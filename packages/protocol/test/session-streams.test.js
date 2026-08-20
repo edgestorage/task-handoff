@@ -44,6 +44,8 @@ import {
   emptyAppSessionsSnapshot,
 } from "../src/app-sessions.ts";
 import {
+  AiSessionTransientSubscriptionSchema,
+  aiSessionTransientSubscriptionAccepts,
   SESSION_STREAM_PROTOCOL_VERSION,
   SessionStreamsHelloSchema,
 } from "../src/events.ts";
@@ -493,4 +495,46 @@ test("AI session message delta is an ephemeral event outside revision recovery",
     syncRequired: false,
     events: [{ type: AiSessionEventType.MessageDelta, payload }],
   }).success, false);
+});
+
+test("AI transient subscriptions separate list deltas from session detail timeline demand", () => {
+  assert.deepEqual(AiSessionTransientSubscriptionSchema.parse({}), {
+    messageDeltas: { allInstances: false, instanceIds: [] },
+    timelineAllSessions: false,
+    timelineSessions: [],
+  });
+  assert.deepEqual(AiSessionTransientSubscriptionSchema.parse({
+    messageDeltas: { allInstances: false, instanceIds: ["instance-a"] },
+    timelineSessions: [{ instanceId: "instance-a", sessionId: "session-a" }],
+  }), {
+    messageDeltas: { allInstances: false, instanceIds: ["instance-a"] },
+    timelineAllSessions: false,
+    timelineSessions: [{ instanceId: "instance-a", sessionId: "session-a" }],
+  });
+  assert.deepEqual(AiSessionTransientSubscriptionSchema.parse({
+    futureField: true,
+    messageDeltas: { allInstances: false, futureMode: "batched" },
+  }), {
+    messageDeltas: { allInstances: false, instanceIds: [] },
+    timelineAllSessions: false,
+    timelineSessions: [],
+  });
+  assert.equal(AiSessionTransientSubscriptionSchema.safeParse({ messageDeltas: { allInstances: "yes" } }).success, false);
+  const subscription = AiSessionTransientSubscriptionSchema.parse({
+    replaySince: "2026-08-21T00:00:00.000Z",
+    messageDeltas: { instanceIds: ["instance-a"] },
+    timelineSessions: [{ instanceId: "instance-a", sessionId: "session-a" }],
+  });
+  assert.equal(aiSessionTransientSubscriptionAccepts(subscription, {
+    type: AiSessionEventType.MessageDelta,
+    payload: { instanceId: "instance-a", sessionId: "session-other" },
+  }), true);
+  assert.equal(aiSessionTransientSubscriptionAccepts(subscription, {
+    type: AiSessionEventType.TimelineItem,
+    payload: { instanceId: "instance-a", sessionId: "session-other" },
+  }), false);
+  assert.equal(aiSessionTransientSubscriptionAccepts(subscription, {
+    type: AiSessionEventType.TimelineItem,
+    payload: { instanceId: "instance-a", sessionId: "session-a" },
+  }), true);
 });

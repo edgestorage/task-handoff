@@ -170,7 +170,10 @@ test("pending claim recovery is outside the add-remote-node form and offers conf
   assert.doesNotMatch(remoteDialog, /pendingProxyClaims/);
   assert.match(settings, /proxyClaimForceDeleteAllowed\(error\)/);
   assert.match(settings, /<AlertDialog :open="Boolean\(pendingClaimForceId\)"/);
+  assert.match(settings, /resumeProxyClaim\(claim\.claimId\)/);
+  assert.match(settings, /cancelProxyClaim\(claim\.claimId\)/);
   assert.match(settings, /cancelControlPlaneProxyClaim\(id, true\)/);
+  assert.match(settings, /if \(!result\.deleted && pendingProxyClaims\.data\.value\?\.some\(\(claim\) => claim\.claimId === id\)\)/);
   assert.match(settings, /async function forceCancelProxyClaim\(\)[\s\S]*catch \(error\) \{\s*showControlPlaneToast\(translateApiError\(error, t\)\);/);
   assert.match(read("src/api/queries.ts"), /force \? "\?force=true"/);
 });

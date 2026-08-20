@@ -51,7 +51,7 @@
       <label>
         <span>{{ t("instances.create.nodeFolder") }}</span>
         <ControlPlaneSelect :model-value="localFolderSelectValue" :placeholder="t('instances.create.selectLocalFolder')" @update:model-value="$emit('select-local-folder', $event)">
-          <ControlPlaneSelectItem v-for="folder in localFolders" :key="folder.id" :value="folder.id">{{ folder.name }} · {{ folder.path }}</ControlPlaneSelectItem>
+          <ControlPlaneSelectItem v-for="folder in localFolders" :key="folder.id" :value="folder.id">{{ nodeLocalFolderDisplayName(folder) }} · {{ folder.path }}</ControlPlaneSelectItem>
           <ControlPlaneSelectItem :value="chooseFolderValue">{{ t("instances.create.chooseFolder") }}</ControlPlaneSelectItem>
         </ControlPlaneSelect>
       </label>
@@ -81,6 +81,7 @@
 import { Folder, FolderOpen, GitBranch, Plus } from "@lucide/vue";
 import { useI18n } from "vue-i18n";
 import type { Node, NodeLocalFolder, Project } from "../../../api/types";
+import { nodeLocalFolderDisplayName } from "../nodePath";
 import { Button } from "../../../components/ui/button";
 import ControlPlaneInput from "../shared/ControlPlaneInput.vue";
 import ControlPlaneSelect from "../shared/ControlPlaneSelect.vue";

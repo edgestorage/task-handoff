@@ -562,7 +562,7 @@ function deriveRuntimeDefaults() {
   }
   runtimeDraft.nodeId = sourceDraft.localNodeId || runtimeDraft.nodeId || firstNodeId;
   runtimeDraft.runtimeId = runtimeIdForNode(runtimeDraft.nodeId, runtimeDraft.runtimeId);
-  runtimeDraft.imageId = selectedRuntimeRequiresImage.value ? selectedLocalFolder.value?.defaultImageSelection?.imageId || runtimeDraft.imageId || firstImageId : "";
+  runtimeDraft.imageId = selectedRuntimeRequiresImage.value ? runtimeDraft.imageId || firstImageId : "";
 }
 
 function ensureRuntimeForNode() {

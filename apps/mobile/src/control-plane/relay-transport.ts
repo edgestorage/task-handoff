@@ -1,6 +1,7 @@
 import type { z } from 'zod';
 import { RelayTtySnapshotEnvelopeSchema, type OfficialMobileAccountClient as CloudMobileAccountClient } from '@task-handoff/cloud-contracts/mobile';
 import type { MobileCloudRelayControlPlaneProfile } from './profile';
+import type { AiSessionTransientSubscription } from '@task-handoff/protocol/events';
 import { MobileControlPlaneTransportError, type MobileAppSessionTtyConnection, type MobileAppSessionTtyHandlers, type MobileControlPlaneEventConnection, type MobileControlPlaneEventHandlers, type MobileControlPlaneTransport } from './transport';
 
 type RelayEnvelope = { type: string; id?: string; status?: number; body?: unknown; event?: any; streamId?: string; data?: unknown; pendingEscape?: unknown; cols?: unknown; rows?: unknown; code?: number | null; signal?: string | null };
@@ -33,8 +34,40 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
   }
 
   connectEvents(handlers: MobileControlPlaneEventHandlers): MobileControlPlaneEventConnection {
-    this.events.add(handlers); void this.ensureChannel().then((channel) => { channel.send({ type: 'event-subscribe', body: { topics: handlers.topics } }); handlers.onOpen(); }).catch(handlers.onError);
-    return { close: () => { this.events.delete(handlers); if (this.channelValue) this.channelValue.send({ type: 'event-subscribe', body: { topics: [...new Set([...this.events].flatMap((entry) => [...(entry.topics ?? [])]))] } }); } };
+    let closed = false;
+    this.events.add(handlers);
+    void this.ensureChannel().then((channel) => {
+      if (closed) return;
+      this.sendEventSubscription(channel);
+      handlers.onOpen();
+    }).catch(handlers.onError);
+    return {
+      close: () => {
+        if (closed) return;
+        closed = true;
+        this.events.delete(handlers);
+        this.sendEventSubscription();
+      },
+      updateAiSessionTransient: (subscription) => {
+        handlers.aiSessionTransient = subscription;
+        this.sendEventSubscription();
+      },
+    };
+  }
+
+  private sendEventSubscription(channel = this.channelValue) {
+    if (!channel) return;
+    const topics = new Set<string>();
+    let wildcard = false;
+    for (const subscriber of this.events) {
+      if (subscriber.topics === undefined) {
+        wildcard = true;
+        break;
+      }
+      for (const topic of subscriber.topics) topics.add(topic);
+    }
+    const aiSessionTransient = wildcard ? undefined : aggregateTransientDemand(this.events, topics);
+    channel.send({ type: 'event-subscribe', body: { topics: wildcard ? undefined : [...topics].sort(), ...(aiSessionTransient ? { aiSessionTransient } : {}) } });
   }
 
   connectAppSessionTty(instanceId: string, sessionId: string, handlers: MobileAppSessionTtyHandlers): MobileAppSessionTtyConnection {
@@ -66,6 +99,21 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
   }
 
   private reset(error: unknown) { this.channelValue?.close(4000, 'reset'); this.channelValue = undefined; this.channel = undefined; for (const pending of this.pending.values()) pending.reject(normalize(error)); this.pending.clear(); for (const handler of this.events) handler.onError(normalize(error)); for (const handler of this.tty.values()) handler.onError(normalize(error)); }
+}
+
+function aggregateTransientDemand(events: Iterable<MobileControlPlaneEventHandlers>, topics: Set<string>): AiSessionTransientSubscription | undefined {
+  if (![...topics].some((topic) => topic === 'ai.sessions' || topic === '*')) return undefined;
+  const selected = [...events].filter((entry) => entry.topics?.some((topic) => topic === 'ai.sessions' || topic === '*'));
+  if (selected.some((entry) => !entry.aiSessionTransient)) return undefined;
+  const instances = new Set<string>(); const sessions = new Map<string, { instanceId: string; sessionId: string }>();
+  let allInstances = false; let timelineAllSessions = false; let replaySince: string | undefined;
+  for (const entry of selected) {
+    const demand = entry.aiSessionTransient!; allInstances ||= demand.messageDeltas.allInstances; timelineAllSessions ||= demand.timelineAllSessions;
+    for (const id of demand.messageDeltas.instanceIds) instances.add(id);
+    for (const session of demand.timelineSessions) sessions.set(`${session.instanceId}\0${session.sessionId}`, session);
+    if (demand.replaySince && (!replaySince || demand.replaySince < replaySince)) replaySince = demand.replaySince;
+  }
+  return { ...(replaySince ? { replaySince } : {}), messageDeltas: { allInstances, instanceIds: [...instances] }, timelineAllSessions, timelineSessions: [...sessions.values()] };
 }
 
 function normalize(error: unknown) { return error instanceof MobileControlPlaneTransportError ? error : transportError('RELAY_CONNECTION_FAILED', true); }

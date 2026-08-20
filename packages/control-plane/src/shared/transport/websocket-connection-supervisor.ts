@@ -8,6 +8,7 @@ export type WebSocketConnectionSupervisorOptions = {
   handshakeTimeoutMs?: number;
   heartbeatIntervalMs?: number;
   heartbeatTimeoutMs?: number;
+  heartbeatMissThreshold?: number;
   stableThresholdMs?: number;
   now?: () => number;
   setTimeoutFn?: typeof setTimeout;
@@ -44,6 +45,7 @@ export class WebSocketConnectionSupervisor {
   private readonly handshakeTimeoutMs: number;
   private readonly heartbeatIntervalMs: number;
   private readonly heartbeatTimeoutMs: number;
+  private readonly heartbeatMissThreshold: number;
   private readonly stableThresholdMs: number;
   private readonly now: () => number;
   private readonly setTimeoutFn: typeof setTimeout;
@@ -57,6 +59,7 @@ export class WebSocketConnectionSupervisor {
   private heartbeatTimer?: Timer;
   private stableTimer?: Timer;
   private awaitingPongSince?: number;
+  private consecutiveHeartbeatMisses = 0;
   private stable = false;
   private stopped = false;
   private currentPhase: WebSocketConnectionPhase = "connecting";
@@ -69,7 +72,8 @@ export class WebSocketConnectionSupervisor {
     this.connectTimeoutMs = positive(options.connectTimeoutMs, 10_000);
     this.handshakeTimeoutMs = positive(options.handshakeTimeoutMs, 10_000);
     this.heartbeatIntervalMs = positive(options.heartbeatIntervalMs, 25_000);
-    this.heartbeatTimeoutMs = positive(options.heartbeatTimeoutMs, 10_000);
+    this.heartbeatTimeoutMs = positive(options.heartbeatTimeoutMs, 15_000);
+    this.heartbeatMissThreshold = Math.max(1, Math.floor(positive(options.heartbeatMissThreshold, 2)));
     this.stableThresholdMs = positive(options.stableThresholdMs, 60_000);
     this.now = options.now || Date.now;
     this.setTimeoutFn = options.setTimeoutFn || setTimeout;
@@ -115,7 +119,13 @@ export class WebSocketConnectionSupervisor {
   }
 
   activity() {
-    if (!this.stopped) this.lastActivityAt = this.now();
+    if (this.stopped) return;
+    this.lastActivityAt = this.now();
+    this.awaitingPongSince = undefined;
+    this.consecutiveHeartbeatMisses = 0;
+    if (this.currentPhase === "handshaking" || this.currentPhase === "healthy") {
+      this.scheduleHeartbeat(this.heartbeatIntervalMs);
+    }
   }
 
   pong() {
@@ -127,6 +137,7 @@ export class WebSocketConnectionSupervisor {
       if (this.recentPingRttMs.length > RECENT_PING_RTT_SAMPLE_LIMIT) this.recentPingRttMs.shift();
     }
     this.awaitingPongSince = undefined;
+    this.consecutiveHeartbeatMisses = 0;
     this.lastPongAt = timestamp;
     this.lastActivityAt = timestamp;
     this.scheduleHeartbeat(this.heartbeatIntervalMs);
@@ -148,6 +159,7 @@ export class WebSocketConnectionSupervisor {
       ...(this.recentPingRttMs.length ? { pingRttP95Ms: percentile95(this.recentPingRttMs) } : {}),
       ...(this.lastActivityAt === undefined ? {} : { lastActivityAt: new Date(this.lastActivityAt).toISOString() }),
       ...(this.lastPongAt === undefined ? {} : { lastPongAt: new Date(this.lastPongAt).toISOString() }),
+      ...(this.consecutiveHeartbeatMisses ? { consecutiveHeartbeatMisses: this.consecutiveHeartbeatMisses } : {}),
     };
   }
 
@@ -160,21 +172,35 @@ export class WebSocketConnectionSupervisor {
       if (this.awaitingPongSince !== undefined) {
         const elapsed = Math.max(0, this.now() - this.awaitingPongSince);
         if (elapsed >= this.heartbeatTimeoutMs) {
-          this.timeout("heartbeat");
+          this.consecutiveHeartbeatMisses += 1;
+          this.awaitingPongSince = undefined;
+          if (this.consecutiveHeartbeatMisses >= this.heartbeatMissThreshold) {
+            this.timeout("heartbeat");
+            return;
+          }
+          this.sendHeartbeatProbe();
           return;
         }
         this.scheduleHeartbeat(this.heartbeatTimeoutMs - elapsed);
         return;
       }
-      this.awaitingPongSince = this.now();
-      try {
-        this.ping();
-      } catch {
+      this.sendHeartbeatProbe();
+    }, delay));
+  }
+
+  private sendHeartbeatProbe() {
+    this.awaitingPongSince = this.now();
+    try {
+      this.ping();
+    } catch {
+      this.consecutiveHeartbeatMisses += 1;
+      this.awaitingPongSince = undefined;
+      if (this.consecutiveHeartbeatMisses >= this.heartbeatMissThreshold) {
         this.timeout("heartbeat");
         return;
       }
-      this.scheduleHeartbeat(this.heartbeatTimeoutMs);
-    }, delay));
+    }
+    this.scheduleHeartbeat(this.heartbeatTimeoutMs);
   }
 
   private timeout(kind: WebSocketConnectionTimeout) {

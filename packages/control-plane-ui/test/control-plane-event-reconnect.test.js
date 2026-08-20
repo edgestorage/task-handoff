@@ -10,3 +10,16 @@ test("Control Plane events reset reconnect backoff only after the authoritative 
   assert.doesNotMatch(openHandler, /reconnectBackoff\.reset\(\)/);
   assert.match(helloHandler, /const hello = parsed\.data;[\s\S]*reconnectBackoff\.reset\(\)/);
 });
+
+test("Control Plane events declare list delta demand separately from detail timeline demand", () => {
+  assert.match(source, /const messageDeltaDemand = aiSessionMessageDeltaDemand\.value/);
+  assert.match(source, /messageDeltas: instanceId[\s\S]*scopedMessageDeltaDemanded \? \[instanceId\] : \[\]/);
+  assert.match(source, /timelineSessions: aiSessionTimelineDemand\.value\.filter/);
+  assert.match(source, /watch\(\[aiSessionMessageDeltaDemand, aiSessionTimelineDemand, aiSessionTransientReplaySince\]/);
+  assert.match(source, /if \(replaySince\) \{[\s\S]*invalidateQueries/);
+  assert.doesNotMatch(source, /messageDeltas: \{ allInstances: true/);
+});
+
+test("new Control Plane clients advertise precise transient subscription support in the socket URL", () => {
+  assert.match(source, /url\.searchParams\.set\("aiSessionTransient", "1"\)/);
+});

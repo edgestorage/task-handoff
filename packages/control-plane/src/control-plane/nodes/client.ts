@@ -12,6 +12,7 @@ export type NodeAgentWebSocket = {
 export type NodeAgentWebSocketControl = {
   ping?: () => void;
   onPong?: (listener: () => void) => void;
+  send?: (data: unknown) => void;
 };
 
 export type NodeAgentTransport = {

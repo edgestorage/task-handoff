@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { resolveStoragePaths } from "@task-handoff/core/storage/paths";
 import type {
+  AiSessionConversationAttachment,
   AiSessionLifecycle,
   AiSessionLineage,
   AiSessionCreationSource,
@@ -19,6 +20,7 @@ import type {
   AiSessionSummary,
   AiSessionsSnapshot,
 } from "@task-handoff/protocol/ai-sessions";
+import { AiSessionConversationAttachmentStore, type RetainedAiSessionMessageAttachment } from "./ai-session-conversation-attachment-store";
 import {
   compact,
   messageText,
@@ -86,6 +88,7 @@ type RegistryOptions = {
   idleAfterMs?: number;
   staleAfterMs?: number;
   orphanedAppSessionRetentionMs?: number;
+  conversationAttachments?: AiSessionConversationAttachmentStore;
 };
 
 const DEFAULT_RETENTION_MS = 24 * 60 * 60 * 1000;
@@ -106,6 +109,7 @@ function aiSessionDir() {
 }
 
 function summaryForHeartbeat(session: AiSessionStatus): AiSessionSummary {
+  const turns = session.turns?.map(({ userMessages: _userMessages, ...turn }) => turn);
   return {
     id: session.id,
     agent: session.agent,
@@ -122,7 +126,7 @@ function summaryForHeartbeat(session: AiSessionStatus): AiSessionSummary {
     cwd: session.cwd,
     cwdFolderId: session.cwdFolderId,
     userPrompt: session.userPrompt,
-    turns: session.turns,
+    turns,
     status: session.status,
     phase: session.phase,
     summary: session.summary,
@@ -186,6 +190,7 @@ export class AiSessionRegistry {
   private readonly transcriptService: AiSessionTranscriptService;
   private readonly store: AiSessionFileStore;
   private readonly changes = new EventEmitter();
+  private readonly conversationAttachments?: AiSessionConversationAttachmentStore;
 
   constructor(options: RegistryOptions = {}) {
     this.dir = options.dir || aiSessionDir();
@@ -197,6 +202,7 @@ export class AiSessionRegistry {
     this.idleAfterMs = options.idleAfterMs ?? (Number(process.env.TASK_HANDOFF_AI_SESSION_IDLE_AFTER_MS) || DEFAULT_IDLE_AFTER_MS);
     this.staleAfterMs = options.staleAfterMs ?? (Number(process.env.TASK_HANDOFF_AI_SESSION_STALE_AFTER_MS) || DEFAULT_STALE_AFTER_MS);
     this.orphanedAppSessionRetentionMs = options.orphanedAppSessionRetentionMs ?? (Number(process.env.TASK_HANDOFF_AI_SESSION_ORPHAN_RETENTION_MS) || DEFAULT_ORPHANED_APP_SESSION_RETENTION_MS);
+    this.conversationAttachments = options.conversationAttachments;
     this.transcriptService = new AiSessionTranscriptService({ idleAfterMs: this.idleAfterMs, staleAfterMs: this.staleAfterMs });
   }
 
@@ -311,10 +317,10 @@ export class AiSessionRegistry {
     }));
   }
 
-  enqueueMessage(id: string, message: string, attachments: AiSessionMessageAttachment[] = [], references: AiSessionReference[] = [], permissionMode?: AiSessionPermissionMode) {
+  enqueueMessage(id: string, message: string, attachments: AiSessionMessageAttachment[] = [], references: AiSessionReference[] = [], permissionMode?: AiSessionPermissionMode, messageId?: string) {
     const current = this.get(id);
     if (!current) return undefined;
-    const result = this.queueService.enqueueMessage(current, message, attachments, references, permissionMode);
+    const result = this.queueService.enqueueMessage(current, message, attachments, references, permissionMode, messageId);
     return result ? { ...result, session: this.put(result.session) } : undefined;
   }
 
@@ -327,7 +333,38 @@ export class AiSessionRegistry {
   }
 
   queuedMessageAttachments(queueId: string) {
+    const queuedItem = this.readSessions().flatMap((session) => session.queue.items).find((item) => item.id === queueId);
+    if (this.conversationAttachments && queuedItem?.attachments.length) {
+      return this.conversationAttachments.providerAttachments(queuedItem.attachments.map((attachment) => attachment.id));
+    }
     return this.queueService.queuedMessageAttachments(queueId);
+  }
+
+  stageMessageAttachments(input: {
+    sessionId: string;
+    messageId: string;
+    attachments?: AiSessionMessageAttachment[];
+    runtimePathRoot?: string;
+    draftScopeType?: "session" | "create-request";
+    draftScopeId?: string;
+    draftAttachmentIds?: readonly string[];
+  }): { attachments: AiSessionConversationAttachment[]; providerAttachments: RetainedAiSessionMessageAttachment[] } {
+    if (!this.conversationAttachments) {
+      return { attachments: [], providerAttachments: input.attachments || [] };
+    }
+    return this.conversationAttachments.stageMessage(input);
+  }
+
+  commitMessageAttachments(sessionId: string, messageId: string, turnId?: string) {
+    return this.conversationAttachments?.commitMessage(sessionId, messageId, turnId) || 0;
+  }
+
+  rollbackMessageAttachments(sessionId: string, messageId: string) {
+    return this.conversationAttachments?.rollbackMessage(sessionId, messageId) || 0;
+  }
+
+  conversationAttachmentStore() {
+    return this.conversationAttachments;
   }
 
   markQueuedMessageSending(id: string, queueId: string) {
@@ -350,7 +387,9 @@ export class AiSessionRegistry {
 
   removeQueuedMessage(id: string, queueId: string) {
     const current = this.get(id);
+    const messageId = current?.queue.items.find((item) => item.id === queueId)?.messageId;
     const updated = current ? this.queueService.removeQueuedMessage(current, queueId) : undefined;
+    if (messageId) this.rollbackMessageAttachments(id, messageId);
     return updated ? this.put(updated) : undefined;
   }
 

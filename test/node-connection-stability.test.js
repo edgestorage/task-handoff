@@ -2,7 +2,7 @@ const assert = require("node:assert/strict");
 const { EventEmitter } = require("node:events");
 const test = require("node:test");
 
-const { NodeAgentControlPlaneConnectionSchema, NodeAgentHealthSchema } = require("../packages/protocol/src/control-plane.ts");
+const { NodeAgentControlPlaneConnectionSchema, NodeAgentHealthSchema, NodeConnectionDiagnosticsSchema } = require("../packages/protocol/src/control-plane.ts");
 const { ControlPlaneNodeAgentClient } = require("../packages/control-plane/src/control-plane/nodes/client.ts");
 const { ControlPlaneNodeAgentGateway } = require("../packages/control-plane/src/control-plane/nodes/gateway.ts");
 const { NodeConnectionRuntime } = require("../packages/control-plane/src/control-plane/nodes/connection-runtime.ts");
@@ -62,9 +62,42 @@ test("shared websocket supervisor detects connect handshake and half-open failur
   clock.advance(6);
   assert.equal(pings, 1);
   clock.advance(4);
+  assert.equal(pings, 2);
+  assert.deepEqual(timeouts, []);
+  clock.advance(4);
   assert.deepEqual(timeouts, ["heartbeat"]);
   assert.equal(supervisor.phase, "failed");
   assert.equal(stable, 0);
+});
+
+test("shared websocket supervisor treats business traffic as liveness and requires consecutive missed probes", () => {
+  const clock = fakeClock();
+  const timeouts = [];
+  let pings = 0;
+  const supervisor = new WebSocketConnectionSupervisor({
+    heartbeatIntervalMs: 6,
+    heartbeatTimeoutMs: 4,
+    heartbeatMissThreshold: 2,
+    ...clock,
+    ping: () => { pings += 1; },
+    onTimeout: (kind) => timeouts.push(kind),
+  });
+  supervisor.start();
+  supervisor.opened();
+  supervisor.healthy();
+
+  clock.advance(6);
+  assert.equal(pings, 1);
+  clock.advance(3);
+  supervisor.activity();
+  clock.advance(6);
+  assert.equal(pings, 2);
+  clock.advance(4);
+  assert.equal(pings, 3);
+  supervisor.pong();
+  clock.advance(6);
+  assert.equal(pings, 4);
+  assert.deepEqual(timeouts, []);
 });
 
 test("shared websocket supervisor resets retry only after a stable healthy window", () => {
@@ -146,6 +179,20 @@ test("control-plane connection diagnostics remain optional across the v0.0.21 bo
   });
 });
 
+test("node connection diagnostics validate the ephemeral public projection", () => {
+  assert.deepEqual(NodeConnectionDiagnosticsSchema.parse({
+    pingRttMs: 9,
+    pingRttP95Ms: 14,
+    consecutiveReconnects: 3,
+    nextRetryAt: "2026-08-20T00:00:05.000Z",
+  }), {
+    pingRttMs: 9,
+    pingRttP95Ms: 14,
+    consecutiveReconnects: 3,
+    nextRetryAt: "2026-08-20T00:00:05.000Z",
+  });
+});
+
 test("runtime projection rejects persisted direct HTTP health until the control API is observed", () => {
   const runtime = new NodeConnectionRuntime();
   const observations = [];
@@ -174,14 +221,27 @@ test("runtime projection rejects persisted direct HTTP health until the control 
   assert.equal(runtime.observedReachable(node), true);
   assert.equal(runtime.project(node).status, "online");
   assert.equal(runtime.project(node).connectionPhase, "healthy");
+  assert.deepEqual(runtime.project(node).connectionDiagnostics, { consecutiveReconnects: 0 });
+  assert.equal(runtime.pong(node.id, second, { pingRttMs: 7, pingRttP95Ms: 11 }), true);
+  assert.deepEqual(runtime.project(node).connectionDiagnostics, {
+    pingRttMs: 7,
+    pingRttP95Ms: 11,
+    consecutiveReconnects: 0,
+  });
   const publishedAfterReachable = observations.length;
   const controlChangedAt = runtime.observation(node.id).controlChangedAt;
   assert.equal(runtime.observedReachable(node), true);
   assert.equal(observations.length, publishedAfterReachable);
   assert.equal(runtime.observation(node.id).controlChangedAt, controlChangedAt);
-  runtime.disconnected(node.id, second, { error: "closed" });
+  runtime.disconnected(node.id, second, { error: "closed", nextRetryAt: "2026-08-20T00:00:05.000Z" });
   assert.equal(runtime.project(node).status, "online");
   assert.equal(runtime.project(node).connectionPhase, "healthy");
+  assert.deepEqual(runtime.project(node).connectionDiagnostics, {
+    pingRttMs: 7,
+    pingRttP95Ms: 11,
+    consecutiveReconnects: 1,
+    nextRetryAt: "2026-08-20T00:00:05.000Z",
+  });
   assert.equal(runtime.observedFailure(node, "request timed out"), true);
   assert.equal(runtime.project(node).status, "offline");
   assert.equal(runtime.project(node).health, "failed");
@@ -193,17 +253,35 @@ test("reverse tunnel becomes healthy only after identify and ignores a replaced 
       super();
       this.readyState = 1;
       this.sent = [];
+      this.failSend = false;
     }
-    send(value) { this.sent.push(String(value)); }
+    send(value) {
+      if (this.failSend) throw new Error("reverse subscription send failed");
+      this.sent.push(String(value));
+    }
     ping() {}
     terminate() { this.readyState = 3; this.emit("close", 1006, Buffer.alloc(0)); }
     close(code = 1000, reason = "") { this.readyState = 3; this.emit("close", code, Buffer.from(reason)); }
   }
   const runtime = new NodeConnectionRuntime();
   const transport = new ControlPlaneNodeAgentTunnelTransport(undefined, { connectionRuntime: runtime });
+  transport.setEventSubscription("node_reverse", {
+    legacyAll: false,
+    messageDeltas: { allInstances: false, instanceIds: [] },
+    timelineAllSessions: false,
+    timelineSessions: [],
+  });
   const ingress = new NodeTunnelIngress(transport);
   const first = new Socket();
   ingress.attachMain("node_reverse", first);
+  assert.deepEqual(JSON.parse(first.sent[0]), {
+    type: "control-plane.event-subscribe",
+    aiSessionTransient: {
+      messageDeltas: { allInstances: false, instanceIds: [] },
+      timelineAllSessions: false,
+      timelineSessions: [],
+    },
+  });
   assert.equal(runtime.observation("node_reverse").phase, "handshaking");
   first.emit("message", JSON.stringify({ type: "node-agent.identify" }));
   assert.equal(runtime.observation("node_reverse").phase, "healthy");
@@ -215,8 +293,19 @@ test("reverse tunnel becomes healthy only after identify and ignores a replaced 
   assert.equal(runtime.observation("node_reverse").phase, "handshaking");
   second.emit("message", JSON.stringify({ type: "node-agent.identify" }));
   assert.equal(runtime.observation("node_reverse").phase, "healthy");
-  second.emit("close", 1006, Buffer.alloc(0));
+  second.failSend = true;
+  assert.doesNotThrow(() => transport.setEventSubscription("node_reverse", {
+    legacyAll: false,
+    messageDeltas: { allInstances: true, instanceIds: [] },
+    timelineAllSessions: false,
+    timelineSessions: [],
+  }));
   assert.equal(runtime.observation("node_reverse").phase, "offline");
+  const third = new Socket();
+  ingress.attachMain("node_reverse", third);
+  assert.equal(JSON.parse(third.sent[0]).aiSessionTransient.messageDeltas.allInstances, true);
+  third.emit("message", JSON.stringify({ type: "node-agent.identify" }));
+  third.emit("close", 1000, Buffer.alloc(0));
 });
 
 test("direct requests enforce total and streaming-header deadlines", async () => {
@@ -326,7 +415,7 @@ test("direct event connection terminates a half-open socket and publishes reconn
   };
   const transport = {
     proxyWebSocket(_node, socket, route) {
-      assert.equal(route, "/events");
+      assert.equal(route, "/events?aiSessionTransient=1");
       queueMicrotask(() => socket.send(JSON.stringify({ type: "node-agent.events.connected" })));
       return { ping: () => { pings += 1; } };
     },
@@ -348,8 +437,8 @@ test("direct event connection terminates a half-open socket and publishes reconn
   subscriber.start();
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(runtime.observation(node.id).phase, "healthy");
-  clock.advance(10);
-  assert.equal(pings, 1);
+  clock.advance(15);
+  assert.equal(pings, 2);
   assert.equal(runtime.observation(node.id).phase, "reconnecting");
 });
 
@@ -399,8 +488,58 @@ test("proxy node event subscriber opens the authoritative node-agent event strea
 
   assert.equal(opened.length, 1);
   assert.equal(opened[0].target, node);
-  assert.equal(opened[0].route, "/events");
+  assert.equal(opened[0].route, "/events?aiSessionTransient=1");
   assert.equal(hellos.length, 1);
   assert.equal(hellos[0].instanceId, "inst_proxy_events");
   assert.equal(subscriber.diagnostics().activeConnections, 1);
+});
+
+test("node event subscriber sends aggregated transient demand over the reused upstream", async (t) => {
+  const sent = [];
+  let failControlSend = false;
+  const node = {
+    id: "node_transient_events",
+    connectionMode: "direct-http",
+    connectionEnabled: true,
+    endpoint: "http://127.0.0.1:18080",
+    auth: { mode: "local-static-key", secret: "secret" },
+  };
+  const subscriber = new ControlPlaneNodeEventSubscriber(
+    {
+      listNodes: () => [node],
+      resolveNodeAgentTransport: () => ({
+        proxyWebSocket(_node, socket) {
+          queueMicrotask(() => socket.send(JSON.stringify({ type: "node-agent.events.connected" })));
+          return { send: (value) => {
+            if (failControlSend) throw new Error("subscription transport failed");
+            sent.push(JSON.parse(String(value)));
+          } };
+        },
+      }),
+    },
+    { handleMessage() {} },
+    { safetyIntervalMs: 60_000 },
+  );
+  t.after(() => subscriber.stop());
+  subscriber.setAiSessionTransientDemand({
+    legacyAll: false,
+    messageDeltas: { allInstances: false, instanceIds: ["instance-card"] },
+    timelineAllSessions: false,
+    timelineSessions: [{ instanceId: "instance-detail", sessionId: "session-detail" }],
+  });
+  subscriber.start();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(sent.at(-1).aiSessionTransient, {
+    messageDeltas: { allInstances: false, instanceIds: ["instance-card"] },
+    timelineAllSessions: false,
+    timelineSessions: [{ instanceId: "instance-detail", sessionId: "session-detail" }],
+  });
+  failControlSend = true;
+  assert.doesNotThrow(() => subscriber.setAiSessionTransientDemand({
+    legacyAll: false,
+    messageDeltas: { allInstances: false, instanceIds: [] },
+    timelineAllSessions: false,
+    timelineSessions: [],
+  }));
+  assert.equal(subscriber.diagnostics().activeConnections, 0);
 });

@@ -24,6 +24,28 @@ export const AiAgentKindSchema = z.string().trim().min(1).max(80);
 
 export const AiSessionCreationSourceSchema = z.enum(["app-session", "ai-session"]);
 
+export const AiSessionAttachmentKindSchema = z.enum(["image", "file"]);
+
+const AiSessionMessageAttachmentBaseSchema = z.object({
+  id: z.string().trim().min(1).max(120),
+  kind: AiSessionAttachmentKindSchema,
+  name: z.string().trim().min(1).max(240),
+  mime: z.string().trim().min(1).max(120),
+  size: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+});
+
+export const AiSessionConversationAttachmentContentStateSchema = z.enum(["available", "expired", "missing"]);
+
+export const AiSessionConversationAttachmentSchema = AiSessionMessageAttachmentBaseSchema.extend({
+  contentState: AiSessionConversationAttachmentContentStateSchema.default("available"),
+}).strict();
+
+export const AiSessionUserMessageDetailSchema = z.object({
+  id: z.string().trim().min(1).max(240),
+  text: z.string(),
+  attachments: z.array(AiSessionConversationAttachmentSchema).max(AI_SESSION_MAX_MESSAGE_ATTACHMENTS).default([]),
+}).strict();
+
 export const AiSessionLifecycleSchema = z.enum([
   "running",
   "waiting",
@@ -73,6 +95,7 @@ const AiSessionTimelineItemBaseSchema = z.object({
 export const AiSessionTimelineUserMessageSchema = AiSessionTimelineItemBaseSchema.extend({
   type: z.literal("user-message"),
   text: z.string(),
+  attachments: z.array(AiSessionConversationAttachmentSchema).max(AI_SESSION_MAX_MESSAGE_ATTACHMENTS).optional(),
 }).strict();
 
 export const AiSessionTimelineAgentMessageSchema = AiSessionTimelineItemBaseSchema.extend({
@@ -165,16 +188,6 @@ export const AiSessionLineageSchema = z.object({
   parentProviderSessionId: z.string().trim().min(1).max(240),
   throughTurnId: z.string().trim().min(1).max(240).optional(),
 }).strict();
-
-export const AiSessionAttachmentKindSchema = z.enum(["image", "file"]);
-
-const AiSessionMessageAttachmentBaseSchema = z.object({
-  id: z.string().trim().min(1).max(120),
-  kind: AiSessionAttachmentKindSchema,
-  name: z.string().trim().min(1).max(240),
-  mime: z.string().trim().min(1).max(120),
-  size: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
-});
 
 export const AiSessionMessageAttachmentSchema = z.union([
   AiSessionMessageAttachmentBaseSchema.extend({
@@ -462,6 +475,7 @@ export const AiSessionControlErrorSchema = z.object({
 export const AiSessionQueuedMessageSchema = z
   .object({
     id: z.string().trim().min(1).max(120),
+    messageId: z.string().trim().min(1).max(240).optional(),
     message: z.string().trim().min(1).max(20000),
     attachments: z.array(AiSessionMessageAttachmentMetaSchema).max(AI_SESSION_MAX_MESSAGE_ATTACHMENTS).default([]),
     references: AiSessionReferencesSchema,
@@ -507,6 +521,7 @@ export const AiSessionTurnSchema = z
     providerTurnId: z.string().trim().max(240).optional(),
     source: AiSessionSourceSchema.optional(),
     userPrompt: z.string().trim().optional(),
+    userMessages: z.array(AiSessionUserMessageDetailSchema).max(100).optional(),
     status: z.enum(["queued", "running", "waiting", "completed", "failed"]).default("running"),
     phase: AiSessionPhaseSchema.optional(),
     summary: z.string().trim().max(1000).optional(),
@@ -527,6 +542,7 @@ export const AiSessionHistoryTurnSchema = AiSessionTurnSchema.pick({
   id: true,
   providerTurnId: true,
   userPrompt: true,
+  userMessages: true,
   status: true,
   phase: true,
   summary: true,
@@ -586,6 +602,8 @@ export const AiSessionActionResultSchema = z.object({
 
 export const AI_SESSION_HISTORY_DEFAULT_LIMIT = 50;
 export const AI_SESSION_HISTORY_MAX_LIMIT = 500;
+export const AI_SESSION_ATTACHMENT_RETENTION_DEFAULT_DAYS = 30;
+export const AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS = 365;
 // Compatibility alias for consumers that used the original fixed default.
 export const AI_SESSION_HISTORY_LIMIT = AI_SESSION_HISTORY_DEFAULT_LIMIT;
 
@@ -626,6 +644,8 @@ export const AiSessionResumeResultSchema = z.object({
   creationSource: AiSessionCreationSourceSchema,
 }).strict();
 
+export const AiSessionSummaryTurnSchema = AiSessionTurnSchema.omit({ userMessages: true });
+
 export const AiSessionSummarySchema = AiSessionStatusSchema.pick({
   id: true,
   agent: true,
@@ -655,7 +675,11 @@ export const AiSessionSummarySchema = AiSessionStatusSchema.pick({
   startedAt: true,
   updatedAt: true,
   error: true,
-});
+}).extend({
+  // Compatibility for v0.0.21: list snapshots retain the bounded turn summary
+  // shape and never carry conversation attachment metadata or content.
+  turns: z.array(AiSessionSummaryTurnSchema).max(50).optional(),
+}).strict();
 
 export const AiSessionsSnapshotSchema = z
   .object({
@@ -900,6 +924,7 @@ export const AiSessionRealtimeInputSchema = AiSessionInputBaseSchema.extend({
   activeTurnId: z.string().trim().max(240).optional(),
   providerTurnId: z.string().trim().max(240).optional(),
   userPrompt: z.string().trim().optional(),
+  userMessage: AiSessionUserMessageDetailSchema.optional(),
   text: z.string().optional(),
   itemId: z.string().trim().max(240).optional(),
   status: AiSessionLifecycleSchema.optional(),
@@ -925,6 +950,9 @@ export const AiSessionRealtimeInputSchema = AiSessionInputBaseSchema.extend({
     }
   } else if (input.contextCompaction !== undefined) {
     context.addIssue({ code: "custom", path: ["contextCompaction"], message: "contextCompaction is only valid for context-compaction events" });
+  }
+  if (input.kind !== "send-ack" && input.kind !== "user-message" && input.userMessage !== undefined) {
+    context.addIssue({ code: "custom", path: ["userMessage"], message: "userMessage is only valid for send-ack and user-message events" });
   }
   if (input.kind === "sub-agent-activity") {
     if (!input.subAgents) {
@@ -973,6 +1001,9 @@ export type AiSessionSubAgentActivity = z.infer<typeof AiSessionSubAgentActivity
 export type AiSessionSubAgent = z.infer<typeof AiSessionSubAgentSchema>;
 export type AiSessionSource = z.infer<typeof AiSessionSourceSchema>;
 export type AiSessionContextCompaction = z.infer<typeof AiSessionContextCompactionSchema>;
+export type AiSessionConversationAttachmentContentState = z.infer<typeof AiSessionConversationAttachmentContentStateSchema>;
+export type AiSessionConversationAttachment = z.infer<typeof AiSessionConversationAttachmentSchema>;
+export type AiSessionUserMessageDetail = z.infer<typeof AiSessionUserMessageDetailSchema>;
 export type AiSessionMessageAttachment = z.infer<typeof AiSessionMessageAttachmentSchema>;
 export type AiSessionMessageAttachmentMeta = z.infer<typeof AiSessionMessageAttachmentMetaSchema>;
 export type AiSessionMessageAttachmentRef = z.infer<typeof AiSessionMessageAttachmentRefSchema>;
@@ -1012,6 +1043,7 @@ export type AiSessionControlError = z.infer<typeof AiSessionControlErrorSchema>;
 export type AiSessionQueuedMessage = z.infer<typeof AiSessionQueuedMessageSchema>;
 export type AiSessionQueue = z.infer<typeof AiSessionQueueSchema>;
 export type AiSessionTurn = z.infer<typeof AiSessionTurnSchema>;
+export type AiSessionSummaryTurn = z.infer<typeof AiSessionSummaryTurnSchema>;
 export type AiSessionStatus = z.infer<typeof AiSessionStatusSchema>;
 export type AiSessionActionResult = z.infer<typeof AiSessionActionResultSchema>;
 export type AiSessionHistoryItem = z.infer<typeof AiSessionHistoryItemSchema>;

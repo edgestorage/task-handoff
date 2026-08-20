@@ -109,6 +109,21 @@ function createDirectHarness() {
   };
 }
 
+test("direct adapter keeps only the latest control frame until the upstream websocket opens", () => {
+  const upstream = new ContractSocket();
+  upstream.readyState = 0;
+  const transport = createDirectNodeAgentTransport(fetch, {
+    openWebSocket: () => upstream,
+  });
+  const control = transport.proxyWebSocket(directNode(), new ContractSocket(), "/events");
+  control.send("old-subscription");
+  control.send("current-subscription");
+  assert.deepEqual(upstream.sent, []);
+  upstream.readyState = upstream.OPEN;
+  upstream.emit("open");
+  assert.deepEqual(upstream.sent.map((entry) => entry.data), ["current-subscription"]);
+});
+
 function createTunnelHarness() {
   const transport = new ControlPlaneNodeAgentTunnelTransport(undefined, {
     requestTimeoutMs: 1_000,

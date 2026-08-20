@@ -201,6 +201,12 @@ export function controlledInstanceCapabilities(
       aiSessionWorkspaceSelection: true,
       aiSessionPersistenceSettings: true,
       aiSessionTimeline,
+      aiSessionConversationAttachments: {
+        metadataAgents: ["codex", "claude"],
+        contentAgents: ["codex", "claude"],
+        uploadAgents: ["codex", "claude"],
+        retentionSettings: true,
+      },
     },
   });
 }

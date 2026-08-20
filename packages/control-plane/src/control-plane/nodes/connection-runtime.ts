@@ -1,4 +1,4 @@
-import type { Node } from "@task-handoff/protocol/control-plane";
+import type { Node, NodeConnectionDiagnostics } from "@task-handoff/protocol/control-plane";
 
 export type NodeConnectionTransport = "direct-http" | "reverse-wss";
 export type NodeConnectionRuntimePhase = "connecting" | "handshaking" | "healthy" | "reconnecting" | "suspect" | "offline";
@@ -13,6 +13,8 @@ export type NodeConnectionObservation = {
   connectedAt?: string;
   lastSeenAt?: string;
   lastPongAt?: string;
+  pingRttMs?: number;
+  pingRttP95Ms?: number;
   consecutiveFailures: number;
   nextRetryAt?: string;
   closeCode?: number;
@@ -24,6 +26,7 @@ export type NodeConnectionObservation = {
 
 export type NodeConnectionProjection = Node & {
   connectionPhase?: NodeConnectionRuntimePhase;
+  connectionDiagnostics?: NodeConnectionDiagnostics;
 };
 
 type ObservationUpdate = Partial<Omit<NodeConnectionObservation, "nodeId" | "transport" | "generation" | "changedAt">>;
@@ -74,9 +77,14 @@ export class NodeConnectionRuntime {
     });
   }
 
-  pong(nodeId: string, generation: number) {
+  pong(nodeId: string, generation: number, diagnostics: { pingRttMs?: number; pingRttP95Ms?: number } = {}) {
     const timestamp = new Date().toISOString();
-    return this.update(nodeId, generation, { lastSeenAt: timestamp, lastPongAt: timestamp }, false);
+    return this.update(nodeId, generation, {
+      lastSeenAt: timestamp,
+      lastPongAt: timestamp,
+      ...(diagnostics.pingRttMs === undefined ? {} : { pingRttMs: diagnostics.pingRttMs }),
+      ...(diagnostics.pingRttP95Ms === undefined ? {} : { pingRttP95Ms: diagnostics.pingRttP95Ms }),
+    }, false);
   }
 
   stable(nodeId: string, generation: number) {
@@ -163,6 +171,12 @@ export class NodeConnectionRuntime {
         ? { ...node, status: "unknown", health: "unknown", connectionPhase: "connecting" }
         : node;
     }
+    const connectionDiagnostics = {
+      ...(observation.pingRttMs === undefined ? {} : { pingRttMs: observation.pingRttMs }),
+      ...(observation.pingRttP95Ms === undefined ? {} : { pingRttP95Ms: observation.pingRttP95Ms }),
+      consecutiveReconnects: observation.consecutiveFailures,
+      ...(observation.nextRetryAt ? { nextRetryAt: observation.nextRetryAt } : {}),
+    };
     // A direct node's HTTP health check is the authority for node reachability.
     // Its event WebSocket is a secondary stream: reconnecting it must not make a
     // node with a healthy control API appear offline.
@@ -170,6 +184,7 @@ export class NodeConnectionRuntime {
       if (observation.controlReachability === "reachable") {
         return {
           ...node,
+          connectionDiagnostics,
           status: "online",
           health: node.health === "unknown" || node.health === "failed" ? "ok" : node.health,
           lastSeenAt: observation.lastSeenAt || node.lastSeenAt,
@@ -178,6 +193,7 @@ export class NodeConnectionRuntime {
       }
       return {
         ...node,
+        connectionDiagnostics,
         status: observation.controlReachability === "unreachable" ? "offline" : "unknown",
         health: observation.controlReachability === "unreachable" ? "failed" : "unknown",
         lastSeenAt: observation.lastSeenAt,
@@ -185,12 +201,12 @@ export class NodeConnectionRuntime {
       };
     }
     if (observation.phase === "healthy") {
-      return { ...node, status: "online", health: node.health === "unknown" ? "ok" : node.health, lastSeenAt: observation.lastSeenAt || observation.connectedAt, connectionPhase: observation.phase };
+      return { ...node, connectionDiagnostics, status: "online", health: node.health === "unknown" ? "ok" : node.health, lastSeenAt: observation.lastSeenAt || observation.connectedAt, connectionPhase: observation.phase };
     }
     if (observation.phase === "connecting" || observation.phase === "handshaking" || observation.phase === "reconnecting" || observation.phase === "suspect") {
-      return { ...node, status: "offline", health: "degraded", lastSeenAt: observation.lastSeenAt, connectionPhase: observation.phase };
+      return { ...node, connectionDiagnostics, status: "offline", health: "degraded", lastSeenAt: observation.lastSeenAt, connectionPhase: observation.phase };
     }
-    return { ...node, status: "offline", health: "failed", lastSeenAt: observation.lastSeenAt, connectionPhase: observation.phase };
+    return { ...node, connectionDiagnostics, status: "offline", health: "failed", lastSeenAt: observation.lastSeenAt, connectionPhase: observation.phase };
   }
 
   diagnostics() {

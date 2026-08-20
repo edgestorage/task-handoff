@@ -6,6 +6,7 @@ const test = require("node:test");
 
 const { filesystemRoots, folderPlaces, listFolderTree, MAX_FOLDER_TREE_CHILDREN, requireBrowsableFolderPath } = require("../packages/control-plane/src/node-agent/folders.ts");
 const { nodeAgentStorePaths } = require("../packages/control-plane/src/node-agent/persistence/paths.ts");
+const { UpdateLocalFolderSchema } = require("../packages/control-plane/src/node-agent/schemas.ts");
 const { NodeAgentState } = require("../packages/control-plane/src/node-agent/state.ts");
 
 test("folder picker starts at filesystem roots", () => {
@@ -98,4 +99,23 @@ test("node-agent refuses to persist a local folder until its path passes authori
   const created = state.createLocalFolder({ name: "Workspace", path: workspace, labels: {} });
   assert.equal(created.path, path.resolve(workspace));
   assert.deepEqual(state.localFolders.list().map((folder) => folder.id), [created.id]);
+
+  const renamed = state.updateLocalFolder(created.id, { name: "Customer Portal" });
+  assert.equal(renamed.name, "Customer Portal");
+  assert.equal(renamed.path, created.path);
+  assert.equal(state.localFolders.get(created.id).name, "Customer Portal");
+  const reset = state.updateLocalFolder(created.id, { name: "" });
+  assert.equal(reset.name, "workspace");
+  assert.equal(state.localFolders.get(created.id).name, "workspace");
+  assert.throws(() => state.updateLocalFolder("folder_missing", { name: "Missing" }), {
+    code: "NODE_LOCAL_FOLDER_NOT_FOUND",
+    statusCode: 404,
+  });
+});
+
+test("local folder name updates accept reset-to-folder-name and cannot mutate the path or image", () => {
+  assert.deepEqual(UpdateLocalFolderSchema.parse({ name: "Customer Portal" }), { name: "Customer Portal" });
+  assert.deepEqual(UpdateLocalFolderSchema.parse({ name: "" }), { name: "" });
+  assert.equal(UpdateLocalFolderSchema.safeParse({ name: "Customer Portal", path: "/other" }).success, false);
+  assert.equal(UpdateLocalFolderSchema.safeParse({ name: "Customer Portal", defaultImageSelection: { imageId: "img_other" } }).success, false);
 });

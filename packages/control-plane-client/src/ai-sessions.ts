@@ -98,6 +98,9 @@ export function createControlPlaneAiSessionsApi(transport: ControlPlaneClientTra
     historyDetail(instanceId: string, aiSessionId: string, signal?: AbortSignal) {
       return requestData(`/api/controlled-instances/${encodeURIComponent(instanceId)}/ai-sessions/history/${encodeURIComponent(aiSessionId)}`, AiSessionHistoryDetailSchema, { signal });
     },
+    detail(instanceId: string, aiSessionId: string, signal?: AbortSignal) {
+      return requestData(sessionRoute(instanceId, aiSessionId), AiSessionStatusSchema, { signal });
+    },
     timeline(instanceId: string, aiSessionId: string, signal?: AbortSignal) {
       return requestData(`${sessionRoute(instanceId, aiSessionId)}/timeline`, AiSessionTimelineSchema, { signal });
     },
@@ -164,8 +167,25 @@ export function createControlPlaneAiSessionsApi(transport: ControlPlaneClientTra
     reorderQueue(instanceId: string, sessionId: string, input: AiSessionQueueReorderInput) {
       return requestData(`${sessionRoute(instanceId, sessionId)}/queue/reorder`, AiSessionStatusSchema, json("PATCH", AiSessionQueueReorderInputSchema.parse(input)));
     },
-    uploadAttachment(input: { instanceId: string; sessionId: string; kind: "image" | "file"; name: string; mime: string; data: string }) {
-      return requestData("/api/ai-session-attachments", AiSessionUploadedAttachmentSchema, json("POST", input));
+    async uploadAttachment(input: { instanceId: string; sessionId: string; scopeType?: "session" | "create-request"; kind: "image" | "file"; name: string; mime: string; data: string }, onProgress?: (progress: number) => void) {
+      onProgress?.(0);
+      const content = await fetch(input.data).then((response) => response.blob());
+      const query = new URLSearchParams({
+        scopeType: input.scopeType || "session",
+        scopeId: input.sessionId,
+        kind: input.kind,
+        name: input.name,
+        mime: input.mime,
+        size: String(content.size),
+      });
+      const response = await transport.request(
+        `/api/controlled-instances/${encodeURIComponent(input.instanceId)}/ai-session-attachments/drafts?${query}`,
+        DataSchema(AiSessionUploadedAttachmentSchema),
+        { method: "POST", headers: { "content-type": "application/octet-stream" }, body: content },
+        onProgress,
+      );
+      onProgress?.(1);
+      return response.data;
     },
     mentionCatalog(instanceId: string, sessionId: string, signal?: AbortSignal) {
       return requestData(`${sessionRoute(instanceId, sessionId)}/mentions`, AiSessionMentionCatalogSchema, { signal });

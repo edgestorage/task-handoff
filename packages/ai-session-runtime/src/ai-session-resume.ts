@@ -70,7 +70,7 @@ export class AiSessionResumeCoordinator {
       if (item.creationSource === "ai-session") {
         if (!this.options.resumeProvider) throw new Error("Provider does not support direct AI session resume.");
         await this.options.resumeProvider(item);
-        this.options.history.remove(item.id);
+        this.options.history.activate(item.id);
         return AiSessionResumeResultSchema.parse({
           disposition: "resumed",
           aiSessionId: item.id,

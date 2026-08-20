@@ -229,6 +229,7 @@
         :instance-display-name="instanceDisplayName"
         :instances="boardInstancesWithAiSessions"
         :loading="board.isLoading.value"
+        :node-local-folders-by-node-id="nodeLocalFoldersByNodeId"
         @open-ai-session-app="openAiSessionAppFromBoard"
         @resolve-approval="resolveAiSessionApprovalAction"
         @select-instance="selectInstance"

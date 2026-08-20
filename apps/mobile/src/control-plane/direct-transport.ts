@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { TtyStreamSnapshotMessageSchema } from '@task-handoff/protocol/app-sessions';
+import type { AiSessionTransientSubscription } from '@task-handoff/protocol/events';
 
 import type { SecureValueStore } from '../platform/secure-storage';
 import { assertDirectIdentityCompatible, probeDirectControlPlane } from './direct-enrollment';
@@ -17,6 +18,7 @@ import {
 const EventSchema = z.object({
   v: z.literal(1),
   type: z.string().trim().min(1),
+  replay: z.boolean().optional(),
   topic: z.string().trim().min(1).optional(),
   payload: z.unknown(),
   scope: z.object({ instanceId: z.string().optional(), nodeId: z.string().optional() }).passthrough().optional(),
@@ -84,7 +86,7 @@ function websocketRouteUrl(origin: string, route: string) {
 }
 
 function websocketUrl(origin: string) {
-  return websocketRouteUrl(origin, '/api/events');
+  return websocketRouteUrl(origin, '/api/events?aiSessionTransient=1');
 }
 
 export class DirectControlPlaneTransport implements MobileControlPlaneTransport {
@@ -153,6 +155,10 @@ export class DirectControlPlaneTransport implements MobileControlPlaneTransport 
         this.eventSubscribers.delete(handlers);
         if (!this.eventSubscribers.size) this.closeEventConnection();
         else if (this.eventOpen) this.sendEventSubscription();
+      },
+      updateAiSessionTransient: (subscription) => {
+        handlers.aiSessionTransient = subscription;
+        this.sendEventSubscription();
       },
     };
   }
@@ -223,7 +229,8 @@ export class DirectControlPlaneTransport implements MobileControlPlaneTransport 
     for (const subscriber of this.eventSubscribers) {
       for (const topic of subscriber.topics ?? DEFAULT_EVENT_TOPICS) topics.add(topic);
     }
-    socket.send(JSON.stringify({ v: 1, type: 'subscribe', topics: [...topics].sort() }));
+    const aiSessionTransient = aggregateTransientDemand(this.eventSubscribers, topics);
+    socket.send(JSON.stringify({ v: 1, type: 'subscribe', topics: [...topics].sort(), ...(aiSessionTransient ? { aiSessionTransient } : {}) }));
   }
 
   connectAppSessionTty(instanceId: string, sessionId: string, handlers: MobileAppSessionTtyHandlers): MobileAppSessionTtyConnection {
@@ -325,6 +332,26 @@ export class DirectControlPlaneTransport implements MobileControlPlaneTransport 
     if (!token) throw new MobileControlPlaneTransportError('DIRECT_SESSION_MISSING', 'The mobile Control Plane session is missing. Sign in again.');
     return token;
   }
+}
+
+function aggregateTransientDemand(subscribers: Iterable<MobileControlPlaneEventHandlers>, topics: Set<string>): AiSessionTransientSubscription | undefined {
+  if (![...topics].some((topic) => topic === 'ai.sessions' || topic === '*')) return undefined;
+  const selected = [...subscribers].filter((entry) => (entry.topics ?? DEFAULT_EVENT_TOPICS).some((topic) => topic === 'ai.sessions' || topic === '*'));
+  if (selected.some((entry) => !entry.aiSessionTransient)) return undefined;
+  const instanceIds = new Set<string>();
+  const timelineSessions = new Map<string, { instanceId: string; sessionId: string }>();
+  let allInstances = false;
+  let timelineAllSessions = false;
+  let replaySince: string | undefined;
+  for (const entry of selected) {
+    const demand = entry.aiSessionTransient!;
+    allInstances ||= demand.messageDeltas.allInstances;
+    timelineAllSessions ||= demand.timelineAllSessions;
+    for (const id of demand.messageDeltas.instanceIds) instanceIds.add(id);
+    for (const session of demand.timelineSessions) timelineSessions.set(`${session.instanceId}\0${session.sessionId}`, session);
+    if (demand.replaySince && (!replaySince || demand.replaySince < replaySince)) replaySince = demand.replaySince;
+  }
+  return { ...(replaySince ? { replaySince } : {}), messageDeltas: { allInstances, instanceIds: [...instanceIds] }, timelineAllSessions, timelineSessions: [...timelineSessions.values()] };
 }
 
 async function parseJson(response: Response) {

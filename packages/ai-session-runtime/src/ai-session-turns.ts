@@ -4,6 +4,7 @@ import type {
   AiSessionSnapshotInput,
   AiSessionSource,
   AiSessionStatus,
+  AiSessionUserMessageDetail,
 } from "@task-handoff/protocol/ai-sessions";
 
 export function compact(value: unknown, max = 500) {
@@ -84,6 +85,33 @@ function normalizeIsoTimestamp(value: unknown) {
   return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : undefined;
 }
 
+function normalizeUserMessages(value: unknown) {
+  if (!Array.isArray(value)) return undefined;
+  const messages = new Map<string, AiSessionUserMessageDetail>();
+  for (const raw of value) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+    const record = raw as Partial<AiSessionUserMessageDetail>;
+    if (!record.id || typeof record.id !== "string" || typeof record.text !== "string") continue;
+    const attachments = Array.isArray(record.attachments)
+      ? record.attachments.filter((attachment) => attachment && typeof attachment.id === "string").slice(0, 6)
+      : [];
+    const message = { id: compact(record.id, 240), text: messageText(record.text), attachments };
+    const existing = messages.get(message.id);
+    // Attachment-bearing controlled events are higher fidelity than transcript
+    // events that only know the message text.
+    messages.set(message.id, existing && existing.attachments.length > message.attachments.length ? existing : message);
+  }
+  const normalized = [...messages.values()].slice(-100);
+  return normalized.length ? normalized : undefined;
+}
+
+function mergeUserMessages(
+  current: NonNullable<AiSessionStatus["turns"]>[number]["userMessages"],
+  incoming: NonNullable<AiSessionStatus["turns"]>[number]["userMessages"],
+) {
+  return normalizeUserMessages([...(current || []), ...(incoming || [])]);
+}
+
 function mergeContextCompactions(
   current: NonNullable<AiSessionStatus["turns"]>[number]["contextCompactions"],
   incoming: NonNullable<AiSessionStatus["turns"]>[number]["contextCompactions"],
@@ -134,6 +162,7 @@ export function normalizeTurns(values?: unknown[], meta: TurnMeta = {}) {
       providerTurnId: record.providerTurnId ? compact(record.providerTurnId, 240) : meta.providerTurnId,
       source: record.source || meta.source,
       userPrompt: record.userPrompt ? messageText(record.userPrompt) : undefined,
+      userMessages: normalizeUserMessages(record.userMessages),
       status: record.status || "completed",
       phase: record.phase,
       summary: record.summary ? compact(record.summary, 1000) : undefined,
@@ -148,7 +177,7 @@ export function normalizeTurns(values?: unknown[], meta: TurnMeta = {}) {
       updatedAt: record.updatedAt,
       completedAt: record.completedAt,
     };
-    if (turn.userPrompt || turn.summary || turn.lastMessage || turn.contextCompactions?.length) {
+    if (turn.userPrompt || turn.userMessages?.length || turn.summary || turn.lastMessage || turn.contextCompactions?.length) {
       turns.push(turn);
     }
   }
@@ -185,6 +214,7 @@ function mergeTurnPatch(
 ) {
   const patch = definedTurnPatch(turn);
   patch.contextCompactions = mergeContextCompactions(existing?.contextCompactions, turn.contextCompactions);
+  patch.userMessages = mergeUserMessages(existing?.userMessages, turn.userMessages);
   if (!existing) {
     return patch;
   }
@@ -192,6 +222,7 @@ function mergeTurnPatch(
     existing.summary === (turn.summary ?? existing.summary) &&
     existing.lastMessage === (turn.lastMessage ?? existing.lastMessage) &&
     existing.lastMessageItemId === (turn.lastMessageItemId ?? existing.lastMessageItemId) &&
+    JSON.stringify(existing.userMessages || []) === JSON.stringify(patch.userMessages || []) &&
     JSON.stringify(existing.contextCompactions || []) === JSON.stringify(patch.contextCompactions || []);
   const sameState = existing.status === (turn.status ?? existing.status) &&
     existing.phase === (turn.phase ?? existing.phase);
@@ -310,6 +341,7 @@ export type TurnUpdatePatch = {
   summary?: AiSessionStatus["summary"];
   lastMessage?: AiSessionStatus["lastMessage"];
   lastMessageItemId?: AiSessionStatus["lastMessageItemId"];
+  userMessage?: AiSessionUserMessageDetail;
 };
 
 export function updateTurns(
@@ -356,6 +388,28 @@ export function updateTurns(
         startedAt: updatedAt,
         updatedAt,
       });
+    }
+  }
+  if (patch.userMessage) {
+    let messageTurn = activeTurnId ? turns.find((turn) => turn.id === activeTurnId) : turns.at(-1);
+    if (!messageTurn) {
+      messageTurn = {
+        id: activeTurnId || stableGeneratedTurnId(patch.userMessage.text, updatedAt),
+        ...meta,
+        userPrompt: messageText(patch.userMessage.text) || undefined,
+        status: patch.status === "waiting" ? "waiting" : "running",
+        phase: (patch.phase as AiSessionPhase | undefined) || "thinking",
+        revision: 0,
+        startedAt: updatedAt,
+        updatedAt,
+      };
+      turns.push(messageTurn);
+    }
+    const mergedMessages = mergeUserMessages(messageTurn.userMessages, [patch.userMessage]);
+    if (JSON.stringify(messageTurn.userMessages || []) !== JSON.stringify(mergedMessages || [])) {
+      messageTurn.userMessages = mergedMessages;
+      messageTurn.revision += 1;
+      messageTurn.updatedAt = updatedAt;
     }
   }
   if (patch.lastMessage || patch.summary) {

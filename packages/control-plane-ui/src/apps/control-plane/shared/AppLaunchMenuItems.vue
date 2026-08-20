@@ -16,7 +16,7 @@
         <DropdownMenuItem v-for="folder in filteredCwdFolders" :key="`${app.id}-${folder.id}`" class="app-launch-menu-item" :disabled="launching" @select="$emit('launch', app.id, folder.id)">
           <Folder :size="14" />
           <span>
-            <strong>{{ folder.name }}</strong>
+            <strong>{{ nodeLocalFolderDisplayName(folder) }}</strong>
             <small>{{ folder.path }}</small>
           </span>
         </DropdownMenuItem>
@@ -43,6 +43,7 @@ import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { Folder, FolderPlus, Search } from "@lucide/vue";
 import type { InstanceBoardItem, NodeLocalFolder } from "../../../api/types";
+import { nodeLocalFolderDisplayName } from "../nodePath";
 import { isSameOrChildNodePath } from "../nodePath";
 import {
   DropdownMenuItem,
@@ -82,7 +83,7 @@ const cwdFolders = computed(() => {
 });
 const filteredCwdFolders = computed(() => {
   const query = folderSearch.value.trim().toLowerCase();
-  return cwdFolders.value.filter((folder) => !query || `${folder.name} ${folder.path}`.toLowerCase().includes(query));
+  return cwdFolders.value.filter((folder) => !query || `${nodeLocalFolderDisplayName(folder)} ${folder.name} ${folder.path}`.toLowerCase().includes(query));
 });
 function isLocalRuntime() {
   return props.instance.runtime?.type === "local" || props.instance.runtime.kind === "local";

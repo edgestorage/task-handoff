@@ -58,6 +58,7 @@ import type {
   NodeFolderTreeEntry,
   NodeJoinInvite,
   NodeLocalFolder,
+  UpdateNodeLocalFolderInput,
   NodeRuntimesPayload,
   NodeControlPlaneConnection,
   NodeControlPlanePairing,
@@ -508,6 +509,10 @@ export function getAiSessionHistoryDetail(instanceId: string, aiSessionId: strin
   return sharedAiSessionsApi.historyDetail(instanceId, aiSessionId);
 }
 
+export function getAiSessionDetail(instanceId: string, aiSessionId: string, signal?: AbortSignal) {
+  return sharedAiSessionsApi.detail(instanceId, aiSessionId, signal);
+}
+
 export function getAiSessionTimeline(instanceId: string, aiSessionId: string, signal?: AbortSignal) {
   return sharedAiSessionsApi.timeline(instanceId, aiSessionId, signal);
 }
@@ -680,8 +685,8 @@ export function getInstanceAppManagementJob(instanceId: string, jobId: string) {
   return getApiData<AppManagementJobResponse>(`controlled-instances/${instanceId}/apps/jobs/${encodeURIComponent(jobId)}`);
 }
 
-export function uploadAiSessionAttachment(input: { instanceId: string; sessionId: string; kind: "image" | "file"; name: string; mime: string; data: string }) {
-  return sharedAiSessionsApi.uploadAttachment(input);
+export function uploadAiSessionAttachment(input: { instanceId: string; sessionId: string; scopeType?: "session" | "create-request"; kind: "image" | "file"; name: string; mime: string; data: string }, onProgress?: (progress: number) => void) {
+  return sharedAiSessionsApi.uploadAttachment(input, onProgress);
 }
 
 export function sendAiSessionMessage(instanceId: string, sessionId: string, message: string, mode?: "auto" | "queue" | "steer" | "immediate", attachments: AiSessionAttachmentRef[] = [], references: AiSessionReference[] = [], permissionMode?: import("@task-handoff/protocol/ai-sessions").AiSessionPermissionMode) {
@@ -842,6 +847,10 @@ export function createNodeJoinInvite(input: { nodeName?: string } = {}) {
 
 export function createNodeLocalFolder(nodeId: string, input: CreateNodeLocalFolderInput) {
   return postApiData<NodeLocalFolder>(`nodes/${nodeId}/local-folders`, input);
+}
+
+export function updateNodeLocalFolder(nodeId: string, folderId: string, input: UpdateNodeLocalFolderInput) {
+  return patchApiData<NodeLocalFolder>(`nodes/${nodeId}/local-folders/${folderId}`, input);
 }
 
 export function deleteNodeLocalFolder(nodeId: string, folderId: string) {

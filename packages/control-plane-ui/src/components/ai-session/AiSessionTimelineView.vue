@@ -20,6 +20,13 @@
             :data-message-id="message.id"
           >
             <MarkdownContent :content="message.text" :code-tools="markdownCodeTools" />
+            <AiSessionMessageAttachments
+              v-if="message.attachments?.length && conversationSessionId"
+              :instance-id="instanceId"
+              :session-id="conversationSessionId"
+              :message-id="message.id"
+              :attachments="message.attachments"
+            />
           </article>
           <footer class="ai-session-user-message-actions" :aria-label="t('sessions.timeline.turnActions')">
             <time
@@ -138,6 +145,7 @@ import type { AiSessionSummary } from "../../api/types";
 import type { AiSessionTurnTimelineState } from "../../apps/control-plane/useAiSessionTimelineStore";
 import { Button } from "../ui/button";
 import AiSessionResult from "./AiSessionResult.vue";
+import AiSessionMessageAttachments from "./AiSessionMessageAttachments.vue";
 import type { TimelineMessage, TimelineTurnNode } from "./timelineActivities";
 import { compactTimelineForTurn, turnElapsedEnd } from "./timelineActivities";
 
@@ -147,6 +155,7 @@ const props = withDefaults(defineProps<{
   canResolveApproval?: boolean;
   fileLinks?: boolean;
   instanceId: string;
+  conversationSessionId?: string;
   session?: AiSessionSummary;
   storedTurns?: AiSessionHistoryTurn[];
   turnTimelines?: Record<string, AiSessionTurnTimelineState>;
@@ -179,7 +188,7 @@ type DisplayConversationTurn = {
   id: string;
   startedAt?: string;
   endedAt?: string;
-  userMessages: TimelineMessage[];
+  userMessages: Extract<TimelineMessage, { type: "user-message" }>[];
   history: TimelineTurnNode[];
   latestResponse?: TimelineMessage;
   activities: AiSessionTimelineActivity[];
@@ -192,8 +201,11 @@ const sourceTurns = computed(() => props.session?.turns || props.storedTurns);
 const turns = computed<DisplayConversationTurn[]>(() => sourceTurns.value.map((turn) => {
   const state = props.turnTimelines[turn.id] || { status: "idle" as const, items: [] };
   const timeline = compactTimelineForTurn(state.items, turn);
-  const userMessages = turn.userPrompt?.trim()
-    ? [{ id: `${turn.id}:user-summary`, turnId: turn.id, type: "user-message" as const, text: turn.userPrompt.trim() }]
+  const retainedUserMessages = "userMessages" in turn && Array.isArray(turn.userMessages) ? turn.userMessages : [];
+  const userMessages = retainedUserMessages.length
+    ? retainedUserMessages.map((message) => ({ ...message, turnId: turn.id, type: "user-message" as const }))
+    : turn.userPrompt?.trim()
+    ? [{ id: `${turn.id}:user-summary`, turnId: turn.id, type: "user-message" as const, text: turn.userPrompt.trim(), attachments: [] }]
     : [];
   const responseText = turn.lastMessage?.trim() || (!props.session ? turn.summary?.trim() : "");
   const lastMessageItemId = "lastMessageItemId" in turn && typeof turn.lastMessageItemId === "string"

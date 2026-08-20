@@ -99,6 +99,10 @@ export function nodePathName(value: string) {
   return withoutTrailingSeparators.split(separator).filter(Boolean).at(-1) || nodePath;
 }
 
+export function nodeLocalFolderDisplayName(folder: { name?: string; path: string }) {
+  return folder.name?.trim() || nodePathName(folder.path);
+}
+
 function comparableNodePath(value: string, windows: boolean): ComparableNodePath | undefined {
   const windowsSlashes = windows ? value.replace(/\\/g, "/") : "";
   const normalized = windows

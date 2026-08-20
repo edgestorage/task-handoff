@@ -2,6 +2,7 @@
 .idea/
 .pnpm-store/
 .task-handoff/
+.tmp-review/
 node_modules/
 /dist/
 /release/

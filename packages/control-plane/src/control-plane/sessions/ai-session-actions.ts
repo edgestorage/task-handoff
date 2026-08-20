@@ -30,6 +30,7 @@ import {
   type AiSessionTimeline,
   type AiSessionTurnTimeline,
   type AiSessionMessageAttachment,
+  type AiSessionMessageAttachmentRef,
   type AiSessionPermissionMode,
   type AiSessionReference,
   type AiSessionResumeResult,
@@ -42,6 +43,7 @@ import {
   type NodeRuntime,
 } from "@task-handoff/protocol/control-plane";
 import { parseResponse } from "@task-handoff/protocol/response-validation";
+import { TRACE_ID_HEADER, type RequestTimingDiagnostics } from "../../shared/http/server-timing.ts";
 import {
   RepositoryAiSessionWorkspaceSchema,
   type RepositoryAiSessionGitSelection,
@@ -50,7 +52,12 @@ import {
 
 type AiSessionActionServiceOptions = {
   requireInstance: (instanceId: string) => Promise<ControlledInstance>;
-  request: (instance: ControlledInstance, route: string, init?: RequestInit) => Promise<unknown>;
+  request: (
+    instance: ControlledInstance,
+    route: string,
+    init?: RequestInit,
+    onTiming?: (diagnostics: RequestTimingDiagnostics) => void,
+  ) => Promise<unknown>;
   requireRuntime: (nodeId: string, runtimeId: string) => Promise<NodeRuntime>;
   refreshSnapshots: () => Promise<unknown>;
   warn?: (data: Record<string, unknown>, message: string) => void;
@@ -75,6 +82,10 @@ export class AiSessionActionService {
 
   async historyDetail(instanceId: string, aiSessionId: string): Promise<AiSessionHistoryDetail> {
     return parseResponse(AiSessionHistoryDetailSchema, await this.get(instanceId, `/ai-sessions/history/${encodeURIComponent(aiSessionId)}`));
+  }
+
+  async detail(instanceId: string, aiSessionId: string) {
+    return parseResponse(AiSessionStatusSchema, await this.get(instanceId, `/ai-sessions/${encodeURIComponent(aiSessionId)}`));
   }
 
   async timeline(instanceId: string, aiSessionId: string): Promise<AiSessionTimeline> {
@@ -115,13 +126,13 @@ export class AiSessionActionService {
       cwdFolderId?: string;
       gitSelection?: RepositoryAiSessionGitSelection;
       message: string;
-      attachments?: AiSessionMessageAttachment[];
+      attachments?: Array<AiSessionMessageAttachment | AiSessionMessageAttachmentRef>;
       references?: AiSessionReference[];
       permissionMode?: AiSessionPermissionMode;
       clientRequestId: string;
     },
   ): Promise<AiSessionCreateResult> {
-    assertAiSessionAttachmentsWithinLimit(input.attachments || []);
+    assertAiSessionAttachmentsWithinLimit((input.attachments || []).filter((attachment): attachment is AiSessionMessageAttachment => attachment.source.type !== "upload-ref"));
     const instance = await this.options.requireInstance(instanceId);
     const supportsWorkspaceSelection = instanceSupportsAiSessionWorkspaceSelection(instance);
     if (input.gitSelection && !supportsWorkspaceSelection) {
@@ -213,22 +224,27 @@ export class AiSessionActionService {
     sessionId: string,
     message: string,
     mode?: AiSessionSendMode,
-    attachments: AiSessionMessageAttachment[] = [],
+    attachments: Array<AiSessionMessageAttachment | AiSessionMessageAttachmentRef> = [],
     references: AiSessionReference[] = [],
     permissionMode?: AiSessionPermissionMode,
+    diagnostics?: { traceId: string; onTiming?: (timing: RequestTimingDiagnostics) => void },
   ): Promise<AiSessionActionResult> {
-    assertAiSessionAttachmentsWithinLimit(attachments);
+    const materializedAttachments = attachments.filter((attachment): attachment is AiSessionMessageAttachment => attachment.source.type !== "upload-ref");
+    assertAiSessionAttachmentsWithinLimit(materializedAttachments);
     const instance = await this.options.requireInstance(instanceId);
     if (attachments.some((attachment) => attachment.source.type === "runtime-path")) {
       const runtime = await this.options.requireRuntime(instance.nodeId, instance.runtimeId);
-      assertAiSessionRuntimePathSupport(attachments, runtime.type);
+      assertAiSessionRuntimePathSupport(materializedAttachments, runtime.type);
     }
     const session = instance.aiSessions.sessions.find((candidate) => candidate.id === sessionId);
     const effectivePermissionMode = permissionMode
       || (session?.agent === "codex" ? instance.config.defaultCodexPermissionMode : undefined);
     return parseResponse(AiSessionActionResultSchema, await this.options.request(instance, sessionRoute(sessionId, "messages"), {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: {
+        "content-type": "application/json",
+        ...(diagnostics?.traceId ? { [TRACE_ID_HEADER]: diagnostics.traceId } : {}),
+      },
       body: JSON.stringify({
         message,
         ...(mode ? { mode } : {}),
@@ -236,7 +252,7 @@ export class AiSessionActionService {
         ...(references.length ? { references } : {}),
         ...(effectivePermissionMode ? { permissionMode: effectivePermissionMode } : {}),
       }),
-    }));
+    }, diagnostics?.onTiming));
   }
 
   async mentionCatalog(instanceId: string, sessionId: string) {

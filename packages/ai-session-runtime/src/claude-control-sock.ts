@@ -133,6 +133,7 @@ export class ClaudeControlSockSessionBridge implements AiSessionControlProvider,
     const updated = this.registry.applyRealtimeEvent(session.id, {
       kind: "send-ack",
       userPrompt: input.message,
+      userMessage: input.messageId ? { id: input.messageId, text: input.message, attachments: input.userMessageAttachments || [] } : undefined,
       source: "control",
     }) || session;
     return { session: updated, provider: this.agent, action: "send", turnId: updated.activeTurnId };

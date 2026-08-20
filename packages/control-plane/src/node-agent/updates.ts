@@ -79,7 +79,38 @@ export type NodeUpdatePackageSelection = {
   relatedCurrentVersions: string[];
 };
 
-export async function resolveNodeUpdatePackage(runCommand: CommandRunner): Promise<NodeUpdatePackageSelection> {
+function activeUpdatePackage(moduleDir: string): NodeUpdatePackageSelection | undefined {
+  let current = path.resolve(moduleDir);
+  let nodeAgentVersion: string | undefined;
+  while (current !== path.dirname(current)) {
+    try {
+      const manifest = JSON.parse(fs.readFileSync(path.join(current, "package.json"), "utf8")) as { name?: unknown; version?: unknown };
+      if (manifest.name === "@task-handoff/node-agent" && typeof manifest.version === "string" && manifest.version.trim()) {
+        nodeAgentVersion = manifest.version.trim();
+      }
+      if (manifest.name === "@task-handoff/server" && typeof manifest.version === "string" && manifest.version.trim()) {
+        return {
+          packageName: "@task-handoff/server",
+          currentVersion: manifest.version.trim(),
+          relatedCurrentVersions: nodeAgentVersion ? [nodeAgentVersion] : [],
+        };
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    current = path.dirname(current);
+  }
+  return nodeAgentVersion
+    ? { packageName: "@task-handoff/node-agent", currentVersion: nodeAgentVersion, relatedCurrentVersions: [] }
+    : undefined;
+}
+
+export async function resolveNodeUpdatePackage(runCommand: CommandRunner, moduleDir?: string): Promise<NodeUpdatePackageSelection> {
+  // Compatibility for v0.0.18: legacy service units may execute a package from
+  // /usr/local while the ambient npm global prefix points somewhere else.
+  // The running package is authoritative for both update selection and version.
+  const active = moduleDir ? activeUpdatePackage(moduleDir) : undefined;
+  if (active) return active;
   const result = await runCommand(npmCommand(), ["root", "--global"]);
   const globalRoot = result.stdout.trim();
   if (!globalRoot) throw new Error("npm did not return its global module root.");

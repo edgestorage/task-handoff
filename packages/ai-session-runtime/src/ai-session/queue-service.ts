@@ -66,10 +66,12 @@ export class AiSessionQueueService {
     attachments: AiSessionMessageAttachment[] = [],
     references: AiSessionReference[] = [],
     permissionMode?: AiSessionPermissionMode,
+    messageId?: string,
   ): AiSessionEnqueueResult | undefined {
     const timestamp = this.now();
     const item: AiSessionQueuedMessage = {
       id: this.generateQueueId(),
+      ...(messageId ? { messageId } : {}),
       message: messageText(message),
       attachments: aiSessionAttachmentMetas(attachments),
       references,

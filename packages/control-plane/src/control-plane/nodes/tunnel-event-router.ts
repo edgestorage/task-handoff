@@ -131,10 +131,15 @@ export class NodeTunnelEventRouter {
             : eventType.startsWith("app-session.") ? "app.sessions" : "ai.sessions",
           createdAt: typeof event.createdAt === "string" ? event.createdAt : new Date().toISOString(),
           payload: sessionEvent.payload,
+          ...(event.replay === true ? { replay: true } : {}),
           scope: eventScope,
         };
         if (this.options.onSessionEvent && !this.options.onSessionEvent(envelope)) return;
-        this.options.events?.publish(eventType, sessionEvent.payload, { topic: envelope.topic, scope: eventScope });
+        this.options.events?.publish(eventType, sessionEvent.payload, {
+          topic: envelope.topic,
+          scope: eventScope,
+          sourceEvent: { id: envelope.id, createdAt: envelope.createdAt, replay: envelope.replay },
+        });
       });
       return true;
     }

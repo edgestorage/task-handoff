@@ -38,6 +38,13 @@ export const ControlPlaneNodeLocalFolderSchema = z.object({
 }).passthrough();
 export type ControlPlaneNodeLocalFolder = z.infer<typeof ControlPlaneNodeLocalFolderSchema>;
 
+export function controlPlaneLocalFolderDisplayName(folder: Pick<ControlPlaneNodeLocalFolder, "name" | "path">) {
+  const name = folder.name.trim();
+  if (name) return name;
+  const path = folder.path.replace(/[\\/]+$/u, "");
+  return path.split(/[\\/]+/u).filter(Boolean).at(-1) || folder.path;
+}
+
 export type ControlPlaneInstanceResourceEntry = ControlPlaneInstanceDirectoryEntry;
 
 export function createControlPlaneResourcesApi(transport: ControlPlaneClientTransport) {

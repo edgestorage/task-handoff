@@ -6,6 +6,7 @@ const card = fs.readFileSync(new URL("../src/apps/control-plane/ai-board/AiSessi
 const dock = fs.readFileSync(new URL("../src/apps/control-plane/ai-board/AiSessionFloatingDock.vue", import.meta.url), "utf8");
 const panel = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.vue", import.meta.url), "utf8");
 const result = fs.readFileSync(new URL("../src/components/ai-session/AiSessionResult.vue", import.meta.url), "utf8");
+const conversation = fs.readFileSync(new URL("../src/components/ai-session/AiSessionConversationContent.vue", import.meta.url), "utf8");
 const message = fs.readFileSync(new URL("../src/components/ai-session/AiSessionStreamingMarkdown.vue", import.meta.url), "utf8");
 const timeline = fs.readFileSync(new URL("../src/components/ai-session/AiSessionTimelineView.vue", import.meta.url), "utf8");
 const animatedText = fs.readFileSync(new URL("../src/components/ai-session/AiSessionAnimatedTextNode.vue", import.meta.url), "utf8");
@@ -18,9 +19,10 @@ test("board, instance session cards, and selected details use the streaming Mark
     assert.match(source, /:is-latest=/);
   }
   for (const source of [dock, panel]) {
-    assert.match(source, /AiSessionResult/);
-    assert.match(source, /:is-latest=/);
+    assert.match(source, /AiSessionConversationContent/);
   }
+  assert.match(conversation, /AiSessionResult/);
+  assert.match(conversation, /:is-latest=/);
   assert.match(panel, /<AiSessionStreamingMarkdown/);
   assert.match(panel, /import AiSessionStreamingMarkdown from "\.\.\/\.\.\/\.\.\/components\/ai-session\/AiSessionStreamingMarkdown\.vue"/);
   assert.match(panel, /<AiSessionToolActivity/);
@@ -31,7 +33,8 @@ test("board, instance session cards, and selected details use the streaming Mark
 });
 
 test("selected session details use the streaming message view", () => {
-  assert.match(panel, /AiSessionResult/);
+  assert.match(panel, /AiSessionConversationContent/);
+  assert.match(conversation, /AiSessionResult/);
   assert.match(result, /AiSessionStreamingMarkdown/);
   assert.match(message, /activeMessage\(props\.instanceId, props\.sessionId\)/);
   assert.match(message, /streamingState\.value\?\.receivedText \?\? props\.content/);

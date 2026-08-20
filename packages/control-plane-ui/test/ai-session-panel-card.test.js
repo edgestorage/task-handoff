@@ -48,9 +48,10 @@ test("AI session list supports persistent card and compact-list layouts", () => 
   assert.match(styles, /\.session-ai-compact-unread\s*\{[\s\S]*justify-self: end;[\s\S]*width: 7px;[\s\S]*height: 7px;[\s\S]*background: var\(--status-info\);/);
   assert.match(styles, /\.session-ai-path-group\.is-compact-list\s*\{\s*gap: 2px;/);
   assert.match(styles, /\.session-ai-path-group:not\(\[data-collapsed="true"\]\)\s*\{[\s\S]*padding-bottom: 6px;/);
-  assert.match(styles, /\.session-ai-path-group\.is-compact-list:not\(\[data-collapsed="true"\]\) \.session-ai-path-group-head\s*\{\s*margin-bottom: 4px;/);
+  assert.doesNotMatch(styles, /\.session-ai-path-group\.is-compact-list[^}]*margin-bottom:/);
   assert.match(styles, /\.session-ai-path-group \+ \.session-ai-path-group\s*\{[\s\S]*margin-top: -6px;/);
   assert.doesNotMatch(styles, /\.session-ai-path-group \+ \.session-ai-path-group\[data-collapsed="true"\]/);
+  assert.match(styles, /\.session-ai-path-group-title\s*\{[^}]*font-weight: 400;/s);
   assert.match(styles, /\.session-ai-compact-row\.is-grouped\s*\{\s*width: 100%;\s*margin-left: 0;\s*padding-left: 8px;/);
   assert.match(styles, /\.session-ai-compact-title\s*\{[^}]*font-weight: 400;/s);
   assert.match(statusIndicator, /\[data-size="compact"\]\[data-state="idle"\][^{]*\{\s*visibility: hidden;/);

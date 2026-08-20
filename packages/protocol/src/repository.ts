@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { AiSessionCreateInputSchema, AiSessionGitSelectionSchema, AiSessionRuntimePathSchema } from "./ai-sessions.ts";
+import { AiSessionCreateInputSchema, AiSessionCreateRefInputSchema, AiSessionGitSelectionSchema, AiSessionRuntimePathSchema } from "./ai-sessions.ts";
 
 const IdSchema = z.string().trim().min(1).max(160).regex(/^[a-zA-Z0-9][a-zA-Z0-9_.:-]*$/);
 const TimestampSchema = z.string().datetime();
@@ -387,6 +387,11 @@ export const RepositoryAiSessionWorkspaceInspectSchema = z.object({
 export const RepositoryAiSessionGitSelectionSchema = AiSessionGitSelectionSchema;
 
 export const RepositoryWorkspaceAiSessionCreateSchema = AiSessionCreateInputSchema.extend({
+  gitSelection: RepositoryAiSessionGitSelectionSchema,
+}).strict();
+
+export const RepositoryWorkspaceAiSessionCreateRefSchema = AiSessionCreateRefInputSchema.extend({
+  cwd: AiSessionRuntimePathSchema,
   gitSelection: RepositoryAiSessionGitSelectionSchema,
 }).strict();
 

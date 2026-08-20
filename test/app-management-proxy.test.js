@@ -70,6 +70,32 @@ test("control-plane gateway sends app management requests through the generic no
   assert.equal(requests[0].body.path.includes("job_apps"), false);
 });
 
+test("control-plane gateway reports transport and upstream Server-Timing without changing the response model", async () => {
+  let timing;
+  let outerHeaders;
+  const gateway = new ControlledInstanceGateway({
+    requireNode: () => node,
+    nodeAgentTransport: () => transportWithRequest(async (_node, _route, init) => {
+      outerHeaders = init.headers;
+      return new Response(JSON.stringify({ data: { ok: true } }), {
+        headers: {
+          "content-type": "application/json",
+          "server-timing": "instance_action;dur=8.0, node_proxy;dur=9.0",
+          "x-task-handoff-trace-id": "trace-gateway-1",
+        },
+      });
+    }),
+  });
+
+  const result = await gateway.request(instance, "/health", { headers: { "x-task-handoff-trace-id": "trace-gateway-1" } }, (value) => { timing = value; });
+  assert.deepEqual(result, { ok: true });
+  assert.equal(outerHeaders["x-task-handoff-trace-id"], "trace-gateway-1");
+  assert.equal(timing.traceId, "trace-gateway-1");
+  assert.match(timing.serverTiming, /instance_action;dur=8\.0/);
+  assert.match(timing.serverTiming, /node_proxy;dur=9\.0/);
+  assert.match(timing.serverTiming, /node_transport;dur=/);
+});
+
 test("structured controlled-instance conflicts survive the proxy boundary", async () => {
   const gateway = new ControlledInstanceGateway({
     requireNode: () => node,

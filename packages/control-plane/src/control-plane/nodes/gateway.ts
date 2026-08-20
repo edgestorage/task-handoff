@@ -177,6 +177,14 @@ export class ControlPlaneNodeAgentGateway {
     });
   }
 
+  updateLocalFolder(node: Node, folderId: string, input: unknown) {
+    return this.client.requestSchema(node, `/local-folders/${encodeURIComponent(folderId)}`, NodeLocalFolderSchema, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input),
+    });
+  }
+
   async requireLocalFolder(node: Node, folderId: string) {
     const folders = await this.listLocalFolders(node);
     const folder = folders.find((item) => item.id === folderId);

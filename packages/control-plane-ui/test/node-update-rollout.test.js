@@ -74,6 +74,13 @@ test("instance update controls are replaced by authoritative convergence state",
   assert.doesNotMatch(panel, /component: ['"]controlled-instance['"]/);
 });
 
+test("node update impact uses the panel body typography instead of browser paragraph defaults", () => {
+  const panel = read("src/apps/control-plane/settings/NodeDetailPanel.vue");
+
+  assert.match(panel, /class="managed-update-impact"/);
+  assert.match(panel, /\.managed-update-impact\s*\{[\s\S]*?margin:\s*0;[\s\S]*?font-size:\s*var\(--node-detail-body-size\);/);
+});
+
 test("node rollout presents converging, successful, and degraded authoritative phases", () => {
   const t = createControlPlaneI18nForTest("en-US").global.t;
 

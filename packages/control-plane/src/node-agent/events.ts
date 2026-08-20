@@ -12,7 +12,7 @@ import {
 } from "@task-handoff/protocol/control-plane";
 import { AiSessionEventTopic, AiSessionEventType } from "@task-handoff/protocol/ai-sessions";
 import { AppSessionEventTopic } from "@task-handoff/protocol/app-sessions";
-import { SessionStreamsHelloEventType, SessionStreamsHelloSchema, eventTopic, type EventEnvelope } from "@task-handoff/protocol/events";
+import { AiSessionTransientSubscriptionSchema, SessionStreamsHelloEventType, SessionStreamsHelloSchema, aiSessionTransientSubscriptionAccepts, eventTopic, type AiSessionTransientSubscription, type EventEnvelope } from "@task-handoff/protocol/events";
 import { safeParseResponse } from "@task-handoff/protocol/response-validation";
 import { EventConnectionRetryTimer, eventConnectionSafetyIntervalMs } from "../shared/events/connection-retry.ts";
 
@@ -21,6 +21,7 @@ type NodeAgentInstanceEventState = {
 };
 
 type ForwardedInstanceEvent = EventEnvelope & {
+  replay?: boolean;
   scope?: {
     instanceId?: string;
     [key: string]: unknown;
@@ -38,11 +39,14 @@ function splitTerminalReplay(data: string, maxLength = 60_000) {
   return chunks;
 }
 
+const MAX_EVENT_OUTPUT_BUFFERED_BYTES = 16 * 1024 * 1024;
+
 export class NodeAgentInstanceEventForwarder {
   private readonly sockets = new Map<string, WebSocket>();
   private readonly socketUrls = new Map<string, string>();
   private readonly retries = new Map<string, { timer: EventConnectionRetryTimer; url?: string }>();
   private readonly outputs = new Set<WebSocket>();
+  private readonly outputSubscriptions = new Map<WebSocket, AiSessionTransientSubscription | undefined>();
   private readonly imagePullTerminalByInstance = new Map<string, { output: ImagePullTerminalOutput; tail: string; finished?: ImagePullTerminalFinished }>();
   private readonly state: NodeAgentInstanceEventState;
   private readonly token?: string;
@@ -91,12 +95,31 @@ export class NodeAgentInstanceEventForwarder {
     for (const retry of this.retries.values()) retry.timer.cancel();
     this.retries.clear();
     this.outputs.clear();
+    this.outputSubscriptions.clear();
   }
 
-  addOutput(socket: WebSocket) {
+  addOutput(socket: WebSocket, options: { expectsTransientSubscription?: boolean; legacyFallbackMs?: number } = {}) {
     this.outputs.add(socket);
-    socket.on("close", () => this.outputs.delete(socket));
-    socket.on("error", () => this.outputs.delete(socket));
+    // Compatibility for v0.0.21: no subscription update means the older control-plane expects the full stream.
+    this.outputSubscriptions.set(socket, options.expectsTransientSubscription ? AiSessionTransientSubscriptionSchema.parse({}) : undefined);
+    let legacyFallback: ReturnType<typeof setTimeout> | undefined;
+    if (!options.expectsTransientSubscription && options.legacyFallbackMs !== undefined) {
+      legacyFallback = this.setTimeoutFn(() => {
+        legacyFallback = undefined;
+        if (this.outputs.has(socket) && this.outputSubscriptions.get(socket) === undefined) this.syncNow();
+      }, options.legacyFallbackMs);
+    }
+    let removed = false;
+    const remove = () => {
+      if (removed) return;
+      removed = true;
+      this.outputs.delete(socket);
+      this.outputSubscriptions.delete(socket);
+      if (legacyFallback) clearTimeout(legacyFallback);
+      this.syncNow();
+    };
+    socket.on("close", remove);
+    socket.on("error", remove);
     for (const instance of this.state.listInstances()) {
       const snapshot = tryInstanceLifecycleSnapshot(instance);
       if (!snapshot) {
@@ -120,10 +143,20 @@ export class NodeAgentInstanceEventForwarder {
         this.sendForwarded(socket, this.createEvent(ImagePullTerminalEventType.Finished, terminal.finished, { instanceId }));
       }
     }
+    if (options.expectsTransientSubscription || options.legacyFallbackMs === undefined) this.syncNow();
+    return remove;
+  }
+
+  setOutputSubscription(socket: WebSocket, input: unknown) {
+    if (!this.outputs.has(socket)) return false;
+    const parsed = AiSessionTransientSubscriptionSchema.safeParse(input);
+    if (!parsed.success) return false;
+    this.outputSubscriptions.set(socket, parsed.data);
+    // Receiving the current subscription cancels the compatibility hold-open
+    // and is the authority to establish controlled-instance inputs.
     this.syncNow();
-    return () => {
-      this.outputs.delete(socket);
-    };
+    for (const [instanceId, instanceSocket] of this.sockets) this.sendInstanceSubscription(instanceId, instanceSocket);
+    return true;
   }
 
   publish(type: string, payload: unknown, scope: Record<string, unknown> = {}) {
@@ -181,7 +214,22 @@ export class NodeAgentInstanceEventForwarder {
 
   private sendForwarded(output: WebSocket, event: EventEnvelope) {
     const encoded = JSON.stringify({ type: "node-agent.event.forwarded", event });
-    if (output.readyState === WebSocket.OPEN) output.send(encoded);
+    this.sendOutput(output, encoded);
+  }
+
+  private sendOutput(output: WebSocket, encoded: string) {
+    if (output.readyState !== WebSocket.OPEN) return false;
+    if (output.bufferedAmount + Buffer.byteLength(encoded, "utf8") > MAX_EVENT_OUTPUT_BUFFERED_BYTES) {
+      try { output.close(1013, "Event consumer is too slow."); } catch { /* Close is best-effort after rejecting the frame. */ }
+      return false;
+    }
+    try {
+      output.send(encoded);
+      return true;
+    } catch {
+      try { output.close(1011, "Event delivery failed."); } catch { /* Close is best-effort after rejecting the frame. */ }
+      return false;
+    }
   }
 
   syncNow() {
@@ -189,7 +237,22 @@ export class NodeAgentInstanceEventForwarder {
   }
 
   diagnostics() {
-    return { reconnectAttempts: this.reconnectAttempts, safetyReconciliations: this.safetyReconciliations, activeConnections: this.sockets.size, pendingRetries: [...this.retries.values()].filter((entry) => entry.timer.pending).length, safetyIntervalMs: this.safetyIntervalMs };
+    const subscriptions = [...this.outputSubscriptions.values()];
+    return {
+      reconnectAttempts: this.reconnectAttempts,
+      safetyReconciliations: this.safetyReconciliations,
+      activeConnections: this.sockets.size,
+      pendingRetries: [...this.retries.values()].filter((entry) => entry.timer.pending).length,
+      safetyIntervalMs: this.safetyIntervalMs,
+      transientDemand: {
+        legacyOutputs: subscriptions.filter((entry) => entry === undefined).length,
+        scopedOutputs: subscriptions.filter((entry) => entry !== undefined).length,
+        messageDeltaAllInstances: subscriptions.some((entry) => entry?.messageDeltas.allInstances),
+        messageDeltaInstanceCount: new Set(subscriptions.flatMap((entry) => entry?.messageDeltas.instanceIds || [])).size,
+        timelineAllSessions: subscriptions.some((entry) => entry?.timelineAllSessions),
+        timelineSessionCount: new Set(subscriptions.flatMap((entry) => entry?.timelineSessions.map((session) => JSON.stringify([session.instanceId, session.sessionId])) || [])).size,
+      },
+    };
   }
 
   private sync() {
@@ -255,7 +318,7 @@ export class NodeAgentInstanceEventForwarder {
       const retry = this.retries.get(instanceId);
       this.retries.set(instanceId, { timer: retry?.timer || new EventConnectionRetryTimer(), url });
       if (socket.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify({ v: 1, type: "subscribe", topics: [AiSessionEventTopic, "app.sessions", "apps", "instances"] }));
+        this.sendInstanceSubscription(instanceId, socket);
         this.logger?.info?.({ instanceId, url }, "ai-session.event.forward.connect");
         this.logger?.info?.({ instanceId, url }, "app-session.event.forward.connect");
       }
@@ -277,7 +340,7 @@ export class NodeAgentInstanceEventForwarder {
         // Reset only after the current protocol handshake has succeeded.
         this.retries.get(instanceId)?.timer.reset();
         const encoded = JSON.stringify({ type: "node-agent.streams.hello", instanceId, payload: hello.data });
-        for (const output of this.outputs) if (output.readyState === WebSocket.OPEN) output.send(encoded);
+        for (const output of this.outputs) this.sendOutput(output, encoded);
         return;
       }
       this.recordAiSessionEvent(instanceId, event);
@@ -287,8 +350,8 @@ export class NodeAgentInstanceEventForwarder {
         event,
       });
       for (const output of this.outputs) {
-        if (output.readyState === WebSocket.OPEN) {
-          output.send(encoded);
+        if (output.readyState === WebSocket.OPEN && this.outputAccepts(output, event)) {
+          this.sendOutput(output, encoded);
         }
       }
     });
@@ -304,6 +367,48 @@ export class NodeAgentInstanceEventForwarder {
       this.logger?.warn?.({ instanceId, url }, "app-session.event.forward.error");
       socket.close();
     });
+  }
+
+  private sendInstanceSubscription(instanceId: string, socket: WebSocket) {
+    if (socket.readyState !== WebSocket.OPEN) return;
+    const subscriptions = [...this.outputs].map((output) => this.outputSubscriptions.get(output));
+    const legacyAll = subscriptions.some((entry) => entry === undefined);
+    if (legacyAll) {
+      socket.send(JSON.stringify({ v: 1, type: "subscribe", topics: [AiSessionEventTopic, "app.sessions", "apps", "instances"] }));
+      return;
+    }
+    const messageDeltas = subscriptions.some((entry) => entry!.messageDeltas.allInstances || entry!.messageDeltas.instanceIds.includes(instanceId));
+    const timelineAllSessions = subscriptions.some((entry) => entry!.timelineAllSessions);
+    const timelineSessionIds = [...new Set(subscriptions.flatMap((entry) => entry!.timelineSessions
+      .filter((session) => session.instanceId === instanceId)
+      .map((session) => session.sessionId)))];
+    const replaySince = earliestReplaySince(subscriptions.map((entry) => entry!.replaySince));
+    socket.send(JSON.stringify({
+      v: 1,
+      type: "subscribe",
+      topics: [
+        AiSessionEventType.Snapshot,
+        AiSessionEventType.Patch,
+        AiSessionEventType.Removed,
+        ...(messageDeltas ? [AiSessionEventType.MessageDelta] : []),
+        ...(timelineAllSessions || timelineSessionIds.length ? [AiSessionEventType.TimelineItem] : []),
+        "app.sessions",
+        "apps",
+        "instances",
+      ],
+      aiSessionTransient: {
+        ...(replaySince ? { replaySince } : {}),
+        messageDeltas: { allInstances: messageDeltas, instanceIds: [] },
+        timelineAllSessions,
+        timelineSessions: timelineSessionIds.map((sessionId) => ({ instanceId, sessionId })),
+      },
+    }));
+  }
+
+  private outputAccepts(output: WebSocket, event: ForwardedInstanceEvent) {
+    const subscription = this.outputSubscriptions.get(output);
+    if (!subscription) return true;
+    return aiSessionTransientSubscriptionAccepts(subscription, event);
   }
 
   private scheduleReconnect(instanceId: string) {
@@ -327,7 +432,7 @@ export class NodeAgentInstanceEventForwarder {
     if (event.topic !== AiSessionEventTopic) {
       return;
     }
-    if (event.type === AiSessionEventType.MessageDelta) {
+    if (event.type === AiSessionEventType.MessageDelta || event.type === AiSessionEventType.TimelineItem) {
       return;
     }
     const meta = eventPayloadMeta(event.payload);
@@ -428,11 +533,16 @@ function instanceEventUrl(instance: ControlledInstance) {
   }
   try {
     const url = new URL("/api/events", base);
+    url.searchParams.set("aiSessionTransient", "1");
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     return url.toString();
   } catch {
     return undefined;
   }
+}
+
+function earliestReplaySince(values: Array<string | undefined>) {
+  return values.filter((value): value is string => Boolean(value)).sort()[0];
 }
 
 function parseForwardedInstanceEvent(raw: unknown, instanceId: string): ForwardedInstanceEvent | undefined {
@@ -455,6 +565,7 @@ function parseForwardedInstanceEvent(raw: unknown, instanceId: string): Forwarde
       topic: typeof record.topic === "string" ? record.topic : eventTopic(type),
       createdAt: typeof record.createdAt === "string" ? record.createdAt : new Date().toISOString(),
       payload: "payload" in record ? record.payload : {},
+      ...(record.replay === true ? { replay: true } : {}),
       scope: {
         ...scope,
         instanceId,

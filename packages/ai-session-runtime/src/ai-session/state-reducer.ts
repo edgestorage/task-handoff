@@ -2,6 +2,7 @@ import type {
   AiSessionRealtimeInput,
   AiSessionSnapshotInput,
   AiSessionStatus,
+  AiSessionUserMessageDetail,
 } from "@task-handoff/protocol/ai-sessions";
 import {
   compact,
@@ -56,6 +57,7 @@ export type AiSessionPatch = Partial<
   >
 > & {
   counters?: Partial<AiSessionStatus["counters"]>;
+  userMessage?: AiSessionUserMessageDetail;
 };
 
 export type ApplyAiSessionPatchOptions = {
@@ -113,9 +115,10 @@ export function applyAiSessionPatch(
     interrupt: status === "running" || status === "waiting",
   };
 
+  const { userMessage: _userMessage, ...sessionPatch } = patch;
   return {
     ...current,
-    ...patch,
+    ...sessionPatch,
     id: current.id,
     agent: current.agent,
     creationSource: current.creationSource,
@@ -178,6 +181,7 @@ export function reduceAiSessionRealtime(
       status: event.status || "running",
       phase: event.phase || "thinking",
       userPrompt,
+      userMessage: event.userMessage,
     }, { updatedAt, meta, clearError: true });
   }
   if (event.kind === "lifecycle") {
@@ -205,6 +209,7 @@ export function reduceAiSessionRealtime(
       status: event.status || "running",
       phase: event.phase || "thinking",
       userPrompt: event.userPrompt,
+      userMessage: event.userMessage,
     }, { updatedAt, meta, clearError: true });
   }
   if (event.kind === "assistant-message") {

@@ -163,6 +163,24 @@ test("cancel retains a retryable compensation receipt when R is unavailable", as
   assert.equal(service.proxyPrivateStore.pendingClaimByClaimId(receipt.claimId), undefined);
 });
 
+test("force cancel resolves a persisted pending record id independently from its claim id", async () => {
+  const { service } = fixture(async () => { throw new Error("proxy offline"); });
+  await assert.rejects(service.claimProxyNode({
+    proxyOrigin: "https://proxy.example.test",
+    inviteToken: "i".repeat(32),
+  }));
+  const receipt = service.listPendingProxyClaims()[0];
+  const pending = service.proxyPrivateStore.pendingClaimByClaimId(receipt.claimId);
+  service.proxyPrivateStore.pendingClaims.delete(pending.id);
+  service.proxyPrivateStore.pendingClaims.put({ ...pending, id: "proxy_pending_legacy" });
+
+  const abandoned = await service.cancelProxyClaim("proxy_pending_legacy", true);
+
+  assert.equal(abandoned.deleted, true);
+  assert.equal(service.proxyPrivateStore.pendingClaimByReference("proxy_pending_legacy"), undefined);
+  assert.equal(service.proxyPrivateStore.pendingClaimByClaimId(receipt.claimId), undefined);
+});
+
 test("cancel retains compensation authority when R returns a mismatched 2xx revoke receipt", async () => {
   let committedBody;
   const { service } = fixture(async (_url, init) => {

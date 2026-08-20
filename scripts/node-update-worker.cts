@@ -142,6 +142,17 @@ function verifyNpmArtifactIntegrity() {
   return { packageName, integrity: actualIntegrity };
 }
 
+function activePackagePrefix(scriptPath: string) {
+  let current = path.resolve(scriptPath);
+  while (current !== path.dirname(current)) {
+    if (path.basename(current) === "node_modules" && path.basename(path.dirname(current)) === "lib") {
+      return path.dirname(path.dirname(current));
+    }
+    current = path.dirname(current);
+  }
+  return undefined;
+}
+
 async function waitForControlPlaneHealth(healthUrl, timeoutMs = 60_000) {
   const deadline = Date.now() + timeoutMs;
   let lastFailure = "not reachable";
@@ -182,10 +193,14 @@ try {
   if (!claimed) process.exit(0);
   const verifiedArtifact = verifyNpmArtifactIntegrity();
   const packageName = verifiedArtifact.packageName;
-  const prefixResult = spawnSync(npmCommand, ["prefix", "--global"], { encoding: "utf8" });
-  if (prefixResult.status !== 0) throw new Error("Could not determine the npm global prefix.");
-  const prefix = prefixResult.stdout.trim();
-  const rootResult = spawnSync(npmCommand, ["root", "--global"], { encoding: "utf8" });
+  // Compatibility for v0.0.18: install beside the worker that the service is
+  // actually running, even when npm's ambient global prefix has changed.
+  const ownedPrefix = activePackagePrefix(process.argv[1]);
+  const prefixResult = ownedPrefix ? undefined : spawnSync(npmCommand, ["prefix", "--global"], { encoding: "utf8" });
+  if (prefixResult && prefixResult.status !== 0) throw new Error("Could not determine the npm global prefix.");
+  const prefix = ownedPrefix || prefixResult?.stdout.trim();
+  if (!prefix) throw new Error("Could not determine the npm global prefix.");
+  const rootResult = spawnSync(npmCommand, ["root", "--global", "--prefix", prefix], { encoding: "utf8" });
   if (rootResult.status !== 0) throw new Error("Could not determine the npm global module root.");
   const globalRoot = rootResult.stdout.trim();
   const packageNames = [packageName];

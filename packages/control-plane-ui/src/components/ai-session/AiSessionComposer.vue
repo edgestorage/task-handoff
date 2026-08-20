@@ -3,11 +3,13 @@ import { computed, nextTick, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { formatBytes } from "../../i18n/presentation";
 import type { SupportedLocale } from "../../i18n/locale";
-import { AppWindow, ArrowUp, Box, Check, CornerDownRight, File, Folder, Hand, LoaderCircle, Minimize2, Pencil, Plus, Puzzle, ScanSearch, ShieldAlert, ShieldCheck, Square, Target, WandSparkles, X } from "@lucide/vue";
+import { AppWindow, ArrowUp, Box, Check, Copy, CornerDownRight, File, Folder, Hand, LoaderCircle, Minimize2, Pencil, Plus, Puzzle, ScanSearch, ShieldAlert, ShieldCheck, Square, Target, WandSparkles, X } from "@lucide/vue";
 import { PopoverAnchor } from "reka-ui";
 import type { AiSessionMentionCandidate } from "../../api/types";
 import type { AiSessionCommandInput, AiSessionPermissionMode } from "@task-handoff/protocol/ai-sessions";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu";
+import { Dialog, DialogContent, DialogTitle } from "../ui/dialog";
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "../ui/context-menu";
 import { Popover, PopoverContent } from "../ui/popover";
 import { Textarea } from "../ui/textarea";
 import { mentionTokenAt, reconcileMentionBindings, replaceMentionToken, type AiSessionMentionBinding } from "./mentions";
@@ -26,6 +28,8 @@ export type AiSessionComposerAttachment = {
   dataUrl?: string;
   previewUrl?: string;
   file?: File;
+  uploadProgress?: number;
+  uploadState?: "uploading" | "uploaded" | "failed";
 };
 
 type DesktopFileBridge = {
@@ -85,6 +89,7 @@ const commandOpen = ref(false);
 const commandQuery = ref("");
 const activeCommandIndex = ref(0);
 const commandCandidates = computed(() => matchingCommands(commandQuery.value));
+const previewAttachment = ref<AiSessionComposerAttachment>();
 const editing = computed(() => Boolean(props.editingLabel));
 const overlayOpen = computed(() => !editing.value && !props.busy && (mentions.open.value || commandOpen.value));
 const mentionPopoverRadius = ref("20px");
@@ -185,6 +190,7 @@ watch(attachments, (next, previous) => {
   for (const attachment of previous || []) {
     if (attachment.previewUrl && !next.some((item) => item.id === attachment.id)) URL.revokeObjectURL(attachment.previewUrl);
   }
+  if (previewAttachment.value && !next.some((item) => item.id === previewAttachment.value?.id)) closeImagePreview();
   void nextTick(resizeInput);
 });
 
@@ -318,6 +324,52 @@ function removeAttachment(id: string) {
 
 function formatAttachmentSize(size: number) {
   return formatBytes(size, locale.value as SupportedLocale);
+}
+
+function openImagePreview(attachment: AiSessionComposerAttachment) {
+  if (attachment.kind === "image") previewAttachment.value = attachment;
+}
+
+function closeImagePreview() {
+  previewAttachment.value = undefined;
+}
+
+function attachmentProgressLabel(attachment: AiSessionComposerAttachment) {
+  return t("sessions.composer.uploadProgress", { progress: Math.round((attachment.uploadProgress || 0) * 100) });
+}
+
+async function copyAttachmentImage(attachment: AiSessionComposerAttachment) {
+  const source = attachment.previewUrl || attachment.dataUrl;
+  if (!source || !navigator.clipboard?.write || typeof ClipboardItem === "undefined") {
+    showControlPlaneToast(t("sessions.composer.copyImageFailed"));
+    return;
+  }
+  try {
+    const sourceBlob = await fetch(source).then((response) => response.blob());
+    const blob = sourceBlob.type === "image/png" ? sourceBlob : await imageBlobAsPng(sourceBlob);
+    await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+    showControlPlaneToast(t("sessions.composer.imageCopied"));
+  } catch {
+    showControlPlaneToast(t("sessions.composer.copyImageFailed"));
+  }
+}
+
+async function imageBlobAsPng(blob: Blob) {
+  const bitmap = await createImageBitmap(blob);
+  try {
+    const canvas = document.createElement("canvas");
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("Canvas is unavailable.");
+    context.drawImage(bitmap, 0, 0);
+    return await new Promise<Blob>((resolve, reject) => canvas.toBlob((png) => {
+      if (png) resolve(png);
+      else reject(new Error("Image conversion failed."));
+    }, "image/png"));
+  } finally {
+    bitmap.close();
+  }
 }
 
 function handlePaste(event: ClipboardEvent) {
@@ -558,7 +610,25 @@ watch(() => props.busy, (busy) => {
   <form ref="composerEl" class="ai-session-composer" :aria-busy="busy" @drop="handleDrop" @dragover.prevent @submit.prevent="submit">
     <div v-if="attachments.length" class="ai-session-composer__attachments">
       <figure v-for="attachment in attachments" :key="attachment.id" :class="{ 'ai-session-composer__file': attachment.kind === 'file' }">
-        <img v-if="attachment.kind === 'image'" :alt="attachment.name" :src="attachment.previewUrl || attachment.dataUrl" />
+        <ContextMenu v-if="attachment.kind === 'image'">
+          <ContextMenuTrigger as-child>
+            <button
+              type="button"
+              class="ai-session-composer__image-trigger"
+              :title="t('sessions.composer.previewImage', { name: attachment.name })"
+              :aria-label="t('sessions.composer.previewImage', { name: attachment.name })"
+              @click="openImagePreview(attachment)"
+            >
+              <img :alt="attachment.name" :src="attachment.previewUrl || attachment.dataUrl" />
+            </button>
+          </ContextMenuTrigger>
+          <ContextMenuContent>
+            <ContextMenuItem @select="copyAttachmentImage(attachment)">
+              <Copy :size="15" />
+              <span>{{ t("sessions.composer.copyImage") }}</span>
+            </ContextMenuItem>
+          </ContextMenuContent>
+        </ContextMenu>
         <template v-else>
           <span class="ai-session-composer__file-icon"><File :size="22" /></span>
           <figcaption>
@@ -566,11 +636,42 @@ watch(() => props.busy, (busy) => {
             <span>{{ formatAttachmentSize(attachment.size) }}<template v-if="attachment.source.type === 'runtime-path'"> · {{ t("sessions.composer.localPath") }}</template></span>
           </figcaption>
         </template>
-        <button type="button" :title="t('sessions.composer.removeAttachment')" :aria-label="t('sessions.composer.removeAttachment')" :disabled="busy" @click="removeAttachment(attachment.id)">
+        <div
+          v-if="attachment.uploadState === 'uploading'"
+          class="ai-session-composer__upload-progress"
+          role="progressbar"
+          :aria-label="attachmentProgressLabel(attachment)"
+          aria-valuemin="0"
+          aria-valuemax="100"
+          :aria-valuenow="Math.round((attachment.uploadProgress || 0) * 100)"
+        >
+          <span>{{ Math.round((attachment.uploadProgress || 0) * 100) }}%</span>
+          <i :style="{ width: `${Math.round((attachment.uploadProgress || 0) * 100)}%` }" />
+        </div>
+        <button class="ai-session-composer__remove" type="button" :title="t('sessions.composer.removeAttachment')" :aria-label="t('sessions.composer.removeAttachment')" :disabled="busy" @click="removeAttachment(attachment.id)">
           <X :size="14" />
         </button>
       </figure>
     </div>
+    <Dialog :open="Boolean(previewAttachment)" @update:open="(open) => { if (!open) closeImagePreview(); }">
+      <DialogContent class="ai-session-composer__image-dialog">
+        <DialogTitle class="sr-only">{{ previewAttachment?.name }}</DialogTitle>
+        <ContextMenu v-if="previewAttachment">
+          <ContextMenuTrigger as-child>
+            <img
+              :src="previewAttachment.previewUrl || previewAttachment.dataUrl"
+              :alt="previewAttachment.name"
+            />
+          </ContextMenuTrigger>
+          <ContextMenuContent>
+            <ContextMenuItem @select="copyAttachmentImage(previewAttachment)">
+              <Copy :size="15" />
+              <span>{{ t("sessions.composer.copyImage") }}</span>
+            </ContextMenuItem>
+          </ContextMenuContent>
+        </ContextMenu>
+      </DialogContent>
+    </Dialog>
     <Popover :open="overlayOpen" @update:open="(open) => { if (!open) { mentions.close(); commandOpen = false; } }">
       <PopoverAnchor as-child>
         <div class="ai-session-composer__input-anchor">
@@ -842,10 +943,20 @@ watch(() => props.busy, (busy) => {
 .ai-session-composer__attachments img {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
 }
 
-.ai-session-composer__attachments button {
+.ai-session-composer__image-trigger {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: transparent;
+  cursor: zoom-in;
+  padding: 0;
+}
+
+.ai-session-composer__attachments .ai-session-composer__remove {
   position: absolute;
   top: 4px;
   right: 4px;
@@ -859,6 +970,48 @@ watch(() => props.busy, (busy) => {
   color: white;
   cursor: pointer;
   padding: 0;
+}
+
+.ai-session-composer__upload-progress {
+  position: absolute;
+  inset: auto 4px 4px;
+  z-index: 1;
+  height: 18px;
+  overflow: hidden;
+  border-radius: 5px;
+  background: rgb(0 0 0 / 72%);
+  color: white;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  line-height: 18px;
+  text-align: center;
+}
+
+.ai-session-composer__upload-progress span {
+  position: relative;
+  z-index: 1;
+}
+
+.ai-session-composer__upload-progress i {
+  position: absolute;
+  inset: auto 0 0;
+  height: 3px;
+  background: var(--primary);
+  transition: width 0.12s linear;
+}
+
+:global(.ai-session-composer__image-dialog) {
+  width: min(92vw, 1120px);
+  max-width: none;
+  height: min(88vh, 860px);
+  padding: 12px;
+}
+
+:global(.ai-session-composer__image-dialog img) {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  object-fit: contain;
 }
 
 .ai-session-composer__attachments button:disabled,

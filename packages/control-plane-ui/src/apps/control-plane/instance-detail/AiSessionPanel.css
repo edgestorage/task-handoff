@@ -887,10 +887,6 @@
   padding-bottom: 6px;
 }
 
-.session-ai-path-group.is-compact-list:not([data-collapsed="true"]) .session-ai-path-group-head {
-  margin-bottom: 4px;
-}
-
 .session-ai-path-group + .session-ai-path-group {
   /* The list already contributes an 8px gap. Keep group-to-group rhythm at 2px
      regardless of whether the preceding group is expanded. */
@@ -985,7 +981,7 @@
   flex: 0 1 auto;
   color: var(--text-strong);
   font-size: 13px;
-  font-weight: 650;
+  font-weight: 400;
 }
 
 .session-ai-path-group-icon {
@@ -1755,7 +1751,13 @@
 .session-ai-detail-head-actions .session-ai-history-continue {
   width: auto;
   padding: 0 10px;
+  gap: 6px;
   font-size: 12px;
+}
+
+.session-ai-detail-head-actions .session-ai-history-continue:disabled {
+  cursor: wait;
+  opacity: 0.72;
 }
 
 :global(.session-ai-detail-actions-menu) {

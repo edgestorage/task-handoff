@@ -27,6 +27,7 @@ export class CodexAppServerSessionControl {
       activeTurnId: result.turnId,
       providerTurnId: result.turnId,
       userPrompt: input.message,
+      userMessage: input.messageId ? { id: input.messageId, text: input.message, attachments: input.userMessageAttachments || [] } : undefined,
       source: "control",
     }) || session;
     return { session: updated, provider: "codex", action: result.started ? "send" : "steer", turnId: updated.activeTurnId, providerTurnId: result.turnId };
@@ -43,6 +44,7 @@ export class CodexAppServerSessionControl {
       activeTurnId: result.turnId,
       providerTurnId: result.turnId,
       userPrompt: input.message,
+      userMessage: input.messageId ? { id: input.messageId, text: input.message, attachments: input.userMessageAttachments || [] } : undefined,
       source: "control",
     }) || session;
     return { session: updated, provider: "codex", action: "send", turnId: updated.activeTurnId, providerTurnId: result.turnId };
@@ -59,6 +61,7 @@ export class CodexAppServerSessionControl {
       activeTurnId: result.turnId,
       providerTurnId: result.turnId,
       userPrompt: input.message,
+      userMessage: input.messageId ? { id: input.messageId, text: input.message, attachments: input.userMessageAttachments || [] } : undefined,
       source: "control",
     }) || session;
     return { session: updated, provider: "codex", action: "steer", turnId: updated.activeTurnId, providerTurnId: result.turnId };

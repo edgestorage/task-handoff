@@ -174,6 +174,7 @@
           :can-interrupt="canInterrupt(selectedCard.session)"
           :can-resolve-approval="canResolveApproval(selectedCard.session)"
           :card="selectedCard"
+          :conversation-session="selectedCardConversationSession || selectedCard.session"
           :attachments="messageAttachments"
           :draft="messageDraft"
           :editing-label="queueComposerEdit ? t('sessions.composer.editingQueuedMessage') : undefined"
@@ -185,6 +186,9 @@
           :instance-display-name="instanceDisplayName"
           :prompt-count="promptCount(selectedCard.session)"
           :prompt-index="promptIndexFor(selectedCard)"
+          :timeline-mode="effectiveTimelineViewMode"
+          :selected-turn-state="selectedTurnTimelineState"
+          :turn-timelines="conversationTurnTimelines"
           @next-prompt="nextPrompt(selectedCard)"
           @open-ai-session-app="openCardApp"
           @previous-prompt="previousPrompt(selectedCard)"
@@ -193,6 +197,8 @@
           @reorder-queued-messages="reorderSelectedQueuedMessages"
           @resolve-approval="resolveSelectedApproval"
           @retry-queued-message="retrySelectedQueuedMessage"
+          @load-turn-timeline="loadTurnTimeline"
+          @continue-from-turn="forkCardSession(selectedCard, 'current', $event)"
           @run="runSelectedSessionAction"
           @command="executeSelectedSessionCommand"
           @cancel-edit="cancelQueueComposerEdit"
@@ -228,13 +234,14 @@ import { translateApiError } from "../../../i18n/apiError";
 import { useEventListener } from "@vueuse/core";
 import { Columns3, LayoutGrid, Search, SlidersHorizontal } from "@lucide/vue";
 import { useQueryClient } from "@tanstack/vue-query";
-import { closeAiSession, editAiSessionQueuedMessage, forkAiSession, interruptAiSession, markAiSessionRead, openAiSessionApp, removeAiSessionQueuedMessage, reorderAiSessionQueuedMessages, resolveAiSessionApproval, retryAiSessionQueuedMessage, sendAiSessionMessage, steerAiSessionQueuedMessage, uploadAiSessionAttachment, useControlPlaneSettingsQuery } from "../../../api/queries";
+import { closeAiSession, editAiSessionQueuedMessage, forkAiSession, getAiSessionDetail, interruptAiSession, markAiSessionRead, openAiSessionApp, removeAiSessionQueuedMessage, reorderAiSessionQueuedMessages, resolveAiSessionApproval, retryAiSessionQueuedMessage, sendAiSessionMessage, steerAiSessionQueuedMessage, uploadAiSessionAttachment, useControlPlaneSettingsQuery } from "../../../api/queries";
 import { controlPlaneQueryKeys } from "../../../api/queryKeys.ts";
 import { executeAiSessionCommand } from "../../../api/ai-session-commands";
-import type { AiSessionCommandInput, AiSessionPermissionMode } from "@task-handoff/protocol/ai-sessions";
+import type { AiSessionCommandInput, AiSessionPermissionMode, AiSessionStatus } from "@task-handoff/protocol/ai-sessions";
 import { isAiSessionApprovalPending } from "@task-handoff/control-plane-client";
-import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions } from "../../../api/types";
+import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions, NodeLocalFolder } from "../../../api/types";
 import type { AiSessionComposerAttachment } from "../../../components/ai-session/AiSessionComposer.vue";
+import { uploadAiSessionComposerAttachment } from "../../../components/ai-session/attachmentUpload";
 import { referencesForBindings, type AiSessionMentionBinding } from "../../../components/ai-session/mentions";
 import { desktopRuntimePathAccess } from "../../../components/ai-session/useAiSessionMentions";
 import { Button } from "../../../components/ui/button";
@@ -251,7 +258,10 @@ import {
 } from "../../../components/ui/dropdown-menu";
 import { ScrollArea } from "../../../components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../../components/ui/tooltip";
-import { showControlPlaneToast } from "../useControlPlaneToasts";
+import { showControlPlaneToast, showDelayedControlPlaneLoadingToast } from "../useControlPlaneToasts";
+import { useAiSessionTimelinePresentation } from "../useAiSessionTimelinePresentation";
+import { useAiSessionTimelineViewMode } from "../useAiSessionTimelineViewMode";
+import { useAiSessionMessageDeltaDemand, useAiSessionTimelineDemand } from "../useAiSessionEventDemand";
 import { aiSessionMessageText, clearAiSessionDraft, loadAiSessionDraftPayload, persistAiSessionDraftPayload } from "../useAiSessionDraft";
 import {
   aiSessionAppTab,
@@ -269,6 +279,7 @@ import AiSessionCard from "./AiSessionCard.vue";
 import AiSessionFloatingDock from "./AiSessionFloatingDock.vue";
 import type { AiBoardCard, AiBoardColumnKey } from "./aiBoardTypes";
 import { useAiBoardTriggers } from "./useAiBoardTriggers";
+import { nodeLocalFolderDisplayName } from "../nodePath";
 
 const AI_BOARD_VISIBLE_COLUMNS_STORAGE_KEY = "task-handoff.control-plane.ai-board.visible-columns";
 const AI_BOARD_LAYOUT_STORAGE_KEY = "task-handoff.control-plane.ai-board.layout";
@@ -290,6 +301,7 @@ const props = defineProps<{
   instanceDisplayName: (instance: InstanceBoardItem) => string;
   instances: InstanceWithAiSessions[];
   loading: boolean;
+  nodeLocalFoldersByNodeId: Record<string, NodeLocalFolder[]>;
 }>();
 
 const emit = defineEmits<{
@@ -322,7 +334,7 @@ const aiSessionActionBusy = ref(false);
 const stoppingAppSessionKey = ref("");
 const forkingSessionKey = ref("");
 const forkRequestIds = new Map<string, string>();
-const pendingBusyFork = ref<{ card: AiBoardCard; mode: "current" | "managed-worktree" }>();
+const pendingBusyFork = ref<{ card: AiBoardCard; mode: "current" | "managed-worktree"; throughTurnId?: string }>();
 const queryClient = useQueryClient();
 const controlPlaneSettings = useControlPlaneSettingsQuery();
 const mentionTrigger = computed(() => controlPlaneSettings.data.value?.mentionTrigger || "@");
@@ -392,6 +404,50 @@ const visibleCards = computed(() => {
 
 const totalBoundSessions = computed(() => allCards.value.length);
 const selectedCard = computed(() => allCards.value.find((card) => card.key === selectedCardKey.value));
+useAiSessionMessageDeltaDemand(computed(() => ({ instanceIds: props.instances.map((instance) => instance.id) })));
+useAiSessionTimelineDemand(computed(() => selectedCard.value ? {
+  instanceId: selectedCard.value.instance.id,
+  sessionId: selectedCard.value.session.id,
+} : undefined));
+const selectedCardSessionDetail = ref<AiSessionStatus>();
+let selectedCardSessionDetailRevision = 0;
+const selectedCardConversationSession = computed<AiSessionSummary | undefined>(() => {
+  const session = selectedCard.value?.session;
+  if (!session) return undefined;
+  const detail = selectedCardSessionDetail.value;
+  return detail?.id === session.id ? { ...session, turns: detail.turns || session.turns } : session;
+});
+const { viewMode: timelineViewMode } = useAiSessionTimelineViewMode();
+const {
+  conversationTurnTimelines,
+  loadSelectedTurnTimeline,
+  loadTurnTimeline,
+  selectedTurn: selectedTimelineTurn,
+  selectedTurnState: selectedTurnTimelineState,
+  supportsTimeline: supportsAiSessionTimeline,
+} = useAiSessionTimelinePresentation({
+  instance: () => selectedCard.value?.instance,
+  promptIndex: () => selectedCard.value ? promptIndexFor(selectedCard.value) : 0,
+  session: selectedCardConversationSession,
+});
+const effectiveTimelineViewMode = computed(() => supportsAiSessionTimeline.value ? timelineViewMode.value : "compact");
+watch(
+  () => selectedTimelineTurn.value ? `${selectedCard.value?.key || ""}:${selectedTimelineTurn.value.id}:${selectedTimelineTurn.value.status}` : "",
+  () => void loadSelectedTurnTimeline(),
+  { immediate: true },
+);
+watch(() => `${selectedCard.value?.instance.id || ""}\u0000${selectedCard.value?.session.id || ""}\u0000${selectedCard.value?.session.updatedAt || ""}`, async () => {
+  const card = selectedCard.value;
+  const revision = ++selectedCardSessionDetailRevision;
+  selectedCardSessionDetail.value = undefined;
+  if (!card) return;
+  try {
+    const detail = await getAiSessionDetail(card.instance.id, card.session.id);
+    if (revision === selectedCardSessionDetailRevision) selectedCardSessionDetail.value = detail;
+  } catch {
+    // Compatibility for v0.0.21: detail absence only disables retained attachment rendering.
+  }
+}, { immediate: true });
 const layoutVisibleCards = computed(() => visibleCards.value
   .filter((card) => visibleColumnKeys.value.has(cardColumnKey(card)))
   .sort((left, right) => compareAiBoardCards(left, right, layoutMode.value === "grid" && gridSortByStatus.value)));
@@ -504,7 +560,22 @@ function compareAiBoardCards(left: AiBoardCard, right: AiBoardCard, sortByStatus
 
 function aiBoardCardPath(card: AiBoardCard) {
   const path = card.session.cwd?.trim();
-  return { key: path || "__unknown_path__", label: path || t("sessions.board.unknownPath") };
+  const folders = props.nodeLocalFoldersByNodeId[card.instance.nodeId] || [];
+  const normalizedPath = normalizeFolderPath(path);
+  const folder = (card.session.cwdFolderId
+    ? folders.find((candidate) => candidate.id === card.session.cwdFolderId)
+    : undefined)
+    || folders.find((candidate) => normalizeFolderPath(candidate.path) === normalizedPath);
+  return {
+    key: normalizedPath || "__unknown_path__",
+    label: folder ? nodeLocalFolderDisplayName(folder) : path || t("sessions.board.unknownPath"),
+  };
+}
+
+function normalizeFolderPath(value?: string) {
+  const path = value?.trim() || "";
+  if (/^[A-Za-z]:[\\/]/u.test(path)) return path.replace(/\\/gu, "/").replace(/\/+$/u, "").toLowerCase();
+  return path.replace(/\/+$/u, "");
 }
 
 function aiBoardCardGroup(card: AiBoardCard, groupBy: Exclude<AiBoardGridGroupBy, "none">) {
@@ -729,12 +800,17 @@ async function runSelectedSessionAction(permissionMode?: AiSessionPermissionMode
 
 async function uploadMessageAttachments(instanceId: string, sessionId: string) {
   return Promise.all(messageAttachments.value.map(async (attachment) => {
-    if (attachment.source.type === "runtime-path") {
-      return { id: attachment.id, kind: attachment.kind, name: attachment.name, mime: attachment.mime, size: attachment.size, source: attachment.source };
-    }
-    if (!attachment.dataUrl) throw new Error(t("sessions.panel.attachmentUnavailable", { name: attachment.name }));
-    const uploaded = await uploadAiSessionAttachment({ instanceId, sessionId, kind: attachment.kind, name: attachment.name, mime: attachment.mime, data: attachment.dataUrl });
-    return { id: uploaded.id, kind: uploaded.kind, source: { type: "upload-ref" as const } };
+    return uploadAiSessionComposerAttachment(attachment, (onProgress) => {
+      if (!attachment.dataUrl) throw new Error(t("sessions.panel.attachmentUnavailable", { name: attachment.name }));
+      return uploadAiSessionAttachment({
+        instanceId,
+        sessionId,
+        kind: attachment.kind,
+        name: attachment.name,
+        mime: attachment.mime,
+        data: attachment.dataUrl,
+      }, onProgress);
+    });
   }));
 }
 
@@ -897,6 +973,7 @@ async function reorderSelectedQueuedMessages(payload: { expectedRevision: number
 async function stopCardAppSession(card: AiBoardCard) {
   if (stoppingAppSessionKey.value) return;
   stoppingAppSessionKey.value = card.key;
+  const loadingToast = showDelayedControlPlaneLoadingToast(t("sessions.actions.closingSession"));
   try {
     await closeAiSession(card.instance.id, card.session.id, crypto.randomUUID());
     await refreshBoard();
@@ -904,35 +981,38 @@ async function stopCardAppSession(card: AiBoardCard) {
       clearSelectedCard();
     }
   } catch (error) {
+    loadingToast.dismiss();
     showControlPlaneToast(translateApiError(error, t, t("sessions.panel.closeSessionFailed")));
     await refreshBoard();
   } finally {
+    loadingToast.dismiss();
     stoppingAppSessionKey.value = "";
   }
 }
 
-async function forkCardSession(card: AiBoardCard, mode: "current" | "managed-worktree" = "current") {
-  if (card.session.status === "running" || card.session.status === "waiting") {
-    pendingBusyFork.value = { card, mode };
+async function forkCardSession(card: AiBoardCard, mode: "current" | "managed-worktree" = "current", throughTurnId?: string) {
+  if (!throughTurnId && (card.session.status === "running" || card.session.status === "waiting")) {
+    pendingBusyFork.value = { card, mode, throughTurnId };
     return;
   }
-  await performCardFork(card, mode);
+  await performCardFork(card, mode, throughTurnId);
 }
 
 function confirmBusyFork() {
   const pending = pendingBusyFork.value;
   pendingBusyFork.value = undefined;
-  if (pending) void performCardFork(pending.card, pending.mode);
+  if (pending) void performCardFork(pending.card, pending.mode, pending.throughTurnId);
 }
 
-async function performCardFork(card: AiBoardCard, mode: "current" | "managed-worktree") {
+async function performCardFork(card: AiBoardCard, mode: "current" | "managed-worktree", throughTurnId?: string) {
   if (forkingSessionKey.value || card.session.actions?.fork !== true) return;
   forkingSessionKey.value = card.key;
-  const requestKey = `${card.key}:${mode}`;
+  const requestKey = `${card.key}:${mode}:${throughTurnId || "latest"}`;
   const clientRequestId = forkRequestIds.get(requestKey) || crypto.randomUUID();
   forkRequestIds.set(requestKey, clientRequestId);
+  const loadingToast = showDelayedControlPlaneLoadingToast(t("sessions.actions.forking"));
   try {
-    const result = await forkAiSession(card.instance.id, card.session.id, { clientRequestId, workspace: { mode } });
+    const result = await forkAiSession(card.instance.id, card.session.id, { clientRequestId, ...(throughTurnId ? { throughTurnId } : {}), workspace: { mode } });
     let forkedCard: AiBoardCard | undefined;
     for (let attempt = 0; attempt < 25; attempt += 1) {
       forkedCard = allCards.value.find((candidate) => candidate.instance.id === card.instance.id && candidate.session.id === result.aiSessionId && candidate.session.providerSessionId === result.providerSessionId);
@@ -947,8 +1027,10 @@ async function performCardFork(card: AiBoardCard, mode: "current" | "managed-wor
     selectCard(forkedCard.key);
     forkRequestIds.delete(requestKey);
   } catch (error) {
+    loadingToast.dismiss();
     showControlPlaneToast(translateApiError(error, t, t("sessions.panel.forkFailed")));
   } finally {
+    loadingToast.dismiss();
     forkingSessionKey.value = "";
   }
 }

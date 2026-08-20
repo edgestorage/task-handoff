@@ -116,6 +116,96 @@ test("detached node update worker does not overwrite rollout completion after se
   assert.match(npmCalls, new RegExp(`install --global --prefix .* @task-handoff/node-agent@${targetVersion.replaceAll(".", "\\.")}`));
 });
 
+test("detached node update worker installs into the prefix that owns the running worker", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "node-update-worker-owned-prefix-"));
+  const activePrefix = path.join(directory, "active");
+  const ambientPrefix = path.join(directory, "ambient");
+  const packagedWorker = path.join(activePrefix, "lib/node_modules/@task-handoff/node-agent/dist/node-update-worker.cts");
+  fs.mkdirSync(path.dirname(packagedWorker), { recursive: true });
+  fs.symlinkSync(path.join(root, "scripts", "node-update-worker.cts"), packagedWorker);
+  const jobFile = path.join(directory, "job.json");
+  const targetVersion = require(path.join(root, "package.json")).version;
+  const timestamp = new Date().toISOString();
+  fs.writeFileSync(jobFile, `${JSON.stringify({
+    id: "update_owned_prefix",
+    nodeId: "node_1",
+    source: "npm",
+    channel: "stable",
+    toVersion: targetVersion,
+    artifactRef: `npm:@task-handoff/node-agent@${targetVersion}#sha512-d29ya2VyLXRlc3Q=`,
+    runtimeArtifacts: [],
+    impact: {
+      runningInstanceCount: 0,
+      stoppedInstanceCount: 0,
+      activeInstanceCount: 0,
+      restartInstanceCount: 0,
+      runningInstanceIds: [],
+      stoppedInstanceIds: [],
+      activeInstanceIds: [],
+    },
+    status: "queued",
+    rollout: {
+      phase: "queued",
+      desiredVersion: targetVersion,
+      expectedInstanceIds: [],
+      expectedInstanceCount: 0,
+      matchedInstanceCount: 0,
+      pendingInstanceCount: 0,
+      failedInstanceCount: 0,
+      deferredInstanceCount: 0,
+    },
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  }, null, 2)}\n`);
+  const npm = path.join(directory, "npm");
+  const npmLog = path.join(directory, "npm.log");
+  fs.writeFileSync(npm, `#!/bin/sh
+printf '%s\\n' "$*" >> "${npmLog}"
+if [ "$1" = "view" ]; then
+  echo '"sha512-d29ya2VyLXRlc3Q="'
+elif [ "$1" = "prefix" ]; then
+  echo "${ambientPrefix}"
+elif [ "$1" = "root" ]; then
+  shift
+  prefix="${ambientPrefix}"
+  while [ "$#" -gt 0 ]; do
+    if [ "$1" = "--prefix" ]; then prefix="$2"; break; fi
+    shift
+  done
+  echo "$prefix/lib/node_modules"
+elif [ "$1" = "install" ]; then
+  shift
+  prefix="${ambientPrefix}"
+  while [ "$#" -gt 0 ]; do
+    if [ "$1" = "--prefix" ]; then prefix="$2"; shift 2; continue; fi
+    shift
+  done
+  mkdir -p "$prefix/lib/node_modules/@task-handoff/node-agent"
+  printf '{"version":"${targetVersion}"}\\n' > "$prefix/lib/node_modules/@task-handoff/node-agent/package.json"
+fi
+exit 0
+`, { mode: 0o755 });
+  fs.writeFileSync(path.join(directory, "systemctl"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+
+  const result = spawnSync(process.execPath, [
+    packagedWorker,
+    "--job-file", jobFile,
+    "--target-version", targetVersion,
+    "--npm-command", npm,
+  ], {
+    encoding: "utf8",
+    env: { ...process.env, PATH: `${directory}:${process.env.PATH}` },
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(activePrefix, "lib/node_modules/@task-handoff/node-agent/package.json"), "utf8")).version, targetVersion);
+  assert.equal(fs.existsSync(path.join(ambientPrefix, "lib/node_modules/@task-handoff/node-agent/package.json")), false);
+  const npmCalls = fs.readFileSync(npmLog, "utf8");
+  assert.doesNotMatch(npmCalls, /^prefix --global$/m);
+  assert.ok(npmCalls.includes(`root --global --prefix ${activePrefix}`));
+  assert.ok(npmCalls.includes(`install --global --prefix ${activePrefix} @task-handoff/node-agent@${targetVersion}`));
+});
+
 test("detached node update worker updates both co-installed distributions even when the standalone package already has the target version", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "server-node-update-worker-"));
   const jobFile = path.join(directory, "job.json");

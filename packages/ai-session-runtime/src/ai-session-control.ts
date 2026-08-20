@@ -1,8 +1,10 @@
+import { randomUUID } from "node:crypto";
 import type {
   AiSessionActionResult,
   AiSessionApprovalInput,
   AiSessionCreationSource,
   AiSessionMessageAttachment,
+  AiSessionConversationAttachment,
   AiSessionPermissionMode,
   AiSessionLineage,
   AiSessionReference,
@@ -21,6 +23,13 @@ export type AiSessionSendInput = {
   attachments?: AiSessionMessageAttachment[];
   references?: AiSessionReference[];
   permissionMode?: AiSessionPermissionMode;
+  /** Internal controlled-instance identity; never accepted from the public wire model. */
+  messageId?: string;
+  userMessageAttachments?: AiSessionConversationAttachment[];
+  /** Internal controlled-instance draft handles, scoped before provider dispatch. */
+  draftAttachmentIds?: string[];
+  draftScopeType?: "session" | "create-request";
+  draftScopeId?: string;
 };
 
 export type AiSessionApprovalDecision = AiSessionApprovalInput["decision"];
@@ -234,20 +243,21 @@ export class AiSessionController {
       throw aiSessionControlError("AI_SESSION_PERMISSION_MODE_UNSUPPORTED", `${session.agent} sessions do not support Codex permission modes.`, 400);
     }
     const mode = input.mode || "auto";
+    const prepared = this.prepareMessage(session, { ...input, message });
     if (mode === "queue" || (mode === "auto" && isSessionBusy(session))) {
-      const queued = this.registry.enqueueMessage(session.id, message, input.attachments || [], input.references || [], input.permissionMode);
+      const queued = this.registry.enqueueMessage(session.id, message, prepared.attachments || [], input.references || [], input.permissionMode, prepared.messageId);
       if (!queued) {
         throw aiSessionControlError("AI_SESSION_NOT_FOUND", "AI session not found.", 404);
       }
       return { session: queued.session, provider: session.agent, action: "queue" as const, queueId: queued.item.id };
     }
     if (mode === "steer") {
-      return this.steerMessage(session.id, { message, attachments: input.attachments || [], references: input.references || [], permissionMode: input.permissionMode });
+      return this.steerPreparedMessage(session, prepared);
     }
     if (isSessionBusy(session)) {
       throw aiSessionControlError("AI_SESSION_BUSY", "AI session is busy. Queue the message or steer it into the running turn.", 409);
     }
-    return this.startMessage(session.id, { message, attachments: input.attachments || [], references: input.references || [], permissionMode: input.permissionMode });
+    return this.startPreparedMessage(session, prepared);
   }
 
   async startMessage(sessionId: string, input: AiSessionSendInput) {
@@ -255,12 +265,23 @@ export class AiSessionController {
     if (isSessionBusy(session)) {
       throw aiSessionControlError("AI_SESSION_BUSY", "AI session is busy. Queue the message or steer it into the running turn.", 409);
     }
+    return this.startPreparedMessage(session, this.prepareMessage(session, input));
+  }
+
+  private async startPreparedMessage(session: AiSessionStatus, input: AiSessionSendInput) {
     const provider = this.requireProvider(session);
     const start = provider.startMessage || provider.sendMessage;
     if (!start) {
       throw aiSessionControlError("AI_SESSION_SEND_UNSUPPORTED", `${session.agent} sessions do not support starting turns.`, 400);
     }
-    return start.call(provider, session, input);
+    try {
+      const result = await start.call(provider, session, input);
+      if (input.messageId) this.registry.commitMessageAttachments(session.id, input.messageId, result?.turnId);
+      return result;
+    } catch (error) {
+      if (input.messageId) this.registry.rollbackMessageAttachments(session.id, input.messageId);
+      throw error;
+    }
   }
 
   async steerMessage(sessionId: string, input: string | AiSessionSendInput) {
@@ -268,13 +289,43 @@ export class AiSessionController {
     if (!isSessionBusy(session)) {
       throw aiSessionControlError("AI_SESSION_NOT_ACTIVE", "AI session is not active.", 409);
     }
+    return this.steerPreparedMessage(session, this.prepareMessage(session, typeof input === "string" ? { message: input } : input));
+  }
+
+  private async steerPreparedMessage(session: AiSessionStatus, input: AiSessionSendInput) {
     const provider = this.requireProvider(session);
     const steer = provider.steerMessage || provider.sendMessage;
     if (!steer) {
       throw aiSessionControlError("AI_SESSION_STEER_UNSUPPORTED", `${session.agent} sessions do not support turn steering.`, 400);
     }
-    const normalized = typeof input === "string" ? { message: input } : input;
-    return steer.call(provider, session, normalized);
+    try {
+      const result = await steer.call(provider, session, input);
+      if (input.messageId) this.registry.commitMessageAttachments(session.id, input.messageId, result?.turnId || session.activeTurnId);
+      return result;
+    } catch (error) {
+      if (input.messageId) this.registry.rollbackMessageAttachments(session.id, input.messageId);
+      throw error;
+    }
+  }
+
+  private prepareMessage(session: AiSessionStatus, input: AiSessionSendInput): AiSessionSendInput {
+    if (input.messageId && input.userMessageAttachments) return input;
+    const messageId = input.messageId || `msg_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
+    const staged = this.registry.stageMessageAttachments({
+      sessionId: session.id,
+      messageId,
+      attachments: input.attachments,
+      runtimePathRoot: session.cwd,
+      draftAttachmentIds: input.draftAttachmentIds,
+      draftScopeType: input.draftScopeType,
+      draftScopeId: input.draftScopeId,
+    });
+    return {
+      ...input,
+      messageId,
+      attachments: staged.providerAttachments,
+      userMessageAttachments: staged.attachments,
+    };
   }
 
   async sendNextQueuedMessage(sessionId: string) {
@@ -288,7 +339,7 @@ export class AiSessionController {
     }
     this.registry.markQueuedMessageSending(session.id, item.id);
     try {
-      const result = await this.startMessage(session.id, { message: item.message, attachments: this.registry.queuedMessageAttachments(item.id), references: item.references, permissionMode: item.permissionMode });
+      const result = await this.startMessage(session.id, { message: item.message, messageId: item.messageId, attachments: this.registry.queuedMessageAttachments(item.id), userMessageAttachments: item.attachments.map((attachment) => ({ ...attachment, contentState: "available" as const })), references: item.references, permissionMode: item.permissionMode });
       const updated = this.registry.removeQueuedMessage(session.id, item.id);
       return { ...result, session: updated || result.session, queueId: item.id };
     } catch (error) {
@@ -303,7 +354,7 @@ export class AiSessionController {
     if (!item) {
       throw aiSessionControlError("AI_SESSION_QUEUE_ITEM_NOT_FOUND", "Queued message not found.", 404);
     }
-    const result = await this.steerMessage(session.id, { message: item.message, attachments: this.registry.queuedMessageAttachments(item.id), references: item.references });
+    const result = await this.steerMessage(session.id, { message: item.message, messageId: item.messageId, attachments: this.registry.queuedMessageAttachments(item.id), userMessageAttachments: item.attachments.map((attachment) => ({ ...attachment, contentState: "available" as const })), references: item.references });
     const updated = this.registry.removeQueuedMessage(session.id, item.id);
     return { ...result, session: updated || result.session, action: "steer" as const, queueId: item.id };
   }

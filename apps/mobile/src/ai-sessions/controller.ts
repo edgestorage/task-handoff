@@ -26,6 +26,7 @@ export class MobileAiSessionController {
   private connection?: MobileControlPlaneEventConnection;
   private readonly recoveries = new Map<string, Promise<void>>();
   private readonly firstDeltas = new Set<string>();
+  private readonly seenTransientEventIds = new Set<string>();
   private epoch = 0;
   private readonly storeGeneration: number;
   private readonly reconnectBackoff = new MobileReconnectBackoff();
@@ -171,9 +172,11 @@ export class MobileAiSessionController {
   applyEvent(event: MobileControlPlaneEvent) {
     if (!this.store.isGeneration(this.controlPlaneId, this.storeGeneration)) return false;
     if (event.type === AiSessionEventType.MessageDelta) {
+      if (event.id && this.seenTransientEventIds.has(event.id)) return true;
+      if (event.id) this.rememberTransientEventId(event.id);
       const parsed = safeParseResponse(AiSessionMessageDeltaEventSchema, event.payload);
       if (!parsed.success || event.scope?.instanceId !== parsed.data.instanceId) return false;
-      this.store.appendMessageDelta(this.controlPlaneId, parsed.data);
+      this.store.appendMessageDelta(this.controlPlaneId, parsed.data, { replay: event.replay });
       const deltaKey = `${parsed.data.instanceId}\u0000${parsed.data.sessionId}\u0000${parsed.data.turnId}\u0000${parsed.data.itemId}`;
       if (!this.firstDeltas.has(deltaKey)) {
         this.firstDeltas.add(deltaKey);
@@ -183,6 +186,8 @@ export class MobileAiSessionController {
       return true;
     }
     if (event.type === AiSessionEventType.TimelineItem) {
+      if (event.id && this.seenTransientEventIds.has(event.id)) return true;
+      if (event.id) this.rememberTransientEventId(event.id);
       const parsed = safeParseResponse(AiSessionTimelineItemEventSchema, event.payload);
       if (!parsed.success || event.scope?.instanceId !== parsed.data.instanceId) return false;
       this.store.applyTimelineItem(this.controlPlaneId, parsed.data);
@@ -212,6 +217,12 @@ export class MobileAiSessionController {
       return false;
     }
     return true;
+  }
+
+  private rememberTransientEventId(id: string) {
+    this.seenTransientEventIds.delete(id);
+    this.seenTransientEventIds.add(id);
+    while (this.seenTransientEventIds.size > 10_000) this.seenTransientEventIds.delete(this.seenTransientEventIds.values().next().value!);
   }
 
   private async recoverInstanceNow(instanceId: string, epoch: number) {

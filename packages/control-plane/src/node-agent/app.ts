@@ -537,7 +537,8 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       || instance.targetStatus !== "reachable"
       || !instance.target.web
       || !instance.registrationToken) return false;
-    const syncKey = `${instance.processIncarnationId || "unknown"}:${instance.config.aiSessionHistoryLimit}`;
+    const supportsAttachmentRetention = instance.capabilities.features.aiSessionConversationAttachments?.retentionSettings === true;
+    const syncKey = `${instance.processIncarnationId || "unknown"}:${instance.config.aiSessionHistoryLimit}:${supportsAttachmentRetention ? instance.config.aiSessionAttachmentRetentionDays : "unsupported"}`;
     if (aiSessionPersistenceSyncKeys.get(id) === syncKey) return true;
     let response: Response;
     try {
@@ -547,7 +548,11 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
           "content-type": "application/json",
           authorization: `Bearer ${instance.registrationToken}`,
         },
-        body: JSON.stringify({ historyLimit: instance.config.aiSessionHistoryLimit }),
+        body: JSON.stringify({
+          historyLimit: instance.config.aiSessionHistoryLimit,
+          // Compatibility for v0.0.21: omit this field unless the controlled instance advertises support.
+          ...(supportsAttachmentRetention ? { attachmentRetentionDays: instance.config.aiSessionAttachmentRetentionDays } : {}),
+        }),
       }, DEFAULT_AUTO_IMPORT_AGENT_CONFIG_TIMEOUT_MS);
     } catch (error) {
       lifecycleLoggers.warn({
@@ -969,7 +974,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       platform: finalComputerPlatform(platform),
       arch: process.arch,
       protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
-      capabilities: { modelEndpointProbe: true, aiSessionHistoryLimit: true, folderPlaces: true },
+      capabilities: { modelEndpointProbe: true, aiSessionHistoryLimit: true, aiSessionAttachmentRetention: true, folderPlaces: true, localFolderNameUpdate: true },
       build: buildInfo("node-agent"),
       instanceProxy: { ...instanceProxyMetrics },
       serverTime: new Date().toISOString(),
@@ -1015,6 +1020,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     listFolderPlaces: folderPlaces,
     listFolderTree,
     createLocalFolder: (input) => state.createLocalFolder(input),
+    updateLocalFolder: (id, input) => state.updateLocalFolder(id, input),
     deleteLocalFolder: (id) => state.localFolders.delete(id),
   });
 
@@ -1066,10 +1072,21 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     },
   });
 
-  app.get("/api/node-agent/events", { websocket: true }, (socket) => {
+  app.get("/api/node-agent/events", { websocket: true }, (socket, request) => {
     const ws = socket as WebSocket;
     ws.send(JSON.stringify({ type: "node-agent.events.connected", nodeId, serverTime: new Date().toISOString() }));
-    const dispose = eventForwarder.addOutput(ws);
+    const query = request.query as { aiSessionTransient?: string };
+    const dispose = eventForwarder.addOutput(ws, { expectsTransientSubscription: query.aiSessionTransient === "1" });
+    ws.on("message", (raw) => {
+      try {
+        const message = JSON.parse(String(raw)) as Record<string, unknown>;
+        if (message.type === "subscribe" && message.aiSessionTransient !== undefined) {
+          eventForwarder.setOutputSubscription(ws, message.aiSessionTransient);
+        }
+      } catch {
+        // Event subscription updates are additive; malformed updates leave the compatibility stream unchanged.
+      }
+    });
     ws.on("close", dispose);
     ws.on("error", dispose);
   });

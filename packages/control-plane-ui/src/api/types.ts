@@ -413,6 +413,12 @@ export type Node = {
   status: "unknown" | "online" | "offline" | "degraded";
   health: "unknown" | "ok" | "degraded" | "failed";
   connectionPhase?: "connecting" | "handshaking" | "healthy" | "reconnecting" | "suspect" | "offline";
+  connectionDiagnostics?: {
+    pingRttMs?: number;
+    pingRttP95Ms?: number;
+    consecutiveReconnects: number;
+    nextRetryAt?: string;
+  };
   capabilities: Record<string, unknown>;
   labels: Record<string, string>;
   lastSeenAt?: string;
@@ -552,7 +558,6 @@ export type NodeLocalFolder = {
   nodeId: string;
   name: string;
   path: string;
-  defaultImageSelection?: ImageSelection;
   labels: Record<string, string>;
   createdAt: string;
   updatedAt: string;
@@ -707,6 +712,7 @@ export type ControlledInstance = {
     autoImportAgentConfigs: boolean;
     defaultCodexPermissionMode: AiSessionPermissionMode;
     aiSessionHistoryLimit: number;
+    aiSessionAttachmentRetentionDays: number;
   };
   workspace: {
     mode?: WorkspacePolicy["mode"];
@@ -1008,6 +1014,7 @@ export type CreateControlledInstanceInput = {
     autoImportAgentConfigs?: boolean;
     defaultCodexPermissionMode?: AiSessionPermissionMode;
     aiSessionHistoryLimit?: number;
+    aiSessionAttachmentRetentionDays?: number;
   };
   modelSelection?: ModelSelection;
   start?: boolean;
@@ -1027,6 +1034,7 @@ export type UpdateControlledInstanceInput = {
     autoImportAgentConfigs?: boolean;
     defaultCodexPermissionMode?: AiSessionPermissionMode;
     aiSessionHistoryLimit?: number;
+    aiSessionAttachmentRetentionDays?: number;
   };
   modelSelection?: ModelSelection;
 };
@@ -1101,9 +1109,10 @@ export type UpdateNodeInput = Pick<Node, "name">;
 export type CreateNodeLocalFolderInput = {
   name: string;
   path: string;
-  defaultImageSelection?: ImageSelection;
   labels?: Record<string, string>;
 };
+
+export type UpdateNodeLocalFolderInput = Pick<NodeLocalFolder, "name">;
 
 export type CreateNodeRuntimeInput = {
   id?: string;
