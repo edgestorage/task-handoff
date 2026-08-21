@@ -4,6 +4,7 @@ const {
   DESKTOP_NODE_AGENT_GRACEFUL_TIMEOUT_MS,
   ensureDesktopNodeAgent,
   inspectExistingDesktopControlPlane,
+  inspectStartedDesktopControlPlane,
   inspectExistingDesktopNodeAgent,
   stopExistingDesktopNodeAgent,
 } = require("../src/node-agent-handoff.cjs");
@@ -36,6 +37,46 @@ test("desktop detects a verified Control Plane before replacing its node agent",
     isAlive: () => true,
     processIdentity: () => "test:reused-pid",
   }).status, "stale");
+});
+
+test("desktop identifies the Control Plane it started from the singleton owner", () => {
+  const existing = owner({
+    component: "control-plane",
+    dataDir: "/desktop/control-plane",
+    host: "127.0.0.1",
+    port: 18081,
+  });
+  assert.deepEqual(inspectStartedDesktopControlPlane({
+    pid: existing.pid,
+    dataDir: existing.dataDir,
+    host: existing.host,
+    port: existing.port,
+    inspectOptions: {
+      readOwner: () => existing,
+      isAlive: () => true,
+      processIdentity: () => existing.startIdentity,
+    },
+  }), { status: "running", owner: existing });
+});
+
+test("desktop rejects a Control Plane singleton owned by another launch", () => {
+  const existing = owner({
+    component: "control-plane",
+    dataDir: "/server/control-plane",
+    host: "127.0.0.1",
+    port: 18081,
+  });
+  assert.equal(inspectStartedDesktopControlPlane({
+    pid: 5678,
+    dataDir: "/desktop/control-plane",
+    host: existing.host,
+    port: existing.port,
+    inspectOptions: {
+      readOwner: () => existing,
+      isAlive: () => true,
+      processIdentity: () => existing.startIdentity,
+    },
+  }).status, "foreign");
 });
 
 test("desktop node-agent ensure state machine replaces an existing verified owner", async () => {

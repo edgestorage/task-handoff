@@ -52,6 +52,12 @@ test("the composer offers steer while the session is running and no action reque
   assert.match(composer, /v-if="canSteer"[\s\S]*:disabled="busy"[\s\S]*@click="emit\('steer'\)"/);
 });
 
+test("Ctrl+Enter steers a running turn without changing normal Enter submission", () => {
+  assert.match(composer, /event\.key === "Enter"[\s\S]*event\.ctrlKey[\s\S]*!event\.metaKey[\s\S]*!event\.altKey[\s\S]*!event\.shiftKey[\s\S]*canSteer\.value[\s\S]*event\.preventDefault\(\);[\s\S]*event\.stopPropagation\(\);[\s\S]*emit\("steer"\);/);
+  assert.match(composer, /if \(event\.key !== "Enter" \|\| event\.shiftKey \|\| event\.isComposing\) \{[\s\S]*submit\(\);/);
+  assert.match(composer, /:title="t\('sessions\.composer\.steerTurnShortcut'\)"[\s\S]*:aria-label="t\('sessions\.composer\.steerTurnShortcut'\)"/);
+});
+
 test("the Codex composer exposes exactly three permission modes beside the plus button", () => {
   assert.match(composer, /class="ai-session-composer__leading">[\s\S]*<Plus :size="18" \/>[\s\S]*<DropdownMenu v-if="permissionProvider === 'codex'">/);
   assert.match(composer, /value: "ask", label: t\("sessions\.permission\.ask"\)/);

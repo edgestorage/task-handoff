@@ -411,6 +411,19 @@ function submit() {
 function handleInputKeydown(event: KeyboardEvent) {
   if (props.busy) return;
   if (event.isComposing) return;
+  if (
+    event.key === "Enter"
+    && event.ctrlKey
+    && !event.metaKey
+    && !event.altKey
+    && !event.shiftKey
+    && canSteer.value
+  ) {
+    event.preventDefault();
+    event.stopPropagation();
+    emit("steer");
+    return;
+  }
   if (event.key === "ArrowDown" || event.key === "ArrowUp") {
     const moved = moveActiveMention(event.key === "ArrowDown" ? 1 : -1);
     if (moved) {
@@ -814,7 +827,8 @@ watch(() => props.busy, (busy) => {
           v-if="canSteer"
           type="button"
           class="ai-session-composer__tool"
-          :title="t('sessions.composer.steerTurn')"
+          :title="t('sessions.composer.steerTurnShortcut')"
+          :aria-label="t('sessions.composer.steerTurnShortcut')"
           :disabled="busy"
           @click="emit('steer')"
         >

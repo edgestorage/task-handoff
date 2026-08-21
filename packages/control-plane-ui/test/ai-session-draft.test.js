@@ -12,11 +12,17 @@ const storage = new MemoryStorage();
 global.window = { localStorage: storage };
 const {
   AI_SESSION_DRAFT_TTL_MS,
+  aiSessionCreationDraftKey,
   loadAiSessionDraft,
   loadAiSessionDraftPayload,
   persistAiSessionDraft,
   persistAiSessionDraftPayload,
 } = await import("../src/apps/control-plane/useAiSessionDraft.ts");
+
+test("new-session draft keys are isolated by instance", () => {
+  assert.equal(aiSessionCreationDraftKey("inst-a"), "new-session:inst-a");
+  assert.notEqual(aiSessionCreationDraftKey("inst-a"), aiSessionCreationDraftKey("inst-b"));
+});
 
 test("AI session drafts are isolated by session id and expire", () => {
   const now = 1_000_000;

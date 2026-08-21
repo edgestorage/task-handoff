@@ -43,6 +43,7 @@ const {
   DESKTOP_NODE_AGENT_GRACEFUL_TIMEOUT_MS,
   ensureDesktopNodeAgent,
   inspectExistingDesktopControlPlane,
+  inspectStartedDesktopControlPlane,
   stopExistingDesktopNodeAgent,
 } = require("./node-agent-handoff.cjs");
 const { applyDesktopDockIcon, desktopIconPath: resolveDesktopIconPath, desktopTrayIconPath: resolveDesktopTrayIconPath } = require("./icon.cjs");
@@ -815,8 +816,11 @@ function startNodeAgent(options = {}) {
   return child;
 }
 
-async function waitForControlPlane(url, child, attempts = 80) {
-  const expectedDataDir = resolveDataDir();
+async function waitForControlPlane(url, child, options = {}) {
+  const attempts = options.attempts ?? 80;
+  const expectedDataDir = options.dataDir || resolveDataDir();
+  const expectedHost = options.host || resolveControlPlaneHost();
+  const expectedPort = options.port || resolveControlPlanePort();
   for (let index = 0; index < attempts; index += 1) {
     const spawnError = childProcessSpawnErrors.get(child);
     if (spawnError) {
@@ -829,7 +833,19 @@ async function waitForControlPlane(url, child, attempts = 80) {
       const response = await fetch(`${url}/api/health`);
       if (response.ok) {
         const payload = await response.json();
-        if (path.resolve(payload?.data?.dataDir || "") === expectedDataDir) {
+        const health = payload?.data;
+        const owner = inspectStartedDesktopControlPlane({
+          pid: child.pid,
+          dataDir: expectedDataDir,
+          host: expectedHost,
+          port: expectedPort,
+        });
+        if (
+          health?.ok === true
+          && health?.role === "control-plane"
+          && health?.build?.component === "control-plane"
+          && owner.status === "running"
+        ) {
           return;
         }
       }
@@ -947,7 +963,7 @@ async function boot() {
     const actualNodeAgentPort = Number(nodeAgentHealth?.listener?.port) || nodeAgentPort;
     const nodeAgentEndpoint = localHttpUrl(nodeAgentHost, actualNodeAgentPort);
     const child = startControlPlane({ host: controlPlaneHost, port: controlPlanePort, nodeAgentEndpoint, nodeAgentControlEndpoint });
-    await waitForControlPlane(url, child);
+    await waitForControlPlane(url, child, { host: controlPlaneHost, port: controlPlanePort });
     desktopServiceLifecycle.markRunning();
     desktopServiceSupervisor.markRunning(url);
     desktopWindows.open();
@@ -976,6 +992,18 @@ ipcMain.handle("task-handoff:choose-project-folder", async () => {
     properties: ["openDirectory", "createDirectory"],
   });
   return result.canceled ? undefined : { path: result.filePaths[0] };
+});
+
+ipcMain.handle("task-handoff:open-local-path", async (_event, localPath) => {
+  const normalized = typeof localPath === "string" ? localPath.trim() : "";
+  if (!normalized || !path.isAbsolute(normalized)) return { ok: false, code: "invalid-local-path" };
+  try {
+    if (!fs.statSync(normalized).isDirectory()) return { ok: false, code: "local-path-not-directory" };
+  } catch {
+    return { ok: false, code: "local-path-unavailable" };
+  }
+  const error = await shell.openPath(normalized);
+  return error ? { ok: false, code: "open-local-path-failed", error } : { ok: true };
 });
 
 ipcMain.handle("task-handoff:open-app-window", (_event, url) => {

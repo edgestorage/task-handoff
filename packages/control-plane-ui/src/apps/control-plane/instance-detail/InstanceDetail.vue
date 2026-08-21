@@ -159,7 +159,7 @@
         :standalone="standalone"
         :toolbar-target="sessionToolbarTarget"
         @copy-registration="$emit('copyRegistration', $event)"
-        @launch-app="(target, appId, cwdFolderId) => $emit('launchApp', target, appId, cwdFolderId)"
+        @launch-app="(target, appId, cwdFolderId, options) => $emit('launchApp', target, appId, cwdFolderId, options)"
         @move-session-tab="(sourceKey, targetKey, placement, targetPane) => $emit('moveSessionTab', sourceKey, targetKey, placement, targetPane)"
         @move-session-to-pane="(sessionKey, pane) => $emit('moveSessionToPane', sessionKey, pane)"
         @focus-session-pane="$emit('focusSessionPane', $event)"
@@ -265,7 +265,7 @@ const props = defineProps<{
 
 defineEmits<{
   copyRegistration: [instance: InstanceBoardItem];
-  launchApp: [instance: InstanceBoardItem, appId: string, cwdFolderId?: string];
+  launchApp: [instance: InstanceBoardItem, appId: string, cwdFolderId?: string, options?: Record<string, unknown>];
   moveSessionTab: [sourceKey: string, targetKey: string, placement: "before" | "after", targetPane?: SessionPaneId];
   moveSessionToPane: [sessionKey: string, pane: SessionPaneId];
   focusSessionPane: [pane: SessionPaneId];

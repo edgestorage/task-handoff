@@ -78,6 +78,17 @@ export class LocalhostRuntimeAdapter implements RuntimeAdapter {
   private readonly paths: NodeAgentStorePaths;
   private readonly nodeAgentUrl: () => string;
   private readonly processSupervisor: LocalProcessSupervisor;
+
+  async resolveInstanceWeb(context: ExecutorContext) {
+    const port = context.instance.runtime.port;
+    if (!port) {
+      throw Object.assign(new Error(`Instance ${context.instance.id} does not have a node-owned local runtime port.`), {
+        statusCode: 409,
+        code: "INSTANCE_RUNTIME_ENDPOINT_UNAVAILABLE",
+      });
+    }
+    return `http://127.0.0.1:${port}`;
+  }
   private readonly commandOverride?: string[];
   private readonly lockPath?: string;
 

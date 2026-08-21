@@ -83,6 +83,7 @@ test("standalone switching warms an uncached target before changing the window i
 
 test("initial loading overlay covers both the main workbench and standalone detail before fading out", () => {
   assert.match(workbench, /<Transition name="workbench-loading">[\s\S]*?v-if="workbenchLoadingOverlayVisible"[\s\S]*?class="workbench-loading-overlay"/);
+  assert.match(workbench, /<InstanceDetail\s+[\s\S]*?v-else-if="instanceViewMode && !settingsMode && !workbenchLoadingOverlayVisible"/);
   assert.match(workbench, /const initialWorkbenchLoadingVisible = ref\(true\);[\s\S]*?const initialWorkbenchLoadingFinished = ref\(false\);/);
   assert.match(workbench, /\(standaloneMode\.value && !standaloneOwnershipResolved\.value\) \|\| board\.isLoading\.value[\s\S]*?window\.requestAnimationFrame\(\(\) => \{\s*initialWorkbenchLoadingVisible\.value = false;/);
   assert.match(workbench, /\{ flush: "post", immediate: true \}/);

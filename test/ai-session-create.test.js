@@ -3,6 +3,7 @@ const { EventEmitter } = require("node:events");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { Readable } = require("node:stream");
 const test = require("node:test");
 const ts = require("typescript");
 const { registerWorkspaceRequire } = require("./workspace-require.js");
@@ -18,6 +19,7 @@ require.extensions[".ts"] = (module, filename) => {
 };
 
 const { AiSessionController } = require("../packages/ai-session-runtime/src/ai-session-control.ts");
+const { AiSessionConversationAttachmentStore } = require("../packages/ai-session-runtime/src/ai-session-conversation-attachment-store.ts");
 const { AiSessionCreateCoordinator } = require("../packages/ai-session-runtime/src/ai-session-create.ts");
 const { AiSessionForkCoordinator } = require("../packages/ai-session-runtime/src/ai-session-fork.ts");
 const { AiSessionCloseCoordinator } = require("../packages/ai-session-runtime/src/ai-session-close.ts");
@@ -124,6 +126,229 @@ test("AI session create coordinator removes the projection and provider thread w
   assert.deepEqual(deleted, ["thread-failed"]);
   assert.deepEqual(registry.all(), []);
   assert.equal(diagnostics[0].providerSessionId, "thread-failed");
+});
+
+test("AI session create retries the same uploaded attachment after first-turn compensation", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-create-attachment-retry-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const conversationAttachments = new AiSessionConversationAttachmentStore({ dataDir: root });
+  const registry = createAiSessionRegistry({
+    dir: path.join(root, "sessions"),
+    conversationAttachments,
+  });
+  const controller = new AiSessionController(registry);
+  let creates = 0;
+  let starts = 0;
+  controller.register({
+    agent: "codex",
+    async createSession({ cwd }) {
+      creates += 1;
+      return { providerSessionId: `thread-attachment-retry-${creates}`, cwd, creationSource: "ai-session" };
+    },
+    async startMessage(_session, input) {
+      starts += 1;
+      assert.equal(fs.readFileSync(input.attachments[0].retainedPath, "utf8"), "retry");
+      if (starts === 1) throw new Error("first turn failed");
+    },
+    async deleteSession() {},
+  });
+  const draft = await conversationAttachments.createDraft({
+    scopeType: "create-request",
+    scopeId: "create-attachment-retry",
+    kind: "file",
+    name: "retry.txt",
+    mime: "text/plain",
+    size: 5,
+    source: Readable.from(["retry"]),
+  });
+  const coordinator = new AiSessionCreateCoordinator({ registry, controller });
+  const input = {
+    agent: "codex",
+    cwd: root,
+    message: "Retry with the same attachment",
+    clientRequestId: "create-attachment-retry",
+    draftAttachmentIds: [draft.id],
+    draftScopeType: "create-request",
+    draftScopeId: "create-attachment-retry",
+  };
+
+  await assert.rejects(coordinator.create(input), { code: "AI_SESSION_MATERIALIZATION_FAILED" });
+  const result = await coordinator.create(input);
+  assert.equal(result.disposition, "created");
+  assert.equal(creates, 2);
+  assert.equal(starts, 2);
+});
+
+test("AI session queue preserves staged upload ownership until automatic dequeue", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-queue-attachment-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const workspace = path.join(root, "workspace");
+  fs.mkdirSync(workspace);
+  const conversationAttachments = new AiSessionConversationAttachmentStore({ dataDir: root });
+  const registry = createAiSessionRegistry({
+    dir: path.join(root, "sessions"),
+    conversationAttachments,
+  });
+  const controller = new AiSessionController(registry);
+  const starts = [];
+  controller.register({
+    agent: "codex",
+    async startMessage(_session, input) {
+      starts.push(input);
+      assert.equal(fs.readFileSync(input.attachments[0].retainedPath, "utf8"), "image");
+      return { turnId: "turn-queued-attachment" };
+    },
+  });
+  const session = registry.start({
+    agent: "codex",
+    cwd: workspace,
+    activeTurnId: "turn-running",
+    status: "running",
+    phase: "thinking",
+  });
+  const draft = await conversationAttachments.createDraft({
+    scopeType: "session",
+    scopeId: session.id,
+    kind: "image",
+    name: "pasted.png",
+    mime: "image/png",
+    size: 5,
+    source: Readable.from(["image"]),
+  });
+
+  const queued = await controller.sendMessage(session.id, {
+    message: "Inspect the pasted image",
+    draftAttachmentIds: [draft.id],
+    draftScopeType: "session",
+    draftScopeId: session.id,
+  });
+  assert.equal(registry.get(session.id).queue.items[0].messageId, queued.session.queue.items[0].messageId);
+
+  // Compatibility for v0.0.21: affected queue snapshots omitted messageId.
+  const persisted = JSON.parse(fs.readFileSync(registry.sessionPath(session.id), "utf8"));
+  delete persisted.queue.items[0].messageId;
+  fs.writeFileSync(registry.sessionPath(session.id), `${JSON.stringify(persisted, null, 2)}\n`);
+  assert.equal(registry.get(session.id).queue.items[0].messageId, undefined);
+
+  registry.complete(session.id, "Done");
+  await controller.sendNextQueuedMessage(session.id);
+
+  assert.equal(starts.length, 1);
+  assert.equal(starts[0].messageId, queued.session.queue.items[0].messageId);
+  assert.deepEqual(registry.get(session.id).queue.items, []);
+});
+
+test("AI session queue retains staged uploads across a failed automatic dispatch and retry", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-queue-attachment-retry-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const workspace = path.join(root, "workspace");
+  fs.mkdirSync(workspace);
+  const conversationAttachments = new AiSessionConversationAttachmentStore({ dataDir: root });
+  const registry = createAiSessionRegistry({
+    dir: path.join(root, "sessions"),
+    conversationAttachments,
+  });
+  const controller = new AiSessionController(registry);
+  const starts = [];
+  controller.register({
+    agent: "codex",
+    async startMessage(_session, input) {
+      starts.push(input);
+      assert.equal(fs.readFileSync(input.attachments[0].retainedPath, "utf8"), "retry");
+      if (starts.length === 1) throw new Error("transient provider failure");
+      return { turnId: "turn-queued-attachment-retry" };
+    },
+  });
+  const session = registry.start({
+    agent: "codex",
+    cwd: workspace,
+    activeTurnId: "turn-running",
+    status: "running",
+    phase: "thinking",
+  });
+  const draft = await conversationAttachments.createDraft({
+    scopeType: "session",
+    scopeId: session.id,
+    kind: "file",
+    name: "retry.txt",
+    mime: "text/plain",
+    size: 5,
+    source: Readable.from(["retry"]),
+  });
+  const queued = await controller.sendMessage(session.id, {
+    message: "Retry the queued attachment",
+    draftAttachmentIds: [draft.id],
+    draftScopeType: "session",
+    draftScopeId: session.id,
+  });
+
+  registry.complete(session.id, "Done");
+  await assert.rejects(controller.sendNextQueuedMessage(session.id), /transient provider failure/);
+  assert.equal(registry.get(session.id).queue.items[0].status, "failed");
+
+  controller.retryQueuedMessage(session.id, queued.session.queue.items[0].id);
+  await controller.sendNextQueuedMessage(session.id);
+
+  assert.equal(starts.length, 2);
+  assert.equal(starts[1].attachments[0].id, draft.id);
+  assert.deepEqual(registry.get(session.id).queue.items, []);
+});
+
+test("AI session queue reclaims restored upload drafts after a process restart", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-queue-attachment-restart-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const workspace = path.join(root, "workspace");
+  fs.mkdirSync(workspace);
+  const firstAttachments = new AiSessionConversationAttachmentStore({ dataDir: root });
+  const firstRegistry = createAiSessionRegistry({
+    dir: path.join(root, "sessions"),
+    conversationAttachments: firstAttachments,
+  });
+  const firstController = new AiSessionController(firstRegistry);
+  const session = firstRegistry.start({
+    agent: "codex",
+    cwd: workspace,
+    activeTurnId: "turn-running",
+    status: "running",
+    phase: "thinking",
+  });
+  const draft = await firstAttachments.createDraft({
+    scopeType: "session",
+    scopeId: session.id,
+    kind: "file",
+    name: "restart.txt",
+    mime: "text/plain",
+    size: 7,
+    source: Readable.from(["restart"]),
+  });
+  await firstController.sendMessage(session.id, {
+    message: "Dispatch after restart",
+    draftAttachmentIds: [draft.id],
+    draftScopeType: "session",
+    draftScopeId: session.id,
+  });
+
+  const restoredAttachments = new AiSessionConversationAttachmentStore({ dataDir: root });
+  const restoredRegistry = createAiSessionRegistry({
+    dir: path.join(root, "sessions"),
+    conversationAttachments: restoredAttachments,
+  });
+  const restoredController = new AiSessionController(restoredRegistry);
+  const starts = [];
+  restoredController.register({
+    agent: "codex",
+    async startMessage(_session, input) {
+      starts.push(input);
+      assert.equal(fs.readFileSync(input.attachments[0].retainedPath, "utf8"), "restart");
+      return { turnId: "turn-after-restart" };
+    },
+  });
+
+  assert.equal(restoredAttachments.cancelDraft("session", session.id, draft.id), false);
+  restoredRegistry.complete(session.id, "Done");
+  await restoredController.sendNextQueuedMessage(session.id);
+  assert.equal(starts.length, 1);
+  assert.deepEqual(restoredRegistry.get(session.id).queue.items, []);
 });
 
 test("AI session Fork creates an independent Direct session and deduplicates the request", async () => {

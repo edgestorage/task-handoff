@@ -613,7 +613,6 @@ export const ControlPlaneHealthResponseSchema = z.object({
       component: z.literal("control-plane"),
       packageVersion: z.string().trim().min(1).max(80),
     }).loose(),
-    dataDir: z.string().min(1),
     serverTime: TimestampSchema,
   }).loose(),
 }).loose();
@@ -1653,6 +1652,14 @@ export const InstanceTargetSchema = z
   })
   .strict();
 
+// Compatibility for v0.0.21: controlled instances used to report the node-owned
+// runtime target. Keep accepting that wire shape during the N-1 window; the
+// node-agent report state transition deliberately discards every field. Runtime
+// adapters are the sole authority for instance endpoints.
+const LegacyControlledInstanceReportedTargetSchema = z
+  .object({ ...InstanceTargetSchema.shape })
+  .strict();
+
 export const InstanceAccessSchema = z
   .object({
     strategy: z.enum(["control-plane-proxy", "direct-port", "node-proxy", "kubernetes-ingress", "kubernetes-port-forward"]).default("control-plane-proxy"),
@@ -2170,7 +2177,7 @@ export const ControlledInstanceRegisterSchema = z
     controlMode: z.enum(["standalone", "controlled"]).default("controlled"),
     capabilities: ControlledInstanceCapabilitiesSchema.default(defaultControlledInstanceCapabilities),
     appInventory: InstanceAppInventorySchema.optional(),
-    target: InstanceTargetSchema.default({ strategy: "direct-port", status: "unknown" }),
+    target: LegacyControlledInstanceReportedTargetSchema.optional(),
     workspace: WorkspaceStatusSchema.default({ status: "unknown" }),
     registrationToken: z.string().trim().max(240).optional(),
     processIncarnationId: z.string().trim().min(1).max(120).optional(),
@@ -2194,7 +2201,7 @@ export const ControlledInstanceHeartbeatSchema = z
     aiSessions: ControlledInstanceSchema.shape.aiSessions.optional(),
     triggers: ControlledInstanceSchema.shape.triggers.optional(),
     workspace: WorkspaceStatusSchema.optional(),
-    target: InstanceTargetSchema.partial().optional(),
+    target: LegacyControlledInstanceReportedTargetSchema.optional(),
     processIncarnationId: z.string().trim().min(1).max(120).optional(),
   })
   .strict()

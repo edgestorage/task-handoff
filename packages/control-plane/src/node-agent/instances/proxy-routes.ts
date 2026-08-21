@@ -33,7 +33,7 @@ type ProxyMetrics = ReturnType<typeof createInstanceProxyMetrics>;
 type Options = {
   fetchImpl: typeof fetch;
   metrics: ProxyMetrics;
-  instanceBase(id: string): string;
+  instanceBase(id: string): string | Promise<string>;
   syncModelEnvironment(id: string): Promise<unknown>;
   diagnostic: Diagnostic;
 };
@@ -55,7 +55,7 @@ export function registerInstanceProxyRoutes(app: FastifyInstance, options: Optio
     const startedAt = performance.now();
     const id = (request.params as { id: string }).id;
     const parsed = ProxyRequestSchema.parse(request.body);
-    const instanceBase = options.instanceBase(id);
+    const instanceBase = await options.instanceBase(id);
     const proxyPath = normalizedPath(parsed.path);
     if (parsed.method === "POST" && proxyPath === "/api/apps/sessions") await options.syncModelEnvironment(id);
     diagnostic({ instanceId: id, action: "proxy", method: parsed.method, path: proxyPath, instanceBase }, "node instance proxy requested");
@@ -103,7 +103,7 @@ export function registerInstanceProxyRoutes(app: FastifyInstance, options: Optio
     try {
       const id = (request.params as { id: string }).id;
       const parsed = ProxyRequestSchema.parse(request.body);
-      const instanceBase = options.instanceBase(id);
+      const instanceBase = await options.instanceBase(id);
       const proxyPath = normalizedPath(parsed.path);
       diagnostic({ instanceId: id, action: "proxy.stream", method: parsed.method, path: proxyPath, instanceBase }, "node instance streaming proxy requested");
       const response = await fetchImpl(`${instanceBase}${proxyPath}`, {
@@ -152,7 +152,7 @@ export function registerInstanceProxyRoutes(app: FastifyInstance, options: Optio
   app.post("/api/node-agent/instances/:id/proxy/raw", { bodyLimit: INSTANCE_PROXY_REQUEST_BODY_LIMIT }, async (request, reply) => {
     const id = (request.params as { id: string }).id;
     const parsed = ProxyRequestSchema.parse(request.body);
-    const instanceBase = options.instanceBase(id);
+    const instanceBase = await options.instanceBase(id);
     const proxyPath = normalizedPath(parsed.path);
     diagnostic({ instanceId: id, action: "proxy.raw", method: parsed.method, path: proxyPath, instanceBase }, "node instance raw proxy requested");
     const response = await fetchImpl(`${instanceBase}${proxyPath}`, {
@@ -178,14 +178,14 @@ export function registerInstanceProxyRoutes(app: FastifyInstance, options: Optio
     return { data: { status: response.status, headers: proxyResponseHeaders(response.headers), bodyBase64: bytes.toString("base64") } };
   });
 
-  app.get("/api/node-agent/instances/:id/proxy/ws/*", { websocket: true }, (socket, request) => {
+  app.get("/api/node-agent/instances/:id/proxy/ws/*", { websocket: true }, async (socket, request) => {
     const id = (request.params as { id: string; "*": string }).id;
     const suffix = (request.params as { id: string; "*": string })["*"] || "";
     const queryIndex = request.url.indexOf("?");
     const query = queryIndex >= 0 ? request.url.slice(queryIndex) : "";
     let upstream: WebSocket | undefined;
     try {
-      const instanceBase = options.instanceBase(id);
+      const instanceBase = await options.instanceBase(id);
       const upstreamUrl = new URL(`/${suffix}${query}`, `${instanceBase}/`);
       upstreamUrl.protocol = upstreamUrl.protocol === "https:" ? "wss:" : "ws:";
       const protocols = proxyWebSocketProtocols(request.headers);

@@ -31,7 +31,7 @@ export const sessions = {
   },
   actions: {
     allow: "允许", skip: "跳过", deny: "拒绝", controls: "AI 会话卡片控制", searchTriggers: "搜索触发器", noTriggers: "没有触发器模板",
-    noMatchingTriggers: "没有匹配的触发器", remove: "移除", add: "添加", openAppFor: "打开 {agent} 的应用会话", openApp: "打开应用会话",
+    noMatchingTriggers: "没有匹配的触发器", remove: "移除", add: "添加", openAppFor: "打开 {agent} 的应用会话", openApp: "打开应用会话", openTerminal: "打开 Terminal",
     moreFor: "{agent} 的更多操作", more: "更多操作", fork: "继续聊天", forkCurrent: "使用当前工作区", forkWorktree: "创建独立 worktree", continueFromTurn: "从当前回合继续聊天", forkBusyTitle: "在当前回合运行时继续聊天？", forkBusyDescription: "Codex 会基于 interrupted snapshot 开始新的聊天，原回合会继续运行且不会被中断。", forkConfirm: "继续聊天", forking: "正在继续聊天", closingApp: "正在关闭应用会话", closeApp: "关闭应用会话", closingSession: "正在关闭 AI 会话", closeSession: "关闭 AI 会话", unread: "未读 AI 会话", openedFromTerminal: "由终端应用会话打开",
     previousMessage: "{agent} 的上一条用户消息", nextMessage: "{agent} 的下一条用户消息", addTrigger: "添加触发器", triggersBound: "已绑定 {count} 个触发器",
   },
@@ -48,7 +48,7 @@ export const sessions = {
   panel: {
     view: "视图", status: "状态", listOptions: "AI 会话列表选项", sessionList: "AI 会话列表", sessionListDescription: "选择一个会话并在详情区域中查看。", newSession: "新建 AI 会话", allStatuses: "全部状态", active: "活跃", waiting: "等待中", problem: "异常",
     noMatching: "没有匹配的会话", noConversations: "尚无对话", tryFilter: "请尝试其他状态筛选。", startHint: "使用上方的 + 按钮开始对话。",
-    resizeList: "调整 AI 会话列表大小", startIdea: "从一个想法开始", searchProjects: "搜索项目", noProjects: "未找到项目", newProject: "新建项目", currentFolderMode: "当前文件夹", worktreeMode: "独立 worktree", chooseBranch: "选择分支", searchBranches: "搜索分支", detached: "Detached", switchBranchTitle: "切换当前文件夹的分支？", switchBranchDescription: "创建会话时会把当前文件夹切换到“{branch}”。未提交的改动会保留，但这个文件夹中的其他活动会话可能看到新的工作树内容。", confirmBranchSwitch: "确认切换",
+    resizeList: "调整 AI 会话列表大小", startIdea: "从一个想法开始", searchProjects: "搜索项目", noProjects: "未找到项目", newProject: "新建项目", openInFileManager: "在文件管理器中打开", openInFileManagerFailed: "无法在系统文件管理器中打开该文件夹。", renameProject: "重命名", renameProjectDescription: "修改项目在文件夹选择器和 AI 会话分组中的名称，不会改变实际路径。", renameProjectFailed: "无法重命名项目。", projectName: "项目名称", currentFolderMode: "当前文件夹", worktreeMode: "独立 worktree", chooseBranch: "选择分支", searchBranches: "搜索分支", detached: "Detached", switchBranchTitle: "切换当前文件夹的分支？", switchBranchDescription: "创建会话时会把当前文件夹切换到“{branch}”。未提交的改动会保留，但这个文件夹中的其他活动会话可能看到新的工作树内容。", confirmBranchSwitch: "确认切换",
     promptPlaceholder: "描述你想做的事", chooseProject: "选择项目", projectUnavailable: "这个项目已不在节点的登记目录中。", startedWorktree: "AI 会话已在所选 worktree 中启动。", backLatest: "返回最新消息",
     defaultPermissionFailed: "无法更新默认 Codex 权限模式。", starting: "新的 AI 会话仍在启动，请稍后重试。",
     startFailed: "无法启动 AI 会话。", sendFailed: "无法发送消息。", noGoal: "没有活跃目标。", commandFailed: "无法运行命令。", steerFailed: "无法追加消息。",
@@ -68,7 +68,7 @@ export const sessions = {
     askDescription: "访问互联网或编辑工作区外文件前进行询问。", autoReviewDescription: "仅对检测为可能不安全的操作进行询问。",
     fullAccessDescription: "无需审批即可无限制访问互联网和文件。", localPath: "本地路径", removeAttachment: "移除附件", previewImage: "预览 {name}", copyImage: "复制图片", imageCopied: "图片已复制", copyImageFailed: "无法复制图片。", uploadProgress: "正在上传：{progress}%", followUp: "请求后续修改",
     noMatches: "没有匹配项", commands: "命令", loading: "正在加载...", openCommands: "打开命令菜单", permissionMode: "权限模式：{mode}", choosePermission: "选择权限模式",
-    steerTurn: "追加到当前 AI 回合", availableIdle: "空闲时可用", review: "审查未提交变更", rename: "重命名当前线程", goal: "设置或查看长期目标",
+    steerTurn: "追加到当前 AI 回合", steerTurnShortcut: "追加到当前 AI 回合（Ctrl+Enter）", availableIdle: "空闲时可用", review: "审查未提交变更", rename: "重命名当前线程", goal: "设置或查看长期目标",
     compact: "总结对话上下文", threadName: "线程名称", objective: "目标",
     supportedImages: "仅支持 PNG、JPG、WEBP、GIF、BMP 图片。", emptyFile: "不能添加空文件。", imageTooLarge: "单张图片不能超过 20 MB。",
     runtimePathOutside: "Local Runtime 路径附件必须位于当前 AI 会话工作区内；请将文件移入工作区后重试。",

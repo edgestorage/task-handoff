@@ -57,9 +57,10 @@ function runtimeLifecycleCompleted(
       uiAccessStatus: latest.uiAccessStatus,
     } : {}),
     ready: hasFreshProcessReport ? latest.ready : false,
-    target: observation.target
-      ? hasFreshProcessReport ? { ...observation.target, ...latest.target } : { ...latest.target, ...observation.target }
-      : latest.target,
+    // Runtime adapters own endpoint topology. A concurrent controlled-instance
+    // report may win process health fields, but it must never replace a target
+    // observed by the adapter completing this lifecycle operation.
+    target: observation.target ? { ...latest.target, ...observation.target } : latest.target,
     workspace: observation.workspace
       ? hasFreshProcessReport ? { ...observation.workspace, ...latest.workspace } : { ...latest.workspace, ...observation.workspace }
       : latest.workspace,

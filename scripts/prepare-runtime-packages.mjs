@@ -63,9 +63,11 @@ for (const [name, definition] of selected) {
     fs.writeFileSync(wrapperPath, `#!/usr/bin/env node\n${bundledRuntimeBootstrap}require("../dist/${definition.entryFile}");\n`, { mode: 0o755 });
     bin[definition.binName] = `bin/${definition.binName}`;
   }
-  if (name === "node-agent") {
+  if (definition.updateWorkerInput) {
     const updateWorkerPath = path.join(binDir, "task-handoff-node-update-worker");
     fs.writeFileSync(updateWorkerPath, `#!/usr/bin/env node\nrequire("../dist/${definition.updateWorkerEntryFile}");\n`, { mode: 0o755 });
+  }
+  if (name === "node-agent") {
     const dockerAssetsDir = path.join(packageDir, "docker");
     fs.mkdirSync(dockerAssetsDir, { recursive: true });
     for (const asset of ["entrypoint.sh", "instance-launcher.sh", "runtime-installer.mjs"]) {

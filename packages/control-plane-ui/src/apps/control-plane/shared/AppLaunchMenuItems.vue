@@ -121,4 +121,14 @@ function isLocalRuntime() {
   font-size: 12px;
   text-align: center;
 }
+
+:global(.app-launch-menu .app-launch-menu-item strong),
+:global(.board-launch-menu .app-launch-menu-item strong) {
+  font-weight: 500;
+}
+
+:global(.app-launch-menu .app-launch-menu-item small),
+:global(.board-launch-menu .app-launch-menu-item small) {
+  font-weight: 400;
+}
 </style>

@@ -246,7 +246,7 @@
       />
 
       <InstanceDetail
-        v-else-if="instanceViewMode && !settingsMode"
+        v-else-if="instanceViewMode && !settingsMode && !workbenchLoadingOverlayVisible"
         :class="{ 'preview-expanded': sessionPreviewExpanded }"
         v-model:app-launch-menu-open="appLaunchMenuOpen"
         v-model:preview-expanded="sessionPreviewExpanded"

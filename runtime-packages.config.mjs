@@ -51,6 +51,8 @@ export const runtimePackages = {
     description: "Complete TaskHandoff server package.",
     input: "apps/cli/src/runtime/server.ts",
     entryFile: "server-cli.js",
+    updateWorkerInput: "scripts/node-update-worker.cts",
+    updateWorkerEntryFile: "node-update-worker.js",
     binName: "task-handoff",
     dependencies: {},
     aggregateDependencies: [

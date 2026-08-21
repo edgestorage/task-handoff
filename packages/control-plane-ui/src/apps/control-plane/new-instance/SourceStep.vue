@@ -6,13 +6,13 @@
     </div>
 
     <div class="choice-grid" :aria-label="t('instances.create.workspaceSource')">
-      <button type="button" class="choice-tile" :class="{ active: sourceDraft.mode === 'project' }" @click="$emit('select-source-mode', 'project')">
-        <GitBranch :size="17" />
-        <span>{{ t("instances.create.repository") }}</span>
-      </button>
       <button type="button" class="choice-tile" :class="{ active: sourceDraft.mode === 'local-folder' }" @click="$emit('select-source-mode', 'local-folder')">
         <Folder :size="17" />
         <span>{{ t("instances.create.localFolder") }}</span>
+      </button>
+      <button type="button" class="choice-tile" :class="{ active: sourceDraft.mode === 'project' }" @click="$emit('select-source-mode', 'project')">
+        <GitBranch :size="17" />
+        <span>{{ t("instances.create.repository") }}</span>
       </button>
     </div>
 

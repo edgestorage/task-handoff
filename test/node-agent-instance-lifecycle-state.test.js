@@ -67,7 +67,7 @@ test("instance lifecycle reducer preserves an authoritative heartbeat that races
   assert.equal(reduced.status, "running");
   assert.equal(reduced.agentStatus, "online");
   assert.equal(reduced.ready, true);
-  assert.equal(reduced.target.web, "http://instance:8080");
+  assert.equal(reduced.target.web, "http://127.0.0.1:32000");
   assert.equal(reduced.workspace.status, "ready");
   assert.equal(reduced.runtime.containerName, "task-handoff-inst_lifecycle");
   assert.equal(reduced.apps.runningCount, 2);

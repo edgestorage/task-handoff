@@ -351,6 +351,7 @@
           :selected-ai-session="selectedAiSession"
           :session="pane.session"
           :session-key="pane.sessionKey"
+          @launch-app="(target, appId, cwdFolderId, options) => $emit('launchApp', target, appId, cwdFolderId, options)"
           @open-ai-session-app="(target, session) => $emit('openAiSessionApp', target, session)"
           @open-repository-workspace="$emit('openRepositoryWorkspace', $event)"
           @open-launch-menu="updateAppLaunchMenuOpen(pane.id, true)"
@@ -505,7 +506,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   copyRegistration: [instance: InstanceBoardItem];
-  launchApp: [instance: InstanceBoardItem, appId: string, cwdFolderId?: string];
+  launchApp: [instance: InstanceBoardItem, appId: string, cwdFolderId?: string, options?: Record<string, unknown>];
   moveSessionTab: [sourceKey: string, targetKey: string, placement: "before" | "after", targetPane?: SessionPaneId];
   moveSessionToPane: [sessionKey: string, pane: SessionPaneId];
   focusSessionPane: [pane: SessionPaneId];

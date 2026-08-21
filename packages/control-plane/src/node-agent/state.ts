@@ -654,8 +654,8 @@ export class NodeAgentState {
       ready: !managedArtifacts && actualVersion === desiredControlledInstanceVersion(),
       connectionStatus: "online",
       agentStatus: "online",
-      targetStatus: parsed.target.status === "endpoint-unreachable" ? "endpoint-unreachable" : parsed.target.status === "reachable" ? "reachable" : existing.targetStatus,
-      uiAccessStatus: parsed.target.status === "endpoint-unreachable" ? "endpoint-unreachable" : existing.uiAccessStatus,
+      targetStatus: existing.targetStatus,
+      uiAccessStatus: existing.uiAccessStatus,
       controlMode: parsed.controlMode,
       protocolVersion: parsed.protocolVersion,
       instanceVersion: parsed.instanceVersion,
@@ -665,7 +665,7 @@ export class NodeAgentState {
       capabilities: parsed.capabilities,
       appInventory: parsed.appInventory,
       workspace: parsed.workspace,
-      target: { ...existing.target, ...parsed.target },
+      target: existing.target,
       registrationToken: existing.registrationToken || parsed.registrationToken,
       lastHeartbeatAt: timestamp,
       updatedAt: timestamp,
@@ -685,12 +685,8 @@ export class NodeAgentState {
     }
     warnProtocolVersion(parsed.protocolVersion, `Instance ${id}`);
     const timestamp = now();
-    const mergedTarget = parsed.target ? { ...current.target, ...parsed.target } : current.target;
-    const target = {
-      ...mergedTarget,
-      status: mergedTarget.status === "unknown" && (mergedTarget.web || mergedTarget.api) ? "reachable" as const : mergedTarget.status,
-    };
-    const targetStatus = target.status === "endpoint-unreachable" ? "endpoint-unreachable" : target.status === "reachable" ? "reachable" : current.targetStatus;
+    const target = current.target;
+    const targetStatus = current.targetStatus;
     const actualVersion = parsed.build?.packageVersion || current.build?.packageVersion || current.instanceVersion;
     const managedArtifacts = runtimeUsesManagedArtifacts(this.requireRuntime(current.runtimeId));
     const runtimeVersion = runtimeVersionStateForReport(current, actualVersion, managedArtifacts);

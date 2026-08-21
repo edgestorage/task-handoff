@@ -108,39 +108,44 @@
               :class="{ 'is-compact-list': sessionListLayout === 'list' }"
               :data-collapsed="groupSessionsByPath && collapsedPathGroups[group.key] ? 'true' : undefined"
             >
-              <div
+              <AiSessionPathGroupContextMenu
                 v-if="groupSessionsByPath"
-                class="session-ai-path-group-head"
+                :can-open="canOpenPathGroupFolder"
+                :can-rename="canRenamePathGroup(group)"
+                @open="openPathGroupFolder(group)"
+                @rename="openPathGroupRename(group)"
               >
-                <button
-                  type="button"
-                  class="session-ai-path-group-toggle"
-                  :aria-expanded="!collapsedPathGroups[group.key]"
-                  @click="togglePathGroup(group.key)"
-                >
-                  <Folder v-if="collapsedPathGroups[group.key]" class="session-ai-path-group-icon" :size="15" />
-                  <FolderOpen v-else class="session-ai-path-group-icon" :size="15" />
-                  <span class="session-ai-path-group-text">
-                    <TooltipProvider :delay-duration="120">
-                      <Tooltip>
-                        <TooltipTrigger as-child>
-                          <span class="session-ai-path-group-title">{{ group.label }}</span>
-                        </TooltipTrigger>
-                        <TooltipContent class="ai-session-path-tooltip" side="top" :side-offset="8">{{ group.path }}</TooltipContent>
-                      </Tooltip>
-                    </TooltipProvider>
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  class="session-ai-path-group-add"
-                  :aria-label="`${t('sessions.panel.newSession')} · ${group.label}`"
-                  :title="t('sessions.panel.newSession')"
-                  @click="openNewSessionForGroup(group)"
-                >
-                  <Plus :size="15" />
-                </button>
-              </div>
+                <div class="session-ai-path-group-head">
+                  <button
+                    type="button"
+                    class="session-ai-path-group-toggle"
+                    :aria-expanded="!collapsedPathGroups[group.key]"
+                    @click="togglePathGroup(group.key)"
+                  >
+                    <Folder v-if="collapsedPathGroups[group.key]" class="session-ai-path-group-icon" :size="15" />
+                    <FolderOpen v-else class="session-ai-path-group-icon" :size="15" />
+                    <span class="session-ai-path-group-text">
+                      <TooltipProvider :delay-duration="120">
+                        <Tooltip>
+                          <TooltipTrigger as-child>
+                            <span class="session-ai-path-group-title">{{ group.label }}</span>
+                          </TooltipTrigger>
+                          <TooltipContent class="ai-session-path-tooltip" side="top" :side-offset="8">{{ group.path }}</TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    class="session-ai-path-group-add"
+                    :aria-label="`${t('sessions.panel.newSession')} · ${group.label}`"
+                    :title="t('sessions.panel.newSession')"
+                    @click="openNewSessionForGroup(group)"
+                  >
+                    <Plus :size="15" />
+                  </button>
+                </div>
+              </AiSessionPathGroupContextMenu>
               <template v-if="!groupSessionsByPath || !collapsedPathGroups[group.key]">
                 <ContextMenu
                   v-for="session in group.sessions"
@@ -247,8 +252,10 @@
                     :bound-trigger-count="boundTriggers(session).length"
                     :has-app-session="Boolean(aiSessionAppTab(instance, session))"
                     :can-open-app="Boolean(aiSessionAppTab(instance, session) || session.actions?.openApp)"
+                    :can-open-terminal="Boolean(terminalLaunchAppId)"
                     :can-fork="session.actions?.fork === true"
                     :is-forking="forkingAiSessionId === session.id"
+                    :is-opening-terminal="launchingApp"
                     :is-stopping-app-session="stoppingAppSessionId === session.id"
                     :is-trigger-bound="(configHash) => isTriggerBound(session, configHash)"
                     :is-trigger-busy="(configHash) => triggerBusyKey === triggerActionKey(session, configHash)"
@@ -256,6 +263,7 @@
                     :trigger-templates="triggerTemplates"
                     @close-session="closeSession(session)"
                     @open-app="openSessionApp(session)"
+                    @open-terminal="openSessionTerminal(session)"
                     @fork-session="forkSession(session, $event)"
                     @toggle-trigger="toggleTrigger(session, $event)"
                   />
@@ -282,39 +290,44 @@
             <p v-else-if="!historyItems.length" class="session-ai-history-state">{{ t("sessions.panel.noHistory") }}</p>
             <template v-else>
               <section v-for="group in displayedHistoryGroups" :key="group.key" class="session-ai-path-group session-ai-history-group">
-                <div
+                <AiSessionPathGroupContextMenu
                   v-if="groupSessionsByPath"
-                  class="session-ai-path-group-head"
+                  :can-open="canOpenPathGroupFolder"
+                  :can-rename="canRenamePathGroup(group)"
+                  @open="openPathGroupFolder(group)"
+                  @rename="openPathGroupRename(group)"
                 >
-                  <button
-                    type="button"
-                    class="session-ai-path-group-toggle"
-                    :aria-expanded="!collapsedHistoryPathGroups[group.key]"
-                    @click="toggleHistoryPathGroup(group.key)"
-                  >
-                    <Folder v-if="collapsedHistoryPathGroups[group.key]" class="session-ai-path-group-icon" :size="15" />
-                    <FolderOpen v-else class="session-ai-path-group-icon" :size="15" />
-                    <span class="session-ai-path-group-text">
-                      <TooltipProvider :delay-duration="120">
-                        <Tooltip>
-                          <TooltipTrigger as-child>
-                            <span class="session-ai-path-group-title">{{ group.label }}</span>
-                          </TooltipTrigger>
-                          <TooltipContent class="ai-session-path-tooltip" side="top" :side-offset="8">{{ group.path }}</TooltipContent>
-                        </Tooltip>
-                      </TooltipProvider>
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    class="session-ai-path-group-add"
-                    :aria-label="`${t('sessions.panel.newSession')} · ${group.label}`"
-                    :title="t('sessions.panel.newSession')"
-                    @click="openNewSessionForGroup(group)"
-                  >
-                    <Plus :size="15" />
-                  </button>
-                </div>
+                  <div class="session-ai-path-group-head">
+                    <button
+                      type="button"
+                      class="session-ai-path-group-toggle"
+                      :aria-expanded="!collapsedHistoryPathGroups[group.key]"
+                      @click="toggleHistoryPathGroup(group.key)"
+                    >
+                      <Folder v-if="collapsedHistoryPathGroups[group.key]" class="session-ai-path-group-icon" :size="15" />
+                      <FolderOpen v-else class="session-ai-path-group-icon" :size="15" />
+                      <span class="session-ai-path-group-text">
+                        <TooltipProvider :delay-duration="120">
+                          <Tooltip>
+                            <TooltipTrigger as-child>
+                              <span class="session-ai-path-group-title">{{ group.label }}</span>
+                            </TooltipTrigger>
+                            <TooltipContent class="ai-session-path-tooltip" side="top" :side-offset="8">{{ group.path }}</TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      class="session-ai-path-group-add"
+                      :aria-label="`${t('sessions.panel.newSession')} · ${group.label}`"
+                      :title="t('sessions.panel.newSession')"
+                      @click="openNewSessionForGroup(group)"
+                    >
+                      <Plus :size="15" />
+                    </button>
+                  </div>
+                </AiSessionPathGroupContextMenu>
                 <template v-if="!groupSessionsByPath || !collapsedHistoryPathGroups[group.key]">
                   <article
                     v-for="item in group.items"
@@ -472,8 +485,13 @@
                 <DropdownMenuContent class="session-ai-project-menu session-ai-project-picker-menu" align="start" :collision-padding="12" :side-offset="8">
                   <input v-model="newSessionFolderQuery" class="session-ai-project-search" :placeholder="t('sessions.panel.searchProjects')" :aria-label="t('sessions.panel.searchProjects')" />
                   <ScrollArea type="auto" :horizontal="false" class="session-ai-project-list">
-                    <DropdownMenuItem v-for="folder in filteredNewSessionFolders" :key="folder.id" class="session-ai-project-item" @select="newSessionFolderId = folder.id">
-                      <Folder :size="15" /><span>{{ folder.name }}</span><Check v-if="newSessionFolderId === folder.id" :size="15" />
+                    <DropdownMenuItem v-for="folder in filteredNewSessionFolders" :key="folder.id" class="session-ai-project-item session-ai-project-folder-item" @select="newSessionFolderId = folder.id">
+                      <Folder :size="15" />
+                      <span class="session-ai-project-folder-copy">
+                        <strong>{{ folder.name }}</strong>
+                        <small>{{ folder.path }}</small>
+                      </span>
+                      <Check v-if="newSessionFolderId === folder.id" :size="15" />
                     </DropdownMenuItem>
                     <p v-if="!filteredNewSessionFolders.length" class="session-ai-project-empty">{{ t("sessions.panel.noProjects") }}</p>
                   </ScrollArea>
@@ -555,11 +573,12 @@
             <AiSessionComposer
               v-model="newSessionDraft"
               v-model:attachments="messageAttachments"
+              v-model:mention-bindings="newSessionMentionBindings"
               class="session-ai-compose session-ai-new-composer"
               :class="{ 'is-loading': newSessionComposerBusy }"
               :aria-busy="newSessionComposerBusy"
               :busy="newSessionComposerBusy"
-              :disabled="!newSessionFolder"
+              :disabled="!newSessionFolder || (newSessionWorkspaceLoading && !newSessionWorkspace)"
               :can-interrupt="false"
               :provider="newSessionApp === 'claude' ? 'claude' : 'codex'"
               :permission-mode="newSessionPermissionMode"
@@ -645,7 +664,7 @@
                 />
                 <DropdownMenuSub v-if="compactAiSessionLayout">
                   <DropdownMenuSubTrigger class="session-ai-detail-actions-menu-item">
-                    <CircleHelp :size="16" />
+                    <CircleHelp :size="14" />
                     <span>{{ t("sessions.detail.sessionDetails") }}</span>
                   </DropdownMenuSubTrigger>
                   <DropdownMenuSubContent class="session-ai-detail-info-menu">
@@ -663,8 +682,17 @@
                   :disabled="openingAiSessionId === selectedSession.id"
                   @select="openSessionApp(selectedSession)"
                 >
-                  <ExternalLink :size="16" />
+                  <ExternalLink :size="14" />
                   <span>{{ t("sessions.actions.openApp") }}</span>
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  v-if="terminalLaunchAppId"
+                  class="session-ai-detail-actions-menu-item"
+                  :disabled="launchingApp"
+                  @select="openSessionTerminal(selectedSession)"
+                >
+                  <SquareTerminal :size="14" />
+                  <span>{{ t("sessions.actions.openTerminal") }}</span>
                 </DropdownMenuItem>
                 <DropdownMenuItem
                   v-if="selectedForkTurn"
@@ -672,12 +700,12 @@
                   :disabled="forkingAiSessionId === selectedSession.id"
                   @select="forkSession(selectedSession, 'current', selectedForkTurn.id)"
                 >
-                  <Split :size="16" />
+                  <Split :size="14" />
                   <span>{{ t("sessions.actions.continueFromTurn") }}</span>
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem class="session-ai-detail-actions-menu-item danger" :disabled="stoppingAppSessionId === selectedSession.id" @select="closeSession(selectedSession)">
-                  <Square :size="16" />
+                  <Square :size="14" />
                   <span>{{ t("sessions.actions.closeSession") }}</span>
                 </DropdownMenuItem>
               </DropdownMenuContent>
@@ -886,6 +914,29 @@
       @up="newProjectPicker.goUp"
       @update:open="newProjectPicker.setOpen"
     />
+    <Dialog :open="Boolean(pathGroupRenameTarget)" @update:open="setPathGroupRenameOpen">
+      <DialogContent class="session-ai-path-rename-dialog">
+        <DialogHeader>
+          <DialogTitle>{{ t("sessions.panel.renameProject") }}</DialogTitle>
+          <DialogDescription>{{ t("sessions.panel.renameProjectDescription") }}</DialogDescription>
+        </DialogHeader>
+        <form class="session-ai-path-rename-form" @submit.prevent="submitPathGroupRename">
+          <label for="session-path-group-name">{{ t("sessions.panel.projectName") }}</label>
+          <ControlPlaneInput
+            id="session-path-group-name"
+            v-model="pathGroupRenameDraft"
+            :maxlength="160"
+            :disabled="renamingPathGroup"
+            autofocus
+          />
+          <code v-if="pathGroupRenameTarget">{{ pathGroupRenameTarget.path }}</code>
+          <DialogFooter>
+            <Button type="button" variant="outline" :disabled="renamingPathGroup" @click="setPathGroupRenameOpen(false)">{{ t("common.actions.cancel") }}</Button>
+            <Button type="submit" :disabled="!canSubmitPathGroupRename">{{ t("common.actions.save") }}</Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
     <AlertDialog :open="Boolean(newSessionBranchSwitchTarget)" @update:open="(open) => !open && (newSessionBranchSwitchTarget = undefined)">
       <AlertDialogContent>
         <AlertDialogHeader>
@@ -920,7 +971,7 @@ import { useI18n } from "vue-i18n";
 import { formatRelativeTime } from "../../../i18n/presentation";
 import type { SupportedLocale } from "../../../i18n/locale";
 import { translateApiError } from "../../../i18n/apiError";
-import { ArrowLeft, Ban, Check, ChevronDown, ChevronRight, CircleHelp, ExternalLink, Filter, Folder, FolderOpen, GitBranch, History, LoaderCircle, MessageSquare, MoreHorizontal, PanelLeftOpen, Plus, SlidersHorizontal, Split, Square, X } from "@lucide/vue";
+import { ArrowLeft, Ban, Check, ChevronDown, ChevronRight, CircleHelp, ExternalLink, Filter, Folder, FolderOpen, GitBranch, History, LoaderCircle, MessageSquare, MoreHorizontal, PanelLeftOpen, Plus, SlidersHorizontal, Split, Square, SquareTerminal, X } from "@lucide/vue";
 import { useQueryClient } from "@tanstack/vue-query";
 import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
 import AiSessionCardContextMenu from "../../../components/ai-session/AiSessionCardContextMenu.vue";
@@ -928,7 +979,8 @@ import AiSessionCardMarks from "../../../components/ai-session/AiSessionCardMark
 import AiSessionStatusIndicator from "../../../components/ai-session/AiSessionStatusIndicator.vue";
 import AiAgentIcon from "../../../components/AiAgentIcon.vue";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../../components/ui/alert-dialog";
-import { bindAiSessionTrigger, closeAiSession, createAiSession, createNodeLocalFolder, editAiSessionQueuedMessage, forkAiSession, getAiSessionDetail, getAiSessionHistory, getAiSessionHistoryDetail, getAiSessionWorkspace, interruptAiSession, listNodeFolderPlaces, listNodeFolderTree, markAiSessionRead, openAiSessionApp, removeAiSessionQueuedMessage, reorderAiSessionQueuedMessages, resolveAiSessionApproval, resumeAiSession, retryAiSessionQueuedMessage, sendAiSessionMessage, steerAiSessionQueuedMessage, unbindAiSessionTrigger, updateControlledInstance, uploadAiSessionAttachment, useControlPlaneSettingsQuery, useControlPlaneTriggersQuery } from "../../../api/queries";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
+import { bindAiSessionTrigger, closeAiSession, createAiSession, createNodeLocalFolder, editAiSessionQueuedMessage, forkAiSession, getAiSessionDetail, getAiSessionHistory, getAiSessionHistoryDetail, getAiSessionWorkspace, interruptAiSession, listNodeFolderPlaces, listNodeFolderTree, markAiSessionRead, openAiSessionApp, removeAiSessionQueuedMessage, reorderAiSessionQueuedMessages, resolveAiSessionApproval, resumeAiSession, retryAiSessionQueuedMessage, sendAiSessionMessage, steerAiSessionQueuedMessage, unbindAiSessionTrigger, updateControlledInstance, updateNodeLocalFolder, uploadAiSessionAttachment, useControlPlaneSettingsQuery, useControlPlaneTriggersQuery } from "../../../api/queries";
 import { controlPlaneQueryKeys } from "../../../api/queryKeys.ts";
 import { executeAiSessionCommand } from "../../../api/ai-session-commands";
 import { type AiSessionCommandInput, type AiSessionHistoryDetail, type AiSessionHistoryItem, type AiSessionMessageAttachmentRef, type AiSessionPermissionMode, type AiSessionStatus } from "@task-handoff/protocol/ai-sessions";
@@ -959,10 +1011,14 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../
 import { showControlPlaneToast, showDelayedControlPlaneLoadingToast } from "../useControlPlaneToasts";
 import { nativeNodeFolderSelectionResult, nodeLocalFolderDisplayName, nodePathName, relativeNodePathSegments, type NativeNodeFolderPicker } from "../nodePath";
 import NodeStorageFolderPickerDialog from "../settings/NodeStorageFolderPickerDialog.vue";
+import ControlPlaneInput from "../shared/ControlPlaneInput.vue";
+import { nodeSupportsLocalFolderNameUpdate } from "../../../api/nodeCapabilities";
+import { canOpenDesktopLocalPath, openDesktopLocalPath } from "../../../lib/desktopBridge";
 import RepositoryEnvironment from "./RepositoryEnvironment.vue";
+import AiSessionPathGroupContextMenu from "./AiSessionPathGroupContextMenu.vue";
 import { useNodeStorageFolderPicker } from "../settings/useNodeStorageFolderPicker";
 import { groupAiSessionEntriesByPath } from "./aiSessionPathGrouping";
-import { aiSessionMessageText, clearAiSessionDraft, loadAiSessionDraftPayload, persistAiSessionDraftPayload } from "../useAiSessionDraft";
+import { aiSessionCreationDraftKey, aiSessionMessageText, clearAiSessionDraft, loadAiSessionDraftPayload, persistAiSessionDraftPayload } from "../useAiSessionDraft";
 import {
   aiSessionPermissionKey,
   clearAiSessionPermissionMode,
@@ -1051,6 +1107,7 @@ const props = defineProps<{
   chooseProjectFolder?: NativeNodeFolderPicker;
   instance: InstanceWithAiSessions;
   launchableApps?: LaunchableApp[];
+  launchingApp?: boolean;
   nodeLocalFolders?: NodeLocalFolder[];
   selectedAiSession: (instance: InstanceBoardItem, sessions?: AiSessionSummary[]) => AiSessionSummary | undefined;
 }>();
@@ -1208,7 +1265,10 @@ const showNewSession = computed(() => newSessionOpen.value || !selectedSession.v
 const selectedListSessionId = computed(() => showNewSession.value ? undefined : selectedSession.value?.id);
 const newSessionApp = ref("");
 const newSessionFolderId = ref("");
-const newSessionDraft = ref("");
+const activeNewSessionDraftKey = ref(aiSessionCreationDraftKey(props.instance.id));
+const initialNewSessionDraft = loadAiSessionDraftPayload(activeNewSessionDraftKey.value);
+const newSessionDraft = ref(initialNewSessionDraft.value);
+const newSessionMentionBindings = ref(initialNewSessionDraft.bindings);
 const newSessionFolderQuery = ref("");
 const newSessionBranchQuery = ref("");
 const collapsedNewSessionBranchFolders = ref(new Set<string>());
@@ -1226,9 +1286,20 @@ const newSessionCreateAttempt = ref<{
 const savingNewSessionPermission = ref(false);
 const choosingNewSessionFolder = ref(false);
 const newSessionPermissionMode = ref<AiSessionPermissionMode>(props.instance.config.defaultCodexPermissionMode);
-const newSessionComposerBusy = computed(() => launchingNewSession.value || savingNewSessionPermission.value || newSessionWorkspaceLoading.value || choosingNewSessionFolder.value);
+const newSessionComposerBusy = computed(() => launchingNewSession.value || savingNewSessionPermission.value || choosingNewSessionFolder.value);
 const aiSessionLaunchableApps = computed(() => (props.launchableApps || []).filter((app) => app.id === "codex"));
+const terminalLaunchAppId = computed(() => ["terminal-tty", "terminal", "gui-terminal"]
+  .find((appId) => props.launchableApps?.some((app) => app.id === appId)));
 const createdNewSessionFolders = ref<NodeLocalFolder[]>([]);
+const pathGroupRenameTarget = ref<NodeLocalFolder>();
+const pathGroupRenameDraft = ref("");
+const renamingPathGroup = ref(false);
+const canSubmitPathGroupRename = computed(() => Boolean(
+  pathGroupRenameTarget.value
+  && pathGroupRenameDraft.value.trim()
+  && pathGroupRenameDraft.value.trim() !== pathGroupRenameTarget.value.name
+  && !renamingPathGroup.value,
+));
 const INSTANCE_WORKSPACE_FOLDER_ID = "__instance_workspace__";
 type NewSessionFolderOption = Pick<NodeLocalFolder, "id" | "name" | "path"> & { cwdFolderId?: string };
 const newSessionFolders = computed<NewSessionFolderOption[]>(() => {
@@ -1253,6 +1324,55 @@ async function registerNewSessionFolder(nodeId: string, input: { name: string; p
   createdNewSessionFolders.value = [...createdNewSessionFolders.value, folder];
   newSessionFolderId.value = folder.id;
   return folder;
+}
+
+function registeredPathGroupFolder(group: AiSessionPathGroup | AiSessionHistoryPathGroup) {
+  if (!group.cwdFolderId) return undefined;
+  return [...(props.nodeLocalFolders || []), ...createdNewSessionFolders.value]
+    .find((folder) => folder.id === group.cwdFolderId);
+}
+
+const canOpenPathGroupFolder = computed(() => desktopRuntimePathAccess(props.instance) === "desktop-local" && canOpenDesktopLocalPath());
+
+function canRenamePathGroup(group: AiSessionPathGroup | AiSessionHistoryPathGroup) {
+  return Boolean(registeredPathGroupFolder(group) && nodeSupportsLocalFolderNameUpdate(props.instance.node));
+}
+
+async function openPathGroupFolder(group: AiSessionPathGroup | AiSessionHistoryPathGroup) {
+  const result = await openDesktopLocalPath(group.path);
+  if (!result.ok) showControlPlaneToast(t("sessions.panel.openInFileManagerFailed"));
+}
+
+function openPathGroupRename(group: AiSessionPathGroup | AiSessionHistoryPathGroup) {
+  const folder = registeredPathGroupFolder(group);
+  if (!folder || !nodeSupportsLocalFolderNameUpdate(props.instance.node)) return;
+  pathGroupRenameTarget.value = folder;
+  pathGroupRenameDraft.value = folder.name;
+}
+
+function setPathGroupRenameOpen(open: boolean) {
+  if (open || renamingPathGroup.value) return;
+  pathGroupRenameTarget.value = undefined;
+  pathGroupRenameDraft.value = "";
+}
+
+async function submitPathGroupRename() {
+  const folder = pathGroupRenameTarget.value;
+  const name = pathGroupRenameDraft.value.trim();
+  if (!folder || !name || !canSubmitPathGroupRename.value) return;
+  renamingPathGroup.value = true;
+  let succeeded = false;
+  try {
+    const updated = await updateNodeLocalFolder(folder.nodeId, folder.id, { name });
+    createdNewSessionFolders.value = createdNewSessionFolders.value.map((candidate) => candidate.id === updated.id ? updated : candidate);
+    await queryClient.invalidateQueries({ queryKey: controlPlaneQueryKeys.nodeLocalFolders(folder.nodeId) });
+    succeeded = true;
+  } catch (error) {
+    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.renameProjectFailed")));
+  } finally {
+    renamingPathGroup.value = false;
+    if (succeeded) setPathGroupRenameOpen(false);
+  }
 }
 const newProjectPicker = useNodeStorageFolderPicker({
   createFolder: registerNewSessionFolder,
@@ -1542,6 +1662,19 @@ watch(
   { immediate: true },
 );
 
+watch(() => props.instance.id, (instanceId) => {
+  activeNewSessionDraftKey.value = aiSessionCreationDraftKey(instanceId);
+  const draft = loadAiSessionDraftPayload(activeNewSessionDraftKey.value);
+  newSessionDraft.value = draft.value;
+  newSessionMentionBindings.value = draft.bindings;
+  messageAttachments.value = [];
+  newSessionCreateAttempt.value = undefined;
+});
+
+watch([newSessionDraft, newSessionMentionBindings], ([draft, bindings]) => {
+  persistAiSessionDraftPayload(activeNewSessionDraftKey.value, draft, bindings);
+}, { deep: true });
+
 watch(
   [showNewSession, aiSessionLaunchableApps, newSessionFolders],
   ([show]) => {
@@ -1554,31 +1687,34 @@ watch(
   [() => props.instance.id, newSessionFolderId, showNewSession],
   ([instanceId, folderId, show], _previous, onCleanup) => {
     const revision = ++newSessionWorkspaceRevision;
-    newSessionWorkspace.value = undefined;
     newSessionWorkspaceMode.value = "current-folder";
     newSessionBranch.value = "";
     newSessionBranchQuery.value = "";
     if (!show || !folderId) {
+      newSessionWorkspace.value = undefined;
       newSessionWorkspaceLoading.value = false;
       return;
     }
     const abort = new AbortController();
     onCleanup(() => abort.abort());
-    newSessionWorkspaceLoading.value = true;
     const cwdFolderId = newSessionFolders.value.find((folder) => folder.id === folderId)?.cwdFolderId;
+    const queryKey = controlPlaneQueryKeys.aiSessionWorkspace(instanceId, cwdFolderId);
+    const cachedWorkspace = queryClient.getQueryData<RepositoryAiSessionWorkspace>(queryKey);
+    newSessionWorkspace.value = cachedWorkspace;
+    if (cachedWorkspace) selectDefaultNewSessionBranch(cachedWorkspace);
+    newSessionWorkspaceLoading.value = true;
     void getAiSessionWorkspace(instanceId, cwdFolderId, abort.signal)
       .then((workspace) => {
         if (revision !== newSessionWorkspaceRevision) return;
+        queryClient.setQueryData(queryKey, workspace);
         newSessionWorkspace.value = workspace;
-        newSessionBranch.value = workspace.currentBranch
-          || workspace.branches.find((branch) => branch.current)?.name
-          || workspace.branches.find((branch) => branch.currentFolderSelectable)?.name
-          || "";
+        const selected = workspace.branches.find((branch) => branch.name === newSessionBranch.value);
+        if (!selected || !newSessionBranchSelectable(selected)) selectDefaultNewSessionBranch(workspace);
       })
       .catch(() => {
         if (abort.signal.aborted) return;
         // Compatibility for v0.0.21: instances without pre-session repository inspection keep the original cwd-only flow.
-        if (revision === newSessionWorkspaceRevision) newSessionWorkspace.value = undefined;
+        // Keep a cached workspace visible when only the background refresh failed.
       })
       .finally(() => {
         if (revision === newSessionWorkspaceRevision) newSessionWorkspaceLoading.value = false;
@@ -1586,6 +1722,13 @@ watch(
   },
   { immediate: true },
 );
+
+function selectDefaultNewSessionBranch(workspace: RepositoryAiSessionWorkspace) {
+  newSessionBranch.value = workspace.currentBranch
+    || workspace.branches.find((branch) => branch.current)?.name
+    || workspace.branches.find((branch) => branch.currentFolderSelectable)?.name
+    || "";
+}
 
 function togglePathGroup(key: string) {
   collapsedPathGroups[key] = !collapsedPathGroups[key];
@@ -1892,9 +2035,7 @@ function openNewSession() {
   if (wasVisible) {
     return;
   }
-  newSessionDraft.value = "";
   messageAttachments.value = [];
-  messageMentionBindings.value = [];
   newSessionCreateAttempt.value = undefined;
   initializeNewSessionDefaults();
 }
@@ -2099,11 +2240,11 @@ async function confirmNewProject() {
 async function createNewSession(permissionMode?: AiSessionPermissionMode) {
   const message = newSessionDraft.value.trim();
   const cwdFolderId = newSessionFolder.value?.cwdFolderId;
-  if (!newSessionApp.value || !newSessionFolder.value || !message || newSessionComposerBusy.value) return;
+  if (!newSessionApp.value || !newSessionFolder.value || !message || newSessionComposerBusy.value || (newSessionWorkspaceLoading.value && !newSessionWorkspace.value)) return;
   const gitSelection = newSessionWorkspace.value?.availability === "available" && newSessionBranch.value
     ? { mode: newSessionWorkspaceMode.value, branch: newSessionBranch.value }
     : undefined;
-  const references = referencesForBindings(newSessionDraft.value, messageMentionBindings.value);
+  const references = referencesForBindings(newSessionDraft.value, newSessionMentionBindings.value);
   const fingerprint = JSON.stringify({
     instanceId: props.instance.id,
     agent: newSessionApp.value,
@@ -2144,8 +2285,9 @@ async function createNewSession(permissionMode?: AiSessionPermissionMode) {
       persistAiSessionPermissionMode(aiSessionPermissionKey(props.instance.id, result.aiSessionId), permissionMode);
     }
     emit("selectAiSession", props.instance.id, result.aiSessionId);
+    clearAiSessionDraft(activeNewSessionDraftKey.value);
     newSessionDraft.value = "";
-    messageMentionBindings.value = [];
+    newSessionMentionBindings.value = [];
     messageAttachments.value = [];
     newSessionCreateAttempt.value = undefined;
     newSessionOpen.value = false;
@@ -2411,6 +2553,12 @@ async function openSessionApp(session: AiSessionSummary) {
   } finally {
     openingAiSessionId.value = "";
   }
+}
+
+function openSessionTerminal(session: AiSessionSummary) {
+  const appId = terminalLaunchAppId.value;
+  if (!appId || props.launchingApp || !session.cwd) return;
+  emit("launchApp", props.instance, appId, undefined, { cwd: session.cwd });
 }
 
 async function closeSession(session: AiSessionSummary) {
@@ -2838,6 +2986,7 @@ onBeforeUnmount(() => {
 });
 
 const emit = defineEmits<{
+  launchApp: [instance: InstanceBoardItem, appId: string, cwdFolderId?: string, options?: Record<string, unknown>];
   openAiSessionApp: [instance: InstanceBoardItem, session?: AiSessionSummary];
   openRepositoryWorkspace: [target: RepositoryWorkspaceTabTarget];
   selectAiSession: [instanceId: string, sessionId: string];

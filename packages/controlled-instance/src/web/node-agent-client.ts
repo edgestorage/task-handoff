@@ -121,7 +121,6 @@ export class NodeAgentRegistrationClient {
       controlMode: "controlled",
       capabilities: snapshot.capabilities,
       appInventory: snapshot.appInventory,
-      target: snapshot.target,
       workspace: snapshot.workspace,
       processIncarnationId: this.processIncarnationId,
     });
@@ -146,7 +145,6 @@ export class NodeAgentRegistrationClient {
         apps: snapshot.apps,
         aiSessions: snapshot.aiSessions,
         workspace: snapshot.workspace,
-        target: snapshot.target,
         processIncarnationId: this.processIncarnationId,
       });
     } catch (error) {
