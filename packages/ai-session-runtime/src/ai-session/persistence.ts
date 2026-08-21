@@ -157,6 +157,7 @@ function normalizeQueuedMessage(value: unknown): AiSessionQueuedMessage | undefi
   }
   const candidate = {
     id: compact(record.id, 120),
+    ...(typeof record.messageId === "string" && record.messageId.trim() ? { messageId: compact(record.messageId, 240) } : {}),
     message: messageText(record.message),
     attachments: normalizeAiSessionMessageAttachmentMetas(record.attachments),
     references: normalizeAiSessionReferences(record.references),

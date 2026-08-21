@@ -21,10 +21,12 @@ test("node update launch failure persists a terminal failed job", async () => {
     currentRuntimeVersion: () => "1.0.0",
     listInstances: () => [],
     resolveRuntimeArtifacts: async () => [],
+    managedUpdateSupport: () => ({ supported: true }),
     runCommand: async (command, args) => {
       if (command === "systemd-run") throw new Error("systemd is unavailable");
       assert.equal(command, "npm");
       if (args[0] === "root") return { stdout: globalRoot, stderr: "" };
+      if (args[0] === "prefix") return { stdout: globalRoot, stderr: "" };
       if (args.includes("dist.integrity")) return { stdout: JSON.stringify(integrity), stderr: "" };
       return { stdout: JSON.stringify("9.8.7"), stderr: "" };
     },

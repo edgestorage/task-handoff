@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld("taskHandoffDesktop", {
   },
   setWindowChromeTheme: (theme) => ipcRenderer.invoke("task-handoff:set-window-chrome-theme", theme),
   chooseProjectFolder: () => ipcRenderer.invoke("task-handoff:choose-project-folder"),
+  openLocalPath: (localPath) => ipcRenderer.invoke("task-handoff:open-local-path", localPath),
   getPathForFile: (file) => webUtils.getPathForFile(file),
   openAppWindow: (url) => ipcRenderer.invoke("task-handoff:open-app-window", url),
   openControlPlaneWindow: (url) => ipcRenderer.invoke("task-handoff:open-control-plane-window", url),

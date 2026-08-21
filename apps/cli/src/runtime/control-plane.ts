@@ -1,7 +1,11 @@
 import { Command } from "commander";
 import path from "node:path";
 import { resolvePackageVersion } from "@task-handoff/core/core/package-version";
-import { replaceControlPlaneCredentials, runControlPlaneServer } from "@task-handoff/control-plane/server";
+import {
+  initializeControlPlaneCredentials,
+  replaceControlPlaneCredentials,
+  runControlPlaneServer,
+} from "@task-handoff/control-plane/server";
 
 function parsePort(value: string) {
   const port = Number(value);
@@ -50,17 +54,26 @@ async function main() {
 
   program
     .command("credentials")
-    .description("Replace the Control Plane administrator username and password while the service is stopped.")
+    .description("Initialize or replace Control Plane administrator credentials while the service is stopped.")
     .requiredOption("--username <username>", "New administrator username")
     .requiredOption("--password-stdin", "Read the new password from standard input")
+    .option("--initialize-if-needed", "Create the administrator only when none exists")
     .option("--data-dir <path>", "Control plane data directory")
-    .action(async (options: { username: string; passwordStdin: boolean; dataDir?: string }) => {
+    .action(async (options: { username: string; passwordStdin: boolean; initializeIfNeeded?: boolean; dataDir?: string }) => {
       if (process.stdin.isTTY) {
         throw new Error("Pipe the new password to standard input when using --password-stdin.");
       }
       const chunks: Buffer[] = [];
       for await (const chunk of process.stdin) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
       const password = Buffer.concat(chunks).toString("utf8").replace(/\r?\n$/, "");
+      if (options.initializeIfNeeded) {
+        const result = await initializeControlPlaneCredentials(options.dataDir, {
+          username: options.username,
+          password,
+        });
+        console.log(result.created ? "created" : "unchanged");
+        return;
+      }
       const user = await replaceControlPlaneCredentials(options.dataDir, {
         username: options.username,
         password,

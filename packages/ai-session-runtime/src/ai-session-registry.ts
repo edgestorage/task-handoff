@@ -204,6 +204,19 @@ export class AiSessionRegistry {
     this.orphanedAppSessionRetentionMs = options.orphanedAppSessionRetentionMs ?? (Number(process.env.TASK_HANDOFF_AI_SESSION_ORPHAN_RETENTION_MS) || DEFAULT_ORPHANED_APP_SESSION_RETENTION_MS);
     this.conversationAttachments = options.conversationAttachments;
     this.transcriptService = new AiSessionTranscriptService({ idleAfterMs: this.idleAfterMs, staleAfterMs: this.staleAfterMs });
+    if (this.conversationAttachments) {
+      for (const session of this.readSessions()) {
+        for (const item of session.queue.items) {
+          const attachmentIds = item.attachments.map((attachment) => attachment.id);
+          if (!attachmentIds.length) continue;
+          const messageId = item.messageId
+            || this.conversationAttachments.messageIdForAttachments(session.id, attachmentIds);
+          if (messageId) {
+            this.conversationAttachments.claimMessageAttachments(session.id, messageId, attachmentIds);
+          }
+        }
+      }
+    }
   }
 
   sessionPath(id: string) {
@@ -332,12 +345,18 @@ export class AiSessionRegistry {
     return this.queueService.nextQueuedMessage(this.get(id));
   }
 
-  queuedMessageAttachments(queueId: string) {
-    const queuedItem = this.readSessions().flatMap((session) => session.queue.items).find((item) => item.id === queueId);
+  queuedMessageDispatch(queueId: string) {
+    const session = this.readSessions().find((candidate) => candidate.queue.items.some((item) => item.id === queueId));
+    const queuedItem = session?.queue.items.find((item) => item.id === queueId);
     if (this.conversationAttachments && queuedItem?.attachments.length) {
-      return this.conversationAttachments.providerAttachments(queuedItem.attachments.map((attachment) => attachment.id));
+      const attachmentIds = queuedItem.attachments.map((attachment) => attachment.id);
+      return {
+        // Compatibility for v0.0.21: affected queue snapshots omitted messageId.
+        messageId: queuedItem.messageId || (session ? this.conversationAttachments.messageIdForAttachments(session.id, attachmentIds) : undefined),
+        attachments: this.conversationAttachments.providerAttachments(attachmentIds),
+      };
     }
-    return this.queueService.queuedMessageAttachments(queueId);
+    return { messageId: queuedItem?.messageId, attachments: this.queueService.queuedMessageAttachments(queueId) };
   }
 
   stageMessageAttachments(input: {
@@ -387,7 +406,12 @@ export class AiSessionRegistry {
 
   removeQueuedMessage(id: string, queueId: string) {
     const current = this.get(id);
-    const messageId = current?.queue.items.find((item) => item.id === queueId)?.messageId;
+    const queuedItem = current?.queue.items.find((item) => item.id === queueId);
+    const attachmentIds = queuedItem?.attachments.map((attachment) => attachment.id) || [];
+    const messageId = queuedItem?.messageId
+      || (current && attachmentIds.length
+        ? this.conversationAttachments?.messageIdForAttachments(current.id, attachmentIds)
+        : undefined);
     const updated = current ? this.queueService.removeQueuedMessage(current, queueId) : undefined;
     if (messageId) this.rollbackMessageAttachments(id, messageId);
     return updated ? this.put(updated) : undefined;

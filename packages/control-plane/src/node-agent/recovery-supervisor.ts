@@ -1,5 +1,5 @@
 import { ControlledInstanceSchema, type ControlledInstance } from "@task-handoff/protocol/control-plane";
-import type { RuntimeConvergenceCoordinator } from "./runtime-convergence.ts";
+import { instanceImagePreparationPending, type RuntimeConvergenceCoordinator } from "./runtime-convergence.ts";
 import type { RuntimeAdapterRegistry } from "./runtimes/adapters.ts";
 import type { NodeAgentState } from "./state.ts";
 
@@ -10,6 +10,10 @@ const RESTORABLE_INSTANCE_STATUSES = new Set<ControlledInstance["status"]>([
   "registered",
   "running",
 ]);
+
+function isDockerRestoreCandidate(instance: ControlledInstance) {
+  return RESTORABLE_INSTANCE_STATUSES.has(instance.status) && !instanceImagePreparationPending(instance);
+}
 
 type Logger = (data: Record<string, unknown>, message: string) => void;
 
@@ -69,8 +73,8 @@ export class NodeAgentRecoverySupervisor {
   }
 
   markRestored(id: string) {
-    const status = this.options.state.requireInstance(id).status;
-    if (["failed", "stopping", "stopped"].includes(status)) return false;
+    const instance = this.options.state.requireInstance(id);
+    if (["failed", "stopping", "stopped"].includes(instance.status) || instanceImagePreparationPending(instance)) return false;
     this.restoredInstances.add(id);
     this.restoreErrors.delete(id);
     return true;
@@ -161,8 +165,7 @@ export class NodeAgentRecoverySupervisor {
           && (!retry || retry.nextAttemptAt <= (this.options.nowMs?.() ?? Date.now()));
       }
       if (runtime.type !== "docker") return false;
-      return RESTORABLE_INSTANCE_STATUSES.has(instance.status)
-        || (instance.status === "provisioning" && instance.imageProvisioning?.phase === "ready");
+      return isDockerRestoreCandidate(instance);
     });
 
     await Promise.all(candidates.map(async (instance) => {
@@ -225,8 +228,7 @@ export class NodeAgentRecoverySupervisor {
         && (!retry || retry.nextAttemptAt <= (this.options.nowMs?.() ?? Date.now()));
     }
     if (runtime.type !== "docker") return false;
-    return RESTORABLE_INSTANCE_STATUSES.has(instance.status)
-      || (instance.status === "provisioning" && instance.imageProvisioning?.phase === "ready");
+    return isDockerRestoreCandidate(instance);
   }
 
   async recoverManagedInstances() {
@@ -239,6 +241,7 @@ export class NodeAgentRecoverySupervisor {
       // its identity. Instances started in this process already have a target.
       && (this.restoredInstances.has(instance.id) || instance.target.status !== "unknown")
       && (!instance.ready || instance.runtimeVersion?.phase !== "matched")
+      && !instanceImagePreparationPending(instance)
       && !["created", "stopped", "failed", "provisioning", "stopping"].includes(instance.status)
     ));
     await Promise.all(candidates.map(async (instance) => {

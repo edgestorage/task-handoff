@@ -7,6 +7,7 @@ const panel = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail
 const styles = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.css", import.meta.url), "utf8");
 const boardCard = fs.readFileSync(new URL("../src/apps/control-plane/ai-board/AiSessionCard.vue", import.meta.url), "utf8");
 const contextMenu = fs.readFileSync(new URL("../src/components/ai-session/AiSessionCardContextMenu.vue", import.meta.url), "utf8");
+const pathGroupContextMenu = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPathGroupContextMenu.vue", import.meta.url), "utf8");
 const originMark = fs.readFileSync(new URL("../src/components/ai-session/AiSessionOriginMark.vue", import.meta.url), "utf8");
 const cardMarks = fs.readFileSync(new URL("../src/components/ai-session/AiSessionCardMarks.vue", import.meta.url), "utf8");
 const statusIndicator = fs.readFileSync(new URL("../src/components/ai-session/AiSessionStatusIndicator.vue", import.meta.url), "utf8");
@@ -17,6 +18,43 @@ const scrollArea = fs.readFileSync(new URL("../src/components/ui/scroll-area/Scr
 
 test("compact detail prompt keeps 16px before its divider", () => {
   assert.match(styles, /\.session-ai-detail-block \{[\s\S]*padding-bottom: 16px;/);
+});
+
+test("project rows show folder paths", () => {
+  assert.match(panel, /class="session-ai-project-item session-ai-project-folder-item"[\s\S]*class="session-ai-project-folder-copy"[\s\S]*<strong>\{\{ folder\.name \}\}<\/strong>[\s\S]*<small>\{\{ folder\.path \}\}<\/small>/);
+  assert.match(styles, /\.session-ai-project-folder-item\)[^{]*\{[^}]*min-height: 44px;/s);
+  assert.match(styles, /\.session-ai-project-item\)[^{]*\{[^}]*font-weight: 500 !important;/s);
+  assert.match(styles, /\.session-ai-project-folder-copy > strong\) \{ font-weight: 500; \}/);
+  assert.match(styles, /\.session-ai-project-folder-copy > small\)[^{]*\{[^}]*color: var\(--text-muted\);[^}]*font-size: 12px;[^}]*font-weight: 400;/s);
+});
+
+test("AI session card and detail menus open Terminal at the authoritative session cwd", () => {
+  assert.match(panel, /<AiSessionCardContextMenu[\s\S]*:can-open-terminal="Boolean\(terminalLaunchAppId\)"[\s\S]*@open-terminal="openSessionTerminal\(session\)"/);
+  assert.match(panel, /<DropdownMenuItem[\s\S]*v-if="terminalLaunchAppId"[\s\S]*@select="openSessionTerminal\(selectedSession\)"[\s\S]*sessions\.actions\.openTerminal/);
+  assert.match(panel, /function openSessionTerminal\(session: AiSessionSummary\) \{[\s\S]*emit\("launchApp", props\.instance, appId, undefined, \{ cwd: session\.cwd \}\);/);
+  assert.match(contextMenu, /\.ai-session-context-menu \.ai-session-context-menu-item\) \{[\s\S]*font-size: 13px;/);
+  assert.match(contextMenu, /\.ai-session-context-trigger-item strong\) \{[\s\S]*font-size: 13px;/);
+  assert.match(styles, /\.session-ai-detail-actions-menu \.session-ai-detail-actions-menu-item\) \{[\s\S]*font-size: 13px;/);
+});
+
+test("AI session detail menu icons match the card context menu", () => {
+  for (const icon of ["ExternalLink", "SquareTerminal", "Split"]) {
+    assert.match(panel, new RegExp(`<${icon} :size="14" \\/>`));
+    assert.match(contextMenu, new RegExp(`<${icon} :size="14" \\/>`));
+  }
+  assert.match(panel, /<Square :size="14" \/>/);
+  assert.match(contextMenu, /<Square :size="14" \/>/);
+});
+
+test("AI session path groups share node-backed rename and desktop-local folder actions", () => {
+  assert.match(panel, /<AiSessionPathGroupContextMenu[\s\S]*:can-open="canOpenPathGroupFolder"[\s\S]*:can-rename="canRenamePathGroup\(group\)"/);
+  assert.match(panel, /function canRenamePathGroup[\s\S]*registeredPathGroupFolder\(group\)[\s\S]*nodeSupportsLocalFolderNameUpdate\(props\.instance\.node\)/);
+  assert.match(panel, /updateNodeLocalFolder\(folder\.nodeId, folder\.id, \{ name \}\)/);
+  assert.match(panel, /desktopRuntimePathAccess\(props\.instance\) === "desktop-local" && canOpenDesktopLocalPath\(\)/);
+  assert.match(panel, /openDesktopLocalPath\(group\.path\)/);
+  assert.match(pathGroupContextMenu, /ContextMenuItem v-if="canOpen" class="ai-session-path-group-menu-item"[\s\S]*sessions\.panel\.openInFileManager/);
+  assert.match(pathGroupContextMenu, /ContextMenuItem v-if="canRename" class="ai-session-path-group-menu-item"[\s\S]*sessions\.panel\.renameProject/);
+  assert.match(pathGroupContextMenu, /\.ai-session-context-menu \.ai-session-path-group-menu-item\) \{\s*gap: 8px;\s*font-size: 13px;/);
 });
 
 test("instance AI session cards always show the latest turn independently of detail navigation", () => {
@@ -51,7 +89,7 @@ test("AI session list supports persistent card and compact-list layouts", () => 
   assert.doesNotMatch(styles, /\.session-ai-path-group\.is-compact-list[^}]*margin-bottom:/);
   assert.match(styles, /\.session-ai-path-group \+ \.session-ai-path-group\s*\{[\s\S]*margin-top: -6px;/);
   assert.doesNotMatch(styles, /\.session-ai-path-group \+ \.session-ai-path-group\[data-collapsed="true"\]/);
-  assert.match(styles, /\.session-ai-path-group-title\s*\{[^}]*font-weight: 400;/s);
+  assert.match(styles, /\.session-ai-path-group-title\s*\{[^}]*font-weight: 500;/s);
   assert.match(styles, /\.session-ai-compact-row\.is-grouped\s*\{\s*width: 100%;\s*margin-left: 0;\s*padding-left: 8px;/);
   assert.match(styles, /\.session-ai-compact-title\s*\{[^}]*font-weight: 400;/s);
   assert.match(statusIndicator, /\[data-size="compact"\]\[data-state="idle"\][^{]*\{\s*visibility: hidden;/);
@@ -300,8 +338,13 @@ test("an unselected AI session defaults to the new-session surface", () => {
   assert.doesNotMatch(panel, /session-ai-no-selection/);
 });
 
-test("opening the already-visible new-session surface preserves its draft", () => {
-  assert.match(panel, /function openNewSession\(\) \{\s*const wasVisible = showNewSession\.value;\s*newSessionOpen\.value = true;[\s\S]{0,120}if \(wasVisible\) \{[\s\S]{0,80}return;[\s\S]{0,80}\}[\s\S]{0,120}newSessionDraft\.value = "";/);
+test("new-session drafts persist per instance until creation succeeds", () => {
+  assert.match(panel, /activeNewSessionDraftKey = ref\(aiSessionCreationDraftKey\(props\.instance\.id\)\)/);
+  assert.match(panel, /watch\(\[newSessionDraft, newSessionMentionBindings\],[\s\S]*persistAiSessionDraftPayload\(activeNewSessionDraftKey\.value, draft, bindings\)/);
+  assert.match(panel, /watch\(\(\) => props\.instance\.id,[\s\S]*loadAiSessionDraftPayload\(activeNewSessionDraftKey\.value\)/);
+  assert.match(panel, /v-model="newSessionDraft"[\s\S]*v-model:mention-bindings="newSessionMentionBindings"/);
+  assert.doesNotMatch(panel, /function openNewSession\(\)[\s\S]{0,400}newSessionDraft\.value = "";/);
+  assert.match(panel, /emit\("selectAiSession", props\.instance\.id, result\.aiSessionId\);\s*clearAiSessionDraft\(activeNewSessionDraftKey\.value\);\s*newSessionDraft\.value = "";/);
 });
 
 test("new-session folder picker keeps actions visible while long folder lists scroll", () => {
@@ -318,6 +361,15 @@ test("new-session Git inspection reacts only to stable selection changes", () =>
   assert.doesNotMatch(panel, /\(\) => \[props\.instance\.id, newSessionFolderId\.value, showNewSession\.value\]/);
   assert.match(panel, /const abort = new AbortController\(\);\s*onCleanup\(\(\) => abort\.abort\(\)\);/);
   assert.match(panel, /getAiSessionWorkspace\(instanceId, cwdFolderId, abort\.signal\)/);
+});
+
+test("new-session Git inspection uses cached workspace data without blocking the composer", () => {
+  assert.match(panel, /controlPlaneQueryKeys\.aiSessionWorkspace\(instanceId, cwdFolderId\)/);
+  assert.match(panel, /getQueryData<RepositoryAiSessionWorkspace>\(queryKey\)[\s\S]*newSessionWorkspace\.value = cachedWorkspace[\s\S]*getAiSessionWorkspace\(instanceId, cwdFolderId, abort\.signal\)/);
+  assert.match(panel, /queryClient\.setQueryData\(queryKey, workspace\)/);
+  assert.match(panel, /const newSessionComposerBusy = computed\(\(\) => launchingNewSession\.value \|\| savingNewSessionPermission\.value \|\| choosingNewSessionFolder\.value\);/);
+  assert.doesNotMatch(panel, /const newSessionComposerBusy = computed\([^\n]*newSessionWorkspaceLoading/);
+  assert.match(panel, /:disabled="!newSessionFolder \|\| \(newSessionWorkspaceLoading && !newSessionWorkspace\)"/);
 });
 
 test("new-session branches use a folder tree and confirm current-folder switches", () => {

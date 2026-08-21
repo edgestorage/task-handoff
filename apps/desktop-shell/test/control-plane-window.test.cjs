@@ -93,6 +93,7 @@ test("preload API delegates privileged desktop operations through IPC", async ()
 
   assert.equal(api.windowChrome.mode, "macos-overlay");
   assert.equal(api.getPathForFile({ name: "project" }), "/files/project");
+  await api.openLocalPath("/projects/task-handoff");
   await api.openControlPlaneWindow("/repository-workspace");
   await api.openInstanceDetailWindow("instance-a");
   await api.switchInstanceDetailWindow("instance-b");
@@ -109,6 +110,7 @@ test("preload API delegates privileged desktop operations through IPC", async ()
   await api.desktopUpdates.check();
   await api.desktopUpdates.install();
   assert.deepEqual(invocations, [
+    ["task-handoff:open-local-path", "/projects/task-handoff"],
     ["task-handoff:open-control-plane-window", "/repository-workspace"],
     ["task-handoff:open-instance-detail-window", "instance-a"],
     ["task-handoff:switch-instance-detail-window", "instance-b"],
@@ -131,6 +133,13 @@ test("preload API delegates privileged desktop operations through IPC", async ()
   assert.deepEqual(state, { status: "ready" });
   unsubscribe();
   assert.equal(listeners.has(channel), false);
+});
+
+test("desktop local-path opening is restricted to an existing absolute directory", () => {
+  const handler = mainSource.match(/ipcMain\.handle\("task-handoff:open-local-path"[\s\S]*?\n\}\);/)?.[0] || "";
+  assert.match(handler, /path\.isAbsolute\(normalized\)/);
+  assert.match(handler, /fs\.statSync\(normalized\)\.isDirectory\(\)/);
+  assert.match(handler, /shell\.openPath\(normalized\)/);
 });
 
 test("only registered instance detail windows can control their own always-on-top state", () => {

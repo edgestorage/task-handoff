@@ -521,6 +521,7 @@ import { useI18n } from "vue-i18n";
 import { Box, Boxes, Download, FolderOpen, Gauge, KeyRound, Monitor, MoreHorizontal, Network, Pencil, Plus, RefreshCw, ServerCog, Settings, Trash2 } from "@lucide/vue";
 import { TooltipTrigger as RekaTooltipTrigger } from "reka-ui";
 import type { BuildInfo, InstanceBoardItem, LocalDockerImage, Node, NodeAgentExternalListener, NodeControlPlaneConnection, NodeControlPlanePairing, NodeLocalFolder, NodeRuntime, UpdateChannel, UpdateCheckResult, UpdateJob } from "../../../api/types";
+import { nodeSupportsLocalFolderNameUpdate } from "../../../api/nodeCapabilities";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
@@ -663,13 +664,7 @@ const activeTab = ref<NodeDetailTab>("overview");
 const remoteConnectionDialogOpen = ref(false);
 const localFolderRenameTarget = ref<NodeLocalFolder>();
 const localFolderRenameDraft = ref("");
-const canRenameLocalFolders = computed(() => {
-  const agent = props.selectedNode?.capabilities?.agent;
-  if (!agent || typeof agent !== "object" || Array.isArray(agent)) return false;
-  const capabilities = (agent as Record<string, unknown>).capabilities;
-  return Boolean(capabilities && typeof capabilities === "object" && !Array.isArray(capabilities)
-    && (capabilities as Record<string, unknown>).localFolderNameUpdate === true);
-});
+const canRenameLocalFolders = computed(() => nodeSupportsLocalFolderNameUpdate(props.selectedNode));
 const canSubmitLocalFolderRename = computed(() => Boolean(
   localFolderRenameTarget.value
   && localFolderRenameDraft.value.trim() !== localFolderRenameTarget.value.name

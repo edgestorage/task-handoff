@@ -658,7 +658,6 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
       role: "control-plane",
       protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
       build: buildInfo(),
-      dataDir: paths.dataDir,
       serverTime: new Date().toISOString(),
     },
   }));

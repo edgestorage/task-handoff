@@ -1,10 +1,14 @@
 import { Command, InvalidArgumentError, Option } from "commander";
 import fs from "node:fs";
 import http from "node:http";
+import os from "node:os";
 import path from "node:path";
 import { spawnSync, type SpawnSyncOptions } from "node:child_process";
 import { isExactSemanticVersion, updateChannelForVersion } from "./update-channel.mjs";
-import { acquireUpdateLock, cleanUpLockOnSignals } from "./update-lock.mjs";
+import {
+  currentServerInstallArgs,
+  globalPrefixFromModulePath,
+} from "@task-handoff/core/core/server-update-installation";
 
 const packageRoot = path.resolve(__dirname, "..");
 const manifest = JSON.parse(fs.readFileSync(path.join(packageRoot, "package.json"), "utf8")) as { version: string };
@@ -21,47 +25,13 @@ function run(command: string, args: string[], options: SpawnSyncOptions = {}) {
 }
 
 function findGlobalPrefix() {
-  let current = packageRoot;
-  while (current !== path.dirname(current)) {
-    if (path.basename(current) === "node_modules" && path.basename(path.dirname(current)) === "lib") {
-      return path.dirname(path.dirname(current));
-    }
-    current = path.dirname(current);
-  }
+  const prefix = globalPrefixFromModulePath(packageRoot);
+  if (prefix) return prefix;
   throw new Error(`Cannot determine the npm global prefix from ${packageRoot}.`);
 }
 
-function parseEnvFile(file: string) {
-  const values: Record<string, string> = {};
-  if (!fs.existsSync(file)) return values;
-  for (const line of fs.readFileSync(file, "utf8").split(/\r?\n/)) {
-    if (!line || line.startsWith("#")) continue;
-    const separator = line.indexOf("=");
-    if (separator > 0) values[line.slice(0, separator)] = line.slice(separator + 1);
-  }
-  return values;
-}
-
-function serviceUser() {
-  const unit = "/etc/systemd/system/task-handoff-node-agent.service";
-  if (!fs.existsSync(unit)) return "root";
-  return fs.readFileSync(unit, "utf8").match(/^User=(.+)$/m)?.[1] || "root";
-}
-
 function currentInstallOptions() {
-  const controlPlane = parseEnvFile("/etc/task-handoff/control-plane.env");
-  const nodeAgent = parseEnvFile("/etc/task-handoff/node-agent.env");
-  return [
-    "--service-user", serviceUser(),
-    "--control-plane-data-dir", controlPlane.TASK_HANDOFF_CONTROL_PLANE_DATA_DIR || "/var/lib/task-handoff/control-plane",
-    "--node-agent-data-dir", nodeAgent.TASK_HANDOFF_NODE_AGENT_DATA_DIR || "/var/lib/task-handoff/node-agent",
-    "--control-plane-host", controlPlane.TASK_HANDOFF_CONTROL_PLANE_HOST || "0.0.0.0",
-    "--control-plane-port", controlPlane.TASK_HANDOFF_CONTROL_PLANE_PORT || "8081",
-    "--node-agent-host", nodeAgent.TASK_HANDOFF_NODE_AGENT_HOST || "127.0.0.1",
-    "--node-agent-port", nodeAgent.TASK_HANDOFF_NODE_AGENT_PORT || "8091",
-    "--node-agent-ipc-path", nodeAgent.TASK_HANDOFF_NODE_AGENT_IPC_PATH || "/run/task-handoff/node-agent.sock",
-    "--auth-mode", controlPlane.TASK_HANDOFF_CONTROL_PLANE_AUTH_MODE || "password",
-  ];
+  return currentServerInstallArgs();
 }
 
 function systemctlState(service: string) {
@@ -110,6 +80,16 @@ function npmVersion(target: string, registry?: string) {
   if (registry) args.push("--registry", registry);
   const value = JSON.parse(run(npmCommand, args));
   if (typeof value !== "string") throw new Error(`npm target ${target} did not resolve to one version.`);
+  return value;
+}
+
+function npmIntegrity(version: string, registry?: string) {
+  const args = ["view", `@task-handoff/server@${version}`, "dist.integrity", "--json"];
+  if (registry) args.push("--registry", registry);
+  const value = JSON.parse(run(npmCommand, args));
+  if (typeof value !== "string" || !/^sha(?:256|384|512)-[A-Za-z0-9+/=]+$/.test(value)) {
+    throw new Error(`npm did not return immutable integrity metadata for @task-handoff/server@${version}.`);
+  }
   return value;
 }
 
@@ -193,9 +173,16 @@ async function main() {
     .option("--node-agent-ipc-path <path>")
     .option("--auth-mode <mode>")
     .option("--static-dir <path>")
+    .option("--preserve-current", "Reuse the installed service configuration")
+    .option("--materialize-only", "Rewrite service configuration without starting services")
     .action((options) => {
       requireRoot();
-      run(process.execPath, [path.join(packageRoot, "bin", "task-handoff-install-server"), ...installArgs(options)], { stdio: "inherit" });
+      run(process.execPath, [
+        path.join(packageRoot, "bin", "task-handoff-install-server"),
+        ...(options.preserveCurrent ? currentInstallOptions() : []),
+        ...installArgs(options),
+        ...(options.materializeOnly ? ["--materialize-only"] : []),
+      ], { stdio: "inherit" });
     });
 
   program.command("status").description("Show the installed version and service state.").action(() => {
@@ -242,29 +229,66 @@ async function main() {
         console.log(`@task-handoff/server ${manifest.version} is already installed.`);
         return;
       }
-      const releaseLock = acquireUpdateLock();
-      const removeSignalCleanup = cleanUpLockOnSignals(releaseLock);
+      const prefix = findGlobalPrefix();
+      const preserved = currentInstallOptions();
+      const nodeSocket = preserved[preserved.indexOf("--node-agent-ipc-path") + 1];
+      const controlPlanePort = Number(preserved[preserved.indexOf("--control-plane-port") + 1]);
+      const integrity = npmIntegrity(targetVersion, options.registry);
+      const directory = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-server-update-"));
+      const jobFile = path.join(directory, "job.json");
+      const timestamp = new Date().toISOString();
+      fs.writeFileSync(jobFile, `${JSON.stringify({
+        id: `update_cli_${process.pid}_${Date.now()}`,
+        nodeId: "node_cli_server",
+        source: "npm",
+        channel: options.channel || updateChannelForVersion(targetVersion),
+        fromVersion: manifest.version,
+        toVersion: targetVersion,
+        artifactRef: `npm:@task-handoff/server@${targetVersion}#${integrity}`,
+        runtimeArtifacts: [],
+        impact: {
+          runningInstanceCount: 0,
+          stoppedInstanceCount: 0,
+          activeInstanceCount: 0,
+          restartInstanceCount: 0,
+          runningInstanceIds: [],
+          stoppedInstanceIds: [],
+          activeInstanceIds: [],
+        },
+        rollout: {
+          phase: "queued",
+          desiredVersion: targetVersion,
+          expectedInstanceIds: [],
+          expectedInstanceCount: 0,
+          matchedInstanceCount: 0,
+          pendingInstanceCount: 0,
+          failedInstanceCount: 0,
+          deferredInstanceCount: 0,
+        },
+        status: "queued",
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      }, null, 2)}\n`);
       try {
-        const prefix = findGlobalPrefix();
-        const preserved = currentInstallOptions();
-        const nodeSocket = preserved[preserved.indexOf("--node-agent-ipc-path") + 1];
-        const controlPlanePort = Number(preserved[preserved.indexOf("--control-plane-port") + 1]);
-        const npmArgs = ["install", "--global", "--prefix", prefix, `@task-handoff/server@${targetVersion}`];
-        if (options.registry) npmArgs.push("--registry", options.registry);
         console.log(`Updating @task-handoff/server ${manifest.version} -> ${targetVersion}`);
-        run(npmCommand, npmArgs, { stdio: "inherit" });
-        run(path.join(prefix, "bin", "task-handoff"), ["install", ...preserved], { stdio: "inherit" });
-        run("systemctl", ["restart", "task-handoff-node-agent.service"]);
-        waitForSocket(nodeSocket);
-        run("systemctl", ["restart", "task-handoff-control-plane.service"]);
-        await waitForHttp(controlPlanePort);
+        run(path.join(packageRoot, "bin", "task-handoff-node-update-worker"), [
+          "--job-file", jobFile,
+          "--target-version", targetVersion,
+          "--npm-command", npmCommand,
+          "--install-prefix", prefix,
+          "--node-agent-ipc-path", nodeSocket,
+          "--control-plane-health-url", `http://127.0.0.1:${controlPlanePort}/api/health`,
+          ...(options.registry ? ["--registry", options.registry] : []),
+          "--standalone",
+        ], { stdio: "inherit" });
+        const completed = JSON.parse(fs.readFileSync(jobFile, "utf8"));
+        if (completed.status !== "succeeded") throw new Error(completed.error?.message || `Update finished with status ${completed.status}.`);
         console.log(`Updated TaskHandoff server to ${targetVersion}.`);
       } catch (error) {
-        console.error(`Update failed. To reinstall the previous version, run: npm install -g @task-handoff/server@${manifest.version}`);
+        console.error(`Update failed. The updater attempted to restore @task-handoff/server ${manifest.version}.`);
         throw error;
       } finally {
-        removeSignalCleanup();
-        releaseLock();
+        fs.rmSync(directory, { recursive: true, force: true });
       }
     });
 

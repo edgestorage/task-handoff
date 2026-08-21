@@ -365,14 +365,18 @@ export function useActiveInstanceSessions({
     sessionTabOrderKeys[instanceId] = reorderSessionTabKeys(currentOrder, sourceKey, targetKey, placement);
   }
 
-  async function launchSelectedApp(instance: InstanceBoardItem, appId: string, cwdFolderId?: string) {
+  async function launchSelectedApp(instance: InstanceBoardItem, appId: string, cwdFolderId?: string, options?: Record<string, unknown>) {
     if (!isInstanceAppReady(instance) || launchingApp.value) {
       return;
     }
     launchingApp.value = true;
     appLaunchMenuOpen.value = false;
     try {
-      const session = await launchAppSession(instance.id, { appId, ...(cwdFolderId ? { cwdFolderId } : {}) });
+      const session = await launchAppSession(instance.id, {
+        appId,
+        ...(cwdFolderId ? { cwdFolderId } : {}),
+        ...(options ? { options } : {}),
+      });
       const pane = focusedSessionPanes[instance.id] === "right" && rightSelectedSessionKeys[instance.id] ? "right" : "left";
       if (pane === "right") {
         ensurePaneAssignments(instance.id)[session.id] = true;

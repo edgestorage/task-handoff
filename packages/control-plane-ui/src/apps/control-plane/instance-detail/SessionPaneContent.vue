@@ -55,8 +55,10 @@
       :choose-project-folder="chooseProjectFolder"
       :instance="instance"
       :launchable-apps="launchableApps"
+      :launching-app="launchingApp"
       :node-local-folders="nodeLocalFolders"
       :selected-ai-session="selectedAiSession"
+      @launch-app="(target, appId, cwdFolderId, options) => $emit('launchApp', target, appId, cwdFolderId, options)"
       @open-ai-session-app="(target, aiSession) => $emit('openAiSessionApp', target, aiSession)"
       @open-repository-workspace="$emit('openRepositoryWorkspace', $event)"
       @select-ai-session="(instanceId, sessionId) => $emit('selectAiSession', instanceId, sessionId)"
@@ -125,6 +127,7 @@ const props = defineProps<{
 }>();
 
 defineEmits<{
+  launchApp: [instance: InstanceBoardItem, appId: string, cwdFolderId?: string, options?: Record<string, unknown>];
   openAiSessionApp: [instance: InstanceBoardItem, session?: AiSessionSummary];
   openRepositoryWorkspace: [target: RepositoryWorkspaceTabTarget];
   openLaunchMenu: [];

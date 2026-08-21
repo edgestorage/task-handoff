@@ -9,6 +9,7 @@ const workbench = read("ControlPlaneWorkbench.vue");
 const board = read("board/InstanceBoardView.vue");
 const boardSessions = read("board/useInstanceBoardSessions.ts");
 const detailSelection = read("instance-detail/instanceDetailSelection.ts");
+const sessionPreviewStyles = read("instance-detail/SessionPreview.css");
 const appLaunchItems = read("shared/AppLaunchMenuItems.vue");
 const appLaunchIcon = read("shared/AppLaunchIcon.vue");
 const options = read("shared/InstanceViewOptionsMenu.vue");
@@ -99,6 +100,15 @@ test("board app launch menus keep parent and project flyout layouts consistent",
   assert.match(board, /:global\(\.board-launch-menu \.app-launch-menu-item\) \{[\s\S]*?grid-template-columns: 18px minmax\(0, 1fr\) 16px;/);
   assert.match(board, /:global\(\.board-launch-menu \.app-launch-menu-item span\) \{[\s\S]*?display: grid;[\s\S]*?gap: 2px;/);
   assert.doesNotMatch(board, /board-launch-menu-item/);
+});
+
+test("app launch menu names and paths use the shared menu typography", () => {
+  assert.match(appLaunchItems, /\.app-launch-menu \.app-launch-menu-item strong[\s\S]*?font-weight: 500;/);
+  assert.match(appLaunchItems, /\.app-launch-menu \.app-launch-menu-item small[\s\S]*?font-weight: 400;/);
+  assert.match(appLaunchItems, /\.board-launch-menu \.app-launch-menu-item strong[\s\S]*?font-weight: 500;/);
+  assert.match(appLaunchItems, /\.board-launch-menu \.app-launch-menu-item small[\s\S]*?font-weight: 400;/);
+  assert.doesNotMatch(sessionPreviewStyles, /\.app-launch-menu strong\)[^{]*\{[^}]*font-weight:/s);
+  assert.doesNotMatch(sessionPreviewStyles, /\.app-launch-menu small\)[^{]*\{[^}]*font-weight:/s);
 });
 
 test("app launch menus use product and terminal icons instead of a generic launch glyph", () => {

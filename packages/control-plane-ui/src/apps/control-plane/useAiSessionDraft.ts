@@ -10,6 +10,10 @@ export function aiSessionMessageText(message: string) {
   return message || AI_SESSION_ATTACHMENT_ONLY_MESSAGE;
 }
 
+export function aiSessionCreationDraftKey(instanceId: string) {
+  return `new-session:${instanceId}`;
+}
+
 type StoredDraft = {
   value: string;
   bindings: AiSessionMentionBinding[];

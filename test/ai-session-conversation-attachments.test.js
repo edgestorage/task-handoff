@@ -153,6 +153,72 @@ test("streamed drafts persist once, enforce scope, and become staged message han
   assert.equal(store.content("session-a", "message-a", draft.id).attachment.name, "report.txt");
 });
 
+test("failed create-request dispatch restores its upload draft for a new session retry", async () => {
+  const dataDir = tempDir();
+  const store = new AiSessionConversationAttachmentStore({ dataDir });
+  const draft = await store.createDraft({
+    scopeType: "create-request",
+    scopeId: "create-retry",
+    kind: "file",
+    name: "retry.txt",
+    mime: "text/plain",
+    size: 5,
+    source: Readable.from(["retry"]),
+  });
+  store.stageDrafts({
+    scopeType: "create-request",
+    scopeId: "create-retry",
+    sessionId: "failed-session",
+    messageId: "failed-message",
+    attachmentIds: [draft.id],
+  });
+  assert.equal(store.rollbackMessage("failed-session", "failed-message"), 1);
+  assert.equal(store.attachmentMetadata("failed-session", "failed-message", draft.id), undefined);
+
+  const restored = new AiSessionConversationAttachmentStore({ dataDir });
+  const retried = restored.stageDrafts({
+    scopeType: "create-request",
+    scopeId: "create-retry",
+    sessionId: "retry-session",
+    messageId: "retry-message",
+    attachmentIds: [draft.id],
+  });
+  assert.equal(retried.attachments[0].id, draft.id);
+  assert.equal(fs.readFileSync(retried.providerAttachments[0].retainedPath, "utf8"), "retry");
+});
+
+test("process restart restores a consumed upload as a real retryable draft", async () => {
+  const dataDir = tempDir();
+  const first = new AiSessionConversationAttachmentStore({ dataDir });
+  const draft = await first.createDraft({
+    scopeType: "create-request",
+    scopeId: "create-restart",
+    kind: "file",
+    name: "restart.txt",
+    mime: "text/plain",
+    size: 7,
+    source: Readable.from(["restart"]),
+  });
+  first.stageDrafts({
+    scopeType: "create-request",
+    scopeId: "create-restart",
+    sessionId: "interrupted-session",
+    messageId: "interrupted-message",
+    attachmentIds: [draft.id],
+  });
+
+  const restored = new AiSessionConversationAttachmentStore({ dataDir });
+  const retried = restored.stageDrafts({
+    scopeType: "create-request",
+    scopeId: "create-restart",
+    sessionId: "retry-session",
+    messageId: "retry-message",
+    attachmentIds: [draft.id],
+  });
+  assert.equal(retried.attachments[0].id, draft.id);
+  assert.equal(fs.readFileSync(retried.providerAttachments[0].retainedPath, "utf8"), "restart");
+});
+
 test("streamed draft rejects declared-size mismatch without leaving content", async () => {
   const dataDir = tempDir();
   const store = new AiSessionConversationAttachmentStore({ dataDir });

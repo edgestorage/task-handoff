@@ -74,6 +74,14 @@ test("desktop rolls back failed children without coupling a healthy node-agent t
   assert.match(main, /inspectExistingDesktopControlPlane\(\)[\s\S]*ensureDesktopNodeAgent/);
 });
 
+test("desktop readiness uses health for availability and the singleton lease for ownership", () => {
+  const main = fs.readFileSync(path.join(__dirname, "../src/main.cjs"), "utf8");
+  assert.match(main, /health\?\.role === "control-plane"/);
+  assert.match(main, /health\?\.build\?\.component === "control-plane"/);
+  assert.match(main, /inspectStartedDesktopControlPlane\(\{/);
+  assert.doesNotMatch(main, /payload\?\.data\?\.dataDir/);
+});
+
 test("desktop child supervision reports output, spawn failures, and exits", () => {
   const child = fakeChild();
   const info = [];

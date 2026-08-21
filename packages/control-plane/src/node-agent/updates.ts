@@ -15,6 +15,7 @@ import path from "node:path";
 import type { CommandRunner } from "../shared/process/command-runner.ts";
 import type { NodeAgentStorePaths } from "./persistence/paths.ts";
 import { createId, JsonCollection } from "../shared/persistence/store.ts";
+import { globalPrefixFromModulePath } from "@task-handoff/core/core/server-update-installation";
 
 function now() {
   return new Date().toISOString();
@@ -77,9 +78,12 @@ export type NodeUpdatePackageSelection = {
   packageName: NodeUpdatePackageName;
   currentVersion?: string;
   relatedCurrentVersions: string[];
+  installPrefix: string;
 };
 
 function activeUpdatePackage(moduleDir: string): NodeUpdatePackageSelection | undefined {
+  const installPrefix = globalPrefixFromModulePath(moduleDir);
+  if (!installPrefix) return undefined;
   let current = path.resolve(moduleDir);
   let nodeAgentVersion: string | undefined;
   while (current !== path.dirname(current)) {
@@ -93,6 +97,7 @@ function activeUpdatePackage(moduleDir: string): NodeUpdatePackageSelection | un
           packageName: "@task-handoff/server",
           currentVersion: manifest.version.trim(),
           relatedCurrentVersions: nodeAgentVersion ? [nodeAgentVersion] : [],
+          installPrefix,
         };
       }
     } catch (error) {
@@ -101,7 +106,7 @@ function activeUpdatePackage(moduleDir: string): NodeUpdatePackageSelection | un
     current = path.dirname(current);
   }
   return nodeAgentVersion
-    ? { packageName: "@task-handoff/node-agent", currentVersion: nodeAgentVersion, relatedCurrentVersions: [] }
+    ? { packageName: "@task-handoff/node-agent", currentVersion: nodeAgentVersion, relatedCurrentVersions: [], installPrefix }
     : undefined;
 }
 
@@ -111,9 +116,12 @@ export async function resolveNodeUpdatePackage(runCommand: CommandRunner, module
   // The running package is authoritative for both update selection and version.
   const active = moduleDir ? activeUpdatePackage(moduleDir) : undefined;
   if (active) return active;
-  const result = await runCommand(npmCommand(), ["root", "--global"]);
-  const globalRoot = result.stdout.trim();
+  const rootResult = await runCommand(npmCommand(), ["root", "--global"]);
+  const globalRoot = rootResult.stdout.trim();
   if (!globalRoot) throw new Error("npm did not return its global module root.");
+  const prefixResult = await runCommand(npmCommand(), ["prefix", "--global"]);
+  const installPrefix = prefixResult.stdout.trim();
+  if (!path.isAbsolute(installPrefix)) throw new Error(`npm did not return an absolute global prefix: ${installPrefix || "empty"}`);
   const server = installedPackageManifest(globalRoot, "@task-handoff/server");
   const nodeAgent = installedPackageManifest(globalRoot, "@task-handoff/node-agent");
   if (server) {
@@ -121,12 +129,14 @@ export async function resolveNodeUpdatePackage(runCommand: CommandRunner, module
       packageName: "@task-handoff/server",
       currentVersion: server.version,
       relatedCurrentVersions: nodeAgent ? [nodeAgent.version] : [],
+      installPrefix,
     };
   }
   return {
     packageName: "@task-handoff/node-agent",
     currentVersion: nodeAgent?.version,
     relatedCurrentVersions: [],
+    installPrefix,
   };
 }
 

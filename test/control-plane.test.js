@@ -11,7 +11,7 @@ const test = require("node:test");
 const WebSocket = require("ws");
 const { z } = require("zod");
 
-const { createControlPlaneApp, replaceControlPlaneCredentials, routeAuthorization } = require("../packages/control-plane/src/server.ts");
+const { createControlPlaneApp, initializeControlPlaneCredentials, replaceControlPlaneCredentials, routeAuthorization } = require("../packages/control-plane/src/server.ts");
 const { connectReverseTunnel, createNodeAgentApp, createReverseTunnelManager, listenNodeAgentIpcServer, mergeRuntimeLifecycleResult, NodeAgentExternalListenerManager, requestRuntimeAppSessionDrain, resolvedDockerImageUpdatePatch, runtimeVersionStateForActual } = require("../packages/control-plane/src/node-agent.ts");
 const { ControlPlaneChatGatewayRuntime, aiSessionDeliveryText, createDingdingStreamClient } = require("../packages/control-plane/src/chat-gateway.ts");
 const { ControlledInstanceGateway } = require("../packages/control-plane/src/control-plane/instances/gateway.ts");
@@ -89,7 +89,7 @@ test("runtime app-session drain prefers managed bulk drain and falls back across
   const bulk = await requestRuntimeAppSessionDrain(async (url, init) => {
     bulkCalls.push([String(url), init?.method, init?.headers]);
     return new Response(JSON.stringify({ data: { drained: true } }), { status: 200, headers: { "content-type": "application/json" } });
-  }, baseInstance);
+  }, baseInstance, async () => baseInstance.target.web);
   assert.equal(bulk.requested, 2);
   assert.deepEqual(bulk.failures, []);
   assert.equal(bulkCalls.length, 1);
@@ -114,7 +114,7 @@ test("runtime app-session drain prefers managed bulk drain and falls back across
       }), { status: 200, headers: { "content-type": "application/json" } });
     }
     return new Response(JSON.stringify({ data: { status: "stopped" } }), { status: 200, headers: { "content-type": "application/json" } });
-  }, baseInstance);
+  }, baseInstance, async () => baseInstance.target.web);
   assert.equal(fallback.requested, 1);
   assert.deepEqual(fallback.failures, []);
   assert.deepEqual(fallbackCalls, [
@@ -238,7 +238,7 @@ function testManagedVolumeInspection(instanceId, name) {
   return { Name: name, Labels: volume.labels };
 }
 
-test("runtime lifecycle result preserves a newer registration heartbeat", () => {
+test("runtime lifecycle result preserves a newer process report and the adapter-owned target", () => {
   const baseline = ControlledInstanceSchema.parse({
     id: "inst_start_race",
     name: "start race",
@@ -297,7 +297,7 @@ test("runtime lifecycle result preserves a newer registration heartbeat", () => 
   assert.equal(merged.health, "ok");
   assert.equal(merged.agentStatus, "online");
   assert.equal(merged.ready, true);
-  assert.equal(merged.target.web, "http://instance:8080");
+  assert.equal(merged.target.web, "http://127.0.0.1:32000");
   assert.equal(merged.workspace.status, "ready");
   assert.equal(merged.runtime.containerName, "task-handoff-inst_start_race");
 });
@@ -584,6 +584,23 @@ test("UI and chat launchers consume only the current authoritative app inventory
 
 function tempDataDir(name) {
   return fs.mkdtempSync(path.join(os.tmpdir(), `task-handoff-${name}-`));
+}
+
+function installTestLocalRuntimeTarget(app, instanceId, port) {
+  const current = app.nodeAgentState.requireInstance(instanceId);
+  app.nodeAgentState.controlledInstances.put(ControlledInstanceSchema.parse({
+    ...current,
+    runtimeId: "runtime_local_host",
+    runtime: { kind: "local", port, labels: { "task-handoff.runtime-kind": "local" } },
+    target: {
+      strategy: "direct-port",
+      status: "reachable",
+      web: `http://127.0.0.1:${port}`,
+      api: `http://127.0.0.1:${port}/api`,
+    },
+    targetStatus: "reachable",
+    uiAccessStatus: "reachable",
+  }));
 }
 
 async function json(app, method, url, payload, headers) {
@@ -1974,6 +1991,48 @@ test("offline credential replacement reads v0.0.17 account records and revokes e
     assert.equal((await app.inject({ method: "GET", url: "/api/projects", headers: { cookie: oldCookie } })).statusCode, 401);
     assert.equal((await app.inject({ method: "POST", url: "/api/auth/login", payload: { username: "admin", password: "password123" } })).statusCode, 401);
     assert.equal((await app.inject({ method: "POST", url: "/api/auth/login", payload: { username: "operator", password: "password456" } })).statusCode, 200);
+  } finally {
+    await app.close();
+  }
+});
+
+test("offline credential initialization creates exactly one administrator without replacing it", async () => {
+  const dataDir = tempDataDir("cp-auth-offline-initialize");
+  const authUsersDir = path.join(dataDir, "auth-users");
+  fs.mkdirSync(authUsersDir, { recursive: true });
+  fs.writeFileSync(path.join(authUsersDir, "corrupt-user.json"), "{not-json\n");
+  const first = await initializeControlPlaneCredentials(dataDir, {
+    username: "generated-admin",
+    password: "generated-password-123",
+  }, { lockPath: path.join(dataDir, "initialize.lock") });
+  assert.equal(first.created, true);
+  assert.equal(first.user.username, "generated-admin");
+
+  const repeated = await initializeControlPlaneCredentials(dataDir, {
+    username: "replacement-admin",
+    password: "replacement-password-456",
+  }, { lockPath: path.join(dataDir, "initialize.lock") });
+  assert.deepEqual(repeated, { created: false });
+
+  const app = await createControlPlaneApp({ dataDir, logger: false, auth: { mode: "password" } });
+  try {
+    const publicBootstrap = await app.inject({
+      method: "POST",
+      url: "/api/auth/bootstrap-admin",
+      payload: { username: "attacker", password: "attacker-password-789" },
+    });
+    assert.equal(publicBootstrap.statusCode, 409);
+    assert.equal(publicBootstrap.json().error.code, "AUTH_BOOTSTRAP_ALREADY_DONE");
+    assert.equal((await app.inject({
+      method: "POST",
+      url: "/api/auth/login",
+      payload: { username: "generated-admin", password: "generated-password-123" },
+    })).statusCode, 200);
+    assert.equal((await app.inject({
+      method: "POST",
+      url: "/api/auth/login",
+      payload: { username: "replacement-admin", password: "replacement-password-456" },
+    })).statusCode, 401);
   } finally {
     await app.close();
   }
@@ -3790,8 +3849,10 @@ test("node agent update API treats a missing npm channel as no update", async (t
     dataDir: tempDataDir("node-agent-update-missing-channel"),
     logger: false,
     token: "agent-secret",
+    managedUpdateSupport: () => ({ supported: true }),
     updateCommandRunner: async (_command, args) => {
       if (args[0] === "root") return { stdout: globalRoot, stderr: "" };
+      if (args[0] === "prefix") return { stdout: globalRoot, stderr: "" };
       throw Object.assign(new Error("npm ERR! code E404"), {
         details: { stdout: "", stderr: "npm ERR! code E404 npm ERR! 404 No match found for version beta" },
       });
@@ -3864,9 +3925,11 @@ test("node agent update checks default to the stable npm channel", async (t) => 
     dataDir: tempDataDir("node-agent-update-check"),
     logger: false,
     token: "agent-secret",
+    managedUpdateSupport: () => ({ supported: true }),
     updateCommandRunner: async (command, args) => {
       calls.push([command, args]);
       if (args[0] === "root") return { stdout: globalRoot, stderr: "" };
+      if (args[0] === "prefix") return { stdout: globalRoot, stderr: "" };
       return { stdout: JSON.stringify(args.includes("dist.integrity") ? npmIntegrityFixture : "9.8.7"), stderr: "" };
     },
     dockerCommandRunner: async (_command, args) => {
@@ -3902,6 +3965,7 @@ test("node agent update checks default to the stable npm channel", async (t) => 
   assert.equal(response.json().data.availableVersion, "9.8.7");
   assert.deepEqual(calls, [
     ["npm", ["root", "--global"]],
+    ["npm", ["prefix", "--global"]],
     ["npm", ["view", "@task-handoff/node-agent@latest", "version", "--json"]],
     ["npm", ["view", "@task-handoff/node-agent@9.8.7", "dist.integrity", "--json"]],
   ]);
@@ -3917,6 +3981,7 @@ test("node update preflight excludes Local Runtime artifacts on macOS and report
     dataDir: tempDataDir("node-agent-update-runtime-preflight"),
     logger: false,
     token: "agent-secret",
+    managedUpdateSupport: () => ({ supported: true }),
     platform: "darwin",
     arch: "arm64",
     dockerCommandRunner: async (_command, args) => {
@@ -3926,6 +3991,7 @@ test("node update preflight excludes Local Runtime artifacts on macOS and report
     updateCommandRunner: async (command, args) => {
       updateCommands.push(command);
       if (args[0] === "root") return { stdout: globalRoot, stderr: "" };
+      if (args[0] === "prefix") return { stdout: globalRoot, stderr: "" };
       return { stdout: JSON.stringify(args.includes("dist.integrity") ? npmIntegrityFixture : "9.8.7"), stderr: "" };
     },
     resolveRuntimeArtifact: async (version, platform, arch) => {
@@ -4119,15 +4185,17 @@ test("node update checks use the package that owns the installed service launche
     ["view", "@task-handoff/server@1.1.0", "dist.integrity", "--json"],
   ]);
   assert.deepEqual(await resolveNodeUpdatePackage(async (_command, args) => {
-    assert.deepEqual(args, ["root", "--global"]);
+    assert.ok(["root", "prefix"].includes(args[0]));
+    assert.deepEqual(args.slice(1), ["--global"]);
     return { stdout: `${globalRoot}\n`, stderr: "" };
-  }), { packageName: "@task-handoff/server", currentVersion: "1.0.0", relatedCurrentVersions: ["0.9.0"] });
+  }), { packageName: "@task-handoff/server", currentVersion: "1.0.0", relatedCurrentVersions: ["0.9.0"], installPrefix: globalRoot });
   fs.rmSync(serverRoot, { recursive: true });
   fs.rmSync(nodeAgentRoot, { recursive: true });
   assert.deepEqual(await resolveNodeUpdatePackage(async () => ({ stdout: globalRoot, stderr: "" })), {
     packageName: "@task-handoff/node-agent",
     currentVersion: undefined,
     relatedCurrentVersions: [],
+    installPrefix: globalRoot,
   });
 
   const companionOnly = await checkNodeAgentUpdate({
@@ -4155,6 +4223,7 @@ test("node update package resolution prefers the running module over an unrelate
     packageName: "@task-handoff/node-agent",
     currentVersion: "0.0.18",
     relatedCurrentVersions: [],
+    installPrefix: prefix,
   });
 
   const serverRoot = path.join(prefix, "lib", "node_modules", "@task-handoff", "server");
@@ -4169,6 +4238,7 @@ test("node update package resolution prefers the running module over an unrelate
     packageName: "@task-handoff/server",
     currentVersion: "0.0.24",
     relatedCurrentVersions: ["0.0.23"],
+    installPrefix: prefix,
   });
 });
 
@@ -4211,9 +4281,11 @@ test("node agent update apply launches the resolved worker through systemd-run",
     dataDir: tempDataDir("node-agent-update-apply-worker"),
     logger: false,
     token: "agent-secret",
+    managedUpdateSupport: () => ({ supported: true }),
     updateCommandRunner: async (command, args) => {
       calls.push([command, args]);
       if (command === "npm" && args[0] === "root") return { stdout: globalRoot, stderr: "" };
+      if (command === "npm" && args[0] === "prefix") return { stdout: globalRoot, stderr: "" };
       return command === "npm" ? { stdout: JSON.stringify(args.includes("dist.integrity") ? npmIntegrityFixture : "9.8.7"), stderr: "" } : { stdout: "", stderr: "" };
     },
     platform: "linux",
@@ -4257,14 +4329,15 @@ test("node agent update apply launches the resolved worker through systemd-run",
     },
   });
   assert.equal(response.statusCode, 202);
-  assert.equal(calls.length, 5);
-  assert.equal(calls[4][0], "systemd-run");
-  const args = calls[4][1];
+  assert.equal(calls.length, 7);
+  assert.equal(calls[6][0], "systemd-run");
+  const args = calls[6][1];
   const propertyIndex = args.indexOf("--property=Type=exec");
   assert.equal(args[propertyIndex + 1], process.execPath);
   assert.equal(args[propertyIndex + 2], path.resolve(__dirname, "..", "scripts", "node-update-worker.cts"));
   assert.equal(args[args.indexOf("--target-version") + 1], "9.8.7");
   assert.equal(args[args.indexOf("--npm-command") + 1], "npm");
+  assert.equal(args[args.indexOf("--install-prefix") + 1], globalRoot);
   assert.equal(args[args.indexOf("--control-plane-health-url") + 1], "http://127.0.0.1:8081/api/health");
 });
 
@@ -5003,6 +5076,7 @@ test("node agent runs local docker behind node-local target and auto-imports age
       .map((call) => `${call.method} ${new URL(call.url).pathname}`)
       .filter((call) => call === "GET /api/health" || call.startsWith("POST /api/config-sync/import/")),
     [
+      "GET /api/health",
       "POST /api/config-sync/import/codex",
       "POST /api/config-sync/import/claude",
     ],
@@ -5297,7 +5371,7 @@ test("node agent skips start config auto-import when disabled on the instance", 
     fetchCalls
       .map((call) => `${call.method} ${new URL(call.url).pathname}`)
       .filter((call) => call === "GET /api/health" || call.startsWith("POST /api/config-sync/import/")),
-    [],
+    ["GET /api/health"],
   );
 });
 
@@ -5377,6 +5451,7 @@ test("node agent config auto-import failure does not fail start", async (t) => {
       .map((call) => `${call.method} ${new URL(call.url).pathname}`)
       .filter((call) => call === "GET /api/health" || call.startsWith("POST /api/config-sync/import/")),
     [
+      "GET /api/health",
       "POST /api/config-sync/import/codex",
       "POST /api/config-sync/import/claude",
     ],
@@ -8704,6 +8779,7 @@ test("node agent proxies mutating instance API requests while runtime convergenc
       },
     },
   });
+  installTestLocalRuntimeTarget(app, "inst_1", 18080);
 
   const response = await app.inject({
     method: "POST",
@@ -8796,6 +8872,7 @@ test("node agent proxies direct-port instances through the node-local host", asy
       },
     },
   });
+  installTestLocalRuntimeTarget(app, "inst_proxy", 18080);
 
   const response = await app.inject({
     method: "POST",
@@ -8921,6 +8998,7 @@ test("node agent proxies instance websocket subprotocols", async (t) => {
       },
     },
   });
+  installTestLocalRuntimeTarget(app, "inst_ws", upstreamAddress.port);
 
   await withTimeout(app.listen({ host: "127.0.0.1", port: 0 }), "node agent listen");
   const address = app.server.address();

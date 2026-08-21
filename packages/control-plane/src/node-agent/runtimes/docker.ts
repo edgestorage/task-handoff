@@ -509,6 +509,22 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
     return { web, api: `${web}/api` };
   }
 
+  async resolveInstanceWeb(context: ExecutorContext) {
+    const containerName = context.instance.runtime.containerName || containerNameForInstance(context.instance.id);
+    const actualContainerId = await this.inspectContainerId(containerName);
+    if (!actualContainerId) {
+      throw runtimeExecutorError("INSTANCE_RUNTIME_ENDPOINT_UNAVAILABLE", `Docker container ${containerName} does not exist.`);
+    }
+    assertExpectedContainerId(
+      containerName,
+      actualContainerId,
+      context.instance.runtime.containerId,
+      "while resolving its web endpoint",
+      "INSTANCE_RUNTIME_ENDPOINT_UNAVAILABLE",
+    );
+    return (await this.publishedEndpoint(containerName)).web;
+  }
+
   private bootstrapResult(context: ExecutorContext, containerName: string, containerId?: string, backupName?: string): ExecutorStartResult {
     return {
       status: "starting",

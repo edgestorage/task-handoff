@@ -115,6 +115,21 @@ function inspectExistingDesktopControlPlane(options = {}) {
   return { status: "running", owner };
 }
 
+function inspectStartedDesktopControlPlane(options) {
+  const inspection = inspectExistingDesktopControlPlane(options.inspectOptions);
+  if (inspection.status !== "running") return inspection;
+  const owner = inspection.owner;
+  if (
+    owner.pid !== options.pid
+    || path.resolve(owner.dataDir || "") !== path.resolve(options.dataDir)
+    || owner.host !== options.host
+    || Number(owner.port) !== options.port
+  ) {
+    return { status: "foreign", owner };
+  }
+  return inspection;
+}
+
 function inspectExistingDesktopNodeAgent(options = {}) {
   const lockPath = options.lockPath || resolveNodeAgentSingletonLockPath();
   const readOwner = options.readOwner || readNodeAgentLockOwner;
@@ -241,6 +256,7 @@ module.exports = {
   DESKTOP_NODE_AGENT_GRACEFUL_TIMEOUT_MS,
   ensureDesktopNodeAgent,
   inspectExistingDesktopControlPlane,
+  inspectStartedDesktopControlPlane,
   inspectExistingDesktopNodeAgent,
   readControlPlaneLockOwner,
   readNodeAgentLockOwner,

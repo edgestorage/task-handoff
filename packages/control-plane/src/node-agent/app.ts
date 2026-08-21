@@ -50,6 +50,7 @@ import {
   createInstanceProxyMetrics,
   registerInstanceProxyRoutes,
 } from "./instances/proxy-routes.ts";
+import { nodeLocalInstanceWebBase } from "./instance-target.ts";
 import {
   allocateNodeAgentExternalListener,
   NodeAgentExternalListenerManager,
@@ -143,6 +144,8 @@ export type CreateNodeAgentAppOptions = {
   dockerCommandRunner?: CommandRunner;
   dockerTerminalCommandRunner?: TerminalCommandRunner;
   updateCommandRunner?: CommandRunner;
+  /** Test-only managed-update capability override. */
+  managedUpdateSupport?: (selection: { packageName: string; installPrefix: string }) => { supported: boolean; reason?: string };
   fetchImpl?: typeof fetch;
   platform?: NodeJS.Platform;
   arch?: NodeJS.Architecture;
@@ -263,14 +266,13 @@ function nodeAgentDiagnosticLogsEnabled() {
 }
 
 
-async function probeInstanceEndpoint(fetchImpl: typeof fetch, instance: ControlledInstance) {
-  if (!instance.target.web) {
-    return "unknown" as const;
-  }
+type ResolveInstanceWeb = (instance: ControlledInstance) => Promise<string>;
+
+async function probeInstanceEndpoint(fetchImpl: typeof fetch, instance: ControlledInstance, resolveInstanceWeb: ResolveInstanceWeb) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 2_000);
   try {
-    const response = await fetchImpl(`${nodeLocalInstanceWebBase(instance)}/api/health`, { signal: controller.signal });
+    const response = await fetchImpl(`${await resolveInstanceWeb(instance)}/api/health`, { signal: controller.signal });
     return response.ok ? "reachable" as const : "endpoint-unreachable" as const;
   } catch {
     return "endpoint-unreachable" as const;
@@ -289,7 +291,7 @@ async function fetchWithTimeout(fetchImpl: typeof fetch, url: string, init: Requ
   }
 }
 
-async function autoImportAgentConfig(fetchImpl: typeof fetch, instance: ControlledInstance, action: "start" | "restart", loggers: NodeAgentLifecycleLoggers) {
+async function autoImportAgentConfig(fetchImpl: typeof fetch, instance: ControlledInstance, action: "start" | "restart", loggers: NodeAgentLifecycleLoggers, resolveInstanceWeb: ResolveInstanceWeb) {
   if (!instance.config.autoImportAgentConfigs) {
     loggers.diagnostic({ instanceId: instance.id, action }, "node instance config auto-import skipped");
     return;
@@ -297,7 +299,7 @@ async function autoImportAgentConfig(fetchImpl: typeof fetch, instance: Controll
   if (instance.targetStatus !== "reachable") {
     return;
   }
-  const instanceBase = nodeLocalInstanceWebBase(instance);
+  const instanceBase = await resolveInstanceWeb(instance);
   const timeoutMs = Number(process.env.TASK_HANDOFF_CONFIG_AUTO_IMPORT_TIMEOUT_MS || DEFAULT_AUTO_IMPORT_AGENT_CONFIG_TIMEOUT_MS);
   for (const preset of AUTO_IMPORT_AGENT_CONFIG_PRESETS) {
     try {
@@ -318,13 +320,14 @@ async function syncAssignedModelEnvironment(
   state: NodeAgentState,
   instanceId: string,
   warn?: (data: Record<string, unknown>, message: string) => void,
+  resolveInstanceWeb: ResolveInstanceWeb = async (instance) => nodeLocalInstanceWebBase(instance),
 ) {
   const instance = state.requireInstance(instanceId);
   state.instancePrivateConfigs.materialize(instance.id, instance.registrationToken, state.resolvedAssignedModelEnvironment(instanceId));
-  if (instance.targetStatus !== "reachable" || !instance.target.web) return false;
+  if (instance.targetStatus !== "reachable") return false;
   let response: Response;
   try {
-    response = await fetchWithTimeout(fetchImpl, `${nodeLocalInstanceWebBase(instance)}/api/internal/model-environment`, {
+    response = await fetchWithTimeout(fetchImpl, `${await resolveInstanceWeb(instance)}/api/internal/model-environment`, {
       method: "PUT",
       headers: {
         "content-type": "application/json",
@@ -351,28 +354,6 @@ async function syncAssignedModelEnvironment(
   return true;
 }
 
-function nodeLocalInstanceWebBase(instance: ControlledInstance) {
-  const webBase = instance.target.web;
-  if (!webBase) {
-    const error = new Error(`Instance ${instance.id} does not have a web endpoint.`);
-    Object.assign(error, { statusCode: 409, code: "NODE_INSTANCE_WEB_ENDPOINT_MISSING" });
-    throw error;
-  }
-  if (instance.target.strategy !== "direct-port") {
-    return webBase.replace(/\/$/, "");
-  }
-  try {
-    const url = new URL(webBase);
-    if (!url.port) {
-      return webBase.replace(/\/$/, "");
-    }
-    url.hostname = process.env.TASK_HANDOFF_NODE_AGENT_PROXY_HOST || "127.0.0.1";
-    return url.toString().replace(/\/$/, "");
-  } catch {
-    return webBase.replace(/\/$/, "");
-  }
-}
-
 function appSessionsFromCrossVersionSnapshot(payload: unknown) {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return [];
   const data = (payload as Record<string, unknown>).data;
@@ -384,8 +365,8 @@ function appSessionsFromCrossVersionSnapshot(payload: unknown) {
   return Array.isArray(sessions) ? sessions : [];
 }
 
-export async function requestRuntimeAppSessionDrain(fetchImpl: typeof fetch, instance: ControlledInstance) {
-  const instanceBase = nodeLocalInstanceWebBase(instance);
+export async function requestRuntimeAppSessionDrain(fetchImpl: typeof fetch, instance: ControlledInstance, resolveInstanceWeb: ResolveInstanceWeb = async (value) => nodeLocalInstanceWebBase(value)) {
+  const instanceBase = await resolveInstanceWeb(instance);
   if (instance.registrationToken) {
     const internalResponse = await fetchWithTimeout(fetchImpl, `${instanceBase}/api/internal/node-agent/drain`, {
       method: "POST",
@@ -424,9 +405,9 @@ export async function requestRuntimeAppSessionDrain(fetchImpl: typeof fetch, ins
   };
 }
 
-export async function releaseRuntimeAppSessionDrain(fetchImpl: typeof fetch, instance: ControlledInstance) {
+export async function releaseRuntimeAppSessionDrain(fetchImpl: typeof fetch, instance: ControlledInstance, resolveInstanceWeb: ResolveInstanceWeb = async (value) => nodeLocalInstanceWebBase(value)) {
   if (!instance.registrationToken) return false;
-  const response = await fetchWithTimeout(fetchImpl, `${nodeLocalInstanceWebBase(instance)}/api/internal/node-agent/resume`, {
+  const response = await fetchWithTimeout(fetchImpl, `${await resolveInstanceWeb(instance)}/api/internal/node-agent/resume`, {
     method: "POST",
     headers: { authorization: `Bearer ${instance.registrationToken}` },
   }, 5_000);
@@ -447,6 +428,7 @@ async function startNodeInstance(
   fetchImpl: typeof fetch,
   id: string,
   loggers: NodeAgentLifecycleLoggers,
+  resolveInstanceWeb: ResolveInstanceWeb,
   reason: "request" | "restore" | "update" = "request",
 ) {
   const current = state.requireInstance(id);
@@ -462,14 +444,16 @@ async function startNodeInstance(
   const starting = state.applyInstanceLifecycle(id, { type: "start-requested" });
   const adapter = runtimeAdapters.forRuntime(state.requireRuntime(starting.runtimeId));
   const result = await adapter.start(state.context(starting));
-  const probedEndpointStatus = await probeInstanceEndpoint(fetchImpl, ControlledInstanceSchema.parse({
-    ...starting,
-    ...result,
-    target: result.target ? { ...starting.target, ...result.target } : starting.target,
-    workspace: result.workspace ? { ...starting.workspace, error: undefined, ...result.workspace } : starting.workspace,
-    runtime: result.runtime ? { ...starting.runtime, ...result.runtime } : starting.runtime,
-    updatedAt: now(),
-  }));
+  const probedEndpointStatus = result.target?.web
+    ? await probeInstanceEndpoint(fetchImpl, ControlledInstanceSchema.parse({
+        ...starting,
+        ...result,
+        target: { ...starting.target, ...result.target },
+        workspace: result.workspace ? { ...starting.workspace, error: undefined, ...result.workspace } : starting.workspace,
+        runtime: result.runtime ? { ...starting.runtime, ...result.runtime } : starting.runtime,
+        updatedAt: now(),
+      }), resolveInstanceWeb)
+    : "unknown" as const;
   const stored = state.applyInstanceLifecycle(id, {
     type: "runtime-lifecycle-completed",
     baseline: starting,
@@ -528,6 +512,10 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       (error, event) => app.log.error({ error, instanceId: event.instanceId, pid: event.pid }, "local controlled instance exit recovery failed"),
     ),
   );
+  const resolveInstanceWeb: ResolveInstanceWeb = async (instance) => nodeLocalInstanceWebBase(
+    instance,
+    await runtimeAdapters.forRuntime(state.requireRuntime(instance.runtimeId)).resolveInstanceWeb(state.context(instance)),
+  );
   const updateCommandRunner = options.updateCommandRunner || options.dockerCommandRunner || defaultCommandRunner;
   const fetchImpl = options.fetchImpl || fetch;
   const aiSessionPersistenceSyncKeys = new Map<string, string>();
@@ -535,14 +523,13 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     const instance = state.requireInstance(id);
     if (!supportsAiSessionPersistenceSettings(instance.capabilities)
       || instance.targetStatus !== "reachable"
-      || !instance.target.web
       || !instance.registrationToken) return false;
     const supportsAttachmentRetention = instance.capabilities.features.aiSessionConversationAttachments?.retentionSettings === true;
     const syncKey = `${instance.processIncarnationId || "unknown"}:${instance.config.aiSessionHistoryLimit}:${supportsAttachmentRetention ? instance.config.aiSessionAttachmentRetentionDays : "unsupported"}`;
     if (aiSessionPersistenceSyncKeys.get(id) === syncKey) return true;
     let response: Response;
     try {
-      response = await fetchWithTimeout(fetchImpl, `${nodeLocalInstanceWebBase(instance)}/api/internal/ai-session-persistence-settings`, {
+      response = await fetchWithTimeout(fetchImpl, `${await resolveInstanceWeb(instance)}/api/internal/ai-session-persistence-settings`, {
         method: "PUT",
         headers: {
           "content-type": "application/json",
@@ -652,7 +639,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     },
     beginDrain: async (instance) => {
       try {
-        const result = await requestRuntimeAppSessionDrain(fetchImpl, instance);
+        const result = await requestRuntimeAppSessionDrain(fetchImpl, instance, resolveInstanceWeb);
         if (result.failures.length) {
           app.log.warn({ instanceId: instance.id, requested: result.requested, failures: result.failures }, "runtime convergence could not stop every app session");
         } else {
@@ -664,7 +651,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     },
     endDrain: async (instance) => {
       try {
-        if (await releaseRuntimeAppSessionDrain(fetchImpl, instance)) {
+        if (await releaseRuntimeAppSessionDrain(fetchImpl, instance, resolveInstanceWeb)) {
           app.log.info({ instanceId: instance.id }, "runtime convergence released app session drain");
         }
       } catch (error) {
@@ -679,10 +666,23 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       const adapter = adapterForInstance(instance);
       const restartBoundary = state.applyInstanceLifecycle(instance.id, { type: "convergence-restart-requested" });
       const result = await adapter.restart(state.context(restartBoundary));
+      const probeTarget = ControlledInstanceSchema.parse({
+        ...restartBoundary,
+        ...result,
+        target: result.target ? { ...restartBoundary.target, ...result.target } : restartBoundary.target,
+        runtime: result.runtime ? { ...restartBoundary.runtime, ...result.runtime } : restartBoundary.runtime,
+        updatedAt: now(),
+      });
+      const targetStatus = await probeInstanceEndpoint(fetchImpl, probeTarget, resolveInstanceWeb);
       state.applyInstanceLifecycle(instance.id, {
         type: "runtime-lifecycle-completed",
         baseline: restartBoundary,
-        observation: result,
+        observation: {
+          ...result,
+          target: result.target ? { ...result.target, status: targetStatus } : undefined,
+          targetStatus,
+          uiAccessStatus: targetStatus,
+        },
       });
     },
     onForcedDrain: (instance) => app.log.warn({ instanceId: instance.id }, "runtime convergence drain deadline reached; restarting instance"),
@@ -762,7 +762,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
         }));
       }
       const runtime = state.requireRuntime(current.runtimeId);
-      await startNodeInstance(state, runtimeAdapters, fetchImpl, id, lifecycleLoggers);
+      await startNodeInstance(state, runtimeAdapters, fetchImpl, id, lifecycleLoggers, resolveInstanceWeb);
       const started = state.requireInstance(id);
       if (runtime.type === "docker" && started.imageProvisioning && started.imageProvisioning.phase !== "ready") {
         eventForwarder.syncNow();
@@ -793,7 +793,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
         }
       }
       if (!shouldContinue()) return state.requireInstance(id);
-      await autoImportAgentConfig(fetchImpl, instance, "start", lifecycleLoggers);
+      await autoImportAgentConfig(fetchImpl, instance, "start", lifecycleLoggers, resolveInstanceWeb);
       eventForwarder.syncNow();
       return instance;
     } catch (error) {
@@ -827,8 +827,8 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     state,
     runtimeAdapters,
     convergence,
-    restoreInstance: (id) => startNodeInstance(state, runtimeAdapters, fetchImpl, id, lifecycleLoggers, "restore"),
-    autoImport: (instance) => autoImportAgentConfig(fetchImpl, instance, "start", lifecycleLoggers),
+    restoreInstance: (id) => startNodeInstance(state, runtimeAdapters, fetchImpl, id, lifecycleLoggers, resolveInstanceWeb, "restore"),
+    autoImport: (instance) => autoImportAgentConfig(fetchImpl, instance, "start", lifecycleLoggers, resolveInstanceWeb),
     provisionImage: provisionInstanceImage,
     stopImageProvisioning: () => imageProvisioning.stop(),
     usesManagedArtifact,
@@ -864,6 +864,24 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       await resolvePreflightRuntimeArtifacts(version)
     ).map((artifact) => artifact.identity),
     moduleDir: import.meta.url ? path.dirname(fileURLToPath(import.meta.url)) : __dirname,
+    managedUpdateSupport: options.managedUpdateSupport || ((selection) => {
+      if ((options.platform || process.platform) !== "linux") {
+        return { supported: false, reason: "Managed server updates require Linux and systemd." };
+      }
+      if (typeof process.getuid === "function" && process.getuid() !== 0) {
+        return { supported: false, reason: "Managed server updates require the node agent to run as root." };
+      }
+      if (!fs.existsSync("/run/systemd/system")) {
+        return { supported: false, reason: "Managed server updates require an active systemd host." };
+      }
+      if (selection.packageName === "@task-handoff/server" && !process.env.TASK_HANDOFF_CONTROL_PLANE_HEALTH_URL?.trim()) {
+        return { supported: false, reason: "Managed server updates require a local control-plane health URL." };
+      }
+      if (!process.env.TASK_HANDOFF_NODE_AGENT_IPC_PATH?.trim()) {
+        return { supported: false, reason: "Managed server updates require the node-agent IPC readiness endpoint." };
+      }
+      return { supported: true };
+    }),
   });
 
   app.setErrorHandler((error, request, reply) => {
@@ -1024,7 +1042,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     deleteLocalFolder: (id) => state.localFolders.delete(id),
   });
 
-  registerNodeModelRoutes(app, state.modelRegistry, (id) => syncAssignedModelEnvironment(fetchImpl, state, id, lifecycleLoggers.warn), fetchImpl);
+  registerNodeModelRoutes(app, state.modelRegistry, (id) => syncAssignedModelEnvironment(fetchImpl, state, id, lifecycleLoggers.warn, resolveInstanceWeb), fetchImpl);
 
   registerEnvironmentTemplateRoutes(app, environmentTemplates);
 
@@ -1117,8 +1135,8 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     start: (id, shouldContinue) => startInstanceWithFailureState(id, "request", shouldContinue),
     sync: () => eventForwarder.syncNow(),
     isManaged: usesManagedArtifact,
-    probe: (instance) => probeInstanceEndpoint(fetchImpl, instance),
-    autoImport: (instance) => autoImportAgentConfig(fetchImpl, instance, "restart", lifecycleLoggers),
+    probe: (instance) => probeInstanceEndpoint(fetchImpl, instance, resolveInstanceWeb),
+    autoImport: (instance) => autoImportAgentConfig(fetchImpl, instance, "restart", lifecycleLoggers, resolveInstanceWeb),
     markRestarted: (id) => recoverySupervisor.markRestored(id),
     allowRecovery: (id) => recoverySupervisor.allowRecovery(id),
     suppressRecovery: (id) => recoverySupervisor.suppressRecovery(id),
@@ -1139,8 +1157,8 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   registerInstanceProxyRoutes(app, {
     fetchImpl,
     metrics: instanceProxyMetrics,
-    instanceBase: (id) => nodeLocalInstanceWebBase(state.requireInstance(id)),
-    syncModelEnvironment: (id) => syncAssignedModelEnvironment(fetchImpl, state, id, lifecycleLoggers.warn),
+    instanceBase: (id) => resolveInstanceWeb(state.requireInstance(id)),
+    syncModelEnvironment: (id) => syncAssignedModelEnvironment(fetchImpl, state, id, lifecycleLoggers.warn, resolveInstanceWeb),
     diagnostic: logDiagnostic,
   });
 

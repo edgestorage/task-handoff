@@ -86,18 +86,14 @@ test("controlled instance node agent client posts register and heartbeat payload
   assert.equal(requests[0].body.build.imageRef, "task-handoff-web:test");
   assert.deepEqual(requests[0].body.appInventory, snapshot().appInventory);
   assert.equal(requests[0].body.endpoints, undefined);
-  assert.deepEqual(requests[0].body.target, {
-    strategy: "direct-port",
-    status: "reachable",
-    web: "http://instance.local",
-  });
+  assert.equal(requests[0].body.target, undefined);
 
   assert.equal(requests[1].url, "http://node.local/api/node-agent/instances/inst_registered/heartbeat");
   assert.equal(requests[1].body.protocolVersion, "2026-06-23");
   assert.equal(requests[1].body.build.buildId, "build-test");
   assert.deepEqual(requests[1].body.appInventory, snapshot().appInventory);
   assert.equal(requests[1].body.endpoints, undefined);
-  assert.equal(requests[1].body.target.web, "http://instance.local");
+  assert.equal(requests[1].body.target, undefined);
   assert.equal(requests[1].body.receiver, undefined);
   assert.equal(requests[1].body.apps.runningCount, 1);
   assert.equal(requests[2].url, "http://node.local/api/node-agent/instances/inst_registered/heartbeat");

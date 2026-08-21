@@ -29,6 +29,11 @@ export const controlPlaneQueryKeys = {
     : ["instance-board-payload"] as const,
   instanceDirectory: ["instance-directory"] as const,
   aiSessions: (instanceId?: string) => ["control-plane-ai-sessions", instanceId || "*"] as const,
+  aiSessionWorkspace: (instanceId: string, cwdFolderId?: string) => [
+    "control-plane-ai-session-workspace",
+    instanceId,
+    cwdFolderId || null,
+  ] as const,
   appSessions: (instanceId?: string) => ["control-plane-app-sessions", instanceId || "*"] as const,
   chatBridges: ["chat-gateway-bridges"] as const,
   chatStatus: ["chat-gateway-status"] as const,

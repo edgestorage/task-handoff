@@ -33,6 +33,12 @@ const ManifestSchema = z.object({
   size: z.number().int().positive().max(AI_SESSION_MAX_ATTACHMENT_BYTES),
   blobHash: z.string().regex(/^[a-f0-9]{64}$/),
   sourceType: z.enum(["inline", "runtime-path"]),
+  // Internal ownership needed to restore a consumed upload draft when provider
+  // dispatch fails. This never crosses the controlled-instance API boundary.
+  draftScope: z.object({
+    type: z.enum(["session", "create-request"]),
+    id: z.string().trim().min(1).max(160),
+  }).strict().optional(),
   state: z.enum(["draft", "staged", "committed"]),
   createdAt: z.string().datetime(),
   committedAt: z.string().datetime().optional(),
@@ -56,6 +62,23 @@ const DraftManifestSchema = z.object({
 
 type AttachmentManifest = z.infer<typeof ManifestSchema>;
 type DraftManifest = z.infer<typeof DraftManifestSchema>;
+
+function restoredUploadDraft(manifest: AttachmentManifest): DraftManifest | undefined {
+  if (!manifest.draftScope) return undefined;
+  return DraftManifestSchema.parse({
+    schemaVersion: 1,
+    id: manifest.id,
+    scopeType: manifest.draftScope.type,
+    scopeId: manifest.draftScope.id,
+    kind: manifest.kind,
+    name: manifest.name,
+    mime: manifest.mime,
+    size: manifest.size,
+    blobHash: manifest.blobHash,
+    createdAt: manifest.createdAt,
+    expiresAt: new Date(Date.parse(manifest.createdAt) + DRAFT_RETENTION_MS).toISOString(),
+  });
+}
 
 export type RetainedAiSessionMessageAttachment = AiSessionMessageAttachment & { retainedPath?: string };
 
@@ -269,6 +292,7 @@ export class AiSessionConversationAttachmentStore {
           size: draft.size,
           blobHash: draft.blobHash,
           sourceType: "inline",
+          draftScope: { type: draft.scopeType, id: draft.scopeId },
           state: "staged",
           createdAt: draft.createdAt,
         });
@@ -315,7 +339,8 @@ export class AiSessionConversationAttachmentStore {
     const committedAt = new Date(this.now()).toISOString();
     const manifests = this.messageManifests(sessionId, messageId);
     for (const manifest of manifests) {
-      const next = ManifestSchema.parse({ ...manifest, state: "committed", committedAt: manifest.committedAt || committedAt, turnId: turnId || manifest.turnId });
+      const { draftScope: _draftScope, ...committed } = manifest;
+      const next = ManifestSchema.parse({ ...committed, state: "committed", committedAt: manifest.committedAt || committedAt, turnId: turnId || manifest.turnId });
       this.saveManifest(next);
     }
     this.gc();
@@ -326,7 +351,14 @@ export class AiSessionConversationAttachmentStore {
     let rolledBack = 0;
     for (const manifest of this.messageManifests(sessionId, messageId)) {
       if (manifest.state !== "staged") continue;
-      this.saveManifest(ManifestSchema.parse({ ...manifest, state: "draft" }));
+      if (manifest.draftScope) {
+        // Persist the restored draft before removing the message manifest so a
+        // crash cannot lose the only durable owner of the shared blob.
+        this.saveDraft(restoredUploadDraft(manifest)!);
+        this.removeManifest(manifest.id);
+      } else {
+        this.saveManifest(ManifestSchema.parse({ ...manifest, state: "draft" }));
+      }
       rolledBack += 1;
     }
     return rolledBack;
@@ -349,6 +381,29 @@ export class AiSessionConversationAttachmentStore {
       const manifest = this.manifests.get(id);
       return manifest ? [this.providerAttachment(manifest)] : [];
     });
+  }
+
+  messageIdForAttachments(sessionId: string, attachmentIds: readonly string[]) {
+    const manifests = attachmentIds.map((id) => this.manifests.get(id));
+    if (!manifests.length || manifests.some((manifest) => !manifest || manifest.sessionId !== sessionId)) return undefined;
+    const messageIds = new Set(manifests.map((manifest) => manifest!.messageId));
+    return messageIds.size === 1 ? [...messageIds][0] : undefined;
+  }
+
+  claimMessageAttachments(sessionId: string, messageId: string, attachmentIds: readonly string[]) {
+    const manifests = attachmentIds.map((id) => this.manifests.get(id));
+    if (!manifests.length || manifests.some((manifest) => !manifest
+      || manifest.sessionId !== sessionId
+      || manifest.messageId !== messageId)) return false;
+    for (const manifest of manifests) {
+      if (manifest!.state === "draft") {
+        this.saveManifest(ManifestSchema.parse({ ...manifest, state: "staged" }));
+      }
+    }
+    for (const manifest of manifests) {
+      if (manifest!.draftScope) this.removeDraft(manifest!.id);
+    }
+    return true;
   }
 
   content(sessionId: string, messageId: string, attachmentId: string): AiSessionAttachmentContent {
@@ -459,6 +514,10 @@ export class AiSessionConversationAttachmentStore {
         const restored = parsed.data.state === "staged"
           ? ManifestSchema.parse({ ...parsed.data, state: "draft" })
           : parsed.data;
+        const retryableDraft = parsed.data.state === "staged" ? restoredUploadDraft(parsed.data) : undefined;
+        if (retryableDraft) {
+          this.saveDraft(retryableDraft);
+        }
         if (restored !== parsed.data) this.writeManifestFile(restored);
         this.manifests.set(restored.id, restored);
         if (!restored.contentDeletedAt) this.verifyBlob(restored);

@@ -137,6 +137,32 @@ test("stopped instances remain pending until a start is requested", async () => 
   assert.equal(updated.ready, false);
 });
 
+test("runtime reconciliation remains pending until Docker image preparation completes", async () => {
+  const timestamp = new Date().toISOString();
+  const store = memoryStore(instance({
+    status: "starting",
+    ready: false,
+    imageProvisioning: {
+      phase: "pulling-image",
+      requestedReference: "example/app:latest",
+      generation: 1,
+      startedAt: timestamp,
+      updatedAt: timestamp,
+    },
+  }));
+  let installs = 0;
+  let restarts = 0;
+  const coordinator = new RuntimeConvergenceCoordinator(store, () => "2.0.0", {
+    async install() { installs += 1; },
+    async restart() { restarts += 1; },
+  });
+
+  const updated = await coordinator.schedule("inst_runtime", { startRequested: true });
+  assert.equal(updated.runtimeVersion.phase, "pending");
+  assert.equal(installs, 0);
+  assert.equal(restarts, 0);
+});
+
 test("an explicit stop cancels restart after an in-flight install", async () => {
   const store = memoryStore(instance());
   let finishInstall;

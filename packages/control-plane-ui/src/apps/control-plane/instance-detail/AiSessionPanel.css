@@ -153,6 +153,25 @@
   padding: 0 var(--session-ai-list-right-inset) 2px 0;
 }
 
+.session-ai-path-rename-form {
+  display: grid;
+  gap: 12px;
+}
+
+.session-ai-path-rename-form > label {
+  color: var(--text-strong);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.session-ai-path-rename-form > code {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .session-ai-sidebar-actions {
   display: flex;
   align-items: center;
@@ -283,7 +302,7 @@
   margin-right: auto;
   overflow: hidden;
   font-size: 12px;
-  font-weight: 650;
+  font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -350,14 +369,20 @@
   border-radius: 6px;
   color: var(--control-plane-menu-text);
   font-size: 12px !important;
-  font-weight: 700 !important;
+  font-weight: 500 !important;
   line-height: 1 !important;
   padding: 0 8px;
 }
 
 
-:global(.session-ai-project-item span) { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+:global(.session-ai-project-item > span) { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 :global(.session-ai-project-item > svg) { width: 13px; height: 13px; }
+:global(.session-ai-project-folder-item) { min-height: 44px; padding-top: 6px; padding-bottom: 6px; }
+:global(.session-ai-project-folder-copy) { display: grid; gap: 3px; line-height: 1.15; }
+:global(.session-ai-project-folder-copy > strong),
+:global(.session-ai-project-folder-copy > small) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+:global(.session-ai-project-folder-copy > strong) { font-weight: 500; }
+:global(.session-ai-project-folder-copy > small) { color: var(--text-muted); font-size: 12px; font-weight: 400; }
 :global(.session-ai-branch-tree-item.is-folder) { color: var(--text-muted); }
 :global(.session-ai-branch-tree-toggle) { display: grid; flex: 0 0 9px; width: 9px; height: 13px; place-items: center; }
 :global(.session-ai-branch-tree-toggle > svg) { width: 9px; height: 9px; transition: transform 120ms ease; }
@@ -434,7 +459,7 @@
   min-width: 0;
   overflow: hidden;
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -450,7 +475,7 @@
   background: var(--ai-board-chip-bg);
   color: var(--ai-board-chip-text);
   font-size: 11px;
-  font-weight: 850;
+  font-weight: 500;
   padding: 0 6px;
 }
 
@@ -495,7 +520,7 @@
 :global(.session-ai-options-label) {
   color: var(--text-muted);
   font-size: 11px !important;
-  font-weight: 750 !important;
+  font-weight: 400 !important;
   line-height: 1 !important;
   padding: 7px 8px 5px;
 }
@@ -505,16 +530,16 @@
   align-items: center;
   gap: 7px;
   width: 100%;
-  min-height: 30px;
+  min-height: 32px;
   border: 0;
   border-radius: 6px;
   background: transparent;
   color: var(--control-plane-menu-text);
   cursor: pointer;
-  font-size: 12px !important;
-  font-weight: 700 !important;
-  line-height: 1 !important;
-  padding: 0 8px;
+  font-size: 13px !important;
+  font-weight: 500 !important;
+  line-height: 20px !important;
+  padding: 6px 8px;
   text-align: left;
 }
 
@@ -556,7 +581,7 @@
 :global(.session-ai-filter-label) {
   color: var(--text-muted);
   font-size: 11px !important;
-  font-weight: 750 !important;
+  font-weight: 400 !important;
   line-height: 1 !important;
   padding: 7px 8px 5px;
 }
@@ -566,16 +591,16 @@
   grid-template-columns: 16px minmax(0, 1fr) auto;
   align-items: center;
   gap: 7px;
-  min-height: 30px;
+  min-height: 32px;
   border: 0;
   border-radius: 6px;
   background: transparent;
-  color: var(--terminal-text);
+  color: var(--control-plane-menu-text);
   cursor: pointer;
-  font-size: 12px !important;
-  font-weight: 700 !important;
-  line-height: 1 !important;
-  padding: 0 8px;
+  font-size: 13px !important;
+  font-weight: 500 !important;
+  line-height: 20px !important;
+  padding: 6px 8px;
   text-align: left;
 }
 
@@ -583,7 +608,7 @@
 :global(.session-ai-filter-item:focus-visible),
 :global(.session-ai-filter-item[data-highlighted]) {
   background: var(--surface-active);
-  color: var(--white);
+  color: var(--control-plane-menu-hover-text);
   outline: none;
 }
 
@@ -621,7 +646,7 @@
   background: var(--surface-hover);
   color: var(--text-muted);
   font-size: 11px !important;
-  font-weight: 750 !important;
+  font-weight: 500 !important;
   line-height: 1;
   padding: 0 6px;
 }
@@ -981,7 +1006,7 @@
   flex: 0 1 auto;
   color: var(--text-strong);
   font-size: 13px;
-  font-weight: 400;
+  font-weight: 500;
 }
 
 .session-ai-path-group-icon {
@@ -1768,10 +1793,10 @@
   padding: 6px;
 }
 
-:global(.session-ai-detail-actions-menu-item) {
+:global(.session-ai-detail-actions-menu .session-ai-detail-actions-menu-item) {
   min-height: 32px;
   border-radius: 6px;
-  font-size: 12px;
+  font-size: 13px;
   padding: 6px 8px;
 }
 
