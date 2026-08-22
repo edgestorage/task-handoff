@@ -119,12 +119,29 @@ for (const [name, definition] of selected) {
     throw new Error(`${name} package is missing its built UI.`);
   }
   if (definition.input) {
+    const runtimeOutputs = [];
     for (const entry of fs.readdirSync(path.join(packageDir, "dist"))) {
       if (!entry.endsWith(".js") && !entry.endsWith(".mjs")) continue;
       const content = fs.readFileSync(path.join(packageDir, "dist", entry), "utf8");
+      runtimeOutputs.push([entry, content]);
       const lineCount = content.split("\n").length;
       if (content.length / lineCount < 500) {
         throw new Error(`${name} runtime output is not minified: dist/${entry}`);
+      }
+      const repositoryRequire = content.match(/require\(["'](?:\.\.\/)+(?:apps|packages|scripts)\//);
+      if (repositoryRequire) {
+        throw new Error(`${name} runtime output references repository source in dist/${entry}: ${repositoryRequire[0]}`);
+      }
+    }
+    for (const dependency of definition.bundledDependencies || []) {
+      if (manifest.dependencies?.[dependency]) {
+        throw new Error(`${name} bundled dependency ${dependency} must not be declared as an external package dependency.`);
+      }
+      const escaped = dependency.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const externalRequire = new RegExp(`require\\(["']${escaped}(?:["'/])`);
+      const externalOutput = runtimeOutputs.find(([, content]) => externalRequire.test(content));
+      if (externalOutput) {
+        throw new Error(`${name} runtime output keeps bundled dependency ${dependency} external in dist/${externalOutput[0]}.`);
       }
     }
   }
@@ -133,11 +150,11 @@ for (const [name, definition] of selected) {
     throw new Error(`${name} package must expose only the ${definition.binName} executable.`);
   }
   const binPath = path.join(packageDir, manifest.bin[definition.binName]);
-  if (name === "node-agent") {
+  if (definition.updateWorkerInput) {
     const workerPath = path.join(packageDir, "bin", "task-handoff-node-update-worker");
     const workerSyntax = spawnSync(process.execPath, ["--check", workerPath], { cwd: root, encoding: "utf8" });
     if (workerSyntax.status !== 0) {
-      throw new Error(`node-agent update worker syntax check failed:\n${workerSyntax.stderr || workerSyntax.stdout}`);
+      throw new Error(`${name} update worker syntax check failed:\n${workerSyntax.stderr || workerSyntax.stdout}`);
     }
   }
   if (definition.aggregateDependencies) {
@@ -148,6 +165,13 @@ for (const [name, definition] of selected) {
     const serverCliHelp = spawnSync(process.execPath, [binPath, "--help"], { cwd: root, encoding: "utf8" });
     if (serverCliHelp.status !== 0 || !serverCliHelp.stdout.includes("update")) {
       throw new Error(`${name} package CLI smoke test failed:\n${serverCliHelp.stderr || serverCliHelp.stdout}`);
+    }
+    if (definition.updateWorkerInput) {
+      const workerPath = path.join(packageDir, "bin", "task-handoff-node-update-worker");
+      const workerHelp = spawnSync(process.execPath, [workerPath, "--help"], { cwd: packageDir, encoding: "utf8" });
+      if (workerHelp.status !== 0 || !workerHelp.stdout.includes("--job-file")) {
+        throw new Error(`${name} update worker smoke test failed:\n${workerHelp.stderr || workerHelp.stdout}`);
+      }
     }
     for (const dependency of definition.aggregateDependencies) {
       if (manifest.dependencies[dependency] !== manifest.version) {
@@ -161,6 +185,13 @@ for (const [name, definition] of selected) {
     const help = spawnSync(process.execPath, [binPath, "--help"], { cwd: packageDir, encoding: "utf8" });
     if (help.status !== 0 || !help.stdout.includes(definition.binName)) {
       throw new Error(`${name} package CLI smoke test failed:\n${help.stderr || help.stdout}`);
+    }
+    if (definition.updateWorkerInput) {
+      const workerPath = path.join(packageDir, "bin", "task-handoff-node-update-worker");
+      const workerHelp = spawnSync(process.execPath, [workerPath, "--help"], { cwd: packageDir, encoding: "utf8" });
+      if (workerHelp.status !== 0 || !workerHelp.stdout.includes("--job-file")) {
+        throw new Error(`${name} update worker smoke test failed:\n${workerHelp.stderr || workerHelp.stdout}`);
+      }
     }
     await checkBundledRuntime(packageDir, manifest, name, definition);
   } finally {

@@ -73,6 +73,33 @@ test("server bootstrap owns the complete Debian and Ubuntu install path", () => 
   assert.match(bootstrap, /--artifacts-dir/);
 });
 
+test("remote node-agent bootstrap installs its Node.js and native build environment", () => {
+  const installer = fs.readFileSync(path.join(root, "packages", "control-plane", "src", "control-plane", "nodes", "install-script.ts"), "utf8");
+
+  assert.match(installer, /MIN_NODE_VERSION="24\.15\.0"/);
+  assert.match(installer, /ensure_node_environment/);
+  assert.match(installer, /apt-get update/);
+  assert.match(installer, /nodejs\.org\/dist\/latest-v24\.x\/SHASUMS256\.txt/);
+  assert.match(installer, /Node\.js archive checksum verification failed/);
+  assert.match(installer, /apt-get install -y --no-install-recommends g\+\+ make python3/);
+  assert.match(installer, /case "\$current_node_version" in[\s\S]*24\.\*/);
+});
+
+test("remote node-agent bootstrap restarts and verifies the installed service through IPC", () => {
+  const installer = fs.readFileSync(path.join(root, "packages", "control-plane", "src", "control-plane", "nodes", "install-script.ts"), "utf8");
+  const enable = installer.indexOf("systemctl enable task-handoff-node-agent.service");
+  const restart = installer.indexOf("systemctl restart task-handoff-node-agent.service");
+  const readiness = installer.indexOf('curl --unix-socket "$IPC_PATH" -fsS "http://localhost/api/node-agent/health"');
+  const pairing = installer.indexOf('"http://localhost/api/node-agent/control-plane-connections"');
+
+  assert.ok(enable >= 0);
+  assert.ok(restart > enable);
+  assert.ok(readiness > restart);
+  assert.ok(pairing > readiness);
+  assert.doesNotMatch(installer, /systemctl enable --now task-handoff-node-agent\.service/);
+  assert.match(installer, /Compatibility for v0\.0\.24:/);
+});
+
 test("global server package pins and resolves all three runtime packages", async () => {
   const { runtimePackages } = await import("../runtime-packages.config.mjs");
   const server = runtimePackages.server;
@@ -182,7 +209,11 @@ test("server package owns the unified management command and runtimes stay indep
 
   assert.equal(runtimePackages.server.binName, "task-handoff");
   assert.equal(runtimePackages["control-plane"].binName, "task-handoff-control-plane");
+  assert.deepEqual(runtimePackages["control-plane"].bundledDependencies, ["@fastify/compress"]);
+  assert.equal(runtimePackages["control-plane"].dependencies["@fastify/compress"], undefined);
   assert.equal(runtimePackages["node-agent"].binName, "task-handoff-node-agent");
+  assert.deepEqual(runtimePackages["node-agent"].bundledDependencies, ["@fastify/compress"]);
+  assert.equal(runtimePackages["node-agent"].dependencies["@fastify/compress"], undefined);
   assert.equal(runtimePackages["controlled-instance"].binName, "task-handoff-controlled-instance");
   assert.deepEqual(runtimePackages["controlled-instance"].dependencies, { "node-pty": "^1.1.0" });
   assert.equal(runtimePackages.server.input, "apps/cli/src/runtime/server.ts");
@@ -211,6 +242,16 @@ test("runtime package archives verify every directly executed helper", () => {
   assert.match(builder, /verifyArchiveExecutables/);
 });
 
+test("runtime package builds transform and execute CommonJS TypeScript workers", () => {
+  const rollup = fs.readFileSync(path.join(root, "rollup.config.mjs"), "utf8");
+  const checker = fs.readFileSync(path.join(root, "scripts", "check-runtime-packages.mjs"), "utf8");
+
+  assert.match(rollup, /extensions: \["\.cjs", "\.cts", "\.js", "\.ts"\]/);
+  assert.match(checker, /runtime output references repository source/);
+  assert.match(checker, /update worker smoke test failed/);
+  assert.match(checker, /workerPath, "--help"/);
+});
+
 test("standalone node-agent CLI can create pairing invites over local IPC", () => {
   const runtimeCli = fs.readFileSync(path.join(root, "apps", "cli", "src", "runtime", "node-agent.ts"), "utf8");
   const remoteInstaller = fs.readFileSync(path.join(root, "packages", "control-plane", "src", "control-plane", "nodes", "install-script.ts"), "utf8");
@@ -223,6 +264,26 @@ test("standalone node-agent CLI can create pairing invites over local IPC", () =
   assert.match(remoteInstaller, /TASK_HANDOFF_NODE_AGENT_CONNECTION_MODE=local-ipc/);
   assert.match(remoteInstaller, /TASK_HANDOFF_NODE_AGENT_IPC_PATH=\$IPC_PATH/);
   assert.match(remoteInstaller, /invite --ipc-path \$IPC_PATH/);
+});
+
+test("standalone node-agent CLI can connect an existing service to a control plane over local IPC", () => {
+  const runtimeCli = fs.readFileSync(path.join(root, "apps", "cli", "src", "runtime", "node-agent.ts"), "utf8");
+  assert.match(runtimeCli, /\.command\("connect"\)/);
+  assert.match(runtimeCli, /\.requiredOption\("--control-plane <url>"/);
+  assert.match(runtimeCli, /\.requiredOption\("--join-token <token>"/);
+  assert.match(runtimeCli, /fetchNodeAgentIpc\(options\.ipcPath!, "\/control-plane-connections"/);
+  assert.match(runtimeCli, /activate: true/);
+});
+
+test("standalone node-agent CLI can uninstall while preserving data by default", () => {
+  const runtimeCli = fs.readFileSync(path.join(root, "apps", "cli", "src", "runtime", "node-agent.ts"), "utf8");
+  const uninstaller = fs.readFileSync(path.join(root, "packages", "control-plane", "src", "node-agent", "uninstall.ts"), "utf8");
+  assert.match(runtimeCli, /\.command\("uninstall"\)/);
+  assert.match(runtimeCli, /\.option\("--delete-data"/);
+  assert.match(runtimeCli, /\.option\("--keep-data"/);
+  assert.match(uninstaller, /\["disable", "--now", NODE_AGENT_SERVICE\]/);
+  assert.match(uninstaller, /await dependencies\.confirmDeleteData\(dataDir\)/);
+  assert.match(uninstaller, /Docker volumes are preserved\. \[y\/N\]/);
 });
 
 test("node-agent installer honors an explicit npm package before an ambient binary", () => {

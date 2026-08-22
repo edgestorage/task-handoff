@@ -165,7 +165,6 @@ export type Project = {
   source: ProjectSource;
   defaultImageSelection?: ImageSelection;
   defaultNodeId?: string;
-  defaultRuntimeId?: string;
   workspacePolicy: WorkspacePolicy;
   labels: Record<string, string>;
   createdAt: string;
@@ -1053,7 +1052,6 @@ export type CreateProjectInput = {
   source: ProjectSource;
   defaultImageSelection?: ImageSelection;
   defaultNodeId?: string;
-  defaultRuntimeId?: string;
 };
 
 export type CreateModelInput = {

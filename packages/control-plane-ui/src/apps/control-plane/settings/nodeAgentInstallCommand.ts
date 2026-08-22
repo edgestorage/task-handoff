@@ -2,6 +2,19 @@ function shellQuote(value: string) {
   return `'${value.replace(/'/g, `'"'"'`)}'`;
 }
 
+export function nodeAgentConnectCommand(input: {
+  controlPlaneUrl: string;
+  joinToken: string;
+}) {
+  const controlPlaneUrl = normalizeControlPlaneBaseUrl(input.controlPlaneUrl);
+  if (!isHttpUrl(controlPlaneUrl) || !input.joinToken) return "";
+  return [
+    "sudo task-handoff-node-agent connect",
+    `  --control-plane ${shellQuote(controlPlaneUrl)}`,
+    `  --join-token ${shellQuote(input.joinToken)}`,
+  ].map((line, index, lines) => index < lines.length - 1 ? `${line} \\` : line).join("\n");
+}
+
 export function normalizeControlPlaneBaseUrl(value: string) {
   const trimmed = value.trim();
   try {

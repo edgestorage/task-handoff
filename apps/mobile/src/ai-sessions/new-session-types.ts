@@ -1,7 +1,7 @@
 import type { AiSessionPermissionMode } from '@task-handoff/protocol/ai-sessions';
 import type { RepositoryAiSessionWorkspace } from '@task-handoff/protocol/repository';
 import type { ControlPlaneInstanceDirectoryEntry, ControlPlaneNodeDirectoryEntry } from '@task-handoff/protocol/control-plane-directory';
-import { controlPlaneLocalFolderDisplayName, type ControlPlaneNodeLocalFolder } from '@task-handoff/control-plane-client';
+import { controlPlaneLocalFolderDisplayName, type AiSessionPastedTextPresentation, type ControlPlaneNodeLocalFolder } from '@task-handoff/control-plane-client';
 
 type InstanceWorkspaceSource = { type: string; localFolderId?: string; path?: string };
 export const INSTANCE_WORKSPACE_FOLDER_ID = "__instance_workspace__";
@@ -30,7 +30,7 @@ export type NewSessionFormProps = {
   busy: boolean;
   disabled: boolean;
   error?: string;
-  attachments: readonly { id: string; kind: 'image' | 'file'; name: string }[];
+  attachments: readonly { id: string; kind: 'image' | 'file'; name: string; size?: number; textPresentation?: AiSessionPastedTextPresentation }[];
   visualBalanceInset?: number;
   onInstanceChange(value: string): void;
   onAgentChange(value: string): void;
@@ -40,6 +40,8 @@ export type NewSessionFormProps = {
   onMessageChange(value: string): void;
   onAddImage(): void;
   onAddFile(): void;
+  onPasteImages?(uris: string[]): void;
+  onPasteText?(text: string): void;
   onRemoveAttachment(id: string): void;
   onPermissionModeChange(value: AiSessionPermissionMode): void;
   onCreate(): void;

@@ -34,7 +34,7 @@ export class ControlledInstanceCreator {
   async create(input: unknown) {
     const parsedInput = CreateInstanceInputSchema.parse(input);
     const project = parsedInput.projectId ? this.options.requireProject(parsedInput.projectId) : undefined;
-    const runtimeId = parsedInput.runtimeId || project?.defaultRuntimeId || "runtime_local_docker";
+    const runtimeId = parsedInput.runtimeId || "runtime_local_docker";
     const nodeId = parsedInput.nodeId || project?.defaultNodeId || this.options.defaultNodeId();
     if (!nodeId) {
       throw publicError("At least one node connection is required before creating an instance.", 400, "NODE_REQUIRED");

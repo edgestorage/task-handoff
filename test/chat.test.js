@@ -6686,6 +6686,7 @@ test("controlled instance refreshes managed model auth through its registration-
     assert.deepEqual(appliedPersistenceSettings.json().data, {
       applied: true,
       historyLimit: 2,
+      attachmentRetentionDays: 30,
       removedHistoryCount: 1,
     });
     assert.equal(JSON.parse(fs.readFileSync(path.join(paths.dataDir, "ai-session-persistence", "settings.json"), "utf8")).historyLimit, 2);

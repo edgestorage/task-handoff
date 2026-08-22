@@ -1,5 +1,10 @@
-import { File } from 'expo-file-system';
-import type { ControlPlaneClient } from '@task-handoff/control-plane-client';
+import * as Crypto from 'expo-crypto';
+import { File, Paths } from 'expo-file-system';
+import {
+  classifyAiSessionPastedText,
+  type AiSessionPastedTextPresentation,
+  type ControlPlaneClient,
+} from '@task-handoff/control-plane-client';
 import {
   AI_SESSION_MAX_ATTACHMENT_BYTES,
   AI_SESSION_MAX_INLINE_FILE_BYTES,
@@ -12,6 +17,21 @@ import type { MobileLocalFile } from '../platform/file-picker';
 const IMAGE_MIMES = new Set(['image/bmp', 'image/gif', 'image/jpeg', 'image/png', 'image/webp']);
 const FILE_MIMES = new Set(['application/json', 'application/pdf', 'application/zip', 'application/octet-stream']);
 
+export function formatMobileAttachmentBytes(value: number, locale: string) {
+  const units = ['B', 'KiB', 'MiB'];
+  let amount = Math.max(0, value);
+  let unit = 0;
+  while (amount >= 1024 && unit < units.length - 1) {
+    amount /= 1024;
+    unit += 1;
+  }
+  return `${new Intl.NumberFormat(locale, { maximumFractionDigits: amount >= 10 || unit === 0 ? 0 : 1 }).format(amount)} ${units[unit]}`;
+}
+
+export function formatMobileTextLength(value: number, locale: string) {
+  return new Intl.NumberFormat(locale, { maximumFractionDigits: 0 }).format(value);
+}
+
 export type MobilePendingAttachment = {
   localId: string;
   kind: 'image' | 'file';
@@ -22,6 +42,8 @@ export type MobilePendingAttachment = {
   uploadRef?: AiSessionMessageAttachmentRef;
   expiresAt?: string;
   error?: string;
+  textPresentation?: AiSessionPastedTextPresentation;
+  retryLocal?: MobileLocalFile;
 };
 
 const PASTED_IMAGE_MIMES: Record<string, string> = {
@@ -48,6 +70,28 @@ export function mobilePastedImage(uri: string): MobileLocalFile {
   };
 }
 
+export function mobilePastedText(text: string, sequence: number): MobileLocalFile {
+  const decision = classifyAiSessionPastedText(text, sequence);
+  if (decision.disposition !== 'attachment') {
+    throw attachmentError(
+      decision.disposition === 'rejected' ? 'ATTACHMENT_TOO_LARGE' : 'ATTACHMENT_TEXT_NOT_LONG',
+      decision.disposition === 'rejected' ? 'The pasted text must be smaller than 500 KiB.' : 'The pasted text does not need an attachment.',
+    );
+  }
+  const file = new File(Paths.cache, `ai-session-paste-${Crypto.randomUUID()}.txt`);
+  file.create();
+  file.write(decision.file.text);
+  return {
+    kind: 'file',
+    mime: decision.file.mime,
+    name: decision.file.name,
+    size: file.info().size,
+    temporary: true,
+    textPresentation: decision.file.presentation,
+    uri: file.uri,
+  };
+}
+
 export function validateMobileLocalFile(file: MobileLocalFile) {
   if (!file.size || file.size < 1) throw attachmentError('ATTACHMENT_SIZE_UNKNOWN', 'The selected file has no readable content or size.');
   const mime = (file.mime || '').toLowerCase();
@@ -66,20 +110,23 @@ export async function uploadMobileAttachment(
 ): Promise<MobilePendingAttachment> {
   const file = validateMobileLocalFile(local);
   const localId = `${file.kind}:${file.name}:${file.size}`;
+  let completed = false;
   try {
     const data = await (options.readBase64 ? options.readBase64(file.uri) : new File(file.uri).base64());
     const uploaded = await client.aiSessions.uploadAttachment({ ...identity, kind: file.kind, name: file.name, mime: file.mime, data });
     if (uploaded.expiresAt && Date.parse(uploaded.expiresAt) <= (options.now ?? Date.now())) throw attachmentError('ATTACHMENT_EXPIRED', 'The uploaded attachment expired before it could be used.');
+    completed = true;
     return {
       localId, kind: uploaded.kind, name: uploaded.name, mime: uploaded.mime, size: uploaded.size,
       phase: 'uploaded', expiresAt: uploaded.expiresAt,
+      textPresentation: file.textPresentation,
       uploadRef: { id: uploaded.id, kind: uploaded.kind, source: { type: 'upload-ref' } },
     };
   } catch (cause) {
     const uncertain = cause && typeof cause === 'object' && ((cause as { retryable?: unknown }).retryable === true || (cause as { code?: unknown }).code === 'DIRECT_NETWORK_FAILED');
-    return { localId, kind: file.kind, name: file.name, mime: file.mime, size: file.size, phase: uncertain ? 'result-unknown' : 'failed', error: uncertain ? 'Upload result unknown. Select the file again; the client will not reuse or resend this upload.' : cause instanceof Error ? cause.message : 'Upload failed.' };
+    return { localId, kind: file.kind, name: file.name, mime: file.mime, size: file.size, phase: uncertain ? 'result-unknown' : 'failed', error: uncertain ? 'Upload result unknown. Retry this attachment before sending.' : cause instanceof Error ? cause.message : 'Upload failed.', retryLocal: file, textPresentation: file.textPresentation };
   } finally {
-    if (file.temporary) {
+    if (completed && file.temporary) {
       try {
         if (options.removeTemporary) await options.removeTemporary(file.uri);
         else new File(file.uri).delete();

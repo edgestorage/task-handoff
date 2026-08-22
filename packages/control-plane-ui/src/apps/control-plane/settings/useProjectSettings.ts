@@ -24,19 +24,12 @@ export function useProjectSettings({ errorText, onProjectDeleted, projectInUse, 
     name: "",
     url: "",
     defaultImageSelection: undefined as { imageId: string; tag?: string } | undefined,
-    defaultRuntimeId: "",
   });
 
   const settingsDefaultImageSelectValue = computed({
     get: () => settingsProject.defaultImageSelection?.imageId || DEFAULT_SELECT_VALUE,
     set: (value: string) => {
       settingsProject.defaultImageSelection = value === DEFAULT_SELECT_VALUE ? undefined : { imageId: value };
-    },
-  });
-  const settingsDefaultRuntimeSelectValue = computed({
-    get: () => settingsProject.defaultRuntimeId || DEFAULT_SELECT_VALUE,
-    set: (value: string) => {
-      settingsProject.defaultRuntimeId = value === DEFAULT_SELECT_VALUE ? "" : value;
     },
   });
   const canCreateSettingsProject = computed(() => {
@@ -53,12 +46,6 @@ export function useProjectSettings({ errorText, onProjectDeleted, projectInUse, 
   function clearDefaultImage(imageId: string) {
     if (settingsProject.defaultImageSelection?.imageId === imageId) {
       settingsProject.defaultImageSelection = undefined;
-    }
-  }
-
-  function clearDefaultRuntime(runtimeId: string) {
-    if (settingsProject.defaultRuntimeId === runtimeId) {
-      settingsProject.defaultRuntimeId = "";
     }
   }
 
@@ -79,13 +66,11 @@ export function useProjectSettings({ errorText, onProjectDeleted, projectInUse, 
           clone: { submodules: false, lfs: false, subdirectory: "" },
         },
         ...(settingsProject.defaultImageSelection ? { defaultImageSelection: settingsProject.defaultImageSelection } : {}),
-        ...(settingsProject.defaultRuntimeId ? { defaultRuntimeId: settingsProject.defaultRuntimeId } : {}),
       });
       settingsProjectSuccess.value = t("settings.projectRegistry.created", { name: project.name });
       settingsProject.name = "";
       settingsProject.url = "";
       settingsProject.defaultImageSelection = undefined;
-      settingsProject.defaultRuntimeId = "";
       await refreshProjects();
     } catch (error) {
       showControlPlaneToast(translateError(error));
@@ -120,7 +105,6 @@ export function useProjectSettings({ errorText, onProjectDeleted, projectInUse, 
   return {
     canCreateSettingsProject,
     clearDefaultImage,
-    clearDefaultRuntime,
     clearProjectFeedback,
     createSettingsProject,
     creatingSettingsProject,
@@ -128,7 +112,6 @@ export function useProjectSettings({ errorText, onProjectDeleted, projectInUse, 
     projectSourceLabel,
     removeProject,
     settingsDefaultImageSelectValue,
-    settingsDefaultRuntimeSelectValue,
     settingsProject,
     settingsProjectSuccess,
   };

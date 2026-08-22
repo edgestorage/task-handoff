@@ -33,6 +33,18 @@ test("composer image attachments expose upload progress, contain previews, and i
   assert.doesNotMatch(transport, /onUploadProgress:/);
 });
 
+test("composer converts only long pure text pastes through the existing file attachment path", () => {
+  const composer = fs.readFileSync(new URL("../src/components/ai-session/AiSessionComposer.vue", import.meta.url), "utf8");
+  assert.match(composer, /classifyAiSessionPastedText\(text, pastedTextSequence\.value \+ 1\)/);
+  assert.match(composer, /if \(files\.length\) \{[\s\S]*event\.preventDefault\(\);[\s\S]*addFiles\(files\)/);
+  assert.match(composer, /decision\.disposition === "inline"\) return/);
+  assert.match(composer, /new globalThis\.File\(\[decision\.file\.text\]/);
+  assert.match(composer, /addFiles\(\[file\], new Map/);
+  assert.match(composer, /<FileText v-if="attachment\.textPresentation"/);
+  assert.match(composer, /attachment\.textPresentation\.summary/);
+  assert.match(composer, /sessions\.composer\.textLength/);
+});
+
 test("conversation detail renders retained image and file metadata without a UI attachment overlay", () => {
   const attachments = fs.readFileSync(new URL("../src/components/ai-session/AiSessionMessageAttachments.vue", import.meta.url), "utf8");
   const timeline = fs.readFileSync(new URL("../src/components/ai-session/AiSessionTimelineView.vue", import.meta.url), "utf8");

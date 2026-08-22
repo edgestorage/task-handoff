@@ -81,7 +81,6 @@ export class ControlPlaneCatalogService {
       source,
       defaultImageSelection: parsedInput.defaultImageSelection || { imageId: "market_taskhandoff_browser" },
       defaultNodeId: parsedInput.defaultNodeId || this.options.defaultNodeId(),
-      defaultRuntimeId: parsedInput.defaultRuntimeId || "runtime_local_docker",
       workspacePolicy: WorkspacePolicySchema.parse(parsedInput.workspacePolicy || workspacePolicyForSource(source)),
       labels: parsedInput.labels || {},
       createdAt: timestamp,

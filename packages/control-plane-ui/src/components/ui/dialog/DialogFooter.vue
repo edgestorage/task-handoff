@@ -6,7 +6,12 @@ const props = defineProps<{ class?: HTMLAttributes["class"] }>()
 </script>
 
 <template>
-  <div :class="cn('flex flex-col-reverse sm:flex-row sm:justify-end sm:gap-2', props.class)">
+  <div
+    :class="cn(
+      'flex flex-col-reverse [&_button]:h-8 [&_button]:rounded-md [&_button]:px-3 [&_button]:py-0 [&_button]:text-xs sm:flex-row sm:justify-end sm:gap-2',
+      props.class,
+    )"
+  >
     <slot />
   </div>
 </template>

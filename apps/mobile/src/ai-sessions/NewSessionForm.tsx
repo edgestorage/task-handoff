@@ -1,6 +1,8 @@
 import { KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { TextInputWrapper, type PasteEventPayload } from 'expo-paste-input';
 import { Hand, Plus, ShieldAlert, ShieldCheck } from 'lucide-react-native';
 import type { ControlPlaneInstanceDirectoryEntry, ControlPlaneNodeDirectoryEntry } from '@task-handoff/protocol/control-plane-directory';
+import { AI_SESSION_LONG_PASTE_CODE_POINT_THRESHOLD } from '@task-handoff/control-plane-client';
 
 import { AnchoredSelectMenu, type AnchoredSelectOption } from '../components/AnchoredSelectMenu';
 import { Screen } from '../components/Screen';
@@ -21,10 +23,11 @@ import type { NewSessionFormProps } from './new-session-types';
 import { NewSessionBranchPicker } from './NewSessionBranchPicker';
 import { NewSessionContextMenu } from './NewSessionContextMenu';
 import { AttachmentMenu } from './SessionComposerMenus';
+import { formatMobileAttachmentBytes, formatMobileTextLength } from './attachments';
 
 export function NewSessionForm(props: NewSessionFormProps) {
   const { colors } = useMobileTheme();
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   const workspaceMode = props.workspaceMode ?? 'current-folder';
   const selectedAgentName = props.selectedInstance?.availableAgents.find((agent) => agent.id === props.selectedAgent)?.name;
   const selectedFolder = props.folders.find((folder) => folder.id === props.selectedFolderId);
@@ -79,22 +82,37 @@ export function NewSessionForm(props: NewSessionFormProps) {
           </NewSessionContextMenu>
         </View>
 
-        <TextInput
-          accessibilityLabel={t('sessions.prompt')}
-          editable={!props.busy}
-          multiline
-          onChangeText={props.onMessageChange}
-          placeholder={t('sessions.promptPlaceholder')}
-          placeholderTextColor={colors.textMuted}
-          selectionColor={colors.primary}
-          style={[styles.prompt, { color: colors.text }]}
-          value={props.message}
-        />
+        <TextInputWrapper
+          interceptTextPasteAbove={AI_SESSION_LONG_PASTE_CODE_POINT_THRESHOLD}
+          onPaste={(payload: PasteEventPayload) => {
+            if (payload.type === 'images') props.onPasteImages?.(payload.uris);
+            else if (payload.type === 'text' && payload.intercepted) props.onPasteText?.(payload.value);
+          }}
+          style={styles.promptWrapper}
+        >
+          <TextInput
+            accessibilityLabel={t('sessions.prompt')}
+            editable={!props.busy}
+            multiline
+            onChangeText={props.onMessageChange}
+            placeholder={t('sessions.promptPlaceholder')}
+            placeholderTextColor={colors.textMuted}
+            selectionColor={colors.primary}
+            style={[styles.prompt, { color: colors.text }]}
+            value={props.message}
+          />
+        </TextInputWrapper>
 
         {props.attachments.length ? <View style={styles.attachments}>
           {props.attachments.map((attachment) => <View key={attachment.id} style={[styles.attachment, { backgroundColor: colors.surfaceMuted }]}>
-            <SystemIcon android={attachment.kind === 'image' ? 'image' : 'description'} color={colors.textMuted} ios={attachment.kind === 'image' ? 'photo' : 'doc'} size={15} />
-            <Text numberOfLines={1} style={[styles.attachmentName, { color: colors.text }]}>{attachment.name}</Text>
+            <SystemIcon android={attachment.kind === 'image' ? 'image' : 'description'} color={colors.textMuted} ios={attachment.kind === 'image' ? 'photo' : attachment.textPresentation ? 'doc.plaintext' : 'doc'} size={15} />
+            <View accessible accessibilityLabel={attachment.textPresentation ? `${attachment.name}, ${attachment.textPresentation.summary || t('composer.blankPastedText')}, ${t('composer.textLength', { count: formatMobileTextLength(attachment.textPresentation.codePointLength, locale) })}, ${formatMobileAttachmentBytes(attachment.size || 0, locale)}` : attachment.name} style={styles.attachmentCopy}>
+              <Text numberOfLines={1} style={[styles.attachmentName, { color: colors.text }]}>{attachment.name}</Text>
+              {attachment.textPresentation ? <>
+                <Text numberOfLines={1} style={[styles.attachmentSummary, { color: colors.text }]}>{attachment.textPresentation.summary || t('composer.blankPastedText')}</Text>
+                <Text numberOfLines={1} style={[styles.attachmentMeta, { color: colors.textMuted }]}>{t('composer.textLength', { count: formatMobileTextLength(attachment.textPresentation.codePointLength, locale) })} · {formatMobileAttachmentBytes(attachment.size || 0, locale)}</Text>
+              </> : null}
+            </View>
             <Pressable accessibilityLabel={t('workspace.removeAttachment', { name: attachment.name })} accessibilityRole="button" accessibilityState={{ disabled: props.busy }} disabled={props.busy} hitSlop={8} onPress={() => props.onRemoveAttachment(attachment.id)} style={props.busy ? styles.disabled : undefined}>
               <SystemIcon android="close" color={colors.textMuted} ios="xmark.circle.fill" size={17} />
             </Pressable>
@@ -200,7 +218,8 @@ const styles = StyleSheet.create({
   contextRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   contextPill: { alignItems: 'center', borderRadius: 10, flexDirection: 'row', gap: 6, maxWidth: '100%', minHeight: 38, paddingHorizontal: 11 },
   contextLabel: { flexShrink: 1, fontSize: 14, fontWeight: '600', lineHeight: 20 },
-  prompt: { flex: 1, fontSize: 16, lineHeight: 24, minHeight: 176, paddingHorizontal: 4, paddingVertical: 16, textAlignVertical: 'top' },
+  promptWrapper: { flex: 1, minHeight: 176 },
+  prompt: { flex: 1, fontSize: 16, lineHeight: 24, paddingHorizontal: 4, paddingVertical: 16, textAlignVertical: 'top' },
   toolbar: { alignItems: 'center', flexDirection: 'row', height: SESSION_COMPOSER_TOOLBAR_HEIGHT, justifyContent: 'space-between', marginHorizontal: -6, paddingBottom: 6 },
   leadingTools: { alignItems: 'center', flexDirection: 'row' },
   toolButton: { alignItems: 'center', height: SESSION_COMPOSER_TOOL_SIZE, justifyContent: 'center', width: SESSION_COMPOSER_TOOL_SIZE },
@@ -209,7 +228,10 @@ const styles = StyleSheet.create({
   sendButton: { alignItems: 'center', borderRadius: SESSION_COMPOSER_ACTION_RADIUS, height: SESSION_COMPOSER_ACTION_SIZE, justifyContent: 'center', width: SESSION_COMPOSER_ACTION_SIZE },
   attachments: { gap: 6 },
   attachment: { alignItems: 'center', borderRadius: 10, flexDirection: 'row', gap: 8, paddingHorizontal: 10, paddingVertical: 8 },
-  attachmentName: { flex: 1, fontSize: 13, fontWeight: '600', lineHeight: 18 },
+  attachmentCopy: { flex: 1, minWidth: 0 },
+  attachmentName: { fontSize: 13, fontWeight: '500', lineHeight: 18 },
+  attachmentSummary: { fontSize: 12, fontWeight: '400', lineHeight: 17 },
+  attachmentMeta: { fontSize: 12, fontWeight: '400', lineHeight: 17 },
   disabled: { opacity: 0.4 },
   pressed: { opacity: 0.72 },
   error: { borderRadius: 12, fontSize: 13, lineHeight: 19, padding: 12 },

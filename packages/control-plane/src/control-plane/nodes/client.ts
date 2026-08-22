@@ -4,7 +4,7 @@ import { safeParseResponse } from "@task-handoff/protocol/response-validation";
 
 export type NodeAgentWebSocket = {
   on(event: string, listener: (...args: unknown[]) => void): void;
-  send(data: unknown): void;
+  send(data: unknown, options?: { binary?: boolean }): void;
   close(code?: number, reason?: string): void;
   readyState: number;
 };

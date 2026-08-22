@@ -178,12 +178,32 @@ export function createControlPlaneAiSessionsApi(transport: ControlPlaneClientTra
         mime: input.mime,
         size: String(content.size),
       });
-      const response = await transport.request(
-        `/api/controlled-instances/${encodeURIComponent(input.instanceId)}/ai-session-attachments/drafts?${query}`,
-        DataSchema(AiSessionUploadedAttachmentSchema),
-        { method: "POST", headers: { "content-type": "application/octet-stream" }, body: content },
-        onProgress,
-      );
+      let response: { data: z.infer<typeof AiSessionUploadedAttachmentSchema> };
+      try {
+        response = await transport.request(
+          `/api/controlled-instances/${encodeURIComponent(input.instanceId)}/ai-session-attachments/drafts?${query}`,
+          DataSchema(AiSessionUploadedAttachmentSchema),
+          { method: "POST", headers: { "content-type": "application/octet-stream" }, body: content },
+          onProgress,
+        );
+      } catch (error) {
+        if (!isMissingScopedAttachmentUploadRoute(error)) throw error;
+        // Compatibility for v0.0.21: its public upload endpoint accepts the same
+        // attachment content and scopes create requests by clientRequestId.
+        response = await transport.request(
+          "/api/ai-session-attachments",
+          DataSchema(AiSessionUploadedAttachmentSchema),
+          json("POST", {
+            instanceId: input.instanceId,
+            sessionId: input.sessionId,
+            kind: input.kind,
+            name: input.name,
+            mime: input.mime,
+            data: input.data,
+          }),
+          onProgress,
+        );
+      }
       onProgress?.(1);
       return response.data;
     },
@@ -194,6 +214,15 @@ export function createControlPlaneAiSessionsApi(transport: ControlPlaneClientTra
       return requestData(`${sessionRoute(instanceId, sessionId)}/mentions/files`, AiSessionMentionFileSearchSchema, json("POST", { query }, signal));
     },
   };
+}
+
+function isMissingScopedAttachmentUploadRoute(error: unknown) {
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as { status?: unknown; code?: unknown };
+  return candidate.status === 404
+    || candidate.status === 405
+    || candidate.code === "ROUTE_NOT_FOUND"
+    || candidate.code === "HTTP_404";
 }
 
 export type ControlPlaneAiSessions = z.infer<typeof ControlPlaneAiSessionsSchema>;

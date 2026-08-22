@@ -325,6 +325,36 @@ test("a stale turn snapshot cannot overwrite a newer assistant item", () => {
   assert.equal(store.activeMessage("instance_1", "session_1").value, current);
 });
 
+test("a terminal snapshot replaces a stale active assistant item missed while unsubscribed", () => {
+  const store = createStreamingMessagesStore();
+  const progress = identity({ itemId: "item_progress" });
+  const final = identity({ itemId: "item_final" });
+  store.appendDelta({ identity: progress, streamId: "stream_1", delta: "early progress" });
+
+  store.applySnapshot({
+    meta: meta({ generatedAt: "2026-07-18T00:00:02.000Z" }),
+    snapshot: {
+      runningCount: 0,
+      waitingCount: 0,
+      staleCount: 0,
+      updatedAt: "2026-07-18T00:00:02.000Z",
+      sessions: [session({
+        activeTurnId: undefined,
+        status: "idle",
+        turns: [{ id: "turn_1", status: "completed", revision: 3, lastMessage: "final response", lastMessageItemId: "item_final" }],
+        lastMessage: "final response",
+        lastMessageItemId: "item_final",
+      })],
+    },
+  });
+
+  const active = store.activeMessage("instance_1", "session_1").value;
+  assert.equal(active, store.message(final));
+  assert.equal(active.value.receivedText, "final response");
+  assert.equal(active.value.status, "complete");
+  assert.equal(store.message(progress).value.receivedText, "early progress");
+});
+
 test("a terminal snapshot without item identity still converges to the authoritative full text", () => {
   const store = createStreamingMessagesStore();
   const id = identity({ itemId: "item_live" });

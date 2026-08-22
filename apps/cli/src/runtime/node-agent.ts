@@ -6,6 +6,7 @@ import {
   fetchNodeAgentIpc,
   nodeAgentIpcPath,
   runNodeAgentServer,
+  uninstallNodeAgent,
 } from "@task-handoff/control-plane/node-agent";
 
 function parsePort(value: string) {
@@ -65,6 +66,35 @@ async function createPairingInvite(options: {
   };
 }
 
+async function connectControlPlane(options: {
+  controlPlane: string;
+  joinToken: string;
+  controlPlaneName?: string;
+  endpoint?: string;
+  ipcPath?: string;
+  token?: string;
+}) {
+  const headers = {
+    "content-type": "application/json",
+    ...(options.token ? { authorization: `Bearer ${options.token}` } : {}),
+  };
+  const body = JSON.stringify({
+    controlPlaneUrl: options.controlPlane,
+    joinToken: options.joinToken,
+    ...(options.controlPlaneName ? { controlPlaneName: options.controlPlaneName } : {}),
+    activate: true,
+  });
+  const response = options.endpoint
+    ? await fetch(`${options.endpoint.replace(/\/$/, "")}/api/node-agent/control-plane-connections`, { method: "POST", headers, body })
+    : await fetchNodeAgentIpc(options.ipcPath!, "/control-plane-connections", { method: "POST", headers, body });
+  const payload = (await response.json().catch(() => ({}))) as {
+    data?: { connection?: { id?: unknown; url?: unknown }; tunnel?: { status?: unknown; error?: unknown } };
+    error?: { message?: string };
+  };
+  if (!response.ok) throw new Error(payload.error?.message || `Node Agent connection failed with HTTP ${response.status}`);
+  return payload.data;
+}
+
 async function main() {
   const program = new Command();
   program
@@ -121,6 +151,52 @@ async function main() {
       if (invite.nodeId) console.log(`Node: ${invite.nodeId}`);
       console.log(`Join token: ${invite.joinToken}`);
       if (invite.expiresAt) console.log(`Expires: ${invite.expiresAt}`);
+    });
+
+  program
+    .command("connect")
+    .description("Connect this Node Agent to a reachable Control Plane.")
+    .requiredOption("--control-plane <url>", "Public Control Plane base URL")
+    .requiredOption("--join-token <token>", "One-time join token issued by the Control Plane")
+    .option("--control-plane-name <name>", "Control Plane display name")
+    .option("--endpoint <url>", "Use the Node Agent HTTP endpoint instead of its local IPC socket")
+    .option("--ipc-path <path>", "Local Node Agent IPC socket path")
+    .option("--data-dir <path>", "Node Agent data directory used to locate its IPC socket")
+    .option("--token <token>", "Bearer token for local Node Agent access", process.env.TASK_HANDOFF_NODE_AGENT_TOKEN)
+    .option("--json", "Print raw JSON output")
+    .action(async (options) => {
+      const rootOptions = program.opts();
+      const explicitIpcPath = options.ipcPath || rootOptions.ipcPath
+        || process.env.TASK_HANDOFF_NODE_AGENT_IPC_PATH;
+      const dataDir = options.dataDir || rootOptions.dataDir
+        || process.env.TASK_HANDOFF_NODE_AGENT_DATA_DIR;
+      const ipcPath = options.endpoint
+        ? undefined
+        : explicitIpcPath || nodeAgentIpcPath(dataDir || defaultNodeAgentDataDir());
+      const result = await connectControlPlane({
+        controlPlane: options.controlPlane,
+        joinToken: options.joinToken,
+        controlPlaneName: options.controlPlaneName,
+        endpoint: options.endpoint,
+        ipcPath,
+        token: options.token,
+      });
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+      console.log(`Control Plane: ${String(result?.connection?.url || options.controlPlane)}`);
+      console.log(`Connection: ${String(result?.tunnel?.status || "saved")}`);
+    });
+
+  program
+    .command("uninstall")
+    .description("Uninstall the Node Agent service and packages; data is preserved by default.")
+    .option("--data-dir <path>", "Override the installed Node Agent data directory")
+    .option("--delete-data", "Delete Node Agent data without prompting")
+    .option("--keep-data", "Preserve Node Agent data without prompting")
+    .action(async (options) => {
+      await uninstallNodeAgent(options);
     });
 
   await program.parseAsync(process.argv);

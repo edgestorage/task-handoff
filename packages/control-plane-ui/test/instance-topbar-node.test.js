@@ -69,7 +69,7 @@ test("instance switcher menu exposes each instance's node in a portal-safe layou
 
 test("standalone window identity follows the selected directory entry while scoped detail data loads", () => {
   assert.match(workbench, /const standaloneDirectoryInstance = computed\(\(\) => standaloneMode\.value[\s\S]*?instance\.id === standaloneInstanceId\.value/);
-  assert.match(workbench, /const selectedInstanceId = computed\(\(\) => standaloneMode\.value \? standaloneInstanceId\.value : activeInstance\.value\?\.id \|\| ""\);/);
+  assert.match(workbench, /const selectedInstanceId = computed\(\(\) => standaloneMode\.value \? standaloneInstanceId\.value : activeInstanceId\.value\);/);
   assert.match(workbench, /const selectedDetail = !standaloneMode\.value \|\| activeInstance\.value\?\.id === standaloneInstanceId\.value[\s\S]*?return selectedDetail\?\.name \|\| standaloneDirectoryInstance\.value\?\.name/);
   assert.match(workbench, /watch\(\s*\[topbarTitle, standaloneInstanceId\][\s\S]*?document\.title = `\$\{topbarTitle\.value\} · TaskHandoff`/);
 });

@@ -9,10 +9,12 @@ const {
   MARKET_CATALOG_PROTOCOL_VERSION,
   MarketCatalogSnapshotSchema,
   NodeImageAvailabilitySchema,
+  ProjectSchema,
   parseDockerImageReference,
   sanitizeStoredControlledInstance,
   sanitizeStoredImageProfile,
   sanitizeStoredMarketCatalogSnapshot,
+  sanitizeStoredProject,
 } = require("../packages/protocol/src/control-plane.ts");
 const {
   EmbeddedMarketCatalogProvider,
@@ -80,6 +82,22 @@ test("Market catalog validates date protocols, tags, and optional platform sizes
 
 test("stored custom profiles and controlled instances migrate before strict parsing", () => {
   const now = timestamp();
+  const project = ProjectSchema.parse(sanitizeStoredProject({
+    id: "proj_legacy_runtime",
+    name: "Legacy runtime project",
+    source: { type: "local-folder", path: "/workspace" },
+    defaultImageSelection: { imageId: "img_custom" },
+    defaultNodeId: "node_1",
+    // Compatibility for v0.0.21: no longer part of the project model.
+    defaultRuntimeId: "runtime_local_docker",
+    workspacePolicy: { mode: "local-bind", path: "/workspace", readOnly: false },
+    labels: {},
+    createdAt: now,
+    updatedAt: now,
+  }));
+  assert.equal(project.defaultImageSelection.imageId, "img_custom");
+  assert.equal("defaultRuntimeId" in project, false);
+
   const custom = CustomImageProfileSchema.parse(sanitizeStoredImageProfile({
     id: "img_custom",
     name: "Custom",

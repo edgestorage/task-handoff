@@ -78,7 +78,6 @@ function projectForInstance(instance: ControlledInstance): Project {
     source,
     defaultImageSelection: instance.imageSelection,
     defaultNodeId: instance.nodeId,
-    defaultRuntimeId: instance.runtimeId,
     workspacePolicy: workspacePolicyForSource(source),
     labels: {},
     createdAt: instance.createdAt,

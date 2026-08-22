@@ -4,8 +4,7 @@
     <div v-else-if="error" class="detail-empty error">{{ error }}</div>
     <div v-else-if="instance" class="instance-detail-layout" :class="{ 'preview-expanded': previewExpanded }">
       <header v-if="!previewExpanded" class="detail-head">
-        <div>
-          <p>{{ instanceSourceLabel(instance, t) }}</p>
+        <div class="detail-identity">
           <div
             class="detail-name-field"
             :class="{ editing: editingNameId === instance.id }"
@@ -33,7 +32,11 @@
               <span class="detail-name-button-label">{{ instanceDisplayName(instance) }}</span>
             </button>
           </div>
-          <span>{{ instance.image?.name || instance.imageSelection?.imageId }} · {{ instance.node?.name || instance.nodeId }} / {{ instance.runtime?.name || instance.runtimeId }}</span>
+          <div class="detail-meta">
+            <p>{{ instanceSourceLabel(instance, t) }}</p>
+            <span aria-hidden="true">·</span>
+            <span :title="instanceRuntimeSummary(instance)">{{ instanceRuntimeSummary(instance) }}</span>
+          </div>
           <span v-if="instance.imageProvisioning && instance.imageProvisioning.phase !== 'ready' && !instance.imagePullProgress" class="image-provisioning-status">
             {{ imageProvisioningLabel(instance, t) }}<template v-if="instance.imageProvisioning.error"> · {{ instance.imageProvisioning.error }}</template>
           </span>
@@ -359,6 +362,10 @@ function buildLabel(instance: InstanceBoardItem) {
 
 function packageLabel(instance: InstanceBoardItem) {
   return instance.build?.packageVersion || instance.instanceVersion || t("common.status.unknown");
+}
+
+function instanceRuntimeSummary(instance: InstanceBoardItem) {
+  return `${instance.image?.name || instance.imageSelection?.imageId} · ${instance.node?.name || instance.nodeId} / ${instance.runtime?.name || instance.runtimeId}`;
 }
 
 function buildTitle(instance: InstanceBoardItem) {

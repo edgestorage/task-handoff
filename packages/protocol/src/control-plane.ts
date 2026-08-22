@@ -393,7 +393,9 @@ export function migrateLegacyImageSelection(input: unknown, legacyImageId?: unkn
 export function sanitizeStoredProject(input: unknown) {
   if (!input || typeof input !== "object" || Array.isArray(input)) return input;
   const source = input as Record<string, unknown>;
-  const { defaultImageId, ...record } = source;
+  // Compatibility for v0.0.21: projects persisted by older control planes may
+  // carry a runtime preference. Runtime selection is instance-owned now.
+  const { defaultImageId, defaultRuntimeId: _defaultRuntimeId, ...record } = source;
   return {
     ...record,
     defaultImageSelection: migrateLegacyImageSelection(source.defaultImageSelection, defaultImageId),
@@ -820,7 +822,6 @@ export const ProjectSchema = z
     source: ProjectSourceSchema,
     defaultImageSelection: ImageSelectionSchema.optional(),
     defaultNodeId: IdSchema.optional(),
-    defaultRuntimeId: IdSchema.optional(),
     workspacePolicy: WorkspacePolicySchema,
     labels: LabelsSchema,
     createdAt: TimestampSchema,
@@ -1290,6 +1291,25 @@ export const NodeConnectionDiagnosticsSchema = z.object({
 }).strict();
 
 export type NodeConnectionDiagnostics = z.infer<typeof NodeConnectionDiagnosticsSchema>;
+
+export const NodeJoinedEventSchema = z.object({
+  nodeId: IdSchema,
+  // Compatibility for v0.0.21: events emitted by older control planes omit
+  // inviteId. Consumers still refresh topology but cannot complete a wizard.
+  inviteId: IdSchema.optional(),
+}).strict();
+
+export const NodeJoinInviteStatusSchema = z.discriminatedUnion("status", [
+  z.object({
+    id: IdSchema,
+    status: z.literal("pending"),
+  }).strict(),
+  z.object({
+    id: IdSchema,
+    status: z.literal("completed"),
+    nodeId: IdSchema,
+  }).strict(),
+]);
 
 export const NodeControlPlaneProxyStateSchema = z.object({
   reachability: z.enum(["unknown", "reachable", "unreachable"]),
@@ -2381,6 +2401,8 @@ export type ImagePullTerminalFinished = z.infer<typeof ImagePullTerminalFinished
 export type ImagePullProgress = z.infer<typeof ImagePullProgressSchema>;
 export type NodeImageAvailability = z.infer<typeof NodeImageAvailabilitySchema>;
 export type Node = z.infer<typeof NodeSchema>;
+export type NodeJoinedEvent = z.infer<typeof NodeJoinedEventSchema>;
+export type NodeJoinInviteStatus = z.infer<typeof NodeJoinInviteStatusSchema>;
 export type NodeRuntime = z.infer<typeof NodeRuntimeSchema>;
 export type InstanceResourceMetrics = z.infer<typeof InstanceResourceMetricsSchema>;
 export type NodeAgentHealth = z.infer<typeof NodeAgentHealthSchema>;

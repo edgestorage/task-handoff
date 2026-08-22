@@ -429,22 +429,13 @@
               <!-- i18n-audit-allow-next-line code-token: example Git remote URL -->
               <ControlPlaneInput v-model="settingsProject.url" placeholder="https://github.com/org/repo" />
             </label>
-            <div class="settings-form-grid">
-              <label>
-                <span>{{ t("settings.projectRegistry.defaultImage") }}</span>
-                <ControlPlaneSelect v-model="settingsDefaultImageSelectValue" :placeholder="t('settings.projectRegistry.useDefault')">
-                  <ControlPlaneSelectItem :value="DEFAULT_SELECT_VALUE">{{ t("settings.projectRegistry.useDefault") }}</ControlPlaneSelectItem>
-                  <ControlPlaneSelectItem v-for="image in imageOptions.data.value || []" :key="image.id" :value="image.id">{{ image.name }}</ControlPlaneSelectItem>
-                </ControlPlaneSelect>
-              </label>
-              <label>
-                <span>{{ t("settings.projectRegistry.defaultRuntime") }}</span>
-                <ControlPlaneSelect v-model="settingsDefaultRuntimeSelectValue" :placeholder="t('settings.projectRegistry.useDefault')">
-                  <ControlPlaneSelectItem :value="DEFAULT_SELECT_VALUE">{{ t("settings.projectRegistry.useDefault") }}</ControlPlaneSelectItem>
-                  <ControlPlaneSelectItem v-for="runtime in nodeRuntimeItems" :key="runtime.id" :value="runtime.id">{{ runtimeName(runtime) }}</ControlPlaneSelectItem>
-                </ControlPlaneSelect>
-              </label>
-            </div>
+            <label>
+              <span>{{ t("settings.projectRegistry.defaultImage") }}</span>
+              <ControlPlaneSelect v-model="settingsDefaultImageSelectValue" :placeholder="t('settings.projectRegistry.useDefault')">
+                <ControlPlaneSelectItem :value="DEFAULT_SELECT_VALUE">{{ t("settings.projectRegistry.useDefault") }}</ControlPlaneSelectItem>
+                <ControlPlaneSelectItem v-for="image in imageOptions.data.value || []" :key="image.id" :value="image.id">{{ image.name }}</ControlPlaneSelectItem>
+              </ControlPlaneSelect>
+            </label>
             <Button variant="outline" size="sm" :disabled="!canCreateSettingsProject || creatingSettingsProject" @click="createSettingsProject">
               <Plus :size="15" />
               <span>{{ creatingSettingsProject ? t("settings.projectRegistry.creating") : t("settings.projectRegistry.create") }}</span>
@@ -471,6 +462,15 @@
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent class="node-add-menu" align="end" :side-offset="6">
+                    <DropdownMenuItem class="node-add-menu-item node-onboarding-menu-item" @select="openNodeOnboarding">
+                      <Sparkles :size="16" aria-hidden="true" />
+                      <span>
+                        <strong>{{ t("settings.nodeOnboarding.title") }}</strong>
+                        <small>{{ t("settings.nodeOnboarding.description") }}</small>
+                      </span>
+                      <Badge class="node-onboarding-menu-badge" variant="secondary">{{ t("settings.nodeOnboarding.recommended") }}</Badge>
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
                     <DropdownMenuItem v-if="!hasLocalNode" class="node-add-menu-item" :disabled="syncingLocalNode" @select="addLocalNode">
                       <MonitorCog :size="16" aria-hidden="true" />
                       <span>
@@ -606,6 +606,15 @@
         @select="selectNodeStorageFolder"
         @up="goUpNodeStorageFolder"
         @update:open="setNodeStorageFolderDialogOpen"
+      />
+      <NodeOnboardingDialog
+        :node-joined-event="nodeJoinedEvent"
+        :nodes="nodes.data.value || []"
+        :open="nodeOnboardingOpen"
+        :public-base-url="nodeAgentInstallControlPlaneUrl"
+        :version="nodeAgentInstallVersion"
+        @close="nodeOnboardingOpen = false"
+        @created="handleOnboardingCreated"
       />
       <Dialog :open="nodeRenameOpen" @update:open="setNodeRenameOpen">
         <DialogContent class="node-rename-dialog">
@@ -769,7 +778,7 @@
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useQueryClient } from "@tanstack/vue-query";
-import { Activity, AlertTriangle, ArrowLeft, Check, ChevronDown, ChevronUp, ChevronsUpDown, Download, Eye, EyeOff, KeyRound, Layers, MapPin, MonitorCog, Plus, RefreshCw, Server, Settings, ShieldAlert, Trash2 } from "@lucide/vue";
+import { Activity, AlertTriangle, ArrowLeft, Check, ChevronDown, ChevronUp, ChevronsUpDown, Download, Eye, EyeOff, KeyRound, Layers, MapPin, MonitorCog, Plus, RefreshCw, Server, Settings, ShieldAlert, Sparkles, Trash2 } from "@lucide/vue";
 import { cancelControlPlaneProxyClaim, claimControlPlaneProxyNode, controlPlaneQueryKeys, downloadControlPlaneDiagnosticLogs, getNodeExternalListener, resumeControlPlaneProxyClaim, updateControlPlaneSettings, updateNodeExternalListener, useAuthSessionQuery, useChatBridgesQuery, useChatGatewayStatusQuery, useControlPlaneSettingsQuery, useImageOptionsQuery, useImagesQuery, useInstanceBoardPayloadQuery, useMarketCatalogQuery, useModelRegistryQuery, useModelsQuery, useNodeImageAvailabilityQuery, useNodeRuntimesPayloadQuery, useNodesQuery, usePendingControlPlaneProxyClaimsQuery, useProjectsQuery, useServerUpdateCheckQuery } from "../../../api/queries";
 import { invalidateControlPlaneDomains } from "../../../api/queryInvalidation";
 import type { BuildInfo, ControlPlaneSettings, InstanceBoardItem, ModelLocation, Node, NodeAgentExternalListener, UpdateChannel } from "../../../api/types";
@@ -778,7 +787,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Button } from "../../../components/ui/button";
 import { Checkbox } from "../../../components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "../../../components/ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "../../../components/ui/popover";
 import { ScrollArea } from "../../../components/ui/scroll-area";
@@ -803,6 +812,7 @@ import { useNodeSettings } from "./useNodeSettings";
 import { useDesktopUpdates, type DesktopUpdateChannel } from "./useDesktopUpdates";
 import NodeDetailPanel from "./NodeDetailPanel.vue";
 import NodeConnectionDiagnostics from "./NodeConnectionDiagnostics.vue";
+import NodeOnboardingDialog from "./NodeOnboardingDialog.vue";
 import NodeAgentInstallDialog from "./NodeAgentInstallDialog.vue";
 import NodeStorageFolderPickerDialog from "./NodeStorageFolderPickerDialog.vue";
 import GeneratedTokenDialog from "./GeneratedTokenDialog.vue";
@@ -814,6 +824,7 @@ import { showControlPlaneToast } from "../useControlPlaneToasts";
 import { connectionStatusKeys, translateStatus } from "../../../i18n/status";
 import { translateApiError } from "../../../i18n/apiError";
 import { normalizeProxyOrigin, proxyClaimForceDeleteAllowed, proxyClaimValidation } from "./controlPlaneProxyUi";
+import type { NodeJoinedEvent } from "@task-handoff/protocol/control-plane";
 
 type SettingsSection = "basic" | "chat" | "images" | "environment-templates" | "projects" | "nodes" | "models" | "triggers" | "mobile-sessions" | "account" | "cloud-connectivity";
 type NodeDiagnosticLog = {
@@ -829,6 +840,7 @@ const props = defineProps<{
   chooseProjectFolder?: () => Promise<string | { path: string; ownerNodeId?: string } | undefined>;
   initialSection?: SettingsSection;
   instances: InstanceBoardItem[];
+  nodeJoinedEvent?: NodeJoinedEvent;
 }>();
 
 const emit = defineEmits<{
@@ -896,6 +908,7 @@ const commandTriggerError = computed(() => validCommandTrigger(commandTrigger.va
 const triggerSettingsAtDefaults = computed(() => commandTrigger.value === "/" && mentionTrigger.value === "@");
 const triggerSettingsDirty = computed(() => mentionTrigger.value !== (controlPlaneSettings.data.value?.mentionTrigger || "@") || commandTrigger.value !== (controlPlaneSettings.data.value?.commandTrigger || "/"));
 const remoteNodeDialogOpen = ref(false);
+const nodeOnboardingOpen = ref(false);
 const remoteNodeMode = ref<"direct" | "control-plane-proxy">("direct");
 const creatingProxyNode = ref(false);
 const proxyNodeError = ref("");
@@ -1018,7 +1031,6 @@ const { clearChatFeedback } = chatSettings;
 const {
   canCreateSettingsProject,
   clearDefaultImage,
-  clearDefaultRuntime,
   clearProjectFeedback,
   createSettingsProject,
   creatingSettingsProject,
@@ -1026,7 +1038,6 @@ const {
   projectSourceLabel,
   removeProject,
   settingsDefaultImageSelectValue,
-  settingsDefaultRuntimeSelectValue,
   settingsProject,
   settingsProjectSuccess,
 } = useProjectSettings({
@@ -1081,7 +1092,6 @@ const {
   refreshNodeStorageFolderRoots,
 } = useNodeResourceSettings({
   chooseProjectFolder: props.chooseProjectFolder,
-  clearDefaultRuntime,
   errorText,
   instances: boardItems,
   nodes: nodes.data,
@@ -1309,12 +1319,10 @@ const {
   updateNodeRenameDraft,
 } = useNodeSettings({
   errorText,
-  onNodeDeleted: clearDefaultRuntime,
   onNodeRenamed: syncRenamedNode,
   refreshNodeRuntimeState,
   refreshNodeTopology,
   nodes: () => nodes.data.value || [],
-  runtimes: () => nodeRuntimeItems.value,
   updateChannel: () => updateChannel.value,
   translate: t,
 });
@@ -1324,6 +1332,14 @@ function openRemoteNodeDialog() {
   proxyNodeError.value = "";
   proxyNodeErrorField.value = "form";
   remoteNodeDialogOpen.value = true;
+}
+
+function openNodeOnboarding() {
+  nodeOnboardingOpen.value = true;
+}
+
+function handleOnboardingCreated(node: Node) {
+  selectNode(node.id);
 }
 
 const canSubmitRemoteNode = computed(() => remoteNodeMode.value === "direct"
@@ -2135,8 +2151,15 @@ function errorText(error: unknown) {
 
 :global(.node-add-menu-item > span) {
   display: grid;
+  flex: 1 1 auto;
   gap: 2px;
   min-width: 0;
+}
+
+:global(.node-onboarding-menu-badge) {
+  flex: 0 0 auto;
+  align-self: center;
+  white-space: nowrap;
 }
 
 :global(.node-add-menu-item strong),
@@ -2889,12 +2912,6 @@ function errorText(error: unknown) {
   margin-top: 0;
 }
 
-.settings-form-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 9px;
-}
-
 .image-market-section {
   grid-column: 1 / -1;
 }
@@ -3226,8 +3243,7 @@ function errorText(error: unknown) {
   }
   .image-management-grid,
   .project-management-grid,
-  .node-management-grid,
-  .settings-form-grid {
+  .node-management-grid {
     grid-template-columns: 1fr;
   }
 

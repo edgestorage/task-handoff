@@ -275,7 +275,12 @@ test("reverse tunnel becomes healthy only after identify and ignores a replaced 
   const ingress = new NodeTunnelIngress(transport);
   const first = new Socket();
   ingress.attachMain("node_reverse", first);
-  assert.deepEqual(JSON.parse(first.sent[0]), {
+  assert.equal(JSON.parse(first.sent[0]).type, "control-plane.hello");
+  assert.equal(runtime.observation("node_reverse").phase, "handshaking");
+  first.emit("message", JSON.stringify({ type: "node-agent.identify" }));
+  assert.equal(runtime.observation("node_reverse").phase, "healthy");
+  assert.equal(JSON.parse(first.sent[1]).type, "control-plane.identified");
+  assert.deepEqual(JSON.parse(first.sent[2]), {
     type: "control-plane.event-subscribe",
     aiSessionTransient: {
       messageDeltas: { allInstances: false, instanceIds: [] },
@@ -283,9 +288,6 @@ test("reverse tunnel becomes healthy only after identify and ignores a replaced 
       timelineSessions: [],
     },
   });
-  assert.equal(runtime.observation("node_reverse").phase, "handshaking");
-  first.emit("message", JSON.stringify({ type: "node-agent.identify" }));
-  assert.equal(runtime.observation("node_reverse").phase, "healthy");
 
   const second = new Socket();
   ingress.attachMain("node_reverse", second);
@@ -304,8 +306,9 @@ test("reverse tunnel becomes healthy only after identify and ignores a replaced 
   assert.equal(runtime.observation("node_reverse").phase, "offline");
   const third = new Socket();
   ingress.attachMain("node_reverse", third);
-  assert.equal(JSON.parse(third.sent[0]).aiSessionTransient.messageDeltas.allInstances, true);
+  assert.equal(JSON.parse(third.sent[0]).type, "control-plane.hello");
   third.emit("message", JSON.stringify({ type: "node-agent.identify" }));
+  assert.equal(JSON.parse(third.sent[2]).aiSessionTransient.messageDeltas.allInstances, true);
   third.emit("close", 1000, Buffer.alloc(0));
 });
 

@@ -1,5 +1,6 @@
 import { queryOptions, useQuery } from "@tanstack/vue-query";
 import { computed, toValue, type MaybeRefOrGetter } from "vue";
+import { NodeJoinInviteStatusSchema } from "@task-handoff/protocol/control-plane";
 import { api, ApiError, deleteApiData, getApiData, getApiPayload, patchApiData, postApiData, putApiData, withApiError } from "./client";
 import { mergeInstanceBoardQueryData } from "./instanceBoardMerge.ts";
 import { controlPlaneQueryKeys } from "./queryKeys.ts";
@@ -869,6 +870,11 @@ export function createNodeControlPlaneConnection(id: string, input: CreateNodeCo
 
 export function createNodeJoinInvite(input: { nodeName?: string } = {}) {
   return postApiData<NodeJoinInvite>("node-join/invites", input);
+}
+
+export function getNodeJoinInviteStatus(id: string, signal?: AbortSignal) {
+  return getApiData<unknown>(`node-join/invites/${encodeURIComponent(id)}`, { signal })
+    .then((value) => NodeJoinInviteStatusSchema.parse(value));
 }
 
 export function createNodeLocalFolder(nodeId: string, input: CreateNodeLocalFolderInput) {

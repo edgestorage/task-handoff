@@ -182,8 +182,8 @@ export class ControlPlaneNodeProxyRuntime {
 
     const wrapped: NodeAgentWebSocket = {
       get readyState() { return socket.readyState; },
-      send: (data) => {
-        if (!released && acceptFrame(data)) socket.send(data);
+      send: (data, options) => {
+        if (!released && acceptFrame(data)) socket.send(data, options);
       },
       close: (code, reason) => {
         release();

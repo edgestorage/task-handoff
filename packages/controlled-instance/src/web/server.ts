@@ -695,6 +695,10 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       : Number(configuredDeltaCoalescingWindow),
   });
   const codexAppServer = options.codexAppServer || new CodexAppServerSessionBridge(aiSessions, {
+    ensureAppSessions: async () => {
+      appRuntime.ensureSharedResource("codex");
+      return appSessionsWithSharedCodexAppServer();
+    },
     timelineStorePath: path.join(storagePaths.dataDir, "ai-session-timeline", "codex"),
     threadStartDefaults: {
       model: process.env.TASK_HANDOFF_CODEX_MODEL?.trim() || undefined,
@@ -759,7 +763,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   aiSessionDiscovery.register(claudeControlSock);
   aiSessionDiscovery.register(new TranscriptTailDiscoveryProvider());
   aiSessionDiscovery.register(codexAppServer);
-  const appSessionsWithSharedCodexAppServer = () => {
+  function appSessionsWithSharedCodexAppServer() {
     const appServer = appRuntime.sharedResourceSessionAi("codex")?.appServer;
     if (!appServer) {
       return appRuntime.listSessions();
@@ -775,7 +779,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
         ai: { appServer },
       },
     ];
-  };
+  }
   const aiSessionResume = new AiSessionResumeCoordinator({
     history: aiSessionHistory,
     registry: aiSessions,

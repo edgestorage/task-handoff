@@ -198,6 +198,7 @@ import { Button } from "../../../components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
 import { ScrollArea } from "../../../components/ui/scroll-area";
 import RepositoryErrorNotice from "./RepositoryErrorNotice.vue";
+import { createBrowserUuid } from "../../../lib/random-id";
 
 const props = withDefaults(defineProps<{
   aiAgent?: "codex" | "claude";
@@ -346,7 +347,7 @@ async function createManagedWorktreeSession() {
       agent: props.aiAgent,
       worktree: { mode: "new-branch", branchName, startRef, expectedSnapshotId: worktrees.value.snapshotId },
       message,
-      clientRequestId: crypto.randomUUID(),
+      clientRequestId: createBrowserUuid(),
     });
     emit("aiSessionStarted", result);
     createBranchName.value = "";
@@ -394,7 +395,7 @@ async function startAiSession(worktree: RepositoryWorktree) {
         worktreeId: worktree.id,
       },
       message,
-      clientRequestId: crypto.randomUUID(),
+      clientRequestId: createBrowserUuid(),
     });
     emit("aiSessionStarted", result);
     startingComposerWorktreeId.value = "";

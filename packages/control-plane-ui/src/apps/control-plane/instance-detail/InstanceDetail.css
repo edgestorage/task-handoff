@@ -4,7 +4,7 @@
   height: 100%;
   min-height: 0;
   overflow: hidden;
-  padding: 18px;
+  padding: 14px;
 }
 
 .instance-detail-layout {
@@ -44,33 +44,45 @@
 
 .detail-head {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 16px;
-  margin-bottom: 14px;
+  margin-bottom: 10px;
 }
 
 .detail-head p {
-  margin: 0 0 3px;
+  margin: 0;
   color: var(--text-muted);
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 400;
 }
 
-.detail-head > div:first-child {
+.detail-identity {
   flex: 1 1 auto;
   min-width: 0;
 }
 
-.detail-head span {
+.detail-meta {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.detail-meta span,
+.detail-identity > .image-provisioning-status {
   display: block;
   max-width: 640px;
   overflow: hidden;
   color: var(--text-muted);
   font-size: 12px;
-  font-weight: 650;
+  font-weight: 400;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.detail-meta span[aria-hidden="true"] {
+  flex: none;
 }
 
 .detail-name-field {
@@ -88,8 +100,8 @@
   min-width: 0;
   margin: 0 0 1px -6px;
   font: inherit;
-  font-size: 28px;
-  font-weight: 750;
+  font-size: 24px;
+  font-weight: 700;
   letter-spacing: 0;
   line-height: 1.08;
   white-space: nowrap;
@@ -290,12 +302,9 @@
   .detail-head {
     display: grid;
     grid-template-columns: 1fr;
+    align-items: start;
     gap: 8px;
     margin-bottom: 8px;
-  }
-
-  .detail-head p {
-    display: none;
   }
 
   .detail-name-button,

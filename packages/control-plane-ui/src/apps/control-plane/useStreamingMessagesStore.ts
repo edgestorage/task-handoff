@@ -244,7 +244,14 @@ export function createStreamingMessagesStore(options: StreamingMessagesStoreOpti
     const text = turn?.lastMessage ?? (activeTurn ? undefined : session.lastMessage);
     const status = aiSessionAuthoritativeMessageStatus(session, turn?.status);
     if (target?.value.itemId && authoritativeItemId && target.value.itemId !== authoritativeItemId) {
-      return;
+      if (status === "streaming") return;
+      target = ensureMessage({
+        instanceId,
+        sessionId: session.id,
+        turnId: target.value.turnId,
+        itemId: authoritativeItemId,
+      }, streamId, generatedAt);
+      activeMessage(instanceId, session.id).value = target;
     }
     if (target?.value.itemId && !authoritativeItemId && status === "streaming") {
       return;

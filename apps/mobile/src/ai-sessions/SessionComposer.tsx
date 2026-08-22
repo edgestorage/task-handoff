@@ -3,6 +3,7 @@ import { BlurView } from 'expo-blur';
 import { TextInputWrapper, type PasteEventPayload } from 'expo-paste-input';
 import { Hand, Pencil, Plus, ShieldAlert, ShieldCheck, X } from 'lucide-react-native';
 import { ActivityIndicator, Animated, Easing, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { AI_SESSION_LONG_PASTE_CODE_POINT_THRESHOLD } from '@task-handoff/control-plane-client';
 
 import { SystemIcon } from '../components/SystemIcon';
 import { useMobileTheme } from '../components/theme';
@@ -88,8 +89,12 @@ export function SessionComposer(props: SessionComposerProps) {
         tint={dark ? 'systemUltraThinMaterialDark' : 'systemUltraThinMaterialLight'}
       />
       <TextInputWrapper
+        interceptTextPasteAbove={
+          props.editingLabel ? undefined : AI_SESSION_LONG_PASTE_CODE_POINT_THRESHOLD
+        }
         onPaste={(payload: PasteEventPayload) => {
           if (payload.type === 'images') props.onPasteImages(payload.uris);
+          else if (payload.type === 'text' && payload.intercepted) props.onPasteText(payload.value);
         }}
         pointerEvents="box-none"
         style={StyleSheet.absoluteFill}

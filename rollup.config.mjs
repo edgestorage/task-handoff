@@ -42,7 +42,7 @@ const plugins = [
       rewriteRelativeImportExtensions: true,
     },
   }),
-  commonjs({ transformMixedEsModules: true, extensions: [".cjs", ".js", ".ts"] }),
+  commonjs({ transformMixedEsModules: true, extensions: [".cjs", ".cts", ".js", ".ts"] }),
 ];
 
 const runtimeDependencyEntrypoints = {
