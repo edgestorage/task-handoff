@@ -231,6 +231,27 @@ test('directory controller applies node connection and instance lifecycle events
   controller.stop();
 });
 
+test('directory controller keeps the newest per-node fleet state', () => {
+  const store = new MobileDirectoryStore();
+  store.set('cp-fleet', {
+    nodeStates: [{ nodeId: 'node-1', resource: 'instances', phase: 'loading', revision: 2 }],
+  });
+  const api = { resources: {} } as unknown as ControlPlaneClient;
+  const controller = new MobileDirectoryController('cp-fleet', api, store);
+
+  expect(controller.applyEvent({
+    type: 'node.fleet.updated', topic: 'instances', scope: { nodeId: 'node-1' },
+    payload: { nodeId: 'node-1', resource: 'instances', phase: 'stale', revision: 1 },
+  })).toBe(false);
+  expect(store.profile('cp-fleet').nodeStates[0].phase).toBe('loading');
+  expect(controller.applyEvent({
+    type: 'node.fleet.updated', topic: 'instances', scope: { nodeId: 'node-1' },
+    payload: { nodeId: 'node-1', resource: 'instances', phase: 'ready', revision: 3, updatedAt: '2026-08-22T00:00:00.000Z' },
+  })).toBe(true);
+  expect(store.profile('cp-fleet').nodeStates[0].phase).toBe('ready');
+  controller.stop();
+});
+
 test('instance lifecycle actions use the server-projected availability and refresh the directory', async () => {
   const store = new MobileDirectoryStore();
   const running = ControlPlaneInstanceDirectoryEntrySchema.parse({ ...instance, availableActions: ['stop', 'restart'] });

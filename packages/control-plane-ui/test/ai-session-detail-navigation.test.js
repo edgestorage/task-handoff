@@ -43,14 +43,15 @@ test("AI session details render messages without redundant section titles", () =
   assert.match(panel, /<AiSessionConversationContent/);
   assert.match(floatingDock, /class="ai-board-floating-prompt-content"[\s\S]*?<MarkdownContent :content="displayAiSessionTitle/);
   assert.match(floatingDock, /<AiSessionConversationContent/);
-  assert.match(conversation, /<AiSessionResult[\s\S]*?:response-content="displayAiSessionResponse/);
+  assert.match(conversation, /<AiSessionResult[\s\S]*?:response-content="compactResponseContent"/);
+  assert.match(conversation, /compactResponseContent = computed\(\(\) => displayAiSessionResponse/);
   for (const detail of [panel, floatingDock]) assert.doesNotMatch(detail, /message-section-title|response-section-title/);
 });
 
 test("cards and details count the same display turns", () => {
   assert.match(panel, /return aiSessionTurns\(session\)\.length;/);
   assert.match(board, /return aiSessionTurns\(session\)\.length;/);
-  assert.match(displayHelpers, /const turns = aiSessionDisplayTurns\(session\);[\s\S]*?const turn = turns\[index\];[\s\S]*?turn\?\.contextCompactions\?\.length \? "\/compact" : "-"/);
+  assert.match(displayHelpers, /const turns = aiSessionDisplayTurns\(session\);[\s\S]*?const turn = turns\[index\];[\s\S]*?const turnPrompt = turn\?\.userPrompt\?\.trim\(\);[\s\S]*?if \(turn\?\.contextCompactions\?\.length\) return "\/compact";[\s\S]*?return session\.userPrompt\?\.trim\(\) \|\| "-";/);
 });
 
 test("current approval summary remains visible while navigating messages", () => {

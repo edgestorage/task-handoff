@@ -16,10 +16,7 @@ import type { CommandRunner } from "../shared/process/command-runner.ts";
 import type { NodeAgentStorePaths } from "./persistence/paths.ts";
 import { createId, JsonCollection } from "../shared/persistence/store.ts";
 import { globalPrefixFromModulePath } from "@task-handoff/core/core/server-update-installation";
-
-function now() {
-  return new Date().toISOString();
-}
+import { nowIso as now } from "@task-handoff/core/core/time";
 
 export function isNewerVersion(current: string | undefined, available: string) {
   if (!current) return true;

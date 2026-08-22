@@ -151,6 +151,16 @@ export const ControlPlaneTriggerTemplateInputSchema = z.object({
   policy: TriggerPolicySchema.partial().optional(),
 }).strict();
 
+// Additive mutation diagnostics. Compatibility for v0.0.21: older control
+// planes omit this field, so clients normalize it to an empty list.
+export const ControlPlaneTriggerMutationFailureSchema = z.object({
+  scope: z.enum(["node", "instance"]),
+  nodeId: z.string().trim().min(1).max(160).optional(),
+  instanceId: z.string().trim().min(1).max(160).optional(),
+  code: z.string().trim().min(1).max(160),
+  message: z.string().trim().min(1).max(4000),
+}).strip();
+
 export type TriggerSource = z.infer<typeof TriggerSourceSchema>;
 export type TriggerAction = z.infer<typeof TriggerActionSchema>;
 export type TriggerPolicy = z.infer<typeof TriggerPolicySchema>;
@@ -163,6 +173,7 @@ export type TriggerIndex = z.infer<typeof TriggerIndexSchema>;
 export type ControlPlaneTrigger = z.infer<typeof ControlPlaneTriggerSchema>;
 export type ControlPlaneTriggers = z.infer<typeof ControlPlaneTriggersSchema>;
 export type ControlPlaneTriggerTemplateInput = z.infer<typeof ControlPlaneTriggerTemplateInputSchema>;
+export type ControlPlaneTriggerMutationFailure = z.infer<typeof ControlPlaneTriggerMutationFailureSchema>;
 
 type HashInput = Pick<TriggerConfig, "source" | "action" | "policy">;
 

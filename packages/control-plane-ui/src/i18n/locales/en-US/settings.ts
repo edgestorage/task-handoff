@@ -216,7 +216,7 @@ export const settings = {
     noPairedKeys: "No control planes are paired with this node.", connectRemote: "Connect this node to another control plane",
     activeConnections: "Outbound connections · {count}", noActiveConnections: "This node has no configured outbound control-plane connections.", addConnection: "Add outbound connection", connectionPairing: "uses {keyId}",
     connectionPingRtt: "Current RTT", connectionPingP95: "Recent P95", connectionReconnects: "Reconnect streak", connectionNextRetry: "Next retry",
-    connectionMilliseconds: "{value} ms", connectionRetryIn: "in {seconds}s", connectionRetryNow: "retrying now", connectionRetryNotScheduled: "not scheduled",
+    connectionMilliseconds: "{value} ms", connectionWaitingFirstSample: "Waiting for first sample", connectionRetryIn: "in {seconds}s", connectionRetryNow: "retrying now", connectionRetryNotScheduled: "not scheduled",
     controlPlaneUrl: "Control-plane URL", joinToken: "Join token", tokenPlaceholder: "token from target control plane", name: "Name", optional: "Optional",
     connecting: "Connecting", connect: "Connect", remoteResult: "Remote connection: {status}", selectNode: "Select a node to inspect its local resources.",
     currentNotChecked: "Current {version} · not checked", updateUnsupported: "Managed update unsupported",

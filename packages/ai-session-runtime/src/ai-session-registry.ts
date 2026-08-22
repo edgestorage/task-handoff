@@ -514,7 +514,8 @@ export class AiSessionRegistry {
       }, { updatedAt: input.observedAt, meta, suppressTurnUpdate: !input.turns?.length });
     }
     this.reconciliation.clearOrphan(existing.id);
-    return this.put(reduceAiSessionSnapshot(existing, input));
+    const updated = reduceAiSessionSnapshot(existing, input);
+    return updated === existing ? existing : this.put(updated);
   }
 
   attachTranscript(id: string, transcriptPath?: string) {

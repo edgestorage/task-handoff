@@ -7,6 +7,7 @@ import type { IPty } from "node-pty";
 import { spawn as spawnPty } from "node-pty";
 import writeFileAtomic from "write-file-atomic";
 import type { TaskHandoffStoragePaths } from "@task-handoff/core/storage/paths";
+import { nowIso as now } from "@task-handoff/core/core/time";
 import { TTY_STREAM_PROTOCOL_VERSION } from "@task-handoff/protocol/app-sessions";
 import { AppCatalogRepository, executablePath } from "./catalog";
 import { builtinManagedAppRegistry } from "./managed-app-definitions";
@@ -65,10 +66,6 @@ type ManagedProcessTree = {
 
 function sessionId() {
   return `app_${Date.now().toString(36)}_${Math.random().toString(16).slice(2)}`;
-}
-
-function now() {
-  return new Date().toISOString();
 }
 
 function envFlag(name: string, fallback = false) {

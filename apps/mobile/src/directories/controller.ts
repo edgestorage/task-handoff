@@ -1,11 +1,12 @@
 import type { ControlPlaneClient } from '@task-handoff/control-plane-client';
-import { ControlPlaneInstanceLifecycleDirectoryEventSchema, ControlPlaneNodeConnectionPhaseSchema } from '@task-handoff/protocol/control-plane-directory';
+import { ControlPlaneInstanceLifecycleDirectoryEventSchema, ControlPlaneNodeConnectionPhaseSchema, ControlPlaneNodeFleetStateSchema } from '@task-handoff/protocol/control-plane-directory';
 import type { ControlPlaneInstanceAction } from '@task-handoff/protocol/control-plane-directory';
 import { safeParseResponse } from '@task-handoff/protocol/response-validation';
 import { z } from 'zod';
 
 import { MobileDirectoryStore } from './store';
-import type { MobileControlPlaneEvent, MobileControlPlaneEventConnection, MobileControlPlaneTransport, MobileControlPlaneTransportError } from '../control-plane/transport';
+import { MobileControlPlaneTransportError } from '../control-plane/transport';
+import type { MobileControlPlaneEvent, MobileControlPlaneEventConnection, MobileControlPlaneTransport } from '../control-plane/transport';
 import { MobileReconnectBackoff } from '../platform/reconnect';
 
 const NodeConnectionObservationSchema = z.object({
@@ -48,15 +49,20 @@ export class MobileDirectoryController {
     try {
       if (!options.managed) await this.transport?.revalidate?.();
       if (epoch !== this.epoch || !this.store.isGeneration(this.controlPlaneId, this.storeGeneration)) return false;
-      const [nodes, instances] = await Promise.all([
-        this.client.resources.nodes(signal),
-        this.client.resources.instanceBoard(signal),
-      ]);
+      const nodesPromise = this.client.resources.nodes(signal).then((nodes) => {
+        if (epoch === this.epoch && this.store.isGeneration(this.controlPlaneId, this.storeGeneration)) {
+          this.store.set(this.controlPlaneId, { nodes });
+        }
+        return nodes;
+      });
+      const directoryPromise = this.instanceDirectory(signal);
+      const [nodes, directory] = await Promise.all([nodesPromise, directoryPromise]);
       if (epoch !== this.epoch || !this.store.isGeneration(this.controlPlaneId, this.storeGeneration)) return false;
       this.store.set(this.controlPlaneId, {
         nodes,
-        instances,
-        phase: 'ready',
+        instances: directory.data,
+        nodeStates: directory.meta?.nodeStates || [],
+        phase: directoryPhase(directory.meta?.nodeStates || [], directory.data.length),
         updatedAt: new Date().toISOString(),
         error: undefined,
       });
@@ -186,6 +192,18 @@ export class MobileDirectoryController {
       if (applied) this.scheduleRefresh();
       return applied;
     }
+    if (event.type === 'node.fleet.updated') {
+      const parsed = safeParseResponse(ControlPlaneNodeFleetStateSchema, event.payload);
+      if (!parsed.success || event.scope?.nodeId !== parsed.data.nodeId) return false;
+      const current = this.store.profile(this.controlPlaneId);
+      const previous = current.nodeStates.find((state) => state.nodeId === parsed.data.nodeId && state.resource === parsed.data.resource);
+      if (previous?.revision !== undefined && parsed.data.revision !== undefined && previous.revision >= parsed.data.revision) return false;
+      this.store.set(this.controlPlaneId, {
+        nodeStates: [...current.nodeStates.filter((state) => state.nodeId !== parsed.data.nodeId || state.resource !== parsed.data.resource), parsed.data],
+      });
+      this.scheduleRefresh();
+      return true;
+    }
     if (event.topic === 'nodes' || event.topic === 'node.state' || event.topic === 'instances') {
       this.scheduleRefresh();
       return true;
@@ -219,9 +237,37 @@ export class MobileDirectoryController {
   }
 
   private async refreshDirectories(epoch: number, signal?: AbortSignal) {
-    const [nodes, instances] = await Promise.all([this.client.resources.nodes(signal), this.client.resources.instanceBoard(signal)]);
+    const nodesPromise = this.client.resources.nodes(signal).then((nodes) => {
+      if (!signal?.aborted && epoch === this.epoch && this.store.isGeneration(this.controlPlaneId, this.storeGeneration)) {
+        this.store.set(this.controlPlaneId, { nodes });
+      }
+      return nodes;
+    });
+    const [nodes, directory] = await Promise.all([nodesPromise, this.instanceDirectory(signal)]);
     if (signal?.aborted || epoch !== this.epoch || !this.store.isGeneration(this.controlPlaneId, this.storeGeneration)) return;
-    this.store.set(this.controlPlaneId, { nodes, instances, phase: 'ready', updatedAt: new Date().toISOString(), error: undefined });
+    this.store.set(this.controlPlaneId, {
+      nodes,
+      instances: directory.data,
+      nodeStates: directory.meta?.nodeStates || [],
+      phase: directoryPhase(directory.meta?.nodeStates || [], directory.data.length),
+      updatedAt: new Date().toISOString(),
+      error: undefined,
+    });
+  }
+
+  private async instanceDirectory(signal?: AbortSignal) {
+    const progressive = this.client.resources.instanceDirectory;
+    if (typeof progressive !== 'function') {
+      return { data: await this.client.resources.instanceBoard(signal), meta: undefined };
+    }
+    try {
+      return await progressive(signal);
+    } catch (cause) {
+      // Compatibility for v0.0.21: progressive directory query parameters are
+      // rejected by its strict route schema, so retain its blocking snapshot.
+      if (!(cause instanceof MobileControlPlaneTransportError) || cause.status !== 400) throw cause;
+      return { data: await this.client.resources.instanceBoard(signal), meta: undefined };
+    }
   }
 
   private scheduleReconnect(epoch: number) {
@@ -233,4 +279,12 @@ export class MobileDirectoryController {
       void this.start().catch(() => undefined);
     }, delay);
   }
+}
+
+function directoryPhase(states: readonly { resource: string; phase: string }[], instanceCount: number) {
+  const instanceStates = states.filter((state) => state.resource === 'instances');
+  if (instanceStates.some((state) => state.phase === 'error') && !instanceCount) return 'error' as const;
+  if (instanceStates.some((state) => state.phase === 'stale' || state.phase === 'error')) return 'stale' as const;
+  if (instanceStates.some((state) => state.phase === 'loading' || state.phase === 'uninitialized')) return instanceCount ? 'stale' as const : 'loading' as const;
+  return 'ready' as const;
 }

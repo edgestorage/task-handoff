@@ -30,6 +30,7 @@ import type {
   ControlPlaneAiSessions,
   ControlPlaneTriggers,
   CreateControlPlaneTriggerInput,
+  ControlPlaneTriggerMutationResult,
   ChatBridgeConfig,
   ChatChannel,
   AiSessionUploadedAttachment,
@@ -211,7 +212,11 @@ export function useImageOptionsQuery() {
 }
 
 function fetchModelRegistry(signal?: AbortSignal) {
-  return getApiData<FederatedModelRegistry>("models", { signal });
+  return getApiData<FederatedModelRegistry>("models?progressive=true", { signal }).catch((error) => {
+    // Compatibility for v0.0.21: progressive fleet reads are additive.
+    if (!(error instanceof ApiError) || error.status !== 400 || error.code !== "VALIDATION_ERROR") throw error;
+    return getApiData<FederatedModelRegistry>("models", { signal });
+  });
 }
 
 export function modelConfigsFromRegistry(registry: FederatedModelRegistry) {
@@ -333,7 +338,11 @@ export function listNodeUpdateJobs(nodeId: string) {
 }
 
 function fetchNodeRuntimesPayload(signal?: AbortSignal) {
-  return getApiPayload<NodeRuntime[], NodeRuntimesPayload["meta"]>("node-runtimes", { signal });
+  return getApiPayload<NodeRuntime[], NodeRuntimesPayload["meta"]>("node-runtimes?progressive=true", { signal }).catch((error) => {
+    // Compatibility for v0.0.21: progressive fleet reads are additive.
+    if (!(error instanceof ApiError) || error.status !== 400 || error.code !== "VALIDATION_ERROR") throw error;
+    return getApiPayload<NodeRuntime[], NodeRuntimesPayload["meta"]>("node-runtimes", { signal });
+  });
 }
 
 export function useNodeRuntimesQuery() {
@@ -438,14 +447,18 @@ export function deleteNodeControlPlaneConnection(nodeId: string, connectionId: s
 }
 
 async function fetchInstanceBoardPayload(signal?: AbortSignal, instanceId = "") {
-  const route = instanceId ? `instance-board?instanceId=${encodeURIComponent(instanceId)}` : "instance-board";
+  const params = new URLSearchParams();
+  params.set("progressive", "true");
+  if (instanceId) params.set("instanceId", instanceId);
+  const route = `instance-board?${params.toString()}`;
   try {
     return await getApiPayload<InstanceBoardItem[], InstanceBoardPayload["meta"]>(route, { signal });
   } catch (error) {
-    // Compatibility for v0.0.21: its strict query schema rejects instanceId.
-    if (!instanceId || !(error instanceof ApiError) || error.status !== 400 || error.code !== "VALIDATION_ERROR") throw error;
+    // Compatibility for v0.0.21: its strict query schema rejects progressive
+    // and instanceId, so current clients fall back to its blocking snapshot.
+    if (!(error instanceof ApiError) || error.status !== 400 || error.code !== "VALIDATION_ERROR") throw error;
     const payload = await getApiPayload<InstanceBoardItem[], InstanceBoardPayload["meta"]>("instance-board", { signal });
-    return { ...payload, data: payload.data.filter((item) => item.id === instanceId) };
+    return { ...payload, data: instanceId ? payload.data.filter((item) => item.id === instanceId) : payload.data };
   }
 }
 
@@ -459,11 +472,16 @@ export function instanceBoardQueryOptions(instanceId: MaybeRefOrGetter<string> =
 }
 
 export function useInstanceBoardQuery(instanceId: MaybeRefOrGetter<string> = "", enabled: MaybeRefOrGetter<boolean> = true) {
-  return useQuery({
+  const query = useQuery({
     ...instanceBoardQueryOptions(instanceId),
-    select: (payload) => payload.data,
     enabled: computed(() => toValue(enabled)),
   });
+  return {
+    ...query,
+    data: computed(() => query.data.value?.data),
+    nodeStates: computed(() => query.data.value?.meta?.nodeStates || []),
+    nodeErrors: computed(() => query.data.value?.meta?.nodeErrors || []),
+  };
 }
 
 export function getInstanceResourceMetrics(instanceId: string) {
@@ -477,7 +495,15 @@ export function useInstanceBoardPayloadQuery() {
 export function useInstanceDirectoryQuery(enabled: MaybeRefOrGetter<boolean> = true) {
   return useQuery({
     queryKey: controlPlaneQueryKeys.instanceDirectory,
-    queryFn: ({ signal }) => sharedControlPlaneClient.resources.instanceBoard(signal) as Promise<ControlPlaneInstanceResourceEntry[]>,
+    queryFn: async ({ signal }) => {
+      try {
+        return (await sharedControlPlaneClient.resources.instanceDirectory(signal)).data as ControlPlaneInstanceResourceEntry[];
+      } catch (error) {
+        // Compatibility for v0.0.21: progressive directory query parameters are additive.
+        if (!(error instanceof ApiError) || error.status !== 400 || error.code !== "VALIDATION_ERROR") throw error;
+        return sharedControlPlaneClient.resources.instanceBoard(signal) as Promise<ControlPlaneInstanceResourceEntry[]>;
+      }
+    },
     enabled: computed(() => toValue(enabled)),
     refetchInterval: 15_000,
     retry: false,
@@ -577,11 +603,11 @@ export function createControlPlaneTrigger(input: CreateControlPlaneTriggerInput)
 }
 
 export function updateControlPlaneTrigger(configHash: string, input: CreateControlPlaneTriggerInput) {
-  return putApiData<Record<string, unknown>>(`triggers/${configHash}`, input);
+  return putApiData<ControlPlaneTriggerMutationResult>(`triggers/${configHash}`, input);
 }
 
 export function deleteControlPlaneTrigger(configHash: string) {
-  return deleteApiData<Record<string, unknown>>(`triggers/${configHash}`);
+  return deleteApiData<ControlPlaneTriggerMutationResult>(`triggers/${configHash}`);
 }
 
 export function applyControlPlaneTrigger(configHash: string, instanceIds: string[]) {

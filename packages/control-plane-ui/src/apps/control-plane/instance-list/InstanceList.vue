@@ -23,6 +23,7 @@
           :instances="instances"
           :is-instance-action-busy="isInstanceActionBusy"
           :loading="loading"
+          :node-states="nodeStates"
           :nodes="nodes"
           :open-menu-id="openMenuId"
           :sort-mode="sortMode"
@@ -75,7 +76,7 @@
         <input :value="filter" :placeholder="t('instances.list.search')" @input="$emit('update:filter', ($event.target as HTMLInputElement).value)" />
       </label>
 
-      <div v-if="loading && !hasConnectingNodes" class="list-empty">{{ t("instances.list.loading") }}</div>
+      <div v-if="loading && !nodes.length" class="list-empty">{{ t("instances.list.loading") }}</div>
       <div v-else-if="error" class="list-empty error">{{ error }}</div>
       <ScrollArea v-else class="instance-rows">
         <div class="instance-rows-content">
@@ -89,8 +90,8 @@
           >
             <Server class="instance-group-icon" :size="15" />
             <span class="instance-group-name">{{ group.label }}</span>
-            <span v-if="group.connectionLabel" class="instance-group-status" :data-phase="group.connectionPhase">
-              <LoaderCircle v-if="group.connectionPhase !== 'offline'" :size="13" aria-hidden="true" />
+            <span v-if="group.connectionLabel" class="instance-group-status" :data-phase="group.resourcePhase || group.connectionPhase">
+              <LoaderCircle v-if="group.resourcePhase === 'loading' || group.resourcePhase === 'uninitialized' || (group.connectionPhase && group.connectionPhase !== 'offline')" :size="13" aria-hidden="true" />
               {{ group.connectionLabel }}
             </span>
             <ChevronRight class="instance-group-chevron" :class="{ open: !collapsedGroups[group.key] }" :size="15" />
@@ -220,6 +221,10 @@
           </template>
         </template>
         <div v-if="!instances.length && !loading" class="list-empty">{{ t("instances.list.noMatches") }}</div>
+        <div v-if="hasPendingNodes && !groupByNode" class="instance-list-pending">
+          <LoaderCircle :size="13" aria-hidden="true" />
+          {{ t("instances.list.nodesStillLoading") }}
+        </div>
         </div>
       </ScrollArea>
     </template>
@@ -231,7 +236,7 @@
 import { computed, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { Boxes, ChevronRight, Container, Download, ExternalLink, Laptop, LoaderCircle, MoreHorizontal, PackagePlus, PanelLeftClose, PanelLeftOpen, Play, Plus, RotateCw, Search, Server, Settings, Square, Trash2, Upload } from "@lucide/vue";
-import type { InstanceBoardItem, Node } from "../../../api/types";
+import type { InstanceBoardItem, Node, NodeFleetResourceState } from "../../../api/types";
 import type { ConfigSyncDirection } from "@task-handoff/protocol/config-sync";
 import { Button } from "../../../components/ui/button";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "../../../components/ui/context-menu";
@@ -260,6 +265,7 @@ const props = defineProps<{
   instances: InstanceBoardItem[];
   isInstanceActionBusy: (instance: InstanceBoardItem) => boolean;
   loading: boolean;
+  nodeStates?: NodeFleetResourceState[];
   nodes: Node[];
   openMenuId: string;
   sortMode: InstanceListSortMode;
@@ -300,27 +306,38 @@ function instanceRuntimeLabel(instance: InstanceBoardItem) {
 }
 
 const collapsedGroups = reactive<Record<string, boolean>>({});
-const hasConnectingNodes = computed(() => props.groupByNode && props.nodes.some((node) => node.connectionPhase === "connecting" || node.connectionPhase === "handshaking" || node.connectionPhase === "reconnecting"));
+const instanceNodeStates = computed(() => new Map((props.nodeStates || [])
+  .filter((state) => state.resource === "instances")
+  .map((state) => [state.nodeId, state])));
+const hasPendingNodes = computed(() => props.nodes.some((node) => {
+  const phase = instanceNodeStates.value.get(node.id)?.phase;
+  return phase === "uninitialized" || phase === "loading";
+}));
 
 const instanceGroups = computed(() => {
   if (!props.groupByNode) {
     return [{ key: "__all__", label: t("instances.board.allNodes"), instances: props.instances }];
   }
-  const groups = new Map<string, { key: string; label: string; instances: InstanceBoardItem[]; connectionPhase?: Node["connectionPhase"]; connectionLabel?: string }>();
+  const groups = new Map<string, { key: string; label: string; instances: InstanceBoardItem[]; connectionPhase?: Node["connectionPhase"]; resourcePhase?: NodeFleetResourceState["phase"]; connectionLabel?: string }>();
   for (const node of props.nodes) {
-    const connectionLabel = node.connectionPhase === "connecting" || node.connectionPhase === "handshaking"
+    const resourceState = instanceNodeStates.value.get(node.id);
+    const connectionLabel = resourceState?.phase === "uninitialized" || resourceState?.phase === "loading"
+      ? t("instances.list.nodeLoading")
+      : resourceState?.phase === "stale"
+        ? t("instances.list.nodeStale")
+        : resourceState?.phase === "error"
+          ? t("instances.list.nodeLoadFailed")
+          : node.connectionPhase === "connecting" || node.connectionPhase === "handshaking"
       ? t("instances.list.nodeConnecting")
       : node.connectionPhase === "reconnecting"
         ? t("instances.list.nodeReconnecting")
         : undefined;
-    if (connectionLabel) {
-      groups.set(node.id, { key: node.id, label: node.name || node.id, instances: [], connectionPhase: node.connectionPhase, connectionLabel });
-    }
+    groups.set(node.id, { key: node.id, label: node.name || node.id, instances: [], connectionPhase: node.connectionPhase, resourcePhase: resourceState?.phase, connectionLabel });
   }
   for (const instance of props.instances) {
     const key = instance.nodeId || "__unknown__";
     const node = props.nodes.find((candidate) => candidate.id === key);
-    const current = groups.get(key) || { key, label: instanceNodeLabel(instance), instances: [], connectionPhase: node?.connectionPhase };
+    const current = groups.get(key) || { key, label: instanceNodeLabel(instance), instances: [], connectionPhase: node?.connectionPhase, resourcePhase: instanceNodeStates.value.get(key)?.phase };
     current.instances.push(instance);
     groups.set(key, current);
   }
@@ -583,12 +600,29 @@ function openNewInstanceFromTemporaryList() {
   animation: instance-group-connecting-spin 900ms linear infinite;
 }
 
+.instance-list-pending {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 400;
+  padding: 8px 4px 4px;
+}
+
+.instance-list-pending svg {
+  flex: 0 0 auto;
+  animation: instance-group-connecting-spin 900ms linear infinite;
+}
+
 @keyframes instance-group-connecting-spin {
   to { transform: rotate(360deg); }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .instance-group-status svg {
+  .instance-group-status svg,
+  .instance-list-pending svg {
     animation: none;
   }
 }

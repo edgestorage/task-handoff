@@ -27,6 +27,7 @@ test("AI session UI uses authoritative Direct create, Open App, and close action
   assert.match(createNewSession, /\.\.\.\(cwdFolderId \? \{ cwdFolderId \} : \{\}\)/);
   assert.match(panel, /:disabled="!newSessionFolder \|\| \(newSessionWorkspaceLoading && !newSessionWorkspace\)"/);
   assert.match(panel, /source\.localFolderId/);
+  assert.match(panel, /selectableInstanceCwdFolders\(props\.instance, folders\)/);
   assert.match(panel, /relativeNodePathSegments\(folder\.path, sourcePath\)\?\.length === 0/);
   assert.doesNotMatch(createNewSession, /runtime-path/);
   assert.match(panel, /emit\("selectAiSession", props\.instance\.id, result\.aiSessionId\)/);

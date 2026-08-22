@@ -150,7 +150,7 @@
         v-if="!standaloneMode && instanceViewMode && !settingsMode && instancesSidebarVisible"
         v-model:filter="instanceFilter"
         :active-action-label="activeActionLabel"
-        :active-instance-id="activeInstance?.id"
+        :active-instance-id="activeInstanceId"
         :can-export-config="canExportConfig"
         :collapsed="instancesCollapsed"
         :error="board.error.value ? errorText(board.error.value) : ''"
@@ -158,7 +158,8 @@
         :instance-display-name="instanceDisplayName"
         :instances="filteredInstances"
         :is-instance-action-busy="isInstanceActionBusy"
-        :loading="board.isLoading.value"
+        :loading="nodes.isLoading.value"
+        :node-states="board.nodeStates.value"
         :nodes="nodes.data.value || []"
         :open-menu-id="openInstanceMenuId"
         v-model:sort-mode="instanceSortMode"
@@ -185,7 +186,7 @@
         v-model:sort-mode="instanceSortMode"
         v-model:status-filter="boardStatusFilter"
         :active-action-label="activeActionLabel"
-        :active-instance-id="activeInstance?.id"
+        :active-instance-id="activeInstanceId"
         :all-filter-value="ALL_BOARD_FILTER_VALUE"
         :app-options="boardAppOptions"
         :board-card-detail="boardCardDetail"
@@ -275,7 +276,7 @@
         :left-session-tabs="leftOrderedSessionTabs"
         :launchable-apps="launchableApps"
         :launching-app="launchingApp"
-        :loading="board.isLoading.value || (standaloneMode && !standaloneOwnershipResolved)"
+        :loading="board.isLoading.value || selectedInstancePending || (standaloneMode && (!standaloneOwnershipResolved || standaloneBoardPending))"
         :standalone="standaloneMode"
         :resource-metrics="activeInstanceResourceMetrics"
         :resource-metrics-error="activeInstanceResourceMetricsError"
@@ -505,15 +506,26 @@ const controlPlane = useControlPlaneStatusQuery();
 const sessionQueryInstanceId = computed(() => standaloneMode.value ? standaloneInstanceId.value : "");
 const sessionQueriesEnabled = computed(() => !standaloneMode.value || standaloneOwnershipReady.value);
 const board = useInstanceBoardQuery(sessionQueryInstanceId, sessionQueriesEnabled);
+const instanceDirectoryComplete = computed(() => {
+  if (!board.isSuccess.value) return false;
+  const instanceStates = board.nodeStates.value.filter((state) => state.resource === "instances");
+  // Compatibility for v0.0.21: its blocking board response has no nodeStates.
+  return instanceStates.length === 0 || instanceStates.every((state) => state.phase === "ready");
+});
 const instanceDirectory = useInstanceDirectoryQuery(standaloneMode);
 const controlPlaneAiSessions = useControlPlaneAiSessionsQuery(sessionQueryInstanceId, sessionQueriesEnabled);
 const controlPlaneAppSessions = useControlPlaneAppSessionsQuery(sessionQueryInstanceId, sessionQueriesEnabled);
 const nodes = useNodesQuery(computed(() => !standaloneMode.value));
+const standaloneBoardPending = computed(() => standaloneMode.value
+  && !(board.data.value || []).some((instance) => instance.id === standaloneInstanceId.value)
+  && board.nodeStates.value.some((state) => state.resource === "instances" && (state.phase === "uninitialized" || state.phase === "loading")));
 const workbenchLoadingOverlayVisible = computed(() => initialWorkbenchLoadingVisible.value
   || (standaloneMode.value && instanceSwitchLoadingVisible.value));
 
 watch(
-  () => (standaloneMode.value && !standaloneOwnershipResolved.value) || board.isLoading.value,
+  () => standaloneMode.value
+    ? !standaloneOwnershipResolved.value || board.isLoading.value || standaloneBoardPending.value
+    : nodes.isLoading.value,
   (loading) => {
     if (loading || initialWorkbenchLoadingFinished.value) return;
     initialWorkbenchLoadingFinished.value = true;
@@ -651,8 +663,12 @@ const {
   instances: boardInstancesWithAiSessions,
   selection: standaloneMode.value
     ? { mode: "standalone", activeInstanceId: standaloneInstanceId }
-    : { mode: "persistent" },
+    : { mode: "persistent", directoryComplete: instanceDirectoryComplete },
 });
+const selectedInstancePending = computed(() => !standaloneMode.value
+  && Boolean(activeInstanceId.value)
+  && !activeInstance.value
+  && !instanceDirectoryComplete.value);
 const nodeLocalFolderNodeIds = ref<string[]>([]);
 watch([sortedInstances, activeInstanceId], ([instances]) => {
   const visibleInstances = standaloneMode.value && activeInstance.value ? [activeInstance.value] : instances;
@@ -680,6 +696,7 @@ const standaloneDetailError = computed(() => {
   if (!standaloneMode.value) return "";
   if (!standaloneInstanceId.value) return t("instances.window.invalidRoute");
   if (standaloneOwnershipConflict.value) return t("instances.window.alreadyOpen");
+  if (standaloneBoardPending.value) return "";
   if (standaloneOwnershipResolved.value && !activeInstance.value) return t("instances.window.instanceUnavailable");
   return "";
 });
@@ -741,7 +758,7 @@ const boardAppOptions = computed(() => {
 const activeNodeLocalFolders = computed(() => activeInstance.value ? nodeLocalFoldersByNodeId.value[activeInstance.value.nodeId] || [] : []);
 const configSyncInstance = computed(() => sortedInstances.value.find((instance) => instance.id === configSyncInstanceId.value));
 const topbarKicker = computed(() => (settingsMode.value ? t("navigation.settings") : t("common.productName")));
-const selectedInstanceId = computed(() => standaloneMode.value ? standaloneInstanceId.value : activeInstance.value?.id || "");
+const selectedInstanceId = computed(() => standaloneMode.value ? standaloneInstanceId.value : activeInstanceId.value);
 const topbarTitle = computed(() => {
   if (!settingsMode.value) {
     const selectedDetail = !standaloneMode.value || activeInstance.value?.id === standaloneInstanceId.value

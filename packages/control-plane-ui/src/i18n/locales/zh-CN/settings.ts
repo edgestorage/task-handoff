@@ -218,7 +218,7 @@ export const settings = {
     noPairedKeys: "此节点没有已配对的控制面板。", connectRemote: "将此节点连接到另一个控制面板",
     activeConnections: "主动连接配置 · {count}", noActiveConnections: "此节点没有已配置的控制面板主动连接。", addConnection: "添加主动连接", connectionPairing: "使用密钥 {keyId}",
     connectionPingRtt: "当前 RTT", connectionPingP95: "近期 P95", connectionReconnects: "连续重连", connectionNextRetry: "下次重试",
-    connectionMilliseconds: "{value} 毫秒", connectionRetryIn: "{seconds} 秒后", connectionRetryNow: "即将重试", connectionRetryNotScheduled: "未安排",
+    connectionMilliseconds: "{value} 毫秒", connectionWaitingFirstSample: "等待首个样本", connectionRetryIn: "{seconds} 秒后", connectionRetryNow: "即将重试", connectionRetryNotScheduled: "未安排",
     controlPlaneUrl: "控制面板 URL", joinToken: "加入 token", tokenPlaceholder: "目标控制面板提供的 token", name: "名称", optional: "可选",
     connecting: "正在连接", connect: "连接", remoteResult: "远程连接：{status}", selectNode: "请选择节点以查看其本地资源。",
     currentNotChecked: "当前版本 {version} · 尚未检查", updateUnsupported: "不支持托管更新",

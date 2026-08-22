@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   ControlPlaneTriggerTemplateInputSchema,
+  ControlPlaneTriggerMutationFailureSchema,
   ControlPlaneTriggersSchema,
   TriggerConfigSchema,
   TriggerDeploymentSchema,
@@ -22,6 +23,7 @@ const TriggerMutationResultSchema = z.object({
   configHash: TriggerConfigSchema.shape.configHash.optional(),
   deletedTemplate: z.boolean().optional(),
   results: z.array(z.unknown()).optional(),
+  partialFailures: z.array(ControlPlaneTriggerMutationFailureSchema).default([]),
 }).strip();
 
 export function createControlPlaneTriggersApi(transport: ControlPlaneClientTransport) {

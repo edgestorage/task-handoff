@@ -5,10 +5,7 @@ import {
 } from "@task-handoff/protocol/control-plane";
 import { JsonCollection } from "../../shared/persistence/store.ts";
 import type { NodeAgentStorePaths } from "../persistence/paths.ts";
-
-function now() {
-  return new Date().toISOString();
-}
+import { nowIso as now } from "@task-handoff/core/core/time";
 
 export class EnvironmentTemplateStore {
   private readonly records: JsonCollection<EnvironmentTemplate>;

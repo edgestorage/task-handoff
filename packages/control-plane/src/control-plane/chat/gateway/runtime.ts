@@ -513,7 +513,7 @@ export class ControlPlaneChatGatewayRuntime {
   }
 
   private async handleLarkMessage(bridge: ChatBridgeConfig, runtime: LarkRuntimeState, message: NormalizedMessage) {
-    const allowed = this.larkAllowed(bridge, message.senderId);
+    const allowed = this.bindOrAllowChatUser(bridge, message.senderId);
     const text = String(message.content || "").trim();
     if (!allowed || !text) {
       this.logWarn({
@@ -627,7 +627,7 @@ export class ControlPlaneChatGatewayRuntime {
 
   private async handleLarkCardAction(bridge: ChatBridgeConfig, runtime: LarkRuntimeState, event: CardActionEvent) {
     const userId = event.operator.openId || event.operator.userId;
-    if (!this.larkAllowed(bridge, userId)) {
+    if (!this.bindOrAllowChatUser(bridge, userId)) {
       this.logWarn({
         bridgeId: bridge.id,
         chatId: event.chatId,
@@ -700,12 +700,12 @@ export class ControlPlaneChatGatewayRuntime {
   private async handleDingdingRobotMessage(bridge: ChatBridgeConfig, runtime: DingdingRuntimeBridge, message: DWClientDownStream) {
     const event = parseDingdingRobotEvent(message.data);
     runtime.client.socketCallBackResponse(message.headers.messageId, {});
-    if (!event || !this.dingdingAllowed(bridge, event.senderId)) {
+    if (!event || !this.bindOrAllowChatUser(bridge, event.senderId)) {
       this.logWarn({
         bridgeId: bridge.id,
         hasEvent: Boolean(event),
         senderId: event?.senderId,
-        allowed: event ? this.dingdingAllowed(bridge, event.senderId) : undefined,
+        allowed: event ? this.bindOrAllowChatUser(bridge, event.senderId) : undefined,
       }, "dingding robot message ignored");
       return;
     }
@@ -849,7 +849,7 @@ export class ControlPlaneChatGatewayRuntime {
 
   private async handleDingdingCardCallback(bridge: ChatBridgeConfig, runtime: DingdingRuntimeBridge, message: DWClientDownStream) {
     const event = parseDingdingCardEvent(message.data);
-    if (!this.dingdingAllowed(bridge, event.userId)) {
+    if (!this.bindOrAllowChatUser(bridge, event.userId)) {
       return dingdingCardUpdateResponse("not authorized", undefined, "unauthorized", event.body, event.params);
     }
     const chatId = event.chatId || stringSetting(bridge.defaultChatId);
@@ -1023,7 +1023,7 @@ export class ControlPlaneChatGatewayRuntime {
         });
         continue;
       }
-      if (!this.telegramAllowed(bridge, update.userId)) {
+      if (!this.bindOrAllowChatUser(bridge, update.userId)) {
         continue;
       }
       const attachments = await telegramMessageAttachmentsWithDownloadedImages({
@@ -1122,7 +1122,7 @@ export class ControlPlaneChatGatewayRuntime {
     const chat = asRecord(message.chat);
     const chatId = chat.id !== undefined ? String(chat.id) : bridge.defaultChatId;
     const userId = from.id !== undefined ? String(from.id) : undefined;
-    if (!chatId || !this.telegramAllowed(bridge, userId)) {
+    if (!chatId || !this.bindOrAllowChatUser(bridge, userId)) {
       return;
     }
     if (await this.telegramAiSessionCallbacks.tryHandle(data, {
@@ -1248,7 +1248,7 @@ export class ControlPlaneChatGatewayRuntime {
     return parseChatGatewayCallbackAction(data, (token, expectedType) => this.service.resolveChatActionToken(token, expectedType));
   }
 
-  private dingdingAllowed(bridge: ChatBridgeConfig, userId: string | undefined) {
+  private bindOrAllowChatUser(bridge: ChatBridgeConfig, userId: string | undefined) {
     const normalized = String(userId || "").trim();
     if (!normalized) {
       return false;
@@ -1256,35 +1256,7 @@ export class ControlPlaneChatGatewayRuntime {
     if (bridge.allowedUserIds.length === 0) {
       bridge.allowedUserIds = [normalized];
       this.updateChatBridge(bridge.id, { allowedUserIds: bridge.allowedUserIds });
-      this.logInfo({ bridgeId: bridge.id, userId: normalized }, "dingding user bound");
-      return true;
-    }
-    return bridge.allowedUserIds.includes(normalized);
-  }
-
-  private larkAllowed(bridge: ChatBridgeConfig, userId: string | undefined) {
-    const normalized = String(userId || "").trim();
-    if (!normalized) {
-      return false;
-    }
-    if (bridge.allowedUserIds.length === 0) {
-      bridge.allowedUserIds = [normalized];
-      this.updateChatBridge(bridge.id, { allowedUserIds: bridge.allowedUserIds });
-      this.logInfo({ bridgeId: bridge.id, userId: normalized }, "lark user bound");
-      return true;
-    }
-    return bridge.allowedUserIds.includes(normalized);
-  }
-
-  private telegramAllowed(bridge: ChatBridgeConfig, userId: string | undefined) {
-    const normalized = String(userId || "").trim();
-    if (!normalized) {
-      return false;
-    }
-    if (bridge.allowedUserIds.length === 0) {
-      bridge.allowedUserIds = [normalized];
-      this.updateChatBridge(bridge.id, { allowedUserIds: bridge.allowedUserIds });
-      this.logInfo({ bridgeId: bridge.id, userId: normalized }, "telegram user bound");
+      this.logInfo({ bridgeId: bridge.id, channel: bridge.channel, userId: normalized }, "chat user bound");
       return true;
     }
     return bridge.allowedUserIds.includes(normalized);

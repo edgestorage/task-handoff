@@ -7,6 +7,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
 const { EventEmitter } = require("node:events");
+const zlib = require("node:zlib");
 const test = require("node:test");
 const WebSocket = require("ws");
 const { z } = require("zod");
@@ -136,6 +137,35 @@ test("control plane reports the explicit packaged version in health", async (t) 
   const health = await app.inject({ method: "GET", url: "/api/health" });
   assert.equal(health.statusCode, 200);
   assert.equal(health.json().data.build.packageVersion, "9.8.7");
+});
+
+test("control plane compresses large JSON responses but leaves small responses uncompressed", async (t) => {
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-response-compression"),
+    logger: false,
+    auth: { mode: "disabled" },
+  });
+  t.after(() => app.close());
+  app.get("/api/test-large-json-response", async () => ({ data: "x".repeat(10_000) }));
+
+  const large = await app.inject({
+    method: "GET",
+    url: "/api/test-large-json-response",
+    headers: { "accept-encoding": "gzip, deflate, br" },
+  });
+  assert.equal(large.statusCode, 200);
+  assert.equal(large.headers["content-encoding"], "br");
+  assert.equal(large.headers.vary, "accept-encoding");
+  assert.ok(large.rawPayload.length < 1000);
+  assert.deepEqual(JSON.parse(zlib.brotliDecompressSync(large.rawPayload).toString("utf8")), { data: "x".repeat(10_000) });
+
+  const small = await app.inject({
+    method: "GET",
+    url: "/api/health",
+    headers: { "accept-encoding": "gzip, deflate, br" },
+  });
+  assert.equal(small.statusCode, 200);
+  assert.equal(small.headers["content-encoding"], undefined);
 });
 
 test("pending decision callbacks are stable and resolved from the current route", () => {
@@ -9917,6 +9947,107 @@ test("aborting an active fleet query cancels its reverse-WSS node request", asyn
   assert.equal(nodeAfterAbort.body.data.connectionPhase, "healthy");
 });
 
+test("progressive instance board publishes fast node snapshots without waiting for a slow node", async (t) => {
+  const timestamp = "2026-08-22T00:00:00.000Z";
+  const instance = ControlledInstanceSchema.parse({
+    id: "inst_progressive_fast",
+    name: "Fast instance",
+    source: { type: "local-folder", path: "/workspace" },
+    sourceSnapshot: {},
+    modelSelection: {},
+    nodeId: "node_progressive_fast",
+    runtimeId: "runtime_progressive_fast",
+    target: { strategy: "node-proxy", status: "reachable", web: "http://127.0.0.1:32100", api: "http://127.0.0.1:32100/api" },
+    runtime: { labels: {} },
+    registrationToken: "instance-secret",
+    protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  });
+  const runtime = {
+    id: instance.runtimeId,
+    nodeId: instance.nodeId,
+    name: "Docker",
+    type: "docker",
+    status: "online",
+    accessStrategy: "direct-port",
+    capabilities: {},
+    labels: {},
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+  const slowResolvers = [];
+  const fetchImpl = async (url) => {
+    const parsed = new URL(String(url));
+    const route = parsed.pathname.replace(/^\/api\/node-agent/, "");
+    if (route === "/health") {
+      const nodeId = parsed.hostname === "slow-progressive.example" ? "node_progressive_slow" : "node_progressive_fast";
+      return new Response(JSON.stringify({ data: { ok: true, role: "node-agent", nodeId, protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (parsed.hostname === "slow-progressive.example") {
+      return new Promise((resolve) => slowResolvers.push(() => resolve(new Response(JSON.stringify({ data: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }))));
+    }
+    const data = route === "/instances" ? [instance] : route === "/runtimes" ? [runtime] : [];
+    return new Response(JSON.stringify({ data }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-progressive-board"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+    service: { fetchImpl },
+  });
+  t.after(() => app.close());
+  for (const [id, endpoint] of [
+    ["node_progressive_fast", "http://fast-progressive.example:8091"],
+    ["node_progressive_slow", "http://slow-progressive.example:8091"],
+  ]) {
+    const created = await json(app, "POST", "/api/nodes", {
+      id,
+      name: id,
+      connectionMode: "direct-http",
+      endpoint,
+      auth: { mode: "paired-hmac", keyId: `key_${id}`, secret: `secret_${id}` },
+    });
+    assert.equal(created.statusCode, 201, JSON.stringify(created.body));
+  }
+
+  const initial = await json(app, "GET", "/api/instance-board?progressive=true");
+  assert.equal(initial.statusCode, 200, JSON.stringify(initial.body));
+  await new Promise((resolve) => setImmediate(resolve));
+  const partial = await json(app, "GET", "/api/instance-board?progressive=true");
+  assert.deepEqual(partial.body.data.map((item) => item.id), [instance.id]);
+  const instanceStates = partial.body.meta.nodeStates.filter((state) => state.resource === "instances");
+  assert.equal(instanceStates.find((state) => state.nodeId === "node_progressive_fast").phase, "ready");
+  assert.equal(instanceStates.find((state) => state.nodeId === "node_progressive_slow").phase, "loading");
+
+  const scoped = await json(app, "GET", `/api/instance-board?instanceId=${instance.id}&progressive=true`);
+  assert.deepEqual(scoped.body.data.map((item) => item.id), [instance.id]);
+
+  let chatSettled = false;
+  const chatPromise = json(app, "POST", "/api/chat-gateway/messages", {
+    source: { channel: "telegram", chatSessionId: "progressive-chat", userId: "user-progressive" },
+    message: { text: "/instances" },
+  }).finally(() => { chatSettled = true; });
+  let sessionsSettled = false;
+  const sessionsPromise = json(app, "GET", "/api/ai-sessions").finally(() => { sessionsSettled = true; });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(chatSettled, false);
+  assert.equal(sessionsSettled, false);
+  slowResolvers.forEach((resolve) => resolve());
+  const chat = await chatPromise;
+  assert.equal(chat.statusCode, 200, JSON.stringify(chat.body));
+  assert.deepEqual(chat.body.data.instances.map((entry) => entry.id), [instance.id]);
+  const sessions = await sessionsPromise;
+  assert.equal(sessions.statusCode, 200, JSON.stringify(sessions.body));
+  assert.deepEqual(sessions.body.data.instances.map((entry) => entry.instanceId), [instance.id]);
+});
+
 test("reverse tunnel authenticates forwarded control-plane requests to a paired node agent", async (t) => {
   const nodeId = "node_tunnel_forwarded_auth";
   const keyId = "key_tunnel_forwarded_auth";
@@ -11365,6 +11496,7 @@ test("control plane reports node-scoped image availability and preserves unknown
 });
 
 test("control plane protects project and instance images without coupling images to local folders", async (t) => {
+  let offlineImageGuard = false;
   const mock = createMockNodeAgentFetch({
     localFolders: [{
       id: "folder_image_guard",
@@ -11381,7 +11513,16 @@ test("control plane protects project and instance images without coupling images
     dataDir: tempDataDir("control-plane-image-delete-guards"),
     logger: false,
     staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
-    service: { fetchImpl: mock.fetchImpl },
+    service: {
+      fetchImpl: (url, init) => {
+        const parsed = new URL(String(url));
+        if (parsed.hostname !== "offline-image-guard.example") return mock.fetchImpl(url, init);
+        if (offlineImageGuard) return Promise.reject(Object.assign(new Error("offline"), { code: "ECONNREFUSED" }));
+        return Promise.resolve(new Response(JSON.stringify({
+          data: { ok: true, role: "node-agent", nodeId: "node_image_guard_offline", protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION },
+        }), { status: 200, headers: { "content-type": "application/json" } }));
+      },
+    },
   });
   t.after(() => app.close());
 
@@ -11422,6 +11563,18 @@ test("control plane protects project and instance images without coupling images
   const removedFolderImage = await json(app, "DELETE", "/api/images/img_folder_guard");
   assert.equal(removedFolderImage.statusCode, 200);
   assert.equal(removedFolderImage.body.data.deleted, true);
+  const offlineNode = await json(app, "POST", "/api/nodes", {
+    id: "node_image_guard_offline",
+    name: "Offline image guard",
+    connectionMode: "direct-http",
+    endpoint: "http://offline-image-guard.example:8091",
+    auth: { mode: "paired-hmac", keyId: "key_image_guard_offline", secret: "image-guard-secret" },
+  });
+  assert.equal(offlineNode.statusCode, 201, JSON.stringify(offlineNode.body));
+  offlineImageGuard = true;
+  const directoryWithOfflineNode = await json(app, "GET", "/api/instance-board");
+  assert.equal(directoryWithOfflineNode.statusCode, 200, JSON.stringify(directoryWithOfflineNode.body));
+  assert.equal(directoryWithOfflineNode.body.meta.nodeStates.find((state) => state.nodeId === "node_image_guard_offline" && state.resource === "instances")?.phase, "error");
   const removed = await json(app, "DELETE", "/api/images/img_unused");
   assert.equal(removed.statusCode, 200);
   assert.equal(removed.body.data.deleted, true);
@@ -12814,6 +12967,10 @@ test("control plane chat gateway binds sessions and forwards messages to active 
     }),
   });
 
+  // The test mutates the fake node agent directly, bypassing the real node
+  // session event stream that would update the control-plane aggregators.
+  const refreshedDirectory = await json(app, "GET", "/api/instance-board");
+  assert.equal(refreshedDirectory.statusCode, 200);
   const refreshedAppSessions = await json(app, "GET", "/api/app-sessions?refresh=true");
   assert.equal(refreshedAppSessions.statusCode, 200);
 
@@ -18634,6 +18791,7 @@ test("control plane aggregates ai session pending routes and proxies ai session 
   assert.equal(aiPending.kind, "approval");
   assert.match(aiPending.result, /npm install/);
 
+  const instanceReadsBeforeAiActions = mock.requests.filter((request) => request.path === "/instances" && request.method === "GET").length;
   const mentionCatalog = await json(app, "GET", `/api/controlled-instances/${created.body.data.id}/ai-sessions/ais_waiting/mentions`);
   assert.equal(mentionCatalog.statusCode, 200);
   assert.equal(mentionCatalog.body.data.candidates[0].name, "Exact / Plugin");
@@ -18649,6 +18807,10 @@ test("control plane aggregates ai session pending routes and proxies ai session 
   assert.match(mentionMessage.headers["server-timing"], /node_proxy;dur=8\.0/);
   assert.match(mentionMessage.headers["server-timing"], /node_transport;dur=/);
   assert.match(mentionMessage.headers["server-timing"], /control_plane;dur=/);
+  assert.equal(
+    mock.requests.filter((request) => request.path === "/instances" && request.method === "GET").length,
+    instanceReadsBeforeAiActions,
+  );
   const mentionForwards = requests.filter((request) => request.body.path.includes("/ai-sessions/ais_waiting/")).slice(-3);
   assert.deepEqual(mentionForwards.map((request) => [request.body.method, request.body.path, request.body.body ? JSON.parse(request.body.body) : undefined]), [
     ["GET", "/api/ai-sessions/ais_waiting/mentions", undefined],

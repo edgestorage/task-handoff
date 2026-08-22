@@ -61,6 +61,7 @@ export function NodesDirectory({ state, onOpen }: NodesDirectoryProps) {
         {!state.nodes.length ? <EmptySection loading={state.phase === 'loading'} systemImage="server.rack" /> : null}
         {state.nodes.map((node) => {
           const instances = instancesByNode.get(node.id) ?? [];
+          const fleetState = state.nodeStates.find((entry) => entry.nodeId === node.id && entry.resource === 'instances');
           return (
             <Section
               key={node.id}
@@ -87,7 +88,10 @@ export function NodesDirectory({ state, onOpen }: NodesDirectoryProps) {
                 </HStack>
               </Button>
               {instances.map((instance) => <InstanceSummaryRow instance={instance} key={instance.id} />)}
-              {!instances.length ? <Label title={t('directories.noInstancesOnNode')} systemImage="shippingbox" modifiers={[foregroundStyle({ type: 'hierarchical', style: 'secondary' })]} /> : null}
+              {!instances.length && (fleetState?.phase === 'loading' || fleetState?.phase === 'uninitialized')
+                ? <HStack spacing={9}><ProgressView /><Text modifiers={[foregroundStyle({ type: 'hierarchical', style: 'secondary' })]}>{t('directories.loading')}</Text></HStack>
+                : !instances.length ? <Label title={t('directories.noInstancesOnNode')} systemImage="shippingbox" modifiers={[foregroundStyle({ type: 'hierarchical', style: 'secondary' })]} /> : null}
+              {fleetState?.error ? <Text modifiers={[font({ textStyle: 'footnote' }), foregroundStyle(colors.error)]}>{fleetState.error.message}</Text> : null}
             </Section>
           );
         })}

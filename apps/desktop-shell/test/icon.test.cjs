@@ -119,6 +119,8 @@ test("Electron unpacks the server runtime needed by its bundled Node process", (
     assert.ok(packageJson.build.asarUnpack.includes(launcherAsset), `${launcherAsset} must be available as a real file`);
   }
   assert.ok(packageJson.build.files.includes("release/runtime-artifacts/**/*"));
+  assert.ok(packageJson.files.includes("shared"), "npm releases must contain shared desktop runtime sources");
+  assert.ok(packageJson.build.files.includes("shared/process-start-identity.cjs"), "Desktop packages must contain the shared process identity helper");
   assert.equal(packageJson.build.extraResources.some((entry) => entry.from === "dist"), false);
 });
 

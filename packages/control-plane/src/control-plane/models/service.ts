@@ -33,8 +33,12 @@ export class ControlPlaneModelService {
     return this.listAll().map(publicModel);
   }
 
-  async listFederated(signal?: AbortSignal) {
-    const fleet = await this.options.gateway.listFleetModels(this.options.listNodes(), { signal });
+  async listFederated(signal?: AbortSignal, progressive = false) {
+    const nodes = this.options.listNodes();
+    const fleet = progressive
+      ? this.options.gateway.readFleetModels(nodes)
+      : await this.options.gateway.listFleetModels(nodes, { signal });
+    if (progressive) void this.options.gateway.refreshFleetModels(nodes);
     const groups = new Map<string, {
       id: string;
       model: ReturnType<typeof publicModel> | NodeModelPublicRecord;

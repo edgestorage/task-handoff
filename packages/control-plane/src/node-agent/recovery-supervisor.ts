@@ -2,6 +2,7 @@ import { ControlledInstanceSchema, type ControlledInstance } from "@task-handoff
 import { instanceImagePreparationPending, type RuntimeConvergenceCoordinator } from "./runtime-convergence.ts";
 import type { RuntimeAdapterRegistry } from "./runtimes/adapters.ts";
 import type { NodeAgentState } from "./state.ts";
+import { nowIso as now } from "@task-handoff/core/core/time";
 
 const RESTORABLE_INSTANCE_STATUSES = new Set<ControlledInstance["status"]>([
   "provisioning",
@@ -35,10 +36,6 @@ type Options = {
   nowMs?: () => number;
   runInstanceOperation?<T>(instanceId: string, operation: () => Promise<T>): Promise<T>;
 };
-
-function now() {
-  return new Date().toISOString();
-}
 
 function resumableLocalShutdownState(instance: ControlledInstance) {
   return ControlledInstanceSchema.parse({

@@ -8,6 +8,7 @@ import WebSocket from "ws";
 import type { FastifyServerOptions } from "fastify";
 import { z } from "zod";
 import { processStartIdentity } from "@task-handoff/core/core/process-singleton-lock";
+import { nowIso as now } from "@task-handoff/core/core/time";
 import { DEFAULT_MAINTENANCE_INTERVAL_MS } from "@task-handoff/core/storage/retention";
 import {
   CONTROL_PLANE_PROTOCOL_VERSION,
@@ -250,10 +251,6 @@ function isPairingCompleteRoute(url: string) {
 
 function isPairingSelfRevokeRoute(url: string) {
   return url.split("?")[0] === "/api/node-agent/pairing/current";
-}
-
-function now() {
-  return new Date().toISOString();
 }
 
 

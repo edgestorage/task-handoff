@@ -1,4 +1,7 @@
 import http from "node:http";
+import { PROXY_HOP_BY_HOP_HEADERS, proxyWebSocketHeaders as filteredWebSocketHeaders } from "@task-handoff/core/core/http-proxy";
+
+export { proxyWebSocketProtocols } from "@task-handoff/core/core/http-proxy";
 
 const WEB_PROXY_STARTUP_ERROR_CODES = new Set(["ECONNREFUSED", "ECONNRESET", "EHOSTUNREACH"]);
 
@@ -28,7 +31,7 @@ export function kasmVncAuthorizationHeader() {
 }
 
 export function proxyHeaders(headers: http.IncomingHttpHeaders, host: string, port: number, extraHeaders: http.OutgoingHttpHeaders = {}) {
-  const blocked = new Set(["connection", "content-length", "host", "keep-alive", "proxy-authenticate", "proxy-authorization", "referer", "referrer", "te", "trailer", "transfer-encoding", "upgrade"]);
+  const blocked = new Set([...PROXY_HOP_BY_HOP_HEADERS, "host", "referer", "referrer"]);
   const isBlocked = (key: string) => {
     const lower = key.toLowerCase();
     return blocked.has(lower) || lower.startsWith("sec-ch-") || lower.startsWith("sec-fetch-");
@@ -45,17 +48,7 @@ export function proxyHeaders(headers: http.IncomingHttpHeaders, host: string, po
 }
 
 export function proxyWebSocketHeaders(headers: http.IncomingHttpHeaders, host: string, port: number, extraHeaders: http.OutgoingHttpHeaders = {}) {
-  return Object.fromEntries(Object.entries(proxyHeaders(headers, host, port, extraHeaders)).filter(([key]) => {
-    const lower = key.toLowerCase();
-    return !lower.startsWith("sec-websocket-") || lower === "sec-websocket-origin";
-  }));
-}
-
-export function proxyWebSocketProtocols(headers: http.IncomingHttpHeaders) {
-  const raw = headers["sec-websocket-protocol"];
-  const values = Array.isArray(raw) ? raw : raw ? [raw] : [];
-  const protocols = values.flatMap((value) => value.split(",").map((protocol) => protocol.trim()).filter(Boolean));
-  return protocols.length ? protocols : undefined;
+  return filteredWebSocketHeaders(proxyHeaders(headers, host, port, extraHeaders));
 }
 
 function responseHeaderValue(headers: http.IncomingHttpHeaders, key: string) {

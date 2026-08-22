@@ -72,7 +72,12 @@
               {{ imageProvisioningLabel(instance, t) }}<template v-if="instance.imageProvisioning.error"> · {{ instance.imageProvisioning.error }}</template>
             </p>
             <div class="board-card-preview" :data-interactive="interactive" :data-state="boardPreviewState(instance)">
-              <div v-if="boardSessions(instance).length > 1" class="board-session-switcher" @click.stop>
+              <div
+                v-if="boardSessions(instance).length > 1"
+                class="board-session-switcher"
+                :data-ai-preview="boardPrimarySession(instance)?.kind === 'ai' ? 'true' : undefined"
+                @click.stop
+              >
                 <DropdownMenu>
                   <DropdownMenuTrigger as-child>
                     <button type="button" class="board-session-trigger" :aria-label="t('instances.board.switchSession', { name: instanceDisplayName(instance) })">
@@ -96,15 +101,14 @@
                   </DropdownMenuContent>
                 </DropdownMenu>
               </div>
-              <div v-if="boardPrimarySession(instance)?.kind === 'ai' && boardPrimaryAiSession(instance)" class="board-ai-preview">
+              <div
+                v-if="boardPrimarySession(instance)?.kind === 'ai' && boardPrimaryAiSession(instance)"
+                class="board-ai-preview"
+                :data-state="boardPrimaryAiSession(instance)?.status"
+              >
                 <div class="board-ai-card-head">
                   <span class="board-ai-dot" :data-state="boardPrimaryAiSession(instance)?.status" />
-                  <span>
-                    <strong>{{ boardPrimaryAiSession(instance)?.agent }}</strong>
-                  </span>
-                </div>
-                <div class="board-ai-question">
-                  <MarkdownContent :content="displayAiSessionTitle(boardPrimaryAiSession(instance), undefined, t)" />
+                  <MarkdownContent class="board-ai-title" :content="displayAiSessionTitle(boardPrimaryAiSession(instance), undefined, t)" />
                 </div>
                 <div class="board-ai-answer">
                   <AiSessionStreamingMarkdown
@@ -114,6 +118,15 @@
                     :session-id="boardPrimaryAiSession(instance)?.id || ''"
                   />
                 </div>
+                <AiSessionToolActivity
+                  class="board-instance-ai-activity"
+                  :current-tool="boardPrimaryAiSession(instance)?.currentTool"
+                  :phase="boardPrimaryAiSession(instance)?.phase"
+                  :status="boardPrimaryAiSession(instance)?.status"
+                  :summary="boardPrimaryAiSession(instance)?.summary"
+                  :tool-calls-since-last-message="boardPrimaryAiSession(instance)?.toolCallsSinceLastMessage"
+                  tone="board"
+                />
                 <button
                   v-if="boardAiSessions(instance).length > 1"
                   type="button"
@@ -220,6 +233,7 @@ import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
 import AiSessionStreamingMarkdown from "../../../components/ai-session/AiSessionStreamingMarkdown.vue";
+import AiSessionToolActivity from "../../../components/ai-session/AiSessionToolActivity.vue";
 import { ScrollArea } from "../../../components/ui/scroll-area";
 import ControlPlaneSelect from "../shared/ControlPlaneSelect.vue";
 import ControlPlaneSelectItem from "../shared/ControlPlaneSelectItem.vue";
@@ -603,6 +617,11 @@ function canLaunchBoardApp(instance: InstanceBoardItem) {
     transform 120ms ease;
 }
 
+.board-session-switcher[data-ai-preview="true"] {
+  right: 8px;
+  left: auto;
+}
+
 .instance-board-card:hover .board-session-switcher,
 .instance-board-card:focus-within .board-session-switcher {
   opacity: 1;
@@ -870,14 +889,13 @@ function canLaunchBoardApp(instance: InstanceBoardItem) {
 .board-ai-preview {
   display: grid;
   position: relative;
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-rows: max-content minmax(0, 1fr);
   height: 100%;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
   background: var(--ai-board-card-bg);
   color: var(--ai-board-title);
-  padding: 40px 0 0;
 }
 
 .board-ai-card-head {
@@ -886,25 +904,27 @@ function canLaunchBoardApp(instance: InstanceBoardItem) {
   align-items: start;
   gap: 9px;
   min-width: 0;
-  padding: 10px 14px 8px;
+  padding: 12px 14px;
 }
 
-.board-ai-card-head > span:last-child {
-  display: grid;
+.board-ai-title {
   min-width: 0;
-}
-
-.board-ai-card-head strong {
+  max-height: 19px;
   overflow: hidden;
+  overflow-wrap: anywhere;
+  color: var(--ai-board-title);
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
+  word-break: break-word;
 }
 
-.board-ai-card-head strong {
-  color: color-mix(in srgb, var(--ai-board-muted) 78%, transparent);
-  font-size: 13px;
-  font-weight: 700;
-  line-height: 1.2;
+.board-ai-title :deep(p) {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .board-ai-dot {
@@ -931,33 +951,17 @@ function canLaunchBoardApp(instance: InstanceBoardItem) {
   box-shadow: var(--ai-board-dot-idle-shadow);
 }
 
-.board-ai-question,
 .board-ai-answer {
   min-width: 0;
   overflow: hidden;
 }
 
-.board-ai-question {
-  display: -webkit-box;
-  max-height: 19px;
-  overflow-wrap: anywhere;
-  color: var(--ai-board-title);
-  font-size: 14px;
-  line-height: 1.35;
-  padding: 0 14px;
-  word-break: break-word;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 1;
-}
-
-.board-ai-question :deep(p),
 .board-ai-answer :deep(p) {
   margin: 0;
 }
 
 .board-ai-answer {
   position: relative;
-  margin-top: 8px;
   border-top: 1px solid var(--ai-session-card-divider);
   background: var(--ai-session-card-content-bg);
   color: var(--ai-board-title);
@@ -969,11 +973,25 @@ function canLaunchBoardApp(instance: InstanceBoardItem) {
   word-break: break-word;
 }
 
-.board-ai-question :deep(*),
 .board-ai-answer :deep(*) {
   max-width: 100%;
   overflow-wrap: anywhere;
   word-break: break-word;
+}
+
+.board-ai-preview[data-state="running"] .board-ai-answer,
+.board-ai-preview[data-state="waiting"] .board-ai-answer {
+  padding-bottom: 52px;
+}
+
+.board-instance-ai-activity {
+  position: absolute;
+  right: 82px;
+  bottom: 10px;
+  left: 14px;
+  z-index: 4;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .board-ai-answer::after {
@@ -1013,32 +1031,35 @@ function canLaunchBoardApp(instance: InstanceBoardItem) {
   position: absolute;
   top: 50%;
   z-index: 3;
-  width: 28px;
-  height: 44px;
+  width: 32px;
+  height: 48px;
   place-items: center;
-  border: 0;
-  border-radius: 7px;
-  background: color-mix(in srgb, var(--surface-overlay) 52%, transparent);
-  color: var(--text-muted);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface-overlay) 92%, transparent);
+  color: var(--text-strong);
   cursor: pointer;
   opacity: 0;
   transform: translateY(-50%) scale(0.96);
   backdrop-filter: blur(8px);
+  box-shadow: var(--shadow-popover);
   transition:
     opacity 120ms ease,
     transform 120ms ease,
-    background-color 120ms ease;
+    background-color 120ms ease,
+    border-color 120ms ease;
 }
 
 .board-ai-preview:hover .board-ai-slide,
 .board-ai-preview:focus-within .board-ai-slide {
-  opacity: 0.72;
+  opacity: 0.96;
   transform: translateY(-50%) scale(1);
 }
 
 .board-ai-slide:hover,
 .board-ai-slide:focus-visible {
-  background: color-mix(in srgb, var(--surface-active) 72%, transparent);
+  border-color: var(--focus-ring);
+  background: var(--surface-active);
   color: var(--text-strong);
   opacity: 1;
   outline: none;
@@ -1046,12 +1067,13 @@ function canLaunchBoardApp(instance: InstanceBoardItem) {
 
 .board-ai-slide:disabled {
   cursor: default;
+  color: var(--text-subtle);
   opacity: 0;
 }
 
 .board-ai-preview:hover .board-ai-slide:disabled,
 .board-ai-preview:focus-within .board-ai-slide:disabled {
-  opacity: 0.24;
+  opacity: 0.42;
 }
 
 .board-ai-slide-previous { left: 6px; }

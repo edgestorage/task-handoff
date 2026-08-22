@@ -109,6 +109,36 @@ test("structured controlled-instance conflicts survive the proxy boundary", asyn
   );
 });
 
+test("legacy node-agent proxy connection failures normalize to a retryable bad gateway", async () => {
+  const gateway = new ControlledInstanceGateway({
+    requireNode: () => node,
+    nodeAgentTransport: () => transportWithRequest(async () => new Response(JSON.stringify({
+      error: { code: "NODE_AGENT_ERROR", message: "fetch failed" },
+    }), { status: 500, headers: { "content-type": "application/json" } })),
+  });
+  await assert.rejects(
+    gateway.request(instance, "/repository/ai-session-workspace/inspect", { method: "POST", body: "{}" }),
+    (error) => error.code === "INSTANCE_PROXY_UPSTREAM_FAILED" && error.statusCode === 502 && error.retryable === true,
+  );
+});
+
+test("structured node-agent upstream availability errors preserve retryability", async () => {
+  const gateway = new ControlledInstanceGateway({
+    requireNode: () => node,
+    nodeAgentTransport: () => transportWithRequest(async () => new Response(JSON.stringify({
+      error: {
+        code: "INSTANCE_PROXY_UPSTREAM_UNREACHABLE",
+        message: "Instance web endpoint is not reachable.",
+        retryable: true,
+      },
+    }), { status: 502, headers: { "content-type": "application/json" } })),
+  });
+  await assert.rejects(
+    gateway.request(instance, "/repository/ai-session-workspace/inspect", { method: "POST", body: "{}" }),
+    (error) => error.code === "INSTANCE_PROXY_UPSTREAM_UNREACHABLE" && error.statusCode === 502 && error.retryable === true,
+  );
+});
+
 test("offline instances fail before stale inventory can be treated as management capability", async () => {
   let requests = 0;
   const gateway = new ControlledInstanceGateway({

@@ -14,15 +14,20 @@ import { useI18n } from '../i18n';
 export function NodesDirectory({ state, onOpen }: { state: MobileDirectoryProfileState; onOpen?(node: ControlPlaneNodeDirectoryEntry): void }) {
   const { colors } = useMobileTheme();
   const { t } = useI18n();
-  return <View style={[styles.screen, { backgroundColor: colors.background }]}><DirectoryList emptyIcon={{ android: 'dns', ios: 'server.rack' }} state={state} data={state.nodes} keyOf={(node) => node.id} render={(node) => (
+  return <View style={[styles.screen, { backgroundColor: colors.background }]}><DirectoryList emptyIcon={{ android: 'dns', ios: 'server.rack' }} state={state} data={state.nodes} keyOf={(node) => node.id} render={(node) => {
+    const fleetState = state.nodeStates.find((entry) => entry.nodeId === node.id && entry.resource === 'instances');
+    return (
     <DirectoryCard icon="node" onPress={() => onOpen?.(node)} title={nodeDisplayName(node, t)} subtitle={connectionModeLabel(node.connectionMode, t)}>
       <View style={styles.nodeSummary}>
         <Text style={[styles.meta, { color: colors.textMuted }]}>{nodeSummary(state.instances.filter((instance) => instance.nodeId === node.id).length, node, t)}</Text>
       </View>
       {node.status === 'online' && node.health === 'ok' ? null : <Text style={[styles.meta, { color: colors.textMuted }]}>{relativeObservedAt(node.lastSeenAt || node.observedAt, t)}</Text>}
       {node.error ? <Text style={[styles.error, { color: colors.error }]}>{node.error.code}: {node.error.message}</Text> : null}
+      {fleetState?.phase === 'loading' || fleetState?.phase === 'uninitialized' ? <Text style={[styles.meta, { color: colors.textMuted }]}>{t('directories.loading')}</Text> : null}
+      {fleetState?.error ? <Text style={[styles.error, { color: colors.error }]}>{fleetState.error.message}</Text> : null}
     </DirectoryCard>
-  )} /></View>;
+    );
+  }} /></View>;
 }
 
 export function InstancesDirectory({ state, nodeId, onOpen, onRefresh }: { state: MobileDirectoryProfileState; nodeId?: string; onOpen?(instance: ControlPlaneInstanceDirectoryEntry): void; onRefresh?: () => Promise<void> }) {

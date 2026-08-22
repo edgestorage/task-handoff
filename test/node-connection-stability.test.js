@@ -2,7 +2,8 @@ const assert = require("node:assert/strict");
 const { EventEmitter } = require("node:events");
 const test = require("node:test");
 
-const { NodeAgentControlPlaneConnectionSchema, NodeAgentHealthSchema, NodeConnectionDiagnosticsSchema } = require("../packages/protocol/src/control-plane.ts");
+const { CONTROL_PLANE_PROTOCOL_VERSION, ControlledInstanceSchema, NodeAgentControlPlaneConnectionSchema, NodeAgentHealthSchema, NodeConnectionDiagnosticsSchema } = require("../packages/protocol/src/control-plane.ts");
+const { ControlPlaneFleetDirectoryMetaSchema } = require("../packages/protocol/src/control-plane-directory.ts");
 const { ControlPlaneNodeAgentClient } = require("../packages/control-plane/src/control-plane/nodes/client.ts");
 const { ControlPlaneNodeAgentGateway } = require("../packages/control-plane/src/control-plane/nodes/gateway.ts");
 const { NodeConnectionRuntime } = require("../packages/control-plane/src/control-plane/nodes/connection-runtime.ts");
@@ -382,6 +383,222 @@ test("fleet aggregation serves node snapshots without waiting for a slow or reco
     connectionPhase: "connecting",
   }]);
   assert.deepEqual(replacedConnection.items, []);
+});
+
+test("instance lookup consumes the current node fleet snapshot without another request", async () => {
+  const timestamp = "2026-08-21T00:00:00.000Z";
+  const instance = ControlledInstanceSchema.parse({
+    id: "inst_cached",
+    name: "Cached instance",
+    source: { type: "local-folder", path: "/workspace" },
+    sourceSnapshot: {},
+    modelSelection: {},
+    nodeId: "node_cached_instance",
+    runtimeId: "runtime_cached",
+    target: { strategy: "node-proxy", status: "reachable", web: "http://127.0.0.1:32100", api: "http://127.0.0.1:32100/api" },
+    runtime: { labels: {} },
+    registrationToken: "instance-secret",
+    protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  });
+  let requests = 0;
+  const client = new ControlPlaneNodeAgentClient({
+    request: async () => {
+      requests += 1;
+      return new Response(JSON.stringify({ data: [instance] }), { status: 200, headers: { "content-type": "application/json" } });
+    },
+  });
+  const gateway = new ControlPlaneNodeAgentGateway(client);
+  const node = {
+    id: instance.nodeId,
+    connectionMode: "direct-http",
+    endpoint: "http://127.0.0.1:8091",
+    status: "online",
+    auth: { mode: "paired-hmac", keyId: "key_cached" },
+    connectionPhase: "healthy",
+  };
+
+  await gateway.listFleetInstances([node]);
+  assert.equal(requests, 1);
+  assert.equal(gateway.instanceFromSnapshot([node], instance.id)?.id, instance.id);
+  assert.equal(requests, 1);
+  assert.equal(gateway.instanceFromSnapshot([{ ...node, endpoint: "http://127.0.0.1:8092" }], instance.id), undefined);
+});
+
+test("fleet snapshots expose each node as soon as that node finishes", async () => {
+  const timestamp = "2026-08-22T00:00:00.000Z";
+  const runtime = (nodeId) => ({
+    id: `runtime_${nodeId}`,
+    nodeId,
+    name: nodeId,
+    type: "docker",
+    status: "online",
+    accessStrategy: "direct-port",
+    capabilities: {},
+    labels: {},
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  });
+  let resolveSlow;
+  const slowResponse = new Promise((resolve) => { resolveSlow = resolve; });
+  const observed = [];
+  const client = new ControlPlaneNodeAgentClient({
+    request: async (node) => node.id === "node_slow"
+      ? slowResponse
+      : new Response(JSON.stringify({ data: [runtime(node.id)] }), { status: 200, headers: { "content-type": "application/json" } }),
+  });
+  const gateway = new ControlPlaneNodeAgentGateway(client, { onFleetStateChanged: (state) => observed.push(state) });
+  const nodes = ["node_fast", "node_slow"].map((id) => ({
+    id,
+    connectionMode: "direct-http",
+    endpoint: `http://${id}.test`,
+    status: "online",
+    auth: { mode: "paired-hmac", keyId: `key_${id}` },
+    connectionPhase: "healthy",
+  }));
+
+  const refresh = gateway.refreshFleetRuntimes(nodes);
+  await new Promise((resolve) => setImmediate(resolve));
+  const partial = gateway.readFleetRuntimes(nodes);
+  assert.deepEqual(partial.items.map((item) => item.nodeId), ["node_fast"]);
+  assert.equal(partial.nodeStates.find((state) => state.nodeId === "node_fast").phase, "ready");
+  assert.equal(partial.nodeStates.find((state) => state.nodeId === "node_slow").phase, "loading");
+
+  resolveSlow(new Response(JSON.stringify({ data: [runtime("node_slow")] }), { status: 200, headers: { "content-type": "application/json" } }));
+  await refresh;
+  assert.deepEqual(gateway.readFleetRuntimes(nodes).items.map((item) => item.nodeId), ["node_fast", "node_slow"]);
+  assert.ok(observed.some((state) => state.nodeId === "node_fast" && state.phase === "ready"));
+});
+
+test("scoped fleet reads preserve snapshots owned by nodes outside the requested scope", async () => {
+  const timestamp = "2026-08-22T00:00:00.000Z";
+  const runtime = (nodeId) => ({
+    id: `runtime_${nodeId}`,
+    nodeId,
+    name: nodeId,
+    type: "docker",
+    status: "online",
+    accessStrategy: "direct-port",
+    capabilities: {},
+    labels: {},
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  });
+  const client = new ControlPlaneNodeAgentClient({
+    request: async (node) => new Response(JSON.stringify({ data: [runtime(node.id)] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }),
+  });
+  const gateway = new ControlPlaneNodeAgentGateway(client);
+  const nodes = ["node_a", "node_b"].map((id) => ({
+    id,
+    connectionMode: "direct-http",
+    endpoint: `http://${id}.test`,
+    status: "online",
+    auth: { mode: "paired-hmac", keyId: `key_${id}` },
+    connectionPhase: "healthy",
+  }));
+
+  await gateway.refreshFleetRuntimes(nodes);
+  assert.deepEqual(gateway.readFleetRuntimes(nodes).items.map((item) => item.nodeId), ["node_a", "node_b"]);
+  assert.deepEqual(gateway.readFleetRuntimes([nodes[0]]).items.map((item) => item.nodeId), ["node_a"]);
+  assert.deepEqual(gateway.readFleetRuntimes(nodes).items.map((item) => item.nodeId), ["node_a", "node_b"]);
+});
+
+test("failed fleet refreshes retry with backoff without republishing identical failure states", async () => {
+  let requests = 0;
+  let available = false;
+  const observed = [];
+  const runtime = {
+    id: "runtime_retry",
+    nodeId: "node_retry",
+    name: "Retry runtime",
+    type: "docker",
+    status: "online",
+    accessStrategy: "direct-port",
+    capabilities: {},
+    labels: {},
+    createdAt: "2026-08-22T00:00:00.000Z",
+    updatedAt: "2026-08-22T00:00:00.000Z",
+  };
+  const client = new ControlPlaneNodeAgentClient({
+    request: async () => {
+      requests += 1;
+      if (!available) throw Object.assign(new Error("node offline"), { code: "ECONNREFUSED" });
+      return new Response(JSON.stringify({ data: [runtime] }), { status: 200, headers: { "content-type": "application/json" } });
+    },
+  });
+  const gateway = new ControlPlaneNodeAgentGateway(client, {
+    fleetRetryBaseMs: 20,
+    fleetRetryMaxMs: 20,
+    onFleetStateChanged: (state) => observed.push(state),
+  });
+  const node = {
+    id: "node_retry",
+    connectionMode: "direct-http",
+    endpoint: "http://node-retry.test",
+    status: "online",
+    auth: { mode: "paired-hmac", keyId: "key_retry" },
+    connectionPhase: "healthy",
+  };
+
+  await gateway.refreshFleetRuntimes([node]);
+  assert.equal(requests, 1);
+  assert.deepEqual(observed.map((state) => state.phase), ["loading", "error"]);
+  await gateway.refreshFleetRuntimes([node]);
+  assert.equal(requests, 1);
+
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  assert.equal(requests, 2);
+  assert.deepEqual(observed.map((state) => state.phase), ["loading", "error"]);
+
+  available = true;
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  assert.equal(requests, 3);
+  assert.deepEqual(observed.map((state) => state.phase), ["loading", "error", "ready"]);
+  assert.deepEqual(gateway.readFleetRuntimes([node]).items.map((item) => item.id), [runtime.id]);
+});
+
+test("malformed fleet responses do not republish observation-only failure changes", async () => {
+  let requests = 0;
+  const observed = [];
+  const client = new ControlPlaneNodeAgentClient({
+    request: async () => {
+      requests += 1;
+      return new Response(JSON.stringify({ data: [{ id: "inst_malformed" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  const gateway = new ControlPlaneNodeAgentGateway(client, {
+    fleetRetryBaseMs: 20,
+    fleetRetryMaxMs: 20,
+    onFleetStateChanged: (state) => observed.push(state),
+  });
+  const node = {
+    id: "node_malformed",
+    connectionMode: "direct-http",
+    endpoint: "http://node-malformed.test",
+    status: "online",
+    auth: { mode: "paired-hmac", keyId: "key_malformed" },
+    connectionPhase: "healthy",
+  };
+
+  await gateway.refreshFleetInstances([node]);
+  assert.equal(requests, 1);
+  assert.deepEqual(observed.map((state) => state.phase), ["loading", "stale"]);
+
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  assert.equal(requests, 2);
+  assert.deepEqual(observed.map((state) => state.phase), ["loading", "stale"]);
+  gateway.dispose();
+});
+
+test("v0.0.21 directory metadata without node states normalizes to an empty progressive state", () => {
+  assert.deepEqual(ControlPlaneFleetDirectoryMetaSchema.parse({}), { nodeStates: [] });
 });
 
 test("node agent health response drops unknown cross-version fields", () => {

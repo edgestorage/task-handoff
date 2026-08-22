@@ -33,6 +33,12 @@ test("plain and payload hooks share one payload cache per resource", () => {
   assert.doesNotMatch(source, /queryKey: \["instance-board"\]/);
 });
 
+test("instance directory and scoped board reads stay progressive", () => {
+  assert.match(source, /function fetchInstanceBoardPayload[\s\S]*params\.set\("progressive", "true"\)[\s\S]*if \(instanceId\) params\.set\("instanceId", instanceId\)/);
+  assert.match(source, /useInstanceDirectoryQuery[\s\S]*sharedControlPlaneClient\.resources\.instanceDirectory\(signal\)/);
+  assert.match(workbenchSource, /const standaloneBoardPending = computed\([\s\S]*state\.resource === "instances"[\s\S]*state\.phase === "loading"/);
+});
+
 test("workbench local folders consume the shared query cache", () => {
   assert.match(workbenchSource, /useQueries\(\{/);
   assert.match(workbenchSource, /nodeLocalFoldersQueryOptions/);

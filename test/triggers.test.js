@@ -207,6 +207,267 @@ test("editing a deployed trigger migrates control-plane session deployments", as
   assert.equal(requests[1].init.method, "DELETE");
 });
 
+test("applying a trigger fans out across instances without serial blocking", async () => {
+  const records = new Map();
+  const collection = {
+    list: () => [...records.values()],
+    get: (id) => records.get(id),
+    put: (record) => { records.set(record.id, record); return record; },
+    delete: (id) => records.delete(id),
+  };
+  const pending = [];
+  const started = [];
+  const service = new ControlPlaneTriggerService({
+    triggers: collection,
+    listInstances: async () => [],
+    requireInstance: async (id) => ({ id, name: id }),
+    instanceRequest: async (instance) => new Promise((resolve) => {
+      started.push(instance.id);
+      pending.push(() => resolve({ ok: true }));
+    }),
+  });
+  const trigger = service.createTrigger({
+    name: "Concurrent",
+    source: { type: "schedule", scheduleKind: "interval", intervalMs: 60_000 },
+    action: { promptTemplate: "Continue" },
+  });
+
+  const applying = service.applyTrigger(trigger.configHash, {
+    instanceIds: ["inst_1", "inst_2", "inst_3"],
+    target: { type: "ai-session", aiSessionId: "session_1" },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(started, ["inst_1", "inst_2", "inst_3"]);
+  pending.forEach((resolve) => resolve());
+  const result = await applying;
+  assert.deepEqual(result.results.map((entry) => entry.instanceId), ["inst_1", "inst_2", "inst_3"]);
+});
+
+test("trigger fan-out stops scheduling after failure and waits for active mutations", async () => {
+  const records = new Map();
+  const collection = {
+    list: () => [...records.values()],
+    get: (id) => records.get(id),
+    put: (record) => { records.set(record.id, record); return record; },
+    delete: (id) => records.delete(id),
+  };
+  const started = [];
+  const activeResolvers = [];
+  const failure = Object.assign(new Error("deployment failed"), { code: "DEPLOYMENT_FAILED" });
+  const service = new ControlPlaneTriggerService({
+    triggers: collection,
+    listInstances: async () => [],
+    requireInstance: async (id) => ({ id, name: id }),
+    instanceRequest: async (instance) => {
+      started.push(instance.id);
+      if (instance.id === "inst_1") throw failure;
+      return new Promise((resolve) => activeResolvers.push(resolve));
+    },
+  });
+  const trigger = service.createTrigger({
+    name: "Concurrent failure",
+    source: { type: "schedule", scheduleKind: "interval", intervalMs: 60_000 },
+    action: { promptTemplate: "Continue" },
+  });
+  let settled = false;
+  const applying = service.applyTrigger(trigger.configHash, {
+    instanceIds: Array.from({ length: 10 }, (_, index) => `inst_${index + 1}`),
+    target: { type: "ai-session", aiSessionId: "session_1" },
+  }).finally(() => { settled = true; });
+
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(started, Array.from({ length: 8 }, (_, index) => `inst_${index + 1}`));
+  assert.equal(settled, false);
+  activeResolvers.forEach((resolve) => resolve({ ok: true }));
+  await assert.rejects(applying, (error) => error === failure);
+  assert.equal(settled, true);
+  assert.equal(started.includes("inst_9"), false);
+  assert.equal(started.includes("inst_10"), false);
+});
+
+test("trigger deletion mutates ready instances and reports unavailable nodes", async () => {
+  const records = new Map();
+  const collection = {
+    list: () => [...records.values()],
+    get: (id) => records.get(id),
+    put: (record) => { records.set(record.id, record); return record; },
+    delete: (id) => records.delete(id),
+  };
+  let trigger;
+  const requests = [];
+  const service = new ControlPlaneTriggerService({
+    triggers: collection,
+    listInstances: async () => [],
+    listMutationInstances: async () => ({
+      items: [{
+        id: "inst_online",
+        name: "Online instance",
+        nodeId: "node_online",
+        triggers: { configs: [{
+          configHash: trigger.configHash,
+          deployments: [{
+            configHash: trigger.configHash,
+            deploymentId: "deployment_online",
+            origin: "control-plane",
+            enabled: true,
+            target: { type: "ai-session", aiSessionId: "session_online" },
+          }],
+        }] },
+      }],
+      partialFailures: [{
+        scope: "node",
+        nodeId: "node_offline",
+        code: "ECONNREFUSED",
+        message: "Node node_offline is offline; trigger deployment changes were skipped.",
+      }],
+    }),
+    requireInstance: async () => { throw new Error("unused"); },
+    instanceRequest: async (instance, route) => { requests.push({ instanceId: instance.id, route }); return { deleted: true }; },
+  });
+  trigger = service.createTrigger({
+    name: "Best effort template",
+    source: { type: "schedule", scheduleKind: "interval", intervalMs: 60_000 },
+    action: { promptTemplate: "Continue" },
+  });
+
+  const result = await service.deleteTrigger(trigger.configHash);
+  assert.equal(records.has(trigger.configHash), false);
+  assert.deepEqual(requests, [{
+    instanceId: "inst_online",
+    route: `/triggers/${trigger.configHash}/deployments/deployment_online`,
+  }]);
+  assert.equal(result.results[0].deleted, true);
+  assert.deepEqual(result.partialFailures, [{
+    scope: "node",
+    nodeId: "node_offline",
+    code: "ECONNREFUSED",
+    message: "Node node_offline is offline; trigger deployment changes were skipped.",
+  }]);
+});
+
+test("trigger editing continues after an instance mutation fails", async () => {
+  const records = new Map();
+  const collection = {
+    list: () => [...records.values()],
+    get: (id) => records.get(id),
+    put: (record) => { records.set(record.id, record); return record; },
+    delete: (id) => records.delete(id),
+  };
+  let trigger;
+  const requests = [];
+  const instances = ["inst_failed", "inst_ready"].map((id) => ({
+    id,
+    name: id,
+    nodeId: `node_${id}`,
+    triggers: { configs: [{
+      configHash: "pending",
+      deployments: [{
+        configHash: "pending",
+        deploymentId: `deployment_${id}`,
+        origin: "control-plane",
+        enabled: true,
+        target: { type: "ai-session", aiSessionId: `session_${id}` },
+      }],
+    }] },
+  }));
+  const service = new ControlPlaneTriggerService({
+    triggers: collection,
+    listInstances: async () => [],
+    listMutationInstances: async () => ({ items: instances, partialFailures: [] }),
+    requireInstance: async () => { throw new Error("unused"); },
+    instanceRequest: async (instance, route) => {
+      requests.push({ instanceId: instance.id, route });
+      if (instance.id === "inst_failed") throw Object.assign(new Error("instance offline"), { code: "ECONNREFUSED" });
+      return { ok: true };
+    },
+  });
+  trigger = service.createTrigger({
+    name: "Best effort edit",
+    source: { type: "schedule", scheduleKind: "interval", intervalMs: 60_000 },
+    action: { promptTemplate: "Continue" },
+  });
+  for (const instance of instances) {
+    instance.triggers.configs[0].configHash = trigger.configHash;
+    instance.triggers.configs[0].deployments[0].configHash = trigger.configHash;
+  }
+
+  const result = await service.updateTrigger(trigger.configHash, {
+    name: "Best effort edit",
+    source: { type: "schedule", scheduleKind: "interval", intervalMs: 120_000 },
+    action: { promptTemplate: "Continue" },
+  });
+
+  assert.equal(result.partialFailures.length, 1);
+  assert.deepEqual(result.partialFailures[0], {
+    scope: "instance",
+    nodeId: "node_inst_failed",
+    instanceId: "inst_failed",
+    code: "ECONNREFUSED",
+    message: "instance offline",
+  });
+  assert.equal(requests.some((entry) => entry.instanceId === "inst_ready" && entry.route === "/triggers"), true);
+  assert.equal(requests.some((entry) => entry.instanceId === "inst_ready" && entry.route.includes("/deployments/")), true);
+  assert.equal(records.has(trigger.configHash), false);
+  assert.equal(records.has(result.trigger.configHash), true);
+});
+
+test("trigger migration runs instances concurrently but preserves create-before-delete per deployment", async () => {
+  const records = new Map();
+  const collection = {
+    list: () => [...records.values()],
+    get: (id) => records.get(id),
+    put: (record) => { records.set(record.id, record); return record; },
+    delete: (id) => records.delete(id),
+  };
+  const calls = [];
+  const pendingCreates = [];
+  let created;
+  const service = new ControlPlaneTriggerService({
+    triggers: collection,
+    listInstances: async () => ["inst_1", "inst_2"].map((id) => ({
+      id,
+      name: id,
+      triggers: { configs: [{
+        configHash: created.configHash,
+        deployments: [{
+          configHash: created.configHash,
+          deploymentId: `deployment_${id}`,
+          origin: "control-plane",
+          enabled: true,
+          target: { type: "ai-session", aiSessionId: `session_${id}` },
+        }],
+      }] },
+    })),
+    requireInstance: async () => { throw new Error("unused"); },
+    instanceRequest: async (instance, route) => {
+      calls.push({ instanceId: instance.id, route });
+      if (route === "/triggers") return new Promise((resolve) => pendingCreates.push(resolve));
+      return { deleted: true };
+    },
+  });
+  created = service.createTrigger({
+    name: "Concurrent migration",
+    source: { type: "schedule", scheduleKind: "interval", intervalMs: 60_000 },
+    action: { promptTemplate: "Continue" },
+  });
+
+  const updating = service.updateTrigger(created.configHash, {
+    name: "Concurrent migration",
+    source: { type: "schedule", scheduleKind: "interval", intervalMs: 120_000 },
+    action: { promptTemplate: "Continue" },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(calls.map((entry) => entry.instanceId), ["inst_1", "inst_2"]);
+  assert.ok(calls.every((entry) => entry.route === "/triggers"));
+  pendingCreates.forEach((resolve) => resolve({ created: true }));
+  await updating;
+  for (const instanceId of ["inst_1", "inst_2"]) {
+    const routes = calls.filter((entry) => entry.instanceId === instanceId).map((entry) => entry.route);
+    assert.equal(routes[0], "/triggers");
+    assert.match(routes[1], /\/deployments\/deployment_/);
+  }
+});
+
 test("trigger events use triggers topic", () => {
   assert.equal(eventTopic("trigger.run.completed"), "triggers");
 });

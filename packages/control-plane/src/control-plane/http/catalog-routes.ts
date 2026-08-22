@@ -21,6 +21,7 @@ const NodeModelParamsSchema = z.object({
   nodeId: z.string().trim().min(1).max(120),
   modelId: z.string().trim().min(1).max(120).optional(),
 }).strict();
+const FleetModelQuerySchema = z.object({ progressive: z.enum(["true", "false"]).optional() }).strict();
 
 export function registerCatalogRoutes({ app, service, events }: RegisterCatalogRoutesOptions) {
   app.get("/api/projects", async () => ({ data: service.listProjects() }));
@@ -42,9 +43,10 @@ export function registerCatalogRoutes({ app, service, events }: RegisterCatalogR
     return { data: { deleted } };
   });
 
-  app.get("/api/models", async (request, reply) => withRequestSignal(request, reply, async (signal) => ({
-    data: await service.listFederatedModels(signal),
-  })));
+  app.get("/api/models", async (request, reply) => withRequestSignal(request, reply, async (signal) => {
+    const query = FleetModelQuerySchema.parse(request.query);
+    return { data: await service.listFederatedModels(signal, query.progressive === "true") };
+  }));
   app.post("/api/models", async (request, reply) => {
     const model = await service.createModel(request.body);
     events.publish("model.created", { modelId: model.id });

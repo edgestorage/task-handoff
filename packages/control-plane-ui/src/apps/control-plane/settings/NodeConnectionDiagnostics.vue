@@ -12,20 +12,23 @@ import { onMounted, onScopeDispose, ref } from "vue";
 import { useI18n } from "vue-i18n";
 
 type ConnectionDiagnostics = {
+  status?: "connected" | "connecting" | "reconnecting" | "failed" | "disabled";
   pingRttMs?: number;
   pingRttP95Ms?: number;
   consecutiveReconnects?: number;
   nextRetryAt?: string;
 };
 
-defineProps<{ diagnostics?: ConnectionDiagnostics }>();
+const props = defineProps<{ diagnostics?: ConnectionDiagnostics }>();
 
 const { t } = useI18n();
 const clock = ref(Date.now());
 let clockTimer: ReturnType<typeof setInterval> | undefined;
 
 const metricMs = (value?: number) => value === undefined
-  ? t("common.status.unavailable")
+  ? t(props.diagnostics?.status === "connected"
+    ? "settings.nodeDetail.connectionWaitingFirstSample"
+    : "common.status.unavailable")
   : t("settings.nodeDetail.connectionMilliseconds", { value: Math.round(value) });
 const metricValue = (value?: number) => value === undefined ? t("common.status.unavailable") : value;
 const retryCountdown = (value?: string) => {

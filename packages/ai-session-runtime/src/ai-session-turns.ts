@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import type {
   AiSessionPhase,
   AiSessionSnapshotInput,
@@ -235,7 +236,11 @@ function mergeTurnPatch(
 }
 
 function mergeTurns(current?: AiSessionStatus["turns"], next?: AiSessionStatus["turns"], meta: TurnMeta = {}) {
-  const merged = normalizeTurns(current);
+  const baseline = normalizeTurns(current);
+  // Merge into detached turn records. If the normalized result is unchanged,
+  // updateTurns returns the caller's original array to preserve structural
+  // sharing without allowing this reducer to mutate it.
+  const merged = baseline.map((turn) => ({ ...turn }));
   const incomingTurns = normalizeTurns(next, meta);
   function insertTurn(turn: NonNullable<AiSessionStatus["turns"]>[number], incomingIndex: number) {
     const previousKnown = incomingTurns.slice(0, incomingIndex).reverse().find((entry) => merged.some((turn) => turn.id === entry.id));
@@ -291,7 +296,7 @@ function mergeTurns(current?: AiSessionStatus["turns"], next?: AiSessionStatus["
       }
     }
   }
-  return merged.slice(-50);
+  return { turns: merged.slice(-50), baseline };
 }
 
 export function turnHasResponse(turn?: NonNullable<AiSessionStatus["turns"]>[number]) {
@@ -350,7 +355,8 @@ export function updateTurns(
   updatedAt: string,
   meta: TurnMeta = {},
 ) {
-  const turns = mergeTurns(current, patch.turns, meta);
+  const merged = mergeTurns(current, patch.turns, meta);
+  const turns = merged.turns;
   const activeTurnId = patch.activeTurnId ? compact(patch.activeTurnId, 240) : "";
   const activeTurnPrompt = activeTurnId
     ? patch.turns?.find((turn) => turn.id === activeTurnId)?.userPrompt
@@ -493,5 +499,8 @@ export function updateTurns(
       turns.push(activeTurn);
     }
   }
-  return normalizeTurns(turns);
+  const normalized = normalizeTurns(turns);
+  return isDeepStrictEqual(normalized, merged.baseline)
+    ? current ?? merged.baseline
+    : normalized;
 }

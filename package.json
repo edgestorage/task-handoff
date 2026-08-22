@@ -18,6 +18,7 @@
     "dist",
     "apps",
     "packages",
+    "shared",
     "scripts/install-server-services.sh",
     "scripts/install-server.sh",
     "README.md",
@@ -97,6 +98,7 @@
     ],
     "files": [
       "apps/desktop-shell/src/**/*",
+      "shared/process-start-identity.cjs",
       "bin/task-handoff.js",
       "docker/entrypoint.sh",
       "docker/instance-launcher.sh",

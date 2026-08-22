@@ -97,6 +97,32 @@ const DirectoryErrorSchema = z.object({
   message: z.string().trim().min(1).max(2048),
 }).strict();
 
+export const ControlPlaneFleetResourceSchema = z.enum(["instances", "runtimes", "models"]);
+export const ControlPlaneFleetResourcePhaseSchema = z.enum(["uninitialized", "loading", "ready", "stale", "error"]);
+export const ControlPlaneNodeFleetStateSchema = z.object({
+  nodeId: IdSchema,
+  resource: ControlPlaneFleetResourceSchema,
+  phase: ControlPlaneFleetResourcePhaseSchema,
+  revision: z.number().int().nonnegative().optional(),
+  updatedAt: TimestampSchema.optional(),
+  error: z.object({
+    nodeId: IdSchema,
+    route: z.string().trim().min(1).max(500),
+    method: z.string().trim().min(1).max(20),
+    code: z.string().trim().min(1).max(120),
+    message: z.string().trim().min(1).max(4096),
+    statusCode: z.number().int().optional(),
+    issues: z.array(z.object({
+      path: z.array(z.union([z.string(), z.number()])).optional(),
+      message: z.string(),
+    }).passthrough()).optional(),
+  }).passthrough().optional(),
+}).strict();
+
+export const ControlPlaneFleetDirectoryMetaSchema = z.object({
+  nodeStates: z.array(ControlPlaneNodeFleetStateSchema).default([]),
+}).passthrough();
+
 export const ControlPlaneNodeDirectoryEntrySchema = z.object({
   id: IdSchema,
   name: z.string().trim().min(1).max(160),
@@ -164,3 +190,6 @@ export type ControlPlaneInstanceDirectoryEntry = z.infer<typeof ControlPlaneInst
 export type ControlPlaneNodeConnectionPhase = z.infer<typeof ControlPlaneNodeConnectionPhaseSchema>;
 export type ControlPlaneInstanceAction = z.infer<typeof ControlPlaneInstanceActionSchema>;
 export type ControlPlaneInstanceLifecycleDirectoryEvent = z.infer<typeof ControlPlaneInstanceLifecycleDirectoryEventSchema>;
+export type ControlPlaneFleetResource = z.infer<typeof ControlPlaneFleetResourceSchema>;
+export type ControlPlaneFleetResourcePhase = z.infer<typeof ControlPlaneFleetResourcePhaseSchema>;
+export type ControlPlaneNodeFleetState = z.infer<typeof ControlPlaneNodeFleetStateSchema>;

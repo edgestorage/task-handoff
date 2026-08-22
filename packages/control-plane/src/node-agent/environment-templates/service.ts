@@ -10,14 +10,11 @@ import type { LocalDockerExecutor } from "../runtimes/docker.ts";
 import type { EnvironmentTemplateStore } from "./store.ts";
 import type { InstancePrivateConfigStore } from "../instances/private-config-store.ts";
 import { InstanceOperationGate } from "../instances/instance-operation-gate.ts";
+import { nowIso as now } from "@task-handoff/core/core/time";
 
 export const CreateEnvironmentTemplateInputSchema = z.object({
   name: z.string().trim().min(1).max(160),
 }).strict();
-
-function now() {
-  return new Date().toISOString();
-}
 
 function operationError(error: unknown, fallbackCode: string, phase: NonNullable<EnvironmentTemplate["error"]>["phase"]) {
   return {
