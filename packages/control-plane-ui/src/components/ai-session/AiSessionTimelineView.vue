@@ -80,43 +80,14 @@
             @retry-activity-history="$emit('loadTurnTimeline', turns[virtualTurn.index].id, true)"
           >
             <template #turn-footer>
-              <footer
+              <AiSessionTurnActions
                 v-if="turns[virtualTurn.index].latestResponse && completedTurn(turns[virtualTurn.index].id)"
-                class="ai-session-turn-actions"
-                :aria-label="t('sessions.timeline.turnActions')"
-              >
-                <Button
-                  type="button"
-                  size="xs"
-                  variant="ghost"
-                  class="ai-session-turn-action"
-                  :aria-label="copiedMessageId === turns[virtualTurn.index].latestResponse?.id ? t('sessions.markdown.copied') : t('sessions.markdown.copy')"
-                  :title="copiedMessageId === turns[virtualTurn.index].latestResponse?.id ? t('sessions.markdown.copied') : t('sessions.markdown.copy')"
-                  @click="copyMessage(turns[virtualTurn.index].latestResponse)"
-                >
-                  <Check v-if="copiedMessageId === turns[virtualTurn.index].latestResponse?.id" :size="13" />
-                  <Copy v-else :size="13" />
-                </Button>
-                <Button
-                  v-if="continuableTurn(turns[virtualTurn.index].id)"
-                  type="button"
-                  size="xs"
-                  variant="ghost"
-                  class="ai-session-turn-action"
-                  :disabled="busy"
-                  :aria-label="t('sessions.actions.continueFromTurn')"
-                  :title="t('sessions.actions.continueFromTurn')"
-                  @click="continueFromTurn(turns[virtualTurn.index].id)"
-                >
-                  <Split :size="13" />
-                </Button>
-                <time
-                  v-if="turnTime(turns[virtualTurn.index].id)"
-                  class="ai-session-turn-time"
-                  :datetime="turnTime(turns[virtualTurn.index].id)"
-                  :title="formatTurnDateTime(turnTime(turns[virtualTurn.index].id))"
-                >{{ formatTurnTime(turnTime(turns[virtualTurn.index].id)) }}</time>
-              </footer>
+                :busy="busy"
+                :can-continue="Boolean(continuableTurn(turns[virtualTurn.index].id))"
+                :content="turns[virtualTurn.index].latestResponse?.text || ''"
+                :timestamp="turnTime(turns[virtualTurn.index].id)"
+                @continue="continueFromTurn(turns[virtualTurn.index].id)"
+              />
             </template>
           </AiSessionResult>
           <section
@@ -138,13 +109,14 @@
 import { elementScroll, useVirtualizer } from "@tanstack/vue-virtual";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { Check, Copy, Split } from "@lucide/vue";
+import { Check, Copy } from "@lucide/vue";
 import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
 import type { AiSessionHistoryTurn, AiSessionTimelineActivity, AiSessionTurn } from "@task-handoff/protocol/ai-sessions";
 import type { AiSessionSummary } from "../../api/types";
 import type { AiSessionTurnTimelineState } from "../../apps/control-plane/useAiSessionTimelineStore";
 import { Button } from "../ui/button";
 import AiSessionResult from "./AiSessionResult.vue";
+import AiSessionTurnActions from "./AiSessionTurnActions.vue";
 import AiSessionMessageAttachments from "./AiSessionMessageAttachments.vue";
 import type { TimelineMessage, TimelineTurnNode } from "./timelineActivities";
 import { compactTimelineForTurn, turnElapsedEnd } from "./timelineActivities";
@@ -460,49 +432,6 @@ watch(() => turns.value.length, () => void nextTick(syncScrollElement));
   display: grid;
   gap: 8px;
   min-width: 0;
-}
-
-.ai-session-turn-actions {
-  display: flex;
-  min-height: 26px;
-  align-items: center;
-  gap: 2px;
-  color: var(--text-muted);
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 120ms ease;
-}
-
-.ai-session-timeline-turn:hover .ai-session-turn-actions,
-.ai-session-timeline-turn:focus-within .ai-session-turn-actions {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-.ai-session-turn-actions :deep(.ai-session-turn-action) {
-  width: 26px;
-  height: 26px;
-  padding: 0;
-  color: inherit;
-}
-
-.ai-session-turn-actions :deep(.ai-session-turn-action svg) {
-  width: 13px;
-  height: 13px;
-}
-
-.ai-session-turn-time {
-  padding-inline: 6px;
-  font-size: 13px;
-  line-height: 20px;
-  white-space: nowrap;
-}
-
-@media (hover: none) {
-  .ai-session-turn-actions {
-    opacity: 1;
-    pointer-events: auto;
-  }
 }
 
 .ai-session-timeline-message {

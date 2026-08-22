@@ -17,6 +17,9 @@ test("node settings separates paired control planes from active connections", ()
   assert.match(panel, /connection\.status === 'connected'/);
   assert.match(panel, /node-connection-status-trigger/);
   assert.match(panel, /<NodeConnectionDiagnostics :diagnostics="connection"/);
+  assert.match(diagnostics, /props\.diagnostics\?\.status === "connected"/);
+  assert.match(diagnostics, /settings\.nodeDetail\.connectionWaitingFirstSample/);
+  assert.match(diagnostics, /common\.status\.unavailable/);
   assert.match(panel, /@update:open="refreshConnectionDiagnostics"/);
   assert.match(panel, /:diagnostics="selectedNode\.connectionDiagnostics"/);
   assert.match(panel, /@update:open="refreshNodeConnectionDiagnostics"/);

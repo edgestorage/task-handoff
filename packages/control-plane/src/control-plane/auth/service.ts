@@ -9,6 +9,7 @@ import {
 } from "@task-handoff/protocol/control-plane-access";
 import type { ControlPlaneRole } from "./authorization.ts";
 import type { ControlPlaneStorePaths } from "../persistence/paths.ts";
+import { nowIso as now } from "@task-handoff/core/core/time";
 import { createId, createSecret, JsonCollection, type StoredRecord } from "../../shared/persistence/store.ts";
 
 const scryptAsync = promisify(crypto.scrypt);
@@ -107,10 +108,6 @@ const AuthSessionSchema = StoredRecordSchema.extend({
   path: ["device"],
   message: "Mobile sessions require device metadata.",
 });
-
-function now() {
-  return new Date().toISOString();
-}
 
 function positiveInteger(value: number | undefined, fallback: number) {
   return Number.isInteger(value) && Number(value) > 0 ? Number(value) : fallback;

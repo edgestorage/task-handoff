@@ -2,8 +2,10 @@ import path from "node:path";
 import fs from "node:fs";
 import crypto from "node:crypto";
 import Fastify from "fastify";
+import compress from "@fastify/compress";
 import cookie from "@fastify/cookie";
 import websocket from "@fastify/websocket";
+import { isControlPlaneCredentialHeader } from "./proxy-headers.ts";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import type { FastifyServerOptions } from "fastify";
 import { z } from "zod";
@@ -311,6 +313,11 @@ function actionForHttpMethod(method: string): ControlPlaneAction {
 export async function createControlPlaneApp(options: CreateControlPlaneAppOptions = {}) {
   const paths = controlPlaneStorePaths(options.dataDir);
   const app = Fastify({ logger: options.logger ?? true });
+  await app.register(compress, {
+    encodings: ["br", "gzip", "deflate"],
+    globalDecompression: false,
+    threshold: 1024,
+  });
   app.addContentTypeParser("application/octet-stream", (_request, payload, done) => done(null, payload));
   const events = new ControlPlaneEventBus();
   const cloudConnectivityEnabled = options.cloudConnectivityEnabled ?? process.env.TASK_HANDOFF_CLOUD_CONNECTIVITY_ENABLED !== "0";
@@ -321,7 +328,18 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     topic: "node.state",
     scope: { nodeId: observation.nodeId },
   }));
-  const service = new ControlPlaneService(paths, { ...options.service, logger: diagnosticLogger, nodeConnectionRuntime });
+  const service = new ControlPlaneService(paths, {
+    ...options.service,
+    logger: diagnosticLogger,
+    nodeConnectionRuntime,
+    onFleetStateChanged: (state) => {
+      options.service?.onFleetStateChanged?.(state);
+      events.publish("node.fleet.updated", state, {
+        topic: state.resource === "instances" ? "instances" : state.resource === "models" ? "models" : "node.runtime",
+        scope: { nodeId: state.nodeId },
+      });
+    },
+  });
   const auth = new ControlPlaneAuth(paths, options.auth);
   const identity = new ControlPlaneIdentityService(
     paths.identitySigningPath,
@@ -346,7 +364,10 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
       const token = crypto.randomBytes(32).toString("base64url");
       cloudRelayActors.set(token, actor);
       try {
-        const headers = Object.fromEntries(Object.entries(input.headers ?? {}).filter(([name]) => !["authorization", "cookie", "host", "connection", "upgrade", CLOUD_INTERNAL_ACTOR_HEADER].includes(name.toLowerCase())).map(([name, value]) => [name, String(value)]));
+        const headers = Object.fromEntries(Object.entries(input.headers ?? {}).filter(([name]) => {
+          const lower = name.toLowerCase();
+          return !isControlPlaneCredentialHeader(lower) && !["host", "connection", "upgrade", CLOUD_INTERNAL_ACTOR_HEADER].includes(lower);
+        }).map(([name, value]) => [name, String(value)]));
         const response = await app.inject({ method: method as any, url: requestPath, headers: { ...headers, [CLOUD_INTERNAL_ACTOR_HEADER]: token }, ...(input.body === undefined ? {} : { payload: input.body as any }) });
         let body: unknown; try { body = response.json(); } catch { body = response.body; }
         return { status: response.statusCode, body };
@@ -564,6 +585,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     nodeEventSubscriber.stop();
     stopAiSessionTransientDemand();
     chatGateway.stopAll();
+    service.dispose();
   });
 
   app.setErrorHandler((error, request, reply) => {

@@ -2,6 +2,10 @@ export const triggers = {
   title: "Triggers",
   libraryTitle: "Trigger Library · {count}",
   description: "Templates aggregated from control plane and controlled instances.",
+  feedback: {
+    partialFailure: "The operation completed, but {count} nodes or instances were not updated: {targets}. Retry after they recover.",
+    unknownTarget: "unknown target",
+  },
   empty: "No trigger templates yet.",
   filter: "Filter templates",
   overview: { label: "Trigger status overview", templates: "Templates", deployments: "Deployments", running: "Running", errors: "Errors" },

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import writeFileAtomic from "write-file-atomic";
+import { safeFileName } from "@task-handoff/core/core/file-names";
 
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_MAX_BYTES = 2 * 1024 * 1024 * 1024;
@@ -97,7 +98,7 @@ export class AiSessionAttachmentCache {
       ...(input.sessionId ? { sessionId: input.sessionId } : {}),
       ...(input.messageId ? { messageId: input.messageId } : {}),
       kind: input.kind,
-      name: safeName(input.name),
+      name: safeFileName(input.name),
       mime: input.mime.toLowerCase(),
       ...(input.disposition ? { disposition: input.disposition } : {}),
       size: input.size,
@@ -169,7 +170,7 @@ export class AiSessionAttachmentCache {
             ...(input.sessionId ? { sessionId: input.sessionId } : {}),
             ...(input.messageId ? { messageId: input.messageId } : {}),
             kind: input.kind,
-            name: safeName(input.name),
+            name: safeFileName(input.name),
             mime: input.mime.toLowerCase(),
             ...(input.disposition ? { disposition: input.disposition } : {}),
             size: input.size,
@@ -313,10 +314,6 @@ export class AiSessionAttachmentCache {
 
 function cacheIdentity(instanceId: string, attachmentId: string) {
   return crypto.createHash("sha256").update(`${instanceId}\0${attachmentId}`).digest("hex");
-}
-
-function safeName(name: string) {
-  return path.basename(name).replace(/[\u0000-\u001f\u007f]/g, "_").trim().slice(0, 240) || "attachment";
 }
 
 function pickFields(value: unknown) {

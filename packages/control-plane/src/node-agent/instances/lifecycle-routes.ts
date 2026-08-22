@@ -12,6 +12,7 @@ import type { InstanceLifecycleEvent } from "../instance-lifecycle-state.ts";
 import { reportedVersion } from "../runtime-convergence.ts";
 import { runtimeVersionStateForActual } from "../runtime-version-state.ts";
 import { InstanceOperationGate } from "./instance-operation-gate.ts";
+import { nowIso as now } from "@task-handoff/core/core/time";
 
 const LifecycleRequestSchema = z.object({}).strict().default({});
 
@@ -45,10 +46,6 @@ type Hooks = {
   releaseEnvironmentImage?(imageId: string): Promise<unknown>;
   diagnostic(data: Record<string, unknown>, message: string): void;
 };
-
-function now() {
-  return new Date().toISOString();
-}
 
 export function registerInstanceLifecycleRoutes(
   app: FastifyInstance,

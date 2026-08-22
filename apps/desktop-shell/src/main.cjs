@@ -357,9 +357,32 @@ function isHtmlDataUrl(value) {
   return typeof value === "string" && value.startsWith("data:text/html");
 }
 
+function desktopWindowWebPreferences() {
+  return {
+    contextIsolation: true,
+    nodeIntegration: false,
+    preload: path.join(__dirname, "preload.cjs"),
+    sandbox: true,
+  };
+}
+
+function openExternalWindowsOnly(webContents) {
+  webContents.setWindowOpenHandler(({ url: targetUrl }) => {
+    void shell.openExternal(targetUrl);
+    return { action: "deny" };
+  });
+}
+
+function createDesktopBrowserWindow(options, windowsOverlayHeight) {
+  const window = new BrowserWindow({ ...options, webPreferences: desktopWindowWebPreferences() });
+  if (process.platform === "win32") windowsTitleBarOverlayHeights.set(window, windowsOverlayHeight);
+  openExternalWindowsOnly(window.webContents);
+  return window;
+}
+
 function createWindow(url) {
   let failurePageShown = isHtmlDataUrl(url);
-  mainWindow = new BrowserWindow({
+  mainWindow = createDesktopBrowserWindow({
     width: 1280,
     height: 820,
     minWidth: 960,
@@ -369,19 +392,7 @@ function createWindow(url) {
     title: "TaskHandoff Control Plane",
     icon: desktopIconPath(),
     backgroundColor: desktopWindowBackgroundColor("dark"),
-    webPreferences: {
-      contextIsolation: true,
-      nodeIntegration: false,
-      preload: path.join(__dirname, "preload.cjs"),
-      sandbox: true,
-    },
-  });
-  if (process.platform === "win32") windowsTitleBarOverlayHeights.set(mainWindow, 56);
-
-  mainWindow.webContents.setWindowOpenHandler(({ url: targetUrl }) => {
-    void shell.openExternal(targetUrl);
-    return { action: "deny" };
-  });
+  }, 56);
 
   mainWindow.once("ready-to-show", () => {
     mainWindow?.show();
@@ -474,7 +485,7 @@ function createControlPlaneWindow(url) {
   const initialSize = instanceId
     ? desktopWindowPreferences?.instanceDetailSize() || { width: 1280, height: 820 }
     : { width: 1280, height: 820 };
-  const controlPlaneWindow = new BrowserWindow({
+  const controlPlaneWindow = createDesktopBrowserWindow({
     ...initialSize,
     minWidth: instanceId ? 400 : 760,
     minHeight: 520,
@@ -483,14 +494,7 @@ function createControlPlaneWindow(url) {
     title: "TaskHandoff",
     icon: desktopIconPath(),
     backgroundColor: "#071013",
-    webPreferences: {
-      contextIsolation: true,
-      nodeIntegration: false,
-      preload: path.join(__dirname, "preload.cjs"),
-      sandbox: true,
-    },
-  });
-  if (process.platform === "win32") windowsTitleBarOverlayHeights.set(controlPlaneWindow, 42);
+  }, 42);
   if (instanceId) {
     let persistSizeTimer;
     const persistSize = () => {
@@ -513,10 +517,6 @@ function createControlPlaneWindow(url) {
     controlPlaneWindow.destroy();
     return registered;
   }
-  controlPlaneWindow.webContents.setWindowOpenHandler(({ url: targetUrl }) => {
-    void shell.openExternal(targetUrl);
-    return { action: "deny" };
-  });
   controlPlaneWindow.once("ready-to-show", () => {
     logInfo(`[desktop-shell] control plane child window ready instanceId=${instanceId || ""}`);
     controlPlaneWindow.show();
@@ -540,7 +540,7 @@ function createAppWindow(url) {
   if (!["http:", "https:"].includes(parsedUrl.protocol)) {
     throw new Error("Only HTTP(S) app windows are supported.");
   }
-  const appWindow = new BrowserWindow({
+  const appWindow = createDesktopBrowserWindow({
     width: 1180,
     height: 780,
     minWidth: 760,
@@ -551,19 +551,7 @@ function createAppWindow(url) {
     title: "TaskHandoff App",
     icon: desktopIconPath(),
     backgroundColor: "#071013",
-    webPreferences: {
-      contextIsolation: true,
-      nodeIntegration: false,
-      preload: path.join(__dirname, "preload.cjs"),
-      sandbox: true,
-    },
-  });
-  if (process.platform === "win32") windowsTitleBarOverlayHeights.set(appWindow, 42);
-
-  appWindow.webContents.setWindowOpenHandler(({ url: targetUrl }) => {
-    void shell.openExternal(targetUrl);
-    return { action: "deny" };
-  });
+  }, 42);
   const appView = new BrowserView({
     webPreferences: {
       contextIsolation: true,
@@ -585,10 +573,7 @@ function createAppWindow(url) {
   appWindow.on("closed", () => {
     appWindow.removeListener("resize", resizeAppView);
   });
-  appView.webContents.setWindowOpenHandler(({ url: targetUrl }) => {
-    void shell.openExternal(targetUrl);
-    return { action: "deny" };
-  });
+  openExternalWindowsOnly(appView.webContents);
   appWindow.once("ready-to-show", () => {
     appWindow.show();
   });

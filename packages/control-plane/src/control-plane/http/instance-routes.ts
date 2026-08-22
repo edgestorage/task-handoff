@@ -22,6 +22,7 @@ const InstanceAppJobParamsSchema = z.object({ id: z.string().trim().min(1), jobI
 const InstanceBoardQuerySchema = z.object({
   projection: z.literal("directory").optional(),
   instanceId: z.string().trim().min(1).max(120).optional(),
+  progressive: z.enum(["true", "false"]).optional(),
 }).strict();
 
 export function registerInstanceRoutes({ app, service, events }: RegisterInstanceRoutesOptions) {
@@ -96,11 +97,11 @@ export function registerInstanceRoutes({ app, service, events }: RegisterInstanc
   });
   app.get("/api/instance-board", async (request, reply) => withRequestSignal(request, reply, async (signal) => {
     const query = InstanceBoardQuerySchema.parse(request.query);
-    const result = await service.boardWithDiagnostics(signal);
+    const result = await service.boardWithDiagnostics(signal, query.progressive === "true");
     return {
       data: (query.instanceId ? result.items.filter((item) => item.id === query.instanceId) : result.items)
         .map((item) => query.projection === "directory" ? publicInstanceDirectory(item) : item),
-      meta: { nodeErrors: result.nodeErrors },
+      meta: { nodeErrors: result.nodeErrors, nodeStates: result.nodeStates },
     };
   }));
 }

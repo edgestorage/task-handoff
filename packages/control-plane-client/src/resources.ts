@@ -2,6 +2,7 @@ import { z } from "zod";
 import {
   ControlPlaneInstanceActionSchema,
   ControlPlaneInstanceDirectorySchema,
+  ControlPlaneFleetDirectoryMetaSchema,
   ControlPlaneNodeDirectorySchema,
   type ControlPlaneInstanceDirectoryEntry,
 } from "@task-handoff/protocol/control-plane-directory";
@@ -9,6 +10,10 @@ import { AiSessionPermissionModeSchema, type AiSessionPermissionMode } from "@ta
 import type { ControlPlaneClientTransport } from "./transport.ts";
 
 const DataSchema = <T extends z.ZodType>(schema: T) => z.object({ data: schema }).passthrough();
+const FleetDirectoryPayloadSchema = z.object({
+  data: ControlPlaneInstanceDirectorySchema,
+  meta: ControlPlaneFleetDirectoryMetaSchema.optional(),
+}).passthrough();
 const InstancePermissionConfigSchema = z.object({
   config: z.object({ defaultCodexPermissionMode: AiSessionPermissionModeSchema }).passthrough(),
 }).passthrough();
@@ -57,6 +62,9 @@ export function createControlPlaneResourcesApi(transport: ControlPlaneClientTran
     },
     instanceBoard(signal?: AbortSignal) {
       return requestData("/api/instance-board?projection=directory", ControlPlaneInstanceDirectorySchema, signal);
+    },
+    instanceDirectory(signal?: AbortSignal) {
+      return transport.request("/api/instance-board?projection=directory&progressive=true", FleetDirectoryPayloadSchema, { signal });
     },
     async instanceWorkspaceSource(instanceId: string, signal?: AbortSignal) {
       return (await requestData(

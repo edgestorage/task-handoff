@@ -471,20 +471,27 @@ test("shared trigger client owns template, binding, and run routes", async () =>
       if (path.includes("/ai-sessions/") && init.method === "POST") return schema.parse({ data: { config, deployment } });
       if (path.includes("/ai-sessions/") && init.method === "DELETE") return schema.parse({ data: { deleted: true } });
       if (path.endsWith("/run")) return schema.parse({ data: { status: "completed" } });
-      return schema.parse({ data: init.method === "PUT" ? { previousConfigHash: config.configHash, trigger: { ...config, id: config.configHash }, results: [] } : { configHash: config.configHash, deletedTemplate: true, results: [] } });
+      return schema.parse({ data: init.method === "PUT" ? {
+        previousConfigHash: config.configHash,
+        trigger: { ...config, id: config.configHash },
+        results: [],
+        partialFailures: [{ scope: "node", nodeId: "node-offline", code: "ECONNREFUSED", message: "offline" }],
+      } : { configHash: config.configHash, deletedTemplate: true, results: [] } });
     },
   };
   const api = createControlPlaneClient(transport);
   const input = { name: config.name, source: config.source, action: config.action, policy: config.policy };
   const listed = await api.triggers.list();
   await api.triggers.create(input);
-  await api.triggers.update(config.configHash, input);
+  const updated = await api.triggers.update(config.configHash, input);
   await api.triggers.bindSession("instance/1", "session/1", config.configHash);
   await api.triggers.run("instance/1", config.configHash, deployment.deploymentId);
   await api.triggers.unbindSession("instance/1", "session/1", config.configHash);
-  await api.triggers.remove(config.configHash);
+  const removed = await api.triggers.remove(config.configHash);
 
   assert.equal("futureField" in listed.triggers[0], false);
+  assert.deepEqual(updated.partialFailures, [{ scope: "node", nodeId: "node-offline", code: "ECONNREFUSED", message: "offline" }]);
+  assert.deepEqual(removed.partialFailures, []);
   assert.deepEqual(requests.map((request) => request.path), [
     "/api/triggers",
     "/api/triggers",

@@ -1010,6 +1010,7 @@ import { ToggleGroup, ToggleGroupItem } from "../../../components/ui/toggle-grou
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../../components/ui/tooltip";
 import { showControlPlaneToast, showDelayedControlPlaneLoadingToast } from "../useControlPlaneToasts";
 import { nativeNodeFolderSelectionResult, nodeLocalFolderDisplayName, nodePathName, relativeNodePathSegments, type NativeNodeFolderPicker } from "../nodePath";
+import { filterInstanceCwdFolders, selectableInstanceCwdFolders } from "../shared/instanceCwdFolders";
 import NodeStorageFolderPickerDialog from "../settings/NodeStorageFolderPickerDialog.vue";
 import ControlPlaneInput from "../shared/ControlPlaneInput.vue";
 import { nodeSupportsLocalFolderNameUpdate } from "../../../api/nodeCapabilities";
@@ -1312,12 +1313,12 @@ const newSessionFolders = computed<NewSessionFolderOption[]>(() => {
       path: workspacePath,
     }] satisfies NewSessionFolderOption[];
   }
-  return [...new Map(folders.map((folder) => [folder.id, {
+  return selectableInstanceCwdFolders(props.instance, folders).map((folder) => ({
     id: folder.id,
     cwdFolderId: folder.id,
     name: nodeLocalFolderDisplayName(folder),
     path: folder.path,
-  }])).values()];
+  }));
 });
 async function registerNewSessionFolder(nodeId: string, input: { name: string; path: string }) {
   const folder = await createNodeLocalFolder(nodeId, input);
@@ -1384,8 +1385,7 @@ const newProjectPicker = useNodeStorageFolderPicker({
   },
 });
 const filteredNewSessionFolders = computed(() => {
-  const query = newSessionFolderQuery.value.trim().toLowerCase();
-  return newSessionFolders.value.filter((folder) => !query || `${folder.name} ${folder.path}`.toLowerCase().includes(query));
+  return filterInstanceCwdFolders(newSessionFolders.value, newSessionFolderQuery.value);
 });
 const filteredNewSessionBranches = computed(() => {
   const query = newSessionBranchQuery.value.trim().toLowerCase();

@@ -80,7 +80,7 @@ function latestTurnUserPrompt(turns: AiSessionStatus["turns"]) {
  * Applies a state patch without persistence, clock access, id generation, or
  * event emission. Callers must supply updatedAt when they want to advance time.
  */
-export function applyAiSessionPatch(
+function buildAiSessionPatch(
   current: AiSessionStatus,
   patch: AiSessionPatch,
   options: ApplyAiSessionPatchOptions = {},
@@ -94,10 +94,10 @@ export function applyAiSessionPatch(
   const updatedAt = options.preserveUpdatedAt ? current.updatedAt : options.updatedAt ?? current.updatedAt;
   const turnPatch = options.suppressPromptTurn ? { ...patch, userPrompt: undefined } : patch;
   const turns = options.suppressTurnUpdate
-    ? normalizeTurns(options.replaceTurns ? undefined : current.turns)
+    ? options.replaceTurns ? normalizeTurns(undefined) : current.turns
     : updateTurns(options.replaceTurns ? undefined : current.turns, turnPatch, updatedAt, options.meta);
   const prompt = patch.userPrompt ? messageText(patch.userPrompt) : "";
-  const latestTurn = turns.at(-1);
+  const latestTurn = turns?.at(-1);
   const derivedUserPrompt = latestTurnUserPrompt(turns);
   const startsEmptyTurn = Boolean(
     prompt &&
@@ -146,6 +146,84 @@ export function applyAiSessionPatch(
     queue: patch.queue ? normalizeAiSessionQueue(patch.queue) : current.queue,
     subAgents: patch.subAgents !== undefined ? normalizeAiSessionSubAgents(patch.subAgents) : current.subAgents,
   };
+}
+
+export function applyAiSessionPatch(
+  current: AiSessionStatus,
+  patch: AiSessionPatch,
+  options: ApplyAiSessionPatchOptions = {},
+): AiSessionStatus {
+  return buildAiSessionPatch(current, patch, options);
+}
+
+type AiSessionBusinessKey = Exclude<keyof AiSessionStatus, "updatedAt">;
+
+const AI_SESSION_BUSINESS_KEYS = [
+  "id",
+  "agent",
+  "creationSource",
+  "appSessionId",
+  "appId",
+  "providerSessionId",
+  "lineage",
+  "providerMeta",
+  "appBindingKeys",
+  "actions",
+  "activeTurnId",
+  "title",
+  "cwd",
+  "cwdFolderId",
+  "userPrompt",
+  "turns",
+  "status",
+  "phase",
+  "summary",
+  "lastMessage",
+  "lastMessageItemId",
+  "currentTool",
+  "toolCallsSinceLastMessage",
+  "subAgents",
+  "transcriptPath",
+  "transcriptSize",
+  "startedAt",
+  "completedAt",
+  "error",
+  "counters",
+  "queue",
+] as const satisfies readonly AiSessionBusinessKey[];
+
+// Keep this list exhaustive when the persisted session model grows.
+const _allAiSessionBusinessKeysCovered: Exclude<AiSessionBusinessKey, typeof AI_SESSION_BUSINESS_KEYS[number]> extends never ? true : never = true;
+void _allAiSessionBusinessKeysCovered;
+
+function sameAiSessionBusinessState(current: AiSessionStatus, next: AiSessionStatus) {
+  for (const key of AI_SESSION_BUSINESS_KEYS) {
+    const currentValue = current[key];
+    const nextValue = next[key];
+    if (Object.is(currentValue, nextValue)) continue;
+    // updateTurns preserves the original array when its normalized wire value
+    // is unchanged, so a different turns reference is a real state change.
+    if (key === "turns" || !samePersistedValue(currentValue, nextValue)) return false;
+  }
+  return true;
+}
+
+function samePersistedValue(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+    return left.every((value, index) => samePersistedValue(value ?? null, right[index] ?? null));
+  }
+  if (left && right && typeof left === "object" && typeof right === "object") {
+    const leftRecord = left as Record<string, unknown>;
+    const rightRecord = right as Record<string, unknown>;
+    const leftKeys = Object.keys(leftRecord).filter((key) => leftRecord[key] !== undefined);
+    const rightKeys = Object.keys(rightRecord).filter((key) => rightRecord[key] !== undefined);
+    if (leftKeys.length !== rightKeys.length) return false;
+    return leftKeys.every((key) => Object.prototype.hasOwnProperty.call(rightRecord, key)
+      && samePersistedValue(leftRecord[key], rightRecord[key]));
+  }
+  return false;
 }
 
 function canonicalRealtimeTurnId(
@@ -317,7 +395,7 @@ export function reduceAiSessionSnapshot(
   );
   const replaceAppBinding = isAuthoritativeAppBindingSnapshot(event);
 
-  return applyAiSessionPatch(current, {
+  const next = buildAiSessionPatch(current, {
     appSessionId: replaceAppBinding ? event.appSessionId : event.appSessionId || current.appSessionId,
     appId: event.appId || current.appId,
     providerSessionId: event.providerSessionId || current.providerSessionId,
@@ -372,4 +450,5 @@ export function reduceAiSessionSnapshot(
       !event.lastMessage
     ),
   });
+  return sameAiSessionBusinessState(current, next) ? current : next;
 }

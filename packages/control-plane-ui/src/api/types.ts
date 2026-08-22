@@ -33,6 +33,8 @@ import type {
 } from "@task-handoff/protocol/ai-sessions";
 import { AiSessionEventType as ProtocolAiSessionEventType, AiSessionUnreadEventType as ProtocolAiSessionUnreadEventType } from "@task-handoff/protocol/ai-sessions";
 import type { AiSessionSubAgent as ProtocolAiSessionSubAgent } from "@task-handoff/protocol/ai-sessions";
+import type { ControlPlaneTriggerMutationFailure } from "@task-handoff/protocol/triggers";
+import type { ControlPlaneNodeFleetState } from "@task-handoff/protocol/control-plane-directory";
 import type {
   AppSessionDeltaResponse as ProtocolAppSessionDeltaResponse,
   AppSessionPatchEvent as ProtocolAppSessionPatchEvent,
@@ -546,7 +548,10 @@ export type NodeAgentScopedError = {
 
 export type NodeDiagnosticsMeta = {
   nodeErrors?: NodeAgentScopedError[];
+  nodeStates?: NodeFleetResourceState[];
 };
+
+export type NodeFleetResourceState = ControlPlaneNodeFleetState;
 
 export type NodeRuntimesPayload = {
   data: NodeRuntime[];
@@ -880,6 +885,10 @@ export type CreateControlPlaneTriggerInput = {
   source: TriggerSource;
   action: { promptTemplate: string };
   policy?: Partial<TriggerConfig["policy"]>;
+};
+
+export type ControlPlaneTriggerMutationResult = Record<string, unknown> & {
+  partialFailures?: ControlPlaneTriggerMutationFailure[];
 };
 
 export type AiSessionLifecycle = ProtocolAiSessionLifecycle;

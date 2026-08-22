@@ -5,6 +5,10 @@ export const AI_SESSION_MAX_REFERENCES = 20;
 export const AI_SESSION_MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 export const AI_SESSION_MAX_INLINE_FILE_BYTES = 500 * 1024;
 export const AI_SESSION_MAX_MESSAGE_ATTACHMENT_BYTES = 40 * 1024 * 1024;
+export const AI_SESSION_ATTACHMENT_UPLOAD_BODY_LIMIT = AI_SESSION_MAX_ATTACHMENT_BYTES + 1024 * 1024;
+export const AI_SESSION_ATTACHMENT_DRAFT_STREAM_CHUNK_BYTES = 256 * 1024;
+export const AI_SESSION_ATTACHMENT_DRAFT_STREAM_BODY_LIMIT = 2 * AI_SESSION_ATTACHMENT_DRAFT_STREAM_CHUNK_BYTES;
+export const AI_SESSION_ATTACHMENT_DRAFT_STREAM_TTL_MS = 10 * 60 * 1000;
 export const AiSessionEventTopic = "ai.sessions";
 export const AiSessionEventType = {
   Snapshot: "ai-session.snapshot",
@@ -25,6 +29,49 @@ export const AiAgentKindSchema = z.string().trim().min(1).max(80);
 export const AiSessionCreationSourceSchema = z.enum(["app-session", "ai-session"]);
 
 export const AiSessionAttachmentKindSchema = z.enum(["image", "file"]);
+
+const AiSessionAttachmentDraftFields = {
+  scopeType: z.enum(["session", "create-request"]),
+  scopeId: z.string().trim().min(1).max(160),
+  kind: AiSessionAttachmentKindSchema,
+  name: z.string().trim().min(1).max(240),
+  mime: z.string().trim().min(1).max(120),
+};
+
+export const AiSessionAttachmentDraftUploadQuerySchema = z.object({
+  ...AiSessionAttachmentDraftFields,
+  size: z.coerce.number().int().positive().max(AI_SESSION_MAX_ATTACHMENT_BYTES),
+}).strict();
+
+export const AiSessionAttachmentDraftStreamIdSchema = z.string().regex(/^cia_[a-f0-9]{24}$/);
+
+export const AiSessionAttachmentDraftStreamCreateInputSchema = z.object({
+  attachmentId: AiSessionAttachmentDraftStreamIdSchema,
+  ...AiSessionAttachmentDraftFields,
+  size: z.number().int().positive().max(AI_SESSION_MAX_ATTACHMENT_BYTES),
+}).strict();
+
+export const AiSessionAttachmentDraftStreamOffsetQuerySchema = z.object({
+  offset: z.coerce.number().int().nonnegative(),
+}).strict();
+
+export const AiSessionAttachmentDraftStreamOffsetSchema = z.object({
+  attachmentId: AiSessionAttachmentDraftStreamIdSchema,
+  offset: z.number().int().nonnegative(),
+});
+
+export const AiSessionAttachmentDraftSchema = z.object({
+  id: AiSessionAttachmentDraftStreamIdSchema,
+  kind: AiSessionAttachmentKindSchema,
+  name: z.string().trim().min(1).max(240),
+  mime: z.string().trim().min(1).max(120),
+  size: z.number().int().positive().max(AI_SESSION_MAX_ATTACHMENT_BYTES),
+  expiresAt: z.string().datetime(),
+});
+
+export function isAiSessionInlineImageMime(mime: string) {
+  return ["image/bmp", "image/gif", "image/jpeg", "image/png", "image/webp"].includes(mime.split(";", 1)[0]!.trim().toLowerCase());
+}
 
 const AiSessionMessageAttachmentBaseSchema = z.object({
   id: z.string().trim().min(1).max(120),
@@ -1005,6 +1052,9 @@ export type AiSessionConversationAttachmentContentState = z.infer<typeof AiSessi
 export type AiSessionConversationAttachment = z.infer<typeof AiSessionConversationAttachmentSchema>;
 export type AiSessionUserMessageDetail = z.infer<typeof AiSessionUserMessageDetailSchema>;
 export type AiSessionMessageAttachment = z.infer<typeof AiSessionMessageAttachmentSchema>;
+export type AiSessionAttachmentDraftUploadQuery = z.infer<typeof AiSessionAttachmentDraftUploadQuerySchema>;
+export type AiSessionAttachmentDraftStreamCreateInput = z.infer<typeof AiSessionAttachmentDraftStreamCreateInputSchema>;
+export type AiSessionAttachmentDraft = z.infer<typeof AiSessionAttachmentDraftSchema>;
 export type AiSessionMessageAttachmentMeta = z.infer<typeof AiSessionMessageAttachmentMetaSchema>;
 export type AiSessionMessageAttachmentRef = z.infer<typeof AiSessionMessageAttachmentRefSchema>;
 export type AiSessionSendMode = z.infer<typeof AiSessionSendModeSchema>;

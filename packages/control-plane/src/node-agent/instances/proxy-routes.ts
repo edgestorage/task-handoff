@@ -48,6 +48,32 @@ function tooLarge(reply: { code(statusCode: number): { send(payload: unknown): u
   });
 }
 
+async function fetchInstanceUpstream(
+  fetchImpl: typeof fetch,
+  url: string,
+  init: RequestInit,
+  context: { instanceId: string; method: string; path: string; diagnostic: Diagnostic },
+) {
+  try {
+    return await fetchImpl(url, init);
+  } catch (error) {
+    if (init.signal?.aborted) throw error;
+    context.diagnostic({
+      instanceId: context.instanceId,
+      action: "proxy.upstream.failed",
+      method: context.method,
+      path: context.path,
+      error: error instanceof Error ? error.message : String(error),
+    }, "node instance proxy upstream unavailable");
+    throw Object.assign(new Error(`Instance ${context.instanceId} web endpoint is not reachable.`), {
+      statusCode: 502,
+      code: "INSTANCE_PROXY_UPSTREAM_UNREACHABLE",
+      retryable: true,
+      cause: error,
+    });
+  }
+}
+
 export function registerInstanceProxyRoutes(app: FastifyInstance, options: Options) {
   const { fetchImpl, metrics, diagnostic } = options;
 
@@ -59,11 +85,11 @@ export function registerInstanceProxyRoutes(app: FastifyInstance, options: Optio
     const proxyPath = normalizedPath(parsed.path);
     if (parsed.method === "POST" && proxyPath === "/api/apps/sessions") await options.syncModelEnvironment(id);
     diagnostic({ instanceId: id, action: "proxy", method: parsed.method, path: proxyPath, instanceBase }, "node instance proxy requested");
-    const response = await fetchImpl(`${instanceBase}${proxyPath}`, {
+    const response = await fetchInstanceUpstream(fetchImpl, `${instanceBase}${proxyPath}`, {
       method: parsed.method,
       headers: { ...parsed.headers },
       body: proxyRequestBody(parsed),
-    });
+    }, { instanceId: id, method: parsed.method, path: proxyPath, diagnostic });
     const contentType = response.headers.get("content-type") || "application/octet-stream";
     const text = await response.text();
     const durationMs = performance.now() - startedAt;
@@ -106,12 +132,12 @@ export function registerInstanceProxyRoutes(app: FastifyInstance, options: Optio
       const instanceBase = await options.instanceBase(id);
       const proxyPath = normalizedPath(parsed.path);
       diagnostic({ instanceId: id, action: "proxy.stream", method: parsed.method, path: proxyPath, instanceBase }, "node instance streaming proxy requested");
-      const response = await fetchImpl(`${instanceBase}${proxyPath}`, {
+      const response = await fetchInstanceUpstream(fetchImpl, `${instanceBase}${proxyPath}`, {
         method: parsed.method,
         headers: { ...parsed.headers },
         body: proxyRequestBody(parsed),
         signal: controller.signal,
-      });
+      }, { instanceId: id, method: parsed.method, path: proxyPath, diagnostic });
       const declaredLength = Number(response.headers.get("content-length"));
       if (Number.isFinite(declaredLength) && declaredLength > metrics.maxResponseBytes) {
         metrics.limitRejected += 1;
@@ -155,11 +181,11 @@ export function registerInstanceProxyRoutes(app: FastifyInstance, options: Optio
     const instanceBase = await options.instanceBase(id);
     const proxyPath = normalizedPath(parsed.path);
     diagnostic({ instanceId: id, action: "proxy.raw", method: parsed.method, path: proxyPath, instanceBase }, "node instance raw proxy requested");
-    const response = await fetchImpl(`${instanceBase}${proxyPath}`, {
+    const response = await fetchInstanceUpstream(fetchImpl, `${instanceBase}${proxyPath}`, {
       method: parsed.method,
       headers: { ...parsed.headers },
       body: proxyRequestBody(parsed),
-    });
+    }, { instanceId: id, method: parsed.method, path: proxyPath, diagnostic });
     const declaredLength = Number(response.headers.get("content-length"));
     if (Number.isFinite(declaredLength) && declaredLength > metrics.maxResponseBytes) {
       metrics.limitRejected += 1;

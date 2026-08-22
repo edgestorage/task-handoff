@@ -44,7 +44,7 @@ import { useI18n } from "vue-i18n";
 import { Folder, FolderPlus, Search } from "@lucide/vue";
 import type { InstanceBoardItem, NodeLocalFolder } from "../../../api/types";
 import { nodeLocalFolderDisplayName } from "../nodePath";
-import { isSameOrChildNodePath } from "../nodePath";
+import { filterInstanceCwdFolders, selectableInstanceCwdFolders } from "./instanceCwdFolders";
 import {
   DropdownMenuItem,
   DropdownMenuSeparator,
@@ -70,24 +70,8 @@ defineEmits<{
 }>();
 
 const folderSearch = ref("");
-const cwdFolders = computed(() => {
-  const uniqueFolders = [...new Map((props.folders || []).map((folder) => [folder.id, folder])).values()];
-  if (isLocalRuntime()) {
-    return uniqueFolders;
-  }
-  const source = props.instance.source;
-  if (source.type !== "local-folder") {
-    return [];
-  }
-  return uniqueFolders.filter((folder) => isSameOrChildNodePath(folder.path, source.path));
-});
-const filteredCwdFolders = computed(() => {
-  const query = folderSearch.value.trim().toLowerCase();
-  return cwdFolders.value.filter((folder) => !query || `${nodeLocalFolderDisplayName(folder)} ${folder.name} ${folder.path}`.toLowerCase().includes(query));
-});
-function isLocalRuntime() {
-  return props.instance.runtime?.type === "local" || props.instance.runtime.kind === "local";
-}
+const cwdFolders = computed(() => selectableInstanceCwdFolders(props.instance, props.folders || []));
+const filteredCwdFolders = computed(() => filterInstanceCwdFolders(cwdFolders.value, folderSearch.value));
 
 </script>
 

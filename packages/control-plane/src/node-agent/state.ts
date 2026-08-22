@@ -46,13 +46,10 @@ import { reduceInstanceLifecycle, type InstanceLifecycleEvent } from "./instance
 import type { ExecutorContext } from "./runtimes/docker.ts";
 import type { RuntimeAdapter } from "./runtimes/adapters.ts";
 import { requireBrowsableFolderPath } from "./folders.ts";
+import { nowIso as now } from "@task-handoff/core/core/time";
 
 const BUILTIN_LOCAL_RUNTIME_ID = "runtime_local_host";
 const BUILTIN_RUNTIME_LABEL = "task-handoff.node-agent.builtin";
-
-function now() {
-  return new Date().toISOString();
-}
 
 function userRuntimeLabels(labels: Record<string, string> | undefined) {
   const sanitized = { ...labels };

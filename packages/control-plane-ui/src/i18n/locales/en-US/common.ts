@@ -38,6 +38,7 @@ export const common = {
     running: "Running",
     stopped: "Stopped",
     off: "Off",
+    unavailable: "Unavailable",
     unknown: "Unknown",
     unknownValue: "Unknown ({value})",
   },

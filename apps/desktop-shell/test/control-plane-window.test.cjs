@@ -34,8 +34,9 @@ test("control plane child windows are restricted to approved same-origin routes"
 test("control plane child windows use the compact content-backed titlebar", () => {
   assert.match(mainSource, /function compactTitleBarWindowOptions\(\) \{[\s\S]*?height: 42,[\s\S]*?trafficLightPosition: \{ x: 16, y: 15 \}/);
   const createWindowSource = mainSource.match(/function createControlPlaneWindow\(url\) \{[\s\S]*?\n\}/)?.[0] || "";
-  assert.match(createWindowSource, /new BrowserWindow\(\{[\s\S]*?\.\.\.compactTitleBarWindowOptions\(\)/);
-  assert.match(createWindowSource, /windowsTitleBarOverlayHeights\.set\(controlPlaneWindow, 42\)/);
+  assert.match(createWindowSource, /createDesktopBrowserWindow\(\{[\s\S]*?\.\.\.compactTitleBarWindowOptions\(\)/);
+  assert.match(createWindowSource, /\}, 42\)/);
+  assert.match(mainSource, /function createDesktopBrowserWindow\([\s\S]*?webPreferences: desktopWindowWebPreferences\(\)[\s\S]*?openExternalWindowsOnly\(window\.webContents\)/);
   assert.match(createWindowSource, /minWidth: instanceId \? 400 : 760/);
   assert.match(createWindowSource, /const initialSize = instanceId[\s\S]*?desktopWindowPreferences\?\.instanceDetailSize\(\)/);
   assert.match(createWindowSource, /controlPlaneWindow\.on\("resize"[\s\S]*?setTimeout\(persistSize, 180\)/);

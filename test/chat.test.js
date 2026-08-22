@@ -43,6 +43,10 @@ const {
   scanRecentTranscripts,
 } = require("../packages/ai-session-runtime/src/ai-session-registry.ts");
 const {
+  reduceAiSessionRealtime,
+  reduceAiSessionSnapshot,
+} = require("../packages/ai-session-runtime/src/ai-session/state-reducer.ts");
+const {
   CodexToolActivityTracker,
   CodexSubAgentTracker,
   codexApprovalRequest,
@@ -884,6 +888,27 @@ test("ai session registry atomically replaces and explicitly clears tool activit
   stop();
 });
 
+test("ai session realtime activity accepts protocol-valid sessions without turns", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-optional-turns-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const created = registry.start({ agent: "codex", providerSessionId: "thread-optional-turns" });
+  const current = { ...created, turns: undefined };
+
+  const updated = reduceAiSessionRealtime(current, {
+    type: "realtime",
+    kind: "tool-activity",
+    source: "control",
+    sourcePriority: 90,
+    sessionId: current.id,
+    observedAt: "2026-08-22T00:00:00.000Z",
+    currentTool: null,
+    toolCallsSinceLastMessage: 1,
+  });
+
+  assert.equal(updated.turns, undefined);
+  assert.equal(updated.toolCallsSinceLastMessage, 1);
+});
+
 test("ai session registry keeps sub-agent state independent from tool activity and responses", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-sub-agents-"));
   const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
@@ -1317,6 +1342,76 @@ test("ai session registry rebinds orphaned app sessions without creating duplica
   assert.equal(rebound.id, first.id);
   assert.equal(fs.readdirSync(path.join(root, "ai-sessions")).filter((name) => name.endsWith(".json")).length, 1);
   assert.equal(registry.snapshot().sessions.length, 1);
+});
+
+test("ai session registry ignores observation-only adapter snapshots", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-observation-noop-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  let changes = 0;
+  registry.onChange(() => {
+    changes += 1;
+  });
+  const input = {
+    agent: "codex",
+    providerSessionId: "thread-observation-noop",
+    turns: [{
+      id: "turn_1",
+      providerTurnId: "turn_1",
+      userPrompt: "Keep the snapshot stable",
+      status: "completed",
+      phase: "unknown",
+      summary: "Done",
+      lastMessage: "Done",
+      revision: 1,
+      updatedAt: "2026-08-21T14:00:00.000Z",
+    }],
+    status: "idle",
+    phase: "unknown",
+    summary: "Done",
+    lastMessage: "Done",
+    replaceActivity: true,
+  };
+
+  const first = registry.applyAdapterSnapshot({ ...input, observedAt: "2026-08-21T14:00:00.000Z" });
+  const changesAfterFirstSnapshot = changes;
+  const currentBeforeRepeatedSnapshot = registry.get(first.id);
+  const directRepeated = reduceAiSessionSnapshot(currentBeforeRepeatedSnapshot, {
+    ...input,
+    type: "snapshot",
+    source: "control",
+    sourcePriority: 90,
+    sessionId: first.id,
+    observedAt: "2026-08-21T14:00:30.000Z",
+  });
+  assert.equal(directRepeated, currentBeforeRepeatedSnapshot);
+  assert.equal(reduceAiSessionSnapshot(currentBeforeRepeatedSnapshot, {
+    ...input,
+    type: "snapshot",
+    source: "control",
+    sourcePriority: 90,
+    sessionId: first.id,
+    observedAt: first.updatedAt,
+  }), currentBeforeRepeatedSnapshot);
+  const repeated = registry.applyAdapterSnapshot({ ...input, observedAt: "2026-08-21T14:00:30.000Z" });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(repeated)), JSON.parse(JSON.stringify(first)));
+  assert.equal(repeated.updatedAt, "2026-08-21T14:00:00.000Z");
+  assert.equal(changes, changesAfterFirstSnapshot);
+
+  const sameTimestamp = registry.applyAdapterSnapshot({ ...input, observedAt: first.updatedAt });
+  assert.deepEqual(JSON.parse(JSON.stringify(sameTimestamp)), JSON.parse(JSON.stringify(first)));
+  assert.equal(changes, changesAfterFirstSnapshot);
+
+  const changed = registry.applyAdapterSnapshot({
+    ...input,
+    turns: [{ ...input.turns[0], summary: "Actually changed", lastMessage: "Actually changed", revision: 2 }],
+    summary: "Actually changed",
+    lastMessage: "Actually changed",
+    observedAt: "2026-08-21T14:01:00.000Z",
+  });
+  assert.equal(changed.updatedAt, "2026-08-21T14:01:00.000Z");
+  assert.equal(changed.lastMessage, "Actually changed");
+  assert.equal(changes, changesAfterFirstSnapshot + 1);
 });
 
 test("ai session registry snapshots expose one canonical session per app identity", () => {

@@ -67,3 +67,80 @@ test("managed upload forwards bounded chunks while retaining a non-blocking cach
   assert.ok(cached);
   assert.deepEqual(fs.readFileSync(cached.path), content);
 });
+
+test("managed upload reports malformed controlled-instance responses as a bad gateway", async (t) => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "ai-session-upload-protocol-"));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  const app = Fastify({ logger: false });
+  t.after(() => app.close());
+  app.addContentTypeParser("application/octet-stream", (_request, payload, done) => done(null, payload));
+  app.setErrorHandler((error, _request, reply) => reply.code(error.statusCode || 500).send({ error: { code: error.code, message: error.message } }));
+  registerSessionRoutes({
+    app,
+    service: {
+      async proxyInstanceHttp(_instanceId, route) {
+        return route.includes("draft-streams") && !route.match(/\/cia_[^/]+$/)
+          ? streamedJson({ offset: 0 }, 201)
+          : streamedJson({ removed: true });
+      },
+    },
+    events: { publish() {} },
+    appSessionAggregator: {},
+    aiSessionAggregator: {},
+    aiSessionUnread: {},
+    aiSessionAttachments: {},
+    aiSessionAttachmentCache: new AiSessionAttachmentCache(dataDir),
+  });
+  const query = new URLSearchParams({ scopeType: "session", scopeId: "session-1", kind: "file", name: "asset.bin", mime: "application/octet-stream", size: "1" });
+  const response = await app.inject({ method: "POST", url: `/api/controlled-instances/instance-1/ai-session-attachments/drafts?${query}`, headers: { "content-type": "application/octet-stream" }, payload: Buffer.from("a") });
+  assert.equal(response.statusCode, 502);
+  assert.equal(response.json().error.code, "AI_SESSION_ATTACHMENT_PROTOCOL_INVALID");
+});
+
+test("message actions resolve attachment retention only for managed upload references", async (t) => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "ai-session-message-retention-"));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  const app = Fastify({ logger: false });
+  t.after(() => app.close());
+  let retentionLookups = 0;
+  registerSessionRoutes({
+    app,
+    service: {
+      async sendAiSessionMessage(_instanceId, _sessionId, _message, _mode, attachments) {
+        const attachmentId = attachments.find((attachment) => attachment.source.type === "upload-ref")?.id;
+        return {
+          session: {
+            turns: attachmentId ? [{ userMessages: [{ id: "message-1", attachments: [{ id: attachmentId }] }] }] : [],
+            queue: { items: [] },
+          },
+        };
+      },
+      async requireControlledInstance() {
+        retentionLookups += 1;
+        return { config: { aiSessionAttachmentRetentionDays: 7 } };
+      },
+    },
+    events: { publish() {} },
+    appSessionAggregator: {},
+    aiSessionAggregator: {},
+    aiSessionUnread: {},
+    aiSessionAttachments: { resolveRefs() { return []; } },
+    aiSessionAttachmentCache: new AiSessionAttachmentCache(dataDir),
+  });
+
+  const plain = await app.inject({
+    method: "POST",
+    url: "/api/controlled-instances/instance-1/ai-sessions/session-1/messages",
+    payload: { message: "plain message" },
+  });
+  assert.equal(plain.statusCode, 200);
+  assert.equal(retentionLookups, 0);
+
+  const managed = await app.inject({
+    method: "POST",
+    url: "/api/controlled-instances/instance-1/ai-sessions/session-1/messages",
+    payload: { message: "with attachment", attachments: [{ id: "cia_1234567890abcdef12345678", source: { type: "upload-ref" } }] },
+  });
+  assert.equal(managed.statusCode, 200);
+  assert.equal(retentionLookups, 1);
+});

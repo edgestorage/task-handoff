@@ -33,7 +33,7 @@
     :instance-id="instanceId"
     :file-links="fileLinks"
     :is-latest="promptIndex >= promptCount - 1"
-    :response-content="displayAiSessionResponse(session, promptIndex, t)"
+    :response-content="compactResponseContent"
     :turn-started-at="selectedTurn?.startedAt"
     :turn-ended-at="turnElapsedEnd(selectedTurn)"
     :session="session"
@@ -53,7 +53,18 @@
     @remove-queued-message="$emit('removeQueuedMessage', $event)"
     @reorder-queued-messages="$emit('reorderQueuedMessages', $event)"
     @resolve-approval="$emit('resolveApproval', $event)"
-  />
+  >
+    <template #turn-footer>
+      <AiSessionTurnActions
+        v-if="compactCompletedTurn && compactResponseContent"
+        :busy="busy"
+        :can-continue="compactCanContinue"
+        :content="compactResponseContent"
+        :timestamp="compactTurnTime"
+        @continue="$emit('continueFromTurn', compactCompletedTurn.id)"
+      />
+    </template>
+  </AiSessionResult>
 </template>
 
 <script setup lang="ts">
@@ -65,6 +76,7 @@ import { aiSessionTurns, displayAiSessionResponse } from "../../apps/control-pla
 import { compactTimelineForTurn, turnElapsedEnd } from "./timelineActivities";
 import AiSessionResult from "./AiSessionResult.vue";
 import AiSessionTimelineView from "./AiSessionTimelineView.vue";
+import AiSessionTurnActions from "./AiSessionTurnActions.vue";
 
 const props = withDefaults(defineProps<{
   activityInteractive?: boolean;
@@ -106,6 +118,13 @@ defineEmits<{
 
 const { t } = useI18n();
 const selectedTurn = computed(() => aiSessionTurns(props.session)[props.promptIndex]);
+const compactResponseContent = computed(() => displayAiSessionResponse(props.session, props.promptIndex, t));
+const compactCompletedTurn = computed(() => selectedTurn.value?.status === "completed" ? selectedTurn.value : undefined);
+const compactCanContinue = computed(() => Boolean(props.session.actions?.fork && compactCompletedTurn.value?.providerTurnId));
+const compactTurnTime = computed(() => {
+  const turn = compactCompletedTurn.value;
+  return turn?.completedAt || turn?.updatedAt || turn?.startedAt || "";
+});
 const selectedTimeline = computed(() => compactTimelineForTurn(props.selectedTurnState.items, selectedTurn.value));
 </script>
 

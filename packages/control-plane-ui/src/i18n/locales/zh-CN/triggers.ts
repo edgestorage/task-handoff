@@ -5,6 +5,10 @@ export const triggers = {
   title: "触发器",
   libraryTitle: "触发器库 · {count}",
   description: "汇总来自控制平面和受控实例的模板。",
+  feedback: {
+    partialFailure: "操作已完成，但有 {count} 个节点或实例未更新：{targets}。请在其恢复后重试。",
+    unknownTarget: "未知目标",
+  },
   empty: "暂无触发器模板。",
   filter: "筛选模板",
   overview: { label: "触发器状态概览", templates: "模板", deployments: "部署", running: "运行中", errors: "错误" },

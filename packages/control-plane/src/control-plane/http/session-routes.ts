@@ -3,7 +3,7 @@ import fs from "node:fs";
 import crypto from "node:crypto";
 import { Readable, Transform } from "node:stream";
 import { z } from "zod";
-import { AiSessionApprovalInputSchema, AiSessionCloseInputSchema, AiSessionCommandInputSchema, AiSessionCreateRefInputSchema, AiSessionForkInputSchema, AiSessionMentionFileSearchInputSchema, AiSessionMessageRefInputSchema, AiSessionOpenAppInputSchema, AiSessionQueueEditInputSchema, AiSessionQueueReorderInputSchema, AiSessionUnreadEventType } from "@task-handoff/protocol/ai-sessions";
+import { AI_SESSION_ATTACHMENT_DRAFT_STREAM_CHUNK_BYTES, AI_SESSION_ATTACHMENT_UPLOAD_BODY_LIMIT, AiSessionApprovalInputSchema, AiSessionAttachmentDraftSchema, AiSessionAttachmentDraftStreamCreateInputSchema, AiSessionAttachmentDraftStreamOffsetSchema, AiSessionAttachmentDraftUploadQuerySchema, AiSessionCloseInputSchema, AiSessionCommandInputSchema, AiSessionCreateRefInputSchema, AiSessionForkInputSchema, AiSessionMentionFileSearchInputSchema, AiSessionMessageRefInputSchema, AiSessionOpenAppInputSchema, AiSessionQueueEditInputSchema, AiSessionQueueReorderInputSchema, AiSessionUnreadEventType, isAiSessionInlineImageMime } from "@task-handoff/protocol/ai-sessions";
 import type { ControlPlaneService } from "../application/service.ts";
 import type { ControlPlaneEventBus } from "../events/bus.ts";
 import type { ControlPlaneAiSessionAggregator } from "../sessions/ai-session-aggregator.ts";
@@ -54,12 +54,6 @@ const AppSessionAccessRevokeRequestSchema = z
 
 const EmptyRequestSchema = z.object({}).strict();
 
-const INLINE_RASTER_MIME_TYPES = new Set(["image/bmp", "image/gif", "image/jpeg", "image/png", "image/webp"]);
-
-function isInlineRaster(mime: string) {
-  return INLINE_RASTER_MIME_TYPES.has(mime.split(";", 1)[0]!.trim().toLowerCase());
-}
-
 function attachmentName(disposition: string | undefined, fallback: string) {
   if (!disposition) return fallback;
   const encoded = /filename\*=UTF-8''([^;]+)/i.exec(disposition)?.[1];
@@ -82,6 +76,15 @@ async function proxyData(response: { status: number; body: ReadableStream<Uint8A
     });
   }
   return payload.data;
+}
+
+function parseAttachmentProtocolResponse<T>(schema: z.ZodType<T>, value: unknown, phase: string) {
+  const parsed = schema.safeParse(value);
+  if (parsed.success) return parsed.data;
+  throw Object.assign(new Error(`Controlled instance returned an invalid attachment ${phase} response: ${parsed.error.issues.map((issue) => `${issue.path.join(".") || "response"}: ${issue.message}`).join("; ")}`), {
+    statusCode: 502,
+    code: "AI_SESSION_ATTACHMENT_PROTOCOL_INVALID",
+  });
 }
 
 export function registerSessionRoutes({
@@ -178,16 +181,9 @@ export function registerSessionRoutes({
     const params = InstanceSessionParamsSchema.parse(request.params);
     return { data: await service.getAiSessionDetail(params.id, params.sessionId) };
   });
-  app.post<{ Params: { id: string }; Querystring: Record<string, unknown>; Body: Readable }>("/api/controlled-instances/:id/ai-session-attachments/drafts", { bodyLimit: 21 * 1024 * 1024 }, async (request, reply) => {
+  app.post<{ Params: { id: string }; Querystring: Record<string, unknown>; Body: Readable }>("/api/controlled-instances/:id/ai-session-attachments/drafts", { bodyLimit: AI_SESSION_ATTACHMENT_UPLOAD_BODY_LIMIT }, async (request, reply) => {
     const params = IdParamsSchema.parse(request.params);
-    const input = z.object({
-      scopeType: z.enum(["session", "create-request"]),
-      scopeId: z.string().trim().min(1).max(160),
-      kind: z.enum(["image", "file"]),
-      name: z.string().trim().min(1).max(240),
-      mime: z.string().trim().min(1).max(120),
-      size: z.coerce.number().int().positive().max(20 * 1024 * 1024),
-    }).strict().parse(request.query);
+    const input = AiSessionAttachmentDraftUploadQuerySchema.parse(request.query);
     const attachmentId = `cia_${crypto.randomUUID().replace(/-/g, "").slice(0, 24)}`;
     const target = "/api/ai-session-attachments/draft-streams";
     const controller = new AbortController();
@@ -207,32 +203,39 @@ export function registerSessionRoutes({
     });
     let offset = 0;
     try {
-      await proxyData(await service.proxyInstanceHttp(params.id, target, {
+      const started = parseAttachmentProtocolResponse(AiSessionAttachmentDraftStreamOffsetSchema, await proxyData(await service.proxyInstanceHttp(params.id, target, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ attachmentId, ...input }),
+        body: JSON.stringify(AiSessionAttachmentDraftStreamCreateInputSchema.parse({ attachmentId, ...input })),
         signal: controller.signal,
-      }));
+      })), "start");
+      if (started.attachmentId !== attachmentId || started.offset !== 0) {
+        throw Object.assign(new Error("Controlled instance returned an invalid attachment upload offset."), { statusCode: 502, code: "AI_SESSION_ATTACHMENT_OFFSET_MISMATCH" });
+      }
       for await (const raw of request.body) {
         const received = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
-        for (let start = 0; start < received.length; start += 256 * 1024) {
-          const chunk = received.subarray(start, Math.min(start + 256 * 1024, received.length));
+        for (let start = 0; start < received.length; start += AI_SESSION_ATTACHMENT_DRAFT_STREAM_CHUNK_BYTES) {
+          const chunk = received.subarray(start, Math.min(start + AI_SESSION_ATTACHMENT_DRAFT_STREAM_CHUNK_BYTES, received.length));
           cacheWriter?.offer(chunk);
-          await proxyData(await service.proxyInstanceHttp(params.id, `${target}/${encodeURIComponent(attachmentId)}?offset=${offset}`, {
+          const acknowledged = parseAttachmentProtocolResponse(AiSessionAttachmentDraftStreamOffsetSchema, await proxyData(await service.proxyInstanceHttp(params.id, `${target}/${encodeURIComponent(attachmentId)}?offset=${offset}`, {
             method: "PUT",
             headers: { "content-type": "application/octet-stream", "content-length": String(chunk.length) },
             body: chunk,
             signal: controller.signal,
-          }));
-          offset += chunk.length;
+          })), "chunk");
+          const expectedOffset = offset + chunk.length;
+          if (acknowledged.attachmentId !== attachmentId || acknowledged.offset !== expectedOffset) {
+            throw Object.assign(new Error("Controlled instance returned an invalid attachment upload offset."), { statusCode: 502, code: "AI_SESSION_ATTACHMENT_OFFSET_MISMATCH" });
+          }
+          offset = acknowledged.offset;
         }
       }
-      const draft = await proxyData(await service.proxyInstanceHttp(params.id, `${target}/${encodeURIComponent(attachmentId)}/complete`, {
+      const draft = parseAttachmentProtocolResponse(AiSessionAttachmentDraftSchema, await proxyData(await service.proxyInstanceHttp(params.id, `${target}/${encodeURIComponent(attachmentId)}/complete`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: "{}",
         signal: controller.signal,
-      }));
+      })), "completion");
       void cacheWriter?.finish();
       return reply.code(201).send({ data: draft });
     } catch (error) {
@@ -316,7 +319,7 @@ export function registerSessionRoutes({
         attachmentId: params.attachmentId,
         sessionId: params.sessionId,
         messageId: params.messageId,
-        kind: isInlineRaster(mime) ? "image" : "file",
+        kind: isAiSessionInlineImageMime(mime) ? "image" : "file",
         name: attachmentName(disposition, params.attachmentId),
         mime,
         size: declaredSize,
@@ -377,21 +380,23 @@ export function registerSessionRoutes({
       ? attachment
       : resolvedById.get(attachment.id)!).filter(Boolean);
     const result = await service.createAiSession(params.id, { ...parsed, attachments });
-    const retainedDays = (await service.requireControlledInstance(params.id, true)).config.aiSessionAttachmentRetentionDays ?? 30;
     const attachmentIds = new Set(parsed.attachments.filter((attachment) => attachment.source.type === "upload-ref" && attachment.id.startsWith("cia_")).map((attachment) => attachment.id));
-    if (attachmentIds.size) void service.getAiSessionDetail(params.id, result.aiSessionId).then((session) => {
-      const messageId = session.turns?.flatMap((turn) => turn.userMessages || [])
-        .find((message) => message.attachments.some((attachment) => attachmentIds.has(attachment.id)))?.id;
-      if (!messageId) return;
-      for (const attachmentId of attachmentIds) aiSessionAttachmentCache.bind({
-        instanceId: params.id,
-        attachmentId,
-        scopeId: parsed.clientRequestId,
-        sessionId: result.aiSessionId,
-        messageId,
-        cacheUntil: Date.now() + retainedDays * 24 * 60 * 60 * 1000,
-      });
-    }).catch(() => undefined);
+    if (attachmentIds.size) {
+      const retainedDays = (await service.requireControlledInstance(params.id, true)).config.aiSessionAttachmentRetentionDays ?? 30;
+      void service.getAiSessionDetail(params.id, result.aiSessionId).then((session) => {
+        const messageId = session.turns?.flatMap((turn) => turn.userMessages || [])
+          .find((message) => message.attachments.some((attachment) => attachmentIds.has(attachment.id)))?.id;
+        if (!messageId) return;
+        for (const attachmentId of attachmentIds) aiSessionAttachmentCache.bind({
+          instanceId: params.id,
+          attachmentId,
+          scopeId: parsed.clientRequestId,
+          sessionId: result.aiSessionId,
+          messageId,
+          cacheUntil: Date.now() + retainedDays * 24 * 60 * 60 * 1000,
+        });
+      }).catch(() => undefined);
+    }
     events.publish("instance.ai-session.created", { instanceId: params.id, sessionId: result.aiSessionId, providerSessionId: result.providerSessionId, clientRequestId: parsed.clientRequestId });
     return { data: result };
   });
@@ -462,13 +467,13 @@ export function registerSessionRoutes({
       finishTiming("failed");
       throw error;
     }
-    const retainedDays = (await service.requireControlledInstance(params.id, true)).config.aiSessionAttachmentRetentionDays ?? 30;
-    const cacheUntil = Date.now() + retainedDays * 24 * 60 * 60 * 1000;
     const attachmentIds = new Set(parsed.attachments.filter((attachment) => attachment.source.type === "upload-ref" && attachment.id.startsWith("cia_")).map((attachment) => attachment.id));
     const messageId = result.session.turns?.flatMap((turn) => turn.userMessages || [])
       .find((message) => message.attachments.some((attachment) => attachmentIds.has(attachment.id)))?.id
       || result.session.queue.items.find((item) => item.id === result.queueId)?.messageId;
-    if (messageId) {
+    if (attachmentIds.size && messageId) {
+      const retainedDays = (await service.requireControlledInstance(params.id, true)).config.aiSessionAttachmentRetentionDays ?? 30;
+      const cacheUntil = Date.now() + retainedDays * 24 * 60 * 60 * 1000;
       for (const attachmentId of attachmentIds) aiSessionAttachmentCache.bind({
         instanceId: params.id,
         attachmentId,

@@ -20,6 +20,7 @@ import {
   LEGACY_MODEL_ENV_KEYS,
   NodeModelStore,
 } from "./stores.ts";
+import { nowIso as now } from "@task-handoff/core/core/time";
 
 type InstanceAccess = {
   has(id: string): boolean;
@@ -27,10 +28,6 @@ type InstanceAccess = {
   require(id: string): ControlledInstance;
   put(instance: ControlledInstance): ControlledInstance;
 };
-
-function now() {
-  return new Date().toISOString();
-}
 
 export class NodeModelRegistry {
   private readonly models: NodeModelStore;

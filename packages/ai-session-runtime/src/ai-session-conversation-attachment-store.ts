@@ -15,6 +15,7 @@ import {
   type AiSessionMessageAttachment,
 } from "@task-handoff/protocol/ai-sessions";
 import type { TaskHandoffStoragePaths } from "@task-handoff/core/storage/paths";
+import { safeFileName } from "@task-handoff/core/core/file-names";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DRAFT_RETENTION_MS = DAY_MS;
@@ -200,7 +201,7 @@ export class AiSessionConversationAttachmentStore {
         scopeType: input.scopeType,
         scopeId: input.scopeId,
         kind: input.kind,
-        name: safeName(input.name),
+        name: safeFileName(input.name),
         mime: input.mime.toLowerCase(),
         size,
         blobHash,
@@ -310,7 +311,7 @@ export class AiSessionConversationAttachmentStore {
           sessionId: input.sessionId,
           messageId: input.messageId,
           kind: snapshot.attachment.kind,
-          name: safeName(snapshot.attachment.name),
+          name: safeFileName(snapshot.attachment.name),
           mime: snapshot.attachment.mime,
           size: snapshot.content.length,
           blobHash,
@@ -741,11 +742,6 @@ export class AiSessionConversationAttachmentStore {
 
 function normalizeRetentionDays(value: number | undefined) {
   return Number.isInteger(value) && value !== undefined && value >= 0 && value <= 365 ? value : AI_SESSION_ATTACHMENT_RETENTION_DEFAULT_DAYS;
-}
-
-function safeName(name: string) {
-  const value = path.basename(name).replace(/[\u0000-\u001f\u007f]/g, "_").trim().slice(0, 240);
-  return value || "attachment";
 }
 
 function pickManifestFields(value: unknown) {

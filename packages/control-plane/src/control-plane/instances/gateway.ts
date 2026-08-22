@@ -63,10 +63,15 @@ export class ControlledInstanceGateway {
     if (!response.ok) {
       const remoteError = remoteErrorPayload(payload.error);
       const message = remoteError?.message || errorMessage(payload.error) || `Instance request failed with HTTP ${response.status}`;
+      // Compatibility for v0.0.17: legacy node agents surfaced failures while
+      // connecting their instance proxy as a generic internal error. At this
+      // boundary it is an upstream gateway failure, not a control-plane 500.
+      const legacyProxyFailure = response.status === 500 && remoteError?.code === "NODE_AGENT_ERROR";
       const error = new Error(message);
       Object.assign(error, {
-        statusCode: response.status,
-        code: remoteError?.code || "INSTANCE_REQUEST_FAILED",
+        statusCode: legacyProxyFailure ? 502 : response.status,
+        code: legacyProxyFailure ? "INSTANCE_PROXY_UPSTREAM_FAILED" : remoteError?.code || "INSTANCE_REQUEST_FAILED",
+        ...(legacyProxyFailure ? { retryable: true } : typeof remoteError?.retryable === "boolean" ? { retryable: remoteError.retryable } : {}),
         ...(remoteError?.details ? { details: remoteError.details } : {}),
         instanceId: instance.id,
         nodeId: instance.nodeId,
@@ -167,7 +172,8 @@ function remoteErrorPayload(value: unknown) {
   const code = typeof record.code === "string" && record.code.trim() ? record.code : undefined;
   const message = typeof record.message === "string" && record.message ? record.message : undefined;
   const details = record.details && typeof record.details === "object" && !Array.isArray(record.details) ? record.details as Record<string, unknown> : undefined;
-  return code || message ? { code, message, details } : undefined;
+  const retryable = typeof record.retryable === "boolean" ? record.retryable : undefined;
+  return code || message ? { code, message, details, retryable } : undefined;
 }
 
 function requestBody(body: BodyInit | null | undefined) {

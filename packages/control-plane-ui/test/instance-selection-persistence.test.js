@@ -86,6 +86,42 @@ test("persists explicit selection and replaces a missing stored instance", async
   scope.stop();
 });
 
+test("retains the selected instance while the progressive directory is incomplete", async () => {
+  storage.values.clear();
+  storage.setItem(ACTIVE_INSTANCE_STORAGE_KEY, "instance-b");
+  const directoryComplete = ref(true);
+  const instances = ref([
+    instance("instance-a", "2026-07-25T10:00:00.000Z"),
+    instance("instance-b", "2026-07-25T09:00:00.000Z"),
+  ]);
+  const scope = effectScope();
+  const state = scope.run(() => useWorkbenchInstances({
+    instances,
+    selection: { mode: "persistent", directoryComplete },
+  }));
+
+  directoryComplete.value = false;
+  instances.value = [instance("instance-a", "2026-07-25T10:00:00.000Z")];
+  await nextTick();
+  assert.equal(state.activeInstanceId.value, "instance-b");
+  assert.equal(state.activeInstance.value, undefined);
+  assert.equal(storage.getItem(ACTIVE_INSTANCE_STORAGE_KEY), "instance-b");
+
+  instances.value = [
+    instance("instance-a", "2026-07-25T10:00:00.000Z"),
+    instance("instance-b", "2026-07-25T09:00:00.000Z"),
+  ];
+  await nextTick();
+  assert.equal(state.activeInstance.value.id, "instance-b");
+
+  instances.value = [instance("instance-a", "2026-07-25T10:00:00.000Z")];
+  directoryComplete.value = true;
+  await nextTick();
+  assert.equal(state.activeInstanceId.value, "instance-a");
+  assert.equal(storage.getItem(ACTIVE_INSTANCE_STORAGE_KEY), "instance-a");
+  scope.stop();
+});
+
 test("standalone selection neither falls back nor touches persistent selection", async () => {
   storage.values.clear();
   storage.setItem(ACTIVE_INSTANCE_STORAGE_KEY, "instance-a");

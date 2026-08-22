@@ -173,7 +173,7 @@ const dockerRuntimeCheck = reactive<{ key: string; state: DockerRuntimeCheckStat
 });
 
 const sourceDraft = reactive<SourceDraft>({
-  mode: "project" as SourceMode,
+  mode: "local-folder" as SourceMode,
   projectId: "",
   localNodeId: "",
   localFolderId: "",
@@ -203,7 +203,7 @@ const imageAvailability = useNodeImageAvailabilityQuery(() => runtimeDraft.nodeI
 const environmentTemplates = useEnvironmentTemplatesQuery(() => runtimeDraft.nodeId);
 const instanceDraft = reactive<InstanceDraft>({
   name: "",
-  autoImportAgentConfigs: true,
+  autoImportAgentConfigs: false,
   codexModelHash: null,
   claudeModelHash: null,
 });
@@ -679,7 +679,7 @@ async function createInstance() {
       ...(instanceDraft.name.trim() ? { name: instanceDraft.name.trim() } : {}),
     });
     instanceDraft.name = "";
-    instanceDraft.autoImportAgentConfigs = true;
+    instanceDraft.autoImportAgentConfigs = false;
     instanceDraft.codexModelHash = null;
     instanceDraft.claudeModelHash = null;
   } catch (error) {

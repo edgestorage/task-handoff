@@ -316,6 +316,7 @@
 import { computed, reactive, ref } from "vue";
 import { useQueryClient } from "@tanstack/vue-query";
 import { useI18n } from "vue-i18n";
+import type { ControlPlaneTriggerMutationFailure } from "@task-handoff/protocol/triggers";
 import { Activity, Bot, CircleAlert, Clock3, FolderSync, History, MapPin, MapPinPlus, Pencil, Play, Plus, Trash2, Unlink, X, Zap } from "@lucide/vue";
 import { bindAiSessionTrigger, createControlPlaneTrigger, deleteControlPlaneTrigger, runControlledInstanceTrigger, unbindAiSessionTrigger, updateControlPlaneTrigger, useControlPlaneAiSessionsQuery, useControlPlaneTriggersQuery } from "../../../api/queries";
 import { controlPlaneQueryKeys } from "../../../api/queryKeys.ts";
@@ -591,7 +592,8 @@ async function saveTemplate() {
       },
     };
     if (editingHash.value) {
-      await updateControlPlaneTrigger(editingHash.value, input);
+      const result = await updateControlPlaneTrigger(editingHash.value, input);
+      showMutationFailures(result.partialFailures);
     } else {
       await createControlPlaneTrigger(input);
     }
@@ -654,13 +656,23 @@ async function deleteTemplate(configHash: string) {
   }
   deletingHash.value = configHash;
   try {
-    await deleteControlPlaneTrigger(configHash);
+    const result = await deleteControlPlaneTrigger(configHash);
+    showMutationFailures(result.partialFailures);
     await refresh();
   } catch (error) {
     showControlPlaneToast(translateApiError(error, t));
   } finally {
     deletingHash.value = "";
   }
+}
+
+function showMutationFailures(failures: ControlPlaneTriggerMutationFailure[] | undefined) {
+  if (!failures?.length) return;
+  const failedTargets = [...new Set(failures.map((failure) => failure.instanceId || failure.nodeId).filter(Boolean))];
+  showControlPlaneToast(t("triggers.feedback.partialFailure", {
+    count: failedTargets.length || failures.length,
+    targets: failedTargets.join(", ") || t("triggers.feedback.unknownTarget"),
+  }), "info");
 }
 
 async function refresh() {

@@ -129,7 +129,8 @@ test("detail surfaces omit the legacy running response placeholder", () => {
   assert.doesNotMatch(result, /v-show="displayContent"/);
   assert.match(result, /const displayContent = computed\(\(\) => streamingContent\.value \|\| props\.responseContent\)/);
   assert.match(result, /props\.isLatest[\s\S]*?streamingMessages\.activeMessage\(props\.instanceId, props\.session\.id\)/);
-  assert.match(conversation, /:response-content="displayAiSessionResponse\(session, promptIndex, t\)"/);
+  assert.match(conversation, /:response-content="compactResponseContent"/);
+  assert.match(conversation, /compactResponseContent = computed\(\(\) => displayAiSessionResponse\(props\.session, props\.promptIndex, t\)\)/);
   assert.match(sessions, /includeProgress \? aiSessionProgressText\(session, t\) : ""/);
 });
 

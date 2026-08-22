@@ -41,6 +41,7 @@ export const common = {
     running: "运行中",
     stopped: "已停止",
     off: "关闭",
+    unavailable: "不可用",
     unknown: "未知",
     unknownValue: "未知（{value}）",
   },

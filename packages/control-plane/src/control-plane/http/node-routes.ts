@@ -22,6 +22,7 @@ import { publicNodeDirectory } from "../public-records.ts";
 
 const DeleteNodeQuerySchema = z.object({ force: z.enum(["true", "false"]).optional() }).strict();
 const NodeListQuerySchema = z.object({ projection: z.literal("directory").optional() }).strict();
+const FleetListQuerySchema = z.object({ progressive: z.enum(["true", "false"]).optional() }).strict();
 
 type ErrorPayload = (error: unknown) => {
   statusCode: number;
@@ -223,8 +224,9 @@ export function registerNodeRoutes({
   });
 
   app.get("/api/node-runtimes", async (request, reply) => withRequestSignal(request, reply, async (signal) => {
-    const result = await service.listNodeRuntimesWithDiagnostics(signal);
-    return { data: result.items, meta: { nodeErrors: result.nodeErrors } };
+    const query = FleetListQuerySchema.parse(request.query);
+    const result = await service.listNodeRuntimesWithDiagnostics(signal, query.progressive === "true");
+    return { data: result.items, meta: { nodeErrors: result.nodeErrors, nodeStates: result.nodeStates } };
   }));
 
   registerNodeAgentTunnelRoutes({ app, service, nodeAgentTunnel, errorPayload });

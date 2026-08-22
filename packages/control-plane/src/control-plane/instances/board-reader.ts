@@ -10,6 +10,7 @@ import {
 import { aiSessionsBoardSummary } from "@task-handoff/protocol/ai-sessions";
 import { publicInstanceWithAccess, publicNode } from "../public-records.ts";
 import type { NodeAgentScopedError } from "../nodes/client.ts";
+import type { NodeFleetResourceState } from "../nodes/gateway.ts";
 
 export type InstanceBoardReaderInput = {
   projects: Project[];
@@ -18,11 +19,13 @@ export type InstanceBoardReaderInput = {
   runtimes: NodeRuntime[];
   instances: ControlledInstance[];
   nodeErrors?: NodeAgentScopedError[];
+  nodeStates?: NodeFleetResourceState[];
 };
 
 export type InstanceBoardResult = {
   items: ReturnType<typeof boardInstance>[];
   nodeErrors: NodeAgentScopedError[];
+  nodeStates: NodeFleetResourceState[];
 };
 
 export class InstanceBoardReader {
@@ -42,6 +45,7 @@ export class InstanceBoardReader {
         runtime: runtimes.get(`${instance.nodeId}:${instance.runtimeId}`),
       })),
       nodeErrors: input.nodeErrors || [],
+      nodeStates: input.nodeStates || [],
     };
   }
 }

@@ -3,10 +3,11 @@ import { Readable, Transform } from "node:stream";
 import type { ControlPlaneService } from "../application/service.ts";
 import { CONTROL_PLANE_SESSION_COOKIE } from "../auth/service.ts";
 import { PUBLIC_CONTROL_PLANE_ROUTE } from "./auth-boundary.ts";
+import { PROXY_HOP_BY_HOP_HEADERS, proxyWebSocketHeaders, proxyWebSocketProtocols } from "@task-handoff/core/core/http-proxy";
+import { CONTROL_PLANE_CREDENTIAL_HEADERS } from "./proxy-headers.ts";
 
-const HOP_BY_HOP_HEADERS = new Set(["connection", "content-length", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade"]);
-const CONTROL_PLANE_IDENTITY_REQUEST_HEADERS = new Set(["authorization"]);
 const DECODED_RESPONSE_HEADERS = new Set(["content-encoding"]);
+const INSTANCE_WEBSOCKET_BLOCKED_HEADERS = new Set(["host", ...CONTROL_PLANE_CREDENTIAL_HEADERS]);
 
 export type RegisterInstanceProxyRoutesOptions = {
   app: FastifyInstance;
@@ -22,7 +23,7 @@ export function registerInstanceProxyRoutes({ app, service }: RegisterInstancePr
     const queryIndex = request.url.indexOf("?");
     const query = queryIndex >= 0 ? request.url.slice(queryIndex) : "";
     try {
-      await service.proxyInstanceWebSocket(params.id, socket, `/${suffix}${query}`, proxyWebSocketProtocols(request.headers), proxyWebSocketHeaders(request.headers));
+      await service.proxyInstanceWebSocket(params.id, socket, `/${suffix}${query}`, proxyWebSocketProtocols(request.headers), instanceProxyWebSocketHeaders(request.headers));
     } catch {
       socket.close(1011, "Instance websocket endpoint is not reachable.");
     }
@@ -52,7 +53,7 @@ export function registerInstanceProxyRoutes({ app, service }: RegisterInstancePr
   app.get("/apps/access/tty/ws", { websocket: true, config: PUBLIC_CONTROL_PLANE_ROUTE }, async (socket, request) => {
     try {
       const target = await service.appAccessProxyTarget(queryToken(request.url), "tty");
-      await service.proxyInstanceWebSocket(target.instance.id, socket, target.path, proxyWebSocketProtocols(request.headers), proxyWebSocketHeaders(request.headers));
+      await service.proxyInstanceWebSocket(target.instance.id, socket, target.path, proxyWebSocketProtocols(request.headers), instanceProxyWebSocketHeaders(request.headers));
     } catch {
       socket.close(1011, "TTY access link is invalid or expired.");
     }
@@ -62,7 +63,7 @@ export function registerInstanceProxyRoutes({ app, service }: RegisterInstancePr
     const params = request.params as { token?: string; "*": string };
     try {
       const target = await service.appAccessProxyTarget(params.token || queryToken(request.url), "vnc", params["*"] || "");
-      await service.proxyInstanceWebSocket(target.instance.id, socket, target.path, proxyWebSocketProtocols(request.headers), proxyWebSocketHeaders(request.headers));
+      await service.proxyInstanceWebSocket(target.instance.id, socket, target.path, proxyWebSocketProtocols(request.headers), instanceProxyWebSocketHeaders(request.headers));
     } catch {
       socket.close(1011, "VNC access link is invalid or expired.");
     }
@@ -168,7 +169,7 @@ function proxyHeaders(headers: Record<string, unknown>) {
     Object.entries(headers)
       .flatMap(([key, value]) => {
         const lower = key.toLowerCase();
-        if (HOP_BY_HOP_HEADERS.has(lower) || CONTROL_PLANE_IDENTITY_REQUEST_HEADERS.has(lower) || typeof value === "undefined") return [];
+        if (PROXY_HOP_BY_HOP_HEADERS.has(lower) || lower === "authorization" || typeof value === "undefined") return [];
         const text = Array.isArray(value) ? value.join(", ") : String(value);
         if (lower !== "cookie") return [[key, text]];
         const forwarded = withoutControlPlaneSessionCookie(text);
@@ -185,26 +186,8 @@ function withoutControlPlaneSessionCookie(value: string) {
     .join("; ");
 }
 
-function proxyWebSocketHeaders(headers: Record<string, unknown>) {
-  return Object.fromEntries(
-    Object.entries(proxyHeaders(headers)).filter(([key]) => {
-      const lower = key.toLowerCase();
-      if (lower === "host" || lower === "cookie" || lower === "authorization") {
-        return false;
-      }
-      return !lower.startsWith("sec-websocket-") || lower === "sec-websocket-origin";
-    }),
-  );
-}
-
-function proxyWebSocketProtocols(headers: Record<string, unknown>) {
-  const value = headers["sec-websocket-protocol"];
-  const text = Array.isArray(value) ? value.join(",") : typeof value === "string" ? value : "";
-  const protocols = text
-    .split(",")
-    .map((protocol) => protocol.trim())
-    .filter(Boolean);
-  return protocols.length ? protocols : undefined;
+function instanceProxyWebSocketHeaders(headers: Record<string, unknown>) {
+  return proxyWebSocketHeaders(proxyHeaders(headers), { blockedHeaders: INSTANCE_WEBSOCKET_BLOCKED_HEADERS });
 }
 
 type StreamingProxyResponse = { status: number; headers: Record<string, string>; body: ReadableStream<Uint8Array> | null };
@@ -225,7 +208,7 @@ function proxyInstanceHttp(
 function replyProxyResponse(reply: FastifyReply, response: StreamingProxyResponse, transform?: Transform) {
   for (const [key, value] of Object.entries(response.headers)) {
     const lower = key.toLowerCase();
-    if (!HOP_BY_HOP_HEADERS.has(lower) && !DECODED_RESPONSE_HEADERS.has(lower)) {
+    if (!PROXY_HOP_BY_HOP_HEADERS.has(lower) && !DECODED_RESPONSE_HEADERS.has(lower)) {
       reply.header(key, value);
     }
   }
