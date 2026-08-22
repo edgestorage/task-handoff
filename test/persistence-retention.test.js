@@ -11,12 +11,25 @@ const { ControlPlanePersistenceMaintenance } = require("../packages/control-plan
 const { NodeAgentIdentityService } = require("../packages/control-plane/src/node-agent/identity/service.ts");
 const { nodeAgentStorePaths } = require("../packages/control-plane/src/node-agent/persistence/paths.ts");
 const { NodeAgentPersistenceMaintenance } = require("../packages/control-plane/src/node-agent/persistence/maintenance.ts");
+const { EphemeralTokenStore } = require("../packages/control-plane/src/shared/security/ephemeral-token-store.ts");
 const { copyTruncateOpenLog } = require("../packages/core/src/storage/open-log-retention.ts");
 const { enforceInstanceLogBudget, RotatingLogWriter } = require("../packages/app-runtime/src/log-retention.ts");
 
 function tempDir(name) {
   return fs.mkdtempSync(path.join(os.tmpdir(), `task-handoff-${name}-`));
 }
+
+test("ephemeral token store expires records and consumes each key once", () => {
+  const store = new EphemeralTokenStore();
+  store.put("one", { expiresAt: "2026-08-22T00:00:10.000Z", value: 1 }, Date.parse("2026-08-22T00:00:00.000Z"));
+  assert.equal(store.peek("one", Date.parse("2026-08-22T00:00:05.000Z")).value, 1);
+  assert.equal(store.take("one", Date.parse("2026-08-22T00:00:05.000Z")).value, 1);
+  assert.equal(store.take("one", Date.parse("2026-08-22T00:00:05.000Z")), undefined);
+
+  store.put("expired", { expiresAt: "2026-08-22T00:00:10.000Z" }, Date.parse("2026-08-22T00:00:00.000Z"));
+  assert.equal(store.peek("expired", Date.parse("2026-08-22T00:00:10.000Z")), undefined);
+  assert.deepEqual(store.list(Date.parse("2026-08-22T00:00:10.000Z")), []);
+});
 
 test("temporary node-agent pairing invites never enter identity persistence", () => {
   const paths = nodeAgentStorePaths(tempDir("memory-pairing-invite"));

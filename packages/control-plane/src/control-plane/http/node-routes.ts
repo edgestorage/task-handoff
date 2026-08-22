@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { ApplyUpdateRequestSchema, UpdateCheckRequestSchema } from "@task-handoff/protocol/control-plane";
+import { ApplyUpdateRequestSchema, NodeJoinInviteStatusSchema, UpdateCheckRequestSchema } from "@task-handoff/protocol/control-plane";
 import { ControlPlaneEventBus } from "../events/bus.ts";
 import { ControlPlaneService } from "../application/service.ts";
 import {
@@ -139,10 +139,13 @@ export function registerNodeRoutes({
     events.publish("node-join.invite.created", { inviteId: invite.id });
     return reply.code(201).send({ data: invite });
   });
+  app.get("/api/node-join/invites/:id", async (request) => ({
+    data: NodeJoinInviteStatusSchema.parse(service.getNodeJoinInviteStatus(IdParamsSchema.parse(request.params).id)),
+  }));
   app.post("/api/node-join/complete", { config: PUBLIC_CONTROL_PLANE_ROUTE }, async (request, reply) => {
-    const node = service.completeNodeJoin(request.body);
+    const { node, inviteId } = service.completeNodeJoin(request.body);
     nodeEventSubscriber.syncNow();
-    events.publish("node.joined", { nodeId: node.id });
+    events.publish("node.joined", { nodeId: node.id, inviteId });
     return reply.code(201).send({ data: service.requirePublicNode(node.id) });
   });
   app.get("/api/nodes/:id/runtimes", async (request) => ({ data: await service.listNodeRuntimes(IdParamsSchema.parse(request.params).id) }));

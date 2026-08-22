@@ -556,7 +556,7 @@ function deriveRuntimeDefaults() {
     const project = selectedProject.value;
     const nodeId = project?.defaultNodeId || runtimeDraft.nodeId || firstNodeId;
     runtimeDraft.nodeId = nodeId;
-    runtimeDraft.runtimeId = runtimeIdForNode(nodeId, project?.defaultRuntimeId || runtimeDraft.runtimeId);
+    runtimeDraft.runtimeId = runtimeIdForNode(nodeId, runtimeDraft.runtimeId);
     runtimeDraft.imageId = selectedRuntimeRequiresImage.value ? project?.defaultImageSelection?.imageId || runtimeDraft.imageId || firstImageId : "";
     return;
   }
@@ -716,7 +716,6 @@ async function createQuickProject() {
       },
       defaultImageSelection: imageOptions.data.value?.[0] ? { imageId: imageOptions.data.value[0].id } : undefined,
       defaultNodeId: firstNodeId,
-      defaultRuntimeId: nodeRuntimes.data.value?.find((runtime) => runtime.nodeId === firstNodeId)?.id,
     });
     newProject.name = "";
     newProject.url = "";
@@ -725,7 +724,7 @@ async function createQuickProject() {
     sourceDraft.projectId = project.id;
     runtimeDraft.imageId = project.defaultImageSelection?.imageId || imageOptions.data.value?.[0]?.id || "";
     runtimeDraft.nodeId = project.defaultNodeId || nodes.data.value?.[0]?.id || "";
-    runtimeDraft.runtimeId = project.defaultRuntimeId || runtimeIdForNode(runtimeDraft.nodeId);
+    runtimeDraft.runtimeId = runtimeIdForNode(runtimeDraft.nodeId);
     createdProjectName = t("instances.create.feedback.namedCreated", { name: project.name });
   } catch (error) {
     showControlPlaneToast(errorText(error));

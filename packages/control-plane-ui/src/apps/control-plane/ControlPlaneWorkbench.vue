@@ -241,6 +241,7 @@
         :choose-project-folder="desktopBridge?.chooseProjectFolder"
         :initial-section="settingsSection"
         :instances="sortedInstances"
+        :node-joined-event="lastNodeJoinedEvent"
         @back="closeSettings"
         @open-instance-settings="openInstanceSettings"
         @section-change="settingsSection = $event"
@@ -403,6 +404,7 @@ import InstanceSettingsDialog from "./instance-settings/InstanceSettingsDialog.v
 import { useInstanceAppManagement } from "./instance-settings/useInstanceAppManagement";
 import NewInstanceModal from "./NewInstanceModal.vue";
 import SettingsModal from "./settings/SettingsModal.vue";
+import type { NodeJoinedEvent } from "@task-handoff/protocol/control-plane";
 import { useActiveInstanceSessions } from "./instance-detail/useActiveInstanceSessions";
 import { useBoardTerminalPreviews } from "./board/useBoardTerminalPreviews";
 import { useInstanceActions } from "./useInstanceActions";
@@ -778,6 +780,7 @@ const topbarNodeName = computed(() => {
   return activeInstance.value?.node?.name || "";
 });
 const refreshing = computed(() => board.isFetching.value || controlPlane.isFetching.value);
+const lastNodeJoinedEvent = ref<NodeJoinedEvent>();
 useControlPlaneEvents({
   instanceId: sessionQueryInstanceId,
   enabled: sessionQueriesEnabled,
@@ -797,6 +800,11 @@ useControlPlaneEvents({
     recoverOpen: loadActiveInstanceResourceMetrics,
   },
   imagePullProgress,
+  nodes: {
+    joined(event) {
+      lastNodeJoinedEvent.value = event;
+    },
+  },
 });
 const lastRefreshLabel = computed(() => formatTime(lastRefreshAt.value, locale.value as SupportedLocale));
 const connectingInstanceIds = computed(() => sortedInstances.value.filter(isInstanceConnecting).map((instance) => instance.id).join("\n"));

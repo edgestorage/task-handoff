@@ -11,7 +11,6 @@ type ChooseProjectFolder = () => Promise<string | { path: string; ownerNodeId?: 
 
 type UseNodeResourceSettingsInput = {
   chooseProjectFolder?: ChooseProjectFolder;
-  clearDefaultRuntime: (runtimeId: string) => void;
   errorText: (error: unknown) => string;
   instances: Ref<InstanceBoardItem[] | undefined>;
   nodes: Ref<Node[] | undefined>;
@@ -24,7 +23,7 @@ type UseNodeResourceSettingsInput = {
 const CONTROL_PLANE_LOCAL_NODE_LABEL = "task-handoff.control-plane.local";
 const CONTROL_PLANE_BUILTIN_NODE_LABEL = "task-handoff.control-plane.builtin";
 
-export function useNodeResourceSettings({ chooseProjectFolder, clearDefaultRuntime, errorText, instances, nodes, refreshFolders, refreshRuntimeState, runtimes, translate: t }: UseNodeResourceSettingsInput) {
+export function useNodeResourceSettings({ chooseProjectFolder, errorText, instances, nodes, refreshFolders, refreshRuntimeState, runtimes, translate: t }: UseNodeResourceSettingsInput) {
   const translateError = (error: unknown) => translateApiError(error, t, errorText(error));
   const selectedNodeId = ref("");
   const creatingNodeLocalFolder = ref(false);
@@ -88,7 +87,6 @@ export function useNodeResourceSettings({ chooseProjectFolder, clearDefaultRunti
     deletingRuntimeId.value = runtime.id;
     try {
       await deleteNodeRuntime(selectedNode.value.id, runtime.id);
-      clearDefaultRuntime(runtime.id);
       await refreshRuntimeState();
     } catch (error) {
       showControlPlaneToast(translateError(error));

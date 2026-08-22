@@ -742,6 +742,110 @@ test("Codex bridge creates a persistent Direct thread on the shared client", asy
   assert.equal(registry.getByProviderSessionId("codex", "thread-bridge").creationSource, "ai-session");
 });
 
+test("Codex send self-heals a missing shared app-server provider", async () => {
+  const { registry } = runtime();
+  const calls = [];
+  class RecoveringClient extends EventEmitter {
+    async start() { calls.push(["client-start"]); }
+    stop() {}
+    async listLoadedThreadIds() { return []; }
+    async resumeThread(threadId) {
+      calls.push(["thread-resume", threadId]);
+      return { id: threadId, cwd: "/workspace", status: { type: "idle" }, turns: [] };
+    }
+    async startTurn(threadId, message) {
+      calls.push(["turn-start", threadId, message]);
+      return { turnId: "turn-recovered" };
+    }
+  }
+  const session = registry.applyAdapterSnapshot({
+    agent: "codex",
+    creationSource: "ai-session",
+    appId: "codex-app-server",
+    providerSessionId: "thread-recover",
+    cwd: "/workspace",
+    status: "idle",
+  });
+  let ensures = 0;
+  const bridge = new CodexAppServerSessionBridge(registry, {
+    createClient(options) {
+      assert.equal(options.socketPath, "/tmp/recovered-app-server.sock");
+      return new RecoveringClient();
+    },
+    async ensureAppSessions() {
+      ensures += 1;
+      return [{
+        id: "__shared_codex_app_server__",
+        appId: "codex",
+        status: "running",
+        ai: { appServer: { socketPath: "/tmp/recovered-app-server.sock", command: "codex" } },
+      }];
+    },
+  });
+
+  const result = await bridge.startMessage(session, { message: "continue" });
+
+  assert.equal(ensures, 1);
+  assert.equal(result.providerTurnId, "turn-recovered");
+  assert.deepEqual(calls, [
+    ["client-start"],
+    ["thread-resume", "thread-recover"],
+    ["turn-start", "thread-recover", "continue"],
+  ]);
+});
+
+test("Close AI Session self-heals a missing shared app-server before archiving", async () => {
+  const { registry, controller } = runtime();
+  const calls = [];
+  class RecoveringClient extends EventEmitter {
+    async start() { calls.push(["client-start"]); }
+    stop() {}
+    async listLoadedThreadIds() { return []; }
+    async resumeThread(threadId) {
+      calls.push(["thread-resume", threadId]);
+      return { id: threadId, cwd: "/workspace", status: { type: "idle" }, turns: [] };
+    }
+    async archiveThread(threadId) { calls.push(["thread-archive", threadId]); }
+    async unsubscribeThread(threadId) { calls.push(["thread-unsubscribe", threadId]); }
+  }
+  const session = registry.applyAdapterSnapshot({
+    agent: "codex",
+    creationSource: "ai-session",
+    appId: "codex-app-server",
+    providerSessionId: "thread-close-recover",
+    cwd: "/workspace",
+    status: "idle",
+  });
+  let ensures = 0;
+  const bridge = new CodexAppServerSessionBridge(registry, {
+    createClient() { return new RecoveringClient(); },
+    async ensureAppSessions() {
+      ensures += 1;
+      return [{
+        id: "__shared_codex_app_server__",
+        appId: "codex",
+        status: "running",
+        ai: { appServer: { socketPath: "/tmp/recovered-close-app-server.sock", command: "codex" } },
+      }];
+    },
+  });
+  controller.register(bridge);
+  const history = new AiSessionHistoryStore({ dataDir: fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-close-recover-")) });
+  const coordinator = new AiSessionCloseCoordinator({ registry, controller, history, stopApp: () => {} });
+
+  const result = await coordinator.close(session.id);
+
+  assert.equal(ensures, 1);
+  assert.equal(result.disposition, "closed");
+  assert.equal(registry.get(session.id), undefined);
+  assert.equal(history.get(session.id).providerSessionId, "thread-close-recover");
+  assert.deepEqual(calls, [
+    ["client-start"],
+    ["thread-archive", "thread-close-recover"],
+    ["thread-unsubscribe", "thread-close-recover"],
+  ]);
+});
+
 test("Codex Direct creation starts its first turn without resuming or reading the new thread", async () => {
   const { registry, controller } = runtime();
   const calls = [];

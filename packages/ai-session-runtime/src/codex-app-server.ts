@@ -22,6 +22,7 @@ export { CodexAppServerClient } from "./codex-app-server/client/client";
 type CodexAppServerBridgeOptions = {
   allowSpawn?: boolean;
   createClient?: (options: CodexAppServerClientOptions) => CodexAppServerClientLike;
+  ensureAppSessions?: () => Promise<CodexAppSession[]>;
   onEventSourceClose?: () => void;
   onMessageDelta?: (event: {
     sessionId: string;
@@ -496,11 +497,8 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
   }
 
   private async requireReadyClient() {
-    if (!this.connection.client) {
-      throw aiSessionControlError("AI_SESSION_CONTROL_NOT_CONNECTED", "Codex app-server is not connected.", 503);
-    }
     try {
-      const ready = await this.connection.ready();
+      const ready = await this.readyConnection();
       if (ready) return ready.client;
     } catch (error) {
       if (error && typeof error === "object" && "code" in error) throw error;
@@ -510,11 +508,8 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
   }
 
   private async requireReadyThreadClient(threadId: string) {
-    if (!this.connection.client) {
-      throw aiSessionControlError("AI_SESSION_CONTROL_NOT_CONNECTED", "Codex app-server is not connected.", 503);
-    }
     try {
-      const ready = await this.connection.ready();
+      const ready = await this.readyConnection();
       if (!ready) {
         throw new Error("Codex app-server is not connected.");
       }
@@ -527,6 +522,25 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
         409,
       );
     }
+  }
+
+  /** Re-establishes the runtime-owned provider before a user control action. */
+  private async readyConnection() {
+    let firstError: unknown;
+    if (this.connection.client) {
+      try {
+        return await this.connection.ready();
+      } catch (error) {
+        firstError = error;
+      }
+    }
+    if (!this.options.ensureAppSessions) {
+      if (firstError) throw firstError;
+      throw new Error("Codex app-server is not connected.");
+    }
+    const appSessions = await this.options.ensureAppSessions();
+    await this.sync(appSessions);
+    return this.connection.ready();
   }
 
 }

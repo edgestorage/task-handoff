@@ -290,8 +290,6 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
     if (current && current.socket !== socket) {
       this.finalizeConnection(current, new Error(`Reverse tunnel for node ${nodeId} was replaced.`), "Reverse tunnel was replaced.", true);
     }
-    const subscription = this.eventSubscriptions.get(nodeId);
-    if (subscription) this.sendEventSubscription(nodeId, subscription);
   }
 
   setEventSubscription(nodeId: string, demand: ControlPlaneAiSessionTransientDemand) {
@@ -349,7 +347,10 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
     const current = this.sockets.get(nodeId);
     if (!current || current.socket !== socket || current.runtimeGeneration === undefined) return false;
     current.supervisor?.healthy();
-    return this.connectionRuntime?.connected(nodeId, current.runtimeGeneration) ?? true;
+    const connected = this.connectionRuntime?.connected(nodeId, current.runtimeGeneration) ?? true;
+    const subscription = this.eventSubscriptions.get(nodeId);
+    if (subscription) this.sendEventSubscription(nodeId, subscription);
+    return connected;
   }
 
   private finalizeConnection(connection: ReverseTunnelConnection, error: Error, reason: string, closeMainSocket: boolean) {

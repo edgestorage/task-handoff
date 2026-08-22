@@ -7,6 +7,7 @@ import { now } from "../application/helpers.ts";
 import { EphemeralTokenStore } from "../../shared/security/ephemeral-token-store.ts";
 
 const DEFAULT_INVITE_TTL_MS = 10 * 60 * 1000;
+const COMPLETED_INVITE_STATUS_TTL_MS = 10 * 60 * 1000;
 
 type NodeJoinInvite = {
   id: string;
@@ -31,6 +32,7 @@ type NodeJoinServiceOptions = {
 export class NodeJoinService {
   private readonly options: NodeJoinServiceOptions;
   private readonly invites = new EphemeralTokenStore<NodeJoinInvite>();
+  private readonly completedInvites = new EphemeralTokenStore<{ nodeId: string; expiresAt: string }>();
 
   constructor(options: NodeJoinServiceOptions) {
     this.options = options;
@@ -47,6 +49,16 @@ export class NodeJoinService {
     };
     this.invites.put(invite.tokenHash, invite);
     return { id: invite.id, joinToken: token, expiresAt: invite.expiresAt };
+  }
+
+  status(id: string) {
+    const completed = this.completedInvites.peek(id);
+    if (completed) return { id, status: "completed" as const, nodeId: completed.nodeId };
+    if (this.invites.list().some((invite) => invite.id === id)) return { id, status: "pending" as const };
+    throw Object.assign(new Error(`Node join invite ${id} was not found or has expired.`), {
+      statusCode: 404,
+      code: "NODE_JOIN_INVITE_NOT_FOUND",
+    });
   }
 
   complete(input: unknown) {
@@ -68,7 +80,7 @@ export class NodeJoinService {
         code: "NODE_JOIN_NODE_ALREADY_EXISTS",
       });
     }
-    return this.options.nodes.put(NodeSchema.parse({
+    const node = this.options.nodes.put(NodeSchema.parse({
       id: parsedInput.nodeId,
       name: parsedInput.nodeName || invite.nodeName || parsedInput.nodeId,
       connectionMode: "reverse-wss",
@@ -86,6 +98,11 @@ export class NodeJoinService {
       createdAt: timestamp,
       updatedAt: timestamp,
     }));
+    this.completedInvites.put(invite.id, {
+      nodeId: node.id,
+      expiresAt: new Date(Date.now() + COMPLETED_INVITE_STATUS_TTL_MS).toISOString(),
+    });
+    return { node, inviteId: invite.id };
   }
 
 }

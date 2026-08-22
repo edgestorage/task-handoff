@@ -10,6 +10,11 @@ catalogs:
       specifier: 43.1.0
       version: 43.1.0
 
+patchedDependencies:
+  expo-paste-input@0.2.2:
+    hash: htaeyyjmdlkat5buzm362in2am
+    path: patches/expo-paste-input@0.2.2.patch
+
 importers:
 
   .:
@@ -298,7 +303,7 @@ importers:
         version: 57.0.1(expo@57.0.10)(react@19.2.3)
       expo-paste-input:
         specifier: 0.2.2
-        version: 0.2.2(expo@57.0.10)(react-native@0.86.2(@react-native/jest-preset@0.86.2(@babel/core@7.29.7)(react@19.2.3))(@react-native/metro-config@0.86.2)(@types/react@19.2.18)(react@19.2.3))(react@19.2.3)
+        version: 0.2.2(patch_hash=htaeyyjmdlkat5buzm362in2am)(expo@57.0.10)(react-native@0.86.2(@react-native/jest-preset@0.86.2(@babel/core@7.29.7)(react@19.2.3))(@react-native/metro-config@0.86.2)(@types/react@19.2.18)(react@19.2.3))(react@19.2.3)
       expo-router:
         specifier: ~57.0.10
         version: 57.0.10(67xxfuxrpm2hva62ep3c5y62cq)
@@ -12669,7 +12674,7 @@ snapshots:
       expo: 57.0.10(@babel/core@7.29.7)(@expo/metro-runtime@57.0.8)(expo-router@57.0.10)(expo-widgets@57.0.8)(react-dom@19.2.3(react@19.2.3))(react-native-webview@13.17.0(react-native@0.86.2(@react-native/jest-preset@0.86.2(@babel/core@7.29.7)(react@19.2.3))(@react-native/metro-config@0.86.2)(@types/react@19.2.18)(react@19.2.3))(react@19.2.3))(react-native-worklets@0.10.1(@babel/core@7.29.7)(@react-native/metro-config@0.86.2)(react-native@0.86.2(@react-native/jest-preset@0.86.2(@babel/core@7.29.7)(react@19.2.3))(@react-native/metro-config@0.86.2)(@types/react@19.2.18)(react@19.2.3))(react@19.2.3))(react-native@0.86.2(@react-native/jest-preset@0.86.2(@babel/core@7.29.7)(react@19.2.3))(@react-native/metro-config@0.86.2)(@types/react@19.2.18)(react@19.2.3))(react@19.2.3)(typescript@6.0.3)
       react: 19.2.3
 
-  expo-paste-input@0.2.2(expo@57.0.10)(react-native@0.86.2(@react-native/jest-preset@0.86.2(@babel/core@7.29.7)(react@19.2.3))(@react-native/metro-config@0.86.2)(@types/react@19.2.18)(react@19.2.3))(react@19.2.3):
+  expo-paste-input@0.2.2(patch_hash=htaeyyjmdlkat5buzm362in2am)(expo@57.0.10)(react-native@0.86.2(@react-native/jest-preset@0.86.2(@babel/core@7.29.7)(react@19.2.3))(@react-native/metro-config@0.86.2)(@types/react@19.2.18)(react@19.2.3))(react@19.2.3):
     dependencies:
       expo: 57.0.10(@babel/core@7.29.7)(@expo/metro-runtime@57.0.8)(expo-router@57.0.10)(expo-widgets@57.0.8)(react-dom@19.2.3(react@19.2.3))(react-native-webview@13.17.0(react-native@0.86.2(@react-native/jest-preset@0.86.2(@babel/core@7.29.7)(react@19.2.3))(@react-native/metro-config@0.86.2)(@types/react@19.2.18)(react@19.2.3))(react@19.2.3))(react-native-worklets@0.10.1(@babel/core@7.29.7)(@react-native/metro-config@0.86.2)(react-native@0.86.2(@react-native/jest-preset@0.86.2(@babel/core@7.29.7)(react@19.2.3))(@react-native/metro-config@0.86.2)(@types/react@19.2.18)(react@19.2.3))(react@19.2.3))(react-native@0.86.2(@react-native/jest-preset@0.86.2(@babel/core@7.29.7)(react@19.2.3))(@react-native/metro-config@0.86.2)(@types/react@19.2.18)(react@19.2.3))(react@19.2.3)(typescript@6.0.3)
       react: 19.2.3

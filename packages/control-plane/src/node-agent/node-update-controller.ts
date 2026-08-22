@@ -18,6 +18,8 @@ import {
 } from "./updates.ts";
 
 const UPDATE_PREFLIGHT_TTL_MS = 10 * 60 * 1_000;
+const UPDATE_WORKER_CLAIM_TIMEOUT_MS = 5_000;
+const UPDATE_WORKER_CLAIM_POLL_MS = 50;
 const NodeAgentApplyUpdateRequestSchema = ApplyUpdateRequestSchema.strict();
 
 type Options = {
@@ -29,6 +31,8 @@ type Options = {
   resolveRuntimeArtifacts(version: string): Promise<RuntimeArtifactIdentity[]>;
   moduleDir: string;
   managedUpdateSupport?(selection: { packageName: string; installPrefix: string }): { supported: boolean; reason?: string };
+  workerClaimTimeoutMs?: number;
+  workerClaimPollMs?: number;
 };
 
 function updateImpact(instances: ControlledInstance[]): UpdateCheckResult["impact"] {
@@ -171,7 +175,7 @@ export class NodeUpdateController {
           cause,
         });
       }
-      return job;
+      return await this.waitForWorkerClaim(job);
     } finally {
       this.applying = false;
     }
@@ -210,6 +214,43 @@ export class NodeUpdateController {
     throw Object.assign(new Error("Another server update is already running on this node."), {
       statusCode: 409,
       code: "SERVER_UPDATE_ALREADY_RUNNING",
+    });
+  }
+
+  private async waitForWorkerClaim(job: ReturnType<NodeUpdateJobs["create"]>) {
+    // Compatibility for v0.0.22-v0.0.24: systemd-run could report a successful
+    // exec even when the packaged worker exited before claiming the queued job.
+    const timeoutMs = this.options.workerClaimTimeoutMs ?? UPDATE_WORKER_CLAIM_TIMEOUT_MS;
+    const pollMs = this.options.workerClaimPollMs ?? UPDATE_WORKER_CLAIM_POLL_MS;
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() <= deadline) {
+      const current = this.options.jobs.records.get(job.id);
+      if (!current) {
+        throw Object.assign(new Error(`Update job ${job.id} disappeared before the worker claimed it.`), {
+          statusCode: 500,
+          code: "UPDATE_JOB_NOT_FOUND",
+        });
+      }
+      if (current.status !== "queued") return current;
+      if (Date.now() >= deadline) break;
+      await new Promise((resolve) => setTimeout(resolve, Math.max(1, Math.min(pollMs, deadline - Date.now()))));
+    }
+
+    const current = this.options.jobs.records.get(job.id);
+    if (current?.status !== "queued") return current || job;
+    this.options.jobs.patch(job.id, {
+      status: "failed",
+      rollout: { ...current.rollout, phase: "failed" },
+      error: {
+        code: "NODE_UPDATE_FAILED",
+        message: "The node update worker did not claim the queued job after systemd accepted it.",
+        retryable: true,
+      },
+      completedAt: new Date().toISOString(),
+    });
+    throw Object.assign(new Error("The node update worker did not start after systemd accepted the update job."), {
+      statusCode: 500,
+      code: "NODE_UPDATE_WORKER_START_TIMEOUT",
     });
   }
 }

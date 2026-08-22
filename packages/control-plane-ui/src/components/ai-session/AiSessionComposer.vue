@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { formatBytes } from "../../i18n/presentation";
+import { formatBytes, formatNumber } from "../../i18n/presentation";
 import type { SupportedLocale } from "../../i18n/locale";
-import { AppWindow, ArrowUp, Box, Check, Copy, CornerDownRight, File, Folder, Hand, LoaderCircle, Minimize2, Pencil, Plus, Puzzle, ScanSearch, ShieldAlert, ShieldCheck, Square, Target, WandSparkles, X } from "@lucide/vue";
+import { AppWindow, ArrowUp, Box, Check, Copy, CornerDownRight, File, FileText, Folder, Hand, LoaderCircle, Minimize2, Pencil, Plus, Puzzle, ScanSearch, ShieldAlert, ShieldCheck, Square, Target, WandSparkles, X } from "@lucide/vue";
 import { PopoverAnchor } from "reka-ui";
 import type { AiSessionMentionCandidate } from "../../api/types";
 import type { AiSessionCommandInput, AiSessionPermissionMode } from "@task-handoff/protocol/ai-sessions";
@@ -17,6 +17,7 @@ import { commandTokenAt, matchingCommands, parseAiSessionCommand, replaceCommand
 import { useAiSessionMentions, type AiSessionMentionContext } from "./useAiSessionMentions";
 import { useAiSessionPermissionMode } from "../../apps/control-plane/useAiSessionPermissionMode";
 import { showControlPlaneToast } from "../../apps/control-plane/useControlPlaneToasts";
+import { classifyAiSessionPastedText, type AiSessionPastedTextPresentation } from "@task-handoff/control-plane-client";
 
 export type AiSessionComposerAttachment = {
   id: string;
@@ -30,6 +31,7 @@ export type AiSessionComposerAttachment = {
   file?: File;
   uploadProgress?: number;
   uploadState?: "uploading" | "uploaded" | "failed";
+  textPresentation?: AiSessionPastedTextPresentation;
 };
 
 type DesktopFileBridge = {
@@ -90,6 +92,7 @@ const commandQuery = ref("");
 const activeCommandIndex = ref(0);
 const commandCandidates = computed(() => matchingCommands(commandQuery.value));
 const previewAttachment = ref<AiSessionComposerAttachment>();
+const pastedTextSequence = ref(0);
 const editing = computed(() => Boolean(props.editingLabel));
 const overlayOpen = computed(() => !editing.value && !props.busy && (mentions.open.value || commandOpen.value));
 const mentionPopoverRadius = ref("20px");
@@ -240,7 +243,7 @@ function validateFiles(files: File[], runtimePathFiles: Set<File>, outsideWorksp
   return accepted;
 }
 
-async function addFiles(files: File[]) {
+async function addFiles(files: File[], textPresentations = new Map<File, AiSessionPastedTextPresentation>()) {
   if (props.busy) {
     return;
   }
@@ -262,7 +265,7 @@ async function addFiles(files: File[]) {
   if (!accepted.length) {
     return;
   }
-  void Promise.all(accepted.map((file) => readAttachment(file, runtimePaths.get(file)))).then((items) => {
+  void Promise.all(accepted.map((file) => readAttachment(file, runtimePaths.get(file), textPresentations.get(file)))).then((items) => {
     emit("update:attachments", [...attachments.value, ...items]);
   });
 }
@@ -284,7 +287,7 @@ function normalizeAbsoluteRuntimePath(value: string) {
   return `/${segments.join("/")}`;
 }
 
-function readAttachment(file: File, runtimePath?: string): Promise<AiSessionComposerAttachment> {
+function readAttachment(file: File, runtimePath?: string, textPresentation?: AiSessionPastedTextPresentation): Promise<AiSessionComposerAttachment> {
   const kind = attachmentKind(file);
   const common = {
     id: `local_${Date.now()}_${Math.random().toString(16).slice(2)}`,
@@ -308,6 +311,7 @@ function readAttachment(file: File, runtimePath?: string): Promise<AiSessionComp
         source: { type: "inline" },
         dataUrl: String(reader.result || ""),
         file,
+        textPresentation,
       });
     });
     reader.addEventListener("error", () => reject(reader.error || new Error(t("sessions.composer.readFailed"))));
@@ -324,6 +328,10 @@ function removeAttachment(id: string) {
 
 function formatAttachmentSize(size: number) {
   return formatBytes(size, locale.value as SupportedLocale);
+}
+
+function formatTextLength(length: number) {
+  return t("sessions.composer.textLength", { count: formatNumber(length, locale.value as SupportedLocale, { maximumFractionDigits: 0 }) });
 }
 
 function openImagePreview(attachment: AiSessionComposerAttachment) {
@@ -378,11 +386,22 @@ function handlePaste(event: ClipboardEvent) {
     return;
   }
   const files = Array.from(event.clipboardData?.files || []);
-  if (!files.length) {
+  if (files.length) {
+    event.preventDefault();
+    void addFiles(files);
     return;
   }
+  const text = event.clipboardData?.getData("text/plain") || "";
+  const decision = classifyAiSessionPastedText(text, pastedTextSequence.value + 1);
+  if (decision.disposition === "inline") return;
   event.preventDefault();
-  void addFiles(files);
+  if (decision.disposition === "rejected") {
+    showControlPlaneToast(t("sessions.composer.fileTooLarge"));
+    return;
+  }
+  pastedTextSequence.value += 1;
+  const file = new globalThis.File([decision.file.text], decision.file.name, { type: decision.file.mime });
+  void addFiles([file], new Map([[file, decision.file.presentation]]));
 }
 
 function handleDrop(event: DragEvent) {
@@ -643,10 +662,18 @@ watch(() => props.busy, (busy) => {
           </ContextMenuContent>
         </ContextMenu>
         <template v-else>
-          <span class="ai-session-composer__file-icon"><File :size="22" /></span>
+          <span class="ai-session-composer__file-icon">
+            <FileText v-if="attachment.textPresentation" :size="22" />
+            <File v-else :size="22" />
+          </span>
           <figcaption>
             <strong :title="attachment.name">{{ attachment.name }}</strong>
-            <span>{{ formatAttachmentSize(attachment.size) }}<template v-if="attachment.source.type === 'runtime-path'"> · {{ t("sessions.composer.localPath") }}</template></span>
+            <span v-if="attachment.textPresentation" class="ai-session-composer__file-summary" :title="attachment.textPresentation.summary || t('sessions.composer.blankPastedText')">
+              {{ attachment.textPresentation.summary || t("sessions.composer.blankPastedText") }}
+            </span>
+            <span>
+              <template v-if="attachment.textPresentation">{{ formatTextLength(attachment.textPresentation.codePointLength) }} · </template>{{ formatAttachmentSize(attachment.size) }}<template v-if="attachment.source.type === 'runtime-path'"> · {{ t("sessions.composer.localPath") }}</template>
+            </span>
           </figcaption>
         </template>
         <div
@@ -916,7 +943,7 @@ watch(() => props.busy, (busy) => {
   display: flex;
   align-items: center;
   gap: 10px;
-  width: min(240px, 62vw);
+  width: min(280px, 72vw);
   padding: 10px 34px 10px 10px;
 }
 
@@ -942,6 +969,11 @@ watch(() => props.busy, (busy) => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.ai-session-composer__file .ai-session-composer__file-summary {
+  color: var(--ai-composer-text, currentColor);
+  font-size: 12px;
 }
 
 .ai-session-composer__file strong {

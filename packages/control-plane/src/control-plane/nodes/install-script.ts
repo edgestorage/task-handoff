@@ -6,6 +6,7 @@ export function nodeAgentInstallScript() {
   return shellScript`#!/bin/sh
 set -eu
 
+MIN_NODE_VERSION="24.15.0"
 CONTROL_PLANE_URL=""
 JOIN_TOKEN=""
 SERVICE_USER="root"
@@ -38,7 +39,15 @@ Options:
   --service-user <user>       systemd service user
   --host <host>               Node-agent HTTP bind host, default 127.0.0.1
   --port <port>               Node-agent HTTP port, default 8091
+
+On Debian and Ubuntu, the installer also installs a compatible Node.js 24,
+npm, and the native build tools required by the runtime packages.
 USAGE
+}
+
+die() {
+  echo "Error: $*" >&2
+  exit 1
 }
 
 need_root() {
@@ -53,6 +62,54 @@ require_command() {
     echo "Missing required command: $1" >&2
     exit 1
   fi
+}
+
+node_is_compatible() {
+  command -v node >/dev/null 2>&1 || return 1
+  current_node_version="$(node -p 'process.versions.node' 2>/dev/null || true)"
+  case "$current_node_version" in
+    24.*) dpkg --compare-versions "$current_node_version" ge "$MIN_NODE_VERSION" ;;
+    *) return 1 ;;
+  esac
+}
+
+ensure_node_environment() {
+  command -v apt-get >/dev/null 2>&1 || die "automatic Node.js installation currently supports Debian and Ubuntu hosts with apt-get"
+  command -v dpkg >/dev/null 2>&1 || die "dpkg is required for automatic Node.js installation"
+
+  export DEBIAN_FRONTEND=noninteractive
+  echo "Refreshing apt package metadata"
+  apt-get update
+
+  if ! node_is_compatible || ! command -v npm >/dev/null 2>&1; then
+    echo "Installing the current official Node.js 24 build with its bundled npm."
+    apt-get install -y ca-certificates curl xz-utils
+    case "$(dpkg --print-architecture)" in
+      amd64) node_arch="x64" ;;
+      arm64) node_arch="arm64" ;;
+      *) die "automatic Node.js installation supports amd64 and arm64; install Node.js $MIN_NODE_VERSION manually on this architecture" ;;
+    esac
+    node_tmp="$(mktemp -d)"
+    trap 'rm -rf "$node_tmp"' EXIT HUP INT TERM
+    curl -fsSL https://nodejs.org/dist/latest-v24.x/SHASUMS256.txt -o "$node_tmp/SHASUMS256.txt"
+    node_archive="$(awk -v suffix="linux-$node_arch.tar.xz" '$2 ~ suffix "$" { print $2; exit }' "$node_tmp/SHASUMS256.txt")"
+    [ -n "$node_archive" ] || die "could not find the official Node.js 24 archive for $node_arch"
+    curl -fsSL "https://nodejs.org/dist/latest-v24.x/$node_archive" -o "$node_tmp/$node_archive"
+    expected_checksum="$(awk -v archive="$node_archive" '$2 == archive { print $1; exit }' "$node_tmp/SHASUMS256.txt")"
+    actual_checksum="$(sha256sum "$node_tmp/$node_archive" | awk '{ print $1 }')"
+    [ "$actual_checksum" = "$expected_checksum" ] || die "Node.js archive checksum verification failed"
+    tar -xJf "$node_tmp/$node_archive" --strip-components=1 -C /usr/local
+    rm -rf "$node_tmp"
+    trap - EXIT HUP INT TERM
+  fi
+
+  node_is_compatible || die "Node.js $MIN_NODE_VERSION or newer within the Node.js 24 release line is required; found $(node --version 2>/dev/null || echo none)"
+  command -v npm >/dev/null 2>&1 || die "npm was not installed with Node.js"
+
+  # The controlled-instance package contains native addons such as node-pty.
+  # Keep node-gyp's fallback toolchain available for installation and updates.
+  echo "Ensuring native Node.js build tools are available"
+  apt-get install -y --no-install-recommends g++ make python3
 }
 
 while [ "$#" -gt 0 ]; do
@@ -88,6 +145,8 @@ if ! command -v systemctl >/dev/null 2>&1; then
   echo "systemd is required for this installer." >&2
   exit 1
 fi
+
+ensure_node_environment
 
 if [ "$SERVICE_USER" != "root" ] && ! id "$SERVICE_USER" >/dev/null 2>&1; then
   useradd --system --create-home --home-dir /var/lib/task-handoff --shell /usr/sbin/nologin "$SERVICE_USER"
@@ -191,14 +250,18 @@ WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload
-systemctl enable --now task-handoff-node-agent.service
+# Compatibility for v0.0.24: enable --now left an already-running process on
+# the old package, environment, and unit after a repeated installation.
+systemctl enable task-handoff-node-agent.service
+systemctl restart task-handoff-node-agent.service
 
 for i in $(seq 1 30); do
-  if curl -fsS "http://$HOST:$PORT/api/node-agent/health" >/dev/null 2>&1; then
+  if [ -S "$IPC_PATH" ] && curl --unix-socket "$IPC_PATH" -fsS "http://localhost/api/node-agent/health" >/dev/null 2>&1; then
     break
   fi
   if [ "$i" = "30" ]; then
     systemctl status --no-pager task-handoff-node-agent.service || true
+    curl --unix-socket "$IPC_PATH" --fail-with-body --show-error "http://localhost/api/node-agent/health" >&2 || true
     echo "Node agent did not become healthy." >&2
     exit 1
   fi
@@ -208,9 +271,10 @@ done
 if [ -n "$JOIN_TOKEN" ]; then
   payload="$(mktemp)"
   status="$(curl -sS -o "$payload" -w '%{http_code}' \
+    --unix-socket "$IPC_PATH" \
     -H 'content-type: application/json' \
     -d "{\"controlPlaneUrl\":\"$CONTROL_PLANE_URL\",\"joinToken\":\"$JOIN_TOKEN\",\"controlPlaneName\":\"TaskHandoff Control Plane\",\"activate\":true}" \
-    "http://$HOST:$PORT/api/node-agent/control-plane-connections")"
+    "http://localhost/api/node-agent/control-plane-connections")"
   if [ "$status" != "201" ]; then
     cat "$payload" >&2 || true
     rm -f "$payload"
@@ -225,5 +289,6 @@ fi
 echo "TaskHandoff node-agent is installed and running."
 echo "Service: task-handoff-node-agent.service"
 echo "Pairing token: sudo task-handoff-node-agent invite --ipc-path $IPC_PATH"
+echo "Uninstall: sudo task-handoff-node-agent uninstall"
 `;
 }

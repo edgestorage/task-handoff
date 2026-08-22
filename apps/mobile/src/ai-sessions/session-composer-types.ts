@@ -23,6 +23,7 @@ export type SessionComposerProps = {
   onAddImage(): void;
   onAddRuntimeFile(): void;
   onPasteImages(uris: string[]): void;
+  onPasteText(text: string): void;
   onCancelEdit?(): void;
   onFocusChange(focused: boolean): void;
   onPermissionModeChange(mode: AiSessionPermissionMode): void;

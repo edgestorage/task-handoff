@@ -67,6 +67,7 @@ test("instance and settings surfaces preserve Market and Custom ownership", () =
   assert.doesNotMatch(settings, /grid-template-rows: 92px/);
   assert.match(settings, /removeImageProfile\(image\)/);
   assert.doesNotMatch(settings, /removeImageProfile\(market/);
+  assert.doesNotMatch(settings, /projectRegistry\.defaultRuntime/);
 
   const artwork = fs.readFileSync(path.join(__dirname, "../src/apps/control-plane/shared/ImageArtwork.vue"), "utf8");
   assert.match(artwork, /<Box/);
@@ -77,6 +78,7 @@ test("instance and settings surfaces preserve Market and Custom ownership", () =
   const project = fs.readFileSync(path.join(__dirname, "../src/apps/control-plane/settings/useProjectSettings.ts"), "utf8");
   assert.match(project, /defaultImageSelection/);
   assert.doesNotMatch(project, /defaultImageId/);
+  assert.doesNotMatch(project, /defaultRuntimeId/);
 
   const nodeFolders = fs.readFileSync(path.join(__dirname, "../src/apps/control-plane/settings/useNodeResourceSettings.ts"), "utf8");
   assert.doesNotMatch(nodeFolders, /defaultImageSelection/);

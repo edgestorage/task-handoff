@@ -1028,6 +1028,7 @@ import {
 } from "../useAiSessionPermissionMode";
 import { createStreamingScrollFollow, distanceFromBottom, STREAMING_SCROLL_FOLLOW_THRESHOLD, type ScrollViewport } from "../../../lib/streaming-scroll-follow";
 import { createLayoutScrollAnchor, createUserLayoutChangeGuard } from "../../../lib/layout-scroll-anchor";
+import { createBrowserUuid } from "../../../lib/random-id";
 import {
   aiSessionStatusGroup as sessionStatusGroup,
   canInterruptAiSession,
@@ -2263,7 +2264,7 @@ async function createNewSession(permissionMode?: AiSessionPermissionMode) {
     permissionMode,
   });
   if (newSessionCreateAttempt.value?.fingerprint !== fingerprint) {
-    newSessionCreateAttempt.value = { clientRequestId: crypto.randomUUID(), fingerprint };
+    newSessionCreateAttempt.value = { clientRequestId: createBrowserUuid(), fingerprint };
   }
   const attempt = newSessionCreateAttempt.value;
   launchingNewSession.value = true;
@@ -2545,7 +2546,7 @@ async function openSessionApp(session: AiSessionSummary) {
   openingAiSessionId.value = session.id;
   try {
     emit("openAiSessionApp", props.instance, session);
-    const result = await openAiSessionApp(props.instance.id, session.id, crypto.randomUUID());
+    const result = await openAiSessionApp(props.instance.id, session.id, createBrowserUuid());
     emit("openAiSessionApp", props.instance, aiSessionAppNavigationTarget(session, result));
   } catch (error) {
     showControlPlaneToast(translateApiError(error, t, t("sessions.panel.openAppFailed")));
@@ -2566,7 +2567,7 @@ async function closeSession(session: AiSessionSummary) {
   stoppingAppSessionId.value = session.id;
   const loadingToast = showDelayedControlPlaneLoadingToast(t("sessions.actions.closingSession"));
   try {
-    await closeAiSession(props.instance.id, session.id, crypto.randomUUID());
+    await closeAiSession(props.instance.id, session.id, createBrowserUuid());
     await refreshBoard();
   } catch (error) {
     loadingToast.dismiss();
@@ -2596,7 +2597,7 @@ async function performFork(session: AiSessionSummary, mode: "current" | "managed
   if (forkingAiSessionId.value || session.actions?.fork !== true) return;
   forkingAiSessionId.value = session.id;
   const requestKey = `${session.id}:${mode}:${throughTurnId || "latest"}`;
-  const clientRequestId = forkRequestIds.get(requestKey) || crypto.randomUUID();
+  const clientRequestId = forkRequestIds.get(requestKey) || createBrowserUuid();
   forkRequestIds.set(requestKey, clientRequestId);
   const loadingToast = showDelayedControlPlaneLoadingToast(t("sessions.actions.forking"));
   try {

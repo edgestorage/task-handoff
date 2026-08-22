@@ -8,6 +8,7 @@ import { CONTROL_PLANE_CREDENTIAL_HEADERS } from "./proxy-headers.ts";
 
 const DECODED_RESPONSE_HEADERS = new Set(["content-encoding"]);
 const INSTANCE_WEBSOCKET_BLOCKED_HEADERS = new Set(["host", ...CONTROL_PLANE_CREDENTIAL_HEADERS]);
+const MAX_PROXY_REQUEST_BODY_BYTES = 64 * 1024 * 1024;
 
 export type RegisterInstanceProxyRoutesOptions = {
   app: FastifyInstance;
@@ -109,7 +110,7 @@ export function registerInstanceProxyRoutes({ app, service }: RegisterInstancePr
     const proxied = await proxyInstanceHttp(service, reply, params.id, "/", {
       method: request.method,
       headers: proxyHeaders(request.headers),
-      body: requestBody(request.body),
+      body: await requestBody(request.body),
     });
     return replyInstanceProxyResponse(reply, proxied, params.id, "/");
   });
@@ -144,7 +145,7 @@ export function registerInstanceProxyRoutes({ app, service }: RegisterInstancePr
       const proxied = await proxyInstanceHttp(service, reply, params.id, `/${suffix}${query}`, {
         method: request.method,
         headers: proxyHeaders(request.headers),
-        body: requestBody(request.body),
+        body: await requestBody(request.body),
       });
       return replyProxyResponse(reply, proxied);
     },
@@ -153,7 +154,7 @@ export function registerInstanceProxyRoutes({ app, service }: RegisterInstancePr
 
 type ProxySocket = {
   on: (event: string, listener: (...args: unknown[]) => void) => void;
-  send: (data: unknown) => void;
+  send: (data: unknown, options?: { binary?: boolean }) => void;
   close: (code?: number, reason?: string) => void;
   readyState: number;
 };
@@ -275,10 +276,26 @@ function replyInstanceProxyResponse(reply: FastifyReply, response: StreamingProx
   return replyProxyResponse(reply, response, transform);
 }
 
-function requestBody(body: unknown) {
+async function requestBody(body: unknown) {
   if (Buffer.isBuffer(body)) return body;
   if (body instanceof Uint8Array) return Buffer.from(body);
   if (body instanceof URLSearchParams) return body.toString();
+  if (body && typeof body === "object" && Symbol.asyncIterator in body) {
+    const chunks: Buffer[] = [];
+    let length = 0;
+    for await (const value of body as AsyncIterable<unknown>) {
+      const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value as Uint8Array);
+      length += chunk.length;
+      if (length > MAX_PROXY_REQUEST_BODY_BYTES) {
+        throw Object.assign(new Error("Instance proxy request body exceeds the configured limit."), {
+          statusCode: 413,
+          code: "INSTANCE_PROXY_REQUEST_TOO_LARGE",
+        });
+      }
+      chunks.push(chunk);
+    }
+    return Buffer.concat(chunks, length);
+  }
   return typeof body === "string" ? body : body === undefined || body === null ? undefined : JSON.stringify(body);
 }
 

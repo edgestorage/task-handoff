@@ -22,10 +22,10 @@ test('removes an explicit system-picker cache copy after upload without touching
   const uploadAttachment = jest.fn().mockResolvedValue({ id: 'att-1', kind: 'file', name: 'note.txt', mime: 'text/plain', size: 5, expiresAt: '2026-08-06T00:00:00.000Z' });
   const removeTemporary = jest.fn();
   const client = { aiSessions: { uploadAttachment } } as unknown as ControlPlaneClient;
-  await uploadMobileAttachment(client, { instanceId: 'instance-1', sessionId: 'session-1' }, { uri: 'file:///cache/copied-note', name: 'note.txt', mime: 'text/plain', size: 5, kind: 'file', temporary: true }, { readBase64: async () => 'aGVsbG8=', removeTemporary });
+  await uploadMobileAttachment(client, { instanceId: 'instance-1', sessionId: 'session-1' }, { uri: 'file:///cache/copied-note', name: 'note.txt', mime: 'text/plain', size: 5, kind: 'file', temporary: true }, { readBase64: async () => 'aGVsbG8=', removeTemporary, now: Date.parse('2026-08-05T00:00:00.000Z') });
   expect(removeTemporary).toHaveBeenCalledWith('file:///cache/copied-note');
   removeTemporary.mockClear();
-  await uploadMobileAttachment(client, { instanceId: 'instance-1', sessionId: 'session-1' }, { uri: 'file:///library/photo.png', name: 'photo.png', mime: 'image/png', size: 5, kind: 'image', temporary: false }, { readBase64: async () => 'aGVsbG8=', removeTemporary });
+  await uploadMobileAttachment(client, { instanceId: 'instance-1', sessionId: 'session-1' }, { uri: 'file:///library/photo.png', name: 'photo.png', mime: 'image/png', size: 5, kind: 'image', temporary: false }, { readBase64: async () => 'aGVsbG8=', removeTemporary, now: Date.parse('2026-08-05T00:00:00.000Z') });
   expect(removeTemporary).not.toHaveBeenCalled();
 });
 
@@ -36,6 +36,16 @@ test('network-unknown upload is not converted into a reusable ref', async () => 
   expect(attachment.phase).toBe('result-unknown');
   expect(attachment.uploadRef).toBeUndefined();
   expect(uploadAttachment).toHaveBeenCalledTimes(1);
+});
+
+test('keeps a temporary generated file after a definite failure so the user can retry it', async () => {
+  const uploadAttachment = jest.fn().mockRejectedValue(new Error('offline'));
+  const removeTemporary = jest.fn();
+  const client = { aiSessions: { uploadAttachment } } as unknown as ControlPlaneClient;
+  const local = { uri: 'file:///cache/pasted-text-1.txt', name: 'pasted-text-1.txt', mime: 'text/plain', size: 10_001, kind: 'file' as const, temporary: true, textPresentation: { summary: 'hello', codePointLength: 10_001 } };
+  const attachment = await uploadMobileAttachment(client, { instanceId: 'instance-1', sessionId: 'session-1' }, local, { readBase64: async () => 'aGVsbG8=', removeTemporary });
+  expect(attachment).toMatchObject({ phase: 'failed', retryLocal: local, textPresentation: local.textPresentation });
+  expect(removeTemporary).not.toHaveBeenCalled();
 });
 
 test('runtime attachments can only originate from server file candidates under the absolute session cwd', () => {

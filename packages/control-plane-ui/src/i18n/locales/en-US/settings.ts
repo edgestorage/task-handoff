@@ -168,7 +168,7 @@ export const settings = {
   },
   projectRegistry: {
     count: "Git repositories · {count}", inUse: "In use", deleting: "Deleting", empty: "No Git repositories yet.", addTitle: "Add Git repository",
-    namePlaceholder: "Repository name", gitUrl: "Git URL", defaultImage: "Default image", defaultRuntime: "Default runtime", useDefault: "Use default",
+    namePlaceholder: "Repository name", gitUrl: "Git URL", defaultImage: "Default image", useDefault: "Use default",
     creating: "Creating", create: "Create repository", created: "{name} created.", deleteConfirm: "Delete project {name}?", localFolder: "local folder",
   },
   nodeRegistry: {
@@ -179,6 +179,30 @@ export const settings = {
     protocol: "Protocol", build: "Build", package: "Package", image: "Image", built: "Built", empty: "No nodes yet.", rename: "Rename node",
     renameDescription: "Change the display name used across the control plane. The node ID and connection settings will not change.",
     remoteDialogDescription: "Connect a node-agent that is running on another machine.", joinToken: "Join token", creating: "Creating", create: "Create node",
+  },
+  nodeOnboarding: {
+    title: "Add node wizard", description: "Check network reachability, then follow the shortest supported connection path.", progress: "Node connection progress",
+    recommended: "Recommended", unavailable: "Unavailable", prepare: "Prepare connection", connect: "Connect node", connecting: "Connecting...", copy: "Copy command", copied: "Copied", clipboardFailed: "The value could not be copied.",
+    steps: { network: "Network", target: "Target", connect: "Connect", complete: "Complete" },
+    network: {
+      title: "Can remote nodes reach this Control Plane?", description: "The automatic check sets a recommendation. You can change it before continuing.", origin: "Public Control Plane address", recheck: "Check again", question: "Control Plane public reachability",
+      public: "Reachable from the internet", publicDescription: "The Node Agent will connect back to this Control Plane.", private: "Not reachable from the internet", privateDescription: "This Control Plane will connect to the Node Agent or use a relay.", overrideWarning: "Your selection differs from the automatic check. The connection will be verified again.",
+      status: { checking: "Checking {origin}...", reachable: "{origin} appears reachable", unreachable: "{origin} does not appear publicly reachable", inconclusive: "Public reachability could not be confirmed for {origin}" },
+    },
+    target: {
+      agentInstalledTitle: "Is Node Agent already installed on the target machine?", agentInstalledDescription: "Both choices use a Node Agent connection back to this Control Plane.", installed: "Already installed", installedDescription: "Connect the existing service to this Control Plane.", notInstalled: "Not installed yet", notInstalledDescription: "Install the service and connect it in one command.", optionalName: "Node name (optional)",
+      agentPublicTitle: "Can this Control Plane reach the Node Agent?", agentPublicDescription: "Choose based on the Node Agent endpoint, firewall, and TLS configuration.", agentPublic: "Node Agent is publicly reachable", agentPublicHint: "Connect directly using its HTTPS endpoint and pairing token.", neitherPublic: "Neither side is publicly reachable", neitherPublicHint: "Use an account relay or another trusted Control Plane.",
+    },
+    reverse: {
+      connectTitle: "Connect the existing Node Agent", connectDescription: "Connect from the Control Plane that currently manages the target Agent, or run a command on the target machine.", installTitle: "Install and connect Node Agent", installDescription: "Run this command on the target machine to install the matching version and connect it.", method: "Connection method", useUi: "Connect from UI", useCommand: "Run command", uiStepOpen: "Open the Control Plane that currently manages the target Node Agent, go to Settings > Nodes, and select the node.", uiStepAdd: "Open Connections and select Add outbound connection.", uiStepSubmit: "Enter the Control Plane URL and join token below, then select Connect.", controlPlaneUrl: "Control Plane URL", joinToken: "Join token", copyUrl: "Copy URL", copyToken: "Copy token", runCommand: "Run on the target machine", waiting: "Waiting for the Node Agent · invitation expires {time}", expired: "This invitation expired. Generate a new invite.", regenerate: "Generate new invite",
+    },
+    direct: {
+      title: "Connect to the public Node Agent", description: "The Control Plane will verify the endpoint, consume its one-time pairing token, and save the resulting identity.", endpoint: "Node Agent HTTPS endpoint", tokenSource: "Pairing token source", managed: "Managed by a Control Plane", standalone: "Standalone Node Agent", managedHelp: "Open the source Control Plane, select this node, and generate a token that allows another Control Plane to connect.", standaloneHelp: "Run this command on the Node Agent machine, then paste the one-time token below.", token: "One-time pairing token", validation: { invalid: "Enter a valid HTTP or HTTPS Node Agent endpoint.", "public-http": "A public Node Agent endpoint must use HTTPS.", token: "Enter the one-time token issued by this Node Agent." },
+    },
+    relay: {
+      title: "Connect through a relay", description: "Neither side accepts an inbound connection. Choose a supported service that both sides can reach.", account: "Connect with Thandoff account", accountUnavailable: "Account-based Node Agent relay is not supported by the current protocol.", proxy: "Use a trusted Control Plane", proxyDescription: "Connect through another Control Plane that already manages the target node.",
+    },
+    complete: { title: "Node connected", description: "{name} is now available in this Control Plane." },
   },
   controlPlaneProxy: {
     directMode: "Direct endpoint", proxyMode: "Control-plane proxy", proxyOrigin: "Trusted proxy origin", inviteToken: "Proxy invite token",
@@ -199,7 +223,7 @@ export const settings = {
   nodeDetail: {
     protocol: "Protocol", build: "Build", package: "Package", image: "Image", built: "Built",
     renameDescription: "Change this node's display name", pairingDescription: "Authorize another control plane to access this node", removeDescription: "Remove this node from the control plane",
-    sections: "Node detail sections", overview: "Overview", runtimes: "Runtimes", updates: "Updates", storage: "Storage", inventory: "Inventory", remote: "Control planes",
+    sections: "Node detail sections", overview: "Overview", runtimes: "Runtimes", updates: "Updates", storage: "Storage", inventory: "Inventory", remote: "Connections",
     instances: "Instances", localFolders: "Local folders", diagnostics: "Agent diagnostics", diagnosticLog: "Diagnostic log · {count}",
     noDiagnostics: "No node protocol errors recorded from the latest refresh.", tcpListener: "TCP listener", listenOn: "Listen on", loopback: "127.0.0.1 only",
     allIpv4: "All IPv4 interfaces", port: "Port", applying: "Applying", loading: "Loading", apply: "Apply",

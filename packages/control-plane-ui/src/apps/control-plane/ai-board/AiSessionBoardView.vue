@@ -280,6 +280,7 @@ import AiSessionFloatingDock from "./AiSessionFloatingDock.vue";
 import type { AiBoardCard, AiBoardColumnKey } from "./aiBoardTypes";
 import { useAiBoardTriggers } from "./useAiBoardTriggers";
 import { nodeLocalFolderDisplayName } from "../nodePath";
+import { createBrowserUuid } from "../../../lib/random-id";
 
 const AI_BOARD_VISIBLE_COLUMNS_STORAGE_KEY = "task-handoff.control-plane.ai-board.visible-columns";
 const AI_BOARD_LAYOUT_STORAGE_KEY = "task-handoff.control-plane.ai-board.layout";
@@ -975,7 +976,7 @@ async function stopCardAppSession(card: AiBoardCard) {
   stoppingAppSessionKey.value = card.key;
   const loadingToast = showDelayedControlPlaneLoadingToast(t("sessions.actions.closingSession"));
   try {
-    await closeAiSession(card.instance.id, card.session.id, crypto.randomUUID());
+    await closeAiSession(card.instance.id, card.session.id, createBrowserUuid());
     await refreshBoard();
     if (selectedCardKey.value === card.key) {
       clearSelectedCard();
@@ -1008,7 +1009,7 @@ async function performCardFork(card: AiBoardCard, mode: "current" | "managed-wor
   if (forkingSessionKey.value || card.session.actions?.fork !== true) return;
   forkingSessionKey.value = card.key;
   const requestKey = `${card.key}:${mode}:${throughTurnId || "latest"}`;
-  const clientRequestId = forkRequestIds.get(requestKey) || crypto.randomUUID();
+  const clientRequestId = forkRequestIds.get(requestKey) || createBrowserUuid();
   forkRequestIds.set(requestKey, clientRequestId);
   const loadingToast = showDelayedControlPlaneLoadingToast(t("sessions.actions.forking"));
   try {
@@ -1043,7 +1044,7 @@ async function openCardApp(instance: InstanceWithAiSessions, session?: AiSession
   }
   try {
     emit("openAiSessionApp", instance, session);
-    const result = await openAiSessionApp(instance.id, session.id, crypto.randomUUID());
+    const result = await openAiSessionApp(instance.id, session.id, createBrowserUuid());
     emit("openAiSessionApp", instance, aiSessionAppNavigationTarget(session, result));
   } catch (error) {
     showControlPlaneToast(translateApiError(error, t, t("sessions.panel.openAppFailed")));

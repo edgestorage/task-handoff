@@ -3,6 +3,12 @@ const test = require("node:test");
 
 const {
   appendAiSessionMessageDelta,
+  AI_SESSION_ATTACHMENT_ONLY_MESSAGE,
+  AI_SESSION_LONG_PASTE_CODE_POINT_THRESHOLD,
+  aiSessionMessageText,
+  aiSessionPastedTextSummary,
+  aiSessionTextCodePointLength,
+  classifyAiSessionPastedText,
   aiSessionElapsedSeconds,
   applyAiSessionUnreadState,
   createControlPlaneClient,
@@ -85,6 +91,88 @@ test("shared AI Session attachment upload forwards transport progress", async ()
 
   assert.deepEqual(progress, [0, 0.4, 1]);
   assert.equal("futureField" in uploaded, false);
+});
+
+test("shared AI Session attachment upload falls back to the v0.0.21 endpoint", async () => {
+  const requests = [];
+  const transport = {
+    async request(path, schema, init) {
+      requests.push({ path, init });
+      if (requests.length === 1) throw Object.assign(new Error("missing route"), { status: 404 });
+      return schema.parse({ data: {
+        id: "attachment-legacy",
+        kind: "file",
+        name: "note.txt",
+        mime: "text/plain",
+        size: 5,
+      } });
+    },
+  };
+  const api = createControlPlaneClient(transport);
+  const uploaded = await api.aiSessions.uploadAttachment({
+    instanceId: "instance-1",
+    sessionId: "create-request-1",
+    scopeType: "create-request",
+    kind: "file",
+    name: "note.txt",
+    mime: "text/plain",
+    data: "data:text/plain;base64,aGVsbG8=",
+  });
+
+  assert.equal(uploaded.id, "attachment-legacy");
+  assert.equal(requests[1].path, "/api/ai-session-attachments");
+  assert.deepEqual(JSON.parse(requests[1].init.body), {
+    instanceId: "instance-1",
+    sessionId: "create-request-1",
+    kind: "file",
+    name: "note.txt",
+    mime: "text/plain",
+    data: "data:text/plain;base64,aGVsbG8=",
+  });
+});
+
+test("shared long-paste classifier normalizes text and preserves the 10000 boundary", () => {
+  assert.equal(AI_SESSION_LONG_PASTE_CODE_POINT_THRESHOLD, 10_000);
+  assert.deepEqual(classifyAiSessionPastedText("中".repeat(10_000)), { disposition: "inline" });
+  const decision = classifyAiSessionPastedText(`  first   line\r\n${"😀".repeat(9_991)}`, 2);
+  assert.equal(decision.disposition, "attachment");
+  assert.equal(decision.file.name, "pasted-text-2.txt");
+  assert.equal(decision.file.text.includes("\r"), false);
+  assert.equal(decision.file.presentation.codePointLength, 10_006);
+  assert.equal(decision.file.presentation.summary, "first line");
+  assert.equal(decision.file.size, new TextEncoder().encode(decision.file.text).byteLength);
+});
+
+test("shared long-paste summary truncates by code point and rejects the existing file limit", () => {
+  const longLine = "😀".repeat(81);
+  const decision = classifyAiSessionPastedText(`${longLine}\n${"a".repeat(10_000)}`);
+  assert.equal(decision.disposition, "attachment");
+  assert.equal([...decision.file.presentation.summary.slice(0, -1)].length, 80);
+  assert.equal(decision.file.presentation.summary.endsWith("…"), true);
+  assert.equal(classifyAiSessionPastedText(" ".repeat(10_001)).disposition, "attachment");
+  assert.equal(classifyAiSessionPastedText("😀".repeat(128_000)).disposition, "rejected");
+});
+
+test("shared long-paste fixtures cover unicode, blank summaries, and exact UTF-8 byte limits", () => {
+  assert.equal(aiSessionTextCodePointLength("中文😀e\u0301"), 5);
+  assert.equal(aiSessionPastedTextSummary("\r\n \t\r最后一行   摘要"), "最后一行 摘要");
+  assert.equal(aiSessionPastedTextSummary("\n\t \n"), "");
+
+  const belowLimit = classifyAiSessionPastedText("a".repeat(500 * 1024 - 1));
+  assert.equal(belowLimit.disposition, "attachment");
+  assert.equal(belowLimit.file.size, 500 * 1024 - 1);
+
+  const exactLimit = classifyAiSessionPastedText("a".repeat(500 * 1024));
+  assert.deepEqual(exactLimit, {
+    disposition: "rejected",
+    code: "AI_SESSION_PASTED_TEXT_TOO_LARGE",
+    size: 500 * 1024,
+  });
+});
+
+test("attachment-only message helper remains locale neutral", () => {
+  assert.equal(aiSessionMessageText(""), AI_SESSION_ATTACHMENT_ONLY_MESSAGE);
+  assert.equal(aiSessionMessageText("hello"), "hello");
 });
 
 test("shared AI Session client sends a node folder identity for server-side runtime path resolution", async () => {

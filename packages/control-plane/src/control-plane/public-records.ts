@@ -175,11 +175,7 @@ export function publicProject(project: Project) {
 
 export function normalizeProject(project: unknown) {
   if (project && typeof project === "object" && !Array.isArray(project)) {
-    const record = { ...(sanitizeStoredProject(project) as Record<string, unknown>) };
-    if (!("defaultRuntimeId" in record)) {
-      record.defaultRuntimeId = "runtime_local_docker";
-    }
-    return ProjectSchema.parse(record);
+    return ProjectSchema.parse(sanitizeStoredProject(project));
   }
   return ProjectSchema.parse(project);
 }

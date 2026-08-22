@@ -19,7 +19,7 @@ for (const workspaceDir of ["apps", "packages"]) {
   }
 }
 
-function runtimeDependencies(workspaceRoots, extraNames = []) {
+function runtimeDependencies(workspaceRoots, extraNames = [], bundledNames = []) {
   const dependencies = new Map();
   const pending = [...workspaceRoots];
   const visited = new Set();
@@ -42,8 +42,15 @@ function runtimeDependencies(workspaceRoots, extraNames = []) {
     if (!version) throw new Error(`Runtime dependency ${name} is not declared in the root package.json.`);
     dependencies.set(name, version);
   }
+  for (const name of bundledNames) {
+    if (!dependencies.delete(name)) {
+      throw new Error(`Bundled runtime dependency ${name} is not reachable from the runtime workspace dependencies.`);
+    }
+  }
   return Object.fromEntries([...dependencies].sort(([left], [right]) => left.localeCompare(right)));
 }
+
+const bundledControlPlaneDependencies = ["@fastify/compress"];
 
 export const runtimePackages = {
   server: {
@@ -68,7 +75,15 @@ export const runtimePackages = {
     entryFile: "cli.js",
     binName: "task-handoff-control-plane",
     uiDir: "packages/control-plane-ui/dist",
-    dependencies: runtimeDependencies(["@task-handoff/control-plane"], ["commander"]),
+    // Pure JavaScript compression support belongs in the portable runtime bundle.
+    // Keeping it out of the external dependency set lets Control Plane-only updates
+    // reuse an existing installation even when compression is introduced.
+    bundledDependencies: bundledControlPlaneDependencies,
+    dependencies: runtimeDependencies(
+      ["@task-handoff/control-plane"],
+      ["commander"],
+      bundledControlPlaneDependencies,
+    ),
   },
   "node-agent": {
     packageName: "@task-handoff/node-agent",
@@ -78,7 +93,12 @@ export const runtimePackages = {
     updateWorkerInput: "scripts/node-update-worker.cts",
     updateWorkerEntryFile: "node-update-worker.js",
     binName: "task-handoff-node-agent",
-    dependencies: runtimeDependencies(["@task-handoff/control-plane"], ["commander"]),
+    bundledDependencies: bundledControlPlaneDependencies,
+    dependencies: runtimeDependencies(
+      ["@task-handoff/control-plane"],
+      ["commander"],
+      bundledControlPlaneDependencies,
+    ),
   },
   "controlled-instance": {
     packageName: "@task-handoff/controlled-instance",

@@ -23,7 +23,7 @@ export const settings = {
   basic: "基础",
   chat: "聊天",
   nodes: "节点",
-  projects: "项目",
+  projects: "Git 项目",
   models: "模型",
   images: "镜像",
   environmentTemplates: "环境模板",
@@ -170,7 +170,7 @@ export const settings = {
   },
   projectRegistry: {
     count: "Git 仓库 · {count}", inUse: "使用中", deleting: "正在删除", empty: "尚无 Git 仓库。", addTitle: "添加 Git 仓库",
-    namePlaceholder: "仓库名称", gitUrl: "Git 地址", defaultImage: "默认镜像", defaultRuntime: "默认运行时", useDefault: "使用默认值",
+    namePlaceholder: "仓库名称", gitUrl: "Git 地址", defaultImage: "默认镜像", useDefault: "使用默认值",
     creating: "正在创建", create: "创建仓库", created: "{name} 已创建。", deleteConfirm: "确认删除项目 {name}？", localFolder: "本地文件夹",
   },
   nodeRegistry: {
@@ -181,6 +181,30 @@ export const settings = {
     protocol: "协议", build: "构建", package: "软件包", image: "镜像", built: "构建时间", empty: "尚无节点。", rename: "重命名节点",
     renameDescription: "修改控制面板各处使用的显示名称。节点 ID 和连接设置不会改变。",
     remoteDialogDescription: "连接运行在另一台机器上的 node-agent。", joinToken: "加入 Token", creating: "正在创建", create: "创建节点",
+  },
+  nodeOnboarding: {
+    title: "添加节点向导", description: "检查网络可达性，然后按当前环境中最短的受支持路径完成连接。", progress: "节点连接进度",
+    recommended: "推荐", unavailable: "不可用", prepare: "准备连接", connect: "连接节点", connecting: "正在连接...", copy: "复制命令", copied: "已复制", clipboardFailed: "无法复制内容。",
+    steps: { network: "网络", target: "目标", connect: "连接", complete: "完成" },
+    network: {
+      title: "远程节点能否访问此控制面板？", description: "自动检测会给出默认建议，你可以在继续前修改。", origin: "控制面板公网地址", recheck: "重新检测", question: "控制面板公网可达性",
+      public: "可以从公网访问", publicDescription: "Node Agent 将主动连接回此控制面板。", private: "不能从公网访问", privateDescription: "将由控制面板连接 Node Agent，或使用中继。", overrideWarning: "你的选择与自动检测结果不同，建立连接时会再次验证。",
+      status: { checking: "正在检测 {origin}...", reachable: "{origin} 看起来可以访问", unreachable: "{origin} 看起来无法从公网访问", inconclusive: "无法确认 {origin} 的公网可达性" },
+    },
+    target: {
+      agentInstalledTitle: "目标机器是否已经安装 Node Agent？", agentInstalledDescription: "两种情况都会让 Node Agent 主动连接回此控制面板。", installed: "已经安装", installedDescription: "把现有服务连接到此控制面板。", notInstalled: "尚未安装", notInstalledDescription: "通过一条命令完成安装和连接。", optionalName: "节点名称（可选）",
+      agentPublicTitle: "此控制面板能否访问 Node Agent？", agentPublicDescription: "请根据 Node Agent 地址、防火墙和 TLS 配置选择。", agentPublic: "Node Agent 可以从公网访问", agentPublicHint: "使用 HTTPS 地址和配对 Token 直接连接。", neitherPublic: "双方都不能从公网访问", neitherPublicHint: "使用账号中继或另一台可信控制面板。",
+    },
+    reverse: {
+      connectTitle: "连接现有 Node Agent", connectDescription: "可以在当前管理目标 Agent 的控制面板中主动连接，也可以在目标机器运行命令。", installTitle: "安装并连接 Node Agent", installDescription: "在目标机器运行此命令，安装匹配版本并完成连接。", method: "连接方式", useUi: "从界面连接", useCommand: "运行命令", uiStepOpen: "打开当前管理目标 Node Agent 的控制面板，进入“设置 > 节点”，选择目标节点。", uiStepAdd: "打开“连接”页，点击“添加主动连接”。", uiStepSubmit: "填写下面的控制面板 URL 和加入 Token，然后点击“连接”。", controlPlaneUrl: "控制面板 URL", joinToken: "加入 Token", copyUrl: "复制地址", copyToken: "复制 Token", runCommand: "在目标机器运行", waiting: "正在等待 Node Agent · 邀请于 {time} 过期", expired: "邀请已经过期，请重新生成邀请。", regenerate: "重新生成邀请",
+    },
+    direct: {
+      title: "连接公网 Node Agent", description: "控制面板将验证地址、消费一次性配对 Token，并保存配对后的身份。", endpoint: "Node Agent HTTPS 地址", tokenSource: "配对 Token 获取方式", managed: "由控制面板管理", standalone: "独立 Node Agent", managedHelp: "打开来源控制面板，选择此节点，然后生成允许另一个控制面板连接的 Token。", standaloneHelp: "在 Node Agent 所在机器运行下面的命令，然后粘贴一次性 Token。", token: "一次性配对 Token", validation: { invalid: "请输入有效的 Node Agent HTTP 或 HTTPS 地址。", "public-http": "公网 Node Agent 地址必须使用 HTTPS。", token: "请输入由此 Node Agent 签发的一次性 Token。" },
+    },
+    relay: {
+      title: "通过中继连接", description: "双方都无法接受入站连接，请选择双方均可访问的受支持服务。", account: "使用 Thandoff 账号连接", accountUnavailable: "当前协议尚不支持账号型 Node Agent 中继。", proxy: "使用可信控制面板", proxyDescription: "通过已经管理目标节点的另一台控制面板连接。",
+    },
+    complete: { title: "节点已连接", description: "{name} 现在可以在此控制面板中使用。" },
   },
   controlPlaneProxy: {
     directMode: "直接端点", proxyMode: "控制面代理", proxyOrigin: "可信代理 Origin", inviteToken: "代理邀请 Token",
@@ -201,7 +225,7 @@ export const settings = {
   nodeDetail: {
     protocol: "协议", build: "构建", package: "软件包", image: "镜像", built: "构建时间",
     renameDescription: "更改此节点的显示名称", pairingDescription: "授权另一个控制面板访问此节点", removeDescription: "从控制面板移除此节点",
-    sections: "节点详情分区", overview: "概览", runtimes: "运行环境", updates: "更新", storage: "存储", inventory: "清单", remote: "控制面板",
+    sections: "节点详情分区", overview: "概览", runtimes: "运行环境", updates: "更新", storage: "项目", inventory: "清单", remote: "连接",
     instances: "实例", localFolders: "本地文件夹", diagnostics: "Agent 诊断", diagnosticLog: "诊断日志 · {count}",
     noDiagnostics: "最近一次刷新未记录节点协议错误。", tcpListener: "TCP 监听器", listenOn: "监听地址", loopback: "仅 127.0.0.1",
     allIpv4: "所有 IPv4 接口", port: "端口", applying: "正在应用", loading: "正在加载", apply: "应用",

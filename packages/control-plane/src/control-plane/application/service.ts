@@ -796,6 +796,10 @@ export class ControlPlaneService {
     return this.nodeJoinService.createInvite(input);
   }
 
+  getNodeJoinInviteStatus(id: string) {
+    return this.nodeJoinService.status(id);
+  }
+
   completeNodeJoin(input: unknown) {
     return this.nodeJoinService.complete(input);
   }
@@ -1691,9 +1695,21 @@ export class ControlPlaneService {
     return this.nodeAgentGateway.readFleetInstances(nodes);
   }
 
-  private async requireNodeInstance(id: string) {
+  private async requireNodeInstance(id: string, refresh = false) {
     const nodes = this.listNodes();
     const cached = this.nodeAgentGateway.instanceFromSnapshot(nodes, id);
+    if (cached && refresh) {
+      const node = nodes.find((candidate) => candidate.id === cached.nodeId);
+      if (node) {
+        await this.nodeAgentGateway.refreshFleetInstances([node], {}, true);
+        const refreshed = this.nodeAgentGateway.instanceFromSnapshot([node], id);
+        if (refreshed) return refreshed;
+        const state = this.nodeAgentGateway.readFleetInstances([node]).nodeStates.find((candidate) => candidate.nodeId === node.id);
+        if (state?.phase === "ready") {
+          throwNotFound("CONTROLLED_INSTANCE_NOT_FOUND", `Controlled instance ${id} was not found.`);
+        }
+      }
+    }
     if (cached) return cached;
     const refreshed = await this.nodeAgentGateway.listFleetInstances(nodes);
     const instance = refreshed.items.find((item) => item.id === id);
@@ -1781,8 +1797,8 @@ export class ControlPlaneService {
     return publicNode(this.projectNodeConnection(this.requireNode(id)));
   }
 
-  async requireControlledInstance(id: string, includeSecret = false) {
-    const record = await this.requireNodeInstance(id);
+  async requireControlledInstance(id: string, includeSecret = false, refresh = false) {
+    const record = await this.requireNodeInstance(id, refresh);
     return includeSecret ? record : publicInstanceWithAccess(record);
   }
 }

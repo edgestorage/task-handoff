@@ -350,6 +350,22 @@ export class NodeUpdateJobs {
     options: { processStarted?: boolean } = {},
   ) {
     const byId = new Map(instances.map((instance) => [instance.id, instance]));
+    if (options.processStarted) {
+      // Compatibility for v0.0.22-v0.0.24: recover jobs stranded before the
+      // packaged worker's first transition so they no longer block retries.
+      for (const queued of this.list().filter((candidate) => candidate.status === "queued")) {
+        this.patch(queued.id, {
+          status: "failed",
+          rollout: { ...queued.rollout, phase: "failed" },
+          error: {
+            code: "NODE_UPDATE_FAILED",
+            message: "The node agent restarted before the update worker claimed this job.",
+            retryable: true,
+          },
+          completedAt: now(),
+        });
+      }
+    }
     for (const persisted of this.list().filter((candidate) => ["updating-node", "restarting-node", "converging-instances"].includes(candidate.status))) {
       if (options.processStarted && persisted.status === "restarting-node" && nodeVersion !== persisted.toVersion) {
         this.patch(persisted.id, {

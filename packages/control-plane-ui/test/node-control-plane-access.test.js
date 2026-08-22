@@ -11,6 +11,8 @@ test("node settings separates paired control planes from active connections", ()
   const modal = fs.readFileSync(path.join(root, "src/apps/control-plane/settings/SettingsModal.vue"), "utf8");
   const diagnostics = fs.readFileSync(path.join(root, "src/apps/control-plane/settings/NodeConnectionDiagnostics.vue"), "utf8");
   const queries = fs.readFileSync(path.join(root, "src/api/queries.ts"), "utf8");
+  const zh = fs.readFileSync(path.join(root, "src/i18n/locales/zh-CN/settings.ts"), "utf8");
+  const en = fs.readFileSync(path.join(root, "src/i18n/locales/en-US/settings.ts"), "utf8");
 
   assert.match(panel, /resources\.controlPlanePairings/);
   assert.match(panel, /resources\.controlPlaneConnections/);
@@ -32,4 +34,6 @@ test("node settings separates paired control planes from active connections", ()
   assert.doesNotMatch(panel, /remote\.current \?[^\n]*remote\.active/);
   assert.match(queries, /control-plane-pairings/);
   assert.match(queries, /control-plane-connections/);
+  assert.match(zh, /inventory: "清单", remote: "连接"/);
+  assert.match(en, /inventory: "Inventory", remote: "Connections"/);
 });

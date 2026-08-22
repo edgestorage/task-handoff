@@ -296,7 +296,7 @@ test("the return-to-latest control stays compact and visually separated from the
 
 test("all instance AI sessions expose close through the unified context menu", () => {
   assert.match(panel, /<AiSessionCardContextMenu[\s\S]*?@close-session="closeSession\(session\)"/);
-  assert.match(panel, /await closeAiSession\(props\.instance\.id, session\.id, crypto\.randomUUID\(\)\);/);
+  assert.match(panel, /await closeAiSession\(props\.instance\.id, session\.id, createBrowserUuid\(\)\);/);
   assert.match(panel, /aiSessionAppTab\(instance, session\) \|\| session\.actions\?\.openApp/);
 });
 

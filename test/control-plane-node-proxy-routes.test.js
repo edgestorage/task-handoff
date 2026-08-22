@@ -90,7 +90,7 @@ class Socket extends EventEmitter {
   readyState = 1;
   sent = [];
   closes = [];
-  send(data) { this.sent.push(data); }
+  send(data, options) { this.sent.push({ data, options }); }
   close(code, reason) { this.readyState = 3; this.closes.push({ code, reason }); }
 }
 
@@ -352,7 +352,10 @@ test("binding-authenticated WebSocket route uses the target transport and preser
         requestStream() {},
         proxyWebSocket(target, socket, route, protocols, headers) {
           observed = { target, route, protocols, headers };
-          socket.on("message", (data, isBinary) => socket.send(isBinary ? data : `echo:${String(data)}`));
+          socket.on("message", (data, isBinary) => socket.send(
+            isBinary ? data : Buffer.from(`echo:${String(data)}`),
+            { binary: Boolean(isBinary) },
+          ));
         },
       },
     }),
@@ -367,9 +370,10 @@ test("binding-authenticated WebSocket route uses the target transport and preser
     await app.close();
   });
   client.send("hello");
-  const [reply] = await once(client, "message");
+  const [reply, isBinary] = await once(client, "message");
 
   assert.equal(String(reply), "echo:hello");
+  assert.equal(isBinary, false);
   assert.equal(observed.target.id, node.id);
   assert.equal(observed.route, "/terminal?mode=raw");
   assert.equal(observed.protocols, undefined);

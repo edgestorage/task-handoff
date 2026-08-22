@@ -7,7 +7,9 @@ import {
   InstanceLifecycleSnapshotSchema,
   InstanceResourceMetricsEventType,
   InstanceResourceMetricsSchema,
+  NodeJoinedEventSchema,
   type InstanceLifecycleSnapshot,
+  type NodeJoinedEvent,
 } from "@task-handoff/protocol/control-plane";
 import { AiSessionTimelineItemEventSchema, AiSessionUnreadEventType, AiSessionUnreadStateSchema, type AiSessionTimelineItemEvent, type AiSessionUnreadState } from "@task-handoff/protocol/ai-sessions";
 import { safeParseResponse } from "@task-handoff/protocol/response-validation";
@@ -71,6 +73,9 @@ export function useControlPlaneEvents(input: {
     applyEvent: (type: string, payload: unknown) => boolean;
     clear?: (instanceId: string) => void;
     reconcileLifecycle?: (lifecycle: InstanceLifecycleSnapshot) => void;
+  };
+  nodes?: {
+    joined: (event: NodeJoinedEvent) => void;
   };
 }) {
   const queryClient = useQueryClient();
@@ -208,6 +213,12 @@ export function useControlPlaneEvents(input: {
       if (!lifecycle.success || event.scope?.instanceId !== lifecycle.data.instanceId) return false;
       input.imagePullProgress?.reconcileLifecycle?.(lifecycle.data);
       return applyInstanceLifecycle(queryClient, lifecycle.data);
+    }
+    if (event.type === "node.joined") {
+      const joined = safeParseResponse(NodeJoinedEventSchema, event.payload);
+      if (!joined.success) return false;
+      input.nodes?.joined(joined.data);
+      return false;
     }
     return false;
   }

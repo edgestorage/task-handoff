@@ -183,6 +183,14 @@ sudo task-handoff-node-agent invite --ipc-path /run/task-handoff/node-agent.sock
 
 使用 `--json` 可获得适合自动化处理的输出。远程 TCP 接入仍需邀请令牌和配对后的 HMAC 认证。
 
+卸载独立安装的 Node Agent：
+
+```sh
+sudo task-handoff-node-agent uninstall
+```
+
+该命令会移除 systemd 服务和运行时包，最后询问是否删除 Node Agent 数据目录，默认不删除。非交互执行可显式传入 `--keep-data` 或 `--delete-data`。受管 Docker volume 不会被连带删除。
+
 ## CLI
 
 `@task-handoff/server` 提供统一的 `task-handoff` 命令：

@@ -173,6 +173,9 @@ curl -fsSL https://CONTROL_PLANE_HOST/install-node-agent.sh | sudo sh -s -- \
   --version RELEASE_VERSION
 ```
 
+On Debian and Ubuntu, the remote-node installer bootstraps the required Node.js
+24, npm, and native build tools on a fresh host.
+
 Replace `RELEASE_VERSION` with the Control Plane's runtime package version so the Node Agent and controlled-instance runtime use the same release.
 
 An installed Node Agent can also generate a one-time invitation directly on the node:
@@ -182,6 +185,14 @@ sudo task-handoff-node-agent invite --ipc-path /run/task-handoff/node-agent.sock
 ```
 
 Add `--json` for automation-friendly output. Remote TCP access still requires an invitation and paired HMAC authentication.
+
+To remove a standalone Node Agent installation:
+
+```sh
+sudo task-handoff-node-agent uninstall
+```
+
+The command removes the systemd service and runtime packages, then asks whether to delete the Node Agent data directory. The default is No. Use `--keep-data` or `--delete-data` for non-interactive execution. Managed Docker volumes are preserved.
 
 ## CLI
 
