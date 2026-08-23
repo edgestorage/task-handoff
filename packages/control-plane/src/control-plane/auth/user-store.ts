@@ -11,16 +11,18 @@ import {
 } from "./database/index.ts";
 import { importV0021AuthJson, legacyAuthDataPresent } from "./database/legacy-import.ts";
 import type {
-  ExternalIdentityApprovalRecord,
   IdentityProviderRecord,
-  LoginIdentityRecord,
   RoleDefinitionRecord,
-  UserAccessGrantRecord,
   UserAccountRecord,
-  UserSessionRecord,
   UserAuditRecord,
 } from "./user-records.ts";
-import type { ControlPlaneRecordCollection } from "./database/repository.ts";
+import type {
+  ControlPlaneApprovalCollection,
+  ControlPlaneGrantCollection,
+  ControlPlaneIdentityCollection,
+  ControlPlaneRecordCollection,
+  ControlPlaneSessionCollection,
+} from "./database/repository.ts";
 
 export const SYSTEM_ROLE_IDS = {
   admin: "role_admin",
@@ -57,19 +59,24 @@ export class ControlPlaneUserStore {
   }
 
   get users(): ControlPlaneRecordCollection<UserAccountRecord> { return this.repository().users; }
-  get identities(): ControlPlaneRecordCollection<LoginIdentityRecord> { return this.repository().identities; }
+  get identities(): ControlPlaneIdentityCollection { return this.repository().identities; }
   get roles(): ControlPlaneRecordCollection<RoleDefinitionRecord> { return this.repository().roles; }
-  get grants(): ControlPlaneRecordCollection<UserAccessGrantRecord> { return this.repository().grants; }
-  get sessions(): ControlPlaneRecordCollection<UserSessionRecord> { return this.repository().sessions; }
+  get grants(): ControlPlaneGrantCollection { return this.repository().grants; }
+  get sessions(): ControlPlaneSessionCollection { return this.repository().sessions; }
   get providers(): ControlPlaneRecordCollection<IdentityProviderRecord> { return this.repository().providers; }
-  get approvals(): ControlPlaneRecordCollection<ExternalIdentityApprovalRecord> { return this.repository().approvals; }
+  get approvals(): ControlPlaneApprovalCollection { return this.repository().approvals; }
   get audit(): ControlPlaneRecordCollection<UserAuditRecord> { return this.repository().audit; }
 
   async init() {
     if (this.repositoryValue) return this.state();
     this.repositoryValue = await createControlPlaneUserRepository(this.paths, this.database);
     try {
-      if (legacyAuthDataPresent(this.paths)) await importV0021AuthJson(this.repositoryValue, this.paths);
+      if (legacyAuthDataPresent(this.paths)) {
+        await this.repositoryValue.transaction(async (transaction) => {
+          await this.ensureSystemRoles(transaction);
+          await importV0021AuthJson(transaction, this.paths);
+        });
+      }
       const metadata = await this.repositoryValue.metadata();
       const state = {
         initialized: Boolean(metadata.initializedAt),

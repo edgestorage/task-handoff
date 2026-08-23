@@ -31,6 +31,11 @@ load_private_config() {
   fi
 }
 
+if [ -n "${TASK_HANDOFF_WORKSPACE_SUBDIRECTORY:-}" ]; then
+  export TASK_HANDOFF_WORKSPACE="${TASK_HANDOFF_WORKSPACE:-/workspace}/${TASK_HANDOFF_WORKSPACE_SUBDIRECTORY}"
+  unset TASK_HANDOFF_WORKSPACE_SUBDIRECTORY
+fi
+
 if [ "$(id -u)" = "0" ] && [ "${TASK_HANDOFF_PRIVILEGE_DROPPED:-0}" != "1" ]; then
   load_private_config
   mkdir -p /data /home/agent

@@ -147,13 +147,17 @@ export function useCurrentAccessQuery(enabled: MaybeRefOrGetter<boolean> = true)
   });
 }
 
-export function useUsersQuery(enabled: MaybeRefOrGetter<boolean> = true) {
+export function useUsersQuery(enabled: MaybeRefOrGetter<boolean> = true, includeArchived = false) {
   return useQuery({
-    queryKey: controlPlaneQueryKeys.users,
-    queryFn: ({ signal }) => sharedControlPlaneClient.users.list({}, signal),
+    queryKey: [...controlPlaneQueryKeys.users, { includeArchived }],
+    queryFn: ({ signal }) => sharedControlPlaneClient.users.list({ includeArchived }, signal),
     enabled: computed(() => toValue(enabled)),
     retry: false,
   });
+}
+
+export function usePermissionsQuery(enabled: MaybeRefOrGetter<boolean> = true) {
+  return useQuery({ queryKey: controlPlaneQueryKeys.permissions, queryFn: ({ signal }) => sharedControlPlaneClient.users.permissions(signal), enabled: computed(() => toValue(enabled)), retry: false });
 }
 
 export function useRolesQuery(enabled: MaybeRefOrGetter<boolean> = true) {
@@ -174,10 +178,27 @@ export function useIdentityProvidersQuery(enabled: MaybeRefOrGetter<boolean> = t
   });
 }
 
+export function useExternalIdentityApprovalsQuery(enabled: MaybeRefOrGetter<boolean> = true) {
+  return useQuery({ queryKey: controlPlaneQueryKeys.externalIdentityApprovals, queryFn: ({ signal }) => sharedControlPlaneClient.users.approvals(signal), enabled: computed(() => toValue(enabled)), retry: false });
+}
+
 export const createControlPlaneUser = (input: unknown) => sharedControlPlaneClient.users.create(input);
-export const updateControlPlaneUser = (userId: string, input: unknown) => sharedControlPlaneClient.users.update(userId, input);
+export const updateControlPlaneUser = (userId: string, input: import("@task-handoff/protocol/control-plane-access").ControlPlaneUpdateUserInput) => sharedControlPlaneClient.users.update(userId, input);
 export const setControlPlaneUserAccess = (userId: string, input: unknown) => sharedControlPlaneClient.users.setAccess(userId, input);
 export const getControlPlaneUserDetail = (userId: string) => sharedControlPlaneClient.users.detail(userId);
+export const resetControlPlaneUserPassword = (userId: string, input: { password: string; requirePasswordChange?: boolean }) => sharedControlPlaneClient.users.resetPassword(userId, input);
+export const listControlPlaneUserSessions = (userId: string) => sharedControlPlaneClient.users.sessions(userId);
+export const revokeControlPlaneUserSession = (userId: string, sessionId: string) => sharedControlPlaneClient.users.revokeSession(userId, sessionId);
+export const revokeAllControlPlaneUserSessions = (userId: string) => sharedControlPlaneClient.users.revokeAllSessions(userId);
+export const unbindControlPlaneUserExternalIdentity = (userId: string, identityId: string) => sharedControlPlaneClient.users.unbindExternalIdentity(userId, identityId);
+export const createControlPlaneRole = (input: unknown) => sharedControlPlaneClient.users.createRole(input);
+export const updateControlPlaneRole = (roleId: string, input: unknown) => sharedControlPlaneClient.users.updateRole(roleId, input);
+export const archiveControlPlaneRole = (roleId: string) => sharedControlPlaneClient.users.archiveRole(roleId);
+export const createControlPlaneIdentityProvider = (input: unknown) => sharedControlPlaneClient.users.createProvider(input);
+export const updateControlPlaneIdentityProvider = (providerId: string, input: unknown) => sharedControlPlaneClient.users.updateProvider(providerId, input);
+export const removeControlPlaneIdentityProvider = (providerId: string) => sharedControlPlaneClient.users.removeProvider(providerId);
+export const approveControlPlaneExternalIdentity = (approvalId: string, input: unknown) => sharedControlPlaneClient.users.approveIdentity(approvalId, input);
+export const rejectControlPlaneExternalIdentity = (approvalId: string) => sharedControlPlaneClient.users.rejectIdentity(approvalId);
 
 export function useControlPlaneStatusQuery() {
   return useQuery({

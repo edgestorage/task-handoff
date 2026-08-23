@@ -86,12 +86,41 @@ test("shared users client owns strict authorization responses and encoded manage
     roleIds: ["role_operator"],
     permissionIds: ["nodes:read"],
     nodeScope: { kind: "selected", nodeIds: ["node_1"] },
+    instanceScope: { kind: "inherit-node-scope" },
     authorizationRevision: 2,
   });
   const revoked = await api.users.revokeSession("user/operator", "session/1");
   assert.equal(revoked.revoked, true);
   assert.equal(requests[1].path, "/api/users/user%2Foperator/sessions/session%2F1");
   assert.equal(requests[1].init.method, "DELETE");
+});
+
+test("shared users client owns role, provider, identity, and approval mutations", async () => {
+  const requests = [];
+  const timestamp = "2026-08-23T00:00:00.000Z";
+  const transport = {
+    async request(path, schema, init) {
+      requests.push({ path, init });
+      if (path.endsWith("/identities/identity%2Fone")) return schema.parse({ data: { unbound: true } });
+      if (path === "/api/roles/role%2Fone") return schema.parse({ data: { id: "role/one", name: "Reviewer", system: false, status: "active", permissionIds: ["nodes:read"], createdAt: timestamp, updatedAt: timestamp } });
+      if (path === "/api/identity-providers/provider%2Fone") return schema.parse({ data: { deleted: true } });
+      if (path.endsWith("/reject")) return schema.parse({ data: { rejected: true } });
+      throw new Error(`Unexpected path ${path}`);
+    },
+  };
+  const api = createControlPlaneClient(transport);
+  assert.deepEqual(await api.users.unbindExternalIdentity("user/one", "identity/one"), { unbound: true });
+  assert.equal((await api.users.updateRole("role/one", { name: "Reviewer" })).name, "Reviewer");
+  assert.deepEqual(await api.users.removeProvider("provider/one"), { deleted: true });
+  assert.deepEqual(await api.users.rejectIdentity("approval/one"), { rejected: true });
+  assert.deepEqual(requests.map(({ path }) => path), [
+    "/api/users/user%2Fone/identities/identity%2Fone",
+    "/api/roles/role%2Fone",
+    "/api/identity-providers/provider%2Fone",
+    "/api/external-identity-approvals/approval%2Fone/reject",
+  ]);
+  assert.equal(requests[1].init.method, "PATCH");
+  assert.equal(requests[3].init.method, "POST");
 });
 
 test("shared AI Session attachment upload forwards transport progress", async () => {

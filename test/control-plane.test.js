@@ -2311,7 +2311,7 @@ test("control plane admin bootstrap has exactly one winner under concurrency", a
   assert.equal(rejected.every((response) => response.json().error.code === "AUTH_BOOTSTRAP_IN_PROGRESS"), true);
   const database = new DatabaseSync(path.join(dataDir, "user-access", "control-plane.sqlite"), { readOnly: true });
   try {
-    assert.equal(database.prepare("SELECT count(*) AS count FROM control_plane_users").get().count, 1);
+    assert.equal(database.prepare("SELECT count(*) AS count FROM cp_users").get().count, 1);
   } finally {
     database.close();
   }

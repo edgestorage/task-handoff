@@ -233,16 +233,18 @@ export const GitWorkspaceProvisioningInputSchema = z.object({
   operationId: IdSchema,
   instanceId: IdSchema,
   remoteUrl: z.string().trim().min(1).max(4096),
-  ref: z.object({
-    type: z.enum(["branch", "tag", "commit"]),
-    name: z.string().trim().min(1).max(240).optional(),
-    commit: z.string().trim().min(1).max(80).optional(),
-  }).strict(),
+  ref: z.discriminatedUnion("type", [
+    z.object({ type: z.enum(["branch", "tag"]), name: z.string().trim().min(1).max(240) }).strict(),
+    z.object({ type: z.literal("commit"), commit: z.string().trim().regex(/^[0-9a-fA-F]{4,64}$/, "commit must be a hexadecimal Git object id") }).strict(),
+  ]),
   clone: z.object({
     depth: z.number().int().positive().max(100_000).optional(),
     submodules: z.boolean().default(false),
     lfs: z.boolean().default(false),
-    subdirectory: z.string().trim().max(240).default(""),
+    subdirectory: z.string().trim().max(240).refine(
+      (value) => !value.startsWith("/") && !value.split("/").some((segment) => segment === ".."),
+      "subdirectory must be a relative path within the repository",
+    ).transform((value) => value.split("/").filter((segment) => segment && segment !== ".").join("/")).default(""),
   }).strict(),
   credentials: z.array(GitWorkspaceProvisioningCredentialSchema).max(256).default([]),
 }).strict();
@@ -272,6 +274,33 @@ export function sanitizeGitCredentialPublic(input: unknown) {
   return GitCredentialPublicSchema.safeParse({
     ...pick(record, ["id", "name", "kind", "secretSet", "status", "revision", "createdAt", "updatedAt"]),
     scope: pick(scope, ["scheme", "host", "port", "pathPrefix"]),
+  });
+}
+
+export function sanitizeGitWorkspaceProvisioningInput(input: unknown) {
+  const record = objectRecord(input);
+  const ref = objectRecord(record?.ref);
+  const clone = objectRecord(record?.clone);
+  const credentials = Array.isArray(record?.credentials) ? record.credentials.map((value) => {
+    const credential = objectRecord(value);
+    const payload = objectRecord(credential?.payload);
+    const publicCredential = sanitizeGitCredentialPublic(payload?.credential);
+    const secret = objectRecord(payload?.secret);
+    return {
+      ...pick(credential, ["operationId", "retention"]),
+      payload: {
+        credential: publicCredential.success ? publicCredential.data : payload?.credential,
+        secret: secret?.kind === "https-token"
+          ? pick(secret, ["kind", "username", "token"])
+          : pick(secret, ["kind", "privateKey", "passphrase", "pinnedKnownHosts"]),
+      },
+    };
+  }) : record?.credentials;
+  return GitWorkspaceProvisioningInputSchema.safeParse({
+    ...pick(record, ["operationId", "instanceId", "remoteUrl"]),
+    ref: pick(ref, ["type", "name", "commit"]),
+    clone: pick(clone, ["depth", "submodules", "lfs", "subdirectory"]),
+    credentials,
   });
 }
 

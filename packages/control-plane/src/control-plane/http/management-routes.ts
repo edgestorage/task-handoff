@@ -38,6 +38,7 @@ export type RegisterControlPlaneManagementRoutesOptions = {
   nodeAgentTunnel: ControlPlaneNodeAgentTunnelTransport;
   nodeEventSubscriber: ControlPlaneNodeEventSubscriber;
   errorPayload: ErrorPayload;
+  onInstanceDeleted?: (instanceId: string) => Promise<void>;
 };
 
 export function registerControlPlaneManagementRoutes(options: RegisterControlPlaneManagementRoutesOptions) {
@@ -54,11 +55,12 @@ export function registerControlPlaneManagementRoutes(options: RegisterControlPla
     nodeAgentTunnel,
     nodeEventSubscriber,
     errorPayload,
+    onInstanceDeleted,
   } = options;
 
   registerCatalogRoutes({ app, service, events });
   registerNodeRoutes({ app, service, events, nodeAgentTunnel, nodeEventSubscriber, errorPayload });
-  registerInstanceRoutes({ app, service, events });
+  registerInstanceRoutes({ app, service, events, onInstanceDeleted });
   registerEnvironmentTemplateRoutes(app, service, events);
   registerSessionRoutes({ app, service, events, appSessionAggregator, aiSessionAggregator, aiSessionUnread, aiSessionAttachments, aiSessionAttachmentCache });
   registerTriggerRoutes({ app, service, events });

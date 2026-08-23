@@ -83,8 +83,8 @@ git_config=(
   -c core.sshCommand="node /run/task-handoff/bootstrap/git-provisioning-helper.js ssh"
 )
 clone_args=(clone)
-if [ -n "${TASK_HANDOFF_GIT_DEPTH:-}" ]; then clone_args+=(--depth "${TASK_HANDOFF_GIT_DEPTH}"); fi
-if [ "${TASK_HANDOFF_GIT_SUBMODULES:-false}" = "true" ]; then clone_args+=(--recurse-submodules); fi
+# A commit SHA is not guaranteed to be reachable from a shallow default-branch clone.
+if [ -n "${TASK_HANDOFF_GIT_DEPTH:-}" ] && [ -z "${TASK_HANDOFF_GIT_COMMIT:-}" ]; then clone_args+=(--depth "${TASK_HANDOFF_GIT_DEPTH}"); fi
 if [ -n "${TASK_HANDOFF_GIT_REF:-}" ]; then clone_args+=(--branch "${TASK_HANDOFF_GIT_REF}"); fi
 clone_args+=(-- "${TASK_HANDOFF_GIT_URL}" "${checkout}")
 
@@ -96,7 +96,7 @@ if ! runuser -u agent -- env \
   GIT_TERMINAL_PROMPT=0 \
   GIT_SSH_COMMAND="node /run/task-handoff/bootstrap/git-provisioning-helper.js ssh" \
   git "${git_config[@]}" "${clone_args[@]}"; then
-  fail AUTHENTICATION_REJECTED 74
+  fail CLONE_FAILED 74
 fi
 
 if [ -n "${TASK_HANDOFF_GIT_COMMIT:-}" ]; then
@@ -104,10 +104,22 @@ if [ -n "${TASK_HANDOFF_GIT_COMMIT:-}" ]; then
     fail REF_NOT_FOUND 75
   fi
 fi
+if [ "${TASK_HANDOFF_GIT_SUBMODULES:-false}" = "true" ]; then
+  if ! runuser -u agent -- env \
+    HOME=/tmp/task-handoff-git-home \
+    GIT_TERMINAL_PROMPT=0 \
+    GIT_SSH_COMMAND="node /run/task-handoff/bootstrap/git-provisioning-helper.js ssh" \
+    git "${git_config[@]}" -C "${checkout}" submodule update --init --recursive; then
+    fail CLONE_FAILED 74
+  fi
+fi
 if [ "${TASK_HANDOFF_GIT_LFS:-false}" = "true" ]; then
   if ! runuser -u agent -- env GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="node /run/task-handoff/bootstrap/git-provisioning-helper.js ssh" git "${git_config[@]}" -C "${checkout}" lfs pull; then
     fail LFS_FAILED 76
   fi
+fi
+if [ -n "${TASK_HANDOFF_WORKSPACE_SUBDIRECTORY:-}" ] && [ ! -d "${checkout}/${TASK_HANDOFF_WORKSPACE_SUBDIRECTORY}" ]; then
+  fail SUBDIRECTORY_NOT_FOUND 75
 fi
 shopt -s dotglob nullglob
 mv -- "${checkout}"/* "${workspace}/"

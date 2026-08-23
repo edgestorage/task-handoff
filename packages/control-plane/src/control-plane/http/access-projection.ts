@@ -1,6 +1,7 @@
 import type { FastifyRequest } from "fastify";
 import type { FederatedModelRegistry } from "@task-handoff/protocol/control-plane";
 import type { ControlPlaneService } from "../application/service.ts";
+import { instanceScopeAllows } from "../auth/authorization.ts";
 import { controlPlaneRequestActor } from "./request-actor.ts";
 
 export function requestCanAccessNode(request: FastifyRequest, nodeId: string) {
@@ -10,6 +11,15 @@ export function requestCanAccessNode(request: FastifyRequest, nodeId: string) {
 
 export function filterRequestNodes<T>(request: FastifyRequest, items: T[], nodeId: (item: T) => string) {
   return items.filter((item) => requestCanAccessNode(request, nodeId(item)));
+}
+
+export function requestCanAccessInstance(request: FastifyRequest, instance: { id: string; nodeId: string }) {
+  const actor = controlPlaneRequestActor(request);
+  return actor?.type !== "user" || instanceScopeAllows(actor.nodeScope, actor.instanceScope, instance.id, instance.nodeId);
+}
+
+export function filterRequestInstances<T>(request: FastifyRequest, items: T[], instance: (item: T) => { id: string; nodeId: string }) {
+  return items.filter((item) => requestCanAccessInstance(request, instance(item)));
 }
 
 export function projectFederatedModelRegistry(request: FastifyRequest, registry: FederatedModelRegistry): FederatedModelRegistry {
@@ -31,12 +41,12 @@ export function projectFederatedModelRegistry(request: FastifyRequest, registry:
 
 export async function requestVisibleInstanceIds(service: ControlPlaneService, request: FastifyRequest) {
   const instances = await service.listControlledInstances();
-  return new Set(instances.filter((instance) => requestCanAccessNode(request, instance.nodeId)).map((instance) => instance.id));
+  return new Set(instances.filter((instance) => requestCanAccessInstance(request, instance)).map((instance) => instance.id));
 }
 
 export async function assertRequestInstanceVisible(service: ControlPlaneService, request: FastifyRequest, instanceId: string) {
   const instance = await service.requireControlledInstance(instanceId);
-  if (requestCanAccessNode(request, instance.nodeId)) return instance;
+  if (requestCanAccessInstance(request, instance)) return instance;
   throw Object.assign(new Error("The requested resource is not visible."), {
     statusCode: 404,
     code: "CONTROL_PLANE_RESOURCE_NOT_VISIBLE",

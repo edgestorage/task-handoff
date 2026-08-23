@@ -159,10 +159,10 @@ export async function importV0021AuthJson(repository: ControlPlaneUserRepository
         updatedAt: user.updatedAt,
       });
       await transaction.grants.put({
-        id: user.id,
         userId: user.id,
         roleIds: [`role_${membership?.role || user.role}`],
         nodeScope: membership?.nodeScope || { kind: "all" },
+        instanceScope: { kind: "inherit-node-scope" },
         authorizationRevision: membership?.authorizationRevision || 1,
         createdAt: user.createdAt,
         updatedAt: user.updatedAt,

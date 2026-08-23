@@ -1,5 +1,6 @@
 import type {
   ControlPlanePermissionId,
+  ControlPlaneUserInstanceScope,
   ControlPlaneUserNodeScope,
 } from "@task-handoff/protocol/control-plane-access";
 
@@ -10,7 +11,9 @@ export type ControlPlaneUserAuthorizationContext = {
   roleIds: string[];
   permissionIds: ControlPlanePermissionId[];
   nodeScope: ControlPlaneUserNodeScope;
+  instanceScope?: ControlPlaneUserInstanceScope;
   authorizationRevision: number;
+  requiresPasswordChange: boolean;
 };
 
 export type ControlPlaneActor =
@@ -71,13 +74,28 @@ export function permissionForControlPlaneOperation(action: ControlPlaneAction, r
   return `${prefix}:manage` as ControlPlanePermissionId;
 }
 
-export function scopeAllows(nodeScope: ControlPlaneUserNodeScope, resourceScope: ResolvedControlPlaneResourceScope) {
+export function nodeScopeAllows(nodeScope: ControlPlaneUserNodeScope, nodeId: string) {
+  return nodeScope.kind === "all" || nodeScope.nodeIds.includes(nodeId);
+}
+
+export function instanceScopeAllows(
+  nodeScope: ControlPlaneUserNodeScope,
+  instanceScope: ControlPlaneUserInstanceScope | undefined,
+  instanceId: string,
+  nodeId: string,
+) {
+  if (!instanceScope || instanceScope.kind === "inherit-node-scope") return nodeScopeAllows(nodeScope, nodeId);
+  return instanceScope.instanceIds.includes(instanceId);
+}
+
+export function scopeAllows(actor: Pick<ControlPlaneUserAuthorizationContext, "nodeScope" | "instanceScope">, resourceScope: ResolvedControlPlaneResourceScope) {
   if (resourceScope.kind === "global-public" || resourceScope.kind === "global-shared" || resourceScope.kind === "global-admin") return true;
-  return nodeScope.kind === "all" || nodeScope.nodeIds.includes(resourceScope.nodeId);
+  if (resourceScope.kind === "node") return nodeScopeAllows(actor.nodeScope, resourceScope.nodeId);
+  return instanceScopeAllows(actor.nodeScope, actor.instanceScope, resourceScope.instanceId, resourceScope.nodeId);
 }
 
 export function canAccessResolvedResource(actor: ControlPlaneUserAuthorizationContext, action: ControlPlaneAction, resource: ControlPlaneResource, resourceScope: ResolvedControlPlaneResourceScope) {
-  return userCan(actor, action, resource) && scopeAllows(actor.nodeScope, resourceScope);
+  return userCan(actor, action, resource) && scopeAllows(actor, resourceScope);
 }
 
 export function can(actor: ControlPlaneActor, action: ControlPlaneAction, resource: ControlPlaneResource) {
@@ -107,7 +125,7 @@ export function assertCan(actor: ControlPlaneActor, action: ControlPlaneAction, 
 
 export function assertCanAccessResolvedResource(actor: ControlPlaneUserAuthorizationContext, action: ControlPlaneAction, resource: ControlPlaneResource, resourceScope: ResolvedControlPlaneResourceScope) {
   if (!userCan(actor, action, resource)) throw forbiddenError(action, resource);
-  if (scopeAllows(actor.nodeScope, resourceScope)) return;
+  if (scopeAllows(actor, resourceScope)) return;
   throw Object.assign(new Error("The requested resource is not visible."), { statusCode: 404, code: "CONTROL_PLANE_RESOURCE_NOT_VISIBLE" });
 }
 

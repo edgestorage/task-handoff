@@ -455,6 +455,7 @@ export function sanitizeStoredProject(input: unknown) {
   const { defaultImageId, defaultRuntimeId: _defaultRuntimeId, ...record } = source;
   return {
     ...record,
+    source: sanitizeStoredProjectSource(source.source),
     defaultImageSelection: migrateLegacyImageSelection(source.defaultImageSelection, defaultImageId),
   };
 }
@@ -775,13 +776,17 @@ export const ApplyUpdateRequestSchema = z.object({
   preflightToken: z.string().trim().min(16).max(240),
 }).strict();
 
-export const GitRefSchema = z
-  .object({
-    type: z.enum(["branch", "tag", "commit"]),
-    name: z.string().trim().min(1).max(240).optional(),
-    commit: z.string().trim().max(80).optional(),
-  })
-  .strict();
+const GitNamedRefSchema = z.object({
+  type: z.enum(["branch", "tag"]),
+  name: z.string().trim().min(1).max(240),
+}).strict();
+
+const GitCommitRefSchema = z.object({
+  type: z.literal("commit"),
+  commit: z.string().trim().regex(/^[0-9a-fA-F]{4,64}$/, "commit must be a hexadecimal Git object id"),
+}).strict();
+
+export const GitRefSchema = z.discriminatedUnion("type", [GitNamedRefSchema, GitCommitRefSchema]);
 
 export const GitAuthSchema = z
   .object({
@@ -798,7 +803,10 @@ export const GitCloneOptionsSchema = z
     depth: z.number().int().positive().max(100000).optional(),
     submodules: z.boolean().default(false),
     lfs: z.boolean().default(false),
-    subdirectory: z.string().trim().max(240).default(""),
+    subdirectory: z.string().trim().max(240).refine(
+      (value) => !value.startsWith("/") && !value.split("/").some((segment) => segment === ".."),
+      "subdirectory must be a relative path within the repository",
+    ).transform((value) => value.split("/").filter((segment) => segment && segment !== ".").join("/")).default(""),
   })
   .strict();
 
@@ -1917,6 +1925,30 @@ export const ControlledInstanceSchema = z
   })
   .strict();
 
+const NodeAgentInstanceLifecycleResultWireSchema = z.union([
+  ControlledInstanceSchema.transform((instance) => ({ instance, gitWorkspaceProvisioningOperationId: undefined })),
+  z.object({
+    instance: ControlledInstanceSchema,
+    gitWorkspaceProvisioningOperationId: IdSchema.optional(),
+  }).strict(),
+]);
+
+export const NodeAgentInstanceLifecycleResultSchema = z.preprocess((input) => {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return input;
+  const source = input as Record<string, unknown>;
+  // Compatibility for v0.0.21 bare instance responses, while allowing independently
+  // upgraded node agents to add fields to the lifecycle response and instance snapshot.
+  if (source.instance && typeof source.instance === "object" && !Array.isArray(source.instance)) {
+    return {
+      instance: sanitizeStoredControlledInstance(source.instance),
+      ...(typeof source.gitWorkspaceProvisioningOperationId === "string"
+        ? { gitWorkspaceProvisioningOperationId: source.gitWorkspaceProvisioningOperationId }
+        : {}),
+    };
+  }
+  return sanitizeStoredControlledInstance(source);
+}, NodeAgentInstanceLifecycleResultWireSchema);
+
 export const InstanceLifecycleEventType = {
   Snapshot: "instance.lifecycle.snapshot",
 } as const;
@@ -2099,7 +2131,7 @@ function sanitizeStoredProjectSource(input: unknown, onWarning?: (warning: { ins
       : ["type", "repositoryId", "url", "provider", "ref", "auth", "clone"];
   const candidate = pickObjectFields(source, allowed) as Record<string, unknown>;
   if (type !== "local-folder") {
-    const ref = sanitizeStoredStrictObject(GitRefSchema, pickObjectFields(source.ref, ["type", "name", "commit"]), "source.ref", onWarning, instanceId);
+    const ref = sanitizeStoredGitRef(source.ref, onWarning, instanceId);
     const auth = sanitizeStoredStrictObject(GitAuthSchema, pickObjectFields(source.auth, ["type", "secretId"]), "source.auth", onWarning, instanceId);
     const clone = sanitizeStoredStrictObject(GitCloneOptionsSchema, pickObjectFields(source.clone, ["depth", "submodules", "lfs", "subdirectory"]), "source.clone", onWarning, instanceId);
     if (ref) candidate.ref = ref; else delete candidate.ref;
@@ -2112,6 +2144,24 @@ function sanitizeStoredProjectSource(input: unknown, onWarning?: (warning: { ins
     return parsed;
   }
   return candidate;
+}
+
+function sanitizeStoredGitRef(input: unknown, onWarning?: (warning: { instanceId?: string; field: string }) => void, instanceId?: string) {
+  const source = input && typeof input === "object" && !Array.isArray(input) ? input as Record<string, unknown> : undefined;
+  const direct = GitRefSchema.safeParse(pickObjectFields(source, ["type", "name", "commit"]));
+  if (direct.success) return direct.data;
+  // Compatibility for v0.0.21: malformed ref shapes were accepted. Preserve the
+  // executor's old precedence (commit before name), then fall back to the former default.
+  const commit = typeof source?.commit === "string" ? source.commit.trim() : "";
+  const name = typeof source?.name === "string" ? source.name.trim() : "";
+  const migrated = commit
+    ? GitRefSchema.safeParse({ type: "commit", commit })
+    : name
+      ? GitRefSchema.safeParse({ type: source?.type === "tag" ? "tag" : "branch", name })
+      : GitRefSchema.safeParse({ type: "branch", name: "main" });
+  if (!migrated.success) return undefined;
+  onWarning?.({ instanceId, field: "source.ref" });
+  return migrated.data;
 }
 
 function sanitizeStoredAiSessions(input: unknown, onWarning?: (warning: { instanceId?: string; field: string }) => void, instanceId?: string) {

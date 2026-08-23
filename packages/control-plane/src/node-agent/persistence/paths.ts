@@ -16,6 +16,7 @@ export type NodeAgentStorePaths = {
   gitCredentialPayloadsDir: string;
   gitCredentialAssignmentsDir: string;
   gitCredentialAuthorizationSetsDir: string;
+  gitWorkspaceProvisioningIntentsDir: string;
   updatesDir: string;
   logsDir: string;
 };
@@ -41,6 +42,7 @@ export function nodeAgentStorePaths(dataDir = defaultNodeAgentDataDir()): NodeAg
     gitCredentialPayloadsDir: path.join(root, "git-credentials", "payloads"),
     gitCredentialAssignmentsDir: path.join(root, "git-credentials", "assignments"),
     gitCredentialAuthorizationSetsDir: path.join(root, "git-credentials", "authorization-sets"),
+    gitWorkspaceProvisioningIntentsDir: path.join(root, "git-credentials", "workspace-provisioning-intents"),
     updatesDir: path.join(root, "updates"),
     logsDir: path.join(root, "logs"),
   };

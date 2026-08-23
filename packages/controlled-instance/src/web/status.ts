@@ -190,6 +190,7 @@ export function controlledInstanceCapabilities(
   appRuntime: AppRuntimeManager,
   aiSessionTimeline: AiSessionTimelineCapabilities,
   aiSessionProviders: AiSessionProviderCapability[] = [],
+  gitCredentialBrokerInstalled = false,
 ): ControlledInstanceCapabilities {
   const inventory = appRuntime.appInventory();
   const available = inventory.items.filter((item) => item.availability === "available");
@@ -205,8 +206,8 @@ export function controlledInstanceCapabilities(
       logs: true,
       aiSessionWorkspaceSelection: true,
       aiSessionPersistenceSettings: true,
-      gitCliCredentialBroker: true,
-      gitCredentialProxy: true,
+      gitCliCredentialBroker: gitCredentialBrokerInstalled,
+      gitCredentialProxy: gitCredentialBrokerInstalled,
       aiSessionTimeline,
       aiSessionProviders: availableProviders,
       aiSessionConversationAttachments: {
@@ -243,6 +244,7 @@ export async function controlledInstanceSnapshot(
   triggers: TriggerStore | undefined,
   aiSessionTimeline: AiSessionTimelineCapabilities,
   aiSessionProviders: AiSessionProviderCapability[] = [],
+  gitCredentialBrokerInstalled = false,
 ) {
   const appSessions = appRuntime.listSessions();
   return {
@@ -252,7 +254,7 @@ export async function controlledInstanceSnapshot(
     protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
     build: buildInfo(),
     controlMode: (controlledMode() ? "controlled" : "standalone") as "standalone" | "controlled",
-    capabilities: controlledInstanceCapabilities(appRuntime, aiSessionTimeline, aiSessionProviders),
+    capabilities: controlledInstanceCapabilities(appRuntime, aiSessionTimeline, aiSessionProviders, gitCredentialBrokerInstalled),
     appInventory: appRuntime.appInventory(),
     apps: {
       runningCount: appRuntime.runningSessionCount(),

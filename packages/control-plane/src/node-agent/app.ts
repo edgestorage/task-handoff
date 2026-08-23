@@ -1149,6 +1149,9 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     deleteInstance: (id) => state.controlledInstances.delete(id),
     applyLifecycle: (id, event) => state.applyInstanceLifecycle(id, event),
     context: (instance, modelEnv) => state.context(instance, modelEnv),
+    setGitWorkspaceProvisioning: (input) => state.setGitWorkspaceProvisioning(input),
+    discardGitWorkspaceProvisioning: (id) => state.discardGitWorkspaceProvisioning(id),
+    gitWorkspaceProvisioningStatus: (id) => state.gitWorkspaceProvisioningStatus(id),
   }, runtimeAdapters, convergence, {
     start: (id, shouldContinue, signal) => startInstanceWithFailureState(id, "request", shouldContinue, signal),
     sync: () => eventForwarder.syncNow(),

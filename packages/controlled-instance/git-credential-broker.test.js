@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { GitCredentialBroker, installGitBrokerEnvironment } from "./src/web/git-credential-broker.ts";
+import { parseGitSshInvocation } from "./src/web/git-transport.ts";
 
 function request(socketPath, payload) {
   return new Promise((resolve, reject) => {
@@ -47,7 +48,7 @@ test("managed Git environment contains only helper and proxy locations", () => {
   const previous = { ...process.env };
   try {
     process.env.GIT_CONFIG_COUNT = "0";
-    installGitBrokerEnvironment("/runtime/controlled-instance-cli.js", "/run/task-handoff/git-proxy/broker.sock");
+    assert.equal(installGitBrokerEnvironment("/runtime/controlled-instance-cli.js", "/run/task-handoff/git-proxy/broker.sock"), true);
     assert.equal(process.env.GIT_CONFIG_COUNT, "4");
     assert.match(process.env.GIT_CONFIG_VALUE_1, /git-credential-helper/);
     assert.match(process.env.GIT_CONFIG_VALUE_3, /git-ssh/);
@@ -57,4 +58,49 @@ test("managed Git environment contains only helper and proxy locations", () => {
     for (const key of Object.keys(process.env)) if (!(key in previous)) delete process.env[key];
     Object.assign(process.env, previous);
   }
+});
+
+test("broker closes promptly while a local socket client is still connected", async (t) => {
+  const root = fs.mkdtempSync(path.join("/private/tmp", "task-handoff-git-proxy-close-"));
+  const broker = new GitCredentialBroker({ runtimeDir: root, socketPath: path.join(root, "broker.sock") });
+  await broker.start();
+  const socket = net.createConnection(broker.socketPath);
+  await new Promise((resolve, reject) => {
+    socket.once("connect", resolve);
+    socket.once("error", reject);
+  });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  await Promise.race([
+    broker.close(),
+    new Promise((_, reject) => setTimeout(() => reject(new Error("broker close timed out")), 500)),
+  ]);
+  if (!socket.destroyed) {
+    await Promise.race([
+      new Promise((resolve) => socket.once("close", resolve)),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("client socket close timed out")), 500)),
+    ]);
+  }
+  assert.equal(socket.destroyed, true);
+});
+
+test("managed Git capability installation reports an unavailable CLI", () => {
+  assert.equal(installGitBrokerEnvironment(undefined, "/run/task-handoff/git-proxy/broker.sock"), false);
+});
+
+test("managed SSH accepts one Git service argument and rebuilds it safely", () => {
+  assert.deepEqual(parseGitSshInvocation(["git@git.example.com", "git-upload-pack 'team/repo.git'"]), {
+    remote: "ssh://git.example.com/team/repo.git",
+    args: ["git@git.example.com", "git-upload-pack 'team/repo.git'"],
+  });
+  assert.deepEqual(parseGitSshInvocation(["git@git.example.com", "git-upload-pack 'team/repo'\\''s.git'"]), {
+    remote: "ssh://git.example.com/team/repo's.git",
+    args: ["git@git.example.com", "git-upload-pack 'team/repo'\\''s.git'"],
+  });
+  for (const command of [
+    "git-upload-pack repo; id",
+    "git-upload-pack 'repo'; id",
+    "git-upload-pack \"repo$(id)\"",
+    "git-upload-pack repo other",
+    "git-upload-pack 'unterminated",
+  ]) assert.equal(parseGitSshInvocation(["git@git.example.com", command]), undefined);
 });

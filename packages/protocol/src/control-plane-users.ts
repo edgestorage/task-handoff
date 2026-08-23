@@ -29,6 +29,7 @@ export const ControlPlaneRoleStatusSchema = z.enum(["active", "archived"]);
 export const ControlPlaneIdentityProviderKindSchema = z.enum(["oidc", "github"]);
 export const ControlPlaneIdentityProviderStatusSchema = z.enum(["enabled", "disabled"]);
 export const ControlPlaneExternalIdentityLoginPolicySchema = z.enum(["existing-only", "admin-approved-create"]);
+export const ControlPlaneExternalIdentityApprovalStatusSchema = z.enum(["pending", "approved", "rejected", "expired"]);
 
 export const ControlPlaneUserNodeScopeSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("all") }).strict(),
@@ -38,12 +39,21 @@ export const ControlPlaneUserNodeScopeSchema = z.discriminatedUnion("kind", [
   }).strict(),
 ]);
 
+export const ControlPlaneUserInstanceScopeSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("inherit-node-scope") }).strict(),
+  z.object({
+    kind: z.literal("selected"),
+    instanceIds: z.array(z.string().trim().min(1)).max(10_000),
+  }).strict(),
+]);
+
 export const ControlPlanePermissionDescriptorSchema = z.object({
   id: ControlPlanePermissionIdSchema,
   resource: z.string().trim().min(1).max(80),
   action: z.string().trim().min(1).max(80),
   nodeScoped: z.boolean(),
   name: z.string().trim().min(1).max(160),
+  translationKey: z.string().trim().min(1).max(200).optional(),
   description: z.string().trim().min(1).max(500).optional(),
 }).strict();
 
@@ -56,6 +66,7 @@ export const CONTROL_PLANE_PERMISSION_CATALOG = CONTROL_PLANE_PERMISSION_IDS.map
     action,
     nodeScoped: !GLOBAL_PERMISSION_RESOURCES.has(resource),
     name: id,
+    translationKey: `settings.userAccess.permissionLabels.${resource}.${action}`,
   });
 });
 
@@ -68,6 +79,16 @@ export const ControlPlaneUserSummarySchema = z.object({
   updatedAt: z.string().datetime(),
   lastLoginAt: z.string().datetime().optional(),
 }).strict();
+
+export const ControlPlaneUserLoginNameSchema = z.string().trim().min(1).max(80).regex(/^[a-zA-Z0-9_.@-]+$/);
+
+export const ControlPlaneUpdateUserInputSchema = z.object({
+  displayName: z.string().trim().min(1).max(160).optional(),
+  username: ControlPlaneUserLoginNameSchema.optional(),
+  status: ControlPlaneUserStatusSchema.optional(),
+}).strict().refine((input) => Object.values(input).some((value) => value !== undefined), {
+  message: "At least one user field must be updated.",
+});
 
 export const ControlPlaneLoginIdentitySummarySchema = z.object({
   id: z.string().trim().min(1),
@@ -116,6 +137,7 @@ export const ControlPlaneUserAccessGrantSchema = z.object({
   userId: z.string().trim().min(1),
   roleIds: z.array(z.string().trim().min(1)).min(1).max(100),
   nodeScope: ControlPlaneUserNodeScopeSchema,
+  instanceScope: ControlPlaneUserInstanceScopeSchema.default({ kind: "inherit-node-scope" }),
   authorizationRevision: z.number().int().positive(),
   updatedAt: z.string().datetime(),
 }).strict();
@@ -131,6 +153,7 @@ export const ControlPlaneCurrentAuthorizationSchema = z.object({
   roleIds: z.array(z.string().trim().min(1)).min(1).max(100),
   permissionIds: z.array(ControlPlanePermissionIdSchema).max(CONTROL_PLANE_PERMISSION_IDS.length),
   nodeScope: ControlPlaneUserNodeScopeSchema,
+  instanceScope: ControlPlaneUserInstanceScopeSchema.default({ kind: "inherit-node-scope" }),
   authorizationRevision: z.number().int().positive(),
 }).strict();
 
@@ -152,6 +175,20 @@ export const ControlPlaneIdentityProviderSummarySchema = z.object({
   }
 });
 
+export const ControlPlaneExternalIdentityApprovalSummarySchema = z.object({
+  id: z.string().trim().min(1),
+  providerId: z.string().trim().min(1),
+  subject: z.string().trim().min(1).max(500),
+  verifiedEmail: z.string().email().optional(),
+  displayName: z.string().trim().min(1).max(160).optional(),
+  status: ControlPlaneExternalIdentityApprovalStatusSchema,
+  expiresAt: z.string().datetime(),
+  decidedAt: z.string().datetime().optional(),
+  decidedByUserId: z.string().trim().min(1).optional(),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+}).strict();
+
 export const ControlPlaneAccessManagementCapabilitySchema = z.object({
   userManagement: z.object({
     users: z.literal(true),
@@ -167,19 +204,23 @@ export const ControlPlaneAccessManagementCapabilitySchema = z.object({
   authorization: z.object({
     customRoles: z.boolean(),
     nodeScopes: z.literal(true),
+    instanceScopes: z.literal(true).optional(),
     authorizationRevisions: z.literal(true),
   }).strict(),
 }).strict();
 
 export type ControlPlanePermissionId = z.infer<typeof ControlPlanePermissionIdSchema>;
 export type ControlPlaneUserNodeScope = z.infer<typeof ControlPlaneUserNodeScopeSchema>;
+export type ControlPlaneUserInstanceScope = z.infer<typeof ControlPlaneUserInstanceScopeSchema>;
 export type ControlPlanePermissionDescriptor = z.infer<typeof ControlPlanePermissionDescriptorSchema>;
 export type ControlPlaneUserSummary = z.infer<typeof ControlPlaneUserSummarySchema>;
 export type ControlPlaneUserDetail = z.infer<typeof ControlPlaneUserDetailSchema>;
+export type ControlPlaneUpdateUserInput = z.infer<typeof ControlPlaneUpdateUserInputSchema>;
 export type ControlPlaneLoginIdentitySummary = z.infer<typeof ControlPlaneLoginIdentitySummarySchema>;
 export type ControlPlaneUserSessionSummary = z.infer<typeof ControlPlaneUserSessionSummarySchema>;
 export type ControlPlaneRoleSummary = z.infer<typeof ControlPlaneRoleSummarySchema>;
 export type ControlPlaneUserAccessGrant = z.infer<typeof ControlPlaneUserAccessGrantSchema>;
 export type ControlPlaneCurrentAuthorization = z.infer<typeof ControlPlaneCurrentAuthorizationSchema>;
 export type ControlPlaneIdentityProviderSummary = z.infer<typeof ControlPlaneIdentityProviderSummarySchema>;
+export type ControlPlaneExternalIdentityApprovalSummary = z.infer<typeof ControlPlaneExternalIdentityApprovalSummarySchema>;
 export type ControlPlaneAccessManagementCapability = z.infer<typeof ControlPlaneAccessManagementCapabilitySchema>;

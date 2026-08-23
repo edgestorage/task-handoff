@@ -249,7 +249,6 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
     await this.createPersistentVolumes(context);
     if (context.project.source.type !== "local-folder") {
       await this.provisionGitWorkspace(context);
-      context.completeGitWorkspaceProvisioning?.();
     }
     let runResult;
     try {
@@ -260,6 +259,7 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
     } catch (cause) {
       throw runtimeExecutorError("RUNTIME_EXECUTOR_FAILED", `Could not create Docker container ${containerName}.`, cause);
     }
+    context.completeGitWorkspaceProvisioning?.();
     return this.bootstrapResult(context, containerName, runResult.stdout || undefined);
   }
 
@@ -1106,6 +1106,7 @@ function runtimeExecutorError(code: string, message: string, cause?: unknown) {
 
 const GIT_PROVISIONING_ERROR_CODES = new Set([
   "AUTHENTICATION_REJECTED",
+  "CLONE_FAILED",
   "CREDENTIAL_AMBIGUOUS",
   "CREDENTIAL_MISSING",
   "HOST_KEY_REQUIRED",
@@ -1113,6 +1114,7 @@ const GIT_PROVISIONING_ERROR_CODES = new Set([
   "REF_NOT_FOUND",
   "REMOTE_UNSUPPORTED",
   "SSH_AGENT_UNAVAILABLE",
+  "SUBDIRECTORY_NOT_FOUND",
   "WORKSPACE_NOT_EMPTY",
   "WORKSPACE_OWNERSHIP_MISMATCH",
 ]);
@@ -1252,9 +1254,9 @@ export function dockerRunArgs(context: ExecutorContext, containerName: string, o
     appendDockerEnv(args, "TASK_HANDOFF_PROJECT_SOURCE", JSON.stringify(context.project.source));
     appendDockerEnv(args, "TASK_HANDOFF_WORKSPACE_POLICY", JSON.stringify(context.project.workspacePolicy));
     appendDockerEnv(args, "TASK_HANDOFF_GIT_URL", context.project.source.url);
-    if (context.project.source.ref?.commit) {
+    if (context.project.source.ref.type === "commit") {
       appendDockerEnv(args, "TASK_HANDOFF_GIT_COMMIT", context.project.source.ref.commit);
-    } else if (context.project.source.ref?.name) {
+    } else {
       appendDockerEnv(args, "TASK_HANDOFF_GIT_REF", context.project.source.ref.name);
     }
     if (context.project.source.clone?.depth) {
@@ -1313,11 +1315,12 @@ export function dockerGitProvisionArgs(
   const append = (key: string, value: string) => args.push("-e", `${key}=${value}`);
   append("TASK_HANDOFF_GIT_URL", input.remoteUrl);
   append("TASK_HANDOFF_INSTANCE_ID", context.instance.id);
-  if (input.ref.commit) append("TASK_HANDOFF_GIT_COMMIT", input.ref.commit);
-  else if (input.ref.name) append("TASK_HANDOFF_GIT_REF", input.ref.name);
+  if (input.ref.type === "commit") append("TASK_HANDOFF_GIT_COMMIT", input.ref.commit);
+  else append("TASK_HANDOFF_GIT_REF", input.ref.name);
   if (input.clone.depth) append("TASK_HANDOFF_GIT_DEPTH", String(input.clone.depth));
   append("TASK_HANDOFF_GIT_SUBMODULES", input.clone.submodules ? "true" : "false");
   append("TASK_HANDOFF_GIT_LFS", input.clone.lfs ? "true" : "false");
+  if (input.clone.subdirectory) append("TASK_HANDOFF_WORKSPACE_SUBDIRECTORY", input.clone.subdirectory);
   args.push(
     "--entrypoint", "/bin/bash",
     context.instance.environmentTemplateOrigin?.imageId || context.image.resolvedReference || context.image.requestedReference!,

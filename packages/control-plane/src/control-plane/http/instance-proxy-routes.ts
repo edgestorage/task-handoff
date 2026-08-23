@@ -24,9 +24,15 @@ export function registerInstanceProxyRoutes({ app, service, auth, authorizationC
   registerRawProxyBodyParsers(app);
 
   const appAccessTarget = async (token: string, mode: "tty" | "vnc" | "web", suffix = "") => {
-    const access = service.resolveAppAccessToken(token, mode);
-    if (access.authorization) auth.assertAppAccessAuthorization(access.authorization);
-    return service.appAccessProxyTarget(token, mode, suffix);
+    const target = await service.appAccessProxyTarget(token, mode, suffix);
+    if (target.access.authorization) {
+      await auth.assertAppAccessAuthorization({
+        ...target.access.authorization,
+        instanceId: target.instance.id,
+        nodeId: target.instance.nodeId,
+      });
+    }
+    return target;
   };
 
   const trackSocket = (socket: ProxySocket, binding: { userId: string; authorizationRevision: number } | undefined) => {

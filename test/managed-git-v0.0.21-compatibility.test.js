@@ -6,6 +6,7 @@ const test = require("node:test");
 
 const {
   ProjectSourceSchema,
+  sanitizeStoredProject,
   normalizeControlledInstanceCapabilities,
   normalizeNodeAgentCapabilities,
   supportsGitCliCredentialBroker,
@@ -26,6 +27,15 @@ test("v0.0.21 Git source auth remains readable but does not imply a managed capa
   assert.equal(supportsGitCliCredentialBroker(fixture.controlledInstanceCapabilities), false);
   assert.equal(normalizeNodeAgentCapabilities(fixture.nodeCapabilities).folderPlaces, true);
   assert.equal(normalizeControlledInstanceCapabilities(fixture.controlledInstanceCapabilities).features.tty, true);
+});
+
+test("v0.0.21 malformed Git refs migrate according to the old executor precedence", () => {
+  const base = { id: "proj_ref", name: "Ref", labels: {}, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" };
+  const source = { type: "git-repository", url: "https://git.example.com/repo.git", auth: { type: "none" }, clone: {} };
+  const commit = sanitizeStoredProject({ ...base, source: { ...source, ref: { type: "branch", name: "ignored", commit: "deadbeef" } } });
+  assert.deepEqual(commit.source.ref, { type: "commit", commit: "deadbeef" });
+  const fallback = sanitizeStoredProject({ ...base, source: { ...source, ref: { type: "tag" } } });
+  assert.deepEqual(fallback.source.ref, { type: "branch", name: "main" });
 });
 
 test("managed Git capability combinations degrade only the unsupported credential domain", () => {

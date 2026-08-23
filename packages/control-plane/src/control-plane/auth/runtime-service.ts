@@ -36,7 +36,7 @@ export class ControlPlaneAuth {
     this.mode = ControlPlaneAuthModeSchema.parse(options.mode || process.env.TASK_HANDOFF_CONTROL_PLANE_AUTH_MODE || "disabled");
     this.users = new ControlPlaneUserService(paths, { database: options.database });
     this.sessions = new ControlPlaneUserAuthentication(this.users, options.loginRateLimit);
-    this.identityProviders = new ControlPlaneIdentityProviderService(paths, this.users.store);
+    this.identityProviders = new ControlPlaneIdentityProviderService(paths, this.users);
     this.external = new ControlPlaneExternalAuthentication(this.users, this.sessions, this.identityProviders);
     this.onUserAuthorizationChanged = options.onUserAuthorizationChanged;
   }
@@ -55,9 +55,9 @@ export class ControlPlaneAuth {
     return this.mode === "password";
   }
 
-  state() {
+  async state() {
     if (!this.enabled()) return { mode: this.mode, enabled: false, requiresBootstrap: false };
-    return { mode: this.mode, enabled: true, requiresBootstrap: this.users.state().requiresBootstrap };
+    return { mode: this.mode, enabled: true, requiresBootstrap: (await this.users.state()).requiresBootstrap };
   }
 
   async bootstrapAdmin(input: unknown) {
@@ -91,7 +91,7 @@ export class ControlPlaneAuth {
 
   async currentSession(token: string | undefined, clientType: "web" | "mobile" = "web") {
     const current = this.enabled() ? await this.sessions.currentSession(token, clientType) : { authenticated: true };
-    return { ...this.state(), ...current };
+    return { ...await this.state(), ...current };
   }
 
   async currentAccess(token: string | undefined, clientType: "web" | "mobile") {
@@ -108,7 +108,9 @@ export class ControlPlaneAuth {
       roleIds: current.authorization.roleIds,
       permissionIds: current.authorization.permissionIds,
       nodeScope: current.authorization.nodeScope,
+      instanceScope: current.authorization.instanceScope,
       authorizationRevision: current.authorization.authorizationRevision,
+      requiresPasswordChange: current.requiresPasswordChange,
     };
   }
 
@@ -126,17 +128,21 @@ export class ControlPlaneAuth {
     return current ? this.sessions.revokeSession(current.user.id, sessionId) : undefined;
   }
 
-  assertAppAccessAuthorization(binding: { userId: string; authorizationRevision: number; nodeId: string }) {
-    const authorization = this.users.authorization(binding.userId);
+  async assertAppAccessAuthorization(binding: { userId: string; authorizationRevision: number; instanceId: string; nodeId: string }) {
+    const authorization = await this.users.authorization(binding.userId);
     if (authorization.authorizationRevision !== binding.authorizationRevision) {
       throw Object.assign(new Error("The app access authorization has changed."), { code: "CONTROL_PLANE_AUTHORIZATION_REVISION_CONFLICT", statusCode: 401 });
     }
-    assertCanAccessResolvedResource({ type: "user", identityId: "access-lease", ...authorization }, "interactive-access", { type: "app-session" }, { kind: "node", nodeId: binding.nodeId });
+    assertCanAccessResolvedResource(
+      { type: "user", identityId: "access-lease", requiresPasswordChange: false, ...authorization },
+      "interactive-access",
+      { type: "app-session" },
+      { kind: "instance-derived", instanceId: binding.instanceId, nodeId: binding.nodeId },
+    );
   }
 
-  notifyAuthorizationChanged(userId: string) {
-    const user = this.users.store.users.get(userId);
-    const grant = this.users.store.grants.get(userId);
+  async notifyAuthorizationChanged(userId: string) {
+    const [user, grant] = await Promise.all([this.users.store.users.get(userId), this.users.store.grants.get(userId)]);
     if (user && grant) this.onUserAuthorizationChanged?.({ userId, authorizationRevision: grant.authorizationRevision, status: user.status });
   }
 

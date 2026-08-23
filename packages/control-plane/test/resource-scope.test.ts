@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { canAccessResolvedResource } from "../src/control-plane/auth/authorization.ts";
 import { resolveRequestResourceScopes } from "../src/control-plane/auth/resource-scope.ts";
 import { projectFederatedModelRegistry } from "../src/control-plane/http/access-projection.ts";
 import { setControlPlaneRequestActor } from "../src/control-plane/http/request-actor.ts";
@@ -29,12 +30,15 @@ function serviceFixture() {
       if (!project) throw Object.assign(new Error("missing"), { statusCode: 404 });
       return project;
     },
-    requireControlledInstanceForAuthorization(instanceId: string, allowedNodeIds: ReadonlySet<string>) {
+    requireControlledInstanceForAuthorization(instanceId: string, allowedNodeIds?: ReadonlySet<string>) {
       requiredInstances.push(instanceId);
-      authorizationNodeScopes.push([...allowedNodeIds]);
+      authorizationNodeScopes.push(allowedNodeIds ? [...allowedNodeIds] : undefined);
       const instance = instances.get(instanceId);
-      if (!instance || !allowedNodeIds.has(instance.nodeId)) throw Object.assign(new Error("missing"), { statusCode: 404 });
+      if (!instance || (allowedNodeIds && !allowedNodeIds.has(instance.nodeId))) throw Object.assign(new Error("missing"), { statusCode: 404 });
       return instance;
+    },
+    resolveControlledInstanceTargetNodeId(input: { nodeId?: string }) {
+      return input.nodeId || "node-b";
     },
   };
   return { service: service as any, requiredNodes, requiredInstances, authorizationNodeScopes };
@@ -75,15 +79,47 @@ test("instance-derived resources resolve their parent instance before authorizat
   );
   assert.deepEqual(scopes, [{ kind: "instance-derived", nodeId: "node-a", instanceId: "instance-a" }]);
   assert.deepEqual(requiredInstances, ["instance-a"]);
-  assert.deepEqual(authorizationNodeScopes, [["node-a"]]);
-  await assert.rejects(resolveRequestResourceScopes(
+  assert.deepEqual(authorizationNodeScopes, [undefined]);
+  const hiddenScopes = await resolveRequestResourceScopes(
     service,
     request({ id: "instance-b", sessionId: "session-b" }),
     "/api/controlled-instances/:id/ai-sessions/:sessionId/messages",
     { type: "ai-session" },
     actor,
-  ), (error: unknown) => (error as { statusCode?: number }).statusCode === 404);
-  assert.deepEqual(authorizationNodeScopes.at(-1), ["node-a"]);
+  );
+  assert.equal(canAccessResolvedResource(actor as any, "send-message", { type: "ai-session" }, hiddenScopes![0]), false);
+  assert.equal(authorizationNodeScopes.at(-1), undefined);
+});
+
+test("selected instance scope is independent from node scope", async () => {
+  const { service } = serviceFixture();
+  const actor = {
+    type: "user",
+    userId: "user-a",
+    identityId: "identity-a",
+    roleIds: ["role_operator"],
+    permissionIds: ["ai-sessions:read", "ai-sessions:manage"],
+    nodeScope: { kind: "selected", nodeIds: ["node-a"] },
+    instanceScope: { kind: "selected", instanceIds: ["instance-b"] },
+    authorizationRevision: 1,
+  } as const;
+  const selected = await resolveRequestResourceScopes(service, request({ id: "instance-b" }), "/api/controlled-instances/:id/ai-sessions", { type: "ai-session" }, actor as any);
+  const sameNodeUnselected = await resolveRequestResourceScopes(service, request({ id: "instance-a" }), "/api/controlled-instances/:id/ai-sessions", { type: "ai-session" }, actor as any);
+  assert.equal(canAccessResolvedResource(actor as any, "read", { type: "ai-session" }, selected![0]), true);
+  assert.equal(canAccessResolvedResource(actor as any, "read", { type: "ai-session" }, sameNodeUnselected![0]), false);
+});
+
+test("instance creation authorizes the resolved default node", async () => {
+  const { service, requiredNodes } = serviceFixture();
+  const scopes = await resolveRequestResourceScopes(service, request({}, {}), "/api/controlled-instances", { type: "instance" }, undefined, "create");
+  assert.deepEqual(scopes, [{ kind: "node", nodeId: "node-b" }]);
+  assert.deepEqual(requiredNodes, ["node-b"]);
+  const actor = {
+    type: "user", userId: "user-a", identityId: "identity-a", roleIds: ["role_operator"],
+    permissionIds: ["instances:manage"], nodeScope: { kind: "selected", nodeIds: ["node-a"] },
+    instanceScope: { kind: "selected", instanceIds: ["instance-b"] }, authorizationRevision: 1,
+  } as const;
+  assert.equal(canAccessResolvedResource(actor as any, "create", { type: "instance" }, scopes![0]), false);
 });
 
 test("Trigger apply resolves every unique target before the handler can execute", async () => {
@@ -101,7 +137,7 @@ test("Trigger apply resolves every unique target before the handler can execute"
     { kind: "instance-derived", nodeId: "node-b", instanceId: "instance-b" },
   ]);
   assert.deepEqual(requiredInstances.sort(), ["instance-a", "instance-b"]);
-  assert.deepEqual(authorizationNodeScopes, [["node-a", "node-b"], ["node-a", "node-b"]]);
+  assert.deepEqual(authorizationNodeScopes, [undefined, undefined]);
 });
 
 test("Git projects are global while Local Folder projects fail closed without an owner", async () => {

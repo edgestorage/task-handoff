@@ -4,9 +4,13 @@ import {
   ControlPlanePermissionIdSchema,
   ControlPlaneRoleSummarySchema,
   ControlPlaneUserDetailSchema,
+  ControlPlaneUserInstanceScopeSchema,
+  ControlPlaneUserLoginNameSchema,
   ControlPlaneUserNodeScopeSchema,
   ControlPlaneUserSummarySchema,
+  ControlPlaneUpdateUserInputSchema,
   type ControlPlanePermissionId,
+  type ControlPlaneUserInstanceScope,
   type ControlPlaneUserNodeScope,
 } from "@task-handoff/protocol/control-plane-access";
 import { nowIso as now } from "@task-handoff/core/core/time";
@@ -18,9 +22,17 @@ import { hashControlPlanePassword, normalizeControlPlaneLoginName } from "./pass
 import { ControlPlaneUserStore, SYSTEM_ROLE_IDS } from "./user-store.ts";
 import type { LoginIdentityRecord, RoleDefinitionRecord, UserAccountRecord } from "./user-records.ts";
 
-const LoginNameSchema = z.string().trim().min(1).max(80).regex(/^[a-zA-Z0-9_.@-]+$/);
+type LoginCapabilityProjection = {
+  userStatus?: { userId: string; status: UserAccountRecord["status"] };
+  roleIds?: { userId: string; roleIds: readonly string[] };
+  removedIdentityId?: string;
+  providerStatus?: { providerId: string; status: "enabled" | "disabled" };
+};
+
+const LoginNameSchema = ControlPlaneUserLoginNameSchema;
 const PasswordSchema = z.string().min(8).max(4096);
 const NodeScopeInputSchema = ControlPlaneUserNodeScopeSchema;
+const InstanceScopeInputSchema = ControlPlaneUserInstanceScopeSchema;
 
 const BootstrapInputSchema = z.object({
   username: LoginNameSchema,
@@ -31,19 +43,14 @@ const BootstrapInputSchema = z.object({
 const CreateLocalUserInputSchema = BootstrapInputSchema.extend({
   roleIds: z.array(z.string().trim().min(1)).min(1).max(100),
   nodeScope: NodeScopeInputSchema,
+  instanceScope: InstanceScopeInputSchema.optional(),
   requirePasswordChange: z.boolean().optional(),
 }).strict();
-
-const UpdateUserInputSchema = z.object({
-  displayName: z.string().trim().min(1).max(160).optional(),
-  status: z.enum(["active", "disabled", "archived"]).optional(),
-}).strict().refine((input) => input.displayName !== undefined || input.status !== undefined, {
-  message: "At least one user field must be updated.",
-});
 
 const SetAccessInputSchema = z.object({
   roleIds: z.array(z.string().trim().min(1)).min(1).max(100),
   nodeScope: NodeScopeInputSchema,
+  instanceScope: InstanceScopeInputSchema.optional(),
   expectedAuthorizationRevision: z.number().int().positive(),
 }).strict();
 
@@ -61,13 +68,6 @@ const UpdateRoleInputSchema = z.object({
   message: "At least one role field must be updated.",
 });
 
-const BindExternalIdentityInputSchema = z.object({
-  providerId: z.string().trim().min(1),
-  subject: z.string().trim().min(1).max(500),
-  verifiedEmail: z.string().email().optional(),
-  kind: z.enum(["oidc", "oauth"]),
-}).strict();
-
 const RecoverLocalCredentialsInputSchema = z.object({
   username: LoginNameSchema,
   password: PasswordSchema,
@@ -81,6 +81,7 @@ const ApproveExternalIdentityInputSchema = z.object({
   displayName: z.string().trim().min(1).max(160).optional(),
   roleIds: z.array(z.string().trim().min(1)).min(1).max(100),
   nodeScope: NodeScopeInputSchema,
+  instanceScope: InstanceScopeInputSchema.optional(),
 }).strict();
 
 function conflict(code: string, message: string) {
@@ -94,6 +95,11 @@ function notFound(kind: string) {
 export function normalizeUserNodeScope(scope: ControlPlaneUserNodeScope): ControlPlaneUserNodeScope {
   if (scope.kind === "all") return { kind: "all" };
   return { kind: "selected", nodeIds: [...new Set(scope.nodeIds.map((id) => id.trim()).filter(Boolean))].sort() };
+}
+
+export function normalizeUserInstanceScope(scope: ControlPlaneUserInstanceScope): ControlPlaneUserInstanceScope {
+  if (scope.kind === "inherit-node-scope") return { kind: "inherit-node-scope" };
+  return { kind: "selected", instanceIds: [...new Set(scope.instanceIds.map((id) => id.trim()).filter(Boolean))].sort() };
 }
 
 export class ControlPlaneUserService {
@@ -115,16 +121,16 @@ export class ControlPlaneUserService {
     return this.initPromise;
   }
 
-  state() {
+  async state() {
     const store = this.store.state();
-    return { ...store, requiresBootstrap: !store.initialized || this.store.users.list().length === 0 };
+    return { ...store, requiresBootstrap: !store.initialized || (await this.store.users.list()).length === 0 };
   }
 
   async bootstrapAdmin(input: unknown) {
     await this.init();
     if (this.bootstrapInProgress) throw conflict("AUTH_BOOTSTRAP_IN_PROGRESS", "Control Plane admin initialization is already in progress.");
     const parsed = BootstrapInputSchema.parse(input);
-    if (this.store.state().initialized && this.store.users.list().length > 0) {
+    if (this.store.state().initialized && (await this.store.users.list()).length > 0) {
       throw conflict("AUTH_BOOTSTRAP_ALREADY_DONE", "Control Plane user store is already initialized.");
     }
     this.bootstrapInProgress = true;
@@ -136,10 +142,11 @@ export class ControlPlaneUserService {
         ...parsed,
         roleIds: [SYSTEM_ROLE_IDS.admin],
         nodeScope: { kind: "all" },
+        instanceScope: { kind: "inherit-node-scope" },
       });
       userId = created.user.id;
       identityId = created.identity.id;
-      return this.detail(created.user.id);
+      return await this.detail(created.user.id);
     } catch (error) {
       if (userId) {
         await this.store.grants.delete(userId);
@@ -152,28 +159,34 @@ export class ControlPlaneUserService {
     }
   }
 
-  list(options: { includeArchived?: boolean; search?: string } = {}) {
+  async list(options: { includeArchived?: boolean; search?: string } = {}) {
     const search = options.search?.trim().toLocaleLowerCase("en-US");
-    return this.store.users.list()
+    const [users, identities] = await Promise.all([this.store.users.list(), this.store.identities.list()]);
+    const localIdentityByUser = new Map(identities.filter((identity) => identity.kind === "local-password").map((identity) => [identity.userId, identity]));
+    return users
       .filter((user) => options.includeArchived || user.status !== "archived")
       .filter((user) => !search || user.displayName.toLocaleLowerCase("en-US").includes(search)
-        || this.localIdentity(user.id)?.normalizedLoginName.includes(search))
+        || localIdentityByUser.get(user.id)?.normalizedLoginName?.includes(search))
       .sort((left, right) => left.displayName.localeCompare(right.displayName))
-      .map((user) => this.publicUser(user));
+      .map((user) => this.publicUser(user, localIdentityByUser.get(user.id)));
   }
 
-  detail(userId: string) {
-    const user = this.requireUser(userId);
-    const identities = this.store.identities.list().filter((identity) => identity.userId === userId).map((identity) => this.publicIdentity(identity));
-    const accessGrant = this.store.grants.get(userId);
+  async detail(userId: string) {
+    const user = await this.requireUser(userId);
+    const [identityRecords, accessGrant] = await Promise.all([
+      this.store.identities.listByUser(userId),
+      this.store.grants.get(userId),
+    ]);
     if (!accessGrant) throw conflict("CONTROL_PLANE_USER_ACCESS_REQUIRED", "User has no access grant.");
+    const identities = identityRecords.map((identity) => this.publicIdentity(identity));
     return ControlPlaneUserDetailSchema.parse({
-      ...this.publicUser(user),
+      ...this.publicUser(user, identityRecords.find((identity) => identity.kind === "local-password")),
       identities,
       accessGrant: {
         userId: accessGrant.userId,
         roleIds: accessGrant.roleIds,
         nodeScope: accessGrant.nodeScope,
+        instanceScope: accessGrant.instanceScope,
         authorizationRevision: accessGrant.authorizationRevision,
         updatedAt: accessGrant.updatedAt,
       },
@@ -187,9 +200,20 @@ export class ControlPlaneUserService {
   }
 
   async updateUser(userId: string, input: unknown) {
-    const parsed = UpdateUserInputSchema.parse(input);
+    const parsed = ControlPlaneUpdateUserInputSchema.parse(input);
     await this.store.transaction(async (repository) => {
-      const current = this.requireUser(userId, repository);
+      const current = await this.requireUser(userId, repository);
+      const timestamp = now();
+      if (parsed.username !== undefined) {
+        const identity = await this.localIdentity(userId, repository);
+        if (!identity) throw notFound("identity");
+        const normalizedLoginName = normalizeControlPlaneLoginName(parsed.username);
+        const conflictingIdentity = await repository.identities.findByLoginName(normalizedLoginName);
+        if (conflictingIdentity && conflictingIdentity.id !== identity.id) {
+          throw conflict("CONTROL_PLANE_USERNAME_CONFLICT", "A Control Plane user already uses that username.");
+        }
+        await repository.identities.put({ ...identity, normalizedLoginName, updatedAt: timestamp });
+      }
       const candidate: UserAccountRecord = {
         ...current,
         ...(parsed.displayName === undefined ? {} : { displayName: parsed.displayName }),
@@ -197,11 +221,9 @@ export class ControlPlaneUserService {
           status: parsed.status,
           archivedAt: parsed.status === "archived" ? now() : undefined,
         }),
-        updatedAt: now(),
+        updatedAt: timestamp,
       };
-      if (candidate.status !== "active" && this.isLastLoginCapableAdmin(userId, repository)) {
-        throw conflict("CONTROL_PLANE_LAST_ACTIVE_ADMIN", "At least one active login-capable Admin must remain.");
-      }
+      await this.assertLoginCapableAdminRemains(repository, { userStatus: { userId, status: candidate.status } });
       await repository.users.put(candidate);
       if (parsed.status !== undefined && parsed.status !== current.status) await this.bumpAuthorizationRevisionIn(repository, userId);
     });
@@ -211,20 +233,19 @@ export class ControlPlaneUserService {
   async setAccess(userId: string, input: unknown) {
     const parsed = SetAccessInputSchema.parse(input);
     await this.store.transaction(async (repository) => {
-      this.requireUser(userId, repository);
-      const current = repository.grants.get(userId);
+      await this.requireUser(userId, repository);
+      const current = await repository.grants.get(userId);
       if (!current) throw conflict("CONTROL_PLANE_USER_ACCESS_REQUIRED", "User has no access grant.");
       if (current.authorizationRevision !== parsed.expectedAuthorizationRevision) {
         throw conflict("CONTROL_PLANE_AUTHORIZATION_REVISION_CONFLICT", "User authorization changed before this update was applied.");
       }
-      this.assertActiveRoles(parsed.roleIds, repository);
-      if (this.isLastLoginCapableAdmin(userId, repository) && !parsed.roleIds.includes(SYSTEM_ROLE_IDS.admin)) {
-        throw conflict("CONTROL_PLANE_LAST_ACTIVE_ADMIN", "At least one active login-capable Admin must remain.");
-      }
+      await this.assertActiveRoles(parsed.roleIds, repository);
+      await this.assertLoginCapableAdminRemains(repository, { roleIds: { userId, roleIds: parsed.roleIds } });
       await repository.grants.put({
         ...current,
         roleIds: [...new Set(parsed.roleIds)].sort(),
         nodeScope: normalizeUserNodeScope(parsed.nodeScope),
+        instanceScope: parsed.instanceScope ? normalizeUserInstanceScope(parsed.instanceScope) : current.instanceScope,
         authorizationRevision: current.authorizationRevision + 1,
         updatedAt: now(),
       });
@@ -233,16 +254,24 @@ export class ControlPlaneUserService {
     return this.detail(userId);
   }
 
-  authorization(userId: string, repository?: ControlPlaneUserRepository) {
+  async authorization(userId: string, repository?: ControlPlaneUserRepository) {
     const collections = repository || this.store;
-    const user = this.requireUser(userId, repository);
+    const user = await this.requireUser(userId, repository);
     if (user.status !== "active") throw Object.assign(new Error("User is not active."), { code: "CONTROL_PLANE_USER_DISABLED", statusCode: 403 });
-    const grant = collections.grants.get(userId);
+    const grant = await collections.grants.get(userId);
     if (!grant) throw conflict("CONTROL_PLANE_USER_ACCESS_REQUIRED", "User has no access grant.");
-    const roles = grant.roleIds.map((roleId) => collections.roles.get(roleId)).filter((role): role is RoleDefinitionRecord => Boolean(role && role.status === "active"));
+    const roleRecords = await Promise.all(grant.roleIds.map((roleId) => collections.roles.get(roleId)));
+    const roles = roleRecords.filter((role): role is RoleDefinitionRecord => Boolean(role && role.status === "active"));
     if (roles.length !== grant.roleIds.length) throw conflict("CONTROL_PLANE_ROLE_INACTIVE", "User access references an unavailable role.");
     const permissionIds = [...new Set(roles.flatMap((role) => role.permissionIds))].sort() as ControlPlanePermissionId[];
-    return { userId, roleIds: grant.roleIds, permissionIds, nodeScope: grant.nodeScope, authorizationRevision: grant.authorizationRevision };
+    return {
+      userId,
+      roleIds: grant.roleIds,
+      permissionIds,
+      nodeScope: grant.nodeScope,
+      instanceScope: grant.instanceScope,
+      authorizationRevision: grant.authorizationRevision,
+    };
   }
 
   async resetLocalPassword(userId: string, password: string, requirePasswordChange = true) {
@@ -250,8 +279,8 @@ export class ControlPlaneUserService {
     const passwordHash = await hashControlPlanePassword(password);
     let identityId = "";
     await this.store.transaction(async (repository) => {
-      this.requireUser(userId, repository);
-      const identity = this.localIdentity(userId, repository);
+      await this.requireUser(userId, repository);
+      const identity = await this.localIdentity(userId, repository);
       if (!identity) throw notFound("identity");
       identityId = identity.id;
       await repository.identities.put({
@@ -262,7 +291,7 @@ export class ControlPlaneUserService {
       });
       await this.bumpAuthorizationRevisionIn(repository, userId);
     });
-    return this.publicIdentity(this.store.identities.get(identityId)!);
+    return this.publicIdentity((await this.store.identities.get(identityId))!);
   }
 
   async recoverLocalCredentials(input: unknown) {
@@ -271,18 +300,20 @@ export class ControlPlaneUserService {
     const passwordHash = await hashControlPlanePassword(parsed.password);
     let targetId = "";
     await this.store.transaction(async (repository) => {
-      const users = repository.users.list();
+      const users = await repository.users.list();
       const target = parsed.userId
         ? users.find((user) => user.id === parsed.userId)
         : parsed.targetUsername
-          ? users.find((user) => this.localIdentity(user.id, repository)?.normalizedLoginName === normalizeControlPlaneLoginName(parsed.targetUsername!))
+          ? (await Promise.all(users.map(async (user) => ({ user, identity: await this.localIdentity(user.id, repository) }))))
+            .find(({ identity }) => identity?.normalizedLoginName === normalizeControlPlaneLoginName(parsed.targetUsername!))?.user
           : users.length === 1 ? users[0] : undefined;
       if (!target && (parsed.userId || parsed.targetUsername)) throw notFound("user");
       if (!target) throw conflict("AUTH_ACCOUNT_AMBIGUOUS", "The account to recover is ambiguous.");
-      if (repository.identities.list().some((identity) => identity.kind === "local-password" && identity.userId !== target.id && identity.normalizedLoginName === normalizedLoginName)) {
+      const conflictingIdentity = await repository.identities.findByLoginName(normalizedLoginName);
+      if (conflictingIdentity && conflictingIdentity.userId !== target.id) {
         throw conflict("CONTROL_PLANE_USERNAME_CONFLICT", "A Control Plane user already uses that username.");
       }
-      const identity = this.localIdentity(target.id, repository);
+      const identity = await this.localIdentity(target.id, repository);
       if (!identity) throw notFound("identity");
       targetId = target.id;
       await repository.identities.put({
@@ -297,47 +328,18 @@ export class ControlPlaneUserService {
     return this.detail(targetId);
   }
 
-  async bindExternalIdentity(userId: string, input: unknown) {
-    const parsed = BindExternalIdentityInputSchema.parse(input);
-    const timestamp = now();
-    let identityId = "";
+  async unbindExternalIdentity(userId: string, identityId: string) {
     await this.store.transaction(async (repository) => {
-      this.requireUser(userId, repository);
-      const provider = repository.providers.get(parsed.providerId);
-      if (!provider) throw notFound("identity_provider");
-      if ((provider.kind === "oidc" ? "oidc" : "oauth") !== parsed.kind) {
-        throw conflict("CONTROL_PLANE_IDENTITY_PROVIDER_KIND_CONFLICT", "Identity kind does not match its provider.");
-      }
-      if (repository.identities.list().some((identity) => identity.providerId === parsed.providerId && identity.subject === parsed.subject)) {
-        throw conflict("CONTROL_PLANE_EXTERNAL_IDENTITY_CONFLICT", "External identity is already bound to a user.");
-      }
-      const identity = await repository.identities.put({
-        id: createId("identity"),
-        userId,
-        kind: parsed.kind,
-        providerId: parsed.providerId,
-        subject: parsed.subject,
-        verifiedEmail: parsed.verifiedEmail,
-        createdAt: timestamp,
-        updatedAt: timestamp,
-      });
-      identityId = identity.id;
-      await this.bumpAuthorizationRevisionIn(repository, userId);
-    });
-    return this.publicIdentity(this.store.identities.get(identityId)!);
-  }
-
-  async unbindIdentity(userId: string, identityId: string) {
-    await this.store.transaction(async (repository) => {
-      const user = this.requireUser(userId, repository);
-      const identity = repository.identities.get(identityId);
+      const user = await this.requireUser(userId, repository);
+      const identity = await repository.identities.get(identityId);
       if (!identity || identity.userId !== userId) throw notFound("identity");
-      const identities = repository.identities.list().filter((candidate) => candidate.userId === userId);
-      if (identities.length <= 1 && user.status === "active") {
-        throw conflict("CONTROL_PLANE_LAST_LOGIN_IDENTITY", "An active user must retain at least one login identity.");
+      if (identity.kind === "local-password") {
+        throw conflict("CONTROL_PLANE_LOCAL_IDENTITY_IMMUTABLE", "Local password identities cannot be unbound.");
       }
-      if (this.isLastLoginCapableAdmin(userId, repository) && identities.length <= 1) {
-        throw conflict("CONTROL_PLANE_LAST_ACTIVE_ADMIN", "At least one active login-capable Admin must remain.");
+      const projection = { removedIdentityId: identityId };
+      await this.assertLoginCapableAdminRemains(repository, projection);
+      if (user.status === "active" && !await this.hasLoginCapableIdentity(userId, repository, projection)) {
+        throw conflict("CONTROL_PLANE_LAST_LOGIN_IDENTITY", "An active user must retain at least one login identity.");
       }
       await repository.identities.delete(identityId);
       await this.bumpAuthorizationRevisionIn(repository, userId);
@@ -346,18 +348,18 @@ export class ControlPlaneUserService {
   }
 
   async approveExternalIdentity(actorUserId: string, approvalId: string, input: unknown) {
-    if (!this.authorization(actorUserId).permissionIds.includes("users:manage")) {
+    if (!(await this.authorization(actorUserId)).permissionIds.includes("users:manage")) {
       throw Object.assign(new Error("User management is forbidden."), { code: "CONTROL_PLANE_FORBIDDEN", statusCode: 403 });
     }
     const parsed = ApproveExternalIdentityInputSchema.parse(input);
-    this.assertActiveRoles(parsed.roleIds);
-    const approval = this.store.approvals.get(approvalId);
+    await this.assertActiveRoles(parsed.roleIds);
+    const approval = await this.store.approvals.get(approvalId);
     if (!approval || approval.status !== "pending" || approval.expiresAt <= now()) {
       throw conflict("CONTROL_PLANE_EXTERNAL_IDENTITY_APPROVAL_INVALID", "External identity approval is invalid or expired.");
     }
-    const provider = this.store.providers.get(approval.providerId);
+    const provider = await this.store.providers.get(approval.providerId);
     if (!provider || provider.status !== "enabled") throw notFound("identity_provider");
-    if (this.store.identities.list().some((identity) => identity.providerId === approval.providerId && identity.subject === approval.subject)) {
+    if (await this.store.identities.findByProviderSubject(approval.providerId, approval.subject)) {
       throw conflict("CONTROL_PLANE_EXTERNAL_IDENTITY_CONFLICT", "External identity is already bound to a user.");
     }
     const timestamp = now();
@@ -379,21 +381,21 @@ export class ControlPlaneUserService {
       updatedAt: timestamp,
     };
     await this.store.transaction(async (repository) => {
-      const currentApproval = repository.approvals.get(approvalId);
+      const currentApproval = await repository.approvals.get(approvalId);
       if (!currentApproval || currentApproval.status !== "pending" || currentApproval.expiresAt <= now()) {
         throw conflict("CONTROL_PLANE_EXTERNAL_IDENTITY_APPROVAL_INVALID", "External identity approval is invalid or expired.");
       }
-      if (repository.identities.list().some((candidate) => candidate.providerId === approval.providerId && candidate.subject === approval.subject)) {
+      if (await repository.identities.findByProviderSubject(approval.providerId, approval.subject)) {
         throw conflict("CONTROL_PLANE_EXTERNAL_IDENTITY_CONFLICT", "External identity is already bound to a user.");
       }
-      this.assertActiveRoles(parsed.roleIds, repository);
+      await this.assertActiveRoles(parsed.roleIds, repository);
       await repository.users.put(user);
       await repository.identities.put(identity);
       await repository.grants.put({
-        id: user.id,
         userId: user.id,
         roleIds: [...new Set(parsed.roleIds)].sort(),
         nodeScope: normalizeUserNodeScope(parsed.nodeScope),
+        instanceScope: normalizeUserInstanceScope(parsed.instanceScope || { kind: "inherit-node-scope" }),
         authorizationRevision: 1,
         createdAt: timestamp,
         updatedAt: timestamp,
@@ -404,12 +406,12 @@ export class ControlPlaneUserService {
   }
 
   async rejectExternalIdentity(actorUserId: string, approvalId: string) {
-    if (!this.authorization(actorUserId).permissionIds.includes("users:manage")) {
+    if (!(await this.authorization(actorUserId)).permissionIds.includes("users:manage")) {
       throw Object.assign(new Error("User management is forbidden."), { code: "CONTROL_PLANE_FORBIDDEN", statusCode: 403 });
     }
     const timestamp = now();
     await this.store.transaction(async (repository) => {
-      const approval = repository.approvals.get(approvalId);
+      const approval = await repository.approvals.get(approvalId);
       if (!approval || approval.status !== "pending") throw notFound("external_identity_approval");
       await repository.approvals.put({ ...approval, status: "rejected", decidedAt: timestamp, decidedByUserId: actorUserId, updatedAt: timestamp });
     });
@@ -420,7 +422,7 @@ export class ControlPlaneUserService {
     const parsed = CreateRoleInputSchema.parse(input);
     const timestamp = now();
     return this.store.transaction(async (repository) => {
-      if (repository.roles.list().some((role) => role.name.toLocaleLowerCase("en-US") === parsed.name.toLocaleLowerCase("en-US") && role.status === "active")) {
+      if ((await repository.roles.list()).some((role) => role.name.toLocaleLowerCase("en-US") === parsed.name.toLocaleLowerCase("en-US") && role.status === "active")) {
         throw conflict("CONTROL_PLANE_ROLE_NAME_CONFLICT", "An active role already uses that name.");
       }
       return ControlPlaneRoleSummarySchema.parse(await repository.roles.put({
@@ -433,10 +435,10 @@ export class ControlPlaneUserService {
   async updateRole(roleId: string, input: unknown) {
     const parsed = UpdateRoleInputSchema.parse(input);
     const updated = await this.store.transaction(async (repository) => {
-      const current = repository.roles.get(roleId);
+      const current = await repository.roles.get(roleId);
       if (!current) throw notFound("role");
       if (current.system) throw conflict("CONTROL_PLANE_SYSTEM_ROLE_IMMUTABLE", "System roles cannot be edited.");
-      if (parsed.name && repository.roles.list().some((role) => role.id !== roleId && role.status === "active" && role.name.toLocaleLowerCase("en-US") === parsed.name!.toLocaleLowerCase("en-US"))) {
+      if (parsed.name && (await repository.roles.list()).some((role) => role.id !== roleId && role.status === "active" && role.name.toLocaleLowerCase("en-US") === parsed.name!.toLocaleLowerCase("en-US"))) {
         throw conflict("CONTROL_PLANE_ROLE_NAME_CONFLICT", "An active role already uses that name.");
       }
       const changed = await repository.roles.put({
@@ -446,7 +448,7 @@ export class ControlPlaneUserService {
         ...(parsed.permissionIds === undefined ? {} : { permissionIds: [...new Set(parsed.permissionIds)].sort() }),
         updatedAt: now(),
       });
-      for (const grant of repository.grants.list().filter((candidate) => candidate.roleIds.includes(roleId))) {
+      for (const grant of await repository.grants.listByRole(roleId)) {
         await repository.grants.put({ ...grant, authorizationRevision: grant.authorizationRevision + 1, updatedAt: now() });
         await this.revokeSessionsIn(repository, grant.userId);
       }
@@ -457,10 +459,10 @@ export class ControlPlaneUserService {
 
   async archiveRole(roleId: string) {
     return this.store.transaction(async (repository) => {
-      const current = repository.roles.get(roleId);
+      const current = await repository.roles.get(roleId);
       if (!current) throw notFound("role");
       if (current.system) throw conflict("CONTROL_PLANE_SYSTEM_ROLE_IMMUTABLE", "System roles cannot be archived.");
-      if (repository.grants.list().some((grant) => grant.roleIds.includes(roleId))) {
+      if ((await repository.grants.listByRole(roleId)).length > 0) {
         throw conflict("CONTROL_PLANE_ROLE_IN_USE", "Role is assigned to one or more users.");
       }
       return ControlPlaneRoleSummarySchema.parse(await repository.roles.put({ ...current, status: "archived", updatedAt: now() }));
@@ -471,17 +473,37 @@ export class ControlPlaneUserService {
     return this.store.transaction((repository) => this.revokeSessionsIn(repository, userId));
   }
 
+  async removeInstanceFromAccessScopes(instanceId: string) {
+    return this.store.transaction(async (repository) => {
+      const affectedUserIds: string[] = [];
+      for (const grant of await repository.grants.list()) {
+        if (grant.instanceScope.kind !== "selected" || !grant.instanceScope.instanceIds.includes(instanceId)) continue;
+        await repository.grants.put({
+          ...grant,
+          instanceScope: {
+            kind: "selected",
+            instanceIds: grant.instanceScope.instanceIds.filter((candidate) => candidate !== instanceId),
+          },
+          authorizationRevision: grant.authorizationRevision + 1,
+          updatedAt: now(),
+        });
+        await this.revokeSessionsIn(repository, grant.userId);
+        affectedUserIds.push(grant.userId);
+      }
+      return affectedUserIds;
+    });
+  }
+
   private async revokeSessionsIn(repository: ControlPlaneUserRepository, userId: string) {
     let revoked = 0;
-    for (const session of repository.sessions.list()) {
-      if (session.userId !== userId) continue;
+    for (const session of await repository.sessions.listByUser(userId)) {
       if (await repository.sessions.delete(session.id)) revoked += 1;
     }
     return revoked;
   }
 
   private async bumpAuthorizationRevisionIn(repository: ControlPlaneUserRepository, userId: string) {
-    const grant = repository.grants.get(userId);
+    const grant = await repository.grants.get(userId);
     if (!grant) throw conflict("CONTROL_PLANE_USER_ACCESS_REQUIRED", "User has no access grant.");
     await repository.grants.put({ ...grant, authorizationRevision: grant.authorizationRevision + 1, updatedAt: now() });
     await this.revokeSessionsIn(repository, userId);
@@ -508,17 +530,17 @@ export class ControlPlaneUserService {
       updatedAt: timestamp,
     };
     return this.store.transaction(async (repository) => {
-      if (repository.identities.list().some((candidate) => candidate.kind === "local-password" && candidate.normalizedLoginName === normalizedLoginName)) {
+      if (await repository.identities.findByLoginName(normalizedLoginName)) {
         throw conflict("CONTROL_PLANE_USERNAME_CONFLICT", "A Control Plane user already uses that username.");
       }
-      this.assertActiveRoles(input.roleIds, repository);
+      await this.assertActiveRoles(input.roleIds, repository);
       await repository.users.put(user);
       await repository.identities.put(identity);
       await repository.grants.put({
-        id: user.id,
         userId: user.id,
         roleIds: [...new Set(input.roleIds)].sort(),
         nodeScope: normalizeUserNodeScope(input.nodeScope),
+        instanceScope: normalizeUserInstanceScope(input.instanceScope || { kind: "inherit-node-scope" }),
         authorizationRevision: 1,
         createdAt: timestamp,
         updatedAt: timestamp,
@@ -527,20 +549,25 @@ export class ControlPlaneUserService {
     });
   }
 
-  private requireUser(userId: string, repository?: ControlPlaneUserRepository) {
-    const user = (repository?.users || this.store.users).get(userId);
+  private async requireUser(userId: string, repository?: ControlPlaneUserRepository) {
+    const user = await (repository?.users || this.store.users).get(userId);
     if (!user) throw notFound("user");
     return user;
   }
 
-  private localIdentity(userId: string, repository?: ControlPlaneUserRepository) {
-    return (repository?.identities || this.store.identities).list().find((identity) => identity.userId === userId && identity.kind === "local-password");
+  private async localIdentity(userId: string, repository?: ControlPlaneUserRepository) {
+    return (await (repository?.identities || this.store.identities).listByUser(userId)).find((identity) => identity.kind === "local-password");
   }
 
-  private publicUser(user: UserAccountRecord) {
+  private publicUser(user: UserAccountRecord, localIdentity?: LoginIdentityRecord) {
     return ControlPlaneUserSummarySchema.parse({
-      ...user,
-      primaryUsername: this.localIdentity(user.id)?.normalizedLoginName,
+      id: user.id,
+      displayName: user.displayName,
+      primaryUsername: localIdentity?.normalizedLoginName,
+      status: user.status,
+      createdAt: user.createdAt,
+      updatedAt: user.updatedAt,
+      lastLoginAt: user.lastLoginAt,
     });
   }
 
@@ -560,29 +587,59 @@ export class ControlPlaneUserService {
     });
   }
 
-  private assertActiveRoles(roleIds: readonly string[], repository?: ControlPlaneUserRepository) {
+  private async assertActiveRoles(roleIds: readonly string[], repository?: ControlPlaneUserRepository) {
     const unique = [...new Set(roleIds)];
     if (unique.length !== roleIds.length) throw conflict("CONTROL_PLANE_ROLE_DUPLICATE", "Role assignments must be unique.");
     for (const roleId of unique) {
-      const role = (repository?.roles || this.store.roles).get(roleId);
+      const role = await (repository?.roles || this.store.roles).get(roleId);
       if (!role || role.status !== "active") throw notFound("role");
     }
   }
 
-  private isLastLoginCapableAdmin(userId: string, repository?: ControlPlaneUserRepository) {
-    const collections = repository || this.store;
-    const targetGrant = collections.grants.get(userId);
-    if (!targetGrant?.roleIds.includes(SYSTEM_ROLE_IDS.admin)) return false;
-    return collections.users.list().filter((user) => user.status === "active").filter((user) => {
-      const grant = collections.grants.get(user.id);
-      const hasIdentity = collections.identities.list().some((identity) => identity.userId === user.id && (
-        identity.kind === "local-password" || collections.providers.get(identity.providerId || "")?.status === "enabled"
-      ));
-      return grant?.roleIds.includes(SYSTEM_ROLE_IDS.admin) && hasIdentity;
-    }).length <= 1;
+  async assertProviderStatusChangeAllowed(providerId: string, status: "enabled" | "disabled", repository?: ControlPlaneUserRepository) {
+    if (status === "enabled") return;
+    await this.assertLoginCapableAdminRemains(repository || this.store, {
+      providerStatus: { providerId, status },
+    });
   }
 
-  roleSummaries() {
-    return this.store.roles.list().map((role) => ControlPlaneRoleSummarySchema.parse(role));
+  private async assertLoginCapableAdminRemains(
+    repository: ControlPlaneUserRepository | ControlPlaneUserStore,
+    projection: LoginCapabilityProjection = {},
+  ) {
+    let remains = false;
+    for (const user of await repository.users.list()) {
+      const status = projection.userStatus?.userId === user.id ? projection.userStatus.status : user.status;
+      if (status !== "active") continue;
+      const grant = await repository.grants.get(user.id);
+      const roleIds = projection.roleIds?.userId === user.id ? projection.roleIds.roleIds : grant?.roleIds;
+      if (roleIds?.includes(SYSTEM_ROLE_IDS.admin) === true
+        && await this.hasLoginCapableIdentity(user.id, repository, projection)) {
+        remains = true;
+        break;
+      }
+    }
+    if (!remains) {
+      throw conflict("CONTROL_PLANE_LAST_ACTIVE_ADMIN", "At least one active login-capable Admin must remain.");
+    }
+  }
+
+  private async hasLoginCapableIdentity(
+    userId: string,
+    repository: ControlPlaneUserRepository | ControlPlaneUserStore,
+    projection: LoginCapabilityProjection,
+  ) {
+    for (const identity of await repository.identities.listByUser(userId)) {
+      if (identity.id === projection.removedIdentityId) continue;
+      if (identity.kind === "local-password") return true;
+      const provider = await repository.providers.get(identity.providerId || "");
+      const status = projection.providerStatus?.providerId === provider?.id ? projection.providerStatus.status : provider?.status;
+      if (status === "enabled") return true;
+    }
+    return false;
+  }
+
+  async roleSummaries() {
+    return (await this.store.roles.list()).map((role) => ControlPlaneRoleSummarySchema.parse(role));
   }
 }

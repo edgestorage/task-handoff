@@ -18,6 +18,7 @@ export const ControlPlaneAuthSessionSchema = z.object({
   enabled: z.boolean(),
   requiresBootstrap: z.boolean(),
   authenticated: z.boolean(),
+  requiresPasswordChange: z.boolean().optional(),
   user: ControlPlaneAuthenticatedUserSchema.optional(),
   authorization: ControlPlaneCurrentAuthorizationSchema.optional(),
 }).strict();

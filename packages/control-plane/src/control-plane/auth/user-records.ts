@@ -7,6 +7,7 @@ import {
   ControlPlanePermissionIdSchema,
   ControlPlaneRoleStatusSchema,
   ControlPlaneUserNodeScopeSchema,
+  ControlPlaneUserInstanceScopeSchema,
   ControlPlaneUserStatusSchema,
 } from "@task-handoff/protocol/control-plane-access";
 
@@ -59,11 +60,14 @@ export const RoleDefinitionRecordSchema = StoredRecordSchema.extend({
   permissionIds: z.array(ControlPlanePermissionIdSchema),
 }).strict();
 
-export const UserAccessGrantRecordSchema = StoredRecordSchema.extend({
+export const UserAccessGrantRecordSchema = z.object({
   userId: z.string().trim().min(1),
   roleIds: z.array(z.string().trim().min(1)).min(1).max(100),
   nodeScope: ControlPlaneUserNodeScopeSchema,
+  instanceScope: ControlPlaneUserInstanceScopeSchema.default({ kind: "inherit-node-scope" }),
   authorizationRevision: z.number().int().positive(),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
 }).strict();
 
 export const UserSessionRecordSchema = StoredRecordSchema.extend({

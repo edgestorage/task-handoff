@@ -7,7 +7,18 @@ export const triggers = {
     unknownTarget: "unknown target",
   },
   empty: "No trigger templates yet.",
+  emptyDescription: "Create a trigger to automate work from schedules, file changes, or AI session events.",
   filter: "Filter templates",
+  filters: {
+    source: "Trigger source",
+    status: "Trigger status",
+    allSources: "All sources",
+    allStatuses: "All statuses",
+    filteredFrom: "Filtered from {count}",
+    noMatches: "No matching triggers",
+    noMatchesDescription: "Try another search term or clear the current filters.",
+    clear: "Clear filters",
+  },
   overview: { label: "Trigger status overview", templates: "Templates", deployments: "Deployments", running: "Running", errors: "Errors" },
   deployments: {
     title: "Deployments",
@@ -18,7 +29,7 @@ export const triggers = {
     dialogDescription: "Choose an AI session. The trigger will run inside that session's controlled instance.",
     noSessions: "No available AI sessions.",
   },
-  activity: { title: "Recent activity", latest: "Latest {time}" },
+  activity: { title: "Recent activity", latest: "Latest {time}", count: "{count} recent runs", empty: "No recent runs." },
   create: {
     action: "New trigger",
     close: "Close create trigger dialog",
@@ -161,6 +172,8 @@ export const triggers = {
     errors: "{count} errors",
   },
   actions: {
+    configure: "Configure",
+    more: "More actions",
     edit: "Edit",
     editTitle: "Edit trigger template",
     delete: "Delete",
@@ -168,6 +181,8 @@ export const triggers = {
     run: "Run",
     deploy: "Deploy to session",
     unbind: "Remove deployment",
+    deleteConfirmTitle: "Delete trigger?",
+    deleteConfirmDescription: "Delete “{name}” and remove its control-plane deployments? This action cannot be undone.",
   },
   status: {
     enabled: "Enabled",

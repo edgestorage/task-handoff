@@ -599,7 +599,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   let nodeAgentClient!: NodeAgentRegistrationClient;
   const gitCredentialBroker = new GitCredentialBroker({ nodeAgentClient: () => nodeAgentClient });
   await gitCredentialBroker.start();
-  installGitBrokerEnvironment(process.env.TASK_HANDOFF_CLI_PATH, gitCredentialBroker.socketPath);
+  const gitCredentialBrokerInstalled = installGitBrokerEnvironment(process.env.TASK_HANDOFF_CLI_PATH, gitCredentialBroker.socketPath);
   const managedModelEnv = { ...process.env };
   logControlledInstanceStart(storagePaths.logDir, storagePaths.dataDir);
   applyManagedCodexModelConfig(managedModelEnv);
@@ -650,6 +650,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     triggers,
     aiSessionController.timelineCapabilities(),
     aiSessionProviderCapabilities,
+    gitCredentialBrokerInstalled,
   ));
 
   await app.register(websocket);
@@ -1402,6 +1403,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       triggers,
       aiSessionController.timelineCapabilities(),
       aiSessionProviderCapabilities,
+      gitCredentialBrokerInstalled,
     );
     return {
       data: {
@@ -1414,7 +1416,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   });
 
   app.get("/api/instance/capabilities", async () => ({
-    data: controlledInstanceCapabilities(appRuntime, aiSessionController.timelineCapabilities(), aiSessionProviderCapabilities),
+    data: controlledInstanceCapabilities(appRuntime, aiSessionController.timelineCapabilities(), aiSessionProviderCapabilities, gitCredentialBrokerInstalled),
   }));
 
   app.get("/api/workspace/status", async () => ({

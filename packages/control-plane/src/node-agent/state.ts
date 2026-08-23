@@ -214,7 +214,6 @@ export class NodeAgentState {
   private listenerPort: number;
   private readonly containerUrlOverride?: string;
   private readonly platform: NodeJS.Platform;
-  private readonly pendingGitWorkspaceProvisioning = new Map<string, GitWorkspaceProvisioningInput>();
 
   constructor(paths: NodeAgentStorePaths, nodeId: string, endpoint: string | undefined, containerUrl: string | undefined, listenerPort: number, platform: NodeJS.Platform) {
     this.paths = paths;
@@ -635,21 +634,32 @@ export class NodeAgentState {
     });
     const stored = this.controlledInstances.put(instance);
     this.instancePrivateConfigs.materialize(stored.id, stored.registrationToken, this.resolvedAssignedModelEnvironment(stored.id));
-    if (input.gitWorkspaceProvisioning) {
-      this.pendingGitWorkspaceProvisioning.set(stored.id, input.gitWorkspaceProvisioning);
+    if (input.gitWorkspaceProvisioning?.credentials.every((credential) => credential.retention === "operation-only")) {
+      this.gitCredentials.putWorkspaceProvisioning(input.gitWorkspaceProvisioning);
     }
     return stored;
   }
 
   takeGitWorkspaceProvisioning(instanceId: string) {
-    const pending = this.pendingGitWorkspaceProvisioning.get(instanceId);
-    this.pendingGitWorkspaceProvisioning.delete(instanceId);
+    const pending = this.gitCredentials.getWorkspaceProvisioning(instanceId);
+    this.gitCredentials.removeWorkspaceProvisioning(instanceId);
     return pending;
+  }
+
+  setGitWorkspaceProvisioning(input: GitWorkspaceProvisioningInput) {
+    const instance = this.requireInstance(input.instanceId);
+    if (instance.source.type === "local-folder" || instance.source.url !== input.remoteUrl) {
+      throw Object.assign(new Error(`Git provisioning does not match instance ${instance.id}.`), {
+        code: "GIT_WORKSPACE_PROVISIONING_INSTANCE_MISMATCH",
+        statusCode: 409,
+      });
+    }
+    this.gitCredentials.putWorkspaceProvisioning(input);
   }
 
   private gitWorkspaceProvisioningFor(instance: ControlledInstance): GitWorkspaceProvisioningInput | undefined {
     if (instance.source.type === "local-folder") return undefined;
-    const pending = this.pendingGitWorkspaceProvisioning.get(instance.id);
+    const pending = this.gitCredentials.getWorkspaceProvisioning(instance.id);
     if (pending) return pending;
     const authorization = this.gitCredentials.getAuthorizationSet(instance.id);
     const payloads = authorization.credentialIds.flatMap((id) => {
@@ -685,7 +695,11 @@ export class NodeAgentState {
   }
 
   discardGitWorkspaceProvisioning(instanceId: string) {
-    return this.pendingGitWorkspaceProvisioning.delete(instanceId);
+    return this.gitCredentials.discardPendingWorkspaceProvisioning(instanceId);
+  }
+
+  gitWorkspaceProvisioningStatus(instanceId: string) {
+    return this.gitCredentials.workspaceProvisioningStatus(instanceId);
   }
 
   registerInstance(id: string, input: ControlledInstanceRegister, token?: string) {
@@ -815,7 +829,7 @@ export class NodeAgentState {
       privateConfigPath: this.instancePrivateConfigs.filePath(privateConfig.instanceId),
       ...(gitWorkspaceProvisioning ? {
         gitWorkspaceProvisioning,
-        completeGitWorkspaceProvisioning: () => this.pendingGitWorkspaceProvisioning.delete(instance.id),
+        completeGitWorkspaceProvisioning: () => this.gitCredentials.completeWorkspaceProvisioning(instance.id, gitWorkspaceProvisioning.operationId),
       } : {}),
     };
   }

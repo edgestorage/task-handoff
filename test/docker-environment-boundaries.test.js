@@ -179,7 +179,7 @@ test("docker executor creates and labels authoritative volumes before docker run
 test("Docker Git provisioning uses a disposable helper before the final instance and keeps secrets out of argv", async () => {
   const value = context({
     type: "git-repository", repositoryId: "repo_one", url: "https://git.example.com/team/repo.git",
-    ref: { type: "branch", name: "main" }, auth: { type: "none" }, clone: { depth: 1, submodules: false, lfs: false, subdirectory: "" },
+    ref: { type: "branch", name: "main" }, auth: { type: "none" }, clone: { depth: 1, submodules: false, lfs: false, subdirectory: "packages/app" },
   });
   value.gitWorkspaceProvisioning = {
     operationId: "gitop_one",
@@ -231,10 +231,12 @@ test("Docker Git provisioning uses a disposable helper before the final instance
   assert.ok(staleCleanupIndex >= 0 && staleCleanupIndex < helperIndex && finalIndex > helperIndex);
   assert.ok(calls[helperIndex].includes("task-handoff.role=git-provisioning"));
   assert.ok(calls[helperIndex].includes(`task-handoff.instance-id=${value.instance.id}`));
+  assert.ok(calls[helperIndex].includes("TASK_HANDOFF_WORKSPACE_SUBDIRECTORY=packages/app"));
   assert.equal(completed, 1);
   assert.equal(fs.existsSync(authDirectory), false);
   const finalArgs = calls[finalIndex];
   assert.ok(finalArgs.includes("TASK_HANDOFF_SKIP_WORKSPACE_BOOTSTRAP=true"));
+  assert.ok(finalArgs.includes("TASK_HANDOFF_WORKSPACE_SUBDIRECTORY=packages/app"));
   assert.equal(finalArgs.some((item) => item.includes("provision-secret")), false);
   const dryRun = dockerGitProvisionArgs(value, "helper", "/private/auth");
   assert.equal(dryRun.some((item) => item.includes("provision-secret")), false);
@@ -362,6 +364,9 @@ test("Git provisioning script only replaces instance-owned staging and rejects u
   assert.match(script, /WORKSPACE_OWNERSHIP_MISMATCH/);
   assert.match(script, /TASK_HANDOFF_INSTANCE_ID/);
   assert.match(script, /checkout="\$\{staging\}\/checkout"/);
+  assert.match(script, /CLONE_FAILED/);
+  assert.match(script, /SUBDIRECTORY_NOT_FOUND/);
+  assert.match(script, /TASK_HANDOFF_GIT_COMMIT.*TASK_HANDOFF_GIT_DEPTH|TASK_HANDOFF_GIT_DEPTH.*TASK_HANDOFF_GIT_COMMIT/);
   assert.doesNotMatch(script, /rm -rf -- "\$\{workspace\}"/);
 });
 

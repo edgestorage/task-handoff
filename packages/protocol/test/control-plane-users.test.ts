@@ -3,10 +3,12 @@ import test from "node:test";
 import {
   CONTROL_PLANE_PERMISSION_IDS,
   ControlPlaneCurrentAuthorizationSchema,
+  ControlPlaneExternalIdentityApprovalSummarySchema,
   ControlPlaneIdentityProviderSummarySchema,
   ControlPlanePermissionIdSchema,
   ControlPlanePublicCapabilitiesSchema,
   ControlPlaneUserDetailSchema,
+  ControlPlaneUpdateUserInputSchema,
   controlPlaneAccessManagementCapabilities,
   normalizeControlPlanePublicCapabilities,
   supportsControlPlaneCustomRoles,
@@ -25,7 +27,7 @@ const baseCapabilities = {
 const accessManagement = {
   userManagement: { users: true as const, identities: true as const, sessions: true as const },
   authentication: { externalIdentity: { oidc: true, oauthAdapters: ["github" as const] } },
-  authorization: { customRoles: true, nodeScopes: true as const, authorizationRevisions: true as const },
+  authorization: { customRoles: true, nodeScopes: true as const, instanceScopes: true as const, authorizationRevisions: true as const },
 };
 
 test("access management capabilities normalize through one query boundary", () => {
@@ -69,7 +71,17 @@ test("user wire models ignore unknown response fields and keep secrets out", () 
   });
   assert.equal("privateNotes" in user, false);
   assert.equal("passwordHash" in user.identities[0], false);
+  assert.deepEqual(user.accessGrant.instanceScope, { kind: "inherit-node-scope" });
   assert.equal(ControlPlaneUserDetailSchema.safeParse({ ...user, id: undefined }).success, false);
+});
+
+test("user update input keeps local username changes inside the user API boundary", () => {
+  assert.deepEqual(ControlPlaneUpdateUserInputSchema.parse({ displayName: "Alice Doe", username: "Alice.New" }), {
+    displayName: "Alice Doe",
+    username: "Alice.New",
+  });
+  assert.equal(ControlPlaneUpdateUserInputSchema.safeParse({ username: "invalid username" }).success, false);
+  assert.equal(ControlPlaneUpdateUserInputSchema.safeParse({}).success, false);
 });
 
 test("authorization accepts only catalog permissions", () => {
@@ -82,6 +94,11 @@ test("authorization accepts only catalog permissions", () => {
     authorizationRevision: 2,
   });
   assert.deepEqual(authorization.permissionIds, ["nodes:read", "instances:interactive"]);
+  assert.deepEqual(authorization.instanceScope, { kind: "inherit-node-scope" });
+  assert.deepEqual(ControlPlaneCurrentAuthorizationSchema.parse({
+    ...authorization,
+    instanceScope: { kind: "selected", instanceIds: ["instance_1"] },
+  }).instanceScope, { kind: "selected", instanceIds: ["instance_1"] });
   assert.equal(ControlPlaneCurrentAuthorizationSchema.safeParse({ ...authorization, permissionIds: ["unknown:permission"] }).success, false);
   assert.equal(CONTROL_PLANE_PERMISSION_IDS.every((id) => ControlPlanePermissionIdSchema.safeParse(id).success), true);
 });
@@ -103,4 +120,21 @@ test("identity provider public model rejects secrets and requires OIDC issuer", 
   assert.equal(ControlPlaneIdentityProviderSummarySchema.safeParse(provider).success, true);
   assert.equal(ControlPlaneIdentityProviderSummarySchema.safeParse({ ...provider, issuer: undefined }).success, false);
   assert.equal(ControlPlaneIdentityProviderSummarySchema.safeParse({ ...provider, clientSecret: "secret" }).success, false);
+});
+
+test("external identity approvals expose only the review wire model", () => {
+  const approval = parseResponse(ControlPlaneExternalIdentityApprovalSummarySchema, {
+    id: "approval_1",
+    providerId: "provider_1",
+    subject: "subject_1",
+    verifiedEmail: "alice@example.com",
+    displayName: "Alice",
+    status: "pending",
+    expiresAt: "2026-08-24T00:00:00.000Z",
+    createdAt: "2026-08-23T00:00:00.000Z",
+    updatedAt: "2026-08-23T00:00:00.000Z",
+    internalState: "must-not-survive",
+  });
+  assert.equal("internalState" in approval, false);
+  assert.equal(ControlPlaneExternalIdentityApprovalSummarySchema.safeParse({ ...approval, subject: undefined }).success, false);
 });
