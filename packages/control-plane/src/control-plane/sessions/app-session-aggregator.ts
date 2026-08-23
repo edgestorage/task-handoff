@@ -200,13 +200,23 @@ export class ControlPlaneAppSessionAggregator {
       const advertisedStreamId = this.advertisedStreams.get(entry.instanceId)?.streamId;
       if (advertisedStreamId && advertisedStreamId !== entry.streamId) continue;
       if (current?.streamId === entry.streamId && current.revision >= entry.revision) continue;
-      if (current?.streamId !== entry.streamId) this.history.delete(entry.instanceId);
-      this.snapshots.set(entry.instanceId, {
-        streamId: entry.streamId,
-        snapshot: activeAppSessionsSnapshotFromRecords(entry.appSessions.sessions, entry.appSessions.updatedAt),
-        revision: entry.revision,
-        lastEventAt: entry.lastEventAt,
-      });
+      const event: AppSessionEvent = {
+        type: AppSessionEventType.Snapshot,
+        payload: {
+          meta: {
+            streamId: entry.streamId,
+            instanceId: entry.instanceId,
+            revision: entry.revision,
+            traceId: `aps_bootstrap_${Date.now().toString(36)}`,
+            generatedAt: entry.lastEventAt,
+            reason: "startup",
+          },
+          snapshot: activeAppSessionsSnapshotFromRecords(entry.appSessions.sessions, entry.appSessions.updatedAt),
+        },
+      };
+      // Snapshot reconciliation and realtime ingestion must have the same
+      // observable commit boundary: advancing the shared revision also emits.
+      if (this.apply(event)) this.onRecoveredEvent?.(event);
     }
   }
 

@@ -7,7 +7,9 @@ import writeFileAtomic from "write-file-atomic";
 import { z } from "zod";
 import {
   AI_SESSION_ATTACHMENT_RETENTION_DEFAULT_DAYS,
+  AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES,
   AI_SESSION_MAX_ATTACHMENT_BYTES,
+  AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES,
   AI_SESSION_MAX_MESSAGE_ATTACHMENT_BYTES,
   AI_SESSION_MAX_MESSAGE_ATTACHMENTS,
   AiSessionConversationAttachmentSchema,
@@ -20,6 +22,14 @@ import { safeFileName } from "@task-handoff/core/core/file-names";
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DRAFT_RETENTION_MS = DAY_MS;
 const DEFAULT_MAX_BYTES = 2 * 1024 * 1024 * 1024;
+
+function normalizeMaxFileAttachmentBytes(value: number | undefined) {
+  const normalized = value ?? AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES;
+  if (!Number.isInteger(normalized) || normalized <= 0 || normalized > AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES) {
+    throw new RangeError(`maxFileAttachmentBytes must be between 1 and ${AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES}.`);
+  }
+  return normalized;
+}
 
 const ManifestSchema = z.object({
   schemaVersion: z.literal(1),
@@ -87,6 +97,7 @@ export type AiSessionConversationAttachmentStoreOptions = {
   now?: () => number;
   retentionDays?: number;
   maxBytes?: number;
+  maxFileAttachmentBytes?: number;
   onWarning?: (reason: string) => void;
 };
 
@@ -119,6 +130,7 @@ export class AiSessionConversationAttachmentStore {
   private readonly draftDir: string;
   private readonly now: () => number;
   private readonly maxBytes: number;
+  private maxFileAttachmentBytes: number;
   private readonly onWarning?: (reason: string) => void;
   private retentionDays: number;
   private readonly manifests = new Map<string, AttachmentManifest>();
@@ -134,6 +146,7 @@ export class AiSessionConversationAttachmentStore {
     this.draftDir = path.join(this.root, "drafts");
     this.now = options.now || Date.now;
     this.maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
+    this.maxFileAttachmentBytes = normalizeMaxFileAttachmentBytes(options.maxFileAttachmentBytes);
     this.retentionDays = normalizeRetentionDays(options.retentionDays);
     this.onWarning = options.onWarning;
     fs.mkdirSync(this.blobDir, { recursive: true, mode: 0o700 });
@@ -150,6 +163,10 @@ export class AiSessionConversationAttachmentStore {
     return this.gc();
   }
 
+  setMaxFileAttachmentBytes(bytes: number) {
+    this.maxFileAttachmentBytes = normalizeMaxFileAttachmentBytes(bytes);
+  }
+
   async createDraft(input: {
     id?: string;
     scopeType: "session" | "create-request";
@@ -164,6 +181,7 @@ export class AiSessionConversationAttachmentStore {
     if (!Number.isInteger(input.size) || input.size <= 0 || input.size > AI_SESSION_MAX_ATTACHMENT_BYTES) {
       throw attachmentError("AI_SESSION_ATTACHMENT_INVALID", "AI session attachment has an invalid size.", 400);
     }
+    this.assertUploadedFileSize(input.kind, input.size);
     if (this.usedBytes() + input.size > this.maxBytes) {
       throw attachmentError("AI_SESSION_ATTACHMENT_STORAGE_FULL", "AI session attachment storage is full.", 507);
     }
@@ -273,6 +291,11 @@ export class AiSessionConversationAttachmentStore {
       return draft;
     });
     const snapshots = attachments.map((attachment) => this.snapshot(attachment, input.runtimePathRoot));
+    for (const snapshot of snapshots) {
+      if (snapshot.attachment.source.type === "inline") {
+        this.assertUploadedFileSize(snapshot.attachment.kind, snapshot.content.length);
+      }
+    }
     const totalBytes = snapshots.reduce((sum, entry) => sum + entry.content.length, drafts.reduce((sum, draft) => sum + draft.size, 0));
     if (totalBytes > AI_SESSION_MAX_MESSAGE_ATTACHMENT_BYTES) {
       throw attachmentError("AI_SESSION_ATTACHMENT_MESSAGE_TOO_LARGE", `Attachments must be ${AI_SESSION_MAX_MESSAGE_ATTACHMENT_BYTES} bytes or less in total.`, 400);
@@ -570,6 +593,15 @@ export class AiSessionConversationAttachmentStore {
       throw attachmentError("AI_SESSION_ATTACHMENT_SIZE_MISMATCH", "Runtime attachment size changed before it was accepted.", 409);
     }
     return { attachment, content: fs.readFileSync(filePath) };
+  }
+
+  private assertUploadedFileSize(kind: "image" | "file", size: number) {
+    if (kind !== "file" || size < this.maxFileAttachmentBytes) return;
+    throw attachmentError(
+      "AI_SESSION_ATTACHMENTS_TOO_LARGE",
+      `File attachment must be smaller than ${this.maxFileAttachmentBytes} bytes.`,
+      413,
+    );
   }
 
   private publicAttachment(manifest: AttachmentManifest): AiSessionConversationAttachment {

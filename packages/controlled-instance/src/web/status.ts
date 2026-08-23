@@ -10,6 +10,7 @@ import {
   CONTROL_PLANE_PROTOCOL_VERSION,
   ControlledInstanceCapabilitiesSchema,
   type AiSessionTimelineCapabilities,
+  type AiSessionProviderCapability,
   type ControlledInstanceCapabilities,
 } from "@task-handoff/protocol/control-plane";
 import { TriggerStore } from "../triggers/store";
@@ -106,6 +107,7 @@ export function runtimeDiagnostics(paths: TaskHandoffStoragePaths, noVncRoot: st
     { name: "import", requiredFor: ["browser", "gui-terminal", "vscode-web"] },
     { name: process.env.TASK_HANDOFF_CODEX_COMMAND || "codex", label: "codex", requiredFor: ["codex"] },
     { name: process.env.TASK_HANDOFF_CLAUDE_COMMAND || process.env.CLAUDE_CLI_PATH || "claude", label: "claude", requiredFor: ["claude"] },
+    { name: process.env.TASK_HANDOFF_OPENCODE_COMMAND || "opencode", label: "opencode", requiredFor: ["opencode"] },
   ].map((command) => {
     const resolvedPath = executablePath(command.name);
     const required = requiredCapabilities
@@ -187,9 +189,12 @@ export function workspaceStatus(paths: TaskHandoffStoragePaths) {
 export function controlledInstanceCapabilities(
   appRuntime: AppRuntimeManager,
   aiSessionTimeline: AiSessionTimelineCapabilities,
+  aiSessionProviders: AiSessionProviderCapability[] = [],
 ): ControlledInstanceCapabilities {
   const inventory = appRuntime.appInventory();
   const available = inventory.items.filter((item) => item.availability === "available");
+  const availableAppIds = new Set(available.map((item) => item.id));
+  const availableProviders = aiSessionProviders.filter((provider) => availableAppIds.has(provider.agent));
   return ControlledInstanceCapabilitiesSchema.parse({
     features: {
       appRuntime: true,
@@ -200,12 +205,16 @@ export function controlledInstanceCapabilities(
       logs: true,
       aiSessionWorkspaceSelection: true,
       aiSessionPersistenceSettings: true,
+      gitCliCredentialBroker: true,
+      gitCredentialProxy: true,
       aiSessionTimeline,
+      aiSessionProviders: availableProviders,
       aiSessionConversationAttachments: {
-        metadataAgents: ["codex", "claude"],
-        contentAgents: ["codex", "claude"],
-        uploadAgents: ["codex", "claude"],
+        metadataAgents: availableProviders.filter((provider) => provider.actions.send).map((provider) => provider.agent),
+        contentAgents: availableProviders.filter((provider) => provider.actions.send).map((provider) => provider.agent),
+        uploadAgents: availableProviders.filter((provider) => provider.actions.send).map((provider) => provider.agent),
         retentionSettings: true,
+        fileSizeLimitSettings: true,
       },
     },
   });
@@ -233,6 +242,7 @@ export async function controlledInstanceSnapshot(
   aiSessions: ReturnType<typeof createAiSessionRegistry>,
   triggers: TriggerStore | undefined,
   aiSessionTimeline: AiSessionTimelineCapabilities,
+  aiSessionProviders: AiSessionProviderCapability[] = [],
 ) {
   const appSessions = appRuntime.listSessions();
   return {
@@ -242,7 +252,7 @@ export async function controlledInstanceSnapshot(
     protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
     build: buildInfo(),
     controlMode: (controlledMode() ? "controlled" : "standalone") as "standalone" | "controlled",
-    capabilities: controlledInstanceCapabilities(appRuntime, aiSessionTimeline),
+    capabilities: controlledInstanceCapabilities(appRuntime, aiSessionTimeline, aiSessionProviders),
     appInventory: appRuntime.appInventory(),
     apps: {
       runningCount: appRuntime.runningSessionCount(),

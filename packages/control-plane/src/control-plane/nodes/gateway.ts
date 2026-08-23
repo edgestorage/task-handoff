@@ -37,6 +37,12 @@ import type {
   ControlPlaneFleetResourcePhase,
   ControlPlaneNodeFleetState,
 } from "@task-handoff/protocol/control-plane-directory";
+import {
+  GitCredentialPublicSchema,
+  NodeGitCredentialAuthorizationSetSchema,
+  type NodeGitCredentialAuthorizationSet,
+  type NodeGitCredentialPayload,
+} from "@task-handoff/protocol/managed-git-credentials";
 
 export type NodeAgentFleetResult<T> = {
   items: T[];
@@ -167,6 +173,29 @@ export class ControlPlaneNodeAgentGateway {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(input),
     });
+  }
+
+  deployGitCredential(node: Node, payload: NodeGitCredentialPayload) {
+    return this.client.requestSchema(node, `/git-credentials/${encodeURIComponent(payload.credential.id)}`, GitCredentialPublicSchema, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  }
+
+  removeGitCredential(node: Node, credentialId: string) {
+    return this.client.requestSchema(node, `/git-credentials/${encodeURIComponent(credentialId)}`, z.object({ deleted: z.boolean() }).strip(), {
+      method: "DELETE",
+    });
+  }
+
+  replaceGitCredentialAuthorizations(node: Node, desired: NodeGitCredentialAuthorizationSet) {
+    return this.client.requestSchema(
+      node,
+      `/instances/${encodeURIComponent(desired.instanceId)}/git-credential-authorizations`,
+      NodeGitCredentialAuthorizationSetSchema,
+      { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(desired) },
+    );
   }
 
   createPairingInvite(node: Node, input: unknown = {}) {

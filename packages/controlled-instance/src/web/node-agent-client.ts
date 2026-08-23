@@ -1,6 +1,11 @@
 import crypto from "node:crypto";
 import { StandardReconnectBackoff } from "@task-handoff/core/core/reconnect";
 import type { ImageSelection, InstanceAppInventory } from "@task-handoff/protocol/control-plane";
+import {
+  GitCredentialHttpsResolveResponseSchema,
+  GitCredentialSshAgentResponseSchema,
+  GitCredentialSshPrepareResponseSchema,
+} from "@task-handoff/protocol/managed-git-credentials";
 
 export type NodeAgentRegistrationConfig = {
   controlMode: "standalone" | "controlled";
@@ -106,6 +111,35 @@ export class NodeAgentRegistrationClient {
     return this.runExclusive(() => this.heartbeatOnce());
   }
 
+  async resolveGitHttps(remoteUrl: string) {
+    return GitCredentialHttpsResolveResponseSchema.parse(await this.request(
+      `node-agent/instances/${encodeURIComponent(this.requiredInstanceId())}/git-credentials/https`,
+      { remoteUrl },
+    ));
+  }
+
+  async prepareGitSsh(remoteUrl: string) {
+    return GitCredentialSshPrepareResponseSchema.parse(await this.request(
+      `node-agent/instances/${encodeURIComponent(this.requiredInstanceId())}/git-credentials/ssh/prepare`,
+      { remoteUrl },
+    ));
+  }
+
+  async exchangeGitSshAgent(invocationId: string, frame: string) {
+    return GitCredentialSshAgentResponseSchema.parse(await this.request(
+      `node-agent/instances/${encodeURIComponent(this.requiredInstanceId())}/git-credentials/ssh/agent`,
+      { invocationId, frame },
+    ));
+  }
+
+  async releaseGitSsh(invocationId: string) {
+    await this.request(
+      `node-agent/instances/${encodeURIComponent(this.requiredInstanceId())}/git-credentials/ssh/${encodeURIComponent(invocationId)}`,
+      {},
+      "DELETE",
+    );
+  }
+
   private async registerOnce() {
     const snapshot = await this.snapshotProvider();
     const instanceId = this.requiredInstanceId();
@@ -186,13 +220,13 @@ export class NodeAgentRegistrationClient {
     return running;
   }
 
-  private async request(path: string, body: Record<string, unknown>) {
+  private async request(path: string, body: Record<string, unknown>, method = "POST") {
     const baseUrl = this.config.nodeAgentUrl?.replace(/\/$/, "");
     if (!baseUrl) {
       throw new Error("Node agent URL is required.");
     }
     const response = await this.fetchImpl(`${baseUrl}/api/${path}`, {
-      method: "POST",
+      method,
       signal: AbortSignal.timeout(5_000),
       headers: {
         "content-type": "application/json",

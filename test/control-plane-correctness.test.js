@@ -393,11 +393,12 @@ test("direct node creation failure self-revokes the pairing on a real node-agent
   assert.equal(localHealth.statusCode, 200, localHealth.body);
 });
 
-test("AI session resume returns the committed result when snapshot refresh fails", async () => {
-  const warnings = [];
+test("AI session resume returns the committed result without refreshing the shared projection", async () => {
+  let requests = 0;
   const service = new AiSessionActionService({
     requireInstance: async () => ({}),
     request: async (_instance, route) => {
+      requests += 1;
       assert.equal(route, "/ai-sessions/ai_session_1/resume");
       return {
         disposition: "resumed",
@@ -408,46 +409,38 @@ test("AI session resume returns the committed result when snapshot refresh fails
       };
     },
     requireRuntime: async () => ({}),
-    refreshSnapshots: async () => {
-      throw Object.assign(new Error("snapshot provider unavailable"), { code: "SNAPSHOT_UNAVAILABLE" });
-    },
-    warn: (data, message) => warnings.push({ data, message }),
   });
 
   const result = await service.resume("instance_1", "ai_session_1");
   assert.equal(result.disposition, "resumed");
-  assert.equal(warnings.length, 1);
-  assert.equal(warnings[0].data.code, "SNAPSHOT_UNAVAILABLE");
-  assert.match(warnings[0].message, /resumed.*refresh failed/i);
-  const diagnostics = service.diagnostics();
-  assert.equal(diagnostics.resumeSnapshotRefreshFailures, 1);
-  assert.equal(diagnostics.lastResumeSnapshotRefreshFailure.instanceId, "instance_1");
-  assert.equal(diagnostics.lastResumeSnapshotRefreshFailure.aiSessionId, "ai_session_1");
+  assert.equal(requests, 1);
+  assert.equal(service.diagnostics().resumeSnapshotRefreshFailures, 0);
 });
 
-test("AI session resume remains successful when refresh diagnostics throw", async () => {
+test("AI session fork returns the committed result without refreshing the shared projection", async () => {
+  let requests = 0;
   const service = new AiSessionActionService({
     requireInstance: async () => ({}),
-    request: async () => ({
-      disposition: "resumed",
-      aiSessionId: "ai_session_2",
-      providerSessionId: "provider_session_2",
-      appSessionId: "app_session_2",
-      creationSource: "app-session",
-    }),
+    request: async (_instance, route) => {
+      requests += 1;
+      assert.equal(route, "/ai-sessions/ai_session_1/fork");
+      return {
+        disposition: "created",
+        aiSessionId: "ai_session_2",
+        providerSessionId: "provider_session_2",
+        creationSource: "ai-session",
+      };
+    },
     requireRuntime: async () => ({}),
-    refreshSnapshots: async () => { throw new Error("snapshot failed"); },
-    warn: () => { throw new Error("logger failed"); },
   });
 
-  const result = await service.resume("instance_2", "ai_session_2");
-  assert.equal(result.disposition, "resumed");
-  assert.equal(service.diagnostics().resumeSnapshotRefreshFailures, 1);
+  const result = await service.fork("instance_1", "ai_session_1", { clientRequestId: "fork-1", workspace: { mode: "current" } });
+  assert.equal(result.disposition, "created");
+  assert.equal(requests, 1);
 });
 
 test("AI session create, Open App, and close proxy strict controlled-instance results", async () => {
   const requests = [];
-  let snapshotRefreshes = 0;
   const instance = { config: { defaultCodexPermissionMode: "auto-review" } };
   const service = new AiSessionActionService({
     requireInstance: async () => instance,
@@ -458,7 +451,6 @@ test("AI session create, Open App, and close proxy strict controlled-instance re
       return { disposition: "closed", aiSessionId: "ai-direct", providerSessionId: "thread-direct", creationSource: "ai-session" };
     },
     requireRuntime: async () => ({ type: "local" }),
-    refreshSnapshots: async () => { snapshotRefreshes += 1; },
   });
   const created = await service.create("instance-direct", {
     agent: "codex",
@@ -477,7 +469,6 @@ test("AI session create, Open App, and close proxy strict controlled-instance re
   ]);
   assert.equal(requests[0].body.permissionMode, "auto-review");
   assert.deepEqual(requests[1].body, { clientRequestId: "request-open" });
-  assert.equal(snapshotRefreshes, 0, "committed lifecycle actions rely on the authoritative event stream");
 });
 
 test("AI session workspace identity is capability-gated for v0.0.21 controlled instances", async () => {
@@ -496,7 +487,6 @@ test("AI session workspace identity is capability-gated for v0.0.21 controlled i
       return { disposition: "created", aiSessionId: "ai-capability", providerSessionId: "thread-capability", creationSource: "ai-session" };
     },
     requireRuntime: async () => ({ type: "local" }),
-    refreshSnapshots: async () => undefined,
   });
 
   await service.create("instance-legacy", {

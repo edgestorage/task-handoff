@@ -133,11 +133,27 @@ test("AI session persistence settings migrate v0.0.21 and preserve retention on 
   fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
   fs.writeFileSync(settingsPath, `${JSON.stringify({ schemaVersion: 1, historyLimit: 24 })}\n`);
   const store = new AiSessionPersistenceSettingsStore({ dataDir: root });
-  assert.deepEqual(store.get(), { schemaVersion: 2, historyLimit: 24, attachmentRetentionDays: 30 });
+  assert.deepEqual(store.get(), { schemaVersion: 3, historyLimit: 24, attachmentRetentionDays: 30, maxFileAttachmentBytes: 500 * 1024 });
   assert.equal(store.put({ historyLimit: 25, attachmentRetentionDays: 7 }).attachmentRetentionDays, 7);
   assert.equal(store.put({ historyLimit: 26 }).attachmentRetentionDays, 7);
   assert.equal(new AiSessionPersistenceSettingsStore({ dataDir: root }).get().attachmentRetentionDays, 7);
+  assert.equal(store.put({ historyLimit: 27, maxFileAttachmentBytes: 1024 }).maxFileAttachmentBytes, 1024);
+  assert.equal(store.put({ historyLimit: 28 }).maxFileAttachmentBytes, 1024);
   assert.throws(() => store.put({ historyLimit: 26, attachmentRetentionDays: 366 }));
+  assert.throws(() => store.put({ historyLimit: 26, maxFileAttachmentBytes: 20 * 1024 * 1024 + 1 }));
+});
+
+test("AI session persistence settings migrate schema v2 with the default file attachment limit", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-history-settings-v2-"));
+  const settingsPath = path.join(root, "ai-session-persistence", "settings.json");
+  fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+  fs.writeFileSync(settingsPath, `${JSON.stringify({ schemaVersion: 2, historyLimit: 24, attachmentRetentionDays: 7 })}\n`);
+  assert.deepEqual(new AiSessionPersistenceSettingsStore({ dataDir: root }).get(), {
+    schemaVersion: 3,
+    historyLimit: 24,
+    attachmentRetentionDays: 7,
+    maxFileAttachmentBytes: 500 * 1024,
+  });
 });
 
 test("AI session history details persist normalized turns and isolate damaged files", () => {

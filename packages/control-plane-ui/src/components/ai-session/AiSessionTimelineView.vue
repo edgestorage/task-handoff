@@ -55,6 +55,7 @@
             :busy="busy"
             :can-interrupt="canInterrupt"
             :can-resolve-approval="canResolveApproval"
+            :approval-decisions="approvalDecisions"
             :instance-id="instanceId"
             :file-links="fileLinks"
             :is-latest="isLatestTurn(virtualTurn.index)"
@@ -125,6 +126,7 @@ const props = withDefaults(defineProps<{
   busy?: boolean;
   canInterrupt?: boolean;
   canResolveApproval?: boolean;
+  approvalDecisions?: Array<"allow" | "deny" | "skip">;
   fileLinks?: boolean;
   instanceId: string;
   conversationSessionId?: string;
@@ -132,6 +134,7 @@ const props = withDefaults(defineProps<{
   storedTurns?: AiSessionHistoryTurn[];
   turnTimelines?: Record<string, AiSessionTurnTimelineState>;
 }>(), {
+  approvalDecisions: () => ["allow", "deny", "skip"],
   storedTurns: () => [],
   turnTimelines: () => ({}),
 });

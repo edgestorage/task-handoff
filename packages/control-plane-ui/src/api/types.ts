@@ -62,7 +62,6 @@ import type {
   ControlPlaneAiSessionsSnapshot as SharedControlPlaneAiSessionsSnapshot,
   ControlPlaneAuthSession as SharedControlPlaneAuthSession,
 } from "@task-handoff/control-plane-client";
-import type { ControlPlaneAuthenticatedUser } from "@task-handoff/protocol/control-plane-access";
 
 export type { AiSessionCloseResult, AiSessionCreateResult, AiSessionForkResult, AiSessionHistoryDetail, AiSessionHistoryItem, AiSessionHistoryList, AiSessionMentionCandidate, AiSessionMentionCatalog, AiSessionMentionDiagnostic, AiSessionMentionFileSearch, AiSessionOpenAppResult, AiSessionReference, AiSessionResumeResult, AiSessionTimeline, AiSessionTurnTimeline };
 
@@ -137,7 +136,6 @@ export type { NodeRolloutSummary, NodeUpdateImpact, RuntimeVersionState };
 export type { ApplyUpdateRequest };
 export type { EnvironmentSource, EnvironmentTemplate };
 
-export type AuthUser = ControlPlaneAuthenticatedUser;
 export type AuthSession = SharedControlPlaneAuthSession;
 
 export type ProjectSource =
@@ -171,7 +169,7 @@ export type Project = {
   updatedAt: string;
 };
 
-export type ModelApp = "codex" | "claude";
+export type ModelApp = "codex" | "claude" | "opencode";
 
 export type ModelConfig = {
   id: string;
@@ -717,6 +715,7 @@ export type ControlledInstance = {
     defaultCodexPermissionMode: AiSessionPermissionMode;
     aiSessionHistoryLimit: number;
     aiSessionAttachmentRetentionDays: number;
+    aiSessionMaxFileAttachmentBytes: number;
   };
   workspace: {
     mode?: WorkspacePolicy["mode"];
@@ -760,6 +759,7 @@ export type ControlledInstance = {
 export type ModelSelection = {
   codexModelHash?: string | null;
   claudeModelHash?: string | null;
+  opencodeModelHash?: string | null;
 };
 
 export type {
@@ -1023,8 +1023,10 @@ export type CreateControlledInstanceInput = {
     defaultCodexPermissionMode?: AiSessionPermissionMode;
     aiSessionHistoryLimit?: number;
     aiSessionAttachmentRetentionDays?: number;
+    aiSessionMaxFileAttachmentBytes?: number;
   };
   modelSelection?: ModelSelection;
+  gitCredentialRetention?: "operation-only" | "instance-retained";
   start?: boolean;
 };
 
@@ -1043,6 +1045,7 @@ export type UpdateControlledInstanceInput = {
     defaultCodexPermissionMode?: AiSessionPermissionMode;
     aiSessionHistoryLimit?: number;
     aiSessionAttachmentRetentionDays?: number;
+    aiSessionMaxFileAttachmentBytes?: number;
   };
   modelSelection?: ModelSelection;
 };

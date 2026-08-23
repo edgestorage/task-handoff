@@ -201,7 +201,7 @@ import RepositoryErrorNotice from "./RepositoryErrorNotice.vue";
 import { createBrowserUuid } from "../../../lib/random-id";
 
 const props = withDefaults(defineProps<{
-  aiAgent?: "codex" | "claude";
+  aiAgent?: "codex" | "claude" | "opencode";
   appearance?: "popover" | "page";
   instanceId: string;
   open: boolean;

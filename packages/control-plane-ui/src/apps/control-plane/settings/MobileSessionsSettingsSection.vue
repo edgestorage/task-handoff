@@ -41,7 +41,7 @@
                 </div>
                 <div>
                   <dt>{{ t("settings.mobileSessions.signedInAs") }}</dt>
-                  <dd>{{ session.user.username }}</dd>
+                  <dd>{{ session.user.primaryUsername || session.user.displayName }}</dd>
                 </div>
               </dl>
             </div>

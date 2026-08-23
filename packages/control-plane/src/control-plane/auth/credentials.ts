@@ -1,20 +1,24 @@
-import { ControlPlaneAuth } from "./service.ts";
+import { ControlPlaneUserService } from "./user-service.ts";
 import { controlPlaneStorePaths } from "../persistence/paths.ts";
 import { acquireControlPlaneSingletonLock, defaultControlPlaneSingletonLockPath } from "../process/singleton-lock.ts";
 
 export async function replaceControlPlaneCredentials(
   dataDir: string | undefined,
-  input: { username: string; password: string },
+  input: { username: string; password: string; userId?: string; targetUsername?: string },
   options: { lockPath?: string } = {},
 ) {
   const paths = controlPlaneStorePaths(dataDir);
   const lock = acquireControlPlaneSingletonLock(options.lockPath || defaultControlPlaneSingletonLockPath(), { dataDir: paths.dataDir });
+  const users = new ControlPlaneUserService(paths);
   try {
-    const auth = new ControlPlaneAuth(paths, { mode: "password" });
-    auth.init();
-    return await auth.replaceCredentials(input);
+    await users.init();
+    return await users.recoverLocalCredentials(input);
   } finally {
-    lock.release();
+    try {
+      await users.store.close();
+    } finally {
+      lock.release();
+    }
   }
 }
 
@@ -25,12 +29,16 @@ export async function initializeControlPlaneCredentials(
 ) {
   const paths = controlPlaneStorePaths(dataDir);
   const lock = acquireControlPlaneSingletonLock(options.lockPath || defaultControlPlaneSingletonLockPath(), { dataDir: paths.dataDir });
+  const users = new ControlPlaneUserService(paths);
   try {
-    const auth = new ControlPlaneAuth(paths, { mode: "password" });
-    auth.init();
-    if (!auth.state().requiresBootstrap) return { created: false as const };
-    return { created: true as const, user: await auth.bootstrapAdmin(input) };
+    await users.init();
+    if (users.store.state().initialized && users.store.users.list().length > 0) return { created: false as const };
+    return { created: true as const, user: await users.bootstrapAdmin(input) };
   } finally {
-    lock.release();
+    try {
+      await users.store.close();
+    } finally {
+      lock.release();
+    }
   }
 }

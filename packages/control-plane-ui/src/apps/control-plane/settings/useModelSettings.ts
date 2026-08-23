@@ -61,7 +61,7 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
     if (!editingModelId.value && settingsModel.locationScope !== "control-plane" && !nodes().some((node) => node.id === settingsModel.locationScope)) {
       return false;
     }
-    return settingsModel.app === "codex" || settingsModel.app === "claude";
+    return settingsModel.app === "codex" || settingsModel.app === "claude" || settingsModel.app === "opencode";
   });
 
   function clearModelFeedback() {

@@ -127,6 +127,7 @@ export class AppRuntimeManager extends EventEmitter {
       spawnLogged: (command, args, env, logDir, logName, cwd) => this.spawnLogged(command, args, env, logDir, logName, cwd),
       stopProcessTree: (child, signal) => this.requestManagedProcessTreeStop(child.pid, signal || "SIGTERM", child),
       waitForUnixSocket: (socketPath, timeoutMs, getError) => this.waitForUnixSocket(socketPath, timeoutMs, getError),
+      waitForHttp: (url, headers, timeoutMs, getError) => this.waitForHttp(url, headers, timeoutMs, getError),
       patchSession: (sessionId, patch) => this.patchSessionMetadata(sessionId, patch),
     };
     for (const provider of registry.providers) {
@@ -191,6 +192,10 @@ export class AppRuntimeManager extends EventEmitter {
 
   sharedResourceSessionAi(appId: string) {
     return this.sharedAppResource(appId)?.projectSessionAi?.();
+  }
+
+  sharedResourcePrivateConnection(appId: string) {
+    return this.sharedAppResource(appId)?.privateConnection?.();
   }
 
   ensureSharedResource(appId: string) {
@@ -1668,6 +1673,30 @@ export class AppRuntimeManager extends EventEmitter {
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
     }
     throw new Error(`${socketPath} did not become ready within ${timeoutMs}ms.`);
+  }
+
+  private waitForHttp(url: string, headers: Record<string, string>, timeoutMs: number, getError?: () => Error | undefined) {
+    const startedAt = Date.now();
+    const script = [
+      "const url=process.argv[1];",
+      "const headers=JSON.parse(process.env.TASK_HANDOFF_READINESS_HEADERS||'{}');",
+      "fetch(url,{headers,signal:AbortSignal.timeout(500)}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1));",
+    ].join("");
+    while (Date.now() - startedAt < timeoutMs) {
+      const error = getError?.();
+      if (error) throw error;
+      const status = spawnSync(process.execPath, ["-e", script, url], {
+        stdio: "ignore",
+        env: {
+          ...process.env,
+          ELECTRON_RUN_AS_NODE: "1",
+          TASK_HANDOFF_READINESS_HEADERS: JSON.stringify(headers),
+        },
+      }).status;
+      if (status === 0) return;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+    }
+    throw new Error(`${url} did not become ready within ${timeoutMs}ms.`);
   }
 
   private canConnectUnixSocket(socketPath: string) {

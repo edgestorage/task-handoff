@@ -6,7 +6,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Defs, LinearGradient, Rect, Stop } from 'react-native-svg';
 import { aiSessionMessageText, canInterruptAiSession, isAiSessionApprovalPending, type ControlPlaneAiSessionSummary, type ControlPlaneClient } from '@task-handoff/control-plane-client';
 import type { AiSessionMentionCandidate, AiSessionPermissionMode } from '@task-handoff/protocol/ai-sessions';
-import { supportsDirectoryAiSessionTimelineCapability, type ControlPlaneInstanceDirectoryEntry } from '@task-handoff/protocol/control-plane-directory';
+import { directoryAiSessionProviderCapability, supportsDirectoryAiSessionTimelineCapability, type ControlPlaneInstanceDirectoryEntry } from '@task-handoff/protocol/control-plane-directory';
 
 import { mobileAiSessionBusyKey, MobileAiSessionActionCoordinator, MobileAiSessionDraftStore, type MobileActionResult } from './actions';
 import { aiSessionDisplayTurns, SessionDetail, type SessionDetailMode } from './SessionDetail';
@@ -33,6 +33,7 @@ export function SessionWorkspace({
   drafts,
   permissions,
   defaultPermissionMode,
+  maxFileAttachmentBytes,
   client,
   onVisible,
   onOpenSession,
@@ -50,6 +51,7 @@ export function SessionWorkspace({
   drafts?: MobileAiSessionDraftStore;
   permissions?: MobileAiSessionPermissionStore;
   defaultPermissionMode?: AiSessionPermissionMode;
+  maxFileAttachmentBytes?: number;
   client?: ControlPlaneClient;
   onVisible?(updatedAt: string): void;
   onOpenSession?(sessionId: string): void;
@@ -224,6 +226,10 @@ export function SessionWorkspace({
   const isLatestTurn = detailMode === 'conversation' || selectedTurnIndex >= latestTurnIndex;
   const canInterrupt = canInterruptAiSession(session);
   const approvalPending = isAiSessionApprovalPending(session);
+  const providerCapability = directoryAiSessionProviderCapability(instanceCapabilities, session.agent);
+  // Compatibility for v0.0.21: older directory responses do not publish provider decision capabilities.
+  const approvalDecisions: Array<'allow' | 'deny' | 'skip'> = providerCapability?.actions.approvalDecisions
+    ?? (session.agent === 'codex' || session.agent === 'claude' ? ['allow', 'skip', 'deny'] : []);
   const state = (action: Parameters<typeof mobileAiSessionBusyKey>[3], queueId?: string) => actions?.state(mobileAiSessionBusyKey(controlPlaneId, instanceId, session.id, action, queueId));
   const sendState = state('send');
   const performAction = async <T,>(label: string, operation: () => Promise<MobileActionResult<T>>) => {
@@ -369,7 +375,7 @@ export function SessionWorkspace({
     try {
       const local = await (kind === 'image' ? pickImage() : pickDocument());
       if (!local) return;
-      const uploaded = await uploadMobileAttachment(client, { instanceId, sessionId: session.id }, local);
+      const uploaded = await uploadMobileAttachment(client, { instanceId, sessionId: session.id }, local, { maxFileAttachmentBytes });
       setAttachments((current) => [...current.filter((item) => item.localId !== uploaded.localId), uploaded]);
     } catch (cause) {
       setAttachments((current) => [...current, { localId: `failed:${Date.now()}`, kind, name: 'Attachment', mime: 'application/octet-stream', size: 0, phase: 'failed', error: cause instanceof Error ? cause.message : 'Could not select attachment.' }]);
@@ -379,7 +385,7 @@ export function SessionWorkspace({
     if (!client) return;
     const pasted = await Promise.all(uris.map(async (uri, index): Promise<MobilePendingAttachment> => {
       try {
-        return await uploadMobileAttachment(client, { instanceId, sessionId: session.id }, mobilePastedImage(uri));
+        return await uploadMobileAttachment(client, { instanceId, sessionId: session.id }, mobilePastedImage(uri), { maxFileAttachmentBytes });
       } catch (cause) {
         try { new File(uri).delete(); } catch { /* The native wrapper owns only temporary paste files. */ }
         return {
@@ -400,9 +406,9 @@ export function SessionWorkspace({
     try {
       if (attachments.length >= 6) throw new Error('You can attach at most 6 files.');
       const nextSequence = pastedTextSequence.current + 1;
-      const local = mobilePastedText(text, nextSequence);
+      const local = mobilePastedText(text, nextSequence, maxFileAttachmentBytes);
       pastedTextSequence.current = nextSequence;
-      const uploaded = await uploadMobileAttachment(client, { instanceId, sessionId: session.id }, local);
+      const uploaded = await uploadMobileAttachment(client, { instanceId, sessionId: session.id }, local, { maxFileAttachmentBytes });
       setAttachments((current) => [...current.filter((item) => item.localId !== uploaded.localId), uploaded]);
     } catch (cause) {
       toast.show({ detail: cause instanceof Error ? cause.message : 'Could not attach pasted text.', title: t('composer.addAttachment'), tone: 'error' });
@@ -410,7 +416,7 @@ export function SessionWorkspace({
   };
   const retryAttachment = async (attachment: MobilePendingAttachment) => {
     if (!client || !attachment.retryLocal) return;
-    const uploaded = await uploadMobileAttachment(client, { instanceId, sessionId: session.id }, attachment.retryLocal);
+    const uploaded = await uploadMobileAttachment(client, { instanceId, sessionId: session.id }, attachment.retryLocal, { maxFileAttachmentBytes });
     setAttachments((current) => current.map((item) => item.localId === attachment.localId ? uploaded : item));
   };
   const removeAttachment = (attachment: MobilePendingAttachment) => {
@@ -515,14 +521,14 @@ export function SessionWorkspace({
             <Text accessibilityLiveRegion="polite" style={[styles.noticeText, { color: colors.noticeText }]}>{t('workspace.offline')}</Text>
           </View>
         ) : null}
-        {isLatestTurn && approvalPending ? (
+        {isLatestTurn && approvalPending && approvalDecisions.length ? (
           <View style={[styles.approval, { backgroundColor: colors.notice }]}> 
             <View style={styles.approvalTitleRow}>
               <SystemIcon android="approval" color={colors.noticeText} ios="hand.raised.fill" size={17} />
               <Text style={[styles.approvalTitle, { color: colors.noticeText }]}>{t('sessions.approvalNeeded')}</Text>
             </View>
             <View style={styles.actionRow}>
-              {(['allow', 'skip', 'deny'] as const).map((decision) => (
+              {approvalDecisions.map((decision) => (
                 <ApprovalButton key={decision} decision={decision} label={t(`workspace.${decision}` as 'workspace.allow')} disabled={!authoritativeActionsEnabled || !actions || ['busy', 'result-unknown'].includes(state('approval')?.phase || '')} onPress={() => {
                   const decisionLabel = t(`workspace.${decision}` as 'workspace.allow');
                   Alert.alert(t('workspace.resolveApproval'), t('workspace.sendDecision', { decision: decisionLabel }), [

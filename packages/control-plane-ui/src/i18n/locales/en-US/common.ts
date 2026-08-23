@@ -3,6 +3,7 @@ export const common = {
   products: {
     codex: "Codex",
     claude: "Claude",
+    opencode: "OpenCode",
   },
   imageCapabilities: {
     browser: "Browser",
@@ -11,6 +12,7 @@ export const common = {
     "vscode-web": "VS Code",
     codex: "Codex",
     claude: "Claude",
+    opencode: "OpenCode",
   },
   actions: {
     add: "Add",

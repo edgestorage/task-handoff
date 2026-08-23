@@ -63,6 +63,7 @@ export default function NewAiSessionRoute() {
   const permissionMode = permissionSelection?.instanceId === selectedInstanceId
     ? permissionSelection.mode
     : selectedInstance?.config.defaultCodexPermissionMode ?? 'ask';
+  const maxFileAttachmentBytes = selectedInstance?.config.aiSessionMaxFileAttachmentBytes;
 
   const guidance = instanceCreateGuidance(selectedInstance);
   useEffect(() => {
@@ -147,7 +148,7 @@ export default function NewAiSessionRoute() {
       const client = createMobileControlPlaneClient(profile, mobileSecureStore).api;
       const uploadedAttachments = await Promise.all(attachments.map(async (attachment) => attachment.uploaded?.phase === 'uploaded'
         ? attachment.uploaded
-        : uploadMobileAttachment(client, { instanceId: selectedInstance.id, sessionId: requestId }, attachment.local)));
+        : uploadMobileAttachment(client, { instanceId: selectedInstance.id, sessionId: requestId }, attachment.local, { maxFileAttachmentBytes })));
       setAttachments((current) => current.map((attachment) => {
         const index = attachments.findIndex((candidate) => candidate.id === attachment.id);
         return index >= 0 ? { ...attachment, uploaded: uploadedAttachments[index] } : attachment;
@@ -176,7 +177,7 @@ export default function NewAiSessionRoute() {
     try {
       const selected = await (kind === 'image' ? pickImage() : pickDocument());
       if (!selected) return;
-      const local = validateMobileLocalFile(selected);
+      const local = validateMobileLocalFile(selected, maxFileAttachmentBytes);
       setAttachments((current) => [...current, { id: Crypto.randomUUID(), local }]);
     } catch (cause) {
       toast.show({ detail: cause instanceof Error ? cause.message : 'Could not select attachment.', title: t('composer.addAttachment'), tone: 'error' });
@@ -187,7 +188,7 @@ export default function NewAiSessionRoute() {
     try {
       if (attachments.length >= 6) throw new Error('You can attach at most 6 files.');
       const nextSequence = pastedTextSequence.current + 1;
-      const local = validateMobileLocalFile(mobilePastedText(text, nextSequence));
+      const local = validateMobileLocalFile(mobilePastedText(text, nextSequence, maxFileAttachmentBytes), maxFileAttachmentBytes);
       pastedTextSequence.current = nextSequence;
       setAttachments((current) => [...current, { id: Crypto.randomUUID(), local }]);
     } catch (cause) {
@@ -199,7 +200,7 @@ export default function NewAiSessionRoute() {
     try {
       const available = Math.max(0, 6 - attachments.length);
       if (uris.length > available) throw new Error('You can attach at most 6 files.');
-      const pasted = uris.map((uri) => ({ id: Crypto.randomUUID(), local: validateMobileLocalFile(mobilePastedImage(uri)) }));
+      const pasted = uris.map((uri) => ({ id: Crypto.randomUUID(), local: validateMobileLocalFile(mobilePastedImage(uri), maxFileAttachmentBytes) }));
       setAttachments((current) => [...current, ...pasted]);
     } catch (cause) {
       for (const uri of uris) {

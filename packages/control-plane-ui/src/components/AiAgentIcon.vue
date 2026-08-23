@@ -10,9 +10,10 @@
 import { computed } from "vue";
 import claudeCodeIcon from "@lobehub/icons-static-svg/icons/claudecode.svg?url";
 import codexIcon from "@lobehub/icons-static-svg/icons/codex.svg?url";
+import opencodeIcon from "@lobehub/icons-static-svg/icons/opencode.svg?url";
 
 const props = withDefaults(defineProps<{
-  agent: "codex" | "claude";
+  agent: "codex" | "claude" | "opencode";
   size?: number;
 }>(), {
   size: 16,
@@ -21,6 +22,7 @@ const props = withDefaults(defineProps<{
 const iconSources = {
   claude: claudeCodeIcon,
   codex: codexIcon,
+  opencode: opencodeIcon,
 } satisfies Record<typeof props.agent, string>;
 
 const iconStyle = computed(() => ({

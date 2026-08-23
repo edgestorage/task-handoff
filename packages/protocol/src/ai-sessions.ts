@@ -4,6 +4,8 @@ export const AI_SESSION_MAX_MESSAGE_ATTACHMENTS = 6;
 export const AI_SESSION_MAX_REFERENCES = 20;
 export const AI_SESSION_MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 export const AI_SESSION_MAX_INLINE_FILE_BYTES = 500 * 1024;
+export const AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES = AI_SESSION_MAX_INLINE_FILE_BYTES;
+export const AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES = AI_SESSION_MAX_ATTACHMENT_BYTES;
 export const AI_SESSION_MAX_MESSAGE_ATTACHMENT_BYTES = 40 * 1024 * 1024;
 export const AI_SESSION_ATTACHMENT_UPLOAD_BODY_LIMIT = AI_SESSION_MAX_ATTACHMENT_BYTES + 1024 * 1024;
 export const AI_SESSION_ATTACHMENT_DRAFT_STREAM_CHUNK_BYTES = 256 * 1024;
@@ -656,7 +658,7 @@ export const AI_SESSION_HISTORY_LIMIT = AI_SESSION_HISTORY_DEFAULT_LIMIT;
 
 export const AiSessionHistoryItemSchema = z.object({
   id: z.string().trim().min(1).max(120),
-  agent: z.enum(["codex", "claude"]),
+  agent: AiAgentKindSchema,
   creationSource: AiSessionCreationSourceSchema,
   providerSessionId: z.string().trim().min(1).max(240),
   lineage: AiSessionLineageSchema.optional(),

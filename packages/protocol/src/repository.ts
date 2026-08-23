@@ -270,6 +270,11 @@ export const RepositoryErrorCodeSchema = z.enum([
   "REPOSITORY_HOOK_FAILED",
   "REPOSITORY_SIGNING_FAILED",
   "REPOSITORY_AUTHENTICATION_FAILED",
+  "REPOSITORY_CREDENTIAL_MISSING",
+  "REPOSITORY_CREDENTIAL_AMBIGUOUS",
+  "REPOSITORY_REMOTE_UNSUPPORTED",
+  "REPOSITORY_HOST_KEY_REQUIRED",
+  "REPOSITORY_AUTHENTICATION_REJECTED",
   "REPOSITORY_NON_FAST_FORWARD",
   "REPOSITORY_UPSTREAM_MISSING",
   "REPOSITORY_COMMAND_TIMEOUT",
@@ -341,14 +346,14 @@ export const AiSessionWorkspaceSelectionSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("worktree"), repositoryContextId: IdSchema, worktreeId: IdSchema }).strict(),
 ]);
 export const RepositoryStartAiSessionRequestSchema = z.object({
-  agent: z.enum(["codex", "claude"]),
+  agent: z.enum(["codex", "claude", "opencode"]),
   workspaceSelection: AiSessionWorkspaceSelectionSchema,
   message: z.string().trim().min(1).max(20000),
   clientRequestId: IdSchema,
   permissionMode: z.enum(["ask", "auto-review", "full-access"]).optional(),
 }).strict();
 export const RepositoryCreateWorktreeAiSessionRequestSchema = z.object({
-  agent: z.enum(["codex", "claude"]),
+  agent: z.enum(["codex", "claude", "opencode"]),
   worktree: RepositoryCreateWorktreeRequestSchema,
   message: z.string().trim().min(1).max(20000),
   clientRequestId: IdSchema,

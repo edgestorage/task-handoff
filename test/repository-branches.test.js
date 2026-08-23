@@ -20,9 +20,9 @@ const { RepositorySessionResolver } = require("../packages/controlled-instance/s
 const { ManagedWorktreeRegistry, RepositoryWorktreeService } = require("../packages/controlled-instance/src/repository/worktrees.ts");
 const { RepositoryMutationQueue } = require("../packages/controlled-instance/src/repository/mutation-queue.ts");
 
-function services(fixture) {
+function services(fixture, gitOptions = {}) {
   const sessions = [{ id: "ai-1", cwd: fixture.root, status: "running" }];
-  const resolver = new RepositorySessionResolver({ aiSession: (id) => sessions.find((item) => item.id === id), appSession: () => undefined });
+  const resolver = new RepositorySessionResolver({ aiSession: (id) => sessions.find((item) => item.id === id), appSession: () => undefined }, gitOptions);
   const resolve = () => resolver.resolveAiSession("ai-1");
   const queue = new RepositoryMutationQueue();
   const worktrees = new RepositoryWorktreeService(
@@ -32,7 +32,7 @@ function services(fixture) {
     [fixture.base],
     queue,
   );
-  return { resolve, worktrees, branches: new RepositoryBranchService(resolve, worktrees, queue) };
+  return { resolve, worktrees, branches: new RepositoryBranchService(resolve, worktrees, queue, gitOptions) };
 }
 
 function initializeRemote(fixture) {
@@ -181,4 +181,26 @@ test("publish sets upstream only with confirmation and push never retries non-fa
   state = await service.resolve();
   await assert.rejects(() => service.branches.push({ remote: "origin", sourceBranch: "feature/publish", targetBranch: "feature/publish", expectedSnapshotId: state.context.snapshotId }), (error) => error.code === "REPOSITORY_NON_FAST_FORWARD");
   assert.equal(git(remote, ["show", "refs/heads/feature/publish:remote-ahead.txt"]), "ahead");
+});
+
+test("remote credential failures map to stable Repository error categories", async () => {
+  const cases = [
+    ["TASK_HANDOFF_GIT_CREDENTIAL_ERROR=AMBIGUOUS", "REPOSITORY_CREDENTIAL_AMBIGUOUS"],
+    ["TASK_HANDOFF_GIT_CREDENTIAL_ERROR=UNSUPPORTED", "REPOSITORY_REMOTE_UNSUPPORTED"],
+    ["TASK_HANDOFF_GIT_CREDENTIAL_ERROR=MISSING_HOST_KEY", "REPOSITORY_HOST_KEY_REQUIRED"],
+    ["TASK_HANDOFF_GIT_CREDENTIAL_ERROR=REJECTED", "REPOSITORY_AUTHENTICATION_REJECTED"],
+    ["fatal: could not read Username: terminal prompts disabled", "REPOSITORY_CREDENTIAL_MISSING"],
+  ];
+  for (const [diagnostic, expectedCode] of cases) {
+    const fixture = createGitFixture();
+    initializeRemote(fixture);
+    const fakeGit = path.join(fixture.base, `fake-git-${expectedCode}`);
+    fs.writeFileSync(fakeGit, `#!/bin/sh\ncase " $* " in *" fetch "*) printf '%s\\n' ${JSON.stringify(diagnostic)} >&2; exit 1;; esac\nexec git "$@"\n`, { mode: 0o755 });
+    const service = services(fixture, { gitCommand: fakeGit });
+    const state = await service.resolve();
+    await assert.rejects(
+      () => service.branches.fetch({ remote: "origin", expectedSnapshotId: state.context.snapshotId }),
+      (error) => error.code === expectedCode && !error.message.includes(diagnostic),
+    );
+  }
 });

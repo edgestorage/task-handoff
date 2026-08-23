@@ -106,7 +106,8 @@ export function directEndpointIssue(value: string) {
 function isPrivateHostname(hostname: string) {
   const normalized = hostname.toLowerCase().replace(/^\[|\]$/g, "");
   if (normalized === "localhost" || normalized.endsWith(".localhost") || normalized.endsWith(".local") || normalized === "::1") return true;
-  if (normalized.startsWith("fc") || normalized.startsWith("fd") || normalized.startsWith("fe80:")) return true;
+  const isIpv6Literal = normalized.includes(":");
+  if (isIpv6Literal && (normalized.startsWith("fc") || normalized.startsWith("fd") || normalized.startsWith("fe80:"))) return true;
   const octets = normalized.split(".").map(Number);
   if (octets.length !== 4 || octets.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return false;
   return octets[0] === 10

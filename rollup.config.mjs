@@ -14,11 +14,12 @@ const external = Object.keys({
   ...(packageJson.peerDependencies || {}),
 });
 
-const isExternal = (id) => external.some((pkg) => id === pkg || id.startsWith(`${pkg}/`));
+const isNodeBuiltin = (id) => id.startsWith("node:");
+const isExternal = (id) => isNodeBuiltin(id) || external.some((pkg) => id === pkg || id.startsWith(`${pkg}/`));
 
 const externalFrom = (dependencies) => {
   const names = Object.keys(dependencies);
-  return (id) => names.some((pkg) => id === pkg || id.startsWith(`${pkg}/`));
+  return (id) => isNodeBuiltin(id) || names.some((pkg) => id === pkg || id.startsWith(`${pkg}/`));
 };
 
 const plugins = [
@@ -166,6 +167,20 @@ function runtimeBuild(name, definition) {
         inlineDynamicImports: true,
       },
       external: externalFrom(definition.dependencies),
+      onwarn,
+      plugins: [cleanRuntimeDir(outputDir), runtimeDependencyEntrypoints, ...plugins, runtimeMinifier()],
+    });
+  }
+  for (const standalone of definition.standaloneInputs || []) {
+    builds.push({
+      input: standalone.input,
+      output: {
+        file: `${outputDir}/${standalone.entryFile}`,
+        format: "cjs",
+        exports: "auto",
+        inlineDynamicImports: true,
+      },
+      external: isNodeBuiltin,
       onwarn,
       plugins: [cleanRuntimeDir(outputDir), runtimeDependencyEntrypoints, ...plugins, runtimeMinifier()],
     });

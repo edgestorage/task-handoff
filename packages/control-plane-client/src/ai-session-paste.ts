@@ -1,4 +1,4 @@
-import { AI_SESSION_MAX_INLINE_FILE_BYTES } from "@task-handoff/protocol/ai-sessions";
+import { AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES } from "@task-handoff/protocol/ai-sessions";
 
 export const AI_SESSION_LONG_PASTE_CODE_POINT_THRESHOLD = 10_000;
 export const AI_SESSION_PASTED_TEXT_SUMMARY_CODE_POINTS = 80;
@@ -45,12 +45,12 @@ export function aiSessionPastedTextSummary(text: string) {
     : compact;
 }
 
-export function classifyAiSessionPastedText(text: string, sequence = 1): AiSessionPastedTextDecision {
+export function classifyAiSessionPastedText(text: string, sequence = 1, maxFileAttachmentBytes = AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES): AiSessionPastedTextDecision {
   const normalized = normalizeAiSessionPastedText(text);
   const codePointLength = aiSessionTextCodePointLength(normalized);
   if (codePointLength <= AI_SESSION_LONG_PASTE_CODE_POINT_THRESHOLD) return { disposition: "inline" };
   const size = new TextEncoder().encode(normalized).byteLength;
-  if (size >= AI_SESSION_MAX_INLINE_FILE_BYTES) {
+  if (size >= maxFileAttachmentBytes) {
     return { disposition: "rejected", code: "AI_SESSION_PASTED_TEXT_TOO_LARGE", size };
   }
   return {

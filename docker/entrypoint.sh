@@ -56,6 +56,9 @@ mkdir -p \
   "${TASK_HANDOFF_WORKSPACE:-/workspace}"
 
 bootstrap_workspace() {
+  if [ "${TASK_HANDOFF_SKIP_WORKSPACE_BOOTSTRAP:-false}" = "true" ]; then
+    return
+  fi
   local workspace="${TASK_HANDOFF_WORKSPACE:-/workspace}"
   local mode="${TASK_HANDOFF_WORKSPACE_MODE:-}"
   local git_url="${TASK_HANDOFF_GIT_URL:-}"

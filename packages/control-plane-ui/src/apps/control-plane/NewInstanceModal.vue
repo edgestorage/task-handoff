@@ -31,6 +31,7 @@
                   v-model:new-project-open="newProjectOpen"
                   :can-browse-project-folder="canBrowseProjectFolder"
                   :can-create-project="canCreateProject"
+                  :can-manage-secrets="canManageSecrets"
                   :choose-folder-value="chooseFolderValue"
                   :creating-local-folder="creatingLocalFolder"
                   :creating-project="creatingProject"
@@ -39,6 +40,7 @@
                   :local-folders="localFolders.data.value || []"
                   :local-path-open="localPathOpen"
                   :local-path-placeholder="localPathPlaceholder"
+                  :git-credentials="gitCredentials.data.value || []"
                   :new-project="newProject"
                   :node-folder-tree-error="nodeFolderTreeError"
                   :node-folder-tree-rows="nodeFolderTreeRows"
@@ -60,6 +62,7 @@
                   v-else
                   v-model:new-image-open="newImageOpen"
                   :can-create-image="canCreateImage"
+                  :can-retain-git-credential="canManageSecrets"
                   :creating-image="creatingImage"
                   :docker-runtime-check-message="dockerRuntimeCheckMessage"
                   :docker-runtime-check-state="dockerRuntimeCheck.state"
@@ -67,6 +70,10 @@
                   :images="imageOptions.data.value || []"
                   :image-availability="imageAvailability.data.value || []"
                   :instance-draft="instanceDraft"
+                  :git-credential="selectedProjectGitCredential"
+                  :git-credential-id="selectedProjectGitCredentialId"
+                  :git-credential-provisioning-supported="gitCredentialProvisioningSupported"
+                  :git-source="selectedProject?.source.type === 'git-repository'"
                   :models="models.data.value || []"
                   :new-image="newImage"
                   :nodes="nodes.data.value || []"
@@ -107,8 +114,9 @@ import { computed, nextTick, reactive, ref, watch } from "vue";
 import { useQueryClient } from "@tanstack/vue-query";
 import { ArrowRight, LoaderCircle, Plus, X } from "@lucide/vue";
 import { useI18n } from "vue-i18n";
+import { supportsNodeGitWorkspaceProvisioning, supportsNodeManagedGitCredentialRegistry } from "@task-handoff/protocol/control-plane";
 import { translateApiError } from "../../i18n/apiError";
-import { checkNodeRuntime, createControlledInstance, createImage, createProject, listNodeFolderTree, useEnvironmentTemplatesQuery, useImageOptionsQuery, useModelsQuery, useNodeImageAvailabilityQuery, useNodeLocalFoldersQuery, useNodeRuntimesQuery, useNodesQuery, useProjectsQuery } from "../../api/queries";
+import { checkNodeRuntime, createControlledInstance, createImage, createProject, listNodeFolderTree, useAuthSessionQuery, useCurrentAccessQuery, useEnvironmentTemplatesQuery, useGitCredentialsQuery, useImageOptionsQuery, useModelsQuery, useNodeImageAvailabilityQuery, useNodeLocalFoldersQuery, useNodeRuntimesQuery, useNodesQuery, useProjectsQuery } from "../../api/queries";
 import { controlPlaneQueryKeys } from "../../api/queryKeys.ts";
 import type { CreateControlledInstanceResult, InstanceBoardItem } from "../../api/types";
 import { Button } from "../../components/ui/button";
@@ -142,6 +150,9 @@ const chooseFolderValue = "__choose_folder__";
 const CONTROL_PLANE_LOCAL_NODE_LABEL = "task-handoff.control-plane.local";
 
 const queryClient = useQueryClient();
+const authSession = useAuthSessionQuery();
+const currentAccess = useCurrentAccessQuery(computed(() => Boolean(authSession.data.value?.enabled && authSession.data.value.authenticated)));
+const canManageSecrets = computed(() => authSession.data.value?.enabled !== true || currentAccess.data.value?.permissionIds.includes("secrets:manage") === true);
 const projects = useProjectsQuery();
 const models = useModelsQuery();
 const imageOptions = useImageOptionsQuery();
@@ -206,10 +217,13 @@ const instanceDraft = reactive<InstanceDraft>({
   autoImportAgentConfigs: false,
   codexModelHash: null,
   claudeModelHash: null,
+  opencodeModelHash: null,
+  retainGitCredential: false,
 });
 const newProject = reactive<NewProjectDraft>({
   name: "",
   url: "",
+  gitCredentialId: "",
 });
 const newImage = reactive<NewImageDraft>({
   name: "",
@@ -219,6 +233,15 @@ const localFolders = useNodeLocalFoldersQuery(() => sourceDraft.localNodeId);
 
 const activeStepIndex = computed(() => stepIndex(step.value));
 const selectedProject = computed(() => (projects.data.value || []).find((project) => project.id === sourceDraft.projectId));
+const gitCredentials = useGitCredentialsQuery(computed(() => sourceDraft.mode === "project" && canManageSecrets.value));
+const selectedProjectGitCredentialId = computed(() => selectedProject.value?.source.type === "git-repository"
+  ? selectedProject.value.source.auth?.secretId || ""
+  : "");
+const selectedProjectGitCredential = computed(() => (gitCredentials.data.value || [])
+  .find((credential) => credential.id === selectedProjectGitCredentialId.value));
+watch(() => selectedProject.value?.id, () => {
+  instanceDraft.retainGitCredential = false;
+});
 const selectedLocalNode = computed(() => (nodes.data.value || []).find((node) => node.id === sourceDraft.localNodeId));
 const selectedLocalFolder = computed(() => (localFolders.data.value || []).find((folder) => folder.id === sourceDraft.localFolderId));
 const localFolderPath = computed(() => sourceDraft.localPath.trim());
@@ -232,6 +255,21 @@ const runtimesForSelectedNode = computed(() => (nodeRuntimes.data.value || []).f
 const selectedNode = computed(() => (nodes.data.value || []).find((node) => node.id === runtimeDraft.nodeId));
 const selectedNodePlatform = computed(() => nodePlatform(selectedNode.value));
 const selectedRuntime = computed(() => runtimesForSelectedNode.value.find((runtime) => runtime.id === runtimeDraft.runtimeId));
+const selectedNodeAgentCapabilities = computed(() => {
+  const agent = selectedNode.value?.capabilities.agent;
+  return agent && typeof agent === "object" && !Array.isArray(agent)
+    ? (agent as Record<string, unknown>).capabilities
+    : undefined;
+});
+const gitCredentialProvisioningSupported = computed(() => Boolean(
+  selectedRuntime.value
+  && supportsNodeManagedGitCredentialRegistry(selectedNodeAgentCapabilities.value)
+  && supportsNodeGitWorkspaceProvisioning(selectedNodeAgentCapabilities.value, selectedRuntime.value.type),
+));
+watch(gitCredentialProvisioningSupported, (supported) => {
+  if (supported) return;
+  instanceDraft.retainGitCredential = false;
+});
 const selectedDockerRuntimeKey = computed(() => selectedRuntime.value?.type === "docker" ? `${runtimeDraft.nodeId}:${selectedRuntime.value.id}` : "");
 const dockerRuntimeCheckMessage = computed(() => {
   if (dockerRuntimeCheck.rawMessage) return dockerRuntimeCheck.rawMessage;
@@ -486,6 +524,9 @@ watch(
     if (typeof instanceDraft.claudeModelHash === "string" && !modelIds.has(instanceDraft.claudeModelHash)) {
       instanceDraft.claudeModelHash = null;
     }
+    if (typeof instanceDraft.opencodeModelHash === "string" && !modelIds.has(instanceDraft.opencodeModelHash)) {
+      instanceDraft.opencodeModelHash = null;
+    }
   },
   { immediate: true },
 );
@@ -674,7 +715,11 @@ async function createInstance() {
       modelSelection: {
         ...(instanceDraft.codexModelHash !== undefined ? { codexModelHash: instanceDraft.codexModelHash } : {}),
         ...(instanceDraft.claudeModelHash !== undefined ? { claudeModelHash: instanceDraft.claudeModelHash } : {}),
+        ...(instanceDraft.opencodeModelHash !== undefined ? { opencodeModelHash: instanceDraft.opencodeModelHash } : {}),
       },
+      ...(selectedProjectGitCredentialId.value && instanceDraft.retainGitCredential
+        ? { gitCredentialRetention: "instance-retained" as const }
+        : {}),
       start: true,
       ...(instanceDraft.name.trim() ? { name: instanceDraft.name.trim() } : {}),
     });
@@ -682,6 +727,8 @@ async function createInstance() {
     instanceDraft.autoImportAgentConfigs = false;
     instanceDraft.codexModelHash = null;
     instanceDraft.claudeModelHash = null;
+    instanceDraft.opencodeModelHash = null;
+    instanceDraft.retainGitCredential = false;
   } catch (error) {
     showControlPlaneToast(errorText(error));
     return;
@@ -705,13 +752,14 @@ async function createQuickProject() {
   let createdProjectName = t("instances.create.feedback.projectCreated");
   try {
     const firstNodeId = nodes.data.value?.[0]?.id;
+    const credential = (gitCredentials.data.value || []).find((item) => item.id === newProject.gitCredentialId && item.status === "enabled");
     const project = await createProject({
       name: newProject.name.trim(),
       source: {
         type: "git-repository",
         url: newProject.url.trim(),
         ref: { type: "branch", name: "main" },
-        auth: { type: "none" },
+        auth: credential ? { type: credential.kind, secretId: credential.id } : { type: "none" },
         clone: { submodules: false, lfs: false, subdirectory: "" },
       },
       defaultImageSelection: imageOptions.data.value?.[0] ? { imageId: imageOptions.data.value[0].id } : undefined,
@@ -719,6 +767,7 @@ async function createQuickProject() {
     });
     newProject.name = "";
     newProject.url = "";
+    newProject.gitCredentialId = "";
     newProjectOpen.value = false;
     sourceDraft.mode = "project";
     sourceDraft.projectId = project.id;

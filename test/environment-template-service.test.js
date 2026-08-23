@@ -34,6 +34,16 @@ function fixture(runtimeType = "docker") {
   return { dataDir, paths, store, privateConfigs, instance, runtime, gate };
 }
 
+test("instance operation invalidation aborts the current lifecycle signal", () => {
+  const gate = new InstanceOperationGate();
+  const intent = gate.intent("inst_one");
+  const signal = gate.signal("inst_one", intent);
+  assert.equal(signal.aborted, false);
+  gate.invalidate("inst_one");
+  assert.equal(signal.aborted, true);
+  assert.equal(gate.isIntentCurrent("inst_one", intent), false);
+});
+
 test("environment template service commits, validates, persists ready, and safely deletes", async (t) => {
   const state = fixture();
   t.after(() => fs.rmSync(state.dataDir, { recursive: true, force: true }));
@@ -98,6 +108,50 @@ test("non-Docker instances are rejected without creating a template record", asy
   );
   await assert.rejects(() => service.create("inst_one", { name: "Unsupported" }), (error) => error.code === "ENVIRONMENT_TEMPLATE_RUNTIME_UNSUPPORTED");
   assert.deepEqual(service.list(), []);
+});
+
+test("retained Git credentials block template creation before Docker inspection or commit", async (t) => {
+  const state = fixture();
+  t.after(() => fs.rmSync(state.dataDir, { recursive: true, force: true }));
+  const privateConfig = state.privateConfigs.get("inst_one");
+  state.privateConfigs.put({
+    ...privateConfig,
+    gitCredentials: {
+      revision: 1,
+      credentials: [{
+        assignmentRevision: 1,
+        credential: {
+          id: "gitcred_one",
+          name: "Team token",
+          kind: "https-token",
+          scope: { scheme: "https", host: "git.example.com", pathPrefix: "/team/" },
+          secretSet: true,
+          status: "enabled",
+          revision: 1,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        },
+        secret: { kind: "https-token", username: "git", token: "template-secret" },
+      }],
+    },
+  });
+  const calls = [];
+  const service = new EnvironmentTemplateService(
+    state.store,
+    state.privateConfigs,
+    {
+      inspectContainerConfigSecurity: async () => { calls.push("inspect"); },
+      commitEnvironmentTemplate: async () => { calls.push("commit"); return imageId; },
+    },
+    () => state.instance,
+    () => state.runtime,
+    (id, operation) => state.gate.run(id, operation),
+  );
+
+  const failed = await service.create("inst_one", { name: "Must not contain credentials" });
+  assert.equal(failed.status, "failed");
+  assert.equal(failed.error.code, "ENVIRONMENT_TEMPLATE_GIT_CREDENTIALS_FORBIDDEN");
+  assert.deepEqual(calls, []);
 });
 
 test("Docker executor uses default-pause commit and reference-safe image removal", async () => {

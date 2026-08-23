@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS, AI_SESSION_HISTORY_MAX_LIMIT, AiSessionPermissionModeSchema } from "@task-handoff/protocol/ai-sessions";
+import { AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS, AI_SESSION_HISTORY_MAX_LIMIT, AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES, AiSessionPermissionModeSchema } from "@task-handoff/protocol/ai-sessions";
+import { GitWorkspaceProvisioningInputSchema } from "@task-handoff/protocol/managed-git-credentials";
 import {
   ControlledInstanceSchema,
   EnvironmentSourceSchema,
@@ -58,8 +59,10 @@ export const CreateNodeInstanceSchema = z
       defaultCodexPermissionMode: AiSessionPermissionModeSchema.optional(),
       aiSessionHistoryLimit: z.number().int().min(1).max(AI_SESSION_HISTORY_MAX_LIMIT).optional(),
       aiSessionAttachmentRetentionDays: z.number().int().min(0).max(AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS).optional(),
+      aiSessionMaxFileAttachmentBytes: z.number().int().positive().max(AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES).optional(),
     }).strict().optional(),
     modelSelection: ControlledInstanceSchema.shape.modelSelection,
+    gitWorkspaceProvisioning: GitWorkspaceProvisioningInputSchema.optional(),
   })
   .strict()
   .superRefine((input, context) => {
@@ -68,6 +71,9 @@ export const CreateNodeInstanceSchema = z
     }
     if (input.environmentSource?.type === "template" && input.image) {
       context.addIssue({ code: "custom", path: ["image"], message: "Template environment source is resolved by the node-agent and cannot include an image snapshot." });
+    }
+    if (input.gitWorkspaceProvisioning && input.source.type === "local-folder") {
+      context.addIssue({ code: "custom", path: ["gitWorkspaceProvisioning"], message: "Git provisioning requires a Git source." });
     }
   });
 
@@ -79,6 +85,7 @@ export const UpdateNodeInstanceSchema = z
       defaultCodexPermissionMode: AiSessionPermissionModeSchema.optional(),
       aiSessionHistoryLimit: z.number().int().min(1).max(AI_SESSION_HISTORY_MAX_LIMIT).optional(),
       aiSessionAttachmentRetentionDays: z.number().int().min(0).max(AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS).optional(),
+      aiSessionMaxFileAttachmentBytes: z.number().int().positive().max(AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES).optional(),
     }).strict().optional(),
     modelSelection: ControlledInstanceSchema.shape.modelSelection.optional(),
   })

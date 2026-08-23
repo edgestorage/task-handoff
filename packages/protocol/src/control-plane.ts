@@ -5,6 +5,8 @@ import {
   AI_SESSION_HISTORY_MAX_LIMIT,
   AI_SESSION_ATTACHMENT_RETENTION_DEFAULT_DAYS,
   AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS,
+  AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES,
+  AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES,
   AI_SESSION_MAX_MESSAGE_ATTACHMENT_BYTES,
   AI_SESSION_MAX_MESSAGE_ATTACHMENTS,
   AiSessionMessageAttachmentSchema,
@@ -14,13 +16,22 @@ import {
 } from "./ai-sessions.ts";
 import { TriggerConfigSchema, TriggerDeploymentSchema, TriggerRunSchema, TriggerRuntimeStateSchema } from "./triggers.ts";
 import { ControlPlaneProxyErrorSchema, ProxyTargetStateSchema } from "./control-plane-proxy.ts";
+import {
+  AiSessionProviderCapabilitiesSchema,
+  type AiSessionProviderCapability,
+} from "./ai-session-provider-capabilities.ts";
+export {
+  AiSessionProviderCapabilitiesSchema,
+  AiSessionProviderCapabilitySchema,
+  type AiSessionProviderCapability,
+} from "./ai-session-provider-capabilities.ts";
 
-export const CONTROL_PLANE_PROTOCOL_VERSION = "2026-08-20";
+export const CONTROL_PLANE_PROTOCOL_VERSION = "2026-08-23";
 export const NODE_TUNNEL_PROTOCOL_VERSION = "2026-08-01";
 export const MARKET_CATALOG_PROTOCOL_VERSION = "2026-07-29";
 // Compatibility for v0.0.21: this released protocol already requires appInventory
 // and remains inside the N-1 support window as later additive features advance the boundary.
-const APP_INVENTORY_REQUIRED_PROTOCOL_VERSIONS = new Set(["2026-08-01", "2026-08-16", "2026-08-17", CONTROL_PLANE_PROTOCOL_VERSION]);
+const APP_INVENTORY_REQUIRED_PROTOCOL_VERSIONS = new Set(["2026-08-01", "2026-08-16", "2026-08-17", "2026-08-20", CONTROL_PLANE_PROTOCOL_VERSION]);
 export const ProtocolVersionSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Protocol version must use YYYY-MM-DD format.");
 
 const AiSessionCapabilityAgentSchema = z.string().trim().min(1).max(120);
@@ -39,7 +50,12 @@ function emptyAiSessionConversationAttachmentCapabilities() {
     contentAgents: [] as string[],
     uploadAgents: [] as string[],
     retentionSettings: false,
+    fileSizeLimitSettings: false,
   };
+}
+
+function emptyAiSessionProviderCapabilities() {
+  return [] as AiSessionProviderCapability[];
 }
 
 function defaultControlledInstanceFeatures() {
@@ -52,8 +68,11 @@ function defaultControlledInstanceFeatures() {
     logs: false,
     aiSessionWorkspaceSelection: false,
     aiSessionPersistenceSettings: false,
+    gitCliCredentialBroker: false,
+    gitCredentialProxy: false,
     aiSessionTimeline: emptyAiSessionTimelineCapabilities(),
     aiSessionConversationAttachments: emptyAiSessionConversationAttachmentCapabilities(),
+    aiSessionProviders: emptyAiSessionProviderCapabilities(),
   };
 }
 
@@ -76,6 +95,9 @@ export const AiSessionConversationAttachmentCapabilitiesSchema = z.object({
   contentAgents: z.array(AiSessionCapabilityAgentSchema).max(100).default([]),
   uploadAgents: z.array(AiSessionCapabilityAgentSchema).max(100).default([]),
   retentionSettings: z.boolean().default(false),
+  // Compatibility for v0.0.21: older controlled instances do not accept the
+  // additive maxFileAttachmentBytes internal settings field.
+  fileSizeLimitSettings: z.boolean().default(false),
 }).passthrough();
 
 export const ControlledInstanceFeatureCapabilitiesSchema = z.object({
@@ -87,9 +109,15 @@ export const ControlledInstanceFeatureCapabilitiesSchema = z.object({
   logs: z.boolean().default(false),
   aiSessionWorkspaceSelection: z.boolean().default(false),
   aiSessionPersistenceSettings: z.boolean().default(false),
+  // Additive capability: absent on v0.0.21 controlled instances.
+  gitCliCredentialBroker: z.boolean().optional(),
+  // Additive capability for the node-agent-owned runtime broker architecture.
+  gitCredentialProxy: z.boolean().optional(),
   aiSessionTimeline: AiSessionTimelineCapabilitiesSchema.default(emptyAiSessionTimelineCapabilities),
   // Compatibility for v0.0.21: the additive wire field must remain optional.
   aiSessionConversationAttachments: AiSessionConversationAttachmentCapabilitiesSchema.optional(),
+  // Compatibility for v0.0.21: provider capabilities are additive and absent on older instances.
+  aiSessionProviders: AiSessionProviderCapabilitiesSchema.optional(),
 }).passthrough();
 
 /** The single capability document for the controlled-instance/control-plane boundary. */
@@ -105,6 +133,9 @@ export type ControlledInstanceCapabilities = z.infer<typeof ControlledInstanceCa
 type NormalizedControlledInstanceCapabilities = ControlledInstanceCapabilities & {
   features: ControlledInstanceCapabilities["features"] & {
     aiSessionConversationAttachments: AiSessionConversationAttachmentCapabilities;
+    aiSessionProviders: AiSessionProviderCapability[];
+    gitCliCredentialBroker: boolean;
+    gitCredentialProxy: boolean;
   };
 };
 
@@ -126,6 +157,8 @@ export function normalizeControlledInstanceCapabilities(capabilities: unknown): 
     "logs",
     "aiSessionWorkspaceSelection",
     "aiSessionPersistenceSettings",
+    "gitCliCredentialBroker",
+    "gitCredentialProxy",
   ] as const) {
     const parsed = z.boolean().safeParse(features[feature]);
     if (parsed.success) normalizedFeatures[feature] = parsed.data;
@@ -134,6 +167,8 @@ export function normalizeControlledInstanceCapabilities(capabilities: unknown): 
   if (timeline.success) normalizedFeatures.aiSessionTimeline = timeline.data;
   const conversationAttachments = AiSessionConversationAttachmentCapabilitiesSchema.safeParse(features.aiSessionConversationAttachments);
   if (conversationAttachments.success) normalizedFeatures.aiSessionConversationAttachments = conversationAttachments.data;
+  const providers = AiSessionProviderCapabilitiesSchema.safeParse(features.aiSessionProviders);
+  if (providers.success) normalizedFeatures.aiSessionProviders = providers.data;
   return ControlledInstanceCapabilitiesSchema.parse({
     ...document,
     features: { ...features, ...normalizedFeatures },
@@ -148,8 +183,25 @@ export function supportsAiSessionPersistenceSettings(capabilities: unknown) {
   return normalizeControlledInstanceCapabilities(capabilities).features.aiSessionPersistenceSettings;
 }
 
+export function supportsGitCliCredentialBroker(capabilities: unknown) {
+  const features = normalizeControlledInstanceCapabilities(capabilities).features;
+  return features.gitCredentialProxy || features.gitCliCredentialBroker;
+}
+
+export function supportsGitCredentialProxy(capabilities: unknown) {
+  return normalizeControlledInstanceCapabilities(capabilities).features.gitCredentialProxy;
+}
+
 export function aiSessionConversationAttachmentCapabilities(capabilities: unknown): AiSessionConversationAttachmentCapabilities {
   return normalizeControlledInstanceCapabilities(capabilities).features.aiSessionConversationAttachments;
+}
+
+export function aiSessionProviderCapabilities(capabilities: unknown) {
+  return normalizeControlledInstanceCapabilities(capabilities).features.aiSessionProviders;
+}
+
+export function aiSessionProviderCapability(capabilities: unknown, agent: string) {
+  return aiSessionProviderCapabilities(capabilities).find((provider) => provider.agent === agent);
 }
 
 export function aiSessionConversationAttachmentCapabilityAgents(
@@ -172,6 +224,10 @@ export function supportsAiSessionConversationAttachmentCapability(
 
 export function supportsAiSessionAttachmentRetentionSettings(capabilities: unknown) {
   return aiSessionConversationAttachmentCapabilities(capabilities).retentionSettings;
+}
+
+export function supportsAiSessionFileSizeLimitSettings(capabilities: unknown) {
+  return aiSessionConversationAttachmentCapabilities(capabilities).fileSizeLimitSettings === true;
 }
 
 /** Query the structured Timeline feature from the normalized capability document. */
@@ -309,6 +365,7 @@ export const ModelSelectionSchema = z
   .object({
     codexModelHash: IdSchema.nullable().optional(),
     claudeModelHash: IdSchema.nullable().optional(),
+    opencodeModelHash: IdSchema.nullable().optional(),
   })
   .strict()
   .default({});
@@ -729,6 +786,9 @@ export const GitRefSchema = z
 export const GitAuthSchema = z
   .object({
     type: z.enum(["none", "ssh-key", "https-token"]).default("none"),
+    // Compatibility for v0.0.21: preserve the existing field on read. Current
+    // Repository producers use it as a managed credential reference; it never
+    // carries secret material or directly grants an instance assignment.
     secretId: z.string().trim().min(1).max(120).optional(),
   })
   .strict();
@@ -804,6 +864,21 @@ export const ProjectSourceSchema = z.discriminatedUnion("type", [
     .strict(),
 ]);
 
+export type ProjectSource = z.infer<typeof ProjectSourceSchema>;
+
+/** Project auth belongs to the Repository configuration, not the instance/node wire projection. */
+export function projectSourceWithoutGitCredential(input: unknown): ProjectSource {
+  const source = ProjectSourceSchema.parse(input);
+  if (source.type === "local-folder") return source;
+  return ProjectSourceSchema.parse({
+    ...source,
+    auth: { type: "none" },
+  });
+}
+
+/** Compatibility alias for code compiled against the initial managed-credential implementation. */
+export const projectSourceWithoutLegacyGitSecretId = projectSourceWithoutGitCredential;
+
 export const WorkspacePolicySchema = z
   .object({
     mode: z.enum(["local-bind", "git-clone", "empty-volume", "persistent-volume"]),
@@ -813,7 +888,7 @@ export const WorkspacePolicySchema = z
   })
   .strict();
 
-export const ModelAppSchema = z.enum(["codex", "claude"]);
+export const ModelAppSchema = z.enum(["codex", "claude", "opencode"]);
 
 export const ProjectSchema = z
   .object({
@@ -860,6 +935,7 @@ export const NodeModelAssignmentSchema = z.object({
   instanceId: IdSchema,
   codexModelHash: IdSchema.optional(),
   claudeModelHash: IdSchema.optional(),
+  opencodeModelHash: IdSchema.optional(),
   updatedAt: TimestampSchema,
 }).strict();
 
@@ -913,6 +989,7 @@ export const UpdateNodeModelAssignmentSchema = z.object({
   modelSelection: ModelSelectionSchema,
   codexModelHash: IdSchema.optional(),
   claudeModelHash: IdSchema.optional(),
+  opencodeModelHash: IdSchema.optional(),
 }).strict();
 
 export function modelConfigHash(input: Pick<z.infer<typeof ModelConfigSchema>, "app" | "endpoint" | "key" | "model">) {
@@ -1460,13 +1537,54 @@ export const InstanceResourceMetricsEventType = {
   Snapshot: "instance.metrics.snapshot",
 } as const;
 
+export const NodeAgentManagedGitCapabilitiesSchema = z.object({
+  registry: z.boolean().default(false),
+  runtimeBroker: z.boolean().default(false),
+  workspaceProvisioning: z.object({
+    docker: z.boolean().default(false),
+    kubernetes: z.boolean().default(false),
+    local: z.boolean().default(false),
+  }).strip().default({ docker: false, kubernetes: false, local: false }),
+}).strip();
+
 export const NodeAgentCapabilitiesSchema = z.object({
   modelEndpointProbe: z.boolean().optional(),
   aiSessionHistoryLimit: z.boolean().optional(),
   aiSessionAttachmentRetention: z.boolean().optional(),
+  aiSessionFileAttachmentLimit: z.boolean().optional(),
   folderPlaces: z.boolean().optional(),
   localFolderNameUpdate: z.boolean().optional(),
+  // Additive capability: absent on v0.0.21 node-agents.
+  managedGitCredentials: NodeAgentManagedGitCapabilitiesSchema.optional(),
 }).strip();
+
+export type NodeAgentCapabilities = z.infer<typeof NodeAgentCapabilitiesSchema>;
+
+export function normalizeNodeAgentCapabilities(capabilities: unknown): NodeAgentCapabilities & {
+  managedGitCredentials: z.infer<typeof NodeAgentManagedGitCapabilitiesSchema>;
+} {
+  const parsed = NodeAgentCapabilitiesSchema.safeParse(capabilities);
+  const current = parsed.success ? parsed.data : {};
+  return {
+    ...current,
+    managedGitCredentials: NodeAgentManagedGitCapabilitiesSchema.parse(current.managedGitCredentials || {}),
+  };
+}
+
+export function supportsNodeManagedGitCredentialRegistry(capabilities: unknown) {
+  return normalizeNodeAgentCapabilities(capabilities).managedGitCredentials.registry;
+}
+
+export function supportsNodeGitCredentialRuntimeBroker(capabilities: unknown) {
+  return normalizeNodeAgentCapabilities(capabilities).managedGitCredentials.runtimeBroker;
+}
+
+export function supportsNodeGitWorkspaceProvisioning(
+  capabilities: unknown,
+  runtime: "docker" | "kubernetes" | "local",
+) {
+  return normalizeNodeAgentCapabilities(capabilities).managedGitCredentials.workspaceProvisioning[runtime];
+}
 
 export function supportsNodeFolderPlaces(capabilities: unknown) {
   return NodeAgentCapabilitiesSchema.safeParse(capabilities).data?.folderPlaces === true;
@@ -1474,6 +1592,10 @@ export function supportsNodeFolderPlaces(capabilities: unknown) {
 
 export function supportsNodeLocalFolderNameUpdate(capabilities: unknown) {
   return NodeAgentCapabilitiesSchema.safeParse(capabilities).data?.localFolderNameUpdate === true;
+}
+
+export function supportsNodeAiSessionFileAttachmentLimit(capabilities: unknown) {
+  return NodeAgentCapabilitiesSchema.safeParse(capabilities).data?.aiSessionFileAttachmentLimit === true;
 }
 
 export const NodeAgentHealthSchema = z
@@ -1738,9 +1860,10 @@ export const ControlledInstanceSchema = z
         defaultCodexPermissionMode: AiSessionPermissionModeSchema.default("ask"),
         aiSessionHistoryLimit: z.number().int().min(1).max(AI_SESSION_HISTORY_MAX_LIMIT).default(AI_SESSION_HISTORY_DEFAULT_LIMIT),
         aiSessionAttachmentRetentionDays: z.number().int().min(0).max(AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS).default(AI_SESSION_ATTACHMENT_RETENTION_DEFAULT_DAYS),
+        aiSessionMaxFileAttachmentBytes: z.number().int().positive().max(AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES).default(AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES),
       })
       .strict()
-      .default({ autoImportAgentConfigs: true, defaultCodexPermissionMode: "ask", aiSessionHistoryLimit: AI_SESSION_HISTORY_DEFAULT_LIMIT, aiSessionAttachmentRetentionDays: AI_SESSION_ATTACHMENT_RETENTION_DEFAULT_DAYS }),
+      .default({ autoImportAgentConfigs: true, defaultCodexPermissionMode: "ask", aiSessionHistoryLimit: AI_SESSION_HISTORY_DEFAULT_LIMIT, aiSessionAttachmentRetentionDays: AI_SESSION_ATTACHMENT_RETENTION_DEFAULT_DAYS, aiSessionMaxFileAttachmentBytes: AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES }),
     workspace: WorkspaceStatusSchema.default({ status: "unknown" }),
     target: InstanceTargetSchema.default({ strategy: "direct-port", status: "unknown" }),
     access: InstanceAccessSchema,
@@ -1864,8 +1987,8 @@ export function sanitizeStoredControlledInstance(
   next.aiSessions = sanitizeStoredAiSessions(source.aiSessions, onWarning, typeof source.id === "string" ? source.id : undefined);
   next.triggers = sanitizeStoredTriggers(source.triggers, onWarning, typeof source.id === "string" ? source.id : undefined);
   next.apps = sanitizeStoredStrictObject(ControlledInstanceSchema.shape.apps.unwrap(), pickObjectFields(source.apps, ["runningCount", "problemCount", "updatedAt", "revision"]), "apps", onWarning, typeof source.id === "string" ? source.id : undefined) || { runningCount: 0, problemCount: 0 };
-  next.config = sanitizeStoredStrictObject(ControlledInstanceSchema.shape.config.unwrap(), pickObjectFields(source.config, ["autoImportAgentConfigs", "defaultCodexPermissionMode", "aiSessionHistoryLimit", "aiSessionAttachmentRetentionDays"]), "config", onWarning, typeof source.id === "string" ? source.id : undefined) || { autoImportAgentConfigs: true, defaultCodexPermissionMode: "ask", aiSessionHistoryLimit: AI_SESSION_HISTORY_DEFAULT_LIMIT, aiSessionAttachmentRetentionDays: AI_SESSION_ATTACHMENT_RETENTION_DEFAULT_DAYS };
-  next.modelSelection = sanitizeStoredStrictObject(ModelSelectionSchema.unwrap(), pickObjectFields(source.modelSelection, ["codexModelHash", "claudeModelHash"]), "modelSelection", onWarning, typeof source.id === "string" ? source.id : undefined) || {};
+  next.config = sanitizeStoredStrictObject(ControlledInstanceSchema.shape.config.unwrap(), pickObjectFields(source.config, ["autoImportAgentConfigs", "defaultCodexPermissionMode", "aiSessionHistoryLimit", "aiSessionAttachmentRetentionDays", "aiSessionMaxFileAttachmentBytes"]), "config", onWarning, typeof source.id === "string" ? source.id : undefined) || { autoImportAgentConfigs: true, defaultCodexPermissionMode: "ask", aiSessionHistoryLimit: AI_SESSION_HISTORY_DEFAULT_LIMIT, aiSessionAttachmentRetentionDays: AI_SESSION_ATTACHMENT_RETENTION_DEFAULT_DAYS, aiSessionMaxFileAttachmentBytes: AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES };
+  next.modelSelection = sanitizeStoredStrictObject(ModelSelectionSchema.unwrap(), pickObjectFields(source.modelSelection, ["codexModelHash", "claudeModelHash", "opencodeModelHash"]), "modelSelection", onWarning, typeof source.id === "string" ? source.id : undefined) || {};
   next.imageSnapshot = sanitizeStoredInstanceImageSnapshot(
     source.imageSnapshot,
     source.imageId,

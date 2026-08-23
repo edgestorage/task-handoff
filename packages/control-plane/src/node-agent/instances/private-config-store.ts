@@ -58,7 +58,9 @@ export class InstancePrivateConfigStore {
         code: "INSTANCE_PRIVATE_CONFIG_IDENTITY_MISMATCH",
       });
     }
-    if (source.instanceCredential === undefined && source.registrationToken !== undefined) {
+    if ((source.instanceCredential === undefined && source.registrationToken !== undefined) || source.gitCredentials !== undefined) {
+      // Compatibility for the pre-release snapshot implementation: read the instance
+      // identity but immediately scrub the obsolete Git secret snapshot from disk.
       this.put(parsed);
     }
     return parsed;
@@ -73,7 +75,11 @@ export class InstancePrivateConfigStore {
     return parsed;
   }
 
-  materialize(instanceId: string, instanceCredential: string | undefined, environment: Record<string, string>) {
+  materialize(
+    instanceId: string,
+    instanceCredential: string | undefined,
+    environment: Record<string, string>,
+  ) {
     if (!instanceCredential) {
       throw Object.assign(new Error(`Instance ${instanceId} does not have a long-lived credential.`), {
         statusCode: 409,

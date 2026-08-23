@@ -10,6 +10,11 @@ export type AppAccessToken = {
   sessionId: string;
   mode: AppAccessMode;
   expiresAt: string;
+  authorization?: {
+    userId: string;
+    authorizationRevision: number;
+    nodeId: string;
+  };
 };
 
 export type AppAccessServiceOptions = {
@@ -33,17 +38,29 @@ export class AppAccessService {
     this.listAppSessions = options.listAppSessions;
   }
 
-  createToken(input: { instanceId: string; sessionId: string; mode: AppAccessMode; ttlMs?: number }) {
+  createToken(input: {
+    instanceId: string;
+    sessionId: string;
+    mode: AppAccessMode;
+    ttlMs?: number;
+    authorization?: AppAccessToken["authorization"];
+  }) {
     return this.tokens.create({
       instanceId: input.instanceId,
       sessionId: input.sessionId,
       mode: input.mode,
       ttlMs: input.ttlMs,
+      authorization: input.authorization,
     });
   }
 
-  async createSessionToken(input: { instanceId: string; sessionId: string; ttlMs?: number }) {
-    await this.requireInstance(input.instanceId);
+  async createSessionToken(input: {
+    instanceId: string;
+    sessionId: string;
+    ttlMs?: number;
+    authorization?: { userId: string; authorizationRevision: number };
+  }) {
+    const instance = await this.requireInstance(input.instanceId);
     const session = await this.requireSession(input.instanceId, input.sessionId);
     const mode = appSessionAccessMode(session);
     if (mode !== "vnc") {
@@ -56,7 +73,15 @@ export class AppAccessService {
       Object.assign(error, { statusCode: 409, code: "APP_SESSION_NOT_RUNNING" });
       throw error;
     }
-    return this.createToken({ ...input, mode });
+    return this.createToken({
+      instanceId: input.instanceId,
+      sessionId: input.sessionId,
+      ttlMs: input.ttlMs,
+      mode,
+      ...(input.authorization ? {
+        authorization: { ...input.authorization, nodeId: instance.nodeId },
+      } : {}),
+    });
   }
 
   resolveToken(token: string, mode?: AppAccessMode) {

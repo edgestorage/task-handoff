@@ -33,6 +33,11 @@ type Logger = {
   warn?: (data: Record<string, unknown>, message?: string) => void;
 };
 
+type EventOutputDiagnostic = {
+  outputId: string;
+  kind: "events-websocket" | "reverse-tunnel" | "legacy";
+};
+
 function splitTerminalReplay(data: string, maxLength = 60_000) {
   const chunks: string[] = [];
   for (let offset = 0; offset < data.length; offset += maxLength) chunks.push(data.slice(offset, offset + maxLength));
@@ -47,6 +52,7 @@ export class NodeAgentInstanceEventForwarder {
   private readonly retries = new Map<string, { timer: EventConnectionRetryTimer; url?: string }>();
   private readonly outputs = new Set<WebSocket>();
   private readonly outputSubscriptions = new Map<WebSocket, AiSessionTransientSubscription | undefined>();
+  private readonly outputDiagnostics = new Map<WebSocket, EventOutputDiagnostic>();
   private readonly imagePullTerminalByInstance = new Map<string, { output: ImagePullTerminalOutput; tail: string; finished?: ImagePullTerminalFinished }>();
   private readonly state: NodeAgentInstanceEventState;
   private readonly token?: string;
@@ -58,6 +64,7 @@ export class NodeAgentInstanceEventForwarder {
   private reconnectAttempts = 0;
   private safetyReconciliations = 0;
   private localSequence = 0;
+  private outputSequence = 0;
   private readonly createSocket: (url: string, options: { headers?: { authorization: string } }) => WebSocket;
   private readonly setIntervalFn: typeof setInterval;
   private readonly clearIntervalFn: typeof clearInterval;
@@ -96,10 +103,19 @@ export class NodeAgentInstanceEventForwarder {
     this.retries.clear();
     this.outputs.clear();
     this.outputSubscriptions.clear();
+    this.outputDiagnostics.clear();
   }
 
   addOutput(socket: WebSocket, options: { expectsTransientSubscription?: boolean; legacyFallbackMs?: number } = {}) {
     this.outputs.add(socket);
+    this.outputDiagnostics.set(socket, {
+      outputId: `event_output_${++this.outputSequence}`,
+      kind: options.expectsTransientSubscription
+        ? "events-websocket"
+        : options.legacyFallbackMs !== undefined
+          ? "reverse-tunnel"
+          : "legacy",
+    });
     // Compatibility for v0.0.21: no subscription update means the older control-plane expects the full stream.
     this.outputSubscriptions.set(socket, options.expectsTransientSubscription ? AiSessionTransientSubscriptionSchema.parse({}) : undefined);
     let legacyFallback: ReturnType<typeof setTimeout> | undefined;
@@ -115,6 +131,7 @@ export class NodeAgentInstanceEventForwarder {
       removed = true;
       this.outputs.delete(socket);
       this.outputSubscriptions.delete(socket);
+      this.outputDiagnostics.delete(socket);
       if (legacyFallback) clearTimeout(legacyFallback);
       this.syncNow();
     };
@@ -217,16 +234,30 @@ export class NodeAgentInstanceEventForwarder {
     this.sendOutput(output, encoded);
   }
 
-  private sendOutput(output: WebSocket, encoded: string) {
-    if (output.readyState !== WebSocket.OPEN) return false;
+  private sendOutput(output: WebSocket, encoded: string, event?: ForwardedInstanceEvent) {
+    const appSessionDiagnostic = event?.topic === AppSessionEventTopic
+      ? {
+          ...this.outputDiagnostics.get(output),
+          instanceId: event.scope?.instanceId,
+          eventType: event.type,
+          ...eventPayloadMeta(event.payload),
+        }
+      : undefined;
+    if (output.readyState !== WebSocket.OPEN) {
+      if (appSessionDiagnostic) this.logger?.warn?.({ ...appSessionDiagnostic, readyState: output.readyState, outcome: "not-open" }, "app-session.event.output.rejected");
+      return false;
+    }
     if (output.bufferedAmount + Buffer.byteLength(encoded, "utf8") > MAX_EVENT_OUTPUT_BUFFERED_BYTES) {
+      if (appSessionDiagnostic) this.logger?.warn?.({ ...appSessionDiagnostic, bufferedAmount: output.bufferedAmount, outcome: "backpressure" }, "app-session.event.output.rejected");
       try { output.close(1013, "Event consumer is too slow."); } catch { /* Close is best-effort after rejecting the frame. */ }
       return false;
     }
     try {
       output.send(encoded);
+      if (appSessionDiagnostic) this.logger?.info?.({ ...appSessionDiagnostic, bufferedAmount: output.bufferedAmount, bytes: Buffer.byteLength(encoded, "utf8"), outcome: "queued" }, "app-session.event.output.queued");
       return true;
-    } catch {
+    } catch (error) {
+      if (appSessionDiagnostic) this.logger?.warn?.({ ...appSessionDiagnostic, error: error instanceof Error ? error.message : String(error), outcome: "send-failed" }, "app-session.event.output.rejected");
       try { output.close(1011, "Event delivery failed."); } catch { /* Close is best-effort after rejecting the frame. */ }
       return false;
     }
@@ -350,8 +381,8 @@ export class NodeAgentInstanceEventForwarder {
         event,
       });
       for (const output of this.outputs) {
-        if (output.readyState === WebSocket.OPEN && this.outputAccepts(output, event)) {
-          this.sendOutput(output, encoded);
+        if (this.outputAccepts(output, event)) {
+          this.sendOutput(output, encoded, event);
         }
       }
     });

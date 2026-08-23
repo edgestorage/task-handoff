@@ -1,10 +1,12 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { InstanceDeleteResultSchema, RuntimeArtifactIdentitySchema, type ControlledInstance, type InstanceDeleteInput, type InstanceDeleteResult, type InstanceImageSnapshot, type LocalDockerImage, type Node, type NodeRuntime, type Project, type RuntimeArtifactIdentity } from "@task-handoff/protocol/control-plane";
 import { safeParseResponse } from "@task-handoff/protocol/response-validation";
 import { defaultCommandRunner, type CommandRunner } from "../../shared/process/command-runner.ts";
 import { DockerImageService, listDockerImages } from "../docker-images.ts";
+import type { GitWorkspaceProvisioningInput } from "@task-handoff/protocol/managed-git-credentials";
 
 export { defaultCommandRunner, type CommandResult, type CommandRunner } from "../../shared/process/command-runner.ts";
 
@@ -17,6 +19,9 @@ export type ExecutorContext = {
   nodeAgentUrl?: string;
   modelEnv?: Record<string, string>;
   privateConfigPath?: string;
+  gitWorkspaceProvisioning?: GitWorkspaceProvisioningInput;
+  completeGitWorkspaceProvisioning?: () => void;
+  signal?: AbortSignal;
 };
 
 export type ExecutorStartResult = {
@@ -242,6 +247,10 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
       await this.images.ensure(context.image.resolvedReference || context.image.requestedReference!);
     }
     await this.createPersistentVolumes(context);
+    if (context.project.source.type !== "local-folder") {
+      await this.provisionGitWorkspace(context);
+      context.completeGitWorkspaceProvisioning?.();
+    }
     let runResult;
     try {
       runResult = await this.runCommand("docker", dockerRunArgs(context, containerName, {
@@ -252,6 +261,50 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
       throw runtimeExecutorError("RUNTIME_EXECUTOR_FAILED", `Could not create Docker container ${containerName}.`, cause);
     }
     return this.bootstrapResult(context, containerName, runResult.stdout || undefined);
+  }
+
+  private async provisionGitWorkspace(context: ExecutorContext) {
+    const input = context.gitWorkspaceProvisioning;
+    if (!input) throw runtimeExecutorError("GIT_WORKSPACE_PROVISIONING_MISSING", `Git workspace provisioning input is missing for ${context.instance.id}.`);
+    const containerName = `${containerNameForInstance(context.instance.id)}-git-provision`;
+    const authDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-git-auth-"));
+    fs.chmodSync(authDirectory, 0o700);
+    try {
+      await this.runCommand("docker", ["rm", "-f", containerName], { timeoutMs: 30_000 }).catch(() => ({ stdout: "", stderr: "" }));
+      this.materializeGitProvisioningAuth(authDirectory, input);
+      const args = dockerGitProvisionArgs(context, containerName, authDirectory, {
+        launcherAssetsDir: this.launcherAssetsDir,
+      });
+      await this.runCommand("docker", args, { timeoutMs: 15 * 60_000, signal: context.signal });
+    } catch (cause) {
+      throw gitWorkspaceProvisioningError(context.instance.id, cause);
+    } finally {
+      await this.runCommand("docker", ["rm", "-f", containerName], { timeoutMs: 30_000 }).catch(() => ({ stdout: "", stderr: "" }));
+      fs.rmSync(authDirectory, { recursive: true, force: true });
+    }
+  }
+
+  private materializeGitProvisioningAuth(directory: string, input: NonNullable<ExecutorContext["gitWorkspaceProvisioning"]>) {
+    const write = (targetDirectory: string, name: string, value: string) => {
+      const filePath = path.join(targetDirectory, name);
+      fs.writeFileSync(filePath, value, { encoding: "utf8", mode: 0o600 });
+      fs.chmodSync(filePath, 0o600);
+    };
+    input.credentials.forEach((credential, index) => {
+      const credentialDirectory = path.join(directory, `credential-${index}`);
+      fs.mkdirSync(credentialDirectory, { recursive: true, mode: 0o700 });
+      fs.chmodSync(credentialDirectory, 0o700);
+      write(credentialDirectory, "scope.json", JSON.stringify(credential.payload.credential.scope));
+      if (credential.payload.secret.kind === "https-token") {
+        write(credentialDirectory, "username", credential.payload.secret.username);
+        write(credentialDirectory, "token", credential.payload.secret.token);
+        return;
+      }
+      write(credentialDirectory, "private-key", credential.payload.secret.privateKey);
+      write(credentialDirectory, "known_hosts", credential.payload.secret.pinnedKnownHosts);
+      if (credential.payload.secret.passphrase) write(credentialDirectory, "passphrase", credential.payload.secret.passphrase);
+      write(credentialDirectory, "ssh-askpass.sh", `#!/usr/bin/env bash\ncat /run/task-handoff/git-runtime/credential-${index}/passphrase 2>/dev/null || true\n`);
+    });
   }
 
   private async recreateWithAuthoritativeBootstrap(
@@ -1051,6 +1104,34 @@ function runtimeExecutorError(code: string, message: string, cause?: unknown) {
   return error;
 }
 
+const GIT_PROVISIONING_ERROR_CODES = new Set([
+  "AUTHENTICATION_REJECTED",
+  "CREDENTIAL_AMBIGUOUS",
+  "CREDENTIAL_MISSING",
+  "HOST_KEY_REQUIRED",
+  "LFS_FAILED",
+  "REF_NOT_FOUND",
+  "REMOTE_UNSUPPORTED",
+  "SSH_AGENT_UNAVAILABLE",
+  "WORKSPACE_NOT_EMPTY",
+  "WORKSPACE_OWNERSHIP_MISMATCH",
+]);
+
+function gitWorkspaceProvisioningError(instanceId: string, cause: unknown) {
+  const candidate = cause && typeof cause === "object" ? cause as { code?: unknown } : undefined;
+  const causeCode = typeof candidate?.code === "string" ? candidate.code : "";
+  if (causeCode === "RUNTIME_COMMAND_TIMEOUT") {
+    return runtimeExecutorError("GIT_WORKSPACE_PROVISIONING_TIMEOUT", `Git workspace provisioning timed out for ${instanceId}.`);
+  }
+  if (causeCode === "RUNTIME_COMMAND_ABORTED") {
+    return runtimeExecutorError("GIT_WORKSPACE_PROVISIONING_CANCELLED", `Git workspace provisioning was cancelled for ${instanceId}.`);
+  }
+  const detail = commandFailureDetail(cause) || "";
+  const marker = detail.match(/TASK_HANDOFF_GIT_PROVISIONING_ERROR=([A-Z_]+)/)?.[1];
+  const reason = marker && GIT_PROVISIONING_ERROR_CODES.has(marker) ? marker : "FAILED";
+  return runtimeExecutorError(`GIT_WORKSPACE_PROVISIONING_${reason}`, `Could not provision Git workspace for ${instanceId}.`);
+}
+
 function commandFailureDetail(cause: unknown) {
   if (!cause || typeof cause !== "object") return cause === undefined ? undefined : String(cause);
   const candidate = cause as { message?: unknown; details?: { stderr?: unknown; stdout?: unknown } };
@@ -1161,6 +1242,7 @@ export function dockerRunArgs(context: ExecutorContext, containerName: string, o
     TASK_HANDOFF_CHAT_BRIDGES: "none",
     TASK_HANDOFF_WORKSPACE: context.project.workspacePolicy.path || "/workspace",
     TASK_HANDOFF_WORKSPACE_MODE: context.project.workspacePolicy.mode,
+    ...(context.project.source.type === "local-folder" ? {} : { TASK_HANDOFF_SKIP_WORKSPACE_BOOTSTRAP: "true" }),
   };
   for (const [key, value] of Object.entries(runtimeEnv)) appendDockerEnv(args, key, value);
 
@@ -1194,6 +1276,52 @@ export function dockerRunArgs(context: ExecutorContext, containerName: string, o
     DOCKER_BOOTSTRAP_ENTRYPOINT,
     "task-handoff",
     "web",
+  );
+  return args;
+}
+
+export function dockerGitProvisionArgs(
+  context: ExecutorContext,
+  containerName: string,
+  authDirectory: string,
+  options: Pick<DockerExecutorOptions, "launcherAssetsDir"> = {},
+) {
+  const input = context.gitWorkspaceProvisioning;
+  if (!input || context.project.source.type === "local-folder") {
+    throw Object.assign(new Error("Git provisioning requires a Git source and operation input."), { code: "GIT_WORKSPACE_PROVISIONING_INVALID", statusCode: 400 });
+  }
+  const launcherAssetsDir = path.resolve(options.launcherAssetsDir || defaultLauncherAssetsDir());
+  const workspace = persistentVolumesForContext(context).find((volume) => volume.role === "workspace");
+  if (!workspace) throw Object.assign(new Error("Git workspace volume was not found."), { code: "GIT_WORKSPACE_VOLUME_MISSING", statusCode: 409 });
+  const args = [
+    "run", "--rm", "--name", containerName,
+    "--label", "task-handoff.role=git-provisioning",
+    "--label", `task-handoff.instance-id=${context.instance.id}`,
+    "--user", "0:0",
+    "--network", "bridge",
+    "--security-opt", "no-new-privileges",
+    "--cap-drop", "ALL",
+    "--cap-add", "CHOWN",
+    "--cap-add", "SETUID",
+    "--cap-add", "SETGID",
+    "--cap-add", "DAC_OVERRIDE",
+    "--mount", `type=volume,src=${workspace.name},dst=/workspace`,
+    "--mount", `type=bind,src=${launcherAssetsDir},dst=${DOCKER_BOOTSTRAP_CONTAINER_DIR},readonly`,
+    "--tmpfs", "/run/task-handoff/git-runtime:rw,nosuid,nodev,exec,mode=0700",
+  ];
+  if (input.credentials.length) args.push("--mount", `type=bind,src=${path.resolve(authDirectory)},dst=/run/task-handoff/git-auth,readonly`);
+  const append = (key: string, value: string) => args.push("-e", `${key}=${value}`);
+  append("TASK_HANDOFF_GIT_URL", input.remoteUrl);
+  append("TASK_HANDOFF_INSTANCE_ID", context.instance.id);
+  if (input.ref.commit) append("TASK_HANDOFF_GIT_COMMIT", input.ref.commit);
+  else if (input.ref.name) append("TASK_HANDOFF_GIT_REF", input.ref.name);
+  if (input.clone.depth) append("TASK_HANDOFF_GIT_DEPTH", String(input.clone.depth));
+  append("TASK_HANDOFF_GIT_SUBMODULES", input.clone.submodules ? "true" : "false");
+  append("TASK_HANDOFF_GIT_LFS", input.clone.lfs ? "true" : "false");
+  args.push(
+    "--entrypoint", "/bin/bash",
+    context.instance.environmentTemplateOrigin?.imageId || context.image.resolvedReference || context.image.requestedReference!,
+    `${DOCKER_BOOTSTRAP_CONTAINER_DIR}/git-provision.sh`,
   );
   return args;
 }

@@ -153,6 +153,45 @@ test("streamed drafts persist once, enforce scope, and become staged message han
   assert.equal(store.content("session-a", "message-a", draft.id).attachment.name, "report.txt");
 });
 
+test("controlled-instance attachment store enforces the live file upload limit", async () => {
+  const dataDir = tempDir();
+  const store = new AiSessionConversationAttachmentStore({ dataDir }, { maxFileAttachmentBytes: 5 });
+  await assert.rejects(() => store.createDraft({
+    scopeType: "session",
+    scopeId: "session-a",
+    kind: "file",
+    name: "too-large.txt",
+    mime: "text/plain",
+    size: 5,
+    source: Readable.from(["12345"]),
+  }), { code: "AI_SESSION_ATTACHMENTS_TOO_LARGE", statusCode: 413 });
+
+  const accepted = await store.createDraft({
+    scopeType: "session",
+    scopeId: "session-a",
+    kind: "file",
+    name: "accepted.txt",
+    mime: "text/plain",
+    size: 4,
+    source: Readable.from(["1234"]),
+  });
+  assert.equal(accepted.size, 4);
+
+  store.setMaxFileAttachmentBytes(4);
+  assert.throws(() => store.stageMessage({
+    sessionId: "session-a",
+    messageId: "message-inline",
+    attachments: [{
+      id: "inline-file",
+      kind: "file",
+      name: "inline.txt",
+      mime: "text/plain",
+      size: 4,
+      source: { type: "inline", encoding: "base64", data: Buffer.from("1234").toString("base64") },
+    }],
+  }), { code: "AI_SESSION_ATTACHMENTS_TOO_LARGE", statusCode: 413 });
+});
+
 test("failed create-request dispatch restores its upload draft for a new session retry", async () => {
   const dataDir = tempDir();
   const store = new AiSessionConversationAttachmentStore({ dataDir });

@@ -24,6 +24,7 @@
         <TabsList class="instance-settings-tabs-list" :aria-label="t('instances.settings.sections')">
           <TabsTrigger value="general"><SlidersHorizontal :size="14" />{{ t("instances.settings.general") }}</TabsTrigger>
           <TabsTrigger value="models"><Cpu :size="14" />{{ t("instances.settings.models") }}</TabsTrigger>
+          <TabsTrigger value="git-credentials"><KeyRound :size="14" />{{ t("instances.settings.gitCredentials") }}</TabsTrigger>
           <TabsTrigger value="apps"><Boxes :size="14" />{{ t("instances.settings.apps") }}</TabsTrigger>
         </TabsList>
 
@@ -59,6 +60,20 @@
                       <small>{{ t("instances.settings.instanceNameDescription") }}</small>
                     </span>
                     <ControlPlaneInput v-model="instanceName" :disabled="savingGeneral" maxlength="160" :placeholder="t('instances.settings.instanceName')" />
+                  </label>
+                  <label class="instance-settings-name-control">
+                    <span>
+                      <strong>{{ t("instances.settings.aiSessionFileAttachmentLimit") }}</strong>
+                      <small>{{ fileAttachmentLimitSupported ? t("instances.settings.aiSessionFileAttachmentLimitDescription") : t("instances.settings.aiSessionFileAttachmentLimitUnsupported") }}</small>
+                    </span>
+                    <ControlPlaneInput
+                      v-model="aiSessionMaxFileAttachmentKiB"
+                      type="number"
+                      min="1"
+                      :max="AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES / 1024"
+                      step="1"
+                      :disabled="savingGeneral || !fileAttachmentLimitSupported"
+                    />
                   </label>
                   <label class="instance-settings-name-control">
                     <span>
@@ -108,7 +123,7 @@
                     />
                   </label>
                 </div>
-                <Button size="sm" :disabled="savingGeneral || !generalChanged || !validInstanceName || !validHistoryLimit || !validAttachmentRetention" @click="saveGeneral">
+                <Button size="sm" :disabled="savingGeneral || !generalChanged || !validInstanceName || !validHistoryLimit || !validAttachmentRetention || !validFileAttachmentLimit" @click="saveGeneral">
                   {{ savingGeneral ? t("instances.settings.saving") : t("instances.settings.saveChanges") }}
                 </Button>
               </div>
@@ -121,7 +136,7 @@
               <p class="instance-settings-help">{{ t("instances.settings.modelSelectionDescription") }}</p>
               <div class="instance-model-grid">
                 <label v-for="app in modelApps" :key="app">
-                  <span>{{ app === "codex" ? t("common.products.codex") : t("common.products.claude") }}</span>
+                  <span>{{ t(`common.products.${app}`) }}</span>
                   <ControlPlaneSelect :model-value="modelDraftValue(app)" :disabled="savingModels" @update:model-value="setModelDraft(app, $event)">
                     <ControlPlaneSelectItem :value="noModelValue">{{ t("instances.settings.noModel") }}</ControlPlaneSelectItem>
                     <ControlPlaneSelectItem :value="defaultModelValue">{{ t("instances.settings.globalDefault") }}</ControlPlaneSelectItem>
@@ -137,6 +152,51 @@
                   {{ savingModels ? t("instances.settings.saving") : t("instances.settings.saveModels") }}
                 </Button>
               </div>
+            </section>
+          </TabsContent>
+
+          <TabsContent value="git-credentials" class="instance-settings-section">
+            <section class="instance-settings-card">
+              <div class="instance-settings-section-heading">
+                <h3>{{ t("instances.settings.gitCredentialsTitle") }}</h3>
+                <p>{{ t("instances.settings.gitCredentialsDescription") }}</p>
+              </div>
+              <p v-if="!gitBrokerSupported" class="instance-settings-help">{{ t("instances.settings.gitCredentialsUnsupported") }}</p>
+              <div v-else-if="gitAssignments.error.value || gitCredentials.error.value" class="instance-app-issues" role="alert">
+                <p>{{ gitCredentialError }}</p>
+                <Button size="sm" variant="outline" @click="refreshGitCredentials">{{ t("instances.settings.retry") }}</Button>
+              </div>
+              <template v-else>
+                <div v-if="gitCredentialMatchText" class="instance-git-match-preview" :data-status="gitCredentialMatchStatus">
+                  <Globe2 :size="15" />
+                  <span>{{ gitCredentialMatchText }}</span>
+                  <Badge variant="secondary">{{ t(`instances.settings.gitCredentialMatchStatus.${gitCredentialMatchStatus}`) }}</Badge>
+                </div>
+                <div class="instance-git-assignment-create">
+                  <ControlPlaneSelect v-model="selectedGitCredentialId" :placeholder="t('instances.settings.selectGitCredential')" :disabled="gitCredentialBusy">
+                    <ControlPlaneSelectItem :value="noGitCredentialValue">{{ t("instances.settings.selectGitCredential") }}</ControlPlaneSelectItem>
+                    <ControlPlaneSelectItem v-for="credential in assignableGitCredentials" :key="credential.id" :value="credential.id">{{ credential.name }} · {{ credential.scope.host }}{{ credential.scope.pathPrefix }}</ControlPlaneSelectItem>
+                  </ControlPlaneSelect>
+                  <Button size="sm" :disabled="!selectedGitCredentialId || selectedGitCredentialId === noGitCredentialValue || gitCredentialBusy" @click="authorizeGitCredential">
+                    <KeyRound :size="14" />
+                    {{ t("instances.settings.authorizeGitCredential") }}
+                  </Button>
+                </div>
+                <p v-if="gitAssignments.isLoading.value" class="instance-settings-empty">{{ t("instances.settings.gitCredentialsLoading") }}</p>
+                <p v-else-if="!gitAssignments.data.value?.length" class="instance-settings-empty">{{ t("instances.settings.noGitCredentials") }}</p>
+                <div v-else class="instance-app-list">
+                  <article v-for="assignment in gitAssignments.data.value" :key="assignment.credentialId" class="instance-app-row instance-git-assignment-row">
+                    <div>
+                      <strong>{{ gitCredentialName(assignment.credentialId) }}</strong>
+                      <code>{{ gitCredentialScope(assignment.credentialId) }}</code>
+                    </div>
+                    <div class="instance-git-assignment-actions">
+                      <Badge :variant="assignment.status === 'synced' ? 'default' : 'secondary'">{{ t(`instances.settings.gitCredentialStatus.${assignment.status}`) }}</Badge>
+                      <Button size="sm" variant="outline" :disabled="gitCredentialBusy" @click="revokeGitCredential(assignment.credentialId)">{{ t("instances.settings.revokeGitCredential") }}</Button>
+                    </div>
+                  </article>
+                </div>
+              </template>
             </section>
           </TabsContent>
 
@@ -274,8 +334,10 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { Boxes, Cpu, Globe2, LoaderCircle, Monitor, RefreshCw, SlidersHorizontal, TerminalSquare, X } from "@lucide/vue";
-import { AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS, AI_SESSION_HISTORY_MAX_LIMIT, type AiSessionPermissionMode } from "@task-handoff/protocol/ai-sessions";
+import { Boxes, Cpu, Globe2, KeyRound, LoaderCircle, Monitor, RefreshCw, SlidersHorizontal, TerminalSquare, X } from "@lucide/vue";
+import { AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS, AI_SESSION_HISTORY_MAX_LIMIT, AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES, type AiSessionPermissionMode } from "@task-handoff/protocol/ai-sessions";
+import { supportsAiSessionFileSizeLimitSettings, supportsGitCredentialProxy, supportsNodeAiSessionFileAttachmentLimit } from "@task-handoff/protocol/control-plane";
+import { resolveGitCredential, type GitCredentialPublic } from "@task-handoff/protocol/managed-git-credentials";
 import type { AppManagementJob, AppManagementOperation, AppManagementSnapshot, InstanceBoardItem, ManagedAppProjection, ModelApp, ModelConfig, ModelSelection, UpdateControlledInstanceInput } from "../../../api/types";
 import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../../components/ui/alert-dialog";
 import { Badge } from "../../../components/ui/badge";
@@ -294,13 +356,14 @@ import { useControlPlaneLocale } from "../../../i18n/index";
 import { formatDateTime } from "../../../i18n/presentation";
 import { connectionStatusKeys, instanceStatusKeys, translateStatus } from "../../../i18n/status";
 import { translateApiError } from "../../../i18n/apiError";
+import { authorizeInstanceGitCredential, revokeInstanceGitCredential, useGitCredentialsQuery, useInstanceGitCredentialAssignmentsQuery } from "../../../api/queries";
 
 const { t } = useI18n();
 const { locale } = useControlPlaneLocale();
 const instanceStatusLabel = (status: string) => translateStatus(instanceStatusKeys, status, t);
 const connectionStatusLabel = (status: string) => translateStatus(connectionStatusKeys, status, t);
 
-type InstanceSettingsSection = "general" | "models" | "apps";
+type InstanceSettingsSection = "general" | "models" | "git-credentials" | "apps";
 type AppFilter = "all" | "available" | "installed";
 
 const props = defineProps<{
@@ -323,6 +386,7 @@ const autoImportAgentConfigs = ref(true);
 const defaultCodexPermissionMode = ref<AiSessionPermissionMode>("ask");
 const aiSessionHistoryLimit = ref("50");
 const aiSessionAttachmentRetentionDays = ref("30");
+const aiSessionMaxFileAttachmentKiB = ref("500");
 const modelSelection = ref<ModelSelection>({});
 const savingGeneral = ref(false);
 const savingModels = ref(false);
@@ -333,7 +397,69 @@ const appConfirmation = ref<{ app: ManagedAppProjection; operation: AppManagemen
 const appFilter = ref<AppFilter>("all");
 const defaultModelValue = "__default__";
 const noModelValue = "__none__";
-const modelApps: ModelApp[] = ["codex", "claude"];
+const modelApps: ModelApp[] = ["codex", "claude", "opencode"];
+const noGitCredentialValue = "__none__";
+const selectedGitCredentialId = ref(noGitCredentialValue);
+const gitCredentialBusy = ref(false);
+const gitBrokerSupported = computed(() => Boolean(props.instance && supportsGitCredentialProxy(props.instance.capabilities)));
+const gitCredentials = useGitCredentialsQuery(computed(() => props.open && section.value === "git-credentials" && gitBrokerSupported.value));
+const gitAssignments = useInstanceGitCredentialAssignmentsQuery(computed(() => props.instance?.id || ""), computed(() => props.open && section.value === "git-credentials" && gitBrokerSupported.value));
+const assignedGitCredentialIds = computed(() => new Set((gitAssignments.data.value || []).map((assignment) => assignment.credentialId)));
+const assignableGitCredentials = computed(() => (gitCredentials.data.value || []).filter((credential) => credential.status === "enabled" && !assignedGitCredentialIds.value.has(credential.id)));
+const gitCredentialError = computed(() => translateApiError(gitAssignments.error.value || gitCredentials.error.value, t, t("instances.settings.gitCredentialsLoadFailed")));
+const gitCredentialMatch = computed(() => {
+  const source = props.instance?.source;
+  if (!source || source.type === "local-folder") return undefined;
+  const syncedIds = new Set((gitAssignments.data.value || [])
+    .filter((assignment) => assignment.status === "synced")
+    .map((assignment) => assignment.credentialId));
+  return resolveGitCredential(source.url, (gitCredentials.data.value || [])
+    .filter((credential) => syncedIds.has(credential.id))
+    .map((credential) => ({
+      id: credential.id,
+      kind: credential.kind,
+      scope: credential.scope,
+      status: credential.status,
+      pinnedKnownHosts: credential.kind === "ssh-key",
+    })));
+});
+const gitCredentialMatchStatus = computed(() => gitCredentialMatch.value?.status || "none");
+const gitCredentialMatchText = computed(() => {
+  const match = gitCredentialMatch.value;
+  if (!match) return "";
+  if (match.status === "unique") return t("instances.settings.gitCredentialMatchUnique", { name: gitCredentialName(match.credential.id) });
+  if (match.status === "ambiguous") return t("instances.settings.gitCredentialMatchAmbiguous", { count: match.credentialIds.length });
+  if (match.status === "missing-host-key") return t("instances.settings.gitCredentialMatchHostKey");
+  if (match.status === "unsupported") return t("instances.settings.gitCredentialMatchUnsupported");
+  return t("instances.settings.gitCredentialMatchNone");
+});
+
+function gitCredential(credentialId: string): GitCredentialPublic | undefined { return gitCredentials.data.value?.find((item) => item.id === credentialId); }
+function gitCredentialName(credentialId: string) { return gitCredential(credentialId)?.name || credentialId; }
+function gitCredentialScope(credentialId: string) {
+  const credential = gitCredential(credentialId);
+  return credential ? `${credential.scope.scheme}://${credential.scope.host}${credential.scope.port ? `:${credential.scope.port}` : ""}${credential.scope.pathPrefix}` : credentialId;
+}
+async function refreshGitCredentials() { await Promise.all([gitCredentials.refetch(), gitAssignments.refetch()]); }
+async function authorizeGitCredential() {
+  const instance = props.instance;
+  if (!instance || selectedGitCredentialId.value === noGitCredentialValue) return;
+  gitCredentialBusy.value = true;
+  try {
+    await authorizeInstanceGitCredential(instance.id, selectedGitCredentialId.value);
+    selectedGitCredentialId.value = noGitCredentialValue;
+    await refreshGitCredentials();
+  } catch (cause) { error.value = translateApiError(cause, t, t("instances.settings.gitCredentialAuthorizeFailed")); }
+  finally { gitCredentialBusy.value = false; }
+}
+async function revokeGitCredential(credentialId: string) {
+  const instance = props.instance;
+  if (!instance) return;
+  gitCredentialBusy.value = true;
+  try { await revokeInstanceGitCredential(instance.id, credentialId); await refreshGitCredentials(); }
+  catch (cause) { error.value = translateApiError(cause, t, t("instances.settings.gitCredentialRevokeFailed")); }
+  finally { gitCredentialBusy.value = false; }
+}
 
 const generalChanged = computed(() => Boolean(props.instance && (
   instanceName.value.trim() !== props.instance.name
@@ -341,6 +467,7 @@ const generalChanged = computed(() => Boolean(props.instance && (
   || defaultCodexPermissionMode.value !== props.instance.config.defaultCodexPermissionMode
   || (historyLimitSupported.value && Number(aiSessionHistoryLimit.value) !== props.instance.config.aiSessionHistoryLimit)
   || (attachmentRetentionSupported.value && Number(aiSessionAttachmentRetentionDays.value) !== props.instance.config.aiSessionAttachmentRetentionDays)
+  || (fileAttachmentLimitSupported.value && Number(aiSessionMaxFileAttachmentKiB.value) * 1024 !== props.instance.config.aiSessionMaxFileAttachmentBytes)
 )));
 const validInstanceName = computed(() => instanceName.value.trim().length > 0);
 const validHistoryLimit = computed(() => {
@@ -379,6 +506,18 @@ const attachmentRetentionSupported = computed(() => {
     ? (features as Record<string, unknown>).aiSessionConversationAttachments
     : undefined;
   return nodeSupported && Boolean(feature && typeof feature === "object" && !Array.isArray(feature) && (feature as Record<string, unknown>).retentionSettings === true);
+});
+const validFileAttachmentLimit = computed(() => {
+  const value = Number(aiSessionMaxFileAttachmentKiB.value);
+  return !fileAttachmentLimitSupported.value || (Number.isInteger(value) && value >= 1 && value <= AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES / 1024);
+});
+const fileAttachmentLimitSupported = computed(() => {
+  const nodeAgent = props.instance?.node?.capabilities?.agent;
+  const nodeCapabilities = nodeAgent && typeof nodeAgent === "object" && !Array.isArray(nodeAgent)
+    ? (nodeAgent as Record<string, unknown>).capabilities
+    : undefined;
+  return supportsNodeAiSessionFileAttachmentLimit(nodeCapabilities)
+    && supportsAiSessionFileSizeLimitSettings(props.instance?.capabilities);
 });
 const attachmentRetentionWillShorten = computed(() => Boolean(
   props.instance
@@ -426,6 +565,7 @@ watch(
     defaultCodexPermissionMode.value = props.instance.config.defaultCodexPermissionMode;
     aiSessionHistoryLimit.value = String(props.instance.config.aiSessionHistoryLimit);
     aiSessionAttachmentRetentionDays.value = String(props.instance.config.aiSessionAttachmentRetentionDays);
+    aiSessionMaxFileAttachmentKiB.value = String(props.instance.config.aiSessionMaxFileAttachmentBytes / 1024);
     modelSelection.value = { ...props.instance.modelSelection };
     error.value = "";
     success.value = "";
@@ -465,7 +605,7 @@ function modelOptionLabel(model: ModelConfig) {
 }
 
 function draftModelId(app: ModelApp) {
-  return app === "codex" ? modelSelection.value.codexModelHash : modelSelection.value.claudeModelHash;
+  return app === "codex" ? modelSelection.value.codexModelHash : app === "claude" ? modelSelection.value.claudeModelHash : modelSelection.value.opencodeModelHash;
 }
 
 function modelDraftValue(app: ModelApp) {
@@ -486,7 +626,7 @@ function setModelDraft(app: ModelApp, value: string) {
   const id = value === defaultModelValue ? undefined : value === noModelValue ? null : value;
   modelSelection.value = normalizedSelection({
     ...modelSelection.value,
-    ...(app === "codex" ? { codexModelHash: id } : { claudeModelHash: id }),
+    ...(app === "codex" ? { codexModelHash: id } : app === "claude" ? { claudeModelHash: id } : { opencodeModelHash: id }),
   });
   error.value = "";
   success.value = "";
@@ -496,11 +636,12 @@ function normalizedSelection(value: ModelSelection): ModelSelection {
   return {
     ...(value.codexModelHash !== undefined ? { codexModelHash: value.codexModelHash } : {}),
     ...(value.claudeModelHash !== undefined ? { claudeModelHash: value.claudeModelHash } : {}),
+    ...(value.opencodeModelHash !== undefined ? { opencodeModelHash: value.opencodeModelHash } : {}),
   };
 }
 
 async function saveGeneral() {
-  if (!props.instance || savingGeneral.value || !validInstanceName.value || !validHistoryLimit.value || !validAttachmentRetention.value) return;
+  if (!props.instance || savingGeneral.value || !validInstanceName.value || !validHistoryLimit.value || !validAttachmentRetention.value || !validFileAttachmentLimit.value) return;
   savingGeneral.value = true;
   error.value = "";
   success.value = "";
@@ -512,6 +653,7 @@ async function saveGeneral() {
         defaultCodexPermissionMode: defaultCodexPermissionMode.value,
         ...(historyLimitSupported.value ? { aiSessionHistoryLimit: Number(aiSessionHistoryLimit.value) } : {}),
         ...(attachmentRetentionSupported.value ? { aiSessionAttachmentRetentionDays: Number(aiSessionAttachmentRetentionDays.value) } : {}),
+        ...(fileAttachmentLimitSupported.value ? { aiSessionMaxFileAttachmentBytes: Number(aiSessionMaxFileAttachmentKiB.value) * 1024 } : {}),
       },
     });
     instanceName.value = instanceName.value.trim();
@@ -522,6 +664,7 @@ async function saveGeneral() {
     defaultCodexPermissionMode.value = props.instance.config.defaultCodexPermissionMode;
     aiSessionHistoryLimit.value = String(props.instance.config.aiSessionHistoryLimit);
     aiSessionAttachmentRetentionDays.value = String(props.instance.config.aiSessionAttachmentRetentionDays);
+    aiSessionMaxFileAttachmentKiB.value = String(props.instance.config.aiSessionMaxFileAttachmentBytes / 1024);
     error.value = translateApiError(cause, t);
   } finally {
     savingGeneral.value = false;
@@ -1196,6 +1339,47 @@ async function confirmAppOperation() {
   padding: 18px 0;
 }
 
+.instance-git-assignment-create {
+  align-items: center;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.instance-git-match-preview {
+  align-items: center;
+  background: var(--surface-inset);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text-muted);
+  display: grid;
+  font-size: 12px;
+  gap: 8px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  padding: 10px 12px;
+}
+
+.instance-git-match-preview[data-status="unique"] {
+  color: var(--text);
+}
+
+.instance-git-assignment-row > div:first-child {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.instance-git-assignment-row small {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.instance-git-assignment-actions {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
 @media (max-width: 680px) {
   .instance-settings-grid,
   .instance-model-grid {
@@ -1231,6 +1415,11 @@ async function confirmAppOperation() {
   }
 
   .instance-app-confirmation-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .instance-git-assignment-create {
+    align-items: stretch;
     grid-template-columns: 1fr;
   }
 }

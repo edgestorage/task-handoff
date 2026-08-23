@@ -38,12 +38,27 @@ const SESSION_EVENT_SCHEMAS = {
 
 const SESSION_EVENT_TYPES = new Set<string>(Object.keys(SESSION_EVENT_SCHEMAS));
 
+type Logger = {
+  info?: (data: Record<string, unknown>, message?: string) => void;
+  warn?: (data: Record<string, unknown>, message?: string) => void;
+};
+
 type TunnelEventRouterOptions = {
   events?: ControlPlaneEventBus;
   onStreamsHello?: (instanceId: string, hello: SessionStreamsHello) => void | Promise<void>;
   onSessionEvent?: (event: EventEnvelope) => boolean;
   validateInstanceScope?: (nodeId: string, instanceId: string) => boolean | Promise<boolean>;
   scopeTtlMs?: number;
+  logger?: Logger;
+};
+
+type SessionEventDiagnostic = {
+  nodeId: string;
+  instanceId?: string;
+  eventType: string;
+  traceId?: string;
+  streamId?: string;
+  revision?: number;
 };
 
 export class NodeTunnelEventRouter {
@@ -55,6 +70,10 @@ export class NodeTunnelEventRouter {
 
   constructor(options: TunnelEventRouterOptions = {}) {
     this.options = options;
+  }
+
+  setLogger(logger: Logger | undefined) {
+    this.options.logger = logger;
   }
 
   handle(nodeId: string, message: Record<string, unknown>) {
@@ -115,10 +134,17 @@ export class NodeTunnelEventRouter {
 
     if (SESSION_EVENT_TYPES.has(eventType)) {
       const sessionEvent = parseSessionEvent(eventType, payload);
-      if (!sessionEvent) return true;
+      if (!sessionEvent) {
+        this.options.logger?.warn?.({ nodeId, eventType, reason: "invalid-payload" }, "session-event.transport.rejected");
+        return true;
+      }
+      const diagnostic = sessionEventDiagnostic(nodeId, eventType, sessionEvent.instanceId, sessionEvent.payload);
       const claimedIds = [scope.instanceId, event.instanceId, forwardedInstanceId]
         .filter((value): value is string => typeof value === "string" && Boolean(value));
-      if (claimedIds.some((instanceId) => instanceId !== sessionEvent.instanceId)) return true;
+      if (claimedIds.some((instanceId) => instanceId !== sessionEvent.instanceId)) {
+        this.options.logger?.warn?.({ ...diagnostic, claimedInstanceIds: claimedIds, reason: "instance-claim-mismatch" }, "session-event.transport.rejected");
+        return true;
+      }
       this.enqueue(nodeId, sessionEvent.instanceId, () => {
         const eventScope = { ...scope, nodeId, instanceId: sessionEvent.instanceId };
         const envelope: EventEnvelope = {
@@ -134,13 +160,16 @@ export class NodeTunnelEventRouter {
           ...(event.replay === true ? { replay: true } : {}),
           scope: eventScope,
         };
-        if (this.options.onSessionEvent && !this.options.onSessionEvent(envelope)) return;
+        if (this.options.onSessionEvent && !this.options.onSessionEvent(envelope)) {
+          this.options.logger?.warn?.({ ...diagnostic, reason: "aggregator-rejected" }, "session-event.transport.rejected");
+          return;
+        }
         this.options.events?.publish(eventType, sessionEvent.payload, {
           topic: envelope.topic,
           scope: eventScope,
           sourceEvent: { id: envelope.id, createdAt: envelope.createdAt, replay: envelope.replay },
         });
-      });
+      }, diagnostic);
       return true;
     }
 
@@ -185,13 +214,17 @@ export class NodeTunnelEventRouter {
     };
   }
 
-  private enqueue(nodeId: string, instanceId: string, publish: () => void | Promise<void>) {
+  private enqueue(nodeId: string, instanceId: string, publish: () => void | Promise<void>, diagnostic?: SessionEventDiagnostic) {
     const key = scopeKey(nodeId, instanceId);
     const epoch = this.scopeEpoch(key);
     const previous = this.eventQueues.get(key) || Promise.resolve();
     const queued = previous.catch(() => undefined).then(async () => {
       if (this.scopeEpochs.get(key) !== epoch) return;
-      if (await this.isScopeValid(nodeId, instanceId, epoch) && this.scopeEpochs.get(key) === epoch) await publish();
+      if (await this.isScopeValid(nodeId, instanceId, epoch) && this.scopeEpochs.get(key) === epoch) {
+        await publish();
+      } else if (diagnostic) {
+        this.options.logger?.warn?.({ ...diagnostic, reason: "instance-scope-invalid" }, "session-event.transport.rejected");
+      }
     });
     this.eventQueues.set(key, queued);
     const cleanup = () => {
@@ -243,6 +276,19 @@ function parseSessionEvent(eventType: string, payload: unknown) {
   if (!parsed.success) return undefined;
   const data = parsed.data;
   return { instanceId: "meta" in data ? data.meta.instanceId : data.instanceId, payload: data };
+}
+
+function sessionEventDiagnostic(nodeId: string, eventType: string, instanceId: string, payload: unknown): SessionEventDiagnostic {
+  const record = recordValue(payload) || {};
+  const meta = recordValue(record.meta) || {};
+  return {
+    nodeId,
+    instanceId,
+    eventType,
+    traceId: typeof meta.traceId === "string" ? meta.traceId : undefined,
+    streamId: typeof meta.streamId === "string" ? meta.streamId : undefined,
+    revision: typeof meta.revision === "number" ? meta.revision : undefined,
+  };
 }
 
 function recordValue(value: unknown) {

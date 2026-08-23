@@ -1,5 +1,6 @@
 import { AiSessionTransientSubscriptionSchema, aiSessionTransientSubscriptionAccepts, eventTopic, type AiSessionTransientSubscription, type EventEnvelope, type EventScope } from "@task-handoff/protocol/events";
 import { AiSessionEventTopic, AiSessionEventType } from "@task-handoff/protocol/ai-sessions";
+import type { ControlPlanePermissionId } from "@task-handoff/protocol/control-plane-access";
 
 export type ControlPlaneEvent<T = unknown> = {
   v: 1;
@@ -24,6 +25,15 @@ type EventSocket = {
   instanceIds?: Set<string>;
   aiSessionTransient?: AiSessionTransientSubscription;
   subscriptionReceived?: boolean;
+  authorization?: EventAuthorizationBinding;
+};
+
+export type EventAuthorizationBinding = {
+  userId: string;
+  authorizationRevision: number;
+  permissionIds: ControlPlanePermissionId[];
+  allowedNodeIds?: Set<string>;
+  allowedInstanceIds?: Set<string>;
 };
 
 const MAX_EVENT_CLIENT_BUFFERED_BYTES = 16 * 1024 * 1024;
@@ -40,15 +50,18 @@ export class ControlPlaneEventBus {
   private readonly transientDemandListeners = new Set<(demand: ControlPlaneAiSessionTransientDemand) => void>();
   private readonly externalTransientDemands = new Map<symbol, AiSessionTransientSubscription | undefined>();
   private seq = 0;
+  private droppedUnscopedNodeEvents = 0;
+  private lastUnscopedNodeEvent?: { type: string; topic: string; createdAt: string };
 
-  connect(socket: EventSocket, options: { instanceIds?: string[]; expectsTransientSubscription?: boolean } = {}) {
+  connect(socket: EventSocket, options: { instanceIds?: string[]; expectsTransientSubscription?: boolean; authorization?: EventAuthorizationBinding } = {}) {
     socket.topics = new Set(["*"]);
     socket.instanceIds = options.instanceIds?.length ? new Set(options.instanceIds) : undefined;
+    socket.authorization = options.authorization;
     // Compatibility for v0.0.21: clients without the URL capability hint never
     // send a subscribe frame and therefore retain the prior full stream. A new
     // client declares that it will subscribe so opening its socket cannot cause
     // a temporary full-stream demand spike before the first frame arrives.
-    socket.subscriptionReceived = options.expectsTransientSubscription !== true;
+    socket.subscriptionReceived = options.authorization ? false : options.expectsTransientSubscription !== true;
     this.clients.add(socket);
     this.publishTransientDemand();
     socket.on("close", () => {
@@ -59,8 +72,8 @@ export class ControlPlaneEventBus {
       const message = parseClientMessage(value);
       if (message?.type === "subscribe") {
         socket.topics = new Set(message.topics === undefined ? ["*"] : message.topics);
-        socket.instanceIds = message.instanceIds?.length ? new Set(message.instanceIds) : undefined;
-        socket.aiSessionTransient = message.aiSessionTransient;
+        socket.instanceIds = authorizedInstanceSubscription(socket, message.instanceIds);
+        socket.aiSessionTransient = authorizedTransientSubscription(socket, message.aiSessionTransient);
         socket.subscriptionReceived = true;
         this.publishTransientDemand();
       }
@@ -69,6 +82,10 @@ export class ControlPlaneEventBus {
 
   publish<T>(type: string, payload: T, options: { scope?: EventScope; topic?: string; sourceEvent?: Pick<EventEnvelope, "id" | "createdAt" | "replay"> } = {}): ControlPlaneEvent<T> {
     const event = this.createEvent(type, payload, options);
+    if (NODE_DERIVED_EVENT_TOPICS.has(event.topic) && !event.scope?.nodeId && !event.scope?.instanceId) {
+      this.droppedUnscopedNodeEvents += 1;
+      this.lastUnscopedNodeEvent = { type: event.type, topic: event.topic, createdAt: event.createdAt };
+    }
     const topic = event.topic;
     const encoded = JSON.stringify(event);
     const encodedBytes = Buffer.byteLength(encoded, "utf8");
@@ -80,7 +97,7 @@ export class ControlPlaneEventBus {
       }
     }
     for (const client of this.clients) {
-      if (client.readyState === client.OPEN && subscribed(client.topics, topic, type) && subscribedInstance(client.instanceIds, event.scope) && subscribedAiSessionTransient(client, event)) {
+      if (client.readyState === client.OPEN && authorizedEvent(client, event) && subscribed(client.topics, topic, type) && subscribedInstance(client.instanceIds, event.scope) && subscribedAiSessionTransient(client, event)) {
         if ((client.bufferedAmount ?? 0) + encodedBytes > MAX_EVENT_CLIENT_BUFFERED_BYTES) {
           this.clients.delete(client);
           try { client.close?.(1013, "Event consumer is too slow."); } catch { /* Consumer cleanup is already complete. */ }
@@ -96,6 +113,23 @@ export class ControlPlaneEventBus {
       }
     }
     return event;
+  }
+
+  authorizationDiagnostics() {
+    return {
+      droppedUnscopedNodeEvents: this.droppedUnscopedNodeEvents,
+      ...(this.lastUnscopedNodeEvent ? { lastUnscopedNodeEvent: this.lastUnscopedNodeEvent } : {}),
+    };
+  }
+
+  invalidateUserAuthorization(userId: string, authorizationRevision: number) {
+    for (const client of this.clients) {
+      const binding = client.authorization;
+      if (!binding || binding.userId !== userId || binding.authorizationRevision === authorizationRevision) continue;
+      this.clients.delete(client);
+      try { client.close?.(4001, "Authorization changed. Reconnect for a current snapshot."); } catch { /* Connection is already invalidated. */ }
+    }
+    this.publishTransientDemand();
   }
 
   on(listener: (event: EventEnvelope) => void) {
@@ -191,7 +225,7 @@ export class ControlPlaneEventBus {
       createdAt: options.sourceEvent?.createdAt || new Date().toISOString(),
       payload,
       ...(options.sourceEvent?.replay ? { replay: true } : {}),
-      scope: options.scope,
+      scope: normalizedEventScope(options.scope, payload),
     };
   }
 
@@ -229,6 +263,72 @@ function subscribedAiSessionTransient(client: EventSocket, event: EventEnvelope)
   if (event.type !== "ai-session.message-delta" && event.type !== "ai-session.timeline-item") return true;
   if (!client.subscriptionReceived) return false;
   return aiSessionTransientSubscriptionAccepts(client.aiSessionTransient, event);
+}
+
+const NODE_DERIVED_EVENT_TOPICS = new Set([
+  "nodes",
+  "node.state",
+  "node.runtime",
+  "instances",
+  "app.sessions",
+  "ai.sessions",
+  "apps",
+]);
+
+function authorizedEvent(client: EventSocket, event: EventEnvelope) {
+  const authorization = client.authorization;
+  if (!authorization) return true;
+  if (event.topic === "triggers" && !event.scope?.nodeId && !event.scope?.instanceId) {
+    return authorization.permissionIds.includes("triggers:manage");
+  }
+  if (!authorization.allowedNodeIds && !authorization.allowedInstanceIds) return true;
+  if (event.scope?.nodeId) return authorization.allowedNodeIds?.has(event.scope.nodeId) === true;
+  if (event.scope?.instanceId) return authorization.allowedInstanceIds?.has(event.scope.instanceId) === true;
+  return !NODE_DERIVED_EVENT_TOPICS.has(event.topic);
+}
+
+function authorizedInstanceSubscription(client: EventSocket, requested: string[] | undefined) {
+  const allowed = client.authorization?.allowedInstanceIds;
+  if (!allowed) return requested?.length ? new Set(requested) : undefined;
+  const selected = requested?.length ? requested.filter((id) => allowed.has(id)) : [...allowed];
+  return new Set(selected);
+}
+
+function authorizedTransientSubscription(client: EventSocket, subscription: AiSessionTransientSubscription | undefined) {
+  const allowed = client.authorization?.allowedInstanceIds;
+  if (!allowed) return subscription;
+  if (!subscription) {
+    return {
+      messageDeltas: { allInstances: false, instanceIds: [...allowed] },
+      timelineAllSessions: false,
+      timelineSessions: [],
+    };
+  }
+  return {
+    ...subscription,
+    messageDeltas: {
+      allInstances: false,
+      instanceIds: subscription.messageDeltas.allInstances
+        ? [...allowed]
+        : subscription.messageDeltas.instanceIds.filter((id) => allowed.has(id)),
+    },
+    timelineAllSessions: false,
+    timelineSessions: subscription.timelineSessions.filter((entry) => allowed.has(entry.instanceId)),
+  };
+}
+
+function normalizedEventScope<T>(scope: EventScope | undefined, payload: T): EventScope | undefined {
+  if (scope?.nodeId || scope?.instanceId) return scope;
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return scope;
+  const record = payload as Record<string, unknown>;
+  const meta = record.meta && typeof record.meta === "object" && !Array.isArray(record.meta)
+    ? record.meta as Record<string, unknown>
+    : {};
+  const nodeValue = record.nodeId ?? meta.nodeId;
+  const instanceValue = record.instanceId ?? meta.instanceId;
+  const nodeId = typeof nodeValue === "string" && nodeValue.trim() ? nodeValue.trim() : undefined;
+  const instanceId = typeof instanceValue === "string" && instanceValue.trim() ? instanceValue.trim() : undefined;
+  return nodeId || instanceId ? { ...(nodeId ? { nodeId } : {}), ...(instanceId ? { instanceId } : {}) } : scope;
 }
 
 function parseClientMessage(value: unknown): { type?: string; topics?: string[]; instanceIds?: string[]; aiSessionTransient?: AiSessionTransientSubscription } | undefined {

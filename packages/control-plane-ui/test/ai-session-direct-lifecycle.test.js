@@ -87,12 +87,13 @@ test("history resume waits for source and provider identity without requiring an
   assert.match(panel, /result\.appSessionId \? session\.appSessionId === result\.appSessionId : !session\.appSessionId/);
 });
 
-test("Fork creates an authoritative Direct AI session and waits for its projection", async () => {
-  const [panel, board, card, cardMenu, queries, sharedClient] = await Promise.all([
+test("Fork creates an authoritative Direct AI session and waits for its event projection", async () => {
+  const [panel, board, card, cardMenu, projectionWait, queries, sharedClient] = await Promise.all([
     source("apps/control-plane/instance-detail/AiSessionPanel.vue"),
     source("apps/control-plane/ai-board/AiSessionBoardView.vue"),
     source("apps/control-plane/ai-board/AiSessionCard.vue"),
     source("components/ai-session/AiSessionCardContextMenu.vue"),
+    source("apps/control-plane/ai-session-projection.ts"),
     source("api/queries.ts"),
     readFile(new URL("../../control-plane-client/src/ai-sessions.ts", import.meta.url), "utf8"),
   ]);
@@ -110,10 +111,13 @@ test("Fork creates an authoritative Direct AI session and waits for its projecti
   assert.match(sharedClient, /requestData\([^\n]+AiSessionForkResultSchema/);
   for (const component of [panel, board]) {
     assert.match(component, /providerSessionId === result\.providerSessionId/);
-    assert.match(component, /await new Promise\(\(resolve\) => setTimeout\(resolve, 100\)\)/);
+    assert.match(component, /waitForAiSessionProjection/);
+    assert.doesNotMatch(component, /for \(let attempt = 0; attempt < 25/);
     assert.match(component, /workspace: \{ mode \}/);
     assert.match(component, /requestKey = `[^`]+:\$\{mode\}(?::\$\{throughTurnId \|\| "latest"\})?`/);
   }
   assert.doesNotMatch(panel, /registry\.put|optimistic/i);
   assert.doesNotMatch(board, /registry\.put|optimistic/i);
+  assert.match(projectionWait, /watch\(read/);
+  assert.doesNotMatch(projectionWait, /refetch|invalidateQueries/);
 });

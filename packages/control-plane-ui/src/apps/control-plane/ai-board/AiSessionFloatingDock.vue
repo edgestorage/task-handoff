@@ -149,6 +149,7 @@
       :provider="card.session.agent"
       :permission-key="aiSessionPermissionKey(card.instance.id, card.session.id)"
       :default-permission-mode="card.instance.config.defaultCodexPermissionMode"
+      :max-file-attachment-bytes="card.instance.config.aiSessionMaxFileAttachmentBytes"
       @update:model-value="$emit('update:draft', $event)"
       @update:attachments="$emit('update:attachments', $event)"
       @update:mention-bindings="$emit('update:mentionBindings', $event)"

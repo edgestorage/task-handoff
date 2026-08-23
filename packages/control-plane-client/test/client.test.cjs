@@ -60,6 +60,40 @@ test("shared AI Session client owns route encoding, request input, and response 
   assert.equal(requests[0].init.method, "POST");
 });
 
+test("shared users client owns strict authorization responses and encoded management routes", async () => {
+  const requests = [];
+  const transport = {
+    async request(path, schema, init) {
+      requests.push({ path, init });
+      if (path === "/api/access/me") return schema.parse({ data: {
+        userId: "user_operator",
+        identityId: "identity_operator",
+        roleIds: ["role_operator"],
+        permissionIds: ["nodes:read"],
+        nodeScope: { kind: "selected", nodeIds: ["node_1"], futureScope: true },
+        authorizationRevision: 2,
+        futureAccess: true,
+      } });
+      if (path.endsWith("/session%2F1")) return schema.parse({ data: { revoked: true } });
+      throw new Error(`Unexpected path ${path}`);
+    },
+  };
+  const api = createControlPlaneClient(transport);
+  const access = await api.users.currentAuthorization();
+  assert.deepEqual(access, {
+    userId: "user_operator",
+    identityId: "identity_operator",
+    roleIds: ["role_operator"],
+    permissionIds: ["nodes:read"],
+    nodeScope: { kind: "selected", nodeIds: ["node_1"] },
+    authorizationRevision: 2,
+  });
+  const revoked = await api.users.revokeSession("user/operator", "session/1");
+  assert.equal(revoked.revoked, true);
+  assert.equal(requests[1].path, "/api/users/user%2Foperator/sessions/session%2F1");
+  assert.equal(requests[1].init.method, "DELETE");
+});
+
 test("shared AI Session attachment upload forwards transport progress", async () => {
   const progress = [];
   const transport = {
@@ -168,6 +202,13 @@ test("shared long-paste fixtures cover unicode, blank summaries, and exact UTF-8
     code: "AI_SESSION_PASTED_TEXT_TOO_LARGE",
     size: 500 * 1024,
   });
+});
+
+test("shared long-paste classifier accepts an instance-specific file limit", () => {
+  const text = "a".repeat(700 * 1024);
+  assert.equal(classifyAiSessionPastedText(text).disposition, "rejected");
+  assert.equal(classifyAiSessionPastedText(text, 1, 1024 * 1024).disposition, "attachment");
+  assert.equal(classifyAiSessionPastedText("a".repeat(1024 * 1024), 1, 1024 * 1024).disposition, "rejected");
 });
 
 test("attachment-only message helper remains locale neutral", () => {
@@ -323,8 +364,9 @@ test("shared auth client owns Web and mobile authentication contracts", async ()
             authenticated: true,
             user: {
               id: "user-1",
-              username: "admin",
-              role: "admin",
+              displayName: "Administrator",
+              primaryUsername: "admin",
+              status: "active",
               createdAt: "2026-08-05T00:00:00.000Z",
               updatedAt: "2026-08-05T00:00:00.000Z",
             },
@@ -335,8 +377,9 @@ test("shared auth client owns Web and mobile authentication contracts", async ()
       if (path === "/api/auth/password") {
         return schema.parse({ data: { user: {
           id: "user-1",
-          username: "admin",
-          role: "admin",
+          displayName: "Administrator",
+          primaryUsername: "admin",
+          status: "active",
           createdAt: "2026-08-05T00:00:00.000Z",
           updatedAt: "2026-08-05T00:00:00.000Z",
         } } });
@@ -346,17 +389,29 @@ test("shared auth client owns Web and mobile authentication contracts", async ()
           sessionToken: "mobile-token-that-is-at-least-32-characters",
           session: {
             id: "mobile-session-1",
+            userId: "user-1",
+            identityId: "identity-1",
+            clientType: "mobile",
             expiresAt: "2026-09-05T00:00:00.000Z",
             createdAt: "2026-08-05T00:00:00.000Z",
             lastSeenAt: "2026-08-05T00:00:00.000Z",
             device: { id: "device-0001", name: "Phone", platform: "ios" },
             user: {
               id: "user-1",
-              username: "admin",
-              role: "admin",
+              displayName: "Administrator",
+              primaryUsername: "admin",
+              status: "active",
               createdAt: "2026-08-05T00:00:00.000Z",
               updatedAt: "2026-08-05T00:00:00.000Z",
             },
+          },
+          authorization: {
+            userId: "user-1",
+            identityId: "identity-1",
+            roleIds: ["role_admin"],
+            permissionIds: ["users:manage"],
+            nodeScope: { kind: "all" },
+            authorizationRevision: 1,
           },
         },
       });

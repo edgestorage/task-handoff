@@ -13,7 +13,7 @@
         <form v-else class="account-security-form" @submit.prevent="submit">
           <label>
             <span>{{ t("settings.account.username") }}</span>
-            <Input :model-value="authSession.data.value?.user?.username || ''" autocomplete="username" disabled />
+            <Input :model-value="authSession.data.value?.user?.primaryUsername || authSession.data.value?.user?.displayName || ''" autocomplete="username" disabled />
           </label>
           <label>
             <span>{{ t("settings.account.currentPassword") }}</span>

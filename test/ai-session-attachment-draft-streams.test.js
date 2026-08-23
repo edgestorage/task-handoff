@@ -1,8 +1,12 @@
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
 const { Readable } = require("node:stream");
 const test = require("node:test");
 
 const { AiSessionAttachmentDraftStreams } = require("../packages/ai-session-runtime/src/ai-session-attachment-draft-streams.ts");
+const { AiSessionConversationAttachmentStore } = require("../packages/ai-session-runtime/src/ai-session-conversation-attachment-store.ts");
 const {
   AI_SESSION_ATTACHMENT_DRAFT_STREAM_CHUNK_BYTES,
   AiSessionAttachmentDraftStreamCreateInputSchema,
@@ -52,6 +56,28 @@ test("draft stream surfaces creation failures before accepting chunks", async ()
     size: AI_SESSION_ATTACHMENT_DRAFT_STREAM_CHUNK_BYTES,
   })), (error) => error.code === "AI_SESSION_ATTACHMENT_STORAGE_FULL");
   await assert.rejects(() => streams.append(attachmentId, 0, Readable.from([Buffer.alloc(AI_SESSION_ATTACHMENT_DRAFT_STREAM_CHUNK_BYTES)])), (error) => error.code === "AI_SESSION_ATTACHMENT_UPLOAD_NOT_FOUND");
+});
+
+test("draft stream rejects files above the controlled-instance limit before accepting chunks", async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-draft-stream-limit-"));
+  try {
+    const store = new AiSessionConversationAttachmentStore({ dataDir }, { maxFileAttachmentBytes: 4 });
+    const streams = new AiSessionAttachmentDraftStreams((input) => store.createDraft(input));
+    await assert.rejects(() => streams.begin(AiSessionAttachmentDraftStreamCreateInputSchema.parse({
+      attachmentId,
+      scopeType: "session",
+      scopeId: "session-1",
+      kind: "file",
+      name: "asset.bin",
+      mime: "application/octet-stream",
+      size: 4,
+    })), { code: "AI_SESSION_ATTACHMENTS_TOO_LARGE", statusCode: 413 });
+    await assert.rejects(() => streams.append(attachmentId, 0, Readable.from([Buffer.from("data")])), {
+      code: "AI_SESSION_ATTACHMENT_UPLOAD_NOT_FOUND",
+    });
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
 });
 
 test("draft stream rejects concurrent offset transitions", async () => {

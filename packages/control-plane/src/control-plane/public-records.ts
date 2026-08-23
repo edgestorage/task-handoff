@@ -112,8 +112,12 @@ export function publicInstanceDirectory(item: InstanceBoardResult["items"][numbe
     capabilities: {
       aiSessionTimeline: item.capabilities.features.aiSessionTimeline,
       aiSessionConversationAttachments: item.capabilities.features.aiSessionConversationAttachments,
+      aiSessionProviders: item.capabilities.features.aiSessionProviders,
     },
-    config: { defaultCodexPermissionMode: item.config.defaultCodexPermissionMode },
+    config: {
+      defaultCodexPermissionMode: item.config.defaultCodexPermissionMode,
+      aiSessionMaxFileAttachmentBytes: item.config.aiSessionMaxFileAttachmentBytes,
+    },
     lastHeartbeatAt: item.lastHeartbeatAt,
     heartbeatAgeMs: item.heartbeatAgeMs,
     observedAt: item.updatedAt,
@@ -135,7 +139,7 @@ export function publicInstanceDirectory(item: InstanceBoardResult["items"][numbe
         supportsCwdSelection: app.capabilities.supportsCwdSelection,
       })),
     availableAgents: (item.appInventory?.items || [])
-      .filter((app) => app.availability === "available" && (app.id === "codex" || app.id === "claude"))
+      .filter((app) => app.availability === "available" && item.capabilities.features.aiSessionProviders.some((provider) => provider.agent === app.id && provider.actions.create))
       .map((app) => ({
         id: app.id,
         name: app.name,

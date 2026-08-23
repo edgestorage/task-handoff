@@ -30,6 +30,10 @@
       "types": "./src/ai-sessions.ts",
       "default": "./src/ai-sessions.ts"
     },
+    "./ai-session-provider-capabilities": {
+      "types": "./src/ai-session-provider-capabilities.ts",
+      "default": "./src/ai-session-provider-capabilities.ts"
+    },
     "./app-sessions": {
       "types": "./src/app-sessions.ts",
       "default": "./src/app-sessions.ts"
@@ -49,6 +53,10 @@
     "./events": {
       "types": "./src/events.ts",
       "default": "./src/events.ts"
+    },
+    "./managed-git-credentials": {
+      "types": "./src/managed-git-credentials.ts",
+      "default": "./src/managed-git-credentials.ts"
     },
     "./response-validation": {
       "types": "./src/response-validation.ts",

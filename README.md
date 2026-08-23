@@ -26,6 +26,7 @@ TaskHandoff brings Codex and other AI development work into one control plane. I
 - **Environment templates** — Save a Docker instance's installed tools and container configuration as a node-local reusable environment, then combine it with any project or local-folder workspace.
 - **AI session center** — View and control sessions across instances with real-time state delivered over WebSocket.
 - **Repository workflows** — Inspect files, changes, branches, and worktrees, with conservative remote delivery for Git repositories.
+- **Managed Git credentials** — Scope HTTPS tokens or pinned SSH keys to remotes, use them for one-time provisioning, or retain them for Agent, Terminal, App, and Repository Git commands.
 - **Chat integrations** — Route messages, approvals, and actions from Telegram, DingTalk, WeChat, and Feishu/Lark to a selected instance.
 - **Application management** — Install, remove, and run applications on target instances through a trusted built-in catalog.
 - **Mobile client** — Connect an iOS or Android device directly to a user-managed Control Plane for AI sessions, instance operations, applications, and terminals.

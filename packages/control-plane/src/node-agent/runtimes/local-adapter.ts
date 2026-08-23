@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { processStartIdentity } from "@task-handoff/core/core/process-singleton-lock";
@@ -131,6 +132,8 @@ export class LocalhostRuntimeAdapter implements RuntimeAdapter {
     const errPath = path.join(logDir, "controlled-instance.err.log");
     copyTruncateOpenLog(outPath);
     copyTruncateOpenLog(errPath);
+    const gitBrokerDir = fs.mkdtempSync(path.join(os.tmpdir(), `task-handoff-git-proxy-${context.instance.id}-`));
+    fs.chmodSync(gitBrokerDir, 0o700);
     const out = fs.openSync(outPath, "a", 0o600);
     const err = fs.openSync(errPath, "a", 0o600);
     const child = spawn(command, args, {
@@ -159,6 +162,7 @@ export class LocalhostRuntimeAdapter implements RuntimeAdapter {
         TASK_HANDOFF_CODEX_APP_SERVER: process.env.TASK_HANDOFF_CODEX_APP_SERVER || "1",
         TASK_HANDOFF_WEB_PORT: String(port),
         TASK_HANDOFF_WEB_HOST: "127.0.0.1",
+        TASK_HANDOFF_GIT_CREDENTIAL_SOCKET: path.join(gitBrokerDir, "broker.sock"),
         ...(context.modelEnv || {}),
       },
     });
@@ -167,6 +171,7 @@ export class LocalhostRuntimeAdapter implements RuntimeAdapter {
     try {
       await waitForChildSpawn(child);
     } catch (error) {
+      fs.rmSync(gitBrokerDir, { recursive: true, force: true });
       const message = error instanceof Error ? error.message : String(error);
       try {
         fs.appendFileSync(
@@ -199,6 +204,7 @@ export class LocalhostRuntimeAdapter implements RuntimeAdapter {
       }
     });
     child.once("exit", (code, signal) => {
+      fs.rmSync(gitBrokerDir, { recursive: true, force: true });
       try {
         fs.appendFileSync(
           lifecycleLogPath,

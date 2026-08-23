@@ -57,9 +57,11 @@ async function main() {
     .description("Initialize or replace Control Plane administrator credentials while the service is stopped.")
     .requiredOption("--username <username>", "New administrator username")
     .requiredOption("--password-stdin", "Read the new password from standard input")
+    .option("--user-id <userId>", "Select the account by its local user ID")
+    .option("--target-username <username>", "Select the account by its current username")
     .option("--initialize-if-needed", "Create the administrator only when none exists")
     .option("--data-dir <path>", "Control plane data directory")
-    .action(async (options: { username: string; passwordStdin: boolean; initializeIfNeeded?: boolean; dataDir?: string }) => {
+    .action(async (options: { username: string; passwordStdin: boolean; userId?: string; targetUsername?: string; initializeIfNeeded?: boolean; dataDir?: string }) => {
       if (process.stdin.isTTY) {
         throw new Error("Pipe the new password to standard input when using --password-stdin.");
       }
@@ -77,8 +79,10 @@ async function main() {
       const user = await replaceControlPlaneCredentials(options.dataDir, {
         username: options.username,
         password,
+        userId: options.userId,
+        targetUsername: options.targetUsername,
       });
-      console.log(`Updated Control Plane credentials for ${user.username}. Existing sessions were revoked.`);
+      console.log(`Updated Control Plane credentials for ${user.primaryUsername || user.displayName}. Existing sessions were revoked.`);
     });
 
   await program.parseAsync(process.argv);

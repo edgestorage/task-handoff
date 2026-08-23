@@ -79,7 +79,11 @@
 
       <AccountSecuritySettingsSection v-else-if="settingsSection === 'account'" />
 
+      <UserAccessSettingsSection v-else-if="settingsSection === 'users'" :nodes="nodes.data.value || []" />
+
       <CloudConnectivitySettingsSection v-else-if="settingsSection === 'cloud-connectivity'" />
+
+      <GitCredentialsSettingsSection v-else-if="settingsSection === 'git-credentials'" />
 
       <ScrollArea v-else-if="settingsSection === 'models'" class="settings-section-scroll" :horizontal="false">
         <div class="settings-section-scroll-content">
@@ -256,6 +260,7 @@
               <ControlPlaneSelect v-model="settingsModel.app" :placeholder="t('settings.modelRegistry.selectApp')">
                 <ControlPlaneSelectItem value="codex">Codex</ControlPlaneSelectItem>
                 <ControlPlaneSelectItem value="claude">Claude</ControlPlaneSelectItem>
+                <ControlPlaneSelectItem value="opencode">OpenCode</ControlPlaneSelectItem>
               </ControlPlaneSelect>
             </label>
             <div class="checkbox-row">
@@ -401,8 +406,26 @@
               <div>
                 <strong>{{ project.name }}</strong>
                 <code>{{ projectSourceLabel(project) }}</code>
+                <small>{{ t("settings.projectRegistry.credential") }} · {{ projectCredentialLabel(project) }}</small>
               </div>
               <div class="settings-row-actions">
+                <ControlPlaneSelect
+                  v-if="canManageSecrets && project.source.type !== 'local-folder'"
+                  :model-value="project.source.auth?.secretId || NO_GIT_CREDENTIAL_VALUE"
+                  :disabled="updatingProjectCredentialId === project.id"
+                  :placeholder="t('settings.projectRegistry.noCredential')"
+                  @update:model-value="updateProjectCredential(project, $event)"
+                >
+                  <ControlPlaneSelectItem :value="NO_GIT_CREDENTIAL_VALUE">{{ t("settings.projectRegistry.noCredential") }}</ControlPlaneSelectItem>
+                  <ControlPlaneSelectItem
+                    v-for="credential in managedGitCredentials.data.value || []"
+                    :key="credential.id"
+                    :value="credential.id"
+                    :disabled="credential.status !== 'enabled'"
+                  >
+                    {{ credential.name }}
+                  </ControlPlaneSelectItem>
+                </ControlPlaneSelect>
                 <Badge variant="secondary">{{ projectInUse(project.id) ? t("settings.projectRegistry.inUse") : project.workspacePolicy.mode }}</Badge>
                 <Button variant="outline" size="sm" :disabled="projectInUse(project.id) || deletingProjectId === project.id" @click="removeProject(project)">
                   <Trash2 :size="14" />
@@ -428,6 +451,15 @@
               <span>{{ t("settings.projectRegistry.gitUrl") }}</span>
               <!-- i18n-audit-allow-next-line code-token: example Git remote URL -->
               <ControlPlaneInput v-model="settingsProject.url" placeholder="https://github.com/org/repo" />
+            </label>
+            <label v-if="canManageSecrets">
+              <span>{{ t("settings.projectRegistry.credential") }}</span>
+              <ControlPlaneSelect v-model="settingsGitCredentialValue" :placeholder="t('settings.projectRegistry.noCredential')">
+                <ControlPlaneSelectItem :value="NO_GIT_CREDENTIAL_VALUE">{{ t("settings.projectRegistry.noCredential") }}</ControlPlaneSelectItem>
+                <ControlPlaneSelectItem v-for="credential in enabledManagedGitCredentials" :key="credential.id" :value="credential.id">
+                  {{ credential.name }} · {{ credential.scope.host }}{{ credential.scope.pathPrefix }}
+                </ControlPlaneSelectItem>
+              </ControlPlaneSelect>
             </label>
             <label>
               <span>{{ t("settings.projectRegistry.defaultImage") }}</span>
@@ -779,7 +811,7 @@ import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useQueryClient } from "@tanstack/vue-query";
 import { Activity, AlertTriangle, ArrowLeft, Check, ChevronDown, ChevronUp, ChevronsUpDown, Download, Eye, EyeOff, KeyRound, Layers, MapPin, MonitorCog, Plus, RefreshCw, Server, Settings, ShieldAlert, Sparkles, Trash2 } from "@lucide/vue";
-import { cancelControlPlaneProxyClaim, claimControlPlaneProxyNode, controlPlaneQueryKeys, downloadControlPlaneDiagnosticLogs, getNodeExternalListener, resumeControlPlaneProxyClaim, updateControlPlaneSettings, updateNodeExternalListener, useAuthSessionQuery, useChatBridgesQuery, useChatGatewayStatusQuery, useControlPlaneSettingsQuery, useImageOptionsQuery, useImagesQuery, useInstanceBoardPayloadQuery, useMarketCatalogQuery, useModelRegistryQuery, useModelsQuery, useNodeImageAvailabilityQuery, useNodeRuntimesPayloadQuery, useNodesQuery, usePendingControlPlaneProxyClaimsQuery, useProjectsQuery, useServerUpdateCheckQuery } from "../../../api/queries";
+import { cancelControlPlaneProxyClaim, claimControlPlaneProxyNode, controlPlaneQueryKeys, downloadControlPlaneDiagnosticLogs, getNodeExternalListener, resumeControlPlaneProxyClaim, updateControlPlaneSettings, updateNodeExternalListener, useAuthSessionQuery, useChatBridgesQuery, useChatGatewayStatusQuery, useControlPlaneSettingsQuery, useCurrentAccessQuery, useGitCredentialsQuery, useImageOptionsQuery, useImagesQuery, useInstanceBoardPayloadQuery, useMarketCatalogQuery, useModelRegistryQuery, useModelsQuery, useNodeImageAvailabilityQuery, useNodeRuntimesPayloadQuery, useNodesQuery, usePendingControlPlaneProxyClaimsQuery, useProjectsQuery, useServerUpdateCheckQuery } from "../../../api/queries";
 import { invalidateControlPlaneDomains } from "../../../api/queryInvalidation";
 import type { BuildInfo, ControlPlaneSettings, InstanceBoardItem, ModelLocation, Node, NodeAgentExternalListener, UpdateChannel } from "../../../api/types";
 import { Badge } from "../../../components/ui/badge";
@@ -801,6 +833,7 @@ import BasicSettingsSection from "./AppearanceSettingsSection.vue";
 import ChatBridgeSettingsSection from "./ChatBridgeSettingsSection.vue";
 import MobileSessionsSettingsSection from "./MobileSessionsSettingsSection.vue";
 import AccountSecuritySettingsSection from "./AccountSecuritySettingsSection.vue";
+import UserAccessSettingsSection from "./UserAccessSettingsSection.vue";
 import { useChatBridgeSettings } from "./useChatBridgeSettings";
 import { useImageSettings } from "./useImageSettings";
 import { useModelSettings } from "./useModelSettings";
@@ -818,6 +851,7 @@ import NodeStorageFolderPickerDialog from "./NodeStorageFolderPickerDialog.vue";
 import GeneratedTokenDialog from "./GeneratedTokenDialog.vue";
 import EnvironmentTemplatesSettings from "./EnvironmentTemplatesSettings.vue";
 import CloudConnectivitySettingsSection from "./CloudConnectivitySettingsSection.vue";
+import GitCredentialsSettingsSection from "./GitCredentialsSettingsSection.vue";
 import { nodeEndpointDisplay } from "./nodeEndpointDisplay";
 import { getThemePreference, saveThemePreference, type ThemePreference } from "../../../utils/theme";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
@@ -826,7 +860,7 @@ import { translateApiError } from "../../../i18n/apiError";
 import { normalizeProxyOrigin, proxyClaimForceDeleteAllowed, proxyClaimValidation } from "./controlPlaneProxyUi";
 import type { NodeJoinedEvent } from "@task-handoff/protocol/control-plane";
 
-type SettingsSection = "basic" | "chat" | "images" | "environment-templates" | "projects" | "nodes" | "models" | "triggers" | "mobile-sessions" | "account" | "cloud-connectivity";
+type SettingsSection = "basic" | "chat" | "images" | "environment-templates" | "projects" | "nodes" | "models" | "git-credentials" | "triggers" | "mobile-sessions" | "account" | "users" | "cloud-connectivity";
 type NodeDiagnosticLog = {
   route: string;
   method: string;
@@ -852,24 +886,34 @@ const emit = defineEmits<{
 const { locale, t } = useI18n();
 
 const DEFAULT_SELECT_VALUE = "__default__";
+const NO_GIT_CREDENTIAL_VALUE = "__none__";
 const modelPickerOpen = ref(false);
 const authSession = useAuthSessionQuery();
+const currentAccess = useCurrentAccessQuery(computed(() => Boolean(authSession.data.value?.enabled && authSession.data.value.authenticated)));
+const canManageUsers = computed(() => currentAccess.data.value?.permissionIds.includes("users:manage") === true);
+const canManageSettings = computed(() => currentAccess.data.value?.permissionIds.includes("settings:manage") === true);
+const canManageSecrets = computed(() => authSession.data.value?.enabled !== true || currentAccess.data.value?.permissionIds.includes("secrets:manage") === true);
 const settingsSections = computed<Array<{ id: SettingsSection; label: string }>>(() => [
   { id: "nodes", label: t("settings.nodes") },
   { id: "images", label: t("settings.images") },
   { id: "environment-templates", label: t("settings.environmentTemplates") },
   { id: "projects", label: t("settings.projects") },
   { id: "models", label: t("settings.models") },
+  ...(canManageSecrets.value ? [{ id: "git-credentials" as const, label: t("settings.gitCredentials.navigation") }] : []),
   { id: "triggers", label: t("triggers.title") },
   { id: "chat", label: t("settings.chat") },
   { id: "mobile-sessions", label: t("settings.mobileSessions.navigation") },
   ...(authSession.data.value?.enabled ? [{ id: "account" as const, label: t("settings.account.navigation") }] : []),
-  ...(authSession.data.value?.user?.role === "admin" ? [{ id: "cloud-connectivity" as const, label: t("settings.cloud.navigation") }] : []),
+  ...(canManageUsers.value ? [{ id: "users" as const, label: t("settings.userAccess.navigation") }] : []),
+  ...(canManageSettings.value ? [{ id: "cloud-connectivity" as const, label: t("settings.cloud.navigation") }] : []),
   { id: "basic", label: t("settings.basic") },
 ]);
 
+const settingsSection = ref<SettingsSection>(props.initialSection || "nodes");
 const queryClient = useQueryClient();
 const projects = useProjectsQuery();
+const managedGitCredentials = useGitCredentialsQuery(computed(() => canManageSecrets.value && settingsSection.value === "projects"));
+const enabledManagedGitCredentials = computed(() => (managedGitCredentials.data.value || []).filter((credential) => credential.status === "enabled"));
 const models = useModelsQuery();
 const modelRegistry = useModelRegistryQuery();
 const images = useImagesQuery();
@@ -885,9 +929,10 @@ const desktopUpdates = useDesktopUpdates();
 const updateChannel = computed<UpdateChannel>(() => controlPlaneSettings.data.value?.updateChannel || "stable");
 const diagnosticLogs = computed(() => controlPlaneSettings.data.value?.diagnosticLogs === true);
 
-const settingsSection = ref<SettingsSection>(props.initialSection || "nodes");
-watch(() => authSession.data.value?.user?.role, (role) => {
-  if (role !== "admin" && settingsSection.value === "cloud-connectivity") setSettingsSection("nodes");
+watch([canManageUsers, canManageSettings, canManageSecrets], ([manageUsers, manageSettings, manageSecrets]) => {
+  if (!manageSettings && settingsSection.value === "cloud-connectivity") setSettingsSection("nodes");
+  if (!manageUsers && settingsSection.value === "users") setSettingsSection("nodes");
+  if (!manageSecrets && settingsSection.value === "git-credentials") setSettingsSection("nodes");
 }, { immediate: true });
 watch(() => authSession.data.value?.enabled, (enabled) => {
   if (!enabled && settingsSection.value === "account") setSettingsSection("nodes");
@@ -1036,12 +1081,17 @@ const {
   creatingSettingsProject,
   deletingProjectId,
   projectSourceLabel,
+  projectCredentialLabel,
   removeProject,
+  updateProjectCredential,
+  updatingProjectCredentialId,
   settingsDefaultImageSelectValue,
+  settingsGitCredentialValue,
   settingsProject,
   settingsProjectSuccess,
 } = useProjectSettings({
   errorText,
+  gitCredentials: computed(() => managedGitCredentials.data.value || []),
   onProjectDeleted() {},
   projectInUse,
   refreshProjects,

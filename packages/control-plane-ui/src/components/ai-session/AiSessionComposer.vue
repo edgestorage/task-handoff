@@ -18,6 +18,7 @@ import { useAiSessionMentions, type AiSessionMentionContext } from "./useAiSessi
 import { useAiSessionPermissionMode } from "../../apps/control-plane/useAiSessionPermissionMode";
 import { showControlPlaneToast } from "../../apps/control-plane/useControlPlaneToasts";
 import { classifyAiSessionPastedText, type AiSessionPastedTextPresentation } from "@task-handoff/control-plane-client";
+import { AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES } from "@task-handoff/protocol/ai-sessions";
 
 export type AiSessionComposerAttachment = {
   id: string;
@@ -47,6 +48,7 @@ const props = defineProps<{
   placeholder?: string;
   mentionBindings?: AiSessionMentionBinding[];
   mentionContext?: AiSessionMentionContext;
+  maxFileAttachmentBytes?: number;
   mentionTrigger?: string;
   commandTrigger?: string;
   sessionBusy?: boolean;
@@ -76,7 +78,6 @@ const draft = computed({
 
 const MAX_ATTACHMENTS = 6;
 const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
-const MAX_INLINE_FILE_BYTES = 500 * 1024;
 const MAX_TOTAL_ATTACHMENT_BYTES = 40 * 1024 * 1024;
 const SUPPORTED_IMAGE_MIME = new Set(["image/bmp", "image/gif", "image/jpeg", "image/png", "image/webp"]);
 const composerEl = ref<HTMLFormElement>();
@@ -221,7 +222,7 @@ function validateFiles(files: File[], runtimePathFiles: Set<File>, outsideWorksp
       showControlPlaneToast(t("sessions.composer.imageTooLarge"));
       continue;
     }
-    if (!usesRuntimePath && kind === "file" && file.size >= MAX_INLINE_FILE_BYTES) {
+    if (!usesRuntimePath && kind === "file" && file.size >= (props.maxFileAttachmentBytes || AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES)) {
       showControlPlaneToast(outsideWorkspaceFiles.has(file)
         ? t("sessions.composer.runtimePathOutside")
         : props.mentionContext?.runtimeType === "local"
@@ -392,7 +393,7 @@ function handlePaste(event: ClipboardEvent) {
     return;
   }
   const text = event.clipboardData?.getData("text/plain") || "";
-  const decision = classifyAiSessionPastedText(text, pastedTextSequence.value + 1);
+  const decision = classifyAiSessionPastedText(text, pastedTextSequence.value + 1, props.maxFileAttachmentBytes || AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES);
   if (decision.disposition === "inline") return;
   event.preventDefault();
   if (decision.disposition === "rejected") {

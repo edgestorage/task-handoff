@@ -34,7 +34,7 @@ export type SessionTab = {
 };
 
 export type RepositoryWorkspaceTabTarget = {
-  aiAgent?: "codex" | "claude";
+  aiAgent?: "codex" | "claude" | "opencode";
   filePath?: string;
   fileRequestId?: number;
   initialView: "files" | "changes";

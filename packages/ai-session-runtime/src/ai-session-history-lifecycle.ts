@@ -8,9 +8,10 @@ import {
 import { AiSessionHistoryStore } from "./ai-session-history-store";
 import { activeAppSessionIds, type AppSessionPresenceCandidate } from "./ai-session/reconciliation-service";
 
-function resumableAgent(agent: string): agent is AiSessionHistoryItem["agent"] {
-  return agent === "codex" || agent === "claude";
-}
+type ResumableAgentQuery = (agent: string) => boolean;
+
+// Compatibility for v0.0.21: standalone consumers only knew the two released providers.
+const legacyResumableAgent: ResumableAgentQuery = (agent) => agent === "codex" || agent === "claude";
 
 export function aiSessionHistoryTurns(session: AiSessionStatus): AiSessionHistoryTurn[] {
   const turns = (session.turns || []).slice(-50).map((turn) => AiSessionHistoryTurnSchema.parse({
@@ -45,7 +46,7 @@ export function aiSessionHistoryItem(
   session: AiSessionStatus,
   archivedAt = new Date().toISOString(),
 ): AiSessionHistoryItem | undefined {
-  if (!resumableAgent(session.agent) || !session.providerSessionId || !session.cwd) {
+  if (!session.agent.trim() || !session.providerSessionId || !session.cwd) {
     return undefined;
   }
   return AiSessionHistoryItemSchema.parse({
@@ -66,16 +67,18 @@ export function aiSessionHistoryItem(
 
 export class AiSessionHistoryLifecycle {
   private readonly store: AiSessionHistoryStore;
+  private readonly isResumableAgent: ResumableAgentQuery;
 
-  constructor(store: AiSessionHistoryStore) {
+  constructor(store: AiSessionHistoryStore, isResumableAgent: ResumableAgentQuery = legacyResumableAgent) {
     this.store = store;
+    this.isResumableAgent = isResumableAgent;
   }
 
   activate(sessions: readonly AiSessionStatus[], appSessions: readonly AppSessionPresenceCandidate[]) {
     const activeIds = activeAppSessionIds(appSessions);
     let activated = 0;
     for (const session of sessions) {
-      if (!resumableAgent(session.agent) || !session.providerSessionId || !session.appSessionId || !activeIds.has(session.appSessionId)) continue;
+      if (!this.isResumableAgent(session.agent) || !session.providerSessionId || !session.appSessionId || !activeIds.has(session.appSessionId)) continue;
       activated += Number(this.store.activate(session.id));
       activated += Number(this.store.activateIdentity(session.agent, session.providerSessionId));
     }
@@ -91,7 +94,7 @@ export class AiSessionHistoryLifecycle {
     let archived = 0;
     let activated = 0;
     for (const session of sessions) {
-      if (!resumableAgent(session.agent) || !session.providerSessionId || !session.appSessionId) continue;
+      if (!this.isResumableAgent(session.agent) || !session.providerSessionId || !session.appSessionId) continue;
       if (activeIds.has(session.appSessionId)) {
         activated += Number(this.store.activate(session.id));
         activated += Number(this.store.activateIdentity(session.agent, session.providerSessionId));

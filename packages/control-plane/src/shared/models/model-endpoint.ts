@@ -1,4 +1,4 @@
-export type ModelEndpointApp = "codex" | "claude";
+export type ModelEndpointApp = "codex" | "claude" | "opencode";
 
 export type DiscoveredModel = {
   id: string;
@@ -67,7 +67,7 @@ export async function testModelEndpoint(fetchImpl: FetchImpl, input: {
   app: ModelEndpointApp;
 }): Promise<ModelTestResult> {
   const startedAt = Date.now();
-  const response = input.app === "codex"
+  const response = input.app === "codex" || input.app === "opencode"
     ? await endpointFetch(fetchImpl, appendEndpointPath(input.endpoint, "responses"), {
       method: "POST",
       headers: {

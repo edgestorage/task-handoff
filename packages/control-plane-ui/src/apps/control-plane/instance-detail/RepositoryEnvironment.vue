@@ -186,7 +186,7 @@ import RepositoryDeliveryDialog from "./RepositoryDeliveryDialog.vue";
 import RepositoryErrorNotice from "./RepositoryErrorNotice.vue";
 
 const props = defineProps<{
-  aiAgent?: "codex" | "claude";
+  aiAgent?: "codex" | "claude" | "opencode";
   connectionStatus: string;
   instanceId: string;
   sessionId: string;

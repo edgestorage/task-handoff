@@ -526,7 +526,6 @@ test("complete-session Timeline forwarding is capability-gated by the canonical 
       return { sessionId: "ais_1", providerSessionId: "thread_1", items: [], generatedAt: "2026-08-15T00:00:00.000Z" };
     },
     requireRuntime: async () => ({}),
-    refreshSnapshots: async () => undefined,
   });
   const timeline = await service.timeline("instance_1", "ais_1");
   assert.equal(requestedPath, "/ai-sessions/ais_1/timeline");
@@ -536,7 +535,6 @@ test("complete-session Timeline forwarding is capability-gated by the canonical 
     requireInstance: async () => ({ capabilities: { features: {} } }),
     request: async () => { throw new Error("must not forward"); },
     requireRuntime: async () => ({}),
-    refreshSnapshots: async () => undefined,
   });
   await assert.rejects(() => unsupported.timeline("instance_unsupported", "ais_1"), (error) => error.code === "AI_SESSION_TIMELINE_UNSUPPORTED");
 });
@@ -554,7 +552,6 @@ test("per-turn Timeline forwarding is independently capability-gated", async () 
       return { sessionId: "ais_1", turnId: "turn_2", items: [], generatedAt: "2026-08-15T00:00:00.000Z" };
     },
     requireRuntime: async () => ({}),
-    refreshSnapshots: async () => undefined,
   });
   const timeline = await service.turnTimeline("instance_1", "ais_1", "turn_2");
   assert.equal(requestedPath, "/ai-sessions/ais_1/turns/turn_2/timeline");
@@ -568,7 +565,6 @@ test("per-turn Timeline forwarding is independently capability-gated", async () 
     } } } }),
     request: async () => { throw new Error("must not forward"); },
     requireRuntime: async () => ({}),
-    refreshSnapshots: async () => undefined,
   });
   await assert.rejects(
     () => unsupported.turnTimeline("instance_unsupported", "ais_1", "turn_2"),
@@ -598,7 +594,6 @@ test("Timeline forwarding accepts provider-scoped capabilities", async () => {
       return { sessionId: "ais_1", providerSessionId: "provider_1", items: [], generatedAt: "2026-08-16T00:00:00.000Z" };
     },
     requireRuntime: async () => ({}),
-    refreshSnapshots: async () => undefined,
   });
   await service.timeline("instance_1", "ais_1");
   await service.turnTimeline("instance_1", "ais_1", "turn_1");

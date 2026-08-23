@@ -19,6 +19,7 @@ import { withRequestSignal } from "./request-signal.ts";
 import { z } from "zod";
 import { PUBLIC_CONTROL_PLANE_ROUTE } from "./auth-boundary.ts";
 import { publicNodeDirectory } from "../public-records.ts";
+import { filterRequestNodes } from "./access-projection.ts";
 
 const DeleteNodeQuerySchema = z.object({ force: z.enum(["true", "false"]).optional() }).strict();
 const NodeListQuerySchema = z.object({ projection: z.literal("directory").optional() }).strict();
@@ -57,7 +58,8 @@ export function registerNodeRoutes({
   };
   app.get("/api/nodes", async (request) => {
     const query = NodeListQuerySchema.parse(request.query);
-    return { data: query.projection === "directory" ? service.listNodes().map((node) => publicNodeDirectory(service.projectNodeConnection(node))) : service.listPublicNodes() };
+    const nodes = filterRequestNodes(request, service.listNodes(), (node) => node.id);
+    return { data: query.projection === "directory" ? nodes.map((node) => publicNodeDirectory(service.projectNodeConnection(node))) : nodes.map((node) => service.requirePublicNode(node.id)) };
   });
   app.post("/api/nodes/local/sync", async () => {
     const node = await service.syncLocalNodeConnection();
@@ -229,7 +231,13 @@ export function registerNodeRoutes({
   app.get("/api/node-runtimes", async (request, reply) => withRequestSignal(request, reply, async (signal) => {
     const query = FleetListQuerySchema.parse(request.query);
     const result = await service.listNodeRuntimesWithDiagnostics(signal, query.progressive === "true");
-    return { data: result.items, meta: { nodeErrors: result.nodeErrors, nodeStates: result.nodeStates } };
+    return {
+      data: filterRequestNodes(request, result.items, (item) => item.nodeId),
+      meta: {
+        nodeErrors: filterRequestNodes(request, result.nodeErrors, (item) => item.nodeId),
+        nodeStates: filterRequestNodes(request, result.nodeStates, (item) => item.nodeId),
+      },
+    };
   }));
 
   registerNodeAgentTunnelRoutes({ app, service, nodeAgentTunnel, errorPayload });

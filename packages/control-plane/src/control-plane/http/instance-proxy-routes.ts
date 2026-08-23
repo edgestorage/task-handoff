@@ -1,10 +1,13 @@
-import type { FastifyInstance, FastifyReply } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { Readable, Transform } from "node:stream";
 import type { ControlPlaneService } from "../application/service.ts";
+import type { ControlPlaneAuth } from "../auth/service.ts";
 import { CONTROL_PLANE_SESSION_COOKIE } from "../auth/service.ts";
 import { PUBLIC_CONTROL_PLANE_ROUTE } from "./auth-boundary.ts";
 import { PROXY_HOP_BY_HOP_HEADERS, proxyWebSocketHeaders, proxyWebSocketProtocols } from "@task-handoff/core/core/http-proxy";
 import { CONTROL_PLANE_CREDENTIAL_HEADERS } from "./proxy-headers.ts";
+import type { AuthorizationConnectionRegistry } from "../auth/authorization-connections.ts";
+import { controlPlaneRequestActor } from "./request-actor.ts";
 
 const DECODED_RESPONSE_HEADERS = new Set(["content-encoding"]);
 const INSTANCE_WEBSOCKET_BLOCKED_HEADERS = new Set(["host", ...CONTROL_PLANE_CREDENTIAL_HEADERS]);
@@ -13,10 +16,24 @@ const MAX_PROXY_REQUEST_BODY_BYTES = 64 * 1024 * 1024;
 export type RegisterInstanceProxyRoutesOptions = {
   app: FastifyInstance;
   service: ControlPlaneService;
+  auth: ControlPlaneAuth;
+  authorizationConnections: AuthorizationConnectionRegistry;
 };
 
-export function registerInstanceProxyRoutes({ app, service }: RegisterInstanceProxyRoutesOptions) {
+export function registerInstanceProxyRoutes({ app, service, auth, authorizationConnections }: RegisterInstanceProxyRoutesOptions) {
   registerRawProxyBodyParsers(app);
+
+  const appAccessTarget = async (token: string, mode: "tty" | "vnc" | "web", suffix = "") => {
+    const access = service.resolveAppAccessToken(token, mode);
+    if (access.authorization) auth.assertAppAccessAuthorization(access.authorization);
+    return service.appAccessProxyTarget(token, mode, suffix);
+  };
+
+  const trackSocket = (socket: ProxySocket, binding: { userId: string; authorizationRevision: number } | undefined) => {
+    if (!binding) return;
+    const release = authorizationConnections.track(binding, () => socket.close(4001, "Authorization changed."));
+    socket.on("close", release);
+  };
 
   const proxyInstanceWebSocket = async (socket: ProxySocket, request: ProxyRequest) => {
     const params = request.params as { id: string; "*": string };
@@ -24,6 +41,8 @@ export function registerInstanceProxyRoutes({ app, service }: RegisterInstancePr
     const queryIndex = request.url.indexOf("?");
     const query = queryIndex >= 0 ? request.url.slice(queryIndex) : "";
     try {
+      const actor = controlPlaneRequestActor(request as FastifyRequest);
+      trackSocket(socket, actor?.type === "user" ? actor : undefined);
       await service.proxyInstanceWebSocket(params.id, socket, `/${suffix}${query}`, proxyWebSocketProtocols(request.headers), instanceProxyWebSocketHeaders(request.headers));
     } catch {
       socket.close(1011, "Instance websocket endpoint is not reachable.");
@@ -33,7 +52,7 @@ export function registerInstanceProxyRoutes({ app, service }: RegisterInstancePr
   app.get("/api/app-access/session", { config: PUBLIC_CONTROL_PLANE_ROUTE }, async (request) => {
     const token = queryToken(request.url);
     const mode = (request.query as { mode?: string }).mode === "vnc" ? "vnc" : (request.query as { mode?: string }).mode === "web" ? "web" : "tty";
-    const target = await service.appAccessProxyTarget(token, mode);
+    const target = await appAccessTarget(token, mode);
     return {
       data: {
         mode,
@@ -53,7 +72,8 @@ export function registerInstanceProxyRoutes({ app, service }: RegisterInstancePr
 
   app.get("/apps/access/tty/ws", { websocket: true, config: PUBLIC_CONTROL_PLANE_ROUTE }, async (socket, request) => {
     try {
-      const target = await service.appAccessProxyTarget(queryToken(request.url), "tty");
+      const target = await appAccessTarget(queryToken(request.url), "tty");
+      trackSocket(socket, target.access.authorization);
       await service.proxyInstanceWebSocket(target.instance.id, socket, target.path, proxyWebSocketProtocols(request.headers), instanceProxyWebSocketHeaders(request.headers));
     } catch {
       socket.close(1011, "TTY access link is invalid or expired.");
@@ -63,7 +83,8 @@ export function registerInstanceProxyRoutes({ app, service }: RegisterInstancePr
   const proxyVncAccessWebSocket = async (socket: ProxySocket, request: ProxyRequest) => {
     const params = request.params as { token?: string; "*": string };
     try {
-      const target = await service.appAccessProxyTarget(params.token || queryToken(request.url), "vnc", params["*"] || "");
+      const target = await appAccessTarget(params.token || queryToken(request.url), "vnc", params["*"] || "");
+      trackSocket(socket, target.access.authorization);
       await service.proxyInstanceWebSocket(target.instance.id, socket, target.path, proxyWebSocketProtocols(request.headers), instanceProxyWebSocketHeaders(request.headers));
     } catch {
       socket.close(1011, "VNC access link is invalid or expired.");
@@ -77,7 +98,7 @@ export function registerInstanceProxyRoutes({ app, service }: RegisterInstancePr
     wsHandler: proxyVncAccessWebSocket,
     handler: async (request, reply) => {
       const params = request.params as { "*": string };
-      const target = await service.appAccessProxyTarget(queryToken(request.url), "vnc", params["*"] || "");
+      const target = await appAccessTarget(queryToken(request.url), "vnc", params["*"] || "");
       const proxied = await proxyInstanceHttp(service, reply, target.instance.id, target.path, {
         method: request.method,
         headers: proxyHeaders(request.headers),
@@ -93,7 +114,7 @@ export function registerInstanceProxyRoutes({ app, service }: RegisterInstancePr
     wsHandler: proxyVncAccessWebSocket,
     handler: async (request, reply) => {
       const params = request.params as { token: string; "*": string };
-      const target = await service.appAccessProxyTarget(params.token, "vnc", params["*"] || "");
+      const target = await appAccessTarget(params.token, "vnc", params["*"] || "");
       const proxied = await proxyInstanceHttp(service, reply, target.instance.id, target.path, {
         method: request.method,
         headers: proxyHeaders(request.headers),

@@ -20,6 +20,7 @@ const {
   ControlledInstanceCapabilitiesSchema,
   normalizeControlledInstanceCapabilities,
   supportsAiSessionPersistenceSettings,
+  supportsAiSessionFileSizeLimitSettings,
   supportsAiSessionTimelineCapability,
   supportsAiSessionWorkspaceSelection,
 } = require("../packages/protocol/src/control-plane.ts");
@@ -77,6 +78,8 @@ test("instance capabilities are projected from available inventory items", () =>
       issues: [],
       items: [
         { id: "terminal-tty", kind: "tty", availability: "available" },
+        { id: "codex", kind: "tty", availability: "available" },
+        { id: "opencode", kind: "tty", availability: "missing-dependency" },
         { id: "chromium", kind: "gui", availability: "missing-dependency" },
       ],
     }),
@@ -84,18 +87,24 @@ test("instance capabilities are projected from available inventory items", () =>
     sessionReadAgents: ["codex"],
     turnReadAgents: ["codex"],
     liveItemAgents: ["codex"],
-  });
+  }, [
+    { agent: "codex", actions: { create: true, send: true }, timeline: { sessionRead: true, turnRead: true, liveItems: true } },
+    { agent: "opencode", actions: { create: true, send: true }, timeline: { sessionRead: true, turnRead: true, liveItems: true } },
+  ]);
   assert.equal(capabilities.features.tty, true);
   assert.equal(capabilities.features.gui, false);
   assert.equal(capabilities.features.browser, false);
   assert.equal(capabilities.features.screenshots, false);
   assert.equal(capabilities.features.aiSessionPersistenceSettings, true);
   assert.equal(supportsAiSessionPersistenceSettings(capabilities), true);
+  assert.equal(supportsAiSessionFileSizeLimitSettings(capabilities), true);
   assert.deepEqual(capabilities.features.aiSessionTimeline, {
     sessionReadAgents: ["codex"],
     turnReadAgents: ["codex"],
     liveItemAgents: ["codex"],
   });
+  assert.deepEqual(capabilities.features.aiSessionProviders.map((provider) => provider.agent), ["codex"]);
+  assert.deepEqual(capabilities.features.aiSessionConversationAttachments.uploadAgents, ["codex"]);
   assert.equal(ControlledInstanceCapabilitiesSchema.safeParse(capabilities).success, true);
   assert.equal("protocolVersion" in capabilities, false);
 });

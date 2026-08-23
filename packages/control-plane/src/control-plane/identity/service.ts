@@ -72,6 +72,26 @@ export class ControlPlaneIdentityService {
       nodes: true,
       instanceBoard: true,
       triggers: true,
+      ...(authentication === "required" ? {
+        accessManagement: {
+          userManagement: {
+            users: true,
+            identities: true,
+            sessions: true,
+          },
+          authentication: {
+            externalIdentity: {
+              oidc: true,
+              oauthAdapters: ["github"],
+            },
+          },
+          authorization: {
+            customRoles: true,
+            nodeScopes: true,
+            authorizationRevisions: true,
+          },
+        },
+      } : {}),
     };
     const payload = ControlPlanePublicIdentityPayloadSchema.parse({
       version: 1,

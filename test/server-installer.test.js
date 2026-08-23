@@ -55,7 +55,7 @@ function typescriptSources(directory) {
   });
 }
 
-test("server bootstrap owns the complete Debian and Ubuntu install path", () => {
+test("server bootstrap owns Debian, Ubuntu, RHEL, and CentOS install paths without target-host native builds", () => {
   const bootstrap = fs.readFileSync(path.join(root, "scripts", "install-server.sh"), "utf8");
 
   assert.match(bootstrap, /MIN_NODE_VERSION="24\.15\.0"/);
@@ -64,8 +64,12 @@ test("server bootstrap owns the complete Debian and Ubuntu install path", () => 
   assert.match(bootstrap, /PACKAGE_TARGET="latest"/);
   assert.match(bootstrap, /nodejs\.org\/dist\/latest-v24\.x\/SHASUMS256\.txt/);
   assert.match(bootstrap, /Node\.js archive checksum verification failed/);
-  assert.match(bootstrap, /apt-get install -y --no-install-recommends g\+\+ make python3/);
+  assert.doesNotMatch(bootstrap, /g\+\+|gcc-c\+\+|make python3/);
   assert.match(bootstrap, /apt-get install -y docker\.io/);
+  assert.match(bootstrap, /dnf install -y ca-certificates curl tar xz/);
+  assert.match(bootstrap, /download\.docker\.com\/linux\/\$docker_repo_os\/docker-ce\.repo/);
+  assert.match(bootstrap, /dnf install -y docker-ce docker-ce-cli containerd\.io/);
+  assert.doesNotMatch(bootstrap, /dpkg --compare-versions/);
   assert.match(bootstrap, /npm install -g/);
   assert.match(bootstrap, /@task-handoff\/server@\$PACKAGE_TARGET/);
   assert.match(bootstrap, /task-handoff-server-\$VERSION\.tgz/);
@@ -73,16 +77,52 @@ test("server bootstrap owns the complete Debian and Ubuntu install path", () => 
   assert.match(bootstrap, /--artifacts-dir/);
 });
 
-test("remote node-agent bootstrap installs its Node.js and native build environment", () => {
+test("remote node-agent bootstrap installs Node.js portably without a native build environment", () => {
   const installer = fs.readFileSync(path.join(root, "packages", "control-plane", "src", "control-plane", "nodes", "install-script.ts"), "utf8");
 
   assert.match(installer, /MIN_NODE_VERSION="24\.15\.0"/);
   assert.match(installer, /ensure_node_environment/);
-  assert.match(installer, /apt-get update/);
+  assert.match(installer, /if node_is_compatible && command -v npm/);
+  assert.match(installer, /apt-get install -y ca-certificates curl xz-utils/);
+  assert.match(installer, /dnf install -y ca-certificates curl tar xz/);
   assert.match(installer, /nodejs\.org\/dist\/latest-v24\.x\/SHASUMS256\.txt/);
   assert.match(installer, /Node\.js archive checksum verification failed/);
-  assert.match(installer, /apt-get install -y --no-install-recommends g\+\+ make python3/);
+  assert.doesNotMatch(installer, /g\+\+|gcc-c\+\+|make python3/);
+  assert.doesNotMatch(installer, /dpkg --compare-versions/);
   assert.match(installer, /case "\$current_node_version" in[\s\S]*24\.\*/);
+});
+
+test("remote node-agent bootstrap accepts a compatible preinstalled Node without a distro package manager", async () => {
+  const { nodeAgentInstallScript } = await import("../packages/control-plane/src/control-plane/nodes/install-script.ts");
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-node-installer-"));
+  const bin = path.join(directory, "bin");
+  fs.mkdirSync(bin);
+  fs.symlinkSync(process.execPath, path.join(bin, "node"));
+  const npmPath = spawnSync("/usr/bin/which", ["npm"], { encoding: "utf8" }).stdout.trim();
+  assert.ok(npmPath);
+  fs.symlinkSync(npmPath, path.join(bin, "npm"));
+  const commands = {
+    id: "#!/bin/sh\necho 0\n",
+    systemctl: "#!/bin/sh\nexit 0\n",
+    uname: "#!/bin/sh\n[ \"$1\" = \"-s\" ] && echo Linux || echo x86_64\n",
+    getconf: "#!/bin/sh\necho 'glibc 2.28'\n",
+  };
+  for (const [command, contents] of Object.entries(commands)) {
+    fs.writeFileSync(path.join(bin, command), contents, { mode: 0o755 });
+  }
+  const installer = nodeAgentInstallScript().replace("\nensure_node_environment\n", "\nensure_node_environment\nexit 0\n");
+  const result = spawnSync("/bin/sh", ["-s", "--", "--control-plane", "https://control.example.com"], {
+    input: installer,
+    encoding: "utf8",
+    env: { ...process.env, PATH: `${bin}:/usr/bin:/bin` },
+  });
+  try {
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /Using existing Node\.js/);
+    assert.doesNotMatch(result.stdout, /package metadata|prerequisites with dnf/);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test("remote node-agent bootstrap restarts and verifies the installed service through IPC", () => {
@@ -211,11 +251,18 @@ test("server package owns the unified management command and runtimes stay indep
   assert.equal(runtimePackages["control-plane"].binName, "task-handoff-control-plane");
   assert.deepEqual(runtimePackages["control-plane"].bundledDependencies, ["@fastify/compress"]);
   assert.equal(runtimePackages["control-plane"].dependencies["@fastify/compress"], undefined);
+  assert.equal(runtimePackages["control-plane"].dependencies["drizzle-orm"], "1.0.0-rc.4");
+  assert.equal(runtimePackages["control-plane"].dependencies.pg, "8.16.3");
   assert.equal(runtimePackages["node-agent"].binName, "task-handoff-node-agent");
   assert.deepEqual(runtimePackages["node-agent"].bundledDependencies, ["@fastify/compress"]);
   assert.equal(runtimePackages["node-agent"].dependencies["@fastify/compress"], undefined);
+  assert.equal(runtimePackages["node-agent"].dependencies["drizzle-orm"], undefined);
+  assert.equal(runtimePackages["node-agent"].dependencies.pg, undefined);
   assert.equal(runtimePackages["controlled-instance"].binName, "task-handoff-controlled-instance");
   assert.deepEqual(runtimePackages["controlled-instance"].dependencies, { "node-pty": "^1.1.0" });
+  for (const name of ["control-plane", "node-agent", "controlled-instance"]) {
+    assert.deepEqual(runtimePackages[name].bundledNativeDependencies, ["node-pty"]);
+  }
   assert.equal(runtimePackages.server.input, "apps/cli/src/runtime/server.ts");
   assert.doesNotMatch(prepare, /task-handoff-server-install/);
   assert.doesNotMatch(prepare, /name === "control-plane"/);
@@ -247,9 +294,12 @@ test("runtime package builds transform and execute CommonJS TypeScript workers",
   const checker = fs.readFileSync(path.join(root, "scripts", "check-runtime-packages.mjs"), "utf8");
 
   assert.match(rollup, /extensions: \["\.cjs", "\.cts", "\.js", "\.ts"\]/);
+  assert.match(rollup, /id\.startsWith\("node:"\)/);
   assert.match(checker, /runtime output references repository source/);
   assert.match(checker, /update worker smoke test failed/);
   assert.match(checker, /workerPath, "--help"/);
+  assert.match(checker, /assertNoControlPlaneDatabasePayload/);
+  assert.match(checker, /checkEmbeddedControlledInstance/);
 });
 
 test("standalone node-agent CLI can create pairing invites over local IPC", () => {

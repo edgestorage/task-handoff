@@ -1,0 +1,41 @@
+{
+  "projectSource": {
+    "type": "git-repository",
+    "repositoryId": "repo_legacy",
+    "url": "https://git.example.com/team/repo.git",
+    "ref": { "type": "branch", "name": "main" },
+    "auth": { "type": "https-token", "secretId": "legacy_secret" },
+    "clone": { "depth": 1, "submodules": false, "lfs": false, "subdirectory": "" }
+  },
+  "instancePrivateConfig": {
+    "version": 1,
+    "instanceId": "inst_legacy",
+    "registrationToken": "legacy-instance-credential",
+    "environment": {},
+    "updatedAt": "2026-08-01T00:00:00.000Z"
+  },
+  "nodeCapabilities": {
+    "modelEndpointProbe": true,
+    "folderPlaces": true
+  },
+  "controlledInstanceCapabilities": {
+    "features": {
+      "appRuntime": true,
+      "tty": true
+    }
+  },
+  "repositoryError": {
+    "ok": false,
+    "error": {
+      "code": "REPOSITORY_AUTHENTICATION_FAILED",
+      "message": "Authentication failed.",
+      "retryable": true
+    }
+  },
+  "dockerEntrypoint": {
+    "sourceEnvironment": "TASK_HANDOFF_WORKSPACE_MODE",
+    "urlEnvironment": "TASK_HANDOFF_GIT_URL",
+    "cloneFunction": "bootstrap_workspace",
+    "emptyWorkspaceGuard": "find \"${workspace}\" -mindepth 1 -maxdepth 1 -print -quit"
+  }
+}

@@ -714,6 +714,76 @@ test("proxy node event subscriber opens the authoritative node-agent event strea
   assert.equal(subscriber.diagnostics().activeConnections, 1);
 });
 
+test("proxy node event subscriber logs authoritative app-session frames before routing", async (t) => {
+  const logs = [];
+  const node = {
+    id: "node_proxy_app_events",
+    connectionMode: "control-plane-proxy",
+    connectionEnabled: true,
+    connectionPath: {
+      kind: "control-plane-proxy",
+      proxyId: "proxy.example.test",
+      proxyBindingId: "binding_proxy_app_events",
+      targetNodeId: "node_target_app_events",
+    },
+    auth: { mode: "paired-hmac" },
+  };
+  const payload = {
+    meta: {
+      instanceId: "inst_proxy_app_events",
+      streamId: "aps_proxy_app_events",
+      revision: 11,
+      previousRevision: 10,
+      traceId: "aps_evt_proxy_app_events",
+      generatedAt: "2026-08-23T00:00:00.000Z",
+      reason: "app-session-created",
+    },
+    session: { id: "app_proxy", appId: "terminal-tty", status: "running", bindings: [] },
+  };
+  const transport = {
+    proxyWebSocket(_target, socket) {
+      queueMicrotask(() => socket.send(JSON.stringify({
+        type: "node-agent.event.forwarded",
+        event: {
+          v: 1,
+          id: "evt_proxy_app",
+          seq: 11,
+          type: "app-session.patch",
+          topic: "app.sessions",
+          createdAt: "2026-08-23T00:00:00.000Z",
+          payload,
+          scope: { instanceId: payload.meta.instanceId },
+        },
+      })));
+    },
+  };
+  const tunnel = new ControlPlaneNodeAgentTunnelTransport(undefined, {
+    onSessionEvent: () => true,
+    validateInstanceScope: () => true,
+  });
+  const subscriber = new ControlPlaneNodeEventSubscriber(
+    { listNodes: () => [node], resolveNodeAgentTransport: () => transport },
+    tunnel,
+    { safetyIntervalMs: 60_000, logger: { info: (data, message) => logs.push({ data, message }) } },
+  );
+  t.after(() => subscriber.stop());
+
+  subscriber.start();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(logs.find((entry) => entry.message === "app-session.event.transport.received"), {
+    message: "app-session.event.transport.received",
+    data: {
+      nodeId: node.id,
+      instanceId: payload.meta.instanceId,
+      eventType: "app-session.patch",
+      traceId: payload.meta.traceId,
+      streamId: payload.meta.streamId,
+      revision: payload.meta.revision,
+    },
+  });
+});
+
 test("node event subscriber sends aggregated transient demand over the reused upstream", async (t) => {
   const sent = [];
   let failControlSend = false;

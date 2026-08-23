@@ -104,9 +104,6 @@ RUN if id -u agent >/dev/null 2>&1; then \
   && visudo -cf /etc/sudoers.d/task-handoff-agent
 
 FROM runtime-base AS runtime-package-install
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends g++ make \
-  && rm -rf /var/lib/apt/lists/*
 COPY --from=build /app/release/npm/artifacts/task-handoff-controlled-instance-[0-9]*.tgz /tmp/
 RUN npm install -g --omit=dev --no-audit --no-fund /tmp/task-handoff-controlled-instance-[0-9]*.tgz \
   && rm -f /tmp/task-handoff-controlled-instance-[0-9]*.tgz
