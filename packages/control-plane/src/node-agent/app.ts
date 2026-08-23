@@ -17,7 +17,10 @@ import {
   InstanceResourceMetricsEventType,
   sanitizeCrossVersionControlledInstanceHeartbeat,
   sanitizeCrossVersionControlledInstanceRegister,
+  supportsAiSessionAttachmentRetentionSettings,
+  supportsAiSessionFileSizeLimitSettings,
   supportsAiSessionPersistenceSettings,
+  supportsGitCliCredentialBroker,
   type BuildInfo,
   type ControlledInstance,
   type InstanceResourceMetrics,
@@ -40,6 +43,7 @@ import {
   runtimeUsesManagedArtifacts,
 } from "./state.ts";
 import { registerNodeModelRoutes } from "./models/routes.ts";
+import { registerNodeGitCredentialRoutes } from "./git-credentials/routes.ts";
 import { registerRuntimeRoutes } from "./runtimes/routes.ts";
 import { registerInstanceManagementRoutes } from "./instances/routes.ts";
 import { registerInstanceLifecycleRoutes } from "./instances/lifecycle-routes.ts";
@@ -242,7 +246,8 @@ function isUnixSocketRequest(request: { ip?: string; socket: { remoteAddress?: s
 
 function isInstanceReportRoute(url: string) {
   const path = url.split("?")[0];
-  return /^\/api\/node-agent\/instances\/[^/]+\/(register|heartbeat)$/.test(path);
+  return /^\/api\/node-agent\/instances\/[^/]+\/(register|heartbeat)$/.test(path)
+    || /^\/api\/node-agent\/instances\/[^/]+\/git-credentials\//.test(path);
 }
 
 function isPairingCompleteRoute(url: string) {
@@ -426,7 +431,8 @@ async function startNodeInstance(
   id: string,
   loggers: NodeAgentLifecycleLoggers,
   resolveInstanceWeb: ResolveInstanceWeb,
-  reason: "request" | "restore" | "update" = "request",
+  reason: "request" | "restore" | "update" | "image-ready" = "request",
+  signal?: AbortSignal,
 ) {
   const current = state.requireInstance(id);
   if (current.imageProvisioning && current.imageProvisioning.phase !== "ready" && state.requireRuntime(current.runtimeId).type === "docker") {
@@ -440,7 +446,7 @@ async function startNodeInstance(
   loggers.diagnostic({ instanceId: id, action: "start", reason, runtimeId: current.runtimeId, imageId: current.imageSelection?.imageId }, "node instance start requested");
   const starting = state.applyInstanceLifecycle(id, { type: "start-requested" });
   const adapter = runtimeAdapters.forRuntime(state.requireRuntime(starting.runtimeId));
-  const result = await adapter.start(state.context(starting));
+  const result = await adapter.start({ ...state.context(starting), signal });
   const probedEndpointStatus = result.target?.web
     ? await probeInstanceEndpoint(fetchImpl, ControlledInstanceSchema.parse({
         ...starting,
@@ -521,8 +527,9 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     if (!supportsAiSessionPersistenceSettings(instance.capabilities)
       || instance.targetStatus !== "reachable"
       || !instance.registrationToken) return false;
-    const supportsAttachmentRetention = instance.capabilities.features.aiSessionConversationAttachments?.retentionSettings === true;
-    const syncKey = `${instance.processIncarnationId || "unknown"}:${instance.config.aiSessionHistoryLimit}:${supportsAttachmentRetention ? instance.config.aiSessionAttachmentRetentionDays : "unsupported"}`;
+    const supportsAttachmentRetention = supportsAiSessionAttachmentRetentionSettings(instance.capabilities);
+    const supportsFileSizeLimit = supportsAiSessionFileSizeLimitSettings(instance.capabilities);
+    const syncKey = `${instance.processIncarnationId || "unknown"}:${instance.config.aiSessionHistoryLimit}:${supportsAttachmentRetention ? instance.config.aiSessionAttachmentRetentionDays : "unsupported"}:${supportsFileSizeLimit ? instance.config.aiSessionMaxFileAttachmentBytes : "unsupported"}`;
     if (aiSessionPersistenceSyncKeys.get(id) === syncKey) return true;
     let response: Response;
     try {
@@ -536,6 +543,8 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
           historyLimit: instance.config.aiSessionHistoryLimit,
           // Compatibility for v0.0.21: omit this field unless the controlled instance advertises support.
           ...(supportsAttachmentRetention ? { attachmentRetentionDays: instance.config.aiSessionAttachmentRetentionDays } : {}),
+          // Compatibility for v0.0.21: its strict settings schema rejects this additive field.
+          ...(supportsFileSizeLimit ? { maxFileAttachmentBytes: instance.config.aiSessionMaxFileAttachmentBytes } : {}),
         }),
       }, DEFAULT_AUTO_IMPORT_AGENT_CONFIG_TIMEOUT_MS);
     } catch (error) {
@@ -746,6 +755,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     id: string,
     reason: "request" | "image-ready",
     shouldContinue: () => boolean = () => true,
+    signal?: AbortSignal,
   ) => {
     try {
       if (!shouldContinue()) return state.requireInstance(id);
@@ -759,7 +769,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
         }));
       }
       const runtime = state.requireRuntime(current.runtimeId);
-      await startNodeInstance(state, runtimeAdapters, fetchImpl, id, lifecycleLoggers, resolveInstanceWeb);
+      await startNodeInstance(state, runtimeAdapters, fetchImpl, id, lifecycleLoggers, resolveInstanceWeb, reason, signal);
       const started = state.requireInstance(id);
       if (runtime.type === "docker" && started.imageProvisioning && started.imageProvisioning.phase !== "ready") {
         eventForwarder.syncNow();
@@ -816,6 +826,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
         instance.id,
         "image-ready",
         () => instanceOperations.isIntentCurrent(instance.id, intent),
+        instanceOperations.signal(instance.id, intent),
       ).catch(() => undefined);
     });
   };
@@ -989,7 +1000,15 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       platform: finalComputerPlatform(platform),
       arch: process.arch,
       protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
-      capabilities: { modelEndpointProbe: true, aiSessionHistoryLimit: true, aiSessionAttachmentRetention: true, folderPlaces: true, localFolderNameUpdate: true },
+      capabilities: {
+        modelEndpointProbe: true,
+        aiSessionHistoryLimit: true,
+        aiSessionAttachmentRetention: true,
+        aiSessionFileAttachmentLimit: true,
+        folderPlaces: true,
+        localFolderNameUpdate: true,
+        managedGitCredentials: { registry: true, runtimeBroker: true, workspaceProvisioning: { docker: true, kubernetes: false, local: false } },
+      },
       build: buildInfo("node-agent"),
       instanceProxy: { ...instanceProxyMetrics },
       serverTime: new Date().toISOString(),
@@ -1040,6 +1059,8 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   });
 
   registerNodeModelRoutes(app, state.modelRegistry, (id) => syncAssignedModelEnvironment(fetchImpl, state, id, lifecycleLoggers.warn, resolveInstanceWeb), fetchImpl);
+
+  registerNodeGitCredentialRoutes(app, state);
 
   registerEnvironmentTemplateRoutes(app, environmentTemplates);
 
@@ -1129,7 +1150,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     applyLifecycle: (id, event) => state.applyInstanceLifecycle(id, event),
     context: (instance, modelEnv) => state.context(instance, modelEnv),
   }, runtimeAdapters, convergence, {
-    start: (id, shouldContinue) => startInstanceWithFailureState(id, "request", shouldContinue),
+    start: (id, shouldContinue, signal) => startInstanceWithFailureState(id, "request", shouldContinue, signal),
     sync: () => eventForwarder.syncNow(),
     isManaged: usesManagedArtifact,
     probe: (instance) => probeInstanceEndpoint(fetchImpl, instance, resolveInstanceWeb),
@@ -1142,6 +1163,9 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     deleteMetadata: (id) => {
       aiSessionPersistenceSyncKeys.delete(id);
       state.modelRegistry.deleteInstanceMetadata(id);
+      state.gitCredentials.removeInstance(id);
+      state.gitCredentials.collectUnreferencedPayloads();
+      state.discardGitWorkspaceProvisioning(id);
       state.instancePrivateConfigs.delete(id);
     },
     retireInstanceData: (id) => {

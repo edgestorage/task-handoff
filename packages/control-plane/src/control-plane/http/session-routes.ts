@@ -3,7 +3,7 @@ import fs from "node:fs";
 import crypto from "node:crypto";
 import { Readable, Transform } from "node:stream";
 import { z } from "zod";
-import { AI_SESSION_ATTACHMENT_DRAFT_STREAM_CHUNK_BYTES, AI_SESSION_ATTACHMENT_UPLOAD_BODY_LIMIT, AiSessionApprovalInputSchema, AiSessionAttachmentDraftSchema, AiSessionAttachmentDraftStreamCreateInputSchema, AiSessionAttachmentDraftStreamOffsetSchema, AiSessionAttachmentDraftUploadQuerySchema, AiSessionCloseInputSchema, AiSessionCommandInputSchema, AiSessionCreateRefInputSchema, AiSessionForkInputSchema, AiSessionMentionFileSearchInputSchema, AiSessionMessageRefInputSchema, AiSessionOpenAppInputSchema, AiSessionQueueEditInputSchema, AiSessionQueueReorderInputSchema, AiSessionUnreadEventType, isAiSessionInlineImageMime } from "@task-handoff/protocol/ai-sessions";
+import { AI_SESSION_ATTACHMENT_DRAFT_STREAM_CHUNK_BYTES, AI_SESSION_ATTACHMENT_UPLOAD_BODY_LIMIT, AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES, AiSessionApprovalInputSchema, AiSessionAttachmentDraftSchema, AiSessionAttachmentDraftStreamCreateInputSchema, AiSessionAttachmentDraftStreamOffsetSchema, AiSessionAttachmentDraftUploadQuerySchema, AiSessionCloseInputSchema, AiSessionCommandInputSchema, AiSessionCreateRefInputSchema, AiSessionForkInputSchema, AiSessionMentionFileSearchInputSchema, AiSessionMessageRefInputSchema, AiSessionOpenAppInputSchema, AiSessionQueueEditInputSchema, AiSessionQueueReorderInputSchema, AiSessionUnreadEventType, isAiSessionInlineImageMime } from "@task-handoff/protocol/ai-sessions";
 import type { ControlPlaneService } from "../application/service.ts";
 import type { ControlPlaneEventBus } from "../events/bus.ts";
 import type { ControlPlaneAiSessionAggregator } from "../sessions/ai-session-aggregator.ts";
@@ -19,6 +19,8 @@ import {
   InstanceSessionTurnParamsSchema,
   InstanceSessionQueueParamsSchema,
 } from "./route-params.ts";
+import { assertRequestInstanceVisible, requestVisibleInstanceIds } from "./access-projection.ts";
+import { controlPlaneRequestActor } from "./request-actor.ts";
 
 const AiSessionWorkspaceQuerySchema = z.object({ cwdFolderId: z.string().trim().min(1).max(120).optional() }).strict();
 
@@ -104,6 +106,7 @@ export function registerSessionRoutes({
       streamId: z.string().trim().min(1).optional(),
       sinceRevision: z.string().optional(),
     }).parse(request.query || {});
+    if (query.instanceId) await assertRequestInstanceVisible(service, request, query.instanceId);
     if (query.sinceRevision !== undefined) {
       const sinceRevision = Number(query.sinceRevision);
       if (!Number.isInteger(sinceRevision) || sinceRevision < 0) {
@@ -121,7 +124,11 @@ export function registerSessionRoutes({
     const view = await appSessionAggregator.list({
       refresh: query.refresh === "true" || query.refresh === "1",
     });
-    return { data: query.instanceId ? { ...view, instances: view.instances.filter((entry) => entry.instanceId === query.instanceId) } : view };
+    const visibleInstanceIds = await requestVisibleInstanceIds(service, request);
+    return { data: {
+      ...view,
+      instances: view.instances.filter((entry) => visibleInstanceIds.has(entry.instanceId) && (!query.instanceId || entry.instanceId === query.instanceId)),
+    } };
   });
 
   app.post("/api/controlled-instances/:id/apps/sessions", async (request) => {
@@ -147,7 +154,17 @@ export function registerSessionRoutes({
   app.post("/api/controlled-instances/:id/apps/sessions/:sessionId/access", async (request) => {
     const params = InstanceSessionParamsSchema.parse(request.params);
     EmptyRequestSchema.parse(request.body || {});
-    const access = await service.createAppSessionAccessToken({ instanceId: params.id, sessionId: params.sessionId });
+    const actor = controlPlaneRequestActor(request);
+    const access = await service.createAppSessionAccessToken({
+      instanceId: params.id,
+      sessionId: params.sessionId,
+      ...(actor?.type === "user" ? {
+        authorization: {
+          userId: actor.userId,
+          authorizationRevision: actor.authorizationRevision,
+        },
+      } : {}),
+    });
     return {
       data: {
         mode: access.mode,
@@ -169,9 +186,10 @@ export function registerSessionRoutes({
     const entry = view.instances.find((item) => item.instanceId === params.id);
     return { data: entry?.appSessions || { runningCount: 0, problemCount: 0, sessions: [], updatedAt: new Date().toISOString() } };
   });
-  app.get("/api/controlled-instances/:id/ai-sessions/history", async (request) => {
+  app.get<{ Querystring: { agents?: string } }>("/api/controlled-instances/:id/ai-sessions/history", async (request) => {
     const params = IdParamsSchema.parse(request.params);
-    return { data: await service.listAiSessionHistory(params.id) };
+    const agents = request.query.agents?.split(",").map((agent) => agent.trim()).filter(Boolean);
+    return { data: await service.listAiSessionHistory(params.id, agents) };
   });
   app.get("/api/controlled-instances/:id/ai-sessions/history/:sessionId", async (request) => {
     const params = InstanceSessionParamsSchema.parse(request.params);
@@ -184,6 +202,14 @@ export function registerSessionRoutes({
   app.post<{ Params: { id: string }; Querystring: Record<string, unknown>; Body: Readable }>("/api/controlled-instances/:id/ai-session-attachments/drafts", { bodyLimit: AI_SESSION_ATTACHMENT_UPLOAD_BODY_LIMIT }, async (request, reply) => {
     const params = IdParamsSchema.parse(request.params);
     const input = AiSessionAttachmentDraftUploadQuerySchema.parse(request.query);
+    const instance = await service.requireControlledInstance(params.id, true);
+    const maxFileAttachmentBytes = instance.config.aiSessionMaxFileAttachmentBytes ?? AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES;
+    if (input.kind === "file" && input.size >= maxFileAttachmentBytes) {
+      throw Object.assign(new Error(`File attachment must be smaller than ${maxFileAttachmentBytes} bytes.`), {
+        statusCode: 413,
+        code: "AI_SESSION_ATTACHMENTS_TOO_LARGE",
+      });
+    }
     const attachmentId = `cia_${crypto.randomUUID().replace(/-/g, "").slice(0, 24)}`;
     const target = "/api/ai-session-attachments/draft-streams";
     const controller = new AbortController();
@@ -547,6 +573,7 @@ export function registerSessionRoutes({
 
   app.get("/api/ai-sessions", async (request, reply) => {
     const query = request.query as { refresh?: string; sinceRevision?: string; instanceId?: string; streamId?: string };
+    if (query.instanceId) await assertRequestInstanceVisible(service, request, query.instanceId);
     if (query.sinceRevision !== undefined) {
       const sinceRevision = Number(query.sinceRevision);
       if (!Number.isInteger(sinceRevision) || sinceRevision < 0) {
@@ -563,7 +590,11 @@ export function registerSessionRoutes({
       }
     }
     const fullView = await aiSessionAggregator.list({ refresh: query.refresh === "true" || query.refresh === "1" });
-    const view = query.instanceId ? { ...fullView, instances: fullView.instances.filter((entry) => entry.instanceId === query.instanceId) } : fullView;
+    const visibleInstanceIds = await requestVisibleInstanceIds(service, request);
+    const view = {
+      ...fullView,
+      instances: fullView.instances.filter((entry) => visibleInstanceIds.has(entry.instanceId) && (!query.instanceId || entry.instanceId === query.instanceId)),
+    };
     for (const entry of view.instances) aiSessionUnread.reconcile(entry.instanceId, entry.aiSessions);
     return { data: {
       ...view,

@@ -6680,16 +6680,27 @@ test("controlled instance refreshes managed model auth through its registration-
       method: "PUT",
       url: "/api/internal/ai-session-persistence-settings",
       headers: { authorization: "Bearer instance-registration-token" },
-      payload: { historyLimit: 2 },
+      payload: { historyLimit: 2, maxFileAttachmentBytes: 4 },
     });
     assert.equal(appliedPersistenceSettings.statusCode, 200);
     assert.deepEqual(appliedPersistenceSettings.json().data, {
       applied: true,
       historyLimit: 2,
       attachmentRetentionDays: 30,
+      maxFileAttachmentBytes: 4,
       removedHistoryCount: 1,
     });
-    assert.equal(JSON.parse(fs.readFileSync(path.join(paths.dataDir, "ai-session-persistence", "settings.json"), "utf8")).historyLimit, 2);
+    const persistedAiSessionSettings = JSON.parse(fs.readFileSync(path.join(paths.dataDir, "ai-session-persistence", "settings.json"), "utf8"));
+    assert.equal(persistedAiSessionSettings.historyLimit, 2);
+    assert.equal(persistedAiSessionSettings.maxFileAttachmentBytes, 4);
+    const rejectedFileUpload = await app.inject({
+      method: "POST",
+      url: "/api/ai-session-attachments/drafts?scopeType=create-request&scopeId=settings-test&kind=file&name=four.txt&mime=text%2Fplain&size=4",
+      headers: { "content-type": "application/octet-stream" },
+      payload: Buffer.from("four"),
+    });
+    assert.equal(rejectedFileUpload.statusCode, 413);
+    assert.equal(rejectedFileUpload.json().error.code, "AI_SESSION_ATTACHMENTS_TOO_LARGE");
     assert.deepEqual(new AiSessionHistoryStore(paths, { limit: 2 }).list().map((item) => item.id), ["ai-managed-2", "ai-managed-1"]);
     assert.equal(fs.readdirSync(path.join(paths.dataDir, "ai-session-history", "details")).length, 2);
     assert.equal(fs.readdirSync(timelinePath).length, 2);

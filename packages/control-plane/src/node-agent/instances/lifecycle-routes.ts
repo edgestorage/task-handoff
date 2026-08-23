@@ -31,7 +31,7 @@ type Convergence = {
 };
 
 type Hooks = {
-  start(id: string, shouldContinue?: () => boolean): Promise<ControlledInstance>;
+  start(id: string, shouldContinue?: () => boolean, signal?: AbortSignal): Promise<ControlledInstance>;
   sync(): void;
   isManaged(instance: ControlledInstance): boolean;
   probe(instance: ControlledInstance): Promise<"reachable" | "endpoint-unreachable" | "unknown">;
@@ -67,6 +67,10 @@ export function registerInstanceLifecycleRoutes(
       code: "INSTANCE_OPERATION_SUPERSEDED",
     });
   };
+  const signalFor = (id: string, intent: object) => {
+    const signal = (operations as InstanceOperationGate & { signal?: (instanceId: string, operationIntent: object) => AbortSignal }).signal;
+    return typeof signal === "function" ? signal.call(operations, id, intent) : undefined;
+  };
 
   app.post("/api/node-agent/instances/:id/start", async (request) => {
     LifecycleRequestSchema.parse(request.body);
@@ -75,7 +79,7 @@ export function registerInstanceLifecycleRoutes(
     return operations.run(id, async () => {
       assertIntentCurrent(id, intent);
       hooks.allowRecovery(id);
-      return { data: await hooks.start(id, () => operations.isIntentCurrent(id, intent)) };
+      return { data: await hooks.start(id, () => operations.isIntentCurrent(id, intent), signalFor(id, intent)) };
     });
   });
 

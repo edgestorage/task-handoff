@@ -8,6 +8,13 @@ test('validates image/file MIME and size before reading device content', () => {
   expect(() => validateMobileLocalFile({ uri: 'file:///cache/a.bin', name: 'a.bin', mime: undefined, size: undefined, kind: 'file' })).toThrow(/readable content or size/);
 });
 
+test('uses the instance-specific ordinary file size limit', () => {
+  const file = { uri: 'file:///cache/large.txt', name: 'large.txt', mime: 'text/plain', size: 700 * 1024, kind: 'file' as const };
+  expect(() => validateMobileLocalFile(file)).toThrow(/smaller than 512000 bytes/);
+  expect(validateMobileLocalFile(file, 1024 * 1024).size).toBe(700 * 1024);
+  expect(() => validateMobileLocalFile({ ...file, size: 1024 * 1024 }, 1024 * 1024)).toThrow(/smaller than 1048576 bytes/);
+});
+
 test('uploads only base64 and scoped business identity, never the device URI', async () => {
   const uploadAttachment = jest.fn().mockResolvedValue({ id: 'att-1', kind: 'file', name: 'note.txt', mime: 'text/plain', size: 5, expiresAt: '2026-08-06T00:00:00.000Z' });
   const client = { aiSessions: { uploadAttachment } } as unknown as ControlPlaneClient;

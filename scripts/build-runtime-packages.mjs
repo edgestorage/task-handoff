@@ -40,19 +40,27 @@ function requiredExecutablePaths(name, definition) {
       "docker/entrypoint.sh",
       "docker/instance-launcher.sh",
       "docker/runtime-installer.mjs",
+      "docker/git-provision.sh",
+      ...(definition.standaloneInputs || []).map((entry) => `docker/${entry.entryFile}`),
     ] : []),
   ];
 }
 
 async function verifyArchiveExecutables(name, definition, archivePath) {
-  const missing = new Set(requiredExecutablePaths(name, definition));
+  const requiredNativeFiles = definition.bundledNativeDependencies?.includes("node-pty")
+    ? [
+        "node_modules/node-pty/prebuilds/linux-x64/pty.node",
+        "node_modules/node-pty/prebuilds/linux-arm64/pty.node",
+      ]
+    : [];
+  const missing = new Set([...requiredExecutablePaths(name, definition), ...requiredNativeFiles]);
   await list({
     file: archivePath,
     strict: true,
     onReadEntry(entry) {
       const relativePath = entry.path.replace(/^package\//, "");
       if (!missing.has(relativePath)) return;
-      if (!entry.mode || (entry.mode & 0o111) === 0) {
+      if (requiredExecutablePaths(name, definition).includes(relativePath) && (!entry.mode || (entry.mode & 0o111) === 0)) {
         throw new Error(`Runtime package ${name} archive entry is not executable: ${relativePath}`);
       }
       missing.delete(relativePath);

@@ -18,6 +18,7 @@ export type ManagedAppRuntimeHost = {
   spawnLogged(command: string, args: string[], env: NodeJS.ProcessEnv, logDir: string, logName: string, cwd?: string): ChildProcessWithoutNullStreams;
   stopProcessTree(child: ChildProcessWithoutNullStreams, signal?: NodeJS.Signals): void;
   waitForUnixSocket(socketPath: string, timeoutMs: number, getError?: () => Error | undefined): void;
+  waitForHttp(url: string, headers: Record<string, string>, timeoutMs: number, getError?: () => Error | undefined): void;
   patchSession(sessionId: string, patch: { ai: AppSession["ai"] }): void;
 };
 
@@ -74,6 +75,7 @@ export type ManagedAppSharedResource = {
   acquire(command: string, cwd: string, env: NodeJS.ProcessEnv, consumerId: string): ManagedAppSharedResourceInfo;
   release(consumerId: string): void;
   info(): ManagedAppSharedResourceInfo | undefined;
+  privateConnection?(): { endpoint: string; headers: Record<string, string> } | undefined;
   projectSessionAi?(): AppSession["ai"];
 };
 

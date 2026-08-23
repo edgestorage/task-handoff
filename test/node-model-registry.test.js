@@ -79,6 +79,9 @@ test("node model registry uses immutable content hashes, private storage, and ha
   const claudeInput = modelInput({ name: "Local Claude", key: "claude-secret", model: "claude-test", app: "claude", order: 200 });
   const claudeHash = modelConfigHash(claudeInput);
   assert.equal((await request(app, "POST", "/api/node-agent/models", claudeInput)).statusCode, 201);
+  const opencodeInput = modelInput({ name: "Local OpenCode", key: "opencode-secret", model: "openai-compatible-test", app: "opencode", order: 300 });
+  const opencodeHash = modelConfigHash(opencodeInput);
+  assert.equal((await request(app, "POST", "/api/node-agent/models", opencodeInput)).statusCode, 201);
 
   const timestamp = new Date().toISOString();
   const deployInput = modelInput({ name: "Deployed Codex", key: "deployed-secret" });
@@ -97,13 +100,15 @@ test("node model registry uses immutable content hashes, private storage, and ha
   assert.equal(wrongApp.json().error.code, "NODE_MODEL_APP_MISMATCH");
 
   const assigned = await request(app, "PUT", "/api/node-agent/instances/inst_models/model-assignment", {
-    modelSelection: { codexModelHash: codexHash, claudeModelHash: claudeHash },
+    modelSelection: { codexModelHash: codexHash, claudeModelHash: claudeHash, opencodeModelHash: opencodeHash },
     codexModelHash: codexHash,
     claudeModelHash: claudeHash,
+    opencodeModelHash: opencodeHash,
   });
   assert.equal(assigned.statusCode, 200);
-  assert.deepEqual(assigned.json().data.instance.modelSelection, { codexModelHash: codexHash, claudeModelHash: claudeHash });
-  assert.deepEqual(app.nodeAgentState.resolvedAssignedModelEnvironment("inst_models"), {
+  assert.deepEqual(assigned.json().data.instance.modelSelection, { codexModelHash: codexHash, claudeModelHash: claudeHash, opencodeModelHash: opencodeHash });
+  const assignedEnvironment = app.nodeAgentState.resolvedAssignedModelEnvironment("inst_models");
+  assert.deepEqual({ ...assignedEnvironment, TASK_HANDOFF_OPENCODE_CONFIG_CONTENT: undefined }, {
     OPENAI_API_KEY: codexInput.key,
     OPENAI_BASE_URL: codexInput.endpoint,
     TASK_HANDOFF_CODEX_BASE_URL: codexInput.endpoint,
@@ -111,6 +116,19 @@ test("node model registry uses immutable content hashes, private storage, and ha
     ANTHROPIC_API_KEY: claudeInput.key,
     ANTHROPIC_BASE_URL: claudeInput.endpoint,
     TASK_HANDOFF_CLAUDE_MODEL: claudeInput.model,
+    TASK_HANDOFF_OPENCODE_CONFIG_CONTENT: undefined,
+  });
+  assert.deepEqual(JSON.parse(assignedEnvironment.TASK_HANDOFF_OPENCODE_CONFIG_CONTENT), {
+    $schema: "https://opencode.ai/config.json",
+    model: `task-handoff/${opencodeInput.model}`,
+    provider: {
+      "task-handoff": {
+        npm: "@ai-sdk/openai-compatible",
+        name: "TaskHandoff",
+        options: { baseURL: opencodeInput.endpoint, apiKey: opencodeInput.key },
+        models: { [opencodeInput.model]: { name: opencodeInput.name } },
+      },
+    },
   });
 
   const rotated = await request(app, "PATCH", `/api/node-agent/models/${codexHash}`, { key: "rotated-secret" });

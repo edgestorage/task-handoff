@@ -48,8 +48,9 @@ test("history detail composer resumes, waits for authoritative state, and then s
   assert.match(panel, /session\.providerSessionId === result\.providerSessionId/);
   assert.match(panel, /session\.creationSource === result\.creationSource/);
   assert.match(panel, /result\.appSessionId \? session\.appSessionId === result\.appSessionId : !session\.appSessionId/);
-  assert.match(panel, /for \(let attempt = 0; attempt < 12 && !session; attempt \+= 1\)/);
-  assert.match(panel, /refetchQueries\(\{ queryKey: \["control-plane-ai-sessions"\] \}\)/);
+  assert.match(panel, /waitForAiSessionProjection\(findAuthoritativeSession\)/);
+  assert.doesNotMatch(panel, /for \(let attempt = 0; attempt < 12/);
+  assert.doesNotMatch(panel, /refetchQueries\(\{ queryKey: \["control-plane-ai-sessions"\] \}\)/);
   assert.match(panel, /await sendAiSessionMessage\([\s\S]*session\.id[\s\S]*aiSessionMessageText\(message\)[\s\S]*attachments/);
   assert.match(panel, /emit\("selectAiSession", props\.instance\.id, session\.id\);/);
   assert.match(panel, /showControlPlaneToast/);

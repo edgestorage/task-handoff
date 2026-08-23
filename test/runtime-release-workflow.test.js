@@ -42,6 +42,7 @@ test("runtime release builds one Linux controlled-instance artifact from support
   assert.match(workflow, /Build Linux controlled instance production runtime/);
   assert.equal((workflow.match(/pnpm runtime:artifact -- --version/g) || []).length, 1);
   assert.match(workflow, /--prebuilds-dir release\/node-pty-prebuilds/);
+  assert.match(workflow, /pattern: node-pty-prebuild-\*[\s\S]*path: release\/node-pty-prebuilds[\s\S]*merge-multiple: true/);
   assert.match(workflow, /release\/runtime-artifacts\/\*/);
   assert.match(workflow, /needs: node-pty-prebuilds/);
   assert.match(workflow, /runtime-packages:\n\s+needs: controlled-instance-artifact/);

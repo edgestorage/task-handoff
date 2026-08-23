@@ -60,7 +60,11 @@ test("Docker image bakes a versioned bootstrap runtime while the managed launche
 
   assert.match(dockerfile, /ARG TASK_HANDOFF_VERSION=0\.0\.1[\s\S]*TASK_HANDOFF_VERSION="\$\{TASK_HANDOFF_VERSION\}" pnpm run runtime:pack:controlled-instance/);
   assert.match(dockerfile, /npm install -g --omit=dev[\s\S]*task-handoff-controlled-instance-/);
-  assert.match(dockerfile, /FROM runtime-base AS runtime-package-install[\s\S]*apt-get install -y --no-install-recommends g\+\+ make/);
+  const runtimePackageInstall = dockerfile.slice(
+    dockerfile.indexOf("FROM runtime-base AS runtime-package-install"),
+    dockerfile.indexOf("FROM runtime-base AS runtime-core"),
+  );
+  assert.doesNotMatch(runtimePackageInstall, /g\+\+|\bmake\b|python3/);
   assert.match(dockerfile, /FROM runtime-base AS runtime-core[\s\S]*COPY --from=runtime-package-install \/usr\/local\/lib\/node_modules\/@task-handoff\/controlled-instance/);
   assert.match(dockerfile, /ln -s \.\.\/lib\/node_modules\/@task-handoff\/controlled-instance\/bin\/task-handoff-controlled-instance \/usr\/local\/bin\/task-handoff-controlled-instance/);
   assert.match(dockerfile, /COPY docker\/instance-launcher\.sh/);

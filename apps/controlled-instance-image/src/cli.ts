@@ -2,6 +2,7 @@ import { Command } from "commander";
 import path from "node:path";
 import { resolvePackageVersion } from "@task-handoff/core/core/package-version";
 import { runWebServer } from "@task-handoff/controlled-instance/web/server";
+import { runGitCredentialHelper, runGitSsh, runGitSshAskpass } from "@task-handoff/controlled-instance/web/git-credential-broker";
 
 function parsePort(value: string) {
   const port = Number(value);
@@ -22,6 +23,10 @@ async function main() {
   const program = new Command();
 
   program.name("task-handoff-controlled-instance").description("Run a TaskHandoff controlled instance.").version(resolvePackageVersion("@task-handoff/controlled-instance-image"));
+
+  program.command("git-credential-helper [action]", { hidden: true }).allowUnknownOption().allowExcessArguments().action(runGitCredentialHelper);
+  program.command("git-ssh [args...]", { hidden: true }).allowUnknownOption().allowExcessArguments().action(runGitSsh);
+  program.command("git-ssh-askpass <invocationId>", { hidden: true }).action(runGitSshAskpass);
 
   program
     .command("web")

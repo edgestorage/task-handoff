@@ -79,9 +79,10 @@ export const runtimePackages = {
     // Keeping it out of the external dependency set lets Control Plane-only updates
     // reuse an existing installation even when compression is introduced.
     bundledDependencies: bundledControlPlaneDependencies,
+    bundledNativeDependencies: ["node-pty"],
     dependencies: runtimeDependencies(
       ["@task-handoff/control-plane"],
-      ["commander"],
+      ["commander", "drizzle-orm", "pg"],
       bundledControlPlaneDependencies,
     ),
   },
@@ -92,8 +93,13 @@ export const runtimePackages = {
     entryFile: "cli.js",
     updateWorkerInput: "scripts/node-update-worker.cts",
     updateWorkerEntryFile: "node-update-worker.js",
+    standaloneInputs: [{
+      input: "apps/cli/src/runtime/git-provisioning-helper.ts",
+      entryFile: "git-provisioning-helper.js",
+    }],
     binName: "task-handoff-node-agent",
     bundledDependencies: bundledControlPlaneDependencies,
+    bundledNativeDependencies: ["node-pty"],
     dependencies: runtimeDependencies(
       ["@task-handoff/control-plane"],
       ["commander"],
@@ -107,10 +113,11 @@ export const runtimePackages = {
     entryFile: "controlled-instance-cli.js",
     binName: "task-handoff-controlled-instance",
     uiDir: "packages/controlled-instance-ui/dist",
+    bundledNativeDependencies: ["node-pty"],
     // The controlled-instance application is shipped by node-agent as one
-    // portable bundle. Keep only the native dependency external; Rollup owns
-    // the complete JavaScript dependency graph so the artifact does not carry
-    // a workspace-wide pnpm virtual store.
+    // portable bundle. Rollup owns the JavaScript graph and the release package
+    // carries node-pty prebuilds for the supported Linux targets, so the artifact
+    // does not carry a workspace-wide pnpm virtual store.
     dependencies: {
       "node-pty": rootPackage.dependencies["node-pty"],
     },

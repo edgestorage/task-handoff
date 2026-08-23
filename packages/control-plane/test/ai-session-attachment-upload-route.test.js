@@ -23,6 +23,9 @@ test("managed upload forwards bounded chunks while retaining a non-blocking cach
   const downstream = [];
   let attachmentId;
   const service = {
+    async requireControlledInstance() {
+      return { config: { aiSessionMaxFileAttachmentBytes: 1024 * 1024 } };
+    },
     async proxyInstanceHttp(_instanceId, route, init) {
       if (route === "/api/ai-session-attachments/draft-streams") {
         attachmentId = JSON.parse(init.body).attachmentId;
@@ -78,6 +81,9 @@ test("managed upload reports malformed controlled-instance responses as a bad ga
   registerSessionRoutes({
     app,
     service: {
+      async requireControlledInstance() {
+        return { config: { aiSessionMaxFileAttachmentBytes: 1024 * 1024 } };
+      },
       async proxyInstanceHttp(_instanceId, route) {
         return route.includes("draft-streams") && !route.match(/\/cia_[^/]+$/)
           ? streamedJson({ offset: 0 }, 201)
@@ -95,6 +101,40 @@ test("managed upload reports malformed controlled-instance responses as a bad ga
   const response = await app.inject({ method: "POST", url: `/api/controlled-instances/instance-1/ai-session-attachments/drafts?${query}`, headers: { "content-type": "application/octet-stream" }, payload: Buffer.from("a") });
   assert.equal(response.statusCode, 502);
   assert.equal(response.json().error.code, "AI_SESSION_ATTACHMENT_PROTOCOL_INVALID");
+});
+
+test("managed upload rejects ordinary files at the instance limit before proxying", async (t) => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "ai-session-upload-limit-"));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  const app = Fastify({ logger: false });
+  t.after(() => app.close());
+  app.addContentTypeParser("application/octet-stream", (_request, payload, done) => done(null, payload));
+  app.setErrorHandler((error, _request, reply) => reply.code(error.statusCode || 500).send({ error: { code: error.code, message: error.message } }));
+  let proxyCalls = 0;
+  registerSessionRoutes({
+    app,
+    service: {
+      async requireControlledInstance() {
+        return { config: { aiSessionMaxFileAttachmentBytes: 700 * 1024 } };
+      },
+      async proxyInstanceHttp() {
+        proxyCalls += 1;
+        throw new Error("must not proxy an oversized file");
+      },
+    },
+    events: { publish() {} },
+    appSessionAggregator: {},
+    aiSessionAggregator: {},
+    aiSessionUnread: {},
+    aiSessionAttachments: {},
+    aiSessionAttachmentCache: new AiSessionAttachmentCache(dataDir),
+  });
+  const size = 700 * 1024;
+  const query = new URLSearchParams({ scopeType: "session", scopeId: "session-1", kind: "file", name: "asset.bin", mime: "application/octet-stream", size: String(size) });
+  const response = await app.inject({ method: "POST", url: `/api/controlled-instances/instance-1/ai-session-attachments/drafts?${query}`, headers: { "content-type": "application/octet-stream" }, payload: Buffer.alloc(size) });
+  assert.equal(response.statusCode, 413);
+  assert.equal(response.json().error.code, "AI_SESSION_ATTACHMENTS_TOO_LARGE");
+  assert.equal(proxyCalls, 0);
 });
 
 test("message actions resolve attachment retention only for managed upload references", async (t) => {

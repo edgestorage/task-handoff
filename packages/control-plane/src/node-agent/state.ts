@@ -1,6 +1,6 @@
 import path from "node:path";
 import { z } from "zod";
-import { AI_SESSION_HISTORY_DEFAULT_LIMIT } from "@task-handoff/protocol/ai-sessions";
+import { AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES, AI_SESSION_HISTORY_DEFAULT_LIMIT } from "@task-handoff/protocol/ai-sessions";
 import {
   CONTROL_PLANE_PROTOCOL_VERSION,
   ControlledInstanceHeartbeatSchema,
@@ -12,10 +12,12 @@ import {
   NodeSchema,
   ProjectSchema,
   ProjectSourceSchema,
+  projectSourceWithoutLegacyGitSecretId,
   WorkspacePolicySchema,
   safeParseStoredControlledInstance,
   sanitizeStoredControlledInstance,
   sanitizeStoredNodeLocalFolder,
+  supportsGitCliCredentialBroker,
   type ControlledInstance,
   type ControlledInstanceHeartbeat,
   type ControlledInstanceRegister,
@@ -37,6 +39,7 @@ import { NodeModelRegistry } from "./models/registry.ts";
 import { NodeUpdateJobs } from "./updates.ts";
 import { EnvironmentTemplateStore } from "./environment-templates/store.ts";
 import { InstancePrivateConfigStore } from "./instances/private-config-store.ts";
+import { NodeGitCredentialStore } from "./git-credentials/store.ts";
 import {
   desiredControlledInstanceVersion,
   runtimeVersionStateForActual,
@@ -47,6 +50,8 @@ import type { ExecutorContext } from "./runtimes/docker.ts";
 import type { RuntimeAdapter } from "./runtimes/adapters.ts";
 import { requireBrowsableFolderPath } from "./folders.ts";
 import { nowIso as now } from "@task-handoff/core/core/time";
+import type { GitWorkspaceProvisioningInput } from "@task-handoff/protocol/managed-git-credentials";
+import { resolveGitCredential } from "@task-handoff/protocol/managed-git-credentials";
 
 const BUILTIN_LOCAL_RUNTIME_ID = "runtime_local_host";
 const BUILTIN_RUNTIME_LABEL = "task-handoff.node-agent.builtin";
@@ -160,7 +165,11 @@ export class ControlledInstanceCollection extends JsonCollection<ControlledInsta
     const existingPrivateConfig = this.privateConfigs.get(record.id);
     const instanceCredential = record.registrationToken || existingPrivateConfig?.instanceCredential;
     if (instanceCredential) {
-      this.privateConfigs.materialize(record.id, instanceCredential, existingPrivateConfig?.environment || {});
+      this.privateConfigs.materialize(
+        record.id,
+        instanceCredential,
+        existingPrivateConfig?.environment || {},
+      );
     }
     const { registrationToken: _registrationToken, ...persistentRecord } = record;
     const stored = super.put(ControlledInstanceSchema.parse({
@@ -199,11 +208,13 @@ export class NodeAgentState {
   readonly environmentTemplates: EnvironmentTemplateStore;
   readonly instancePrivateConfigs: InstancePrivateConfigStore;
   readonly modelRegistry: NodeModelRegistry;
+  readonly gitCredentials: NodeGitCredentialStore;
   readonly updateJobs: NodeUpdateJobs;
   readonly node: Node;
   private listenerPort: number;
   private readonly containerUrlOverride?: string;
   private readonly platform: NodeJS.Platform;
+  private readonly pendingGitWorkspaceProvisioning = new Map<string, GitWorkspaceProvisioningInput>();
 
   constructor(paths: NodeAgentStorePaths, nodeId: string, endpoint: string | undefined, containerUrl: string | undefined, listenerPort: number, platform: NodeJS.Platform) {
     this.paths = paths;
@@ -221,6 +232,7 @@ export class NodeAgentState {
       }),
     }, this.instancePrivateConfigs);
     this.environmentTemplates = new EnvironmentTemplateStore(paths);
+    this.gitCredentials = new NodeGitCredentialStore(paths);
     this.modelRegistry = new NodeModelRegistry(paths, nodeId, {
       has: (id) => Boolean(this.controlledInstances.get(id)),
       list: () => this.listInstances(),
@@ -256,6 +268,7 @@ export class NodeAgentState {
     this.instancePrivateConfigs.init();
     this.controlledInstances.init();
     this.environmentTemplates.init();
+    this.gitCredentials.init();
     this.modelRegistry.init();
     this.updateJobs.init();
     this.updateJobs.reconcileRollouts(this.controlledInstances.list(), desiredControlledInstanceVersion(), { processStarted: true });
@@ -513,7 +526,7 @@ export class NodeAgentState {
     const runtime = this.requireRuntime(input.runtimeId);
     const timestamp = now();
     const id = input.id || createId("inst");
-    const source = ProjectSourceSchema.parse(input.source);
+    const source = projectSourceWithoutLegacyGitSecretId(input.source);
     const environmentSource = input.environmentSource || (input.imageSelection ? { type: "image" as const, imageSelection: input.imageSelection } : undefined);
     if (environmentSource?.type === "template" && runtime.type !== "docker") {
       const error = new Error(`Runtime ${runtime.name} does not support environment templates.`);
@@ -609,6 +622,7 @@ export class NodeAgentState {
         defaultCodexPermissionMode: input.config?.defaultCodexPermissionMode ?? (runtime.type === "docker" ? "full-access" : "ask"),
         aiSessionHistoryLimit: input.config?.aiSessionHistoryLimit ?? AI_SESSION_HISTORY_DEFAULT_LIMIT,
         aiSessionAttachmentRetentionDays: input.config?.aiSessionAttachmentRetentionDays ?? 30,
+        aiSessionMaxFileAttachmentBytes: input.config?.aiSessionMaxFileAttachmentBytes ?? AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES,
       },
       workspace: runtime.type === "local" ? { mode: "local-bind", status: "unknown", path: workspacePath } : { status: "unknown" },
       target: { strategy: "node-proxy", status: "unknown" },
@@ -621,7 +635,57 @@ export class NodeAgentState {
     });
     const stored = this.controlledInstances.put(instance);
     this.instancePrivateConfigs.materialize(stored.id, stored.registrationToken, this.resolvedAssignedModelEnvironment(stored.id));
+    if (input.gitWorkspaceProvisioning) {
+      this.pendingGitWorkspaceProvisioning.set(stored.id, input.gitWorkspaceProvisioning);
+    }
     return stored;
+  }
+
+  takeGitWorkspaceProvisioning(instanceId: string) {
+    const pending = this.pendingGitWorkspaceProvisioning.get(instanceId);
+    this.pendingGitWorkspaceProvisioning.delete(instanceId);
+    return pending;
+  }
+
+  private gitWorkspaceProvisioningFor(instance: ControlledInstance): GitWorkspaceProvisioningInput | undefined {
+    if (instance.source.type === "local-folder") return undefined;
+    const pending = this.pendingGitWorkspaceProvisioning.get(instance.id);
+    if (pending) return pending;
+    const authorization = this.gitCredentials.getAuthorizationSet(instance.id);
+    const payloads = authorization.credentialIds.flatMap((id) => {
+      const payload = this.gitCredentials.getPayload(id);
+      return payload ? [payload] : [];
+    });
+    const candidates = payloads.map((item) => ({
+      id: item.credential.id,
+      kind: item.credential.kind,
+      scope: item.credential.scope,
+      status: item.credential.status,
+      pinnedKnownHosts: item.secret.kind === "ssh-key" && Boolean(item.secret.pinnedKnownHosts.trim()),
+    }));
+    const match = resolveGitCredential(instance.source.url, candidates);
+    if (match.status === "ambiguous" || match.status === "missing-host-key") {
+      throw Object.assign(new Error(`Git credential resolution failed for instance ${instance.id}: ${match.status}.`), {
+        code: `GIT_CREDENTIAL_${match.status.replace(/-/g, "_").toUpperCase()}`,
+        statusCode: 409,
+      });
+    }
+    return {
+      operationId: `gitop_${instance.id}_${instance.stateRevision}`,
+      instanceId: instance.id,
+      remoteUrl: instance.source.url,
+      ref: instance.source.ref,
+      clone: instance.source.clone,
+      credentials: payloads.map((item, index) => ({
+        operationId: `gitcredop_${instance.id}_${instance.stateRevision}_${index}`,
+        retention: "instance-retained" as const,
+        payload: item,
+      })),
+    };
+  }
+
+  discardGitWorkspaceProvisioning(instanceId: string) {
+    return this.pendingGitWorkspaceProvisioning.delete(instanceId);
   }
 
   registerInstance(id: string, input: ControlledInstanceRegister, token?: string) {
@@ -729,9 +793,17 @@ export class NodeAgentState {
     }
   }
 
+  authenticateInstance(instanceId: string, token?: string) {
+    const instance = this.requireInstance(instanceId);
+    this.validateInstanceToken(instance, token);
+    return instance;
+  }
+
   context(instance: ControlledInstance, modelEnv: Record<string, string> = this.resolvedAssignedModelEnvironment(instance.id)): ExecutorContext {
     const image = instance.imageSnapshot || InstanceImageSnapshotSchema.parse({ id: "img_localhost", origin: "custom", name: "Localhost", repository: "localhost", tag: "local", requestedReference: "localhost:local", pullPolicy: "if-not-present", capabilities: [], optionalApps: [], defaultEnv: {}, labels: {}, createdAt: instance.createdAt, updatedAt: instance.updatedAt });
+    const existingPrivateConfig = this.instancePrivateConfigs.get(instance.id);
     const privateConfig = this.instancePrivateConfigs.materialize(instance.id, instance.registrationToken, modelEnv);
+    const gitWorkspaceProvisioning = this.gitWorkspaceProvisioningFor(instance);
     return {
       project: projectForInstance(instance),
       image,
@@ -741,6 +813,10 @@ export class NodeAgentState {
       nodeAgentUrl: this.containerUrl,
       modelEnv,
       privateConfigPath: this.instancePrivateConfigs.filePath(privateConfig.instanceId),
+      ...(gitWorkspaceProvisioning ? {
+        gitWorkspaceProvisioning,
+        completeGitWorkspaceProvisioning: () => this.pendingGitWorkspaceProvisioning.delete(instance.id),
+      } : {}),
     };
   }
 }

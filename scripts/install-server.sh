@@ -19,7 +19,8 @@ usage() {
   cat <<'USAGE'
 Usage: install-server.sh [options]
 
-Installs everything needed by a local TaskHandoff server on Debian or Ubuntu:
+Installs everything needed by a local TaskHandoff server on Debian, Ubuntu,
+RHEL 8/9, or CentOS Stream 9:
   - Node.js 24.15.0 or newer within the Node.js 24 release line
   - Docker (unless --skip-docker is used)
   - control-plane, node-agent, and controlled-instance runtime packages
@@ -75,29 +76,64 @@ done
 [ "$AUTH_MODE" = "password" ] || [ "$AUTH_MODE" = "disabled" ] || die "--auth-mode must be password or disabled"
 
 need_root
-command -v apt-get >/dev/null 2>&1 || die "this installer currently supports Debian and Ubuntu hosts with apt-get"
 command -v systemctl >/dev/null 2>&1 || die "systemd is required"
 
-export DEBIAN_FRONTEND=noninteractive
+version_is_at_least() {
+  awk -v current="$1" -v minimum="$2" 'BEGIN {
+    split(current, left, "."); split(minimum, right, ".");
+    for (i = 1; i <= 3; i++) {
+      if ((left[i] + 0) > (right[i] + 0)) exit 0;
+      if ((left[i] + 0) < (right[i] + 0)) exit 1;
+    }
+    exit 0;
+  }'
+}
 
-echo "[1/5] Refreshing apt package metadata"
-apt-get update
-
-echo "[2/5] Ensuring Node.js >= $MIN_NODE_VERSION"
 node_is_compatible() {
   command -v node >/dev/null 2>&1 || return 1
   current_node_version="$(node -p 'process.versions.node' 2>/dev/null || true)"
-  [ -n "$current_node_version" ] && dpkg --compare-versions "$current_node_version" ge "$MIN_NODE_VERSION"
+  case "$current_node_version" in
+    24.*) version_is_at_least "$current_node_version" "$MIN_NODE_VERSION" ;;
+    *) return 1 ;;
+  esac
 }
 
-if ! node_is_compatible || ! command -v npm >/dev/null 2>&1; then
-  echo "Installing the current official Node.js 24 build with its bundled npm."
-  apt-get install -y ca-certificates curl xz-utils
-  case "$(dpkg --print-architecture)" in
-    amd64) node_arch="x64" ;;
-    arm64) node_arch="arm64" ;;
-    *) die "automatic Node.js installation supports amd64 and arm64; install Node.js $MIN_NODE_VERSION manually on this architecture" ;;
+install_node_prerequisites() {
+  if command -v apt-get >/dev/null 2>&1; then
+    export DEBIAN_FRONTEND=noninteractive
+    echo "[1/5] Refreshing apt package metadata"
+    apt-get update
+    apt-get install -y ca-certificates curl xz-utils
+  elif command -v dnf >/dev/null 2>&1; then
+    echo "[1/5] Installing Node.js archive prerequisites with dnf"
+    dnf install -y ca-certificates curl tar xz
+  else
+    die "automatic Node.js installation requires apt-get or dnf; install Node.js $MIN_NODE_VERSION with npm manually"
+  fi
+}
+
+ensure_supported_linux_runtime() {
+  for command in awk getconf uname; do command -v "$command" >/dev/null 2>&1 || die "$command is required"; done
+  [ "$(uname -s)" = "Linux" ] || die "runtime packages support Linux hosts only"
+  case "$(uname -m)" in
+    x86_64|amd64) node_arch="x64" ;;
+    aarch64|arm64) node_arch="arm64" ;;
+    *) die "runtime packages support x86_64 and arm64 Linux hosts only" ;;
   esac
+  glibc_version="$(getconf GNU_LIBC_VERSION 2>/dev/null | awk '{ print $2 }')"
+  [ -n "$glibc_version" ] && version_is_at_least "$glibc_version" "2.28" \
+    || die "runtime packages require glibc 2.28 or newer; found ${glibc_version:-unknown}"
+}
+
+echo "[2/5] Ensuring Node.js >= $MIN_NODE_VERSION"
+if node_is_compatible && command -v npm >/dev/null 2>&1; then
+  ensure_supported_linux_runtime
+  echo "Using existing Node.js $(node --version) and npm $(npm --version)"
+else
+  echo "Installing the current official Node.js 24 build with its bundled npm."
+  install_node_prerequisites
+  for command in awk curl getconf mktemp sha256sum tar uname; do command -v "$command" >/dev/null 2>&1 || die "$command is required"; done
+  ensure_supported_linux_runtime
   node_tmp="$(mktemp -d)"
   trap 'rm -rf "$node_tmp"' EXIT HUP INT TERM
   curl -fsSL https://nodejs.org/dist/latest-v24.x/SHASUMS256.txt -o "$node_tmp/SHASUMS256.txt"
@@ -114,16 +150,25 @@ fi
 node_is_compatible || die "Node.js $MIN_NODE_VERSION or newer is required; found $(node --version 2>/dev/null || echo none)"
 command -v npm >/dev/null 2>&1 || die "npm was not installed with Node.js"
 
-# Runtime packages include native Node.js addons such as node-pty. Published
-# prebuilds are not guaranteed for every supported Node.js/platform pair, so
-# npm must be able to fall back to node-gyp during installation.
-echo "Ensuring native Node.js build tools are available"
-apt-get install -y --no-install-recommends g++ make python3
-
 echo "[3/5] Ensuring Docker is available"
 if [ "$INSTALL_DOCKER" = "1" ]; then
   if ! command -v docker >/dev/null 2>&1; then
-    apt-get install -y docker.io
+    if command -v apt-get >/dev/null 2>&1; then
+      apt-get update
+      apt-get install -y docker.io
+    elif command -v dnf >/dev/null 2>&1; then
+      os_id="$(. /etc/os-release && printf '%s' "$ID")"
+      case "$os_id" in
+        rhel) docker_repo_os="rhel" ;;
+        centos) docker_repo_os="centos" ;;
+        *) die "automatic Docker installation on dnf hosts supports RHEL and CentOS; install Docker Engine manually or pass --skip-docker" ;;
+      esac
+      dnf install -y dnf-plugins-core
+      dnf config-manager --add-repo "https://download.docker.com/linux/$docker_repo_os/docker-ce.repo"
+      dnf install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+    else
+      die "automatic Docker installation requires apt-get or dnf"
+    fi
   fi
   systemctl enable --now docker.service
   docker info >/dev/null

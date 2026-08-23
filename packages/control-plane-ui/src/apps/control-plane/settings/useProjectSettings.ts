@@ -1,28 +1,33 @@
-import { computed, reactive, ref } from "vue";
-import { createProject, deleteProject } from "../../../api/queries";
+import { computed, reactive, ref, type ComputedRef } from "vue";
+import { createProject, deleteProject, updateProject } from "../../../api/queries";
 import type { Project } from "../../../api/types";
+import type { GitCredentialPublic } from "@task-handoff/protocol/managed-git-credentials";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
 import type { Translate } from "../../../i18n/status.ts";
 import { translateApiError } from "../../../i18n/apiError.ts";
 
 const DEFAULT_SELECT_VALUE = "__default__";
+const NO_GIT_CREDENTIAL_VALUE = "__none__";
 
 type UseProjectSettingsInput = {
   errorText: (error: unknown) => string;
   onProjectDeleted: (projectId: string) => void;
   projectInUse: (projectId: string) => boolean;
   refreshProjects: () => Promise<void>;
+  gitCredentials: ComputedRef<GitCredentialPublic[]>;
   translate: Translate;
 };
 
-export function useProjectSettings({ errorText, onProjectDeleted, projectInUse, refreshProjects, translate: t }: UseProjectSettingsInput) {
+export function useProjectSettings({ errorText, gitCredentials, onProjectDeleted, projectInUse, refreshProjects, translate: t }: UseProjectSettingsInput) {
   const translateError = (error: unknown) => translateApiError(error, t, errorText(error));
   const creatingSettingsProject = ref(false);
   const deletingProjectId = ref("");
+  const updatingProjectCredentialId = ref("");
   const settingsProjectSuccess = ref("");
   const settingsProject = reactive({
     name: "",
     url: "",
+    gitCredentialId: NO_GIT_CREDENTIAL_VALUE,
     defaultImageSelection: undefined as { imageId: string; tag?: string } | undefined,
   });
 
@@ -37,6 +42,10 @@ export function useProjectSettings({ errorText, onProjectDeleted, projectInUse, 
       return false;
     }
     return Boolean(settingsProject.url.trim());
+  });
+  const settingsGitCredentialValue = computed({
+    get: () => settingsProject.gitCredentialId,
+    set: (value: string) => { settingsProject.gitCredentialId = value; },
   });
 
   function clearProjectFeedback() {
@@ -56,13 +65,14 @@ export function useProjectSettings({ errorText, onProjectDeleted, projectInUse, 
     creatingSettingsProject.value = true;
     clearProjectFeedback();
     try {
+      const credential = gitCredentials.value.find((item) => item.id === settingsProject.gitCredentialId && item.status === "enabled");
       const project = await createProject({
         name: settingsProject.name.trim(),
         source: {
           type: "git-repository",
           url: settingsProject.url.trim(),
           ref: { type: "branch", name: "main" },
-          auth: { type: "none" },
+          auth: credential ? { type: credential.kind, secretId: credential.id } : { type: "none" },
           clone: { submodules: false, lfs: false, subdirectory: "" },
         },
         ...(settingsProject.defaultImageSelection ? { defaultImageSelection: settingsProject.defaultImageSelection } : {}),
@@ -70,6 +80,7 @@ export function useProjectSettings({ errorText, onProjectDeleted, projectInUse, 
       settingsProjectSuccess.value = t("settings.projectRegistry.created", { name: project.name });
       settingsProject.name = "";
       settingsProject.url = "";
+      settingsProject.gitCredentialId = NO_GIT_CREDENTIAL_VALUE;
       settingsProject.defaultImageSelection = undefined;
       await refreshProjects();
     } catch (error) {
@@ -98,8 +109,31 @@ export function useProjectSettings({ errorText, onProjectDeleted, projectInUse, 
     }
   }
 
+  async function updateProjectCredential(project: Project, credentialId: string) {
+    if (updatingProjectCredentialId.value || project.source.type === "local-folder") return;
+    const credential = gitCredentials.value.find((item) => item.id === credentialId && item.status === "enabled");
+    const auth = credential ? { type: credential.kind, secretId: credential.id } as const : { type: "none" as const };
+    if ((project.source.auth?.secretId || NO_GIT_CREDENTIAL_VALUE) === (credential?.id || NO_GIT_CREDENTIAL_VALUE)) return;
+    updatingProjectCredentialId.value = project.id;
+    clearProjectFeedback();
+    try {
+      await updateProject(project.id, { source: { ...project.source, auth } });
+      await refreshProjects();
+    } catch (error) {
+      showControlPlaneToast(translateError(error));
+    } finally {
+      updatingProjectCredentialId.value = "";
+    }
+  }
+
   function projectSourceLabel(project: { source: { type: string; path?: string; url?: string } }) {
     return project.source.type === "local-folder" ? project.source.path || t("settings.projectRegistry.localFolder") : project.source.url || project.source.type;
+  }
+
+  function projectCredentialLabel(project: Project) {
+    const credentialId = project.source.type === "git-repository" ? project.source.auth?.secretId : undefined;
+    if (!credentialId) return t("settings.projectRegistry.noCredential");
+    return gitCredentials.value.find((credential) => credential.id === credentialId)?.name || credentialId;
   }
 
   return {
@@ -110,8 +144,12 @@ export function useProjectSettings({ errorText, onProjectDeleted, projectInUse, 
     creatingSettingsProject,
     deletingProjectId,
     projectSourceLabel,
+    projectCredentialLabel,
     removeProject,
+    updateProjectCredential,
+    updatingProjectCredentialId,
     settingsDefaultImageSelectValue,
+    settingsGitCredentialValue,
     settingsProject,
     settingsProjectSuccess,
   };

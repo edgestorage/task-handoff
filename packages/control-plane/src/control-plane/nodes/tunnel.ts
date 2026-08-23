@@ -142,6 +142,14 @@ type TunnelErrorPayload = {
   message: string;
 };
 
+function objectRecord(value: unknown) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function firstStringValue(...values: unknown[]) {
+  return values.find((value): value is string => typeof value === "string" && Boolean(value));
+}
+
 function createRequestId() {
   return `req_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
 }
@@ -423,6 +431,10 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
 
   instanceScopeDiagnostics() {
     return this.eventRouter.diagnostics();
+  }
+
+  setEventDiagnosticLogger(logger: { info?: (data: Record<string, unknown>, message?: string) => void; warn?: (data: Record<string, unknown>, message?: string) => void } | undefined) {
+    this.eventRouter.setLogger(logger);
   }
 
   async request(node: { id: string }, route: string, init: RequestInit = {}) {
@@ -856,7 +868,7 @@ export class ControlPlaneNodeEventSubscriber {
   private readonly service: ControlPlaneService;
   private readonly tunnel: ControlPlaneNodeAgentTunnelTransport;
   private readonly safetyIntervalMs: number;
-  private readonly logger?: { info?: (data: Record<string, unknown>, message?: string) => void };
+  private readonly logger?: { info?: (data: Record<string, unknown>, message?: string) => void; warn?: (data: Record<string, unknown>, message?: string) => void };
   private readonly connectionRuntime?: NodeConnectionRuntime;
   private readonly connectionOptions: {
     connectTimeoutMs?: number;
@@ -902,6 +914,7 @@ export class ControlPlaneNodeEventSubscriber {
     this.tunnel = tunnel;
     this.safetyIntervalMs = eventConnectionSafetyIntervalMs(options.safetyIntervalMs);
     this.logger = options.logger;
+    this.tunnel.setEventDiagnosticLogger?.(this.logger);
     this.connectionRuntime = options.connectionRuntime;
     this.connectionOptions = options;
   }
@@ -1066,6 +1079,19 @@ export class ControlPlaneNodeEventSubscriber {
           if (runtimeGeneration !== undefined) this.connectionRuntime?.connected(node.id, runtimeGeneration);
         }
         const record = message as Record<string, unknown>;
+        const forwardedEvent = objectRecord(record.event);
+        const forwardedPayload = objectRecord(forwardedEvent?.payload);
+        const forwardedMeta = objectRecord(forwardedPayload?.meta);
+        if (typeof forwardedEvent?.type === "string" && forwardedEvent.type.startsWith("app-session.")) {
+          this.logger?.info?.({
+            nodeId: node.id,
+            instanceId: firstStringValue(record.instanceId, objectRecord(forwardedEvent.scope)?.instanceId, forwardedMeta?.instanceId),
+            eventType: forwardedEvent.type,
+            traceId: typeof forwardedMeta?.traceId === "string" ? forwardedMeta.traceId : undefined,
+            streamId: typeof forwardedMeta?.streamId === "string" ? forwardedMeta.streamId : undefined,
+            revision: typeof forwardedMeta?.revision === "number" ? forwardedMeta.revision : undefined,
+          }, "app-session.event.transport.received");
+        }
         const forwardedMessage = typeof record.type === "string" && record.type.startsWith("node-agent.")
           ? record
           : { type: "node-agent.event.forwarded", event: record };

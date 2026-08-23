@@ -106,6 +106,7 @@ export default function SessionDetailRoute() {
     drafts={mobileDraftStore}
     permissions={mobilePermissionStore}
     defaultPermissionMode={defaultPermissionMode}
+    maxFileAttachmentBytes={instance?.config.aiSessionMaxFileAttachmentBytes}
     detailMode={detailMode}
     instanceId={params.instanceId}
     instanceCapabilities={instance?.capabilities}

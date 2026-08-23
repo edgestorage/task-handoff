@@ -5,6 +5,7 @@
       :busy="busy"
       :can-interrupt="canInterrupt"
       :can-resolve-approval="canResolveApproval"
+      :approval-decisions="approvalDecisions"
       :instance-id="instanceId"
       :conversation-session-id="session.id"
       :file-links="fileLinks"
@@ -30,6 +31,7 @@
     :busy="busy"
     :can-interrupt="canInterrupt"
     :can-resolve-approval="canResolveApproval"
+    :approval-decisions="approvalDecisions"
     :instance-id="instanceId"
     :file-links="fileLinks"
     :is-latest="promptIndex >= promptCount - 1"
@@ -83,6 +85,7 @@ const props = withDefaults(defineProps<{
   busy?: boolean;
   canInterrupt?: boolean;
   canResolveApproval?: boolean;
+  approvalDecisions?: Array<"allow" | "deny" | "skip">;
   fileLinks?: boolean;
   instanceId: string;
   mode: "compact" | "full";
@@ -96,6 +99,7 @@ const props = withDefaults(defineProps<{
   busy: false,
   canInterrupt: false,
   canResolveApproval: false,
+  approvalDecisions: () => ["allow", "deny", "skip"],
   fileLinks: false,
   selectedTurnState: () => ({ status: "ready", items: [] }),
   turnTimelines: () => ({}),

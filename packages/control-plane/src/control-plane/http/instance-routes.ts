@@ -6,6 +6,9 @@ import { IdParamsSchema } from "./route-params.ts";
 import { AppManagementOperationRequestSchema, InstanceDeleteInputSchema } from "@task-handoff/protocol/control-plane";
 import { withRequestSignal } from "./request-signal.ts";
 import { publicInstanceDirectory } from "../public-records.ts";
+import { filterRequestNodes } from "./access-projection.ts";
+import { assertCan } from "../auth/authorization.ts";
+import { controlPlaneRequestActor } from "./request-actor.ts";
 
 export type RegisterInstanceRoutesOptions = {
   app: FastifyInstance;
@@ -26,8 +29,18 @@ const InstanceBoardQuerySchema = z.object({
 }).strict();
 
 export function registerInstanceRoutes({ app, service, events }: RegisterInstanceRoutesOptions) {
-  app.get("/api/controlled-instances", async () => ({ data: await service.listControlledInstances() }));
+  app.get("/api/controlled-instances", async (request) => ({
+    data: filterRequestNodes(request, await service.listControlledInstances(), (instance) => instance.nodeId),
+  }));
   app.post("/api/controlled-instances", async (request, reply) => {
+    const body = request.body && typeof request.body === "object" && !Array.isArray(request.body)
+      ? request.body as Record<string, unknown>
+      : {};
+    if (body.gitCredentialRetention === "instance-retained") {
+      const actor = controlPlaneRequestActor(request);
+      if (!actor) throw Object.assign(new Error("Authentication is required."), { code: "CONTROL_PLANE_AUTH_REQUIRED", statusCode: 401 });
+      assertCan(actor, "manage-secrets", { type: "secret" });
+    }
     const instance = await service.createControlledInstance(request.body);
     events.publish("instance.created", { instanceId: instance.id });
     return reply.code(201).send({ data: instance });
@@ -99,9 +112,12 @@ export function registerInstanceRoutes({ app, service, events }: RegisterInstanc
     const query = InstanceBoardQuerySchema.parse(request.query);
     const result = await service.boardWithDiagnostics(signal, query.progressive === "true");
     return {
-      data: (query.instanceId ? result.items.filter((item) => item.id === query.instanceId) : result.items)
+      data: filterRequestNodes(request, query.instanceId ? result.items.filter((item) => item.id === query.instanceId) : result.items, (item) => item.nodeId)
         .map((item) => query.projection === "directory" ? publicInstanceDirectory(item) : item),
-      meta: { nodeErrors: result.nodeErrors, nodeStates: result.nodeStates },
+      meta: {
+        nodeErrors: filterRequestNodes(request, result.nodeErrors, (item) => item.nodeId),
+        nodeStates: filterRequestNodes(request, result.nodeStates, (item) => item.nodeId),
+      },
     };
   }));
 }

@@ -33,9 +33,11 @@ import {
   AiSessionHistoryStore,
   AiSessionResumeCoordinator,
   AiSessionOpenAppCoordinator,
+  AiSessionProviderRegistry,
   ClaudeAppSessionBindingProvider,
   ClaudeControlSockSessionBridge,
   CodexAppServerSessionBridge,
+  OpenCodeSessionBridge,
   createAiSessionRegistry,
   TranscriptTailDiscoveryProvider,
   type AiSessionRegistry,
@@ -53,6 +55,7 @@ import { configSyncPresets, configSyncPrograms, listConfigSyncFolders, runConfig
 import { ConfigSyncRequestSchema } from "@task-handoff/protocol/config-sync";
 import { applyManagedCodexModelConfig } from "./codex-model-config";
 import { applyManagedClaudeModelConfig } from "./claude-model-config";
+import { GitCredentialBroker, installGitBrokerEnvironment } from "./git-credential-broker";
 import {
   controlledInstanceCapabilities,
   controlledInstanceSnapshot,
@@ -593,6 +596,10 @@ async function runTriggerOnce(triggers: TriggerStore, executor: TriggerExecutor,
 export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   const startedAt = new Date().toISOString();
   const storagePaths = resolveStoragePaths();
+  let nodeAgentClient!: NodeAgentRegistrationClient;
+  const gitCredentialBroker = new GitCredentialBroker({ nodeAgentClient: () => nodeAgentClient });
+  await gitCredentialBroker.start();
+  installGitBrokerEnvironment(process.env.TASK_HANDOFF_CLI_PATH, gitCredentialBroker.socketPath);
   const managedModelEnv = { ...process.env };
   logControlledInstanceStart(storagePaths.logDir, storagePaths.dataDir);
   applyManagedCodexModelConfig(managedModelEnv);
@@ -603,7 +610,6 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   appRuntime.replaceManagedEnvironment(managedAppEnvironment(managedModelEnv));
   const app = Fastify({ logger: options.logger ?? true });
   app.addContentTypeParser("application/octet-stream", (_request, payload, done) => done(null, payload));
-  let nodeAgentClient!: NodeAgentRegistrationClient;
   const appManagement = options.appManagement || new AppManagementManager({
     stateDir: path.join(storagePaths.runtimeDir, "app-management"),
     installBaseDir: process.env.TASK_HANDOFF_MANAGED_APP_ROOT || path.join(storagePaths.dataDir, "managed-apps"),
@@ -620,6 +626,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   const initialAiSessionPersistenceSettings = aiSessionPersistenceSettings.get();
   const aiSessionConversationAttachments = new AiSessionConversationAttachmentStore(storagePaths, {
     retentionDays: initialAiSessionPersistenceSettings.attachmentRetentionDays,
+    maxFileAttachmentBytes: initialAiSessionPersistenceSettings.maxFileAttachmentBytes,
     onWarning: (reason) => app.log.warn({ reason }, "AI session conversation attachment was sanitized"),
   });
   const attachmentDraftStreams = new AiSessionAttachmentDraftStreams((input) => aiSessionConversationAttachments.createDraft(input));
@@ -631,8 +638,8 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     onWarning: (warning) => app.log.warn({ warning }, "AI session history entry was sanitized"),
     onRemove: (sessionId) => aiSessionConversationAttachments.releaseSession(sessionId),
   });
-  const aiSessionHistoryLifecycle = new AiSessionHistoryLifecycle(aiSessionHistory);
   const aiSessionController = new AiSessionController(aiSessions);
+  let aiSessionProviderCapabilities: ReturnType<AiSessionProviderRegistry["capabilities"]> = [];
   const triggers = new TriggerStore(storagePaths);
   const triggerExecutor = new TriggerExecutor(triggers, aiSessionController);
   const triggerManager = new TriggerManager(triggers, triggerExecutor, storagePaths, (type, payload) => events.publish(type, payload));
@@ -642,6 +649,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     aiSessions,
     triggers,
     aiSessionController.timelineCapabilities(),
+    aiSessionProviderCapabilities,
   ));
 
   await app.register(websocket);
@@ -686,7 +694,10 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     | { type: typeof AppSessionEventType.Removed; payload: AppSessionRemovedEvent };
   const appSessionEventHistory: Array<AppSessionRuntimeEvent & { createdAtMs: number }> = [];
   let lastAppSessionSnapshot = appSessionsSnapshotFromRecords([]);
-  const aiSessionDiscovery = options.aiSessionDiscovery || new AiSessionDiscoveryCoordinator();
+  const aiSessionDiscovery = options.aiSessionDiscovery || new AiSessionDiscoveryCoordinator(({ providerId, error }) => {
+    app.log.warn({ err: error, providerId }, "AI session discovery provider failed");
+  });
+  const aiSessionProviders = new AiSessionProviderRegistry(aiSessionController, aiSessionDiscovery);
   const configuredDeltaCoalescingWindow = process.env.TASK_HANDOFF_AI_SESSION_DELTA_COALESCE_MS;
   const aiSessionMessageDeltas = new AiSessionMessageDeltaCoalescer({
     emit: (payload) => events.publish(AiSessionEventType.MessageDelta, payload),
@@ -715,6 +726,29 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     },
     onEventSourceClose: () => aiSessionMessageDeltas.flushAll("event-source-close"),
   });
+  const openCode = new OpenCodeSessionBridge(aiSessions, {
+    connection: () => {
+      appRuntime.ensureSharedResource("opencode");
+      const connection = appRuntime.sharedResourcePrivateConnection("opencode");
+      if (!connection) throw Object.assign(new Error("OpenCode shared server connection is unavailable."), { code: "OPENCODE_SERVER_UNAVAILABLE" });
+      return connection;
+    },
+    workspaceRoots: () => {
+      const configured = repositoryWorkspaceRootsFromEnv();
+      return configured.length ? configured : [process.env.TASK_HANDOFF_WORKSPACE || process.cwd()];
+    },
+    onMessageDelta: (delta) => {
+      const payload = AiSessionMessageDeltaEventSchema.parse({
+        instanceId,
+        nodeId: process.env.TASK_HANDOFF_NODE_ID,
+        ...delta,
+        generatedAt: new Date().toISOString(),
+      });
+      aiSessionMessageDeltas.push(payload);
+    },
+    onEventSourceClose: () => aiSessionMessageDeltas.flushAll("event-source-close"),
+    onDiagnostic: (diagnostic) => app.log.warn({ diagnostic }, "OpenCode adapter diagnostic"),
+  });
   const retainCodexTimelineHistory = () => {
     if (typeof codexAppServer.retainTimelineHistory !== "function") return;
     try {
@@ -738,18 +772,58 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     const next = AiSessionPersistenceSettingsInputSchema.parse(request.body || {});
     const settings = aiSessionPersistenceSettings.put(next);
     aiSessionConversationAttachments.setRetentionDays(settings.attachmentRetentionDays);
+    aiSessionConversationAttachments.setMaxFileAttachmentBytes(settings.maxFileAttachmentBytes);
     const history = aiSessionHistory.setRetentionLimit(next.historyLimit);
     retainCodexTimelineHistory();
     return { data: {
       applied: true,
       historyLimit: history.limit,
       attachmentRetentionDays: settings.attachmentRetentionDays,
+      maxFileAttachmentBytes: settings.maxFileAttachmentBytes,
       removedHistoryCount: history.removed.length,
     } };
   });
   const claudeControlSock = new ClaudeControlSockSessionBridge(aiSessions);
-  aiSessionController.register(codexAppServer);
-  aiSessionController.register(claudeControlSock);
+  aiSessionProviders.register({
+    agent: "codex",
+    controlProvider: codexAppServer,
+    discoveryProvider: codexAppServer,
+    ensureReady: async () => {
+      appRuntime.ensureSharedResource("codex");
+      await codexAppServer.sync(appSessionsWithSharedCodexAppServer());
+    },
+    capability: {
+      agent: "codex",
+      actions: { create: true, send: true, queue: true, steer: true, interrupt: true, archive: true, delete: true, fork: true, approvalDecisions: ["allow", "deny", "skip"] },
+      timeline: { sessionRead: true, turnRead: true, liveItems: true },
+    },
+  });
+  aiSessionProviders.register({
+    agent: "claude",
+    controlProvider: claudeControlSock,
+    discoveryProvider: claudeControlSock,
+    capability: {
+      agent: "claude",
+      actions: { create: false, send: true, queue: true, steer: true, interrupt: true, archive: true, delete: false, fork: false, approvalDecisions: [] },
+      timeline: { sessionRead: false, turnRead: false, liveItems: false },
+    },
+  });
+  aiSessionProviders.register({
+    agent: "opencode",
+    controlProvider: openCode,
+    discoveryProvider: openCode,
+    ensureReady: async () => {
+      appRuntime.ensureSharedResource("opencode");
+      await openCode.ensureReady();
+    },
+    capability: {
+      agent: "opencode",
+      actions: { create: true, send: true, queue: true, steer: false, interrupt: true, archive: true, delete: true, fork: true, approvalDecisions: ["allow", "deny"] },
+      timeline: { sessionRead: true, turnRead: true, liveItems: true },
+    },
+  });
+  aiSessionProviderCapabilities = aiSessionProviders.capabilities();
+  const aiSessionHistoryLifecycle = new AiSessionHistoryLifecycle(aiSessionHistory, (agent) => Boolean(aiSessionProviders.get(agent)));
   const unsubscribeTimelineItems = aiSessionController.subscribeTimelineItems((timelineItem) => {
     events.publish(AiSessionEventType.TimelineItem, AiSessionTimelineItemEventSchema.parse({
       instanceId,
@@ -760,9 +834,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   });
   app.addHook("onClose", async () => unsubscribeTimelineItems());
   aiSessionDiscovery.register(new ClaudeAppSessionBindingProvider());
-  aiSessionDiscovery.register(claudeControlSock);
   aiSessionDiscovery.register(new TranscriptTailDiscoveryProvider());
-  aiSessionDiscovery.register(codexAppServer);
   function appSessionsWithSharedCodexAppServer() {
     const appServer = appRuntime.sharedResourceSessionAi("codex")?.appServer;
     if (!appServer) {
@@ -792,9 +864,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       },
     }),
     resumeProvider: async (item) => {
-      await appRuntime.ensureSharedResource(item.agent);
-      await codexAppServer.sync(appSessionsWithSharedCodexAppServer());
-      await aiSessionController.provider(item.agent).resumeSession?.(item.providerSessionId);
+      await aiSessionProviders.resume(item);
     },
   });
   const aiSessionCreate = new AiSessionCreateCoordinator({
@@ -802,8 +872,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     controller: aiSessionController,
     operationStorePath: path.join(storagePaths.runtimeDir, "ai-session-create-operations.json"),
     ensureProvider: async (agent) => {
-      await appRuntime.ensureSharedResource(agent);
-      if (agent === "codex") await codexAppServer.sync(appSessionsWithSharedCodexAppServer());
+      await aiSessionProviders.ensureReady(agent);
     },
     onDiagnostic: (diagnostic) => app.log.warn({ diagnostic }, "AI session create compensation"),
   });
@@ -819,8 +888,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     controller: aiSessionController,
     operationStorePath: path.join(storagePaths.runtimeDir, "ai-session-fork-operations.json"),
     ensureProvider: async (agent) => {
-      await appRuntime.ensureSharedResource(agent);
-      if (agent === "codex") await codexAppServer.sync(appSessionsWithSharedCodexAppServer());
+      await aiSessionProviders.ensureReady(agent);
     },
     prepareManagedWorktree: async (source, clientRequestId) => repositoryAiSessionWorkspace.prepareForkWorktree(source.id, clientRequestId),
     validateManagedWorktree: async (source, worktreeId, cwd) => repositoryAiSessionWorkspace.validateForkWorktree(source.id, worktreeId, cwd),
@@ -1157,10 +1225,13 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       });
     });
     aiSessionTimer = setInterval(() => {
-      void refreshAndPublishAiSessions();
+      void refreshAndPublishAiSessions().catch((error) => {
+        app.log.warn({ err: error }, "periodic AI session discovery failed");
+      });
     }, Number(process.env.TASK_HANDOFF_AI_SESSION_SCAN_INTERVAL_MS) || 30_000);
   });
   app.addHook("onClose", async () => {
+    await gitCredentialBroker.close();
     stopAiSessionChangeListener();
     if (startupAiSessionTask) {
       clearImmediate(startupAiSessionTask);
@@ -1176,6 +1247,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     }
     codexAppServer.stop();
     claudeControlSock.stop();
+    openCode.close();
   });
   app.addHook("preClose", async () => {
     // Provider sessions are durable user state, not process-owned resources.
@@ -1183,6 +1255,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     // exits and Close AI Session remain responsible for provider archival.
     serviceClosing = true;
     codexAppServer.stop();
+    openCode.close();
     aiSessionMessageDeltas.close("service-close");
   });
   const publishAppSessionRuntimeChange = (reason: AppSessionEventReason, session: Record<string, unknown>) => {
@@ -1328,6 +1401,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       aiSessions,
       triggers,
       aiSessionController.timelineCapabilities(),
+      aiSessionProviderCapabilities,
     );
     return {
       data: {
@@ -1340,7 +1414,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   });
 
   app.get("/api/instance/capabilities", async () => ({
-    data: controlledInstanceCapabilities(appRuntime, aiSessionController.timelineCapabilities()),
+    data: controlledInstanceCapabilities(appRuntime, aiSessionController.timelineCapabilities(), aiSessionProviderCapabilities),
   }));
 
   app.get("/api/workspace/status", async () => ({
@@ -1471,9 +1545,12 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     data: triggers.list().recentRuns,
   }));
 
-  app.get("/api/ai-sessions/history", async () => ({
-    data: AiSessionHistoryListSchema.parse({ items: aiSessionHistory.list() }),
-  }));
+  app.get<{ Querystring: { agents?: string } }>("/api/ai-sessions/history", async (request) => {
+    // Compatibility for v0.0.21: legacy clients parse history agents as codex | claude.
+    const requested = request.query.agents?.split(",").map((agent) => agent.trim()).filter(Boolean);
+    const agents = new Set(requested?.length ? requested : ["codex", "claude"]);
+    return { data: AiSessionHistoryListSchema.parse({ items: aiSessionHistory.list().filter((item) => agents.has(item.agent)) }) };
+  });
 
   app.post<{ Querystring: Record<string, unknown>; Body: Readable }>("/api/ai-session-attachments/drafts", { bodyLimit: AI_SESSION_ATTACHMENT_UPLOAD_BODY_LIMIT }, async (request, reply) => {
     try {

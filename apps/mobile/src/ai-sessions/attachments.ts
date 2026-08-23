@@ -6,8 +6,8 @@ import {
   type ControlPlaneClient,
 } from '@task-handoff/control-plane-client';
 import {
+  AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES,
   AI_SESSION_MAX_ATTACHMENT_BYTES,
-  AI_SESSION_MAX_INLINE_FILE_BYTES,
   type AiSessionMessageAttachmentRef,
   type AiSessionMentionCandidate,
 } from '@task-handoff/protocol/ai-sessions';
@@ -70,12 +70,12 @@ export function mobilePastedImage(uri: string): MobileLocalFile {
   };
 }
 
-export function mobilePastedText(text: string, sequence: number): MobileLocalFile {
-  const decision = classifyAiSessionPastedText(text, sequence);
+export function mobilePastedText(text: string, sequence: number, maxFileAttachmentBytes = AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES): MobileLocalFile {
+  const decision = classifyAiSessionPastedText(text, sequence, maxFileAttachmentBytes);
   if (decision.disposition !== 'attachment') {
     throw attachmentError(
       decision.disposition === 'rejected' ? 'ATTACHMENT_TOO_LARGE' : 'ATTACHMENT_TEXT_NOT_LONG',
-      decision.disposition === 'rejected' ? 'The pasted text must be smaller than 500 KiB.' : 'The pasted text does not need an attachment.',
+      decision.disposition === 'rejected' ? `The pasted text must be ${maxFileAttachmentBytes} bytes or less.` : 'The pasted text does not need an attachment.',
     );
   }
   const file = new File(Paths.cache, `ai-session-paste-${Crypto.randomUUID()}.txt`);
@@ -92,13 +92,13 @@ export function mobilePastedText(text: string, sequence: number): MobileLocalFil
   };
 }
 
-export function validateMobileLocalFile(file: MobileLocalFile) {
+export function validateMobileLocalFile(file: MobileLocalFile, maxFileAttachmentBytes = AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES) {
   if (!file.size || file.size < 1) throw attachmentError('ATTACHMENT_SIZE_UNKNOWN', 'The selected file has no readable content or size.');
   const mime = (file.mime || '').toLowerCase();
   if (file.kind === 'image' && !IMAGE_MIMES.has(mime)) throw attachmentError('ATTACHMENT_MIME_UNSUPPORTED', 'Choose a BMP, GIF, JPEG, PNG, or WebP image.');
   if (file.kind === 'file' && !(mime.startsWith('text/') || FILE_MIMES.has(mime))) throw attachmentError('ATTACHMENT_MIME_UNSUPPORTED', 'This file type is not supported for mobile upload.');
-  const tooLarge = file.kind === 'image' ? file.size > AI_SESSION_MAX_ATTACHMENT_BYTES : file.size >= AI_SESSION_MAX_INLINE_FILE_BYTES;
-  if (tooLarge) throw attachmentError('ATTACHMENT_TOO_LARGE', file.kind === 'image' ? `Images may be at most ${AI_SESSION_MAX_ATTACHMENT_BYTES} bytes.` : `Files must be smaller than ${AI_SESSION_MAX_INLINE_FILE_BYTES} bytes.`);
+  const tooLarge = file.kind === 'image' ? file.size > AI_SESSION_MAX_ATTACHMENT_BYTES : file.size >= maxFileAttachmentBytes;
+  if (tooLarge) throw attachmentError('ATTACHMENT_TOO_LARGE', file.kind === 'image' ? `Images may be at most ${AI_SESSION_MAX_ATTACHMENT_BYTES} bytes.` : `Files must be smaller than ${maxFileAttachmentBytes} bytes.`);
   return { ...file, mime, size: file.size } as MobileLocalFile & { mime: string; size: number };
 }
 
@@ -106,9 +106,9 @@ export async function uploadMobileAttachment(
   client: ControlPlaneClient,
   identity: { instanceId: string; sessionId: string },
   local: MobileLocalFile,
-  options: { readBase64?(uri: string): Promise<string>; removeTemporary?(uri: string): Promise<void> | void; now?: number } = {},
+  options: { readBase64?(uri: string): Promise<string>; removeTemporary?(uri: string): Promise<void> | void; now?: number; maxFileAttachmentBytes?: number } = {},
 ): Promise<MobilePendingAttachment> {
-  const file = validateMobileLocalFile(local);
+  const file = validateMobileLocalFile(local, options.maxFileAttachmentBytes);
   const localId = `${file.kind}:${file.name}:${file.size}`;
   let completed = false;
   try {

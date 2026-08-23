@@ -231,6 +231,7 @@ import { useI18n } from "vue-i18n";
 import { compareNaturalText, compareTechnicalIdentifiers } from "../../../i18n/presentation";
 import type { SupportedLocale } from "../../../i18n/locale";
 import { translateApiError } from "../../../i18n/apiError";
+import { waitForAiSessionProjection } from "../ai-session-projection";
 import { useEventListener } from "@vueuse/core";
 import { Columns3, LayoutGrid, Search, SlidersHorizontal } from "@lucide/vue";
 import { useQueryClient } from "@tanstack/vue-query";
@@ -1014,16 +1015,11 @@ async function performCardFork(card: AiBoardCard, mode: "current" | "managed-wor
   const loadingToast = showDelayedControlPlaneLoadingToast(t("sessions.actions.forking"));
   try {
     const result = await forkAiSession(card.instance.id, card.session.id, { clientRequestId, ...(throughTurnId ? { throughTurnId } : {}), workspace: { mode } });
-    let forkedCard: AiBoardCard | undefined;
-    for (let attempt = 0; attempt < 25; attempt += 1) {
-      forkedCard = allCards.value.find((candidate) => candidate.instance.id === card.instance.id && candidate.session.id === result.aiSessionId && candidate.session.providerSessionId === result.providerSessionId);
-      if (forkedCard) break;
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-    if (!forkedCard) {
-      await refreshBoard();
-      forkedCard = allCards.value.find((candidate) => candidate.instance.id === card.instance.id && candidate.session.id === result.aiSessionId && candidate.session.providerSessionId === result.providerSessionId);
-    }
+    const forkedCard = await waitForAiSessionProjection(() => allCards.value.find(
+      (candidate) => candidate.instance.id === card.instance.id
+        && candidate.session.id === result.aiSessionId
+        && candidate.session.providerSessionId === result.providerSessionId,
+    ));
     if (!forkedCard) throw new Error(t("sessions.panel.forkProjectionPending"));
     selectCard(forkedCard.key);
     forkRequestIds.delete(requestKey);

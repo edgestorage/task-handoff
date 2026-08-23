@@ -12,6 +12,7 @@ import {
   type Project,
   type SelectableImage,
 } from "@task-handoff/protocol/control-plane";
+import { resolveGitCredential, type GitCredentialPublic } from "@task-handoff/protocol/managed-git-credentials";
 import { createId, type JsonCollection, type JsonFile } from "../../shared/persistence/store.ts";
 import {
   CreateImageInputSchema,
@@ -34,6 +35,7 @@ export type ControlPlaneCatalogServiceOptions = {
   market: MarketCatalogService;
   settings: JsonFile<ControlPlaneSettings>;
   defaultNodeId: () => string | undefined;
+  requireGitCredential: (id: string) => GitCredentialPublic;
 };
 
 export class ControlPlaneCatalogService {
@@ -74,7 +76,7 @@ export class ControlPlaneCatalogService {
   createProject(input: unknown) {
     const parsedInput = CreateProjectInputSchema.parse(input);
     const timestamp = now();
-    const source = ProjectSourceSchema.parse(parsedInput.source);
+    const source = this.validateProjectSource(parsedInput.source);
     return this.options.projects.put(ProjectSchema.parse({
       ...parsedInput,
       id: parsedInput.id || createId("proj"),
@@ -91,7 +93,7 @@ export class ControlPlaneCatalogService {
   updateProject(id: string, input: unknown) {
     const parsedInput: UpdateProjectInput = UpdateProjectInputSchema.parse(input);
     const current = this.requireProject(id);
-    const source = parsedInput.source ? ProjectSourceSchema.parse(parsedInput.source) : current.source;
+    const source = parsedInput.source ? this.validateProjectSource(parsedInput.source) : current.source;
     return this.options.projects.put(ProjectSchema.parse({
       ...current,
       ...parsedInput,
@@ -111,6 +113,24 @@ export class ControlPlaneCatalogService {
     const record = this.getProject(id);
     if (!record) throwNotFound("PROJECT_NOT_FOUND", `Project ${id} was not found.`);
     return record;
+  }
+
+  private validateProjectSource(input: unknown) {
+    const source = ProjectSourceSchema.parse(input);
+    if (source.type === "local-folder") return source;
+    if (source.auth.type === "none") {
+      if (source.auth.secretId) throw catalogGitCredentialError("A public Git repository cannot reference a credential.", "GIT_REPOSITORY_AUTH_INVALID");
+      return source;
+    }
+    if (!source.auth.secretId) throw catalogGitCredentialError("Git repository authentication requires a credential.", "GIT_REPOSITORY_CREDENTIAL_REQUIRED");
+    const credential = this.options.requireGitCredential(source.auth.secretId);
+    if (credential.status !== "enabled") throw catalogGitCredentialError("The Git repository credential is disabled.", "GIT_REPOSITORY_CREDENTIAL_DISABLED");
+    if (credential.kind !== source.auth.type) throw catalogGitCredentialError("Git repository auth type does not match its credential.", "GIT_REPOSITORY_CREDENTIAL_KIND_MISMATCH");
+    const match = resolveGitCredential(source.url, [{ ...credential, status: "enabled" }]);
+    if (match.status !== "unique" || match.credential.id !== credential.id) {
+      throw catalogGitCredentialError(`Git repository credential does not authorize its remote (${match.status}).`, `GIT_REPOSITORY_CREDENTIAL_${match.status.replace(/-/g, "_").toUpperCase()}`);
+    }
+    return source;
   }
 
   listImages() {
@@ -264,4 +284,8 @@ export class ControlPlaneCatalogService {
       },
     });
   }
+}
+
+function catalogGitCredentialError(message: string, code: string) {
+  return Object.assign(new Error(message), { code, statusCode: 409 });
 }

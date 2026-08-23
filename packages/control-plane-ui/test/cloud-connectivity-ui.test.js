@@ -7,10 +7,10 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (relative) => fs.readFileSync(path.join(root, relative), "utf8");
 
-test("cloud connectivity settings are visible only to the local administrator", () => {
+test("cloud connectivity settings are visible only with settings management permission", () => {
   const settings = read("src/apps/control-plane/settings/SettingsModal.vue");
-  assert.match(settings, /authSession\.data\.value\?\.user\?\.role === "admin"/);
-  assert.match(settings, /role !== "admin" && settingsSection\.value === "cloud-connectivity"/);
+  assert.match(settings, /permissionIds\.includes\("settings:manage"\)/);
+  assert.match(settings, /!manageSettings && settingsSection\.value === "cloud-connectivity"/);
   assert.match(settings, /setSettingsSection\("nodes"\)/);
 });
 

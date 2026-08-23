@@ -108,15 +108,15 @@
       </section>
 
       <div v-if="isLatest && canResolveApproval" class="ai-session-detail-approval">
-        <button type="button" :disabled="busy" @click="$emit('resolveApproval', 'allow')">
+        <button v-if="approvalDecisions.includes('allow')" type="button" :disabled="busy" @click="$emit('resolveApproval', 'allow')">
           <Check :size="14" />
           <span>{{ t("sessions.actions.allow") }}</span>
         </button>
-        <button type="button" :disabled="busy" @click="$emit('resolveApproval', 'skip')">
+        <button v-if="approvalDecisions.includes('skip')" type="button" :disabled="busy" @click="$emit('resolveApproval', 'skip')">
           <Ban :size="14" />
           <span>{{ t("sessions.actions.skip") }}</span>
         </button>
-        <button type="button" :disabled="busy" @click="$emit('resolveApproval', 'deny')">
+        <button v-if="approvalDecisions.includes('deny')" type="button" :disabled="busy" @click="$emit('resolveApproval', 'deny')">
           <X :size="14" />
           <span>{{ t("sessions.actions.deny") }}</span>
         </button>
@@ -153,6 +153,7 @@ const props = withDefaults(defineProps<{
   busy?: boolean;
   canInterrupt?: boolean;
   canResolveApproval?: boolean;
+  approvalDecisions?: Array<"allow" | "deny" | "skip">;
   fileLinks?: boolean;
   instanceId: string;
   isLatest?: boolean;
@@ -173,6 +174,7 @@ const props = withDefaults(defineProps<{
   busy: false,
   canInterrupt: false,
   canResolveApproval: false,
+  approvalDecisions: () => ["allow", "deny", "skip"],
   fileLinks: false,
   isLatest: false,
   responseContent: "",

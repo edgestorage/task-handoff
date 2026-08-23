@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { AiSessionPermissionModeSchema, InstanceBoardAiSummarySchema } from "./ai-sessions.ts";
+import { AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES, AiSessionPermissionModeSchema, InstanceBoardAiSummarySchema } from "./ai-sessions.ts";
+import { AiSessionProviderCapabilitiesSchema } from "./ai-session-provider-capabilities.ts";
 
 const IdSchema = z.string().trim().min(1).max(120).regex(/^[a-zA-Z0-9][a-zA-Z0-9_.:-]*$/);
 const TimestampSchema = z.string().datetime();
@@ -30,7 +31,13 @@ function emptyDirectoryConversationAttachmentCapabilities() {
 export const ControlPlaneInstanceDirectoryCapabilitiesSchema = z.object({
   aiSessionTimeline: ControlPlaneDirectoryTimelineCapabilitiesSchema.default(emptyDirectoryTimelineCapabilities),
   aiSessionConversationAttachments: ControlPlaneDirectoryConversationAttachmentCapabilitiesSchema.optional(),
+  aiSessionProviders: AiSessionProviderCapabilitiesSchema.optional(),
 }).passthrough();
+
+export function directoryAiSessionProviderCapability(capabilities: unknown, agent: string) {
+  const parsed = ControlPlaneInstanceDirectoryCapabilitiesSchema.safeParse(capabilities);
+  return parsed.success ? parsed.data.aiSessionProviders?.find((provider) => provider.agent === agent) : undefined;
+}
 
 export function supportsDirectoryAiSessionTimelineCapability(
   capabilities: unknown,
@@ -158,7 +165,8 @@ export const ControlPlaneInstanceDirectoryEntrySchema = z.object({
   }),
   config: z.object({
     defaultCodexPermissionMode: AiSessionPermissionModeSchema.default("ask"),
-  }).strict().default({ defaultCodexPermissionMode: "ask" }),
+    aiSessionMaxFileAttachmentBytes: z.number().int().positive().default(AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES),
+  }).strict().default({ defaultCodexPermissionMode: "ask", aiSessionMaxFileAttachmentBytes: AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES }),
   lastHeartbeatAt: TimestampSchema.optional(),
   heartbeatAgeMs: z.number().int().nonnegative().optional(),
   observedAt: TimestampSchema,

@@ -58,7 +58,7 @@ export class NodeModelRegistry {
     const referenceCounts = new Map<string, number>();
     for (const instance of this.instances.list()) {
       const assignment = this.assignments.get(instance.id);
-      for (const modelHash of [assignment?.codexModelHash, assignment?.claudeModelHash]) {
+      for (const modelHash of [assignment?.codexModelHash, assignment?.claudeModelHash, assignment?.opencodeModelHash]) {
         if (modelHash) referenceCounts.set(modelHash, (referenceCounts.get(modelHash) || 0) + 1);
       }
     }
@@ -127,14 +127,18 @@ export class NodeModelRegistry {
     const current = this.instances.require(instanceId);
     this.validateRef("codex", input.codexModelHash);
     this.validateRef("claude", input.claudeModelHash);
+    this.validateRef("opencode", input.opencodeModelHash);
     if (input.modelSelection.codexModelHash !== undefined && (input.modelSelection.codexModelHash ?? undefined) !== input.codexModelHash) {
       throw Object.assign(new Error("Codex model selection does not match its node assignment."), { statusCode: 400, code: "NODE_MODEL_SELECTION_MISMATCH" });
     }
     if (input.modelSelection.claudeModelHash !== undefined && (input.modelSelection.claudeModelHash ?? undefined) !== input.claudeModelHash) {
       throw Object.assign(new Error("Claude model selection does not match its node assignment."), { statusCode: 400, code: "NODE_MODEL_SELECTION_MISMATCH" });
     }
+    if (input.modelSelection.opencodeModelHash !== undefined && (input.modelSelection.opencodeModelHash ?? undefined) !== input.opencodeModelHash) {
+      throw Object.assign(new Error("OpenCode model selection does not match its node assignment."), { statusCode: 400, code: "NODE_MODEL_SELECTION_MISMATCH" });
+    }
     const previous = this.assignments.get(instanceId);
-    const assignment = NodeModelAssignmentSchema.parse({ instanceId, codexModelHash: input.codexModelHash, claudeModelHash: input.claudeModelHash, updatedAt: now() });
+    const assignment = NodeModelAssignmentSchema.parse({ instanceId, codexModelHash: input.codexModelHash, claudeModelHash: input.claudeModelHash, opencodeModelHash: input.opencodeModelHash, updatedAt: now() });
     this.assignments.put(assignment);
     try {
       const instance = this.instances.put(ControlledInstanceSchema.parse({ ...current, modelSelection: input.modelSelection, updatedAt: now() }));
@@ -157,6 +161,7 @@ export class NodeModelRegistry {
     return {
       ...this.environmentForRef("codex", assignment.codexModelHash),
       ...this.environmentForRef("claude", assignment.claudeModelHash),
+      ...this.environmentForRef("opencode", assignment.opencodeModelHash),
     };
   }
 
@@ -165,26 +170,41 @@ export class NodeModelRegistry {
     this.legacyEnvironments.delete(instanceId);
   }
 
-  private validateRef(app: "codex" | "claude", modelHash?: string) {
+  private validateRef(app: "codex" | "claude" | "opencode", modelHash?: string) {
     if (!modelHash) return;
     const model = this.requireModel(modelHash);
     if (model.app !== app) throw Object.assign(new Error(`Model ${model.id} belongs to ${model.app}, not ${app}.`), { statusCode: 400, code: "NODE_MODEL_APP_MISMATCH" });
     if (!model.enabled) throw Object.assign(new Error(`Model ${model.id} is disabled.`), { statusCode: 409, code: "NODE_MODEL_DISABLED" });
   }
 
-  private environmentForRef(app: "codex" | "claude", modelHash?: string) {
+  private environmentForRef(app: "codex" | "claude" | "opencode", modelHash?: string) {
     if (!modelHash) return {};
     this.validateRef(app, modelHash);
     const model = this.requireModel(modelHash);
-    return app === "codex" ? {
+    if (app === "codex") return {
       OPENAI_API_KEY: model.key,
       OPENAI_BASE_URL: model.endpoint,
       TASK_HANDOFF_CODEX_BASE_URL: model.endpoint,
       TASK_HANDOFF_CODEX_MODEL: model.model,
-    } : {
+    };
+    if (app === "claude") return {
       ANTHROPIC_API_KEY: model.key,
       ANTHROPIC_BASE_URL: model.endpoint,
       TASK_HANDOFF_CLAUDE_MODEL: model.model,
+    };
+    return {
+      TASK_HANDOFF_OPENCODE_CONFIG_CONTENT: JSON.stringify({
+        $schema: "https://opencode.ai/config.json",
+        model: `task-handoff/${model.model}`,
+        provider: {
+          "task-handoff": {
+            npm: "@ai-sdk/openai-compatible",
+            name: "TaskHandoff",
+            options: { baseURL: model.endpoint, apiKey: model.key },
+            models: { [model.model]: { name: model.name } },
+          },
+        },
+      }),
     };
   }
 
@@ -198,7 +218,7 @@ export class NodeModelRegistry {
   private referenceIds(modelId: string) {
     return this.instances.list().filter((instance) => {
       const assignment = this.assignments.get(instance.id);
-      return assignment?.codexModelHash === modelId || assignment?.claudeModelHash === modelId;
+      return assignment?.codexModelHash === modelId || assignment?.claudeModelHash === modelId || assignment?.opencodeModelHash === modelId;
     }).map((instance) => instance.id);
   }
 

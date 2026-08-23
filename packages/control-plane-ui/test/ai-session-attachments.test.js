@@ -5,8 +5,8 @@ import test from "node:test";
 test("composer supports generic files and Local Runtime path references", () => {
   const composer = fs.readFileSync(new URL("../src/components/ai-session/AiSessionComposer.vue", import.meta.url), "utf8");
   assert.match(composer, /kind: "image" \| "file"/);
-  assert.match(composer, /MAX_INLINE_FILE_BYTES = 500 \* 1024/);
-  assert.match(composer, /file\.size >= MAX_INLINE_FILE_BYTES/);
+  assert.match(composer, /maxFileAttachmentBytes\?: number/);
+  assert.match(composer, /file\.size >= \(props\.maxFileAttachmentBytes \|\| AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES\)/);
   assert.match(composer, /runtimePathAccess === "desktop-local"/);
   assert.match(composer, /runtimePathWithinWorkspace\(filePath, props\.mentionContext\.cwd\)/);
   assert.match(composer, /t\("sessions\.composer\.runtimePathOutside"\)/);
@@ -35,7 +35,7 @@ test("composer image attachments expose upload progress, contain previews, and i
 
 test("composer converts only long pure text pastes through the existing file attachment path", () => {
   const composer = fs.readFileSync(new URL("../src/components/ai-session/AiSessionComposer.vue", import.meta.url), "utf8");
-  assert.match(composer, /classifyAiSessionPastedText\(text, pastedTextSequence\.value \+ 1\)/);
+  assert.match(composer, /classifyAiSessionPastedText\(text, pastedTextSequence\.value \+ 1, props\.maxFileAttachmentBytes/);
   assert.match(composer, /if \(files\.length\) \{[\s\S]*event\.preventDefault\(\);[\s\S]*addFiles\(files\)/);
   assert.match(composer, /decision\.disposition === "inline"\) return/);
   assert.match(composer, /new globalThis\.File\(\[decision\.file\.text\]/);

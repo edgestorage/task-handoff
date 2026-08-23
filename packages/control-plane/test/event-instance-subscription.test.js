@@ -252,3 +252,147 @@ test("control-plane forwarding preserves transient source identity and replay me
   assert.equal(client.sent[0].createdAt, "2026-08-21T00:00:00.000Z");
   assert.equal(client.sent[0].replay, true);
 });
+
+test("user event authorization cannot be widened by a subscribe frame", () => {
+  const events = new ControlPlaneEventBus();
+  const client = socket();
+  events.connect(client.value, {
+    authorization: {
+      userId: "user-a",
+      authorizationRevision: 3,
+      permissionIds: ["nodes:read", "instances:read", "ai-sessions:read"],
+      allowedNodeIds: new Set(["node-a"]),
+      allowedInstanceIds: new Set(["instance-a"]),
+    },
+  });
+  client.listeners.message(JSON.stringify({
+    type: "subscribe",
+    topics: ["*"],
+    instanceIds: ["instance-a", "instance-b"],
+    aiSessionTransient: { messageDeltas: { allInstances: true, instanceIds: [] } },
+  }));
+  events.publish("node.updated", {}, { topic: "nodes", scope: { nodeId: "node-a" } });
+  events.publish("node.updated", {}, { topic: "nodes", scope: { nodeId: "node-b" } });
+  events.publish("instance.updated", {}, { topic: "instances", scope: { instanceId: "instance-a" } });
+  events.publish("instance.updated", {}, { topic: "instances", scope: { instanceId: "instance-b" } });
+  events.publish("instance.updated", {}, { topic: "instances" });
+  events.publish("ai-session.message-delta", { instanceId: "instance-a" }, { scope: { instanceId: "instance-a" } });
+  events.publish("ai-session.message-delta", { instanceId: "instance-b" }, { scope: { instanceId: "instance-b" } });
+  assert.deepEqual(client.sent.map((event) => event.scope), [
+    { nodeId: "node-a" },
+    { instanceId: "instance-a" },
+    { instanceId: "instance-a" },
+  ]);
+  assert.deepEqual(events.aiSessionTransientDemand().messageDeltas, { allInstances: false, instanceIds: ["instance-a"] });
+});
+
+test("user authorization revision invalidation closes the bound event connection", () => {
+  const events = new ControlPlaneEventBus();
+  const client = socket();
+  const closed = [];
+  client.value.close = (code, reason) => closed.push({ code, reason });
+  events.connect(client.value, {
+    authorization: {
+      userId: "user-a",
+      authorizationRevision: 3,
+      permissionIds: ["nodes:read"],
+      allowedNodeIds: new Set(["node-a"]),
+      allowedInstanceIds: new Set(["instance-a"]),
+    },
+  });
+  events.invalidateUserAuthorization("user-a", 4);
+  events.publish("node.updated", {}, { topic: "nodes", scope: { nodeId: "node-a" } });
+  assert.deepEqual(closed, [{ code: 4001, reason: "Authorization changed. Reconnect for a current snapshot." }]);
+  assert.equal(client.sent.length, 0);
+});
+
+test("viewer event connections cannot read global trigger template events", () => {
+  const events = new ControlPlaneEventBus();
+  const client = socket();
+  events.connect(client.value, {
+    authorization: {
+      userId: "user-a",
+      authorizationRevision: 1,
+      permissionIds: ["triggers:read"],
+      allowedNodeIds: new Set(["node-a"]),
+      allowedInstanceIds: new Set(),
+    },
+  });
+  events.publish("trigger.updated", {}, { topic: "triggers" });
+  assert.equal(client.sent.length, 0);
+});
+
+test("restricted user legacy subscribe demand is reduced to authorized instances", () => {
+  const events = new ControlPlaneEventBus();
+  const client = socket();
+  events.connect(client.value, {
+    authorization: {
+      userId: "user-a",
+      authorizationRevision: 1,
+      permissionIds: ["ai-sessions:read"],
+      allowedNodeIds: new Set(["node-a"]),
+      allowedInstanceIds: new Set(["instance-a"]),
+    },
+  });
+  assert.equal(events.aiSessionTransientDemand().legacyAll, false);
+  client.listeners.message(JSON.stringify({ type: "subscribe", topics: ["ai.sessions"] }));
+  assert.deepEqual(events.aiSessionTransientDemand().messageDeltas, {
+    allInstances: false,
+    instanceIds: ["instance-a"],
+  });
+});
+
+test("event envelope derives routing scope from authoritative producer payload", () => {
+  const events = new ControlPlaneEventBus();
+  const allowed = socket();
+  const denied = socket();
+  events.connect(allowed.value, {
+    authorization: {
+      userId: "user-a",
+      authorizationRevision: 1,
+      permissionIds: ["instances:read", "ai-sessions:read"],
+      allowedNodeIds: new Set(["node-a"]),
+      allowedInstanceIds: new Set(["instance-a"]),
+    },
+  });
+  events.connect(denied.value, {
+    authorization: {
+      userId: "user-b",
+      authorizationRevision: 1,
+      permissionIds: ["instances:read", "ai-sessions:read"],
+      allowedNodeIds: new Set(["node-b"]),
+      allowedInstanceIds: new Set(["instance-b"]),
+    },
+  });
+  events.publish("instance.updated", { instanceId: "instance-a" }, { topic: "instances" });
+  assert.deepEqual(allowed.sent[0].scope, { instanceId: "instance-a" });
+  assert.equal(denied.sent.length, 0);
+
+  events.publish("ai-session.snapshot", { meta: { instanceId: "instance-a" } });
+  assert.deepEqual(allowed.sent[1].scope, { instanceId: "instance-a" });
+  assert.equal(denied.sent.length, 0);
+});
+
+test("unscoped node-derived events fail closed for restricted members and remain diagnosable", () => {
+  const events = new ControlPlaneEventBus();
+  const client = socket();
+  events.connect(client.value, {
+    authorization: {
+      userId: "user-a",
+      authorizationRevision: 1,
+      permissionIds: ["instances:read"],
+      allowedNodeIds: new Set(["node-a"]),
+      allowedInstanceIds: new Set(["instance-a"]),
+    },
+  });
+  events.publish("instance.updated", { opaque: true }, { topic: "instances" });
+  assert.equal(client.sent.length, 0);
+  assert.deepEqual(events.authorizationDiagnostics(), {
+    droppedUnscopedNodeEvents: 1,
+    lastUnscopedNodeEvent: {
+      type: "instance.updated",
+      topic: "instances",
+      createdAt: events.authorizationDiagnostics().lastUnscopedNodeEvent.createdAt,
+    },
+  });
+});

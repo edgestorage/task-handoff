@@ -11,6 +11,7 @@ const {
   normalizeControlledInstanceCapabilities,
   supportsAiSessionConversationAttachmentCapability,
   supportsAiSessionAttachmentRetentionSettings,
+  supportsAiSessionFileSizeLimitSettings,
 } = require("../src/control-plane.ts");
 
 const attachment = { id: "att-a", kind: "image", name: "a.png", mime: "image/png", size: 4, contentState: "available" };
@@ -37,8 +38,10 @@ test("conversation attachment capabilities are additive and independently querya
   assert.equal(supportsAiSessionConversationAttachmentCapability(legacy, "codex", "metadata"), false);
   const sanitizedLegacy = normalizeControlledInstanceCapabilities({ features: { futureFeature: true }, futureRoot: true });
   assert.equal(supportsAiSessionAttachmentRetentionSettings(sanitizedLegacy), false);
-  const current = normalizeControlledInstanceCapabilities({ features: { aiSessionConversationAttachments: { metadataAgents: ["codex"], contentAgents: ["codex"], uploadAgents: [], retentionSettings: true } } });
+  assert.equal(supportsAiSessionFileSizeLimitSettings(sanitizedLegacy), false);
+  const current = normalizeControlledInstanceCapabilities({ features: { aiSessionConversationAttachments: { metadataAgents: ["codex"], contentAgents: ["codex"], uploadAgents: [], retentionSettings: true, fileSizeLimitSettings: true } } });
   assert.equal(supportsAiSessionConversationAttachmentCapability(current, "codex", "metadata"), true);
   assert.equal(supportsAiSessionConversationAttachmentCapability(current, "claude", "metadata"), false);
   assert.equal(supportsAiSessionAttachmentRetentionSettings(current), true);
+  assert.equal(supportsAiSessionFileSizeLimitSettings(current), true);
 });

@@ -5,10 +5,13 @@ import { SystemIcon } from '../components/SystemIcon';
 import { useMobileTheme } from '../components/theme';
 import { useI18n } from '../i18n';
 import { mobileControlPlaneProfileAddress, type MobileControlPlaneProfile } from './profile';
+import type { ControlPlaneCurrentAuthorization } from '@task-handoff/protocol/control-plane-access';
+import { controlPlaneRoleMessageKey } from './current-access';
 
 export type ControlPlaneDetailContentProps = {
   active: boolean;
   busy: boolean;
+  currentAccess?: ControlPlaneCurrentAuthorization;
   onMakeActive(): void;
   onRemove(): void;
   profile: MobileControlPlaneProfile;
@@ -30,6 +33,14 @@ export function ControlPlaneDetailContent(props: ControlPlaneDetailContentProps)
           <DetailRow label={t('controlPlane.id')} value={props.profile.identity.controlPlaneId} />
           <View style={[styles.divider, { backgroundColor: colors.border }]} />
           <DetailRow label={t('controlPlane.fingerprint')} value={props.profile.identity.publicKeyFingerprint} />
+          {props.currentAccess ? <>
+            <View style={[styles.divider, { backgroundColor: colors.border }]} />
+            <DetailRow label={t('controlPlane.memberRole')} value={props.currentAccess.roleIds.map((roleId) => { const key = controlPlaneRoleMessageKey(roleId); return key ? t(key) : roleId; }).join(', ')} />
+            <View style={[styles.divider, { backgroundColor: colors.border }]} />
+            <DetailRow label={t('controlPlane.nodeAccess')} value={props.currentAccess.nodeScope.kind === 'all' ? t('controlPlane.allNodes') : t('controlPlane.selectedNodes', { count: props.currentAccess.nodeScope.nodeIds.length })} />
+            <View style={[styles.divider, { backgroundColor: colors.border }]} />
+            <DetailRow label={t('controlPlane.authorizationRevision')} value={String(props.currentAccess.authorizationRevision)} />
+          </> : null}
         </View>
         <Text style={[styles.footnote, { color: colors.textMuted }]}>{t('controlPlane.fingerprintHelp')}</Text>
       </View>

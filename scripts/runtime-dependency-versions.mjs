@@ -43,12 +43,32 @@ export function exactInstalledDependencies(root, dependencies, workspaceDirector
 
 export function materializeInstalledDependencies(packageRoot, root, dependencies, workspaceDirectories = ["apps", "packages"]) {
   const nodeModules = path.join(packageRoot, "node_modules");
-  if (fs.existsSync(nodeModules)) throw new Error(`Runtime package already contains node_modules: ${packageRoot}`);
+  const nodeModulesExisted = fs.existsSync(nodeModules);
   const manifests = installedDependencyManifests(root, dependencies, workspaceDirectories);
+  const links = [];
   for (const [name, manifestPath] of Object.entries(manifests)) {
     const linkPath = path.join(nodeModules, ...name.split("/"));
+    if (fs.existsSync(linkPath)) throw new Error(`Runtime package dependency path already exists: ${linkPath}`);
     fs.mkdirSync(path.dirname(linkPath), { recursive: true });
     fs.symlinkSync(path.dirname(manifestPath), linkPath, process.platform === "win32" ? "junction" : "dir");
+    links.push(linkPath);
   }
-  return () => fs.rmSync(nodeModules, { recursive: true, force: true });
+  return () => {
+    if (!nodeModulesExisted) {
+      fs.rmSync(nodeModules, { recursive: true, force: true });
+      return;
+    }
+    for (const linkPath of links) {
+      fs.rmSync(linkPath, { recursive: true, force: true });
+      let parent = path.dirname(linkPath);
+      while (parent !== nodeModules) {
+        try {
+          fs.rmdirSync(parent);
+        } catch {
+          break;
+        }
+        parent = path.dirname(parent);
+      }
+    }
+  };
 }

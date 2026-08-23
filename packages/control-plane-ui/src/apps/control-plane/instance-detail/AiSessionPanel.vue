@@ -233,15 +233,15 @@
                   :tool-calls-since-last-message="session.toolCallsSinceLastMessage"
                 />
                 <div v-if="canResolveApproval(session)" class="session-ai-card-approval-actions">
-                  <button type="button" :disabled="aiSessionActionBusy" :title="t('sessions.actions.allow')" @click.stop="resolveApproval(session, 'allow')">
+                  <button v-if="approvalDecisions(session).includes('allow')" type="button" :disabled="aiSessionActionBusy" :title="t('sessions.actions.allow')" @click.stop="resolveApproval(session, 'allow')">
                     <Check :size="13" />
                     <span>{{ t("sessions.actions.allow") }}</span>
                   </button>
-                  <button type="button" :disabled="aiSessionActionBusy" :title="t('sessions.actions.skip')" @click.stop="resolveApproval(session, 'skip')">
+                  <button v-if="approvalDecisions(session).includes('skip')" type="button" :disabled="aiSessionActionBusy" :title="t('sessions.actions.skip')" @click.stop="resolveApproval(session, 'skip')">
                     <Ban :size="13" />
                     <span>{{ t("sessions.actions.skip") }}</span>
                   </button>
-                  <button type="button" :disabled="aiSessionActionBusy" :title="t('sessions.actions.deny')" @click.stop="resolveApproval(session, 'deny')">
+                  <button v-if="approvalDecisions(session).includes('deny')" type="button" :disabled="aiSessionActionBusy" :title="t('sessions.actions.deny')" @click.stop="resolveApproval(session, 'deny')">
                     <X :size="13" />
                     <span>{{ t("sessions.actions.deny") }}</span>
                   </button>
@@ -344,7 +344,7 @@
                       @keydown.space.prevent="selectHistoryItem(item)"
                     >
                       <div class="session-ai-history-row-head">
-                        <strong>{{ item.agent === "claude" ? t("common.products.claude") : t("common.products.codex") }}</strong>
+                        <strong>{{ agentDisplayName(item.agent) }}</strong>
                         <time :datetime="item.lastActiveAt">{{ relativeHistoryTime(item.lastActiveAt) }}</time>
                       </div>
                       <p>{{ historyItemTitle(item) }}</p>
@@ -429,7 +429,7 @@
             </div>
             <header>
               <div>
-                <span>{{ historyDetail.item.agent === "claude" ? t("common.products.claude") : t("common.products.codex") }}</span>
+                <span>{{ agentDisplayName(historyDetail.item.agent) }}</span>
                 <strong>{{ historyItemTitle(historyDetail.item) }}</strong>
               </div>
             </header>
@@ -464,6 +464,7 @@
             :provider="historyDetail.item.agent"
             :permission-key="historyAiSessionPermissionKey(instance.id, historyDetail.item.id)"
             :default-permission-mode="instance.config.defaultCodexPermissionMode"
+            :max-file-attachment-bytes="instance.config.aiSessionMaxFileAttachmentBytes"
             :placeholder="t('sessions.panel.continueConversation')"
             @run="sendHistoryMessage"
           />
@@ -557,14 +558,14 @@
               <DropdownMenu>
                 <DropdownMenuTrigger as-child>
                   <button type="button" class="session-ai-app-pill" :disabled="launchingNewSession">
-                    <AiAgentIcon :agent="newSessionApp === 'claude' ? 'claude' : 'codex'" :size="14" />
-                    <strong>{{ newSessionApp === "claude" ? t("common.products.claude") : t("common.products.codex") }}</strong>
+                    <AiAgentIcon :agent="agentIcon(newSessionApp)" :size="14" />
+                    <strong>{{ agentDisplayName(newSessionApp) }}</strong>
                     <ChevronDown :size="13" />
                   </button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent class="session-ai-project-menu" align="start" :side-offset="8">
                   <DropdownMenuItem v-for="app in aiSessionLaunchableApps" :key="app.id" class="session-ai-project-item" @select="newSessionApp = app.id">
-                    <AiAgentIcon :agent="app.id === 'claude' ? 'claude' : 'codex'" :size="14" />
+                    <AiAgentIcon :agent="agentIcon(app.id)" :size="14" />
                     <span>{{ app.label }}</span><Check v-if="newSessionApp === app.id" :size="15" />
                   </DropdownMenuItem>
                 </DropdownMenuContent>
@@ -580,9 +581,10 @@
               :busy="newSessionComposerBusy"
               :disabled="!newSessionFolder || (newSessionWorkspaceLoading && !newSessionWorkspace)"
               :can-interrupt="false"
-              :provider="newSessionApp === 'claude' ? 'claude' : 'codex'"
+              :provider="newSessionApp"
               :permission-mode="newSessionPermissionMode"
               :default-permission-mode="instance.config.defaultCodexPermissionMode"
+              :max-file-attachment-bytes="instance.config.aiSessionMaxFileAttachmentBytes"
               :placeholder="t('sessions.panel.promptPlaceholder')"
               @update:permission-mode="updateNewSessionPermissionMode"
               @run="createNewSession"
@@ -741,6 +743,7 @@
             :busy="aiSessionActionBusy"
             :can-interrupt="canInterrupt(selectedSession)"
             :can-resolve-approval="canResolveApproval(selectedSession)"
+            :approval-decisions="approvalDecisions(selectedSession)"
             :instance-id="instance.id"
             file-links
             :mode="effectiveTimelineViewMode"
@@ -803,6 +806,7 @@
           :provider="selectedSession.agent"
           :permission-key="aiSessionPermissionKey(instance.id, selectedSession.id)"
           :default-permission-mode="instance.config.defaultCodexPermissionMode"
+          :max-file-attachment-bytes="instance.config.aiSessionMaxFileAttachmentBytes"
           :mention-context="mentionContext"
           :mention-trigger="mentionTrigger"
           :command-trigger="commandTrigger"
@@ -877,15 +881,15 @@
             :tool-calls-since-last-message="sessionListPreviewSession.toolCallsSinceLastMessage"
           />
           <div v-if="canResolveApproval(sessionListPreviewSession)" class="session-ai-card-approval-actions">
-            <button type="button" :disabled="aiSessionActionBusy" :title="t('sessions.actions.allow')" @click.stop="resolveApproval(sessionListPreviewSession, 'allow')">
+            <button v-if="approvalDecisions(sessionListPreviewSession).includes('allow')" type="button" :disabled="aiSessionActionBusy" :title="t('sessions.actions.allow')" @click.stop="resolveApproval(sessionListPreviewSession, 'allow')">
               <Check :size="13" />
               <span>{{ t("sessions.actions.allow") }}</span>
             </button>
-            <button type="button" :disabled="aiSessionActionBusy" :title="t('sessions.actions.skip')" @click.stop="resolveApproval(sessionListPreviewSession, 'skip')">
+            <button v-if="approvalDecisions(sessionListPreviewSession).includes('skip')" type="button" :disabled="aiSessionActionBusy" :title="t('sessions.actions.skip')" @click.stop="resolveApproval(sessionListPreviewSession, 'skip')">
               <Ban :size="13" />
               <span>{{ t("sessions.actions.skip") }}</span>
             </button>
-            <button type="button" :disabled="aiSessionActionBusy" :title="t('sessions.actions.deny')" @click.stop="resolveApproval(sessionListPreviewSession, 'deny')">
+            <button v-if="approvalDecisions(sessionListPreviewSession).includes('deny')" type="button" :disabled="aiSessionActionBusy" :title="t('sessions.actions.deny')" @click.stop="resolveApproval(sessionListPreviewSession, 'deny')">
               <X :size="13" />
               <span>{{ t("sessions.actions.deny") }}</span>
             </button>
@@ -971,6 +975,7 @@ import { useI18n } from "vue-i18n";
 import { formatRelativeTime } from "../../../i18n/presentation";
 import type { SupportedLocale } from "../../../i18n/locale";
 import { translateApiError } from "../../../i18n/apiError";
+import { waitForAiSessionProjection } from "../ai-session-projection";
 import { ArrowLeft, Ban, Check, ChevronDown, ChevronRight, CircleHelp, ExternalLink, Filter, Folder, FolderOpen, GitBranch, History, LoaderCircle, MessageSquare, MoreHorizontal, PanelLeftOpen, Plus, SlidersHorizontal, Split, Square, SquareTerminal, X } from "@lucide/vue";
 import { useQueryClient } from "@tanstack/vue-query";
 import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
@@ -985,6 +990,7 @@ import { controlPlaneQueryKeys } from "../../../api/queryKeys.ts";
 import { executeAiSessionCommand } from "../../../api/ai-session-commands";
 import { type AiSessionCommandInput, type AiSessionHistoryDetail, type AiSessionHistoryItem, type AiSessionMessageAttachmentRef, type AiSessionPermissionMode, type AiSessionStatus } from "@task-handoff/protocol/ai-sessions";
 import type { RepositoryAiSessionWorkspace, RepositoryAiSessionWorkspaceBranch } from "@task-handoff/protocol/repository";
+import { directoryAiSessionProviderCapability } from "@task-handoff/protocol/control-plane-directory";
 import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions, NodeLocalFolder, TriggerConfig, TriggerDeployment, TriggerRuntimeState } from "../../../api/types";
 import type { LaunchableApp } from "../useInstanceSessions";
 import { updateInstanceBoardData } from "../instanceBoardCache.ts";
@@ -1242,9 +1248,9 @@ watch(() => ({
     void markAiSessionRead(props.instance.id, current.id, current.updatedAt).catch(() => undefined);
   }
 }, { immediate: true });
-const repositoryAiAgent = computed<"codex" | "claude" | undefined>(() => {
+const repositoryAiAgent = computed<"codex" | "claude" | "opencode" | undefined>(() => {
   const agent = selectedSession.value?.agent;
-  return agent === "codex" || agent === "claude" ? agent : undefined;
+  return agent === "codex" || agent === "claude" || agent === "opencode" ? agent : undefined;
 });
 const compactAiSessionLayout = useMediaQuery("(max-width: 920px)");
 const supportsSessionListHoverPreview = useMediaQuery("(hover: hover) and (pointer: fine)");
@@ -1962,16 +1968,7 @@ async function resumeHistorySession(item: AiSessionHistoryItem) {
     && session.creationSource === result.creationSource
     && (result.appSessionId ? session.appSessionId === result.appSessionId : !session.appSessionId)
   ));
-  let session = findAuthoritativeSession();
-  for (let attempt = 0; attempt < 12 && !session; attempt += 1) {
-    await new Promise((resolve) => window.setTimeout(resolve, 250));
-    session = findAuthoritativeSession();
-  }
-  if (!session) {
-    await queryClient.refetchQueries({ queryKey: ["control-plane-ai-sessions"] });
-    await nextTick();
-    session = findAuthoritativeSession();
-  }
+  const session = await waitForAiSessionProjection(findAuthoritativeSession);
   if (!session) throw new Error(t("sessions.panel.resumePending"));
   return session;
 }
@@ -2304,7 +2301,22 @@ function canInterrupt(session: AiSessionSummary) {
 }
 
 function canResolveApproval(session: AiSessionSummary) {
-  return isAiSessionApprovalPending(session);
+  return isAiSessionApprovalPending(session) && approvalDecisions(session).length > 0;
+}
+
+function approvalDecisions(session: AiSessionSummary): Array<"allow" | "deny" | "skip"> {
+  const capability = directoryAiSessionProviderCapability(props.instance.capabilities, session.agent);
+  if (capability) return capability.actions.approvalDecisions;
+  // Compatibility for v0.0.21: provider capabilities were absent and the UI exposed all legacy decisions.
+  return session.agent === "codex" || session.agent === "claude" ? ["allow", "deny", "skip"] : [];
+}
+
+function agentIcon(agent: string): "codex" | "claude" | "opencode" {
+  return agent === "claude" || agent === "opencode" ? agent : "codex";
+}
+
+function agentDisplayName(agent: string) {
+  return agent === "codex" || agent === "claude" || agent === "opencode" ? t(`common.products.${agent}`) : agent;
 }
 
 async function refreshBoard() {
@@ -2602,16 +2614,9 @@ async function performFork(session: AiSessionSummary, mode: "current" | "managed
   const loadingToast = showDelayedControlPlaneLoadingToast(t("sessions.actions.forking"));
   try {
     const result = await forkAiSession(props.instance.id, session.id, { clientRequestId, ...(throughTurnId ? { throughTurnId } : {}), workspace: { mode } });
-    let forked = props.instance.aiSessions?.sessions.find((candidate) => candidate.id === result.aiSessionId && candidate.providerSessionId === result.providerSessionId);
-    for (let attempt = 0; attempt < 25; attempt += 1) {
-      forked = props.instance.aiSessions?.sessions.find((candidate) => candidate.id === result.aiSessionId && candidate.providerSessionId === result.providerSessionId);
-      if (forked) break;
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-    if (!forked) {
-      await refreshBoard();
-      forked = props.instance.aiSessions?.sessions.find((candidate) => candidate.id === result.aiSessionId && candidate.providerSessionId === result.providerSessionId);
-    }
+    const forked = await waitForAiSessionProjection(() => props.instance.aiSessions?.sessions.find(
+      (candidate) => candidate.id === result.aiSessionId && candidate.providerSessionId === result.providerSessionId,
+    ));
     if (!forked) throw new Error(t("sessions.panel.forkProjectionPending"));
     selectSession(forked.id);
     forkRequestIds.delete(requestKey);

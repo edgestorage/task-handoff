@@ -5,14 +5,19 @@
       <span class="repository-error-title"><strong>{{ presentation.message }}</strong><code v-if="presentation.code">{{ presentation.code }}</code><em v-if="presentation.retryable !== undefined">{{ presentation.retryable ? t("repository.errorNotice.retryable") : t("repository.errorNotice.actionRequired") }}</em></span>
       <small v-if="presentation.recovery">{{ presentation.recovery }}</small>
     </span>
+    <Button v-if="credentialRecovery" size="sm" variant="outline" @click="openGitCredentialSettings">
+      <KeyRound :size="14" />
+      <span>{{ t("repository.errorNotice.manageCredentials") }}</span>
+    </Button>
   </div>
 </template>
 
 <script setup lang="ts">
-import { CircleAlert } from "@lucide/vue";
+import { CircleAlert, KeyRound } from "@lucide/vue";
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 import { repositoryErrorPresentation } from "./repositoryErrorPresentation";
+import { Button } from "../../../components/ui/button";
 
 const props = defineProps<{
   error: unknown;
@@ -21,6 +26,9 @@ const props = defineProps<{
 const { t } = useI18n();
 
 const presentation = computed(() => repositoryErrorPresentation(props.error, props.fallback, t));
+const credentialRecoveryCodes = new Set(["REPOSITORY_CREDENTIAL_MISSING", "REPOSITORY_CREDENTIAL_AMBIGUOUS", "REPOSITORY_REMOTE_UNSUPPORTED", "REPOSITORY_HOST_KEY_REQUIRED", "REPOSITORY_AUTHENTICATION_REJECTED"]);
+const credentialRecovery = computed(() => Boolean(presentation.value.code && credentialRecoveryCodes.has(presentation.value.code)));
+function openGitCredentialSettings() { window.dispatchEvent(new CustomEvent("task-handoff:open-instance-git-credentials")); }
 </script>
 
 <style scoped>
@@ -31,4 +39,5 @@ const presentation = computed(() => repositoryErrorPresentation(props.error, pro
 .repository-error-title code { border-radius: 4px; background: color-mix(in srgb, currentColor 10%, transparent); padding: 1px 4px; font-size: 12px; }
 .repository-error-title em { color: var(--text-muted); font-size: 12px; font-style: normal; text-transform: uppercase; }
 .repository-error-notice small { color: color-mix(in srgb, currentColor 78%, var(--text-muted)); font-size: 12px; }
+.repository-error-notice > button { flex: 0 0 auto; }
 </style>

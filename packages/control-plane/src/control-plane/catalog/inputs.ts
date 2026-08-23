@@ -14,13 +14,19 @@ const LegacyProjectRuntimeInputShape = { defaultRuntimeId: NodeRuntimeSchema.sha
 export const CreateProjectInputSchema = CreateProjectInputBaseSchema
   .extend(LegacyProjectRuntimeInputShape)
   .strict()
-  .transform(({ defaultRuntimeId: _defaultRuntimeId, ...input }) => input);
+  .transform(({ defaultRuntimeId: _defaultRuntimeId, ...input }) => ({
+    ...input,
+    source: ProjectSourceSchema.parse(input.source),
+  }));
 export const UpdateProjectInputSchema = CreateProjectInputBaseSchema
   .omit({ id: true })
   .partial()
   .extend(LegacyProjectRuntimeInputShape)
   .strict()
-  .transform(({ defaultRuntimeId: _defaultRuntimeId, ...input }) => input);
+  .transform(({ defaultRuntimeId: _defaultRuntimeId, ...input }) => ({
+    ...input,
+    ...(input.source ? { source: ProjectSourceSchema.parse(input.source) } : {}),
+  }));
 export const DEFAULT_MENTION_TRIGGER = "@";
 export const DEFAULT_COMMAND_TRIGGER = "/";
 

@@ -67,10 +67,11 @@ test("clone conflict quarantines credentials and remote access", () => {
   assert.equal(service.backgroundCredential(), undefined);
 });
 
-test("only a local administrator can mutate cloud connectivity settings", () => {
-  assert.equal(can({ type: "user", userId: "admin", role: "admin" }, "manage-settings", { type: "control-plane-settings" }), true);
-  assert.equal(can({ type: "user", userId: "operator", role: "operator" }, "manage-settings", { type: "control-plane-settings" }), false);
-  assert.equal(can({ type: "user", userId: "viewer", role: "viewer" }, "manage-settings", { type: "control-plane-settings" }), false);
+test("settings mutation follows the authoritative permission projection", () => {
+  const actor = (userId, permissionIds) => ({ type: "user", userId, identityId: `identity-${userId}`, roleIds: [], permissionIds, nodeScope: { kind: "all" }, authorizationRevision: 1 });
+  assert.equal(can(actor("admin", ["settings:manage"]), "manage-settings", { type: "control-plane-settings" }), true);
+  assert.equal(can(actor("operator", ["settings:read"]), "manage-settings", { type: "control-plane-settings" }), false);
+  assert.equal(can(actor("viewer", []), "manage-settings", { type: "control-plane-settings" }), false);
 });
 
 test("service outage keeps local disable and pending revocation instead of allowing account overwrite", async () => {

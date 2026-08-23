@@ -180,7 +180,7 @@ export class ControlPlaneModelService {
     return includeSecret ? model : publicModel(model);
   }
 
-  async prepareAssignment(node: Node, selection: { codexModelHash?: string | null; claudeModelHash?: string | null }) {
+  async prepareAssignment(node: Node, selection: { codexModelHash?: string | null; claudeModelHash?: string | null; opencodeModelHash?: string | null }) {
     const nodeModels = await this.options.gateway.listModels(node);
     const storedSelection = {
       ...(selection.codexModelHash === null
@@ -189,8 +189,11 @@ export class ControlPlaneModelService {
       ...(selection.claudeModelHash === null
         ? { claudeModelHash: null }
         : selection.claudeModelHash?.trim() ? { claudeModelHash: selection.claudeModelHash.trim() } : {}),
+      ...(selection.opencodeModelHash === null
+        ? { opencodeModelHash: null }
+        : selection.opencodeModelHash?.trim() ? { opencodeModelHash: selection.opencodeModelHash.trim() } : {}),
     };
-    const resolve = async (app: "codex" | "claude", selectedId?: string | null) => {
+    const resolve = async (app: "codex" | "claude" | "opencode", selectedId?: string | null) => {
       if (selectedId === null) return undefined;
       const controlPlaneModel = selectedId
         ? this.listAll().find((model) => model.id === selectedId)
@@ -210,6 +213,7 @@ export class ControlPlaneModelService {
       modelSelection: storedSelection,
       codexModelHash: await resolve("codex", storedSelection.codexModelHash),
       claudeModelHash: await resolve("claude", storedSelection.claudeModelHash),
+      opencodeModelHash: await resolve("opencode", storedSelection.opencodeModelHash),
     };
   }
 
@@ -264,7 +268,7 @@ function requireModelEndpointProbe(node: Node) {
   }
 }
 
-function assertUsableModel(model: Pick<ModelConfig, "id" | "app" | "enabled">, app: "codex" | "claude") {
+function assertUsableModel(model: Pick<ModelConfig, "id" | "app" | "enabled">, app: "codex" | "claude" | "opencode") {
   if (model.app !== app) {
     throw Object.assign(new Error(`Model ${model.id} is not a ${app} model.`), {
       statusCode: 400,

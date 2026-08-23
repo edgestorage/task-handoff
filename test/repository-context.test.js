@@ -98,9 +98,12 @@ test("Git process is bounded, allowlisted, non-interactive, and redacts credenti
   assert.equal(env.GIT_TERMINAL_PROMPT, "0");
   assert.equal(env.GCM_INTERACTIVE, "Never");
   assert.equal(env.SSH_ASKPASS_REQUIRE, "force");
-  const redacted = redactGitDiagnostic("fatal https://user:secret@example.com/repo?token=abcd Authorization: Bearer ghp_secretvalue");
+  const redacted = redactGitDiagnostic("fatal https://user:secret@example.com/repo?token=abcd Authorization: Bearer ghp_secretvalue /run/task-handoff/git-broker/ssh-1/identity -----BEGIN OPENSSH PRIVATE KEY-----\nprivate-material\n-----END OPENSSH PRIVATE KEY-----");
   assert.equal(redacted.includes("secret"), false);
   assert.equal(redacted.includes("abcd"), false);
+  assert.equal(redacted.includes("private-material"), false);
+  assert.equal(redacted.includes("ssh-1"), false);
+  assert.match(redacted, /\[git-broker-runtime\]/);
 });
 
 test("Git process timeout terminates the command with a stable adapter error", async () => {

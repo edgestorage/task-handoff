@@ -6,6 +6,7 @@ import { mergeInstanceBoardQueryData } from "./instanceBoardMerge.ts";
 import { controlPlaneQueryKeys } from "./queryKeys.ts";
 import { sharedAiSessionsApi, sharedControlPlaneClient } from "./sharedClient.ts";
 import type { ControlPlaneInstanceResourceEntry } from "@task-handoff/control-plane-client";
+import type { GitCredentialCreateRequest, GitCredentialPublic, GitCredentialUpdateRequest, InstanceGitCredentialAssignment } from "@task-handoff/protocol/managed-git-credentials";
 export { controlPlaneQueryKeys } from "./queryKeys.ts";
 import type {
   ControlPlaneStatusResponse,
@@ -13,7 +14,6 @@ import type {
   ControlPlaneAppSessions,
   AppSession,
   AuthSession,
-  AuthUser,
   CreateNodeControlPlaneConnectionInput,
   CreateControlledInstanceInput,
   CreateControlledInstanceResult,
@@ -137,6 +137,48 @@ export function revokeMobileSession(sessionId: string) {
   return sharedControlPlaneClient.auth.revokeMobileSession(sessionId);
 }
 
+export function useCurrentAccessQuery(enabled: MaybeRefOrGetter<boolean> = true) {
+  return useQuery({
+    queryKey: controlPlaneQueryKeys.currentAccess,
+    queryFn: ({ signal }) => sharedControlPlaneClient.users.currentAuthorization(signal),
+    enabled: computed(() => toValue(enabled)),
+    retry: false,
+    refetchInterval: 30_000,
+  });
+}
+
+export function useUsersQuery(enabled: MaybeRefOrGetter<boolean> = true) {
+  return useQuery({
+    queryKey: controlPlaneQueryKeys.users,
+    queryFn: ({ signal }) => sharedControlPlaneClient.users.list({}, signal),
+    enabled: computed(() => toValue(enabled)),
+    retry: false,
+  });
+}
+
+export function useRolesQuery(enabled: MaybeRefOrGetter<boolean> = true) {
+  return useQuery({
+    queryKey: controlPlaneQueryKeys.roles,
+    queryFn: ({ signal }) => sharedControlPlaneClient.users.roles(signal),
+    enabled: computed(() => toValue(enabled)),
+    retry: false,
+  });
+}
+
+export function useIdentityProvidersQuery(enabled: MaybeRefOrGetter<boolean> = true) {
+  return useQuery({
+    queryKey: controlPlaneQueryKeys.identityProviders,
+    queryFn: ({ signal }) => sharedControlPlaneClient.users.providers(signal),
+    enabled: computed(() => toValue(enabled)),
+    retry: false,
+  });
+}
+
+export const createControlPlaneUser = (input: unknown) => sharedControlPlaneClient.users.create(input);
+export const updateControlPlaneUser = (userId: string, input: unknown) => sharedControlPlaneClient.users.update(userId, input);
+export const setControlPlaneUserAccess = (userId: string, input: unknown) => sharedControlPlaneClient.users.setAccess(userId, input);
+export const getControlPlaneUserDetail = (userId: string) => sharedControlPlaneClient.users.detail(userId);
+
 export function useControlPlaneStatusQuery() {
   return useQuery({
     queryKey: controlPlaneQueryKeys.status,
@@ -242,6 +284,25 @@ export function useModelsQuery(enabled: MaybeRefOrGetter<boolean> = true) {
     queryFn: ({ signal }) => fetchModelRegistry(signal),
     select: modelConfigsFromRegistry,
     enabled: computed(() => toValue(enabled)),
+    retry: false,
+  });
+}
+
+export function useGitCredentialsQuery(enabled: MaybeRefOrGetter<boolean> = true) {
+  return useQuery({
+    queryKey: controlPlaneQueryKeys.gitCredentials,
+    queryFn: ({ signal }) => getApiData<{ items: GitCredentialPublic[] }>("git-credentials", { signal }),
+    select: (value) => value.items,
+    enabled: computed(() => toValue(enabled)),
+    retry: false,
+  });
+}
+
+export function useInstanceGitCredentialAssignmentsQuery(instanceId: MaybeRefOrGetter<string>, enabled: MaybeRefOrGetter<boolean> = true) {
+  return useQuery({
+    queryKey: computed(() => controlPlaneQueryKeys.instanceGitCredentialAssignments(toValue(instanceId))),
+    queryFn: ({ signal }) => getApiData<InstanceGitCredentialAssignment[]>(`controlled-instances/${encodeURIComponent(toValue(instanceId))}/git-credential-assignments`, { signal }),
+    enabled: computed(() => Boolean(toValue(instanceId)) && toValue(enabled)),
     retry: false,
   });
 }
@@ -796,6 +857,26 @@ export function deleteModel(id: string) {
   return deleteApiData<{ deleted: boolean }>(`models/${id}`);
 }
 
+export function createGitCredential(input: GitCredentialCreateRequest) {
+  return postApiData<GitCredentialPublic>("git-credentials", input);
+}
+
+export function updateGitCredential(id: string, input: GitCredentialUpdateRequest) {
+  return patchApiData<GitCredentialPublic>(`git-credentials/${id}`, input);
+}
+
+export function deleteGitCredential(id: string) {
+  return deleteApiData<{ deleted: boolean }>(`git-credentials/${id}`);
+}
+
+export function authorizeInstanceGitCredential(instanceId: string, credentialId: string) {
+  return postApiData<InstanceGitCredentialAssignment>(`controlled-instances/${encodeURIComponent(instanceId)}/git-credential-assignments`, { credentialId });
+}
+
+export function revokeInstanceGitCredential(instanceId: string, credentialId: string) {
+  return deleteApiData<{ revoked: boolean }>(`controlled-instances/${encodeURIComponent(instanceId)}/git-credential-assignments/${encodeURIComponent(credentialId)}`);
+}
+
 export function createNodeModel(nodeId: string, input: CreateModelInput) {
   return postApiData<ModelConfig>(`nodes/${nodeId}/models`, input);
 }
@@ -816,7 +897,7 @@ export function discoverModels(input: ModelEndpointDraft, nodeId?: string) {
   return postApiData<ModelDiscoveryResult>(nodeId ? `nodes/${nodeId}/models/discover` : "models/discover", input);
 }
 
-export function testModel(input: ModelEndpointDraft & { model: string; app: "codex" | "claude" }, nodeId?: string) {
+export function testModel(input: ModelEndpointDraft & { model: string; app: "codex" | "claude" | "opencode" }, nodeId?: string) {
   return postApiData<ModelTestResult>(nodeId ? `nodes/${nodeId}/models/test` : "models/test", input);
 }
 

@@ -35,9 +35,21 @@ test("origin probe classifies private, insecure, reachable, and failed origins",
   assert.equal((await probeControlPlaneOrigin("https://cp.example.com", { now, fetchImpl: async () => { throw new Error("offline"); } })).reason, "request-failed");
 });
 
+test("origin probe does not classify fc and fd domain names as private IPv6 addresses", async () => {
+  const fetchImpl = async () => new Response();
+  assert.equal((await probeControlPlaneOrigin("https://fc-xxx.example.com", { fetchImpl })).status, "reachable");
+  assert.equal((await probeControlPlaneOrigin("https://fd-test.dev", { fetchImpl })).status, "reachable");
+  assert.equal((await probeControlPlaneOrigin("https://[fc00::1]", { fetchImpl })).reason, "private-host");
+  assert.equal((await probeControlPlaneOrigin("https://[fd00::1]", { fetchImpl })).reason, "private-host");
+});
+
 test("public direct endpoints require HTTPS while private endpoints may use HTTP", () => {
   assert.equal(directEndpointIssue("http://203.0.113.8:8091"), "public-http");
   assert.equal(directEndpointIssue("http://10.0.0.8:8091"), undefined);
+  assert.equal(directEndpointIssue("http://fc-xxx.example.com"), "public-http");
+  assert.equal(directEndpointIssue("http://fd-test.dev"), "public-http");
+  assert.equal(directEndpointIssue("http://[fc00::1]"), undefined);
+  assert.equal(directEndpointIssue("http://[fd00::1]"), undefined);
   assert.equal(directEndpointIssue("https://node.example.com"), undefined);
   assert.equal(directEndpointIssue("not-a-url"), "invalid");
 });

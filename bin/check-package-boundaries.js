@@ -12,6 +12,15 @@ const IGNORED_DIRS = new Set(["dist", "build", "node_modules", ".turbo", ".vite"
 const CSS_IMPORT_SPECIFIER = /@import\s+(?:url\(\s*)?["']([^"']+)["']/g;
 const CSS_URL_SPECIFIER = /\burl\(\s*["']?([^"')]+)["']?\s*\)/g;
 const BUILTINS = new Set(builtinModules.flatMap((name) => [name, `node:${name}`]));
+const CONTROL_PLANE_DATABASE_DEPENDENCIES = new Set(["drizzle-orm", "pg"]);
+
+function forbidsControlPlaneDatabaseDependency(root, file) {
+  const relative = path.relative(root, file).split(path.sep).join("/");
+  return relative.startsWith("packages/control-plane/src/node-agent/")
+    || relative.startsWith("packages/control-plane/src/shared/")
+    || relative.startsWith("packages/controlled-instance/")
+    || relative.startsWith("apps/controlled-instance-image/");
+}
 
 function walk(dir) {
   if (!fs.existsSync(dir)) return [];
@@ -174,6 +183,11 @@ function checkWorkspace(root = DEFAULT_ROOT) {
         if (specifier.startsWith("node:") || BUILTINS.has(specifier)) continue;
         const dependency = dependencyName(specifier);
         const target = packagesByName.get(dependency);
+
+        if (forbidsControlPlaneDatabaseDependency(root, file) && CONTROL_PLANE_DATABASE_DEPENDENCIES.has(dependency)) {
+          violations.push(`${relativeFile}: Control Plane database dependency is forbidden in this runtime boundary: ${rawSpecifier}`);
+          continue;
+        }
 
         if (dependency === owner.manifest.name) {
           violations.push(`${relativeFile}: package-internal imports must be relative: ${rawSpecifier}`);

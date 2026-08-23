@@ -15,9 +15,14 @@ import {
   sanitizeStoredImageProfile,
   sanitizeStoredNode,
   sanitizeStoredProject,
+  supportsAiSessionFileSizeLimitSettings,
   supportsAiSessionPersistenceSettings,
+  supportsGitCredentialProxy,
   supportsNodeFolderPlaces,
   supportsNodeLocalFolderNameUpdate,
+  supportsNodeAiSessionFileAttachmentLimit,
+  supportsNodeManagedGitCredentialRegistry,
+  supportsNodeGitCredentialRuntimeBroker,
   ModelConfigSchema,
   NodeSchema,
   PendingRouteSchema,
@@ -87,6 +92,7 @@ import { ControlledInstanceCreator } from "../instances/creator.ts";
 import { ControlPlaneTriggerService } from "../triggers/service.ts";
 import { ControlPlaneCatalogService } from "../catalog/service.ts";
 import { EmbeddedMarketCatalogProvider, MarketCatalogService } from "../catalog/market.ts";
+import { ControlPlaneGitCredentialService } from "../git-credentials/service.ts";
 import { AppAccessService, type AppAccessMode } from "../instances/app-access-service.ts";
 import { ChatActionTokenService, type ChatActionToken } from "../chat/action-token-service.ts";
 import { ChatBridgeService } from "../chat/bridges/service.ts";
@@ -193,6 +199,7 @@ export class ControlPlaneService {
   private readonly controlPlaneTriggerService: ControlPlaneTriggerService;
   private readonly catalogService: ControlPlaneCatalogService;
   private readonly marketCatalogService: MarketCatalogService;
+  readonly gitCredentials: ControlPlaneGitCredentialService;
   private readonly chatBridgeService: ChatBridgeService;
   private readonly chatSessionService: ChatSessionService;
   private readonly chatSessionRuntime: ControlPlaneChatSessionRuntime;
@@ -249,11 +256,6 @@ export class ControlPlaneService {
       requireInstance: (instanceId) => this.requireControlledInstance(instanceId, true) as Promise<ControlledInstance>,
       request: (instance, route, init, onTiming) => this.instanceRequest(instance, route, init, onTiming),
       requireRuntime: (nodeId, runtimeId) => this.requireNodeRuntimeOnNode(nodeId, runtimeId),
-      refreshSnapshots: () => Promise.all([
-        this.listAppSessions({ refresh: true }),
-        this.listAiSessions({ refresh: true }),
-      ]),
-      warn: (data, message) => this.logWarn(data, message),
     });
     this.projects = new JsonCollection(paths.projectsDir, { ...storeOptions(ProjectSchema), sanitize: sanitizeStoredProject });
     this.models = new JsonCollection(paths.modelsDir, storeOptions(ModelConfigSchema));
@@ -300,12 +302,21 @@ export class ControlPlaneService {
       sanitize: sanitizeStoredConfigSyncPreferenceRecord,
     });
     this.marketCatalogService = new MarketCatalogService();
+    this.gitCredentials = new ControlPlaneGitCredentialService(paths, {
+      repositoryReferences: (credentialId) => this.projects.list().flatMap((project) => {
+        const source = project.source;
+        return source.type !== "local-folder" && source.auth.secretId === credentialId
+          ? [{ id: project.id, name: project.name, url: source.url, authType: source.auth.type as "ssh-key" | "https-token" }]
+          : [];
+      }),
+    });
     this.catalogService = new ControlPlaneCatalogService({
       projects: this.projects,
       images: this.images,
       market: this.marketCatalogService,
       settings: this.settings,
       defaultNodeId: () => this.defaultNodeId(),
+      requireGitCredential: (id) => this.gitCredentials.requirePublic(id),
     });
     this.controlledInstanceCreator = new ControlledInstanceCreator({
       gateway: this.nodeAgentGateway,
@@ -316,6 +327,7 @@ export class ControlPlaneService {
       requireLocalFolder: (node, folderId) => this.requireNodeLocalFolder(node, folderId),
       resolveImageSelection: (selection) => this.catalogService.resolveImageSelection(selection),
       prepareModels: (node, selection) => this.modelService.prepareAssignment(node, selection),
+      gitCredentials: this.gitCredentials,
     });
     this.controlPlaneTriggerService = new ControlPlaneTriggerService({
       triggers: this.triggers,
@@ -393,6 +405,95 @@ export class ControlPlaneService {
     return this.appSessionSnapshotProvider ? this.appSessionSnapshotProvider(options) : this.bootstrapAppSessionsFromInstances();
   }
 
+  listInstanceGitCredentialAssignments(instanceId: string) {
+    return this.gitCredentials.listAssignments(instanceId);
+  }
+
+  async updateGitCredential(id: string, input: unknown) {
+    const credential = this.gitCredentials.update(id, input);
+    const payload = this.gitCredentials.payload(id, { allowDisabled: true });
+    const deployedNodes = new Set<string>();
+    for (const existing of this.gitCredentials.listAssignments().filter((assignment) => assignment.credentialId === id)) {
+      let assignment = this.gitCredentials.authorize(existing.instanceId, id, { allowDisabled: true });
+      try {
+        const instance = await this.requireControlledInstance(existing.instanceId, true) as ControlledInstance;
+        const node = this.requireNode(instance.nodeId);
+        const agent = node.capabilities.agent;
+        const capabilities = agent && typeof agent === "object" && !Array.isArray(agent)
+          ? (agent as Record<string, unknown>).capabilities
+          : undefined;
+        if (!supportsNodeManagedGitCredentialRegistry(capabilities) || !supportsNodeGitCredentialRuntimeBroker(capabilities) || !supportsGitCredentialProxy(instance.capabilities)) {
+          throw new Error("Managed Git credential synchronization is unsupported by the target.");
+        }
+        if (!deployedNodes.has(node.id)) {
+          await this.nodeAgentGateway.deployGitCredential(node, payload);
+          deployedNodes.add(node.id);
+        }
+        await this.nodeAgentGateway.replaceGitCredentialAuthorizations(node, this.gitCredentials.desiredAuthorizationSet(existing.instanceId));
+        assignment = this.gitCredentials.markAssignmentStatus(existing.instanceId, id, "synced");
+      } catch (error) {
+        assignment = this.gitCredentials.markAssignmentStatus(existing.instanceId, id, "deferred");
+        this.logWarn({ instanceId: existing.instanceId, credentialId: id, credentialRevision: credential.revision, assignmentRevision: assignment.assignmentRevision, error: error instanceof Error ? error.message : String(error) }, "Git credential revision sync deferred");
+      }
+    }
+    return credential;
+  }
+
+  async authorizeInstanceGitCredential(instanceId: string, credentialId: string) {
+    const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
+    const node = this.requireNode(instance.nodeId);
+    if (!supportsGitCredentialProxy(instance.capabilities)) {
+      throw Object.assign(new Error(`Instance ${instance.id} does not support managed Git CLI credentials.`), {
+        code: "GIT_CREDENTIAL_INSTANCE_UNSUPPORTED",
+        statusCode: 409,
+      });
+    }
+    const agent = node.capabilities.agent;
+    const capabilities = agent && typeof agent === "object" && !Array.isArray(agent)
+      ? (agent as Record<string, unknown>).capabilities
+      : undefined;
+    if (!supportsNodeManagedGitCredentialRegistry(capabilities) || !supportsNodeGitCredentialRuntimeBroker(capabilities)) {
+      throw Object.assign(new Error(`Node ${node.id} does not support managed Git credentials.`), {
+        code: "GIT_CREDENTIAL_NODE_UNSUPPORTED",
+        statusCode: 409,
+      });
+    }
+    const payload = this.gitCredentials.payload(credentialId);
+    await this.nodeAgentGateway.deployGitCredential(node, payload);
+    let assignment = this.gitCredentials.authorize(instanceId, credentialId);
+    try {
+      await this.nodeAgentGateway.replaceGitCredentialAuthorizations(node, this.gitCredentials.desiredAuthorizationSet(instanceId));
+      assignment = this.gitCredentials.markAssignmentStatus(instanceId, credentialId, "synced");
+    } catch (error) {
+      assignment = this.gitCredentials.markAssignmentStatus(instanceId, credentialId, "deferred");
+      this.logWarn({ instanceId, credentialId, error: error instanceof Error ? error.message : String(error) }, "Git credential assignment sync deferred");
+    }
+    return assignment;
+  }
+
+  async revokeInstanceGitCredential(instanceId: string, credentialId: string) {
+    const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
+    const node = this.requireNode(instance.nodeId);
+    const current = this.gitCredentials.listAssignments(instanceId).find((item) => item.credentialId === credentialId);
+    if (!current) return false;
+    const revoking = this.gitCredentials.markAssignmentStatus(instanceId, credentialId, "revoking");
+    try {
+      await this.nodeAgentGateway.replaceGitCredentialAuthorizations(node, this.gitCredentials.desiredAuthorizationSet(instanceId));
+      this.gitCredentials.revoke(instanceId, credentialId);
+      const cachedInstances = await this.listCachedNodeInstances();
+      const stillReferencedOnNode = this.gitCredentials.listAssignments().some((item) => {
+        if (item.credentialId !== credentialId) return false;
+        const assigned = cachedInstances.find((candidate) => candidate.id === item.instanceId);
+        return assigned?.nodeId === node.id;
+      });
+      if (!stillReferencedOnNode) await this.nodeAgentGateway.removeGitCredential(node, credentialId).catch(() => undefined);
+      return true;
+    } catch (error) {
+      this.logWarn({ instanceId, credentialId, error: error instanceof Error ? error.message : String(error) }, "Git credential revocation deferred");
+      return false;
+    }
+  }
+
   init() {
     this.runPersistenceMaintenance();
     this.projects.init();
@@ -403,6 +504,7 @@ export class ControlPlaneService {
     this.chatSessions.init();
     this.chatBridges.init();
     this.triggers.init();
+    this.gitCredentials.init();
     this.proxyPrivateStore.init();
     this.proxyPrivateStore.gcNodeCredentials((credential) => {
       const node = this.nodes.get(credential.nodeId);
@@ -534,8 +636,30 @@ export class ControlPlaneService {
     return this.projectNodeConnection(node);
   }
 
-  recoverPendingPairingRevokes() {
-    return this.nodeConnectionManager.recoverPendingPairingRevokes();
+  async recoverPendingPairingRevokes() {
+    await this.nodeConnectionManager.recoverPendingPairingRevokes();
+    await this.reconcileGitCredentialAssignments();
+  }
+
+  private async reconcileGitCredentialAssignments() {
+    const assignments = this.gitCredentials.listAssignments().filter((assignment) => assignment.status !== "synced");
+    for (const assignment of assignments) {
+      try {
+        const instance = await this.requireControlledInstance(assignment.instanceId, true) as ControlledInstance;
+        const node = this.requireNode(instance.nodeId);
+        if (assignment.status === "revoking") {
+          await this.nodeAgentGateway.replaceGitCredentialAuthorizations(node, this.gitCredentials.desiredAuthorizationSet(assignment.instanceId));
+          this.gitCredentials.revoke(assignment.instanceId, assignment.credentialId);
+          continue;
+        }
+        const payload = this.gitCredentials.payload(assignment.credentialId, { allowDisabled: true });
+        await this.nodeAgentGateway.deployGitCredential(node, payload);
+        await this.nodeAgentGateway.replaceGitCredentialAuthorizations(node, this.gitCredentials.desiredAuthorizationSet(assignment.instanceId));
+        this.gitCredentials.markAssignmentStatus(assignment.instanceId, assignment.credentialId, "synced");
+      } catch (error) {
+        this.logWarn({ instanceId: assignment.instanceId, credentialId: assignment.credentialId, assignmentRevision: assignment.assignmentRevision, error: error instanceof Error ? error.message : String(error) }, "Git credential assignment convergence deferred");
+      }
+    }
   }
 
   listModels() {
@@ -1025,6 +1149,9 @@ export class ControlPlaneService {
     if (parsedInput.config?.aiSessionAttachmentRetentionDays !== undefined) {
       requireAiSessionAttachmentRetentionSupport(node, current);
     }
+    if (parsedInput.config?.aiSessionMaxFileAttachmentBytes !== undefined) {
+      requireAiSessionFileAttachmentLimitSupport(node, current);
+    }
     const { modelSelection, ...instancePatch } = parsedInput;
     let instance = Object.keys(instancePatch).length
       ? await this.nodeAgentGateway.updateInstance(node, id, instancePatch)
@@ -1041,7 +1168,10 @@ export class ControlPlaneService {
     const current = await this.requireNodeInstance(id);
     const node = this.requireNode(current.nodeId);
     const result = await this.nodeAgentGateway.deleteInstance(node, id, parsedInput);
-    if (result.completed) this.configSyncPreferences.delete(id);
+    if (result.completed) {
+      this.configSyncPreferences.delete(id);
+      this.gitCredentials.revokeInstance(id);
+    }
     return result;
   }
 
@@ -1243,7 +1373,12 @@ export class ControlPlaneService {
     return this.appAccessService.createToken(input);
   }
 
-  createAppSessionAccessToken(input: { instanceId: string; sessionId: string; ttlMs?: number }) {
+  createAppSessionAccessToken(input: {
+    instanceId: string;
+    sessionId: string;
+    ttlMs?: number;
+    authorization?: { userId: string; authorizationRevision: number };
+  }) {
     return this.appAccessService.createSessionToken(input);
   }
 
@@ -1361,8 +1496,8 @@ export class ControlPlaneService {
     return this.aiSessionActionService.resolveApproval(instanceId, sessionId, decision);
   }
 
-  listAiSessionHistory(instanceId: string) {
-    return this.aiSessionActionService.listHistory(instanceId);
+  listAiSessionHistory(instanceId: string, agents?: readonly string[]) {
+    return this.aiSessionActionService.listHistory(instanceId, agents);
   }
 
   getAiSessionHistoryDetail(instanceId: string, aiSessionId: string) {
@@ -1432,7 +1567,6 @@ export class ControlPlaneService {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ appId, ...launchOptions }),
     }) as Record<string, unknown>;
-    await this.listAppSessions({ refresh: true });
     return session;
   }
 
@@ -1443,7 +1577,6 @@ export class ControlPlaneService {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({}),
     }) as Record<string, unknown>;
-    await this.listAppSessions({ refresh: true });
     return session;
   }
 
@@ -1483,7 +1616,6 @@ export class ControlPlaneService {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ title }),
     }) as Record<string, unknown>;
-    await this.listAppSessions({ refresh: true });
     return session;
   }
 
@@ -1696,7 +1828,10 @@ export class ControlPlaneService {
   }
 
   private async requireNodeInstance(id: string, refresh = false) {
-    const nodes = this.listNodes();
+    return this.requireNodeInstanceFromNodes(id, this.listNodes(), refresh);
+  }
+
+  private async requireNodeInstanceFromNodes(id: string, nodes: Node[], refresh = false) {
     const cached = this.nodeAgentGateway.instanceFromSnapshot(nodes, id);
     if (cached && refresh) {
       const node = nodes.find((candidate) => candidate.id === cached.nodeId);
@@ -1801,6 +1936,13 @@ export class ControlPlaneService {
     const record = await this.requireNodeInstance(id, refresh);
     return includeSecret ? record : publicInstanceWithAccess(record);
   }
+
+  requireControlledInstanceForAuthorization(id: string, allowedNodeIds: ReadonlySet<string>) {
+    const nodes = this.listNodes().filter((node) => allowedNodeIds.has(node.id));
+    const instance = this.nodeAgentGateway.instanceFromSnapshot(nodes, id);
+    if (!instance) throwNotFound("CONTROLLED_INSTANCE_NOT_FOUND", `Controlled instance ${id} was not found.`);
+    return publicInstanceWithAccess(instance);
+  }
 }
 
 function requireAiSessionHistoryLimitSupport(node: Node, instance: ControlledInstance) {
@@ -1837,6 +1979,22 @@ function requireAiSessionAttachmentRetentionSupport(node: Node, instance: Contro
     throw Object.assign(new Error("This instance does not support managed AI session attachment retention settings."), {
       statusCode: 409,
       code: "AI_SESSION_ATTACHMENT_RETENTION_UNSUPPORTED",
+    });
+  }
+}
+
+function requireAiSessionFileAttachmentLimitSupport(node: Node, instance: ControlledInstance) {
+  const agent = node.capabilities.agent;
+  const agentCapabilities = agent && typeof agent === "object" && !Array.isArray(agent)
+    ? (agent as Record<string, unknown>).capabilities
+    : undefined;
+  const nodeSupported = supportsNodeAiSessionFileAttachmentLimit(agentCapabilities);
+  if (!nodeSupported || !supportsAiSessionFileSizeLimitSettings(instance.capabilities)) {
+    // Compatibility for v0.0.21: older node agents reject the additive instance
+    // config field and older controlled instances cannot enforce it locally.
+    throw Object.assign(new Error("This instance does not support managed AI session file attachment limits."), {
+      statusCode: 409,
+      code: "AI_SESSION_FILE_ATTACHMENT_LIMIT_UNSUPPORTED",
     });
   }
 }

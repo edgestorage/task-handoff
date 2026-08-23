@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   ControlPlaneAuthenticatedUserSchema,
+  ControlPlaneCurrentAuthorizationSchema,
   ControlPlaneMobileLoginInputSchema,
   ControlPlaneMobileLoginResponseSchema,
   ControlPlaneMobileSessionRevocationResponseSchema,
@@ -18,6 +19,7 @@ export const ControlPlaneAuthSessionSchema = z.object({
   requiresBootstrap: z.boolean(),
   authenticated: z.boolean(),
   user: ControlPlaneAuthenticatedUserSchema.optional(),
+  authorization: ControlPlaneCurrentAuthorizationSchema.optional(),
 }).strict();
 
 export function createControlPlaneAuthApi(transport: ControlPlaneClientTransport) {

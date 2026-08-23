@@ -23,8 +23,15 @@ export type AiSessionDiscoveryProvider = {
   refresh: (context: AiSessionDiscoveryContext) => Promise<void> | void;
 };
 
+export type AiSessionDiscoveryErrorHandler = (input: {
+  providerId: string;
+  error: unknown;
+}) => void;
+
 export class AiSessionDiscoveryCoordinator {
   private readonly providers = new Map<string, AiSessionDiscoveryProvider>();
+
+  constructor(private readonly onProviderError?: AiSessionDiscoveryErrorHandler) {}
 
   register(provider: AiSessionDiscoveryProvider) {
     this.providers.set(provider.id, provider);
@@ -32,7 +39,11 @@ export class AiSessionDiscoveryCoordinator {
 
   async refresh(context: AiSessionDiscoveryContext) {
     for (const provider of this.providers.values()) {
-      await provider.refresh(context);
+      try {
+        await provider.refresh(context);
+      } catch (error) {
+        this.onProviderError?.({ providerId: provider.id, error });
+      }
     }
   }
 }

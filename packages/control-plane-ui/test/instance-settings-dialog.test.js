@@ -71,6 +71,15 @@ test("instance settings exposes general, models, apps, and inventory freshness s
   assert.match(dialog, /aiSessionHistoryLimit:\s*Number\(aiSessionHistoryLimit\.value\)/);
 });
 
+test("instance settings configures the ordinary file upload limit through node capability gating", () => {
+  const dialog = read("src/apps/control-plane/instance-settings/InstanceSettingsDialog.vue");
+  assert.match(dialog, /aiSessionFileAttachmentLimit/);
+  assert.match(dialog, /aiSessionMaxFileAttachmentKiB/);
+  assert.match(dialog, /aiSessionMaxFileAttachmentBytes: Number\(aiSessionMaxFileAttachmentKiB\.value\) \* 1024/);
+  assert.match(dialog, /supportsNodeAiSessionFileAttachmentLimit\(nodeCapabilities\)[\s\S]*supportsAiSessionFileSizeLimitSettings\(props\.instance\?\.capabilities\)/);
+  assert.match(dialog, /AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES \/ 1024/);
+});
+
 test("instance settings edits the instance name through the general settings update", () => {
   const dialog = read("src/apps/control-plane/instance-settings/InstanceSettingsDialog.vue");
 

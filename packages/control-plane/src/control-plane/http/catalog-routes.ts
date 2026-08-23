@@ -1,9 +1,12 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { ControlPlaneEventBus } from "../events/bus.ts";
 import { ControlPlaneService } from "../application/service.ts";
 import { IdParamsSchema } from "./route-params.ts";
 import { withRequestSignal } from "./request-signal.ts";
+import { projectFederatedModelRegistry, requestCanAccessNode } from "./access-projection.ts";
+import { assertCan } from "../auth/authorization.ts";
+import { controlPlaneRequestActor } from "./request-actor.ts";
 
 export type RegisterCatalogRoutesOptions = {
   app: FastifyInstance;
@@ -24,15 +27,23 @@ const NodeModelParamsSchema = z.object({
 const FleetModelQuerySchema = z.object({ progressive: z.enum(["true", "false"]).optional() }).strict();
 
 export function registerCatalogRoutes({ app, service, events }: RegisterCatalogRoutesOptions) {
-  app.get("/api/projects", async () => ({ data: service.listProjects() }));
+  app.get("/api/projects", async (request) => ({
+    data: service.listProjects().filter((project) => project.source.type !== "local-folder"
+      || Boolean(project.source.ownerNodeId
+        && service.nodes.get(project.source.ownerNodeId)
+        && requestCanAccessNode(request, project.source.ownerNodeId))),
+  }));
   app.post("/api/projects", async (request, reply) => {
+    assertCanManageRepositoryCredential(request);
     const project = service.createProject(request.body);
     events.publish("project.created", { projectId: project.id });
     return reply.code(201).send({ data: project });
   });
   app.get("/api/projects/:id", async (request) => ({ data: service.requireProject(IdParamsSchema.parse(request.params).id) }));
   app.patch("/api/projects/:id", async (request) => {
-    const project = service.updateProject(IdParamsSchema.parse(request.params).id, request.body);
+    const id = IdParamsSchema.parse(request.params).id;
+    assertCanManageRepositoryCredential(request, service.requireProject(id).source);
+    const project = service.updateProject(id, request.body);
     events.publish("project.updated", { projectId: project.id });
     return { data: project };
   });
@@ -45,7 +56,7 @@ export function registerCatalogRoutes({ app, service, events }: RegisterCatalogR
 
   app.get("/api/models", async (request, reply) => withRequestSignal(request, reply, async (signal) => {
     const query = FleetModelQuerySchema.parse(request.query);
-    return { data: await service.listFederatedModels(signal, query.progressive === "true") };
+    return { data: projectFederatedModelRegistry(request, await service.listFederatedModels(signal, query.progressive === "true")) };
   }));
   app.post("/api/models", async (request, reply) => {
     const model = await service.createModel(request.body);
@@ -125,4 +136,20 @@ export function registerCatalogRoutes({ app, service, events }: RegisterCatalogR
     events.publish("image.deleted", { imageId: id, deleted });
     return { data: { deleted } };
   });
+}
+
+function assertCanManageRepositoryCredential(request: FastifyRequest, currentSource?: { type: string; auth?: { secretId?: string } }) {
+  const body = request.body && typeof request.body === "object" && !Array.isArray(request.body)
+    ? request.body as Record<string, unknown>
+    : undefined;
+  const source = body?.source && typeof body.source === "object" && !Array.isArray(body.source)
+    ? body.source as Record<string, unknown>
+    : undefined;
+  const auth = source?.auth && typeof source.auth === "object" && !Array.isArray(source.auth)
+    ? source.auth as Record<string, unknown>
+    : undefined;
+  if (!source || (auth?.secretId === undefined && !currentSource?.auth?.secretId)) return;
+  const actor = controlPlaneRequestActor(request);
+  if (!actor) throw Object.assign(new Error("Authentication is required."), { code: "CONTROL_PLANE_AUTH_REQUIRED", statusCode: 401 });
+  assertCan(actor, "manage-secrets", { type: "secret" });
 }

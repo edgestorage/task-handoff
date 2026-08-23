@@ -385,7 +385,8 @@ import { useQueries, useQueryClient } from "@tanstack/vue-query";
 import { useEventListener } from "@vueuse/core";
 import { Bot, Boxes, Check, ChevronDown, Container, Download, House, Laptop, LayoutGrid, LoaderCircle, LogOut, Maximize2, Minus, RefreshCw, Settings, X } from "@lucide/vue";
 import "@xterm/xterm/css/xterm.css";
-import { controlPlaneQueryKeys, getInstanceAppManagement, getInstanceResourceMetrics, installInstanceApp, instanceBoardQueryOptions, logoutControlPlane, nodeLocalFoldersQueryOptions, renameAppSession, resolveAiSessionApproval, saveEnvironmentTemplate, uninstallInstanceApp, updateControlledInstance, useAuthSessionQuery, useControlPlaneAiSessionsQuery, useControlPlaneAppSessionsQuery, useControlPlaneStatusQuery, useInstanceBoardQuery, useInstanceDirectoryQuery, useModelsQuery, useNodesQuery, useServerUpdateCheckQuery } from "../../api/queries";
+import { controlPlaneQueryKeys, getInstanceAppManagement, getInstanceResourceMetrics, installInstanceApp, instanceBoardQueryOptions, logoutControlPlane, nodeLocalFoldersQueryOptions, renameAppSession, resolveAiSessionApproval, saveEnvironmentTemplate, uninstallInstanceApp, updateControlledInstance, useAuthSessionQuery, useControlPlaneAiSessionsQuery, useControlPlaneAppSessionsQuery, useControlPlaneStatusQuery, useCurrentAccessQuery, useInstanceBoardQuery, useInstanceDirectoryQuery, useModelsQuery, useNodesQuery, useServerUpdateCheckQuery } from "../../api/queries";
+import { authorizationCacheEpoch as currentAccessEpoch, authorizationCacheEpochChanged as authorizationEpochChanged, preserveAcrossAuthorizationChange } from "../../api/authorizationCache";
 import type { ControlPlaneInstanceResourceEntry } from "@task-handoff/control-plane-client";
 import type { ConfigSyncDirection } from "@task-handoff/protocol/config-sync";
 import { type AiSessionSummary, type AppManagementOperation, type InstanceBoardItem, type InstanceBoardItemWithAppSessions, type InstanceResourceMetrics, type NodeLocalFolder, type UpdateControlledInstanceInput } from "../../api/types";
@@ -504,6 +505,7 @@ function storedSessionPreviewExpanded() {
 const queryClient = useQueryClient();
 const { locale, t } = useI18n();
 const authSession = useAuthSessionQuery();
+const currentAccess = useCurrentAccessQuery(computed(() => Boolean(authSession.data.value?.enabled && authSession.data.value.authenticated)));
 const controlPlane = useControlPlaneStatusQuery();
 const sessionQueryInstanceId = computed(() => standaloneMode.value ? standaloneInstanceId.value : "");
 const sessionQueriesEnabled = computed(() => !standaloneMode.value || standaloneOwnershipReady.value);
@@ -518,6 +520,18 @@ const instanceDirectory = useInstanceDirectoryQuery(standaloneMode);
 const controlPlaneAiSessions = useControlPlaneAiSessionsQuery(sessionQueryInstanceId, sessionQueriesEnabled);
 const controlPlaneAppSessions = useControlPlaneAppSessionsQuery(sessionQueryInstanceId, sessionQueriesEnabled);
 const nodes = useNodesQuery(computed(() => !standaloneMode.value));
+let authorizationCacheEpoch = "";
+watch(() => currentAccessEpoch(currentAccess.data.value), (epoch) => {
+  if (!epoch || !authorizationCacheEpoch) {
+    authorizationCacheEpoch = epoch;
+    return;
+  }
+  if (!authorizationEpochChanged(authorizationCacheEpoch, epoch)) return;
+  authorizationCacheEpoch = epoch;
+  queryClient.removeQueries({
+    predicate: (query) => !preserveAcrossAuthorizationChange(query.queryKey),
+  });
+}, { immediate: true });
 const standaloneBoardPending = computed(() => standaloneMode.value
   && !(board.data.value || []).some((instance) => instance.id === standaloneInstanceId.value)
   && board.nodeStates.value.some((state) => state.resource === "instances" && (state.phase === "uninitialized" || state.phase === "loading")));
@@ -548,7 +562,7 @@ const instanceViewMode = computed(() => workbenchView.value === "instance");
 const boardMode = computed(() => workbenchView.value === "board");
 const aiBoardMode = computed(() => workbenchView.value === "ai");
 const settingsMode = ref(false);
-const settingsSection = ref<"basic" | "chat" | "images" | "environment-templates" | "projects" | "nodes" | "models" | "triggers" | "mobile-sessions" | "account" | "cloud-connectivity">("nodes");
+const settingsSection = ref<"basic" | "chat" | "images" | "environment-templates" | "projects" | "nodes" | "models" | "git-credentials" | "triggers" | "mobile-sessions" | "account" | "users" | "cloud-connectivity">("nodes");
 const boardFilter = ref("");
 const aiBoardFilter = ref("");
 const boardProjectFilter = ref(ALL_BOARD_FILTER_VALUE);
@@ -570,7 +584,7 @@ const configSyncDialogOpen = computed({
   },
 });
 const instanceSettingsId = ref("");
-const instanceSettingsSection = ref<"general" | "models" | "apps">("general");
+const instanceSettingsSection = ref<"general" | "models" | "git-credentials" | "apps">("general");
 const instanceSettingsOpen = computed({
   get: () => Boolean(instanceSettingsId.value),
   set: (open: boolean) => {
@@ -1038,6 +1052,7 @@ useEventListener(window, "click", handleGlobalClick);
 useEventListener(window, "keydown", handleGlobalKeydown);
 
 onBeforeUnmount(() => {
+  window.removeEventListener("task-handoff:open-instance-git-credentials", openActiveInstanceGitCredentials);
   instanceSwitcherResizeObserver?.disconnect();
   instanceSwitcherResizeObserver = undefined;
   finishInstanceSwitch(instanceSwitchSequence);
@@ -1054,6 +1069,7 @@ onBeforeUnmount(() => {
 });
 
 onMounted(async () => {
+  window.addEventListener("task-handoff:open-instance-git-credentials", openActiveInstanceGitCredentials);
   if (!standaloneMode.value) return;
   await nextTick();
   observeInstanceSwitcherOverflow();
@@ -1073,6 +1089,11 @@ onMounted(async () => {
   // i18n-audit-allow-next-line code-token: toast presentation variant
   if (result.action === "focused") showToast(t("instances.window.alreadyOpen"), "info");
 });
+
+function openActiveInstanceGitCredentials() {
+  if (standaloneMode.value || !activeInstanceId.value) return;
+  openInstanceSettings(activeInstanceId.value, "git-credentials");
+}
 
 function handleGlobalClick() {
   closeFloatingLayers();
@@ -1232,6 +1253,9 @@ function settingsSectionTitle(section: typeof settingsSection.value) {
   if (section === "models") {
     return t("settings.models");
   }
+  if (section === "git-credentials") {
+    return t("settings.gitCredentials.navigation");
+  }
   if (section === "chat") {
     return t("settings.chatBridges");
   }
@@ -1243,6 +1267,9 @@ function settingsSectionTitle(section: typeof settingsSection.value) {
   }
   if (section === "account") {
     return t("settings.account.navigation");
+  }
+  if (section === "users") {
+    return t("settings.userAccess.navigation");
   }
   return t("settings.projects");
 }
@@ -1273,7 +1300,7 @@ async function manageInstanceApp(instanceId: string, appId: string, operation: A
   instanceAppManagement.applyJob(instanceId, response.job);
 }
 
-function openInstanceSettings(instanceId: string, section: "general" | "models" | "apps" = "general") {
+function openInstanceSettings(instanceId: string, section: "general" | "models" | "git-credentials" | "apps" = "general") {
   if (!boardInstancesWithAppSessions.value.some((instance) => instance.id === instanceId)) return;
   instanceSettingsSection.value = section;
   instanceSettingsId.value = instanceId;

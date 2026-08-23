@@ -242,8 +242,24 @@ export class ControlPlaneAiSessionAggregator {
       const advertisedStreamId = this.advertisedStreams.get(entry.instanceId)?.streamId;
       if (advertisedStreamId && advertisedStreamId !== entry.streamId) continue;
       if (current?.streamId === entry.streamId && current.revision >= entry.revision) continue;
-      if (current?.streamId !== entry.streamId) this.history.delete(entry.instanceId);
-      this.snapshots.set(entry.instanceId, { streamId: entry.streamId, snapshot: entry.aiSessions, revision: entry.revision, lastEventAt: entry.lastEventAt });
+      const event: AiSessionEvent = {
+        type: AiSessionEventType.Snapshot,
+        payload: {
+          meta: {
+            streamId: entry.streamId,
+            instanceId: entry.instanceId,
+            revision: entry.revision,
+            traceId: `ais_bootstrap_${Date.now().toString(36)}`,
+            generatedAt: entry.lastEventAt,
+            reason: "startup",
+          },
+          snapshot: entry.aiSessions,
+        },
+      };
+      // A refreshed HTTP snapshot shares the global projection with WebSocket
+      // consumers. If it advances the revision, publish the same authoritative
+      // transition so another browser cannot miss the later duplicate WS event.
+      if (this.apply(event)) this.onRecoveredEvent?.(event);
     }
   }
 

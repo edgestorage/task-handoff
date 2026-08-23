@@ -171,6 +171,12 @@ jobs:
           name: controlled-instance-runtime-${{ needs.controlled-instance-artifact.outputs.version }}
           path: release/runtime-artifacts
 
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: node-pty-prebuild-*
+          path: release/node-pty-prebuilds
+          merge-multiple: true
+
       - name: Build npm tarballs
         env:
           TASK_HANDOFF_VERSION: ${{ steps.version.outputs.value }}

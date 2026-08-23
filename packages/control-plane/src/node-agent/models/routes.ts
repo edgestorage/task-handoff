@@ -17,7 +17,7 @@ const NodeModelDiscoveryInputSchema = z.object({
 
 const NodeModelTestInputSchema = NodeModelDiscoveryInputSchema.extend({
   model: z.string().trim().min(1).max(240),
-  app: z.enum(["codex", "claude"]),
+  app: z.enum(["codex", "claude", "opencode"]),
 }).strict();
 
 export function registerNodeModelRoutes(

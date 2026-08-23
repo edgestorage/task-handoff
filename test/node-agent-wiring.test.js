@@ -448,7 +448,7 @@ test("stop cancels in-flight start, reconcile, and restart before waiting for li
 
 test("node-agent app forwards lifecycle cancellation into the start continuation guard", () => {
   const source = fs.readFileSync(path.join(__dirname, "../packages/control-plane/src/node-agent/app.ts"), "utf8");
-  assert.match(source, /start:\s*\(id, shouldContinue\)\s*=>\s*startInstanceWithFailureState\(id, "request", shouldContinue\)/);
+  assert.match(source, /start:\s*\(id, shouldContinue, signal\)\s*=>\s*startInstanceWithFailureState\(id, "request", shouldContinue, signal\)/);
   assert.match(source, /if \(!shouldContinue\(\)\) return state\.requireInstance\(id\);/);
   assert.ok(
     source.indexOf("if (!shouldContinue()) return state.requireInstance(id);")

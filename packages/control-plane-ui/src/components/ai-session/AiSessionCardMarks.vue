@@ -17,8 +17,8 @@ const props = defineProps<{
   creationSource?: "ai-session" | "app-session";
 }>();
 
-const brandedAgent = computed<"codex" | "claude" | undefined>(() => (
-  props.agent === "codex" || props.agent === "claude" ? props.agent : undefined
+const brandedAgent = computed<"codex" | "claude" | "opencode" | undefined>(() => (
+  props.agent === "codex" || props.agent === "claude" || props.agent === "opencode" ? props.agent : undefined
 ));
 </script>
 

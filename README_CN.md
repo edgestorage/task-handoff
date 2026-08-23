@@ -26,6 +26,7 @@ TaskHandoff 用于集中运行和监管 Codex 等 AI 开发工作。它把分散
 - **环境模板**：把 Docker 实例中安装的工具和容器配置保存为节点本地的可复用环境，再与任意 Git 项目或本地目录工作空间组合。
 - **AI 会话中心**：统一查看和控制实例中的 AI 会话，通过 WebSocket 实时同步状态。
 - **仓库协作**：在会话中查看文件、变更、分支和 worktree，并提供保守的远程交付能力。
+- **托管 Git 凭证**：按 remote scope 管理 HTTPS token 或 pinned SSH key，可仅用于首次 provisioning，也可保留给 Agent、Terminal、App 和 Repository 的后续 Git 命令。
 - **聊天入口整合**：通过适配器接入 Telegram、钉钉、微信和飞书/Lark，将消息、审批和操作路由到指定实例。
 - **应用管理**：通过可信内置目录在目标实例中安装、卸载和运行应用。
 - **移动端客户端**：iOS 或 Android 设备可直接连接用户管理的 Control Plane，访问 AI 会话、实例操作、应用和终端。
