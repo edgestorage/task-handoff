@@ -27,7 +27,7 @@ const controlPlaneDatabasePayloadPatterns = [
   /require\(["']drizzle-orm(?:["'/])/,
   /require\(["']pg["']\)/,
   /require\(["']node:sqlite["']\)/,
-  /control_plane_migration_ledger/,
+  /cp_migration_ledger/,
 ];
 
 function assertNoControlPlaneDatabasePayload(label, manifest, outputs) {

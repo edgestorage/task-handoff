@@ -15,7 +15,7 @@ test("GitHub OAuth resolves only provider subject and consumes state once", asyn
     const paths = controlPlaneStorePaths(dataDir);
     const users = new ControlPlaneUserService(paths);
     const admin = await users.bootstrapAdmin({ username: "admin", password: "password123" });
-    const providers = new ControlPlaneIdentityProviderService(paths, users.store);
+    const providers = new ControlPlaneIdentityProviderService(paths, users);
     providers.init();
     const provider = await providers.create({
       name: "GitHub",
@@ -25,7 +25,8 @@ test("GitHub OAuth resolves only provider subject and consumes state once", asyn
       clientSecret: "client-secret",
       callbackUrl: "https://cp.example.com/api/auth/external/callback",
     });
-    await users.bindExternalIdentity(admin.id, { providerId: provider.id, subject: "1234", kind: "oauth", verifiedEmail: "old@example.com" });
+    const timestamp = new Date().toISOString();
+    await users.store.identities.put({ id: "identity_github_admin", userId: admin.id, providerId: provider.id, subject: "1234", kind: "oauth", verifiedEmail: "old@example.com", createdAt: timestamp, updatedAt: timestamp });
     const calls: string[] = [];
     const fetchMock: typeof fetch = async (input) => {
       const url = String(input);
@@ -42,7 +43,7 @@ test("GitHub OAuth resolves only provider subject and consumes state once", asyn
     assert.equal(result.user.id, admin.id);
     await assert.rejects(() => external.callback({ state, code: "authorization-code" }), { code: "AUTH_EXTERNAL_FLOW_INVALID" });
     assert.deepEqual(calls, ["https://github.com/login/oauth/access_token", "https://api.github.com/user", "https://api.github.com/user/emails"]);
-    assert.equal(JSON.stringify(users.store.identities.list()).includes("temporary-provider-token"), false);
+    assert.equal(JSON.stringify(await users.store.identities.list()).includes("temporary-provider-token"), false);
   } finally {
     fs.rmSync(dataDir, { recursive: true, force: true });
   }
@@ -54,7 +55,7 @@ test("unbound identities never auto-link by email", async () => {
     const paths = controlPlaneStorePaths(dataDir);
     const users = new ControlPlaneUserService(paths);
     await users.bootstrapAdmin({ username: "admin@example.com", password: "password123" });
-    const providers = new ControlPlaneIdentityProviderService(paths, users.store);
+    const providers = new ControlPlaneIdentityProviderService(paths, users);
     providers.init();
     const provider = await providers.create({ name: "GitHub", kind: "github", status: "enabled", clientId: "id", clientSecret: "secret", callbackUrl: "https://cp.example.com/callback" });
     const external = new ControlPlaneExternalAuthentication(users, new ControlPlaneUserAuthentication(users), providers, { fetch: async (input) => {
@@ -66,7 +67,7 @@ test("unbound identities never auto-link by email", async () => {
     const begin = await external.begin(provider.id);
     const state = new URL(begin.authorizationUrl).searchParams.get("state")!;
     await assert.rejects(() => external.callback({ state, code: "code" }), { code: "AUTH_EXTERNAL_IDENTITY_NOT_BOUND" });
-    assert.equal(users.store.users.list().length, 1);
+    assert.equal((await users.store.users.list()).length, 1);
   } finally {
     fs.rmSync(dataDir, { recursive: true, force: true });
   }
@@ -78,7 +79,7 @@ test("admin-approved-create produces a pending request and explicit user", async
     const paths = controlPlaneStorePaths(dataDir);
     const users = new ControlPlaneUserService(paths);
     const admin = await users.bootstrapAdmin({ username: "admin", password: "password123" });
-    const providers = new ControlPlaneIdentityProviderService(paths, users.store);
+    const providers = new ControlPlaneIdentityProviderService(paths, users);
     providers.init();
     const provider = await providers.create({ name: "GitHub", kind: "github", status: "enabled", loginPolicy: "admin-approved-create", clientId: "id", clientSecret: "secret", callbackUrl: "https://cp.example.com/callback" });
     const external = new ControlPlaneExternalAuthentication(users, new ControlPlaneUserAuthentication(users), providers, { fetch: async (input) => {
@@ -109,7 +110,7 @@ test("external login state is process-local and provider disablement aborts call
     const paths = controlPlaneStorePaths(dataDir);
     const users = new ControlPlaneUserService(paths);
     await users.bootstrapAdmin({ username: "admin", password: "password123" });
-    const providers = new ControlPlaneIdentityProviderService(paths, users.store);
+    const providers = new ControlPlaneIdentityProviderService(paths, users);
     providers.init();
     const provider = await providers.create({ name: "GitHub", kind: "github", status: "enabled", clientId: "id", clientSecret: "secret", callbackUrl: "https://cp.example.com/callback" });
     const auth = new ControlPlaneUserAuthentication(users);

@@ -63,228 +63,24 @@
         @export-diagnostic-logs="exportDiagnosticLogs"
       />
 
-      <ScrollArea v-else-if="settingsSection === 'chat'" class="settings-section-scroll" :horizontal="false">
-        <div class="settings-section-scroll-content">
-          <ChatBridgeSettingsSection
-            :chat="chatSettings"
-            :error-text="errorText"
-            :gateway-error="chatGatewayStatus.error.value"
-            :is-refreshing="chatBridges.isFetching.value || chatGatewayStatus.isFetching.value"
-            :refresh-chat="refreshChat"
-          />
-        </div>
-      </ScrollArea>
+      <ChatBridgeSettingsSection
+        v-else-if="settingsSection === 'chat'"
+        :chat="chatSettings"
+        :error-text="errorText"
+        :gateway-error="chatGatewayStatus.error.value"
+        :is-refreshing="chatBridges.isFetching.value || chatGatewayStatus.isFetching.value"
+        :refresh-chat="refreshChat"
+      />
 
       <MobileSessionsSettingsSection v-else-if="settingsSection === 'mobile-sessions'" />
 
-      <AccountSecuritySettingsSection v-else-if="settingsSection === 'account'" />
-
-      <UserAccessSettingsSection v-else-if="settingsSection === 'users'" :nodes="nodes.data.value || []" />
+      <UserAccessSettingsSection v-else-if="settingsSection === 'users'" :nodes="nodes.data.value || []" :instances="instances" />
 
       <CloudConnectivitySettingsSection v-else-if="settingsSection === 'cloud-connectivity'" />
 
       <GitCredentialsSettingsSection v-else-if="settingsSection === 'git-credentials'" />
 
-      <ScrollArea v-else-if="settingsSection === 'models'" class="settings-section-scroll" :horizontal="false">
-        <div class="settings-section-scroll-content">
-      <div class="project-management-grid">
-        <section class="modal-section settings-panel-surface">
-          <div class="section-head">
-            <span>{{ t("settings.modelRegistry.count", { count: models.data.value?.length || 0 }) }}</span>
-          </div>
-          <ScrollArea class="registered-project-list">
-            <div class="settings-scroll-content">
-            <article v-for="model in models.data.value || []" :key="model.id" class="registered-project-row model-card" data-model-row>
-              <header class="model-card-header">
-                <div class="model-card-title">
-                  <strong>{{ model.name }}</strong>
-                  <code>{{ model.model }}</code>
-                </div>
-                <div class="model-card-badges">
-                  <Badge variant="secondary">{{ model.app }}</Badge>
-                  <Badge :variant="model.enabled ? 'default' : 'secondary'">{{ model.enabled ? t("settings.modelRegistry.enabled") : t("settings.modelRegistry.disabled") }}</Badge>
-                </div>
-              </header>
-              <div class="model-card-endpoint" :title="model.endpoint">{{ model.endpoint }}</div>
-              <div class="model-card-meta">
-                <span>{{ t("settings.modelRegistry.credential", { value: model.keyPreview || (model.keySet ? t("settings.modelRegistry.set") : t("settings.modelRegistry.missing")) }) }}</span>
-                <span>{{ t("settings.modelRegistry.references", { count: model.referenceCount || 0 }) }}</span>
-              </div>
-              <div class="model-location-list" :aria-label="t('settings.modelRegistry.locations')">
-                <div v-for="location in model.locations || []" :key="modelLocationKey(location)" class="model-location-row">
-                  <MapPin :size="13" aria-hidden="true" />
-                  <span>{{ modelLocationLabel(location) }}</span>
-                  <small v-if="location.type === 'node'">{{ t("settings.modelRegistry.references", { count: location.referenceCount }) }}</small>
-                </div>
-              </div>
-              <footer class="settings-row-actions model-card-actions">
-                <Button variant="outline" size="sm" class="icon-button" :disabled="!model.locations?.some((location) => location.type === 'control-plane') || savingModelId === model.id || !canMoveModel(model.id, -1)" :aria-label="t('settings.modelRegistry.moveUp')" :title="t('settings.modelRegistry.moveUp')" @click="moveModel(model.id, -1)">
-                  <ChevronUp :size="14" />
-                </Button>
-                <Button variant="outline" size="sm" class="icon-button" :disabled="!model.locations?.some((location) => location.type === 'control-plane') || savingModelId === model.id || !canMoveModel(model.id, 1)" :aria-label="t('settings.modelRegistry.moveDown')" :title="t('settings.modelRegistry.moveDown')" @click="moveModel(model.id, 1)">
-                  <ChevronDown :size="14" />
-                </Button>
-                <Button variant="outline" size="sm" class="model-edit-button" :disabled="savingModelId === model.id" @click="editModel(model)">
-                  <Settings :size="14" />
-                  <span>{{ t("settings.modelRegistry.editAll") }}</span>
-                </Button>
-                <DropdownMenu>
-                  <DropdownMenuTrigger as-child>
-                    <Button variant="outline" size="sm" class="model-delete-trigger" :disabled="deletingModelId === model.id || !model.locations?.length">
-                      <Trash2 :size="14" />
-                      <span>{{ deletingModelId === model.id ? t("settings.modelRegistry.deleting") : t("settings.modelRegistry.deleteFrom") }}</span>
-                      <ChevronDown :size="13" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent class="model-location-menu" align="end" :side-offset="6">
-                    <DropdownMenuItem
-                      v-for="location in model.locations || []"
-                      :key="`delete-${modelLocationKey(location)}`"
-                      class="model-location-menu-item"
-                      :disabled="location.type === 'node' && location.referenceCount > 0"
-                      @select="removeModel(model, location)"
-                    >
-                      <Trash2 :size="14" />
-                      <span>
-                        <strong>{{ modelLocationLabel(location) }}</strong>
-                        <small v-if="location.type === 'node' && location.referenceCount > 0">{{ t("settings.modelRegistry.inUseBy", { count: location.referenceCount }) }}</small>
-                        <small v-else>{{ t("settings.modelRegistry.deleteLocation") }}</small>
-                      </span>
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </footer>
-            </article>
-            <p v-if="!(models.data.value || []).length" class="settings-empty">{{ t("settings.modelRegistry.empty") }}</p>
-            </div>
-          </ScrollArea>
-          <div v-if="modelRegistry.data.value?.nodeDiagnostics.length" class="model-node-diagnostics" role="status" aria-live="polite">
-            <div class="model-node-diagnostics-head">
-              <AlertTriangle :size="15" aria-hidden="true" />
-              <strong>{{ t("settings.modelRegistry.diagnostics") }}</strong>
-              <Button variant="ghost" size="sm" :disabled="modelRegistry.isFetching.value" @click="modelRegistry.refetch()">
-                <RefreshCw :size="13" />
-                <span>{{ modelRegistry.isFetching.value ? t("settings.modelRegistry.retrying") : t("common.actions.retry") }}</span>
-              </Button>
-            </div>
-            <div v-for="diagnostic in modelRegistry.data.value.nodeDiagnostics" :key="`${diagnostic.nodeId}:${diagnostic.code}`" class="model-node-diagnostic-row">
-              <strong>{{ nodeName(diagnostic.nodeId) }}</strong>
-              <span>{{ diagnostic.message }}</span>
-              <code>{{ diagnostic.code }}</code>
-            </div>
-          </div>
-          <p v-if="modelSaveSuccess" class="settings-success">{{ modelSaveSuccess }}</p>
-        </section>
-
-        <section class="modal-section settings-panel-surface">
-          <div class="section-head model-form-head">
-            <div>
-              <span>{{ editingModelId ? t("settings.modelRegistry.edit") : t("settings.modelRegistry.add") }}</span>
-              <small>{{ editingModelId ? t("settings.modelRegistry.editDescription", { count: editingModelLocationCount }) : t("settings.modelRegistry.addDescription") }}</small>
-            </div>
-            <button v-if="editingModelId" type="button" @click="resetModelForm">{{ t("settings.modelRegistry.new") }}</button>
-          </div>
-          <div class="inline-create">
-            <label v-if="!editingModelId">
-              <span>{{ t("settings.fields.location") }}</span>
-              <ControlPlaneSelect v-model="settingsModel.locationScope" :placeholder="t('settings.modelRegistry.selectLocation')">
-                <ControlPlaneSelectItem value="control-plane">{{ t("settings.modelRegistry.controlPlane") }}</ControlPlaneSelectItem>
-                <ControlPlaneSelectItem v-for="node in nodes.data.value || []" :key="node.id" :value="node.id">{{ t("settings.modelRegistry.nodeLocation", { name: node.name }) }}</ControlPlaneSelectItem>
-              </ControlPlaneSelect>
-            </label>
-            <div v-else class="model-edit-scope">
-              <span>{{ t("settings.fields.location") }}</span>
-              <div><Layers :size="15" /><strong>{{ t("settings.modelRegistry.allLocations", { count: editingModelLocationCount }) }}</strong></div>
-            </div>
-            <label>
-              <span>{{ t("settings.fields.name") }}</span>
-              <ControlPlaneInput v-model="settingsModel.name" :placeholder="t('settings.modelRegistry.namePlaceholder')" />
-            </label>
-            <label>
-              <span>{{ t("settings.fields.endpoint") }}</span>
-              <!-- i18n-audit-allow-next-line code-token: example model API endpoint -->
-              <ControlPlaneInput v-model="settingsModel.endpoint" placeholder="https://api.openai.com/v1" />
-            </label>
-            <div class="model-field">
-              <div class="model-field-head">
-                <span>{{ t("settings.modelRegistry.model") }}</span>
-                <Button variant="ghost" size="sm" :disabled="!canDiscoverModels || discoveringModels" @click="fetchModelOptions">
-                  <RefreshCw :size="13" :class="{ 'spin': discoveringModels }" />
-                  <span>{{ discoveringModels ? t("settings.modelRegistry.discovering") : t("settings.modelRegistry.discover") }}</span>
-                </Button>
-              </div>
-              <div class="model-input-row">
-                <!-- i18n-audit-allow-next-line product-name: example model identifier -->
-                <ControlPlaneInput v-model="settingsModel.model" :aria-label="t('settings.modelRegistry.model')" placeholder="gpt-5-codex" />
-                <Popover v-model:open="modelPickerOpen">
-                  <PopoverTrigger as-child>
-                    <Button variant="outline" size="sm" class="model-picker-trigger" :disabled="!discoveredModels.length" :aria-label="t('settings.modelRegistry.chooseDiscovered')">
-                      <ChevronsUpDown :size="14" />
-                    </Button>
-                  </PopoverTrigger>
-                  <PopoverContent
-                    class="model-picker-popover"
-                    align="end"
-                    :collision-padding="12"
-                    :side-offset="6"
-                    :style="{ width: 'min(360px, var(--reka-popover-content-available-width))', padding: '4px' }"
-                  >
-                    <Command class="model-picker-command" :model-value="settingsModel.model" @update:model-value="selectDiscoveredModel">
-                      <CommandInput class="model-picker-search-input" :placeholder="t('settings.modelRegistry.searchModels')" />
-                      <ScrollArea class="model-picker-scroll" :horizontal="false">
-                        <CommandList class="model-picker-list">
-                          <CommandEmpty>{{ t("settings.modelRegistry.noModelMatches") }}</CommandEmpty>
-                          <CommandGroup class="model-picker-group">
-                            <CommandItem v-for="option in discoveredModels" :key="option.id" class="model-picker-option" :value="option.id">
-                              <span>{{ option.id }}</span>
-                              <small v-if="option.ownedBy">{{ option.ownedBy }}</small>
-                              <Check :size="14" :class="{ 'model-option-unselected': option.id !== settingsModel.model }" />
-                            </CommandItem>
-                          </CommandGroup>
-                        </CommandList>
-                      </ScrollArea>
-                    </Command>
-                  </PopoverContent>
-                </Popover>
-              </div>
-              <small>{{ t("settings.modelRegistry.manualModelHint") }}</small>
-              <small v-if="!selectedNodeSupportsModelEndpointProbe">{{ t("settings.modelRegistry.probeUnsupported") }}</small>
-            </div>
-            <label>
-              <span>{{ t("settings.fields.apiKey") }}</span>
-              <ControlPlaneInput v-model="settingsModel.key" type="password" :placeholder="editingModelId ? t('settings.modelRegistry.keepKey') : t('settings.fields.apiKey')" />
-              <small v-if="editingModelId">{{ t("settings.modelRegistry.keepCredential") }}</small>
-            </label>
-            <label>
-              <span>{{ t("settings.fields.app") }}</span>
-              <ControlPlaneSelect v-model="settingsModel.app" :placeholder="t('settings.modelRegistry.selectApp')">
-                <ControlPlaneSelectItem value="codex">Codex</ControlPlaneSelectItem>
-                <ControlPlaneSelectItem value="claude">Claude</ControlPlaneSelectItem>
-                <ControlPlaneSelectItem value="opencode">OpenCode</ControlPlaneSelectItem>
-              </ControlPlaneSelect>
-            </label>
-            <div class="checkbox-row">
-              <label>
-                <Checkbox :model-value="settingsModel.enabled" @update:model-value="(value) => settingsModel.enabled = value === true" />
-                <span>{{ t("common.status.enabled") }}</span>
-              </label>
-            </div>
-            <p v-if="modelEndpointFeedback" class="model-endpoint-feedback" :data-kind="modelEndpointFeedback.kind">{{ modelEndpointFeedback.text }}</p>
-            <div class="model-form-actions">
-              <Button variant="outline" size="sm" :disabled="!canTestModel || testingModel" @click="checkModel">
-                <Activity :size="14" />
-                <span>{{ testingModel ? t("settings.modelRegistry.testing") : t("settings.modelRegistry.test") }}</span>
-              </Button>
-              <Button size="sm" class="model-submit" :disabled="!canSaveModel || savingModelId === formModelBusyId" @click="saveModel">
-                <Plus :size="15" />
-                <span>{{ savingModelId === formModelBusyId ? t("settings.modelRegistry.saving") : editingModelId ? t("settings.modelRegistry.save") : t("settings.modelRegistry.create") }}</span>
-              </Button>
-            </div>
-          </div>
-        </section>
-      </div>
-        </div>
-      </ScrollArea>
+      <ModelSettingsSection v-else-if="settingsSection === 'models'" />
 
       <ScrollArea v-else-if="settingsSection === 'images'" class="settings-section-scroll" :horizontal="false">
         <div class="settings-section-scroll-content">
@@ -393,91 +189,7 @@
 
       <EnvironmentTemplatesSettings v-else-if="settingsSection === 'environment-templates'" :nodes="nodes.data.value || []" />
 
-      <ScrollArea v-else-if="settingsSection === 'projects'" class="settings-section-scroll" :horizontal="false">
-        <div class="settings-section-scroll-content">
-      <div class="project-management-grid">
-        <section class="modal-section settings-panel-surface">
-          <div class="section-head">
-            <span>{{ t("settings.projectRegistry.count", { count: projects.data.value?.length || 0 }) }}</span>
-          </div>
-          <ScrollArea class="registered-project-list">
-            <div class="settings-scroll-content">
-            <div v-for="project in projects.data.value || []" :key="project.id" class="registered-project-row">
-              <div>
-                <strong>{{ project.name }}</strong>
-                <code>{{ projectSourceLabel(project) }}</code>
-                <small>{{ t("settings.projectRegistry.credential") }} · {{ projectCredentialLabel(project) }}</small>
-              </div>
-              <div class="settings-row-actions">
-                <ControlPlaneSelect
-                  v-if="canManageSecrets && project.source.type !== 'local-folder'"
-                  :model-value="project.source.auth?.secretId || NO_GIT_CREDENTIAL_VALUE"
-                  :disabled="updatingProjectCredentialId === project.id"
-                  :placeholder="t('settings.projectRegistry.noCredential')"
-                  @update:model-value="updateProjectCredential(project, $event)"
-                >
-                  <ControlPlaneSelectItem :value="NO_GIT_CREDENTIAL_VALUE">{{ t("settings.projectRegistry.noCredential") }}</ControlPlaneSelectItem>
-                  <ControlPlaneSelectItem
-                    v-for="credential in managedGitCredentials.data.value || []"
-                    :key="credential.id"
-                    :value="credential.id"
-                    :disabled="credential.status !== 'enabled'"
-                  >
-                    {{ credential.name }}
-                  </ControlPlaneSelectItem>
-                </ControlPlaneSelect>
-                <Badge variant="secondary">{{ projectInUse(project.id) ? t("settings.projectRegistry.inUse") : project.workspacePolicy.mode }}</Badge>
-                <Button variant="outline" size="sm" :disabled="projectInUse(project.id) || deletingProjectId === project.id" @click="removeProject(project)">
-                  <Trash2 :size="14" />
-                  <span>{{ deletingProjectId === project.id ? t("settings.projectRegistry.deleting") : t("common.actions.delete") }}</span>
-                </Button>
-              </div>
-            </div>
-            <p v-if="!(projects.data.value || []).length" class="settings-empty">{{ t("settings.projectRegistry.empty") }}</p>
-            </div>
-          </ScrollArea>
-        </section>
-
-        <section class="modal-section settings-panel-surface">
-          <div class="section-head">
-            <span>{{ t("settings.projectRegistry.addTitle") }}</span>
-          </div>
-          <div class="inline-create">
-            <label>
-              <span>{{ t("settings.fields.name") }}</span>
-              <ControlPlaneInput v-model="settingsProject.name" :placeholder="t('settings.projectRegistry.namePlaceholder')" />
-            </label>
-            <label>
-              <span>{{ t("settings.projectRegistry.gitUrl") }}</span>
-              <!-- i18n-audit-allow-next-line code-token: example Git remote URL -->
-              <ControlPlaneInput v-model="settingsProject.url" placeholder="https://github.com/org/repo" />
-            </label>
-            <label v-if="canManageSecrets">
-              <span>{{ t("settings.projectRegistry.credential") }}</span>
-              <ControlPlaneSelect v-model="settingsGitCredentialValue" :placeholder="t('settings.projectRegistry.noCredential')">
-                <ControlPlaneSelectItem :value="NO_GIT_CREDENTIAL_VALUE">{{ t("settings.projectRegistry.noCredential") }}</ControlPlaneSelectItem>
-                <ControlPlaneSelectItem v-for="credential in enabledManagedGitCredentials" :key="credential.id" :value="credential.id">
-                  {{ credential.name }} · {{ credential.scope.host }}{{ credential.scope.pathPrefix }}
-                </ControlPlaneSelectItem>
-              </ControlPlaneSelect>
-            </label>
-            <label>
-              <span>{{ t("settings.projectRegistry.defaultImage") }}</span>
-              <ControlPlaneSelect v-model="settingsDefaultImageSelectValue" :placeholder="t('settings.projectRegistry.useDefault')">
-                <ControlPlaneSelectItem :value="DEFAULT_SELECT_VALUE">{{ t("settings.projectRegistry.useDefault") }}</ControlPlaneSelectItem>
-                <ControlPlaneSelectItem v-for="image in imageOptions.data.value || []" :key="image.id" :value="image.id">{{ image.name }}</ControlPlaneSelectItem>
-              </ControlPlaneSelect>
-            </label>
-            <Button variant="outline" size="sm" :disabled="!canCreateSettingsProject || creatingSettingsProject" @click="createSettingsProject">
-              <Plus :size="15" />
-              <span>{{ creatingSettingsProject ? t("settings.projectRegistry.creating") : t("settings.projectRegistry.create") }}</span>
-            </Button>
-          </div>
-          <p v-if="settingsProjectSuccess" class="settings-success">{{ settingsProjectSuccess }}</p>
-        </section>
-      </div>
-        </div>
-      </ScrollArea>
+      <ProjectSettingsSection v-else-if="settingsSection === 'projects'" :can-manage-secrets="canManageSecrets" />
 
       <div v-else class="node-management-grid">
         <TooltipProvider :delay-duration="120">
@@ -810,18 +522,16 @@
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useQueryClient } from "@tanstack/vue-query";
-import { Activity, AlertTriangle, ArrowLeft, Check, ChevronDown, ChevronUp, ChevronsUpDown, Download, Eye, EyeOff, KeyRound, Layers, MapPin, MonitorCog, Plus, RefreshCw, Server, Settings, ShieldAlert, Sparkles, Trash2 } from "@lucide/vue";
-import { cancelControlPlaneProxyClaim, claimControlPlaneProxyNode, controlPlaneQueryKeys, downloadControlPlaneDiagnosticLogs, getNodeExternalListener, resumeControlPlaneProxyClaim, updateControlPlaneSettings, updateNodeExternalListener, useAuthSessionQuery, useChatBridgesQuery, useChatGatewayStatusQuery, useControlPlaneSettingsQuery, useCurrentAccessQuery, useGitCredentialsQuery, useImageOptionsQuery, useImagesQuery, useInstanceBoardPayloadQuery, useMarketCatalogQuery, useModelRegistryQuery, useModelsQuery, useNodeImageAvailabilityQuery, useNodeRuntimesPayloadQuery, useNodesQuery, usePendingControlPlaneProxyClaimsQuery, useProjectsQuery, useServerUpdateCheckQuery } from "../../../api/queries";
+import { AlertTriangle, ArrowLeft, ChevronDown, Download, Eye, EyeOff, KeyRound, MonitorCog, Plus, RefreshCw, Server, ShieldAlert, Sparkles, Trash2 } from "@lucide/vue";
+import { cancelControlPlaneProxyClaim, claimControlPlaneProxyNode, controlPlaneQueryKeys, downloadControlPlaneDiagnosticLogs, getNodeExternalListener, resumeControlPlaneProxyClaim, updateControlPlaneSettings, updateNodeExternalListener, useAuthSessionQuery, useChatBridgesQuery, useChatGatewayStatusQuery, useControlPlaneSettingsQuery, useCurrentAccessQuery, useImagesQuery, useInstanceBoardPayloadQuery, useMarketCatalogQuery, useModelsQuery, useNodeImageAvailabilityQuery, useNodeRuntimesPayloadQuery, useNodesQuery, usePendingControlPlaneProxyClaimsQuery, useServerUpdateCheckQuery } from "../../../api/queries";
 import { invalidateControlPlaneDomains } from "../../../api/queryInvalidation";
-import type { BuildInfo, ControlPlaneSettings, InstanceBoardItem, ModelLocation, Node, NodeAgentExternalListener, UpdateChannel } from "../../../api/types";
+import type { BuildInfo, ControlPlaneSettings, InstanceBoardItem, Node, NodeAgentExternalListener, UpdateChannel } from "../../../api/types";
 import { Badge } from "../../../components/ui/badge";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../../components/ui/alert-dialog";
 import { Button } from "../../../components/ui/button";
 import { Checkbox } from "../../../components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
-import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "../../../components/ui/command";
-import { Popover, PopoverContent, PopoverTrigger } from "../../../components/ui/popover";
 import { ScrollArea } from "../../../components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../../components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../../components/ui/tooltip";
@@ -832,12 +542,9 @@ import ControlPlaneTriggersView from "../triggers/ControlPlaneTriggersView.vue";
 import BasicSettingsSection from "./AppearanceSettingsSection.vue";
 import ChatBridgeSettingsSection from "./ChatBridgeSettingsSection.vue";
 import MobileSessionsSettingsSection from "./MobileSessionsSettingsSection.vue";
-import AccountSecuritySettingsSection from "./AccountSecuritySettingsSection.vue";
 import UserAccessSettingsSection from "./UserAccessSettingsSection.vue";
 import { useChatBridgeSettings } from "./useChatBridgeSettings";
 import { useImageSettings } from "./useImageSettings";
-import { useModelSettings } from "./useModelSettings";
-import { useProjectSettings } from "./useProjectSettings";
 import ImageArtwork from "../shared/ImageArtwork.vue";
 import { resolveImageDescription } from "../shared/imageDescription";
 import { useNodeResourceSettings } from "./useNodeResourceSettings";
@@ -852,6 +559,8 @@ import GeneratedTokenDialog from "./GeneratedTokenDialog.vue";
 import EnvironmentTemplatesSettings from "./EnvironmentTemplatesSettings.vue";
 import CloudConnectivitySettingsSection from "./CloudConnectivitySettingsSection.vue";
 import GitCredentialsSettingsSection from "./GitCredentialsSettingsSection.vue";
+import ModelSettingsSection from "./ModelSettingsSection.vue";
+import ProjectSettingsSection from "./ProjectSettingsSection.vue";
 import { nodeEndpointDisplay } from "./nodeEndpointDisplay";
 import { getThemePreference, saveThemePreference, type ThemePreference } from "../../../utils/theme";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
@@ -860,7 +569,7 @@ import { translateApiError } from "../../../i18n/apiError";
 import { normalizeProxyOrigin, proxyClaimForceDeleteAllowed, proxyClaimValidation } from "./controlPlaneProxyUi";
 import type { NodeJoinedEvent } from "@task-handoff/protocol/control-plane";
 
-type SettingsSection = "basic" | "chat" | "images" | "environment-templates" | "projects" | "nodes" | "models" | "git-credentials" | "triggers" | "mobile-sessions" | "account" | "users" | "cloud-connectivity";
+type SettingsSection = "basic" | "chat" | "images" | "environment-templates" | "projects" | "nodes" | "models" | "git-credentials" | "triggers" | "mobile-sessions" | "users" | "cloud-connectivity";
 type NodeDiagnosticLog = {
   route: string;
   method: string;
@@ -885,9 +594,6 @@ const emit = defineEmits<{
 
 const { locale, t } = useI18n();
 
-const DEFAULT_SELECT_VALUE = "__default__";
-const NO_GIT_CREDENTIAL_VALUE = "__none__";
-const modelPickerOpen = ref(false);
 const authSession = useAuthSessionQuery();
 const currentAccess = useCurrentAccessQuery(computed(() => Boolean(authSession.data.value?.enabled && authSession.data.value.authenticated)));
 const canManageUsers = computed(() => currentAccess.data.value?.permissionIds.includes("users:manage") === true);
@@ -903,7 +609,6 @@ const settingsSections = computed<Array<{ id: SettingsSection; label: string }>>
   { id: "triggers", label: t("triggers.title") },
   { id: "chat", label: t("settings.chat") },
   { id: "mobile-sessions", label: t("settings.mobileSessions.navigation") },
-  ...(authSession.data.value?.enabled ? [{ id: "account" as const, label: t("settings.account.navigation") }] : []),
   ...(canManageUsers.value ? [{ id: "users" as const, label: t("settings.userAccess.navigation") }] : []),
   ...(canManageSettings.value ? [{ id: "cloud-connectivity" as const, label: t("settings.cloud.navigation") }] : []),
   { id: "basic", label: t("settings.basic") },
@@ -911,13 +616,8 @@ const settingsSections = computed<Array<{ id: SettingsSection; label: string }>>
 
 const settingsSection = ref<SettingsSection>(props.initialSection || "nodes");
 const queryClient = useQueryClient();
-const projects = useProjectsQuery();
-const managedGitCredentials = useGitCredentialsQuery(computed(() => canManageSecrets.value && settingsSection.value === "projects"));
-const enabledManagedGitCredentials = computed(() => (managedGitCredentials.data.value || []).filter((credential) => credential.status === "enabled"));
 const models = useModelsQuery();
-const modelRegistry = useModelRegistryQuery();
 const images = useImagesQuery();
-const imageOptions = useImageOptionsQuery();
 const marketCatalog = useMarketCatalogQuery();
 const nodes = useNodesQuery();
 const nodeRuntimes = useNodeRuntimesPayloadQuery();
@@ -933,9 +633,6 @@ watch([canManageUsers, canManageSettings, canManageSecrets], ([manageUsers, mana
   if (!manageSettings && settingsSection.value === "cloud-connectivity") setSettingsSection("nodes");
   if (!manageUsers && settingsSection.value === "users") setSettingsSection("nodes");
   if (!manageSecrets && settingsSection.value === "git-credentials") setSettingsSection("nodes");
-}, { immediate: true });
-watch(() => authSession.data.value?.enabled, (enabled) => {
-  if (!enabled && settingsSection.value === "account") setSettingsSection("nodes");
 }, { immediate: true });
 const themePreference = ref<ThemePreference>(getThemePreference());
 const publicBaseUrl = ref("");
@@ -972,7 +669,6 @@ const codexModels = computed(() => (models.data.value || []).filter((model) => m
 const claudeModels = computed(() => (models.data.value || []).filter((model) => model.app === "claude"));
 const nodeRuntimeItems = computed(() => nodeRuntimes.data.value?.data || []);
 const boardItems = computed(() => board.data.value?.data || []);
-const projectIdsInUse = computed(() => new Set(boardItems.value.map((instance) => instance.projectId)));
 const nodeDiagnosticsByNodeId = computed(() => {
   const diagnostics: Record<string, NodeDiagnosticLog[]> = {};
   const seen = new Set<string>();
@@ -1047,9 +743,7 @@ async function refresh() {
   await invalidateControlPlaneDomains(queryClient, ["manual"]);
 }
 
-const refreshProjects = () => invalidateControlPlaneDomains(queryClient, ["projects"]);
 const refreshImages = () => invalidateControlPlaneDomains(queryClient, ["images"]);
-const refreshModels = () => invalidateControlPlaneDomains(queryClient, ["models"]);
 const refreshNodeTopology = () => invalidateControlPlaneDomains(queryClient, ["nodeTopology"]);
 const refreshNodeRuntimeState = () => invalidateControlPlaneDomains(queryClient, ["nodeRuntimeState"]);
 const refreshNodeFolders = () => invalidateControlPlaneDomains(queryClient, ["nodeFolders"]);
@@ -1070,31 +764,6 @@ const chatSettings = useChatBridgeSettings({
   errorText,
   gatewayStatus: chatGatewayStatus.data,
   refresh: refreshChat,
-  translate: t,
-});
-const { clearChatFeedback } = chatSettings;
-const {
-  canCreateSettingsProject,
-  clearDefaultImage,
-  clearProjectFeedback,
-  createSettingsProject,
-  creatingSettingsProject,
-  deletingProjectId,
-  projectSourceLabel,
-  projectCredentialLabel,
-  removeProject,
-  updateProjectCredential,
-  updatingProjectCredentialId,
-  settingsDefaultImageSelectValue,
-  settingsGitCredentialValue,
-  settingsProject,
-  settingsProjectSuccess,
-} = useProjectSettings({
-  errorText,
-  gitCredentials: computed(() => managedGitCredentials.data.value || []),
-  onProjectDeleted() {},
-  projectInUse,
-  refreshProjects,
   translate: t,
 });
 const {
@@ -1245,7 +914,7 @@ const {
 } = useImageSettings({
   errorText,
   images: images.data,
-  onImageDeleted: clearDefaultImage,
+  onImageDeleted() {},
   refreshImages,
   translate: t,
 });
@@ -1257,59 +926,6 @@ function closeImageCreate() {
 async function submitRegistryImage() {
   await createRegistryImageAction();
   if (imageCreateSuccess.value) imageCreateOpen.value = false;
-}
-const {
-  canDiscoverModels,
-  canSaveModel,
-  canTestModel,
-  checkModel,
-  canMoveModel,
-  clearModelFeedback,
-  deletingModelId,
-  discoveredModels,
-  discoveringModels,
-  editModel,
-  editingModelId,
-  formModelBusyId,
-  modelSaveSuccess,
-  modelEndpointFeedback,
-  moveModel,
-  removeModel,
-  resetModelForm,
-  saveModel,
-  savingModelId,
-  selectedNodeSupportsModelEndpointProbe,
-  settingsModel,
-  testingModel,
-  fetchModelOptions,
-} = useModelSettings({
-  errorText,
-  models: () => models.data.value || [],
-  nodes: () => nodes.data.value || [],
-  onModelDeleted() {},
-  refreshModels,
-  translate: t,
-});
-function selectDiscoveredModel(value: unknown) {
-  if (typeof value !== "string") return;
-  settingsModel.model = value;
-  modelPickerOpen.value = false;
-}
-const editingModelLocationCount = computed(() => {
-  const model = (models.data.value || []).find((item) => item.id === editingModelId.value);
-  return model?.locations?.length || 1;
-});
-
-function nodeName(nodeId: string) {
-  return (nodes.data.value || []).find((node) => node.id === nodeId)?.name || nodeId;
-}
-
-function modelLocationKey(location: ModelLocation) {
-  return location.type === "control-plane" ? "control-plane" : `node:${location.nodeId}`;
-}
-
-function modelLocationLabel(location: ModelLocation) {
-  return location.type === "control-plane" ? t("settings.modelRegistry.controlPlane") : nodeName(location.nodeId);
 }
 const {
   addLocalNode,
@@ -1703,10 +1319,7 @@ async function setSettingsSection(section: SettingsSection) {
   settingsSection.value = section;
   emit("section-change", section);
   clearImageFeedback();
-  clearProjectFeedback();
   clearNodeFeedback();
-  clearModelFeedback();
-  clearChatFeedback();
   publicBaseUrlMessage.value = "";
   if (section === "chat") {
     await refreshChat();
@@ -1811,10 +1424,6 @@ function imagePullPolicyLabel(policy: string) {
   return t("common.status.unknownValue", { value: policy });
 }
 
-function projectInUse(projectId: string) {
-  return projectIdsInUse.value.has(projectId);
-}
-
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" ? value as Record<string, unknown> : undefined;
 }
@@ -1907,7 +1516,7 @@ function errorText(error: unknown) {
   min-width: 0;
   height: 100%;
   overflow: hidden;
-  gap: 12px;
+  gap: 18px;
   background:
     radial-gradient(circle at 62% -10%, var(--brand-accent-soft), transparent 28rem),
     var(--surface-inset);
@@ -1920,10 +1529,6 @@ function errorText(error: unknown) {
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
-}
-
-.control-settings-page :deep(.trigger-board) {
-  padding: 12px;
 }
 
 .settings-section-scroll {
@@ -2002,15 +1607,6 @@ function errorText(error: unknown) {
 .image-management-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  align-items: start;
-  gap: 12px;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.project-management-grid {
-  display: grid;
-  grid-template-columns: minmax(280px, 0.9fr) minmax(0, 1.1fr);
   align-items: start;
   gap: 12px;
   min-height: 0;
@@ -2352,13 +1948,11 @@ function errorText(error: unknown) {
 }
 
 .registered-image-list,
-.local-image-list,
-.registered-project-list {
+.local-image-list {
   min-height: 0;
 }
 
-.registered-image-list,
-.registered-project-list {
+.registered-image-list {
   max-height: min(520px, calc(100vh - 270px));
 }
 
@@ -2375,8 +1969,7 @@ function errorText(error: unknown) {
 }
 
 .registered-image-row,
-.local-image-row,
-.registered-project-row {
+.local-image-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   align-items: center;
@@ -2399,16 +1992,14 @@ function errorText(error: unknown) {
 }
 
 .registered-image-row > div:first-child,
-.local-image-row > div:first-child,
-.registered-project-row > div:first-child {
+.local-image-row > div:first-child {
   display: grid;
   min-width: 0;
   gap: 3px;
 }
 
 .registered-image-row strong,
-.local-image-row strong,
-.registered-project-row strong {
+.local-image-row strong {
   overflow: hidden;
   color: var(--text-strong);
   font-size: 13px;
@@ -2418,7 +2009,6 @@ function errorText(error: unknown) {
 
 .registered-image-row code,
 .local-image-row span,
-.registered-project-row code,
 .image-meta-line {
   overflow: hidden;
   color: var(--text-muted);
@@ -2431,415 +2021,6 @@ function errorText(error: unknown) {
   line-height: 1.35;
 }
 
-.model-card {
-  gap: 9px;
-  padding: 12px;
-  transition: border-color 140ms ease, background 140ms ease;
-}
-
-.model-card:hover {
-  border-color: var(--line-strong);
-  background: var(--surface-hover);
-}
-
-.model-card-header,
-.model-card-badges,
-.model-card-meta,
-.model-location-row,
-.model-node-diagnostics-head {
-  display: flex;
-  align-items: center;
-}
-
-.model-card-header {
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.model-card-title {
-  display: grid;
-  min-width: 0;
-  gap: 3px;
-}
-
-.model-card-title strong {
-  font-size: 14px;
-}
-
-.model-card-title code {
-  color: var(--text-muted);
-  font-size: 11px;
-}
-
-.model-card-badges {
-  flex: 0 0 auto;
-  gap: 5px;
-}
-
-.model-card-endpoint {
-  overflow: hidden;
-  color: var(--text-muted);
-  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace);
-  font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.model-card-meta {
-  flex-wrap: wrap;
-  gap: 6px 14px;
-  color: var(--text-muted);
-  font-size: 11px;
-}
-
-.model-location-list {
-  display: grid;
-  gap: 5px;
-  border-top: 1px solid var(--line);
-  padding-top: 8px;
-}
-
-.model-location-row {
-  min-width: 0;
-  gap: 6px;
-  color: var(--text);
-  font-size: 11px;
-}
-
-.model-location-row svg {
-  flex: 0 0 auto;
-  color: var(--text-muted);
-}
-
-.model-location-row span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.model-location-row small {
-  flex: 0 0 auto;
-  color: var(--text-muted);
-  margin-left: auto;
-}
-
-.model-card-actions {
-  border-top: 1px solid var(--line);
-  padding-top: 9px;
-}
-
-.model-card-actions .model-edit-button {
-  margin-left: auto;
-}
-
-:global(.model-location-menu) {
-  min-width: 250px;
-}
-
-:global(.model-location-menu-item) {
-  align-items: flex-start !important;
-  gap: 9px !important;
-  padding-block: 8px !important;
-}
-
-:global(.model-location-menu-item > svg) {
-  color: var(--status-danger);
-  margin-top: 2px;
-}
-
-:global(.model-location-menu-item > span) {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-}
-
-:global(.model-location-menu-item strong),
-:global(.model-location-menu-item small) {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-:global(.model-location-menu-item strong) {
-  color: var(--text-strong);
-  font-size: 12px;
-}
-
-:global(.model-location-menu-item small) {
-  color: var(--text-muted);
-  font-size: 10px;
-}
-
-.model-node-diagnostics {
-  display: grid;
-  gap: 8px;
-  border: 1px solid color-mix(in srgb, var(--status-danger) 35%, var(--line));
-  border-radius: 7px;
-  background: var(--status-danger-bg);
-  color: var(--text);
-  font-size: 11px;
-  padding: 9px;
-}
-
-.model-node-diagnostics-head {
-  gap: 7px;
-}
-
-.model-node-diagnostics-head > svg {
-  flex: 0 0 auto;
-  color: var(--status-danger);
-}
-
-.model-node-diagnostics-head > button {
-  height: 26px;
-  margin-left: auto;
-}
-
-.model-node-diagnostics-head strong {
-  color: var(--text-strong);
-  font-size: 12px;
-}
-
-.model-node-diagnostic-row {
-  display: grid;
-  grid-template-columns: minmax(90px, 0.35fr) minmax(0, 1fr) auto;
-  gap: 8px;
-  border-top: 1px solid color-mix(in srgb, var(--status-danger) 25%, transparent);
-  padding-top: 7px;
-}
-
-.model-node-diagnostic-row strong,
-.model-node-diagnostic-row span,
-.model-node-diagnostic-row code {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.model-node-diagnostic-row code {
-  color: var(--status-danger);
-  font-size: 10px;
-}
-
-.model-form-head {
-  align-items: flex-start;
-}
-
-.model-form-head > div {
-  display: grid;
-  gap: 4px;
-}
-
-.model-form-head small,
-.inline-create label > small {
-  color: var(--text-muted);
-  font-size: 10px;
-  font-weight: 550;
-  line-height: 1.4;
-}
-
-.model-edit-scope {
-  display: grid;
-  gap: 7px;
-}
-
-.model-edit-scope > span {
-  color: var(--text-muted);
-  font-size: 11px;
-  font-weight: 750;
-}
-
-.model-edit-scope > div {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 36px;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  background: var(--surface-inset);
-  color: var(--text-muted);
-  padding: 0 10px;
-}
-
-.model-edit-scope strong {
-  color: var(--text);
-  font-size: 12px;
-}
-
-.model-submit {
-  flex: 1 1 auto;
-}
-
-.model-field {
-  display: grid;
-  gap: 7px;
-}
-
-.model-field > small {
-  color: var(--text-muted);
-  font-size: 12px;
-  line-height: 1.4;
-}
-
-.model-field-head,
-.model-input-row,
-.model-form-actions {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-}
-
-.model-field-head {
-  justify-content: space-between;
-  color: var(--text-muted);
-  font-size: 12px;
-  font-weight: 750;
-}
-
-.model-field-head button {
-  min-height: 26px;
-  height: 26px;
-  padding-inline: 7px;
-  font-size: 12px;
-}
-
-.model-input-row > :first-child {
-  min-width: 0;
-  flex: 1 1 auto;
-}
-
-.model-picker-trigger {
-  width: 34px;
-  min-width: 34px;
-  padding: 0;
-}
-
-:global(.model-picker-popover) {
-  display: grid;
-  grid-template-rows: minmax(0, 1fr);
-  width: min(360px, var(--reka-popover-content-available-width));
-  height: min(360px, var(--reka-popover-content-available-height));
-  overflow: hidden;
-  border-color: var(--line);
-  background: var(--surface-raised);
-  padding: 4px;
-}
-
-.model-picker-command {
-  display: grid;
-  min-height: 0;
-  grid-template-rows: auto minmax(0, 1fr);
-  border-radius: 7px;
-  background: transparent;
-}
-
-.model-picker-command :deep([cmdk-input-wrapper]) {
-  height: 34px;
-  gap: 7px;
-  margin: 2px 2px 4px;
-  border: 1px solid var(--line-subtle);
-  border-radius: 7px;
-  background: var(--surface-inset);
-  padding: 0 9px;
-}
-
-.model-picker-command :deep([cmdk-input-wrapper]:focus-within) {
-  border-color: var(--focus-ring);
-}
-
-.model-picker-command :deep([cmdk-input-wrapper] > svg) {
-  width: 14px;
-  height: 14px;
-  margin-right: 0;
-}
-
-.model-picker-search-input {
-  height: 32px;
-  padding: 0;
-  font-size: 12px;
-}
-
-.model-picker-scroll {
-  min-height: 0;
-  max-height: none;
-}
-
-.model-picker-scroll :deep([data-task-handoff-scroll-viewport]) {
-  padding-right: 8px;
-}
-
-.model-picker-list {
-  max-height: none;
-  overflow: visible;
-}
-
-.model-picker-group {
-  padding: 0;
-}
-
-.model-picker-option {
-  min-height: 32px;
-  border-radius: 6px;
-  cursor: pointer;
-  padding: 5px 8px;
-  font-size: 12px;
-}
-
-.model-picker-option:hover,
-.model-picker-option:focus-visible,
-.model-picker-option[data-highlighted] {
-  background: var(--surface-active);
-  color: var(--text-strong);
-}
-
-.model-picker-option[data-state="checked"] {
-  background: var(--surface-active);
-  color: var(--status-success);
-}
-
-.model-picker-option > span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.model-picker-option > span + svg {
-  margin-left: auto;
-}
-
-.model-picker-popover small {
-  margin-left: auto;
-  color: var(--text-muted);
-  font-size: 11px;
-}
-
-.model-option-unselected {
-  opacity: 0;
-}
-
-.model-endpoint-feedback {
-  margin: 0;
-  color: var(--status-success);
-  font-size: 12px;
-  line-height: 1.45;
-}
-
-.model-endpoint-feedback[data-kind="error"] {
-  color: var(--status-danger);
-}
-
-.model-form-actions > button:first-child {
-  flex: 0 0 auto;
-}
-
-.spin {
-  animation: spin 0.8s linear infinite;
-}
-
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
 
 .checkbox-row,
 .project-model-picker {
@@ -3224,6 +2405,13 @@ function errorText(error: unknown) {
   gap: 9px;
 }
 
+.inline-create label > small {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
 .settings-empty,
 .settings-success,
 .control-plane-error {
@@ -3292,7 +2480,6 @@ function errorText(error: unknown) {
     grid-template-columns: 1fr;
   }
   .image-management-grid,
-  .project-management-grid,
   .node-management-grid {
     grid-template-columns: 1fr;
   }

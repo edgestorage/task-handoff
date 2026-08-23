@@ -1,7 +1,7 @@
 import { computed, reactive, ref, watch } from "vue";
 import { createModel, createNodeModel, deleteModel, deleteNodeModel, discoverModels, reorderModels, testModel, updateModel, updateNodeModel } from "../../../api/queries";
 import type { DiscoveredModel, ModelApp, ModelConfig, ModelLocation, Node } from "../../../api/types";
-import { showControlPlaneToast } from "../useControlPlaneToasts";
+import { showControlPlaneToast, showDelayedControlPlaneLoadingToast } from "../useControlPlaneToasts";
 import type { Translate } from "../../../i18n/status.ts";
 import { translateApiError } from "../../../i18n/apiError.ts";
 
@@ -23,7 +23,6 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
   const discoveredModels = ref<DiscoveredModel[]>([]);
   const discoveringModels = ref(false);
   const testingModel = ref(false);
-  const modelEndpointFeedback = ref<{ kind: "success" | "error"; text: string }>();
   const settingsModel = reactive({
     name: "",
     endpoint: "",
@@ -33,6 +32,10 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
     enabled: true,
     locationScope: "control-plane",
   });
+  const initialDraft = ref("");
+  const serializeDraft = () => JSON.stringify({ ...settingsModel });
+  initialDraft.value = serializeDraft();
+  const modelDraftDirty = computed(() => serializeDraft() !== initialDraft.value);
 
   const formModelBusyId = computed(() => editingModelId.value || "__new_model__");
   const selectedNodeSupportsModelEndpointProbe = computed(() => {
@@ -66,20 +69,13 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
 
   function clearModelFeedback() {
     modelSaveSuccess.value = "";
-    modelEndpointFeedback.value = undefined;
   }
 
   watch(
     () => [settingsModel.endpoint, settingsModel.key, settingsModel.locationScope, editingModelId.value],
     () => {
       discoveredModels.value = [];
-      modelEndpointFeedback.value = undefined;
     },
-  );
-
-  watch(
-    () => [settingsModel.model, settingsModel.app],
-    () => { modelEndpointFeedback.value = undefined; },
   );
 
   function endpointDraft() {
@@ -97,19 +93,19 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
   async function fetchModelOptions() {
     if (!canDiscoverModels.value || discoveringModels.value) return;
     discoveringModels.value = true;
-    modelEndpointFeedback.value = undefined;
+    const loadingToast = showDelayedControlPlaneLoadingToast(t("settings.modelRegistry.discovering"));
     try {
       const result = await discoverModels(endpointDraft(), endpointNodeId());
       discoveredModels.value = result.models;
-      modelEndpointFeedback.value = {
-        kind: "success",
-        text: result.models.length
-          ? t("settings.modelRegistry.discovered", { count: result.models.length, latency: result.latencyMs })
-          : t("settings.modelRegistry.discoveredEmpty", { latency: result.latencyMs }),
-      };
+      loadingToast.dismiss();
+      showControlPlaneToast(result.models.length
+        ? t("settings.modelRegistry.discovered", { count: result.models.length, latency: result.latencyMs })
+        : t("settings.modelRegistry.discoveredEmpty", { latency: result.latencyMs }), "success");
     } catch (error) {
-      modelEndpointFeedback.value = { kind: "error", text: translateError(error) };
+      loadingToast.dismiss();
+      showControlPlaneToast(translateError(error));
     } finally {
+      loadingToast.dismiss();
       discoveringModels.value = false;
     }
   }
@@ -117,17 +113,20 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
   async function checkModel() {
     if (!canTestModel.value || testingModel.value) return;
     testingModel.value = true;
-    modelEndpointFeedback.value = undefined;
+    const loadingToast = showDelayedControlPlaneLoadingToast(t("settings.modelRegistry.testing"));
     try {
       const result = await testModel({
         ...endpointDraft(),
         model: settingsModel.model.trim(),
         app: settingsModel.app,
       }, endpointNodeId());
-      modelEndpointFeedback.value = { kind: "success", text: t("settings.modelRegistry.testSucceeded", { latency: result.latencyMs }) };
+      loadingToast.dismiss();
+      showControlPlaneToast(t("settings.modelRegistry.testSucceeded", { latency: result.latencyMs }), "success");
     } catch (error) {
-      modelEndpointFeedback.value = { kind: "error", text: translateError(error) };
+      loadingToast.dismiss();
+      showControlPlaneToast(translateError(error));
     } finally {
+      loadingToast.dismiss();
       testingModel.value = false;
     }
   }
@@ -141,6 +140,8 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
     settingsModel.app = "codex";
     settingsModel.enabled = true;
     settingsModel.locationScope = "control-plane";
+    clearModelFeedback();
+    initialDraft.value = serializeDraft();
   }
 
   function editModel(model: ModelConfig) {
@@ -154,11 +155,12 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
     const location = model.locations?.find((item) => item.type === "control-plane") || model.locations?.find((item) => item.type === "node");
     settingsModel.locationScope = location?.type === "node" ? location.nodeId : "control-plane";
     clearModelFeedback();
+    initialDraft.value = serializeDraft();
   }
 
-  async function saveModel() {
+  async function saveModel(): Promise<boolean> {
     if (!canSaveModel.value || savingModelId.value) {
-      return;
+      return false;
     }
     const busyId = formModelBusyId.value;
     savingModelId.value = busyId;
@@ -192,25 +194,21 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
           ? await createModel({ ...payload, key: settingsModel.key.trim() })
           : await createNodeModel(settingsModel.locationScope, { ...payload, key: settingsModel.key.trim() });
       }
-      modelSaveSuccess.value = t("settings.modelRegistry.saved", { name: saved.name });
       resetModelForm();
+      modelSaveSuccess.value = t("settings.modelRegistry.saved", { name: saved.name });
       if (!refreshed) await refreshModels();
+      return true;
     } catch (error) {
       showControlPlaneToast(translateError(error));
+      return false;
     } finally {
       savingModelId.value = "";
     }
   }
 
-  async function removeModel(model: ModelConfig, location: ModelLocation) {
+  async function removeModel(model: ModelConfig, location: ModelLocation): Promise<boolean> {
     if (deletingModelId.value) {
-      return;
-    }
-    const locationName = location.type === "control-plane"
-      ? t("settings.modelRegistry.controlPlane")
-      : nodes().find((node) => node.id === location.nodeId)?.name || location.nodeId;
-    if (!window.confirm(t("settings.modelRegistry.deleteConfirm", { name: model.name, location: locationName }))) {
-      return;
+      return false;
     }
     deletingModelId.value = model.id;
     clearModelFeedback();
@@ -222,8 +220,10 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
       }
       onModelDeleted(model.id);
       await refreshModels();
+      return true;
     } catch (error) {
       showControlPlaneToast(translateError(error));
+      return false;
     } finally {
       deletingModelId.value = "";
     }
@@ -271,7 +271,7 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
     editingModelId,
     formModelBusyId,
     modelSaveSuccess,
-    modelEndpointFeedback,
+    modelDraftDirty,
     moveModel,
     removeModel,
     resetModelForm,

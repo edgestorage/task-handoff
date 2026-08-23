@@ -88,6 +88,7 @@ export class ControlPlaneIdentityService {
           authorization: {
             customRoles: true,
             nodeScopes: true,
+            instanceScopes: true,
             authorizationRevisions: true,
           },
         },

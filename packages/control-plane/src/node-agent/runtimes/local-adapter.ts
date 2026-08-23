@@ -34,6 +34,16 @@ function localWorkspacePath(instance: ControlledInstance) {
   return path.resolve(instance.source.path);
 }
 
+export function localGitBrokerDirectoryPrefix(
+  instanceId: string,
+  platform = process.platform,
+  temporaryDirectory = os.tmpdir(),
+) {
+  const temporaryRoot = platform === "darwin" ? "/private/tmp" : temporaryDirectory;
+  const instanceHash = crypto.createHash("sha256").update(instanceId).digest("hex").slice(0, 12);
+  return path.join(temporaryRoot, `th-git-${instanceHash}-`);
+}
+
 export function configuredLocalControlledCommand() {
   const value = process.env.TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND_ARGV?.trim();
   if (!value) {
@@ -132,7 +142,7 @@ export class LocalhostRuntimeAdapter implements RuntimeAdapter {
     const errPath = path.join(logDir, "controlled-instance.err.log");
     copyTruncateOpenLog(outPath);
     copyTruncateOpenLog(errPath);
-    const gitBrokerDir = fs.mkdtempSync(path.join(os.tmpdir(), `task-handoff-git-proxy-${context.instance.id}-`));
+    const gitBrokerDir = fs.mkdtempSync(localGitBrokerDirectoryPrefix(context.instance.id));
     fs.chmodSync(gitBrokerDir, 0o700);
     const out = fs.openSync(outPath, "a", 0o600);
     const err = fs.openSync(errPath, "a", 0o600);

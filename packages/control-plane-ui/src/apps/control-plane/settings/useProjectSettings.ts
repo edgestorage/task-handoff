@@ -6,8 +6,8 @@ import { showControlPlaneToast } from "../useControlPlaneToasts";
 import type { Translate } from "../../../i18n/status.ts";
 import { translateApiError } from "../../../i18n/apiError.ts";
 
-const DEFAULT_SELECT_VALUE = "__default__";
-const NO_GIT_CREDENTIAL_VALUE = "__none__";
+export const DEFAULT_SELECT_VALUE = "__default__";
+export const NO_GIT_CREDENTIAL_VALUE = "__none__";
 
 type UseProjectSettingsInput = {
   errorText: (error: unknown) => string;
@@ -23,7 +23,6 @@ export function useProjectSettings({ errorText, gitCredentials, onProjectDeleted
   const creatingSettingsProject = ref(false);
   const deletingProjectId = ref("");
   const updatingProjectCredentialId = ref("");
-  const settingsProjectSuccess = ref("");
   const settingsProject = reactive({
     name: "",
     url: "",
@@ -48,8 +47,11 @@ export function useProjectSettings({ errorText, gitCredentials, onProjectDeleted
     set: (value: string) => { settingsProject.gitCredentialId = value; },
   });
 
-  function clearProjectFeedback() {
-    settingsProjectSuccess.value = "";
+  function resetProjectForm() {
+    settingsProject.name = "";
+    settingsProject.url = "";
+    settingsProject.gitCredentialId = NO_GIT_CREDENTIAL_VALUE;
+    settingsProject.defaultImageSelection = undefined;
   }
 
   function clearDefaultImage(imageId: string) {
@@ -58,12 +60,11 @@ export function useProjectSettings({ errorText, gitCredentials, onProjectDeleted
     }
   }
 
-  async function createSettingsProject() {
+  async function createSettingsProject(): Promise<boolean> {
     if (!canCreateSettingsProject.value || creatingSettingsProject.value) {
-      return;
+      return false;
     }
     creatingSettingsProject.value = true;
-    clearProjectFeedback();
     try {
       const credential = gitCredentials.value.find((item) => item.id === settingsProject.gitCredentialId && item.status === "enabled");
       const project = await createProject({
@@ -77,33 +78,32 @@ export function useProjectSettings({ errorText, gitCredentials, onProjectDeleted
         },
         ...(settingsProject.defaultImageSelection ? { defaultImageSelection: settingsProject.defaultImageSelection } : {}),
       });
-      settingsProjectSuccess.value = t("settings.projectRegistry.created", { name: project.name });
-      settingsProject.name = "";
-      settingsProject.url = "";
-      settingsProject.gitCredentialId = NO_GIT_CREDENTIAL_VALUE;
-      settingsProject.defaultImageSelection = undefined;
+      showControlPlaneToast(t("settings.projectRegistry.created", { name: project.name }), "success");
+      resetProjectForm();
       await refreshProjects();
+      return true;
     } catch (error) {
       showControlPlaneToast(translateError(error));
+      return false;
     } finally {
       creatingSettingsProject.value = false;
     }
   }
 
-  async function removeProject(project: { id: string; name: string }) {
+  async function removeProject(project: { id: string; name: string }): Promise<boolean> {
     if (projectInUse(project.id) || deletingProjectId.value) {
-      return;
-    }
-    if (!window.confirm(t("settings.projectRegistry.deleteConfirm", { name: project.name }))) {
-      return;
+      return false;
     }
     deletingProjectId.value = project.id;
     try {
       await deleteProject(project.id);
       onProjectDeleted(project.id);
       await refreshProjects();
+      showControlPlaneToast(t("settings.projectRegistry.deleted", { name: project.name }), "success");
+      return true;
     } catch (error) {
       showControlPlaneToast(translateError(error));
+      return false;
     } finally {
       deletingProjectId.value = "";
     }
@@ -115,10 +115,10 @@ export function useProjectSettings({ errorText, gitCredentials, onProjectDeleted
     const auth = credential ? { type: credential.kind, secretId: credential.id } as const : { type: "none" as const };
     if ((project.source.auth?.secretId || NO_GIT_CREDENTIAL_VALUE) === (credential?.id || NO_GIT_CREDENTIAL_VALUE)) return;
     updatingProjectCredentialId.value = project.id;
-    clearProjectFeedback();
     try {
       await updateProject(project.id, { source: { ...project.source, auth } });
       await refreshProjects();
+      showControlPlaneToast(t("settings.projectRegistry.credentialUpdated"), "success");
     } catch (error) {
       showControlPlaneToast(translateError(error));
     } finally {
@@ -139,18 +139,17 @@ export function useProjectSettings({ errorText, gitCredentials, onProjectDeleted
   return {
     canCreateSettingsProject,
     clearDefaultImage,
-    clearProjectFeedback,
     createSettingsProject,
     creatingSettingsProject,
     deletingProjectId,
     projectSourceLabel,
     projectCredentialLabel,
+    resetProjectForm,
     removeProject,
     updateProjectCredential,
     updatingProjectCredentialId,
     settingsDefaultImageSelectValue,
     settingsGitCredentialValue,
     settingsProject,
-    settingsProjectSuccess,
   };
 }

@@ -63,6 +63,8 @@ function fixture(retention, deployedStatus = "deferred") {
     markAssignmentStatus: (_instanceId, _credentialId, status) => { calls.push(`status:${status}`); },
     desiredAuthorizationSet: (instanceId) => ({ instanceId, generation: 1, credentialIds: [payload.credential.id], updatedAt: timestamp }),
     revoke: () => { calls.push("revoke"); },
+    rememberOperationProvisioning: () => { calls.push("remember-provisioning"); },
+    forgetOperationProvisioning: () => { calls.push("forget-provisioning"); },
   };
   const gateway = {
     createInstance: async (_node, input) => { calls.push("create"); createdInputs.push(input); return instance; },
@@ -70,7 +72,13 @@ function fixture(retention, deployedStatus = "deferred") {
     removeGitCredential: async () => { calls.push("remove-payload"); },
     replaceGitCredentialAuthorizations: async () => { calls.push("authorizations"); },
     assignInstanceModels: async () => { calls.push("models"); return { instance }; },
-    deleteInstance: async () => undefined,
+    startInstance: async (_node, _instanceId, input) => {
+      calls.push("start");
+      createdInputs.push(input);
+      return { instance, gitWorkspaceProvisioningOperationId: input.gitWorkspaceProvisioning?.operationId };
+    },
+    deleteInstance: async () => ({ completed: true }),
+    listInstances: async () => [],
   };
   const creator = new ControlledInstanceCreator({
     gateway,
@@ -108,7 +116,7 @@ function fixture(retention, deployedStatus = "deferred") {
     start: false,
     ...overrides,
   });
-  return { calls, createdInputs, repository, run };
+  return { calls, createdInputs, repository, instance, gateway, run };
 }
 
 test("Repository credential defaults to one operation-only provisioning grant without an assignment", async () => {
@@ -117,7 +125,14 @@ test("Repository credential defaults to one operation-only provisioning grant wi
   assert.equal(state.createdInputs[0].gitWorkspaceProvisioning.credentials[0].retention, "operation-only");
   assert.deepEqual(state.createdInputs[0].source.auth, { type: "none" });
   assert.deepEqual(state.createdInputs[0].sourceSnapshot.source.auth, { type: "none" });
-  assert.deepEqual(state.calls, ["create", "models"]);
+  assert.deepEqual(state.calls, ["remember-provisioning", "create", "models"]);
+});
+
+test("operation-only provisioning is reissued on immediate start", async () => {
+  const state = fixture("operation-only");
+  await state.run({ start: true });
+  assert.equal(state.createdInputs[1].gitWorkspaceProvisioning.credentials[0].payload.secret.token, "creation-secret");
+  assert.deepEqual(state.calls, ["remember-provisioning", "create", "models", "start", "forget-provisioning"]);
 });
 
 test("invalid historical Repository credential reference fails without a client override", async () => {
@@ -127,9 +142,44 @@ test("invalid historical Repository credential reference fails without a client 
   assert.deepEqual(state.calls, []);
 });
 
-test("retained creation deploys payload before the atomic authorization set", async () => {
+test("retained creation deploys payload after instance confirmation and before the atomic authorization set", async () => {
   const state = fixture("instance-retained", "deferred");
   await state.run();
-  assert.equal(state.createdInputs[0].gitWorkspaceProvisioning.credentials[0].retention, "instance-retained");
-  assert.deepEqual(state.calls, ["payload", "create", "authorize", "authorizations", "status:synced", "models"]);
+  assert.equal(state.createdInputs[0].gitWorkspaceProvisioning, undefined);
+  assert.deepEqual(state.calls, ["create", "payload", "authorize", "authorizations", "status:synced", "models"]);
+});
+
+test("retained immediate start resolves from the authorization set instead of reissuing a secret snapshot", async () => {
+  const state = fixture("instance-retained");
+  await state.run({ start: true });
+  assert.deepEqual(state.createdInputs[1], {});
+  assert.equal(state.calls.includes("forget-provisioning"), false);
+});
+
+test("an ambiguous create response reconciles the caller-assigned instance id", async () => {
+  const state = fixture("operation-only");
+  state.gateway.createInstance = async () => { state.calls.push("create:response-lost"); throw new Error("response lost"); };
+  state.gateway.listInstances = async () => { state.calls.push("list"); return [state.instance]; };
+  const result = await state.run();
+  assert.equal(result.id, state.instance.id);
+  assert.deepEqual(state.calls, ["remember-provisioning", "create:response-lost", "list", "models"]);
+});
+
+test("uncertain create compensation is reported and preserves the operation intent", async () => {
+  const state = fixture("operation-only");
+  state.gateway.createInstance = async () => { throw new Error("response lost"); };
+  state.gateway.listInstances = async () => { throw new Error("node unavailable"); };
+  state.gateway.deleteInstance = async () => ({ completed: false });
+  await assert.rejects(
+    () => state.run(),
+    (error) => error.code === "INSTANCE_CREATE_COMPENSATION_REQUIRED",
+  );
+  assert.equal(state.calls.includes("forget-provisioning"), false);
+});
+
+test("a lost retained payload response still triggers payload cleanup", async () => {
+  const state = fixture("instance-retained");
+  state.gateway.deployGitCredential = async () => { state.calls.push("payload:response-lost"); throw new Error("response lost"); };
+  await assert.rejects(() => state.run(), /response lost/);
+  assert.deepEqual(state.calls, ["create", "payload:response-lost", "remove-payload"]);
 });

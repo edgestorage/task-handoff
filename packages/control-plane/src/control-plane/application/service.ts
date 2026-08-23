@@ -1139,6 +1139,10 @@ export class ControlPlaneService {
     return this.controlledInstanceCreator.create(input);
   }
 
+  resolveControlledInstanceTargetNodeId(input: unknown) {
+    return this.controlledInstanceCreator.targetNodeId(input);
+  }
+
   async updateControlledInstance(id: string, input: unknown) {
     const parsedInput: UpdateInstanceInput = UpdateInstanceInputSchema.parse(input);
     const current = await this.requireNodeInstance(id);
@@ -1196,8 +1200,12 @@ export class ControlPlaneService {
     const current = await this.requireNodeInstance(id);
     const node = this.requireNode(current.nodeId);
     await this.modelService.ensureInstanceAssignment(current);
-    const instance = await this.nodeAgentGateway.startInstance(node, id);
-    return publicInstanceWithAccess(instance);
+    const gitWorkspaceProvisioning = this.gitCredentials.operationProvisioning(id);
+    const result = await this.nodeAgentGateway.startInstance(node, id, gitWorkspaceProvisioning ? { gitWorkspaceProvisioning } : {});
+    if (gitWorkspaceProvisioning && result.gitWorkspaceProvisioningOperationId === gitWorkspaceProvisioning.operationId) {
+      this.gitCredentials.forgetOperationProvisioning(id);
+    }
+    return publicInstanceWithAccess(result.instance);
   }
 
   async stopControlledInstance(id: string) {
@@ -1211,8 +1219,12 @@ export class ControlPlaneService {
     const current = await this.requireNodeInstance(id);
     const node = this.requireNode(current.nodeId);
     await this.modelService.ensureInstanceAssignment(current);
-    const instance = await this.nodeAgentGateway.restartInstance(node, id);
-    return publicInstanceWithAccess(instance);
+    const gitWorkspaceProvisioning = this.gitCredentials.operationProvisioning(id);
+    const result = await this.nodeAgentGateway.restartInstance(node, id, gitWorkspaceProvisioning ? { gitWorkspaceProvisioning } : {});
+    if (gitWorkspaceProvisioning && result.gitWorkspaceProvisioningOperationId === gitWorkspaceProvisioning.operationId) {
+      this.gitCredentials.forgetOperationProvisioning(id);
+    }
+    return publicInstanceWithAccess(result.instance);
   }
 
   async retryControlledInstanceImageProvisioning(id: string) {
@@ -1937,8 +1949,8 @@ export class ControlPlaneService {
     return includeSecret ? record : publicInstanceWithAccess(record);
   }
 
-  requireControlledInstanceForAuthorization(id: string, allowedNodeIds: ReadonlySet<string>) {
-    const nodes = this.listNodes().filter((node) => allowedNodeIds.has(node.id));
+  requireControlledInstanceForAuthorization(id: string, allowedNodeIds?: ReadonlySet<string>) {
+    const nodes = allowedNodeIds ? this.listNodes().filter((node) => allowedNodeIds.has(node.id)) : this.listNodes();
     const instance = this.nodeAgentGateway.instanceFromSnapshot(nodes, id);
     if (!instance) throwNotFound("CONTROLLED_INSTANCE_NOT_FOUND", `Controlled instance ${id} was not found.`);
     return publicInstanceWithAccess(instance);

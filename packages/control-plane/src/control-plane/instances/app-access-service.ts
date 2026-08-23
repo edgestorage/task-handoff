@@ -13,7 +13,6 @@ export type AppAccessToken = {
   authorization?: {
     userId: string;
     authorizationRevision: number;
-    nodeId: string;
   };
 };
 
@@ -60,7 +59,7 @@ export class AppAccessService {
     ttlMs?: number;
     authorization?: { userId: string; authorizationRevision: number };
   }) {
-    const instance = await this.requireInstance(input.instanceId);
+    await this.requireInstance(input.instanceId);
     const session = await this.requireSession(input.instanceId, input.sessionId);
     const mode = appSessionAccessMode(session);
     if (mode !== "vnc") {
@@ -78,9 +77,7 @@ export class AppAccessService {
       sessionId: input.sessionId,
       ttlMs: input.ttlMs,
       mode,
-      ...(input.authorization ? {
-        authorization: { ...input.authorization, nodeId: instance.nodeId },
-      } : {}),
+      ...(input.authorization ? { authorization: input.authorization } : {}),
     });
   }
 

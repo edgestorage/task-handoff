@@ -7,7 +7,7 @@ import type { NodeAgentRegistrationClient } from "./node-agent-client.ts";
 import { parseGitSshInvocation, remoteFromHttpsCredentialRequest, runSsh } from "./git-transport.ts";
 
 type BrokerResponse = Record<string, unknown> & { status: string };
-type LocalSshInvocation = { server: net.Server; directory: string; invocationId: string };
+type LocalSshInvocation = { server: net.Server; sockets: Set<net.Socket>; directory: string; invocationId: string };
 
 function brokerError(code: string, message: string) {
   return Object.assign(new Error(message), { code, statusCode: 409 });
@@ -26,6 +26,7 @@ function safeSocketPath(value: string | undefined) {
 
 export class GitCredentialBroker {
   private server?: net.Server;
+  private readonly sockets = new Set<net.Socket>();
   private requestCount = 0;
   private readonly sshInvocations = new Map<string, LocalSshInvocation>();
   readonly socketPath: string;
@@ -57,10 +58,15 @@ export class GitCredentialBroker {
     fs.chmodSync(this.runtimeDir, 0o700);
     fs.rmSync(this.socketPath, { force: true });
     this.server = net.createServer({ allowHalfOpen: true }, (socket) => {
+      this.trackSocket(this.sockets, socket);
       let input = "";
       socket.setEncoding("utf8");
       socket.on("data", (chunk) => { input += chunk; if (input.length > 1024 * 1024) socket.destroy(); });
-      socket.on("end", () => { void this.handleWireRequest(input).then((response) => socket.end(`${JSON.stringify(response)}\n`)); });
+      socket.on("end", () => {
+        void this.handleWireRequest(input).then((response) => {
+          if (!socket.destroyed) socket.end(`${JSON.stringify(response)}\n`);
+        });
+      });
     });
     await new Promise<void>((resolve, reject) => {
       this.server!.once("error", reject);
@@ -73,11 +79,18 @@ export class GitCredentialBroker {
     for (const id of [...this.sshInvocations.keys()]) await this.releaseSshInvocation(id);
     const server = this.server;
     this.server = undefined;
+    for (const socket of this.sockets) socket.destroy();
     if (server) await new Promise<void>((resolve) => server.close(() => resolve()));
     fs.rmSync(this.socketPath, { force: true });
   }
 
   private client() { return this.options.nodeAgentClient?.(); }
+
+  private trackSocket(sockets: Set<net.Socket>, socket: net.Socket) {
+    sockets.add(socket);
+    socket.on("error", () => undefined);
+    socket.once("close", () => sockets.delete(socket));
+  }
 
   private async handleWireRequest(input: string): Promise<BrokerResponse> {
     this.requestCount += 1;
@@ -119,13 +132,17 @@ export class GitCredentialBroker {
     const directory = fs.mkdtempSync(path.join(this.runtimeDir, "ssh-"));
     fs.chmodSync(directory, 0o700);
     const socketPath = path.join(directory, "agent.sock");
-    const server = net.createServer((socket) => proxyAgentConnection(socket, (frame) => client.exchangeGitSshAgent(invocationId, frame.toString("base64"))));
+    const sockets = new Set<net.Socket>();
+    const server = net.createServer((socket) => {
+      this.trackSocket(sockets, socket);
+      proxyAgentConnection(socket, (frame) => client.exchangeGitSshAgent(invocationId, frame.toString("base64")));
+    });
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
       server.listen(socketPath, () => resolve());
     });
     fs.chmodSync(socketPath, 0o600);
-    const value = { server, directory, invocationId };
+    const value = { server, sockets, directory, invocationId };
     this.sshInvocations.set(invocationId, value);
     return value;
   }
@@ -133,7 +150,10 @@ export class GitCredentialBroker {
   private async releaseSshInvocation(invocationId: string) {
     const invocation = this.sshInvocations.get(invocationId);
     this.sshInvocations.delete(invocationId);
-    if (invocation) await new Promise<void>((resolve) => invocation.server.close(() => resolve()));
+    if (invocation) {
+      for (const socket of invocation.sockets) socket.destroy();
+      await new Promise<void>((resolve) => invocation.server.close(() => resolve()));
+    }
     if (invocation) fs.rmSync(invocation.directory, { recursive: true, force: true });
     const client = this.client();
     if (client) await client.releaseGitSsh(invocationId).catch(() => undefined);
@@ -251,7 +271,7 @@ export async function runGitSshAskpass() {
 }
 
 export function installGitBrokerEnvironment(cliPath: string | undefined, socketPath: string) {
-  if (!cliPath) return;
+  if (!cliPath) return false;
   const count = Number(process.env.GIT_CONFIG_COUNT || 0);
   process.env.TASK_HANDOFF_GIT_ORIGINAL_CONFIG_COUNT = String(count);
   process.env.GIT_CONFIG_COUNT = String(count + 4);
@@ -264,4 +284,5 @@ export function installGitBrokerEnvironment(cliPath: string | undefined, socketP
   process.env[`GIT_CONFIG_KEY_${count + 3}`] = "core.sshCommand";
   process.env[`GIT_CONFIG_VALUE_${count + 3}`] = `node ${JSON.stringify(cliPath)} git-ssh`;
   process.env.TASK_HANDOFF_GIT_CREDENTIAL_SOCKET = socketPath;
+  return true;
 }

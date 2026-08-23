@@ -101,13 +101,13 @@ export class ControlPlaneUserAuthentication {
     const sourceId = context.sourceId?.trim() || "unknown";
     this.limiter.begin(sourceId, loginName);
     try {
-      const identity = this.users.store.identities.list().find((candidate) => candidate.kind === "local-password" && candidate.normalizedLoginName === loginName);
+      const identity = await this.users.store.identities.findByLoginName(loginName);
       const valid = identity ? await verifyControlPlanePassword(parsed.password, identity.passwordHash || "") : false;
       if (!identity || !valid) {
         this.limiter.failure(sourceId, loginName);
         throw Object.assign(new Error("Invalid username or password."), { code: "AUTH_LOGIN_FAILED", statusCode: 401 });
       }
-      const user = this.users.store.users.get(identity.userId);
+      const user = await this.users.store.users.get(identity.userId);
       if (!user || user.status !== "active") {
         this.limiter.failure(sourceId, loginName);
         throw Object.assign(new Error("Invalid username or password."), { code: "AUTH_LOGIN_FAILED", statusCode: 401 });
@@ -130,11 +130,17 @@ export class ControlPlaneUserAuthentication {
     const timestamp = now();
     const secret = createSecret();
     const created = await this.users.store.transaction(async (repository) => {
-      const identity = repository.identities.get(identityId);
+      const identity = await repository.identities.get(identityId);
       if (!identity) throw Object.assign(new Error("Login identity was not found."), { code: "CONTROL_PLANE_IDENTITY_NOT_FOUND", statusCode: 404 });
-      const authorization = this.users.authorization(identity.userId, repository);
+      if (clientType === "mobile" && identity.requiresPasswordChange === true) {
+        throw Object.assign(new Error("Change the temporary password in the Control Plane before signing in on mobile."), {
+          code: "AUTH_PASSWORD_CHANGE_REQUIRED",
+          statusCode: 403,
+        });
+      }
+      const authorization = await this.users.authorization(identity.userId, repository);
       if (activity.loginAt) {
-        const user = repository.users.get(identity.userId)!;
+        const user = (await repository.users.get(identity.userId))!;
         await repository.users.put({ ...user, lastLoginAt: activity.loginAt, updatedAt: activity.loginAt });
         await repository.identities.put({ ...identity, lastUsedAt: activity.loginAt, updatedAt: activity.loginAt });
       }
@@ -157,8 +163,8 @@ export class ControlPlaneUserAuthentication {
     return {
       sessionToken: `${record.id}.${secret}`,
       expiresAt: record.expiresAt,
-      session: this.publicSession(record.id),
-      user: this.users.detail(identity.userId),
+      session: await this.publicSession(record.id),
+      user: await this.users.detail(identity.userId),
       authorization: ControlPlaneCurrentAuthorizationSchema.parse({ ...authorization, identityId }),
       requiresPasswordChange: identity.requiresPasswordChange === true,
     };
@@ -168,7 +174,7 @@ export class ControlPlaneUserAuthentication {
     const parsed = z.object({ currentPassword: z.string().min(1).max(4096), newPassword: z.string().min(8).max(4096) }).strict().parse(input);
     const current = await this.resolve(token, "web");
     if (!current) throw Object.assign(new Error("Sign in to change the password."), { code: "CONTROL_PLANE_AUTH_REQUIRED", statusCode: 401 });
-    const identity = this.users.store.identities.get(current.session.identityId);
+    const identity = await this.users.store.identities.get(current.session.identityId);
     if (!identity || identity.kind !== "local-password" || !(await verifyControlPlanePassword(parsed.currentPassword, identity.passwordHash || ""))) {
       throw Object.assign(new Error("The current password is incorrect."), { code: "AUTH_CURRENT_PASSWORD_INVALID", statusCode: 400 });
     }
@@ -182,7 +188,7 @@ export class ControlPlaneUserAuthentication {
   async resolve(token: string | undefined, clientType?: "web" | "mobile") {
     const [sessionId, secret] = token?.split(".") || [];
     if (!sessionId || !secret) return undefined;
-    const session = this.users.store.sessions.get(sessionId);
+    const session = await this.users.store.sessions.get(sessionId);
     const timestamp = now();
     if (!session) {
       this.sessionActivity.delete(sessionId);
@@ -195,7 +201,7 @@ export class ControlPlaneUserAuthentication {
     if ((clientType && session.clientType !== clientType) || session.tokenHash !== sha256(secret)) return undefined;
     let authorization;
     try {
-      authorization = this.users.authorization(session.userId);
+      authorization = await this.users.authorization(session.userId);
     } catch {
       await this.users.store.sessions.delete(session.id);
       this.sessionActivity.delete(session.id);
@@ -209,8 +215,9 @@ export class ControlPlaneUserAuthentication {
     this.trackSessionActivity(session, timestamp);
     return {
       session: { ...session, lastSeenAt: timestamp },
-      user: this.users.detail(session.userId),
+      user: await this.users.detail(session.userId),
       authorization: ControlPlaneCurrentAuthorizationSchema.parse({ ...authorization, identityId: session.identityId }),
+      requiresPasswordChange: (await this.users.store.identities.get(session.identityId))?.requiresPasswordChange === true,
     };
   }
 
@@ -220,32 +227,36 @@ export class ControlPlaneUserAuthentication {
       authenticated: Boolean(current),
       user: current?.user,
       authorization: current?.authorization,
+      requiresPasswordChange: current?.requiresPasswordChange === true,
     };
   }
 
-  listSessions(requestingUserId: string, targetUserId = requestingUserId) {
+  async listSessions(requestingUserId: string, targetUserId = requestingUserId) {
     if (requestingUserId !== targetUserId) {
-      const authorization = this.users.authorization(requestingUserId);
+      const authorization = await this.users.authorization(requestingUserId);
       if (!authorization.permissionIds.includes("users:manage")) throw Object.assign(new Error("Session management is forbidden."), { code: "CONTROL_PLANE_FORBIDDEN", statusCode: 403 });
     }
-    return this.users.store.sessions.list()
-      .filter((session) => session.userId === targetUserId && session.expiresAt > now())
-      .map((session) => this.publicSession(session.id));
+    const sessions = (await this.users.store.sessions.listByUser(targetUserId)).filter((session) => session.expiresAt > now());
+    return Promise.all(sessions.map((session) => this.publicSession(session.id)));
   }
 
-  listMobileSessions(requestingUserId: string) {
-    return this.users.store.sessions.list()
-      .filter((session) => session.userId === requestingUserId && session.clientType === "mobile" && session.expiresAt > now())
-      .map((session) => ({ ...this.publicSession(session.id), device: session.device!, user: this.users.detail(session.userId) }));
+  async listMobileSessions(requestingUserId: string) {
+    const sessions = (await this.users.store.sessions.listByUser(requestingUserId))
+      .filter((session) => session.clientType === "mobile" && session.expiresAt > now());
+    return Promise.all(sessions.map(async (session) => ({
+      ...await this.publicSession(session.id),
+      device: session.device!,
+      user: await this.users.detail(session.userId),
+    })));
   }
 
   async revokeSession(requestingUserId: string, sessionId: string) {
-    const session = this.users.store.sessions.get(sessionId);
+    const session = await this.users.store.sessions.get(sessionId);
     if (!session) {
       this.sessionActivity.delete(sessionId);
       return false;
     }
-    if (session.userId !== requestingUserId && !this.users.authorization(requestingUserId).permissionIds.includes("users:manage")) {
+    if (session.userId !== requestingUserId && !(await this.users.authorization(requestingUserId)).permissionIds.includes("users:manage")) {
       throw Object.assign(new Error("Session management is forbidden."), { code: "CONTROL_PLANE_FORBIDDEN", statusCode: 403 });
     }
     const revoked = await this.users.store.sessions.delete(sessionId);
@@ -262,8 +273,8 @@ export class ControlPlaneUserAuthentication {
     return { ok: true };
   }
 
-  private publicSession(sessionId: string) {
-    const session = this.users.store.sessions.get(sessionId);
+  private async publicSession(sessionId: string) {
+    const session = await this.users.store.sessions.get(sessionId);
     if (!session) throw Object.assign(new Error("Session was not found."), { code: "CONTROL_PLANE_SESSION_NOT_FOUND", statusCode: 404 });
     return ControlPlaneUserSessionSummarySchema.parse({
       id: session.id,

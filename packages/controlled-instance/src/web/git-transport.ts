@@ -32,13 +32,34 @@ export function parseGitSshInvocation(args: unknown) {
   }
   if (!hostArgument || !/^(?:[a-zA-Z0-9._-]+@)?[^@\s]+$/.test(hostArgument)) return undefined;
   const host = hostArgument.replace(/^[^@]+@/, "");
-  const service = values.at(-1) || "";
-  const match = /^(?:git-upload-pack|git-receive-pack|git-upload-archive)\s+['\"]?([^'\"]+)['\"]?$/.exec(service);
-  if (!host || !match) return undefined;
+  const parsedService = parseGitServiceCommand(values.at(-1) || "");
+  if (!host || !parsedService) return undefined;
+  const service = `${parsedService.service} ${shellSingleQuote(parsedService.repository)}`;
   return {
-    remote: `ssh://${host}${port ? `:${port}` : ""}/${match[1].replace(/^\/+/, "")}`,
+    remote: `ssh://${host}${port ? `:${port}` : ""}/${encodeURIComponent(parsedService.repository.replace(/^\/+/, "")).replace(/%2F/gi, "/")}`,
     args: [...safeOptions, ...(port ? ["-p", port] : []), hostArgument, service],
   };
+}
+
+function parseGitServiceCommand(value: string) {
+  const match = /^(git-upload-pack|git-receive-pack|git-upload-archive) ([\s\S]+)$/.exec(value);
+  if (!match) return undefined;
+  const argument = match[2];
+  let repository: string;
+  if (argument.startsWith("'")) {
+    if (!argument.endsWith("'")) return undefined;
+    repository = argument.slice(1, -1).replace(/'\\''/g, "'");
+    if (shellSingleQuote(repository) !== argument) return undefined;
+  } else {
+    if (!/^[a-zA-Z0-9._~@%+,:\/-]+$/.test(argument)) return undefined;
+    repository = argument;
+  }
+  if (!repository || /[\0-\x1f\x7f]/.test(repository)) return undefined;
+  return { service: match[1], repository };
+}
+
+function shellSingleQuote(value: string) {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
 export function runSsh(args: string[], managed: boolean, overrides: NodeJS.ProcessEnv = {}) {

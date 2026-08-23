@@ -10,17 +10,21 @@ import {
 } from "reka-ui"
 import { cn } from "@/lib/utils"
 
-const props = defineProps<DialogContentProps & { class?: HTMLAttributes["class"]; style?: HTMLAttributes["style"] }>()
+const props = defineProps<DialogContentProps & {
+  class?: HTMLAttributes["class"]
+  overlayClass?: HTMLAttributes["class"]
+  style?: HTMLAttributes["style"]
+}>()
 const emits = defineEmits<DialogContentEmits>()
 
-const delegatedProps = reactiveOmit(props, "class", "style")
+const delegatedProps = reactiveOmit(props, "class", "overlayClass", "style")
 const forwarded = useForwardPropsEmits(delegatedProps, emits)
 </script>
 
 <template>
   <DialogPortal>
     <DialogOverlay
-      class="fixed inset-0 z-50 bg-black/80 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0"
+      :class="cn('fixed inset-0 z-50 bg-black/80 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0', props.overlayClass)"
     />
     <DialogContent
       v-bind="forwarded"

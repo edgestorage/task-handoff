@@ -5,6 +5,7 @@ import {
   GitCredentialPublicSchema,
   GitCredentialSecretInputSchema,
   GitCredentialUpdateRequestSchema,
+  GitWorkspaceProvisioningInputSchema,
   InstanceGitCredentialAssignmentSchema,
   NodeGitCredentialPayloadSchema,
   NodeGitCredentialAuthorizationSetSchema,
@@ -14,6 +15,7 @@ import {
   type GitCredentialSecretInput,
   type InstanceGitCredentialAssignment,
   type NodeGitCredentialPayload,
+  type GitWorkspaceProvisioningInput,
 } from "@task-handoff/protocol/managed-git-credentials";
 import { createId, JsonCollection } from "../../shared/persistence/store.ts";
 import type { ControlPlaneStorePaths } from "../persistence/paths.ts";
@@ -43,6 +45,18 @@ const GitCredentialAuditRecordSchema = z.object({
   instanceId: GitCredentialPublicSchema.shape.id.optional(),
   credentialRevision: GitCredentialPublicSchema.shape.revision.optional(),
   assignmentRevision: GitCredentialPublicSchema.shape.revision.optional(),
+  createdAt: GitCredentialPublicSchema.shape.createdAt,
+  updatedAt: GitCredentialPublicSchema.shape.updatedAt,
+}).strict();
+
+const GitCredentialProvisioningIntentSchema = z.object({
+  id: GitCredentialPublicSchema.shape.id,
+  instanceId: GitCredentialPublicSchema.shape.id,
+  credentialId: GitCredentialPublicSchema.shape.id,
+  operationId: GitWorkspaceProvisioningInputSchema.shape.operationId,
+  remoteUrl: GitWorkspaceProvisioningInputSchema.shape.remoteUrl,
+  ref: GitWorkspaceProvisioningInputSchema.shape.ref,
+  clone: GitWorkspaceProvisioningInputSchema.shape.clone,
   createdAt: GitCredentialPublicSchema.shape.createdAt,
   updatedAt: GitCredentialPublicSchema.shape.updatedAt,
 }).strict();
@@ -92,10 +106,28 @@ function sanitizeAssignmentRecord(input: unknown) {
   ].flatMap((key) => Object.prototype.hasOwnProperty.call(source, key) ? [[key, source[key]]] : []));
 }
 
+function sanitizeProvisioningIntentRecord(input: unknown) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return input;
+  const source = input as Record<string, unknown>;
+  return {
+    id: source.id,
+    instanceId: source.instanceId,
+    credentialId: source.credentialId,
+    // Compatibility for pre-release managed-Git intents written before operation IDs became stable.
+    operationId: source.operationId || source.instanceId,
+    remoteUrl: source.remoteUrl,
+    ref: source.ref,
+    clone: source.clone,
+    createdAt: source.createdAt,
+    updatedAt: source.updatedAt,
+  };
+}
+
 export class ControlPlaneGitCredentialService {
   private readonly credentials: JsonCollection<GitCredentialRecord>;
   private readonly assignments: JsonCollection<GitCredentialAssignmentRecord>;
   private readonly audit: JsonCollection<z.infer<typeof GitCredentialAuditRecordSchema>>;
+  private readonly provisioningIntents: JsonCollection<z.infer<typeof GitCredentialProvisioningIntentSchema>>;
   private readonly secrets: ControlPlaneSecretBox;
   private readonly repositoryReferences: (credentialId: string) => RepositoryCredentialReference[];
 
@@ -119,6 +151,12 @@ export class ControlPlaneGitCredentialService {
       directoryMode: 0o700,
       fileMode: 0o600,
     });
+    this.provisioningIntents = new JsonCollection(paths.gitCredentialProvisioningIntentsDir, {
+      schema: GitCredentialProvisioningIntentSchema,
+      sanitize: sanitizeProvisioningIntentRecord,
+      directoryMode: 0o700,
+      fileMode: 0o600,
+    });
     this.secrets = new ControlPlaneSecretBox(paths.gitCredentialEncryptionKeyPath);
     this.repositoryReferences = options.repositoryReferences || (() => []);
   }
@@ -128,6 +166,7 @@ export class ControlPlaneGitCredentialService {
     this.credentials.init();
     this.assignments.init();
     this.audit.init();
+    this.provisioningIntents.init();
   }
 
   list(): GitCredentialPublic[] {
@@ -201,10 +240,11 @@ export class ControlPlaneGitCredentialService {
     this.require(id);
     const references = this.assignments.list().filter((assignment) => assignment.credentialId === id && assignment.status !== "revoked");
     const repositories = this.repositoryReferences(id);
-    if (references.length > 0 || repositories.length > 0) {
+    const provisioningInstances = this.provisioningIntents.list().filter((intent) => intent.credentialId === id).map((intent) => intent.instanceId);
+    if (references.length > 0 || repositories.length > 0 || provisioningInstances.length > 0) {
       throw Object.assign(gitCredentialError("Git credential is referenced by one or more repositories or instances.", "GIT_CREDENTIAL_IN_USE", 409), {
         details: {
-          instances: references.map((assignment) => assignment.instanceId).sort(),
+          instances: [...new Set([...references.map((assignment) => assignment.instanceId), ...provisioningInstances])].sort(),
           repositories: repositories.map((repository) => ({ id: repository.id, name: repository.name })),
         },
       });
@@ -224,6 +264,43 @@ export class ControlPlaneGitCredentialService {
       throw gitCredentialError(`Git credential ${id} secret could not be opened.`, "GIT_CREDENTIAL_SECRET_INVALID", 500);
     }
     return NodeGitCredentialPayloadSchema.parse({ credential: this.publicCredential(record), secret });
+  }
+
+  rememberOperationProvisioning(input: GitWorkspaceProvisioningInput) {
+    const parsed = GitWorkspaceProvisioningInputSchema.parse(input);
+    const credential = parsed.credentials.length === 1 && parsed.credentials[0].retention === "operation-only"
+      ? parsed.credentials[0]
+      : undefined;
+    if (!credential) throw gitCredentialError("Operation-only provisioning requires exactly one credential.", "GIT_CREDENTIAL_PROVISIONING_INVALID", 400);
+    const timestamp = now();
+    return this.provisioningIntents.put({
+      id: parsed.instanceId,
+      instanceId: parsed.instanceId,
+      credentialId: credential.payload.credential.id,
+      operationId: parsed.operationId,
+      remoteUrl: parsed.remoteUrl,
+      ref: parsed.ref,
+      clone: parsed.clone,
+      createdAt: this.provisioningIntents.get(parsed.instanceId)?.createdAt || timestamp,
+      updatedAt: timestamp,
+    });
+  }
+
+  operationProvisioning(instanceId: string): GitWorkspaceProvisioningInput | undefined {
+    const intent = this.provisioningIntents.get(instanceId);
+    if (!intent) return undefined;
+    return GitWorkspaceProvisioningInputSchema.parse({
+      operationId: intent.operationId,
+      instanceId,
+      remoteUrl: intent.remoteUrl,
+      ref: intent.ref,
+      clone: intent.clone,
+      credentials: [{ operationId: intent.operationId, retention: "operation-only", payload: this.payload(intent.credentialId) }],
+    });
+  }
+
+  forgetOperationProvisioning(instanceId: string) {
+    return this.provisioningIntents.delete(instanceId);
   }
 
   listAssignments(instanceId?: string): InstanceGitCredentialAssignment[] {
@@ -267,8 +344,8 @@ export class ControlPlaneGitCredentialService {
   revoke(instanceId: string, credentialId: string) {
     const current = this.assignments.get(assignmentId(instanceId, credentialId));
     if (!current || current.status === "revoked") return false;
-    this.assignments.put({ ...current, status: "revoked", assignmentRevision: current.assignmentRevision + 1, updatedAt: now() });
-    this.auditEvent("revoke", credentialId, { instanceId, credentialRevision: current.credentialRevision, assignmentRevision: current.assignmentRevision });
+    const record = this.assignments.put({ ...current, status: "revoked", assignmentRevision: current.assignmentRevision + 1, updatedAt: now() });
+    this.auditEvent("revoke", credentialId, { instanceId, credentialRevision: record.credentialRevision, assignmentRevision: record.assignmentRevision });
     return true;
   }
 
@@ -287,6 +364,7 @@ export class ControlPlaneGitCredentialService {
     for (const assignment of this.assignments.list().filter((item) => item.instanceId === instanceId)) {
       if (this.assignments.delete(assignment.id)) removed += 1;
     }
+    this.provisioningIntents.delete(instanceId);
     return removed;
   }
 
@@ -305,7 +383,10 @@ export class ControlPlaneGitCredentialService {
   }
 
   private assertRepositoryCompatibility(credential: GitCredentialPublic) {
-    for (const repository of this.repositoryReferences(credential.id)) {
+    const provisioning = this.provisioningIntents.list()
+      .filter((intent) => intent.credentialId === credential.id)
+      .map((intent) => ({ id: intent.instanceId, name: intent.instanceId, url: intent.remoteUrl, authType: credential.kind }));
+    for (const repository of [...this.repositoryReferences(credential.id), ...provisioning]) {
       if (repository.authType !== credential.kind) {
         throw gitCredentialError(`Credential kind no longer matches repository ${repository.id}.`, "GIT_CREDENTIAL_REPOSITORY_KIND_MISMATCH", 409);
       }

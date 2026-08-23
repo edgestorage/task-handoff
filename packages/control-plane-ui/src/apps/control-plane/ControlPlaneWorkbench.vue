@@ -124,14 +124,41 @@
           <RefreshCw :size="15" />
           <span>{{ t("common.actions.refresh") }}</span>
         </Button>
-        <Button :variant="settingsMode ? 'default' : 'outline'" size="sm" :aria-label="t('navigation.settings')" :title="t('navigation.settings')" :aria-pressed="settingsMode" @click="toggleSettings">
-          <Settings :size="15" />
-          <span>{{ t("navigation.settings") }}</span>
-        </Button>
-        <Button v-if="authSession.data.value?.enabled" variant="outline" size="sm" :aria-label="t('auth.signOut')" :title="t('auth.signOut')" :disabled="signingOut" @click="signOut">
-          <LogOut :size="15" />
-          <span>{{ signingOut ? t("auth.signingOut") : t("auth.signOut") }}</span>
-        </Button>
+        <template v-if="desktopBridge">
+          <Button :variant="settingsMode ? 'default' : 'outline'" size="sm" :aria-label="t('navigation.settings')" :title="t('navigation.settings')" :aria-pressed="settingsMode" @click="toggleSettings">
+            <Settings :size="15" />
+            <span>{{ t("navigation.settings") }}</span>
+          </Button>
+        </template>
+        <DropdownMenu v-else>
+          <DropdownMenuTrigger as-child>
+            <Button :variant="settingsMode ? 'default' : 'outline'" size="sm" class="control-plane-user-trigger" :aria-label="t('navigation.userMenu')" :title="t('navigation.userMenu')">
+              <UserRound :size="15" />
+              <span>{{ userMenuLabel }}</span>
+              <ChevronDown :size="13" aria-hidden="true" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent class="control-plane-user-menu" align="end" :collision-padding="12" :side-offset="8">
+            <DropdownMenuLabel v-if="authSession.data.value?.enabled" class="control-plane-user-menu-identity">
+              <span>{{ t("navigation.signedInAs") }}</span>
+              <strong>{{ userMenuLabel }}</strong>
+            </DropdownMenuLabel>
+            <DropdownMenuSeparator v-if="authSession.data.value?.enabled" />
+            <DropdownMenuItem v-if="authSession.data.value?.enabled" @select="openAccountSecurity">
+              <UserRound :size="14" />
+              <span>{{ t("settings.account.navigation") }}</span>
+            </DropdownMenuItem>
+            <DropdownMenuItem @select="openSettings()">
+              <Settings :size="14" />
+              <span>{{ t("navigation.settings") }}</span>
+            </DropdownMenuItem>
+            <DropdownMenuSeparator v-if="authSession.data.value?.enabled" />
+            <DropdownMenuItem v-if="authSession.data.value?.enabled" :disabled="signingOut" class="control-plane-user-menu-sign-out" @select="signOut">
+              <LogOut :size="14" />
+              <span>{{ signingOut ? t("auth.signingOut") : t("auth.signOut") }}</span>
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
         <div
           v-if="showWindowsNativeWindowControlSpace"
           class="desktop-window-controls native-window-control-space windows-native-window-control-space"
@@ -333,6 +360,8 @@
 
     <NewInstanceModal v-if="!standaloneMode && newInstanceOpen" :choose-project-folder="desktopBridge?.chooseProjectFolder" @close="newInstanceOpen = false" @created="handleInstanceCreated" />
 
+    <AccountSecurityDialog v-model:open="accountSecurityOpen" />
+
     <ConfigSyncDialog
       v-model:open="configSyncDialogOpen"
       :direction="configSyncDirection"
@@ -383,15 +412,15 @@ import type { SupportedLocale } from "../../i18n/locale";
 import { translateApiError } from "../../i18n/apiError";
 import { useQueries, useQueryClient } from "@tanstack/vue-query";
 import { useEventListener } from "@vueuse/core";
-import { Bot, Boxes, Check, ChevronDown, Container, Download, House, Laptop, LayoutGrid, LoaderCircle, LogOut, Maximize2, Minus, RefreshCw, Settings, X } from "@lucide/vue";
+import { Bot, Boxes, Check, ChevronDown, Container, Download, House, Laptop, LayoutGrid, LoaderCircle, LogOut, Maximize2, Minus, RefreshCw, Settings, UserRound, X } from "@lucide/vue";
 import "@xterm/xterm/css/xterm.css";
 import { controlPlaneQueryKeys, getInstanceAppManagement, getInstanceResourceMetrics, installInstanceApp, instanceBoardQueryOptions, logoutControlPlane, nodeLocalFoldersQueryOptions, renameAppSession, resolveAiSessionApproval, saveEnvironmentTemplate, uninstallInstanceApp, updateControlledInstance, useAuthSessionQuery, useControlPlaneAiSessionsQuery, useControlPlaneAppSessionsQuery, useControlPlaneStatusQuery, useCurrentAccessQuery, useInstanceBoardQuery, useInstanceDirectoryQuery, useModelsQuery, useNodesQuery, useServerUpdateCheckQuery } from "../../api/queries";
-import { authorizationCacheEpoch as currentAccessEpoch, authorizationCacheEpochChanged as authorizationEpochChanged, preserveAcrossAuthorizationChange } from "../../api/authorizationCache";
+import { authorizationCacheEpoch as currentAccessEpoch, authorizationCacheEpochChanged as authorizationEpochChanged, preserveAcrossAuthorizationChange, signedOutAuthSession } from "../../api/authorizationCache";
 import type { ControlPlaneInstanceResourceEntry } from "@task-handoff/control-plane-client";
 import type { ConfigSyncDirection } from "@task-handoff/protocol/config-sync";
 import { type AiSessionSummary, type AppManagementOperation, type InstanceBoardItem, type InstanceBoardItemWithAppSessions, type InstanceResourceMetrics, type NodeLocalFolder, type UpdateControlledInstanceInput } from "../../api/types";
 import { Button } from "../../components/ui/button";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../../components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "../../components/ui/dropdown-menu";
 import { ScrollArea } from "../../components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../components/ui/tooltip";
 import AiSessionBoardView from "./ai-board/AiSessionBoardView.vue";
@@ -404,6 +433,7 @@ import SaveEnvironmentTemplateDialog from "./instance-list/SaveEnvironmentTempla
 import InstanceSettingsDialog from "./instance-settings/InstanceSettingsDialog.vue";
 import { useInstanceAppManagement } from "./instance-settings/useInstanceAppManagement";
 import NewInstanceModal from "./NewInstanceModal.vue";
+import AccountSecurityDialog from "./settings/AccountSecurityDialog.vue";
 import SettingsModal from "./settings/SettingsModal.vue";
 import type { NodeJoinedEvent } from "@task-handoff/protocol/control-plane";
 import { useActiveInstanceSessions } from "./instance-detail/useActiveInstanceSessions";
@@ -562,7 +592,8 @@ const instanceViewMode = computed(() => workbenchView.value === "instance");
 const boardMode = computed(() => workbenchView.value === "board");
 const aiBoardMode = computed(() => workbenchView.value === "ai");
 const settingsMode = ref(false);
-const settingsSection = ref<"basic" | "chat" | "images" | "environment-templates" | "projects" | "nodes" | "models" | "git-credentials" | "triggers" | "mobile-sessions" | "account" | "users" | "cloud-connectivity">("nodes");
+const settingsSection = ref<"basic" | "chat" | "images" | "environment-templates" | "projects" | "nodes" | "models" | "git-credentials" | "triggers" | "mobile-sessions" | "users" | "cloud-connectivity">("nodes");
+const accountSecurityOpen = ref(false);
 const boardFilter = ref("");
 const aiBoardFilter = ref("");
 const boardProjectFilter = ref(ALL_BOARD_FILTER_VALUE);
@@ -602,6 +633,9 @@ const signingOut = ref(false);
 const aiApprovalBusyKey = ref("");
 const boardSessionKeys = reactive<Record<string, string>>({});
 const desktopBridge = (window as Window & { taskHandoffDesktop?: DesktopBridge }).taskHandoffDesktop;
+const userMenuLabel = computed(() => authSession.data.value?.user?.displayName
+  || authSession.data.value?.user?.primaryUsername
+  || t("navigation.user"));
 const stopDesktopOpenSettings = desktopBridge?.onOpenSettings?.(() => {
   if (!standaloneMode.value) openSettings();
 });
@@ -1224,6 +1258,11 @@ function openSettings(section: typeof settingsSection.value = "nodes") {
   closeFloatingLayers();
 }
 
+function openAccountSecurity() {
+  accountSecurityOpen.value = true;
+  closeFloatingLayers();
+}
+
 function toggleSettings() {
   if (settingsMode.value) {
     closeSettings();
@@ -1264,9 +1303,6 @@ function settingsSectionTitle(section: typeof settingsSection.value) {
   }
   if (section === "mobile-sessions") {
     return t("settings.mobileSessions.navigation");
-  }
-  if (section === "account") {
-    return t("settings.account.navigation");
   }
   if (section === "users") {
     return t("settings.userAccess.navigation");
@@ -1484,9 +1520,15 @@ async function signOut() {
   if (signingOut.value) return;
   signingOut.value = true;
   try {
+    const currentSession = authSession.data.value;
     await logoutControlPlane();
-    queryClient.clear();
-    await queryClient.invalidateQueries({ queryKey: ["auth-session"] });
+    await queryClient.cancelQueries();
+    queryClient.removeQueries({ predicate: (query) => String(query.queryKey[0] || "") !== "auth-session" });
+    if (currentSession) {
+      queryClient.setQueryData(["auth-session"], signedOutAuthSession(currentSession));
+    } else {
+      await queryClient.refetchQueries({ queryKey: ["auth-session"], type: "active" });
+    }
   } finally {
     signingOut.value = false;
   }

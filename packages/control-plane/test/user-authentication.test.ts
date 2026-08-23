@@ -45,13 +45,44 @@ test("authorization change invalidates an existing session", async () => {
   }
 });
 
+test("temporary-password sessions remain restricted until the password is changed", async () => {
+  const current = fixture();
+  try {
+    await current.users.bootstrapAdmin({ username: "admin", password: "password123" });
+    const user = await current.users.createLocalUser({
+      username: "operator",
+      password: "temporary-password",
+      roleIds: ["role_operator"],
+      nodeScope: { kind: "all" },
+      requirePasswordChange: true,
+    });
+    const login = await current.auth.loginLocal({ username: "operator", password: "temporary-password" });
+    assert.equal(login.requiresPasswordChange, true);
+    assert.equal((await current.auth.currentSession(login.sessionToken))?.requiresPasswordChange, true);
+    await assert.rejects(() => current.auth.createSessionForIdentity(user.identities[0].id, "mobile", {
+      id: "device_temporary_password",
+      name: "Phone",
+      platform: "ios",
+    }), { code: "AUTH_PASSWORD_CHANGE_REQUIRED" });
+
+    const changed = await current.auth.changeLocalPassword(login.sessionToken, {
+      currentPassword: "temporary-password",
+      newPassword: "permanent-password",
+    });
+    assert.equal(changed.requiresPasswordChange, false);
+    assert.equal((await current.auth.currentSession(changed.sessionToken))?.requiresPasswordChange, false);
+  } finally {
+    await current.dispose();
+  }
+});
+
 test("resolving a session tracks activity without persisting the session", async () => {
   const current = fixture();
   try {
     await current.users.bootstrapAdmin({ username: "admin", password: "password123" });
     const login = await current.auth.loginLocal({ username: "admin", password: "password123" });
     const sessionId = login.session.id;
-    assert.equal(current.users.store.sessions.get(sessionId)?.lastSeenAt, undefined);
+    assert.equal((await current.users.store.sessions.get(sessionId))?.lastSeenAt, undefined);
 
     let writes = 0;
     const put = current.users.store.sessions.put.bind(current.users.store.sessions);
@@ -62,8 +93,8 @@ test("resolving a session tracks activity without persisting the session", async
 
     const resolved = await current.auth.resolve(login.sessionToken);
     assert.equal(writes, 0);
-    assert.equal(current.users.store.sessions.get(sessionId)?.lastSeenAt, undefined);
-    assert.equal(resolved?.session.lastSeenAt, current.auth.listSessions(resolved!.user.id)[0]?.lastSeenAt);
+    assert.equal((await current.users.store.sessions.get(sessionId))?.lastSeenAt, undefined);
+    assert.equal(resolved?.session.lastSeenAt, (await current.auth.listSessions(resolved!.user.id))[0]?.lastSeenAt);
   } finally {
     await current.dispose();
   }

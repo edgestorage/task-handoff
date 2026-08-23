@@ -1,16 +1,17 @@
-import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { sql } from "drizzle-orm";
+import { index, integer, primaryKey, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 const timestamps = {
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 };
 
-export const metadata = sqliteTable("control_plane_metadata", {
+export const metadata = sqliteTable("cp_metadata", {
   key: text("key").primaryKey(),
   value: text("value", { mode: "json" }).notNull(),
 });
 
-export const users = sqliteTable("control_plane_users", {
+export const users = sqliteTable("cp_users", {
   id: text("id").primaryKey(),
   displayName: text("display_name").notNull(),
   status: text("status", { enum: ["active", "disabled", "archived"] }).notNull(),
@@ -19,7 +20,7 @@ export const users = sqliteTable("control_plane_users", {
   ...timestamps,
 });
 
-export const identities = sqliteTable("control_plane_login_identities", {
+export const identities = sqliteTable("cp_login_identities", {
   id: text("id").primaryKey(),
   userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   kind: text("kind", { enum: ["local-password", "oidc", "oauth"] }).notNull(),
@@ -32,12 +33,12 @@ export const identities = sqliteTable("control_plane_login_identities", {
   lastUsedAt: text("last_used_at"),
   ...timestamps,
 }, (table) => [
-  uniqueIndex("cp_identity_login_name_uq").on(table.normalizedLoginName),
-  uniqueIndex("cp_identity_provider_subject_uq").on(table.providerId, table.subject),
-  index("cp_identity_user_idx").on(table.userId),
+  uniqueIndex("cp_login_identities_login_name_uq").on(table.normalizedLoginName),
+  uniqueIndex("cp_login_identities_provider_subject_uq").on(table.providerId, table.subject),
+  index("cp_login_identities_user_idx").on(table.userId),
 ]);
 
-export const roles = sqliteTable("control_plane_roles", {
+export const roles = sqliteTable("cp_roles", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
   description: text("description"),
@@ -45,20 +46,28 @@ export const roles = sqliteTable("control_plane_roles", {
   status: text("status", { enum: ["active", "archived"] }).notNull(),
   permissionIds: text("permission_ids", { mode: "json" }).$type<string[]>().notNull(),
   ...timestamps,
-}, (table) => [uniqueIndex("cp_role_active_name_uq").on(table.name, table.status)]);
+}, (table) => [
+  uniqueIndex("cp_roles_active_name_uq").on(sql`lower(${table.name})`).where(sql`${table.status} = 'active'`),
+]);
 
-export const grants = sqliteTable("control_plane_user_access_grants", {
-  id: text("id").primaryKey(),
-  userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
-  roleIds: text("role_ids", { mode: "json" }).$type<string[]>().notNull(),
+export const grants = sqliteTable("cp_user_access_grants", {
+  userId: text("user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
   nodeScope: text("node_scope", { mode: "json" }).$type<{ kind: "all" } | { kind: "selected"; nodeIds: string[] }>().notNull(),
+  instanceScope: text("instance_scope", { mode: "json" }).$type<{ kind: "inherit-node-scope" } | { kind: "selected"; instanceIds: string[] }>().notNull(),
   authorizationRevision: integer("authorization_revision").notNull(),
   ...timestamps,
-}, (table) => [uniqueIndex("cp_grant_user_uq").on(table.userId)]);
+});
 
-export const sessions = sqliteTable("control_plane_user_sessions", {
-  id: text("id").primaryKey(),
+export const userRoles = sqliteTable("cp_user_roles", {
   userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  roleId: text("role_id").notNull().references(() => roles.id, { onDelete: "restrict" }),
+}, (table) => [
+  primaryKey({ columns: [table.userId, table.roleId] }),
+  index("cp_user_roles_role_idx").on(table.roleId),
+]);
+
+export const sessions = sqliteTable("cp_user_sessions", {
+  id: text("id").primaryKey(),
   identityId: text("identity_id").notNull().references(() => identities.id, { onDelete: "cascade" }),
   authorizationRevision: integer("authorization_revision").notNull(),
   tokenHash: text("token_hash").notNull(),
@@ -68,12 +77,12 @@ export const sessions = sqliteTable("control_plane_user_sessions", {
   device: text("device", { mode: "json" }).$type<{ id: string; name: string; platform: "ios" | "android"; appVersion?: string }>(),
   ...timestamps,
 }, (table) => [
-  uniqueIndex("cp_session_token_hash_uq").on(table.tokenHash),
-  index("cp_session_user_idx").on(table.userId),
-  index("cp_session_expiry_idx").on(table.expiresAt),
+  uniqueIndex("cp_user_sessions_token_hash_uq").on(table.tokenHash),
+  index("cp_user_sessions_identity_idx").on(table.identityId),
+  index("cp_user_sessions_expiry_idx").on(table.expiresAt),
 ]);
 
-export const providers = sqliteTable("control_plane_identity_providers", {
+export const providers = sqliteTable("cp_identity_providers", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
   kind: text("kind", { enum: ["oidc", "github"] }).notNull(),
@@ -86,7 +95,7 @@ export const providers = sqliteTable("control_plane_identity_providers", {
   ...timestamps,
 });
 
-export const approvals = sqliteTable("control_plane_external_identity_approvals", {
+export const approvals = sqliteTable("cp_external_identity_approvals", {
   id: text("id").primaryKey(),
   providerId: text("provider_id").notNull().references(() => providers.id, { onDelete: "cascade" }),
   subject: text("subject").notNull(),
@@ -97,9 +106,9 @@ export const approvals = sqliteTable("control_plane_external_identity_approvals"
   decidedAt: text("decided_at"),
   decidedByUserId: text("decided_by_user_id").references(() => users.id),
   ...timestamps,
-}, (table) => [index("cp_approval_lookup_idx").on(table.providerId, table.subject, table.status)]);
+}, (table) => [index("cp_external_identity_approvals_lookup_idx").on(table.providerId, table.subject, table.status)]);
 
-export const audit = sqliteTable("control_plane_user_audit", {
+export const audit = sqliteTable("cp_user_audit", {
   id: text("id").primaryKey(),
   action: text("action").notNull(),
   actorUserId: text("actor_user_id"),
@@ -107,9 +116,9 @@ export const audit = sqliteTable("control_plane_user_audit", {
   targetId: text("target_id"),
   details: text("details", { mode: "json" }).$type<Record<string, unknown>>().notNull(),
   createdAt: text("created_at").notNull(),
-}, (table) => [index("cp_audit_created_idx").on(table.createdAt)]);
+}, (table) => [index("cp_user_audit_created_idx").on(table.createdAt)]);
 
-export const migrationLedger = sqliteTable("control_plane_migration_ledger", {
+export const migrationLedger = sqliteTable("cp_migration_ledger", {
   id: text("id").primaryKey(),
   checksum: text("checksum").notNull(),
   appliedAt: text("applied_at").notNull(),

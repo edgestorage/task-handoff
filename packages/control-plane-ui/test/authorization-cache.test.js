@@ -5,6 +5,7 @@ import {
   authorizationCacheEpoch,
   authorizationCacheEpochChanged,
   preserveAcrossAuthorizationChange,
+  signedOutAuthSession,
 } from "../src/api/authorizationCache.ts";
 
 const access = (userId, revision) => ({
@@ -33,4 +34,22 @@ test("authorization changes preserve only identity queries", () => {
   assert.equal(preserveAcrossAuthorizationChange(["control-plane-current-access"]), true);
   assert.equal(preserveAcrossAuthorizationChange(["instance-board", "instance-a"]), false);
   assert.equal(preserveAcrossAuthorizationChange(["control-plane-ai-sessions"]), false);
+});
+
+test("a successful logout projects the observed auth session to an anonymous snapshot", () => {
+  assert.deepEqual(signedOutAuthSession({
+    mode: "password",
+    enabled: true,
+    requiresBootstrap: false,
+    authenticated: true,
+    requiresPasswordChange: true,
+    user: { id: "user-admin", displayName: "Admin" },
+    authorization: access("admin", 3),
+  }), {
+    mode: "password",
+    enabled: true,
+    requiresBootstrap: false,
+    authenticated: false,
+    requiresPasswordChange: false,
+  });
 });

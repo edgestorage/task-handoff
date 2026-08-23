@@ -7,6 +7,7 @@ import type { ControlPlaneIdentityProviderService } from "./identity-provider-se
 import { OidcDiscoverySchema, verifyOidcIdToken } from "./oidc.ts";
 import type { ControlPlaneUserAuthentication } from "./user-authentication.ts";
 import type { ControlPlaneUserService } from "./user-service.ts";
+import type { IdentityProviderRecord } from "./user-records.ts";
 
 const FLOW_TTL_MS = 10 * 60 * 1000;
 const APPROVAL_TTL_MS = 24 * 60 * 60 * 1000;
@@ -53,7 +54,7 @@ export class ControlPlaneExternalAuthentication {
 
   async begin(providerId: string, clientType: "web" | "mobile" = "web") {
     this.pruneFlows();
-    const provider = this.users.store.providers.get(providerId);
+    const provider = await this.users.store.providers.get(providerId);
     if (!provider || provider.status !== "enabled") throw Object.assign(new Error("Identity provider is unavailable."), { code: "CONTROL_PLANE_IDENTITY_PROVIDER_UNAVAILABLE", statusCode: 404 });
     const flow: ExternalLoginFlow = {
       providerId,
@@ -75,17 +76,17 @@ export class ControlPlaneExternalAuthentication {
     const flow = this.flows.get(parsed.state);
     this.flows.delete(parsed.state);
     if (!flow || flow.expiresAt <= Date.now()) throw Object.assign(new Error("External login callback is invalid or expired."), { code: "AUTH_EXTERNAL_FLOW_INVALID", statusCode: 401 });
-    const provider = this.users.store.providers.get(flow.providerId);
+    const provider = await this.users.store.providers.get(flow.providerId);
     if (!provider || provider.status !== "enabled") throw Object.assign(new Error("Identity provider is unavailable."), { code: "CONTROL_PLANE_IDENTITY_PROVIDER_UNAVAILABLE", statusCode: 401 });
     const claims = provider.kind === "oidc"
       ? await this.exchangeOidc(provider, flow, parsed.code)
       : await this.exchangeGitHub(provider, flow, parsed.code);
-    const identity = this.users.store.identities.list().find((candidate) => candidate.providerId === provider.id && candidate.subject === claims.subject);
+    const identity = await this.users.store.identities.findByProviderSubject(provider.id, claims.subject);
     if (identity) return { kind: "session" as const, ...await this.sessions.createSessionForIdentity(identity.id, flow.clientType) };
     if (provider.loginPolicy === "existing-only") {
       throw Object.assign(new Error("External identity is not bound to a Control Plane user."), { code: "AUTH_EXTERNAL_IDENTITY_NOT_BOUND", statusCode: 403 });
     }
-    const existing = this.users.store.approvals.list().find((candidate) => candidate.providerId === provider.id && candidate.subject === claims.subject && candidate.status === "pending" && candidate.expiresAt > now());
+    const existing = await this.users.store.approvals.findActivePending(provider.id, claims.subject, now());
     if (existing) return { kind: "pending-approval" as const, approvalId: existing.id, expiresAt: existing.expiresAt };
     const timestamp = now();
     const approval = await this.users.store.approvals.put({
@@ -102,7 +103,7 @@ export class ControlPlaneExternalAuthentication {
     return { kind: "pending-approval" as const, approvalId: approval.id, expiresAt: approval.expiresAt };
   }
 
-  private async oidcAuthorizationUrl(provider: NonNullable<ReturnType<ControlPlaneUserService["store"]["providers"]["get"]>>, flow: ExternalLoginFlow) {
+  private async oidcAuthorizationUrl(provider: IdentityProviderRecord, flow: ExternalLoginFlow) {
     const discovery = await this.discovery(provider.issuer!);
     const url = new URL(discovery.authorization_endpoint);
     url.search = new URLSearchParams({
@@ -118,7 +119,7 @@ export class ControlPlaneExternalAuthentication {
     return url.toString();
   }
 
-  private githubAuthorizationUrl(provider: NonNullable<ReturnType<ControlPlaneUserService["store"]["providers"]["get"]>>, flow: ExternalLoginFlow) {
+  private githubAuthorizationUrl(provider: IdentityProviderRecord, flow: ExternalLoginFlow) {
     const url = new URL("https://github.com/login/oauth/authorize");
     url.search = new URLSearchParams({
       client_id: provider.clientId,
@@ -131,7 +132,7 @@ export class ControlPlaneExternalAuthentication {
     return url.toString();
   }
 
-  private async exchangeOidc(provider: NonNullable<ReturnType<ControlPlaneUserService["store"]["providers"]["get"]>>, flow: ExternalLoginFlow, code: string) {
+  private async exchangeOidc(provider: IdentityProviderRecord, flow: ExternalLoginFlow, code: string) {
     const discovery = await this.discovery(provider.issuer!);
     const response = await this.fetchImplementation(discovery.token_endpoint, {
       method: "POST",
@@ -141,7 +142,7 @@ export class ControlPlaneExternalAuthentication {
         code,
         redirect_uri: provider.callbackUrl,
         client_id: provider.clientId,
-        client_secret: this.providers.clientSecret(provider.id),
+        client_secret: await this.providers.clientSecret(provider.id),
         code_verifier: flow.codeVerifier,
       }),
     });
@@ -159,13 +160,13 @@ export class ControlPlaneExternalAuthentication {
     return externalIdentityProviderAdapter("oidc").normalizeClaims(claims);
   }
 
-  private async exchangeGitHub(provider: NonNullable<ReturnType<ControlPlaneUserService["store"]["providers"]["get"]>>, flow: ExternalLoginFlow, code: string) {
+  private async exchangeGitHub(provider: IdentityProviderRecord, flow: ExternalLoginFlow, code: string) {
     const tokenResponse = await this.fetchImplementation("https://github.com/login/oauth/access_token", {
       method: "POST",
       headers: { accept: "application/json", "content-type": "application/x-www-form-urlencoded" },
       body: form({
         client_id: provider.clientId,
-        client_secret: this.providers.clientSecret(provider.id),
+        client_secret: await this.providers.clientSecret(provider.id),
         code,
         redirect_uri: provider.callbackUrl,
         code_verifier: flow.codeVerifier,

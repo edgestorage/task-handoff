@@ -27,28 +27,45 @@ export type ControlPlaneMigrationLedgerRecord = {
 };
 
 export type ControlPlaneRecordCollection<T extends { id: string }> = {
-  list(): T[];
-  get(id: string): T | undefined;
-  put(record: T): Promise<T>;
-  delete(id: string): Promise<boolean>;
-};
-
-export type ControlPlaneRawRecordCollection<T extends { id: string }> = {
   list(): Promise<T[]>;
   get(id: string): Promise<T | undefined>;
   put(record: T): Promise<T>;
   delete(id: string): Promise<boolean>;
 };
 
+export type ControlPlaneIdentityCollection = ControlPlaneRecordCollection<LoginIdentityRecord> & {
+  findByLoginName(normalizedLoginName: string): Promise<LoginIdentityRecord | undefined>;
+  findByProviderSubject(providerId: string, subject: string): Promise<LoginIdentityRecord | undefined>;
+  listByUser(userId: string): Promise<LoginIdentityRecord[]>;
+  existsForProvider(providerId: string): Promise<boolean>;
+};
+
+export type ControlPlaneGrantCollection = {
+  list(): Promise<UserAccessGrantRecord[]>;
+  get(userId: string): Promise<UserAccessGrantRecord | undefined>;
+  listByRole(roleId: string): Promise<UserAccessGrantRecord[]>;
+  put(record: UserAccessGrantRecord): Promise<UserAccessGrantRecord>;
+  delete(userId: string): Promise<boolean>;
+};
+
+export type ControlPlaneSessionCollection = ControlPlaneRecordCollection<UserSessionRecord> & {
+  listByUser(userId: string): Promise<UserSessionRecord[]>;
+};
+
+export type ControlPlaneApprovalCollection = ControlPlaneRecordCollection<ExternalIdentityApprovalRecord> & {
+  findActivePending(providerId: string, subject: string, now: string): Promise<ExternalIdentityApprovalRecord | undefined>;
+  hasActivePendingForProvider(providerId: string, now: string): Promise<boolean>;
+};
+
 export type ControlPlaneUserRepository = {
   readonly dialect: "sqlite" | "postgresql";
   readonly users: ControlPlaneRecordCollection<UserAccountRecord>;
-  readonly identities: ControlPlaneRecordCollection<LoginIdentityRecord>;
+  readonly identities: ControlPlaneIdentityCollection;
   readonly roles: ControlPlaneRecordCollection<RoleDefinitionRecord>;
-  readonly grants: ControlPlaneRecordCollection<UserAccessGrantRecord>;
-  readonly sessions: ControlPlaneRecordCollection<UserSessionRecord>;
+  readonly grants: ControlPlaneGrantCollection;
+  readonly sessions: ControlPlaneSessionCollection;
   readonly providers: ControlPlaneRecordCollection<IdentityProviderRecord>;
-  readonly approvals: ControlPlaneRecordCollection<ExternalIdentityApprovalRecord>;
+  readonly approvals: ControlPlaneApprovalCollection;
   readonly audit: ControlPlaneRecordCollection<UserAuditRecord>;
   metadata(): Promise<ControlPlaneUserStoreMetadata>;
   putMetadata(metadata: ControlPlaneUserStoreMetadata): Promise<void>;
@@ -56,20 +73,6 @@ export type ControlPlaneUserRepository = {
   putMigration(record: ControlPlaneMigrationLedgerRecord): Promise<void>;
   transaction<T>(operation: (repository: ControlPlaneUserRepository) => Promise<T>): Promise<T>;
   close(): Promise<void>;
-};
-
-export type ControlPlaneRawUserRepository = Omit<ControlPlaneUserRepository,
-  "users" | "identities" | "roles" | "grants" | "sessions" | "providers" | "approvals" | "audit" | "transaction"
-> & {
-  readonly users: ControlPlaneRawRecordCollection<UserAccountRecord>;
-  readonly identities: ControlPlaneRawRecordCollection<LoginIdentityRecord>;
-  readonly roles: ControlPlaneRawRecordCollection<RoleDefinitionRecord>;
-  readonly grants: ControlPlaneRawRecordCollection<UserAccessGrantRecord>;
-  readonly sessions: ControlPlaneRawRecordCollection<UserSessionRecord>;
-  readonly providers: ControlPlaneRawRecordCollection<IdentityProviderRecord>;
-  readonly approvals: ControlPlaneRawRecordCollection<ExternalIdentityApprovalRecord>;
-  readonly audit: ControlPlaneRawRecordCollection<UserAuditRecord>;
-  transaction<T>(operation: (repository: ControlPlaneRawUserRepository) => Promise<T>): Promise<T>;
 };
 
 export const userRecordSchemas = {

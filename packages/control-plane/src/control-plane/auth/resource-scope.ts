@@ -2,6 +2,7 @@ import type { FastifyRequest } from "fastify";
 import type { ControlPlaneService } from "../application/service.ts";
 import type {
   ControlPlaneUserAuthorizationContext,
+  ControlPlaneAction,
   ControlPlaneResource,
   ResolvedControlPlaneResourceScope,
 } from "./authorization.ts";
@@ -19,8 +20,8 @@ function nodeScope(nodeId: string): ResolvedControlPlaneResourceScope {
 }
 
 async function instanceScope(service: ControlPlaneService, instanceId: string, actor?: ControlPlaneUserAuthorizationContext): Promise<ResolvedControlPlaneResourceScope> {
-  if (!actor || actor.nodeScope.kind === "all") return { kind: "instance-derived", nodeId: "", instanceId };
-  const instance = service.requireControlledInstanceForAuthorization(instanceId, new Set(actor.nodeScope.nodeIds));
+  if (!actor) return { kind: "instance-derived", nodeId: "", instanceId };
+  const instance = service.requireControlledInstanceForAuthorization(instanceId);
   return { kind: "instance-derived", nodeId: instance.nodeId, instanceId: instance.id };
 }
 
@@ -35,6 +36,7 @@ export async function resolveRequestResourceScopes(
   routePath: string,
   resource: ControlPlaneResource,
   actor?: ControlPlaneUserAuthorizationContext,
+  action?: ControlPlaneAction,
 ): Promise<ResolvedControlPlaneResourceScope[] | undefined> {
   const params = record(request.params);
   const body = record(request.body);
@@ -69,9 +71,8 @@ export async function resolveRequestResourceScopes(
     return [nodeScope(project.source.ownerNodeId)];
   }
 
-  if (resource.type === "instance" && routePath === "/api/controlled-instances") {
-    const targetNodeId = stringField(body.nodeId);
-    if (!targetNodeId) return undefined;
+  if (resource.type === "instance" && routePath === "/api/controlled-instances" && action === "create") {
+    const targetNodeId = service.resolveControlledInstanceTargetNodeId(body);
     service.requireNode(targetNodeId);
     return [nodeScope(targetNodeId)];
   }

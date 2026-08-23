@@ -73,10 +73,50 @@ test("assignment lifecycle protects referenced credentials and uses monotonic re
     assert.equal(auditText.includes("git.example.com ssh-ed25519"), false);
     assert.match(auditText, /"action": "authorize"/);
     assert.match(auditText, /"action": "revoke"/);
+    const revokeRevisions = fs.readdirSync(auditDir)
+      .map((name) => JSON.parse(fs.readFileSync(path.join(auditDir, name), "utf8")))
+      .filter((entry) => entry.action === "revoke")
+      .map((entry) => entry.assignmentRevision)
+      .sort((left, right) => left - right);
+    assert.deepEqual(revokeRevisions, [3, 5]);
     assert.equal(fs.statSync(auditDir).mode & 0o777, 0o700);
     for (const name of fs.readdirSync(auditDir)) {
       assert.equal(fs.statSync(path.join(auditDir, name)).mode & 0o777, 0o600);
     }
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("operation-only provisioning intent survives restart without persisting secret material", () => {
+  const { dataDir, service } = fixture();
+  try {
+    const credential = service.create({
+      name: "Token",
+      scope: { scheme: "https", host: "git.example.com", pathPrefix: "/team" },
+      secret: { kind: "https-token", username: "git", token: "operation-secret" },
+    });
+    service.rememberOperationProvisioning({
+      operationId: "gitop_one",
+      instanceId: "inst_one",
+      remoteUrl: "https://git.example.com/team/repo.git",
+      ref: { type: "branch", name: "main" },
+      clone: { submodules: false, lfs: false, subdirectory: "packages/app" },
+      credentials: [{ operationId: "gitcredop_one", retention: "operation-only", payload: service.payload(credential.id) }],
+    });
+    const intentText = fs.readFileSync(path.join(controlPlaneStorePaths(dataDir).gitCredentialProvisioningIntentsDir, "inst_one.json"), "utf8");
+    assert.equal(intentText.includes("operation-secret"), false);
+
+    const restored = new ControlPlaneGitCredentialService(controlPlaneStorePaths(dataDir));
+    restored.init();
+    const provisioning = restored.operationProvisioning("inst_one");
+    assert.equal(provisioning?.operationId, "gitop_one");
+    assert.equal(restored.operationProvisioning("inst_one")?.operationId, "gitop_one");
+    assert.equal(provisioning?.clone.subdirectory, "packages/app");
+    assert.equal(provisioning?.credentials[0]?.payload.secret.kind === "https-token" ? provisioning.credentials[0].payload.secret.token : "", "operation-secret");
+    assert.throws(() => restored.remove(credential.id), (error: { code?: string }) => error.code === "GIT_CREDENTIAL_IN_USE");
+    restored.forgetOperationProvisioning("inst_one");
+    assert.equal(restored.remove(credential.id), true);
   } finally {
     fs.rmSync(dataDir, { recursive: true, force: true });
   }

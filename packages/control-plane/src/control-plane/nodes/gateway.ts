@@ -10,6 +10,7 @@ import {
   NodeAgentHealthSchema,
   NodeAgentExternalListenerSchema,
   NodeAgentInstanceProxyRawResponseSchema,
+  NodeAgentInstanceLifecycleResultSchema,
   NodeAgentPairingInviteResponseSchema,
   NodeAgentControlPlaneConnectionCreateResultSchema,
   NodeAgentControlPlanePairingSchema,
@@ -536,13 +537,13 @@ export class ControlPlaneNodeAgentGateway {
   }
 
   async startInstance(node: Node, instanceId: string, input: unknown = {}) {
-    const instance = await this.client.requestSchema(node, `/instances/${encodeURIComponent(instanceId)}/start`, ControlledInstanceSchema, {
+    const result = await this.client.requestSchema(node, `/instances/${encodeURIComponent(instanceId)}/start`, NodeAgentInstanceLifecycleResultSchema, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(input),
     });
-    this.upsertInstanceSnapshot(node, instance);
-    return instance;
+    this.upsertInstanceSnapshot(node, result.instance);
+    return result;
   }
 
   async retryInstanceImageProvisioning(node: Node, instanceId: string) {
@@ -562,13 +563,13 @@ export class ControlPlaneNodeAgentGateway {
   }
 
   async restartInstance(node: Node, instanceId: string, input: unknown = {}) {
-    const instance = await this.client.requestSchema(node, `/instances/${encodeURIComponent(instanceId)}/restart`, ControlledInstanceSchema, {
+    const result = await this.client.requestSchema(node, `/instances/${encodeURIComponent(instanceId)}/restart`, NodeAgentInstanceLifecycleResultSchema, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(input),
     });
-    this.upsertInstanceSnapshot(node, instance);
-    return instance;
+    this.upsertInstanceSnapshot(node, result.instance);
+    return result;
   }
 
   instanceResourceMetrics(node: Node, instanceId: string) {

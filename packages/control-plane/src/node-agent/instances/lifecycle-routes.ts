@@ -13,8 +13,12 @@ import { reportedVersion } from "../runtime-convergence.ts";
 import { runtimeVersionStateForActual } from "../runtime-version-state.ts";
 import { InstanceOperationGate } from "./instance-operation-gate.ts";
 import { nowIso as now } from "@task-handoff/core/core/time";
+import { GitWorkspaceProvisioningInputSchema, type GitWorkspaceProvisioningInput } from "@task-handoff/protocol/managed-git-credentials";
 
-const LifecycleRequestSchema = z.object({}).strict().default({});
+const LifecycleRequestSchema = z.object({
+  // Compatibility for v0.0.21: control planes only send this after the managed-Git capability gate.
+  gitWorkspaceProvisioning: GitWorkspaceProvisioningInputSchema.optional(),
+}).strict().default({});
 
 type LifecycleState = {
   requireInstance(id: string): ControlledInstance;
@@ -23,6 +27,9 @@ type LifecycleState = {
   deleteInstance(id: string): boolean;
   applyLifecycle(id: string, event: InstanceLifecycleEvent): ControlledInstance;
   context(instance: ControlledInstance, modelEnv?: Record<string, string>): ExecutorContext;
+  setGitWorkspaceProvisioning(input: GitWorkspaceProvisioningInput): void;
+  discardGitWorkspaceProvisioning(id: string): boolean;
+  gitWorkspaceProvisioningStatus(id: string): { status: "pending" | "consumed"; operationId: string } | undefined;
 };
 
 type Convergence = {
@@ -71,15 +78,33 @@ export function registerInstanceLifecycleRoutes(
     const signal = (operations as InstanceOperationGate & { signal?: (instanceId: string, operationIntent: object) => AbortSignal }).signal;
     return typeof signal === "function" ? signal.call(operations, id, intent) : undefined;
   };
+  const applyGitProvisioning = (id: string, input: GitWorkspaceProvisioningInput | undefined) => {
+    if (!input) return;
+    if (input.instanceId !== id) {
+      throw Object.assign(new Error(`Git provisioning belongs to ${input.instanceId}, not ${id}.`), {
+        code: "GIT_WORKSPACE_PROVISIONING_INSTANCE_MISMATCH",
+        statusCode: 409,
+      });
+    }
+    state.setGitWorkspaceProvisioning(input);
+  };
+  const lifecycleResult = (instance: ControlledInstance, input?: GitWorkspaceProvisioningInput) => {
+    if (!input) return instance;
+    const status = state.gitWorkspaceProvisioningStatus(instance.id);
+    return status?.status === "consumed" && status.operationId === input.operationId
+      ? { instance, gitWorkspaceProvisioningOperationId: input.operationId }
+      : instance;
+  };
 
   app.post("/api/node-agent/instances/:id/start", async (request) => {
-    LifecycleRequestSchema.parse(request.body);
+    const body = LifecycleRequestSchema.parse(request.body);
     const id = (request.params as { id: string }).id;
     const intent = intentFor(id);
     return operations.run(id, async () => {
       assertIntentCurrent(id, intent);
+      applyGitProvisioning(id, body.gitWorkspaceProvisioning);
       hooks.allowRecovery(id);
-      return { data: await hooks.start(id, () => operations.isIntentCurrent(id, intent), signalFor(id, intent)) };
+      return { data: lifecycleResult(await hooks.start(id, () => operations.isIntentCurrent(id, intent), signalFor(id, intent)), body.gitWorkspaceProvisioning) };
     });
   });
 
@@ -110,6 +135,8 @@ export function registerInstanceLifecycleRoutes(
   app.post("/api/node-agent/instances/:id/stop", async (request) => {
     const id = (request.params as { id: string }).id;
     state.requireInstance(id);
+    // Stopping is an explicit cancellation boundary for a not-yet-consumed grant.
+    state.discardGitWorkspaceProvisioning(id);
     operations.invalidate(id);
     const cancellation = settledCancellation(id);
     return operations.run(id, async () => {
@@ -141,10 +168,11 @@ export function registerInstanceLifecycleRoutes(
 
   app.post("/api/node-agent/instances/:id/restart", async (request) => {
     const id = (request.params as { id: string }).id;
-    LifecycleRequestSchema.parse(request.body);
+    const body = LifecycleRequestSchema.parse(request.body);
     const intent = intentFor(id);
     return operations.run(id, async () => {
       assertIntentCurrent(id, intent);
+      applyGitProvisioning(id, body.gitWorkspaceProvisioning);
       hooks.allowRecovery(id);
       let current = state.requireInstance(id);
       if (hooks.isManaged(current) && (!current.ready || current.runtimeVersion?.phase !== "matched")) {
@@ -159,7 +187,7 @@ export function registerInstanceLifecycleRoutes(
         const instance = await convergence.schedule(id, { startRequested: true });
         assertIntentCurrent(id, intent);
         hooks.sync();
-        return { data: instance };
+        return { data: lifecycleResult(instance, body.gitWorkspaceProvisioning) };
       }
       hooks.diagnostic({ instanceId: id, action: "restart", runtimeId: current.runtimeId, imageId: current.imageSelection?.imageId, containerName: current.runtime.containerName }, "node instance restart requested");
       const result = await adapters.forRuntime(state.requireRuntime(current.runtimeId)).restart(state.context(current));
@@ -188,7 +216,7 @@ export function registerInstanceLifecycleRoutes(
       await hooks.autoImport(stored);
       hooks.sync();
       hooks.diagnostic({ instanceId: id, action: "restart", status: stored.status, connectionStatus: stored.connectionStatus, targetStatus: stored.targetStatus, targetWeb: stored.target.web, containerName: stored.runtime.containerName }, "node instance restart completed");
-      return { data: stored };
+      return { data: lifecycleResult(stored, body.gitWorkspaceProvisioning) };
     });
   });
 

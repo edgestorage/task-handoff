@@ -25,7 +25,7 @@ import { AiSessionAttachmentCache } from "../sessions/ai-session-attachment-cach
 import { ControlPlaneNodeAgentTunnelTransport, ControlPlaneNodeEventSubscriber } from "../nodes/tunnel.ts";
 import { controlPlaneStorePaths } from "../persistence/paths.ts";
 import { acquireControlPlaneSingletonLock, defaultControlPlaneSingletonLockPath } from "../process/singleton-lock.ts";
-import { assertCan, assertCanAccessResolvedResource, type ControlPlaneAction, type ControlPlaneActor, type ControlPlaneResource } from "../auth/authorization.ts";
+import { assertCan, assertCanAccessResolvedResource, instanceScopeAllows, type ControlPlaneAction, type ControlPlaneActor, type ControlPlaneResource } from "../auth/authorization.ts";
 import { resolveRequestResourceScopes } from "../auth/resource-scope.ts";
 import { controlPlaneRequestActor, setControlPlaneRequestActor } from "./request-actor.ts";
 import { registerControlPlaneManagementRoutes } from "./management-routes.ts";
@@ -697,13 +697,19 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
       });
     }
     setControlPlaneRequestActor(request, actor);
+    if (actor.type === "user" && actor.requiresPasswordChange && securityUrl !== "/api/auth/password") {
+      throw Object.assign(new Error("Change the temporary password before accessing the Control Plane."), {
+        code: "AUTH_PASSWORD_CHANGE_REQUIRED",
+        statusCode: 403,
+      });
+    }
     const authorization = routeAuthorization(request.method, securityUrl);
     if (authorization) {
       if (actor.type === "user") {
         assertCan(actor, authorization.action, authorization.resource);
         let scopes;
         try {
-          scopes = await resolveRequestResourceScopes(service, request, securityUrl, authorization.resource, actor);
+          scopes = await resolveRequestResourceScopes(service, request, securityUrl, authorization.resource, actor, authorization.action);
         } catch (error) {
           if (error && typeof error === "object" && (error as { statusCode?: number }).statusCode === 404) {
             throw Object.assign(new Error("The requested resource is not visible."), {
@@ -802,7 +808,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     const eventInstanceId = typeof eventQuery.instanceId === "string" ? eventQuery.instanceId.trim() : "";
     const actor = controlPlaneRequestActor(request);
     const visibleInstances = actor?.type === "user"
-      ? (await service.listControlledInstances()).filter((instance) => actor.nodeScope.kind === "all" || actor.nodeScope.nodeIds.includes(instance.nodeId))
+      ? (await service.listControlledInstances()).filter((instance) => instanceScopeAllows(actor.nodeScope, actor.instanceScope, instance.id, instance.nodeId))
       : undefined;
     const visibleInstanceIds = visibleInstances ? new Set(visibleInstances.map((instance) => instance.id)) : undefined;
     if (eventInstanceId && visibleInstanceIds && !visibleInstanceIds.has(eventInstanceId)) {
@@ -836,6 +842,8 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
           permissionIds: actor.permissionIds,
           ...(actor.nodeScope.kind === "selected" ? {
             allowedNodeIds: new Set(actor.nodeScope.nodeIds),
+          } : {}),
+          ...((actor.instanceScope?.kind === "selected" || actor.nodeScope.kind === "selected") ? {
             allowedInstanceIds: visibleInstanceIds,
           } : {}),
         },
@@ -980,6 +988,11 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     nodeAgentTunnel,
     nodeEventSubscriber,
     errorPayload: controlPlaneErrorPayload,
+    onInstanceDeleted: async (instanceId) => {
+      if (!auth.enabled()) return;
+      const affectedUserIds = await auth.users.removeInstanceFromAccessScopes(instanceId);
+      for (const userId of affectedUserIds) await auth.notifyAuthorizationChanged(userId);
+    },
   });
 
   registerNodeProxyRoutes({

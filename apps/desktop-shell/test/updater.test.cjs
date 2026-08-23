@@ -66,10 +66,11 @@ test("desktop update channel persistence sanitizes historical data", () => {
 
 test("desktop update capabilities preserve platform installation boundaries", () => {
   assert.deepEqual(updateCapabilities({ packaged: true, platform: "darwin" }), { check: true, download: true, install: true });
-  assert.equal(updateCapabilities({ packaged: true, platform: "win32" }).install, false);
+  assert.equal(updateCapabilities({ packaged: true, platform: "win32" }).reasonCode, "windows-signing-required");
   assert.equal(updateCapabilities({ packaged: true, platform: "linux", env: { APPIMAGE: "/tmp/app.AppImage" } }).install, true);
-  assert.equal(updateCapabilities({ packaged: true, platform: "linux", env: {} }).check, false);
-  assert.equal(updateCapabilities({ packaged: false, platform: "darwin" }).check, false);
+  assert.equal(updateCapabilities({ packaged: true, platform: "linux", env: {} }).reasonCode, "appimage-required");
+  assert.equal(updateCapabilities({ packaged: false, platform: "darwin" }).reasonCode, "development-build");
+  assert.equal(updateCapabilities({ packaged: true, platform: "freebsd" }).reasonCode, "unsupported-platform");
 });
 
 test("desktop updater publishes one normalized state machine", async (t) => {

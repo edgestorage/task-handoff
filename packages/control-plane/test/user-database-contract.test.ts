@@ -70,15 +70,58 @@ for (const fixture of fixtures) {
         });
         throw new Error("force rollback");
       }), /force rollback/);
-      assert.equal(current.repository.users.get("user_rollback"), undefined);
-      assert.equal(current.repository.identities.get("identity_rollback"), undefined);
-      assert.equal(current.repository.audit.get("audit_rollback"), undefined);
+      assert.equal(await current.repository.users.get("user_rollback"), undefined);
+      assert.equal(await current.repository.identities.get("identity_rollback"), undefined);
+      assert.equal(await current.repository.audit.get("audit_rollback"), undefined);
 
       await current.repository.transaction(async (transaction) => {
         await transaction.users.put({ id: "user_one", displayName: "One", status: "active", createdAt: timestamp, updatedAt: timestamp });
         await transaction.users.put({ id: "user_two", displayName: "Two", status: "active", createdAt: timestamp, updatedAt: timestamp });
+        await transaction.roles.put({ id: "role_one", name: "Role One", system: false, status: "active", permissionIds: ["users:read"], createdAt: timestamp, updatedAt: timestamp });
+        await transaction.roles.put({ id: "role_two", name: "Role Two", system: false, status: "active", permissionIds: ["nodes:read"], createdAt: timestamp, updatedAt: timestamp });
         await transaction.identities.put({ id: "identity_one", userId: "user_one", kind: "local-password", normalizedLoginName: "same-login", passwordHash: "hash", createdAt: timestamp, updatedAt: timestamp });
+        await transaction.grants.put({
+          userId: "user_one",
+          roleIds: ["role_one", "role_two"],
+          nodeScope: { kind: "all" },
+          instanceScope: { kind: "inherit-node-scope" },
+          authorizationRevision: 1,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        });
       });
+      assert.deepEqual((await current.repository.grants.get("user_one"))?.roleIds, ["role_one", "role_two"]);
+      const currentGrant = (await current.repository.grants.get("user_one"))!;
+      await assert.rejects(() => current.repository.grants.put({
+        ...currentGrant,
+        roleIds: ["role_one", "role_missing"],
+        authorizationRevision: 2,
+      }));
+      assert.deepEqual((await current.repository.grants.get("user_one"))?.roleIds, ["role_one", "role_two"], "failed role replacement must roll back the aggregate");
+
+      await assert.rejects(() => current.repository.sessions.put({
+        id: "session_wrong_user",
+        userId: "user_two",
+        identityId: "identity_one",
+        authorizationRevision: 1,
+        tokenHash: "wrong-user-hash",
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        clientType: "web",
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      }), /does not belong/);
+      await current.repository.sessions.put({
+        id: "session_one",
+        userId: "user_one",
+        identityId: "identity_one",
+        authorizationRevision: 1,
+        tokenHash: "session-one-hash",
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        clientType: "web",
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      });
+      assert.equal((await current.repository.sessions.get("session_one"))?.userId, "user_one");
       await assert.rejects(() => current.repository.identities.put({
         id: "identity_two",
         userId: "user_two",
@@ -88,7 +131,18 @@ for (const fixture of fixtures) {
         createdAt: timestamp,
         updatedAt: timestamp,
       }));
-      assert.equal(current.repository.identities.get("identity_two"), undefined);
+      assert.equal(await current.repository.identities.get("identity_two"), undefined);
+
+      await Promise.all([
+        current.repository.transaction(async (transaction) => {
+          await transaction.users.put({ id: "user_concurrent_one", displayName: "Concurrent One", status: "active", createdAt: timestamp, updatedAt: timestamp });
+        }),
+        current.repository.transaction(async (transaction) => {
+          await transaction.users.put({ id: "user_concurrent_two", displayName: "Concurrent Two", status: "active", createdAt: timestamp, updatedAt: timestamp });
+        }),
+      ]);
+      assert.ok(await current.repository.users.get("user_concurrent_one"));
+      assert.ok(await current.repository.users.get("user_concurrent_two"));
     } finally {
       await current.cleanup();
     }

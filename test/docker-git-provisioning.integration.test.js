@@ -113,6 +113,15 @@ test("real Docker helper recursively provisions independently scoped HTTPS remot
   fs.writeFileSync(path.join(mainSeed, ".gitmodules"), fs.readFileSync(path.join(mainSeed, ".gitmodules"), "utf8").replace("REPLACE_AFTER_LISTEN", `https://host.docker.internal:${port}/team/sub.git`));
   git(root, ["-C", mainSeed, "add", ".gitmodules"]);
   git(root, ["-C", mainSeed, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "main"]);
+  const historicalMainCommit = git(root, ["-C", mainSeed, "rev-parse", "HEAD"]);
+
+  fs.writeFileSync(path.join(subSeed, "sub.txt"), "submodule-v2\n");
+  git(root, ["-C", subSeed, "add", "sub.txt"]);
+  git(root, ["-C", subSeed, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "sub-v2"]);
+  git(root, ["-C", subSeed, "push", "-q", path.join(root, "team/sub.git"), "HEAD:main"]);
+  const latestSubCommit = git(root, ["-C", subSeed, "rev-parse", "HEAD"]);
+  git(root, ["-C", mainSeed, "update-index", "--cacheinfo", `160000,${latestSubCommit},deps/sub`]);
+  git(root, ["-C", mainSeed, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "main-v2"]);
   git(root, ["-C", mainSeed, "push", "-q", path.join(root, "root/main.git"), "HEAD:main"]);
   git(root, ["--git-dir", path.join(root, "root/main.git"), "symbolic-ref", "HEAD", "refs/heads/main"]);
 
@@ -135,7 +144,7 @@ test("real Docker helper recursively provisions independently scoped HTTPS remot
     gitWorkspaceProvisioning: {
       operationId: `gitop-${suffix}`, instanceId: `integration-${suffix}`,
       remoteUrl: `https://host.docker.internal:${port}/root/main.git`,
-      ref: { type: "branch", name: "main" }, clone: { submodules: true, lfs: false, subdirectory: "" }, credentials,
+      ref: { type: "commit", commit: historicalMainCommit }, clone: { submodules: true, lfs: false, subdirectory: "" }, credentials,
     },
   };
   const expectedVolume = `task-handoff-${context.instance.id}-workspace`;
@@ -146,7 +155,7 @@ test("real Docker helper recursively provisions independently scoped HTTPS remot
   args.splice(args.length - 4, 0, "-e", "GIT_SSL_NO_VERIFY=1");
   assert.equal(args.some((value) => value.includes(token)), false);
   await defaultCommandRunner("docker", args, { timeoutMs: 120_000 });
-  const workspaceInspection = await defaultCommandRunner("docker", ["run", "--rm", "--entrypoint", "sh", "--mount", `type=volume,src=${expectedVolume},dst=/workspace`, image, "-c", "test -f /workspace/README.md && test -f /workspace/deps/sub/sub.txt && test ! -e /workspace/.task-handoff-git-provisioning && find /workspace -type f -maxdepth 5 -exec cat {} +"]);
+  const workspaceInspection = await defaultCommandRunner("docker", ["run", "--rm", "--entrypoint", "sh", "--mount", `type=volume,src=${expectedVolume},dst=/workspace`, image, "-c", "test -f /workspace/README.md && test \"$(cat /workspace/deps/sub/sub.txt)\" = submodule && test ! -e /workspace/.task-handoff-git-provisioning && find /workspace -type f -maxdepth 5 -exec cat {} +"]);
   assert.equal(workspaceInspection.stdout.includes(token), false);
   await assert.rejects(() => defaultCommandRunner("docker", ["inspect", container]));
 });

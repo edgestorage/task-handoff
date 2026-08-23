@@ -27,6 +27,7 @@ export type ControlPlaneStorePaths = {
   gitCredentialsDir: string;
   gitCredentialAssignmentsDir: string;
   gitCredentialAuditDir: string;
+  gitCredentialProvisioningIntentsDir: string;
   gitCredentialEncryptionKeyPath: string;
   aiSessionUnreadDir: string;
   logsDir: string;
@@ -64,6 +65,7 @@ export function controlPlaneStorePaths(dataDir = defaultControlPlaneDataDir()): 
     gitCredentialsDir: path.join(root, "git-credentials", "credentials"),
     gitCredentialAssignmentsDir: path.join(root, "git-credentials", "assignments"),
     gitCredentialAuditDir: path.join(root, "git-credentials", "audit"),
+    gitCredentialProvisioningIntentsDir: path.join(root, "git-credentials", "provisioning-intents"),
     gitCredentialEncryptionKeyPath: path.join(root, "git-credentials", "encryption-key.json"),
     aiSessionUnreadDir: path.join(root, "ai-session-unread"),
     logsDir: path.join(root, "logs"),

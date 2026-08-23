@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   ControlPlaneCurrentAuthorizationSchema,
+  ControlPlaneExternalIdentityApprovalSummarySchema,
   ControlPlaneIdentityProviderSummarySchema,
   ControlPlaneLoginIdentitySummarySchema,
   ControlPlanePermissionDescriptorSchema,
@@ -8,6 +9,8 @@ import {
   ControlPlaneUserDetailSchema,
   ControlPlaneUserSessionSummarySchema,
   ControlPlaneUserSummarySchema,
+  ControlPlaneUpdateUserInputSchema,
+  type ControlPlaneUpdateUserInput,
 } from "@task-handoff/protocol/control-plane-access";
 import type { ControlPlaneClientTransport } from "./transport.ts";
 
@@ -31,14 +34,17 @@ export function createControlPlaneUsersApi(transport: ControlPlaneClientTranspor
     create(input: unknown) {
       return transport.request("/api/users", DataSchema(ControlPlaneUserDetailSchema), json("POST", input)).then((response) => response.data);
     },
-    update(userId: string, input: unknown) {
-      return transport.request(`/api/users/${encodeURIComponent(userId)}`, DataSchema(ControlPlaneUserDetailSchema), json("PATCH", input)).then((response) => response.data);
+    update(userId: string, input: ControlPlaneUpdateUserInput) {
+      return transport.request(`/api/users/${encodeURIComponent(userId)}`, DataSchema(ControlPlaneUserDetailSchema), json("PATCH", ControlPlaneUpdateUserInputSchema.parse(input))).then((response) => response.data);
     },
     setAccess(userId: string, input: unknown) {
       return transport.request(`/api/users/${encodeURIComponent(userId)}/access`, DataSchema(ControlPlaneUserDetailSchema), json("PUT", input)).then((response) => response.data);
     },
     resetPassword(userId: string, input: { password: string; requirePasswordChange?: boolean }) {
       return transport.request(`/api/users/${encodeURIComponent(userId)}/password-reset`, DataSchema(ControlPlaneLoginIdentitySummarySchema), json("POST", input)).then((response) => response.data);
+    },
+    unbindExternalIdentity(userId: string, identityId: string) {
+      return transport.request(`/api/users/${encodeURIComponent(userId)}/identities/${encodeURIComponent(identityId)}`, DataSchema(z.object({ unbound: z.boolean() }).strict()), { method: "DELETE" }).then((response) => response.data);
     },
     sessions(userId: string, signal?: AbortSignal) {
       return transport.request(`/api/users/${encodeURIComponent(userId)}/sessions`, DataSchema(z.array(ControlPlaneUserSessionSummarySchema)), { signal }).then((response) => response.data);
@@ -55,8 +61,35 @@ export function createControlPlaneUsersApi(transport: ControlPlaneClientTranspor
     permissions(signal?: AbortSignal) {
       return transport.request("/api/permissions", DataSchema(z.array(ControlPlanePermissionDescriptorSchema)), { signal }).then((response) => response.data);
     },
+    createRole(input: unknown) {
+      return transport.request("/api/roles", DataSchema(ControlPlaneRoleSummarySchema), json("POST", input)).then((response) => response.data);
+    },
+    updateRole(roleId: string, input: unknown) {
+      return transport.request(`/api/roles/${encodeURIComponent(roleId)}`, DataSchema(ControlPlaneRoleSummarySchema), json("PATCH", input)).then((response) => response.data);
+    },
+    archiveRole(roleId: string) {
+      return transport.request(`/api/roles/${encodeURIComponent(roleId)}`, DataSchema(ControlPlaneRoleSummarySchema), { method: "DELETE" }).then((response) => response.data);
+    },
     providers(signal?: AbortSignal) {
       return transport.request("/api/identity-providers", DataSchema(z.array(ControlPlaneIdentityProviderSummarySchema)), { signal }).then((response) => response.data);
+    },
+    createProvider(input: unknown) {
+      return transport.request("/api/identity-providers", DataSchema(ControlPlaneIdentityProviderSummarySchema), json("POST", input)).then((response) => response.data);
+    },
+    updateProvider(providerId: string, input: unknown) {
+      return transport.request(`/api/identity-providers/${encodeURIComponent(providerId)}`, DataSchema(ControlPlaneIdentityProviderSummarySchema), json("PATCH", input)).then((response) => response.data);
+    },
+    removeProvider(providerId: string) {
+      return transport.request(`/api/identity-providers/${encodeURIComponent(providerId)}`, DataSchema(z.object({ deleted: z.boolean() }).strict()), { method: "DELETE" }).then((response) => response.data);
+    },
+    approvals(signal?: AbortSignal) {
+      return transport.request("/api/external-identity-approvals", DataSchema(z.array(ControlPlaneExternalIdentityApprovalSummarySchema)), { signal }).then((response) => response.data);
+    },
+    approveIdentity(approvalId: string, input: unknown) {
+      return transport.request(`/api/external-identity-approvals/${encodeURIComponent(approvalId)}/approve`, DataSchema(ControlPlaneUserDetailSchema), json("POST", input)).then((response) => response.data);
+    },
+    rejectIdentity(approvalId: string) {
+      return transport.request(`/api/external-identity-approvals/${encodeURIComponent(approvalId)}/reject`, DataSchema(z.object({ rejected: z.boolean() }).strict()), json("POST", {})).then((response) => response.data);
     },
   };
 }

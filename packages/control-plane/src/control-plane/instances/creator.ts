@@ -37,14 +37,21 @@ export class ControlledInstanceCreator {
     this.options = options;
   }
 
-  async create(input: unknown) {
+  targetNodeId(input: unknown) {
     const parsedInput = CreateInstanceInputSchema.parse(input);
     const project = parsedInput.projectId ? this.options.requireProject(parsedInput.projectId) : undefined;
-    const runtimeId = parsedInput.runtimeId || "runtime_local_docker";
     const nodeId = parsedInput.nodeId || project?.defaultNodeId || this.options.defaultNodeId();
     if (!nodeId) {
       throw publicError("At least one node connection is required before creating an instance.", 400, "NODE_REQUIRED");
     }
+    return nodeId;
+  }
+
+  async create(input: unknown) {
+    const parsedInput = CreateInstanceInputSchema.parse(input);
+    const project = parsedInput.projectId ? this.options.requireProject(parsedInput.projectId) : undefined;
+    const runtimeId = parsedInput.runtimeId || "runtime_local_docker";
+    const nodeId = this.targetNodeId(parsedInput);
     const node = this.options.requireNode(nodeId);
     const agent = node.capabilities.agent;
     const agentCapabilities = agent && typeof agent === "object" && !Array.isArray(agent)
@@ -102,10 +109,13 @@ export class ControlledInstanceCreator {
       : undefined;
     let instance: ControlledInstance | undefined;
     let assigned: ControlledInstance | undefined;
+    let retainedPayloadMayBeDeployed = false;
+    let retainedAuthorized = false;
     try {
-      // Persist retained material before the node can race into image/workspace provisioning.
-      if (retainedPayload) await this.options.gateway.deployGitCredential(node, retainedPayload);
-      instance = await this.options.gateway.createInstance(node, {
+      if (gitProvisioning?.retention === "operation-only") {
+        this.options.gitCredentials.rememberOperationProvisioning(gitProvisioning.input);
+      }
+      const createInput = {
         id: instanceId,
         name: parsedInput.name,
         runtimeId,
@@ -118,11 +128,26 @@ export class ControlledInstanceCreator {
         sourceSnapshot: source.snapshot,
         config: parsedInput.config,
         modelSelection: {},
-        ...(gitProvisioning ? { gitWorkspaceProvisioning: gitProvisioning.input } : {}),
-      });
+        ...(gitProvisioning?.retention === "operation-only" ? { gitWorkspaceProvisioning: gitProvisioning.input } : {}),
+      };
+      try {
+        instance = await this.options.gateway.createInstance(node, createInput);
+      } catch (createError) {
+        // The create response can be lost after the node has durably created the
+        // caller-assigned id. Reconcile that id before attempting compensation.
+        instance = await this.options.gateway.listInstances(node)
+          .then((instances) => instances.find((candidate) => candidate.id === instanceId))
+          .catch(() => undefined);
+        if (!instance) throw createError;
+      }
       assigned = instance;
       if (gitProvisioning?.retention === "instance-retained") {
-        const assignment = this.options.gitCredentials.authorize(instance.id, gitProvisioning.credentialId);
+        // Creation never clones the workspace. Deploy retained material only after
+        // the caller-assigned instance id is confirmed, before an explicit start.
+        retainedPayloadMayBeDeployed = true;
+        await this.options.gateway.deployGitCredential(node, retainedPayload!);
+        this.options.gitCredentials.authorize(instance.id, gitProvisioning.credentialId);
+        retainedAuthorized = true;
         await this.options.gateway.replaceGitCredentialAuthorizations(node, this.options.gitCredentials.desiredAuthorizationSet(instance.id));
         this.options.gitCredentials.markAssignmentStatus(
           instance.id,
@@ -132,11 +157,48 @@ export class ControlledInstanceCreator {
       }
       assigned = (await this.options.gateway.assignInstanceModels(node, instance.id, preparedModels)).instance;
     } catch (error) {
-      if (instance && gitProvisioning?.retention === "instance-retained") {
-        this.options.gitCredentials.revoke(instance.id, gitProvisioning.credentialId);
+      let retainedAuthorizationCleanupFailure: unknown;
+      if (retainedAuthorized && gitProvisioning?.retention === "instance-retained") {
+        this.options.gitCredentials.revoke(instanceId, gitProvisioning.credentialId);
+        try {
+          await this.options.gateway.replaceGitCredentialAuthorizations(node, this.options.gitCredentials.desiredAuthorizationSet(instanceId));
+        } catch (cleanupError) {
+          retainedAuthorizationCleanupFailure = cleanupError;
+        }
       }
-      if (instance) await this.options.gateway.deleteInstance(node, instance.id, { deleteVolumes: true }).catch(() => undefined);
-      if (retainedPayload) await this.options.gateway.removeGitCredential(node, retainedPayload.credential.id).catch(() => undefined);
+      let compensated = false;
+      let compensationFailure: unknown;
+      try {
+        const result = await this.options.gateway.deleteInstance(node, instanceId, { deleteVolumes: true });
+        compensated = result.completed;
+        if (!result.completed) compensationFailure = new Error(`Instance ${instanceId} deletion requires retry.`);
+      } catch (compensationError) {
+        if (isNotFound(compensationError)) compensated = true;
+        else compensationFailure = compensationError;
+      }
+      let retainedPayloadCleanupFailure: unknown;
+      if (retainedPayloadMayBeDeployed && retainedPayload) {
+        try {
+          await this.options.gateway.removeGitCredential(node, retainedPayload.credential.id);
+        } catch (cleanupError) {
+          retainedPayloadCleanupFailure = cleanupError;
+        }
+      }
+      if (compensated && gitProvisioning?.retention === "operation-only") this.options.gitCredentials.forgetOperationProvisioning(instanceId);
+      if (compensationFailure || retainedAuthorizationCleanupFailure || retainedPayloadCleanupFailure) {
+        const failure = publicError(
+          `Instance ${instanceId} creation failed and node cleanup could not be confirmed.`,
+          502,
+          "INSTANCE_CREATE_COMPENSATION_REQUIRED",
+        );
+        Object.assign(failure, {
+          cause: error,
+          compensationError: compensationFailure,
+          retainedAuthorizationCleanupError: retainedAuthorizationCleanupFailure,
+          retainedPayloadCleanupError: retainedPayloadCleanupFailure,
+        });
+        throw failure;
+      }
       throw error;
     }
 
@@ -147,7 +209,15 @@ export class ControlledInstanceCreator {
     };
     if (parsedInput.start) {
       try {
-        assigned = await this.options.gateway.startInstance(node, assigned.id);
+        const startResult = await this.options.gateway.startInstance(
+          node,
+          assigned.id,
+          gitProvisioning?.retention === "operation-only" ? { gitWorkspaceProvisioning: gitProvisioning.input } : {},
+        );
+        assigned = startResult.instance;
+        if (gitProvisioning?.retention === "operation-only" && startResult.gitWorkspaceProvisioningOperationId === gitProvisioning.input.operationId) {
+          this.options.gitCredentials.forgetOperationProvisioning(assigned.id);
+        }
         startOutcome = { status: "started" };
       } catch (error) {
         startOutcome = { status: "failed", error: publicOperationError(error, "INSTANCE_START_FAILED") };
@@ -253,6 +323,12 @@ export class ControlledInstanceCreator {
     snapshot = folder as unknown as Record<string, unknown>;
     return { value: source, configured: source, snapshot };
   }
+}
+
+function isNotFound(error: unknown) {
+  if (!error || typeof error !== "object") return false;
+  const record = error as { statusCode?: unknown; code?: unknown };
+  return record.statusCode === 404 || record.code === "CONTROLLED_INSTANCE_NOT_FOUND";
 }
 
 function sourceSnapshotWithoutGitCredential(snapshot: Record<string, unknown>) {

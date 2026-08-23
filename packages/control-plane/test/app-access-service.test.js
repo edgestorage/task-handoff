@@ -40,8 +40,8 @@ test("user app access leases retain only the authorization binding needed for re
   assert.deepEqual(access.authorization, {
     userId: "user-1",
     authorizationRevision: 4,
-    nodeId: "node-1",
   });
+  assert.equal("nodeId" in access.authorization, false);
   assert.equal("identityId" in access.authorization, false);
 });
 

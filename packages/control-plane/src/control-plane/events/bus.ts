@@ -281,9 +281,9 @@ function authorizedEvent(client: EventSocket, event: EventEnvelope) {
   if (event.topic === "triggers" && !event.scope?.nodeId && !event.scope?.instanceId) {
     return authorization.permissionIds.includes("triggers:manage");
   }
+  if (event.scope?.nodeId) return !authorization.allowedNodeIds || authorization.allowedNodeIds.has(event.scope.nodeId);
+  if (event.scope?.instanceId) return !authorization.allowedInstanceIds || authorization.allowedInstanceIds.has(event.scope.instanceId);
   if (!authorization.allowedNodeIds && !authorization.allowedInstanceIds) return true;
-  if (event.scope?.nodeId) return authorization.allowedNodeIds?.has(event.scope.nodeId) === true;
-  if (event.scope?.instanceId) return authorization.allowedInstanceIds?.has(event.scope.instanceId) === true;
   return !NODE_DERIVED_EVENT_TOPICS.has(event.topic);
 }
 

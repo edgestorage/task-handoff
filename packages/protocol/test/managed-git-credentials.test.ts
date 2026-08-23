@@ -4,14 +4,18 @@ import {
   GitCredentialCreateRequestSchema,
   GitCredentialPublicSchema,
   GitCredentialRetentionSchema,
+  GitWorkspaceProvisioningInputSchema,
   NodeGitCredentialPayloadSchema,
   normalizeGitCredentialScope,
   normalizeGitRemote,
   resolveGitCredential,
   sanitizeGitCredentialPublic,
+  sanitizeGitWorkspaceProvisioningInput,
 } from "../src/managed-git-credentials.ts";
 import {
   normalizeControlledInstanceCapabilities,
+  GitCloneOptionsSchema,
+  GitRefSchema,
   normalizeNodeAgentCapabilities,
   supportsGitCliCredentialBroker,
   supportsGitCredentialProxy,
@@ -21,6 +25,43 @@ import {
 } from "../src/control-plane.ts";
 
 const timestamp = "2026-08-23T00:00:00.000Z";
+
+test("workspace subdirectory is a relative repository path", () => {
+  assert.equal(GitCloneOptionsSchema.parse({ subdirectory: "packages/app" }).subdirectory, "packages/app");
+  assert.equal(GitCloneOptionsSchema.parse({ subdirectory: "." }).subdirectory, "");
+  assert.equal(GitCloneOptionsSchema.parse({ subdirectory: "./packages//app" }).subdirectory, "packages/app");
+  for (const subdirectory of ["/tmp/outside", "../outside", "packages/../outside"]) {
+    assert.equal(GitCloneOptionsSchema.safeParse({ subdirectory }).success, false);
+  }
+  assert.equal(GitWorkspaceProvisioningInputSchema.safeParse({
+    operationId: "gitop_one",
+    instanceId: "inst_one",
+    remoteUrl: "https://git.example.com/team/repo.git",
+    ref: { type: "branch", name: "main" },
+    clone: { subdirectory: "../outside" },
+    credentials: [],
+  }).success, false);
+});
+
+test("Git refs require the field selected by their discriminator", () => {
+  assert.deepEqual(GitRefSchema.parse({ type: "branch", name: "main" }), { type: "branch", name: "main" });
+  assert.deepEqual(GitRefSchema.parse({ type: "commit", commit: "deadbeef" }), { type: "commit", commit: "deadbeef" });
+  for (const ref of [
+    { type: "branch" },
+    { type: "tag" },
+    { type: "commit" },
+    { type: "commit", commit: "--help" },
+    { type: "commit", commit: "main" },
+    { type: "branch", commit: "deadbeef" },
+    { type: "commit", name: "main" },
+  ]) {
+    assert.equal(GitRefSchema.safeParse(ref).success, false);
+    assert.equal(GitWorkspaceProvisioningInputSchema.safeParse({
+      operationId: "gitop_one", instanceId: "inst_one", remoteUrl: "https://git.example.com/repo.git",
+      ref, clone: {}, credentials: [],
+    }).success, false);
+  }
+});
 
 function credential(
   id: string,
@@ -198,4 +239,31 @@ test("public response readers ignore future fields without retaining secrets", (
     assert.equal("future" in sanitizedPublic.data, false);
     assert.equal("futureScope" in sanitizedPublic.data.scope, false);
   }
+});
+
+test("stored workspace provisioning ignores future fields at every private record boundary", () => {
+  const parsed = sanitizeGitWorkspaceProvisioningInput({
+    operationId: "gitop_one",
+    instanceId: "inst_one",
+    remoteUrl: "https://git.example.com/team/repo.git",
+    ref: { type: "branch", name: "main", future: true },
+    clone: { submodules: false, lfs: false, future: true },
+    credentials: [{
+      operationId: "gitop_one",
+      retention: "operation-only",
+      future: true,
+      payload: {
+        future: true,
+        credential: {
+          id: "gitcred_one", name: "Token", kind: "https-token",
+          scope: { scheme: "https", host: "git.example.com", pathPrefix: "/team/", future: true },
+          secretSet: true, status: "enabled", revision: 1, createdAt: timestamp, updatedAt: timestamp, future: true,
+        },
+        secret: { kind: "https-token", username: "git", token: "secret", future: true },
+      },
+    }],
+    future: true,
+  });
+  assert.equal(parsed.success, true);
+  assert.equal(JSON.stringify(parsed.success ? parsed.data : {}).includes("future"), false);
 });

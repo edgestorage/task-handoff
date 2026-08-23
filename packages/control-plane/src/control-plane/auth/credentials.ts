@@ -32,7 +32,7 @@ export async function initializeControlPlaneCredentials(
   const users = new ControlPlaneUserService(paths);
   try {
     await users.init();
-    if (users.store.state().initialized && users.store.users.list().length > 0) return { created: false as const };
+    if (users.store.state().initialized && (await users.store.users.list()).length > 0) return { created: false as const };
     return { created: true as const, user: await users.bootstrapAdmin(input) };
   } finally {
     try {
