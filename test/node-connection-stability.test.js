@@ -11,6 +11,7 @@ const { createDirectNodeAgentTransport } = require("../packages/control-plane/sr
 const { ControlPlaneNodeAgentTunnelTransport, ControlPlaneNodeEventSubscriber } = require("../packages/control-plane/src/control-plane/nodes/tunnel.ts");
 const { NodeTunnelIngress } = require("../packages/control-plane/src/control-plane/nodes/tunnel-ingress.ts");
 const { WebSocketConnectionSupervisor } = require("../packages/control-plane/src/shared/transport/websocket-connection-supervisor.ts");
+const { runtimeVersionStateForActual, runtimeVersionStateForReport } = require("../packages/control-plane/src/node-agent/runtime-version-state.ts");
 
 function fakeClock() {
   let timestamp = 0;
@@ -510,6 +511,117 @@ test("scoped fleet reads preserve snapshots owned by nodes outside the requested
   assert.deepEqual(gateway.readFleetRuntimes(nodes).items.map((item) => item.nodeId), ["node_a", "node_b"]);
 });
 
+test("fleet revalidation publishes only semantic state changes after the initial snapshot", async () => {
+  const observed = [];
+  let runtimeName = "Runtime A";
+  const runtime = () => ({
+    id: "runtime_stable",
+    nodeId: "node_stable",
+    name: runtimeName,
+    type: "docker",
+    status: "online",
+    accessStrategy: "direct-port",
+    capabilities: {},
+    labels: {},
+    createdAt: "2026-08-22T00:00:00.000Z",
+    updatedAt: "2026-08-22T00:00:00.000Z",
+  });
+  const client = new ControlPlaneNodeAgentClient({
+    request: async () => new Response(JSON.stringify({ data: [runtime()] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }),
+  });
+  const gateway = new ControlPlaneNodeAgentGateway(client, {
+    fleetSnapshotFreshMs: 0,
+    onFleetStateChanged: (state) => observed.push(state),
+  });
+  const node = {
+    id: "node_stable",
+    connectionMode: "direct-http",
+    endpoint: "http://node-stable.test",
+    status: "online",
+    auth: { mode: "paired-hmac", keyId: "key_stable" },
+    connectionPhase: "healthy",
+  };
+
+  await gateway.refreshFleetRuntimes([node]);
+  assert.deepEqual(observed.map((state) => state.phase), ["loading", "ready"]);
+  assert.equal(observed[0].contentChanged, false);
+  assert.equal(observed[1].contentChanged, true);
+
+  observed.length = 0;
+  await gateway.refreshFleetRuntimes([node]);
+  assert.deepEqual(observed, []);
+
+  runtimeName = "Runtime B";
+  await gateway.refreshFleetRuntimes([node]);
+  assert.deepEqual(observed.map((state) => state.phase), ["ready"]);
+  assert.equal(observed[0].contentChanged, true);
+  assert.equal(gateway.readFleetRuntimes([node]).items[0].name, "Runtime B");
+});
+
+test("instance heartbeat clocks do not publish fleet content changes", async () => {
+  const timestamp = "2026-08-22T00:00:00.000Z";
+  let heartbeat = 0;
+  const instance = () => ControlledInstanceSchema.parse({
+    id: "inst_heartbeat",
+    name: "Heartbeat instance",
+    source: { type: "local-folder", path: "/workspace" },
+    sourceSnapshot: {},
+    modelSelection: {},
+    nodeId: "node_heartbeat",
+    runtimeId: "runtime_heartbeat",
+    target: { strategy: "node-proxy", status: "reachable", web: "http://127.0.0.1:32100", api: "http://127.0.0.1:32100/api" },
+    runtime: { labels: {} },
+    protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
+    stateRevision: heartbeat,
+    lastHeartbeatAt: new Date(Date.parse(timestamp) + heartbeat * 1_000).toISOString(),
+    createdAt: timestamp,
+    updatedAt: new Date(Date.parse(timestamp) + heartbeat * 1_000).toISOString(),
+  });
+  const observed = [];
+  const client = new ControlPlaneNodeAgentClient({
+    request: async () => new Response(JSON.stringify({ data: [instance()] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }),
+  });
+  const gateway = new ControlPlaneNodeAgentGateway(client, {
+    fleetSnapshotFreshMs: 0,
+    onFleetStateChanged: (state) => observed.push(state),
+  });
+  const node = {
+    id: "node_heartbeat",
+    connectionMode: "direct-http",
+    endpoint: "http://node-heartbeat.test",
+    status: "online",
+    auth: { mode: "paired-hmac", keyId: "key_heartbeat" },
+    connectionPhase: "healthy",
+  };
+
+  await gateway.refreshFleetInstances([node]);
+  observed.length = 0;
+  heartbeat += 1;
+  await gateway.refreshFleetInstances([node]);
+  assert.deepEqual(observed, []);
+});
+
+test("Local Runtime heartbeats preserve the original matched version timestamp", () => {
+  const desiredVersion = runtimeVersionStateForActual().desiredVersion;
+  const current = {
+    desiredVersion,
+    actualVersion: desiredVersion,
+    phase: "matched",
+    attempt: 0,
+    matchedAt: "2026-08-22T00:00:00.000Z",
+  };
+  assert.equal(
+    runtimeVersionStateForReport({ runtimeVersion: current }, desiredVersion, false),
+    current,
+  );
+});
+
 test("failed fleet refreshes retry with backoff without republishing identical failure states", async () => {
   let requests = 0;
   let available = false;
@@ -612,6 +724,7 @@ test("node agent health response drops unknown cross-version fields", () => {
     build: { component: "node-agent", packageVersion: "1.2.3", futureBuildField: true },
     listener: { host: "127.0.0.1", port: 8091, futureListenerField: true },
     process: { pid: 42, startIdentity: "process-start", futureProcessField: true },
+    eventTransport: { status: "congested", activeOutputs: 1, bufferedBytes: 16_777_216, peakBufferedBytes: 16_777_216, coalescedEvents: 12, futureMetric: true },
   });
   assert.deepEqual(parsed, {
     ok: true,
@@ -619,6 +732,7 @@ test("node agent health response drops unknown cross-version fields", () => {
     build: { component: "node-agent", packageVersion: "1.2.3" },
     listener: { host: "127.0.0.1", port: 8091 },
     process: { pid: 42, startIdentity: "process-start" },
+    eventTransport: { status: "congested", activeOutputs: 1, bufferedBytes: 16_777_216, peakBufferedBytes: 16_777_216, coalescedEvents: 12 },
   });
 });
 

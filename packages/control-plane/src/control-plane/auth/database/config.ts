@@ -42,5 +42,5 @@ export function resolveControlPlaneUserDatabaseConfig(
     dialect: "sqlite",
     path: process.env.TASK_HANDOFF_CONTROL_PLANE_SQLITE_PATH,
   });
-  return { ...parsed, path: path.resolve(parsed.path || paths.userDatabasePath) };
+  return { ...parsed, path: path.resolve(parsed.path || paths.databasePath) };
 }

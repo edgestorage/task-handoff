@@ -106,9 +106,13 @@ export class ControlPlaneAppSessionAggregator {
     return this.apply({ type: AppSessionEventType.Removed, payload });
   }
 
-  async list(options: { refresh?: boolean } = {}): Promise<ControlPlaneAppSessionsView> {
-    if (options.refresh || this.snapshots.size === 0) await this.bootstrapFromInstances();
-    return this.view();
+  async list(options: { refresh?: boolean; instanceId?: string } = {}): Promise<ControlPlaneAppSessionsView> {
+    if (options.refresh && options.instanceId && this.recoverSnapshot) {
+      await this.refreshInstance(options.instanceId);
+    } else if (options.refresh || this.snapshots.size === 0) {
+      await this.bootstrapFromInstances();
+    }
+    return this.view(options.instanceId);
   }
 
   async streamDescriptors() {
@@ -220,6 +224,30 @@ export class ControlPlaneAppSessionAggregator {
     }
   }
 
+  private async refreshInstance(instanceId: string) {
+    const projectionAtStart = this.snapshots.get(instanceId);
+    const state = await this.recoverSnapshot!(instanceId);
+    if (this.snapshots.get(instanceId) !== projectionAtStart) return;
+    const advertisedStreamId = this.advertisedStreams.get(instanceId)?.streamId;
+    if (advertisedStreamId && advertisedStreamId !== state.streamId) return;
+    if (projectionAtStart?.streamId === state.streamId && projectionAtStart.revision >= state.revision) return;
+    const event: AppSessionEvent = {
+      type: AppSessionEventType.Snapshot,
+      payload: {
+        meta: {
+          streamId: state.streamId,
+          instanceId,
+          revision: state.revision,
+          traceId: `aps_refresh_${Date.now().toString(36)}`,
+          generatedAt: state.lastEventAt,
+          reason: "startup",
+        },
+        snapshot: state.snapshot,
+      },
+    };
+    if (this.apply(event)) this.onRecoveredEvent?.(event);
+  }
+
   private recoverStream(instanceId: string, streamId: string, highWater: number) {
     const existing = this.recoveries.get(instanceId);
     if (existing) {
@@ -302,10 +330,12 @@ export class ControlPlaneAppSessionAggregator {
     throw new Error("APP_SESSION_DELTA_INSTANCE_ID_REQUIRED");
   }
 
-  private view(): ControlPlaneAppSessionsView {
+  private view(instanceId?: string): ControlPlaneAppSessionsView {
     return {
       updatedAt: new Date().toISOString(),
-      instances: [...this.snapshots.entries()].map(([instanceId, entry]) => ({ instanceId, streamId: entry.streamId, appSessions: entry.snapshot, revision: entry.revision, lastEventAt: entry.lastEventAt })),
+      instances: [...this.snapshots.entries()]
+        .filter(([candidateId]) => !instanceId || candidateId === instanceId)
+        .map(([candidateId, entry]) => ({ instanceId: candidateId, streamId: entry.streamId, appSessions: entry.snapshot, revision: entry.revision, lastEventAt: entry.lastEventAt })),
     };
   }
 }

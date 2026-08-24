@@ -124,7 +124,6 @@ export function useActiveAiSessionsSnapshot() {
 
 export function useActiveAiSessionView(controlPlaneId: string | undefined, instanceId: string, sessionId: string) {
   const runtime = useMobileControlPlaneRuntime();
-  const active = useActiveAiSessionsRuntime();
   useEffect(() => {
     if (!controlPlaneId || runtime.controlPlaneId !== controlPlaneId || !instanceId || !sessionId || !runtime.coordinator) return;
     const replaySince = new Date().toISOString();
@@ -134,11 +133,11 @@ export function useActiveAiSessionView(controlPlaneId: string | undefined, insta
       timelineAllSessions: false,
       timelineSessions: [{ instanceId, sessionId }],
     });
-    // The snapshot and source replay form one recovery barrier: the snapshot
-    // covers state before this cursor and replay covers events after it.
-    void active.refresh().catch(() => undefined);
+    // Persistent AI Session events already keep the store authoritative. The
+    // replay cursor only opens the transient message/timeline window and must
+    // not refetch the complete session fleet on every detail selection.
     return dispose;
-  }, [active, controlPlaneId, instanceId, runtime.controlPlaneId, runtime.coordinator, sessionId]);
+  }, [controlPlaneId, instanceId, runtime.controlPlaneId, runtime.coordinator, sessionId]);
   return useSyncExternalStore(
     (listener) => controlPlaneId
       ? mobileAiSessionStore.subscribeSession(controlPlaneId, instanceId, sessionId, listener)

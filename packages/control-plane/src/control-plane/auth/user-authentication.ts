@@ -85,6 +85,7 @@ function sha256(value: string) {
 }
 
 export class ControlPlaneUserAuthentication {
+  private readonly passwordUpdates = new Set<string>();
   private readonly limiter: LoginRateLimiter;
   private readonly sessionActivity = new Map<string, { expiresAt: string; lastSeenAt: string }>();
   private readonly users: ControlPlaneUserService;
@@ -174,15 +175,23 @@ export class ControlPlaneUserAuthentication {
     const parsed = z.object({ currentPassword: z.string().min(1).max(4096), newPassword: z.string().min(8).max(4096) }).strict().parse(input);
     const current = await this.resolve(token, "web");
     if (!current) throw Object.assign(new Error("Sign in to change the password."), { code: "CONTROL_PLANE_AUTH_REQUIRED", statusCode: 401 });
-    const identity = await this.users.store.identities.get(current.session.identityId);
-    if (!identity || identity.kind !== "local-password" || !(await verifyControlPlanePassword(parsed.currentPassword, identity.passwordHash || ""))) {
-      throw Object.assign(new Error("The current password is incorrect."), { code: "AUTH_CURRENT_PASSWORD_INVALID", statusCode: 400 });
+    if (this.passwordUpdates.has(current.user.id)) {
+      throw Object.assign(new Error("A password update is already in progress for this account."), { code: "AUTH_CREDENTIAL_UPDATE_IN_PROGRESS", statusCode: 409 });
     }
-    if (await verifyControlPlanePassword(parsed.newPassword, identity.passwordHash || "")) {
-      throw Object.assign(new Error("The new password must be different from the current password."), { code: "AUTH_PASSWORD_UNCHANGED", statusCode: 400 });
+    this.passwordUpdates.add(current.user.id);
+    try {
+      const identity = await this.users.store.identities.get(current.session.identityId);
+      if (!identity || identity.kind !== "local-password" || !(await verifyControlPlanePassword(parsed.currentPassword, identity.passwordHash || ""))) {
+        throw Object.assign(new Error("The current password is incorrect."), { code: "AUTH_CURRENT_PASSWORD_INVALID", statusCode: 400 });
+      }
+      if (await verifyControlPlanePassword(parsed.newPassword, identity.passwordHash || "")) {
+        throw Object.assign(new Error("The new password must be different from the current password."), { code: "AUTH_PASSWORD_UNCHANGED", statusCode: 400 });
+      }
+      await this.users.resetLocalPassword(identity.userId, parsed.newPassword, false);
+      return this.createSessionForIdentity(identity.id, "web");
+    } finally {
+      this.passwordUpdates.delete(current.user.id);
     }
-    await this.users.resetLocalPassword(identity.userId, parsed.newPassword, false);
-    return this.createSessionForIdentity(identity.id, "web");
   }
 
   async resolve(token: string | undefined, clientType?: "web" | "mobile") {

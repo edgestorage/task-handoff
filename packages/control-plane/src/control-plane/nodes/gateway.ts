@@ -37,6 +37,7 @@ import type {
   ControlPlaneFleetResource,
   ControlPlaneFleetResourcePhase,
   ControlPlaneNodeFleetState,
+  ControlPlaneNodeFleetUpdatedEvent,
 } from "@task-handoff/protocol/control-plane-directory";
 import {
   GitCredentialPublicSchema,
@@ -56,7 +57,7 @@ export type ControlPlaneNodeAgentGatewayOptions = {
   fleetSnapshotFreshMs?: number;
   fleetRetryBaseMs?: number;
   fleetRetryMaxMs?: number;
-  onFleetStateChanged?: (state: NodeFleetResourceState) => void;
+  onFleetStateChanged?: (state: ControlPlaneNodeFleetUpdatedEvent) => void;
 };
 
 export type NodeFleetResource = ControlPlaneFleetResource;
@@ -93,7 +94,7 @@ export class ControlPlaneNodeAgentGateway {
   private readonly fleetSnapshotFreshMs: number;
   private readonly fleetRetryBaseMs: number;
   private readonly fleetRetryMaxMs: number;
-  private readonly onFleetStateChanged: ((state: NodeFleetResourceState) => void) | undefined;
+  private readonly onFleetStateChanged: ((state: ControlPlaneNodeFleetUpdatedEvent) => void) | undefined;
   private readonly runtimeSnapshots = new Map<string, NodeAgentFleetSnapshot<NodeRuntime>>();
   private readonly instanceSnapshots = new Map<string, NodeAgentFleetSnapshot<ControlledInstance>>();
   private readonly modelSnapshots = new Map<string, NodeAgentFleetSnapshot<NodeModelPublicRecord>>();
@@ -645,27 +646,33 @@ export class ControlPlaneNodeAgentGateway {
     if (force) this.clearFleetRetry(key);
     const connectionKey = this.fleetConnectionKey(node);
     const current = snapshots.get(node.id);
-    const fresh = current?.connectionKey === connectionKey
-      && current.phase === "ready"
-      && current.updatedAt !== undefined
-      && Date.now() - Date.parse(current.updatedAt) < this.fleetSnapshotFreshMs;
+    const previous = current?.connectionKey === connectionKey ? current : undefined;
+    const fresh = previous?.phase === "ready"
+      && previous.updatedAt !== undefined
+      && Date.now() - Date.parse(previous.updatedAt) < this.fleetSnapshotFreshMs;
     if (!force && fresh) return Promise.resolve();
 
     const retryingFailure = current?.connectionKey === connectionKey && Boolean(current.error)
       && (current.phase === "error" || current.phase === "stale");
     const revision = this.nextFleetRevision(node.id, resource);
+    // A usable snapshot remains authoritative while it is revalidated. Publishing
+    // observation-only ready -> stale -> ready transitions would make every client
+    // refetch the same fleet projection and amplify one refresh across all windows.
     const loading: NodeAgentFleetSnapshot<T> = {
       connectionKey,
       items: current?.connectionKey === connectionKey ? [...current.items] : [],
       phase: retryingFailure
         ? current.phase
-        : current?.connectionKey === connectionKey && current.updatedAt ? "stale" : "loading",
+        : previous?.phase === "ready" ? "ready"
+          : previous?.updatedAt ? "stale" : "loading",
       revision,
       updatedAt: current?.connectionKey === connectionKey ? current.updatedAt : undefined,
       error: retryingFailure ? current.error : undefined,
     };
     snapshots.set(node.id, loading);
-    if (!retryingFailure) this.emitFleetState(node.id, resource, loading);
+    if (!retryingFailure && (!previous || !this.sameFleetState(resource, previous, loading))) {
+      this.emitFleetState(node.id, resource, loading, { contentChanged: false });
+    }
 
     const refresh = (async () => {
       try {
@@ -682,13 +689,16 @@ export class ControlPlaneNodeAgentGateway {
           error: invalidPayloadError,
         };
         snapshots.set(node.id, ready);
+        const contentChanged = !previous || !this.sameFleetItems(resource, previous, ready);
         if (invalidPayloadError) {
-          if (!this.sameFleetState(loading, ready)) this.emitFleetState(node.id, resource, ready);
+          if (!this.sameFleetState(resource, loading, ready)) this.emitFleetState(node.id, resource, ready, { contentChanged });
           this.scheduleFleetRetry(key, () => this.refreshFleetNode(node, resource, route, {}, snapshots, load, true));
           return;
         }
         this.resetFleetRetry(key);
-        this.emitFleetState(node.id, resource, ready);
+        if (!previous || !this.sameFleetState(resource, previous, ready)) {
+          this.emitFleetState(node.id, resource, ready, { contentChanged });
+        }
       } catch (error) {
         if (snapshots.get(node.id)?.revision !== revision) return;
         const scopedError = nodeAgentScopedError(node, route, "GET", error);
@@ -698,7 +708,7 @@ export class ControlPlaneNodeAgentGateway {
           error: scopedError,
         };
         snapshots.set(node.id, failed);
-        if (!this.sameFleetState(loading, failed)) this.emitFleetState(node.id, resource, failed);
+        if (!this.sameFleetState(resource, loading, failed)) this.emitFleetState(node.id, resource, failed, { contentChanged: false });
         this.scheduleFleetRetry(key, () => this.refreshFleetNode(node, resource, route, {}, snapshots, load, true));
       }
     })().finally(() => {
@@ -736,6 +746,7 @@ export class ControlPlaneNodeAgentGateway {
       resource,
       phase: "uninitialized",
       revision: this.nextFleetRevision(node.id, resource),
+      contentChanged: true,
     });
   }
 
@@ -764,17 +775,51 @@ export class ControlPlaneNodeAgentGateway {
     };
   }
 
-  private emitFleetState<T>(nodeId: string, resource: NodeFleetResource, snapshot: NodeAgentFleetSnapshot<T>) {
-    this.onFleetStateChanged?.(this.publicFleetState(nodeId, resource, snapshot));
+  private emitFleetState<T>(
+    nodeId: string,
+    resource: NodeFleetResource,
+    snapshot: NodeAgentFleetSnapshot<T>,
+    options: { contentChanged?: boolean } = {},
+  ) {
+    this.onFleetStateChanged?.({
+      ...this.publicFleetState(nodeId, resource, snapshot),
+      ...(options.contentChanged === undefined ? {} : { contentChanged: options.contentChanged }),
+    });
   }
 
-  private sameFleetState<T>(left: NodeAgentFleetSnapshot<T>, right: NodeAgentFleetSnapshot<T>) {
+  private sameFleetItems<T>(resource: NodeFleetResource, left: NodeAgentFleetSnapshot<T>, right: NodeAgentFleetSnapshot<T>) {
+    return JSON.stringify(this.fleetItemsForComparison(resource, left.items))
+      === JSON.stringify(this.fleetItemsForComparison(resource, right.items));
+  }
+
+  private fleetItemsForComparison<T>(resource: NodeFleetResource, items: T[]) {
+    if (resource !== "instances") return items;
+    return items.map((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return item;
+      // Instance heartbeats advance persistence/observation clocks without
+      // changing the authoritative fleet resource. Lifecycle events own these
+      // fields and must not turn a fleet refresh into a board refetch.
+      const {
+        stateRevision: _stateRevision,
+        updatedAt: _updatedAt,
+        lastHeartbeatAt: _lastHeartbeatAt,
+        aiSessions,
+        ...semantic
+      } = item as Record<string, unknown>;
+      const comparableAiSessions = aiSessions && typeof aiSessions === "object" && !Array.isArray(aiSessions)
+        ? (({ updatedAt: _aiSessionsUpdatedAt, ...snapshot }) => snapshot)(aiSessions as Record<string, unknown>)
+        : aiSessions;
+      return { ...semantic, ...(comparableAiSessions ? { aiSessions: comparableAiSessions } : {}) };
+    });
+  }
+
+  private sameFleetState<T>(resource: NodeFleetResource, left: NodeAgentFleetSnapshot<T>, right: NodeAgentFleetSnapshot<T>) {
     const comparable = (snapshot: NodeAgentFleetSnapshot<T>) => ({
       phase: snapshot.phase,
       // `updatedAt` records the observation time and advances on every
       // malformed response. It is not a semantic state change and must not
       // keep invalidating progressive consumers while the failure is stable.
-      items: snapshot.items,
+      items: this.fleetItemsForComparison(resource, snapshot.items),
       error: snapshot.error && {
         code: snapshot.error.code,
         message: snapshot.error.message,
@@ -817,6 +862,7 @@ export class ControlPlaneNodeAgentGateway {
     snapshots: Map<string, NodeAgentFleetSnapshot<T>>,
     result: NodeAgentListResult<T>,
   ) {
+    const previous = snapshots.get(node.id);
     const snapshot: NodeAgentFleetSnapshot<T> = {
       connectionKey: this.fleetConnectionKey(node),
       items: [...result.items],
@@ -826,7 +872,11 @@ export class ControlPlaneNodeAgentGateway {
       error: result.nodeErrors[0],
     };
     snapshots.set(node.id, snapshot);
-    this.emitFleetState(node.id, resource, snapshot);
+    this.emitFleetState(node.id, resource, snapshot, {
+      contentChanged: !previous
+        || previous.connectionKey !== snapshot.connectionKey
+        || !this.sameFleetItems(resource, previous, snapshot),
+    });
   }
 
   private nextFleetRevision(nodeId: string, resource: NodeFleetResource) {
@@ -853,23 +903,29 @@ export class ControlPlaneNodeAgentGateway {
     // A mutation response is not a complete fleet snapshot. Only update an
     // already-established snapshot so a cold cache cannot hide sibling instances.
     if (!snapshot || snapshot.connectionKey !== connectionKey) return;
+    const previousItems = snapshot.items;
     snapshot.items = [...snapshot.items.filter((item) => item.id !== instance.id), instance];
     snapshot.phase = "ready";
     snapshot.revision = this.nextFleetRevision(node.id, "instances");
     snapshot.updatedAt = new Date().toISOString();
     snapshot.error = undefined;
-    this.emitFleetState(node.id, "instances", snapshot);
+    this.emitFleetState(node.id, "instances", snapshot, {
+      contentChanged: JSON.stringify(previousItems) !== JSON.stringify(snapshot.items),
+    });
   }
 
   private removeInstanceSnapshot(node: Node, instanceId: string) {
     const snapshot = this.instanceSnapshots.get(node.id);
     if (!snapshot || snapshot.connectionKey !== this.fleetConnectionKey(node)) return;
+    const previousItems = snapshot.items;
     snapshot.items = snapshot.items.filter((item) => item.id !== instanceId);
     snapshot.phase = "ready";
     snapshot.revision = this.nextFleetRevision(node.id, "instances");
     snapshot.updatedAt = new Date().toISOString();
     snapshot.error = undefined;
-    this.emitFleetState(node.id, "instances", snapshot);
+    this.emitFleetState(node.id, "instances", snapshot, {
+      contentChanged: JSON.stringify(previousItems) !== JSON.stringify(snapshot.items),
+    });
   }
 
   private requireFleetNodeReady(node: Node, route: string) {

@@ -1,5 +1,11 @@
 import type { ControlPlaneAppSessions } from '@task-handoff/control-plane-client';
-import { applyAppSessionStreamEvent, type AppSessionStreamApplyResult, type AppSessionStreamEvent } from '@task-handoff/protocol/app-sessions';
+import {
+  activeAppSessionsSnapshotFromRecords,
+  applyAppSessionStreamEvent,
+  type AppSessionRecord,
+  type AppSessionStreamApplyResult,
+  type AppSessionStreamEvent,
+} from '@task-handoff/protocol/app-sessions';
 
 export type MobileAppSessionProfileState = {
   controlPlaneId: string;
@@ -24,8 +30,29 @@ export class MobileAppSessionStore {
     return initial;
   }
   replaceSnapshot(id: string, snapshot: ControlPlaneAppSessions) {
-    this.profiles.set(id, { ...this.profile(id), snapshot, sync: { phase: 'ready', lastSyncedAt: snapshot.updatedAt } });
+    const current = this.profile(id);
+    const authoritativeSnapshot = preserveNewerAppSessionEntries(current.snapshot, snapshot);
+    this.profiles.set(id, { ...current, snapshot: authoritativeSnapshot, sync: { phase: 'ready', lastSyncedAt: authoritativeSnapshot.updatedAt } });
     this.emit(id);
+  }
+  upsertSession(id: string, instanceId: string, session: AppSessionRecord) {
+    const current = this.profile(id);
+    const snapshot = current.snapshot;
+    if (!snapshot) return false;
+    const index = snapshot.instances.findIndex((entry) => entry.instanceId === instanceId);
+    if (index < 0) return false;
+    const entry = snapshot.instances[index];
+    const sessions = [...entry.appSessions.sessions.filter((candidate) => candidate.id !== session.id), session];
+    const updatedAt = session.updatedAt ?? new Date().toISOString();
+    const replacement = {
+      ...entry,
+      appSessions: activeAppSessionsSnapshotFromRecords(sessions, updatedAt),
+    };
+    this.replaceSnapshot(id, {
+      updatedAt: updatedAt > snapshot.updatedAt ? updatedAt : snapshot.updatedAt,
+      instances: snapshot.instances.map((candidate, candidateIndex) => candidateIndex === index ? replacement : candidate),
+    });
+    return true;
   }
   setSyncState(id: string, sync: MobileAppSessionProfileState['sync']) {
     this.profiles.set(id, { ...this.profile(id), sync });
@@ -67,3 +94,26 @@ export class MobileAppSessionStore {
 }
 
 export const mobileAppSessionStore = new MobileAppSessionStore();
+
+function preserveNewerAppSessionEntries(
+  current: ControlPlaneAppSessions | undefined,
+  incoming: ControlPlaneAppSessions,
+): ControlPlaneAppSessions {
+  if (!current) return incoming;
+  let preserved = false;
+  const instances = incoming.instances.map((entry) => {
+    const existing = current.instances.find((candidate) => candidate.instanceId === entry.instanceId);
+    if (!existing || existing.streamId !== entry.streamId) return entry;
+    const existingRevision = existing.revision ?? 0;
+    const incomingRevision = entry.revision ?? 0;
+    if (existingRevision < incomingRevision) return entry;
+    if (existingRevision === incomingRevision && (existing.lastEventAt ?? existing.appSessions.updatedAt) <= (entry.lastEventAt ?? entry.appSessions.updatedAt)) return entry;
+    preserved = true;
+    return existing;
+  });
+  return preserved ? {
+    ...incoming,
+    updatedAt: current.updatedAt > incoming.updatedAt ? current.updatedAt : incoming.updatedAt,
+    instances,
+  } : incoming;
+}

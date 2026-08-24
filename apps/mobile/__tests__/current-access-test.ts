@@ -21,6 +21,7 @@ const access: ControlPlaneCurrentAuthorization = {
   roleIds: ['role_operator'],
   permissionIds: ['triggers:read', 'triggers:manage'],
   nodeScope: { kind: 'selected', nodeIds: ['node_a'] },
+  instanceScope: { kind: 'inherit-node-scope' },
   authorizationRevision: 3,
 };
 

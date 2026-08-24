@@ -41,6 +41,52 @@ test('app session store exposes stream gaps instead of hiding them with a local 
   expect(store.profile('cp-1').snapshot?.instances[0].revision).toBe(1);
 });
 
+test('app session store applies mutation records without a full list refresh', () => {
+  const store = new MobileAppSessionStore();
+  store.replaceSnapshot('cp-1', {
+    updatedAt: at,
+    instances: [{
+      instanceId: 'instance-1',
+      streamId: 'stream-1',
+      revision: 1,
+      appSessions: {
+        runningCount: 1,
+        problemCount: 0,
+        sessions: [{ id: 'app-session-1', appId: 'terminal', status: 'running', bindings: [] }],
+        updatedAt: at,
+      },
+    }],
+  });
+
+  expect(store.upsertSession('cp-1', 'instance-1', {
+    id: 'app-session-1', appId: 'terminal', title: 'Renamed', status: 'running', bindings: [], updatedAt: '2026-08-07T00:01:00.000Z',
+  })).toBe(true);
+  expect(store.profile('cp-1').snapshot?.instances[0].appSessions.sessions[0]).toEqual(expect.objectContaining({ title: 'Renamed' }));
+
+  store.upsertSession('cp-1', 'instance-1', {
+    id: 'app-session-1', appId: 'terminal', status: 'stopped', bindings: [], updatedAt: '2026-08-07T00:02:00.000Z',
+  });
+  expect(store.profile('cp-1').snapshot?.instances[0].appSessions.sessions).toEqual([]);
+});
+
+test('an older App Session HTTP snapshot cannot overwrite a newer stream projection', () => {
+  const store = new MobileAppSessionStore();
+  const initial = { updatedAt: at, instances: [{ instanceId: 'instance-1', streamId: 'stream-1', revision: 1, appSessions: { runningCount: 0, problemCount: 0, sessions: [], updatedAt: at } }] };
+  store.replaceSnapshot('cp-1', initial);
+  store.applyStreamEvent('cp-1', {
+    type: AppSessionEventType.Patch,
+    payload: {
+      meta: { streamId: 'stream-1', instanceId: 'instance-1', revision: 2, previousRevision: 1, traceId: 'trace-newer', generatedAt: '2026-08-07T00:01:00.000Z', reason: 'app-session-created' },
+      session: { id: 'app-session-1', appId: 'terminal', status: 'running', bindings: [] },
+    },
+  });
+
+  store.replaceSnapshot('cp-1', initial);
+
+  expect(store.profile('cp-1').snapshot?.instances[0].revision).toBe(2);
+  expect(store.profile('cp-1').snapshot?.instances[0].appSessions.sessions).toHaveLength(1);
+});
+
 test('app sessions reload a snapshot and reconnect after the event socket closes', async () => {
   jest.useFakeTimers();
   try {

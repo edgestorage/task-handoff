@@ -23,6 +23,7 @@ type EventSocket = {
   on: (event: "close" | "message", listener: (value?: unknown) => void) => void;
   topics?: Set<string>;
   instanceIds?: Set<string>;
+  metricInstanceIds?: Set<string>;
   aiSessionTransient?: AiSessionTransientSubscription;
   subscriptionReceived?: boolean;
   authorization?: EventAuthorizationBinding;
@@ -53,9 +54,10 @@ export class ControlPlaneEventBus {
   private droppedUnscopedNodeEvents = 0;
   private lastUnscopedNodeEvent?: { type: string; topic: string; createdAt: string };
 
-  connect(socket: EventSocket, options: { instanceIds?: string[]; expectsTransientSubscription?: boolean; authorization?: EventAuthorizationBinding } = {}) {
+  connect(socket: EventSocket, options: { instanceIds?: string[]; expectsTransientSubscription?: boolean; expectsMetricSubscription?: boolean; authorization?: EventAuthorizationBinding } = {}) {
     socket.topics = new Set(["*"]);
     socket.instanceIds = options.instanceIds?.length ? new Set(options.instanceIds) : undefined;
+    socket.metricInstanceIds = options.expectsMetricSubscription ? new Set() : undefined;
     socket.authorization = options.authorization;
     // Compatibility for v0.0.21: clients without the URL capability hint never
     // send a subscribe frame and therefore retain the prior full stream. A new
@@ -73,6 +75,7 @@ export class ControlPlaneEventBus {
       if (message?.type === "subscribe") {
         socket.topics = new Set(message.topics === undefined ? ["*"] : message.topics);
         socket.instanceIds = authorizedInstanceSubscription(socket, message.instanceIds);
+        socket.metricInstanceIds = authorizedMetricInstanceSubscription(socket, message.metricInstanceIds);
         socket.aiSessionTransient = authorizedTransientSubscription(socket, message.aiSessionTransient);
         socket.subscriptionReceived = true;
         this.publishTransientDemand();
@@ -97,7 +100,7 @@ export class ControlPlaneEventBus {
       }
     }
     for (const client of this.clients) {
-      if (client.readyState === client.OPEN && authorizedEvent(client, event) && subscribed(client.topics, topic, type) && subscribedInstance(client.instanceIds, event.scope) && subscribedAiSessionTransient(client, event)) {
+      if (client.readyState === client.OPEN && authorizedEvent(client, event) && subscribed(client.topics, topic, type) && subscribedInstance(client.instanceIds, event.scope) && subscribedResourceMetrics(client, event) && subscribedAiSessionTransient(client, event)) {
         if ((client.bufferedAmount ?? 0) + encodedBytes > MAX_EVENT_CLIENT_BUFFERED_BYTES) {
           this.clients.delete(client);
           try { client.close?.(1013, "Event consumer is too slow."); } catch { /* Consumer cleanup is already complete. */ }
@@ -259,6 +262,14 @@ function subscribedInstance(instanceIds: Set<string> | undefined, scope: EventSc
   return !instanceIds || !scope?.instanceId || instanceIds.has(scope.instanceId);
 }
 
+function subscribedResourceMetrics(client: EventSocket, event: EventEnvelope) {
+  if (event.type !== "instance.metrics.snapshot") return true;
+  // Compatibility for v0.0.23: legacy subscribers did not send this field and
+  // continue to receive the full metrics stream.
+  if (!client.metricInstanceIds) return true;
+  return Boolean(event.scope?.instanceId && client.metricInstanceIds.has(event.scope.instanceId));
+}
+
 function subscribedAiSessionTransient(client: EventSocket, event: EventEnvelope) {
   if (event.type !== "ai-session.message-delta" && event.type !== "ai-session.timeline-item") return true;
   if (!client.subscriptionReceived) return false;
@@ -292,6 +303,12 @@ function authorizedInstanceSubscription(client: EventSocket, requested: string[]
   if (!allowed) return requested?.length ? new Set(requested) : undefined;
   const selected = requested?.length ? requested.filter((id) => allowed.has(id)) : [...allowed];
   return new Set(selected);
+}
+
+function authorizedMetricInstanceSubscription(client: EventSocket, requested: string[] | undefined) {
+  if (requested === undefined) return undefined;
+  const allowed = client.authorization?.allowedInstanceIds;
+  return new Set(allowed ? requested.filter((id) => allowed.has(id)) : requested);
 }
 
 function authorizedTransientSubscription(client: EventSocket, subscription: AiSessionTransientSubscription | undefined) {
@@ -331,17 +348,19 @@ function normalizedEventScope<T>(scope: EventScope | undefined, payload: T): Eve
   return nodeId || instanceId ? { ...(nodeId ? { nodeId } : {}), ...(instanceId ? { instanceId } : {}) } : scope;
 }
 
-function parseClientMessage(value: unknown): { type?: string; topics?: string[]; instanceIds?: string[]; aiSessionTransient?: AiSessionTransientSubscription } | undefined {
+function parseClientMessage(value: unknown): { type?: string; topics?: string[]; instanceIds?: string[]; metricInstanceIds?: string[]; aiSessionTransient?: AiSessionTransientSubscription } | undefined {
   try {
     const parsed = JSON.parse(String(value || "{}"));
     if (!parsed || typeof parsed !== "object") return undefined;
-    const message = parsed as { type?: string; topics?: unknown; instanceIds?: unknown; aiSessionTransient?: unknown };
+    const message = parsed as { type?: string; topics?: unknown; instanceIds?: unknown; metricInstanceIds?: unknown; aiSessionTransient?: unknown };
+    if (message.metricInstanceIds !== undefined && !Array.isArray(message.metricInstanceIds)) return undefined;
     const transient = message.aiSessionTransient === undefined ? undefined : AiSessionTransientSubscriptionSchema.safeParse(message.aiSessionTransient);
     if (transient && !transient.success) return undefined;
     return {
       type: message.type,
       topics: Array.isArray(message.topics) ? message.topics.map(String).filter(Boolean) : undefined,
       instanceIds: Array.isArray(message.instanceIds) ? message.instanceIds.map(String).map((id) => id.trim()).filter(Boolean) : undefined,
+      metricInstanceIds: Array.isArray(message.metricInstanceIds) ? message.metricInstanceIds.map(String).map((id) => id.trim()).filter(Boolean) : undefined,
       ...(transient?.success ? { aiSessionTransient: transient.data } : {}),
     };
   } catch {

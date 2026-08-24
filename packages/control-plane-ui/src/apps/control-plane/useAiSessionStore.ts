@@ -50,7 +50,7 @@ export function useAiSessionStore(input: {
     topic: "ai.sessions",
     getEntry: (instanceId) => queryClient.getQueryData<ControlPlaneAiSessions>(input.queryKey())
       ?.instances.find((entry) => entry.instanceId === instanceId),
-    refreshSnapshot: async (instanceId, signal) => (await aiSessionsApi.refresh(signal))
+    refreshSnapshot: async (instanceId, signal) => (await aiSessionsApi.refresh(signal, instanceId))
       .instances.find((entry) => entry.instanceId === instanceId),
     applySnapshot: applyRecoveredSnapshot,
     loadDelta: (entry, signal) => aiSessionsApi.delta(entry.instanceId, entry.streamId, entry.revision ?? 0, signal),

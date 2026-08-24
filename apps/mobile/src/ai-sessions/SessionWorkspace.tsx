@@ -189,7 +189,7 @@ export function SessionWorkspace({
     });
     if (!loadableTurns.length) return;
     let active = true;
-    if (supportsTurnTimeline) {
+    if (supportsTurnTimeline && !(detailMode === 'conversation' && supportsSessionTimeline)) {
       for (const turn of loadableTurns) {
         mobileAiSessionStore.beginTurnTimeline(controlPlaneId, instanceId, timelineSession.id, turn);
         void client.aiSessions.turnTimeline(instanceId, timelineSession.id, turn.id).then((timeline) => {

@@ -36,8 +36,8 @@ test("unreleased database setup is one canonical cp-prefixed migration per diale
 test("canonical SQLite schema coexists with indexes from the previous unreleased schema", async () => {
   const dataDir = tempDataDir();
   const paths = controlPlaneStorePaths(dataDir);
-  fs.mkdirSync(path.dirname(paths.userDatabasePath), { recursive: true });
-  const legacy = new DatabaseSync(paths.userDatabasePath);
+  fs.mkdirSync(path.dirname(paths.databasePath), { recursive: true });
+  const legacy = new DatabaseSync(paths.databasePath);
   try {
     legacy.exec(`
       CREATE TABLE control_plane_login_identities (normalized_login_name TEXT, provider_id TEXT, subject TEXT, user_id TEXT);
@@ -61,7 +61,7 @@ test("canonical SQLite schema coexists with indexes from the previous unreleased
 
   const repository = await createControlPlaneUserRepository(paths);
   try {
-    const database = new DatabaseSync(paths.userDatabasePath, { readOnly: true });
+    const database = new DatabaseSync(paths.databasePath, { readOnly: true });
     try {
       const indexes = new Map(database.prepare("SELECT name, tbl_name FROM sqlite_master WHERE type = 'index' AND name LIKE 'cp_%'").all()
         .map((row) => [row.name, row.tbl_name]));
@@ -91,7 +91,7 @@ test("fresh user store defaults to SQLite and initializes canonical system roles
     assert.deepEqual((await store.roles.get(SYSTEM_ROLE_IDS.admin))?.permissionIds, [...CONTROL_PLANE_PERMISSION_IDS]);
     assert.equal((await store.roles.get(SYSTEM_ROLE_IDS.operator))?.system, true);
     assert.equal((await store.roles.get(SYSTEM_ROLE_IDS.viewer))?.system, true);
-    const database = new DatabaseSync(paths.userDatabasePath, { readOnly: true });
+    const database = new DatabaseSync(paths.databasePath, { readOnly: true });
     try {
       const tables = database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'cp_%' ORDER BY name").all().map((row) => row.name);
       assert.deepEqual(tables, [

@@ -94,10 +94,17 @@ test("Git process is bounded, allowlisted, non-interactive, and redacts credenti
   const git = new GitProcess(fixture.root, { outputLimitBytes: 8 });
   await assert.rejects(() => git.run("for-each-ref", ["--format=%(refname) %(objectname)"]), (error) => error instanceof GitProcessError && error.code === "GIT_OUTPUT_LIMIT");
   assert.throws(() => git.run("credential", []), (error) => error instanceof GitProcessError);
-  const env = gitEnvironment(true);
-  assert.equal(env.GIT_TERMINAL_PROMPT, "0");
-  assert.equal(env.GCM_INTERACTIVE, "Never");
-  assert.equal(env.SSH_ASKPASS_REQUIRE, "force");
+  const previousBrokerSocket = process.env.TASK_HANDOFF_GIT_CREDENTIAL_SOCKET;
+  delete process.env.TASK_HANDOFF_GIT_CREDENTIAL_SOCKET;
+  try {
+    const env = gitEnvironment(true);
+    assert.equal(env.GIT_TERMINAL_PROMPT, "0");
+    assert.equal(env.GCM_INTERACTIVE, "Never");
+    assert.equal(env.SSH_ASKPASS_REQUIRE, "force");
+  } finally {
+    if (previousBrokerSocket === undefined) delete process.env.TASK_HANDOFF_GIT_CREDENTIAL_SOCKET;
+    else process.env.TASK_HANDOFF_GIT_CREDENTIAL_SOCKET = previousBrokerSocket;
+  }
   const redacted = redactGitDiagnostic("fatal https://user:secret@example.com/repo?token=abcd Authorization: Bearer ghp_secretvalue /run/task-handoff/git-broker/ssh-1/identity -----BEGIN OPENSSH PRIVATE KEY-----\nprivate-material\n-----END OPENSSH PRIVATE KEY-----");
   assert.equal(redacted.includes("secret"), false);
   assert.equal(redacted.includes("abcd"), false);

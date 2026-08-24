@@ -112,13 +112,13 @@ export class MobileAiSessionActionCoordinator {
       mobileMetrics.record('action.error', { action, result: uncertain ? 'unknown' : 'failed' });
       if (uncertain) {
         await this.recover().then(() => {
+          if (!this.store.isGeneration(this.controlPlaneId, this.storeGeneration)) return;
           if (authoritativeFingerprint() !== before) this.set(key, { phase: 'idle' });
         }).catch(() => undefined);
       }
       return { disposition: uncertain ? 'result-unknown' : 'failed', error };
     }
     this.set(key, { phase: 'idle' });
-    await this.recover().catch(() => undefined);
     return { disposition: 'accepted' as const, result };
   }
 

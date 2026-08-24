@@ -112,6 +112,13 @@ test("instance directory renders independent node loading states", () => {
   assert.match(instanceList, /groups\.set\(node\.id/);
 });
 
+test("connecting instances refetch only the active board projection", () => {
+  assert.match(workbench, /connectingRefreshTimer = setInterval\(\(\) => \{[\s\S]*?queryClient\.refetchQueries\(\{[\s\S]*?queryKey: controlPlaneQueryKeys\.scopedInstanceBoard\(sessionQueryInstanceId\.value\),[\s\S]*?exact: true,[\s\S]*?\}\);[\s\S]*?\}, 2000\);/);
+  const connectingRefresh = workbench.match(/connectingRefreshTimer = setInterval\([\s\S]*?\}, 2000\);/)?.[0] || "";
+  assert.doesNotMatch(connectingRefresh, /void refresh\(\)/);
+  assert.doesNotMatch(connectingRefresh, /control-plane-models|nodeLocalFolders|control-plane-triggers/);
+});
+
 test("board app launch menus keep parent and project flyout layouts consistent", () => {
   assert.match(board, /<AppLaunchMenuItems[\s\S]*?submenu-class="board-launch-menu"/);
   assert.match(appLaunchItems, /<DropdownMenuSubContent :class="submenuClass \|\| 'app-launch-menu'">/);

@@ -123,6 +123,7 @@ export function registerSessionRoutes({
     }
     const view = await appSessionAggregator.list({
       refresh: query.refresh === "true" || query.refresh === "1",
+      instanceId: query.instanceId,
     });
     const visibleInstanceIds = await requestVisibleInstanceIds(service, request);
     return { data: {
@@ -589,7 +590,10 @@ export function registerSessionRoutes({
         throw error;
       }
     }
-    const fullView = await aiSessionAggregator.list({ refresh: query.refresh === "true" || query.refresh === "1" });
+    const fullView = await aiSessionAggregator.list({
+      refresh: query.refresh === "true" || query.refresh === "1",
+      instanceId: query.instanceId,
+    });
     const visibleInstanceIds = await requestVisibleInstanceIds(service, request);
     const view = {
       ...fullView,

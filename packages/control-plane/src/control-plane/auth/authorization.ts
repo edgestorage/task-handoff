@@ -65,7 +65,8 @@ export function permissionForControlPlaneOperation(action: ControlPlaneAction, r
   if (action === "manage-secrets") return "secrets:manage";
   if (action === "manage-settings") return "settings:manage";
   if (action === "manage-members") return "users:manage";
-  if (action === "manage-node-auth") return "nodes:manage";
+  if (action === "manage-node-auth") return "secrets:manage";
+  if (resourceType === "trigger-template" && action !== "read") return "settings:manage";
   if (action === "interactive-access" || action === "proxy") {
     return INTERACTIVE_RESOURCES.has(resourceType) ? `${prefix}:interactive` as ControlPlanePermissionId : undefined;
   }

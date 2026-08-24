@@ -1362,6 +1362,7 @@ test("ai session registry ignores observation-only adapter snapshots", () => {
       phase: "unknown",
       summary: "Done",
       lastMessage: "Done",
+      lastMessageItemId: "item_done",
       revision: 1,
       updatedAt: "2026-08-21T14:00:00.000Z",
     }],
@@ -1369,6 +1370,7 @@ test("ai session registry ignores observation-only adapter snapshots", () => {
     phase: "unknown",
     summary: "Done",
     lastMessage: "Done",
+    lastMessageItemId: "item_done",
     replaceActivity: true,
   };
 
@@ -1392,10 +1394,15 @@ test("ai session registry ignores observation-only adapter snapshots", () => {
     sessionId: first.id,
     observedAt: first.updatedAt,
   }), currentBeforeRepeatedSnapshot);
-  const repeated = registry.applyAdapterSnapshot({ ...input, observedAt: "2026-08-21T14:00:30.000Z" });
+  const repeated = registry.applyAdapterSnapshot({
+    ...input,
+    turns: input.turns.map((turn) => ({ ...turn })),
+    observedAt: "2026-08-21T14:00:30.000Z",
+  });
 
   assert.deepEqual(JSON.parse(JSON.stringify(repeated)), JSON.parse(JSON.stringify(first)));
   assert.equal(repeated.updatedAt, "2026-08-21T14:00:00.000Z");
+  assert.equal(registry.get(first.id).lastMessageItemId, "item_done");
   assert.equal(changes, changesAfterFirstSnapshot);
 
   const sameTimestamp = registry.applyAdapterSnapshot({ ...input, observedAt: first.updatedAt });
@@ -1481,6 +1488,35 @@ test("ai session registry includes user prompt in snapshots", () => {
   assert.equal(snapshot.sessions[0].turns[0].summary, "AI board list updated");
   assert.equal(snapshot.sessions[0].turns[0].lastMessage, "AI board list updated");
   assert.equal(typeof snapshot.sessions[0].turns[0].updatedAt, "string");
+});
+
+test("ai session aggregate snapshots carry only the latest turn while detail retains history", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-compact-summary-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const turns = [1, 2, 3].map((revision) => ({
+    id: `turn_${revision}`,
+    userPrompt: `Prompt ${revision}`,
+    status: "completed",
+    phase: "unknown",
+    summary: `Done ${revision}`,
+    lastMessage: `Done ${revision}`,
+    revision,
+    updatedAt: `2026-08-21T14:00:0${revision}.000Z`,
+  }));
+  const session = registry.applyAdapterSnapshot({
+    agent: "codex",
+    providerSessionId: "thread-compact-summary",
+    turns,
+    status: "idle",
+    phase: "unknown",
+    summary: "Done 3",
+    lastMessage: "Done 3",
+    observedAt: "2026-08-21T14:00:03.000Z",
+    replaceActivity: true,
+  });
+
+  assert.deepEqual(registry.get(session.id)?.turns?.map((turn) => turn.id), ["turn_1", "turn_2", "turn_3"]);
+  assert.deepEqual(registry.snapshot().sessions[0].turns?.map((turn) => turn.id), ["turn_3"]);
 });
 
 test("ai session registry derives the top-level prompt from canonical turns", () => {
@@ -6054,7 +6090,7 @@ test("web app ai session read routes do not refresh discovery state", async () =
   }
 });
 
-test("web app events websocket sends session handshake and authoritative app-management snapshot", async (t) => {
+test("web app events websocket bootstraps session authority before app-management state", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-web-events-"));
   const paths = appRuntimeTestPaths(root);
   const restoreEnv = withWebStorageEnv(paths, {
@@ -6069,15 +6105,20 @@ test("web app events websocket sends session handshake and authoritative app-man
   await app.listen({ host: "127.0.0.1", port: 0 });
   const address = app.server.address();
   assert.equal(typeof address, "object");
-  const socket = new WebSocket(`ws://127.0.0.1:${address.port}/api/events`);
+  const socket = new WebSocket(`ws://127.0.0.1:${address.port}/api/events?aiSessionAuthoritySnapshot=1`);
   t.after(() => socket.terminate());
-  const firstMessages = withTimeout(webSocketMessageFrames(socket, 2), "initial events");
+  const firstMessages = withTimeout(webSocketMessageFrames(socket, 3), "initial events");
 
   await withTimeout(waitForWebSocketOpen(socket), "controlled instance events websocket open");
-  const [helloFrame, appManagementFrame] = await firstMessages;
+  const [helloFrame, aiSessionFrame, appManagementFrame] = await firstMessages;
   const hello = JSON.parse(helloFrame.message);
   assert.equal(hello.type, "streams.hello");
   assert.deepEqual(hello.payload.streams.map((stream) => stream.topic).sort(), ["ai.sessions", "app.sessions"]);
+  const aiSession = JSON.parse(aiSessionFrame.message);
+  assert.equal(aiSession.type, AiSessionEventType.Snapshot);
+  assert.equal(aiSession.payload.meta.streamId, hello.payload.streams.find((stream) => stream.topic === "ai.sessions").streamId);
+  assert.equal(aiSession.payload.meta.revision, hello.payload.streams.find((stream) => stream.topic === "ai.sessions").latestRevision);
+  assert.deepEqual(aiSession.payload.snapshot.sessions, []);
   const appManagement = JSON.parse(appManagementFrame.message);
   assert.equal(appManagement.type, "app.management");
   assert.equal(appManagement.payload.streamId, appManagement.payload.snapshot.streamId);

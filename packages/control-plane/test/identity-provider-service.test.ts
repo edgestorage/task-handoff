@@ -48,7 +48,7 @@ test("provider service validates discovery, encrypts client secrets and never re
     const stored = (await users.store.providers.get(provider.id))!;
     assert.notEqual(stored.clientSecretCiphertext, "top-secret");
     await users.store.close();
-    assert.equal(fs.readFileSync(paths.userDatabasePath).includes(Buffer.from("top-secret")), false);
+    assert.equal(fs.readFileSync(paths.databasePath).includes(Buffer.from("top-secret")), false);
   } finally {
     fs.rmSync(dataDir, { recursive: true, force: true });
   }

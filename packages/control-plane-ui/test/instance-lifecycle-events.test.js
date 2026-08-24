@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { QueryClient } from "@tanstack/vue-query";
 import { mergeInstanceBoardPayload, mergeInstanceBoardQueryData } from "../src/api/instanceBoardMerge.ts";
-import { applyInstanceLifecycle } from "../src/apps/control-plane/instanceLifecycleCache.ts";
+import { applyInstanceLifecycle, applyNodeFleetState } from "../src/apps/control-plane/instanceLifecycleCache.ts";
 import { controlPlaneQueryKeys } from "../src/api/queryKeys.ts";
 
 function boardInstance(id, revision, status = "created") {
@@ -78,6 +78,46 @@ test("instance lifecycle snapshots patch both global and scoped board caches", (
   assert.equal(applyInstanceLifecycle(queryClient, lifecycle(2, "starting")), true);
   assert.equal(queryClient.getQueryData(controlPlaneQueryKeys.instanceBoard).data[0].status, "starting");
   assert.equal(queryClient.getQueryData(controlPlaneQueryKeys.scopedInstanceBoard("inst_target")).data[0].status, "starting");
+});
+
+test("node fleet events update diagnostics without replacing board rows", () => {
+  const queryClient = new QueryClient();
+  const target = boardInstance("inst_target", 4, "running");
+  const previousError = {
+    nodeId: "node_a",
+    route: "/instances",
+    method: "GET",
+    code: "NODE_AGENT_FLEET_TIMEOUT",
+    message: "old timeout",
+  };
+  queryClient.setQueryData(controlPlaneQueryKeys.instanceBoard, {
+    data: [target],
+    meta: {
+      nodeStates: [{ nodeId: "node_a", resource: "instances", phase: "error", revision: 2, error: previousError }],
+      nodeErrors: [previousError],
+    },
+  });
+
+  assert.equal(applyNodeFleetState(queryClient, {
+    nodeId: "node_a",
+    resource: "instances",
+    phase: "ready",
+    revision: 3,
+    updatedAt: "2026-07-25T00:00:03.000Z",
+  }), true);
+  const updated = queryClient.getQueryData(controlPlaneQueryKeys.instanceBoard);
+  assert.equal(updated.data[0], target, "fleet progress must not replace authoritative lifecycle rows");
+  assert.equal(updated.meta.nodeStates[0].phase, "ready");
+  assert.equal(updated.meta.nodeStates[0].revision, 3);
+  assert.deepEqual(updated.meta.nodeErrors, []);
+
+  assert.equal(applyNodeFleetState(queryClient, {
+    nodeId: "node_a",
+    resource: "instances",
+    phase: "loading",
+    revision: 1,
+  }), false);
+  assert.equal(queryClient.getQueryData(controlPlaneQueryKeys.instanceBoard), updated);
 });
 
 test("instance lifecycle snapshots patch the lightweight instance directory", () => {

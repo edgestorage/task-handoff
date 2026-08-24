@@ -10,10 +10,12 @@ const {
   aiSessionTextCodePointLength,
   classifyAiSessionPastedText,
   aiSessionElapsedSeconds,
+  applyControlPlaneAiSessionStreamEvent,
   applyAiSessionUnreadState,
   createControlPlaneClient,
   deriveAiSessionUnreadAfterStreamEvent,
   isAiSessionApprovalPending,
+  mergeAiSessionSummaryTurnsWithDetail,
   sortedAiSessions,
   sortedAiSessionInboxEntries,
 } = require("../src/index.ts");
@@ -23,6 +25,24 @@ test("shared AI Session elapsed time requires a terminal timestamp once inactive
   assert.equal(aiSessionElapsedSeconds(startedAt, undefined, false, Date.parse("2026-08-21T00:00:00.000Z")), undefined);
   assert.equal(aiSessionElapsedSeconds(startedAt, undefined, true, Date.parse("2026-08-17T00:00:09.900Z")), 9);
   assert.equal(aiSessionElapsedSeconds(startedAt, "2026-08-17T00:00:07.500Z", false), 7);
+});
+
+test("AI Session realtime turns override retained detail fields without dropping history", () => {
+  const detailTurns = [
+    { id: "turn_stale", status: "completed", revision: 1, userMessages: [{ id: "message_stale", text: "stale" }] },
+    { id: "turn_current", status: "running", revision: 1, lastMessage: "old", userMessages: [{ id: "message_current", text: "prompt" }] },
+  ];
+  const summaryTurns = [
+    { id: "turn_current", status: "completed", revision: 2, lastMessage: "new" },
+    { id: "turn_new", status: "running", revision: 1 },
+  ];
+
+  assert.deepEqual(mergeAiSessionSummaryTurnsWithDetail(summaryTurns, detailTurns), [
+    detailTurns[0],
+    { ...summaryTurns[0], userMessages: detailTurns[1].userMessages },
+    summaryTurns[1],
+  ]);
+  assert.deepEqual(mergeAiSessionSummaryTurnsWithDetail([], detailTurns), []);
 });
 
 test("shared AI Session client owns route encoding, request input, and response schema", async () => {
@@ -480,7 +500,7 @@ test("shared client owns recovery, desktop lifecycle, and command routes used by
   const transport = {
     async request(path, schema, init) {
       requests.push({ path, init });
-      if (path === "/api/ai-sessions?refresh=true") return schema.parse({ data: { updatedAt: "2026-08-05T00:00:00.000Z", instances: [] } });
+      if (path.startsWith("/api/ai-sessions?refresh=true")) return schema.parse({ data: { updatedAt: "2026-08-05T00:00:00.000Z", instances: [] } });
       if (path.endsWith("/open-app")) return schema.parse({ data: { disposition: "opened", aiSessionId: "session", providerSessionId: "provider", appSessionId: "app", creationSource: "ai-session" } });
       if (path.endsWith("/close")) return schema.parse({ data: { disposition: "closed", aiSessionId: "session", providerSessionId: "provider", creationSource: "ai-session" } });
       return schema.parse({ data: { command: "rename", value: "Renamed" } });
@@ -488,11 +508,13 @@ test("shared client owns recovery, desktop lifecycle, and command routes used by
   };
   const api = createControlPlaneClient(transport);
   await api.aiSessions.refresh();
+  await api.aiSessions.refresh(undefined, "instance/1");
   await api.aiSessions.openApp("instance/1", "session 1", "request-open");
   await api.aiSessions.close("instance/1", "session 1", "request-close");
   await api.aiSessions.executeCommand("instance/1", "session 1", { command: "rename", argument: "Renamed" });
   assert.deepEqual(requests.map((request) => request.path), [
     "/api/ai-sessions?refresh=true",
+    "/api/ai-sessions?refresh=true&instanceId=instance%2F1",
     "/api/controlled-instances/instance%2F1/ai-sessions/session%201/open-app",
     "/api/controlled-instances/instance%2F1/ai-sessions/session%201/close",
     "/api/controlled-instances/instance%2F1/ai-sessions/session%201/commands",
@@ -706,6 +728,50 @@ test("shared AI Session state preserves Web sorting, unread, approval, and delta
     settledAt: undefined,
     updatedAt: "new",
   });
+});
+
+test("Control Plane AI Session patches preserve unread without leaking it into the strict stream reducer", () => {
+  const current = {
+    instanceId: "instance-1",
+    streamId: "stream-1",
+    revision: 1,
+    lastEventAt: "2026-08-05T00:00:00.000Z",
+    aiSessions: {
+      runningCount: 0,
+      waitingCount: 0,
+      staleCount: 0,
+      updatedAt: "2026-08-05T00:00:00.000Z",
+      sessions: [
+        { id: "changed", agent: "codex", status: "idle", phase: "unknown", startedAt: "2026-08-05T00:00:00.000Z", updatedAt: "2026-08-05T00:00:00.000Z", unread: false },
+        { id: "unchanged", agent: "codex", status: "idle", phase: "unknown", startedAt: "2026-08-05T00:00:00.000Z", updatedAt: "2026-08-05T00:00:00.000Z", unread: true },
+      ],
+    },
+  };
+  const event = {
+    type: "ai-session.patch",
+    payload: {
+      meta: {
+        streamId: "stream-1",
+        instanceId: "instance-1",
+        revision: 2,
+        previousRevision: 1,
+        traceId: "trace-2",
+        generatedAt: "2026-08-05T00:01:00.000Z",
+        reason: "provider-event",
+      },
+      upserted: [
+        { id: "changed", agent: "codex", status: "running", phase: "responding", startedAt: "2026-08-05T00:00:00.000Z", updatedAt: "2026-08-05T00:01:00.000Z" },
+      ],
+      removed: [],
+    },
+  };
+
+  const applied = applyControlPlaneAiSessionStreamEvent(current, event);
+
+  assert.equal(applied.result.kind, "applied");
+  assert.equal(applied.entry.revision, 2);
+  assert.equal(applied.entry.aiSessions.sessions.find((session) => session.id === "changed").unread, false);
+  assert.equal(applied.entry.aiSessions.sessions.find((session) => session.id === "unchanged").unread, true);
 });
 
 test("AI Session inbox sorts by the latest user message instead of status or assistant activity", () => {

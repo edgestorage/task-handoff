@@ -48,8 +48,8 @@ test("AI session details render messages without redundant section titles", () =
   for (const detail of [panel, floatingDock]) assert.doesNotMatch(detail, /message-section-title|response-section-title/);
 });
 
-test("cards and details count the same display turns", () => {
-  assert.match(panel, /return aiSessionTurns\(session\)\.length;/);
+test("details count retained turns while cards consume compact aggregate turns", () => {
+  assert.match(panel, /const conversation = selectedConversationSession\.value\?\.id === session\.id[\s\S]*?return aiSessionTurns\(conversation\)\.length;/);
   assert.match(board, /return aiSessionTurns\(session\)\.length;/);
   assert.match(displayHelpers, /const turns = aiSessionDisplayTurns\(session\);[\s\S]*?const turn = turns\[index\];[\s\S]*?const turnPrompt = turn\?\.userPrompt\?\.trim\(\);[\s\S]*?if \(turn\?\.contextCompactions\?\.length\) return "\/compact";[\s\S]*?return session\.userPrompt\?\.trim\(\) \|\| "-";/);
 });

@@ -724,7 +724,7 @@
                 class="session-ai-detail-prompt-content"
                 :class="{ expanded: promptExpanded }"
               >
-                <MarkdownContent :content="displayAiSessionTitle(selectedSession, promptIndexFor(selectedSession), t)" :code-tools="markdownCodeTools" />
+                <MarkdownContent :content="displayAiSessionTitle(selectedConversationSession || selectedSession, promptIndexFor(selectedSession), t)" :code-tools="markdownCodeTools" />
               </div>
               <button
                 v-if="promptHasOverflow"
@@ -781,7 +781,7 @@
           class="session-ai-timeline-sticky-prompt"
           aria-hidden="true"
         >
-          <MarkdownContent :content="displayAiSessionTitle(selectedSession, promptIndexFor(selectedSession), t)" :code-tools="markdownCodeTools" />
+          <MarkdownContent :content="displayAiSessionTitle(selectedConversationSession || selectedSession, promptIndexFor(selectedSession), t)" :code-tools="markdownCodeTools" />
         </article>
         <Button
           v-if="!isFollowingLatest"
@@ -1039,6 +1039,7 @@ import {
   aiSessionStatusGroup as sessionStatusGroup,
   canInterruptAiSession,
   isAiSessionApprovalPending,
+  mergeAiSessionSummaryTurnsWithDetail,
 } from "@task-handoff/control-plane-client";
 import {
   aiSessionAppDisplayName,
@@ -1204,7 +1205,7 @@ const selectedConversationSession = computed<AiSessionSummary | undefined>(() =>
   const session = selectedSession.value;
   const detail = selectedSessionDetail.value;
   if (!session || !detail || detail.id !== session.id) return session;
-  return { ...session, turns: detail.turns || session.turns };
+  return { ...session, turns: mergeAiSessionSummaryTurnsWithDetail(session.turns, detail.turns) };
 });
 const { setViewMode: persistTimelineViewMode, viewMode: timelineViewMode } = useAiSessionTimelineViewMode();
 const {
@@ -1780,7 +1781,10 @@ function startSidebarResize(event: PointerEvent) {
 }
 
 function promptCount(session: AiSessionSummary) {
-  return aiSessionTurns(session).length;
+  const conversation = selectedConversationSession.value?.id === session.id
+    ? selectedConversationSession.value
+    : session;
+  return aiSessionTurns(conversation).length;
 }
 
 function latestPromptIndex(session: AiSessionSummary) {
@@ -2956,7 +2960,7 @@ onMounted(() => {
   });
 });
 
-watch(() => `${props.instance.id}\u0000${selectedSession.value?.id || ""}\u0000${selectedSession.value?.updatedAt || ""}`, async () => {
+watch(() => `${props.instance.id}\u0000${selectedSession.value?.id || ""}`, async () => {
   const session = selectedSession.value;
   const revision = ++selectedSessionDetailRevision;
   selectedSessionDetail.value = undefined;

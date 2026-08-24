@@ -5,7 +5,7 @@ import test from "node:test";
 const read = (relative) => fs.readFileSync(new URL(`../${relative}`, import.meta.url), "utf8");
 
 test("OpenCode model selection is available for registry, creation, and instance settings", () => {
-  assert.match(read("src/apps/control-plane/settings/SettingsModal.vue"), /ControlPlaneSelectItem value="opencode"/);
+  assert.match(read("src/apps/control-plane/settings/ModelSettingsSection.vue"), /value="opencode"/);
   assert.match(read("src/apps/control-plane/new-instance/RuntimeStep.vue"), /model\.app === "opencode"/);
   assert.match(read("src/apps/control-plane/new-instance/newInstanceTypes.ts"), /opencodeModelHash\?: string \| null/);
   assert.match(read("src/apps/control-plane/instance-settings/InstanceSettingsDialog.vue"), /\["codex", "claude", "opencode"\]/);

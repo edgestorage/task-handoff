@@ -243,7 +243,7 @@ async function removeCredential() {
 </script>
 
 <style scoped>
-.git-credentials-settings { max-width: 980px; }
+.git-credentials-settings { margin: 0 auto; width: min(100%, var(--settings-content-max-width, 1080px)); }
 .git-credentials-panel { align-content: start; }
 .git-credentials-head { align-items: flex-start; display: flex; gap: 16px; justify-content: space-between; }
 .git-credentials-head > div { display: grid; gap: 4px; }
