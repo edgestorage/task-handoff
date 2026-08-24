@@ -22,7 +22,7 @@ export type ControlPlaneStorePaths = {
   authUsersDir: string;
   authSessionsDir: string;
   authMembershipsDir: string;
-  userDatabasePath: string;
+  databasePath: string;
   identityProviderEncryptionKeyPath: string;
   gitCredentialsDir: string;
   gitCredentialAssignmentsDir: string;
@@ -60,7 +60,7 @@ export function controlPlaneStorePaths(dataDir = defaultControlPlaneDataDir()): 
     authUsersDir: path.join(root, "auth-users"),
     authSessionsDir: path.join(root, "auth-sessions"),
     authMembershipsDir: path.join(root, "auth-memberships"),
-    userDatabasePath: path.join(root, "user-access", "control-plane.sqlite"),
+    databasePath: path.join(root, "control-plane.sqlite"),
     identityProviderEncryptionKeyPath: path.join(root, "user-access", "identity-provider-encryption-key.json"),
     gitCredentialsDir: path.join(root, "git-credentials", "credentials"),
     gitCredentialAssignmentsDir: path.join(root, "git-credentials", "assignments"),

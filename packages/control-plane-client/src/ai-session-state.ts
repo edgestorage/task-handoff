@@ -3,6 +3,8 @@ import {
   type AiSessionStreamApplyResult,
   type AiSessionStreamEvent,
   type AiSessionSummary,
+  type AiSessionSummaryTurn,
+  type AiSessionTurn,
   type AiSessionUnreadState,
   type AiSessionsState,
 } from "@task-handoff/protocol/ai-sessions";
@@ -100,6 +102,24 @@ export function aiSessionLastUserMessageAt(session: AiSessionSummary) {
   return session.userPrompt?.trim() && Number.isFinite(Date.parse(session.startedAt)) ? session.startedAt : undefined;
 }
 
+export function mergeAiSessionSummaryTurnsWithDetail(
+  summaryTurns: readonly AiSessionSummaryTurn[] | undefined,
+  detailTurns: readonly AiSessionTurn[] | undefined,
+): Array<AiSessionSummaryTurn & Pick<AiSessionTurn, "userMessages">> | undefined {
+  if (summaryTurns === undefined) return detailTurns?.map((turn) => ({ ...turn }));
+  if (summaryTurns.length === 0) return [];
+  if (!detailTurns?.length) return [...summaryTurns];
+  const summaryById = new Map(summaryTurns.map((turn) => [turn.id, turn]));
+  const merged = detailTurns.map((detail) => {
+    const summary = summaryById.get(detail.id);
+    if (!summary) return { ...detail };
+    summaryById.delete(detail.id);
+    return { ...summary, ...(detail.userMessages ? { userMessages: detail.userMessages } : {}) };
+  });
+  merged.push(...summaryTurns.filter((turn) => summaryById.has(turn.id)));
+  return merged.slice(-50);
+}
+
 export function aiSessionLastUserMessageTime(session: AiSessionSummary) {
   const value = aiSessionLastUserMessageAt(session);
   return value ? Date.parse(value) : 0;
@@ -165,7 +185,13 @@ export function applyControlPlaneAiSessionStreamEvent(
     streamId: current.streamId,
     revision: current.revision ?? 0,
     lastEventAt: current.lastEventAt ?? current.aiSessions.updatedAt,
-    snapshot: current.aiSessions,
+    // `unread` belongs to the Control Plane projection, not the public AI
+    // Session stream protocol. Passing decorated sessions into the strict
+    // protocol reducer makes every partial patch fail schema validation.
+    snapshot: {
+      ...current.aiSessions,
+      sessions: current.aiSessions.sessions.map(({ unread: _unread, ...session }) => session),
+    },
   } : undefined;
   const result = applyAiSessionStreamEvent(projection, event);
   if (result.kind !== "applied") return { result, entry: current };

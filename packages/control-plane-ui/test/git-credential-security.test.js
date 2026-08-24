@@ -41,7 +41,7 @@ test("git credential controls follow canonical node and instance capabilities", 
   assert.match(newInstance, /:git-credential-provisioning-supported="gitCredentialProvisioningSupported"/);
   assert.match(runtimeStep, /v-if="gitSource && gitCredentialId && gitCredentialProvisioningSupported"/);
   assert.match(runtimeStep, /gitCredentialUnsupported/);
-  assert.match(instanceSettings, /supportsGitCliCredentialBroker/);
+  assert.match(instanceSettings, /supportsGitCredentialProxy/);
 });
 
 test("instance settings derives credential match diagnostics from authoritative synced assignments", () => {

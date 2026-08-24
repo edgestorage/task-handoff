@@ -22,6 +22,12 @@ export type EventSubscribeMessage = {
   type: "subscribe";
   topics?: string[];
   instanceIds?: string[];
+  /**
+   * Optional resource-metrics scope independent from the general instance
+   * event scope. Compatibility for v0.0.23: absence retains the legacy full
+   * metrics stream; an explicit empty list disables metrics snapshots.
+   */
+  metricInstanceIds?: string[];
   aiSessionTransient?: AiSessionTransientSubscription;
 };
 

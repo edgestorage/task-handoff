@@ -285,7 +285,7 @@ async function confirmDelete() { const target = pendingDelete.value; if (!target
 
 <style scoped>
 .model-settings-scroll { height: 100%; min-height: 0; width: 100%; }
-.model-settings-page { display: grid; gap: 12px; padding: 0 10px 20px 0; width: 100%; }
+.model-settings-page { display: grid; gap: 12px; margin: 0 auto; padding: 0 10px 20px 0; width: min(100%, var(--settings-content-max-width, 1080px)); }
 .model-page-head { align-items: flex-start; display: flex; gap: 16px; justify-content: space-between; }
 .model-page-head p, .model-form-section h3, .model-form-section p { margin: 0; }
 .model-page-head p { color: var(--text-muted); font-size: 12px; line-height: 1.45; }

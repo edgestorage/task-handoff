@@ -44,6 +44,7 @@ const { acquireControlPlaneSingletonLock } = require("../packages/control-plane/
 const { acquireNodeAgentSingletonLock } = require("../packages/control-plane/src/node-agent/process/singleton-lock.ts");
 const { EventConnectionRetryTimer, eventConnectionRetryDelay, eventConnectionSafetyIntervalMs } = require("../packages/control-plane/src/shared/events/connection-retry.ts");
 const { JsonCollection, JsonFile } = require("../packages/control-plane/src/shared/persistence/store.ts");
+const { controlPlaneStorePaths } = require("../packages/control-plane/src/control-plane/persistence/paths.ts");
 const { nodeAgentStorePaths } = require("../packages/control-plane/src/node-agent/persistence/paths.ts");
 const { aiSessionUserPrompts, displayAiSessionMessage, displayAiSessionTitle, launchableAppsForInstance: uiLaunchableAppsForInstance } = require("../packages/control-plane-ui/src/apps/control-plane/useInstanceSessions.ts");
 const { launchableAppsForInstance: chatLaunchableAppsForInstance } = require("../packages/control-plane/src/control-plane/chat/rendering.ts");
@@ -51,7 +52,7 @@ const { AiSessionEventType, AiSessionEventTopic, AiSessionUnreadEventType } = re
 const { AppSessionEventType, normalizeAppSessionRecord, normalizeAppSessionStatus } = require("../packages/protocol/src/app-sessions.ts");
 const { ApplyUpdateRequestSchema, CONTROL_PLANE_PROTOCOL_VERSION, ControlledInstanceHeartbeatSchema, ControlledInstanceRegisterSchema, ControlledInstanceSchema, InstanceAppInventorySchema, InstanceLifecycleEventType, RuntimeArtifactIdentitySchema, RuntimeVersionStateSchema, UpdateCheckRequestSchema, UpdateJobSchema, decodeNodeTunnelRequestBody, modelConfigHash, parseStoredControlledInstance, sanitizeStoredControlledInstance } = require("../packages/protocol/src/control-plane.ts");
 const { ChatActionTokenService, parsePendingDecisionCallbackData, pendingDecisionRouteFingerprint } = require("../packages/control-plane/src/control-plane/chat/action-token-service.ts");
-const { ControlPlanePublicIdentityDocumentSchema, ControlPlanePublicIdentityPayloadSchema, controlPlaneIdentitySigningInput } = require("../packages/protocol/src/control-plane-access.ts");
+const { CONTROL_PLANE_PERMISSION_IDS, ControlPlanePublicIdentityDocumentSchema, ControlPlanePublicIdentityPayloadSchema, controlPlaneIdentitySigningInput } = require("../packages/protocol/src/control-plane-access.ts");
 
 const controlledProcessIdentityRouteStubLines = [
   "  if (req.url === '/api/health') { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ data: { ok: true } })); return; }",
@@ -587,6 +588,7 @@ test("app inventory protocol is strict and stored legacy app capability is disca
     aiSessionWorkspaceSelection: false,
     aiSessionPersistenceSettings: false,
     gitCliCredentialBroker: false,
+    gitCredentialProxy: false,
     aiSessionTimeline: { sessionReadAgents: [], turnReadAgents: [], liveItemAgents: [] },
     aiSessionConversationAttachments: { metadataAgents: [], contentAgents: [], uploadAgents: [], retentionSettings: false, fileSizeLimitSettings: false },
     aiSessionProviders: [],
@@ -892,6 +894,57 @@ test("session aggregator refresh broadcasts every snapshot that advances the sha
   assert.equal(appEvents[0].type, AppSessionEventType.Snapshot);
   assert.equal(appEvents[0].payload.meta.revision, 3);
   assert.equal(appAggregator.applySnapshot(appSnapshot), false, "the later WS copy remains idempotent");
+});
+
+test("session aggregator refresh scopes recovery and response to one controlled instance", async () => {
+  const timestamp = new Date().toISOString();
+  const aiTarget = aiSessionSnapshotPayload(
+    { sessions: [{ id: "ai_target", agent: "codex", status: "idle", phase: "unknown", startedAt: timestamp, updatedAt: timestamp, queue: { pendingCount: 0, items: [] } }] },
+    { instanceId: "inst_target", streamId: "ai_target_stream", revision: 2, generatedAt: timestamp },
+  );
+  let aiBootstrapCount = 0;
+  const aiRecovered = [];
+  const aiAggregator = new ControlPlaneAiSessionAggregator({
+    bootstrap: async () => { aiBootstrapCount += 1; return { instances: [] }; },
+    recoverSnapshot: async (instanceId) => {
+      aiRecovered.push(instanceId);
+      return { streamId: aiTarget.meta.streamId, revision: aiTarget.meta.revision, lastEventAt: timestamp, snapshot: aiTarget.snapshot };
+    },
+  });
+  aiAggregator.applySnapshot(aiSessionSnapshotPayload(
+    { sessions: [] },
+    { instanceId: "inst_other", streamId: "ai_other_stream", revision: 1, generatedAt: timestamp },
+  ));
+
+  const aiView = await aiAggregator.list({ refresh: true, instanceId: "inst_target" });
+  assert.deepEqual(aiRecovered, ["inst_target"]);
+  assert.equal(aiBootstrapCount, 0);
+  assert.deepEqual(aiView.instances.map((entry) => entry.instanceId), ["inst_target"]);
+  assert.equal(aiView.instances[0].revision, 2);
+
+  const appTarget = appSessionSnapshotPayload(
+    { sessions: [{ id: "app_target", status: "running" }] },
+    { instanceId: "inst_target", streamId: "app_target_stream", revision: 3, generatedAt: timestamp },
+  );
+  let appBootstrapCount = 0;
+  const appRecovered = [];
+  const appAggregator = new ControlPlaneAppSessionAggregator({
+    bootstrap: async () => { appBootstrapCount += 1; return { instances: [] }; },
+    recoverSnapshot: async (instanceId) => {
+      appRecovered.push(instanceId);
+      return { streamId: appTarget.meta.streamId, revision: appTarget.meta.revision, lastEventAt: timestamp, snapshot: appTarget.snapshot };
+    },
+  });
+  appAggregator.applySnapshot(appSessionSnapshotPayload(
+    { sessions: [] },
+    { instanceId: "inst_other", streamId: "app_other_stream", revision: 1, generatedAt: timestamp },
+  ));
+
+  const appView = await appAggregator.list({ refresh: true, instanceId: "inst_target" });
+  assert.deepEqual(appRecovered, ["inst_target"]);
+  assert.equal(appBootstrapCount, 0);
+  assert.deepEqual(appView.instances.map((entry) => entry.instanceId), ["inst_target"]);
+  assert.equal(appView.instances[0].revision, 3);
 });
 
 test("controlled instance gateway preserves structured remote errors for every proxied route", async () => {
@@ -2309,7 +2362,7 @@ test("control plane admin bootstrap has exactly one winner under concurrency", a
   assert.equal(winners.length, 1);
   assert.equal(rejected.length, 7);
   assert.equal(rejected.every((response) => response.json().error.code === "AUTH_BOOTSTRAP_IN_PROGRESS"), true);
-  const database = new DatabaseSync(path.join(dataDir, "user-access", "control-plane.sqlite"), { readOnly: true });
+  const database = new DatabaseSync(controlPlaneStorePaths(dataDir).databasePath, { readOnly: true });
   try {
     assert.equal(database.prepare("SELECT count(*) AS count FROM cp_users").get().count, 1);
   } finally {
@@ -2484,9 +2537,19 @@ test("control plane serves the remote node-agent installer without auth", async 
 });
 
 test("control plane authorization role matrix separates viewer operator and admin", () => {
-  const admin = { type: "user", membershipId: "m_admin", role: "admin", nodeScope: { kind: "all" }, authorizationRevision: 1 };
-  const operator = { type: "user", membershipId: "m_operator", role: "operator", nodeScope: { kind: "all" }, authorizationRevision: 1 };
-  const viewer = { type: "user", membershipId: "m_viewer", role: "viewer", nodeScope: { kind: "all" }, authorizationRevision: 1 };
+  const actor = (role, permissionIds) => ({
+    type: "user",
+    userId: `user_${role}`,
+    identityId: `identity_${role}`,
+    roleIds: [`role_${role}`],
+    permissionIds,
+    nodeScope: { kind: "all" },
+    authorizationRevision: 1,
+    requiresPasswordChange: false,
+  });
+  const admin = actor("admin", [...CONTROL_PLANE_PERMISSION_IDS]);
+  const operator = actor("operator", CONTROL_PLANE_PERMISSION_IDS.filter((id) => !["users:", "roles:", "identity-providers:", "settings:", "secrets:", "chat-bridges:"].some((prefix) => id.startsWith(prefix))));
+  const viewer = actor("viewer", CONTROL_PLANE_PERMISSION_IDS.filter((id) => id.endsWith(":read")));
 
   assert.equal(can(admin, "manage-secrets", { type: "model" }), true);
   assert.equal(can(operator, "start", { type: "instance", id: "inst_1" }), true);
@@ -2498,8 +2561,18 @@ test("control plane authorization role matrix separates viewer operator and admi
 });
 
 test("control plane mutation route policies never degrade privileged operations to read", () => {
-  const viewer = { type: "user", membershipId: "m_viewer", role: "viewer", nodeScope: { kind: "all" }, authorizationRevision: 1 };
-  const operator = { type: "user", membershipId: "m_operator", role: "operator", nodeScope: { kind: "all" }, authorizationRevision: 1 };
+  const actor = (role, permissionIds) => ({
+    type: "user",
+    userId: `user_${role}`,
+    identityId: `identity_${role}`,
+    roleIds: [`role_${role}`],
+    permissionIds,
+    nodeScope: { kind: "all" },
+    authorizationRevision: 1,
+    requiresPasswordChange: false,
+  });
+  const viewer = actor("viewer", CONTROL_PLANE_PERMISSION_IDS.filter((id) => id.endsWith(":read")));
+  const operator = actor("operator", CONTROL_PLANE_PERMISSION_IDS.filter((id) => !["users:", "roles:", "identity-providers:", "settings:", "secrets:", "chat-bridges:"].some((prefix) => id.startsWith(prefix))));
   const operatorRoutes = [
     ["POST", "/api/ai-session-attachments", "send-message", "ai-session"],
     ["POST", "/api/chat-gateway/messages", "send-message", "ai-session"],
@@ -3706,7 +3779,11 @@ test("control plane subscribes to direct node agent websocket events", async (t)
     7000,
   );
 
-  const event = await waitForCondition(() => receivedEvents.find((entry) => entry.type === AiSessionEventType.Snapshot), "direct node agent ai session event", 7000);
+  const event = await waitForCondition(() => receivedEvents.find((entry) => (
+    entry.type === AiSessionEventType.Snapshot
+    && entry.scope?.nodeId === directNodeId
+    && entry.scope?.instanceId === "inst_direct_events"
+  )), "direct node agent ai session event", 7000);
   assert.equal(event.type, AiSessionEventType.Snapshot);
   assert.equal(event.topic, AiSessionEventTopic);
   assert.equal(event.scope.nodeId, directNodeId);
@@ -4123,6 +4200,18 @@ test("node update preflight excludes Local Runtime artifacts on macOS and report
     },
     updateCommandRunner: async (command, args) => {
       updateCommands.push(command);
+      if (command === "systemd-run") {
+        const jobFile = args[args.indexOf("--job-file") + 1];
+        const job = JSON.parse(fs.readFileSync(jobFile, "utf8"));
+        fs.writeFileSync(jobFile, JSON.stringify({
+          ...job,
+          status: "updating-node",
+          rollout: { ...job.rollout, phase: "updating-node" },
+          startedAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }));
+        return { stdout: "", stderr: "" };
+      }
       if (args[0] === "root") return { stdout: globalRoot, stderr: "" };
       if (args[0] === "prefix") return { stdout: globalRoot, stderr: "" };
       return { stdout: JSON.stringify(args.includes("dist.integrity") ? npmIntegrityFixture : "9.8.7"), stderr: "" };
@@ -9203,6 +9292,13 @@ test("node agent proxies direct-port instances through the node-local host", asy
   const health = await app.inject({ method: "GET", url: "/api/node-agent/health", headers: { authorization: "Bearer agent-secret" } });
   assert.equal(health.json().data.instanceProxy.limitRejected, 1);
   assert.ok(health.json().data.instanceProxy.responseBytes >= Buffer.byteLength("<html>ok</html>"));
+  assert.deepEqual(health.json().data.eventTransport, {
+    status: "healthy",
+    activeOutputs: 0,
+    bufferedBytes: 0,
+    peakBufferedBytes: 0,
+    coalescedEvents: 0,
+  });
 });
 
 test("node agent proxies instance websocket subprotocols", async (t) => {
@@ -13361,6 +13457,9 @@ test("control plane chat gateway binds sessions and forwards messages to active 
       request.body?.path === "/api/apps/sessions" &&
       innerBody?.appId === "chromium";
   }));
+
+  const refreshedAfterLaunch = await json(app, "GET", "/api/app-sessions?refresh=true");
+  assert.equal(refreshedAfterLaunch.statusCode, 200);
 
   const settingsPatch = await json(app, "PATCH", "/api/control-plane/settings", {
     publicBaseUrl: "https://control.example.test",

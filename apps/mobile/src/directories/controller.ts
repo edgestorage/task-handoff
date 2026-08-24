@@ -1,5 +1,5 @@
 import type { ControlPlaneClient } from '@task-handoff/control-plane-client';
-import { ControlPlaneInstanceLifecycleDirectoryEventSchema, ControlPlaneNodeConnectionPhaseSchema, ControlPlaneNodeFleetStateSchema } from '@task-handoff/protocol/control-plane-directory';
+import { ControlPlaneInstanceLifecycleDirectoryEventSchema, ControlPlaneNodeConnectionPhaseSchema, ControlPlaneNodeFleetUpdatedEventSchema } from '@task-handoff/protocol/control-plane-directory';
 import type { ControlPlaneInstanceAction } from '@task-handoff/protocol/control-plane-directory';
 import { safeParseResponse } from '@task-handoff/protocol/response-validation';
 import { z } from 'zod';
@@ -16,6 +16,8 @@ const NodeConnectionObservationSchema = z.object({
   lastSeenAt: z.string().datetime().optional(),
 }).strip();
 const INSTANCE_LIFECYCLE_SNAPSHOT_EVENT = 'instance.lifecycle.snapshot';
+type DirectoryRefreshDomain = 'nodes' | 'instances';
+const ALL_DIRECTORY_DOMAINS: readonly DirectoryRefreshDomain[] = ['nodes', 'instances'];
 
 export class MobileDirectoryController {
   private epoch = 0;
@@ -23,7 +25,8 @@ export class MobileDirectoryController {
   private connection?: MobileControlPlaneEventConnection;
   private refreshTimer?: ReturnType<typeof setTimeout>;
   private refreshInFlight?: Promise<void>;
-  private refreshQueued = false;
+  private readonly refreshQueued = new Set<DirectoryRefreshDomain>();
+  private readonly scheduledRefresh = new Set<DirectoryRefreshDomain>();
   private activeSignal?: AbortSignal;
   private readonly reconnectBackoff = new MobileReconnectBackoff();
   private reconnectTimer?: ReturnType<typeof setTimeout>;
@@ -85,7 +88,7 @@ export class MobileDirectoryController {
     const updated = await this.client.resources.updateInstanceName(instanceId, name);
     if (this.store.isGeneration(this.controlPlaneId, this.storeGeneration)) {
       this.store.setInstanceName(this.controlPlaneId, updated.id, updated.name);
-      void this.requestRefresh().catch(() => undefined);
+      void this.requestRefresh(['instances']).catch(() => undefined);
     }
     return updated;
   }
@@ -94,7 +97,7 @@ export class MobileDirectoryController {
     const updated = await this.client.resources.updateNodeName(nodeId, name);
     if (this.store.isGeneration(this.controlPlaneId, this.storeGeneration)) {
       this.store.setNodeName(this.controlPlaneId, updated.id, updated.name);
-      void this.requestRefresh().catch(() => undefined);
+      void this.requestRefresh(['nodes']).catch(() => undefined);
     }
     return updated;
   }
@@ -104,7 +107,7 @@ export class MobileDirectoryController {
     if (!instance) throw new Error(`Instance ${instanceId} is not in the current directory snapshot.`);
     if (!instance.availableActions.includes(action)) throw new Error(`Instance action ${action} is not currently available.`);
     const result = await this.client.resources.instanceAction(instanceId, action);
-    await this.requestRefresh();
+    await this.requestRefresh(['instances']);
     return result;
   }
 
@@ -151,7 +154,8 @@ export class MobileDirectoryController {
     this.refreshTimer = undefined;
     this.reconnectTimer = undefined;
     this.reconnectBackoff.reset();
-    this.refreshQueued = false;
+    this.refreshQueued.clear();
+    this.scheduledRefresh.clear();
     this.activeSignal = undefined;
     this.connection?.close();
     this.connection = undefined;
@@ -189,67 +193,86 @@ export class MobileDirectoryController {
       const parsed = safeParseResponse(ControlPlaneInstanceLifecycleDirectoryEventSchema, event.payload);
       if (!parsed.success || event.scope?.instanceId !== parsed.data.instanceId) return false;
       const applied = this.store.applyInstanceLifecycle(this.controlPlaneId, parsed.data);
-      if (applied) this.scheduleRefresh();
+      if (applied) this.scheduleRefresh(['instances']);
       return applied;
     }
     if (event.type === 'node.fleet.updated') {
-      const parsed = safeParseResponse(ControlPlaneNodeFleetStateSchema, event.payload);
+      const parsed = safeParseResponse(ControlPlaneNodeFleetUpdatedEventSchema, event.payload);
       if (!parsed.success || event.scope?.nodeId !== parsed.data.nodeId) return false;
+      const { contentChanged, ...fleetState } = parsed.data;
       const current = this.store.profile(this.controlPlaneId);
-      const previous = current.nodeStates.find((state) => state.nodeId === parsed.data.nodeId && state.resource === parsed.data.resource);
-      if (previous?.revision !== undefined && parsed.data.revision !== undefined && previous.revision >= parsed.data.revision) return false;
+      const previous = current.nodeStates.find((state) => state.nodeId === fleetState.nodeId && state.resource === fleetState.resource);
+      if (previous?.revision !== undefined && fleetState.revision !== undefined && previous.revision >= fleetState.revision) return false;
       this.store.set(this.controlPlaneId, {
-        nodeStates: [...current.nodeStates.filter((state) => state.nodeId !== parsed.data.nodeId || state.resource !== parsed.data.resource), parsed.data],
+        nodeStates: [...current.nodeStates.filter((state) => state.nodeId !== fleetState.nodeId || state.resource !== fleetState.resource), fleetState],
       });
-      this.scheduleRefresh();
+      // Compatibility for v0.0.23: an omitted hint came from a producer that
+      // could not prove the resource projection stayed unchanged.
+      if (contentChanged !== false && fleetState.resource === 'instances') this.scheduleRefresh(['instances']);
       return true;
     }
-    if (event.topic === 'nodes' || event.topic === 'node.state' || event.topic === 'instances') {
-      this.scheduleRefresh();
+    if (event.type.startsWith('instance.ai-session.') || event.type.startsWith('instance.app-session.')) return true;
+    if (event.topic === 'nodes' || event.topic === 'node.state') {
+      this.scheduleRefresh(['nodes']);
+      return true;
+    }
+    if (event.topic === 'instances') {
+      this.scheduleRefresh(['instances']);
       return true;
     }
     return false;
   }
 
-  private scheduleRefresh() {
+  private scheduleRefresh(domains: readonly DirectoryRefreshDomain[]) {
+    for (const domain of domains) this.scheduledRefresh.add(domain);
     if (this.refreshTimer) return;
     this.refreshTimer = setTimeout(() => {
       this.refreshTimer = undefined;
-      void this.requestRefresh().catch(() => undefined);
+      const scheduled = [...this.scheduledRefresh];
+      this.scheduledRefresh.clear();
+      void this.requestRefresh(scheduled).catch(() => undefined);
     }, 100);
   }
 
-  private requestRefresh() {
+  private requestRefresh(domains: readonly DirectoryRefreshDomain[] = ALL_DIRECTORY_DOMAINS) {
+    if (!domains.length) return Promise.resolve();
     if (this.refreshInFlight) {
-      this.refreshQueued = true;
+      for (const domain of domains) this.refreshQueued.add(domain);
       return this.refreshInFlight;
     }
     const epoch = this.epoch;
-    const refresh = this.refreshDirectories(epoch, this.activeSignal).finally(() => {
+    const refresh = this.refreshDirectories(epoch, this.activeSignal, domains).finally(() => {
       if (this.refreshInFlight !== refresh) return;
       this.refreshInFlight = undefined;
-      if (!this.refreshQueued || epoch !== this.epoch) return;
-      this.refreshQueued = false;
-      void this.requestRefresh().catch(() => undefined);
+      if (!this.refreshQueued.size || epoch !== this.epoch) return;
+      const queued = [...this.refreshQueued];
+      this.refreshQueued.clear();
+      void this.requestRefresh(queued).catch(() => undefined);
     });
     this.refreshInFlight = refresh;
     return refresh;
   }
 
-  private async refreshDirectories(epoch: number, signal?: AbortSignal) {
-    const nodesPromise = this.client.resources.nodes(signal).then((nodes) => {
+  private async refreshDirectories(epoch: number, signal: AbortSignal | undefined, domains: readonly DirectoryRefreshDomain[]) {
+    const refreshNodes = domains.includes('nodes');
+    const refreshInstances = domains.includes('instances');
+    const current = this.store.profile(this.controlPlaneId);
+    const nodesPromise = refreshNodes ? this.client.resources.nodes(signal).then((nodes) => {
       if (!signal?.aborted && epoch === this.epoch && this.store.isGeneration(this.controlPlaneId, this.storeGeneration)) {
         this.store.set(this.controlPlaneId, { nodes });
       }
       return nodes;
-    });
-    const [nodes, directory] = await Promise.all([nodesPromise, this.instanceDirectory(signal)]);
+    }) : Promise.resolve(current.nodes);
+    const directoryPromise = refreshInstances ? this.instanceDirectory(signal) : Promise.resolve(undefined);
+    const [nodes, directory] = await Promise.all([nodesPromise, directoryPromise]);
     if (signal?.aborted || epoch !== this.epoch || !this.store.isGeneration(this.controlPlaneId, this.storeGeneration)) return;
     this.store.set(this.controlPlaneId, {
-      nodes,
-      instances: directory.data,
-      nodeStates: directory.meta?.nodeStates || [],
-      phase: directoryPhase(directory.meta?.nodeStates || [], directory.data.length),
+      ...(refreshNodes ? { nodes } : {}),
+      ...(directory ? {
+        instances: directory.data,
+        nodeStates: directory.meta?.nodeStates || [],
+        phase: directoryPhase(directory.meta?.nodeStates || [], directory.data.length),
+      } : {}),
       updatedAt: new Date().toISOString(),
       error: undefined,
     });

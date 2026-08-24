@@ -3,6 +3,7 @@ import fs from "node:fs";
 import test from "node:test";
 
 const source = fs.readFileSync(new URL("../src/apps/control-plane/useControlPlaneEvents.ts", import.meta.url), "utf8");
+const workbench = fs.readFileSync(new URL("../src/apps/control-plane/ControlPlaneWorkbench.vue", import.meta.url), "utf8");
 
 test("Control Plane events reset reconnect backoff only after the authoritative hello", () => {
   const openHandler = source.match(/current\.addEventListener\("open",[\s\S]*?\n    \}\);/)?.[0] || "";
@@ -16,10 +17,28 @@ test("Control Plane events declare list delta demand separately from detail time
   assert.match(source, /messageDeltas: instanceId[\s\S]*scopedMessageDeltaDemanded \? \[instanceId\] : \[\]/);
   assert.match(source, /timelineSessions: aiSessionTimelineDemand\.value\.filter/);
   assert.match(source, /watch\(\[aiSessionMessageDeltaDemand, aiSessionTimelineDemand, aiSessionTransientReplaySince\]/);
-  assert.match(source, /if \(replaySince\) \{[\s\S]*invalidateQueries/);
+  assert.match(source, /watch\(\(\) => JSON\.stringify\(toValue\(input\.resourceMetricInstanceIds \|\| \[\]\)\)[\s\S]*?sendSubscription\(socket\);/);
+  assert.doesNotMatch(source, /replaySince[\s\S]{0,320}invalidateQueries/);
   assert.doesNotMatch(source, /messageDeltas: \{ allInstances: true/);
 });
 
 test("new Control Plane clients advertise precise transient subscription support in the socket URL", () => {
   assert.match(source, /url\.searchParams\.set\("aiSessionTransient", "1"\)/);
+  assert.match(source, /url\.searchParams\.set\("resourceMetricsScope", "1"\)/);
+});
+
+test("fleet diagnostics are consumed locally while semantic content changes recover authoritative queries", () => {
+  const handler = source.match(/if \(event\.type === "node\.fleet\.updated"\)[\s\S]*?\n    \}/)?.[0] || "";
+  assert.match(handler, /applyNodeFleetState\(queryClient, state\.data\)/);
+  assert.match(handler, /return state\.data\.contentChanged === false/);
+});
+
+test("AI and App Session operation receipts do not invalidate the instance board", () => {
+  assert.match(source, /event\.type\?\.startsWith\("instance\.ai-session\."\)/);
+  assert.match(source, /event\.type\?\.startsWith\("instance\.app-session\."\)/);
+});
+
+test("the session stream starts only after both initial authoritative snapshots settle", () => {
+  assert.match(workbench, /const sessionEventsEnabled = computed\(\(\) => sessionQueriesEnabled\.value[\s\S]*!controlPlaneAiSessions\.isPending\.value[\s\S]*!controlPlaneAppSessions\.isPending\.value\)/);
+  assert.match(workbench, /useControlPlaneEvents\(\{[\s\S]*enabled: sessionEventsEnabled/);
 });

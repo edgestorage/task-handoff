@@ -585,6 +585,16 @@ export type NodeStatus = {
   agent?: Record<string, unknown>;
 };
 
+export type NodeAgentEventTransportHealth = {
+  status: "healthy" | "congested" | "recovering";
+  activeOutputs: number;
+  bufferedBytes: number;
+  peakBufferedBytes: number;
+  coalescedEvents: number;
+  congestedSince?: string;
+  lastCongestedAt?: string;
+};
+
 export type NodePairingInvite = {
   nodeId: string;
   joinToken: string;

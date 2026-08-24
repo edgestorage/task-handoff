@@ -77,7 +77,8 @@ import writeFileAtomic from "write-file-atomic";
 import { z } from "zod";
 import type { CommandRunner } from "../../shared/process/command-runner.ts";
 import { ControlPlaneNodeAgentClient, type NodeAgentTransport, type NodeAgentWebSocket } from "../nodes/client.ts";
-import { ControlPlaneNodeAgentGateway, type NodeFleetResourceState } from "../nodes/gateway.ts";
+import { ControlPlaneNodeAgentGateway } from "../nodes/gateway.ts";
+import type { ControlPlaneNodeFleetUpdatedEvent } from "@task-handoff/protocol/control-plane-directory";
 import { createDirectNodeAgentTransport } from "../nodes/direct-transport.ts";
 import { NodeAgentTransportResolver } from "../nodes/transport-resolver.ts";
 import { ControlPlaneProxyNodeAgentTransport } from "../nodes/control-plane-proxy-transport.ts";
@@ -154,7 +155,7 @@ export type ControlPlaneServiceOptions = {
   nodeAgentTransport?: NodeAgentTransport;
   logger?: ServiceLogger;
   nodeConnectionRuntime?: NodeConnectionRuntime;
-  onFleetStateChanged?: (state: NodeFleetResourceState) => void;
+  onFleetStateChanged?: (state: ControlPlaneNodeFleetUpdatedEvent) => void;
 };
 
 function isControlPlaneLocalNode(node: Node) {

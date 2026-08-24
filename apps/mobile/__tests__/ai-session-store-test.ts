@@ -77,6 +77,35 @@ describe('MobileAiSessionStore identity isolation', () => {
     expect(store.session('cp-b', 'instance-1', 'session-1')?.id).toBe('session-1');
   });
 
+  test('an older HTTP snapshot cannot overwrite a newer stream projection', () => {
+    const store = new MobileAiSessionStore();
+    const initial = snapshot('instance-1', 'session-1');
+    store.replaceSnapshot('cp-monotonic', initial);
+    const current = initial.instances[0].aiSessions.sessions[0];
+    const { unread: _unread, ...protocolSession } = current;
+    store.applyStreamEvent('cp-monotonic', {
+      type: AiSessionEventType.Patch,
+      payload: {
+        meta: {
+          streamId: initial.instances[0].streamId,
+          instanceId: 'instance-1',
+          revision: 2,
+          previousRevision: 1,
+          traceId: 'trace-newer',
+          generatedAt: '2026-08-05T00:01:00.000Z',
+          reason: 'provider-event',
+        },
+        upserted: [{ ...protocolSession, status: 'running', updatedAt: '2026-08-05T00:01:00.000Z' }],
+        removed: [],
+      },
+    });
+
+    store.replaceSnapshot('cp-monotonic', initial);
+
+    expect(store.profile('cp-monotonic').snapshot?.instances[0].revision).toBe(2);
+    expect(store.session('cp-monotonic', 'instance-1', 'session-1')?.status).toBe('running');
+  });
+
   test('message deltas notify only their session and preserve unrelated session view snapshots', () => {
     const store = new MobileAiSessionStore();
     const initial = snapshot('instance-1', 'session-1');

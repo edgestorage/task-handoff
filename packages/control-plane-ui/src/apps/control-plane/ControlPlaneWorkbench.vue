@@ -515,7 +515,8 @@ type BoardSize = "small" | "medium" | "large";
 type WorkbenchView = "instance" | "board" | "ai";
 const BOARD_SIZE_STORAGE_KEY = "task-handoff.control-plane.board-size";
 const BOARD_INTERACTIVE_STORAGE_KEY = "task-handoff.control-plane.board-interactive";
-const SESSION_PREVIEW_EXPANDED_STORAGE_KEY = "task-handoff.control-plane.session-preview-expanded";
+const MAIN_SESSION_PREVIEW_EXPANDED_STORAGE_KEY = "task-handoff.control-plane.session-preview-expanded";
+const STANDALONE_SESSION_PREVIEW_EXPANDED_STORAGE_KEY = "task-handoff.control-plane.instance-window.session-preview-expanded";
 const ALL_BOARD_FILTER_VALUE = "__all__";
 const BOARD_SIZE_VALUES = new Set<BoardSize>(["small", "medium", "large"]);
 
@@ -529,7 +530,10 @@ function storedBoardInteractive() {
 }
 
 function storedSessionPreviewExpanded() {
-  return window.localStorage?.getItem(SESSION_PREVIEW_EXPANDED_STORAGE_KEY) === "true";
+  const stored = window.localStorage?.getItem(standaloneMode.value
+    ? STANDALONE_SESSION_PREVIEW_EXPANDED_STORAGE_KEY
+    : MAIN_SESSION_PREVIEW_EXPANDED_STORAGE_KEY);
+  return stored === null || stored === undefined ? standaloneMode.value : stored === "true";
 }
 
 const queryClient = useQueryClient();
@@ -549,6 +553,12 @@ const instanceDirectoryComplete = computed(() => {
 const instanceDirectory = useInstanceDirectoryQuery(standaloneMode);
 const controlPlaneAiSessions = useControlPlaneAiSessionsQuery(sessionQueryInstanceId, sessionQueriesEnabled);
 const controlPlaneAppSessions = useControlPlaneAppSessionsQuery(sessionQueryInstanceId, sessionQueriesEnabled);
+// HTTP owns the initial authoritative snapshot. Opening the session stream
+// before both initial queries settle makes every hello descriptor race an
+// empty cache and issue a redundant per-instance recovery request.
+const sessionEventsEnabled = computed(() => sessionQueriesEnabled.value
+  && !controlPlaneAiSessions.isPending.value
+  && !controlPlaneAppSessions.isPending.value);
 const nodes = useNodesQuery(computed(() => !standaloneMode.value));
 let authorizationCacheEpoch = "";
 watch(() => currentAccessEpoch(currentAccess.data.value), (epoch) => {
@@ -571,7 +581,7 @@ const workbenchLoadingOverlayVisible = computed(() => initialWorkbenchLoadingVis
 watch(
   () => standaloneMode.value
     ? !standaloneOwnershipResolved.value || board.isLoading.value || standaloneBoardPending.value
-    : nodes.isLoading.value,
+    : board.isLoading.value,
   (loading) => {
     if (loading || initialWorkbenchLoadingFinished.value) return;
     initialWorkbenchLoadingFinished.value = true;
@@ -754,6 +764,7 @@ const resourceMetricsByInstanceId = reactive<Record<string, InstanceResourceMetr
 const resourceMetricsErrorByInstanceId = reactive<Record<string, string>>({});
 const activeInstanceResourceMetrics = computed(() => activeInstance.value?.runtime?.type === "docker" ? resourceMetricsByInstanceId[activeInstance.value.id] : undefined);
 const activeInstanceResourceMetricsError = computed(() => activeInstance.value?.runtime?.type === "docker" ? resourceMetricsErrorByInstanceId[activeInstance.value.id] : undefined);
+const resourceMetricEventInstanceIds = computed(() => activeInstance.value?.runtime?.type === "docker" ? [activeInstance.value.id] : []);
 const boardSizeOptions = computed<Array<{ value: BoardSize; label: string }>>(() => [
   { value: "small", label: t("instances.board.small") },
   { value: "medium", label: t("instances.board.medium") },
@@ -831,7 +842,8 @@ const refreshing = computed(() => board.isFetching.value || controlPlane.isFetch
 const lastNodeJoinedEvent = ref<NodeJoinedEvent>();
 useControlPlaneEvents({
   instanceId: sessionQueryInstanceId,
-  enabled: sessionQueriesEnabled,
+  resourceMetricInstanceIds: resourceMetricEventInstanceIds,
+  enabled: sessionEventsEnabled,
   aiSessions: aiSessionStore,
   appSessions: appSessionStore,
   appManagement: {
@@ -994,7 +1006,9 @@ watch(boardBulkAppFilter, (appId) => {
 });
 
 watch(sessionPreviewExpanded, (expanded) => {
-  window.localStorage?.setItem(SESSION_PREVIEW_EXPANDED_STORAGE_KEY, String(expanded));
+  window.localStorage?.setItem(standaloneMode.value
+    ? STANDALONE_SESSION_PREVIEW_EXPANDED_STORAGE_KEY
+    : MAIN_SESSION_PREVIEW_EXPANDED_STORAGE_KEY, String(expanded));
 });
 
 watch(boardInteractive, (interactive) => {
@@ -1069,7 +1083,10 @@ watch(
     if (ids && !connectingRefreshTimer) {
       connectingRefreshTimer = setInterval(() => {
         if (!refreshing.value) {
-          void refresh();
+          void queryClient.refetchQueries({
+            queryKey: controlPlaneQueryKeys.scopedInstanceBoard(sessionQueryInstanceId.value),
+            exact: true,
+          });
         }
       }, 2000);
       return;

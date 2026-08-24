@@ -13,7 +13,7 @@
       </div>
 
       <ScrollArea v-if="settingsSection === 'triggers'" class="settings-section-scroll" :horizontal="false">
-        <div class="settings-section-scroll-content">
+        <div class="settings-section-scroll-content settings-content-column">
           <ControlPlaneTriggersView :instances="instances" />
         </div>
       </ScrollArea>
@@ -296,7 +296,7 @@
                   <small>{{ nodeLocationLabel(target) }} · {{ nodeEndpointDisplay(target.endpoint) || target.connectionMode }}</small>
                 </span>
                 <span class="node-list-meta">
-                  <Tooltip @update:open="refreshNodeConnectionDiagnostics">
+                  <Tooltip @update:open="(open) => refreshNodeConnectionDiagnostics(open, target.id)">
                     <TooltipTrigger as-child>
                       <span class="node-diagnostic-badge" :aria-label="nodeBuildTitle(target.id)">
                         <Badge :variant="nodeStatusVariant(target.id)">{{ nodeStatusLabel(target.id) }}</Badge>
@@ -310,7 +310,7 @@
                         <span v-if="nodeBuild(target.id)?.imageRef"><b>{{ t("settings.nodeRegistry.image") }}</b><em>{{ nodeBuild(target.id)?.imageRef }}</em></span>
                         <span v-if="nodeBuild(target.id)?.builtAt"><b>{{ t("settings.nodeRegistry.built") }}</b><em>{{ nodeBuild(target.id)?.builtAt }}</em></span>
                       </div>
-                      <NodeConnectionDiagnostics class="node-list-connection-diagnostics" :diagnostics="target.connectionDiagnostics" />
+                      <NodeConnectionDiagnostics class="node-list-connection-diagnostics" :diagnostics="target.connectionDiagnostics" :event-transport="nodeEventTransport(target.id)" />
                     </TooltipContent>
                   </Tooltip>
                   <small>{{ nodeRuntimeSummary(target.id) }} · {{ nodeInstanceSummary(target.id) }}</small>
@@ -525,7 +525,7 @@ import { useQueryClient } from "@tanstack/vue-query";
 import { AlertTriangle, ArrowLeft, ChevronDown, Download, Eye, EyeOff, KeyRound, MonitorCog, Plus, RefreshCw, Server, ShieldAlert, Sparkles, Trash2 } from "@lucide/vue";
 import { cancelControlPlaneProxyClaim, claimControlPlaneProxyNode, controlPlaneQueryKeys, downloadControlPlaneDiagnosticLogs, getNodeExternalListener, resumeControlPlaneProxyClaim, updateControlPlaneSettings, updateNodeExternalListener, useAuthSessionQuery, useChatBridgesQuery, useChatGatewayStatusQuery, useControlPlaneSettingsQuery, useCurrentAccessQuery, useImagesQuery, useInstanceBoardPayloadQuery, useMarketCatalogQuery, useModelsQuery, useNodeImageAvailabilityQuery, useNodeRuntimesPayloadQuery, useNodesQuery, usePendingControlPlaneProxyClaimsQuery, useServerUpdateCheckQuery } from "../../../api/queries";
 import { invalidateControlPlaneDomains } from "../../../api/queryInvalidation";
-import type { BuildInfo, ControlPlaneSettings, InstanceBoardItem, Node, NodeAgentExternalListener, UpdateChannel } from "../../../api/types";
+import type { BuildInfo, ControlPlaneSettings, InstanceBoardItem, Node, NodeAgentEventTransportHealth, NodeAgentExternalListener, UpdateChannel } from "../../../api/types";
 import { Badge } from "../../../components/ui/badge";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../../components/ui/alert-dialog";
 import { Button } from "../../../components/ui/button";
@@ -1227,7 +1227,6 @@ const nodeDetailActions = computed(() => ({
   loadNodeImages,
   loadControlPlaneAccess,
   loadManagedUpdateJobs,
-  refreshNodeConnectionState: async () => { await nodes.refetch(); },
   openInstanceSettings: (instanceId: string) => emit("openInstanceSettings", instanceId),
   openNodeRename,
   removeNode,
@@ -1293,6 +1292,7 @@ const nodeDetailStatus = {
   build: nodeBuild,
   buildLabel: nodeBuildLabel,
   buildTitle: nodeBuildTitle,
+  eventTransport: nodeEventTransport,
   isBuiltinNode: isControlPlaneBuiltinNode,
   locationLabel: nodeLocationLabel,
   nameById: nodeNameById,
@@ -1455,6 +1455,12 @@ function nodePackageLabel(nodeId: string) {
   return nodeBuild(nodeId)?.packageVersion || t("common.status.unknown");
 }
 
+function nodeEventTransport(nodeId: string): NodeAgentEventTransportHealth | undefined {
+  const value = asRecord(nodeAgent(nodeId)?.eventTransport);
+  if (!value || !["healthy", "congested", "recovering"].includes(String(value.status))) return undefined;
+  return value as NodeAgentEventTransportHealth;
+}
+
 function nodeBuildTitle(nodeId: string) {
   const build = nodeBuild(nodeId);
   return [
@@ -1479,6 +1485,7 @@ function nodeInstanceSummary(nodeId: string) {
 
 function nodeStatusValue(nodeId: string) {
   const node = (nodes.data.value || []).find((item) => item.id === nodeId);
+  if (nodeEventTransport(nodeId)?.status === "congested") return "degraded";
   return nodeStatusById[nodeId]?.status || node?.status || "unknown";
 }
 
@@ -1494,8 +1501,10 @@ function nodeStatusClass(nodeId: string) {
   return `status-${nodeStatusValue(nodeId)}`;
 }
 
-function refreshNodeConnectionDiagnostics(open: boolean) {
-  if (open) void nodes.refetch();
+function refreshNodeConnectionDiagnostics(open: boolean, nodeId?: string) {
+  if (!open) return;
+  if (nodeId) void checkSettingsNode(nodeId);
+  else void nodes.refetch();
 }
 
 function updateRemoteConnect(field: "controlPlaneUrl" | "joinToken" | "controlPlaneName", value: string) {
@@ -1510,6 +1519,7 @@ function errorText(error: unknown) {
 
 <style scoped>
 .control-settings-page {
+  --settings-content-max-width: 1080px;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   align-items: start;
@@ -1546,6 +1556,11 @@ function errorText(error: unknown) {
 .settings-section-scroll-content {
   min-width: 0;
   padding: 0 10px 18px 0;
+}
+
+.settings-content-column {
+  margin: 0 auto;
+  width: min(100%, var(--settings-content-max-width));
 }
 
 .control-settings-page-actions {

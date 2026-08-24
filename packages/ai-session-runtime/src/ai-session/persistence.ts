@@ -277,6 +277,9 @@ export function sanitizePersistedAiSession(value: unknown): AiSessionStatus | un
     phase: normalizeAiSessionPhase(record.phase),
     ...(typeof record.summary === "string" && record.summary ? { summary: compact(record.summary, 1000) } : {}),
     ...(typeof record.lastMessage === "string" && record.lastMessage ? { lastMessage: messageText(record.lastMessage) } : {}),
+    ...(typeof record.lastMessageItemId === "string" && record.lastMessageItemId
+      ? { lastMessageItemId: compact(record.lastMessageItemId, 240) }
+      : {}),
     ...(currentTool ? { currentTool } : {}),
     toolCallsSinceLastMessage: normalizeNonNegativeInteger(record.toolCallsSinceLastMessage),
     subAgents: normalizeAiSessionSubAgents(record.subAgents),

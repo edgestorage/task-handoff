@@ -24,7 +24,7 @@
                     <span v-if="status.build(selectedNode.id)?.imageRef"><b>{{ t("settings.nodeDetail.image") }}</b><em>{{ status.build(selectedNode.id)?.imageRef }}</em></span>
                     <span v-if="status.build(selectedNode.id)?.builtAt"><b>{{ t("settings.nodeDetail.built") }}</b><em>{{ status.build(selectedNode.id)?.builtAt }}</em></span>
                   </div>
-                  <NodeConnectionDiagnostics class="node-status-connection-diagnostics" :diagnostics="selectedNode.connectionDiagnostics" />
+                  <NodeConnectionDiagnostics class="node-status-connection-diagnostics" :diagnostics="selectedNode.connectionDiagnostics" :event-transport="status.eventTransport(selectedNode.id)" />
                 </TooltipContent>
               </Tooltip>
             </div>
@@ -520,7 +520,7 @@ import { computed, ref, watch, type Component } from "vue";
 import { useI18n } from "vue-i18n";
 import { Box, Boxes, Download, FolderOpen, Gauge, KeyRound, Monitor, MoreHorizontal, Network, Pencil, Plus, RefreshCw, ServerCog, Settings, Trash2 } from "@lucide/vue";
 import { TooltipTrigger as RekaTooltipTrigger } from "reka-ui";
-import type { BuildInfo, InstanceBoardItem, LocalDockerImage, Node, NodeAgentExternalListener, NodeControlPlaneConnection, NodeControlPlanePairing, NodeLocalFolder, NodeRuntime, UpdateChannel, UpdateCheckResult, UpdateJob } from "../../../api/types";
+import type { BuildInfo, InstanceBoardItem, LocalDockerImage, Node, NodeAgentEventTransportHealth, NodeAgentExternalListener, NodeControlPlaneConnection, NodeControlPlanePairing, NodeLocalFolder, NodeRuntime, UpdateChannel, UpdateCheckResult, UpdateJob } from "../../../api/types";
 import { nodeSupportsLocalFolderNameUpdate } from "../../../api/nodeCapabilities";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
@@ -577,7 +577,6 @@ type NodeDetailActions = {
   loadNodeImages: (nodeId: string) => void | Promise<void>;
   loadControlPlaneAccess: (nodeId: string) => void | Promise<void>;
   loadManagedUpdateJobs: (nodeId: string) => void | Promise<void>;
-  refreshNodeConnectionState: () => void | Promise<void>;
   openNodeRename: (node: Node) => void;
   openInstanceSettings: (instanceId: string) => void;
   removeNode: (node: Node) => void | Promise<void>;
@@ -643,6 +642,7 @@ type NodeDetailStatus = {
   build: (nodeId: string) => Partial<BuildInfo> | undefined;
   buildLabel: (nodeId: string) => string;
   buildTitle: (nodeId: string) => string;
+  eventTransport: (nodeId: string) => NodeAgentEventTransportHealth | undefined;
   isBuiltinNode: (node: Node) => boolean;
   locationLabel: (node: Node) => string;
   nameById: (nodeId: string) => string;
@@ -724,7 +724,8 @@ function refreshConnectionDiagnostics(open: boolean) {
 }
 
 function refreshNodeConnectionDiagnostics(open: boolean) {
-  if (open) void props.actions.refreshNodeConnectionState();
+  const nodeId = props.selectedNode?.id;
+  if (open && nodeId) void props.actions.checkSettingsNode(nodeId);
 }
 
 async function submitRemoteConnection() {

@@ -206,7 +206,7 @@ async function confirmDelete() { if (!deleteTarget.value) return; if (await remo
 
 <style scoped>
 .project-settings-scroll { height: 100%; min-height: 0; width: 100%; }
-.project-settings-page { display: grid; gap: 12px; padding: 0 10px 20px 0; width: 100%; }
+.project-settings-page { display: grid; gap: 12px; margin: 0 auto; padding: 0 10px 20px 0; width: min(100%, var(--settings-content-max-width, 1080px)); }
 .project-page-head { align-items: flex-start; display: flex; gap: 16px; justify-content: space-between; }
 .project-page-head p, .project-form-section h3, .project-form-section p { margin: 0; }
 .project-page-head p { color: var(--text-muted); font-size: 12px; line-height: 1.45; }

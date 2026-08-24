@@ -126,6 +126,14 @@ export const ControlPlaneNodeFleetStateSchema = z.object({
   }).passthrough().optional(),
 }).strict();
 
+// Event wire model is intentionally separate from the directory snapshot.
+// Compatibility for v0.0.23: old producers omit this additive hint. Consumers
+// must treat absence as unknown and recover their authoritative topic; current
+// producers send an explicit false for diagnostic-only changes.
+export const ControlPlaneNodeFleetUpdatedEventSchema = ControlPlaneNodeFleetStateSchema.extend({
+  contentChanged: z.boolean().optional(),
+}).strict();
+
 export const ControlPlaneFleetDirectoryMetaSchema = z.object({
   nodeStates: z.array(ControlPlaneNodeFleetStateSchema).default([]),
 }).passthrough();
@@ -201,3 +209,4 @@ export type ControlPlaneInstanceLifecycleDirectoryEvent = z.infer<typeof Control
 export type ControlPlaneFleetResource = z.infer<typeof ControlPlaneFleetResourceSchema>;
 export type ControlPlaneFleetResourcePhase = z.infer<typeof ControlPlaneFleetResourcePhaseSchema>;
 export type ControlPlaneNodeFleetState = z.infer<typeof ControlPlaneNodeFleetStateSchema>;
+export type ControlPlaneNodeFleetUpdatedEvent = z.infer<typeof ControlPlaneNodeFleetUpdatedEventSchema>;

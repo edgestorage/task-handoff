@@ -172,7 +172,7 @@ import { useI18n } from "vue-i18n";
 import { AlertTriangle, ChevronDown, Clock3, MessageCircle, MessageCircleMore, MoreHorizontal, Plus, Power, RefreshCw, Search, Settings, Trash2, Users, X } from "@lucide/vue";
 import type { ChatBridgeConfig, ChatChannel } from "../../../api/types";
 import type { useChatBridgeSettings } from "./useChatBridgeSettings";
-import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../../components/ui/alert-dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../../components/ui/alert-dialog";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
@@ -221,7 +221,7 @@ async function confirmDelete(bridge?: ChatBridgeConfig) { if (!bridge) return; c
 
 <style scoped>
 .chat-settings-scroll { height: 100%; min-height: 0; width: 100%; }
-.chat-settings-page { display: grid; gap: 12px; padding: 0 10px 20px 0; width: 100%; }
+.chat-settings-page { display: grid; gap: 12px; margin: 0 auto; padding: 0 10px 20px 0; width: min(100%, var(--settings-content-max-width, 1080px)); }
 .chat-page-head { align-items: flex-start; display: flex; gap: 16px; justify-content: space-between; }
 .chat-page-head p, .chat-form-section h3, .chat-form-section p { margin: 0; }
 .chat-page-head p { color: var(--text-muted); font-size: 12px; line-height: 1.45; }

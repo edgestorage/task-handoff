@@ -32,3 +32,11 @@ test("expanded instance preview removes only the detail gutter", () => {
   assert.match(themeStyles, /:root,\s*\[data-theme="light"\] \{[\s\S]*?--titlebar-overflow-fade: #ffffff;/);
   assert.match(themeStyles, /\.dark,\s*\[data-theme="dark"\] \{[\s\S]*?--titlebar-overflow-fade: #0b1519;/);
 });
+
+test("main and standalone windows persist expanded preview independently", () => {
+  assert.match(workbench, /const MAIN_SESSION_PREVIEW_EXPANDED_STORAGE_KEY = "task-handoff\.control-plane\.session-preview-expanded";/);
+  assert.match(workbench, /const STANDALONE_SESSION_PREVIEW_EXPANDED_STORAGE_KEY = "task-handoff\.control-plane\.instance-window\.session-preview-expanded";/);
+  assert.match(workbench, /const stored = window\.localStorage\?\.getItem\(standaloneMode\.value\s*\? STANDALONE_SESSION_PREVIEW_EXPANDED_STORAGE_KEY\s*: MAIN_SESSION_PREVIEW_EXPANDED_STORAGE_KEY\);/);
+  assert.match(workbench, /return stored === null \|\| stored === undefined \? standaloneMode\.value : stored === "true";/);
+  assert.match(workbench, /watch\(sessionPreviewExpanded, \(expanded\) => \{\s*window\.localStorage\?\.setItem\(standaloneMode\.value\s*\? STANDALONE_SESSION_PREVIEW_EXPANDED_STORAGE_KEY\s*: MAIN_SESSION_PREVIEW_EXPANDED_STORAGE_KEY, String\(expanded\)\);/);
+});

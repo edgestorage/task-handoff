@@ -201,9 +201,10 @@ function sameAiSessionBusinessState(current: AiSessionStatus, next: AiSessionSta
     const currentValue = current[key];
     const nextValue = next[key];
     if (Object.is(currentValue, nextValue)) continue;
-    // updateTurns preserves the original array when its normalized wire value
-    // is unchanged, so a different turns reference is a real state change.
-    if (key === "turns" || !samePersistedValue(currentValue, nextValue)) return false;
+    // Provider discovery may reconstruct an equivalent turn array. Identity is
+    // an implementation detail; only the normalized persisted value advances
+    // the authoritative session and its updatedAt timestamp.
+    if (!samePersistedValue(currentValue, nextValue)) return false;
   }
   return true;
 }

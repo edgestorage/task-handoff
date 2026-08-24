@@ -26,7 +26,13 @@ test("node settings separates paired control planes from active connections", ()
   assert.match(panel, /:diagnostics="selectedNode\.connectionDiagnostics"/);
   assert.match(panel, /@update:open="refreshNodeConnectionDiagnostics"/);
   assert.match(modal, /:diagnostics="target\.connectionDiagnostics"/);
-  assert.match(modal, /@update:open="refreshNodeConnectionDiagnostics"/);
+  assert.match(modal, /refreshNodeConnectionDiagnostics\(open, target\.id\)/);
+  assert.match(panel, /:event-transport="status\.eventTransport\(selectedNode\.id\)"/);
+  assert.match(modal, /:event-transport="nodeEventTransport\(target\.id\)"/);
+  assert.match(modal, /void checkSettingsNode\(nodeId\)/);
+  assert.match(diagnostics, /eventTransport\.status !== 'healthy'/);
+  assert.match(diagnostics, /eventTransport\.peakBufferedBytes/);
+  assert.match(diagnostics, /eventTransport\.coalescedEvents/);
   assert.match(diagnostics, /diagnostics\?\.pingRttMs/);
   assert.match(diagnostics, /diagnostics\?\.pingRttP95Ms/);
   assert.match(diagnostics, /diagnostics\?\.consecutiveReconnects/);

@@ -13,12 +13,13 @@ import {
 } from "@task-handoff/protocol/control-plane";
 import { AiSessionTimelineItemEventSchema, AiSessionUnreadEventType, AiSessionUnreadStateSchema, type AiSessionTimelineItemEvent, type AiSessionUnreadState } from "@task-handoff/protocol/ai-sessions";
 import { safeParseResponse } from "@task-handoff/protocol/response-validation";
+import { ControlPlaneNodeFleetUpdatedEventSchema } from "@task-handoff/protocol/control-plane-directory";
 import type { SessionStreamDescriptor } from "@task-handoff/protocol/events";
 import type { AppManagementEvent } from "../../api/types";
 import type { InstanceResourceMetrics } from "../../api/types";
 import { controlPlaneQueryKeys } from "../../api/queryKeys.ts";
 import { controlPlaneDomainQueryKeys } from "../../api/queryInvalidation.ts";
-import { applyInstanceLifecycle } from "./instanceLifecycleCache.ts";
+import { applyInstanceLifecycle, applyNodeFleetState } from "./instanceLifecycleCache.ts";
 import { controlPlaneEventDomains } from "./eventInvalidation.ts";
 import { aiSessionMessageDeltaDemand, aiSessionTimelineDemand, aiSessionTransientReplaySince } from "./useAiSessionEventDemand.ts";
 import {
@@ -48,6 +49,7 @@ const LIFECYCLE_COMMAND_NOTIFICATIONS = new Set([
 
 export function useControlPlaneEvents(input: {
   instanceId?: MaybeRefOrGetter<string>;
+  resourceMetricInstanceIds?: MaybeRefOrGetter<string[]>;
   enabled?: MaybeRefOrGetter<boolean>;
   aiSessions: {
     applyEvent: (event: AiSessionDeltaResponse["events"][number]) => boolean;
@@ -118,7 +120,7 @@ export function useControlPlaneEvents(input: {
     });
   }
 
-  function sendSubscription(target = socket, replaySince = aiSessionTransientReplaySince.value) {
+  function sendSubscription(target = socket, replaySince: string | undefined = undefined) {
     if (!target || target.readyState !== WebSocket.OPEN) return;
     const instanceId = toValue(input.instanceId || "");
     const messageDeltaDemand = aiSessionMessageDeltaDemand.value;
@@ -130,6 +132,7 @@ export function useControlPlaneEvents(input: {
       type: "subscribe",
       topics: ["*"],
       ...(instanceId ? { instanceIds: [instanceId] } : {}),
+      ...(input.resourceMetrics ? { metricInstanceIds: toValue(input.resourceMetricInstanceIds || []) } : {}),
       aiSessionTransient: {
         ...(replaySince ? { replaySince } : {}),
         messageDeltas: instanceId
@@ -175,6 +178,12 @@ export function useControlPlaneEvents(input: {
     if (event.type && LIFECYCLE_COMMAND_NOTIFICATIONS.has(event.type)) {
       return true;
     }
+    if (event.type?.startsWith("instance.ai-session.") || event.type?.startsWith("instance.app-session.")) {
+      // These are operation receipts, not instance resource mutations. AI/App
+      // Session stream events own the resulting state; treating the receipts as
+      // `instances` invalidations refetches the board after every session action.
+      return true;
+    }
     if (event.type?.startsWith("image.pull.")) {
       return input.imagePullProgress?.applyEvent(event.type, event.payload) || false;
     }
@@ -213,6 +222,19 @@ export function useControlPlaneEvents(input: {
       if (!lifecycle.success || event.scope?.instanceId !== lifecycle.data.instanceId) return false;
       input.imagePullProgress?.reconcileLifecycle?.(lifecycle.data);
       return applyInstanceLifecycle(queryClient, lifecycle.data);
+    }
+    if (event.type === "node.fleet.updated") {
+      const state = safeParseResponse(ControlPlaneNodeFleetUpdatedEventSchema, event.payload);
+      if (!state.success) return false;
+      // Diagnostic-only fleet changes can be applied in place. The gateway is
+      // the only boundary that can compare the old and new resource projection;
+      // when it reports a semantic content change, recover the authoritative
+      // topic query instead of pretending this metadata-only event contains rows.
+      applyNodeFleetState(queryClient, state.data);
+      // Compatibility for v0.0.23: absence means the old producer could not
+      // distinguish diagnostic churn from a resource change, so recover the
+      // authoritative topic. Current producers explicitly send false.
+      return state.data.contentChanged === false;
     }
     if (event.type === "node.joined") {
       const joined = safeParseResponse(NodeJoinedEventSchema, event.payload);
@@ -267,12 +289,16 @@ export function useControlPlaneEvents(input: {
   watch([aiSessionMessageDeltaDemand, aiSessionTimelineDemand, aiSessionTransientReplaySince], () => {
     const replaySince = aiSessionTransientReplaySince.value;
     sendSubscription(socket, replaySince);
-    // Establish the authoritative half of the snapshot/replay barrier. Events
-    // produced after replaySince are recovered by the source replay below it.
-    if (replaySince) {
-      void queryClient.invalidateQueries({ queryKey: controlPlaneQueryKeys.scopedInstanceBoard(toValue(input.instanceId || "")) });
-    }
+    // Timeline/detail queries establish their own authoritative snapshot before
+    // consuming replayed transient events. Reconnect recovery is descriptor-
+    // driven, so expanding transient demand must not refetch the full AI Session
+    // list for every card selection.
   }, { deep: false });
+  watch(() => JSON.stringify(toValue(input.resourceMetricInstanceIds || [])), () => {
+    // Metrics scope is independent from AI transient replay. Re-sending an old
+    // replay cursor here would incorrectly retrigger the HTTP recovery barrier.
+    sendSubscription(socket);
+  });
   onBeforeUnmount(() => {
     closing = true;
     reconnectBackoff.reset();
@@ -286,6 +312,7 @@ export function useControlPlaneEvents(input: {
 function eventsUrl(instanceId = "") {
   const url = new URL("/api/events", window.location.origin);
   url.searchParams.set("aiSessionTransient", "1");
+  url.searchParams.set("resourceMetricsScope", "1");
   if (instanceId) url.searchParams.set("instanceId", instanceId);
   url.protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   return url.toString();

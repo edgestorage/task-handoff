@@ -59,8 +59,10 @@ test("conversation detail renders retained image and file metadata without a UI 
   assert.match(attachments, /attachment\.contentState === 'expired'/);
   assert.match(attachments, /'Expired' : 'Missing'/);
   assert.match(panel, /getAiSessionDetail/);
+  assert.match(panel, /watch\(\(\) => `\$\{props\.instance\.id\}\\u0000\$\{selectedSession\.value\?\.id \|\| ""\}`/);
+  assert.doesNotMatch(panel, /selectedSession\.value\?\.updatedAt[\s\S]{0,200}getAiSessionDetail/);
   assert.match(panel, /selectedConversationSession \|\| selectedSession/);
-  assert.match(panel, /return \{ \.\.\.session, turns: detail\.turns \|\| session\.turns \};/);
+  assert.match(panel, /return \{ \.\.\.session, turns: mergeAiSessionSummaryTurnsWithDetail\(session\.turns, detail\.turns\) \};/);
   assert.doesNotMatch(panel, /session\.turns\s*=.*attachments/);
 });
 

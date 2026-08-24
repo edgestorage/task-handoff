@@ -1606,6 +1606,16 @@ export function supportsNodeAiSessionFileAttachmentLimit(capabilities: unknown) 
   return NodeAgentCapabilitiesSchema.safeParse(capabilities).data?.aiSessionFileAttachmentLimit === true;
 }
 
+export const NodeAgentEventTransportHealthSchema = z.object({
+  status: z.enum(["healthy", "congested", "recovering"]),
+  activeOutputs: z.number().int().nonnegative(),
+  bufferedBytes: z.number().int().nonnegative(),
+  peakBufferedBytes: z.number().int().nonnegative(),
+  coalescedEvents: z.number().int().nonnegative(),
+  congestedSince: TimestampSchema.optional(),
+  lastCongestedAt: TimestampSchema.optional(),
+}).strip();
+
 export const NodeAgentHealthSchema = z
   .object({
     ok: z.boolean().optional(),
@@ -1634,6 +1644,8 @@ export const NodeAgentHealthSchema = z
       totalDurationMs: z.number().nonnegative(),
       maxResponseBytes: z.number().int().nonnegative(),
     }).partial().strip().optional(),
+    // Additive health diagnostic: absent on node-agents before v0.0.25.
+    eventTransport: NodeAgentEventTransportHealthSchema.optional(),
     serverTime: TimestampSchema.optional(),
   })
   .strip();

@@ -246,10 +246,54 @@ test('directory controller keeps the newest per-node fleet state', () => {
   expect(store.profile('cp-fleet').nodeStates[0].phase).toBe('loading');
   expect(controller.applyEvent({
     type: 'node.fleet.updated', topic: 'instances', scope: { nodeId: 'node-1' },
-    payload: { nodeId: 'node-1', resource: 'instances', phase: 'ready', revision: 3, updatedAt: '2026-08-22T00:00:00.000Z' },
+    payload: { nodeId: 'node-1', resource: 'instances', phase: 'ready', revision: 3, updatedAt: '2026-08-22T00:00:00.000Z', contentChanged: false },
   })).toBe(true);
   expect(store.profile('cp-fleet').nodeStates[0].phase).toBe('ready');
   controller.stop();
+});
+
+test('fleet diagnostics stay local while semantic changes refresh only instances', async () => {
+  jest.useFakeTimers();
+  try {
+    const store = new MobileDirectoryStore();
+    store.set('cp-fleet-targeted', { instances: [instance], phase: 'ready' });
+    const nodes = jest.fn().mockResolvedValue([]);
+    const instanceBoard = jest.fn().mockResolvedValue([instance]);
+    const api = { resources: { nodes, instanceBoard } } as unknown as ControlPlaneClient;
+    const controller = new MobileDirectoryController('cp-fleet-targeted', api, store);
+
+    controller.applyEvent({
+      type: 'node.fleet.updated', topic: 'instances', scope: { nodeId: 'node-1' },
+      payload: { nodeId: 'node-1', resource: 'instances', phase: 'ready', revision: 1, contentChanged: false },
+    });
+    await jest.advanceTimersByTimeAsync(100);
+    expect(nodes).not.toHaveBeenCalled();
+    expect(instanceBoard).not.toHaveBeenCalled();
+
+    controller.applyEvent({
+      type: 'node.fleet.updated', topic: 'instances', scope: { nodeId: 'node-1' },
+      payload: { nodeId: 'node-1', resource: 'instances', phase: 'ready', revision: 2, contentChanged: true },
+    });
+    await jest.advanceTimersByTimeAsync(100);
+    expect(nodes).not.toHaveBeenCalled();
+    expect(instanceBoard).toHaveBeenCalledTimes(1);
+
+    controller.applyEvent({
+      type: 'node.fleet.updated', topic: 'instances', scope: { nodeId: 'node-1' },
+      payload: { nodeId: 'node-1', resource: 'instances', phase: 'ready', revision: 3 },
+    });
+    await jest.advanceTimersByTimeAsync(100);
+    expect(instanceBoard).toHaveBeenCalledTimes(2);
+
+    controller.applyEvent({
+      type: 'instance.ai-session.message.accepted', topic: 'instances', scope: { instanceId: instance.id }, payload: {},
+    });
+    await jest.advanceTimersByTimeAsync(100);
+    expect(instanceBoard).toHaveBeenCalledTimes(2);
+    controller.stop();
+  } finally {
+    jest.useRealTimers();
+  }
 });
 
 test('instance lifecycle actions use the server-projected availability and refresh the directory', async () => {
@@ -301,14 +345,11 @@ test('directory renames use shared resource APIs and immediately update the auth
   expect(updateInstanceName).toHaveBeenCalledWith(instance.id, 'Renamed Instance');
 });
 
-test('concurrent directory mutations share one refresh and queue one trailing refresh', async () => {
+test('concurrent instance mutations refresh only instances and queue one trailing refresh', async () => {
   const store = new MobileDirectoryStore();
   store.set('cp-a', { instances: [instance], phase: 'ready' });
-  let resolveNodes!: (value: []) => void;
   let resolveInstances!: (value: typeof instance[]) => void;
-  const nodes = jest.fn()
-    .mockReturnValueOnce(new Promise<[]>((resolve) => { resolveNodes = resolve; }))
-    .mockResolvedValueOnce([]);
+  const nodes = jest.fn().mockResolvedValue([]);
   const instanceBoard = jest.fn()
     .mockReturnValueOnce(new Promise<typeof instance[]>((resolve) => { resolveInstances = resolve; }))
     .mockResolvedValueOnce([instance]);
@@ -327,13 +368,12 @@ test('concurrent directory mutations share one refresh and queue one trailing re
     controller.updateInstanceName(instance.id, 'First'),
     controller.updateInstanceName(instance.id, 'Second'),
   ]);
-  expect(nodes).toHaveBeenCalledTimes(1);
+  expect(nodes).not.toHaveBeenCalled();
   expect(instanceBoard).toHaveBeenCalledTimes(1);
 
-  resolveNodes([]);
   resolveInstances([instance]);
   for (let index = 0; index < 6; index += 1) await Promise.resolve();
-  expect(nodes).toHaveBeenCalledTimes(2);
+  expect(nodes).not.toHaveBeenCalled();
   expect(instanceBoard).toHaveBeenCalledTimes(2);
   controller.stop();
 });

@@ -37,6 +37,45 @@ test("event bus combines topic and optional instance subscription filters", () =
   assert.deepEqual(client.sent.map((event) => event.scope.instanceId), ["a"]);
 });
 
+test("resource metrics use an independent active-instance scope without hiding lifecycle events", () => {
+  const events = new ControlPlaneEventBus();
+  const legacy = socket();
+  const activeOnly = socket();
+  const disabled = socket();
+  events.connect(legacy.value);
+  events.connect(activeOnly.value);
+  events.connect(disabled.value);
+  activeOnly.listeners.message(JSON.stringify({ type: "subscribe", topics: ["*"], metricInstanceIds: ["a"] }));
+  disabled.listeners.message(JSON.stringify({ type: "subscribe", topics: ["*"], metricInstanceIds: [] }));
+
+  events.publish("instance.metrics.snapshot", { instanceId: "a" }, { scope: { instanceId: "a" } });
+  events.publish("instance.metrics.snapshot", { instanceId: "b" }, { scope: { instanceId: "b" } });
+  events.publish("instance.lifecycle.snapshot", { instanceId: "b" }, { scope: { instanceId: "b" } });
+
+  assert.deepEqual(legacy.sent.map((event) => event.type), [
+    "instance.metrics.snapshot",
+    "instance.metrics.snapshot",
+    "instance.lifecycle.snapshot",
+  ]);
+  assert.deepEqual(activeOnly.sent.map((event) => [event.type, event.scope.instanceId]), [
+    ["instance.metrics.snapshot", "a"],
+    ["instance.lifecycle.snapshot", "b"],
+  ]);
+  assert.deepEqual(disabled.sent.map((event) => event.type), ["instance.lifecycle.snapshot"]);
+});
+
+test("new metric-scoped clients receive no snapshots before their subscription frame", () => {
+  const events = new ControlPlaneEventBus();
+  const client = socket();
+  events.connect(client.value, { expectsMetricSubscription: true });
+  events.publish("instance.metrics.snapshot", { instanceId: "a" }, { scope: { instanceId: "a" } });
+  assert.equal(client.sent.length, 0);
+
+  client.listeners.message(JSON.stringify({ type: "subscribe", metricInstanceIds: ["a"] }));
+  events.publish("instance.metrics.snapshot", { instanceId: "a" }, { scope: { instanceId: "a" } });
+  assert.equal(client.sent.length, 1);
+});
+
 test("global events without instance scope remain visible to scoped clients", () => {
   const events = new ControlPlaneEventBus();
   const client = socket();

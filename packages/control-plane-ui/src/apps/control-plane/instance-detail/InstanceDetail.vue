@@ -1,7 +1,6 @@
 <template>
   <section class="instance-detail" :aria-label="t('instances.detail.label')">
-    <div v-if="loading" class="detail-empty">{{ t("instances.detail.loading") }}</div>
-    <div v-else-if="error" class="detail-empty error">{{ error }}</div>
+    <div v-if="error" class="detail-empty error">{{ error }}</div>
     <div v-else-if="instance" class="instance-detail-layout" :class="{ 'preview-expanded': previewExpanded }">
       <header v-if="!previewExpanded" class="detail-head">
         <div class="detail-identity">
@@ -185,7 +184,7 @@
 
     </div>
 
-    <section v-else class="detail-empty">
+    <section v-else-if="!loading" class="detail-empty">
       <h1>{{ t("instances.detail.emptyTitle") }}</h1>
       <p>{{ t("instances.detail.emptyDescription") }}</p>
       <Button v-if="!standalone" size="sm" @click="$emit('newInstance')">

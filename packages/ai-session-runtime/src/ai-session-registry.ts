@@ -109,7 +109,10 @@ function aiSessionDir() {
 }
 
 function summaryForHeartbeat(session: AiSessionStatus): AiSessionSummary {
-  const turns = session.turns?.map(({ userMessages: _userMessages, ...turn }) => turn);
+  // Compatibility for v0.0.23: `turns` remains the same optional wire field,
+  // but aggregate snapshots carry only the latest turn. Full retained history
+  // belongs to the session detail/timeline endpoints, not fleet heartbeats.
+  const turns = session.turns?.slice(-1).map(({ userMessages: _userMessages, ...turn }) => turn);
   return {
     id: session.id,
     agent: session.agent,
@@ -191,6 +194,8 @@ export class AiSessionRegistry {
   private readonly store: AiSessionFileStore;
   private readonly changes = new EventEmitter();
   private readonly conversationAttachments?: AiSessionConversationAttachmentStore;
+  private changeBatchDepth = 0;
+  private pendingChangeReason: string | undefined;
 
   constructor(options: RegistryOptions = {}) {
     this.dir = options.dir || aiSessionDir();
@@ -228,6 +233,20 @@ export class AiSessionRegistry {
     return () => {
       this.changes.off("change", listener);
     };
+  }
+
+  async batchChanges<T>(run: () => Promise<T> | T): Promise<T> {
+    this.changeBatchDepth += 1;
+    try {
+      return await run();
+    } finally {
+      this.changeBatchDepth -= 1;
+      if (this.changeBatchDepth === 0 && this.pendingChangeReason) {
+        const reason = this.pendingChangeReason;
+        this.pendingChangeReason = undefined;
+        this.changes.emit("change", reason);
+      }
+    }
   }
 
   start(input: AiSessionStartInput, options: { meta?: TurnMeta; timestamp?: string; suppressPromptTurn?: boolean } = {}) {
@@ -669,6 +688,10 @@ export class AiSessionRegistry {
   }
 
   private emitChange(reason: string) {
+    if (this.changeBatchDepth > 0) {
+      this.pendingChangeReason ||= reason;
+      return;
+    }
     this.changes.emit("change", reason);
   }
 

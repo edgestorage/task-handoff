@@ -804,7 +804,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   });
 
   app.get("/api/events", { websocket: true }, async (socket, request) => {
-    const eventQuery = request.query as { aiSessionTransient?: string; instanceId?: string };
+    const eventQuery = request.query as { aiSessionTransient?: string; resourceMetricsScope?: string; instanceId?: string };
     const eventInstanceId = typeof eventQuery.instanceId === "string" ? eventQuery.instanceId.trim() : "";
     const actor = controlPlaneRequestActor(request);
     const visibleInstances = actor?.type === "user"
@@ -835,6 +835,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     events.connect(gatedSocket, {
       instanceIds: eventInstanceId ? [eventInstanceId] : undefined,
       expectsTransientSubscription: eventQuery.aiSessionTransient === "1",
+      expectsMetricSubscription: eventQuery.resourceMetricsScope === "1",
       ...(actor?.type === "user" ? {
         authorization: {
           userId: actor.userId,

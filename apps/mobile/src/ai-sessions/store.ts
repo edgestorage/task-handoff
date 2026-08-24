@@ -159,12 +159,13 @@ export class MobileAiSessionStore {
 
   replaceSnapshot(controlPlaneId: string, snapshot: ControlPlaneAiSessions, affectedSessionKeys?: ReadonlySet<string>) {
     const current = this.profile(controlPlaneId);
+    const authoritativeSnapshot = preserveNewerAiSessionEntries(current.snapshot, snapshot);
     const next = {
       ...current,
       controlPlaneId,
-      snapshot,
-      messages: reconcileStreamingMessages(current.messages, snapshot),
-      sync: { phase: 'ready' as const, lastSyncedAt: snapshot.updatedAt },
+      snapshot: authoritativeSnapshot,
+      messages: reconcileStreamingMessages(current.messages, authoritativeSnapshot),
+      sync: { phase: 'ready' as const, lastSyncedAt: authoritativeSnapshot.updatedAt },
     };
     this.profiles.set(controlPlaneId, next);
     this.messageTurnsByControlPlane.set(controlPlaneId, indexMessageTurns(next.messages));
@@ -461,6 +462,29 @@ export class MobileAiSessionStore {
 }
 
 export const mobileAiSessionStore = new MobileAiSessionStore();
+
+function preserveNewerAiSessionEntries(
+  current: ControlPlaneAiSessions | undefined,
+  incoming: ControlPlaneAiSessions,
+): ControlPlaneAiSessions {
+  if (!current) return incoming;
+  let preserved = false;
+  const instances = incoming.instances.map((entry) => {
+    const existing = current.instances.find((candidate) => candidate.instanceId === entry.instanceId);
+    if (!existing || existing.streamId !== entry.streamId) return entry;
+    const existingRevision = existing.revision ?? 0;
+    const incomingRevision = entry.revision ?? 0;
+    if (existingRevision < incomingRevision) return entry;
+    if (existingRevision === incomingRevision && (existing.lastEventAt ?? existing.aiSessions.updatedAt) <= (entry.lastEventAt ?? entry.aiSessions.updatedAt)) return entry;
+    preserved = true;
+    return existing;
+  });
+  return preserved ? {
+    ...incoming,
+    updatedAt: current.updatedAt > incoming.updatedAt ? current.updatedAt : incoming.updatedAt,
+    instances,
+  } : incoming;
+}
 
 function reconcileStreamingMessages(
   messages: Readonly<Record<string, MobileStreamingMessage>>,

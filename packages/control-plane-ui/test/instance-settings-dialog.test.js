@@ -33,7 +33,7 @@ test("the instance App menu opens settings directly on app management", () => {
   assert.match(preview, /\$emit\('openSettings', instance\.id, 'apps'\)/);
   assert.match(detail, /\$emit\('openSettings', instanceId, section\)/);
   assert.match(workbench, /:initial-section="instanceSettingsSection"/);
-  assert.match(workbench, /function openInstanceSettings\(instanceId: string, section: "general" \| "models" \| "apps" = "general"\)/);
+  assert.match(workbench, /function openInstanceSettings\(instanceId: string, section: "general" \| "models" \| "git-credentials" \| "apps" = "general"\)/);
   assert.match(dialog, /section\.value = props\.initialSection \|\| "general"/);
 });
 

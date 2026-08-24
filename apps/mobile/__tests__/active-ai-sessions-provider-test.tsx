@@ -3,6 +3,7 @@ import { Text } from 'react-native';
 
 import {
   ActiveAiSessionsProvider,
+  useActiveAiSessionView,
   useActiveAiSessionsRuntime,
   useActiveAiSessions,
   type ActiveAiSessionsDependencies,
@@ -42,6 +43,12 @@ function MessageCountConsumer() {
   return <Text>messages:{Object.keys(state.messages).length}</Text>;
 }
 
+function DetailConsumer() {
+  const { controlPlaneId } = useActiveAiSessionsRuntime();
+  useActiveAiSessionView(controlPlaneId, 'instance-1', 'session-1');
+  return <Text>detail-mounted</Text>;
+}
+
 test('one root provider owns one AI session connection for multiple screens', async () => {
   const list = jest.fn().mockResolvedValue({ updatedAt: '2026-08-05T00:00:00.000Z', instances: [] });
   const connectEvents = jest.fn(() => ({ close: jest.fn() }));
@@ -66,6 +73,7 @@ test('one root provider owns one AI session connection for multiple screens', as
       <Consumer name="detail" />
       <RuntimeConsumer onRender={runtimeRenders} />
       <MessageCountConsumer />
+      <DetailConsumer />
     </ActiveAiSessionsProvider>,
   );
 
@@ -79,9 +87,10 @@ test('one root provider owns one AI session connection for multiple screens', as
   expect(connectEvents).toHaveBeenCalledWith(expect.objectContaining({
     topics: ['ai.sessions'],
     aiSessionTransient: {
-      messageDeltas: { allInstances: false, instanceIds: [] },
+      messageDeltas: { allInstances: false, instanceIds: ['instance-1'] },
+      replaySince: expect.any(String),
       timelineAllSessions: false,
-      timelineSessions: [],
+      timelineSessions: [{ instanceId: 'instance-1', sessionId: 'session-1' }],
     },
   }));
   const stableRuntimeRenderCount = runtimeRenders.mock.calls.length;

@@ -85,8 +85,10 @@ export function createControlPlaneAiSessionsApi(transport: ControlPlaneClientTra
       const query = instanceId ? `?instanceId=${encodeURIComponent(instanceId)}` : "";
       return requestData(`/api/ai-sessions${query}`, ControlPlaneAiSessionsSchema, { signal });
     },
-    refresh(signal?: AbortSignal) {
-      return requestData("/api/ai-sessions?refresh=true", ControlPlaneAiSessionsSchema, { signal });
+    refresh(signal?: AbortSignal, instanceId?: string) {
+      const query = new URLSearchParams({ refresh: "true" });
+      if (instanceId) query.set("instanceId", instanceId);
+      return requestData(`/api/ai-sessions?${query}`, ControlPlaneAiSessionsSchema, { signal });
     },
     delta(instanceId: string, streamId: string, sinceRevision: number, signal?: AbortSignal) {
       const query = new URLSearchParams({ instanceId, streamId, sinceRevision: String(sinceRevision) });

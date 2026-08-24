@@ -139,7 +139,7 @@ test("AI session cards show the agent mark beside the optional terminal-origin m
   assert.match(originMark, /<SquareTerminal :size="14"/);
   assert.match(originMark, /opacity: 0\.38;/);
   assert.match(cardMarks, /<AiAgentIcon :agent="brandedAgent" :size="14"/);
-  assert.match(cardMarks, /props\.agent === "codex" \|\| props\.agent === "claude" \? props\.agent : undefined/);
+  assert.match(cardMarks, /props\.agent === "codex" \|\| props\.agent === "claude" \|\| props\.agent === "opencode" \? props\.agent : undefined/);
   assert.match(cardMarks, /<AiSessionOriginMark :creation-source="creationSource"/);
   assert.match(cardMarks, /\.ai-session-card-marks \{[\s\S]*?opacity: 0;[\s\S]*?transition: opacity 140ms ease;/);
   assert.match(panel, /<AiSessionCardMarks :agent="session\.agent" :creation-source="session\.creationSource"/);

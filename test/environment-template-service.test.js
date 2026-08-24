@@ -110,11 +110,11 @@ test("non-Docker instances are rejected without creating a template record", asy
   assert.deepEqual(service.list(), []);
 });
 
-test("retained Git credentials block template creation before Docker inspection or commit", async (t) => {
+test("legacy retained Git credentials are scrubbed before template security inspection", async (t) => {
   const state = fixture();
   t.after(() => fs.rmSync(state.dataDir, { recursive: true, force: true }));
   const privateConfig = state.privateConfigs.get("inst_one");
-  state.privateConfigs.put({
+  fs.writeFileSync(state.privateConfigs.filePath("inst_one"), JSON.stringify({
     ...privateConfig,
     gitCredentials: {
       revision: 1,
@@ -134,24 +134,29 @@ test("retained Git credentials block template creation before Docker inspection 
         secret: { kind: "https-token", username: "git", token: "template-secret" },
       }],
     },
-  });
+  }));
   const calls = [];
   const service = new EnvironmentTemplateService(
     state.store,
     state.privateConfigs,
     {
-      inspectContainerConfigSecurity: async () => { calls.push("inspect"); },
+      inspectContainerConfigSecurity: async (_container, secrets) => {
+        calls.push("inspect");
+        assert.equal(secrets.includes("template-secret"), false);
+      },
       commitEnvironmentTemplate: async () => { calls.push("commit"); return imageId; },
+      inspectEnvironmentTemplateImage: async () => ({ imageId, platform: "linux", architecture: "x64", sizeBytes: 2048 }),
+      inspectImageConfigSecurity: async () => undefined,
     },
     () => state.instance,
     () => state.runtime,
     (id, operation) => state.gate.run(id, operation),
   );
 
-  const failed = await service.create("inst_one", { name: "Must not contain credentials" });
-  assert.equal(failed.status, "failed");
-  assert.equal(failed.error.code, "ENVIRONMENT_TEMPLATE_GIT_CREDENTIALS_FORBIDDEN");
-  assert.deepEqual(calls, []);
+  const created = await service.create("inst_one", { name: "Sanitized" });
+  assert.equal(created.status, "ready");
+  assert.deepEqual(calls, ["inspect", "commit"]);
+  assert.equal(fs.readFileSync(state.privateConfigs.filePath("inst_one"), "utf8").includes("template-secret"), false);
 });
 
 test("Docker executor uses default-pause commit and reference-safe image removal", async () => {

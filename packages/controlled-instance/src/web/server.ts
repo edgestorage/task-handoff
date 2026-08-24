@@ -45,6 +45,7 @@ import {
 import { NodeAgentRegistrationClient, nodeAgentRegistrationConfigFromEnv } from "./node-agent-client";
 import { nodeAgentApiRoute, publicApiRoute, registerAuth, resolveWebAuth } from "./auth";
 import { AiSessionMessageDeltaCoalescer } from "./ai-session-message-delta-coalescer";
+import { projectAiSessionAuthorityChange } from "./ai-session-authority-events";
 import {
   AiSessionPersistenceSettingsInputSchema,
   AiSessionPersistenceSettingsStore,
@@ -108,6 +109,8 @@ import {
   AiSessionMessageDeltaEventSchema,
   AiSessionTimelineItemEventSchema,
   type AiSessionEventReason,
+  type AiSessionPatchEvent,
+  type AiSessionRemovedEvent,
   type AiSessionMessageAttachment,
   type AiSessionSnapshotEvent,
   type AiSessionStatus,
@@ -669,19 +672,16 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     triggerManager.stop();
     appRuntime.dispose?.();
   });
-  let aiSessionsFingerprint = "";
   const instanceId = process.env.TASK_HANDOFF_INSTANCE_ID || "standalone";
   const aiSessionStreamId = `ais_${instanceId}_${crypto.randomUUID()}`;
   const appSessionStreamId = `aps_${instanceId}_${crypto.randomUUID()}`;
   let aiSessionSnapshotRevision = 0;
-  let lastAiSessionSnapshot: AiSessionsSnapshot = {
-    runningCount: 0,
-    waitingCount: 0,
-    staleCount: 0,
-    sessions: [],
-    updatedAt: startedAt,
-  };
-  const aiSessionEventHistory: Array<{ type: typeof AiSessionEventType.Snapshot; payload: AiSessionSnapshotEvent; createdAtMs: number }> = [];
+  let lastAiSessionSnapshot: AiSessionsSnapshot | undefined;
+  type AiSessionRuntimeEvent =
+    | { type: typeof AiSessionEventType.Snapshot; payload: AiSessionSnapshotEvent }
+    | { type: typeof AiSessionEventType.Patch; payload: AiSessionPatchEvent }
+    | { type: typeof AiSessionEventType.Removed; payload: AiSessionRemovedEvent };
+  const aiSessionEventHistory: Array<AiSessionRuntimeEvent & { createdAtMs: number }> = [];
   const drainingAiSessionIds = new Set<string>();
   const aiSessionLifecycleById = new Map<string, string>();
   let aiSessionTimer: ReturnType<typeof setInterval> | undefined;
@@ -918,25 +918,27 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   let serviceClosing = false;
   const refreshAiSessions = async () => {
     if (serviceClosing) return;
-    const appSessions = appSessionsWithSharedCodexAppServer();
-    const activeAppIds = new Set(appSessions.filter((session) => !session.status || session.status === "running").map((session) => session.id));
-    const lostBindings = aiSessions.all().flatMap((session) => {
-      const appSessionId = session.appSessionId;
-      return appSessionId && !activeAppIds.has(appSessionId) ? [{ session, appSessionId }] : [];
+    await aiSessions.batchChanges(async () => {
+      const appSessions = appSessionsWithSharedCodexAppServer();
+      const activeAppIds = new Set(appSessions.filter((session) => !session.status || session.status === "running").map((session) => session.id));
+      const lostBindings = aiSessions.all().flatMap((session) => {
+        const appSessionId = session.appSessionId;
+        return appSessionId && !activeAppIds.has(appSessionId) ? [{ session, appSessionId }] : [];
+      });
+      await Promise.all(lostBindings.map(async ({ session, appSessionId }) => {
+        if (serviceClosing) return;
+        try { await aiSessionClose.closeForAppSession(appSessionId); } catch (error: unknown) {
+          app.log.warn({ err: error, aiSessionId: session.id, appSessionId }, "failed to close AI session after App exit");
+        }
+      }));
+      aiSessions.reconcileAppSessionBindings(appSessions);
+      await aiSessionDiscovery.refresh({
+        registry: aiSessions,
+        appSessions,
+      });
+      aiSessionHistoryLifecycle.activate(aiSessions.all(), appSessions);
+      retainCodexTimelineHistory();
     });
-    await Promise.all(lostBindings.map(async ({ session, appSessionId }) => {
-      if (serviceClosing) return;
-      try { await aiSessionClose.closeForAppSession(appSessionId); } catch (error: unknown) {
-        app.log.warn({ err: error, aiSessionId: session.id, appSessionId }, "failed to close AI session after App exit");
-      }
-    }));
-    aiSessions.reconcileAppSessionBindings(appSessions);
-    await aiSessionDiscovery.refresh({
-      registry: aiSessions,
-      appSessions,
-    });
-    aiSessionHistoryLifecycle.activate(aiSessions.all(), appSessions);
-    retainCodexTimelineHistory();
   };
   const aiSessionRefreshScheduler = new AiSessionRefreshScheduler(
     refreshAiSessions,
@@ -945,18 +947,32 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   const refreshAndPublishAiSessions = (reason: AiSessionEventReason = "discovery-scan") => (
     aiSessionRefreshScheduler.request(reason)
   );
+  const createAiSessionMeta = (reason: AiSessionEventReason) => ({
+    streamId: aiSessionStreamId,
+    instanceId,
+    nodeId: process.env.TASK_HANDOFF_NODE_ID,
+    revision: aiSessionSnapshotRevision,
+    previousRevision: aiSessionSnapshotRevision > 0 ? aiSessionSnapshotRevision - 1 : undefined,
+    traceId: `ais_evt_${Date.now().toString(36)}_${Math.random().toString(16).slice(2, 10)}`,
+    generatedAt: new Date().toISOString(),
+    reason,
+  });
   const createAiSessionSnapshotEvent = (snapshot: AiSessionsSnapshot, reason: AiSessionEventReason): AiSessionSnapshotEvent => ({
-    meta: {
-      streamId: aiSessionStreamId,
-      instanceId,
-      nodeId: process.env.TASK_HANDOFF_NODE_ID,
-      revision: aiSessionSnapshotRevision,
-      previousRevision: aiSessionSnapshotRevision > 0 ? aiSessionSnapshotRevision - 1 : undefined,
-      traceId: `ais_evt_${Date.now().toString(36)}_${Math.random().toString(16).slice(2, 10)}`,
-      generatedAt: new Date().toISOString(),
-      reason,
-    },
+    meta: createAiSessionMeta(reason),
     snapshot,
+  });
+  const createAiSessionPatchEvent = (
+    changes: { upserted: AiSessionsSnapshot["sessions"]; removed: string[] },
+    reason: AiSessionEventReason,
+  ): AiSessionPatchEvent => ({
+    meta: createAiSessionMeta(reason),
+    upserted: changes.upserted,
+    removed: changes.removed,
+  });
+  const createAiSessionRemovedEvent = (sessionIds: string[], reason: AiSessionEventReason): AiSessionRemovedEvent => ({
+    meta: createAiSessionMeta(reason),
+    sessionIds,
+    expiresAt: new Date(Date.now() + AI_SESSION_DELTA_RETENTION_MS).toISOString(),
   });
   const pruneAiSessionEventHistory = () => {
     const cutoff = Date.now() - AI_SESSION_DELTA_RETENTION_MS;
@@ -964,31 +980,38 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       aiSessionEventHistory.shift();
     }
   };
-  const rememberAiSessionEvent = (payload: AiSessionSnapshotEvent) => {
-    aiSessionEventHistory.push({ type: AiSessionEventType.Snapshot, payload, createdAtMs: Date.now() });
+  const rememberAiSessionEvent = (event: AiSessionRuntimeEvent) => {
+    aiSessionEventHistory.push({ ...event, createdAtMs: Date.now() });
     pruneAiSessionEventHistory();
+  };
+  const publishAiSessionEvent = (event: AiSessionRuntimeEvent, snapshot: AiSessionsSnapshot, reason: AiSessionEventReason) => {
+    rememberAiSessionEvent(event);
+    events.publish(event.type, event.payload);
+    app.log.info({
+      traceId: event.payload.meta.traceId,
+      instanceId: event.payload.meta.instanceId,
+      streamId: event.payload.meta.streamId,
+      revision: event.payload.meta.revision,
+      reason,
+      eventType: event.type,
+      sessionCount: snapshot.sessions.length,
+      runningCount: snapshot.runningCount,
+      waitingCount: snapshot.waitingCount,
+    }, "ai-session.event.published");
   };
   const publishAiSessionSnapshot = (reason: AiSessionEventReason = "provider-event") => {
     aiSessionMessageDeltas.flushAll("authoritative-event");
     const snapshot = aiSessions.boundSnapshot(appSessionsWithSharedCodexAppServer());
-    const fingerprint = JSON.stringify(snapshot.sessions);
-    if (fingerprint !== aiSessionsFingerprint) {
-      aiSessionsFingerprint = fingerprint;
-      lastAiSessionSnapshot = snapshot;
+    const change = projectAiSessionAuthorityChange(lastAiSessionSnapshot, snapshot);
+    if (change.kind !== "unchanged") {
       aiSessionSnapshotRevision += 1;
-      const payload = createAiSessionSnapshotEvent(snapshot, reason);
-      rememberAiSessionEvent(payload);
-      events.publish(AiSessionEventType.Snapshot, payload);
-      app.log.info({
-        traceId: payload.meta.traceId,
-        instanceId: payload.meta.instanceId,
-        streamId: payload.meta.streamId,
-        revision: payload.meta.revision,
-        reason,
-        sessionCount: snapshot.sessions.length,
-        runningCount: snapshot.runningCount,
-        waitingCount: snapshot.waitingCount,
-      }, "ai-session.snapshot.published");
+      const event: AiSessionRuntimeEvent = change.kind === "snapshot"
+        ? { type: AiSessionEventType.Snapshot, payload: createAiSessionSnapshotEvent(snapshot, reason) }
+        : change.kind === "patch"
+          ? { type: AiSessionEventType.Patch, payload: createAiSessionPatchEvent(change, reason) }
+          : { type: AiSessionEventType.Removed, payload: createAiSessionRemovedEvent(change.sessionIds, reason) };
+      publishAiSessionEvent(event, snapshot, reason);
+      lastAiSessionSnapshot = snapshot;
       triggerManager.handleAiSessions(snapshot);
       if (reason === "discovery-scan") {
         streamDiagnostics.aiDiscoveryCorrections += 1;
@@ -1357,7 +1380,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   }));
 
   app.get("/api/events", { websocket: true }, (socket, request) => {
-    const query = request.query as { aiSessionTransient?: string };
+    const query = request.query as { aiSessionAuthoritySnapshot?: string; aiSessionTransient?: string };
     events.connect(socket, { expectsTransientSubscription: query.aiSessionTransient === "1" });
     events.send(socket, SessionStreamsHelloEventType, {
       protocolVersion: SESSION_STREAM_PROTOCOL_VERSION,
@@ -1378,6 +1401,20 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
         },
       ],
     });
+    if (query.aiSessionAuthoritySnapshot === "1") {
+      // A stateful relay owns no projection when it reconnects, even when this
+      // controlled instance has continued publishing patches. Bootstrap only
+      // that relay connection; ordinary UI subscribers recover over HTTP and
+      // must not receive another full snapshot.
+      events.send(
+        socket,
+        AiSessionEventType.Snapshot,
+        createAiSessionSnapshotEvent(
+          lastAiSessionSnapshot || aiSessions.boundSnapshot(appSessionsWithSharedCodexAppServer()),
+          "startup",
+        ),
+      );
+    }
     events.send(socket, "app.management", appManagement.snapshotEvent());
     void appManagement.refreshSnapshot()
       .then(() => appManagement.publishSnapshot())
@@ -1433,7 +1470,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       streamId: aiSessionStreamId,
       revision: aiSessionSnapshotRevision,
       lastEventAt: aiSessionEventHistory.at(-1)?.payload.meta.generatedAt || startedAt,
-      snapshot: lastAiSessionSnapshot,
+      snapshot: lastAiSessionSnapshot || aiSessions.boundSnapshot(appSessionsWithSharedCodexAppServer()),
     } };
   });
 
@@ -1442,7 +1479,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       streamId: aiSessionStreamId,
       revision: aiSessionSnapshotRevision,
       lastEventAt: aiSessionEventHistory.at(-1)?.payload.meta.generatedAt || startedAt,
-      snapshot: lastAiSessionSnapshot,
+      snapshot: lastAiSessionSnapshot || aiSessions.boundSnapshot(appSessionsWithSharedCodexAppServer()),
     },
   }));
 

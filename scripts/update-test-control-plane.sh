@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# Keep this automation aligned with tasks/update-test-control-plane.md. The task
+# Keep this automation aligned with knowledge/update-test-control-plane.md. The task
 # document owns the deployment and rollback contract; this script removes the
 # repetitive operator steps without weakening its checks.
 
@@ -10,6 +10,8 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT"
 
 HOST=${TASK_HANDOFF_TEST_HOST:-huadream@192.168.139.109}
+SSH_PORT=${TASK_HANDOFF_TEST_SSH_PORT:-}
+REUSE_ARTIFACTS=${TASK_HANDOFF_TEST_REUSE_ARTIFACTS:-0}
 BASE_VERSION=${TASK_HANDOFF_TEST_BASE_VERSION:-0.0.25}
 ARTIFACT_DIR=release/npm/artifacts
 BUILD_DATE=$(date +%Y%m%d)
@@ -31,6 +33,16 @@ for command in node pnpm git ssh scp shasum; do
   require_command "$command"
 done
 
+SSH_ARGS=(-o BatchMode=yes)
+SCP_ARGS=(-o BatchMode=yes)
+if [ -n "$SSH_PORT" ]; then
+  case "$SSH_PORT" in
+    *[!0-9]*|'') printf 'Unsafe SSH port: %s\n' "$SSH_PORT" >&2; exit 1 ;;
+  esac
+  SSH_ARGS+=(-p "$SSH_PORT")
+  SCP_ARGS+=(-P "$SSH_PORT")
+fi
+
 node -e '
   const [major, minor] = process.versions.node.split(".").map(Number);
   if (major !== 24 || minor < 15) throw new Error(`Node.js 24.15.0 or newer Node.js 24 is required; received ${process.version}.`);
@@ -38,7 +50,7 @@ node -e '
 
 log "Preflight $HOST"
 git status --short
-REMOTE_PREFLIGHT=$(ssh -o BatchMode=yes "$HOST" 'set -eu
+REMOTE_PREFLIGHT=$(ssh "${SSH_ARGS[@]}" "$HOST" 'set -eu
   node --version
   sudo -n true
   systemctl is-active task-handoff-node-agent.service
@@ -55,7 +67,7 @@ if [ -z "$VERSION" ]; then
   VERSION_PREFIX="$BASE_VERSION-local.$BUILD_DATE."
   CANDIDATES=$(
     find "$ARTIFACT_DIR" release/runtime-artifacts -maxdepth 1 -type f -name "*${VERSION_PREFIX}*" -print 2>/dev/null || true
-    ssh -o BatchMode=yes "$HOST" "find /usr/local/lib/node_modules/@task-handoff /tmp -maxdepth 1 -name '*${VERSION_PREFIX}*' -print 2>/dev/null; node -p 'require(\"/usr/local/lib/node_modules/@task-handoff/server/package.json\").version'"
+    ssh "${SSH_ARGS[@]}" "$HOST" "find /usr/local/lib/node_modules/@task-handoff /tmp -maxdepth 1 -name '*${VERSION_PREFIX}*' -print 2>/dev/null; node -p 'require(\"/usr/local/lib/node_modules/@task-handoff/server/package.json\").version'"
   )
   NEXT=$(printf '%s\n' "$CANDIDATES" | awk -v prefix="$VERSION_PREFIX" '
     { position = index($0, prefix); if (!position) next; suffix = substr($0, position + length(prefix)); sub(/[^0-9].*/, "", suffix); if (suffix ~ /^[0-9]+$/ && suffix > maximum) maximum = suffix }
@@ -75,7 +87,7 @@ CHECKSUMS="/private/tmp/task-handoff-$VERSION.sha256"
 # Reserving the remote path before building makes an interrupted deployment
 # consume its version instead of allowing different code to reuse it later.
 log "Reserve version $VERSION"
-while ! ssh -o BatchMode=yes "$HOST" "mkdir '$REMOTE_STAGE'" 2>/dev/null; do
+while ! ssh "${SSH_ARGS[@]}" "$HOST" "mkdir '$REMOTE_STAGE'" 2>/dev/null; do
   if [ "$AUTO_VERSION" -ne 1 ]; then
     printf 'Version already has a remote deployment path and cannot be reused: %s\n' "$VERSION" >&2
     exit 1
@@ -86,20 +98,26 @@ while ! ssh -o BatchMode=yes "$HOST" "mkdir '$REMOTE_STAGE'" 2>/dev/null; do
   CHECKSUMS="/private/tmp/task-handoff-$VERSION.sha256"
   printf 'Version is already reserved; trying %s\n' "$VERSION"
 done
-for name in server control-plane node-agent controlled-instance; do
-  test ! -e "$ARTIFACT_DIR/task-handoff-$name-$VERSION.tgz" || {
-    printf 'Version already has a local artifact and cannot be reused: %s\n' "$VERSION" >&2
-    exit 1
-  }
-done
+if [ "$REUSE_ARTIFACTS" != 1 ]; then
+  for name in server control-plane node-agent controlled-instance; do
+    test ! -e "$ARTIFACT_DIR/task-handoff-$name-$VERSION.tgz" || {
+      printf 'Version already has a local artifact and cannot be reused: %s\n' "$VERSION" >&2
+      exit 1
+    }
+  done
+fi
 
 log "Build and verify $VERSION"
-pnpm run typecheck:legacy
-pnpm run typecheck:controlled-instance
-pnpm run control-plane-ui:typecheck
-TASK_HANDOFF_VERSION="$VERSION" pnpm run runtime:pack --target controlled-instance
-TASK_HANDOFF_VERSION="$VERSION" pnpm run runtime:artifact -- --version "$VERSION" --prebuilds-dir release/node-pty-prebuilds
-TASK_HANDOFF_VERSION="$VERSION" pnpm run runtime:pack
+if [ "$REUSE_ARTIFACTS" = 1 ]; then
+  log "Reuse existing verified artifacts for $VERSION"
+else
+  pnpm run typecheck:legacy
+  pnpm run typecheck:controlled-instance
+  pnpm run control-plane-ui:typecheck
+  TASK_HANDOFF_VERSION="$VERSION" pnpm run runtime:pack --target controlled-instance
+  TASK_HANDOFF_VERSION="$VERSION" pnpm run runtime:artifact -- --version "$VERSION" --prebuilds-dir release/node-pty-prebuilds
+  TASK_HANDOFF_VERSION="$VERSION" pnpm run runtime:pack
+fi
 
 for name in server control-plane node-agent controlled-instance; do
   test -f "$ARTIFACT_DIR/task-handoff-$name-$VERSION.tgz"
@@ -123,7 +141,7 @@ shasum -a 256 \
 cat "$CHECKSUMS"
 
 log "Upload and assemble staging runtime"
-scp -o BatchMode=yes \
+scp "${SCP_ARGS[@]}" \
   "$ARTIFACT_DIR/task-handoff-server-$VERSION.tgz" \
   "$ARTIFACT_DIR/task-handoff-control-plane-$VERSION.tgz" \
   "$ARTIFACT_DIR/task-handoff-node-agent-$VERSION.tgz" \
@@ -131,7 +149,7 @@ scp -o BatchMode=yes \
   "$CHECKSUMS" \
   "$HOST:$REMOTE_STAGE/"
 
-ssh -o BatchMode=yes "$HOST" \
+ssh "${SSH_ARGS[@]}" "$HOST" \
   "sudo -n env VERSION='$VERSION' REMOTE_STAGE='$REMOTE_STAGE' bash -s" <<'REMOTE'
 set -eu
 cd "$REMOTE_STAGE"
@@ -160,7 +178,7 @@ test -x "$NEW/node_modules/@task-handoff/control-plane/bin/task-handoff-control-
 REMOTE
 
 log "Atomically switch Node Agent and Control Plane"
-SWITCH_OUTPUT=$(ssh -o BatchMode=yes "$HOST" \
+SWITCH_OUTPUT=$(ssh "${SSH_ARGS[@]}" "$HOST" \
   "sudo -n env VERSION='$VERSION' bash -s" <<'REMOTE'
 set -eu
 BASE=/usr/local/lib/node_modules/@task-handoff
@@ -225,7 +243,7 @@ REMOTE
 printf '%s\n' "$SWITCH_OUTPUT"
 
 log "Validate runtime and controlled-instance convergence"
-ssh -o BatchMode=yes "$HOST" "sudo -n env VERSION='$VERSION' bash -s" <<'REMOTE'
+ssh "${SSH_ARGS[@]}" "$HOST" "sudo -n env VERSION='$VERSION' bash -s" <<'REMOTE'
 set -eu
 test "$(node -p 'require("/usr/local/lib/node_modules/@task-handoff/server/package.json").version')" = "$VERSION"
 systemctl is-active --quiet task-handoff-node-agent.service

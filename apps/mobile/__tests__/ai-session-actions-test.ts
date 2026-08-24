@@ -40,12 +40,12 @@ test('blocks duplicate action submission while the first request is unresolved',
   expect(api.aiSessions.interrupt).toHaveBeenCalledTimes(1);
 });
 
-test('closes through the shared client with an idempotency key and refreshes authoritative state', async () => {
+test('closes through the shared client with an idempotency key and waits for authoritative events', async () => {
   const api = client();
   const coordinator = new MobileAiSessionActionCoordinator('cp', api, new MobileAiSessionStore());
   expect((await coordinator.close('instance', 'session', 'close-request-1')).disposition).toBe('accepted');
   expect(api.aiSessions.close).toHaveBeenCalledWith('instance', 'session', 'close-request-1');
-  expect(api.aiSessions.list).toHaveBeenCalledTimes(1);
+  expect(api.aiSessions.list).not.toHaveBeenCalled();
 });
 
 test('keeps an authoritative action response accepted when only the follow-up snapshot refresh fails', async () => {
@@ -53,6 +53,7 @@ test('keeps an authoritative action response accepted when only the follow-up sn
   const coordinator = new MobileAiSessionActionCoordinator('cp', api, new MobileAiSessionStore());
   expect((await coordinator.interrupt('instance', 'session')).disposition).toBe('accepted');
   expect(coordinator.state(mobileAiSessionBusyKey('cp', 'instance', 'session', 'interrupt')).phase).toBe('idle');
+  expect(api.aiSessions.list).not.toHaveBeenCalled();
 });
 
 test('does not replay an uncertain send and recovers from the authoritative snapshot', async () => {
@@ -197,15 +198,18 @@ test('a request finishing after page or profile switch only recovers its origina
   await newPage.interrupt('instance', 'session');
   resolve({});
   await pending;
-  expect(oldApi.aiSessions.list).toHaveBeenCalledTimes(1);
-  expect(newApi.aiSessions.list).toHaveBeenCalledTimes(1);
+  expect(oldApi.aiSessions.list).not.toHaveBeenCalled();
+  expect(newApi.aiSessions.list).not.toHaveBeenCalled();
   expect(store.profile('cp-old').controlPlaneId).toBe('cp-old');
   expect(store.profile('cp-new').controlPlaneId).toBe('cp-new');
 });
 
 test('a request finishing after profile deletion cannot recreate cleared session cache', async () => {
   let resolveSnapshot!: (value: unknown) => void;
-  const api = client({ list: jest.fn().mockReturnValue(new Promise((resolve) => { resolveSnapshot = resolve; })) });
+  const api = client({
+    interrupt: jest.fn().mockRejectedValue(Object.assign(new Error('connection lost'), { code: 'DIRECT_NETWORK_FAILED', retryable: true })),
+    list: jest.fn().mockReturnValue(new Promise((resolve) => { resolveSnapshot = resolve; })),
+  });
   const store = new MobileAiSessionStore();
   store.profile('cp-deleted');
   const coordinator = new MobileAiSessionActionCoordinator('cp-deleted', api, store);

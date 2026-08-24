@@ -1011,6 +1011,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       },
       build: buildInfo("node-agent"),
       instanceProxy: { ...instanceProxyMetrics },
+      eventTransport: eventForwarder.eventTransportHealth(),
       serverTime: new Date().toISOString(),
     },
   }));

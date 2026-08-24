@@ -20,7 +20,7 @@ function request(socketPath, payload) {
 }
 
 test("controlled instance HTTPS proxy asks node-agent for every operation and keeps no snapshot", async (t) => {
-  const root = fs.mkdtempSync(path.join("/private/tmp", "task-handoff-git-proxy-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-git-proxy-"));
   let token = "token-one";
   const remotes = [];
   const client = {
@@ -38,7 +38,7 @@ test("controlled instance HTTPS proxy asks node-agent for every operation and ke
 });
 
 test("standalone or N-1 instances return no-match without contacting a managed store", async (t) => {
-  const root = fs.mkdtempSync(path.join("/private/tmp", "task-handoff-git-proxy-none-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-git-proxy-none-"));
   const broker = new GitCredentialBroker({ runtimeDir: root, socketPath: path.join(root, "broker.sock") });
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   assert.deepEqual(await broker.request({ type: "https", protocol: "https", host: "git.example.com", path: "repo.git" }), { status: "none" });
@@ -61,7 +61,7 @@ test("managed Git environment contains only helper and proxy locations", () => {
 });
 
 test("broker closes promptly while a local socket client is still connected", async (t) => {
-  const root = fs.mkdtempSync(path.join("/private/tmp", "task-handoff-git-proxy-close-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-git-proxy-close-"));
   const broker = new GitCredentialBroker({ runtimeDir: root, socketPath: path.join(root, "broker.sock") });
   await broker.start();
   const socket = net.createConnection(broker.socketPath);

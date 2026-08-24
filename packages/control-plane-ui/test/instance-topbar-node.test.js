@@ -4,6 +4,7 @@ import test from "node:test";
 
 const workbench = fs.readFileSync(new URL("../src/apps/control-plane/ControlPlaneWorkbench.vue", import.meta.url), "utf8");
 const styles = fs.readFileSync(new URL("../src/apps/control-plane/ControlPlaneWorkbench.css", import.meta.url), "utf8");
+const instanceDetail = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/InstanceDetail.vue", import.meta.url), "utf8");
 const sessionPreviewStyles = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/SessionPreview.css", import.meta.url), "utf8");
 
 test("instance title appends the authoritative node name as muted metadata", () => {
@@ -84,8 +85,10 @@ test("standalone switching warms an uncached target before changing the window i
 test("initial loading overlay covers both the main workbench and standalone detail before fading out", () => {
   assert.match(workbench, /<Transition name="workbench-loading">[\s\S]*?v-if="workbenchLoadingOverlayVisible"[\s\S]*?class="workbench-loading-overlay"/);
   assert.match(workbench, /<InstanceDetail\s+[\s\S]*?v-else-if="instanceViewMode && !settingsMode && !workbenchLoadingOverlayVisible"/);
+  assert.doesNotMatch(instanceDetail, /instances\.detail\.loading/);
+  assert.match(instanceDetail, /<section v-else-if="!loading" class="detail-empty">/);
   assert.match(workbench, /const initialWorkbenchLoadingVisible = ref\(true\);[\s\S]*?const initialWorkbenchLoadingFinished = ref\(false\);/);
-  assert.match(workbench, /standaloneMode\.value[\s\S]*?\? !standaloneOwnershipResolved\.value \|\| board\.isLoading\.value[\s\S]*?: nodes\.isLoading\.value[\s\S]*?window\.requestAnimationFrame\(\(\) => \{\s*initialWorkbenchLoadingVisible\.value = false;/);
+  assert.match(workbench, /standaloneMode\.value[\s\S]*?\? !standaloneOwnershipResolved\.value \|\| board\.isLoading\.value \|\| standaloneBoardPending\.value[\s\S]*?: board\.isLoading\.value[\s\S]*?window\.requestAnimationFrame\(\(\) => \{\s*initialWorkbenchLoadingVisible\.value = false;/);
   assert.match(workbench, /\{ flush: "post", immediate: true \}/);
   assert.match(workbench, /standaloneMode \? "instances\.detail\.loading" : "instances\.list\.loading"/);
   assert.match(styles, /\.workbench-loading-overlay \{[\s\S]*?background: color-mix\(in srgb, var\(--workspace-bg\) 48%, transparent\);[\s\S]*?backdrop-filter: blur\(2px\);/);
