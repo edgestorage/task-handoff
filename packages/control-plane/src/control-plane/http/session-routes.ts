@@ -200,6 +200,14 @@ export function registerSessionRoutes({
     const params = InstanceSessionParamsSchema.parse(request.params);
     return { data: await service.getAiSessionDetail(params.id, params.sessionId) };
   });
+  app.get("/api/controlled-instances/:id/ai-sessions/:sessionId/turns", async (request) => {
+    const params = InstanceSessionParamsSchema.parse(request.params);
+    return { data: await service.getAiSessionTurnIndex(params.id, params.sessionId) };
+  });
+  app.get("/api/controlled-instances/:id/ai-sessions/:sessionId/turns/:turnId", async (request) => {
+    const params = InstanceSessionTurnParamsSchema.parse(request.params);
+    return { data: await service.getAiSessionTurnBody(params.id, params.sessionId, params.turnId) };
+  });
   app.post<{ Params: { id: string }; Querystring: Record<string, unknown>; Body: Readable }>("/api/controlled-instances/:id/ai-session-attachments/drafts", { bodyLimit: AI_SESSION_ATTACHMENT_UPLOAD_BODY_LIMIT }, async (request, reply) => {
     const params = IdParamsSchema.parse(request.params);
     const input = AiSessionAttachmentDraftUploadQuerySchema.parse(request.query);
@@ -410,9 +418,13 @@ export function registerSessionRoutes({
     const attachmentIds = new Set(parsed.attachments.filter((attachment) => attachment.source.type === "upload-ref" && attachment.id.startsWith("cia_")).map((attachment) => attachment.id));
     if (attachmentIds.size) {
       const retainedDays = (await service.requireControlledInstance(params.id, true)).config.aiSessionAttachmentRetentionDays ?? 30;
-      void service.getAiSessionDetail(params.id, result.aiSessionId).then((session) => {
-        const messageId = session.turns?.flatMap((turn) => turn.userMessages || [])
-          .find((message) => message.attachments.some((attachment) => attachmentIds.has(attachment.id)))?.id;
+      void service.getAiSessionTurnIndex(params.id, result.aiSessionId).then(async (index) => {
+        const latestTurn = index.turns.at(-1);
+        if (!latestTurn) return;
+        const body = await service.getAiSessionTurnBody(params.id, result.aiSessionId, latestTurn.id);
+        const messageId = body.turn.userMessages?.find((message) => (
+          message.attachments.some((attachment) => attachmentIds.has(attachment.id))
+        ))?.id;
         if (!messageId) return;
         for (const attachmentId of attachmentIds) aiSessionAttachmentCache.bind({
           instanceId: params.id,
@@ -495,9 +507,7 @@ export function registerSessionRoutes({
       throw error;
     }
     const attachmentIds = new Set(parsed.attachments.filter((attachment) => attachment.source.type === "upload-ref" && attachment.id.startsWith("cia_")).map((attachment) => attachment.id));
-    const messageId = result.session.turns?.flatMap((turn) => turn.userMessages || [])
-      .find((message) => message.attachments.some((attachment) => attachmentIds.has(attachment.id)))?.id
-      || result.session.queue.items.find((item) => item.id === result.queueId)?.messageId;
+    const messageId = result.messageId;
     if (attachmentIds.size && messageId) {
       const retainedDays = (await service.requireControlledInstance(params.id, true)).config.aiSessionAttachmentRetentionDays ?? 30;
       const cacheUntil = Date.now() + retainedDays * 24 * 60 * 60 * 1000;

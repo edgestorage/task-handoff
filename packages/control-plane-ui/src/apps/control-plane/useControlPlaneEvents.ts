@@ -1,17 +1,18 @@
 import { onBeforeUnmount, onMounted, toValue, watch, type MaybeRefOrGetter } from "vue";
 import { useQueryClient } from "@tanstack/vue-query";
 import { StandardReconnectBackoff } from "@task-handoff/core/core/reconnect";
-import { SessionStreamsHelloEventType, SessionStreamsHelloSchema } from "@task-handoff/protocol/events";
+import { COMPACT_EVENT_ENVELOPE_VERSION, EventKeepalivePongSchema, SessionStreamsHelloEventType, SessionStreamsHelloSchema, normalizeEventEnvelope } from "@task-handoff/protocol/events";
 import {
   InstanceLifecycleEventType,
   InstanceLifecycleSnapshotSchema,
   InstanceResourceMetricsEventType,
   InstanceResourceMetricsSchema,
+  NodeStateProjectionEventSchema,
   NodeJoinedEventSchema,
   type InstanceLifecycleSnapshot,
   type NodeJoinedEvent,
 } from "@task-handoff/protocol/control-plane";
-import { AiSessionTimelineItemEventSchema, AiSessionUnreadEventType, AiSessionUnreadStateSchema, type AiSessionTimelineItemEvent, type AiSessionUnreadState } from "@task-handoff/protocol/ai-sessions";
+import { AiSessionEventType as ProtocolAiSessionEventType, AiSessionTimelineItemEventSchema, AiSessionUnreadEventType, AiSessionUnreadStateSchema, normalizeAiSessionMessageDeltaEvent, type AiSessionTimelineItemEvent, type AiSessionUnreadState } from "@task-handoff/protocol/ai-sessions";
 import { safeParseResponse } from "@task-handoff/protocol/response-validation";
 import { ControlPlaneNodeFleetUpdatedEventSchema } from "@task-handoff/protocol/control-plane-directory";
 import type { SessionStreamDescriptor } from "@task-handoff/protocol/events";
@@ -19,7 +20,7 @@ import type { AppManagementEvent } from "../../api/types";
 import type { InstanceResourceMetrics } from "../../api/types";
 import { controlPlaneQueryKeys } from "../../api/queryKeys.ts";
 import { controlPlaneDomainQueryKeys } from "../../api/queryInvalidation.ts";
-import { applyInstanceLifecycle, applyNodeFleetState } from "./instanceLifecycleCache.ts";
+import { applyInstanceLifecycle, applyNodeFleetState, applyNodeStateProjection } from "./instanceLifecycleCache.ts";
 import { controlPlaneEventDomains } from "./eventInvalidation.ts";
 import { aiSessionMessageDeltaDemand, aiSessionTimelineDemand, aiSessionTransientReplaySince } from "./useAiSessionEventDemand.ts";
 import {
@@ -84,6 +85,7 @@ export function useControlPlaneEvents(input: {
   const pendingInvalidationKeys = new Map<string, readonly unknown[]>();
   let invalidationTimer: ReturnType<typeof setTimeout> | undefined;
   let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+  let keepaliveTimer: ReturnType<typeof setInterval> | undefined;
   let socket: WebSocket | undefined;
   let closing = false;
   const reconnectBackoff = new StandardReconnectBackoff();
@@ -101,6 +103,7 @@ export function useControlPlaneEvents(input: {
       hasOpened = true;
       const instanceId = toValue(input.instanceId || "");
       sendSubscription(current, new Date().toISOString());
+      startKeepalive(current);
       void queryClient.invalidateQueries({ queryKey: controlPlaneQueryKeys.scopedInstanceBoard(toValue(input.instanceId || "")) });
       void input.appManagement?.recoverOpen();
       void input.resourceMetrics?.recoverOpen();
@@ -109,6 +112,7 @@ export function useControlPlaneEvents(input: {
     current.addEventListener("message", (event) => handleMessage(String(event.data)));
     current.addEventListener("close", () => {
       if (socket !== current) return;
+      stopKeepalive();
       socket = undefined;
       if (!closing && !reconnectTimer) {
         const { delay } = reconnectBackoff.next();
@@ -130,6 +134,7 @@ export function useControlPlaneEvents(input: {
     target.send(JSON.stringify({
       v: 1,
       type: "subscribe",
+      eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION,
       topics: ["*"],
       ...(instanceId ? { instanceIds: [instanceId] } : {}),
       ...(input.resourceMetrics ? { metricInstanceIds: toValue(input.resourceMetricInstanceIds || []) } : {}),
@@ -144,9 +149,23 @@ export function useControlPlaneEvents(input: {
     }));
   }
 
+  function startKeepalive(target: WebSocket) {
+    stopKeepalive();
+    keepaliveTimer = setInterval(() => {
+      if (socket !== target || target.readyState !== WebSocket.OPEN) return;
+      target.send(JSON.stringify({ v: 1, type: "ping", sentAt: new Date().toISOString() }));
+    }, 20_000);
+  }
+
+  function stopKeepalive() {
+    if (keepaliveTimer) clearInterval(keepaliveTimer);
+    keepaliveTimer = undefined;
+  }
+
   function handleMessage(raw: string) {
     try {
       const message = JSON.parse(raw) as EventMessage;
+      if (EventKeepalivePongSchema.safeParse(message).success) return;
       const instanceId = toValue(input.instanceId || "");
       if (message.type === SessionStreamsHelloEventType) {
         const parsed = safeParseResponse(SessionStreamsHelloSchema, message.payload);
@@ -223,6 +242,12 @@ export function useControlPlaneEvents(input: {
       input.imagePullProgress?.reconcileLifecycle?.(lifecycle.data);
       return applyInstanceLifecycle(queryClient, lifecycle.data);
     }
+    if (event.type === "node.connection.updated" || event.type === "node.proxy-state.updated") {
+      const state = safeParseResponse(NodeStateProjectionEventSchema, event.payload);
+      // Compatibility for v0.0.23: older producers send internal observation
+      // payloads. Returning false preserves the authoritative query fallback.
+      return state.success ? applyNodeStateProjection(queryClient, state.data) : false;
+    }
     if (event.type === "node.fleet.updated") {
       const state = safeParseResponse(ControlPlaneNodeFleetUpdatedEventSchema, event.payload);
       if (!state.success) return false;
@@ -277,10 +302,12 @@ export function useControlPlaneEvents(input: {
     closing = true;
     socket?.close();
     socket = undefined;
+    stopKeepalive();
   });
   watch(() => toValue(input.instanceId || ""), () => {
     if (!socket) return;
     closing = true;
+    stopKeepalive();
     socket.close();
     socket = undefined;
     closing = false;
@@ -304,6 +331,7 @@ export function useControlPlaneEvents(input: {
     reconnectBackoff.reset();
     socket?.close();
     socket = undefined;
+    stopKeepalive();
     if (invalidationTimer) clearTimeout(invalidationTimer);
     if (reconnectTimer) clearTimeout(reconnectTimer);
   });
@@ -319,12 +347,18 @@ function eventsUrl(instanceId = "") {
 }
 
 function normalizedEvents(message: EventMessage): EventMessage[] {
-  if (message.type !== "node-agent.event.forwarded") return [message];
-  const forwarded = message.event && typeof message.event === "object" && !Array.isArray(message.event)
-    ? message.event as EventMessage
-    : undefined;
-  if (!forwarded?.type) return [];
-  return [{ ...forwarded, scope: { ...(message.scope || {}), ...(forwarded.scope || {}) } }];
+  const candidate = message.type === "node-agent.event.forwarded" ? message.event : message;
+  const normalized = normalizeEventEnvelope(candidate, message.scope);
+  if (!normalized) return [];
+  const instanceId = normalized.scope?.instanceId;
+  if (normalized.type === ProtocolAiSessionEventType.MessageDelta && instanceId) {
+    try {
+      normalized.payload = normalizeAiSessionMessageDeltaEvent(normalized.payload, instanceId);
+    } catch {
+      return [];
+    }
+  }
+  return [normalized];
 }
 
 function eventInstanceId(event: EventMessage) {

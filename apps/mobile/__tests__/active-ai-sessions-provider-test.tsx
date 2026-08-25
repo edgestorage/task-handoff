@@ -25,6 +25,24 @@ const profile = {
   capabilities: { authentication: 'required' as const, aiSessions: true, nodes: true, instanceBoard: true, triggers: true },
   createdAt: '2026-08-05T00:00:00.000Z',
   updatedAt: '2026-08-05T00:00:00.000Z',
+  detailRevision: 'detail-1',
+};
+
+const compactSession = {
+  id: 'session-detail',
+  providerSessionId: 'session-detail',
+  creationSource: 'ai-session' as const,
+  agent: 'codex' as const,
+  status: 'idle' as const,
+  phase: 'unknown' as const,
+  startedAt: '2026-08-05T00:00:00.000Z',
+  updatedAt: '2026-08-05T00:00:00.000Z',
+  turnCount: 1,
+  queue: { revision: 0, pendingCount: 0, items: [] },
+  toolCallsSinceLastMessage: 0,
+  subAgentCount: 0,
+  subAgents: [],
+  unread: false,
 };
 
 function Consumer({ name }: { name: string }) {
@@ -103,6 +121,71 @@ test('one root provider owns one AI session connection for multiple screens', as
   });
   await waitFor(() => screen.getByText('messages:1'));
   expect(runtimeRenders).toHaveBeenCalledTimes(stableRuntimeRenderCount);
+  await screen.unmount();
+  mobileAiSessionStore.clearProfile('cp-provider');
+});
+
+test('selected compact session reloads detail when its authoritative revision changes', async () => {
+  const list = jest.fn().mockResolvedValue({
+    updatedAt: compactSession.updatedAt,
+    instances: [{
+      instanceId: 'instance-detail',
+      streamId: 'stream-detail',
+      revision: 1,
+      aiSessions: { runningCount: 0, waitingCount: 0, staleCount: 0, updatedAt: compactSession.updatedAt, sessions: [{ ...compactSession, detailRevision: 'detail-1', turnsRevision: 'turns-1' }] },
+    }],
+  });
+  const detail = jest.fn()
+    .mockResolvedValue({ id: compactSession.id, queue: compactSession.queue, subAgents: [] });
+  const firstTurn = { id: 'turn-1', status: 'completed' as const, phase: 'responding' as const, revision: 1, bodyRevision: 'body-1', userPrompt: 'question', lastMessage: 'answer', startedAt: compactSession.startedAt, updatedAt: compactSession.updatedAt };
+  const secondTurn = { id: 'turn-2', status: 'completed' as const, phase: 'responding' as const, revision: 1, bodyRevision: 'body-2', userPrompt: 'second question', lastMessage: 'second answer', startedAt: '2026-08-05T00:01:00.000Z', updatedAt: '2026-08-05T00:01:00.000Z' };
+  const turnIndex = jest.fn()
+    .mockResolvedValueOnce({ sessionId: compactSession.id, revision: 'turns-1', turns: [firstTurn] })
+    .mockResolvedValueOnce({ sessionId: compactSession.id, revision: 'turns-2', turns: [firstTurn, secondTurn] });
+  const turnBody = jest.fn()
+    .mockResolvedValueOnce({ sessionId: compactSession.id, revision: firstTurn.bodyRevision, turn: firstTurn })
+    .mockResolvedValueOnce({ sessionId: compactSession.id, revision: secondTurn.bodyRevision, turn: secondTurn });
+  const dependencies: ActiveAiSessionsDependencies = {
+    activeProfile: jest.fn().mockResolvedValue(profile),
+    subscribeProfiles: () => () => undefined,
+    createClient: () => ({
+      api: { auth: { session: jest.fn().mockResolvedValue({ authenticated: true }) }, aiSessions: { list, detail, turnIndex, turnBody } },
+      transport: { revalidate: jest.fn().mockResolvedValue(undefined), connectEvents: () => ({ close: jest.fn() }) },
+    }) as unknown as ReturnType<ActiveAiSessionsDependencies['createClient']>,
+    subscribeLifecycle: (listener) => { listener('active'); return () => undefined; },
+    subscribeNetwork: (listener) => { listener({ connected: true, internetReachable: true, type: 'wifi' }); return () => undefined; },
+  };
+  function SelectedDetail() {
+    const view = useActiveAiSessionView('cp-provider', 'instance-detail', 'session-detail');
+    return <Text>{view.session?.turns?.at(-1)?.lastMessage || 'loading'}</Text>;
+  }
+
+  const screen = await render(<ActiveAiSessionsProvider dependencies={dependencies}><SelectedDetail /></ActiveAiSessionsProvider>);
+  await waitFor(() => screen.getByText('answer'));
+  expect(detail).toHaveBeenCalledTimes(1);
+
+  const updatedAt = '2026-08-05T00:01:00.000Z';
+  await act(async () => {
+    mobileAiSessionStore.replaceSnapshot('cp-provider', {
+      updatedAt,
+      instances: [{
+        instanceId: 'instance-detail',
+        streamId: 'stream-detail',
+        revision: 2,
+        aiSessions: {
+          runningCount: 0,
+          waitingCount: 0,
+          staleCount: 0,
+          updatedAt,
+          sessions: [{ ...compactSession, updatedAt, detailRevision: 'detail-2', turnsRevision: 'turns-2' }],
+        },
+      }],
+    });
+  });
+  await waitFor(() => screen.getByText('second answer'));
+  expect(detail).toHaveBeenCalledTimes(2);
+  expect(turnIndex).toHaveBeenCalledTimes(2);
+  expect(turnBody).toHaveBeenCalledTimes(2);
   await screen.unmount();
   mobileAiSessionStore.clearProfile('cp-provider');
 });

@@ -43,14 +43,14 @@ test("AI session details render messages without redundant section titles", () =
   assert.match(panel, /<AiSessionConversationContent/);
   assert.match(floatingDock, /class="ai-board-floating-prompt-content"[\s\S]*?<MarkdownContent :content="displayAiSessionTitle/);
   assert.match(floatingDock, /<AiSessionConversationContent/);
-  assert.match(conversation, /<AiSessionResult[\s\S]*?:response-content="compactResponseContent"/);
+  assert.match(conversation, /<AiSessionResult[\s\S]*?:response-content="detailState === 'ready' \? compactResponseContent : ''"/);
   assert.match(conversation, /compactResponseContent = computed\(\(\) => displayAiSessionResponse/);
   for (const detail of [panel, floatingDock]) assert.doesNotMatch(detail, /message-section-title|response-section-title/);
 });
 
-test("details count retained turns while cards consume compact aggregate turns", () => {
-  assert.match(panel, /const conversation = selectedConversationSession\.value\?\.id === session\.id[\s\S]*?return aiSessionTurns\(conversation\)\.length;/);
-  assert.match(board, /return aiSessionTurns\(session\)\.length;/);
+test("details count retained turns while cards consume bounded summary counts", () => {
+  assert.match(panel, /const conversation = selectedConversationSession\.value\?\.id === session\.id[\s\S]*?conversation\.turns \? aiSessionTurns\(conversation\)\.length : conversation\.turnCount \?\? 0;/);
+  assert.match(board, /return session\.turnCount \?\? aiSessionTurns\(session\)\.length;/);
   assert.match(displayHelpers, /const turns = aiSessionDisplayTurns\(session\);[\s\S]*?const turn = turns\[index\];[\s\S]*?const turnPrompt = turn\?\.userPrompt\?\.trim\(\);[\s\S]*?if \(turn\?\.contextCompactions\?\.length\) return "\/compact";[\s\S]*?return session\.userPrompt\?\.trim\(\) \|\| "-";/);
 });
 

@@ -6,7 +6,7 @@ import type {
 } from "@task-handoff/protocol/control-plane";
 import type { InstanceAppInventory } from "@task-handoff/protocol/control-plane";
 import type {
-  AiSessionActionResult,
+  AiSessionActionResponse,
   AiSessionMessageAttachment,
   InstanceBoardAiSummary,
   AiSessionsSnapshot,
@@ -82,12 +82,12 @@ export type ChatProjectLookupDeps = {
 export type ChatPendingDeps = {
   listPendingRoutes: () => Promise<ChatPendingRoute[]>;
   pendingDecisionCallbackData: (routeId: string, decision: "allow" | "deny" | "skip") => string;
-  resolveAiSessionApproval: (instanceId: string, sessionId: string, decision: "allow" | "deny" | "skip") => Promise<AiSessionActionResult>;
+  resolveAiSessionApproval: (instanceId: string, sessionId: string, decision: "allow" | "deny" | "skip") => Promise<AiSessionActionResponse>;
 };
 
 export type ChatAiSessionActionDeps = {
-  sendAiSessionMessage: (instanceId: string, sessionId: string, message: string, mode?: "auto" | "queue" | "steer" | "immediate", attachments?: AiSessionMessageAttachment[]) => Promise<AiSessionActionResult>;
-  interruptAiSession: (instanceId: string, sessionId: string) => Promise<AiSessionActionResult>;
+  sendAiSessionMessage: (instanceId: string, sessionId: string, message: string, mode?: "auto" | "queue" | "steer" | "immediate", attachments?: AiSessionMessageAttachment[]) => Promise<AiSessionActionResponse>;
+  interruptAiSession: (instanceId: string, sessionId: string) => Promise<AiSessionActionResponse>;
 };
 
 export type ChatAppAccessDeps = {

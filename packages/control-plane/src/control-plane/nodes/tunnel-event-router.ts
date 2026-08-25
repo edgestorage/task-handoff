@@ -14,6 +14,7 @@ import {
   AiSessionRemovedEventSchema,
   AiSessionSnapshotEventSchema,
   AiSessionTimelineItemEventSchema,
+  normalizeAiSessionMessageDeltaEvent,
 } from "@task-handoff/protocol/ai-sessions";
 import {
   AppSessionEventType,
@@ -133,7 +134,7 @@ export class NodeTunnelEventRouter {
     }
 
     if (SESSION_EVENT_TYPES.has(eventType)) {
-      const sessionEvent = parseSessionEvent(eventType, payload);
+      const sessionEvent = parseSessionEvent(eventType, payload, claimedInstanceId);
       if (!sessionEvent) {
         this.options.logger?.warn?.({ nodeId, eventType, reason: "invalid-payload" }, "session-event.transport.rejected");
         return true;
@@ -269,10 +270,18 @@ export class NodeTunnelEventRouter {
   }
 }
 
-function parseSessionEvent(eventType: string, payload: unknown) {
+function parseSessionEvent(eventType: string, payload: unknown, claimedInstanceId?: string) {
   const schema = SESSION_EVENT_SCHEMAS[eventType as keyof typeof SESSION_EVENT_SCHEMAS];
   if (!schema) return undefined;
-  const parsed = safeParseResponse(schema, payload);
+  let normalizedPayload = payload;
+  if (eventType === AiSessionEventType.MessageDelta && claimedInstanceId) {
+    try {
+      normalizedPayload = normalizeAiSessionMessageDeltaEvent(payload, claimedInstanceId);
+    } catch {
+      return undefined;
+    }
+  }
+  const parsed = safeParseResponse(schema, normalizedPayload);
   if (!parsed.success) return undefined;
   const data = parsed.data;
   return { instanceId: "meta" in data ? data.meta.instanceId : data.instanceId, payload: data };

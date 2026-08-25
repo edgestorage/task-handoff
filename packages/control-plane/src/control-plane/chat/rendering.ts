@@ -1,13 +1,13 @@
 import { appSessionAccessMode, type AppSessionAccessMode } from "@task-handoff/protocol/app-sessions";
-import type { AiSessionActionResult } from "@task-handoff/protocol/ai-sessions";
+import type { AiSessionActionResponse } from "@task-handoff/protocol/ai-sessions";
 import { isVisibleAppSessionStatus } from "../sessions/app-session-visibility.ts";
 import type { ChatBoardInstance } from "./types.ts";
 
-export function aiSessionActionTurnId(value: AiSessionActionResult) {
-  return value.turnId || value.providerTurnId || value.session.activeTurnId || "";
+export function aiSessionActionTurnId(value: AiSessionActionResponse) {
+  return value.turnId || value.providerTurnId || "";
 }
 
-export function aiSessionActionProviderTurnId(value: AiSessionActionResult) {
+export function aiSessionActionProviderTurnId(value: AiSessionActionResponse) {
   return value.providerTurnId || value.turnId || "";
 }
 

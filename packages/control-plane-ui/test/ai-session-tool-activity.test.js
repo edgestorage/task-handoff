@@ -114,7 +114,7 @@ test("both detail surfaces share the complete AI result while cards remain uncha
 });
 
 test("context compaction uses the transient activity lane instead of a persistent turn result", () => {
-  assert.match(sessions, /turn\.contextCompactions\?\.length/);
+  assert.match(sessions, /return session\?\.turns \|\| \[\]/);
   assert.doesNotMatch(result, /contextCompactions/);
   assert.doesNotMatch(result, /ai-session-context-compaction/);
   assert.match(result, /<AiSessionToolActivity/);
@@ -129,7 +129,7 @@ test("detail surfaces omit the legacy running response placeholder", () => {
   assert.doesNotMatch(result, /v-show="displayContent"/);
   assert.match(result, /const displayContent = computed\(\(\) => streamingContent\.value \|\| props\.responseContent\)/);
   assert.match(result, /props\.isLatest[\s\S]*?streamingMessages\.activeMessage\(props\.instanceId, props\.session\.id\)/);
-  assert.match(conversation, /:response-content="compactResponseContent"/);
+  assert.match(conversation, /:response-content="detailState === 'ready' \? compactResponseContent : ''"/);
   assert.match(conversation, /compactResponseContent = computed\(\(\) => displayAiSessionResponse\(props\.session, props\.promptIndex, t\)\)/);
   assert.match(sessions, /includeProgress \? aiSessionProgressText\(session, t\) : ""/);
 });
@@ -180,7 +180,7 @@ test("detail user prompts collapse to three lines with a local toggle", () => {
   assert.match(panelCss, /max-height: calc\(1\.55em \* 3\)/);
   assert.match(panelCss, /\.session-ai-detail-prompt-content \{[\s\S]*?font-size: 14px;[\s\S]*?line-height: 1\.55;/);
   assert.match(panelCss, /session-ai-detail-prompt-toggle/);
-  assert.match(panel, /v-else-if="effectiveTimelineViewMode === 'compact' && detailScrolled"[\s\S]*class="session-ai-timeline-sticky-prompt"/);
+  assert.match(panel, /v-else-if="effectiveTimelineViewMode === 'compact' && detailScrolled && !detailConversationTransitioning"[\s\S]*class="session-ai-timeline-sticky-prompt"/);
   assert.doesNotMatch(panelCss, /session-ai-detail\.is-scrolled header/);
   assert.doesNotMatch(panel, /session-ai-detail-head-placeholder|detailHeaderPlaceholderHeight/);
 });

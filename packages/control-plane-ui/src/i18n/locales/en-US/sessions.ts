@@ -35,7 +35,7 @@ export const sessions = {
   detail: {
     selected: "Selected AI session", sessionDetails: "Session details", workspace: "Workspace", session: "Session", appBinding: "App binding", forkedFrom: "Forked from", unknown: "Unknown",
     notBound: "Not bound", collapse: "Collapse details", expand: "Expand", collapsePrompt: "Collapse",
-    noSelected: "No AI session selected",
+    noSelected: "No AI session selected", loading: "Loading session details…", loadFailed: "Failed to load session details.", retry: "Retry",
   },
   markdown: {
     copied: "Copied",

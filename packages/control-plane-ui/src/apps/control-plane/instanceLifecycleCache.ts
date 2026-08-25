@@ -1,7 +1,8 @@
 import type { QueryClient } from "@tanstack/vue-query";
-import type { InstanceLifecycleSnapshot } from "@task-handoff/protocol/control-plane";
+import type { InstanceLifecycleSnapshot, NodeStateProjectionEvent } from "@task-handoff/protocol/control-plane";
 import type { ControlPlaneNodeFleetState } from "@task-handoff/protocol/control-plane-directory";
 import type { InstanceBoardItem, InstanceBoardPayload } from "../../api/types";
+import type { Node } from "../../api/types";
 import type { ControlPlaneInstanceResourceEntry } from "@task-handoff/control-plane-client";
 import { controlPlaneQueryKeys } from "../../api/queryKeys.ts";
 import { mergeNewerLifecycleProjection } from "../../api/instanceBoardMerge.ts";
@@ -80,5 +81,23 @@ export function applyNodeFleetState(queryClient: QueryClient, state: ControlPlan
       },
     };
   });
+  return applied;
+}
+
+export function applyNodeStateProjection(queryClient: QueryClient, state: NodeStateProjectionEvent) {
+  let applied = false;
+  queryClient.setQueryData<Node[]>(controlPlaneQueryKeys.nodes, (current) => current?.map((node) => {
+    if (node.id !== state.nodeId) return node;
+    applied = true;
+    return {
+      ...node,
+      status: state.status,
+      health: state.health,
+      lastSeenAt: state.lastSeenAt ?? undefined,
+      connectionPhase: state.connectionPhase ?? undefined,
+      connectionDiagnostics: state.connectionDiagnostics ?? undefined,
+      proxyState: state.proxyState ?? undefined,
+    };
+  }));
   return applied;
 }

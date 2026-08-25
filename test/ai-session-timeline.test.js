@@ -631,3 +631,37 @@ test("control-plane tunnel forwards a validated single Timeline item event", asy
   assert.deepEqual(published[0].payload, itemEvent);
   assert.deepEqual(published[0].options.scope, { nodeId: "node_1", instanceId: "instance_1" });
 });
+
+test("control-plane tunnel restores compact message delta identity from its validated scope", async () => {
+  const accepted = [];
+  const published = [];
+  const router = new NodeTunnelEventRouter({
+    events: { publish: (type, payload, options) => published.push({ type, payload, options }) },
+    onSessionEvent: (event) => { accepted.push(event); return true; },
+    validateInstanceScope: async (nodeId, instanceId) => nodeId === "node_1" && instanceId === "instance_1",
+  });
+  router.handle("node_1", {
+    type: "node-agent.event.forwarded",
+    event: {
+      v: "2026-08-25",
+      id: "delta-event-1",
+      type: AiSessionEventType.MessageDelta,
+      createdAt: "2026-08-25T00:00:00.000Z",
+      scope: { instanceId: "instance_1" },
+      payload: {
+        sessionId: "session_1",
+        turnId: "turn_1",
+        itemId: "item_1",
+        delta: "hello",
+        generatedAt: "2026-08-25T00:00:00.000Z",
+      },
+    },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(accepted.length, 1);
+  assert.equal(accepted[0].payload.instanceId, "instance_1");
+  assert.equal(accepted[0].payload.providerSessionId, undefined);
+  assert.deepEqual(accepted[0].scope, { nodeId: "node_1", instanceId: "instance_1" });
+  assert.equal(published[0].payload.instanceId, "instance_1");
+});

@@ -414,7 +414,7 @@ import { useQueries, useQueryClient } from "@tanstack/vue-query";
 import { useEventListener } from "@vueuse/core";
 import { Bot, Boxes, Check, ChevronDown, Container, Download, House, Laptop, LayoutGrid, LoaderCircle, LogOut, Maximize2, Minus, RefreshCw, Settings, UserRound, X } from "@lucide/vue";
 import "@xterm/xterm/css/xterm.css";
-import { controlPlaneQueryKeys, getInstanceAppManagement, getInstanceResourceMetrics, installInstanceApp, instanceBoardQueryOptions, logoutControlPlane, nodeLocalFoldersQueryOptions, renameAppSession, resolveAiSessionApproval, saveEnvironmentTemplate, uninstallInstanceApp, updateControlledInstance, useAuthSessionQuery, useControlPlaneAiSessionsQuery, useControlPlaneAppSessionsQuery, useControlPlaneStatusQuery, useCurrentAccessQuery, useInstanceBoardQuery, useInstanceDirectoryQuery, useModelsQuery, useNodesQuery, useServerUpdateCheckQuery } from "../../api/queries";
+import { controlPlaneQueryKeys, fetchInstanceBoardPayload, getInstanceAppManagement, getInstanceResourceMetrics, installInstanceApp, instanceBoardQueryOptions, logoutControlPlane, nodeLocalFoldersQueryOptions, renameAppSession, resolveAiSessionApproval, saveEnvironmentTemplate, uninstallInstanceApp, updateControlledInstance, useAuthSessionQuery, useControlPlaneAiSessionsQuery, useControlPlaneAppSessionsQuery, useControlPlaneStatusQuery, useCurrentAccessQuery, useInstanceBoardQuery, useInstanceDirectoryQuery, useModelsQuery, useNodesQuery, useServerUpdateCheckQuery } from "../../api/queries";
 import { authorizationCacheEpoch as currentAccessEpoch, authorizationCacheEpochChanged as authorizationEpochChanged, preserveAcrossAuthorizationChange, signedOutAuthSession } from "../../api/authorizationCache";
 import type { ControlPlaneInstanceResourceEntry } from "@task-handoff/control-plane-client";
 import type { ConfigSyncDirection } from "@task-handoff/protocol/config-sync";
@@ -442,6 +442,7 @@ import { useInstanceActions } from "./useInstanceActions";
 import { useInstanceBoardSessions, type BoardSessionTab } from "./board/useInstanceBoardSessions";
 import { appDisplayName, buildAppSessionTabs, type SessionTab } from "./useInstanceSessions";
 import { isInstanceConnecting } from "./useInstanceStatus";
+import { applyInstanceBoardTargetSnapshot } from "./instanceBoardCache.ts";
 import { useResizableInstancesSidebar } from "./instance-list/useResizableInstancesSidebar";
 import { useWorkbenchInstances } from "./instance-list/useWorkbenchInstances";
 import { useAiSessionStore } from "./useAiSessionStore";
@@ -965,6 +966,7 @@ useEventListener(window, "storage", (event) => {
 const { disposeBoardTerminalPreviews, disposeHiddenBoardTerminalPreviews, mountBoardTerminalPreviews, setBoardTerminalHost } = useBoardTerminalPreviews(boardMode, boardInteractive);
 
 let connectingRefreshTimer: ReturnType<typeof setInterval> | undefined;
+const connectingRefreshLoads = new Set<string>();
 
 watch(
   [topbarTitle, standaloneInstanceId],
@@ -1032,12 +1034,12 @@ watch(
 const resourceMetricsLoads = new Map<string, Promise<void>>();
 
 watch(
-  () => [
-    activeInstanceId.value,
-    activeInstance.value?.runtime?.type,
-    activeInstance.value?.runtime?.containerId,
-    activeInstance.value?.runtime?.containerName,
-  ] as const,
+  [
+    () => activeInstanceId.value,
+    () => activeInstance.value?.runtime?.type,
+    () => activeInstance.value?.runtime?.containerId,
+    () => activeInstance.value?.runtime?.containerName,
+  ],
   () => void loadActiveInstanceResourceMetrics(),
   { immediate: true },
 );
@@ -1082,11 +1084,18 @@ watch(
   (ids) => {
     if (ids && !connectingRefreshTimer) {
       connectingRefreshTimer = setInterval(() => {
-        if (!refreshing.value) {
-          void queryClient.refetchQueries({
-            queryKey: controlPlaneQueryKeys.scopedInstanceBoard(sessionQueryInstanceId.value),
-            exact: true,
-          });
+        for (const instanceId of connectingInstanceIds.value.split("\n").filter(Boolean)) {
+          if (connectingRefreshLoads.has(instanceId)) continue;
+          connectingRefreshLoads.add(instanceId);
+          void fetchInstanceBoardPayload(undefined, instanceId)
+            .then((payload) => applyInstanceBoardTargetSnapshot(
+              queryClient,
+              sessionQueryInstanceId.value,
+              instanceId,
+              payload.data.find((instance) => instance.id === instanceId),
+            ))
+            .catch(() => undefined)
+            .finally(() => connectingRefreshLoads.delete(instanceId));
         }
       }, 2000);
       return;
@@ -1115,6 +1124,7 @@ onBeforeUnmount(() => {
     clearInterval(connectingRefreshTimer);
     connectingRefreshTimer = undefined;
   }
+  connectingRefreshLoads.clear();
   disposeBoardTerminalPreviews();
   stopInstanceResize();
 });

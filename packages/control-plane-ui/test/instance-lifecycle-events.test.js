@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { QueryClient } from "@tanstack/vue-query";
 import { mergeInstanceBoardPayload, mergeInstanceBoardQueryData } from "../src/api/instanceBoardMerge.ts";
-import { applyInstanceLifecycle, applyNodeFleetState } from "../src/apps/control-plane/instanceLifecycleCache.ts";
+import { applyInstanceLifecycle, applyNodeFleetState, applyNodeStateProjection } from "../src/apps/control-plane/instanceLifecycleCache.ts";
 import { controlPlaneQueryKeys } from "../src/api/queryKeys.ts";
+import { applyInstanceBoardTargetSnapshot } from "../src/apps/control-plane/instanceBoardCache.ts";
 
 function boardInstance(id, revision, status = "created") {
   return {
@@ -118,6 +119,56 @@ test("node fleet events update diagnostics without replacing board rows", () => 
     revision: 1,
   }), false);
   assert.equal(queryClient.getQueryData(controlPlaneQueryKeys.instanceBoard), updated);
+});
+
+test("node state events patch only the target node without refetching the directory", () => {
+  const queryClient = new QueryClient();
+  const target = {
+    id: "node_target",
+    name: "Target",
+    status: "offline",
+    health: "failed",
+    connectionPhase: "reconnecting",
+    capabilities: {},
+    labels: {},
+  };
+  const untouched = { ...target, id: "node_other", name: "Other" };
+  queryClient.setQueryData(controlPlaneQueryKeys.nodes, [target, untouched]);
+
+  assert.equal(applyNodeStateProjection(queryClient, {
+    nodeId: "node_target",
+    status: "online",
+    health: "ok",
+    lastSeenAt: "2026-08-25T06:00:00.000Z",
+    connectionPhase: "healthy",
+    connectionDiagnostics: { consecutiveReconnects: 0, pingRttMs: 12 },
+    proxyState: null,
+  }), true);
+
+  const updated = queryClient.getQueryData(controlPlaneQueryKeys.nodes);
+  assert.equal(updated[0].status, "online");
+  assert.equal(updated[0].connectionPhase, "healthy");
+  assert.equal(updated[0].connectionDiagnostics.pingRttMs, 12);
+  assert.equal(updated[0].proxyState, undefined);
+  assert.equal(updated[1], untouched);
+});
+
+test("connecting recovery replaces only the requested board item", () => {
+  const queryClient = new QueryClient();
+  const target = boardInstance("inst_target", 1, "registering");
+  const untouched = boardInstance("inst_other", 4, "running");
+  queryClient.setQueryData(controlPlaneQueryKeys.instanceBoard, { data: [target, untouched], meta: { nodeErrors: [] } });
+
+  assert.equal(applyInstanceBoardTargetSnapshot(
+    queryClient,
+    "",
+    target.id,
+    boardInstance(target.id, 2, "running"),
+  ), true);
+  const updated = queryClient.getQueryData(controlPlaneQueryKeys.instanceBoard);
+  assert.equal(updated.data[0].status, "running");
+  assert.equal(updated.data[1], untouched);
+  assert.deepEqual(updated.meta, { nodeErrors: [] });
 });
 
 test("instance lifecycle snapshots patch the lightweight instance directory", () => {

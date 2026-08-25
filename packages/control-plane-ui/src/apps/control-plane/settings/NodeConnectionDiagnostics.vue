@@ -10,6 +10,8 @@
         <span><b>{{ t("settings.nodeDetail.eventBuffered") }}</b><em>{{ formatBytes(eventTransport.bufferedBytes) }}</em></span>
         <span><b>{{ t("settings.nodeDetail.eventPeakBuffered") }}</b><em>{{ formatBytes(eventTransport.peakBufferedBytes) }}</em></span>
         <span><b>{{ t("settings.nodeDetail.eventCoalesced") }}</b><em>{{ eventTransport.coalescedEvents }}</em></span>
+        <span v-if="eventTransport.oversizedEvents"><b>{{ t("settings.nodeDetail.eventOversized") }}</b><em>{{ eventTransport.oversizedEvents }}</em></span>
+        <span v-if="eventTransport.peakEventBytes"><b>{{ t("settings.nodeDetail.eventPeakPayload") }}</b><em>{{ formatBytes(eventTransport.peakEventBytes) }}</em></span>
       </div>
     </div>
     <div class="node-connection-diagnostic-grid">
@@ -56,9 +58,11 @@ const retryCountdown = (value?: string) => {
     : t("settings.nodeDetail.connectionRetryNow");
 };
 const eventTransportStatus = computed(() => t(`settings.nodeDetail.eventTransportStatus.${props.eventTransport?.status || "healthy"}`));
-const eventTransportMessage = computed(() => t(props.eventTransport?.status === "congested"
-  ? "settings.nodeDetail.eventTransportCongested"
-  : "settings.nodeDetail.eventTransportRecovering"));
+const eventTransportMessage = computed(() => t(props.eventTransport?.oversizedEvents
+  ? "settings.nodeDetail.eventTransportPayloadExceeded"
+  : props.eventTransport?.status === "congested"
+    ? "settings.nodeDetail.eventTransportCongested"
+    : "settings.nodeDetail.eventTransportRecovering"));
 const formatBytes = (value: number) => {
   if (value < 1024) return `${value} B`;
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KiB`;

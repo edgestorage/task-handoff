@@ -48,7 +48,9 @@ test("composer converts only long pure text pastes through the existing file att
 test("conversation detail renders retained image and file metadata without a UI attachment overlay", () => {
   const attachments = fs.readFileSync(new URL("../src/components/ai-session/AiSessionMessageAttachments.vue", import.meta.url), "utf8");
   const timeline = fs.readFileSync(new URL("../src/components/ai-session/AiSessionTimelineView.vue", import.meta.url), "utf8");
+  const board = fs.readFileSync(new URL("../src/apps/control-plane/ai-board/AiSessionBoardView.vue", import.meta.url), "utf8");
   const panel = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.vue", import.meta.url), "utf8");
+  const projection = fs.readFileSync(new URL("../src/apps/control-plane/useAiSessionConversationProjection.ts", import.meta.url), "utf8");
   assert.match(timeline, /turn\.userMessages/);
   assert.match(timeline, /<AiSessionMessageAttachments/);
   assert.match(attachments, /contentState === 'available'/);
@@ -58,12 +60,13 @@ test("conversation detail renders retained image and file metadata without a UI 
   assert.match(attachments, /navigator\.clipboard\.write/);
   assert.match(attachments, /attachment\.contentState === 'expired'/);
   assert.match(attachments, /'Expired' : 'Missing'/);
-  assert.match(panel, /getAiSessionDetail/);
-  assert.match(panel, /watch\(\(\) => `\$\{props\.instance\.id\}\\u0000\$\{selectedSession\.value\?\.id \|\| ""\}`/);
-  assert.doesNotMatch(panel, /selectedSession\.value\?\.updatedAt[\s\S]{0,200}getAiSessionDetail/);
+  assert.match(projection, /getAiSessionDetail/);
+  assert.match(projection, /getAiSessionTurnBody/);
+  assert.doesNotMatch(projection, /updatedAt[\s\S]{0,200}getAiSessionDetail/);
   assert.match(panel, /selectedConversationSession \|\| selectedSession/);
-  assert.match(panel, /return \{ \.\.\.session, turns: mergeAiSessionSummaryTurnsWithDetail\(session\.turns, detail\.turns\) \};/);
+  assert.match(panel, /useAiSessionConversationProjection/);
   assert.doesNotMatch(panel, /session\.turns\s*=.*attachments/);
+  assert.match(board, /useAiSessionConversationProjection/);
 });
 
 test("desktop runtime paths are limited to the control-plane local node", () => {

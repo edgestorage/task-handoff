@@ -74,6 +74,15 @@ test("access management sub-navigation stays compact inside its grid layout", ()
   assert.match(users, /\.access-tabs-list\{[^}]*justify-self:start[^}]*width:fit-content/);
 });
 
+test("user access follows the shared settings page and directory layout", () => {
+  assert.match(users, /class="user-access-scroll"/);
+  assert.match(users, /class="user-access-settings"/);
+  assert.match(users, /class="user-access-head"/);
+  assert.match(users, /\.user-access-settings\{[^}]*var\(--settings-content-max-width,1080px\)/);
+  assert.match(users, /\.access-tab-content\{[^}]*background:var\(--surface-raised\)[^}]*border:1px solid var\(--line\)/);
+  assert.doesNotMatch(users, /settings-panel-surface|modal-section/);
+});
+
 test("user profile and effective permission details use focused dialogs", () => {
   assert.match(users, /profileOpen/);
   assert.match(users, /profileUsername/);

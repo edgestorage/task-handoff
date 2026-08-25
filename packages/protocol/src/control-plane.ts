@@ -1464,6 +1464,17 @@ export const NodeSchema = z
     }
   });
 
+/** Minimal public projection for converging one node's ephemeral connection state. */
+export const NodeStateProjectionEventSchema = z.object({
+  nodeId: IdSchema,
+  status: z.enum(["unknown", "online", "offline", "degraded"]),
+  health: z.enum(["unknown", "ok", "degraded", "failed"]),
+  lastSeenAt: TimestampSchema.nullable(),
+  connectionPhase: z.enum(["connecting", "handshaking", "healthy", "reconnecting", "suspect", "offline"]).nullable(),
+  connectionDiagnostics: NodeConnectionDiagnosticsSchema.nullable(),
+  proxyState: NodeControlPlaneProxyStateSchema.nullable(),
+}).strict();
+
 export function sanitizeStoredNode(input: unknown, onWarning?: (warning: { field: string }) => void) {
   if (!input || typeof input !== "object" || Array.isArray(input)) return input;
   const source = input as Record<string, unknown>;
@@ -1612,9 +1623,13 @@ export const NodeAgentEventTransportHealthSchema = z.object({
   bufferedBytes: z.number().int().nonnegative(),
   peakBufferedBytes: z.number().int().nonnegative(),
   coalescedEvents: z.number().int().nonnegative(),
+  // Compatibility for v0.0.23: older node agents do not report payload limits.
+  oversizedEvents: z.number().int().nonnegative().optional(),
+  peakEventBytes: z.number().int().nonnegative().optional(),
   congestedSince: TimestampSchema.optional(),
   lastCongestedAt: TimestampSchema.optional(),
 }).strip();
+export type NodeAgentEventTransportHealth = z.infer<typeof NodeAgentEventTransportHealthSchema>;
 
 export const NodeAgentHealthSchema = z
   .object({
@@ -2586,6 +2601,7 @@ export type ImagePullTerminalFinished = z.infer<typeof ImagePullTerminalFinished
 export type ImagePullProgress = z.infer<typeof ImagePullProgressSchema>;
 export type NodeImageAvailability = z.infer<typeof NodeImageAvailabilitySchema>;
 export type Node = z.infer<typeof NodeSchema>;
+export type NodeStateProjectionEvent = z.infer<typeof NodeStateProjectionEventSchema>;
 export type NodeJoinedEvent = z.infer<typeof NodeJoinedEventSchema>;
 export type NodeJoinInviteStatus = z.infer<typeof NodeJoinInviteStatusSchema>;
 export type NodeRuntime = z.infer<typeof NodeRuntimeSchema>;

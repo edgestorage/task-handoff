@@ -30,7 +30,11 @@ const { AiSessionHistoryLifecycle } = require("../packages/ai-session-runtime/sr
 const { AiSessionPersistenceSettingsStore } = require("../packages/ai-session-runtime/src/ai-session-persistence-settings.ts");
 const { AiSessionResumeCoordinator } = require("../packages/ai-session-runtime/src/ai-session-resume.ts");
 const { createAiSessionRegistry } = require("../packages/ai-session-runtime/src/ai-session-registry.ts");
-const { sanitizePersistedAiSession } = require("../packages/ai-session-runtime/src/ai-session/persistence.ts");
+const {
+  decodePersistedAiSession,
+  encodePersistedAiSession,
+  sanitizePersistedAiSession,
+} = require("../packages/ai-session-runtime/src/ai-session/persistence.ts");
 
 function historyItem(index, overrides = {}) {
   const timestamp = new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString();
@@ -233,6 +237,9 @@ test("AI session persistence migrates creation source and ignores cross-version 
 
     const direct = sanitizePersistedAiSession({ ...legacy, creationSource: "ai-session", appSessionId: undefined });
     assert.equal(direct.creationSource, "ai-session");
+    assert.deepEqual(direct.subAgents, []);
+    assert.deepEqual(direct.queue, { revision: 0, pendingCount: 0, items: [] });
+    assert.equal(sanitizePersistedAiSession({ ...legacy, id: undefined }), undefined);
   } finally {
     console.warn = originalWarn;
   }
@@ -242,6 +249,82 @@ test("AI session persistence migrates creation source and ignores cross-version 
     items: [{ ...historyItem(14), creationSource: undefined }],
   });
   assert.equal(migratedHistory.items[0].creationSource, "app-session");
+});
+
+test("AI session persistence codec round-trips every current business field", () => {
+  const session = {
+    id: "ai-round-trip",
+    agent: "codex",
+    creationSource: "ai-session",
+    appSessionId: "app-round-trip",
+    appId: "codex-app-server",
+    providerSessionId: "thread-round-trip",
+    lineage: { kind: "fork", parentProviderSessionId: "thread-parent", throughTurnId: "turn-parent" },
+    providerMeta: { model: "gpt-test", nested: { enabled: true } },
+    appBindingKeys: ["binding-1"],
+    actions: { send: true, interrupt: true, approval: false, fork: true, openApp: true, close: true },
+    activeTurnId: "turn-1",
+    title: "Round trip",
+    cwd: "/workspace/project",
+    cwdFolderId: "folder-project",
+    userPrompt: "Run the full test",
+    turns: [{
+      id: "turn-1",
+      providerTurnId: "provider-turn-1",
+      source: "realtime",
+      userPrompt: "Run the full test",
+      userMessages: [{ id: "message-1", text: "Run the full test", attachments: [] }],
+      status: "running",
+      phase: "tool",
+      summary: "Running",
+      lastMessage: "Working",
+      lastMessageItemId: "item-1",
+      contextCompactions: [{ id: "compact-1", status: "completed", startedAt: "2026-08-01T00:00:00.000Z", completedAt: "2026-08-01T00:00:01.000Z" }],
+      revision: 3,
+      sourcePriority: 90,
+      snapshotVersion: 4,
+      observedAt: "2026-08-01T00:00:02.000Z",
+      startedAt: "2026-08-01T00:00:00.000Z",
+      updatedAt: "2026-08-01T00:00:02.000Z",
+    }],
+    status: "running",
+    phase: "tool",
+    summary: "Running",
+    lastMessage: "Working",
+    lastMessageItemId: "item-1",
+    currentTool: { id: "tool-1", kind: "commandExecution", name: "Command", inputPreview: "pnpm test", startedAt: "2026-08-01T00:00:01.000Z" },
+    toolCallsSinceLastMessage: 2,
+    subAgents: [{ threadId: "child-1", path: "agent-a", status: "running", activity: "interacted", message: "Checking", updatedAt: "2026-08-01T00:00:02.000Z" }],
+    transcriptPath: "/workspace/transcript.jsonl",
+    transcriptSize: 1234,
+    startedAt: "2026-08-01T00:00:00.000Z",
+    updatedAt: "2026-08-01T00:00:02.000Z",
+    completedAt: "2026-08-01T00:00:03.000Z",
+    error: "Retained diagnostic",
+    counters: { toolCalls: 2, edits: 1, approvals: 1 },
+    queue: {
+      revision: 2,
+      pendingCount: 1,
+      items: [{
+        id: "queue-1",
+        messageId: "message-queued",
+        message: "Continue",
+        attachments: [{ id: "attachment-1", kind: "file", name: "notes.txt", mime: "text/plain", size: 12, sourceType: "runtime-path" }],
+        references: [{ kind: "skill", name: "Notes", path: "/workspace/.agents/skills/notes/SKILL.md" }],
+        permissionMode: "ask",
+        status: "queued",
+        createdAt: "2026-08-01T00:00:01.000Z",
+        updatedAt: "2026-08-01T00:00:02.000Z",
+        error: "Retained queue diagnostic",
+      }],
+    },
+  };
+
+  const decoded = decodePersistedAiSession(encodePersistedAiSession(session));
+  assert.deepEqual(decoded, decodePersistedAiSession(session));
+  assert.equal("fingerprint" in encodePersistedAiSession(session), false);
+  assert.equal("observedAt" in encodePersistedAiSession(session), false);
+  assert.throws(() => encodePersistedAiSession({ ...session, providerFingerprint: "derived" }), /unrecognized/i);
 });
 
 test("AI session history preserves minimal fork lineage and ignores lineage extensions", () => {

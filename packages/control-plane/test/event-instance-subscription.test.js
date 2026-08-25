@@ -5,17 +5,44 @@ import { ControlPlaneEventBus } from "../src/control-plane/events/bus.ts";
 function socket() {
   const listeners = {};
   const sent = [];
+  let pingCount = 0;
   return {
     listeners,
     sent,
+    pingCount: () => pingCount,
     value: {
       readyState: 1,
       OPEN: 1,
       send: (value) => sent.push(JSON.parse(value)),
+      ping: () => { pingCount += 1; },
       on: (event, listener) => { listeners[event] = listener; },
     },
   };
 }
+
+test("event bus keeps browser sockets alive with server transport pings", (context) => {
+  context.mock.timers.enable({ apis: ["setInterval"] });
+  const events = new ControlPlaneEventBus();
+  const client = socket();
+  events.connect(client.value);
+  context.mock.timers.tick(20_000);
+  assert.equal(client.pingCount(), 1);
+  client.listeners.close();
+  context.mock.timers.tick(20_000);
+  assert.equal(client.pingCount(), 1);
+});
+
+test("event bus answers browser keepalives on the existing socket", () => {
+  const events = new ControlPlaneEventBus();
+  const client = socket();
+  events.connect(client.value);
+  client.listeners.message(JSON.stringify({ v: 1, type: "ping", sentAt: "2026-08-25T04:00:00.000Z" }));
+  assert.equal(client.sent.length, 1);
+  assert.equal(client.sent[0].v, 1);
+  assert.equal(client.sent[0].type, "pong");
+  assert.equal(client.sent[0].sentAt, "2026-08-25T04:00:00.000Z");
+  assert.match(client.sent[0].receivedAt, /^2026-/);
+});
 
 test("event bus preserves v0.0.21 all-instance behavior when no scope is requested", () => {
   const events = new ControlPlaneEventBus();
@@ -290,6 +317,47 @@ test("control-plane forwarding preserves transient source identity and replay me
   assert.equal(client.sent[0].id, "source-event-a");
   assert.equal(client.sent[0].createdAt, "2026-08-21T00:00:00.000Z");
   assert.equal(client.sent[0].replay, true);
+});
+
+test("control-plane public v2 events omit internal routing and provider identities", () => {
+  const events = new ControlPlaneEventBus();
+  const legacy = socket();
+  const compact = socket();
+  events.connect(legacy.value);
+  events.connect(compact.value);
+  const demand = {
+    messageDeltas: { allInstances: true, instanceIds: [] },
+    timelineAllSessions: false,
+    timelineSessions: [],
+  };
+  legacy.listeners.message(JSON.stringify({ type: "subscribe", topics: ["ai.sessions"], aiSessionTransient: demand }));
+  compact.listeners.message(JSON.stringify({ type: "subscribe", eventEnvelopeVersion: "2026-08-25", topics: ["ai.sessions"], aiSessionTransient: demand }));
+  const payload = {
+    instanceId: "instance-a",
+    nodeId: "node-a",
+    sessionId: "session-a",
+    providerSessionId: "provider-a",
+    turnId: "turn-a",
+    itemId: "item-a",
+    delta: "hello",
+    generatedAt: "2026-08-25T00:00:00.000Z",
+  };
+  events.publish("ai-session.message-delta", payload, { scope: { nodeId: "node-a", instanceId: "instance-a" } });
+
+  assert.equal(legacy.sent[0].v, 1);
+  assert.deepEqual(legacy.sent[0].scope, { nodeId: "node-a", instanceId: "instance-a" });
+  assert.deepEqual(legacy.sent[0].payload, payload);
+  assert.equal(compact.sent[0].v, "2026-08-25");
+  assert.equal(compact.sent[0].seq, undefined);
+  assert.equal(compact.sent[0].topic, undefined);
+  assert.deepEqual(compact.sent[0].scope, { instanceId: "instance-a" });
+  assert.deepEqual(compact.sent[0].payload, {
+    sessionId: "session-a",
+    turnId: "turn-a",
+    itemId: "item-a",
+    delta: "hello",
+    generatedAt: "2026-08-25T00:00:00.000Z",
+  });
 });
 
 test("user event authorization cannot be widened by a subscribe frame", () => {

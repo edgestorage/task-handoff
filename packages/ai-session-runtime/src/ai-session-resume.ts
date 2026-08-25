@@ -91,8 +91,8 @@ export class AiSessionResumeCoordinator {
       });
     } catch (error: unknown) {
       if (!previous) this.options.registry.discard(item.id);
-      else this.options.registry.put(previous);
-      if (previousProvider) this.options.registry.put(previousProvider);
+      else this.options.registry.restoreAuthority(previous);
+      if (previousProvider) this.options.registry.restoreAuthority(previousProvider);
       throw resumeError(
         "AI_SESSION_RESUME_UNAVAILABLE",
         error instanceof Error ? error.message : "Provider session could not be resumed.",

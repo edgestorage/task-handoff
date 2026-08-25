@@ -196,7 +196,7 @@ const AI_SESSION_BUSINESS_KEYS = [
 const _allAiSessionBusinessKeysCovered: Exclude<AiSessionBusinessKey, typeof AI_SESSION_BUSINESS_KEYS[number]> extends never ? true : never = true;
 void _allAiSessionBusinessKeysCovered;
 
-function sameAiSessionBusinessState(current: AiSessionStatus, next: AiSessionStatus) {
+export function sameAiSessionBusinessState(current: AiSessionStatus, next: AiSessionStatus) {
   for (const key of AI_SESSION_BUSINESS_KEYS) {
     const currentValue = current[key];
     const nextValue = next[key];

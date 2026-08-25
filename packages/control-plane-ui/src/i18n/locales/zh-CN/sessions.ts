@@ -38,7 +38,7 @@ export const sessions = {
   detail: {
     selected: "已选 AI 会话", sessionDetails: "会话详情", workspace: "工作区", session: "会话", appBinding: "应用绑定", forkedFrom: "分支来源", unknown: "未知",
     notBound: "未绑定", collapse: "收起详情", expand: "展开", collapsePrompt: "收起",
-    noSelected: "未选择 AI 会话",
+    noSelected: "未选择 AI 会话", loading: "正在加载会话详情…", loadFailed: "无法加载会话详情。", retry: "重试",
   },
   markdown: {
     copied: "已复制",

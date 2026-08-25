@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import Fastify from "fastify";
 import websocket from "@fastify/websocket";
+import { TASK_HANDOFF_WEBSOCKET_SERVER_OPTIONS } from "@task-handoff/protocol/websocket-bridge";
 import WebSocket from "ws";
 import type { FastifyServerOptions } from "fastify";
 import { z } from "zod";
@@ -625,7 +626,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   activeLogMaintenanceTimer.unref();
   const instanceProxyMetrics = createInstanceProxyMetrics();
   app.decorate("nodeAgentState", state);
-  await app.register(websocket);
+  await app.register(websocket, { options: TASK_HANDOFF_WEBSOCKET_SERVER_OPTIONS });
   const eventForwarder = new NodeAgentInstanceEventForwarder(state, token, { logger: app.log, safetyIntervalMs: Number(process.env.TASK_HANDOFF_EVENT_CONNECTION_SAFETY_INTERVAL_MS) || undefined });
   const convergence = new RuntimeConvergenceCoordinator(state.controlledInstances, desiredControlledInstanceVersion, {
     isInstalled: async (instance, desiredVersion) => {
@@ -1118,7 +1119,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       try {
         const message = JSON.parse(String(raw)) as Record<string, unknown>;
         if (message.type === "subscribe" && message.aiSessionTransient !== undefined) {
-          eventForwarder.setOutputSubscription(ws, message.aiSessionTransient);
+          eventForwarder.setOutputSubscription(ws, message.aiSessionTransient, message.eventEnvelopeVersion);
         }
       } catch {
         // Event subscription updates are additive; malformed updates leave the compatibility stream unchanged.

@@ -82,110 +82,7 @@
 
       <ModelSettingsSection v-else-if="settingsSection === 'models'" />
 
-      <ScrollArea v-else-if="settingsSection === 'images'" class="settings-section-scroll" :horizontal="false">
-        <div class="settings-section-scroll-content">
-      <div class="image-management-grid">
-        <section class="modal-section settings-panel-surface image-market-section">
-          <div class="image-market-head">
-            <div>
-              <strong>{{ t("settings.imageRegistry.marketTitle") }}</strong>
-              <span>{{ t("settings.imageRegistry.marketDescription") }}</span>
-            </div>
-            <Badge variant="secondary">{{ t("settings.imageRegistry.marketCount", { count: marketCatalog.data.value?.catalog.items.length || 0 }) }}</Badge>
-          </div>
-          <div class="market-image-grid">
-            <article v-for="image in marketCatalog.data.value?.catalog.items || []" :key="image.id" class="market-image-card">
-              <ImageArtwork compact class="market-image-artwork" :cover="image.cover" :icon-size="18" :name="image.name" />
-              <div class="market-image-content">
-                <div class="market-image-title">
-                  <strong>{{ image.name }}</strong>
-                  <Badge variant="secondary">{{ t("settings.imageRegistry.official") }}</Badge>
-                </div>
-                <p>{{ resolveImageDescription(image, locale) }}</p>
-                <div class="market-capability-list">
-                  <span v-for="capability in image.capabilities.slice(0, 3)" :key="capability">{{ capabilityLabel(capability) }}</span>
-                  <span v-if="image.capabilities.length > 3">+{{ image.capabilities.length - 3 }}</span>
-                </div>
-                <div class="market-image-footer">
-                  <span :data-status="catalogAvailabilityStatus(image.id)"><i />{{ catalogAvailabilityLabel(image.id) }}</span>
-                  <code :title="`${image.repository}:${image.defaultTag}`">{{ image.repository }}:{{ image.defaultTag }}</code>
-                </div>
-              </div>
-            </article>
-          </div>
-          <p v-if="marketCatalog.data.value?.status.error" class="settings-empty">{{ marketCatalog.data.value.status.error }}</p>
-        </section>
-
-        <section class="modal-section settings-panel-surface image-custom-section">
-          <div class="image-registry-head">
-            <div>
-              <strong>{{ t("settings.imageRegistry.customTitle") }}</strong>
-              <span>{{ t("settings.imageRegistry.customDescription", { count: images.data.value?.length || 0 }) }}</span>
-            </div>
-            <div class="image-registry-actions">
-              <ControlPlaneSelect v-model="imageCatalogNodeId" :placeholder="t('settings.imageRegistry.selectNode')">
-                <ControlPlaneSelectItem v-for="node in nodes.data.value || []" :key="node.id" :value="node.id">{{ node.name }}</ControlPlaneSelectItem>
-              </ControlPlaneSelect>
-              <Button size="sm" @click="imageCreateOpen = !imageCreateOpen">
-                <Plus :size="14" />
-                <span>{{ t("settings.imageRegistry.add") }}</span>
-              </Button>
-            </div>
-          </div>
-
-          <p v-if="imageCreateSuccess" class="settings-success">{{ imageCreateSuccess }}</p>
-
-          <ScrollArea class="registered-image-list">
-            <div class="settings-scroll-content image-registry-list">
-              <div v-for="image in images.data.value || []" :key="image.id" class="registered-image-row">
-                <ImageArtwork compact class="registered-image-artwork" :cover="image.cover" :icon-size="15" :name="image.name" />
-                <div class="registered-image-copy">
-                  <strong>{{ image.name }}</strong>
-                  <code>{{ image.reference }}</code>
-                </div>
-                <span class="registered-image-availability">{{ catalogAvailabilityLabel(image.id) }}</span>
-                <div class="settings-row-actions">
-                  <Badge variant="secondary">{{ imagePullPolicyLabel(image.pullPolicy) }}</Badge>
-                  <Button variant="outline" size="sm" :disabled="deletingImageId === image.id" @click="removeImageProfile(image)">
-                    <Trash2 :size="14" />
-                    <span>{{ deletingImageId === image.id ? t("settings.imageRegistry.deleting") : t("common.actions.delete") }}</span>
-                  </Button>
-                </div>
-              </div>
-              <p v-if="!(images.data.value || []).length" class="settings-empty">{{ t("settings.imageRegistry.empty") }}</p>
-            </div>
-          </ScrollArea>
-
-          <Dialog v-model:open="imageCreateOpen">
-            <DialogContent class="registry-image-dialog">
-              <DialogHeader>
-                <DialogTitle>{{ t("settings.imageRegistry.addTitle") }}</DialogTitle>
-                <DialogDescription>{{ t("settings.imageRegistry.referenceDescription") }}</DialogDescription>
-              </DialogHeader>
-              <div class="registry-dialog-fields">
-                <label>
-                  <span>{{ t("settings.fields.name") }}</span>
-                  <ControlPlaneInput v-model="settingsImage.name" :placeholder="t('settings.imageRegistry.namePlaceholder')" />
-                </label>
-                <label>
-                  <span>{{ t("settings.imageRegistry.reference") }}</span>
-                  <!-- i18n-audit-allow-next-line code-token: example OCI image reference -->
-                  <ControlPlaneInput v-model="settingsImage.reference" placeholder="docker.io/org/image:v1" />
-                </label>
-              </div>
-              <DialogFooter>
-                <Button variant="outline" @click="closeImageCreate">{{ t("common.actions.cancel") }}</Button>
-                <Button :disabled="!canCreateImage || savingImage" @click="submitRegistryImage">
-                  <Plus :size="14" />
-                  <span>{{ savingImage ? t("settings.imageRegistry.adding") : t("settings.imageRegistry.add") }}</span>
-                </Button>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
-        </section>
-      </div>
-        </div>
-      </ScrollArea>
+      <ImageSettingsSection v-else-if="settingsSection === 'images'" />
 
       <EnvironmentTemplatesSettings v-else-if="settingsSection === 'environment-templates'" :nodes="nodes.data.value || []" />
 
@@ -523,7 +420,7 @@ import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useQueryClient } from "@tanstack/vue-query";
 import { AlertTriangle, ArrowLeft, ChevronDown, Download, Eye, EyeOff, KeyRound, MonitorCog, Plus, RefreshCw, Server, ShieldAlert, Sparkles, Trash2 } from "@lucide/vue";
-import { cancelControlPlaneProxyClaim, claimControlPlaneProxyNode, controlPlaneQueryKeys, downloadControlPlaneDiagnosticLogs, getNodeExternalListener, resumeControlPlaneProxyClaim, updateControlPlaneSettings, updateNodeExternalListener, useAuthSessionQuery, useChatBridgesQuery, useChatGatewayStatusQuery, useControlPlaneSettingsQuery, useCurrentAccessQuery, useImagesQuery, useInstanceBoardPayloadQuery, useMarketCatalogQuery, useModelsQuery, useNodeImageAvailabilityQuery, useNodeRuntimesPayloadQuery, useNodesQuery, usePendingControlPlaneProxyClaimsQuery, useServerUpdateCheckQuery } from "../../../api/queries";
+import { cancelControlPlaneProxyClaim, claimControlPlaneProxyNode, controlPlaneQueryKeys, downloadControlPlaneDiagnosticLogs, getNodeExternalListener, resumeControlPlaneProxyClaim, updateControlPlaneSettings, updateNodeExternalListener, useAuthSessionQuery, useChatBridgesQuery, useChatGatewayStatusQuery, useControlPlaneSettingsQuery, useCurrentAccessQuery, useInstanceBoardPayloadQuery, useModelsQuery, useNodeRuntimesPayloadQuery, useNodesQuery, usePendingControlPlaneProxyClaimsQuery, useServerUpdateCheckQuery } from "../../../api/queries";
 import { invalidateControlPlaneDomains } from "../../../api/queryInvalidation";
 import type { BuildInfo, ControlPlaneSettings, InstanceBoardItem, Node, NodeAgentEventTransportHealth, NodeAgentExternalListener, UpdateChannel } from "../../../api/types";
 import { Badge } from "../../../components/ui/badge";
@@ -544,9 +441,6 @@ import ChatBridgeSettingsSection from "./ChatBridgeSettingsSection.vue";
 import MobileSessionsSettingsSection from "./MobileSessionsSettingsSection.vue";
 import UserAccessSettingsSection from "./UserAccessSettingsSection.vue";
 import { useChatBridgeSettings } from "./useChatBridgeSettings";
-import { useImageSettings } from "./useImageSettings";
-import ImageArtwork from "../shared/ImageArtwork.vue";
-import { resolveImageDescription } from "../shared/imageDescription";
 import { useNodeResourceSettings } from "./useNodeResourceSettings";
 import { useNodeSettings } from "./useNodeSettings";
 import { useDesktopUpdates, type DesktopUpdateChannel } from "./useDesktopUpdates";
@@ -557,6 +451,7 @@ import NodeAgentInstallDialog from "./NodeAgentInstallDialog.vue";
 import NodeStorageFolderPickerDialog from "./NodeStorageFolderPickerDialog.vue";
 import GeneratedTokenDialog from "./GeneratedTokenDialog.vue";
 import EnvironmentTemplatesSettings from "./EnvironmentTemplatesSettings.vue";
+import ImageSettingsSection from "./ImageSettingsSection.vue";
 import CloudConnectivitySettingsSection from "./CloudConnectivitySettingsSection.vue";
 import GitCredentialsSettingsSection from "./GitCredentialsSettingsSection.vue";
 import ModelSettingsSection from "./ModelSettingsSection.vue";
@@ -592,7 +487,7 @@ const emit = defineEmits<{
   "section-change": [section: SettingsSection];
 }>();
 
-const { locale, t } = useI18n();
+const { t } = useI18n();
 
 const authSession = useAuthSessionQuery();
 const currentAccess = useCurrentAccessQuery(computed(() => Boolean(authSession.data.value?.enabled && authSession.data.value.authenticated)));
@@ -617,8 +512,6 @@ const settingsSections = computed<Array<{ id: SettingsSection; label: string }>>
 const settingsSection = ref<SettingsSection>(props.initialSection || "nodes");
 const queryClient = useQueryClient();
 const models = useModelsQuery();
-const images = useImagesQuery();
-const marketCatalog = useMarketCatalogQuery();
 const nodes = useNodesQuery();
 const nodeRuntimes = useNodeRuntimesPayloadQuery();
 const board = useInstanceBoardPayloadQuery();
@@ -743,7 +636,6 @@ async function refresh() {
   await invalidateControlPlaneDomains(queryClient, ["manual"]);
 }
 
-const refreshImages = () => invalidateControlPlaneDomains(queryClient, ["images"]);
 const refreshNodeTopology = () => invalidateControlPlaneDomains(queryClient, ["nodeTopology"]);
 const refreshNodeRuntimeState = () => invalidateControlPlaneDomains(queryClient, ["nodeRuntimeState"]);
 const refreshNodeFolders = () => invalidateControlPlaneDomains(queryClient, ["nodeFolders"]);
@@ -890,43 +782,7 @@ watch(
   () => { void loadExternalListener(); },
   { immediate: true },
 );
-const imageCatalogNodeId = ref("");
-const imageCreateOpen = ref(false);
-const imageAvailability = useNodeImageAvailabilityQuery(() => imageCatalogNodeId.value);
 const hasLocalNode = computed(() => (nodes.data.value || []).some(isControlPlaneLocalNode));
-watch(
-  () => nodes.data.value,
-  (items) => {
-    if (imageCatalogNodeId.value && (items || []).some((node) => node.id === imageCatalogNodeId.value)) return;
-    imageCatalogNodeId.value = items?.[0]?.id || "";
-  },
-  { immediate: true },
-);
-const {
-  canCreateImage,
-  clearImageFeedback,
-  createRegistryImage: createRegistryImageAction,
-  deletingImageId,
-  imageCreateSuccess,
-  removeImageProfile,
-  savingImage,
-  settingsImage,
-} = useImageSettings({
-  errorText,
-  images: images.data,
-  onImageDeleted() {},
-  refreshImages,
-  translate: t,
-});
-function closeImageCreate() {
-  imageCreateOpen.value = false;
-  clearImageFeedback();
-}
-
-async function submitRegistryImage() {
-  await createRegistryImageAction();
-  if (imageCreateSuccess.value) imageCreateOpen.value = false;
-}
 const {
   addLocalNode,
   applyManagedUpdate,
@@ -1318,7 +1174,6 @@ async function setSettingsSection(section: SettingsSection) {
   if (section !== "nodes") closeNodeStorageFolderPicker();
   settingsSection.value = section;
   emit("section-change", section);
-  clearImageFeedback();
   clearNodeFeedback();
   publicBaseUrlMessage.value = "";
   if (section === "chat") {
@@ -1397,31 +1252,6 @@ function validCommandTrigger(value: string) {
 
 async function refreshChat() {
   await invalidateControlPlaneDomains(queryClient, ["chat"]);
-}
-
-function catalogAvailabilityStatus(imageId: string) {
-  const availability = imageAvailability.data.value?.find((item) => item.image.id === imageId);
-  if (!imageCatalogNodeId.value || !availability) return "unknown";
-  return availability.status;
-}
-
-function catalogAvailabilityLabel(imageId: string) {
-  const status = catalogAvailabilityStatus(imageId);
-  if (!imageCatalogNodeId.value) return t("settings.imageRegistry.selectNodeHint");
-  if (status === "unknown") return t("settings.imageRegistry.availabilityUnknown");
-  return status === "available" ? t("settings.imageRegistry.availableOnNode") : t("settings.imageRegistry.pullOnCreate");
-}
-
-function capabilityLabel(capability: string) {
-  const key = `common.imageCapabilities.${capability}`;
-  return t(key, capability);
-}
-
-function imagePullPolicyLabel(policy: string) {
-  if (policy === "if-not-present") return t("settings.imageRegistry.pullIfMissing");
-  if (policy === "always") return t("settings.imageRegistry.pullAlways");
-  if (policy === "never") return t("settings.imageRegistry.pullNever");
-  return t("common.status.unknownValue", { value: policy });
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -1617,15 +1447,6 @@ function errorText(error: unknown) {
   background: var(--surface-active);
   color: var(--text-strong);
   outline: none;
-}
-
-.image-management-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  align-items: start;
-  gap: 12px;
-  min-height: 0;
-  overflow: hidden;
 }
 
 .node-management-grid {
@@ -1962,13 +1783,8 @@ function errorText(error: unknown) {
   outline: none;
 }
 
-.registered-image-list,
 .local-image-list {
   min-height: 0;
-}
-
-.registered-image-list {
-  max-height: min(520px, calc(100vh - 270px));
 }
 
 .local-image-list {
@@ -1983,7 +1799,6 @@ function errorText(error: unknown) {
   padding-top: 12px;
 }
 
-.registered-image-row,
 .local-image-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -2006,14 +1821,12 @@ function errorText(error: unknown) {
   max-width: 100%;
 }
 
-.registered-image-row > div:first-child,
 .local-image-row > div:first-child {
   display: grid;
   min-width: 0;
   gap: 3px;
 }
 
-.registered-image-row strong,
 .local-image-row strong {
   overflow: hidden;
   color: var(--text-strong);
@@ -2022,7 +1835,6 @@ function errorText(error: unknown) {
   white-space: nowrap;
 }
 
-.registered-image-row code,
 .local-image-row span,
 .image-meta-line {
   overflow: hidden;
@@ -2158,258 +1970,6 @@ function errorText(error: unknown) {
   margin-top: 0;
 }
 
-.image-market-section {
-  grid-column: 1 / -1;
-}
-
-.image-custom-section {
-  min-height: 0;
-}
-
-.image-registry-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 14px;
-}
-
-.image-registry-head > div:first-child {
-  display: grid;
-  gap: 3px;
-}
-
-.image-registry-head > div:first-child > strong {
-  color: var(--text-strong);
-  font-size: 13px;
-}
-
-.image-registry-head > div:first-child > span {
-  color: var(--text-muted);
-  font-size: 12px;
-}
-
-.image-registry-actions {
-  display: grid;
-  grid-template-columns: minmax(170px, 220px) auto;
-  align-items: center;
-  gap: 8px;
-}
-
-:global(.registry-image-dialog) {
-  width: min(520px, calc(100vw - 32px));
-  max-width: 520px;
-}
-
-.registry-dialog-fields {
-  display: grid;
-  gap: 12px;
-}
-
-.registry-dialog-fields label {
-  display: grid;
-  min-width: 0;
-  gap: 6px;
-}
-
-.registry-dialog-fields label > span {
-  color: var(--text-muted);
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.image-registry-list {
-  display: grid;
-  gap: 6px;
-}
-
-.registered-image-row {
-  grid-template-columns: 36px minmax(0, 1fr) minmax(120px, auto) auto;
-  gap: 10px;
-  border-color: var(--line-subtle);
-  background: var(--surface);
-  padding: 6px;
-}
-
-.registered-image-row:hover {
-  border-color: var(--line);
-  background: var(--surface-hover);
-}
-
-.registered-image-artwork {
-  width: 36px;
-  height: 36px;
-  min-height: 36px;
-  border-radius: 7px;
-}
-
-.registered-image-copy {
-  display: grid;
-  min-width: 0;
-  gap: 3px;
-}
-
-.registered-image-availability {
-  overflow: hidden;
-  color: var(--text-muted);
-  font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.image-market-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.image-market-head > div {
-  display: grid;
-  gap: 3px;
-}
-
-.image-market-head strong {
-  color: var(--text-strong);
-  font-size: 13px;
-}
-
-.image-market-head span {
-  color: var(--text-muted);
-  font-size: 12px;
-}
-
-.market-image-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.market-image-card {
-  display: grid;
-  grid-template-columns: 40px minmax(0, 1fr);
-  align-items: start;
-  min-height: 112px;
-  min-width: 0;
-  overflow: hidden;
-  gap: 10px;
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  background: var(--surface-raised);
-  padding: 10px;
-  transition: border-color 120ms ease, background 120ms ease;
-}
-
-.market-image-card:hover {
-  border-color: var(--line-strong);
-  background: var(--surface-hover);
-}
-
-.market-image-artwork {
-  width: 40px;
-  height: 40px;
-  min-height: 40px;
-  border-radius: 8px;
-}
-
-.market-image-content {
-  display: grid;
-  min-width: 0;
-  align-content: start;
-  gap: 5px;
-}
-
-.market-image-title {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.market-image-title strong {
-  overflow: hidden;
-  color: var(--text-strong);
-  font-size: 13px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.market-image-content p {
-  overflow: hidden;
-  margin: 0;
-  color: var(--text-muted);
-  font-size: 12px;
-  line-height: 1.4;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.market-capability-list {
-  display: flex;
-  min-width: 0;
-  gap: 4px;
-  overflow: hidden;
-}
-
-.market-capability-list span {
-  flex: 0 0 auto;
-  border: 1px solid var(--line-subtle);
-  border-radius: 4px;
-  background: var(--surface);
-  color: var(--text-muted);
-  font-size: 10px;
-  font-weight: 700;
-  line-height: 17px;
-  padding: 0 5px;
-}
-
-.market-image-footer {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding-top: 4px;
-  border-top: 1px solid var(--line-subtle);
-}
-
-.market-image-footer span,
-.market-image-footer code {
-  overflow: hidden;
-  color: var(--text-muted);
-  font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.market-image-footer span {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 5px;
-}
-
-.market-image-footer span i {
-  width: 6px;
-  height: 6px;
-  flex: 0 0 auto;
-  border-radius: 999px;
-  background: var(--text-subtle);
-}
-
-.market-image-footer span[data-status="available"] i {
-  background: var(--status-success);
-}
-
-.market-image-footer span[data-status="pull-required"] i {
-  background: var(--status-warning);
-}
-
-.market-image-footer code {
-  min-width: 0;
-  flex: 1 1 auto;
-  text-align: right;
-}
-
 .modal-section label,
 .inline-create {
   display: grid;
@@ -2484,17 +2044,7 @@ function errorText(error: unknown) {
   margin-top: 2px;
 }
 
-@media (max-width: 1080px) {
-  .market-image-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
 @media (max-width: 780px) {
-  .market-image-grid {
-    grid-template-columns: 1fr;
-  }
-  .image-management-grid,
   .node-management-grid {
     grid-template-columns: 1fr;
   }
@@ -2507,22 +2057,6 @@ function errorText(error: unknown) {
     padding-right: 6px;
   }
 
-  .image-registry-head {
-    display: grid;
-  }
-
-  .image-registry-actions {
-    grid-template-columns: 1fr;
-  }
-
-  .registered-image-row {
-    grid-template-columns: 36px minmax(0, 1fr);
-  }
-
-  .registered-image-availability,
-  .registered-image-row .settings-row-actions {
-    grid-column: 2;
-  }
 }
 </style>
 <style src="./SettingsPanelSurface.css"></style>

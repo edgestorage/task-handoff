@@ -107,6 +107,7 @@
               :can-interrupt="canInterrupt"
               :can-resolve-approval="canResolveApproval"
               :instance-id="card.instance.id"
+              :detail-state="detailState"
               :mode="timelineMode"
               :prompt-count="promptCount"
               :prompt-index="promptIndex"
@@ -118,6 +119,7 @@
               @reorder-queued-messages="$emit('reorderQueuedMessages', $event)"
               @steer-queued-message="$emit('steerQueuedMessage', $event)"
               @retry-queued-message="$emit('retryQueuedMessage', $event)"
+              @retry-detail="$emit('retryDetail')"
               @remove-queued-message="$emit('removeQueuedMessage', $event)"
               @resolve-approval="$emit('resolveApproval', $event)"
               @continue-from-turn="$emit('continueFromTurn', $event)"
@@ -186,12 +188,15 @@ import type { AiBoardCard } from "./aiBoardTypes";
 
 const { t } = useI18n();
 
+type AiSessionDetailState = "loading" | "ready" | "error";
+
 const props = defineProps<{
   busy: boolean;
   canInterrupt: boolean;
   canResolveApproval: boolean;
   card: AiBoardCard;
   conversationSession: AiSessionSummary;
+  detailState: AiSessionDetailState;
   collapsed: boolean;
   attachments: AiSessionComposerAttachment[];
   draft: string;
@@ -221,6 +226,7 @@ defineEmits<{
   reorderQueuedMessages: [payload: { expectedRevision: number; queueIds: string[] }];
   resolveApproval: [decision: "allow" | "deny" | "skip"];
   retryQueuedMessage: [queueId: string];
+  retryDetail: [];
   run: [permissionMode?: AiSessionPermissionMode];
   command: [input: AiSessionCommandInput];
   steer: [];

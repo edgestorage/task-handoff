@@ -593,7 +593,7 @@ function TimelineCurrentActivity({ item }: { item: DetailItem }) {
 }
 
 export function aiSessionDisplayTurns(session: ControlPlaneAiSessionSummary | undefined) {
-  return (session?.turns ?? []).filter((turn) => turn.userPrompt?.trim() || turn.lastMessage?.trim() || turn.summary?.trim() || turn.contextCompactions?.length);
+  return session?.turns ?? [];
 }
 
 export function sessionActivityText(session: ControlPlaneAiSessionSummary, t: Translate = english) {

@@ -639,6 +639,44 @@ export const AiSessionStatusSchema = z
   })
   .strict();
 
+// Current detail metadata intentionally excludes Turn bodies. Compatibility
+// for v0.0.23 remains at the client boundary, where a legacy AiSessionStatus
+// response can be projected into this model and its Turns seeded into cache.
+export const AiSessionDetailSchema = AiSessionStatusSchema.pick({
+  id: true,
+  appBindingKeys: true,
+  cwd: true,
+  error: true,
+  providerMeta: true,
+  queue: true,
+  subAgents: true,
+}).strict();
+
+export const AiSessionTurnIndexEntrySchema = AiSessionTurnSchema.pick({
+  id: true,
+  providerTurnId: true,
+  status: true,
+  phase: true,
+  revision: true,
+  startedAt: true,
+  updatedAt: true,
+  completedAt: true,
+}).extend({
+  bodyRevision: z.string().trim().min(1).max(64),
+}).strict();
+
+export const AiSessionTurnIndexSchema = z.object({
+  sessionId: z.string().trim().min(1).max(120),
+  revision: z.string().trim().min(1).max(64),
+  turns: z.array(AiSessionTurnIndexEntrySchema).max(50),
+}).strict();
+
+export const AiSessionTurnBodySchema = z.object({
+  sessionId: z.string().trim().min(1).max(120),
+  revision: z.string().trim().min(1).max(64),
+  turn: AiSessionTurnSchema,
+}).strict();
+
 export const AiSessionActionResultSchema = z.object({
   session: AiSessionStatusSchema,
   provider: z.string().trim().min(1).max(80),
@@ -648,6 +686,46 @@ export const AiSessionActionResultSchema = z.object({
   providerTurnId: z.string().trim().min(1).max(240).optional(),
   queueId: z.string().trim().min(1).max(120).optional(),
 }).strict();
+
+// Public action acknowledgement. The runtime-owned full session remains an
+// internal reducer result and must not cross HTTP/reverse-proxy boundaries.
+export const AiSessionActionResponseSchema = AiSessionActionResultSchema.omit({ session: true }).extend({
+  sessionId: z.string().trim().min(1).max(120),
+  messageId: z.string().trim().min(1).max(240).optional(),
+}).strict();
+
+export function projectAiSessionActionResponse(result: z.infer<typeof AiSessionActionResultSchema>) {
+  const latestTurn = result.session.turns?.at(-1);
+  const queuedMessageId = result.queueId
+    ? result.session.queue?.items.find((item) => item.id === result.queueId)?.messageId
+    : undefined;
+  const messageId = queuedMessageId || (
+    result.action === "send" || result.action === "queue" || result.action === "steer"
+      ? latestTurn?.userMessages?.at(-1)?.id
+      : undefined
+  );
+  return AiSessionActionResponseSchema.parse({
+    sessionId: result.session.id,
+    provider: result.provider,
+    action: result.action,
+    ...(result.decision ? { decision: result.decision } : {}),
+    ...(result.turnId || result.session.activeTurnId || latestTurn?.id
+      ? { turnId: result.turnId || result.session.activeTurnId || latestTurn?.id }
+      : {}),
+    ...(result.providerTurnId || latestTurn?.providerTurnId
+      ? { providerTurnId: result.providerTurnId || latestTurn?.providerTurnId }
+      : {}),
+    ...(result.queueId ? { queueId: result.queueId } : {}),
+    ...(messageId ? { messageId } : {}),
+  });
+}
+
+// Compatibility for v0.0.23: normalize the former full-session response at
+// the HTTP consumer boundary while current producers send only the ack.
+export const AiSessionActionCompatibleResponseSchema = z.union([
+  AiSessionActionResponseSchema,
+  AiSessionActionResultSchema.transform(projectAiSessionActionResponse),
+]);
 
 export const AI_SESSION_HISTORY_DEFAULT_LIMIT = 50;
 export const AI_SESSION_HISTORY_MAX_LIMIT = 500;
@@ -726,8 +804,21 @@ export const AiSessionSummarySchema = AiSessionStatusSchema.pick({
   error: true,
 }).extend({
   // Compatibility for v0.0.21: list snapshots retain the bounded turn summary
-  // shape and never carry conversation attachment metadata or content.
+  // shape when reading an older producer. Current producers omit turns and use
+  // the bounded count/timestamp projection below.
   turns: z.array(AiSessionSummaryTurnSchema).max(50).optional(),
+  // Version of the fields intentionally omitted or compacted by the list
+  // projection. Detail consumers bind an HTTP response to this value instead
+  // of treating updatedAt as a reason to reload the complete conversation.
+  // Compatibility for v0.0.23: older producers omit it and consumers retain
+  // the list projection as authoritative while only enriching Turn metadata.
+  detailRevision: z.string().trim().min(1).max(64).optional(),
+  // Independent version for the Turn index/body domain. It is not a display
+  // key and must not remount or fade the owning session.
+  turnsRevision: z.string().trim().min(1).max(64).optional(),
+  turnCount: z.number().int().min(0).optional(),
+  subAgentCount: z.number().int().min(0).optional(),
+  lastUserMessageAt: z.string().datetime().optional(),
 }).strict();
 
 export const AiSessionsSnapshotSchema = z
@@ -826,13 +917,37 @@ export const AiSessionMessageDeltaEventSchema = z
     instanceId: z.string().trim().min(1).max(160),
     nodeId: z.string().trim().min(1).max(160).optional(),
     sessionId: z.string().trim().min(1).max(120),
-    providerSessionId: z.string().trim().min(1).max(240),
+    // Compatibility for v0.0.23: compact delta producers omit the provider
+    // identity after resolving the authoritative AI Session id.
+    providerSessionId: z.string().trim().min(1).max(240).optional(),
     turnId: z.string().trim().min(1).max(240),
     itemId: z.string().trim().min(1).max(240),
     delta: z.string().min(1),
     generatedAt: z.string().datetime(),
   })
   .strict();
+
+export const AiSessionMessageDeltaCompactEventSchema = AiSessionMessageDeltaEventSchema
+  .omit({ instanceId: true, nodeId: true, providerSessionId: true })
+  .strict();
+
+export function compactAiSessionMessageDeltaEvent(input: AiSessionMessageDeltaEvent) {
+  return AiSessionMessageDeltaCompactEventSchema.parse({
+    sessionId: input.sessionId,
+    turnId: input.turnId,
+    itemId: input.itemId,
+    delta: input.delta,
+    generatedAt: input.generatedAt,
+  });
+}
+
+export function normalizeAiSessionMessageDeltaEvent(input: unknown, instanceId: string) {
+  const compact = AiSessionMessageDeltaCompactEventSchema.safeParse(input);
+  if (compact.success) {
+    return AiSessionMessageDeltaEventSchema.parse({ instanceId, ...compact.data });
+  }
+  return AiSessionMessageDeltaEventSchema.parse(input);
+}
 
 export const AiSessionTimelineItemEventSchema = z.object({
   instanceId: z.string().trim().min(1).max(160),
@@ -1095,9 +1210,14 @@ export type AiSessionControlError = z.infer<typeof AiSessionControlErrorSchema>;
 export type AiSessionQueuedMessage = z.infer<typeof AiSessionQueuedMessageSchema>;
 export type AiSessionQueue = z.infer<typeof AiSessionQueueSchema>;
 export type AiSessionTurn = z.infer<typeof AiSessionTurnSchema>;
+export type AiSessionDetail = z.infer<typeof AiSessionDetailSchema>;
+export type AiSessionTurnIndexEntry = z.infer<typeof AiSessionTurnIndexEntrySchema>;
+export type AiSessionTurnIndex = z.infer<typeof AiSessionTurnIndexSchema>;
+export type AiSessionTurnBody = z.infer<typeof AiSessionTurnBodySchema>;
 export type AiSessionSummaryTurn = z.infer<typeof AiSessionSummaryTurnSchema>;
 export type AiSessionStatus = z.infer<typeof AiSessionStatusSchema>;
 export type AiSessionActionResult = z.infer<typeof AiSessionActionResultSchema>;
+export type AiSessionActionResponse = z.infer<typeof AiSessionActionResponseSchema>;
 export type AiSessionHistoryItem = z.infer<typeof AiSessionHistoryItemSchema>;
 export type AiSessionHistoryIndex = z.infer<typeof AiSessionHistoryIndexSchema>;
 export type AiSessionHistoryList = z.infer<typeof AiSessionHistoryListSchema>;
@@ -1115,6 +1235,7 @@ export type AiSessionSnapshotEvent = z.infer<typeof AiSessionSnapshotEventSchema
 export type AiSessionPatchEvent = z.infer<typeof AiSessionPatchEventSchema>;
 export type AiSessionRemovedEvent = z.infer<typeof AiSessionRemovedEventSchema>;
 export type AiSessionMessageDeltaEvent = z.infer<typeof AiSessionMessageDeltaEventSchema>;
+export type AiSessionMessageDeltaCompactEvent = z.infer<typeof AiSessionMessageDeltaCompactEventSchema>;
 export type AiSessionTimelineItemEvent = z.infer<typeof AiSessionTimelineItemEventSchema>;
 export type AiSessionDeltaResponse = z.infer<typeof AiSessionDeltaResponseSchema>;
 export type AiSessionSnapshotInput = z.infer<typeof AiSessionSnapshotInputSchema>;

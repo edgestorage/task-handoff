@@ -261,8 +261,8 @@ for attempt in $(seq 1 90); do
     let input = "";
     process.stdin.on("data", (chunk) => input += chunk).on("end", () => {
       const expected = process.argv[1];
-      const running = (JSON.parse(input).data || []).filter((item) => item.status === "running");
-      process.exit(running.every((item) => item.ready && item.runtimeVersion?.desiredVersion === expected && item.runtimeVersion?.actualVersion === expected && item.runtimeVersion?.phase === "matched") ? 0 : 1);
+      const active = (JSON.parse(input).data || []).filter((item) => item.status !== "stopped");
+      process.exit(active.every((item) => item.ready && item.runtimeVersion?.desiredVersion === expected && item.runtimeVersion?.actualVersion === expected && item.runtimeVersion?.phase === "matched") ? 0 : 1);
     });
   ' "$VERSION"; then
     converged=1

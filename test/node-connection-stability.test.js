@@ -283,6 +283,7 @@ test("reverse tunnel becomes healthy only after identify and ignores a replaced 
   assert.equal(JSON.parse(first.sent[1]).type, "control-plane.identified");
   assert.deepEqual(JSON.parse(first.sent[2]), {
     type: "control-plane.event-subscribe",
+    eventEnvelopeVersion: "2026-08-25",
     aiSessionTransient: {
       messageDeltas: { allInstances: false, instanceIds: [] },
       timelineAllSessions: false,
@@ -576,6 +577,11 @@ test("instance heartbeat clocks do not publish fleet content changes", async () 
     runtime: { labels: {} },
     protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
     stateRevision: heartbeat,
+    appInventory: {
+      items: [],
+      issues: [],
+      observedAt: new Date(Date.parse(timestamp) + heartbeat * 1_000).toISOString(),
+    },
     lastHeartbeatAt: new Date(Date.parse(timestamp) + heartbeat * 1_000).toISOString(),
     createdAt: timestamp,
     updatedAt: new Date(Date.parse(timestamp) + heartbeat * 1_000).toISOString(),
@@ -603,6 +609,57 @@ test("instance heartbeat clocks do not publish fleet content changes", async () 
   await gateway.refreshFleetInstances([node]);
   observed.length = 0;
   heartbeat += 1;
+  await gateway.refreshFleetInstances([node]);
+  assert.deepEqual(observed, []);
+});
+
+test("AI Session projections do not publish fleet content changes", async () => {
+  const timestamp = "2026-08-22T00:00:00.000Z";
+  let aiSessionRevision = 1;
+  const instance = () => ControlledInstanceSchema.parse({
+    id: "inst_ai_sessions",
+    name: "AI Session instance",
+    source: { type: "local-folder", path: "/workspace" },
+    sourceSnapshot: {},
+    modelSelection: {},
+    nodeId: "node_ai_sessions",
+    runtimeId: "runtime_ai_sessions",
+    target: { strategy: "node-proxy", status: "reachable", web: "http://127.0.0.1:32100", api: "http://127.0.0.1:32100/api" },
+    runtime: { labels: {} },
+    protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
+    aiSessions: {
+      runningCount: aiSessionRevision,
+      waitingCount: 0,
+      staleCount: 0,
+      sessions: [],
+      updatedAt: new Date(Date.parse(timestamp) + aiSessionRevision * 1_000).toISOString(),
+    },
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  });
+  const observed = [];
+  const client = new ControlPlaneNodeAgentClient({
+    request: async () => new Response(JSON.stringify({ data: [instance()] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }),
+  });
+  const gateway = new ControlPlaneNodeAgentGateway(client, {
+    fleetSnapshotFreshMs: 0,
+    onFleetStateChanged: (state) => observed.push(state),
+  });
+  const node = {
+    id: "node_ai_sessions",
+    connectionMode: "direct-http",
+    endpoint: "http://node-ai-sessions.test",
+    status: "online",
+    auth: { mode: "paired-hmac", keyId: "key_ai_sessions" },
+    connectionPhase: "healthy",
+  };
+
+  await gateway.refreshFleetInstances([node]);
+  observed.length = 0;
+  aiSessionRevision += 1;
   await gateway.refreshFleetInstances([node]);
   assert.deepEqual(observed, []);
 });

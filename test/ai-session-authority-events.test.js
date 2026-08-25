@@ -5,6 +5,7 @@ const WebSocket = require("ws");
 
 const { NodeAgentInstanceEventForwarder } = require("../packages/control-plane/src/node-agent/events.ts");
 const { projectAiSessionAuthorityChange } = require("../packages/controlled-instance/src/web/ai-session-authority-events.ts");
+const { WebEventBus } = require("../packages/controlled-instance/src/web/events.ts");
 const { AiSessionEventType, emptyAiSessionsSnapshot } = require("../packages/protocol/src/ai-sessions.ts");
 const { AppSessionEventType, emptyAppSessionsSnapshot } = require("../packages/protocol/src/app-sessions.ts");
 
@@ -59,6 +60,90 @@ function envelope(type, payload, revision) {
   });
 }
 
+test("summary lastMessageItemId settles retained message delta without embedding turns", () => {
+  class TestClient extends EventEmitter {
+    constructor() {
+      super();
+      this.OPEN = WebSocket.OPEN;
+      this.readyState = WebSocket.OPEN;
+      this.sent = [];
+    }
+    send(value) { this.sent.push(JSON.parse(String(value))); }
+  }
+
+  const bus = new WebEventBus();
+  bus.publish(AiSessionEventType.MessageDelta, {
+    instanceId: "inst_authority",
+    sessionId: "session-one",
+    providerSessionId: "thread-one",
+    turnId: "turn-one",
+    itemId: "item-one",
+    delta: "streamed",
+    generatedAt: now,
+  });
+  bus.publish(AiSessionEventType.Patch, {
+    meta: meta(2, 1),
+    upserted: [{ ...summary("session-one", "running"), lastMessageItemId: "item-one" }],
+    removed: [],
+  });
+
+  const client = new TestClient();
+  bus.connect(client, { expectsTransientSubscription: true });
+  client.emit("message", JSON.stringify({
+    type: "subscribe",
+    topics: ["ai.sessions"],
+    aiSessionTransient: { replaySince: "2026-08-23T00:00:00.000Z", messageDeltas: { allInstances: true } },
+  }));
+  assert.equal(client.sent.some((event) => event.type === AiSessionEventType.MessageDelta), false);
+});
+
+test("node agent negotiates compact output without changing legacy forwarding", () => {
+  class TestSocket extends EventEmitter {
+    constructor() {
+      super();
+      this.OPEN = WebSocket.OPEN;
+      this.readyState = WebSocket.OPEN;
+      this.bufferedAmount = 0;
+      this.sent = [];
+    }
+    send(value) { this.sent.push(JSON.parse(String(value))); }
+    close() {}
+  }
+
+  const forwarder = new NodeAgentInstanceEventForwarder({ listInstances: () => [] });
+  const legacy = new TestSocket();
+  const compact = new TestSocket();
+  forwarder.addOutput(legacy, { expectsTransientSubscription: true });
+  forwarder.addOutput(compact, { expectsTransientSubscription: true });
+  assert.equal(forwarder.setOutputSubscription(legacy, { messageDeltas: { allInstances: true } }), true);
+  assert.equal(forwarder.setOutputSubscription(compact, { messageDeltas: { allInstances: true } }, "2026-08-25"), true);
+  const payload = {
+    instanceId: "inst_authority",
+    nodeId: "node-a",
+    sessionId: "session-a",
+    providerSessionId: "provider-a",
+    turnId: "turn-a",
+    itemId: "item-a",
+    delta: "hello",
+    generatedAt: now,
+  };
+  forwarder.publish(AiSessionEventType.MessageDelta, payload, { nodeId: "node-a", instanceId: "inst_authority" });
+
+  assert.equal(legacy.sent[0].event.v, 1);
+  assert.deepEqual(legacy.sent[0].event.payload, payload);
+  assert.equal(compact.sent[0].event.v, "2026-08-25");
+  assert.equal(compact.sent[0].event.seq, undefined);
+  assert.equal(compact.sent[0].event.topic, undefined);
+  assert.deepEqual(compact.sent[0].event.payload, {
+    sessionId: "session-a",
+    turnId: "turn-a",
+    itemId: "item-a",
+    delta: "hello",
+    generatedAt: now,
+  });
+  forwarder.stop();
+});
+
 test("AI session authority emits one initial snapshot and routine minimal deltas", () => {
   const initial = snapshot([summary("one"), summary("two")]);
   assert.equal(projectAiSessionAuthorityChange(undefined, initial).kind, "snapshot");
@@ -72,8 +157,9 @@ test("AI session authority emits one initial snapshot and routine minimal deltas
 
   const removed = snapshot([summary("one", "running")]);
   assert.deepEqual(projectAiSessionAuthorityChange(changed, removed), {
-    kind: "removed",
-    sessionIds: ["two"],
+    kind: "patch",
+    upserted: [],
+    removed: ["two"],
   });
 
   assert.deepEqual(projectAiSessionAuthorityChange(initial, snapshot([...initial.sessions].reverse())), {
@@ -144,6 +230,8 @@ test("node agent collapses backpressured AI authority events into the latest sna
   assert.equal(congestedHealth.bufferedBytes, 300 * 1024);
   assert.equal(congestedHealth.peakBufferedBytes, 300 * 1024);
   assert.equal(congestedHealth.coalescedEvents, 3);
+  assert.equal(congestedHealth.oversizedEvents, 0);
+  assert.equal(congestedHealth.peakEventBytes, 0);
   assert.match(congestedHealth.congestedSince, /^\d{4}-/);
   assert.match(congestedHealth.lastCongestedAt, /^\d{4}-/);
   output.bufferedAmount = 0;
@@ -155,6 +243,47 @@ test("node agent collapses backpressured AI authority events into the latest sna
   assert.equal(output.sent[0].event.payload.snapshot.sessions.length, 0);
   assert.equal(forwarder.eventTransportHealth().status, "recovering");
   assert.equal(forwarder.eventTransportHealth().bufferedBytes, 0);
+  forwarder.stop();
+});
+
+test("node agent rejects an authority snapshot above the hard event budget", () => {
+  class TestSocket extends EventEmitter {
+    constructor(readyState = WebSocket.CONNECTING) {
+      super();
+      this.readyState = readyState;
+      this.bufferedAmount = 0;
+      this.sent = [];
+      this.closed = [];
+    }
+    send(value) { this.sent.push(JSON.parse(String(value))); }
+    close(code, reason) { this.closed.push([code, reason]); this.readyState = WebSocket.CLOSED; }
+  }
+
+  const input = new TestSocket();
+  const forwarder = new NodeAgentInstanceEventForwarder(
+    { listInstances: () => [{ id: "inst_authority", target: { api: "http://127.0.0.1:19001" } }] },
+    undefined,
+    {
+      createSocket: () => input,
+      setIntervalFn: () => ({ kind: "interval" }),
+      clearIntervalFn: () => undefined,
+    },
+  );
+  const output = new TestSocket(WebSocket.OPEN);
+  forwarder.addOutput(output, { expectsTransientSubscription: true });
+  input.readyState = WebSocket.OPEN;
+  input.emit("open");
+  const oversized = snapshot(Array.from({ length: 2_000 }, (_, index) => summary(`session-${index}`)));
+  input.emit("message", envelope(AiSessionEventType.Snapshot, {
+    meta: meta(1),
+    snapshot: oversized,
+  }, 1));
+
+  assert.equal(output.sent.length, 0);
+  assert.equal(output.closed[0][0], 1009);
+  const health = forwarder.eventTransportHealth();
+  assert.equal(health.oversizedEvents, 1);
+  assert.ok(health.peakEventBytes > 256 * 1024);
   forwarder.stop();
 });
 

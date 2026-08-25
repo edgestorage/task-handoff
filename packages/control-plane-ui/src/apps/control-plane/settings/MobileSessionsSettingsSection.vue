@@ -1,16 +1,18 @@
 <template>
-  <ScrollArea class="settings-section-scroll" :horizontal="false">
-    <div class="settings-section-scroll-content mobile-sessions-settings">
-      <section class="modal-section settings-panel-surface mobile-sessions-panel">
-        <header class="mobile-sessions-head">
-          <div>
-            <strong>{{ t("settings.mobileSessions.title") }}</strong>
-            <p>{{ t("settings.mobileSessions.description") }}</p>
-          </div>
-          <Button variant="outline" size="sm" :disabled="!canLoadSessions || sessions.isFetching.value" @click="sessions.refetch()">
-            <RefreshCw :class="{ spinning: sessions.isFetching.value }" :size="14" />
-            <span>{{ sessions.isFetching.value ? t("settings.mobileSessions.refreshing") : t("settings.mobileSessions.refresh") }}</span>
-          </Button>
+  <ScrollArea class="mobile-sessions-scroll" :horizontal="false">
+    <div class="mobile-sessions-page">
+      <header class="mobile-sessions-page-head">
+        <p>{{ t("settings.mobileSessions.description") }}</p>
+        <Button variant="outline" size="sm" :disabled="!canLoadSessions || sessions.isFetching.value" @click="sessions.refetch()">
+          <RefreshCw :class="{ spinning: sessions.isFetching.value }" :size="14" />
+          <span>{{ sessions.isFetching.value ? t("settings.mobileSessions.refreshing") : t("settings.mobileSessions.refresh") }}</span>
+        </Button>
+      </header>
+
+      <section class="mobile-sessions-directory">
+        <header class="mobile-sessions-directory-head">
+          <strong>{{ t("settings.mobileSessions.title") }}</strong>
+          <span v-if="sessions.data.value?.length">{{ sessions.data.value.length }}</span>
         </header>
 
         <p v-if="authSession.isLoading.value" class="mobile-sessions-state" role="status">{{ t("settings.mobileSessions.loading") }}</p>
@@ -121,20 +123,23 @@ async function confirmRevoke() {
 </script>
 
 <style scoped>
-.mobile-sessions-settings { max-width: 920px; }
-.mobile-sessions-panel { align-content: start; }
-.mobile-sessions-head { align-items: flex-start; display: flex; gap: 16px; justify-content: space-between; }
-.mobile-sessions-head > div { display: grid; gap: 4px; }
-.mobile-sessions-head strong { color: var(--text-strong); font-size: 15px; }
-.mobile-sessions-head p { color: var(--text-muted); font-size: 13px; line-height: 1.5; margin: 0; }
-.mobile-sessions-state { color: var(--text-muted); font-size: 13px; margin: 0; padding: 28px 12px; text-align: center; }
-.mobile-sessions-error { align-items: center; color: var(--status-danger); display: flex; font-size: 13px; gap: 12px; justify-content: space-between; padding: 12px; }
-.mobile-session-list { display: grid; gap: 8px; }
-.mobile-session-row { align-items: center; background: var(--surface-inset); border: 1px solid var(--line); border-radius: 8px; display: grid; gap: 12px; grid-template-columns: auto minmax(0, 1fr) auto; padding: 12px; }
-.mobile-session-icon { align-items: center; background: var(--surface-active); border-radius: 10px; color: var(--text-muted); display: flex; height: 40px; justify-content: center; width: 40px; }
-.mobile-session-copy { display: grid; gap: 8px; min-width: 0; }
+.mobile-sessions-scroll { height: 100%; min-height: 0; width: 100%; }
+.mobile-sessions-page { display: grid; gap: 12px; margin: 0 auto; padding: 0 10px 20px 0; width: min(100%, var(--settings-content-max-width, 1080px)); }
+.mobile-sessions-page-head { align-items: flex-start; display: flex; gap: 16px; justify-content: space-between; }
+.mobile-sessions-page-head p { color: var(--text-muted); font-size: 12px; line-height: 1.45; margin: 0; }
+.mobile-sessions-directory { background: var(--surface-raised); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.mobile-sessions-directory-head { align-items: center; border-bottom: 1px solid var(--line); display: flex; gap: 8px; min-height: 38px; padding: 0 12px; }
+.mobile-sessions-directory-head strong { color: var(--text-strong); font-size: 13px; font-weight: 500; }
+.mobile-sessions-directory-head span { color: var(--text-muted); font-size: 12px; }
+.mobile-sessions-state { color: var(--text-muted); font-size: 12px; margin: 0; padding: 48px 20px; text-align: center; }
+.mobile-sessions-error { align-items: center; color: var(--status-danger); display: flex; font-size: 12px; gap: 12px; justify-content: space-between; min-height: 80px; padding: 12px; }
+.mobile-session-list { display: grid; }
+.mobile-session-row + .mobile-session-row { border-top: 1px solid var(--line); }
+.mobile-session-row { align-items: center; display: grid; gap: 12px; grid-template-columns: auto minmax(0, 1fr) auto; min-height: 76px; padding: 10px 12px; }
+.mobile-session-icon { align-items: center; background: var(--surface-active); border-radius: 8px; color: var(--text-muted); display: flex; height: 36px; justify-content: center; width: 36px; }
+.mobile-session-copy { display: grid; gap: 6px; min-width: 0; }
 .mobile-session-title { align-items: center; display: flex; flex-wrap: wrap; gap: 7px; }
-.mobile-session-title strong { color: var(--text-strong); font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mobile-session-title strong { color: var(--text-strong); font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mobile-session-copy dl { display: flex; flex-wrap: wrap; gap: 8px 20px; margin: 0; }
 .mobile-session-copy dl > div { display: flex; font-size: 12px; gap: 5px; }
 .mobile-session-copy dt { color: var(--text-muted); }
@@ -142,7 +147,9 @@ async function confirmRevoke() {
 .spinning { animation: mobile-session-spin 0.8s linear infinite; }
 @keyframes mobile-session-spin { to { transform: rotate(360deg); } }
 @media (max-width: 720px) {
-  .mobile-sessions-head { align-items: stretch; flex-direction: column; }
+  .mobile-sessions-page { padding-right: 7px; }
+  .mobile-sessions-page-head { align-items: stretch; flex-direction: column; }
+  .mobile-sessions-page-head > button { align-self: flex-start; }
   .mobile-session-row { align-items: start; grid-template-columns: auto minmax(0, 1fr); }
   .mobile-session-row > button { grid-column: 1 / -1; justify-self: end; }
 }
