@@ -3188,6 +3188,15 @@ test("control plane emits websocket events for mutations", async (t) => {
   await withTimeout(waitForWebSocketOpen(socket), "control plane events websocket open");
   assert.equal(JSON.parse((await connectedMessage).message).type, "streams.hello");
 
+  const projectCreatedEvent = new Promise((resolve) => {
+    const listener = (raw) => {
+      const event = JSON.parse(String(raw));
+      if (event.type !== "project.created") return;
+      socket.off("message", listener);
+      resolve(event);
+    };
+    socket.on("message", listener);
+  });
   const project = await json(app, "POST", "/api/projects", {
     name: "Events Project",
     source: {
@@ -3196,7 +3205,7 @@ test("control plane emits websocket events for mutations", async (t) => {
     },
   });
   assert.equal(project.statusCode, 201);
-  const event = JSON.parse((await withTimeout(onceWebSocketMessageFrame(socket), "project created event")).message);
+  const event = await withTimeout(projectCreatedEvent, "project created event");
   assert.equal(event.type, "project.created");
   assert.equal(event.payload.projectId, project.body.data.id);
 });
@@ -9298,6 +9307,8 @@ test("node agent proxies direct-port instances through the node-local host", asy
     bufferedBytes: 0,
     peakBufferedBytes: 0,
     coalescedEvents: 0,
+    oversizedEvents: 0,
+    peakEventBytes: 0,
   });
 });
 

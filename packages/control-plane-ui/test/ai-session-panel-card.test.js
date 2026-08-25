@@ -279,7 +279,7 @@ test("mobile AI sessions keep detail visible and float the session list in a dis
   assert.match(styles, /:global\(\.session-ai-sidebar-sheet \.session-ai-sidebar\) \{[\s\S]*--session-ai-list-left-inset: 12px;[\s\S]*--session-ai-list-right-inset: 12px;[\s\S]*--session-ai-list-bottom-inset: 12px;[\s\S]*padding: 12px 0 12px 12px;/);
   assert.match(styles, /@media \(max-width: 920px\)[\s\S]*\.session-ai-panel \{\s*--session-ai-scrollbar-outset: 0px;\s*padding: 8px;[\s\S]*grid-template-rows: minmax\(0, 1fr\);[\s\S]*\.session-ai-mobile-list-button \{[\s\S]*position: absolute;[\s\S]*top: 10px;[\s\S]*left: 4px;[\s\S]*width: 26px;[\s\S]*height: 26px;/);
   assert.match(styles, /\.session-ai-detail-content > header \{\s*padding-left: 24px;/);
-  assert.match(styles, /\.session-ai-detail-content > header > \.session-ai-detail-block-user \{[\s\S]*width: calc\(100% \+ 24px\);[\s\S]*margin-left: -24px;[\s\S]*padding-left: 24px;/);
+  assert.match(styles, /\.session-ai-detail-content > header > \.session-ai-detail-prompt-stage \{[\s\S]*width: calc\(100% \+ 24px\);[\s\S]*margin-left: -24px;[\s\S]*padding-left: 24px;/);
   assert.doesNotMatch(styles, /\.session-ai-detail\.is-scrolled \.session-ai-detail-content > header/);
   assert.match(styles, /\.session-ai-mobile-list-button \{[\s\S]*border-color: transparent;[\s\S]*background: transparent;/);
   assert.match(styles, /\.session-ai-mobile-list-button\[data-open="true"\] \{[\s\S]*border-color: transparent;[\s\S]*background: var\(--surface-hover\);/);

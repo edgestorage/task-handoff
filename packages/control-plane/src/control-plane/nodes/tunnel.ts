@@ -4,7 +4,7 @@ import {
   encodeNodeTunnelRequestBody,
   type Node,
 } from "@task-handoff/protocol/control-plane";
-import type { EventEnvelope, SessionStreamsHello } from "@task-handoff/protocol/events";
+import { COMPACT_EVENT_ENVELOPE_VERSION, type EventEnvelope, type SessionStreamsHello } from "@task-handoff/protocol/events";
 import { bridgeWebSockets, closeWebSocket, normalizeWebSocketCloseCode, normalizeWebSocketCloseReason, type WebSocketLike } from "@task-handoff/protocol/websocket-bridge";
 import type { ControlPlaneService } from "../application/service.ts";
 import type { NodeAgentTransport } from "./client.ts";
@@ -311,6 +311,7 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
     try {
       current.socket.send(JSON.stringify({
         type: "control-plane.event-subscribe",
+        eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION,
         aiSessionTransient: {
           ...(demand.replaySince ? { replaySince: demand.replaySince } : {}),
           messageDeltas: demand.messageDeltas,
@@ -956,6 +957,7 @@ export class ControlPlaneNodeEventSubscriber {
     const encoded = JSON.stringify({
       v: 1,
       type: "subscribe",
+      eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION,
       aiSessionTransient: {
         ...(demand.replaySince ? { replaySince: demand.replaySince } : {}),
         messageDeltas: demand.messageDeltas,
@@ -1127,6 +1129,7 @@ export class ControlPlaneNodeEventSubscriber {
       socket.sendUpstream(JSON.stringify({
         v: 1,
         type: "subscribe",
+        eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION,
         aiSessionTransient: {
           ...(this.transientDemand.replaySince ? { replaySince: this.transientDemand.replaySince } : {}),
           messageDeltas: this.transientDemand.messageDeltas,

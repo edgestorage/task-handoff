@@ -52,6 +52,40 @@ test("controlled instance preserves legacy full-topic subscription behavior", ()
   assert.equal(client.sent.length, 2);
 });
 
+test("controlled instance sends compact deltas only after explicit projection negotiation", () => {
+  const events = new WebEventBus();
+  const legacy = socket();
+  const compact = socket();
+  events.connect(legacy.value);
+  events.connect(compact.value);
+  legacy.listeners.message(JSON.stringify({ type: "subscribe", topics: ["ai.sessions"] }));
+  compact.listeners.message(JSON.stringify({ type: "subscribe", eventEnvelopeVersion: "2026-08-25", topics: ["ai.sessions"] }));
+  const payload = {
+    instanceId: "instance-a",
+    nodeId: "node-a",
+    sessionId: "session-a",
+    providerSessionId: "provider-a",
+    turnId: "turn-a",
+    itemId: "item-a",
+    delta: "hello",
+    generatedAt: "2026-08-25T00:00:00.000Z",
+  };
+  events.publish("ai-session.message-delta", payload);
+
+  assert.equal(legacy.sent[0].v, 1);
+  assert.deepEqual(legacy.sent[0].payload, payload);
+  assert.equal(compact.sent[0].v, "2026-08-25");
+  assert.equal(compact.sent[0].seq, undefined);
+  assert.equal(compact.sent[0].topic, undefined);
+  assert.deepEqual(compact.sent[0].payload, {
+    sessionId: "session-a",
+    turnId: "turn-a",
+    itemId: "item-a",
+    delta: "hello",
+    generatedAt: "2026-08-25T00:00:00.000Z",
+  });
+});
+
 test("controlled instance treats an explicit empty topic list as no subscription", () => {
   const events = new WebEventBus();
   const client = socket();

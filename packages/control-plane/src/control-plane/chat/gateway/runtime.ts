@@ -4,7 +4,7 @@ import type { CardActionEvent, NormalizedMessage } from "@larksuiteoapi/node-sdk
 import { createInlineKeyboard } from "@task-handoff/core/core/chat-interactions";
 import type { ChatInlineKeyboard, ChatInteractionPayload } from "@task-handoff/core/core/chat-interactions";
 import {
-  type AiSessionActionResult,
+  type AiSessionActionResponse,
   type AiSessionMessageAttachment,
   type AiSessionsSnapshot,
   type AiSessionSummary,
@@ -118,7 +118,7 @@ type ChatGatewayResult = {
   instanceId?: string;
   aiSessionId?: string;
   instance?: { id: string };
-  aiSession?: AiSessionActionResult | AiSessionSummary;
+  aiSession?: AiSessionActionResponse | AiSessionSummary;
   turnId?: string;
   providerTurnId?: string;
 };
@@ -1953,10 +1953,10 @@ function stringArraySetting(value: unknown) {
 }
 
 function routedAiSessionResult(result: ChatGatewayResult) {
-  const actionResult = result.aiSession && "session" in result.aiSession ? result.aiSession : undefined;
-  const session = actionResult?.session || (result.aiSession && "id" in result.aiSession ? result.aiSession : undefined);
+  const actionResult = result.aiSession && "sessionId" in result.aiSession ? result.aiSession : undefined;
+  const session = result.aiSession && "id" in result.aiSession ? result.aiSession : undefined;
   const instanceId = result.instanceId || result.instance?.id || "";
-  const sessionId = result.aiSessionId || session?.id || result.binding?.activeAiSessionId || "";
+  const sessionId = result.aiSessionId || actionResult?.sessionId || session?.id || result.binding?.activeAiSessionId || "";
   const turnId = result.turnId || result.providerTurnId || actionResult?.turnId || actionResult?.providerTurnId || (session ? aiSessionDeliveryTurnId(session) : "");
   return {
     instanceId,

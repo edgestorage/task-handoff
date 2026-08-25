@@ -1674,6 +1674,14 @@ export class ControlPlaneService {
     return this.aiSessionActionService.detail(instanceId, sessionId);
   }
 
+  getAiSessionTurnIndex(instanceId: string, sessionId: string) {
+    return this.aiSessionActionService.turnIndex(instanceId, sessionId);
+  }
+
+  getAiSessionTurnBody(instanceId: string, sessionId: string, turnId: string) {
+    return this.aiSessionActionService.turnBody(instanceId, sessionId, turnId);
+  }
+
   steerAiSessionQueuedMessage(instanceId: string, sessionId: string, queueId: string) {
     return this.aiSessionActionService.steerQueuedMessage(instanceId, sessionId, queueId);
   }

@@ -1,8 +1,11 @@
 const assert = require("node:assert/strict");
 const { EventEmitter } = require("node:events");
 const test = require("node:test");
+const Fastify = require("fastify");
+const websocket = require("@fastify/websocket");
+const WebSocket = require("ws");
 
-const { bridgeWebSockets, closeWebSocket } = require("../packages/protocol/src/websocket-bridge.ts");
+const { TASK_HANDOFF_WEBSOCKET_SERVER_OPTIONS, bridgeWebSockets, closeWebSocket } = require("../packages/protocol/src/websocket-bridge.ts");
 
 class MockWebSocket extends EventEmitter {
   constructor() {
@@ -138,4 +141,54 @@ test("bridgeWebSockets converts destination send exceptions into symmetric closu
   assert.doesNotThrow(() => client.emit("message", "opaque", false));
   assert.deepEqual(client.closes.at(-1), { code: 1011, reason: "WebSocket bridge send failed." });
   assert.deepEqual(upstream.closes.at(-1), { code: 1011, reason: "WebSocket bridge send failed." });
+});
+
+test("structured websocket compression uses a bounded low-cost policy", () => {
+  assert.deepEqual(TASK_HANDOFF_WEBSOCKET_SERVER_OPTIONS, {
+    perMessageDeflate: {
+      threshold: 256,
+      serverNoContextTakeover: true,
+      clientNoContextTakeover: true,
+      concurrencyLimit: 4,
+      zlibDeflateOptions: { level: 1 },
+    },
+  });
+});
+
+test("transparent websocket bridges never recompress opaque frames", () => {
+  const client = new MockWebSocket();
+  const upstream = new MockWebSocket();
+  bridgeWebSockets(client, upstream);
+
+  client.emit("message", "opaque-text", false);
+  upstream.emit("message", Buffer.from([1, 2, 3]), true);
+
+  assert.deepEqual(upstream.sent[0].options, { binary: false, compress: false });
+  assert.deepEqual(client.sent[0].options, { binary: true, compress: false });
+});
+
+test("websocket compression is negotiated only with clients that request it", async (context) => {
+  const app = Fastify();
+  await app.register(websocket, { options: TASK_HANDOFF_WEBSOCKET_SERVER_OPTIONS });
+  app.get("/events", { websocket: true }, (socket) => socket.send("x".repeat(300)));
+  await app.listen({ host: "127.0.0.1", port: 0 });
+  context.after(() => app.close());
+  const address = app.server.address();
+  const url = `ws://127.0.0.1:${address.port}/events`;
+
+  const current = new WebSocket(url);
+  context.after(() => current.terminate());
+  await new Promise((resolve, reject) => {
+    current.once("message", resolve);
+    current.once("error", reject);
+  });
+  assert.match(current.extensions, /permessage-deflate/);
+
+  const legacy = new WebSocket(url, { perMessageDeflate: false });
+  context.after(() => legacy.terminate());
+  await new Promise((resolve, reject) => {
+    legacy.once("message", resolve);
+    legacy.once("error", reject);
+  });
+  assert.equal(legacy.extensions, "");
 });

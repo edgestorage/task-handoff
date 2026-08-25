@@ -228,14 +228,27 @@ test("AI session queue preserves staged upload ownership until automatic dequeue
   const persisted = JSON.parse(fs.readFileSync(registry.sessionPath(session.id), "utf8"));
   delete persisted.queue.items[0].messageId;
   fs.writeFileSync(registry.sessionPath(session.id), `${JSON.stringify(persisted, null, 2)}\n`);
-  assert.equal(registry.get(session.id).queue.items[0].messageId, undefined);
+  const restoredRegistry = createAiSessionRegistry({
+    dir: path.join(root, "sessions"),
+    conversationAttachments,
+  });
+  const restoredController = new AiSessionController(restoredRegistry);
+  restoredController.register({
+    agent: "codex",
+    async startMessage(_session, input) {
+      starts.push(input);
+      assert.equal(fs.readFileSync(input.attachments[0].retainedPath, "utf8"), "image");
+      return { turnId: "turn-queued-attachment" };
+    },
+  });
+  assert.equal(restoredRegistry.get(session.id).queue.items[0].messageId, undefined);
 
-  registry.complete(session.id, "Done");
-  await controller.sendNextQueuedMessage(session.id);
+  restoredRegistry.complete(session.id, "Done");
+  await restoredController.sendNextQueuedMessage(session.id);
 
   assert.equal(starts.length, 1);
   assert.equal(starts[0].messageId, queued.session.queue.items[0].messageId);
-  assert.deepEqual(registry.get(session.id).queue.items, []);
+  assert.deepEqual(restoredRegistry.get(session.id).queue.items, []);
 });
 
 test("AI session queue retains staged uploads across a failed automatic dispatch and retry", async (t) => {

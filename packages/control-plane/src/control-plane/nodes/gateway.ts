@@ -803,13 +803,19 @@ export class ControlPlaneNodeAgentGateway {
         stateRevision: _stateRevision,
         updatedAt: _updatedAt,
         lastHeartbeatAt: _lastHeartbeatAt,
-        aiSessions,
+        aiSessions: _aiSessions,
+        appInventory,
         ...semantic
       } = item as Record<string, unknown>;
-      const comparableAiSessions = aiSessions && typeof aiSessions === "object" && !Array.isArray(aiSessions)
-        ? (({ updatedAt: _aiSessionsUpdatedAt, ...snapshot }) => snapshot)(aiSessions as Record<string, unknown>)
-        : aiSessions;
-      return { ...semantic, ...(comparableAiSessions ? { aiSessions: comparableAiSessions } : {}) };
+      // AI Sessions have their own authoritative summary stream. Comparing the
+      // compatibility projection embedded in /instances would turn every Turn
+      // into a fleet content change and make all browser windows refetch board.
+      // App inventory remains part of the directory, but its observation clock
+      // advances on every heartbeat even when items and issues are unchanged.
+      const comparableAppInventory = appInventory && typeof appInventory === "object" && !Array.isArray(appInventory)
+        ? (({ observedAt: _observedAt, ...inventory }) => inventory)(appInventory as Record<string, unknown>)
+        : appInventory;
+      return { ...semantic, ...(comparableAppInventory ? { appInventory: comparableAppInventory } : {}) };
     });
   }
 
@@ -910,7 +916,11 @@ export class ControlPlaneNodeAgentGateway {
     snapshot.updatedAt = new Date().toISOString();
     snapshot.error = undefined;
     this.emitFleetState(node.id, "instances", snapshot, {
-      contentChanged: JSON.stringify(previousItems) !== JSON.stringify(snapshot.items),
+      contentChanged: !this.sameFleetItems(
+        "instances",
+        { ...snapshot, items: previousItems },
+        snapshot,
+      ),
     });
   }
 

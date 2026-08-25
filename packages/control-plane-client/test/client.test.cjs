@@ -12,9 +12,11 @@ const {
   aiSessionElapsedSeconds,
   applyControlPlaneAiSessionStreamEvent,
   applyAiSessionUnreadState,
+  AiSessionConversationCache,
   createControlPlaneClient,
   deriveAiSessionUnreadAfterStreamEvent,
   isAiSessionApprovalPending,
+  mergeAiSessionSummaryWithDetail,
   mergeAiSessionSummaryTurnsWithDetail,
   sortedAiSessions,
   sortedAiSessionInboxEntries,
@@ -43,6 +45,81 @@ test("AI Session realtime turns override retained detail fields without dropping
     summaryTurns[1],
   ]);
   assert.deepEqual(mergeAiSessionSummaryTurnsWithDetail([], detailTurns), []);
+});
+
+test("AI Session detail enriches only metadata and cannot overwrite live summary text", () => {
+  const summary = {
+    id: "session-1",
+    detailRevision: "detail-2",
+    summary: "current summary",
+    lastMessage: "current compact response",
+    queue: { revision: 2, pendingCount: 0, items: [] },
+    subAgents: [],
+  };
+  const detail = {
+    id: "session-1",
+    summary: "full summary",
+    lastMessage: "full response",
+    turns: [{ id: "turn-1", status: "completed", revision: 2, lastMessage: "full response", userMessages: [{ id: "message-1", text: "prompt" }] }],
+    queue: { revision: 2, pendingCount: 1, items: [{ id: "queued-1" }] },
+    subAgents: [{ threadId: "sub-1" }],
+  };
+
+  assert.deepEqual(mergeAiSessionSummaryWithDetail(summary, detail), {
+    ...summary,
+    turns: detail.turns,
+    queue: detail.queue,
+    subAgents: detail.subAgents,
+    appBindingKeys: undefined,
+    cwd: undefined,
+    error: undefined,
+    providerMeta: undefined,
+  });
+
+  const legacySummary = {
+    ...summary,
+    detailRevision: undefined,
+    turns: [{ id: "turn-1", status: "completed", revision: 2, lastMessage: "current response" }],
+  };
+  const legacyMerged = mergeAiSessionSummaryWithDetail(legacySummary, detail);
+  assert.equal(legacyMerged.summary, "current summary");
+  assert.equal(legacyMerged.lastMessage, "current compact response");
+  assert.equal(legacyMerged.queue, legacySummary.queue);
+  assert.equal(legacyMerged.subAgents, legacySummary.subAgents);
+  assert.deepEqual(legacyMerged.turns[0].userMessages, detail.turns[0].userMessages);
+});
+
+test("conversation cache keeps the mounted projection while revisions refresh independently", () => {
+  const cache = new AiSessionConversationCache(2);
+  const summary = {
+    id: "session-1",
+    detailRevision: "detail-1",
+    turnsRevision: "turns-1",
+    updatedAt: "2026-08-26T00:00:00.000Z",
+    queue: { revision: 0, pendingCount: 0, items: [] },
+    subAgents: [],
+  };
+  cache.setDetail("instance-1", summary, { id: summary.id, queue: summary.queue, subAgents: [] });
+  cache.setTurnIndex("instance-1", summary, {
+    sessionId: summary.id,
+    revision: "turns-1",
+    turns: [{ id: "turn-1", status: "running", phase: "responding", revision: 1, bodyRevision: "body-1", startedAt: summary.updatedAt, updatedAt: summary.updatedAt }],
+  });
+  cache.setTurn("instance-1", summary.id, "body-1", { id: "turn-1", status: "running", phase: "responding", revision: 1, lastMessage: "visible", startedAt: summary.updatedAt, updatedAt: summary.updatedAt });
+
+  const changed = { ...summary, detailRevision: "detail-2", turnsRevision: "turns-2", lastMessage: "live" };
+  assert.equal(cache.hasProjection("instance-1", summary.id), true);
+  assert.equal(cache.hasDetail("instance-1", changed), false);
+  assert.equal(cache.hasTurnIndex("instance-1", changed), false);
+  assert.equal(cache.projection("instance-1", changed).turns[0].lastMessage, "visible");
+  assert.equal(cache.projection("instance-1", changed).lastMessage, "live");
+  cache.setTurnIndex("instance-1", changed, {
+    sessionId: summary.id,
+    revision: "turns-2",
+    turns: [{ id: "turn-1", status: "running", phase: "responding", revision: 1, bodyRevision: "body-2", startedAt: summary.updatedAt, updatedAt: summary.updatedAt }],
+  });
+  assert.equal(cache.needsTurn("instance-1", summary.id, "turn-1")?.bodyRevision, "body-2");
+  assert.equal(cache.projection("instance-1", changed).turns[0].lastMessage, "visible");
 });
 
 test("shared AI Session client owns route encoding, request input, and response schema", async () => {

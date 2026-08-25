@@ -136,8 +136,8 @@ test("control-plane proxy websocket keeps route and auth binding-scoped and uses
 
   downstream.emit("message", "input", false);
   upstream.emit("message", Buffer.from([7, 8]), true);
-  assert.deepEqual(upstream.sent[0], { data: "input", options: { binary: false } });
-  assert.deepEqual(downstream.sent[0], { data: Buffer.from([7, 8]), options: { binary: true } });
+  assert.deepEqual(upstream.sent[0], { data: "input", options: { binary: false, compress: false } });
+  assert.deepEqual(downstream.sent[0], { data: Buffer.from([7, 8]), options: { binary: true, compress: false } });
   upstream.emit("close", 1000, "done");
   assert.deepEqual(downstream.closes.at(-1), { code: 1000, reason: "done" });
 });

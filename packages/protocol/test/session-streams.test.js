@@ -6,6 +6,8 @@ import {
   AiSessionCreateInputSchema,
   AiSessionCreateRefInputSchema,
   AiSessionCreateResultSchema,
+  AiSessionActionCompatibleResponseSchema,
+  projectAiSessionActionResponse,
   AiSessionForkInputSchema,
   AiSessionForkResultSchema,
   AiSessionCloseInputSchema,
@@ -18,6 +20,8 @@ import {
   AiSessionHistoryListSchema,
   AI_SESSION_HISTORY_MAX_LIMIT,
   AiSessionMessageDeltaEventSchema,
+  compactAiSessionMessageDeltaEvent,
+  normalizeAiSessionMessageDeltaEvent,
   AiSessionMentionCandidateSchema,
   AiSessionMentionFileSearchSchema,
   AiSessionMessageInputSchema,
@@ -29,6 +33,9 @@ import {
   AiSessionReferenceSchema,
   AiSessionRealtimeInputSchema,
   AiSessionStatusSchema,
+  AiSessionDetailSchema,
+  AiSessionTurnBodySchema,
+  AiSessionTurnIndexSchema,
   AiSessionSummarySchema,
   AiSessionResumeResultSchema,
   AiSessionSubAgentSchema,
@@ -48,6 +55,9 @@ import {
   aiSessionTransientSubscriptionAccepts,
   SESSION_STREAM_PROTOCOL_VERSION,
   SessionStreamsHelloSchema,
+  COMPACT_EVENT_ENVELOPE_VERSION,
+  normalizeEventEnvelope,
+  projectEventEnvelope,
 } from "../src/events.ts";
 
 const now = "2026-07-13T00:00:00.000Z";
@@ -68,6 +78,42 @@ test("AI session queue schemas expose revisioned edit and reorder inputs", () =>
   assert.deepEqual(AiSessionQueueReorderInputSchema.parse({ expectedRevision: 2, queueIds: ["q-2", "q-1"] }), { expectedRevision: 2, queueIds: ["q-2", "q-1"] });
   assert.equal(AiSessionQueueEditInputSchema.safeParse({ message: "missing revision" }).success, false);
   assert.equal(AiSessionQueueReorderInputSchema.safeParse({ expectedRevision: 2, queueIds: [], extra: true }).success, false);
+});
+
+test("AI session detail, Turn index, and Turn body are independent strict wire models", () => {
+  const detail = AiSessionDetailSchema.parse({
+    id: "session-a",
+    queue: { revision: 0, pendingCount: 0, items: [] },
+    subAgents: [],
+  });
+  assert.equal("turns" in detail, false);
+  assert.equal(AiSessionDetailSchema.safeParse({ ...detail, turns: [] }).success, false);
+
+  const indexTurn = { id: "turn-a", status: "completed", phase: "responding", revision: 2, bodyRevision: "body-v2", startedAt: now, updatedAt: now };
+  const index = AiSessionTurnIndexSchema.parse({ sessionId: detail.id, revision: "turns-v2", turns: [indexTurn] });
+  assert.deepEqual(index.turns, [indexTurn]);
+  assert.equal(AiSessionTurnIndexSchema.safeParse({ ...index, turns: [{ ...indexTurn, lastMessage: "must stay in the body" }] }).success, false);
+
+  const { bodyRevision: _bodyRevision, ...turn } = indexTurn;
+  const body = AiSessionTurnBodySchema.parse({ sessionId: detail.id, revision: indexTurn.bodyRevision, turn: { ...turn, lastMessage: "complete response" } });
+  assert.equal(body.turn.lastMessage, "complete response");
+});
+
+test("AI session HTTP action acknowledgement omits the full session and normalizes v0.0.23", () => {
+  const session = AiSessionStatusSchema.parse({
+    id: "session-a",
+    agent: "codex",
+    status: "running",
+    phase: "responding",
+    startedAt: now,
+    updatedAt: now,
+    turns: [{ id: "turn-a", status: "running", phase: "responding", revision: 1, startedAt: now, updatedAt: now, userMessages: [{ id: "message-a", text: "hello", attachments: [] }] }],
+  });
+  const legacy = { session, provider: "codex", action: "send", turnId: "turn-a" };
+  const expected = { sessionId: session.id, provider: "codex", action: "send", turnId: "turn-a", messageId: "message-a" };
+  assert.deepEqual(projectAiSessionActionResponse(legacy), expected);
+  assert.deepEqual(AiSessionActionCompatibleResponseSchema.parse(legacy), expected);
+  assert.equal("session" in expected, false);
 });
 
 test("AI session history schemas expose bounded strict summaries and resume results", () => {
@@ -229,6 +275,8 @@ test("AI session tool activity schemas default and project the window count", ()
   const summary = { ...status };
   delete summary.counters;
   assert.equal(AiSessionSummarySchema.parse(summary).toolCallsSinceLastMessage, 0);
+  assert.equal(AiSessionSummarySchema.parse(summary).detailRevision, undefined);
+  assert.equal(AiSessionSummarySchema.parse({ ...summary, detailRevision: "detail-v2" }).detailRevision, "detail-v2");
 
   const projected = AiSessionSummarySchema.parse({ ...summary,
     currentTool: { id: "item-1", kind: "commandExecution", name: "Command", inputPreview: "pnpm test" },
@@ -495,6 +543,60 @@ test("AI session message delta is an ephemeral event outside revision recovery",
     syncRequired: false,
     events: [{ type: AiSessionEventType.MessageDelta, payload }],
   }).success, false);
+});
+
+test("compact event projection removes only connection-derived message delta fields", () => {
+  const payload = AiSessionMessageDeltaEventSchema.parse({
+    instanceId: "instance-a",
+    nodeId: "node-a",
+    sessionId: "session-a",
+    providerSessionId: "thread-a",
+    turnId: "turn-a",
+    itemId: "item-a",
+    delta: "hello",
+    generatedAt: now,
+  });
+  const event = {
+    v: 1,
+    id: "event-a",
+    seq: 42,
+    type: AiSessionEventType.MessageDelta,
+    topic: "ai.sessions",
+    createdAt: now,
+    payload,
+    scope: { nodeId: "node-a", instanceId: "instance-a" },
+  };
+  const projected = projectEventEnvelope(event, COMPACT_EVENT_ENVELOPE_VERSION, {
+    payload: compactAiSessionMessageDeltaEvent(payload),
+    publicScope: true,
+  });
+
+  assert.deepEqual(projected, {
+    v: "2026-08-25",
+    id: "event-a",
+    type: AiSessionEventType.MessageDelta,
+    createdAt: now,
+    payload: {
+      sessionId: "session-a",
+      turnId: "turn-a",
+      itemId: "item-a",
+      delta: "hello",
+      generatedAt: now,
+    },
+    scope: { instanceId: "instance-a" },
+  });
+  const normalized = normalizeEventEnvelope(projected);
+  assert.equal(normalized.seq, 0);
+  assert.equal(normalized.topic, "ai.sessions");
+  assert.deepEqual(normalizeAiSessionMessageDeltaEvent(normalized.payload, normalized.scope.instanceId), {
+    instanceId: "instance-a",
+    sessionId: "session-a",
+    turnId: "turn-a",
+    itemId: "item-a",
+    delta: "hello",
+    generatedAt: now,
+  });
+  assert.equal(projectEventEnvelope(event, 1), event);
 });
 
 test("AI transient subscriptions separate list deltas from session detail timeline demand", () => {

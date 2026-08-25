@@ -785,7 +785,8 @@ test("ai session registry indexes provider sessions without rescanning on every 
 
   assert.equal(registry.getByProviderSessionId("codex", "thread-indexed")?.id, session.id);
   fs.rmSync(registry.sessionPath(session.id));
-  assert.equal(registry.getByProviderSessionId("codex", "thread-indexed"), undefined);
+  assert.equal(registry.getByProviderSessionId("codex", "thread-indexed")?.id, session.id);
+  assert.equal(createAiSessionRegistry({ dir }).getByProviderSessionId("codex", "thread-indexed"), undefined);
 
   const persisted = registry.start({ agent: "codex", providerSessionId: "thread-reloaded" });
   const reloaded = createAiSessionRegistry({ dir });
@@ -825,7 +826,7 @@ test("ai session registry migrates unknown sub-agent fields and caps after dedup
   persisted.subAgents = subAgents;
   fs.writeFileSync(registry.sessionPath(session.id), JSON.stringify(persisted));
 
-  const restored = registry.get(session.id);
+  const restored = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") }).get(session.id);
   assert.equal(restored?.subAgents.length, 50);
   assert.equal(restored?.subAgents.find((agent) => agent.threadId === "thread-00")?.status, "running");
   assert.equal(restored?.subAgents.some((agent) => "futureField" in agent), false);
@@ -1009,6 +1010,23 @@ test("ai session registry migrates historical tool activity and ignores unknown 
   }
   assert.equal(warnings.some((message) => message.includes("futureSessionField")), true);
   assert.equal(warnings.some((message) => message.includes("historicalDetail")), true);
+});
+
+test("ai session registry keeps memory authoritative when persistence fails", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-atomic-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const session = registry.start({ agent: "codex", providerSessionId: "thread-atomic", title: "Before" });
+  const sessionPath = registry.sessionPath(session.id);
+  fs.rmSync(sessionPath);
+  fs.mkdirSync(sessionPath);
+
+  assert.throws(() => registry.applyAdapterSnapshot({
+    agent: "codex",
+    providerSessionId: "thread-atomic",
+    title: "After",
+    status: "running",
+  }));
+  assert.equal(registry.get(session.id)?.title, "Before");
 });
 
 test("ai session registry starts explicit turns without carrying over previous responses", () => {
@@ -1481,16 +1499,12 @@ test("ai session registry includes user prompt in snapshots", () => {
   const snapshot = registry.snapshot();
   assert.equal(snapshot.sessions[0].userPrompt, "Design the AI session board");
   assert.equal(snapshot.sessions[0].lastMessage, "AI board list updated");
-  assert.equal(snapshot.sessions[0].turns.length, 1);
-  assert.match(snapshot.sessions[0].turns[0].id, /^turn_/);
-  assert.equal(snapshot.sessions[0].turns[0].revision, 1);
-  assert.equal(snapshot.sessions[0].turns[0].userPrompt, "Design the AI session board");
-  assert.equal(snapshot.sessions[0].turns[0].summary, "AI board list updated");
-  assert.equal(snapshot.sessions[0].turns[0].lastMessage, "AI board list updated");
-  assert.equal(typeof snapshot.sessions[0].turns[0].updatedAt, "string");
+  assert.equal(snapshot.sessions[0].turns, undefined);
+  assert.equal(snapshot.sessions[0].turnCount, 1);
+  assert.equal(typeof snapshot.sessions[0].lastUserMessageAt, "string");
 });
 
-test("ai session aggregate snapshots carry only the latest turn while detail retains history", () => {
+test("ai session aggregate snapshots separate turns from list summaries", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-compact-summary-"));
   const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
   const turns = [1, 2, 3].map((revision) => ({
@@ -1516,7 +1530,87 @@ test("ai session aggregate snapshots carry only the latest turn while detail ret
   });
 
   assert.deepEqual(registry.get(session.id)?.turns?.map((turn) => turn.id), ["turn_1", "turn_2", "turn_3"]);
-  assert.deepEqual(registry.snapshot().sessions[0].turns?.map((turn) => turn.id), ["turn_3"]);
+  const firstSummary = registry.snapshot().sessions[0];
+  assert.equal(firstSummary.turns, undefined);
+  assert.equal(firstSummary.turnCount, 3);
+  assert.equal(typeof firstSummary.detailRevision, "string");
+  assert.equal(typeof firstSummary.turnsRevision, "string");
+
+  registry.applyAdapterSnapshot({
+    agent: "codex",
+    providerSessionId: "thread-compact-summary",
+    turns: turns.map((turn, index) => index === 2 ? { ...turn, lastMessage: "A newer complete response" } : turn),
+    status: "idle",
+    phase: "unknown",
+    summary: "Done 3",
+    lastMessage: "A newer complete response",
+    observedAt: "2026-08-21T14:00:04.000Z",
+    replaceActivity: true,
+  });
+  assert.equal(registry.snapshot().sessions[0].detailRevision, firstSummary.detailRevision);
+  assert.notEqual(registry.snapshot().sessions[0].turnsRevision, firstSummary.turnsRevision);
+});
+
+test("ai session list payload stays bounded as turn history grows", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-summary-budget-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const longText = "response ".repeat(8_000);
+  const turns = Array.from({ length: 50 }, (_, index) => ({
+    id: `turn_${index}`,
+    userPrompt: `Prompt ${index}`,
+    status: "completed",
+    lastMessage: longText,
+    revision: index,
+    updatedAt: new Date(Date.UTC(2026, 7, 21, 14, 0, index)).toISOString(),
+  }));
+  const session = registry.applyAdapterSnapshot({
+    agent: "codex",
+    providerSessionId: "thread-summary-budget",
+    turns,
+    status: "idle",
+    lastMessage: longText,
+    observedAt: "2026-08-21T14:01:00.000Z",
+    replaceActivity: true,
+  });
+  const committed = registry.get(session.id);
+  registry.restoreAuthority({
+    ...committed,
+    cwd: `/${"d".repeat(4_095)}`,
+    appBindingKeys: Array.from({ length: 20 }, (_, index) => `binding-${index}-${"x".repeat(220)}`),
+    userPrompt: longText,
+    summary: longText.slice(0, 1_000),
+    error: longText.slice(0, 4_000),
+    currentTool: { id: "tool-id", name: "exec", inputPreview: longText.slice(0, 500), startedAt: committed.updatedAt },
+    subAgents: Array.from({ length: 50 }, (_, index) => ({
+      threadId: `sub-agent-${index}`,
+      status: "running",
+      message: longText.slice(0, 1_000),
+      updatedAt: committed.updatedAt,
+    })),
+    queue: {
+      revision: 100,
+      pendingCount: 100,
+      items: Array.from({ length: 100 }, (_, index) => ({
+        id: `queue-${index}`,
+        message: longText.slice(0, 20_000),
+        attachments: [],
+        references: [],
+        status: "queued",
+        createdAt: committed.updatedAt,
+        updatedAt: committed.updatedAt,
+      })),
+    },
+  });
+
+  assert.equal(registry.get(session.id)?.turns?.length, 50);
+  const summary = registry.snapshot().sessions[0];
+  assert.equal(summary.turns, undefined);
+  assert.equal(summary.turnCount, 50);
+  assert.equal(summary.subAgentCount, 50);
+  assert.equal(summary.subAgents.length, 0);
+  assert.deepEqual(summary.queue, { revision: 100, pendingCount: 100, items: [] });
+  assert.ok(Buffer.byteLength(JSON.stringify(summary)) <= 4 * 1024);
+  assert.ok(Buffer.byteLength(JSON.stringify({ sessions: Array.from({ length: 20 }, () => summary) })) <= 256 * 1024);
 });
 
 test("ai session registry derives the top-level prompt from canonical turns", () => {
@@ -1626,6 +1720,24 @@ test("ai session registry emits change events for realtime publishing", () => {
   registry.progress(session.id, "ignored", "assistant");
 
   assert.deepEqual(changes, ["write", "write", "write"]);
+});
+
+test("ai session registry publishes one final authority change per batch", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-batch-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const session = registry.start({ agent: "codex", providerSessionId: "thread-batch", userPrompt: "Start" });
+  const changes = [];
+  const unsubscribe = registry.onChange((reason) => changes.push(reason));
+
+  await registry.batchChanges(() => {
+    registry.progress(session.id, "Working", "assistant");
+    registry.complete(session.id, "Done");
+  });
+
+  unsubscribe();
+  assert.deepEqual(changes, ["write"]);
+  assert.equal(registry.get(session.id)?.lastMessage, "Done");
+  assert.equal(registry.get(session.id)?.status, "idle");
 });
 
 test("ai session controller rejects approvals without structured provider support", async () => {
@@ -1857,7 +1969,7 @@ test("AI session queue edits and reorders use an exact revisioned queued-message
   assert.deepEqual(retried.queue.items.filter((item) => item.status === "queued").map((item) => item.id), [third.id, second.id, first.id]);
 });
 
-test("ai session registry does not truncate assistant responses", () => {
+test("ai session detail preserves full assistant responses while list summaries stay bounded", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-registry-"));
   const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
   const fullResponse = `${"A".repeat(5000)}\nfinal line`;
@@ -1869,15 +1981,18 @@ test("ai session registry does not truncate assistant responses", () => {
   });
   registry.progress(session.id, fullResponse, "assistant");
 
+  const detailSession = registry.get(session.id);
   const snapshotSession = registry.snapshot().sessions[0];
-  assert.equal(snapshotSession.lastMessage, fullResponse);
-  assert.equal(snapshotSession.lastMessage.endsWith("final line"), true);
-  assert.equal(snapshotSession.turns[0].lastMessage, fullResponse);
+  assert.equal(detailSession.lastMessage, fullResponse);
+  assert.equal(detailSession.turns[0].lastMessage, fullResponse);
+  assert.equal(snapshotSession.lastMessage.length <= 800, true);
+  assert.equal(snapshotSession.turns, undefined);
   assert.equal(snapshotSession.summary.endsWith("..."), true);
-  assert.equal(AiSessionSummarySchema.parse(snapshotSession).lastMessage, fullResponse);
+  assert.equal(AiSessionSummarySchema.parse(snapshotSession).lastMessage, snapshotSession.lastMessage);
 
   registry.complete(session.id, fullResponse);
-  assert.equal(registry.snapshot().sessions[0].lastMessage, fullResponse);
+  assert.equal(registry.get(session.id).lastMessage, fullResponse);
+  assert.equal(registry.snapshot().sessions[0].lastMessage.length <= 800, true);
 });
 
 test("ai session registry merges resumed claude app sessions by provider id", () => {
@@ -2581,7 +2696,7 @@ test("ai session registry backfills user prompt from scanned transcripts", () =>
   assert.equal(session.lastMessage, "Current progress");
 });
 
-test("ai session registry preserves full assistant text from scanned transcripts", () => {
+test("ai session detail preserves full assistant text from scanned transcripts", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-registry-"));
   const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
   const cwd = path.join(root, "repo");
@@ -2592,12 +2707,14 @@ test("ai session registry preserves full assistant text from scanned transcripts
     `${JSON.stringify({ type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: fullResponse }] } })}\n`,
   );
 
-  registry.createFromTranscript("codex", transcriptPath, { providerSessionId: "codex-session", cwd });
+  const created = registry.createFromTranscript("codex", transcriptPath, { providerSessionId: "codex-session", cwd });
 
-  const session = registry.snapshot().sessions[0];
-  assert.equal(session.lastMessage, fullResponse);
-  assert.equal(session.lastMessage.endsWith("not truncated"), true);
-  assert.equal(session.summary.endsWith("..."), true);
+  const detail = registry.get(created.id);
+  const summary = registry.snapshot().sessions[0];
+  assert.equal(detail.lastMessage, fullResponse);
+  assert.equal(detail.lastMessage.endsWith("not truncated"), true);
+  assert.equal(summary.lastMessage.length <= 800, true);
+  assert.equal(summary.summary.endsWith("..."), true);
 });
 
 test("ai session registry treats repeated transcript backfill turns as a snapshot", () => {
@@ -4760,7 +4877,8 @@ test("claude control sock bridge ignores stopped app sessions and prunes undisco
   const sessions = registry.snapshot(10).sessions;
   assert.equal(sessions.length, 1);
   assert.equal(sessions[0].providerSessionId, "live-provider");
-  assert.equal(sessions[0].providerMeta.short, "cafebabe");
+  assert.equal(sessions[0].providerMeta, undefined);
+  assert.equal(registry.get(sessions[0].id).providerMeta.short, "cafebabe");
 });
 
 test("codex app server bridge controls turns through the ai session provider interface", async () => {
@@ -5428,8 +5546,7 @@ test("codex app server bridge resumes persisted AI sessions after an app-server 
     cwd: "/workspace",
     status: "idle",
   });
-  registry.put({
-    ...closing,
+  registry.patch(closing.id, {
     actions: { send: false, interrupt: false, approval: false, openApp: false, close: false },
   });
   class FakeCodexAppServerClient extends EventEmitter {
@@ -6176,7 +6293,7 @@ test("controlled instance session streams use restart epochs and ordered retaine
   }
 });
 
-test("controlled instance publishes provider changes immediately and discovery corrects missed changes without unchanged revisions", async () => {
+test("controlled instance publishes provider changes immediately and ignores external store writers until restart", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-session-discovery-"));
   const paths = appRuntimeTestPaths(root);
   const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
@@ -6229,7 +6346,6 @@ test("controlled instance publishes provider changes immediately and discovery c
       id: "tool_immediate",
       kind: "commandExecution",
       name: "Command",
-      inputPreview: "pnpm test",
     });
     assert.equal(toolSession.toolCallsSinceLastMessage, 2);
     const toolDelta = JSON.parse((await app.inject({
@@ -6244,19 +6360,14 @@ test("controlled instance publishes provider changes immediately and discovery c
 
     const externalRegistry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
     externalRegistry.start({ agent: "claude", appSessionId, providerSessionId: "provider_missed", status: "idle" });
-    const correctedState = await waitForCondition(async () => {
-      const state = JSON.parse((await app.inject({ method: "GET", url: "/api/ai-sessions/state" })).payload).data;
-      return state.snapshot.sessions.some((session) => session.providerSessionId === "provider_missed") ? state : undefined;
-    }, "discovery correction", 2500);
-    const correctedRevision = correctedState.revision;
-    const correctedDiagnostics = JSON.parse((await app.inject({ method: "GET", url: "/api/diagnostics" })).payload).data.sessionStreams.ai;
-    assert.ok(correctedDiagnostics.discoveryCorrections >= 1);
-
     await new Promise((resolve) => setTimeout(resolve, 1100));
     const unchangedState = JSON.parse((await app.inject({ method: "GET", url: "/api/ai-sessions/state" })).payload).data;
     const unchangedDiagnostics = JSON.parse((await app.inject({ method: "GET", url: "/api/diagnostics" })).payload).data.sessionStreams.ai;
-    assert.equal(unchangedState.revision, correctedRevision);
+    assert.equal(unchangedState.revision, toolState.revision);
+    assert.equal(unchangedState.snapshot.sessions.some((session) => session.providerSessionId === "provider_missed"), false);
     assert.ok(unchangedDiagnostics.discoveryUnchanged >= 1);
+    const restartedRegistry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+    assert.equal(restartedRegistry.all().some((session) => session.providerSessionId === "provider_missed"), true);
   } finally {
     await app.close();
     restoreEnv();

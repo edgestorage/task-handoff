@@ -8,15 +8,18 @@ import {
   appendAiSessionMessageDelta,
   applyAiSessionUnreadState,
   applyControlPlaneAiSessionStreamEvent,
+  AiSessionConversationCache,
 } from '@task-handoff/control-plane-client';
 import {
   mergeAiSessionTimelineItems,
+  type AiSessionDetail,
   type AiSessionMessageDeltaEvent,
   type AiSessionStreamApplyResult,
   type AiSessionStreamEvent,
   type AiSessionTimelineItem,
   type AiSessionTimelineItemEvent,
   type AiSessionTurn,
+  type AiSessionTurnIndex,
   type AiSessionUnreadState,
 } from '@task-handoff/protocol/ai-sessions';
 
@@ -97,6 +100,7 @@ type Listener = () => void;
 
 export class MobileAiSessionStore {
   private readonly profiles = new Map<string, MobileAiSessionProfileState>();
+  private readonly conversations = new AiSessionConversationCache(80);
   private readonly listeners = new Map<string, Set<Listener>>();
   private readonly snapshotListeners = new Map<string, Set<Listener>>();
   private readonly sessionListeners = new Map<string, Set<Listener>>();
@@ -127,10 +131,16 @@ export class MobileAiSessionStore {
     return this.profile(controlPlaneId).snapshot;
   }
 
-  session(controlPlaneId: string, instanceId: string, sessionId: string): ControlPlaneAiSessionSummary | undefined {
+  sessionSummary(controlPlaneId: string, instanceId: string, sessionId: string) {
     return this.profile(controlPlaneId).snapshot?.instances
       .find((instance) => instance.instanceId === instanceId)
       ?.aiSessions.sessions.find((session) => session.id === sessionId);
+  }
+
+  session(controlPlaneId: string, instanceId: string, sessionId: string): ControlPlaneAiSessionSummary | undefined {
+    const summary = this.sessionSummary(controlPlaneId, instanceId, sessionId);
+    if (!summary) return undefined;
+    return this.conversations.projection(mobileConversationInstanceKey(controlPlaneId, instanceId), summary);
   }
 
   sessionView(controlPlaneId: string, instanceId: string, sessionId: string): MobileAiSessionViewState {
@@ -138,9 +148,7 @@ export class MobileAiSessionStore {
     const cached = this.sessionViewCache.get(key);
     if (cached) return cached;
     const profile = this.profiles.get(controlPlaneId);
-    const session = profile?.snapshot?.instances
-        .find((instance) => instance.instanceId === instanceId)
-        ?.aiSessions.sessions.find((candidate) => candidate.id === sessionId);
+    const session = this.session(controlPlaneId, instanceId, sessionId);
     const view: MobileAiSessionViewState = {
       session,
       messages: Object.values(profile?.messages ?? {}).filter((message) => (
@@ -155,6 +163,51 @@ export class MobileAiSessionStore {
     this.sessionViewCache.set(key, view);
     addIndex(this.sessionViewKeysByControlPlane, controlPlaneId, key);
     return view;
+  }
+
+  hasSessionDetail(controlPlaneId: string, instanceId: string, summary: ControlPlaneAiSessionSummary) {
+    return this.conversations.hasDetail(mobileConversationInstanceKey(controlPlaneId, instanceId), summary);
+  }
+
+  hasSessionTurnIndex(controlPlaneId: string, instanceId: string, summary: ControlPlaneAiSessionSummary) {
+    return this.conversations.hasTurnIndex(mobileConversationInstanceKey(controlPlaneId, instanceId), summary);
+  }
+
+  sessionTurnIndex(controlPlaneId: string, instanceId: string, sessionId: string) {
+    return this.conversations.turnIndex(mobileConversationInstanceKey(controlPlaneId, instanceId), sessionId);
+  }
+
+  neededSessionTurn(controlPlaneId: string, instanceId: string, sessionId: string, turnId: string) {
+    return this.conversations.needsTurn(mobileConversationInstanceKey(controlPlaneId, instanceId), sessionId, turnId);
+  }
+
+  setSessionDetail(controlPlaneId: string, instanceId: string, summary: ControlPlaneAiSessionSummary, detail: AiSessionDetail) {
+    const key = mobileSessionSubscriptionKey(controlPlaneId, instanceId, detail.id);
+    this.conversations.setDetail(mobileConversationInstanceKey(controlPlaneId, instanceId), summary, detail);
+    this.sessionViewCache.delete(key);
+    for (const listener of this.sessionListeners.get(key) ?? []) listener();
+  }
+
+  setSessionTurnIndex(controlPlaneId: string, instanceId: string, summary: ControlPlaneAiSessionSummary, index: AiSessionTurnIndex) {
+    const key = mobileSessionSubscriptionKey(controlPlaneId, instanceId, summary.id);
+    this.conversations.setTurnIndex(mobileConversationInstanceKey(controlPlaneId, instanceId), summary, index);
+    this.sessionViewCache.delete(key);
+    for (const listener of this.sessionListeners.get(key) ?? []) listener();
+  }
+
+  setSessionTurn(controlPlaneId: string, instanceId: string, sessionId: string, revision: string, turn: AiSessionTurn) {
+    const key = mobileSessionSubscriptionKey(controlPlaneId, instanceId, sessionId);
+    this.conversations.setTurn(mobileConversationInstanceKey(controlPlaneId, instanceId), sessionId, revision, turn);
+    this.sessionViewCache.delete(key);
+    for (const listener of this.sessionListeners.get(key) ?? []) listener();
+  }
+
+  clearSessionDetail(controlPlaneId: string, instanceId: string, sessionId: string) {
+    const key = mobileSessionSubscriptionKey(controlPlaneId, instanceId, sessionId);
+    if (!this.conversations.clear(mobileConversationInstanceKey(controlPlaneId, instanceId), sessionId)) return false;
+    this.sessionViewCache.delete(key);
+    for (const listener of this.sessionListeners.get(key) ?? []) listener();
+    return true;
   }
 
   replaceSnapshot(controlPlaneId: string, snapshot: ControlPlaneAiSessions, affectedSessionKeys?: ReadonlySet<string>) {
@@ -351,7 +404,11 @@ export class MobileAiSessionStore {
   }
 
   clearProfile(controlPlaneId: string) {
+    const instances = this.snapshot(controlPlaneId)?.instances || [];
     const deleted = this.profiles.delete(controlPlaneId);
+    for (const instance of instances) {
+      this.conversations.clearInstance(mobileConversationInstanceKey(controlPlaneId, instance.instanceId));
+    }
     this.messageTurnsByControlPlane.delete(controlPlaneId);
     this.timelineRecoveryRevisions.delete(controlPlaneId);
     for (const [key, state] of this.timelineStates) if (state.controlPlaneId === controlPlaneId) this.timelineStates.delete(key);
@@ -555,6 +612,10 @@ function mobileMessageTurnKey(message: Pick<MobileStreamingMessage, 'instanceId'
 
 function mobileSessionSubscriptionKey(controlPlaneId: string, instanceId: string, sessionId: string) {
   return JSON.stringify([controlPlaneId, instanceId, sessionId]);
+}
+
+function mobileConversationInstanceKey(controlPlaneId: string, instanceId: string) {
+  return JSON.stringify([controlPlaneId, instanceId]);
 }
 
 function mobileTimelineTurnKey(controlPlaneId: string, instanceId: string, sessionId: string, turnId: string) {

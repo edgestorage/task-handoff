@@ -112,10 +112,11 @@ test("instance directory renders independent node loading states", () => {
   assert.match(instanceList, /groups\.set\(node\.id/);
 });
 
-test("connecting instances refetch only the active board projection", () => {
-  assert.match(workbench, /connectingRefreshTimer = setInterval\(\(\) => \{[\s\S]*?queryClient\.refetchQueries\(\{[\s\S]*?queryKey: controlPlaneQueryKeys\.scopedInstanceBoard\(sessionQueryInstanceId\.value\),[\s\S]*?exact: true,[\s\S]*?\}\);[\s\S]*?\}, 2000\);/);
+test("connecting instances recover only their target board rows", () => {
+  assert.match(workbench, /connectingRefreshTimer = setInterval\(\(\) => \{[\s\S]*?fetchInstanceBoardPayload\(undefined, instanceId\)[\s\S]*?applyInstanceBoardTargetSnapshot\([\s\S]*?instanceId,[\s\S]*?\}, 2000\);/);
   const connectingRefresh = workbench.match(/connectingRefreshTimer = setInterval\([\s\S]*?\}, 2000\);/)?.[0] || "";
   assert.doesNotMatch(connectingRefresh, /void refresh\(\)/);
+  assert.doesNotMatch(connectingRefresh, /refetchQueries/);
   assert.doesNotMatch(connectingRefresh, /control-plane-models|nodeLocalFolders|control-plane-triggers/);
 });
 

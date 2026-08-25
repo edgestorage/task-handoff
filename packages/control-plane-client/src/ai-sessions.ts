@@ -1,7 +1,7 @@
 import { z } from "zod";
 import {
   AiSessionApprovalInputSchema,
-  AiSessionActionResultSchema,
+  AiSessionActionCompatibleResponseSchema,
   AiSessionCreateRefInputSchema,
   AiSessionCreateResultSchema,
   AiSessionForkInputSchema,
@@ -25,6 +25,9 @@ import {
   AiSessionResumeResultSchema,
   AiSessionSummarySchema,
   AiSessionStatusSchema,
+  AiSessionDetailSchema,
+  AiSessionTurnIndexSchema,
+  AiSessionTurnBodySchema,
   AiSessionUnreadStateSchema,
   AiSessionsSnapshotSchema,
   type AiSessionCreateRefInput,
@@ -102,7 +105,13 @@ export function createControlPlaneAiSessionsApi(transport: ControlPlaneClientTra
       return requestData(`/api/controlled-instances/${encodeURIComponent(instanceId)}/ai-sessions/history/${encodeURIComponent(aiSessionId)}`, AiSessionHistoryDetailSchema, { signal });
     },
     detail(instanceId: string, aiSessionId: string, signal?: AbortSignal) {
-      return requestData(sessionRoute(instanceId, aiSessionId), AiSessionStatusSchema, { signal });
+      return requestData(sessionRoute(instanceId, aiSessionId), AiSessionDetailSchema, { signal });
+    },
+    turnIndex(instanceId: string, aiSessionId: string, signal?: AbortSignal) {
+      return requestData(`${sessionRoute(instanceId, aiSessionId)}/turns`, AiSessionTurnIndexSchema, { signal });
+    },
+    turnBody(instanceId: string, aiSessionId: string, turnId: string, signal?: AbortSignal) {
+      return requestData(`${sessionRoute(instanceId, aiSessionId)}/turns/${encodeURIComponent(turnId)}`, AiSessionTurnBodySchema, { signal });
     },
     timeline(instanceId: string, aiSessionId: string, signal?: AbortSignal) {
       return requestData(`${sessionRoute(instanceId, aiSessionId)}/timeline`, AiSessionTimelineSchema, { signal });
@@ -147,16 +156,16 @@ export function createControlPlaneAiSessionsApi(transport: ControlPlaneClientTra
         attachments: input.attachments ?? [],
         references: input.references ?? [],
       });
-      return requestData(`${sessionRoute(instanceId, sessionId)}/messages`, AiSessionActionResultSchema, json("POST", body));
+      return requestData(`${sessionRoute(instanceId, sessionId)}/messages`, AiSessionActionCompatibleResponseSchema, json("POST", body));
     },
     approval(instanceId: string, sessionId: string, decision: "allow" | "deny" | "skip") {
-      return requestData(`${sessionRoute(instanceId, sessionId)}/approval`, AiSessionActionResultSchema, json("POST", AiSessionApprovalInputSchema.parse({ decision })));
+      return requestData(`${sessionRoute(instanceId, sessionId)}/approval`, AiSessionActionCompatibleResponseSchema, json("POST", AiSessionApprovalInputSchema.parse({ decision })));
     },
     interrupt(instanceId: string, sessionId: string) {
-      return requestData(`${sessionRoute(instanceId, sessionId)}/interrupt`, AiSessionActionResultSchema, json("POST"));
+      return requestData(`${sessionRoute(instanceId, sessionId)}/interrupt`, AiSessionActionCompatibleResponseSchema, json("POST"));
     },
     steerQueue(instanceId: string, sessionId: string, queueId: string) {
-      return requestData(`${sessionRoute(instanceId, sessionId)}/queue/${encodeURIComponent(queueId)}/steer`, AiSessionActionResultSchema, json("POST"));
+      return requestData(`${sessionRoute(instanceId, sessionId)}/queue/${encodeURIComponent(queueId)}/steer`, AiSessionActionCompatibleResponseSchema, json("POST"));
     },
     retryQueue(instanceId: string, sessionId: string, queueId: string) {
       return requestData(`${sessionRoute(instanceId, sessionId)}/queue/${encodeURIComponent(queueId)}/retry`, AiSessionStatusSchema, json("POST"));

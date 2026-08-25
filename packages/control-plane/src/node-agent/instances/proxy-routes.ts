@@ -216,14 +216,16 @@ export function registerInstanceProxyRoutes(app: FastifyInstance, options: Optio
       upstreamUrl.protocol = upstreamUrl.protocol === "https:" ? "wss:" : "ws:";
       const protocols = proxyWebSocketProtocols(request.headers);
       diagnostic({ instanceId: id, action: "proxy.ws", path: `/${suffix}${query}`, upstreamUrl: upstreamUrl.toString(), protocols: protocols || [] }, "node instance websocket proxy opening");
-      upstream = protocols ? new WebSocket(upstreamUrl, protocols) : new WebSocket(upstreamUrl);
+      upstream = protocols
+        ? new WebSocket(upstreamUrl, protocols, { perMessageDeflate: false })
+        : new WebSocket(upstreamUrl, { perMessageDeflate: false });
       upstream.on("open", () => {
         diagnostic({ instanceId: id, action: "proxy.ws", path: `/${suffix}${query}` }, "node instance websocket proxy opened");
         socket.on("message", (data, isBinary) => upstream?.readyState === WebSocket.OPEN && upstream.send(websocketPayload(data, isBinary)));
         socket.on("close", () => upstream?.close());
         socket.on("error", () => upstream?.close());
       });
-      upstream.on("message", (data, isBinary) => socket.readyState === WebSocket.OPEN && socket.send(isBinary ? data : data.toString()));
+      upstream.on("message", (data, isBinary) => socket.readyState === WebSocket.OPEN && socket.send(isBinary ? data : data.toString(), { binary: isBinary, compress: false }));
       upstream.on("close", () => {
         diagnostic({ instanceId: id, action: "proxy.ws", path: `/${suffix}${query}` }, "node instance websocket proxy closed");
         socket.close();

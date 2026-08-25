@@ -294,6 +294,7 @@ test("board floating detail consumes the same Timeline presentation as instance 
   const dock = fs.readFileSync(new URL("../src/apps/control-plane/ai-board/AiSessionFloatingDock.vue", import.meta.url), "utf8");
   const conversation = fs.readFileSync(new URL("../src/components/ai-session/AiSessionConversationContent.vue", import.meta.url), "utf8");
   for (const source of [panel, board]) {
+    assert.match(source, /useAiSessionConversationProjection/);
     assert.match(source, /useAiSessionTimelinePresentation/);
     assert.match(source, /useAiSessionTimelineDemand/);
     assert.match(source, /conversationTurnTimelines/);
@@ -302,7 +303,6 @@ test("board floating detail consumes the same Timeline presentation as instance 
   for (const source of [panel, dock]) assert.match(source, /<AiSessionConversationContent/);
   assert.match(dock, /:mode="timelineMode"/);
   assert.match(conversation, /v-if="mode === 'full'"[\s\S]*<AiSessionTimelineView[\s\S]*<AiSessionResult/);
-  assert.match(board, /getAiSessionDetail\(card\.instance\.id, card\.session\.id\)/);
   assert.match(board, /@continue-from-turn="forkCardSession\(selectedCard, 'current', \$event\)"/);
   assert.doesNotMatch(dock, /<AiSessionResult/);
 });

@@ -130,7 +130,7 @@ export function SessionWorkspace({
   const permissionMode = permissionSelection && permissionSelection.key === permissionKey
     ? permissionSelection.mode
     : defaultPermissionMode ?? 'ask';
-  const turnCount = aiSessionDisplayTurns(session).length;
+  const turnCount = session?.turnCount ?? aiSessionDisplayTurns(session).length;
   const latestTurnIndex = Math.max(0, turnCount - 1);
   const timelineTurnSignature = (session?.turns ?? []).map((turn) => `${turn.id}:${turn.providerTurnId || ''}:${turn.status}`).join('|');
   const supportsTurnTimeline = session ? supportsDirectoryAiSessionTimelineCapability(instanceCapabilities, session.agent, 'turn-read') : false;
@@ -173,6 +173,24 @@ export function SessionWorkspace({
     selectionSessionId.current = sessionId;
     knownTurnCount.current = turnCount;
   }, [latestTurnIndex, sessionId, turnCount]);
+  useEffect(() => {
+    if (!client || !sessionId || !session) return;
+    const turns = session.turns || [];
+    const visibleTurns = detailMode === 'conversation' ? turns : turns.slice(selectedTurnIndex, selectedTurnIndex + 1);
+    const neededTurns = visibleTurns.map((turn) => (
+      mobileAiSessionStore.neededSessionTurn(controlPlaneId, instanceId, sessionId, turn.id)
+    )).filter((turn): turn is NonNullable<typeof turn> => Boolean(turn));
+    if (!neededTurns.length) return;
+    let active = true;
+    void Promise.all(neededTurns.map((turn) => client.aiSessions.turnBody(instanceId, sessionId, turn.id)))
+      .then((bodies) => {
+        if (!active) return;
+        for (const body of bodies) {
+          mobileAiSessionStore.setSessionTurn(controlPlaneId, instanceId, sessionId, body.revision, body.turn);
+        }
+      }).catch(() => undefined);
+    return () => { active = false; };
+  }, [client, controlPlaneId, detailMode, instanceId, selectedTurnIndex, sessionId, timelineTurnSignature]);
   useEffect(() => {
     timelineLoadInputs.current = { session, timelines };
   }, [session, timelines]);

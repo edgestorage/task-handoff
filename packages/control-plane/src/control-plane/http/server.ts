@@ -5,6 +5,7 @@ import Fastify from "fastify";
 import compress from "@fastify/compress";
 import cookie from "@fastify/cookie";
 import websocket from "@fastify/websocket";
+import { TASK_HANDOFF_WEBSOCKET_SERVER_OPTIONS } from "@task-handoff/protocol/websocket-bridge";
 import { isControlPlaneCredentialHeader } from "./proxy-headers.ts";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import type { FastifyServerOptions } from "fastify";
@@ -12,7 +13,7 @@ import { z } from "zod";
 import { AiSessionUnreadEventType } from "@task-handoff/protocol/ai-sessions";
 import { TtyStreamSnapshotMessageSchema } from "@task-handoff/protocol/app-sessions";
 import { RelayTtySnapshotEnvelopeSchema } from "@task-handoff/cloud-contracts";
-import { CONTROL_PLANE_PROTOCOL_VERSION, ControlPlaneHealthResponseSchema, ImagePullTerminalEventType, type BuildInfo } from "@task-handoff/protocol/control-plane";
+import { CONTROL_PLANE_PROTOCOL_VERSION, ControlPlaneHealthResponseSchema, ImagePullTerminalEventType, NodeStateProjectionEventSchema, type BuildInfo, type Node } from "@task-handoff/protocol/control-plane";
 import { packageVersionResolver } from "@task-handoff/core/core/package-version";
 import { DEFAULT_MAINTENANCE_INTERVAL_MS } from "@task-handoff/core/storage/retention";
 import { SESSION_STREAM_PROTOCOL_VERSION, SessionStreamsHelloEventType, aiSessionTransientSubscriptionAccepts, type AiSessionTransientSubscription } from "@task-handoff/protocol/events";
@@ -105,6 +106,26 @@ function envFlag(value: string | undefined) {
 
 function controlPlaneDiagnosticLogsEnabled() {
   return envFlag(process.env.TASK_HANDOFF_DIAGNOSTIC_LOGS);
+}
+
+function nodeStateProjection(node: Node & {
+  connectionPhase?: "connecting" | "handshaking" | "healthy" | "reconnecting" | "suspect" | "offline";
+  connectionDiagnostics?: {
+    pingRttMs?: number;
+    pingRttP95Ms?: number;
+    consecutiveReconnects: number;
+    nextRetryAt?: string;
+  };
+}) {
+  return NodeStateProjectionEventSchema.parse({
+    nodeId: node.id,
+    status: node.status,
+    health: node.health,
+    lastSeenAt: node.lastSeenAt ?? null,
+    connectionPhase: node.connectionPhase ?? null,
+    connectionDiagnostics: node.connectionDiagnostics ?? null,
+    proxyState: node.proxyState ?? null,
+  });
 }
 
 function optionalEnv(name: string) {
@@ -354,10 +375,6 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   let diagnosticLogsEnabled = controlPlaneDiagnosticLogsEnabled();
   const diagnosticLogger = createControlPlaneDiagnosticLogger(paths.logsDir, () => diagnosticLogsEnabled, app.log);
   const nodeConnectionRuntime = new NodeConnectionRuntime();
-  nodeConnectionRuntime.onChange((observation) => events.publish("node.connection.updated", observation, {
-    topic: "node.state",
-    scope: { nodeId: observation.nodeId },
-  }));
   const service = new ControlPlaneService(paths, {
     ...options.service,
     logger: diagnosticLogger,
@@ -370,6 +387,14 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
       });
     },
   });
+  nodeConnectionRuntime.onChange((observation) => events.publish(
+    "node.connection.updated",
+    nodeStateProjection(service.requirePublicNode(observation.nodeId)),
+    {
+      topic: "node.state",
+      scope: { nodeId: observation.nodeId },
+    },
+  ));
   const auth = new ControlPlaneAuth(paths, {
     ...options.auth,
     onUserAuthorizationChanged: (change) => {
@@ -541,7 +566,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     logger: diagnosticLogger,
     onStateChanged: (node) => events.publish(
       "node.proxy-state.updated",
-      { nodeId: node.id, proxyState: node.proxyState },
+      nodeStateProjection(node),
       { topic: "node.state", scope: { nodeId: node.id } },
     ),
   });
@@ -610,7 +635,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   });
   nodeEventSubscriber.start();
   await app.register(cookie);
-  await app.register(websocket);
+  await app.register(websocket, { options: TASK_HANDOFF_WEBSOCKET_SERVER_OPTIONS });
   app.addHook("onClose", async () => {
     await cloudConnectivityRuntime.stop();
     if (pairingRecoveryTimer) clearInterval(pairingRecoveryTimer);
@@ -824,6 +849,9 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
       send(value: string) {
         if (handshakeSent) socket.send(value);
         else pendingFrames.push(value);
+      },
+      ping() {
+        socket.ping();
       },
       on(event: "close" | "message", listener: (value?: unknown) => void) {
         socket.on(event, listener);

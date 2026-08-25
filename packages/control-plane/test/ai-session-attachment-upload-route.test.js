@@ -149,10 +149,10 @@ test("message actions resolve attachment retention only for managed upload refer
       async sendAiSessionMessage(_instanceId, _sessionId, _message, _mode, attachments) {
         const attachmentId = attachments.find((attachment) => attachment.source.type === "upload-ref")?.id;
         return {
-          session: {
-            turns: attachmentId ? [{ userMessages: [{ id: "message-1", attachments: [{ id: attachmentId }] }] }] : [],
-            queue: { items: [] },
-          },
+          sessionId: "session-1",
+          provider: "codex",
+          action: "send",
+          ...(attachmentId ? { messageId: "message-1" } : {}),
         };
       },
       async requireControlledInstance() {

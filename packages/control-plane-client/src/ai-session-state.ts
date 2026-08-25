@@ -2,6 +2,8 @@ import {
   applyAiSessionStreamEvent,
   type AiSessionStreamApplyResult,
   type AiSessionStreamEvent,
+  type AiSessionStatus,
+  type AiSessionDetail,
   type AiSessionSummary,
   type AiSessionSummaryTurn,
   type AiSessionTurn,
@@ -89,6 +91,9 @@ export function aiSessionStableSortKey(session: AiSessionSummary) {
 }
 
 export function aiSessionLastUserMessageAt(session: AiSessionSummary) {
+  if (session.lastUserMessageAt && Number.isFinite(Date.parse(session.lastUserMessageAt))) {
+    return session.lastUserMessageAt;
+  }
   let latestValue: string | undefined;
   let latestTime = 0;
   for (const turn of session.turns || []) {
@@ -118,6 +123,34 @@ export function mergeAiSessionSummaryTurnsWithDetail(
   });
   merged.push(...summaryTurns.filter((turn) => summaryById.has(turn.id)));
   return merged.slice(-50);
+}
+
+/**
+ * Joins a compact list row with an HTTP detail from the same detailRevision.
+ * Older producers do not expose detailRevision and still put the authoritative
+ * conversation fields in the list row, so only enrich their Turn metadata.
+ */
+export function mergeAiSessionSummaryWithDetail<Summary extends AiSessionSummary>(
+  summary: Summary,
+  detail: AiSessionDetail | AiSessionStatus,
+  turnBodies?: AiSessionStatus["turns"],
+): Summary {
+  const legacyTurns = "turns" in detail ? detail.turns : undefined;
+  const turns = turnBodies ?? legacyTurns;
+  if (!summary.detailRevision) {
+    const mergedTurns = mergeAiSessionSummaryTurnsWithDetail(summary.turns, turns);
+    return { ...summary, turns: mergedTurns } as Summary;
+  }
+  return {
+    ...summary,
+    appBindingKeys: detail.appBindingKeys,
+    cwd: detail.cwd,
+    error: detail.error,
+    providerMeta: detail.providerMeta,
+    queue: detail.queue,
+    subAgents: detail.subAgents,
+    turns,
+  } as Summary;
 }
 
 export function aiSessionLastUserMessageTime(session: AiSessionSummary) {

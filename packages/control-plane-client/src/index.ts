@@ -3,6 +3,7 @@ export * from "./ai-sessions.ts";
 export * from "./app-sessions.ts";
 export * from "./app-inventory.ts";
 export * from "./ai-session-state.ts";
+export * from "./ai-session-conversation-cache.ts";
 export * from "./ai-session-paste.ts";
 export * from "./auth.ts";
 export * from "./users.ts";

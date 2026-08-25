@@ -16,7 +16,10 @@ import {
   AiSessionPatchEventSchema,
   AiSessionRemovedEventSchema,
   AiSessionSnapshotEventSchema,
+  AiSessionMessageDeltaEventSchema,
   applyAiSessionStreamEvent,
+  compactAiSessionMessageDeltaEvent,
+  normalizeAiSessionMessageDeltaEvent,
   type AiSessionStreamEvent,
   type AiSessionsState,
 } from "@task-handoff/protocol/ai-sessions";
@@ -30,7 +33,7 @@ import {
   type AppSessionStreamEvent,
   type AppSessionsState,
 } from "@task-handoff/protocol/app-sessions";
-import { AiSessionTransientSubscriptionSchema, SessionStreamsHelloEventType, SessionStreamsHelloSchema, aiSessionTransientSubscriptionAccepts, eventTopic, type AiSessionTransientSubscription, type EventEnvelope, type SessionStreamsHello } from "@task-handoff/protocol/events";
+import { COMPACT_EVENT_ENVELOPE_VERSION, AiSessionTransientSubscriptionSchema, SessionStreamsHelloEventType, SessionStreamsHelloSchema, aiSessionTransientSubscriptionAccepts, eventTopic, normalizeEventEnvelope, projectEventEnvelope, type AiSessionTransientSubscription, type EventEnvelope, type SessionStreamsHello } from "@task-handoff/protocol/events";
 import { safeParseResponse } from "@task-handoff/protocol/response-validation";
 import { EventConnectionRetryTimer, eventConnectionSafetyIntervalMs } from "../shared/events/connection-retry.ts";
 
@@ -64,6 +67,7 @@ function splitTerminalReplay(data: string, maxLength = 60_000) {
 
 const MAX_EVENT_OUTPUT_BUFFERED_BYTES = 16 * 1024 * 1024;
 const AI_SESSION_AUTHORITY_BACKPRESSURE_BYTES = 256 * 1024;
+const AI_SESSION_AUTHORITY_MAX_EVENT_BYTES = 256 * 1024;
 const AI_SESSION_AUTHORITY_FLUSH_RETRY_MS = 25;
 const EVENT_TRANSPORT_RECOVERY_NOTICE_MS = 5 * 60 * 1000;
 
@@ -73,6 +77,8 @@ type EventTransportCongestionIncident = {
   recoveredAt?: string;
   peakBufferedBytes: number;
   coalescedEvents: number;
+  oversizedEvents: number;
+  peakEventBytes: number;
 };
 
 export class NodeAgentInstanceEventForwarder {
@@ -81,6 +87,7 @@ export class NodeAgentInstanceEventForwarder {
   private readonly retries = new Map<string, { timer: EventConnectionRetryTimer; url?: string }>();
   private readonly outputs = new Set<WebSocket>();
   private readonly outputSubscriptions = new Map<WebSocket, AiSessionTransientSubscription | undefined>();
+  private readonly outputEnvelopeVersions = new Map<WebSocket, 1 | typeof COMPACT_EVENT_ENVELOPE_VERSION>();
   private readonly outputDiagnostics = new Map<WebSocket, EventOutputDiagnostic>();
   private readonly aiSessionProjectionByInstance = new Map<string, AiSessionsState>();
   private readonly appSessionProjectionByInstance = new Map<string, AppSessionsState>();
@@ -141,6 +148,7 @@ export class NodeAgentInstanceEventForwarder {
     this.retries.clear();
     this.outputs.clear();
     this.outputSubscriptions.clear();
+    this.outputEnvelopeVersions.clear();
     this.outputDiagnostics.clear();
     for (const timeout of this.pendingAiSessionAuthorityFlush.values()) this.clearTimeoutFn(timeout);
     this.pendingAiSessionAuthorityFlush.clear();
@@ -163,6 +171,7 @@ export class NodeAgentInstanceEventForwarder {
     });
     // Compatibility for v0.0.21: no subscription update means the older control-plane expects the full stream.
     this.outputSubscriptions.set(socket, options.expectsTransientSubscription ? AiSessionTransientSubscriptionSchema.parse({}) : undefined);
+    this.outputEnvelopeVersions.set(socket, 1);
     let legacyFallback: ReturnType<typeof setTimeout> | undefined;
     if (!options.expectsTransientSubscription && options.legacyFallbackMs !== undefined) {
       legacyFallback = this.setTimeoutFn(() => {
@@ -179,6 +188,7 @@ export class NodeAgentInstanceEventForwarder {
       removed = true;
       this.outputs.delete(socket);
       this.outputSubscriptions.delete(socket);
+      this.outputEnvelopeVersions.delete(socket);
       this.outputDiagnostics.delete(socket);
       this.sessionAuthorityReplayedOutputs.delete(socket);
       const pendingFlush = this.pendingAiSessionAuthorityFlush.get(socket);
@@ -221,11 +231,12 @@ export class NodeAgentInstanceEventForwarder {
     return remove;
   }
 
-  setOutputSubscription(socket: WebSocket, input: unknown) {
+  setOutputSubscription(socket: WebSocket, input: unknown, eventEnvelopeVersion?: unknown) {
     if (!this.outputs.has(socket)) return false;
     const parsed = AiSessionTransientSubscriptionSchema.safeParse(input);
     if (!parsed.success) return false;
     this.outputSubscriptions.set(socket, parsed.data);
+    this.outputEnvelopeVersions.set(socket, eventEnvelopeVersion === COMPACT_EVENT_ENVELOPE_VERSION ? COMPACT_EVENT_ENVELOPE_VERSION : 1);
     // Receiving the current subscription cancels the compatibility hold-open
     // and is the authority to establish controlled-instance inputs.
     this.replaySessionAuthority(socket);
@@ -288,11 +299,20 @@ export class NodeAgentInstanceEventForwarder {
   }
 
   private sendForwarded(output: WebSocket, event: EventEnvelope) {
-    const encoded = JSON.stringify({ type: "node-agent.event.forwarded", event });
+    const delta = event.type === AiSessionEventType.MessageDelta
+      ? AiSessionMessageDeltaEventSchema.safeParse(event.payload)
+      : undefined;
+    const wireEvent = this.outputEnvelopeVersions.get(output) === COMPACT_EVENT_ENVELOPE_VERSION
+      ? projectEventEnvelope(event, COMPACT_EVENT_ENVELOPE_VERSION, {
+          ...(delta?.success ? { payload: compactAiSessionMessageDeltaEvent(delta.data) } : {}),
+        })
+      : event;
+    const encoded = JSON.stringify({ type: "node-agent.event.forwarded", event: wireEvent });
     this.sendOutput(output, encoded, event);
   }
 
   private sendOutput(output: WebSocket, encoded: string, event?: ForwardedInstanceEvent) {
+    const encodedBytes = Buffer.byteLength(encoded, "utf8");
     const diagnosticTopic = event?.topic === AppSessionEventTopic
       ? "app-session"
       : event?.topic === AiSessionEventTopic
@@ -313,7 +333,20 @@ export class NodeAgentInstanceEventForwarder {
     if (event && this.shouldCoalesceAiSessionAuthority(output, event) && this.deferAiSessionAuthority(output, event)) {
       return true;
     }
-    if (output.bufferedAmount + Buffer.byteLength(encoded, "utf8") > MAX_EVENT_OUTPUT_BUFFERED_BYTES) {
+    if (event && isAiSessionAuthorityEvent(event) && encodedBytes > AI_SESSION_AUTHORITY_MAX_EVENT_BYTES) {
+      if (event.type !== AiSessionEventType.Snapshot && this.deferAiSessionAuthority(output, event)) return true;
+      this.observeEventTransportCongestion(output, false, encodedBytes);
+      if (eventDiagnostic) this.logger?.warn?.({
+        ...eventDiagnostic,
+        bufferedAmount: output.bufferedAmount,
+        bytes: encodedBytes,
+        maxBytes: AI_SESSION_AUTHORITY_MAX_EVENT_BYTES,
+        outcome: "payload-too-large",
+      }, `${diagnosticTopic}.event.output.rejected`);
+      try { output.close(1009, "AI Session authority event exceeds the transport limit."); } catch { /* Close is best-effort after rejecting the frame. */ }
+      return false;
+    }
+    if (output.bufferedAmount + encodedBytes > MAX_EVENT_OUTPUT_BUFFERED_BYTES) {
       this.observeEventTransportCongestion(output, false);
       if (eventDiagnostic) this.logger?.warn?.({ ...eventDiagnostic, bufferedAmount: output.bufferedAmount, outcome: "backpressure" }, `${diagnosticTopic}.event.output.rejected`);
       try { output.close(1013, "Event consumer is too slow."); } catch { /* Close is best-effort after rejecting the frame. */ }
@@ -321,7 +354,7 @@ export class NodeAgentInstanceEventForwarder {
     }
     try {
       output.send(encoded);
-      if (eventDiagnostic) this.logger?.info?.({ ...eventDiagnostic, bufferedAmount: output.bufferedAmount, bytes: Buffer.byteLength(encoded, "utf8"), outcome: "queued" }, `${diagnosticTopic}.event.output.queued`);
+      if (eventDiagnostic) this.logger?.info?.({ ...eventDiagnostic, bufferedAmount: output.bufferedAmount, bytes: encodedBytes, outcome: "queued" }, `${diagnosticTopic}.event.output.queued`);
       return true;
     } catch (error) {
       if (eventDiagnostic) this.logger?.warn?.({ ...eventDiagnostic, error: error instanceof Error ? error.message : String(error), outcome: "send-failed" }, `${diagnosticTopic}.event.output.rejected`);
@@ -361,7 +394,7 @@ export class NodeAgentInstanceEventForwarder {
       ...this.outputDiagnostics.get(output),
       instanceId,
       eventType: event.type,
-      revision: payload.meta.revision,
+      ...eventPayloadMeta(payload),
       bufferedAmount: output.bufferedAmount,
       outcome: "coalesced-latest",
     }, "ai-session.event.output.coalesced");
@@ -396,13 +429,12 @@ export class NodeAgentInstanceEventForwarder {
     }
     pending.delete(instanceId);
     if (!pending.size) this.pendingAiSessionAuthorityByOutput.delete(output);
-    const encoded = JSON.stringify({ type: "node-agent.event.forwarded", event });
-    this.sendOutput(output, encoded, event);
+    this.sendForwarded(output, event);
     this.refreshEventTransportRecovery();
     if (pending.size) this.scheduleAiSessionAuthorityFlush(output);
   }
 
-  private observeEventTransportCongestion(output: WebSocket, coalesced: boolean) {
+  private observeEventTransportCongestion(output: WebSocket, coalesced: boolean, payloadBytes = 0) {
     const observedAt = new Date().toISOString();
     const bufferedBytes = Math.max(0, Math.floor(output.bufferedAmount));
     const current = this.eventTransportCongestion;
@@ -411,6 +443,8 @@ export class NodeAgentInstanceEventForwarder {
       lastCongestedAt: observedAt,
       peakBufferedBytes: Math.max(current?.recoveredAt ? 0 : current?.peakBufferedBytes || 0, bufferedBytes),
       coalescedEvents: (current?.recoveredAt ? 0 : current?.coalescedEvents || 0) + (coalesced ? 1 : 0),
+      oversizedEvents: (current?.recoveredAt ? 0 : current?.oversizedEvents || 0) + (payloadBytes > 0 ? 1 : 0),
+      peakEventBytes: Math.max(current?.recoveredAt ? 0 : current?.peakEventBytes || 0, payloadBytes),
     };
   }
 
@@ -442,6 +476,8 @@ export class NodeAgentInstanceEventForwarder {
       bufferedBytes,
       peakBufferedBytes: incident?.peakBufferedBytes || bufferedBytes,
       coalescedEvents: incident?.coalescedEvents || 0,
+      oversizedEvents: incident?.oversizedEvents || 0,
+      peakEventBytes: incident?.peakEventBytes || 0,
       ...(congested && incident ? { congestedSince: incident.congestedSince } : {}),
       ...(incident ? { lastCongestedAt: incident.lastCongestedAt } : {}),
     };
@@ -571,13 +607,9 @@ export class NodeAgentInstanceEventForwarder {
       }
       this.recordAiSessionEvent(instanceId, event);
       this.recordAppSessionEvent(instanceId, event);
-      const encoded = JSON.stringify({
-        type: "node-agent.event.forwarded",
-        event,
-      });
       for (const output of this.outputs) {
         if (this.outputAccepts(output, event)) {
-          this.sendOutput(output, encoded, event);
+          this.sendForwarded(output, event);
         }
       }
     });
@@ -600,7 +632,7 @@ export class NodeAgentInstanceEventForwarder {
     const subscriptions = [...this.outputs].map((output) => this.outputSubscriptions.get(output));
     const legacyAll = subscriptions.some((entry) => entry === undefined);
     if (legacyAll) {
-      socket.send(JSON.stringify({ v: 1, type: "subscribe", topics: [AiSessionEventTopic, "app.sessions", "apps", "instances"] }));
+      socket.send(JSON.stringify({ v: 1, type: "subscribe", eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION, topics: [AiSessionEventTopic, "app.sessions", "apps", "instances"] }));
       return;
     }
     const messageDeltas = subscriptions.some((entry) => entry!.messageDeltas.allInstances || entry!.messageDeltas.instanceIds.includes(instanceId));
@@ -612,6 +644,7 @@ export class NodeAgentInstanceEventForwarder {
     socket.send(JSON.stringify({
       v: 1,
       type: "subscribe",
+      eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION,
       topics: [
         AiSessionEventType.Snapshot,
         AiSessionEventType.Patch,
@@ -892,29 +925,13 @@ function earliestReplaySince(values: Array<string | undefined>) {
 function parseForwardedInstanceEvent(raw: unknown, instanceId: string): ForwardedInstanceEvent | undefined {
   try {
     const parsed = JSON.parse(String(raw));
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return undefined;
+    const event = normalizeEventEnvelope(parsed, { instanceId });
+    if (!event || event.type === "events.connected") return undefined;
+    if (event.type === AiSessionEventType.MessageDelta) {
+      const payload = normalizeAiSessionMessageDeltaEvent(event.payload, instanceId);
+      return { ...event, payload, scope: { ...event.scope, instanceId } };
     }
-    const record = parsed as Record<string, unknown>;
-    const type = typeof record.type === "string" ? record.type : "";
-    if (!type || type === "events.connected") {
-      return undefined;
-    }
-    const scope = record.scope && typeof record.scope === "object" && !Array.isArray(record.scope) ? record.scope as Record<string, unknown> : {};
-    return {
-      v: 1,
-      id: typeof record.id === "string" ? record.id : `evt_${Date.now().toString(36)}`,
-      seq: Number(record.seq) || 0,
-      type,
-      topic: typeof record.topic === "string" ? record.topic : eventTopic(type),
-      createdAt: typeof record.createdAt === "string" ? record.createdAt : new Date().toISOString(),
-      payload: "payload" in record ? record.payload : {},
-      ...(record.replay === true ? { replay: true } : {}),
-      scope: {
-        ...scope,
-        instanceId,
-      },
-    };
+    return { ...event, scope: { ...event.scope, instanceId } };
   } catch {
     return undefined;
   }

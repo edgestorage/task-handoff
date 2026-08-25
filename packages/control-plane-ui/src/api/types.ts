@@ -50,6 +50,7 @@ import type {
   ImagePullProgress,
   ApplyUpdateRequest,
   NodeRolloutSummary,
+  NodeAgentEventTransportHealth as ProtocolNodeAgentEventTransportHealth,
   NodeUpdateImpact,
   RuntimeVersionState,
   UpdateCheckResult as ProtocolUpdateCheckResult,
@@ -585,15 +586,7 @@ export type NodeStatus = {
   agent?: Record<string, unknown>;
 };
 
-export type NodeAgentEventTransportHealth = {
-  status: "healthy" | "congested" | "recovering";
-  activeOutputs: number;
-  bufferedBytes: number;
-  peakBufferedBytes: number;
-  coalescedEvents: number;
-  congestedSince?: string;
-  lastCongestedAt?: string;
-};
+export type NodeAgentEventTransportHealth = ProtocolNodeAgentEventTransportHealth;
 
 export type NodePairingInvite = {
   nodeId: string;

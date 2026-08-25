@@ -268,8 +268,7 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
       return { providerSessionId, cwd, creationSource: "ai-session", lineage };
     } catch (error) {
       if (error && typeof error === "object" && "rpcCode" in error && error.rpcCode === -32601) {
-        this.registry.put({
-          ...input.source,
+        this.registry.patch(input.source.id, {
           actions: { ...input.source.actions, fork: false },
         });
         throw aiSessionControlError("AI_SESSION_FORK_UNSUPPORTED", "Codex app-server does not support Fork.", 409);

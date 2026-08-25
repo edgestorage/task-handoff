@@ -2,9 +2,19 @@ export type WebSocketLike = {
   readyState: number;
   OPEN?: number;
   bufferedAmount?: number;
-  send: (data: unknown, options?: { binary?: boolean }) => void;
+  send: (data: unknown, options?: { binary?: boolean; compress?: boolean }) => void;
   close: (code?: number, reason?: string) => void;
   on: (event: "open" | "message" | "close" | "error", listener: (...args: unknown[]) => void) => void;
+};
+
+export const TASK_HANDOFF_WEBSOCKET_SERVER_OPTIONS = {
+  perMessageDeflate: {
+    threshold: 256,
+    serverNoContextTakeover: true,
+    clientNoContextTakeover: true,
+    concurrencyLimit: 4,
+    zlibDeflateOptions: { level: 1 },
+  },
 };
 
 type WebSocketFrame = {
@@ -67,7 +77,8 @@ export function closeWebSocket(socket: WebSocketLike, code?: unknown, reason?: u
 }
 
 function sendFrame(socket: WebSocketLike, frame: WebSocketFrame) {
-  socket.send(frame.data, { binary: frame.isBinary });
+  // Transparent WebSocket bridges carry unknown or already-compressed data.
+  socket.send(frame.data, { binary: frame.isBinary, compress: false });
 }
 
 function flush(socket: WebSocketLike, frames: WebSocketFrame[], send: (frame: WebSocketFrame) => boolean, dequeued: (frame: WebSocketFrame) => void) {

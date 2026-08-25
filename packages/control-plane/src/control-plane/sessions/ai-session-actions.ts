@@ -1,6 +1,6 @@
 import {
   AI_SESSION_MAX_MESSAGE_ATTACHMENT_BYTES,
-  AiSessionActionResultSchema,
+  AiSessionActionCompatibleResponseSchema,
   AiSessionCreateResultSchema,
   AiSessionForkResultSchema,
   AiSessionCloseResultSchema,
@@ -17,7 +17,10 @@ import {
   AiSessionQueueReorderInputSchema,
   AiSessionResumeResultSchema,
   AiSessionStatusSchema,
-  type AiSessionActionResult,
+  AiSessionDetailSchema,
+  AiSessionTurnIndexSchema,
+  AiSessionTurnBodySchema,
+  type AiSessionActionResponse,
   type AiSessionCommandInput,
   type AiSessionCommandResult,
   type AiSessionCreateResult,
@@ -35,6 +38,8 @@ import {
   type AiSessionReference,
   type AiSessionResumeResult,
   type AiSessionSendMode,
+  type AiSessionStatus,
+  type AiSessionTurn,
 } from "@task-handoff/protocol/ai-sessions";
 import {
   aiSessionTimelineCapabilityAgents,
@@ -49,6 +54,8 @@ import {
   type RepositoryAiSessionGitSelection,
   type RepositoryAiSessionWorkspace,
 } from "@task-handoff/protocol/repository";
+import { z } from "zod";
+import { createHash } from "node:crypto";
 
 type AiSessionActionServiceOptions = {
   requireInstance: (instanceId: string) => Promise<ControlledInstance>;
@@ -61,6 +68,36 @@ type AiSessionActionServiceOptions = {
   requireRuntime: (nodeId: string, runtimeId: string) => Promise<NodeRuntime>;
 };
 
+function projectAiSessionDetail(session: AiSessionStatus) {
+  return AiSessionDetailSchema.parse({
+    id: session.id,
+    appBindingKeys: session.appBindingKeys,
+    cwd: session.cwd,
+    error: session.error,
+    providerMeta: session.providerMeta,
+    queue: session.queue,
+    subAgents: session.subAgents,
+  });
+}
+
+function projectAiSessionTurnIndexEntry(turn: AiSessionTurn) {
+  return {
+    id: turn.id,
+    providerTurnId: turn.providerTurnId,
+    status: turn.status,
+    phase: turn.phase,
+    revision: turn.revision,
+    startedAt: turn.startedAt,
+    updatedAt: turn.updatedAt,
+    completedAt: turn.completedAt,
+    bodyRevision: legacyAiSessionTurnBodyRevision(turn),
+  };
+}
+
+function legacyAiSessionTurnBodyRevision(turn: AiSessionTurn) {
+  return createHash("sha256").update(JSON.stringify(turn)).digest("base64url").slice(0, 22);
+}
+
 export class AiSessionActionService {
   private readonly options: AiSessionActionServiceOptions;
   private resumeSnapshotRefreshFailures = 0;
@@ -70,8 +107,8 @@ export class AiSessionActionService {
     this.options = options;
   }
 
-  async resolveApproval(instanceId: string, sessionId: string, decision: "allow" | "deny" | "skip"): Promise<AiSessionActionResult> {
-    return parseResponse(AiSessionActionResultSchema, await this.post(instanceId, sessionRoute(sessionId, "approval"), { decision }));
+  async resolveApproval(instanceId: string, sessionId: string, decision: "allow" | "deny" | "skip"): Promise<AiSessionActionResponse> {
+    return parseResponse(AiSessionActionCompatibleResponseSchema, await this.post(instanceId, sessionRoute(sessionId, "approval"), { decision }));
   }
 
   async listHistory(instanceId: string, agents?: readonly string[]): Promise<AiSessionHistoryList> {
@@ -84,6 +121,49 @@ export class AiSessionActionService {
   }
 
   async detail(instanceId: string, aiSessionId: string) {
+    const response = await this.get(instanceId, `/ai-sessions/${encodeURIComponent(aiSessionId)}`);
+    const current = AiSessionDetailSchema.safeParse(response);
+    if (current.success) return current.data;
+    // Compatibility for v0.0.23: project the legacy full status into the new
+    // metadata-only detail model. Turn bodies are recovered separately.
+    return projectAiSessionDetail(parseResponse(AiSessionStatusSchema, response));
+  }
+
+  async turnIndex(instanceId: string, aiSessionId: string) {
+    try {
+      return parseResponse(AiSessionTurnIndexSchema, await this.get(instanceId, `${sessionRoute(aiSessionId, "turns")}?projection=index`));
+    } catch (error) {
+      if (!splitAiSessionReadUnavailable(error)) throw error;
+      // Compatibility for v0.0.23: the old endpoint ignores projection=index
+      // and the old server has no single-Turn route. Derive both projections
+      // from its complete detail response only at this compatibility boundary.
+      const legacy = await this.legacyStatus(instanceId, aiSessionId);
+      return AiSessionTurnIndexSchema.parse({
+        sessionId: legacy.id,
+        revision: `legacy:${legacy.updatedAt}`,
+        turns: (legacy.turns || []).filter((turn) => (
+          turn.userPrompt?.trim()
+          || turn.lastMessage?.trim()
+          || turn.summary?.trim()
+          || turn.contextCompactions?.length
+        )).map(projectAiSessionTurnIndexEntry),
+      });
+    }
+  }
+
+  async turnBody(instanceId: string, aiSessionId: string, turnId: string) {
+    try {
+      return parseResponse(AiSessionTurnBodySchema, await this.get(instanceId, `${sessionRoute(aiSessionId, "turns")}/${encodeURIComponent(turnId)}`));
+    } catch (error) {
+      if (!splitAiSessionReadUnavailable(error)) throw error;
+      const legacy = await this.legacyStatus(instanceId, aiSessionId);
+      const turn = (legacy.turns || []).find((candidate) => candidate.id === turnId || candidate.providerTurnId === turnId);
+      if (!turn) throw new Error(`AI session Turn ${turnId} was not found.`);
+      return AiSessionTurnBodySchema.parse({ sessionId: legacy.id, revision: legacyAiSessionTurnBodyRevision(turn), turn });
+    }
+  }
+
+  private async legacyStatus(instanceId: string, aiSessionId: string) {
     return parseResponse(AiSessionStatusSchema, await this.get(instanceId, `/ai-sessions/${encodeURIComponent(aiSessionId)}`));
   }
 
@@ -194,7 +274,7 @@ export class AiSessionActionService {
     references: AiSessionReference[] = [],
     permissionMode?: AiSessionPermissionMode,
     diagnostics?: { traceId: string; onTiming?: (timing: RequestTimingDiagnostics) => void },
-  ): Promise<AiSessionActionResult> {
+  ): Promise<AiSessionActionResponse> {
     const materializedAttachments = attachments.filter((attachment): attachment is AiSessionMessageAttachment => attachment.source.type !== "upload-ref");
     assertAiSessionAttachmentsWithinLimit(materializedAttachments);
     const instance = await this.options.requireInstance(instanceId);
@@ -205,7 +285,7 @@ export class AiSessionActionService {
     const session = instance.aiSessions.sessions.find((candidate) => candidate.id === sessionId);
     const effectivePermissionMode = permissionMode
       || (session?.agent === "codex" ? instance.config.defaultCodexPermissionMode : undefined);
-    return parseResponse(AiSessionActionResultSchema, await this.options.request(instance, sessionRoute(sessionId, "messages"), {
+    return parseResponse(AiSessionActionCompatibleResponseSchema, await this.options.request(instance, sessionRoute(sessionId, "messages"), {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -238,7 +318,7 @@ export class AiSessionActionService {
   }
 
   async steerQueuedMessage(instanceId: string, sessionId: string, queueId: string) {
-    return parseResponse(AiSessionActionResultSchema, await this.post(instanceId, queueRoute(sessionId, queueId, "steer"), {}));
+    return parseResponse(AiSessionActionCompatibleResponseSchema, await this.post(instanceId, queueRoute(sessionId, queueId, "steer"), {}));
   }
 
   async retryQueuedMessage(instanceId: string, sessionId: string, queueId: string) {
@@ -260,8 +340,8 @@ export class AiSessionActionService {
     return parseResponse(AiSessionStatusSchema, await this.patch(instanceId, sessionRoute(sessionId, "queue/reorder"), body));
   }
 
-  async interrupt(instanceId: string, sessionId: string): Promise<AiSessionActionResult> {
-    return parseResponse(AiSessionActionResultSchema, await this.post(instanceId, sessionRoute(sessionId, "interrupt"), {}));
+  async interrupt(instanceId: string, sessionId: string): Promise<AiSessionActionResponse> {
+    return parseResponse(AiSessionActionCompatibleResponseSchema, await this.post(instanceId, sessionRoute(sessionId, "interrupt"), {}));
   }
 
   private async get(instanceId: string, route: string) {
@@ -317,6 +397,16 @@ function aiSessionWorkspaceSelectionUnsupported() {
 
 function sessionRoute(sessionId: string, suffix: string) {
   return `/ai-sessions/${encodeURIComponent(sessionId)}/${suffix}`;
+}
+
+function splitAiSessionReadUnavailable(error: unknown) {
+  if (error instanceof z.ZodError) return true;
+  if (!error || typeof error !== "object") return false;
+  const record = error as { statusCode?: unknown; status?: unknown; code?: unknown };
+  const status = record.statusCode ?? record.status;
+  return status === 404
+    && record.code !== "AI_SESSION_NOT_FOUND"
+    && record.code !== "AI_SESSION_TURN_NOT_FOUND";
 }
 
 function queueRoute(sessionId: string, queueId: string, suffix?: string) {

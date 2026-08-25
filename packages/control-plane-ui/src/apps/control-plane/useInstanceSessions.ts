@@ -504,7 +504,7 @@ export function aiSessionUserPrompts(session?: AiSessionSummary) {
 }
 
 export function aiSessionTurns(session?: AiSessionSummary) {
-  return (session?.turns || []).filter((turn) => turn.userPrompt?.trim() || turn.lastMessage?.trim() || turn.summary?.trim() || turn.contextCompactions?.length);
+  return session?.turns || [];
 }
 
 function aiSessionDisplayTurns(session?: AiSessionSummary) {

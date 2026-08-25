@@ -121,6 +121,16 @@ export function createStreamingMessagesStore(options: StreamingMessagesStoreOpti
     return entry;
   }
 
+  function settleProjectedStatus(entry: StreamingMessageRef, status: StreamingMessageStatus, generatedAt: string) {
+    const current = entry.value;
+    entry.value = {
+      ...current,
+      status,
+      settledAt: status === "streaming" ? undefined : generatedAt,
+      updatedAt: generatedAt,
+    };
+  }
+
   function applySnapshot(payload: AiSessionSnapshotEvent) {
     applyAuthoritativeSnapshot({
       instanceId: payload.meta.instanceId,
@@ -241,8 +251,16 @@ export function createStreamingMessagesStore(options: StreamingMessagesStoreOpti
         )
       : activeTurn;
     const authoritativeItemId = turn?.lastMessageItemId || session.lastMessageItemId;
-    const text = turn?.lastMessage ?? (activeTurn ? undefined : session.lastMessage);
     const status = aiSessionAuthoritativeMessageStatus(session, turn?.status);
+    // The current list projection deliberately omits turns and compacts the
+    // top-level lastMessage for previews. It may advance lifecycle state, but
+    // it is not authoritative conversation content and must never replace the
+    // complete text accumulated from message-delta events.
+    if (session.turns === undefined) {
+      if (target) settleProjectedStatus(target, status, generatedAt);
+      return;
+    }
+    const text = turn?.lastMessage ?? (activeTurn ? undefined : session.lastMessage);
     if (target?.value.itemId && authoritativeItemId && target.value.itemId !== authoritativeItemId) {
       if (status === "streaming") return;
       target = ensureMessage({

@@ -217,7 +217,7 @@ test("snapshot and patch settle existing message identities while removed events
     upserted: [session({ status: "failed", lastMessage: "final error", lastMessageItemId: "item_1", turns: undefined })],
     removed: [],
   });
-  assert.equal(entry.value.receivedText, "final error");
+  assert.equal(entry.value.receivedText, "final");
   assert.equal(entry.value.status, "failed");
 
   store.applyRemoved({
@@ -226,6 +226,32 @@ test("snapshot and patch settle existing message identities while removed events
     expiresAt: "2026-07-18T01:00:00.000Z",
   });
   assert.equal(store.message(id), undefined);
+});
+
+test("terminal compact list projection preserves the complete streamed markdown", () => {
+  const store = createStreamingMessagesStore();
+  const id = identity();
+  const completeMarkdown = "Result\n\n- first\n- second\n\n```js\nrun();\n```";
+  const entry = store.appendDelta({
+    identity: id,
+    streamId: "stream_1",
+    delta: completeMarkdown,
+  });
+
+  store.applyPatch({
+    meta: meta({ revision: 2, generatedAt: "2026-07-18T00:00:02.000Z" }),
+    upserted: [session({
+      status: "idle",
+      turns: undefined,
+      lastMessage: "Result - first - second ```js run(); ```",
+      lastMessageItemId: "item_1",
+    })],
+    removed: [],
+  });
+
+  assert.equal(entry.value.receivedText, completeMarkdown);
+  assert.equal(entry.value.status, "complete");
+  assert.equal(entry.value.settledAt, "2026-07-18T00:00:02.000Z");
 });
 
 test("updating one message preserves unrelated refs, values, and subscriptions", () => {

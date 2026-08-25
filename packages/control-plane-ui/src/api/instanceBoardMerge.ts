@@ -1,7 +1,7 @@
 import { replaceEqualDeep } from "@tanstack/vue-query";
 import type { InstanceBoardItem, InstanceBoardPayload } from "./types";
 
-function mergeInstance(
+export function mergeInstanceBoardItem(
   previous: InstanceBoardItem | undefined,
   incoming: InstanceBoardItem,
 ) {
@@ -42,7 +42,7 @@ export function mergeInstanceBoardPayload(
   const previousById = new Map(previous.data.map((instance) => [instance.id, instance]));
   return replaceEqualDeep(previous, {
     ...incoming,
-    data: incoming.data.map((instance) => mergeInstance(previousById.get(instance.id), instance)),
+    data: incoming.data.map((instance) => mergeInstanceBoardItem(previousById.get(instance.id), instance)),
   });
 }
 
@@ -60,7 +60,7 @@ export function mergeInstanceBoardQueryData(
     const previousItems = Array.isArray(previous) ? previous : undefined;
     if (!previousItems) return incoming;
     const previousById = new Map(previousItems.map((instance) => [instance.id, instance]));
-    return replaceEqualDeep(previousItems, incoming.map((instance) => mergeInstance(previousById.get(instance.id), instance)));
+    return replaceEqualDeep(previousItems, incoming.map((instance) => mergeInstanceBoardItem(previousById.get(instance.id), instance)));
   }
   return mergeInstanceBoardPayload(Array.isArray(previous) ? undefined : previous, incoming);
 }

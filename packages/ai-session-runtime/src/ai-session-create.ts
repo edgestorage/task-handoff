@@ -100,7 +100,7 @@ export class AiSessionCreateCoordinator {
       throw aiSessionControlError("AI_SESSION_MATERIALIZATION_FAILED", "Direct AI session could not be projected.", 502);
     }
     if (input.cwdFolderId && session.cwdFolderId !== input.cwdFolderId) {
-      session = this.options.registry.put({ ...session, cwdFolderId: input.cwdFolderId });
+      session = this.options.registry.patch(session.id, { cwdFolderId: input.cwdFolderId });
     }
     try {
       await withTimeout(

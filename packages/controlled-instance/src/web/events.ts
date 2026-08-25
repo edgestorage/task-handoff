@@ -1,4 +1,5 @@
-import { AiSessionTransientSubscriptionSchema, aiSessionTransientSubscriptionAccepts, eventTopic, type AiSessionTransientSubscription, type EventEnvelope } from "@task-handoff/protocol/events";
+import { AiSessionEventType, AiSessionMessageDeltaEventSchema, compactAiSessionMessageDeltaEvent } from "@task-handoff/protocol/ai-sessions";
+import { COMPACT_EVENT_ENVELOPE_VERSION, AiSessionTransientSubscriptionSchema, aiSessionTransientSubscriptionAccepts, eventTopic, projectEventEnvelope, type AiSessionTransientSubscription, type EventEnvelope } from "@task-handoff/protocol/events";
 
 export type WebEvent<T = unknown> = {
   v: 1;
@@ -19,6 +20,7 @@ type WebEventClient = {
   on: (event: "close" | "message", listener: (value?: unknown) => void) => void;
   topics?: Set<string>;
   aiSessionTransient?: AiSessionTransientSubscription;
+  eventEnvelopeVersion?: 1 | typeof COMPACT_EVENT_ENVELOPE_VERSION;
 };
 
 const MAX_EVENT_CLIENT_BUFFERED_BYTES = 16 * 1024 * 1024;
@@ -50,6 +52,7 @@ export class WebEventBus {
       if (message?.type === "subscribe") {
         client.topics = new Set(message.topics === undefined ? ["*"] : message.topics);
         client.aiSessionTransient = message.aiSessionTransient;
+        client.eventEnvelopeVersion = message.eventEnvelopeVersion ?? 1;
         if (message.aiSessionTransient?.replaySince) this.replayTransient(client, message.aiSessionTransient.replaySince);
       }
     });
@@ -64,7 +67,10 @@ export class WebEventBus {
     this.retainTransient(event, encoded, encodedBytes);
     for (const client of this.clients) {
       if (client.readyState === client.OPEN && subscribed(client.topics, topic, type) && aiSessionTransientSubscriptionAccepts(client.aiSessionTransient, event)) {
-        this.sendClient(client, encoded, encodedBytes);
+        const frame = client.eventEnvelopeVersion === COMPACT_EVENT_ENVELOPE_VERSION
+          ? encodedCompactEvent(event)
+          : { encoded, bytes: encodedBytes };
+        this.sendClient(client, frame.encoded, frame.bytes);
       }
     }
     return event;
@@ -88,7 +94,10 @@ export class WebEventBus {
       if (retained.event.type !== "ai-session.message-delta" && retained.event.createdAt < replaySince) continue;
       if (!subscribed(client.topics, retained.event.topic, retained.event.type)) continue;
       if (!aiSessionTransientSubscriptionAccepts(client.aiSessionTransient, retained.event)) continue;
-      const replay = JSON.stringify({ ...retained.event, replay: true });
+      const projected = client.eventEnvelopeVersion === COMPACT_EVENT_ENVELOPE_VERSION
+        ? compactEvent(retained.event)
+        : retained.event;
+      const replay = JSON.stringify({ ...projected, replay: true });
       if (!this.sendClient(client, replay, Buffer.byteLength(replay, "utf8"))) break;
     }
   }
@@ -106,10 +115,14 @@ export class WebEventBus {
       ? snapshot.sessions
       : Array.isArray(record.upserted) ? record.upserted : [];
     const settledTurns = new Set<string>();
+    const settledItems = new Set<string>();
     for (const value of sessions) {
       if (!value || typeof value !== "object" || Array.isArray(value)) continue;
       const session = value as Record<string, unknown>;
       const sessionId = String(session.id || "");
+      if (sessionId && session.lastMessageItemId) {
+        settledItems.add(`${sessionId}\0${String(session.lastMessageItemId)}`);
+      }
       const turns = Array.isArray(session.turns) ? session.turns : [];
       for (const turnValue of turns) {
         if (!turnValue || typeof turnValue !== "object" || Array.isArray(turnValue)) continue;
@@ -121,14 +134,16 @@ export class WebEventBus {
       }
       if (!turns.length && sessionId && session.status !== "running" && session.status !== "waiting") removedSessionIds.add(sessionId);
     }
-    if (!removedSessionIds.size && !settledTurns.size) return;
+    if (!removedSessionIds.size && !settledTurns.size && !settledItems.size) return;
     const retained = this.transientReplay.filter((entry) => {
       if (entry.event.type !== "ai-session.message-delta") return true;
       const eventPayload = entry.event.payload && typeof entry.event.payload === "object" && !Array.isArray(entry.event.payload)
         ? entry.event.payload as Record<string, unknown>
         : {};
       const sessionId = String(eventPayload.sessionId || "");
-      return !removedSessionIds.has(sessionId) && !settledTurns.has(`${sessionId}\0${String(eventPayload.turnId || "")}`);
+      return !removedSessionIds.has(sessionId)
+        && !settledTurns.has(`${sessionId}\0${String(eventPayload.turnId || "")}`)
+        && !settledItems.has(`${sessionId}\0${String(eventPayload.itemId || "")}`);
     });
     if (retained.length === this.transientReplay.length) return;
     this.transientReplay.splice(0, this.transientReplay.length, ...retained);
@@ -175,19 +190,34 @@ function subscribed(topics: Set<string> | undefined, topic: string, type: string
   return !topics || topics.has("*") || topics.has(topic) || topics.has(type);
 }
 
-function parseClientMessage(value: unknown): { type?: string; topics?: string[]; aiSessionTransient?: AiSessionTransientSubscription } | undefined {
+function parseClientMessage(value: unknown): { type?: string; topics?: string[]; aiSessionTransient?: AiSessionTransientSubscription; eventEnvelopeVersion?: 1 | typeof COMPACT_EVENT_ENVELOPE_VERSION } | undefined {
   try {
     const parsed = JSON.parse(String(value || "{}"));
     if (!parsed || typeof parsed !== "object") return undefined;
-    const message = parsed as { type?: string; topics?: string[]; aiSessionTransient?: unknown };
+    const message = parsed as { type?: string; topics?: string[]; aiSessionTransient?: unknown; eventEnvelopeVersion?: unknown };
     const transient = message.aiSessionTransient === undefined ? undefined : AiSessionTransientSubscriptionSchema.safeParse(message.aiSessionTransient);
     if (transient && !transient.success) return undefined;
     return {
       type: message.type,
       topics: Array.isArray(message.topics) ? message.topics.map(String).filter(Boolean) : undefined,
       ...(transient?.success ? { aiSessionTransient: transient.data } : {}),
+      ...(message.eventEnvelopeVersion === COMPACT_EVENT_ENVELOPE_VERSION ? { eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION } : {}),
     };
   } catch {
     return undefined;
   }
+}
+
+function compactEvent(event: EventEnvelope) {
+  const delta = event.type === AiSessionEventType.MessageDelta
+    ? AiSessionMessageDeltaEventSchema.safeParse(event.payload)
+    : undefined;
+  return projectEventEnvelope(event, COMPACT_EVENT_ENVELOPE_VERSION, {
+    ...(delta?.success ? { payload: compactAiSessionMessageDeltaEvent(delta.data) } : {}),
+  });
+}
+
+function encodedCompactEvent(event: EventEnvelope) {
+  const encoded = JSON.stringify(compactEvent(event));
+  return { encoded, bytes: Buffer.byteLength(encoded, "utf8") };
 }

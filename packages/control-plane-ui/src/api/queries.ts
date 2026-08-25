@@ -529,7 +529,7 @@ export function deleteNodeControlPlaneConnection(nodeId: string, connectionId: s
   return deleteApiData<{ deleted: boolean }>(`nodes/${nodeId}/control-plane-connections/${encodeURIComponent(connectionId)}`);
 }
 
-async function fetchInstanceBoardPayload(signal?: AbortSignal, instanceId = "") {
+export async function fetchInstanceBoardPayload(signal?: AbortSignal, instanceId = "") {
   const params = new URLSearchParams();
   params.set("progressive", "true");
   if (instanceId) params.set("instanceId", instanceId);
@@ -550,6 +550,11 @@ export function instanceBoardQueryOptions(instanceId: MaybeRefOrGetter<string> =
     queryKey: computed(() => controlPlaneQueryKeys.scopedInstanceBoard(toValue(instanceId))),
     queryFn: ({ signal }: { signal: AbortSignal }) => fetchInstanceBoardPayload(signal, toValue(instanceId)),
     structuralSharing: mergeInstanceBoardQueryData,
+    // The event stream owns normal convergence. HTTP is reserved for the
+    // initial snapshot and explicit stream/event recovery.
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
     retry: false,
   } as const;
 }
@@ -602,6 +607,11 @@ export function useControlPlaneAiSessionsQuery(instanceId: MaybeRefOrGetter<stri
       return scope ? { ...view, instances: view.instances.filter((entry) => entry.instanceId === scope) } : view;
     },
     enabled: computed(() => toValue(enabled)),
+    // Summary state advances through the revisioned AI Session stream. Stream
+    // recovery performs HTTP reads only when the authoritative revision requires it.
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
     retry: false,
   });
 }
@@ -620,6 +630,14 @@ export function getAiSessionHistoryDetail(instanceId: string, aiSessionId: strin
 
 export function getAiSessionDetail(instanceId: string, aiSessionId: string, signal?: AbortSignal) {
   return sharedAiSessionsApi.detail(instanceId, aiSessionId, signal);
+}
+
+export function getAiSessionTurnIndex(instanceId: string, aiSessionId: string, signal?: AbortSignal) {
+  return sharedAiSessionsApi.turnIndex(instanceId, aiSessionId, signal);
+}
+
+export function getAiSessionTurnBody(instanceId: string, aiSessionId: string, turnId: string, signal?: AbortSignal) {
+  return sharedAiSessionsApi.turnBody(instanceId, aiSessionId, turnId, signal);
 }
 
 export function getAiSessionTimeline(instanceId: string, aiSessionId: string, signal?: AbortSignal) {

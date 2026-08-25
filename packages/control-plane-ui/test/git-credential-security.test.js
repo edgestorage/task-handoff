@@ -58,3 +58,14 @@ test("credential form errors and success toasts never interpolate submitted secr
   assert.doesNotMatch(settings, /showControlPlaneToast\([^)]*(?:draft|secret|token|privateKey|passphrase|knownHosts)/s);
   assert.doesNotMatch(settings, /formError\.value\s*=\s*(?:draft|secret|token|privateKey|passphrase|knownHosts)/);
 });
+
+test("Git credential settings follow the shared directory and editor patterns", () => {
+  assert.match(settings, /class="git-credentials-toolbar"/);
+  assert.match(settings, /class="git-credentials-directory"/);
+  assert.match(settings, /v-for="credential in filteredCredentials"/);
+  assert.match(settings, /<DropdownMenu>[\s\S]*<DropdownMenuContent align="end"/);
+  assert.match(settings, /<ScrollArea class="git-credential-dialog-scroll"/);
+  assert.match(settings, /class="git-credential-form-section"/);
+  assert.match(settings, /<AlertDialog :open="Boolean\(pendingDelete\)"/);
+  assert.match(settings, /<AlertDialog :open="closeConfirmationOpen"/);
+});

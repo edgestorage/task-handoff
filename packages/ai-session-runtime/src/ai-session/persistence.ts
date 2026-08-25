@@ -19,17 +19,21 @@ import type {
 } from "@task-handoff/protocol/ai-sessions";
 import { compact, messageText, normalizeTurns } from "../ai-session-turns";
 
-const PERSISTED_SESSION_FIELDS = new Set([
+const PERSISTED_AI_SESSION_FIELD_NAMES = [
   "id", "agent", "creationSource", "appSessionId", "appId", "providerSessionId", "lineage", "providerMeta", "appBindingKeys", "actions",
   "activeTurnId", "title", "cwd", "cwdFolderId", "userPrompt", "turns", "status", "phase", "summary", "lastMessage", "lastMessageItemId",
   "currentTool", "toolCallsSinceLastMessage", "subAgents", "transcriptPath", "transcriptSize", "startedAt", "updatedAt",
   "completedAt", "error", "counters", "queue",
-]);
+] as const satisfies readonly (keyof AiSessionStatus)[];
 
-const PERSISTED_TOOL_FIELDS = new Set(["id", "kind", "name", "inputPreview", "startedAt"]);
-const PERSISTED_SUB_AGENT_FIELDS = new Set(["threadId", "path", "status", "activity", "message", "updatedAt"]);
-const PERSISTED_QUEUE_ITEM_FIELDS = new Set(["id", "messageId", "message", "attachments", "references", "permissionMode", "status", "createdAt", "updatedAt", "error"]);
-const PERSISTED_ATTACHMENT_META_FIELDS = new Set(["id", "kind", "name", "mime", "size", "sourceType"]);
+const PERSISTED_SESSION_FIELDS = new Set<string>(PERSISTED_AI_SESSION_FIELD_NAMES);
+
+export type PersistedAiSession = Pick<AiSessionStatus, typeof PERSISTED_AI_SESSION_FIELD_NAMES[number]>;
+
+const PERSISTED_TOOL_FIELDS = new Set(Object.keys(AiSessionToolSchema.shape));
+const PERSISTED_SUB_AGENT_FIELDS = new Set(Object.keys(AiSessionSubAgentSchema.shape));
+const PERSISTED_QUEUE_ITEM_FIELDS = new Set(Object.keys(AiSessionQueuedMessageSchema.shape));
+const PERSISTED_ATTACHMENT_META_FIELDS = new Set(Object.keys(AiSessionMessageAttachmentMetaSchema.shape));
 
 function warnUnknownFields(record: Record<string, unknown>, allowed: ReadonlySet<string>, context: string) {
   const unknown = Object.keys(record).filter((key) => !allowed.has(key));
@@ -242,7 +246,7 @@ function normalizePersistedTurns(value: unknown): AiSessionStatus["turns"] {
  * Migrates persisted/cross-version runtime data by projecting known fields
  * before applying the current strict protocol schema.
  */
-export function sanitizePersistedAiSession(value: unknown): AiSessionStatus | undefined {
+export function decodePersistedAiSession(value: unknown): AiSessionStatus | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
   if (typeof record.id !== "string" || typeof record.agent !== "string" || typeof record.startedAt !== "string" || typeof record.updatedAt !== "string") {
@@ -294,4 +298,22 @@ export function sanitizePersistedAiSession(value: unknown): AiSessionStatus | un
   };
   const parsed = AiSessionStatusSchema.safeParse(candidate);
   return parsed.success ? parsed.data : undefined;
+}
+
+export function encodePersistedAiSession(session: AiSessionStatus): PersistedAiSession {
+  const current = AiSessionStatusSchema.parse(session);
+  const encoded: Partial<PersistedAiSession> = {};
+  for (const field of PERSISTED_AI_SESSION_FIELD_NAMES) {
+    const value = current[field];
+    if (value !== undefined) {
+      Object.assign(encoded, { [field]: value });
+    }
+  }
+  return encoded as PersistedAiSession;
+}
+
+// Compatibility for v0.0.23: callers used this name before persistence became
+// an explicit codec. Keep the façade while all reads converge on decode().
+export function sanitizePersistedAiSession(value: unknown) {
+  return decodePersistedAiSession(value);
 }

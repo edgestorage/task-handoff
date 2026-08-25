@@ -43,7 +43,7 @@ test("selected session details use the streaming message view", () => {
 });
 
 test("detail exposes an intent-aware shadcn return-to-latest control", () => {
-  assert.match(panel, /<Button[\s\S]*?v-if="!isFollowingLatest"[\s\S]*?@click="followLatest"/);
+  assert.match(panel, /<Button[\s\S]*?v-if="detailCanScroll && !isFollowingLatest"[\s\S]*?@click="followLatest"/);
   assert.match(panel, /keepFollowingAfterSend = detailScrollViewport[\s\S]*distanceFromBottom\(detailScrollViewport\) <= STREAMING_SCROLL_FOLLOW_THRESHOLD/);
   assert.match(panel, /keepFollowingAfterSend && scrollFollow\?\.isFollowing\(\)[\s\S]*await nextTick\(\);[\s\S]*scrollFollow\?\.followLatest\(\);[\s\S]*scrollFollow\?\.notifyContentResize\(\);/);
   assert.match(panel, /<ChevronDown :size="17" \/>/);
@@ -58,9 +58,9 @@ test("detail exposes an intent-aware shadcn return-to-latest control", () => {
   assert.match(result, /onBeforeUpdate\([\s\S]*emit\("layoutWillChange", turnElement\.value\)/);
   assert.match(result, /onUpdated\([\s\S]*emit\("layoutCommitted", turnElement\.value\)/);
   assert.match(panel, /data-task-handoff-scroll-viewport/);
-  assert.match(panel, /watch\(\(\) => `\$\{props\.instance\.id\}\\u0000\$\{selectedSession\.value\?\.id \|\| ""\}`/);
+  assert.match(panel, /useAiSessionConversationProjection/);
   assert.match(panel, /onMounted\(\(\) => \{[\s\S]*if \(!detailScrollViewport\) observeDetailScroll\(\);/);
-  assert.match(panel, /isFollowingLatest\.value = true;[\s\S]*isSmoothFollowingLatest\.value = false;[\s\S]*scrollFollow\?\.jumpLatest\(\);[\s\S]*handleDetailScroll\(\);/);
+  assert.match(panel, /isFollowingLatest\.value = true;[\s\S]*isSmoothFollowingLatest\.value = false;[\s\S]*if \(effectiveTimelineViewMode\.value === "full"\) \{[\s\S]*scrollFollow\?\.jumpLatest\(\);[\s\S]*viewport\.scrollTop = 0;[\s\S]*handleDetailScroll\(\);/);
   assert.match(panel, /enteringFullTimeline = value === "full"[\s\S]*await nextTick\(\);[\s\S]*scrollFollow\?\.jumpLatest\(\);[\s\S]*handleDetailScroll\(\);/);
 });
 

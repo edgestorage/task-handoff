@@ -7,7 +7,7 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from 'react';
-import type { ControlPlaneClient } from '@task-handoff/control-plane-client';
+import { aiSessionDetailCacheRevision, aiSessionTurnsCacheRevision, type ControlPlaneClient } from '@task-handoff/control-plane-client';
 
 import { isCarPlayConnected, subscribeToCarPlayConnection } from '../carplay/runtime';
 import { createMobileControlPlaneClient } from '../control-plane/client';
@@ -124,6 +124,15 @@ export function useActiveAiSessionsSnapshot() {
 
 export function useActiveAiSessionView(controlPlaneId: string | undefined, instanceId: string, sessionId: string) {
   const runtime = useMobileControlPlaneRuntime();
+  const summary = useSyncExternalStore(
+    (listener) => controlPlaneId
+      ? mobileAiSessionStore.subscribeSession(controlPlaneId, instanceId, sessionId, listener)
+      : () => undefined,
+    () => controlPlaneId ? mobileAiSessionStore.sessionSummary(controlPlaneId, instanceId, sessionId) : undefined,
+    () => undefined,
+  );
+  const detailRevision = summary ? aiSessionDetailCacheRevision(summary) : '';
+  const turnsRevision = summary ? aiSessionTurnsCacheRevision(summary) : '';
   useEffect(() => {
     if (!controlPlaneId || runtime.controlPlaneId !== controlPlaneId || !instanceId || !sessionId || !runtime.coordinator) return;
     const replaySince = new Date().toISOString();
@@ -138,6 +147,28 @@ export function useActiveAiSessionView(controlPlaneId: string | undefined, insta
     // not refetch the complete session fleet on every detail selection.
     return dispose;
   }, [controlPlaneId, instanceId, runtime.controlPlaneId, runtime.coordinator, sessionId]);
+  useEffect(() => {
+    if (!controlPlaneId || runtime.controlPlaneId !== controlPlaneId || !runtime.api || !summary || !detailRevision || !turnsRevision) return;
+    const abort = new AbortController();
+    void Promise.all([
+      mobileAiSessionStore.hasSessionDetail(controlPlaneId, instanceId, summary)
+        ? undefined
+        : runtime.api.aiSessions.detail(instanceId, sessionId, abort.signal),
+      mobileAiSessionStore.hasSessionTurnIndex(controlPlaneId, instanceId, summary)
+        ? undefined
+        : runtime.api.aiSessions.turnIndex(instanceId, sessionId, abort.signal),
+    ]).then(async ([detail, index]) => {
+      if (abort.signal.aborted) return;
+      if (detail) mobileAiSessionStore.setSessionDetail(controlPlaneId, instanceId, summary, detail);
+      if (index) mobileAiSessionStore.setSessionTurnIndex(controlPlaneId, instanceId, summary, index);
+      const latest = mobileAiSessionStore.sessionTurnIndex(controlPlaneId, instanceId, sessionId)?.turns.at(-1);
+      const needed = latest && mobileAiSessionStore.neededSessionTurn(controlPlaneId, instanceId, sessionId, latest.id);
+      if (!needed) return;
+      const body = await runtime.api!.aiSessions.turnBody(instanceId, sessionId, needed.id, abort.signal);
+      if (!abort.signal.aborted) mobileAiSessionStore.setSessionTurn(controlPlaneId, instanceId, sessionId, body.revision, body.turn);
+    }).catch(() => undefined);
+    return () => abort.abort();
+  }, [controlPlaneId, detailRevision, instanceId, runtime.api, runtime.controlPlaneId, sessionId, summary?.id, turnsRevision]);
   return useSyncExternalStore(
     (listener) => controlPlaneId
       ? mobileAiSessionStore.subscribeSession(controlPlaneId, instanceId, sessionId, listener)

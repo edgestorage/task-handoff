@@ -1,5 +1,5 @@
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { resolveStoragePaths } from "@task-handoff/core/storage/paths";
 import type {
@@ -40,6 +40,7 @@ import {
   applyAiSessionPatch,
   reduceAiSessionRealtime,
   reduceAiSessionSnapshot,
+  sameAiSessionBusinessState,
   type AiSessionPatch,
 } from "./ai-session/state-reducer";
 import {
@@ -108,11 +109,72 @@ function aiSessionDir() {
   return path.join(resolveStoragePaths().dataDir, "ai-sessions");
 }
 
+function canonicalDetailValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalDetailValue);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>)
+    .filter(([, entry]) => entry !== undefined)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, entry]) => [key, canonicalDetailValue(entry)]));
+}
+
+const aiSessionDetailRevisionCache = new WeakMap<AiSessionStatus, string>();
+
+export function aiSessionDetailRevision(session: AiSessionStatus) {
+  const cached = aiSessionDetailRevisionCache.get(session);
+  if (cached) return cached;
+  const detail = canonicalDetailValue({
+    appBindingKeys: session.appBindingKeys,
+    cwd: session.cwd,
+    error: session.error,
+    providerMeta: session.providerMeta,
+    queue: session.queue,
+    subAgents: session.subAgents,
+  });
+  const revision = createHash("sha256").update(JSON.stringify(detail)).digest("base64url").slice(0, 22);
+  aiSessionDetailRevisionCache.set(session, revision);
+  return revision;
+}
+
+const aiSessionTurnsRevisionCache = new WeakMap<AiSessionStatus, string>();
+
+export function aiSessionTurnBodyRevision(turn: NonNullable<AiSessionStatus["turns"]>[number]) {
+  return createHash("sha256")
+    .update(JSON.stringify(canonicalDetailValue(turn)))
+    .digest("base64url")
+    .slice(0, 22);
+}
+
+export function aiSessionTurnsRevision(session: AiSessionStatus) {
+  const cached = aiSessionTurnsRevisionCache.get(session);
+  if (cached) return cached;
+  const index = (session.turns || []).map((turn) => ({
+    id: turn.id,
+    providerTurnId: turn.providerTurnId,
+    status: turn.status,
+    phase: turn.phase,
+    revision: turn.revision,
+    startedAt: turn.startedAt,
+    updatedAt: turn.updatedAt,
+    completedAt: turn.completedAt,
+    bodyRevision: aiSessionTurnBodyRevision(turn),
+  }));
+  const revision = createHash("sha256")
+    .update(JSON.stringify(canonicalDetailValue(index)))
+    .digest("base64url")
+    .slice(0, 22);
+  aiSessionTurnsRevisionCache.set(session, revision);
+  return revision;
+}
+
 function summaryForHeartbeat(session: AiSessionStatus): AiSessionSummary {
-  // Compatibility for v0.0.23: `turns` remains the same optional wire field,
-  // but aggregate snapshots carry only the latest turn. Full retained history
-  // belongs to the session detail/timeline endpoints, not fleet heartbeats.
-  const turns = session.turns?.slice(-1).map(({ userMessages: _userMessages, ...turn }) => turn);
+  const meaningfulTurns = (session.turns || []).filter((turn) => (
+    turn.userPrompt?.trim()
+    || turn.lastMessage?.trim()
+    || turn.summary?.trim()
+    || turn.contextCompactions?.length
+  ));
+  const lastUserTurn = [...meaningfulTurns].reverse().find((turn) => turn.userPrompt?.trim());
   return {
     id: session.id,
     agent: session.agent,
@@ -121,27 +183,30 @@ function summaryForHeartbeat(session: AiSessionStatus): AiSessionSummary {
     appId: session.appId,
     providerSessionId: session.providerSessionId,
     lineage: session.lineage,
-    providerMeta: session.providerMeta,
-    appBindingKeys: session.appBindingKeys,
+    appBindingKeys: session.appBindingKeys?.slice(0, 3).map((value) => compact(value, 120)),
     actions: actionsForSession(session),
     activeTurnId: session.activeTurnId,
     title: session.title,
-    cwd: session.cwd,
+    cwd: session.cwd ? compact(session.cwd, 512) : undefined,
     cwdFolderId: session.cwdFolderId,
-    userPrompt: session.userPrompt,
-    turns,
+    userPrompt: session.userPrompt ? compact(session.userPrompt, 400) : undefined,
+    detailRevision: aiSessionDetailRevision(session),
+    turnsRevision: aiSessionTurnsRevision(session),
+    turnCount: meaningfulTurns.length,
+    lastUserMessageAt: lastUserTurn?.startedAt || lastUserTurn?.updatedAt || (session.userPrompt ? session.startedAt : undefined),
     status: session.status,
     phase: session.phase,
-    summary: session.summary,
-    lastMessage: session.lastMessage,
+    summary: session.summary ? compact(session.summary, 300) : undefined,
+    lastMessage: session.lastMessage ? compact(session.lastMessage, 800) : undefined,
     lastMessageItemId: session.lastMessageItemId,
-    currentTool: session.currentTool,
+    currentTool: session.currentTool ? { ...session.currentTool, inputPreview: undefined } : undefined,
     toolCallsSinceLastMessage: session.toolCallsSinceLastMessage,
-    subAgents: session.subAgents,
-    queue: session.queue,
+    subAgentCount: session.subAgents.length,
+    subAgents: [],
+    queue: { revision: session.queue.revision, pendingCount: session.queue.pendingCount, items: [] },
     startedAt: session.startedAt,
     updatedAt: session.updatedAt,
-    error: session.error,
+    error: session.error ? compact(session.error, 300) : undefined,
   };
 }
 
@@ -250,6 +315,10 @@ export class AiSessionRegistry {
   }
 
   start(input: AiSessionStartInput, options: { meta?: TurnMeta; timestamp?: string; suppressPromptTurn?: boolean } = {}) {
+    return this.put(this.initialSession(input, options));
+  }
+
+  private initialSession(input: AiSessionStartInput, options: { meta?: TurnMeta; timestamp?: string; suppressPromptTurn?: boolean } = {}) {
     const timestamp = options.timestamp || nowIso();
     const meta = options.meta || turnMeta({ source: "control", observedAt: timestamp });
     const session: AiSessionStatus = {
@@ -277,7 +346,6 @@ export class AiSessionRegistry {
       counters: { toolCalls: 0, edits: 0, approvals: 0 },
       queue: emptyQueue(),
     };
-    this.put(session);
     return session;
   }
 
@@ -316,10 +384,22 @@ export class AiSessionRegistry {
     return this.removeStoredSession(id);
   }
 
-  put(session: AiSessionStatus) {
-    this.store.save(session);
+  private put(session: AiSessionStatus) {
+    const current = this.get(session.id);
+    if (current && sameAiSessionBusinessState(current, session)) {
+      return current;
+    }
+    const committed = this.store.save(session);
     this.emitChange("write");
-    return session;
+    return committed;
+  }
+
+  patch(id: string, patch: AiSessionUpdateInput) {
+    return this.update(id, patch);
+  }
+
+  restoreAuthority(session: AiSessionStatus) {
+    return this.put(session);
   }
 
   private removeStoredSession(id: string) {
@@ -498,7 +578,7 @@ export class AiSessionRegistry {
       );
     }
     if (!existing) {
-      const session = this.start({
+      const session = this.initialSession({
         agent: input.agent,
         creationSource: input.creationSource,
         appSessionId: input.appSessionId,
@@ -514,7 +594,7 @@ export class AiSessionRegistry {
         phase: input.phase || "unknown",
         summary: input.summary,
       }, { meta, timestamp: input.observedAt, suppressPromptTurn: !input.turns?.length });
-      return this.update(session.id, {
+      return this.put(applyAiSessionPatch(session, {
         providerMeta: input.providerMeta,
         lineage: input.lineage,
         appBindingKeys: input.appBindingKeys,
@@ -530,7 +610,7 @@ export class AiSessionRegistry {
         transcriptSize: input.transcriptSize,
         status: input.status || session.status,
         phase: input.phase || "unknown",
-      }, { updatedAt: input.observedAt, meta, suppressTurnUpdate: !input.turns?.length });
+      }, { updatedAt: input.observedAt, meta, suppressTurnUpdate: !input.turns?.length }));
     }
     this.reconciliation.clearOrphan(existing.id);
     const updated = reduceAiSessionSnapshot(existing, input);
@@ -611,9 +691,7 @@ export class AiSessionRegistry {
   }
 
   private readSessions() {
-    const now = Date.now();
     return this.store.list()
-      .map((session) => this.withDerivedLifecycle(session, now))
       .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
   }
 
@@ -728,20 +806,6 @@ export class AiSessionRegistry {
       });
     }
     return matched;
-  }
-
-  private withDerivedLifecycle(session: AiSessionStatus, now = Date.now()) {
-    if (["idle", "failed", "waiting"].includes(session.status)) {
-      return session;
-    }
-    const age = now - Date.parse(session.updatedAt);
-    if (age > this.staleAfterMs && session.transcriptPath) {
-      return { ...session, status: "idle" as const };
-    }
-    if (age > this.idleAfterMs && session.status === "running") {
-      return { ...session, status: "idle" as const };
-    }
-    return session;
   }
 
 }
