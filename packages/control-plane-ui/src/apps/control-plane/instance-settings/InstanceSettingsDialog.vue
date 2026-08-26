@@ -30,12 +30,12 @@
 
         <ScrollArea class="instance-settings-scroll">
           <TabsContent value="general" class="instance-settings-section">
-            <section class="instance-settings-card">
+            <section class="instance-settings-card instance-settings-group">
               <div class="instance-settings-section-heading">
                 <h3>{{ t("instances.settings.detailsTitle") }}</h3>
                 <p>{{ t("instances.settings.detailsDescription") }}</p>
               </div>
-              <dl class="instance-settings-grid">
+              <dl class="instance-settings-grid instance-settings-surface">
                 <div><dt>{{ t("instances.settings.id") }}</dt><dd><code>{{ instance.id }}</code></dd></div>
                 <div><dt>{{ t("instances.settings.state") }}</dt><dd>{{ instanceStatusLabel(instance.status) }} · {{ connectionStatusLabel(instance.connectionStatus) }}</dd></div>
                 <div><dt>{{ t("instances.settings.node") }}</dt><dd>{{ instance.node?.name || instance.nodeId }}</dd></div>
@@ -47,12 +47,12 @@
               </dl>
             </section>
 
-            <section class="instance-settings-card">
+            <section class="instance-settings-card instance-settings-group">
               <div class="instance-settings-section-heading">
                 <h3>{{ t("instances.settings.configurationTitle") }}</h3>
                 <p>{{ t("instances.settings.configurationDescription") }}</p>
               </div>
-              <div class="instance-settings-control-row">
+              <div class="instance-settings-control-surface instance-settings-surface">
                 <div class="instance-settings-general-controls">
                   <label class="instance-settings-name-control">
                     <span>
@@ -89,7 +89,7 @@
                       :disabled="savingGeneral || !attachmentRetentionSupported"
                     />
                   </label>
-                  <p v-if="attachmentRetentionWillShorten" class="instance-settings-help">{{ t("instances.settings.aiSessionAttachmentRetentionWarning") }}</p>
+                  <p v-if="attachmentRetentionWillShorten" class="instance-settings-help instance-settings-row-note">{{ t("instances.settings.aiSessionAttachmentRetentionWarning") }}</p>
                   <label class="instance-settings-checkbox">
                     <Checkbox :model-value="autoImportAgentConfigs" :disabled="savingGeneral" @update:model-value="autoImportAgentConfigs = $event === true" />
                     <span>
@@ -123,89 +123,105 @@
                     />
                   </label>
                 </div>
-                <Button size="sm" :disabled="savingGeneral || !generalChanged || !validInstanceName || !validHistoryLimit || !validAttachmentRetention || !validFileAttachmentLimit" @click="saveGeneral">
-                  {{ savingGeneral ? t("instances.settings.saving") : t("instances.settings.saveChanges") }}
-                </Button>
+                <div class="instance-settings-general-actions">
+                  <Button size="sm" :disabled="savingGeneral || !generalChanged || !validInstanceName || !validHistoryLimit || !validAttachmentRetention || !validFileAttachmentLimit" @click="saveGeneral">
+                    {{ savingGeneral ? t("instances.settings.saving") : t("instances.settings.saveChanges") }}
+                  </Button>
+                </div>
               </div>
             </section>
           </TabsContent>
 
           <TabsContent value="models" class="instance-settings-section">
-            <section class="instance-settings-card">
-              <h3>{{ t("instances.settings.modelSelection") }}</h3>
-              <p class="instance-settings-help">{{ t("instances.settings.modelSelectionDescription") }}</p>
-              <div class="instance-model-grid">
-                <label v-for="app in modelApps" :key="app">
-                  <span>{{ t(`common.products.${app}`) }}</span>
-                  <ControlPlaneSelect :model-value="modelDraftValue(app)" :disabled="savingModels" @update:model-value="setModelDraft(app, $event)">
-                    <ControlPlaneSelectItem :value="noModelValue">{{ t("instances.settings.noModel") }}</ControlPlaneSelectItem>
-                    <ControlPlaneSelectItem :value="defaultModelValue">{{ t("instances.settings.globalDefault") }}</ControlPlaneSelectItem>
-                    <ControlPlaneSelectItem v-if="invalidSelection(app)" :value="draftModelId(app)!">{{ t("instances.settings.unavailableModel", { id: draftModelId(app) }) }}</ControlPlaneSelectItem>
-                    <ControlPlaneSelectItem v-for="model in selectableModels(app)" :key="`${app}-${model.id}`" :value="model.id">{{ modelOptionLabel(model) }}</ControlPlaneSelectItem>
-                  </ControlPlaneSelect>
-                  <small v-if="invalidSelection(app)" class="instance-settings-error">{{ t("instances.settings.invalidModel") }}</small>
-                  <small v-else>{{ t("instances.settings.effectiveModel", { name: effectiveModelLabel(app) }) }}</small>
-                </label>
+            <section class="instance-settings-card instance-settings-group">
+              <div class="instance-settings-section-heading">
+                <h3>{{ t("instances.settings.modelSelection") }}</h3>
+                <p>{{ t("instances.settings.modelSelectionDescription") }}</p>
               </div>
-              <div class="instance-settings-actions">
-                <Button size="sm" :disabled="savingModels || !modelsChanged" @click="saveModels">
-                  {{ savingModels ? t("instances.settings.saving") : t("instances.settings.saveModels") }}
-                </Button>
+              <div class="instance-model-surface instance-settings-surface">
+                <div class="instance-model-grid">
+                  <label v-for="app in modelApps" :key="app">
+                    <span class="instance-model-copy">
+                      <strong>{{ t(`common.products.${app}`) }}</strong>
+                      <small v-if="invalidSelection(app)" class="instance-settings-error">{{ t("instances.settings.invalidModel") }}</small>
+                      <small v-else>{{ t("instances.settings.effectiveModel", { name: effectiveModelLabel(app) }) }}</small>
+                    </span>
+                    <ControlPlaneSelect :model-value="modelDraftValue(app)" :disabled="savingModels" @update:model-value="setModelDraft(app, $event)">
+                      <ControlPlaneSelectItem :value="noModelValue">{{ t("instances.settings.noModel") }}</ControlPlaneSelectItem>
+                      <ControlPlaneSelectItem :value="defaultModelValue">{{ t("instances.settings.globalDefault") }}</ControlPlaneSelectItem>
+                      <ControlPlaneSelectItem v-if="invalidSelection(app)" :value="draftModelId(app)!">{{ t("instances.settings.unavailableModel", { id: draftModelId(app) }) }}</ControlPlaneSelectItem>
+                      <ControlPlaneSelectItem v-for="model in selectableModels(app)" :key="`${app}-${model.id}`" :value="model.id">{{ modelOptionLabel(model) }}</ControlPlaneSelectItem>
+                    </ControlPlaneSelect>
+                  </label>
+                </div>
+                <div class="instance-settings-general-actions">
+                  <Button size="sm" :disabled="savingModels || !modelsChanged" @click="saveModels">
+                    {{ savingModels ? t("instances.settings.saving") : t("instances.settings.saveModels") }}
+                  </Button>
+                </div>
               </div>
             </section>
           </TabsContent>
 
           <TabsContent value="git-credentials" class="instance-settings-section">
-            <section class="instance-settings-card">
+            <section class="instance-settings-card instance-settings-group">
               <div class="instance-settings-section-heading">
                 <h3>{{ t("instances.settings.gitCredentialsTitle") }}</h3>
                 <p>{{ t("instances.settings.gitCredentialsDescription") }}</p>
               </div>
-              <p v-if="!gitBrokerSupported" class="instance-settings-help">{{ t("instances.settings.gitCredentialsUnsupported") }}</p>
-              <div v-else-if="gitAssignments.error.value || gitCredentials.error.value" class="instance-app-issues" role="alert">
-                <p>{{ gitCredentialError }}</p>
-                <Button size="sm" variant="outline" @click="refreshGitCredentials">{{ t("instances.settings.retry") }}</Button>
+              <div class="instance-git-directory instance-settings-surface">
+                <div v-if="!gitBrokerSupported" class="instance-settings-state">{{ t("instances.settings.gitCredentialsUnsupported") }}</div>
+                <div v-else-if="gitAssignments.error.value || gitCredentials.error.value" class="instance-settings-state instance-settings-state-error" role="alert">
+                  <span>{{ gitCredentialError }}</span>
+                  <Button size="sm" variant="outline" @click="refreshGitCredentials">{{ t("instances.settings.retry") }}</Button>
+                </div>
+                <template v-else>
+                  <div v-if="gitCredentialMatchText" class="instance-git-match-preview" :data-status="gitCredentialMatchStatus">
+                    <Globe2 :size="15" />
+                    <span>{{ gitCredentialMatchText }}</span>
+                    <Badge variant="secondary">{{ t(`instances.settings.gitCredentialMatchStatus.${gitCredentialMatchStatus}`) }}</Badge>
+                  </div>
+                  <div class="instance-git-assignment-create">
+                    <ControlPlaneSelect v-model="selectedGitCredentialId" :placeholder="t('instances.settings.selectGitCredential')" :disabled="gitCredentialBusy">
+                      <ControlPlaneSelectItem :value="noGitCredentialValue">{{ t("instances.settings.selectGitCredential") }}</ControlPlaneSelectItem>
+                      <ControlPlaneSelectItem v-for="credential in assignableGitCredentials" :key="credential.id" :value="credential.id">{{ credential.name }} · {{ credential.scope.host }}{{ credential.scope.pathPrefix }}</ControlPlaneSelectItem>
+                    </ControlPlaneSelect>
+                    <Button size="sm" :disabled="!selectedGitCredentialId || selectedGitCredentialId === noGitCredentialValue || gitCredentialBusy" @click="authorizeGitCredential">
+                      <KeyRound :size="14" />
+                      {{ t("instances.settings.authorizeGitCredential") }}
+                    </Button>
+                  </div>
+                  <div v-if="gitAssignments.isLoading.value" class="instance-settings-state">{{ t("instances.settings.gitCredentialsLoading") }}</div>
+                  <div v-else-if="!gitAssignments.data.value?.length" class="instance-settings-state instance-settings-empty-state">
+                    <KeyRound :size="26" aria-hidden="true" />
+                    <span>{{ t("instances.settings.noGitCredentials") }}</span>
+                  </div>
+                  <div v-else class="instance-app-list instance-directory-list">
+                    <article v-for="assignment in gitAssignments.data.value" :key="assignment.credentialId" class="instance-app-row instance-git-assignment-row">
+                      <div class="instance-directory-identity">
+                        <span class="instance-app-icon" aria-hidden="true"><KeyRound :size="16" /></span>
+                        <div>
+                          <strong>{{ gitCredentialName(assignment.credentialId) }}</strong>
+                          <code>{{ gitCredentialScope(assignment.credentialId) }}</code>
+                        </div>
+                      </div>
+                      <div class="instance-git-assignment-actions">
+                        <Badge :variant="assignment.status === 'synced' ? 'default' : 'secondary'">{{ t(`instances.settings.gitCredentialStatus.${assignment.status}`) }}</Badge>
+                        <Button size="sm" variant="outline" :disabled="gitCredentialBusy" @click="revokeGitCredential(assignment.credentialId)">{{ t("instances.settings.revokeGitCredential") }}</Button>
+                      </div>
+                    </article>
+                  </div>
+                </template>
               </div>
-              <template v-else>
-                <div v-if="gitCredentialMatchText" class="instance-git-match-preview" :data-status="gitCredentialMatchStatus">
-                  <Globe2 :size="15" />
-                  <span>{{ gitCredentialMatchText }}</span>
-                  <Badge variant="secondary">{{ t(`instances.settings.gitCredentialMatchStatus.${gitCredentialMatchStatus}`) }}</Badge>
-                </div>
-                <div class="instance-git-assignment-create">
-                  <ControlPlaneSelect v-model="selectedGitCredentialId" :placeholder="t('instances.settings.selectGitCredential')" :disabled="gitCredentialBusy">
-                    <ControlPlaneSelectItem :value="noGitCredentialValue">{{ t("instances.settings.selectGitCredential") }}</ControlPlaneSelectItem>
-                    <ControlPlaneSelectItem v-for="credential in assignableGitCredentials" :key="credential.id" :value="credential.id">{{ credential.name }} · {{ credential.scope.host }}{{ credential.scope.pathPrefix }}</ControlPlaneSelectItem>
-                  </ControlPlaneSelect>
-                  <Button size="sm" :disabled="!selectedGitCredentialId || selectedGitCredentialId === noGitCredentialValue || gitCredentialBusy" @click="authorizeGitCredential">
-                    <KeyRound :size="14" />
-                    {{ t("instances.settings.authorizeGitCredential") }}
-                  </Button>
-                </div>
-                <p v-if="gitAssignments.isLoading.value" class="instance-settings-empty">{{ t("instances.settings.gitCredentialsLoading") }}</p>
-                <p v-else-if="!gitAssignments.data.value?.length" class="instance-settings-empty">{{ t("instances.settings.noGitCredentials") }}</p>
-                <div v-else class="instance-app-list">
-                  <article v-for="assignment in gitAssignments.data.value" :key="assignment.credentialId" class="instance-app-row instance-git-assignment-row">
-                    <div>
-                      <strong>{{ gitCredentialName(assignment.credentialId) }}</strong>
-                      <code>{{ gitCredentialScope(assignment.credentialId) }}</code>
-                    </div>
-                    <div class="instance-git-assignment-actions">
-                      <Badge :variant="assignment.status === 'synced' ? 'default' : 'secondary'">{{ t(`instances.settings.gitCredentialStatus.${assignment.status}`) }}</Badge>
-                      <Button size="sm" variant="outline" :disabled="gitCredentialBusy" @click="revokeGitCredential(assignment.credentialId)">{{ t("instances.settings.revokeGitCredential") }}</Button>
-                    </div>
-                  </article>
-                </div>
-              </template>
             </section>
           </TabsContent>
 
           <TabsContent value="apps" class="instance-settings-section">
-            <section class="instance-settings-card">
+            <section class="instance-settings-card instance-settings-group">
               <div class="instance-app-heading">
-                <div>
+                <div class="instance-settings-section-heading">
                   <h3>{{ t("instances.settings.managedApps") }}</h3>
-                  <p class="instance-settings-help">{{ t("instances.settings.managedAppsDescription") }}</p>
+                  <p>{{ t("instances.settings.managedAppsDescription") }}</p>
                 </div>
                 <div v-if="appManagement" class="instance-app-heading-actions">
                   <Badge variant="secondary">{{ appManagement.capabilities.platform }} · {{ appManagement.capabilities.arch }}</Badge>
@@ -215,15 +231,15 @@
                 </div>
               </div>
               <p v-if="appManagement" class="instance-settings-observed">{{ t("instances.settings.observed", { time: formatObservedAt(appManagement.observedAt), privilege: appManagement.capabilities.privilege }) }}</p>
-              <div v-if="appManagementLoading && !appManagement" class="instance-settings-empty">{{ t("instances.settings.appsLoading") }}</div>
-              <div v-else-if="appManagementError" class="instance-app-issues" role="alert">
-                <strong>{{ t("instances.settings.appsUnavailable") }}</strong>
-                <p>{{ appManagementError }}</p>
-                <Button size="sm" variant="outline" @click="refreshApps">{{ t("instances.settings.retry") }}</Button>
-              </div>
-              <p v-else-if="!appManagement" class="instance-settings-empty">{{ t("instances.settings.noSnapshot") }}</p>
-              <p v-else-if="!appManagement.apps.length" class="instance-settings-empty">{{ t("instances.settings.noManagedApps") }}</p>
-              <template v-else>
+              <div class="instance-app-directory instance-settings-surface">
+                <div v-if="appManagementLoading && !appManagement" class="instance-settings-state">{{ t("instances.settings.appsLoading") }}</div>
+                <div v-else-if="appManagementError" class="instance-settings-state instance-settings-state-error" role="alert">
+                  <span>{{ t("instances.settings.appsUnavailable") }} · {{ appManagementError }}</span>
+                  <Button size="sm" variant="outline" @click="refreshApps">{{ t("instances.settings.retry") }}</Button>
+                </div>
+                <div v-else-if="!appManagement" class="instance-settings-state">{{ t("instances.settings.noSnapshot") }}</div>
+                <div v-else-if="!appManagement.apps.length" class="instance-settings-state instance-settings-empty-state">{{ t("instances.settings.noManagedApps") }}</div>
+                <template v-else>
                 <div class="instance-app-toolbar" :aria-label="t('instances.settings.appFilters')">
                   <div class="instance-app-filters">
                     <Button v-for="filter in appFilters" :key="filter.value" size="sm" :variant="appFilter === filter.value ? 'secondary' : 'ghost'" :aria-pressed="appFilter === filter.value" @click="appFilter = filter.value">
@@ -232,8 +248,8 @@
                   </div>
                   <small>{{ installableAppCount ? t("instances.settings.readyToInstall", { count: installableAppCount }) : t("instances.settings.noInstalls") }}</small>
                 </div>
-                <p v-if="!filteredManagedApps.length" class="instance-settings-empty">{{ t("instances.settings.noFilterMatches") }}</p>
-                <div v-else class="instance-app-list">
+                <div v-if="!filteredManagedApps.length" class="instance-settings-state">{{ t("instances.settings.noFilterMatches") }}</div>
+                <div v-else class="instance-app-list instance-directory-list">
                   <article v-for="app in filteredManagedApps" :key="app.id" class="instance-app-row instance-managed-app-row">
                     <div class="instance-app-main">
                       <div class="instance-app-identity">
@@ -271,28 +287,34 @@
                     </div>
                   </article>
                 </div>
-              </template>
+                </template>
+              </div>
             </section>
 
-            <section class="instance-settings-card">
+            <section class="instance-settings-card instance-settings-group">
               <div class="instance-app-heading">
-                <div>
+                <div class="instance-settings-section-heading">
                   <h3>{{ t("instances.settings.customLaunchers") }}</h3>
-                  <p class="instance-settings-help">{{ t("instances.settings.customLaunchersDescription") }}</p>
+                  <p>{{ t("instances.settings.customLaunchersDescription") }}</p>
                 </div>
                 <Badge :variant="inventoryBadgeVariant">{{ inventoryStateLabel }}</Badge>
               </div>
               <p v-if="instance.appInventory" class="instance-settings-observed">{{ t("instances.settings.inventoryObserved", { time: formatObservedAt(instance.appInventory.observedAt) }) }}</p>
-              <p v-if="!customInventoryApps.length" class="instance-settings-empty">{{ t("instances.settings.noCustomLaunchers") }}</p>
-              <div v-else class="instance-app-list">
-                <article v-for="app in customInventoryApps" :key="app.id" class="instance-app-row">
-                  <div><strong>{{ app.name }}</strong><code>{{ app.id }} · {{ app.kind }}</code><small v-if="app.diagnosticCode">{{ t("instances.settings.executableMissing") }}</small></div>
-                  <Badge :variant="app.availability === 'available' ? 'default' : 'secondary'">{{ app.availability }}</Badge>
-                </article>
-              </div>
-              <div v-if="instance.appInventory?.issues.length" class="instance-app-issues" role="status">
-                <strong>{{ t("instances.settings.inventoryDiagnostics") }}</strong>
-                <p v-for="issue in instance.appInventory.issues" :key="issue.code">{{ issue.message }} <code>{{ issue.code }}</code></p>
+              <div class="instance-app-directory instance-settings-surface">
+                <div v-if="!customInventoryApps.length" class="instance-settings-state instance-settings-empty-state">{{ t("instances.settings.noCustomLaunchers") }}</div>
+                <div v-else class="instance-app-list instance-directory-list">
+                  <article v-for="app in customInventoryApps" :key="app.id" class="instance-app-row instance-custom-app-row">
+                    <div class="instance-directory-identity">
+                      <span class="instance-app-icon" aria-hidden="true"><Boxes :size="16" /></span>
+                      <div><strong>{{ app.name }}</strong><code>{{ app.id }} · {{ app.kind }}</code><small v-if="app.diagnosticCode">{{ t("instances.settings.executableMissing") }}</small></div>
+                    </div>
+                    <Badge :variant="app.availability === 'available' ? 'default' : 'secondary'">{{ app.availability }}</Badge>
+                  </article>
+                </div>
+                <div v-if="instance.appInventory?.issues.length" class="instance-app-issues" role="status">
+                  <strong>{{ t("instances.settings.inventoryDiagnostics") }}</strong>
+                  <p v-for="issue in instance.appInventory.issues" :key="issue.code">{{ issue.message }} <code>{{ issue.code }}</code></p>
+                </div>
               </div>
             </section>
           </TabsContent>
@@ -795,8 +817,8 @@ async function confirmAppOperation() {
 
 <style scoped>
 :global(.instance-settings-dialog[role="dialog"]) {
-  width: min(800px, calc(100vw - 36px));
-  max-width: 800px;
+  width: min(920px, calc(100vw - 36px));
+  max-width: 920px;
   height: 680px;
   max-height: calc(100vh - 36px);
   grid-template-rows: auto minmax(0, 1fr) auto;
@@ -880,7 +902,7 @@ async function confirmAppOperation() {
 
 .instance-settings-tabs-list {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   width: 100%;
   height: auto;
   min-height: 36px;
@@ -929,45 +951,56 @@ async function confirmAppOperation() {
 
 .instance-settings-section {
   display: grid;
-  gap: 16px;
+  gap: 18px;
   margin: 0;
-  padding: 2px 10px 4px 2px;
+  padding: 2px 10px 18px 2px;
+}
+
+.instance-settings-section[hidden] {
+  display: none;
 }
 
 .instance-settings-card {
   display: grid;
   gap: 12px;
-  border-top: 1px solid var(--line);
-  padding-top: 16px;
-}
-
-.instance-settings-card:first-child {
-  border-top: 0;
-  padding-top: 0;
 }
 
 .instance-settings-card h3,
 .instance-app-heading h3 {
   margin: 0;
   color: var(--text-strong);
-  font-size: 13px;
+  font-size: 14px;
+  font-weight: 600;
 }
 
 .instance-settings-section-heading {
   display: grid;
-  gap: 3px;
+  gap: 2px;
+  padding: 0 2px;
 }
 
 .instance-settings-section-heading p {
   margin: 0;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.instance-settings-group {
+  gap: 7px;
+}
+
+.instance-settings-surface {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface-raised);
 }
 
 .instance-settings-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
+  gap: 0;
   margin: 0;
 }
 
@@ -975,24 +1008,29 @@ async function confirmAppOperation() {
   display: grid;
   min-width: 0;
   gap: 4px;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  background: var(--surface-raised);
-  padding: 10px;
+  padding: 12px 16px;
+}
+
+.instance-settings-grid div:nth-child(even) {
+  border-left: 1px solid var(--line);
+}
+
+.instance-settings-grid div:nth-child(n + 3) {
+  border-top: 1px solid var(--line);
 }
 
 .instance-settings-grid dt {
   color: var(--text-muted);
-  font-size: 11px;
-  font-weight: 750;
-  text-transform: uppercase;
+  font-size: 12px;
+  font-weight: 500;
 }
 
 .instance-settings-grid dd {
   overflow-wrap: anywhere;
   margin: 0;
   color: var(--text-strong);
-  font-size: 12px;
+  font-size: 13px;
+  line-height: 1.5;
 }
 
 .instance-settings-grid code {
@@ -1000,21 +1038,35 @@ async function confirmAppOperation() {
   font-size: 11px;
 }
 
-.instance-settings-control-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  background: var(--surface-raised);
-  padding: 12px;
+.instance-settings-control-surface {
+  display: grid;
 }
 
 .instance-settings-general-controls {
   display: grid;
-  flex: 1;
-  gap: 14px;
+  gap: 0;
+}
+
+.instance-settings-general-controls > label {
+  padding: 14px 16px;
+}
+
+.instance-settings-general-controls > label + label,
+.instance-settings-general-controls > .instance-settings-row-note + label,
+.instance-settings-general-controls > label + .instance-settings-row-note {
+  border-top: 1px solid var(--line);
+}
+
+.instance-settings-general-actions {
+  display: flex;
+  justify-content: flex-end;
+  border-top: 1px solid var(--line);
+  padding: 10px 16px;
+}
+
+.instance-settings-row-note {
+  background: var(--surface-inset);
+  padding: 8px 16px;
 }
 
 .instance-settings-checkbox {
@@ -1026,8 +1078,7 @@ async function confirmAppOperation() {
 
 .instance-settings-checkbox span,
 .instance-settings-name-control > span,
-.instance-settings-select-control > span,
-.instance-model-grid label {
+.instance-settings-select-control > span {
   display: grid;
   gap: 5px;
 }
@@ -1046,7 +1097,8 @@ async function confirmAppOperation() {
 
 .instance-settings-checkbox strong {
   color: var(--text-strong);
-  font-size: 12px;
+  font-size: 13px;
+  font-weight: 500;
 }
 
 .instance-settings-name-control {
@@ -1058,7 +1110,8 @@ async function confirmAppOperation() {
 
 .instance-settings-name-control strong {
   color: var(--text-strong);
-  font-size: 12px;
+  font-size: 13px;
+  font-weight: 500;
 }
 
 .instance-settings-select-control {
@@ -1070,18 +1123,45 @@ async function confirmAppOperation() {
 
 .instance-settings-select-control strong {
   color: var(--text-strong);
-  font-size: 12px;
+  font-size: 13px;
+  font-weight: 500;
 }
 
-.instance-settings-actions {
-  display: flex;
-  justify-content: flex-end;
+.instance-model-surface {
+  display: grid;
 }
 
 .instance-model-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
+  gap: 0;
+}
+
+.instance-model-grid label {
+  display: grid;
+  align-items: center;
+  gap: 20px;
+  grid-template-columns: minmax(220px, 0.8fr) minmax(320px, 1.2fr);
+  padding: 14px 16px;
+}
+
+.instance-model-grid label + label {
+  border-top: 1px solid var(--line);
+}
+
+.instance-model-copy {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.instance-model-copy strong {
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.instance-model-copy .instance-settings-error {
+  color: var(--status-danger);
 }
 
 .instance-app-heading,
@@ -1104,14 +1184,18 @@ async function confirmAppOperation() {
   height: 28px;
 }
 
+.instance-app-heading > .instance-settings-section-heading {
+  min-width: 0;
+}
+
 .instance-app-toolbar {
   display: flex;
   min-height: 36px;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  border-block: 1px solid var(--line);
-  padding: 6px 0;
+  border-bottom: 1px solid var(--line);
+  padding: 6px 10px;
 }
 
 .instance-app-toolbar > small {
@@ -1144,9 +1228,17 @@ async function confirmAppOperation() {
   gap: 8px;
 }
 
-.instance-app-row {
+.instance-directory-list {
+  gap: 0;
+}
+
+.instance-directory-list .instance-app-row {
+  min-height: 68px;
+  padding: 10px 12px;
+}
+
+.instance-directory-list .instance-app-row + .instance-app-row {
   border-top: 1px solid var(--line);
-  padding-top: 10px;
 }
 
 .instance-app-row > div {
@@ -1160,14 +1252,7 @@ async function confirmAppOperation() {
   grid-template-columns: minmax(0, 1fr);
   align-items: stretch;
   justify-content: normal;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  background: var(--surface-raised);
-  padding: 12px;
-}
-
-.instance-managed-app-row:first-child {
-  border-top: 1px solid var(--line);
+  background: transparent;
 }
 
 .instance-app-copy {
@@ -1311,8 +1396,9 @@ async function confirmAppOperation() {
 }
 
 .instance-app-issues {
-  border-left: 3px solid var(--status-danger);
-  padding-left: 10px;
+  border-top: 1px solid var(--line);
+  background: var(--surface-inset);
+  padding: 10px 12px;
   color: var(--text);
   font-size: 12px;
 }
@@ -1339,18 +1425,46 @@ async function confirmAppOperation() {
   padding: 18px 0;
 }
 
+.instance-settings-state {
+  display: flex;
+  min-height: 112px;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--text-muted);
+  font-size: 12px;
+  padding: 18px;
+  text-align: center;
+}
+
+.instance-settings-state-error {
+  color: var(--status-danger);
+}
+
+.instance-settings-empty-state {
+  display: grid;
+  gap: 7px;
+  justify-items: center;
+}
+
+.instance-app-directory,
+.instance-git-directory {
+  display: grid;
+}
+
 .instance-git-assignment-create {
   align-items: center;
   display: grid;
   gap: 8px;
   grid-template-columns: minmax(0, 1fr) auto;
+  border-bottom: 1px solid var(--line);
+  padding: 10px 12px;
 }
 
 .instance-git-match-preview {
   align-items: center;
   background: var(--surface-inset);
-  border: 1px solid var(--line);
-  border-radius: 8px;
+  border-bottom: 1px solid var(--line);
   color: var(--text-muted);
   display: grid;
   font-size: 12px;
@@ -1369,6 +1483,33 @@ async function confirmAppOperation() {
   min-width: 0;
 }
 
+.instance-git-assignment-row {
+  align-items: center;
+}
+
+.instance-directory-identity {
+  display: flex !important;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 10px !important;
+}
+
+.instance-directory-identity > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.instance-directory-identity strong {
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.instance-custom-app-row {
+  align-items: center;
+}
+
 .instance-git-assignment-row small {
   color: var(--text-muted);
   font-size: 12px;
@@ -1381,20 +1522,27 @@ async function confirmAppOperation() {
 }
 
 @media (max-width: 680px) {
-  .instance-settings-grid,
-  .instance-model-grid {
+  .instance-settings-grid {
     grid-template-columns: 1fr;
   }
 
-  .instance-settings-control-row {
-    align-items: stretch;
-    flex-direction: column;
+  .instance-settings-tabs-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .instance-settings-name-control,
-  .instance-settings-select-control {
+  .instance-settings-select-control,
+  .instance-model-grid label {
     grid-template-columns: 1fr;
     gap: 8px;
+  }
+
+  .instance-settings-grid div:nth-child(even) {
+    border-left: 0;
+  }
+
+  .instance-settings-grid div:nth-child(n + 2) {
+    border-top: 1px solid var(--line);
   }
 
   .instance-managed-app-row {

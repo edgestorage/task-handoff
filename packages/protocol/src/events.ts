@@ -33,6 +33,39 @@ export type CompactEventEnvelope<T = unknown> = {
 
 export type EventWireEnvelope<T = unknown> = EventEnvelope<T> | CompactEventEnvelope<T>;
 
+export const EventScopeSchema = z.object({
+  nodeId: z.string().optional(),
+  instanceId: z.string().optional(),
+}).passthrough();
+
+export const EventEnvelopeSchema = z.object({
+  v: z.literal(1),
+  id: z.string().min(1),
+  seq: z.number().finite(),
+  type: z.string().min(1),
+  topic: z.string().min(1),
+  createdAt: z.string().datetime(),
+  payload: z.unknown(),
+  replay: z.literal(true).optional(),
+  scope: EventScopeSchema.optional(),
+}).passthrough();
+
+export const CompactEventEnvelopeSchema = z.object({
+  v: z.literal(COMPACT_EVENT_ENVELOPE_VERSION),
+  id: z.string().min(1),
+  type: z.string().min(1),
+  createdAt: z.string().datetime(),
+  payload: z.unknown(),
+  topic: z.string().min(1).optional(),
+  replay: z.literal(true).optional(),
+  scope: EventScopeSchema.optional(),
+}).passthrough();
+
+export const EventWireEnvelopeSchema = z.discriminatedUnion("v", [
+  EventEnvelopeSchema,
+  CompactEventEnvelopeSchema,
+]);
+
 export type EventSubscribeMessage = {
   v?: 1;
   type: "subscribe";

@@ -1204,7 +1204,7 @@ export function dockerRunArgs(context: ExecutorContext, containerName: string, o
     "--add-host",
     "host.docker.internal:host-gateway",
     "--tmpfs",
-    "/tmp:rw,mode=1777",
+    "/tmp:rw,nosuid,nodev,exec,mode=1777",
     "-p",
     `${publishHost}::8080`,
   ];

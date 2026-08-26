@@ -1637,6 +1637,10 @@
   margin-top: 12px;
 }
 
+.session-ai-detail-content > .ai-session-conversation-stage {
+  margin-top: 18px;
+}
+
 .session-ai-detail-content > .ai-session-result {
   margin-top: 16px;
 }

@@ -145,19 +145,21 @@ export function aiSessionTurnBodyRevision(turn: NonNullable<AiSessionStatus["tur
     .slice(0, 22);
 }
 
+export function aiSessionConversationTurns(session: AiSessionStatus) {
+  return (session.turns || []).filter((turn) => (
+    turn.userPrompt?.trim()
+    || turn.lastMessage?.trim()
+    || turn.summary?.trim()
+    || turn.contextCompactions?.length
+  ));
+}
+
 export function aiSessionTurnsRevision(session: AiSessionStatus) {
   const cached = aiSessionTurnsRevisionCache.get(session);
   if (cached) return cached;
-  const index = (session.turns || []).map((turn) => ({
+  const index = aiSessionConversationTurns(session).map((turn) => ({
     id: turn.id,
     providerTurnId: turn.providerTurnId,
-    status: turn.status,
-    phase: turn.phase,
-    revision: turn.revision,
-    startedAt: turn.startedAt,
-    updatedAt: turn.updatedAt,
-    completedAt: turn.completedAt,
-    bodyRevision: aiSessionTurnBodyRevision(turn),
   }));
   const revision = createHash("sha256")
     .update(JSON.stringify(canonicalDetailValue(index)))
@@ -168,12 +170,7 @@ export function aiSessionTurnsRevision(session: AiSessionStatus) {
 }
 
 function summaryForHeartbeat(session: AiSessionStatus): AiSessionSummary {
-  const meaningfulTurns = (session.turns || []).filter((turn) => (
-    turn.userPrompt?.trim()
-    || turn.lastMessage?.trim()
-    || turn.summary?.trim()
-    || turn.contextCompactions?.length
-  ));
+  const meaningfulTurns = aiSessionConversationTurns(session);
   const lastUserTurn = [...meaningfulTurns].reverse().find((turn) => turn.userPrompt?.trim());
   return {
     id: session.id,
@@ -192,6 +189,10 @@ function summaryForHeartbeat(session: AiSessionStatus): AiSessionSummary {
     userPrompt: session.userPrompt ? compact(session.userPrompt, 400) : undefined,
     detailRevision: aiSessionDetailRevision(session),
     turnsRevision: aiSessionTurnsRevision(session),
+    latestTurnRef: meaningfulTurns.length ? {
+      id: meaningfulTurns.at(-1)!.id,
+      bodyRevision: aiSessionTurnBodyRevision(meaningfulTurns.at(-1)!),
+    } : undefined,
     turnCount: meaningfulTurns.length,
     lastUserMessageAt: lastUserTurn?.startedAt || lastUserTurn?.updatedAt || (session.userPrompt ? session.startedAt : undefined),
     status: session.status,
@@ -351,6 +352,28 @@ export class AiSessionRegistry {
 
   get(id: string) {
     return this.store.get(id);
+  }
+
+  conversation(id: string) {
+    const session = this.store.get(id);
+    return session ? this.projectConversationAttachments(session) : undefined;
+  }
+
+  private projectConversationAttachments(session: AiSessionStatus): AiSessionStatus {
+    if (!this.conversationAttachments) return session;
+    return {
+      ...session,
+      turns: session.turns?.map((turn) => ({
+        ...turn,
+        userMessages: turn.userMessages?.map((message) => ({
+          ...message,
+          attachments: message.attachments.map((attachment) => (
+            this.conversationAttachments!.attachmentMetadata(session.id, message.id, attachment.id)
+              || { ...attachment, contentState: "missing" as const }
+          )),
+        })),
+      })),
+    };
   }
 
   restoreHistory(item: AiSessionHistoryItem) {
@@ -747,7 +770,7 @@ export class AiSessionRegistry {
       runningCount: sessions.filter((session) => session.status === "running").length,
       waitingCount: sessions.filter((session) => session.status === "waiting").length,
       staleCount: 0,
-      sessions: sessions.map(summaryForHeartbeat),
+      sessions: sessions.map((session) => summaryForHeartbeat(this.projectConversationAttachments(session))),
       updatedAt: nowIso(),
     };
   }

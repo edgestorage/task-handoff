@@ -18,8 +18,12 @@ import {
   AiSessionResumeResultSchema,
   AiSessionStatusSchema,
   AiSessionDetailSchema,
+  AiSessionDetailReadSchema,
   AiSessionTurnIndexSchema,
+  AiSessionTurnIndexReadSchema,
   AiSessionTurnBodySchema,
+  AiSessionTurnBodyReadSchema,
+  AiSessionQueueMutationResponseSchema,
   type AiSessionActionResponse,
   type AiSessionCommandInput,
   type AiSessionCommandResult,
@@ -120,27 +124,38 @@ export class AiSessionActionService {
     return parseResponse(AiSessionHistoryDetailSchema, await this.get(instanceId, `/ai-sessions/history/${encodeURIComponent(aiSessionId)}`));
   }
 
-  async detail(instanceId: string, aiSessionId: string) {
-    const response = await this.get(instanceId, `/ai-sessions/${encodeURIComponent(aiSessionId)}`);
-    const current = AiSessionDetailSchema.safeParse(response);
+  async detail(instanceId: string, aiSessionId: string, revision?: string) {
+    const query = revision ? `?revision=${encodeURIComponent(revision)}` : "";
+    const response = await this.get(instanceId, `/ai-sessions/${encodeURIComponent(aiSessionId)}${query}`);
+    const current = AiSessionDetailReadSchema.safeParse(response);
     if (current.success) return current.data;
     // Compatibility for v0.0.23: project the legacy full status into the new
     // metadata-only detail model. Turn bodies are recovered separately.
-    return projectAiSessionDetail(parseResponse(AiSessionStatusSchema, response));
+    const legacy = parseResponse(AiSessionStatusSchema, response);
+    const legacyRevision = `legacy:${legacy.updatedAt}`;
+    return AiSessionDetailReadSchema.parse({
+      kind: revision === legacyRevision ? "not-modified" : "updated",
+      revision: legacyRevision,
+      ...(revision === legacyRevision ? {} : { detail: projectAiSessionDetail(legacy) }),
+    });
   }
 
-  async turnIndex(instanceId: string, aiSessionId: string) {
+  async turnIndex(instanceId: string, aiSessionId: string, revision?: string) {
+    const query = new URLSearchParams({ projection: "index" });
+    if (revision) query.set("revision", revision);
     try {
-      return parseResponse(AiSessionTurnIndexSchema, await this.get(instanceId, `${sessionRoute(aiSessionId, "turns")}?projection=index`));
+      return parseResponse(AiSessionTurnIndexReadSchema, await this.get(instanceId, `${sessionRoute(aiSessionId, "turns")}?${query}`));
     } catch (error) {
       if (!splitAiSessionReadUnavailable(error)) throw error;
       // Compatibility for v0.0.23: the old endpoint ignores projection=index
       // and the old server has no single-Turn route. Derive both projections
       // from its complete detail response only at this compatibility boundary.
       const legacy = await this.legacyStatus(instanceId, aiSessionId);
-      return AiSessionTurnIndexSchema.parse({
+      const legacyRevision = `legacy:${legacy.updatedAt}`;
+      if (revision === legacyRevision) return AiSessionTurnIndexReadSchema.parse({ kind: "not-modified", revision: legacyRevision });
+      const index = AiSessionTurnIndexSchema.parse({
         sessionId: legacy.id,
-        revision: `legacy:${legacy.updatedAt}`,
+        revision: legacyRevision,
         turns: (legacy.turns || []).filter((turn) => (
           turn.userPrompt?.trim()
           || turn.lastMessage?.trim()
@@ -148,18 +163,23 @@ export class AiSessionActionService {
           || turn.contextCompactions?.length
         )).map(projectAiSessionTurnIndexEntry),
       });
+      return AiSessionTurnIndexReadSchema.parse({ kind: "updated", revision: legacyRevision, index });
     }
   }
 
-  async turnBody(instanceId: string, aiSessionId: string, turnId: string) {
+  async turnBody(instanceId: string, aiSessionId: string, turnId: string, revision?: string) {
+    const query = revision ? `?revision=${encodeURIComponent(revision)}` : "";
     try {
-      return parseResponse(AiSessionTurnBodySchema, await this.get(instanceId, `${sessionRoute(aiSessionId, "turns")}/${encodeURIComponent(turnId)}`));
+      return parseResponse(AiSessionTurnBodyReadSchema, await this.get(instanceId, `${sessionRoute(aiSessionId, "turns")}/${encodeURIComponent(turnId)}${query}`));
     } catch (error) {
       if (!splitAiSessionReadUnavailable(error)) throw error;
       const legacy = await this.legacyStatus(instanceId, aiSessionId);
       const turn = (legacy.turns || []).find((candidate) => candidate.id === turnId || candidate.providerTurnId === turnId);
       if (!turn) throw new Error(`AI session Turn ${turnId} was not found.`);
-      return AiSessionTurnBodySchema.parse({ sessionId: legacy.id, revision: legacyAiSessionTurnBodyRevision(turn), turn });
+      const legacyRevision = legacyAiSessionTurnBodyRevision(turn);
+      if (revision === legacyRevision) return AiSessionTurnBodyReadSchema.parse({ kind: "not-modified", revision: legacyRevision });
+      const body = AiSessionTurnBodySchema.parse({ sessionId: legacy.id, revision: legacyRevision, turn });
+      return AiSessionTurnBodyReadSchema.parse({ kind: "updated", revision: legacyRevision, body });
     }
   }
 
@@ -322,22 +342,22 @@ export class AiSessionActionService {
   }
 
   async retryQueuedMessage(instanceId: string, sessionId: string, queueId: string) {
-    return parseResponse(AiSessionStatusSchema, await this.post(instanceId, queueRoute(sessionId, queueId, "retry"), {}));
+    return parseResponse(AiSessionQueueMutationResponseSchema, await this.post(instanceId, queueRoute(sessionId, queueId, "retry"), {}));
   }
 
   async removeQueuedMessage(instanceId: string, sessionId: string, queueId: string) {
     const instance = await this.options.requireInstance(instanceId);
-    return parseResponse(AiSessionStatusSchema, await this.options.request(instance, queueRoute(sessionId, queueId), { method: "DELETE" }));
+    return parseResponse(AiSessionQueueMutationResponseSchema, await this.options.request(instance, queueRoute(sessionId, queueId), { method: "DELETE" }));
   }
 
   async editQueuedMessage(instanceId: string, sessionId: string, queueId: string, input: { expectedRevision: number; message: string }) {
     const body = AiSessionQueueEditInputSchema.parse(input);
-    return parseResponse(AiSessionStatusSchema, await this.patch(instanceId, queueRoute(sessionId, queueId), body));
+    return parseResponse(AiSessionQueueMutationResponseSchema, await this.patch(instanceId, queueRoute(sessionId, queueId), body));
   }
 
   async reorderQueuedMessages(instanceId: string, sessionId: string, input: { expectedRevision: number; queueIds: string[] }) {
     const body = AiSessionQueueReorderInputSchema.parse(input);
-    return parseResponse(AiSessionStatusSchema, await this.patch(instanceId, sessionRoute(sessionId, "queue/reorder"), body));
+    return parseResponse(AiSessionQueueMutationResponseSchema, await this.patch(instanceId, sessionRoute(sessionId, "queue/reorder"), body));
   }
 
   async interrupt(instanceId: string, sessionId: string): Promise<AiSessionActionResponse> {

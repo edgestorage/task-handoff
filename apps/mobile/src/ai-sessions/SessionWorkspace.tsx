@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { File } from 'expo-file-system';
 import { CornerDownRight, GripVertical, Pencil, RotateCcw, Trash2, type LucideIcon } from 'lucide-react-native';
 import { Alert, Animated, FlatList, Keyboard, KeyboardAvoidingView, PanResponder, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
@@ -108,15 +108,24 @@ export function SessionWorkspace({
   const queueRowHeights = useRef(new Map<string, number>());
   const queueDrag = useRef<{ queueId: string; sourceCenter: number; sourceIds: string[]; targets: { index: number; center: number }[] } | undefined>(undefined);
   const [selectedTurnIndex, setSelectedTurnIndex] = useState(() => Math.max(0, aiSessionDisplayTurns(session).length - 1));
+  const [pendingTurnIndex, setPendingTurnIndex] = useState<number>();
+  const turnSelectionRequest = useRef(0);
+  const turnBodyRequests = useRef(new Map<string, Promise<boolean>>());
+  const timelineRequests = useRef(new Map<string, symbol>());
+  const [turnBodyRetry, setTurnBodyRetry] = useState(0);
+  const turnBodyRetryAttempt = useRef(0);
   const [localDetailMode, setLocalDetailMode] = useState<SessionDetailMode>('turn');
   const detailMode = controlledDetailMode ?? localDetailMode;
   const setDetailMode = (next: SessionDetailMode) => {
     if (controlledDetailMode === undefined) setLocalDetailMode(next);
     onDetailModeChange?.(next);
   };
-  const selectionSessionId = useRef<string | undefined>(undefined);
+  const selectionSessionScope = useRef<string | undefined>(undefined);
   const knownTurnCount = useRef(0);
   const sessionId = session?.id;
+  const turnScope = JSON.stringify([controlPlaneId, instanceId, sessionId]);
+  const currentTurnScope = useRef(turnScope);
+  currentTurnScope.current = turnScope;
   const currentSessionId = useRef(sessionId);
   currentSessionId.current = sessionId;
   const activeQueueEdit = queueEdit?.sessionId === sessionId ? queueEdit : undefined;
@@ -132,7 +141,9 @@ export function SessionWorkspace({
     : defaultPermissionMode ?? 'ask';
   const turnCount = session?.turnCount ?? aiSessionDisplayTurns(session).length;
   const latestTurnIndex = Math.max(0, turnCount - 1);
-  const timelineTurnSignature = (session?.turns ?? []).map((turn) => `${turn.id}:${turn.providerTurnId || ''}:${turn.status}`).join('|');
+  const timelineTurnSignature = (session?.turns ?? []).map((turn) => (
+    `${turn.id}:${turn.providerTurnId || ''}:${turn.status}:${(turn as { bodyRevision?: string }).bodyRevision || ''}`
+  )).join('|');
   const supportsTurnTimeline = session ? supportsDirectoryAiSessionTimelineCapability(instanceCapabilities, session.agent, 'turn-read') : false;
   const supportsSessionTimeline = session ? supportsDirectoryAiSessionTimelineCapability(instanceCapabilities, session.agent, 'session-read') : false;
   const supportsLiveTimeline = session ? supportsDirectoryAiSessionTimelineCapability(instanceCapabilities, session.agent, 'live-items') : false;
@@ -167,30 +178,89 @@ export function SessionWorkspace({
     return () => { live = false; };
   }, [controlPlaneId, defaultPermissionMode, instanceId, permissions, session?.agent, sessionId]);
   useEffect(() => {
-    const sameSession = selectionSessionId.current === sessionId;
+    const sameSession = selectionSessionScope.current === turnScope;
     const previousCount = knownTurnCount.current;
     setSelectedTurnIndex((current) => !sameSession || current >= previousCount - 1 ? latestTurnIndex : Math.min(current, latestTurnIndex));
-    selectionSessionId.current = sessionId;
+    if (!sameSession) {
+      turnSelectionRequest.current += 1;
+      setPendingTurnIndex(undefined);
+      turnBodyRequests.current.clear();
+    }
+    selectionSessionScope.current = turnScope;
     knownTurnCount.current = turnCount;
-  }, [latestTurnIndex, sessionId, turnCount]);
-  useEffect(() => {
-    if (!client || !sessionId || !session) return;
+  }, [latestTurnIndex, turnCount, turnScope]);
+  const ensureTurnBody = useCallback((turnId: string) => {
+    if (!client?.aiSessions.turnBody || !sessionId) return Promise.resolve(false);
+    const needed = mobileAiSessionStore.neededSessionTurn(controlPlaneId, instanceId, sessionId, turnId);
+    if (!needed) return Promise.resolve(true);
+    const requestScope = turnScope;
+    const requestKey = JSON.stringify([requestScope, needed.id, needed.bodyRevision]);
+    const existing = turnBodyRequests.current.get(requestKey);
+    if (existing) return existing;
+    const cachedRevision = mobileAiSessionStore.sessionTurnRevision(controlPlaneId, instanceId, sessionId, needed.id);
+    const request = client.aiSessions.turnBody(instanceId, sessionId, needed.id, cachedRevision).then((read) => {
+      if (currentTurnScope.current !== requestScope) return false;
+      const currentIndex = mobileAiSessionStore.sessionTurnIndex(controlPlaneId, instanceId, sessionId)?.turns
+        .find((candidate) => candidate.id === needed.id || candidate.providerTurnId === needed.id);
+      if (read.kind === 'updated' && currentIndex?.bodyRevision === read.revision) {
+        mobileAiSessionStore.setSessionTurn(controlPlaneId, instanceId, sessionId, read.revision, read.body.turn);
+      }
+      turnBodyRetryAttempt.current = 0;
+      return !mobileAiSessionStore.neededSessionTurn(controlPlaneId, instanceId, sessionId, needed.id);
+    }).finally(() => {
+      if (turnBodyRequests.current.get(requestKey) === request) turnBodyRequests.current.delete(requestKey);
+    });
+    turnBodyRequests.current.set(requestKey, request);
+    return request;
+  }, [client, controlPlaneId, instanceId, sessionId, turnScope]);
+  const requestTurnSelection = useCallback((requestedIndex: number) => {
+    if (!sessionId || !session) return;
     const turns = session.turns || [];
-    const visibleTurns = detailMode === 'conversation' ? turns : turns.slice(selectedTurnIndex, selectedTurnIndex + 1);
-    const neededTurns = visibleTurns.map((turn) => (
-      mobileAiSessionStore.neededSessionTurn(controlPlaneId, instanceId, sessionId, turn.id)
-    )).filter((turn): turn is NonNullable<typeof turn> => Boolean(turn));
-    if (!neededTurns.length) return;
-    let active = true;
-    void Promise.all(neededTurns.map((turn) => client.aiSessions.turnBody(instanceId, sessionId, turn.id)))
-      .then((bodies) => {
-        if (!active) return;
-        for (const body of bodies) {
-          mobileAiSessionStore.setSessionTurn(controlPlaneId, instanceId, sessionId, body.revision, body.turn);
-        }
-      }).catch(() => undefined);
-    return () => { active = false; };
-  }, [client, controlPlaneId, detailMode, instanceId, selectedTurnIndex, sessionId, timelineTurnSignature]);
+    const nextIndex = Math.min(Math.max(requestedIndex, 0), Math.max(0, turns.length - 1));
+    const target = turns[nextIndex];
+    if (!target) return;
+    const request = turnSelectionRequest.current + 1;
+    turnSelectionRequest.current = request;
+    const needed = mobileAiSessionStore.neededSessionTurn(controlPlaneId, instanceId, sessionId, target.id);
+    if (!needed) {
+      setPendingTurnIndex(undefined);
+      setSelectedTurnIndex(nextIndex);
+      return;
+    }
+    setPendingTurnIndex(nextIndex);
+    void ensureTurnBody(target.id).then((ready) => {
+      if (turnSelectionRequest.current !== request || currentTurnScope.current !== turnScope) return;
+      setPendingTurnIndex(undefined);
+      if (ready) setSelectedTurnIndex(nextIndex);
+      else toast.show({ detail: t('sessions.turnLoadFailed'), title: t('toast.actionFailed', { action: t('sessions.turn') }), tone: 'error' });
+    }).catch(() => {
+      if (turnSelectionRequest.current !== request || currentTurnScope.current !== turnScope) return;
+      setPendingTurnIndex(undefined);
+      toast.show({ detail: t('sessions.turnLoadFailed'), title: t('toast.actionFailed', { action: t('sessions.turn') }), tone: 'error' });
+    });
+  }, [controlPlaneId, ensureTurnBody, instanceId, session, sessionId, t, toast, turnScope]);
+  useEffect(() => {
+    if (!sessionId || !session || !client?.aiSessions.turnBody) return;
+    const turns = session.turns || [];
+    const indexes = detailMode === 'conversation'
+      ? turns.map((_turn, index) => index)
+      : [selectedTurnIndex, selectedTurnIndex - 1, selectedTurnIndex + 1, pendingTurnIndex]
+        .filter((index): index is number => index !== undefined && index >= 0 && index < turns.length);
+    let selectedFailed = false;
+    for (const index of new Set(indexes)) {
+      const target = turns[index];
+      if (!target || !mobileAiSessionStore.neededSessionTurn(controlPlaneId, instanceId, sessionId, target.id)) continue;
+      void ensureTurnBody(target.id).catch(() => {
+        if (index !== selectedTurnIndex || selectedFailed) return;
+        selectedFailed = true;
+        const delay = Math.min(4_000, 400 * (2 ** turnBodyRetryAttempt.current));
+        turnBodyRetryAttempt.current = Math.min(turnBodyRetryAttempt.current + 1, 4);
+        setTimeout(() => {
+          if (currentTurnScope.current === turnScope) setTurnBodyRetry((value) => value + 1);
+        }, delay);
+      });
+    }
+  }, [client, controlPlaneId, detailMode, ensureTurnBody, instanceId, pendingTurnIndex, selectedTurnIndex, session, sessionId, timelineTurnSignature, turnBodyRetry, turnScope]);
   useEffect(() => {
     timelineLoadInputs.current = { session, timelines };
   }, [session, timelines]);
@@ -206,30 +276,42 @@ export function SessionWorkspace({
       return true;
     });
     if (!loadableTurns.length) return;
-    let active = true;
     if (supportsTurnTimeline && !(detailMode === 'conversation' && supportsSessionTimeline)) {
       for (const turn of loadableTurns) {
+        const requestKey = JSON.stringify([controlPlaneId, instanceId, timelineSession.id, turn.id]);
+        const requestToken = Symbol(requestKey);
+        timelineRequests.current.set(requestKey, requestToken);
         mobileAiSessionStore.beginTurnTimeline(controlPlaneId, instanceId, timelineSession.id, turn);
         void client.aiSessions.turnTimeline(instanceId, timelineSession.id, turn.id).then((timeline) => {
-          if (active) mobileAiSessionStore.resolveTurnTimeline(controlPlaneId, instanceId, timelineSession.id, turn, timeline.items);
+          if (timelineRequests.current.get(requestKey) === requestToken) {
+            mobileAiSessionStore.resolveTurnTimeline(controlPlaneId, instanceId, timelineSession.id, turn, timeline.items);
+          }
         }).catch((cause) => {
-          if (active) mobileAiSessionStore.rejectTurnTimeline(controlPlaneId, instanceId, timelineSession.id, turn, cause instanceof Error ? cause.message : 'Could not load the turn timeline.');
+          if (timelineRequests.current.get(requestKey) === requestToken) {
+            mobileAiSessionStore.rejectTurnTimeline(controlPlaneId, instanceId, timelineSession.id, turn, cause instanceof Error ? cause.message : 'Could not load the turn timeline.');
+          }
+        }).finally(() => {
+          if (timelineRequests.current.get(requestKey) === requestToken) timelineRequests.current.delete(requestKey);
         });
       }
     } else {
+      const requestKey = JSON.stringify([controlPlaneId, instanceId, timelineSession.id, '']);
+      const requestToken = Symbol(requestKey);
+      timelineRequests.current.set(requestKey, requestToken);
       for (const turn of turns) mobileAiSessionStore.beginTurnTimeline(controlPlaneId, instanceId, timelineSession.id, turn);
       void client.aiSessions.timeline(instanceId, timelineSession.id).then((timeline) => {
-        if (!active) return;
+        if (timelineRequests.current.get(requestKey) !== requestToken) return;
         for (const turn of turns) {
           const identities = new Set([turn.id, turn.providerTurnId].filter(Boolean));
           mobileAiSessionStore.resolveTurnTimeline(controlPlaneId, instanceId, timelineSession.id, turn, timeline.items.filter((item) => identities.has(item.turnId)));
         }
       }).catch((cause) => {
-        if (!active) return;
+        if (timelineRequests.current.get(requestKey) !== requestToken) return;
         for (const turn of turns) mobileAiSessionStore.rejectTurnTimeline(controlPlaneId, instanceId, timelineSession.id, turn, cause instanceof Error ? cause.message : 'Could not load the session timeline.');
+      }).finally(() => {
+        if (timelineRequests.current.get(requestKey) === requestToken) timelineRequests.current.delete(requestKey);
       });
     }
-    return () => { active = false; };
     // Timeline store transitions deliberately do not restart in-flight reads.
   }, [client, controlPlaneId, detailMode, instanceId, selectedTurnIndex, session?.id, supportsSessionTimeline, supportsTurnTimeline, timelineRecoveryRevision, timelineTurnSignature]);
   useEffect(() => {
@@ -240,13 +322,20 @@ export function SessionWorkspace({
     queueDrag.current = undefined;
   }, [session?.queue.revision, sessionId]);
   if (!session) return <SessionDetail messages={messages} session={session} />;
+  const selectedTurn = session.turns?.[selectedTurnIndex];
+  const selectedTurnRefreshing = Boolean(selectedTurn && mobileAiSessionStore.neededSessionTurn(
+    controlPlaneId,
+    instanceId,
+    session.id,
+    selectedTurn.id,
+  ));
   const authoritativeActionsEnabled = syncPhase === 'ready';
   const isLatestTurn = detailMode === 'conversation' || selectedTurnIndex >= latestTurnIndex;
   const canInterrupt = canInterruptAiSession(session);
   const approvalPending = isAiSessionApprovalPending(session);
   const providerCapability = directoryAiSessionProviderCapability(instanceCapabilities, session.agent);
   // Compatibility for v0.0.21: older directory responses do not publish provider decision capabilities.
-  const approvalDecisions: Array<'allow' | 'deny' | 'skip'> = providerCapability?.actions.approvalDecisions
+  const approvalDecisions: ('allow' | 'deny' | 'skip')[] = providerCapability?.actions.approvalDecisions
     ?? (session.agent === 'codex' || session.agent === 'claude' ? ['allow', 'skip', 'deny'] : []);
   const state = (action: Parameters<typeof mobileAiSessionBusyKey>[3], queueId?: string) => actions?.state(mobileAiSessionBusyKey(controlPlaneId, instanceId, session.id, action, queueId));
   const sendState = state('send');
@@ -497,12 +586,14 @@ export function SessionWorkspace({
           onRetryTimeline={(turn) => mobileAiSessionStore.retryTurnTimeline(controlPlaneId, instanceId, session.id, turn)}
           onContinueFromTurn={continueFromTurn}
           onVisible={onVisible}
-          onTurnIndexChange={setSelectedTurnIndex}
+          onTurnIndexChange={requestTurnSelection}
+          pendingTurnIndex={pendingTurnIndex}
           session={session}
           showModePicker={controlledDetailMode === undefined}
           timelineEnabled={supportsTurnTimeline || supportsSessionTimeline || supportsLiveTimeline}
           timelineHistoryEnabled={supportsTurnTimeline || supportsSessionTimeline}
           timelines={timelines}
+          turnLoading={pendingTurnIndex !== undefined || selectedTurnRefreshing}
           turnIndex={selectedTurnIndex}
         />
       </View>

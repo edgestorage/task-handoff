@@ -535,9 +535,9 @@ export function displayAiSessionTitle(session: AiSessionSummary | undefined, pro
     const turnPrompt = turn?.userPrompt?.trim();
     if (turnPrompt) return turnPrompt;
     if (turn?.contextCompactions?.length) return "/compact";
-    if (promptIndex !== undefined) return "-";
+    if (promptIndex !== undefined) return "";
   }
-  return session.userPrompt?.trim() || "-";
+  return session.userPrompt?.trim() || "";
 }
 
 export function aiSessionContext(session: AiSessionSummary) {

@@ -1,12 +1,16 @@
 import { z } from 'zod';
 import { TtyStreamSnapshotMessageSchema } from '@task-handoff/protocol/app-sessions';
-import type { AiSessionTransientSubscription } from '@task-handoff/protocol/events';
+import {
+  COMPACT_EVENT_ENVELOPE_VERSION,
+  type AiSessionTransientSubscription,
+} from '@task-handoff/protocol/events';
 
 import type { SecureValueStore } from '../platform/secure-storage';
 import { assertDirectIdentityCompatible, probeDirectControlPlane } from './direct-enrollment';
 import type { MobileDirectControlPlaneProfile } from './profile';
 import {
   MobileControlPlaneTransportError,
+  normalizeMobileControlPlaneEvent,
   type MobileAppSessionTtyConnection,
   type MobileAppSessionTtyHandlers,
   type MobileControlPlaneEvent,
@@ -15,22 +19,12 @@ import {
   type MobileControlPlaneTransport,
 } from './transport';
 
-const EventSchema = z.object({
-  v: z.literal(1),
-  type: z.string().trim().min(1),
-  replay: z.boolean().optional(),
-  topic: z.string().trim().min(1).optional(),
-  payload: z.unknown(),
-  scope: z.object({ instanceId: z.string().optional(), nodeId: z.string().optional() }).passthrough().optional(),
-}).passthrough();
-
 const ForwardedEventSchema = z.object({
   type: z.literal('node-agent.event.forwarded'),
-  event: EventSchema,
+  event: z.unknown(),
   scope: z.object({ instanceId: z.string().optional(), nodeId: z.string().optional() }).passthrough().optional(),
 }).passthrough();
 
-const IncomingEventSchema = z.union([ForwardedEventSchema, EventSchema]);
 const DEFAULT_EVENT_TOPICS = ['ai.sessions', 'app.sessions', 'node.state', 'nodes', 'instances', 'system'] as const;
 
 const IncomingTtyMessageSchema = z.discriminatedUnion('type', [
@@ -42,13 +36,12 @@ const IncomingTtyMessageSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('error'), message: z.string().optional() }).passthrough(),
 ]);
 
-function normalizeIncomingEvent(event: z.infer<typeof IncomingEventSchema>): MobileControlPlaneEvent {
+function normalizeIncomingEvent(event: unknown): MobileControlPlaneEvent | undefined {
   const forwarded = ForwardedEventSchema.safeParse(event);
-  if (!forwarded.success) return event;
-  return {
-    ...forwarded.data.event,
-    scope: { ...forwarded.data.scope, ...forwarded.data.event.scope },
-  };
+  return normalizeMobileControlPlaneEvent(
+    forwarded.success ? forwarded.data.event : event,
+    forwarded.success ? forwarded.data.scope : undefined,
+  );
 }
 
 type WebSocketLike = {
@@ -184,9 +177,8 @@ export class DirectControlPlaneTransport implements MobileControlPlaneTransport 
         socket.addEventListener('message', (event) => {
           if (this.eventSocket !== socket) return;
           try {
-            const parsed = IncomingEventSchema.safeParse(JSON.parse(String(event.data)));
-            if (!parsed.success) throw new Error('Event envelope did not match the protocol.');
-            const normalized = normalizeIncomingEvent(parsed.data);
+            const normalized = normalizeIncomingEvent(JSON.parse(String(event.data)));
+            if (!normalized) throw new Error('Event envelope did not match the protocol.');
             for (const subscriber of [...this.eventSubscribers]) subscriber.onEvent(normalized);
           } catch {
             const error = new MobileControlPlaneTransportError('DIRECT_EVENT_INVALID', 'The Control Plane sent an invalid event envelope.');
@@ -230,7 +222,7 @@ export class DirectControlPlaneTransport implements MobileControlPlaneTransport 
       for (const topic of subscriber.topics ?? DEFAULT_EVENT_TOPICS) topics.add(topic);
     }
     const aiSessionTransient = aggregateTransientDemand(this.eventSubscribers, topics);
-    socket.send(JSON.stringify({ v: 1, type: 'subscribe', topics: [...topics].sort(), ...(aiSessionTransient ? { aiSessionTransient } : {}) }));
+    socket.send(JSON.stringify({ v: 1, type: 'subscribe', eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION, topics: [...topics].sort(), ...(aiSessionTransient ? { aiSessionTransient } : {}) }));
   }
 
   connectAppSessionTty(instanceId: string, sessionId: string, handlers: MobileAppSessionTtyHandlers): MobileAppSessionTtyConnection {

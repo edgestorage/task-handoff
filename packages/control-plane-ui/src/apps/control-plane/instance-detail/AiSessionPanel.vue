@@ -726,7 +726,11 @@
                     class="session-ai-detail-prompt-content"
                     :class="{ expanded: promptExpanded }"
                   >
-                    <MarkdownContent :content="displayAiSessionTitle(selectedConversationSession || selectedSession, promptIndexFor(selectedSession), t)" :code-tools="markdownCodeTools" />
+                    <MarkdownContent
+                      v-if="selectedSessionContentState === 'ready'"
+                      :content="displayAiSessionTitle(selectedConversationSession || selectedSession, promptIndexFor(selectedSession), t)"
+                      :code-tools="markdownCodeTools"
+                    />
                   </div>
                   <button
                     v-if="promptHasOverflow"
@@ -749,13 +753,14 @@
             :can-resolve-approval="canResolveApproval(selectedSession)"
             :approval-decisions="approvalDecisions(selectedSession)"
             :instance-id="instance.id"
-            :detail-state="selectedSessionDetailState"
+            :detail-state="selectedSessionContentState"
             file-links
             :mode="effectiveTimelineViewMode"
             :prompt-count="promptCount(selectedSession)"
             :prompt-index="promptIndexFor(selectedSession)"
             :session="selectedConversationSession || selectedSession"
             :selected-turn-state="selectedTurnTimelineState"
+            :turn-bodies-ready="selectedSessionTurnsReady"
             :turn-timelines="conversationTurnTimelines"
             activity-interactive
             @layout-will-change="beginDetailLayoutAnchor"
@@ -788,7 +793,11 @@
           class="session-ai-timeline-sticky-prompt"
           aria-hidden="true"
         >
-          <MarkdownContent :content="displayAiSessionTitle(selectedConversationSession || selectedSession, promptIndexFor(selectedSession), t)" :code-tools="markdownCodeTools" />
+          <MarkdownContent
+            v-if="selectedSessionContentState === 'ready'"
+            :content="displayAiSessionTitle(selectedConversationSession || selectedSession, promptIndexFor(selectedSession), t)"
+            :code-tools="markdownCodeTools"
+          />
         </article>
         <Button
           v-if="detailCanScroll && !isFollowingLatest"
@@ -1200,15 +1209,21 @@ const displayedSessionGroups = computed<AiSessionPathGroup[]>(() => groupSession
   parentLabel: "",
   sessions: sortedSessions.value,
 }]);
-const selectedSession = computed(() => props.selectedAiSession(props.instance, filteredSessions.value));
+// Keep the detail selection anchored to the authoritative session set. A status
+// transition (for example running -> idle) must not make the selected session
+// disappear merely because the sidebar filter changed its membership.
+const selectedSession = computed(() => props.selectedAiSession(props.instance, visibleAiSessions.value));
 useAiSessionMessageDeltaDemand(computed(() => ({ instanceIds: [props.instance.id] })));
 useAiSessionTimelineDemand(computed(() => selectedSession.value ? {
   instanceId: props.instance.id,
   sessionId: selectedSession.value.id,
 } : undefined));
 const {
+  allTurnsReady: selectedSessionTurnsReady,
   conversation: selectedConversationSession,
   loadAllTurns: loadAllSelectedSessionTurns,
+  hasCurrentTurn: hasCurrentSelectedSessionTurn,
+  hasRenderableTurn: hasRenderableSelectedSessionTurn,
   loadTurn: loadSelectedSessionTurn,
   refresh: loadSelectedSessionDetail,
   state: selectedSessionDetailState,
@@ -1232,6 +1247,16 @@ const effectiveTimelineViewMode = computed(() => (
     ? timelineViewMode.value
     : "compact"
 ));
+const selectedSessionContentState = computed(() => {
+  if (selectedSessionDetailState.value !== "ready" || effectiveTimelineViewMode.value === "full") {
+    return selectedSessionDetailState.value;
+  }
+  const summary = selectedSession.value;
+  const conversation = selectedConversationSession.value;
+  if (!summary || !conversation) return "loading";
+  const turn = aiSessionTurns(conversation)[promptIndexFor(summary)];
+  return !turn || hasRenderableSelectedSessionTurn(turn.id) ? "ready" : "loading";
+});
 
 async function setTimelineViewMode(value: unknown) {
   if (value !== "compact" && value !== "full") return;
@@ -1438,6 +1463,7 @@ const historyMessageDraft = ref("");
 const historyMessageAttachments = ref<AiSessionComposerAttachment[]>([]);
 let currentListScrollTop = 0;
 let historyDetailRevision = 0;
+let promptSelectionRevision = 0;
 const promptIndexes = ref<Record<string, { index: number; count: number }>>({});
 const collapsedPathGroups = reactive<Record<string, boolean>>({});
 const collapsedHistoryPathGroups = reactive<Record<string, boolean>>({});
@@ -1836,14 +1862,26 @@ function promptIndexFor(session: AiSessionSummary) {
   return Math.min(Math.max(saved.index, 0), count - 1);
 }
 
-function setPromptIndex(session: AiSessionSummary, index: number) {
+async function setPromptIndex(session: AiSessionSummary, index: number) {
   const count = promptCount(session);
   if (!count) {
     return;
   }
+  const targetIndex = Math.min(Math.max(index, 0), count - 1);
+  const conversation = selectedConversationSession.value?.id === session.id
+    ? selectedConversationSession.value
+    : undefined;
+  const targetTurn = conversation ? aiSessionTurns(conversation)[targetIndex] : undefined;
+  if (targetTurn && !hasCurrentSelectedSessionTurn(targetTurn.id)) {
+    const requestRevision = ++promptSelectionRevision;
+    const loaded = await loadSelectedSessionTurn(targetTurn.id);
+    if (!loaded || requestRevision !== promptSelectionRevision || selectedSession.value?.id !== session.id) return;
+  } else {
+    promptSelectionRevision += 1;
+  }
   promptIndexes.value = {
     ...promptIndexes.value,
-    [session.id]: { index: Math.min(Math.max(index, 0), count - 1), count },
+    [session.id]: { index: targetIndex, count },
   };
   promptExpanded.value = false;
   promptHasOverflow.value = false;
@@ -1851,11 +1889,11 @@ function setPromptIndex(session: AiSessionSummary, index: number) {
 }
 
 function previousPrompt(session: AiSessionSummary) {
-  setPromptIndex(session, promptIndexFor(session) - 1);
+  void setPromptIndex(session, promptIndexFor(session) - 1);
 }
 
 function nextPrompt(session: AiSessionSummary) {
-  setPromptIndex(session, promptIndexFor(session) + 1);
+  void setPromptIndex(session, promptIndexFor(session) + 1);
 }
 
 function cancelSessionListPreviewClose() {
@@ -2788,7 +2826,12 @@ function syncComposerOffset() {
     return;
   }
   detail.style.setProperty("--session-ai-compose-offset", `${Math.ceil(composer.getBoundingClientRect().height)}px`);
-  scrollFollow?.notifyContentResize();
+  // Session replacement is a layout transaction. The old viewport may still
+  // report a resize while Vue swaps its content; treating that resize as live
+  // streaming growth can snap compact mode to the old/new bottom.
+  if (!detailScrollLayoutPending && !detailConversationTransitioning.value) {
+    scrollFollow?.notifyContentResize();
+  }
 }
 
 function followLatest() {
@@ -2920,11 +2963,10 @@ function updateDetailCanScroll() {
 function pauseDetailScrollFollow(event: WheelEvent | TouchEvent) {
   userDetailLayoutGuard.cancel();
   detailLayoutAnchor.cancel();
-  if (event instanceof TouchEvent || event.deltaY < 0) {
-    scrollFollow?.stopFollowing();
-    return;
-  }
-  scrollFollow?.pauseFollowing();
+  // Wheel events fire before the resulting scroll event. Lock following until
+  // the user actually reaches the bottom, so a downward scroll near the bottom
+  // cannot be mistaken for passive following and snapped to the end.
+  scrollFollow?.pauseFollowing(true);
 }
 
 function handleDetailScroll() {
@@ -2949,6 +2991,12 @@ watch([selectedSession, messageAttachments, messageDraft, historyMessageAttachme
 }, { immediate: true });
 
 watch(() => `${props.instance.id}\u0000${selectedSession.value?.id || ""}`, () => {
+  // Freeze the previous viewport before the new session is rendered. This is
+  // especially important in compact mode, where switching sessions must start
+  // at the top instead of inheriting the previous follow state.
+  detailScrollLayoutPending = true;
+  scrollFollow?.stopFollowing();
+  detailLayoutAnchor.cancel();
   void loadSelectedTurnTimeline();
   queueComposerEdit.value = undefined;
   const draft = selectedSession.value ? loadAiSessionDraftPayload(selectedSession.value.id) : { value: "", bindings: [] };

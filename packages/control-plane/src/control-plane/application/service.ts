@@ -32,6 +32,7 @@ import {
   type ChatSessionBinding,
   type ControlledInstance,
   type ControlledInstanceHeartbeat,
+  type InstanceLifecycleSnapshot,
   type CustomImageProfile,
   type ModelConfig,
   type Node,
@@ -1136,6 +1137,18 @@ export class ControlPlaneService {
     return instances.some((instance) => instance.id === instanceId && instance.nodeId === nodeId);
   }
 
+  async applyInstanceLifecycle(nodeId: string, lifecycle: InstanceLifecycleSnapshot) {
+    const node = this.requireNode(nodeId);
+    const initial = this.nodeAgentGateway.applyInstanceLifecycle(node, lifecycle);
+    if (initial !== "missing") return true;
+
+    await this.nodeAgentGateway.refreshFleetInstances([node], {}, true);
+    const instance = this.nodeAgentGateway.instanceFromSnapshot([node], lifecycle.instanceId);
+    if (!instance || instance.nodeId !== nodeId) return false;
+    this.nodeAgentGateway.applyInstanceLifecycle(node, lifecycle);
+    return true;
+  }
+
   createControlledInstance(input: unknown) {
     return this.controlledInstanceCreator.create(input);
   }
@@ -1670,16 +1683,16 @@ export class ControlPlaneService {
     return this.aiSessionActionService.queue(instanceId, sessionId);
   }
 
-  getAiSessionDetail(instanceId: string, sessionId: string) {
-    return this.aiSessionActionService.detail(instanceId, sessionId);
+  getAiSessionDetail(instanceId: string, sessionId: string, revision?: string) {
+    return this.aiSessionActionService.detail(instanceId, sessionId, revision);
   }
 
-  getAiSessionTurnIndex(instanceId: string, sessionId: string) {
-    return this.aiSessionActionService.turnIndex(instanceId, sessionId);
+  getAiSessionTurnIndex(instanceId: string, sessionId: string, revision?: string) {
+    return this.aiSessionActionService.turnIndex(instanceId, sessionId, revision);
   }
 
-  getAiSessionTurnBody(instanceId: string, sessionId: string, turnId: string) {
-    return this.aiSessionActionService.turnBody(instanceId, sessionId, turnId);
+  getAiSessionTurnBody(instanceId: string, sessionId: string, turnId: string, revision?: string) {
+    return this.aiSessionActionService.turnBody(instanceId, sessionId, turnId, revision);
   }
 
   steerAiSessionQueuedMessage(instanceId: string, sessionId: string, queueId: string) {

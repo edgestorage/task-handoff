@@ -25,6 +25,7 @@ import {
   UpdateJobSchema,
   safeParseStoredControlledInstance,
   type ControlledInstance,
+  type InstanceLifecycleSnapshot,
   type Node,
   type NodeLocalFolder,
   type NodeModelPublicRecord,
@@ -63,6 +64,8 @@ export type ControlPlaneNodeAgentGatewayOptions = {
 export type NodeFleetResource = ControlPlaneFleetResource;
 export type NodeFleetResourcePhase = ControlPlaneFleetResourcePhase;
 export type NodeFleetResourceState = ControlPlaneNodeFleetState;
+
+export type InstanceLifecycleApplyResult = "applied" | "ignored" | "missing";
 
 type NodeAgentListResult<T> = {
   items: T[];
@@ -482,6 +485,34 @@ export class ControlPlaneNodeAgentGateway {
       if (instance) return instance;
     }
     return undefined;
+  }
+
+  applyInstanceLifecycle(node: Node, lifecycle: InstanceLifecycleSnapshot): InstanceLifecycleApplyResult {
+    const snapshot = this.instanceSnapshots.get(node.id);
+    if (!snapshot || snapshot.connectionKey !== this.fleetConnectionKey(node)) return "missing";
+    const index = snapshot.items.findIndex((instance) => instance.id === lifecycle.instanceId);
+    if (index < 0) return "missing";
+    const current = snapshot.items[index];
+    if (current.nodeId !== node.id) return "missing";
+    if (current.stateRevision >= lifecycle.revision) return "ignored";
+
+    const next = ControlledInstanceSchema.parse({
+      ...current,
+      stateRevision: lifecycle.revision,
+      updatedAt: lifecycle.updatedAt,
+      status: lifecycle.status,
+      health: lifecycle.health,
+      connectionStatus: lifecycle.connectionStatus,
+      uiAccessStatus: lifecycle.accessStatus,
+      imageProvisioning: lifecycle.imageProvisioning,
+      workspace: lifecycle.workspace,
+      runtime: lifecycle.runtime,
+      runtimeVersion: lifecycle.runtimeVersion,
+      ready: lifecycle.ready,
+      lastHeartbeatAt: lifecycle.lastHeartbeatAt,
+    });
+    snapshot.items = snapshot.items.map((instance, itemIndex) => itemIndex === index ? next : instance);
+    return "applied";
   }
 
   async createInstance(node: Node, input: unknown) {

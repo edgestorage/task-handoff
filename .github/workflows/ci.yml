@@ -35,4 +35,83 @@ jobs:
       - run: pnpm test
       - run: pnpm check
       - run: pnpm web:typecheck
+
+  node-pty-prebuilds:
+    name: node-pty prebuild (${{ matrix.platform }}-${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            platform: linux
+            arch: x64
+          - runner: ubuntu-24.04-arm
+            platform: linux
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 9.15.3
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build and collect Linux node-pty prebuild on the glibc baseline
+        shell: bash
+        run: |
+          docker run --rm \
+            -v "$PWD:/workspace" \
+            -w /workspace \
+            node:24-bullseye \
+            bash -lc 'set -euo pipefail; cd node_modules/node-pty; rm -rf build; npm_config_nodedir=/usr/local node /usr/local/lib/node_modules/npm/node_modules/node-gyp/bin/node-gyp.js rebuild; cd /workspace; node scripts/node-pty-prebuild.mjs build --output release/node-pty-prebuilds --platform "${{ matrix.platform }}" --arch "${{ matrix.arch }}"'
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ci-node-pty-prebuild-${{ matrix.platform }}-${{ matrix.arch }}
+          path: release/node-pty-prebuilds/*
+          if-no-files-found: error
+
+  runtime-packages:
+    needs: node-pty-prebuilds
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 9.15.3
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: ci-node-pty-prebuild-*
+          path: release/node-pty-prebuilds
+          merge-multiple: true
+
+      - name: Build Linux controlled instance runtime artifact
+        shell: bash
+        run: |
+          version="$(node -p 'require("./package.json").version')"
+          pnpm runtime:build -- --target controlled-instance
+          pnpm runtime:artifact -- --version "$version" --prebuilds-dir release/node-pty-prebuilds
+
       - run: pnpm runtime:pack

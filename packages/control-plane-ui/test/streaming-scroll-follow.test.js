@@ -135,6 +135,27 @@ test("scroll intent inside the 48px follow zone does not show the return control
   assert.deepEqual(changes, []);
 });
 
+test("manual scroll restores following at the rounded browser bottom", () => {
+  const frames = new FakeAnimationFrameScheduler();
+  const target = viewport({ scrollTop: 500 });
+  const follow = createStreamingScrollFollow(() => target, { requestFrame: frames.requestAnimationFrame, cancelFrame: frames.cancelAnimationFrame });
+  follow.pauseFollowing(true);
+  target.scrollTop = 598.5;
+  follow.handleScroll();
+  assert.equal(follow.isFollowing(), true);
+});
+
+test("wheel at the current bottom does not permanently disable following", () => {
+  const frames = new FakeAnimationFrameScheduler();
+  const target = viewport();
+  const follow = createStreamingScrollFollow(() => target, { requestFrame: frames.requestAnimationFrame, cancelFrame: frames.cancelAnimationFrame });
+  follow.pauseFollowing(true);
+  assert.equal(follow.isFollowing(), true);
+  target.scrollHeight = 1100;
+  follow.notifyContentResize();
+  assert.equal(target.scrollTop, 700);
+});
+
 test("long follow jumps within 1600px of the bottom before smooth scrolling", () => {
   const frames = new FakeAnimationFrameScheduler();
   const scrollCalls = [];
@@ -210,6 +231,53 @@ test("content growth retargets an explicit smooth follow without snapping", () =
   assert.equal(frames.pendingFrameCount, 1);
   frames.step();
   assert.deepEqual(target.scrollCalls, [{ top: 1200, behavior: "smooth" }]);
+});
+
+test("content growth does not snap back after a user scrolls away in the same frame", () => {
+  const frames = new FakeAnimationFrameScheduler();
+  const target = viewport();
+  const follow = createStreamingScrollFollow(() => target, {
+    requestFrame: frames.requestAnimationFrame,
+    cancelFrame: frames.cancelAnimationFrame,
+  });
+  follow.pauseFollowing();
+  target.scrollTop = 550;
+  target.scrollHeight = 1050;
+  follow.handleScroll();
+
+  assert.equal(distanceFromBottom(target), 100);
+  assert.equal(target.scrollTop, 550);
+  assert.equal(follow.isFollowing(), false);
+});
+
+test("manual wheel pause resumes following when the user reaches the bottom", () => {
+  const frames = new FakeAnimationFrameScheduler();
+  const target = viewport({ scrollTop: 550 });
+  const follow = createStreamingScrollFollow(() => target, {
+    requestFrame: frames.requestAnimationFrame,
+    cancelFrame: frames.cancelAnimationFrame,
+  });
+  follow.pauseFollowing(true);
+  target.scrollTop = 600;
+  follow.handleScroll();
+
+  assert.equal(follow.isFollowing(), true);
+});
+
+test("programmatic stop does not resume when loading content reaches the bottom", () => {
+  const frames = new FakeAnimationFrameScheduler();
+  const target = viewport({ scrollHeight: 300, scrollTop: 0 });
+  const follow = createStreamingScrollFollow(() => target, {
+    requestFrame: frames.requestAnimationFrame,
+    cancelFrame: frames.cancelAnimationFrame,
+  });
+  follow.stopFollowing();
+  target.scrollHeight = 1200;
+  follow.handleScroll();
+  follow.notifyContentResize();
+
+  assert.equal(follow.isFollowing(), false);
+  assert.equal(target.scrollTop, 0);
 });
 
 test("remaining within 48px keeps automatic following enabled", () => {

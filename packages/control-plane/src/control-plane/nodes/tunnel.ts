@@ -3,6 +3,7 @@ import { PassThrough, Readable } from "node:stream";
 import {
   encodeNodeTunnelRequestBody,
   type Node,
+  type InstanceLifecycleSnapshot,
 } from "@task-handoff/protocol/control-plane";
 import { COMPACT_EVENT_ENVELOPE_VERSION, type EventEnvelope, type SessionStreamsHello } from "@task-handoff/protocol/events";
 import { bridgeWebSockets, closeWebSocket, normalizeWebSocketCloseCode, normalizeWebSocketCloseReason, type WebSocketLike } from "@task-handoff/protocol/websocket-bridge";
@@ -228,6 +229,7 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
   constructor(events?: ControlPlaneEventBus, options: {
     onStreamsHello?: (instanceId: string, hello: SessionStreamsHello) => void | Promise<void>;
     onSessionEvent?: (event: EventEnvelope) => boolean;
+    onInstanceLifecycle?: (nodeId: string, lifecycle: InstanceLifecycleSnapshot) => boolean | Promise<boolean>;
     validateInstanceScope?: (nodeId: string, instanceId: string) => boolean | Promise<boolean>;
     httpStreamHeaderTimeoutMs?: number;
     requestTimeoutMs?: number;
@@ -243,6 +245,7 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
       events,
       onStreamsHello: options.onStreamsHello,
       onSessionEvent: options.onSessionEvent,
+      onInstanceLifecycle: options.onInstanceLifecycle,
       validateInstanceScope: options.validateInstanceScope,
     });
     this.httpStreamHeaderTimeoutMs = options.httpStreamHeaderTimeoutMs ?? 30_000;

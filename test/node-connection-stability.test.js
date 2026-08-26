@@ -431,6 +431,90 @@ test("instance lookup consumes the current node fleet snapshot without another r
   assert.equal(gateway.instanceFromSnapshot([{ ...node, endpoint: "http://127.0.0.1:8092" }], instance.id), undefined);
 });
 
+test("instance lifecycle events converge a fresh fleet snapshot by revision", async () => {
+  const timestamp = "2026-08-21T00:00:00.000Z";
+  const instance = ControlledInstanceSchema.parse({
+    id: "inst_lifecycle",
+    name: "Lifecycle instance",
+    source: { type: "local-folder", path: "/workspace" },
+    sourceSnapshot: {},
+    modelSelection: {},
+    nodeId: "node_lifecycle",
+    runtimeId: "runtime_lifecycle",
+    stateRevision: 1,
+    status: "starting",
+    connectionStatus: "offline",
+    runtime: { labels: {} },
+    registrationToken: "instance-secret",
+    protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  });
+  let requests = 0;
+  const client = new ControlPlaneNodeAgentClient({
+    request: async () => {
+      requests += 1;
+      return new Response(JSON.stringify({ data: [instance] }), { status: 200, headers: { "content-type": "application/json" } });
+    },
+  });
+  const gateway = new ControlPlaneNodeAgentGateway(client);
+  const node = {
+    id: instance.nodeId,
+    connectionMode: "direct-http",
+    endpoint: "http://127.0.0.1:8091",
+    status: "online",
+    auth: { mode: "paired-hmac", keyId: "key_lifecycle" },
+    connectionPhase: "healthy",
+  };
+
+  assert.equal(gateway.applyInstanceLifecycle(node, {
+    instanceId: instance.id,
+    revision: 2,
+    updatedAt: "2026-08-21T00:00:01.000Z",
+    status: "running",
+    health: "ok",
+    connectionStatus: "online",
+    accessStatus: "reachable",
+    workspace: { status: "ready", path: "/workspace" },
+    runtime: { pid: 42, labels: {} },
+    ready: true,
+  }), "missing");
+
+  await gateway.listFleetInstances([node]);
+  assert.equal(gateway.applyInstanceLifecycle(node, {
+    instanceId: instance.id,
+    revision: 2,
+    updatedAt: "2026-08-21T00:00:01.000Z",
+    status: "running",
+    health: "ok",
+    connectionStatus: "online",
+    accessStatus: "reachable",
+    workspace: { status: "ready", path: "/workspace" },
+    runtime: { pid: 42, labels: {} },
+    ready: true,
+  }), "applied");
+  assert.equal(gateway.applyInstanceLifecycle(node, {
+    instanceId: instance.id,
+    revision: 1,
+    updatedAt: timestamp,
+    status: "starting",
+    health: "unknown",
+    connectionStatus: "offline",
+    accessStatus: "endpoint-unreachable",
+    workspace: { status: "unknown" },
+    runtime: { labels: {} },
+    ready: false,
+  }), "ignored");
+
+  const converged = gateway.instanceFromSnapshot([node], instance.id);
+  assert.equal(converged.stateRevision, 2);
+  assert.equal(converged.connectionStatus, "online");
+  assert.equal(converged.uiAccessStatus, "reachable");
+  assert.equal(converged.ready, true);
+  assert.equal(converged.runtime.pid, 42);
+  assert.equal(requests, 1);
+});
+
 test("fleet snapshots expose each node as soon as that node finishes", async () => {
   const timestamp = "2026-08-22T00:00:00.000Z";
   const runtime = (nodeId) => ({

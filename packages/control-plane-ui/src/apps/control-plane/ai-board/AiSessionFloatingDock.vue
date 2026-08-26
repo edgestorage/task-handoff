@@ -80,7 +80,10 @@
                 class="ai-board-floating-prompt-content"
                 :class="{ expanded: promptExpanded }"
               >
-                <MarkdownContent :content="displayAiSessionTitle(card.session, promptIndex, t)" />
+                <MarkdownContent
+                  v-if="detailState === 'ready'"
+                  :content="displayAiSessionTitle(conversationSession, promptIndex, t)"
+                />
               </div>
               <button
                 v-if="promptHasOverflow"
@@ -113,6 +116,7 @@
               :prompt-index="promptIndex"
               :session="conversationSession"
               :selected-turn-state="selectedTurnState"
+              :turn-bodies-ready="turnBodiesReady"
               :turn-timelines="turnTimelines"
               activity-interactive
               @edit-queued-message="$emit('editQueuedMessage', $event)"
@@ -211,6 +215,7 @@ const props = defineProps<{
   promptIndex: number;
   selectedTurnState: AiSessionTurnTimelineState;
   timelineMode: "compact" | "full";
+  turnBodiesReady: boolean;
   turnTimelines: Record<string, AiSessionTurnTimelineState>;
 }>();
 

@@ -2,6 +2,7 @@ import type { ControlPlaneClient } from '@task-handoff/control-plane-client';
 import {
   AiSessionEventType,
   AiSessionMessageDeltaEventSchema,
+  normalizeAiSessionMessageDeltaEvent,
   AiSessionPatchEventSchema,
   AiSessionRemovedEventSchema,
   AiSessionSnapshotEventSchema,
@@ -174,7 +175,14 @@ export class MobileAiSessionController {
     if (event.type === AiSessionEventType.MessageDelta) {
       if (event.id && this.seenTransientEventIds.has(event.id)) return true;
       if (event.id) this.rememberTransientEventId(event.id);
-      const parsed = safeParseResponse(AiSessionMessageDeltaEventSchema, event.payload);
+      const instanceId = event.scope?.instanceId || '';
+      let payload: unknown;
+      try {
+        payload = normalizeAiSessionMessageDeltaEvent(event.payload, instanceId);
+      } catch {
+        return false;
+      }
+      const parsed = safeParseResponse(AiSessionMessageDeltaEventSchema, payload);
       if (!parsed.success || event.scope?.instanceId !== parsed.data.instanceId) return false;
       this.store.appendMessageDelta(this.controlPlaneId, parsed.data, { replay: event.replay });
       const deltaKey = `${parsed.data.instanceId}\u0000${parsed.data.sessionId}\u0000${parsed.data.turnId}\u0000${parsed.data.itemId}`;

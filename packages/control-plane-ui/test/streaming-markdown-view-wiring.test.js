@@ -54,7 +54,7 @@ test("detail exposes an intent-aware shadcn return-to-latest control", () => {
   assert.match(panel, /@layout-committed="commitDetailLayoutAnchor"/);
   assert.match(panel, /function commitDetailLayoutAnchor\(\) \{[\s\S]*?detailLayoutAnchor\.commit\(\);[\s\S]*?scrollFollow\?\.notifyContentResize\(\);/);
   assert.match(timeline, /watch\(virtualTotalSize,[\s\S]*?emit\("layoutCommitted"\)/);
-  assert.match(panel, /function pauseDetailScrollFollow\(event: WheelEvent \| TouchEvent\)[\s\S]*?event instanceof TouchEvent \|\| event\.deltaY < 0[\s\S]*?scrollFollow\?\.stopFollowing\(\)/);
+  assert.match(panel, /function pauseDetailScrollFollow\(event: WheelEvent \| TouchEvent\)[\s\S]*?scrollFollow\?\.pauseFollowing\(true\)/);
   assert.match(result, /onBeforeUpdate\([\s\S]*emit\("layoutWillChange", turnElement\.value\)/);
   assert.match(result, /onUpdated\([\s\S]*emit\("layoutCommitted", turnElement\.value\)/);
   assert.match(panel, /data-task-handoff-scroll-viewport/);

@@ -1,18 +1,22 @@
 <template>
-  <div v-if="loading && !nodes.length" class="ai-session-turn-history-status" aria-busy="true">
-    <LoaderCircle class="ai-session-turn-history-loading-icon" :size="15" aria-hidden="true" />
-    <span>{{ elapsedLabel }} · {{ t("sessions.timeline.loading") }}</span>
-  </div>
-  <button v-else-if="error && !nodes.length" type="button" class="ai-session-turn-history-status ai-session-turn-history-retry" @click="$emit('retry')">
+  <button v-if="error && !nodes.length" type="button" class="ai-session-turn-history-status ai-session-turn-history-retry" @click="$emit('retry')">
     <ChevronRight :size="15" />
     <span>{{ elapsedLabel }} · {{ t("sessions.timeline.loadFailed") }}</span>
   </button>
-  <details v-else-if="nodes.length" class="ai-session-turn-history">
+  <details
+    v-else-if="nodes.length || loadable || loading"
+    class="ai-session-turn-history"
+    @toggle="requestHistoryIfOpened"
+  >
     <summary>
       <ChevronRight :size="15" />
       <span>{{ elapsedLabel }}</span>
     </summary>
     <div class="ai-session-turn-history-content">
+      <div v-if="loading && !nodes.length" class="ai-session-turn-history-status" aria-busy="true">
+        <LoaderCircle class="ai-session-turn-history-loading-icon" :size="15" aria-hidden="true" />
+        <span>{{ t("sessions.timeline.loading") }}</span>
+      </div>
       <template v-for="node in nodes" :key="node.id">
         <article
           v-if="node.type === 'message'"
@@ -42,15 +46,20 @@ import AiSessionActivityGroup from "./AiSessionActivityGroup.vue";
 const props = defineProps<{
   nodes: TimelineTurnNode[];
   loading?: boolean;
+  loadable?: boolean;
   error?: string;
   startedAt?: string;
   endedAt?: string;
   active?: boolean;
 }>();
-defineEmits<{ retry: [] }>();
+const emit = defineEmits<{ load: []; retry: [] }>();
 const { t } = useI18n();
 const now = ref(Date.now());
 let elapsedTimer: ReturnType<typeof setInterval> | undefined;
+
+function requestHistoryIfOpened(event: Event) {
+  if ((event.currentTarget as HTMLDetailsElement).open && props.loadable) emit("load");
+}
 
 function syncElapsedTimer() {
   clearInterval(elapsedTimer);

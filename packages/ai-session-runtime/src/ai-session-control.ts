@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
+import { AiSessionConversationAttachmentSchema } from "@task-handoff/protocol/ai-sessions";
 import type {
   AiSessionActionResult,
   AiSessionApprovalInput,
   AiSessionCreationSource,
   AiSessionMessageAttachment,
+  AiSessionMessageAttachmentMeta,
   AiSessionConversationAttachment,
   AiSessionPermissionMode,
   AiSessionLineage,
@@ -73,6 +75,17 @@ export type AiSessionProviderTimelineItemEvent = {
 };
 
 export type AiSessionProviderTimelineItemListener = (event: AiSessionProviderTimelineItemEvent) => void;
+
+function queuedConversationAttachments(attachments: readonly AiSessionMessageAttachmentMeta[]) {
+  return attachments.map((attachment) => AiSessionConversationAttachmentSchema.parse({
+    id: attachment.id,
+    kind: attachment.kind,
+    name: attachment.name,
+    mime: attachment.mime,
+    size: attachment.size,
+    contentState: "available",
+  }));
+}
 
 export type AiSessionProviderTimelineCapabilities = {
   sessionRead: boolean;
@@ -356,7 +369,7 @@ export class AiSessionController {
         message: item.message,
         messageId: dispatch.messageId,
         attachments: dispatch.attachments,
-        userMessageAttachments: item.attachments.map((attachment) => ({ ...attachment, contentState: "available" as const })),
+        userMessageAttachments: queuedConversationAttachments(item.attachments),
         references: item.references,
         permissionMode: item.permissionMode,
       }, { rollbackAttachmentsOnError: false });
@@ -379,7 +392,7 @@ export class AiSessionController {
       message: item.message,
       messageId: dispatch.messageId,
       attachments: dispatch.attachments,
-      userMessageAttachments: item.attachments.map((attachment) => ({ ...attachment, contentState: "available" as const })),
+      userMessageAttachments: queuedConversationAttachments(item.attachments),
       references: item.references,
     }, { rollbackAttachmentsOnError: false });
     const updated = this.registry.removeQueuedMessage(session.id, item.id);

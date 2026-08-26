@@ -1,14 +1,15 @@
 import WebSocket from "ws";
 import nacl from "tweetnacl";
 import { AccessTicketSchema, RelayAttachCapabilitySchema } from "@task-handoff/cloud-contracts";
-import { AiSessionTransientSubscriptionSchema, type AiSessionTransientSubscription } from "@task-handoff/protocol/events";
+import { COMPACT_EVENT_ENVELOPE_VERSION, AiSessionTransientSubscriptionSchema, type AiSessionTransientSubscription, type EventEnvelope } from "@task-handoff/protocol/events";
 import type { ControlPlaneActor } from "../auth/authorization.ts";
 import type { ControlPlaneIdentityService } from "../identity/service.ts";
+import { projectCompactPublicEvent } from "../events/bus.ts";
 
 type RelayEnvelope = { type: string; id?: string; status?: number; body?: any; event?: unknown; streamId?: string; data?: unknown; pendingEscape?: unknown; cols?: unknown; rows?: unknown; code?: number | null; signal?: string | null };
 export type RelaySessionBridge = {
   request(actor: ControlPlaneActor, input: { path: string; method: string; headers: Record<string, string>; body?: unknown }): Promise<{ status: number; body: unknown }>;
-  subscribe(actor: ControlPlaneActor, topics: string[], listener: (event: unknown) => void, aiSessionTransient?: AiSessionTransientSubscription): () => void;
+  subscribe(actor: ControlPlaneActor, topics: string[], listener: (event: EventEnvelope) => void, aiSessionTransient?: AiSessionTransientSubscription): () => void;
   openTty?(actor: ControlPlaneActor, input: { instanceId: string; sessionId: string }, listener: (message: RelayEnvelope) => void): Promise<{ send(data: string): void; resize(cols: number, rows: number): void; close(): void }>;
 };
 
@@ -94,7 +95,8 @@ class EncryptedControlPlaneRelaySession {
       this.unsubscribe?.();
       const topics = Array.isArray(value.body?.topics) ? value.body.topics.map(String) : ["*"];
       const transient = AiSessionTransientSubscriptionSchema.safeParse(value.body?.aiSessionTransient);
-      this.unsubscribe = this.bridge.subscribe(this.actor, topics, (event) => this.send({ type: "event", event }), transient.success ? transient.data : undefined);
+      const compact = value.body?.eventEnvelopeVersion === COMPACT_EVENT_ENVELOPE_VERSION;
+      this.unsubscribe = this.bridge.subscribe(this.actor, topics, (event) => this.send({ type: "event", event: compact ? projectCompactPublicEvent(event) : event }), transient.success ? transient.data : undefined);
       return;
     }
     if (value.type === "tty-open" && value.streamId && this.bridge.openTty) { const streamId = value.streamId; const tty = await this.bridge.openTty(this.actor, value.body, (event) => this.send({ ...event, streamId })); this.ttys.set(streamId, tty); this.send({ type: "tty-opened", streamId }); return; }

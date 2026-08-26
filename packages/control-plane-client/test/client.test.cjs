@@ -89,7 +89,7 @@ test("AI Session detail enriches only metadata and cannot overwrite live summary
   assert.deepEqual(legacyMerged.turns[0].userMessages, detail.turns[0].userMessages);
 });
 
-test("conversation cache keeps the mounted projection while revisions refresh independently", () => {
+test("conversation cache keeps the last projection visible while independently converging revisions", () => {
   const cache = new AiSessionConversationCache(2);
   const summary = {
     id: "session-1",
@@ -99,27 +99,88 @@ test("conversation cache keeps the mounted projection while revisions refresh in
     queue: { revision: 0, pendingCount: 0, items: [] },
     subAgents: [],
   };
-  cache.setDetail("instance-1", summary, { id: summary.id, queue: summary.queue, subAgents: [] });
-  cache.setTurnIndex("instance-1", summary, {
+  cache.setDetail("instance-1", summary.detailRevision, { id: summary.id, queue: summary.queue, subAgents: [] });
+  cache.setTurnIndex("instance-1", summary.turnsRevision, {
     sessionId: summary.id,
     revision: "turns-1",
     turns: [{ id: "turn-1", status: "running", phase: "responding", revision: 1, bodyRevision: "body-1", startedAt: summary.updatedAt, updatedAt: summary.updatedAt }],
   });
-  cache.setTurn("instance-1", summary.id, "body-1", { id: "turn-1", status: "running", phase: "responding", revision: 1, lastMessage: "visible", startedAt: summary.updatedAt, updatedAt: summary.updatedAt });
+  assert.equal(cache.hasRenderableTurn("instance-1", summary.id, "turn-1"), false);
+  assert.equal(cache.hasCurrentTurn("instance-1", summary.id, "turn-1"), false);
+  assert.equal(cache.setTurn("instance-1", summary.id, "body-1", { id: "turn-1", status: "running", phase: "responding", revision: 1, lastMessage: "visible", startedAt: summary.updatedAt, updatedAt: summary.updatedAt }), true);
+  assert.equal(cache.hasRenderableTurn("instance-1", summary.id, "turn-1"), true);
+  assert.equal(cache.hasCurrentTurn("instance-1", summary.id, "turn-1"), true);
 
   const changed = { ...summary, detailRevision: "detail-2", turnsRevision: "turns-2", lastMessage: "live" };
-  assert.equal(cache.hasProjection("instance-1", summary.id), true);
+  assert.equal(cache.hasProjection("instance-1", summary), true);
   assert.equal(cache.hasDetail("instance-1", changed), false);
   assert.equal(cache.hasTurnIndex("instance-1", changed), false);
+  assert.equal(cache.hasRenderableProjection("instance-1", changed.id), true);
   assert.equal(cache.projection("instance-1", changed).turns[0].lastMessage, "visible");
   assert.equal(cache.projection("instance-1", changed).lastMessage, "live");
-  cache.setTurnIndex("instance-1", changed, {
+  cache.setTurnIndex("instance-1", changed.turnsRevision, {
     sessionId: summary.id,
     revision: "turns-2",
     turns: [{ id: "turn-1", status: "running", phase: "responding", revision: 1, bodyRevision: "body-2", startedAt: summary.updatedAt, updatedAt: summary.updatedAt }],
   });
+  assert.equal(cache.hasRenderableTurn("instance-1", summary.id, "turn-1"), true);
+  assert.equal(cache.hasCurrentTurn("instance-1", summary.id, "turn-1"), false);
   assert.equal(cache.needsTurn("instance-1", summary.id, "turn-1")?.bodyRevision, "body-2");
   assert.equal(cache.projection("instance-1", changed).turns[0].lastMessage, "visible");
+  assert.equal(cache.setTurn("instance-1", summary.id, "body-late", { id: "turn-1", status: "completed", phase: "responding", revision: 2, lastMessage: "late", startedAt: summary.updatedAt, updatedAt: summary.updatedAt }), false);
+  assert.equal(cache.turnEntry("instance-1", summary.id, "turn-1")?.bodyRevision, "body-2");
+  assert.equal(cache.projection("instance-1", changed).turns[0].lastMessage, "visible");
+  assert.equal(cache.setTurn("instance-1", summary.id, "body-2", { id: "turn-1", status: "completed", phase: "responding", revision: 2, lastMessage: "fresh", startedAt: summary.updatedAt, updatedAt: summary.updatedAt }), true);
+  assert.equal(cache.hasCurrentTurn("instance-1", summary.id, "turn-1"), true);
+  assert.equal(cache.turnEntry("instance-1", summary.id, "turn-1")?.bodyRevision, "body-2");
+  assert.equal(cache.needsTurn("instance-1", summary.id, "turn-1"), undefined);
+  assert.equal(cache.projection("instance-1", changed).turns[0].lastMessage, "fresh");
+  assert.equal(cache.setTurn("instance-1", summary.id, "body-3", { id: "turn-1", status: "completed", phase: "responding", revision: 3, lastMessage: "live refresh", startedAt: summary.updatedAt, updatedAt: summary.updatedAt }, "body-3"), true);
+  assert.equal(cache.turnEntry("instance-1", summary.id, "turn-1")?.bodyRevision, "body-3");
+  assert.equal(cache.projection("instance-1", changed).turns[0].lastMessage, "live refresh");
+});
+
+test("conversation cache projects terminal index state over a cached running Turn body", () => {
+  const cache = new AiSessionConversationCache();
+  const startedAt = "2026-08-26T00:00:00.000Z";
+  const completedAt = "2026-08-26T00:01:00.000Z";
+  const summary = {
+    id: "session-terminal-index",
+    detailRevision: "detail-1",
+    turnsRevision: "turns-running",
+    updatedAt: startedAt,
+    queue: { revision: 0, pendingCount: 0, items: [] },
+    subAgents: [],
+  };
+  cache.setDetail("instance-1", summary.detailRevision, { id: summary.id, queue: summary.queue, subAgents: [] });
+  cache.setTurnIndex("instance-1", summary.turnsRevision, {
+    sessionId: summary.id,
+    revision: summary.turnsRevision,
+    turns: [{ id: "turn-1", status: "running", phase: "responding", revision: 1, bodyRevision: "body-1", startedAt, updatedAt: startedAt }],
+  });
+  cache.setTurn("instance-1", summary.id, "body-1", {
+    id: "turn-1",
+    status: "running",
+    phase: "responding",
+    revision: 1,
+    userPrompt: "Question",
+    lastMessage: "Answer",
+    startedAt,
+    updatedAt: startedAt,
+  });
+
+  const settled = { ...summary, turnsRevision: "turns-completed", updatedAt: completedAt };
+  cache.setTurnIndex("instance-1", settled.turnsRevision, {
+    sessionId: summary.id,
+    revision: settled.turnsRevision,
+    turns: [{ id: "turn-1", status: "completed", phase: "responding", revision: 2, bodyRevision: "body-1", startedAt, updatedAt: completedAt, completedAt }],
+  });
+
+  const turn = cache.projection("instance-1", settled).turns[0];
+  assert.equal(turn.status, "completed");
+  assert.equal(turn.completedAt, completedAt);
+  assert.equal(turn.lastMessage, "Answer");
+  assert.equal(cache.needsTurn("instance-1", summary.id, "turn-1"), undefined);
 });
 
 test("shared AI Session client owns route encoding, request input, and response schema", async () => {
@@ -155,6 +216,27 @@ test("shared AI Session client owns route encoding, request input, and response 
 
   assert.equal(requests[0].path, "/api/controlled-instances/instance%2Fone/ai-sessions/session%20two/interrupt");
   assert.equal(requests[0].init.method, "POST");
+});
+
+test("shared AI Session projection reads send the cached revision", async () => {
+  const requests = [];
+  const transport = {
+    async request(path, schema) {
+      requests.push(path);
+      return schema.parse({ data: { kind: "not-modified", revision: "revision/value" } });
+    },
+  };
+  const api = createControlPlaneClient(transport);
+
+  await api.aiSessions.detail("instance/one", "session two", "revision/value");
+  await api.aiSessions.turnIndex("instance/one", "session two", "revision/value");
+  await api.aiSessions.turnBody("instance/one", "session two", "turn three", "revision/value");
+
+  assert.deepEqual(requests, [
+    "/api/controlled-instances/instance%2Fone/ai-sessions/session%20two?revision=revision%2Fvalue",
+    "/api/controlled-instances/instance%2Fone/ai-sessions/session%20two/turns?revision=revision%2Fvalue",
+    "/api/controlled-instances/instance%2Fone/ai-sessions/session%20two/turns/turn%20three?revision=revision%2Fvalue",
+  ]);
 });
 
 test("shared users client owns strict authorization responses and encoded management routes", async () => {
@@ -418,9 +500,10 @@ test("shared AI Session client owns revisioned queue edit and reorder routes", a
     async request(path, schema, init) {
       requests.push({ path, init });
       return schema.parse({ data: {
-        id: "session-1", agent: "codex", status: "running", phase: "thinking",
-        startedAt: "2026-08-05T00:00:00.000Z", updatedAt: "2026-08-05T00:00:00.000Z",
-        queue: { revision: 4, pendingCount: 2, items: [] },
+        sessionId: "session-1",
+        queueRevision: 4,
+        action: path.endsWith("/reorder") ? "reorder" : "edit",
+        ...(path.endsWith("/reorder") ? {} : { queueId: "queue-1" }),
       } });
     },
   };

@@ -628,16 +628,16 @@ export function getAiSessionHistoryDetail(instanceId: string, aiSessionId: strin
   return sharedAiSessionsApi.historyDetail(instanceId, aiSessionId);
 }
 
-export function getAiSessionDetail(instanceId: string, aiSessionId: string, signal?: AbortSignal) {
-  return sharedAiSessionsApi.detail(instanceId, aiSessionId, signal);
+export function getAiSessionDetail(instanceId: string, aiSessionId: string, revision?: string, signal?: AbortSignal) {
+  return sharedAiSessionsApi.detail(instanceId, aiSessionId, revision, signal);
 }
 
-export function getAiSessionTurnIndex(instanceId: string, aiSessionId: string, signal?: AbortSignal) {
-  return sharedAiSessionsApi.turnIndex(instanceId, aiSessionId, signal);
+export function getAiSessionTurnIndex(instanceId: string, aiSessionId: string, revision?: string, signal?: AbortSignal) {
+  return sharedAiSessionsApi.turnIndex(instanceId, aiSessionId, revision, signal);
 }
 
-export function getAiSessionTurnBody(instanceId: string, aiSessionId: string, turnId: string, signal?: AbortSignal) {
-  return sharedAiSessionsApi.turnBody(instanceId, aiSessionId, turnId, signal);
+export function getAiSessionTurnBody(instanceId: string, aiSessionId: string, turnId: string, revision?: string, signal?: AbortSignal) {
+  return sharedAiSessionsApi.turnBody(instanceId, aiSessionId, turnId, revision, signal);
 }
 
 export function getAiSessionTimeline(instanceId: string, aiSessionId: string, signal?: AbortSignal) {

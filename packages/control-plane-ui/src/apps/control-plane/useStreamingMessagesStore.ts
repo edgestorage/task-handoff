@@ -257,7 +257,14 @@ export function createStreamingMessagesStore(options: StreamingMessagesStoreOpti
     // it is not authoritative conversation content and must never replace the
     // complete text accumulated from message-delta events.
     if (session.turns === undefined) {
-      if (target) settleProjectedStatus(target, status, generatedAt);
+      if (target) {
+        settleProjectedStatus(target, status, generatedAt);
+      } else if (session.activeTurnId) {
+        // Summary-only patches still establish an authoritative Turn boundary.
+        // Keep the previous Turn cached for history, but never expose it as the
+        // active response while the new Turn is waiting for its first delta.
+        clearActiveMessage(streamingSessionKey(instanceId, session.id));
+      }
       return;
     }
     const text = turn?.lastMessage ?? (activeTurn ? undefined : session.lastMessage);

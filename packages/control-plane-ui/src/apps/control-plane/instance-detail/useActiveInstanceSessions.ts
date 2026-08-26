@@ -7,7 +7,7 @@ import {
   absoluteInstanceUrl,
   buildSessionTabs,
   launchableAppsForInstance,
-  selectedAiSession as resolveSelectedAiSession,
+  sortedAiSessionsByLastUserMessage,
   sessionFrameUrl,
   sessionTerminalSocketUrl,
   uniqueLaunchableApps,
@@ -53,6 +53,7 @@ export function useActiveInstanceSessions({
   const recentSessionKeys = reactive<Record<string, string[]>>({});
   const sessionTabOrderKeys = reactive<Record<string, string[]>>({});
   const selectedAiSessionKeys = reactive<Record<string, string>>({});
+  const selectedAiSessionSnapshots = reactive<Record<string, AiSessionSummary | undefined>>({});
   const repositorySessionTabs = reactive<Record<string, SessionTab[]>>({});
   const pendingAiSessionAppSelections = new Map<string, AiSessionSummary>();
 
@@ -434,7 +435,23 @@ export function useActiveInstanceSessions({
   }
 
   function selectedAiSession(instance: InstanceBoardItem, sessions?: AiSessionSummary[]) {
-    return resolveSelectedAiSession(sessions, selectedAiSessionKeys[instance.id]);
+    const available = sessions || [];
+    const selectedId = selectedAiSessionKeys[instance.id];
+    const selected = available.find((session) => session.id === selectedId);
+    if (selected) {
+      selectedAiSessionSnapshots[instance.id] = selected;
+      return selected;
+    }
+    // Once a user has selected a session, do not silently replace it when a
+    // completion patch temporarily omits it from the projection. This avoids
+    // jumping to an unrelated session while the authoritative snapshot catches up.
+    if (selectedId) return selectedAiSessionSnapshots[instance.id];
+    const initial = sortedAiSessionsByLastUserMessage(available, false)[0];
+    if (initial) {
+      selectedAiSessionKeys[instance.id] = initial.id;
+      selectedAiSessionSnapshots[instance.id] = initial;
+    }
+    return initial;
   }
 
   function openAiSessionApp(instance: InstanceBoardItemWithAppSessions, session?: AiSessionSummary) {

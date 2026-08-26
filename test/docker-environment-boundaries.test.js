@@ -138,6 +138,7 @@ test("docker config uses a read-only private file and explicit managed mounts wi
   assert.ok(args.includes("type=volume,src=task-handoff-inst_one-runtime,dst=/opt/task-handoff/instance-runtime"));
   assert.ok(args.includes("/run/task-handoff/bootstrap/entrypoint.sh"));
   assert.ok(args.includes("--no-healthcheck"));
+  assert.ok(args.includes("/tmp:rw,nosuid,nodev,exec,mode=1777"));
   assert.ok(args.includes("/tmp/workspace:/workspace:rw"));
   assert.equal(args.some((value) => value.includes("registration-secret") || value.includes("model-secret")), false);
 

@@ -125,7 +125,7 @@ test('one root provider owns one AI session connection for multiple screens', as
   mobileAiSessionStore.clearProfile('cp-provider');
 });
 
-test('selected compact session reloads detail when its authoritative revision changes', async () => {
+test('selected compact session commits a new Turn projection when the detail refresh fails', async () => {
   const list = jest.fn().mockResolvedValue({
     updatedAt: compactSession.updatedAt,
     instances: [{
@@ -136,15 +136,18 @@ test('selected compact session reloads detail when its authoritative revision ch
     }],
   });
   const detail = jest.fn()
-    .mockResolvedValue({ id: compactSession.id, queue: compactSession.queue, subAgents: [] });
+    .mockResolvedValueOnce({ kind: 'updated', revision: 'detail-1', detail: { id: compactSession.id, queue: compactSession.queue, subAgents: [] } })
+    .mockRejectedValueOnce(new Error('detail unavailable'));
   const firstTurn = { id: 'turn-1', status: 'completed' as const, phase: 'responding' as const, revision: 1, bodyRevision: 'body-1', userPrompt: 'question', lastMessage: 'answer', startedAt: compactSession.startedAt, updatedAt: compactSession.updatedAt };
   const secondTurn = { id: 'turn-2', status: 'completed' as const, phase: 'responding' as const, revision: 1, bodyRevision: 'body-2', userPrompt: 'second question', lastMessage: 'second answer', startedAt: '2026-08-05T00:01:00.000Z', updatedAt: '2026-08-05T00:01:00.000Z' };
+  const completedSecondTurn = { ...secondTurn, revision: 2, bodyRevision: 'body-3', lastMessage: 'completed second answer' };
   const turnIndex = jest.fn()
-    .mockResolvedValueOnce({ sessionId: compactSession.id, revision: 'turns-1', turns: [firstTurn] })
-    .mockResolvedValueOnce({ sessionId: compactSession.id, revision: 'turns-2', turns: [firstTurn, secondTurn] });
+    .mockResolvedValueOnce({ kind: 'updated', revision: 'turns-1', index: { sessionId: compactSession.id, revision: 'turns-1', turns: [firstTurn] } })
+    .mockResolvedValueOnce({ kind: 'updated', revision: 'turns-2', index: { sessionId: compactSession.id, revision: 'turns-2', turns: [firstTurn, secondTurn] } });
   const turnBody = jest.fn()
-    .mockResolvedValueOnce({ sessionId: compactSession.id, revision: firstTurn.bodyRevision, turn: firstTurn })
-    .mockResolvedValueOnce({ sessionId: compactSession.id, revision: secondTurn.bodyRevision, turn: secondTurn });
+    .mockResolvedValueOnce({ kind: 'updated', revision: firstTurn.bodyRevision, body: { sessionId: compactSession.id, revision: firstTurn.bodyRevision, turn: firstTurn } })
+    .mockResolvedValueOnce({ kind: 'updated', revision: secondTurn.bodyRevision, body: { sessionId: compactSession.id, revision: secondTurn.bodyRevision, turn: secondTurn } })
+    .mockResolvedValueOnce({ kind: 'updated', revision: completedSecondTurn.bodyRevision, body: { sessionId: compactSession.id, revision: completedSecondTurn.bodyRevision, turn: completedSecondTurn } });
   const dependencies: ActiveAiSessionsDependencies = {
     activeProfile: jest.fn().mockResolvedValue(profile),
     subscribeProfiles: () => () => undefined,
@@ -186,6 +189,34 @@ test('selected compact session reloads detail when its authoritative revision ch
   expect(detail).toHaveBeenCalledTimes(2);
   expect(turnIndex).toHaveBeenCalledTimes(2);
   expect(turnBody).toHaveBeenCalledTimes(2);
+
+  await act(async () => {
+    mobileAiSessionStore.replaceSnapshot('cp-provider', {
+      updatedAt: '2026-08-05T00:02:00.000Z',
+      instances: [{
+        instanceId: 'instance-detail',
+        streamId: 'stream-detail',
+        revision: 3,
+        aiSessions: {
+          runningCount: 0,
+          waitingCount: 0,
+          staleCount: 0,
+          updatedAt: '2026-08-05T00:02:00.000Z',
+          sessions: [{
+            ...compactSession,
+            updatedAt: '2026-08-05T00:02:00.000Z',
+            detailRevision: 'detail-2',
+            turnsRevision: 'turns-2',
+            latestTurnRef: { id: secondTurn.id, bodyRevision: completedSecondTurn.bodyRevision },
+          }],
+        },
+      }],
+    });
+  });
+  await waitFor(() => screen.getByText('completed second answer'));
+  expect(detail).toHaveBeenCalledTimes(2);
+  expect(turnIndex).toHaveBeenCalledTimes(2);
+  expect(turnBody).toHaveBeenCalledTimes(3);
   await screen.unmount();
   mobileAiSessionStore.clearProfile('cp-provider');
 });

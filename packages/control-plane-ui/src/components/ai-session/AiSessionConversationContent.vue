@@ -47,6 +47,7 @@
           :conversation-session-id="session.id"
           :file-links="fileLinks"
           :session="session"
+          :turn-bodies-ready="turnBodiesReady"
           :turn-timelines="turnTimelines"
           @edit-queued-message="$emit('editQueuedMessage', $event)"
           @open-file="$emit('openFile', $event)"
@@ -84,6 +85,7 @@
         :activity-interactive="activityInteractive"
         @layout-will-change="$emit('layoutWillChange')"
         @layout-committed="$emit('layoutCommitted')"
+        @load-activity-history="$emit('loadTurnTimeline', selectedTurn?.id || '')"
         @retry-activity-history="$emit('loadTurnTimeline', selectedTurn?.id || '', true)"
         @edit-queued-message="$emit('editQueuedMessage', $event)"
         @open-file="$emit('openFile', $event)"
@@ -139,6 +141,7 @@ const props = withDefaults(defineProps<{
   promptIndex: number;
   session: AiSessionSummary;
   selectedTurnState?: AiSessionTurnTimelineState;
+  turnBodiesReady?: boolean;
   turnTimelines?: Record<string, AiSessionTurnTimelineState>;
 }>(), {
   activityInteractive: true,
@@ -149,6 +152,7 @@ const props = withDefaults(defineProps<{
   fileLinks: false,
   detailState: "ready",
   selectedTurnState: () => ({ status: "ready", items: [] }),
+  turnBodiesReady: true,
   turnTimelines: () => ({}),
 });
 

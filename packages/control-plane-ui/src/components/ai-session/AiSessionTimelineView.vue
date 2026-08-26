@@ -78,6 +78,7 @@
             @remove-queued-message="$emit('removeQueuedMessage', $event)"
             @reorder-queued-messages="$emit('reorderQueuedMessages', $event)"
             @resolve-approval="$emit('resolveApproval', $event)"
+            @load-activity-history="$emit('loadTurnTimeline', turns[virtualTurn.index].id)"
             @retry-activity-history="$emit('loadTurnTimeline', turns[virtualTurn.index].id, true)"
           >
             <template #turn-footer>
@@ -132,10 +133,12 @@ const props = withDefaults(defineProps<{
   conversationSessionId?: string;
   session?: AiSessionSummary;
   storedTurns?: AiSessionHistoryTurn[];
+  turnBodiesReady?: boolean;
   turnTimelines?: Record<string, AiSessionTurnTimelineState>;
 }>(), {
   approvalDecisions: () => ["allow", "deny", "skip"],
   storedTurns: () => [],
+  turnBodiesReady: true,
   turnTimelines: () => ({}),
 });
 const emit = defineEmits<{
@@ -214,6 +217,9 @@ const scrollMargin = ref(0);
 let stickyUserMessageId = "";
 let stickyUserMessageFrame = 0;
 let copiedTurnTimer: ReturnType<typeof setTimeout> | undefined;
+let visibleTimelineFrame = 0;
+let timelineScrollIntent = false;
+let timelineScrollIntentTimer: ReturnType<typeof setTimeout> | undefined;
 const turnVirtualizer = useVirtualizer(computed(() => ({
   count: turns.value.length,
   estimateSize: () => 420,
@@ -236,8 +242,8 @@ const virtualTotalSize = computed(() => turnVirtualizer.value.getTotalSize());
 function syncScrollElement() {
   const viewport = timelineElement.value?.closest<HTMLElement>("[data-task-handoff-scroll-viewport]");
   if (scrollElement.value !== viewport) {
-    scrollElement.value?.removeEventListener("scroll", scheduleStickyUserMessageUpdate);
-    viewport?.addEventListener("scroll", scheduleStickyUserMessageUpdate, { passive: true });
+    detachViewportListeners(scrollElement.value);
+    attachViewportListeners(viewport);
   }
   scrollElement.value = viewport || undefined;
   if (!viewport || !timelineElement.value) {
@@ -249,6 +255,72 @@ function syncScrollElement() {
     - viewport.getBoundingClientRect().top
     + viewport.scrollTop;
   scheduleStickyUserMessageUpdate();
+}
+
+function attachViewportListeners(viewport?: HTMLElement | null) {
+  viewport?.addEventListener("scroll", handleViewportScroll, { passive: true });
+  viewport?.addEventListener("wheel", markTimelineScrollIntent, { passive: true });
+  viewport?.addEventListener("touchstart", markTimelineScrollIntent, { passive: true });
+  viewport?.addEventListener("touchmove", markTimelineScrollIntent, { passive: true });
+  viewport?.addEventListener("pointerdown", markTimelineScrollIntent, { passive: true });
+  viewport?.addEventListener("keydown", handleTimelineScrollKey);
+}
+
+function detachViewportListeners(viewport?: HTMLElement) {
+  viewport?.removeEventListener("scroll", handleViewportScroll);
+  viewport?.removeEventListener("wheel", markTimelineScrollIntent);
+  viewport?.removeEventListener("touchstart", markTimelineScrollIntent);
+  viewport?.removeEventListener("touchmove", markTimelineScrollIntent);
+  viewport?.removeEventListener("pointerdown", markTimelineScrollIntent);
+  viewport?.removeEventListener("keydown", handleTimelineScrollKey);
+}
+
+function markTimelineScrollIntent() {
+  timelineScrollIntent = true;
+  clearTimeout(timelineScrollIntentTimer);
+  timelineScrollIntentTimer = setTimeout(() => {
+    timelineScrollIntent = false;
+  }, 2_000);
+}
+
+function handleTimelineScrollKey(event: KeyboardEvent) {
+  if (["ArrowDown", "ArrowUp", "PageDown", "PageUp", "Home", "End", " "].includes(event.key)) {
+    markTimelineScrollIntent();
+  }
+}
+
+function handleViewportScroll() {
+  scheduleStickyUserMessageUpdate();
+  if (!props.turnBodiesReady || !timelineScrollIntent) {
+    timelineScrollIntent = false;
+    return;
+  }
+  scheduleVisibleTurnTimelines();
+  clearTimeout(timelineScrollIntentTimer);
+  timelineScrollIntentTimer = setTimeout(() => {
+    timelineScrollIntent = false;
+  }, 250);
+}
+
+function loadVisibleTurnTimelines() {
+  const viewport = scrollElement.value;
+  const timeline = timelineElement.value;
+  if (!props.session || !viewport || !timeline) return;
+  const viewportBounds = viewport.getBoundingClientRect();
+  for (const element of timeline.querySelectorAll<HTMLElement>(".ai-session-timeline-turn[data-index]")) {
+    const bounds = element.getBoundingClientRect();
+    if (bounds.bottom <= viewportBounds.top || bounds.top >= viewportBounds.bottom) continue;
+    const index = Number(element.dataset.index);
+    if (!Number.isInteger(index)) continue;
+    const turn = turns.value[index];
+    if (!turn || (turn.timelineStatus !== "idle" && turn.timelineStatus !== "stale")) continue;
+    emit("loadTurnTimeline", turn.id);
+  }
+}
+
+function scheduleVisibleTurnTimelines() {
+  cancelAnimationFrame(visibleTimelineFrame);
+  visibleTimelineFrame = requestAnimationFrame(() => requestAnimationFrame(loadVisibleTurnTimelines));
 }
 
 function updateStickyUserMessage(messageId: string) {
@@ -296,15 +368,6 @@ function measureVirtualTurn(element: unknown) {
   // is patched but before paint, so commit the first real size here while still
   // keeping measureElement registered for subsequent content changes.
   turnVirtualizer.value.resizeItem(index, Math.ceil(element.getBoundingClientRect().height));
-}
-
-function loadVisibleTurnTimelines() {
-  if (!props.session) return;
-  for (const virtualTurn of virtualTurns.value) {
-    const turn = turns.value[virtualTurn.index];
-    if (!turn || (turn.timelineStatus !== "idle" && turn.timelineStatus !== "stale")) continue;
-    emit("loadTurnTimeline", turn.id);
-  }
 }
 
 function commitVirtualTurnLayout(index: number, element: HTMLElement) {
@@ -377,28 +440,26 @@ function continueFromTurn(turnId: string) {
 onMounted(() => {
   void nextTick(() => {
     syncScrollElement();
-    loadVisibleTurnTimelines();
   });
   window.addEventListener("resize", syncScrollElement);
 });
 onBeforeUnmount(() => {
   clearTimeout(copiedTurnTimer);
+  clearTimeout(timelineScrollIntentTimer);
   cancelAnimationFrame(stickyUserMessageFrame);
-  scrollElement.value?.removeEventListener("scroll", scheduleStickyUserMessageUpdate);
+  cancelAnimationFrame(visibleTimelineFrame);
+  detachViewportListeners(scrollElement.value);
   updateStickyUserMessage("");
   window.removeEventListener("resize", syncScrollElement);
 });
-watch(() => props.turnTimelines, () => void nextTick(() => {
-  scheduleStickyUserMessageUpdate();
-  loadVisibleTurnTimelines();
-}), { flush: "post" });
-watch(virtualTurns, () => void nextTick(() => {
-  scheduleStickyUserMessageUpdate();
-  loadVisibleTurnTimelines();
-}), { flush: "post" });
-watch(() => sourceTurns.value.map((turn) => `${turn.id}:${turn.status}`).join("|"), () => {
-  void nextTick(loadVisibleTurnTimelines);
+watch(() => props.turnTimelines, () => void nextTick(scheduleStickyUserMessageUpdate), { flush: "post" });
+watch(() => props.turnBodiesReady, (ready) => {
+  if (ready) return;
+  timelineScrollIntent = false;
+  clearTimeout(timelineScrollIntentTimer);
+  cancelAnimationFrame(visibleTimelineFrame);
 });
+watch(virtualTurns, () => void nextTick(scheduleStickyUserMessageUpdate), { flush: "post" });
 watch(virtualTotalSize, () => void nextTick(() => emit("layoutCommitted")), { flush: "post" });
 watch(() => turns.value.length, () => void nextTick(syncScrollElement));
 </script>

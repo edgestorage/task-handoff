@@ -16,7 +16,7 @@ import { RelayTtySnapshotEnvelopeSchema } from "@task-handoff/cloud-contracts";
 import { CONTROL_PLANE_PROTOCOL_VERSION, ControlPlaneHealthResponseSchema, ImagePullTerminalEventType, NodeStateProjectionEventSchema, type BuildInfo, type Node } from "@task-handoff/protocol/control-plane";
 import { packageVersionResolver } from "@task-handoff/core/core/package-version";
 import { DEFAULT_MAINTENANCE_INTERVAL_MS } from "@task-handoff/core/storage/retention";
-import { SESSION_STREAM_PROTOCOL_VERSION, SessionStreamsHelloEventType, aiSessionTransientSubscriptionAccepts, type AiSessionTransientSubscription } from "@task-handoff/protocol/events";
+import { SESSION_STREAM_PROTOCOL_VERSION, SessionStreamsHelloEventType, aiSessionTransientSubscriptionAccepts, type AiSessionTransientSubscription, type EventEnvelope } from "@task-handoff/protocol/events";
 import { CONTROL_PLANE_SESSION_COOKIE, ControlPlaneAuth, type ControlPlaneAuthOptions } from "../auth/service.ts";
 import { ControlPlaneService, type ControlPlaneServiceOptions } from "../application/service.ts";
 import { ControlPlaneChatGatewayRuntime } from "../chat/gateway/runtime.ts";
@@ -435,7 +435,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
         return { status: response.statusCode, body };
       } finally { cloudRelayActors.delete(token); }
     },
-    subscribe(actor: ControlPlaneActor, topics: string[], listener: (event: unknown) => void, aiSessionTransient?: AiSessionTransientSubscription) {
+    subscribe(actor: ControlPlaneActor, topics: string[], listener: (event: EventEnvelope) => void, aiSessionTransient?: AiSessionTransientSubscription) {
       if (actor.type !== "cloud-account") throw Object.assign(new Error("Cloud account actor required."), { code: "CLOUD_ACTOR_REQUIRED" });
       // The relay decoder supplies ["*"] when the legacy field is absent.
       // An explicit empty list means the last consumer has unsubscribed.
@@ -527,6 +527,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   const nodeAgentTunnel = new ControlPlaneNodeAgentTunnelTransport(events, {
     connectionRuntime: nodeConnectionRuntime,
     validateInstanceScope: (nodeId, instanceId) => service.nodeOwnsInstance(nodeId, instanceId),
+    onInstanceLifecycle: (nodeId, lifecycle) => service.applyInstanceLifecycle(nodeId, lifecycle),
     onStreamsHello: (instanceId, hello) => {
       for (const descriptor of hello.streams) {
         if (descriptor.topic === "ai.sessions") aiSessionAggregator.advertiseStream(instanceId, descriptor);

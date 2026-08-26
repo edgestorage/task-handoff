@@ -29,13 +29,17 @@ import {
   AiSessionOpenAppInputSchema,
   AiSessionOpenAppResultSchema,
   AiSessionQueueEditInputSchema,
+  AiSessionQueueMutationResponseSchema,
   AiSessionQueueReorderInputSchema,
   AiSessionReferenceSchema,
   AiSessionRealtimeInputSchema,
   AiSessionStatusSchema,
   AiSessionDetailSchema,
+  AiSessionDetailReadSchema,
   AiSessionTurnBodySchema,
+  AiSessionTurnBodyReadSchema,
   AiSessionTurnIndexSchema,
+  AiSessionTurnIndexReadSchema,
   AiSessionSummarySchema,
   AiSessionResumeResultSchema,
   AiSessionSubAgentSchema,
@@ -56,6 +60,7 @@ import {
   SESSION_STREAM_PROTOCOL_VERSION,
   SessionStreamsHelloSchema,
   COMPACT_EVENT_ENVELOPE_VERSION,
+  EventWireEnvelopeSchema,
   normalizeEventEnvelope,
   projectEventEnvelope,
 } from "../src/events.ts";
@@ -97,6 +102,17 @@ test("AI session detail, Turn index, and Turn body are independent strict wire m
   const { bodyRevision: _bodyRevision, ...turn } = indexTurn;
   const body = AiSessionTurnBodySchema.parse({ sessionId: detail.id, revision: indexTurn.bodyRevision, turn: { ...turn, lastMessage: "complete response" } });
   assert.equal(body.turn.lastMessage, "complete response");
+
+  assert.deepEqual(AiSessionDetailReadSchema.parse({ kind: "not-modified", revision: "detail-v1" }), { kind: "not-modified", revision: "detail-v1" });
+  assert.deepEqual(AiSessionTurnIndexReadSchema.parse({ kind: "updated", revision: index.revision, index }).index, index);
+  assert.deepEqual(AiSessionTurnBodyReadSchema.parse({ kind: "updated", revision: body.revision, body }).body, body);
+  assert.equal(AiSessionDetailReadSchema.safeParse({ kind: "not-modified", revision: "detail-v1", detail }).success, false);
+});
+
+test("AI session queue mutations return a minimal revision acknowledgement", () => {
+  const receipt = { sessionId: "session-a", queueRevision: 3, action: "edit", queueId: "queue-a" };
+  assert.deepEqual(AiSessionQueueMutationResponseSchema.parse(receipt), receipt);
+  assert.equal(AiSessionQueueMutationResponseSchema.safeParse({ ...receipt, session: { id: "session-a" } }).success, false);
 });
 
 test("AI session HTTP action acknowledgement omits the full session and normalizes v0.0.23", () => {
@@ -277,6 +293,10 @@ test("AI session tool activity schemas default and project the window count", ()
   assert.equal(AiSessionSummarySchema.parse(summary).toolCallsSinceLastMessage, 0);
   assert.equal(AiSessionSummarySchema.parse(summary).detailRevision, undefined);
   assert.equal(AiSessionSummarySchema.parse({ ...summary, detailRevision: "detail-v2" }).detailRevision, "detail-v2");
+  assert.deepEqual(AiSessionSummarySchema.parse({
+    ...summary,
+    latestTurnRef: { id: "turn-1", bodyRevision: "body-v2" },
+  }).latestTurnRef, { id: "turn-1", bodyRevision: "body-v2" });
 
   const projected = AiSessionSummarySchema.parse({ ...summary,
     currentTool: { id: "item-1", kind: "commandExecution", name: "Command", inputPreview: "pnpm test" },
@@ -597,6 +617,40 @@ test("compact event projection removes only connection-derived message delta fie
     generatedAt: now,
   });
   assert.equal(projectEventEnvelope(event, 1), event);
+});
+
+test("event wire envelopes require declared fields while allowing additive fields", () => {
+  const compact = {
+    v: COMPACT_EVENT_ENVELOPE_VERSION,
+    id: "event-a",
+    type: "instance.updated",
+    createdAt: now,
+    payload: {},
+    futureField: true,
+  };
+  assert.equal(EventWireEnvelopeSchema.safeParse(compact).success, true);
+  for (const field of ["id", "type", "createdAt", "payload"]) {
+    const malformed = { ...compact };
+    delete malformed[field];
+    assert.equal(EventWireEnvelopeSchema.safeParse(malformed).success, false, `missing compact ${field}`);
+  }
+  assert.equal(EventWireEnvelopeSchema.safeParse({
+    v: 1,
+    id: "event-b",
+    seq: 1,
+    type: "instance.updated",
+    topic: "instances",
+    createdAt: now,
+    payload: {},
+  }).success, true);
+  assert.equal(EventWireEnvelopeSchema.safeParse({
+    v: 1,
+    id: "event-b",
+    type: "instance.updated",
+    topic: "instances",
+    createdAt: now,
+    payload: {},
+  }).success, false);
 });
 
 test("AI transient subscriptions separate list deltas from session detail timeline demand", () => {

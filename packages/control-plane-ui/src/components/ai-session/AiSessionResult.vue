@@ -11,11 +11,13 @@
     <div ref="turnContentElement" class="ai-session-result-content">
       <AiSessionTurnHistory
         :nodes="activityHistory"
-        :loading="!active && (activityHistoryStatus === 'idle' || activityHistoryStatus === 'loading' || activityHistoryStatus === 'stale')"
+        :loading="!active && activityHistoryStatus === 'loading'"
+        :loadable="!active && (activityHistoryStatus === 'idle' || activityHistoryStatus === 'stale')"
         :error="activityHistoryError"
         :started-at="turnStartedAt"
         :ended-at="turnEndedAt"
         :active="active"
+        @load="$emit('loadActivityHistory')"
         @retry="$emit('retryActivityHistory')"
       />
 
@@ -199,6 +201,7 @@ const emit = defineEmits<{
   steerQueuedMessage: [queueId: string];
   layoutWillChange: [element: HTMLElement];
   layoutCommitted: [element: HTMLElement];
+  loadActivityHistory: [];
   retryActivityHistory: [];
 }>();
 
