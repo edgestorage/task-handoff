@@ -46,6 +46,7 @@ const {
   reduceAiSessionRealtime,
   reduceAiSessionSnapshot,
 } = require("../packages/ai-session-runtime/src/ai-session/state-reducer.ts");
+const { normalizeTurns } = require("../packages/ai-session-runtime/src/ai-session-turns.ts");
 const {
   CodexToolActivityTracker,
   CodexSubAgentTracker,
@@ -63,7 +64,7 @@ const { CodexTimelineStore } = require("../packages/ai-session-runtime/src/codex
 const { CodexAppServerConnectionManager } = require("../packages/ai-session-runtime/src/codex-app-server/client/connection-manager.ts");
 const { CodexAppServerSessionDiscovery } = require("../packages/ai-session-runtime/src/codex-app-server/session/discovery.ts");
 const { ClaudeControlSockSessionBridge } = require("../packages/ai-session-runtime/src/claude-control-sock.ts");
-const { AiSessionEventType, AiSessionSummarySchema } = require("../packages/protocol/src/ai-sessions.ts");
+const { AiSessionActionResultSchema, AiSessionEventType, AiSessionSummarySchema } = require("../packages/protocol/src/ai-sessions.ts");
 const { APP_SESSION_DELTA_RETENTION_MS } = require("../packages/protocol/src/app-sessions.ts");
 const { summarizeTranscriptLine } = require("../packages/core/src/core/transcript.ts");
 const { summarizeThreadTurns } = require("../packages/ai-session-runtime/src/codex-app-server-protocol.ts");
@@ -1535,6 +1536,7 @@ test("ai session aggregate snapshots separate turns from list summaries", () => 
   assert.equal(firstSummary.turnCount, 3);
   assert.equal(typeof firstSummary.detailRevision, "string");
   assert.equal(typeof firstSummary.turnsRevision, "string");
+  assert.equal(firstSummary.latestTurnRef?.id, "turn_3");
 
   registry.applyAdapterSnapshot({
     agent: "codex",
@@ -1547,8 +1549,10 @@ test("ai session aggregate snapshots separate turns from list summaries", () => 
     observedAt: "2026-08-21T14:00:04.000Z",
     replaceActivity: true,
   });
-  assert.equal(registry.snapshot().sessions[0].detailRevision, firstSummary.detailRevision);
-  assert.notEqual(registry.snapshot().sessions[0].turnsRevision, firstSummary.turnsRevision);
+  const updatedSummary = registry.snapshot().sessions[0];
+  assert.equal(updatedSummary.detailRevision, firstSummary.detailRevision);
+  assert.equal(updatedSummary.turnsRevision, firstSummary.turnsRevision);
+  assert.notEqual(updatedSummary.latestTurnRef?.bodyRevision, firstSummary.latestTurnRef?.bodyRevision);
 });
 
 test("ai session list payload stays bounded as turn history grows", () => {
@@ -1935,6 +1939,121 @@ test("ai session controller can steer queued messages into active turns", async 
   assert.equal(result.queueId, queued.item.id);
   assert.deepEqual(calls, [["steer", session.id, "queued follow up"]]);
   assert.deepEqual(registry.get(session.id).queue.items, []);
+});
+
+test("AI session queued image attachments are projected before steer and automatic dequeue", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-queue-attachment-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const controller = new AiSessionController(registry);
+  const dispatchedAttachments = [];
+  const image = {
+    id: "image-1",
+    kind: "image",
+    name: "capture.png",
+    mime: "image/png",
+    size: 3,
+    source: { type: "inline", encoding: "base64", data: "cG5n" },
+  };
+  controller.register({
+    agent: "codex",
+    async startMessage(current, input) {
+      dispatchedAttachments.push(input.userMessageAttachments);
+      return AiSessionActionResultSchema.parse({
+        session: {
+          ...current,
+          turns: [{
+            id: "turn-next",
+            status: "running",
+            phase: "thinking",
+            revision: 1,
+            startedAt: current.updatedAt,
+            updatedAt: current.updatedAt,
+            userMessages: [{ id: input.messageId || "message-next", text: input.message, attachments: input.userMessageAttachments }],
+          }],
+        },
+        provider: "codex",
+        action: "send",
+        turnId: "turn-next",
+      });
+    },
+    async steerMessage(current, input) {
+      dispatchedAttachments.push(input.userMessageAttachments);
+      const turnId = current.activeTurnId || "turn-running";
+      return AiSessionActionResultSchema.parse({
+        session: {
+          ...current,
+          turns: [{
+            id: turnId,
+            status: "running",
+            phase: "thinking",
+            revision: 1,
+            startedAt: current.updatedAt,
+            updatedAt: current.updatedAt,
+            userMessages: [{ id: input.messageId || "message-steer", text: input.message, attachments: input.userMessageAttachments }],
+          }],
+        },
+        provider: "codex",
+        action: "steer",
+        turnId,
+      });
+    },
+    async interrupt(current) {
+      return { session: current, provider: "codex", action: "interrupt" };
+    },
+  });
+
+  const steering = registry.start({ agent: "codex", activeTurnId: "turn-running", status: "running", phase: "thinking" });
+  const queuedSteer = registry.enqueueMessage(steering.id, "Look at this", [image]);
+  const steerResult = await controller.steerQueuedMessage(steering.id, queuedSteer.item.id);
+  assert.doesNotThrow(() => AiSessionActionResultSchema.parse(steerResult));
+  assert.deepEqual(dispatchedAttachments[0], [{
+    id: image.id,
+    kind: image.kind,
+    name: image.name,
+    mime: image.mime,
+    size: image.size,
+    contentState: "available",
+  }]);
+
+  const automatic = registry.start({ agent: "codex", activeTurnId: "turn-busy", status: "running", phase: "thinking" });
+  registry.enqueueMessage(automatic.id, "Then this", [image]);
+  registry.complete(automatic.id, "Done");
+  const automaticResult = await controller.sendNextQueuedMessage(automatic.id);
+  assert.doesNotThrow(() => AiSessionActionResultSchema.parse(automaticResult));
+  assert.equal("sourceType" in dispatchedAttachments[1][0], false);
+});
+
+test("AI session Turn normalization removes internal attachment fields", () => {
+  const turns = normalizeTurns([{
+    id: "turn-polluted",
+    status: "running",
+    phase: "thinking",
+    revision: 1,
+    startedAt: "2026-08-26T00:00:00.000Z",
+    updatedAt: "2026-08-26T00:00:00.000Z",
+    userMessages: [{
+      id: "message-polluted",
+      text: "Look at this",
+      attachments: [{
+        id: "image-polluted",
+        kind: "image",
+        name: "capture.png",
+        mime: "image/png",
+        size: 3,
+        sourceType: "inline",
+        contentState: "available",
+      }],
+    }],
+  }]);
+
+  assert.deepEqual(turns[0].userMessages[0].attachments, [{
+    id: "image-polluted",
+    kind: "image",
+    name: "capture.png",
+    mime: "image/png",
+    size: 3,
+    contentState: "available",
+  }]);
 });
 
 test("AI session queue edits and reorders use an exact revisioned queued-message permutation", () => {
@@ -6192,7 +6311,25 @@ test("web app ai session read routes do not refresh discovery state", async () =
 
     const detail = await app.inject({ method: "GET", url: "/api/ai-sessions/ais_existing" });
     assert.equal(detail.statusCode, 200);
-    assert.equal(JSON.parse(detail.payload).data.providerSessionId, "thread_existing");
+    const detailRead = JSON.parse(detail.payload).data;
+    assert.equal(detailRead.kind, "updated");
+    assert.equal(detailRead.detail.id, "ais_existing");
+    const unchangedDetail = await app.inject({ method: "GET", url: `/api/ai-sessions/ais_existing?revision=${encodeURIComponent(detailRead.revision)}` });
+    assert.deepEqual(JSON.parse(unchangedDetail.payload).data, { kind: "not-modified", revision: detailRead.revision });
+
+    const index = await app.inject({ method: "GET", url: "/api/ai-sessions/ais_existing/turns?projection=index" });
+    const indexRead = JSON.parse(index.payload).data;
+    assert.equal(indexRead.kind, "updated");
+    assert.deepEqual(indexRead.index.turns.map((turn) => turn.id), ["turn_existing"]);
+    const unchangedIndex = await app.inject({ method: "GET", url: `/api/ai-sessions/ais_existing/turns?projection=index&revision=${encodeURIComponent(indexRead.revision)}` });
+    assert.deepEqual(JSON.parse(unchangedIndex.payload).data, { kind: "not-modified", revision: indexRead.revision });
+
+    const body = await app.inject({ method: "GET", url: "/api/ai-sessions/ais_existing/turns/turn_existing" });
+    const bodyRead = JSON.parse(body.payload).data;
+    assert.equal(bodyRead.kind, "updated");
+    assert.equal(bodyRead.body.turn.userPrompt, "existing prompt");
+    const unchangedBody = await app.inject({ method: "GET", url: `/api/ai-sessions/ais_existing/turns/turn_existing?revision=${encodeURIComponent(bodyRead.revision)}` });
+    assert.deepEqual(JSON.parse(unchangedBody.payload).data, { kind: "not-modified", revision: bodyRead.revision });
 
     const unsafeDetail = await app.inject({ method: "GET", url: "/api/ai-sessions/parent%5Csession" });
     assert.equal(unsafeDetail.statusCode, 404);
@@ -6322,13 +6459,11 @@ test("controlled instance publishes provider changes immediately and ignores ext
     await app.ready();
     const appSessionId = "app_discovery";
     const initial = JSON.parse((await app.inject({ method: "GET", url: "/api/ai-sessions/state" })).payload).data;
-    const providerStartedAt = Date.now();
     const providerSession = registry.start({ agent: "codex", appSessionId, providerSessionId: "provider_immediate", status: "idle" });
     const providerState = await waitForCondition(async () => {
       const state = JSON.parse((await app.inject({ method: "GET", url: "/api/ai-sessions/state" })).payload).data;
       return state.revision > initial.revision ? state : undefined;
     }, "provider event projection", 500);
-    assert.ok(Date.now() - providerStartedAt < 500);
     assert.equal(providerState.snapshot.sessions.some((session) => session.providerSessionId === "provider_immediate"), true);
 
     registry.applyRealtimeEvent(providerSession.id, {

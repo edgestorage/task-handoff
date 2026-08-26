@@ -49,6 +49,7 @@ describe('MobileAiSessionStore identity isolation', () => {
     compact.instances[0].aiSessions.sessions[0] = {
       ...summary,
       detailRevision: 'detail-1',
+      turnsRevision: 'turns-1',
       turnCount: 1,
       subAgentCount: 1,
       queue: { revision: 2, pendingCount: 1, items: [] },
@@ -76,7 +77,7 @@ describe('MobileAiSessionStore identity isolation', () => {
     });
 
     const compactSummary = compact.instances[0].aiSessions.sessions[0];
-    store.setSessionDetail('cp-detail', 'instance-detail', compactSummary, AiSessionDetailSchema.parse({
+    store.setSessionDetail('cp-detail', 'instance-detail', compactSummary.detailRevision!, AiSessionDetailSchema.parse({
       id: detail.id,
       appBindingKeys: detail.appBindingKeys,
       cwd: detail.cwd,
@@ -85,7 +86,7 @@ describe('MobileAiSessionStore identity isolation', () => {
       queue: detail.queue,
       subAgents: detail.subAgents,
     }));
-    store.setSessionTurnIndex('cp-detail', 'instance-detail', compactSummary, AiSessionTurnIndexSchema.parse({
+    store.setSessionTurnIndex('cp-detail', 'instance-detail', compactSummary.turnsRevision!, AiSessionTurnIndexSchema.parse({
       sessionId: detail.id,
       revision: compactSummary.turnsRevision || 'turns-1',
       turns: detail.turns?.map((turn) => ({
@@ -372,6 +373,20 @@ describe('MobileAiSessionStore identity isolation', () => {
       },
     })).toBe(true);
     expect(Object.values(store.profile('cp-a').messages)[0]?.receivedText).toBe('hello');
+
+    expect(controller.applyEvent({
+      type: AiSessionEventType.MessageDelta,
+      topic: 'ai.sessions',
+      scope: { instanceId: 'instance-1' },
+      payload: {
+        sessionId: 'session-1',
+        turnId: 'turn-1',
+        itemId: 'item-2',
+        delta: 'compact',
+        generatedAt: updatedAt,
+      },
+    })).toBe(true);
+    expect(Object.values(store.profile('cp-a').messages).some((message) => message.receivedText === 'compact')).toBe(true);
 
     expect(controller.applyEvent({
       type: AiSessionEventType.TimelineItem,

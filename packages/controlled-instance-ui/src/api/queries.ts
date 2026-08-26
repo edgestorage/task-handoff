@@ -130,11 +130,11 @@ export function steerAiSessionQueuedMessage(id: string, queueId: string) {
 }
 
 export function retryAiSessionQueuedMessage(id: string, queueId: string) {
-  return postApiData<AiSessionStatus>(`ai-sessions/${id}/queue/${queueId}/retry`);
+  return postApiData<{ sessionId: string; queueRevision: number; action: "retry"; queueId: string }>(`ai-sessions/${id}/queue/${queueId}/retry`);
 }
 
 export function removeAiSessionQueuedMessage(id: string, queueId: string) {
-  return deleteApiData<AiSessionStatus>(`ai-sessions/${id}/queue/${queueId}`);
+  return deleteApiData<{ sessionId: string; queueRevision: number; action: "remove"; queueId: string }>(`ai-sessions/${id}/queue/${queueId}`);
 }
 
 export function resolveAiSessionApproval(id: string, decision: "allow" | "deny" | "skip") {

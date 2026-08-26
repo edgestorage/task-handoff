@@ -46,7 +46,7 @@ test("AI session titles fall back to the authoritative latest user prompt when t
   };
 
   assert.equal(displayAiSessionTitle(session, undefined, chinese), raw);
-  assert.equal(displayAiSessionTitle(session, 0, chinese), "-");
+  assert.equal(displayAiSessionTitle(session, 0, chinese), "");
 });
 
 test("raw tool names and previews are appended outside localized presentation", () => {

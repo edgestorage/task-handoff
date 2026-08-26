@@ -26,7 +26,7 @@ test("AI Session detail does not render the list summary projection as conversat
   assert.match(conversation, /ai-session-conversation-detail-reveal 120ms ease 250ms forwards/);
   assert.match(conversation, /prefers-reduced-motion: reduce/);
   assert.doesNotMatch(conversation, /translate(?:3d|X|Y)?\(/);
-  assert.match(panel, /:detail-state="selectedSessionDetailState"/);
+  assert.match(panel, /:detail-state="selectedSessionContentState"/);
   assert.match(panel, /@transitioning-change="setDetailConversationTransitioning"/);
   assert.match(panel, /detailScrollLayoutPending \|\| detailConversationTransitioning\.value/);
   assert.match(panel, /effectiveTimelineViewMode === 'compact' && detailScrolled && !detailConversationTransitioning/);
@@ -36,11 +36,16 @@ test("AI Session detail does not render the list summary projection as conversat
   assert.match(panel, /<Transition name="session-ai-prompt-fade" appear>/);
   assert.match(panel, /:key="selectedSession\.id" ref="detailPromptSectionEl"/);
   assert.match(panelCss, /\.session-ai-prompt-fade-enter-active,[\s\S]*?\.session-ai-prompt-fade-leave-active[\s\S]*?transition: opacity 180ms ease/);
-  assert.match(board, /:detail-state="selectedCardSessionDetailState"/);
-  assert.match(projection, /const hadRenderableContent = conversations\.hasProjection\(instanceId, summary\.id\)/);
+  assert.match(board, /:detail-state="selectedCardContentState"/);
+  assert.match(projection, /const hadRenderableContent = conversations\.hasRenderableProjection\(instanceId, summary\.id\)/);
   assert.match(projection, /if \(!hadRenderableContent\) state\.value = "loading"/);
+  assert.match(projection, /if \(next\[1\] !== previous\[1\]\) void refresh\(\{ detail: true \}\)/);
+  assert.match(projection, /if \(next\[2\] !== previous\[2\]\) void refresh\(\{ index: true \}\)/);
   assert.match(dock, /:detail-state="detailState"/);
-  assert.match(projection, /toValue\(options\.summary\)\?\.detailRevision, toValue\(options\.summary\)\?\.turnsRevision/);
+  assert.match(projection, /summary\?\.detailRevision, summary\?\.turnsRevision, summary\?\.latestTurnRef\?\.id/);
+  assert.match(projection, /hasRenderableTurn\(instanceId, summary\.id, turnId\)/);
+  assert.match(panel, /hasRenderableSelectedSessionTurn\(turn\.id\) \? "ready" : "loading"/);
+  assert.match(board, /hasRenderableSelectedCardTurn\(turn\.id\) \? "ready" : "loading"/);
   for (const source of [panel, board]) assert.match(source, /useAiSessionConversationProjection/);
 });
 
@@ -56,5 +61,6 @@ test("both AI Session detail surfaces expose failed detail recovery", () => {
   assert.match(conversation, /\$emit\('retryDetail'\)/);
   assert.match(panel, /@retry-detail="loadSelectedSessionDetail"/);
   assert.match(board, /@retry-detail="loadSelectedCardSessionDetail"/);
-  assert.match(projection, /state\.value = "error"/);
+  assert.match(projection, /state\.value = renderable \? "ready" : "error"/);
+  assert.match(projection, /scheduleRetry\(\)/);
 });

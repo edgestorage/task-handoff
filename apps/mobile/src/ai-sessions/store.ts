@@ -9,6 +9,7 @@ import {
   applyAiSessionUnreadState,
   applyControlPlaneAiSessionStreamEvent,
   AiSessionConversationCache,
+  aiSessionTurnsCacheRevision,
 } from '@task-handoff/control-plane-client';
 import {
   mergeAiSessionTimelineItems,
@@ -173,33 +174,51 @@ export class MobileAiSessionStore {
     return this.conversations.hasTurnIndex(mobileConversationInstanceKey(controlPlaneId, instanceId), summary);
   }
 
+  sessionDetailRevision(controlPlaneId: string, instanceId: string, sessionId: string) {
+    return this.conversations.detailRevision(mobileConversationInstanceKey(controlPlaneId, instanceId), sessionId);
+  }
+
+  sessionTurnsRevision(controlPlaneId: string, instanceId: string, sessionId: string) {
+    return this.conversations.turnsRevision(mobileConversationInstanceKey(controlPlaneId, instanceId), sessionId);
+  }
+
   sessionTurnIndex(controlPlaneId: string, instanceId: string, sessionId: string) {
-    return this.conversations.turnIndex(mobileConversationInstanceKey(controlPlaneId, instanceId), sessionId);
+    const summary = this.sessionSummary(controlPlaneId, instanceId, sessionId);
+    return this.conversations.turnIndex(
+      mobileConversationInstanceKey(controlPlaneId, instanceId),
+      sessionId,
+      summary ? aiSessionTurnsCacheRevision(summary) : undefined,
+    );
   }
 
   neededSessionTurn(controlPlaneId: string, instanceId: string, sessionId: string, turnId: string) {
     return this.conversations.needsTurn(mobileConversationInstanceKey(controlPlaneId, instanceId), sessionId, turnId);
   }
 
-  setSessionDetail(controlPlaneId: string, instanceId: string, summary: ControlPlaneAiSessionSummary, detail: AiSessionDetail) {
+  sessionTurnRevision(controlPlaneId: string, instanceId: string, sessionId: string, turnId: string) {
+    return this.conversations.turnRevision(mobileConversationInstanceKey(controlPlaneId, instanceId), sessionId, turnId);
+  }
+
+  setSessionDetail(controlPlaneId: string, instanceId: string, revision: string, detail: AiSessionDetail) {
     const key = mobileSessionSubscriptionKey(controlPlaneId, instanceId, detail.id);
-    this.conversations.setDetail(mobileConversationInstanceKey(controlPlaneId, instanceId), summary, detail);
+    this.conversations.setDetail(mobileConversationInstanceKey(controlPlaneId, instanceId), revision, detail);
     this.sessionViewCache.delete(key);
     for (const listener of this.sessionListeners.get(key) ?? []) listener();
   }
 
-  setSessionTurnIndex(controlPlaneId: string, instanceId: string, summary: ControlPlaneAiSessionSummary, index: AiSessionTurnIndex) {
-    const key = mobileSessionSubscriptionKey(controlPlaneId, instanceId, summary.id);
-    this.conversations.setTurnIndex(mobileConversationInstanceKey(controlPlaneId, instanceId), summary, index);
+  setSessionTurnIndex(controlPlaneId: string, instanceId: string, revision: string, index: AiSessionTurnIndex) {
+    const key = mobileSessionSubscriptionKey(controlPlaneId, instanceId, index.sessionId);
+    this.conversations.setTurnIndex(mobileConversationInstanceKey(controlPlaneId, instanceId), revision, index);
     this.sessionViewCache.delete(key);
     for (const listener of this.sessionListeners.get(key) ?? []) listener();
   }
 
-  setSessionTurn(controlPlaneId: string, instanceId: string, sessionId: string, revision: string, turn: AiSessionTurn) {
+  setSessionTurn(controlPlaneId: string, instanceId: string, sessionId: string, revision: string, turn: AiSessionTurn, authoritativeRevision?: string) {
     const key = mobileSessionSubscriptionKey(controlPlaneId, instanceId, sessionId);
-    this.conversations.setTurn(mobileConversationInstanceKey(controlPlaneId, instanceId), sessionId, revision, turn);
+    if (!this.conversations.setTurn(mobileConversationInstanceKey(controlPlaneId, instanceId), sessionId, revision, turn, authoritativeRevision)) return false;
     this.sessionViewCache.delete(key);
     for (const listener of this.sessionListeners.get(key) ?? []) listener();
+    return true;
   }
 
   clearSessionDetail(controlPlaneId: string, instanceId: string, sessionId: string) {

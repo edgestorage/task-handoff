@@ -434,6 +434,53 @@ test("a new turn does not keep the previous turn as the active streaming message
   assert.equal(current.value.receivedText, "new response");
 });
 
+test("a summary-only new-turn patch detaches the previous active message", () => {
+  const store = createStreamingMessagesStore();
+  const previous = identity({ turnId: "turn_previous", itemId: "item_previous" });
+  const previousEntry = store.appendDelta({ identity: previous, streamId: "stream_1", delta: "previous response" });
+  store.applySnapshot({
+    meta: meta({ generatedAt: "2026-07-18T00:00:01.000Z" }),
+    snapshot: {
+      runningCount: 0,
+      waitingCount: 0,
+      staleCount: 0,
+      updatedAt: "2026-07-18T00:00:01.000Z",
+      sessions: [session({
+        activeTurnId: undefined,
+        status: "idle",
+        lastMessage: "previous response",
+        lastMessageItemId: "item_previous",
+        turns: [{ id: "turn_previous", status: "completed", revision: 2, lastMessage: "previous response", lastMessageItemId: "item_previous" }],
+      })],
+    },
+  });
+
+  store.applyPatch({
+    meta: meta({ revision: 2, generatedAt: "2026-07-18T00:00:02.000Z" }),
+    upserted: [session({
+      activeTurnId: "turn_new",
+      status: "running",
+      phase: "thinking",
+      lastMessage: undefined,
+      lastMessageItemId: undefined,
+      turns: undefined,
+    })],
+    removed: [],
+  });
+
+  assert.equal(store.activeMessage("instance_1", "session_1").value, undefined);
+  assert.equal(store.message(previous), previousEntry);
+  assert.equal(previousEntry.value.receivedText, "previous response");
+
+  const current = store.appendDelta({
+    identity: identity({ turnId: "turn_new", itemId: "item_new" }),
+    streamId: "stream_1",
+    delta: "new response",
+  });
+  assert.equal(store.activeMessage("instance_1", "session_1").value, current);
+  assert.equal(current.value.receivedText, "new response");
+});
+
 test("multiple board-style message views rerender only for their subscribed session", () => {
   const store = createStreamingMessagesStore();
   const firstId = identity();

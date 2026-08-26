@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
+import { AiSessionConversationAttachmentSchema } from "@task-handoff/protocol/ai-sessions";
 import type {
   AiSessionPhase,
   AiSessionSnapshotInput,
@@ -94,7 +95,19 @@ function normalizeUserMessages(value: unknown) {
     const record = raw as Partial<AiSessionUserMessageDetail>;
     if (!record.id || typeof record.id !== "string" || typeof record.text !== "string") continue;
     const attachments = Array.isArray(record.attachments)
-      ? record.attachments.filter((attachment) => attachment && typeof attachment.id === "string").slice(0, 6)
+      ? record.attachments.flatMap((attachment) => {
+        if (!attachment || typeof attachment !== "object" || Array.isArray(attachment)) return [];
+        const candidate = attachment as Record<string, unknown>;
+        const parsed = AiSessionConversationAttachmentSchema.safeParse({
+          id: candidate.id,
+          kind: candidate.kind,
+          name: candidate.name,
+          mime: candidate.mime,
+          size: candidate.size,
+          ...(candidate.contentState !== undefined ? { contentState: candidate.contentState } : {}),
+        });
+        return parsed.success ? [parsed.data] : [];
+      }).slice(0, 6)
       : [];
     const message = { id: compact(record.id, 240), text: messageText(record.text), attachments };
     const existing = messages.get(message.id);

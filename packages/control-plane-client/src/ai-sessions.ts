@@ -24,10 +24,10 @@ import {
   AiSessionCommandResultSchema,
   AiSessionResumeResultSchema,
   AiSessionSummarySchema,
-  AiSessionStatusSchema,
-  AiSessionDetailSchema,
-  AiSessionTurnIndexSchema,
-  AiSessionTurnBodySchema,
+  AiSessionDetailReadSchema,
+  AiSessionTurnIndexReadSchema,
+  AiSessionTurnBodyReadSchema,
+  AiSessionQueueMutationResponseSchema,
   AiSessionUnreadStateSchema,
   AiSessionsSnapshotSchema,
   type AiSessionCreateRefInput,
@@ -104,14 +104,17 @@ export function createControlPlaneAiSessionsApi(transport: ControlPlaneClientTra
     historyDetail(instanceId: string, aiSessionId: string, signal?: AbortSignal) {
       return requestData(`/api/controlled-instances/${encodeURIComponent(instanceId)}/ai-sessions/history/${encodeURIComponent(aiSessionId)}`, AiSessionHistoryDetailSchema, { signal });
     },
-    detail(instanceId: string, aiSessionId: string, signal?: AbortSignal) {
-      return requestData(sessionRoute(instanceId, aiSessionId), AiSessionDetailSchema, { signal });
+    detail(instanceId: string, aiSessionId: string, revision?: string, signal?: AbortSignal) {
+      const query = revision ? `?revision=${encodeURIComponent(revision)}` : "";
+      return requestData(`${sessionRoute(instanceId, aiSessionId)}${query}`, AiSessionDetailReadSchema, { signal });
     },
-    turnIndex(instanceId: string, aiSessionId: string, signal?: AbortSignal) {
-      return requestData(`${sessionRoute(instanceId, aiSessionId)}/turns`, AiSessionTurnIndexSchema, { signal });
+    turnIndex(instanceId: string, aiSessionId: string, revision?: string, signal?: AbortSignal) {
+      const query = revision ? `?revision=${encodeURIComponent(revision)}` : "";
+      return requestData(`${sessionRoute(instanceId, aiSessionId)}/turns${query}`, AiSessionTurnIndexReadSchema, { signal });
     },
-    turnBody(instanceId: string, aiSessionId: string, turnId: string, signal?: AbortSignal) {
-      return requestData(`${sessionRoute(instanceId, aiSessionId)}/turns/${encodeURIComponent(turnId)}`, AiSessionTurnBodySchema, { signal });
+    turnBody(instanceId: string, aiSessionId: string, turnId: string, revision?: string, signal?: AbortSignal) {
+      const query = revision ? `?revision=${encodeURIComponent(revision)}` : "";
+      return requestData(`${sessionRoute(instanceId, aiSessionId)}/turns/${encodeURIComponent(turnId)}${query}`, AiSessionTurnBodyReadSchema, { signal });
     },
     timeline(instanceId: string, aiSessionId: string, signal?: AbortSignal) {
       return requestData(`${sessionRoute(instanceId, aiSessionId)}/timeline`, AiSessionTimelineSchema, { signal });
@@ -168,16 +171,16 @@ export function createControlPlaneAiSessionsApi(transport: ControlPlaneClientTra
       return requestData(`${sessionRoute(instanceId, sessionId)}/queue/${encodeURIComponent(queueId)}/steer`, AiSessionActionCompatibleResponseSchema, json("POST"));
     },
     retryQueue(instanceId: string, sessionId: string, queueId: string) {
-      return requestData(`${sessionRoute(instanceId, sessionId)}/queue/${encodeURIComponent(queueId)}/retry`, AiSessionStatusSchema, json("POST"));
+      return requestData(`${sessionRoute(instanceId, sessionId)}/queue/${encodeURIComponent(queueId)}/retry`, AiSessionQueueMutationResponseSchema, json("POST"));
     },
     removeQueue(instanceId: string, sessionId: string, queueId: string) {
-      return requestData(`${sessionRoute(instanceId, sessionId)}/queue/${encodeURIComponent(queueId)}`, AiSessionStatusSchema, { method: "DELETE" });
+      return requestData(`${sessionRoute(instanceId, sessionId)}/queue/${encodeURIComponent(queueId)}`, AiSessionQueueMutationResponseSchema, { method: "DELETE" });
     },
     editQueue(instanceId: string, sessionId: string, queueId: string, input: AiSessionQueueEditInput) {
-      return requestData(`${sessionRoute(instanceId, sessionId)}/queue/${encodeURIComponent(queueId)}`, AiSessionStatusSchema, json("PATCH", AiSessionQueueEditInputSchema.parse(input)));
+      return requestData(`${sessionRoute(instanceId, sessionId)}/queue/${encodeURIComponent(queueId)}`, AiSessionQueueMutationResponseSchema, json("PATCH", AiSessionQueueEditInputSchema.parse(input)));
     },
     reorderQueue(instanceId: string, sessionId: string, input: AiSessionQueueReorderInput) {
-      return requestData(`${sessionRoute(instanceId, sessionId)}/queue/reorder`, AiSessionStatusSchema, json("PATCH", AiSessionQueueReorderInputSchema.parse(input)));
+      return requestData(`${sessionRoute(instanceId, sessionId)}/queue/reorder`, AiSessionQueueMutationResponseSchema, json("PATCH", AiSessionQueueReorderInputSchema.parse(input)));
     },
     async uploadAttachment(input: { instanceId: string; sessionId: string; scopeType?: "session" | "create-request"; kind: "image" | "file"; name: string; mime: string; data: string }, onProgress?: (progress: number) => void) {
       onProgress?.(0);

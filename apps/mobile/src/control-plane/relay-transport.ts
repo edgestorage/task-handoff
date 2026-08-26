@@ -1,8 +1,8 @@
 import type { z } from 'zod';
 import { RelayTtySnapshotEnvelopeSchema, type OfficialMobileAccountClient as CloudMobileAccountClient } from '@task-handoff/cloud-contracts/mobile';
 import type { MobileCloudRelayControlPlaneProfile } from './profile';
-import type { AiSessionTransientSubscription } from '@task-handoff/protocol/events';
-import { MobileControlPlaneTransportError, type MobileAppSessionTtyConnection, type MobileAppSessionTtyHandlers, type MobileControlPlaneEventConnection, type MobileControlPlaneEventHandlers, type MobileControlPlaneTransport } from './transport';
+import { COMPACT_EVENT_ENVELOPE_VERSION, type AiSessionTransientSubscription } from '@task-handoff/protocol/events';
+import { MobileControlPlaneTransportError, normalizeMobileControlPlaneEvent, type MobileAppSessionTtyConnection, type MobileAppSessionTtyHandlers, type MobileControlPlaneEventConnection, type MobileControlPlaneEventHandlers, type MobileControlPlaneTransport } from './transport';
 
 type RelayEnvelope = { type: string; id?: string; status?: number; body?: unknown; event?: any; streamId?: string; data?: unknown; pendingEscape?: unknown; cols?: unknown; rows?: unknown; code?: number | null; signal?: string | null };
 export interface EncryptedRelayChannel { send(value: RelayEnvelope): void; close(code?: number, reason?: string): void; subscribe(listener: (value: RelayEnvelope) => void, onClose: (error?: unknown) => void): () => void; }
@@ -67,7 +67,7 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
       for (const topic of subscriber.topics) topics.add(topic);
     }
     const aiSessionTransient = wildcard ? undefined : aggregateTransientDemand(this.events, topics);
-    channel.send({ type: 'event-subscribe', body: { topics: wildcard ? undefined : [...topics].sort(), ...(aiSessionTransient ? { aiSessionTransient } : {}) } });
+    channel.send({ type: 'event-subscribe', body: { eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION, topics: wildcard ? undefined : [...topics].sort(), ...(aiSessionTransient ? { aiSessionTransient } : {}) } });
   }
 
   connectAppSessionTty(instanceId: string, sessionId: string, handlers: MobileAppSessionTtyHandlers): MobileAppSessionTtyConnection {
@@ -94,7 +94,12 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
 
   private receive(value: RelayEnvelope) {
     if (value.type === 'response' && value.id) { const pending = this.pending.get(value.id); if (!pending) return; this.pending.delete(value.id); pending.abort?.(); if ((value.status ?? 500) >= 400) pending.reject(new MobileControlPlaneTransportError('RELAY_CONTROL_PLANE_RESPONSE_FAILED', 'Control Plane request failed.', false, value.status)); else { const parsed = pending.schema.safeParse(value.body); if (parsed.success) pending.resolve(parsed.data); else pending.reject(transportError('RELAY_RESPONSE_SCHEMA_INVALID')); } return; }
-    if (value.type === 'event' && value.event) { for (const handlers of this.events) handlers.onEvent(value.event); return; }
+    if (value.type === 'event' && value.event) {
+      const event = normalizeMobileControlPlaneEvent(value.event);
+      if (!event) return this.reset(transportError('RELAY_EVENT_INVALID'));
+      for (const handlers of this.events) handlers.onEvent(event);
+      return;
+    }
     if (value.streamId && this.tty.has(value.streamId)) { const handlers = this.tty.get(value.streamId)!; if (value.type === 'tty-opened') handlers.onOpen(); else if (value.type === 'tty-snapshot') { const snapshot = RelayTtySnapshotEnvelopeSchema.safeParse(value); if (!snapshot.success) handlers.onError(transportError('RELAY_TTY_SNAPSHOT_INVALID')); else handlers.onSnapshot(snapshot.data.data, snapshot.data.pendingEscape, snapshot.data.cols, snapshot.data.rows); } else if (value.type === 'tty-output') handlers.onOutput(String(value.data ?? '')); else if (value.type === 'tty-resize') { const body = value.body as any; handlers.onResize(body.cols, body.rows); } else if (value.type === 'tty-exit') handlers.onExit(value.code, value.signal); else if (value.type === 'tty-error') handlers.onError(transportError('RELAY_TTY_FAILED')); else if (value.type === 'tty-closed') { handlers.onClose(); this.tty.delete(value.streamId); } }
   }
 

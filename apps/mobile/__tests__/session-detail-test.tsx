@@ -6,6 +6,7 @@ import { Animated, FlatList, Keyboard, PixelRatio, StyleSheet, Text } from 'reac
 import { Brain, CornerDownRight, FilePenLine, Minimize2, Pencil, RotateCcw, SquareTerminal, Trash2 } from 'lucide-react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ControlPlaneAiSessionSummarySchema, type ControlPlaneClient } from '@task-handoff/control-plane-client';
+import { AiSessionDetailSchema, AiSessionTurnIndexSchema } from '@task-handoff/protocol/ai-sessions';
 
 import { conversationDetailItems, detailItems, isSessionScrollNearBottom, processedDurationLabel, SessionDetail } from '../src/ai-sessions/SessionDetail';
 import { COMPOSER_BACKDROP_OPACITIES, composerBottomBackdropGeometry, moveQueueId, queueActionIcon, queueDragPreview, queueItemsWithQueuedOrder, queueListScrollEnabled, sessionKeyboardAvoidingBehavior, SessionWorkspace } from '../src/ai-sessions/SessionWorkspace';
@@ -350,6 +351,18 @@ test('terminal Turn without an authoritative completion timestamp shows a dash',
   }, undefined, Date.parse('2026-08-10T00:00:00.000Z'))).toBe('-');
 });
 
+test('terminal Turn duration stays fixed at its authoritative completion timestamp', () => {
+  const turn = {
+    id: 'turn-completed-with-time',
+    status: 'completed' as const,
+    startedAt: '2026-08-05T00:00:00.000Z',
+    updatedAt: '2026-08-05T00:01:00.000Z',
+    completedAt: '2026-08-05T00:01:00.000Z',
+  };
+  expect(processedDurationLabel(turn, undefined, Date.parse('2026-08-05T00:02:00.000Z'))).toBe('Processed in 1m 0s');
+  expect(processedDurationLabel(turn, undefined, Date.parse('2026-08-10T00:00:00.000Z'))).toBe('Processed in 1m 0s');
+});
+
 test('active Turn keeps elapsed time separate from recovered current activity', () => {
   const projected = detailItems(session, [], undefined, undefined, {
     'turn-1': {
@@ -409,6 +422,103 @@ test('detail navigates one authoritative turn and applies streaming only to late
   await screen.unmount();
 });
 
+test('compact workspace keeps the committed Turn visible and applies only the latest cold-cache selection', async () => {
+  const controlPlaneId = 'cp-atomic-turn';
+  const instanceId = 'instance-atomic-turn';
+  const compact = ControlPlaneAiSessionSummarySchema.parse({
+    ...session,
+    id: 'session-atomic-turn',
+    currentTool: undefined,
+    detailRevision: 'detail-1',
+    turnsRevision: 'turns-1',
+    turnCount: 3,
+    turns: undefined,
+    subAgents: [],
+  });
+  const indexedTurns = ['First', 'Second', 'Third'].map((name, index) => ({
+    id: `turn-${index + 1}`,
+    status: 'completed' as const,
+    phase: 'responding' as const,
+    revision: 1,
+    bodyRevision: `body-${index + 1}`,
+    startedAt: `2026-08-05T00:0${index}:00.000Z`,
+    updatedAt: `2026-08-05T00:0${index}:30.000Z`,
+  }));
+  const turnBodies = indexedTurns.map((turn, index) => ({
+    ...turn,
+    bodyRevision: undefined,
+    userPrompt: `${['First', 'Second', 'Third'][index]} prompt`,
+    lastMessage: `${['First', 'Second', 'Third'][index]} response`,
+  }));
+  mobileAiSessionStore.replaceSnapshot(controlPlaneId, {
+    updatedAt: compact.updatedAt,
+    instances: [{
+      instanceId,
+      streamId: 'stream-atomic-turn',
+      revision: 1,
+      aiSessions: { runningCount: 0, waitingCount: 0, staleCount: 0, updatedAt: compact.updatedAt, sessions: [compact] },
+    }],
+  });
+  mobileAiSessionStore.setSessionDetail(controlPlaneId, instanceId, compact.detailRevision!, AiSessionDetailSchema.parse({
+    id: compact.id,
+    queue: compact.queue,
+    subAgents: [],
+  }));
+  mobileAiSessionStore.setSessionTurnIndex(controlPlaneId, instanceId, compact.turnsRevision!, AiSessionTurnIndexSchema.parse({
+    sessionId: compact.id,
+    revision: compact.turnsRevision,
+    turns: indexedTurns,
+  }));
+  mobileAiSessionStore.setSessionTurn(controlPlaneId, instanceId, compact.id, 'body-3', turnBodies[2]);
+
+  let resolveFirst!: (value: unknown) => void;
+  let resolveSecond!: (value: unknown) => void;
+  const firstRead = new Promise((resolve) => { resolveFirst = resolve; });
+  const secondRead = new Promise((resolve) => { resolveSecond = resolve; });
+  const turnBody = jest.fn((_instanceId: string, _sessionId: string, turnId: string) => (
+    turnId === 'turn-1' ? firstRead : secondRead
+  ));
+  const client = { aiSessions: { turnBody } } as unknown as ControlPlaneClient;
+  function Harness() {
+    const [, rerender] = useReducer((value: number) => value + 1, 0);
+    useEffect(() => mobileAiSessionStore.subscribeSession(controlPlaneId, instanceId, compact.id, rerender), []);
+    const view = mobileAiSessionStore.sessionView(controlPlaneId, instanceId, compact.id);
+    return <SessionWorkspace client={client} controlPlaneId={controlPlaneId} instanceId={instanceId} messages={[]} session={view.session} />;
+  }
+  const screen = await render(<SafeAreaProvider initialMetrics={{ frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { top: 47, right: 0, bottom: 34, left: 0 } }}>
+    <Harness />
+  </SafeAreaProvider>);
+
+  screen.getByText('Third prompt');
+  screen.getByText('3 / 3');
+  await waitFor(() => expect(turnBody).toHaveBeenCalledWith(instanceId, compact.id, 'turn-2', undefined));
+  await fireEvent.press(screen.getByRole('button', { name: 'Previous turn' }));
+  await waitFor(() => expect(screen.getByTestId('session-turn-loading-indicator')).toBeTruthy());
+  expect(screen.getByTestId('session-turn-loading-overlay')).toBeTruthy();
+  expect(within(screen.getByTestId('session-turn-navigator')).queryByTestId('session-turn-loading-indicator')).toBeNull();
+  screen.getByText('Third prompt');
+  screen.getByText('3 / 3');
+
+  await fireEvent.press(screen.getByRole('button', { name: 'Previous turn' }));
+  await waitFor(() => expect(turnBody).toHaveBeenCalledWith(instanceId, compact.id, 'turn-1', undefined));
+  await act(async () => {
+    resolveSecond({ kind: 'updated', revision: 'body-2', body: { sessionId: compact.id, revision: 'body-2', turn: turnBodies[1] } });
+    await secondRead;
+  });
+  screen.getByText('Third prompt');
+  expect(screen.queryByText('Second prompt')).toBeNull();
+
+  await act(async () => {
+    resolveFirst({ kind: 'updated', revision: 'body-1', body: { sessionId: compact.id, revision: 'body-1', turn: turnBodies[0] } });
+    await firstRead;
+  });
+  await waitFor(() => screen.getByText('First prompt'));
+  screen.getByText('1 / 3');
+  expect(turnBody.mock.calls.filter((call) => call[2] === 'turn-2')).toHaveLength(1);
+  await screen.unmount();
+  mobileAiSessionStore.clearProfile(controlPlaneId);
+});
+
 test('timeline detail follows the Web three-part layout around the final AI response', async () => {
   const timelineSession = ControlPlaneAiSessionSummarySchema.parse({
     ...session,
@@ -441,7 +551,7 @@ test('timeline detail follows the Web three-part layout around the final AI resp
   expect(projectedWithoutCurrentItems.at(-1)).toEqual(expect.objectContaining({ role: 'current', history: [], interactive: true }));
 
   const screen = await render(<SessionDetail messages={[]} session={timelineSession} timelineEnabled timelines={timelines} />);
-  screen.getByText('-');
+  screen.getByText(/^Processed in /);
   screen.getByText('Final answer');
   await fireEvent.press(screen.getByRole('button', { name: 'Thinking…' }));
   await waitFor(() => screen.getByText('Running command'));
@@ -467,7 +577,7 @@ test('completed timeline exposes loading, failure retry, and empty history state
     status: 'idle',
     currentTool: undefined,
     subAgents: [],
-    turns: [{ ...session.turns![0], status: 'completed', lastMessage: 'Done' }],
+    turns: [{ ...session.turns![0], status: 'completed', completedAt: '2026-08-05T00:01:00.000Z', lastMessage: 'Done' }],
   });
   const retry = jest.fn();
   expect(detailItems(completed, [], 0, undefined, { 'turn-1': { status: 'loading', items: [] } }, true)).toEqual(expect.arrayContaining([
@@ -478,7 +588,18 @@ test('completed timeline exposes loading, failure retry, and empty history state
   ]));
   const loading = await render(<SessionDetail messages={[]} session={completed} timelineEnabled timelines={{ 'turn-1': { status: 'loading', items: [] } }} />);
   expect(loading.getByTestId('session-timeline-loading-indicator').props.animating).toBe(true);
-  loading.getByText(/Loading full activity/);
+  loading.getByText('Processed in 1m 0s · Loading full activity…');
+  await loading.rerender(<SessionDetail messages={[]} session={completed} timelineEnabled timelines={{
+    'turn-1': {
+      status: 'ready',
+      items: [
+        { id: 'activity', turnId: 'turn-1', type: 'activity', activityKind: 'commandExecution', title: 'Command', status: 'completed' },
+        { id: 'answer', turnId: 'turn-1', type: 'ai-message', text: 'Done' },
+      ],
+    },
+  }} />);
+  loading.getByText('Processed in 1m 0s');
+  expect(loading.queryByText('-')).toBeNull();
   await loading.unmount();
   const failed = await render(<SessionDetail messages={[]} onRetryTimeline={retry} session={completed} timelineEnabled timelines={{ 'turn-1': { status: 'error', items: [], error: 'offline' } }} />);
   expect(StyleSheet.flatten(failed.getByTestId('session-message-actions-user').props.style).justifyContent).toBe('flex-end');
@@ -532,6 +653,63 @@ test('workspace retries a failed authoritative turn timeline request', async () 
   await waitFor(() => expect(mobileAiSessionStore.timelineTurnState('cp-timeline-load', 'instance-timeline-load', completed.id, completed.turns![0]).status).toBe('ready'));
   await screen.unmount();
   mobileAiSessionStore.clearProfile('cp-timeline-load');
+});
+
+test('workspace keeps an in-flight timeline request authoritative across Turn lifecycle updates', async () => {
+  const controlPlaneId = 'cp-timeline-lifecycle';
+  const instanceId = 'instance-timeline-lifecycle';
+  const running = ControlPlaneAiSessionSummarySchema.parse({
+    ...session,
+    id: 'session-timeline-lifecycle',
+    subAgents: [],
+    turns: [{ ...session.turns![0], id: 'turn-timeline-lifecycle', status: 'running', lastMessage: 'Done' }],
+  });
+  const completed = ControlPlaneAiSessionSummarySchema.parse({
+    ...running,
+    status: 'idle',
+    turns: [{ ...running.turns![0], status: 'completed', completedAt: '2026-08-05T00:01:00.000Z' }],
+  });
+  let resolveTimeline!: (value: unknown) => void;
+  const timelineRead = new Promise((resolve) => { resolveTimeline = resolve; });
+  const turnTimeline = jest.fn().mockReturnValue(timelineRead);
+  const client = { aiSessions: { turnTimeline } } as unknown as ControlPlaneClient;
+  let completeTurn!: () => void;
+  function Harness() {
+    const [current, complete] = useReducer(() => completed, running);
+    const [, rerender] = useReducer((value: number) => value + 1, 0);
+    completeTurn = complete;
+    useEffect(() => mobileAiSessionStore.subscribeSession(controlPlaneId, instanceId, running.id, rerender), []);
+    const turn = current.turns![0];
+    return <SessionWorkspace
+      client={client}
+      controlPlaneId={controlPlaneId}
+      instanceCapabilities={{ aiSessionTimeline: { sessionReadAgents: [], turnReadAgents: ['codex'], liveItemAgents: [] } }}
+      instanceId={instanceId}
+      messages={[]}
+      session={current}
+      timelines={{ [turn.id]: mobileAiSessionStore.timelineTurnState(controlPlaneId, instanceId, current.id, turn) }}
+    />;
+  }
+  const screen = await render(<SafeAreaProvider initialMetrics={{ frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { top: 47, right: 0, bottom: 34, left: 0 } }}>
+    <Harness />
+  </SafeAreaProvider>);
+
+  await waitFor(() => expect(turnTimeline).toHaveBeenCalledTimes(1));
+  await waitFor(() => expect(mobileAiSessionStore.timelineTurnState(controlPlaneId, instanceId, running.id, running.turns![0]).status).toBe('loading'));
+  await act(async () => completeTurn());
+  await act(async () => {
+    resolveTimeline({
+      sessionId: running.id,
+      turnId: running.turns![0].id,
+      items: [{ id: 'answer', turnId: running.turns![0].id, type: 'ai-message', text: 'Done' }],
+      generatedAt: completed.updatedAt,
+    });
+    await timelineRead;
+  });
+  await waitFor(() => expect(mobileAiSessionStore.timelineTurnState(controlPlaneId, instanceId, completed.id, completed.turns![0]).status).toBe('ready'));
+  expect(turnTimeline).toHaveBeenCalledTimes(1);
+  await screen.unmount();
+  mobileAiSessionStore.clearProfile(controlPlaneId);
 });
 
 test('live-only capability renders cached live activity without inventing a history load', async () => {

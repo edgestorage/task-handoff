@@ -398,14 +398,18 @@ function parseClientMessage(value: unknown): { type?: string; sentAt?: string; t
   }
 }
 
-function encodedCompactPublicEvent(event: EventEnvelope) {
+export function projectCompactPublicEvent(event: EventEnvelope) {
   const delta = event.type === AiSessionEventType.MessageDelta
     ? AiSessionMessageDeltaEventSchema.safeParse(event.payload)
     : undefined;
-  const projected = projectEventEnvelope(event, COMPACT_EVENT_ENVELOPE_VERSION, {
+  return projectEventEnvelope(event, COMPACT_EVENT_ENVELOPE_VERSION, {
     publicScope: true,
     ...(delta?.success ? { payload: compactAiSessionMessageDeltaEvent(delta.data) } : {}),
   });
+}
+
+function encodedCompactPublicEvent(event: EventEnvelope) {
+  const projected = projectCompactPublicEvent(event);
   const encoded = JSON.stringify(projected);
   return { encoded, bytes: Buffer.byteLength(encoded, "utf8") };
 }

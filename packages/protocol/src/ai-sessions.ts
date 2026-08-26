@@ -677,6 +677,39 @@ export const AiSessionTurnBodySchema = z.object({
   turn: AiSessionTurnSchema,
 }).strict();
 
+const AiSessionProjectionRevisionSchema = z.string().trim().min(1).max(64);
+const AiSessionProjectionNotModifiedSchema = z.object({
+  kind: z.literal("not-modified"),
+  revision: AiSessionProjectionRevisionSchema,
+}).strict();
+
+export const AiSessionDetailReadSchema = z.discriminatedUnion("kind", [
+  AiSessionProjectionNotModifiedSchema,
+  z.object({
+    kind: z.literal("updated"),
+    revision: AiSessionProjectionRevisionSchema,
+    detail: AiSessionDetailSchema,
+  }).strict(),
+]);
+
+export const AiSessionTurnIndexReadSchema = z.discriminatedUnion("kind", [
+  AiSessionProjectionNotModifiedSchema,
+  z.object({
+    kind: z.literal("updated"),
+    revision: AiSessionProjectionRevisionSchema,
+    index: AiSessionTurnIndexSchema,
+  }).strict(),
+]);
+
+export const AiSessionTurnBodyReadSchema = z.discriminatedUnion("kind", [
+  AiSessionProjectionNotModifiedSchema,
+  z.object({
+    kind: z.literal("updated"),
+    revision: AiSessionProjectionRevisionSchema,
+    body: AiSessionTurnBodySchema,
+  }).strict(),
+]);
+
 export const AiSessionActionResultSchema = z.object({
   session: AiSessionStatusSchema,
   provider: z.string().trim().min(1).max(80),
@@ -692,6 +725,13 @@ export const AiSessionActionResultSchema = z.object({
 export const AiSessionActionResponseSchema = AiSessionActionResultSchema.omit({ session: true }).extend({
   sessionId: z.string().trim().min(1).max(120),
   messageId: z.string().trim().min(1).max(240).optional(),
+}).strict();
+
+export const AiSessionQueueMutationResponseSchema = z.object({
+  sessionId: z.string().trim().min(1).max(120),
+  queueRevision: z.number().int().min(0),
+  action: z.enum(["retry", "remove", "edit", "reorder"]),
+  queueId: z.string().trim().min(1).max(120).optional(),
 }).strict();
 
 export function projectAiSessionActionResponse(result: z.infer<typeof AiSessionActionResultSchema>) {
@@ -816,6 +856,12 @@ export const AiSessionSummarySchema = AiSessionStatusSchema.pick({
   // Independent version for the Turn index/body domain. It is not a display
   // key and must not remount or fade the owning session.
   turnsRevision: z.string().trim().min(1).max(64).optional(),
+  // Minimal pointer used to refresh the live Turn body without reloading the
+  // complete Turn index. The index revision only describes list structure.
+  latestTurnRef: z.object({
+    id: AiSessionTurnSchema.shape.id,
+    bodyRevision: z.string().trim().min(1).max(64),
+  }).strict().optional(),
   turnCount: z.number().int().min(0).optional(),
   subAgentCount: z.number().int().min(0).optional(),
   lastUserMessageAt: z.string().datetime().optional(),
@@ -1214,10 +1260,14 @@ export type AiSessionDetail = z.infer<typeof AiSessionDetailSchema>;
 export type AiSessionTurnIndexEntry = z.infer<typeof AiSessionTurnIndexEntrySchema>;
 export type AiSessionTurnIndex = z.infer<typeof AiSessionTurnIndexSchema>;
 export type AiSessionTurnBody = z.infer<typeof AiSessionTurnBodySchema>;
+export type AiSessionDetailRead = z.infer<typeof AiSessionDetailReadSchema>;
+export type AiSessionTurnIndexRead = z.infer<typeof AiSessionTurnIndexReadSchema>;
+export type AiSessionTurnBodyRead = z.infer<typeof AiSessionTurnBodyReadSchema>;
 export type AiSessionSummaryTurn = z.infer<typeof AiSessionSummaryTurnSchema>;
 export type AiSessionStatus = z.infer<typeof AiSessionStatusSchema>;
 export type AiSessionActionResult = z.infer<typeof AiSessionActionResultSchema>;
 export type AiSessionActionResponse = z.infer<typeof AiSessionActionResponseSchema>;
+export type AiSessionQueueMutationResponse = z.infer<typeof AiSessionQueueMutationResponseSchema>;
 export type AiSessionHistoryItem = z.infer<typeof AiSessionHistoryItemSchema>;
 export type AiSessionHistoryIndex = z.infer<typeof AiSessionHistoryIndexSchema>;
 export type AiSessionHistoryList = z.infer<typeof AiSessionHistoryListSchema>;

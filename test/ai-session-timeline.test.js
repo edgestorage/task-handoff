@@ -22,7 +22,7 @@ require.extensions[".ts"] = (module, filename) => {
 };
 const { codexItemTimeline } = require("../packages/ai-session-runtime/src/codex-app-server-protocol.ts");
 const { CodexAppServerClient, CodexAppServerSessionBridge } = require("../packages/ai-session-runtime/src/codex-app-server.ts");
-const { createAiSessionRegistry } = require("../packages/ai-session-runtime/src/ai-session-registry.ts");
+const { aiSessionTurnBodyRevision, aiSessionTurnsRevision, createAiSessionRegistry } = require("../packages/ai-session-runtime/src/ai-session-registry.ts");
 const { CodexAppServerRpcError, codexPaginatedTimelineSupported } = require("../packages/ai-session-runtime/src/codex-app-server/client/client.ts");
 const { codexNotification } = require("../packages/ai-session-runtime/src/codex-app-server/protocol/events.ts");
 const { CodexTimelineStore } = require("../packages/ai-session-runtime/src/codex-app-server/session/timeline-store.ts");
@@ -31,6 +31,29 @@ const { AiSessionEventType, AiSessionTimelineSchema, AiSessionTurnTimelineSchema
 const { AiSessionActionService } = require("../packages/control-plane/src/control-plane/sessions/ai-session-actions.ts");
 const { ControlPlaneAiSessionAggregator } = require("../packages/control-plane/src/control-plane/sessions/ai-session-aggregator.ts");
 const { NodeTunnelEventRouter } = require("../packages/control-plane/src/control-plane/nodes/tunnel-event-router.ts");
+const { InstanceLifecycleEventType } = require("../packages/protocol/src/control-plane.ts");
+
+test("AI session Turn structure and body revisions change independently", () => {
+  const startedAt = "2026-08-26T00:00:00.000Z";
+  const base = {
+    id: "session-revisions",
+    agent: "codex",
+    status: "running",
+    phase: "responding",
+    startedAt,
+    updatedAt: startedAt,
+    queue: { revision: 0, pendingCount: 0, items: [] },
+    subAgents: [],
+    turns: [{ id: "turn-1", status: "running", phase: "responding", revision: 1, startedAt, updatedAt: startedAt, lastMessage: "one" }],
+  };
+  const bodyChanged = { ...base, turns: [{ ...base.turns[0], revision: 2, lastMessage: "two" }] };
+  assert.equal(aiSessionTurnsRevision(base), aiSessionTurnsRevision(bodyChanged));
+  assert.notEqual(aiSessionTurnBodyRevision(base.turns[0]), aiSessionTurnBodyRevision(bodyChanged.turns[0]));
+  assert.notEqual(aiSessionTurnsRevision(base), aiSessionTurnsRevision({
+    ...base,
+    turns: [...base.turns, { ...base.turns[0], id: "turn-2" }],
+  }));
+});
 
 test("AI session controller routes Timeline reads through provider capabilities", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-timeline-control-"));
@@ -630,6 +653,46 @@ test("control-plane tunnel forwards a validated single Timeline item event", asy
   assert.equal(published[0].type, AiSessionEventType.TimelineItem);
   assert.deepEqual(published[0].payload, itemEvent);
   assert.deepEqual(published[0].options.scope, { nodeId: "node_1", instanceId: "instance_1" });
+});
+
+test("control-plane tunnel converges lifecycle state before publishing it downstream", async () => {
+  const order = [];
+  const router = new NodeTunnelEventRouter({
+    events: { publish: () => order.push("publish") },
+    onInstanceLifecycle: async (nodeId, lifecycle) => {
+      assert.equal(nodeId, "node_1");
+      assert.equal(lifecycle.instanceId, "instance_1");
+      order.push("apply");
+      return true;
+    },
+    validateInstanceScope: async () => {
+      throw new Error("lifecycle ownership is validated while converging the complete fleet snapshot");
+    },
+  });
+  router.handle("node_1", {
+    type: "node-agent.event.forwarded",
+    instanceId: "instance_1",
+    event: {
+      type: InstanceLifecycleEventType.Snapshot,
+      topic: "instances",
+      scope: { instanceId: "instance_1" },
+      payload: {
+        instanceId: "instance_1",
+        revision: 2,
+        updatedAt: "2026-08-26T00:00:00.000Z",
+        status: "running",
+        health: "ok",
+        connectionStatus: "online",
+        accessStatus: "reachable",
+        workspace: { status: "ready" },
+        runtime: { labels: {} },
+        ready: true,
+      },
+    },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(order, ["apply", "publish"]);
 });
 
 test("control-plane tunnel restores compact message delta identity from its validated scope", async () => {

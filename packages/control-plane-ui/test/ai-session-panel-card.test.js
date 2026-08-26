@@ -63,7 +63,8 @@ test("instance AI session cards always show the latest turn independently of det
   assert.match(panel, /displayAiSessionTitle\(session, latestPromptIndex\(session\), t\)/);
   assert.match(panel, /displayAiSessionMessage\(session, latestPromptIndex\(session\), t\)/);
   assert.doesNotMatch(panel, /class="session-ai-turn-nav"/);
-  assert.match(panel, /index: Math\.min\(Math\.max\(index, 0\), count - 1\)/);
+  assert.match(panel, /const targetIndex = Math\.min\(Math\.max\(index, 0\), count - 1\)/);
+  assert.match(panel, /\[session\.id\]: \{ index: targetIndex, count \}/);
   assert.doesNotMatch(panel, /\(index \+ count\) % count/);
 });
 

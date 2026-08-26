@@ -175,7 +175,7 @@
           :can-resolve-approval="canResolveApproval(selectedCard.session)"
           :card="selectedCard"
           :conversation-session="selectedCardConversationSession || selectedCard.session"
-          :detail-state="selectedCardSessionDetailState"
+          :detail-state="selectedCardContentState"
           :attachments="messageAttachments"
           :draft="messageDraft"
           :editing-label="queueComposerEdit ? t('sessions.composer.editingQueuedMessage') : undefined"
@@ -189,6 +189,7 @@
           :prompt-index="promptIndexFor(selectedCard)"
           :timeline-mode="effectiveTimelineViewMode"
           :selected-turn-state="selectedTurnTimelineState"
+          :turn-bodies-ready="selectedCardTurnsReady"
           :turn-timelines="conversationTurnTimelines"
           @next-prompt="nextPrompt(selectedCard)"
           @open-ai-session-app="openCardApp"
@@ -318,6 +319,7 @@ const emit = defineEmits<{
 const { locale, t } = useI18n();
 
 const promptIndexes = ref<Record<string, { index: number; count: number }>>({});
+let promptSelectionRevision = 0;
 const visibleColumnKeys = ref(loadVisibleColumnKeys());
 const layoutMode = ref<AiBoardLayoutMode>(loadLayoutMode());
 const gridGroupBy = ref<AiBoardGridGroupBy>(loadGridGroupBy());
@@ -415,8 +417,11 @@ useAiSessionTimelineDemand(computed(() => selectedCard.value ? {
   sessionId: selectedCard.value.session.id,
 } : undefined));
 const {
+  allTurnsReady: selectedCardTurnsReady,
   conversation: selectedCardConversationSession,
   loadAllTurns: loadAllSelectedCardTurns,
+  hasCurrentTurn: hasCurrentSelectedCardTurn,
+  hasRenderableTurn: hasRenderableSelectedCardTurn,
   loadTurn: loadSelectedCardTurn,
   refresh: loadSelectedCardSessionDetail,
   state: selectedCardSessionDetailState,
@@ -439,6 +444,16 @@ const {
   session: selectedCardConversationSession,
 });
 const effectiveTimelineViewMode = computed(() => supportsAiSessionTimeline.value ? timelineViewMode.value : "compact");
+const selectedCardContentState = computed(() => {
+  if (selectedCardSessionDetailState.value !== "ready" || effectiveTimelineViewMode.value === "full") {
+    return selectedCardSessionDetailState.value;
+  }
+  const card = selectedCard.value;
+  const conversation = selectedCardConversationSession.value;
+  if (!card || !conversation) return "loading";
+  const turn = aiSessionTurns(conversation)[promptIndexFor(card)];
+  return !turn || hasRenderableSelectedCardTurn(turn.id) ? "ready" : "loading";
+});
 watch(
   () => selectedTimelineTurn.value ? `${selectedCard.value?.key || ""}:${selectedTimelineTurn.value.id}:${selectedTimelineTurn.value.status}:${selectedCardTurnIndexKey.value}` : "",
   () => {
@@ -727,23 +742,33 @@ function promptIndexFor(card: AiBoardCard) {
   return Math.min(Math.max(saved.index, 0), count - 1);
 }
 
-function setPromptIndex(card: AiBoardCard, index: number) {
+async function setPromptIndex(card: AiBoardCard, index: number) {
   const count = promptCount(card.session);
   if (!count) {
     return;
   }
+  const targetIndex = Math.min(Math.max(index, 0), count - 1);
+  const conversation = selectedCard.value?.key === card.key ? selectedCardConversationSession.value : undefined;
+  const targetTurn = conversation ? aiSessionTurns(conversation)[targetIndex] : undefined;
+  if (targetTurn && !hasCurrentSelectedCardTurn(targetTurn.id)) {
+    const requestRevision = ++promptSelectionRevision;
+    const loaded = await loadSelectedCardTurn(targetTurn.id);
+    if (!loaded || requestRevision !== promptSelectionRevision || selectedCard.value?.key !== card.key) return;
+  } else {
+    promptSelectionRevision += 1;
+  }
   promptIndexes.value = {
     ...promptIndexes.value,
-    [card.key]: { index: Math.min(Math.max(index, 0), count - 1), count },
+    [card.key]: { index: targetIndex, count },
   };
 }
 
 function previousPrompt(card: AiBoardCard) {
-  setPromptIndex(card, promptIndexFor(card) - 1);
+  void setPromptIndex(card, promptIndexFor(card) - 1);
 }
 
 function nextPrompt(card: AiBoardCard) {
-  setPromptIndex(card, promptIndexFor(card) + 1);
+  void setPromptIndex(card, promptIndexFor(card) + 1);
 }
 
 function canResolveApproval(session: AiSessionSummary) {

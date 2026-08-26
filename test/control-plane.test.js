@@ -3976,7 +3976,7 @@ test("local docker run args include controlled metadata and disable local chat b
   assert.ok(args.includes("TASK_HANDOFF_WORKSPACE_MODE=local-bind"));
   assert.ok(args.includes("bridge"));
   assert.ok(args.includes("host.docker.internal:host-gateway"));
-  assert.ok(args.includes("/tmp:rw,mode=1777"));
+  assert.ok(args.includes("/tmp:rw,nosuid,nodev,exec,mode=1777"));
   assert.ok(args.includes("type=volume,src=task-handoff-inst_1-data,dst=/data"));
   assert.ok(args.includes("type=volume,src=task-handoff-inst_1-agent-home,dst=/home/agent"));
   assert.ok(args.includes("EXTRA_FLAG=1"));
@@ -14035,17 +14035,15 @@ test("control plane telegram bridge renders ai session buttons and handles selec
         return {
           routed: true,
           instance: { id: "inst_1" },
+          instanceId: "inst_1",
+          aiSessionId: "ais_2",
+          turnId: "turn_1",
+          providerTurnId: "turn_1",
           aiSession: {
-            session: {
-              id: "ais_2",
-              agent: "claude",
-              activeTurnId: "turn_1",
-              status: "running",
-              phase: "responding",
-              updatedAt: "2026-07-03T00:00:00.000Z",
-            },
+            sessionId: "ais_2",
             provider: "claude",
             action: "send",
+            turnId: "turn_1",
             providerTurnId: "turn_1",
           },
           reply: "Sent to Project / inst / ais_2.",
@@ -14934,20 +14932,11 @@ test("control plane telegram ai session ack remembers action result turn id", as
         activeAiSessionId: "ais_1",
       },
       instance: { id: "inst_1" },
+      instanceId: "inst_1",
+      aiSessionId: "ais_1",
+      turnId: "turn_control_1",
       aiSession: {
-        session: {
-          id: "ais_1",
-          agent: "claude",
-          activeTurnId: "turn_control_1",
-          status: "running",
-          phase: "thinking",
-          turns: [{
-            id: "turn_control_1",
-            userPrompt: message.message.text,
-            updatedAt: "2026-07-03T00:00:00.000Z",
-          }],
-          updatedAt: "2026-07-03T00:00:00.000Z",
-        },
+        sessionId: "ais_1",
         provider: "claude",
         action: "send",
         turnId: "turn_control_1",
@@ -15068,22 +15057,14 @@ test("control plane telegram queued ack replaces and deletes the previous progre
           activeAiSessionId: "ais_1",
         },
         instance: { id: "inst_1" },
+        instanceId: "inst_1",
+        aiSessionId: "ais_1",
+        turnId: "turn_1",
         aiSession: {
-          session: {
-            id: "ais_1",
-            agent: "codex",
-            activeTurnId: "turn_1",
-            status: "running",
-            phase: "thinking",
-            queue: queued ? {
-              pendingCount: 1,
-              items: [{ id: "queue_1", message: message.message.text, status: "queued" }],
-            } : { pendingCount: 0, items: [] },
-            turns: [{ id: "turn_1", userPrompt: "first", updatedAt: "2026-07-10T00:00:00.000Z" }],
-            updatedAt: "2026-07-10T00:00:00.000Z",
-          },
+          sessionId: "ais_1",
           provider: "codex",
           action: queued ? "queue" : "send",
+          turnId: "turn_1",
           ...(queued ? { queueId: "queue_1" } : { turnId: "turn_1", providerTurnId: "turn_1" }),
         },
         reply: queued ? "Queued for ais_1." : "Sent to ais_1.",
@@ -15230,22 +15211,16 @@ test("control plane telegram replies route to the replied ai session and include
           activeAiSessionId: "ais_default",
         },
         instance: { id: target.instanceId },
+        instanceId: target.instanceId,
+        aiSessionId: target.aiSessionId,
+        turnId: target.aiSessionId === "ais_reply" ? "turn_reply" : "turn_default",
+        providerTurnId: target.aiSessionId === "ais_reply" ? "turn_reply" : "turn_default",
         aiSession: {
-          session: {
-            id: target.aiSessionId,
-            agent: "codex",
-            activeTurnId: target.aiSessionId === "ais_reply" ? "turn_reply" : "turn_default",
-            status: "running",
-            phase: "thinking",
-            turns: [{
-              id: target.aiSessionId === "ais_reply" ? "turn_reply" : "turn_default",
-              userPrompt: message.message.text,
-              updatedAt: "2026-07-03T00:00:00.000Z",
-            }],
-            updatedAt: "2026-07-03T00:00:00.000Z",
-          },
+          sessionId: target.aiSessionId,
           provider: "codex",
           action: "send",
+          turnId: target.aiSessionId === "ais_reply" ? "turn_reply" : "turn_default",
+          providerTurnId: target.aiSessionId === "ais_reply" ? "turn_reply" : "turn_default",
         },
         turnId: target.aiSessionId === "ais_reply" ? "turn_reply" : "turn_default",
         providerTurnId: target.aiSessionId === "ais_reply" ? "turn_reply" : "turn_default",
@@ -16099,17 +16074,15 @@ test("control plane telegram bridge keeps old progress message updating after se
         return {
           routed: true,
           instance: { id: "inst_1" },
+          instanceId: "inst_1",
+          aiSessionId: "ais_1",
+          turnId: "turn_1",
+          providerTurnId: "turn_1",
           aiSession: {
-            session: {
-              id: "ais_1",
-              agent: "codex",
-              activeTurnId: "turn_1",
-              status: "running",
-              phase: "responding",
-              updatedAt: "2026-07-10T00:00:00.000Z",
-            },
+            sessionId: "ais_1",
             provider: "codex",
             action: "send",
+            turnId: "turn_1",
             providerTurnId: "turn_1",
           },
           reply: "Sent to ais_1.",

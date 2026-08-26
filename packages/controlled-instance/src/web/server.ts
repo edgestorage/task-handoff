@@ -39,6 +39,8 @@ import {
   CodexAppServerSessionBridge,
   OpenCodeSessionBridge,
   createAiSessionRegistry,
+  aiSessionConversationTurns,
+  aiSessionDetailRevision,
   aiSessionTurnBodyRevision,
   aiSessionTurnsRevision,
   TranscriptTailDiscoveryProvider,
@@ -105,12 +107,16 @@ import {
   AiSessionApprovalInputSchema,
   AiSessionControlErrorSchema,
   AiSessionDetailSchema,
+  AiSessionDetailReadSchema,
   AiSessionHistoryListSchema,
   AiSessionHistoryDetailSchema,
   AiSessionTimelineSchema,
   AiSessionTurnTimelineSchema,
   AiSessionTurnIndexSchema,
+  AiSessionTurnIndexReadSchema,
   AiSessionTurnBodySchema,
+  AiSessionTurnBodyReadSchema,
+  AiSessionQueueMutationResponseSchema,
   AiSessionDeltaResponseSchema,
   AiSessionMessageDeltaEventSchema,
   AiSessionTimelineItemEventSchema,
@@ -480,16 +486,6 @@ function sendAiSessionControlError(reply: { code: (statusCode: number) => { send
         ? 409
         : 400;
   return reply.code(statusCode).send({ error: AiSessionControlErrorSchema.parse({ code, message: error instanceof Error ? error.message : String(error) }) });
-}
-
-function projectConversationAttachmentStates(
-  session: AiSessionStatus,
-  store: AiSessionConversationAttachmentStore,
-): AiSessionStatus {
-  return {
-    ...session,
-    turns: projectConversationAttachmentTurns(session.id, session.turns, store),
-  };
 }
 
 function projectConversationAttachmentTurns<T extends {
@@ -1751,10 +1747,14 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     }
   });
 
-  app.get<{ Params: { id: string } }>("/api/ai-sessions/:id", async (request, reply) => {
-    const session = aiSessions.get(request.params.id);
+  app.get<{ Params: { id: string }; Querystring: { revision?: string } }>("/api/ai-sessions/:id", async (request, reply) => {
+    const session = aiSessions.conversation(request.params.id);
     if (!session) return reply.code(404).send({ error: { code: "AI_SESSION_NOT_FOUND", message: "AI session not found." } });
-    return { data: AiSessionDetailSchema.parse({
+    const revision = aiSessionDetailRevision(session);
+    if (request.query.revision === revision) {
+      return { data: AiSessionDetailReadSchema.parse({ kind: "not-modified", revision }) };
+    }
+    const detail = AiSessionDetailSchema.parse({
       id: session.id,
       appBindingKeys: session.appBindingKeys,
       cwd: session.cwd,
@@ -1762,7 +1762,8 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       providerMeta: session.providerMeta,
       queue: session.queue,
       subAgents: session.subAgents,
-    }) };
+    });
+    return { data: AiSessionDetailReadSchema.parse({ kind: "updated", revision, detail }) };
   });
 
   app.get<{ Params: { id: string; messageId: string; attachmentId: string } }>("/api/ai-sessions/:id/messages/:messageId/attachments/:attachmentId/content", async (request, reply) => {
@@ -1803,24 +1804,23 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     }
   });
 
-  app.get<{ Params: { id: string }; Querystring: { afterTurnId?: string; afterRevision?: string; projection?: string } }>("/api/ai-sessions/:id/turns", async (request, reply) => {
-    const session = aiSessions.get(request.params.id);
+  app.get<{ Params: { id: string }; Querystring: { afterTurnId?: string; afterRevision?: string; projection?: string; revision?: string } }>("/api/ai-sessions/:id/turns", async (request, reply) => {
+    const session = aiSessions.conversation(request.params.id);
     if (!session) {
       return reply.code(404).send({ error: { code: "AI_SESSION_NOT_FOUND", message: "AI session not found." } });
     }
     const afterTurnId = String(request.query.afterTurnId || "").trim();
     const afterRevision = Number(request.query.afterRevision);
-    const turns = projectConversationAttachmentStates(session, aiSessionConversationAttachments).turns || [];
-    const indexedTurns = turns.filter((turn) => (
-      turn.userPrompt?.trim()
-      || turn.lastMessage?.trim()
-      || turn.summary?.trim()
-      || turn.contextCompactions?.length
-    ));
+    const turns = session.turns || [];
+    const indexedTurns = aiSessionConversationTurns(session);
     if (request.query.projection === "index") {
-      return { data: AiSessionTurnIndexSchema.parse({
+      const revision = aiSessionTurnsRevision(session);
+      if (request.query.revision === revision) {
+        return { data: AiSessionTurnIndexReadSchema.parse({ kind: "not-modified", revision }) };
+      }
+      const index = AiSessionTurnIndexSchema.parse({
         sessionId: session.id,
-        revision: aiSessionTurnsRevision(session),
+        revision,
         turns: indexedTurns.map((turn) => ({
           id: turn.id,
           providerTurnId: turn.providerTurnId,
@@ -1832,7 +1832,8 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
           completedAt: turn.completedAt,
           bodyRevision: aiSessionTurnBodyRevision(turn),
         })),
-      }) };
+      });
+      return { data: AiSessionTurnIndexReadSchema.parse({ kind: "updated", revision, index }) };
     }
     const afterIndex = afterTurnId ? turns.findIndex((entry) => entry.id === afterTurnId) : -1;
     const filtered = turns.filter((turn) => {
@@ -1857,14 +1858,18 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     };
   });
 
-  app.get<{ Params: { id: string; turnId: string } }>("/api/ai-sessions/:id/turns/:turnId", async (request, reply) => {
-    const session = aiSessions.get(request.params.id);
+  app.get<{ Params: { id: string; turnId: string }; Querystring: { revision?: string } }>("/api/ai-sessions/:id/turns/:turnId", async (request, reply) => {
+    const session = aiSessions.conversation(request.params.id);
     if (!session) return reply.code(404).send({ error: { code: "AI_SESSION_NOT_FOUND", message: "AI session not found." } });
-    const turn = (projectConversationAttachmentStates(session, aiSessionConversationAttachments).turns || [])
+    const turn = (session.turns || [])
       .find((candidate) => candidate.id === request.params.turnId || candidate.providerTurnId === request.params.turnId);
-    return turn
-      ? { data: AiSessionTurnBodySchema.parse({ sessionId: session.id, revision: aiSessionTurnBodyRevision(turn), turn }) }
-      : reply.code(404).send({ error: { code: "AI_SESSION_TURN_NOT_FOUND", message: "AI session Turn not found." } });
+    if (!turn) return reply.code(404).send({ error: { code: "AI_SESSION_TURN_NOT_FOUND", message: "AI session Turn not found." } });
+    const revision = aiSessionTurnBodyRevision(turn);
+    if (request.query.revision === revision) {
+      return { data: AiSessionTurnBodyReadSchema.parse({ kind: "not-modified", revision }) };
+    }
+    const body = AiSessionTurnBodySchema.parse({ sessionId: session.id, revision, turn });
+    return { data: AiSessionTurnBodyReadSchema.parse({ kind: "updated", revision, body }) };
   });
 
   app.get<{ Params: { id: string }; Querystring: { tail?: string } }>("/api/ai-sessions/:id/transcript", async (request, reply) => {
@@ -1975,7 +1980,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     try {
       const session = aiSessionController.retryQueuedMessage(request.params.id, request.params.queueId);
       publishAiSessionSnapshot("control-action");
-      return { data: session };
+      return { data: AiSessionQueueMutationResponseSchema.parse({ sessionId: session.id, queueRevision: session.queue.revision, action: "retry", queueId: request.params.queueId }) };
     } catch (error: unknown) {
       return sendAiSessionControlError(reply, error);
     }
@@ -1985,7 +1990,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     try {
       const session = aiSessionController.removeQueuedMessage(request.params.id, request.params.queueId);
       publishAiSessionSnapshot("control-action");
-      return { data: session };
+      return { data: AiSessionQueueMutationResponseSchema.parse({ sessionId: session.id, queueRevision: session.queue.revision, action: "remove", queueId: request.params.queueId }) };
     } catch (error: unknown) {
       return sendAiSessionControlError(reply, error);
     }
@@ -1996,7 +2001,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       const body = AiSessionQueueEditInputSchema.parse(request.body || {});
       const session = aiSessionController.editQueuedMessage(request.params.id, request.params.queueId, body.expectedRevision, body.message);
       publishAiSessionSnapshot("control-action");
-      return { data: session };
+      return { data: AiSessionQueueMutationResponseSchema.parse({ sessionId: session.id, queueRevision: session.queue.revision, action: "edit", queueId: request.params.queueId }) };
     } catch (error: unknown) {
       return sendAiSessionControlError(reply, error);
     }
@@ -2007,7 +2012,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       const body = AiSessionQueueReorderInputSchema.parse(request.body || {});
       const session = aiSessionController.reorderQueuedMessages(request.params.id, body.expectedRevision, body.queueIds);
       publishAiSessionSnapshot("control-action");
-      return { data: session };
+      return { data: AiSessionQueueMutationResponseSchema.parse({ sessionId: session.id, queueRevision: session.queue.revision, action: "reorder" }) };
     } catch (error: unknown) {
       return sendAiSessionControlError(reply, error);
     }

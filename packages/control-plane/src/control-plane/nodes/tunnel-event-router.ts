@@ -6,6 +6,7 @@ import {
   InstanceLifecycleSnapshotSchema,
   InstanceResourceMetricsEventType,
   InstanceResourceMetricsSchema,
+  type InstanceLifecycleSnapshot,
 } from "@task-handoff/protocol/control-plane";
 import {
   AiSessionEventType,
@@ -48,6 +49,7 @@ type TunnelEventRouterOptions = {
   events?: ControlPlaneEventBus;
   onStreamsHello?: (instanceId: string, hello: SessionStreamsHello) => void | Promise<void>;
   onSessionEvent?: (event: EventEnvelope) => boolean;
+  onInstanceLifecycle?: (nodeId: string, lifecycle: InstanceLifecycleSnapshot) => boolean | Promise<boolean>;
   validateInstanceScope?: (nodeId: string, instanceId: string) => boolean | Promise<boolean>;
   scopeTtlMs?: number;
   logger?: Logger;
@@ -111,12 +113,13 @@ export class NodeTunnelEventRouter {
     if (eventType === InstanceLifecycleEventType.Snapshot) {
       const parsed = safeParseResponse(InstanceLifecycleSnapshotSchema, payload);
       if (!parsed.success || parsed.data.instanceId !== claimedInstanceId) return true;
-      this.enqueue(nodeId, parsed.data.instanceId, () => {
+      this.enqueue(nodeId, parsed.data.instanceId, async () => {
+        if (this.options.onInstanceLifecycle && !(await this.options.onInstanceLifecycle(nodeId, parsed.data))) return;
         this.options.events?.publish(eventType, parsed.data, {
           topic: "instances",
           scope: { ...scope, nodeId, instanceId: parsed.data.instanceId },
         });
-      });
+      }, undefined, !this.options.onInstanceLifecycle);
       return true;
     }
     if (eventType === ImagePullTerminalEventType.Output || eventType === ImagePullTerminalEventType.Finished) {
@@ -215,13 +218,19 @@ export class NodeTunnelEventRouter {
     };
   }
 
-  private enqueue(nodeId: string, instanceId: string, publish: () => void | Promise<void>, diagnostic?: SessionEventDiagnostic) {
+  private enqueue(
+    nodeId: string,
+    instanceId: string,
+    publish: () => void | Promise<void>,
+    diagnostic?: SessionEventDiagnostic,
+    validateScope = true,
+  ) {
     const key = scopeKey(nodeId, instanceId);
     const epoch = this.scopeEpoch(key);
     const previous = this.eventQueues.get(key) || Promise.resolve();
     const queued = previous.catch(() => undefined).then(async () => {
       if (this.scopeEpochs.get(key) !== epoch) return;
-      if (await this.isScopeValid(nodeId, instanceId, epoch) && this.scopeEpochs.get(key) === epoch) {
+      if ((!validateScope || await this.isScopeValid(nodeId, instanceId, epoch)) && this.scopeEpochs.get(key) === epoch) {
         await publish();
       } else if (diagnostic) {
         this.options.logger?.warn?.({ ...diagnostic, reason: "instance-scope-invalid" }, "session-event.transport.rejected");

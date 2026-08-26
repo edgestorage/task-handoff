@@ -52,6 +52,8 @@ export function SessionDetail({
   onContinueFromTurn,
   onVisible,
   turnIndex,
+  pendingTurnIndex,
+  turnLoading = false,
   onTurnIndexChange,
   mode,
   onModeChange,
@@ -68,6 +70,8 @@ export function SessionDetail({
   onContinueFromTurn?(turn: DetailTurn): void;
   onVisible?(sessionUpdatedAt: string): void;
   turnIndex?: number;
+  pendingTurnIndex?: number;
+  turnLoading?: boolean;
   onTurnIndexChange?(index: number): void;
   mode?: SessionDetailMode;
   onModeChange?(mode: SessionDetailMode): void;
@@ -92,6 +96,7 @@ export function SessionDetail({
   const selectedMode = mode ?? localMode;
   const localTurnIndex = localTurnSelection.sessionId === session?.id ? localTurnSelection.index : latestIndex;
   const selectedIndex = Math.min(Math.max(turnIndex ?? localTurnIndex, 0), latestIndex);
+  const navigationIndex = Math.min(Math.max(pendingTurnIndex ?? selectedIndex, 0), latestIndex);
   const atBottom = scrollPosition.sessionId === session?.id ? scrollPosition.atBottom : true;
   const resetSessionId = useRef<string | undefined>(undefined);
   const isLatest = selectedIndex >= latestIndex;
@@ -217,10 +222,10 @@ export function SessionDetail({
         <SessionStatusIndicator group={aiSessionStatusGroup(session)} label={sessionStatusLabel} />
         <Text style={[styles.meta, { color: colors.textMuted }]}>{sessionStatusLabel}</Text>
       </View>
-      {selectedMode === 'turn' && turns.length > 1 ? <View style={styles.turnNavigator}>
-        <Pressable accessibilityLabel={t('sessions.previousTurn')} accessibilityRole="button" accessibilityState={{ disabled: selectedIndex <= 0 }} disabled={selectedIndex <= 0} hitSlop={8} onPress={() => selectTurn(selectedIndex - 1)} style={[styles.turnButton, selectedIndex <= 0 && styles.turnButtonDisabled]}><SystemIcon android="chevron_left" color={colors.primary} ios="chevron.left" size={14} /></Pressable>
+      {selectedMode === 'turn' && turns.length > 1 ? <View style={styles.turnNavigator} testID="session-turn-navigator">
+        <Pressable accessibilityLabel={t('sessions.previousTurn')} accessibilityRole="button" accessibilityState={{ disabled: navigationIndex <= 0 }} disabled={navigationIndex <= 0} hitSlop={8} onPress={() => selectTurn(navigationIndex - 1)} style={[styles.turnButton, navigationIndex <= 0 && styles.turnButtonDisabled]}><SystemIcon android="chevron_left" color={colors.primary} ios="chevron.left" size={14} /></Pressable>
         <Text style={[styles.turnIndex, { color: colors.textMuted }]}>{selectedIndex + 1} / {turns.length}</Text>
-        <Pressable accessibilityLabel={t('sessions.nextTurn')} accessibilityRole="button" accessibilityState={{ disabled: isLatest }} disabled={isLatest} hitSlop={8} onPress={() => selectTurn(selectedIndex + 1)} style={[styles.turnButton, isLatest && styles.turnButtonDisabled]}><SystemIcon android="chevron_right" color={colors.primary} ios="chevron.right" size={14} /></Pressable>
+        <Pressable accessibilityLabel={t('sessions.nextTurn')} accessibilityRole="button" accessibilityState={{ disabled: navigationIndex >= latestIndex }} disabled={navigationIndex >= latestIndex} hitSlop={8} onPress={() => selectTurn(navigationIndex + 1)} style={[styles.turnButton, navigationIndex >= latestIndex && styles.turnButtonDisabled]}><SystemIcon android="chevron_right" color={colors.primary} ios="chevron.right" size={14} /></Pressable>
       </View> : null}
     </View>
   </View>;
@@ -278,6 +283,16 @@ export function SessionDetail({
           testID="session-detail-scroll"
           windowSize={7}
         />
+        {turnLoading ? <View
+          accessibilityState={{ busy: true }}
+          pointerEvents="none"
+          style={styles.turnLoadingOverlay}
+          testID="session-turn-loading-overlay"
+        >
+          <View style={[styles.turnLoadingIndicator, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+            <ActivityIndicator color={colors.textMuted} size="small" testID="session-turn-loading-indicator" />
+          </View>
+        </View> : null}
         {!atBottom && canScroll ? (
           <Pressable
             accessibilityLabel={t('sessions.scrollToBottom')}
@@ -373,7 +388,7 @@ export function detailItems(
       else items.push(responseItem);
     }
     if (isLatest && session.status === 'failed') items.push({ id: 'session:error', role: 'error', text: t('sessions.failedDiagnostic') });
-    let projected = hasTimeline ? compactMobileTimeline(items) : items;
+    let projected = hasTimeline ? compactMobileTimeline(items, turn) : items;
     if ((!active || timelineEnabled) && !projected.some((item) => item.role === 'history')) {
       const responseIndex = projected.findIndex((item) => item.role === 'assistant');
       projected.splice(responseIndex < 0 ? Math.min(1, projected.length) : responseIndex, 0, {
@@ -420,7 +435,7 @@ function turnTimelineDetailItems(turn: DetailTurn, timeline: readonly AiSessionT
   return items;
 }
 
-function compactMobileTimeline(items: DetailItem[]) {
+function compactMobileTimeline(items: DetailItem[], turn: DetailTurn) {
   const primaryUserIndex = items.findIndex((item) => item.role === 'user');
   const latestResponseIndex = items.findLastIndex((item) => item.role === 'assistant');
   if (latestResponseIndex < 0) return items;
@@ -429,7 +444,7 @@ function compactMobileTimeline(items: DetailItem[]) {
   const trailing = items.slice(latestResponseIndex + 1).filter((_item, offset) => latestResponseIndex + 1 + offset !== primaryUserIndex);
   return [
     ...(primaryUser ? [primaryUser] : []),
-    ...(history.length ? [{ id: `timeline-history:${history[0].id}`, role: 'history' as const, history }] : []),
+    ...(history.length ? [{ id: `timeline-history:${history[0].id}`, role: 'history' as const, history, turn }] : []),
     items[latestResponseIndex],
     ...trailing,
   ];
@@ -678,6 +693,8 @@ const styles = StyleSheet.create({
   turnButton: { alignItems: 'center', height: 32, justifyContent: 'center', width: 32 },
   turnButtonDisabled: { opacity: 0.3 },
   turnIndex: { fontSize: mobileWebType.meta, fontVariant: ['tabular-nums'], fontWeight: '600', lineHeight: mobileWebType.metaLine, minWidth: 44, textAlign: 'center' },
+  turnLoadingOverlay: { alignItems: 'center', left: 0, pointerEvents: 'none', position: 'absolute', right: 0, top: 104, zIndex: 2 },
+  turnLoadingIndicator: { alignItems: 'center', borderRadius: 18, borderWidth: StyleSheet.hairlineWidth, height: 36, justifyContent: 'center', width: 36 },
   statusDot: { borderRadius: 4, height: 8, width: 8 },
   meta: { fontSize: mobileWebType.meta, lineHeight: mobileWebType.metaLine, textTransform: 'capitalize' },
   muted: { fontSize: mobileWebType.small, lineHeight: mobileWebType.smallLine },

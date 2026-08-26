@@ -23,6 +23,7 @@ import { assertRequestInstanceVisible, requestVisibleInstanceIds } from "./acces
 import { controlPlaneRequestActor } from "./request-actor.ts";
 
 const AiSessionWorkspaceQuerySchema = z.object({ cwdFolderId: z.string().trim().min(1).max(120).optional() }).strict();
+const AiSessionProjectionQuerySchema = z.object({ revision: z.string().trim().min(1).max(64).optional() }).strict();
 
 export type RegisterSessionRoutesOptions = {
   app: FastifyInstance;
@@ -198,15 +199,18 @@ export function registerSessionRoutes({
   });
   app.get("/api/controlled-instances/:id/ai-sessions/:sessionId", async (request) => {
     const params = InstanceSessionParamsSchema.parse(request.params);
-    return { data: await service.getAiSessionDetail(params.id, params.sessionId) };
+    const query = AiSessionProjectionQuerySchema.parse(request.query || {});
+    return { data: await service.getAiSessionDetail(params.id, params.sessionId, query.revision) };
   });
   app.get("/api/controlled-instances/:id/ai-sessions/:sessionId/turns", async (request) => {
     const params = InstanceSessionParamsSchema.parse(request.params);
-    return { data: await service.getAiSessionTurnIndex(params.id, params.sessionId) };
+    const query = AiSessionProjectionQuerySchema.parse(request.query || {});
+    return { data: await service.getAiSessionTurnIndex(params.id, params.sessionId, query.revision) };
   });
   app.get("/api/controlled-instances/:id/ai-sessions/:sessionId/turns/:turnId", async (request) => {
     const params = InstanceSessionTurnParamsSchema.parse(request.params);
-    return { data: await service.getAiSessionTurnBody(params.id, params.sessionId, params.turnId) };
+    const query = AiSessionProjectionQuerySchema.parse(request.query || {});
+    return { data: await service.getAiSessionTurnBody(params.id, params.sessionId, params.turnId, query.revision) };
   });
   app.post<{ Params: { id: string }; Querystring: Record<string, unknown>; Body: Readable }>("/api/controlled-instances/:id/ai-session-attachments/drafts", { bodyLimit: AI_SESSION_ATTACHMENT_UPLOAD_BODY_LIMIT }, async (request, reply) => {
     const params = IdParamsSchema.parse(request.params);
@@ -418,11 +422,13 @@ export function registerSessionRoutes({
     const attachmentIds = new Set(parsed.attachments.filter((attachment) => attachment.source.type === "upload-ref" && attachment.id.startsWith("cia_")).map((attachment) => attachment.id));
     if (attachmentIds.size) {
       const retainedDays = (await service.requireControlledInstance(params.id, true)).config.aiSessionAttachmentRetentionDays ?? 30;
-      void service.getAiSessionTurnIndex(params.id, result.aiSessionId).then(async (index) => {
-        const latestTurn = index.turns.at(-1);
+      void service.getAiSessionTurnIndex(params.id, result.aiSessionId).then(async (indexRead) => {
+        if (indexRead.kind !== "updated") return;
+        const latestTurn = indexRead.index.turns.at(-1);
         if (!latestTurn) return;
-        const body = await service.getAiSessionTurnBody(params.id, result.aiSessionId, latestTurn.id);
-        const messageId = body.turn.userMessages?.find((message) => (
+        const bodyRead = await service.getAiSessionTurnBody(params.id, result.aiSessionId, latestTurn.id);
+        if (bodyRead.kind !== "updated") return;
+        const messageId = bodyRead.body.turn.userMessages?.find((message) => (
           message.attachments.some((attachment) => attachmentIds.has(attachment.id))
         ))?.id;
         if (!messageId) return;
