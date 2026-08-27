@@ -1357,9 +1357,9 @@ function errorText(error: unknown) {
   height: 100%;
   overflow: hidden;
   gap: 18px;
-  background:
+  background: var(--control-plane-settings-background,
     radial-gradient(circle at 62% -10%, var(--brand-accent-soft), transparent 28rem),
-    var(--surface-inset);
+    var(--surface-inset));
   color: var(--text);
   padding: 18px;
 }

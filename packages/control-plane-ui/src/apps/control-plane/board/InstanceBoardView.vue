@@ -383,9 +383,9 @@ function canLaunchBoardApp(instance: InstanceBoardItem) {
   gap: 10px;
   min-height: 0;
   overflow: hidden;
-  background:
+  background: var(--instance-board-background,
     radial-gradient(circle at 78% 10%, var(--brand-accent-soft), transparent 32rem),
-    var(--workspace-bg);
+    var(--workspace-bg));
   padding: 10px;
 }
 
