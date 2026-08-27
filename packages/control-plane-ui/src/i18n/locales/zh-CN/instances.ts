@@ -3,6 +3,17 @@ import type { instances as englishInstances } from "../en-US/instances.ts";
 
 export const instances = {
   title: "实例",
+  modelEntities: {
+    selected: "已选模型 Provider",
+    orderHint: "默认使用第一个兼容 Provider 的第一个模型。",
+    available: "可用 Provider",
+    availableHint: "添加此实例需要向 AI 会话提供的模型 Provider。",
+    add: "添加",
+    remove: "移除 {name}",
+    moveUp: "上移 {name}",
+    moveDown: "下移 {name}",
+    empty: "当前节点没有可用的模型 Provider。",
+  },
   window: {
     invalidRoute: "实例详情链接无效，请从实例切换器中选择实例。",
     instanceUnavailable: "该实例不可用，请从实例切换器中选择其他实例。",
@@ -329,7 +340,7 @@ export const instances = {
     instanceName: "实例名称", instanceNameDescription: "用于在控制面板中识别此实例。", autoImport: "自动导入 agent 配置",
     autoImportDescription: "实例启动时导入支持的 agent 配置。", sessionPermissions: "新 Codex 会话权限",
     sessionPermissionsDescription: "用于初始化新会话的输入区；现有会话保留各自选择。", aiSessionHistoryLimit: "AI 会话历史保留数量", aiSessionHistoryLimitDescription: "在实例中保留指定数量的已关闭 AI 会话及其旧版 Timeline 历史（1–500）。", aiSessionHistoryLimitUnsupported: "升级节点代理和受管实例后才能配置历史保留数量。", aiSessionAttachmentRetention: "会话附件保留天数", aiSessionAttachmentRetentionDescription: "图片和文件只保留在此实例中（0–365 天）；设为 0 会立即清理内容，但保留消息元数据。", aiSessionAttachmentRetentionUnsupported: "升级节点代理和受管实例后才能配置附件保留时间。", aiSessionAttachmentRetentionWarning: "缩短保留时间可能立即且不可恢复地删除已到期附件内容。", aiSessionFileAttachmentLimit: "上传普通文件大小上限（KiB）", aiSessionFileAttachmentLimitDescription: "此实例上传的普通文件和长粘贴文本必须小于该值（1–20480 KiB）；图片仍使用独立的 20 MiB 上限。", aiSessionFileAttachmentLimitUnsupported: "升级节点代理后才能配置上传文件大小。", askApproval: "请求批准", approveForMe: "自动批准", fullAccess: "完全访问",
-    saving: "正在保存", saveChanges: "保存更改", generalSaved: "常规设置已保存。", modelSelection: "模型选择",
+    saving: "正在保存", saveChanges: "保存更改", generalSaved: "常规设置已保存。", modelSelection: "模型选择", modelEntities: "模型实体", activeModel: "当前模型：{name}",
     modelSelectionDescription: "分配前会将控制面板模型部署到此实例的节点；节点本地模型仅在所属节点可用。更改会在下次启动或重启时生效。",
     noModel: "不使用模型", globalDefault: "全局默认", invalidModel: "保存的选择已删除、已禁用或属于其他应用。请选择模型或全局默认。", unavailableModel: "不可用 · {id}", effectiveModel: "当前生效：{name}",
     noEnabledGlobalModel: "没有已启用的全局模型", saveModels: "保存模型设置", modelsSaved: "模型设置已保存，将在下次启动或重启时生效。",

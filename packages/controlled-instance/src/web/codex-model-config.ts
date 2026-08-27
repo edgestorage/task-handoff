@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import TOML from "@iarna/toml";
 import { atomicWriteFileSync } from "@task-handoff/core/storage/atomic-write";
+import type { ControlledPrivateModelCatalog } from "./private-model-catalog";
 
 type ConfigObject = Record<string, unknown>;
 type TomlMap = ReturnType<typeof TOML.parse>;
@@ -12,7 +13,22 @@ export type ManagedCodexModelConfigResult = {
   configPath?: string;
   authPath?: string;
   backupPath?: string;
+  model?: string;
+  modelProvider?: string;
+  providerEnvironment?: Record<string, string>;
 };
+
+const MANAGED_PROVIDER_PREFIX = "task-handoff-";
+
+export function codexProviderId(modelEntityId: string) {
+  return `${MANAGED_PROVIDER_PREFIX}${modelEntityId.toLowerCase().replace(/[^a-z0-9_-]+/g, "-")}`;
+}
+
+export function codexProviderEnvironment(catalog: ControlledPrivateModelCatalog | undefined) {
+  return Object.fromEntries((catalog?.entities || [])
+    .filter((entity) => entity.protocols.includes("openai-responses"))
+    .map((entity) => [`TASK_HANDOFF_CODEX_PROVIDER_${codexProviderId(entity.id).toUpperCase().replace(/[^A-Z0-9_]/g, "_")}_API_KEY`, entity.key]));
+}
 
 function codexHome(env: NodeJS.ProcessEnv) {
   const configured = env.CODEX_HOME?.trim();
@@ -51,21 +67,27 @@ function atomicWrite(filePath: string, contents: string) {
  * model/base-url environment variables, so manually launched Codex sessions use
  * the same instance-level selection.
  */
-export function applyManagedCodexModelConfig(env: NodeJS.ProcessEnv = process.env): ManagedCodexModelConfigResult {
+export function applyManagedCodexModelConfig(
+  env: NodeJS.ProcessEnv = process.env,
+  catalog?: ControlledPrivateModelCatalog,
+): ManagedCodexModelConfigResult {
   if (env.TASK_HANDOFF_CONTROL_MODE !== "controlled") {
     return { applied: false };
   }
-  const model = (env.TASK_HANDOFF_CODEX_MODEL || "").trim();
+  const codexEntities = (catalog?.entities || []).filter((entity) => entity.protocols.includes("openai-responses"));
+  const defaultEntity = codexEntities[0];
+  const defaultName = defaultEntity?.modelNames.slice().sort((a, b) => a.order - b.order || a.name.localeCompare(b.name))[0]?.name;
+  const model = defaultName || (env.TASK_HANDOFF_CODEX_MODEL || "").trim();
   const baseUrl = (env.TASK_HANDOFF_CODEX_BASE_URL || "").trim();
   const apiKey = (env.OPENAI_API_KEY || "").trim();
-  if (!model || !baseUrl || !apiKey) {
+  if (catalog ? (!defaultEntity || !model) : (!model || !baseUrl || !apiKey)) {
     return { applied: false };
   }
   const home = codexHome(env);
   const configPath = path.join(home, "config.toml");
   const authPath = path.join(home, "auth.json");
   let applied = false;
-  if (apiKey) {
+  if (!catalog && apiKey) {
     let currentKey = "";
     try {
       const currentAuth = JSON.parse(fs.readFileSync(authPath, "utf8")) as Record<string, unknown>;
@@ -82,19 +104,35 @@ export function applyManagedCodexModelConfig(env: NodeJS.ProcessEnv = process.en
   }
 
   const current = readConfig(configPath);
+  const providerEnvironment = codexProviderEnvironment(catalog);
+  const modelProvider = defaultEntity ? codexProviderId(defaultEntity.id) : "openai";
+  const existingProviders = asConfigObject(current.config.model_providers);
+  const retainedProviders = Object.fromEntries(Object.entries(existingProviders).filter(([id]) => !id.startsWith(MANAGED_PROVIDER_PREFIX)));
+  const managedProviders = Object.fromEntries(codexEntities.map((entity) => {
+    const providerId = codexProviderId(entity.id);
+    const envKey = Object.keys(codexProviderEnvironment({ ...catalog!, entities: [entity] }))[0];
+    return [providerId, {
+      name: `TaskHandoff ${entity.id}`,
+      base_url: entity.endpoint,
+      env_key: envKey,
+      wire_api: "responses",
+    }];
+  }));
   if (
     current.config.model === model
-    && current.config.model_provider === "openai"
-    && current.config.openai_base_url === baseUrl
+    && current.config.model_provider === modelProvider
+    && (!catalog ? current.config.openai_base_url === baseUrl : JSON.stringify(existingProviders) === JSON.stringify({ ...retainedProviders, ...managedProviders }))
   ) {
-    return { applied, configPath, authPath };
+    return { applied, configPath, authPath, model, modelProvider, providerEnvironment };
   }
 
   const next: ConfigObject = {
     ...current.config,
     model,
-    model_provider: "openai",
-    openai_base_url: baseUrl,
+    model_provider: modelProvider,
+    ...(!catalog ? { openai_base_url: baseUrl } : {
+      model_providers: { ...retainedProviders, ...managedProviders },
+    }),
   };
   let backupPath: string | undefined;
   if (current.contents) {
@@ -104,5 +142,5 @@ export function applyManagedCodexModelConfig(env: NodeJS.ProcessEnv = process.en
     fs.chmodSync(backupPath, 0o600);
   }
   atomicWrite(configPath, TOML.stringify(next as TomlMap));
-  return { applied: true, configPath, authPath, backupPath };
+  return { applied: true, configPath, authPath, backupPath, model, modelProvider, providerEnvironment };
 }

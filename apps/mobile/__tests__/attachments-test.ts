@@ -4,6 +4,9 @@ import { runtimeAttachmentFromServerCandidate, uploadMobileAttachment, usableUpl
 
 test('validates image/file MIME and size before reading device content', () => {
   expect(validateMobileLocalFile({ uri: 'file:///cache/a.png', name: 'a.png', mime: 'image/png', size: 10, kind: 'image' }).mime).toBe('image/png');
+  expect(validateMobileLocalFile({ uri: 'file:///cache/a.png', name: 'a.png', mime: 'application/octet-stream', size: 10, kind: 'image' }).mime).toBe('image/png');
+  expect(validateMobileLocalFile({ uri: 'file:///cache/a.docx', name: 'a.docx', mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', size: 10, kind: 'file' }).mime).toBe('application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+  expect(validateMobileLocalFile({ uri: 'file:///cache/a.unknown', name: 'a.unknown', mime: undefined, size: 10, kind: 'file' }).mime).toBe('application/octet-stream');
   expect(() => validateMobileLocalFile({ uri: 'file:///cache/a.svg', name: 'a.svg', mime: 'image/svg+xml', size: 10, kind: 'image' })).toThrow(/Choose a BMP/);
   expect(() => validateMobileLocalFile({ uri: 'file:///cache/a.bin', name: 'a.bin', mime: undefined, size: undefined, kind: 'file' })).toThrow(/readable content or size/);
 });
@@ -19,7 +22,7 @@ test('uploads only base64 and scoped business identity, never the device URI', a
   const uploadAttachment = jest.fn().mockResolvedValue({ id: 'att-1', kind: 'file', name: 'note.txt', mime: 'text/plain', size: 5, expiresAt: '2026-08-06T00:00:00.000Z' });
   const client = { aiSessions: { uploadAttachment } } as unknown as ControlPlaneClient;
   const attachment = await uploadMobileAttachment(client, { instanceId: 'instance-1', sessionId: 'session-1' }, { uri: 'file:///private/device-note', name: 'note.txt', mime: 'text/plain', size: 5, kind: 'file' }, { readBase64: async () => 'aGVsbG8=', now: Date.parse('2026-08-05T00:00:00.000Z') });
-  expect(uploadAttachment).toHaveBeenCalledWith({ instanceId: 'instance-1', sessionId: 'session-1', kind: 'file', name: 'note.txt', mime: 'text/plain', data: 'aGVsbG8=' });
+  expect(uploadAttachment).toHaveBeenCalledWith({ instanceId: 'instance-1', sessionId: 'session-1', kind: 'file', name: 'note.txt', mime: 'text/plain', data: 'data:text/plain;base64,aGVsbG8=' }, undefined);
   expect(JSON.stringify(uploadAttachment.mock.calls)).not.toContain('device-note');
   expect(usableUploadRefs([attachment], Date.parse('2026-08-05T00:00:00.000Z'))).toEqual([{ id: 'att-1', kind: 'file', source: { type: 'upload-ref' } }]);
   expect(() => usableUploadRefs([attachment], Date.parse('2026-08-07T00:00:00.000Z'))).toThrow(/expired/);

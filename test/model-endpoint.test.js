@@ -89,6 +89,36 @@ test("Claude model test uses Messages API and Anthropic key headers", async () =
   assert.equal(JSON.parse(request.init.body).model, "claude-test");
 });
 
+test("OpenCode model test uses OpenAI-compatible Chat Completions by default", async () => {
+  let request;
+  await testModelEndpoint(async (url, init) => {
+    request = { url, init };
+    return new Response(JSON.stringify({ id: "chatcmpl-test", choices: [{ message: { content: "OK" } }] }), { status: 200 });
+  }, { endpoint: "https://gateway.example/v1", key: "opencode-key", model: "qwen-test", app: "opencode" });
+  assert.equal(request.url, "https://gateway.example/v1/chat/completions");
+  assert.deepEqual(JSON.parse(request.init.body), {
+    model: "qwen-test",
+    messages: [{ role: "user", content: "Reply with OK." }],
+    max_tokens: 32,
+    stream: false,
+  });
+});
+
+test("model test protocol is independent from the legacy app discriminator", async () => {
+  let requestUrl;
+  await testModelEndpoint(async (url) => {
+    requestUrl = url;
+    return new Response(JSON.stringify({ id: "chatcmpl-test", choices: [] }), { status: 200 });
+  }, {
+    endpoint: "https://gateway.example/v1",
+    key: "shared-key",
+    model: "shared-model",
+    app: "codex",
+    protocol: "openai-chat-completions",
+  });
+  assert.equal(requestUrl, "https://gateway.example/v1/chat/completions");
+});
+
 test("model tests reject a successful HTTP response with an invalid protocol payload", async () => {
   await assert.rejects(
     testModelEndpoint(async () => new Response("not-json", { status: 200 }), {

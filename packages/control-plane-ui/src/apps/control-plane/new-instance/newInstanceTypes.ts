@@ -22,9 +22,7 @@ export type RuntimeDraft = {
 export type InstanceDraft = {
   name: string;
   autoImportAgentConfigs: boolean;
-  codexModelHash?: string | null;
-  claudeModelHash?: string | null;
-  opencodeModelHash?: string | null;
+  modelEntityIds: string[];
   retainGitCredential: boolean;
 };
 

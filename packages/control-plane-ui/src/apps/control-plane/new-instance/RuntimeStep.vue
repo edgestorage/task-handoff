@@ -218,31 +218,9 @@
     </div>
     <p v-else-if="gitSource && gitCredentialId" class="git-credential-unavailable" role="status">{{ t("instances.create.gitCredentialUnsupported") }}</p>
 
-    <div v-if="codexModels.length || claudeModels.length || opencodeModels.length" class="step-fields instance-model-fields">
-      <label v-if="codexModels.length">
-        <span>{{ t("instances.create.codexModel") }}</span>
-        <ControlPlaneSelect v-model="instanceCodexModelValue" :placeholder="t('instances.create.noModel')">
-          <ControlPlaneSelectItem :value="noModelValue">{{ t("instances.create.noModel") }}</ControlPlaneSelectItem>
-          <ControlPlaneSelectItem :value="defaultModelValue">{{ t("instances.create.globalDefault") }}</ControlPlaneSelectItem>
-          <ControlPlaneSelectItem v-for="model in codexModels" :key="`instance-codex-${model.id}`" :value="model.id">{{ modelOptionLabel(model) }}</ControlPlaneSelectItem>
-        </ControlPlaneSelect>
-      </label>
-      <label v-if="claudeModels.length">
-        <span>{{ t("instances.create.claudeModel") }}</span>
-        <ControlPlaneSelect v-model="instanceClaudeModelValue" :placeholder="t('instances.create.noModel')">
-          <ControlPlaneSelectItem :value="noModelValue">{{ t("instances.create.noModel") }}</ControlPlaneSelectItem>
-          <ControlPlaneSelectItem :value="defaultModelValue">{{ t("instances.create.globalDefault") }}</ControlPlaneSelectItem>
-          <ControlPlaneSelectItem v-for="model in claudeModels" :key="`instance-claude-${model.id}`" :value="model.id">{{ modelOptionLabel(model) }}</ControlPlaneSelectItem>
-        </ControlPlaneSelect>
-      </label>
-      <label v-if="opencodeModels.length">
-        <span>{{ t("instances.create.opencodeModel") }}</span>
-        <ControlPlaneSelect v-model="instanceOpenCodeModelValue" :placeholder="t('instances.create.noModel')">
-          <ControlPlaneSelectItem :value="noModelValue">{{ t("instances.create.noModel") }}</ControlPlaneSelectItem>
-          <ControlPlaneSelectItem :value="defaultModelValue">{{ t("instances.create.globalDefault") }}</ControlPlaneSelectItem>
-          <ControlPlaneSelectItem v-for="model in opencodeModels" :key="`instance-opencode-${model.id}`" :value="model.id">{{ modelOptionLabel(model) }}</ControlPlaneSelectItem>
-        </ControlPlaneSelect>
-      </label>
+    <div class="instance-model-fields">
+      <span class="instance-model-fields-title">{{ t("instances.settings.modelSelection") }}</span>
+      <ModelEntitySelection v-model="instanceDraft.modelEntityIds" :models="models" :node-id="runtimeDraft.nodeId" />
     </div>
 
     <label class="config-check-field">
@@ -269,6 +247,7 @@ import { resolveImageDescription } from "../shared/imageDescription";
 import ControlPlaneInput from "../shared/ControlPlaneInput.vue";
 import ControlPlaneSelect from "../shared/ControlPlaneSelect.vue";
 import ControlPlaneSelectItem from "../shared/ControlPlaneSelectItem.vue";
+import ModelEntitySelection from "../../../components/models/ModelEntitySelection.vue";
 import type { InstanceDraft, NewImageDraft, RuntimeDraft } from "./newInstanceTypes";
 import { dockerInstallGuidance, type DockerRuntimeCheckState } from "./dockerRuntimeGuidance";
 
@@ -300,8 +279,6 @@ const props = defineProps<{
   sourceSummary: string;
 }>();
 
-const defaultModelValue = "__default__";
-const noModelValue = "__none__";
 const imagePickerOpen = ref(false);
 const imageSearch = ref("");
 const imageSearchInput = ref<HTMLInputElement>();
@@ -400,25 +377,6 @@ watch(templatePickerOpen, async (open) => {
   await nextTick();
   templateSearchInput.value?.focus();
 });
-const eligibleModels = computed(() => props.models.filter((model) => model.locations?.some((location) => location.type === "control-plane" || (location.type === "node" && location.nodeId === props.runtimeDraft.nodeId))));
-const codexModels = computed(() => eligibleModels.value.filter((model) => model.app === "codex"));
-const claudeModels = computed(() => eligibleModels.value.filter((model) => model.app === "claude"));
-const opencodeModels = computed(() => eligibleModels.value.filter((model) => model.app === "opencode"));
-const modelOptionLabel = (model: ModelConfig) => model.locations?.some((location) => location.type === "control-plane")
-  ? t("instances.create.modelCopyToNode", { name: model.name })
-  : t("instances.create.modelOnNode", { name: model.name });
-const instanceCodexModelValue = computed({
-  get: () => props.instanceDraft.codexModelHash === null ? noModelValue : props.instanceDraft.codexModelHash || defaultModelValue,
-  set: (value: string) => { props.instanceDraft.codexModelHash = value === defaultModelValue ? undefined : value === noModelValue ? null : value; },
-});
-const instanceClaudeModelValue = computed({
-  get: () => props.instanceDraft.claudeModelHash === null ? noModelValue : props.instanceDraft.claudeModelHash || defaultModelValue,
-  set: (value: string) => { props.instanceDraft.claudeModelHash = value === defaultModelValue ? undefined : value === noModelValue ? null : value; },
-});
-const instanceOpenCodeModelValue = computed({
-  get: () => props.instanceDraft.opencodeModelHash === null ? noModelValue : props.instanceDraft.opencodeModelHash || defaultModelValue,
-  set: (value: string) => { props.instanceDraft.opencodeModelHash = value === defaultModelValue ? undefined : value === noModelValue ? null : value; },
-});
 
 defineEmits<{
   "check-docker-runtime": [];
@@ -431,6 +389,22 @@ defineEmits<{
 .wizard-section {
   display: grid;
   gap: 14px;
+}
+
+.instance-model-fields {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface-raised);
+}
+
+.instance-model-fields-title {
+  display: block;
+  border-bottom: 1px solid var(--line);
+  padding: 10px 16px;
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 500;
 }
 
 .section-head {

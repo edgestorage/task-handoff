@@ -161,7 +161,15 @@ export class InstanceModelAssignmentStore {
       const raw = JSON.parse(fs.readFileSync(filePath, "utf8"));
       const parsed = NodeModelAssignmentSchema.safeParse(raw);
       if (parsed.success) return parsed.data;
-      const sanitized = NodeModelAssignmentSchema.strip().safeParse(raw);
+      const source = raw && typeof raw === "object" && !Array.isArray(raw) ? raw as Record<string, unknown> : {};
+      const sanitized = NodeModelAssignmentSchema.safeParse({
+        instanceId: source.instanceId,
+        modelEntityIds: source.modelEntityIds,
+        codexModelHash: source.codexModelHash,
+        claudeModelHash: source.claudeModelHash,
+        opencodeModelHash: source.opencodeModelHash,
+        updatedAt: source.updatedAt,
+      });
       if (sanitized.success) {
         console.warn(JSON.stringify({ message: "unknown stored model assignment fields were ignored", instanceId, filePath }));
         return sanitized.data;

@@ -206,6 +206,7 @@ export function controlledInstanceCapabilities(
       logs: true,
       aiSessionWorkspaceSelection: true,
       aiSessionPersistenceSettings: true,
+      privateModelCatalog: true,
       gitCliCredentialBroker: gitCredentialBrokerInstalled,
       gitCredentialProxy: gitCredentialBrokerInstalled,
       aiSessionTimeline,

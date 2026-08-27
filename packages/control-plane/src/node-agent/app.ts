@@ -22,6 +22,7 @@ import {
   supportsAiSessionFileSizeLimitSettings,
   supportsAiSessionPersistenceSettings,
   supportsGitCliCredentialBroker,
+  supportsControlledInstancePrivateModelCatalog,
   type BuildInfo,
   type ControlledInstance,
   type InstanceResourceMetrics,
@@ -326,7 +327,9 @@ async function syncAssignedModelEnvironment(
   resolveInstanceWeb: ResolveInstanceWeb = async (instance) => nodeLocalInstanceWebBase(instance),
 ) {
   const instance = state.requireInstance(instanceId);
-  state.instancePrivateConfigs.materialize(instance.id, instance.registrationToken, state.resolvedAssignedModelEnvironment(instanceId));
+  const modelEnvironment = state.resolvedAssignedModelEnvironment(instanceId);
+  const modelCatalog = state.modelRegistry.privateCatalog(instanceId);
+  state.instancePrivateConfigs.materialize(instance.id, instance.registrationToken, modelEnvironment, modelCatalog);
   if (instance.targetStatus !== "reachable") return false;
   let response: Response;
   try {
@@ -336,7 +339,7 @@ async function syncAssignedModelEnvironment(
         "content-type": "application/json",
         authorization: `Bearer ${instance.registrationToken}`,
       },
-      body: JSON.stringify(state.resolvedAssignedModelEnvironment(instanceId)),
+      body: JSON.stringify(modelEnvironment),
     }, DEFAULT_AUTO_IMPORT_AGENT_CONFIG_TIMEOUT_MS);
   } catch (error) {
     warn?.({
@@ -353,6 +356,22 @@ async function syncAssignedModelEnvironment(
       statusCode: response.status,
     }, "node instance model environment live sync deferred");
     return false;
+  }
+  if (!supportsControlledInstancePrivateModelCatalog(instance.capabilities)) return true;
+  try {
+    const catalogResponse = await fetchWithTimeout(fetchImpl, `${await resolveInstanceWeb(instance)}/api/internal/model-catalog`, {
+      method: "PUT",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${instance.registrationToken}`,
+      },
+      body: JSON.stringify(modelCatalog),
+    }, DEFAULT_AUTO_IMPORT_AGENT_CONFIG_TIMEOUT_MS);
+    if (!catalogResponse.ok && catalogResponse.status !== 404) {
+      warn?.({ instanceId, statusCode: catalogResponse.status }, "node instance model catalog live sync deferred");
+    }
+  } catch (error) {
+    warn?.({ instanceId, error: error instanceof Error ? error.message : String(error) }, "node instance model catalog live sync deferred");
   }
   return true;
 }
@@ -523,6 +542,39 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   const updateCommandRunner = options.updateCommandRunner || options.dockerCommandRunner || defaultCommandRunner;
   const fetchImpl = options.fetchImpl || fetch;
   const aiSessionPersistenceSyncKeys = new Map<string, string>();
+  // A lifecycle probe can race container startup and record a transient
+  // endpoint-unreachable result. Reconcile that projection once the instance
+  // sends its authoritative online report, without probing on every heartbeat.
+  const endpointProbePromises = new Map<string, Promise<void>>();
+  const reconcileReportedEndpoint = (instance: ControlledInstance) => {
+    if (instance.targetStatus !== "endpoint-unreachable"
+      || instance.connectionStatus !== "online"
+      || instance.agentStatus !== "online"
+      || !instance.target.web
+      || endpointProbePromises.has(instance.id)) return;
+    const processIncarnationId = instance.processIncarnationId;
+    const probe = (async () => {
+      const status = await probeInstanceEndpoint(fetchImpl, instance, resolveInstanceWeb);
+      if (status !== "reachable") return;
+      const current = state.requireInstance(instance.id);
+      if (current.processIncarnationId !== processIncarnationId
+        || current.connectionStatus !== "online"
+        || current.agentStatus !== "online") return;
+      state.controlledInstances.put(ControlledInstanceSchema.parse({
+        ...current,
+        target: { ...current.target, status: "reachable" },
+        targetStatus: "reachable",
+        uiAccessStatus: "reachable",
+        updatedAt: now(),
+      }));
+      eventForwarder.syncNow();
+    })().catch((error) => {
+      app.log.debug({ instanceId: instance.id, error }, "node instance endpoint reconciliation probe failed");
+    }).finally(() => {
+      endpointProbePromises.delete(instance.id);
+    });
+    endpointProbePromises.set(instance.id, probe);
+  };
   const syncAiSessionPersistenceSettings = async (id: string) => {
     const instance = state.requireInstance(id);
     if (!supportsAiSessionPersistenceSettings(instance.capabilities)
@@ -1003,6 +1055,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
       capabilities: {
         modelEndpointProbe: true,
+        managedModels: { multiEntityAssignment: true, privateModelCatalog: true },
         aiSessionHistoryLimit: true,
         aiSessionAttachmentRetention: true,
         aiSessionFileAttachmentLimit: true,
@@ -1098,6 +1151,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     },
     afterReport: (instance, report) => {
       eventForwarder.syncNow();
+      reconcileReportedEndpoint(instance);
       void syncAiSessionPersistenceSettings(instance.id);
       if (report === "register") {
         logDiagnostic({ instanceId: instance.id, action: report, protocolVersion: instance.protocolVersion, build: instance.build, targetStatus: instance.targetStatus, targetStrategy: instance.target.strategy }, "node instance registered");

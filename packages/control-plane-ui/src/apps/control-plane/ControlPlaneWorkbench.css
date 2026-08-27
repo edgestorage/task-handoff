@@ -353,6 +353,10 @@
   padding: 0 6px;
 }
 
+.control-plane-settings-switcher-shell > .control-plane-kicker {
+  padding: 0 6px;
+}
+
 .control-plane-instance-switcher:hover,
 .control-plane-instance-switcher[data-state="open"] {
   background: hsl(var(--accent) / 0.7);
@@ -478,6 +482,43 @@
 :global(.control-plane-instance-menu-check) {
   color: hsl(var(--primary));
   margin-top: 1px;
+}
+
+:global(.control-plane-settings-menu.control-plane-settings-menu) {
+  width: max(var(--reka-dropdown-menu-trigger-width), 220px);
+  max-width: min(320px, var(--reka-dropdown-menu-content-available-width));
+  max-height: var(--reka-dropdown-menu-content-available-height);
+  border-radius: 12px;
+  padding: 4px;
+}
+
+:global(.control-plane-settings-menu-scroll) {
+  height: min(var(--settings-menu-height), 352px, calc(var(--reka-dropdown-menu-content-available-height) - 8px));
+}
+
+:global(.control-plane-settings-menu-list) {
+  display: grid;
+  gap: 1px;
+}
+
+:global(.control-plane-settings-menu-scroll:has([data-orientation="vertical"][data-state="visible"]) .control-plane-settings-menu-list) {
+  padding-right: 8px;
+}
+
+:global(.control-plane-settings-menu .control-plane-settings-menu-item) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 16px;
+  gap: 8px;
+  min-height: 32px;
+  align-items: center;
+  border-radius: 7px;
+  padding: 4px 9px;
+  cursor: pointer;
+}
+
+:global(.control-plane-settings-menu-item.selected) {
+  background: var(--surface-active);
+  color: hsl(var(--primary));
 }
 
 .control-plane-actions {

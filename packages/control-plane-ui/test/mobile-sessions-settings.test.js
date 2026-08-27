@@ -9,10 +9,11 @@ const read = (relative) => fs.readFileSync(path.join(root, relative), "utf8");
 
 test("settings exposes account-scoped mobile sessions and authoritative revocation", () => {
   const modal = read("src/apps/control-plane/settings/SettingsModal.vue");
+  const settingsSections = read("src/apps/control-plane/settings/settingsSections.ts");
   const section = read("src/apps/control-plane/settings/MobileSessionsSettingsSection.vue");
   const queries = read("src/api/queries.ts");
 
-  assert.match(modal, /id: "mobile-sessions"/);
+  assert.match(settingsSections, /id: "mobile-sessions"/);
   assert.match(modal, /<MobileSessionsSettingsSection v-else-if="settingsSection === 'mobile-sessions'"/);
   assert.match(section, /useAuthSessionQuery\(\)/);
   assert.match(section, /useMobileSessionsQuery\(canLoadSessions\)/);

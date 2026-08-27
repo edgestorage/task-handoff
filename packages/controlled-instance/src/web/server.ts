@@ -58,7 +58,8 @@ import { WebEventBus } from "./events";
 import { AppManagementManager, AppManagementRequestError } from "./app-management";
 import { configSyncPresets, configSyncPrograms, listConfigSyncFolders, runConfigSync, runConfigSyncBatch } from "./config-sync";
 import { ConfigSyncRequestSchema } from "@task-handoff/protocol/config-sync";
-import { applyManagedCodexModelConfig } from "./codex-model-config";
+import { applyManagedCodexModelConfig, codexProviderId } from "./codex-model-config";
+import { ControlledPrivateModelCatalogSchema, readControlledPrivateModelCatalog, resolveControlledPrivateModelSelection } from "./private-model-catalog";
 import { applyManagedClaudeModelConfig } from "./claude-model-config";
 import { GitCredentialBroker, installGitBrokerEnvironment } from "./git-credential-broker";
 import {
@@ -98,6 +99,11 @@ import {
   AiSessionCreateInputSchema,
   AiSessionCreateRefInputSchema,
   AiSessionCreateResultSchema,
+  AiSessionModelSelectionInputSchema,
+  AiSessionModelSelectionActionResponseSchema,
+  AiSessionReasoningEffortInputSchema,
+  AiSessionReasoningEffortActionResponseSchema,
+  type AiSessionModelSelection,
   AiSessionForkInputSchema,
   AiSessionForkResultSchema,
   AiSessionCloseInputSchema,
@@ -138,6 +144,7 @@ import {
   AiSessionResumeResultSchema,
   isAiSessionInlineImageMime,
 } from "@task-handoff/protocol/ai-sessions";
+import { normalizeAiSessionReasoningEffortCapabilities } from "@task-handoff/protocol/ai-session-provider-capabilities";
 import {
   APP_SESSION_DELTA_RETENTION_MS,
   AppSessionDeltaResponseSchema,
@@ -385,6 +392,7 @@ function managedAppEnvironment(env: NodeJS.ProcessEnv) {
   const managed = managedModelEnvironment(env);
   return {
     ...managed,
+    ...Object.fromEntries(Object.entries(env).filter(([key, value]) => key.startsWith("TASK_HANDOFF_CODEX_PROVIDER_") && typeof value === "string")),
     // Explicit undefined values shadow the controlled-instance process
     // environment and are omitted by child_process when Claude is launched.
     ANTHROPIC_AUTH_TOKEN: undefined,
@@ -607,7 +615,9 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   const gitCredentialBrokerInstalled = installGitBrokerEnvironment(process.env.TASK_HANDOFF_CLI_PATH, gitCredentialBroker.socketPath);
   const managedModelEnv = { ...process.env };
   logControlledInstanceStart(storagePaths.logDir, storagePaths.dataDir);
-  applyManagedCodexModelConfig(managedModelEnv);
+  let privateModelCatalog = readControlledPrivateModelCatalog(managedModelEnv);
+  let codexManagedConfig = applyManagedCodexModelConfig(managedModelEnv, privateModelCatalog);
+  Object.assign(managedModelEnv, codexManagedConfig.providerEnvironment || {});
   applyManagedClaudeModelConfig(managedModelEnv);
   const auth = resolveWebAuth(storagePaths);
   const events = new WebEventBus();
@@ -644,7 +654,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     onRemove: (sessionId) => aiSessionConversationAttachments.releaseSession(sessionId),
   });
   const aiSessionController = new AiSessionController(aiSessions);
-  let aiSessionProviderCapabilities: ReturnType<AiSessionProviderRegistry["capabilities"]> = [];
+  const aiSessionProviderCapabilities = () => aiSessionProviders.capabilities();
   const triggers = new TriggerStore(storagePaths);
   const triggerExecutor = new TriggerExecutor(triggers, aiSessionController);
   const triggerManager = new TriggerManager(triggers, triggerExecutor, storagePaths, (type, payload) => events.publish(type, payload));
@@ -654,7 +664,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     aiSessions,
     triggers,
     aiSessionController.timelineCapabilities(),
-    aiSessionProviderCapabilities,
+    aiSessionProviderCapabilities(),
     gitCredentialBrokerInstalled,
   ));
 
@@ -715,9 +725,31 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     },
     timelineStorePath: path.join(storagePaths.dataDir, "ai-session-timeline", "codex"),
     threadStartDefaults: {
-      model: process.env.TASK_HANDOFF_CODEX_MODEL?.trim() || undefined,
-      modelProvider: process.env.TASK_HANDOFF_CODEX_MODEL?.trim() ? "openai" : undefined,
+      model: codexManagedConfig.model || process.env.TASK_HANDOFF_CODEX_MODEL?.trim() || undefined,
+      modelProvider: codexManagedConfig.modelProvider || (process.env.TASK_HANDOFF_CODEX_MODEL?.trim() ? "openai" : undefined),
     },
+    resolveModelSelection: (selection) => {
+      const resolved = resolveControlledPrivateModelSelection(privateModelCatalog, "codex", selection);
+      return {
+        model: resolved.modelName,
+        modelProvider: codexProviderId(resolved.modelEntityId),
+      };
+    },
+    projectModelSelection: (modelProvider, model) => {
+      const entities = privateModelCatalog?.entities.filter((candidate) => candidate.protocols.includes("openai-responses")) || [];
+      // Codex persists the provider name in its own namespace. Older threads
+      // may report a generic provider (for example `openai`) instead of the
+      // managed provider id we assign to the model entity. Prefer the exact
+      // provider mapping, then reconcile by model name only when that name is
+      // unique in the instance catalog.
+      const entity = entities.find((candidate) => codexProviderId(candidate.id) === modelProvider)
+        || (() => {
+          const matches = entities.filter((candidate) => candidate.modelNames.some((entry) => entry.name === model));
+          return matches.length === 1 ? matches[0] : undefined;
+        })();
+      return entity ? { modelEntityId: entity.id, modelName: model } : undefined;
+    },
+    onDiagnostic: (diagnostic) => app.log.warn({ diagnostic }, "Codex model selection diagnostic"),
     onMessageDelta: (delta) => {
       const payload = AiSessionMessageDeltaEventSchema.parse({
         instanceId,
@@ -795,11 +827,22 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       appRuntime.ensureSharedResource("codex");
       await codexAppServer.sync(appSessionsWithSharedCodexAppServer());
     },
-    capability: {
+    capability: () => ({
       agent: "codex",
       actions: { create: true, send: true, queue: true, steer: true, interrupt: true, archive: true, delete: true, fork: true, approvalDecisions: ["allow", "deny", "skip"] },
       timeline: { sessionRead: true, turnRead: true, liveItems: true },
-    },
+      modelSelection: {
+        selectModelAtCreate: true,
+        selectProviderAtCreate: true,
+        switchModelWithinProvider: codexAppServer.supportsThreadSettingsUpdate(),
+        // Codex thread/settings/update accepts model only; provider is fixed per thread.
+        switchProviderDuringSession: false,
+      },
+      reasoningEffort: {
+        selectAtCreate: codexAppServer.supportsThreadSettingsUpdate(),
+        updateDuringSession: codexAppServer.supportsThreadSettingsUpdate(),
+      },
+    }),
   });
   aiSessionProviders.register({
     agent: "claude",
@@ -809,6 +852,13 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       agent: "claude",
       actions: { create: false, send: true, queue: true, steer: true, interrupt: true, archive: true, delete: false, fork: false, approvalDecisions: [] },
       timeline: { sessionRead: false, turnRead: false, liveItems: false },
+      modelSelection: {
+        selectModelAtCreate: false,
+        selectProviderAtCreate: false,
+        switchModelWithinProvider: false,
+        switchProviderDuringSession: false,
+      },
+      reasoningEffort: { selectAtCreate: false, updateDuringSession: false },
     },
   });
   aiSessionProviders.register({
@@ -823,9 +873,15 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       agent: "opencode",
       actions: { create: true, send: true, queue: true, steer: false, interrupt: true, archive: true, delete: true, fork: true, approvalDecisions: ["allow", "deny"] },
       timeline: { sessionRead: true, turnRead: true, liveItems: true },
+      modelSelection: {
+        selectModelAtCreate: false,
+        selectProviderAtCreate: false,
+        switchModelWithinProvider: false,
+        switchProviderDuringSession: false,
+      },
+      reasoningEffort: { selectAtCreate: false, updateDuringSession: false },
     },
   });
-  aiSessionProviderCapabilities = aiSessionProviders.capabilities();
   const aiSessionHistoryLifecycle = new AiSessionHistoryLifecycle(aiSessionHistory, (agent) => Boolean(aiSessionProviders.get(agent)));
   const unsubscribeTimelineItems = aiSessionController.subscribeTimelineItems((timelineItem) => {
     events.publish(AiSessionEventType.TimelineItem, AiSessionTimelineItemEventSchema.parse({
@@ -877,6 +933,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     ensureProvider: async (agent) => {
       await aiSessionProviders.ensureReady(agent);
     },
+    resolveModelSelection: (agent, requested) => resolveControlledPrivateModelSelection(privateModelCatalog, agent, requested),
     onDiagnostic: (diagnostic) => app.log.warn({ diagnostic }, "AI session create compensation"),
   });
   const repositoryAiSessionWorkspace = registerRepositoryRoutes(app, {
@@ -1440,7 +1497,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       aiSessions,
       triggers,
       aiSessionController.timelineCapabilities(),
-      aiSessionProviderCapabilities,
+      aiSessionProviderCapabilities(),
       gitCredentialBrokerInstalled,
     );
     return {
@@ -1454,7 +1511,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   });
 
   app.get("/api/instance/capabilities", async () => ({
-    data: controlledInstanceCapabilities(appRuntime, aiSessionController.timelineCapabilities(), aiSessionProviderCapabilities, gitCredentialBrokerInstalled),
+    data: controlledInstanceCapabilities(appRuntime, aiSessionController.timelineCapabilities(), aiSessionProviderCapabilities(), gitCredentialBrokerInstalled),
   }));
 
   app.get("/api/workspace/status", async () => ({
@@ -1694,6 +1751,15 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     try {
       const referenced = AiSessionCreateRefInputSchema.extend({ cwd: AiSessionCreateInputSchema.shape.cwd }).strict().safeParse(request.body || {});
       const body = referenced.success ? referenced.data : AiSessionCreateInputSchema.parse(request.body || {});
+      if (body.reasoningEffort) {
+        const capability = normalizeAiSessionReasoningEffortCapabilities(aiSessionProviders.get(body.agent)?.capability);
+        if (!capability.selectAtCreate) {
+          throw Object.assign(new Error(`${body.agent} does not support selecting reasoning effort at creation.`), {
+            code: "AI_SESSION_REASONING_EFFORT_UNSUPPORTED",
+            statusCode: 409,
+          });
+        }
+      }
       const attachments: AiSessionMessageAttachment[] = [];
       for (const attachment of body.attachments) {
         if (attachment.source.type !== "upload-ref") attachments.push(AiSessionMessageAttachmentSchema.parse(attachment));
@@ -1720,6 +1786,34 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       const result = AiSessionForkResultSchema.parse(await aiSessionFork.fork(request.params.id, body));
       publishAiSessionSnapshot("control-action");
       return { data: result };
+    } catch (error: unknown) {
+      return sendAiSessionControlError(reply, error);
+    }
+  });
+
+  app.put<{ Params: { id: string }; Body: unknown }>("/api/ai-sessions/:id/model-selection", async (request, reply) => {
+    try {
+      const body = AiSessionModelSelectionInputSchema.parse(request.body || {});
+      const session = aiSessions.get(request.params.id);
+      if (!session) throw Object.assign(new Error("AI Session was not found."), { code: "AI_SESSION_NOT_FOUND", statusCode: 404 });
+      const selection = resolveControlledPrivateModelSelection(privateModelCatalog, session.agent, body.modelSelection);
+      if (!selection) throw Object.assign(new Error("Model selection is unavailable."), { code: "AI_SESSION_MODEL_SELECTION_UNAVAILABLE", statusCode: 409 });
+      await aiSessionController.updateModelSelection(session.id, selection);
+      publishAiSessionSnapshot("control-action");
+      return { data: AiSessionModelSelectionActionResponseSchema.parse({ sessionId: session.id, accepted: true }) };
+    } catch (error: unknown) {
+      return sendAiSessionControlError(reply, error);
+    }
+  });
+
+  app.put<{ Params: { id: string }; Body: unknown }>("/api/ai-sessions/:id/reasoning-effort", async (request, reply) => {
+    try {
+      const body = AiSessionReasoningEffortInputSchema.parse(request.body || {});
+      const session = aiSessions.get(request.params.id);
+      if (!session) throw Object.assign(new Error("AI Session was not found."), { code: "AI_SESSION_NOT_FOUND", statusCode: 404 });
+      await aiSessionController.updateReasoningEffort(session.id, body.reasoningEffort);
+      publishAiSessionSnapshot("control-action");
+      return { data: AiSessionReasoningEffortActionResponseSchema.parse({ sessionId: session.id, accepted: true }) };
     } catch (error: unknown) {
       return sendAiSessionControlError(reply, error);
     }
@@ -2127,6 +2221,20 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       claudeAuthConfigured: Boolean(next.ANTHROPIC_API_KEY),
       configUpdated: codex.applied || claude.applied,
     } };
+  });
+
+  app.put<{ Body: unknown }>("/api/internal/model-catalog", nodeAgentApiRoute({
+    code: "MANAGED_MODEL_CATALOG_FORBIDDEN",
+    message: "Instance registration token is required.",
+  }), async (request) => {
+    privateModelCatalog = ControlledPrivateModelCatalogSchema.parse(request.body);
+    for (const key of Object.keys(managedModelEnv)) {
+      if (key.startsWith("TASK_HANDOFF_CODEX_PROVIDER_")) delete managedModelEnv[key];
+    }
+    codexManagedConfig = applyManagedCodexModelConfig(managedModelEnv, privateModelCatalog);
+    Object.assign(managedModelEnv, codexManagedConfig.providerEnvironment || {});
+    appRuntime.replaceManagedEnvironment(managedAppEnvironment(managedModelEnv));
+    return { data: { applied: true, configUpdated: codexManagedConfig.applied } };
   });
 
   app.get("/api/config-sync/presets", async () => ({

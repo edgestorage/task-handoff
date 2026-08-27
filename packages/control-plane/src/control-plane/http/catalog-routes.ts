@@ -63,6 +63,11 @@ export function registerCatalogRoutes({ app, service, events }: RegisterCatalogR
     events.publish("model.created", { modelId: model.id });
     return reply.code(201).send({ data: model });
   });
+  app.post("/api/models/:id/copy", async (request, reply) => {
+    const model = service.copyModel(IdParamsSchema.parse(request.params).id, request.body);
+    events.publish("model.created", { modelId: model.id });
+    return reply.code(201).send({ data: model });
+  });
   app.post("/api/models/discover", async (request) => ({ data: await service.discoverModels(request.body) }));
   app.post("/api/models/test", async (request) => ({ data: await service.testModel(request.body) }));
   app.post("/api/models/reorder", async (request) => {

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import test from "node:test";
 
 const settings = fs.readFileSync(new URL("../src/apps/control-plane/settings/SettingsModal.vue", import.meta.url), "utf8");
+const settingsSections = fs.readFileSync(new URL("../src/apps/control-plane/settings/settingsSections.ts", import.meta.url), "utf8");
 const users = fs.readFileSync(new URL("../src/apps/control-plane/settings/UserAccessSettingsSection.vue", import.meta.url), "utf8");
 const roles = fs.readFileSync(new URL("../src/apps/control-plane/settings/RoleManagementPanel.vue", import.meta.url), "utf8");
 const providers = fs.readFileSync(new URL("../src/apps/control-plane/settings/IdentityProviderManagementPanel.vue", import.meta.url), "utf8");
@@ -14,7 +15,8 @@ const zhSettings = fs.readFileSync(new URL("../src/i18n/locales/zh-CN/settings.t
 
 test("user management navigation consumes the authoritative permission projection", () => {
   assert.match(settings, /permissionIds\.includes\("users:manage"\)/);
-  assert.match(settings, /canManageUsers[\s\S]*id: "users"/);
+  assert.match(settings, /manageUsers: canManageUsers\.value/);
+  assert.match(settingsSections, /access\.manageUsers[\s\S]*id: "users"/);
   assert.doesNotMatch(settings, /user\?\.role|role !== "admin"/);
   assert.match(workbench, /useCurrentAccessQuery/);
   assert.match(workbench, /preserveAcrossAuthorizationChange/);
@@ -50,7 +52,7 @@ test("personal account opens outside settings while administrator management rem
   assert.match(users, /settings\.userAccess\.context/);
   assert.doesNotMatch(settings, /id: "account"/);
   assert.match(workbench, /@select="openAccountSecurity"/);
-  assert.ok(settings.indexOf('id: "mobile-sessions"') < settings.indexOf('id: "users"'));
+  assert.ok(settingsSections.indexOf('id: "mobile-sessions"') < settingsSections.indexOf('id: "users"'));
 });
 
 test("access management UI covers user security, custom roles, providers, and approvals", () => {

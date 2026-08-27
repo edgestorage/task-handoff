@@ -15,12 +15,17 @@ import {
 import { AiSessionEventType as ProtocolAiSessionEventType, AiSessionTimelineItemEventSchema, AiSessionUnreadEventType, AiSessionUnreadStateSchema, normalizeAiSessionMessageDeltaEvent, type AiSessionTimelineItemEvent, type AiSessionUnreadState } from "@task-handoff/protocol/ai-sessions";
 import { safeParseResponse } from "@task-handoff/protocol/response-validation";
 import { ControlPlaneNodeFleetUpdatedEventSchema } from "@task-handoff/protocol/control-plane-directory";
+import { ControlPlaneAiSessionTriggerBoundEventSchema, ControlPlaneAiSessionTriggerUnboundEventSchema } from "@task-handoff/protocol/triggers";
 import type { SessionStreamDescriptor } from "@task-handoff/protocol/events";
 import type { AppManagementEvent } from "../../api/types";
 import type { InstanceResourceMetrics } from "../../api/types";
+import type { InstanceTriggerMutationResult } from "../../api/types";
+import type { InstanceBoardPayload } from "../../api/types";
 import { controlPlaneQueryKeys } from "../../api/queryKeys.ts";
+import { getControlledInstanceTriggers } from "../../api/queries.ts";
 import { controlPlaneDomainQueryKeys } from "../../api/queryInvalidation.ts";
 import { applyInstanceLifecycle, applyNodeFleetState, applyNodeStateProjection } from "./instanceLifecycleCache.ts";
+import { removeInstanceTriggerBinding, replaceInstanceTriggerSnapshot, upsertInstanceTriggerBinding } from "./instanceTriggerCache.ts";
 import { controlPlaneEventDomains } from "./eventInvalidation.ts";
 import { aiSessionMessageDeltaDemand, aiSessionTimelineDemand, aiSessionTransientReplaySince } from "./useAiSessionEventDemand.ts";
 import {
@@ -107,6 +112,9 @@ export function useControlPlaneEvents(input: {
       void queryClient.invalidateQueries({ queryKey: controlPlaneQueryKeys.scopedInstanceBoard(toValue(input.instanceId || "")) });
       void input.appManagement?.recoverOpen();
       void input.resourceMetrics?.recoverOpen();
+      for (const triggerInstanceId of cachedInstanceIds(instanceId)) {
+        void recoverInstanceTriggers(triggerInstanceId);
+      }
       if (recovering) input.aiSessions.recoverTimelineItems();
     });
     current.addEventListener("message", (event) => handleMessage(String(event.data)));
@@ -203,6 +211,31 @@ export function useControlPlaneEvents(input: {
       // `instances` invalidations refetches the board after every session action.
       return true;
     }
+    if (event.type === "trigger.deployment.bound") {
+      const bound = safeParseResponse(ControlPlaneAiSessionTriggerBoundEventSchema, event.payload);
+      if (!bound.success) return false;
+      if (bound.data.mutation) {
+        upsertInstanceTriggerBinding(queryClient, bound.data.instanceId, bound.data.mutation as InstanceTriggerMutationResult);
+      } else {
+        // Compatibility for v0.0.23: recover the authoritative instance
+        // trigger snapshot when the event predates embedded mutation results.
+        void recoverInstanceTriggers(bound.data.instanceId);
+      }
+      queueInvalidation(["control-plane-triggers"]);
+      return true;
+    }
+    if (event.type === "trigger.deployment.unbound") {
+      const unbound = safeParseResponse(ControlPlaneAiSessionTriggerUnboundEventSchema, event.payload);
+      if (!unbound.success) return false;
+      removeInstanceTriggerBinding(queryClient, unbound.data.instanceId, unbound.data.sessionId, unbound.data.configHash);
+      queueInvalidation(["control-plane-triggers"]);
+      return true;
+    }
+    if (event.type?.startsWith("trigger.") && eventInstanceId(event)) {
+      void recoverInstanceTriggers(eventInstanceId(event)!);
+      queueInvalidation(["control-plane-triggers"]);
+      return true;
+    }
     if (event.type?.startsWith("image.pull.")) {
       return input.imagePullProgress?.applyEvent(event.type, event.payload) || false;
     }
@@ -268,6 +301,24 @@ export function useControlPlaneEvents(input: {
       return false;
     }
     return false;
+  }
+
+  async function recoverInstanceTriggers(instanceId: string) {
+    try {
+      replaceInstanceTriggerSnapshot(queryClient, instanceId, await getControlledInstanceTriggers(instanceId));
+    } catch (error) {
+      console.warn("CONTROL_PLANE_TRIGGER_RECOVERY_FAILED", { instanceId, error });
+    }
+  }
+
+  function cachedInstanceIds(scopeInstanceId: string) {
+    const ids = new Set<string>();
+    for (const [, payload] of queryClient.getQueriesData<InstanceBoardPayload>({ queryKey: controlPlaneQueryKeys.instanceBoard })) {
+      for (const instance of payload?.data || []) {
+        if (!scopeInstanceId || instance.id === scopeInstanceId) ids.add(instance.id);
+      }
+    }
+    return ids;
   }
 
   function rememberTransientEventId(id: string) {

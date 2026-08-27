@@ -267,6 +267,9 @@ export class ControlPlaneService {
       listNodes: () => this.listNodes(),
       requireNode: (id) => this.requireNode(id),
       fetchImpl: this.fetchImpl,
+      listInstances: () => this.listCachedNodeInstances(),
+      listAiSessions: () => this.listAiSessions(),
+      listAiSessionHistory: (instanceId) => this.listAiSessionHistory(instanceId),
     });
     this.images = new JsonCollection(paths.imagesDir, {
       ...storeOptions(CustomImageProfileSchema),
@@ -674,6 +677,10 @@ export class ControlPlaneService {
 
   createModel(input: unknown) {
     return this.modelService.create(input);
+  }
+
+  copyModel(id: string, input: unknown) {
+    return this.modelService.copy(id, input);
   }
 
   updateModel(id: string, input: unknown) {
@@ -1566,6 +1573,14 @@ export class ControlPlaneService {
 
   forkAiSession(instanceId: string, aiSessionId: string, input: AiSessionForkInput) {
     return this.aiSessionActionService.fork(instanceId, aiSessionId, input);
+  }
+
+  updateAiSessionModelSelection(instanceId: string, aiSessionId: string, clientRequestId: string, selection: import("@task-handoff/protocol/ai-sessions").AiSessionModelSelection) {
+    return this.aiSessionActionService.updateModelSelection(instanceId, aiSessionId, clientRequestId, selection);
+  }
+
+  updateAiSessionReasoningEffort(instanceId: string, aiSessionId: string, clientRequestId: string, effort: import("@task-handoff/protocol/ai-sessions").AiSessionReasoningEffort) {
+    return this.aiSessionActionService.updateReasoningEffort(instanceId, aiSessionId, clientRequestId, effort);
   }
 
   openAiSessionApp(instanceId: string, aiSessionId: string, clientRequestId: string) {

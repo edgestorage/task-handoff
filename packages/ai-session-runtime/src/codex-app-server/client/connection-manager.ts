@@ -1,4 +1,4 @@
-import type { CodexAppServerClientLike } from "./contract";
+import type { CodexAppServerClientLike, CodexThreadResumeOptions } from "./contract";
 import type { CodexAppServerEvent, CodexThread } from "../protocol/types";
 
 export type CodexAppServerConnection = {
@@ -14,6 +14,7 @@ type ConnectionManagerOptions = {
   onEvent: (event: CodexAppServerEvent, connection: CodexAppServerConnection) => void;
   onDisconnect?: (connection: CodexAppServerConnection) => void;
   onInvalidate?: (connection: CodexAppServerConnection) => void;
+  threadResumeOptions?: (threadId: string) => CodexThreadResumeOptions | undefined;
   retryDelayMs?: number;
 };
 
@@ -157,7 +158,7 @@ export class CodexAppServerConnectionManager {
     if (readiness) return readiness.then(() => undefined);
     const pending = this.subscriptionAttempts.get(threadId);
     if (pending) return pending;
-    const attempt = client.resumeThread(threadId).then((thread) => {
+    const attempt = client.resumeThread(threadId, this.options.threadResumeOptions?.(threadId)).then((thread) => {
       if (client === this.clientValue && epoch === this.epochValue) {
         this.subscribedThreadIds.add(threadId);
       }
@@ -196,7 +197,7 @@ export class CodexAppServerConnectionManager {
         if (!connection.client.resumeThread) {
           throw new Error("Codex app-server does not support resuming an unloaded thread.");
         }
-        await connection.client.resumeThread(threadId);
+        await connection.client.resumeThread(threadId, this.options.threadResumeOptions?.(threadId));
       }
       if (!this.isCurrent(connection)) {
         throw new Error("Codex app-server connection changed while resuming the thread.");

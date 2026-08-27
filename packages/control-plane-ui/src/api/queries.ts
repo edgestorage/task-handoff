@@ -19,6 +19,7 @@ import type {
   CreateControlledInstanceResult,
   CreateImageInput,
   CreateModelInput,
+  CopyModelInput,
   CreateNodeInput,
   NodePairingInvite,
   CreateNodeLocalFolderInput,
@@ -32,6 +33,8 @@ import type {
   ControlPlaneTriggers,
   CreateControlPlaneTriggerInput,
   ControlPlaneTriggerMutationResult,
+  InstanceTriggerIndex,
+  InstanceTriggerMutationResult,
   ChatBridgeConfig,
   ChatChannel,
   AiSessionUploadedAttachment,
@@ -658,6 +661,14 @@ export function createAiSession(instanceId: string, input: import("@task-handoff
   return sharedAiSessionsApi.create(instanceId, input);
 }
 
+export function updateAiSessionModelSelection(instanceId: string, aiSessionId: string, clientRequestId: string, modelSelection: import("@task-handoff/protocol/ai-sessions").AiSessionModelSelection) {
+  return sharedAiSessionsApi.updateModelSelection(instanceId, aiSessionId, clientRequestId, modelSelection);
+}
+
+export function updateAiSessionReasoningEffort(instanceId: string, aiSessionId: string, clientRequestId: string, reasoningEffort: import("@task-handoff/protocol/ai-sessions").AiSessionReasoningEffort) {
+  return sharedAiSessionsApi.updateReasoningEffort(instanceId, aiSessionId, clientRequestId, reasoningEffort);
+}
+
 export function forkAiSession(instanceId: string, aiSessionId: string, input: import("@task-handoff/protocol/ai-sessions").AiSessionForkInput) {
   return sharedAiSessionsApi.fork(instanceId, aiSessionId, input);
 }
@@ -716,11 +727,15 @@ export function applyControlPlaneTrigger(configHash: string, instanceIds: string
 }
 
 export function bindAiSessionTrigger(instanceId: string, sessionId: string, configHash: string) {
-  return postApiData<Record<string, unknown>>(`controlled-instances/${instanceId}/ai-sessions/${sessionId}/triggers`, { configHash });
+  return postApiData<InstanceTriggerMutationResult>(`controlled-instances/${instanceId}/ai-sessions/${sessionId}/triggers`, { configHash });
 }
 
 export function unbindAiSessionTrigger(instanceId: string, sessionId: string, configHash: string) {
   return deleteApiData<Record<string, unknown>>(`controlled-instances/${instanceId}/ai-sessions/${sessionId}/triggers/${configHash}`);
+}
+
+export function getControlledInstanceTriggers(instanceId: string) {
+  return getApiData<InstanceTriggerIndex>(`controlled-instances/${instanceId}/triggers`);
 }
 
 export function useChatGatewayStatusQuery() {
@@ -888,6 +903,10 @@ export function createModel(input: CreateModelInput) {
   return postApiData<ModelConfig>("models", input);
 }
 
+export function copyModel(id: string, input: CopyModelInput) {
+  return postApiData<ModelConfig>(`models/${id}/copy`, input);
+}
+
 export function updateModel(id: string, input: UpdateModelInput) {
   return patchApiData<ModelConfig>(`models/${id}`, input);
 }
@@ -936,7 +955,7 @@ export function discoverModels(input: ModelEndpointDraft, nodeId?: string) {
   return postApiData<ModelDiscoveryResult>(nodeId ? `nodes/${nodeId}/models/discover` : "models/discover", input);
 }
 
-export function testModel(input: ModelEndpointDraft & { model: string; app: "codex" | "claude" | "opencode" }, nodeId?: string) {
+export function testModel(input: ModelEndpointDraft & { model: string; app?: "codex" | "claude" | "opencode" }, nodeId?: string) {
   return postApiData<ModelTestResult>(nodeId ? `nodes/${nodeId}/models/test` : "models/test", input);
 }
 

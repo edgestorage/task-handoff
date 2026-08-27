@@ -64,6 +64,31 @@ test("provider registry is the single registration and capability source", async
   assert.throws(() => providers.register({ agent: "opencode", controlProvider: provider, capability }), /Duplicate/);
 });
 
+test("provider registry projects version-dependent capabilities on every read", () => {
+  let settingsSupported = false;
+  const provider = { agent: "codex", interrupt: async () => undefined };
+  const providers = new AiSessionProviderRegistry(
+    { register: () => undefined },
+    { register: () => undefined },
+  );
+  providers.register({
+    agent: "codex",
+    controlProvider: provider,
+    capability: () => ({
+      agent: "codex",
+      actions: { create: true, send: true, queue: true, steer: true, interrupt: true, archive: true, delete: true, fork: true, approvalDecisions: ["allow", "deny", "skip"] },
+      timeline: { sessionRead: true, turnRead: true, liveItems: true },
+      modelSelection: { selectModelAtCreate: true, selectProviderAtCreate: true, switchModelWithinProvider: settingsSupported, switchProviderDuringSession: false },
+      reasoningEffort: { selectAtCreate: settingsSupported, updateDuringSession: settingsSupported },
+    }),
+  });
+  assert.equal(providers.capabilities()[0].modelSelection.switchModelWithinProvider, false);
+  assert.equal(providers.capabilities()[0].reasoningEffort.updateDuringSession, false);
+  settingsSupported = true;
+  assert.equal(providers.capabilities()[0].modelSelection.switchModelWithinProvider, true);
+  assert.equal(providers.capabilities()[0].reasoningEffort.updateDuringSession, true);
+});
+
 test("AI session discovery isolates provider failures", async () => {
   const failures = [];
   const calls = [];

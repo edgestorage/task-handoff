@@ -20,7 +20,7 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
 
   constructor(profile: MobileCloudRelayControlPlaneProfile, private readonly account: CloudMobileAccountClient, private readonly openChannel: RelayChannelFactory) { this.profile = profile; }
 
-  async request<T>(path: string, schema: z.ZodType<T>, init: RequestInit = {}) {
+  async request<T>(path: string, schema: z.ZodType<T>, init: RequestInit = {}, _onUploadProgress?: (progress: number) => void) {
     if (!path.startsWith('/') || path.startsWith('//')) throw transportError('RELAY_ROUTE_INVALID');
     const headers = new Headers(init.headers); if (headers.has('authorization')) throw transportError('RELAY_AUTH_HEADER_FORBIDDEN');
     const channel = await this.ensureChannel(); const id = `request_${++this.nextId}`;

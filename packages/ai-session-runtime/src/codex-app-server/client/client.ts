@@ -101,6 +101,11 @@ export function codexThreadForkCapabilities(userAgent: string | undefined): Code
   return { fullHistory, throughTurn };
 }
 
+export function codexThreadSettingsUpdateSupported(userAgent: string | undefined) {
+  const version = codexVersion(userAgent);
+  return Boolean(version && compareVersion(version, [0, 133, 0]) >= 0);
+}
+
 function codexVersion(userAgent: string | undefined) {
   const match = userAgent?.match(/(?:^|\s|\/)(\d+)\.(\d+)\.(\d+)(?:[-+\s]|$)/);
   return match ? [Number(match[1]), Number(match[2]), Number(match[3])] as const : undefined;
@@ -228,6 +233,7 @@ export class CodexAppServerClient extends EventEmitter {
       ...(options.permissions || {}),
       ephemeral: false,
       ...(options.historyMode ? { historyMode: options.historyMode } : {}),
+      ...(options.reasoningEffort ? { config: { model_reasoning_effort: options.reasoningEffort } } : {}),
       sessionStartSource: "startup",
       threadSource: "user",
     });
@@ -243,7 +249,55 @@ export class CodexAppServerClient extends EventEmitter {
     if (typeof thread.cwd !== "string" || !thread.cwd.trim()) {
       throw new Error("Codex thread/start returned no cwd.");
     }
-    return thread;
+    return withThreadModelResult(thread, result);
+  }
+
+  supportsThreadSettingsUpdate() {
+    return codexThreadSettingsUpdateSupported(this.serverUserAgent);
+  }
+
+  async updateThreadSettings(threadId: string, settings: import("./contract").CodexThreadSettings) {
+    if (!this.supportsThreadSettingsUpdate()) {
+      throw new CodexAppServerRpcError("Codex app-server does not support thread/settings/update.", -32601);
+    }
+    type RawNotification = { method: string; params: JsonValue };
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let listener: ((notification: RawNotification) => void) | undefined;
+    if (!settings.model && !settings.effort) {
+      throw new Error("Codex thread settings update requires model or effort.");
+    }
+    const updated = new Promise<import("./contract").CodexThreadSettingsResult>((resolve, reject) => {
+      listener = (notification) => {
+        if (notification.method !== "thread/settings/updated") return;
+        const params = notification.params;
+        const threadSettings = params.threadSettings && typeof params.threadSettings === "object" && !Array.isArray(params.threadSettings)
+          ? params.threadSettings as JsonValue
+          : undefined;
+        if (params.threadId !== threadId) return;
+        if (settings.model && threadSettings?.model !== settings.model) return;
+        if (settings.effort && threadSettings?.effort !== settings.effort) return;
+        if (timer) clearTimeout(timer);
+        if (listener) this.off("notification", listener);
+        resolve({
+          ...(settings.model ? { model: settings.model } : {}),
+          ...(settings.effort ? { effort: settings.effort } : {}),
+          ...(typeof threadSettings.modelProvider === "string" ? { modelProvider: threadSettings.modelProvider } : {}),
+        });
+      };
+      this.on("notification", listener);
+      timer = setTimeout(() => {
+        if (listener) this.off("notification", listener);
+        reject(new Error(`Codex thread settings update timed out for ${threadId}.`));
+      }, this.requestTimeoutMs);
+    });
+    try {
+      await this.request("thread/settings/update", { threadId, ...settings });
+      return await updated;
+    } catch (error) {
+      if (timer) clearTimeout(timer);
+      if (listener) this.off("notification", listener);
+      throw error;
+    }
   }
 
   threadForkCapabilities() {
@@ -261,6 +315,9 @@ export class CodexAppServerClient extends EventEmitter {
         threadId: options.threadId,
         ...(options.lastTurnId ? { lastTurnId: options.lastTurnId } : {}),
         ...(options.cwd ? { cwd: options.cwd } : {}),
+        ...(options.model ? { model: options.model } : {}),
+        ...(options.modelProvider ? { modelProvider: options.modelProvider } : {}),
+        ...(options.reasoningEffort ? { config: { model_reasoning_effort: options.reasoningEffort } } : {}),
         ephemeral: false,
       });
       const thread = result.thread && typeof result.thread === "object" && !Array.isArray(result.thread)
@@ -271,7 +328,7 @@ export class CodexAppServerClient extends EventEmitter {
       }
       if (thread.ephemeral === true) throw new Error("Codex thread/fork returned an ephemeral thread.");
       if (typeof thread.cwd !== "string" || !thread.cwd.trim()) throw new Error("Codex thread/fork returned no cwd.");
-      return thread;
+      return withThreadModelResult(thread, result);
     } catch (error) {
       if (error instanceof CodexAppServerRpcError && error.rpcCode === -32601) {
         this.forkMethodAvailable = false;
@@ -282,7 +339,9 @@ export class CodexAppServerClient extends EventEmitter {
 
   async readThread(threadId: string, options: { includeTurns?: boolean } = {}) {
     const result = await this.request("thread/read", { threadId, includeTurns: Boolean(options.includeTurns) });
-    return result.thread && typeof result.thread === "object" ? result.thread as CodexThread : undefined;
+    return result.thread && typeof result.thread === "object"
+      ? withThreadModelResult(result.thread as CodexThread, result)
+      : undefined;
   }
 
   async listThreadItems(threadId: string, turnId?: string): Promise<CodexThreadItemEntry[] | undefined> {
@@ -438,9 +497,16 @@ export class CodexAppServerClient extends EventEmitter {
     await this.request("fuzzyFileSearch/sessionStop", { sessionId });
   }
 
-  async resumeThread(threadId: string) {
-    const result = await this.request("thread/resume", { threadId });
-    return result.thread && typeof result.thread === "object" ? result.thread as CodexThread : undefined;
+  async resumeThread(threadId: string, options: import("./contract").CodexThreadResumeOptions = {}) {
+    const result = await this.request("thread/resume", {
+      threadId,
+      ...(options.model ? { model: options.model } : {}),
+      ...(options.modelProvider ? { modelProvider: options.modelProvider } : {}),
+      ...(options.reasoningEffort ? { config: { model_reasoning_effort: options.reasoningEffort } } : {}),
+    });
+    return result.thread && typeof result.thread === "object"
+      ? withThreadModelResult(result.thread as CodexThread, result)
+      : undefined;
   }
 
   async archiveThread(threadId: string) {
@@ -679,6 +745,15 @@ export class CodexAppServerClient extends EventEmitter {
       this.emit("event", event);
     }
   }
+}
+
+function withThreadModelResult(thread: CodexThread, result: JsonValue): CodexThread {
+  return {
+    ...thread,
+    ...(typeof result.model === "string" ? { model: result.model } : {}),
+    ...(typeof result.modelProvider === "string" ? { modelProvider: result.modelProvider } : {}),
+    ...(typeof result.reasoningEffort === "string" ? { reasoningEffort: result.reasoningEffort } : {}),
+  };
 }
 
 function websocketProxyStream(child: ChildProcessWithoutNullStreams) {

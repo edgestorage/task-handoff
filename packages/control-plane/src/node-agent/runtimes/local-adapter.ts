@@ -167,6 +167,7 @@ export class LocalhostRuntimeAdapter implements RuntimeAdapter {
         TASK_HANDOFF_WORKSPACE: workspacePath,
         TASK_HANDOFF_WORKSPACE_MODE: "local-bind",
         TASK_HANDOFF_DATA_DIR: dataDir,
+        TASK_HANDOFF_INSTANCE_PRIVATE_CONFIG_PATH: context.privateConfigPath || "",
         TASK_HANDOFF_LOG_DIR: logDir,
         TASK_HANDOFF_APP_SESSION_PERSIST: "1",
         TASK_HANDOFF_CODEX_APP_SERVER: process.env.TASK_HANDOFF_CODEX_APP_SERVER || "1",

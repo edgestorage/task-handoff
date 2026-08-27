@@ -114,6 +114,26 @@ export const TriggerIndexSchema = z.object({
   recentRuns: z.array(TriggerRunSchema).default([]),
 }).strict();
 
+export const TriggerMutationResultSchema = z.object({
+  config: TriggerConfigSchema,
+  deployment: TriggerDeploymentSchema,
+  runtime: TriggerRuntimeStateSchema.optional(),
+}).strict();
+
+export const ControlPlaneAiSessionTriggerBoundEventSchema = z.object({
+  instanceId: z.string().trim().min(1).max(160),
+  sessionId: z.string().trim().min(1).max(160),
+  // Compatibility for v0.0.23: deployment events did not carry the
+  // authoritative mutation result. Current consumers recover via GET.
+  mutation: TriggerMutationResultSchema.optional(),
+}).strip();
+
+export const ControlPlaneAiSessionTriggerUnboundEventSchema = z.object({
+  instanceId: z.string().trim().min(1).max(160),
+  sessionId: z.string().trim().min(1).max(160),
+  configHash: TriggerConfigSchema.shape.configHash,
+}).strip();
+
 export const ControlPlaneTriggerDeploymentEntrySchema = z.object({
   instanceId: z.string().trim().min(1).max(160),
   instanceName: z.string().trim().min(1).max(160),
@@ -170,6 +190,7 @@ export type TriggerDeployment = z.infer<typeof TriggerDeploymentSchema>;
 export type TriggerRuntimeState = z.infer<typeof TriggerRuntimeStateSchema>;
 export type TriggerRun = z.infer<typeof TriggerRunSchema>;
 export type TriggerIndex = z.infer<typeof TriggerIndexSchema>;
+export type TriggerMutationResult = z.infer<typeof TriggerMutationResultSchema>;
 export type ControlPlaneTrigger = z.infer<typeof ControlPlaneTriggerSchema>;
 export type ControlPlaneTriggers = z.infer<typeof ControlPlaneTriggersSchema>;
 export type ControlPlaneTriggerTemplateInput = z.infer<typeof ControlPlaneTriggerTemplateInputSchema>;

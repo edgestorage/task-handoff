@@ -59,6 +59,7 @@ export function SessionDetail({
   onModeChange,
   showModePicker = true,
   bottomInset = 0,
+  contentLoading = false,
   keyboardViewportRevision = 0,
 }: {
   session?: ControlPlaneAiSessionSummary;
@@ -77,6 +78,7 @@ export function SessionDetail({
   onModeChange?(mode: SessionDetailMode): void;
   showModePicker?: boolean;
   bottomInset?: number;
+  contentLoading?: boolean;
   keyboardViewportRevision?: number;
 }) {
   const { colors } = useMobileTheme();
@@ -103,9 +105,9 @@ export function SessionDetail({
   const showsLatest = selectedMode === 'conversation' || isLatest;
   const activityText = session ? sessionActivityText(session, t) : undefined;
   const timelineVisible = timelineEnabled || Object.values(timelines).some((timeline) => timeline.items.length > 0);
-  const items = useMemo(() => selectedMode === 'conversation'
+  const items = useMemo(() => contentLoading ? [] : selectedMode === 'conversation'
     ? conversationDetailItems(session, messages, t, timelines, timelineVisible, timelineHistoryEnabled)
-    : detailItems(session, messages, selectedIndex, t, timelines, timelineVisible, timelineHistoryEnabled), [session, messages, selectedIndex, selectedMode, t, timelineHistoryEnabled, timelineVisible, timelines]);
+    : detailItems(session, messages, selectedIndex, t, timelines, timelineVisible, timelineHistoryEnabled), [contentLoading, session, messages, selectedIndex, selectedMode, t, timelineHistoryEnabled, timelineVisible, timelines]);
   const projectionId = `${session?.id || ''}:${selectedMode}`;
   const initialConversationStart = conversationWindowStart(items, items.length);
   const conversationStart = selectedMode === 'conversation' && conversationWindow.projectionId === projectionId
@@ -272,7 +274,7 @@ export function SessionDetail({
           } : undefined}
           onStartReachedThreshold={0.5}
           scrollEventThrottle={16}
-          ListEmptyComponent={<EmptyState icon={{ android: 'chat_bubble_outline', ios: 'bubble.left' }} iconSize={26} message={t('sessions.noMessages')} style={styles.conversationEmpty} />}
+          ListEmptyComponent={contentLoading ? null : <EmptyState icon={{ android: 'chat_bubble_outline', ios: 'bubble.left' }} iconSize={26} message={t('sessions.noMessages')} style={styles.conversationEmpty} />}
           ListFooterComponent={listFooter}
           ListHeaderComponent={selectedMode !== 'conversation' || conversationStart === 0 ? listHeader : null}
           maxToRenderPerBatch={6}

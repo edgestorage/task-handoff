@@ -22,9 +22,39 @@
           class="desktop-window-controls native-window-control-space macos-native-window-control-space"
           aria-hidden="true"
         />
-        <div v-if="settingsMode" class="control-plane-title">
+        <div v-if="settingsMode" class="control-plane-title control-plane-settings-switcher-shell">
           <span class="control-plane-kicker">{{ topbarKicker }}</span>
-          <strong>{{ topbarTitle }}</strong>
+          <DropdownMenu>
+            <DropdownMenuTrigger as-child>
+              <button type="button" class="control-plane-instance-switcher control-plane-settings-switcher" :aria-label="t('settings.sections')" @dblclick.stop>
+                <span class="control-plane-instance-switcher-title">
+                  <strong>{{ topbarTitle }}</strong>
+                  <ChevronDown class="control-plane-instance-switcher-chevron" :size="16" aria-hidden="true" />
+                </span>
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent class="control-plane-settings-menu" align="start" :collision-padding="12" :side-offset="8">
+              <ScrollArea
+                class="control-plane-settings-menu-scroll"
+                :horizontal="false"
+                :style="{ '--settings-menu-height': `${settingsSections.length * 33 + 2}px` }"
+              >
+                <div class="control-plane-settings-menu-list">
+                  <DropdownMenuItem
+                    v-for="item in settingsSections"
+                    :key="item.id"
+                    class="control-plane-settings-menu-item"
+                    :class="{ selected: item.id === settingsSection }"
+                    :aria-current="item.id === settingsSection ? 'true' : undefined"
+                    @select="settingsSection = item.id"
+                  >
+                    <span>{{ item.label }}</span>
+                    <Check v-if="item.id === settingsSection" :size="16" aria-hidden="true" />
+                  </DropdownMenuItem>
+                </div>
+              </ScrollArea>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
         <div v-else class="control-plane-title control-plane-instance-switcher-shell">
           <span v-if="!standaloneMode" class="control-plane-kicker">{{ topbarKicker }}</span>
@@ -435,6 +465,7 @@ import { useInstanceAppManagement } from "./instance-settings/useInstanceAppMana
 import NewInstanceModal from "./NewInstanceModal.vue";
 import AccountSecurityDialog from "./settings/AccountSecurityDialog.vue";
 import SettingsModal from "./settings/SettingsModal.vue";
+import { buildSettingsSections, type SettingsSection } from "./settings/settingsSections";
 import type { NodeJoinedEvent } from "@task-handoff/protocol/control-plane";
 import { useActiveInstanceSessions } from "./instance-detail/useActiveInstanceSessions";
 import { useBoardTerminalPreviews } from "./board/useBoardTerminalPreviews";
@@ -541,6 +572,14 @@ const queryClient = useQueryClient();
 const { locale, t } = useI18n();
 const authSession = useAuthSessionQuery();
 const currentAccess = useCurrentAccessQuery(computed(() => Boolean(authSession.data.value?.enabled && authSession.data.value.authenticated)));
+const canManageUsers = computed(() => currentAccess.data.value?.permissionIds.includes("users:manage") === true);
+const canManageSettings = computed(() => currentAccess.data.value?.permissionIds.includes("settings:manage") === true);
+const canManageSecrets = computed(() => authSession.data.value?.enabled !== true || currentAccess.data.value?.permissionIds.includes("secrets:manage") === true);
+const settingsSections = computed(() => buildSettingsSections(t, {
+  manageSecrets: canManageSecrets.value,
+  manageSettings: canManageSettings.value,
+  manageUsers: canManageUsers.value,
+}));
 const controlPlane = useControlPlaneStatusQuery();
 const sessionQueryInstanceId = computed(() => standaloneMode.value ? standaloneInstanceId.value : "");
 const sessionQueriesEnabled = computed(() => !standaloneMode.value || standaloneOwnershipReady.value);
@@ -560,7 +599,8 @@ const controlPlaneAppSessions = useControlPlaneAppSessionsQuery(sessionQueryInst
 const sessionEventsEnabled = computed(() => sessionQueriesEnabled.value
   && !controlPlaneAiSessions.isPending.value
   && !controlPlaneAppSessions.isPending.value);
-const nodes = useNodesQuery(computed(() => !standaloneMode.value));
+// The standalone switcher uses the compact instance directory, so resolve node labels from the shared node directory.
+const nodes = useNodesQuery();
 let authorizationCacheEpoch = "";
 watch(() => currentAccessEpoch(currentAccess.data.value), (epoch) => {
   if (!epoch || !authorizationCacheEpoch) {
@@ -603,7 +643,7 @@ const instanceViewMode = computed(() => workbenchView.value === "instance");
 const boardMode = computed(() => workbenchView.value === "board");
 const aiBoardMode = computed(() => workbenchView.value === "ai");
 const settingsMode = ref(false);
-const settingsSection = ref<"basic" | "chat" | "images" | "environment-templates" | "projects" | "nodes" | "models" | "git-credentials" | "triggers" | "mobile-sessions" | "users" | "cloud-connectivity">("nodes");
+const settingsSection = ref<SettingsSection>("nodes");
 const accountSecurityOpen = ref(false);
 const boardFilter = ref("");
 const aiBoardFilter = ref("");
@@ -704,9 +744,10 @@ const switcherDuplicateNames = computed(() => {
 const switcherInstanceName = (instance: InstanceBoardItem | ControlPlaneInstanceResourceEntry) => switcherDuplicateNames.value.has(instance.name)
   ? `${instance.name} (${instance.id})`
   : instance.name;
-const switcherNodeName = (instance: InstanceBoardItem | ControlPlaneInstanceResourceEntry) => "node" in instance
-  ? instance.node?.name || instance.nodeId
-  : instance.nodeId;
+const switcherNodeName = (instance: InstanceBoardItem | ControlPlaneInstanceResourceEntry) => {
+  if ("node" in instance && instance.node?.name) return instance.node.name;
+  return nodes.data.value?.find((node) => node.id === instance.nodeId)?.name || instance.nodeId;
+};
 const instanceSettingsInstance = computed(() => boardInstancesWithAppSessions.value.find((instance) => instance.id === instanceSettingsId.value));
 const instanceAppManagement = useInstanceAppManagement({ load: getInstanceAppManagement, errorText });
 const instanceSettingsAppManagement = computed(() => instanceSettingsId.value ? instanceAppManagement.state(instanceSettingsId.value) : undefined);
@@ -828,7 +869,7 @@ const topbarTitle = computed(() => {
       : undefined;
     return selectedDetail?.name || standaloneDirectoryInstance.value?.name || t("navigation.controlPlane");
   }
-  return settingsSectionTitle(settingsSection.value);
+  return settingsSections.value.find((section) => section.id === settingsSection.value)?.label || t("navigation.settings");
 });
 const topbarRuntimeType = computed(() => {
   if (!standaloneMode.value) return activeInstance.value?.runtime?.type;
@@ -1301,40 +1342,6 @@ function toggleSettings() {
 function closeSettings() {
   settingsMode.value = false;
   closeFloatingLayers();
-}
-
-function settingsSectionTitle(section: typeof settingsSection.value) {
-  if (section === "basic") {
-    return t("settings.basic");
-  }
-  if (section === "images") {
-    return t("settings.images");
-  }
-  if (section === "environment-templates") {
-    return t("settings.environmentTemplates");
-  }
-  if (section === "nodes") {
-    return t("settings.nodes");
-  }
-  if (section === "models") {
-    return t("settings.models");
-  }
-  if (section === "git-credentials") {
-    return t("settings.gitCredentials.navigation");
-  }
-  if (section === "chat") {
-    return t("settings.chatBridges");
-  }
-  if (section === "triggers") {
-    return t("triggers.title");
-  }
-  if (section === "mobile-sessions") {
-    return t("settings.mobileSessions.navigation");
-  }
-  if (section === "users") {
-    return t("settings.userAccess.navigation");
-  }
-  return t("settings.projects");
 }
 
 function handleInstanceCreated(instance: InstanceBoardItem) {

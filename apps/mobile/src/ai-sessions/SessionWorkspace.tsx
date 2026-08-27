@@ -1,18 +1,18 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { File } from 'expo-file-system';
 import { CornerDownRight, GripVertical, Pencil, RotateCcw, Trash2, type LucideIcon } from 'lucide-react-native';
-import { Alert, Animated, FlatList, Keyboard, KeyboardAvoidingView, PanResponder, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Animated, FlatList, Keyboard, KeyboardAvoidingView, PanResponder, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Defs, LinearGradient, Rect, Stop } from 'react-native-svg';
-import { aiSessionMessageText, canInterruptAiSession, isAiSessionApprovalPending, type ControlPlaneAiSessionSummary, type ControlPlaneClient } from '@task-handoff/control-plane-client';
+import { aiSessionMessageText, canInterruptAiSession, isAiSessionApprovalPending, type AiSessionModelGroup, type ControlPlaneAiSessionSummary, type ControlPlaneClient } from '@task-handoff/control-plane-client';
 import type { AiSessionMentionCandidate, AiSessionPermissionMode } from '@task-handoff/protocol/ai-sessions';
 import { directoryAiSessionProviderCapability, supportsDirectoryAiSessionTimelineCapability, type ControlPlaneInstanceDirectoryEntry } from '@task-handoff/protocol/control-plane-directory';
 
 import { mobileAiSessionBusyKey, MobileAiSessionActionCoordinator, MobileAiSessionDraftStore, type MobileActionResult } from './actions';
 import { aiSessionDisplayTurns, SessionDetail, type SessionDetailMode } from './SessionDetail';
 import { mobileAiSessionStore, type MobileStreamingMessage, type MobileTurnTimelineState } from './store';
-import { pickDocument, pickImage } from '../platform/file-picker';
-import { formatMobileAttachmentBytes, formatMobileTextLength, mobilePastedImage, mobilePastedText, runtimeAttachmentFromServerCandidate, uploadMobileAttachment, usableUploadRefs, type MobilePendingAttachment } from './attachments';
+import { pickDocument, pickImage, type MobileLocalFile } from '../platform/file-picker';
+import { formatMobileAttachmentBytes, formatMobileTextLength, mobilePastedImage, mobilePastedText, runtimeAttachmentFromServerCandidate, uploadingMobileAttachment, uploadMobileAttachment, usableUploadRefs, type MobilePendingAttachment } from './attachments';
 import { useMobileTheme } from '../components/theme';
 import { SystemIcon } from '../components/SystemIcon';
 import { SessionComposer } from './SessionComposer';
@@ -34,6 +34,7 @@ export function SessionWorkspace({
   permissions,
   defaultPermissionMode,
   maxFileAttachmentBytes,
+  modelGroups = [],
   client,
   onVisible,
   onOpenSession,
@@ -52,6 +53,7 @@ export function SessionWorkspace({
   permissions?: MobileAiSessionPermissionStore;
   defaultPermissionMode?: AiSessionPermissionMode;
   maxFileAttachmentBytes?: number;
+  modelGroups?: AiSessionModelGroup[];
   client?: ControlPlaneClient;
   onVisible?(updatedAt: string): void;
   onOpenSession?(sessionId: string): void;
@@ -323,7 +325,18 @@ export function SessionWorkspace({
   }, [session?.queue.revision, sessionId]);
   if (!session) return <SessionDetail messages={messages} session={session} />;
   const selectedTurn = session.turns?.[selectedTurnIndex];
-  const selectedTurnRefreshing = Boolean(selectedTurn && mobileAiSessionStore.neededSessionTurn(
+  const selectedTurnHasBody = Boolean(selectedTurn && mobileAiSessionStore.sessionTurnRevision(
+    controlPlaneId,
+    instanceId,
+    session.id,
+    selectedTurn.id,
+  ));
+  const initialTurnLoading = Boolean(
+    session.turnsRevision
+    && (session.turnCount ?? session.turns?.length ?? 0) > 0
+    && (!selectedTurn || !selectedTurnHasBody)
+  );
+  const selectedTurnRefreshing = initialTurnLoading || Boolean(selectedTurn && mobileAiSessionStore.neededSessionTurn(
     controlPlaneId,
     instanceId,
     session.id,
@@ -339,6 +352,7 @@ export function SessionWorkspace({
     ?? (session.agent === 'codex' || session.agent === 'claude' ? ['allow', 'skip', 'deny'] : []);
   const state = (action: Parameters<typeof mobileAiSessionBusyKey>[3], queueId?: string) => actions?.state(mobileAiSessionBusyKey(controlPlaneId, instanceId, session.id, action, queueId));
   const sendState = state('send');
+  const modelSelectionState = state('model-selection');
   const performAction = async <T,>(label: string, operation: () => Promise<MobileActionResult<T>>) => {
     const result = await operation();
     if (result.disposition === 'failed' || result.disposition === 'result-unknown') {
@@ -350,6 +364,11 @@ export function SessionWorkspace({
     if (!actions || !authoritativeActionsEnabled) return;
     const result = await performAction(t('sessions.continueFromTurn'), () => actions.fork(instanceId, session.id, turn.id, crypto.randomUUID()));
     if (result.disposition === 'accepted') onOpenSession?.(result.result.aiSessionId);
+  };
+  const updateModelSelection = async (selection: NonNullable<typeof session.modelSelection>) => {
+    if (!actions || !authoritativeActionsEnabled || modelSelectionState?.phase === 'busy') return;
+    const result = await performAction(t('sessions.model'), () => actions.updateModelSelection(instanceId, session.id, crypto.randomUUID(), selection));
+    if (result.disposition !== 'accepted') rerender((value) => value + 1);
   };
   const queuedItems = session.queue.items.filter((item) => item.status === 'queued');
   const displayedQueueItems = queueItemsWithQueuedOrder(session.queue.items, queueOrderPreview);
@@ -482,20 +501,34 @@ export function SessionWorkspace({
     try {
       const local = await (kind === 'image' ? pickImage() : pickDocument());
       if (!local) return;
-      const uploaded = await uploadMobileAttachment(client, { instanceId, sessionId: session.id }, local, { maxFileAttachmentBytes });
-      setAttachments((current) => [...current.filter((item) => item.localId !== uploaded.localId), uploaded]);
+      await uploadLocalAttachment(local);
     } catch (cause) {
       setAttachments((current) => [...current, { localId: `failed:${Date.now()}`, kind, name: 'Attachment', mime: 'application/octet-stream', size: 0, phase: 'failed', error: cause instanceof Error ? cause.message : 'Could not select attachment.' }]);
     }
   };
+  const uploadLocalAttachment = async (local: MobileLocalFile, replaceLocalId?: string) => {
+    if (!client) return;
+    const pending = uploadingMobileAttachment(local, maxFileAttachmentBytes);
+    setAttachments((current) => replaceLocalId
+      ? current.map((item) => item.localId === replaceLocalId ? pending : item)
+      : [...current.filter((item) => item.localId !== pending.localId), pending]);
+    const uploaded = await uploadMobileAttachment(client, { instanceId, sessionId: session.id }, local, {
+      maxFileAttachmentBytes,
+      onProgress: (progress) => setAttachments((current) => current.map((item) => (
+        item.localId === pending.localId && item.phase === 'uploading' ? { ...item, progress } : item
+      ))),
+    });
+    setAttachments((current) => current.map((item) => item.localId === pending.localId ? uploaded : item));
+    return uploaded;
+  };
   const pasteImages = async (uris: string[]) => {
     if (!client) return;
-    const pasted = await Promise.all(uris.map(async (uri, index): Promise<MobilePendingAttachment> => {
+    await Promise.all(uris.map(async (uri, index) => {
       try {
-        return await uploadMobileAttachment(client, { instanceId, sessionId: session.id }, mobilePastedImage(uri), { maxFileAttachmentBytes });
+        await uploadLocalAttachment(mobilePastedImage(uri));
       } catch (cause) {
         try { new File(uri).delete(); } catch { /* The native wrapper owns only temporary paste files. */ }
-        return {
+        const failed: MobilePendingAttachment = {
           error: cause instanceof Error ? cause.message : 'Could not paste image.',
           kind: 'image',
           localId: `clipboard-failed:${Date.now()}:${index}`,
@@ -504,9 +537,9 @@ export function SessionWorkspace({
           phase: 'failed',
           size: 0,
         };
+        setAttachments((current) => [...current, failed]);
       }
     }));
-    setAttachments((current) => [...current.filter((item) => !pasted.some((next) => next.localId === item.localId)), ...pasted]);
   };
   const pasteText = async (text: string) => {
     if (!client || activeQueueEdit) return;
@@ -515,16 +548,14 @@ export function SessionWorkspace({
       const nextSequence = pastedTextSequence.current + 1;
       const local = mobilePastedText(text, nextSequence, maxFileAttachmentBytes);
       pastedTextSequence.current = nextSequence;
-      const uploaded = await uploadMobileAttachment(client, { instanceId, sessionId: session.id }, local, { maxFileAttachmentBytes });
-      setAttachments((current) => [...current.filter((item) => item.localId !== uploaded.localId), uploaded]);
+      await uploadLocalAttachment(local);
     } catch (cause) {
       toast.show({ detail: cause instanceof Error ? cause.message : 'Could not attach pasted text.', title: t('composer.addAttachment'), tone: 'error' });
     }
   };
   const retryAttachment = async (attachment: MobilePendingAttachment) => {
     if (!client || !attachment.retryLocal) return;
-    const uploaded = await uploadMobileAttachment(client, { instanceId, sessionId: session.id }, attachment.retryLocal, { maxFileAttachmentBytes });
-    setAttachments((current) => current.map((item) => item.localId === attachment.localId ? uploaded : item));
+    await uploadLocalAttachment(attachment.retryLocal, attachment.localId);
   };
   const removeAttachment = (attachment: MobilePendingAttachment) => {
     if (attachment.retryLocal?.temporary) {
@@ -550,7 +581,8 @@ export function SessionWorkspace({
   const composerAction = activeQueueEdit ? 'save' : !hasDraft && canInterrupt ? 'stop' : 'send';
   const composerOperationState = composerAction === 'stop' ? state('interrupt') : composerAction === 'save' ? state('queue-edit', activeQueueEdit?.queueId) : sendState;
   const composerBusy = composerOperationState?.phase === 'busy';
-  const composerDisabled = !authoritativeActionsEnabled || !actions || ['busy', 'result-unknown'].includes(composerOperationState?.phase || '')
+  const attachmentUploading = attachments.some((attachment) => attachment.phase === 'uploading');
+  const composerDisabled = !authoritativeActionsEnabled || !actions || attachmentUploading || ['busy', 'result-unknown'].includes(composerOperationState?.phase || '')
     || (composerAction === 'stop' ? !canInterrupt : composerAction === 'save'
       ? !hasDraft || draft.trim() === activeQueueEdit?.originalMessage.trim()
       : !session.actions?.send || !hasDraft);
@@ -579,6 +611,7 @@ export function SessionWorkspace({
       <View onTouchStart={Keyboard.dismiss} style={[styles.fill, { backgroundColor: colors.surface }]} testID="session-content">
         <SessionDetail
           bottomInset={composerOverlayHeight}
+          contentLoading={initialTurnLoading}
           keyboardViewportRevision={keyboardViewportRevision}
           messages={messages}
           mode={detailMode}
@@ -715,11 +748,12 @@ export function SessionWorkspace({
             <Text numberOfLines={1} style={[styles.attachmentName, { color: colors.text }]}>{attachment.name}</Text>
             {attachment.textPresentation ? <Text numberOfLines={1} style={[styles.attachmentSummary, { color: colors.text }]}>{attachment.textPresentation.summary || t('composer.blankPastedText')}</Text> : null}
             <Text numberOfLines={1} style={[styles.attachmentMeta, { color: attachment.phase === 'failed' || attachment.phase === 'result-unknown' ? colors.error : colors.textMuted }]}>
-              {attachment.textPresentation ? `${t('composer.textLength', { count: formatMobileTextLength(attachment.textPresentation.codePointLength, locale) })} · ` : ''}{formatMobileAttachmentBytes(attachment.size, locale)} · {attachment.phase}
+              {attachment.textPresentation ? `${t('composer.textLength', { count: formatMobileTextLength(attachment.textPresentation.codePointLength, locale) })} · ` : ''}{formatMobileAttachmentBytes(attachment.size, locale)} · {attachment.phase === 'uploading' && attachment.progress !== undefined && attachment.progress > 0 ? `${Math.round(attachment.progress * 100)}%` : attachment.phase}
             </Text>
             {attachment.error ? <Text accessibilityLiveRegion="polite" numberOfLines={2} style={[styles.error, { color: colors.error }]}>{attachment.error}</Text> : null}
           </View>
-          {attachment.retryLocal ? <Pressable accessibilityLabel={t('common.retry')} accessibilityRole="button" hitSlop={8} onPress={() => { void retryAttachment(attachment); }}><RotateCcw color={colors.primary} size={16} /></Pressable> : null}
+          {attachment.phase === 'uploading' ? <View style={styles.attachmentProgress}><ActivityIndicator color={colors.primary} size="small" /></View> : null}
+          {attachment.retryLocal && attachment.phase !== 'uploading' ? <Pressable accessibilityLabel={t('common.retry')} accessibilityRole="button" hitSlop={8} onPress={() => { void retryAttachment(attachment); }}><RotateCcw color={colors.primary} size={16} /></Pressable> : null}
           <Pressable accessibilityLabel={`Remove ${attachment.name}`} accessibilityRole="button" hitSlop={8} onPress={() => removeAttachment(attachment)}><SystemIcon android="close" color={colors.textMuted} ios="xmark.circle.fill" size={17} /></Pressable>
         </View>)}</View> : null}
         <SessionComposer
@@ -745,6 +779,10 @@ export function SessionWorkspace({
           onValueChange={updateDraft}
           permissionEnabled={session.agent === 'codex'}
           permissionMode={permissionMode}
+          modelGroups={modelGroups}
+          modelSelection={session.modelSelection}
+          modelSelectionBusy={modelSelectionState?.phase === 'busy'}
+          onModelSelectionChange={(selection) => { void updateModelSelection(selection); }}
           runtimeFileDisabled={!authoritativeActionsEnabled || !client || !session.cwd}
           value={draft}
         />
@@ -931,6 +969,7 @@ const styles = StyleSheet.create({
   attachmentName: { fontSize: mobileWebType.meta, fontWeight: '500', lineHeight: mobileWebType.metaLine },
   attachmentSummary: { fontSize: 12, fontWeight: '400', lineHeight: 17 },
   attachmentMeta: { fontSize: 12, fontWeight: '400', lineHeight: 17 },
+  attachmentProgress: { alignItems: 'center', height: 20, justifyContent: 'center', width: 20 },
   runtimeFiles: { backgroundColor: '#f8fafc', borderRadius: 10, maxHeight: 128 }, runtimeFilesContent: { gap: 8, padding: 10 },
   runtimeFile: { color: '#2563eb', fontSize: mobileWebType.meta, lineHeight: mobileWebType.metaLine },
 });

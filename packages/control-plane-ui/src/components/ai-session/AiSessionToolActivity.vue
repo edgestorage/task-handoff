@@ -187,7 +187,7 @@ const statusText = computed(() => {
   text-align: left;
 }
 .ai-session-tool-activity-trigger > span { font-weight: 400; }
-.ai-session-tool-activity-trigger > svg { flex: 0 0 auto; transition: transform 120ms ease; }
+.ai-session-tool-activity-trigger > svg { flex: 0 0 auto; color: var(--text-muted); transition: transform 120ms ease; }
 .ai-session-tool-activity-trigger > svg.open { transform: rotate(90deg); }
 .ai-session-tool-activity-expanded { display: grid; flex: 0 0 100%; gap: 6px; min-width: 0; margin-top: 10px; padding-left: 20px; }
 .ai-session-tool-activity-expanded > span { color: var(--text-muted); font-size: 12px; }

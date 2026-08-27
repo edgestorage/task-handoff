@@ -33,6 +33,8 @@ export type AiSessionPatch = Partial<
     | "providerSessionId"
     | "lineage"
     | "providerMeta"
+    | "modelSelection"
+    | "reasoningEffort"
     | "appBindingKeys"
     | "actions"
     | "activeTurnId"
@@ -167,6 +169,8 @@ const AI_SESSION_BUSINESS_KEYS = [
   "providerSessionId",
   "lineage",
   "providerMeta",
+  "modelSelection",
+  "reasoningEffort",
   "appBindingKeys",
   "actions",
   "activeTurnId",
@@ -262,6 +266,20 @@ export function reduceAiSessionRealtime(
       userPrompt,
       userMessage: event.userMessage,
     }, { updatedAt, meta, clearError: true });
+  }
+  if (event.kind === "model-selection") {
+    return applyAiSessionPatch(current, { modelSelection: event.modelSelection }, {
+      updatedAt,
+      meta,
+      suppressTurnUpdate: true,
+    });
+  }
+  if (event.kind === "reasoning-effort") {
+    return applyAiSessionPatch(current, { reasoningEffort: event.reasoningEffort }, {
+      updatedAt,
+      meta,
+      suppressTurnUpdate: true,
+    });
   }
   if (event.kind === "lifecycle") {
     const status = event.status || current.status;
@@ -402,6 +420,8 @@ export function reduceAiSessionSnapshot(
     providerSessionId: event.providerSessionId || current.providerSessionId,
     lineage: current.lineage || event.lineage,
     providerMeta: event.providerMeta || current.providerMeta,
+    modelSelection: event.modelSelection || current.modelSelection,
+    reasoningEffort: event.reasoningEffort || current.reasoningEffort,
     appBindingKeys: replaceAppBinding ? event.appBindingKeys : event.appBindingKeys || current.appBindingKeys,
     actions: event.actions || current.actions,
     activeTurnId: nextActiveTurnId(current, event, staleActivitySnapshot),

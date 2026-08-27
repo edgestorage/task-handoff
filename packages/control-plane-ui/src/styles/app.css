@@ -16,8 +16,8 @@
   --secondary-foreground: 240 6% 10%;
   --muted: 240 12% 97%;
   --muted-foreground: 240 4% 40%;
-  --accent: 168 47% 92%;
-  --accent-foreground: 174 62% 24%;
+  --accent: 240 12% 94%;
+  --accent-foreground: 240 6% 10%;
   --border: 240 6% 85%;
   --input: 240 6% 81%;
 
@@ -27,7 +27,7 @@
   --surface-inset: #f8f8fa;
   --surface-overlay: #ffffff;
   --surface-hover: #f2f2f7;
-  --surface-active: #dff7f3;
+  --surface-active: #e9e9ef;
   --titlebar-overflow-fade: #ffffff;
   --text: #1c1c1e;
   --text-strong: #000000;
@@ -41,7 +41,7 @@
   --terminal-bg: #ffffff;
   --terminal-surface: #f8f8fa;
   --terminal-text: #1c1c1e;
-  --terminal-selection: #dff7f3;
+  --terminal-selection: #e9e9ef;
   --shadow-panel: 0 18px 44px rgb(0 0 0 / 12%);
   --shadow-popover: 0 14px 34px rgb(0 0 0 / 14%);
   --shadow-soft: 0 1px 3px rgb(0 0 0 / 9%);

@@ -91,6 +91,14 @@ test('create forwards the selected permission mode', async () => {
   expect(create.mock.calls[0][1].permissionMode).toBe('auto-review');
 });
 
+test('create forwards the selected model entity and model name', async () => {
+  const create = jest.fn().mockResolvedValue({ disposition: 'created', aiSessionId: 'session-1', providerSessionId: 'provider-1', creationSource: 'ai-session' });
+  const api = { aiSessions: { create } } as unknown as ControlPlaneClient;
+  const modelSelection = { modelEntityId: 'mdl-secondary', modelName: 'shared-name' };
+  await createMobileAiSession(api, { instance, agent: 'codex', message: 'Build it', modelSelection, clientRequestId: 'mobile-request-model' });
+  expect(create).toHaveBeenCalledWith(instance.id, expect.objectContaining({ modelSelection }));
+});
+
 test('create forwards staged attachment references', async () => {
   const create = jest.fn().mockResolvedValue({ disposition: 'created', aiSessionId: 'session-1', providerSessionId: 'provider-1', creationSource: 'ai-session' });
   const api = { aiSessions: { create } } as unknown as ControlPlaneClient;
@@ -117,14 +125,14 @@ test('create request identity survives a new store instance and changes only wit
   };
   const ids = ['request-1', 'request-2', 'request-3'];
   const createId = () => ids.shift()!;
-  const payload = { agent: 'codex', cwdFolderId: 'folder-1', message: 'Build it' };
+  const payload = { agent: 'codex', cwdFolderId: 'folder-1', message: 'Build it', modelSelection: { modelEntityId: 'mdl-one', modelName: 'same-name' } };
   const first = new MobileAiSessionCreateRequestStore(storage);
   expect(await first.getOrCreate('cp', 'instance', payload, createId)).toBe('request-1');
   const afterRestart = new MobileAiSessionCreateRequestStore(storage);
   expect(await afterRestart.getOrCreate('cp', 'instance', payload, createId)).toBe('request-1');
   expect(await afterRestart.getOrCreate('cp', 'instance', { ...payload, message: 'Build something else' }, createId)).toBe('request-2');
   await afterRestart.clear('cp', 'instance', 'request-2');
-  expect(await afterRestart.getOrCreate('cp', 'instance', { ...payload, message: 'Build something else' }, createId)).toBe('request-3');
+  expect(await afterRestart.getOrCreate('cp', 'instance', { ...payload, modelSelection: { modelEntityId: 'mdl-two', modelName: 'same-name' }, message: 'Build something else' }, createId)).toBe('request-3');
 });
 
 test('directory and Inbox state remain isolated across Control Planes and data sources', () => {

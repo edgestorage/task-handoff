@@ -169,6 +169,7 @@ export class ControlledInstanceCollection extends JsonCollection<ControlledInsta
         record.id,
         instanceCredential,
         existingPrivateConfig?.environment || {},
+        existingPrivateConfig?.modelCatalog,
       );
     }
     const { registrationToken: _registrationToken, ...persistentRecord } = record;
@@ -633,7 +634,12 @@ export class NodeAgentState {
       updatedAt: timestamp,
     });
     const stored = this.controlledInstances.put(instance);
-    this.instancePrivateConfigs.materialize(stored.id, stored.registrationToken, this.resolvedAssignedModelEnvironment(stored.id));
+    this.instancePrivateConfigs.materialize(
+      stored.id,
+      stored.registrationToken,
+      this.resolvedAssignedModelEnvironment(stored.id),
+      this.modelRegistry.privateCatalog(stored.id),
+    );
     if (input.gitWorkspaceProvisioning?.credentials.every((credential) => credential.retention === "operation-only")) {
       this.gitCredentials.putWorkspaceProvisioning(input.gitWorkspaceProvisioning);
     }
@@ -816,7 +822,12 @@ export class NodeAgentState {
   context(instance: ControlledInstance, modelEnv: Record<string, string> = this.resolvedAssignedModelEnvironment(instance.id)): ExecutorContext {
     const image = instance.imageSnapshot || InstanceImageSnapshotSchema.parse({ id: "img_localhost", origin: "custom", name: "Localhost", repository: "localhost", tag: "local", requestedReference: "localhost:local", pullPolicy: "if-not-present", capabilities: [], optionalApps: [], defaultEnv: {}, labels: {}, createdAt: instance.createdAt, updatedAt: instance.updatedAt });
     const existingPrivateConfig = this.instancePrivateConfigs.get(instance.id);
-    const privateConfig = this.instancePrivateConfigs.materialize(instance.id, instance.registrationToken, modelEnv);
+    const privateConfig = this.instancePrivateConfigs.materialize(
+      instance.id,
+      instance.registrationToken,
+      modelEnv,
+      this.modelRegistry.privateCatalog(instance.id),
+    );
     const gitWorkspaceProvisioning = this.gitWorkspaceProvisioningFor(instance);
     return {
       project: projectForInstance(instance),

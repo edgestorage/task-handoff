@@ -160,6 +160,14 @@ export const ControlPlaneAvailableAppSchema = z.object({
   supportsCwdSelection: z.boolean(),
 }).strict();
 
+const ControlPlaneDirectoryModelSelectionSchema = z.object({
+  modelEntityIds: z.array(IdSchema).max(64).transform((ids) => [...new Set(ids)]).optional(),
+  // Compatibility for v0.0.23 directory producers.
+  codexModelHash: IdSchema.nullable().optional(),
+  claudeModelHash: IdSchema.nullable().optional(),
+  opencodeModelHash: IdSchema.nullable().optional(),
+}).strict().default({});
+
 export const ControlPlaneInstanceDirectoryEntrySchema = z.object({
   id: IdSchema,
   name: z.string().trim().min(1).max(160),
@@ -175,6 +183,7 @@ export const ControlPlaneInstanceDirectoryEntrySchema = z.object({
     defaultCodexPermissionMode: AiSessionPermissionModeSchema.default("ask"),
     aiSessionMaxFileAttachmentBytes: z.number().int().positive().default(AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES),
   }).strict().default({ defaultCodexPermissionMode: "ask", aiSessionMaxFileAttachmentBytes: AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES }),
+  modelSelection: ControlPlaneDirectoryModelSelectionSchema,
   lastHeartbeatAt: TimestampSchema.optional(),
   heartbeatAgeMs: z.number().int().nonnegative().optional(),
   observedAt: TimestampSchema,

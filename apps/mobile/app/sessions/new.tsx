@@ -4,8 +4,9 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import { Platform } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import type { AiSessionGitSelection, AiSessionPermissionMode } from '@task-handoff/protocol/ai-sessions';
-import { aiSessionMessageText } from '@task-handoff/control-plane-client';
+import type { AiSessionGitSelection, AiSessionModelSelection, AiSessionPermissionMode } from '@task-handoff/protocol/ai-sessions';
+import { aiSessionMessageText, defaultAiSessionModelSelection, deriveAiSessionModelGroups, type AiSessionCatalogModelEntity } from '@task-handoff/control-plane-client';
+import { directoryAiSessionProviderCapability } from '@task-handoff/protocol/control-plane-directory';
 import type { RepositoryAiSessionWorkspace } from '@task-handoff/protocol/repository';
 
 import { NewSessionForm, newSessionVisualBalanceInset } from '../../src/ai-sessions/NewSessionForm';
@@ -30,6 +31,8 @@ export default function NewAiSessionRoute() {
   const [message, setMessage] = useState('');
   const [permissionSelection, setPermissionSelection] = useState<{ instanceId: string; mode: AiSessionPermissionMode }>();
   const [savingPermission, setSavingPermission] = useState(false);
+  const [modelEntities, setModelEntities] = useState<AiSessionCatalogModelEntity[]>([]);
+  const [modelSelectionDraft, setModelSelectionDraft] = useState<{ instanceId: string; agent: string; value: AiSessionModelSelection }>();
   const [folderState, setFolderState] = useState<{ nodeId: string; folders: AiSessionFolderOption[] }>({ nodeId: '', folders: [] });
   const [workspaceState, setWorkspaceState] = useState<{
     instanceId?: string;
@@ -64,6 +67,17 @@ export default function NewAiSessionRoute() {
     ? permissionSelection.mode
     : selectedInstance?.config.defaultCodexPermissionMode ?? 'ask';
   const maxFileAttachmentBytes = selectedInstance?.config.aiSessionMaxFileAttachmentBytes;
+  const modelGroups = selectedInstance ? deriveAiSessionModelGroups({
+    entities: modelEntities,
+    assignment: selectedInstance.modelSelection,
+    agent,
+    nodeId: selectedInstance.nodeId,
+    mode: 'create',
+    capability: directoryAiSessionProviderCapability(selectedInstance.capabilities, agent)?.modelSelection,
+  }) : [];
+  const modelSelection = modelSelectionDraft?.instanceId === selectedInstanceId && modelSelectionDraft.agent === agent
+    ? modelSelectionDraft.value
+    : defaultAiSessionModelSelection(modelGroups);
 
   const guidance = instanceCreateGuidance(selectedInstance);
   useEffect(() => {
@@ -97,6 +111,17 @@ export default function NewAiSessionRoute() {
     });
     return () => abort.abort();
   }, [selectedInstance?.nodeId, selectedInstanceId]);
+
+  useEffect(() => {
+    const abort = new AbortController();
+    void mobileProfileStore.active().then(async (profile) => {
+      if (!profile || abort.signal.aborted) return;
+      const registry = await createMobileControlPlaneClient(profile, mobileSecureStore).api.resources.models(abort.signal);
+      if (abort.signal.aborted) return;
+      setModelEntities(registry.models.map((group) => ({ ...group.model, locations: group.locations })));
+    }).catch(() => { if (!abort.signal.aborted) setModelEntities([]); });
+    return () => abort.abort();
+  }, [controlPlaneId]);
 
   useEffect(() => {
     if (!selectedInstanceId || !selectedFolder) return;
@@ -142,6 +167,7 @@ export default function NewAiSessionRoute() {
         gitSelection,
         message: aiSessionMessageText(message.trim()),
         permissionMode,
+        modelSelection,
         attachments: attachments.map(({ local }) => ({ kind: local.kind, name: local.name, size: local.size })),
       };
       const requestId = await mobileCreateRequestStore.getOrCreate(controlPlaneId, selectedInstance.id, requestInput, Crypto.randomUUID);
@@ -161,6 +187,7 @@ export default function NewAiSessionRoute() {
         message: aiSessionMessageText(message.trim()),
         attachments: usableUploadRefs(uploadedAttachments),
         permissionMode,
+        modelSelection,
         clientRequestId: requestId,
       });
       if (agent === 'codex') await mobilePermissionStore.write(controlPlaneId, selectedInstance.id, result.aiSessionId, permissionMode).catch(() => undefined);
@@ -255,7 +282,10 @@ export default function NewAiSessionRoute() {
     workspaceLoading={workspaceLoading}
     message={message}
     attachments={attachments.map(({ id, local }) => ({ id, kind: local.kind, name: local.name, size: local.size, textPresentation: local.textPresentation }))}
-    permissionMode={permissionMode}
+      permissionMode={permissionMode}
+      modelGroups={modelGroups}
+      modelSelection={modelSelection}
+      onModelSelectionChange={(value) => setModelSelectionDraft({ instanceId: selectedInstanceId, agent, value })}
     busy={busy || savingPermission || workspaceLoading}
     disabled={busy || savingPermission || workspaceLoading || Boolean(guidance) || !agent || !selectedFolder || (!message.trim() && !attachments.length)}
     error={guidance}

@@ -1,18 +1,8 @@
 import { computed, ref } from "vue";
 import { useQueryClient } from "@tanstack/vue-query";
 import { bindAiSessionTrigger, unbindAiSessionTrigger, useControlPlaneTriggersQuery } from "../../../api/queries";
-import { controlPlaneQueryKeys } from "../../../api/queryKeys.ts";
-import type { InstanceBoardItem, TriggerConfig, TriggerDeployment, TriggerRuntimeState } from "../../../api/types";
 import type { AiBoardCard } from "./aiBoardTypes";
-import { updateInstanceBoardData } from "../instanceBoardCache.ts";
-
-type TriggerMutationResult = {
-  config?: TriggerConfig;
-  deployment?: TriggerDeployment;
-  runtime?: TriggerRuntimeState;
-};
-
-type InstanceTriggerSnapshot = NonNullable<InstanceBoardItem["triggers"]>;
+import { isAiSessionTriggerDeployment, removeInstanceTriggerBinding, upsertInstanceTriggerBinding } from "../instanceTriggerCache.ts";
 
 export function useAiBoardTriggers() {
   const queryClient = useQueryClient();
@@ -41,15 +31,12 @@ export function useAiBoardTriggers() {
     try {
       if (isTriggerBound(card, configHash)) {
         await unbindAiSessionTrigger(card.instance.id, card.session.id, configHash);
-        removeLocalTriggerBinding(card, configHash);
+        removeInstanceTriggerBinding(queryClient, card.instance.id, card.session.id, configHash);
       } else {
-        const created = await bindAiSessionTrigger(card.instance.id, card.session.id, configHash) as TriggerMutationResult;
-        upsertLocalTriggerBinding(card, created);
+        const created = await bindAiSessionTrigger(card.instance.id, card.session.id, configHash);
+        upsertInstanceTriggerBinding(queryClient, card.instance.id, created);
       }
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: controlPlaneQueryKeys.instanceBoard }),
-        queryClient.invalidateQueries({ queryKey: ["control-plane-triggers"] }),
-      ]);
+      await queryClient.invalidateQueries({ queryKey: ["control-plane-triggers"] });
     } finally {
       triggerBusyKey.value = "";
     }
@@ -64,87 +51,8 @@ export function useAiBoardTriggers() {
     triggerBusyKey,
     triggerTemplates,
   };
-
-  function upsertLocalTriggerBinding(card: AiBoardCard, result: TriggerMutationResult) {
-    if (!result.config || !result.deployment) {
-      return;
-    }
-    updateInstanceBoardData(queryClient, (instances) => instances.map((instance) => {
-      if (instance.id !== card.instance.id) {
-        return instance;
-      }
-      const snapshot = instance.triggers || emptyTriggerSnapshot();
-      const currentConfig = snapshot.configs.find((entry) => entry.configHash === result.config?.configHash);
-      const nextEntry = {
-        configHash: result.config.configHash,
-        config: result.config,
-        deployments: [
-          ...(currentConfig?.deployments || []).filter((deployment) => deployment.deploymentId !== result.deployment?.deploymentId),
-          result.deployment,
-        ],
-        runtime: result.runtime
-          ? [...(currentConfig?.runtime || []).filter((runtime) => runtime.deploymentId !== result.runtime?.deploymentId), result.runtime]
-          : currentConfig?.runtime || [],
-      };
-      const configs = [
-        ...snapshot.configs.filter((entry) => entry.configHash !== result.config?.configHash),
-        nextEntry,
-      ];
-      return {
-        ...instance,
-        triggers: {
-          ...snapshot,
-          configs,
-          updatedAt: new Date().toISOString(),
-        },
-      };
-    }));
-  }
-
-  function removeLocalTriggerBinding(card: AiBoardCard, configHash: string) {
-    updateInstanceBoardData(queryClient, (instances) => instances.map((instance) => {
-      if (instance.id !== card.instance.id || !instance.triggers) {
-        return instance;
-      }
-      const configs = instance.triggers.configs.flatMap((entry) => {
-        if (entry.configHash !== configHash) {
-          return [entry];
-        }
-        const deployments = entry.deployments.filter((deployment) => !isAiSessionTriggerDeployment(deployment, card.session.id));
-        if (!deployments.length) {
-          return [];
-        }
-        const deploymentIds = new Set(deployments.map((deployment) => deployment.deploymentId || deployment.configHash));
-        return [{
-          ...entry,
-          deployments,
-          runtime: entry.runtime.filter((runtime) => deploymentIds.has(runtime.deploymentId || runtime.configHash)),
-        }];
-      });
-      return {
-        ...instance,
-        triggers: {
-          ...instance.triggers,
-          configs,
-          updatedAt: new Date().toISOString(),
-        },
-      };
-    }));
-  }
-}
-
-function isAiSessionTriggerDeployment(deployment: TriggerDeployment, sessionId: string) {
-  return deployment.target.type === "ai-session" && deployment.target.aiSessionId === sessionId;
 }
 
 function shortHash(value: string) {
   return value.length > 14 ? `${value.slice(0, 10)}...` : value;
-}
-
-function emptyTriggerSnapshot(): InstanceTriggerSnapshot {
-  return {
-    configs: [],
-    recentRuns: [],
-    updatedAt: new Date().toISOString(),
-  };
 }

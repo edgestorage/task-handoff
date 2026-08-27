@@ -57,7 +57,7 @@ test("instance title appends the authoritative node name as muted metadata", () 
 
 test("instance switcher menu exposes each instance's node in a portal-safe layout", () => {
   assert.match(workbench, /<span class="control-plane-instance-menu-copy">[\s\S]*?<strong>\{\{ switcherInstanceName\(instance\) \}\}<\/strong>[\s\S]*?<small>\{\{ switcherNodeName\(instance\) \}\}<\/small>/);
-  assert.match(workbench, /const switcherNodeName = [\s\S]*?instance\.node\?\.name \|\| instance\.nodeId/);
+  assert.match(workbench, /const switcherNodeName = [\s\S]*?instance\.node\?\.name[\s\S]*?nodes\.data\.value\?\.find\(\(node\) => node\.id === instance\.nodeId\)\?\.name \|\| instance\.nodeId/);
   assert.match(workbench, /--instance-menu-height': `\$\{Math\.max\(switcherInstances\.length, 1\) \* 52 - 2\}px`/);
   assert.match(workbench, /:class="\{ selected: instance\.id === selectedInstanceId \}"[\s\S]*?:aria-current="instance\.id === selectedInstanceId \? 'true' : undefined"/);
   assert.match(styles, /:global\(\.control-plane-instance-menu\.control-plane-instance-menu\) \{[\s\S]*?width: max\(var\(--reka-dropdown-menu-trigger-width\), 260px\);[\s\S]*?var\(--reka-dropdown-menu-content-available-width\)[\s\S]*?border-radius: 12px;/);

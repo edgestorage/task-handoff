@@ -52,10 +52,12 @@ test("models settings edits aggregate entries and deletes explicit locations thr
   assert.match(settings, /location\.type === 'node' && location\.referenceCount > 0/);
 });
 
-test("model settings discovers models into a searchable picker while preserving direct input and real endpoint testing", () => {
+test("model settings discovers models into an ordered name list with real endpoint testing", () => {
   const settings = read("src/apps/control-plane/settings/ModelSettingsSection.vue");
   const state = read("src/apps/control-plane/settings/useModelSettings.ts");
-  assert.match(settings, /<ControlPlaneInput v-model="settingsModel\.model"/);
+  assert.match(settings, /v-for="\(entry, index\) in settingsModel\.modelNames"/);
+  assert.match(settings, /<ControlPlaneInput v-model="entry\.name"/);
+  assert.doesNotMatch(settings, /<ControlPlaneInput v-model="settingsModel\.model"/);
   assert.match(settings, /<PopoverContent class="model-picker-popover [^"]*p-1"[\s\S]*:collision-padding="12"/);
   assert.match(settings, /<Command class="model-picker-command"[\s\S]*<CommandInput class="model-picker-search-input [^"]*text-\[13px\]" :placeholder="t\('settings\.modelRegistry\.searchModels'\)"/);
   assert.match(settings, /<ScrollArea class="model-picker-scroll" :horizontal="false">[\s\S]*<CommandList class="model-picker-list max-h-none overflow-visible">/);
@@ -71,11 +73,47 @@ test("model settings discovers models into a searchable picker while preserving 
   assert.match(settings, /@click="checkModel"/);
   assert.match(state, /discoverModels\(endpointDraft\(\), endpointNodeId\(\)\)/);
   assert.match(state, /testModel\(\{/);
-  assert.match(state, /existingModelId: editingModelId\.value/);
+  assert.match(state, /modelNames: settingsModel\.modelNames\.map/);
+  assert.match(state, /model: settingsModel\.modelNames\[0\]\?\.name\.trim\(\) \|\| ""/);
+  assert.match(state, /existingModelId: editingModelId\.value \|\| copyingModelId\.value/);
   assert.match(state, /showControlPlaneToast\(t\("settings\.modelRegistry\.testSucceeded"[^;]+"success"\)/);
   assert.match(state, /showDelayedControlPlaneLoadingToast\(t\("settings\.modelRegistry\.testing"\)\)/);
   assert.match(state, /showDelayedControlPlaneLoadingToast\(t\("settings\.modelRegistry\.discovering"\)\)/);
   assert.doesNotMatch(settings, /modelEndpointFeedback/);
+});
+
+test("model settings owns endpoint protocols independently from consuming apps", () => {
+  const section = read("src/apps/control-plane/settings/ModelSettingsSection.vue");
+  const state = read("src/apps/control-plane/settings/useModelSettings.ts");
+  assert.match(section, /modelProtocols = \["openai-responses", "openai-chat-completions", "anthropic-messages"\]/);
+  assert.match(section, /settings\.fields\.endpoint[\s\S]*class="model-protocol-field" role="group"[\s\S]*settings\.fields\.apiKey/);
+  assert.match(section, /<ToggleGroup class="model-protocol-options" type="multiple"/);
+  assert.match(section, /<ToggleGroupItem v-for="protocol in modelProtocols"/);
+  assert.match(section, /settingsModel\.protocols\.includes\(protocol\)/);
+  assert.match(section, /\.model-protocol-options \{[^}]*grid-template-columns: repeat\(3,minmax\(0,1fr\)\)/);
+  assert.match(section, /\.model-protocol-options \{[^}]*gap: 8px;/);
+  assert.match(section, /\.model-protocol-options :deep\(\.model-protocol-option\) \{[^}]*border-radius: 6px;[^}]*min-height: 58px;[^}]*padding: 5px 8px;/);
+  assert.match(section, /\.model-protocol-copy strong \{[^}]*font-size: 13px;[^}]*font-weight: 500;/);
+  assert.match(section, /\.model-protocol-copy small \{[^}]*font-size: 12px;[^}]*font-weight: 400;/);
+  assert.match(section, /\.model-protocol-copy \{[^}]*position: relative;[^}]*width: 100%;/);
+  assert.match(section, /\.model-protocol-check \{[^}]*position: absolute;[^}]*right: 0;[^}]*top: 0;/);
+  assert.doesNotMatch(section, /class="model-form-grid"/);
+  assert.match(state, /function setProtocols\(values: unknown\)/);
+  assert.match(state, /Promise\.all\(settingsModel\.protocols\.map\(\(protocol\) => testModel/);
+  assert.match(state, /protocols: \[\.\.\.settingsModel\.protocols\]/);
+});
+
+test("only control-plane model locations expose secret-preserving copy", () => {
+  const settings = read("src/apps/control-plane/settings/ModelSettingsSection.vue");
+  const state = read("src/apps/control-plane/settings/useModelSettings.ts");
+  const queries = read("src/api/queries.ts");
+  assert.match(settings, /v-if="model\.locations\?\.some\(\(location\) => location\.type === 'control-plane'\)" @select="openCopyDialog\(model\)"/);
+  assert.match(settings, /v-else-if="copyingModelId" class="model-scope-notice"/);
+  assert.match(state, /function copyModelDraft\(model: ModelConfig\)/);
+  assert.match(state, /saved = await copyModel\(copyingModelId\.value, payload\)/);
+  assert.match(state, /source\.endpoint === settingsModel\.endpoint\.trim\(\)[\s\S]*source\.model === settingsModel\.model\.trim\(\)/);
+  assert.doesNotMatch(state, /sourceProtocols/);
+  assert.match(queries, /postApiData<ModelConfig>\(`models\/\$\{id\}\/copy`, input\)/);
 });
 
 test("models settings uses a full-width directory and a guarded editor dialog", () => {

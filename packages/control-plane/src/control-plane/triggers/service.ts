@@ -1,6 +1,7 @@
 import type { ControlledInstance } from "@task-handoff/protocol/control-plane";
 import {
   ControlPlaneTriggersSchema,
+  TriggerMutationResultSchema,
   triggerConfigHash,
   type ControlPlaneTriggerMutationFailure,
   type TriggerConfig,
@@ -322,7 +323,7 @@ export class ControlPlaneTriggerService {
     const parsed = BindAiSessionTriggerSchema.parse(input || {});
     const config = this.requireTrigger(parsed.configHash);
     const instance = await this.requireInstance(instanceId);
-    return this.instanceRequest(instance, "/triggers", {
+    return TriggerMutationResultSchema.parse(await this.instanceRequest(instance, "/triggers", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -338,7 +339,7 @@ export class ControlPlaneTriggerService {
           target: { type: "ai-session", aiSessionId: sessionId },
         },
       }),
-    });
+    }));
   }
 
   async unbindAiSessionTrigger(instanceId: string, sessionId: string, configHash: string) {

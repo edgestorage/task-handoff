@@ -53,6 +53,13 @@ test("AI and App Session operation receipts do not invalidate the instance board
   assert.match(source, /event\.type\?\.startsWith\("instance\.app-session\."\)/);
 });
 
+test("trigger deployment events update the instance trigger projection and recover v0.0.23 events", () => {
+  assert.match(source, /event\.type === "trigger\.deployment\.bound"[\s\S]*ControlPlaneAiSessionTriggerBoundEventSchema/);
+  assert.match(source, /upsertInstanceTriggerBinding\(queryClient, bound\.data\.instanceId/);
+  assert.match(source, /Compatibility for v0\.0\.23[\s\S]*recoverInstanceTriggers/);
+  assert.match(source, /event\.type === "trigger\.deployment\.unbound"[\s\S]*removeInstanceTriggerBinding/);
+});
+
 test("the session stream starts only after both initial authoritative snapshots settle", () => {
   assert.match(workbench, /const sessionEventsEnabled = computed\(\(\) => sessionQueriesEnabled\.value[\s\S]*!controlPlaneAiSessions\.isPending\.value[\s\S]*!controlPlaneAppSessions\.isPending\.value\)/);
   assert.match(workbench, /useControlPlaneEvents\(\{[\s\S]*enabled: sessionEventsEnabled/);

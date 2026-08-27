@@ -2,13 +2,15 @@ import {
   FederatedModelRegistrySchema,
   ModelConfigSchema,
   modelConfigHash,
+  supportsNodeMultiEntityModelAssignment,
   type ControlledInstance,
   type ModelConfig,
   type Node,
   type NodeModelPublicRecord,
 } from "@task-handoff/protocol/control-plane";
 import type { JsonCollection } from "../../shared/persistence/store.ts";
-import { CreateModelInputSchema, ModelDiscoveryInputSchema, ModelTestInputSchema, UpdateModelInputSchema, type ModelDiscoveryInput, type ModelTestInput, type UpdateModelInput } from "../application/inputs.ts";
+import type { AiSessionHistoryList } from "@task-handoff/protocol/ai-sessions";
+import { CopyModelInputSchema, CreateModelInputSchema, ModelDiscoveryInputSchema, ModelTestInputSchema, UpdateModelInputSchema, type ModelDiscoveryInput, type ModelTestInput, type UpdateModelInput } from "../application/inputs.ts";
 import { now, throwNotFound } from "../application/helpers.ts";
 import type { ControlPlaneNodeAgentGateway } from "../nodes/gateway.ts";
 import { normalizeModel, publicModel } from "../public-records.ts";
@@ -20,6 +22,9 @@ type ControlPlaneModelServiceOptions = {
   listNodes: () => Node[];
   requireNode: (id: string) => Node;
   fetchImpl: typeof fetch;
+  listInstances?: () => Promise<ControlledInstance[]>;
+  listAiSessions?: () => Promise<{ instances: Array<{ instanceId: string; aiSessions: { sessions: Array<{ id: string; modelSelection?: { modelEntityId: string } }> } }> }>;
+  listAiSessionHistory?: (instanceId: string) => Promise<AiSessionHistoryList>;
 };
 
 export class ControlPlaneModelService {
@@ -94,11 +99,19 @@ export class ControlPlaneModelService {
 
   create(input: unknown) {
     const parsedInput = CreateModelInputSchema.parse(input);
+    const protocols = parsedInput.protocols?.length
+      ? parsedInput.protocols
+      : parsedInput.app === "claude" ? ["anthropic-messages"]
+        : parsedInput.app === "opencode" ? ["openai-chat-completions"]
+          : ["openai-responses"];
+    const modelNames = normalizeModelNames(parsedInput.modelNames, parsedInput.model);
+    const normalizedInput = { ...parsedInput, modelNames, model: modelNames[0].name };
     const timestamp = now();
-    const id = modelConfigHash(parsedInput);
+    const id = modelConfigHash(normalizedInput);
     const existing = this.options.models.get(id);
     const model = ModelConfigSchema.parse({
-      ...parsedInput,
+      ...normalizedInput,
+      protocols,
       id,
       enabled: parsedInput.enabled ?? true,
       order: parsedInput.order ?? this.nextOrder(),
@@ -109,13 +122,46 @@ export class ControlPlaneModelService {
     return publicModel(this.options.models.put(model));
   }
 
+  copy(id: string, input: unknown) {
+    const source = this.requireSecret(id);
+    const parsedInput = CopyModelInputSchema.parse(input);
+    const candidate = {
+      ...parsedInput,
+      key: parsedInput.key?.trim() || source.key,
+    };
+    const modelNames = normalizeModelNames(candidate.modelNames, candidate.model);
+    const nextId = modelConfigHash({ ...candidate, model: modelNames[0].name });
+    if (nextId === source.id) {
+      throw Object.assign(new Error("Change the model, endpoint, app, or API key before creating a copy."), {
+        statusCode: 409,
+        code: "MODEL_COPY_UNCHANGED",
+      });
+    }
+    if (this.options.models.get(nextId)) {
+      throw Object.assign(new Error(`Model ${nextId} already exists.`), {
+        statusCode: 409,
+        code: "MODEL_COPY_CONFLICT",
+      });
+    }
+    return this.create(candidate);
+  }
+
   update(id: string, input: unknown) {
     const parsedInput: UpdateModelInput = UpdateModelInputSchema.parse(input);
     const current = this.requireSecret(id);
+    const modelNames = parsedInput.modelNames?.length
+      ? normalizeModelNames(parsedInput.modelNames, parsedInput.model || current.model)
+      : parsedInput.model ? normalizeModelNames(undefined, parsedInput.model) : normalizeModelNames(current.modelNames, current.model);
+    const protocols = parsedInput.protocols?.length
+      ? parsedInput.protocols
+      : current.protocols?.length ? current.protocols : defaultProtocols(parsedInput.app || current.app);
     const candidate = ModelConfigSchema.parse({
       ...current,
       ...parsedInput,
       key: parsedInput.key?.trim() ? parsedInput.key : current.key,
+      protocols,
+      modelNames,
+      model: modelNames[0].name,
       createdAt: current.createdAt,
       updatedAt: now(),
     });
@@ -123,8 +169,16 @@ export class ControlPlaneModelService {
     return publicModel(this.options.models.put(ModelConfigSchema.parse({ ...candidate, id: nextId })));
   }
 
-  delete(id: string) {
+  async delete(id: string) {
     this.requireSecret(id);
+    const references = await this.references(id);
+    if (references.length) {
+      throw Object.assign(new Error(`Model ${id} is referenced by managed instances or AI Sessions.`), {
+        statusCode: 409,
+        code: "MODEL_IN_USE",
+        details: { references },
+      });
+    }
     return this.options.models.delete(id);
   }
 
@@ -180,9 +234,13 @@ export class ControlPlaneModelService {
     return includeSecret ? model : publicModel(model);
   }
 
-  async prepareAssignment(node: Node, selection: { codexModelHash?: string | null; claudeModelHash?: string | null; opencodeModelHash?: string | null }) {
+  async prepareAssignment(node: Node, selection: { modelEntityIds?: string[]; codexModelHash?: string | null; claudeModelHash?: string | null; opencodeModelHash?: string | null }) {
     const nodeModels = await this.options.gateway.listModels(node);
-    const storedSelection = {
+    const storedSelection: {
+      modelEntityIds?: string[];
+      codexModelHash?: string | null; claudeModelHash?: string | null; opencodeModelHash?: string | null;
+    } = {
+      ...(selection.modelEntityIds?.length ? { modelEntityIds: [...new Set(selection.modelEntityIds.map((id) => id.trim()).filter(Boolean))] } : {}),
       ...(selection.codexModelHash === null
         ? { codexModelHash: null }
         : selection.codexModelHash?.trim() ? { codexModelHash: selection.codexModelHash.trim() } : {}),
@@ -193,11 +251,27 @@ export class ControlPlaneModelService {
         ? { opencodeModelHash: null }
         : selection.opencodeModelHash?.trim() ? { opencodeModelHash: selection.opencodeModelHash.trim() } : {}),
     };
+    const entityIds = storedSelection.modelEntityIds || [];
+    const controlPlaneModels = this.listAll();
+    const resolvedEntities: ModelConfig[] = [];
+    for (const entityId of entityIds) {
+      const controlPlaneModel = controlPlaneModels.find((model) => model.id === entityId);
+      if (controlPlaneModel) {
+        assertEnabledModel(controlPlaneModel);
+        await this.options.gateway.deployModel(node, controlPlaneModel.id, controlPlaneModel);
+        resolvedEntities.push(controlPlaneModel);
+        continue;
+      }
+      const local = nodeModels.find((model) => model.id === entityId);
+      if (!local) throwNotFound("MODEL_NOT_FOUND", `Model ${entityId} was not found on control-plane or node ${node.id}.`);
+      assertEnabledModel(local);
+      resolvedEntities.push(ModelConfigSchema.parse({ ...local, key: "node-private" }));
+    }
     const resolve = async (app: "codex" | "claude" | "opencode", selectedId?: string | null) => {
       if (selectedId === null) return undefined;
       const controlPlaneModel = selectedId
         ? this.listAll().find((model) => model.id === selectedId)
-        : this.listAll().find((model) => model.enabled && model.app === app);
+        : controlPlaneModels.find((model) => model.enabled && modelSupportsApp(model, app));
       if (controlPlaneModel) {
         assertUsableModel(controlPlaneModel, app);
         await this.options.gateway.deployModel(node, controlPlaneModel.id, controlPlaneModel);
@@ -209,11 +283,35 @@ export class ControlPlaneModelService {
       assertUsableModel(local, app);
       return local.id;
     };
-    return {
+    const firstFor = (app: "codex" | "claude" | "opencode") => resolvedEntities.find((model) => modelSupportsApp(model, app))?.id;
+    if (entityIds.length) {
+      storedSelection.codexModelHash = firstFor("codex");
+      storedSelection.claudeModelHash = firstFor("claude");
+      storedSelection.opencodeModelHash = firstFor("opencode");
+    }
+    const codexModelHash = entityIds.length ? storedSelection.codexModelHash : await resolve("codex", storedSelection.codexModelHash);
+    const claudeModelHash = entityIds.length ? storedSelection.claudeModelHash : await resolve("claude", storedSelection.claudeModelHash);
+    const opencodeModelHash = entityIds.length ? storedSelection.opencodeModelHash : await resolve("opencode", storedSelection.opencodeModelHash);
+    const prepared = {
       modelSelection: storedSelection,
-      codexModelHash: await resolve("codex", storedSelection.codexModelHash),
-      claudeModelHash: await resolve("claude", storedSelection.claudeModelHash),
-      opencodeModelHash: await resolve("opencode", storedSelection.opencodeModelHash),
+      modelEntityIds: entityIds,
+      codexModelHash,
+      claudeModelHash,
+      opencodeModelHash,
+    };
+    const agent = node.capabilities.agent;
+    const capabilities = agent && typeof agent === "object" && !Array.isArray(agent)
+      ? (agent as { capabilities?: unknown }).capabilities
+      : undefined;
+    if (supportsNodeMultiEntityModelAssignment(capabilities)) return prepared;
+    // Compatibility for v0.0.23: its strict update schema only accepts the
+    // per-agent hashes, so do not send either ordered-array field.
+    const { modelEntityIds: _modelEntityIds, ...legacySelection } = storedSelection;
+    return {
+      modelSelection: legacySelection,
+      codexModelHash,
+      claudeModelHash,
+      opencodeModelHash,
     };
   }
 
@@ -245,6 +343,54 @@ export class ControlPlaneModelService {
     return this.options.models.list().reduce((max, model) => Math.max(max, model.order), 0) + 100;
   }
 
+  private async references(modelId: string) {
+    const instances = await this.options.listInstances?.() || [];
+    const references: Array<{ kind: "instance" | "ai-session" | "history"; instanceId: string; aiSessionId?: string }> = [];
+    for (const instance of instances) {
+      const ids = instance.modelSelection.modelEntityIds?.length
+        ? instance.modelSelection.modelEntityIds
+        : [instance.modelSelection.codexModelHash, instance.modelSelection.claudeModelHash, instance.modelSelection.opencodeModelHash];
+      if (ids.includes(modelId)) references.push({ kind: "instance", instanceId: instance.id });
+    }
+    const current = await this.options.listAiSessions?.() || { instances: [] };
+    for (const entry of current.instances) {
+      for (const session of entry.aiSessions.sessions) {
+        if (session.modelSelection?.modelEntityId === modelId) {
+          references.push({ kind: "ai-session", instanceId: entry.instanceId, aiSessionId: session.id });
+        }
+      }
+    }
+    const diagnostics: Array<{ instanceId: string; code: string }> = [];
+    await Promise.all(this.options.listAiSessionHistory ? instances.map(async (instance) => {
+      try {
+        const history = await this.options.listAiSessionHistory!(instance.id);
+        for (const item of history.items) {
+          if (item.modelSelection?.modelEntityId === modelId) {
+            references.push({ kind: "history", instanceId: instance.id, aiSessionId: item.id });
+          }
+        }
+      } catch (error) {
+        diagnostics.push({
+          instanceId: instance.id,
+          code: error && typeof error === "object" && "code" in error && typeof error.code === "string"
+            ? error.code
+            : "AI_SESSION_HISTORY_UNAVAILABLE",
+        });
+      }
+    }) : []);
+    if (diagnostics.length) {
+      throw Object.assign(new Error("Model references could not be verified for every managed instance."), {
+        statusCode: 409,
+        code: "MODEL_REFERENCE_CHECK_INCOMPLETE",
+        details: { diagnostics },
+      });
+    }
+    return references
+      .filter((reference, index, all) => all.findIndex((candidate) => candidate.kind === reference.kind
+        && candidate.instanceId === reference.instanceId && candidate.aiSessionId === reference.aiSessionId) === index)
+      .sort((a, b) => a.instanceId.localeCompare(b.instanceId) || a.kind.localeCompare(b.kind) || (a.aiSessionId || "").localeCompare(b.aiSessionId || ""));
+  }
+
   private resolvePrivateInput<T extends ModelDiscoveryInput | ModelTestInput>(input: T): T & { key: string } {
     const key = input.key?.trim() || (input.existingModelId ? this.requireSecret(input.existingModelId).key : "");
     if (!key) {
@@ -252,6 +398,24 @@ export class ControlPlaneModelService {
     }
     return { ...input, key };
   }
+}
+
+function normalizeModelNames(entries: ModelConfig["modelNames"] | undefined, legacyModel: string) {
+  const source = entries?.length ? entries : [{ name: legacyModel, order: 100 }];
+  const seen = new Set<string>();
+  return source
+    .map((entry) => ({ name: entry.name.trim(), order: entry.order }))
+    .filter((entry) => {
+      if (!entry.name || seen.has(entry.name)) return false;
+      seen.add(entry.name);
+      return true;
+    })
+    .sort((left, right) => left.order - right.order || left.name.localeCompare(right.name))
+    .map((entry, index) => ({ name: entry.name, order: (index + 1) * 100 }));
+}
+
+function defaultProtocols(app: ModelConfig["app"]): ModelConfig["protocols"] {
+  return app === "claude" ? ["anthropic-messages"] : app === "opencode" ? ["openai-chat-completions"] : ["openai-responses"];
 }
 
 function requireModelEndpointProbe(node: Node) {
@@ -269,7 +433,7 @@ function requireModelEndpointProbe(node: Node) {
 }
 
 function assertUsableModel(model: Pick<ModelConfig, "id" | "app" | "enabled">, app: "codex" | "claude" | "opencode") {
-  if (model.app !== app) {
+  if (!modelSupportsApp(model, app)) {
     throw Object.assign(new Error(`Model ${model.id} is not a ${app} model.`), {
       statusCode: 400,
       code: "MODEL_APP_MISMATCH",
@@ -278,4 +442,15 @@ function assertUsableModel(model: Pick<ModelConfig, "id" | "app" | "enabled">, a
   if (!model.enabled) {
     throw Object.assign(new Error(`Model ${model.id} is disabled.`), { statusCode: 400, code: "MODEL_DISABLED" });
   }
+}
+
+function assertEnabledModel(model: Pick<ModelConfig, "id" | "enabled">) {
+  if (!model.enabled) {
+    throw Object.assign(new Error(`Model ${model.id} is disabled.`), { statusCode: 400, code: "MODEL_DISABLED" });
+  }
+}
+
+function modelSupportsApp(model: Pick<ModelConfig, "app"> & { protocols?: ModelConfig["protocols"] }, app: "codex" | "claude" | "opencode") {
+  const protocol = app === "claude" ? "anthropic-messages" : app === "opencode" ? "openai-chat-completions" : "openai-responses";
+  return model.protocols?.length ? model.protocols.includes(protocol) : model.app === app;
 }

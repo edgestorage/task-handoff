@@ -242,16 +242,17 @@ A semantic version tag such as `v1.2.3` builds the controlled-instance runtime a
 
 ### Docker images
 
-The Docker workflow builds and smoke-tests four image profiles:
+The Docker workflow builds and smoke-tests five image profiles:
 
 | Image | Profile capabilities |
 | --- | --- |
 | `task-handoff-controlled-codex` | Terminal and Codex |
+| `task-handoff-controlled-opencode` | Terminal and OpenCode |
 | `task-handoff-controlled-ai` | Terminal, Codex, and Claude |
 | `task-handoff-controlled-webcap` | GUI terminal, browser, WebCap, Codex, and Claude |
 | `task-handoff-controlled-browser` | GUI terminal, browser, VS Code Web, Codex, and Claude; no WebCap |
 
-All four receive the same immutable `sha-<commit>` tag. A semantic version tag such as `v1.2.3` promotes the corresponding images to that version; stable releases also update `latest`.
+All five receive the same immutable `sha-<commit>` tag. A semantic version tag such as `v1.2.3` promotes the corresponding images to that version; stable releases also update `latest`.
 
 ### Desktop application
 

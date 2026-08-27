@@ -9,7 +9,7 @@ export type AiSessionProviderDescriptor = {
   discoveryProvider?: AiSessionDiscoveryProvider;
   ensureReady?: () => void | Promise<void>;
   resume?: (item: AiSessionHistoryItem) => void | Promise<void>;
-  capability: AiSessionProviderCapability;
+  capability: AiSessionProviderCapability | (() => AiSessionProviderCapability);
 };
 
 export class AiSessionProviderRegistry {
@@ -59,10 +59,12 @@ export class AiSessionProviderRegistry {
       await descriptor.resume(item);
       return;
     }
-    await descriptor.controlProvider.resumeSession?.(item.providerSessionId);
+    await descriptor.controlProvider.resumeSession?.(item.providerSessionId, item.modelSelection, item.reasoningEffort);
   }
 
   capabilities() {
-    return [...this.descriptors.values()].map((descriptor) => descriptor.capability);
+    return [...this.descriptors.values()].map((descriptor) => (
+      typeof descriptor.capability === "function" ? descriptor.capability() : descriptor.capability
+    ));
   }
 }

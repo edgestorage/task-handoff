@@ -64,7 +64,7 @@ export interface MobileAppSessionTtyConnection {
 
 export interface MobileControlPlaneTransport extends ControlPlaneClientTransport {
   readonly profile: MobileControlPlaneProfile;
-  request<T>(path: string, schema: z.ZodType<T>, init?: RequestInit): Promise<T>;
+  request<T>(path: string, schema: z.ZodType<T>, init?: RequestInit, onUploadProgress?: (progress: number) => void): Promise<T>;
   revalidate?(): Promise<void>;
   connectEvents(handlers: MobileControlPlaneEventHandlers): MobileControlPlaneEventConnection;
   connectAppSessionTty(instanceId: string, sessionId: string, handlers: MobileAppSessionTtyHandlers): MobileAppSessionTtyConnection;
