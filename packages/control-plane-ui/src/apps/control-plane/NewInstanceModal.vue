@@ -215,9 +215,7 @@ const environmentTemplates = useEnvironmentTemplatesQuery(() => runtimeDraft.nod
 const instanceDraft = reactive<InstanceDraft>({
   name: "",
   autoImportAgentConfigs: false,
-  codexModelHash: null,
-  claudeModelHash: null,
-  opencodeModelHash: null,
+  modelEntityIds: [],
   retainGitCredential: false,
 });
 const newProject = reactive<NewProjectDraft>({
@@ -518,15 +516,7 @@ watch(
   () => models.data.value,
   (items) => {
     const modelIds = new Set((items || []).map((model) => model.id));
-    if (typeof instanceDraft.codexModelHash === "string" && !modelIds.has(instanceDraft.codexModelHash)) {
-      instanceDraft.codexModelHash = null;
-    }
-    if (typeof instanceDraft.claudeModelHash === "string" && !modelIds.has(instanceDraft.claudeModelHash)) {
-      instanceDraft.claudeModelHash = null;
-    }
-    if (typeof instanceDraft.opencodeModelHash === "string" && !modelIds.has(instanceDraft.opencodeModelHash)) {
-      instanceDraft.opencodeModelHash = null;
-    }
+    instanceDraft.modelEntityIds = instanceDraft.modelEntityIds.filter((id) => modelIds.has(id));
   },
   { immediate: true },
 );
@@ -712,11 +702,7 @@ async function createInstance() {
       config: {
         autoImportAgentConfigs: instanceDraft.autoImportAgentConfigs,
       },
-      modelSelection: {
-        ...(instanceDraft.codexModelHash !== undefined ? { codexModelHash: instanceDraft.codexModelHash } : {}),
-        ...(instanceDraft.claudeModelHash !== undefined ? { claudeModelHash: instanceDraft.claudeModelHash } : {}),
-        ...(instanceDraft.opencodeModelHash !== undefined ? { opencodeModelHash: instanceDraft.opencodeModelHash } : {}),
-      },
+      modelSelection: instanceDraft.modelEntityIds.length ? { modelEntityIds: instanceDraft.modelEntityIds } : {},
       ...(selectedProjectGitCredentialId.value && instanceDraft.retainGitCredential
         ? { gitCredentialRetention: "instance-retained" as const }
         : {}),
@@ -725,9 +711,7 @@ async function createInstance() {
     });
     instanceDraft.name = "";
     instanceDraft.autoImportAgentConfigs = false;
-    instanceDraft.codexModelHash = null;
-    instanceDraft.claudeModelHash = null;
-    instanceDraft.opencodeModelHash = null;
+    instanceDraft.modelEntityIds = [];
     instanceDraft.retainGitCredential = false;
   } catch (error) {
     showControlPlaneToast(errorText(error));

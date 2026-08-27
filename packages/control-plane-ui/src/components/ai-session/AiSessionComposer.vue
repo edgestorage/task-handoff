@@ -7,11 +7,14 @@ import { AppWindow, ArrowUp, Box, Check, Copy, CornerDownRight, File, FileText, 
 import { PopoverAnchor } from "reka-ui";
 import type { AiSessionMentionCandidate } from "../../api/types";
 import type { AiSessionCommandInput, AiSessionPermissionMode } from "@task-handoff/protocol/ai-sessions";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu";
-import { Dialog, DialogContent, DialogTitle } from "../ui/dialog";
+import type { AiSessionModelSelection, AiSessionReasoningEffort } from "@task-handoff/protocol/ai-sessions";
+import type { AiSessionModelGroup } from "@task-handoff/control-plane-client";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "../ui/context-menu";
 import { Popover, PopoverContent } from "../ui/popover";
 import { Textarea } from "../ui/textarea";
+import { ScrollArea } from "../ui/scroll-area";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
 import { mentionTokenAt, reconcileMentionBindings, replaceMentionToken, type AiSessionMentionBinding } from "./mentions";
 import { commandTokenAt, matchingCommands, parseAiSessionCommand, replaceCommandToken, type AiSessionCommandCandidate } from "./commands";
 import { useAiSessionMentions, type AiSessionMentionContext } from "./useAiSessionMentions";
@@ -19,6 +22,7 @@ import { useAiSessionPermissionMode } from "../../apps/control-plane/useAiSessio
 import { showControlPlaneToast } from "../../apps/control-plane/useControlPlaneToasts";
 import { classifyAiSessionPastedText, type AiSessionPastedTextPresentation } from "@task-handoff/control-plane-client";
 import { AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES } from "@task-handoff/protocol/ai-sessions";
+import AiSessionImagePreview from "./AiSessionImagePreview.vue";
 
 export type AiSessionComposerAttachment = {
   id: string;
@@ -57,6 +61,12 @@ const props = defineProps<{
   permissionMode?: AiSessionPermissionMode;
   defaultPermissionMode?: AiSessionPermissionMode;
   editingLabel?: string;
+  modelGroups?: AiSessionModelGroup[];
+  modelSelection?: AiSessionModelSelection;
+  modelSelectionPending?: boolean;
+  reasoningEffort?: AiSessionReasoningEffort;
+  reasoningEffortEnabled?: boolean;
+  reasoningEffortPending?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -68,6 +78,8 @@ const emit = defineEmits<{
   (event: "steer"): void;
   (event: "command", value: AiSessionCommandInput): void;
   (event: "cancelEdit"): void;
+  (event: "selectModel", value: AiSessionModelSelection): void;
+  (event: "selectReasoningEffort", value: AiSessionReasoningEffort): void;
 }>();
 const { locale, t } = useI18n();
 
@@ -141,6 +153,28 @@ const permissionOptions = computed(() => [
   { value: "full-access", label: t("sessions.permission.fullAccess"), description: t("sessions.composer.fullAccessDescription"), icon: ShieldAlert, danger: true },
 ] satisfies Array<{ value: AiSessionPermissionMode; label: string; description: string; icon: typeof Hand; danger?: boolean }>);
 const selectedPermission = computed(() => permissionOptions.value.find((option) => option.value === permissionMode.value) || permissionOptions.value[0]);
+const modelGroups = computed(() => props.modelGroups || []);
+const modelOptions = computed(() => modelGroups.value.flatMap((group) => group.models));
+const displayedModelSelection = computed(() => props.modelSelection || modelOptions.value[0]);
+const displayedModelName = computed(() => displayedModelSelection.value?.modelName || t("sessions.composer.modelSelectionUnavailable"));
+const reasoningEfforts: AiSessionReasoningEffort[] = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
+const modelMenuDisabled = computed(() => Boolean(
+  props.busy
+  || props.sessionBusy
+  || props.modelSelectionPending
+  || props.reasoningEffortPending
+  || (modelOptions.value.length <= 1 && !props.reasoningEffortEnabled),
+));
+
+function isSelectedModel(model: AiSessionModelSelection) {
+  return model.modelEntityId === displayedModelSelection.value?.modelEntityId && model.modelName === displayedModelSelection.value?.modelName;
+}
+
+function selectedModelNameForGroup(group: AiSessionModelGroup) {
+  return props.modelSelection?.modelEntityId === group.modelEntityId
+    ? props.modelSelection.modelName
+    : undefined;
+}
 
 function resizeInput() {
   const element = textareaElement();
@@ -694,25 +728,14 @@ watch(() => props.busy, (busy) => {
         </button>
       </figure>
     </div>
-    <Dialog :open="Boolean(previewAttachment)" @update:open="(open) => { if (!open) closeImagePreview(); }">
-      <DialogContent class="ai-session-composer__image-dialog">
-        <DialogTitle class="sr-only">{{ previewAttachment?.name }}</DialogTitle>
-        <ContextMenu v-if="previewAttachment">
-          <ContextMenuTrigger as-child>
-            <img
-              :src="previewAttachment.previewUrl || previewAttachment.dataUrl"
-              :alt="previewAttachment.name"
-            />
-          </ContextMenuTrigger>
-          <ContextMenuContent>
-            <ContextMenuItem @select="copyAttachmentImage(previewAttachment)">
-              <Copy :size="15" />
-              <span>{{ t("sessions.composer.copyImage") }}</span>
-            </ContextMenuItem>
-          </ContextMenuContent>
-        </ContextMenu>
-      </DialogContent>
-    </Dialog>
+    <AiSessionImagePreview
+      :open="Boolean(previewAttachment)"
+      :src="previewAttachment?.previewUrl || previewAttachment?.dataUrl"
+      :alt="previewAttachment?.name"
+      :copyable="Boolean(previewAttachment)"
+      @update:open="(open) => { if (!open) closeImagePreview(); }"
+      @copy="previewAttachment && copyAttachmentImage(previewAttachment)"
+    />
     <Popover :open="overlayOpen" @update:open="(open) => { if (!open) { mentions.close(); commandOpen = false; } }">
       <PopoverAnchor as-child>
         <div class="ai-session-composer__input-anchor">
@@ -862,6 +885,108 @@ watch(() => props.busy, (busy) => {
         >
           <CornerDownRight :size="18" />
         </button>
+        <DropdownMenu v-if="modelOptions.length || reasoningEffortEnabled">
+          <DropdownMenuTrigger as-child>
+            <button
+              type="button"
+              class="ai-session-composer__model-trigger"
+              :disabled="modelMenuDisabled"
+              :title="t('sessions.composer.modelSelectionTitle', { model: displayedModelName })"
+              :aria-label="t('sessions.composer.modelSelectionTitle', { model: displayedModelName })"
+              :aria-busy="modelSelectionPending || undefined"
+            >
+              <LoaderCircle v-if="modelSelectionPending" class="animate-spin motion-reduce:animate-none" :size="14" />
+              <span>{{ displayedModelName }}</span>
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            class="ai-session-model-menu"
+            side="top"
+            align="end"
+            :collision-padding="12"
+            :side-offset="8"
+          >
+            <ScrollArea type="auto" :horizontal="false" class="ai-session-model-menu__scroll">
+              <div class="ai-session-model-menu__list">
+                <template v-for="(group, groupIndex) in modelGroups" :key="group.modelEntityId">
+                  <DropdownMenuSeparator v-if="groupIndex" />
+                  <DropdownMenuSub v-if="group.models.length > 1">
+                    <DropdownMenuSubTrigger
+                      class="ai-session-model-menu__item ai-session-model-menu__provider-item"
+                      :class="{ 'ai-session-model-menu__item--selected': selectedModelNameForGroup(group) }"
+                    >
+                      <span class="ai-session-model-menu__copy"><strong>{{ group.providerName }}</strong></span>
+                      <small
+                        v-if="selectedModelNameForGroup(group)"
+                        class="ai-session-model-menu__inline-model"
+                      >{{ selectedModelNameForGroup(group) }}</small>
+                    </DropdownMenuSubTrigger>
+                    <DropdownMenuSubContent class="ai-session-model-menu ai-session-model-menu--nested" :collision-padding="12">
+                      <DropdownMenuItem
+                        v-for="model in group.models"
+                        :key="`${model.modelEntityId}:${model.modelName}`"
+                        class="ai-session-model-menu__item"
+                        :class="{ 'ai-session-model-menu__item--selected': isSelectedModel(model) }"
+                        @select="emit('selectModel', { modelEntityId: model.modelEntityId, modelName: model.modelName })"
+                      >
+                        <span class="ai-session-model-menu__copy"><strong>{{ model.modelName }}</strong></span>
+                        <Check v-if="isSelectedModel(model)" class="ai-session-model-menu__check" :size="16" />
+                      </DropdownMenuItem>
+                    </DropdownMenuSubContent>
+                  </DropdownMenuSub>
+                  <DropdownMenuItem
+                    v-else
+                    class="ai-session-model-menu__item ai-session-model-menu__provider-item"
+                    :class="{ 'ai-session-model-menu__item--selected': isSelectedModel(group.models[0]) }"
+                    @select="emit('selectModel', { modelEntityId: group.models[0].modelEntityId, modelName: group.models[0].modelName })"
+                  >
+                    <span class="ai-session-model-menu__copy"><strong>{{ group.providerName }}</strong></span>
+                    <small class="ai-session-model-menu__inline-model">{{ group.models[0].modelName }}</small>
+                    <Check v-if="isSelectedModel(group.models[0])" class="ai-session-model-menu__check" :size="16" />
+                  </DropdownMenuItem>
+                </template>
+                <template v-if="reasoningEffortEnabled">
+                  <DropdownMenuSeparator />
+                  <DropdownMenuSub>
+                    <DropdownMenuSubTrigger class="ai-session-model-menu__item ai-session-model-menu__provider-item">
+                      <span class="ai-session-model-menu__copy"><strong>{{ t("sessions.composer.reasoningEffort") }}</strong></span>
+                      <small v-if="reasoningEffort" class="ai-session-model-menu__inline-model">{{ reasoningEffort }}</small>
+                    </DropdownMenuSubTrigger>
+                    <DropdownMenuSubContent class="ai-session-model-menu ai-session-model-menu--nested" :collision-padding="12">
+                      <DropdownMenuItem
+                        v-for="effort in reasoningEfforts"
+                        :key="effort"
+                        class="ai-session-model-menu__item"
+                        :class="{ 'ai-session-model-menu__item--selected': reasoningEffort === effort }"
+                        @select="emit('selectReasoningEffort', effort)"
+                      >
+                        <span class="ai-session-model-menu__copy"><strong>{{ effort }}</strong></span>
+                        <Check v-if="reasoningEffort === effort" class="ai-session-model-menu__check" :size="16" />
+                      </DropdownMenuItem>
+                    </DropdownMenuSubContent>
+                  </DropdownMenuSub>
+                </template>
+              </div>
+            </ScrollArea>
+          </DropdownMenuContent>
+        </DropdownMenu>
+        <TooltipProvider v-else-if="provider" :delay-duration="200">
+          <Tooltip>
+            <TooltipTrigger as-child>
+              <span class="ai-session-composer__model-tooltip-trigger">
+                <button
+                  type="button"
+                  class="ai-session-composer__model-trigger ai-session-composer__model-trigger--unavailable"
+                  disabled
+                  :aria-label="modelSelection ? t('sessions.composer.modelSelectionTitle', { model: displayedModelName }) : t('sessions.composer.modelSelectionUnavailable')"
+                >
+                  <span>{{ displayedModelName }}</span>
+                </button>
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="top" :side-offset="8">{{ t('sessions.composer.modelSelectionUnavailable') }}</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
         <button
           type="submit"
           class="ai-session-composer__primary"
@@ -1047,20 +1172,6 @@ watch(() => props.busy, (busy) => {
   transition: width 0.12s linear;
 }
 
-:global(.ai-session-composer__image-dialog) {
-  width: min(92vw, 1120px);
-  max-width: none;
-  height: min(88vh, 860px);
-  padding: 12px;
-}
-
-:global(.ai-session-composer__image-dialog img) {
-  width: 100%;
-  height: 100%;
-  min-height: 0;
-  object-fit: contain;
-}
-
 .ai-session-composer__attachments button:disabled,
 .ai-session-composer__tool:disabled {
   cursor: not-allowed;
@@ -1203,6 +1314,134 @@ watch(() => props.busy, (busy) => {
 .ai-session-composer__permission-trigger:disabled {
   cursor: not-allowed;
   opacity: 0.55;
+}
+
+.ai-session-composer__model-trigger {
+  display: inline-flex;
+  min-width: 0;
+  max-width: min(180px, 30vw);
+  height: 32px;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ai-composer-muted, currentColor);
+  cursor: pointer;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.ai-session-composer__model-trigger span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-session-composer__model-trigger:disabled {
+  cursor: default;
+  opacity: 0.62;
+}
+
+.ai-session-composer__model-tooltip-trigger {
+  display: inline-flex;
+  min-width: 0;
+}
+
+.ai-session-composer__model-trigger:not(:disabled):is(:hover, :focus-visible) {
+  background: color-mix(in srgb, var(--ai-composer-muted, currentColor) 10%, transparent);
+  outline: none;
+}
+
+:global(.ai-session-model-menu) {
+  width: min(280px, calc(100vw - 24px));
+  max-height: min(320px, var(--reka-dropdown-menu-content-available-height));
+  overflow: hidden;
+  padding: 4px;
+}
+
+:global(.ai-session-model-menu__scroll) {
+  max-height: min(312px, calc(var(--reka-dropdown-menu-content-available-height) - 8px));
+  min-width: 0;
+}
+
+:global(.ai-session-model-menu__list) {
+  display: grid;
+}
+
+:global(.ai-session-model-menu__provider) {
+  padding: 7px 9px 5px;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  font-weight: 400;
+}
+
+:global(.ai-session-model-menu__item) {
+  min-height: 32px;
+  gap: 8px;
+  border-radius: 7px;
+  padding: 4px 8px;
+}
+
+:global(.ai-session-model-menu__provider-item) {
+  align-items: center;
+}
+
+:global(.ai-session-model-menu__copy) {
+  display: grid;
+  min-width: 0;
+  flex: 1 1 auto;
+  gap: 1px;
+}
+
+:global(.ai-session-model-menu__copy strong) {
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+:global(.ai-session-model-menu__copy small) {
+  overflow: hidden;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+:global(.ai-session-model-menu__check) {
+  flex: 0 0 auto;
+}
+
+:global(.ai-session-model-menu__item--selected) {
+  color: hsl(var(--primary));
+}
+
+:global(.ai-session-model-menu__item--selected .ai-session-model-menu__inline-model) {
+  color: color-mix(in srgb, hsl(var(--primary)) 25%, hsl(var(--muted-foreground)));
+}
+
+:global(.ai-session-model-menu__inline-model) {
+  max-width: 52%;
+  overflow: hidden;
+  color: hsl(var(--muted-foreground));
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+:global(.ai-session-model-menu--nested) {
+  min-width: 220px;
+  max-height: min(320px, var(--reka-dropdown-menu-content-available-height));
 }
 
 :global(.ai-session-permission-menu) {

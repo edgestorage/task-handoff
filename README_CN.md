@@ -239,16 +239,17 @@ scripts/                          安装、构建和运行脚本
 
 ### Docker 镜像
 
-Docker 工作流会构建并冒烟测试四种镜像配置：
+Docker 工作流会构建并冒烟测试五种镜像配置：
 
 | 镜像 | Profile 能力 |
 | --- | --- |
 | `task-handoff-controlled-codex` | Terminal、Codex |
+| `task-handoff-controlled-opencode` | Terminal、OpenCode |
 | `task-handoff-controlled-ai` | Terminal、Codex、Claude |
 | `task-handoff-controlled-webcap` | GUI Terminal、Browser、WebCap、Codex、Claude |
 | `task-handoff-controlled-browser` | GUI Terminal、Browser、VS Code Web、Codex、Claude；不包含 WebCap |
 
-四者使用相同的不可变 `sha-<commit>` 标签。推送 `v1.2.3` 形式的语义化版本标签时，对应镜像会提升为该版本；稳定版本同时更新 `latest`。
+五者使用相同的不可变 `sha-<commit>` 标签。推送 `v1.2.3` 形式的语义化版本标签时，对应镜像会提升为该版本；稳定版本同时更新 `latest`。
 
 ### 桌面应用
 

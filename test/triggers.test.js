@@ -14,6 +14,8 @@ require.extensions[".ts"] = (module, filename) => {
 
 const { eventTopic } = require("../packages/protocol/src/events.ts");
 const {
+  ControlPlaneAiSessionTriggerBoundEventSchema,
+  ControlPlaneAiSessionTriggerUnboundEventSchema,
   TriggerSourceSchema,
   TriggerTargetSchema,
   triggerConfigHash,
@@ -470,6 +472,25 @@ test("trigger migration runs instances concurrently but preserves create-before-
 
 test("trigger events use triggers topic", () => {
   assert.equal(eventTopic("trigger.run.completed"), "triggers");
+});
+
+test("trigger deployment event schemas accept v0.0.23 bound and current unbound payloads", () => {
+  assert.deepEqual(ControlPlaneAiSessionTriggerBoundEventSchema.parse({
+    instanceId: "inst_1",
+    sessionId: "ais_1",
+  }), {
+    instanceId: "inst_1",
+    sessionId: "ais_1",
+  });
+  assert.deepEqual(ControlPlaneAiSessionTriggerUnboundEventSchema.parse({
+    instanceId: "inst_1",
+    sessionId: "ais_1",
+    configHash: "trg_abcdefgh",
+  }), {
+    instanceId: "inst_1",
+    sessionId: "ais_1",
+    configHash: "trg_abcdefgh",
+  });
 });
 
 test("trigger protocol only accepts strict AI session targets", () => {

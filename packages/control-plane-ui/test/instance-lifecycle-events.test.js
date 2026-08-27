@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { QueryClient } from "@tanstack/vue-query";
-import { mergeInstanceBoardPayload, mergeInstanceBoardQueryData } from "../src/api/instanceBoardMerge.ts";
+import { markInstanceTriggerProjectionAuthoritative, mergeInstanceBoardPayload, mergeInstanceBoardQueryData } from "../src/api/instanceBoardMerge.ts";
 import { applyInstanceLifecycle, applyNodeFleetState, applyNodeStateProjection } from "../src/apps/control-plane/instanceLifecycleCache.ts";
 import { controlPlaneQueryKeys } from "../src/api/queryKeys.ts";
 import { applyInstanceBoardTargetSnapshot } from "../src/apps/control-plane/instanceBoardCache.ts";
@@ -288,6 +288,48 @@ test("board HTTP merge accepts newer revisions and authoritative removals", () =
   assert.equal(merged.data.length, 1);
   assert.equal(merged.data[0].stateRevision, 3);
   assert.equal(merged.data[0].status, "running");
+});
+
+test("a board heartbeat cannot overwrite an authoritative trigger projection", () => {
+  markInstanceTriggerProjectionAuthoritative("inst_target");
+  const previous = {
+    ...boardInstance("inst_target", 2, "running"),
+    lastHeartbeatAt: "2026-08-27T13:18:40.000Z",
+    triggers: {
+      configs: [{ configHash: "trg_new", deployments: [{ configHash: "trg_new" }] }],
+      recentRuns: [],
+      updatedAt: "2026-08-27T13:18:47.000Z",
+    },
+  };
+  const stale = {
+    ...previous,
+    lastHeartbeatAt: "2026-08-27T13:18:45.000Z",
+    triggers: { configs: [], recentRuns: [] },
+  };
+
+  const merged = mergeInstanceBoardPayload({ data: [previous] }, { data: [stale] });
+  assert.equal(merged.data[0].triggers.configs[0].configHash, "trg_new");
+});
+
+test("trigger projections remain independent from later board heartbeats", () => {
+  markInstanceTriggerProjectionAuthoritative("inst_target");
+  const previous = {
+    ...boardInstance("inst_target", 2, "running"),
+    lastHeartbeatAt: "2026-08-27T13:18:40.000Z",
+    triggers: {
+      configs: [{ configHash: "trg_old", deployments: [{ configHash: "trg_old" }] }],
+      recentRuns: [],
+      updatedAt: "2026-08-27T13:18:47.000Z",
+    },
+  };
+  const authoritative = {
+    ...previous,
+    lastHeartbeatAt: "2026-08-27T13:18:50.000Z",
+    triggers: { configs: [{ configHash: "trg_new", deployments: [] }], recentRuns: [] },
+  };
+
+  const merged = mergeInstanceBoardPayload({ data: [previous] }, { data: [authoritative] });
+  assert.equal(merged.data[0].triggers.configs[0].configHash, "trg_old");
 });
 
 test("board structural sharing accepts the item array produced by query select", () => {

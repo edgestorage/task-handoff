@@ -1,13 +1,26 @@
 import { replaceEqualDeep } from "@tanstack/vue-query";
 import type { InstanceBoardItem, InstanceBoardPayload } from "./types";
 
+const authoritativeInstanceTriggerIds = new Set<string>();
+
+export function markInstanceTriggerProjectionAuthoritative(instanceId: string) {
+  authoritativeInstanceTriggerIds.add(instanceId);
+}
+
 export function mergeInstanceBoardItem(
   previous: InstanceBoardItem | undefined,
   incoming: InstanceBoardItem,
 ) {
   if (!previous) return incoming;
-  if ((previous.stateRevision || 0) <= (incoming.stateRevision || 0)) return incoming;
-  return mergeNewerLifecycleProjection(incoming, previous);
+  const lifecycleMerged = (previous.stateRevision || 0) <= (incoming.stateRevision || 0)
+    ? incoming
+    : mergeNewerLifecycleProjection(incoming, previous);
+  return preserveNewerTriggerProjection(previous, lifecycleMerged);
+}
+
+function preserveNewerTriggerProjection(previous: InstanceBoardItem, incoming: InstanceBoardItem): InstanceBoardItem {
+  if (!previous.triggers || !authoritativeInstanceTriggerIds.has(previous.id)) return incoming;
+  return { ...incoming, triggers: previous.triggers };
 }
 
 /**

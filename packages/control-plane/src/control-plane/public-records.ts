@@ -118,6 +118,7 @@ export function publicInstanceDirectory(item: InstanceBoardResult["items"][numbe
       defaultCodexPermissionMode: item.config.defaultCodexPermissionMode,
       aiSessionMaxFileAttachmentBytes: item.config.aiSessionMaxFileAttachmentBytes,
     },
+    modelSelection: item.modelSelection,
     lastHeartbeatAt: item.lastHeartbeatAt,
     heartbeatAgeMs: item.heartbeatAgeMs,
     observedAt: item.updatedAt,
@@ -200,6 +201,27 @@ export function normalizeModel(model: unknown) {
       const apps = Array.isArray(record.apps) ? record.apps : [];
       record.app = apps.includes("claude") && !apps.includes("codex") ? "claude" : "codex";
     }
+    if (!Array.isArray(record.protocols) || record.protocols.length === 0) {
+      record.protocols = record.app === "claude" ? ["anthropic-messages"] : record.app === "opencode" ? ["openai-chat-completions"] : ["openai-responses"];
+    }
+    const sourceModelNames = Array.isArray(record.modelNames) && record.modelNames.length > 0
+      ? record.modelNames
+      : [{ name: record.model, order: 100 }];
+    const names = new Set<string>();
+    const normalizedModelNames = sourceModelNames
+      .flatMap((entry) => {
+        if (!entry || typeof entry !== "object") return [];
+        const item = entry as Record<string, unknown>;
+        if (typeof item.name !== "string" || !item.name.trim() || names.has(item.name.trim())) return [];
+        names.add(item.name.trim());
+        return [{ name: item.name.trim(), order: typeof item.order === "number" ? item.order : 0 }];
+      })
+      .sort((left, right) => left.order - right.order || left.name.localeCompare(right.name))
+      .map((entry, index) => ({ name: entry.name, order: (index + 1) * 100 }));
+    record.modelNames = normalizedModelNames.length === 0 && typeof record.model === "string" && record.model.trim()
+      ? [{ name: record.model.trim(), order: 100 }]
+      : normalizedModelNames;
+    record.model = (record.modelNames as Array<{ name: string }>)[0]?.name || record.model;
     delete record.apps;
     return ModelConfigSchema.parse(record);
   }

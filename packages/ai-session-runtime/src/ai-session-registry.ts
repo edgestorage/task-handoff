@@ -6,6 +6,7 @@ import type {
   AiSessionConversationAttachment,
   AiSessionLifecycle,
   AiSessionLineage,
+  AiSessionModelSelection,
   AiSessionCreationSource,
   AiSessionHistoryItem,
   AiSessionMessageAttachment,
@@ -71,6 +72,8 @@ type AiSessionStartInput = {
   appId?: string;
   providerSessionId?: string;
   lineage?: AiSessionLineage;
+  modelSelection?: AiSessionModelSelection;
+  reasoningEffort?: AiSessionStatus["reasoningEffort"];
   title?: string;
   cwd?: string;
   cwdFolderId?: string;
@@ -128,6 +131,8 @@ export function aiSessionDetailRevision(session: AiSessionStatus) {
     cwd: session.cwd,
     error: session.error,
     providerMeta: session.providerMeta,
+    modelSelection: session.modelSelection,
+    reasoningEffort: session.reasoningEffort,
     queue: session.queue,
     subAgents: session.subAgents,
   });
@@ -180,6 +185,8 @@ function summaryForHeartbeat(session: AiSessionStatus): AiSessionSummary {
     appId: session.appId,
     providerSessionId: session.providerSessionId,
     lineage: session.lineage,
+    modelSelection: session.modelSelection,
+    reasoningEffort: session.reasoningEffort,
     appBindingKeys: session.appBindingKeys?.slice(0, 3).map((value) => compact(value, 120)),
     actions: actionsForSession(session),
     activeTurnId: session.activeTurnId,
@@ -331,6 +338,8 @@ export class AiSessionRegistry {
       providerSessionId: input.providerSessionId ? compact(input.providerSessionId, 240) : undefined,
       lineage: input.lineage,
       providerMeta: undefined,
+      modelSelection: input.modelSelection,
+      reasoningEffort: input.reasoningEffort,
       activeTurnId: undefined,
       title: input.title ? compact(input.title, 240) : undefined,
       cwd: input.cwd ? compact(input.cwd, 4096) : undefined,
@@ -385,6 +394,8 @@ export class AiSessionRegistry {
       appId: item.agent,
       providerSessionId: item.providerSessionId,
       lineage: item.lineage,
+      modelSelection: item.modelSelection,
+      reasoningEffort: item.reasoningEffort,
       title: item.title,
       cwd: item.cwd,
       cwdFolderId: item.cwdFolderId,
@@ -608,6 +619,8 @@ export class AiSessionRegistry {
         appId: input.appId,
         providerSessionId: input.providerSessionId,
         lineage: input.lineage,
+        modelSelection: input.modelSelection,
+        reasoningEffort: input.reasoningEffort,
         title: input.title,
         cwd: input.cwd,
         cwdFolderId: input.cwdFolderId,
@@ -619,6 +632,8 @@ export class AiSessionRegistry {
       }, { meta, timestamp: input.observedAt, suppressPromptTurn: !input.turns?.length });
       return this.put(applyAiSessionPatch(session, {
         providerMeta: input.providerMeta,
+        modelSelection: input.modelSelection,
+        reasoningEffort: input.reasoningEffort,
         lineage: input.lineage,
         appBindingKeys: input.appBindingKeys,
         actions: input.actions,

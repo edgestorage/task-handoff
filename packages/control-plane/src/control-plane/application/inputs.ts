@@ -67,10 +67,16 @@ export const CreateModelInputSchema = z.object({
   endpoint: ModelConfigSchema.shape.endpoint,
   key: ModelConfigSchema.shape.key,
   model: ModelConfigSchema.shape.model,
+  modelNames: ModelConfigSchema.shape.modelNames.optional(),
+  protocols: ModelConfigSchema.shape.protocols.optional(),
   app: ModelConfigSchema.shape.app,
   enabled: ModelConfigSchema.shape.enabled.optional(),
   order: ModelConfigSchema.shape.order.optional(),
   labels: ModelConfigSchema.shape.labels.optional(),
+}).strict();
+
+export const CopyModelInputSchema = CreateModelInputSchema.omit({ key: true }).extend({
+  key: ModelConfigSchema.shape.key.optional(),
 }).strict();
 
 export const UpdateModelInputSchema = CreateModelInputSchema.partial().strict();
@@ -83,8 +89,9 @@ export const ModelDiscoveryInputSchema = z.object({
 
 export const ModelTestInputSchema = ModelDiscoveryInputSchema.extend({
   model: ModelConfigSchema.shape.model,
-  app: ModelConfigSchema.shape.app,
-}).strict();
+  app: ModelConfigSchema.shape.app.optional(),
+  protocol: z.enum(["openai-responses", "openai-chat-completions", "anthropic-messages"]).optional(),
+}).strict().refine((input) => Boolean(input.protocol || input.app), { message: "A model protocol is required.", path: ["protocol"] });
 
 export const CreateNodeInputSchema = z.object({
   id: NodeSchema.shape.id.optional(),

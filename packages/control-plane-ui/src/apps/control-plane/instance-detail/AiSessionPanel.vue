@@ -582,11 +582,17 @@
               :disabled="!newSessionFolder || (newSessionWorkspaceLoading && !newSessionWorkspace)"
               :can-interrupt="false"
               :provider="newSessionApp"
+              :model-groups="newSessionModelGroups"
+              :model-selection="newSessionModelSelection"
+              :reasoning-effort="newSessionReasoningEffort"
+              :reasoning-effort-enabled="newSessionReasoningEffortCapability.selectAtCreate"
               :permission-mode="newSessionPermissionMode"
               :default-permission-mode="instance.config.defaultCodexPermissionMode"
               :max-file-attachment-bytes="instance.config.aiSessionMaxFileAttachmentBytes"
               :placeholder="t('sessions.panel.promptPlaceholder')"
               @update:permission-mode="updateNewSessionPermissionMode"
+              @select-model="newSessionModelSelection = $event"
+              @select-reasoning-effort="newSessionReasoningEffort = $event"
               @run="createNewSession"
             />
           </div>
@@ -820,6 +826,12 @@
           :busy="aiSessionActionBusy"
           :can-interrupt="canInterrupt(selectedSession)"
           :provider="selectedSession.agent"
+          :model-groups="selectedSessionModelGroups"
+          :model-selection="selectedSessionModelDisplay"
+          :model-selection-pending="modelSelectionPendingSessionId === selectedSession.id"
+          :reasoning-effort="selectedSession.reasoningEffort"
+          :reasoning-effort-enabled="selectedSessionReasoningEffortCapability.updateDuringSession"
+          :reasoning-effort-pending="reasoningEffortPending?.sessionId === selectedSession.id"
           :permission-key="aiSessionPermissionKey(instance.id, selectedSession.id)"
           :default-permission-mode="instance.config.defaultCodexPermissionMode"
           :max-file-attachment-bytes="instance.config.aiSessionMaxFileAttachmentBytes"
@@ -831,6 +843,8 @@
           @cancel-edit="cancelQueueComposerEdit"
           @command="executeSelectedSessionCommand"
           @run="runSelectedSessionAction"
+          @select-model="selectExistingSessionModel"
+          @select-reasoning-effort="selectExistingSessionReasoningEffort"
           @steer="steerMessageDraft"
         />
       </section>
@@ -1001,15 +1015,16 @@ import AiSessionStatusIndicator from "../../../components/ai-session/AiSessionSt
 import AiAgentIcon from "../../../components/AiAgentIcon.vue";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../../components/ui/alert-dialog";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
-import { bindAiSessionTrigger, closeAiSession, createAiSession, createNodeLocalFolder, editAiSessionQueuedMessage, forkAiSession, getAiSessionHistory, getAiSessionHistoryDetail, getAiSessionWorkspace, interruptAiSession, listNodeFolderPlaces, listNodeFolderTree, markAiSessionRead, openAiSessionApp, removeAiSessionQueuedMessage, reorderAiSessionQueuedMessages, resolveAiSessionApproval, resumeAiSession, retryAiSessionQueuedMessage, sendAiSessionMessage, steerAiSessionQueuedMessage, unbindAiSessionTrigger, updateControlledInstance, updateNodeLocalFolder, uploadAiSessionAttachment, useControlPlaneSettingsQuery, useControlPlaneTriggersQuery } from "../../../api/queries";
+import { bindAiSessionTrigger, closeAiSession, createAiSession, createNodeLocalFolder, editAiSessionQueuedMessage, forkAiSession, getAiSessionHistory, getAiSessionHistoryDetail, getAiSessionWorkspace, interruptAiSession, listNodeFolderPlaces, listNodeFolderTree, markAiSessionRead, openAiSessionApp, removeAiSessionQueuedMessage, reorderAiSessionQueuedMessages, resolveAiSessionApproval, resumeAiSession, retryAiSessionQueuedMessage, sendAiSessionMessage, steerAiSessionQueuedMessage, unbindAiSessionTrigger, updateAiSessionModelSelection, updateAiSessionReasoningEffort, updateControlledInstance, updateNodeLocalFolder, uploadAiSessionAttachment, useControlPlaneSettingsQuery, useControlPlaneTriggersQuery, useModelsQuery } from "../../../api/queries";
 import { controlPlaneQueryKeys } from "../../../api/queryKeys.ts";
 import { executeAiSessionCommand } from "../../../api/ai-session-commands";
-import { type AiSessionCommandInput, type AiSessionHistoryDetail, type AiSessionHistoryItem, type AiSessionMessageAttachmentRef, type AiSessionPermissionMode } from "@task-handoff/protocol/ai-sessions";
+import { type AiSessionCommandInput, type AiSessionHistoryDetail, type AiSessionHistoryItem, type AiSessionMessageAttachmentRef, type AiSessionModelSelection, type AiSessionPermissionMode, type AiSessionReasoningEffort } from "@task-handoff/protocol/ai-sessions";
+import { normalizeAiSessionModelSelectionCapabilities, normalizeAiSessionReasoningEffortCapabilities } from "@task-handoff/protocol/ai-session-provider-capabilities";
 import type { RepositoryAiSessionWorkspace, RepositoryAiSessionWorkspaceBranch } from "@task-handoff/protocol/repository";
 import { directoryAiSessionProviderCapability } from "@task-handoff/protocol/control-plane-directory";
-import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions, NodeLocalFolder, TriggerConfig, TriggerDeployment, TriggerRuntimeState } from "../../../api/types";
+import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions, NodeLocalFolder } from "../../../api/types";
 import type { LaunchableApp } from "../useInstanceSessions";
-import { updateInstanceBoardData } from "../instanceBoardCache.ts";
+import { isAiSessionTriggerDeployment, removeInstanceTriggerBinding, upsertInstanceTriggerBinding } from "../instanceTriggerCache.ts";
 import AiSessionComposer, { type AiSessionComposerAttachment } from "../../../components/ai-session/AiSessionComposer.vue";
 import { uploadAiSessionComposerAttachment } from "../../../components/ai-session/attachmentUpload";
 import AiSessionConversationContent from "../../../components/ai-session/AiSessionConversationContent.vue";
@@ -1055,6 +1070,8 @@ import { createBrowserUuid } from "../../../lib/random-id";
 import {
   aiSessionStatusGroup as sessionStatusGroup,
   canInterruptAiSession,
+  defaultAiSessionModelSelection,
+  deriveAiSessionModelGroups,
   isAiSessionApprovalPending,
 } from "@task-handoff/control-plane-client";
 import {
@@ -1305,6 +1322,38 @@ const selectedForkTurn = computed(() => {
 const showNewSession = computed(() => newSessionOpen.value || !selectedSession.value);
 const selectedListSessionId = computed(() => showNewSession.value ? undefined : selectedSession.value?.id);
 const newSessionApp = ref("");
+const modelsQuery = useModelsQuery();
+const newSessionModelSelection = ref<AiSessionModelSelection>();
+const modelSelectionPendingSessionId = ref("");
+const newSessionReasoningEffort = ref<AiSessionReasoningEffort>();
+const reasoningEffortPending = ref<{ sessionId: string; target: AiSessionReasoningEffort }>();
+const newSessionModelGroups = computed(() => deriveAiSessionModelGroups({
+  entities: modelsQuery.data.value || [],
+  assignment: props.instance.modelSelection,
+  agent: newSessionApp.value,
+  nodeId: props.instance.nodeId,
+  mode: "create",
+  capability: modelSelectionCapability(newSessionApp.value),
+}));
+const selectedSessionModelGroups = computed(() => {
+  const session = selectedSession.value;
+  if (!session) return [];
+  return deriveAiSessionModelGroups({
+    entities: modelsQuery.data.value || [],
+    assignment: props.instance.modelSelection,
+    agent: session.agent,
+    nodeId: props.instance.nodeId,
+    mode: "existing",
+    currentSelection: session.modelSelection,
+    capability: modelSelectionCapability(session.agent),
+  });
+});
+const selectedSessionModelDisplay = computed(() => {
+  const session = selectedSession.value;
+  return session?.modelSelection;
+});
+const newSessionReasoningEffortCapability = computed(() => reasoningEffortCapability(newSessionApp.value));
+const selectedSessionReasoningEffortCapability = computed(() => reasoningEffortCapability(selectedSession.value?.agent || ""));
 const newSessionFolderId = ref("");
 const activeNewSessionDraftKey = ref(aiSessionCreationDraftKey(props.instance.id));
 const initialNewSessionDraft = loadAiSessionDraftPayload(activeNewSessionDraftKey.value);
@@ -1331,6 +1380,32 @@ const newSessionComposerBusy = computed(() => launchingNewSession.value || savin
 const aiSessionLaunchableApps = computed(() => (props.launchableApps || []).filter((app) => app.id === "codex"));
 const terminalLaunchAppId = computed(() => ["terminal-tty", "terminal", "gui-terminal"]
   .find((appId) => props.launchableApps?.some((app) => app.id === appId)));
+
+function modelSelectionCapability(agent: string) {
+  // Controlled-instance capabilities are wrapped in the public `features` document.
+  // Passing the outer record makes the directory helper normalize to unsupported,
+  // which silently hides the model picker even when the runtime advertises it.
+  return normalizeAiSessionModelSelectionCapabilities(directoryAiSessionProviderCapability(props.instance.capabilities?.features, agent));
+}
+
+function reasoningEffortCapability(agent: string) {
+  return normalizeAiSessionReasoningEffortCapabilities(directoryAiSessionProviderCapability(props.instance.capabilities?.features, agent));
+}
+
+watch(newSessionModelGroups, (groups) => {
+  const current = newSessionModelSelection.value;
+  if (current && groups.some((group) => group.models.some((model) => model.modelEntityId === current.modelEntityId && model.modelName === current.modelName))) return;
+  newSessionModelSelection.value = defaultAiSessionModelSelection(groups);
+}, { immediate: true });
+watch(newSessionReasoningEffortCapability, (capability) => {
+  if (!capability.selectAtCreate) newSessionReasoningEffort.value = undefined;
+});
+watch(visibleAiSessions, (sessions) => {
+  const pending = reasoningEffortPending.value;
+  if (pending && sessions.find((session) => session.id === pending.sessionId)?.reasoningEffort === pending.target) {
+    reasoningEffortPending.value = undefined;
+  }
+});
 const createdNewSessionFolders = ref<NodeLocalFolder[]>([]);
 const pathGroupRenameTarget = ref<NodeLocalFolder>();
 const pathGroupRenameDraft = ref("");
@@ -2323,6 +2398,8 @@ async function createNewSession(permissionMode?: AiSessionPermissionMode) {
     })),
     references,
     permissionMode,
+    modelSelection: newSessionModelSelection.value,
+    reasoningEffort: newSessionReasoningEffort.value,
   });
   if (newSessionCreateAttempt.value?.fingerprint !== fingerprint) {
     newSessionCreateAttempt.value = { clientRequestId: createBrowserUuid(), fingerprint };
@@ -2341,6 +2418,8 @@ async function createNewSession(permissionMode?: AiSessionPermissionMode) {
       attachments,
       references,
       permissionMode,
+      ...(newSessionModelSelection.value ? { modelSelection: newSessionModelSelection.value } : {}),
+      ...(newSessionReasoningEffort.value ? { reasoningEffort: newSessionReasoningEffort.value } : {}),
       clientRequestId: attempt.clientRequestId,
     });
     if (permissionMode) {
@@ -2360,6 +2439,34 @@ async function createNewSession(permissionMode?: AiSessionPermissionMode) {
   }
 }
 
+async function selectExistingSessionModel(modelSelection: AiSessionModelSelection) {
+  const session = selectedSession.value;
+  if (!session || modelSelectionPendingSessionId.value || (
+    session.modelSelection?.modelEntityId === modelSelection.modelEntityId
+    && session.modelSelection.modelName === modelSelection.modelName
+  )) return;
+  modelSelectionPendingSessionId.value = session.id;
+  try {
+    await updateAiSessionModelSelection(props.instance.id, session.id, createBrowserUuid(), modelSelection);
+  } catch (error) {
+    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.modelSwitchFailed")));
+  } finally {
+    if (modelSelectionPendingSessionId.value === session.id) modelSelectionPendingSessionId.value = "";
+  }
+}
+
+async function selectExistingSessionReasoningEffort(reasoningEffort: AiSessionReasoningEffort) {
+  const session = selectedSession.value;
+  if (!session || reasoningEffortPending.value || session.reasoningEffort === reasoningEffort) return;
+  reasoningEffortPending.value = { sessionId: session.id, target: reasoningEffort };
+  try {
+    await updateAiSessionReasoningEffort(props.instance.id, session.id, createBrowserUuid(), reasoningEffort);
+  } catch (error) {
+    if (reasoningEffortPending.value?.sessionId === session.id) reasoningEffortPending.value = undefined;
+    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.reasoningEffortFailed")));
+  }
+}
+
 function canInterrupt(session: AiSessionSummary) {
   return canInterruptAiSession(session);
 }
@@ -2369,7 +2476,7 @@ function canResolveApproval(session: AiSessionSummary) {
 }
 
 function approvalDecisions(session: AiSessionSummary): Array<"allow" | "deny" | "skip"> {
-  const capability = directoryAiSessionProviderCapability(props.instance.capabilities, session.agent);
+  const capability = directoryAiSessionProviderCapability(props.instance.capabilities?.features, session.agent);
   if (capability) return capability.actions.approvalDecisions;
   // Compatibility for v0.0.21: provider capabilities were absent and the UI exposed all legacy decisions.
   return session.agent === "codex" || session.agent === "claude" ? ["allow", "deny", "skip"] : [];
@@ -2698,10 +2805,6 @@ function parentSessionLabel(session: AiSessionSummary) {
   return parent ? displayAiSessionTitle(parent, 0, t) : parentProviderSessionId;
 }
 
-function isAiSessionTriggerDeployment(deployment: TriggerDeployment, sessionId: string) {
-  return deployment.target.type === "ai-session" && deployment.target.aiSessionId === sessionId;
-}
-
 function isTriggerBound(session: AiSessionSummary, configHash: string) {
   return boundTriggers(session).some((deployment) => deployment.configHash === configHash);
 }
@@ -2719,15 +2822,12 @@ async function toggleTrigger(session: AiSessionSummary, configHash: string) {
   try {
     if (isTriggerBound(session, configHash)) {
       await unbindAiSessionTrigger(props.instance.id, session.id, configHash);
-      removeLocalTriggerBinding(session, configHash);
+      removeInstanceTriggerBinding(queryClient, props.instance.id, session.id, configHash);
     } else {
-      const created = await bindAiSessionTrigger(props.instance.id, session.id, configHash) as TriggerMutationResult;
-      upsertLocalTriggerBinding(created);
+      const created = await bindAiSessionTrigger(props.instance.id, session.id, configHash);
+      upsertInstanceTriggerBinding(queryClient, props.instance.id, created);
     }
-    await Promise.all([
-      queryClient.invalidateQueries({ queryKey: controlPlaneQueryKeys.instanceBoard }),
-      queryClient.invalidateQueries({ queryKey: ["control-plane-triggers"] }),
-    ]);
+    await queryClient.invalidateQueries({ queryKey: ["control-plane-triggers"] });
   } finally {
     triggerBusyKey.value = "";
   }
@@ -2735,88 +2835,6 @@ async function toggleTrigger(session: AiSessionSummary, configHash: string) {
 
 function shortHash(value: string) {
   return value.length > 14 ? `${value.slice(0, 10)}...` : value;
-}
-
-type TriggerMutationResult = {
-  config?: TriggerConfig;
-  deployment?: TriggerDeployment;
-  runtime?: TriggerRuntimeState;
-};
-
-type InstanceTriggerSnapshot = NonNullable<InstanceBoardItem["triggers"]>;
-
-function emptyTriggerSnapshot(): InstanceTriggerSnapshot {
-  return {
-    configs: [],
-    recentRuns: [],
-    updatedAt: new Date().toISOString(),
-  };
-}
-
-function upsertLocalTriggerBinding(result: TriggerMutationResult) {
-  if (!result.config || !result.deployment) {
-    return;
-  }
-  updateInstanceBoardData(queryClient, (instances) => instances.map((instance) => {
-    if (instance.id !== props.instance.id) {
-      return instance;
-    }
-    const snapshot = instance.triggers || emptyTriggerSnapshot();
-    const currentConfig = snapshot.configs.find((entry) => entry.configHash === result.config?.configHash);
-    const nextEntry = {
-      configHash: result.config.configHash,
-      config: result.config,
-      deployments: [
-        ...(currentConfig?.deployments || []).filter((deployment) => deployment.deploymentId !== result.deployment?.deploymentId),
-        result.deployment,
-      ],
-      runtime: result.runtime
-        ? [...(currentConfig?.runtime || []).filter((runtime) => runtime.deploymentId !== result.runtime?.deploymentId), result.runtime]
-        : currentConfig?.runtime || [],
-    };
-    return {
-      ...instance,
-      triggers: {
-        ...snapshot,
-        configs: [
-          ...snapshot.configs.filter((entry) => entry.configHash !== result.config?.configHash),
-          nextEntry,
-        ],
-        updatedAt: new Date().toISOString(),
-      },
-    };
-  }));
-}
-
-function removeLocalTriggerBinding(session: AiSessionSummary, configHash: string) {
-  updateInstanceBoardData(queryClient, (instances) => instances.map((instance) => {
-    if (instance.id !== props.instance.id || !instance.triggers) {
-      return instance;
-    }
-    const configs = instance.triggers.configs.flatMap((entry) => {
-      if (entry.configHash !== configHash) {
-        return [entry];
-      }
-      const deployments = entry.deployments.filter((deployment) => !isAiSessionTriggerDeployment(deployment, session.id));
-      if (!deployments.length) {
-        return [];
-      }
-      const deploymentIds = new Set(deployments.map((deployment) => deployment.deploymentId || deployment.configHash));
-      return [{
-        ...entry,
-        deployments,
-        runtime: entry.runtime.filter((runtime) => deploymentIds.has(runtime.deploymentId || runtime.configHash)),
-      }];
-    });
-    return {
-      ...instance,
-      triggers: {
-        ...instance.triggers,
-        configs,
-        updatedAt: new Date().toISOString(),
-      },
-    };
-  }));
 }
 
 function syncComposerOffset() {

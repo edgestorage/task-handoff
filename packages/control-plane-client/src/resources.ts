@@ -28,6 +28,26 @@ const NamedResourceSchema = z.object({
   id: z.string().trim().min(1).max(160),
   name: z.string().trim().min(1).max(160),
 });
+const PublicModelRegistrySchema = z.object({
+  models: z.array(z.object({
+    id: z.string().trim().min(1).max(120),
+    model: z.object({
+      id: z.string().trim().min(1).max(120),
+      name: z.string().trim().min(1).max(160),
+      model: z.string().trim().min(1).max(240),
+      modelNames: z.array(z.object({ name: z.string(), order: z.number().int() }).strip()).default([]),
+      protocols: z.array(z.string()).default([]),
+      app: z.string().optional(),
+      enabled: z.boolean(),
+      order: z.number().int(),
+    }).passthrough(),
+    locations: z.array(z.object({
+      type: z.enum(["control-plane", "node"]),
+      nodeId: z.string().optional(),
+      enabled: z.boolean(),
+    }).passthrough()),
+  }).passthrough()),
+}).passthrough();
 const InstanceActionResultSchema = z.object({
   id: z.string().trim().min(1).max(160),
   status: z.string().trim().min(1).max(80),
@@ -65,6 +85,9 @@ export function createControlPlaneResourcesApi(transport: ControlPlaneClientTran
     },
     instanceDirectory(signal?: AbortSignal) {
       return transport.request("/api/instance-board?projection=directory&progressive=true", FleetDirectoryPayloadSchema, { signal });
+    },
+    models(signal?: AbortSignal) {
+      return requestData("/api/models", PublicModelRegistrySchema, signal);
     },
     async instanceWorkspaceSource(instanceId: string, signal?: AbortSignal) {
       return (await requestData(

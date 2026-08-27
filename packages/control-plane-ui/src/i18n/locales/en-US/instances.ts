@@ -1,5 +1,16 @@
 export const instances = {
   title: "Instances",
+  modelEntities: {
+    selected: "Selected model providers",
+    orderHint: "The first compatible provider and its first model are used by default.",
+    available: "Available providers",
+    availableHint: "Add any provider this instance should make available to AI sessions.",
+    add: "Add",
+    remove: "Remove {name}",
+    moveUp: "Move {name} up",
+    moveDown: "Move {name} down",
+    empty: "No model providers are available on this node.",
+  },
   window: {
     invalidRoute: "This instance detail link is invalid. Choose an instance from the switcher.",
     instanceUnavailable: "This instance is unavailable. Choose another instance from the switcher.",
@@ -384,7 +395,7 @@ export const instances = {
     saving: "Saving",
     saveChanges: "Save changes",
     generalSaved: "General settings saved.",
-    modelSelection: "Model selection",
+    modelSelection: "Model selection", modelEntities: "Model entities", activeModel: "Current model: {name}",
     modelSelectionDescription: "Control-plane models are deployed to this instance's node before assignment. Node-local models are available only on their owner node. Changes apply on the next start or restart.",
     noModel: "No model",
     globalDefault: "Global default",

@@ -96,7 +96,7 @@ export class AiSessionCloseCoordinator {
         creationSource: session.creationSource,
       });
     } catch (error: unknown) {
-      try { await provider.resumeSession?.(session.providerSessionId); } catch (resumeError: unknown) {
+      try { await provider.resumeSession?.(session.providerSessionId, session.modelSelection, session.reasoningEffort); } catch (resumeError: unknown) {
         this.options.onDiagnostic?.({
           code: "AI_SESSION_CLOSE_ROLLBACK_FAILED",
           aiSessionId: session.id,

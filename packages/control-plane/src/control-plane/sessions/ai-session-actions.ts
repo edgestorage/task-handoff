@@ -16,6 +16,8 @@ import {
   AiSessionQueueEditInputSchema,
   AiSessionQueueReorderInputSchema,
   AiSessionResumeResultSchema,
+  AiSessionModelSelectionActionResponseSchema,
+  AiSessionReasoningEffortActionResponseSchema,
   AiSessionStatusSchema,
   AiSessionDetailSchema,
   AiSessionDetailReadSchema,
@@ -43,14 +45,18 @@ import {
   type AiSessionResumeResult,
   type AiSessionSendMode,
   type AiSessionStatus,
+  type AiSessionModelSelection,
+  type AiSessionReasoningEffort,
   type AiSessionTurn,
 } from "@task-handoff/protocol/ai-sessions";
 import {
+  aiSessionProviderCapability,
   aiSessionTimelineCapabilityAgents,
   supportsAiSessionWorkspaceSelection,
   type ControlledInstance,
   type NodeRuntime,
 } from "@task-handoff/protocol/control-plane";
+import { normalizeAiSessionModelSelectionCapabilities, normalizeAiSessionReasoningEffortCapabilities } from "@task-handoff/protocol/ai-session-provider-capabilities";
 import { parseResponse } from "@task-handoff/protocol/response-validation";
 import { TRACE_ID_HEADER, type RequestTimingDiagnostics } from "../../shared/http/server-timing.ts";
 import {
@@ -227,10 +233,30 @@ export class AiSessionActionService {
       references?: AiSessionReference[];
       permissionMode?: AiSessionPermissionMode;
       clientRequestId: string;
+      modelSelection?: AiSessionModelSelection;
+      reasoningEffort?: AiSessionReasoningEffort;
     },
   ): Promise<AiSessionCreateResult> {
     assertAiSessionAttachmentsWithinLimit((input.attachments || []).filter((attachment): attachment is AiSessionMessageAttachment => attachment.source.type !== "upload-ref"));
     const instance = await this.options.requireInstance(instanceId);
+    if (input.modelSelection) {
+      const capability = normalizeAiSessionModelSelectionCapabilities(aiSessionProviderCapability(instance.capabilities, input.agent));
+      if (!capability.selectModelAtCreate) {
+        throw Object.assign(new Error(`${input.agent} does not support selecting a model at creation.`), {
+          statusCode: 409,
+          code: "AI_SESSION_MODEL_SELECTION_UNSUPPORTED",
+        });
+      }
+    }
+    if (input.reasoningEffort) {
+      const capability = normalizeAiSessionReasoningEffortCapabilities(aiSessionProviderCapability(instance.capabilities, input.agent));
+      if (!capability.selectAtCreate) {
+        throw Object.assign(new Error(`${input.agent} does not support selecting reasoning effort at creation.`), {
+          statusCode: 409,
+          code: "AI_SESSION_REASONING_EFFORT_UNSUPPORTED",
+        });
+      }
+    }
     const supportsWorkspaceSelection = instanceSupportsAiSessionWorkspaceSelection(instance);
     if (input.gitSelection && !supportsWorkspaceSelection) {
       throw aiSessionWorkspaceSelectionUnsupported();
@@ -266,6 +292,53 @@ export class AiSessionActionService {
 
   async fork(instanceId: string, aiSessionId: string, input: AiSessionForkInput): Promise<AiSessionForkResult> {
     return parseResponse(AiSessionForkResultSchema, await this.post(instanceId, sessionRoute(aiSessionId, "fork"), input));
+  }
+
+  async updateModelSelection(instanceId: string, aiSessionId: string, clientRequestId: string, selection: AiSessionModelSelection) {
+    const instance = await this.options.requireInstance(instanceId);
+    const session = instance.aiSessions.sessions.find((candidate) => candidate.id === aiSessionId);
+    if (!session) throw Object.assign(new Error("AI Session was not found."), { statusCode: 404, code: "AI_SESSION_NOT_FOUND" });
+    const capability = normalizeAiSessionModelSelectionCapabilities(aiSessionProviderCapability(instance.capabilities, session.agent));
+    const changesProvider = Boolean(session.modelSelection && session.modelSelection.modelEntityId !== selection.modelEntityId);
+    if (changesProvider ? !capability.switchProviderDuringSession : !capability.switchModelWithinProvider) {
+      const code = changesProvider && session.agent === "codex"
+        ? "AI_SESSION_PROVIDER_SWITCH_REQUIRES_NEW_SESSION"
+        : "AI_SESSION_MODEL_SELECTION_UNSUPPORTED";
+      throw Object.assign(new Error(changesProvider && session.agent === "codex"
+        ? "Codex provider changes require a new session."
+        : `${session.agent} does not support this model change.`), { statusCode: 409, code });
+    }
+    return parseResponse(AiSessionModelSelectionActionResponseSchema, await this.options.request(
+      instance,
+      sessionRoute(aiSessionId, "model-selection"),
+      {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ clientRequestId, modelSelection: selection }),
+      },
+    ));
+  }
+
+  async updateReasoningEffort(instanceId: string, aiSessionId: string, clientRequestId: string, effort: AiSessionReasoningEffort) {
+    const instance = await this.options.requireInstance(instanceId);
+    const session = instance.aiSessions.sessions.find((candidate) => candidate.id === aiSessionId);
+    if (!session) throw Object.assign(new Error("AI Session was not found."), { statusCode: 404, code: "AI_SESSION_NOT_FOUND" });
+    const capability = normalizeAiSessionReasoningEffortCapabilities(aiSessionProviderCapability(instance.capabilities, session.agent));
+    if (!capability.updateDuringSession) {
+      throw Object.assign(new Error(`${session.agent} does not support reasoning effort changes.`), {
+        statusCode: 409,
+        code: "AI_SESSION_REASONING_EFFORT_UNSUPPORTED",
+      });
+    }
+    return parseResponse(AiSessionReasoningEffortActionResponseSchema, await this.options.request(
+      instance,
+      sessionRoute(aiSessionId, "reasoning-effort"),
+      {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ clientRequestId, reasoningEffort: effort }),
+      },
+    ));
   }
 
   async openApp(instanceId: string, aiSessionId: string, clientRequestId: string): Promise<AiSessionOpenAppResult> {

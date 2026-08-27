@@ -218,6 +218,25 @@ test("shared AI Session client owns route encoding, request input, and response 
   assert.equal(requests[0].init.method, "POST");
 });
 
+test("shared AI Session client sends strict reasoning effort actions", async () => {
+  const requests = [];
+  const transport = {
+    async request(path, schema, init) {
+      requests.push({ path, init });
+      return schema.parse({ data: { sessionId: "session reasoning", accepted: true } });
+    },
+  };
+  const api = createControlPlaneClient(transport);
+
+  await api.aiSessions.updateReasoningEffort("instance/one", "session reasoning", "req_reasoning", "ultra");
+  assert.deepEqual(requests.map(({ path, init }) => ({ path, method: init.method, body: JSON.parse(init.body) })), [{
+    path: "/api/controlled-instances/instance%2Fone/ai-sessions/session%20reasoning/reasoning-effort",
+    method: "PUT",
+    body: { clientRequestId: "req_reasoning", reasoningEffort: "ultra" },
+  }]);
+  assert.throws(() => api.aiSessions.updateReasoningEffort("instance", "session", "req", "custom"));
+});
+
 test("shared AI Session projection reads send the cached revision", async () => {
   const requests = [];
   const transport = {
@@ -309,7 +328,8 @@ test("shared AI Session attachment upload forwards transport progress", async ()
       assert.equal(path, "/api/controlled-instances/instance-1/ai-session-attachments/drafts?scopeType=session&scopeId=session-1&kind=image&name=pasted.png&mime=image%2Fpng&size=1");
       assert.equal(init.method, "POST");
       assert.equal(init.headers["content-type"], "application/octet-stream");
-      assert.equal(init.body.size, 1);
+      assert.equal(init.body.byteLength, 1);
+      assert.equal(init.body instanceof ArrayBuffer, true);
       onUploadProgress?.(0.4);
       return schema.parse({ data: {
         id: "attachment-1",

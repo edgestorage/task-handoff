@@ -82,6 +82,46 @@ describe('DirectControlPlaneTransport', () => {
     });
   });
 
+  test('uses the authenticated XHR path for upload progress', async () => {
+    const requestHeaders = new Map<string, string>();
+    const xhr = {
+      abort: jest.fn(),
+      onabort: undefined as (() => void) | undefined,
+      onerror: undefined as (() => void) | undefined,
+      onload: undefined as (() => void) | undefined,
+      open: jest.fn(),
+      responseText: '',
+      setRequestHeader: jest.fn((name: string, value: string) => requestHeaders.set(name, value)),
+      status: 0,
+      upload: { onprogress: undefined as ((event: { lengthComputable: boolean; loaded: number; total: number }) => void) | undefined },
+      withCredentials: true,
+      send: jest.fn(function (this: any, body: XMLHttpRequestBodyInit | null) {
+        expect(body).toBeInstanceOf(ArrayBuffer);
+        this.upload.onprogress?.({ lengthComputable: true, loaded: 3, total: 4 });
+        this.status = 201;
+        this.responseText = JSON.stringify({ data: { ok: true } });
+        this.onload?.();
+      }),
+    };
+    const progress = jest.fn();
+    const transport = new DirectControlPlaneTransport(profile, secureStore(), {
+      probeImpl: async () => target,
+      xhrFactory: () => xhr as unknown as XMLHttpRequest,
+    });
+
+    const response = await transport.request(
+      '/api/upload',
+      z.object({ data: z.object({ ok: z.literal(true) }) }),
+      { method: 'POST', headers: { 'content-type': 'application/octet-stream' }, body: new ArrayBuffer(4) },
+      progress,
+    );
+
+    expect(response.data.ok).toBe(true);
+    expect(progress).toHaveBeenCalledWith(0.75);
+    expect(requestHeaders.get('authorization')).toBe('Bearer msess_test.secret');
+    expect(requestHeaders.get('content-type')).toBe('application/octet-stream');
+  });
+
   test('explicit foreground revalidation does not reuse an earlier identity probe', async () => {
     const probeImpl = jest.fn().mockResolvedValue(target);
     const transport = new DirectControlPlaneTransport(profile, secureStore(), { probeImpl });

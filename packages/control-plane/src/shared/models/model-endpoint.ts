@@ -1,4 +1,5 @@
 export type ModelEndpointApp = "codex" | "claude" | "opencode";
+export type ModelEndpointProtocol = "openai-responses" | "openai-chat-completions" | "anthropic-messages";
 
 export type DiscoveredModel = {
   id: string;
@@ -64,11 +65,13 @@ export async function testModelEndpoint(fetchImpl: FetchImpl, input: {
   endpoint: string;
   key: string;
   model: string;
-  app: ModelEndpointApp;
+  app?: ModelEndpointApp;
+  protocol?: ModelEndpointProtocol;
 }): Promise<ModelTestResult> {
   const startedAt = Date.now();
-  const response = input.app === "codex" || input.app === "opencode"
-    ? await endpointFetch(fetchImpl, appendEndpointPath(input.endpoint, "responses"), {
+  const protocol = input.protocol || (input.app === "claude" ? "anthropic-messages" : input.app === "opencode" ? "openai-chat-completions" : "openai-responses");
+  const response = protocol === "openai-responses"
+    ? await endpointFetch(fetchImpl, appendModelOperationPath(input.endpoint, "responses"), {
       method: "POST",
       headers: {
         accept: "application/json",
@@ -77,7 +80,17 @@ export async function testModelEndpoint(fetchImpl: FetchImpl, input: {
       },
       body: JSON.stringify({ model: input.model, input: "Reply with OK.", max_output_tokens: 32, stream: false }),
     })
-    : await endpointFetch(fetchImpl, appendAnthropicMessagesPath(input.endpoint), {
+    : protocol === "openai-chat-completions"
+      ? await endpointFetch(fetchImpl, appendModelOperationPath(input.endpoint, "chat/completions"), {
+        method: "POST",
+        headers: {
+          accept: "application/json",
+          authorization: `Bearer ${input.key}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ model: input.model, messages: [{ role: "user", content: "Reply with OK." }], max_tokens: 32, stream: false }),
+      })
+      : await endpointFetch(fetchImpl, appendAnthropicMessagesPath(input.endpoint), {
       method: "POST",
       headers: {
         accept: "application/json",
@@ -115,8 +128,16 @@ export function appendEndpointPath(endpoint: string, suffix: string) {
 
 function appendAnthropicMessagesPath(endpoint: string) {
   const url = parseEndpoint(endpoint);
+  if (/\/messages\/?$/.test(url.pathname)) return url.toString();
   const lastSegment = url.pathname.split("/").filter(Boolean).at(-1) || "";
   return appendEndpointPath(url.toString(), /^v\d+$/.test(lastSegment) ? "messages" : "v1/messages");
+}
+
+function appendModelOperationPath(endpoint: string, suffix: "responses" | "chat/completions") {
+  const url = parseEndpoint(endpoint);
+  const normalizedPath = url.pathname.replace(/\/+$/, "");
+  if (normalizedPath.endsWith(`/${suffix}`)) return url.toString();
+  return appendEndpointPath(url.toString(), suffix);
 }
 
 function parseEndpoint(endpoint: string) {

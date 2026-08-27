@@ -1,11 +1,11 @@
 import type { ControlPlaneClient } from '@task-handoff/control-plane-client';
-import type { AiSessionForkResult, AiSessionMessageAttachmentRef, AiSessionPermissionMode, AiSessionSendMode } from '@task-handoff/protocol/ai-sessions';
+import type { AiSessionForkResult, AiSessionMessageAttachmentRef, AiSessionModelSelection, AiSessionPermissionMode, AiSessionSendMode } from '@task-handoff/protocol/ai-sessions';
 
 import type { ValueStore } from '../platform/secure-storage';
 import type { MobileAiSessionStore } from './store';
 import { mobileMetrics } from '../observability/mobile-metrics';
 
-export type MobileAiSessionAction = 'send' | 'approval' | 'interrupt' | 'close' | 'fork' | 'queue-steer' | 'queue-retry' | 'queue-remove' | 'queue-edit' | 'queue-reorder';
+export type MobileAiSessionAction = 'send' | 'approval' | 'interrupt' | 'close' | 'fork' | 'model-selection' | 'queue-steer' | 'queue-retry' | 'queue-remove' | 'queue-edit' | 'queue-reorder';
 export type MobileActionState = { phase: 'idle' | 'busy' | 'result-unknown' | 'failed'; error?: string };
 export type MobileActionResult<T> =
   | { disposition: 'accepted'; result: T }
@@ -46,6 +46,9 @@ export class MobileAiSessionActionCoordinator {
   }
   close(instanceId: string, sessionId: string, clientRequestId: string) {
     return this.run(instanceId, sessionId, 'close', undefined, () => this.client.aiSessions.close(instanceId, sessionId, clientRequestId));
+  }
+  updateModelSelection(instanceId: string, sessionId: string, clientRequestId: string, selection: AiSessionModelSelection) {
+    return this.run(instanceId, sessionId, 'model-selection', undefined, () => this.client.aiSessions.updateModelSelection(instanceId, sessionId, clientRequestId, selection));
   }
   async fork(instanceId: string, sessionId: string, throughTurnId: string, proposedClientRequestId: string) {
     const requestKey = JSON.stringify([instanceId, sessionId, throughTurnId]);
@@ -136,7 +139,7 @@ export class MobileAiSessionActionCoordinator {
     const session = this.store.session(this.controlPlaneId, instanceId, sessionId);
     if (!session) return 'missing';
     if (queueId) return JSON.stringify(session.queue.items.find((item) => item.id === queueId) ?? null);
-    return JSON.stringify({ status: session.status, phase: session.phase, updatedAt: session.updatedAt, actions: session.actions, queue: session.queue });
+    return JSON.stringify({ status: session.status, phase: session.phase, updatedAt: session.updatedAt, actions: session.actions, queue: session.queue, modelSelection: session.modelSelection });
   }
 
   private matchingForks(instanceId: string, sessionId: string, throughTurnId: string) {

@@ -6,8 +6,13 @@ function modelOrder(a: ModelConfig, b: ModelConfig) {
 
 export function selectableInstanceModels(models: ModelConfig[], app: ModelApp, nodeId: string) {
   return models
-    .filter((model) => model.app === app && model.locations?.some((location) => location.enabled && (location.type === "control-plane" || location.nodeId === nodeId)))
+    .filter((model) => modelSupportsApp(model, app) && model.locations?.some((location) => location.enabled && (location.type === "control-plane" || location.nodeId === nodeId)))
     .sort(modelOrder);
+}
+
+export function modelSupportsApp(model: ModelConfig, app: ModelApp) {
+  const protocol = app === "claude" ? "anthropic-messages" : app === "opencode" ? "openai-chat-completions" : "openai-responses";
+  return model.protocols?.includes(protocol) || (!model.protocols?.length && model.app === app);
 }
 
 export function invalidInstanceModelSelection(models: ModelConfig[], app: ModelApp, nodeId: string, modelId?: string | null) {

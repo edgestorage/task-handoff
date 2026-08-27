@@ -139,21 +139,7 @@
                 <p>{{ t("instances.settings.modelSelectionDescription") }}</p>
               </div>
               <div class="instance-model-surface instance-settings-surface">
-                <div class="instance-model-grid">
-                  <label v-for="app in modelApps" :key="app">
-                    <span class="instance-model-copy">
-                      <strong>{{ t(`common.products.${app}`) }}</strong>
-                      <small v-if="invalidSelection(app)" class="instance-settings-error">{{ t("instances.settings.invalidModel") }}</small>
-                      <small v-else>{{ t("instances.settings.effectiveModel", { name: effectiveModelLabel(app) }) }}</small>
-                    </span>
-                    <ControlPlaneSelect :model-value="modelDraftValue(app)" :disabled="savingModels" @update:model-value="setModelDraft(app, $event)">
-                      <ControlPlaneSelectItem :value="noModelValue">{{ t("instances.settings.noModel") }}</ControlPlaneSelectItem>
-                      <ControlPlaneSelectItem :value="defaultModelValue">{{ t("instances.settings.globalDefault") }}</ControlPlaneSelectItem>
-                      <ControlPlaneSelectItem v-if="invalidSelection(app)" :value="draftModelId(app)!">{{ t("instances.settings.unavailableModel", { id: draftModelId(app) }) }}</ControlPlaneSelectItem>
-                      <ControlPlaneSelectItem v-for="model in selectableModels(app)" :key="`${app}-${model.id}`" :value="model.id">{{ modelOptionLabel(model) }}</ControlPlaneSelectItem>
-                    </ControlPlaneSelect>
-                  </label>
-                </div>
+                <ModelEntitySelection v-model="modelEntityIds" :models="models" :node-id="instance?.nodeId || ''" :disabled="savingModels" />
                 <div class="instance-settings-general-actions">
                   <Button size="sm" :disabled="savingModels || !modelsChanged" @click="saveModels">
                     {{ savingModels ? t("instances.settings.saving") : t("instances.settings.saveModels") }}
@@ -360,7 +346,7 @@ import { Boxes, Cpu, Globe2, KeyRound, LoaderCircle, Monitor, RefreshCw, Sliders
 import { AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS, AI_SESSION_HISTORY_MAX_LIMIT, AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES, type AiSessionPermissionMode } from "@task-handoff/protocol/ai-sessions";
 import { supportsAiSessionFileSizeLimitSettings, supportsGitCredentialProxy, supportsNodeAiSessionFileAttachmentLimit } from "@task-handoff/protocol/control-plane";
 import { resolveGitCredential, type GitCredentialPublic } from "@task-handoff/protocol/managed-git-credentials";
-import type { AppManagementJob, AppManagementOperation, AppManagementSnapshot, InstanceBoardItem, ManagedAppProjection, ModelApp, ModelConfig, ModelSelection, UpdateControlledInstanceInput } from "../../../api/types";
+import type { AppManagementJob, AppManagementOperation, AppManagementSnapshot, InstanceBoardItem, ManagedAppProjection, ModelConfig, ModelSelection, UpdateControlledInstanceInput } from "../../../api/types";
 import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../../components/ui/alert-dialog";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
@@ -373,7 +359,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../../components/ui
 import ControlPlaneInput from "../shared/ControlPlaneInput.vue";
 import ControlPlaneSelect from "../shared/ControlPlaneSelect.vue";
 import ControlPlaneSelectItem from "../shared/ControlPlaneSelectItem.vue";
-import { effectiveInstanceModel, invalidInstanceModelSelection, selectableInstanceModels } from "./instanceSettingsState";
+import ModelEntitySelection from "../../../components/models/ModelEntitySelection.vue";
 import { useControlPlaneLocale } from "../../../i18n/index";
 import { formatDateTime } from "../../../i18n/presentation";
 import { connectionStatusKeys, instanceStatusKeys, translateStatus } from "../../../i18n/status";
@@ -417,9 +403,6 @@ const success = ref("");
 const operationSubmitting = ref("");
 const appConfirmation = ref<{ app: ManagedAppProjection; operation: AppManagementOperation }>();
 const appFilter = ref<AppFilter>("all");
-const defaultModelValue = "__default__";
-const noModelValue = "__none__";
-const modelApps: ModelApp[] = ["codex", "claude", "opencode"];
 const noGitCredentialValue = "__none__";
 const selectedGitCredentialId = ref(noGitCredentialValue);
 const gitCredentialBusy = ref(false);
@@ -546,7 +529,12 @@ const attachmentRetentionWillShorten = computed(() => Boolean(
   && attachmentRetentionSupported.value
   && Number(aiSessionAttachmentRetentionDays.value) < props.instance.config.aiSessionAttachmentRetentionDays,
 ));
-const modelsChanged = computed(() => JSON.stringify(normalizedSelection(modelSelection.value)) !== JSON.stringify(normalizedSelection(props.instance?.modelSelection || {})));
+const legacyModelSelectionNeedsUpgrade = computed(() => {
+  const selection = props.instance?.modelSelection;
+  return Boolean(selection && !selection.modelEntityIds?.length && legacyModelEntityIds(selection).length);
+});
+const modelsChanged = computed(() => legacyModelSelectionNeedsUpgrade.value
+  || JSON.stringify(normalizedSelection(modelSelection.value)) !== JSON.stringify(normalizedSelection(props.instance?.modelSelection || {})));
 const inventoryState = computed<"current" | "stale" | "not-reported" | "empty" | "degraded">(() => {
   const inventory = props.instance?.appInventory;
   if (!inventory) return "not-reported";
@@ -588,7 +576,7 @@ watch(
     aiSessionHistoryLimit.value = String(props.instance.config.aiSessionHistoryLimit);
     aiSessionAttachmentRetentionDays.value = String(props.instance.config.aiSessionAttachmentRetentionDays);
     aiSessionMaxFileAttachmentKiB.value = String(props.instance.config.aiSessionMaxFileAttachmentBytes / 1024);
-    modelSelection.value = { ...props.instance.modelSelection };
+    modelSelection.value = normalizedSelection(props.instance.modelSelection);
     error.value = "";
     success.value = "";
     appFilter.value = "all";
@@ -617,49 +605,23 @@ function handleOpenChange(open: boolean) {
   emit("update:open", open);
 }
 
-function selectableModels(app: ModelApp) {
-  return selectableInstanceModels(props.models, app, props.instance?.nodeId || "");
-}
+const modelEntityIds = computed<string[]>({
+  get: () => modelSelection.value.modelEntityIds || [],
+  set: (value) => {
+    modelSelection.value = { modelEntityIds: [...new Set(value)] };
+    error.value = "";
+    success.value = "";
+  },
+});
 
-function modelOptionLabel(model: ModelConfig) {
-  const availableFromControlPlane = model.locations?.some((location) => location.type === "control-plane" && location.enabled);
-  return t(availableFromControlPlane ? "instances.create.modelCopyToNode" : "instances.create.modelOnNode", { name: `${model.name} · ${model.model}` });
-}
-
-function draftModelId(app: ModelApp) {
-  return app === "codex" ? modelSelection.value.codexModelHash : app === "claude" ? modelSelection.value.claudeModelHash : modelSelection.value.opencodeModelHash;
-}
-
-function modelDraftValue(app: ModelApp) {
-  return draftModelId(app) === null ? noModelValue : draftModelId(app) || defaultModelValue;
-}
-
-function invalidSelection(app: ModelApp) {
-  return invalidInstanceModelSelection(props.models, app, props.instance?.nodeId || "", draftModelId(app));
-}
-
-function effectiveModelLabel(app: ModelApp) {
-  if (draftModelId(app) === null) return t("instances.settings.noModel");
-  const match = effectiveInstanceModel(props.models, app, props.instance?.nodeId || "", draftModelId(app));
-  return match ? `${match.name} · ${match.model}` : t("instances.settings.noEnabledGlobalModel");
-}
-
-function setModelDraft(app: ModelApp, value: string) {
-  const id = value === defaultModelValue ? undefined : value === noModelValue ? null : value;
-  modelSelection.value = normalizedSelection({
-    ...modelSelection.value,
-    ...(app === "codex" ? { codexModelHash: id } : app === "claude" ? { claudeModelHash: id } : { opencodeModelHash: id }),
-  });
-  error.value = "";
-  success.value = "";
+function legacyModelEntityIds(value: ModelSelection) {
+  return [...new Set([value.codexModelHash, value.claudeModelHash, value.opencodeModelHash]
+    .filter((id): id is string => typeof id === "string" && id.length > 0))];
 }
 
 function normalizedSelection(value: ModelSelection): ModelSelection {
-  return {
-    ...(value.codexModelHash !== undefined ? { codexModelHash: value.codexModelHash } : {}),
-    ...(value.claudeModelHash !== undefined ? { claudeModelHash: value.claudeModelHash } : {}),
-    ...(value.opencodeModelHash !== undefined ? { opencodeModelHash: value.opencodeModelHash } : {}),
-  };
+  const ids = [...new Set(value.modelEntityIds?.length ? value.modelEntityIds : legacyModelEntityIds(value))];
+  return ids.length ? { modelEntityIds: ids } : {};
 }
 
 async function saveGeneral() {
@@ -702,7 +664,7 @@ async function saveModels() {
     await props.updateInstance(props.instance, { modelSelection: normalizedSelection(modelSelection.value) });
     success.value = t("instances.settings.modelsSaved");
   } catch (cause) {
-    modelSelection.value = { ...props.instance.modelSelection };
+    modelSelection.value = normalizedSelection(props.instance.modelSelection);
     error.value = translateApiError(cause, t);
   } finally {
     savingModels.value = false;
@@ -1131,38 +1093,6 @@ async function confirmAppOperation() {
   display: grid;
 }
 
-.instance-model-grid {
-  display: grid;
-  gap: 0;
-}
-
-.instance-model-grid label {
-  display: grid;
-  align-items: center;
-  gap: 20px;
-  grid-template-columns: minmax(220px, 0.8fr) minmax(320px, 1.2fr);
-  padding: 14px 16px;
-}
-
-.instance-model-grid label + label {
-  border-top: 1px solid var(--line);
-}
-
-.instance-model-copy {
-  display: grid;
-  min-width: 0;
-  gap: 3px;
-}
-
-.instance-model-copy strong {
-  color: var(--text-strong);
-  font-size: 13px;
-  font-weight: 500;
-}
-
-.instance-model-copy .instance-settings-error {
-  color: var(--status-danger);
-}
 
 .instance-app-heading,
 .instance-app-row {
@@ -1531,8 +1461,7 @@ async function confirmAppOperation() {
   }
 
   .instance-settings-name-control,
-  .instance-settings-select-control,
-  .instance-model-grid label {
+  .instance-settings-select-control {
     grid-template-columns: 1fr;
     gap: 8px;
   }

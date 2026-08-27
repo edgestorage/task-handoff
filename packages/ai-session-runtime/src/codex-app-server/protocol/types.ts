@@ -1,4 +1,4 @@
-import type { AiSessionSubAgent } from "@task-handoff/protocol/ai-sessions";
+import type { AiSessionReasoningEffort, AiSessionSubAgent } from "@task-handoff/protocol/ai-sessions";
 
 export type JsonValue = Record<string, unknown>;
 export type CodexUserInput =
@@ -23,6 +23,10 @@ export type CodexThread = {
   path?: unknown;
   status?: CodexThreadStatus;
   turns?: unknown;
+  /** Authoritative values returned beside thread snapshots by start/resume/fork. */
+  model?: unknown;
+  modelProvider?: unknown;
+  reasoningEffort?: AiSessionReasoningEffort | unknown;
 };
 export type CodexThreadItemEntry = {
   turnId: string;

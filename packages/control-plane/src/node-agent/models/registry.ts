@@ -21,6 +21,7 @@ import {
   NodeModelStore,
 } from "./stores.ts";
 import { nowIso as now } from "@task-handoff/core/core/time";
+import { InstancePrivateModelCatalogSchema } from "./private-catalog.ts";
 
 type InstanceAccess = {
   has(id: string): boolean;
@@ -58,7 +59,12 @@ export class NodeModelRegistry {
     const referenceCounts = new Map<string, number>();
     for (const instance of this.instances.list()) {
       const assignment = this.assignments.get(instance.id);
-      for (const modelHash of [assignment?.codexModelHash, assignment?.claudeModelHash, assignment?.opencodeModelHash]) {
+      for (const modelHash of new Set([
+        ...(assignment?.modelEntityIds || []),
+        assignment?.codexModelHash,
+        assignment?.claudeModelHash,
+        assignment?.opencodeModelHash,
+      ])) {
         if (modelHash) referenceCounts.set(modelHash, (referenceCounts.get(modelHash) || 0) + 1);
       }
     }
@@ -67,10 +73,12 @@ export class NodeModelRegistry {
 
   create(input: z.infer<typeof CreateNodeModelSchema>) {
     const timestamp = now();
-    const id = modelConfigHash(input);
+    const modelNames = normalizeModelNames(input.modelNames, input.model);
+    const normalizedInput = { ...input, model: modelNames[0].name, modelNames, protocols: input.protocols?.length ? input.protocols : defaultProtocols(input.app) };
+    const id = modelConfigHash(normalizedInput);
     const current = this.models.get(id);
     const model = NodeModelConfigSchema.parse({
-      ...input,
+      ...normalizedInput,
       id,
       enabled: input.enabled ?? true,
       order: input.order ?? this.nextOrder(),
@@ -86,16 +94,26 @@ export class NodeModelRegistry {
     if (input.id !== expectedHash) {
       throw Object.assign(new Error(`Model content hash ${expectedHash} does not match ${input.id}.`), { statusCode: 400, code: "NODE_MODEL_HASH_MISMATCH" });
     }
-    const stored = this.models.get(input.id) || this.models.put(NodeModelConfigSchema.parse(input));
+    const modelNames = normalizeModelNames(input.modelNames, input.model);
+    const stored = this.models.get(input.id) || this.models.put(NodeModelConfigSchema.parse({ ...input, model: modelNames[0].name, modelNames, protocols: input.protocols?.length ? input.protocols : defaultProtocols(input.app) }));
     return this.toPublic(stored, this.referenceIds(stored.id).length);
   }
 
   update(id: string, input: z.infer<typeof UpdateNodeModelSchema>) {
     const current = this.requireModel(id);
+    const modelNames = input.modelNames?.length
+      ? normalizeModelNames(input.modelNames, input.model || current.model)
+      : input.model ? normalizeModelNames(undefined, input.model) : normalizeModelNames(current.modelNames, current.model);
+    const protocols = input.protocols?.length
+      ? input.protocols
+      : current.protocols?.length ? current.protocols : defaultProtocols(input.app || current.app);
     const candidate = NodeModelConfigSchema.parse({
       ...current,
       ...input,
       key: input.key?.trim() ? input.key : current.key,
+      protocols,
+      model: modelNames[0].name,
+      modelNames,
       createdAt: current.createdAt,
       updatedAt: now(),
     });
@@ -125,6 +143,11 @@ export class NodeModelRegistry {
 
   assign(instanceId: string, input: z.infer<typeof UpdateNodeModelAssignmentSchema>) {
     const current = this.instances.require(instanceId);
+    for (const modelEntityId of input.modelEntityIds) this.validateEntityRef(modelEntityId);
+    if (input.modelSelection.modelEntityIds !== undefined
+      && JSON.stringify(input.modelSelection.modelEntityIds) !== JSON.stringify(input.modelEntityIds)) {
+      throw Object.assign(new Error("Ordered model entity selection does not match its node assignment."), { statusCode: 400, code: "NODE_MODEL_SELECTION_MISMATCH" });
+    }
     this.validateRef("codex", input.codexModelHash);
     this.validateRef("claude", input.claudeModelHash);
     this.validateRef("opencode", input.opencodeModelHash);
@@ -138,7 +161,7 @@ export class NodeModelRegistry {
       throw Object.assign(new Error("OpenCode model selection does not match its node assignment."), { statusCode: 400, code: "NODE_MODEL_SELECTION_MISMATCH" });
     }
     const previous = this.assignments.get(instanceId);
-    const assignment = NodeModelAssignmentSchema.parse({ instanceId, codexModelHash: input.codexModelHash, claudeModelHash: input.claudeModelHash, opencodeModelHash: input.opencodeModelHash, updatedAt: now() });
+    const assignment = NodeModelAssignmentSchema.parse({ instanceId, modelEntityIds: input.modelEntityIds, codexModelHash: input.codexModelHash, claudeModelHash: input.claudeModelHash, opencodeModelHash: input.opencodeModelHash, updatedAt: now() });
     this.assignments.put(assignment);
     try {
       const instance = this.instances.put(ControlledInstanceSchema.parse({ ...current, modelSelection: input.modelSelection, updatedAt: now() }));
@@ -158,11 +181,33 @@ export class NodeModelRegistry {
       }
       return {};
     }
+    const firstCompatible = (app: "codex" | "claude" | "opencode") => assignment.modelEntityIds
+      .find((id) => this.modelSupportsApp(this.requireModel(id), app));
     return {
-      ...this.environmentForRef("codex", assignment.codexModelHash),
-      ...this.environmentForRef("claude", assignment.claudeModelHash),
-      ...this.environmentForRef("opencode", assignment.opencodeModelHash),
+      ...this.environmentForRef("codex", firstCompatible("codex") || assignment.codexModelHash),
+      ...this.environmentForRef("claude", firstCompatible("claude") || assignment.claudeModelHash),
+      ...this.environmentForRef("opencode", firstCompatible("opencode") || assignment.opencodeModelHash),
     };
+  }
+
+  privateCatalog(instanceId: string) {
+    const assignment = this.assignments.get(instanceId);
+    return InstancePrivateModelCatalogSchema.parse({
+      protocolVersion: "2026-08-27",
+      instanceId,
+      entities: (assignment?.modelEntityIds || []).map((id) => {
+        const model = this.requireModel(id);
+        this.validateEntityRef(id);
+        return {
+          id: model.id,
+          endpoint: model.endpoint,
+          key: model.key,
+          protocols: model.protocols?.length ? model.protocols : defaultProtocols(model.app),
+          modelNames: normalizeModelNames(model.modelNames, model.model),
+        };
+      }),
+      updatedAt: assignment?.updatedAt || now(),
+    });
   }
 
   deleteInstanceMetadata(instanceId: string) {
@@ -173,8 +218,23 @@ export class NodeModelRegistry {
   private validateRef(app: "codex" | "claude" | "opencode", modelHash?: string) {
     if (!modelHash) return;
     const model = this.requireModel(modelHash);
-    if (model.app !== app) throw Object.assign(new Error(`Model ${model.id} belongs to ${model.app}, not ${app}.`), { statusCode: 400, code: "NODE_MODEL_APP_MISMATCH" });
+    if (!this.modelSupportsApp(model, app)) {
+      throw Object.assign(new Error(`Model ${model.id} does not support the ${app} runtime protocol.`), { statusCode: 400, code: "NODE_MODEL_APP_MISMATCH" });
+    }
     if (!model.enabled) throw Object.assign(new Error(`Model ${model.id} is disabled.`), { statusCode: 409, code: "NODE_MODEL_DISABLED" });
+  }
+
+  private modelSupportsApp(model: NodeModelConfig, app: "codex" | "claude" | "opencode") {
+    const protocol = app === "claude" ? "anthropic-messages" : app === "opencode" ? "openai-chat-completions" : "openai-responses";
+    return model.protocols?.length ? model.protocols.includes(protocol) : model.app === app;
+  }
+
+  private validateEntityRef(modelHash: string) {
+    const model = this.requireModel(modelHash);
+    if (!model.enabled) throw Object.assign(new Error(`Model ${model.id} is disabled.`), { statusCode: 409, code: "NODE_MODEL_DISABLED" });
+    if (!(model.protocols?.length || defaultProtocols(model.app).length)) {
+      throw Object.assign(new Error(`Model ${model.id} does not expose a supported protocol.`), { statusCode: 400, code: "NODE_MODEL_PROTOCOL_UNSUPPORTED" });
+    }
   }
 
   private environmentForRef(app: "codex" | "claude" | "opencode", modelHash?: string) {
@@ -218,7 +278,7 @@ export class NodeModelRegistry {
   private referenceIds(modelId: string) {
     return this.instances.list().filter((instance) => {
       const assignment = this.assignments.get(instance.id);
-      return assignment?.codexModelHash === modelId || assignment?.claudeModelHash === modelId || assignment?.opencodeModelHash === modelId;
+      return assignment?.modelEntityIds.includes(modelId) || assignment?.codexModelHash === modelId || assignment?.claudeModelHash === modelId || assignment?.opencodeModelHash === modelId;
     }).map((instance) => instance.id);
   }
 
@@ -267,8 +327,9 @@ export class NodeModelRegistry {
         const codex = this.migrateApp(environment, "codex", createdModelIds);
         const claude = this.migrateApp(environment, "claude", createdModelIds);
         if (!codex && !claude) throw new Error("no complete model configuration");
-        const modelSelection = { ...(codex ? { codexModelHash: codex } : {}), ...(claude ? { claudeModelHash: claude } : {}) };
-        this.assign(instanceId, { modelSelection, codexModelHash: codex, claudeModelHash: claude });
+        const modelEntityIds = [...new Set([codex, claude].filter((id): id is string => Boolean(id)))];
+        const modelSelection = { modelEntityIds, ...(codex ? { codexModelHash: codex } : {}), ...(claude ? { claudeModelHash: claude } : {}) };
+        this.assign(instanceId, { modelSelection, modelEntityIds, codexModelHash: codex, claudeModelHash: claude });
         this.resolvedEnvironment(instanceId);
         this.legacyEnvironments.delete(instanceId);
       } catch {
@@ -317,4 +378,22 @@ export class NodeModelRegistry {
       reason,
     }));
   }
+}
+
+function defaultProtocols(app: "codex" | "claude" | "opencode") {
+  return app === "claude" ? ["anthropic-messages" as const] : app === "opencode" ? ["openai-chat-completions" as const] : ["openai-responses" as const];
+}
+
+function normalizeModelNames(entries: NodeModelConfig["modelNames"] | undefined, legacyModel: string) {
+  const source = entries?.length ? entries : [{ name: legacyModel, order: 100 }];
+  const names = new Set<string>();
+  return source
+    .map((entry) => ({ name: entry.name.trim(), order: entry.order }))
+    .filter((entry) => {
+      if (!entry.name || names.has(entry.name)) return false;
+      names.add(entry.name);
+      return true;
+    })
+    .sort((left, right) => left.order - right.order || left.name.localeCompare(right.name))
+    .map((entry, index) => ({ name: entry.name, order: (index + 1) * 100 }));
 }

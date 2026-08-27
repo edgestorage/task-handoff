@@ -6,6 +6,8 @@ import type {
   AiSessionCreateResult,
   AiSessionMessageAttachment,
   AiSessionPermissionMode,
+  AiSessionModelSelection,
+  AiSessionReasoningEffort,
   AiSessionReference,
 } from "@task-handoff/protocol/ai-sessions";
 import { AiSessionCreateResultSchema } from "@task-handoff/protocol/ai-sessions";
@@ -25,12 +27,15 @@ export type AiSessionCreateCoordinatorInput = {
   permissionMode?: AiSessionPermissionMode;
   clientRequestId: string;
   idempotencyFingerprint?: string;
+  modelSelection?: AiSessionModelSelection;
+  reasoningEffort?: AiSessionReasoningEffort;
 };
 
 export type AiSessionCreateCoordinatorOptions = {
   registry: AiSessionRegistry;
   controller: AiSessionController;
   ensureProvider?: (agent: string) => void | Promise<void>;
+  resolveModelSelection?: (agent: AiAgentKind, requested?: AiSessionModelSelection) => AiSessionModelSelection | undefined;
   materializationTimeoutMs?: number;
   operationStorePath?: string;
   onDiagnostic?: (diagnostic: Record<string, unknown>) => void;
@@ -76,7 +81,8 @@ export class AiSessionCreateCoordinator {
     if (!provider.createSession) {
       throw aiSessionControlError("AI_SESSION_CREATE_UNSUPPORTED", `${input.agent} does not support direct AI session creation.`, 400);
     }
-    const created = await provider.createSession({ cwd: input.cwd, permissionMode: input.permissionMode });
+    const modelSelection = this.options.resolveModelSelection?.(input.agent, input.modelSelection) || input.modelSelection;
+    const created = await provider.createSession({ cwd: input.cwd, permissionMode: input.permissionMode, modelSelection, reasoningEffort: input.reasoningEffort });
     const providerSessionId = created.providerSessionId.trim();
     if (!providerSessionId || created.creationSource !== "ai-session") {
       throw aiSessionControlError("AI_SESSION_CREATE_INVALID_RESPONSE", "Provider returned an invalid Direct AI session identity.", 502);
@@ -89,6 +95,8 @@ export class AiSessionCreateCoordinator {
         creationSource: "ai-session",
         appId: input.agent === "codex" ? "codex-app-server" : input.agent,
         providerSessionId,
+        modelSelection: created.modelSelection || modelSelection,
+        reasoningEffort: created.reasoningEffort || input.reasoningEffort,
         cwd: created.cwd || input.cwd,
         cwdFolderId: input.cwdFolderId,
         status: "idle",
@@ -101,6 +109,14 @@ export class AiSessionCreateCoordinator {
     }
     if (input.cwdFolderId && session.cwdFolderId !== input.cwdFolderId) {
       session = this.options.registry.patch(session.id, { cwdFolderId: input.cwdFolderId });
+    }
+    const actualModelSelection = created.modelSelection || modelSelection;
+    if (actualModelSelection && session.modelSelection !== actualModelSelection) {
+      session = this.options.registry.patch(session.id, { modelSelection: actualModelSelection });
+    }
+    const actualReasoningEffort = created.reasoningEffort || input.reasoningEffort;
+    if (actualReasoningEffort && session.reasoningEffort !== actualReasoningEffort) {
+      session = this.options.registry.patch(session.id, { reasoningEffort: actualReasoningEffort });
     }
     try {
       await withTimeout(

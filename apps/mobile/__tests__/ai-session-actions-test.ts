@@ -11,6 +11,7 @@ function client(overrides: Partial<ControlPlaneClient['aiSessions']> = {}) {
     list: jest.fn().mockResolvedValue(snapshot),
     sendMessage: jest.fn().mockResolvedValue({}), approval: jest.fn().mockResolvedValue({}), interrupt: jest.fn().mockResolvedValue({}),
     close: jest.fn().mockResolvedValue({}),
+    updateModelSelection: jest.fn().mockResolvedValue({}),
     fork: jest.fn().mockResolvedValue({ disposition: 'created', aiSessionId: 'forked-session', providerSessionId: 'forked-provider', creationSource: 'ai-session' }),
     steerQueue: jest.fn().mockResolvedValue({}), retryQueue: jest.fn().mockResolvedValue({}), removeQueue: jest.fn().mockResolvedValue({}),
     editQueue: jest.fn().mockResolvedValue({}), reorderQueue: jest.fn().mockResolvedValue({}),
@@ -46,6 +47,16 @@ test('closes through the shared client with an idempotency key and waits for aut
   expect((await coordinator.close('instance', 'session', 'close-request-1')).disposition).toBe('accepted');
   expect(api.aiSessions.close).toHaveBeenCalledWith('instance', 'session', 'close-request-1');
   expect(api.aiSessions.list).not.toHaveBeenCalled();
+});
+
+test('updates model selection through the shared client without mutating local session state', async () => {
+  const api = client();
+  const store = new MobileAiSessionStore();
+  const coordinator = new MobileAiSessionActionCoordinator('cp', api, store);
+  const selection = { modelEntityId: 'mdl-two', modelName: 'same-name' };
+  expect((await coordinator.updateModelSelection('instance', 'session', 'model-request-1', selection)).disposition).toBe('accepted');
+  expect(api.aiSessions.updateModelSelection).toHaveBeenCalledWith('instance', 'session', 'model-request-1', selection);
+  expect(store.session('cp', 'instance', 'session')).toBeUndefined();
 });
 
 test('keeps an authoritative action response accepted when only the follow-up snapshot refresh fails', async () => {

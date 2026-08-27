@@ -519,6 +519,100 @@ test('compact workspace keeps the committed Turn visible and applies only the la
   mobileAiSessionStore.clearProfile(controlPlaneId);
 });
 
+test('compact workspace does not render the list summary before the initial Turn body is ready', async () => {
+  const controlPlaneId = 'cp-initial-turn';
+  const instanceId = 'instance-initial-turn';
+  const compact = ControlPlaneAiSessionSummarySchema.parse({
+    ...session,
+    id: 'session-initial-turn',
+    userPrompt: 'List summary prompt',
+    lastMessage: 'List summary response',
+    detailRevision: 'detail-1',
+    turnsRevision: 'turns-1',
+    latestTurnRef: { id: 'turn-initial', bodyRevision: 'body-initial' },
+    turnCount: 1,
+    turns: undefined,
+    subAgents: [],
+  });
+  mobileAiSessionStore.replaceSnapshot(controlPlaneId, {
+    updatedAt: compact.updatedAt,
+    instances: [{
+      instanceId,
+      streamId: 'stream-initial-turn',
+      revision: 1,
+      aiSessions: { runningCount: 1, waitingCount: 0, staleCount: 0, updatedAt: compact.updatedAt, sessions: [compact] },
+    }],
+  });
+  mobileAiSessionStore.setSessionDetail(controlPlaneId, instanceId, compact.detailRevision!, AiSessionDetailSchema.parse({
+    id: compact.id,
+    queue: compact.queue,
+    subAgents: [],
+  }));
+
+  let resolveBody!: (value: unknown) => void;
+  const bodyRead = new Promise((resolve) => { resolveBody = resolve; });
+  const turnBody = jest.fn().mockReturnValue(bodyRead);
+  const client = { aiSessions: { turnBody } } as unknown as ControlPlaneClient;
+  function Harness() {
+    const [, rerender] = useReducer((value: number) => value + 1, 0);
+    useEffect(() => mobileAiSessionStore.subscribeSession(controlPlaneId, instanceId, compact.id, rerender), []);
+    const view = mobileAiSessionStore.sessionView(controlPlaneId, instanceId, compact.id);
+    return <SessionWorkspace client={client} controlPlaneId={controlPlaneId} instanceId={instanceId} messages={[]} session={view.session} />;
+  }
+  const screen = await render(<SafeAreaProvider initialMetrics={{ frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { top: 47, right: 0, bottom: 34, left: 0 } }}>
+    <Harness />
+  </SafeAreaProvider>);
+
+  expect(screen.queryByText('List summary prompt')).toBeNull();
+  expect(screen.queryByText('List summary response')).toBeNull();
+  expect(screen.queryByText('No messages yet.')).toBeNull();
+  screen.getByTestId('session-turn-loading-indicator');
+
+  await act(async () => mobileAiSessionStore.setSessionTurnIndex(controlPlaneId, instanceId, compact.turnsRevision!, AiSessionTurnIndexSchema.parse({
+    sessionId: compact.id,
+    revision: compact.turnsRevision,
+    turns: [{
+      id: 'turn-initial',
+      status: 'running',
+      phase: 'responding',
+      revision: 1,
+      bodyRevision: 'body-initial',
+      startedAt: compact.startedAt,
+      updatedAt: compact.updatedAt,
+    }],
+  })));
+  await waitFor(() => expect(turnBody).toHaveBeenCalledWith(instanceId, compact.id, 'turn-initial', undefined));
+  expect(screen.queryByText('List summary prompt')).toBeNull();
+
+  await act(async () => {
+    resolveBody({
+      kind: 'updated',
+      revision: 'body-initial',
+      body: {
+        sessionId: compact.id,
+        revision: 'body-initial',
+        turn: {
+          id: 'turn-initial',
+          status: 'running',
+          phase: 'responding',
+          revision: 1,
+          userPrompt: 'Authoritative Turn prompt',
+          lastMessage: 'Authoritative Turn response',
+          startedAt: compact.startedAt,
+          updatedAt: compact.updatedAt,
+        },
+      },
+    });
+    await bodyRead;
+  });
+  await waitFor(() => screen.getByText('Authoritative Turn prompt'));
+  screen.getByText('Authoritative Turn response');
+  expect(screen.queryByText('List summary response')).toBeNull();
+  expect(screen.queryByTestId('session-turn-loading-indicator')).toBeNull();
+  await screen.unmount();
+  mobileAiSessionStore.clearProfile(controlPlaneId);
+});
+
 test('timeline detail follows the Web three-part layout around the final AI response', async () => {
   const timelineSession = ControlPlaneAiSessionSummarySchema.parse({
     ...session,
@@ -1173,7 +1267,8 @@ test('composer uploads images received from the native input paste action', asyn
   const fileInfo = jest.spyOn(File.prototype, 'info').mockReturnValue({ exists: true, size: 5 });
   const fileBase64 = jest.spyOn(File.prototype, 'base64').mockResolvedValue('aGVsbG8=');
   const fileDelete = jest.spyOn(File.prototype, 'delete').mockImplementation(() => undefined);
-  const uploadAttachment = jest.fn().mockResolvedValue({ id: 'attachment-1', kind: 'image', mime: 'image/png', name: 'clipboard.png', size: 5 });
+  let resolveUpload!: (value: unknown) => void;
+  const uploadAttachment = jest.fn().mockReturnValue(new Promise((resolve) => { resolveUpload = resolve; }));
   const client = { aiSessions: { uploadAttachment } } as unknown as ControlPlaneClient;
   const actionable = ControlPlaneAiSessionSummarySchema.parse({ ...session, actions: { send: true, interrupt: true }, subAgents: [] });
   const actions = {
@@ -1194,13 +1289,16 @@ test('composer uploads images received from the native input paste action', asyn
   });
 
   await waitFor(() => expect(uploadAttachment).toHaveBeenCalledWith(expect.objectContaining({
-    data: 'aGVsbG8=',
+    data: 'data:image/png;base64,aGVsbG8=',
     instanceId: 'instance',
     kind: 'image',
     mime: 'image/png',
     sessionId: session.id,
-  })));
-  screen.getByText('clipboard.png');
+  }), expect.any(Function)));
+  await waitFor(() => screen.getByText('5 B · uploading'));
+  expect(screen.getByRole('button', { name: 'Send' }).props.accessibilityState.disabled).toBe(true);
+  resolveUpload({ id: 'attachment-1', kind: 'image', mime: 'image/png', name: 'clipboard.png', size: 5 });
+  await waitFor(() => screen.getByText('clipboard.png'));
   await screen.unmount();
   fileInfo.mockRestore();
   fileBase64.mockRestore();

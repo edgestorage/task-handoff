@@ -4,6 +4,7 @@ import { TextInputWrapper, type PasteEventPayload } from 'expo-paste-input';
 import { Hand, Pencil, Plus, ShieldAlert, ShieldCheck, X } from 'lucide-react-native';
 import { ActivityIndicator, Animated, Easing, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { AI_SESSION_LONG_PASTE_CODE_POINT_THRESHOLD } from '@task-handoff/control-plane-client';
+import { AnchoredSelectMenu, type AnchoredSelectOption } from '../components/AnchoredSelectMenu';
 
 import { SystemIcon } from '../components/SystemIcon';
 import { useMobileTheme } from '../components/theme';
@@ -36,6 +37,12 @@ export function SessionComposer(props: SessionComposerProps) {
     { value: 'auto-review', label: t('composer.autoReview'), description: t('composer.autoReviewDescription'), systemImage: 'checkmark.shield' },
     { value: 'full-access', label: t('composer.fullAccess'), description: t('composer.fullAccessDescription'), systemImage: 'exclamationmark.shield', danger: true },
   ];
+  const modelOptions: AnchoredSelectOption[] = (props.modelGroups || []).flatMap((group) => group.models.map((model) => ({
+    label: model.modelName,
+    description: group.providerName,
+    systemImage: 'sparkles' as const,
+    value: JSON.stringify({ modelEntityId: model.modelEntityId, modelName: model.modelName }),
+  })));
   const [permissionLabelMeasurement, setPermissionLabelMeasurement] = useState<{ label: string; width: number }>();
   const [fallbackExpansion] = useState(() => new Animated.Value(props.focused ? 1 : 0));
   const expansion = props.expansion ?? fallbackExpansion;
@@ -190,6 +197,13 @@ export function SessionComposer(props: SessionComposerProps) {
             {currentPermissionLabel}
           </Text> : null}
         </View>}
+        <View style={styles.trailingTools}>
+        {modelOptions.length ? <AnchoredSelectMenu cancelLabel={t('common.cancel')} disabled={props.actionBusy || props.modelSelectionBusy} onSelect={(value) => props.onModelSelectionChange?.(JSON.parse(value))} options={modelOptions} selectedValue={props.modelSelection ? JSON.stringify(props.modelSelection) : ''} title={t('sessions.model')}>
+          {(onPress) => <Pressable accessibilityLabel={props.modelSelection?.modelName || t('sessions.model')} accessibilityRole="button" disabled={props.actionBusy || props.modelSelectionBusy} onPress={onPress} style={({ pressed }) => [styles.modelButton, pressed && styles.pressed]}>
+            {props.modelSelectionBusy ? <ActivityIndicator color={colors.textMuted} size="small" /> : <Text numberOfLines={1} style={[styles.modelText, { color: colors.textMuted }]}>{props.modelSelection?.modelName || t('sessions.model')}</Text>}
+            <SystemIcon android="expand_more" color={colors.textMuted} ios="chevron.down" size={10} />
+          </Pressable>}
+        </AnchoredSelectMenu> : null}
         <Pressable
           accessibilityLabel={actionLabel(props.action, t, props.actionBusy)}
           accessibilityRole="button"
@@ -203,6 +217,7 @@ export function SessionComposer(props: SessionComposerProps) {
             ? <ActivityIndicator color="#ffffff" size="small" testID="session-composer-action-loading" />
             : <SystemIcon android={props.action === 'stop' ? 'stop' : props.action === 'save' ? 'check' : 'arrow_upward'} color="#ffffff" ios={props.action === 'stop' ? 'stop.fill' : props.action === 'save' ? 'checkmark' : 'arrow.up'} size={SESSION_COMPOSER_ACTION_ICON_SIZE} />}
         </Pressable>
+        </View>
       </View>
     </Animated.View>
   );
@@ -236,6 +251,9 @@ const styles = StyleSheet.create({
   inputFocused: { bottom: 50, left: 0, paddingBottom: 8, paddingHorizontal: 14, paddingTop: 14, position: 'absolute', right: 0, top: 0 },
   toolbar: { alignItems: 'center', bottom: 0, flexDirection: 'row', height: SESSION_COMPOSER_TOOLBAR_HEIGHT, justifyContent: 'space-between', left: 0, paddingHorizontal: 8, position: 'absolute', right: 0 },
   leadingTools: { alignItems: 'center', flexDirection: 'row' },
+  trailingTools: { alignItems: 'center', flexDirection: 'row', gap: 4, minWidth: 0 },
+  modelButton: { alignItems: 'center', flexDirection: 'row', gap: 4, maxWidth: 120, minHeight: 40, paddingHorizontal: 5 },
+  modelText: { flexShrink: 1, fontSize: mobileWebType.meta, fontWeight: '500' },
   editingState: { alignItems: 'center', flex: 1, flexDirection: 'row', gap: 7, minWidth: 0, paddingLeft: 8, paddingRight: 6 },
   editingLabel: { flexShrink: 1, fontSize: mobileWebType.meta, fontWeight: '600' },
   cancelEditButton: { alignItems: 'center', height: 34, justifyContent: 'center', width: 34 },

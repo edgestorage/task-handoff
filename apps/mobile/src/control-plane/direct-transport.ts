@@ -96,6 +96,7 @@ export class DirectControlPlaneTransport implements MobileControlPlaneTransport 
     private readonly options: {
       fetchImpl?: typeof fetch;
       webSocketFactory?: WebSocketFactory;
+      xhrFactory?: () => XMLHttpRequest;
       allowInsecureHttp?: boolean;
       probeImpl?: typeof probeDirectControlPlane;
     } = {},
@@ -103,7 +104,7 @@ export class DirectControlPlaneTransport implements MobileControlPlaneTransport 
     this.profile = profile;
   }
 
-  async request<T>(route: string, schema: z.ZodType<T>, init: RequestInit = {}) {
+  async request<T>(route: string, schema: z.ZodType<T>, init: RequestInit = {}, onUploadProgress?: (progress: number) => void) {
     await this.ensureVerified();
     const token = await this.sessionToken();
     const headers = new Headers(init.headers);
@@ -113,6 +114,9 @@ export class DirectControlPlaneTransport implements MobileControlPlaneTransport 
     headers.set('authorization', `Bearer ${token}`);
     headers.set('accept', 'application/json');
     const url = requestUrl(this.profile.access.origin, route);
+    if (onUploadProgress) {
+      return requestWithUploadProgress(url, schema, { ...init, headers }, onUploadProgress, this.options.xhrFactory);
+    }
     let response: Response;
     try {
       response = await (this.options.fetchImpl ?? fetch)(url, {
@@ -324,6 +328,58 @@ export class DirectControlPlaneTransport implements MobileControlPlaneTransport 
     if (!token) throw new MobileControlPlaneTransportError('DIRECT_SESSION_MISSING', 'The mobile Control Plane session is missing. Sign in again.');
     return token;
   }
+}
+
+function requestWithUploadProgress<T>(
+  url: string,
+  schema: z.ZodType<T>,
+  init: RequestInit,
+  onUploadProgress: (progress: number) => void,
+  xhrFactory: (() => XMLHttpRequest) | undefined,
+) {
+  return new Promise<T>((resolve, reject) => {
+    const xhr = xhrFactory ? xhrFactory() : new XMLHttpRequest();
+    const signal = init.signal;
+    let settled = false;
+    const finish = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener('abort', abort);
+      callback();
+    };
+    const abort = () => xhr.abort();
+    xhr.open(init.method || 'GET', url, true);
+    xhr.withCredentials = false;
+    for (const [name, value] of new Headers(init.headers)) xhr.setRequestHeader(name, value);
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable && event.total > 0) onUploadProgress(Math.min(1, event.loaded / event.total));
+    };
+    xhr.onload = () => {
+      let body: unknown;
+      try {
+        body = xhr.responseText ? JSON.parse(xhr.responseText) : undefined;
+      } catch {
+        finish(() => reject(new MobileControlPlaneTransportError('DIRECT_RESPONSE_INVALID', 'The Control Plane returned a non-JSON response.', false, xhr.status)));
+        return;
+      }
+      if (xhr.status < 200 || xhr.status >= 300) {
+        finish(() => reject(responseError(xhr.status, body)));
+        return;
+      }
+      const parsed = schema.safeParse(body);
+      finish(() => parsed.success
+        ? resolve(parsed.data)
+        : reject(new MobileControlPlaneTransportError('DIRECT_RESPONSE_SCHEMA_INVALID', 'The Control Plane response did not match the expected schema.', false, xhr.status)));
+    };
+    xhr.onerror = () => finish(() => reject(new MobileControlPlaneTransportError('DIRECT_NETWORK_FAILED', 'The Control Plane request could not be completed.', true)));
+    xhr.onabort = () => finish(() => reject(new MobileControlPlaneTransportError('DIRECT_REQUEST_ABORTED', 'The Control Plane request was cancelled.')));
+    if (signal?.aborted) {
+      abort();
+      return;
+    }
+    signal?.addEventListener('abort', abort, { once: true });
+    xhr.send((init.body ?? null) as XMLHttpRequestBodyInit | null);
+  });
 }
 
 function aggregateTransientDemand(subscribers: Iterable<MobileControlPlaneEventHandlers>, topics: Set<string>): AiSessionTransientSubscription | undefined {

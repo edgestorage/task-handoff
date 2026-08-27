@@ -9,6 +9,8 @@ import type {
   AiSessionConversationAttachment,
   AiSessionPermissionMode,
   AiSessionLineage,
+  AiSessionModelSelection,
+  AiSessionReasoningEffort,
   AiSessionReference,
   AiSessionSendMode,
   AiSessionStatus,
@@ -40,12 +42,16 @@ export type { AiSessionActionResult } from "@task-handoff/protocol/ai-sessions";
 export type AiSessionProviderCreateInput = {
   cwd: string;
   permissionMode?: AiSessionPermissionMode;
+  modelSelection?: AiSessionModelSelection;
+  reasoningEffort?: AiSessionReasoningEffort;
 };
 
 export type AiSessionProviderCreateResult = {
   providerSessionId: string;
   cwd: string;
   creationSource: AiSessionCreationSource;
+  modelSelection?: AiSessionModelSelection;
+  reasoningEffort?: AiSessionReasoningEffort;
 };
 
 export type AiSessionProviderForkInput = {
@@ -96,9 +102,11 @@ export type AiSessionProviderTimelineCapabilities = {
 export interface AiSessionControlProvider {
   readonly agent: string;
   createSession?(input: AiSessionProviderCreateInput): Promise<AiSessionProviderCreateResult>;
+  updateModelSelection?(session: AiSessionStatus, selection: AiSessionModelSelection): Promise<AiSessionModelSelection>;
+  updateReasoningEffort?(session: AiSessionStatus, effort: AiSessionReasoningEffort): Promise<AiSessionReasoningEffort>;
   forkSession?(input: AiSessionProviderForkInput): Promise<AiSessionProviderForkResult>;
   readSession?(providerSessionId: string): Promise<void>;
-  resumeSession?(providerSessionId: string): Promise<void>;
+  resumeSession?(providerSessionId: string, modelSelection?: AiSessionModelSelection, reasoningEffort?: AiSessionReasoningEffort): Promise<void>;
   archiveSession?(providerSessionId: string): Promise<void>;
   activeSessionExists?(providerSessionId: string): Promise<boolean>;
   deleteSession?(providerSessionId: string): Promise<void>;
@@ -161,6 +169,7 @@ export class AiSessionController {
   private readonly providers = new Map<string, AiSessionControlProvider>();
   private readonly timelineItemListeners = new Set<AiSessionProviderTimelineItemListener>();
   private readonly providerTimelineSubscriptions = new Map<string, () => void>();
+  private readonly pendingSettings = new Set<string>();
 
   constructor(private readonly registry: AiSessionRegistry) {}
 
@@ -241,6 +250,56 @@ export class AiSessionController {
       }
     }
     return provider.forkSession({ source, throughTurnId: input.throughTurnId, providerThroughTurnId, cwd: input.cwd });
+  }
+
+  async updateModelSelection(sessionId: string, selection: AiSessionModelSelection) {
+    const session = this.requireSession(sessionId);
+    if (session.creationSource !== "ai-session") {
+      throw aiSessionControlError("AI_SESSION_MODEL_SELECTION_UNSUPPORTED", "Only Direct AI Sessions support model switching.", 409);
+    }
+    if (isSessionBusy(session)) {
+      throw aiSessionControlError("AI_SESSION_MODEL_SELECTION_CONFLICT", "The model cannot be changed while a turn is active.", 409);
+    }
+    if (session.modelSelection?.modelEntityId === selection.modelEntityId && session.modelSelection.modelName === selection.modelName) {
+      return selection;
+    }
+    const provider = this.requireProvider(session);
+    if (!provider.updateModelSelection) {
+      throw aiSessionControlError("AI_SESSION_MODEL_SELECTION_UNSUPPORTED", `${session.agent} does not support model switching.`, 409);
+    }
+    if (this.pendingSettings.has(session.id)) {
+      throw aiSessionControlError("AI_SESSION_MODEL_SELECTION_CONFLICT", "A session setting change is already pending.", 409);
+    }
+    this.pendingSettings.add(session.id);
+    try {
+      return await provider.updateModelSelection(session, selection);
+    } finally {
+      this.pendingSettings.delete(session.id);
+    }
+  }
+
+  async updateReasoningEffort(sessionId: string, effort: AiSessionReasoningEffort) {
+    const session = this.requireSession(sessionId);
+    if (session.creationSource !== "ai-session") {
+      throw aiSessionControlError("AI_SESSION_REASONING_EFFORT_UNSUPPORTED", "Only Direct AI Sessions support reasoning effort changes.", 409);
+    }
+    if (isSessionBusy(session)) {
+      throw aiSessionControlError("AI_SESSION_REASONING_EFFORT_CONFLICT", "Reasoning effort cannot be changed while a turn is active.", 409);
+    }
+    if (session.reasoningEffort === effort) return effort;
+    const provider = this.requireProvider(session);
+    if (!provider.updateReasoningEffort) {
+      throw aiSessionControlError("AI_SESSION_REASONING_EFFORT_UNSUPPORTED", `${session.agent} does not support reasoning effort changes.`, 409);
+    }
+    if (this.pendingSettings.has(session.id)) {
+      throw aiSessionControlError("AI_SESSION_REASONING_EFFORT_CONFLICT", "A session setting change is already pending.", 409);
+    }
+    this.pendingSettings.add(session.id);
+    try {
+      return await provider.updateReasoningEffort(session, effort);
+    } finally {
+      this.pendingSettings.delete(session.id);
+    }
   }
 
   async sendMessage(sessionId: string, input: AiSessionSendInput) {

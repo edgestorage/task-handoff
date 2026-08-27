@@ -26,7 +26,7 @@ export {
   type AiSessionProviderCapability,
 } from "./ai-session-provider-capabilities.ts";
 
-export const CONTROL_PLANE_PROTOCOL_VERSION = "2026-08-23";
+export const CONTROL_PLANE_PROTOCOL_VERSION = "2026-08-27";
 export const NODE_TUNNEL_PROTOCOL_VERSION = "2026-08-01";
 export const MARKET_CATALOG_PROTOCOL_VERSION = "2026-07-29";
 // Compatibility for v0.0.21: this released protocol already requires appInventory
@@ -68,6 +68,7 @@ function defaultControlledInstanceFeatures() {
     logs: false,
     aiSessionWorkspaceSelection: false,
     aiSessionPersistenceSettings: false,
+    privateModelCatalog: false,
     gitCliCredentialBroker: false,
     gitCredentialProxy: false,
     aiSessionTimeline: emptyAiSessionTimelineCapabilities(),
@@ -109,6 +110,9 @@ export const ControlledInstanceFeatureCapabilitiesSchema = z.object({
   logs: z.boolean().default(false),
   aiSessionWorkspaceSelection: z.boolean().default(false),
   aiSessionPersistenceSettings: z.boolean().default(false),
+  // Compatibility for v0.0.23: only current controlled instances accept the
+  // private model catalog live-sync route.
+  privateModelCatalog: z.boolean().optional(),
   // Additive capability: absent on v0.0.21 controlled instances.
   gitCliCredentialBroker: z.boolean().optional(),
   // Additive capability for the node-agent-owned runtime broker architecture.
@@ -136,6 +140,7 @@ type NormalizedControlledInstanceCapabilities = ControlledInstanceCapabilities &
     aiSessionProviders: AiSessionProviderCapability[];
     gitCliCredentialBroker: boolean;
     gitCredentialProxy: boolean;
+    privateModelCatalog: boolean;
   };
 };
 
@@ -157,6 +162,7 @@ export function normalizeControlledInstanceCapabilities(capabilities: unknown): 
     "logs",
     "aiSessionWorkspaceSelection",
     "aiSessionPersistenceSettings",
+    "privateModelCatalog",
     "gitCliCredentialBroker",
     "gitCredentialProxy",
   ] as const) {
@@ -181,6 +187,10 @@ export function supportsAiSessionWorkspaceSelection(capabilities: unknown) {
 
 export function supportsAiSessionPersistenceSettings(capabilities: unknown) {
   return normalizeControlledInstanceCapabilities(capabilities).features.aiSessionPersistenceSettings;
+}
+
+export function supportsControlledInstancePrivateModelCatalog(capabilities: unknown) {
+  return normalizeControlledInstanceCapabilities(capabilities).features.privateModelCatalog;
 }
 
 export function supportsGitCliCredentialBroker(capabilities: unknown) {
@@ -363,6 +373,9 @@ export const DockerImageDigestSchema = z.string().trim().transform((value, conte
 // and a hash pins the instance to that model.
 export const ModelSelectionSchema = z
   .object({
+    modelEntityIds: z.array(IdSchema).max(64).transform((ids) => [...new Set(ids)]).optional(),
+    // Compatibility for v0.0.23: these hashes remain the single-model projection
+    // consumed by N-1 node agents. Current owners derive them from modelEntityIds.
     codexModelHash: IdSchema.nullable().optional(),
     claudeModelHash: IdSchema.nullable().optional(),
     opencodeModelHash: IdSchema.nullable().optional(),
@@ -897,6 +910,12 @@ export const WorkspacePolicySchema = z
   .strict();
 
 export const ModelAppSchema = z.enum(["codex", "claude", "opencode"]);
+/** Wire protocols an upstream model endpoint may expose. Kept independent from the consuming app. */
+export const ModelProtocolSchema = z.enum(["openai-responses", "openai-chat-completions", "anthropic-messages"]);
+export const ModelNameEntrySchema = z.object({
+  name: z.string().trim().min(1).max(240),
+  order: z.number().int().min(0).max(1_000_000).default(0),
+}).strict();
 
 export const ProjectSchema = z
   .object({
@@ -919,6 +938,11 @@ export const ModelConfigSchema = z
     endpoint: z.string().trim().min(1).max(2048),
     key: z.string().trim().min(1).max(4096),
     model: z.string().trim().min(1).max(240),
+    // Ordered names served by this endpoint; legacy records are normalized from `model`.
+    modelNames: z.array(ModelNameEntrySchema).max(256).default([]),
+    // Empty is accepted for N-1 records; owners normalize it from the legacy app field.
+    protocols: z.array(ModelProtocolSchema).max(3).default([]),
+    /** @deprecated Compatibility discriminator for pre-protocol model records. */
     app: ModelAppSchema,
     enabled: z.boolean().default(true),
     order: z.number().int().min(0).max(1_000_000).default(0),
@@ -941,11 +965,20 @@ export const NodeModelPublicRecordSchema = PublicModelConfigSchema.extend({
 
 export const NodeModelAssignmentSchema = z.object({
   instanceId: IdSchema,
+  modelEntityIds: z.array(IdSchema).max(64).transform((ids) => [...new Set(ids)]).optional(),
   codexModelHash: IdSchema.optional(),
   claudeModelHash: IdSchema.optional(),
   opencodeModelHash: IdSchema.optional(),
   updatedAt: TimestampSchema,
-}).strict();
+}).strict().transform((assignment) => ({
+  ...assignment,
+  // Compatibility for v0.0.23: migrate the per-agent hashes into the ordered
+  // entity collection when reading legacy node-agent persistence or responses.
+  modelEntityIds: assignment.modelEntityIds?.length
+    ? assignment.modelEntityIds
+    : [...new Set([assignment.codexModelHash, assignment.claudeModelHash, assignment.opencodeModelHash]
+      .filter((id): id is string => Boolean(id)))],
+}));
 
 export const ModelLocationSchema = z.discriminatedUnion("type", [
   z.object({
@@ -995,14 +1028,24 @@ export const DeployNodeModelSchema = ModelConfigSchema;
 
 export const UpdateNodeModelAssignmentSchema = z.object({
   modelSelection: ModelSelectionSchema,
+  modelEntityIds: z.array(IdSchema).max(64).transform((ids) => [...new Set(ids)]).optional(),
   codexModelHash: IdSchema.optional(),
   claudeModelHash: IdSchema.optional(),
   opencodeModelHash: IdSchema.optional(),
-}).strict();
+}).strict().transform((assignment) => ({
+  ...assignment,
+  modelEntityIds: assignment.modelEntityIds
+    || assignment.modelSelection.modelEntityIds
+    || [...new Set([assignment.codexModelHash, assignment.claudeModelHash, assignment.opencodeModelHash]
+      .filter((id): id is string => Boolean(id)))],
+}));
 
-export function modelConfigHash(input: Pick<z.infer<typeof ModelConfigSchema>, "app" | "endpoint" | "key" | "model">) {
+export function modelConfigHash(input: Pick<z.infer<typeof ModelConfigSchema>, "app" | "endpoint" | "key" | "model"> & { protocols?: z.infer<typeof ModelProtocolSchema>[] }) {
+  const app = ModelAppSchema.parse(input.app);
   const canonical = {
-    app: ModelAppSchema.parse(input.app),
+    // Compatibility for v0.0.24: N-1 node agents validate this legacy identity shape.
+    // Protocol capabilities remain mutable metadata until the support window advances.
+    app,
     endpoint: ModelConfigSchema.shape.endpoint.parse(input.endpoint),
     key: ModelConfigSchema.shape.key.parse(input.key),
     model: ModelConfigSchema.shape.model.parse(input.model),
@@ -1566,6 +1609,11 @@ export const NodeAgentManagedGitCapabilitiesSchema = z.object({
   }).strip().default({ docker: false, kubernetes: false, local: false }),
 }).strip();
 
+export const NodeAgentManagedModelCapabilitiesSchema = z.object({
+  multiEntityAssignment: z.boolean().default(false),
+  privateModelCatalog: z.boolean().default(false),
+}).strip();
+
 export const NodeAgentCapabilitiesSchema = z.object({
   modelEndpointProbe: z.boolean().optional(),
   aiSessionHistoryLimit: z.boolean().optional(),
@@ -1575,19 +1623,31 @@ export const NodeAgentCapabilitiesSchema = z.object({
   localFolderNameUpdate: z.boolean().optional(),
   // Additive capability: absent on v0.0.21 node-agents.
   managedGitCredentials: NodeAgentManagedGitCapabilitiesSchema.optional(),
+  // Compatibility for v0.0.23: absence keeps the legacy single-model projection.
+  managedModels: NodeAgentManagedModelCapabilitiesSchema.optional(),
 }).strip();
 
 export type NodeAgentCapabilities = z.infer<typeof NodeAgentCapabilitiesSchema>;
 
 export function normalizeNodeAgentCapabilities(capabilities: unknown): NodeAgentCapabilities & {
   managedGitCredentials: z.infer<typeof NodeAgentManagedGitCapabilitiesSchema>;
+  managedModels: z.infer<typeof NodeAgentManagedModelCapabilitiesSchema>;
 } {
   const parsed = NodeAgentCapabilitiesSchema.safeParse(capabilities);
   const current = parsed.success ? parsed.data : {};
   return {
     ...current,
     managedGitCredentials: NodeAgentManagedGitCapabilitiesSchema.parse(current.managedGitCredentials || {}),
+    managedModels: NodeAgentManagedModelCapabilitiesSchema.parse(current.managedModels || {}),
   };
+}
+
+export function supportsNodeMultiEntityModelAssignment(capabilities: unknown) {
+  return normalizeNodeAgentCapabilities(capabilities).managedModels.multiEntityAssignment;
+}
+
+export function supportsNodePrivateModelCatalog(capabilities: unknown) {
+  return normalizeNodeAgentCapabilities(capabilities).managedModels.privateModelCatalog;
 }
 
 export function supportsNodeManagedGitCredentialRegistry(capabilities: unknown) {
@@ -2047,7 +2107,7 @@ export function sanitizeStoredControlledInstance(
   next.triggers = sanitizeStoredTriggers(source.triggers, onWarning, typeof source.id === "string" ? source.id : undefined);
   next.apps = sanitizeStoredStrictObject(ControlledInstanceSchema.shape.apps.unwrap(), pickObjectFields(source.apps, ["runningCount", "problemCount", "updatedAt", "revision"]), "apps", onWarning, typeof source.id === "string" ? source.id : undefined) || { runningCount: 0, problemCount: 0 };
   next.config = sanitizeStoredStrictObject(ControlledInstanceSchema.shape.config.unwrap(), pickObjectFields(source.config, ["autoImportAgentConfigs", "defaultCodexPermissionMode", "aiSessionHistoryLimit", "aiSessionAttachmentRetentionDays", "aiSessionMaxFileAttachmentBytes"]), "config", onWarning, typeof source.id === "string" ? source.id : undefined) || { autoImportAgentConfigs: true, defaultCodexPermissionMode: "ask", aiSessionHistoryLimit: AI_SESSION_HISTORY_DEFAULT_LIMIT, aiSessionAttachmentRetentionDays: AI_SESSION_ATTACHMENT_RETENTION_DEFAULT_DAYS, aiSessionMaxFileAttachmentBytes: AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES };
-  next.modelSelection = sanitizeStoredStrictObject(ModelSelectionSchema.unwrap(), pickObjectFields(source.modelSelection, ["codexModelHash", "claudeModelHash", "opencodeModelHash"]), "modelSelection", onWarning, typeof source.id === "string" ? source.id : undefined) || {};
+  next.modelSelection = sanitizeStoredStrictObject(ModelSelectionSchema.unwrap(), pickObjectFields(source.modelSelection, ["modelEntityIds", "codexModelHash", "claudeModelHash", "opencodeModelHash"]), "modelSelection", onWarning, typeof source.id === "string" ? source.id : undefined) || {};
   next.imageSnapshot = sanitizeStoredInstanceImageSnapshot(
     source.imageSnapshot,
     source.imageId,

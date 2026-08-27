@@ -416,11 +416,31 @@ export const AiSessionRuntimePathSchema = z.object({
   ),
 }).strict();
 
+// Public wire identity only. Endpoint, protocol and credentials remain in the
+// controlled instance's private model catalog.
+export const AiSessionModelSelectionSchema = z.object({
+  modelEntityId: z.string().trim().min(1).max(120),
+  modelName: z.string().trim().min(1).max(240),
+}).strict();
+
+export const AiSessionReasoningEffortSchema = z.enum([
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+  "ultra",
+]);
+
 export const AiSessionCreateInputSchema = AiSessionMessageInputSchema.extend({
   agent: AiAgentKindSchema,
   cwd: AiSessionRuntimePathSchema,
   cwdFolderId: z.string().trim().min(1).max(120).optional(),
   clientRequestId: z.string().trim().min(1).max(160),
+  modelSelection: AiSessionModelSelectionSchema.optional(),
+  reasoningEffort: AiSessionReasoningEffortSchema.optional(),
 }).strict();
 
 export const AiSessionGitSelectionSchema = z.object({
@@ -433,6 +453,28 @@ export const AiSessionCreateRefInputSchema = AiSessionMessageRefInputSchema.exte
   cwdFolderId: z.string().trim().min(1).max(120).optional(),
   gitSelection: AiSessionGitSelectionSchema.optional(),
   clientRequestId: z.string().trim().min(1).max(160),
+  modelSelection: AiSessionModelSelectionSchema.optional(),
+  reasoningEffort: AiSessionReasoningEffortSchema.optional(),
+}).strict();
+
+export const AiSessionModelSelectionInputSchema = z.object({
+  clientRequestId: z.string().trim().min(1).max(160),
+  modelSelection: AiSessionModelSelectionSchema,
+}).strict();
+
+export const AiSessionModelSelectionActionResponseSchema = z.object({
+  sessionId: z.string().trim().min(1).max(120),
+  accepted: z.literal(true),
+}).strict();
+
+export const AiSessionReasoningEffortInputSchema = z.object({
+  clientRequestId: z.string().trim().min(1).max(160),
+  reasoningEffort: AiSessionReasoningEffortSchema,
+}).strict();
+
+export const AiSessionReasoningEffortActionResponseSchema = z.object({
+  sessionId: z.string().trim().min(1).max(120),
+  accepted: z.literal(true),
 }).strict();
 
 export const AiSessionCreateResultSchema = z.object({
@@ -612,6 +654,8 @@ export const AiSessionStatusSchema = z
     providerSessionId: z.string().trim().max(240).optional(),
     lineage: AiSessionLineageSchema.optional(),
     providerMeta: z.record(z.string(), z.unknown()).optional(),
+    modelSelection: AiSessionModelSelectionSchema.optional(),
+    reasoningEffort: AiSessionReasoningEffortSchema.optional(),
     appBindingKeys: z.array(z.string().trim().min(1).max(240)).max(20).optional(),
     actions: AiSessionActionsSchema.optional(),
     activeTurnId: z.string().trim().max(240).optional(),
@@ -648,6 +692,8 @@ export const AiSessionDetailSchema = AiSessionStatusSchema.pick({
   cwd: true,
   error: true,
   providerMeta: true,
+  modelSelection: true,
+  reasoningEffort: true,
   queue: true,
   subAgents: true,
 }).strict();
@@ -780,6 +826,8 @@ export const AiSessionHistoryItemSchema = z.object({
   creationSource: AiSessionCreationSourceSchema,
   providerSessionId: z.string().trim().min(1).max(240),
   lineage: AiSessionLineageSchema.optional(),
+  modelSelection: AiSessionModelSelectionSchema.optional(),
+  reasoningEffort: AiSessionReasoningEffortSchema.optional(),
   title: z.string().trim().max(240).optional(),
   userPrompt: z.string().trim().optional(),
   lastMessage: z.string().trim().optional(),
@@ -822,6 +870,8 @@ export const AiSessionSummarySchema = AiSessionStatusSchema.pick({
   providerSessionId: true,
   lineage: true,
   providerMeta: true,
+  modelSelection: true,
+  reasoningEffort: true,
   appBindingKeys: true,
   actions: true,
   activeTurnId: true,
@@ -1105,6 +1155,8 @@ export const AiSessionSnapshotInputSchema = AiSessionInputBaseSchema.extend({
   providerSessionId: z.string().trim().max(240).optional(),
   lineage: AiSessionLineageSchema.optional(),
   providerMeta: z.record(z.string(), z.unknown()).optional(),
+  modelSelection: AiSessionModelSelectionSchema.optional(),
+  reasoningEffort: AiSessionReasoningEffortSchema.optional(),
   appBindingKeys: z.array(z.string().trim().min(1).max(240)).max(20).optional(),
   actions: AiSessionActionsSchema.optional(),
   title: z.string().trim().max(240).optional(),
@@ -1130,7 +1182,9 @@ export const AiSessionSnapshotInputSchema = AiSessionInputBaseSchema.extend({
 export const AiSessionRealtimeInputSchema = AiSessionInputBaseSchema.extend({
   type: z.literal("event"),
   sessionId: z.string().trim().min(1).max(120),
-  kind: z.enum(["lifecycle", "send-ack", "turn-started", "user-message", "assistant-message", "approval-requested", "turn-completed", "session-error", "tool-activity", "sub-agent-activity", "context-compaction"]),
+  kind: z.enum(["lifecycle", "send-ack", "turn-started", "user-message", "assistant-message", "approval-requested", "turn-completed", "session-error", "tool-activity", "sub-agent-activity", "context-compaction", "model-selection", "reasoning-effort"]),
+  modelSelection: AiSessionModelSelectionSchema.optional(),
+  reasoningEffort: AiSessionReasoningEffortSchema.optional(),
   activeTurnId: z.string().trim().max(240).optional(),
   providerTurnId: z.string().trim().max(240).optional(),
   userPrompt: z.string().trim().optional(),
@@ -1151,6 +1205,20 @@ export const AiSessionRealtimeInputSchema = AiSessionInputBaseSchema.extend({
     approvals: z.number().int().min(0).optional(),
   }).strict().optional(),
 }).strict().superRefine((input, context) => {
+  if (input.kind === "model-selection") {
+    if (!input.modelSelection) {
+      context.addIssue({ code: "custom", path: ["modelSelection"], message: "model-selection events require modelSelection" });
+    }
+  } else if (input.modelSelection !== undefined) {
+    context.addIssue({ code: "custom", path: ["modelSelection"], message: "modelSelection is only valid for model-selection events" });
+  }
+  if (input.kind === "reasoning-effort") {
+    if (!input.reasoningEffort) {
+      context.addIssue({ code: "custom", path: ["reasoningEffort"], message: "reasoning-effort events require reasoningEffort" });
+    }
+  } else if (input.reasoningEffort !== undefined) {
+    context.addIssue({ code: "custom", path: ["reasoningEffort"], message: "reasoningEffort is only valid for reasoning-effort events" });
+  }
   if (input.kind === "session-error" && !input.error) {
     context.addIssue({ code: "custom", path: ["error"], message: "session-error events require error" });
   }
@@ -1236,8 +1304,14 @@ export type AiSessionMentionFileSearch = z.infer<typeof AiSessionMentionFileSear
 export type AiSessionMessageInput = z.infer<typeof AiSessionMessageInputSchema>;
 export type AiSessionMessageRefInput = z.infer<typeof AiSessionMessageRefInputSchema>;
 export type AiSessionRuntimePath = z.infer<typeof AiSessionRuntimePathSchema>;
+export type AiSessionModelSelection = z.infer<typeof AiSessionModelSelectionSchema>;
+export type AiSessionReasoningEffort = z.infer<typeof AiSessionReasoningEffortSchema>;
 export type AiSessionCreateInput = z.infer<typeof AiSessionCreateInputSchema>;
 export type AiSessionCreateRefInput = z.infer<typeof AiSessionCreateRefInputSchema>;
+export type AiSessionModelSelectionInput = z.infer<typeof AiSessionModelSelectionInputSchema>;
+export type AiSessionModelSelectionActionResponse = z.infer<typeof AiSessionModelSelectionActionResponseSchema>;
+export type AiSessionReasoningEffortInput = z.infer<typeof AiSessionReasoningEffortInputSchema>;
+export type AiSessionReasoningEffortActionResponse = z.infer<typeof AiSessionReasoningEffortActionResponseSchema>;
 export type AiSessionGitSelection = z.infer<typeof AiSessionGitSelectionSchema>;
 export type AiSessionCreateResult = z.infer<typeof AiSessionCreateResultSchema>;
 export type AiSessionForkWorkspace = z.infer<typeof AiSessionForkWorkspaceSchema>;

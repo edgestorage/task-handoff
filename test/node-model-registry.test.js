@@ -61,12 +61,24 @@ test("node model registry uses immutable content hashes, private storage, and ha
   const created = await request(app, "POST", "/api/node-agent/models", codexInput);
   assert.equal(created.statusCode, 201);
   assert.equal(created.json().data.id, codexHash);
+  assert.deepEqual(created.json().data.modelNames, [{ name: codexInput.model, order: 100 }]);
   assert.equal("key" in created.json().data, false);
 
   const modelPath = path.join(dataDir, "models", `${codexHash}.json`);
   assert.equal(fs.statSync(path.dirname(modelPath)).mode & 0o777, 0o700);
   assert.equal(fs.statSync(modelPath).mode & 0o777, 0o600);
-  assert.equal(JSON.parse(fs.readFileSync(modelPath, "utf8")).key, codexInput.key);
+  const storedCodex = JSON.parse(fs.readFileSync(modelPath, "utf8"));
+  assert.equal(storedCodex.key, codexInput.key);
+  assert.deepEqual(storedCodex.modelNames, [{ name: codexInput.model, order: 100 }]);
+
+  delete storedCodex.modelNames;
+  delete storedCodex.protocols;
+  fs.writeFileSync(modelPath, JSON.stringify(storedCodex));
+  const upgradedLegacy = await request(app, "PATCH", `/api/node-agent/models/${codexHash}`, { name: "Saved legacy model" });
+  assert.equal(upgradedLegacy.statusCode, 200);
+  const upgradedStoredCodex = JSON.parse(fs.readFileSync(modelPath, "utf8"));
+  assert.deepEqual(upgradedStoredCodex.modelNames, [{ name: codexInput.model, order: 100 }]);
+  assert.deepEqual(upgradedStoredCodex.protocols, ["openai-responses"]);
 
   const duplicate = await request(app, "POST", "/api/node-agent/models", { ...codexInput, name: "Same content" });
   assert.equal(duplicate.statusCode, 201);
@@ -156,12 +168,14 @@ test("node model registry uses immutable content hashes, private storage, and ha
 
 test("node model assignment persists private config when live environment sync cannot connect", async (t) => {
   const dataDir = tempDataDir();
+  let fetchCalls = 0;
   const app = await createNodeAgentApp({
     dataDir,
     logger: false,
     token: "agent-secret",
     nodeId: "node_offline_assignment",
     fetchImpl: async () => {
+      fetchCalls += 1;
       throw new TypeError("fetch failed");
     },
   });
@@ -198,6 +212,68 @@ test("node model assignment persists private config when live environment sync c
     app.nodeAgentState.instancePrivateConfigs.get("inst_offline_assignment").environment.OPENAI_API_KEY,
     "offline-instance-secret",
   );
+  assert.equal(fetchCalls, 0, "v0.0.23 controlled instances must not receive the private catalog endpoint call");
+});
+
+test("ordered model entities resolve defaults by protocol and preserve provider identity", async (t) => {
+  const dataDir = tempDataDir();
+  const app = await createNodeAgentApp({ dataDir, logger: false, token: "agent-secret", nodeId: "node_multi_models" });
+  t.after(async () => app.close());
+  const timestamp = new Date().toISOString();
+  assert.equal((await request(app, "POST", "/api/node-agent/instances", instancePayload("inst_multi_models", timestamp))).statusCode, 201);
+
+  const shared = await request(app, "POST", "/api/node-agent/models", modelInput({
+    name: "Shared endpoint",
+    app: "opencode",
+    protocols: ["openai-chat-completions", "openai-responses"],
+    model: "shared-default",
+    modelNames: [{ name: "same-name", order: 200 }, { name: "shared-first", order: 100 }],
+    key: "shared-secret",
+  }));
+  const responses = await request(app, "POST", "/api/node-agent/models", modelInput({
+    name: "Second Responses endpoint",
+    endpoint: "https://second.example/v1",
+    model: "same-name",
+    modelNames: [{ name: "same-name", order: 100 }, { name: "second-later", order: 200 }],
+    key: "second-secret",
+  }));
+  const disabled = await request(app, "POST", "/api/node-agent/models", modelInput({
+    name: "Disabled endpoint",
+    endpoint: "https://disabled.example/v1",
+    key: "disabled-secret",
+    enabled: false,
+  }));
+  const sharedId = shared.json().data.id;
+  const responsesId = responses.json().data.id;
+
+  const assigned = await request(app, "PUT", "/api/node-agent/instances/inst_multi_models/model-assignment", {
+    modelSelection: { modelEntityIds: [sharedId, responsesId, sharedId] },
+    modelEntityIds: [sharedId, responsesId, sharedId],
+  });
+  assert.equal(assigned.statusCode, 200);
+  assert.deepEqual(assigned.json().data.assignment.modelEntityIds, [sharedId, responsesId]);
+  assert.equal(assigned.json().data.instance.modelSelection.codexModelHash, undefined);
+  const environment = app.nodeAgentState.resolvedAssignedModelEnvironment("inst_multi_models");
+  assert.equal(environment.TASK_HANDOFF_CODEX_MODEL, "shared-first");
+  assert.equal(JSON.parse(environment.TASK_HANDOFF_OPENCODE_CONFIG_CONTENT).model, "task-handoff/shared-first");
+  const catalog = app.nodeAgentState.modelRegistry.privateCatalog("inst_multi_models");
+  assert.deepEqual(catalog.entities.map((entity) => entity.id), [sharedId, responsesId]);
+  assert.deepEqual(catalog.entities[0].modelNames.map((entry) => entry.name), ["shared-first", "same-name"]);
+  assert.equal(catalog.entities[1].modelNames[0].name, "same-name");
+
+  const reordered = await request(app, "PUT", "/api/node-agent/instances/inst_multi_models/model-assignment", {
+    modelSelection: { modelEntityIds: [responsesId, sharedId] },
+    modelEntityIds: [responsesId, sharedId],
+  });
+  assert.equal(reordered.statusCode, 200);
+  assert.equal(app.nodeAgentState.resolvedAssignedModelEnvironment("inst_multi_models").TASK_HANDOFF_CODEX_MODEL, "same-name");
+
+  const rejected = await request(app, "PUT", "/api/node-agent/instances/inst_multi_models/model-assignment", {
+    modelSelection: { modelEntityIds: [disabled.json().data.id] },
+    modelEntityIds: [disabled.json().data.id],
+  });
+  assert.equal(rejected.statusCode, 409);
+  assert.equal(rejected.json().error.code, "NODE_MODEL_DISABLED");
 });
 
 test("node agent migrates complete legacy model sidecars to content hashes and preserves unmappable sidecars", async (t) => {

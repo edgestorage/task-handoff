@@ -69,7 +69,7 @@
               <div class="model-identity">
                 <div class="model-title-line">
                   <strong>{{ model.name }}</strong>
-                  <Badge variant="secondary">{{ appLabel(model.app) }}</Badge>
+                  <Badge variant="secondary">{{ compatibleAppLabel(model) }}</Badge>
                   <Badge :variant="model.enabled ? 'default' : 'secondary'">{{ model.enabled ? t("settings.modelRegistry.enabled") : t("settings.modelRegistry.disabled") }}</Badge>
                 </div>
                 <code>{{ model.model }}</code>
@@ -124,6 +124,8 @@
                 <DropdownMenu>
                   <DropdownMenuTrigger as-child><Button variant="ghost" size="icon" :aria-label="t('settings.modelRegistry.moreActions')" :disabled="savingModelId === model.id || deletingModelId === model.id"><MoreHorizontal :size="16" /></Button></DropdownMenuTrigger>
                   <DropdownMenuContent align="end" :side-offset="6">
+                    <DropdownMenuItem v-if="model.locations?.some((location) => location.type === 'control-plane')" @select="openCopyDialog(model)"><Copy :size="14" /><span>{{ t("settings.modelRegistry.copy") }}</span></DropdownMenuItem>
+                    <DropdownMenuSeparator v-if="model.locations?.some((location) => location.type === 'control-plane')" />
                     <DropdownMenuItem v-if="model.locations?.some((location) => location.type === 'control-plane')" :disabled="!canMoveModel(model.id, -1)" @select="moveModel(model.id, -1)"><ChevronUp :size="14" /><span>{{ t("settings.modelRegistry.moveUp") }}</span></DropdownMenuItem>
                     <DropdownMenuItem v-if="model.locations?.some((location) => location.type === 'control-plane')" :disabled="!canMoveModel(model.id, 1)" @select="moveModel(model.id, 1)"><ChevronDown :size="14" /><span>{{ t("settings.modelRegistry.moveDown") }}</span></DropdownMenuItem>
                     <DropdownMenuSeparator v-if="model.locations?.some((location) => location.type === 'control-plane')" />
@@ -149,22 +151,20 @@
     <DialogContent class="model-editor-dialog w-[min(680px,calc(100vw-32px))] max-w-none gap-0 overflow-hidden p-0">
       <DialogHeader class="model-editor-head space-y-0">
         <div>
-          <DialogTitle>{{ editingModelId ? t("settings.modelRegistry.edit") : t("settings.modelRegistry.add") }}</DialogTitle>
-          <DialogDescription>{{ editingModelId ? t("settings.modelRegistry.editDescription", { count: editingModelLocationCount }) : t("settings.modelRegistry.addDescription") }}</DialogDescription>
+          <DialogTitle>{{ copyingModelId ? t("settings.modelRegistry.copyTitle") : editingModelId ? t("settings.modelRegistry.edit") : t("settings.modelRegistry.add") }}</DialogTitle>
+          <DialogDescription>{{ copyingModelId ? t("settings.modelRegistry.copyDescription") : editingModelId ? t("settings.modelRegistry.editDescription", { count: editingModelLocationCount }) : t("settings.modelRegistry.addDescription") }}</DialogDescription>
         </div>
         <Button variant="ghost" size="icon" :aria-label="t('common.actions.close')" @click="requestCloseEditor"><X :size="16" /></Button>
       </DialogHeader>
       <ScrollArea class="model-editor-scroll" :horizontal="false">
         <form class="model-editor-form" @submit.prevent="submitModel">
           <div v-if="editingModelId" class="model-scope-notice"><Layers :size="16" aria-hidden="true" /><div><strong>{{ t("settings.modelRegistry.allLocations", { count: editingModelLocationCount }) }}</strong><span>{{ t("settings.modelRegistry.editScopeWarning") }}</span></div></div>
+          <div v-else-if="copyingModelId" class="model-scope-notice"><Copy :size="16" aria-hidden="true" /><div><strong>{{ t("settings.modelRegistry.controlPlane") }}</strong><span>{{ t("settings.modelRegistry.copyIdentityHint") }}</span></div></div>
 
           <section class="model-form-section">
             <header><h3>{{ t("settings.modelRegistry.basicInformation") }}</h3><p>{{ t("settings.modelRegistry.basicInformationDescription") }}</p></header>
-            <label v-if="!editingModelId"><span>{{ t("settings.fields.location") }}</span><ControlPlaneSelect v-model="settingsModel.locationScope" :placeholder="t('settings.modelRegistry.selectLocation')"><ControlPlaneSelectItem value="control-plane">{{ t("settings.modelRegistry.controlPlane") }}</ControlPlaneSelectItem><ControlPlaneSelectItem v-for="node in nodes.data.value || []" :key="node.id" :value="node.id">{{ t("settings.modelRegistry.nodeLocation", { name: node.name }) }}</ControlPlaneSelectItem></ControlPlaneSelect></label>
-            <div class="model-form-grid">
-              <label><span>{{ t("settings.fields.name") }}</span><ControlPlaneInput v-model="settingsModel.name" :placeholder="t('settings.modelRegistry.namePlaceholder')" /></label>
-              <label><span>{{ t("settings.fields.app") }}</span><ControlPlaneSelect v-model="settingsModel.app" :placeholder="t('settings.modelRegistry.selectApp')"><ControlPlaneSelectItem value="codex">Codex</ControlPlaneSelectItem><ControlPlaneSelectItem value="claude">Claude</ControlPlaneSelectItem><ControlPlaneSelectItem value="opencode">OpenCode</ControlPlaneSelectItem></ControlPlaneSelect></label>
-            </div>
+            <label v-if="!editingModelId && !copyingModelId"><span>{{ t("settings.fields.location") }}</span><ControlPlaneSelect v-model="settingsModel.locationScope" :placeholder="t('settings.modelRegistry.selectLocation')"><ControlPlaneSelectItem value="control-plane">{{ t("settings.modelRegistry.controlPlane") }}</ControlPlaneSelectItem><ControlPlaneSelectItem v-for="node in nodes.data.value || []" :key="node.id" :value="node.id">{{ t("settings.modelRegistry.nodeLocation", { name: node.name }) }}</ControlPlaneSelectItem></ControlPlaneSelect></label>
+            <label><span>{{ t("settings.fields.name") }}</span><ControlPlaneInput v-model="settingsModel.name" :placeholder="t('settings.modelRegistry.namePlaceholder')" /></label>
             <label class="model-enabled-toggle"><Checkbox :model-value="settingsModel.enabled" @update:model-value="(value) => settingsModel.enabled = value === true" /><span><strong>{{ t("common.status.enabled") }}</strong><small>{{ t("settings.modelRegistry.enabledDescription") }}</small></span></label>
           </section>
 
@@ -175,17 +175,25 @@
               <!-- i18n-audit-allow-next-line code-token: example model API endpoint -->
               <ControlPlaneInput v-model="settingsModel.endpoint" placeholder="https://api.openai.com/v1" />
             </label>
-            <label><span>{{ t("settings.fields.apiKey") }}</span><ControlPlaneInput v-model="settingsModel.key" type="password" :placeholder="editingModelId ? t('settings.modelRegistry.keepKey') : t('settings.fields.apiKey')" /><small v-if="editingModelId">{{ t("settings.modelRegistry.keepCredential") }}</small></label>
+            <div class="model-protocol-field" role="group" aria-labelledby="model-protocol-label">
+              <span id="model-protocol-label" class="model-protocol-label">{{ t("settings.modelRegistry.protocols") }}</span>
+              <ToggleGroup class="model-protocol-options" type="multiple" :model-value="settingsModel.protocols" :aria-label="t('settings.modelRegistry.protocols')" @update:model-value="setProtocols">
+                <ToggleGroupItem v-for="protocol in modelProtocols" :key="protocol" class="model-protocol-option" :value="protocol" variant="outline" :title="t(`settings.modelRegistry.protocol.${protocol}`)">
+                  <span class="model-protocol-copy">
+                    <Check v-if="settingsModel.protocols.includes(protocol)" :size="12" class="model-protocol-check" aria-hidden="true" />
+                    <strong>{{ t(`settings.modelRegistry.protocol.${protocol}`) }}</strong>
+                    <small>{{ t(`settings.modelRegistry.protocolDescription.${protocol}`) }}</small>
+                  </span>
+                </ToggleGroupItem>
+              </ToggleGroup>
+              <small>{{ t("settings.modelRegistry.protocolsDescription") }}</small>
+            </div>
+            <label><span>{{ t("settings.fields.apiKey") }}</span><ControlPlaneInput v-model="settingsModel.key" type="password" :placeholder="editingModelId || copyingModelId ? t('settings.modelRegistry.keepKey') : t('settings.fields.apiKey')" /><small v-if="editingModelId">{{ t("settings.modelRegistry.keepCredential") }}</small><small v-else-if="copyingModelId">{{ t("settings.modelRegistry.copyCredential") }}</small></label>
           </section>
 
           <section class="model-form-section">
             <header><h3>{{ t("settings.modelRegistry.model") }}</h3><p>{{ t("settings.modelRegistry.manualModelHint") }}</p></header>
-            <div class="model-field-head"><span>{{ t("settings.modelRegistry.model") }}</span><Button type="button" variant="ghost" size="sm" :disabled="!canDiscoverModels || discoveringModels" @click="fetchModelOptions"><RefreshCw :size="13" :class="{ spin: discoveringModels }" /><span>{{ discoveringModels ? t("settings.modelRegistry.discovering") : t("settings.modelRegistry.discover") }}</span></Button></div>
-            <div class="model-input-row">
-              <!-- i18n-audit-allow-next-line product-name: example model identifier -->
-              <ControlPlaneInput v-model="settingsModel.model" :aria-label="t('settings.modelRegistry.model')" placeholder="gpt-5-codex" />
-              <Popover v-model:open="modelPickerOpen"><PopoverTrigger as-child><Button type="button" variant="outline" size="icon" :disabled="!discoveredModels.length" :aria-label="t('settings.modelRegistry.chooseDiscovered')"><ChevronsUpDown :size="14" /></Button></PopoverTrigger><PopoverContent class="model-picker-popover w-[min(360px,var(--reka-popover-content-available-width))] overflow-hidden p-1" align="end" :collision-padding="12" :side-offset="6"><Command class="model-picker-command" :model-value="settingsModel.model" @update:model-value="selectDiscoveredModel"><CommandInput class="model-picker-search-input h-8 py-0 text-[13px]" :placeholder="t('settings.modelRegistry.searchModels')" /><ScrollArea class="model-picker-scroll" :horizontal="false"><CommandList class="model-picker-list max-h-none overflow-visible"><CommandEmpty>{{ t("settings.modelRegistry.noModelMatches") }}</CommandEmpty><CommandGroup><CommandItem v-for="option in discoveredModels" :key="option.id" :value="option.id"><span>{{ option.id }}</span><small v-if="option.ownedBy">{{ option.ownedBy }}</small><Check :size="14" :class="{ 'model-option-unselected': option.id !== settingsModel.model }" /></CommandItem></CommandGroup></CommandList></ScrollArea></Command></PopoverContent></Popover>
-            </div>
+            <div class="model-name-list"><div class="model-name-list-head"><span>{{ t("settings.modelRegistry.modelNames") }}</span><div><Button type="button" variant="ghost" size="sm" :disabled="!canDiscoverModels || discoveringModels" @click="fetchModelOptions"><RefreshCw :size="13" :class="{ spin: discoveringModels }" /><span>{{ discoveringModels ? t("settings.modelRegistry.discovering") : t("settings.modelRegistry.discover") }}</span></Button><Popover v-model:open="modelPickerOpen"><PopoverTrigger as-child><Button type="button" variant="ghost" size="sm" :disabled="!discoveredModels.length" :aria-label="t('settings.modelRegistry.chooseDiscovered')"><ChevronsUpDown :size="14" />{{ t("settings.modelRegistry.chooseDiscovered") }}</Button></PopoverTrigger><PopoverContent class="model-picker-popover w-[min(360px,var(--reka-popover-content-available-width))] overflow-hidden p-1" align="end" :collision-padding="12" :side-offset="6"><Command class="model-picker-command" @update:model-value="selectDiscoveredModel"><CommandInput class="model-picker-search-input h-8 py-0 text-[13px]" :placeholder="t('settings.modelRegistry.searchModels')" /><ScrollArea class="model-picker-scroll" :horizontal="false"><CommandList class="model-picker-list max-h-none overflow-visible"><CommandEmpty>{{ t("settings.modelRegistry.noModelMatches") }}</CommandEmpty><CommandGroup><CommandItem v-for="option in discoveredModels" :key="option.id" :value="option.id"><span>{{ option.id }}</span><small v-if="option.ownedBy">{{ option.ownedBy }}</small><Check :size="14" :class="{ 'model-option-unselected': !settingsModel.modelNames.some((entry) => entry.name === option.id) }" /></CommandItem></CommandGroup></CommandList></ScrollArea></Command></PopoverContent></Popover><Button type="button" size="sm" variant="ghost" @click="addModelName">{{ t("settings.modelRegistry.addModelName") }}</Button></div></div><div v-for="(entry, index) in settingsModel.modelNames" :key="index" class="model-name-row"><ControlPlaneInput v-model="entry.name" :placeholder="t('settings.modelRegistry.modelNamePlaceholder')" @update:model-value="(value) => index === 0 && (settingsModel.model = value)" /><Button type="button" variant="ghost" size="icon" :disabled="index === 0" @click="moveModelName(index, -1)"><ChevronUp :size="14" /></Button><Button type="button" variant="ghost" size="icon" :disabled="index === settingsModel.modelNames.length - 1" @click="moveModelName(index, 1)"><ChevronDown :size="14" /></Button><Button type="button" variant="ghost" size="icon" :disabled="settingsModel.modelNames.length === 1" @click="removeModelName(index)"><Trash2 :size="14" /></Button></div></div>
             <small v-if="!selectedNodeSupportsModelEndpointProbe" class="model-form-note">{{ t("settings.modelRegistry.probeUnsupported") }}</small>
           </section>
         </form>
@@ -193,7 +201,7 @@
       <DialogFooter class="model-editor-footer">
         <Button variant="outline" @click="requestCloseEditor">{{ t("common.actions.cancel") }}</Button>
         <Button variant="outline" :disabled="!canTestModel || testingModel" @click="checkModel"><Activity :size="14" /><span>{{ testingModel ? t("settings.modelRegistry.testing") : t("settings.modelRegistry.test") }}</span></Button>
-        <Button :disabled="!canSaveModel || savingModelId === formModelBusyId" @click="submitModel"><span>{{ savingModelId === formModelBusyId ? t("settings.modelRegistry.saving") : editingModelId ? t("settings.modelRegistry.save") : t("settings.modelRegistry.create") }}</span></Button>
+        <Button :disabled="!canSaveModel || savingModelId === formModelBusyId" @click="submitModel"><span>{{ savingModelId === formModelBusyId ? t("settings.modelRegistry.saving") : copyingModelId ? t("settings.modelRegistry.createCopy") : editingModelId ? t("settings.modelRegistry.save") : t("settings.modelRegistry.create") }}</span></Button>
       </DialogFooter>
     </DialogContent>
   </Dialog>
@@ -216,8 +224,8 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { Activity, AlertTriangle, Boxes, Check, ChevronDown, ChevronUp, ChevronsUpDown, KeyRound, Layers, Link2, MapPin, MoreHorizontal, Plus, RefreshCw, Search, Settings, Trash2, X } from "@lucide/vue";
-import type { ModelConfig, ModelLocation } from "../../../api/types";
+import { Activity, AlertTriangle, Boxes, Check, ChevronDown, ChevronUp, ChevronsUpDown, Copy, KeyRound, Layers, Link2, MapPin, MoreHorizontal, Plus, RefreshCw, Search, Settings, Trash2, X } from "@lucide/vue";
+import type { ModelApp, ModelConfig, ModelLocation } from "../../../api/types";
 import { useModelRegistryQuery, useModelsQuery, useNodesQuery } from "../../../api/queries";
 import { invalidateControlPlaneDomains } from "../../../api/queryInvalidation";
 import { useQueryClient } from "@tanstack/vue-query";
@@ -230,11 +238,13 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, Command
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
 import { Popover, PopoverContent, PopoverTrigger } from "../../../components/ui/popover";
 import { ScrollArea } from "../../../components/ui/scroll-area";
+import { ToggleGroup, ToggleGroupItem } from "../../../components/ui/toggle-group";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
 import ControlPlaneInput from "../shared/ControlPlaneInput.vue";
 import ControlPlaneSelect from "../shared/ControlPlaneSelect.vue";
 import ControlPlaneSelectItem from "../shared/ControlPlaneSelectItem.vue";
 import { useModelSettings } from "./useModelSettings";
+import { modelSupportsApp } from "../instance-settings/instanceSettingsState";
 
 type FilterValue = "all" | string;
 const { t } = useI18n();
@@ -252,14 +262,15 @@ const modelPickerOpen = ref(false);
 const pendingDelete = ref<{ model: ModelConfig; location: ModelLocation }>();
 const refreshModels = () => invalidateControlPlaneDomains(queryClient, ["models"]);
 const translateError = (error: unknown) => translateApiError(error, t, error instanceof Error ? error.message : String(error));
-const { canDiscoverModels, canMoveModel, canSaveModel, canTestModel, checkModel, deletingModelId, discoveredModels, discoveringModels, editModel, editingModelId, formModelBusyId, modelDraftDirty, moveModel, removeModel, resetModelForm, saveModel, savingModelId, selectedNodeSupportsModelEndpointProbe, settingsModel, testingModel, fetchModelOptions } = useModelSettings({ errorText: translateError, models: () => models.data.value || [], nodes: () => nodes.data.value || [], onModelDeleted() {}, refreshModels, translate: t });
+const { addModelName, canDiscoverModels, canMoveModel, canSaveModel, canTestModel, checkModel, copyingModelId, copyModelDraft, deletingModelId, discoveredModels, discoveringModels, editModel, editingModelId, formModelBusyId, modelDraftDirty, moveModel, moveModelName, removeModel, removeModelName, resetModelForm, saveModel, savingModelId, selectedNodeSupportsModelEndpointProbe, setProtocols, settingsModel, testingModel, fetchModelOptions } = useModelSettings({ errorText: translateError, models: () => models.data.value || [], nodes: () => nodes.data.value || [], onModelDeleted() {}, refreshModels, translate: t });
+const modelProtocols = ["openai-responses", "openai-chat-completions", "anthropic-messages"] as const;
 const editingModelLocationCount = computed(() => (models.data.value || []).find((model) => model.id === editingModelId.value)?.locations?.length || 1);
 const hasActiveFilters = computed(() => Boolean(searchQuery.value.trim() || appFilter.value !== "all" || locationFilter.value !== "all" || statusFilter.value !== "all"));
 const filteredModels = computed(() => {
   const query = searchQuery.value.trim().toLocaleLowerCase();
   return (models.data.value || []).filter((model) => {
     if (query && ![model.name, model.model, model.endpoint].some((value) => value.toLocaleLowerCase().includes(query))) return false;
-    if (appFilter.value !== "all" && model.app !== appFilter.value) return false;
+    if (appFilter.value !== "all" && !modelSupportsApp(model, appFilter.value as ModelApp)) return false;
     if (statusFilter.value !== "all" && model.enabled !== (statusFilter.value === "enabled")) return false;
     if (locationFilter.value !== "all" && !model.locations?.some((location) => locationFilter.value === "control-plane" ? location.type === "control-plane" : location.type === "node" && location.nodeId === locationFilter.value)) return false;
     return true;
@@ -270,15 +281,17 @@ function nodeName(nodeId: string) { return (nodes.data.value || []).find((node) 
 function modelLocationKey(location: ModelLocation) { return location.type === "control-plane" ? "control-plane" : `node:${location.nodeId}`; }
 function modelLocationLabel(location: ModelLocation) { return location.type === "control-plane" ? t("settings.modelRegistry.controlPlane") : nodeName(location.nodeId); }
 function appLabel(app: string) { return app === "opencode" ? "OpenCode" : app === "claude" ? "Claude" : "Codex"; }
+function compatibleAppLabel(model: ModelConfig) { return (["codex", "claude", "opencode"] as ModelApp[]).filter((app) => modelSupportsApp(model, app)).map(appLabel).join(" · "); }
 function referenceLocations(model: ModelConfig) { return (model.locations || []).filter((location): location is Extract<ModelLocation, { type: "node" }> => location.type === "node" && location.referenceCount > 0); }
 function openCreateDialog() { resetModelForm(); editorOpen.value = true; }
 function openEditDialog(model: ModelConfig) { editModel(model); editorOpen.value = true; }
+function openCopyDialog(model: ModelConfig) { copyModelDraft(model); editorOpen.value = true; }
 function requestCloseEditor() { if (modelDraftDirty.value) closeConfirmationOpen.value = true; else closeEditor(); }
 function handleEditorOpenChange(open: boolean) { if (open) editorOpen.value = true; else requestCloseEditor(); }
 function closeEditor() { editorOpen.value = false; closeConfirmationOpen.value = false; modelPickerOpen.value = false; resetModelForm(); }
 function discardAndClose() { closeEditor(); }
 async function submitModel() { if (await saveModel()) closeEditor(); }
-function selectDiscoveredModel(value: unknown) { if (typeof value !== "string") return; settingsModel.model = value; modelPickerOpen.value = false; }
+function selectDiscoveredModel(value: unknown) { if (typeof value !== "string" || settingsModel.modelNames.some((entry) => entry.name === value)) return; const empty = settingsModel.modelNames.find((entry) => !entry.name.trim()); if (empty) empty.name = value; else settingsModel.modelNames.push({ name: value, order: (settingsModel.modelNames.length + 1) * 100 }); settingsModel.model = settingsModel.modelNames[0]?.name || ""; modelPickerOpen.value = false; }
 function requestDelete(model: ModelConfig, location: ModelLocation) { pendingDelete.value = { model, location }; }
 async function confirmDelete() { const target = pendingDelete.value; if (!target) return; if (await removeModel(target.model, target.location)) pendingDelete.value = undefined; }
 </script>
@@ -362,12 +375,27 @@ async function confirmDelete() { const target = pendingDelete.value; if (!target
 .model-form-section label { display: grid; gap: 5px; }
 .model-form-section label > span, .model-field-head > span { color: var(--text-muted); font-size: 12px; }
 .model-form-section label > small, .model-form-note { color: var(--text-muted); font-size: 12px; line-height: 1.45; }
-.model-form-grid { display: grid; gap: 9px; grid-template-columns: 1fr 180px; }
+.model-protocol-field { display: grid; gap: 7px; }
+.model-protocol-label { color: var(--text-muted); font-size: 12px; }
+.model-protocol-options { display: grid; gap: 8px; grid-template-columns: repeat(3,minmax(0,1fr)); justify-content: stretch; }
+.model-protocol-options :deep(.model-protocol-option) { background: transparent; border-color: var(--line-strong); border-radius: 6px; color: var(--text-muted); justify-content: center; min-height: 58px; min-width: 0; padding: 5px 8px; }
+.model-protocol-options :deep(.model-protocol-option:hover), .model-protocol-options :deep(.model-protocol-option:focus-visible) { background: var(--surface-hover); border-color: var(--brand-accent); color: var(--text-strong); }
+.model-protocol-options :deep(.model-protocol-option[data-state="on"]) { background: var(--surface-active); border-color: var(--brand-accent); color: var(--text-strong); }
+.model-protocol-copy { align-content: center; display: grid; gap: 3px; height: 100%; min-width: 0; position: relative; text-align: center; width: 100%; }
+.model-protocol-copy strong { font-size: 13px; font-weight: 500; line-height: 1.35; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-protocol-copy small { color: var(--text-muted); font-family: var(--font-mono); font-size: 12px; font-weight: 400; line-height: 1.25; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-protocol-check { position: absolute; right: 0; top: 0; }
+.model-protocol-field > small { color: var(--text-muted); font-size: 12px; line-height: 1.45; margin-top: 1px; }
 .model-enabled-toggle { align-items: flex-start; display: flex !important; gap: 9px !important; }
 .model-enabled-toggle > span { display: grid; gap: 2px; }
 .model-enabled-toggle strong { color: var(--text-strong); font-size: 12px; font-weight: 500; }
 .model-field-head, .model-input-row { align-items: center; display: flex; gap: 7px; justify-content: space-between; }
 .model-input-row > :first-child { flex: 1 1 auto; min-width: 0; }
+.model-name-list { display: grid; gap: 7px; }
+.model-name-list-head { align-items: center; display: flex; justify-content: space-between; }
+.model-name-list-head > div { align-items: center; display: flex; gap: 4px; }
+.model-name-list-head > span { color: var(--text-muted); font-size: 12px; }
+.model-name-row { align-items: center; display: grid; gap: 4px; grid-template-columns: minmax(0,1fr) repeat(3, auto); }
 .model-editor-footer { border-top: 1px solid var(--line); display: flex; gap: 8px; justify-content: flex-end; padding: 8px 16px; }
 :global(.model-picker-popover) { height: min(360px,var(--reka-popover-content-available-height)); overflow: hidden; padding: 4px; width: min(360px,var(--reka-popover-content-available-width)); }
 .model-picker-command { display: grid; grid-template-rows: auto minmax(0,1fr); height: 100%; }
@@ -387,5 +415,5 @@ async function confirmDelete() { const target = pendingDelete.value; if (!target
 .spin { animation: model-spin .8s linear infinite; }
 @keyframes model-spin { to { transform: rotate(360deg); } }
 @media(max-width:900px) { .model-toolbar { grid-template-columns: minmax(220px,1fr) repeat(3,minmax(130px,.35fr)); } .model-row-main { grid-template-columns: minmax(210px,1fr) minmax(220px,.8fr) auto; } }
-@media(max-width:720px) { .model-settings-page { padding-right: 7px; } .model-toolbar { grid-template-columns: 1fr 1fr; } .model-search { grid-column: 1/-1; } .model-row-main { align-items: start; grid-template-columns: 1fr auto; gap: 10px; } .model-summary { grid-column: 1/-1; } .model-diagnostic-row { grid-template-columns: 1fr; } .model-form-grid { grid-template-columns: 1fr; } }
+@media(max-width:720px) { .model-settings-page { padding-right: 7px; } .model-toolbar { grid-template-columns: 1fr 1fr; } .model-search { grid-column: 1/-1; } .model-row-main { align-items: start; grid-template-columns: 1fr auto; gap: 10px; } .model-summary { grid-column: 1/-1; } .model-diagnostic-row { grid-template-columns: 1fr; } .model-protocol-options { grid-template-columns: 1fr; } }
 </style>

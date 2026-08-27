@@ -171,12 +171,16 @@ export type Project = {
 };
 
 export type ModelApp = "codex" | "claude" | "opencode";
+export type ModelProtocol = "openai-responses" | "openai-chat-completions" | "anthropic-messages";
+export type ModelNameEntry = { name: string; order: number };
 
 export type ModelConfig = {
   id: string;
   name: string;
   endpoint: string;
   model: string;
+  modelNames?: ModelNameEntry[];
+  protocols?: ModelProtocol[];
   app: ModelApp;
   enabled: boolean;
   order: number;
@@ -760,6 +764,7 @@ export type ControlledInstance = {
 };
 
 export type ModelSelection = {
+  modelEntityIds?: string[];
   codexModelHash?: string | null;
   claudeModelHash?: string | null;
   opencodeModelHash?: string | null;
@@ -839,6 +844,20 @@ export type TriggerRun = {
   error?: string;
   startedAt: string;
   completedAt?: string;
+};
+
+export type InstanceTriggerMutationResult = {
+  config: TriggerConfig;
+  deployment: TriggerDeployment;
+  runtime?: TriggerRuntimeState;
+};
+
+export type InstanceTriggerIndex = {
+  schemaVersion: 1;
+  configs: TriggerConfig[];
+  deployments: TriggerDeployment[];
+  runtime: TriggerRuntimeState[];
+  recentRuns: TriggerRun[];
 };
 
 export type ControlPlaneTrigger = {
@@ -1065,6 +1084,8 @@ export type CreateModelInput = {
   endpoint: string;
   key: string;
   model: string;
+  modelNames?: ModelNameEntry[];
+  protocols?: ModelProtocol[];
   app: ModelApp;
   enabled?: boolean;
   order?: number;
@@ -1073,10 +1094,13 @@ export type CreateModelInput = {
 
 export type UpdateModelInput = Partial<CreateModelInput>;
 
+export type CopyModelInput = Omit<CreateModelInput, "key"> & { key?: string };
+
 export type ModelEndpointDraft = {
   endpoint: string;
   key?: string;
   existingModelId?: string;
+  protocol?: ModelProtocol;
 };
 
 export type DiscoveredModel = {

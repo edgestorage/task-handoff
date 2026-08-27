@@ -50,6 +50,13 @@ export function NewSessionForm(props: NewSessionFormProps) {
       value: branch.name,
     }));
   const selectedBranchLabel = branchOptions.find((option) => option.value === props.selectedBranch)?.label || props.selectedBranch || t('sessions.selectBranch');
+  const modelOptions: AnchoredSelectOption[] = (props.modelGroups || []).flatMap((group) => group.models.map((model) => ({
+    label: model.modelName,
+    description: group.providerName,
+    systemImage: 'sparkles' as const,
+    value: JSON.stringify({ modelEntityId: model.modelEntityId, modelName: model.modelName }),
+  })));
+  const selectedModelValue = props.modelSelection ? JSON.stringify(props.modelSelection) : '';
 
   return <KeyboardAvoidingView behavior={newSessionKeyboardAvoidingBehavior(Platform.OS)} style={styles.screen} testID="new-session-keyboard-area">
     <Screen
@@ -148,16 +155,24 @@ export function NewSessionForm(props: NewSessionFormProps) {
             </AttachmentMenu>
             {props.selectedAgent === 'codex' ? <PermissionButton disabled={props.busy} mode={props.permissionMode} onChange={props.onPermissionModeChange} /> : null}
           </View>
-          <Pressable
-            accessibilityLabel={props.busy ? t('sessions.creating') : t('sessions.create')}
-            accessibilityRole="button"
-            accessibilityState={{ disabled: props.disabled }}
-            disabled={props.disabled}
-            onPress={props.onCreate}
-            style={({ pressed }) => [styles.sendButton, { backgroundColor: colors.primaryButton }, props.disabled && styles.disabled, pressed && styles.pressed]}
-          >
-            <SystemIcon android={props.busy ? 'hourglass_top' : 'arrow_upward'} color="#fff" ios={props.busy ? 'hourglass' : 'arrow.up'} size={SESSION_COMPOSER_ACTION_ICON_SIZE} />
-          </Pressable>
+          <View style={styles.trailingTools}>
+            {modelOptions.length ? <AnchoredSelectMenu cancelLabel={t('common.cancel')} disabled={props.busy} onSelect={(value) => props.onModelSelectionChange?.(JSON.parse(value))} options={modelOptions} selectedValue={selectedModelValue} title={t('sessions.model')}>
+              {(onPress) => <Pressable accessibilityLabel={props.modelSelection?.modelName || t('sessions.model')} accessibilityRole="button" disabled={props.busy} onPress={onPress} style={({ pressed }) => [styles.modelButton, pressed && styles.pressed]}>
+                <Text numberOfLines={1} style={[styles.modelLabel, { color: colors.textMuted }]}>{props.modelSelection?.modelName || t('sessions.model')}</Text>
+                <SystemIcon android="expand_more" color={colors.textMuted} ios="chevron.down" size={10} />
+              </Pressable>}
+            </AnchoredSelectMenu> : null}
+            <Pressable
+              accessibilityLabel={props.busy ? t('sessions.creating') : t('sessions.create')}
+              accessibilityRole="button"
+              accessibilityState={{ disabled: props.disabled }}
+              disabled={props.disabled}
+              onPress={props.onCreate}
+              style={({ pressed }) => [styles.sendButton, { backgroundColor: colors.primaryButton }, props.disabled && styles.disabled, pressed && styles.pressed]}
+            >
+              <SystemIcon android={props.busy ? 'hourglass_top' : 'arrow_upward'} color="#fff" ios={props.busy ? 'hourglass' : 'arrow.up'} size={SESSION_COMPOSER_ACTION_ICON_SIZE} />
+            </Pressable>
+          </View>
         </View>
       </View>
       {props.error ? <Text accessibilityLiveRegion="polite" style={[styles.error, { backgroundColor: colors.errorSoft, color: colors.error }]}>{props.error}</Text> : null}
@@ -222,6 +237,9 @@ const styles = StyleSheet.create({
   prompt: { flex: 1, fontSize: 16, lineHeight: 24, paddingHorizontal: 4, paddingVertical: 16, textAlignVertical: 'top' },
   toolbar: { alignItems: 'center', flexDirection: 'row', height: SESSION_COMPOSER_TOOLBAR_HEIGHT, justifyContent: 'space-between', marginHorizontal: -6, paddingBottom: 6 },
   leadingTools: { alignItems: 'center', flexDirection: 'row' },
+  trailingTools: { alignItems: 'center', flexDirection: 'row', gap: 4, minWidth: 0 },
+  modelButton: { alignItems: 'center', flexDirection: 'row', gap: 4, maxWidth: 150, minHeight: 40, paddingHorizontal: 6 },
+  modelLabel: { flexShrink: 1, fontSize: 12, fontWeight: '500', lineHeight: 17 },
   toolButton: { alignItems: 'center', height: SESSION_COMPOSER_TOOL_SIZE, justifyContent: 'center', width: SESSION_COMPOSER_TOOL_SIZE },
   permissionButton: { alignItems: 'center', flexDirection: 'row', gap: 7, minHeight: 40, paddingHorizontal: 4 },
   permissionLabel: { fontSize: 13, fontWeight: '600', lineHeight: 18 },

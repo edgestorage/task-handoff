@@ -14,6 +14,10 @@ import {
   AiSessionMentionCatalogSchema,
   AiSessionMentionFileSearchSchema,
   AiSessionMessageRefInputSchema,
+  AiSessionModelSelectionActionResponseSchema,
+  AiSessionModelSelectionInputSchema,
+  AiSessionReasoningEffortActionResponseSchema,
+  AiSessionReasoningEffortInputSchema,
   AiSessionOpenAppInputSchema,
   AiSessionOpenAppResultSchema,
   AiSessionQueueEditInputSchema,
@@ -34,6 +38,8 @@ import {
   type AiSessionForkInput,
   type AiSessionCommandInput,
   type AiSessionMessageAttachmentRef,
+  type AiSessionModelSelection,
+  type AiSessionReasoningEffort,
   type AiSessionPermissionMode,
   type AiSessionQueueEditInput,
   type AiSessionQueueReorderInput,
@@ -128,6 +134,14 @@ export function createControlPlaneAiSessionsApi(transport: ControlPlaneClientTra
     create(instanceId: string, input: AiSessionCreateRefInput) {
       return requestData(`/api/controlled-instances/${encodeURIComponent(instanceId)}/ai-sessions`, AiSessionCreateResultSchema, json("POST", AiSessionCreateRefInputSchema.parse(input)));
     },
+    updateModelSelection(instanceId: string, aiSessionId: string, clientRequestId: string, modelSelection: AiSessionModelSelection) {
+      const body = AiSessionModelSelectionInputSchema.parse({ clientRequestId, modelSelection });
+      return requestData(`${sessionRoute(instanceId, aiSessionId)}/model-selection`, AiSessionModelSelectionActionResponseSchema, json("PUT", body));
+    },
+    updateReasoningEffort(instanceId: string, aiSessionId: string, clientRequestId: string, reasoningEffort: AiSessionReasoningEffort) {
+      const body = AiSessionReasoningEffortInputSchema.parse({ clientRequestId, reasoningEffort });
+      return requestData(`${sessionRoute(instanceId, aiSessionId)}/reasoning-effort`, AiSessionReasoningEffortActionResponseSchema, json("PUT", body));
+    },
     fork(instanceId: string, aiSessionId: string, input: AiSessionForkInput) {
       return requestData(`${sessionRoute(instanceId, aiSessionId)}/fork`, AiSessionForkResultSchema, json("POST", AiSessionForkInputSchema.parse(input)));
     },
@@ -184,14 +198,14 @@ export function createControlPlaneAiSessionsApi(transport: ControlPlaneClientTra
     },
     async uploadAttachment(input: { instanceId: string; sessionId: string; scopeType?: "session" | "create-request"; kind: "image" | "file"; name: string; mime: string; data: string }, onProgress?: (progress: number) => void) {
       onProgress?.(0);
-      const content = await fetch(input.data).then((response) => response.blob());
+      const content = await fetch(input.data).then((response) => response.arrayBuffer());
       const query = new URLSearchParams({
         scopeType: input.scopeType || "session",
         scopeId: input.sessionId,
         kind: input.kind,
         name: input.name,
         mime: input.mime,
-        size: String(content.size),
+        size: String(content.byteLength),
       });
       let response: { data: z.infer<typeof AiSessionUploadedAttachmentSchema> };
       try {

@@ -436,6 +436,7 @@ import ControlPlaneInput from "../shared/ControlPlaneInput.vue";
 import ControlPlaneSelect from "../shared/ControlPlaneSelect.vue";
 import ControlPlaneSelectItem from "../shared/ControlPlaneSelectItem.vue";
 import ControlPlaneTriggersView from "../triggers/ControlPlaneTriggersView.vue";
+import { modelSupportsApp } from "../instance-settings/instanceSettingsState";
 import BasicSettingsSection from "./AppearanceSettingsSection.vue";
 import ChatBridgeSettingsSection from "./ChatBridgeSettingsSection.vue";
 import MobileSessionsSettingsSection from "./MobileSessionsSettingsSection.vue";
@@ -463,8 +464,8 @@ import { connectionStatusKeys, translateStatus } from "../../../i18n/status";
 import { translateApiError } from "../../../i18n/apiError";
 import { normalizeProxyOrigin, proxyClaimForceDeleteAllowed, proxyClaimValidation } from "./controlPlaneProxyUi";
 import type { NodeJoinedEvent } from "@task-handoff/protocol/control-plane";
+import { buildSettingsSections, type SettingsSection } from "./settingsSections";
 
-type SettingsSection = "basic" | "chat" | "images" | "environment-templates" | "projects" | "nodes" | "models" | "git-credentials" | "triggers" | "mobile-sessions" | "users" | "cloud-connectivity";
 type NodeDiagnosticLog = {
   route: string;
   method: string;
@@ -494,20 +495,11 @@ const currentAccess = useCurrentAccessQuery(computed(() => Boolean(authSession.d
 const canManageUsers = computed(() => currentAccess.data.value?.permissionIds.includes("users:manage") === true);
 const canManageSettings = computed(() => currentAccess.data.value?.permissionIds.includes("settings:manage") === true);
 const canManageSecrets = computed(() => authSession.data.value?.enabled !== true || currentAccess.data.value?.permissionIds.includes("secrets:manage") === true);
-const settingsSections = computed<Array<{ id: SettingsSection; label: string }>>(() => [
-  { id: "nodes", label: t("settings.nodes") },
-  { id: "images", label: t("settings.images") },
-  { id: "environment-templates", label: t("settings.environmentTemplates") },
-  { id: "projects", label: t("settings.projects") },
-  { id: "models", label: t("settings.models") },
-  ...(canManageSecrets.value ? [{ id: "git-credentials" as const, label: t("settings.gitCredentials.navigation") }] : []),
-  { id: "triggers", label: t("triggers.title") },
-  { id: "chat", label: t("settings.chat") },
-  { id: "mobile-sessions", label: t("settings.mobileSessions.navigation") },
-  ...(canManageUsers.value ? [{ id: "users" as const, label: t("settings.userAccess.navigation") }] : []),
-  ...(canManageSettings.value ? [{ id: "cloud-connectivity" as const, label: t("settings.cloud.navigation") }] : []),
-  { id: "basic", label: t("settings.basic") },
-]);
+const settingsSections = computed(() => buildSettingsSections(t, {
+  manageSecrets: canManageSecrets.value,
+  manageSettings: canManageSettings.value,
+  manageUsers: canManageUsers.value,
+}));
 
 const settingsSection = ref<SettingsSection>(props.initialSection || "nodes");
 const queryClient = useQueryClient();
@@ -558,8 +550,8 @@ const pendingProxyClaims = usePendingControlPlaneProxyClaimsQuery();
 const creatingNodeAgentInstall = ref(false);
 const nodeAgentInstallInvite = ref<{ joinToken: string; expiresAt: string }>();
 const nodeAgentInstallControlPlaneUrl = computed(() => publicBaseUrl.value.trim() || window.location.origin);
-const codexModels = computed(() => (models.data.value || []).filter((model) => model.app === "codex"));
-const claudeModels = computed(() => (models.data.value || []).filter((model) => model.app === "claude"));
+const codexModels = computed(() => (models.data.value || []).filter((model) => modelSupportsApp(model, "codex")));
+const claudeModels = computed(() => (models.data.value || []).filter((model) => modelSupportsApp(model, "claude")));
 const nodeRuntimeItems = computed(() => nodeRuntimes.data.value?.data || []);
 const boardItems = computed(() => board.data.value?.data || []);
 const nodeDiagnosticsByNodeId = computed(() => {

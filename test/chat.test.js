@@ -6,6 +6,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { PassThrough } = require("node:stream");
 const { EventEmitter } = require("node:events");
+const { spawnSync } = require("node:child_process");
 const ts = require("typescript");
 const test = require("node:test");
 const WebSocket = require("ws");
@@ -64,14 +65,14 @@ const { CodexTimelineStore } = require("../packages/ai-session-runtime/src/codex
 const { CodexAppServerConnectionManager } = require("../packages/ai-session-runtime/src/codex-app-server/client/connection-manager.ts");
 const { CodexAppServerSessionDiscovery } = require("../packages/ai-session-runtime/src/codex-app-server/session/discovery.ts");
 const { ClaudeControlSockSessionBridge } = require("../packages/ai-session-runtime/src/claude-control-sock.ts");
-const { AiSessionActionResultSchema, AiSessionEventType, AiSessionSummarySchema } = require("../packages/protocol/src/ai-sessions.ts");
+const { AiSessionActionResultSchema, AiSessionEventType, AiSessionHistoryItemSchema, AiSessionReasoningEffortSchema, AiSessionSummarySchema } = require("../packages/protocol/src/ai-sessions.ts");
 const { APP_SESSION_DELTA_RETENTION_MS } = require("../packages/protocol/src/app-sessions.ts");
 const { summarizeTranscriptLine } = require("../packages/core/src/core/transcript.ts");
 const { summarizeThreadTurns } = require("../packages/ai-session-runtime/src/codex-app-server-protocol.ts");
 const { AppRuntimeManager } = require("../packages/app-runtime/src/runtime.ts");
 const { CodexAppServerConnectionProxy } = require("../packages/app-runtime/src/codex-app-server-proxy.ts");
 const { AiSessionRefreshScheduler, createWebApp } = require("../packages/controlled-instance/src/web/server.ts");
-const { applyManagedCodexModelConfig } = require("../packages/controlled-instance/src/web/codex-model-config.ts");
+const { applyManagedCodexModelConfig, codexProviderId } = require("../packages/controlled-instance/src/web/codex-model-config.ts");
 const { applyManagedClaudeModelConfig } = require("../packages/controlled-instance/src/web/claude-model-config.ts");
 
 test("codex approval parser preserves the request reason", () => {
@@ -1503,6 +1504,24 @@ test("ai session registry includes user prompt in snapshots", () => {
   assert.equal(snapshot.sessions[0].turns, undefined);
   assert.equal(snapshot.sessions[0].turnCount, 1);
   assert.equal(typeof snapshot.sessions[0].lastUserMessageAt, "string");
+});
+
+test("ai session aggregate snapshots preserve session model selection", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-model-summary-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const modelSelection = {
+    modelEntityId: "mdl_deepseek",
+    modelName: "deepseek-v4-flash",
+  };
+  registry.start({
+    agent: "codex",
+    creationSource: "ai-session",
+    providerSessionId: "thread-model-summary",
+    modelSelection,
+  });
+
+  assert.deepEqual(registry.snapshot().sessions[0].modelSelection, modelSelection);
+  assert.deepEqual(registry.boundSnapshot([]).sessions[0].modelSelection, modelSelection);
 });
 
 test("ai session aggregate snapshots separate turns from list summaries", () => {
@@ -6793,6 +6812,453 @@ test("controlled instance leaves user Codex files unchanged when no managed mode
   assert.equal(fs.readFileSync(configPath, "utf8"), configContents);
   assert.equal(fs.readFileSync(authPath, "utf8"), authContents);
   assert.deepEqual(fs.readdirSync(codexHome).sort(), ["auth.json", "config.toml"]);
+});
+
+test("controlled instance materializes every Responses entity as a secret-free Codex provider", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-provider-catalog-"));
+  const codexHome = path.join(root, ".codex");
+  fs.mkdirSync(codexHome, { recursive: true });
+  const catalog = {
+    protocolVersion: "2026-08-27",
+    instanceId: "inst_one",
+    entities: [
+      { id: "mdl_primary", endpoint: "https://one.example/v1", key: "secret-one", protocols: ["openai-responses"], modelNames: [{ name: "gpt-5.6", order: 100 }, { name: "gpt-5.5", order: 200 }] },
+      { id: "mdl_chat", endpoint: "https://chat.example/v1", key: "secret-chat", protocols: ["openai-chat-completions"], modelNames: [{ name: "chat-model", order: 100 }] },
+      { id: "mdl_secondary", endpoint: "https://two.example/v1", key: "secret-two", protocols: ["openai-responses"], modelNames: [{ name: "gpt-5.4", order: 100 }] },
+    ],
+    updatedAt: "2026-08-27T00:00:00.000Z",
+  };
+  const result = applyManagedCodexModelConfig({
+    TASK_HANDOFF_CONTROL_MODE: "controlled",
+    CODEX_HOME: codexHome,
+  }, catalog);
+  const contents = fs.readFileSync(path.join(codexHome, "config.toml"), "utf8");
+  const config = require("@iarna/toml").parse(contents);
+  const primary = codexProviderId("mdl_primary");
+  const secondary = codexProviderId("mdl_secondary");
+  assert.equal(config.model, "gpt-5.6");
+  assert.equal(config.model_provider, primary);
+  assert.deepEqual(Object.keys(config.model_providers).sort(), [primary, secondary].sort());
+  assert.equal(config.model_providers[primary].base_url, "https://one.example/v1");
+  assert.equal(config.model_providers[secondary].wire_api, "responses");
+  assert.equal(result.providerEnvironment[config.model_providers[primary].env_key], "secret-one");
+  assert.equal(contents.includes("secret-one"), false);
+  assert.equal(contents.includes("secret-two"), false);
+  assert.equal(fs.existsSync(path.join(codexHome, "auth.json")), false);
+});
+
+test("Codex routes unknown model slugs to the selected Responses provider without model discovery", async (t) => {
+  const version = spawnSync("codex", ["--version"], { encoding: "utf8" });
+  if (version.status !== 0) {
+    t.skip("Codex is not installed in this test environment.");
+    return;
+  }
+  const fixtures = await Promise.all([startResponsesFixture("one"), startResponsesFixture("two")]);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-provider-routing-"));
+  const codexHome = path.join(root, ".codex");
+  const workspace = path.join(root, "workspace");
+  fs.mkdirSync(codexHome, { recursive: true });
+  fs.mkdirSync(workspace, { recursive: true });
+  const catalog = {
+    protocolVersion: "2026-08-27",
+    instanceId: "inst_routing",
+    entities: [
+      { id: "mdl_route_one", endpoint: `${fixtures[0].origin}/v1`, key: "fixture-key-one", protocols: ["openai-responses"], modelNames: [{ name: "unknown-shared-slug", order: 100 }] },
+      { id: "mdl_route_two", endpoint: `${fixtures[1].origin}/v1`, key: "fixture-key-two", protocols: ["openai-responses"], modelNames: [{ name: "unknown-shared-slug", order: 100 }] },
+    ],
+    updatedAt: "2026-08-28T00:00:00.000Z",
+  };
+  const managed = applyManagedCodexModelConfig({ TASK_HANDOFF_CONTROL_MODE: "controlled", CODEX_HOME: codexHome }, catalog);
+  const environment = { CODEX_HOME: codexHome, ...managed.providerEnvironment };
+  const previous = new Map(Object.keys(environment).map((key) => [key, process.env[key]]));
+  for (const [key, value] of Object.entries(environment)) process.env[key] = value;
+  const client = new CodexAppServerClient({ command: "codex", requestTimeoutMs: 10_000 });
+  t.after(() => {
+    client.stop();
+    for (const fixture of fixtures) fixture.server.close();
+    for (const [key, value] of previous) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+
+  await client.start();
+  const first = await client.startThread({ cwd: workspace, model: "unknown-shared-slug", modelProvider: codexProviderId("mdl_route_one") });
+  const second = await client.startThread({ cwd: workspace, model: "unknown-shared-slug", modelProvider: codexProviderId("mdl_route_two") });
+  const firstCompleted = waitForCodexTurnCompleted(client, first.id);
+  await client.startTurn(first.id, "route to one");
+  const firstRequest = await fixtures[0].nextRequest();
+  await firstCompleted;
+  const secondCompleted = waitForCodexTurnCompleted(client, second.id);
+  await client.startTurn(second.id, "route to two");
+  const secondRequest = await fixtures[1].nextRequest();
+  await secondCompleted;
+  const requests = [firstRequest, secondRequest];
+
+  assert.deepEqual(requests.map((request) => request.url), ["/v1/responses", "/v1/responses"]);
+  assert.deepEqual(requests.map((request) => request.body.model), ["unknown-shared-slug", "unknown-shared-slug"]);
+  assert.deepEqual(requests.map((request) => request.authorization), ["Bearer fixture-key-one", "Bearer fixture-key-two"]);
+
+  assert.deepEqual(await client.updateThreadSettings(first.id, { model: "unknown-updated-slug" }), {
+    model: "unknown-updated-slug",
+    modelProvider: codexProviderId("mdl_route_one"),
+  });
+  await client.startTurn(first.id, "use the updated model");
+  assert.equal((await fixtures[0].nextRequest()).body.model, "unknown-updated-slug");
+});
+
+function waitForCodexTurnCompleted(client, threadId) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      client.off("event", listener);
+      reject(new Error(`Timed out waiting for Codex turn completion for ${threadId}.`));
+    }, 5_000);
+    const listener = (event) => {
+      if (event.type !== "turn-completed" || event.threadId !== threadId) return;
+      clearTimeout(timer);
+      client.off("event", listener);
+      resolve(event);
+    };
+    client.on("event", listener);
+  });
+}
+
+function startResponsesFixture(id) {
+  const requests = [];
+  const waiters = [];
+  const nextRequest = () => requests.length
+    ? Promise.resolve(requests.shift())
+    : new Promise((resolve) => waiters.push(resolve));
+  const server = http.createServer((incoming, response) => {
+    const chunks = [];
+    incoming.on("data", (chunk) => chunks.push(chunk));
+    incoming.on("end", () => {
+      const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      const captured = { authorization: incoming.headers.authorization, body, url: incoming.url };
+      const waiter = waiters.shift();
+      if (waiter) waiter(captured);
+      else requests.push(captured);
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.end([
+        `data: ${JSON.stringify({ type: "response.created", response: { id: `resp_${id}` } })}`,
+        "",
+        `data: ${JSON.stringify({ type: "response.completed", response: { id: `resp_${id}`, usage: { input_tokens: 0, input_tokens_details: null, output_tokens: 0, output_tokens_details: null, total_tokens: 0 } } })}`,
+        "",
+        "",
+      ].join("\n"));
+    });
+  });
+  return new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      resolve({ origin: `http://127.0.0.1:${address.port}`, nextRequest, server });
+    });
+  });
+}
+
+test("Codex Direct Session creation preserves provider identity and reconciles actual model state", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-model-create-"));
+  const registryDir = path.join(root, "ai-sessions");
+  const registry = createAiSessionRegistry({ dir: registryDir });
+  const calls = [];
+  const diagnostics = [];
+  class FakeCodexModelCreateClient extends EventEmitter {
+    async start() {}
+    stop() {}
+    async listLoadedThreadIds() { return []; }
+    async startThread(options) {
+      calls.push(options);
+      const index = calls.length;
+      const actual = index === 3
+        ? { model: "actual-secondary", modelProvider: codexProviderId("mdl_secondary") }
+        : { model: options.model, modelProvider: options.modelProvider };
+      return { id: `thread_create_${index}`, cwd: options.cwd, ...actual, status: { type: "idle" }, turns: [] };
+    }
+  }
+  const fake = new FakeCodexModelCreateClient();
+  const bridge = new CodexAppServerSessionBridge(registry, fake, {
+    threadStartDefaults: { model: "default-primary", modelProvider: codexProviderId("mdl_primary") },
+    resolveModelSelection: (selection) => ({ model: selection.modelName, modelProvider: codexProviderId(selection.modelEntityId) }),
+    projectModelSelection: (provider, model) => provider === codexProviderId("mdl_primary")
+      ? { modelEntityId: "mdl_primary", modelName: model }
+      : provider === codexProviderId("mdl_secondary") ? { modelEntityId: "mdl_secondary", modelName: model } : undefined,
+    onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+  });
+  await bridge.sync();
+
+  const defaultCreated = await bridge.createSession({ cwd: root });
+  const secondCreated = await bridge.createSession({ cwd: root, modelSelection: { modelEntityId: "mdl_secondary", modelName: "same-name" } });
+  const reconciled = await bridge.createSession({ cwd: root, modelSelection: { modelEntityId: "mdl_primary", modelName: "requested-primary" } });
+
+  assert.deepEqual(calls.map(({ model, modelProvider }) => ({ model, modelProvider })), [
+    { model: "default-primary", modelProvider: codexProviderId("mdl_primary") },
+    { model: "same-name", modelProvider: codexProviderId("mdl_secondary") },
+    { model: "requested-primary", modelProvider: codexProviderId("mdl_primary") },
+  ]);
+  assert.deepEqual(defaultCreated.modelSelection, { modelEntityId: "mdl_primary", modelName: "default-primary" });
+  assert.deepEqual(secondCreated.modelSelection, { modelEntityId: "mdl_secondary", modelName: "same-name" });
+  assert.deepEqual(reconciled.modelSelection, { modelEntityId: "mdl_secondary", modelName: "actual-secondary" });
+  assert.equal(diagnostics.at(-1).code, "AI_SESSION_MODEL_SELECTION_RECONCILED");
+  assert.deepEqual(
+    createAiSessionRegistry({ dir: registryDir }).getByProviderSessionId("codex", secondCreated.providerSessionId).modelSelection,
+    secondCreated.modelSelection,
+  );
+});
+
+test("Codex Direct Session switches models only after settings confirmation and rejects provider changes", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-model-switch-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const session = registry.applyAdapterSnapshot({
+    source: "control",
+    agent: "codex",
+    creationSource: "ai-session",
+    appId: "codex-app-server",
+    providerSessionId: "thread_model_switch",
+    cwd: "/workspace",
+    status: "idle",
+    modelSelection: { modelEntityId: "mdl_primary", modelName: "gpt-5.6" },
+  });
+  class FakeCodexModelSwitchClient extends EventEmitter {
+    async start() {}
+    stop() {}
+    async listLoadedThreadIds() { return ["thread_model_switch"]; }
+    async readThread() { return { id: "thread_model_switch", cwd: "/workspace", status: { type: "idle" }, turns: [] }; }
+    supportsThreadSettingsUpdate() { return true; }
+    async updateThreadSettings(threadId, settings) {
+      assert.equal(threadId, "thread_model_switch");
+      assert.equal(registry.get(session.id).modelSelection.modelName, "gpt-5.6");
+      return { model: settings.model, modelProvider: codexProviderId("mdl_primary") };
+    }
+  }
+  const bridge = new CodexAppServerSessionBridge(registry, new FakeCodexModelSwitchClient(), {
+    resolveModelSelection: (selection) => ({ model: selection.modelName, modelProvider: codexProviderId(selection.modelEntityId) }),
+  });
+  assert.deepEqual(registry.get(session.id).modelSelection, { modelEntityId: "mdl_primary", modelName: "gpt-5.6" });
+  await bridge.sync();
+  assert.deepEqual(registry.get(session.id).modelSelection, { modelEntityId: "mdl_primary", modelName: "gpt-5.6" });
+  await bridge.updateModelSelection(registry.get(session.id), { modelEntityId: "mdl_primary", modelName: "gpt-5.5" });
+  assert.equal(registry.get(session.id).modelSelection.modelName, "gpt-5.5");
+  await assert.rejects(
+    bridge.updateModelSelection(registry.get(session.id), { modelEntityId: "mdl_secondary", modelName: "gpt-5.4" }),
+    (error) => error.code === "AI_SESSION_PROVIDER_SWITCH_REQUIRES_NEW_SESSION",
+  );
+  assert.equal(registry.get(session.id).modelSelection.modelEntityId, "mdl_primary");
+});
+
+test("provider-neutral model switching allows native provider changes and serializes session settings", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-provider-model-switch-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const session = registry.start({
+    agent: "opencode",
+    creationSource: "ai-session",
+    providerSessionId: "session_provider_switch",
+    cwd: "/workspace",
+    status: "idle",
+    modelSelection: { modelEntityId: "mdl_one", modelName: "same-name" },
+  });
+  const appOwned = registry.start({
+    agent: "opencode",
+    creationSource: "app-session",
+    providerSessionId: "app_owned_provider_session",
+    cwd: "/workspace",
+    status: "idle",
+    modelSelection: { modelEntityId: "mdl_one", modelName: "same-name" },
+  });
+  const steering = registry.start({
+    agent: "opencode",
+    creationSource: "ai-session",
+    providerSessionId: "session_steering",
+    cwd: "/workspace",
+    status: "running",
+    phase: "thinking",
+    activeTurnId: "turn_running",
+    modelSelection: { modelEntityId: "mdl_one", modelName: "same-name" },
+  });
+  let confirm;
+  const controller = new AiSessionController(registry);
+  controller.register({
+    agent: "opencode",
+    async updateModelSelection(current, selection) {
+      await new Promise((resolve) => { confirm = resolve; });
+      registry.patch(current.id, { modelSelection: selection });
+      return selection;
+    },
+    async updateReasoningEffort(_current, effort) { return effort; },
+    async startMessage() { throw new Error("unused"); },
+    async interrupt() { throw new Error("unused"); },
+  });
+  await assert.rejects(
+    controller.updateModelSelection(appOwned.id, { modelEntityId: "mdl_two", modelName: "same-name" }),
+    (error) => error.code === "AI_SESSION_MODEL_SELECTION_UNSUPPORTED",
+  );
+  await assert.rejects(
+    controller.updateModelSelection(steering.id, { modelEntityId: "mdl_two", modelName: "same-name" }),
+    (error) => error.code === "AI_SESSION_MODEL_SELECTION_CONFLICT",
+  );
+  const pending = controller.updateModelSelection(session.id, { modelEntityId: "mdl_two", modelName: "same-name" });
+  await new Promise((resolve) => setImmediate(resolve));
+  await assert.rejects(
+    controller.updateModelSelection(session.id, { modelEntityId: "mdl_three", modelName: "other" }),
+    (error) => error.code === "AI_SESSION_MODEL_SELECTION_CONFLICT",
+  );
+  await assert.rejects(
+    controller.updateReasoningEffort(session.id, "high"),
+    (error) => error.code === "AI_SESSION_REASONING_EFFORT_CONFLICT",
+  );
+  confirm();
+  assert.deepEqual(await pending, { modelEntityId: "mdl_two", modelName: "same-name" });
+  assert.deepEqual(registry.get(session.id).modelSelection, { modelEntityId: "mdl_two", modelName: "same-name" });
+});
+
+test("AI Session reasoning effort exposes every fixed Codex option and remains optional for old history", () => {
+  const efforts = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
+  assert.deepEqual(efforts.map((effort) => AiSessionReasoningEffortSchema.parse(effort)), efforts);
+  assert.equal(AiSessionReasoningEffortSchema.safeParse("custom").success, false);
+  const history = AiSessionHistoryItemSchema.parse({
+    id: "ais_old_reasoning",
+    agent: "codex",
+    creationSource: "ai-session",
+    providerSessionId: "thread_old_reasoning",
+    cwd: "/workspace",
+    lastActiveAt: "2026-08-27T00:00:00.000Z",
+    archivedAt: "2026-08-27T00:00:00.000Z",
+  });
+  assert.equal(history.reasoningEffort, undefined);
+});
+
+test("Codex client sends reasoning effort in thread config and waits for a matching settings notification", async () => {
+  const client = new CodexAppServerClient({ command: "codex", requestTimeoutMs: 100 });
+  const requests = [];
+  client.supportsThreadSettingsUpdate = () => true;
+  client.request = async (method, params) => {
+    requests.push({ method, params });
+    if (method === "thread/start") {
+      return {
+        thread: { id: "thread_reasoning_client", cwd: "/workspace", status: { type: "idle" }, turns: [] },
+        model: "gpt-5.6",
+        modelProvider: "provider_one",
+        reasoningEffort: "high",
+      };
+    }
+    queueMicrotask(() => {
+      client.emit("notification", {
+        method: "thread/settings/updated",
+        params: { threadId: "thread_reasoning_client", threadSettings: { effort: "low" } },
+      });
+      client.emit("notification", {
+        method: "thread/settings/updated",
+        params: { threadId: "thread_reasoning_client", threadSettings: { effort: "xhigh" } },
+      });
+    });
+    return {};
+  };
+
+  const thread = await client.startThread({ cwd: "/workspace", model: "gpt-5.6", modelProvider: "provider_one", reasoningEffort: "high" });
+  assert.equal(thread.reasoningEffort, "high");
+  const updated = await client.updateThreadSettings("thread_reasoning_client", { effort: "xhigh" });
+  assert.deepEqual(updated, { effort: "xhigh" });
+  assert.deepEqual(requests, [
+    {
+      method: "thread/start",
+      params: {
+        model: "gpt-5.6",
+        modelProvider: "provider_one",
+        cwd: "/workspace",
+        runtimeWorkspaceRoots: ["/workspace"],
+        ephemeral: false,
+        config: { model_reasoning_effort: "high" },
+        sessionStartSource: "startup",
+        threadSource: "user",
+      },
+    },
+    { method: "thread/settings/update", params: { threadId: "thread_reasoning_client", effort: "xhigh" } },
+  ]);
+});
+
+test("Codex Direct Session updates reasoning effort only after authoritative confirmation", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-reasoning-switch-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const session = registry.applyAdapterSnapshot({
+    source: "control",
+    agent: "codex",
+    creationSource: "ai-session",
+    appId: "codex-app-server",
+    providerSessionId: "thread_reasoning_switch",
+    cwd: "/workspace",
+    status: "idle",
+    reasoningEffort: "medium",
+  });
+  let confirm;
+  let shouldFail = false;
+  class FakeCodexReasoningClient extends EventEmitter {
+    async start() {}
+    stop() {}
+    async listLoadedThreadIds() { return ["thread_reasoning_switch"]; }
+    async readThread() { return { id: "thread_reasoning_switch", cwd: "/workspace", status: { type: "idle" }, turns: [] }; }
+    supportsThreadSettingsUpdate() { return true; }
+    async updateThreadSettings(_threadId, settings) {
+      if (shouldFail) throw new Error("settings timeout");
+      await new Promise((resolve) => { confirm = resolve; });
+      return { effort: settings.effort };
+    }
+  }
+  const bridge = new CodexAppServerSessionBridge(registry, new FakeCodexReasoningClient());
+  await bridge.sync();
+  const pending = bridge.updateReasoningEffort(registry.get(session.id), "high");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(registry.get(session.id).reasoningEffort, "medium");
+  confirm();
+  assert.equal(await pending, "high");
+  assert.equal(registry.get(session.id).reasoningEffort, "high");
+  shouldFail = true;
+  await assert.rejects(bridge.updateReasoningEffort(registry.get(session.id), "ultra"), /settings timeout/);
+  assert.equal(registry.get(session.id).reasoningEffort, "high");
+});
+
+test("Codex resume and fork preserve the session provider and model", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-model-resume-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const source = registry.start({
+    agent: "codex",
+    creationSource: "ai-session",
+    providerSessionId: "thread_model_source",
+    cwd: "/workspace",
+    status: "idle",
+    modelSelection: { modelEntityId: "mdl_secondary", modelName: "gpt-5.4" },
+    reasoningEffort: "xhigh",
+  });
+  class FakeCodexModelResumeClient extends EventEmitter {
+    constructor() { super(); this.calls = []; }
+    async start() {}
+    stop() {}
+    async listLoadedThreadIds() { return ["thread_model_source"]; }
+    async readThread() { return { id: "thread_model_source", cwd: "/workspace", status: { type: "idle" }, turns: [] }; }
+    async resumeThread(threadId, options) {
+      this.calls.push(["resume", threadId, options]);
+      return { id: threadId, cwd: "/workspace", model: options.model, modelProvider: options.modelProvider, reasoningEffort: options.reasoningEffort, status: { type: "idle" }, turns: [] };
+    }
+    threadForkCapabilities() { return { fullHistory: true, throughTurn: true }; }
+    async forkThread(options) {
+      this.calls.push(["fork", options]);
+      return { id: "thread_model_fork", cwd: options.cwd || "/workspace", model: options.model, modelProvider: options.modelProvider, reasoningEffort: options.reasoningEffort, status: { type: "idle" }, turns: [] };
+    }
+  }
+  const fake = new FakeCodexModelResumeClient();
+  const bridge = new CodexAppServerSessionBridge(registry, fake, {
+    resolveModelSelection: (selection) => ({ model: selection.modelName, modelProvider: codexProviderId(selection.modelEntityId) }),
+    projectModelSelection: (provider, model) => provider === codexProviderId("mdl_secondary")
+      ? { modelEntityId: "mdl_secondary", modelName: model }
+      : undefined,
+  });
+  await bridge.resumeSession(source.providerSessionId, source.modelSelection, source.reasoningEffort);
+  const forked = await bridge.forkSession({ source });
+  assert.deepEqual(fake.calls, [
+    ["resume", "thread_model_source", { model: "gpt-5.4", modelProvider: codexProviderId("mdl_secondary"), reasoningEffort: "xhigh" }],
+    ["fork", { threadId: "thread_model_source", model: "gpt-5.4", modelProvider: codexProviderId("mdl_secondary"), reasoningEffort: "xhigh" }],
+  ]);
+  assert.deepEqual(forked.modelSelection, source.modelSelection);
+  assert.equal(forked.reasoningEffort, "xhigh");
 });
 
 test("controlled instance materializes its selected Claude model in settings.json", () => {

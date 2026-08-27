@@ -1,4 +1,4 @@
-import type { AiSessionLineage, AiSessionStatus, AiSessionSubAgent, AiSessionTimelineItem } from "@task-handoff/protocol/ai-sessions";
+import { AiSessionReasoningEffortSchema, type AiSessionLineage, type AiSessionModelSelection, type AiSessionStatus, type AiSessionSubAgent, type AiSessionTimelineItem } from "@task-handoff/protocol/ai-sessions";
 import type { AiSessionRegistry } from "../../ai-session-registry";
 import { CodexSubAgentTracker, CodexToolActivityTracker } from "../protocol/activity";
 import { lifecycleForStatus } from "../protocol/status";
@@ -13,6 +13,7 @@ type ProjectorOptions = {
   attachApprovalLifecycle: (sessionId: string | undefined, lifecycle: ReturnType<typeof lifecycleForStatus>) => ReturnType<typeof lifecycleForStatus>;
   latestApprovalSummary: (sessionId: string) => string | undefined;
   threadForkSupported: () => boolean;
+  projectModelSelection?: (modelProvider: string, model: string) => AiSessionModelSelection | undefined;
   onMessageDelta?: (event: {
     sessionId: string;
     providerSessionId: string;
@@ -222,6 +223,10 @@ export class CodexAppServerSessionProjector {
       subAgents: activity.subAgents,
       status: sessionStatus,
       phase: lifecycle.phase,
+      modelSelection: typeof thread.model === "string" && typeof thread.modelProvider === "string"
+        ? this.options.projectModelSelection?.(thread.modelProvider, thread.model)
+        : existing?.modelSelection,
+      reasoningEffort: AiSessionReasoningEffortSchema.safeParse(thread.reasoningEffort).data || existing?.reasoningEffort,
       replaceActivity: true,
     });
   }

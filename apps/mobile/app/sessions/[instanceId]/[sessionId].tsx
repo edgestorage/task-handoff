@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { Alert, Pressable, StyleSheet } from 'react-native';
 import * as Crypto from 'expo-crypto';
@@ -16,6 +16,10 @@ import { SystemIcon } from '../../../src/components/SystemIcon';
 import { useI18n } from '../../../src/i18n';
 import { useTaskStatusSettings } from '../../../src/task-status/settings';
 import { useActiveTriggers } from '../../../src/triggers/use-active-triggers';
+import { deriveAiSessionModelGroups, type AiSessionCatalogModelEntity } from '@task-handoff/control-plane-client';
+import { directoryAiSessionProviderCapability } from '@task-handoff/protocol/control-plane-directory';
+import { createMobileControlPlaneClient } from '../../../src/control-plane/client';
+import { mobileProfileStore, mobileSecureStore } from '../../../src/control-plane/runtime';
 
 export default function SessionDetailRoute() {
   const params = useLocalSearchParams<{ instanceId: string; sessionId: string }>();
@@ -34,6 +38,7 @@ export default function SessionDetailRoute() {
     : undefined;
   const [detailMode, setDetailMode] = useState<SessionDetailMode>('turn');
   const [closing, setClosing] = useState(false);
+  const [modelEntities, setModelEntities] = useState<AiSessionCatalogModelEntity[]>([]);
   const defaultPermissionMode = instance?.config.defaultCodexPermissionMode;
   const markVisible = useCallback((sessionUpdatedAt: string) => {
     if (!client || !controlPlaneId || !session?.unread) return;
@@ -48,6 +53,24 @@ export default function SessionDetailRoute() {
     && trackedSession.instanceId === params.instanceId
     && trackedSession.sessionId === params.sessionId);
   const canTrack = session?.status === 'running' || session?.status === 'waiting';
+  const modelGroups = instance && session ? deriveAiSessionModelGroups({
+    entities: modelEntities,
+    assignment: instance.modelSelection,
+    agent: session.agent,
+    nodeId: instance.nodeId,
+    mode: 'existing',
+    currentSelection: session.modelSelection,
+    capability: directoryAiSessionProviderCapability(instance.capabilities, session.agent)?.modelSelection,
+  }) : [];
+  useEffect(() => {
+    const abort = new AbortController();
+    void mobileProfileStore.active().then(async (profile) => {
+      if (!profile || abort.signal.aborted) return;
+      const registry = await createMobileControlPlaneClient(profile, mobileSecureStore).api.resources.models(abort.signal);
+      if (!abort.signal.aborted) setModelEntities(registry.models.map((group) => ({ ...group.model, locations: group.locations })));
+    }).catch(() => { if (!abort.signal.aborted) setModelEntities([]); });
+    return () => abort.abort();
+  }, [controlPlaneId]);
   const liveActivityAction: MenuAction | undefined = taskStatus.available && taskStatus.loaded && !taskStatus.autoStart ? {
     id: 'live-activity',
     image: trackedHere ? 'waveform.slash' : 'waveform',
@@ -107,6 +130,7 @@ export default function SessionDetailRoute() {
     permissions={mobilePermissionStore}
     defaultPermissionMode={defaultPermissionMode}
     maxFileAttachmentBytes={instance?.config.aiSessionMaxFileAttachmentBytes}
+    modelGroups={modelGroups}
     detailMode={detailMode}
     instanceId={params.instanceId}
     instanceCapabilities={instance?.capabilities}

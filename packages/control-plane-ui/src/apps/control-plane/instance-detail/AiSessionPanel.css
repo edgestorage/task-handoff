@@ -2106,6 +2106,7 @@
     min-height: 26px;
     border-color: transparent;
     background: transparent;
+    box-shadow: none;
     color: var(--control-plane-icon-button-text);
     margin: 0;
     padding: 0;

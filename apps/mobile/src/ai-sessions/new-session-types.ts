@@ -1,4 +1,5 @@
-import type { AiSessionPermissionMode } from '@task-handoff/protocol/ai-sessions';
+import type { AiSessionModelSelection, AiSessionPermissionMode } from '@task-handoff/protocol/ai-sessions';
+import type { AiSessionModelGroup } from '@task-handoff/control-plane-client';
 import type { RepositoryAiSessionWorkspace } from '@task-handoff/protocol/repository';
 import type { ControlPlaneInstanceDirectoryEntry, ControlPlaneNodeDirectoryEntry } from '@task-handoff/protocol/control-plane-directory';
 import { controlPlaneLocalFolderDisplayName, type AiSessionPastedTextPresentation, type ControlPlaneNodeLocalFolder } from '@task-handoff/control-plane-client';
@@ -27,6 +28,8 @@ export type NewSessionFormProps = {
   workspaceLoading?: boolean;
   message: string;
   permissionMode: AiSessionPermissionMode;
+  modelGroups?: AiSessionModelGroup[];
+  modelSelection?: AiSessionModelSelection;
   busy: boolean;
   disabled: boolean;
   error?: string;
@@ -44,6 +47,7 @@ export type NewSessionFormProps = {
   onPasteText?(text: string): void;
   onRemoveAttachment(id: string): void;
   onPermissionModeChange(value: AiSessionPermissionMode): void;
+  onModelSelectionChange?(value: AiSessionModelSelection): void;
   onCreate(): void;
 };
 

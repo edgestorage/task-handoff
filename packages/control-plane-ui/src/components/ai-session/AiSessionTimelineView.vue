@@ -13,20 +13,21 @@
           v-for="message in turns[virtualTurn.index].userMessages"
           :key="message.id"
           class="ai-session-timeline-user-message"
+          data-role="user-message"
+          :data-message-id="message.id"
         >
+          <AiSessionMessageAttachments
+            v-if="message.attachments?.length && conversationSessionId"
+            :instance-id="instanceId"
+            :session-id="conversationSessionId"
+            :message-id="message.id"
+            :attachments="message.attachments"
+          />
           <article
+            v-if="message.text.trim()"
             class="ai-session-timeline-message"
-            data-role="user-message"
-            :data-message-id="message.id"
           >
             <MarkdownContent :content="message.text" :code-tools="markdownCodeTools" />
-            <AiSessionMessageAttachments
-              v-if="message.attachments?.length && conversationSessionId"
-              :instance-id="instanceId"
-              :session-id="conversationSessionId"
-              :message-id="message.id"
-              :attachments="message.attachments"
-            />
           </article>
           <footer class="ai-session-user-message-actions" :aria-label="t('sessions.timeline.turnActions')">
             <time
@@ -513,7 +514,7 @@ watch(() => turns.value.length, () => void nextTick(syncScrollElement));
   min-width: 0;
 }
 
-.ai-session-timeline-message[data-role="user-message"] {
+.ai-session-timeline-message {
   max-width: 100%;
   border-radius: 14px;
   background: var(--surface-hover);
@@ -529,6 +530,8 @@ watch(() => turns.value.length, () => void nextTick(syncScrollElement));
   align-items: center;
   margin-top: 8px;
   color: var(--text-muted);
+  font-size: 13px;
+  line-height: 20px;
   opacity: 0;
   pointer-events: none;
   transition: opacity 120ms ease;
@@ -545,6 +548,13 @@ watch(() => turns.value.length, () => void nextTick(syncScrollElement));
   height: 26px;
   padding: 0;
   color: inherit;
+}
+
+.ai-session-user-message-actions .ai-session-turn-time {
+  padding-inline: 6px;
+  font-size: 13px;
+  line-height: 20px;
+  white-space: nowrap;
 }
 
 @media (hover: none) {

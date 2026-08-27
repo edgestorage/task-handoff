@@ -25,7 +25,7 @@ type ControlledInstanceCreatorOptions = {
   resolveImageSelection: (selection: { imageId: string; tag?: string }) => SelectableImage;
   prepareModels: (
     node: Node,
-    selection: { codexModelHash?: string | null; claudeModelHash?: string | null; opencodeModelHash?: string | null },
+    selection: { modelEntityIds?: string[]; codexModelHash?: string | null; claudeModelHash?: string | null; opencodeModelHash?: string | null },
   ) => Promise<unknown>;
   gitCredentials: ControlPlaneGitCredentialService;
 };

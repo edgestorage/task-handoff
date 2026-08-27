@@ -3,7 +3,7 @@ import fs from "node:fs";
 import crypto from "node:crypto";
 import { Readable, Transform } from "node:stream";
 import { z } from "zod";
-import { AI_SESSION_ATTACHMENT_DRAFT_STREAM_CHUNK_BYTES, AI_SESSION_ATTACHMENT_UPLOAD_BODY_LIMIT, AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES, AiSessionApprovalInputSchema, AiSessionAttachmentDraftSchema, AiSessionAttachmentDraftStreamCreateInputSchema, AiSessionAttachmentDraftStreamOffsetSchema, AiSessionAttachmentDraftUploadQuerySchema, AiSessionCloseInputSchema, AiSessionCommandInputSchema, AiSessionCreateRefInputSchema, AiSessionForkInputSchema, AiSessionMentionFileSearchInputSchema, AiSessionMessageRefInputSchema, AiSessionOpenAppInputSchema, AiSessionQueueEditInputSchema, AiSessionQueueReorderInputSchema, AiSessionUnreadEventType, isAiSessionInlineImageMime } from "@task-handoff/protocol/ai-sessions";
+import { AI_SESSION_ATTACHMENT_DRAFT_STREAM_CHUNK_BYTES, AI_SESSION_ATTACHMENT_UPLOAD_BODY_LIMIT, AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES, AiSessionApprovalInputSchema, AiSessionAttachmentDraftSchema, AiSessionAttachmentDraftStreamCreateInputSchema, AiSessionAttachmentDraftStreamOffsetSchema, AiSessionAttachmentDraftUploadQuerySchema, AiSessionCloseInputSchema, AiSessionCommandInputSchema, AiSessionCreateRefInputSchema, AiSessionForkInputSchema, AiSessionMentionFileSearchInputSchema, AiSessionMessageRefInputSchema, AiSessionModelSelectionInputSchema, AiSessionOpenAppInputSchema, AiSessionQueueEditInputSchema, AiSessionQueueReorderInputSchema, AiSessionReasoningEffortInputSchema, AiSessionUnreadEventType, isAiSessionInlineImageMime } from "@task-handoff/protocol/ai-sessions";
 import type { ControlPlaneService } from "../application/service.ts";
 import type { ControlPlaneEventBus } from "../events/bus.ts";
 import type { ControlPlaneAiSessionAggregator } from "../sessions/ai-session-aggregator.ts";
@@ -458,6 +458,16 @@ export function registerSessionRoutes({
     const result = await service.forkAiSession(params.id, params.sessionId, parsed);
     events.publish("instance.ai-session.forked", { instanceId: params.id, sourceSessionId: params.sessionId, sessionId: result.aiSessionId, providerSessionId: result.providerSessionId, clientRequestId: parsed.clientRequestId });
     return { data: result };
+  });
+  app.put("/api/controlled-instances/:id/ai-sessions/:sessionId/model-selection", async (request) => {
+    const params = InstanceSessionParamsSchema.parse(request.params);
+    const parsed = AiSessionModelSelectionInputSchema.parse(request.body || {});
+    return { data: await service.updateAiSessionModelSelection(params.id, params.sessionId, parsed.clientRequestId, parsed.modelSelection) };
+  });
+  app.put("/api/controlled-instances/:id/ai-sessions/:sessionId/reasoning-effort", async (request) => {
+    const params = InstanceSessionParamsSchema.parse(request.params);
+    const parsed = AiSessionReasoningEffortInputSchema.parse(request.body || {});
+    return { data: await service.updateAiSessionReasoningEffort(params.id, params.sessionId, parsed.clientRequestId, parsed.reasoningEffort) };
   });
   app.post("/api/controlled-instances/:id/ai-sessions/:sessionId/close", async (request) => {
     const params = InstanceSessionParamsSchema.parse(request.params);

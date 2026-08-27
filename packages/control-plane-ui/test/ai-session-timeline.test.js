@@ -315,6 +315,7 @@ test("conversation Timeline composes every turn from the same compact result com
   const group = fs.readFileSync(new URL("../src/components/ai-session/AiSessionActivityGroup.vue", import.meta.url), "utf8");
   const history = fs.readFileSync(new URL("../src/components/ai-session/AiSessionTurnHistory.vue", import.meta.url), "utf8");
   const result = fs.readFileSync(new URL("../src/components/ai-session/AiSessionResult.vue", import.meta.url), "utf8");
+  const toolActivity = fs.readFileSync(new URL("../src/components/ai-session/AiSessionToolActivity.vue", import.meta.url), "utf8");
   const turnActions = fs.readFileSync(new URL("../src/components/ai-session/AiSessionTurnActions.vue", import.meta.url), "utf8");
   const conversation = fs.readFileSync(new URL("../src/components/ai-session/AiSessionConversationContent.vue", import.meta.url), "utf8");
   const streamingMarkdown = fs.readFileSync(new URL("../src/components/ai-session/AiSessionStreamingMarkdown.vue", import.meta.url), "utf8");
@@ -351,7 +352,7 @@ test("conversation Timeline composes every turn from the same compact result com
   assert.match(english, /processedUnavailable: "-"/);
   assert.match(chinese, /processedUnavailable: "-"/);
   assert.match(timeline, /\.ai-session-timeline-user-message \{[\s\S]*justify-self: end;[\s\S]*width: fit-content;[\s\S]*max-width: min\(78%, 620px\);/);
-  assert.match(timeline, /\.ai-session-timeline-message\[data-role="user-message"\] \{[\s\S]*border-radius: 14px;[\s\S]*background: var\(--surface-hover\);[\s\S]*padding: 12px 14px;/);
+  assert.match(timeline, /\.ai-session-timeline-message \{[\s\S]*border-radius: 14px;[\s\S]*background: var\(--surface-hover\);[\s\S]*padding: 12px 14px;/);
   assert.doesNotMatch(timeline, /\.ai-session-timeline-message\[data-role="ai-message"\] \{[\s\S]*padding-(?:top|bottom):/);
   assert.match(result, /\.ai-session-result \{[\s\S]*--detail-activity-gap: 16px;/);
   assert.match(result, /\.ai-session-result-detail \.ai-session-result-content \{[\s\S]*gap: 0;/);
@@ -438,6 +439,7 @@ test("conversation Timeline composes every turn from the same compact result com
     "subAgentActivity", "webSearch", "imageView", "sleep", "imageGeneration", "enteredReviewMode", "exitedReviewMode", "contextCompaction",
   ]) assert.match(group, new RegExp(`\\b${kind}:`));
   assert.match(group, /<ChevronRight v-if="!activityIcon\(activity\)" class="ai-session-activity-disclosure-icon"/);
+  assert.match(toolActivity, /\.ai-session-tool-activity-trigger > svg \{[^}]*color: var\(--text-muted\);/);
   assert.match(group, /<component :is="activityIcon\(activity\)" v-else class="ai-session-activity-kind-icon"/);
   assert.match(group, /sessions\.timeline\.commandStatus\.\$\{activity\.status \|\| "unknown"\}/);
   assert.match(group, /isCommandActivity\(activity\)[\s\S]*activity\.input\?\.trim\(\) \|\| ""/);

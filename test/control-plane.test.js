@@ -400,7 +400,7 @@ function testAppInventory(apps, observedAt = new Date().toISOString()) {
 }
 
 test("controlled instance heartbeat protocol rejects legacy receiver projection", () => {
-  assert.equal(CONTROL_PLANE_PROTOCOL_VERSION, "2026-08-23");
+  assert.equal(CONTROL_PLANE_PROTOCOL_VERSION, "2026-08-27");
   // Compatibility for v0.0.21: advancing the current protocol must not relax
   // the appInventory requirement of an already released wire version.
   assert.equal(ControlledInstanceHeartbeatSchema.safeParse({ protocolVersion: "2026-08-17" }).success, false);
@@ -11328,7 +11328,8 @@ test("control plane models deploy to the target node and instances store assignm
   assert.deepEqual(restartRequest.body, {});
 
   const deleteBoundModel = await json(app, "DELETE", `/api/models/${first.body.data.id}`);
-  assert.equal(deleteBoundModel.statusCode, 200);
+  assert.equal(deleteBoundModel.statusCode, 409);
+  assert.equal(deleteBoundModel.body.error.code, "MODEL_IN_USE");
 });
 
 test("control plane deletes an undeployed model without scanning an offline fleet", async (t) => {

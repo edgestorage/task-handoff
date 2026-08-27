@@ -142,6 +142,11 @@ ARG CODEX_CLI_PACKAGE=@openai/codex@latest
 RUN npm_config_update_notifier=false npm install -g --include=optional --no-audit --no-fund --loglevel=warn "$CODEX_CLI_PACKAGE" \
   && codex --version
 
+FROM runtime-core AS profile-opencode-root
+ARG OPENCODE_CLI_PACKAGE=opencode-ai@latest
+RUN npm_config_update_notifier=false npm install -g --include=optional --no-audit --no-fund --loglevel=warn "$OPENCODE_CLI_PACKAGE" \
+  && opencode --version
+
 FROM profile-codex-root AS profile-ai-root
 ARG CLAUDE_CODE_VERSION=2.1.183
 RUN set -eux; \
@@ -267,6 +272,28 @@ ENV TASK_HANDOFF_IMAGE_REF=${TASK_HANDOFF_IMAGE_REF}
 ENV TASK_HANDOFF_IMAGE_DIGEST=${TASK_HANDOFF_IMAGE_DIGEST}
 LABEL io.task-handoff.image.profile=codex
 LABEL io.task-handoff.image.capabilities=terminal,codex
+
+USER agent
+EXPOSE 8080
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD ["task-handoff-healthcheck"]
+ENTRYPOINT ["tini", "--", "task-handoff-entrypoint"]
+CMD ["task-handoff", "web"]
+
+FROM profile-opencode-root AS profile-opencode
+ARG TASK_HANDOFF_BUILD_ID=local
+ARG TASK_HANDOFF_BUILT_AT=unknown
+ARG TASK_HANDOFF_GIT_COMMIT=
+ARG TASK_HANDOFF_IMAGE_REF=task-handoff-controlled-opencode:local
+ARG TASK_HANDOFF_IMAGE_DIGEST=
+ENV TASK_HANDOFF_IMAGE_PROFILE=opencode
+ENV TASK_HANDOFF_IMAGE_CAPABILITIES=terminal,opencode
+ENV TASK_HANDOFF_BUILD_ID=${TASK_HANDOFF_BUILD_ID}
+ENV TASK_HANDOFF_BUILT_AT=${TASK_HANDOFF_BUILT_AT}
+ENV TASK_HANDOFF_GIT_COMMIT=${TASK_HANDOFF_GIT_COMMIT}
+ENV TASK_HANDOFF_IMAGE_REF=${TASK_HANDOFF_IMAGE_REF}
+ENV TASK_HANDOFF_IMAGE_DIGEST=${TASK_HANDOFF_IMAGE_DIGEST}
+LABEL io.task-handoff.image.profile=opencode
+LABEL io.task-handoff.image.capabilities=terminal,opencode
 
 USER agent
 EXPOSE 8080
