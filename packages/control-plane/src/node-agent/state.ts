@@ -619,6 +619,8 @@ export class NodeAgentState {
       capabilities: {},
       config: {
         autoImportAgentConfigs: input.config?.autoImportAgentConfigs ?? true,
+        codexConfigEnabled: input.config?.codexConfigEnabled ?? true,
+        codexHomeMode: input.config?.codexHomeMode ?? (runtime.type === "local" ? "taskhandoff" : "default"),
         defaultCodexPermissionMode: input.config?.defaultCodexPermissionMode ?? (runtime.type === "docker" ? "full-access" : "ask"),
         aiSessionHistoryLimit: input.config?.aiSessionHistoryLimit ?? AI_SESSION_HISTORY_DEFAULT_LIMIT,
         aiSessionAttachmentRetentionDays: input.config?.aiSessionAttachmentRetentionDays ?? 30,
@@ -820,12 +822,13 @@ export class NodeAgentState {
   }
 
   context(instance: ControlledInstance, modelEnv: Record<string, string> = this.resolvedAssignedModelEnvironment(instance.id)): ExecutorContext {
+    const effectiveModelEnv = modelEnv;
     const image = instance.imageSnapshot || InstanceImageSnapshotSchema.parse({ id: "img_localhost", origin: "custom", name: "Localhost", repository: "localhost", tag: "local", requestedReference: "localhost:local", pullPolicy: "if-not-present", capabilities: [], optionalApps: [], defaultEnv: {}, labels: {}, createdAt: instance.createdAt, updatedAt: instance.updatedAt });
     const existingPrivateConfig = this.instancePrivateConfigs.get(instance.id);
     const privateConfig = this.instancePrivateConfigs.materialize(
       instance.id,
       instance.registrationToken,
-      modelEnv,
+      effectiveModelEnv,
       this.modelRegistry.privateCatalog(instance.id),
     );
     const gitWorkspaceProvisioning = this.gitWorkspaceProvisioningFor(instance);
@@ -836,7 +839,7 @@ export class NodeAgentState {
       runtime: this.requireRuntime(instance.runtimeId),
       instance,
       nodeAgentUrl: this.containerUrl,
-      modelEnv,
+      modelEnv: effectiveModelEnv,
       privateConfigPath: this.instancePrivateConfigs.filePath(privateConfig.instanceId),
       ...(gitWorkspaceProvisioning ? {
         gitWorkspaceProvisioning,

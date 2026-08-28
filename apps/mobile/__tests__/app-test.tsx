@@ -76,6 +76,35 @@ describe('<InboxRoute />', () => {
     ]);
   });
 
+  test('failed session cards preview the authoritative error without expanding the list', async () => {
+    const failedSnapshot = ControlPlaneAiSessionsSchema.parse({
+      updatedAt: '2026-08-05T00:02:00.000Z',
+      instances: [{
+        instanceId: 'instance-1',
+        revision: 1,
+        streamId: 'stream-1',
+        aiSessions: {
+          updatedAt: '2026-08-05T00:02:00.000Z',
+          sessions: [{
+            id: 'failed',
+            agent: 'codex',
+            error: 'Provider rejected the request: invalid authentication token.',
+            phase: 'unknown',
+            startedAt: '2026-08-05T00:00:00.000Z',
+            status: 'failed',
+            updatedAt: '2026-08-05T00:02:00.000Z',
+          }],
+        },
+      }],
+    });
+    const screen = await render(
+      <AiSessionInbox state={{ controlPlaneId: 'cp-1', messages: {}, snapshot: failedSnapshot, sync: { phase: 'ready' } }} />,
+    );
+
+    expect(screen.getByText('Provider rejected the request: invalid authentication token.').props.numberOfLines).toBe(3);
+    expect(screen.queryByText('Session failed. Open the desktop app for diagnostic details.')).toBeNull();
+  });
+
   test('pulling the inbox refreshes its authoritative snapshot and clears the indicator', async () => {
     const onRefresh = jest.fn().mockResolvedValue(undefined);
     const screen = await render(

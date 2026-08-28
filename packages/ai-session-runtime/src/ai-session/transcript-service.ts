@@ -86,28 +86,6 @@ function maxIso(lhs: string, rhs: string) {
   return Date.parse(lhs) >= Date.parse(rhs) ? lhs : rhs;
 }
 
-function progressPatch(text: string, kind?: "user" | "assistant" | "tool") {
-  const summary = compact(text, 1000);
-  if (kind === "user") {
-    return { userPrompt: messageText(text) };
-  }
-  if (kind === "assistant") {
-    return { status: "running" as const, phase: "responding" as const, summary };
-  }
-  if (/approval|permission|approve|deny/i.test(summary)) {
-    return { status: "waiting" as const, phase: "approval" as const, summary, counters: { approvals: 1 } };
-  }
-  if (/^Editing\b|Finished editing\b|Edit failed/i.test(summary)) {
-    return { status: "running" as const, phase: "editing" as const, summary, counters: { edits: 1 } };
-  }
-  if (/^Tool\b|^Running\b|^Finished\b|^Failed\b/i.test(summary)) {
-    return { status: "running" as const, phase: "tool" as const, summary, counters: { toolCalls: 1 } };
-  }
-  return summary
-    ? { status: "running" as const, phase: "responding" as const, summary }
-    : {};
-}
-
 export function resolveAiSessionTranscript(
   agent: string,
   providerSessionId?: string,
@@ -171,6 +149,7 @@ export class AiSessionTranscriptService {
         backfill.turns = updateTurns(backfill.turns, { activeTurnId: state.activeTurnId, userPrompt }, timestamp);
         continue;
       }
+      if (summary.kind !== "assistant") continue;
       backfill.summary = compact(summary.text, 1000);
       backfill.lastMessage = messageText(summary.text);
       backfill.turns = updateTurns(backfill.turns, {
@@ -223,18 +202,7 @@ export class AiSessionTranscriptService {
         source: "transcript-tail",
       });
     }
-    const patch = progressPatch(summary.text, summary.kind);
-    return registry.applyRealtimeEvent(id, {
-      kind: patch.status === "waiting" ? "approval-requested" : "assistant-message",
-      activeTurnId: state.activeTurnId,
-      providerTurnId: state.activeTurnId,
-      text: patch.summary || summary.text,
-      status: patch.status,
-      phase: patch.phase,
-      counters: patch.counters,
-      observedAt: timestamp,
-      source: "transcript-tail",
-    });
+    return registry.get(id);
   }
 
   createFromTranscript(

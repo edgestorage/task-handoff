@@ -86,6 +86,65 @@ test('detail preserves turn and streaming message identity order', () => {
   expect(items[1]).toEqual(expect.objectContaining({ streamKey: 'turn-1:item-1', streaming: true }));
 });
 
+test('failed detail displays the authoritative session error', () => {
+  const failedSession = ControlPlaneAiSessionSummarySchema.parse({
+    ...session,
+    currentTool: undefined,
+    error: 'Provider rejected the request: invalid authentication token.',
+    status: 'failed',
+    subAgents: [],
+    turns: [{ ...session.turns![0], status: 'failed' }],
+  });
+
+  expect(detailItems(failedSession, []).at(-1)).toEqual(expect.objectContaining({
+    role: 'error',
+    text: 'Provider rejected the request: invalid authentication token.',
+  }));
+});
+
+test('failed detail keeps a localized fallback for older producers without an error', () => {
+  const failedSession = ControlPlaneAiSessionSummarySchema.parse({
+    ...session,
+    currentTool: undefined,
+    status: 'failed',
+    subAgents: [],
+    turns: [{ ...session.turns![0], status: 'failed' }],
+  });
+
+  expect(detailItems(failedSession, []).at(-1)).toEqual(expect.objectContaining({
+    role: 'error',
+    text: 'Session failed. No diagnostic details were provided.',
+  }));
+});
+
+test('retryable Codex errors render as warnings until normal progress clears them', () => {
+  const timeline = {
+    'turn-1': {
+      status: 'ready' as const,
+      items: [{
+        id: 'codex_retry:turn-1',
+        turnId: 'turn-1',
+        type: 'activity' as const,
+        activityKind: 'codexRetry',
+        title: 'Codex retry',
+        status: 'waiting' as const,
+        summary: 'Reconnecting to the model stream',
+      }],
+    },
+  };
+  expect(detailItems(session, [], undefined, undefined, timeline, true).find((item) => item.role === 'warning')).toEqual(expect.objectContaining({
+    text: 'Reconnecting to the model stream',
+  }));
+
+  const recovered = {
+    'turn-1': {
+      ...timeline['turn-1'],
+      items: [{ ...timeline['turn-1'].items[0], status: 'completed' as const }],
+    },
+  };
+  expect(detailItems(session, [], undefined, undefined, recovered, true).some((item) => item.role === 'warning')).toBe(false);
+});
+
 test('short detail content does not force a full viewport scroll range', async () => {
   const shortSession = ControlPlaneAiSessionSummarySchema.parse({
     ...session,

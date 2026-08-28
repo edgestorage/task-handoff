@@ -373,11 +373,12 @@ export function reduceAiSessionRealtime(
   }
   if (event.kind === "turn-completed") {
     const error = event.error ? compact(event.error, 4000) : undefined;
-    const responseText = event.text || event.summary || (event.status === "failed" ? error : undefined);
+    const responseText = event.text || event.summary;
     return applyAiSessionPatch(current, {
       activeTurnId: !event.activeTurnId || event.activeTurnId === current.activeTurnId ? undefined : current.activeTurnId,
       status: event.status || "idle",
       phase: event.phase || "unknown",
+      completedAt: event.observedAt || updatedAt,
       summary: responseText,
       lastMessage: responseText,
       error,

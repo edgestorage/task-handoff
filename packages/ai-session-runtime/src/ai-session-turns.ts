@@ -359,8 +359,18 @@ export type TurnUpdatePatch = {
   summary?: AiSessionStatus["summary"];
   lastMessage?: AiSessionStatus["lastMessage"];
   lastMessageItemId?: AiSessionStatus["lastMessageItemId"];
+  completedAt?: AiSessionStatus["completedAt"];
   userMessage?: AiSessionUserMessageDetail;
 };
+
+function turnStatusFromSessionStatus(
+  status: AiSessionStatus["status"] | undefined,
+  fallback: NonNullable<AiSessionStatus["turns"]>[number]["status"] = "running",
+) {
+  if (status === "idle") return "completed";
+  if (status === "waiting" || status === "failed" || status === "running") return status;
+  return fallback;
+}
 
 export function updateTurns(
   current: AiSessionStatus["turns"],
@@ -386,13 +396,13 @@ export function updateTurns(
       }
       promptTurn.userPrompt = prompt;
       promptTurn.updatedAt = updatedAt;
-      promptTurn.status = patch.status === "waiting" ? "waiting" : "running";
+      promptTurn.status = turnStatusFromSessionStatus(patch.status);
       promptTurn.phase = (patch.phase as AiSessionPhase | undefined) || promptTurn.phase || "thinking";
       Object.assign(promptTurn, meta);
       promptTurn.revision += 1;
     } else if (last && !last.lastMessage && !last.summary && last.userPrompt === prompt) {
       last.updatedAt = updatedAt;
-      last.status = patch.status === "waiting" ? "waiting" : "running";
+      last.status = turnStatusFromSessionStatus(patch.status);
       last.phase = (patch.phase as AiSessionPhase | undefined) || last.phase || "thinking";
       Object.assign(last, meta);
       last.revision += 1;
@@ -401,7 +411,7 @@ export function updateTurns(
         id: activeTurnId || stableGeneratedTurnId(prompt, updatedAt),
         ...meta,
         userPrompt: prompt,
-        status: patch.status === "waiting" ? "waiting" : "running",
+        status: turnStatusFromSessionStatus(patch.status),
         phase: (patch.phase as AiSessionPhase | undefined) || "thinking",
         revision: 0,
         startedAt: updatedAt,
@@ -459,7 +469,7 @@ export function updateTurns(
       status: patch.status === "idle" ? "completed" : patch.status === "waiting" ? "waiting" : patch.status === "failed" ? "failed" : last?.status || "running",
       phase: (patch.phase as AiSessionPhase | undefined) || last?.phase,
       updatedAt,
-      completedAt: patch.status === "idle" || patch.status === "failed" ? updatedAt : last?.completedAt,
+      completedAt: patch.completedAt || (patch.status === "idle" || patch.status === "failed" ? updatedAt : last?.completedAt),
       ...meta,
     };
     if (last) {
@@ -486,16 +496,14 @@ export function updateTurns(
         startedAt: updatedAt,
       });
     }
-  } else if ((patch.status || patch.phase) && activeTurnId) {
-    const last = turns.find((turn) => turn.id === activeTurnId);
+  } else if (patch.status || patch.phase) {
+    const last = activeTurnId
+      ? turns.find((turn) => turn.id === activeTurnId)
+      : patch.status === "idle" || patch.status === "failed"
+        ? turns.at(-1)
+        : undefined;
     if (last) {
-      const status = patch.status === "idle"
-        ? "completed"
-        : patch.status === "waiting"
-          ? "waiting"
-          : patch.status === "failed"
-            ? "failed"
-            : last.status;
+      const status = turnStatusFromSessionStatus(patch.status, last.status);
       const phase = (patch.phase as AiSessionPhase | undefined) || last.phase;
       const completedAt = patch.status === "idle" || patch.status === "failed" ? updatedAt : last.completedAt;
       const changed = last.status !== status || last.phase !== phase || last.completedAt !== completedAt;

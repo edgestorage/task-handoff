@@ -15361,6 +15361,24 @@ test("control plane ai session delivery keeps response content inside the latest
   assert.equal(aiSessionDeliveryText(session, "instance-main · claude completed"), "instance-main · claude completed\nsecond answer");
 });
 
+test("control plane ai session delivery reports a failed turn without an assistant response", () => {
+  const session = {
+    id: "ais_failed",
+    agent: "codex",
+    status: "failed",
+    phase: "unknown",
+    error: "Provider rejected the selected model.",
+    turns: [{ id: "turn_failed", userPrompt: "Run it", status: "failed", revision: 1 }],
+    startedAt: "2026-08-29T00:00:00.000Z",
+    updatedAt: "2026-08-29T00:00:01.000Z",
+  };
+
+  assert.equal(
+    aiSessionDeliveryText(session, "instance-main · codex failed"),
+    "instance-main · codex failed\ncodex session failed:\nProvider rejected the selected model.",
+  );
+});
+
 test("control plane ai session delivery appends authoritative tool activity after the latest response", () => {
   const session = {
     id: "ais_tool_progress",

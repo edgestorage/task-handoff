@@ -48,6 +48,14 @@ test("AI session details render messages without redundant section titles", () =
   for (const detail of [panel, floatingDock]) assert.doesNotMatch(detail, /message-section-title|response-section-title/);
 });
 
+test("AI session errors render as a semantic block outside assistant responses", () => {
+  assert.match(conversation, /v-if="showSessionError" class="ai-session-conversation-error" role="alert"/);
+  assert.match(conversation, /session\.error \|\| t\("sessions\.detail\.noErrorDetail"\)/);
+  assert.match(conversation, /props\.session\.status === "failed"[\s\S]*?props\.mode === "full"[\s\S]*?props\.promptIndex >= props\.promptCount - 1/);
+  assert.match(conversation, /\.ai-session-conversation-error \{[\s\S]*?background: var\(--status-danger-bg\);[\s\S]*?border: 1px solid var\(--status-danger-border\);/);
+  assert.match(displayHelpers, /if \(session\.error\) \{\s*return includeProgress \? session\.error : "";/);
+});
+
 test("details count retained turns while cards consume bounded summary counts", () => {
   assert.match(panel, /const conversation = selectedConversationSession\.value\?\.id === session\.id[\s\S]*?conversation\.turns \? aiSessionTurns\(conversation\)\.length : conversation\.turnCount \?\? 0;/);
   assert.match(board, /return session\.turnCount \?\? aiSessionTurns\(session\)\.length;/);

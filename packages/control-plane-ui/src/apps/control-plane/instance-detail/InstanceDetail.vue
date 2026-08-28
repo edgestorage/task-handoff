@@ -278,7 +278,7 @@ defineEmits<{
   openAiSessionApp: [instance: InstanceBoardItem, session?: AiSessionSummary];
   openRepositoryWorkspace: [target: RepositoryWorkspaceTabTarget];
   openWindow: [instance: InstanceBoardItem];
-  openSettings: [instanceId: string, section?: "general" | "models" | "apps"];
+  openSettings: [instanceId: string, section?: "general" | "ai" | "models" | "apps"];
   openUrl: [url: string];
   runAction: [action: InstanceAction, instance: InstanceBoardItem];
   selectAiSession: [instanceId: string, sessionId: string];

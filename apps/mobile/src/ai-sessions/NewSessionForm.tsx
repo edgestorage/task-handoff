@@ -8,6 +8,7 @@ import { AnchoredSelectMenu, type AnchoredSelectOption } from '../components/Anc
 import { Screen } from '../components/Screen';
 import { SystemIcon } from '../components/SystemIcon';
 import { useMobileTheme } from '../components/theme';
+import { mobileWebType } from '../components/mobile-web-typography';
 import { useI18n } from '../i18n';
 import {
   SESSION_COMPOSER_ACTION_ICON_SIZE,
@@ -15,14 +16,24 @@ import {
   SESSION_COMPOSER_ACTION_SIZE,
   SESSION_COMPOSER_ATTACHMENT_ICON_SIZE,
   SESSION_COMPOSER_EXPANDED_RADIUS,
+  SESSION_COMPOSER_MODEL_MAX_WIDTH,
+  SESSION_COMPOSER_PERMISSION_CHEVRON_RIGHT,
+  SESSION_COMPOSER_PERMISSION_CHEVRON_SIZE,
+  SESSION_COMPOSER_PERMISSION_HEIGHT,
+  SESSION_COMPOSER_PERMISSION_ICON_LEFT,
+  SESSION_COMPOSER_PERMISSION_ICON_SLOT_SIZE,
+  SESSION_COMPOSER_PERMISSION_RADIUS,
+  SESSION_COMPOSER_PERMISSION_TEXT_LEFT,
+  SESSION_COMPOSER_PERMISSION_TEXT_RIGHT,
   SESSION_COMPOSER_TOOL_SIZE,
+  SESSION_COMPOSER_TRAILING_TOOL_GAP,
   SESSION_COMPOSER_TOOLBAR_HEIGHT,
   sessionComposerPermissionIconSize,
 } from './composer-metrics';
 import type { NewSessionFormProps } from './new-session-types';
 import { NewSessionBranchPicker } from './NewSessionBranchPicker';
 import { NewSessionContextMenu } from './NewSessionContextMenu';
-import { AttachmentMenu } from './SessionComposerMenus';
+import { AttachmentMenu, ModelSettingsMenu } from './SessionComposerMenus';
 import { formatMobileAttachmentBytes, formatMobileTextLength } from './attachments';
 
 export function NewSessionForm(props: NewSessionFormProps) {
@@ -50,13 +61,7 @@ export function NewSessionForm(props: NewSessionFormProps) {
       value: branch.name,
     }));
   const selectedBranchLabel = branchOptions.find((option) => option.value === props.selectedBranch)?.label || props.selectedBranch || t('sessions.selectBranch');
-  const modelOptions: AnchoredSelectOption[] = (props.modelGroups || []).flatMap((group) => group.models.map((model) => ({
-    label: model.modelName,
-    description: group.providerName,
-    systemImage: 'sparkles' as const,
-    value: JSON.stringify({ modelEntityId: model.modelEntityId, modelName: model.modelName }),
-  })));
-  const selectedModelValue = props.modelSelection ? JSON.stringify(props.modelSelection) : '';
+  const modelGroups = props.modelGroups || [];
 
   return <KeyboardAvoidingView behavior={newSessionKeyboardAvoidingBehavior(Platform.OS)} style={styles.screen} testID="new-session-keyboard-area">
     <Screen
@@ -126,7 +131,7 @@ export function NewSessionForm(props: NewSessionFormProps) {
           </View>)}
         </View> : null}
 
-        <View style={styles.toolbar}>
+        <View style={styles.toolbar} testID="new-session-composer-toolbar">
           <View style={styles.leadingTools}>
             <AttachmentMenu
               cancelLabel={t('common.cancel')}
@@ -156,12 +161,12 @@ export function NewSessionForm(props: NewSessionFormProps) {
             {props.selectedAgent === 'codex' ? <PermissionButton disabled={props.busy} mode={props.permissionMode} onChange={props.onPermissionModeChange} /> : null}
           </View>
           <View style={styles.trailingTools}>
-            {modelOptions.length ? <AnchoredSelectMenu cancelLabel={t('common.cancel')} disabled={props.busy} onSelect={(value) => props.onModelSelectionChange?.(JSON.parse(value))} options={modelOptions} selectedValue={selectedModelValue} title={t('sessions.model')}>
+            {modelGroups.length || props.reasoningEffortEnabled ? <ModelSettingsMenu provider={props.selectedAgent} cancelLabel={t('common.cancel')} disabled={props.busy} formatModelGroupSummary={(model, count) => t('sessions.modelGroupSummary', { model, count })} modelGroups={modelGroups} modelSelection={props.modelSelection} onModelChange={(selection) => props.onModelSelectionChange?.(selection)} onReasoningChange={(effort) => props.onReasoningEffortChange?.(effort)} reasoningEffort={props.reasoningEffort} reasoningEnabled={Boolean(props.reasoningEffortEnabled)} reasoningTitle={t('sessions.reasoningEffort')} title={t('sessions.model')}>
               {(onPress) => <Pressable accessibilityLabel={props.modelSelection?.modelName || t('sessions.model')} accessibilityRole="button" disabled={props.busy} onPress={onPress} style={({ pressed }) => [styles.modelButton, pressed && styles.pressed]}>
                 <Text numberOfLines={1} style={[styles.modelLabel, { color: colors.textMuted }]}>{props.modelSelection?.modelName || t('sessions.model')}</Text>
                 <SystemIcon android="expand_more" color={colors.textMuted} ios="chevron.down" size={10} />
               </Pressable>}
-            </AnchoredSelectMenu> : null}
+            </ModelSettingsMenu> : null}
             <Pressable
               accessibilityLabel={props.busy ? t('sessions.creating') : t('sessions.create')}
               accessibilityRole="button"
@@ -185,7 +190,7 @@ export function newSessionInstanceOptions(instances: readonly ControlPlaneInstan
   return instances.map((instance) => ({ label: instance.name, description: nodeNames.get(instance.nodeId) || instance.nodeId, systemImage: 'server.rack', value: instance.id }));
 }
 
-function ContextPill({ disabled, icon, label, onPress }: { disabled?: boolean; icon: { android: 'dns' | 'auto_awesome' | 'folder' | 'account_tree'; ios: 'server.rack' | 'sparkles' | 'folder' | 'arrow.triangle.branch' }; label: string; onPress?: () => void }) {
+function ContextPill({ disabled, icon, label, onPress }: { disabled?: boolean; icon: { android: 'dns' | 'auto_awesome' | 'folder' | 'account_tree' | 'psychology'; ios: 'server.rack' | 'sparkles' | 'folder' | 'arrow.triangle.branch' | 'brain' }; label: string; onPress?: () => void }) {
   const { colors } = useMobileTheme();
   return <Pressable accessibilityLabel={label} accessibilityRole="button" accessibilityState={{ disabled: Boolean(disabled) }} disabled={disabled} onPress={onPress} style={({ pressed }) => [styles.contextPill, { backgroundColor: colors.surfaceMuted }, disabled && styles.disabled, pressed && styles.pressed]}>
     <SystemIcon android={icon.android} color={colors.textMuted} ios={icon.ios} size={15} />
@@ -205,10 +210,14 @@ function PermissionButton({ disabled, mode, onChange }: { disabled?: boolean; mo
   const selected = options.find((option) => option.value === mode) || options[0];
   const PermissionIcon = mode === 'ask' ? Hand : mode === 'auto-review' ? ShieldCheck : ShieldAlert;
   return <AnchoredSelectMenu cancelLabel={t('common.cancel')} disabled={disabled} onSelect={onChange} options={options} selectedValue={mode} title={t('sessions.permission')}>
-    {(onPress) => <Pressable accessibilityLabel={t('composer.permissionModeValue', { mode: selected.label })} accessibilityRole="button" accessibilityState={{ disabled: Boolean(disabled) }} disabled={disabled} onPress={onPress} style={({ pressed }) => [styles.permissionButton, disabled && styles.disabled, pressed && styles.pressed]}>
-      <PermissionIcon color={selected.danger ? colors.error : colors.textMuted} size={sessionComposerPermissionIconSize(mode)} strokeWidth={1.8} />
+    {(onPress) => <Pressable accessibilityLabel={t('composer.permissionModeValue', { mode: selected.label })} accessibilityRole="button" accessibilityState={{ disabled: Boolean(disabled) }} disabled={disabled} onPress={onPress} style={({ pressed }) => [styles.permissionButton, disabled && styles.disabled, pressed && styles.pressed]} testID="new-session-permission-button">
+      <View style={styles.permissionIconSlot}>
+        <PermissionIcon color={selected.danger ? colors.error : colors.textMuted} size={sessionComposerPermissionIconSize(mode)} strokeWidth={1.8} />
+      </View>
       <Text style={[styles.permissionLabel, { color: selected.danger ? colors.error : colors.textMuted }]}>{selected.label}</Text>
-      <SystemIcon android="expand_more" color={colors.textMuted} ios="chevron.down" size={10} />
+      <View style={styles.permissionChevron}>
+        <SystemIcon android="expand_more" color={colors.textMuted} ios="chevron.down" size={SESSION_COMPOSER_PERMISSION_CHEVRON_SIZE} />
+      </View>
     </Pressable>}
   </AnchoredSelectMenu>;
 }
@@ -235,14 +244,16 @@ const styles = StyleSheet.create({
   contextLabel: { flexShrink: 1, fontSize: 14, fontWeight: '600', lineHeight: 20 },
   promptWrapper: { flex: 1, minHeight: 176 },
   prompt: { flex: 1, fontSize: 16, lineHeight: 24, paddingHorizontal: 4, paddingVertical: 16, textAlignVertical: 'top' },
-  toolbar: { alignItems: 'center', flexDirection: 'row', height: SESSION_COMPOSER_TOOLBAR_HEIGHT, justifyContent: 'space-between', marginHorizontal: -6, paddingBottom: 6 },
+  toolbar: { alignItems: 'center', flexDirection: 'row', height: SESSION_COMPOSER_TOOLBAR_HEIGHT, justifyContent: 'space-between', marginHorizontal: -6 },
   leadingTools: { alignItems: 'center', flexDirection: 'row' },
-  trailingTools: { alignItems: 'center', flexDirection: 'row', gap: 4, minWidth: 0 },
-  modelButton: { alignItems: 'center', flexDirection: 'row', gap: 4, maxWidth: 150, minHeight: 40, paddingHorizontal: 6 },
-  modelLabel: { flexShrink: 1, fontSize: 12, fontWeight: '500', lineHeight: 17 },
+  trailingTools: { alignItems: 'center', flexDirection: 'row', gap: SESSION_COMPOSER_TRAILING_TOOL_GAP, minWidth: 0 },
+  modelButton: { alignItems: 'center', flexDirection: 'row', gap: SESSION_COMPOSER_TRAILING_TOOL_GAP, maxWidth: SESSION_COMPOSER_MODEL_MAX_WIDTH, minHeight: SESSION_COMPOSER_TOOL_SIZE, paddingHorizontal: 5 },
+  modelLabel: { flexShrink: 1, fontSize: mobileWebType.meta, fontWeight: '500' },
   toolButton: { alignItems: 'center', height: SESSION_COMPOSER_TOOL_SIZE, justifyContent: 'center', width: SESSION_COMPOSER_TOOL_SIZE },
-  permissionButton: { alignItems: 'center', flexDirection: 'row', gap: 7, minHeight: 40, paddingHorizontal: 4 },
-  permissionLabel: { fontSize: 13, fontWeight: '600', lineHeight: 18 },
+  permissionButton: { alignItems: 'center', borderRadius: SESSION_COMPOSER_PERMISSION_RADIUS, flexDirection: 'row', height: SESSION_COMPOSER_PERMISSION_HEIGHT },
+  permissionIconSlot: { alignItems: 'center', height: SESSION_COMPOSER_PERMISSION_ICON_SLOT_SIZE, justifyContent: 'center', left: SESSION_COMPOSER_PERMISSION_ICON_LEFT, position: 'absolute', width: SESSION_COMPOSER_PERMISSION_ICON_SLOT_SIZE },
+  permissionLabel: { fontSize: mobileWebType.meta, fontWeight: '600', marginLeft: SESSION_COMPOSER_PERMISSION_TEXT_LEFT, marginRight: SESSION_COMPOSER_PERMISSION_TEXT_RIGHT },
+  permissionChevron: { alignItems: 'center', height: SESSION_COMPOSER_PERMISSION_ICON_SLOT_SIZE, justifyContent: 'center', position: 'absolute', right: SESSION_COMPOSER_PERMISSION_CHEVRON_RIGHT, width: SESSION_COMPOSER_PERMISSION_CHEVRON_SIZE },
   sendButton: { alignItems: 'center', borderRadius: SESSION_COMPOSER_ACTION_RADIUS, height: SESSION_COMPOSER_ACTION_SIZE, justifyContent: 'center', width: SESSION_COMPOSER_ACTION_SIZE },
   attachments: { gap: 6 },
   attachment: { alignItems: 'center', borderRadius: 10, flexDirection: 'row', gap: 8, paddingHorizontal: 10, paddingVertical: 8 },

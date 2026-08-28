@@ -35,7 +35,7 @@ export const sessions = {
   detail: {
     selected: "Selected AI session", sessionDetails: "Session details", workspace: "Workspace", session: "Session", appBinding: "App binding", forkedFrom: "Forked from", unknown: "Unknown",
     notBound: "Not bound", collapse: "Collapse details", expand: "Expand", collapsePrompt: "Collapse",
-    noSelected: "No AI session selected", loading: "Loading session details…", loadFailed: "Failed to load session details.", retry: "Retry",
+    noSelected: "No AI session selected", loading: "Loading session details…", loadFailed: "Failed to load session details.", retry: "Retry", retryWarning: "Temporary connection issue", sessionError: "Session error", noErrorDetail: "Session failed. No diagnostic details were provided.",
   },
   markdown: {
     copied: "Copied",
@@ -64,7 +64,7 @@ export const sessions = {
     plugins: "Plugins", skills: "Skills", files: "Files", directories: "Directories", apps: "Apps", stopTurn: "Stop current AI turn", send: "Send message", sending: "Sending…", stopping: "Stopping…", editingQueuedMessage: "Editing queued message", saveQueuedMessage: "Save queued message", saving: "Saving…", cancelQueuedEdit: "Cancel queued message editing",
     askDescription: "Ask before accessing the internet or editing files outside the workspace.", autoReviewDescription: "Only ask for actions detected as potentially unsafe.",
     fullAccessDescription: "Unrestricted internet and file access without approval.", localPath: "Local path", removeAttachment: "Remove attachment", previewImage: "Preview {name}", zoomIn: "Zoom in", zoomOut: "Zoom out", copyImage: "Copy image", imageCopied: "Image copied", copyImageFailed: "Could not copy the image.", uploadProgress: "Uploading: {progress}%", blankPastedText: "Blank text", textLength: "{count} characters", followUp: "Ask for follow-up changes",
-    noMatches: "No matches", commands: "Commands", loading: "Loading...", openCommands: "Open command menu", permissionMode: "Permission mode: {mode}", choosePermission: "Choose permission mode", modelSelectionTitle: "Model: {model}", modelSelectionUnavailable: "Model switching is unavailable for this session", reasoningEffort: "Reasoning effort",
+    noMatches: "No matches", commands: "Commands", loading: "Loading...", openCommands: "Open command menu", permissionMode: "Permission mode: {mode}", choosePermission: "Choose permission mode", modelSelectionTitle: "Model: {model}", modelSelectionUnavailable: "Model switching is unavailable for this session", modelGroupSummary: "{model} and {count} models", reasoningEffort: "Reasoning effort",
     steerTurn: "Steer current AI turn", steerTurnShortcut: "Steer current AI turn (Ctrl+Enter)", availableIdle: "available when idle", review: "Review uncommitted changes", rename: "Rename the current thread", goal: "Set or view the long-running goal",
     compact: "Summarize conversation context", threadName: "thread name", objective: "objective",
     supportedImages: "Only PNG, JPG, WEBP, GIF, and BMP images are supported.", emptyFile: "Empty files cannot be attached.", imageTooLarge: "An image cannot exceed 20 MB.",

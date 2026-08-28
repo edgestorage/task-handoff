@@ -1445,7 +1445,7 @@ function errorText(error: unknown) {
   display: grid;
   grid-template-columns: minmax(280px, 0.78fr) minmax(0, 1.22fr);
   align-items: start;
-  gap: 12px;
+  gap: 18px;
   height: 100%;
   min-height: 0;
   overflow: hidden;
@@ -1459,23 +1459,34 @@ function errorText(error: unknown) {
   min-height: 0;
   max-height: 100%;
   overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
 }
 
 .node-list-panel {
   grid-template-rows: auto auto minmax(0, 1fr);
+  gap: 10px;
+}
+
+.node-list-panel > .section-head > span {
+  font-weight: 500;
 }
 
 .node-list {
   min-height: 0;
-  padding-right: 2px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  overflow: hidden;
 }
 
 .settings-scroll-content {
   display: grid;
   align-content: start;
-  gap: 8px;
+  gap: 0;
   min-height: 100%;
-  padding-right: 2px;
 }
 
 .node-list-item {
@@ -1484,21 +1495,28 @@ function errorText(error: unknown) {
   gap: 9px;
   width: 100%;
   min-width: 0;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  background: var(--surface-raised);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   color: inherit;
   cursor: pointer;
-  padding: 10px;
+  padding: 12px;
   text-align: left;
 }
 
+.node-list-item + .node-list-item {
+  border-top: 1px solid var(--line);
+}
+
 .node-list-item:hover,
-.node-list-item:focus-visible,
-.node-list-item.active {
-  border-color: var(--brand-accent);
+.node-list-item:focus-visible {
   background: var(--surface-hover);
   outline: none;
+}
+
+.node-list-item.active {
+  background: var(--surface-active);
+  box-shadow: inset 3px 0 0 var(--brand-accent);
 }
 
 .node-list-item > span:nth-child(2) {
@@ -1511,6 +1529,7 @@ function errorText(error: unknown) {
   overflow: hidden;
   color: var(--text-strong);
   font-size: 13px;
+  font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1519,7 +1538,8 @@ function errorText(error: unknown) {
 .node-list-item code {
   overflow: hidden;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: 12px;
+  font-weight: 400;
   text-overflow: ellipsis;
   white-space: nowrap;
 }

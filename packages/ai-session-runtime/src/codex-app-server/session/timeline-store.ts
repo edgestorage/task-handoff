@@ -32,7 +32,7 @@ export class CodexTimelineStore {
   }
 
   upsert(providerSessionId: string, item: AiSessionTimelineItem) {
-    if (isReasoningActivity(item)) return;
+    if (isTransientActivity(item)) return;
     const items = this.items(providerSessionId);
     const index = items.findIndex((candidate) => candidate.id === item.id);
     if (index >= 0) items[index] = item;
@@ -86,9 +86,9 @@ export class CodexTimelineStore {
         const parsed = AiSessionTimelineItemSchema.safeParse(value);
         if (!parsed.success) continue;
         // Compatibility for pre-v0.0.22 development builds: Reasoning was
-        // briefly persisted as a generic Activity before the adapter boundary
-        // excluded it from Timeline entirely.
-        if (isReasoningActivity(parsed.data)) continue;
+        // briefly persisted as a generic Activity. Retry warnings are likewise
+        // runtime-only and must not survive adapter reconstruction.
+        if (isTransientActivity(parsed.data)) continue;
         const index = indexes.get(parsed.data.id);
         if (index === undefined) {
           indexes.set(parsed.data.id, items.length);
@@ -115,6 +115,6 @@ export class CodexTimelineStore {
   }
 }
 
-function isReasoningActivity(item: AiSessionTimelineItem) {
-  return item.type === "activity" && item.activityKind === "reasoning";
+function isTransientActivity(item: AiSessionTimelineItem) {
+  return item.type === "activity" && (item.activityKind === "reasoning" || item.activityKind === "codexRetry");
 }

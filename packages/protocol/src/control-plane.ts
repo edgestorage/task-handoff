@@ -1952,13 +1952,15 @@ export const ControlledInstanceSchema = z
     config: z
       .object({
         autoImportAgentConfigs: z.boolean().default(true),
+        codexConfigEnabled: z.boolean().default(true),
+        codexHomeMode: z.enum(["default", "taskhandoff"]).default("taskhandoff"),
         defaultCodexPermissionMode: AiSessionPermissionModeSchema.default("ask"),
         aiSessionHistoryLimit: z.number().int().min(1).max(AI_SESSION_HISTORY_MAX_LIMIT).default(AI_SESSION_HISTORY_DEFAULT_LIMIT),
         aiSessionAttachmentRetentionDays: z.number().int().min(0).max(AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS).default(AI_SESSION_ATTACHMENT_RETENTION_DEFAULT_DAYS),
         aiSessionMaxFileAttachmentBytes: z.number().int().positive().max(AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES).default(AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES),
       })
       .strict()
-      .default({ autoImportAgentConfigs: true, defaultCodexPermissionMode: "ask", aiSessionHistoryLimit: AI_SESSION_HISTORY_DEFAULT_LIMIT, aiSessionAttachmentRetentionDays: AI_SESSION_ATTACHMENT_RETENTION_DEFAULT_DAYS, aiSessionMaxFileAttachmentBytes: AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES }),
+      .default({ autoImportAgentConfigs: true, codexConfigEnabled: true, codexHomeMode: "taskhandoff", defaultCodexPermissionMode: "ask", aiSessionHistoryLimit: AI_SESSION_HISTORY_DEFAULT_LIMIT, aiSessionAttachmentRetentionDays: AI_SESSION_ATTACHMENT_RETENTION_DEFAULT_DAYS, aiSessionMaxFileAttachmentBytes: AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES }),
     workspace: WorkspaceStatusSchema.default({ status: "unknown" }),
     target: InstanceTargetSchema.default({ strategy: "direct-port", status: "unknown" }),
     access: InstanceAccessSchema,
@@ -2106,7 +2108,7 @@ export function sanitizeStoredControlledInstance(
   next.aiSessions = sanitizeStoredAiSessions(source.aiSessions, onWarning, typeof source.id === "string" ? source.id : undefined);
   next.triggers = sanitizeStoredTriggers(source.triggers, onWarning, typeof source.id === "string" ? source.id : undefined);
   next.apps = sanitizeStoredStrictObject(ControlledInstanceSchema.shape.apps.unwrap(), pickObjectFields(source.apps, ["runningCount", "problemCount", "updatedAt", "revision"]), "apps", onWarning, typeof source.id === "string" ? source.id : undefined) || { runningCount: 0, problemCount: 0 };
-  next.config = sanitizeStoredStrictObject(ControlledInstanceSchema.shape.config.unwrap(), pickObjectFields(source.config, ["autoImportAgentConfigs", "defaultCodexPermissionMode", "aiSessionHistoryLimit", "aiSessionAttachmentRetentionDays", "aiSessionMaxFileAttachmentBytes"]), "config", onWarning, typeof source.id === "string" ? source.id : undefined) || { autoImportAgentConfigs: true, defaultCodexPermissionMode: "ask", aiSessionHistoryLimit: AI_SESSION_HISTORY_DEFAULT_LIMIT, aiSessionAttachmentRetentionDays: AI_SESSION_ATTACHMENT_RETENTION_DEFAULT_DAYS, aiSessionMaxFileAttachmentBytes: AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES };
+  next.config = sanitizeStoredStrictObject(ControlledInstanceSchema.shape.config.unwrap(), pickObjectFields(source.config, ["autoImportAgentConfigs", "codexConfigEnabled", "codexHomeMode", "defaultCodexPermissionMode", "aiSessionHistoryLimit", "aiSessionAttachmentRetentionDays", "aiSessionMaxFileAttachmentBytes"]), "config", onWarning, typeof source.id === "string" ? source.id : undefined) || { autoImportAgentConfigs: true, codexConfigEnabled: true, codexHomeMode: "taskhandoff", defaultCodexPermissionMode: "ask", aiSessionHistoryLimit: AI_SESSION_HISTORY_DEFAULT_LIMIT, aiSessionAttachmentRetentionDays: AI_SESSION_ATTACHMENT_RETENTION_DEFAULT_DAYS, aiSessionMaxFileAttachmentBytes: AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES };
   next.modelSelection = sanitizeStoredStrictObject(ModelSelectionSchema.unwrap(), pickObjectFields(source.modelSelection, ["modelEntityIds", "codexModelHash", "claudeModelHash", "opencodeModelHash"]), "modelSelection", onWarning, typeof source.id === "string" ? source.id : undefined) || {};
   next.imageSnapshot = sanitizeStoredInstanceImageSnapshot(
     source.imageSnapshot,

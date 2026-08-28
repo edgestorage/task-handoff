@@ -56,6 +56,8 @@ export const CreateNodeInstanceSchema = z
     sourceSnapshot: z.record(z.string(), z.unknown()).default({}),
     config: z.object({
       autoImportAgentConfigs: z.boolean().optional(),
+      codexConfigEnabled: z.boolean().optional(),
+      codexHomeMode: z.enum(["default", "taskhandoff"]).optional(),
       defaultCodexPermissionMode: AiSessionPermissionModeSchema.optional(),
       aiSessionHistoryLimit: z.number().int().min(1).max(AI_SESSION_HISTORY_MAX_LIMIT).optional(),
       aiSessionAttachmentRetentionDays: z.number().int().min(0).max(AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS).optional(),
@@ -82,6 +84,8 @@ export const UpdateNodeInstanceSchema = z
     name: z.string().trim().min(1).max(160).optional(),
     config: z.object({
       autoImportAgentConfigs: z.boolean().optional(),
+      codexConfigEnabled: z.boolean().optional(),
+      codexHomeMode: z.enum(["default", "taskhandoff"]).optional(),
       defaultCodexPermissionMode: AiSessionPermissionModeSchema.optional(),
       aiSessionHistoryLimit: z.number().int().min(1).max(AI_SESSION_HISTORY_MAX_LIMIT).optional(),
       aiSessionAttachmentRetentionDays: z.number().int().min(0).max(AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS).optional(),

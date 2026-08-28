@@ -4,6 +4,7 @@ import test from "node:test";
 import { groupAiSessionEntriesByPath } from "../src/apps/control-plane/instance-detail/aiSessionPathGrouping.ts";
 
 const panel = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.vue", import.meta.url), "utf8");
+const activeSessions = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/useActiveInstanceSessions.ts", import.meta.url), "utf8");
 const styles = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.css", import.meta.url), "utf8");
 const boardCard = fs.readFileSync(new URL("../src/apps/control-plane/ai-board/AiSessionCard.vue", import.meta.url), "utf8");
 const contextMenu = fs.readFileSync(new URL("../src/components/ai-session/AiSessionCardContextMenu.vue", import.meta.url), "utf8");
@@ -327,6 +328,8 @@ test("instance and board AI session cards expose their toolbar actions from one 
 test("an unselected AI session defaults to the new-session surface", () => {
   assert.match(panel, /const showNewSession = computed\(\(\) => newSessionOpen\.value \|\| !selectedSession\.value\);/);
   assert.match(panel, /const selectedListSessionId = computed\(\(\) => showNewSession\.value \? undefined : selectedSession\.value\?\.id\);/);
+  assert.match(activeSessions, /if \(selectedId\) return selectedAiSessionSnapshots\[instance\.id\];\s*return undefined;/);
+  assert.doesNotMatch(activeSessions, /const initial = sortedAiSessionsByLastUserMessage\(available/);
   assert.match(panel, /:data-selected="selectedListSessionId === session\.id"/);
   assert.doesNotMatch(panel, /:data-selected="selectedSession\?\.id === session\.id"/);
   assert.match(panel, /<section v-else-if="showNewSession" class="session-ai-detail session-ai-new-detail">/);

@@ -719,6 +719,8 @@ export type ControlledInstance = {
   appInventory?: InstanceAppInventory;
   config: {
     autoImportAgentConfigs: boolean;
+    codexConfigEnabled: boolean;
+    codexHomeMode: "default" | "taskhandoff";
     defaultCodexPermissionMode: AiSessionPermissionMode;
     aiSessionHistoryLimit: number;
     aiSessionAttachmentRetentionDays: number;
@@ -1042,6 +1044,8 @@ export type CreateControlledInstanceInput = {
   runtimeId: string;
   config?: {
     autoImportAgentConfigs?: boolean;
+    codexConfigEnabled?: boolean;
+    codexHomeMode?: "default" | "taskhandoff";
     defaultCodexPermissionMode?: AiSessionPermissionMode;
     aiSessionHistoryLimit?: number;
     aiSessionAttachmentRetentionDays?: number;
@@ -1064,6 +1068,8 @@ export type UpdateControlledInstanceInput = {
   name?: string;
   config?: {
     autoImportAgentConfigs?: boolean;
+    codexConfigEnabled?: boolean;
+    codexHomeMode?: "default" | "taskhandoff";
     defaultCodexPermissionMode?: AiSessionPermissionMode;
     aiSessionHistoryLimit?: number;
     aiSessionAttachmentRetentionDays?: number;

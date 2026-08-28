@@ -1,9 +1,12 @@
+import { MenuView, type MenuAction } from '@react-native-menu/menu';
 import { Button, Host, Menu, RNHostView } from '@expo/ui/swift-ui';
 import { disabled as disabledModifier } from '@expo/ui/swift-ui/modifiers';
-import type { AiSessionPermissionMode } from '@task-handoff/protocol/ai-sessions';
+import type { AiSessionModelSelection, AiSessionPermissionMode, AiSessionReasoningEffort } from '@task-handoff/protocol/ai-sessions';
+import type { AiSessionModelGroup } from '@task-handoff/control-plane-client';
 
 import { AnchoredSelectMenu } from '../components/AnchoredSelectMenu';
 import { useMobileTheme } from '../components/theme';
+import { modelGroupSubtitle, reasoningEfforts, type FormatModelGroupSummary } from './model-settings-menu';
 
 type Trigger = (onPress?: () => void) => React.ReactElement;
 
@@ -61,4 +64,99 @@ export function PermissionMenu(props: PermissionMenuProps) {
     selectedValue={props.mode}
     title={props.title}
   >{props.children}</AnchoredSelectMenu>;
+}
+
+type ModelSettingsMenuProps = {
+  title: string;
+  reasoningTitle: string;
+  cancelLabel: string;
+  disabled: boolean;
+  formatModelGroupSummary: FormatModelGroupSummary;
+  modelGroups: AiSessionModelGroup[];
+  modelSelection?: AiSessionModelSelection;
+  reasoningEffort?: AiSessionReasoningEffort;
+  provider?: string;
+  reasoningEnabled: boolean;
+  children: Trigger;
+  onModelChange(selection: AiSessionModelSelection): void;
+  onReasoningChange(effort: AiSessionReasoningEffort): void;
+};
+
+type ModelSettingsMenuActionInput = Pick<ModelSettingsMenuProps,
+  'formatModelGroupSummary' | 'modelGroups' | 'modelSelection' | 'provider' | 'reasoningEffort' | 'reasoningEnabled' | 'reasoningTitle'
+> & { imageColor: string; selectedImageColor: string };
+
+export function modelSettingsMenuActions(input: ModelSettingsMenuActionInput): MenuAction[] {
+  const modelActions = input.modelGroups.map((group, groupIndex): MenuAction => {
+    const selectedModel = input.modelSelection?.modelEntityId === group.modelEntityId
+      ? input.modelSelection.modelName
+      : undefined;
+    const common = {
+      image: group.models.length > 1 && selectedModel ? 'checkmark' : 'sparkles',
+      imageColor: group.models.length > 1 && selectedModel ? input.selectedImageColor : input.imageColor,
+      subtitle: modelGroupSubtitle(group, input.modelSelection, input.formatModelGroupSummary),
+      title: group.providerName,
+    };
+    if (group.models.length === 1) {
+      return {
+        ...common,
+        id: `model:${groupIndex}:0`,
+        state: selectedModel === group.models[0].modelName ? 'on' : 'off',
+      };
+    }
+    return {
+      ...common,
+      subactions: group.models.map((model, modelIndex) => ({
+        id: `model:${groupIndex}:${modelIndex}`,
+        state: selectedModel === model.modelName ? 'on' : 'off',
+        title: model.modelName,
+      })),
+    };
+  });
+  if (!input.reasoningEnabled) return modelActions;
+  return [...modelActions, {
+    displayInline: true,
+    subactions: [{
+      image: 'brain',
+      imageColor: input.imageColor,
+      subtitle: input.reasoningEffort,
+      subactions: reasoningEfforts
+        .filter((effort) => input.provider === 'codex' || effort !== 'ultra')
+        .map((effort) => ({ id: `reasoning:${effort}`, state: input.reasoningEffort === effort ? 'on' : 'off', title: effort })),
+      title: input.reasoningTitle,
+    }],
+    title: '',
+  }];
+}
+
+export function ModelSettingsMenu(props: ModelSettingsMenuProps) {
+  const { colors, dark } = useMobileTheme();
+  if (props.disabled) return props.children();
+  const actions = modelSettingsMenuActions({
+    formatModelGroupSummary: props.formatModelGroupSummary,
+    imageColor: colors.textMuted,
+    selectedImageColor: colors.primary,
+    modelGroups: props.modelGroups,
+    modelSelection: props.modelSelection,
+    provider: props.provider,
+    reasoningEffort: props.reasoningEffort,
+    reasoningEnabled: props.reasoningEnabled,
+    reasoningTitle: props.reasoningTitle,
+  });
+  const select = (id: string) => {
+    if (id.startsWith('reasoning:')) {
+      props.onReasoningChange(id.slice('reasoning:'.length) as AiSessionReasoningEffort);
+      return;
+    }
+    const match = /^model:(\d+):(\d+)$/.exec(id);
+    if (!match) return;
+    const model = props.modelGroups[Number(match[1])]?.models[Number(match[2])];
+    if (model) props.onModelChange(model);
+  };
+  return <MenuView
+    actions={actions}
+    onPressAction={(event) => select(event.nativeEvent.event)}
+    themeVariant={dark ? 'dark' : 'light'}
+    title={props.title}
+  >{props.children()}</MenuView>;
 }

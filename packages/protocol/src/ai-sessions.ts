@@ -433,6 +433,7 @@ export const AiSessionReasoningEffortSchema = z.enum([
   "max",
   "ultra",
 ]);
+export const AI_SESSION_DEFAULT_REASONING_EFFORT = "medium" as const;
 
 export const AiSessionCreateInputSchema = AiSessionMessageInputSchema.extend({
   agent: AiAgentKindSchema,

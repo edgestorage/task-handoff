@@ -186,7 +186,7 @@ export class NodeModelRegistry {
     return {
       ...this.environmentForRef("codex", firstCompatible("codex") || assignment.codexModelHash),
       ...this.environmentForRef("claude", firstCompatible("claude") || assignment.claudeModelHash),
-      ...this.environmentForRef("opencode", firstCompatible("opencode") || assignment.opencodeModelHash),
+      ...this.environmentForOpenCode(assignment),
     };
   }
 
@@ -261,9 +261,37 @@ export class NodeModelRegistry {
             npm: "@ai-sdk/openai-compatible",
             name: "TaskHandoff",
             options: { baseURL: model.endpoint, apiKey: model.key },
-            models: { [model.model]: { name: model.name } },
+            models: { [model.model]: { name: model.name, variants: openCodeReasoningVariants() } },
           },
         },
+      }),
+    };
+  }
+
+  private environmentForOpenCode(assignment: z.infer<typeof NodeModelAssignmentSchema>) {
+    // Compatibility for v0.0.23: legacy assignments use the stable `task-handoff`
+    // provider identity so existing OpenCode sessions remain resumable.
+    if (assignment.opencodeModelHash) return this.environmentForRef("opencode", assignment.opencodeModelHash);
+    const entities = assignment.modelEntityIds
+      .map((id) => this.requireModel(id))
+      .filter((model) => this.modelSupportsApp(model, "opencode"));
+    if (!entities.length) return {};
+    const firstEntity = entities[0];
+    const firstModelName = normalizeModelNames(firstEntity.modelNames, firstEntity.model)[0].name;
+    const providers = Object.fromEntries(entities.map((model) => [
+      `task-handoff-${model.id}`,
+      {
+        npm: "@ai-sdk/openai-compatible",
+        name: model.name,
+        options: { baseURL: model.endpoint, apiKey: model.key },
+        models: Object.fromEntries(normalizeModelNames(model.modelNames, model.model).map((entry) => [entry.name, { name: model.name, variants: openCodeReasoningVariants() }])),
+      },
+    ]));
+    return {
+      TASK_HANDOFF_OPENCODE_CONFIG_CONTENT: JSON.stringify({
+        $schema: "https://opencode.ai/config.json",
+        model: `task-handoff-${firstEntity.id}/${firstModelName}`,
+        provider: providers,
       }),
     };
   }
@@ -378,6 +406,11 @@ export class NodeModelRegistry {
       reason,
     }));
   }
+}
+
+function openCodeReasoningVariants() {
+  return Object.fromEntries(["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
+    .map((effort) => [effort, { reasoningEffort: effort }]));
 }
 
 function defaultProtocols(app: "codex" | "claude" | "opencode") {

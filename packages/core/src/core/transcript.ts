@@ -363,7 +363,7 @@ export function summarizeTranscriptLine(
         firstText ??= fullText(part.text);
       }
     }
-    return firstSummary || (firstText ? transcriptSummary({ text: firstText, kind: "assistant", timestamp }) : undefined);
+    return firstText ? transcriptSummary({ text: firstText, kind: "assistant", timestamp }) : firstSummary;
   }
 
   if (entry.type === "user") {

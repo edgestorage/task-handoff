@@ -21,6 +21,18 @@
         @retry="$emit('retryActivityHistory')"
       />
 
+      <details v-if="retryWarning" class="ai-session-retry-warning" role="status" aria-live="polite">
+        <summary>
+          <TriangleAlert :size="18" aria-hidden="true" />
+          <div>
+            <strong>{{ t("sessions.detail.retryWarning") }}</strong>
+            <p class="ai-session-retry-warning-preview">{{ retryWarningFirstLine }}</p>
+            <p class="ai-session-retry-warning-detail">{{ retryWarning }}</p>
+          </div>
+          <ChevronRight class="ai-session-retry-warning-chevron" :size="16" aria-hidden="true" />
+        </summary>
+      </details>
+
       <section
         v-if="displayContent"
         class="ai-session-detail-response"
@@ -130,7 +142,7 @@
 </template>
 
 <script setup lang="ts">
-import { Ban, Check, CornerDownRight, GripVertical, Pencil, RotateCcw, Trash2, X } from "@lucide/vue";
+import { Ban, Check, ChevronRight, CornerDownRight, GripVertical, Pencil, RotateCcw, Trash2, TriangleAlert, X } from "@lucide/vue";
 import { computed, nextTick, onBeforeUnmount, onBeforeUpdate, onUpdated, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import type { AiSessionSummary } from "../../api/types";
@@ -160,6 +172,7 @@ const props = withDefaults(defineProps<{
   instanceId: string;
   isLatest?: boolean;
   responseContent?: string;
+  retryWarning?: string;
   turnStartedAt?: string;
   turnEndedAt?: string;
   session: AiSessionSummary;
@@ -180,6 +193,7 @@ const props = withDefaults(defineProps<{
   fileLinks: false,
   isLatest: false,
   responseContent: "",
+  retryWarning: "",
   tone: "detail",
   activities: () => [],
   activityNodes: () => [],
@@ -205,6 +219,7 @@ const emit = defineEmits<{
   retryActivityHistory: [];
 }>();
 
+const retryWarningFirstLine = computed(() => props.retryWarning.split(/\r\n|\r|\n/, 1)[0]);
 const draggingQueueId = ref("");
 const queueOrderPreview = ref<string[]>([]);
 const queuedItems = computed(() => props.session.queue.items.filter((item) => item.status === "queued"));
@@ -377,6 +392,70 @@ const displayContent = computed(() => streamingContent.value || props.responseCo
 .ai-session-result-detail > .ai-session-result-content > * + * {
   margin-top: var(--detail-activity-gap);
 }
+
+.ai-session-retry-warning {
+  background: var(--status-warning-bg);
+  border: 1px solid color-mix(in srgb, var(--status-warning) 40%, var(--line-subtle));
+  border-radius: 8px;
+  color: var(--status-warning);
+}
+
+.ai-session-retry-warning > summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 12px 14px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.ai-session-retry-warning > summary::-webkit-details-marker { display: none; }
+
+.ai-session-retry-warning > summary > svg:first-child { margin-top: 1px; }
+
+.ai-session-retry-warning > summary > div {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ai-session-retry-warning-chevron {
+  align-self: center;
+  transition: transform 120ms ease;
+}
+
+.ai-session-retry-warning[open] .ai-session-retry-warning-chevron { transform: rotate(90deg); }
+
+.ai-session-retry-warning strong {
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.ai-session-retry-warning p {
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.55;
+  margin: 0;
+}
+
+.ai-session-retry-warning-preview {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-session-retry-warning-detail {
+  display: none;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.ai-session-retry-warning[open] .ai-session-retry-warning-preview { display: none; }
+.ai-session-retry-warning[open] .ai-session-retry-warning-detail { display: block; }
 
 .ai-session-result-detail :slotted(.ai-session-turn-actions) {
   margin-top: 8px;

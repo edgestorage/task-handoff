@@ -11,6 +11,9 @@ catalogs:
       version: 43.1.0
 
 patchedDependencies:
+  '@react-native-menu/menu@2.0.0':
+    hash: wltunyzqx2pp5josdvkdbic3mm
+    path: patches/@react-native-menu__menu@2.0.0.patch
   expo-paste-input@0.2.2:
     hash: htaeyyjmdlkat5buzm362in2am
     path: patches/expo-paste-input@0.2.2.patch
@@ -261,7 +264,7 @@ importers:
         version: 15.1.1(expo-font@57.0.1)(react-native@0.86.2(@react-native/jest-preset@0.86.2(@babel/core@7.29.7)(react@19.2.3))(@react-native/metro-config@0.86.2)(@types/react@19.2.18)(react@19.2.3))(react@19.2.3)
       '@react-native-menu/menu':
         specifier: ^2.0.0
-        version: 2.0.0(react-native@0.86.2(@react-native/jest-preset@0.86.2(@babel/core@7.29.7)(react@19.2.3))(@react-native/metro-config@0.86.2)(@types/react@19.2.18)(react@19.2.3))(react@19.2.3)
+        version: 2.0.0(patch_hash=wltunyzqx2pp5josdvkdbic3mm)(react-native@0.86.2(@react-native/jest-preset@0.86.2(@babel/core@7.29.7)(react@19.2.3))(@react-native/metro-config@0.86.2)(@types/react@19.2.18)(react@19.2.3))(react@19.2.3)
       '@task-handoff/cloud-contracts':
         specifier: workspace:*
         version: link:../../packages/cloud-contracts
@@ -10123,7 +10126,7 @@ snapshots:
       react: 19.2.3
       react-native: 0.86.2(@react-native/jest-preset@0.86.2(@babel/core@7.29.7)(react@19.2.3))(@react-native/metro-config@0.86.2)(@types/react@19.2.18)(react@19.2.3)
 
-  '@react-native-menu/menu@2.0.0(react-native@0.86.2(@react-native/jest-preset@0.86.2(@babel/core@7.29.7)(react@19.2.3))(@react-native/metro-config@0.86.2)(@types/react@19.2.18)(react@19.2.3))(react@19.2.3)':
+  '@react-native-menu/menu@2.0.0(patch_hash=wltunyzqx2pp5josdvkdbic3mm)(react-native@0.86.2(@react-native/jest-preset@0.86.2(@babel/core@7.29.7)(react@19.2.3))(@react-native/metro-config@0.86.2)(@types/react@19.2.18)(react@19.2.3))(react@19.2.3)':
     dependencies:
       react: 19.2.3
       react-native: 0.86.2(@react-native/jest-preset@0.86.2(@babel/core@7.29.7)(react@19.2.3))(@react-native/metro-config@0.86.2)(@types/react@19.2.18)(react@19.2.3)

@@ -371,6 +371,7 @@ const AppLaunchSchema = z
   .strict();
 
 const ManagedModelEnvironmentSchema = z.object({
+  CODEX_HOME: z.string().max(4096).optional(),
   OPENAI_API_KEY: z.string().max(4096).optional(),
   OPENAI_BASE_URL: z.string().max(4096).optional(),
   TASK_HANDOFF_CODEX_BASE_URL: z.string().max(4096).optional(),
@@ -762,6 +763,16 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     onEventSourceClose: () => aiSessionMessageDeltas.flushAll("event-source-close"),
   });
   const openCode = new OpenCodeSessionBridge(aiSessions, {
+    resolveModelSelection: (selection) => {
+      const resolved = resolveControlledPrivateModelSelection(privateModelCatalog, "opencode", selection);
+      return resolved ? { providerID: `task-handoff-${resolved.modelEntityId}`, modelID: resolved.modelName } : undefined;
+    },
+    projectModelSelection: (providerID, modelID) => {
+      const entityId = providerID.startsWith("task-handoff-") ? providerID.slice("task-handoff-".length) : undefined;
+      const entities = privateModelCatalog?.entities.filter((candidate) => candidate.protocols.includes("openai-chat-completions")) || [];
+      const matches = entities.filter((candidate) => (!entityId || candidate.id === entityId) && candidate.modelNames.some((entry) => entry.name === modelID));
+      return matches.length === 1 ? { modelEntityId: matches[0].id, modelName: modelID } : undefined;
+    },
     connection: () => {
       appRuntime.ensureSharedResource("opencode");
       const connection = appRuntime.sharedResourcePrivateConnection("opencode");
@@ -784,6 +795,10 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     onEventSourceClose: () => aiSessionMessageDeltas.flushAll("event-source-close"),
     onDiagnostic: (diagnostic) => app.log.warn({ diagnostic }, "OpenCode adapter diagnostic"),
   });
+  // OpenCode is an optional managed app. Do not register its session provider
+  // when the executable is unavailable: discovery runs periodically and would
+  // otherwise turn a missing local dependency into a repeated error storm.
+  const openCodeAvailable = appRuntime.catalog().some((app) => app.id === "opencode");
   const retainCodexTimelineHistory = () => {
     if (typeof codexAppServer.retainTimelineHistory !== "function") return;
     try {
@@ -839,7 +854,8 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
         switchProviderDuringSession: false,
       },
       reasoningEffort: {
-        selectAtCreate: codexAppServer.supportsThreadSettingsUpdate(),
+        // thread/start has accepted model_reasoning_effort before thread/settings/update existed.
+        selectAtCreate: true,
         updateDuringSession: codexAppServer.supportsThreadSettingsUpdate(),
       },
     }),
@@ -861,27 +877,29 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       reasoningEffort: { selectAtCreate: false, updateDuringSession: false },
     },
   });
-  aiSessionProviders.register({
-    agent: "opencode",
-    controlProvider: openCode,
-    discoveryProvider: openCode,
-    ensureReady: async () => {
-      appRuntime.ensureSharedResource("opencode");
-      await openCode.ensureReady();
-    },
-    capability: {
+  if (openCodeAvailable) {
+    aiSessionProviders.register({
       agent: "opencode",
-      actions: { create: true, send: true, queue: true, steer: false, interrupt: true, archive: true, delete: true, fork: true, approvalDecisions: ["allow", "deny"] },
-      timeline: { sessionRead: true, turnRead: true, liveItems: true },
-      modelSelection: {
-        selectModelAtCreate: false,
-        selectProviderAtCreate: false,
-        switchModelWithinProvider: false,
-        switchProviderDuringSession: false,
+      controlProvider: openCode,
+      discoveryProvider: openCode,
+      ensureReady: async () => {
+        appRuntime.ensureSharedResource("opencode");
+        await openCode.ensureReady();
       },
-      reasoningEffort: { selectAtCreate: false, updateDuringSession: false },
-    },
-  });
+      capability: {
+        agent: "opencode",
+        actions: { create: true, send: true, queue: true, steer: false, interrupt: true, archive: true, delete: true, fork: true, approvalDecisions: ["allow", "deny"] },
+        timeline: { sessionRead: true, turnRead: true, liveItems: true },
+        modelSelection: {
+          selectModelAtCreate: true,
+          selectProviderAtCreate: true,
+          switchModelWithinProvider: true,
+          switchProviderDuringSession: true,
+        },
+        reasoningEffort: { selectAtCreate: true, updateDuringSession: true },
+      },
+    });
+  }
   const aiSessionHistoryLifecycle = new AiSessionHistoryLifecycle(aiSessionHistory, (agent) => Boolean(aiSessionProviders.get(agent)));
   const unsubscribeTimelineItems = aiSessionController.subscribeTimelineItems((timelineItem) => {
     events.publish(AiSessionEventType.TimelineItem, AiSessionTimelineItemEventSchema.parse({

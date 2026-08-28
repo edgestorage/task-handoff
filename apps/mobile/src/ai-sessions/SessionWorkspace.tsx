@@ -5,8 +5,9 @@ import { ActivityIndicator, Alert, Animated, FlatList, Keyboard, KeyboardAvoidin
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Defs, LinearGradient, Rect, Stop } from 'react-native-svg';
 import { aiSessionMessageText, canInterruptAiSession, isAiSessionApprovalPending, type AiSessionModelGroup, type ControlPlaneAiSessionSummary, type ControlPlaneClient } from '@task-handoff/control-plane-client';
-import type { AiSessionMentionCandidate, AiSessionPermissionMode } from '@task-handoff/protocol/ai-sessions';
+import { AI_SESSION_DEFAULT_REASONING_EFFORT, type AiSessionMentionCandidate, type AiSessionPermissionMode, type AiSessionReasoningEffort } from '@task-handoff/protocol/ai-sessions';
 import { directoryAiSessionProviderCapability, supportsDirectoryAiSessionTimelineCapability, type ControlPlaneInstanceDirectoryEntry } from '@task-handoff/protocol/control-plane-directory';
+import { normalizeAiSessionReasoningEffortCapabilities } from '@task-handoff/protocol/ai-session-provider-capabilities';
 
 import { mobileAiSessionBusyKey, MobileAiSessionActionCoordinator, MobileAiSessionDraftStore, type MobileActionResult } from './actions';
 import { aiSessionDisplayTurns, SessionDetail, type SessionDetailMode } from './SessionDetail';
@@ -347,6 +348,7 @@ export function SessionWorkspace({
   const canInterrupt = canInterruptAiSession(session);
   const approvalPending = isAiSessionApprovalPending(session);
   const providerCapability = directoryAiSessionProviderCapability(instanceCapabilities, session.agent);
+  const reasoningCapability = normalizeAiSessionReasoningEffortCapabilities(providerCapability);
   // Compatibility for v0.0.21: older directory responses do not publish provider decision capabilities.
   const approvalDecisions: ('allow' | 'deny' | 'skip')[] = providerCapability?.actions.approvalDecisions
     ?? (session.agent === 'codex' || session.agent === 'claude' ? ['allow', 'skip', 'deny'] : []);
@@ -370,6 +372,12 @@ export function SessionWorkspace({
     const result = await performAction(t('sessions.model'), () => actions.updateModelSelection(instanceId, session.id, crypto.randomUUID(), selection));
     if (result.disposition !== 'accepted') rerender((value) => value + 1);
   };
+  const updateReasoningEffort = async (effort: AiSessionReasoningEffort) => {
+    if (!actions || !authoritativeActionsEnabled || reasoningState?.phase === 'busy') return;
+    const result = await performAction(t('sessions.reasoningEffort'), () => actions.updateReasoningEffort(instanceId, session.id, crypto.randomUUID(), effort));
+    if (result.disposition !== 'accepted') rerender((value) => value + 1);
+  };
+  const reasoningState = state('reasoning-effort');
   const queuedItems = session.queue.items.filter((item) => item.status === 'queued');
   const displayedQueueItems = queueItemsWithQueuedOrder(session.queue.items, queueOrderPreview);
   const commitQueueOrder = async (queueIds: string[]) => {
@@ -757,6 +765,7 @@ export function SessionWorkspace({
           <Pressable accessibilityLabel={`Remove ${attachment.name}`} accessibilityRole="button" hitSlop={8} onPress={() => removeAttachment(attachment)}><SystemIcon android="close" color={colors.textMuted} ios="xmark.circle.fill" size={17} /></Pressable>
         </View>)}</View> : null}
         <SessionComposer
+          provider={session.agent}
           action={composerAction}
           actionBusy={composerBusy}
           actionDisabled={composerDisabled}
@@ -783,6 +792,10 @@ export function SessionWorkspace({
           modelSelection={session.modelSelection}
           modelSelectionBusy={modelSelectionState?.phase === 'busy'}
           onModelSelectionChange={(selection) => { void updateModelSelection(selection); }}
+          reasoningEffort={session.reasoningEffort || (session.agent === 'codex' ? AI_SESSION_DEFAULT_REASONING_EFFORT : undefined)}
+          reasoningEffortEnabled={reasoningCapability.updateDuringSession}
+          reasoningEffortBusy={reasoningState?.phase === 'busy'}
+          onReasoningEffortChange={(effort) => { void updateReasoningEffort(effort); }}
           runtimeFileDisabled={!authoritativeActionsEnabled || !client || !session.cwd}
           value={draft}
         />

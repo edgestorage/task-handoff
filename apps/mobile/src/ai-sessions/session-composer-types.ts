@@ -1,4 +1,4 @@
-import type { AiSessionModelSelection, AiSessionPermissionMode } from '@task-handoff/protocol/ai-sessions';
+import type { AiSessionModelSelection, AiSessionPermissionMode, AiSessionReasoningEffort } from '@task-handoff/protocol/ai-sessions';
 import type { AiSessionModelGroup } from '@task-handoff/control-plane-client';
 import type { Animated } from 'react-native';
 
@@ -17,9 +17,13 @@ export type SessionComposerProps = {
   imageDisabled: boolean;
   permissionEnabled: boolean;
   permissionMode: AiSessionPermissionMode;
+  provider?: string;
   modelGroups?: AiSessionModelGroup[];
   modelSelection?: AiSessionModelSelection;
   modelSelectionBusy?: boolean;
+  reasoningEffort?: AiSessionReasoningEffort;
+  reasoningEffortEnabled?: boolean;
+  reasoningEffortBusy?: boolean;
   runtimeFileDisabled: boolean;
   value: string;
   onAction(): void;
@@ -32,5 +36,6 @@ export type SessionComposerProps = {
   onFocusChange(focused: boolean): void;
   onPermissionModeChange(mode: AiSessionPermissionMode): void;
   onModelSelectionChange?(selection: AiSessionModelSelection): void;
+  onReasoningEffortChange?(effort: AiSessionReasoningEffort): void;
   onValueChange(value: string): void;
 };

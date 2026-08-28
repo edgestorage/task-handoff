@@ -74,6 +74,7 @@
         :file-links="fileLinks"
         :is-latest="promptIndex >= promptCount - 1"
         :response-content="detailState === 'ready' ? compactResponseContent : ''"
+        :retry-warning="selectedTimeline.retryWarning"
         :turn-started-at="selectedTurn?.startedAt"
         :turn-ended-at="turnElapsedEnd(selectedTurn)"
         :session="session"
@@ -106,6 +107,13 @@
           />
         </template>
       </AiSessionResult>
+      <section v-if="showSessionError" class="ai-session-conversation-error" role="alert">
+        <TriangleAlert :size="18" aria-hidden="true" />
+        <div>
+          <strong>{{ t("sessions.detail.sessionError") }}</strong>
+          <p>{{ session.error || t("sessions.detail.noErrorDetail") }}</p>
+        </div>
+      </section>
     </div>
     </div>
     </Transition>
@@ -113,7 +121,7 @@
 </template>
 
 <script setup lang="ts">
-import { RotateCcw } from "@lucide/vue";
+import { RotateCcw, TriangleAlert } from "@lucide/vue";
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 import type { AiSessionSummary } from "../../api/types";
@@ -176,6 +184,8 @@ const emit = defineEmits<{
 const { t } = useI18n();
 const selectedTurn = computed(() => aiSessionTurns(props.session)[props.promptIndex]);
 const compactResponseContent = computed(() => displayAiSessionResponse(props.session, props.promptIndex, t));
+const showSessionError = computed(() => props.session.status === "failed"
+  && (props.mode === "full" || props.promptIndex >= props.promptCount - 1));
 const compactCompletedTurn = computed(() => selectedTurn.value?.status === "completed" ? selectedTurn.value : undefined);
 const compactCanContinue = computed(() => Boolean(props.session.actions?.fork && compactCompletedTurn.value?.providerTurnId));
 const compactTurnTime = computed(() => {
@@ -314,5 +324,44 @@ function finishConversationTransition() {
 .ai-session-conversation-timeline-state > span {
   color: var(--text-muted);
   font-size: 12px;
+}
+
+.ai-session-conversation-error {
+  align-items: flex-start;
+  background: var(--status-danger-bg);
+  border: 1px solid var(--status-danger-border);
+  border-radius: 8px;
+  color: var(--status-danger);
+  display: grid;
+  gap: 10px;
+  grid-template-columns: auto minmax(0, 1fr);
+  margin-top: 16px;
+  padding: 12px 14px;
+}
+
+.ai-session-conversation-error > svg {
+  margin-top: 1px;
+}
+
+.ai-session-conversation-error > div {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ai-session-conversation-error strong {
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.ai-session-conversation-error p {
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.55;
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 </style>

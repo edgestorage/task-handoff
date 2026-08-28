@@ -28,7 +28,7 @@ type DetailTurn = Pick<AiSessionTurn, 'id' | 'providerTurnId' | 'status' | 'star
 
 type DetailItem = {
   id: string;
-  role: 'user' | 'assistant' | 'error' | 'activity' | 'history' | 'current';
+  role: 'user' | 'assistant' | 'warning' | 'error' | 'activity' | 'history' | 'current';
   streamKey?: string;
   streaming?: boolean;
   text?: string;
@@ -389,7 +389,7 @@ export function detailItems(
       if (responseIndex >= 0) items[responseIndex] = responseItem;
       else items.push(responseItem);
     }
-    if (isLatest && session.status === 'failed') items.push({ id: 'session:error', role: 'error', text: t('sessions.failedDiagnostic') });
+    if (isLatest && session.status === 'failed') items.push({ id: 'session:error', role: 'error', text: session.error || t('sessions.failedWithoutDiagnostic') });
     let projected = hasTimeline ? compactMobileTimeline(items, turn) : items;
     if ((!active || timelineEnabled) && !projected.some((item) => item.role === 'history')) {
       const responseIndex = projected.findIndex((item) => item.role === 'assistant');
@@ -408,7 +408,7 @@ export function detailItems(
   const items: DetailItem[] = [];
   if (session.userPrompt) items.push({ id: 'session:user', role: 'user', text: session.userPrompt, actions: { timestamp: session.startedAt } });
   if (session.lastMessage || session.summary) items.push({ id: 'session:assistant', role: 'assistant', text: session.lastMessage || session.summary!, actions: session.status === 'idle' ? { timestamp: session.updatedAt || session.startedAt } : undefined });
-  if (session.status === 'failed') items.push({ id: 'session:error', role: 'error', text: t('sessions.failedDiagnostic') });
+  if (session.status === 'failed') items.push({ id: 'session:error', role: 'error', text: session.error || t('sessions.failedWithoutDiagnostic') });
   return items;
 }
 
@@ -424,6 +424,10 @@ function turnTimelineDetailItems(turn: DetailTurn, timeline: readonly AiSessionT
   for (const item of timeline) {
     if (!identities.has(item.turnId)) continue;
     if (item.type === 'activity') {
+      if (item.activityKind === 'codexRetry') {
+        if (item.status === 'waiting' && item.summary) items.push({ id: `timeline:${item.id}`, role: 'warning', text: item.summary });
+        continue;
+      }
       const previous = items.at(-1);
       if (previous?.role === 'activity') previous.activities!.push(item);
       else items.push({ id: `timeline-activities:${item.id}`, role: 'activity', activities: [item] });
@@ -456,12 +460,12 @@ function appendCurrentActivity(items: DetailItem[], text: string, turn: DetailTu
   const responseIndex = items.findLastIndex((item) => item.role === 'assistant');
   const historyIndex = items.findIndex((item) => item.role === 'history');
   const splitIndex = responseIndex >= 0 ? responseIndex + 1 : historyIndex >= 0 ? historyIndex + 1 : Math.min(1, items.length);
-  const trailing = items.slice(splitIndex).filter((item) => item.role !== 'error');
-  const errors = items.slice(splitIndex).filter((item) => item.role === 'error');
+  const trailing = items.slice(splitIndex).filter((item) => item.role !== 'error' && item.role !== 'warning');
+  const notices = items.slice(splitIndex).filter((item) => item.role === 'error' || item.role === 'warning');
   return [
     ...items.slice(0, splitIndex),
     { id: `${turn.id}:current-activity`, role: 'current' as const, text, history: trailing, interactive: true, streaming: running, turn },
-    ...errors,
+    ...notices,
   ];
 }
 
@@ -489,6 +493,7 @@ function DetailItemContent({
   if (conversation && item.role === 'assistant') return <View style={styles.assistantMessage}><View style={styles.conversationResponse}><SafeMarkdown streamKey={item.streamKey} streaming={item.streaming} trimEnd={timelineNested || trimEnd}>{item.text ?? ''}</SafeMarkdown></View><MessageActions item={item} onContinueFromTurn={onContinueFromTurn} /></View>;
   if (item.role === 'user') return <View style={styles.userMessage}><View style={[styles.promptBlock, { backgroundColor: colors.primarySoft }]}><SafeMarkdown trimEnd>{item.text ?? ''}</SafeMarkdown></View><MessageActions item={item} onContinueFromTurn={onContinueFromTurn} /></View>;
   if (item.role === 'assistant') return <View style={styles.assistantMessage}><View style={styles.responseBlock}><SafeMarkdown streamKey={item.streamKey} streaming={item.streaming} trimEnd={timelineNested || trimEnd}>{item.text ?? ''}</SafeMarkdown></View><MessageActions item={item} onContinueFromTurn={onContinueFromTurn} /></View>;
+  if (item.role === 'warning') return <View style={[styles.errorBlock, { backgroundColor: colors.notice }]}><SystemIcon android="warning" color={colors.noticeText} ios="exclamationmark.triangle.fill" size={16} /><View style={styles.errorText}><Text style={[styles.role, { color: colors.noticeText }]}>{t('sessions.retryWarning')}</Text><SafeMarkdown>{item.text ?? ''}</SafeMarkdown></View></View>;
   return <View style={[styles.errorBlock, { backgroundColor: colors.errorSoft }]}><SystemIcon android="error" color={colors.error} ios="exclamationmark.triangle.fill" size={16} /><View style={styles.errorText}><Text style={[styles.role, { color: colors.error }]}>{t('sessions.error')}</Text><SafeMarkdown>{item.text ?? ''}</SafeMarkdown></View></View>;
 }
 

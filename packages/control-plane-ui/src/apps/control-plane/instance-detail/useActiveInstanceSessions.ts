@@ -7,7 +7,6 @@ import {
   absoluteInstanceUrl,
   buildSessionTabs,
   launchableAppsForInstance,
-  sortedAiSessionsByLastUserMessage,
   sessionFrameUrl,
   sessionTerminalSocketUrl,
   uniqueLaunchableApps,
@@ -446,12 +445,7 @@ export function useActiveInstanceSessions({
     // completion patch temporarily omits it from the projection. This avoids
     // jumping to an unrelated session while the authoritative snapshot catches up.
     if (selectedId) return selectedAiSessionSnapshots[instance.id];
-    const initial = sortedAiSessionsByLastUserMessage(available, false)[0];
-    if (initial) {
-      selectedAiSessionKeys[instance.id] = initial.id;
-      selectedAiSessionSnapshots[instance.id] = initial;
-    }
-    return initial;
+    return undefined;
   }
 
   function openAiSessionApp(instance: InstanceBoardItemWithAppSessions, session?: AiSessionSummary) {

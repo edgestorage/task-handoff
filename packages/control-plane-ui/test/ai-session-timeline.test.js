@@ -508,6 +508,22 @@ test("compact Timeline splits history from only the activities after the latest 
   assert.deepEqual(compact.activities.map((activity) => activity.id), ["activity-2", "activity-3"]);
 });
 
+test("compact Timeline exposes only an active Codex retry warning outside normal activities", () => {
+  const waiting = compactTimelineForTurn([
+    { id: "user", turnId: "turn-1", type: "user-message", text: "question" },
+    { id: "codex_retry:turn-1", turnId: "turn-1", type: "activity", activityKind: "codexRetry", title: "Codex retry", status: "waiting", summary: "Reconnecting to the model stream" },
+  ], { id: "turn-1" });
+  assert.equal(waiting.retryWarning, "Reconnecting to the model stream");
+  assert.deepEqual(waiting.activities, []);
+  assert.equal(waiting.activityNodes.some((node) => node.type === "activities"), false);
+
+  const recovered = compactTimelineForTurn([
+    { id: "codex_retry:turn-1", turnId: "turn-1", type: "activity", activityKind: "codexRetry", title: "Codex retry", status: "completed", summary: "Reconnecting to the model stream" },
+  ], { id: "turn-1" });
+  assert.equal(recovered.retryWarning, undefined);
+  assert.deepEqual(recovered.activityNodes, []);
+});
+
 test("compact Timeline keeps user messages inserted after the primary prompt in earlier process", () => {
   const items = [
     { id: "user-primary", turnId: "turn-1", type: "user-message", text: "initial prompt" },
@@ -564,6 +580,13 @@ test("compact mode renders history, latest AI response, then only the live activ
   assert.match(conversation, /:activities="selectedTimeline\.activities"/);
   assert.match(conversation, /:activity-nodes="selectedTimeline\.activityNodes"/);
   assert.match(conversation, /:activity-history="selectedTimeline\.history"/);
+  assert.match(conversation, /:retry-warning="selectedTimeline\.retryWarning"/);
+  assert.match(result, /<details v-if="retryWarning" class="ai-session-retry-warning" role="status"/);
+  assert.match(result, /retryWarningFirstLine = computed\(\(\) => props\.retryWarning\.split\(\/\\r\\n\|\\r\|\\n\/, 1\)\[0\]\)/);
+  assert.match(result, /class="ai-session-retry-warning-preview">\{\{ retryWarningFirstLine \}\}/);
+  assert.match(result, /class="ai-session-retry-warning-detail">\{\{ retryWarning \}\}/);
+  assert.match(result, /\.ai-session-retry-warning\[open\] \.ai-session-retry-warning-preview \{ display: none; \}/);
+  assert.match(result, /\.ai-session-retry-warning\[open\] \.ai-session-retry-warning-detail \{ display: block; \}/);
   assert.match(result, /<AiSessionTurnHistory[\s\S]*<section[\s\S]*class="ai-session-detail-response"[\s\S]*<AiSessionToolActivity/);
   assert.match(result, /<AiSessionTurnHistory\s+:nodes="activityHistory"/);
   assert.match(result, /:loading="!active && activityHistoryStatus === 'loading'"/);

@@ -515,7 +515,7 @@ const emit = defineEmits<{
   setSessionSplitRatio: [ratio: number];
   openAiSessionApp: [instance: InstanceBoardItem, session?: AiSessionSummary];
   openRepositoryWorkspace: [target: { initialView: "files" | "changes"; sessionId: string; sessionKind: RepositorySessionKind }];
-  openSettings: [instanceId: string, section?: "general" | "models" | "apps"];
+  openSettings: [instanceId: string, section?: "general" | "ai" | "models" | "apps"];
   openUrl: [url: string];
   runAction: [action: InstanceAction, instance: InstanceBoardItem];
   selectAiSession: [instanceId: string, sessionId: string];

@@ -262,11 +262,14 @@ test("Codex Timeline store restores item order and lifecycle updates after proce
   firstProcess.upsert("thread_1", { id: "message_1", turnId: "turn_1", type: "ai-message", text: "Checking" });
   firstProcess.upsert("thread_1", { id: "command_1", turnId: "turn_1", type: "activity", activityKind: "commandExecution", title: "Command", status: "running" });
   firstProcess.upsert("thread_1", { id: "command_1", turnId: "turn_1", type: "activity", activityKind: "commandExecution", title: "Command", status: "completed", output: "ok", exitCode: 0 });
+  firstProcess.upsert("thread_1", { id: "codex_retry:turn_1", turnId: "turn_1", type: "activity", activityKind: "codexRetry", title: "Codex retry", status: "waiting", summary: "Reconnecting" });
+  firstProcess.upsert("thread_1", { id: "codex_retry:turn_1", turnId: "turn_1", type: "activity", activityKind: "codexRetry", title: "Codex retry", status: "completed", summary: "Reconnecting" });
   firstProcess.upsert("thread_1", { id: "message_2", turnId: "turn_1", type: "ai-message", text: "Done" });
 
   const storedFile = path.join(directory, fs.readdirSync(directory)[0]);
   const legacyRecord = JSON.parse(fs.readFileSync(storedFile, "utf8"));
   legacyRecord.items.push({ id: "reasoning_legacy", turnId: "turn_1", type: "activity", activityKind: "reasoning", title: "Reasoning" });
+  legacyRecord.items.push({ id: "retry_legacy", turnId: "turn_1", type: "activity", activityKind: "codexRetry", title: "Codex retry", status: "waiting", summary: "Reconnecting" });
   fs.writeFileSync(storedFile, JSON.stringify(legacyRecord));
 
   const restartedProcess = new CodexTimelineStore(directory);

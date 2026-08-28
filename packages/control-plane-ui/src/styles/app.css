@@ -49,7 +49,8 @@
   --scrollbar-thumb-hover: rgb(99 99 102 / 52%);
 
   --control-plane-cockpit-background: var(--workspace-bg);
-  --control-plane-topbar-bg: var(--surface);
+  /* Keep the titlebar close to the workspace while preserving a subtle layer. */
+  --control-plane-topbar-bg: var(--surface-subtle);
   --control-plane-settings-background: var(--surface-inset);
   --instance-board-background: var(--workspace-bg);
   --instance-list-row-hover-bg: var(--surface-inset);

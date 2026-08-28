@@ -1,4 +1,4 @@
-import { AiSessionReasoningEffortSchema, AiSessionTimelineSchema, AiSessionTurnTimelineSchema, type AiSessionCommandInput, type AiSessionCommandResult, type AiSessionModelSelection, type AiSessionReasoningEffort, type AiSessionStatus, type AiSessionTimelineItem } from "@task-handoff/protocol/ai-sessions";
+import { AI_SESSION_DEFAULT_REASONING_EFFORT, AiSessionReasoningEffortSchema, AiSessionTimelineSchema, AiSessionTurnTimelineSchema, type AiSessionCommandInput, type AiSessionCommandResult, type AiSessionModelSelection, type AiSessionReasoningEffort, type AiSessionStatus, type AiSessionTimelineItem } from "@task-handoff/protocol/ai-sessions";
 import type { AiSessionActionResult, AiSessionApprovalDecision, AiSessionControlProvider, AiSessionProviderCreateInput, AiSessionProviderCreateResult, AiSessionProviderForkInput, AiSessionProviderForkResult, AiSessionProviderTimelineItemListener, AiSessionSendInput } from "./ai-session-control";
 import { aiSessionControlError } from "./ai-session-control";
 import type { AiSessionDiscoveryContext, AiSessionDiscoveryProvider } from "./ai-session-discovery";
@@ -235,6 +235,7 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
       if (input.modelSelection && !requestedModel) {
         throw aiSessionControlError("AI_SESSION_MODEL_SELECTION_INVALID", "Codex model selection is unavailable.", 409);
       }
+      const requestedReasoningEffort = input.reasoningEffort ?? AI_SESSION_DEFAULT_REASONING_EFFORT;
       const thread = await client.startThread({
         cwd: input.cwd,
         runtimeWorkspaceRoots: [input.cwd],
@@ -242,7 +243,7 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
         ...requestedModel,
         ...(client.supportsPaginatedTimeline?.() ? { historyMode: "paginated" as const } : {}),
         permissions: codexPermissionOverrides(input.permissionMode),
-        reasoningEffort: input.reasoningEffort,
+        reasoningEffort: requestedReasoningEffort,
       });
       const providerSessionId = typeof thread.id === "string" ? thread.id.trim() : "";
       const cwd = typeof thread.cwd === "string" ? thread.cwd.trim() : "";
@@ -260,7 +261,7 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
         cwd,
         creationSource: "ai-session",
         modelSelection: this.actualModelSelection(thread, input.modelSelection),
-        reasoningEffort: this.actualReasoningEffort(thread, input.reasoningEffort),
+        reasoningEffort: this.actualReasoningEffort(thread, requestedReasoningEffort),
       };
     } finally {
       this.directCreateRequests -= 1;
@@ -358,12 +359,13 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
       if (input.source.modelSelection && !requestedModel) {
         throw aiSessionControlError("AI_SESSION_MODEL_SELECTION_UNAVAILABLE", "The source Codex provider is no longer available.", 409);
       }
+      const requestedReasoningEffort = input.source.reasoningEffort ?? AI_SESSION_DEFAULT_REASONING_EFFORT;
       const thread = await client.forkThread({
         threadId: sourceProviderSessionId,
         ...(input.providerThroughTurnId ? { lastTurnId: input.providerThroughTurnId } : {}),
         ...(input.cwd ? { cwd: input.cwd } : {}),
         ...requestedModel,
-        ...(input.source.reasoningEffort ? { reasoningEffort: input.source.reasoningEffort } : {}),
+        reasoningEffort: requestedReasoningEffort,
       });
       const providerSessionId = typeof thread.id === "string" ? thread.id.trim() : "";
       const cwd = typeof thread.cwd === "string" ? thread.cwd.trim() : "";
@@ -384,7 +386,7 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
         creationSource: "ai-session",
         lineage,
         modelSelection: this.actualModelSelection(thread, input.source.modelSelection),
-        reasoningEffort: this.actualReasoningEffort(thread, input.source.reasoningEffort),
+        reasoningEffort: this.actualReasoningEffort(thread, requestedReasoningEffort),
       };
     } catch (error) {
       if (error && typeof error === "object" && "rpcCode" in error && error.rpcCode === -32601) {
@@ -478,7 +480,7 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
       throw aiSessionControlError("AI_SESSION_MODEL_SELECTION_UNAVAILABLE", "The Codex provider for this session is no longer available.", 409);
     }
     const thread = client.resumeThread
-      ? await client.resumeThread(providerSessionId, { ...requestedModel, ...(reasoningEffort ? { reasoningEffort } : {}) })
+      ? await client.resumeThread(providerSessionId, { ...requestedModel, reasoningEffort: reasoningEffort ?? AI_SESSION_DEFAULT_REASONING_EFFORT })
       : client.readThread ? await client.readThread(providerSessionId, { includeTurns: true }) : undefined;
     if (!thread) throw aiSessionControlError("AI_SESSION_RESUME_UNSUPPORTED", "Codex app-server could not resume the thread.", 409);
     this.recordTimelineHistorySource(thread);

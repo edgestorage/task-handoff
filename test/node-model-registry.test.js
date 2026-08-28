@@ -7,6 +7,11 @@ const test = require("node:test");
 const { createNodeAgentApp } = require("../packages/control-plane/src/node-agent.ts");
 const { modelConfigHash } = require("../packages/protocol/src/control-plane.ts");
 
+const openCodeReasoningVariants = Object.fromEntries(
+  ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
+    .map((effort) => [effort, { reasoningEffort: effort }]),
+);
+
 function tempDataDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-node-models-"));
 }
@@ -138,7 +143,7 @@ test("node model registry uses immutable content hashes, private storage, and ha
         npm: "@ai-sdk/openai-compatible",
         name: "TaskHandoff",
         options: { baseURL: opencodeInput.endpoint, apiKey: opencodeInput.key },
-        models: { [opencodeInput.model]: { name: opencodeInput.name } },
+        models: { [opencodeInput.model]: { name: opencodeInput.name, variants: openCodeReasoningVariants } },
       },
     },
   });
@@ -233,6 +238,7 @@ test("ordered model entities resolve defaults by protocol and preserve provider 
   const responses = await request(app, "POST", "/api/node-agent/models", modelInput({
     name: "Second Responses endpoint",
     endpoint: "https://second.example/v1",
+    protocols: ["openai-responses", "openai-chat-completions"],
     model: "same-name",
     modelNames: [{ name: "same-name", order: 100 }, { name: "second-later", order: 200 }],
     key: "second-secret",
@@ -255,7 +261,11 @@ test("ordered model entities resolve defaults by protocol and preserve provider 
   assert.equal(assigned.json().data.instance.modelSelection.codexModelHash, undefined);
   const environment = app.nodeAgentState.resolvedAssignedModelEnvironment("inst_multi_models");
   assert.equal(environment.TASK_HANDOFF_CODEX_MODEL, "shared-first");
-  assert.equal(JSON.parse(environment.TASK_HANDOFF_OPENCODE_CONFIG_CONTENT).model, "task-handoff/shared-first");
+  const openCodeConfig = JSON.parse(environment.TASK_HANDOFF_OPENCODE_CONFIG_CONTENT);
+  assert.equal(openCodeConfig.model, `task-handoff-${sharedId}/shared-first`);
+  assert.deepEqual(Object.keys(openCodeConfig.provider), [`task-handoff-${sharedId}`, `task-handoff-${responsesId}`]);
+  assert.deepEqual(Object.keys(openCodeConfig.provider[`task-handoff-${sharedId}`].models), ["shared-first", "same-name"]);
+  assert.deepEqual(openCodeConfig.provider[`task-handoff-${sharedId}`].models["shared-first"].variants, openCodeReasoningVariants);
   const catalog = app.nodeAgentState.modelRegistry.privateCatalog("inst_multi_models");
   assert.deepEqual(catalog.entities.map((entity) => entity.id), [sharedId, responsesId]);
   assert.deepEqual(catalog.entities[0].modelNames.map((entry) => entry.name), ["shared-first", "same-name"]);

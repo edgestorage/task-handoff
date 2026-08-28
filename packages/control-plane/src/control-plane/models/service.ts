@@ -265,7 +265,10 @@ export class ControlPlaneModelService {
       const local = nodeModels.find((model) => model.id === entityId);
       if (!local) throwNotFound("MODEL_NOT_FOUND", `Model ${entityId} was not found on control-plane or node ${node.id}.`);
       assertEnabledModel(local);
-      resolvedEntities.push(ModelConfigSchema.parse({ ...local, key: "node-private" }));
+      // Node model listings are public records. Project them back to the
+      // internal shape instead of spreading response-only credential and
+      // reference metadata into the strict model config schema.
+      resolvedEntities.push(nodePublicModelToConfig(local));
     }
     const resolve = async (app: "codex" | "claude" | "opencode", selectedId?: string | null) => {
       if (selectedId === null) return undefined;
@@ -416,6 +419,24 @@ function normalizeModelNames(entries: ModelConfig["modelNames"] | undefined, leg
 
 function defaultProtocols(app: ModelConfig["app"]): ModelConfig["protocols"] {
   return app === "claude" ? ["anthropic-messages"] : app === "opencode" ? ["openai-chat-completions"] : ["openai-responses"];
+}
+
+function nodePublicModelToConfig(model: NodeModelPublicRecord): ModelConfig {
+  return ModelConfigSchema.parse({
+    id: model.id,
+    name: model.name,
+    endpoint: model.endpoint,
+    key: "node-private",
+    model: model.model,
+    modelNames: model.modelNames,
+    protocols: model.protocols,
+    app: model.app,
+    enabled: model.enabled,
+    order: model.order,
+    labels: model.labels,
+    createdAt: model.createdAt,
+    updatedAt: model.updatedAt,
+  });
 }
 
 function requireModelEndpointProbe(node: Node) {

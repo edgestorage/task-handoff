@@ -3,13 +3,13 @@ import { computed, nextTick, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { formatBytes, formatNumber } from "../../i18n/presentation";
 import type { SupportedLocale } from "../../i18n/locale";
-import { AppWindow, ArrowUp, Box, Check, Copy, CornerDownRight, File, FileText, Folder, Hand, LoaderCircle, Minimize2, Pencil, Plus, Puzzle, ScanSearch, ShieldAlert, ShieldCheck, Square, Target, WandSparkles, X } from "@lucide/vue";
+import { AppWindow, ArrowUp, Box, BrainCircuit, Check, Copy, CornerDownRight, File, FileText, Folder, Hand, LoaderCircle, Minimize2, Pencil, Plus, Puzzle, ScanSearch, ShieldAlert, ShieldCheck, Square, Target, WandSparkles, Waypoints, X } from "@lucide/vue";
 import { PopoverAnchor } from "reka-ui";
 import type { AiSessionMentionCandidate } from "../../api/types";
 import type { AiSessionCommandInput, AiSessionPermissionMode } from "@task-handoff/protocol/ai-sessions";
 import type { AiSessionModelSelection, AiSessionReasoningEffort } from "@task-handoff/protocol/ai-sessions";
 import type { AiSessionModelGroup } from "@task-handoff/control-plane-client";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger } from "../ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "../ui/context-menu";
 import { Popover, PopoverContent } from "../ui/popover";
 import { Textarea } from "../ui/textarea";
@@ -158,6 +158,7 @@ const modelOptions = computed(() => modelGroups.value.flatMap((group) => group.m
 const displayedModelSelection = computed(() => props.modelSelection || modelOptions.value[0]);
 const displayedModelName = computed(() => displayedModelSelection.value?.modelName || t("sessions.composer.modelSelectionUnavailable"));
 const reasoningEfforts: AiSessionReasoningEffort[] = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
+const availableReasoningEfforts = computed(() => props.provider === "codex" ? reasoningEfforts : reasoningEfforts.filter((effort) => effort !== "ultra"));
 const modelMenuDisabled = computed(() => Boolean(
   props.busy
   || props.sessionBusy
@@ -174,6 +175,15 @@ function selectedModelNameForGroup(group: AiSessionModelGroup) {
   return props.modelSelection?.modelEntityId === group.modelEntityId
     ? props.modelSelection.modelName
     : undefined;
+}
+
+function modelGroupSubtitle(group: AiSessionModelGroup) {
+  const selected = selectedModelNameForGroup(group);
+  if (selected) return selected;
+  const first = group.models[0]?.modelName || "";
+  return group.models.length > 1
+    ? t("sessions.composer.modelGroupSummary", { model: first, count: group.models.length })
+    : first;
 }
 
 function resizeInput() {
@@ -908,18 +918,17 @@ watch(() => props.busy, (busy) => {
           >
             <ScrollArea type="auto" :horizontal="false" class="ai-session-model-menu__scroll">
               <div class="ai-session-model-menu__list">
-                <template v-for="(group, groupIndex) in modelGroups" :key="group.modelEntityId">
-                  <DropdownMenuSeparator v-if="groupIndex" />
+                <template v-for="group in modelGroups" :key="group.modelEntityId">
                   <DropdownMenuSub v-if="group.models.length > 1">
                     <DropdownMenuSubTrigger
                       class="ai-session-model-menu__item ai-session-model-menu__provider-item"
                       :class="{ 'ai-session-model-menu__item--selected': selectedModelNameForGroup(group) }"
                     >
-                      <span class="ai-session-model-menu__copy"><strong>{{ group.providerName }}</strong></span>
-                      <small
-                        v-if="selectedModelNameForGroup(group)"
-                        class="ai-session-model-menu__inline-model"
-                      >{{ selectedModelNameForGroup(group) }}</small>
+                      <Waypoints class="ai-session-model-menu__icon" :size="17" />
+                      <span class="ai-session-model-menu__copy">
+                        <strong>{{ group.providerName }}</strong>
+                        <small v-if="modelGroupSubtitle(group)">{{ modelGroupSubtitle(group) }}</small>
+                      </span>
                     </DropdownMenuSubTrigger>
                     <DropdownMenuSubContent class="ai-session-model-menu ai-session-model-menu--nested" :collision-padding="12">
                       <DropdownMenuItem
@@ -940,8 +949,11 @@ watch(() => props.busy, (busy) => {
                     :class="{ 'ai-session-model-menu__item--selected': isSelectedModel(group.models[0]) }"
                     @select="emit('selectModel', { modelEntityId: group.models[0].modelEntityId, modelName: group.models[0].modelName })"
                   >
-                    <span class="ai-session-model-menu__copy"><strong>{{ group.providerName }}</strong></span>
-                    <small class="ai-session-model-menu__inline-model">{{ group.models[0].modelName }}</small>
+                    <Waypoints class="ai-session-model-menu__icon" :size="17" />
+                    <span class="ai-session-model-menu__copy">
+                      <strong>{{ group.providerName }}</strong>
+                      <small>{{ group.models[0].modelName }}</small>
+                    </span>
                     <Check v-if="isSelectedModel(group.models[0])" class="ai-session-model-menu__check" :size="16" />
                   </DropdownMenuItem>
                 </template>
@@ -949,12 +961,15 @@ watch(() => props.busy, (busy) => {
                   <DropdownMenuSeparator />
                   <DropdownMenuSub>
                     <DropdownMenuSubTrigger class="ai-session-model-menu__item ai-session-model-menu__provider-item">
-                      <span class="ai-session-model-menu__copy"><strong>{{ t("sessions.composer.reasoningEffort") }}</strong></span>
-                      <small v-if="reasoningEffort" class="ai-session-model-menu__inline-model">{{ reasoningEffort }}</small>
+                      <BrainCircuit class="ai-session-model-menu__icon" :size="17" />
+                      <span class="ai-session-model-menu__copy">
+                        <strong>{{ t("sessions.composer.reasoningEffort") }}</strong>
+                        <small v-if="reasoningEffort">{{ reasoningEffort }}</small>
+                      </span>
                     </DropdownMenuSubTrigger>
-                    <DropdownMenuSubContent class="ai-session-model-menu ai-session-model-menu--nested" :collision-padding="12">
+                    <DropdownMenuSubContent class="ai-session-model-menu ai-session-model-menu--nested ai-session-reasoning-menu" :collision-padding="12">
                       <DropdownMenuItem
-                        v-for="effort in reasoningEfforts"
+                        v-for="effort in availableReasoningEfforts"
                         :key="effort"
                         class="ai-session-model-menu__item"
                         :class="{ 'ai-session-model-menu__item--selected': reasoningEffort === effort }"
@@ -1357,19 +1372,20 @@ watch(() => props.busy, (busy) => {
 }
 
 :global(.ai-session-model-menu) {
-  width: min(280px, calc(100vw - 24px));
-  max-height: min(320px, var(--reka-dropdown-menu-content-available-height));
+  width: min(292px, var(--reka-dropdown-menu-content-available-width));
+  max-height: min(360px, var(--reka-dropdown-menu-content-available-height));
   overflow: hidden;
-  padding: 4px;
+  padding: 5px;
 }
 
 :global(.ai-session-model-menu__scroll) {
-  max-height: min(312px, calc(var(--reka-dropdown-menu-content-available-height) - 8px));
+  max-height: min(350px, calc(var(--reka-dropdown-menu-content-available-height) - 10px));
   min-width: 0;
 }
 
 :global(.ai-session-model-menu__list) {
   display: grid;
+  gap: 1px;
 }
 
 :global(.ai-session-model-menu__provider) {
@@ -1380,14 +1396,19 @@ watch(() => props.busy, (busy) => {
 }
 
 :global(.ai-session-model-menu__item) {
-  min-height: 32px;
-  gap: 8px;
-  border-radius: 7px;
-  padding: 4px 8px;
+  min-height: 42px;
+  gap: 10px;
+  border-radius: 6px;
+  padding: 7px 9px;
 }
 
 :global(.ai-session-model-menu__provider-item) {
   align-items: center;
+}
+
+:global(.ai-session-model-menu__icon) {
+  flex: 0 0 auto;
+  color: hsl(var(--muted-foreground));
 }
 
 :global(.ai-session-model-menu__copy) {
@@ -1401,7 +1422,7 @@ watch(() => props.busy, (busy) => {
   overflow: hidden;
   font-size: 13px;
   font-weight: 500;
-  line-height: 16px;
+  line-height: 18px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1411,37 +1432,53 @@ watch(() => props.busy, (busy) => {
   color: hsl(var(--muted-foreground));
   font-size: 12px;
   font-weight: 400;
-  line-height: 16px;
+  line-height: 17px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 :global(.ai-session-model-menu__check) {
   flex: 0 0 auto;
+  margin-left: auto;
 }
 
 :global(.ai-session-model-menu__item--selected) {
+  background: var(--surface-active);
+  color: var(--text-strong);
+}
+
+:global(.ai-session-model-menu__item--selected .ai-session-model-menu__icon),
+:global(.ai-session-model-menu__item--selected .ai-session-model-menu__check) {
   color: hsl(var(--primary));
 }
 
-:global(.ai-session-model-menu__item--selected .ai-session-model-menu__inline-model) {
-  color: color-mix(in srgb, hsl(var(--primary)) 25%, hsl(var(--muted-foreground)));
-}
-
-:global(.ai-session-model-menu__inline-model) {
-  max-width: 52%;
-  overflow: hidden;
-  color: hsl(var(--muted-foreground));
-  font-size: 13px;
-  font-weight: 400;
-  line-height: 16px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+:global(.ai-session-model-menu__item:is(:focus, [data-highlighted])),
+:global(.ai-session-model-menu__provider-item[data-state="open"]) {
+  background: var(--surface-active);
+  color: var(--text-strong);
 }
 
 :global(.ai-session-model-menu--nested) {
-  min-width: 220px;
-  max-height: min(320px, var(--reka-dropdown-menu-content-available-height));
+  width: min(220px, var(--reka-dropdown-menu-content-available-width));
+  max-height: min(360px, var(--reka-dropdown-menu-content-available-height));
+}
+
+:global(.ai-session-model-menu--nested .ai-session-model-menu__item) {
+  min-height: 32px;
+  gap: 8px;
+  padding: 5px 8px;
+}
+
+:global(.ai-session-model-menu--nested .ai-session-model-menu__copy strong) {
+  line-height: 16px;
+}
+
+:global(.ai-session-reasoning-menu) {
+  width: min(190px, var(--reka-dropdown-menu-content-available-width));
+}
+
+:global(.ai-session-reasoning-menu .ai-session-model-menu__item) {
+  min-height: 30px;
 }
 
 :global(.ai-session-permission-menu) {
