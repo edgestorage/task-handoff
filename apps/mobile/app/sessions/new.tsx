@@ -4,7 +4,8 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import { Platform } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import type { AiSessionGitSelection, AiSessionModelSelection, AiSessionPermissionMode } from '@task-handoff/protocol/ai-sessions';
+import { AI_SESSION_DEFAULT_REASONING_EFFORT, type AiSessionGitSelection, type AiSessionModelSelection, type AiSessionPermissionMode, type AiSessionReasoningEffort } from '@task-handoff/protocol/ai-sessions';
+import { normalizeAiSessionReasoningEffortCapabilities } from '@task-handoff/protocol/ai-session-provider-capabilities';
 import { aiSessionMessageText, defaultAiSessionModelSelection, deriveAiSessionModelGroups, type AiSessionCatalogModelEntity } from '@task-handoff/control-plane-client';
 import { directoryAiSessionProviderCapability } from '@task-handoff/protocol/control-plane-directory';
 import type { RepositoryAiSessionWorkspace } from '@task-handoff/protocol/repository';
@@ -33,6 +34,7 @@ export default function NewAiSessionRoute() {
   const [savingPermission, setSavingPermission] = useState(false);
   const [modelEntities, setModelEntities] = useState<AiSessionCatalogModelEntity[]>([]);
   const [modelSelectionDraft, setModelSelectionDraft] = useState<{ instanceId: string; agent: string; value: AiSessionModelSelection }>();
+  const [reasoningEffort, setReasoningEffort] = useState<AiSessionReasoningEffort>();
   const [folderState, setFolderState] = useState<{ nodeId: string; folders: AiSessionFolderOption[] }>({ nodeId: '', folders: [] });
   const [workspaceState, setWorkspaceState] = useState<{
     instanceId?: string;
@@ -78,6 +80,10 @@ export default function NewAiSessionRoute() {
   const modelSelection = modelSelectionDraft?.instanceId === selectedInstanceId && modelSelectionDraft.agent === agent
     ? modelSelectionDraft.value
     : defaultAiSessionModelSelection(modelGroups);
+  const reasoningCapability = normalizeAiSessionReasoningEffortCapabilities(directoryAiSessionProviderCapability(selectedInstance?.capabilities, agent));
+  const effectiveReasoningEffort = reasoningCapability.selectAtCreate
+    ? reasoningEffort ?? (agent === 'codex' ? AI_SESSION_DEFAULT_REASONING_EFFORT : undefined)
+    : undefined;
 
   const guidance = instanceCreateGuidance(selectedInstance);
   useEffect(() => {
@@ -168,6 +174,7 @@ export default function NewAiSessionRoute() {
         message: aiSessionMessageText(message.trim()),
         permissionMode,
         modelSelection,
+        reasoningEffort: effectiveReasoningEffort,
         attachments: attachments.map(({ local }) => ({ kind: local.kind, name: local.name, size: local.size })),
       };
       const requestId = await mobileCreateRequestStore.getOrCreate(controlPlaneId, selectedInstance.id, requestInput, Crypto.randomUUID);
@@ -188,6 +195,7 @@ export default function NewAiSessionRoute() {
         attachments: usableUploadRefs(uploadedAttachments),
         permissionMode,
         modelSelection,
+        reasoningEffort: effectiveReasoningEffort,
         clientRequestId: requestId,
       });
       if (agent === 'codex') await mobilePermissionStore.write(controlPlaneId, selectedInstance.id, result.aiSessionId, permissionMode).catch(() => undefined);
@@ -285,16 +293,20 @@ export default function NewAiSessionRoute() {
       permissionMode={permissionMode}
       modelGroups={modelGroups}
       modelSelection={modelSelection}
+      reasoningEffort={effectiveReasoningEffort}
+      reasoningEffortEnabled={reasoningCapability.selectAtCreate}
       onModelSelectionChange={(value) => setModelSelectionDraft({ instanceId: selectedInstanceId, agent, value })}
+      onReasoningEffortChange={setReasoningEffort}
     busy={busy || savingPermission || workspaceLoading}
     disabled={busy || savingPermission || workspaceLoading || Boolean(guidance) || !agent || !selectedFolder || (!message.trim() && !attachments.length)}
     error={guidance}
     visualBalanceInset={newSessionVisualBalanceInset(Platform.OS, insets.top)}
     onInstanceChange={(instanceId) => {
       const instance = state.instances.find((candidate) => candidate.id === instanceId);
+      setReasoningEffort(undefined);
       setSelection({ instanceId, agent: instance?.availableAgents[0]?.id });
     }}
-    onAgentChange={(nextAgent) => setSelection({ instanceId: selectedInstanceId, agent: nextAgent, folderId })}
+    onAgentChange={(nextAgent) => { setReasoningEffort(undefined); setSelection({ instanceId: selectedInstanceId, agent: nextAgent, folderId }); }}
     onFolderChange={(nextFolderId) => setSelection({ instanceId: selectedInstanceId, agent, folderId: nextFolderId })}
     onWorkspaceModeChange={(mode) => {
       const workspace = workspaceState.workspace;

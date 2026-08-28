@@ -4,7 +4,6 @@ import { TextInputWrapper, type PasteEventPayload } from 'expo-paste-input';
 import { Hand, Pencil, Plus, ShieldAlert, ShieldCheck, X } from 'lucide-react-native';
 import { ActivityIndicator, Animated, Easing, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { AI_SESSION_LONG_PASTE_CODE_POINT_THRESHOLD } from '@task-handoff/control-plane-client';
-import { AnchoredSelectMenu, type AnchoredSelectOption } from '../components/AnchoredSelectMenu';
 
 import { SystemIcon } from '../components/SystemIcon';
 import { useMobileTheme } from '../components/theme';
@@ -18,11 +17,22 @@ import {
   SESSION_COMPOSER_COLLAPSED_HEIGHT,
   SESSION_COMPOSER_EXPANDED_HEIGHT,
   SESSION_COMPOSER_EXPANDED_RADIUS,
+  SESSION_COMPOSER_MODEL_MAX_WIDTH,
+  SESSION_COMPOSER_PERMISSION_CHEVRON_RIGHT,
+  SESSION_COMPOSER_PERMISSION_CHEVRON_SIZE,
+  SESSION_COMPOSER_PERMISSION_HEIGHT,
+  SESSION_COMPOSER_PERMISSION_ICON_LEFT,
+  SESSION_COMPOSER_PERMISSION_ICON_SLOT_SIZE,
+  SESSION_COMPOSER_PERMISSION_RADIUS,
+  SESSION_COMPOSER_PERMISSION_TEXT_LEFT,
+  SESSION_COMPOSER_PERMISSION_TEXT_RIGHT,
+  SESSION_COMPOSER_PERMISSION_WIDTH_OVERHEAD,
   SESSION_COMPOSER_TOOLBAR_HEIGHT,
   SESSION_COMPOSER_TOOL_SIZE,
+  sessionComposerCollapsedInputRight,
   sessionComposerPermissionIconSize,
 } from './composer-metrics';
-import { AttachmentMenu, PermissionMenu, type PermissionOption } from './SessionComposerMenus';
+import { AttachmentMenu, ModelSettingsMenu, PermissionMenu, type PermissionOption } from './SessionComposerMenus';
 import type { SessionComposerProps } from './session-composer-types';
 
 export function SessionComposer(props: SessionComposerProps) {
@@ -37,12 +47,8 @@ export function SessionComposer(props: SessionComposerProps) {
     { value: 'auto-review', label: t('composer.autoReview'), description: t('composer.autoReviewDescription'), systemImage: 'checkmark.shield' },
     { value: 'full-access', label: t('composer.fullAccess'), description: t('composer.fullAccessDescription'), systemImage: 'exclamationmark.shield', danger: true },
   ];
-  const modelOptions: AnchoredSelectOption[] = (props.modelGroups || []).flatMap((group) => group.models.map((model) => ({
-    label: model.modelName,
-    description: group.providerName,
-    systemImage: 'sparkles' as const,
-    value: JSON.stringify({ modelEntityId: model.modelEntityId, modelName: model.modelName }),
-  })));
+  const modelGroups = props.modelGroups || [];
+  const modelControlsVisible = Boolean(modelGroups.length || props.reasoningEffortEnabled);
   const [permissionLabelMeasurement, setPermissionLabelMeasurement] = useState<{ label: string; width: number }>();
   const [fallbackExpansion] = useState(() => new Animated.Value(props.focused ? 1 : 0));
   const expansion = props.expansion ?? fallbackExpansion;
@@ -73,7 +79,7 @@ export function SessionComposer(props: SessionComposerProps) {
     height: expansion.interpolate({ inputRange: [0, 1], outputRange: [SESSION_COMPOSER_COLLAPSED_HEIGHT, SESSION_COMPOSER_EXPANDED_HEIGHT] }),
   };
   const measuredPermissionWidth = permissionLabelMeasurement?.label === currentPermissionLabel
-    ? Math.ceil(permissionLabelMeasurement.width) + 58
+    ? Math.ceil(permissionLabelMeasurement.width) + SESSION_COMPOSER_PERMISSION_WIDTH_OVERHEAD
     : estimatedPermissionWidth(props.permissionMode);
   const permissionWidth = expansion.interpolate({ inputRange: [0, 1], outputRange: [36, measuredPermissionWidth] });
   const permissionTextOpacity = expansion.interpolate({ inputRange: [0, 0.35, 1], outputRange: [0, 0, 1] });
@@ -116,9 +122,9 @@ export function SessionComposer(props: SessionComposerProps) {
           onChangeText={props.onValueChange}
           onFocus={() => props.onFocusChange(true)}
           placeholder={t('composer.placeholder')}
-          placeholderTextColor={colors.textMuted}
+          placeholderTextColor={colors.textPlaceholder}
           scrollEnabled={props.focused}
-          style={[styles.input, props.focused ? styles.inputFocused : styles.inputCollapsed, !props.focused && !props.permissionEnabled && styles.inputCollapsedWithoutPermission, { color: colors.text }]}
+          style={[styles.input, props.focused ? styles.inputFocused : [styles.inputCollapsed, { right: sessionComposerCollapsedInputRight(modelControlsVisible) }], !props.focused && !props.permissionEnabled && styles.inputCollapsedWithoutPermission, { color: colors.text }]}
           textAlignVertical={props.focused ? 'top' : 'center'}
           testID="session-message-input"
           value={props.value}
@@ -198,12 +204,12 @@ export function SessionComposer(props: SessionComposerProps) {
           </Text> : null}
         </View>}
         <View style={styles.trailingTools}>
-        {modelOptions.length ? <AnchoredSelectMenu cancelLabel={t('common.cancel')} disabled={props.actionBusy || props.modelSelectionBusy} onSelect={(value) => props.onModelSelectionChange?.(JSON.parse(value))} options={modelOptions} selectedValue={props.modelSelection ? JSON.stringify(props.modelSelection) : ''} title={t('sessions.model')}>
+        {modelControlsVisible ? <ModelSettingsMenu provider={props.provider} cancelLabel={t('common.cancel')} disabled={Boolean(props.actionBusy || props.modelSelectionBusy || props.reasoningEffortBusy)} formatModelGroupSummary={(model, count) => t('sessions.modelGroupSummary', { model, count })} modelGroups={modelGroups} modelSelection={props.modelSelection} onModelChange={(selection) => props.onModelSelectionChange?.(selection)} onReasoningChange={(effort) => props.onReasoningEffortChange?.(effort)} reasoningEffort={props.reasoningEffort} reasoningEnabled={Boolean(props.reasoningEffortEnabled)} reasoningTitle={t('sessions.reasoningEffort')} title={t('sessions.model')}>
           {(onPress) => <Pressable accessibilityLabel={props.modelSelection?.modelName || t('sessions.model')} accessibilityRole="button" disabled={props.actionBusy || props.modelSelectionBusy} onPress={onPress} style={({ pressed }) => [styles.modelButton, pressed && styles.pressed]}>
-            {props.modelSelectionBusy ? <ActivityIndicator color={colors.textMuted} size="small" /> : <Text numberOfLines={1} style={[styles.modelText, { color: colors.textMuted }]}>{props.modelSelection?.modelName || t('sessions.model')}</Text>}
+            {props.modelSelectionBusy || props.reasoningEffortBusy ? <ActivityIndicator color={colors.textMuted} size="small" /> : <Text numberOfLines={1} style={[styles.modelText, { color: colors.textMuted }]}>{props.modelSelection?.modelName || t('sessions.model')}</Text>}
             <SystemIcon android="expand_more" color={colors.textMuted} ios="chevron.down" size={10} />
           </Pressable>}
-        </AnchoredSelectMenu> : null}
+        </ModelSettingsMenu> : null}
         <Pressable
           accessibilityLabel={actionLabel(props.action, t, props.actionBusy)}
           accessibilityRole="button"
@@ -246,24 +252,24 @@ const styles = StyleSheet.create({
     shadowRadius: 16,
   },
   input: { fontSize: 16, lineHeight: 23 },
-  inputCollapsed: { bottom: 0, left: 84, paddingHorizontal: 4, paddingVertical: 15, position: 'absolute', right: 52, top: 0 },
+  inputCollapsed: { bottom: 0, left: 84, paddingHorizontal: 4, paddingVertical: 15, position: 'absolute', top: 0 },
   inputCollapsedWithoutPermission: { left: 48 },
   inputFocused: { bottom: 50, left: 0, paddingBottom: 8, paddingHorizontal: 14, paddingTop: 14, position: 'absolute', right: 0, top: 0 },
   toolbar: { alignItems: 'center', bottom: 0, flexDirection: 'row', height: SESSION_COMPOSER_TOOLBAR_HEIGHT, justifyContent: 'space-between', left: 0, paddingHorizontal: 8, position: 'absolute', right: 0 },
   leadingTools: { alignItems: 'center', flexDirection: 'row' },
   trailingTools: { alignItems: 'center', flexDirection: 'row', gap: 4, minWidth: 0 },
-  modelButton: { alignItems: 'center', flexDirection: 'row', gap: 4, maxWidth: 120, minHeight: 40, paddingHorizontal: 5 },
+  modelButton: { alignItems: 'center', flexDirection: 'row', gap: 4, maxWidth: SESSION_COMPOSER_MODEL_MAX_WIDTH, minHeight: 40, paddingHorizontal: 5 },
   modelText: { flexShrink: 1, fontSize: mobileWebType.meta, fontWeight: '500' },
   editingState: { alignItems: 'center', flex: 1, flexDirection: 'row', gap: 7, minWidth: 0, paddingLeft: 8, paddingRight: 6 },
   editingLabel: { flexShrink: 1, fontSize: mobileWebType.meta, fontWeight: '600' },
   cancelEditButton: { alignItems: 'center', height: 34, justifyContent: 'center', width: 34 },
   toolButton: { alignItems: 'center', height: SESSION_COMPOSER_TOOL_SIZE, justifyContent: 'center', width: SESSION_COMPOSER_TOOL_SIZE },
-  permissionButtonFrame: { borderRadius: 19, height: 38, overflow: 'hidden' },
-  permissionMenuTriggerFrame: { height: 38 },
-  permissionButton: { alignItems: 'center', borderRadius: 19, flex: 1, flexDirection: 'row' },
-  permissionIconSlot: { alignItems: 'center', height: 20, justifyContent: 'center', left: 8, position: 'absolute', width: 20 },
-  permissionText: { fontSize: mobileWebType.meta, fontWeight: '600', marginLeft: 34, marginRight: 24 },
-  permissionChevron: { alignItems: 'center', height: 20, justifyContent: 'center', position: 'absolute', right: 8, width: 10 },
+  permissionButtonFrame: { borderRadius: SESSION_COMPOSER_PERMISSION_RADIUS, height: SESSION_COMPOSER_PERMISSION_HEIGHT, overflow: 'hidden' },
+  permissionMenuTriggerFrame: { height: SESSION_COMPOSER_PERMISSION_HEIGHT },
+  permissionButton: { alignItems: 'center', borderRadius: SESSION_COMPOSER_PERMISSION_RADIUS, flex: 1, flexDirection: 'row' },
+  permissionIconSlot: { alignItems: 'center', height: SESSION_COMPOSER_PERMISSION_ICON_SLOT_SIZE, justifyContent: 'center', left: SESSION_COMPOSER_PERMISSION_ICON_LEFT, position: 'absolute', width: SESSION_COMPOSER_PERMISSION_ICON_SLOT_SIZE },
+  permissionText: { fontSize: mobileWebType.meta, fontWeight: '600', marginLeft: SESSION_COMPOSER_PERMISSION_TEXT_LEFT, marginRight: SESSION_COMPOSER_PERMISSION_TEXT_RIGHT },
+  permissionChevron: { alignItems: 'center', height: SESSION_COMPOSER_PERMISSION_ICON_SLOT_SIZE, justifyContent: 'center', position: 'absolute', right: SESSION_COMPOSER_PERMISSION_CHEVRON_RIGHT, width: SESSION_COMPOSER_PERMISSION_CHEVRON_SIZE },
   permissionTextMeasurement: { fontSize: mobileWebType.meta, fontWeight: '600', opacity: 0, position: 'absolute' },
   actionButton: { alignItems: 'center', borderRadius: SESSION_COMPOSER_ACTION_RADIUS, height: SESSION_COMPOSER_ACTION_SIZE, justifyContent: 'center', width: SESSION_COMPOSER_ACTION_SIZE },
   disabled: { opacity: 0.4 },

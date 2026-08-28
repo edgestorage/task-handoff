@@ -1,4 +1,4 @@
-import type { AiSessionModelSelection, AiSessionPermissionMode } from '@task-handoff/protocol/ai-sessions';
+import type { AiSessionModelSelection, AiSessionPermissionMode, AiSessionReasoningEffort } from '@task-handoff/protocol/ai-sessions';
 import type { AiSessionModelGroup } from '@task-handoff/control-plane-client';
 import type { RepositoryAiSessionWorkspace } from '@task-handoff/protocol/repository';
 import type { ControlPlaneInstanceDirectoryEntry, ControlPlaneNodeDirectoryEntry } from '@task-handoff/protocol/control-plane-directory';
@@ -30,6 +30,8 @@ export type NewSessionFormProps = {
   permissionMode: AiSessionPermissionMode;
   modelGroups?: AiSessionModelGroup[];
   modelSelection?: AiSessionModelSelection;
+  reasoningEffort?: AiSessionReasoningEffort;
+  reasoningEffortEnabled?: boolean;
   busy: boolean;
   disabled: boolean;
   error?: string;
@@ -48,6 +50,7 @@ export type NewSessionFormProps = {
   onRemoveAttachment(id: string): void;
   onPermissionModeChange(value: AiSessionPermissionMode): void;
   onModelSelectionChange?(value: AiSessionModelSelection): void;
+  onReasoningEffortChange?(value: AiSessionReasoningEffort): void;
   onCreate(): void;
 };
 

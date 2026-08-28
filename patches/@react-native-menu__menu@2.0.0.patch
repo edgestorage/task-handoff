@@ -1,0 +1,88 @@
+diff --git a/ios/NewArch/MenuView.mm b/ios/NewArch/MenuView.mm
+index f4752cc..f1e7e11 100644
+--- a/ios/NewArch/MenuView.mm
++++ b/ios/NewArch/MenuView.mm
+@@ -102,6 +102,25 @@ using namespace facebook::react;
+         NSMutableArray<NSDictionary *> *subactionsArray = [NSMutableArray arrayWithCapacity:actions.size()];
+         if (action.subactions.size() > 0) {
+             for (const MenuViewActionsSubactionsStruct &subaction : action.subactions) {
++                NSMutableArray<NSDictionary *> *nestedSubactionsArray = [NSMutableArray arrayWithCapacity:subaction.subactions.size()];
++                for (const MenuViewActionsSubactionsSubactionsStruct &nestedSubaction : subaction.subactions) {
++                    NSDictionary *nestedSubactionDict = @{
++                        @"id": [NSString stringWithUTF8String:nestedSubaction.id.c_str()],
++                        @"title": [NSString stringWithUTF8String:nestedSubaction.title.c_str()],
++                        @"titleColor": @(nestedSubaction.titleColor),
++                        @"subtitle": [NSString stringWithUTF8String:nestedSubaction.subtitle.c_str()],
++                        @"state": [NSString stringWithUTF8String:nestedSubaction.state.c_str()],
++                        @"image": [NSString stringWithUTF8String:nestedSubaction.image.c_str()],
++                        @"imageColor": @(nestedSubaction.imageColor),
++                        @"displayInline": @(nestedSubaction.displayInline),
++                        @"attributes": @{
++                            @"destructive": @(nestedSubaction.attributes.destructive),
++                            @"disabled": @(nestedSubaction.attributes.disabled),
++                            @"hidden": @(nestedSubaction.attributes.hidden),
++                        },
++                    };
++                    [nestedSubactionsArray addObject:nestedSubactionDict];
++                }
+                 NSDictionary *subactionDict = @{
+                     @"id": [NSString stringWithUTF8String:subaction.id.c_str()],
+                     @"title": [NSString stringWithUTF8String:subaction.title.c_str()],
+@@ -118,6 +141,7 @@ using namespace facebook::react;
+                         @"disabled": @(subaction.attributes.disabled),
+                         @"hidden": @(subaction.attributes.hidden),
+                     },
++                    @"subactions": nestedSubactionsArray,
+                 };
+                 [subactionsArray addObject:subactionDict];
+             }
+diff --git a/ios/Shared/RCTMenuItem.swift b/ios/Shared/RCTMenuItem.swift
+index f5d510d..a5ecaf7 100644
+--- a/ios/Shared/RCTMenuItem.swift
++++ b/ios/Shared/RCTMenuItem.swift
+@@ -109,6 +109,10 @@ class RCTMenuAction {
+                 menu = UIMenu(title: title, image: image, children: subMenuActions)
+             }
+ 
++            if #available(iOS 15.0, *) {
++                menu.subtitle = subtitle
++            }
++
+             if #available(iOS 16.0, *) {
+                 if(preferredElementSizeString == "small") {
+                     menu.preferredElementSize = .small
+diff --git a/src/NativeModuleSpecs/UIMenuNativeComponent.ts b/src/NativeModuleSpecs/UIMenuNativeComponent.ts
+index 4f35fc5..44e36ac 100644
+--- a/src/NativeModuleSpecs/UIMenuNativeComponent.ts
++++ b/src/NativeModuleSpecs/UIMenuNativeComponent.ts
+@@ -10,6 +10,22 @@ import codegenNativeComponent from "react-native/Libraries/Utilities/codegenNativ
+   types here, to avoid issues while `pod install` takes place.
+ */
+ 
++type LeafAction = {
++	id?: string;
++	title: string;
++	titleColor?: Int32;
++	subtitle?: string;
++	state?: string;
++	image?: string;
++	imageColor?: Int32;
++	displayInline?: boolean;
++	attributes?: {
++		destructive?: boolean;
++		disabled?: boolean;
++		hidden?: boolean;
++	};
++};
++
+ type SubAction = {
+ 	id?: string;
+ 	title: string;
+@@ -26,6 +43,7 @@ type SubAction = {
+ 		disabled?: boolean;
+ 		hidden?: boolean;
+ 	};
++	subactions?: Array<LeafAction>;
+ };
+ type MenuAction = {
+ 	id?: string;

@@ -175,6 +175,12 @@ export class LocalhostRuntimeAdapter implements RuntimeAdapter {
         TASK_HANDOFF_WEB_HOST: "127.0.0.1",
         TASK_HANDOFF_GIT_CREDENTIAL_SOCKET: path.join(gitBrokerDir, "broker.sock"),
         ...(context.modelEnv || {}),
+        // CODEX_HOME belongs to the controlled instance's private config area.
+        // Explicitly clear an inherited value when Codex configuration is
+        // disabled or the default Codex home is selected.
+        CODEX_HOME: context.instance.config.codexConfigEnabled && context.instance.config.codexHomeMode === "taskhandoff"
+          ? path.join(dataDir, "configs", "codex")
+          : undefined,
       },
     });
     fs.closeSync(out);

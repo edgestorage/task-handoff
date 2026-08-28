@@ -5,6 +5,8 @@ import type {
   AiSessionSnapshotInput,
   AiSessionTimelineItem,
   AiSessionTurn,
+  AiSessionModelSelection,
+  AiSessionReasoningEffort,
 } from "@task-handoff/protocol/ai-sessions";
 import type {
   OpenCodeMessage,
@@ -26,6 +28,7 @@ export function projectOpenCodeSession(input: {
   status?: OpenCodeSessionStatus;
   permissions: OpenCodePermission[];
   messages: OpenCodeMessage[];
+  projectModelSelection?: (providerID: string, modelID: string) => AiSessionModelSelection | undefined;
 }): OpenCodeProjection {
   const messages = [...input.messages].sort((left, right) => left.info.time.created - right.info.time.created);
   const permissions = input.permissions.filter((permission) => permission.sessionID === input.session.id);
@@ -83,6 +86,15 @@ export function projectOpenCodeSession(input: {
 
   const latestTurn = turns.at(-1);
   const latestAssistant = messages.filter((message) => message.info.role === "assistant").at(-1);
+  const latestUserInfo = userMessages.at(-1)?.info;
+  const latestUserModel = latestUserInfo?.role === "user"
+    ? latestUserInfo.model as { providerID: string; modelID: string; variant?: string } | undefined
+    : undefined;
+  const actualModel = latestUserModel
+    ? { providerID: latestUserModel.providerID, modelID: latestUserModel.modelID, variant: latestUserModel.variant }
+    : input.session.model
+      ? { providerID: input.session.model.providerID, modelID: input.session.model.id, variant: input.session.model.variant }
+      : undefined;
   const error = latestAssistant?.info.role === "assistant" ? errorText(latestAssistant.info.error) : undefined;
   const lifecycle = projectLifecycle(input.status, pendingPermission, error);
   const phase = projectPhase(input.status, pendingPermission, messages);
@@ -98,6 +110,12 @@ export function projectOpenCodeSession(input: {
         retry: input.status?.type === "retry" ? { attempt: input.status.attempt, message: input.status.message, next: input.status.next } : undefined,
         pendingPermissionId: pendingPermission?.id,
       }),
+      modelSelection: actualModel
+        ? input.projectModelSelection?.(actualModel.providerID, actualModel.modelID)
+        : undefined,
+      reasoningEffort: actualModel?.variant && isReasoningEffort(actualModel.variant)
+        ? actualModel.variant
+        : undefined,
       actions: { send: true, interrupt: lifecycle === "running" || lifecycle === "waiting", approval: Boolean(pendingPermission), fork: true, close: true },
       title: input.session.title,
       cwd: input.session.directory,
@@ -106,7 +124,7 @@ export function projectOpenCodeSession(input: {
       turns: turns.slice(-50),
       status: lifecycle,
       phase,
-      summary: pendingPermission ? permissionSummary(pendingPermission) : input.status?.type === "retry" ? input.status.message : undefined,
+      summary: pendingPermission ? permissionSummary(pendingPermission) : undefined,
       lastMessage: latestTurn?.lastMessage,
       lastMessageItemId: latestTurn?.lastMessageItemId,
       error,
@@ -114,11 +132,16 @@ export function projectOpenCodeSession(input: {
       currentTool: activeTools(messages).at(-1),
       observedAt: iso(input.session.time.updated),
       snapshotVersion: Math.floor(input.session.time.updated),
+      replaceActivity: true,
     },
     timeline,
     turnByMessageId,
     pendingPermission,
   };
+}
+
+function isReasoningEffort(value: string): value is AiSessionReasoningEffort {
+  return ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"].includes(value);
 }
 
 export function projectOpenCodePart(part: OpenCodePart, turnId: string): AiSessionTimelineItem | undefined {

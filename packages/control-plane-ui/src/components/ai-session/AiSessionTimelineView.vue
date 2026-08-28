@@ -61,6 +61,7 @@
             :file-links="fileLinks"
             :is-latest="isLatestTurn(virtualTurn.index)"
             :response-content="turns[virtualTurn.index].latestResponse?.text || ''"
+            :retry-warning="turns[virtualTurn.index].retryWarning"
             :turn-started-at="turns[virtualTurn.index].startedAt"
             :turn-ended-at="turns[virtualTurn.index].endedAt"
             :session="session"
@@ -174,6 +175,7 @@ type DisplayConversationTurn = {
   activityNodes: TimelineTurnNode[];
   timelineStatus: AiSessionTurnTimelineState["status"];
   timelineError?: string;
+  retryWarning?: string;
 };
 
 const sourceTurns = computed(() => props.session?.turns || props.storedTurns);
@@ -209,6 +211,7 @@ const turns = computed<DisplayConversationTurn[]>(() => sourceTurns.value.map((t
     activityNodes: timeline.activityNodes,
     timelineStatus: state.status,
     timelineError: state.error,
+    retryWarning: timeline.retryWarning,
   };
 }));
 const copiedMessageId = ref("");

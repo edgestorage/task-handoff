@@ -52,6 +52,14 @@ test("models settings edits aggregate entries and deletes explicit locations thr
   assert.match(settings, /location\.type === 'node' && location\.referenceCount > 0/);
 });
 
+test("model deletion keeps its target until the asynchronous request completes", () => {
+  const settings = read("src/apps/control-plane/settings/ModelSettingsSection.vue");
+  assert.match(settings, /<AlertDialogCancel :disabled="Boolean\(deletingModelId\)">/);
+  assert.match(settings, /<Button variant="destructive" size="sm" :disabled="Boolean\(deletingModelId\)" @click="confirmDelete">/);
+  assert.doesNotMatch(settings, /<AlertDialogAction[^>]*@click="confirmDelete"/);
+  assert.match(settings, /if \(await removeModel\(target\.model, target\.location\)\) pendingDelete\.value = undefined/);
+});
+
 test("model settings discovers models into an ordered name list with real endpoint testing", () => {
   const settings = read("src/apps/control-plane/settings/ModelSettingsSection.vue");
   const state = read("src/apps/control-plane/settings/useModelSettings.ts");
@@ -69,7 +77,8 @@ test("model settings discovers models into an ordered name list with real endpoi
   assert.match(settings, /:deep\(\[role="option"\]\) \{[^}]*font-size: 13px;/);
   assert.match(settings, /:deep\(\[role="group"\]\) \{ display: grid; gap: 2px; padding: 0; \}/);
   assert.doesNotMatch(settings, /\[cmdk-item\]/);
-  assert.match(settings, /@click="fetchModelOptions"/);
+  assert.match(settings, /@update:open="handleModelPickerOpen"/);
+  assert.match(settings, /if \(open && !discoveredModels\.value\.length && !discoveringModels\.value\) void fetchModelOptions\(\)/);
   assert.match(settings, /@click="checkModel"/);
   assert.match(state, /discoverModels\(endpointDraft\(\), endpointNodeId\(\)\)/);
   assert.match(state, /testModel\(\{/);

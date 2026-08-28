@@ -345,7 +345,11 @@ export class AiSessionRegistry {
       cwd: input.cwd ? compact(input.cwd, 4096) : undefined,
       cwdFolderId: input.cwdFolderId ? compact(input.cwdFolderId, 120) : undefined,
       userPrompt: input.userPrompt ? messageText(input.userPrompt) : undefined,
-      turns: updateTurns(undefined, { userPrompt: options.suppressPromptTurn ? undefined : input.userPrompt, turns: input.turns }, timestamp, meta),
+      turns: updateTurns(undefined, {
+        userPrompt: options.suppressPromptTurn ? undefined : input.userPrompt,
+        turns: input.turns,
+        status: input.status,
+      }, timestamp, meta),
       status: normalizeLifecycle(input.status || "idle"),
       phase: normalizePhase(input.phase || "unknown"),
       summary: input.summary ? compact(input.summary, 1000) : undefined,

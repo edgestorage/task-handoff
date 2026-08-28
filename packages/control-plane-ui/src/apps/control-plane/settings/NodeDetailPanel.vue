@@ -1,10 +1,9 @@
 <template>
   <section class="modal-section settings-panel-surface node-detail-panel">
-    <ScrollArea v-if="selectedNode" class="node-detail-content">
-      <div class="node-detail-content-inner">
-        <div class="node-detail-header">
-          <div class="node-detail-identity">
-            <span>{{ status.locationLabel(selectedNode) }}</span>
+    <Tabs v-if="selectedNode" v-model="activeTab" class="node-detail-tabs">
+          <div class="node-detail-fixed-header">
+            <div class="node-detail-header">
+              <div class="node-detail-identity">
             <div class="node-detail-title-row">
               <strong>{{ selectedNode.name }}</strong>
               <Tooltip @update:open="refreshNodeConnectionDiagnostics">
@@ -27,68 +26,85 @@
                   <NodeConnectionDiagnostics class="node-status-connection-diagnostics" :diagnostics="selectedNode.connectionDiagnostics" :event-transport="status.eventTransport(selectedNode.id)" />
                 </TooltipContent>
               </Tooltip>
-            </div>
-            <div class="node-detail-meta">
-              <code v-if="nodeEndpointDisplay(selectedNode.endpoint)" :title="nodeEndpointDisplay(selectedNode.endpoint)">{{ nodeEndpointDisplay(selectedNode.endpoint) }}</code>
-              <span v-if="nodeEndpointDisplay(selectedNode.endpoint)" aria-hidden="true">·</span>
-              <span class="node-connection-mode">{{ localizedStatus(nodeConnectionModeKeys, selectedNode.connectionMode) }}</span>
-            </div>
-          </div>
-          <div class="node-detail-header-actions">
-            <Button variant="outline" size="sm" :disabled="headerActionState.check.disabled" @click="actions.checkSettingsNode(selectedNode.id)">
-              <RefreshCw :size="14" />
-              <span>{{ headerActionState.check.label }}</span>
-            </Button>
-            <DropdownMenu>
-              <DropdownMenuTrigger as-child>
-                <Button
-                  variant="outline"
-                  size="icon-sm"
-                  :aria-busy="headerActionState.menu.busy"
-                  :aria-label="headerActionState.menu.label"
+              <Tooltip>
+                <RekaTooltipTrigger
+                  as="button"
+                  type="button"
+                  class="node-detail-inline-meta"
+                  :aria-label="`${status.locationLabel(selectedNode)} · ${nodeEndpointDisplay(selectedNode.endpoint) || localizedStatus(nodeConnectionModeKeys, selectedNode.connectionMode)}`"
                 >
-                  <RefreshCw v-if="headerActionState.menu.busy" class="animate-spin motion-reduce:animate-none" :size="16" />
-                  <MoreHorizontal v-else :size="16" />
+                  <MapPin :size="13" aria-hidden="true" />
+                  <span>{{ status.locationLabel(selectedNode) }}</span>
+                  <span aria-hidden="true">·</span>
+                  <code>{{ nodeEndpointDisplay(selectedNode.endpoint) || localizedStatus(nodeConnectionModeKeys, selectedNode.connectionMode) }}</code>
+                </RekaTooltipTrigger>
+                <TooltipContent class="node-detail-context-tooltip" align="start" side="bottom" :side-offset="6">
+                  <div class="node-diagnostic-tooltip-grid">
+                    <span><b>{{ t("settings.fields.location") }}</b><em>{{ status.locationLabel(selectedNode) }}</em></span>
+                    <span><b>{{ t("settings.fields.endpoint") }}</b><em>{{ nodeEndpointDisplay(selectedNode.endpoint) || t("settings.nodeDetail.unknown") }}</em></span>
+                    <span><b>{{ t("settings.nodeDetail.remote") }}</b><em>{{ localizedStatus(nodeConnectionModeKeys, selectedNode.connectionMode) }}</em></span>
+                  </div>
+                </TooltipContent>
+              </Tooltip>
+            </div>
+              </div>
+              <div class="node-detail-header-actions">
+                <Button variant="outline" size="sm" :disabled="headerActionState.check.disabled" @click="actions.checkSettingsNode(selectedNode.id)">
+                  <RefreshCw :size="14" />
+                  <span>{{ headerActionState.check.label }}</span>
                 </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent class="node-detail-action-menu" align="end" :side-offset="6">
-                <DropdownMenuItem class="node-detail-action-item" :disabled="headerActionState.rename.disabled" @select="actions.openNodeRename(selectedNode)">
-                  <Pencil :size="14" />
-                  <span>
-                    <strong>{{ headerActionState.rename.label }}</strong>
-                    <small>{{ t("settings.nodeDetail.renameDescription") }}</small>
-                  </span>
-                </DropdownMenuItem>
-                <DropdownMenuItem class="node-detail-action-item" :disabled="headerActionState.pairingInvite.disabled" @select="actions.createPairingInviteForNode(selectedNode.id)">
-                  <KeyRound :size="14" />
-                  <span>
-                    <strong>{{ headerActionState.pairingInvite.label }}</strong>
-                    <small>{{ t("settings.nodeDetail.pairingDescription") }}</small>
-                  </span>
-                </DropdownMenuItem>
-                <template v-if="headerActionState.canDelete">
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem class="node-detail-action-item danger" :disabled="headerActionState.remove.disabled" @select="actions.removeNode(selectedNode)">
-                    <Trash2 :size="14" />
-                    <span>
-                      <strong>{{ headerActionState.remove.label }}</strong>
-                      <small>{{ t("settings.nodeDetail.removeDescription") }}</small>
-                    </span>
-                  </DropdownMenuItem>
-                </template>
-              </DropdownMenuContent>
-            </DropdownMenu>
+                <DropdownMenu>
+                  <DropdownMenuTrigger as-child>
+                    <Button
+                      variant="outline"
+                      size="icon-sm"
+                      :aria-busy="headerActionState.menu.busy"
+                      :aria-label="headerActionState.menu.label"
+                    >
+                      <RefreshCw v-if="headerActionState.menu.busy" class="animate-spin motion-reduce:animate-none" :size="16" />
+                      <MoreHorizontal v-else :size="16" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent class="node-detail-action-menu" align="end" :side-offset="6">
+                    <DropdownMenuItem class="node-detail-action-item" :disabled="headerActionState.rename.disabled" @select="actions.openNodeRename(selectedNode)">
+                      <Pencil :size="14" />
+                      <span>
+                        <strong>{{ headerActionState.rename.label }}</strong>
+                        <small>{{ t("settings.nodeDetail.renameDescription") }}</small>
+                      </span>
+                    </DropdownMenuItem>
+                    <DropdownMenuItem class="node-detail-action-item" :disabled="headerActionState.pairingInvite.disabled" @select="actions.createPairingInviteForNode(selectedNode.id)">
+                      <KeyRound :size="14" />
+                      <span>
+                        <strong>{{ headerActionState.pairingInvite.label }}</strong>
+                        <small>{{ t("settings.nodeDetail.pairingDescription") }}</small>
+                      </span>
+                    </DropdownMenuItem>
+                    <template v-if="headerActionState.canDelete">
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem class="node-detail-action-item danger" :disabled="headerActionState.remove.disabled" @select="actions.removeNode(selectedNode)">
+                        <Trash2 :size="14" />
+                        <span>
+                          <strong>{{ headerActionState.remove.label }}</strong>
+                          <small>{{ t("settings.nodeDetail.removeDescription") }}</small>
+                        </span>
+                      </DropdownMenuItem>
+                    </template>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+            </div>
+
+            <TabsList class="node-detail-tab-list" :aria-label="t('settings.nodeDetail.sections')">
+              <TabsTrigger v-for="tab in tabs" :key="tab.value" class="node-detail-tab-trigger" :value="tab.value">
+                <component :is="tab.icon" :size="14" />
+                <span>{{ tab.label }}</span>
+              </TabsTrigger>
+            </TabsList>
           </div>
-        </div>
 
-        <Tabs v-model="activeTab" class="node-detail-tabs">
-          <TabsList class="node-detail-tab-list" :aria-label="t('settings.nodeDetail.sections')">
-            <TabsTrigger v-for="tab in tabs" :key="tab.value" class="node-detail-tab-trigger" :value="tab.value">
-              <component :is="tab.icon" :size="14" />
-              <span>{{ tab.label }}</span>
-            </TabsTrigger>
-          </TabsList>
-
+      <ScrollArea class="node-detail-content">
+        <div class="node-detail-content-inner">
           <TabsContent class="node-detail-tab-content" value="overview">
             <div class="node-metrics">
               <div>
@@ -451,9 +467,9 @@
             </div>
             </template>
           </TabsContent>
-        </Tabs>
-      </div>
-    </ScrollArea>
+        </div>
+      </ScrollArea>
+    </Tabs>
     <p v-else class="settings-empty">{{ t("settings.nodeDetail.selectNode") }}</p>
 
     <Dialog :open="remoteConnectionDialogOpen" @update:open="setRemoteConnectionDialogOpen">
@@ -518,7 +534,7 @@
 <script setup lang="ts">
 import { computed, ref, watch, type Component } from "vue";
 import { useI18n } from "vue-i18n";
-import { Box, Boxes, Download, FolderOpen, Gauge, KeyRound, Monitor, MoreHorizontal, Network, Pencil, Plus, RefreshCw, ServerCog, Settings, Trash2 } from "@lucide/vue";
+import { Box, Boxes, Download, FolderOpen, Gauge, KeyRound, MapPin, Monitor, MoreHorizontal, Network, Pencil, Plus, RefreshCw, ServerCog, Settings, Trash2 } from "@lucide/vue";
 import { TooltipTrigger as RekaTooltipTrigger } from "reka-ui";
 import type { BuildInfo, InstanceBoardItem, LocalDockerImage, Node, NodeAgentEventTransportHealth, NodeAgentExternalListener, NodeControlPlaneConnection, NodeControlPlanePairing, NodeLocalFolder, NodeRuntime, UpdateChannel, UpdateCheckResult, UpdateJob } from "../../../api/types";
 import { nodeSupportsLocalFolderNameUpdate } from "../../../api/nodeCapabilities";
@@ -792,16 +808,21 @@ watch(
 
 .node-detail-content-inner {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  gap: 14px;
+  grid-template-rows: minmax(0, 1fr);
   min-height: 100%;
   padding-right: 2px;
+}
+
+.node-detail-fixed-header {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
 }
 
 .node-detail-header {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
+  align-items: center;
   gap: 12px;
   min-width: 0;
 }
@@ -812,15 +833,13 @@ watch(
   gap: 4px;
 }
 
-.node-detail-identity > span,
 .node-metrics span {
   color: var(--text-muted);
   font-size: var(--node-detail-body-size);
-  font-weight: 750;
+  font-weight: 400;
 }
 
 .node-detail-title-row,
-.node-detail-meta,
 .node-detail-header-actions {
   display: flex;
   align-items: center;
@@ -831,15 +850,54 @@ watch(
   gap: 8px;
 }
 
-.node-detail-meta {
+.node-detail-title-row > strong {
+  flex: 0 0 auto;
+  max-width: min(180px, 32%);
+}
+
+.node-detail-inline-meta {
+  display: flex;
+  align-items: center;
+  flex: 1 1 auto;
+  max-width: 320px;
+  min-width: 0;
   gap: 5px;
+  overflow: hidden;
+  border: 0;
+  background: transparent;
   color: var(--text-muted);
   font-size: var(--node-detail-body-size);
   line-height: 1.5;
+  padding: 0;
+  cursor: help;
+  outline: none;
+}
+
+.node-detail-inline-meta > svg,
+.node-detail-inline-meta > span[aria-hidden="true"] {
+  flex: 0 0 auto;
+}
+
+.node-detail-inline-meta > span:first-of-type {
+  flex: 0 1 auto;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.node-detail-inline-meta > code {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.node-detail-inline-meta:focus-visible {
+  border-radius: 4px;
+  box-shadow: 0 0 0 2px var(--ring);
 }
 
 .node-detail-header-actions {
-  align-items: flex-start;
+  align-items: center;
   justify-content: flex-end;
   gap: 7px;
   white-space: nowrap;
@@ -895,7 +953,7 @@ watch(
 :global(.node-detail-action-item strong) {
   color: inherit;
   font-size: 12px;
-  font-weight: 750;
+  font-weight: 500;
 }
 
 :global(.node-detail-action-item small) {
@@ -937,13 +995,15 @@ watch(
   overflow: hidden;
   color: var(--text-strong);
   font-size: 13px;
+  font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .node-detail-header strong {
   min-width: 0;
-  font-size: 18px;
+  font-size: 17px;
+  font-weight: 600;
 }
 
 .node-detail-header code,
@@ -954,15 +1014,6 @@ watch(
   line-height: 1.5;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.node-detail-meta code {
-  flex: 0 1 auto;
-}
-
-.node-connection-mode {
-  flex: 0 0 auto;
-  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace);
 }
 
 .node-diagnostic-badge {
@@ -997,7 +1048,7 @@ watch(
 .node-listener-form label > span {
   color: var(--text-muted);
   font-size: var(--node-detail-body-size);
-  font-weight: 750;
+  font-weight: 400;
 }
 
 .node-listener-warning {
@@ -1018,7 +1069,7 @@ watch(
 .node-detail-tabs {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  gap: 12px;
+  gap: 14px;
   min-height: 0;
   min-width: 0;
 }
@@ -1032,7 +1083,7 @@ watch(
   min-height: 36px;
   border: 1px solid var(--line);
   border-radius: 7px;
-  background: var(--surface-inset);
+  background: var(--surface-raised);
   padding: 2px;
 }
 
@@ -1043,7 +1094,7 @@ watch(
   border-radius: 5px;
   color: var(--text-muted);
   font-size: 12px;
-  font-weight: 750;
+  font-weight: 500;
   padding: 0 8px;
 }
 
@@ -1091,17 +1142,22 @@ watch(
 .node-metrics {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
+  gap: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-raised);
 }
 
 .node-metrics > div {
   display: grid;
   gap: 3px;
   min-width: 0;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  background: var(--surface-raised);
-  padding: 10px;
+  padding: 11px 12px;
+}
+
+.node-metrics > div + div {
+  border-left: 1px solid var(--line);
 }
 
 .node-metrics strong {
@@ -1112,21 +1168,26 @@ watch(
 .node-detail-section,
 .node-remote-panel {
   display: grid;
-  gap: 9px;
-  border-top: 1px solid var(--line);
-  padding-top: 12px;
+  gap: 10px;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  padding: 12px;
 }
 
 .flush-section,
 .node-detail-tab-content > .node-remote-panel:first-child {
-  border-top: 0;
-  padding-top: 0;
+  border: 1px solid var(--line);
+  padding: 12px;
 }
 
 .node-resource-list {
   display: grid;
   align-content: start;
-  gap: 7px;
+  gap: 0;
+  overflow: hidden;
+  border-top: 1px solid var(--line);
   min-height: 0;
 }
 
@@ -1158,10 +1219,14 @@ watch(
   align-items: center;
   gap: 9px;
   min-width: 0;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  background: var(--surface-raised);
-  padding: 9px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 10px;
+}
+
+.node-resource-row + .node-resource-row {
+  border-top: 1px solid var(--line);
 }
 
 .node-resource-row > div:first-child {
@@ -1192,7 +1257,7 @@ watch(
   overflow: hidden;
   color: var(--text-muted);
   font-size: var(--node-detail-section-title-size);
-  font-weight: 700;
+  font-weight: 500;
   line-height: 1.5;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1251,7 +1316,7 @@ watch(
 .managed-update-group-head span {
   color: var(--text-muted);
   font-size: var(--node-detail-body-size);
-  font-weight: 600;
+  font-weight: 400;
   line-height: 1.5;
 }
 
@@ -1283,23 +1348,30 @@ watch(
 .remote-connection-fields label > span {
   color: var(--text-muted);
   font-size: 12px;
-  font-weight: 750;
+  font-weight: 400;
 }
 
 .node-diagnostic-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
+  gap: 0;
+  overflow: hidden;
+  border-top: 1px solid var(--line);
 }
 
 .node-diagnostic-grid span {
   display: grid;
   min-width: 0;
   gap: 3px;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  background: var(--surface-raised);
-  padding: 9px;
+  padding: 9px 10px;
+}
+
+.node-diagnostic-grid span:nth-child(even) {
+  border-left: 1px solid var(--line);
+}
+
+.node-diagnostic-grid span:nth-child(n + 3) {
+  border-top: 1px solid var(--line);
 }
 
 .node-diagnostic-grid b,
@@ -1314,27 +1386,33 @@ watch(
 
 .node-diagnostic-grid b {
   color: var(--text-muted);
-  font-weight: 750;
+  font-weight: 400;
 }
 
 .node-diagnostic-grid em {
   color: var(--text-strong);
-  font-weight: 650;
+  font-weight: 500;
 }
 
 .node-diagnostic-log {
   display: grid;
-  gap: 8px;
+  gap: 0;
+  overflow: hidden;
+  border-top: 1px solid var(--line);
 }
 
 .node-diagnostic-log-entry {
   display: grid;
   gap: 7px;
   min-width: 0;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  background: var(--surface-raised);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   padding: 9px;
+}
+
+.node-diagnostic-log-entry + .node-diagnostic-log-entry {
+  border-top: 1px solid var(--line);
 }
 
 .node-diagnostic-log-entry > div {
@@ -1358,7 +1436,7 @@ watch(
   margin: 0;
   color: var(--text-strong);
   font-size: 12px;
-  font-weight: 650;
+  font-weight: 400;
   line-height: 1.4;
 }
 
@@ -1385,7 +1463,7 @@ watch(
 .control-plane-error {
   margin: 0;
   font-size: 12px;
-  font-weight: 650;
+  font-weight: 400;
 }
 
 .settings-empty {
@@ -1420,7 +1498,7 @@ watch(
 .node-rename-form > label {
   color: var(--text-strong);
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 500;
 }
 
 .node-rename-form > code {
@@ -1436,13 +1514,24 @@ watch(
   align-items: center;
 }
 
-:global(.node-diagnostic-tooltip) {
+:global(.node-diagnostic-tooltip),
+:global(.node-detail-context-tooltip) {
   min-width: 230px;
   max-width: min(360px, 80vw);
   border: 1px solid var(--line-strong) !important;
   background: var(--surface-inset) !important;
   color: var(--text) !important;
   box-shadow: var(--shadow-popover);
+}
+
+:global(.node-detail-context-tooltip) {
+  width: min(420px, calc(100vw - 24px));
+}
+
+:global(.node-detail-context-tooltip .node-diagnostic-tooltip-grid em) {
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+  white-space: normal;
 }
 
 :global(.node-diagnostic-tooltip-grid) {
@@ -1470,12 +1559,12 @@ watch(
 
 :global(.node-diagnostic-tooltip-grid b) {
   color: var(--text-muted) !important;
-  font-weight: 750;
+  font-weight: 500;
 }
 
 :global(.node-diagnostic-tooltip-grid em) {
   color: var(--text-strong) !important;
-  font-weight: 650;
+  font-weight: 400;
 }
 
 .node-connection-status-trigger {

@@ -58,10 +58,6 @@ export function summarizeThreadTurns(thread: CodexThread): {
     };
     const turnError = providerStatus === "failed" ? codexTurnErrorMessage(record.error) : undefined;
     if (index === turns.length - 1) error = turnError;
-    if (turnError) {
-      historyTurn.summary = compact(turnError, 1000);
-      historyTurn.lastMessage = turnError;
-    }
     if (providerStatus === "inProgress") {
       activeTurnId = turnId;
     }

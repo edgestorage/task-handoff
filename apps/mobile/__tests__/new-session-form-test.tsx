@@ -4,7 +4,9 @@ import type { ControlPlaneInstanceDirectoryEntry, ControlPlaneNodeDirectoryEntry
 
 import { NewSessionForm, newSessionInstanceOptions, newSessionKeyboardAvoidingBehavior, newSessionVisualBalanceInset } from '../src/ai-sessions/NewSessionForm';
 import { newSessionMenuActions } from '../src/ai-sessions/NewSessionContextMenu.ios';
-import { SESSION_COMPOSER_ATTACHMENT_ICON_SIZE, SESSION_COMPOSER_TOOL_SIZE, sessionComposerPermissionIconSize } from '../src/ai-sessions/composer-metrics';
+import { modelSettingsMenuActions } from '../src/ai-sessions/SessionComposerMenus.ios';
+import { modelGroupSubtitle } from '../src/ai-sessions/model-settings-menu';
+import { SESSION_COMPOSER_ATTACHMENT_ICON_SIZE, SESSION_COMPOSER_COLLAPSED_INPUT_RIGHT, SESSION_COMPOSER_MODEL_MAX_WIDTH, SESSION_COMPOSER_PERMISSION_HEIGHT, SESSION_COMPOSER_PERMISSION_RADIUS, SESSION_COMPOSER_TOOL_SIZE, SESSION_COMPOSER_TOOLBAR_HEIGHT, SESSION_COMPOSER_TRAILING_TOOL_GAP, sessionComposerCollapsedInputRight, sessionComposerPermissionIconSize } from '../src/ai-sessions/composer-metrics';
 import {
   ANCHORED_SELECT_MENU_CONTENT_WIDTH,
   ANCHORED_SELECT_MENU_HORIZONTAL_PADDING,
@@ -76,6 +78,13 @@ describe('<NewSessionForm />', () => {
     expect(StyleSheet.flatten(attachmentButton.props.style)).toEqual(expect.objectContaining({ height: SESSION_COMPOSER_TOOL_SIZE, width: SESSION_COMPOSER_TOOL_SIZE }));
     expect(SESSION_COMPOSER_ATTACHMENT_ICON_SIZE).toBe(25);
     expect(sessionComposerPermissionIconSize('auto-review')).toBe(22);
+    expect(StyleSheet.flatten(screen.getByTestId('new-session-composer-toolbar').props.style).height).toBe(SESSION_COMPOSER_TOOLBAR_HEIGHT);
+    expect(StyleSheet.flatten(screen.getByTestId('new-session-permission-button').props.style)).toEqual(expect.objectContaining({
+      borderRadius: SESSION_COMPOSER_PERMISSION_RADIUS,
+      height: SESSION_COMPOSER_PERMISSION_HEIGHT,
+    }));
+    expect(sessionComposerCollapsedInputRight(false)).toBe(SESSION_COMPOSER_COLLAPSED_INPUT_RIGHT);
+    expect(sessionComposerCollapsedInputRight(true)).toBe(SESSION_COMPOSER_COLLAPSED_INPUT_RIGHT + SESSION_COMPOSER_MODEL_MAX_WIDTH + SESSION_COMPOSER_TRAILING_TOOL_GAP);
     const nativeActions = newSessionMenuActions([
       ...newSessionInstanceOptions([instance], [node]),
       { label: 'Mobile', description: '/workspace/mobile', systemImage: 'folder', value: 'folder-1' },
@@ -88,6 +97,55 @@ describe('<NewSessionForm />', () => {
       expect.objectContaining({ image: 'sparkles', imageColor: '#aeaeb2', title: 'Codex', subtitle: undefined }),
       expect.objectContaining({ image: 'exclamationmark.shield', imageColor: '#ff6961', title: 'Full access' }),
     ]));
+    const modelGroups = [{
+      modelEntityId: 'provider-one',
+      providerName: 'Provider One',
+      models: [
+        { modelEntityId: 'provider-one', modelName: 'small', providerName: 'Provider One' },
+        { modelEntityId: 'provider-one', modelName: 'large', providerName: 'Provider One' },
+      ],
+    }, {
+      modelEntityId: 'provider-two',
+      providerName: 'Provider Two',
+      models: [{ modelEntityId: 'provider-two', modelName: 'only', providerName: 'Provider Two' }],
+    }];
+    const formatModelGroupSummary = (model: string, count: number) => `${model} and ${count} models`;
+    expect(modelGroupSubtitle(modelGroups[0], { modelEntityId: 'provider-one', modelName: 'large' }, formatModelGroupSummary)).toBe('large');
+    expect(modelGroupSubtitle(modelGroups[0], undefined, formatModelGroupSummary)).toBe('small and 2 models');
+    expect(modelGroupSubtitle(modelGroups[1], undefined, formatModelGroupSummary)).toBe('only');
+    const settingsActions = modelSettingsMenuActions({
+      formatModelGroupSummary,
+      imageColor: '#aeaeb2',
+      selectedImageColor: '#0a84ff',
+      modelGroups,
+      modelSelection: { modelEntityId: 'provider-one', modelName: 'large' },
+      provider: 'codex',
+      reasoningEffort: 'high',
+      reasoningEnabled: true,
+      reasoningTitle: 'Reasoning effort',
+    });
+    expect(settingsActions[0]).toEqual(expect.objectContaining({
+      image: 'checkmark',
+      imageColor: '#0a84ff',
+      subtitle: 'large',
+      subactions: expect.arrayContaining([expect.objectContaining({ state: 'on', title: 'large' })]),
+      title: 'Provider One',
+    }));
+    expect(settingsActions[2]).toEqual(expect.objectContaining({
+      displayInline: true,
+      subactions: [expect.objectContaining({
+        subtitle: 'high',
+        subactions: expect.arrayContaining([expect.objectContaining({ id: 'reasoning:high', state: 'on', title: 'high' })]),
+        title: 'Reasoning effort',
+      })],
+      title: '',
+    }));
+    expect(settingsActions[1]).toEqual(expect.objectContaining({
+      image: 'sparkles',
+      imageColor: '#aeaeb2',
+      state: 'off',
+      title: 'Provider Two',
+    }));
     expect(newSessionKeyboardAvoidingBehavior('ios')).toBe('padding');
     expect(newSessionKeyboardAvoidingBehavior('android')).toBeUndefined();
     const scroll = screen.getByTestId('new-session-scroll');

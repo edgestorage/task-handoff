@@ -41,3 +41,24 @@ test("desktop instance directory fails closed for malformed or unauthorized snap
     fetch: async (url) => url.includes("/api/nodes") ? response([{ id: "node-a", name: "Node A" }]) : response([{ id: "instance-a", nodeId: "node-a" }]),
   }), /instance\.name/);
 });
+
+test("desktop instance directory falls back when an older control plane rejects projections", async () => {
+  const requested = [];
+  const groups = await loadDesktopInstanceDirectory({
+    endpoint: "http://127.0.0.1:18081",
+    fetch: async (url) => {
+      requested.push(url);
+      if (url.includes("projection=directory")) return response([], { ok: false, status: 400 });
+      return url.endsWith("/api/nodes")
+        ? response([{ id: "node-a", name: "Node A" }])
+        : response([{ id: "instance-a", name: "Alpha", nodeId: "node-a" }]);
+    },
+  });
+  assert.deepEqual(requested.sort(), [
+    "http://127.0.0.1:18081/api/instance-board",
+    "http://127.0.0.1:18081/api/instance-board?projection=directory",
+    "http://127.0.0.1:18081/api/nodes",
+    "http://127.0.0.1:18081/api/nodes?projection=directory",
+  ]);
+  assert.deepEqual(groups, [{ nodeId: "node-a", nodeName: "Node A", instances: [{ id: "instance-a", name: "Alpha" }] }]);
+});

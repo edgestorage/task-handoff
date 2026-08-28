@@ -11,6 +11,7 @@ import {
   type AiSessionProviderTimelineItemListener,
   type AiSessionSendInput,
 } from "./ai-session-control";
+import type { AiSessionModelSelection, AiSessionReasoningEffort } from "@task-handoff/protocol/ai-sessions";
 import type { AiSessionDiscoveryContext, AiSessionDiscoveryProvider } from "./ai-session-discovery";
 import type { AiSessionRegistry } from "./ai-session-registry";
 import { OpenCodeClient, type OpenCodeConnection, type OpenCodePromptPart } from "./opencode/client";
@@ -25,6 +26,8 @@ export type OpenCodeSessionBridgeOptions = {
   onDiagnostic?: (event: Record<string, unknown>) => void;
   reconnectBaseMs?: number;
   reconnectMaxMs?: number;
+  resolveModelSelection?: (selection: AiSessionModelSelection) => { providerID: string; modelID: string } | undefined;
+  projectModelSelection?: (providerID: string, modelID: string) => AiSessionModelSelection | undefined;
 };
 
 export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessionDiscoveryProvider {
@@ -34,6 +37,7 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
   private readonly directoryBySession = new Map<string, string>();
   private readonly projectionBySession = new Map<string, OpenCodeProjection>();
   private readonly lineageBySession = new Map<string, AiSessionLineage>();
+  private readonly pendingSettingsBySession = new Map<string, { modelSelection: AiSessionModelSelection; reasoningEffort?: AiSessionReasoningEffort }>();
   private readonly timelineListeners = new Set<AiSessionProviderTimelineItemListener>();
   private readonly reconcileTimers = new Map<string, NodeJS.Timeout>();
   private eventAbort?: AbortController;
@@ -88,9 +92,11 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
 
   async createSession(input: AiSessionProviderCreateInput) {
     await this.ensureReady();
-    const created = await this.client.createSession(input.cwd);
+    const model = input.modelSelection ? this.modelRef(input.modelSelection, input.reasoningEffort) : undefined;
+    if (input.modelSelection && !model) throw aiSessionControlError("AI_SESSION_MODEL_SELECTION_INVALID", "OpenCode model selection is unavailable.", 409);
+    const created = await this.client.createSession(input.cwd, model);
     await this.reconcile(created.id, created.directory, created, "ai-session");
-    return { providerSessionId: created.id, cwd: created.directory, creationSource: "ai-session" as const };
+    return { providerSessionId: created.id, cwd: created.directory, creationSource: "ai-session" as const, modelSelection: input.modelSelection, reasoningEffort: input.reasoningEffort };
   }
 
   async readSession(providerSessionId: string) {
@@ -98,8 +104,28 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
     await this.reconcile(providerSessionId, await this.resolveDirectory(providerSessionId), undefined, "ai-session");
   }
 
-  async resumeSession(providerSessionId: string) {
+  async resumeSession(providerSessionId: string, _modelSelection?: AiSessionModelSelection, _reasoningEffort?: AiSessionReasoningEffort) {
     await this.readSession(providerSessionId);
+  }
+
+  async updateModelSelection(session: AiSessionStatus, selection: AiSessionModelSelection) {
+    if (!session.providerSessionId || !session.cwd) throw aiSessionControlError("AI_SESSION_NOT_FOUND", "OpenCode session identity is missing.", 404);
+    if (session.status === "running" || session.status === "waiting") throw aiSessionControlError("AI_SESSION_MODEL_SELECTION_CONFLICT", "Model cannot be changed while a turn is active.", 409);
+    const pending = this.pendingSettingsBySession.get(session.providerSessionId);
+    const reasoningEffort = pending?.reasoningEffort ?? session.reasoningEffort;
+    if (!this.modelRef(selection, reasoningEffort)) throw aiSessionControlError("AI_SESSION_MODEL_SELECTION_INVALID", "OpenCode model selection is unavailable.", 409);
+    this.pendingSettingsBySession.set(session.providerSessionId, { modelSelection: selection, reasoningEffort });
+    return selection;
+  }
+
+  async updateReasoningEffort(session: AiSessionStatus, effort: AiSessionReasoningEffort) {
+    if (!session.providerSessionId || !session.cwd) throw aiSessionControlError("AI_SESSION_NOT_FOUND", "OpenCode session identity is missing.", 404);
+    if (session.status === "running" || session.status === "waiting") throw aiSessionControlError("AI_SESSION_REASONING_EFFORT_CONFLICT", "Reasoning effort cannot be changed while a turn is active.", 409);
+    const selection = this.pendingSettingsBySession.get(session.providerSessionId)?.modelSelection ?? session.modelSelection;
+    if (!selection) throw aiSessionControlError("AI_SESSION_REASONING_EFFORT_UNKNOWN", "The current OpenCode model is unknown.", 409);
+    if (!this.modelRef(selection, effort)) throw aiSessionControlError("AI_SESSION_REASONING_EFFORT_UNSUPPORTED", "OpenCode reasoning variant is unavailable.", 409);
+    this.pendingSettingsBySession.set(session.providerSessionId, { modelSelection: selection, reasoningEffort: effort });
+    return effort;
   }
 
   async activeSessionExists(providerSessionId: string) {
@@ -156,7 +182,10 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
       throw aiSessionControlError("AI_SESSION_SEND_INVALID", "OpenCode session, cwd, and message identity are required.", 409);
     }
     const parts = await promptParts(session.cwd, input);
-    await this.client.promptAsync(session.providerSessionId, session.cwd, input.messageId, parts);
+    const pending = this.pendingSettingsBySession.get(session.providerSessionId);
+    const selection = pending?.modelSelection || session.modelSelection;
+    const model = selection ? this.modelRef(selection, pending?.reasoningEffort || session.reasoningEffort) : undefined;
+    await this.client.promptAsync(session.providerSessionId, session.cwd, input.messageId, parts, model);
     const updated = this.registry.applyRealtimeEvent(session.id, {
       kind: "send-ack",
       activeTurnId: input.messageId,
@@ -169,6 +198,12 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
     }) || session;
     this.scheduleReconcile(session.providerSessionId, session.cwd);
     return { session: updated, provider: this.agent, action: "send", turnId: input.messageId, providerTurnId: input.messageId };
+  }
+
+  private modelRef(selection: AiSessionModelSelection, effort?: AiSessionReasoningEffort) {
+    const resolved = this.options.resolveModelSelection?.(selection);
+    if (!resolved) return undefined;
+    return { ...resolved, ...(effort ? { variant: effort } : {}) };
   }
 
   async interrupt(session: AiSessionStatus): Promise<AiSessionActionResult> {
@@ -241,7 +276,17 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
       this.client.permissions(directory),
     ]);
     this.directoryBySession.set(providerSessionId, session.directory);
-    const projection = projectOpenCodeSession({ session, status: statuses[providerSessionId], messages, permissions });
+    const projection = projectOpenCodeSession({ session, status: statuses[providerSessionId], messages, permissions, projectModelSelection: this.options.projectModelSelection });
+    const pending = this.pendingSettingsBySession.get(providerSessionId);
+    if (pending) {
+      const observed = projection.snapshot.modelSelection;
+      const observedEffort = projection.snapshot.reasoningEffort;
+      if (observed?.modelEntityId === pending.modelSelection.modelEntityId
+        && observed.modelName === pending.modelSelection.modelName
+        && observedEffort === pending.reasoningEffort) {
+        this.pendingSettingsBySession.delete(providerSessionId);
+      }
+    }
     this.projectionBySession.set(providerSessionId, projection);
     const existing = this.registry.getByProviderSessionId(this.agent, providerSessionId);
     return this.registry.applyAdapterSnapshot({
@@ -376,6 +421,7 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
     this.directoryBySession.delete(providerSessionId);
     this.projectionBySession.delete(providerSessionId);
     this.lineageBySession.delete(providerSessionId);
+    this.pendingSettingsBySession.delete(providerSessionId);
     const timer = this.reconcileTimers.get(providerSessionId);
     if (timer) clearTimeout(timer);
     this.reconcileTimers.delete(providerSessionId);

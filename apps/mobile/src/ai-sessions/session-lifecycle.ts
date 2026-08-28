@@ -1,6 +1,6 @@
 import type { ControlPlaneClient } from '@task-handoff/control-plane-client';
 import type { ControlPlaneInstanceDirectoryEntry } from '@task-handoff/protocol/control-plane-directory';
-import { AiAgentKindSchema, type AiSessionGitSelection, type AiSessionMessageAttachmentRef, type AiSessionModelSelection, type AiSessionPermissionMode } from '@task-handoff/protocol/ai-sessions';
+import { AiAgentKindSchema, type AiSessionGitSelection, type AiSessionMessageAttachmentRef, type AiSessionModelSelection, type AiSessionPermissionMode, type AiSessionReasoningEffort } from '@task-handoff/protocol/ai-sessions';
 import type { ValueStore } from '../platform/secure-storage';
 
 const CREATE_REQUEST_VERSION = 1;
@@ -14,6 +14,7 @@ export async function createMobileAiSession(client: ControlPlaneClient, input: {
   attachments?: AiSessionMessageAttachmentRef[];
   permissionMode?: AiSessionPermissionMode;
   modelSelection?: AiSessionModelSelection;
+  reasoningEffort?: AiSessionReasoningEffort;
   clientRequestId: string;
 }) {
   if (!input.instance.ready || input.instance.connectionStatus !== 'online') throw lifecycleError('INSTANCE_OFFLINE', 'The instance is offline. Start or repair it from the desktop app.');
@@ -29,6 +30,7 @@ export async function createMobileAiSession(client: ControlPlaneClient, input: {
     mode: 'auto',
     permissionMode: agent.data === 'codex' ? input.permissionMode ?? input.instance.config.defaultCodexPermissionMode : undefined,
     modelSelection: input.modelSelection,
+    reasoningEffort: input.reasoningEffort,
     attachments: input.attachments ?? [],
     references: [],
   });

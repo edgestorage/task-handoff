@@ -1,6 +1,6 @@
 import { translate } from '../src/i18n';
 import { matchSupportedLocale, resolveLocale, sanitizeLocalePreference } from '../src/i18n/locale';
-import { mobileDarkColors, resolveThemeDark, sanitizeAppearancePreference } from '../src/components/theme';
+import { mobileDarkColors, mobileLightColors, resolveThemeDark, sanitizeAppearancePreference } from '../src/components/theme';
 
 describe('mobile i18n', () => {
   test('normalizes supported English and simplified Chinese system locales', () => {
@@ -19,6 +19,10 @@ describe('mobile i18n', () => {
     expect(translate('zh-CN', 'sessions.filterAccessibility', { scope: '全部会话' })).toBe('筛选会话，当前范围：全部会话');
     expect(translate('en-US', 'directories.instanceCount', { count: 1 })).toBe('1 Instance');
     expect(translate('en-US', 'directories.instanceCount', { count: 3 })).toBe('3 Instances');
+    expect(translate('en-US', 'sessions.modelGroupSummary', { model: 'small', count: 2 })).toBe('small and 2 models');
+    expect(translate('zh-CN', 'sessions.modelGroupSummary', { model: 'small', count: 2 })).toBe('small 等 2 个模型');
+    expect(translate('en-US', 'composer.placeholder')).toBe('Message');
+    expect(translate('zh-CN', 'composer.placeholder')).toBe('输入消息');
   });
 
   test('normalizes and resolves the persisted appearance preference', () => {
@@ -29,5 +33,7 @@ describe('mobile i18n', () => {
     expect(resolveThemeDark('dark', 'light')).toBe(true);
     expect(mobileDarkColors.text).toBe('#f2f2f7');
     expect(mobileDarkColors.textMuted).toBe('#aeaeb2');
+    expect(mobileLightColors.textPlaceholder).toBe('rgba(60, 60, 67, 0.30)');
+    expect(mobileDarkColors.textPlaceholder).toBe('rgba(235, 235, 245, 0.30)');
   });
 });

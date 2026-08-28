@@ -829,7 +829,7 @@
           :model-groups="selectedSessionModelGroups"
           :model-selection="selectedSessionModelDisplay"
           :model-selection-pending="modelSelectionPendingSessionId === selectedSession.id"
-          :reasoning-effort="selectedSession.reasoningEffort"
+          :reasoning-effort="selectedSession.reasoningEffort || (selectedSession.agent === 'codex' ? AI_SESSION_DEFAULT_REASONING_EFFORT : undefined)"
           :reasoning-effort-enabled="selectedSessionReasoningEffortCapability.updateDuringSession"
           :reasoning-effort-pending="reasoningEffortPending?.sessionId === selectedSession.id"
           :permission-key="aiSessionPermissionKey(instance.id, selectedSession.id)"
@@ -1018,7 +1018,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { bindAiSessionTrigger, closeAiSession, createAiSession, createNodeLocalFolder, editAiSessionQueuedMessage, forkAiSession, getAiSessionHistory, getAiSessionHistoryDetail, getAiSessionWorkspace, interruptAiSession, listNodeFolderPlaces, listNodeFolderTree, markAiSessionRead, openAiSessionApp, removeAiSessionQueuedMessage, reorderAiSessionQueuedMessages, resolveAiSessionApproval, resumeAiSession, retryAiSessionQueuedMessage, sendAiSessionMessage, steerAiSessionQueuedMessage, unbindAiSessionTrigger, updateAiSessionModelSelection, updateAiSessionReasoningEffort, updateControlledInstance, updateNodeLocalFolder, uploadAiSessionAttachment, useControlPlaneSettingsQuery, useControlPlaneTriggersQuery, useModelsQuery } from "../../../api/queries";
 import { controlPlaneQueryKeys } from "../../../api/queryKeys.ts";
 import { executeAiSessionCommand } from "../../../api/ai-session-commands";
-import { type AiSessionCommandInput, type AiSessionHistoryDetail, type AiSessionHistoryItem, type AiSessionMessageAttachmentRef, type AiSessionModelSelection, type AiSessionPermissionMode, type AiSessionReasoningEffort } from "@task-handoff/protocol/ai-sessions";
+import { AI_SESSION_DEFAULT_REASONING_EFFORT, type AiSessionCommandInput, type AiSessionHistoryDetail, type AiSessionHistoryItem, type AiSessionMessageAttachmentRef, type AiSessionModelSelection, type AiSessionPermissionMode, type AiSessionReasoningEffort } from "@task-handoff/protocol/ai-sessions";
 import { normalizeAiSessionModelSelectionCapabilities, normalizeAiSessionReasoningEffortCapabilities } from "@task-handoff/protocol/ai-session-provider-capabilities";
 import type { RepositoryAiSessionWorkspace, RepositoryAiSessionWorkspaceBranch } from "@task-handoff/protocol/repository";
 import { directoryAiSessionProviderCapability } from "@task-handoff/protocol/control-plane-directory";
@@ -1325,7 +1325,7 @@ const newSessionApp = ref("");
 const modelsQuery = useModelsQuery();
 const newSessionModelSelection = ref<AiSessionModelSelection>();
 const modelSelectionPendingSessionId = ref("");
-const newSessionReasoningEffort = ref<AiSessionReasoningEffort>();
+const newSessionReasoningEffort = ref<AiSessionReasoningEffort>(AI_SESSION_DEFAULT_REASONING_EFFORT);
 const reasoningEffortPending = ref<{ sessionId: string; target: AiSessionReasoningEffort }>();
 const newSessionModelGroups = computed(() => deriveAiSessionModelGroups({
   entities: modelsQuery.data.value || [],
@@ -1399,7 +1399,8 @@ watch(newSessionModelGroups, (groups) => {
 }, { immediate: true });
 watch(newSessionReasoningEffortCapability, (capability) => {
   if (!capability.selectAtCreate) newSessionReasoningEffort.value = undefined;
-});
+  else if (newSessionApp.value === "codex" && !newSessionReasoningEffort.value) newSessionReasoningEffort.value = AI_SESSION_DEFAULT_REASONING_EFFORT;
+}, { immediate: true });
 watch(visibleAiSessions, (sessions) => {
   const pending = reasoningEffortPending.value;
   if (pending && sessions.find((session) => session.id === pending.sessionId)?.reasoningEffort === pending.target) {

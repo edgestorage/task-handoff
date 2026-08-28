@@ -30,6 +30,7 @@ export class CodexAppServerSessionProjector {
   private readonly parentThreadsBySubAgent = new Map<string, Set<string>>();
   private readonly lifecycleByThread = new Map<string, CodexSubAgentUpdate>();
   private readonly turnErrorsByThread = new Map<string, { turnId: string; error: string }>();
+  private readonly retryWarningsByThread = new Map<string, { turnId: string; itemId: string; error: string }>();
   private readonly realtimeTimelineByThread = new Map<string, Map<string, CodexRealtimeTimelineItem>>();
 
   constructor(private readonly options: ProjectorOptions) {}
@@ -38,6 +39,7 @@ export class CodexAppServerSessionProjector {
     this.toolActivityByThread.delete(threadId);
     this.subAgentsByThread.delete(threadId);
     this.turnErrorsByThread.delete(threadId);
+    this.retryWarningsByThread.delete(threadId);
     this.realtimeTimelineByThread.delete(threadId);
     for (const [subAgentThreadId, parentThreadIds] of this.parentThreadsBySubAgent) {
       parentThreadIds.delete(threadId);
@@ -51,6 +53,7 @@ export class CodexAppServerSessionProjector {
     this.parentThreadsBySubAgent.clear();
     this.lifecycleByThread.clear();
     this.turnErrorsByThread.clear();
+    this.retryWarningsByThread.clear();
     this.realtimeTimelineByThread.clear();
   }
 
@@ -62,6 +65,9 @@ export class CodexAppServerSessionProjector {
     const session = this.options.findSession(event.threadId);
     if (!session) {
       return false;
+    }
+    if (this.isRetryRecoveryProgress(event)) {
+      this.clearRetryWarning(session.id, event.threadId, event.turnId);
     }
     if ("timelineItem" in event && event.timelineItem) {
       this.recordRealtimeTimelineItem(event.threadId, event.turnId || session.activeTurnId, event.timelineItem);
@@ -90,11 +96,16 @@ export class CodexAppServerSessionProjector {
       return true;
     }
     if (event.type === "turn-started") {
+      this.clearRetryWarning(session.id, event.threadId);
       this.turnErrorsByThread.delete(event.threadId);
       this.options.registry.applyRealtimeEvent(session.id, { kind: "turn-started", activeTurnId: event.turnId, providerTurnId: event.turnId, observedAt: event.observedAt, source: "realtime" });
       return true;
     }
     if (event.type === "turn-error") {
+      if (event.willRetry) {
+        this.publishRetryWarning(session.id, event.threadId, event.turnId, event.error);
+        return true;
+      }
       this.turnErrorsByThread.set(event.threadId, { turnId: event.turnId, error: event.error });
       return true;
     }
@@ -143,6 +154,7 @@ export class CodexAppServerSessionProjector {
       return true;
     }
     if (event.type === "turn-completed") {
+      this.clearRetryWarning(session.id, event.threadId, event.turnId);
       const pendingError = this.turnErrorsByThread.get(event.threadId);
       const error = event.error || (pendingError && (!event.turnId || pendingError.turnId === event.turnId) ? pendingError.error : undefined);
       this.turnErrorsByThread.delete(event.threadId);
@@ -276,6 +288,40 @@ export class CodexAppServerSessionProjector {
     if (!itemId || !turnId) return;
     const projected = projectCodexTimelineItem(itemId, turnId, item);
     if (projected) this.options.onTimelineItem?.({ sessionId, providerSessionId, item: projected });
+  }
+
+  private publishRetryWarning(sessionId: string, threadId: string, turnId: string, error: string) {
+    const itemId = `codex_retry:${turnId}`;
+    const item = { id: itemId, type: "codexRetry", status: "pending", message: error };
+    this.retryWarningsByThread.set(threadId, { turnId, itemId, error });
+    this.recordRealtimeTimelineItem(threadId, turnId, item);
+    this.emitTimelineItem(sessionId, threadId, turnId, item);
+  }
+
+  private clearRetryWarning(sessionId: string, threadId: string, turnId?: string) {
+    const warning = this.retryWarningsByThread.get(threadId);
+    if (!warning || (turnId && warning.turnId !== turnId)) return;
+    const item = {
+      id: warning.itemId,
+      type: "codexRetry",
+      status: "completed",
+      message: warning.error,
+    };
+    this.retryWarningsByThread.delete(threadId);
+    this.recordRealtimeTimelineItem(threadId, warning.turnId, item);
+    this.emitTimelineItem(sessionId, threadId, warning.turnId, item);
+  }
+
+  private isRetryRecoveryProgress(event: CodexAppServerEvent): event is CodexAppServerEvent & { turnId: string } {
+    return (
+      event.type === "context-compaction"
+      || event.type === "tool-item-started"
+      || event.type === "tool-item-completed"
+      || event.type === "sub-agent-activity"
+      || event.type === "timeline-item"
+      || event.type === "agent-message-delta"
+      || event.type === "agent-message-completed"
+    ) && typeof event.turnId === "string";
   }
 
   private toolTracker(threadId: string) {

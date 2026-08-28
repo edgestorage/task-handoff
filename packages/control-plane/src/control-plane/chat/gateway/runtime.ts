@@ -2099,7 +2099,8 @@ function aiSessionDeliveryBody(session: AiSessionSummary, latestTurn: ReturnType
     response = session.lastMessage.trim();
   } else if (session.summary?.trim()) {
     response = session.summary.trim();
-  } else if (session.error?.trim()) {
+  }
+  if (!response && session.error?.trim()) {
     response = session.status === "failed" ? `${session.agent} session failed:\n${session.error.trim()}` : session.error.trim();
   }
 

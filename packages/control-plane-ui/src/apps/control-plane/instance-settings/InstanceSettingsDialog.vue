@@ -23,6 +23,7 @@
       <Tabs v-else v-model="section" class="instance-settings-tabs">
         <TabsList class="instance-settings-tabs-list" :aria-label="t('instances.settings.sections')">
           <TabsTrigger value="general"><SlidersHorizontal :size="14" />{{ t("instances.settings.general") }}</TabsTrigger>
+          <TabsTrigger value="ai"><Bot :size="14" />{{ t("instances.settings.ai") }}</TabsTrigger>
           <TabsTrigger value="models"><Cpu :size="14" />{{ t("instances.settings.models") }}</TabsTrigger>
           <TabsTrigger value="git-credentials"><KeyRound :size="14" />{{ t("instances.settings.gitCredentials") }}</TabsTrigger>
           <TabsTrigger value="apps"><Boxes :size="14" />{{ t("instances.settings.apps") }}</TabsTrigger>
@@ -61,73 +62,34 @@
                     </span>
                     <ControlPlaneInput v-model="instanceName" :disabled="savingGeneral" maxlength="160" :placeholder="t('instances.settings.instanceName')" />
                   </label>
-                  <label class="instance-settings-name-control">
-                    <span>
-                      <strong>{{ t("instances.settings.aiSessionFileAttachmentLimit") }}</strong>
-                      <small>{{ fileAttachmentLimitSupported ? t("instances.settings.aiSessionFileAttachmentLimitDescription") : t("instances.settings.aiSessionFileAttachmentLimitUnsupported") }}</small>
-                    </span>
-                    <ControlPlaneInput
-                      v-model="aiSessionMaxFileAttachmentKiB"
-                      type="number"
-                      min="1"
-                      :max="AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES / 1024"
-                      step="1"
-                      :disabled="savingGeneral || !fileAttachmentLimitSupported"
-                    />
-                  </label>
-                  <label class="instance-settings-name-control">
-                    <span>
-                      <strong>{{ t("instances.settings.aiSessionAttachmentRetention") }}</strong>
-                      <small>{{ attachmentRetentionSupported ? t("instances.settings.aiSessionAttachmentRetentionDescription") : t("instances.settings.aiSessionAttachmentRetentionUnsupported") }}</small>
-                    </span>
-                    <ControlPlaneInput
-                      v-model="aiSessionAttachmentRetentionDays"
-                      type="number"
-                      min="0"
-                      :max="AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS"
-                      step="1"
-                      :disabled="savingGeneral || !attachmentRetentionSupported"
-                    />
-                  </label>
-                  <p v-if="attachmentRetentionWillShorten" class="instance-settings-help instance-settings-row-note">{{ t("instances.settings.aiSessionAttachmentRetentionWarning") }}</p>
-                  <label class="instance-settings-checkbox">
-                    <Checkbox :model-value="autoImportAgentConfigs" :disabled="savingGeneral" @update:model-value="autoImportAgentConfigs = $event === true" />
-                    <span>
-                      <strong>{{ t("instances.settings.autoImport") }}</strong>
-                      <small>{{ t("instances.settings.autoImportDescription") }}</small>
-                    </span>
-                  </label>
-                  <label class="instance-settings-select-control">
-                    <span>
-                      <strong>{{ t("instances.settings.sessionPermissions") }}</strong>
-                      <small>{{ t("instances.settings.sessionPermissionsDescription") }}</small>
-                    </span>
-                    <ControlPlaneSelect v-model="defaultCodexPermissionMode" :disabled="savingGeneral">
-                      <ControlPlaneSelectItem value="ask">{{ t("instances.settings.askApproval") }}</ControlPlaneSelectItem>
-                      <ControlPlaneSelectItem value="auto-review">{{ t("instances.settings.approveForMe") }}</ControlPlaneSelectItem>
-                      <ControlPlaneSelectItem value="full-access">{{ t("instances.settings.fullAccess") }}</ControlPlaneSelectItem>
-                    </ControlPlaneSelect>
-                  </label>
-                  <label class="instance-settings-name-control">
-                    <span>
-                      <strong>{{ t("instances.settings.aiSessionHistoryLimit") }}</strong>
-                      <small>{{ historyLimitSupported ? t("instances.settings.aiSessionHistoryLimitDescription") : t("instances.settings.aiSessionHistoryLimitUnsupported") }}</small>
-                    </span>
-                    <ControlPlaneInput
-                      v-model="aiSessionHistoryLimit"
-                      type="number"
-                      min="1"
-                      :max="AI_SESSION_HISTORY_MAX_LIMIT"
-                      step="1"
-                      :disabled="savingGeneral || !historyLimitSupported"
-                    />
-                  </label>
                 </div>
                 <div class="instance-settings-general-actions">
                   <Button size="sm" :disabled="savingGeneral || !generalChanged || !validInstanceName || !validHistoryLimit || !validAttachmentRetention || !validFileAttachmentLimit" @click="saveGeneral">
                     {{ savingGeneral ? t("instances.settings.saving") : t("instances.settings.saveChanges") }}
                   </Button>
                 </div>
+              </div>
+            </section>
+          </TabsContent>
+
+          <TabsContent value="ai" class="instance-settings-section">
+            <section class="instance-settings-card instance-settings-group">
+              <div class="instance-settings-section-heading">
+                <h3>{{ t("instances.settings.aiConfigurationTitle") }}</h3>
+                <p>{{ t("instances.settings.aiConfigurationDescription") }}</p>
+              </div>
+              <div class="instance-settings-control-surface instance-settings-surface">
+                <div class="instance-settings-general-controls">
+                  <label class="instance-settings-checkbox"><Checkbox :model-value="codexConfigEnabled" :disabled="savingGeneral" @update:model-value="codexConfigEnabled = $event === true" /><span><strong>{{ t("instances.settings.codexConfiguration") }}</strong><small>{{ t("instances.settings.codexConfigurationDescription") }}</small></span></label>
+                  <label class="instance-settings-select-control"><span><strong>{{ t("instances.settings.codexHome") }}</strong><small>{{ t("instances.settings.codexHomeDescription") }}</small></span><ControlPlaneSelect v-model="codexHomeMode" :disabled="savingGeneral || !codexConfigEnabled"><ControlPlaneSelectItem value="default">{{ t("instances.settings.codexHomeDefault") }}</ControlPlaneSelectItem><ControlPlaneSelectItem v-if="instance.runtime?.type === 'local'" value="taskhandoff">{{ t("instances.settings.codexHomeTaskHandoff") }}</ControlPlaneSelectItem></ControlPlaneSelect></label>
+                  <label class="instance-settings-name-control"><span><strong>{{ t("instances.settings.aiSessionFileAttachmentLimit") }}</strong><small>{{ fileAttachmentLimitSupported ? t("instances.settings.aiSessionFileAttachmentLimitDescription") : t("instances.settings.aiSessionFileAttachmentLimitUnsupported") }}</small></span><ControlPlaneInput v-model="aiSessionMaxFileAttachmentKiB" type="number" min="1" :max="AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES / 1024" step="1" :disabled="savingGeneral || !fileAttachmentLimitSupported" /></label>
+                  <label class="instance-settings-name-control"><span><strong>{{ t("instances.settings.aiSessionAttachmentRetention") }}</strong><small>{{ attachmentRetentionSupported ? t("instances.settings.aiSessionAttachmentRetentionDescription") : t("instances.settings.aiSessionAttachmentRetentionUnsupported") }}</small></span><ControlPlaneInput v-model="aiSessionAttachmentRetentionDays" type="number" min="0" :max="AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS" step="1" :disabled="savingGeneral || !attachmentRetentionSupported" /></label>
+                  <p v-if="attachmentRetentionWillShorten" class="instance-settings-help instance-settings-row-note">{{ t("instances.settings.aiSessionAttachmentRetentionWarning") }}</p>
+                  <label class="instance-settings-checkbox"><Checkbox :model-value="autoImportAgentConfigs" :disabled="savingGeneral" @update:model-value="autoImportAgentConfigs = $event === true" /><span><strong>{{ t("instances.settings.autoImport") }}</strong><small>{{ t("instances.settings.autoImportDescription") }}</small></span></label>
+                  <label class="instance-settings-select-control"><span><strong>{{ t("instances.settings.sessionPermissions") }}</strong><small>{{ t("instances.settings.sessionPermissionsDescription") }}</small></span><ControlPlaneSelect v-model="defaultCodexPermissionMode" :disabled="savingGeneral || !codexConfigEnabled"><ControlPlaneSelectItem value="ask">{{ t("instances.settings.askApproval") }}</ControlPlaneSelectItem><ControlPlaneSelectItem value="auto-review">{{ t("instances.settings.approveForMe") }}</ControlPlaneSelectItem><ControlPlaneSelectItem value="full-access">{{ t("instances.settings.fullAccess") }}</ControlPlaneSelectItem></ControlPlaneSelect></label>
+                  <label class="instance-settings-name-control"><span><strong>{{ t("instances.settings.aiSessionHistoryLimit") }}</strong><small>{{ historyLimitSupported ? t("instances.settings.aiSessionHistoryLimitDescription") : t("instances.settings.aiSessionHistoryLimitUnsupported") }}</small></span><ControlPlaneInput v-model="aiSessionHistoryLimit" type="number" min="1" :max="AI_SESSION_HISTORY_MAX_LIMIT" step="1" :disabled="savingGeneral || !historyLimitSupported" /></label>
+                </div>
+                <div class="instance-settings-general-actions"><Button size="sm" :disabled="savingGeneral || !aiChanged || !validHistoryLimit || !validAttachmentRetention || !validFileAttachmentLimit" @click="saveGeneral">{{ savingGeneral ? t("instances.settings.saving") : t("instances.settings.saveChanges") }}</Button></div>
               </div>
             </section>
           </TabsContent>
@@ -139,7 +101,7 @@
                 <p>{{ t("instances.settings.modelSelectionDescription") }}</p>
               </div>
               <div class="instance-model-surface instance-settings-surface">
-                <ModelEntitySelection v-model="modelEntityIds" :models="models" :node-id="instance?.nodeId || ''" :disabled="savingModels" />
+                <ModelEntitySelection v-model="modelEntityIds" :models="models" :node-id="instance?.nodeId || ''" :disabled="savingModels || !codexConfigEnabled" />
                 <div class="instance-settings-general-actions">
                   <Button size="sm" :disabled="savingModels || !modelsChanged" @click="saveModels">
                     {{ savingModels ? t("instances.settings.saving") : t("instances.settings.saveModels") }}
@@ -342,7 +304,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { Boxes, Cpu, Globe2, KeyRound, LoaderCircle, Monitor, RefreshCw, SlidersHorizontal, TerminalSquare, X } from "@lucide/vue";
+import { Bot, Boxes, Cpu, Globe2, KeyRound, LoaderCircle, Monitor, RefreshCw, SlidersHorizontal, TerminalSquare, X } from "@lucide/vue";
 import { AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS, AI_SESSION_HISTORY_MAX_LIMIT, AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES, type AiSessionPermissionMode } from "@task-handoff/protocol/ai-sessions";
 import { supportsAiSessionFileSizeLimitSettings, supportsGitCredentialProxy, supportsNodeAiSessionFileAttachmentLimit } from "@task-handoff/protocol/control-plane";
 import { resolveGitCredential, type GitCredentialPublic } from "@task-handoff/protocol/managed-git-credentials";
@@ -371,7 +333,7 @@ const { locale } = useControlPlaneLocale();
 const instanceStatusLabel = (status: string) => translateStatus(instanceStatusKeys, status, t);
 const connectionStatusLabel = (status: string) => translateStatus(connectionStatusKeys, status, t);
 
-type InstanceSettingsSection = "general" | "models" | "git-credentials" | "apps";
+type InstanceSettingsSection = "general" | "ai" | "models" | "git-credentials" | "apps";
 type AppFilter = "all" | "available" | "installed";
 
 const props = defineProps<{
@@ -391,6 +353,8 @@ const emit = defineEmits<{ "update:open": [open: boolean] }>();
 const section = ref<InstanceSettingsSection>("general");
 const instanceName = ref("");
 const autoImportAgentConfigs = ref(true);
+const codexConfigEnabled = ref(true);
+const codexHomeMode = ref<"default" | "taskhandoff">("taskhandoff");
 const defaultCodexPermissionMode = ref<AiSessionPermissionMode>("ask");
 const aiSessionHistoryLimit = ref("50");
 const aiSessionAttachmentRetentionDays = ref("30");
@@ -466,8 +430,10 @@ async function revokeGitCredential(credentialId: string) {
   finally { gitCredentialBusy.value = false; }
 }
 
-const generalChanged = computed(() => Boolean(props.instance && (
-  instanceName.value.trim() !== props.instance.name
+const generalChanged = computed(() => Boolean(props.instance && instanceName.value.trim() !== props.instance.name));
+const aiChanged = computed(() => Boolean(props.instance && (
+  codexConfigEnabled.value !== props.instance.config.codexConfigEnabled
+  || codexHomeMode.value !== props.instance.config.codexHomeMode
   || autoImportAgentConfigs.value !== props.instance.config.autoImportAgentConfigs
   || defaultCodexPermissionMode.value !== props.instance.config.defaultCodexPermissionMode
   || (historyLimitSupported.value && Number(aiSessionHistoryLimit.value) !== props.instance.config.aiSessionHistoryLimit)
@@ -572,6 +538,8 @@ watch(
     section.value = props.initialSection || "general";
     instanceName.value = props.instance.name;
     autoImportAgentConfigs.value = props.instance.config.autoImportAgentConfigs;
+    codexConfigEnabled.value = props.instance.config.codexConfigEnabled;
+    codexHomeMode.value = props.instance.config.codexHomeMode;
     defaultCodexPermissionMode.value = props.instance.config.defaultCodexPermissionMode;
     aiSessionHistoryLimit.value = String(props.instance.config.aiSessionHistoryLimit);
     aiSessionAttachmentRetentionDays.value = String(props.instance.config.aiSessionAttachmentRetentionDays);
@@ -630,21 +598,26 @@ async function saveGeneral() {
   error.value = "";
   success.value = "";
   try {
-    await props.updateInstance(props.instance, {
-      name: instanceName.value.trim(),
+    const input: UpdateControlledInstanceInput = {
       config: {
         autoImportAgentConfigs: autoImportAgentConfigs.value,
+        codexConfigEnabled: codexConfigEnabled.value,
+        codexHomeMode: codexHomeMode.value,
         defaultCodexPermissionMode: defaultCodexPermissionMode.value,
         ...(historyLimitSupported.value ? { aiSessionHistoryLimit: Number(aiSessionHistoryLimit.value) } : {}),
         ...(attachmentRetentionSupported.value ? { aiSessionAttachmentRetentionDays: Number(aiSessionAttachmentRetentionDays.value) } : {}),
         ...(fileAttachmentLimitSupported.value ? { aiSessionMaxFileAttachmentBytes: Number(aiSessionMaxFileAttachmentKiB.value) * 1024 } : {}),
       },
-    });
+    };
+    if (generalChanged.value) input.name = instanceName.value.trim();
+    await props.updateInstance(props.instance, input);
     instanceName.value = instanceName.value.trim();
     success.value = t("instances.settings.generalSaved");
   } catch (cause) {
     instanceName.value = props.instance.name;
     autoImportAgentConfigs.value = props.instance.config.autoImportAgentConfigs;
+    codexConfigEnabled.value = props.instance.config.codexConfigEnabled;
+    codexHomeMode.value = props.instance.config.codexHomeMode;
     defaultCodexPermissionMode.value = props.instance.config.defaultCodexPermissionMode;
     aiSessionHistoryLimit.value = String(props.instance.config.aiSessionHistoryLimit);
     aiSessionAttachmentRetentionDays.value = String(props.instance.config.aiSessionAttachmentRetentionDays);
@@ -864,7 +837,7 @@ async function confirmAppOperation() {
 
 .instance-settings-tabs-list {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   width: 100%;
   height: auto;
   min-height: 36px;

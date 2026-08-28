@@ -489,7 +489,7 @@ function displayAiSessionContent(session: AiSessionSummary | undefined, promptIn
     return session.summary;
   }
   if (session.error) {
-    return session.error;
+    return includeProgress ? session.error : "";
   }
   return includeProgress ? aiSessionProgressText(session, t) : "";
 }

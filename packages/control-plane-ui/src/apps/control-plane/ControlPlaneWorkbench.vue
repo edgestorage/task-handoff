@@ -666,7 +666,7 @@ const configSyncDialogOpen = computed({
   },
 });
 const instanceSettingsId = ref("");
-const instanceSettingsSection = ref<"general" | "models" | "git-credentials" | "apps">("general");
+const instanceSettingsSection = ref<"general" | "ai" | "models" | "git-credentials" | "apps">("general");
 const instanceSettingsOpen = computed({
   get: () => Boolean(instanceSettingsId.value),
   set: (open: boolean) => {
@@ -1370,7 +1370,7 @@ async function manageInstanceApp(instanceId: string, appId: string, operation: A
   instanceAppManagement.applyJob(instanceId, response.job);
 }
 
-function openInstanceSettings(instanceId: string, section: "general" | "models" | "git-credentials" | "apps" = "general") {
+function openInstanceSettings(instanceId: string, section: "general" | "ai" | "models" | "git-credentials" | "apps" = "general") {
   if (!boardInstancesWithAppSessions.value.some((instance) => instance.id === instanceId)) return;
   instanceSettingsSection.value = section;
   instanceSettingsId.value = instanceId;

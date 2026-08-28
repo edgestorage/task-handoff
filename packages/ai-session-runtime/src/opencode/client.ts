@@ -21,6 +21,8 @@ export type OpenCodePromptPart =
   | { type: "text"; text: string }
   | { type: "file"; mime: string; filename?: string; url: string };
 
+export type OpenCodeModelRef = { providerID: string; modelID: string; variant?: string };
+
 export class OpenCodeHttpError extends Error {
   constructor(
     readonly statusCode: number,
@@ -69,8 +71,12 @@ export class OpenCodeClient {
     return this.request("/permission", OpenCodePermissionListSchema, { directory });
   }
 
-  createSession(directory: string) {
-    return this.request("/session", OpenCodeSessionSchema, { method: "POST", directory, body: {} });
+  createSession(directory: string, model?: OpenCodeModelRef) {
+    return this.request("/session", OpenCodeSessionSchema, {
+      method: "POST",
+      directory,
+      body: model ? { model: { id: model.modelID, providerID: model.providerID, ...(model.variant ? { variant: model.variant } : {}) } } : {},
+    });
   }
 
   forkSession(sessionID: string, directory: string, messageID?: string) {
@@ -97,11 +103,11 @@ export class OpenCodeClient {
     return this.request(`/session/${encodeURIComponent(sessionID)}/abort`, OpenCodeBooleanSchema, { method: "POST", directory });
   }
 
-  async promptAsync(sessionID: string, directory: string, messageID: string, parts: OpenCodePromptPart[]) {
+  async promptAsync(sessionID: string, directory: string, messageID: string, parts: OpenCodePromptPart[], model?: OpenCodeModelRef) {
     await this.request(`/session/${encodeURIComponent(sessionID)}/prompt_async`, undefined, {
       method: "POST",
       directory,
-      body: { messageID, parts },
+      body: { messageID, parts, ...(model ? { model: { providerID: model.providerID, modelID: model.modelID }, ...(model.variant ? { variant: model.variant } : {}) } : {}) },
     });
   }
 

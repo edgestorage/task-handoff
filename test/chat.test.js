@@ -958,6 +958,28 @@ test("ai session registry clears stale current tools at turn completion without 
   assert.equal(completed.toolCallsSinceLastMessage, 4);
 });
 
+test("ai session realtime completion records a duration endpoint without observedAt", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-completion-time-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const session = registry.start({ agent: "codex", providerSessionId: "thread-completion-time" });
+  const started = registry.applyRealtimeEvent(session.id, {
+    kind: "turn-started",
+    activeTurnId: "turn-completion-time",
+    providerTurnId: "provider-completion-time",
+    observedAt: "2026-08-28T12:00:00.000Z",
+  });
+  const completed = registry.applyRealtimeEvent(started.id, {
+    kind: "turn-completed",
+    activeTurnId: "turn-completion-time",
+    status: "idle",
+    text: "Done",
+  });
+
+  assert.equal(completed.completedAt, completed.updatedAt);
+  assert.equal(completed.turns.at(-1)?.status, "completed");
+  assert.equal(completed.turns.at(-1)?.completedAt, completed.updatedAt);
+});
+
 test("ai session registry resets tool activity at an assistant message boundary", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-tool-message-"));
   const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
@@ -1258,7 +1280,7 @@ test("codex app-server thread summary derives completion time from duration when
   assert.equal(summary.turns[0].completedAt, "2025-09-02T08:00:02.500Z");
 });
 
-test("codex app-server thread summary does not revive an older turn error", () => {
+test("codex app-server thread summary keeps turn errors out of assistant messages", () => {
   const summary = summarizeThreadTurns({
     id: "thread_recovered",
     turns: [
@@ -1281,7 +1303,8 @@ test("codex app-server thread summary does not revive an older turn error", () =
 
   assert.equal(summary.error, undefined);
   assert.equal(summary.latestTurnStatus, "completed");
-  assert.equal(summary.turns[0].lastMessage, "Temporary provider failure.");
+  assert.equal(summary.turns[0].lastMessage, undefined);
+  assert.equal(summary.turns[0].summary, undefined);
   assert.equal(summary.turns[1].lastMessage, "Recovered response.");
 });
 
@@ -2231,7 +2254,7 @@ test("claude control sock bridge binds daemon jobs and controls by short id", as
   assert.equal(session.providerSessionId, "ac8eaf94-408d-43a2-a270-7e15821b5a47");
   assert.equal(session.providerMeta.short, "ac8eaf94");
   assert.equal(session.providerMeta.controlSock, "/tmp/control.sock");
-  assert.equal(registry.get(session.id).lastMessage, "Claude says hi");
+  assert.equal(registry.get(session.id).lastMessage, undefined);
 
   const beforeSend = registry.get(session.id);
   await bridge.sendMessage(session, { message: "continue" });
@@ -2257,7 +2280,7 @@ test("claude control sock bridge binds daemon jobs and controls by short id", as
   ]);
 });
 
-test("claude control sock bridge ignores startup chrome in stream tail", async () => {
+test("claude control sock bridge does not project raw stream tail as assistant messages", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-claude-startup-tail-"));
   const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
   const bridge = new ClaudeControlSockSessionBridge(registry, {
@@ -2316,7 +2339,7 @@ test("claude control sock bridge ignores startup chrome in stream tail", async (
   assert.equal(session.lastMessage, undefined);
 });
 
-test("claude control sock bridge strips two-byte escape controls from startup tail", async () => {
+test("claude control sock bridge does not project escaped stream tail as assistant messages", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-claude-esc78-tail-"));
   const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
   const bridge = new ClaudeControlSockSessionBridge(registry, {
@@ -2387,7 +2410,7 @@ test("claude control sock bridge strips two-byte escape controls from startup ta
   assert.deepEqual(session.turns, []);
 });
 
-test("claude control sock bridge ignores tui chrome and completed state becomes idle", async () => {
+test("claude control sock bridge does not project TUI tail and completed state becomes idle", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-claude-tui-chrome-"));
   const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
   const bridge = new ClaudeControlSockSessionBridge(registry, {
@@ -3625,7 +3648,7 @@ test("codex app server bridge does not expose approval actions before the reques
   bridge.stop();
 });
 
-test("codex app server failed turns expose the turn error message", async () => {
+test("codex app server failed turns keep errors out of assistant messages", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-failed-turn-"));
   const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
   class FakeCodexAppServerClient extends EventEmitter {
@@ -3679,10 +3702,11 @@ test("codex app server failed turns expose the turn error message", async () => 
   const failed = registry.list()[0];
   assert.equal(failed.status, "failed");
   assert.equal(failed.error, "The model request failed.");
-  assert.equal(failed.lastMessage, "The model request failed.");
+  assert.equal(failed.lastMessage, undefined);
   assert.equal(failed.turns.at(-1).id, "turn_failed");
   assert.equal(failed.turns.at(-1).status, "failed");
-  assert.equal(failed.turns.at(-1).lastMessage, "The model request failed.");
+  assert.equal(failed.turns.at(-1).lastMessage, undefined);
+  assert.equal(failed.turns.at(-1).summary, undefined);
   assert.equal(failed.turns[0].lastMessage, "previous answer");
 });
 
@@ -3698,7 +3722,10 @@ test("codex app server waits for final turn failure before exposing retry errors
     stop() {}
   }
   const fake = new FakeCodexAppServerClient();
-  const bridge = new CodexAppServerSessionBridge(registry, fake);
+  const timelineItems = [];
+  const bridge = new CodexAppServerSessionBridge(registry, fake, {
+    onTimelineItem: (event) => timelineItems.push(event.item),
+  });
   await bridge.sync();
   const session = registry.list()[0];
   registry.applyRealtimeEvent(session.id, {
@@ -3717,6 +3744,38 @@ test("codex app server waits for final turn failure before exposing retry errors
   });
   assert.equal(registry.get(session.id).status, "running");
   assert.equal(registry.get(session.id).error, undefined);
+  assert.deepEqual(timelineItems.at(-1), {
+    id: "codex_retry:turn_retry_error",
+    turnId: "turn_retry_error",
+    type: "activity",
+    activityKind: "codexRetry",
+    title: "Codex retry",
+    status: "waiting",
+    durationMs: undefined,
+    summary: "Reconnecting... 1/5\n\nCodex error: responseStreamConnectionFailed (HTTP 502)",
+    input: undefined,
+    output: undefined,
+    paths: undefined,
+  });
+
+  fake.emit("event", {
+    type: "agent-message-delta",
+    threadId: "thread_retry_error",
+    turnId: "turn_retry_error",
+    itemId: "message_after_retry",
+    delta: "Recovered",
+  });
+  assert.equal(timelineItems.at(-1).id, "codex_retry:turn_retry_error");
+  assert.equal(timelineItems.at(-1).status, "completed");
+
+  fake.emit("event", {
+    type: "turn-error",
+    threadId: "thread_retry_error",
+    turnId: "turn_retry_error",
+    error: "Reconnecting... 2/5",
+    willRetry: true,
+  });
+  assert.equal(timelineItems.at(-1).status, "waiting");
 
   fake.emit("event", {
     type: "turn-error",
@@ -3736,6 +3795,12 @@ test("codex app server waits for final turn failure before exposing retry errors
   });
   assert.equal(registry.get(session.id).status, "failed");
   assert.equal(registry.get(session.id).error, "Model stream failed after 5 retries. Codex error: responseTooManyFailedAttempts (HTTP 502)");
+  assert.equal(registry.get(session.id).lastMessage, undefined);
+  assert.equal(registry.get(session.id).turns.at(-1).lastMessage, undefined);
+  assert.equal(registry.get(session.id).turns.at(-1).summary, undefined);
+  assert.equal(timelineItems.at(-1).id, "codex_retry:turn_retry_error");
+  assert.equal(timelineItems.at(-1).status, "completed");
+  assert.equal(timelineItems.at(-1).summary, "Reconnecting... 2/5");
 
   fake.emit("event", { type: "turn-started", threadId: "thread_retry_error", turnId: "turn_realtime_error" });
   assert.equal(registry.get(session.id).error, undefined);
@@ -3780,7 +3845,8 @@ test("codex failed thread snapshots restore the AI session error", async () => {
   assert.equal(failed.status, "failed");
   assert.equal(failed.error, "The restored model request failed. Provider remained unavailable. Codex error: httpConnectionFailed (HTTP 502)");
   assert.equal(failed.turns.at(-1).status, "failed");
-  assert.equal(failed.turns.at(-1).lastMessage, "The restored model request failed.\n\nProvider remained unavailable.\n\nCodex error: httpConnectionFailed (HTTP 502)");
+  assert.equal(failed.turns.at(-1).lastMessage, undefined);
+  assert.equal(failed.turns.at(-1).summary, undefined);
 });
 
 test("codex app server protocol parses failed turn error details", () => {
@@ -6991,14 +7057,16 @@ test("Codex Direct Session creation preserves provider identity and reconciles a
   const secondCreated = await bridge.createSession({ cwd: root, modelSelection: { modelEntityId: "mdl_secondary", modelName: "same-name" } });
   const reconciled = await bridge.createSession({ cwd: root, modelSelection: { modelEntityId: "mdl_primary", modelName: "requested-primary" } });
 
-  assert.deepEqual(calls.map(({ model, modelProvider }) => ({ model, modelProvider })), [
-    { model: "default-primary", modelProvider: codexProviderId("mdl_primary") },
-    { model: "same-name", modelProvider: codexProviderId("mdl_secondary") },
-    { model: "requested-primary", modelProvider: codexProviderId("mdl_primary") },
+  assert.deepEqual(calls.map(({ model, modelProvider, reasoningEffort }) => ({ model, modelProvider, reasoningEffort })), [
+    { model: "default-primary", modelProvider: codexProviderId("mdl_primary"), reasoningEffort: "medium" },
+    { model: "same-name", modelProvider: codexProviderId("mdl_secondary"), reasoningEffort: "medium" },
+    { model: "requested-primary", modelProvider: codexProviderId("mdl_primary"), reasoningEffort: "medium" },
   ]);
   assert.deepEqual(defaultCreated.modelSelection, { modelEntityId: "mdl_primary", modelName: "default-primary" });
   assert.deepEqual(secondCreated.modelSelection, { modelEntityId: "mdl_secondary", modelName: "same-name" });
   assert.deepEqual(reconciled.modelSelection, { modelEntityId: "mdl_secondary", modelName: "actual-secondary" });
+  assert.equal(defaultCreated.reasoningEffort, "medium");
+  assert.equal(secondCreated.reasoningEffort, "medium");
   assert.equal(diagnostics.at(-1).code, "AI_SESSION_MODEL_SELECTION_RECONCILED");
   assert.deepEqual(
     createAiSessionRegistry({ dir: registryDir }).getByProviderSessionId("codex", secondCreated.providerSessionId).modelSelection,

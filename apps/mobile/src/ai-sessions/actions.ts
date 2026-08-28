@@ -1,11 +1,11 @@
 import type { ControlPlaneClient } from '@task-handoff/control-plane-client';
-import type { AiSessionForkResult, AiSessionMessageAttachmentRef, AiSessionModelSelection, AiSessionPermissionMode, AiSessionSendMode } from '@task-handoff/protocol/ai-sessions';
+import type { AiSessionForkResult, AiSessionMessageAttachmentRef, AiSessionModelSelection, AiSessionPermissionMode, AiSessionReasoningEffort, AiSessionSendMode } from '@task-handoff/protocol/ai-sessions';
 
 import type { ValueStore } from '../platform/secure-storage';
 import type { MobileAiSessionStore } from './store';
 import { mobileMetrics } from '../observability/mobile-metrics';
 
-export type MobileAiSessionAction = 'send' | 'approval' | 'interrupt' | 'close' | 'fork' | 'model-selection' | 'queue-steer' | 'queue-retry' | 'queue-remove' | 'queue-edit' | 'queue-reorder';
+export type MobileAiSessionAction = 'send' | 'approval' | 'interrupt' | 'close' | 'fork' | 'model-selection' | 'reasoning-effort' | 'queue-steer' | 'queue-retry' | 'queue-remove' | 'queue-edit' | 'queue-reorder';
 export type MobileActionState = { phase: 'idle' | 'busy' | 'result-unknown' | 'failed'; error?: string };
 export type MobileActionResult<T> =
   | { disposition: 'accepted'; result: T }
@@ -49,6 +49,9 @@ export class MobileAiSessionActionCoordinator {
   }
   updateModelSelection(instanceId: string, sessionId: string, clientRequestId: string, selection: AiSessionModelSelection) {
     return this.run(instanceId, sessionId, 'model-selection', undefined, () => this.client.aiSessions.updateModelSelection(instanceId, sessionId, clientRequestId, selection));
+  }
+  updateReasoningEffort(instanceId: string, sessionId: string, clientRequestId: string, effort: AiSessionReasoningEffort) {
+    return this.run(instanceId, sessionId, 'reasoning-effort', undefined, () => this.client.aiSessions.updateReasoningEffort(instanceId, sessionId, clientRequestId, effort));
   }
   async fork(instanceId: string, sessionId: string, throughTurnId: string, proposedClientRequestId: string) {
     const requestKey = JSON.stringify([instanceId, sessionId, throughTurnId]);

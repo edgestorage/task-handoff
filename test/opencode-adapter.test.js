@@ -159,6 +159,92 @@ test("OpenCode projector derives waiting approval, turns, tools, patches, retrie
   assert.equal(projection.timeline.find((item) => item.id === "prt_tool").status, "running");
 });
 
+test("OpenCode projector takes authoritative model settings from the latest user message", () => {
+  const projection = projectOpenCodeSession({
+    session: {
+      id: "ses_model", directory: "/workspace", title: "Model", model: { id: "old", providerID: "provider_old", variant: "medium" },
+      time: { created: 1700000000000, updated: 1700000001000 },
+    },
+    status: { type: "idle" },
+    permissions: [],
+    messages: [{
+      info: {
+        id: "msg_model", sessionID: "ses_model", role: "user", time: { created: 1700000001000 },
+        model: { providerID: "provider_new", modelID: "new", variant: "high" },
+      },
+      parts: [{ id: "part_model", sessionID: "ses_model", messageID: "msg_model", type: "text", text: "Use it" }],
+    }],
+    projectModelSelection: (providerID, modelID) => ({ modelEntityId: providerID, modelName: modelID }),
+  });
+  assert.deepEqual(projection.snapshot.modelSelection, { modelEntityId: "provider_new", modelName: "new" });
+  assert.equal(projection.snapshot.reasoningEffort, "high");
+});
+
+test("OpenCode retry state stays out of the assistant summary and clears stale activity", () => {
+  const registry = createAiSessionRegistry({ dir: fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-opencode-retry-")) });
+  registry.applyAdapterSnapshot({
+    agent: "opencode",
+    creationSource: "ai-session",
+    providerSessionId: "ses_retry",
+    cwd: "/workspace",
+    status: "running",
+    phase: "thinking",
+    summary: "stale retry message",
+  });
+  const projection = projectOpenCodeSession({
+    session: {
+      id: "ses_retry", directory: "/workspace", title: "Retry",
+      time: { created: 1700000000000, updated: 1700000001000 },
+    },
+    status: { type: "retry", attempt: 2, message: "retrying provider", next: 1700000002000 },
+    permissions: [],
+    messages: [{
+      info: { id: "msg_retry", sessionID: "ses_retry", role: "user", time: { created: 1700000000000 } },
+      parts: [{ id: "part_retry", sessionID: "ses_retry", messageID: "msg_retry", type: "text", text: "Try it" }],
+    }],
+  });
+
+  assert.equal(projection.snapshot.summary, undefined);
+  assert.equal(projection.snapshot.replaceActivity, true);
+  assert.equal(registry.applyAdapterSnapshot(projection.snapshot).summary, undefined);
+});
+
+test("OpenCode stages model settings until a real prompt applies them", async () => {
+  const registry = createAiSessionRegistry({ dir: fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-opencode-settings-")) });
+  const session = registry.start({
+    agent: "opencode",
+    creationSource: "ai-session",
+    providerSessionId: "ses_settings",
+    cwd: "/workspace",
+    status: "idle",
+    modelSelection: { modelEntityId: "provider_old", modelName: "old" },
+    reasoningEffort: "medium",
+  });
+  const prompts = [];
+  const bridge = new OpenCodeSessionBridge(registry, {
+    connection: () => ({ endpoint: "http://unused", headers: {} }),
+    workspaceRoots: () => ["/workspace"],
+    resolveModelSelection: (selection) => ({ providerID: selection.modelEntityId, modelID: selection.modelName }),
+  });
+  bridge.client = { promptAsync: async (...args) => prompts.push(args) };
+
+  await bridge.updateModelSelection(session, { modelEntityId: "provider_new", modelName: "new" });
+  await bridge.updateReasoningEffort(session, "high");
+  assert.deepEqual(registry.get(session.id).modelSelection, { modelEntityId: "provider_old", modelName: "old" });
+  assert.equal(registry.get(session.id).reasoningEffort, "medium");
+
+  await bridge.startMessage(registry.get(session.id), {
+    message: "Apply settings",
+    messageId: "msg_settings",
+    attachments: [],
+    userMessageAttachments: [],
+  });
+  assert.deepEqual(prompts[0][4], { providerID: "provider_new", modelID: "new", variant: "high" });
+  assert.deepEqual(registry.get(session.id).modelSelection, { modelEntityId: "provider_old", modelName: "old" });
+  assert.equal(registry.get(session.id).reasoningEffort, "medium");
+  bridge.close();
+});
+
 test("OpenCode global SSE accepts CRLF frames and sync events without properties", async () => {
   const received = [];
   const frames = [

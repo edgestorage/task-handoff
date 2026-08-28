@@ -637,7 +637,6 @@ async function checkSelectedDockerRuntime() {
       dockerRuntimeCheck.state = "offline";
       dockerRuntimeCheck.rawMessage = details.error || "";
     }
-    await queryClient.invalidateQueries({ queryKey: controlPlaneQueryKeys.nodeRuntimes });
   } catch (error) {
     if (selectedDockerRuntimeKey.value !== key) return;
     dockerRuntimeCheck.state = "error";

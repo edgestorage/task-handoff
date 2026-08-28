@@ -212,6 +212,7 @@
   },
   "pnpm": {
     "patchedDependencies": {
+      "@react-native-menu/menu@2.0.0": "patches/@react-native-menu__menu@2.0.0.patch",
       "expo-paste-input@0.2.2": "patches/expo-paste-input@0.2.2.patch"
     }
   }
