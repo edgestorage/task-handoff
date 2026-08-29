@@ -1,5 +1,6 @@
 export const sessions = {
   title: "AI sessions",
+  browser: { address: "Address", back: "Back", forward: "Forward", reload: "Reload", stop: "Stop", connecting: "Connecting browser", unavailable: "Browser access is unavailable.", loadFailed: "Page failed to load.", invalidUrl: "Enter a valid HTTP or HTTPS URL.", pinned: "Web applications", addPinned: "Add web application", addPinnedTitle: "Add web application", addPinnedDescription: "Save a name and URL for quick access from the browser start page.", savePinned: "Add application", removePinned: "Remove web application", noPinned: "No web applications", recent: "Recent visits", noRecent: "No recent visits", clearRecent: "Clear", pinnedName: "Application name", pinnedUrl: "Application URL" },
   status: {
     idle: "Idle",
     running: "Running",

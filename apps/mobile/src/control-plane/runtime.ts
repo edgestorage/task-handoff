@@ -107,5 +107,6 @@ export async function deleteMobileControlPlaneProfile(profile: MobileControlPlan
   mobileAiSessionStore.clearProfile(controlPlaneId);
   mobileDirectoryStore.clearProfile(controlPlaneId);
   mobileTriggerStore.clearProfile(controlPlaneId);
+  await (await import('../browser/controller')).mobileBrowserController.clearProfile(controlPlaneId);
   return remaining;
 }

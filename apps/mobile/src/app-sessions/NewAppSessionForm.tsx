@@ -13,6 +13,7 @@ const DEFAULT_WORKSPACE_VALUE = '__default-workspace__';
 type Props = {
   instances: readonly ControlPlaneInstanceResourceEntry[];
   selectedInstance?: ControlPlaneInstanceResourceEntry;
+  apps?: readonly ControlPlaneInstanceResourceEntry['availableApps'][number][];
   selectedAppId: string;
   folders: readonly ControlPlaneNodeLocalFolder[];
   selectedFolderId?: string;
@@ -29,7 +30,8 @@ export function NewAppSessionForm(props: Props) {
   const { colors } = useMobileTheme();
   const { t } = useI18n();
   const [selectionRowWidth, setSelectionRowWidth] = useState<number>();
-  const selectedApp = props.selectedInstance?.availableApps.find((app) => app.id === props.selectedAppId);
+  const apps = props.apps ?? props.selectedInstance?.availableApps ?? [];
+  const selectedApp = apps.find((app) => app.id === props.selectedAppId);
   const selectedFolder = props.folders.find((folder) => folder.id === props.selectedFolderId);
   const showFolders = selectedApp?.supportsCwdSelection && props.selectedInstance?.runtime.type === 'local';
   const instanceOptions: AnchoredSelectOption[] = props.instances.map((instance) => ({
@@ -38,7 +40,7 @@ export function NewAppSessionForm(props: Props) {
     systemImage: 'server.rack',
     value: instance.id,
   }));
-  const appOptions: AnchoredSelectOption[] = (props.selectedInstance?.availableApps ?? []).map((app) => ({
+  const appOptions: AnchoredSelectOption[] = apps.map((app) => ({
     label: app.name,
     systemImage: 'app',
     value: app.id,

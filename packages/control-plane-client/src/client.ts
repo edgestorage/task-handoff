@@ -6,6 +6,7 @@ import type { ControlPlaneClientTransport } from "./transport.ts";
 import { createControlPlaneResourcesApi } from "./resources.ts";
 import { createControlPlaneTriggersApi } from "./triggers.ts";
 import { createControlPlaneUsersApi } from "./users.ts";
+import { createControlPlaneBrowserApi } from "./browser.ts";
 
 export function createControlPlaneClient(transport: ControlPlaneClientTransport) {
   const compatibleTransport: ControlPlaneClientTransport = {
@@ -18,6 +19,7 @@ export function createControlPlaneClient(transport: ControlPlaneClientTransport)
     users: createControlPlaneUsersApi(compatibleTransport),
     aiSessions: createControlPlaneAiSessionsApi(compatibleTransport),
     appSessions: createControlPlaneAppSessionsApi(compatibleTransport),
+    browser: createControlPlaneBrowserApi(compatibleTransport),
     resources: createControlPlaneResourcesApi(compatibleTransport),
     triggers: createControlPlaneTriggersApi(compatibleTransport),
   };

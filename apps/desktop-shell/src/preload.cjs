@@ -15,6 +15,14 @@ contextBridge.exposeInMainWorld("taskHandoffDesktop", {
   openLocalPath: (localPath) => ipcRenderer.invoke("task-handoff:open-local-path", localPath),
   getPathForFile: (file) => webUtils.getPathForFile(file),
   openAppWindow: (url) => ipcRenderer.invoke("task-handoff:open-app-window", url),
+  prepareBrowserContext: (instanceId) => ipcRenderer.invoke("task-handoff:browser-context-prepare", instanceId),
+  releaseBrowserContext: (contextId) => ipcRenderer.invoke("task-handoff:browser-context-release", contextId),
+  onBrowserNewTab: (listener) => {
+    const handler = (_event, input) => listener(input);
+    ipcRenderer.on("task-handoff:browser-new-tab", handler);
+    return () => ipcRenderer.removeListener("task-handoff:browser-new-tab", handler);
+  },
+  logBrowserDiagnostic: (input) => ipcRenderer.send("task-handoff:browser-diagnostic", input),
   openControlPlaneWindow: (url) => ipcRenderer.invoke("task-handoff:open-control-plane-window", url),
   openInstanceDetailWindow: (instanceId) => ipcRenderer.invoke("task-handoff:open-instance-detail-window", instanceId),
   switchInstanceDetailWindow: (instanceId) => ipcRenderer.invoke("task-handoff:switch-instance-detail-window", instanceId),

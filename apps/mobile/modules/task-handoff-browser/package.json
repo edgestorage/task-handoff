@@ -1,0 +1,12 @@
+{
+  "name": "task-handoff-browser",
+  "version": "0.0.1",
+  "private": true,
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "peerDependencies": {
+    "expo": "~57.0.10",
+    "react": "19.2.3",
+    "react-native": "0.86.2"
+  }
+}

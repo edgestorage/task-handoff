@@ -38,6 +38,14 @@
       "types": "./src/app-sessions.ts",
       "default": "./src/app-sessions.ts"
     },
+    "./browser-tunnel": {
+      "types": "./src/browser-tunnel.ts",
+      "default": "./src/browser-tunnel.ts"
+    },
+    "./browser-access": {
+      "types": "./src/browser-access.ts",
+      "default": "./src/browser-access.ts"
+    },
     "./repository": {
       "types": "./src/repository.ts",
       "default": "./src/repository.ts"
@@ -70,6 +78,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json --noEmit",
     "check": "pnpm run build",
+    "generate:browser-tunnel-native": "node scripts/generate-browser-tunnel-native-fixtures.mjs",
     "test": "node --test"
   },
   "dependencies": {

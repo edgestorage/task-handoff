@@ -319,6 +319,7 @@ export type MobileControlPlaneRuntimeValue = {
   controlPlaneOrigin?: string;
   coordinator?: MobileControlPlaneConnectionCoordinator;
   phase: MobileControlPlaneRuntimePhase;
+  profile?: MobileControlPlaneProfile;
   triggerCapability: boolean;
   transport?: MobileControlPlaneTransport;
 };
@@ -386,6 +387,7 @@ export function MobileControlPlaneRuntimeProvider({
     controlPlaneOrigin: active?.profile.access.kind === 'direct' ? active.profile.access.origin : undefined,
     coordinator: active?.coordinator,
     phase: activePhase,
+    profile: active?.profile,
     triggerCapability: active?.profile.capabilities.triggers === true,
     transport: active?.direct.transport,
   }), [active, activeCarPlayConnected, activePhase]);

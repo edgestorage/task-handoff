@@ -218,6 +218,29 @@ test("shared AI Session client owns route encoding, request input, and response 
   assert.equal(requests[0].init.method, "POST");
 });
 
+test("shared Browser client owns access route encoding and strict handshake parsing", async () => {
+  const requests = [];
+  const transport = {
+    async request(path, schema, init) {
+      requests.push({ path, init });
+      return schema.parse({ data: {
+        accessId: "browser_access_1",
+        token: "t".repeat(32),
+        expiresAt: "2026-08-29T10:00:00.000Z",
+        relayPath: "/browser-relay",
+        future: "ignored",
+      } });
+    },
+  };
+  const api = createControlPlaneClient(transport);
+  const access = await api.browser.access("instance/one");
+  assert.equal(access.accessId, "browser_access_1");
+  assert.deepEqual(requests, [{
+    path: "/api/controlled-instances/instance%2Fone/browser-access",
+    init: { method: "POST", headers: { "content-type": "application/json" }, body: "{}" },
+  }]);
+});
+
 test("shared AI Session client sends strict reasoning effort actions", async () => {
   const requests = [];
   const transport = {

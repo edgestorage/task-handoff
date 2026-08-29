@@ -73,6 +73,7 @@ const legacyBuild = [
   {
     input: {
       cli: "apps/cli/src/index.ts",
+      "browser-tunnel": "packages/protocol/src/browser-tunnel.ts",
       "chat-render": "packages/core/src/core/chat-render.ts",
       diagnostics: "packages/core/src/core/diagnostics.ts",
       persistence: "packages/core/src/core/persistence.ts",

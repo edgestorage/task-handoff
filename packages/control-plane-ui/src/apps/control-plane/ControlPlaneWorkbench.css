@@ -668,6 +668,7 @@
 }
 
 .control-plane-workbench {
+  position: relative;
   display: grid;
   grid-template-columns: var(--instances-width, 292px) minmax(0, 1fr);
   height: calc(var(--control-plane-viewport-height) - var(--control-plane-titlebar-height));

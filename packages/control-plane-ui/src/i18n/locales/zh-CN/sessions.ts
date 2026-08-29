@@ -3,6 +3,7 @@ import type { sessions as englishSessions } from "../en-US/sessions.ts";
 
 export const sessions = {
   title: "AI 会话",
+  browser: { address: "地址", back: "后退", forward: "前进", reload: "刷新", stop: "停止", connecting: "正在连接浏览器", unavailable: "浏览器访问当前不可用。", loadFailed: "页面加载失败。", invalidUrl: "请输入有效的 HTTP 或 HTTPS URL。", pinned: "Web 应用程序", addPinned: "添加 Web 应用程序", addPinnedTitle: "添加 Web 应用程序", addPinnedDescription: "保存应用程序名称和 URL，方便从浏览器启动页快速访问。", savePinned: "添加应用程序", removePinned: "移除 Web 应用程序", noPinned: "暂无 Web 应用程序", recent: "最近访问", noRecent: "暂无最近访问", clearRecent: "清空", pinnedName: "应用程序名称", pinnedUrl: "应用程序 URL" },
   status: {
     idle: "空闲",
     running: "运行中",

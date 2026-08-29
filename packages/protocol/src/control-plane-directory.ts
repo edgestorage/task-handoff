@@ -32,7 +32,13 @@ export const ControlPlaneInstanceDirectoryCapabilitiesSchema = z.object({
   aiSessionTimeline: ControlPlaneDirectoryTimelineCapabilitiesSchema.default(emptyDirectoryTimelineCapabilities),
   aiSessionConversationAttachments: ControlPlaneDirectoryConversationAttachmentCapabilitiesSchema.optional(),
   aiSessionProviders: AiSessionProviderCapabilitiesSchema.optional(),
+  browserTunnel: z.boolean().optional(),
 }).passthrough();
+
+export function supportsDirectoryBrowserTunnel(capabilities: unknown) {
+  const parsed = ControlPlaneInstanceDirectoryCapabilitiesSchema.safeParse(capabilities);
+  return parsed.success && parsed.data.browserTunnel === true;
+}
 
 export function directoryAiSessionProviderCapability(capabilities: unknown, agent: string) {
   const parsed = ControlPlaneInstanceDirectoryCapabilitiesSchema.safeParse(capabilities);
@@ -211,6 +217,7 @@ export const ControlPlaneInstanceDirectoryEntrySchema = z.object({
 export const ControlPlaneInstanceDirectorySchema = z.array(ControlPlaneInstanceDirectoryEntrySchema);
 
 export type ControlPlaneNodeDirectoryEntry = z.infer<typeof ControlPlaneNodeDirectoryEntrySchema>;
+export type ControlPlaneInstanceDirectoryCapabilities = z.infer<typeof ControlPlaneInstanceDirectoryCapabilitiesSchema>;
 export type ControlPlaneInstanceDirectoryEntry = z.infer<typeof ControlPlaneInstanceDirectoryEntrySchema>;
 export type ControlPlaneNodeConnectionPhase = z.infer<typeof ControlPlaneNodeConnectionPhaseSchema>;
 export type ControlPlaneInstanceAction = z.infer<typeof ControlPlaneInstanceActionSchema>;
