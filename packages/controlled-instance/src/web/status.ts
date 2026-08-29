@@ -202,6 +202,7 @@ export function controlledInstanceCapabilities(
       tty: available.some((item) => item.kind === "tty"),
       gui: available.some((item) => item.kind === "gui"),
       browser: available.some((item) => item.id === "browser" || item.id === "chromium"),
+      browserTunnel: true,
       screenshots: available.some((item) => item.kind === "gui") && Boolean(executablePath("import")),
       logs: true,
       aiSessionWorkspaceSelection: true,

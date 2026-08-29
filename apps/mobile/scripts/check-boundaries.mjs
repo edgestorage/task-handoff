@@ -27,6 +27,7 @@ if (!imagePickerPlugin || imagePickerPlugin[1]?.cameraPermission !== false || im
 
 const productionFiles = sourceFiles(path.join(root, 'app')).concat(sourceFiles(path.join(root, 'src')));
 const networkOwners = new Set([
+  path.join(root, 'src', 'control-plane', 'browser-context.ts'),
   path.join(root, 'src', 'control-plane', 'direct-enrollment.ts'),
   path.join(root, 'src', 'control-plane', 'direct-transport.ts'),
   path.join(root, 'src', 'control-plane', 'relay-channel.ts'),
@@ -48,7 +49,7 @@ for (const file of productionFiles) {
   }
   const apiRoutes = source.match(/["'`]\/api\/[^"'`\s]*/g) ?? [];
   const allowedPlatformRoutes = file === path.join(root, 'src', 'control-plane', 'direct-transport.ts')
-    ? new Set(["'/api/events", '"/api/events', '`/api/events'])
+    ? new Set(["'/api/events?aiSessionTransient=1", '"/api/events?aiSessionTransient=1', '`/api/events?aiSessionTransient=1'])
     : new Set();
   for (const route of apiRoutes) {
     if (!allowedPlatformRoutes.has(route)) {
@@ -57,13 +58,23 @@ for (const file of productionFiles) {
   }
 }
 
-const businessRoots = ['ai-sessions', 'app-sessions', 'directories', 'instances', 'nodes', 'triggers'];
+const businessRoots = ['ai-sessions', 'app-sessions', 'browser', 'directories', 'instances', 'nodes', 'triggers'];
 for (const directory of businessRoots.map((name) => path.join(root, 'src', name))) {
   for (const file of sourceFiles(directory)) {
     const source = fs.readFileSync(file, 'utf8');
     if (/cloud-relay|RelayControlPlaneTransport|isDirectMobileControlPlaneProfile|access\.kind/.test(source)) {
       failures.push(`${relative(file)} branches business behavior by Control Plane access kind`);
     }
+  }
+}
+
+for (const file of sourceFiles(path.join(root, 'src', 'browser'))) {
+  const source = fs.readFileSync(file, 'utf8');
+  if (/\btoken\b|proxyPort|socksPort|relayUrl|prepareBrowserContext/.test(source)) {
+    failures.push(`${relative(file)} crosses the native Browser credential or proxy boundary`);
+  }
+  if (/task-handoff-browser/.test(source) && !/TaskHandoffBrowserView/.test(source)) {
+    failures.push(`${relative(file)} imports the native Browser data-plane API outside the Control Plane boundary`);
   }
 }
 
@@ -76,7 +87,7 @@ if (bundleIndex >= 0) {
       'NodeAgentTransport', 'nodeCredential', 'relayEndpoint', 'accessTicket',
       '/api/controlled-instances/:id/start', '/api/controlled-instances/:id/stop',
       '/api/controlled-instances/:id/restart', '/api/nodes/:id/pairing',
-      '/api/nodes/:id/updates/apply', '/api/models',
+      '/api/nodes/:id/updates/apply',
     ];
     for (const file of sourceFiles(bundleDir, new Set(['.js', '.json', '.map', '.hbc']))) {
       const source = fs.readFileSync(file, 'utf8');

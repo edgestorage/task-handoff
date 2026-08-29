@@ -372,6 +372,13 @@
         @stop-session="stopSelectedAppSession"
         @update:instance-sidebar-visible="setInstancesSidebarVisible"
       />
+
+      <EmbeddedBrowserSurfaceLayer
+        :active-instance-id="activeInstanceId"
+        :browser-session-tabs="browserSessionTabs"
+        :browser-surface-state="browserSurfaceState"
+        @update-browser-tab="(instanceId, sessionKey, patch) => updateBrowserTab(instanceId, sessionKey, patch)"
+      />
     </main>
 
     <Transition name="workbench-loading">
@@ -456,6 +463,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../
 import AiSessionBoardView from "./ai-board/AiSessionBoardView.vue";
 import InstanceBoardView from "./board/InstanceBoardView.vue";
 import InstanceDetail from "./instance-detail/InstanceDetail.vue";
+import EmbeddedBrowserSurfaceLayer from "./instance-detail/EmbeddedBrowserSurfaceLayer.vue";
 import InstanceList from "./instance-list/InstanceList.vue";
 import ConfigSyncDialog from "./instance-list/ConfigSyncDialog.vue";
 import InstanceDeleteDialog from "./instance-list/InstanceDeleteDialog.vue";
@@ -495,6 +503,8 @@ type DesktopBridge = {
   switchInstanceDetailWindow?: (instanceId: string) => Promise<{ ok: boolean; action?: "switched" | "focused" | "error"; code?: string }>;
   windowDrag?: (phase: "start" | "move" | "end", screenX: number, screenY: number) => void;
   onOpenSettings?: (listener: () => void) => () => void;
+  onBrowserNewTab?: (listener: (input: { instanceId?: string; url?: string }) => void) => () => void;
+  logBrowserDiagnostic?: (input: { message: string; instanceId?: string }) => void;
   windowChrome?: { mode: "custom" | "macos-overlay" | "windows-overlay" };
   windowAction?: (action: "minimize" | "toggle-maximize" | "close") => Promise<{ ok: boolean; maximized?: boolean }>;
 };
@@ -934,6 +944,8 @@ const {
   activeTerminalSocketUrl,
   appLaunchButtonLabel,
   appLaunchButtonTitle,
+  browserSessionTabs,
+  browserSurfaceState,
   canLaunchApp,
   launchableApps,
   launchingApp,
@@ -964,6 +976,8 @@ const {
   setSessionMenuOpen,
   stoppingSessionId,
   stopSelectedAppSession,
+  openBrowserTab,
+  updateBrowserTab,
 } = useActiveInstanceSessions({
   activeInstance: activeInstanceWithAiSessions,
   appLaunchMenuOpen,
@@ -974,6 +988,13 @@ const {
   refresh,
   sessionMenuOpen,
   t,
+});
+const stopDesktopBrowserNewTab = desktopBridge?.onBrowserNewTab?.(({ instanceId: sourceInstanceId, url }) => {
+  const instanceId = sourceInstanceId || activeInstanceId.value;
+  desktopBridge?.logBrowserDiagnostic?.({ message: `popup event received url=${String(url || "").slice(0, 200)}`, instanceId: instanceId || undefined });
+  if (!instanceId || typeof url !== "string" || !url.trim()) return;
+  openBrowserTab(instanceId, url);
+  desktopBridge?.logBrowserDiagnostic?.({ message: `popup browser tab created url=${url.slice(0, 200)}`, instanceId });
 });
 
 function applyPendingInstanceDetailSelection() {
@@ -1159,6 +1180,7 @@ onBeforeUnmount(() => {
   finishInstanceSwitch(instanceSwitchSequence);
   cancelInstanceSwitcherPointer();
   stopDesktopOpenSettings?.();
+  stopDesktopBrowserNewTab?.();
   webWindowCoordinator?.dispose();
   clearToasts();
   if (connectingRefreshTimer) {

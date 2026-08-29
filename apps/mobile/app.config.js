@@ -29,6 +29,7 @@ module.exports = () => {
   const easProjectId = process.env.EXPO_PROJECT_ID || baseConfig.extra?.eas?.projectId;
   const plugins = [
     ...(baseConfig.plugins || []),
+    './modules/task-handoff-browser/plugin/withTaskHandoffBrowser',
     ...(taskStatusWidgetsEnabled ? [[
       'expo-widgets',
       {

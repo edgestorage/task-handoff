@@ -163,6 +163,7 @@ import { bridgeWebSockets, TASK_HANDOFF_WEBSOCKET_SERVER_OPTIONS } from "@task-h
 import { SESSION_STREAM_PROTOCOL_VERSION, SessionStreamsHelloEventType } from "@task-handoff/protocol/events";
 import { AppManagementOperationRequestSchema } from "@task-handoff/protocol/control-plane";
 import { registerRepositoryRoutes, repositoryWorkspaceRootsFromEnv } from "../repository/routes";
+import { attachBrowserTunnel } from "./browser-tunnel";
 
 const WebSocketClient = require("ws");
 
@@ -2514,6 +2515,10 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       upstream.write(websocketMessageToBuffer(message));
     });
     socket.on("close", () => upstream.destroy());
+  });
+
+  app.get("/api/browser-tunnel", { websocket: true }, (socket) => {
+    attachBrowserTunnel(socket as any);
   });
 
   const webSocketProxyHandler = (socket: { send: (data: unknown, options?: { binary?: boolean; compress?: boolean }) => void; close: () => void; on: (event: "message" | "close" | "error", listener: (message?: unknown, isBinary?: boolean) => void) => void; readyState: number; OPEN: number }, request: { params: { id: string }; raw: { url?: string }; headers: http.IncomingHttpHeaders }) => {

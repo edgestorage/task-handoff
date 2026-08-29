@@ -64,6 +64,7 @@ function defaultControlledInstanceFeatures() {
     tty: false,
     gui: false,
     browser: false,
+    browserTunnel: false,
     screenshots: false,
     logs: false,
     aiSessionWorkspaceSelection: false,
@@ -106,6 +107,8 @@ export const ControlledInstanceFeatureCapabilitiesSchema = z.object({
   tty: z.boolean().default(false),
   gui: z.boolean().default(false),
   browser: z.boolean().default(false),
+  // Compatibility for v0.0.23: Browser Tunnel is additive and absent on older instances.
+  browserTunnel: z.boolean().optional(),
   screenshots: z.boolean().default(false),
   logs: z.boolean().default(false),
   aiSessionWorkspaceSelection: z.boolean().default(false),
@@ -141,6 +144,7 @@ type NormalizedControlledInstanceCapabilities = ControlledInstanceCapabilities &
     gitCliCredentialBroker: boolean;
     gitCredentialProxy: boolean;
     privateModelCatalog: boolean;
+    browserTunnel: boolean;
   };
 };
 
@@ -158,6 +162,7 @@ export function normalizeControlledInstanceCapabilities(capabilities: unknown): 
     "tty",
     "gui",
     "browser",
+    "browserTunnel",
     "screenshots",
     "logs",
     "aiSessionWorkspaceSelection",
@@ -191,6 +196,10 @@ export function supportsAiSessionPersistenceSettings(capabilities: unknown) {
 
 export function supportsControlledInstancePrivateModelCatalog(capabilities: unknown) {
   return normalizeControlledInstanceCapabilities(capabilities).features.privateModelCatalog;
+}
+
+export function supportsBrowserTunnel(capabilities: unknown) {
+  return normalizeControlledInstanceCapabilities(capabilities).features.browserTunnel;
 }
 
 export function supportsGitCliCredentialBroker(capabilities: unknown) {

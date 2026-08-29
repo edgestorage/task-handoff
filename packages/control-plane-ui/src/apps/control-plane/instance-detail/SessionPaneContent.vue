@@ -1,5 +1,5 @@
 <template>
-  <div class="session-pane-content">
+  <div class="session-pane-content" data-browser-surface :data-instance-id="instance.id" :data-pane="pane">
     <div v-if="hasInstanceStatusPage(instance)" class="session-preview-status-page" :data-pending="isInstanceStatusPending(instance)" :data-state="instance.status">
       <div v-if="showImagePreparation" class="session-status-image-layout">
         <div class="session-status-overview">
@@ -69,7 +69,7 @@
     <div v-else-if="activeFrameUrl" class="session-preview-live">
       <iframe class="session-preview-frame" :src="activeFrameUrl" :title="session?.label || t('sessions.tabs.appSession')" allow="clipboard-read; clipboard-write; fullscreen" />
     </div>
-    <div v-else-if="!activeTerminalSocketUrl" class="session-preview-body">
+    <div v-else-if="session?.kind !== 'embedded-browser' && !activeTerminalSocketUrl" class="session-preview-body">
       <Terminal v-if="session?.kind === 'terminal'" :size="34" />
       <Monitor v-else :size="34" />
       <strong>{{ previewTitle(instance, t) }}</strong>
@@ -108,6 +108,7 @@ import RepositoryWorktreesTab from "./RepositoryWorktreesTab.vue";
 import RepositoryWorkspaceTab from "./RepositoryWorkspaceTab.vue";
 import ImagePullStatus from "./ImagePullStatus.vue";
 import type { NativeNodeFolderPicker } from "../nodePath";
+import type { SessionPaneId } from "./useActiveInstanceSessions";
 
 const { locale, t } = useI18n();
 
@@ -121,6 +122,7 @@ const props = defineProps<{
   launchableApps: LaunchableApp[];
   launchingApp: boolean;
   nodeLocalFolders?: NodeLocalFolder[];
+  pane: SessionPaneId;
   selectedAiSession: (instance: InstanceBoardItem, sessions?: AiSessionSummary[]) => AiSessionSummary | undefined;
   session?: SessionTab;
   sessionKey: string;

@@ -1,8 +1,8 @@
 import { Readable, Transform } from "node:stream";
 import type { FastifyInstance } from "fastify";
 import WebSocket from "ws";
+import { bridgeWebSockets } from "@task-handoff/protocol/websocket-bridge";
 import { ProxyRequestSchema } from "../schemas.ts";
-import { websocketPayload } from "../transport/proxy-utils.ts";
 import {
   INSTANCE_PROXY_REQUEST_BODY_LIMIT,
   instanceProxyResponseLimit,
@@ -221,18 +221,18 @@ export function registerInstanceProxyRoutes(app: FastifyInstance, options: Optio
         : new WebSocket(upstreamUrl, { perMessageDeflate: false });
       upstream.on("open", () => {
         diagnostic({ instanceId: id, action: "proxy.ws", path: `/${suffix}${query}` }, "node instance websocket proxy opened");
-        socket.on("message", (data, isBinary) => upstream?.readyState === WebSocket.OPEN && upstream.send(websocketPayload(data, isBinary)));
-        socket.on("close", () => upstream?.close());
-        socket.on("error", () => upstream?.close());
       });
-      upstream.on("message", (data, isBinary) => socket.readyState === WebSocket.OPEN && socket.send(isBinary ? data : data.toString(), { binary: isBinary, compress: false }));
       upstream.on("close", () => {
         diagnostic({ instanceId: id, action: "proxy.ws", path: `/${suffix}${query}` }, "node instance websocket proxy closed");
-        socket.close();
       });
       upstream.on("error", (error) => {
         diagnostic({ instanceId: id, action: "proxy.ws", path: `/${suffix}${query}`, error: error instanceof Error ? error.message : String(error) }, "node instance websocket proxy failed");
-        socket.close(1011, "Instance websocket proxy failed.");
+      });
+      // The node-agent websocket can open before the controlled-instance
+      // websocket. Bridge immediately so early client frames (notably the
+      // browser-tunnel hello) are queued until the instance is ready.
+      bridgeWebSockets(socket as any, upstream, {
+        upstreamOpenTimeoutMs: 10_000,
       });
     } catch (error) {
       diagnostic({ instanceId: id, action: "proxy.ws", path: `/${suffix}${query}`, error: error instanceof Error ? error.message : String(error) }, "node instance websocket endpoint unavailable");

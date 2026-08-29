@@ -2264,6 +2264,14 @@ test("control plane exposes a stable signed identity and authorizes revocable mo
 
   const authorized = await app.inject({ method: "GET", url: "/api/projects", headers: { authorization: `Bearer ${mobileToken}` } });
   assert.equal(authorized.statusCode, 200, authorized.body);
+  const browserAccessForMissingInstance = await app.inject({
+    method: "POST",
+    url: "/api/controlled-instances/instance_missing/browser-access",
+    headers: { authorization: `Bearer ${mobileToken}` },
+    payload: {},
+  });
+  assert.equal(browserAccessForMissingInstance.statusCode, 404, browserAccessForMissingInstance.body);
+  assert.notEqual(browserAccessForMissingInstance.json().error.code, "BROWSER_ACCESS_USER_REQUIRED");
   const eventSocket = await app.injectWS("/api/events", { headers: { authorization: `Bearer ${mobileToken}` } });
   eventSocket.terminate();
   const databaseFiles = [path.join(dataDir, "user-access", "control-plane.sqlite"), path.join(dataDir, "user-access", "control-plane.sqlite-wal")]

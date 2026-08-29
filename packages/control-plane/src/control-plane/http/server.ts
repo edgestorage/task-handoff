@@ -54,6 +54,8 @@ import { CloudConnectivityService } from "../cloud-connectivity/service.ts";
 import type { CloudConnectivityLifecycle } from "../cloud-connectivity/lifecycle.ts";
 import { CloudConnectivityBackgroundRuntime } from "../cloud-connectivity/coordinator-runtime.ts";
 import { AuthorizationConnectionRegistry } from "../auth/authorization-connections.ts";
+import { registerBrowserRelayRoutes } from "./browser-relay-routes.ts";
+import { BrowserAccessService } from "../instances/browser-access-service.ts";
 
 export type CreateControlPlaneAppOptions = {
   dataDir?: string;
@@ -371,6 +373,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   app.addContentTypeParser("application/octet-stream", (_request, payload, done) => done(null, payload));
   const events = new ControlPlaneEventBus();
   const authorizationConnections = new AuthorizationConnectionRegistry();
+  const browserAccess = new BrowserAccessService();
   const cloudConnectivityEnabled = options.cloudConnectivityEnabled ?? process.env.TASK_HANDOFF_CLOUD_CONNECTIVITY_ENABLED !== "0";
   let diagnosticLogsEnabled = controlPlaneDiagnosticLogsEnabled();
   const diagnosticLogger = createControlPlaneDiagnosticLogger(paths.logsDir, () => diagnosticLogsEnabled, app.log);
@@ -820,6 +823,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
         runtime: nodeConnectionRuntime.diagnostics(),
       },
       eventAuthorization: events.authorizationDiagnostics(),
+      browserRelay: browserAccess.diagnostics(),
     },
   }));
 
@@ -1058,6 +1062,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   });
 
   registerInstanceProxyRoutes({ app, service, auth, authorizationConnections });
+  registerBrowserRelayRoutes({ app, service, auth, authorizationConnections, events, browserAccess });
 
   app.get("*", { config: PUBLIC_CONTROL_PLANE_UI_ROUTE }, async (_request, reply) =>
     fs.existsSync(staticDir)

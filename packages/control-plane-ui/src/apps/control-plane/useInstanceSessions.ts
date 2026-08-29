@@ -28,10 +28,12 @@ export type SessionTab = {
   label: string;
   title?: string;
   status: string;
-  kind: "terminal" | "browser" | "logs" | "app" | "ai" | "status" | "repository";
+  kind: "terminal" | "browser" | "embedded-browser" | "logs" | "app" | "ai" | "status" | "repository";
   source?: Record<string, unknown>;
   aiSessions?: AiSessionSummary[];
 };
+
+export const EMBEDDED_BROWSER_APP_ID = "embedded-browser";
 
 export type RepositoryWorkspaceTabTarget = {
   aiAgent?: "codex" | "claude" | "opencode";
@@ -212,6 +214,7 @@ export function appDisplayName(id: string, t: Translate) {
     chromium: "Chromium",
     browser: t("sessions.tabs.browser"),
     "vscode-web": "VS Code",
+    [EMBEDDED_BROWSER_APP_ID]: t("sessions.tabs.browser"),
   };
   return names[id] || id.replace(/[-_]+/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
 }

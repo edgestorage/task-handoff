@@ -74,6 +74,8 @@
                       >
                         <span class="session-tab-button">
                           <FolderGit2 v-if="session.kind === 'repository'" :size="14" class="session-tab-icon" />
+                          <LoaderCircle v-else-if="session.kind === 'embedded-browser' && session.status === 'loading'" :size="14" class="session-tab-icon session-tab-icon-loading" />
+                          <Globe2 v-else-if="session.kind === 'embedded-browser'" :size="14" class="session-tab-icon" />
                           <AppWindow v-else :size="14" class="session-tab-icon" />
                           <input
                             v-if="editingSessionKey === session.key"
@@ -106,7 +108,7 @@
                       </span>
                       </ContextMenuTrigger>
                     <ContextMenuContent class="instance-action-menu">
-                      <ContextMenuItem v-if="session.kind !== 'repository'" class="instance-action-item" @select="beginSessionRename(session)">
+                      <ContextMenuItem v-if="session.kind !== 'repository' && session.kind !== 'embedded-browser'" class="instance-action-item" @select="beginSessionRename(session)">
                         <Pencil :size="14" />
                         <span>{{ t("sessions.tabs.rename") }}</span>
                       </ContextMenuItem>
@@ -320,6 +322,8 @@
         aria-hidden="true"
       >
         <FolderGit2 v-if="sessionTabPointerDrag.session.kind === 'repository'" :size="14" class="session-tab-icon" />
+        <LoaderCircle v-else-if="sessionTabPointerDrag.session.kind === 'embedded-browser' && sessionTabPointerDrag.session.status === 'loading'" :size="14" class="session-tab-icon session-tab-icon-loading" />
+        <Globe2 v-else-if="sessionTabPointerDrag.session.kind === 'embedded-browser'" :size="14" class="session-tab-icon" />
         <AppWindow v-else :size="14" class="session-tab-icon" />
         <strong>{{ sessionDisplayName(sessionTabPointerDrag.session, t) }}</strong>
       </div>
@@ -348,6 +352,7 @@
           :launchable-apps="launchableApps"
           :launching-app="launchingApp"
           :node-local-folders="nodeLocalFolders"
+          :pane="pane.id"
           :selected-ai-session="selectedAiSession"
           :session="pane.session"
           :session-key="pane.sessionKey"
@@ -422,7 +427,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type ComponentPublicInstance, type ObjectDirective } from "vue";
 import { useI18n } from "vue-i18n";
 import { useMediaQuery, useNow, useStorage } from "@vueuse/core";
-import { Activity, AppWindow, Bot, Boxes, ChevronDown, Columns2, Folder, FolderGit2, Maximize2, Minimize2, PanelLeft, PanelRight, PanelRightClose, Pencil, Plus, X } from "@lucide/vue";
+import { Activity, AppWindow, Bot, Boxes, ChevronDown, Columns2, Folder, FolderGit2, Globe2, LoaderCircle, Maximize2, Minimize2, PanelLeft, PanelRight, PanelRightClose, Pencil, Plus, X } from "@lucide/vue";
 import type { RepositorySessionKind } from "@task-handoff/protocol/repository";
 import type { AiSessionSummary, InstanceBoardItem, InstanceResourceMetrics, InstanceWithAiSessions, NodeLocalFolder } from "../../../api/types";
 import { Button } from "../../../components/ui/button";
@@ -579,7 +584,7 @@ watch(
 );
 const { locale } = useControlPlaneLocale();
 const activeRepositorySessionId = computed(() => {
-  if (!props.activeSession || props.activeSession.kind === "ai" || props.activeSession.kind === "status" || props.activeSession.kind === "repository") return "";
+  if (!props.activeSession || props.activeSession.kind === "ai" || props.activeSession.kind === "status" || props.activeSession.kind === "repository" || props.activeSession.kind === "embedded-browser") return "";
   return typeof props.activeSession.source?.id === "string" ? props.activeSession.source.id : props.activeSession.key;
 });
 const resourceMetricsDisplay = computed(() => formatResourceMetrics(props.resourceMetrics, resourceMetricsNow.value.getTime(), locale.value, t));
@@ -599,6 +604,12 @@ let sessionTabDetailCloseTimer: ReturnType<typeof setTimeout> | undefined;
 let sessionTabDetailClosedAt = 0;
 
 function sessionTabWorkspaceLabel(session: SessionTab) {
+  if (session.kind === "embedded-browser") {
+    const url = typeof session.source?.currentUrl === "string"
+      ? session.source.currentUrl
+      : typeof session.source?.initialUrl === "string" ? session.source.initialUrl : "";
+    return url || t("sessions.browser.address");
+  }
   const path = sessionWorkspacePath(session, props.instance);
   return path === "__unknown_workspace__" ? t("sessions.tabs.unknownWorkspace") : path;
 }

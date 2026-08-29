@@ -6,6 +6,7 @@ import {
   appDisplayName,
   absoluteInstanceUrl,
   buildSessionTabs,
+  EMBEDDED_BROWSER_APP_ID,
   launchableAppsForInstance,
   sessionFrameUrl,
   sessionTerminalSocketUrl,
@@ -16,6 +17,9 @@ import {
 import { hasInstanceStatusPage, isInstanceAppReady, isInstanceConnecting } from "../useInstanceStatus";
 import { reorderSessionTabKeys } from "./sessionTabOrder";
 import type { Translate } from "../../../i18n/status";
+import { supportsBrowserTunnel } from "@task-handoff/protocol/control-plane";
+import { supportsDirectoryBrowserTunnel } from "@task-handoff/protocol/control-plane-directory";
+import { canUseDesktopBrowserContext } from "../../../lib/desktopBridge";
 
 export type SessionPaneId = "left" | "right";
 
@@ -54,6 +58,7 @@ export function useActiveInstanceSessions({
   const selectedAiSessionKeys = reactive<Record<string, string>>({});
   const selectedAiSessionSnapshots = reactive<Record<string, AiSessionSummary | undefined>>({});
   const repositorySessionTabs = reactive<Record<string, SessionTab[]>>({});
+  const browserSessionTabs = reactive<Record<string, SessionTab[]>>({});
   const pendingAiSessionAppSelections = new Map<string, AiSessionSummary>();
 
   const sessionTabs = computed(() => {
@@ -61,7 +66,23 @@ export function useActiveInstanceSessions({
     const instanceTabs = buildSessionTabs(activeInstance.value, t);
     return instanceTabs.some((session) => session.kind === "status")
       ? instanceTabs
-      : [...instanceTabs, ...(instanceId ? repositorySessionTabs[instanceId] || [] : [])];
+      : [...instanceTabs, ...(instanceId ? repositorySessionTabs[instanceId] || [] : []), ...(instanceId ? browserSessionTabs[instanceId] || [] : [])];
+  });
+  const browserSurfaceState = computed<Record<string, {
+    leftSessionKey: string;
+    rightSessionKey: string;
+  }>>(() => {
+    const state: Record<string, {
+      leftSessionKey: string;
+      rightSessionKey: string;
+    }> = {};
+    for (const instanceId of Object.keys(browserSessionTabs)) {
+      state[instanceId] = {
+        leftSessionKey: selectedSessionKeys[instanceId] || "",
+        rightSessionKey: rightSelectedSessionKeys[instanceId] || "",
+      };
+    }
+    return state;
   });
   const orderedSessionTabs = computed(() => {
     const instanceId = activeInstance.value?.id;
@@ -143,12 +164,14 @@ export function useActiveInstanceSessions({
     if (!activeInstance.value) {
       return [];
     }
+    const browser = canUseDesktopBrowserContext()
+      && (supportsBrowserTunnel(activeInstance.value.capabilities) || supportsDirectoryBrowserTunnel(activeInstance.value.capabilities))
+      ? [{ id: EMBEDDED_BROWSER_APP_ID, label: t("sessions.tabs.browser") }]
+      : [];
     const catalogApps = launchableAppsForInstance(activeInstance.value, t);
-    if (catalogApps.length) {
-      return catalogApps;
-    }
+    if (catalogApps.length) return [...browser, ...catalogApps];
     const ids = activeInstance.value.image?.optionalApps?.length ? activeInstance.value.image.optionalApps : ["terminal-tty"];
-    return uniqueLaunchableApps(ids.map((id) => ({ id, label: appDisplayName(id, t) })));
+    return uniqueLaunchableApps([...browser, ...ids.map((id) => ({ id, label: appDisplayName(id, t) }))]);
   });
 
   watch(
@@ -366,6 +389,11 @@ export function useActiveInstanceSessions({
   }
 
   async function launchSelectedApp(instance: InstanceBoardItem, appId: string, cwdFolderId?: string, options?: Record<string, unknown>) {
+    if (appId === EMBEDDED_BROWSER_APP_ID) {
+      openBrowserTab(instance.id);
+      appLaunchMenuOpen.value = false;
+      return;
+    }
     if (!isInstanceAppReady(instance) || launchingApp.value) {
       return;
     }
@@ -396,6 +424,14 @@ export function useActiveInstanceSessions({
 
   async function stopSelectedAppSession(instance: InstanceBoardItem, session: SessionTab) {
     if (session.kind === "ai" || session.kind === "status") {
+      return;
+    }
+    if (session.kind === "embedded-browser") {
+      browserSessionTabs[instance.id] = (browserSessionTabs[instance.id] || []).filter((tab) => tab.key !== session.key);
+      if (selectedSessionKeys[instance.id] === session.key) delete selectedSessionKeys[instance.id];
+      if (rightSelectedSessionKeys[instance.id] === session.key) delete rightSelectedSessionKeys[instance.id];
+      delete rightPaneSessionKeys[instance.id]?.[session.key];
+      normalizeSessionLayout();
       return;
     }
     if (session.kind === "repository") {
@@ -517,6 +553,36 @@ export function useActiveInstanceSessions({
     normalizeSessionLayout();
   }
 
+  function openBrowserTab(instanceId: string, initialUrl?: string) {
+    const key = `embedded-browser:${crypto.randomUUID()}`;
+    const tabs = browserSessionTabs[instanceId] ||= reactive<SessionTab[]>([]);
+    tabs.push({
+      key,
+      kind: "embedded-browser",
+      label: EMBEDDED_BROWSER_APP_ID,
+      title: t("sessions.tabs.browser"),
+      status: initialUrl ? "loading" : "running",
+      source: { browserTabId: key, ...(initialUrl ? { initialUrl } : {}) },
+    });
+    const pane = focusedSessionPanes[instanceId] === "right" && rightSelectedSessionKeys[instanceId] ? "right" : "left";
+    if (pane === "right") {
+      ensurePaneAssignments(instanceId)[key] = true;
+      rightSelectedSessionKeys[instanceId] = key;
+    } else {
+      selectedSessionKeys[instanceId] = key;
+    }
+    focusedSessionPanes[instanceId] = pane;
+    rememberSessionKey(instanceId, key);
+  }
+
+  function updateBrowserTab(instanceId: string, sessionKey: string, patch: { title?: string; url?: string; status?: string }) {
+    const session = browserSessionTabs[instanceId]?.find((tab) => tab.key === sessionKey);
+    if (!session) return;
+    if (typeof patch.title === "string" && patch.title.trim()) session.title = patch.title.trim().slice(0, 120);
+    if (typeof patch.url === "string" && patch.url.trim()) session.source = { ...(session.source || {}), currentUrl: patch.url.trim().slice(0, 2000) };
+    if (typeof patch.status === "string" && patch.status.trim()) session.status = patch.status.trim();
+  }
+
   return {
     activeAttachUrl,
     activeInstanceConnecting,
@@ -529,6 +595,8 @@ export function useActiveInstanceSessions({
     appLaunchButtonLabel,
     appLaunchButtonTitle,
     canLaunchApp,
+    browserSessionTabs,
+    browserSurfaceState,
     launchableApps,
     launchingApp,
     launchSelectedApp,
@@ -538,6 +606,8 @@ export function useActiveInstanceSessions({
     moveSessionTab,
     moveSessionToPane,
     openAiSessionApp,
+    openBrowserTab,
+    updateBrowserTab,
     openRepositoryWorkspace,
     openSessionSplit,
     orderedSessionTabs,

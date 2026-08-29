@@ -1,4 +1,4 @@
-import { router, Stack, useLocalSearchParams } from 'expo-router';
+import { router, Stack, useLocalSearchParams, type Href } from 'expo-router';
 import { useEffect, useState } from 'react';
 import type { ControlPlaneNodeLocalFolder } from '@task-handoff/control-plane-client';
 
@@ -10,30 +10,54 @@ import { mobileProfileStore, mobileSecureStore } from '../../src/control-plane/r
 import { useActiveDirectories } from '../../src/directories/use-directories';
 import { useI18n } from '../../src/i18n';
 import { useMobileToast } from '../../src/components/MobileToast';
+import { mobileBrowserCapability } from '../../src/control-plane/browser-context';
+import { useMobileControlPlaneRuntime } from '../../src/control-plane/use-mobile-control-plane-runtime';
+import { mobileBrowserController } from '../../src/browser/controller';
+
+const EMBEDDED_BROWSER_APP_ID = 'embedded-browser';
 
 export default function NewAppSessionRoute() {
   const { t } = useI18n();
   const toast = useMobileToast();
+  const runtime = useMobileControlPlaneRuntime();
   const { instanceId: requestedInstanceId } = useLocalSearchParams<{ instanceId?: string }>();
   const { controlPlaneId, state } = useActiveDirectories();
   const [selection, setSelection] = useState<{ instanceId?: string; appId?: string; folderId?: string }>({});
   const [folderState, setFolderState] = useState<{ nodeId: string; folders: ControlPlaneNodeLocalFolder[] }>({ nodeId: '', folders: [] });
+  const [browserSupported, setBrowserSupported] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const selectedInstanceId = state.instances.some((instance) => instance.id === selection.instanceId)
     ? selection.instanceId!
     : initialAppInstanceId(state.instances, requestedInstanceId);
   const selectedInstance = state.instances.find((instance) => instance.id === selectedInstanceId);
-  const selectedAppId = selectedInstance?.availableApps.some((app) => app.id === selection.appId)
+  const availableApps = selectedInstance
+    ? [
+      ...(browserSupported ? [{ id: EMBEDDED_BROWSER_APP_ID, name: t('browser.browser'), kind: 'web' as const, supportsCwdSelection: false }] : []),
+      ...selectedInstance.availableApps,
+    ]
+    : [];
+  const selectedAppId = availableApps.some((app) => app.id === selection.appId)
     ? selection.appId!
-    : selectedInstance?.availableApps[0]?.id ?? '';
-  const selectedApp = selectedInstance?.availableApps.find((app) => app.id === selectedAppId);
+    : availableApps[0]?.id ?? '';
+  const selectedApp = availableApps.find((app) => app.id === selectedAppId);
   const issue = appLaunchIssue(selectedInstance);
-  const guidance = issue ? t(issue === 'choose-instance'
+  const effectiveIssue = issue === 'no-apps' && browserSupported ? undefined : issue;
+  const guidance = effectiveIssue ? t(effectiveIssue === 'choose-instance'
     ? 'appSessions.chooseInstanceGuidance'
-    : issue === 'instance-not-ready'
+    : effectiveIssue === 'instance-not-ready'
       ? 'appSessions.instanceNotReady'
       : 'appSessions.noApps') : undefined;
+
+  useEffect(() => {
+    let live = true;
+    setBrowserSupported(false);
+    if (!selectedInstance || !runtime.profile) return () => { live = false; };
+    void mobileBrowserCapability(runtime.profile, selectedInstance.capabilities)
+      .then((capability) => { if (live) setBrowserSupported(capability.supported); })
+      .catch(() => { if (live) setBrowserSupported(false); });
+    return () => { live = false; };
+  }, [runtime.profile, selectedInstance]);
 
   useEffect(() => {
     const nodeId = selectedInstance?.runtime.type === 'local' && selectedApp?.supportsCwdSelection ? selectedInstance.nodeId : undefined;
@@ -56,6 +80,11 @@ export default function NewAppSessionRoute() {
       const profile = await mobileProfileStore.active();
       if (!profile || profile.identity.controlPlaneId !== controlPlaneId) throw new Error('No active Control Plane.');
       const api = createMobileControlPlaneClient(profile, mobileSecureStore).api;
+      if (selectedAppId === EMBEDDED_BROWSER_APP_ID) {
+        const tab = await mobileBrowserController.create({ api, profile, instanceId: selectedInstance.id });
+        router.replace(`/browser/${encodeURIComponent(tab.instanceId)}/${encodeURIComponent(tab.id)}` as Href);
+        return;
+      }
       const session = await api.appSessions.launch(selectedInstance.id, {
         appId: selectedAppId,
         ...(selection.folderId ? { cwdFolderId: selection.folderId } : {}),
@@ -80,6 +109,7 @@ export default function NewAppSessionRoute() {
     <NewAppSessionForm
       instances={state.instances}
       selectedInstance={selectedInstance}
+      apps={availableApps}
       selectedAppId={selectedAppId}
       folders={folderState.nodeId === selectedInstance?.nodeId ? folderState.folders : []}
       selectedFolderId={selection.instanceId === selectedInstanceId ? selection.folderId : undefined}
