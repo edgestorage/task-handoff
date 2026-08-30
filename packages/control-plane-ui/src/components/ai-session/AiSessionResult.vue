@@ -44,7 +44,9 @@
           :file-links="fileLinks"
           :instance-id="instanceId"
           :is-latest="isLatest"
+          :provider-turn-id="providerTurnId"
           :session-id="session.id"
+          :turn-id="turnId"
           @open-file="$emit('openFile', $event)"
         />
       </section>
@@ -148,7 +150,7 @@ import { useI18n } from "vue-i18n";
 import type { AiSessionSummary } from "../../api/types";
 import type { AiSessionTimelineActivity } from "@task-handoff/protocol/ai-sessions";
 import type { TimelineTurnNode } from "./timelineActivities";
-import { useStreamingMessagesStore } from "../../apps/control-plane/useStreamingMessagesStore";
+import { streamingMessageMatchesTurn, useStreamingMessagesStore } from "../../apps/control-plane/useStreamingMessagesStore";
 import { createLatestTurnHeightBuffer } from "../../lib/latest-turn-height";
 import { ScrollArea } from "../ui/scroll-area";
 import AiSessionStreamingMarkdown from "./AiSessionStreamingMarkdown.vue";
@@ -173,6 +175,8 @@ const props = withDefaults(defineProps<{
   isLatest?: boolean;
   responseContent?: string;
   retryWarning?: string;
+  providerTurnId?: string;
+  turnId?: string;
   turnStartedAt?: string;
   turnEndedAt?: string;
   session: AiSessionSummary;
@@ -352,9 +356,14 @@ onUpdated(() => {
 });
 
 const streamingMessages = useStreamingMessagesStore();
-const streamingContent = computed(() => props.isLatest
-  ? streamingMessages.activeMessage(props.instanceId, props.session.id).value?.value.receivedText || ""
-  : "");
+const streamingContent = computed(() => {
+  const activeMessage = props.isLatest
+    ? streamingMessages.activeMessage(props.instanceId, props.session.id).value?.value
+    : undefined;
+  return streamingMessageMatchesTurn(activeMessage, { id: props.turnId, providerTurnId: props.providerTurnId })
+    ? activeMessage!.receivedText
+    : "";
+});
 const displayContent = computed(() => streamingContent.value || props.responseContent);
 </script>
 
@@ -479,6 +488,8 @@ const displayContent = computed(() => streamingContent.value || props.responseCo
   border: 0;
   background: transparent;
   color: var(--detail-activity-strong);
+  font-size: 14px;
+  line-height: var(--detail-response-line-height);
   padding-bottom: 12px;
 }
 
@@ -501,7 +512,8 @@ const displayContent = computed(() => streamingContent.value || props.responseCo
   padding-bottom: 0;
 }
 
-.ai-session-detail-response :deep(> div) {
+.ai-session-detail-response :deep(.ai-session-streaming-markdown),
+.ai-session-detail-response :deep(.markstream-vue) {
   color: var(--detail-activity-strong);
   font-size: 14px;
   font-weight: 400;

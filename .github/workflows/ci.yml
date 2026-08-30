@@ -32,7 +32,14 @@ jobs:
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
-      - run: pnpm test
+      - name: Test Node packages
+        run: pnpm run test:node
+      - name: Test Control Plane client
+        run: pnpm --filter @task-handoff/control-plane-client test
+      - name: Test Control Plane UI
+        run: pnpm --filter @task-handoff/control-plane-ui test
+      - name: Test mobile
+        run: pnpm --filter @task-handoff/mobile test
       - run: pnpm check
       - run: pnpm web:typecheck
 

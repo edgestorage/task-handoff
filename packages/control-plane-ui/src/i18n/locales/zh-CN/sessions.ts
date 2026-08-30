@@ -45,6 +45,12 @@ export const sessions = {
     copied: "已复制",
     copy: "复制",
     plainText: "纯文本",
+    openFile: "在内置文件管理器中打开",
+    openDesktopFile: "在桌面文件管理器中打开",
+    copyPath: "复制文件路径",
+    openBuiltinBrowser: "在内置浏览器中打开",
+    openDefaultBrowser: "在默认浏览器中打开",
+    copyLink: "复制链接",
   },
   panel: {
     view: "视图", status: "状态", listOptions: "AI 会话列表选项", sessionList: "AI 会话列表", sessionListDescription: "选择一个会话并在详情区域中查看。", newSession: "新建 AI 会话", allStatuses: "全部状态", active: "活跃", waiting: "等待中", problem: "异常",

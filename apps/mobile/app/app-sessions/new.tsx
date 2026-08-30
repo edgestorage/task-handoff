@@ -24,13 +24,17 @@ export default function NewAppSessionRoute() {
   const { controlPlaneId, state } = useActiveDirectories();
   const [selection, setSelection] = useState<{ instanceId?: string; appId?: string; folderId?: string }>({});
   const [folderState, setFolderState] = useState<{ nodeId: string; folders: ControlPlaneNodeLocalFolder[] }>({ nodeId: '', folders: [] });
-  const [browserSupported, setBrowserSupported] = useState(false);
+  const [browserCapability, setBrowserCapability] = useState<{ key: string; supported: boolean }>({ key: '', supported: false });
   const [busy, setBusy] = useState(false);
 
   const selectedInstanceId = state.instances.some((instance) => instance.id === selection.instanceId)
     ? selection.instanceId!
     : initialAppInstanceId(state.instances, requestedInstanceId);
   const selectedInstance = state.instances.find((instance) => instance.id === selectedInstanceId);
+  const browserCapabilityKey = runtime.profile && selectedInstance
+    ? `${runtime.profile.identity.controlPlaneId}\u0000${selectedInstance.id}\u0000${JSON.stringify(selectedInstance.capabilities)}`
+    : '';
+  const browserSupported = browserCapability.key === browserCapabilityKey && browserCapability.supported;
   const availableApps = selectedInstance
     ? [
       ...(browserSupported ? [{ id: EMBEDDED_BROWSER_APP_ID, name: t('browser.browser'), kind: 'web' as const, supportsCwdSelection: false }] : []),
@@ -51,13 +55,12 @@ export default function NewAppSessionRoute() {
 
   useEffect(() => {
     let live = true;
-    setBrowserSupported(false);
-    if (!selectedInstance || !runtime.profile) return () => { live = false; };
+    if (!selectedInstance || !runtime.profile || !browserCapabilityKey) return () => { live = false; };
     void mobileBrowserCapability(runtime.profile, selectedInstance.capabilities)
-      .then((capability) => { if (live) setBrowserSupported(capability.supported); })
-      .catch(() => { if (live) setBrowserSupported(false); });
+      .then((capability) => { if (live) setBrowserCapability({ key: browserCapabilityKey, supported: capability.supported }); })
+      .catch(() => { if (live) setBrowserCapability({ key: browserCapabilityKey, supported: false }); });
     return () => { live = false; };
-  }, [runtime.profile, selectedInstance]);
+  }, [browserCapabilityKey, runtime.profile, selectedInstance]);
 
   useEffect(() => {
     const nodeId = selectedInstance?.runtime.type === 'local' && selectedApp?.supportsCwdSelection ? selectedInstance.nodeId : undefined;
@@ -108,6 +111,7 @@ export default function NewAppSessionRoute() {
     <Stack.Screen options={{ title: t('nav.newAppSession') }} />
     <NewAppSessionForm
       instances={state.instances}
+      nodes={state.nodes}
       selectedInstance={selectedInstance}
       apps={availableApps}
       selectedAppId={selectedAppId}

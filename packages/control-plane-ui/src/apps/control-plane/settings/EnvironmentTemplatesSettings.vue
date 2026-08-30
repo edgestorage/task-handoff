@@ -157,7 +157,7 @@ async function removeTemplate() {
 .environment-template-state { align-items: center; color: var(--text-muted); display: flex; font-size: 12px; justify-content: center; min-height: 160px; padding: 20px; }
 .environment-template-state-error { gap: 10px; }
 .environment-template-state-error span { flex: 1; }
-.environment-template-empty-state { display: grid; gap: 7px; justify-items: center; min-height: 220px; text-align: center; }
+.environment-template-empty-state { align-content: center; display: grid; gap: 7px; justify-items: center; min-height: 220px; text-align: center; }
 .environment-template-empty-state strong { color: var(--text-strong); font-size: 13px; font-weight: 500; }
 .environment-template-empty-state p { margin: 0 0 5px; }
 .environment-template-list { display: grid; }

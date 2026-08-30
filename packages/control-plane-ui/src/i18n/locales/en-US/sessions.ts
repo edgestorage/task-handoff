@@ -42,6 +42,12 @@ export const sessions = {
     copied: "Copied",
     copy: "Copy",
     plainText: "Plain text",
+    openFile: "Open in built-in file manager",
+    openDesktopFile: "Open in desktop file manager",
+    copyPath: "Copy file path",
+    openBuiltinBrowser: "Open in built-in browser",
+    openDefaultBrowser: "Open in default browser",
+    copyLink: "Copy link",
   },
   panel: {
     view: "View", status: "Status", listOptions: "AI session list options", sessionList: "AI session list", sessionListDescription: "Choose a conversation to show in the detail view.", newSession: "New AI session", allStatuses: "All statuses", active: "Active", waiting: "Waiting", problem: "Problem",

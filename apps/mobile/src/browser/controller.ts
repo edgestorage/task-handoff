@@ -1,7 +1,7 @@
 import type { ControlPlaneClient } from '@task-handoff/control-plane-client';
 
 import type { MobileControlPlaneProfile } from '../control-plane/profile';
-import { prepareMobileBrowserContext, releaseBrowserContext } from '../control-plane/browser-context';
+import { activateMobileBrowserContext, prepareMobileBrowserContext, releaseBrowserContext } from '../control-plane/browser-context';
 import { normalizeBrowserAddress } from './url';
 import { MobileBrowserTabStore, mobileBrowserTabStore } from './store';
 
@@ -10,6 +10,7 @@ type ContextState = { contextId?: string; promise: Promise<string> };
 export class MobileBrowserController {
   private readonly contexts = new Map<string, ContextState>();
   private readonly releases = new Map<string, Promise<void>>();
+  private readonly suspendTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly generations = new Map<string, number>();
   private readonly listeners = new Set<() => void>();
 
@@ -38,19 +39,40 @@ export class MobileBrowserController {
   contextId(controlPlaneId: string, instanceId: string) { return this.contexts.get(contextKey(controlPlaneId, instanceId))?.contextId; }
 
   activate(api: ControlPlaneClient, profile: MobileControlPlaneProfile, instanceId: string) {
+    const key = contextKey(profile.identity.controlPlaneId, instanceId);
+    const timer = this.suspendTimers.get(key);
+    if (timer) {
+      clearTimeout(timer);
+      this.suspendTimers.delete(key);
+    }
     return this.ensureContext(api, profile, instanceId);
   }
 
   suspend(controlPlaneId: string, instanceId: string) {
-    return this.releaseContext(controlPlaneId, instanceId);
+    const key = contextKey(controlPlaneId, instanceId);
+    if (!this.contexts.has(key) || this.suspendTimers.has(key)) return Promise.resolve();
+    const timer = setTimeout(() => {
+      this.suspendTimers.delete(key);
+      void this.releaseContext(controlPlaneId, instanceId);
+    }, 30_000);
+    this.suspendTimers.set(key, timer);
+    return Promise.resolve();
   }
 
   async suspendAll() {
+    for (const timer of this.suspendTimers.values()) clearTimeout(timer);
+    this.suspendTimers.clear();
     const keys = [...this.contexts.keys()].map((key) => key.split('\u0000'));
     await Promise.all(keys.map(([controlPlaneId, instanceId]) => this.releaseContext(controlPlaneId, instanceId)));
   }
 
   async clearProfile(controlPlaneId: string) {
+    for (const [key, timer] of this.suspendTimers) {
+      if (key.startsWith(`${controlPlaneId}\u0000`)) {
+        clearTimeout(timer);
+        this.suspendTimers.delete(key);
+      }
+    }
     const instanceIds = this.store.clearProfile(controlPlaneId);
     await Promise.all(instanceIds.map((instanceId) => this.releaseContext(controlPlaneId, instanceId)));
   }
@@ -60,12 +82,11 @@ export class MobileBrowserController {
     await this.releases.get(key);
     const generation = this.generations.get(key) ?? 0;
     const existing = this.contexts.get(key);
-    if (existing) return existing.promise;
-    // Only the focused instance owns a mobile Browser context. This matches
-    // Android's process-wide proxy boundary and also keeps iOS background tabs
-    // from retaining idle relay channels.
-    const otherKeys = [...this.contexts.keys()].filter((candidate) => candidate !== key).map((candidate) => candidate.split('\u0000'));
-    await Promise.all(otherKeys.map(([controlPlaneId, otherInstanceId]) => this.releaseContext(controlPlaneId, otherInstanceId)));
+    if (existing) {
+      const contextId = await existing.promise;
+      await activateMobileBrowserContext(contextId);
+      return contextId;
+    }
     if ((this.generations.get(key) ?? 0) !== generation) throw Object.assign(new Error('Browser context preparation was cancelled.'), { code: 'BROWSER_CONTEXT_CANCELLED' });
     const state: ContextState = {
       promise: prepareMobileBrowserContext({ api, profile, instanceId }).then(({ contextId }) => {
@@ -85,6 +106,11 @@ export class MobileBrowserController {
 
   private async releaseContext(controlPlaneId: string, instanceId: string) {
     const key = contextKey(controlPlaneId, instanceId);
+    const timer = this.suspendTimers.get(key);
+    if (timer) {
+      clearTimeout(timer);
+      this.suspendTimers.delete(key);
+    }
     this.generations.set(key, (this.generations.get(key) ?? 0) + 1);
     const state = this.contexts.get(key);
     if (!state) return;

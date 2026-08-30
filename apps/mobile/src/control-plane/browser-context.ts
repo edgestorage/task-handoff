@@ -3,6 +3,7 @@ import { supportsDirectoryBrowserTunnel, type ControlPlaneInstanceDirectoryCapab
 
 import {
   browserCapabilities as nativeBrowserCapabilities,
+  activateBrowserContext as nativeActivateBrowserContext,
   prepareBrowserContext as nativePrepareBrowserContext,
   releaseAllBrowserContexts,
   releaseBrowserContext,
@@ -54,3 +55,7 @@ export async function prepareMobileBrowserContext(input: {
 }
 
 export { releaseAllBrowserContexts, releaseBrowserContext };
+
+export function activateMobileBrowserContext(contextId: string) {
+  return nativeActivateBrowserContext(contextId);
+}

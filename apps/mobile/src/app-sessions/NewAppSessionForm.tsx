@@ -1,17 +1,22 @@
 import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { controlPlaneLocalFolderDisplayName, type ControlPlaneInstanceResourceEntry, type ControlPlaneNodeLocalFolder } from '@task-handoff/control-plane-client';
+import type { ControlPlaneNodeDirectoryEntry } from '@task-handoff/protocol/control-plane-directory';
 
-import { AnchoredSelectMenu, type AnchoredSelectOption } from '../components/AnchoredSelectMenu';
+import { NewSessionContextMenu } from '../ai-sessions/NewSessionContextMenu';
+import type { AnchoredSelectOption } from '../components/AnchoredSelectMenu';
 import { Screen } from '../components/Screen';
 import { SystemIcon } from '../components/SystemIcon';
 import { useMobileTheme } from '../components/theme';
 import { useI18n } from '../i18n';
+import { instanceSelectOptions } from '../directories/instance-select-options';
+import { appLaunchSystemIcon } from './app-launch-icon';
 
 const DEFAULT_WORKSPACE_VALUE = '__default-workspace__';
 
 type Props = {
   instances: readonly ControlPlaneInstanceResourceEntry[];
+  nodes: readonly ControlPlaneNodeDirectoryEntry[];
   selectedInstance?: ControlPlaneInstanceResourceEntry;
   apps?: readonly ControlPlaneInstanceResourceEntry['availableApps'][number][];
   selectedAppId: string;
@@ -34,15 +39,10 @@ export function NewAppSessionForm(props: Props) {
   const selectedApp = apps.find((app) => app.id === props.selectedAppId);
   const selectedFolder = props.folders.find((folder) => folder.id === props.selectedFolderId);
   const showFolders = selectedApp?.supportsCwdSelection && props.selectedInstance?.runtime.type === 'local';
-  const instanceOptions: AnchoredSelectOption[] = props.instances.map((instance) => ({
-    description: instance.workspace.path,
-    label: instance.name,
-    systemImage: 'server.rack',
-    value: instance.id,
-  }));
+  const instanceOptions = instanceSelectOptions(props.instances, props.nodes);
   const appOptions: AnchoredSelectOption[] = apps.map((app) => ({
     label: app.name,
-    systemImage: 'app',
+    systemImage: appLaunchSystemIcon(app.id).ios,
     value: app.id,
   }));
   const folderOptions: AnchoredSelectOption[] = [
@@ -61,7 +61,7 @@ export function NewAppSessionForm(props: Props) {
       style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}
       testID="new-app-session-selection-card"
     >
-      <AnchoredSelectMenu cancelLabel={t('common.cancel')} onSelect={props.onInstanceChange} options={instanceOptions} selectedValue={props.selectedInstance?.id ?? ''} title={t('sessions.instance')}>
+      <NewSessionContextMenu cancelLabel={t('common.cancel')} onSelect={props.onInstanceChange} options={instanceOptions} selectedValue={props.selectedInstance?.id ?? ''} title={t('sessions.instance')}>
         {(onPress) => <SelectionRow
           disabled={!instanceOptions.length}
           icon={{ android: 'dns', ios: 'server.rack' }}
@@ -70,21 +70,21 @@ export function NewAppSessionForm(props: Props) {
           width={selectionRowWidth}
           onPress={onPress}
         />}
-      </AnchoredSelectMenu>
+      </NewSessionContextMenu>
       <View style={[styles.divider, { backgroundColor: colors.border }]} />
-      <AnchoredSelectMenu cancelLabel={t('common.cancel')} onSelect={props.onAppChange} options={appOptions} selectedValue={props.selectedAppId} title={t('appSessions.app')}>
+      <NewSessionContextMenu cancelLabel={t('common.cancel')} onSelect={props.onAppChange} options={appOptions} selectedValue={props.selectedAppId} title={t('appSessions.app')}>
         {(onPress) => <SelectionRow
           disabled={!appOptions.length}
-          icon={{ android: 'apps', ios: 'app' }}
+          icon={appLaunchSystemIcon(selectedApp?.id)}
           label={t('appSessions.app')}
           value={selectedApp?.name || t('appSessions.selectApp')}
           width={selectionRowWidth}
           onPress={onPress}
         />}
-      </AnchoredSelectMenu>
+      </NewSessionContextMenu>
       {showFolders ? <>
         <View style={[styles.divider, { backgroundColor: colors.border }]} />
-        <AnchoredSelectMenu
+        <NewSessionContextMenu
           cancelLabel={t('common.cancel')}
           onSelect={(value) => props.onFolderChange(value === DEFAULT_WORKSPACE_VALUE ? undefined : value)}
           options={folderOptions}
@@ -98,7 +98,7 @@ export function NewAppSessionForm(props: Props) {
             width={selectionRowWidth}
             onPress={onPress}
           />}
-        </AnchoredSelectMenu>
+        </NewSessionContextMenu>
       </> : null}
     </View>
 
@@ -116,7 +116,7 @@ export function NewAppSessionForm(props: Props) {
   </Screen>;
 }
 
-function SelectionRow({ disabled, icon, label, value, width, onPress }: { disabled?: boolean; icon: { android: 'dns' | 'apps' | 'folder'; ios: 'server.rack' | 'app' | 'folder' }; label: string; value: string; width?: number; onPress?: () => void }) {
+function SelectionRow({ disabled, icon, label, value, width, onPress }: { disabled?: boolean; icon: Pick<Parameters<typeof SystemIcon>[0], 'android' | 'ios'>; label: string; value: string; width?: number; onPress?: () => void }) {
   const { colors } = useMobileTheme();
   return <Pressable
     accessibilityLabel={`${label}: ${value}`}

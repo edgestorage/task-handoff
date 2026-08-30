@@ -4,7 +4,7 @@ export type AnchoredSelectOption<Value extends string = string> = {
   value: Value;
   label: string;
   description?: string;
-  systemImage?: 'server.rack' | 'app' | 'folder' | 'arrow.triangle.branch' | 'sparkles' | 'hand.raised' | 'checkmark.shield' | 'exclamationmark.shield';
+  systemImage?: 'server.rack' | 'app' | 'folder' | 'arrow.triangle.branch' | 'sparkles' | 'terminal' | 'globe' | 'play.fill' | 'hand.raised' | 'checkmark.shield' | 'exclamationmark.shield';
   danger?: boolean;
 };
 

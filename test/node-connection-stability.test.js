@@ -646,6 +646,66 @@ test("fleet revalidation publishes only semantic state changes after the initial
   assert.equal(gateway.readFleetRuntimes([node]).items[0].name, "Runtime B");
 });
 
+test("runtime checks update the fleet snapshot without exposing an empty directory", async () => {
+  const timestamp = "2026-08-22T00:00:00.000Z";
+  let checked = false;
+  const localRuntime = {
+    id: "runtime_local_host",
+    nodeId: "node_runtime_check",
+    name: "Local",
+    type: "local",
+    status: "online",
+    accessStrategy: "node-proxy",
+    capabilities: {},
+    labels: {},
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+  const runtime = () => ({
+    id: "runtime_local_docker",
+    nodeId: "node_runtime_check",
+    name: "Local Docker",
+    type: "docker",
+    status: checked ? "online" : "unknown",
+    accessStrategy: "direct-port",
+    capabilities: {},
+    labels: {},
+    createdAt: timestamp,
+    updatedAt: checked ? "2026-08-22T00:00:01.000Z" : timestamp,
+  });
+  const observed = [];
+  const client = new ControlPlaneNodeAgentClient({
+    request: async (_node, route, init = {}) => {
+      if (route.endsWith("/check") && init.method === "POST") {
+        checked = true;
+        return new Response(JSON.stringify({ data: runtime() }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ data: [localRuntime, runtime()] }), { status: 200, headers: { "content-type": "application/json" } });
+    },
+  });
+  const gateway = new ControlPlaneNodeAgentGateway(client, { onFleetStateChanged: (state) => observed.push(state) });
+  const node = {
+    id: "node_runtime_check",
+    connectionMode: "direct-http",
+    endpoint: "http://node-runtime-check.test",
+    status: "online",
+    auth: { mode: "paired-hmac", keyId: "key_runtime_check" },
+    connectionPhase: "healthy",
+  };
+
+  await gateway.refreshFleetRuntimes([node]);
+  observed.length = 0;
+  await gateway.checkRuntime(node, "runtime_local_docker");
+
+  const snapshot = gateway.readFleetRuntimes([node]);
+  assert.deepEqual(snapshot.items.map((item) => item.id), ["runtime_local_host", "runtime_local_docker"]);
+  assert.equal(snapshot.items[1].status, "online");
+  assert.equal(snapshot.nodeStates[0].phase, "ready");
+  assert.deepEqual(observed.map((state) => ({ phase: state.phase, contentChanged: state.contentChanged })), [
+    { phase: "ready", contentChanged: true },
+  ]);
+});
+
 test("instance heartbeat clocks do not publish fleet content changes", async () => {
   const timestamp = "2026-08-22T00:00:00.000Z";
   let heartbeat = 0;

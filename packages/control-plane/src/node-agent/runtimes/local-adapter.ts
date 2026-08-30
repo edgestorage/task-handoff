@@ -178,7 +178,8 @@ export class LocalhostRuntimeAdapter implements RuntimeAdapter {
         // CODEX_HOME belongs to the controlled instance's private config area.
         // Explicitly clear an inherited value when Codex configuration is
         // disabled or the default Codex home is selected.
-        CODEX_HOME: context.instance.config.codexConfigEnabled && context.instance.config.codexHomeMode === "taskhandoff"
+        CODEX_HOME: (context.instance.config?.codexConfigEnabled ?? true)
+          && (context.instance.config?.codexHomeMode ?? "taskhandoff") === "taskhandoff"
           ? path.join(dataDir, "configs", "codex")
           : undefined,
       },

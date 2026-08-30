@@ -13,7 +13,7 @@ import {
   encodeBrowserTunnelHello,
   encodeBrowserTunnelOpen,
   encodeBrowserTunnelWindowUpdate,
-} from "../protocol/src/browser-tunnel.ts";
+} from "@task-handoff/protocol/browser-tunnel";
 import { attachBrowserTunnel } from "./src/web/browser-tunnel.ts";
 
 class TestWebSocket extends EventEmitter {

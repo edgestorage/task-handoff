@@ -28,3 +28,8 @@ test("guest popups are routed to the renderer as browser tabs", () => {
   assert.match(main, /guest\.setWindowOpenHandler\(\(\{ url \}\) => \{[\s\S]*?host\.send\("task-handoff:browser-new-tab", \{ url: String\(url\),/);
   assert.match(preload, /onBrowserNewTab/);
 });
+
+test("guest address shortcuts are routed to the owning browser tab", () => {
+  assert.match(main, /guest\.on\("before-input-event"[\s\S]*?input\.key\?\.toLowerCase\(\) !== "l"[\s\S]*?event\.preventDefault\(\)[\s\S]*?!host\.isDestroyed\(\)[\s\S]*?host\.send\("task-handoff:browser-focus-address", \{ webContentsId: guest\.id \}\)/);
+  assert.match(preload, /onBrowserFocusAddress[\s\S]*?task-handoff:browser-focus-address/);
+});

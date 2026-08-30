@@ -24,7 +24,7 @@ import { mobileProfileStore, mobileSecureStore } from '../../../src/control-plan
 export default function SessionDetailRoute() {
   const params = useLocalSearchParams<{ instanceId: string; sessionId: string }>();
   const router = useRouter();
-  const { actions, client, controlPlaneId } = useActiveAiSessionsRuntime();
+  const { actions, client, controlPlaneId, refresh } = useActiveAiSessionsRuntime();
   const directories = useActiveDirectories();
   const { colors } = useMobileTheme();
   const { t } = useI18n();
@@ -126,6 +126,7 @@ export default function SessionDetailRoute() {
     actions={actions}
     controlPlaneId={controlPlaneId || '__booting__'}
     client={client}
+    refresh={refresh}
     drafts={mobileDraftStore}
     permissions={mobilePermissionStore}
     defaultPermissionMode={defaultPermissionMode}

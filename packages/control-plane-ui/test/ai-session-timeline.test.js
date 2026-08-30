@@ -71,6 +71,97 @@ test("turn Timeline cache merges authoritative snapshots with live item upserts"
   });
 });
 
+test("Turn Timeline cache becomes stale when the authoritative Turn revision advances", () => {
+  const store = useAiSessionTimelineStore();
+  const instanceId = "instance-revision";
+  const sessionId = "session-revision";
+  const loadedTurn = { id: "turn-revision", providerTurnId: "provider-turn-revision", revision: 1 };
+  store.cleanupInstance(instanceId);
+  store.resolveTurn(instanceId, sessionId, loadedTurn, [{
+    id: "command-revision",
+    turnId: "provider-turn-revision",
+    type: "activity",
+    activityKind: "commandExecution",
+    title: "Command",
+    status: "running",
+  }]);
+
+  assert.equal(store.turnState(instanceId, sessionId, loadedTurn).status, "ready");
+  const advancedTurn = { ...loadedTurn, revision: 2, status: "completed" };
+  assert.deepEqual(store.turnState(instanceId, sessionId, advancedTurn), {
+    status: "stale",
+    items: [{
+      id: "command-revision",
+      turnId: "provider-turn-revision",
+      type: "activity",
+      activityKind: "commandExecution",
+      title: "Command",
+      status: "running",
+    }],
+  });
+  store.cleanupInstance(instanceId);
+});
+
+test("an older Timeline response remains stale for a newer Turn revision", () => {
+  const store = useAiSessionTimelineStore();
+  const instanceId = "instance-response-race";
+  const sessionId = "session-response-race";
+  const requestedTurn = { id: "turn-response-race", revision: 4 };
+  const currentTurn = { ...requestedTurn, revision: 5 };
+  store.cleanupInstance(instanceId);
+  store.beginTurnLoad(instanceId, sessionId, requestedTurn);
+  store.resolveTurn(instanceId, sessionId, requestedTurn, []);
+
+  assert.equal(store.turnState(instanceId, sessionId, currentTurn).status, "stale");
+  store.cleanupInstance(instanceId);
+});
+
+test("an older Timeline response cannot overwrite a newer resolved revision", () => {
+  const store = useAiSessionTimelineStore();
+  const instanceId = "instance-response-order";
+  const sessionId = "session-response-order";
+  const olderTurn = { id: "turn-response-order", revision: 4 };
+  const newerTurn = { ...olderTurn, revision: 5 };
+  store.cleanupInstance(instanceId);
+  store.beginTurnLoad(instanceId, sessionId, olderTurn);
+  store.beginTurnLoad(instanceId, sessionId, newerTurn);
+  store.resolveTurn(instanceId, sessionId, newerTurn, [{
+    id: "newer-item",
+    turnId: newerTurn.id,
+    type: "activity",
+    activityKind: "commandExecution",
+    title: "Newer",
+    status: "completed",
+  }]);
+  store.apply({
+    instanceId,
+    sessionId,
+    providerSessionId: "thread-response-order",
+    generatedAt: "2026-08-16T00:00:06.000Z",
+    item: {
+      id: "live-after-newer",
+      turnId: newerTurn.id,
+      type: "activity",
+      activityKind: "commandExecution",
+      title: "Live after newer",
+      status: "completed",
+    },
+  });
+  store.resolveTurn(instanceId, sessionId, olderTurn, [{
+    id: "older-item",
+    turnId: olderTurn.id,
+    type: "activity",
+    activityKind: "commandExecution",
+    title: "Older",
+    status: "running",
+  }]);
+
+  const state = store.turnState(instanceId, sessionId, newerTurn);
+  assert.equal(state.status, "ready");
+  assert.deepEqual(state.items.map((item) => item.id), ["newer-item", "live-after-newer"]);
+  store.cleanupInstance(instanceId);
+});
+
 test("realtime Turn state excludes unavailable history snapshots and read errors", () => {
   const store = useAiSessionTimelineStore();
   const instanceId = "instance-realtime-only";

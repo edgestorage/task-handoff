@@ -212,7 +212,7 @@
                     </Button>
                   </div>
                 </div>
-                <p v-if="!resources.runtimes.length" class="settings-empty">{{ t("settings.nodeDetail.noRuntimes") }}</p>
+                <NodeResourceEmptyState v-if="!resources.runtimes.length" :icon="Box" :message="t('settings.nodeDetail.noRuntimes')" />
               </div>
             </div>
           </TabsContent>
@@ -278,7 +278,7 @@
                         <Badge :variant="instance.runtimeVersion?.phase === 'matched' ? 'default' : 'secondary'">{{ runtimeVersionPhase(instance) }}</Badge>
                       </div>
                     </div>
-                    <p v-if="!resources.instances.length" class="settings-empty">{{ t("settings.nodeDetail.noControlledInstances") }}</p>
+                    <NodeResourceEmptyState v-if="!resources.instances.length" :icon="Boxes" :message="t('settings.nodeDetail.noControlledInstances')" />
                   </div>
                 </section>
               </div>
@@ -303,7 +303,7 @@
                   </div>
                   <Badge :variant="job.status === 'succeeded' ? 'default' : 'secondary'">{{ localizedStatus(updateJobStatusKeys, job.status) }}</Badge>
                 </div>
-                <p v-if="!resources.updateJobs.length" class="settings-empty">{{ t("settings.nodeDetail.noUpdateJobs") }}</p>
+                <NodeResourceEmptyState v-if="!resources.updateJobs.length" :icon="History" :message="t('settings.nodeDetail.noUpdateJobs')" />
               </div>
             </div>
           </TabsContent>
@@ -337,7 +337,7 @@
                       </Button>
                     </div>
                   </div>
-                  <p v-if="!resources.localFolders.length" class="settings-empty">{{ t("settings.nodeDetail.noLocalFolders") }}</p>
+                  <NodeResourceEmptyState v-if="!resources.localFolders.length" :icon="FolderOpen" :message="t('settings.nodeDetail.noLocalFolders')" />
                 </div>
               </ScrollArea>
               <p v-if="resources.localFoldersError" class="control-plane-error">{{ resources.localFoldersError }}</p>
@@ -361,7 +361,7 @@
                       <code>{{ image.id }} · {{ image.size || t("settings.nodeDetail.unknownSize") }} · {{ image.createdSince || t("settings.nodeDetail.unknownAge") }}</code>
                     </div>
                   </div>
-                  <p v-if="!resources.images.length" class="settings-empty">{{ t("settings.nodeDetail.noImages") }}</p>
+                  <NodeResourceEmptyState v-if="!resources.images.length" :icon="Container" :message="t('settings.nodeDetail.noImages')" />
                 </div>
               </ScrollArea>
               <p v-if="resources.imagesError" class="control-plane-error">{{ resources.imagesError }}</p>
@@ -386,7 +386,7 @@
                       </Button>
                     </div>
                   </div>
-                  <p v-if="!resources.instances.length" class="settings-empty">{{ t("settings.nodeDetail.noInstances") }}</p>
+                  <NodeResourceEmptyState v-if="!resources.instances.length" :icon="Boxes" :message="t('settings.nodeDetail.noInstances')" />
                 </div>
               </ScrollArea>
             </div>
@@ -420,7 +420,7 @@
                     </Button>
                   </div>
                 </div>
-                <p v-if="!resources.controlPlanePairings.length" class="settings-empty">{{ t("settings.nodeDetail.noPairedKeys") }}</p>
+                <NodeResourceEmptyState v-if="!resources.controlPlanePairings.length" :icon="KeyRound" :message="t('settings.nodeDetail.noPairedKeys')" />
               </div>
               <p v-if="resources.remoteKeysError" class="control-plane-error">{{ resources.remoteKeysError }}</p>
             </div>
@@ -455,7 +455,7 @@
                     </Button>
                   </div>
                 </div>
-                <p v-if="!resources.controlPlaneConnections.length" class="settings-empty">{{ t("settings.nodeDetail.noActiveConnections") }}</p>
+                <NodeResourceEmptyState v-if="!resources.controlPlaneConnections.length" :icon="Network" :message="t('settings.nodeDetail.noActiveConnections')" />
               </div>
               <p v-if="resources.remoteConnectResultByNodeId[selectedNode.id]" class="settings-success">
                 {{ t("settings.nodeDetail.remoteResult", { status: localizedStatus(remoteConnectStatusKeys, resources.remoteConnectResultByNodeId[selectedNode.id].status) }) }}
@@ -534,7 +534,7 @@
 <script setup lang="ts">
 import { computed, ref, watch, type Component } from "vue";
 import { useI18n } from "vue-i18n";
-import { Box, Boxes, Download, FolderOpen, Gauge, KeyRound, MapPin, Monitor, MoreHorizontal, Network, Pencil, Plus, RefreshCw, ServerCog, Settings, Trash2 } from "@lucide/vue";
+import { Box, Boxes, Container, Download, FolderOpen, Gauge, History, KeyRound, MapPin, Monitor, MoreHorizontal, Network, Pencil, Plus, RefreshCw, ServerCog, Settings, Trash2 } from "@lucide/vue";
 import { TooltipTrigger as RekaTooltipTrigger } from "reka-ui";
 import type { BuildInfo, InstanceBoardItem, LocalDockerImage, Node, NodeAgentEventTransportHealth, NodeAgentExternalListener, NodeControlPlaneConnection, NodeControlPlanePairing, NodeLocalFolder, NodeRuntime, UpdateChannel, UpdateCheckResult, UpdateJob } from "../../../api/types";
 import { nodeSupportsLocalFolderNameUpdate } from "../../../api/nodeCapabilities";
@@ -551,6 +551,7 @@ import ControlPlaneSelectItem from "../shared/ControlPlaneSelectItem.vue";
 import ControlPlaneProxyManagementPanel from "./ControlPlaneProxyManagementPanel.vue";
 import ControlPlaneProxyNodePanel from "./ControlPlaneProxyNodePanel.vue";
 import NodeConnectionDiagnostics from "./NodeConnectionDiagnostics.vue";
+import NodeResourceEmptyState from "./NodeResourceEmptyState.vue";
 import { nodeLocalFolderDisplayName } from "../nodePath";
 import { nodeEndpointDisplay } from "./nodeEndpointDisplay";
 import { nodeDetailActionState } from "./nodeDetailActions";

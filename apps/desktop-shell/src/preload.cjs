@@ -13,14 +13,23 @@ contextBridge.exposeInMainWorld("taskHandoffDesktop", {
   setWindowChromeTheme: (theme) => ipcRenderer.invoke("task-handoff:set-window-chrome-theme", theme),
   chooseProjectFolder: () => ipcRenderer.invoke("task-handoff:choose-project-folder"),
   openLocalPath: (localPath) => ipcRenderer.invoke("task-handoff:open-local-path", localPath),
+  revealLocalPath: (localPath) => ipcRenderer.invoke("task-handoff:reveal-local-path", localPath),
+  openExternalUrl: (url) => ipcRenderer.invoke("task-handoff:open-external-url", url),
   getPathForFile: (file) => webUtils.getPathForFile(file),
   openAppWindow: (url) => ipcRenderer.invoke("task-handoff:open-app-window", url),
   prepareBrowserContext: (instanceId) => ipcRenderer.invoke("task-handoff:browser-context-prepare", instanceId),
   releaseBrowserContext: (contextId) => ipcRenderer.invoke("task-handoff:browser-context-release", contextId),
+  touchBrowserContext: (contextId) => ipcRenderer.invoke("task-handoff:browser-context-touch", contextId),
+  setBrowserTabThrottled: (webContentsId, throttled) => ipcRenderer.invoke("task-handoff:browser-tab-throttled", webContentsId, throttled),
   onBrowserNewTab: (listener) => {
     const handler = (_event, input) => listener(input);
     ipcRenderer.on("task-handoff:browser-new-tab", handler);
     return () => ipcRenderer.removeListener("task-handoff:browser-new-tab", handler);
+  },
+  onBrowserFocusAddress: (listener) => {
+    const handler = (_event, input) => listener(input);
+    ipcRenderer.on("task-handoff:browser-focus-address", handler);
+    return () => ipcRenderer.removeListener("task-handoff:browser-focus-address", handler);
   },
   logBrowserDiagnostic: (input) => ipcRenderer.send("task-handoff:browser-diagnostic", input),
   openControlPlaneWindow: (url) => ipcRenderer.invoke("task-handoff:open-control-plane-window", url),

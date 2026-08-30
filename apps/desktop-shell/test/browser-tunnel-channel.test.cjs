@@ -6,7 +6,7 @@ const {
   decodeBrowserTunnelFrame,
   encodeBrowserTunnelFrame,
   encodeBrowserTunnelReady,
-} = require("../../../dist/browser-tunnel.js");
+} = require("@task-handoff/protocol/browser-tunnel");
 const { BrowserTunnelChannel } = require("../src/browser-tunnel-channel.cjs");
 
 test("desktop Browser Tunnel multiplexes a SOCKS socket with credit updates", async () => {

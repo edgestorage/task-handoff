@@ -44,6 +44,7 @@ test("AI Session detail does not render the list summary projection as conversat
   assert.match(dock, /:detail-state="detailState"/);
   assert.match(projection, /summary\?\.detailRevision, summary\?\.turnsRevision, summary\?\.latestTurnRef\?\.id/);
   assert.match(projection, /hasRenderableTurn\(instanceId, summary\.id, turnId\)/);
+  assert.match(projection, /streamingMessages\.applyAuthoritativeTurnBody\(instanceId, currentSummary\.id, read\.body\.turn\)/);
   assert.match(panel, /hasRenderableSelectedSessionTurn\(turn\.id\) \? "ready" : "loading"/);
   assert.match(board, /hasRenderableSelectedCardTurn\(turn\.id\) \? "ready" : "loading"/);
   for (const source of [panel, board]) assert.match(source, /useAiSessionConversationProjection/);

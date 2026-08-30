@@ -51,7 +51,9 @@
           :content="displayAiSessionMessage(card.session, promptIndex, t)"
           :instance-id="card.instance.id"
           :is-latest="promptIndex >= promptCount - 1"
+          :provider-turn-id="card.session.activeTurnId"
           :session-id="card.session.id"
+          :turn-id="card.session.latestTurnRef?.id"
         />
       </div>
       <span v-if="promptCount > 1" class="ai-board-turn-nav">
@@ -349,6 +351,8 @@ const isForking = computed(() => props.forkingSessionKey === props.card.key);
   align-content: start;
   border-top: 1px solid var(--ai-session-card-divider);
   background: var(--ai-session-card-content-bg);
+  font-size: 14px;
+  line-height: 1.35;
   margin: 2px -14px 0;
   min-height: 0;
   overflow-x: hidden;

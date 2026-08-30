@@ -59,7 +59,7 @@ export const CreateInstanceInputSchema = z.object({
 export const UpdateInstanceInputSchema = z.object({
   name: ControlledInstanceSchema.shape.name.optional(),
   config: InstanceConfigInputSchema.optional(),
-  modelSelection: ControlledInstanceSchema.shape.modelSelection.optional(),
+  modelSelection: ControlledInstanceSchema.shape.modelSelection.unwrap().optional(),
 }).strict();
 
 export const CreateModelInputSchema = z.object({

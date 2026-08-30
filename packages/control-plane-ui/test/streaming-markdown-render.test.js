@@ -5,6 +5,7 @@ import { createSSRApp, h } from "vue";
 import { renderToString } from "vue/server-renderer";
 import { createServer } from "vite";
 import { fileURLToPath } from "node:url";
+import { createControlPlaneI18nForTest } from "../src/i18n/testing.ts";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 
@@ -37,6 +38,7 @@ test("text fenced code blocks retain their content alongside animated text", asy
         sessionId: "session-test",
       }),
     });
+    app.use(createControlPlaneI18nForTest());
     const html = await renderToString(app);
     assert.match(html, /data-node-type="code_block"/);
     assert.match(html, /class="ai-session-highlighted-code"/);

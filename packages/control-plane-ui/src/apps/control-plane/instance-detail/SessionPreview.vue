@@ -1087,7 +1087,13 @@ function clearSessionTabLongPressTimer() {
 function startSplitResize(event: PointerEvent) {
   const layout = sessionPaneLayout.value;
   if (!layout || event.button !== 0) return;
+  const handle = event.currentTarget instanceof HTMLElement ? event.currentTarget : undefined;
   event.preventDefault();
+  try {
+    handle?.setPointerCapture?.(event.pointerId);
+  } catch {
+    // Window-level capture listeners keep resizing functional when pointer capture is unavailable.
+  }
   splitResizing.value = true;
   document.body.classList.add("session-pane-resizing");
   const resize = (moveEvent: PointerEvent) => {
@@ -1097,14 +1103,21 @@ function startSplitResize(event: PointerEvent) {
   const stop = () => {
     splitResizing.value = false;
     document.body.classList.remove("session-pane-resizing");
-    window.removeEventListener("pointermove", resize);
-    window.removeEventListener("pointerup", stop);
+    try {
+      if (handle?.hasPointerCapture?.(event.pointerId)) handle.releasePointerCapture(event.pointerId);
+    } catch {
+      // The pointer may already have been released by the browser or WebView host.
+    }
+    window.removeEventListener("pointermove", resize, true);
+    window.removeEventListener("pointerup", stop, true);
+    window.removeEventListener("pointercancel", stop, true);
     stopSplitResize = undefined;
   };
   stopSplitResize?.();
   stopSplitResize = stop;
-  window.addEventListener("pointermove", resize);
-  window.addEventListener("pointerup", stop, { once: true });
+  window.addEventListener("pointermove", resize, true);
+  window.addEventListener("pointerup", stop, true);
+  window.addEventListener("pointercancel", stop, true);
 }
 
 onBeforeUnmount(() => {

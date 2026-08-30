@@ -137,6 +137,8 @@ test("conversation cache keeps the last projection visible while independently c
   assert.equal(cache.projection("instance-1", changed).turns[0].lastMessage, "fresh");
   assert.equal(cache.setTurn("instance-1", summary.id, "body-3", { id: "turn-1", status: "completed", phase: "responding", revision: 3, lastMessage: "live refresh", startedAt: summary.updatedAt, updatedAt: summary.updatedAt }, "body-3"), true);
   assert.equal(cache.turnEntry("instance-1", summary.id, "turn-1")?.bodyRevision, "body-3");
+  assert.equal(cache.turnEntry("instance-1", summary.id, "turn-1")?.status, "completed");
+  assert.equal(cache.turnEntry("instance-1", summary.id, "turn-1")?.revision, 3);
   assert.equal(cache.projection("instance-1", changed).turns[0].lastMessage, "live refresh");
 });
 

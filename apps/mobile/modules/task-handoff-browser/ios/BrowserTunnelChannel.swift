@@ -1,4 +1,7 @@
 import Foundation
+import OSLog
+
+private let browserTunnelLogger = Logger(subsystem: "com.taskhandoff.mobile.dev", category: "task-handoff-browser")
 
 internal actor BrowserTunnelChannel {
   typealias DataSink = @Sendable (Data) async throws -> Void
@@ -72,9 +75,28 @@ internal actor BrowserTunnelChannel {
     let id = allocateStreamId()
     let stream = Stream(id: id, sendCredit: initialWindow, onData: onData, onHalfClose: onHalfClose, onClose: onClose)
     streams[id] = stream
-    try await send(BrowserTunnelProtocol.open(streamId: id, host: host, port: port))
-    try await withCheckedThrowingContinuation { continuation in stream.openContinuation = continuation }
+    browserDiagnostic("tunnel OPEN stream=\(id) target=\(host):\(port)")
+    // Install the waiter before sending OPEN. A fast relay can answer OPEN_OK
+    // before send() returns; registering it afterwards loses the response.
+    try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+      stream.openContinuation = continuation
+      Task { [weak self] in
+        guard let self else { return }
+        do {
+          try await self.send(BrowserTunnelProtocol.open(streamId: id, host: host, port: port))
+        } catch {
+          await self.failOpen(streamId: id, error: error)
+        }
+      }
+    }
     return id
+  }
+
+  private func failOpen(streamId: UInt32, error: Error) {
+    guard let stream = streams.removeValue(forKey: streamId) else { return }
+    stream.state = "closed"
+    stream.openContinuation?.resume(throwing: error)
+    stream.openContinuation = nil
   }
 
   func sendData(streamId: UInt32, data: Data) async throws {
@@ -182,4 +204,9 @@ internal actor BrowserTunnelChannel {
     nextStreamId = nextStreamId == UInt32.max ? 1 : nextStreamId + 1
     return value
   }
+}
+
+private func browserDiagnostic(_ message: String) {
+  NSLog("[task-handoff-browser] %@", message)
+  browserTunnelLogger.info("\(message, privacy: .public)")
 }

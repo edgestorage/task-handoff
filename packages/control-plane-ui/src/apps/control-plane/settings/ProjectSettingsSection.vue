@@ -249,7 +249,7 @@ async function confirmDelete() { if (!deleteTarget.value) return; if (await remo
 .project-summary-popover-empty { color: var(--text-muted); font-size: 12px; margin: 0; padding: 10px 9px; }
 .project-state { align-items: center; color: var(--text-muted); display: flex; font-size: 12px; justify-content: center; min-height: 160px; padding: 20px; }
 .project-state-error { gap: 10px; }
-.project-empty-state { display: grid; gap: 7px; justify-items: center; text-align: center; }
+.project-empty-state { align-content: center; display: grid; gap: 7px; justify-items: center; text-align: center; }
 .project-empty-state strong { color: var(--text-strong); font-size: 13px; }
 .project-empty-state p { margin: 0; }
 .project-editor-head { align-items: center; border-bottom: 1px solid var(--line); display: flex; flex-direction: row; justify-content: space-between; padding: 13px 16px; }

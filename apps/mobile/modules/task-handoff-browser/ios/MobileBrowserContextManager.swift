@@ -1,8 +1,10 @@
 import Foundation
 import CryptoKit
 import Network
-import Security
+import OSLog
 import WebKit
+
+private let browserContextLogger = Logger(subsystem: "com.taskhandoff.mobile.dev", category: "task-handoff-browser")
 
 internal actor MobileBrowserContextManager {
   static let shared = MobileBrowserContextManager()
@@ -27,6 +29,7 @@ internal actor MobileBrowserContextManager {
     if let id = contextIdByKey[key], var context = contextsById[id] {
       context.references += 1
       contextsById[id] = context
+      browserDiagnostic("context reused id=\(id) references=\(context.references)")
       return id
     }
 
@@ -37,9 +40,7 @@ internal actor MobileBrowserContextManager {
     }
     let channel = BrowserTunnelChannel(url: relayURL, token: input.token)
     try await channel.connect()
-    let username = randomCredential()
-    let password = randomCredential()
-    let socks = BrowserSocksServer(channel: channel, username: username, password: password)
+    let socks = BrowserSocksServer(channel: channel)
     let address: BrowserSocksServer.Address
     do {
       address = try await socks.start()
@@ -51,8 +52,8 @@ internal actor MobileBrowserContextManager {
       let store = WKWebsiteDataStore(forIdentifier: profileIdentifier(key))
       var proxy = ProxyConfiguration(socksv5Proxy: .hostPort(host: address.host, port: address.port))
       proxy.allowFailover = false
-      proxy.applyCredential(username: username, password: password)
       store.proxyConfigurations = [proxy]
+      browserDiagnostic("iOS WebView SOCKS proxy configured host=\(address.host) port=\(address.port) profile=\(profileIdentifier(key))")
       return store
     }
     let id = UUID().uuidString.lowercased()
@@ -60,11 +61,16 @@ internal actor MobileBrowserContextManager {
     contextsById[id] = context
     contextIdByKey[key] = id
     preparedContexts += 1
+    browserDiagnostic("context prepared id=\(id) instance=\(input.instanceId)")
     return id
   }
 
   func dataStore(contextId: String) -> WKWebsiteDataStore? {
     contextsById[contextId]?.dataStore
+  }
+
+  func activate(contextId: String) throws {
+    guard contextsById[contextId] != nil else { throw BrowserContextUnavailableException() }
   }
 
   func release(contextId: String) async {
@@ -77,6 +83,7 @@ internal actor MobileBrowserContextManager {
     contextsById.removeValue(forKey: contextId)
     contextIdByKey.removeValue(forKey: context.key)
     releasedContexts += 1
+    browserDiagnostic("context released id=\(contextId)")
     await context.socks.close()
     await context.channel.close()
   }
@@ -97,10 +104,9 @@ internal actor MobileBrowserContextManager {
   }
 }
 
-private func randomCredential() -> String {
-  var bytes = [UInt8](repeating: 0, count: 18)
-  _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
-  return Data(bytes).base64EncodedString().replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "+", with: "-")
+private func browserDiagnostic(_ message: String) {
+  NSLog("[task-handoff-browser] %@", message)
+  browserContextLogger.info("\(message, privacy: .public)")
 }
 
 private func profileIdentifier(_ key: String) -> UUID {

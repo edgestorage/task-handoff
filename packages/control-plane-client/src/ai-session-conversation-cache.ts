@@ -151,6 +151,15 @@ export class AiSessionConversationCache {
     const expectedRevision = authoritativeRevision ?? indexed?.bodyRevision;
     if (!indexed || expectedRevision !== revision) return false;
     if (authoritativeRevision) indexed.bodyRevision = authoritativeRevision;
+    Object.assign(indexed, {
+      providerTurnId: turn.providerTurnId ?? indexed.providerTurnId,
+      status: turn.status,
+      phase: turn.phase,
+      revision: turn.revision,
+      startedAt: turn.startedAt,
+      updatedAt: turn.updatedAt,
+      completedAt: turn.completedAt,
+    });
     entry.turns.set(indexed.id, { revision, turn });
     return true;
   }

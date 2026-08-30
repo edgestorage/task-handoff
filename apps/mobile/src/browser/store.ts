@@ -4,6 +4,7 @@ export type MobileBrowserTab = {
   instanceId: string;
   title: string;
   currentUrl: string;
+  loading: boolean;
   createdAt: string;
 };
 
@@ -22,7 +23,7 @@ export class MobileBrowserTabStore {
 
   create(controlPlaneId: string, instanceId: string, initialUrl = 'about:blank') {
     const tab: MobileBrowserTab = {
-      id: this.createId(), controlPlaneId, instanceId, title: '', currentUrl: initialUrl, createdAt: this.now(),
+      id: this.createId(), controlPlaneId, instanceId, title: '', currentUrl: initialUrl, loading: false, createdAt: this.now(),
     };
     this.tabs = [...this.tabs, tab];
     this.activeTabId = tab.id;
@@ -30,7 +31,7 @@ export class MobileBrowserTabStore {
     return tab;
   }
 
-  update(controlPlaneId: string, instanceId: string, tabId: string, patch: Partial<Pick<MobileBrowserTab, 'title' | 'currentUrl'>>) {
+  update(controlPlaneId: string, instanceId: string, tabId: string, patch: Partial<Pick<MobileBrowserTab, 'title' | 'currentUrl' | 'loading'>>) {
     let changed = false;
     this.tabs = this.tabs.map((tab) => {
       if (tab.controlPlaneId !== controlPlaneId || tab.instanceId !== instanceId || tab.id !== tabId) return tab;
@@ -43,6 +44,7 @@ export class MobileBrowserTabStore {
 
   activate(controlPlaneId: string, instanceId: string, tabId: string) {
     if (!this.tabs.some((tab) => tab.controlPlaneId === controlPlaneId && tab.instanceId === instanceId && tab.id === tabId)) return false;
+    if (this.activeTabId === tabId) return true;
     this.activeTabId = tabId;
     this.emit();
     return true;

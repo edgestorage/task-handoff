@@ -1,5 +1,8 @@
 import ExpoModulesCore
+import OSLog
 import WebKit
+
+private let browserViewLogger = Logger(subsystem: "com.taskhandoff.mobile.dev", category: "task-handoff-browser")
 
 internal final class TaskHandoffBrowserView: ExpoView, WKDownloadDelegate, WKNavigationDelegate, WKUIDelegate, UIDocumentPickerDelegate {
   // On iOS 17 WebKit owns the system upload picker when WKUIDelegate does not
@@ -24,6 +27,7 @@ internal final class TaskHandoffBrowserView: ExpoView, WKDownloadDelegate, WKNav
   }
 
   func setContextId(_ value: String) {
+    browserDiagnostic("WebView context prop=\(value)")
     guard contextId != value else { return }
     contextId = value
     rebuild()
@@ -36,6 +40,7 @@ internal final class TaskHandoffBrowserView: ExpoView, WKDownloadDelegate, WKNav
 
   func load(_ value: String) throws {
     guard let url = allowedNavigationURL(value), let webView else { throw BrowserNavigationRejectedException() }
+    browserViewLogger.info("WebView load requested url=\(url.absoluteString, privacy: .public)")
     webView.load(URLRequest(url: url))
   }
 
@@ -57,14 +62,21 @@ internal final class TaskHandoffBrowserView: ExpoView, WKDownloadDelegate, WKNav
 
   private func rebuild() {
     destroy()
-    guard let contextId else { return }
+    guard let contextId else {
+      browserDiagnostic("WebView rebuild skipped: context unavailable")
+      return
+    }
     Task { @MainActor [weak self] in
-      guard let self, self.contextId == contextId,
-            let dataStore = await MobileBrowserContextManager.shared.dataStore(contextId: contextId) else { return }
+      guard let self, self.contextId == contextId else { return }
+      guard let dataStore = await MobileBrowserContextManager.shared.dataStore(contextId: contextId) else {
+        browserDiagnostic("WebView context unavailable context=\(contextId)")
+        return
+      }
       let configuration = WKWebViewConfiguration()
       configuration.websiteDataStore = dataStore
       configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
       let webView = WKWebView(frame: bounds, configuration: configuration)
+      browserViewLogger.info("WebView created context=\(contextId, privacy: .public)")
       webView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
       webView.navigationDelegate = self
       webView.uiDelegate = self
@@ -78,6 +90,7 @@ internal final class TaskHandoffBrowserView: ExpoView, WKDownloadDelegate, WKNav
   }
 
   func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+    browserViewLogger.info("WebView navigation action url=\(navigationAction.request.url?.absoluteString ?? "", privacy: .public) main=\(navigationAction.targetFrame?.isMainFrame == true, privacy: .public)")
     guard navigationAction.targetFrame?.isMainFrame != true || allowedNavigationURL(navigationAction.request.url?.absoluteString ?? "") != nil else {
       decisionHandler(.cancel)
       onError(["code": "NAVIGATION_SCHEME_REJECTED", "description": "This address scheme is not supported."])
@@ -86,8 +99,16 @@ internal final class TaskHandoffBrowserView: ExpoView, WKDownloadDelegate, WKNav
     decisionHandler(.allow)
   }
 
-  func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { emitNavigation(webView) }
-  func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) { emitNavigation(webView) }
+  func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+    let url = webView.url?.absoluteString ?? ""
+    browserViewLogger.info("WebView did-finish url=\(url, privacy: .public)")
+    emitNavigation(webView)
+  }
+  func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+    let url = webView.url?.absoluteString ?? ""
+    browserViewLogger.info("WebView did-commit url=\(url, privacy: .public)")
+    emitNavigation(webView)
+  }
   func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { emitError(error) }
   func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { emitError(error) }
 
@@ -150,6 +171,7 @@ internal final class TaskHandoffBrowserView: ExpoView, WKDownloadDelegate, WKNav
 
   private func emitError(_ error: Error) {
     let native = error as NSError
+    browserDiagnostic("WebView navigation failed url=\(webView?.url?.absoluteString ?? initialUrl) domain=\(native.domain) code=\(native.code) description=\(native.localizedDescription)")
     onError(["code": "WEBVIEW_\(native.code)", "description": native.localizedDescription])
   }
 
@@ -166,6 +188,11 @@ internal final class TaskHandoffBrowserView: ExpoView, WKDownloadDelegate, WKNav
     downloadDestination = nil
     try? FileManager.default.removeItem(at: destination.deletingLastPathComponent())
   }
+}
+
+private func browserDiagnostic(_ message: String) {
+  NSLog("[task-handoff-browser] %@", message)
+  browserViewLogger.info("\(message, privacy: .public)")
 }
 
 private func allowedNavigationURL(_ value: String) -> URL? {

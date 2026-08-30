@@ -300,7 +300,7 @@ export class ControlPlaneNodeAgentGateway {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(input),
     });
-    this.invalidateFleetResource(node, "runtimes");
+    this.upsertRuntimeSnapshot(node, result);
     return result;
   }
 
@@ -311,14 +311,14 @@ export class ControlPlaneNodeAgentGateway {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(input),
     });
-    this.invalidateFleetResource(node, "runtimes");
+    this.upsertRuntimeSnapshot(node, result);
     return result;
   }
 
   async checkRuntime(node: Node, runtimeId: string) {
     const route = `/runtimes/${encodeURIComponent(runtimeId)}/check`;
     const result = await this.client.requestSchema(node, route, NodeRuntimeSchema, { method: "POST" });
-    this.invalidateFleetResource(node, "runtimes");
+    this.upsertRuntimeSnapshot(node, result);
     return result;
   }
 
@@ -326,7 +326,7 @@ export class ControlPlaneNodeAgentGateway {
     const result = await this.client.requestSchema(node, `/runtimes/${encodeURIComponent(runtimeId)}`, NodeAgentDeleteResponseSchema, {
       method: "DELETE",
     });
-    this.invalidateFleetResource(node, "runtimes");
+    this.removeRuntimeSnapshot(node, runtimeId);
     return result;
   }
 
@@ -913,6 +913,37 @@ export class ControlPlaneNodeAgentGateway {
       contentChanged: !previous
         || previous.connectionKey !== snapshot.connectionKey
         || !this.sameFleetItems(resource, previous, snapshot),
+    });
+  }
+
+  private upsertRuntimeSnapshot(node: Node, runtime: NodeRuntime) {
+    const snapshot = this.runtimeSnapshots.get(node.id);
+    if (!snapshot || snapshot.connectionKey !== this.fleetConnectionKey(node)) return;
+    const previous = { ...snapshot, items: [...snapshot.items] };
+    const index = snapshot.items.findIndex((item) => item.id === runtime.id);
+    snapshot.items = index < 0
+      ? [...snapshot.items, runtime]
+      : snapshot.items.map((item, itemIndex) => itemIndex === index ? runtime : item);
+    snapshot.phase = "ready";
+    snapshot.revision = this.nextFleetRevision(node.id, "runtimes");
+    snapshot.updatedAt = new Date().toISOString();
+    snapshot.error = undefined;
+    this.emitFleetState(node.id, "runtimes", snapshot, {
+      contentChanged: !this.sameFleetItems("runtimes", previous, snapshot),
+    });
+  }
+
+  private removeRuntimeSnapshot(node: Node, runtimeId: string) {
+    const snapshot = this.runtimeSnapshots.get(node.id);
+    if (!snapshot || snapshot.connectionKey !== this.fleetConnectionKey(node)) return;
+    const previous = { ...snapshot, items: [...snapshot.items] };
+    snapshot.items = snapshot.items.filter((item) => item.id !== runtimeId);
+    snapshot.phase = "ready";
+    snapshot.revision = this.nextFleetRevision(node.id, "runtimes");
+    snapshot.updatedAt = new Date().toISOString();
+    snapshot.error = undefined;
+    this.emitFleetState(node.id, "runtimes", snapshot, {
+      contentChanged: !this.sameFleetItems("runtimes", previous, snapshot),
     });
   }
 

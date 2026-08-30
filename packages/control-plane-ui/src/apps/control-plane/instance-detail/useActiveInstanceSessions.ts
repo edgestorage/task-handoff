@@ -1,4 +1,4 @@
-import { computed, reactive, ref, watch, type ComputedRef, type Ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch, type ComputedRef, type Ref } from "vue";
 import { launchAppSession, markAiSessionRead, stopAppSession } from "../../../api/queries";
 import type { AiSessionSummary, InstanceBoardItem, InstanceBoardItemWithAppSessions, InstanceWithAiSessions } from "../../../api/types";
 import {
@@ -169,9 +169,9 @@ export function useActiveInstanceSessions({
       ? [{ id: EMBEDDED_BROWSER_APP_ID, label: t("sessions.tabs.browser") }]
       : [];
     const catalogApps = launchableAppsForInstance(activeInstance.value, t);
-    if (catalogApps.length) return [...browser, ...catalogApps];
+    if (catalogApps.length) return [...catalogApps, ...browser];
     const ids = activeInstance.value.image?.optionalApps?.length ? activeInstance.value.image.optionalApps : ["terminal-tty"];
-    return uniqueLaunchableApps([...browser, ...ids.map((id) => ({ id, label: appDisplayName(id, t) }))]);
+    return uniqueLaunchableApps([...ids.map((id) => ({ id, label: appDisplayName(id, t) })), ...browser]);
   });
 
   watch(
@@ -575,12 +575,44 @@ export function useActiveInstanceSessions({
     rememberSessionKey(instanceId, key);
   }
 
+  function handleMarkdownBrowserRequest(event: Event) {
+    const detail = (event as CustomEvent<{ instanceId?: string; url?: string }>).detail;
+    if (!detail?.url || !detail.instanceId || detail.instanceId !== activeInstance.value?.id) return;
+    try {
+      const url = new URL(detail.url);
+      if (url.protocol !== "http:" && url.protocol !== "https:") return;
+      openBrowserTab(detail.instanceId, url.toString());
+    } catch {
+      // Invalid URLs are rejected by the Markdown link classifier as well.
+    }
+  }
+
+  onMounted(() => window.addEventListener("task-handoff:open-markdown-browser", handleMarkdownBrowserRequest));
+  onBeforeUnmount(() => window.removeEventListener("task-handoff:open-markdown-browser", handleMarkdownBrowserRequest));
+
   function updateBrowserTab(instanceId: string, sessionKey: string, patch: { title?: string; url?: string; status?: string }) {
     const session = browserSessionTabs[instanceId]?.find((tab) => tab.key === sessionKey);
     if (!session) return;
     if (typeof patch.title === "string" && patch.title.trim()) session.title = patch.title.trim().slice(0, 120);
     if (typeof patch.url === "string" && patch.url.trim()) session.source = { ...(session.source || {}), currentUrl: patch.url.trim().slice(0, 2000) };
     if (typeof patch.status === "string" && patch.status.trim()) session.status = patch.status.trim();
+  }
+
+  function pruneBrowserInstances(validInstanceIds: ReadonlySet<string>) {
+    for (const instanceId of Object.keys(browserSessionTabs)) {
+      if (validInstanceIds.has(instanceId)) continue;
+      if (typeof window !== "undefined") {
+        (window as Window & { taskHandoffDesktop?: { logBrowserDiagnostic?: (input: { message: string; instanceId?: string }) => void } }).taskHandoffDesktop?.logBrowserDiagnostic?.({
+          message: `browser instances pruned tabs=${browserSessionTabs[instanceId]?.length || 0}`,
+          instanceId,
+        });
+      }
+      delete browserSessionTabs[instanceId];
+      delete rightPaneSessionKeys[instanceId];
+      delete rightSelectedSessionKeys[instanceId];
+      delete selectedSessionKeys[instanceId];
+      delete focusedSessionPanes[instanceId];
+    }
   }
 
   return {
@@ -607,6 +639,7 @@ export function useActiveInstanceSessions({
     moveSessionToPane,
     openAiSessionApp,
     openBrowserTab,
+    pruneBrowserInstances,
     updateBrowserTab,
     openRepositoryWorkspace,
     openSessionSplit,

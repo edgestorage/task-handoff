@@ -307,7 +307,7 @@ async function removeCredential() {
 .git-credentials-directory-head span { color: var(--text-muted); font-size: 12px; }
 .git-credentials-state { align-items: center; color: var(--text-muted); display: flex; font-size: 12px; justify-content: center; min-height: 160px; padding: 20px; }
 .git-credentials-state-error { gap: 10px; }
-.git-credentials-empty-state { display: grid; gap: 7px; justify-items: center; min-height: 220px; text-align: center; }
+.git-credentials-empty-state { align-content: center; display: grid; gap: 7px; justify-items: center; min-height: 220px; text-align: center; }
 .git-credentials-empty-state strong { color: var(--text-strong); font-size: 13px; font-weight: 500; margin-top: 3px; }
 .git-credentials-empty-state p { margin: 0 0 5px; }
 .git-credential-list { display: grid; }

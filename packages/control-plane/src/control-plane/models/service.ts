@@ -381,7 +381,7 @@ export class ControlPlaneModelService {
         });
       }
     }) : []);
-    if (diagnostics.length) {
+    if (diagnostics.length && references.length === 0) {
       throw Object.assign(new Error("Model references could not be verified for every managed instance."), {
         statusCode: 409,
         code: "MODEL_REFERENCE_CHECK_INCOMPLETE",

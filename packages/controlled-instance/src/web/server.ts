@@ -2229,7 +2229,9 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     message: "Instance registration token is required.",
   }), async (request) => {
     const next = ManagedModelEnvironmentSchema.parse(request.body || {});
-    for (const key of MANAGED_MODEL_ENV_KEYS) delete managedModelEnv[key];
+    for (const key of MANAGED_MODEL_ENV_KEYS) {
+      if (key !== "CODEX_HOME") delete managedModelEnv[key];
+    }
     Object.assign(managedModelEnv, next);
     const codex = applyManagedCodexModelConfig(managedModelEnv);
     const claude = applyManagedClaudeModelConfig(managedModelEnv);

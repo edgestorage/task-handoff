@@ -977,6 +977,7 @@ const {
   stoppingSessionId,
   stopSelectedAppSession,
   openBrowserTab,
+  pruneBrowserInstances,
   updateBrowserTab,
 } = useActiveInstanceSessions({
   activeInstance: activeInstanceWithAiSessions,
@@ -989,6 +990,19 @@ const {
   sessionMenuOpen,
   t,
 });
+const authoritativeInstanceIds = computed<ReadonlySet<string> | undefined>(() => {
+  if (standaloneMode.value) {
+    return instanceDirectory.isSuccess.value
+      ? new Set((instanceDirectory.data.value || []).map((instance) => instance.id))
+      : undefined;
+  }
+  return instanceDirectoryComplete.value
+    ? new Set(sortedInstances.value.map((instance) => instance.id))
+    : undefined;
+});
+watch(authoritativeInstanceIds, (instanceIds) => {
+  if (instanceIds) pruneBrowserInstances(instanceIds);
+}, { immediate: true });
 const stopDesktopBrowserNewTab = desktopBridge?.onBrowserNewTab?.(({ instanceId: sourceInstanceId, url }) => {
   const instanceId = sourceInstanceId || activeInstanceId.value;
   desktopBridge?.logBrowserDiagnostic?.({ message: `popup event received url=${String(url || "").slice(0, 200)}`, instanceId: instanceId || undefined });

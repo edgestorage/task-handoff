@@ -1,28 +1,34 @@
 <template>
-  <div class="ai-session-streaming-markdown" @click="handleLinkClick">
-    <MarkdownRender
-      :content="displayContent"
-      :custom-id="markdownScopeId"
-      :fade="false"
-      :final="isFinal"
-      :max-live-nodes="0"
-      :batch-rendering="false"
-      :smooth-streaming="false"
-      :typewriter="false"
-      html-policy="escape"
-      mode="chat"
-    />
-  </div>
+  <MarkdownLinkContextMenu :labels="menuLabels" :repository-context="props.repositoryContext" :on-open-file="handleContextFile" :on-open-builtin-browser="openBuiltinBrowser">
+    <div class="ai-session-streaming-markdown" @click="handleLinkClick">
+      <MarkdownRender
+        :content="displayContent"
+        :custom-id="markdownScopeId"
+        :fade="false"
+        :final="isFinal"
+        :max-live-nodes="0"
+        :batch-rendering="false"
+        :smooth-streaming="false"
+        :typewriter="false"
+        html-policy="escape"
+        mode="chat"
+      />
+    </div>
+  </MarkdownLinkContextMenu>
 </template>
 
 <script setup lang="ts">
 import { computed, nextTick, provide, ref, watch } from "vue";
+import { useI18n } from "vue-i18n";
 import MarkdownRender, { enableKatex, enableMermaid, setCustomComponents, useSmoothMarkdownStream } from "markstream-vue";
 import type { MarkdownCodeTools } from "@task-handoff/web-theme/markdown";
 import "markstream-vue/index.css";
-import { useStreamingMessagesStore } from "../../apps/control-plane/useStreamingMessagesStore";
+import { streamingMessageMatchesTurn, useStreamingMessagesStore } from "../../apps/control-plane/useStreamingMessagesStore";
 import AiSessionMarkdownNode from "./AiSessionMarkdownNode.vue";
 import { aiSessionMarkdownCodeToolsKey, defaultAiSessionMarkdownCodeTools } from "./markdown-code-tools";
+import MarkdownLinkContextMenu from "./MarkdownLinkContextMenu.vue";
+import type { MarkdownLinkTarget } from "./markdown-link-target";
+import type { RepositoryContext } from "@task-handoff/protocol/repository";
 
 enableKatex();
 enableMermaid();
@@ -39,7 +45,10 @@ const props = withDefaults(defineProps<{
   fileLinks?: boolean;
   instanceId: string;
   isLatest?: boolean;
+  providerTurnId?: string;
+  repositoryContext?: RepositoryContext;
   sessionId: string;
+  turnId?: string;
 }>(), {
   fileLinks: false,
   isLatest: false,
@@ -50,6 +59,19 @@ provide(aiSessionMarkdownCodeToolsKey, computed(() => props.codeTools ?? default
 const emit = defineEmits<{
   openFile: [href: string];
 }>();
+const { t } = useI18n();
+const menuLabels = computed(() => ({
+  openFile: t("sessions.markdown.openFile"),
+  openDesktopFile: t("sessions.markdown.openDesktopFile"),
+  copyPath: t("sessions.markdown.copyPath"),
+  openBuiltinBrowser: t("sessions.markdown.openBuiltinBrowser"),
+  openDefaultBrowser: t("sessions.markdown.openDefaultBrowser"),
+  copyLink: t("sessions.markdown.copyLink"),
+}));
+function handleContextFile(target: Extract<MarkdownLinkTarget, { kind: "file" }>) { emit("openFile", target.href); }
+function openBuiltinBrowser(url: string) {
+  window.dispatchEvent(new CustomEvent("task-handoff:open-markdown-browser", { detail: { instanceId: props.instanceId, url } }));
+}
 
 function isFileHref(href: string) {
   if (!href || href.startsWith("#") || href.startsWith("?") || href.startsWith("//")) return false;
@@ -69,7 +91,10 @@ function handleLinkClick(event: MouseEvent) {
 
 const streamingMessages = useStreamingMessagesStore();
 const activeMessage = computed(() => streamingMessages.activeMessage(props.instanceId, props.sessionId));
-const streamingState = computed(() => props.isLatest ? activeMessage.value.value?.value : undefined);
+const streamingState = computed(() => {
+  const message = props.isLatest ? activeMessage.value.value?.value : undefined;
+  return streamingMessageMatchesTurn(message, { id: props.turnId, providerTurnId: props.providerTurnId }) ? message : undefined;
+});
 const receivedContent = computed(() => String(streamingState.value?.receivedText ?? props.content ?? ""));
 const sourceKey = computed(() => streamingState.value?.key || `snapshot:${props.instanceId}:${props.sessionId}`);
 const sourceStreaming = computed(() => streamingState.value?.status === "streaming");

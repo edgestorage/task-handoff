@@ -4,6 +4,8 @@ class BrowserSocksServer {
   constructor(channel, options = {}) {
     this.channel = channel;
     this.createServer = options.createServer || net.createServer;
+    this.maxConnections = options.maxConnections || 256;
+    this.handshakeTimeout = options.handshakeTimeout || 30_000;
     this.server = undefined;
     this.sockets = new Set();
   }
@@ -26,8 +28,13 @@ class BrowserSocksServer {
   }
 
   accept(socket) {
+    if (this.sockets.size >= this.maxConnections) {
+      socket.destroy();
+      return;
+    }
     this.sockets.add(socket);
     socket.once("close", () => this.sockets.delete(socket));
+    socket.setTimeout?.(this.handshakeTimeout, () => socket.destroy());
     let state = "greeting";
     let pending = Buffer.alloc(0);
     const onData = (chunk) => {
@@ -57,6 +64,7 @@ class BrowserSocksServer {
           socket.removeListener("data", onData);
           void this.channel.attach({ host: request.host, port: request.port }, socket).then(() => {
             state = "stream";
+            socket.setTimeout?.(0);
             socket.write(socksReply(0));
             if (pending.byteLength) socket.emit("data", pending);
           }).catch(() => {
@@ -98,6 +106,7 @@ function parseSocksRequest(input) {
     const length = input[4];
     if (input.byteLength < 7 + length) return undefined;
     host = input.subarray(5, 5 + length).toString("utf8");
+    if (!host) throw new Error("SOCKS hostname is empty.");
     offset = 5 + length;
   } else if (type === 4) {
     if (input.byteLength < 22) return undefined;
@@ -106,7 +115,9 @@ function parseSocksRequest(input) {
   } else {
     throw new Error("Unsupported SOCKS address type.");
   }
-  return { command, host, port: input.readUInt16BE(offset), bytes: offset + 2 };
+  const port = input.readUInt16BE(offset);
+  if (port === 0) throw new Error("SOCKS target port is invalid.");
+  return { command, host, port, bytes: offset + 2 };
 }
 
 function socksReply(code) {
