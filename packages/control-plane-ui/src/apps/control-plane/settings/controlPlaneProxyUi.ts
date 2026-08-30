@@ -27,6 +27,14 @@ export function proxyForceDeleteAllowed(node: Node, error: unknown) {
     && details.forceDeleteAllowed === true);
 }
 
+export function proxyClaimForceDeleteAllowed(error: unknown) {
+  if (!error || typeof error !== "object" || !("details" in error)) return false;
+  const details = error.details;
+  return Boolean(details && typeof details === "object" && !Array.isArray(details)
+    && "forceDeleteAllowed" in details
+    && details.forceDeleteAllowed === true);
+}
+
 export function proxyPathState(node: Node) {
   const state = node.proxyState;
   return {

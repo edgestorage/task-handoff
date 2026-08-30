@@ -18,25 +18,32 @@ test("Docker profiles run as agent with passwordless container-root escalation",
   assert.match(dockerfile, /printf 'agent ALL=\(root\) NOPASSWD: ALL\\n' > \/etc\/sudoers\.d\/task-handoff-agent/);
   assert.match(dockerfile, /chmod 0440 \/etc\/sudoers\.d\/task-handoff-agent/);
   assert.match(dockerfile, /visudo -cf \/etc\/sudoers\.d\/task-handoff-agent/);
-  assert.equal((dockerfile.match(/^USER agent$/gm) || []).length, 4);
+  assert.equal((dockerfile.match(/^USER agent$/gm) || []).length, 5);
 });
 
-test("Docker exports Codex, AI, WebCap, and Browser image profiles from shared layers", () => {
+test("Docker exports Codex, OpenCode, AI, WebCap, and Browser image profiles from shared layers", () => {
   const dockerfile = fs.readFileSync(path.join(root, "Dockerfile"), "utf8");
+  const buildScript = fs.readFileSync(path.join(root, "scripts", "docker-build-image.sh"), "utf8");
 
   assert.match(dockerfile, /FROM runtime-core AS profile-codex-root/);
+  assert.match(dockerfile, /FROM runtime-core AS profile-opencode-root/);
   assert.match(dockerfile, /FROM profile-codex-root AS profile-ai-root/);
   assert.match(dockerfile, /FROM profile-ai-root AS profile-gui-root/);
   assert.match(dockerfile, /FROM profile-gui-root AS profile-webcap-root/);
   assert.match(dockerfile, /FROM profile-gui-root AS profile-browser-root/);
   assert.match(dockerfile, /FROM profile-codex-root AS profile-codex[\s\S]*TASK_HANDOFF_IMAGE_PROFILE=codex/);
+  assert.match(dockerfile, /FROM profile-opencode-root AS profile-opencode[\s\S]*TASK_HANDOFF_IMAGE_PROFILE=opencode/);
   assert.match(dockerfile, /FROM profile-ai-root AS profile-ai[\s\S]*TASK_HANDOFF_IMAGE_PROFILE=ai/);
   assert.match(dockerfile, /FROM profile-webcap-root AS profile-webcap[\s\S]*TASK_HANDOFF_IMAGE_PROFILE=webcap/);
   assert.match(dockerfile, /FROM profile-browser-root AS profile-browser[\s\S]*TASK_HANDOFF_IMAGE_PROFILE=browser/);
   assert.match(dockerfile, /io\.task-handoff\.image\.capabilities=terminal,codex/);
+  assert.match(dockerfile, /io\.task-handoff\.image\.capabilities=terminal,opencode/);
   assert.match(dockerfile, /io\.task-handoff\.image\.capabilities=terminal,codex,claude/);
   assert.match(dockerfile, /io\.task-handoff\.image\.capabilities=terminal,gui-terminal,browser,web-cap,codex,claude/);
   assert.match(dockerfile, /io\.task-handoff\.image\.capabilities=terminal,gui-terminal,browser,vscode-web,codex,claude/);
+  assert.match(dockerfile, /ARG OPENCODE_CLI_PACKAGE=opencode-ai@latest[\s\S]*npm install -g[\s\S]*"\$OPENCODE_CLI_PACKAGE"[\s\S]*opencode --version/);
+  assert.match(buildScript, /opencode\)\n\s+BUILD_TARGET="profile-opencode"\n\s+DEFAULT_IMAGE_REF="task-handoff-controlled-opencode:local"/);
+  assert.match(buildScript, /OPENCODE_CLI_PACKAGE=\$\{OPENCODE_CLI_PACKAGE:-opencode-ai@latest\}/);
 });
 
 test("Docker WebCap profile installs WebCap without code-server", () => {
@@ -60,7 +67,11 @@ test("Docker image bakes a versioned bootstrap runtime while the managed launche
 
   assert.match(dockerfile, /ARG TASK_HANDOFF_VERSION=0\.0\.1[\s\S]*TASK_HANDOFF_VERSION="\$\{TASK_HANDOFF_VERSION\}" pnpm run runtime:pack:controlled-instance/);
   assert.match(dockerfile, /npm install -g --omit=dev[\s\S]*task-handoff-controlled-instance-/);
-  assert.match(dockerfile, /FROM runtime-base AS runtime-package-install[\s\S]*apt-get install -y --no-install-recommends g\+\+ make/);
+  const runtimePackageInstall = dockerfile.slice(
+    dockerfile.indexOf("FROM runtime-base AS runtime-package-install"),
+    dockerfile.indexOf("FROM runtime-base AS runtime-core"),
+  );
+  assert.doesNotMatch(runtimePackageInstall, /g\+\+|\bmake\b|python3/);
   assert.match(dockerfile, /FROM runtime-base AS runtime-core[\s\S]*COPY --from=runtime-package-install \/usr\/local\/lib\/node_modules\/@task-handoff\/controlled-instance/);
   assert.match(dockerfile, /ln -s \.\.\/lib\/node_modules\/@task-handoff\/controlled-instance\/bin\/task-handoff-controlled-instance \/usr\/local\/bin\/task-handoff-controlled-instance/);
   assert.match(dockerfile, /COPY docker\/instance-launcher\.sh/);
@@ -93,6 +104,7 @@ test("Docker CI builds amd64 and arm64 concurrently and publishes a multi-archit
   assert.doesNotMatch(workflow, /docker\/setup-qemu-action/);
   assert.match(workflow, /scope=controlled-instance-\$\{\{ matrix\.arch \}\}/);
   assert.match(workflow, /target: profile-codex/);
+  assert.match(workflow, /target: profile-opencode/);
   assert.match(workflow, /target: profile-ai/);
   assert.match(workflow, /target: profile-webcap/);
   assert.match(workflow, /target: profile-browser/);
@@ -117,16 +129,19 @@ test("Docker tag builds inject the release version while branch builds keep the 
   assert.match(workflow, /version="\$\{GITHUB_REF_NAME#v\}"/);
   assert.match(workflow, /elif \[\[ -n "\$\{\{ inputs\.version \}\}" \]\]; then/);
   assert.match(workflow, /codex_image_ref="\$\{DOCKERHUB_CODEX_IMAGE_NAME\}:\$\{GITHUB_REF_NAME\}"/);
+  assert.match(workflow, /opencode_image_ref="\$\{DOCKERHUB_OPENCODE_IMAGE_NAME\}:\$\{GITHUB_REF_NAME\}"/);
   assert.match(workflow, /ai_image_ref="\$\{DOCKERHUB_AI_IMAGE_NAME\}:\$\{GITHUB_REF_NAME\}"/);
   assert.match(workflow, /webcap_image_ref="\$\{DOCKERHUB_WEBCAP_IMAGE_NAME\}:\$\{GITHUB_REF_NAME\}"/);
   assert.match(workflow, /browser_image_ref="\$\{DOCKERHUB_BROWSER_IMAGE_NAME\}:\$\{GITHUB_REF_NAME\}"/);
   assert.match(workflow, /version="\$\(node -p "require\('\.\/package\.json'\)\.version"\)"/);
   assert.match(workflow, /codex_image_ref="task-handoff-controlled-codex:ci-\$\{\{ matrix\.arch \}\}"/);
+  assert.match(workflow, /opencode_image_ref="task-handoff-controlled-opencode:ci-\$\{\{ matrix\.arch \}\}"/);
   assert.match(workflow, /ai_image_ref="task-handoff-controlled-ai:ci-\$\{\{ matrix\.arch \}\}"/);
   assert.match(workflow, /webcap_image_ref="task-handoff-controlled-webcap:ci-\$\{\{ matrix\.arch \}\}"/);
   assert.match(workflow, /browser_image_ref="task-handoff-controlled-browser:ci-\$\{\{ matrix\.arch \}\}"/);
   assert.match(workflow, /TASK_HANDOFF_VERSION=\$\{\{ steps\.image-version\.outputs\.value \}\}/);
   assert.match(workflow, /TASK_HANDOFF_IMAGE_REF=\$\{\{ steps\.image-version\.outputs\.codex-image-ref \}\}/);
+  assert.match(workflow, /TASK_HANDOFF_IMAGE_REF=\$\{\{ steps\.image-version\.outputs\.opencode-image-ref \}\}/);
   assert.match(workflow, /TASK_HANDOFF_IMAGE_REF=\$\{\{ steps\.image-version\.outputs\.ai-image-ref \}\}/);
   assert.match(workflow, /TASK_HANDOFF_IMAGE_REF=\$\{\{ steps\.image-version\.outputs\.webcap-image-ref \}\}/);
   assert.match(workflow, /TASK_HANDOFF_IMAGE_REF=\$\{\{ steps\.image-version\.outputs\.browser-image-ref \}\}/);

@@ -1,6 +1,6 @@
 import { computed, onScopeDispose, reactive, ref } from "vue";
 import { applyNodeUpdate, checkNode, checkNodeUpdate, createNode, createNodeControlPlaneConnection, createNodeJoinInvite, createNodePairingInvite, deleteNode, deleteNodeControlPlaneConnection, deleteNodeControlPlanePairing, listNodeControlPlaneConnections, listNodeControlPlanePairings, listNodeDockerImages, listNodeUpdateJobs, syncLocalNode, updateNode } from "../../../api/queries";
-import type { LocalDockerImage, Node, NodeControlPlaneConnection, NodeControlPlanePairing, NodeRuntime, NodeStatus, UpdateChannel, UpdateCheckResult, UpdateJob } from "../../../api/types";
+import type { LocalDockerImage, Node, NodeControlPlaneConnection, NodeControlPlanePairing, NodeStatus, UpdateChannel, UpdateCheckResult, UpdateJob } from "../../../api/types";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
 import { useNodeRename } from "./useNodeRename";
 import type { Translate } from "../../../i18n/status.ts";
@@ -11,19 +11,17 @@ import { proxyForceDeleteAllowed } from "./controlPlaneProxyUi.ts";
 type UseNodeSettingsInput = {
   errorText: (error: unknown) => string;
   notify?: typeof showControlPlaneToast;
-  onNodeDeleted: (runtimeId: string) => void;
   onNodeRenamed: (node: Node) => void | Promise<void>;
   refreshNodeRuntimeState: () => Promise<void>;
   refreshNodeTopology: () => Promise<void>;
   nodes: () => Node[];
-  runtimes: () => NodeRuntime[];
   updateNodeAction?: typeof updateNode;
   updateChannel: () => UpdateChannel;
   translate: Translate;
 };
 
 const CONTROL_PLANE_BUILTIN_NODE_LABEL = "task-handoff.control-plane.builtin";
-export function useNodeSettings({ errorText, notify = showControlPlaneToast, onNodeDeleted, onNodeRenamed, refreshNodeRuntimeState, refreshNodeTopology, nodes, runtimes, updateNodeAction = updateNode, updateChannel, translate: t }: UseNodeSettingsInput) {
+export function useNodeSettings({ errorText, notify = showControlPlaneToast, onNodeRenamed, refreshNodeRuntimeState, refreshNodeTopology, nodes, updateNodeAction = updateNode, updateChannel, translate: t }: UseNodeSettingsInput) {
   const translateError = (error: unknown) => translateApiError(error, t, errorText(error));
   const creatingNode = ref(false);
   const syncingLocalNode = ref(false);
@@ -355,7 +353,6 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
           || !window.confirm(t("settings.controlPlaneProxy.forceDeleteConfirm", { name: target.name }))) throw error;
         await deleteNode(target.id, true);
       }
-      for (const runtime of runtimes().filter((item) => item.nodeId === target.id)) onNodeDeleted(runtime.id);
       await refreshNodeTopology();
     } catch (error) {
       showControlPlaneToast(translateError(error));

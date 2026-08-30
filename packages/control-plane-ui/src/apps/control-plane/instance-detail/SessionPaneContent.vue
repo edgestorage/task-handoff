@@ -1,5 +1,5 @@
 <template>
-  <div class="session-pane-content">
+  <div class="session-pane-content" data-browser-surface :data-instance-id="instance.id" :data-pane="pane">
     <div v-if="hasInstanceStatusPage(instance)" class="session-preview-status-page" :data-pending="isInstanceStatusPending(instance)" :data-state="instance.status">
       <div v-if="showImagePreparation" class="session-status-image-layout">
         <div class="session-status-overview">
@@ -52,10 +52,13 @@
     <AiSessionPanel
       v-else-if="session?.kind === 'ai'"
       :active-session="session"
+      :choose-project-folder="chooseProjectFolder"
       :instance="instance"
       :launchable-apps="launchableApps"
+      :launching-app="launchingApp"
       :node-local-folders="nodeLocalFolders"
       :selected-ai-session="selectedAiSession"
+      @launch-app="(target, appId, cwdFolderId, options) => $emit('launchApp', target, appId, cwdFolderId, options)"
       @open-ai-session-app="(target, aiSession) => $emit('openAiSessionApp', target, aiSession)"
       @open-repository-workspace="$emit('openRepositoryWorkspace', $event)"
       @select-ai-session="(instanceId, sessionId) => $emit('selectAiSession', instanceId, sessionId)"
@@ -66,7 +69,7 @@
     <div v-else-if="activeFrameUrl" class="session-preview-live">
       <iframe class="session-preview-frame" :src="activeFrameUrl" :title="session?.label || t('sessions.tabs.appSession')" allow="clipboard-read; clipboard-write; fullscreen" />
     </div>
-    <div v-else-if="!activeTerminalSocketUrl" class="session-preview-body">
+    <div v-else-if="session?.kind !== 'embedded-browser' && !activeTerminalSocketUrl" class="session-preview-body">
       <Terminal v-if="session?.kind === 'terminal'" :size="34" />
       <Monitor v-else :size="34" />
       <strong>{{ previewTitle(instance, t) }}</strong>
@@ -104,6 +107,8 @@ import RepositoryChangesReviewTab from "./RepositoryChangesReviewTab.vue";
 import RepositoryWorktreesTab from "./RepositoryWorktreesTab.vue";
 import RepositoryWorkspaceTab from "./RepositoryWorkspaceTab.vue";
 import ImagePullStatus from "./ImagePullStatus.vue";
+import type { NativeNodeFolderPicker } from "../nodePath";
+import type { SessionPaneId } from "./useActiveInstanceSessions";
 
 const { locale, t } = useI18n();
 
@@ -111,17 +116,20 @@ const props = defineProps<{
   activeActionLabel: (instance: InstanceBoardItem, action: InstanceAction, idleLabel: string) => string;
   appLaunchButtonTitle: string;
   canLaunchApp: boolean;
+  chooseProjectFolder?: NativeNodeFolderPicker;
   instance: InstanceWithAiSessions;
   isInstanceActionBusy: (instance: InstanceBoardItem) => boolean;
   launchableApps: LaunchableApp[];
   launchingApp: boolean;
   nodeLocalFolders?: NodeLocalFolder[];
+  pane: SessionPaneId;
   selectedAiSession: (instance: InstanceBoardItem, sessions?: AiSessionSummary[]) => AiSessionSummary | undefined;
   session?: SessionTab;
   sessionKey: string;
 }>();
 
 defineEmits<{
+  launchApp: [instance: InstanceBoardItem, appId: string, cwdFolderId?: string, options?: Record<string, unknown>];
   openAiSessionApp: [instance: InstanceBoardItem, session?: AiSessionSummary];
   openRepositoryWorkspace: [target: RepositoryWorkspaceTabTarget];
   openLaunchMenu: [];

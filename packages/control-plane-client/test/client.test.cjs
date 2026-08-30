@@ -3,13 +3,187 @@ const test = require("node:test");
 
 const {
   appendAiSessionMessageDelta,
+  AI_SESSION_ATTACHMENT_ONLY_MESSAGE,
+  AI_SESSION_LONG_PASTE_CODE_POINT_THRESHOLD,
+  aiSessionMessageText,
+  aiSessionPastedTextSummary,
+  aiSessionTextCodePointLength,
+  classifyAiSessionPastedText,
+  aiSessionElapsedSeconds,
+  applyControlPlaneAiSessionStreamEvent,
   applyAiSessionUnreadState,
+  AiSessionConversationCache,
   createControlPlaneClient,
   deriveAiSessionUnreadAfterStreamEvent,
   isAiSessionApprovalPending,
+  mergeAiSessionSummaryWithDetail,
+  mergeAiSessionSummaryTurnsWithDetail,
   sortedAiSessions,
   sortedAiSessionInboxEntries,
 } = require("../src/index.ts");
+
+test("shared AI Session elapsed time requires a terminal timestamp once inactive", () => {
+  const startedAt = "2026-08-17T00:00:00.000Z";
+  assert.equal(aiSessionElapsedSeconds(startedAt, undefined, false, Date.parse("2026-08-21T00:00:00.000Z")), undefined);
+  assert.equal(aiSessionElapsedSeconds(startedAt, undefined, true, Date.parse("2026-08-17T00:00:09.900Z")), 9);
+  assert.equal(aiSessionElapsedSeconds(startedAt, "2026-08-17T00:00:07.500Z", false), 7);
+});
+
+test("AI Session realtime turns override retained detail fields without dropping history", () => {
+  const detailTurns = [
+    { id: "turn_stale", status: "completed", revision: 1, userMessages: [{ id: "message_stale", text: "stale" }] },
+    { id: "turn_current", status: "running", revision: 1, lastMessage: "old", userMessages: [{ id: "message_current", text: "prompt" }] },
+  ];
+  const summaryTurns = [
+    { id: "turn_current", status: "completed", revision: 2, lastMessage: "new" },
+    { id: "turn_new", status: "running", revision: 1 },
+  ];
+
+  assert.deepEqual(mergeAiSessionSummaryTurnsWithDetail(summaryTurns, detailTurns), [
+    detailTurns[0],
+    { ...summaryTurns[0], userMessages: detailTurns[1].userMessages },
+    summaryTurns[1],
+  ]);
+  assert.deepEqual(mergeAiSessionSummaryTurnsWithDetail([], detailTurns), []);
+});
+
+test("AI Session detail enriches only metadata and cannot overwrite live summary text", () => {
+  const summary = {
+    id: "session-1",
+    detailRevision: "detail-2",
+    summary: "current summary",
+    lastMessage: "current compact response",
+    queue: { revision: 2, pendingCount: 0, items: [] },
+    subAgents: [],
+  };
+  const detail = {
+    id: "session-1",
+    summary: "full summary",
+    lastMessage: "full response",
+    turns: [{ id: "turn-1", status: "completed", revision: 2, lastMessage: "full response", userMessages: [{ id: "message-1", text: "prompt" }] }],
+    queue: { revision: 2, pendingCount: 1, items: [{ id: "queued-1" }] },
+    subAgents: [{ threadId: "sub-1" }],
+  };
+
+  assert.deepEqual(mergeAiSessionSummaryWithDetail(summary, detail), {
+    ...summary,
+    turns: detail.turns,
+    queue: detail.queue,
+    subAgents: detail.subAgents,
+    appBindingKeys: undefined,
+    cwd: undefined,
+    error: undefined,
+    providerMeta: undefined,
+  });
+
+  const legacySummary = {
+    ...summary,
+    detailRevision: undefined,
+    turns: [{ id: "turn-1", status: "completed", revision: 2, lastMessage: "current response" }],
+  };
+  const legacyMerged = mergeAiSessionSummaryWithDetail(legacySummary, detail);
+  assert.equal(legacyMerged.summary, "current summary");
+  assert.equal(legacyMerged.lastMessage, "current compact response");
+  assert.equal(legacyMerged.queue, legacySummary.queue);
+  assert.equal(legacyMerged.subAgents, legacySummary.subAgents);
+  assert.deepEqual(legacyMerged.turns[0].userMessages, detail.turns[0].userMessages);
+});
+
+test("conversation cache keeps the last projection visible while independently converging revisions", () => {
+  const cache = new AiSessionConversationCache(2);
+  const summary = {
+    id: "session-1",
+    detailRevision: "detail-1",
+    turnsRevision: "turns-1",
+    updatedAt: "2026-08-26T00:00:00.000Z",
+    queue: { revision: 0, pendingCount: 0, items: [] },
+    subAgents: [],
+  };
+  cache.setDetail("instance-1", summary.detailRevision, { id: summary.id, queue: summary.queue, subAgents: [] });
+  cache.setTurnIndex("instance-1", summary.turnsRevision, {
+    sessionId: summary.id,
+    revision: "turns-1",
+    turns: [{ id: "turn-1", status: "running", phase: "responding", revision: 1, bodyRevision: "body-1", startedAt: summary.updatedAt, updatedAt: summary.updatedAt }],
+  });
+  assert.equal(cache.hasRenderableTurn("instance-1", summary.id, "turn-1"), false);
+  assert.equal(cache.hasCurrentTurn("instance-1", summary.id, "turn-1"), false);
+  assert.equal(cache.setTurn("instance-1", summary.id, "body-1", { id: "turn-1", status: "running", phase: "responding", revision: 1, lastMessage: "visible", startedAt: summary.updatedAt, updatedAt: summary.updatedAt }), true);
+  assert.equal(cache.hasRenderableTurn("instance-1", summary.id, "turn-1"), true);
+  assert.equal(cache.hasCurrentTurn("instance-1", summary.id, "turn-1"), true);
+
+  const changed = { ...summary, detailRevision: "detail-2", turnsRevision: "turns-2", lastMessage: "live" };
+  assert.equal(cache.hasProjection("instance-1", summary), true);
+  assert.equal(cache.hasDetail("instance-1", changed), false);
+  assert.equal(cache.hasTurnIndex("instance-1", changed), false);
+  assert.equal(cache.hasRenderableProjection("instance-1", changed.id), true);
+  assert.equal(cache.projection("instance-1", changed).turns[0].lastMessage, "visible");
+  assert.equal(cache.projection("instance-1", changed).lastMessage, "live");
+  cache.setTurnIndex("instance-1", changed.turnsRevision, {
+    sessionId: summary.id,
+    revision: "turns-2",
+    turns: [{ id: "turn-1", status: "running", phase: "responding", revision: 1, bodyRevision: "body-2", startedAt: summary.updatedAt, updatedAt: summary.updatedAt }],
+  });
+  assert.equal(cache.hasRenderableTurn("instance-1", summary.id, "turn-1"), true);
+  assert.equal(cache.hasCurrentTurn("instance-1", summary.id, "turn-1"), false);
+  assert.equal(cache.needsTurn("instance-1", summary.id, "turn-1")?.bodyRevision, "body-2");
+  assert.equal(cache.projection("instance-1", changed).turns[0].lastMessage, "visible");
+  assert.equal(cache.setTurn("instance-1", summary.id, "body-late", { id: "turn-1", status: "completed", phase: "responding", revision: 2, lastMessage: "late", startedAt: summary.updatedAt, updatedAt: summary.updatedAt }), false);
+  assert.equal(cache.turnEntry("instance-1", summary.id, "turn-1")?.bodyRevision, "body-2");
+  assert.equal(cache.projection("instance-1", changed).turns[0].lastMessage, "visible");
+  assert.equal(cache.setTurn("instance-1", summary.id, "body-2", { id: "turn-1", status: "completed", phase: "responding", revision: 2, lastMessage: "fresh", startedAt: summary.updatedAt, updatedAt: summary.updatedAt }), true);
+  assert.equal(cache.hasCurrentTurn("instance-1", summary.id, "turn-1"), true);
+  assert.equal(cache.turnEntry("instance-1", summary.id, "turn-1")?.bodyRevision, "body-2");
+  assert.equal(cache.needsTurn("instance-1", summary.id, "turn-1"), undefined);
+  assert.equal(cache.projection("instance-1", changed).turns[0].lastMessage, "fresh");
+  assert.equal(cache.setTurn("instance-1", summary.id, "body-3", { id: "turn-1", status: "completed", phase: "responding", revision: 3, lastMessage: "live refresh", startedAt: summary.updatedAt, updatedAt: summary.updatedAt }, "body-3"), true);
+  assert.equal(cache.turnEntry("instance-1", summary.id, "turn-1")?.bodyRevision, "body-3");
+  assert.equal(cache.turnEntry("instance-1", summary.id, "turn-1")?.status, "completed");
+  assert.equal(cache.turnEntry("instance-1", summary.id, "turn-1")?.revision, 3);
+  assert.equal(cache.projection("instance-1", changed).turns[0].lastMessage, "live refresh");
+});
+
+test("conversation cache projects terminal index state over a cached running Turn body", () => {
+  const cache = new AiSessionConversationCache();
+  const startedAt = "2026-08-26T00:00:00.000Z";
+  const completedAt = "2026-08-26T00:01:00.000Z";
+  const summary = {
+    id: "session-terminal-index",
+    detailRevision: "detail-1",
+    turnsRevision: "turns-running",
+    updatedAt: startedAt,
+    queue: { revision: 0, pendingCount: 0, items: [] },
+    subAgents: [],
+  };
+  cache.setDetail("instance-1", summary.detailRevision, { id: summary.id, queue: summary.queue, subAgents: [] });
+  cache.setTurnIndex("instance-1", summary.turnsRevision, {
+    sessionId: summary.id,
+    revision: summary.turnsRevision,
+    turns: [{ id: "turn-1", status: "running", phase: "responding", revision: 1, bodyRevision: "body-1", startedAt, updatedAt: startedAt }],
+  });
+  cache.setTurn("instance-1", summary.id, "body-1", {
+    id: "turn-1",
+    status: "running",
+    phase: "responding",
+    revision: 1,
+    userPrompt: "Question",
+    lastMessage: "Answer",
+    startedAt,
+    updatedAt: startedAt,
+  });
+
+  const settled = { ...summary, turnsRevision: "turns-completed", updatedAt: completedAt };
+  cache.setTurnIndex("instance-1", settled.turnsRevision, {
+    sessionId: summary.id,
+    revision: settled.turnsRevision,
+    turns: [{ id: "turn-1", status: "completed", phase: "responding", revision: 2, bodyRevision: "body-1", startedAt, updatedAt: completedAt, completedAt }],
+  });
+
+  const turn = cache.projection("instance-1", settled).turns[0];
+  assert.equal(turn.status, "completed");
+  assert.equal(turn.completedAt, completedAt);
+  assert.equal(turn.lastMessage, "Answer");
+  assert.equal(cache.needsTurn("instance-1", summary.id, "turn-1"), undefined);
+});
 
 test("shared AI Session client owns route encoding, request input, and response schema", async () => {
   const requests = [];
@@ -46,6 +220,255 @@ test("shared AI Session client owns route encoding, request input, and response 
   assert.equal(requests[0].init.method, "POST");
 });
 
+test("shared Browser client owns access route encoding and strict handshake parsing", async () => {
+  const requests = [];
+  const transport = {
+    async request(path, schema, init) {
+      requests.push({ path, init });
+      return schema.parse({ data: {
+        accessId: "browser_access_1",
+        token: "t".repeat(32),
+        expiresAt: "2026-08-29T10:00:00.000Z",
+        relayPath: "/browser-relay",
+        future: "ignored",
+      } });
+    },
+  };
+  const api = createControlPlaneClient(transport);
+  const access = await api.browser.access("instance/one");
+  assert.equal(access.accessId, "browser_access_1");
+  assert.deepEqual(requests, [{
+    path: "/api/controlled-instances/instance%2Fone/browser-access",
+    init: { method: "POST", headers: { "content-type": "application/json" }, body: "{}" },
+  }]);
+});
+
+test("shared AI Session client sends strict reasoning effort actions", async () => {
+  const requests = [];
+  const transport = {
+    async request(path, schema, init) {
+      requests.push({ path, init });
+      return schema.parse({ data: { sessionId: "session reasoning", accepted: true } });
+    },
+  };
+  const api = createControlPlaneClient(transport);
+
+  await api.aiSessions.updateReasoningEffort("instance/one", "session reasoning", "req_reasoning", "ultra");
+  assert.deepEqual(requests.map(({ path, init }) => ({ path, method: init.method, body: JSON.parse(init.body) })), [{
+    path: "/api/controlled-instances/instance%2Fone/ai-sessions/session%20reasoning/reasoning-effort",
+    method: "PUT",
+    body: { clientRequestId: "req_reasoning", reasoningEffort: "ultra" },
+  }]);
+  assert.throws(() => api.aiSessions.updateReasoningEffort("instance", "session", "req", "custom"));
+});
+
+test("shared AI Session projection reads send the cached revision", async () => {
+  const requests = [];
+  const transport = {
+    async request(path, schema) {
+      requests.push(path);
+      return schema.parse({ data: { kind: "not-modified", revision: "revision/value" } });
+    },
+  };
+  const api = createControlPlaneClient(transport);
+
+  await api.aiSessions.detail("instance/one", "session two", "revision/value");
+  await api.aiSessions.turnIndex("instance/one", "session two", "revision/value");
+  await api.aiSessions.turnBody("instance/one", "session two", "turn three", "revision/value");
+
+  assert.deepEqual(requests, [
+    "/api/controlled-instances/instance%2Fone/ai-sessions/session%20two?revision=revision%2Fvalue",
+    "/api/controlled-instances/instance%2Fone/ai-sessions/session%20two/turns?revision=revision%2Fvalue",
+    "/api/controlled-instances/instance%2Fone/ai-sessions/session%20two/turns/turn%20three?revision=revision%2Fvalue",
+  ]);
+});
+
+test("shared users client owns strict authorization responses and encoded management routes", async () => {
+  const requests = [];
+  const transport = {
+    async request(path, schema, init) {
+      requests.push({ path, init });
+      if (path === "/api/access/me") return schema.parse({ data: {
+        userId: "user_operator",
+        identityId: "identity_operator",
+        roleIds: ["role_operator"],
+        permissionIds: ["nodes:read"],
+        nodeScope: { kind: "selected", nodeIds: ["node_1"], futureScope: true },
+        authorizationRevision: 2,
+        futureAccess: true,
+      } });
+      if (path.endsWith("/session%2F1")) return schema.parse({ data: { revoked: true } });
+      throw new Error(`Unexpected path ${path}`);
+    },
+  };
+  const api = createControlPlaneClient(transport);
+  const access = await api.users.currentAuthorization();
+  assert.deepEqual(access, {
+    userId: "user_operator",
+    identityId: "identity_operator",
+    roleIds: ["role_operator"],
+    permissionIds: ["nodes:read"],
+    nodeScope: { kind: "selected", nodeIds: ["node_1"] },
+    instanceScope: { kind: "inherit-node-scope" },
+    authorizationRevision: 2,
+  });
+  const revoked = await api.users.revokeSession("user/operator", "session/1");
+  assert.equal(revoked.revoked, true);
+  assert.equal(requests[1].path, "/api/users/user%2Foperator/sessions/session%2F1");
+  assert.equal(requests[1].init.method, "DELETE");
+});
+
+test("shared users client owns role, provider, identity, and approval mutations", async () => {
+  const requests = [];
+  const timestamp = "2026-08-23T00:00:00.000Z";
+  const transport = {
+    async request(path, schema, init) {
+      requests.push({ path, init });
+      if (path.endsWith("/identities/identity%2Fone")) return schema.parse({ data: { unbound: true } });
+      if (path === "/api/roles/role%2Fone") return schema.parse({ data: { id: "role/one", name: "Reviewer", system: false, status: "active", permissionIds: ["nodes:read"], createdAt: timestamp, updatedAt: timestamp } });
+      if (path === "/api/identity-providers/provider%2Fone") return schema.parse({ data: { deleted: true } });
+      if (path.endsWith("/reject")) return schema.parse({ data: { rejected: true } });
+      throw new Error(`Unexpected path ${path}`);
+    },
+  };
+  const api = createControlPlaneClient(transport);
+  assert.deepEqual(await api.users.unbindExternalIdentity("user/one", "identity/one"), { unbound: true });
+  assert.equal((await api.users.updateRole("role/one", { name: "Reviewer" })).name, "Reviewer");
+  assert.deepEqual(await api.users.removeProvider("provider/one"), { deleted: true });
+  assert.deepEqual(await api.users.rejectIdentity("approval/one"), { rejected: true });
+  assert.deepEqual(requests.map(({ path }) => path), [
+    "/api/users/user%2Fone/identities/identity%2Fone",
+    "/api/roles/role%2Fone",
+    "/api/identity-providers/provider%2Fone",
+    "/api/external-identity-approvals/approval%2Fone/reject",
+  ]);
+  assert.equal(requests[1].init.method, "PATCH");
+  assert.equal(requests[3].init.method, "POST");
+});
+
+test("shared AI Session attachment upload forwards transport progress", async () => {
+  const progress = [];
+  const transport = {
+    async request(path, schema, init, onUploadProgress) {
+      assert.equal(path, "/api/controlled-instances/instance-1/ai-session-attachments/drafts?scopeType=session&scopeId=session-1&kind=image&name=pasted.png&mime=image%2Fpng&size=1");
+      assert.equal(init.method, "POST");
+      assert.equal(init.headers["content-type"], "application/octet-stream");
+      assert.equal(init.body.byteLength, 1);
+      assert.equal(init.body instanceof ArrayBuffer, true);
+      onUploadProgress?.(0.4);
+      return schema.parse({ data: {
+        id: "attachment-1",
+        kind: "image",
+        name: "pasted.png",
+        mime: "image/png",
+        size: 12,
+        futureField: true,
+      } });
+    },
+  };
+  const api = createControlPlaneClient(transport);
+  const uploaded = await api.aiSessions.uploadAttachment({
+    instanceId: "instance-1",
+    sessionId: "session-1",
+    kind: "image",
+    name: "pasted.png",
+    mime: "image/png",
+    data: "data:image/png;base64,eA==",
+  }, (value) => progress.push(value));
+
+  assert.deepEqual(progress, [0, 0.4, 1]);
+  assert.equal("futureField" in uploaded, false);
+});
+
+test("shared AI Session attachment upload falls back to the v0.0.21 endpoint", async () => {
+  const requests = [];
+  const transport = {
+    async request(path, schema, init) {
+      requests.push({ path, init });
+      if (requests.length === 1) throw Object.assign(new Error("missing route"), { status: 404 });
+      return schema.parse({ data: {
+        id: "attachment-legacy",
+        kind: "file",
+        name: "note.txt",
+        mime: "text/plain",
+        size: 5,
+      } });
+    },
+  };
+  const api = createControlPlaneClient(transport);
+  const uploaded = await api.aiSessions.uploadAttachment({
+    instanceId: "instance-1",
+    sessionId: "create-request-1",
+    scopeType: "create-request",
+    kind: "file",
+    name: "note.txt",
+    mime: "text/plain",
+    data: "data:text/plain;base64,aGVsbG8=",
+  });
+
+  assert.equal(uploaded.id, "attachment-legacy");
+  assert.equal(requests[1].path, "/api/ai-session-attachments");
+  assert.deepEqual(JSON.parse(requests[1].init.body), {
+    instanceId: "instance-1",
+    sessionId: "create-request-1",
+    kind: "file",
+    name: "note.txt",
+    mime: "text/plain",
+    data: "data:text/plain;base64,aGVsbG8=",
+  });
+});
+
+test("shared long-paste classifier normalizes text and preserves the 10000 boundary", () => {
+  assert.equal(AI_SESSION_LONG_PASTE_CODE_POINT_THRESHOLD, 10_000);
+  assert.deepEqual(classifyAiSessionPastedText("中".repeat(10_000)), { disposition: "inline" });
+  const decision = classifyAiSessionPastedText(`  first   line\r\n${"😀".repeat(9_991)}`, 2);
+  assert.equal(decision.disposition, "attachment");
+  assert.equal(decision.file.name, "pasted-text-2.txt");
+  assert.equal(decision.file.text.includes("\r"), false);
+  assert.equal(decision.file.presentation.codePointLength, 10_006);
+  assert.equal(decision.file.presentation.summary, "first line");
+  assert.equal(decision.file.size, new TextEncoder().encode(decision.file.text).byteLength);
+});
+
+test("shared long-paste summary truncates by code point and rejects the existing file limit", () => {
+  const longLine = "😀".repeat(81);
+  const decision = classifyAiSessionPastedText(`${longLine}\n${"a".repeat(10_000)}`);
+  assert.equal(decision.disposition, "attachment");
+  assert.equal([...decision.file.presentation.summary.slice(0, -1)].length, 80);
+  assert.equal(decision.file.presentation.summary.endsWith("…"), true);
+  assert.equal(classifyAiSessionPastedText(" ".repeat(10_001)).disposition, "attachment");
+  assert.equal(classifyAiSessionPastedText("😀".repeat(128_000)).disposition, "rejected");
+});
+
+test("shared long-paste fixtures cover unicode, blank summaries, and exact UTF-8 byte limits", () => {
+  assert.equal(aiSessionTextCodePointLength("中文😀e\u0301"), 5);
+  assert.equal(aiSessionPastedTextSummary("\r\n \t\r最后一行   摘要"), "最后一行 摘要");
+  assert.equal(aiSessionPastedTextSummary("\n\t \n"), "");
+
+  const belowLimit = classifyAiSessionPastedText("a".repeat(500 * 1024 - 1));
+  assert.equal(belowLimit.disposition, "attachment");
+  assert.equal(belowLimit.file.size, 500 * 1024 - 1);
+
+  const exactLimit = classifyAiSessionPastedText("a".repeat(500 * 1024));
+  assert.deepEqual(exactLimit, {
+    disposition: "rejected",
+    code: "AI_SESSION_PASTED_TEXT_TOO_LARGE",
+    size: 500 * 1024,
+  });
+});
+
+test("shared long-paste classifier accepts an instance-specific file limit", () => {
+  const text = "a".repeat(700 * 1024);
+  assert.equal(classifyAiSessionPastedText(text).disposition, "rejected");
+  assert.equal(classifyAiSessionPastedText(text, 1, 1024 * 1024).disposition, "attachment");
+  assert.equal(classifyAiSessionPastedText("a".repeat(1024 * 1024), 1, 1024 * 1024).disposition, "rejected");
+});
+
+test("attachment-only message helper remains locale neutral", () => {
+  assert.equal(aiSessionMessageText(""), AI_SESSION_ATTACHMENT_ONLY_MESSAGE);
+  assert.equal(aiSessionMessageText("hello"), "hello");
+});
+
 test("shared AI Session client sends a node folder identity for server-side runtime path resolution", async () => {
   const requests = [];
   const transport = {
@@ -77,15 +500,55 @@ test("shared AI Session client sends a node folder identity for server-side runt
   });
 });
 
+test("shared AI Session client inspects either a node folder or the instance runtime workspace", async () => {
+  const requests = [];
+  const transport = {
+    async request(path, schema, init) {
+      requests.push({ path, init });
+      return schema.parse({ data: { availability: "not-worktree", dirty: false, branches: [] } });
+    },
+  };
+  const api = createControlPlaneClient(transport);
+
+  await api.aiSessions.workspace("instance/1", "folder/1");
+  await api.aiSessions.workspace("instance/1");
+
+  assert.deepEqual(requests.map((request) => request.path), [
+    "/api/controlled-instances/instance%2F1/ai-sessions/workspace?cwdFolderId=folder%2F1",
+    "/api/controlled-instances/instance%2F1/ai-sessions/workspace",
+  ]);
+});
+
+test("shared resource client reads the instance workspace source used for default project selection", async () => {
+  const requests = [];
+  const transport = {
+    async request(path, schema, init) {
+      requests.push({ path, init });
+      return schema.parse({ data: {
+        source: { type: "local-folder", localFolderId: "folder/1", path: "/workspace/project" },
+      } });
+    },
+  };
+  const api = createControlPlaneClient(transport);
+  assert.deepEqual(await api.resources.instanceWorkspaceSource("instance/1"), {
+    type: "local-folder",
+    localFolderId: "folder/1",
+    path: "/workspace/project",
+  });
+  assert.equal(requests[0].path, "/api/controlled-instances/instance%2F1");
+  assert.equal(requests[0].init.method, undefined);
+});
+
 test("shared AI Session client owns revisioned queue edit and reorder routes", async () => {
   const requests = [];
   const transport = {
     async request(path, schema, init) {
       requests.push({ path, init });
       return schema.parse({ data: {
-        id: "session-1", agent: "codex", status: "running", phase: "thinking",
-        startedAt: "2026-08-05T00:00:00.000Z", updatedAt: "2026-08-05T00:00:00.000Z",
-        queue: { revision: 4, pendingCount: 2, items: [] },
+        sessionId: "session-1",
+        queueRevision: 4,
+        action: path.endsWith("/reorder") ? "reorder" : "edit",
+        ...(path.endsWith("/reorder") ? {} : { queueId: "queue-1" }),
       } });
     },
   };
@@ -155,8 +618,9 @@ test("shared auth client owns Web and mobile authentication contracts", async ()
             authenticated: true,
             user: {
               id: "user-1",
-              username: "admin",
-              role: "admin",
+              displayName: "Administrator",
+              primaryUsername: "admin",
+              status: "active",
               createdAt: "2026-08-05T00:00:00.000Z",
               updatedAt: "2026-08-05T00:00:00.000Z",
             },
@@ -167,8 +631,9 @@ test("shared auth client owns Web and mobile authentication contracts", async ()
       if (path === "/api/auth/password") {
         return schema.parse({ data: { user: {
           id: "user-1",
-          username: "admin",
-          role: "admin",
+          displayName: "Administrator",
+          primaryUsername: "admin",
+          status: "active",
           createdAt: "2026-08-05T00:00:00.000Z",
           updatedAt: "2026-08-05T00:00:00.000Z",
         } } });
@@ -178,17 +643,29 @@ test("shared auth client owns Web and mobile authentication contracts", async ()
           sessionToken: "mobile-token-that-is-at-least-32-characters",
           session: {
             id: "mobile-session-1",
+            userId: "user-1",
+            identityId: "identity-1",
+            clientType: "mobile",
             expiresAt: "2026-09-05T00:00:00.000Z",
             createdAt: "2026-08-05T00:00:00.000Z",
             lastSeenAt: "2026-08-05T00:00:00.000Z",
             device: { id: "device-0001", name: "Phone", platform: "ios" },
             user: {
               id: "user-1",
-              username: "admin",
-              role: "admin",
+              displayName: "Administrator",
+              primaryUsername: "admin",
+              status: "active",
               createdAt: "2026-08-05T00:00:00.000Z",
               updatedAt: "2026-08-05T00:00:00.000Z",
             },
+          },
+          authorization: {
+            userId: "user-1",
+            identityId: "identity-1",
+            roleIds: ["role_admin"],
+            permissionIds: ["users:manage"],
+            nodeScope: { kind: "all" },
+            authorizationRevision: 1,
           },
         },
       });
@@ -228,7 +705,7 @@ test("shared client owns recovery, desktop lifecycle, and command routes used by
   const transport = {
     async request(path, schema, init) {
       requests.push({ path, init });
-      if (path === "/api/ai-sessions?refresh=true") return schema.parse({ data: { updatedAt: "2026-08-05T00:00:00.000Z", instances: [] } });
+      if (path.startsWith("/api/ai-sessions?refresh=true")) return schema.parse({ data: { updatedAt: "2026-08-05T00:00:00.000Z", instances: [] } });
       if (path.endsWith("/open-app")) return schema.parse({ data: { disposition: "opened", aiSessionId: "session", providerSessionId: "provider", appSessionId: "app", creationSource: "ai-session" } });
       if (path.endsWith("/close")) return schema.parse({ data: { disposition: "closed", aiSessionId: "session", providerSessionId: "provider", creationSource: "ai-session" } });
       return schema.parse({ data: { command: "rename", value: "Renamed" } });
@@ -236,11 +713,13 @@ test("shared client owns recovery, desktop lifecycle, and command routes used by
   };
   const api = createControlPlaneClient(transport);
   await api.aiSessions.refresh();
+  await api.aiSessions.refresh(undefined, "instance/1");
   await api.aiSessions.openApp("instance/1", "session 1", "request-open");
   await api.aiSessions.close("instance/1", "session 1", "request-close");
   await api.aiSessions.executeCommand("instance/1", "session 1", { command: "rename", argument: "Renamed" });
   assert.deepEqual(requests.map((request) => request.path), [
     "/api/ai-sessions?refresh=true",
+    "/api/ai-sessions?refresh=true&instanceId=instance%2F1",
     "/api/controlled-instances/instance%2F1/ai-sessions/session%201/open-app",
     "/api/controlled-instances/instance%2F1/ai-sessions/session%201/close",
     "/api/controlled-instances/instance%2F1/ai-sessions/session%201/commands",
@@ -391,20 +870,27 @@ test("shared trigger client owns template, binding, and run routes", async () =>
       if (path.includes("/ai-sessions/") && init.method === "POST") return schema.parse({ data: { config, deployment } });
       if (path.includes("/ai-sessions/") && init.method === "DELETE") return schema.parse({ data: { deleted: true } });
       if (path.endsWith("/run")) return schema.parse({ data: { status: "completed" } });
-      return schema.parse({ data: init.method === "PUT" ? { previousConfigHash: config.configHash, trigger: { ...config, id: config.configHash }, results: [] } : { configHash: config.configHash, deletedTemplate: true, results: [] } });
+      return schema.parse({ data: init.method === "PUT" ? {
+        previousConfigHash: config.configHash,
+        trigger: { ...config, id: config.configHash },
+        results: [],
+        partialFailures: [{ scope: "node", nodeId: "node-offline", code: "ECONNREFUSED", message: "offline" }],
+      } : { configHash: config.configHash, deletedTemplate: true, results: [] } });
     },
   };
   const api = createControlPlaneClient(transport);
   const input = { name: config.name, source: config.source, action: config.action, policy: config.policy };
   const listed = await api.triggers.list();
   await api.triggers.create(input);
-  await api.triggers.update(config.configHash, input);
+  const updated = await api.triggers.update(config.configHash, input);
   await api.triggers.bindSession("instance/1", "session/1", config.configHash);
   await api.triggers.run("instance/1", config.configHash, deployment.deploymentId);
   await api.triggers.unbindSession("instance/1", "session/1", config.configHash);
-  await api.triggers.remove(config.configHash);
+  const removed = await api.triggers.remove(config.configHash);
 
   assert.equal("futureField" in listed.triggers[0], false);
+  assert.deepEqual(updated.partialFailures, [{ scope: "node", nodeId: "node-offline", code: "ECONNREFUSED", message: "offline" }]);
+  assert.deepEqual(removed.partialFailures, []);
   assert.deepEqual(requests.map((request) => request.path), [
     "/api/triggers",
     "/api/triggers",
@@ -447,6 +933,50 @@ test("shared AI Session state preserves Web sorting, unread, approval, and delta
     settledAt: undefined,
     updatedAt: "new",
   });
+});
+
+test("Control Plane AI Session patches preserve unread without leaking it into the strict stream reducer", () => {
+  const current = {
+    instanceId: "instance-1",
+    streamId: "stream-1",
+    revision: 1,
+    lastEventAt: "2026-08-05T00:00:00.000Z",
+    aiSessions: {
+      runningCount: 0,
+      waitingCount: 0,
+      staleCount: 0,
+      updatedAt: "2026-08-05T00:00:00.000Z",
+      sessions: [
+        { id: "changed", agent: "codex", status: "idle", phase: "unknown", startedAt: "2026-08-05T00:00:00.000Z", updatedAt: "2026-08-05T00:00:00.000Z", unread: false },
+        { id: "unchanged", agent: "codex", status: "idle", phase: "unknown", startedAt: "2026-08-05T00:00:00.000Z", updatedAt: "2026-08-05T00:00:00.000Z", unread: true },
+      ],
+    },
+  };
+  const event = {
+    type: "ai-session.patch",
+    payload: {
+      meta: {
+        streamId: "stream-1",
+        instanceId: "instance-1",
+        revision: 2,
+        previousRevision: 1,
+        traceId: "trace-2",
+        generatedAt: "2026-08-05T00:01:00.000Z",
+        reason: "provider-event",
+      },
+      upserted: [
+        { id: "changed", agent: "codex", status: "running", phase: "responding", startedAt: "2026-08-05T00:00:00.000Z", updatedAt: "2026-08-05T00:01:00.000Z" },
+      ],
+      removed: [],
+    },
+  };
+
+  const applied = applyControlPlaneAiSessionStreamEvent(current, event);
+
+  assert.equal(applied.result.kind, "applied");
+  assert.equal(applied.entry.revision, 2);
+  assert.equal(applied.entry.aiSessions.sessions.find((session) => session.id === "changed").unread, false);
+  assert.equal(applied.entry.aiSessions.sessions.find((session) => session.id === "unchanged").unread, true);
 });
 
 test("AI Session inbox sorts by the latest user message instead of status or assistant activity", () => {

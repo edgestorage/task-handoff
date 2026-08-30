@@ -5,6 +5,7 @@ import { View } from 'react-native';
 import { useMobileTheme } from '../components/theme';
 import { useI18n } from '../i18n';
 import type { ControlPlaneDetailContentProps } from './ControlPlaneDetailContent';
+import { controlPlaneRoleMessageKey } from './current-access';
 import { mobileControlPlaneProfileAddress } from './profile';
 
 export function ControlPlaneDetailContent(props: ControlPlaneDetailContentProps) {
@@ -28,6 +29,11 @@ export function ControlPlaneDetailContent(props: ControlPlaneDetailContentProps)
             <ValueRow label={t('controlPlane.address')} systemImage="link" value={mobileControlPlaneProfileAddress(props.profile)} modifiers={secondaryText} />
             <ValueRow label={t('controlPlane.id')} systemImage="number" value={props.profile.identity.controlPlaneId} modifiers={secondaryText} />
             <ValueRow label={t('controlPlane.fingerprint')} systemImage="checkmark.seal" value={props.profile.identity.publicKeyFingerprint} modifiers={secondaryText} />
+            {props.currentAccess ? <>
+              <ValueRow label={t('controlPlane.memberRole')} systemImage="person.badge.key" value={props.currentAccess.roleIds.map((roleId) => { const key = controlPlaneRoleMessageKey(roleId); return key ? t(key) : roleId; }).join(', ')} modifiers={secondaryText} />
+              <ValueRow label={t('controlPlane.nodeAccess')} systemImage="server.rack" value={props.currentAccess.nodeScope.kind === 'all' ? t('controlPlane.allNodes') : t('controlPlane.selectedNodes', { count: props.currentAccess.nodeScope.nodeIds.length })} modifiers={secondaryText} />
+              <ValueRow label={t('controlPlane.authorizationRevision')} systemImage="arrow.triangle.2.circlepath" value={String(props.currentAccess.authorizationRevision)} modifiers={secondaryText} />
+            </> : null}
           </Section>
 
           <Section

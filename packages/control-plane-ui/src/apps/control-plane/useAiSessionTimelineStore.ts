@@ -8,11 +8,12 @@ export type AiSessionTurnTimelineState = {
   error?: string;
 };
 
-type TurnIdentity = Pick<AiSessionTurn, "id" | "providerTurnId">;
+type TurnIdentity = Pick<AiSessionTurn, "id" | "providerTurnId"> & Partial<Pick<AiSessionTurn, "revision">>;
 type StoredTurnTimelineState = AiSessionTurnTimelineState & {
   instanceId: string;
   sessionId: string;
   identities: string[];
+  turnRevision?: number;
 };
 type SessionTimelineState = { status: AiSessionTurnTimelineStatus; error?: string };
 type LiveTurnTimeline = {
@@ -107,8 +108,9 @@ function turnState(instanceId: string, sessionId: string, turn: TurnIdentity): A
   void revision.value;
   const stored = turnStates.get(turnKey(instanceId, sessionId, turn.id));
   const liveItems = liveItemsForTurn(instanceId, sessionId, turnIdentities(turn));
+  const stale = stored?.turnRevision !== undefined && turn.revision !== undefined && stored.turnRevision !== turn.revision;
   return {
-    status: stored?.status || "idle",
+    status: stale ? "stale" : stored?.status || "idle",
     items: mergeAiSessionTimelineItems(stored?.items || [], liveItems),
     ...(stored?.error ? { error: stored.error } : {}),
   };
@@ -124,18 +126,26 @@ function realtimeTurnState(instanceId: string, sessionId: string, turn: TurnIden
 
 function setTurnState(instanceId: string, sessionId: string, turn: TurnIdentity, state: AiSessionTurnTimelineState) {
   const key = turnKey(instanceId, sessionId, turn.id);
+  const existing = turnStates.get(key);
+  if (storedTurnRevisionIsNewer(existing, turn)) return false;
   turnStates.delete(key);
   turnStates.set(key, {
     ...state,
     instanceId,
     sessionId,
     identities: turnIdentities(turn),
+    ...(turn.revision !== undefined ? { turnRevision: turn.revision } : {}),
   });
   while (turnStates.size > MAX_CACHED_TURNS) {
     const oldestKey = turnStates.keys().next().value as string;
     turnStates.delete(oldestKey);
   }
   revision.value += 1;
+  return true;
+}
+
+function storedTurnRevisionIsNewer(existing: StoredTurnTimelineState | undefined, turn: TurnIdentity) {
+  return existing?.turnRevision !== undefined && turn.revision !== undefined && existing.turnRevision > turn.revision;
 }
 
 function beginTurnLoad(instanceId: string, sessionId: string, turn: TurnIdentity) {
@@ -147,10 +157,11 @@ function beginTurnLoad(instanceId: string, sessionId: string, turn: TurnIdentity
 }
 
 function resolveTurn(instanceId: string, sessionId: string, turn: TurnIdentity, turnItems: readonly AiSessionTimelineItem[]) {
+  if (storedTurnRevisionIsNewer(turnStates.get(turnKey(instanceId, sessionId, turn.id)), turn)) return false;
   const identities = turnIdentities(turn);
   const merged = mergeAiSessionTimelineItems(turnItems, liveItemsForTurn(instanceId, sessionId, identities));
   clearLiveTurn(instanceId, sessionId, identities);
-  setTurnState(instanceId, sessionId, turn, { status: "ready", items: merged });
+  return setTurnState(instanceId, sessionId, turn, { status: "ready", items: merged });
 }
 
 function rejectTurn(instanceId: string, sessionId: string, turn: TurnIdentity, error: string) {

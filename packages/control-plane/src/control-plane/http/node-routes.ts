@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { ApplyUpdateRequestSchema, UpdateCheckRequestSchema } from "@task-handoff/protocol/control-plane";
+import { ApplyUpdateRequestSchema, NodeJoinInviteStatusSchema, UpdateCheckRequestSchema } from "@task-handoff/protocol/control-plane";
 import { ControlPlaneEventBus } from "../events/bus.ts";
 import { ControlPlaneService } from "../application/service.ts";
 import {
@@ -19,9 +19,11 @@ import { withRequestSignal } from "./request-signal.ts";
 import { z } from "zod";
 import { PUBLIC_CONTROL_PLANE_ROUTE } from "./auth-boundary.ts";
 import { publicNodeDirectory } from "../public-records.ts";
+import { filterRequestNodes } from "./access-projection.ts";
 
 const DeleteNodeQuerySchema = z.object({ force: z.enum(["true", "false"]).optional() }).strict();
 const NodeListQuerySchema = z.object({ projection: z.literal("directory").optional() }).strict();
+const FleetListQuerySchema = z.object({ progressive: z.enum(["true", "false"]).optional() }).strict();
 
 type ErrorPayload = (error: unknown) => {
   statusCode: number;
@@ -56,7 +58,8 @@ export function registerNodeRoutes({
   };
   app.get("/api/nodes", async (request) => {
     const query = NodeListQuerySchema.parse(request.query);
-    return { data: query.projection === "directory" ? service.listNodes().map((node) => publicNodeDirectory(service.projectNodeConnection(node))) : service.listPublicNodes() };
+    const nodes = filterRequestNodes(request, service.listNodes(), (node) => node.id);
+    return { data: query.projection === "directory" ? nodes.map((node) => publicNodeDirectory(service.projectNodeConnection(node))) : nodes.map((node) => service.requirePublicNode(node.id)) };
   });
   app.post("/api/nodes/local/sync", async () => {
     const node = await service.syncLocalNodeConnection();
@@ -138,10 +141,13 @@ export function registerNodeRoutes({
     events.publish("node-join.invite.created", { inviteId: invite.id });
     return reply.code(201).send({ data: invite });
   });
+  app.get("/api/node-join/invites/:id", async (request) => ({
+    data: NodeJoinInviteStatusSchema.parse(service.getNodeJoinInviteStatus(IdParamsSchema.parse(request.params).id)),
+  }));
   app.post("/api/node-join/complete", { config: PUBLIC_CONTROL_PLANE_ROUTE }, async (request, reply) => {
-    const node = service.completeNodeJoin(request.body);
+    const { node, inviteId } = service.completeNodeJoin(request.body);
     nodeEventSubscriber.syncNow();
-    events.publish("node.joined", { nodeId: node.id });
+    events.publish("node.joined", { nodeId: node.id, inviteId });
     return reply.code(201).send({ data: service.requirePublicNode(node.id) });
   });
   app.get("/api/nodes/:id/runtimes", async (request) => ({ data: await service.listNodeRuntimes(IdParamsSchema.parse(request.params).id) }));
@@ -174,6 +180,9 @@ export function registerNodeRoutes({
   app.get("/api/nodes/:id/local-folders", async (request, reply) => withRequestSignal(request, reply, async (signal) => ({
     data: await service.listNodeLocalFolders(IdParamsSchema.parse(request.params).id, signal),
   })));
+  app.get("/api/nodes/:id/folders/places", async (request) => ({
+    data: await service.listNodeFolderPlaces(IdParamsSchema.parse(request.params).id),
+  }));
   app.get("/api/nodes/:id/folders/tree", async (request) => {
     const params = IdParamsSchema.parse(request.params);
     const query = NodeFolderTreeQuerySchema.parse(request.query);
@@ -189,6 +198,12 @@ export function registerNodeRoutes({
     const folder = await service.createNodeLocalFolder(params.id, request.body);
     events.publish("node.local-folder.created", { nodeId: params.id, folderId: folder.id });
     return reply.code(201).send({ data: folder });
+  });
+  app.patch("/api/nodes/:id/local-folders/:folderId", async (request) => {
+    const params = NodeLocalFolderParamsSchema.parse(request.params);
+    const folder = await service.updateNodeLocalFolder(params.id, params.folderId, request.body);
+    events.publish("node.local-folder.updated", { nodeId: params.id, folderId: params.folderId });
+    return { data: folder };
   });
   app.delete("/api/nodes/:id/local-folders/:folderId", async (request) => {
     const params = NodeLocalFolderParamsSchema.parse(request.params);
@@ -214,8 +229,15 @@ export function registerNodeRoutes({
   });
 
   app.get("/api/node-runtimes", async (request, reply) => withRequestSignal(request, reply, async (signal) => {
-    const result = await service.listNodeRuntimesWithDiagnostics(signal);
-    return { data: result.items, meta: { nodeErrors: result.nodeErrors } };
+    const query = FleetListQuerySchema.parse(request.query);
+    const result = await service.listNodeRuntimesWithDiagnostics(signal, query.progressive === "true");
+    return {
+      data: filterRequestNodes(request, result.items, (item) => item.nodeId),
+      meta: {
+        nodeErrors: filterRequestNodes(request, result.nodeErrors, (item) => item.nodeId),
+        nodeStates: filterRequestNodes(request, result.nodeStates, (item) => item.nodeId),
+      },
+    };
   }));
 
   registerNodeAgentTunnelRoutes({ app, service, nodeAgentTunnel, errorPayload });

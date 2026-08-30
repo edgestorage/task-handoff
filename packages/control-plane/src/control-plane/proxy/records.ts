@@ -1,27 +1,32 @@
 import {
   ControlPlaneProxyErrorSchema,
-  ProxyBindingSchema,
-  ProxyInviteSchema,
   PublicProxyBindingSchema,
   PublicProxyInviteSchema,
-  type ProxyBinding,
-  type ProxyInvite,
   type PublicProxyBinding,
   type PublicProxyInvite,
 } from "@task-handoff/protocol/control-plane-proxy";
 import { z } from "zod";
 
+export const ProxyBindingRecordSchema = PublicProxyBindingSchema.extend({
+  credentialHash: z.string().trim().min(32).max(256),
+}).strict();
+
+export type ProxyBindingRecord = z.infer<typeof ProxyBindingRecordSchema>;
+
+export type ProxyInviteRecord = PublicProxyInvite & { tokenHash: string };
+
 export const ControlPlaneProxyAuthoritySchema = z.object({
   revision: z.number().int().nonnegative(),
-  invites: z.array(ProxyInviteSchema),
-  bindings: z.array(ProxyBindingSchema),
+  // Compatibility for v0.0.21: retain the empty property so an N-1 process can
+  // read the authority file, but never persist ephemeral invite material.
+  invites: z.array(z.unknown()).length(0).default([]),
+  bindings: z.array(ProxyBindingRecordSchema),
 }).strict();
 
 export type ControlPlaneProxyAuthority = z.infer<typeof ControlPlaneProxyAuthoritySchema>;
 
 const recordKeys = {
-  invite: new Set(Object.keys(ProxyInviteSchema.shape)),
-  binding: new Set(Object.keys(ProxyBindingSchema.shape)),
+  binding: new Set(Object.keys(ProxyBindingRecordSchema.shape)),
 };
 
 function pick(input: unknown, keys: Iterable<string>) {
@@ -31,7 +36,7 @@ function pick(input: unknown, keys: Iterable<string>) {
 }
 
 export function sanitizeStoredProxyRecord(
-  kind: keyof typeof recordKeys,
+  kind: "binding",
   input: unknown,
   onWarning?: (warning: { kind: string; fields: string[] }) => void,
 ) {
@@ -41,7 +46,7 @@ export function sanitizeStoredProxyRecord(
   const unknown = Object.keys(source).filter((key) => !keys.has(key));
   if (unknown.length > 0) onWarning?.({ kind, fields: unknown });
   const value = pick(source, keys) as Record<string, unknown>;
-  if (kind === "binding" && value.lastError) {
+  if (value.lastError) {
     value.lastError = pick(value.lastError, Object.keys(ControlPlaneProxyErrorSchema.shape));
   }
   return value;
@@ -58,29 +63,21 @@ export function sanitizeStoredProxyAuthority(
   if (unknown.length > 0) onWarning?.({ kind: "authority", fields: unknown });
   return {
     ...(source.revision === undefined ? {} : { revision: source.revision }),
-    invites: Array.isArray(source.invites)
-      ? source.invites.map((value) => sanitizeStoredProxyRecord("invite", value, onWarning))
-      : source.invites,
+    invites: [],
     bindings: Array.isArray(source.bindings)
-      ? source.bindings.map((value) => sanitizeStoredProxyRecord("binding", value, onWarning))
+      ? source.bindings
+        .map((value) => sanitizeStoredProxyRecord("binding", value, onWarning))
+        .filter((value) => !value || typeof value !== "object" || (value as Record<string, unknown>).status !== "revoked")
       : source.bindings,
   };
 }
 
-export function publicProxyInvite(invite: ProxyInvite): PublicProxyInvite {
+export function publicProxyInvite(invite: ProxyInviteRecord): PublicProxyInvite {
   const { tokenHash: _tokenHash, ...value } = invite;
   return PublicProxyInviteSchema.parse(value);
 }
 
-export function publicProxyBinding(binding: ProxyBinding): PublicProxyBinding {
+export function publicProxyBinding(binding: ProxyBindingRecord): PublicProxyBinding {
   const { credentialHash: _credentialHash, ...value } = binding;
   return PublicProxyBindingSchema.parse(value);
 }
-
-export {
-  ProxyBindingSchema as ProxyBindingRecordSchema,
-  ProxyInviteSchema as ProxyInviteRecordSchema,
-};
-
-export type ProxyBindingRecord = ProxyBinding;
-export type ProxyInviteRecord = ProxyInvite;

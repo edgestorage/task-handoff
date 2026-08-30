@@ -73,6 +73,9 @@ export const CONTROL_PLANE_PROXY_APPLICATION_REQUEST_HEADERS = new Set([
   "if-none-match",
   "range",
   "x-request-id",
+  // Compatibility for v0.0.21: this optional diagnostic header is ignored by
+  // older proxies and must never gate the underlying application request.
+  "x-task-handoff-trace-id",
 ]);
 
 export const CONTROL_PLANE_PROXY_APPLICATION_RESPONSE_HEADERS = new Set([
@@ -84,7 +87,9 @@ export const CONTROL_PLANE_PROXY_APPLICATION_RESPONSE_HEADERS = new Set([
   "content-type",
   "etag",
   "last-modified",
+  "server-timing",
   "x-request-id",
+  "x-task-handoff-trace-id",
 ]);
 
 export const CONTROL_PLANE_PROXY_AUTH_HEADERS = {
@@ -123,26 +128,23 @@ export const ControlPlaneProxyErrorSchema = z.object({
   details: z.record(z.string(), z.unknown()).optional(),
 }).strict();
 
-export const ProxyInviteStatusSchema = z.enum(["active", "consumed", "revoked", "expired"]);
+export const ProxyInviteStatusSchema = z.enum(["active", "revoked"]);
 
-export const ProxyInviteSchema = z.object({
+export const PublicProxyInviteSchema = z.object({
   id: IdSchema,
   targetNodeId: IdSchema,
-  tokenHash: z.string().trim().min(32).max(256),
   status: ProxyInviteStatusSchema,
   createdBy: IdSchema,
   expiresAt: TimestampSchema,
-  consumedByClaimId: IdSchema.optional(),
-  consumedAt: TimestampSchema.optional(),
   revokedAt: TimestampSchema.optional(),
   createdAt: TimestampSchema,
   updatedAt: TimestampSchema,
 }).strict();
 
-export const PublicProxyInviteSchema = ProxyInviteSchema.omit({ tokenHash: true });
-
 export const CreateProxyInviteInputSchema = z.object({
   targetNodeId: IdSchema,
+  // Compatibility for v0.0.21: accept the former one-hour range; the issuer
+  // clamps it to the shared ten-minute join-token lifetime.
   expiresInSeconds: z.number().int().min(60).max(3600).default(600),
 }).strict();
 
@@ -155,13 +157,12 @@ export const CreateProxyInviteResultSchema = z.object({
 
 export const ProxyBindingStatusSchema = z.enum(["active", "revoked"]);
 
-export const ProxyBindingSchema = z.object({
+export const PublicProxyBindingSchema = z.object({
   id: IdSchema,
   claimId: IdSchema,
   sourceControlPlaneId: IdSchema,
   targetNodeId: IdSchema,
   bindingKeyId: IdSchema,
-  credentialHash: z.string().trim().min(32).max(256),
   status: ProxyBindingStatusSchema,
   revision: z.number().int().positive(),
   lastError: ControlPlaneProxyErrorSchema.optional(),
@@ -169,8 +170,6 @@ export const ProxyBindingSchema = z.object({
   createdAt: TimestampSchema,
   updatedAt: TimestampSchema,
 }).strict();
-
-export const PublicProxyBindingSchema = ProxyBindingSchema.omit({ credentialHash: true });
 
 export const ClaimProxyInviteInputSchema = z.object({
   protocolVersion: ControlPlaneProxyProtocolVersionSchema,
@@ -292,9 +291,7 @@ export const ProxyNodeCredentialSchema = z.object({
   updatedAt: TimestampSchema,
 }).strict();
 
-export type ProxyInvite = z.infer<typeof ProxyInviteSchema>;
 export type PublicProxyInvite = z.infer<typeof PublicProxyInviteSchema>;
-export type ProxyBinding = z.infer<typeof ProxyBindingSchema>;
 export type PublicProxyBinding = z.infer<typeof PublicProxyBindingSchema>;
 export type ClaimProxyInviteInput = z.infer<typeof ClaimProxyInviteInputSchema>;
 export type ProxyTargetSnapshot = z.infer<typeof ProxyTargetSnapshotSchema>;

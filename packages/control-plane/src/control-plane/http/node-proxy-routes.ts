@@ -20,6 +20,7 @@ import { ControlPlaneProxyEventHub } from "../proxy/event-hub.ts";
 import { publicControlPlaneProxyTarget } from "../proxy/target-projector.ts";
 import type { ControlPlaneProxyTarget } from "../proxy/target-projector.ts";
 import { PROXY_BINDING_ROUTE } from "./auth-boundary.ts";
+import { appendServerTiming, serverTimingDuration, TRACE_ID_HEADER } from "../../shared/http/server-timing.ts";
 
 const BindingParamsSchema = z.object({ bindingId: z.string().trim().min(1).max(160) }).passthrough();
 const WebSocketQuerySchema = z.object({ route: NodeAgentProxyRouteSchema }).strict();
@@ -62,6 +63,7 @@ export function registerNodeProxyRoutes(options: RegisterNodeProxyRoutesOptions)
     forwardedHeaders: Record<string, string>;
     tracked: ReturnType<ControlPlaneNodeProxyRuntime["reserveHttp"]>;
     abort: () => void;
+    startedAt: number;
   }>();
   const releaseHttp = (request: FastifyRequest, reply: FastifyReply) => {
     const context = httpContexts.get(request);
@@ -87,7 +89,7 @@ export function registerNodeProxyRoutes(options: RegisterNodeProxyRoutesOptions)
           tracked.controller.abort(Object.assign(new Error("Proxy HTTP consumer disconnected."), { name: "AbortError", code: "ABORT_ERR" }));
           releaseHttp(request, reply);
         };
-        httpContexts.set(request, { binding, route, forwardedHeaders, tracked, abort });
+        httpContexts.set(request, { binding, route, forwardedHeaders, tracked, abort, startedAt: performance.now() });
         request.raw.once("aborted", abort);
         reply.raw.once("close", abort);
       } catch (error) {
@@ -106,7 +108,7 @@ export function registerNodeProxyRoutes(options: RegisterNodeProxyRoutesOptions)
     try {
       const context = httpContexts.get(request);
       if (!context) throw proxyRouteError(ControlPlaneProxyErrorCode.TransportFailed, "Proxy request context is unavailable.", 500, true);
-      const { binding, route, forwardedHeaders, tracked, abort } = context;
+      const { binding, route, forwardedHeaders, tracked, abort, startedAt } = context;
       assertNoTargetOverride(binding, route, request.body);
       const body = requestBody(request.body);
       tracked.acceptRequestBody(body?.byteLength ?? 0);
@@ -120,7 +122,26 @@ export function registerNodeProxyRoutes(options: RegisterNodeProxyRoutesOptions)
           ...(body ? { body: body as unknown as BodyInit } : {}),
           signal: tracked.controller.signal,
         });
-        return sendProxyResponse(reply, response, tracked, abort, request, forwardedHeaders["x-request-id"]);
+        const proxyForwardMs = performance.now() - startedAt;
+        app.log.info({
+          traceId: forwardedHeaders[TRACE_ID_HEADER],
+          requestId: forwardedHeaders["x-request-id"],
+          bindingId: binding.id,
+          targetNodeId: binding.targetNodeId,
+          routePath: new URL(route, "https://node-agent.invalid").pathname,
+          statusCode: response.status,
+          proxyForwardMs,
+        }, "control-plane proxy request timing");
+        return sendProxyResponse(
+          reply,
+          response,
+          tracked,
+          abort,
+          request,
+          forwardedHeaders["x-request-id"],
+          forwardedHeaders[TRACE_ID_HEADER],
+          proxyForwardMs,
+        );
       } catch (error) {
         releaseHttp(request, reply);
         throw error;
@@ -343,6 +364,13 @@ function applicationRequestHeaders(headers: Record<string, unknown>) {
     }
     forwarded["x-request-id"] = parsed.data;
   }
+  if (forwarded[TRACE_ID_HEADER] !== undefined) {
+    const parsed = ProxyCorrelationIdSchema.safeParse(forwarded[TRACE_ID_HEADER]);
+    if (!parsed.success) {
+      throw proxyRouteError(ControlPlaneProxyErrorCode.HeaderInvalid, "Proxy trace id is invalid.", 400, false, { header: TRACE_ID_HEADER });
+    }
+    forwarded[TRACE_ID_HEADER] = parsed.data;
+  }
   return forwarded;
 }
 
@@ -362,9 +390,17 @@ function sendProxyResponse(
   abort: () => void,
   request: FastifyRequest,
   requestId?: string,
+  traceId?: string,
+  proxyForwardMs?: number,
 ) {
   if (response.body) tracked.beginResponseStream();
-  for (const [name, value] of Object.entries(applicationResponseHeaders(response, requestId))) reply.header(name, value);
+  const responseHeaders = applicationResponseHeaders(response, requestId);
+  responseHeaders["server-timing"] = appendServerTiming(
+    responseHeaders["server-timing"],
+    serverTimingDuration("proxy_forward", proxyForwardMs ?? 0),
+  );
+  if (traceId && !responseHeaders[TRACE_ID_HEADER]) responseHeaders[TRACE_ID_HEADER] = traceId;
+  for (const [name, value] of Object.entries(responseHeaders)) reply.header(name, value);
   const cleanup = () => {
     tracked.release();
     request.raw.removeListener("aborted", abort);

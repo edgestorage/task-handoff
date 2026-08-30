@@ -10,9 +10,30 @@ import {
   type ImagePullTerminalOutput,
   type ControlledInstance,
 } from "@task-handoff/protocol/control-plane";
-import { AiSessionEventTopic, AiSessionEventType } from "@task-handoff/protocol/ai-sessions";
-import { AppSessionEventTopic } from "@task-handoff/protocol/app-sessions";
-import { SessionStreamsHelloEventType, SessionStreamsHelloSchema, eventTopic, type EventEnvelope } from "@task-handoff/protocol/events";
+import {
+  AiSessionEventTopic,
+  AiSessionEventType,
+  AiSessionPatchEventSchema,
+  AiSessionRemovedEventSchema,
+  AiSessionSnapshotEventSchema,
+  AiSessionMessageDeltaEventSchema,
+  applyAiSessionStreamEvent,
+  compactAiSessionMessageDeltaEvent,
+  normalizeAiSessionMessageDeltaEvent,
+  type AiSessionStreamEvent,
+  type AiSessionsState,
+} from "@task-handoff/protocol/ai-sessions";
+import {
+  AppSessionEventTopic,
+  AppSessionEventType,
+  AppSessionPatchEventSchema,
+  AppSessionRemovedEventSchema,
+  AppSessionSnapshotEventSchema,
+  applyAppSessionStreamEvent,
+  type AppSessionStreamEvent,
+  type AppSessionsState,
+} from "@task-handoff/protocol/app-sessions";
+import { COMPACT_EVENT_ENVELOPE_VERSION, AiSessionTransientSubscriptionSchema, SessionStreamsHelloEventType, SessionStreamsHelloSchema, aiSessionTransientSubscriptionAccepts, eventTopic, normalizeEventEnvelope, projectEventEnvelope, type AiSessionTransientSubscription, type EventEnvelope, type SessionStreamsHello } from "@task-handoff/protocol/events";
 import { safeParseResponse } from "@task-handoff/protocol/response-validation";
 import { EventConnectionRetryTimer, eventConnectionSafetyIntervalMs } from "../shared/events/connection-retry.ts";
 
@@ -21,6 +42,7 @@ type NodeAgentInstanceEventState = {
 };
 
 type ForwardedInstanceEvent = EventEnvelope & {
+  replay?: boolean;
   scope?: {
     instanceId?: string;
     [key: string]: unknown;
@@ -32,17 +54,48 @@ type Logger = {
   warn?: (data: Record<string, unknown>, message?: string) => void;
 };
 
+type EventOutputDiagnostic = {
+  outputId: string;
+  kind: "events-websocket" | "reverse-tunnel" | "legacy";
+};
+
 function splitTerminalReplay(data: string, maxLength = 60_000) {
   const chunks: string[] = [];
   for (let offset = 0; offset < data.length; offset += maxLength) chunks.push(data.slice(offset, offset + maxLength));
   return chunks;
 }
 
+const MAX_EVENT_OUTPUT_BUFFERED_BYTES = 16 * 1024 * 1024;
+const AI_SESSION_AUTHORITY_BACKPRESSURE_BYTES = 256 * 1024;
+const AI_SESSION_AUTHORITY_MAX_EVENT_BYTES = 256 * 1024;
+const AI_SESSION_AUTHORITY_FLUSH_RETRY_MS = 25;
+const EVENT_TRANSPORT_RECOVERY_NOTICE_MS = 5 * 60 * 1000;
+
+type EventTransportCongestionIncident = {
+  congestedSince: string;
+  lastCongestedAt: string;
+  recoveredAt?: string;
+  peakBufferedBytes: number;
+  coalescedEvents: number;
+  oversizedEvents: number;
+  peakEventBytes: number;
+};
+
 export class NodeAgentInstanceEventForwarder {
   private readonly sockets = new Map<string, WebSocket>();
   private readonly socketUrls = new Map<string, string>();
   private readonly retries = new Map<string, { timer: EventConnectionRetryTimer; url?: string }>();
   private readonly outputs = new Set<WebSocket>();
+  private readonly outputSubscriptions = new Map<WebSocket, AiSessionTransientSubscription | undefined>();
+  private readonly outputEnvelopeVersions = new Map<WebSocket, 1 | typeof COMPACT_EVENT_ENVELOPE_VERSION>();
+  private readonly outputDiagnostics = new Map<WebSocket, EventOutputDiagnostic>();
+  private readonly aiSessionProjectionByInstance = new Map<string, AiSessionsState>();
+  private readonly appSessionProjectionByInstance = new Map<string, AppSessionsState>();
+  private readonly sessionStreamsHelloByInstance = new Map<string, SessionStreamsHello>();
+  private readonly sessionAuthorityReplayedOutputs = new Set<WebSocket>();
+  private readonly pendingAiSessionAuthorityByOutput = new Map<WebSocket, Map<string, ForwardedInstanceEvent>>();
+  private readonly pendingAiSessionAuthorityFlush = new Map<WebSocket, ReturnType<typeof setTimeout>>();
+  private eventTransportCongestion?: EventTransportCongestionIncident;
   private readonly imagePullTerminalByInstance = new Map<string, { output: ImagePullTerminalOutput; tail: string; finished?: ImagePullTerminalFinished }>();
   private readonly state: NodeAgentInstanceEventState;
   private readonly token?: string;
@@ -54,11 +107,14 @@ export class NodeAgentInstanceEventForwarder {
   private reconnectAttempts = 0;
   private safetyReconciliations = 0;
   private localSequence = 0;
+  private outputSequence = 0;
   private readonly createSocket: (url: string, options: { headers?: { authorization: string } }) => WebSocket;
   private readonly setIntervalFn: typeof setInterval;
   private readonly clearIntervalFn: typeof clearInterval;
+  private readonly setTimeoutFn: typeof setTimeout;
+  private readonly clearTimeoutFn: typeof clearTimeout;
 
-  constructor(state: NodeAgentInstanceEventState, token?: string, options: { logger?: Logger; safetyIntervalMs?: number; createSocket?: NodeAgentInstanceEventForwarder["createSocket"]; setIntervalFn?: typeof setInterval; clearIntervalFn?: typeof clearInterval } = {}) {
+  constructor(state: NodeAgentInstanceEventState, token?: string, options: { logger?: Logger; safetyIntervalMs?: number; createSocket?: NodeAgentInstanceEventForwarder["createSocket"]; setIntervalFn?: typeof setInterval; clearIntervalFn?: typeof clearInterval; setTimeoutFn?: typeof setTimeout; clearTimeoutFn?: typeof clearTimeout } = {}) {
     this.state = state;
     this.token = token;
     this.logger = options.logger;
@@ -66,6 +122,8 @@ export class NodeAgentInstanceEventForwarder {
     this.createSocket = options.createSocket || ((url, socketOptions) => new WebSocket(url, socketOptions));
     this.setIntervalFn = options.setIntervalFn || setInterval;
     this.clearIntervalFn = options.clearIntervalFn || clearInterval;
+    this.setTimeoutFn = options.setTimeoutFn || setTimeout;
+    this.clearTimeoutFn = options.clearTimeoutFn || clearTimeout;
   }
 
   start() {
@@ -89,12 +147,60 @@ export class NodeAgentInstanceEventForwarder {
     for (const retry of this.retries.values()) retry.timer.cancel();
     this.retries.clear();
     this.outputs.clear();
+    this.outputSubscriptions.clear();
+    this.outputEnvelopeVersions.clear();
+    this.outputDiagnostics.clear();
+    for (const timeout of this.pendingAiSessionAuthorityFlush.values()) this.clearTimeoutFn(timeout);
+    this.pendingAiSessionAuthorityFlush.clear();
+    this.pendingAiSessionAuthorityByOutput.clear();
+    this.aiSessionProjectionByInstance.clear();
+    this.appSessionProjectionByInstance.clear();
+    this.sessionStreamsHelloByInstance.clear();
+    this.sessionAuthorityReplayedOutputs.clear();
   }
 
-  addOutput(socket: WebSocket) {
+  addOutput(socket: WebSocket, options: { expectsTransientSubscription?: boolean; legacyFallbackMs?: number } = {}) {
     this.outputs.add(socket);
-    socket.on("close", () => this.outputs.delete(socket));
-    socket.on("error", () => this.outputs.delete(socket));
+    this.outputDiagnostics.set(socket, {
+      outputId: `event_output_${++this.outputSequence}`,
+      kind: options.expectsTransientSubscription
+        ? "events-websocket"
+        : options.legacyFallbackMs !== undefined
+          ? "reverse-tunnel"
+          : "legacy",
+    });
+    // Compatibility for v0.0.21: no subscription update means the older control-plane expects the full stream.
+    this.outputSubscriptions.set(socket, options.expectsTransientSubscription ? AiSessionTransientSubscriptionSchema.parse({}) : undefined);
+    this.outputEnvelopeVersions.set(socket, 1);
+    let legacyFallback: ReturnType<typeof setTimeout> | undefined;
+    if (!options.expectsTransientSubscription && options.legacyFallbackMs !== undefined) {
+      legacyFallback = this.setTimeoutFn(() => {
+        legacyFallback = undefined;
+        if (this.outputs.has(socket) && this.outputSubscriptions.get(socket) === undefined) {
+          this.replaySessionAuthority(socket);
+          this.syncNow();
+        }
+      }, options.legacyFallbackMs);
+    }
+    let removed = false;
+    const remove = () => {
+      if (removed) return;
+      removed = true;
+      this.outputs.delete(socket);
+      this.outputSubscriptions.delete(socket);
+      this.outputEnvelopeVersions.delete(socket);
+      this.outputDiagnostics.delete(socket);
+      this.sessionAuthorityReplayedOutputs.delete(socket);
+      const pendingFlush = this.pendingAiSessionAuthorityFlush.get(socket);
+      if (pendingFlush) this.clearTimeoutFn(pendingFlush);
+      this.pendingAiSessionAuthorityFlush.delete(socket);
+      this.pendingAiSessionAuthorityByOutput.delete(socket);
+      this.refreshEventTransportRecovery();
+      if (legacyFallback) clearTimeout(legacyFallback);
+      this.syncNow();
+    };
+    socket.on("close", remove);
+    socket.on("error", remove);
     for (const instance of this.state.listInstances()) {
       const snapshot = tryInstanceLifecycleSnapshot(instance);
       if (!snapshot) {
@@ -118,10 +224,25 @@ export class NodeAgentInstanceEventForwarder {
         this.sendForwarded(socket, this.createEvent(ImagePullTerminalEventType.Finished, terminal.finished, { instanceId }));
       }
     }
+    if (options.expectsTransientSubscription || options.legacyFallbackMs === undefined) {
+      this.replaySessionAuthority(socket);
+      this.syncNow();
+    }
+    return remove;
+  }
+
+  setOutputSubscription(socket: WebSocket, input: unknown, eventEnvelopeVersion?: unknown) {
+    if (!this.outputs.has(socket)) return false;
+    const parsed = AiSessionTransientSubscriptionSchema.safeParse(input);
+    if (!parsed.success) return false;
+    this.outputSubscriptions.set(socket, parsed.data);
+    this.outputEnvelopeVersions.set(socket, eventEnvelopeVersion === COMPACT_EVENT_ENVELOPE_VERSION ? COMPACT_EVENT_ENVELOPE_VERSION : 1);
+    // Receiving the current subscription cancels the compatibility hold-open
+    // and is the authority to establish controlled-instance inputs.
+    this.replaySessionAuthority(socket);
     this.syncNow();
-    return () => {
-      this.outputs.delete(socket);
-    };
+    for (const [instanceId, instanceSocket] of this.sockets) this.sendInstanceSubscription(instanceId, instanceSocket);
+    return true;
   }
 
   publish(type: string, payload: unknown, scope: Record<string, unknown> = {}) {
@@ -178,8 +299,188 @@ export class NodeAgentInstanceEventForwarder {
   }
 
   private sendForwarded(output: WebSocket, event: EventEnvelope) {
-    const encoded = JSON.stringify({ type: "node-agent.event.forwarded", event });
-    if (output.readyState === WebSocket.OPEN) output.send(encoded);
+    const delta = event.type === AiSessionEventType.MessageDelta
+      ? AiSessionMessageDeltaEventSchema.safeParse(event.payload)
+      : undefined;
+    const wireEvent = this.outputEnvelopeVersions.get(output) === COMPACT_EVENT_ENVELOPE_VERSION
+      ? projectEventEnvelope(event, COMPACT_EVENT_ENVELOPE_VERSION, {
+          ...(delta?.success ? { payload: compactAiSessionMessageDeltaEvent(delta.data) } : {}),
+        })
+      : event;
+    const encoded = JSON.stringify({ type: "node-agent.event.forwarded", event: wireEvent });
+    this.sendOutput(output, encoded, event);
+  }
+
+  private sendOutput(output: WebSocket, encoded: string, event?: ForwardedInstanceEvent) {
+    const encodedBytes = Buffer.byteLength(encoded, "utf8");
+    const diagnosticTopic = event?.topic === AppSessionEventTopic
+      ? "app-session"
+      : event?.topic === AiSessionEventTopic
+        ? "ai-session"
+        : undefined;
+    const eventDiagnostic = diagnosticTopic
+      ? {
+          ...this.outputDiagnostics.get(output),
+          instanceId: event.scope?.instanceId,
+          eventType: event.type,
+          ...eventPayloadMeta(event.payload),
+        }
+      : undefined;
+    if (output.readyState !== WebSocket.OPEN) {
+      if (eventDiagnostic) this.logger?.warn?.({ ...eventDiagnostic, readyState: output.readyState, outcome: "not-open" }, `${diagnosticTopic}.event.output.rejected`);
+      return false;
+    }
+    if (event && this.shouldCoalesceAiSessionAuthority(output, event) && this.deferAiSessionAuthority(output, event)) {
+      return true;
+    }
+    if (event && isAiSessionAuthorityEvent(event) && encodedBytes > AI_SESSION_AUTHORITY_MAX_EVENT_BYTES) {
+      if (event.type !== AiSessionEventType.Snapshot && this.deferAiSessionAuthority(output, event)) return true;
+      this.observeEventTransportCongestion(output, false, encodedBytes);
+      if (eventDiagnostic) this.logger?.warn?.({
+        ...eventDiagnostic,
+        bufferedAmount: output.bufferedAmount,
+        bytes: encodedBytes,
+        maxBytes: AI_SESSION_AUTHORITY_MAX_EVENT_BYTES,
+        outcome: "payload-too-large",
+      }, `${diagnosticTopic}.event.output.rejected`);
+      try { output.close(1009, "AI Session authority event exceeds the transport limit."); } catch { /* Close is best-effort after rejecting the frame. */ }
+      return false;
+    }
+    if (output.bufferedAmount + encodedBytes > MAX_EVENT_OUTPUT_BUFFERED_BYTES) {
+      this.observeEventTransportCongestion(output, false);
+      if (eventDiagnostic) this.logger?.warn?.({ ...eventDiagnostic, bufferedAmount: output.bufferedAmount, outcome: "backpressure" }, `${diagnosticTopic}.event.output.rejected`);
+      try { output.close(1013, "Event consumer is too slow."); } catch { /* Close is best-effort after rejecting the frame. */ }
+      return false;
+    }
+    try {
+      output.send(encoded);
+      if (eventDiagnostic) this.logger?.info?.({ ...eventDiagnostic, bufferedAmount: output.bufferedAmount, bytes: encodedBytes, outcome: "queued" }, `${diagnosticTopic}.event.output.queued`);
+      return true;
+    } catch (error) {
+      if (eventDiagnostic) this.logger?.warn?.({ ...eventDiagnostic, error: error instanceof Error ? error.message : String(error), outcome: "send-failed" }, `${diagnosticTopic}.event.output.rejected`);
+      try { output.close(1011, "Event delivery failed."); } catch { /* Close is best-effort after rejecting the frame. */ }
+      return false;
+    }
+  }
+
+  private shouldCoalesceAiSessionAuthority(output: WebSocket, event: ForwardedInstanceEvent) {
+    if (!isAiSessionAuthorityEvent(event)) return false;
+    const instanceId = event.scope?.instanceId;
+    if (!instanceId) return false;
+    if (this.pendingAiSessionAuthorityByOutput.get(output)?.has(instanceId)) return true;
+    // Compatibility for v0.0.23: older controlled instances publish a full
+    // snapshot for every registry mutation. Once an output is actually slow,
+    // collapse both old snapshots and current patches into the latest recovery
+    // snapshot. Without backpressure every transition remains observable.
+    return output.bufferedAmount >= AI_SESSION_AUTHORITY_BACKPRESSURE_BYTES;
+  }
+
+  private deferAiSessionAuthority(output: WebSocket, event: ForwardedInstanceEvent) {
+    const instanceId = event.scope?.instanceId;
+    const projection = instanceId ? this.aiSessionProjectionByInstance.get(instanceId) : undefined;
+    if (!instanceId || !projection) return false;
+    const payload = authoritySnapshotPayload(event, projection);
+    if (!payload) return false;
+    const pending = this.pendingAiSessionAuthorityByOutput.get(output) || new Map<string, ForwardedInstanceEvent>();
+    pending.set(instanceId, {
+      ...event,
+      type: AiSessionEventType.Snapshot,
+      topic: AiSessionEventTopic,
+      payload,
+    });
+    this.pendingAiSessionAuthorityByOutput.set(output, pending);
+    this.observeEventTransportCongestion(output, true);
+    this.logger?.info?.({
+      ...this.outputDiagnostics.get(output),
+      instanceId,
+      eventType: event.type,
+      ...eventPayloadMeta(payload),
+      bufferedAmount: output.bufferedAmount,
+      outcome: "coalesced-latest",
+    }, "ai-session.event.output.coalesced");
+    this.scheduleAiSessionAuthorityFlush(output);
+    return true;
+  }
+
+  private scheduleAiSessionAuthorityFlush(output: WebSocket) {
+    if (this.pendingAiSessionAuthorityFlush.has(output)) return;
+    const timeout = this.setTimeoutFn(() => {
+      this.pendingAiSessionAuthorityFlush.delete(output);
+      this.flushAiSessionAuthority(output);
+    }, AI_SESSION_AUTHORITY_FLUSH_RETRY_MS);
+    timeout.unref?.();
+    this.pendingAiSessionAuthorityFlush.set(output, timeout);
+  }
+
+  private flushAiSessionAuthority(output: WebSocket) {
+    const pending = this.pendingAiSessionAuthorityByOutput.get(output);
+    if (!pending?.size) {
+      this.pendingAiSessionAuthorityByOutput.delete(output);
+      return;
+    }
+    if (output.readyState !== WebSocket.OPEN) {
+      this.pendingAiSessionAuthorityByOutput.delete(output);
+      return;
+    }
+    const [instanceId, event] = pending.entries().next().value as [string, ForwardedInstanceEvent];
+    if (output.bufferedAmount >= AI_SESSION_AUTHORITY_BACKPRESSURE_BYTES) {
+      this.scheduleAiSessionAuthorityFlush(output);
+      return;
+    }
+    pending.delete(instanceId);
+    if (!pending.size) this.pendingAiSessionAuthorityByOutput.delete(output);
+    this.sendForwarded(output, event);
+    this.refreshEventTransportRecovery();
+    if (pending.size) this.scheduleAiSessionAuthorityFlush(output);
+  }
+
+  private observeEventTransportCongestion(output: WebSocket, coalesced: boolean, payloadBytes = 0) {
+    const observedAt = new Date().toISOString();
+    const bufferedBytes = Math.max(0, Math.floor(output.bufferedAmount));
+    const current = this.eventTransportCongestion;
+    this.eventTransportCongestion = {
+      congestedSince: current?.recoveredAt ? observedAt : current?.congestedSince || observedAt,
+      lastCongestedAt: observedAt,
+      peakBufferedBytes: Math.max(current?.recoveredAt ? 0 : current?.peakBufferedBytes || 0, bufferedBytes),
+      coalescedEvents: (current?.recoveredAt ? 0 : current?.coalescedEvents || 0) + (coalesced ? 1 : 0),
+      oversizedEvents: (current?.recoveredAt ? 0 : current?.oversizedEvents || 0) + (payloadBytes > 0 ? 1 : 0),
+      peakEventBytes: Math.max(current?.recoveredAt ? 0 : current?.peakEventBytes || 0, payloadBytes),
+    };
+  }
+
+  private eventTransportIsCongested() {
+    if ([...this.pendingAiSessionAuthorityByOutput.values()].some((pending) => pending.size > 0)) return true;
+    return [...this.outputs].some((output) => output.readyState === WebSocket.OPEN
+      && output.bufferedAmount >= AI_SESSION_AUTHORITY_BACKPRESSURE_BYTES);
+  }
+
+  private refreshEventTransportRecovery() {
+    const incident = this.eventTransportCongestion;
+    if (!incident || incident.recoveredAt || this.eventTransportIsCongested()) return;
+    incident.recoveredAt = new Date().toISOString();
+  }
+
+  eventTransportHealth() {
+    this.refreshEventTransportRecovery();
+    const activeOutputs = [...this.outputs].filter((output) => output.readyState === WebSocket.OPEN);
+    const bufferedBytes = activeOutputs.reduce((maximum, output) => Math.max(maximum, Math.max(0, Math.floor(output.bufferedAmount))), 0);
+    const congested = this.eventTransportIsCongested();
+    let incident = this.eventTransportCongestion;
+    if (incident?.recoveredAt && Date.now() - Date.parse(incident.recoveredAt) > EVENT_TRANSPORT_RECOVERY_NOTICE_MS) {
+      this.eventTransportCongestion = undefined;
+      incident = undefined;
+    }
+    return {
+      status: congested ? "congested" as const : incident ? "recovering" as const : "healthy" as const,
+      activeOutputs: activeOutputs.length,
+      bufferedBytes,
+      peakBufferedBytes: incident?.peakBufferedBytes || bufferedBytes,
+      coalescedEvents: incident?.coalescedEvents || 0,
+      oversizedEvents: incident?.oversizedEvents || 0,
+      peakEventBytes: incident?.peakEventBytes || 0,
+      ...(congested && incident ? { congestedSince: incident.congestedSince } : {}),
+      ...(incident ? { lastCongestedAt: incident.lastCongestedAt } : {}),
+    };
   }
 
   syncNow() {
@@ -187,11 +488,36 @@ export class NodeAgentInstanceEventForwarder {
   }
 
   diagnostics() {
-    return { reconnectAttempts: this.reconnectAttempts, safetyReconciliations: this.safetyReconciliations, activeConnections: this.sockets.size, pendingRetries: [...this.retries.values()].filter((entry) => entry.timer.pending).length, safetyIntervalMs: this.safetyIntervalMs };
+    const subscriptions = [...this.outputSubscriptions.values()];
+    return {
+      reconnectAttempts: this.reconnectAttempts,
+      safetyReconciliations: this.safetyReconciliations,
+      activeConnections: this.sockets.size,
+      pendingRetries: [...this.retries.values()].filter((entry) => entry.timer.pending).length,
+      safetyIntervalMs: this.safetyIntervalMs,
+      eventTransport: this.eventTransportHealth(),
+      transientDemand: {
+        legacyOutputs: subscriptions.filter((entry) => entry === undefined).length,
+        scopedOutputs: subscriptions.filter((entry) => entry !== undefined).length,
+        messageDeltaAllInstances: subscriptions.some((entry) => entry?.messageDeltas.allInstances),
+        messageDeltaInstanceCount: new Set(subscriptions.flatMap((entry) => entry?.messageDeltas.instanceIds || [])).size,
+        timelineAllSessions: subscriptions.some((entry) => entry?.timelineAllSessions),
+        timelineSessionCount: new Set(subscriptions.flatMap((entry) => entry?.timelineSessions.map((session) => JSON.stringify([session.instanceId, session.sessionId])) || [])).size,
+      },
+    };
   }
 
   private sync() {
     const instanceIds = new Set(this.state.listInstances().map((instance) => instance.id));
+    for (const projectionInstanceId of this.aiSessionProjectionByInstance.keys()) {
+      if (!instanceIds.has(projectionInstanceId)) this.aiSessionProjectionByInstance.delete(projectionInstanceId);
+    }
+    for (const projectionInstanceId of this.appSessionProjectionByInstance.keys()) {
+      if (!instanceIds.has(projectionInstanceId)) this.appSessionProjectionByInstance.delete(projectionInstanceId);
+    }
+    for (const helloInstanceId of this.sessionStreamsHelloByInstance.keys()) {
+      if (!instanceIds.has(helloInstanceId)) this.sessionStreamsHelloByInstance.delete(helloInstanceId);
+    }
     for (const instanceId of this.imagePullTerminalByInstance.keys()) {
       if (!instanceIds.has(instanceId)) this.imagePullTerminalByInstance.delete(instanceId);
     }
@@ -251,10 +577,9 @@ export class NodeAgentInstanceEventForwarder {
     this.socketUrls.set(instanceId, url);
     socket.on("open", () => {
       const retry = this.retries.get(instanceId);
-      retry?.timer.reset();
       this.retries.set(instanceId, { timer: retry?.timer || new EventConnectionRetryTimer(), url });
       if (socket.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify({ v: 1, type: "subscribe", topics: [AiSessionEventTopic, "app.sessions", "apps", "instances"] }));
+        this.sendInstanceSubscription(instanceId, socket);
         this.logger?.info?.({ instanceId, url }, "ai-session.event.forward.connect");
         this.logger?.info?.({ instanceId, url }, "app-session.event.forward.connect");
       }
@@ -271,19 +596,20 @@ export class NodeAgentInstanceEventForwarder {
           socket.close(1002, "Incompatible session stream handshake.");
           return;
         }
+        // Transport open is not recovery: a peer can repeatedly accept the
+        // socket and then reject or omit the authoritative stream handshake.
+        // Reset only after the current protocol handshake has succeeded.
+        this.retries.get(instanceId)?.timer.reset();
+        this.sessionStreamsHelloByInstance.set(instanceId, hello.data);
         const encoded = JSON.stringify({ type: "node-agent.streams.hello", instanceId, payload: hello.data });
-        for (const output of this.outputs) if (output.readyState === WebSocket.OPEN) output.send(encoded);
+        for (const output of this.outputs) this.sendOutput(output, encoded);
         return;
       }
       this.recordAiSessionEvent(instanceId, event);
       this.recordAppSessionEvent(instanceId, event);
-      const encoded = JSON.stringify({
-        type: "node-agent.event.forwarded",
-        event,
-      });
       for (const output of this.outputs) {
-        if (output.readyState === WebSocket.OPEN) {
-          output.send(encoded);
+        if (this.outputAccepts(output, event)) {
+          this.sendForwarded(output, event);
         }
       }
     });
@@ -301,6 +627,49 @@ export class NodeAgentInstanceEventForwarder {
     });
   }
 
+  private sendInstanceSubscription(instanceId: string, socket: WebSocket) {
+    if (socket.readyState !== WebSocket.OPEN) return;
+    const subscriptions = [...this.outputs].map((output) => this.outputSubscriptions.get(output));
+    const legacyAll = subscriptions.some((entry) => entry === undefined);
+    if (legacyAll) {
+      socket.send(JSON.stringify({ v: 1, type: "subscribe", eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION, topics: [AiSessionEventTopic, "app.sessions", "apps", "instances"] }));
+      return;
+    }
+    const messageDeltas = subscriptions.some((entry) => entry!.messageDeltas.allInstances || entry!.messageDeltas.instanceIds.includes(instanceId));
+    const timelineAllSessions = subscriptions.some((entry) => entry!.timelineAllSessions);
+    const timelineSessionIds = [...new Set(subscriptions.flatMap((entry) => entry!.timelineSessions
+      .filter((session) => session.instanceId === instanceId)
+      .map((session) => session.sessionId)))];
+    const replaySince = earliestReplaySince(subscriptions.map((entry) => entry!.replaySince));
+    socket.send(JSON.stringify({
+      v: 1,
+      type: "subscribe",
+      eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION,
+      topics: [
+        AiSessionEventType.Snapshot,
+        AiSessionEventType.Patch,
+        AiSessionEventType.Removed,
+        ...(messageDeltas ? [AiSessionEventType.MessageDelta] : []),
+        ...(timelineAllSessions || timelineSessionIds.length ? [AiSessionEventType.TimelineItem] : []),
+        "app.sessions",
+        "apps",
+        "instances",
+      ],
+      aiSessionTransient: {
+        ...(replaySince ? { replaySince } : {}),
+        messageDeltas: { allInstances: messageDeltas, instanceIds: [] },
+        timelineAllSessions,
+        timelineSessions: timelineSessionIds.map((sessionId) => ({ instanceId, sessionId })),
+      },
+    }));
+  }
+
+  private outputAccepts(output: WebSocket, event: ForwardedInstanceEvent) {
+    const subscription = this.outputSubscriptions.get(output);
+    if (!subscription) return true;
+    return aiSessionTransientSubscriptionAccepts(subscription, event);
+  }
+
   private scheduleReconnect(instanceId: string) {
     const instance = this.state.listInstances().find((candidate) => candidate.id === instanceId);
     const url = instance && instanceEventUrl(instance);
@@ -310,7 +679,7 @@ export class NodeAgentInstanceEventForwarder {
     current.url = url;
     const scheduled = current.timer.schedule(() => {
       if (!this.sockets.has(instanceId)) this.connect(instanceId, url);
-    });
+    }, { setTimeoutFn: this.setTimeoutFn });
     if (scheduled) {
       this.reconnectAttempts += 1;
       this.logger?.info?.({ instanceId, url, attempt: scheduled.attempt, delay: scheduled.delay, reconnectAttempts: this.reconnectAttempts }, "session-stream.connection.reconnect-scheduled");
@@ -322,8 +691,15 @@ export class NodeAgentInstanceEventForwarder {
     if (event.topic !== AiSessionEventTopic) {
       return;
     }
-    if (event.type === AiSessionEventType.MessageDelta) {
+    if (event.type === AiSessionEventType.MessageDelta || event.type === AiSessionEventType.TimelineItem) {
       return;
+    }
+    const authorityEvent = parseAiSessionAuthorityEvent(event);
+    if (authorityEvent) {
+      const applied = applyAiSessionStreamEvent(this.aiSessionProjectionByInstance.get(instanceId), authorityEvent);
+      if (applied.kind === "applied" || applied.kind === "duplicate" || applied.kind === "stale") {
+        this.aiSessionProjectionByInstance.set(instanceId, applied.projection);
+      }
     }
     const meta = eventPayloadMeta(event.payload);
     const previous = this.lastAiSessionEventByInstance.get(instanceId);
@@ -353,6 +729,13 @@ export class NodeAgentInstanceEventForwarder {
     if (event.topic !== AppSessionEventTopic) {
       return;
     }
+    const authorityEvent = parseAppSessionAuthorityEvent(event);
+    if (authorityEvent) {
+      const applied = applyAppSessionStreamEvent(this.appSessionProjectionByInstance.get(instanceId), authorityEvent);
+      if (applied.kind === "applied" || applied.kind === "duplicate" || applied.kind === "stale") {
+        this.appSessionProjectionByInstance.set(instanceId, applied.projection);
+      }
+    }
     const meta = eventPayloadMeta(event.payload);
     const previous = this.lastAppSessionEventByInstance.get(instanceId);
     if (previous?.streamId === meta.streamId && previous.revision !== undefined && meta.revision !== undefined && meta.revision > previous.revision + 1) {
@@ -375,6 +758,58 @@ export class NodeAgentInstanceEventForwarder {
       streamId: meta.streamId,
       revision: meta.revision,
     }, "app-session.event.forward.message");
+  }
+
+  private replaySessionAuthority(output: WebSocket) {
+    if (this.sessionAuthorityReplayedOutputs.has(output) || output.readyState !== WebSocket.OPEN) return;
+    this.sessionAuthorityReplayedOutputs.add(output);
+    for (const [instanceId, hello] of this.sessionStreamsHelloByInstance) {
+      const streams = hello.streams.map((descriptor) => {
+        const projection = descriptor.topic === AiSessionEventTopic
+          ? this.aiSessionProjectionByInstance.get(instanceId)
+          : this.appSessionProjectionByInstance.get(instanceId);
+        if (!projection) return descriptor;
+        if (projection.streamId !== descriptor.streamId) {
+          return {
+            ...descriptor,
+            streamId: projection.streamId,
+            latestRevision: projection.revision,
+            earliestRetainedRevision: projection.revision,
+          };
+        }
+        return {
+          ...descriptor,
+          latestRevision: Math.max(descriptor.latestRevision, projection.revision),
+        };
+      });
+      this.sendOutput(output, JSON.stringify({ type: "node-agent.streams.hello", instanceId, payload: { ...hello, streams } }));
+    }
+    for (const [instanceId, projection] of this.aiSessionProjectionByInstance) {
+      this.sendForwarded(output, this.createEvent(AiSessionEventType.Snapshot, {
+        meta: {
+          streamId: projection.streamId,
+          instanceId,
+          revision: projection.revision,
+          traceId: `ais_replay_${Date.now().toString(36)}`,
+          generatedAt: projection.lastEventAt,
+          reason: "startup",
+        },
+        snapshot: projection.snapshot,
+      }, { instanceId }));
+    }
+    for (const [instanceId, projection] of this.appSessionProjectionByInstance) {
+      this.sendForwarded(output, this.createEvent(AppSessionEventType.Snapshot, {
+        meta: {
+          streamId: projection.streamId,
+          instanceId,
+          revision: projection.revision,
+          traceId: `aps_replay_${Date.now().toString(36)}`,
+          generatedAt: projection.lastEventAt,
+          reason: "startup",
+        },
+        snapshot: projection.snapshot,
+      }, { instanceId }));
+    }
   }
 }
 
@@ -415,6 +850,55 @@ function eventPayloadMeta(payload: unknown) {
   };
 }
 
+function parseAiSessionAuthorityEvent(event: ForwardedInstanceEvent): AiSessionStreamEvent | undefined {
+  const schema = event.type === AiSessionEventType.Snapshot
+    ? AiSessionSnapshotEventSchema
+    : event.type === AiSessionEventType.Patch
+      ? AiSessionPatchEventSchema
+      : event.type === AiSessionEventType.Removed
+        ? AiSessionRemovedEventSchema
+        : undefined;
+  if (!schema) return undefined;
+  const parsed = safeParseResponse(schema, event.payload);
+  if (!parsed.success) return undefined;
+  return { type: event.type, payload: parsed.data } as AiSessionStreamEvent;
+}
+
+function parseAppSessionAuthorityEvent(event: ForwardedInstanceEvent): AppSessionStreamEvent | undefined {
+  const schema = event.type === AppSessionEventType.Snapshot
+    ? AppSessionSnapshotEventSchema
+    : event.type === AppSessionEventType.Patch
+      ? AppSessionPatchEventSchema
+      : event.type === AppSessionEventType.Removed
+        ? AppSessionRemovedEventSchema
+        : undefined;
+  if (!schema) return undefined;
+  const parsed = safeParseResponse(schema, event.payload);
+  if (!parsed.success) return undefined;
+  return { type: event.type, payload: parsed.data } as AppSessionStreamEvent;
+}
+
+function isAiSessionAuthorityEvent(event: ForwardedInstanceEvent) {
+  return event.topic === AiSessionEventTopic && (
+    event.type === AiSessionEventType.Snapshot
+    || event.type === AiSessionEventType.Patch
+    || event.type === AiSessionEventType.Removed
+  );
+}
+
+function authoritySnapshotPayload(event: ForwardedInstanceEvent, projection: AiSessionsState) {
+  const authorityEvent = parseAiSessionAuthorityEvent(event);
+  if (!authorityEvent) return undefined;
+  if (
+    authorityEvent.payload.meta.streamId !== projection.streamId
+    || authorityEvent.payload.meta.revision !== projection.revision
+  ) return undefined;
+  return AiSessionSnapshotEventSchema.parse({
+    meta: authorityEvent.payload.meta,
+    snapshot: projection.snapshot,
+  });
+}
+
 function instanceEventUrl(instance: ControlledInstance) {
   if (!controlledInstanceAcceptsTraffic(instance)) return undefined;
   const base = instance.target?.api || instance.target?.web;
@@ -423,6 +907,10 @@ function instanceEventUrl(instance: ControlledInstance) {
   }
   try {
     const url = new URL("/api/events", base);
+    url.searchParams.set("aiSessionTransient", "1");
+    // Compatibility for v0.0.23: older controlled instances ignore this
+    // optional bootstrap request and continue emitting full authority events.
+    url.searchParams.set("aiSessionAuthoritySnapshot", "1");
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     return url.toString();
   } catch {
@@ -430,31 +918,20 @@ function instanceEventUrl(instance: ControlledInstance) {
   }
 }
 
+function earliestReplaySince(values: Array<string | undefined>) {
+  return values.filter((value): value is string => Boolean(value)).sort()[0];
+}
+
 function parseForwardedInstanceEvent(raw: unknown, instanceId: string): ForwardedInstanceEvent | undefined {
   try {
     const parsed = JSON.parse(String(raw));
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return undefined;
+    const event = normalizeEventEnvelope(parsed, { instanceId });
+    if (!event || event.type === "events.connected") return undefined;
+    if (event.type === AiSessionEventType.MessageDelta) {
+      const payload = normalizeAiSessionMessageDeltaEvent(event.payload, instanceId);
+      return { ...event, payload, scope: { ...event.scope, instanceId } };
     }
-    const record = parsed as Record<string, unknown>;
-    const type = typeof record.type === "string" ? record.type : "";
-    if (!type || type === "events.connected") {
-      return undefined;
-    }
-    const scope = record.scope && typeof record.scope === "object" && !Array.isArray(record.scope) ? record.scope as Record<string, unknown> : {};
-    return {
-      v: 1,
-      id: typeof record.id === "string" ? record.id : `evt_${Date.now().toString(36)}`,
-      seq: Number(record.seq) || 0,
-      type,
-      topic: typeof record.topic === "string" ? record.topic : eventTopic(type),
-      createdAt: typeof record.createdAt === "string" ? record.createdAt : new Date().toISOString(),
-      payload: "payload" in record ? record.payload : {},
-      scope: {
-        ...scope,
-        instanceId,
-      },
-    };
+    return { ...event, scope: { ...event.scope, instanceId } };
   } catch {
     return undefined;
   }

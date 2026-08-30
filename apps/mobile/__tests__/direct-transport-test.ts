@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { COMPACT_EVENT_ENVELOPE_VERSION } from '@task-handoff/protocol/events';
 
 import { DirectControlPlaneTransport } from '../src/control-plane/direct-transport';
 import { createDirectControlPlaneClient } from '../src/control-plane/client';
@@ -81,6 +82,46 @@ describe('DirectControlPlaneTransport', () => {
     });
   });
 
+  test('uses the authenticated XHR path for upload progress', async () => {
+    const requestHeaders = new Map<string, string>();
+    const xhr = {
+      abort: jest.fn(),
+      onabort: undefined as (() => void) | undefined,
+      onerror: undefined as (() => void) | undefined,
+      onload: undefined as (() => void) | undefined,
+      open: jest.fn(),
+      responseText: '',
+      setRequestHeader: jest.fn((name: string, value: string) => requestHeaders.set(name, value)),
+      status: 0,
+      upload: { onprogress: undefined as ((event: { lengthComputable: boolean; loaded: number; total: number }) => void) | undefined },
+      withCredentials: true,
+      send: jest.fn(function (this: any, body: XMLHttpRequestBodyInit | null) {
+        expect(body).toBeInstanceOf(ArrayBuffer);
+        this.upload.onprogress?.({ lengthComputable: true, loaded: 3, total: 4 });
+        this.status = 201;
+        this.responseText = JSON.stringify({ data: { ok: true } });
+        this.onload?.();
+      }),
+    };
+    const progress = jest.fn();
+    const transport = new DirectControlPlaneTransport(profile, secureStore(), {
+      probeImpl: async () => target,
+      xhrFactory: () => xhr as unknown as XMLHttpRequest,
+    });
+
+    const response = await transport.request(
+      '/api/upload',
+      z.object({ data: z.object({ ok: z.literal(true) }) }),
+      { method: 'POST', headers: { 'content-type': 'application/octet-stream' }, body: new ArrayBuffer(4) },
+      progress,
+    );
+
+    expect(response.data.ok).toBe(true);
+    expect(progress).toHaveBeenCalledWith(0.75);
+    expect(requestHeaders.get('authorization')).toBe('Bearer msess_test.secret');
+    expect(requestHeaders.get('content-type')).toBe('application/octet-stream');
+  });
+
   test('explicit foreground revalidation does not reuse an earlier identity probe', async () => {
     const probeImpl = jest.fn().mockResolvedValue(target);
     const transport = new DirectControlPlaneTransport(profile, secureStore(), { probeImpl });
@@ -123,12 +164,44 @@ describe('DirectControlPlaneTransport', () => {
     transport.connectEvents({ onOpen: jest.fn(), onEvent, onError: jest.fn(), onClose: jest.fn() });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(factory).toHaveBeenCalledWith('wss://control.example.com/api/events', { authorization: 'Bearer msess_test.secret' });
+    expect(factory).toHaveBeenCalledWith('wss://control.example.com/api/events?aiSessionTransient=1', { authorization: 'Bearer msess_test.secret' });
     listeners.get('open')?.({});
     expect(socket.send).toHaveBeenCalledWith(expect.stringContaining('"type":"subscribe"'));
+    expect(socket.send).toHaveBeenCalledWith(expect.stringContaining(`"eventEnvelopeVersion":"${COMPACT_EVENT_ENVELOPE_VERSION}"`));
     expect(socket.send).toHaveBeenCalledWith(expect.stringContaining('"node.state"'));
-    listeners.get('message')?.({ data: JSON.stringify({ v: 1, type: 'streams.hello', topic: 'system', payload: {} }) });
+    listeners.get('message')?.({ data: JSON.stringify({ v: COMPACT_EVENT_ENVELOPE_VERSION, id: 'event-1', type: 'streams.hello', createdAt: '2026-08-26T00:00:00.000Z', payload: {} }) });
     expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({ type: 'streams.hello' }));
+  });
+
+  test('rejects compact event envelopes that omit required wire fields', async () => {
+    const listeners = new Map<string, (event: { data?: unknown }) => void>();
+    const socket = {
+      readyState: 0,
+      addEventListener: jest.fn((type: string, listener: (event: { data?: unknown }) => void) => listeners.set(type, listener)),
+      close: jest.fn(),
+      send: jest.fn(),
+    };
+    const onEvent = jest.fn();
+    const onError = jest.fn();
+    const transport = new DirectControlPlaneTransport(profile, secureStore(), {
+      probeImpl: async () => target,
+      webSocketFactory: () => socket,
+    });
+    transport.connectEvents({ onOpen: jest.fn(), onEvent, onError, onClose: jest.fn() });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    listeners.get('message')?.({
+      data: JSON.stringify({
+        v: COMPACT_EVENT_ENVELOPE_VERSION,
+        id: 'event-invalid',
+        type: 'instance.updated',
+        createdAt: '2026-08-26T00:00:00.000Z',
+      }),
+    });
+
+    expect(onEvent).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledWith(expect.objectContaining({ code: 'DIRECT_EVENT_INVALID' }));
+    expect(socket.close).toHaveBeenCalledWith(1002, 'Invalid event envelope');
   });
 
   test('multiplexes event subscribers over one authenticated WebSocket', async () => {
@@ -146,19 +219,20 @@ describe('DirectControlPlaneTransport', () => {
       probeImpl: async () => target,
       webSocketFactory: factory,
     });
-    const first = transport.connectEvents({ topics: ['ai.sessions'], onOpen: jest.fn(), onEvent: firstEvent, onError: jest.fn(), onClose: jest.fn() });
+    const aiSessionTransient = { messageDeltas: { allInstances: false, instanceIds: [] }, timelineAllSessions: false, timelineSessions: [] };
+    const first = transport.connectEvents({ topics: ['ai.sessions'], aiSessionTransient, onOpen: jest.fn(), onEvent: firstEvent, onError: jest.fn(), onClose: jest.fn() });
     const second = transport.connectEvents({ topics: ['nodes'], onOpen: jest.fn(), onEvent: secondEvent, onError: jest.fn(), onClose: jest.fn() });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(factory).toHaveBeenCalledTimes(1);
     listeners.get('open')?.({});
-    expect(socket.send).toHaveBeenLastCalledWith(JSON.stringify({ v: 1, type: 'subscribe', topics: ['ai.sessions', 'nodes'] }));
-    listeners.get('message')?.({ data: JSON.stringify({ v: 1, type: 'streams.hello', topic: 'system', payload: {} }) });
+    expect(socket.send).toHaveBeenLastCalledWith(JSON.stringify({ v: 1, type: 'subscribe', eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION, topics: ['ai.sessions', 'nodes'], aiSessionTransient }));
+    listeners.get('message')?.({ data: JSON.stringify({ v: 1, id: 'event-2', seq: 2, type: 'streams.hello', topic: 'system', createdAt: '2026-08-26T00:00:01.000Z', payload: {} }) });
     expect(firstEvent).toHaveBeenCalledTimes(1);
     expect(secondEvent).toHaveBeenCalledTimes(1);
     first.close();
     expect(socket.close).not.toHaveBeenCalled();
-    expect(socket.send).toHaveBeenLastCalledWith(JSON.stringify({ v: 1, type: 'subscribe', topics: ['nodes'] }));
+    expect(socket.send).toHaveBeenLastCalledWith(JSON.stringify({ v: 1, type: 'subscribe', eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION, topics: ['nodes'] }));
     second.close();
     expect(socket.close).toHaveBeenCalledTimes(1);
   });
@@ -222,21 +296,24 @@ describe('DirectControlPlaneTransport', () => {
         scope: { nodeId: 'node-1' },
         event: {
           v: 1,
+          id: 'event-forwarded',
+          seq: 3,
           type: 'ai-session.message-delta',
           topic: 'ai.sessions',
+          createdAt: '2026-08-26T00:00:02.000Z',
           payload: { sessionId: 'session-1', messageId: 'message-1', delta: 'Hello' },
           scope: { instanceId: 'instance-1' },
         },
       }),
     });
 
-    expect(onEvent).toHaveBeenCalledWith({
+    expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({
       v: 1,
       type: 'ai-session.message-delta',
       topic: 'ai.sessions',
       payload: { sessionId: 'session-1', messageId: 'message-1', delta: 'Hello' },
       scope: { nodeId: 'node-1', instanceId: 'instance-1' },
-    });
+    }));
     expect(onError).not.toHaveBeenCalled();
     expect(socket.close).not.toHaveBeenCalled();
   });

@@ -1,8 +1,8 @@
 import { Readable, Transform } from "node:stream";
 import type { FastifyInstance } from "fastify";
 import WebSocket from "ws";
+import { bridgeWebSockets } from "@task-handoff/protocol/websocket-bridge";
 import { ProxyRequestSchema } from "../schemas.ts";
-import { websocketPayload } from "../transport/proxy-utils.ts";
 import {
   INSTANCE_PROXY_REQUEST_BODY_LIMIT,
   instanceProxyResponseLimit,
@@ -11,6 +11,7 @@ import {
   proxyWebSocketProtocols,
   readResponseBodyWithLimit,
 } from "../instance-proxy-codec.ts";
+import { appendServerTiming, serverTimingDuration, TRACE_ID_HEADER } from "../../shared/http/server-timing.ts";
 
 type Diagnostic = (data: Record<string, unknown>, message: string) => void;
 
@@ -32,7 +33,7 @@ type ProxyMetrics = ReturnType<typeof createInstanceProxyMetrics>;
 type Options = {
   fetchImpl: typeof fetch;
   metrics: ProxyMetrics;
-  instanceBase(id: string): string;
+  instanceBase(id: string): string | Promise<string>;
   syncModelEnvironment(id: string): Promise<unknown>;
   diagnostic: Diagnostic;
 };
@@ -47,24 +48,59 @@ function tooLarge(reply: { code(statusCode: number): { send(payload: unknown): u
   });
 }
 
+async function fetchInstanceUpstream(
+  fetchImpl: typeof fetch,
+  url: string,
+  init: RequestInit,
+  context: { instanceId: string; method: string; path: string; diagnostic: Diagnostic },
+) {
+  try {
+    return await fetchImpl(url, init);
+  } catch (error) {
+    if (init.signal?.aborted) throw error;
+    context.diagnostic({
+      instanceId: context.instanceId,
+      action: "proxy.upstream.failed",
+      method: context.method,
+      path: context.path,
+      error: error instanceof Error ? error.message : String(error),
+    }, "node instance proxy upstream unavailable");
+    throw Object.assign(new Error(`Instance ${context.instanceId} web endpoint is not reachable.`), {
+      statusCode: 502,
+      code: "INSTANCE_PROXY_UPSTREAM_UNREACHABLE",
+      retryable: true,
+      cause: error,
+    });
+  }
+}
+
 export function registerInstanceProxyRoutes(app: FastifyInstance, options: Options) {
   const { fetchImpl, metrics, diagnostic } = options;
 
   app.post("/api/node-agent/instances/:id/proxy", async (request, reply) => {
+    const startedAt = performance.now();
     const id = (request.params as { id: string }).id;
     const parsed = ProxyRequestSchema.parse(request.body);
-    const instanceBase = options.instanceBase(id);
+    const instanceBase = await options.instanceBase(id);
     const proxyPath = normalizedPath(parsed.path);
     if (parsed.method === "POST" && proxyPath === "/api/apps/sessions") await options.syncModelEnvironment(id);
     diagnostic({ instanceId: id, action: "proxy", method: parsed.method, path: proxyPath, instanceBase }, "node instance proxy requested");
-    const response = await fetchImpl(`${instanceBase}${proxyPath}`, {
+    const response = await fetchInstanceUpstream(fetchImpl, `${instanceBase}${proxyPath}`, {
       method: parsed.method,
       headers: { ...parsed.headers },
       body: proxyRequestBody(parsed),
-    });
+    }, { instanceId: id, method: parsed.method, path: proxyPath, diagnostic });
     const contentType = response.headers.get("content-type") || "application/octet-stream";
     const text = await response.text();
-    diagnostic({ instanceId: id, action: "proxy", method: parsed.method, path: proxyPath, statusCode: response.status, contentType }, "node instance proxy completed");
+    const durationMs = performance.now() - startedAt;
+    const traceId = response.headers.get(TRACE_ID_HEADER) || parsed.headers[TRACE_ID_HEADER];
+    const serverTiming = appendServerTiming(
+      response.headers.get("server-timing"),
+      serverTimingDuration("node_proxy", durationMs),
+    );
+    reply.header("server-timing", serverTiming);
+    if (traceId) reply.header(TRACE_ID_HEADER, traceId);
+    diagnostic({ instanceId: id, action: "proxy", method: parsed.method, path: proxyPath, statusCode: response.status, contentType, durationMs, traceId }, "node instance proxy completed");
     reply.code(response.status).type(contentType).send(text);
   });
 
@@ -93,15 +129,15 @@ export function registerInstanceProxyRoutes(app: FastifyInstance, options: Optio
     try {
       const id = (request.params as { id: string }).id;
       const parsed = ProxyRequestSchema.parse(request.body);
-      const instanceBase = options.instanceBase(id);
+      const instanceBase = await options.instanceBase(id);
       const proxyPath = normalizedPath(parsed.path);
       diagnostic({ instanceId: id, action: "proxy.stream", method: parsed.method, path: proxyPath, instanceBase }, "node instance streaming proxy requested");
-      const response = await fetchImpl(`${instanceBase}${proxyPath}`, {
+      const response = await fetchInstanceUpstream(fetchImpl, `${instanceBase}${proxyPath}`, {
         method: parsed.method,
         headers: { ...parsed.headers },
         body: proxyRequestBody(parsed),
         signal: controller.signal,
-      });
+      }, { instanceId: id, method: parsed.method, path: proxyPath, diagnostic });
       const declaredLength = Number(response.headers.get("content-length"));
       if (Number.isFinite(declaredLength) && declaredLength > metrics.maxResponseBytes) {
         metrics.limitRejected += 1;
@@ -142,14 +178,14 @@ export function registerInstanceProxyRoutes(app: FastifyInstance, options: Optio
   app.post("/api/node-agent/instances/:id/proxy/raw", { bodyLimit: INSTANCE_PROXY_REQUEST_BODY_LIMIT }, async (request, reply) => {
     const id = (request.params as { id: string }).id;
     const parsed = ProxyRequestSchema.parse(request.body);
-    const instanceBase = options.instanceBase(id);
+    const instanceBase = await options.instanceBase(id);
     const proxyPath = normalizedPath(parsed.path);
     diagnostic({ instanceId: id, action: "proxy.raw", method: parsed.method, path: proxyPath, instanceBase }, "node instance raw proxy requested");
-    const response = await fetchImpl(`${instanceBase}${proxyPath}`, {
+    const response = await fetchInstanceUpstream(fetchImpl, `${instanceBase}${proxyPath}`, {
       method: parsed.method,
       headers: { ...parsed.headers },
       body: proxyRequestBody(parsed),
-    });
+    }, { instanceId: id, method: parsed.method, path: proxyPath, diagnostic });
     const declaredLength = Number(response.headers.get("content-length"));
     if (Number.isFinite(declaredLength) && declaredLength > metrics.maxResponseBytes) {
       metrics.limitRejected += 1;
@@ -168,33 +204,35 @@ export function registerInstanceProxyRoutes(app: FastifyInstance, options: Optio
     return { data: { status: response.status, headers: proxyResponseHeaders(response.headers), bodyBase64: bytes.toString("base64") } };
   });
 
-  app.get("/api/node-agent/instances/:id/proxy/ws/*", { websocket: true }, (socket, request) => {
+  app.get("/api/node-agent/instances/:id/proxy/ws/*", { websocket: true }, async (socket, request) => {
     const id = (request.params as { id: string; "*": string }).id;
     const suffix = (request.params as { id: string; "*": string })["*"] || "";
     const queryIndex = request.url.indexOf("?");
     const query = queryIndex >= 0 ? request.url.slice(queryIndex) : "";
     let upstream: WebSocket | undefined;
     try {
-      const instanceBase = options.instanceBase(id);
+      const instanceBase = await options.instanceBase(id);
       const upstreamUrl = new URL(`/${suffix}${query}`, `${instanceBase}/`);
       upstreamUrl.protocol = upstreamUrl.protocol === "https:" ? "wss:" : "ws:";
       const protocols = proxyWebSocketProtocols(request.headers);
       diagnostic({ instanceId: id, action: "proxy.ws", path: `/${suffix}${query}`, upstreamUrl: upstreamUrl.toString(), protocols: protocols || [] }, "node instance websocket proxy opening");
-      upstream = protocols ? new WebSocket(upstreamUrl, protocols) : new WebSocket(upstreamUrl);
+      upstream = protocols
+        ? new WebSocket(upstreamUrl, protocols, { perMessageDeflate: false })
+        : new WebSocket(upstreamUrl, { perMessageDeflate: false });
       upstream.on("open", () => {
         diagnostic({ instanceId: id, action: "proxy.ws", path: `/${suffix}${query}` }, "node instance websocket proxy opened");
-        socket.on("message", (data, isBinary) => upstream?.readyState === WebSocket.OPEN && upstream.send(websocketPayload(data, isBinary)));
-        socket.on("close", () => upstream?.close());
-        socket.on("error", () => upstream?.close());
       });
-      upstream.on("message", (data, isBinary) => socket.readyState === WebSocket.OPEN && socket.send(isBinary ? data : data.toString()));
       upstream.on("close", () => {
         diagnostic({ instanceId: id, action: "proxy.ws", path: `/${suffix}${query}` }, "node instance websocket proxy closed");
-        socket.close();
       });
       upstream.on("error", (error) => {
         diagnostic({ instanceId: id, action: "proxy.ws", path: `/${suffix}${query}`, error: error instanceof Error ? error.message : String(error) }, "node instance websocket proxy failed");
-        socket.close(1011, "Instance websocket proxy failed.");
+      });
+      // The node-agent websocket can open before the controlled-instance
+      // websocket. Bridge immediately so early client frames (notably the
+      // browser-tunnel hello) are queued until the instance is ready.
+      bridgeWebSockets(socket as any, upstream, {
+        upstreamOpenTimeoutMs: 10_000,
       });
     } catch (error) {
       diagnostic({ instanceId: id, action: "proxy.ws", path: `/${suffix}${query}`, error: error instanceof Error ? error.message : String(error) }, "node instance websocket endpoint unavailable");

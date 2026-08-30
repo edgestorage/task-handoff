@@ -92,4 +92,27 @@ describe('direct Control Plane enrollment', () => {
     await expect(loginDirectControlPlane(target, { username: 'admin', password: 'secret' }, storage, { fetchImpl })).rejects.toMatchObject({ code: 'DIRECT_AUTH_REQUIRED' });
     expect(fetchImpl).not.toHaveBeenCalled();
   });
+
+  test('preserves the temporary-password requirement returned by the verified Control Plane', async () => {
+    const storage = { available: async () => true, get: async () => 'device-test', set: async () => undefined, remove: async () => undefined };
+    const target = {
+      origin: 'https://control.example.com',
+      identity: {
+        version: 1 as const, kind: 'control-plane' as const, controlPlaneId: 'cp',
+        publicKey: { algorithm: 'Ed25519' as const, encoding: 'base64url' as const, value: 'a'.repeat(43), fingerprint: `sha256:${'b'.repeat(43)}` },
+        capabilities: { authentication: 'required' as const, aiSessions: true, nodes: true, instanceBoard: true, triggers: true },
+        protocolVersion: '2026-08-05', issuedAt: '2026-08-05T00:00:00.000Z', expiresAt: '2026-08-05T00:05:00.000Z',
+      },
+    };
+    const fetchImpl = jest.fn().mockResolvedValue(new Response(JSON.stringify({
+      error: { code: 'AUTH_PASSWORD_CHANGE_REQUIRED', message: 'Change the temporary password first.' },
+    }), { status: 403, headers: { 'content-type': 'application/json' } }));
+
+    await expect(loginDirectControlPlane(target, { username: 'admin', password: 'temporary-password' }, storage, { fetchImpl })).rejects.toMatchObject({
+      code: 'AUTH_PASSWORD_CHANGE_REQUIRED',
+      message: 'Change the temporary password first.',
+      retryable: false,
+      status: 403,
+    });
+  });
 });

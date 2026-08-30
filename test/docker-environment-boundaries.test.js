@@ -7,7 +7,7 @@ const test = require("node:test");
 const { ControlledInstanceSchema } = require("../packages/protocol/src/control-plane.ts");
 const { InstancePrivateConfigStore } = require("../packages/control-plane/src/node-agent/instances/private-config-store.ts");
 const { nodeAgentStorePaths } = require("../packages/control-plane/src/node-agent/persistence/paths.ts");
-const { LocalDockerExecutor, assertDockerConfigHasNoSecrets, dockerRunArgs } = require("../packages/control-plane/src/node-agent/runtimes/docker.ts");
+const { LocalDockerExecutor, assertDockerConfigHasNoSecrets, dockerGitProvisionArgs, dockerRunArgs } = require("../packages/control-plane/src/node-agent/runtimes/docker.ts");
 
 const timestamp = "2026-08-04T00:00:00.000Z";
 
@@ -138,6 +138,7 @@ test("docker config uses a read-only private file and explicit managed mounts wi
   assert.ok(args.includes("type=volume,src=task-handoff-inst_one-runtime,dst=/opt/task-handoff/instance-runtime"));
   assert.ok(args.includes("/run/task-handoff/bootstrap/entrypoint.sh"));
   assert.ok(args.includes("--no-healthcheck"));
+  assert.ok(args.includes("/tmp:rw,nosuid,nodev,exec,mode=1777"));
   assert.ok(args.includes("/tmp/workspace:/workspace:rw"));
   assert.equal(args.some((value) => value.includes("registration-secret") || value.includes("model-secret")), false);
 
@@ -174,6 +175,200 @@ test("docker executor creates and labels authoritative volumes before docker run
   assert.equal(volumeCreateIndexes.length, 3);
   assert.ok(volumeCreateIndexes.every((index) => index < runIndex));
   assert.equal("managedVolumes" in result.runtime, false);
+});
+
+test("Docker Git provisioning uses a disposable helper before the final instance and keeps secrets out of argv", async () => {
+  const value = context({
+    type: "git-repository", repositoryId: "repo_one", url: "https://git.example.com/team/repo.git",
+    ref: { type: "branch", name: "main" }, auth: { type: "none" }, clone: { depth: 1, submodules: false, lfs: false, subdirectory: "packages/app" },
+  });
+  value.gitWorkspaceProvisioning = {
+    operationId: "gitop_one",
+    instanceId: value.instance.id,
+    remoteUrl: value.project.source.url,
+    ref: value.project.source.ref,
+    clone: value.project.source.clone,
+    credentials: [{
+      operationId: "gitcredop_one",
+      retention: "operation-only",
+      payload: {
+        credential: {
+          id: "gitcred_one", name: "Team token", kind: "https-token",
+          scope: { scheme: "https", host: "git.example.com", pathPrefix: "/team/" },
+          secretSet: true, status: "enabled", revision: 1, createdAt: timestamp, updatedAt: timestamp,
+        },
+        secret: { kind: "https-token", username: "git", token: "provision-secret" },
+      },
+    }],
+  };
+  let completed = 0;
+  value.completeGitWorkspaceProvisioning = () => { completed += 1; };
+  const calls = [];
+  let authDirectory;
+  const executor = new LocalDockerExecutor(async (_command, args) => {
+    calls.push(args);
+    if (args[0] === "inspect" && args.includes("{{json .}}")) throw Object.assign(new Error("No such container"), { details: { stderr: "No such container" } });
+    if (args[0] === "image" && args[1] === "inspect") return { stdout: JSON.stringify({ Id: `sha256:${"a".repeat(64)}`, RepoDigests: [] }), stderr: "" };
+    if (args[0] === "volume" && args[1] === "inspect") {
+      const name = args.at(-1);
+      const volume = volumeForInspection(value, name);
+      return { stdout: JSON.stringify({ Name: name, Labels: volume.labels }), stderr: "" };
+    }
+    if (args[0] === "run" && args.includes("/run/task-handoff/bootstrap/git-provision.sh")) {
+      const mount = args.find((item) => item.includes("dst=/run/task-handoff/git-auth"));
+      authDirectory = mount.match(/src=([^,]+)/)[1];
+      assert.equal(fs.readFileSync(path.join(authDirectory, "credential-0", "token"), "utf8"), "provision-secret");
+      assert.equal(args.some((item) => item.includes("provision-secret")), false);
+      return { stdout: "", stderr: "" };
+    }
+    if (args[0] === "run") return { stdout: "container-one", stderr: "" };
+    if (args[0] === "port") return { stdout: "127.0.0.1:18080", stderr: "" };
+    return { stdout: args.at(-1) || "", stderr: "" };
+  });
+  await executor.start(value);
+  const helperIndex = calls.findIndex((args) => args[0] === "run" && args.includes("/run/task-handoff/bootstrap/git-provision.sh"));
+  const staleCleanupIndex = calls.findIndex((args) => args[0] === "rm" && args[1] === "-f" && args[2].endsWith("-git-provision"));
+  const finalIndex = calls.findIndex((args, index) => index > helperIndex && args[0] === "run" && args.includes("task-handoff"));
+  assert.ok(staleCleanupIndex >= 0 && staleCleanupIndex < helperIndex && finalIndex > helperIndex);
+  assert.ok(calls[helperIndex].includes("task-handoff.role=git-provisioning"));
+  assert.ok(calls[helperIndex].includes(`task-handoff.instance-id=${value.instance.id}`));
+  assert.ok(calls[helperIndex].includes("TASK_HANDOFF_WORKSPACE_SUBDIRECTORY=packages/app"));
+  assert.equal(completed, 1);
+  assert.equal(fs.existsSync(authDirectory), false);
+  const finalArgs = calls[finalIndex];
+  assert.ok(finalArgs.includes("TASK_HANDOFF_SKIP_WORKSPACE_BOOTSTRAP=true"));
+  assert.ok(finalArgs.includes("TASK_HANDOFF_WORKSPACE_SUBDIRECTORY=packages/app"));
+  assert.equal(finalArgs.some((item) => item.includes("provision-secret")), false);
+  const dryRun = dockerGitProvisionArgs(value, "helper", "/private/auth");
+  assert.equal(dryRun.some((item) => item.includes("provision-secret")), false);
+  assert.ok(dryRun.includes(`TASK_HANDOFF_INSTANCE_ID=${value.instance.id}`));
+});
+
+test("Docker Git provisioning returns stable errors, preserves retry input, and cleans helper material", async () => {
+  const value = context({
+    type: "git-repository", repositoryId: "repo_one", url: "https://git.example.com/team/repo.git",
+    ref: { type: "branch", name: "main" }, auth: { type: "none" }, clone: { submodules: true, lfs: false, subdirectory: "" },
+  });
+  value.gitWorkspaceProvisioning = {
+    operationId: "gitop_retry", instanceId: value.instance.id, remoteUrl: value.project.source.url,
+    ref: value.project.source.ref, clone: value.project.source.clone,
+    credentials: [{
+      operationId: "gitcredop_retry", retention: "operation-only",
+      payload: {
+        credential: {
+          id: "gitcred_one", name: "Team token", kind: "https-token",
+          scope: { scheme: "https", host: "git.example.com", pathPrefix: "/team/" },
+          secretSet: true, status: "enabled", revision: 1, createdAt: timestamp, updatedAt: timestamp,
+        },
+        secret: { kind: "https-token", username: "git", token: "never-expose-this" },
+      },
+    }],
+  };
+  let completed = 0;
+  value.completeGitWorkspaceProvisioning = () => { completed += 1; };
+  const calls = [];
+  let authDirectory;
+  const executor = new LocalDockerExecutor(async (_command, args) => {
+    calls.push(args);
+    if (args[0] === "inspect" && args.includes("{{json .}}")) throw Object.assign(new Error("missing"), { details: { stderr: "No such container" } });
+    if (args[0] === "image" && args[1] === "inspect") return { stdout: JSON.stringify({ Id: `sha256:${"a".repeat(64)}`, RepoDigests: [] }), stderr: "" };
+    if (args[0] === "volume" && args[1] === "inspect") {
+      const volume = volumeForInspection(value, args.at(-1));
+      return { stdout: JSON.stringify({ Name: volume.name, Labels: volume.labels }), stderr: "" };
+    }
+    if (args[0] === "run" && args.includes("/run/task-handoff/bootstrap/git-provision.sh")) {
+      authDirectory = args.find((item) => item.includes("dst=/run/task-handoff/git-auth")).match(/src=([^,]+)/)[1];
+      throw Object.assign(new Error("raw output contains never-expose-this"), {
+        code: "RUNTIME_EXECUTOR_FAILED",
+        details: { stderr: "fatal: denied never-expose-this\nTASK_HANDOFF_GIT_PROVISIONING_ERROR=CREDENTIAL_MISSING" },
+      });
+    }
+    return { stdout: "", stderr: "" };
+  });
+
+  await assert.rejects(
+    () => executor.start(value),
+    (error) => error.code === "GIT_WORKSPACE_PROVISIONING_CREDENTIAL_MISSING"
+      && !error.message.includes("never-expose-this")
+      && error.cause === undefined,
+  );
+  assert.equal(completed, 0);
+  assert.equal(fs.existsSync(authDirectory), false);
+  assert.equal(calls.some((args) => args[0] === "run" && args.includes("task-handoff") && !args.includes("/run/task-handoff/bootstrap/git-provision.sh")), false);
+  assert.equal(calls.filter((args) => args[0] === "rm" && args[1] === "-f" && args[2].endsWith("-git-provision")).length, 2);
+});
+
+test("Docker Git provisioning maps timeout without retaining command output", async () => {
+  const value = context({
+    type: "git-repository", repositoryId: "repo_one", url: "https://git.example.com/repo.git",
+    ref: { type: "branch", name: "main" }, auth: { type: "none" }, clone: { submodules: false, lfs: false, subdirectory: "" },
+  });
+  value.gitWorkspaceProvisioning = {
+    operationId: "gitop_timeout", instanceId: value.instance.id, remoteUrl: value.project.source.url,
+    ref: value.project.source.ref, clone: value.project.source.clone,
+    credentials: [],
+  };
+  const executor = new LocalDockerExecutor(async (_command, args) => {
+    if (args[0] === "inspect" && args.includes("{{json .}}")) throw Object.assign(new Error("missing"), { details: { stderr: "No such container" } });
+    if (args[0] === "image" && args[1] === "inspect") return { stdout: JSON.stringify({ Id: `sha256:${"a".repeat(64)}`, RepoDigests: [] }), stderr: "" };
+    if (args[0] === "volume" && args[1] === "inspect") {
+      const volume = volumeForInspection(value, args.at(-1));
+      return { stdout: JSON.stringify({ Name: volume.name, Labels: volume.labels }), stderr: "" };
+    }
+    if (args[0] === "run") throw Object.assign(new Error("timeout secret output"), { code: "RUNTIME_COMMAND_TIMEOUT", details: { stderr: "timeout secret output" } });
+    return { stdout: "", stderr: "" };
+  });
+  await assert.rejects(
+    () => executor.start(value),
+    (error) => error.code === "GIT_WORKSPACE_PROVISIONING_TIMEOUT" && !error.message.includes("secret output") && error.cause === undefined,
+  );
+});
+
+test("Docker Git provisioning cancellation aborts the helper and still removes it", async () => {
+  const value = context({
+    type: "git-repository", repositoryId: "repo_one", url: "https://git.example.com/repo.git",
+    ref: { type: "branch", name: "main" }, auth: { type: "none" }, clone: { submodules: false, lfs: false, subdirectory: "" },
+  });
+  value.gitWorkspaceProvisioning = {
+    operationId: "gitop_cancel", instanceId: value.instance.id, remoteUrl: value.project.source.url,
+    ref: value.project.source.ref, clone: value.project.source.clone, credentials: [],
+  };
+  const controller = new AbortController();
+  value.signal = controller.signal;
+  const calls = [];
+  const executor = new LocalDockerExecutor(async (_command, args, options) => {
+    calls.push(args);
+    if (args[0] === "inspect" && args.includes("{{json .}}")) throw Object.assign(new Error("missing"), { details: { stderr: "No such container" } });
+    if (args[0] === "image" && args[1] === "inspect") return { stdout: JSON.stringify({ Id: `sha256:${"a".repeat(64)}`, RepoDigests: [] }), stderr: "" };
+    if (args[0] === "volume" && args[1] === "inspect") {
+      const volume = volumeForInspection(value, args.at(-1));
+      return { stdout: JSON.stringify({ Name: volume.name, Labels: volume.labels }), stderr: "" };
+    }
+    if (args[0] === "run" && args.includes("/run/task-handoff/bootstrap/git-provision.sh")) {
+      assert.equal(options.signal, controller.signal);
+      controller.abort();
+      throw Object.assign(new Error("aborted raw output"), { code: "RUNTIME_COMMAND_ABORTED", details: { stderr: "aborted raw output" } });
+    }
+    return { stdout: "", stderr: "" };
+  });
+  await assert.rejects(
+    () => executor.start(value),
+    (error) => error.code === "GIT_WORKSPACE_PROVISIONING_CANCELLED" && !error.message.includes("raw output"),
+  );
+  assert.equal(calls.filter((args) => args[0] === "rm" && args[1] === "-f" && args[2].endsWith("-git-provision")).length, 2);
+});
+
+test("Git provisioning script only replaces instance-owned staging and rejects unknown workspace data", () => {
+  const script = fs.readFileSync(path.resolve("docker/git-provision.sh"), "utf8");
+  assert.match(script, /TASK_HANDOFF_GIT_PROVISIONING_ERROR=%s/);
+  assert.match(script, /WORKSPACE_NOT_EMPTY/);
+  assert.match(script, /WORKSPACE_OWNERSHIP_MISMATCH/);
+  assert.match(script, /TASK_HANDOFF_INSTANCE_ID/);
+  assert.match(script, /checkout="\$\{staging\}\/checkout"/);
+  assert.match(script, /CLONE_FAILED/);
+  assert.match(script, /SUBDIRECTORY_NOT_FOUND/);
+  assert.match(script, /TASK_HANDOFF_GIT_COMMIT.*TASK_HANDOFF_GIT_DEPTH|TASK_HANDOFF_GIT_DEPTH.*TASK_HANDOFF_GIT_COMMIT/);
+  assert.doesNotMatch(script, /rm -rf -- "\$\{workspace\}"/);
 });
 
 test("docker executor refreshes the published endpoint when starting an existing container", async () => {

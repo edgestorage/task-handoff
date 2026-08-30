@@ -30,7 +30,14 @@ function writeUpdateChannel(file, channel) {
 
 function updateCapabilities({ packaged, platform, env = process.env }) {
   if (!packaged) {
-    return { check: false, download: false, install: false, reason: "Desktop updates are unavailable in development builds." };
+    return {
+      check: false,
+      download: false,
+      install: false,
+      reasonCode: "development-build",
+      // Compatibility for v0.0.21: older desktop UIs render the English reason directly.
+      reason: "Desktop updates are unavailable in development builds.",
+    };
   }
   if (platform === "darwin") {
     return { check: true, download: true, install: true };
@@ -40,6 +47,8 @@ function updateCapabilities({ packaged, platform, env = process.env }) {
       check: true,
       download: false,
       install: false,
+      reasonCode: "windows-signing-required",
+      // Compatibility for v0.0.21: older desktop UIs render the English reason directly.
       reason: "Windows in-app installation will be enabled after the installer is code signed.",
     };
   }
@@ -51,10 +60,19 @@ function updateCapabilities({ packaged, platform, env = process.env }) {
       check: false,
       download: false,
       install: false,
+      reasonCode: "appimage-required",
+      // Compatibility for v0.0.21: older desktop UIs render the English reason directly.
       reason: "In-app updates require the AppImage build. Download package updates from GitHub Releases.",
     };
   }
-  return { check: false, download: false, install: false, reason: `Desktop updates are unsupported on ${platform}.` };
+  return {
+    check: false,
+    download: false,
+    install: false,
+    reasonCode: "unsupported-platform",
+    // Compatibility for v0.0.21: older desktop UIs render the English reason directly.
+    reason: `Desktop updates are unsupported on ${platform}.`,
+  };
 }
 
 function releaseUrl(version) {

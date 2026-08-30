@@ -9,13 +9,13 @@ import {
   CreateProxyInviteResultSchema,
   ProxyBindingAuthenticationSchema,
   ProxyTargetSnapshotSchema,
-  type ProxyBinding,
   type ProxyTargetSnapshot,
   type PublicProxyBinding,
   type PublicProxyInvite,
 } from "@task-handoff/protocol/control-plane-proxy";
 import { createId } from "../../shared/persistence/store.ts";
-import { publicProxyBinding, publicProxyInvite, type ProxyInviteRecord } from "./records.ts";
+import { EphemeralTokenStore } from "../../shared/security/ephemeral-token-store.ts";
+import { publicProxyBinding, publicProxyInvite, type ProxyBindingRecord, type ProxyInviteRecord } from "./records.ts";
 import { ControlPlaneProxyStore } from "./store.ts";
 import type { ControlPlaneProxyTarget } from "./target-projector.ts";
 
@@ -48,6 +48,7 @@ export class ControlPlaneProxyServiceError extends Error {
 
 const hashSecret = (value: string) => crypto.createHash("sha256").update(value).digest("base64url");
 const defaultCreateToken = () => crypto.randomBytes(32).toString("base64url");
+const DEFAULT_PROXY_INVITE_TTL_MS = 10 * 60 * 1_000;
 
 function secretMatches(expectedHash: string, value: string) {
   const actualHash = hashSecret(value);
@@ -77,6 +78,7 @@ export class ControlPlaneProxyService {
   private readonly proxyOriginProvider: (() => string | undefined) | undefined;
   private readonly now: () => Date;
   private readonly createTokenValue: () => string;
+  private readonly invites = new EphemeralTokenStore<ProxyInviteRecord>();
 
   constructor(
     store: ControlPlaneProxyStore,
@@ -93,7 +95,6 @@ export class ControlPlaneProxyService {
 
   init() {
     this.store.init();
-    this.expireInvites();
   }
 
   createInvite(raw: unknown, createdBy: string) {
@@ -116,7 +117,7 @@ export class ControlPlaneProxyService {
       tokenHash: hashSecret(token),
       status: "active",
       createdBy,
-      expiresAt: new Date(this.now().getTime() + input.expiresInSeconds * 1_000).toISOString(),
+      expiresAt: new Date(this.now().getTime() + Math.min(input.expiresInSeconds * 1_000, DEFAULT_PROXY_INVITE_TTL_MS)).toISOString(),
       createdAt: timestamp,
       updatedAt: timestamp,
     } as ProxyInviteRecord;
@@ -126,7 +127,7 @@ export class ControlPlaneProxyService {
       proxyOrigin,
       protocolVersion: CONTROL_PLANE_PROXY_PROTOCOL_VERSION,
     });
-    this.store.transaction((draft) => draft.invites.push(invite));
+    this.invites.put(invite.tokenHash, invite, this.now().getTime());
     return result;
   }
 
@@ -138,16 +139,12 @@ export class ControlPlaneProxyService {
   }
 
   listInvites(): PublicProxyInvite[] {
-    this.expireInvites();
-    return this.store.listInvites().map(publicProxyInvite);
+    return this.invites.list(this.now().getTime()).map(publicProxyInvite);
   }
 
   revokeInvite(id: string): PublicProxyInvite {
-    const invite = this.requireInvite(id);
-    if (invite.status === "consumed") {
-      proxyError(ControlPlaneProxyErrorCode.InviteConsumed, "A consumed proxy invite cannot be revoked independently of its binding.", 409, false, { inviteId: id });
-    }
-    if (invite.status === "revoked" || invite.status === "expired") return publicProxyInvite(invite);
+    const invite = this.listInviteRecords().find((candidate) => candidate.id === id);
+    if (!invite) proxyError(ControlPlaneProxyErrorCode.InviteInvalid, "Proxy invite is unknown.", 404, false, { inviteId: id });
     const timestamp = this.nowIso();
     const updated: ProxyInviteRecord = {
       ...invite,
@@ -155,62 +152,34 @@ export class ControlPlaneProxyService {
       revokedAt: timestamp,
       updatedAt: timestamp,
     };
-    this.store.transaction((draft) => {
-      draft.invites[draft.invites.findIndex((candidate) => candidate.id === id)] = updated;
-    });
+    this.invites.delete(invite.tokenHash, this.now().getTime());
     return publicProxyInvite(updated);
   }
 
   claimInvite(raw: unknown) {
     const input = ClaimProxyInviteInputSchema.parse(raw);
     this.requireCurrentProtocol(input.protocolVersion);
-    this.expireInvites();
-
     const credentialHash = hashSecret(input.credential);
-    return this.store.transaction((draft) => {
-      const recovered = draft.bindings.find((binding) => binding.claimId === input.claimId);
-      if (!input.inviteToken) {
-        if (!recovered) proxyError(ControlPlaneProxyErrorCode.InviteInvalid, "Proxy invite token is required for the first claim.", 401);
-        if (recovered.sourceControlPlaneId !== input.sourceControlPlaneId
-          || recovered.bindingKeyId !== input.bindingKeyId
-          || recovered.credentialHash !== credentialHash
-          || (input.targetNodeId !== undefined && recovered.targetNodeId !== input.targetNodeId)) {
-          proxyError(ControlPlaneProxyErrorCode.BindingIdentityConflict, "Proxy claim conflicts with an existing binding identity.", 409, false, { claimId: input.claimId });
-        }
-        if (recovered.status === "revoked") proxyError(ControlPlaneProxyErrorCode.BindingRevoked, "Proxy binding is revoked.", 403, false, { bindingId: recovered.id });
-        return this.claimResult(recovered, this.requireKnownTarget(recovered.targetNodeId));
-      }
-      const invite = draft.invites.find((candidate) => secretMatches(candidate.tokenHash, input.inviteToken!));
-      if (!invite) proxyError(ControlPlaneProxyErrorCode.InviteInvalid, "Proxy invite is invalid.", 401);
-      if (input.targetNodeId && input.targetNodeId !== invite.targetNodeId) {
-        proxyError(ControlPlaneProxyErrorCode.TargetMismatch, "Proxy invite is bound to a different target.", 409, false, {
-          inviteId: invite.id,
-          targetNodeId: input.targetNodeId,
-        });
-      }
-
+    const recovered = this.store.listBindings().find((binding) => binding.claimId === input.claimId);
+    if (recovered) {
+      this.requireRecoveredIdentity(recovered, input, credentialHash);
+      return this.claimResult(recovered, this.requireKnownTarget(recovered.targetNodeId));
+    }
+    if (!input.inviteToken) proxyError(ControlPlaneProxyErrorCode.InviteInvalid, "Proxy invite token is required for the first claim.", 401);
+    const inviteTokenHash = hashSecret(input.inviteToken);
+    const invite = this.invites.peek(inviteTokenHash, this.now().getTime());
+    if (!invite) proxyError(ControlPlaneProxyErrorCode.InviteInvalid, "Proxy invite is invalid or expired.", 401);
+    if (input.targetNodeId && input.targetNodeId !== invite.targetNodeId) {
+      proxyError(ControlPlaneProxyErrorCode.TargetMismatch, "Proxy invite is bound to a different target.", 409, false, {
+        inviteId: invite.id,
+        targetNodeId: input.targetNodeId,
+      });
+    }
+    const target = this.requireManageableTarget(invite.targetNodeId);
+    const result = this.store.transaction((draft) => {
       const bindingId = bindingIdForInvite(invite.id);
-      const byInvite = draft.bindings.find((binding) => binding.id === bindingId);
-      const byClaim = draft.bindings.find((binding) => binding.claimId === input.claimId);
-      const existing = byInvite ?? byClaim;
-      if (byInvite && byClaim && byInvite.id !== byClaim.id) {
-        proxyError(ControlPlaneProxyErrorCode.BindingIdentityConflict, "Proxy claim conflicts with an existing binding identity.", 409, false, { claimId: input.claimId });
-      }
-      if (existing) {
-        this.requireExactIdentity(existing, bindingId, invite.targetNodeId, input, credentialHash);
-        if (existing.status === "revoked") {
-          proxyError(ControlPlaneProxyErrorCode.BindingRevoked, "Proxy binding is revoked.", 403, false, { bindingId: existing.id });
-        }
-        if (invite.status !== "consumed" || invite.consumedByClaimId !== input.claimId) {
-          proxyError(ControlPlaneProxyErrorCode.BindingIdentityConflict, "Proxy binding and invite authority are inconsistent.", 409, false, { claimId: input.claimId });
-        }
-        return this.claimResult(existing, this.requireKnownTarget(existing.targetNodeId));
-      }
-
-      this.requireClaimableInvite(invite);
-      const target = this.requireManageableTarget(invite.targetNodeId);
       const timestamp = this.nowIso();
-      const binding: ProxyBinding = {
+      const binding: ProxyBindingRecord = {
         id: bindingId,
         claimId: input.claimId,
         sourceControlPlaneId: input.sourceControlPlaneId,
@@ -223,14 +192,12 @@ export class ControlPlaneProxyService {
         updatedAt: timestamp,
       };
       draft.bindings.push(binding);
-      Object.assign(invite, {
-        status: "consumed",
-        consumedByClaimId: input.claimId,
-        consumedAt: timestamp,
-        updatedAt: timestamp,
-      });
       return this.claimResult(binding, target);
     });
+    // Consume only after every deterministic validation and the durable binding
+    // transaction succeeds. A rejected claim must not burn a legitimate token.
+    this.invites.delete(inviteTokenHash, this.now().getTime());
+    return result;
   }
 
   listBindings(): PublicProxyBinding[] {
@@ -256,7 +223,7 @@ export class ControlPlaneProxyService {
     const binding = this.requireBinding(id);
     if (binding.status === "revoked") return publicProxyBinding(binding);
     const timestamp = this.nowIso();
-    const updated: ProxyBinding = {
+    const updated: ProxyBindingRecord = {
       ...binding,
       status: "revoked",
       revision: binding.revision + 1,
@@ -264,7 +231,7 @@ export class ControlPlaneProxyService {
       updatedAt: timestamp,
     };
     this.store.transaction((draft) => {
-      draft.bindings[draft.bindings.findIndex((candidate) => candidate.id === id)] = updated;
+      draft.bindings = draft.bindings.filter((candidate) => candidate.id !== id);
     });
     return publicProxyBinding(updated);
   }
@@ -274,21 +241,15 @@ export class ControlPlaneProxyService {
       const timestamp = this.nowIso();
       const bindings = draft.bindings
         .filter((binding) => binding.targetNodeId === targetNodeId && binding.status === "active")
-        .map((binding) => {
-          Object.assign(binding, {
+        .map((binding) => publicProxyBinding({
+          ...binding,
             status: "revoked",
             revision: binding.revision + 1,
             revokedAt: timestamp,
             updatedAt: timestamp,
-          });
-          return publicProxyBinding(binding);
-        });
-      const invites = draft.invites
-        .filter((invite) => invite.targetNodeId === targetNodeId && invite.status === "active")
-        .map((invite) => {
-          Object.assign(invite, { status: "revoked", revokedAt: timestamp, updatedAt: timestamp });
-          return publicProxyInvite(invite);
-        });
+        }));
+      draft.bindings = draft.bindings.filter((binding) => binding.targetNodeId !== targetNodeId);
+      const invites = this.revokeTargetInvites(targetNodeId, timestamp);
       return { bindings, invites };
     });
   }
@@ -320,39 +281,20 @@ export class ControlPlaneProxyService {
     return target;
   }
 
-  private requireInvite(id: string) {
-    const invite = this.store.getInvite(id);
-    if (!invite) proxyError(ControlPlaneProxyErrorCode.InviteInvalid, "Proxy invite is unknown.", 404, false, { inviteId: id });
-    return invite;
-  }
-
   private requireBinding(id: string) {
     const binding = this.store.getBinding(id);
     if (!binding) proxyError(ControlPlaneProxyErrorCode.BindingUnknown, "Proxy binding is unknown.", 404, false, { bindingId: id });
     return binding;
   }
 
-  private requireClaimableInvite(invite: ProxyInviteRecord) {
-    if (invite.status === "active") return;
-    const codes = {
-      expired: ControlPlaneProxyErrorCode.InviteExpired,
-      consumed: ControlPlaneProxyErrorCode.InviteConsumed,
-      revoked: ControlPlaneProxyErrorCode.InviteRevoked,
-    } as const;
-    proxyError(codes[invite.status], `Proxy invite is ${invite.status}.`, invite.status === "expired" ? 410 : 409, false, { inviteId: invite.id });
-  }
-
-  private requireExactIdentity(
-    binding: ProxyBinding,
-    expectedBindingId: string,
-    targetNodeId: string,
+  private requireRecoveredIdentity(
+    binding: ProxyBindingRecord,
     input: ReturnType<typeof ClaimProxyInviteInputSchema.parse>,
     credentialHash: string,
   ) {
-    if (binding.id !== expectedBindingId
-      || binding.claimId !== input.claimId
+    if (binding.claimId !== input.claimId
       || binding.sourceControlPlaneId !== input.sourceControlPlaneId
-      || binding.targetNodeId !== targetNodeId
+      || (input.targetNodeId !== undefined && binding.targetNodeId !== input.targetNodeId)
       || binding.bindingKeyId !== input.bindingKeyId
       || binding.credentialHash !== credentialHash) {
       proxyError(ControlPlaneProxyErrorCode.BindingIdentityConflict, "Proxy claim conflicts with an existing binding identity.", 409, false, {
@@ -361,7 +303,7 @@ export class ControlPlaneProxyService {
     }
   }
 
-  private claimResult(binding: ProxyBinding, target: ControlPlaneProxyTarget) {
+  private claimResult(binding: ProxyBindingRecord, target: ControlPlaneProxyTarget) {
     const { manageable: _manageable, ...publicTarget } = target;
     return ClaimProxyInviteResultSchema.parse({
       protocolVersion: CONTROL_PLANE_PROXY_PROTOCOL_VERSION,
@@ -370,17 +312,13 @@ export class ControlPlaneProxyService {
     });
   }
 
-  private expireInvites() {
-    const now = this.now().getTime();
-    if (!this.store.listInvites().some((invite) => invite.status === "active" && Date.parse(invite.expiresAt) <= now)) return;
-    this.store.transaction((draft) => {
-      const timestamp = this.nowIso();
-      for (const invite of draft.invites) {
-        if (invite.status === "active" && Date.parse(invite.expiresAt) <= now) {
-          invite.status = "expired";
-          invite.updatedAt = timestamp;
-        }
-      }
-    });
+  private listInviteRecords() {
+    return this.invites.list(this.now().getTime());
+  }
+
+  private revokeTargetInvites(targetNodeId: string, timestamp: string) {
+    const invites = this.listInviteRecords().filter((invite) => invite.targetNodeId === targetNodeId);
+    for (const invite of invites) this.invites.delete(invite.tokenHash, this.now().getTime());
+    return invites.map((invite) => publicProxyInvite({ ...invite, status: "revoked", revokedAt: timestamp, updatedAt: timestamp }));
   }
 }

@@ -101,6 +101,9 @@ export class RuntimeConvergenceCoordinator {
     if (this.cancelled.has(instanceId) && !options.resumeCancelled) {
       return this.storePhase(instance, "pending");
     }
+    if (instanceImagePreparationPending(instance)) {
+      return this.storePhase(instance, "pending");
+    }
     const sameRollout = instance.runtimeVersion?.desiredVersion === desiredVersion;
     const retryWaitMs = sameRollout && !options.startRequested && !isStopped(instance)
       ? this.remainingRetryDelayMs(instance.runtimeVersion)
@@ -312,6 +315,10 @@ export function reportedVersion(instance: ControlledInstance | undefined) {
 
 export function hasActiveWork(instance: ControlledInstance) {
   return instance.apps.runningCount > 0 || instance.aiSessions.runningCount > 0;
+}
+
+export function instanceImagePreparationPending(instance: Pick<ControlledInstance, "imageProvisioning">) {
+  return Boolean(instance.imageProvisioning && instance.imageProvisioning.phase !== "ready");
 }
 
 function isStopped(instance: ControlledInstance) {

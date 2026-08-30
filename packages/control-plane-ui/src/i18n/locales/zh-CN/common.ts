@@ -6,6 +6,7 @@ export const common = {
   products: {
     codex: "Codex",
     claude: "Claude",
+    opencode: "OpenCode",
   },
   imageCapabilities: {
     browser: "浏览器",
@@ -14,6 +15,7 @@ export const common = {
     "vscode-web": "VS Code",
     codex: "Codex",
     claude: "Claude",
+    opencode: "OpenCode",
   },
   actions: {
     add: "添加",
@@ -21,9 +23,11 @@ export const common = {
     cancel: "取消",
     close: "关闭",
     confirm: "确认",
+    continue: "继续",
     copy: "复制",
     create: "创建",
     delete: "删除",
+    done: "完成",
     edit: "编辑",
     minimize: "最小化",
     maximize: "最大化",
@@ -41,6 +45,7 @@ export const common = {
     running: "运行中",
     stopped: "已停止",
     off: "关闭",
+    unavailable: "不可用",
     unknown: "未知",
     unknownValue: "未知（{value}）",
   },

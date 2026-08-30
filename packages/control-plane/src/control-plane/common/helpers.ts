@@ -1,6 +1,4 @@
-export function now() {
-  return new Date().toISOString();
-}
+export { nowIso as now } from "@task-handoff/core/core/time";
 
 export function envFlag(value: string | undefined) {
   return ["1", "true", "yes", "on"].includes(String(value || "").trim().toLowerCase());

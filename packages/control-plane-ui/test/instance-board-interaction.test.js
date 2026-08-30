@@ -9,8 +9,11 @@ const workbench = read("ControlPlaneWorkbench.vue");
 const board = read("board/InstanceBoardView.vue");
 const boardSessions = read("board/useInstanceBoardSessions.ts");
 const detailSelection = read("instance-detail/instanceDetailSelection.ts");
+const sessionPreviewStyles = read("instance-detail/SessionPreview.css");
 const appLaunchItems = read("shared/AppLaunchMenuItems.vue");
+const appLaunchIcon = read("shared/AppLaunchIcon.vue");
 const options = read("shared/InstanceViewOptionsMenu.vue");
+const instanceList = read("instance-list/InstanceList.vue");
 const terminal = read("board/useBoardTerminalPreviews.ts");
 
 const vncInstance = { id: "instance/vnc" };
@@ -66,12 +69,22 @@ test("instance board cards keep App and AI in the session menu and slide individ
   assert.match(board, /boardPrimaryAiSession\(instance\)/);
   assert.match(board, /class="board-ai-slide board-ai-slide-previous"/);
   assert.match(board, /class="board-ai-slide board-ai-slide-next"/);
-  assert.match(board, /\.board-ai-slide \{[\s\S]*position: absolute;[\s\S]*opacity: 0;[\s\S]*backdrop-filter: blur\(8px\)/);
-  assert.match(board, /\.board-ai-preview:hover \.board-ai-slide,[\s\S]*opacity: 0\.72/);
-  assert.match(board, /\.board-ai-card-head strong \{[\s\S]*var\(--ai-board-muted\)[\s\S]*font-size: 13px;[\s\S]*font-weight: 700/);
-  assert.doesNotMatch(board, /board-ai-card-head[\s\S]{0,500}sessions\.board\.updated/);
-  assert.match(board, /\.board-ai-question \{[\s\S]*color: var\(--ai-board-title\);[\s\S]*font-size: 14px;[\s\S]*line-height: 1\.35/);
+  assert.match(board, /:data-ai-preview="boardPrimarySession\(instance\)\?\.kind === 'ai' \? 'true' : undefined"/);
+  assert.match(board, /\.board-session-switcher\[data-ai-preview="true"\] \{[\s\S]*right: 8px;[\s\S]*left: auto;/);
+  assert.doesNotMatch(board, /\.board-ai-preview \{[\s\S]*?padding: 40px 0 0;/);
+  assert.match(board, /\.board-ai-slide \{[\s\S]*width: 32px;[\s\S]*height: 48px;[\s\S]*border: 1px solid var\(--line-strong\);[\s\S]*opacity: 0;[\s\S]*backdrop-filter: blur\(8px\);[\s\S]*box-shadow: var\(--shadow-popover\)/);
+  assert.match(board, /\.board-ai-preview:hover \.board-ai-slide,[\s\S]*opacity: 0\.96/);
+  assert.match(board, /\.board-ai-slide:disabled \{[\s\S]*color: var\(--text-subtle\);[\s\S]*opacity: 0/);
+  assert.match(board, /\.board-ai-preview:hover \.board-ai-slide:disabled,[\s\S]*opacity: 0\.42/);
+  assert.match(board, /<MarkdownContent class="board-ai-title" :content="displayAiSessionTitle\(boardPrimaryAiSession\(instance\), undefined, t\)"/);
+  assert.doesNotMatch(board, /class="board-ai-question"/);
+  assert.match(board, /\.board-ai-preview \{[\s\S]*grid-template-rows: max-content minmax\(0, 1fr\);/);
+  assert.match(board, /\.board-ai-card-head \{[\s\S]*padding: 12px 14px;/);
+  assert.match(board, /\.board-ai-title \{[\s\S]*color: var\(--ai-board-title\);[\s\S]*font-size: 14px;[\s\S]*font-weight: 400/);
+  assert.match(board, /<AiSessionToolActivity[\s\S]*class="board-instance-ai-activity"[\s\S]*:current-tool="boardPrimaryAiSession\(instance\)\?\.currentTool"[\s\S]*tone="board"/);
+  assert.match(board, /\.board-instance-ai-activity \{[\s\S]*right: 82px;[\s\S]*bottom: 10px;[\s\S]*left: 14px;/);
   assert.match(board, /\.board-ai-answer \{[\s\S]*background: var\(--ai-session-card-content-bg\);[\s\S]*color: var\(--ai-board-title\);[\s\S]*font-size: 14px;[\s\S]*font-weight: 400;[\s\S]*line-height: 1\.35/);
+  assert.doesNotMatch(board, /\.board-ai-answer \{[\s\S]*?margin-top:/);
 });
 
 test("each instance board card opens its current session in the instance detail window", () => {
@@ -92,12 +105,45 @@ test("board empty states use the themed inset surface", () => {
   assert.doesNotMatch(board, /\.board-empty \{[\s\S]*?background: var\(--white\);/);
 });
 
+test("instance directory renders independent node loading states", () => {
+  assert.match(workbench, /:node-states="board\.nodeStates\.value"/);
+  assert.match(workbench, /:loading="nodes\.isLoading\.value"/);
+  assert.match(instanceList, /resourceState\?\.phase === "uninitialized" \|\| resourceState\?\.phase === "loading"/);
+  assert.match(instanceList, /groups\.set\(node\.id/);
+});
+
+test("connecting instances recover only their target board rows", () => {
+  assert.match(workbench, /connectingRefreshTimer = setInterval\(\(\) => \{[\s\S]*?fetchInstanceBoardPayload\(undefined, instanceId\)[\s\S]*?applyInstanceBoardTargetSnapshot\([\s\S]*?instanceId,[\s\S]*?\}, 2000\);/);
+  const connectingRefresh = workbench.match(/connectingRefreshTimer = setInterval\([\s\S]*?\}, 2000\);/)?.[0] || "";
+  assert.doesNotMatch(connectingRefresh, /void refresh\(\)/);
+  assert.doesNotMatch(connectingRefresh, /refetchQueries/);
+  assert.doesNotMatch(connectingRefresh, /control-plane-models|nodeLocalFolders|control-plane-triggers/);
+});
+
 test("board app launch menus keep parent and project flyout layouts consistent", () => {
   assert.match(board, /<AppLaunchMenuItems[\s\S]*?submenu-class="board-launch-menu"/);
   assert.match(appLaunchItems, /<DropdownMenuSubContent :class="submenuClass \|\| 'app-launch-menu'">/);
+  assert.match(appLaunchItems, /selectableInstanceCwdFolders\(props\.instance, props\.folders \|\| \[\]\)/);
   assert.match(board, /:global\(\.board-launch-menu \.app-launch-menu-item\) \{[\s\S]*?grid-template-columns: 18px minmax\(0, 1fr\) 16px;/);
   assert.match(board, /:global\(\.board-launch-menu \.app-launch-menu-item span\) \{[\s\S]*?display: grid;[\s\S]*?gap: 2px;/);
   assert.doesNotMatch(board, /board-launch-menu-item/);
+});
+
+test("app launch menu names and paths use the shared menu typography", () => {
+  assert.match(appLaunchItems, /\.app-launch-menu \.app-launch-menu-item strong[\s\S]*?font-weight: 500;/);
+  assert.match(appLaunchItems, /\.app-launch-menu \.app-launch-menu-item small[\s\S]*?font-weight: 400;/);
+  assert.match(appLaunchItems, /\.board-launch-menu \.app-launch-menu-item strong[\s\S]*?font-weight: 500;/);
+  assert.match(appLaunchItems, /\.board-launch-menu \.app-launch-menu-item small[\s\S]*?font-weight: 400;/);
+  assert.doesNotMatch(sessionPreviewStyles, /\.app-launch-menu strong\)[^{]*\{[^}]*font-weight:/s);
+  assert.doesNotMatch(sessionPreviewStyles, /\.app-launch-menu small\)[^{]*\{[^}]*font-weight:/s);
+});
+
+test("app launch menus use product and terminal icons instead of a generic launch glyph", () => {
+  assert.match(appLaunchItems, /<AppLaunchIcon :app-id="app\.id" \/>/);
+  assert.match(appLaunchIcon, /terminalAppIds = new Set\(\["terminal", "terminal-tty", "gui-terminal"\]\)/);
+  assert.match(appLaunchIcon, /<AiAgentIcon v-if="agent"/);
+  assert.match(appLaunchIcon, /<SquareTerminal v-else-if=/);
+  assert.match(appLaunchIcon, /<Play v-else/);
 });
 
 test("mobile board groups flow directly into a single card column", () => {

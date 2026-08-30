@@ -1,29 +1,12 @@
-import { acquireProcessSingletonLock } from "@task-handoff/core/core/process-singleton-lock";
+import {
+  acquireServerUpdateLock,
+  cleanUpServerUpdateLockOnSignals,
+} from "@task-handoff/core/core/server-update-installation";
 
-const defaultLockPath = "/run/task-handoff-server-update.lock";
-const legacyLockGraceMs = 30_000;
-
-export function acquireUpdateLock(lockPath = defaultLockPath, options = {}) {
-  const lock = acquireProcessSingletonLock(lockPath, {
-    component: "server-update",
-    incompleteLockStaleMs: options.legacyGraceMs ?? legacyLockGraceMs,
-    error: { label: "TaskHandoff server update", code: "SERVER_UPDATE_ALREADY_RUNNING" },
-  });
-  return lock.release;
+export function acquireUpdateLock(lockPath, options = {}) {
+  return acquireServerUpdateLock(lockPath, options);
 }
 
 export function cleanUpLockOnSignals(releaseLock) {
-  const handlers = new Map();
-  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
-    const handler = () => {
-      releaseLock();
-      process.removeListener(signal, handler);
-      process.kill(process.pid, signal);
-    };
-    handlers.set(signal, handler);
-    process.on(signal, handler);
-  }
-  return () => {
-    for (const [signal, handler] of handlers) process.removeListener(signal, handler);
-  };
+  return cleanUpServerUpdateLockOnSignals(releaseLock);
 }

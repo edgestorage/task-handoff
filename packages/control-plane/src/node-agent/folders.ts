@@ -1,10 +1,38 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
 import type { NodeFolderTreeEntry } from "@task-handoff/protocol/control-plane";
 import { FolderTreeQuerySchema } from "./schemas.ts";
 
 export const MAX_FOLDER_TREE_CHILDREN = 80;
+
+function folderPathError(message: string, statusCode: number, code: string) {
+  return Object.assign(new Error(message), { statusCode, code });
+}
+
+export function requireBrowsableFolderPath(folderPath: string) {
+  const resolvedPath = path.resolve(folderPath);
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(resolvedPath);
+  } catch (cause) {
+    const code = cause && typeof cause === "object" ? (cause as NodeJS.ErrnoException).code : undefined;
+    if (code === "ENOENT" || code === "ENOTDIR") {
+      throw folderPathError(`Folder ${resolvedPath} was not found.`, 404, "NODE_FOLDER_PATH_NOT_FOUND");
+    }
+    throw folderPathError(`Folder ${resolvedPath} is not accessible.`, 403, "NODE_FOLDER_PATH_UNREADABLE");
+  }
+  if (!stat.isDirectory()) {
+    throw folderPathError(`Path ${resolvedPath} is not a folder.`, 400, "NODE_FOLDER_PATH_NOT_DIRECTORY");
+  }
+  try {
+    fs.accessSync(resolvedPath, fs.constants.R_OK | fs.constants.X_OK);
+  } catch {
+    throw folderPathError(`Folder ${resolvedPath} is not accessible.`, 403, "NODE_FOLDER_PATH_UNREADABLE");
+  }
+  return resolvedPath;
+}
 
 function isDirectory(folderPath: string) {
   try {
@@ -22,6 +50,15 @@ export function filesystemRoots() {
   const currentRoot = path.parse(path.resolve(process.cwd())).root;
   const driveRoots = Array.from({ length: 26 }, (_, index) => `${String.fromCharCode(65 + index)}:\\`);
   return [...new Set([currentRoot, ...driveRoots])].filter(isDirectory);
+}
+
+export function folderPlaces() {
+  const home = path.resolve(os.homedir());
+  const roots = filesystemRoots().map((root) => path.resolve(root));
+  return [
+    ...(isDirectory(home) ? [{ kind: "home" as const, name: path.basename(home) || home, path: home }] : []),
+    ...roots.map((root) => ({ kind: "root" as const, name: root, path: root })),
+  ];
 }
 
 function readFolderTree(folderPath: string, depth: number): NodeFolderTreeEntry | undefined {
@@ -56,7 +93,7 @@ function readFolderTree(folderPath: string, depth: number): NodeFolderTreeEntry 
 }
 
 export function listFolderTree(input: z.infer<typeof FolderTreeQuerySchema>) {
-  const roots = input.path ? [input.path] : filesystemRoots();
+  const roots = input.path ? [requireBrowsableFolderPath(input.path)] : filesystemRoots();
   return roots.flatMap((root) => {
     const entry = readFolderTree(root, input.depth);
     return entry ? [entry] : [];

@@ -1,5 +1,7 @@
 const DECODED_RESPONSE_HEADERS = new Set(["content-encoding", "content-length", "transfer-encoding"]);
 
+export { proxyWebSocketProtocols } from "@task-handoff/core/core/http-proxy";
+
 export const INSTANCE_PROXY_REQUEST_BODY_LIMIT = 64 * 1024 * 1024;
 const DEFAULT_INSTANCE_PROXY_RESPONSE_LIMIT = 64 * 1024 * 1024;
 
@@ -38,14 +40,4 @@ export async function readResponseBodyWithLimit(response: Response, maxBytes: nu
     chunks.push(Buffer.from(value));
   }
   return Buffer.concat(chunks, length);
-}
-
-export function proxyWebSocketProtocols(headers: Record<string, unknown>) {
-  const value = headers["sec-websocket-protocol"];
-  const text = Array.isArray(value) ? value.join(",") : typeof value === "string" ? value : "";
-  const protocols = text
-    .split(",")
-    .map((protocol) => protocol.trim())
-    .filter(Boolean);
-  return protocols.length ? protocols : undefined;
 }

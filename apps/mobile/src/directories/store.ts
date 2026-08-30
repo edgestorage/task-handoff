@@ -3,12 +3,14 @@ import type {
   ControlPlaneInstanceLifecycleDirectoryEvent,
   ControlPlaneNodeConnectionPhase,
   ControlPlaneNodeDirectoryEntry,
+  ControlPlaneNodeFleetState,
 } from '@task-handoff/protocol/control-plane-directory';
 
 export type MobileDirectoryProfileState = {
   controlPlaneId: string;
   nodes: readonly ControlPlaneNodeDirectoryEntry[];
   instances: readonly ControlPlaneInstanceResourceEntry[];
+  nodeStates: readonly ControlPlaneNodeFleetState[];
   phase: 'idle' | 'loading' | 'ready' | 'stale' | 'offline' | 'error';
   updatedAt?: string;
   error?: string;
@@ -28,7 +30,7 @@ export class MobileDirectoryStore {
   profile(controlPlaneId: string) {
     const existing = this.profiles.get(controlPlaneId);
     if (existing) return existing;
-    const initial: MobileDirectoryProfileState = { controlPlaneId, nodes: [], instances: [], phase: 'idle' };
+    const initial: MobileDirectoryProfileState = { controlPlaneId, nodes: [], instances: [], nodeStates: [], phase: 'idle' };
     this.profiles.set(controlPlaneId, initial);
     return initial;
   }

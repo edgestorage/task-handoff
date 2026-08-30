@@ -15,6 +15,7 @@ class TestSocket extends EventEmitter {
     this.readyState = 1;
     this.sent = [];
     this.closes = [];
+    this.pings = 0;
   }
 
   send(data, options) {
@@ -24,6 +25,10 @@ class TestSocket extends EventEmitter {
   close(code, reason) {
     this.readyState = 3;
     this.closes.push({ code, reason });
+  }
+
+  ping() {
+    this.pings += 1;
   }
 }
 
@@ -114,7 +119,7 @@ test("control-plane proxy websocket keeps route and auth binding-scoped and uses
     },
   });
 
-  transport.proxyWebSocket(node, downstream, "/instances/instance_1/terminal?cols=100", ["terminal-v1"], {
+  const control = transport.proxyWebSocket(node, downstream, "/instances/instance_1/terminal?cols=100", ["terminal-v1"], {
     authorization: "Bearer application-token",
   });
   assert.equal(opened[0].url, "wss://proxy.example.test/api/node-proxy/bindings/binding_1/websocket?route=%2Finstances%2Finstance_1%2Fterminal%3Fcols%3D100");
@@ -122,12 +127,35 @@ test("control-plane proxy websocket keeps route and auth binding-scoped and uses
   assert.equal(opened[0].headers.authorization, "Bearer application-token");
   assert.equal(opened[0].headers["x-task-handoff-proxy-credential"], credential.credential);
 
+  let pongs = 0;
+  control.onPong(() => { pongs += 1; });
+  control.ping();
+  upstream.emit("pong");
+  assert.equal(upstream.pings, 1);
+  assert.equal(pongs, 1);
+
   downstream.emit("message", "input", false);
   upstream.emit("message", Buffer.from([7, 8]), true);
-  assert.deepEqual(upstream.sent[0], { data: "input", options: { binary: false } });
-  assert.deepEqual(downstream.sent[0], { data: Buffer.from([7, 8]), options: { binary: true } });
+  assert.deepEqual(upstream.sent[0], { data: "input", options: { binary: false, compress: false } });
+  assert.deepEqual(downstream.sent[0], { data: Buffer.from([7, 8]), options: { binary: true, compress: false } });
   upstream.emit("close", 1000, "done");
   assert.deepEqual(downstream.closes.at(-1), { code: 1000, reason: "done" });
+});
+
+test("control-plane proxy keeps only the latest control frame until the upstream websocket opens", () => {
+  const upstream = new TestSocket();
+  upstream.readyState = 0;
+  const transport = new ControlPlaneProxyNodeAgentTransport({
+    credentialForNode: () => credential,
+    openWebSocket: () => upstream,
+  });
+  const control = transport.proxyWebSocket(node, new TestSocket(), "/events");
+  control.send("old-subscription");
+  control.send("current-subscription");
+  assert.deepEqual(upstream.sent, []);
+  upstream.readyState = upstream.OPEN;
+  upstream.emit("open");
+  assert.deepEqual(upstream.sent.map((entry) => entry.data), ["current-subscription"]);
 });
 
 test("control-plane proxy validates route and credential identity before I/O", async () => {

@@ -22,6 +22,7 @@ export const repository = {
   errorNotice: {
     retryable: "Retryable",
     actionRequired: "Action required",
+    manageCredentials: "Manage credentials",
     recovery: {
       REPOSITORY_SESSION_NOT_FOUND: "The session was deleted. Close this view and return to the current session list.",
       REPOSITORY_SESSION_INACTIVE: "The session is no longer active. Reopen Environment from an active session.",
@@ -44,6 +45,11 @@ export const repository = {
       REPOSITORY_HOOK_FAILED: "Inspect the failing Git hook in the session terminal. The commit was not reported as successful.",
       REPOSITORY_SIGNING_FAILED: "Repair commit signing in the controlled instance or inspect it in the session terminal.",
       REPOSITORY_AUTHENTICATION_FAILED: "Verify the controlled instance's existing Git or SSH credentials in the session terminal.",
+      REPOSITORY_CREDENTIAL_MISSING: "Authorize a matching credential in instance settings, then retry explicitly.",
+      REPOSITORY_CREDENTIAL_AMBIGUOUS: "Remove the overlapping retained assignment in instance settings, then retry explicitly.",
+      REPOSITORY_REMOTE_UNSUPPORTED: "Use an HTTPS, ssh://, or scp-like remote that matches an authorized scope.",
+      REPOSITORY_HOST_KEY_REQUIRED: "Add pinned known-hosts data to the SSH credential, then retry explicitly.",
+      REPOSITORY_AUTHENTICATION_REJECTED: "Rotate or replace the retained credential in instance settings, then retry explicitly.",
       REPOSITORY_NON_FAST_FORWARD: "Fetch and reconcile the branch in the session terminal. The system will not retry with force.",
       REPOSITORY_UPSTREAM_MISSING: "Publish the branch with an explicit remote and target before using upstream delivery actions.",
       REPOSITORY_COMMAND_TIMEOUT: "The Git command reached its time limit. Check the repository in the session terminal before retrying.",

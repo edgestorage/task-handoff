@@ -3,6 +3,7 @@ export const common = {
   products: {
     codex: "Codex",
     claude: "Claude",
+    opencode: "OpenCode",
   },
   imageCapabilities: {
     browser: "Browser",
@@ -11,6 +12,7 @@ export const common = {
     "vscode-web": "VS Code",
     codex: "Codex",
     claude: "Claude",
+    opencode: "OpenCode",
   },
   actions: {
     add: "Add",
@@ -18,9 +20,11 @@ export const common = {
     cancel: "Cancel",
     close: "Close",
     confirm: "Confirm",
+    continue: "Continue",
     copy: "Copy",
     create: "Create",
     delete: "Delete",
+    done: "Done",
     edit: "Edit",
     minimize: "Minimize",
     maximize: "Maximize",
@@ -38,6 +42,7 @@ export const common = {
     running: "Running",
     stopped: "Stopped",
     off: "Off",
+    unavailable: "Unavailable",
     unknown: "Unknown",
     unknownValue: "Unknown ({value})",
   },

@@ -1,18 +1,19 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { File } from 'expo-file-system';
 import { CornerDownRight, GripVertical, Pencil, RotateCcw, Trash2, type LucideIcon } from 'lucide-react-native';
-import { Alert, Animated, FlatList, Keyboard, KeyboardAvoidingView, PanResponder, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Animated, FlatList, Keyboard, KeyboardAvoidingView, PanResponder, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Defs, LinearGradient, Rect, Stop } from 'react-native-svg';
-import { canInterruptAiSession, isAiSessionApprovalPending, type ControlPlaneAiSessionSummary, type ControlPlaneClient } from '@task-handoff/control-plane-client';
-import type { AiSessionMentionCandidate, AiSessionPermissionMode } from '@task-handoff/protocol/ai-sessions';
-import { supportsDirectoryAiSessionTimelineCapability, type ControlPlaneInstanceDirectoryEntry } from '@task-handoff/protocol/control-plane-directory';
+import { aiSessionMessageText, canInterruptAiSession, isAiSessionApprovalPending, type AiSessionModelGroup, type ControlPlaneAiSessionSummary, type ControlPlaneClient } from '@task-handoff/control-plane-client';
+import { AI_SESSION_DEFAULT_REASONING_EFFORT, type AiSessionMentionCandidate, type AiSessionPermissionMode, type AiSessionReasoningEffort } from '@task-handoff/protocol/ai-sessions';
+import { directoryAiSessionProviderCapability, supportsDirectoryAiSessionTimelineCapability, type ControlPlaneInstanceDirectoryEntry } from '@task-handoff/protocol/control-plane-directory';
+import { normalizeAiSessionReasoningEffortCapabilities } from '@task-handoff/protocol/ai-session-provider-capabilities';
 
 import { mobileAiSessionBusyKey, MobileAiSessionActionCoordinator, MobileAiSessionDraftStore, type MobileActionResult } from './actions';
 import { aiSessionDisplayTurns, SessionDetail, type SessionDetailMode } from './SessionDetail';
 import { mobileAiSessionStore, type MobileStreamingMessage, type MobileTurnTimelineState } from './store';
-import { pickDocument, pickImage } from '../platform/file-picker';
-import { mobilePastedImage, runtimeAttachmentFromServerCandidate, uploadMobileAttachment, usableUploadRefs, type MobilePendingAttachment } from './attachments';
+import { pickDocument, pickImage, type MobileLocalFile } from '../platform/file-picker';
+import { formatMobileAttachmentBytes, formatMobileTextLength, mobilePastedImage, mobilePastedText, runtimeAttachmentFromServerCandidate, uploadingMobileAttachment, uploadMobileAttachment, usableUploadRefs, type MobilePendingAttachment } from './attachments';
 import { useMobileTheme } from '../components/theme';
 import { SystemIcon } from '../components/SystemIcon';
 import { SessionComposer } from './SessionComposer';
@@ -33,7 +34,10 @@ export function SessionWorkspace({
   drafts,
   permissions,
   defaultPermissionMode,
+  maxFileAttachmentBytes,
+  modelGroups = [],
   client,
+  refresh,
   onVisible,
   onOpenSession,
   detailMode: controlledDetailMode,
@@ -50,7 +54,10 @@ export function SessionWorkspace({
   drafts?: MobileAiSessionDraftStore;
   permissions?: MobileAiSessionPermissionStore;
   defaultPermissionMode?: AiSessionPermissionMode;
+  maxFileAttachmentBytes?: number;
+  modelGroups?: AiSessionModelGroup[];
   client?: ControlPlaneClient;
+  refresh?(): Promise<void>;
   onVisible?(updatedAt: string): void;
   onOpenSession?(sessionId: string): void;
   detailMode?: SessionDetailMode;
@@ -58,8 +65,9 @@ export function SessionWorkspace({
   syncPhase?: 'idle' | 'loading' | 'ready' | 'stale' | 'offline' | 'error';
 }) {
   const insets = useSafeAreaInsets();
+  const composerBottomInset = Math.max(insets.bottom, 8);
   const { colors } = useMobileTheme();
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   const toast = useMobileToast();
   const [draft, setDraft] = useState('');
   const latestDraft = useRef('');
@@ -70,10 +78,22 @@ export function SessionWorkspace({
     resolved: boolean;
   }>();
   const [composerFocused, setComposerFocused] = useState(false);
+  const [keyboardViewportRevision, setKeyboardViewportRevision] = useState(0);
   const [composerExpansion] = useState(() => new Animated.Value(0));
-  const [composerOverlayHeight, setComposerOverlayHeight] = useState(0);
+  const [composerOverlayHeight, setComposerOverlayHeight] = useState(
+    () => SESSION_COMPOSER_COLLAPSED_HEIGHT + 16 + composerBottomInset,
+  );
   const [, rerender] = useState(0);
   const [attachments, setAttachments] = useState<MobilePendingAttachment[]>([]);
+  const attachmentsRef = useRef(attachments);
+  useEffect(() => { attachmentsRef.current = attachments; }, [attachments]);
+  const pastedTextSequence = useRef(0);
+  useEffect(() => () => {
+    for (const attachment of attachmentsRef.current) {
+      if (!attachment.retryLocal?.temporary) continue;
+      try { new File(attachment.retryLocal.uri).delete(); } catch { /* Temporary paste cache may already be gone. */ }
+    }
+  }, []);
   const [runtimeCandidates, setRuntimeCandidates] = useState<AiSessionMentionCandidate[]>([]);
   const [queueEdit, setQueueEdit] = useState<{
     sessionId: string;
@@ -93,25 +113,42 @@ export function SessionWorkspace({
   const queueRowHeights = useRef(new Map<string, number>());
   const queueDrag = useRef<{ queueId: string; sourceCenter: number; sourceIds: string[]; targets: { index: number; center: number }[] } | undefined>(undefined);
   const [selectedTurnIndex, setSelectedTurnIndex] = useState(() => Math.max(0, aiSessionDisplayTurns(session).length - 1));
+  const [pendingTurnIndex, setPendingTurnIndex] = useState<number>();
+  const turnSelectionRequest = useRef(0);
+  const turnBodyRequests = useRef(new Map<string, Promise<boolean>>());
+  const timelineRequests = useRef(new Map<string, symbol>());
+  const [turnBodyRetry, setTurnBodyRetry] = useState(0);
+  const turnBodyRetryAttempt = useRef(0);
   const [localDetailMode, setLocalDetailMode] = useState<SessionDetailMode>('turn');
   const detailMode = controlledDetailMode ?? localDetailMode;
   const setDetailMode = (next: SessionDetailMode) => {
     if (controlledDetailMode === undefined) setLocalDetailMode(next);
     onDetailModeChange?.(next);
   };
-  const selectionSessionId = useRef<string | undefined>(undefined);
+  const selectionSessionScope = useRef<string | undefined>(undefined);
   const knownTurnCount = useRef(0);
   const sessionId = session?.id;
+  const turnScope = JSON.stringify([controlPlaneId, instanceId, sessionId]);
+  const currentTurnScope = useRef(turnScope);
+  currentTurnScope.current = turnScope;
   const currentSessionId = useRef(sessionId);
   currentSessionId.current = sessionId;
   const activeQueueEdit = queueEdit?.sessionId === sessionId ? queueEdit : undefined;
+  useEffect(() => {
+    const subscription = Keyboard.addListener('keyboardDidShow', () => {
+      setKeyboardViewportRevision((revision) => revision + 1);
+    });
+    return () => subscription?.remove?.();
+  }, []);
   const permissionKey = sessionId ? `${controlPlaneId}\u0000${instanceId}\u0000${sessionId}` : undefined;
   const permissionMode = permissionSelection && permissionSelection.key === permissionKey
     ? permissionSelection.mode
     : defaultPermissionMode ?? 'ask';
-  const turnCount = aiSessionDisplayTurns(session).length;
+  const turnCount = session?.turnCount ?? aiSessionDisplayTurns(session).length;
   const latestTurnIndex = Math.max(0, turnCount - 1);
-  const timelineTurnSignature = (session?.turns ?? []).map((turn) => `${turn.id}:${turn.providerTurnId || ''}:${turn.status}`).join('|');
+  const timelineTurnSignature = (session?.turns ?? []).map((turn) => (
+    `${turn.id}:${turn.providerTurnId || ''}:${turn.status}:${(turn as { bodyRevision?: string }).bodyRevision || ''}`
+  )).join('|');
   const supportsTurnTimeline = session ? supportsDirectoryAiSessionTimelineCapability(instanceCapabilities, session.agent, 'turn-read') : false;
   const supportsSessionTimeline = session ? supportsDirectoryAiSessionTimelineCapability(instanceCapabilities, session.agent, 'session-read') : false;
   const supportsLiveTimeline = session ? supportsDirectoryAiSessionTimelineCapability(instanceCapabilities, session.agent, 'live-items') : false;
@@ -146,12 +183,89 @@ export function SessionWorkspace({
     return () => { live = false; };
   }, [controlPlaneId, defaultPermissionMode, instanceId, permissions, session?.agent, sessionId]);
   useEffect(() => {
-    const sameSession = selectionSessionId.current === sessionId;
+    const sameSession = selectionSessionScope.current === turnScope;
     const previousCount = knownTurnCount.current;
     setSelectedTurnIndex((current) => !sameSession || current >= previousCount - 1 ? latestTurnIndex : Math.min(current, latestTurnIndex));
-    selectionSessionId.current = sessionId;
+    if (!sameSession) {
+      turnSelectionRequest.current += 1;
+      setPendingTurnIndex(undefined);
+      turnBodyRequests.current.clear();
+    }
+    selectionSessionScope.current = turnScope;
     knownTurnCount.current = turnCount;
-  }, [latestTurnIndex, sessionId, turnCount]);
+  }, [latestTurnIndex, turnCount, turnScope]);
+  const ensureTurnBody = useCallback((turnId: string) => {
+    if (!client?.aiSessions.turnBody || !sessionId) return Promise.resolve(false);
+    const needed = mobileAiSessionStore.neededSessionTurn(controlPlaneId, instanceId, sessionId, turnId);
+    if (!needed) return Promise.resolve(true);
+    const requestScope = turnScope;
+    const requestKey = JSON.stringify([requestScope, needed.id, needed.bodyRevision]);
+    const existing = turnBodyRequests.current.get(requestKey);
+    if (existing) return existing;
+    const cachedRevision = mobileAiSessionStore.sessionTurnRevision(controlPlaneId, instanceId, sessionId, needed.id);
+    const request = client.aiSessions.turnBody(instanceId, sessionId, needed.id, cachedRevision).then((read) => {
+      if (currentTurnScope.current !== requestScope) return false;
+      const currentIndex = mobileAiSessionStore.sessionTurnIndex(controlPlaneId, instanceId, sessionId)?.turns
+        .find((candidate) => candidate.id === needed.id || candidate.providerTurnId === needed.id);
+      if (read.kind === 'updated' && currentIndex?.bodyRevision === read.revision) {
+        mobileAiSessionStore.setSessionTurn(controlPlaneId, instanceId, sessionId, read.revision, read.body.turn);
+      }
+      turnBodyRetryAttempt.current = 0;
+      return !mobileAiSessionStore.neededSessionTurn(controlPlaneId, instanceId, sessionId, needed.id);
+    }).finally(() => {
+      if (turnBodyRequests.current.get(requestKey) === request) turnBodyRequests.current.delete(requestKey);
+    });
+    turnBodyRequests.current.set(requestKey, request);
+    return request;
+  }, [client, controlPlaneId, instanceId, sessionId, turnScope]);
+  const requestTurnSelection = useCallback((requestedIndex: number) => {
+    if (!sessionId || !session) return;
+    const turns = session.turns || [];
+    const nextIndex = Math.min(Math.max(requestedIndex, 0), Math.max(0, turns.length - 1));
+    const target = turns[nextIndex];
+    if (!target) return;
+    const request = turnSelectionRequest.current + 1;
+    turnSelectionRequest.current = request;
+    const needed = mobileAiSessionStore.neededSessionTurn(controlPlaneId, instanceId, sessionId, target.id);
+    if (!needed) {
+      setPendingTurnIndex(undefined);
+      setSelectedTurnIndex(nextIndex);
+      return;
+    }
+    setPendingTurnIndex(nextIndex);
+    void ensureTurnBody(target.id).then((ready) => {
+      if (turnSelectionRequest.current !== request || currentTurnScope.current !== turnScope) return;
+      setPendingTurnIndex(undefined);
+      if (ready) setSelectedTurnIndex(nextIndex);
+      else toast.show({ detail: t('sessions.turnLoadFailed'), title: t('toast.actionFailed', { action: t('sessions.turn') }), tone: 'error' });
+    }).catch(() => {
+      if (turnSelectionRequest.current !== request || currentTurnScope.current !== turnScope) return;
+      setPendingTurnIndex(undefined);
+      toast.show({ detail: t('sessions.turnLoadFailed'), title: t('toast.actionFailed', { action: t('sessions.turn') }), tone: 'error' });
+    });
+  }, [controlPlaneId, ensureTurnBody, instanceId, session, sessionId, t, toast, turnScope]);
+  useEffect(() => {
+    if (!sessionId || !session || !client?.aiSessions.turnBody) return;
+    const turns = session.turns || [];
+    const indexes = detailMode === 'conversation'
+      ? turns.map((_turn, index) => index)
+      : [selectedTurnIndex, selectedTurnIndex - 1, selectedTurnIndex + 1, pendingTurnIndex]
+        .filter((index): index is number => index !== undefined && index >= 0 && index < turns.length);
+    let selectedFailed = false;
+    for (const index of new Set(indexes)) {
+      const target = turns[index];
+      if (!target || !mobileAiSessionStore.neededSessionTurn(controlPlaneId, instanceId, sessionId, target.id)) continue;
+      void ensureTurnBody(target.id).catch(() => {
+        if (index !== selectedTurnIndex || selectedFailed) return;
+        selectedFailed = true;
+        const delay = Math.min(4_000, 400 * (2 ** turnBodyRetryAttempt.current));
+        turnBodyRetryAttempt.current = Math.min(turnBodyRetryAttempt.current + 1, 4);
+        setTimeout(() => {
+          if (currentTurnScope.current === turnScope) setTurnBodyRetry((value) => value + 1);
+        }, delay);
+      });
+    }
+  }, [client, controlPlaneId, detailMode, ensureTurnBody, instanceId, pendingTurnIndex, selectedTurnIndex, session, sessionId, timelineTurnSignature, turnBodyRetry, turnScope]);
   useEffect(() => {
     timelineLoadInputs.current = { session, timelines };
   }, [session, timelines]);
@@ -161,39 +275,50 @@ export function SessionWorkspace({
     if (!client || !timelineSession || (!supportsTurnTimeline && !supportsSessionTimeline)) return;
     const turns = aiSessionDisplayTurns(timelineSession);
     const visibleTurns = detailMode === 'conversation' ? turns : turns.slice(selectedTurnIndex, selectedTurnIndex + 1);
-    const loadableTurns = visibleTurns.filter((turn, index) => {
+    const loadableTurns = visibleTurns.filter((turn) => {
       const state = timelineStates[turn.id];
       if (state?.status && !['idle', 'stale'].includes(state.status)) return false;
-      const isLatest = (detailMode === 'conversation' ? turns.indexOf(turn) : selectedTurnIndex + index) === turns.length - 1;
-      return !(supportsLiveTimeline && isLatest && ['queued', 'running', 'waiting'].includes(turn.status));
+      return true;
     });
     if (!loadableTurns.length) return;
-    let active = true;
-    if (supportsTurnTimeline) {
+    if (supportsTurnTimeline && !(detailMode === 'conversation' && supportsSessionTimeline)) {
       for (const turn of loadableTurns) {
+        const requestKey = JSON.stringify([controlPlaneId, instanceId, timelineSession.id, turn.id]);
+        const requestToken = Symbol(requestKey);
+        timelineRequests.current.set(requestKey, requestToken);
         mobileAiSessionStore.beginTurnTimeline(controlPlaneId, instanceId, timelineSession.id, turn);
         void client.aiSessions.turnTimeline(instanceId, timelineSession.id, turn.id).then((timeline) => {
-          if (active) mobileAiSessionStore.resolveTurnTimeline(controlPlaneId, instanceId, timelineSession.id, turn, timeline.items);
+          if (timelineRequests.current.get(requestKey) === requestToken) {
+            mobileAiSessionStore.resolveTurnTimeline(controlPlaneId, instanceId, timelineSession.id, turn, timeline.items);
+          }
         }).catch((cause) => {
-          if (active) mobileAiSessionStore.rejectTurnTimeline(controlPlaneId, instanceId, timelineSession.id, turn, cause instanceof Error ? cause.message : 'Could not load the turn timeline.');
+          if (timelineRequests.current.get(requestKey) === requestToken) {
+            mobileAiSessionStore.rejectTurnTimeline(controlPlaneId, instanceId, timelineSession.id, turn, cause instanceof Error ? cause.message : 'Could not load the turn timeline.');
+          }
+        }).finally(() => {
+          if (timelineRequests.current.get(requestKey) === requestToken) timelineRequests.current.delete(requestKey);
         });
       }
     } else {
+      const requestKey = JSON.stringify([controlPlaneId, instanceId, timelineSession.id, '']);
+      const requestToken = Symbol(requestKey);
+      timelineRequests.current.set(requestKey, requestToken);
       for (const turn of turns) mobileAiSessionStore.beginTurnTimeline(controlPlaneId, instanceId, timelineSession.id, turn);
       void client.aiSessions.timeline(instanceId, timelineSession.id).then((timeline) => {
-        if (!active) return;
+        if (timelineRequests.current.get(requestKey) !== requestToken) return;
         for (const turn of turns) {
           const identities = new Set([turn.id, turn.providerTurnId].filter(Boolean));
           mobileAiSessionStore.resolveTurnTimeline(controlPlaneId, instanceId, timelineSession.id, turn, timeline.items.filter((item) => identities.has(item.turnId)));
         }
       }).catch((cause) => {
-        if (!active) return;
+        if (timelineRequests.current.get(requestKey) !== requestToken) return;
         for (const turn of turns) mobileAiSessionStore.rejectTurnTimeline(controlPlaneId, instanceId, timelineSession.id, turn, cause instanceof Error ? cause.message : 'Could not load the session timeline.');
+      }).finally(() => {
+        if (timelineRequests.current.get(requestKey) === requestToken) timelineRequests.current.delete(requestKey);
       });
     }
-    return () => { active = false; };
     // Timeline store transitions deliberately do not restart in-flight reads.
-  }, [client, controlPlaneId, detailMode, instanceId, selectedTurnIndex, session?.id, supportsLiveTimeline, supportsSessionTimeline, supportsTurnTimeline, timelineRecoveryRevision, timelineTurnSignature]);
+  }, [client, controlPlaneId, detailMode, instanceId, selectedTurnIndex, session?.id, supportsSessionTimeline, supportsTurnTimeline, timelineRecoveryRevision, timelineTurnSignature]);
   useEffect(() => {
     queueOrderPreviewRef.current = undefined;
     setQueueOrderPreview(undefined);
@@ -202,12 +327,36 @@ export function SessionWorkspace({
     queueDrag.current = undefined;
   }, [session?.queue.revision, sessionId]);
   if (!session) return <SessionDetail messages={messages} session={session} />;
+  const selectedTurn = session.turns?.[selectedTurnIndex];
+  const selectedTurnHasBody = Boolean(selectedTurn && mobileAiSessionStore.sessionTurnRevision(
+    controlPlaneId,
+    instanceId,
+    session.id,
+    selectedTurn.id,
+  ));
+  const initialTurnLoading = Boolean(
+    session.turnsRevision
+    && (session.turnCount ?? session.turns?.length ?? 0) > 0
+    && (!selectedTurn || !selectedTurnHasBody)
+  );
+  const selectedTurnRefreshing = initialTurnLoading || Boolean(selectedTurn && mobileAiSessionStore.neededSessionTurn(
+    controlPlaneId,
+    instanceId,
+    session.id,
+    selectedTurn.id,
+  ));
   const authoritativeActionsEnabled = syncPhase === 'ready';
   const isLatestTurn = detailMode === 'conversation' || selectedTurnIndex >= latestTurnIndex;
   const canInterrupt = canInterruptAiSession(session);
   const approvalPending = isAiSessionApprovalPending(session);
+  const providerCapability = directoryAiSessionProviderCapability(instanceCapabilities, session.agent);
+  const reasoningCapability = normalizeAiSessionReasoningEffortCapabilities(providerCapability);
+  // Compatibility for v0.0.21: older directory responses do not publish provider decision capabilities.
+  const approvalDecisions: ('allow' | 'deny' | 'skip')[] = providerCapability?.actions.approvalDecisions
+    ?? (session.agent === 'codex' || session.agent === 'claude' ? ['allow', 'skip', 'deny'] : []);
   const state = (action: Parameters<typeof mobileAiSessionBusyKey>[3], queueId?: string) => actions?.state(mobileAiSessionBusyKey(controlPlaneId, instanceId, session.id, action, queueId));
   const sendState = state('send');
+  const modelSelectionState = state('model-selection');
   const performAction = async <T,>(label: string, operation: () => Promise<MobileActionResult<T>>) => {
     const result = await operation();
     if (result.disposition === 'failed' || result.disposition === 'result-unknown') {
@@ -220,6 +369,19 @@ export function SessionWorkspace({
     const result = await performAction(t('sessions.continueFromTurn'), () => actions.fork(instanceId, session.id, turn.id, crypto.randomUUID()));
     if (result.disposition === 'accepted') onOpenSession?.(result.result.aiSessionId);
   };
+  const updateModelSelection = async (selection: NonNullable<typeof session.modelSelection>) => {
+    if (!actions || !authoritativeActionsEnabled || modelSelectionState?.phase === 'busy') return;
+    const result = await performAction(t('sessions.model'), () => actions.updateModelSelection(instanceId, session.id, crypto.randomUUID(), selection));
+    if (result.disposition === 'accepted') void refresh?.().catch(() => undefined);
+    if (result.disposition !== 'accepted') rerender((value) => value + 1);
+  };
+  const updateReasoningEffort = async (effort: AiSessionReasoningEffort) => {
+    if (!actions || !authoritativeActionsEnabled || reasoningState?.phase === 'busy') return;
+    const result = await performAction(t('sessions.reasoningEffort'), () => actions.updateReasoningEffort(instanceId, session.id, crypto.randomUUID(), effort));
+    if (result.disposition === 'accepted') void refresh?.().catch(() => undefined);
+    if (result.disposition !== 'accepted') rerender((value) => value + 1);
+  };
+  const reasoningState = state('reasoning-effort');
   const queuedItems = session.queue.items.filter((item) => item.status === 'queued');
   const displayedQueueItems = queueItemsWithQueuedOrder(session.queue.items, queueOrderPreview);
   const commitQueueOrder = async (queueIds: string[]) => {
@@ -330,14 +492,14 @@ export function SessionWorkspace({
     if (result.disposition === 'accepted') restoreDraftAfterQueueEdit(activeQueueEdit);
   };
   const send = async () => {
-    if (!actions || !draft.trim()) return;
+    if (!actions || (!draft.trim() && !attachments.length)) return;
     let refs;
     try { refs = usableUploadRefs(attachments); }
     catch (cause) { setAttachments((current) => [...current, { localId: 'validation', kind: 'file', name: 'Attachment', mime: 'application/octet-stream', size: 0, phase: 'failed', error: cause instanceof Error ? cause.message : 'Attachment invalid.' }]); return; }
     const selectedPermissionMode = permissionSelection && permissionSelection.key === permissionKey && permissionSelection.resolved
       ? permissionSelection.mode
       : defaultPermissionMode;
-    const result = await performAction(t('composer.send'), () => actions.send(instanceId, session.id, draft.trim(), session.agent === 'codex' ? selectedPermissionMode : undefined, refs, 'auto'));
+    const result = await performAction(t('composer.send'), () => actions.send(instanceId, session.id, aiSessionMessageText(draft.trim()), session.agent === 'codex' ? selectedPermissionMode : undefined, refs, 'auto'));
     if (result.disposition === 'accepted') {
       setDraft('');
       latestDraft.current = '';
@@ -351,20 +513,34 @@ export function SessionWorkspace({
     try {
       const local = await (kind === 'image' ? pickImage() : pickDocument());
       if (!local) return;
-      const uploaded = await uploadMobileAttachment(client, { instanceId, sessionId: session.id }, local);
-      setAttachments((current) => [...current.filter((item) => item.localId !== uploaded.localId), uploaded]);
+      await uploadLocalAttachment(local);
     } catch (cause) {
       setAttachments((current) => [...current, { localId: `failed:${Date.now()}`, kind, name: 'Attachment', mime: 'application/octet-stream', size: 0, phase: 'failed', error: cause instanceof Error ? cause.message : 'Could not select attachment.' }]);
     }
   };
+  const uploadLocalAttachment = async (local: MobileLocalFile, replaceLocalId?: string) => {
+    if (!client) return;
+    const pending = uploadingMobileAttachment(local, maxFileAttachmentBytes);
+    setAttachments((current) => replaceLocalId
+      ? current.map((item) => item.localId === replaceLocalId ? pending : item)
+      : [...current.filter((item) => item.localId !== pending.localId), pending]);
+    const uploaded = await uploadMobileAttachment(client, { instanceId, sessionId: session.id }, local, {
+      maxFileAttachmentBytes,
+      onProgress: (progress) => setAttachments((current) => current.map((item) => (
+        item.localId === pending.localId && item.phase === 'uploading' ? { ...item, progress } : item
+      ))),
+    });
+    setAttachments((current) => current.map((item) => item.localId === pending.localId ? uploaded : item));
+    return uploaded;
+  };
   const pasteImages = async (uris: string[]) => {
     if (!client) return;
-    const pasted = await Promise.all(uris.map(async (uri, index): Promise<MobilePendingAttachment> => {
+    await Promise.all(uris.map(async (uri, index) => {
       try {
-        return await uploadMobileAttachment(client, { instanceId, sessionId: session.id }, mobilePastedImage(uri));
+        await uploadLocalAttachment(mobilePastedImage(uri));
       } catch (cause) {
         try { new File(uri).delete(); } catch { /* The native wrapper owns only temporary paste files. */ }
-        return {
+        const failed: MobilePendingAttachment = {
           error: cause instanceof Error ? cause.message : 'Could not paste image.',
           kind: 'image',
           localId: `clipboard-failed:${Date.now()}:${index}`,
@@ -373,9 +549,31 @@ export function SessionWorkspace({
           phase: 'failed',
           size: 0,
         };
+        setAttachments((current) => [...current, failed]);
       }
     }));
-    setAttachments((current) => [...current.filter((item) => !pasted.some((next) => next.localId === item.localId)), ...pasted]);
+  };
+  const pasteText = async (text: string) => {
+    if (!client || activeQueueEdit) return;
+    try {
+      if (attachments.length >= 6) throw new Error('You can attach at most 6 files.');
+      const nextSequence = pastedTextSequence.current + 1;
+      const local = mobilePastedText(text, nextSequence, maxFileAttachmentBytes);
+      pastedTextSequence.current = nextSequence;
+      await uploadLocalAttachment(local);
+    } catch (cause) {
+      toast.show({ detail: cause instanceof Error ? cause.message : 'Could not attach pasted text.', title: t('composer.addAttachment'), tone: 'error' });
+    }
+  };
+  const retryAttachment = async (attachment: MobilePendingAttachment) => {
+    if (!client || !attachment.retryLocal) return;
+    await uploadLocalAttachment(attachment.retryLocal, attachment.localId);
+  };
+  const removeAttachment = (attachment: MobilePendingAttachment) => {
+    if (attachment.retryLocal?.temporary) {
+      try { new File(attachment.retryLocal.uri).delete(); } catch { /* Temporary paste cache may already be gone. */ }
+    }
+    setAttachments((current) => current.filter((item) => item.localId !== attachment.localId));
   };
   const loadRuntimeFiles = async () => {
     if (!client) return;
@@ -391,11 +589,12 @@ export function SessionWorkspace({
     if (draftTimer.current) clearTimeout(draftTimer.current);
     if (drafts) draftTimer.current = setTimeout(() => { void drafts.write(controlPlaneId, instanceId, session.id, text); }, 150);
   };
-  const hasDraft = Boolean(draft.trim());
+  const hasDraft = Boolean(draft.trim() || attachments.length);
   const composerAction = activeQueueEdit ? 'save' : !hasDraft && canInterrupt ? 'stop' : 'send';
   const composerOperationState = composerAction === 'stop' ? state('interrupt') : composerAction === 'save' ? state('queue-edit', activeQueueEdit?.queueId) : sendState;
   const composerBusy = composerOperationState?.phase === 'busy';
-  const composerDisabled = !authoritativeActionsEnabled || !actions || ['busy', 'result-unknown'].includes(composerOperationState?.phase || '')
+  const attachmentUploading = attachments.some((attachment) => attachment.phase === 'uploading');
+  const composerDisabled = !authoritativeActionsEnabled || !actions || attachmentUploading || ['busy', 'result-unknown'].includes(composerOperationState?.phase || '')
     || (composerAction === 'stop' ? !canInterrupt : composerAction === 'save'
       ? !hasDraft || draft.trim() === activeQueueEdit?.originalMessage.trim()
       : !session.actions?.send || !hasDraft);
@@ -412,7 +611,6 @@ export function SessionWorkspace({
     if (permissionKey) setPermissionSelection({ key: permissionKey, mode, resolved: true });
     if (sessionId && permissions) void permissions.write(controlPlaneId, instanceId, sessionId, mode).catch(() => undefined);
   };
-  const composerBottomInset = Math.max(insets.bottom, 8);
   const composerBackdropHeight = composerExpansion.interpolate({
     inputRange: [0, 1],
     outputRange: [SESSION_COMPOSER_COLLAPSED_HEIGHT, SESSION_COMPOSER_EXPANDED_HEIGHT],
@@ -420,22 +618,27 @@ export function SessionWorkspace({
   const composerFadeBottom = Animated.add(composerBackdropHeight, composerBottomInset);
   const bottomBackdrop = composerBottomBackdropGeometry(composerBottomInset);
   return (
-    <KeyboardAvoidingView behavior={sessionKeyboardAvoidingBehavior(Platform.OS)} style={styles.fill} testID="session-workspace">
-      <View onTouchStart={Keyboard.dismiss} style={styles.fill} testID="session-content">
+    <View style={[styles.fill, { backgroundColor: colors.surface }]} testID="session-workspace-background">
+      <KeyboardAvoidingView behavior={sessionKeyboardAvoidingBehavior(Platform.OS)} style={[styles.fill, { backgroundColor: colors.surface }]} testID="session-workspace">
+      <View onTouchStart={Keyboard.dismiss} style={[styles.fill, { backgroundColor: colors.surface }]} testID="session-content">
         <SessionDetail
           bottomInset={composerOverlayHeight}
+          contentLoading={initialTurnLoading}
+          keyboardViewportRevision={keyboardViewportRevision}
           messages={messages}
           mode={detailMode}
           onModeChange={setDetailMode}
           onRetryTimeline={(turn) => mobileAiSessionStore.retryTurnTimeline(controlPlaneId, instanceId, session.id, turn)}
           onContinueFromTurn={continueFromTurn}
           onVisible={onVisible}
-          onTurnIndexChange={setSelectedTurnIndex}
+          onTurnIndexChange={requestTurnSelection}
+          pendingTurnIndex={pendingTurnIndex}
           session={session}
           showModePicker={controlledDetailMode === undefined}
           timelineEnabled={supportsTurnTimeline || supportsSessionTimeline || supportsLiveTimeline}
           timelineHistoryEnabled={supportsTurnTimeline || supportsSessionTimeline}
           timelines={timelines}
+          turnLoading={pendingTurnIndex !== undefined || selectedTurnRefreshing}
           turnIndex={selectedTurnIndex}
         />
       </View>
@@ -472,14 +675,14 @@ export function SessionWorkspace({
             <Text accessibilityLiveRegion="polite" style={[styles.noticeText, { color: colors.noticeText }]}>{t('workspace.offline')}</Text>
           </View>
         ) : null}
-        {isLatestTurn && approvalPending ? (
+        {isLatestTurn && approvalPending && approvalDecisions.length ? (
           <View style={[styles.approval, { backgroundColor: colors.notice }]}> 
             <View style={styles.approvalTitleRow}>
               <SystemIcon android="approval" color={colors.noticeText} ios="hand.raised.fill" size={17} />
               <Text style={[styles.approvalTitle, { color: colors.noticeText }]}>{t('sessions.approvalNeeded')}</Text>
             </View>
             <View style={styles.actionRow}>
-              {(['allow', 'skip', 'deny'] as const).map((decision) => (
+              {approvalDecisions.map((decision) => (
                 <ApprovalButton key={decision} decision={decision} label={t(`workspace.${decision}` as 'workspace.allow')} disabled={!authoritativeActionsEnabled || !actions || ['busy', 'result-unknown'].includes(state('approval')?.phase || '')} onPress={() => {
                   const decisionLabel = t(`workspace.${decision}` as 'workspace.allow');
                   Alert.alert(t('workspace.resolveApproval'), t('workspace.sendDecision', { decision: decisionLabel }), [
@@ -551,8 +754,22 @@ export function SessionWorkspace({
             setRuntimeCandidates([]);
           } catch { setRuntimeCandidates([]); }
         }}><Text style={[styles.runtimeFile, { color: colors.primary }]}>{candidate.name} · {candidate.path}</Text></Pressable>} /> : null}
-        {attachments.length ? <View style={styles.attachments}>{attachments.map((attachment) => <View key={attachment.localId} style={[styles.attachment, { backgroundColor: colors.surfaceMuted }]}><SystemIcon android={attachment.kind === 'image' ? 'image' : 'description'} color={colors.textMuted} ios={attachment.kind === 'image' ? 'photo' : 'doc'} size={15} /><Text numberOfLines={1} style={[styles.attachmentName, { color: colors.text }]}>{attachment.name}</Text><Text style={[styles.attachmentPhase, { color: attachment.phase === 'failed' ? colors.error : colors.textMuted }]}>{attachment.phase}</Text><Pressable accessibilityLabel={`Remove ${attachment.name}`} accessibilityRole="button" hitSlop={8} onPress={() => setAttachments((current) => current.filter((item) => item.localId !== attachment.localId))}><SystemIcon android="close" color={colors.textMuted} ios="xmark.circle.fill" size={17} /></Pressable>{attachment.error ? <Text accessibilityLiveRegion="polite" style={[styles.error, { color: colors.error }]}>{attachment.error}</Text> : null}</View>)}</View> : null}
+        {attachments.length ? <View style={styles.attachments}>{attachments.map((attachment) => <View key={attachment.localId} style={[styles.attachment, { backgroundColor: colors.surfaceMuted }]}>
+          <SystemIcon android={attachment.kind === 'image' ? 'image' : 'description'} color={colors.textMuted} ios={attachment.kind === 'image' ? 'photo' : attachment.textPresentation ? 'doc.plaintext' : 'doc'} size={17} />
+          <View accessible accessibilityLabel={attachment.textPresentation ? `${attachment.name}, ${attachment.textPresentation.summary || t('composer.blankPastedText')}, ${t('composer.textLength', { count: formatMobileTextLength(attachment.textPresentation.codePointLength, locale) })}, ${formatMobileAttachmentBytes(attachment.size, locale)}` : attachment.name} style={styles.attachmentCopy}>
+            <Text numberOfLines={1} style={[styles.attachmentName, { color: colors.text }]}>{attachment.name}</Text>
+            {attachment.textPresentation ? <Text numberOfLines={1} style={[styles.attachmentSummary, { color: colors.text }]}>{attachment.textPresentation.summary || t('composer.blankPastedText')}</Text> : null}
+            <Text numberOfLines={1} style={[styles.attachmentMeta, { color: attachment.phase === 'failed' || attachment.phase === 'result-unknown' ? colors.error : colors.textMuted }]}>
+              {attachment.textPresentation ? `${t('composer.textLength', { count: formatMobileTextLength(attachment.textPresentation.codePointLength, locale) })} · ` : ''}{formatMobileAttachmentBytes(attachment.size, locale)} · {attachment.phase === 'uploading' && attachment.progress !== undefined && attachment.progress > 0 ? `${Math.round(attachment.progress * 100)}%` : attachment.phase}
+            </Text>
+            {attachment.error ? <Text accessibilityLiveRegion="polite" numberOfLines={2} style={[styles.error, { color: colors.error }]}>{attachment.error}</Text> : null}
+          </View>
+          {attachment.phase === 'uploading' ? <View style={styles.attachmentProgress}><ActivityIndicator color={colors.primary} size="small" /></View> : null}
+          {attachment.retryLocal && attachment.phase !== 'uploading' ? <Pressable accessibilityLabel={t('common.retry')} accessibilityRole="button" hitSlop={8} onPress={() => { void retryAttachment(attachment); }}><RotateCcw color={colors.primary} size={16} /></Pressable> : null}
+          <Pressable accessibilityLabel={`Remove ${attachment.name}`} accessibilityRole="button" hitSlop={8} onPress={() => removeAttachment(attachment)}><SystemIcon android="close" color={colors.textMuted} ios="xmark.circle.fill" size={17} /></Pressable>
+        </View>)}</View> : null}
         <SessionComposer
+          provider={session.agent}
           action={composerAction}
           actionBusy={composerBusy}
           actionDisabled={composerDisabled}
@@ -568,17 +785,27 @@ export function SessionWorkspace({
           onAddImage={() => { void selectLocal('image'); }}
           onAddRuntimeFile={() => { void loadRuntimeFiles(); }}
           onPasteImages={(uris) => { void pasteImages(uris); }}
+          onPasteText={(text) => { void pasteText(text); }}
           onCancelEdit={() => { if (activeQueueEdit) restoreDraftAfterQueueEdit(activeQueueEdit); }}
           onFocusChange={setComposerFocus}
           onPermissionModeChange={updatePermissionMode}
           onValueChange={updateDraft}
           permissionEnabled={session.agent === 'codex'}
           permissionMode={permissionMode}
+          modelGroups={modelGroups}
+          modelSelection={session.modelSelection}
+          modelSelectionBusy={modelSelectionState?.phase === 'busy'}
+          onModelSelectionChange={(selection) => { void updateModelSelection(selection); }}
+          reasoningEffort={session.reasoningEffort || (session.agent === 'codex' ? AI_SESSION_DEFAULT_REASONING_EFFORT : undefined)}
+          reasoningEffortEnabled={reasoningCapability.updateDuringSession}
+          reasoningEffortBusy={reasoningState?.phase === 'busy'}
+          onReasoningEffortChange={(effort) => { void updateReasoningEffort(effort); }}
           runtimeFileDisabled={!authoritativeActionsEnabled || !client || !session.cwd}
           value={draft}
         />
       </View>
-    </KeyboardAvoidingView>
+      </KeyboardAvoidingView>
+    </View>
   );
 }
 
@@ -754,9 +981,12 @@ const styles = StyleSheet.create({
   noticeText: { flex: 1, fontSize: mobileWebType.meta, lineHeight: mobileWebType.metaLine },
   error: { color: '#b91c1c', fontSize: mobileWebType.meta, lineHeight: mobileWebType.metaLine },
   attachments: { gap: 8 },
-  attachment: { alignItems: 'center', borderRadius: 10, flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingHorizontal: 10, paddingVertical: 8 },
-  attachmentName: { flex: 1, fontSize: mobileWebType.meta, fontWeight: '600', lineHeight: mobileWebType.metaLine },
-  attachmentPhase: { fontSize: mobileWebType.small, lineHeight: mobileWebType.smallLine, textTransform: 'capitalize' },
+  attachment: { alignItems: 'center', borderRadius: 10, flexDirection: 'row', gap: 8, paddingHorizontal: 10, paddingVertical: 8 },
+  attachmentCopy: { flex: 1, minWidth: 0 },
+  attachmentName: { fontSize: mobileWebType.meta, fontWeight: '500', lineHeight: mobileWebType.metaLine },
+  attachmentSummary: { fontSize: 12, fontWeight: '400', lineHeight: 17 },
+  attachmentMeta: { fontSize: 12, fontWeight: '400', lineHeight: 17 },
+  attachmentProgress: { alignItems: 'center', height: 20, justifyContent: 'center', width: 20 },
   runtimeFiles: { backgroundColor: '#f8fafc', borderRadius: 10, maxHeight: 128 }, runtimeFilesContent: { gap: 8, padding: 10 },
   runtimeFile: { color: '#2563eb', fontSize: mobileWebType.meta, lineHeight: mobileWebType.metaLine },
 });

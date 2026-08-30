@@ -5,7 +5,6 @@ import {
   aiSessionLastUserMessageAt,
   aiSessionStatusGroup,
   isAiSessionApprovalPending,
-  redactedAiSessionError,
 } from '@task-handoff/control-plane-client';
 
 import type { AiSessionScope, MobileAiSessionProfileState } from './store';
@@ -141,7 +140,7 @@ export function AiSessionInbox({
             };
           }}
           renderItem={({ item }) => {
-            const error = redactedAiSessionError(item.session);
+            const error = item.session.status === 'failed' ? item.session.error : undefined;
             const content = inboxCardContent(item.session, messagesBySession.get(sessionMessageGroupKey(item.instanceId, item.session.id)), t);
             const approvalPending = isAiSessionApprovalPending(item.session);
             const activityText = sessionActivityText(item.session, t);
@@ -171,7 +170,7 @@ export function AiSessionInbox({
                   {activityText ? <View style={styles.footerActivity} testID="session-card-footer-activity"><SystemIcon android="auto_awesome" color={colors.textMuted} ios="sparkles" size={13} /><ToolActivityText containerStyle={styles.activityTextContainer} running={item.session.status === 'running'} textStyle={styles.footerActivityText}>{activityText}</ToolActivityText></View> : null}
                   <Text style={[styles.time, { color: colors.textMuted }]}>{formatSessionUpdatedTime(aiSessionLastUserMessageAt(item.session) || item.session.startedAt, locale, t('sessions.yesterday'))}</Text>
                 </View>
-                {error ? <Text style={[styles.error, { color: colors.error }]}>{error}</Text> : null}
+                {error ? <Text numberOfLines={3} style={[styles.error, { color: colors.error }]}>{error}</Text> : null}
               </Pressable>
             );
           }}

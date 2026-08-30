@@ -57,15 +57,15 @@ function ActiveAppSessionsBoundary({ children }: { children: ReactNode }) {
     () => empty,
   );
   const closeSession = useCallback(async (instanceId: string, sessionId: string) => {
-    if (!runtime.api || !controller) throw new Error('No active Control Plane.');
-    await runtime.api.appSessions.stop(instanceId, sessionId);
-    await controller.refresh();
-  }, [controller, runtime.api]);
+    if (!runtime.api || !runtime.controlPlaneId) throw new Error('No active Control Plane.');
+    const session = await runtime.api.appSessions.stop(instanceId, sessionId);
+    mobileAppSessionStore.upsertSession(runtime.controlPlaneId, instanceId, session);
+  }, [runtime.api, runtime.controlPlaneId]);
   const renameSession = useCallback(async (instanceId: string, sessionId: string, title: string) => {
-    if (!runtime.api || !controller) throw new Error('No active Control Plane.');
-    await runtime.api.appSessions.rename(instanceId, sessionId, title);
-    await controller.refresh();
-  }, [controller, runtime.api]);
+    if (!runtime.api || !runtime.controlPlaneId) throw new Error('No active Control Plane.');
+    const session = await runtime.api.appSessions.rename(instanceId, sessionId, title);
+    mobileAppSessionStore.upsertSession(runtime.controlPlaneId, instanceId, session);
+  }, [runtime.api, runtime.controlPlaneId]);
   const refresh = useCallback(async () => {
     if (!controller) throw new Error('No active Control Plane.');
     await controller.refresh();

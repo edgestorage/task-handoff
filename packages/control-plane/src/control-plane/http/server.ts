@@ -2,27 +2,33 @@ import path from "node:path";
 import fs from "node:fs";
 import crypto from "node:crypto";
 import Fastify from "fastify";
+import compress from "@fastify/compress";
 import cookie from "@fastify/cookie";
 import websocket from "@fastify/websocket";
+import { TASK_HANDOFF_WEBSOCKET_SERVER_OPTIONS } from "@task-handoff/protocol/websocket-bridge";
+import { isControlPlaneCredentialHeader } from "./proxy-headers.ts";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import type { FastifyServerOptions } from "fastify";
 import { z } from "zod";
 import { AiSessionUnreadEventType } from "@task-handoff/protocol/ai-sessions";
 import { TtyStreamSnapshotMessageSchema } from "@task-handoff/protocol/app-sessions";
 import { RelayTtySnapshotEnvelopeSchema } from "@task-handoff/cloud-contracts";
-import { CONTROL_PLANE_PROTOCOL_VERSION, ControlPlaneHealthResponseSchema, ImagePullTerminalEventType, type BuildInfo } from "@task-handoff/protocol/control-plane";
+import { CONTROL_PLANE_PROTOCOL_VERSION, ControlPlaneHealthResponseSchema, ImagePullTerminalEventType, NodeStateProjectionEventSchema, type BuildInfo, type Node } from "@task-handoff/protocol/control-plane";
 import { packageVersionResolver } from "@task-handoff/core/core/package-version";
 import { DEFAULT_MAINTENANCE_INTERVAL_MS } from "@task-handoff/core/storage/retention";
-import { SESSION_STREAM_PROTOCOL_VERSION, SessionStreamsHelloEventType } from "@task-handoff/protocol/events";
+import { SESSION_STREAM_PROTOCOL_VERSION, SessionStreamsHelloEventType, aiSessionTransientSubscriptionAccepts, type AiSessionTransientSubscription, type EventEnvelope } from "@task-handoff/protocol/events";
 import { CONTROL_PLANE_SESSION_COOKIE, ControlPlaneAuth, type ControlPlaneAuthOptions } from "../auth/service.ts";
 import { ControlPlaneService, type ControlPlaneServiceOptions } from "../application/service.ts";
 import { ControlPlaneChatGatewayRuntime } from "../chat/gateway/runtime.ts";
 import { ControlPlaneEventBus } from "../events/bus.ts";
 import { AiSessionAttachmentStore } from "../sessions/ai-session-attachments.ts";
+import { AiSessionAttachmentCache } from "../sessions/ai-session-attachment-cache.ts";
 import { ControlPlaneNodeAgentTunnelTransport, ControlPlaneNodeEventSubscriber } from "../nodes/tunnel.ts";
 import { controlPlaneStorePaths } from "../persistence/paths.ts";
 import { acquireControlPlaneSingletonLock, defaultControlPlaneSingletonLockPath } from "../process/singleton-lock.ts";
-import { assertCan, type ControlPlaneAction, type ControlPlaneActor, type ControlPlaneResource } from "../auth/authorization.ts";
+import { assertCan, assertCanAccessResolvedResource, instanceScopeAllows, type ControlPlaneAction, type ControlPlaneActor, type ControlPlaneResource } from "../auth/authorization.ts";
+import { resolveRequestResourceScopes } from "../auth/resource-scope.ts";
+import { controlPlaneRequestActor, setControlPlaneRequestActor } from "./request-actor.ts";
 import { registerControlPlaneManagementRoutes } from "./management-routes.ts";
 import { registerInstanceProxyRoutes } from "./instance-proxy-routes.ts";
 import { ControlPlaneAiSessionAggregator } from "../sessions/ai-session-aggregator.ts";
@@ -38,6 +44,8 @@ import { ControlPlaneProxyEventHub } from "../proxy/event-hub.ts";
 import { registerNodeProxyRoutes } from "./node-proxy-routes.ts";
 import { ControlPlaneProxyStateSubscriber } from "../nodes/control-plane-proxy-state-subscriber.ts";
 import { registerControlPlaneProxyManagementRoutes } from "./control-plane-proxy-management-routes.ts";
+import { registerControlPlaneUserRoutes } from "./user-routes.ts";
+import { registerControlPlaneGitCredentialRoutes } from "./git-credential-routes.ts";
 import { projectControlPlaneProxyTarget, publicControlPlaneProxyTarget } from "../proxy/target-projector.ts";
 import { ControlPlaneIdentityService } from "../identity/service.ts";
 import { NodeConnectionRuntime } from "../nodes/connection-runtime.ts";
@@ -45,6 +53,9 @@ import { createControlPlaneDiagnosticLogger, createDiagnosticLogsArchive } from 
 import { CloudConnectivityService } from "../cloud-connectivity/service.ts";
 import type { CloudConnectivityLifecycle } from "../cloud-connectivity/lifecycle.ts";
 import { CloudConnectivityBackgroundRuntime } from "../cloud-connectivity/coordinator-runtime.ts";
+import { AuthorizationConnectionRegistry } from "../auth/authorization-connections.ts";
+import { registerBrowserRelayRoutes } from "./browser-relay-routes.ts";
+import { BrowserAccessService } from "../instances/browser-access-service.ts";
 
 export type CreateControlPlaneAppOptions = {
   dataDir?: string;
@@ -97,6 +108,26 @@ function envFlag(value: string | undefined) {
 
 function controlPlaneDiagnosticLogsEnabled() {
   return envFlag(process.env.TASK_HANDOFF_DIAGNOSTIC_LOGS);
+}
+
+function nodeStateProjection(node: Node & {
+  connectionPhase?: "connecting" | "handshaking" | "healthy" | "reconnecting" | "suspect" | "offline";
+  connectionDiagnostics?: {
+    pingRttMs?: number;
+    pingRttP95Ms?: number;
+    consecutiveReconnects: number;
+    nextRetryAt?: string;
+  };
+}) {
+  return NodeStateProjectionEventSchema.parse({
+    nodeId: node.id,
+    status: node.status,
+    health: node.health,
+    lastSeenAt: node.lastSeenAt ?? null,
+    connectionPhase: node.connectionPhase ?? null,
+    connectionDiagnostics: node.connectionDiagnostics ?? null,
+    proxyState: node.proxyState ?? null,
+  });
 }
 
 function optionalEnv(name: string) {
@@ -199,10 +230,7 @@ async function actorForRequest(auth: ControlPlaneAuth, credential: RequestSessio
   if (!auth.enabled()) {
     return disabledAuthActor();
   }
-  const user = credential.clientType === "mobile"
-    ? await auth.userForMobileSessionToken(credential.token)
-    : await auth.userForSessionToken(credential.token);
-  return user ? { type: "user" as const, userId: user.id, role: user.role } : undefined;
+  return auth.authorizationForSessionToken(credential.token, credential.clientType);
 }
 
 const ROUTES_WITHOUT_RBAC = new Set([
@@ -214,6 +242,8 @@ const ROUTES_WITHOUT_RBAC = new Set([
   "/api/control-plane/identity",
   "/api/health",
   "/api/events",
+  "/api/access/me",
+  "/api/auth/external/callback",
 ]);
 
 export function routeAuthorization(method: string, url: string): { action: ControlPlaneAction; resource: ControlPlaneResource } | undefined {
@@ -228,6 +258,9 @@ export function routeAuthorization(method: string, url: string): { action: Contr
   if (path === "/api/control-plane/diagnostic-logs/export") {
     return { action: "manage-settings", resource: { type: "control-plane-settings" } };
   }
+  if (path === "/api/session-streams/diagnostics") {
+    return { action: "manage-settings", resource: { type: "control-plane-settings" } };
+  }
   if (path.startsWith("/api/control-plane/settings")) {
     return { action: method === "GET" ? "read" : "manage-settings", resource: { type: "control-plane-settings" } };
   }
@@ -237,8 +270,24 @@ export function routeAuthorization(method: string, url: string): { action: Contr
   if (path === "/api/auth/password") {
     return undefined;
   }
+  if (path.startsWith("/api/auth/external/")) return undefined;
+  if (path.startsWith("/api/users")) {
+    return { action: method === "GET" ? "read" : "manage-members", resource: { type: path.includes("/sessions") ? "user-session" : "user" } };
+  }
+  if (path.startsWith("/api/roles") || path === "/api/permissions") {
+    return { action: method === "GET" ? "read" : "update", resource: { type: "role" } };
+  }
+  if (path.startsWith("/api/identity-providers")) {
+    return { action: method === "GET" ? "read" : "update", resource: { type: "identity-provider" } };
+  }
+  if (path.startsWith("/api/external-identity-approvals")) {
+    return { action: method === "GET" ? "read" : "manage-members", resource: { type: "identity-approval" } };
+  }
   if (path.startsWith("/api/models")) {
     return { action: method === "GET" ? "read" : "manage-secrets", resource: { type: "model" } };
+  }
+  if (path.startsWith("/api/git-credentials")) {
+    return { action: "manage-secrets", resource: { type: "secret" } };
   }
   if (path.startsWith("/api/chat-gateway/bridges")) {
     return { action: method === "GET" ? "read" : "manage-secrets", resource: { type: "chat-bridge" } };
@@ -265,9 +314,10 @@ export function routeAuthorization(method: string, url: string): { action: Contr
     return { action: method === "GET" ? "read" : "manage-node-auth", resource: { type: "node" } };
   }
   if (path.startsWith("/api/controlled-instances")) {
-    if (/\/apps\/sessions\/[^/]+\/access$/.test(path)) return { action: "read", resource: { type: "instance" } };
+    if (/\/apps\/sessions\/[^/]+\/access$/.test(path)) return { action: "interactive-access", resource: { type: "app-session" } };
     if (path.includes("/ai-sessions")) {
-      if (path.includes("/triggers")) return { action, resource: { type: "trigger" } };
+      if (path.includes("/triggers")) return { action, resource: { type: "trigger-deployment" } };
+      if (/\/messages\/[^/]+\/attachments\/[^/]+\/content$/.test(path)) return { action: "read-file-content", resource: { type: "attachment" } };
       if (method === "POST" && /\/ai-sessions$/.test(path)) return { action: "send-message", resource: { type: "ai-session" } };
       if (path.endsWith("/approval")) return { action: "approve", resource: { type: "ai-session" } };
       if (path.endsWith("/interrupt")) return { action: "interrupt", resource: { type: "ai-session" } };
@@ -277,7 +327,9 @@ export function routeAuthorization(method: string, url: string): { action: Contr
       if (path.endsWith("/read") || path.endsWith("/mentions/files")) {
         return { action: "read", resource: { type: "ai-session" } };
       }
-      return { action, resource: { type: "ai-session" } };
+      if (path.endsWith("/open-app") || path.endsWith("/close")) return { action: "update", resource: { type: "ai-session" } };
+      if (method === "GET" || method === "HEAD") return { action: "read", resource: { type: "ai-session" } };
+      return { action: "manage-settings", resource: { type: "control-plane-settings" } };
     }
     if (path.includes("/start")) return { action: "start", resource: { type: "instance" } };
     if (path.includes("/stop")) return { action: "stop", resource: { type: "instance" } };
@@ -289,14 +341,17 @@ export function routeAuthorization(method: string, url: string): { action: Contr
     return { action, resource: { type: "project" } };
   }
   if (path.startsWith("/api/images") || path.startsWith("/api/image-options") || path.startsWith("/api/market")) {
-    return { action, resource: { type: "runtime" } };
+    return { action, resource: { type: "image" } };
   }
   if (path.startsWith("/api/triggers")) {
-    return { action, resource: { type: "trigger" } };
+    if (path.endsWith("/apply")) return { action: "create", resource: { type: "trigger-deployment" } };
+    return { action, resource: { type: "trigger-template" } };
   }
-  // Unknown read routes remain visible to viewer roles. Unknown mutations are
-  // fail-closed for non-admin actors instead of silently degrading to read.
-  return { action, resource: { type: "control-plane-settings" } };
+  // Collection reads use a non-sensitive global directory policy and must be
+  // filtered by their handler. Unknown mutations fail closed as settings.
+  return method === "GET" || method === "HEAD"
+    ? { action: "read", resource: { type: "public-directory" } }
+    : { action, resource: { type: "control-plane-settings" } };
 }
 
 function actionForHttpMethod(method: string): ControlPlaneAction {
@@ -310,17 +365,47 @@ function actionForHttpMethod(method: string): ControlPlaneAction {
 export async function createControlPlaneApp(options: CreateControlPlaneAppOptions = {}) {
   const paths = controlPlaneStorePaths(options.dataDir);
   const app = Fastify({ logger: options.logger ?? true });
+  await app.register(compress, {
+    encodings: ["br", "gzip", "deflate"],
+    globalDecompression: false,
+    threshold: 1024,
+  });
+  app.addContentTypeParser("application/octet-stream", (_request, payload, done) => done(null, payload));
   const events = new ControlPlaneEventBus();
+  const authorizationConnections = new AuthorizationConnectionRegistry();
+  const browserAccess = new BrowserAccessService();
   const cloudConnectivityEnabled = options.cloudConnectivityEnabled ?? process.env.TASK_HANDOFF_CLOUD_CONNECTIVITY_ENABLED !== "0";
   let diagnosticLogsEnabled = controlPlaneDiagnosticLogsEnabled();
   const diagnosticLogger = createControlPlaneDiagnosticLogger(paths.logsDir, () => diagnosticLogsEnabled, app.log);
   const nodeConnectionRuntime = new NodeConnectionRuntime();
-  nodeConnectionRuntime.onChange((observation) => events.publish("node.connection.updated", observation, {
-    topic: "node.state",
-    scope: { nodeId: observation.nodeId },
-  }));
-  const service = new ControlPlaneService(paths, { ...options.service, logger: diagnosticLogger, nodeConnectionRuntime });
-  const auth = new ControlPlaneAuth(paths, options.auth);
+  const service = new ControlPlaneService(paths, {
+    ...options.service,
+    logger: diagnosticLogger,
+    nodeConnectionRuntime,
+    onFleetStateChanged: (state) => {
+      options.service?.onFleetStateChanged?.(state);
+      events.publish("node.fleet.updated", state, {
+        topic: state.resource === "instances" ? "instances" : state.resource === "models" ? "models" : "node.runtime",
+        scope: { nodeId: state.nodeId },
+      });
+    },
+  });
+  nodeConnectionRuntime.onChange((observation) => events.publish(
+    "node.connection.updated",
+    nodeStateProjection(service.requirePublicNode(observation.nodeId)),
+    {
+      topic: "node.state",
+      scope: { nodeId: observation.nodeId },
+    },
+  ));
+  const auth = new ControlPlaneAuth(paths, {
+    ...options.auth,
+    onUserAuthorizationChanged: (change) => {
+      events.invalidateUserAuthorization(change.userId, change.authorizationRevision);
+      authorizationConnections.invalidate(change.userId, change.authorizationRevision);
+      options.auth?.onUserAuthorizationChanged?.(change);
+    },
+  });
   const identity = new ControlPlaneIdentityService(
     paths.identitySigningPath,
     () => service.proxyPrivateStore.controlPlaneId(),
@@ -344,16 +429,35 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
       const token = crypto.randomBytes(32).toString("base64url");
       cloudRelayActors.set(token, actor);
       try {
-        const headers = Object.fromEntries(Object.entries(input.headers ?? {}).filter(([name]) => !["authorization", "cookie", "host", "connection", "upgrade", CLOUD_INTERNAL_ACTOR_HEADER].includes(name.toLowerCase())).map(([name, value]) => [name, String(value)]));
+        const headers = Object.fromEntries(Object.entries(input.headers ?? {}).filter(([name]) => {
+          const lower = name.toLowerCase();
+          return !isControlPlaneCredentialHeader(lower) && !["host", "connection", "upgrade", CLOUD_INTERNAL_ACTOR_HEADER].includes(lower);
+        }).map(([name, value]) => [name, String(value)]));
         const response = await app.inject({ method: method as any, url: requestPath, headers: { ...headers, [CLOUD_INTERNAL_ACTOR_HEADER]: token }, ...(input.body === undefined ? {} : { payload: input.body as any }) });
         let body: unknown; try { body = response.json(); } catch { body = response.body; }
         return { status: response.statusCode, body };
       } finally { cloudRelayActors.delete(token); }
     },
-    subscribe(actor: ControlPlaneActor, topics: string[], listener: (event: unknown) => void) {
+    subscribe(actor: ControlPlaneActor, topics: string[], listener: (event: EventEnvelope) => void, aiSessionTransient?: AiSessionTransientSubscription) {
       if (actor.type !== "cloud-account") throw Object.assign(new Error("Cloud account actor required."), { code: "CLOUD_ACTOR_REQUIRED" });
-      const selected = new Set(topics.length ? topics : ["*"]);
-      return events.on((event) => { if (selected.has("*") || selected.has(event.topic) || selected.has(event.type)) listener(event); });
+      // The relay decoder supplies ["*"] when the legacy field is absent.
+      // An explicit empty list means the last consumer has unsubscribed.
+      const selected = new Set(topics);
+      if (!selected.size) return () => undefined;
+      // Compatibility for v0.0.21 cloud clients: absence of the additive model
+      // retains topic-derived legacy demand. Current mobile clients are precise.
+      const stopEvents = events.on((event) => {
+        if ((selected.has("*") || selected.has(event.topic) || selected.has(event.type)) && aiSessionTransientSubscriptionAccepts(aiSessionTransient, event)) listener(event);
+      });
+      // Install delivery before publishing upstream demand so a synchronous
+      // source replay cannot overtake this relay consumer.
+      const stopTransientDemand = aiSessionTransient
+        ? events.registerAiSessionTransientDemand(aiSessionTransient)
+        : events.registerLegacyAiSessionTransientDemand(selected);
+      return () => {
+        stopEvents();
+        stopTransientDemand();
+      };
     },
     async openTty(actor: ControlPlaneActor, input: { instanceId: string; sessionId: string }, listener: (message: any) => void) {
       const instanceId = String(input?.instanceId || ""); const sessionId = String(input?.sessionId || "");
@@ -400,16 +504,22 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   });
   service.setAppSessionSnapshotProvider((options) => appSessionAggregator.list(options));
   service.setAiSessionSnapshotProvider((options) => aiSessionAggregator.list(options));
+  const aiSessionAttachmentCache = new AiSessionAttachmentCache(paths.dataDir, {
+    onWarning: (reason) => app.log.warn(reason),
+  });
   events.on((event) => {
     imagePullProgress.handle(event);
-    if (event.type === "instance.deleted") {
+    if (event.type === "instance.deleted" || event.type === "instance.updated") {
       const instanceId = event.payload && typeof event.payload === "object" && "instanceId" in event.payload
         ? String((event.payload as { instanceId?: unknown }).instanceId || "")
         : "";
       if (instanceId) {
-        appSessionAggregator.removeInstance(instanceId);
-        aiSessionAggregator.removeInstance(instanceId);
-        aiSessionUnread.removeInstance(instanceId);
+        if (event.type === "instance.deleted") {
+          appSessionAggregator.removeInstance(instanceId);
+          aiSessionAggregator.removeInstance(instanceId);
+          aiSessionUnread.removeInstance(instanceId);
+        }
+        aiSessionAttachmentCache.removeInstance(instanceId);
       }
     }
   });
@@ -420,6 +530,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   const nodeAgentTunnel = new ControlPlaneNodeAgentTunnelTransport(events, {
     connectionRuntime: nodeConnectionRuntime,
     validateInstanceScope: (nodeId, instanceId) => service.nodeOwnsInstance(nodeId, instanceId),
+    onInstanceLifecycle: (nodeId, lifecycle) => service.applyInstanceLifecycle(nodeId, lifecycle),
     onStreamsHello: (instanceId, hello) => {
       for (const descriptor of hello.streams) {
         if (descriptor.topic === "ai.sessions") aiSessionAggregator.advertiseStream(instanceId, descriptor);
@@ -459,7 +570,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     logger: diagnosticLogger,
     onStateChanged: (node) => events.publish(
       "node.proxy-state.updated",
-      { nodeId: node.id, proxyState: node.proxyState },
+      nodeStateProjection(node),
       { topic: "node.state", scope: { nodeId: node.id } },
     ),
   });
@@ -488,6 +599,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     }
   });
   service.setNodeAgentTransport(nodeAgentTunnel);
+  await auth.init();
   service.init();
   diagnosticLogsEnabled = service.diagnosticLogsEnabled();
   identity.init();
@@ -511,7 +623,6 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   proxy.init();
   proxyStateSubscriber.start();
   await service.syncLocalNodeConnection().catch(() => undefined);
-  auth.init();
   const chatGateway = new ControlPlaneChatGatewayRuntime(service, options.service?.fetchImpl, {
     aiSessions: aiSessionAggregator,
     logger: diagnosticLogger,
@@ -523,9 +634,12 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     logger: diagnosticLogger,
     connectionRuntime: nodeConnectionRuntime,
   });
+  const stopAiSessionTransientDemand = events.onAiSessionTransientDemand((demand) => {
+    nodeEventSubscriber.setAiSessionTransientDemand(demand);
+  });
   nodeEventSubscriber.start();
   await app.register(cookie);
-  await app.register(websocket);
+  await app.register(websocket, { options: TASK_HANDOFF_WEBSOCKET_SERVER_OPTIONS });
   app.addHook("onClose", async () => {
     await cloudConnectivityRuntime.stop();
     if (pairingRecoveryTimer) clearInterval(pairingRecoveryTimer);
@@ -535,7 +649,10 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     proxyEventHub.stop();
     proxyStateSubscriber.stop();
     nodeEventSubscriber.stop();
+    stopAiSessionTransientDemand();
     chatGateway.stopAll();
+    service.dispose();
+    await auth.close();
   });
 
   app.setErrorHandler((error, request, reply) => {
@@ -578,6 +695,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     const cloudActor = typeof internalActorToken === "string" ? cloudRelayActors.get(internalActorToken) : undefined;
     if (cloudActor) {
       cloudRelayActors.delete(internalActorToken as string);
+      setControlPlaneRequestActor(request, cloudActor);
       const authorization = routeAuthorization(request.method, securityUrl);
       if (!authorization) throw Object.assign(new Error("Cloud access route is not authorized."), { code: "CLOUD_ROUTE_FORBIDDEN", statusCode: 403 });
       assertCan(cloudActor, authorization.action, authorization.resource);
@@ -591,6 +709,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     const isPublicRoute = authBoundary === "public" || (authBoundary === "public-ui" && isPublicUiPath(request.url));
     if (!auth.enabled() || isPublicRoute) {
       const actor = await actorForRequest(auth, requestSessionCredential(request));
+      setControlPlaneRequestActor(request, actor || disabledAuthActor());
       const authorization = routeAuthorization(request.method, securityUrl);
       if (authorization) {
         assertCan(actor || disabledAuthActor(), authorization.action, authorization.resource);
@@ -606,9 +725,35 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
         },
       });
     }
+    setControlPlaneRequestActor(request, actor);
+    if (actor.type === "user" && actor.requiresPasswordChange && securityUrl !== "/api/auth/password") {
+      throw Object.assign(new Error("Change the temporary password before accessing the Control Plane."), {
+        code: "AUTH_PASSWORD_CHANGE_REQUIRED",
+        statusCode: 403,
+      });
+    }
     const authorization = routeAuthorization(request.method, securityUrl);
     if (authorization) {
-      assertCan(actor, authorization.action, authorization.resource);
+      if (actor.type === "user") {
+        assertCan(actor, authorization.action, authorization.resource);
+        let scopes;
+        try {
+          scopes = await resolveRequestResourceScopes(service, request, securityUrl, authorization.resource, actor, authorization.action);
+        } catch (error) {
+          if (error && typeof error === "object" && (error as { statusCode?: number }).statusCode === 404) {
+            throw Object.assign(new Error("The requested resource is not visible."), {
+              statusCode: 404,
+              code: "CONTROL_PLANE_RESOURCE_NOT_VISIBLE",
+            });
+          }
+          throw error;
+        }
+        if (scopes?.length) {
+          for (const scope of scopes) assertCanAccessResolvedResource(actor, authorization.action, authorization.resource, scope);
+        }
+      } else {
+        assertCan(actor, authorization.action, authorization.resource);
+      }
     }
   });
 
@@ -630,7 +775,6 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
       role: "control-plane",
       protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
       build: buildInfo(),
-      dataDir: paths.dataDir,
       serverTime: new Date().toISOString(),
     },
   }));
@@ -678,6 +822,8 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
         ...nodeEventSubscriber.diagnostics(),
         runtime: nodeConnectionRuntime.diagnostics(),
       },
+      eventAuthorization: events.authorizationDiagnostics(),
+      browserRelay: browserAccess.diagnostics(),
     },
   }));
 
@@ -688,33 +834,72 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   });
 
   app.get("/api/events", { websocket: true }, async (socket, request) => {
-    const eventQuery = request.query as { instanceId?: string };
+    const eventQuery = request.query as { aiSessionTransient?: string; resourceMetricsScope?: string; instanceId?: string };
     const eventInstanceId = typeof eventQuery.instanceId === "string" ? eventQuery.instanceId.trim() : "";
+    const actor = controlPlaneRequestActor(request);
+    const visibleInstances = actor?.type === "user"
+      ? (await service.listControlledInstances()).filter((instance) => instanceScopeAllows(actor.nodeScope, actor.instanceScope, instance.id, instance.nodeId))
+      : undefined;
+    const visibleInstanceIds = visibleInstances ? new Set(visibleInstances.map((instance) => instance.id)) : undefined;
+    if (eventInstanceId && visibleInstanceIds && !visibleInstanceIds.has(eventInstanceId)) {
+      socket.close(4003, "The requested event scope is not visible.");
+      return;
+    }
     const pendingFrames: string[] = [];
     let handshakeSent = false;
     const gatedSocket = {
       get readyState() { return socket.readyState; },
+      get bufferedAmount() { return socket.bufferedAmount; },
       OPEN: socket.OPEN,
       send(value: string) {
         if (handshakeSent) socket.send(value);
         else pendingFrames.push(value);
       },
+      ping() {
+        socket.ping();
+      },
       on(event: "close" | "message", listener: (value?: unknown) => void) {
         socket.on(event, listener);
       },
+      close(code?: number, reason?: string) {
+        socket.close(code, reason);
+      },
     };
-    events.connect(gatedSocket, { instanceIds: eventInstanceId ? [eventInstanceId] : undefined });
+    events.connect(gatedSocket, {
+      instanceIds: eventInstanceId ? [eventInstanceId] : undefined,
+      expectsTransientSubscription: eventQuery.aiSessionTransient === "1",
+      expectsMetricSubscription: eventQuery.resourceMetricsScope === "1",
+      ...(actor?.type === "user" ? {
+        authorization: {
+          userId: actor.userId,
+          authorizationRevision: actor.authorizationRevision,
+          permissionIds: actor.permissionIds,
+          ...(actor.nodeScope.kind === "selected" ? {
+            allowedNodeIds: new Set(actor.nodeScope.nodeIds),
+          } : {}),
+          ...((actor.instanceScope?.kind === "selected" || actor.nodeScope.kind === "selected") ? {
+            allowedInstanceIds: visibleInstanceIds,
+          } : {}),
+        },
+      } : {}),
+    });
     const [aiStreams, appStreams] = await Promise.all([
       aiSessionAggregator.streamDescriptors(),
       appSessionAggregator.streamDescriptors(),
     ]);
     events.send(socket, SessionStreamsHelloEventType, {
       protocolVersion: SESSION_STREAM_PROTOCOL_VERSION,
-      streams: [...aiStreams, ...appStreams].filter((stream) => !eventInstanceId || stream.instanceId === eventInstanceId),
+      streams: [...aiStreams, ...appStreams].filter((stream) => (
+        (!visibleInstanceIds || visibleInstanceIds.has(stream.instanceId))
+        && (!eventInstanceId || stream.instanceId === eventInstanceId)
+      )),
     });
     handshakeSent = true;
     for (const frame of pendingFrames) socket.send(frame);
-    for (const snapshot of imagePullProgress.snapshots().filter((entry) => !eventInstanceId || entry.instanceId === eventInstanceId)) {
+    for (const snapshot of imagePullProgress.snapshots().filter((entry) => (
+      (!visibleInstanceIds || visibleInstanceIds.has(entry.instanceId))
+      && (!eventInstanceId || entry.instanceId === eventInstanceId)
+    ))) {
       events.send(socket, ImagePullTerminalEventType.Snapshot, snapshot, {
         topic: "instances",
         scope: { instanceId: snapshot.instanceId },
@@ -744,11 +929,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     data: await auth.loginMobile(request.body, { sourceId: request.ip }),
   }));
   app.patch("/api/auth/password", async (request, reply) => {
-    const result = await auth.changePassword(
-      request.cookies[CONTROL_PLANE_SESSION_COOKIE],
-      request.body,
-      { sourceId: request.ip },
-    );
+    const result = await auth.changePassword(request.cookies[CONTROL_PLANE_SESSION_COOKIE], request.body);
     reply.setCookie(CONTROL_PLANE_SESSION_COOKIE, result.sessionToken, {
       path: "/",
       httpOnly: true,
@@ -759,26 +940,37 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   });
   app.post("/api/auth/mobile/logout", async (request) => {
     const credential = requestSessionCredential(request);
-    return { data: auth.logout(credential.clientType === "mobile" ? credential.token : undefined) };
+    return { data: await auth.logout(credential.clientType === "mobile" ? credential.token : undefined) };
   });
   app.get("/api/auth/mobile/sessions", async (request, reply) => {
-    const sessions = auth.mobileSessions(requestSessionCredential(request).token);
+    const sessions = await auth.mobileSessions(requestSessionCredential(request).token);
     return sessions ? { data: sessions } : reply.code(401).send({
       error: { code: "CONTROL_PLANE_AUTH_REQUIRED", message: "Sign in to access mobile sessions." },
     });
   });
   app.delete("/api/auth/mobile/sessions/:id", async (request, reply) => {
     const params = z.object({ id: z.string().trim().min(1) }).parse(request.params);
-    const revoked = auth.revokeMobileSession(requestSessionCredential(request).token, params.id);
+    const revoked = await auth.revokeMobileSession(requestSessionCredential(request).token, params.id);
     return revoked === undefined ? reply.code(401).send({
       error: { code: "CONTROL_PLANE_AUTH_REQUIRED", message: "Sign in to revoke mobile sessions." },
     }) : { data: { revoked } };
   });
   app.post("/api/auth/logout", { config: PUBLIC_CONTROL_PLANE_ROUTE }, async (request, reply) => {
-    const result = auth.logout(request.cookies[CONTROL_PLANE_SESSION_COOKIE]);
+    const result = await auth.logout(request.cookies[CONTROL_PLANE_SESSION_COOKIE]);
     reply.clearCookie(CONTROL_PLANE_SESSION_COOKIE, { path: "/" });
     return { data: result };
   });
+
+  app.get("/api/access/me", async (request, reply) => {
+    const credential = requestSessionCredential(request);
+    const access = await auth.currentAccess(credential.token, credential.clientType);
+    return access ? { data: access } : reply.code(401).send({
+      error: { code: "CONTROL_PLANE_AUTH_REQUIRED", message: "Sign in to read Control Plane access." },
+    });
+  });
+
+  registerControlPlaneUserRoutes(app, auth);
+  registerControlPlaneGitCredentialRoutes(app, service);
 
   app.get("/api/control-plane/status", async () => ({
     data: {
@@ -826,9 +1018,15 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     aiSessionUnread,
     chatGateway,
     aiSessionAttachments,
+    aiSessionAttachmentCache,
     nodeAgentTunnel,
     nodeEventSubscriber,
     errorPayload: controlPlaneErrorPayload,
+    onInstanceDeleted: async (instanceId) => {
+      if (!auth.enabled()) return;
+      const affectedUserIds = await auth.users.removeInstanceFromAccessScopes(instanceId);
+      for (const userId of affectedUserIds) await auth.notifyAuthorizationChanged(userId);
+    },
   });
 
   registerNodeProxyRoutes({
@@ -852,6 +1050,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     proxy,
     runtime: proxyRuntime,
     events,
+    syncNodeEvents: () => nodeEventSubscriber.syncNow(),
     actorId: async (request) => {
       const actor = await actorForRequest(auth, requestSessionCredential(request));
       if (!actor) return "system:unknown";
@@ -862,7 +1061,8 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     },
   });
 
-  registerInstanceProxyRoutes({ app, service });
+  registerInstanceProxyRoutes({ app, service, auth, authorizationConnections });
+  registerBrowserRelayRoutes({ app, service, auth, authorizationConnections, events, browserAccess });
 
   app.get("*", { config: PUBLIC_CONTROL_PLANE_UI_ROUTE }, async (_request, reply) =>
     fs.existsSync(staticDir)

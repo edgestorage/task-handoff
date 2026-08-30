@@ -15,10 +15,8 @@ import path from "node:path";
 import type { CommandRunner } from "../shared/process/command-runner.ts";
 import type { NodeAgentStorePaths } from "./persistence/paths.ts";
 import { createId, JsonCollection } from "../shared/persistence/store.ts";
-
-function now() {
-  return new Date().toISOString();
-}
+import { globalPrefixFromModulePath } from "@task-handoff/core/core/server-update-installation";
+import { nowIso as now } from "@task-handoff/core/core/time";
 
 export function isNewerVersion(current: string | undefined, available: string) {
   if (!current) return true;
@@ -77,12 +75,50 @@ export type NodeUpdatePackageSelection = {
   packageName: NodeUpdatePackageName;
   currentVersion?: string;
   relatedCurrentVersions: string[];
+  installPrefix: string;
 };
 
-export async function resolveNodeUpdatePackage(runCommand: CommandRunner): Promise<NodeUpdatePackageSelection> {
-  const result = await runCommand(npmCommand(), ["root", "--global"]);
-  const globalRoot = result.stdout.trim();
+function activeUpdatePackage(moduleDir: string): NodeUpdatePackageSelection | undefined {
+  const installPrefix = globalPrefixFromModulePath(moduleDir);
+  if (!installPrefix) return undefined;
+  let current = path.resolve(moduleDir);
+  let nodeAgentVersion: string | undefined;
+  while (current !== path.dirname(current)) {
+    try {
+      const manifest = JSON.parse(fs.readFileSync(path.join(current, "package.json"), "utf8")) as { name?: unknown; version?: unknown };
+      if (manifest.name === "@task-handoff/node-agent" && typeof manifest.version === "string" && manifest.version.trim()) {
+        nodeAgentVersion = manifest.version.trim();
+      }
+      if (manifest.name === "@task-handoff/server" && typeof manifest.version === "string" && manifest.version.trim()) {
+        return {
+          packageName: "@task-handoff/server",
+          currentVersion: manifest.version.trim(),
+          relatedCurrentVersions: nodeAgentVersion ? [nodeAgentVersion] : [],
+          installPrefix,
+        };
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    current = path.dirname(current);
+  }
+  return nodeAgentVersion
+    ? { packageName: "@task-handoff/node-agent", currentVersion: nodeAgentVersion, relatedCurrentVersions: [], installPrefix }
+    : undefined;
+}
+
+export async function resolveNodeUpdatePackage(runCommand: CommandRunner, moduleDir?: string): Promise<NodeUpdatePackageSelection> {
+  // Compatibility for v0.0.18: legacy service units may execute a package from
+  // /usr/local while the ambient npm global prefix points somewhere else.
+  // The running package is authoritative for both update selection and version.
+  const active = moduleDir ? activeUpdatePackage(moduleDir) : undefined;
+  if (active) return active;
+  const rootResult = await runCommand(npmCommand(), ["root", "--global"]);
+  const globalRoot = rootResult.stdout.trim();
   if (!globalRoot) throw new Error("npm did not return its global module root.");
+  const prefixResult = await runCommand(npmCommand(), ["prefix", "--global"]);
+  const installPrefix = prefixResult.stdout.trim();
+  if (!path.isAbsolute(installPrefix)) throw new Error(`npm did not return an absolute global prefix: ${installPrefix || "empty"}`);
   const server = installedPackageManifest(globalRoot, "@task-handoff/server");
   const nodeAgent = installedPackageManifest(globalRoot, "@task-handoff/node-agent");
   if (server) {
@@ -90,12 +126,14 @@ export async function resolveNodeUpdatePackage(runCommand: CommandRunner): Promi
       packageName: "@task-handoff/server",
       currentVersion: server.version,
       relatedCurrentVersions: nodeAgent ? [nodeAgent.version] : [],
+      installPrefix,
     };
   }
   return {
     packageName: "@task-handoff/node-agent",
     currentVersion: nodeAgent?.version,
     relatedCurrentVersions: [],
+    installPrefix,
   };
 }
 
@@ -312,6 +350,22 @@ export class NodeUpdateJobs {
     options: { processStarted?: boolean } = {},
   ) {
     const byId = new Map(instances.map((instance) => [instance.id, instance]));
+    if (options.processStarted) {
+      // Compatibility for v0.0.22-v0.0.24: recover jobs stranded before the
+      // packaged worker's first transition so they no longer block retries.
+      for (const queued of this.list().filter((candidate) => candidate.status === "queued")) {
+        this.patch(queued.id, {
+          status: "failed",
+          rollout: { ...queued.rollout, phase: "failed" },
+          error: {
+            code: "NODE_UPDATE_FAILED",
+            message: "The node agent restarted before the update worker claimed this job.",
+            retryable: true,
+          },
+          completedAt: now(),
+        });
+      }
+    }
     for (const persisted of this.list().filter((candidate) => ["updating-node", "restarting-node", "converging-instances"].includes(candidate.status))) {
       if (options.processStarted && persisted.status === "restarting-node" && nodeVersion !== persisted.toVersion) {
         this.patch(persisted.id, {

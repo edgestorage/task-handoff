@@ -6,6 +6,8 @@ import {
   AiSessionCreateInputSchema,
   AiSessionCreateRefInputSchema,
   AiSessionCreateResultSchema,
+  AiSessionActionCompatibleResponseSchema,
+  projectAiSessionActionResponse,
   AiSessionForkInputSchema,
   AiSessionForkResultSchema,
   AiSessionCloseInputSchema,
@@ -18,6 +20,8 @@ import {
   AiSessionHistoryListSchema,
   AI_SESSION_HISTORY_MAX_LIMIT,
   AiSessionMessageDeltaEventSchema,
+  compactAiSessionMessageDeltaEvent,
+  normalizeAiSessionMessageDeltaEvent,
   AiSessionMentionCandidateSchema,
   AiSessionMentionFileSearchSchema,
   AiSessionMessageInputSchema,
@@ -25,10 +29,17 @@ import {
   AiSessionOpenAppInputSchema,
   AiSessionOpenAppResultSchema,
   AiSessionQueueEditInputSchema,
+  AiSessionQueueMutationResponseSchema,
   AiSessionQueueReorderInputSchema,
   AiSessionReferenceSchema,
   AiSessionRealtimeInputSchema,
   AiSessionStatusSchema,
+  AiSessionDetailSchema,
+  AiSessionDetailReadSchema,
+  AiSessionTurnBodySchema,
+  AiSessionTurnBodyReadSchema,
+  AiSessionTurnIndexSchema,
+  AiSessionTurnIndexReadSchema,
   AiSessionSummarySchema,
   AiSessionResumeResultSchema,
   AiSessionSubAgentSchema,
@@ -44,8 +55,14 @@ import {
   emptyAppSessionsSnapshot,
 } from "../src/app-sessions.ts";
 import {
+  AiSessionTransientSubscriptionSchema,
+  aiSessionTransientSubscriptionAccepts,
   SESSION_STREAM_PROTOCOL_VERSION,
   SessionStreamsHelloSchema,
+  COMPACT_EVENT_ENVELOPE_VERSION,
+  EventWireEnvelopeSchema,
+  normalizeEventEnvelope,
+  projectEventEnvelope,
 } from "../src/events.ts";
 
 const now = "2026-07-13T00:00:00.000Z";
@@ -68,6 +85,53 @@ test("AI session queue schemas expose revisioned edit and reorder inputs", () =>
   assert.equal(AiSessionQueueReorderInputSchema.safeParse({ expectedRevision: 2, queueIds: [], extra: true }).success, false);
 });
 
+test("AI session detail, Turn index, and Turn body are independent strict wire models", () => {
+  const detail = AiSessionDetailSchema.parse({
+    id: "session-a",
+    queue: { revision: 0, pendingCount: 0, items: [] },
+    subAgents: [],
+  });
+  assert.equal("turns" in detail, false);
+  assert.equal(AiSessionDetailSchema.safeParse({ ...detail, turns: [] }).success, false);
+
+  const indexTurn = { id: "turn-a", status: "completed", phase: "responding", revision: 2, bodyRevision: "body-v2", startedAt: now, updatedAt: now };
+  const index = AiSessionTurnIndexSchema.parse({ sessionId: detail.id, revision: "turns-v2", turns: [indexTurn] });
+  assert.deepEqual(index.turns, [indexTurn]);
+  assert.equal(AiSessionTurnIndexSchema.safeParse({ ...index, turns: [{ ...indexTurn, lastMessage: "must stay in the body" }] }).success, false);
+
+  const { bodyRevision: _bodyRevision, ...turn } = indexTurn;
+  const body = AiSessionTurnBodySchema.parse({ sessionId: detail.id, revision: indexTurn.bodyRevision, turn: { ...turn, lastMessage: "complete response" } });
+  assert.equal(body.turn.lastMessage, "complete response");
+
+  assert.deepEqual(AiSessionDetailReadSchema.parse({ kind: "not-modified", revision: "detail-v1" }), { kind: "not-modified", revision: "detail-v1" });
+  assert.deepEqual(AiSessionTurnIndexReadSchema.parse({ kind: "updated", revision: index.revision, index }).index, index);
+  assert.deepEqual(AiSessionTurnBodyReadSchema.parse({ kind: "updated", revision: body.revision, body }).body, body);
+  assert.equal(AiSessionDetailReadSchema.safeParse({ kind: "not-modified", revision: "detail-v1", detail }).success, false);
+});
+
+test("AI session queue mutations return a minimal revision acknowledgement", () => {
+  const receipt = { sessionId: "session-a", queueRevision: 3, action: "edit", queueId: "queue-a" };
+  assert.deepEqual(AiSessionQueueMutationResponseSchema.parse(receipt), receipt);
+  assert.equal(AiSessionQueueMutationResponseSchema.safeParse({ ...receipt, session: { id: "session-a" } }).success, false);
+});
+
+test("AI session HTTP action acknowledgement omits the full session and normalizes v0.0.23", () => {
+  const session = AiSessionStatusSchema.parse({
+    id: "session-a",
+    agent: "codex",
+    status: "running",
+    phase: "responding",
+    startedAt: now,
+    updatedAt: now,
+    turns: [{ id: "turn-a", status: "running", phase: "responding", revision: 1, startedAt: now, updatedAt: now, userMessages: [{ id: "message-a", text: "hello", attachments: [] }] }],
+  });
+  const legacy = { session, provider: "codex", action: "send", turnId: "turn-a" };
+  const expected = { sessionId: session.id, provider: "codex", action: "send", turnId: "turn-a", messageId: "message-a" };
+  assert.deepEqual(projectAiSessionActionResponse(legacy), expected);
+  assert.deepEqual(AiSessionActionCompatibleResponseSchema.parse(legacy), expected);
+  assert.equal("session" in expected, false);
+});
+
 test("AI session history schemas expose bounded strict summaries and resume results", () => {
   const item = {
     id: "ai-history-1",
@@ -83,7 +147,7 @@ test("AI session history schemas expose bounded strict summaries and resume resu
   };
   assert.deepEqual(AiSessionHistoryItemSchema.parse(item), item);
   assert.equal(AiSessionHistoryItemSchema.safeParse({ ...item, transcriptPath: "/home/agent/.codex/session.jsonl" }).success, false);
-  assert.equal(AiSessionHistoryItemSchema.safeParse({ ...item, agent: "other" }).success, false);
+  assert.equal(AiSessionHistoryItemSchema.safeParse({ ...item, agent: "" }).success, false);
   assert.equal(AiSessionHistoryIndexSchema.safeParse({ schemaVersion: 1, items: Array.from({ length: AI_SESSION_HISTORY_MAX_LIMIT + 1 }, () => item) }).success, false);
   assert.equal(AiSessionHistoryListSchema.safeParse({ items: [item], extra: true }).success, false);
   assert.deepEqual(AiSessionHistoryDetailSchema.parse({
@@ -227,6 +291,12 @@ test("AI session tool activity schemas default and project the window count", ()
   const summary = { ...status };
   delete summary.counters;
   assert.equal(AiSessionSummarySchema.parse(summary).toolCallsSinceLastMessage, 0);
+  assert.equal(AiSessionSummarySchema.parse(summary).detailRevision, undefined);
+  assert.equal(AiSessionSummarySchema.parse({ ...summary, detailRevision: "detail-v2" }).detailRevision, "detail-v2");
+  assert.deepEqual(AiSessionSummarySchema.parse({
+    ...summary,
+    latestTurnRef: { id: "turn-1", bodyRevision: "body-v2" },
+  }).latestTurnRef, { id: "turn-1", bodyRevision: "body-v2" });
 
   const projected = AiSessionSummarySchema.parse({ ...summary,
     currentTool: { id: "item-1", kind: "commandExecution", name: "Command", inputPreview: "pnpm test" },
@@ -493,4 +563,134 @@ test("AI session message delta is an ephemeral event outside revision recovery",
     syncRequired: false,
     events: [{ type: AiSessionEventType.MessageDelta, payload }],
   }).success, false);
+});
+
+test("compact event projection removes only connection-derived message delta fields", () => {
+  const payload = AiSessionMessageDeltaEventSchema.parse({
+    instanceId: "instance-a",
+    nodeId: "node-a",
+    sessionId: "session-a",
+    providerSessionId: "thread-a",
+    turnId: "turn-a",
+    itemId: "item-a",
+    delta: "hello",
+    generatedAt: now,
+  });
+  const event = {
+    v: 1,
+    id: "event-a",
+    seq: 42,
+    type: AiSessionEventType.MessageDelta,
+    topic: "ai.sessions",
+    createdAt: now,
+    payload,
+    scope: { nodeId: "node-a", instanceId: "instance-a" },
+  };
+  const projected = projectEventEnvelope(event, COMPACT_EVENT_ENVELOPE_VERSION, {
+    payload: compactAiSessionMessageDeltaEvent(payload),
+    publicScope: true,
+  });
+
+  assert.deepEqual(projected, {
+    v: "2026-08-25",
+    id: "event-a",
+    type: AiSessionEventType.MessageDelta,
+    createdAt: now,
+    payload: {
+      sessionId: "session-a",
+      turnId: "turn-a",
+      itemId: "item-a",
+      delta: "hello",
+      generatedAt: now,
+    },
+    scope: { instanceId: "instance-a" },
+  });
+  const normalized = normalizeEventEnvelope(projected);
+  assert.equal(normalized.seq, 0);
+  assert.equal(normalized.topic, "ai.sessions");
+  assert.deepEqual(normalizeAiSessionMessageDeltaEvent(normalized.payload, normalized.scope.instanceId), {
+    instanceId: "instance-a",
+    sessionId: "session-a",
+    turnId: "turn-a",
+    itemId: "item-a",
+    delta: "hello",
+    generatedAt: now,
+  });
+  assert.equal(projectEventEnvelope(event, 1), event);
+});
+
+test("event wire envelopes require declared fields while allowing additive fields", () => {
+  const compact = {
+    v: COMPACT_EVENT_ENVELOPE_VERSION,
+    id: "event-a",
+    type: "instance.updated",
+    createdAt: now,
+    payload: {},
+    futureField: true,
+  };
+  assert.equal(EventWireEnvelopeSchema.safeParse(compact).success, true);
+  for (const field of ["id", "type", "createdAt", "payload"]) {
+    const malformed = { ...compact };
+    delete malformed[field];
+    assert.equal(EventWireEnvelopeSchema.safeParse(malformed).success, false, `missing compact ${field}`);
+  }
+  assert.equal(EventWireEnvelopeSchema.safeParse({
+    v: 1,
+    id: "event-b",
+    seq: 1,
+    type: "instance.updated",
+    topic: "instances",
+    createdAt: now,
+    payload: {},
+  }).success, true);
+  assert.equal(EventWireEnvelopeSchema.safeParse({
+    v: 1,
+    id: "event-b",
+    type: "instance.updated",
+    topic: "instances",
+    createdAt: now,
+    payload: {},
+  }).success, false);
+});
+
+test("AI transient subscriptions separate list deltas from session detail timeline demand", () => {
+  assert.deepEqual(AiSessionTransientSubscriptionSchema.parse({}), {
+    messageDeltas: { allInstances: false, instanceIds: [] },
+    timelineAllSessions: false,
+    timelineSessions: [],
+  });
+  assert.deepEqual(AiSessionTransientSubscriptionSchema.parse({
+    messageDeltas: { allInstances: false, instanceIds: ["instance-a"] },
+    timelineSessions: [{ instanceId: "instance-a", sessionId: "session-a" }],
+  }), {
+    messageDeltas: { allInstances: false, instanceIds: ["instance-a"] },
+    timelineAllSessions: false,
+    timelineSessions: [{ instanceId: "instance-a", sessionId: "session-a" }],
+  });
+  assert.deepEqual(AiSessionTransientSubscriptionSchema.parse({
+    futureField: true,
+    messageDeltas: { allInstances: false, futureMode: "batched" },
+  }), {
+    messageDeltas: { allInstances: false, instanceIds: [] },
+    timelineAllSessions: false,
+    timelineSessions: [],
+  });
+  assert.equal(AiSessionTransientSubscriptionSchema.safeParse({ messageDeltas: { allInstances: "yes" } }).success, false);
+  const subscription = AiSessionTransientSubscriptionSchema.parse({
+    replaySince: "2026-08-21T00:00:00.000Z",
+    messageDeltas: { instanceIds: ["instance-a"] },
+    timelineSessions: [{ instanceId: "instance-a", sessionId: "session-a" }],
+  });
+  assert.equal(aiSessionTransientSubscriptionAccepts(subscription, {
+    type: AiSessionEventType.MessageDelta,
+    payload: { instanceId: "instance-a", sessionId: "session-other" },
+  }), true);
+  assert.equal(aiSessionTransientSubscriptionAccepts(subscription, {
+    type: AiSessionEventType.TimelineItem,
+    payload: { instanceId: "instance-a", sessionId: "session-other" },
+  }), false);
+  assert.equal(aiSessionTransientSubscriptionAccepts(subscription, {
+    type: AiSessionEventType.TimelineItem,
+    payload: { instanceId: "instance-a", sessionId: "session-a" },
+  }), true);
 });

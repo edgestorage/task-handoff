@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import type { AppSessionRecord } from '@task-handoff/protocol/app-sessions';
@@ -21,9 +21,10 @@ type Props = {
   onRefresh?: () => Promise<void>;
   scope: Extract<AiSessionScope, { kind: 'all' | 'instance' }>;
   state: MobileAppSessionProfileState;
+  header?: ReactNode;
 };
 
-export function AppSessionList({ state, directory, onCloseSession, onRefresh, scope }: Props) {
+export function AppSessionList({ state, directory, onCloseSession, onRefresh, scope, header }: Props) {
   const { colors } = useMobileTheme();
   const { locale, t } = useI18n();
   const router = useRouter();
@@ -60,7 +61,7 @@ export function AppSessionList({ state, directory, onCloseSession, onRefresh, sc
     data={entries}
     itemContainerStyle={styles.cardContainer}
     keyExtractor={(entry) => `${entry.instanceId}:${entry.session.id}`}
-    ListHeaderComponent={statusMessage ? <Text accessibilityLiveRegion="polite" style={[styles.notice, { backgroundColor: colors.notice, color: colors.noticeText }]}>{statusMessage}</Text> : null}
+    ListHeaderComponent={<>{header}{statusMessage ? <Text accessibilityLiveRegion="polite" style={[styles.notice, { backgroundColor: colors.notice, color: colors.noticeText }]}>{statusMessage}</Text> : null}</>}
     ListEmptyComponent={<EmptyState
       icon={state.sync.phase === 'error'
         ? { android: 'error_outline', ios: 'exclamationmark.circle' }

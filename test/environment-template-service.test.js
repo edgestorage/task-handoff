@@ -34,6 +34,16 @@ function fixture(runtimeType = "docker") {
   return { dataDir, paths, store, privateConfigs, instance, runtime, gate };
 }
 
+test("instance operation invalidation aborts the current lifecycle signal", () => {
+  const gate = new InstanceOperationGate();
+  const intent = gate.intent("inst_one");
+  const signal = gate.signal("inst_one", intent);
+  assert.equal(signal.aborted, false);
+  gate.invalidate("inst_one");
+  assert.equal(signal.aborted, true);
+  assert.equal(gate.isIntentCurrent("inst_one", intent), false);
+});
+
 test("environment template service commits, validates, persists ready, and safely deletes", async (t) => {
   const state = fixture();
   t.after(() => fs.rmSync(state.dataDir, { recursive: true, force: true }));
@@ -98,6 +108,55 @@ test("non-Docker instances are rejected without creating a template record", asy
   );
   await assert.rejects(() => service.create("inst_one", { name: "Unsupported" }), (error) => error.code === "ENVIRONMENT_TEMPLATE_RUNTIME_UNSUPPORTED");
   assert.deepEqual(service.list(), []);
+});
+
+test("legacy retained Git credentials are scrubbed before template security inspection", async (t) => {
+  const state = fixture();
+  t.after(() => fs.rmSync(state.dataDir, { recursive: true, force: true }));
+  const privateConfig = state.privateConfigs.get("inst_one");
+  fs.writeFileSync(state.privateConfigs.filePath("inst_one"), JSON.stringify({
+    ...privateConfig,
+    gitCredentials: {
+      revision: 1,
+      credentials: [{
+        assignmentRevision: 1,
+        credential: {
+          id: "gitcred_one",
+          name: "Team token",
+          kind: "https-token",
+          scope: { scheme: "https", host: "git.example.com", pathPrefix: "/team/" },
+          secretSet: true,
+          status: "enabled",
+          revision: 1,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        },
+        secret: { kind: "https-token", username: "git", token: "template-secret" },
+      }],
+    },
+  }));
+  const calls = [];
+  const service = new EnvironmentTemplateService(
+    state.store,
+    state.privateConfigs,
+    {
+      inspectContainerConfigSecurity: async (_container, secrets) => {
+        calls.push("inspect");
+        assert.equal(secrets.includes("template-secret"), false);
+      },
+      commitEnvironmentTemplate: async () => { calls.push("commit"); return imageId; },
+      inspectEnvironmentTemplateImage: async () => ({ imageId, platform: "linux", architecture: "x64", sizeBytes: 2048 }),
+      inspectImageConfigSecurity: async () => undefined,
+    },
+    () => state.instance,
+    () => state.runtime,
+    (id, operation) => state.gate.run(id, operation),
+  );
+
+  const created = await service.create("inst_one", { name: "Sanitized" });
+  assert.equal(created.status, "ready");
+  assert.deepEqual(calls, ["inspect", "commit"]);
+  assert.equal(fs.readFileSync(state.privateConfigs.filePath("inst_one"), "utf8").includes("template-secret"), false);
 });
 
 test("Docker executor uses default-pause commit and reference-safe image removal", async () => {

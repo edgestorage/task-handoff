@@ -11,13 +11,27 @@
     <div ref="turnContentElement" class="ai-session-result-content">
       <AiSessionTurnHistory
         :nodes="activityHistory"
-        :loading="!active && (activityHistoryStatus === 'idle' || activityHistoryStatus === 'loading' || activityHistoryStatus === 'stale')"
+        :loading="!active && activityHistoryStatus === 'loading'"
+        :loadable="!active && (activityHistoryStatus === 'idle' || activityHistoryStatus === 'stale')"
         :error="activityHistoryError"
         :started-at="turnStartedAt"
         :ended-at="turnEndedAt"
         :active="active"
+        @load="$emit('loadActivityHistory')"
         @retry="$emit('retryActivityHistory')"
       />
+
+      <details v-if="retryWarning" class="ai-session-retry-warning" role="status" aria-live="polite">
+        <summary>
+          <TriangleAlert :size="18" aria-hidden="true" />
+          <div>
+            <strong>{{ t("sessions.detail.retryWarning") }}</strong>
+            <p class="ai-session-retry-warning-preview">{{ retryWarningFirstLine }}</p>
+            <p class="ai-session-retry-warning-detail">{{ retryWarning }}</p>
+          </div>
+          <ChevronRight class="ai-session-retry-warning-chevron" :size="16" aria-hidden="true" />
+        </summary>
+      </details>
 
       <section
         v-if="displayContent"
@@ -30,7 +44,9 @@
           :file-links="fileLinks"
           :instance-id="instanceId"
           :is-latest="isLatest"
+          :provider-turn-id="providerTurnId"
           :session-id="session.id"
+          :turn-id="turnId"
           @open-file="$emit('openFile', $event)"
         />
       </section>
@@ -108,15 +124,15 @@
       </section>
 
       <div v-if="isLatest && canResolveApproval" class="ai-session-detail-approval">
-        <button type="button" :disabled="busy" @click="$emit('resolveApproval', 'allow')">
+        <button v-if="approvalDecisions.includes('allow')" type="button" :disabled="busy" @click="$emit('resolveApproval', 'allow')">
           <Check :size="14" />
           <span>{{ t("sessions.actions.allow") }}</span>
         </button>
-        <button type="button" :disabled="busy" @click="$emit('resolveApproval', 'skip')">
+        <button v-if="approvalDecisions.includes('skip')" type="button" :disabled="busy" @click="$emit('resolveApproval', 'skip')">
           <Ban :size="14" />
           <span>{{ t("sessions.actions.skip") }}</span>
         </button>
-        <button type="button" :disabled="busy" @click="$emit('resolveApproval', 'deny')">
+        <button v-if="approvalDecisions.includes('deny')" type="button" :disabled="busy" @click="$emit('resolveApproval', 'deny')">
           <X :size="14" />
           <span>{{ t("sessions.actions.deny") }}</span>
         </button>
@@ -128,13 +144,13 @@
 </template>
 
 <script setup lang="ts">
-import { Ban, Check, CornerDownRight, GripVertical, Pencil, RotateCcw, Trash2, X } from "@lucide/vue";
+import { Ban, Check, ChevronRight, CornerDownRight, GripVertical, Pencil, RotateCcw, Trash2, TriangleAlert, X } from "@lucide/vue";
 import { computed, nextTick, onBeforeUnmount, onBeforeUpdate, onUpdated, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import type { AiSessionSummary } from "../../api/types";
 import type { AiSessionTimelineActivity } from "@task-handoff/protocol/ai-sessions";
 import type { TimelineTurnNode } from "./timelineActivities";
-import { useStreamingMessagesStore } from "../../apps/control-plane/useStreamingMessagesStore";
+import { streamingMessageMatchesTurn, useStreamingMessagesStore } from "../../apps/control-plane/useStreamingMessagesStore";
 import { createLatestTurnHeightBuffer } from "../../lib/latest-turn-height";
 import { ScrollArea } from "../ui/scroll-area";
 import AiSessionStreamingMarkdown from "./AiSessionStreamingMarkdown.vue";
@@ -153,10 +169,14 @@ const props = withDefaults(defineProps<{
   busy?: boolean;
   canInterrupt?: boolean;
   canResolveApproval?: boolean;
+  approvalDecisions?: Array<"allow" | "deny" | "skip">;
   fileLinks?: boolean;
   instanceId: string;
   isLatest?: boolean;
   responseContent?: string;
+  retryWarning?: string;
+  providerTurnId?: string;
+  turnId?: string;
   turnStartedAt?: string;
   turnEndedAt?: string;
   session: AiSessionSummary;
@@ -173,9 +193,11 @@ const props = withDefaults(defineProps<{
   busy: false,
   canInterrupt: false,
   canResolveApproval: false,
+  approvalDecisions: () => ["allow", "deny", "skip"],
   fileLinks: false,
   isLatest: false,
   responseContent: "",
+  retryWarning: "",
   tone: "detail",
   activities: () => [],
   activityNodes: () => [],
@@ -197,9 +219,11 @@ const emit = defineEmits<{
   steerQueuedMessage: [queueId: string];
   layoutWillChange: [element: HTMLElement];
   layoutCommitted: [element: HTMLElement];
+  loadActivityHistory: [];
   retryActivityHistory: [];
 }>();
 
+const retryWarningFirstLine = computed(() => props.retryWarning.split(/\r\n|\r|\n/, 1)[0]);
 const draggingQueueId = ref("");
 const queueOrderPreview = ref<string[]>([]);
 const queuedItems = computed(() => props.session.queue.items.filter((item) => item.status === "queued"));
@@ -332,9 +356,14 @@ onUpdated(() => {
 });
 
 const streamingMessages = useStreamingMessagesStore();
-const streamingContent = computed(() => props.isLatest
-  ? streamingMessages.activeMessage(props.instanceId, props.session.id).value?.value.receivedText || ""
-  : "");
+const streamingContent = computed(() => {
+  const activeMessage = props.isLatest
+    ? streamingMessages.activeMessage(props.instanceId, props.session.id).value?.value
+    : undefined;
+  return streamingMessageMatchesTurn(activeMessage, { id: props.turnId, providerTurnId: props.providerTurnId })
+    ? activeMessage!.receivedText
+    : "";
+});
 const displayContent = computed(() => streamingContent.value || props.responseContent);
 </script>
 
@@ -373,6 +402,70 @@ const displayContent = computed(() => streamingContent.value || props.responseCo
   margin-top: var(--detail-activity-gap);
 }
 
+.ai-session-retry-warning {
+  background: var(--status-warning-bg);
+  border: 1px solid color-mix(in srgb, var(--status-warning) 40%, var(--line-subtle));
+  border-radius: 8px;
+  color: var(--status-warning);
+}
+
+.ai-session-retry-warning > summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 12px 14px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.ai-session-retry-warning > summary::-webkit-details-marker { display: none; }
+
+.ai-session-retry-warning > summary > svg:first-child { margin-top: 1px; }
+
+.ai-session-retry-warning > summary > div {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ai-session-retry-warning-chevron {
+  align-self: center;
+  transition: transform 120ms ease;
+}
+
+.ai-session-retry-warning[open] .ai-session-retry-warning-chevron { transform: rotate(90deg); }
+
+.ai-session-retry-warning strong {
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.ai-session-retry-warning p {
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.55;
+  margin: 0;
+}
+
+.ai-session-retry-warning-preview {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-session-retry-warning-detail {
+  display: none;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.ai-session-retry-warning[open] .ai-session-retry-warning-preview { display: none; }
+.ai-session-retry-warning[open] .ai-session-retry-warning-detail { display: block; }
+
 .ai-session-result-detail :slotted(.ai-session-turn-actions) {
   margin-top: 8px;
 }
@@ -395,6 +488,8 @@ const displayContent = computed(() => streamingContent.value || props.responseCo
   border: 0;
   background: transparent;
   color: var(--detail-activity-strong);
+  font-size: 14px;
+  line-height: var(--detail-response-line-height);
   padding-bottom: 12px;
 }
 
@@ -417,7 +512,8 @@ const displayContent = computed(() => streamingContent.value || props.responseCo
   padding-bottom: 0;
 }
 
-.ai-session-detail-response :deep(> div) {
+.ai-session-detail-response :deep(.ai-session-streaming-markdown),
+.ai-session-detail-response :deep(.markstream-vue) {
   color: var(--detail-activity-strong);
   font-size: 14px;
   font-weight: 400;

@@ -5,7 +5,7 @@ import { instanceDisplayName as formatInstanceDisplayName } from "../useInstance
 type UseWorkbenchInstancesInput<T extends InstanceBoardItem> = {
   instances: Ref<T[] | undefined>;
   selection?:
-    | { mode: "persistent" }
+    | { mode: "persistent"; directoryComplete?: Ref<boolean> }
     | { mode: "standalone"; activeInstanceId: Ref<string> };
 };
 
@@ -87,15 +87,16 @@ export function useWorkbenchInstances<T extends InstanceBoardItem>({ instances, 
     });
   });
 
-  const activeInstance = computed(() => sortedInstances.value.find((instance) => instance.id === activeInstanceId.value)
-    || (persistentSelection ? sortedInstances.value[0] : undefined));
+  const activeInstance = computed(() => sortedInstances.value.find((instance) => instance.id === activeInstanceId.value));
 
   if (persistentSelection) watch(activeInstanceId, persistActiveInstanceId, { flush: "sync" });
 
   watch(
-    sortedInstances,
-    (list) => {
-      if (persistentSelection && (!activeInstanceId.value || !list.some((instance) => instance.id === activeInstanceId.value)) && list[0]) {
+    [sortedInstances, () => selection.mode !== "persistent" || selection.directoryComplete?.value !== false],
+    ([list, directoryComplete]) => {
+      const selectedInstanceMissing = Boolean(activeInstanceId.value)
+        && !list.some((instance) => instance.id === activeInstanceId.value);
+      if (persistentSelection && (!activeInstanceId.value || (directoryComplete && selectedInstanceMissing)) && list[0]) {
         activeInstanceId.value = list[0].id;
       }
     },

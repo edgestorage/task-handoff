@@ -10,7 +10,7 @@ import { mobileMetrics } from '../observability/mobile-metrics';
 import { mobileTriggerStore } from '../triggers/store';
 import type { MobileControlPlaneProfile } from './profile';
 import { createDirectControlPlaneClient } from './client';
-import { requireRemoteMobileSessionRevocation } from './profile-removal';
+import { attemptRemoteMobileSessionRevocation } from './profile-removal';
 import { MobileCloudAccountSession } from './cloud-account';
 
 export const mobileSecureStore = new ExpoSecureValueStore();
@@ -99,7 +99,10 @@ export const mobilePermissionStore = new MobileAiSessionPermissionStore(mobileFi
 
 export async function deleteMobileControlPlaneProfile(profile: MobileControlPlaneProfile) {
   const controlPlaneId = profile.identity.controlPlaneId;
-  if (profile.access.kind === 'direct') await requireRemoteMobileSessionRevocation(() => createDirectControlPlaneClient(profile, mobileSecureStore).api.auth.logoutMobile());
+  if (profile.access.kind === 'direct') {
+    const revoked = await attemptRemoteMobileSessionRevocation(() => createDirectControlPlaneClient(profile, mobileSecureStore).api.auth.logoutMobile());
+    if (!revoked) mobileMetrics.record('profile.warning', { reason: 'remote-revocation-failed' });
+  }
   await mobileDraftStore.clearProfile(controlPlaneId);
   await mobileCreateRequestStore.clearProfile(controlPlaneId);
   await mobilePermissionStore.clearProfile(controlPlaneId);
@@ -107,5 +110,6 @@ export async function deleteMobileControlPlaneProfile(profile: MobileControlPlan
   mobileAiSessionStore.clearProfile(controlPlaneId);
   mobileDirectoryStore.clearProfile(controlPlaneId);
   mobileTriggerStore.clearProfile(controlPlaneId);
+  await (await import('../browser/controller')).mobileBrowserController.clearProfile(controlPlaneId);
   return remaining;
 }

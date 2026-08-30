@@ -3,6 +3,11 @@ import path from "node:path";
 import writeFileAtomic from "write-file-atomic";
 import { z } from "zod";
 import type { NodeAgentStorePaths } from "../persistence/paths.ts";
+import {
+  InstancePrivateModelCatalogSchema,
+  sanitizeInstancePrivateModelCatalog,
+  type InstancePrivateModelCatalog,
+} from "../models/private-catalog.ts";
 
 const PrivateEnvironmentSchema = z.record(
   z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/),
@@ -14,6 +19,7 @@ export const InstancePrivateConfigSchema = z.object({
   instanceId: z.string().trim().min(1).max(120),
   instanceCredential: z.string().trim().min(1).max(240),
   environment: PrivateEnvironmentSchema,
+  modelCatalog: InstancePrivateModelCatalogSchema.optional(),
   updatedAt: z.string().datetime(),
 }).strict();
 
@@ -50,6 +56,7 @@ export class InstancePrivateConfigStore {
       instanceId: source.instanceId,
       instanceCredential: source.instanceCredential ?? source.registrationToken,
       environment: source.environment,
+      modelCatalog: source.modelCatalog === undefined ? undefined : sanitizeInstancePrivateModelCatalog(source.modelCatalog),
       updatedAt: source.updatedAt,
     });
     if (parsed.instanceId !== instanceId) {
@@ -58,7 +65,9 @@ export class InstancePrivateConfigStore {
         code: "INSTANCE_PRIVATE_CONFIG_IDENTITY_MISMATCH",
       });
     }
-    if (source.instanceCredential === undefined && source.registrationToken !== undefined) {
+    if ((source.instanceCredential === undefined && source.registrationToken !== undefined) || source.gitCredentials !== undefined) {
+      // Compatibility for the pre-release snapshot implementation: read the instance
+      // identity but immediately scrub the obsolete Git secret snapshot from disk.
       this.put(parsed);
     }
     return parsed;
@@ -73,7 +82,12 @@ export class InstancePrivateConfigStore {
     return parsed;
   }
 
-  materialize(instanceId: string, instanceCredential: string | undefined, environment: Record<string, string>) {
+  materialize(
+    instanceId: string,
+    instanceCredential: string | undefined,
+    environment: Record<string, string>,
+    modelCatalog?: InstancePrivateModelCatalog,
+  ) {
     if (!instanceCredential) {
       throw Object.assign(new Error(`Instance ${instanceId} does not have a long-lived credential.`), {
         statusCode: 409,
@@ -85,6 +99,7 @@ export class InstancePrivateConfigStore {
       instanceId,
       instanceCredential,
       environment,
+      ...(modelCatalog ? { modelCatalog } : {}),
       updatedAt: new Date().toISOString(),
     });
   }

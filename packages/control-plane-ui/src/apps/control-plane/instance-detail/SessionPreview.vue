@@ -74,6 +74,8 @@
                       >
                         <span class="session-tab-button">
                           <FolderGit2 v-if="session.kind === 'repository'" :size="14" class="session-tab-icon" />
+                          <LoaderCircle v-else-if="session.kind === 'embedded-browser' && session.status === 'loading'" :size="14" class="session-tab-icon session-tab-icon-loading" />
+                          <Globe2 v-else-if="session.kind === 'embedded-browser'" :size="14" class="session-tab-icon" />
                           <AppWindow v-else :size="14" class="session-tab-icon" />
                           <input
                             v-if="editingSessionKey === session.key"
@@ -106,7 +108,7 @@
                       </span>
                       </ContextMenuTrigger>
                     <ContextMenuContent class="instance-action-menu">
-                      <ContextMenuItem v-if="session.kind !== 'repository'" class="instance-action-item" @select="beginSessionRename(session)">
+                      <ContextMenuItem v-if="session.kind !== 'repository' && session.kind !== 'embedded-browser'" class="instance-action-item" @select="beginSessionRename(session)">
                         <Pencil :size="14" />
                         <span>{{ t("sessions.tabs.rename") }}</span>
                       </ContextMenuItem>
@@ -320,6 +322,8 @@
         aria-hidden="true"
       >
         <FolderGit2 v-if="sessionTabPointerDrag.session.kind === 'repository'" :size="14" class="session-tab-icon" />
+        <LoaderCircle v-else-if="sessionTabPointerDrag.session.kind === 'embedded-browser' && sessionTabPointerDrag.session.status === 'loading'" :size="14" class="session-tab-icon session-tab-icon-loading" />
+        <Globe2 v-else-if="sessionTabPointerDrag.session.kind === 'embedded-browser'" :size="14" class="session-tab-icon" />
         <AppWindow v-else :size="14" class="session-tab-icon" />
         <strong>{{ sessionDisplayName(sessionTabPointerDrag.session, t) }}</strong>
       </div>
@@ -342,14 +346,17 @@
           :active-action-label="activeActionLabel"
           :app-launch-button-title="appLaunchButtonTitle"
           :can-launch-app="canLaunchApp"
+          :choose-project-folder="chooseProjectFolder"
           :instance="instance"
           :is-instance-action-busy="isInstanceActionBusy"
           :launchable-apps="launchableApps"
           :launching-app="launchingApp"
           :node-local-folders="nodeLocalFolders"
+          :pane="pane.id"
           :selected-ai-session="selectedAiSession"
           :session="pane.session"
           :session-key="pane.sessionKey"
+          @launch-app="(target, appId, cwdFolderId, options) => $emit('launchApp', target, appId, cwdFolderId, options)"
           @open-ai-session-app="(target, session) => $emit('openAiSessionApp', target, session)"
           @open-repository-workspace="$emit('openRepositoryWorkspace', $event)"
           @open-launch-menu="updateAppLaunchMenuOpen(pane.id, true)"
@@ -420,7 +427,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type ComponentPublicInstance, type ObjectDirective } from "vue";
 import { useI18n } from "vue-i18n";
 import { useMediaQuery, useNow, useStorage } from "@vueuse/core";
-import { Activity, AppWindow, Bot, Boxes, ChevronDown, Columns2, Folder, FolderGit2, Maximize2, Minimize2, PanelLeft, PanelRight, PanelRightClose, Pencil, Plus, X } from "@lucide/vue";
+import { Activity, AppWindow, Bot, Boxes, ChevronDown, Columns2, Folder, FolderGit2, Globe2, LoaderCircle, Maximize2, Minimize2, PanelLeft, PanelRight, PanelRightClose, Pencil, Plus, X } from "@lucide/vue";
 import type { RepositorySessionKind } from "@task-handoff/protocol/repository";
 import type { AiSessionSummary, InstanceBoardItem, InstanceResourceMetrics, InstanceWithAiSessions, NodeLocalFolder } from "../../../api/types";
 import { Button } from "../../../components/ui/button";
@@ -449,6 +456,7 @@ import {
 import { hasInstanceStatusPage, instanceStatusTitle } from "../useInstanceStatus";
 import type { InstanceAction } from "../useInstanceActions";
 import type { SessionPaneId } from "./useActiveInstanceSessions";
+import type { NativeNodeFolderPicker } from "../nodePath";
 
 const { t } = useI18n();
 
@@ -470,6 +478,7 @@ const props = defineProps<{
   appLaunchButtonTitle: string;
   appLaunchMenuOpen: boolean;
   canLaunchApp: boolean;
+  chooseProjectFolder?: NativeNodeFolderPicker;
   copiedText: string;
   instance: InstanceWithAiSessions;
   instanceSidebarVisible?: boolean;
@@ -502,7 +511,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   copyRegistration: [instance: InstanceBoardItem];
-  launchApp: [instance: InstanceBoardItem, appId: string, cwdFolderId?: string];
+  launchApp: [instance: InstanceBoardItem, appId: string, cwdFolderId?: string, options?: Record<string, unknown>];
   moveSessionTab: [sourceKey: string, targetKey: string, placement: "before" | "after", targetPane?: SessionPaneId];
   moveSessionToPane: [sessionKey: string, pane: SessionPaneId];
   focusSessionPane: [pane: SessionPaneId];
@@ -511,7 +520,7 @@ const emit = defineEmits<{
   setSessionSplitRatio: [ratio: number];
   openAiSessionApp: [instance: InstanceBoardItem, session?: AiSessionSummary];
   openRepositoryWorkspace: [target: { initialView: "files" | "changes"; sessionId: string; sessionKind: RepositorySessionKind }];
-  openSettings: [instanceId: string, section?: "general" | "models" | "apps"];
+  openSettings: [instanceId: string, section?: "general" | "ai" | "models" | "apps"];
   openUrl: [url: string];
   runAction: [action: InstanceAction, instance: InstanceBoardItem];
   selectAiSession: [instanceId: string, sessionId: string];
@@ -575,7 +584,7 @@ watch(
 );
 const { locale } = useControlPlaneLocale();
 const activeRepositorySessionId = computed(() => {
-  if (!props.activeSession || props.activeSession.kind === "ai" || props.activeSession.kind === "status" || props.activeSession.kind === "repository") return "";
+  if (!props.activeSession || props.activeSession.kind === "ai" || props.activeSession.kind === "status" || props.activeSession.kind === "repository" || props.activeSession.kind === "embedded-browser") return "";
   return typeof props.activeSession.source?.id === "string" ? props.activeSession.source.id : props.activeSession.key;
 });
 const resourceMetricsDisplay = computed(() => formatResourceMetrics(props.resourceMetrics, resourceMetricsNow.value.getTime(), locale.value, t));
@@ -595,6 +604,12 @@ let sessionTabDetailCloseTimer: ReturnType<typeof setTimeout> | undefined;
 let sessionTabDetailClosedAt = 0;
 
 function sessionTabWorkspaceLabel(session: SessionTab) {
+  if (session.kind === "embedded-browser") {
+    const url = typeof session.source?.currentUrl === "string"
+      ? session.source.currentUrl
+      : typeof session.source?.initialUrl === "string" ? session.source.initialUrl : "";
+    return url || t("sessions.browser.address");
+  }
   const path = sessionWorkspacePath(session, props.instance);
   return path === "__unknown_workspace__" ? t("sessions.tabs.unknownWorkspace") : path;
 }
@@ -1072,7 +1087,13 @@ function clearSessionTabLongPressTimer() {
 function startSplitResize(event: PointerEvent) {
   const layout = sessionPaneLayout.value;
   if (!layout || event.button !== 0) return;
+  const handle = event.currentTarget instanceof HTMLElement ? event.currentTarget : undefined;
   event.preventDefault();
+  try {
+    handle?.setPointerCapture?.(event.pointerId);
+  } catch {
+    // Window-level capture listeners keep resizing functional when pointer capture is unavailable.
+  }
   splitResizing.value = true;
   document.body.classList.add("session-pane-resizing");
   const resize = (moveEvent: PointerEvent) => {
@@ -1082,14 +1103,21 @@ function startSplitResize(event: PointerEvent) {
   const stop = () => {
     splitResizing.value = false;
     document.body.classList.remove("session-pane-resizing");
-    window.removeEventListener("pointermove", resize);
-    window.removeEventListener("pointerup", stop);
+    try {
+      if (handle?.hasPointerCapture?.(event.pointerId)) handle.releasePointerCapture(event.pointerId);
+    } catch {
+      // The pointer may already have been released by the browser or WebView host.
+    }
+    window.removeEventListener("pointermove", resize, true);
+    window.removeEventListener("pointerup", stop, true);
+    window.removeEventListener("pointercancel", stop, true);
     stopSplitResize = undefined;
   };
   stopSplitResize?.();
   stopSplitResize = stop;
-  window.addEventListener("pointermove", resize);
-  window.addEventListener("pointerup", stop, { once: true });
+  window.addEventListener("pointermove", resize, true);
+  window.addEventListener("pointerup", stop, true);
+  window.addEventListener("pointercancel", stop, true);
 }
 
 onBeforeUnmount(() => {

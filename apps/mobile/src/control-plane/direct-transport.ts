@@ -1,11 +1,16 @@
 import { z } from 'zod';
 import { TtyStreamSnapshotMessageSchema } from '@task-handoff/protocol/app-sessions';
+import {
+  COMPACT_EVENT_ENVELOPE_VERSION,
+  type AiSessionTransientSubscription,
+} from '@task-handoff/protocol/events';
 
 import type { SecureValueStore } from '../platform/secure-storage';
 import { assertDirectIdentityCompatible, probeDirectControlPlane } from './direct-enrollment';
 import type { MobileDirectControlPlaneProfile } from './profile';
 import {
   MobileControlPlaneTransportError,
+  normalizeMobileControlPlaneEvent,
   type MobileAppSessionTtyConnection,
   type MobileAppSessionTtyHandlers,
   type MobileControlPlaneEvent,
@@ -14,21 +19,12 @@ import {
   type MobileControlPlaneTransport,
 } from './transport';
 
-const EventSchema = z.object({
-  v: z.literal(1),
-  type: z.string().trim().min(1),
-  topic: z.string().trim().min(1).optional(),
-  payload: z.unknown(),
-  scope: z.object({ instanceId: z.string().optional(), nodeId: z.string().optional() }).passthrough().optional(),
-}).passthrough();
-
 const ForwardedEventSchema = z.object({
   type: z.literal('node-agent.event.forwarded'),
-  event: EventSchema,
+  event: z.unknown(),
   scope: z.object({ instanceId: z.string().optional(), nodeId: z.string().optional() }).passthrough().optional(),
 }).passthrough();
 
-const IncomingEventSchema = z.union([ForwardedEventSchema, EventSchema]);
 const DEFAULT_EVENT_TOPICS = ['ai.sessions', 'app.sessions', 'node.state', 'nodes', 'instances', 'system'] as const;
 
 const IncomingTtyMessageSchema = z.discriminatedUnion('type', [
@@ -40,13 +36,12 @@ const IncomingTtyMessageSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('error'), message: z.string().optional() }).passthrough(),
 ]);
 
-function normalizeIncomingEvent(event: z.infer<typeof IncomingEventSchema>): MobileControlPlaneEvent {
+function normalizeIncomingEvent(event: unknown): MobileControlPlaneEvent | undefined {
   const forwarded = ForwardedEventSchema.safeParse(event);
-  if (!forwarded.success) return event;
-  return {
-    ...forwarded.data.event,
-    scope: { ...forwarded.data.scope, ...forwarded.data.event.scope },
-  };
+  return normalizeMobileControlPlaneEvent(
+    forwarded.success ? forwarded.data.event : event,
+    forwarded.success ? forwarded.data.scope : undefined,
+  );
 }
 
 type WebSocketLike = {
@@ -84,7 +79,7 @@ function websocketRouteUrl(origin: string, route: string) {
 }
 
 function websocketUrl(origin: string) {
-  return websocketRouteUrl(origin, '/api/events');
+  return websocketRouteUrl(origin, '/api/events?aiSessionTransient=1');
 }
 
 export class DirectControlPlaneTransport implements MobileControlPlaneTransport {
@@ -101,6 +96,7 @@ export class DirectControlPlaneTransport implements MobileControlPlaneTransport 
     private readonly options: {
       fetchImpl?: typeof fetch;
       webSocketFactory?: WebSocketFactory;
+      xhrFactory?: () => XMLHttpRequest;
       allowInsecureHttp?: boolean;
       probeImpl?: typeof probeDirectControlPlane;
     } = {},
@@ -108,7 +104,7 @@ export class DirectControlPlaneTransport implements MobileControlPlaneTransport 
     this.profile = profile;
   }
 
-  async request<T>(route: string, schema: z.ZodType<T>, init: RequestInit = {}) {
+  async request<T>(route: string, schema: z.ZodType<T>, init: RequestInit = {}, onUploadProgress?: (progress: number) => void) {
     await this.ensureVerified();
     const token = await this.sessionToken();
     const headers = new Headers(init.headers);
@@ -118,6 +114,9 @@ export class DirectControlPlaneTransport implements MobileControlPlaneTransport 
     headers.set('authorization', `Bearer ${token}`);
     headers.set('accept', 'application/json');
     const url = requestUrl(this.profile.access.origin, route);
+    if (onUploadProgress) {
+      return requestWithUploadProgress(url, schema, { ...init, headers }, onUploadProgress, this.options.xhrFactory);
+    }
     let response: Response;
     try {
       response = await (this.options.fetchImpl ?? fetch)(url, {
@@ -154,6 +153,10 @@ export class DirectControlPlaneTransport implements MobileControlPlaneTransport 
         if (!this.eventSubscribers.size) this.closeEventConnection();
         else if (this.eventOpen) this.sendEventSubscription();
       },
+      updateAiSessionTransient: (subscription) => {
+        handlers.aiSessionTransient = subscription;
+        this.sendEventSubscription();
+      },
     };
   }
 
@@ -178,9 +181,8 @@ export class DirectControlPlaneTransport implements MobileControlPlaneTransport 
         socket.addEventListener('message', (event) => {
           if (this.eventSocket !== socket) return;
           try {
-            const parsed = IncomingEventSchema.safeParse(JSON.parse(String(event.data)));
-            if (!parsed.success) throw new Error('Event envelope did not match the protocol.');
-            const normalized = normalizeIncomingEvent(parsed.data);
+            const normalized = normalizeIncomingEvent(JSON.parse(String(event.data)));
+            if (!normalized) throw new Error('Event envelope did not match the protocol.');
             for (const subscriber of [...this.eventSubscribers]) subscriber.onEvent(normalized);
           } catch {
             const error = new MobileControlPlaneTransportError('DIRECT_EVENT_INVALID', 'The Control Plane sent an invalid event envelope.');
@@ -223,7 +225,8 @@ export class DirectControlPlaneTransport implements MobileControlPlaneTransport 
     for (const subscriber of this.eventSubscribers) {
       for (const topic of subscriber.topics ?? DEFAULT_EVENT_TOPICS) topics.add(topic);
     }
-    socket.send(JSON.stringify({ v: 1, type: 'subscribe', topics: [...topics].sort() }));
+    const aiSessionTransient = aggregateTransientDemand(this.eventSubscribers, topics);
+    socket.send(JSON.stringify({ v: 1, type: 'subscribe', eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION, topics: [...topics].sort(), ...(aiSessionTransient ? { aiSessionTransient } : {}) }));
   }
 
   connectAppSessionTty(instanceId: string, sessionId: string, handlers: MobileAppSessionTtyHandlers): MobileAppSessionTtyConnection {
@@ -325,6 +328,78 @@ export class DirectControlPlaneTransport implements MobileControlPlaneTransport 
     if (!token) throw new MobileControlPlaneTransportError('DIRECT_SESSION_MISSING', 'The mobile Control Plane session is missing. Sign in again.');
     return token;
   }
+}
+
+function requestWithUploadProgress<T>(
+  url: string,
+  schema: z.ZodType<T>,
+  init: RequestInit,
+  onUploadProgress: (progress: number) => void,
+  xhrFactory: (() => XMLHttpRequest) | undefined,
+) {
+  return new Promise<T>((resolve, reject) => {
+    const xhr = xhrFactory ? xhrFactory() : new XMLHttpRequest();
+    const signal = init.signal;
+    let settled = false;
+    const finish = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener('abort', abort);
+      callback();
+    };
+    const abort = () => xhr.abort();
+    xhr.open(init.method || 'GET', url, true);
+    xhr.withCredentials = false;
+    for (const [name, value] of new Headers(init.headers)) xhr.setRequestHeader(name, value);
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable && event.total > 0) onUploadProgress(Math.min(1, event.loaded / event.total));
+    };
+    xhr.onload = () => {
+      let body: unknown;
+      try {
+        body = xhr.responseText ? JSON.parse(xhr.responseText) : undefined;
+      } catch {
+        finish(() => reject(new MobileControlPlaneTransportError('DIRECT_RESPONSE_INVALID', 'The Control Plane returned a non-JSON response.', false, xhr.status)));
+        return;
+      }
+      if (xhr.status < 200 || xhr.status >= 300) {
+        finish(() => reject(responseError(xhr.status, body)));
+        return;
+      }
+      const parsed = schema.safeParse(body);
+      finish(() => parsed.success
+        ? resolve(parsed.data)
+        : reject(new MobileControlPlaneTransportError('DIRECT_RESPONSE_SCHEMA_INVALID', 'The Control Plane response did not match the expected schema.', false, xhr.status)));
+    };
+    xhr.onerror = () => finish(() => reject(new MobileControlPlaneTransportError('DIRECT_NETWORK_FAILED', 'The Control Plane request could not be completed.', true)));
+    xhr.onabort = () => finish(() => reject(new MobileControlPlaneTransportError('DIRECT_REQUEST_ABORTED', 'The Control Plane request was cancelled.')));
+    if (signal?.aborted) {
+      abort();
+      return;
+    }
+    signal?.addEventListener('abort', abort, { once: true });
+    xhr.send((init.body ?? null) as XMLHttpRequestBodyInit | null);
+  });
+}
+
+function aggregateTransientDemand(subscribers: Iterable<MobileControlPlaneEventHandlers>, topics: Set<string>): AiSessionTransientSubscription | undefined {
+  if (![...topics].some((topic) => topic === 'ai.sessions' || topic === '*')) return undefined;
+  const selected = [...subscribers].filter((entry) => (entry.topics ?? DEFAULT_EVENT_TOPICS).some((topic) => topic === 'ai.sessions' || topic === '*'));
+  if (selected.some((entry) => !entry.aiSessionTransient)) return undefined;
+  const instanceIds = new Set<string>();
+  const timelineSessions = new Map<string, { instanceId: string; sessionId: string }>();
+  let allInstances = false;
+  let timelineAllSessions = false;
+  let replaySince: string | undefined;
+  for (const entry of selected) {
+    const demand = entry.aiSessionTransient!;
+    allInstances ||= demand.messageDeltas.allInstances;
+    timelineAllSessions ||= demand.timelineAllSessions;
+    for (const id of demand.messageDeltas.instanceIds) instanceIds.add(id);
+    for (const session of demand.timelineSessions) timelineSessions.set(`${session.instanceId}\0${session.sessionId}`, session);
+    if (demand.replaySince && (!replaySince || demand.replaySince < replaySince)) replaySince = demand.replaySince;
+  }
+  return { ...(replaySince ? { replaySince } : {}), messageDeltas: { allInstances, instanceIds: [...instanceIds] }, timelineAllSessions, timelineSessions: [...timelineSessions.values()] };
 }
 
 async function parseJson(response: Response) {

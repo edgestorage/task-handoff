@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
-import type { ControlPlaneTriggerTemplateInput } from '@task-handoff/protocol/triggers';
+import type { ControlPlaneTriggerMutationFailure, ControlPlaneTriggerTemplateInput } from '@task-handoff/protocol/triggers';
 
 import { Screen } from '../../src/components/Screen';
 import { SystemIcon } from '../../src/components/SystemIcon';
@@ -29,8 +29,22 @@ export default function TriggerDetailRoute() {
   const availableTargets = (aiSessions?.instances ?? []).flatMap((entry) => entry.aiSessions.sessions
     .filter((session) => !boundTargets.has(`${entry.instanceId}:${session.id}`))
     .map((session) => ({ instanceId: entry.instanceId, session })));
-  const save = async (input: ControlPlaneTriggerTemplateInput) => { await triggers.update(item.configHash, input); setEditing(false); };
-  const remove = () => Alert.alert(t('triggers.deleteTitle'), t('triggers.deleteDescription', { name: item.config.name }), [{ text: t('common.cancel'), style: 'cancel' }, { text: t('common.remove'), style: 'destructive', onPress: () => { setBusy('delete'); setError(''); void triggers.remove(item.configHash).then(() => router.back()).catch((cause) => setError(cause instanceof Error ? cause.message : String(cause))).finally(() => setBusy('')); } }]);
+  const partialFailureMessage = (failures: ControlPlaneTriggerMutationFailure[]) => {
+    const targets = [...new Set(failures.map((failure) => failure.instanceId || failure.nodeId).filter(Boolean))];
+    return t('triggers.partialFailure', { count: targets.length || failures.length, targets: targets.join(', ') });
+  };
+  const save = async (input: ControlPlaneTriggerTemplateInput) => {
+    const result = await triggers.update(item.configHash, input);
+    if (result.partialFailures.length) Alert.alert(t('triggers.partialFailureTitle'), partialFailureMessage(result.partialFailures));
+    setEditing(false);
+  };
+  const remove = () => Alert.alert(t('triggers.deleteTitle'), t('triggers.deleteDescription', { name: item.config.name }), [{ text: t('common.cancel'), style: 'cancel' }, { text: t('common.remove'), style: 'destructive', onPress: () => { setBusy('delete'); setError(''); void triggers.remove(item.configHash).then((result) => {
+    if (result.partialFailures.length) {
+      Alert.alert(t('triggers.partialFailureTitle'), partialFailureMessage(result.partialFailures), [{ text: t('common.continue'), onPress: () => router.back() }]);
+      return;
+    }
+    router.back();
+  }).catch((cause) => setError(cause instanceof Error ? cause.message : String(cause))).finally(() => setBusy('')); } }]);
   if (editing) return <><Stack.Screen options={{ title: t('triggers.edit') }} /><TriggerForm initial={triggerDraft(item.config)} onSubmit={save} submitLabel={t('common.save')} /></>;
   return <>
     <Stack.Screen options={{ title: item.config.name }} />

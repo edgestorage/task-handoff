@@ -1,0 +1,27 @@
+{
+  "protocolVersion": "2026-08-29",
+  "limits": {
+    "frameHeaderBytes": 9,
+    "initialWindowBytes": 262144,
+    "maxDataBytes": 65536,
+    "maxControlBytes": 4096,
+    "maxWindowBytes": 16777216
+  },
+  "frameTypes": {
+    "Open": 1,
+    "OpenOk": 2,
+    "Data": 3,
+    "HalfClose": 4,
+    "Close": 5,
+    "Error": 6,
+    "WindowUpdate": 7
+  },
+  "hello": "{\"type\":\"browser-tunnel.hello\",\"protocolVersion\":\"2026-08-29\",\"initialWindowBytes\":262144}",
+  "ready": "{\"type\":\"browser-tunnel.ready\",\"protocolVersion\":\"2026-08-29\",\"initialWindowBytes\":262144}",
+  "vectors": {
+    "openLocalhost3000": "0100000001000000207b22686f7374223a223132372e302e302e31222c22706f7274223a333030307d",
+    "dataStream7": "0300000007000000030001ff",
+    "windowUpdate4096": "07000000090000000400001000",
+    "halfCloseStream9": "040000000900000000"
+  }
+}

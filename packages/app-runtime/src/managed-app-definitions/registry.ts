@@ -4,6 +4,7 @@ import { ccSwitchProvider } from "./cc-switch";
 import { chromiumProvider } from "./chromium";
 import { claudeProvider } from "./claude";
 import { codexProvider } from "./codex";
+import { opencodeProvider } from "./opencode";
 import { terminalGuiProvider } from "./terminal-gui";
 import { terminalTtyProvider } from "./terminal-tty";
 import type { ManagedAppProvider, ManagedAppRegistryOptions } from "./types";
@@ -56,6 +57,7 @@ export function createManagedAppRegistry(providers: readonly ManagedAppProvider[
 export const builtinManagedAppRegistry = createManagedAppRegistry([
   terminalTtyProvider,
   codexProvider,
+  opencodeProvider,
   claudeProvider,
   terminalGuiProvider,
   chromiumProvider,

@@ -1,5 +1,5 @@
 import type { EventEmitter } from "node:events";
-import type { AiSessionApprovalInput } from "@task-handoff/protocol/ai-sessions";
+import type { AiSessionApprovalInput, AiSessionReasoningEffort } from "@task-handoff/protocol/ai-sessions";
 import type { CodexApprovalRequest, CodexThread, CodexThreadItemEntry, CodexUserInput, JsonValue } from "../protocol/types";
 
 type CodexApprovalDecision = AiSessionApprovalInput["decision"];
@@ -17,12 +17,31 @@ export type CodexThreadStartOptions = {
   modelProvider?: string;
   runtimeWorkspaceRoots?: string[];
   permissions?: CodexTurnPermissionOverrides;
+  reasoningEffort?: AiSessionReasoningEffort;
 };
 
 export type CodexThreadForkOptions = {
   threadId: string;
   lastTurnId?: string;
   cwd?: string;
+  model?: string;
+  modelProvider?: string;
+  reasoningEffort?: AiSessionReasoningEffort;
+};
+
+export type CodexThreadResumeOptions = {
+  model?: string;
+  modelProvider?: string;
+  reasoningEffort?: AiSessionReasoningEffort;
+};
+
+export type CodexThreadSettings = {
+  model?: string;
+  effort?: AiSessionReasoningEffort;
+};
+
+export type CodexThreadSettingsResult = CodexThreadSettings & {
+  modelProvider?: string;
 };
 
 export type CodexThreadForkCapabilities = {
@@ -36,6 +55,8 @@ export type CodexAppServerClientLike = EventEmitter & {
   listLoadedThreadIds: () => Promise<string[]>;
   threadForkCapabilities?: () => CodexThreadForkCapabilities;
   startThread?: (options: CodexThreadStartOptions) => Promise<CodexThread>;
+  updateThreadSettings?: (threadId: string, settings: CodexThreadSettings) => Promise<CodexThreadSettingsResult>;
+  supportsThreadSettingsUpdate?: () => boolean;
   forkThread?: (options: CodexThreadForkOptions) => Promise<CodexThread>;
   readThread?: (threadId: string, options?: { includeTurns?: boolean }) => Promise<CodexThread | undefined>;
   listThreadItems?: (threadId: string, turnId?: string) => Promise<CodexThreadItemEntry[] | undefined>;
@@ -51,7 +72,7 @@ export type CodexAppServerClientLike = EventEmitter & {
   updateFuzzyFileSearch?: (sessionId: string, query: string) => Promise<void>;
   stopFuzzyFileSearch?: (sessionId: string) => Promise<void>;
   interruptTurn?: (threadId: string, turnId: string) => Promise<void>;
-  resumeThread?: (threadId: string) => Promise<CodexThread | undefined>;
+  resumeThread?: (threadId: string, options?: CodexThreadResumeOptions) => Promise<CodexThread | undefined>;
   archiveThread?: (threadId: string) => Promise<void>;
   unarchiveThread?: (threadId: string) => Promise<void>;
   deleteThread?: (threadId: string) => Promise<void>;

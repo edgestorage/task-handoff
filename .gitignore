@@ -2,6 +2,7 @@
 .idea/
 .pnpm-store/
 .task-handoff/
+.tmp-review/
 node_modules/
 /dist/
 /release/
@@ -18,7 +19,7 @@ docs/*
 !docs/mobile-control-plane-future-changes.md
 !docs/mobile-control-plane-operations.md
 !docs/mobile-control-plane-security.md
-tasks
+knowledge
 AGENTS.md
 AGENTS.local.md
 ee/cloud-platform/

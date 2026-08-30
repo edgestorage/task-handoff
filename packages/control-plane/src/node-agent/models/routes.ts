@@ -17,8 +17,9 @@ const NodeModelDiscoveryInputSchema = z.object({
 
 const NodeModelTestInputSchema = NodeModelDiscoveryInputSchema.extend({
   model: z.string().trim().min(1).max(240),
-  app: z.enum(["codex", "claude"]),
-}).strict();
+  app: z.enum(["codex", "claude", "opencode"]).optional(),
+  protocol: z.enum(["openai-responses", "openai-chat-completions", "anthropic-messages"]).optional(),
+}).strict().refine((input) => Boolean(input.protocol || input.app), { message: "A model protocol is required.", path: ["protocol"] });
 
 export function registerNodeModelRoutes(
   app: FastifyInstance,
@@ -64,8 +65,14 @@ export function registerNodeModelRoutes(
 
   app.put("/api/node-agent/instances/:id/model-assignment", async (request) => {
     const id = (request.params as { id: string }).id;
+    const currentWireModel = request.body && typeof request.body === "object" && !Array.isArray(request.body)
+      && Object.prototype.hasOwnProperty.call(request.body, "modelEntityIds");
     const result = registry.assign(id, UpdateNodeModelAssignmentSchema.parse(request.body));
     await syncEnvironment(id);
-    return { data: result };
+    if (currentWireModel) return { data: result };
+    // Compatibility for v0.0.23: its strict response parser does not accept
+    // modelEntityIds. Persist the migrated array, but project the legacy reply.
+    const { modelEntityIds: _modelEntityIds, ...assignment } = result.assignment;
+    return { data: { ...result, assignment } };
   });
 }

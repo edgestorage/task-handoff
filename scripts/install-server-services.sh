@@ -22,6 +22,7 @@ NODE_AGENT_PORT="8091"
 NODE_AGENT_IPC_PATH="/run/task-handoff/node-agent.sock"
 AUTH_MODE="password"
 STATIC_DIR=""
+MATERIALIZE_ONLY="0"
 
 usage() {
   cat <<'USAGE'
@@ -47,6 +48,7 @@ Options:
   --node-agent-ipc-path <path>      Local control socket, default /run/task-handoff/node-agent.sock
   --auth-mode <mode>                Control-plane auth mode: password or disabled
   --static-dir <path>               Built control-plane UI directory
+  --materialize-only                Rewrite env and systemd units without starting services
 USAGE
 }
 
@@ -74,6 +76,7 @@ while [ "$#" -gt 0 ]; do
     --node-agent-ipc-path) NODE_AGENT_IPC_PATH="${2:-}"; shift 2 ;;
     --auth-mode) AUTH_MODE="${2:-}"; shift 2 ;;
     --static-dir) STATIC_DIR="${2:-}"; shift 2 ;;
+    --materialize-only) MATERIALIZE_ONLY="1"; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; usage >&2; exit 1 ;;
   esac
@@ -181,6 +184,27 @@ assert_service_command_accessible "$NPM_COMMAND" "npm command"
 mkdir -p "$ENV_DIR" "$CONTROL_PLANE_DATA_DIR" "$NODE_AGENT_DATA_DIR"
 chown -R "$SERVICE_USER":"$SERVICE_USER" "$CONTROL_PLANE_DATA_DIR" "$NODE_AGENT_DATA_DIR" 2>/dev/null || true
 
+ADMIN_USERNAME=""
+ADMIN_PASSWORD=""
+if [ "$AUTH_MODE" = "password" ]; then
+  # Compatibility for v0.0.21: an older service may still be running with a
+  # publicly bootstrap-able empty account store during an in-place upgrade.
+  # The auth store is the sole authority: file existence cannot distinguish a
+  # valid administrator from a corrupt record that sanitation will isolate.
+  systemctl stop task-handoff-control-plane.service 2>/dev/null || true
+  ADMIN_USERNAME="$(node -e 'process.stdout.write(`admin-${require("node:crypto").randomBytes(6).toString("hex")}`)')"
+  ADMIN_PASSWORD="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(24).toString("base64url"))')"
+  if [ "$SERVICE_USER" = "root" ]; then
+    ADMIN_INITIALIZATION_RESULT="$(printf '%s\n' "$ADMIN_PASSWORD" | $CONTROL_PLANE_COMMAND credentials --initialize-if-needed --username "$ADMIN_USERNAME" --password-stdin --data-dir "$CONTROL_PLANE_DATA_DIR")"
+  else
+    ADMIN_INITIALIZATION_RESULT="$(printf '%s\n' "$ADMIN_PASSWORD" | runuser -u "$SERVICE_USER" -- $CONTROL_PLANE_COMMAND credentials --initialize-if-needed --username "$ADMIN_USERNAME" --password-stdin --data-dir "$CONTROL_PLANE_DATA_DIR")"
+  fi
+  if [ "$ADMIN_INITIALIZATION_RESULT" != "created" ]; then
+    ADMIN_USERNAME=""
+    ADMIN_PASSWORD=""
+  fi
+fi
+
 cat > "$ENV_DIR/node-agent.env" <<EOF
 TASK_HANDOFF_NODE_AGENT_HOST=$NODE_AGENT_HOST
 TASK_HANDOFF_NODE_AGENT_PORT=$NODE_AGENT_PORT
@@ -250,9 +274,21 @@ WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload
-systemctl enable --now task-handoff-node-agent.service
-systemctl enable --now task-handoff-control-plane.service
+if [ "$MATERIALIZE_ONLY" = "0" ]; then
+  systemctl enable --now task-handoff-node-agent.service
+  systemctl enable --now task-handoff-control-plane.service
+fi
 
-echo "TaskHandoff server services are installed."
+if [ "$MATERIALIZE_ONLY" = "1" ]; then
+  echo "TaskHandoff server service configuration is materialized."
+else
+  echo "TaskHandoff server services are installed."
+fi
 echo "Control plane: task-handoff-control-plane.service on $CONTROL_PLANE_HOST:$CONTROL_PLANE_PORT"
 echo "Local node-agent: task-handoff-node-agent.service on $NODE_AGENT_HOST:$NODE_AGENT_PORT"
+if [ -n "$ADMIN_USERNAME" ]; then
+  echo "Control Plane administrator credentials (shown once):"
+  echo "  Username: $ADMIN_USERNAME"
+  echo "  Password: $ADMIN_PASSWORD"
+  echo "Store these credentials securely; they are not written to the service environment."
+fi

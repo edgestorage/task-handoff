@@ -59,7 +59,7 @@ export class AiSessionCloseCoordinator {
       actions: { ...session.actions, send: false, interrupt: false, approval: false, openApp: false, close: false },
       queue: { revision: 0, pendingCount: 0, items: [] },
     };
-    this.options.registry.put(frozen);
+    this.options.registry.patch(session.id, { actions: frozen.actions, queue: frozen.queue });
     try {
       if ((session.status === "running" || session.status === "waiting") && session.activeTurnId) {
         await this.options.controller.interrupt(session.id);
@@ -96,7 +96,7 @@ export class AiSessionCloseCoordinator {
         creationSource: session.creationSource,
       });
     } catch (error: unknown) {
-      try { await provider.resumeSession?.(session.providerSessionId); } catch (resumeError: unknown) {
+      try { await provider.resumeSession?.(session.providerSessionId, session.modelSelection, session.reasoningEffort); } catch (resumeError: unknown) {
         this.options.onDiagnostic?.({
           code: "AI_SESSION_CLOSE_ROLLBACK_FAILED",
           aiSessionId: session.id,
@@ -104,7 +104,7 @@ export class AiSessionCloseCoordinator {
           error: resumeError instanceof Error ? resumeError.message : String(resumeError),
         });
       }
-      this.options.registry.put(session);
+      this.options.registry.restoreAuthority(session);
       throw aiSessionControlError(
         "AI_SESSION_CLOSE_FAILED",
         error instanceof Error ? error.message : "AI session could not be closed.",

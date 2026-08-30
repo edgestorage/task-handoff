@@ -4,7 +4,7 @@ import type {
   ControlledInstance,
   Project,
 } from "@task-handoff/protocol/control-plane";
-import type { AiSessionActionResult, AiSessionMessageAttachment } from "@task-handoff/protocol/ai-sessions";
+import type { AiSessionActionResponse, AiSessionMessageAttachment } from "@task-handoff/protocol/ai-sessions";
 import {
   aiSessionActionProviderTurnId,
   aiSessionActionTurnId,
@@ -98,7 +98,7 @@ export class ControlPlaneChatMessageSender {
     };
   }
 
-  private sentResult(binding: ChatSessionBinding, project: Project | undefined, instance: ControlledInstance, sessionId: string, aiSession: AiSessionActionResult) {
+  private sentResult(binding: ChatSessionBinding, project: Project | undefined, instance: ControlledInstance, sessionId: string, aiSession: AiSessionActionResponse) {
     return {
       accepted: true,
       routed: true,

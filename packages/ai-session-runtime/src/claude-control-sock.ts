@@ -58,7 +58,6 @@ export class ClaudeControlSockSessionBridge implements AiSessionControlProvider,
   readonly id = "claude-control-sock";
   readonly agent = "claude";
   private readonly subscriptions = new Map<string, () => void>();
-  private readonly textByShort = new Map<string, string>();
 
   constructor(
     private readonly registry: AiSessionRegistry,
@@ -133,6 +132,7 @@ export class ClaudeControlSockSessionBridge implements AiSessionControlProvider,
     const updated = this.registry.applyRealtimeEvent(session.id, {
       kind: "send-ack",
       userPrompt: input.message,
+      userMessage: input.messageId ? { id: input.messageId, text: input.message, attachments: input.userMessageAttachments || [] } : undefined,
       source: "control",
     }) || session;
     return { session: updated, provider: this.agent, action: "send", turnId: updated.activeTurnId };
@@ -176,7 +176,6 @@ export class ClaudeControlSockSessionBridge implements AiSessionControlProvider,
       stop();
     }
     this.subscriptions.clear();
-    this.textByShort.clear();
   }
 
   private upsertJob(job: Partial<ClaudeDaemonJob>, appSession?: ClaudeAppSession) {
@@ -225,7 +224,6 @@ export class ClaudeControlSockSessionBridge implements AiSessionControlProvider,
       if (!activeShorts.has(short)) {
         stop();
         this.subscriptions.delete(short);
-        this.textByShort.delete(short);
       }
     }
   }
@@ -247,13 +245,6 @@ export class ClaudeControlSockSessionBridge implements AiSessionControlProvider,
     const record = objectValue(message.record);
     if (record) {
       this.upsertJob(record as Partial<ClaudeDaemonJob>);
-    }
-    const text = this.textFromSubscribeMessage(short, message);
-    if (text) {
-      const session = this.sessionForShort(short);
-      if (session) {
-        this.registry.applyRealtimeEvent(session.id, { kind: "assistant-message", text, source: "realtime" });
-      }
     }
     const stateInfo = this.stateFromSubscribeMessage(message, record);
     if (stateInfo.observedState) {
@@ -347,34 +338,6 @@ export class ClaudeControlSockSessionBridge implements AiSessionControlProvider,
     }
   }
 
-  private textFromSubscribeMessage(short: string, message: Record<string, unknown>) {
-    const chunks = [
-      ...arrayValue(message.streamTail).map((value) => String(value || "")),
-      ...arrayValue(message.output).map((value) => String(value || "")),
-      stringValue(message.data),
-      stringValue(message.text),
-      stringValue(message.delta),
-      stringValue(message.raw),
-    ].filter(Boolean);
-    if (chunks.length === 0) {
-      return "";
-    }
-    const clean = stripAnsi(chunks.join("\n"))
-      .replace(/\u0007/g, "")
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .filter((line) => !isClaudeStartupChromeLine(line))
-      .slice(-8)
-      .join("\n")
-      .trim();
-    if (!clean || this.textByShort.get(short) === clean) {
-      return "";
-    }
-    this.textByShort.set(short, clean);
-    return clean;
-  }
-
   private requireShort(session: AiSessionStatus) {
     const short = typeof session.providerMeta?.short === "string" ? session.providerMeta.short : undefined;
     if (!short) {
@@ -432,50 +395,12 @@ function compact(value: unknown, max = 500) {
   return text.length > max ? `${text.slice(0, max - 3)}...` : text;
 }
 
-function stripAnsi(value: unknown) {
-  return String(value)
-    .replace(/\x1B\][^\x07]*(?:\x07|\x1B\\)?/g, "")
-    .replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, "")
-    .replace(/\x1B[\x30-\x7E]/g, "")
-    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "");
-}
-
-function isClaudeStartupChromeLine(line: string) {
-  const normalized = line
-    .replace(/[─━═_\-]{3,}/g, "")
-    .replace(/[⏺●•·]/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (!normalized) {
-    return true;
-  }
-  return [
-    /^claude code\b/i,
-    /\bapi usage billing\b/i,
-    /\/effort\b/i,
-    /\bauto mode on\b/i,
-    /\bshift\+tab to cycle\b/i,
-    /\bfor agents\b/i,
-    /^log an error\??"?$/i,
-    /^~\/\S+/,
-    /^\S+\s+·\s+\S+.*\b\/project\/work\b/i,
-    /^\S+\s+·\s+\/?(?:workspace|project|Users|home)\b/i,
-    /^(?:high|medium|low)\s*·\s*\/?effort\b/i,
-    /^[›>]\s*try\s+["'`]/i,
-    /^try\s+["'`]/i,
-  ].some((pattern) => pattern.test(normalized));
-}
-
 function objectValue(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 }
 
 function arrayValue(value: unknown) {
   return Array.isArray(value) ? value : [];
-}
-
-function stringValue(value: unknown) {
-  return typeof value === "string" ? value : "";
 }
 
 function envFlag(name: string, fallback = false) {

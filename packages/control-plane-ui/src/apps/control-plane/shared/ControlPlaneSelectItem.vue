@@ -1,5 +1,5 @@
 <template>
-  <SelectItem class="control-plane-select-item" :value="value">
+  <SelectItem class="control-plane-select-item" :value="value" :disabled="disabled">
     <slot />
   </SelectItem>
 </template>
@@ -9,6 +9,7 @@ import { SelectItem } from "../../../components/ui/select";
 
 defineProps<{
   value: string;
+  disabled?: boolean;
 }>();
 </script>
 

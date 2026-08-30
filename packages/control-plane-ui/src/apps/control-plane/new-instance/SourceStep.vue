@@ -6,13 +6,13 @@
     </div>
 
     <div class="choice-grid" :aria-label="t('instances.create.workspaceSource')">
-      <button type="button" class="choice-tile" :class="{ active: sourceDraft.mode === 'project' }" @click="$emit('select-source-mode', 'project')">
-        <GitBranch :size="17" />
-        <span>{{ t("instances.create.repository") }}</span>
-      </button>
       <button type="button" class="choice-tile" :class="{ active: sourceDraft.mode === 'local-folder' }" @click="$emit('select-source-mode', 'local-folder')">
         <Folder :size="17" />
         <span>{{ t("instances.create.localFolder") }}</span>
+      </button>
+      <button type="button" class="choice-tile" :class="{ active: sourceDraft.mode === 'project' }" @click="$emit('select-source-mode', 'project')">
+        <GitBranch :size="17" />
+        <span>{{ t("instances.create.repository") }}</span>
       </button>
     </div>
 
@@ -35,6 +35,13 @@
         <!-- i18n-audit-allow-next-line code-token: example Git remote URL -->
         <ControlPlaneInput v-model="newProject.url" placeholder="https://github.com/org/repo" />
       </label>
+      <label v-if="canManageSecrets">
+        <span>{{ t("instances.create.gitCredential") }}</span>
+        <ControlPlaneSelect :model-value="newProject.gitCredentialId || noCredentialValue" :placeholder="t('instances.create.noGitCredential')" @update:model-value="newProject.gitCredentialId = $event === noCredentialValue ? '' : $event">
+          <ControlPlaneSelectItem :value="noCredentialValue">{{ t("instances.create.noGitCredential") }}</ControlPlaneSelectItem>
+          <ControlPlaneSelectItem v-for="credential in enabledGitCredentials" :key="credential.id" :value="credential.id">{{ credential.name }} · {{ credential.scope.host }}{{ credential.scope.pathPrefix }}</ControlPlaneSelectItem>
+        </ControlPlaneSelect>
+      </label>
       <Button variant="outline" size="sm" :disabled="!canCreateProject || creatingProject" @click="$emit('create-project')">
         <Plus :size="15" />
         <span>{{ creatingProject ? t("instances.create.creating") : t("instances.create.createRepository") }}</span>
@@ -51,7 +58,7 @@
       <label>
         <span>{{ t("instances.create.nodeFolder") }}</span>
         <ControlPlaneSelect :model-value="localFolderSelectValue" :placeholder="t('instances.create.selectLocalFolder')" @update:model-value="$emit('select-local-folder', $event)">
-          <ControlPlaneSelectItem v-for="folder in localFolders" :key="folder.id" :value="folder.id">{{ folder.name }} · {{ folder.path }}</ControlPlaneSelectItem>
+          <ControlPlaneSelectItem v-for="folder in localFolders" :key="folder.id" :value="folder.id">{{ nodeLocalFolderDisplayName(folder) }} · {{ folder.path }}</ControlPlaneSelectItem>
           <ControlPlaneSelectItem :value="chooseFolderValue">{{ t("instances.create.chooseFolder") }}</ControlPlaneSelectItem>
         </ControlPlaneSelect>
       </label>
@@ -79,8 +86,11 @@
 
 <script setup lang="ts">
 import { Folder, FolderOpen, GitBranch, Plus } from "@lucide/vue";
+import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 import type { Node, NodeLocalFolder, Project } from "../../../api/types";
+import type { GitCredentialPublic } from "@task-handoff/protocol/managed-git-credentials";
+import { nodeLocalFolderDisplayName } from "../nodePath";
 import { Button } from "../../../components/ui/button";
 import ControlPlaneInput from "../shared/ControlPlaneInput.vue";
 import ControlPlaneSelect from "../shared/ControlPlaneSelect.vue";
@@ -90,13 +100,16 @@ import type { NodeFolderTreeNode } from "./nodeFolderTree";
 import type { NewProjectDraft, SourceDraft, SourceMode } from "./newInstanceTypes";
 
 const { t } = useI18n();
+const noCredentialValue = "__none__";
 
 const props = defineProps<{
   canBrowseProjectFolder: boolean;
   canCreateProject: boolean;
+  canManageSecrets: boolean;
   chooseFolderValue: string;
   creatingLocalFolder: boolean;
   creatingProject: boolean;
+  gitCredentials: GitCredentialPublic[];
   loadingNodeFolderTree: boolean;
   localFolderSelectValue: string;
   localFolders: NodeLocalFolder[];
@@ -112,6 +125,8 @@ const props = defineProps<{
   showNodeFolderTree: boolean;
   sourceDraft: SourceDraft;
 }>();
+
+const enabledGitCredentials = computed(() => props.gitCredentials.filter((credential) => credential.status === "enabled"));
 
 defineEmits<{
   "choose-project-folder-path": [];

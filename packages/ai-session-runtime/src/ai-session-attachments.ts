@@ -1,11 +1,18 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import crypto from "node:crypto";
 import { AI_SESSION_MAX_INLINE_FILE_BYTES, type AiSessionMessageAttachment } from "@task-handoff/protocol/ai-sessions";
+import { SAFE_FILE_SYSTEM_COMPONENT_MAX_BYTES, safeFileName } from "@task-handoff/core/core/file-names";
 
 export type CodexAttachmentInput =
   | { type: "image"; url: string }
   | { type: "localImage"; path: string };
+
+type MaterializableAiSessionAttachment = AiSessionMessageAttachment & {
+  /** Internal-only path owned by the controlled-instance retention store. */
+  retainedPath?: string;
+};
 
 const IMAGE_MIME_EXTENSIONS: Record<string, string> = {
   "image/bmp": ".bmp",
@@ -15,11 +22,6 @@ const IMAGE_MIME_EXTENSIONS: Record<string, string> = {
   "image/webp": ".webp",
 };
 const DEFAULT_ATTACHMENT_RETENTION_MS = 24 * 60 * 60 * 1000;
-
-function safeName(name: string) {
-  const cleaned = path.basename(name).replace(/[^\w.\- ()\u4e00-\u9fff]/g, "_").slice(0, 160);
-  return cleaned || "image";
-}
 
 function attachmentDir() {
   const configured = process.env.TASK_HANDOFF_AI_SESSION_ATTACHMENT_DIR?.trim();
@@ -52,7 +54,7 @@ function cleanupExpiredAttachments(dir: string) {
   }
 }
 
-export function materializeAiSessionAttachments(attachments: AiSessionMessageAttachment[] = [], runtimePathRoot?: string) {
+export function materializeAiSessionAttachments(attachments: MaterializableAiSessionAttachment[] = [], runtimePathRoot?: string) {
   if (!attachments.length) {
     return [];
   }
@@ -60,6 +62,18 @@ export function materializeAiSessionAttachments(attachments: AiSessionMessageAtt
   fs.mkdirSync(dir, { recursive: true });
   cleanupExpiredAttachments(dir);
   return attachments.map((attachment) => {
+    if (attachment.retainedPath) {
+      const retainedPath = canonicalRuntimePath(
+        attachment.retainedPath,
+        "AI_SESSION_ATTACHMENT_CONTENT_MISSING",
+        "Retained attachment content does not exist",
+      );
+      const stat = fs.statSync(retainedPath);
+      if (!stat.isFile()) {
+        throw runtimePathError("AI_SESSION_ATTACHMENT_CONTENT_MISSING", `Retained attachment content is not a file: ${attachment.retainedPath}`);
+      }
+      return { ...attachment, size: stat.size, path: retainedPath };
+    }
     if (attachment.source.type === "runtime-path") {
       if (!path.isAbsolute(attachment.source.path)) {
         throw new Error(`Runtime attachment path must be absolute: ${attachment.source.path}`);
@@ -82,8 +96,12 @@ export function materializeAiSessionAttachments(attachments: AiSessionMessageAtt
       }
       return { ...attachment, size: stat.size, path: canonicalPath };
     }
-    const ext = IMAGE_MIME_EXTENSIONS[attachment.mime.toLowerCase()] || path.extname(attachment.name) || ".img";
-    const fileName = `${attachment.id}-${safeName(attachment.name).replace(/\.[^.]+$/, "")}${ext}`;
+    const ext = safeFileName(IMAGE_MIME_EXTENSIONS[attachment.mime.toLowerCase()] || path.extname(attachment.name) || ".img", ".img", { maxBytes: 16, maxLength: 16 });
+    const prefix = `att-${crypto.createHash("sha256").update(attachment.id).digest("hex").slice(0, 24)}-`;
+    const stem = safeFileName(safeFileName(attachment.name, "image").replace(/\.[^.]+$/, ""), "image", {
+      maxBytes: SAFE_FILE_SYSTEM_COMPONENT_MAX_BYTES - Buffer.byteLength(prefix) - Buffer.byteLength(ext),
+    });
+    const fileName = `${prefix}${stem}${ext}`;
     const filePath = path.join(dir, fileName);
     fs.writeFileSync(filePath, Buffer.from(attachment.source.data, "base64"));
     return { ...attachment, path: filePath };
@@ -92,7 +110,7 @@ export function materializeAiSessionAttachments(attachments: AiSessionMessageAtt
 
 export async function withAttachmentPathFallback<T>(
   message: string,
-  attachments: AiSessionMessageAttachment[] = [],
+  attachments: MaterializableAiSessionAttachment[] = [],
   runtimePathRoot: string | undefined,
   run: (message: string) => Promise<T>,
 ) {
@@ -105,7 +123,7 @@ export async function withAttachmentPathFallback<T>(
 
 export function prepareCodexAiSessionAttachments(
   message: string,
-  attachments: AiSessionMessageAttachment[] = [],
+  attachments: MaterializableAiSessionAttachment[] = [],
   runtimePathRoot?: string,
 ): { message: string; inputs: CodexAttachmentInput[] } {
   const inputs: CodexAttachmentInput[] = [];

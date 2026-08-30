@@ -1,9 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
+import { AiSessionConversationAttachmentSchema } from "@task-handoff/protocol/ai-sessions";
 import type {
   AiSessionPhase,
   AiSessionSnapshotInput,
   AiSessionSource,
   AiSessionStatus,
+  AiSessionUserMessageDetail,
 } from "@task-handoff/protocol/ai-sessions";
 
 export function compact(value: unknown, max = 500) {
@@ -84,6 +87,45 @@ function normalizeIsoTimestamp(value: unknown) {
   return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : undefined;
 }
 
+function normalizeUserMessages(value: unknown) {
+  if (!Array.isArray(value)) return undefined;
+  const messages = new Map<string, AiSessionUserMessageDetail>();
+  for (const raw of value) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+    const record = raw as Partial<AiSessionUserMessageDetail>;
+    if (!record.id || typeof record.id !== "string" || typeof record.text !== "string") continue;
+    const attachments = Array.isArray(record.attachments)
+      ? record.attachments.flatMap((attachment) => {
+        if (!attachment || typeof attachment !== "object" || Array.isArray(attachment)) return [];
+        const candidate = attachment as Record<string, unknown>;
+        const parsed = AiSessionConversationAttachmentSchema.safeParse({
+          id: candidate.id,
+          kind: candidate.kind,
+          name: candidate.name,
+          mime: candidate.mime,
+          size: candidate.size,
+          ...(candidate.contentState !== undefined ? { contentState: candidate.contentState } : {}),
+        });
+        return parsed.success ? [parsed.data] : [];
+      }).slice(0, 6)
+      : [];
+    const message = { id: compact(record.id, 240), text: messageText(record.text), attachments };
+    const existing = messages.get(message.id);
+    // Attachment-bearing controlled events are higher fidelity than transcript
+    // events that only know the message text.
+    messages.set(message.id, existing && existing.attachments.length > message.attachments.length ? existing : message);
+  }
+  const normalized = [...messages.values()].slice(-100);
+  return normalized.length ? normalized : undefined;
+}
+
+function mergeUserMessages(
+  current: NonNullable<AiSessionStatus["turns"]>[number]["userMessages"],
+  incoming: NonNullable<AiSessionStatus["turns"]>[number]["userMessages"],
+) {
+  return normalizeUserMessages([...(current || []), ...(incoming || [])]);
+}
+
 function mergeContextCompactions(
   current: NonNullable<AiSessionStatus["turns"]>[number]["contextCompactions"],
   incoming: NonNullable<AiSessionStatus["turns"]>[number]["contextCompactions"],
@@ -134,6 +176,7 @@ export function normalizeTurns(values?: unknown[], meta: TurnMeta = {}) {
       providerTurnId: record.providerTurnId ? compact(record.providerTurnId, 240) : meta.providerTurnId,
       source: record.source || meta.source,
       userPrompt: record.userPrompt ? messageText(record.userPrompt) : undefined,
+      userMessages: normalizeUserMessages(record.userMessages),
       status: record.status || "completed",
       phase: record.phase,
       summary: record.summary ? compact(record.summary, 1000) : undefined,
@@ -148,7 +191,7 @@ export function normalizeTurns(values?: unknown[], meta: TurnMeta = {}) {
       updatedAt: record.updatedAt,
       completedAt: record.completedAt,
     };
-    if (turn.userPrompt || turn.summary || turn.lastMessage || turn.contextCompactions?.length) {
+    if (turn.userPrompt || turn.userMessages?.length || turn.summary || turn.lastMessage || turn.contextCompactions?.length) {
       turns.push(turn);
     }
   }
@@ -185,6 +228,7 @@ function mergeTurnPatch(
 ) {
   const patch = definedTurnPatch(turn);
   patch.contextCompactions = mergeContextCompactions(existing?.contextCompactions, turn.contextCompactions);
+  patch.userMessages = mergeUserMessages(existing?.userMessages, turn.userMessages);
   if (!existing) {
     return patch;
   }
@@ -192,6 +236,7 @@ function mergeTurnPatch(
     existing.summary === (turn.summary ?? existing.summary) &&
     existing.lastMessage === (turn.lastMessage ?? existing.lastMessage) &&
     existing.lastMessageItemId === (turn.lastMessageItemId ?? existing.lastMessageItemId) &&
+    JSON.stringify(existing.userMessages || []) === JSON.stringify(patch.userMessages || []) &&
     JSON.stringify(existing.contextCompactions || []) === JSON.stringify(patch.contextCompactions || []);
   const sameState = existing.status === (turn.status ?? existing.status) &&
     existing.phase === (turn.phase ?? existing.phase);
@@ -204,7 +249,11 @@ function mergeTurnPatch(
 }
 
 function mergeTurns(current?: AiSessionStatus["turns"], next?: AiSessionStatus["turns"], meta: TurnMeta = {}) {
-  const merged = normalizeTurns(current);
+  const baseline = normalizeTurns(current);
+  // Merge into detached turn records. If the normalized result is unchanged,
+  // updateTurns returns the caller's original array to preserve structural
+  // sharing without allowing this reducer to mutate it.
+  const merged = baseline.map((turn) => ({ ...turn }));
   const incomingTurns = normalizeTurns(next, meta);
   function insertTurn(turn: NonNullable<AiSessionStatus["turns"]>[number], incomingIndex: number) {
     const previousKnown = incomingTurns.slice(0, incomingIndex).reverse().find((entry) => merged.some((turn) => turn.id === entry.id));
@@ -260,7 +309,7 @@ function mergeTurns(current?: AiSessionStatus["turns"], next?: AiSessionStatus["
       }
     }
   }
-  return merged.slice(-50);
+  return { turns: merged.slice(-50), baseline };
 }
 
 export function turnHasResponse(turn?: NonNullable<AiSessionStatus["turns"]>[number]) {
@@ -310,7 +359,18 @@ export type TurnUpdatePatch = {
   summary?: AiSessionStatus["summary"];
   lastMessage?: AiSessionStatus["lastMessage"];
   lastMessageItemId?: AiSessionStatus["lastMessageItemId"];
+  completedAt?: AiSessionStatus["completedAt"];
+  userMessage?: AiSessionUserMessageDetail;
 };
+
+function turnStatusFromSessionStatus(
+  status: AiSessionStatus["status"] | undefined,
+  fallback: NonNullable<AiSessionStatus["turns"]>[number]["status"] = "running",
+) {
+  if (status === "idle") return "completed";
+  if (status === "waiting" || status === "failed" || status === "running") return status;
+  return fallback;
+}
 
 export function updateTurns(
   current: AiSessionStatus["turns"],
@@ -318,7 +378,8 @@ export function updateTurns(
   updatedAt: string,
   meta: TurnMeta = {},
 ) {
-  const turns = mergeTurns(current, patch.turns, meta);
+  const merged = mergeTurns(current, patch.turns, meta);
+  const turns = merged.turns;
   const activeTurnId = patch.activeTurnId ? compact(patch.activeTurnId, 240) : "";
   const activeTurnPrompt = activeTurnId
     ? patch.turns?.find((turn) => turn.id === activeTurnId)?.userPrompt
@@ -335,13 +396,13 @@ export function updateTurns(
       }
       promptTurn.userPrompt = prompt;
       promptTurn.updatedAt = updatedAt;
-      promptTurn.status = patch.status === "waiting" ? "waiting" : "running";
+      promptTurn.status = turnStatusFromSessionStatus(patch.status);
       promptTurn.phase = (patch.phase as AiSessionPhase | undefined) || promptTurn.phase || "thinking";
       Object.assign(promptTurn, meta);
       promptTurn.revision += 1;
     } else if (last && !last.lastMessage && !last.summary && last.userPrompt === prompt) {
       last.updatedAt = updatedAt;
-      last.status = patch.status === "waiting" ? "waiting" : "running";
+      last.status = turnStatusFromSessionStatus(patch.status);
       last.phase = (patch.phase as AiSessionPhase | undefined) || last.phase || "thinking";
       Object.assign(last, meta);
       last.revision += 1;
@@ -350,12 +411,34 @@ export function updateTurns(
         id: activeTurnId || stableGeneratedTurnId(prompt, updatedAt),
         ...meta,
         userPrompt: prompt,
-        status: patch.status === "waiting" ? "waiting" : "running",
+        status: turnStatusFromSessionStatus(patch.status),
         phase: (patch.phase as AiSessionPhase | undefined) || "thinking",
         revision: 0,
         startedAt: updatedAt,
         updatedAt,
       });
+    }
+  }
+  if (patch.userMessage) {
+    let messageTurn = activeTurnId ? turns.find((turn) => turn.id === activeTurnId) : turns.at(-1);
+    if (!messageTurn) {
+      messageTurn = {
+        id: activeTurnId || stableGeneratedTurnId(patch.userMessage.text, updatedAt),
+        ...meta,
+        userPrompt: messageText(patch.userMessage.text) || undefined,
+        status: patch.status === "waiting" ? "waiting" : "running",
+        phase: (patch.phase as AiSessionPhase | undefined) || "thinking",
+        revision: 0,
+        startedAt: updatedAt,
+        updatedAt,
+      };
+      turns.push(messageTurn);
+    }
+    const mergedMessages = mergeUserMessages(messageTurn.userMessages, [patch.userMessage]);
+    if (JSON.stringify(messageTurn.userMessages || []) !== JSON.stringify(mergedMessages || [])) {
+      messageTurn.userMessages = mergedMessages;
+      messageTurn.revision += 1;
+      messageTurn.updatedAt = updatedAt;
     }
   }
   if (patch.lastMessage || patch.summary) {
@@ -386,7 +469,7 @@ export function updateTurns(
       status: patch.status === "idle" ? "completed" : patch.status === "waiting" ? "waiting" : patch.status === "failed" ? "failed" : last?.status || "running",
       phase: (patch.phase as AiSessionPhase | undefined) || last?.phase,
       updatedAt,
-      completedAt: patch.status === "idle" || patch.status === "failed" ? updatedAt : last?.completedAt,
+      completedAt: patch.completedAt || (patch.status === "idle" || patch.status === "failed" ? updatedAt : last?.completedAt),
       ...meta,
     };
     if (last) {
@@ -413,16 +496,14 @@ export function updateTurns(
         startedAt: updatedAt,
       });
     }
-  } else if ((patch.status || patch.phase) && activeTurnId) {
-    const last = turns.find((turn) => turn.id === activeTurnId);
+  } else if (patch.status || patch.phase) {
+    const last = activeTurnId
+      ? turns.find((turn) => turn.id === activeTurnId)
+      : patch.status === "idle" || patch.status === "failed"
+        ? turns.at(-1)
+        : undefined;
     if (last) {
-      const status = patch.status === "idle"
-        ? "completed"
-        : patch.status === "waiting"
-          ? "waiting"
-          : patch.status === "failed"
-            ? "failed"
-            : last.status;
+      const status = turnStatusFromSessionStatus(patch.status, last.status);
       const phase = (patch.phase as AiSessionPhase | undefined) || last.phase;
       const completedAt = patch.status === "idle" || patch.status === "failed" ? updatedAt : last.completedAt;
       const changed = last.status !== status || last.phase !== phase || last.completedAt !== completedAt;
@@ -439,5 +520,8 @@ export function updateTurns(
       turns.push(activeTurn);
     }
   }
-  return normalizeTurns(turns);
+  const normalized = normalizeTurns(turns);
+  return isDeepStrictEqual(normalized, merged.baseline)
+    ? current ?? merged.baseline
+    : normalized;
 }

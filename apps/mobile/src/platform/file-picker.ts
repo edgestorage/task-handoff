@@ -1,6 +1,7 @@
 import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
 import { Platform } from 'react-native';
+import type { AiSessionPastedTextPresentation } from '@task-handoff/control-plane-client';
 
 export type MobileLocalFile = {
   uri: string;
@@ -9,6 +10,7 @@ export type MobileLocalFile = {
   size: number | undefined;
   kind: 'image' | 'file';
   temporary?: boolean;
+  textPresentation?: AiSessionPastedTextPresentation;
 };
 
 export async function pickDocument(): Promise<MobileLocalFile | undefined> {

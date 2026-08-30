@@ -13,6 +13,7 @@ import {
 } from "@task-handoff/protocol/triggers";
 import { DomainStore } from "@task-handoff/core/storage/domain-store";
 import type { TaskHandoffStoragePaths } from "@task-handoff/core/storage/paths";
+import { nowIso as now } from "@task-handoff/core/core/time";
 
 const MAX_RECENT_RUNS = 100;
 
@@ -32,10 +33,6 @@ type TriggerCreateInput = {
     target: TriggerDeployment["target"];
   };
 };
-
-function now() {
-  return new Date().toISOString();
-}
 
 function localInstanceId() {
   return process.env.TASK_HANDOFF_INSTANCE_ID || "local";

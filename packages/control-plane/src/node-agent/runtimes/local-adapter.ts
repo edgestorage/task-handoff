@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { processStartIdentity } from "@task-handoff/core/core/process-singleton-lock";
@@ -31,6 +32,16 @@ function localWorkspacePath(instance: ControlledInstance) {
     throw error;
   }
   return path.resolve(instance.source.path);
+}
+
+export function localGitBrokerDirectoryPrefix(
+  instanceId: string,
+  platform = process.platform,
+  temporaryDirectory = os.tmpdir(),
+) {
+  const temporaryRoot = platform === "darwin" ? "/private/tmp" : temporaryDirectory;
+  const instanceHash = crypto.createHash("sha256").update(instanceId).digest("hex").slice(0, 12);
+  return path.join(temporaryRoot, `th-git-${instanceHash}-`);
 }
 
 export function configuredLocalControlledCommand() {
@@ -78,6 +89,17 @@ export class LocalhostRuntimeAdapter implements RuntimeAdapter {
   private readonly paths: NodeAgentStorePaths;
   private readonly nodeAgentUrl: () => string;
   private readonly processSupervisor: LocalProcessSupervisor;
+
+  async resolveInstanceWeb(context: ExecutorContext) {
+    const port = context.instance.runtime.port;
+    if (!port) {
+      throw Object.assign(new Error(`Instance ${context.instance.id} does not have a node-owned local runtime port.`), {
+        statusCode: 409,
+        code: "INSTANCE_RUNTIME_ENDPOINT_UNAVAILABLE",
+      });
+    }
+    return `http://127.0.0.1:${port}`;
+  }
   private readonly commandOverride?: string[];
   private readonly lockPath?: string;
 
@@ -120,6 +142,8 @@ export class LocalhostRuntimeAdapter implements RuntimeAdapter {
     const errPath = path.join(logDir, "controlled-instance.err.log");
     copyTruncateOpenLog(outPath);
     copyTruncateOpenLog(errPath);
+    const gitBrokerDir = fs.mkdtempSync(localGitBrokerDirectoryPrefix(context.instance.id));
+    fs.chmodSync(gitBrokerDir, 0o700);
     const out = fs.openSync(outPath, "a", 0o600);
     const err = fs.openSync(errPath, "a", 0o600);
     const child = spawn(command, args, {
@@ -143,12 +167,21 @@ export class LocalhostRuntimeAdapter implements RuntimeAdapter {
         TASK_HANDOFF_WORKSPACE: workspacePath,
         TASK_HANDOFF_WORKSPACE_MODE: "local-bind",
         TASK_HANDOFF_DATA_DIR: dataDir,
+        TASK_HANDOFF_INSTANCE_PRIVATE_CONFIG_PATH: context.privateConfigPath || "",
         TASK_HANDOFF_LOG_DIR: logDir,
         TASK_HANDOFF_APP_SESSION_PERSIST: "1",
         TASK_HANDOFF_CODEX_APP_SERVER: process.env.TASK_HANDOFF_CODEX_APP_SERVER || "1",
         TASK_HANDOFF_WEB_PORT: String(port),
         TASK_HANDOFF_WEB_HOST: "127.0.0.1",
+        TASK_HANDOFF_GIT_CREDENTIAL_SOCKET: path.join(gitBrokerDir, "broker.sock"),
         ...(context.modelEnv || {}),
+        // CODEX_HOME belongs to the controlled instance's private config area.
+        // Explicitly clear an inherited value when Codex configuration is
+        // disabled or the default Codex home is selected.
+        CODEX_HOME: (context.instance.config?.codexConfigEnabled ?? true)
+          && (context.instance.config?.codexHomeMode ?? "taskhandoff") === "taskhandoff"
+          ? path.join(dataDir, "configs", "codex")
+          : undefined,
       },
     });
     fs.closeSync(out);
@@ -156,6 +189,7 @@ export class LocalhostRuntimeAdapter implements RuntimeAdapter {
     try {
       await waitForChildSpawn(child);
     } catch (error) {
+      fs.rmSync(gitBrokerDir, { recursive: true, force: true });
       const message = error instanceof Error ? error.message : String(error);
       try {
         fs.appendFileSync(
@@ -188,6 +222,7 @@ export class LocalhostRuntimeAdapter implements RuntimeAdapter {
       }
     });
     child.once("exit", (code, signal) => {
+      fs.rmSync(gitBrokerDir, { recursive: true, force: true });
       try {
         fs.appendFileSync(
           lifecycleLogPath,

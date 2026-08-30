@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { AI_SESSION_HISTORY_MAX_LIMIT, AiSessionPermissionModeSchema } from "@task-handoff/protocol/ai-sessions";
+import { AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS, AI_SESSION_HISTORY_MAX_LIMIT, AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES, AiSessionPermissionModeSchema } from "@task-handoff/protocol/ai-sessions";
+import { GitWorkspaceProvisioningInputSchema } from "@task-handoff/protocol/managed-git-credentials";
 import {
   ControlledInstanceSchema,
   EnvironmentSourceSchema,
@@ -21,10 +22,17 @@ export const ProxyRequestSchema = z
 export const CreateLocalFolderSchema = z
   .object({
     id: z.string().trim().min(1).max(120).optional(),
-    name: z.string().trim().min(1).max(160),
+    name: z.string().trim().max(160),
     path: z.string().trim().min(1).max(4096),
+    // Compatibility for v0.0.21 control planes; new clients do not associate local folders with images.
     defaultImageSelection: ImageSelectionSchema.optional(),
     labels: z.record(z.string(), z.string()).default({}),
+  })
+  .strict();
+
+export const UpdateLocalFolderSchema = z
+  .object({
+    name: z.string().trim().max(160),
   })
   .strict();
 
@@ -48,10 +56,15 @@ export const CreateNodeInstanceSchema = z
     sourceSnapshot: z.record(z.string(), z.unknown()).default({}),
     config: z.object({
       autoImportAgentConfigs: z.boolean().optional(),
+      codexConfigEnabled: z.boolean().optional(),
+      codexHomeMode: z.enum(["default", "taskhandoff"]).optional(),
       defaultCodexPermissionMode: AiSessionPermissionModeSchema.optional(),
       aiSessionHistoryLimit: z.number().int().min(1).max(AI_SESSION_HISTORY_MAX_LIMIT).optional(),
+      aiSessionAttachmentRetentionDays: z.number().int().min(0).max(AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS).optional(),
+      aiSessionMaxFileAttachmentBytes: z.number().int().positive().max(AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES).optional(),
     }).strict().optional(),
     modelSelection: ControlledInstanceSchema.shape.modelSelection,
+    gitWorkspaceProvisioning: GitWorkspaceProvisioningInputSchema.optional(),
   })
   .strict()
   .superRefine((input, context) => {
@@ -61,6 +74,9 @@ export const CreateNodeInstanceSchema = z
     if (input.environmentSource?.type === "template" && input.image) {
       context.addIssue({ code: "custom", path: ["image"], message: "Template environment source is resolved by the node-agent and cannot include an image snapshot." });
     }
+    if (input.gitWorkspaceProvisioning && input.source.type === "local-folder") {
+      context.addIssue({ code: "custom", path: ["gitWorkspaceProvisioning"], message: "Git provisioning requires a Git source." });
+    }
   });
 
 export const UpdateNodeInstanceSchema = z
@@ -68,8 +84,12 @@ export const UpdateNodeInstanceSchema = z
     name: z.string().trim().min(1).max(160).optional(),
     config: z.object({
       autoImportAgentConfigs: z.boolean().optional(),
+      codexConfigEnabled: z.boolean().optional(),
+      codexHomeMode: z.enum(["default", "taskhandoff"]).optional(),
       defaultCodexPermissionMode: AiSessionPermissionModeSchema.optional(),
       aiSessionHistoryLimit: z.number().int().min(1).max(AI_SESSION_HISTORY_MAX_LIMIT).optional(),
+      aiSessionAttachmentRetentionDays: z.number().int().min(0).max(AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS).optional(),
+      aiSessionMaxFileAttachmentBytes: z.number().int().positive().max(AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES).optional(),
     }).strict().optional(),
     modelSelection: ControlledInstanceSchema.shape.modelSelection.optional(),
   })

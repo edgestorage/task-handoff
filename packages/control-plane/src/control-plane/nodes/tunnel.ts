@@ -1,18 +1,18 @@
 import { z } from "zod";
 import { PassThrough, Readable } from "node:stream";
-import { WebSocket as WsClient } from "ws";
 import {
   encodeNodeTunnelRequestBody,
   type Node,
+  type InstanceLifecycleSnapshot,
 } from "@task-handoff/protocol/control-plane";
-import type { EventEnvelope, SessionStreamsHello } from "@task-handoff/protocol/events";
+import { COMPACT_EVENT_ENVELOPE_VERSION, type EventEnvelope, type SessionStreamsHello } from "@task-handoff/protocol/events";
 import { bridgeWebSockets, closeWebSocket, normalizeWebSocketCloseCode, normalizeWebSocketCloseReason, type WebSocketLike } from "@task-handoff/protocol/websocket-bridge";
 import type { ControlPlaneService } from "../application/service.ts";
 import type { NodeAgentTransport } from "./client.ts";
 import type { ControlPlaneEventBus } from "../events/bus.ts";
-import { createDirectNodeAgentAuthHeaders, hmacHeadersFromRecord, sha256Hex, signNodeAgentRequest, timingSafeHexEqual, NODE_AGENT_HMAC_TIMESTAMP_WINDOW_MS, NODE_TUNNEL_API_PATH } from "../../shared/security/node-agent-auth.ts";
+import type { ControlPlaneAiSessionTransientDemand } from "../events/bus.ts";
+import { hmacHeadersFromRecord, sha256Hex, signNodeAgentRequest, timingSafeHexEqual, NODE_AGENT_HMAC_TIMESTAMP_WINDOW_MS, NODE_TUNNEL_API_PATH } from "../../shared/security/node-agent-auth.ts";
 import { NODE_TUNNEL_ROUTE } from "../http/auth-boundary.ts";
-import { createNodeAgentIpcWebSocket, parseNodeAgentIpcEndpoint } from "../../shared/transport/node-agent-ipc.ts";
 import { EventConnectionRetryTimer, eventConnectionSafetyIntervalMs } from "../../shared/events/connection-retry.ts";
 import { WebSocketConnectionSupervisor } from "../../shared/transport/websocket-connection-supervisor.ts";
 import { NodeTunnelIngress, type NodeAgentTunnelSocket } from "./tunnel-ingress.ts";
@@ -33,6 +33,72 @@ type ReverseTunnelSocket = {
   ping?: () => void;
   terminate?: () => void;
 };
+
+type NodeEventSocket = {
+  readonly OPEN?: number;
+  readyState: number;
+  on: (event: string, listener: (...args: unknown[]) => void) => void;
+  send: (data: unknown, options?: { binary?: boolean }) => void;
+  sendUpstream: (data: unknown) => void;
+  close: (code?: number, reason?: string) => void;
+  ping: () => void;
+  terminate: () => void;
+};
+
+class TransportNodeEventSocket implements NodeEventSocket {
+  readonly OPEN = 1;
+  readyState = this.OPEN;
+  private readonly listeners = new Map<string, Set<(...args: unknown[]) => void>>();
+  private pingUpstream?: () => void;
+  private sendToUpstream?: (data: unknown) => void;
+
+  on(event: string, listener: (...args: unknown[]) => void) {
+    const current = this.listeners.get(event) || new Set();
+    current.add(listener);
+    this.listeners.set(event, current);
+  }
+
+  send(data: unknown) {
+    if (this.readyState === this.OPEN) this.emit("message", data, false);
+  }
+
+  sendUpstream(data: unknown) {
+    if (this.readyState !== this.OPEN) return;
+    try {
+      this.sendToUpstream?.(data);
+    } catch {
+      this.close(1011, "Node event subscription delivery failed.");
+    }
+  }
+
+  ping() {
+    if (this.readyState === this.OPEN) this.pingUpstream?.();
+  }
+
+  control(ping?: () => void, onPong?: (listener: () => void) => void, send?: (data: unknown) => void) {
+    this.pingUpstream = ping;
+    this.sendToUpstream = send;
+    onPong?.(() => this.emit("pong"));
+  }
+
+  opened() {
+    if (this.readyState === this.OPEN) this.emit("open");
+  }
+
+  terminate() {
+    this.close(1006);
+  }
+
+  close(code = 1000, reason = "") {
+    if (this.readyState !== this.OPEN) return;
+    this.readyState = 3;
+    this.emit("close", code, Buffer.from(reason));
+  }
+
+  private emit(event: string, ...args: unknown[]) {
+    for (const listener of this.listeners.get(event) || []) listener(...args);
+  }
+}
 
 type ReverseHttpStreamEntry = {
   resolve: (response: Response) => void;
@@ -62,6 +128,7 @@ type ReverseTunnelConnection = {
   httpStreams: Map<string, ReverseHttpStreamEntry>;
   pendingChannels: Map<string, PendingNodeTunnelChannel>;
   supervisor?: WebSocketConnectionSupervisor;
+  failureReason?: string;
 };
 
 export type PendingNodeTunnelChannel = {
@@ -75,6 +142,14 @@ type TunnelErrorPayload = {
   code: string;
   message: string;
 };
+
+function objectRecord(value: unknown) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function firstStringValue(...values: unknown[]) {
+  return values.find((value): value is string => typeof value === "string" && Boolean(value));
+}
 
 function createRequestId() {
   return `req_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
@@ -137,6 +212,7 @@ function requestHeaders(headers: HeadersInit | undefined) {
 
 export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport {
   private readonly sockets = new Map<string, ReverseTunnelConnection>();
+  private readonly eventSubscriptions = new Map<string, ControlPlaneAiSessionTransientDemand>();
   private readonly eventRouter: NodeTunnelEventRouter;
   private readonly httpStreamHeaderTimeoutMs: number;
   private readonly requestTimeoutMs: number;
@@ -146,12 +222,14 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
     handshakeTimeoutMs?: number;
     heartbeatIntervalMs?: number;
     heartbeatTimeoutMs?: number;
+    heartbeatMissThreshold?: number;
     stableThresholdMs?: number;
   };
 
   constructor(events?: ControlPlaneEventBus, options: {
     onStreamsHello?: (instanceId: string, hello: SessionStreamsHello) => void | Promise<void>;
     onSessionEvent?: (event: EventEnvelope) => boolean;
+    onInstanceLifecycle?: (nodeId: string, lifecycle: InstanceLifecycleSnapshot) => boolean | Promise<boolean>;
     validateInstanceScope?: (nodeId: string, instanceId: string) => boolean | Promise<boolean>;
     httpStreamHeaderTimeoutMs?: number;
     requestTimeoutMs?: number;
@@ -160,12 +238,14 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
     handshakeTimeoutMs?: number;
     heartbeatIntervalMs?: number;
     heartbeatTimeoutMs?: number;
+    heartbeatMissThreshold?: number;
     stableThresholdMs?: number;
   } = {}) {
     this.eventRouter = new NodeTunnelEventRouter({
       events,
       onStreamsHello: options.onStreamsHello,
       onSessionEvent: options.onSessionEvent,
+      onInstanceLifecycle: options.onInstanceLifecycle,
       validateInstanceScope: options.validateInstanceScope,
     });
     this.httpStreamHeaderTimeoutMs = options.httpStreamHeaderTimeoutMs ?? 30_000;
@@ -193,8 +273,9 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
       ping: () => socket.ping?.(),
       onTimeout: (kind) => {
         if (this.sockets.get(nodeId) !== next) return;
+        next.failureReason = `Reverse tunnel ${kind} timeout.`;
         if (next.runtimeGeneration !== undefined) {
-          this.connectionRuntime?.update(nodeId, next.runtimeGeneration, { phase: "suspect", error: `Reverse tunnel ${kind} timeout.` });
+          this.connectionRuntime?.update(nodeId, next.runtimeGeneration, { phase: "suspect", error: next.failureReason });
         }
         if (socket.terminate) socket.terminate();
         else socket.close?.(1011, `Reverse tunnel ${kind} timeout.`);
@@ -210,12 +291,41 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
     socket.on?.("pong", () => {
       if (this.sockets.get(nodeId) !== next) return;
       supervisor.pong();
-      if (next.runtimeGeneration !== undefined) this.connectionRuntime?.pong(nodeId, next.runtimeGeneration);
+      if (next.runtimeGeneration !== undefined) this.connectionRuntime?.pong(nodeId, next.runtimeGeneration, supervisor.diagnostics());
     });
     socket.on?.("close", () => this.detach(nodeId, socket));
-    socket.on?.("error", () => this.detach(nodeId, socket));
+    socket.on?.("error", (error) => {
+      next.failureReason ||= error instanceof Error ? error.message : String(error || "Reverse tunnel transport error.");
+      this.detach(nodeId, socket);
+    });
     if (current && current.socket !== socket) {
       this.finalizeConnection(current, new Error(`Reverse tunnel for node ${nodeId} was replaced.`), "Reverse tunnel was replaced.", true);
+    }
+  }
+
+  setEventSubscription(nodeId: string, demand: ControlPlaneAiSessionTransientDemand) {
+    this.eventSubscriptions.set(nodeId, demand);
+    this.sendEventSubscription(nodeId, demand);
+  }
+
+  private sendEventSubscription(nodeId: string, demand: ControlPlaneAiSessionTransientDemand) {
+    const current = this.sockets.get(nodeId);
+    if (!current) return;
+    try {
+      current.socket.send(JSON.stringify({
+        type: "control-plane.event-subscribe",
+        eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION,
+        aiSessionTransient: {
+          ...(demand.replaySince ? { replaySince: demand.replaySince } : {}),
+          messageDeltas: demand.messageDeltas,
+          timelineAllSessions: demand.timelineAllSessions,
+          timelineSessions: demand.timelineSessions,
+        },
+      }));
+    } catch (error) {
+      current.failureReason = error instanceof Error ? error.message : "Reverse tunnel event subscription delivery failed.";
+      this.detach(nodeId, current.socket);
+      try { current.socket.close?.(1011, "Event subscription delivery failed."); } catch { /* The failed tunnel is already detached. */ }
     }
   }
 
@@ -227,7 +337,7 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
     this.sockets.delete(nodeId);
     current.supervisor?.close();
     if (current.runtimeGeneration !== undefined) {
-      this.connectionRuntime?.disconnected(nodeId, current.runtimeGeneration, { error: "Reverse tunnel disconnected." });
+      this.connectionRuntime?.disconnected(nodeId, current.runtimeGeneration, { error: current.failureReason || "Reverse tunnel disconnected." });
     }
     this.invalidateInstanceScope({ nodeId });
     this.finalizeConnection(current, new Error(`Reverse tunnel for node ${nodeId} disconnected.`), "Reverse tunnel disconnected.", true);
@@ -249,7 +359,10 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
     const current = this.sockets.get(nodeId);
     if (!current || current.socket !== socket || current.runtimeGeneration === undefined) return false;
     current.supervisor?.healthy();
-    return this.connectionRuntime?.connected(nodeId, current.runtimeGeneration) ?? true;
+    const connected = this.connectionRuntime?.connected(nodeId, current.runtimeGeneration) ?? true;
+    const subscription = this.eventSubscriptions.get(nodeId);
+    if (subscription) this.sendEventSubscription(nodeId, subscription);
+    return connected;
   }
 
   private finalizeConnection(connection: ReverseTunnelConnection, error: Error, reason: string, closeMainSocket: boolean) {
@@ -279,6 +392,7 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
 
   handleSocketMessage(nodeId: string, socket: { send: (data: string) => void }, message: Record<string, unknown>) {
     if (!this.isCurrentSocket(nodeId, socket)) return undefined;
+    this.sockets.get(nodeId)?.supervisor?.activity();
     return this.handleMessage(nodeId, message);
   }
 
@@ -321,6 +435,10 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
 
   instanceScopeDiagnostics() {
     return this.eventRouter.diagnostics();
+  }
+
+  setEventDiagnosticLogger(logger: { info?: (data: Record<string, unknown>, message?: string) => void; warn?: (data: Record<string, unknown>, message?: string) => void } | undefined) {
+    this.eventRouter.setLogger(logger);
   }
 
   async request(node: { id: string }, route: string, init: RequestInit = {}) {
@@ -663,6 +781,14 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
         sendTunnel({ type: "control-plane.websocket.close", streamId, code: 1011, reason: "Downstream websocket failed." });
       }
     });
+    return {
+      send: (data: unknown) => {
+        const stream = current.streams.get(streamId);
+        if (!stream) return;
+        if (stream.upstream) stream.upstream.send(data);
+        else stream.pendingFrames.push({ data, isBinary: false });
+      },
+    };
   }
 
   attachWebSocketStream(
@@ -738,17 +864,16 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
 }
 
 export class ControlPlaneNodeEventSubscriber {
-  private readonly sockets = new Map<string, WsClient>();
-  private readonly socketUrls = new Map<string, string>();
-  private readonly retries = new Map<string, { timer: EventConnectionRetryTimer; url?: string }>();
+  private readonly sockets = new Map<string, NodeEventSocket>();
+  private readonly connectionKeys = new Map<string, string>();
+  private readonly retries = new Map<string, { timer: EventConnectionRetryTimer; connectionKey?: string }>();
   private readonly supervisors = new Map<string, WebSocketConnectionSupervisor>();
   private readonly runtimeGenerations = new Map<string, number>();
   private readonly service: ControlPlaneService;
   private readonly tunnel: ControlPlaneNodeAgentTunnelTransport;
   private readonly safetyIntervalMs: number;
-  private readonly logger?: { info?: (data: Record<string, unknown>, message?: string) => void };
+  private readonly logger?: { info?: (data: Record<string, unknown>, message?: string) => void; warn?: (data: Record<string, unknown>, message?: string) => void };
   private readonly connectionRuntime?: NodeConnectionRuntime;
-  private readonly createSocket: (url: string, options: { headers: Record<string, string> }) => WsClient;
   private readonly connectionOptions: {
     connectTimeoutMs?: number;
     handshakeTimeoutMs?: number;
@@ -758,12 +883,17 @@ export class ControlPlaneNodeEventSubscriber {
     now?: () => number;
     setTimeoutFn?: typeof setTimeout;
     clearTimeoutFn?: typeof clearTimeout;
-    createSocket?: (url: string, options: { headers: Record<string, string> }) => WsClient;
   };
   private reconnectAttempts = 0;
   private safetyReconciliations = 0;
   private timer: ReturnType<typeof setInterval> | undefined;
   private running = false;
+  private transientDemand: ControlPlaneAiSessionTransientDemand = {
+    legacyAll: false,
+    messageDeltas: { allInstances: false, instanceIds: [] },
+    timelineAllSessions: false,
+    timelineSessions: [],
+  };
 
   constructor(
     service: ControlPlaneService,
@@ -776,20 +906,21 @@ export class ControlPlaneNodeEventSubscriber {
       handshakeTimeoutMs?: number;
       heartbeatIntervalMs?: number;
       heartbeatTimeoutMs?: number;
+      heartbeatMissThreshold?: number;
       stableThresholdMs?: number;
       now?: () => number;
       setTimeoutFn?: typeof setTimeout;
       clearTimeoutFn?: typeof clearTimeout;
-      createSocket?: (url: string, options: { headers: Record<string, string> }) => WsClient;
+      createSocket?: (url: string, options: { headers: Record<string, string> }) => NodeEventSocket;
     } = {},
   ) {
     this.service = service;
     this.tunnel = tunnel;
     this.safetyIntervalMs = eventConnectionSafetyIntervalMs(options.safetyIntervalMs);
     this.logger = options.logger;
+    this.tunnel.setEventDiagnosticLogger?.(this.logger);
     this.connectionRuntime = options.connectionRuntime;
     this.connectionOptions = options;
-    this.createSocket = options.createSocket || ((url, socketOptions) => new WsClient(url, socketOptions));
   }
 
   start() {
@@ -813,7 +944,7 @@ export class ControlPlaneNodeEventSubscriber {
     }
     for (const supervisor of this.supervisors.values()) supervisor.close();
     this.sockets.clear();
-    this.socketUrls.clear();
+    this.connectionKeys.clear();
     this.supervisors.clear();
     this.runtimeGenerations.clear();
     for (const retry of this.retries.values()) retry.timer.cancel();
@@ -824,6 +955,25 @@ export class ControlPlaneNodeEventSubscriber {
     this.sync();
   }
 
+  setAiSessionTransientDemand(demand: ControlPlaneAiSessionTransientDemand) {
+    this.transientDemand = demand;
+    const encoded = JSON.stringify({
+      v: 1,
+      type: "subscribe",
+      eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION,
+      aiSessionTransient: {
+        ...(demand.replaySince ? { replaySince: demand.replaySince } : {}),
+        messageDeltas: demand.messageDeltas,
+        timelineAllSessions: demand.timelineAllSessions,
+        timelineSessions: demand.timelineSessions,
+      },
+    });
+    for (const socket of this.sockets.values()) socket.sendUpstream(encoded);
+    for (const node of this.service.listNodes()) {
+      if (node.connectionMode === "reverse-wss") this.tunnel.setEventSubscription(node.id, demand);
+    }
+  }
+
   diagnostics() {
     return {
       reconnectAttempts: this.reconnectAttempts,
@@ -832,35 +982,36 @@ export class ControlPlaneNodeEventSubscriber {
       pendingRetries: [...this.retries.values()].filter((entry) => entry.timer.pending).length,
       safetyIntervalMs: this.safetyIntervalMs,
       connections: [...this.supervisors.entries()].map(([nodeId, supervisor]) => ({ nodeId, ...supervisor.diagnostics() })),
+      aiSessionTransientDemand: this.transientDemand,
     };
   }
 
   private sync() {
     const active = new Set<string>();
     for (const node of this.service.listNodes()) {
-      const url = this.nodeEventsUrl(node);
-      if (!url) {
+      const connectionKey = this.nodeEventConnectionKey(node);
+      if (!connectionKey) {
         continue;
       }
       active.add(node.id);
       const scheduledRetry = this.retries.get(node.id);
-      if (scheduledRetry?.timer.pending && scheduledRetry.url !== url) {
+      if (scheduledRetry?.timer.pending && scheduledRetry.connectionKey !== connectionKey) {
         scheduledRetry.timer.cancel();
         this.retries.delete(node.id);
       }
-      if (this.socketUrls.get(node.id) !== url && this.sockets.has(node.id)) {
+      if (this.connectionKeys.get(node.id) !== connectionKey && this.sockets.has(node.id)) {
         const staleSocket = this.sockets.get(node.id);
         const generation = this.runtimeGenerations.get(node.id);
         this.supervisors.get(node.id)?.close();
         this.sockets.delete(node.id);
-        this.socketUrls.delete(node.id);
+        this.connectionKeys.delete(node.id);
         this.supervisors.delete(node.id);
         this.runtimeGenerations.delete(node.id);
         if (generation !== undefined) this.connectionRuntime?.disconnected(node.id, generation, { error: "Direct event endpoint changed." });
         staleSocket?.close();
       }
       if (!this.sockets.has(node.id) && !this.retries.get(node.id)?.timer.pending) {
-        this.connect(node, url);
+        this.connect(node, connectionKey);
       }
     }
     for (const [nodeId, socket] of this.sockets) {
@@ -868,7 +1019,7 @@ export class ControlPlaneNodeEventSubscriber {
         const generation = this.runtimeGenerations.get(nodeId);
         this.supervisors.get(nodeId)?.close();
         this.sockets.delete(nodeId);
-        this.socketUrls.delete(nodeId);
+        this.connectionKeys.delete(nodeId);
         this.supervisors.delete(nodeId);
         this.runtimeGenerations.delete(nodeId);
         if (generation !== undefined) this.connectionRuntime?.disconnected(nodeId, generation, { error: "Direct event connection is no longer configured." });
@@ -882,26 +1033,18 @@ export class ControlPlaneNodeEventSubscriber {
       if (!active.has(nodeId)) {
         retry.timer.cancel();
         this.retries.delete(nodeId);
-        this.socketUrls.delete(nodeId);
+        this.connectionKeys.delete(nodeId);
       }
     }
   }
 
-  private connect(node: Node, url: string) {
-    const ipcPath = parseNodeAgentIpcEndpoint(url);
-    const pathWithQuery = "/api/node-agent/events";
-    const parsedUrl = ipcPath ? undefined : new URL(url);
-    const authHeaders = createDirectNodeAgentAuthHeaders(node, {
-      method: "GET",
-      pathWithQuery: parsedUrl ? `${parsedUrl.pathname}${parsedUrl.search}` : pathWithQuery,
-    });
-    const socket = ipcPath
-      ? createNodeAgentIpcWebSocket(ipcPath, "/events", undefined, authHeaders)
-      : this.createSocket(url, { headers: authHeaders });
-    const runtimeGeneration = this.connectionRuntime?.begin(node.id, "direct-http", "connecting");
+  private connect(node: Node, connectionKey: string) {
+    const socket = new TransportNodeEventSocket();
+    const observesDirectConnection = node.connectionMode !== "control-plane-proxy";
+    const runtimeGeneration = observesDirectConnection ? this.connectionRuntime?.begin(node.id, "direct-http", "connecting") : undefined;
     if (runtimeGeneration !== undefined) this.runtimeGenerations.set(node.id, runtimeGeneration);
     const retry = this.retries.get(node.id)?.timer || new EventConnectionRetryTimer();
-    this.retries.set(node.id, { timer: retry, url });
+    this.retries.set(node.id, { timer: retry, connectionKey });
     const supervisor = new WebSocketConnectionSupervisor({
       ...this.connectionOptions,
       ping: () => socket.ping(),
@@ -918,7 +1061,7 @@ export class ControlPlaneNodeEventSubscriber {
       },
     });
     this.sockets.set(node.id, socket);
-    this.socketUrls.set(node.id, url);
+    this.connectionKeys.set(node.id, connectionKey);
     this.supervisors.set(node.id, supervisor);
     supervisor.start();
     socket.on("open", () => {
@@ -941,6 +1084,19 @@ export class ControlPlaneNodeEventSubscriber {
           if (runtimeGeneration !== undefined) this.connectionRuntime?.connected(node.id, runtimeGeneration);
         }
         const record = message as Record<string, unknown>;
+        const forwardedEvent = objectRecord(record.event);
+        const forwardedPayload = objectRecord(forwardedEvent?.payload);
+        const forwardedMeta = objectRecord(forwardedPayload?.meta);
+        if (typeof forwardedEvent?.type === "string" && forwardedEvent.type.startsWith("app-session.")) {
+          this.logger?.info?.({
+            nodeId: node.id,
+            instanceId: firstStringValue(record.instanceId, objectRecord(forwardedEvent.scope)?.instanceId, forwardedMeta?.instanceId),
+            eventType: forwardedEvent.type,
+            traceId: typeof forwardedMeta?.traceId === "string" ? forwardedMeta.traceId : undefined,
+            streamId: typeof forwardedMeta?.streamId === "string" ? forwardedMeta.streamId : undefined,
+            revision: typeof forwardedMeta?.revision === "number" ? forwardedMeta.revision : undefined,
+          }, "app-session.event.transport.received");
+        }
         const forwardedMessage = typeof record.type === "string" && record.type.startsWith("node-agent.")
           ? record
           : { type: "node-agent.event.forwarded", event: record };
@@ -950,13 +1106,13 @@ export class ControlPlaneNodeEventSubscriber {
     socket.on("pong", () => {
       if (this.sockets.get(node.id) !== socket) return;
       supervisor.pong();
-      if (runtimeGeneration !== undefined) this.connectionRuntime?.pong(node.id, runtimeGeneration);
+      if (runtimeGeneration !== undefined) this.connectionRuntime?.pong(node.id, runtimeGeneration, supervisor.diagnostics());
     });
     socket.on("close", (code, reason) => {
       if (this.sockets.get(node.id) === socket) {
         supervisor.close();
         this.sockets.delete(node.id);
-        this.socketUrls.delete(node.id);
+        this.connectionKeys.delete(node.id);
         this.supervisors.delete(node.id);
         this.runtimeGenerations.delete(node.id);
         this.scheduleReconnect(node.id, {
@@ -969,20 +1125,38 @@ export class ControlPlaneNodeEventSubscriber {
     socket.on("error", () => {
       if (this.sockets.get(node.id) === socket) socket.terminate();
     });
+    try {
+      socket.opened();
+      const control = this.service.resolveNodeAgentTransport(node).proxyWebSocket(node, socket, "/events?aiSessionTransient=1");
+      socket.control(control && control.ping, control && control.onPong, control && control.send);
+      socket.sendUpstream(JSON.stringify({
+        v: 1,
+        type: "subscribe",
+        eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION,
+        aiSessionTransient: {
+          ...(this.transientDemand.replaySince ? { replaySince: this.transientDemand.replaySince } : {}),
+          messageDeltas: this.transientDemand.messageDeltas,
+          timelineAllSessions: this.transientDemand.timelineAllSessions,
+          timelineSessions: this.transientDemand.timelineSessions,
+        },
+      }));
+    } catch {
+      socket.close(1011, "Node event transport failed.");
+    }
   }
 
   private scheduleReconnect(nodeId: string, disconnect: { generation?: number; closeCode?: number; error?: string } = {}) {
     const node = this.service.listNodes().find((candidate) => candidate.id === nodeId);
-    const url = node && this.nodeEventsUrl(node);
-    if (!this.running || !node || !url) {
+    const connectionKey = node && this.nodeEventConnectionKey(node);
+    if (!this.running || !node || !connectionKey) {
       if (disconnect.generation !== undefined) this.connectionRuntime?.disconnected(nodeId, disconnect.generation, disconnect);
       return;
     }
     const current = this.retries.get(nodeId) ?? { timer: new EventConnectionRetryTimer() };
     if (current.timer.pending) return;
-    current.url = url;
+    current.connectionKey = connectionKey;
     const scheduled = current.timer.schedule(() => {
-      if (this.running && !this.sockets.has(nodeId)) this.connect(node, url);
+      if (this.running && !this.sockets.has(nodeId)) this.connect(node, connectionKey);
     });
     if (scheduled) {
       this.reconnectAttempts += 1;
@@ -992,27 +1166,21 @@ export class ControlPlaneNodeEventSubscriber {
           nextRetryAt: new Date(Date.now() + scheduled.delay).toISOString(),
         });
       }
-      this.logger?.info?.({ nodeId, url, attempt: scheduled.attempt, delay: scheduled.delay, reconnectAttempts: this.reconnectAttempts }, "session-stream.node-connection.reconnect-scheduled");
+      this.logger?.info?.({ nodeId, attempt: scheduled.attempt, delay: scheduled.delay, reconnectAttempts: this.reconnectAttempts }, "session-stream.node-connection.reconnect-scheduled");
     }
     this.retries.set(nodeId, current);
   }
 
-  private nodeEventsUrl(node: Node) {
+  private nodeEventConnectionKey(node: Node) {
     if (node.connectionEnabled === false) return undefined;
-    const endpoint = node.controlEndpoint || node.endpoint;
-    if (!endpoint || node.connectionMode === "reverse-wss") {
-      return undefined;
-    }
-    if (parseNodeAgentIpcEndpoint(endpoint)) {
-      return endpoint;
-    }
-    try {
-      const url = new URL("/api/node-agent/events", endpoint.replace(/\/$/, ""));
-      url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-      return url.toString();
-    } catch {
-      return undefined;
-    }
+    // Reverse nodes already carry node-agent events on their main tunnel. Every
+    // other connection mode opens the same /events capability through its
+    // NodeAgentTransport adapter (direct, local IPC, or trusted proxy).
+    if (node.connectionMode === "reverse-wss") return undefined;
+    const connectionIdentity = node.connectionMode === "control-plane-proxy"
+      ? node.connectionPath
+      : { endpoint: node.controlEndpoint || node.endpoint, auth: node.auth };
+    return `transport:${node.connectionMode}:${sha256Hex(JSON.stringify(connectionIdentity))}`;
   }
 }
 

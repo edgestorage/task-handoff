@@ -23,10 +23,11 @@ export class MobileTriggerController {
     this.store.set(this.controlPlaneId, { phase: current.snapshot.triggers.length ? 'stale' : 'loading', error: undefined });
     try {
       const [snapshot, session] = await Promise.all([this.client.triggers.list(signal), this.client.auth.session(signal)]);
+      const authorization = session.enabled ? await this.client.users.currentAuthorization(signal) : undefined;
       if (!this.live(epoch)) return false;
       this.store.set(this.controlPlaneId, {
         snapshot,
-        canMutate: !session.enabled || session.user?.role === 'admin' || session.user?.role === 'operator',
+        canMutate: !session.enabled || authorization?.permissionIds.includes('triggers:manage') === true,
         phase: 'ready',
         error: undefined,
       });

@@ -1,9 +1,9 @@
-import { Profiler, useCallback, useEffect, useMemo, useRef, useState, type ProfilerOnRenderCallback } from 'react';
-import { FlatList, Pressable, StyleSheet, Text, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
+import { Profiler, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ProfilerOnRenderCallback } from 'react';
+import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
 import { ScrollViewMarker } from 'react-native-screens/experimental';
 import * as Clipboard from 'expo-clipboard';
-import { Check, ChevronDown, ChevronRight, Copy, LoaderCircle, Sparkles, Split, Timer } from 'lucide-react-native';
-import { aiSessionStatusGroup, isAiSessionApprovalPending, type ControlPlaneAiSessionSummary } from '@task-handoff/control-plane-client';
+import { Check, ChevronDown, ChevronRight, Copy, Sparkles, Split, Timer } from 'lucide-react-native';
+import { aiSessionElapsedSeconds, aiSessionStatusGroup, isAiSessionApprovalPending, type ControlPlaneAiSessionSummary } from '@task-handoff/control-plane-client';
 import type { AiSessionTimelineActivity, AiSessionTimelineItem, AiSessionTurn } from '@task-handoff/protocol/ai-sessions';
 
 import { SafeMarkdown } from '../components/SafeMarkdown';
@@ -22,12 +22,13 @@ import { mobileWebMetric, mobileWebType } from '../components/mobile-web-typogra
 
 const english: Translate = (key, params) => translate('en-US', key, params);
 const SCROLL_BOTTOM_THRESHOLD = 48;
+const CONVERSATION_WINDOW_ITEM_COUNT = 18;
 
 type DetailTurn = Pick<AiSessionTurn, 'id' | 'providerTurnId' | 'status' | 'startedAt' | 'updatedAt' | 'completedAt'>;
 
 type DetailItem = {
   id: string;
-  role: 'user' | 'assistant' | 'error' | 'activity' | 'history' | 'current';
+  role: 'user' | 'assistant' | 'warning' | 'error' | 'activity' | 'history' | 'current';
   streamKey?: string;
   streaming?: boolean;
   text?: string;
@@ -51,11 +52,15 @@ export function SessionDetail({
   onContinueFromTurn,
   onVisible,
   turnIndex,
+  pendingTurnIndex,
+  turnLoading = false,
   onTurnIndexChange,
   mode,
   onModeChange,
   showModePicker = true,
   bottomInset = 0,
+  contentLoading = false,
+  keyboardViewportRevision = 0,
 }: {
   session?: ControlPlaneAiSessionSummary;
   messages: readonly MobileStreamingMessage[];
@@ -66,11 +71,15 @@ export function SessionDetail({
   onContinueFromTurn?(turn: DetailTurn): void;
   onVisible?(sessionUpdatedAt: string): void;
   turnIndex?: number;
+  pendingTurnIndex?: number;
+  turnLoading?: boolean;
   onTurnIndexChange?(index: number): void;
   mode?: SessionDetailMode;
   onModeChange?(mode: SessionDetailMode): void;
   showModePicker?: boolean;
   bottomInset?: number;
+  contentLoading?: boolean;
+  keyboardViewportRevision?: number;
 }) {
   const { colors } = useMobileTheme();
   const { locale, t } = useI18n();
@@ -83,20 +92,32 @@ export function SessionDetail({
   const userDragging = useRef(false);
   const scrollMetrics = useRef({ contentHeight: 0, offsetY: 0, viewportHeight: 0 });
   const followingRef = useRef(true);
+  const [conversationWindow, setConversationWindow] = useState({ projectionId: '', start: 0 });
   const [scrollPosition, setScrollPosition] = useState({ sessionId: session?.id, atBottom: true });
   const [canScroll, setCanScroll] = useState(false);
   const selectedMode = mode ?? localMode;
   const localTurnIndex = localTurnSelection.sessionId === session?.id ? localTurnSelection.index : latestIndex;
   const selectedIndex = Math.min(Math.max(turnIndex ?? localTurnIndex, 0), latestIndex);
+  const navigationIndex = Math.min(Math.max(pendingTurnIndex ?? selectedIndex, 0), latestIndex);
   const atBottom = scrollPosition.sessionId === session?.id ? scrollPosition.atBottom : true;
   const resetSessionId = useRef<string | undefined>(undefined);
   const isLatest = selectedIndex >= latestIndex;
   const showsLatest = selectedMode === 'conversation' || isLatest;
   const activityText = session ? sessionActivityText(session, t) : undefined;
   const timelineVisible = timelineEnabled || Object.values(timelines).some((timeline) => timeline.items.length > 0);
-  const items = useMemo(() => selectedMode === 'conversation'
+  const items = useMemo(() => contentLoading ? [] : selectedMode === 'conversation'
     ? conversationDetailItems(session, messages, t, timelines, timelineVisible, timelineHistoryEnabled)
-    : detailItems(session, messages, selectedIndex, t, timelines, timelineVisible, timelineHistoryEnabled), [session, messages, selectedIndex, selectedMode, t, timelineHistoryEnabled, timelineVisible, timelines]);
+    : detailItems(session, messages, selectedIndex, t, timelines, timelineVisible, timelineHistoryEnabled), [contentLoading, session, messages, selectedIndex, selectedMode, t, timelineHistoryEnabled, timelineVisible, timelines]);
+  const projectionId = `${session?.id || ''}:${selectedMode}`;
+  const initialConversationStart = conversationWindowStart(items, items.length);
+  const conversationStart = selectedMode === 'conversation' && conversationWindow.projectionId === projectionId
+    ? Math.min(conversationWindow.start, initialConversationStart)
+    : initialConversationStart;
+  const displayItems = selectedMode === 'conversation' ? items.slice(conversationStart) : items;
+  const expandConversationWindow = useCallback(() => {
+    if (selectedMode !== 'conversation' || conversationStart <= 0) return;
+    setConversationWindow({ projectionId, start: conversationWindowStart(items, conversationStart) });
+  }, [conversationStart, items, projectionId, selectedMode]);
   const setFollowing = useCallback((next: boolean) => {
     followingRef.current = next;
   }, []);
@@ -107,12 +128,15 @@ export function SessionDetail({
     if (scrollFrame.current !== undefined) cancelAnimationFrame(scrollFrame.current);
     scrollFrame.current = requestAnimationFrame(() => {
       scrollFrame.current = undefined;
-      listRef.current?.scrollToOffset({
-        animated,
-        // Native scroll views clamp an oversized offset to their exact current end.
-        // Using the measured content height also survives automatic content insets.
-        offset: scrollMetrics.current.contentHeight,
-      });
+      const { contentHeight, viewportHeight } = scrollMetrics.current;
+      if (contentHeight > 0 && viewportHeight > 0) {
+        listRef.current?.scrollToOffset({
+          animated,
+          offset: Math.max(0, contentHeight - viewportHeight),
+        });
+        return;
+      }
+      listRef.current?.scrollToEnd({ animated });
     });
   }, []);
   const handleScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
@@ -130,13 +154,19 @@ export function SessionDetail({
   const handleContentSizeChange = useCallback((_width: number, height: number) => {
     scrollMetrics.current.contentHeight = height;
     setCanScroll(height > scrollMetrics.current.viewportHeight + SCROLL_BOTTOM_THRESHOLD);
+    if (selectedMode === 'conversation' && conversationStart > 0 && scrollMetrics.current.viewportHeight > 0 && height <= scrollMetrics.current.viewportHeight) {
+      expandConversationWindow();
+      return;
+    }
     if (
+      selectedMode === 'conversation'
+      &&
       followingRef.current
       && !userDragging.current
       && scrollMetrics.current.viewportHeight > 0
       && height > scrollMetrics.current.viewportHeight + SCROLL_BOTTOM_THRESHOLD
     ) scheduleScrollToBottom(false);
-  }, [scheduleScrollToBottom]);
+  }, [conversationStart, expandConversationWindow, scheduleScrollToBottom, selectedMode]);
   const resumeFollowing = useCallback(() => {
     setFollowing(true);
     scheduleScrollToBottom(true);
@@ -148,14 +178,23 @@ export function SessionDetail({
   useEffect(() => {
     if (session) onVisible?.(session.updatedAt);
   }, [onVisible, session]);
-  useEffect(() => {
-    const projectionId = `${session?.id || ''}:${selectedMode}`;
+  useLayoutEffect(() => {
     if (resetSessionId.current === projectionId) return;
     resetSessionId.current = projectionId;
     userDragging.current = false;
-    setFollowing(true);
+    scrollMetrics.current = { contentHeight: 0, offsetY: 0, viewportHeight: 0 };
+    setFollowing(selectedMode === 'conversation');
+    setAtBottom(true);
+    if (selectedMode === 'conversation') scheduleScrollToBottom(false);
+  }, [projectionId, scheduleScrollToBottom, selectedMode, setAtBottom, setFollowing]);
+  useEffect(() => {
+    if (selectedMode !== 'conversation' || bottomInset <= 0 || !followingRef.current || userDragging.current) return;
     scheduleScrollToBottom(false);
-  }, [scheduleScrollToBottom, selectedMode, session?.id, setFollowing]);
+  }, [bottomInset, scheduleScrollToBottom, selectedMode]);
+  useEffect(() => {
+    if (selectedMode !== 'conversation' || keyboardViewportRevision <= 0 || !followingRef.current || userDragging.current) return;
+    scheduleScrollToBottom(false);
+  }, [keyboardViewportRevision, scheduleScrollToBottom, selectedMode]);
   useEffect(() => () => {
     if (scrollFrame.current !== undefined) cancelAnimationFrame(scrollFrame.current);
   }, []);
@@ -178,24 +217,48 @@ export function SessionDetail({
     </Profiler>
   );
   const sessionStatusLabel = mobileAiSessionStatusLabel(session, t);
+  const listHeader = <View style={styles.header}>
+    {showModePicker && turns.length ? <View style={styles.modePicker}><NativeSessionModePicker mode={selectedMode} onChange={selectMode} /></View> : null}
+    <View style={styles.sessionBar}>
+      <View style={styles.metaRow}>
+        <SessionStatusIndicator group={aiSessionStatusGroup(session)} label={sessionStatusLabel} />
+        <Text style={[styles.meta, { color: colors.textMuted }]}>{sessionStatusLabel}</Text>
+      </View>
+      {selectedMode === 'turn' && turns.length > 1 ? <View style={styles.turnNavigator} testID="session-turn-navigator">
+        <Pressable accessibilityLabel={t('sessions.previousTurn')} accessibilityRole="button" accessibilityState={{ disabled: navigationIndex <= 0 }} disabled={navigationIndex <= 0} hitSlop={8} onPress={() => selectTurn(navigationIndex - 1)} style={[styles.turnButton, navigationIndex <= 0 && styles.turnButtonDisabled]}><SystemIcon android="chevron_left" color={colors.primary} ios="chevron.left" size={14} /></Pressable>
+        <Text style={[styles.turnIndex, { color: colors.textMuted }]}>{selectedIndex + 1} / {turns.length}</Text>
+        <Pressable accessibilityLabel={t('sessions.nextTurn')} accessibilityRole="button" accessibilityState={{ disabled: navigationIndex >= latestIndex }} disabled={navigationIndex >= latestIndex} hitSlop={8} onPress={() => selectTurn(navigationIndex + 1)} style={[styles.turnButton, navigationIndex >= latestIndex && styles.turnButtonDisabled]}><SystemIcon android="chevron_right" color={colors.primary} ios="chevron.right" size={14} /></Pressable>
+      </View> : null}
+    </View>
+  </View>;
+  const listFooter = (!timelineVisible && showsLatest && activityText) || session.subAgents.length ? <View style={styles.footer}>
+    {!timelineVisible && showsLatest && activityText ? <View style={styles.tool}><Sparkles color={colors.textMuted} size={mobileWebMetric(14)} /><ToolActivityText containerStyle={styles.toolText} numberOfLines={1} running={session.status === 'running'} textStyle={styles.currentActivityText}>{activityText}</ToolActivityText></View> : null}
+    <SubAgents agents={session.subAgents} locale={locale} />
+  </View> : null;
   return (
     <Profiler id="detail" onRender={recordDetailRender}>
       <ScrollViewMarker scrollEdgeEffects={{ top: 'soft' }} style={[styles.fill, { backgroundColor: colors.surface }]}>
         <FlatList
           key={`${session.id}:${selectedMode}`}
           ref={listRef}
-          contentContainerStyle={[styles.list, { backgroundColor: colors.surface, paddingBottom: Math.max(28, bottomInset + 16) }]}
+          contentContainerStyle={[styles.list, {
+            backgroundColor: colors.surface,
+            paddingBottom: Math.max(28, bottomInset + 16),
+          }]}
           contentInsetAdjustmentBehavior="automatic"
-          data={items}
-          initialNumToRender={6}
+          data={displayItems}
+          initialNumToRender={selectedMode === 'conversation' ? CONVERSATION_WINDOW_ITEM_COUNT : 6}
           ItemSeparatorComponent={DetailItemSeparator}
           keyExtractor={(item) => item.id}
           keyboardDismissMode="interactive"
+          maintainVisibleContentPosition={selectedMode === 'conversation' ? { minIndexForVisible: 0 } : undefined}
           onContentSizeChange={handleContentSizeChange}
           onLayout={(event) => {
             scrollMetrics.current.viewportHeight = event.nativeEvent.layout.height;
             setCanScroll(scrollMetrics.current.contentHeight > event.nativeEvent.layout.height + SCROLL_BOTTOM_THRESHOLD);
             if (
+              selectedMode === 'conversation'
+              &&
               followingRef.current
               && !userDragging.current
               && scrollMetrics.current.contentHeight > event.nativeEvent.layout.height + SCROLL_BOTTOM_THRESHOLD
@@ -206,34 +269,32 @@ export function SessionDetail({
           onScrollEndDrag={() => { userDragging.current = false; }}
           onMomentumScrollBegin={() => { userDragging.current = true; }}
           onMomentumScrollEnd={finishProgrammaticScroll}
+          onStartReached={selectedMode === 'conversation' ? () => {
+            if (!followingRef.current) expandConversationWindow();
+          } : undefined}
+          onStartReachedThreshold={0.5}
           scrollEventThrottle={16}
-          ListEmptyComponent={<EmptyState icon={{ android: 'chat_bubble_outline', ios: 'bubble.left' }} iconSize={26} message={t('sessions.noMessages')} style={styles.conversationEmpty} />}
-          ListFooterComponent={(!timelineVisible && showsLatest && activityText) || session.subAgents.length ? <View style={styles.footer}>
-            {!timelineVisible && showsLatest && activityText ? <View style={styles.tool}><Sparkles color={colors.textMuted} size={mobileWebMetric(14)} /><ToolActivityText containerStyle={styles.toolText} numberOfLines={1} running={session.status === 'running'} textStyle={styles.currentActivityText}>{activityText}</ToolActivityText></View> : null}
-            <SubAgents agents={session.subAgents} locale={locale} />
-          </View> : null}
-          ListHeaderComponent={<View style={styles.header}>
-            {showModePicker && turns.length ? <View style={styles.modePicker}><NativeSessionModePicker mode={selectedMode} onChange={selectMode} /></View> : null}
-            <View style={styles.sessionBar}>
-              <View style={styles.metaRow}>
-                <SessionStatusIndicator group={aiSessionStatusGroup(session)} label={sessionStatusLabel} />
-                <Text style={[styles.meta, { color: colors.textMuted }]}>{sessionStatusLabel}</Text>
-              </View>
-              {selectedMode === 'turn' && turns.length > 1 ? <View style={styles.turnNavigator}>
-                <Pressable accessibilityLabel={t('sessions.previousTurn')} accessibilityRole="button" accessibilityState={{ disabled: selectedIndex <= 0 }} disabled={selectedIndex <= 0} hitSlop={8} onPress={() => selectTurn(selectedIndex - 1)} style={[styles.turnButton, selectedIndex <= 0 && styles.turnButtonDisabled]}><SystemIcon android="chevron_left" color={colors.primary} ios="chevron.left" size={14} /></Pressable>
-                <Text style={[styles.turnIndex, { color: colors.textMuted }]}>{selectedIndex + 1} / {turns.length}</Text>
-                <Pressable accessibilityLabel={t('sessions.nextTurn')} accessibilityRole="button" accessibilityState={{ disabled: isLatest }} disabled={isLatest} hitSlop={8} onPress={() => selectTurn(selectedIndex + 1)} style={[styles.turnButton, isLatest && styles.turnButtonDisabled]}><SystemIcon android="chevron_right" color={colors.primary} ios="chevron.right" size={14} /></Pressable>
-              </View> : null}
-            </View>
-          </View>}
+          ListEmptyComponent={contentLoading ? null : <EmptyState icon={{ android: 'chat_bubble_outline', ios: 'bubble.left' }} iconSize={26} message={t('sessions.noMessages')} style={styles.conversationEmpty} />}
+          ListFooterComponent={listFooter}
+          ListHeaderComponent={selectedMode !== 'conversation' || conversationStart === 0 ? listHeader : null}
           maxToRenderPerBatch={6}
           renderItem={({ index, item }) => <View
             testID={`session-detail-item-${item.role}`}
-          ><DetailItemContent conversation={selectedMode === 'conversation'} item={item} onContinueFromTurn={onContinueFromTurn} onRetryTimeline={onRetryTimeline} trimEnd={items[index + 1]?.role === 'current'} /></View>}
+          ><DetailItemContent conversation={selectedMode === 'conversation'} item={item} onContinueFromTurn={onContinueFromTurn} onRetryTimeline={onRetryTimeline} trimEnd={displayItems[index + 1]?.role === 'current'} /></View>}
           style={[styles.fill, { backgroundColor: colors.surface }]}
           testID="session-detail-scroll"
           windowSize={7}
         />
+        {turnLoading ? <View
+          accessibilityState={{ busy: true }}
+          pointerEvents="none"
+          style={styles.turnLoadingOverlay}
+          testID="session-turn-loading-overlay"
+        >
+          <View style={[styles.turnLoadingIndicator, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+            <ActivityIndicator color={colors.textMuted} size="small" testID="session-turn-loading-indicator" />
+          </View>
+        </View> : null}
         {!atBottom && canScroll ? (
           <Pressable
             accessibilityLabel={t('sessions.scrollToBottom')}
@@ -257,6 +318,12 @@ export function SessionDetail({
 
 function DetailItemSeparator() {
   return <View style={styles.itemSeparator} />;
+}
+
+function conversationWindowStart(items: readonly DetailItem[], beforeIndex: number) {
+  let start = Math.max(0, beforeIndex - CONVERSATION_WINDOW_ITEM_COUNT);
+  while (start > 0 && items[start]?.role !== 'user') start -= 1;
+  return start;
 }
 
 const recordDetailRender: ProfilerOnRenderCallback = (_id, _phase, actualDuration) => {
@@ -322,16 +389,16 @@ export function detailItems(
       if (responseIndex >= 0) items[responseIndex] = responseItem;
       else items.push(responseItem);
     }
-    if (isLatest && session.status === 'failed') items.push({ id: 'session:error', role: 'error', text: t('sessions.failedDiagnostic') });
-    let projected = hasTimeline ? compactMobileTimeline(items) : items;
-    if (timelineHistoryEnabled && !active && !projected.some((item) => item.role === 'history')) {
+    if (isLatest && session.status === 'failed') items.push({ id: 'session:error', role: 'error', text: session.error || t('sessions.failedWithoutDiagnostic') });
+    let projected = hasTimeline ? compactMobileTimeline(items, turn) : items;
+    if ((!active || timelineEnabled) && !projected.some((item) => item.role === 'history')) {
       const responseIndex = projected.findIndex((item) => item.role === 'assistant');
       projected.splice(responseIndex < 0 ? Math.min(1, projected.length) : responseIndex, 0, {
         id: `${turn.id}:timeline-history-status`,
         role: 'history',
         history: [],
         historyError: timeline?.error,
-        historyStatus: timeline?.status ?? 'idle',
+        historyStatus: active ? 'ready' : timelineHistoryEnabled ? timeline?.status ?? 'idle' : 'ready',
         turn,
       });
     }
@@ -341,7 +408,7 @@ export function detailItems(
   const items: DetailItem[] = [];
   if (session.userPrompt) items.push({ id: 'session:user', role: 'user', text: session.userPrompt, actions: { timestamp: session.startedAt } });
   if (session.lastMessage || session.summary) items.push({ id: 'session:assistant', role: 'assistant', text: session.lastMessage || session.summary!, actions: session.status === 'idle' ? { timestamp: session.updatedAt || session.startedAt } : undefined });
-  if (session.status === 'failed') items.push({ id: 'session:error', role: 'error', text: t('sessions.failedDiagnostic') });
+  if (session.status === 'failed') items.push({ id: 'session:error', role: 'error', text: session.error || t('sessions.failedWithoutDiagnostic') });
   return items;
 }
 
@@ -357,6 +424,10 @@ function turnTimelineDetailItems(turn: DetailTurn, timeline: readonly AiSessionT
   for (const item of timeline) {
     if (!identities.has(item.turnId)) continue;
     if (item.type === 'activity') {
+      if (item.activityKind === 'codexRetry') {
+        if (item.status === 'waiting' && item.summary) items.push({ id: `timeline:${item.id}`, role: 'warning', text: item.summary });
+        continue;
+      }
       const previous = items.at(-1);
       if (previous?.role === 'activity') previous.activities!.push(item);
       else items.push({ id: `timeline-activities:${item.id}`, role: 'activity', activities: [item] });
@@ -370,7 +441,7 @@ function turnTimelineDetailItems(turn: DetailTurn, timeline: readonly AiSessionT
   return items;
 }
 
-function compactMobileTimeline(items: DetailItem[]) {
+function compactMobileTimeline(items: DetailItem[], turn: DetailTurn) {
   const primaryUserIndex = items.findIndex((item) => item.role === 'user');
   const latestResponseIndex = items.findLastIndex((item) => item.role === 'assistant');
   if (latestResponseIndex < 0) return items;
@@ -379,7 +450,7 @@ function compactMobileTimeline(items: DetailItem[]) {
   const trailing = items.slice(latestResponseIndex + 1).filter((_item, offset) => latestResponseIndex + 1 + offset !== primaryUserIndex);
   return [
     ...(primaryUser ? [primaryUser] : []),
-    ...(history.length ? [{ id: `timeline-history:${history[0].id}`, role: 'history' as const, history }] : []),
+    ...(history.length ? [{ id: `timeline-history:${history[0].id}`, role: 'history' as const, history, turn }] : []),
     items[latestResponseIndex],
     ...trailing,
   ];
@@ -387,13 +458,14 @@ function compactMobileTimeline(items: DetailItem[]) {
 
 function appendCurrentActivity(items: DetailItem[], text: string, turn: DetailTurn, running: boolean) {
   const responseIndex = items.findLastIndex((item) => item.role === 'assistant');
-  const splitIndex = responseIndex >= 0 ? responseIndex + 1 : Math.min(1, items.length);
-  const trailing = items.slice(splitIndex).filter((item) => item.role !== 'error');
-  const errors = items.slice(splitIndex).filter((item) => item.role === 'error');
+  const historyIndex = items.findIndex((item) => item.role === 'history');
+  const splitIndex = responseIndex >= 0 ? responseIndex + 1 : historyIndex >= 0 ? historyIndex + 1 : Math.min(1, items.length);
+  const trailing = items.slice(splitIndex).filter((item) => item.role !== 'error' && item.role !== 'warning');
+  const notices = items.slice(splitIndex).filter((item) => item.role === 'error' || item.role === 'warning');
   return [
     ...items.slice(0, splitIndex),
     { id: `${turn.id}:current-activity`, role: 'current' as const, text, history: trailing, interactive: true, streaming: running, turn },
-    ...errors,
+    ...notices,
   ];
 }
 
@@ -421,6 +493,7 @@ function DetailItemContent({
   if (conversation && item.role === 'assistant') return <View style={styles.assistantMessage}><View style={styles.conversationResponse}><SafeMarkdown streamKey={item.streamKey} streaming={item.streaming} trimEnd={timelineNested || trimEnd}>{item.text ?? ''}</SafeMarkdown></View><MessageActions item={item} onContinueFromTurn={onContinueFromTurn} /></View>;
   if (item.role === 'user') return <View style={styles.userMessage}><View style={[styles.promptBlock, { backgroundColor: colors.primarySoft }]}><SafeMarkdown trimEnd>{item.text ?? ''}</SafeMarkdown></View><MessageActions item={item} onContinueFromTurn={onContinueFromTurn} /></View>;
   if (item.role === 'assistant') return <View style={styles.assistantMessage}><View style={styles.responseBlock}><SafeMarkdown streamKey={item.streamKey} streaming={item.streaming} trimEnd={timelineNested || trimEnd}>{item.text ?? ''}</SafeMarkdown></View><MessageActions item={item} onContinueFromTurn={onContinueFromTurn} /></View>;
+  if (item.role === 'warning') return <View style={[styles.errorBlock, { backgroundColor: colors.notice }]}><SystemIcon android="warning" color={colors.noticeText} ios="exclamationmark.triangle.fill" size={16} /><View style={styles.errorText}><Text style={[styles.role, { color: colors.noticeText }]}>{t('sessions.retryWarning')}</Text><SafeMarkdown>{item.text ?? ''}</SafeMarkdown></View></View>;
   return <View style={[styles.errorBlock, { backgroundColor: colors.errorSoft }]}><SystemIcon android="error" color={colors.error} ios="exclamationmark.triangle.fill" size={16} /><View style={styles.errorText}><Text style={[styles.role, { color: colors.error }]}>{t('sessions.error')}</Text><SafeMarkdown>{item.text ?? ''}</SafeMarkdown></View></View>;
 }
 
@@ -473,7 +546,7 @@ function TimelineHistory({
   const [expanded, setExpanded] = useState(false);
   const processedLabel = useProcessedLabel(turn, t);
   if (!items.length && ['idle', 'loading', 'stale'].includes(status)) return <View accessibilityState={{ busy: true }} style={styles.timelineHistoryHeader}>
-    <LoaderCircle color={colors.textMuted} size={mobileWebMetric(15)} />
+    <ActivityIndicator animating color={colors.textMuted} size="small" testID="session-timeline-loading-indicator" />
     <Text style={[styles.timelineHistoryTitle, { color: colors.textMuted }]}>{processedLabel} · {t('sessions.timelineLoading')}</Text>
   </View>;
   if (!items.length && status === 'error') return <Pressable accessibilityRole="button" onPress={onRetry} style={styles.timelineHistoryHeader}>
@@ -486,7 +559,7 @@ function TimelineHistory({
     <Text style={[styles.timelineHistoryTitle, { color: colors.textMuted }]}>{processedLabel}</Text>
   </View>;
   return <View style={styles.timelineHistory}>
-    <Pressable accessibilityRole="button" accessibilityState={{ expanded }} onPress={() => setExpanded((value) => !value)} style={styles.timelineHistoryHeader}>
+    <Pressable accessibilityLabel={t('sessions.timelineDetails')} accessibilityRole="button" accessibilityState={{ expanded }} onPress={() => setExpanded((value) => !value)} style={styles.timelineHistoryHeader}>
     {expanded ? <ChevronDown color={colors.textMuted} size={mobileWebMetric(15)} /> : <ChevronRight color={colors.textMuted} size={mobileWebMetric(15)} />}
       <Text style={[styles.timelineHistoryTitle, { color: colors.textMuted }]}>{processedLabel}</Text>
     </Pressable>
@@ -505,12 +578,9 @@ function useProcessedLabel(turn: DetailTurn | undefined, t: Translate) {
 }
 
 export function processedDurationLabel(turn: DetailTurn | undefined, t: Translate = english, now = Date.now()) {
-  if (!turn?.startedAt) return t('sessions.timelineProcessedUnavailable');
-  const startedAt = Date.parse(turn.startedAt);
-  const endedAtValue = ['completed', 'failed'].includes(turn.status) ? turn.completedAt || turn.updatedAt : undefined;
-  const endedAt = endedAtValue ? Date.parse(endedAtValue) : now;
-  if (!Number.isFinite(startedAt) || !Number.isFinite(endedAt) || endedAt < startedAt) return t('sessions.timelineProcessedUnavailable');
-  const totalSeconds = Math.floor((endedAt - startedAt) / 1_000);
+  const active = turn?.status === 'running' || turn?.status === 'waiting';
+  const totalSeconds = aiSessionElapsedSeconds(turn?.startedAt, turn?.completedAt, active, now);
+  if (totalSeconds === undefined) return t('sessions.timelineProcessedUnavailable');
   if (totalSeconds < 60) return t('sessions.timelineProcessedSeconds', { seconds: totalSeconds });
   const totalMinutes = Math.floor(totalSeconds / 60);
   if (totalMinutes < 60) return t('sessions.timelineProcessedMinutes', { minutes: totalMinutes, seconds: totalSeconds % 60 });
@@ -545,7 +615,7 @@ function TimelineCurrentActivity({ item }: { item: DetailItem }) {
 }
 
 export function aiSessionDisplayTurns(session: ControlPlaneAiSessionSummary | undefined) {
-  return (session?.turns ?? []).filter((turn) => turn.userPrompt?.trim() || turn.lastMessage?.trim() || turn.summary?.trim() || turn.contextCompactions?.length);
+  return session?.turns ?? [];
 }
 
 export function sessionActivityText(session: ControlPlaneAiSessionSummary, t: Translate = english) {
@@ -630,6 +700,8 @@ const styles = StyleSheet.create({
   turnButton: { alignItems: 'center', height: 32, justifyContent: 'center', width: 32 },
   turnButtonDisabled: { opacity: 0.3 },
   turnIndex: { fontSize: mobileWebType.meta, fontVariant: ['tabular-nums'], fontWeight: '600', lineHeight: mobileWebType.metaLine, minWidth: 44, textAlign: 'center' },
+  turnLoadingOverlay: { alignItems: 'center', left: 0, pointerEvents: 'none', position: 'absolute', right: 0, top: 104, zIndex: 2 },
+  turnLoadingIndicator: { alignItems: 'center', borderRadius: 18, borderWidth: StyleSheet.hairlineWidth, height: 36, justifyContent: 'center', width: 36 },
   statusDot: { borderRadius: 4, height: 8, width: 8 },
   meta: { fontSize: mobileWebType.meta, lineHeight: mobileWebType.metaLine, textTransform: 'capitalize' },
   muted: { fontSize: mobileWebType.small, lineHeight: mobileWebType.smallLine },

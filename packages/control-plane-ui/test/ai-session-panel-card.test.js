@@ -1,13 +1,18 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
+import { groupAiSessionEntriesByPath } from "../src/apps/control-plane/instance-detail/aiSessionPathGrouping.ts";
 
 const panel = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.vue", import.meta.url), "utf8");
+const activeSessions = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/useActiveInstanceSessions.ts", import.meta.url), "utf8");
 const styles = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.css", import.meta.url), "utf8");
 const boardCard = fs.readFileSync(new URL("../src/apps/control-plane/ai-board/AiSessionCard.vue", import.meta.url), "utf8");
-const sharedActionStyles = fs.readFileSync(new URL("../src/components/ai-session/AiSessionCardAction.css", import.meta.url), "utf8");
 const contextMenu = fs.readFileSync(new URL("../src/components/ai-session/AiSessionCardContextMenu.vue", import.meta.url), "utf8");
+const pathGroupContextMenu = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPathGroupContextMenu.vue", import.meta.url), "utf8");
 const originMark = fs.readFileSync(new URL("../src/components/ai-session/AiSessionOriginMark.vue", import.meta.url), "utf8");
+const cardMarks = fs.readFileSync(new URL("../src/components/ai-session/AiSessionCardMarks.vue", import.meta.url), "utf8");
+const statusIndicator = fs.readFileSync(new URL("../src/components/ai-session/AiSessionStatusIndicator.vue", import.meta.url), "utf8");
+const theme = fs.readFileSync(new URL("../../web-theme/theme.css", import.meta.url), "utf8");
 const contextSubMenu = fs.readFileSync(new URL("../src/components/ui/context-menu/ContextMenuSubContent.vue", import.meta.url), "utf8");
 const dropdownSubMenu = fs.readFileSync(new URL("../src/components/ui/dropdown-menu/DropdownMenuSubContent.vue", import.meta.url), "utf8");
 const scrollArea = fs.readFileSync(new URL("../src/components/ui/scroll-area/ScrollArea.vue", import.meta.url), "utf8");
@@ -16,22 +21,137 @@ test("compact detail prompt keeps 16px before its divider", () => {
   assert.match(styles, /\.session-ai-detail-block \{[\s\S]*padding-bottom: 16px;/);
 });
 
+test("project rows show folder paths", () => {
+  assert.match(panel, /class="session-ai-project-item session-ai-project-folder-item"[\s\S]*class="session-ai-project-folder-copy"[\s\S]*<strong>\{\{ folder\.name \}\}<\/strong>[\s\S]*<small>\{\{ folder\.path \}\}<\/small>/);
+  assert.match(styles, /\.session-ai-project-folder-item\)[^{]*\{[^}]*min-height: 44px;/s);
+  assert.match(styles, /\.session-ai-project-item\)[^{]*\{[^}]*font-weight: 500 !important;/s);
+  assert.match(styles, /\.session-ai-project-folder-copy > strong\) \{ font-weight: 500; \}/);
+  assert.match(styles, /\.session-ai-project-folder-copy > small\)[^{]*\{[^}]*color: var\(--text-muted\);[^}]*font-size: 12px;[^}]*font-weight: 400;/s);
+});
+
+test("AI session card and detail menus open Terminal at the authoritative session cwd", () => {
+  assert.match(panel, /<AiSessionCardContextMenu[\s\S]*:can-open-terminal="Boolean\(terminalLaunchAppId\)"[\s\S]*@open-terminal="openSessionTerminal\(session\)"/);
+  assert.match(panel, /<DropdownMenuItem[\s\S]*v-if="terminalLaunchAppId"[\s\S]*@select="openSessionTerminal\(selectedSession\)"[\s\S]*sessions\.actions\.openTerminal/);
+  assert.match(panel, /function openSessionTerminal\(session: AiSessionSummary\) \{[\s\S]*emit\("launchApp", props\.instance, appId, undefined, \{ cwd: session\.cwd \}\);/);
+  assert.match(contextMenu, /\.ai-session-context-menu \.ai-session-context-menu-item\) \{[\s\S]*font-size: 13px;/);
+  assert.match(contextMenu, /\.ai-session-context-trigger-item strong\) \{[\s\S]*font-size: 13px;/);
+  assert.match(styles, /\.session-ai-detail-actions-menu \.session-ai-detail-actions-menu-item\) \{[\s\S]*font-size: 13px;/);
+});
+
+test("AI session detail menu icons match the card context menu", () => {
+  for (const icon of ["ExternalLink", "SquareTerminal", "Split"]) {
+    assert.match(panel, new RegExp(`<${icon} :size="14" \\/>`));
+    assert.match(contextMenu, new RegExp(`<${icon} :size="14" \\/>`));
+  }
+  assert.match(panel, /<Square :size="14" \/>/);
+  assert.match(contextMenu, /<Square :size="14" \/>/);
+});
+
+test("AI session path groups share node-backed rename and desktop-local folder actions", () => {
+  assert.match(panel, /<AiSessionPathGroupContextMenu[\s\S]*:can-open="canOpenPathGroupFolder"[\s\S]*:can-rename="canRenamePathGroup\(group\)"/);
+  assert.match(panel, /function canRenamePathGroup[\s\S]*registeredPathGroupFolder\(group\)[\s\S]*nodeSupportsLocalFolderNameUpdate\(props\.instance\.node\)/);
+  assert.match(panel, /updateNodeLocalFolder\(folder\.nodeId, folder\.id, \{ name \}\)/);
+  assert.match(panel, /desktopRuntimePathAccess\(props\.instance\) === "desktop-local" && canOpenDesktopLocalPath\(\)/);
+  assert.match(panel, /openDesktopLocalPath\(group\.path\)/);
+  assert.match(pathGroupContextMenu, /ContextMenuItem v-if="canOpen" class="ai-session-path-group-menu-item"[\s\S]*sessions\.panel\.openInFileManager/);
+  assert.match(pathGroupContextMenu, /ContextMenuItem v-if="canRename" class="ai-session-path-group-menu-item"[\s\S]*sessions\.panel\.renameProject/);
+  assert.match(pathGroupContextMenu, /\.ai-session-context-menu \.ai-session-path-group-menu-item\) \{\s*gap: 8px;\s*font-size: 13px;/);
+});
+
 test("instance AI session cards always show the latest turn independently of detail navigation", () => {
   assert.doesNotMatch(panel, /<small>\{\{ aiSessionStatusLabel\(session\) \}\}<\/small>/);
   assert.match(panel, /function latestPromptIndex\(session: AiSessionSummary\) \{\s*return Math\.max\(0, promptCount\(session\) - 1\);\s*\}/);
   assert.match(panel, /displayAiSessionTitle\(session, latestPromptIndex\(session\), t\)/);
   assert.match(panel, /displayAiSessionMessage\(session, latestPromptIndex\(session\), t\)/);
   assert.doesNotMatch(panel, /class="session-ai-turn-nav"/);
-  assert.match(panel, /index: Math\.min\(Math\.max\(index, 0\), count - 1\)/);
+  assert.match(panel, /const targetIndex = Math\.min\(Math\.max\(index, 0\), count - 1\)/);
+  assert.match(panel, /\[session\.id\]: \{ index: targetIndex, count \}/);
   assert.doesNotMatch(panel, /\(index \+ count\) % count/);
 });
 
-test("terminal-origin AI sessions show the same subtle marker in the panel and board", () => {
+test("AI session list supports persistent card and compact-list layouts", () => {
+  assert.match(panel, /type AiSessionListLayout = "cards" \| "list";/);
+  assert.match(panel, /SESSION_LIST_LAYOUT_STORAGE_KEY = "task-handoff\.control-plane\.ai-sessions-list-layout"/);
+  assert.match(panel, /return window\.localStorage\?\.getItem\(SESSION_LIST_LAYOUT_STORAGE_KEY\) === "list" \? "list" : "cards";/);
+  assert.match(panel, /<DropdownMenuRadioGroup :model-value="sessionListLayout"/);
+  assert.match(panel, /<DropdownMenuRadioItem[^>]*value="cards"/);
+  assert.match(panel, /<DropdownMenuRadioItem[^>]*value="list"/);
+  assert.match(panel, /v-if="sessionListLayout === 'list'"[\s\S]*class="session-ai-compact-row"/);
+  assert.match(panel, /<span v-if="session\.unread" class="session-ai-compact-unread"[^>]*>/);
+  assert.match(panel, /:class="\{ 'is-compact-list': sessionListLayout === 'list' \}"/);
+  assert.match(panel, /:data-collapsed="groupSessionsByPath && collapsedPathGroups\[group\.key\] \? 'true' : undefined"/);
+  assert.match(panel, /v-if="groupSessionsByPath"[^>]*:model-value="showEmptyPathGroups"/);
+  assert.match(panel, /groupAiSessionEntriesByPath\(sessions, showEmptyPathGroups\.value \? newSessionFolders\.value : \[\]\)/);
+  assert.match(panel, /watch\(showEmptyPathGroups, \(value\) => \{[\s\S]*localStorage\?\.setItem\(SHOW_EMPTY_PATH_GROUPS_STORAGE_KEY, String\(value\)\)/);
+  assert.match(panel, /watch\(sessionListLayout, \(value\) => \{[\s\S]*localStorage\?\.setItem\(SESSION_LIST_LAYOUT_STORAGE_KEY, value\)/);
+  assert.match(styles, /\.session-ai-compact-row\s*\{[\s\S]*grid-template-columns: 12px minmax\(0, 1fr\) auto;[\s\S]*gap: 6px;[\s\S]*min-height: 32px;/);
+  assert.match(styles, /\.session-ai-compact-unread\s*\{[\s\S]*justify-self: end;[\s\S]*width: 7px;[\s\S]*height: 7px;[\s\S]*background: var\(--status-info\);/);
+  assert.match(styles, /\.session-ai-path-group\.is-compact-list\s*\{\s*gap: 2px;/);
+  assert.match(styles, /\.session-ai-path-group:not\(\[data-collapsed="true"\]\)\s*\{[\s\S]*padding-bottom: 6px;/);
+  assert.doesNotMatch(styles, /\.session-ai-path-group\.is-compact-list[^}]*margin-bottom:/);
+  assert.match(styles, /\.session-ai-path-group \+ \.session-ai-path-group\s*\{[\s\S]*margin-top: -6px;/);
+  assert.doesNotMatch(styles, /\.session-ai-path-group \+ \.session-ai-path-group\[data-collapsed="true"\]/);
+  assert.match(styles, /\.session-ai-path-group-title\s*\{[^}]*font-weight: 500;/s);
+  assert.match(styles, /\.session-ai-compact-row\.is-grouped\s*\{\s*width: 100%;\s*margin-left: 0;\s*padding-left: 8px;/);
+  assert.match(styles, /\.session-ai-compact-title\s*\{[^}]*font-weight: 400;/s);
+  assert.match(statusIndicator, /\[data-size="compact"\]\[data-state="idle"\][^{]*\{\s*visibility: hidden;/);
+  assert.match(styles, /\.session-ai-compact-row\[data-selected="true"\]\s*\{[\s\S]*background: var\(--ai-session-row-selected-bg\);/);
+});
+
+test("running AI sessions use one theme-aware loading ring across list and board cards", () => {
+  assert.match(panel, /<AiSessionStatusIndicator :status="session\.status" size="compact" \/>/);
+  assert.match(panel, /<AiSessionStatusIndicator :status="session\.status" \/>/);
+  assert.match(panel, /<AiSessionStatusIndicator :status="sessionListPreviewSession\.status" \/>/);
+  assert.match(boardCard, /<AiSessionStatusIndicator class="ai-board-status-indicator" :status="card\.session\.status" \/>/);
+  assert.match(statusIndicator, /<span v-if="status === 'running'" class="ai-session-status-indicator__spinner" \/>/);
+  assert.doesNotMatch(statusIndicator, /LoaderCircle|<svg|<circle/);
+  assert.match(statusIndicator, /width: 12px;[\s\S]*height: 12px;[\s\S]*border: 1\.5px solid var\(--ai-session-running-track\);[\s\S]*\.ai-session-status-indicator__spinner::after[\s\S]*inset: -1\.5px;[\s\S]*border: 1\.5px solid currentColor;[\s\S]*border-top-color: transparent;[\s\S]*animation: ai-session-status-spin 1600ms linear infinite;/);
+  assert.match(statusIndicator, /data-size="compact"[\s\S]*width: 12px;[\s\S]*height: 12px;/);
+  assert.match(styles, /\.session-ai-state\s*\{[\s\S]*grid-template-columns: 12px minmax\(0, 1fr\);[\s\S]*gap: 8px;/);
+  assert.match(boardCard, /\.ai-board-instance\s*\{[\s\S]*grid-template-columns: 12px minmax\(0, 1fr\);[\s\S]*gap: 9px;/);
+  assert.match(statusIndicator, /vertical-align: middle;/);
+  assert.match(statusIndicator, /prefers-reduced-motion: reduce/);
+  assert.match(theme, /\[data-theme="light"\][\s\S]*--ai-session-running-indicator: rgb\(0 0 0 \/ 30%\);/);
+  assert.match(theme, /\[data-theme="light"\][\s\S]*--ai-session-running-track: rgb\(0 0 0 \/ 10%\);/);
+  assert.match(theme, /\[data-theme="dark"\][\s\S]*--ai-session-running-indicator: rgb\(255 255 255 \/ 30%\);/);
+  assert.match(theme, /\[data-theme="dark"\][\s\S]*--ai-session-running-track: rgb\(255 255 255 \/ 10%\);/);
+  assert.doesNotMatch(panel, /class="session-ai-(?:compact-)?dot"/);
+  assert.doesNotMatch(boardCard, /class="ai-board-dot"/);
+});
+
+test("compact AI session rows reuse one delayed hover card that slides between rows", () => {
+  assert.match(panel, /@mouseenter="showSessionListPreview\(\$event, session\)"/);
+  assert.match(panel, /@pointermove="showSessionListPreview\(\$event, session\)"/);
+  assert.match(panel, /supportsSessionListHoverPreview = useMediaQuery\("\(hover: hover\) and \(pointer: fine\)"\)/);
+  assert.match(panel, /sessionListLayout\.value !== "list" \|\| !supportsSessionListHoverPreview\.value \|\| historyMode\.value/);
+  assert.doesNotMatch(panel, /sessionListLayout\.value !== "list" \|\| compactAiSessionLayout\.value/);
+  assert.match(panel, /<Teleport to="body">[\s\S]*v-if="sessionListPreviewVisible && sessionListPreviewSession"[\s\S]*class="session-ai-row session-ai-list-hover-card"/);
+  assert.doesNotMatch(panel, /session-ai-list-hover-card"[\s\S]{0,240}:data-selected=/);
+  assert.doesNotMatch(panel, /session-ai-list-hover-card[^>]*:key=/);
+  assert.match(panel, /const SESSION_LIST_PREVIEW_DELAY_MS = 1_000;/);
+  assert.match(panel, /const SESSION_LIST_PREVIEW_SKIP_DELAY_MS = 800;/);
+  assert.match(panel, /const SESSION_LIST_PREVIEW_CLOSE_DELAY_MS = 120;/);
+  assert.match(panel, /if \(sessionListPreviewVisible\.value \|\| Date\.now\(\) - sessionListPreviewClosedAt <= SESSION_LIST_PREVIEW_SKIP_DELAY_MS\)/);
+  assert.match(styles, /:global\(\.session-ai-row\.session-ai-list-hover-card\)[\s\S]*position: fixed;[\s\S]*left 120ms cubic-bezier\(0\.2, 0\.8, 0\.2, 1\),[\s\S]*top 120ms cubic-bezier\(0\.2, 0\.8, 0\.2, 1\);/);
+  assert.match(styles, /:global\(\.session-ai-list-preview-enter-from\),[\s\S]*opacity: 0;[\s\S]*transform: translateX\(-4px\);/);
+});
+
+test("AI session cards show the agent mark beside the optional terminal-origin mark", () => {
   assert.match(originMark, /v-if="creationSource === 'app-session'"/);
-  assert.match(originMark, /<SquareTerminal :size="17"/);
+  assert.match(originMark, /<SquareTerminal :size="14"/);
   assert.match(originMark, /opacity: 0\.38;/);
-  assert.match(panel, /<AiSessionOriginMark :creation-source="session\.creationSource"/);
-  assert.match(boardCard, /<AiSessionOriginMark :creation-source="card\.session\.creationSource"/);
+  assert.match(cardMarks, /<AiAgentIcon :agent="brandedAgent" :size="14"/);
+  assert.match(cardMarks, /props\.agent === "codex" \|\| props\.agent === "claude" \|\| props\.agent === "opencode" \? props\.agent : undefined/);
+  assert.match(cardMarks, /<AiSessionOriginMark :creation-source="creationSource"/);
+  assert.match(cardMarks, /\.ai-session-card-marks \{[\s\S]*?opacity: 0;[\s\S]*?transition: opacity 140ms ease;/);
+  assert.match(panel, /<AiSessionCardMarks :agent="session\.agent" :creation-source="session\.creationSource"/);
+  assert.match(boardCard, /<AiSessionCardMarks :agent="card\.session\.agent" :creation-source="card\.session\.creationSource"/);
+  assert.match(styles, /\.session-ai-row:hover :deep\(\.ai-session-card-marks\),[\s\S]*?opacity: 1;/);
+  assert.match(boardCard, /\.ai-board-card:hover :deep\(\.ai-session-card-marks\),[\s\S]*?opacity: 1;/);
+  assert.match(styles, /\.ai-session-unread-dot \{[\s\S]*?right: 32px;/);
+  assert.match(styles, /data-app-session-origin="true"\] \.ai-session-unread-dot \{\s*right: 50px;/);
+  assert.match(boardCard, /\.ai-session-unread-dot \{[\s\S]*?right: 32px;/);
+  assert.match(boardCard, /data-app-session-origin="true"\] \.ai-session-unread-dot \{\s*right: 50px;/);
   assert.doesNotMatch(originMark, /appSessionId/);
 });
 
@@ -52,8 +172,8 @@ test("AI session path labels show only the folder and reveal the full path when 
 
 test("AI session path groups create a session in their registered project", () => {
   assert.doesNotMatch(panel, /group\.(?:sessions|items)\.length/);
-  assert.match(panel, /session\.cwdFolderId \? `folder:\$\{session\.cwdFolderId\}` : `cwd:\$\{path\}`/);
-  assert.match(panel, /item\.cwdFolderId \? `folder:\$\{item\.cwdFolderId\}` : `cwd:\$\{path\}`/);
+  assert.match(panel, /groupAiSessionEntriesByPath\(sessions, showEmptyPathGroups\.value \? newSessionFolders\.value : \[\]\)/);
+  assert.match(panel, /groupAiSessionEntriesByPath\(items\)/);
   assert.match(panel, /class="session-ai-path-group-add"[\s\S]*?@click="openNewSessionForGroup\(group\)"/);
   assert.match(panel, /group\.cwdFolderId && newSessionFolders\.value\.some/);
   assert.match(panel, /newSessionFolderId\.value = group\.cwdFolderId;/);
@@ -63,6 +183,48 @@ test("AI session path groups create a session in their registered project", () =
   assert.match(styles, /\.session-ai-path-group-head:hover,\s*\.session-ai-path-group-head:focus-within\s*\{[^}]*background: var\(--surface-hover\);/s);
   assert.match(styles, /\.session-ai-path-group-add\s*\{[^}]*background: transparent;[^}]*opacity: 0;[^}]*visibility: hidden;/s);
   assert.match(styles, /\.session-ai-path-group-head:hover \.session-ai-path-group-add,\s*\.session-ai-path-group-head:focus-within \.session-ai-path-group-add\s*\{[^}]*opacity: 1;[^}]*visibility: visible;/s);
+});
+
+test("AI session path groups merge the same cwd regardless of folder ID provenance", () => {
+  const groups = groupAiSessionEntriesByPath([
+    { cwd: "/Users/huadream/project/codex", id: "legacy" },
+    { cwd: "/Users/huadream/project/codex/", cwdFolderId: "folder-codex", id: "registered" },
+  ]);
+
+  assert.deepEqual(groups, [{
+    key: "cwd:/Users/huadream/project/codex",
+    path: "/Users/huadream/project/codex",
+    cwdFolderId: "folder-codex",
+    entries: [
+      { cwd: "/Users/huadream/project/codex", id: "legacy" },
+      { cwd: "/Users/huadream/project/codex/", cwdFolderId: "folder-codex", id: "registered" },
+    ],
+  }]);
+});
+
+test("AI session path groups optionally include registered folders without sessions", () => {
+  const groups = groupAiSessionEntriesByPath(
+    [{ cwd: "/workspace/active/", id: "session" }],
+    [
+      { id: "folder-active", path: "/workspace/active" },
+      { id: "folder-empty", path: "/workspace/empty/" },
+    ],
+  );
+
+  assert.deepEqual(groups, [
+    {
+      key: "cwd:/workspace/active",
+      path: "/workspace/active",
+      cwdFolderId: "folder-active",
+      entries: [{ cwd: "/workspace/active/", id: "session" }],
+    },
+    {
+      key: "cwd:/workspace/empty",
+      path: "/workspace/empty",
+      cwdFolderId: "folder-empty",
+      entries: [],
+    },
+  ]);
 });
 
 test("instance AI session card user messages use a single unpadded line", () => {
@@ -119,7 +281,7 @@ test("mobile AI sessions keep detail visible and float the session list in a dis
   assert.match(styles, /:global\(\.session-ai-sidebar-sheet \.session-ai-sidebar\) \{[\s\S]*--session-ai-list-left-inset: 12px;[\s\S]*--session-ai-list-right-inset: 12px;[\s\S]*--session-ai-list-bottom-inset: 12px;[\s\S]*padding: 12px 0 12px 12px;/);
   assert.match(styles, /@media \(max-width: 920px\)[\s\S]*\.session-ai-panel \{\s*--session-ai-scrollbar-outset: 0px;\s*padding: 8px;[\s\S]*grid-template-rows: minmax\(0, 1fr\);[\s\S]*\.session-ai-mobile-list-button \{[\s\S]*position: absolute;[\s\S]*top: 10px;[\s\S]*left: 4px;[\s\S]*width: 26px;[\s\S]*height: 26px;/);
   assert.match(styles, /\.session-ai-detail-content > header \{\s*padding-left: 24px;/);
-  assert.match(styles, /\.session-ai-detail-content > header > \.session-ai-detail-block-user \{[\s\S]*width: calc\(100% \+ 24px\);[\s\S]*margin-left: -24px;[\s\S]*padding-left: 24px;/);
+  assert.match(styles, /\.session-ai-detail-content > header > \.session-ai-detail-prompt-stage \{[\s\S]*width: calc\(100% \+ 24px\);[\s\S]*margin-left: -24px;[\s\S]*padding-left: 24px;/);
   assert.doesNotMatch(styles, /\.session-ai-detail\.is-scrolled \.session-ai-detail-content > header/);
   assert.match(styles, /\.session-ai-mobile-list-button \{[\s\S]*border-color: transparent;[\s\S]*background: transparent;/);
   assert.match(styles, /\.session-ai-mobile-list-button\[data-open="true"\] \{[\s\S]*border-color: transparent;[\s\S]*background: var\(--surface-hover\);/);
@@ -134,27 +296,18 @@ test("the return-to-latest control stays compact and visually separated from the
   assert.match(styles, /\.session-ai-follow-latest\s*\{[^}]*bottom: calc\([^}]*var\(--session-ai-compose-offset, 84px\)[^}]*var\(--session-ai-compose-bottom\)[^}]*var\(--session-ai-content-bottom-gap\)[^}]*\);[^}]*width: 32px;[^}]*height: 32px;[^}]*background: color-mix\(in srgb, var\(--surface-raised\) 62%, transparent\);[^}]*backdrop-filter: blur\(10px\);/s);
 });
 
-test("all instance AI sessions expose the unified close menu", () => {
-  assert.match(panel, /<DropdownMenu>[\s\S]*?t\('sessions\.actions\.moreFor', \{ agent: session\.agent \}\)[\s\S]*?t\("sessions\.actions\.closeSession"\)/);
-  assert.match(panel, /await closeAiSession\(props\.instance\.id, session\.id, crypto\.randomUUID\(\)\);/);
-  assert.match(panel, /stoppingAppSessionId === session\.id \? t\("sessions\.actions\.closingSession"\) : t\("sessions\.actions\.closeSession"\)/);
+test("all instance AI sessions expose close through the unified context menu", () => {
+  assert.match(panel, /<AiSessionCardContextMenu[\s\S]*?@close-session="closeSession\(session\)"/);
+  assert.match(panel, /await closeAiSession\(props\.instance\.id, session\.id, createBrowserUuid\(\)\);/);
   assert.match(panel, /aiSessionAppTab\(instance, session\) \|\| session\.actions\?\.openApp/);
-  assert.match(styles, /:global\(\.session-ai-card-menu\)/);
-  assert.match(styles, /:global\(\.session-ai-card-menu-item\.danger\)/);
 });
 
-test("instance and board cards share one action button style", () => {
+test("instance and board cards omit duplicate hover action buttons", () => {
   for (const source of [panel, boardCard]) {
-    assert.match(source, /trigger-button ai-session-card-action/);
-    assert.match(source, /open ai-session-card-action/);
-    assert.match(source, /more ai-session-card-action/);
-    assert.match(source, /<style scoped src="\.\.\/\.\.\/\.\.\/components\/ai-session\/AiSessionCardAction\.css"><\/style>/);
+    assert.doesNotMatch(source, /ai-session-card-action/);
+    assert.doesNotMatch(source, /card-tools/);
   }
-  assert.match(sharedActionStyles, /border: 1px solid var\(--ai-board-floating-border\)/);
-  assert.match(sharedActionStyles, /background: var\(--ai-board-floating-bg\)/);
-  assert.match(sharedActionStyles, /border-color: var\(--ai-board-floating-hover-border\)/);
-  assert.match(styles, /\.session-ai-trigger-button\[data-bound="true"\] \{\s*border-color: var\(--ai-board-active-border\);\s*color: var\(--ai-board-active-text\);/);
-  assert.doesNotMatch(styles, /\.session-ai-open\s*\{/);
+  assert.doesNotMatch(styles, /session-ai-card-tools|session-ai-trigger-button/);
 });
 
 test("instance and board AI session cards expose their toolbar actions from one shared context menu", () => {
@@ -174,6 +327,11 @@ test("instance and board AI session cards expose their toolbar actions from one 
 
 test("an unselected AI session defaults to the new-session surface", () => {
   assert.match(panel, /const showNewSession = computed\(\(\) => newSessionOpen\.value \|\| !selectedSession\.value\);/);
+  assert.match(panel, /const selectedListSessionId = computed\(\(\) => showNewSession\.value \? undefined : selectedSession\.value\?\.id\);/);
+  assert.match(activeSessions, /if \(selectedId\) return selectedAiSessionSnapshots\[instance\.id\];\s*return undefined;/);
+  assert.doesNotMatch(activeSessions, /const initial = sortedAiSessionsByLastUserMessage\(available/);
+  assert.match(panel, /:data-selected="selectedListSessionId === session\.id"/);
+  assert.doesNotMatch(panel, /:data-selected="selectedSession\?\.id === session\.id"/);
   assert.match(panel, /<section v-else-if="showNewSession" class="session-ai-detail session-ai-new-detail">/);
   assert.match(panel, /<h1 class="session-ai-new-title">\{\{ t\("sessions\.panel\.startIdea"\) \}\}<\/h1>/);
   assert.match(styles, /\.session-ai-new-start\s*\{[^}]*width: min\(760px, 100%\);[^}]*gap: 48px;/s);
@@ -184,13 +342,18 @@ test("an unselected AI session defaults to the new-session surface", () => {
   assert.doesNotMatch(panel, /session-ai-no-selection/);
 });
 
-test("opening the already-visible new-session surface preserves its draft", () => {
-  assert.match(panel, /function openNewSession\(\) \{\s*const wasVisible = showNewSession\.value;\s*newSessionOpen\.value = true;[\s\S]{0,120}if \(wasVisible\) \{[\s\S]{0,80}return;[\s\S]{0,80}\}[\s\S]{0,120}newSessionDraft\.value = "";/);
+test("new-session drafts persist per instance until creation succeeds", () => {
+  assert.match(panel, /activeNewSessionDraftKey = ref\(aiSessionCreationDraftKey\(props\.instance\.id\)\)/);
+  assert.match(panel, /watch\(\[newSessionDraft, newSessionMentionBindings\],[\s\S]*persistAiSessionDraftPayload\(activeNewSessionDraftKey\.value, draft, bindings\)/);
+  assert.match(panel, /watch\(\(\) => props\.instance\.id,[\s\S]*loadAiSessionDraftPayload\(activeNewSessionDraftKey\.value\)/);
+  assert.match(panel, /v-model="newSessionDraft"[\s\S]*v-model:mention-bindings="newSessionMentionBindings"/);
+  assert.doesNotMatch(panel, /function openNewSession\(\)[\s\S]{0,400}newSessionDraft\.value = "";/);
+  assert.match(panel, /emit\("selectAiSession", props\.instance\.id, result\.aiSessionId\);\s*clearAiSessionDraft\(activeNewSessionDraftKey\.value\);\s*newSessionDraft\.value = "";/);
 });
 
 test("new-session folder picker keeps actions visible while long folder lists scroll", () => {
   assert.match(panel, /<DropdownMenuContent class="session-ai-project-menu session-ai-project-picker-menu"[^>]*:collision-padding="12"/);
-  assert.match(panel, /<ScrollArea type="auto" :horizontal="false" class="session-ai-project-list">[\s\S]*?filteredNewSessionFolders[\s\S]*?<\/ScrollArea>\s*<DropdownMenuSeparator \/>[\s\S]*?openNewProject/);
+  assert.match(panel, /<ScrollArea type="auto" :horizontal="false" class="session-ai-project-list">[\s\S]*?filteredNewSessionFolders[\s\S]*?<\/ScrollArea>\s*<template v-if="instance\.source\.type === 'local-folder'">[\s\S]*?<DropdownMenuSeparator \/>[\s\S]*?openNewProject/);
   assert.match(styles, /:global\(\.session-ai-project-picker-menu\)\s*\{[^}]*--reka-dropdown-menu-content-available-height[^}]*grid-template-rows: auto minmax\(0, 1fr\) auto auto;[^}]*overflow: hidden;/s);
   assert.match(styles, /\.session-ai-project-list\s*\{[^}]*min-height: 0;/s);
   assert.doesNotMatch(styles, /\.session-ai-project-list\s*\{[^}]*overflow-y: auto;/s);
@@ -201,7 +364,16 @@ test("new-session Git inspection reacts only to stable selection changes", () =>
   assert.match(panel, /watch\(\s*\[\(\) => props\.instance\.id, newSessionFolderId, showNewSession\]/);
   assert.doesNotMatch(panel, /\(\) => \[props\.instance\.id, newSessionFolderId\.value, showNewSession\.value\]/);
   assert.match(panel, /const abort = new AbortController\(\);\s*onCleanup\(\(\) => abort\.abort\(\)\);/);
-  assert.match(panel, /getAiSessionWorkspace\(instanceId, folderId, abort\.signal\)/);
+  assert.match(panel, /getAiSessionWorkspace\(instanceId, cwdFolderId, abort\.signal\)/);
+});
+
+test("new-session Git inspection uses cached workspace data without blocking the composer", () => {
+  assert.match(panel, /controlPlaneQueryKeys\.aiSessionWorkspace\(instanceId, cwdFolderId\)/);
+  assert.match(panel, /getQueryData<RepositoryAiSessionWorkspace>\(queryKey\)[\s\S]*newSessionWorkspace\.value = cachedWorkspace[\s\S]*getAiSessionWorkspace\(instanceId, cwdFolderId, abort\.signal\)/);
+  assert.match(panel, /queryClient\.setQueryData\(queryKey, workspace\)/);
+  assert.match(panel, /const newSessionComposerBusy = computed\(\(\) => launchingNewSession\.value \|\| savingNewSessionPermission\.value \|\| choosingNewSessionFolder\.value\);/);
+  assert.doesNotMatch(panel, /const newSessionComposerBusy = computed\([^\n]*newSessionWorkspaceLoading/);
+  assert.match(panel, /:disabled="!newSessionFolder \|\| \(newSessionWorkspaceLoading && !newSessionWorkspace\)"/);
 });
 
 test("new-session branches use a folder tree and confirm current-folder switches", () => {

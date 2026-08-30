@@ -2,12 +2,14 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { Argument, Command } from "commander";
 import { runtimePackages } from "../runtime-packages.config.mjs";
 import { exactInstalledDependencies } from "./runtime-dependency-versions.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const require = createRequire(import.meta.url);
 const rootPackage = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
 const program = new Command()
   .name("prepare-runtime-packages")
@@ -18,6 +20,30 @@ const [requestedTarget] = program.processedArgs;
 const selected = requestedTarget
   ? Object.entries(runtimePackages).filter(([name]) => name === requestedTarget)
   : Object.entries(runtimePackages);
+
+function copyBundledNodePty(packageDir) {
+  const sourceDir = path.dirname(require.resolve("node-pty/package.json"));
+  const sourceManifest = JSON.parse(fs.readFileSync(path.join(sourceDir, "package.json"), "utf8"));
+  const targetDir = path.join(packageDir, "node_modules", "node-pty");
+  const prebuildsDir = path.join(root, "release", "node-pty-prebuilds");
+  const targets = ["linux-x64", "linux-arm64"];
+  fs.mkdirSync(targetDir, { recursive: true });
+  fs.cpSync(path.join(sourceDir, "lib"), path.join(targetDir, "lib"), { recursive: true });
+  fs.copyFileSync(path.join(sourceDir, "LICENSE"), path.join(targetDir, "LICENSE"));
+  for (const target of targets) {
+    const nativeModule = path.join(prebuildsDir, target, "pty.node");
+    if (!fs.existsSync(nativeModule)) throw new Error(`Bundled node-pty prebuild is missing: ${target}/pty.node`);
+    const targetPrebuildDir = path.join(targetDir, "prebuilds", target);
+    fs.mkdirSync(targetPrebuildDir, { recursive: true });
+    fs.copyFileSync(nativeModule, path.join(targetPrebuildDir, "pty.node"));
+  }
+  fs.writeFileSync(path.join(targetDir, "package.json"), `${JSON.stringify({
+    name: sourceManifest.name,
+    version: sourceManifest.version,
+    license: sourceManifest.license,
+    main: sourceManifest.main,
+  }, null, 2)}\n`);
+}
 
 function copyLinuxExecutable(source, destination) {
   const contents = fs.readFileSync(source, "utf8").replace(/\r\n?/g, "\n");
@@ -63,13 +89,18 @@ for (const [name, definition] of selected) {
     fs.writeFileSync(wrapperPath, `#!/usr/bin/env node\n${bundledRuntimeBootstrap}require("../dist/${definition.entryFile}");\n`, { mode: 0o755 });
     bin[definition.binName] = `bin/${definition.binName}`;
   }
-  if (name === "node-agent") {
+  if (definition.updateWorkerInput) {
     const updateWorkerPath = path.join(binDir, "task-handoff-node-update-worker");
     fs.writeFileSync(updateWorkerPath, `#!/usr/bin/env node\nrequire("../dist/${definition.updateWorkerEntryFile}");\n`, { mode: 0o755 });
+  }
+  if (name === "node-agent") {
     const dockerAssetsDir = path.join(packageDir, "docker");
     fs.mkdirSync(dockerAssetsDir, { recursive: true });
-    for (const asset of ["entrypoint.sh", "instance-launcher.sh", "runtime-installer.mjs"]) {
+    for (const asset of ["entrypoint.sh", "instance-launcher.sh", "runtime-installer.mjs", "git-provision.sh"]) {
       copyLinuxExecutable(path.join(root, "docker", asset), path.join(dockerAssetsDir, asset));
+    }
+    for (const standalone of definition.standaloneInputs || []) {
+      copyLinuxExecutable(path.join(root, "dist", "runtime-packages", name, standalone.entryFile), path.join(dockerAssetsDir, standalone.entryFile));
     }
     const bundledRuntimeDir = path.join(packageDir, "runtime-artifacts");
     fs.rmSync(bundledRuntimeDir, { recursive: true, force: true });
@@ -103,9 +134,11 @@ for (const [name, definition] of selected) {
     dependencies: definition.aggregateDependencies
       ? Object.fromEntries(definition.aggregateDependencies.map((dependency) => [dependency, process.env.TASK_HANDOFF_VERSION || rootPackage.version]))
       : exactInstalledDependencies(root, definition.dependencies),
+    ...(definition.bundledNativeDependencies?.length ? { bundledDependencies: definition.bundledNativeDependencies } : {}),
     publishConfig: { access: "public" },
   };
   fs.writeFileSync(path.join(packageDir, "package.json"), `${JSON.stringify(manifest, null, 2)}\n`);
+  if (definition.bundledNativeDependencies?.includes("node-pty")) copyBundledNodePty(packageDir);
   fs.writeFileSync(
     path.join(packageDir, "README.md"),
     definition.aggregateDependencies

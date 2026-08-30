@@ -20,9 +20,9 @@ import RepositoryWorktreesPanel from "./RepositoryWorktreesPanel.vue";
 const props = defineProps<{ instanceId: string; session: SessionTab }>();
 const sessionId = computed(() => typeof props.session.source?.sessionId === "string" ? props.session.source.sessionId : "");
 const sessionKind = computed<RepositorySessionKind>(() => props.session.source?.sessionKind === "ai-session" ? "ai-session" : "app-session");
-const aiAgent = computed<"codex" | "claude" | undefined>(() => {
+const aiAgent = computed<"codex" | "claude" | "opencode" | undefined>(() => {
   const agent = props.session.source?.aiAgent;
-  return agent === "codex" || agent === "claude" ? agent : undefined;
+  return agent === "codex" || agent === "claude" || agent === "opencode" ? agent : undefined;
 });
 </script>
 

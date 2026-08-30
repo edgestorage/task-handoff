@@ -97,7 +97,6 @@ test("subscriber applies snapshot before opening WSS and then consumes contiguou
   const sockets = [];
   let fetches = 0;
   const subscriber = new ControlPlaneProxyStateSubscriber(service, {
-    reconnectDelayMs: 50,
     async fetchImpl() {
       fetches += 1;
       order.push("snapshot");
@@ -142,7 +141,6 @@ test("R disconnect degrades only proxy reachability, retains target state, then 
   const sockets = [];
   const revisions = [7, 9];
   const subscriber = new ControlPlaneProxyStateSubscriber(service, {
-    reconnectDelayMs: 1,
     async fetchImpl() { return Response.json({ data: snapshot(revisions.shift(), { status: "offline", health: "degraded" }) }); },
     openWebSocket(url) {
       const socket = new Socket();
@@ -227,7 +225,6 @@ test("subscriber logs only a redacted proxy failure summary", async (t) => {
     request: { headers: { "x-task-handoff-proxy-credential": secret } },
   });
   const subscriber = new ControlPlaneProxyStateSubscriber(service, {
-    reconnectDelayMs: 60_000,
     async fetchImpl() { throw failure; },
     logger: { warn(details, message) { warnings.push({ details, message }); } },
   });

@@ -310,7 +310,7 @@ function legacyAppSessionBindings(session: Record<string, unknown>): AppSessionB
   const aiSessionResume = objectRecord(launch.aiSessionResume);
   const bindings: AppSessionBinding[] = [];
   const resumedProviderSessionId = stringValue(aiSessionResume.providerSessionId);
-  const resumedAgent = session.appId === "codex" || session.appId === "claude" ? session.appId : undefined;
+  const resumedAgent = session.appId === "codex" || session.appId === "claude" || session.appId === "opencode" ? session.appId : undefined;
   // The runtime launch is private implementation state; project only its
   // deterministic provider identity into the existing public binding model.
   if (resumedAgent && resumedProviderSessionId) {

@@ -22,13 +22,14 @@ export type RuntimeDraft = {
 export type InstanceDraft = {
   name: string;
   autoImportAgentConfigs: boolean;
-  codexModelHash?: string | null;
-  claudeModelHash?: string | null;
+  modelEntityIds: string[];
+  retainGitCredential: boolean;
 };
 
 export type NewProjectDraft = {
   name: string;
   url: string;
+  gitCredentialId: string;
 };
 
 export type NewImageDraft = {

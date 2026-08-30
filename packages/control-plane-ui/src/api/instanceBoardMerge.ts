@@ -1,13 +1,26 @@
 import { replaceEqualDeep } from "@tanstack/vue-query";
 import type { InstanceBoardItem, InstanceBoardPayload } from "./types";
 
-function mergeInstance(
+const authoritativeInstanceTriggerIds = new Set<string>();
+
+export function markInstanceTriggerProjectionAuthoritative(instanceId: string) {
+  authoritativeInstanceTriggerIds.add(instanceId);
+}
+
+export function mergeInstanceBoardItem(
   previous: InstanceBoardItem | undefined,
   incoming: InstanceBoardItem,
 ) {
   if (!previous) return incoming;
-  if ((previous.stateRevision || 0) <= (incoming.stateRevision || 0)) return incoming;
-  return mergeNewerLifecycleProjection(incoming, previous);
+  const lifecycleMerged = (previous.stateRevision || 0) <= (incoming.stateRevision || 0)
+    ? incoming
+    : mergeNewerLifecycleProjection(incoming, previous);
+  return preserveNewerTriggerProjection(previous, lifecycleMerged);
+}
+
+function preserveNewerTriggerProjection(previous: InstanceBoardItem, incoming: InstanceBoardItem): InstanceBoardItem {
+  if (!previous.triggers || !authoritativeInstanceTriggerIds.has(previous.id)) return incoming;
+  return { ...incoming, triggers: previous.triggers };
 }
 
 /**
@@ -42,7 +55,7 @@ export function mergeInstanceBoardPayload(
   const previousById = new Map(previous.data.map((instance) => [instance.id, instance]));
   return replaceEqualDeep(previous, {
     ...incoming,
-    data: incoming.data.map((instance) => mergeInstance(previousById.get(instance.id), instance)),
+    data: incoming.data.map((instance) => mergeInstanceBoardItem(previousById.get(instance.id), instance)),
   });
 }
 
@@ -60,7 +73,7 @@ export function mergeInstanceBoardQueryData(
     const previousItems = Array.isArray(previous) ? previous : undefined;
     if (!previousItems) return incoming;
     const previousById = new Map(previousItems.map((instance) => [instance.id, instance]));
-    return replaceEqualDeep(previousItems, incoming.map((instance) => mergeInstance(previousById.get(instance.id), instance)));
+    return replaceEqualDeep(previousItems, incoming.map((instance) => mergeInstanceBoardItem(previousById.get(instance.id), instance)));
   }
   return mergeInstanceBoardPayload(Array.isArray(previous) ? undefined : previous, incoming);
 }

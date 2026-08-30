@@ -86,6 +86,13 @@ test("appearance language selection is browser-local and does not emit server se
   assert.doesNotMatch(source, /update:locale|saveLocale|ControlPlaneSettings.*locale/);
 });
 
+test("desktop update capability reasons are localized from structured codes", () => {
+  const source = fs.readFileSync(new URL("../src/apps/control-plane/settings/AppearanceSettingsSection.vue", import.meta.url), "utf8");
+  assert.match(source, /capabilities\.reasonCode/);
+  assert.match(source, /settings\.appearance\.updateReason/);
+  assert.doesNotMatch(source, /\{\{\s*desktopUpdateState\?\.capabilities\.reason\s*\}\}/);
+});
+
 test("shared select values are recreated when the active locale changes", () => {
   const source = fs.readFileSync(new URL("../src/apps/control-plane/shared/ControlPlaneSelect.vue", import.meta.url), "utf8");
   assert.match(source, /<Select :key="locale"/);

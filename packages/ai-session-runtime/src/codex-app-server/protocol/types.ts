@@ -1,4 +1,4 @@
-import type { AiSessionSubAgent } from "@task-handoff/protocol/ai-sessions";
+import type { AiSessionReasoningEffort, AiSessionSubAgent } from "@task-handoff/protocol/ai-sessions";
 
 export type JsonValue = Record<string, unknown>;
 export type CodexUserInput =
@@ -23,6 +23,10 @@ export type CodexThread = {
   path?: unknown;
   status?: CodexThreadStatus;
   turns?: unknown;
+  /** Authoritative values returned beside thread snapshots by start/resume/fork. */
+  model?: unknown;
+  modelProvider?: unknown;
+  reasoningEffort?: AiSessionReasoningEffort | unknown;
 };
 export type CodexThreadItemEntry = {
   turnId: string;
@@ -61,9 +65,9 @@ export type CodexAppServerEvent =
   | { type: "thread-status"; threadId: string; status: CodexThreadStatus }
   | { type: "thread-closed"; threadId: string }
   | { type: "thread-name"; threadId: string; name: string }
-  | { type: "turn-started"; threadId: string; turnId?: string }
+  | { type: "turn-started"; threadId: string; turnId?: string; observedAt?: string }
   | { type: "turn-error"; threadId: string; turnId: string; error: string; willRetry: boolean }
-  | { type: "turn-completed"; threadId: string; turnId?: string; status?: string; error?: string }
+  | { type: "turn-completed"; threadId: string; turnId?: string; status?: string; error?: string; observedAt?: string }
   | { type: "thread-error"; threadId: string; error: string }
   | { type: "context-compaction"; threadId: string; turnId: string; itemId: string; status: "running" | "completed"; observedAt?: string; timelineItem?: JsonValue }
   | { type: "approval-request"; request: CodexApprovalRequest }

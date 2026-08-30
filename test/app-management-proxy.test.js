@@ -70,6 +70,32 @@ test("control-plane gateway sends app management requests through the generic no
   assert.equal(requests[0].body.path.includes("job_apps"), false);
 });
 
+test("control-plane gateway reports transport and upstream Server-Timing without changing the response model", async () => {
+  let timing;
+  let outerHeaders;
+  const gateway = new ControlledInstanceGateway({
+    requireNode: () => node,
+    nodeAgentTransport: () => transportWithRequest(async (_node, _route, init) => {
+      outerHeaders = init.headers;
+      return new Response(JSON.stringify({ data: { ok: true } }), {
+        headers: {
+          "content-type": "application/json",
+          "server-timing": "instance_action;dur=8.0, node_proxy;dur=9.0",
+          "x-task-handoff-trace-id": "trace-gateway-1",
+        },
+      });
+    }),
+  });
+
+  const result = await gateway.request(instance, "/health", { headers: { "x-task-handoff-trace-id": "trace-gateway-1" } }, (value) => { timing = value; });
+  assert.deepEqual(result, { ok: true });
+  assert.equal(outerHeaders["x-task-handoff-trace-id"], "trace-gateway-1");
+  assert.equal(timing.traceId, "trace-gateway-1");
+  assert.match(timing.serverTiming, /instance_action;dur=8\.0/);
+  assert.match(timing.serverTiming, /node_proxy;dur=9\.0/);
+  assert.match(timing.serverTiming, /node_transport;dur=/);
+});
+
 test("structured controlled-instance conflicts survive the proxy boundary", async () => {
   const gateway = new ControlledInstanceGateway({
     requireNode: () => node,
@@ -80,6 +106,36 @@ test("structured controlled-instance conflicts survive the proxy boundary", asyn
   await assert.rejects(
     gateway.request(instance, "/apps/chromium/uninstall", { method: "POST", body: "{}" }),
     (error) => error.code === "app_sessions_running" && error.statusCode === 409 && error.details.sessionIds[0] === "session_apps",
+  );
+});
+
+test("legacy node-agent proxy connection failures normalize to a retryable bad gateway", async () => {
+  const gateway = new ControlledInstanceGateway({
+    requireNode: () => node,
+    nodeAgentTransport: () => transportWithRequest(async () => new Response(JSON.stringify({
+      error: { code: "NODE_AGENT_ERROR", message: "fetch failed" },
+    }), { status: 500, headers: { "content-type": "application/json" } })),
+  });
+  await assert.rejects(
+    gateway.request(instance, "/repository/ai-session-workspace/inspect", { method: "POST", body: "{}" }),
+    (error) => error.code === "INSTANCE_PROXY_UPSTREAM_FAILED" && error.statusCode === 502 && error.retryable === true,
+  );
+});
+
+test("structured node-agent upstream availability errors preserve retryability", async () => {
+  const gateway = new ControlledInstanceGateway({
+    requireNode: () => node,
+    nodeAgentTransport: () => transportWithRequest(async () => new Response(JSON.stringify({
+      error: {
+        code: "INSTANCE_PROXY_UPSTREAM_UNREACHABLE",
+        message: "Instance web endpoint is not reachable.",
+        retryable: true,
+      },
+    }), { status: 502, headers: { "content-type": "application/json" } })),
+  });
+  await assert.rejects(
+    gateway.request(instance, "/repository/ai-session-workspace/inspect", { method: "POST", body: "{}" }),
+    (error) => error.code === "INSTANCE_PROXY_UPSTREAM_UNREACHABLE" && error.statusCode === 502 && error.retryable === true,
   );
 });
 

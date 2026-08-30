@@ -19,7 +19,8 @@ load_private_config() {
     const fs = require("node:fs");
     const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
     if (value.version !== 1 || typeof value.instanceCredential !== "string" || !value.instanceCredential || !value.environment || typeof value.environment !== "object" || Array.isArray(value.environment)) process.exit(78);
-    const environment = { ...value.environment, TASK_HANDOFF_REGISTRATION_TOKEN: value.instanceCredential, TASK_HANDOFF_PRIVATE_CONFIG_LOADED: "1" };
+    const environment = { ...value.environment, TASK_HANDOFF_REGISTRATION_TOKEN: value.instanceCredential, TASK_HANDOFF_PRIVATE_CONFIG_LOADED: "1", TASK_HANDOFF_INSTANCE_PRIVATE_CONFIG_PATH: process.argv[1] };
+    if (value.modelCatalog !== undefined) environment.TASK_HANDOFF_PRIVATE_MODEL_CATALOG_JSON = JSON.stringify(value.modelCatalog);
     for (const [key, item] of Object.entries(environment)) {
       if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) || typeof item !== "string") process.exit(78);
       process.stdout.write(`${key}\t${Buffer.from(item).toString("base64")}\n`);
@@ -30,6 +31,11 @@ load_private_config() {
     exit 78
   fi
 }
+
+if [ -n "${TASK_HANDOFF_WORKSPACE_SUBDIRECTORY:-}" ]; then
+  export TASK_HANDOFF_WORKSPACE="${TASK_HANDOFF_WORKSPACE:-/workspace}/${TASK_HANDOFF_WORKSPACE_SUBDIRECTORY}"
+  unset TASK_HANDOFF_WORKSPACE_SUBDIRECTORY
+fi
 
 if [ "$(id -u)" = "0" ] && [ "${TASK_HANDOFF_PRIVILEGE_DROPPED:-0}" != "1" ]; then
   load_private_config
@@ -56,6 +62,9 @@ mkdir -p \
   "${TASK_HANDOFF_WORKSPACE:-/workspace}"
 
 bootstrap_workspace() {
+  if [ "${TASK_HANDOFF_SKIP_WORKSPACE_BOOTSTRAP:-false}" = "true" ]; then
+    return
+  fi
   local workspace="${TASK_HANDOFF_WORKSPACE:-/workspace}"
   local mode="${TASK_HANDOFF_WORKSPACE_MODE:-}"
   local git_url="${TASK_HANDOFF_GIT_URL:-}"

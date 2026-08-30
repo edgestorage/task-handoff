@@ -15,6 +15,7 @@ import type {
 } from "./types";
 import { asRecord } from "./values";
 import { codexTurnErrorMessage } from "./events";
+import { isoTimestampFromSeconds } from "./items";
 
 export function summarizeThreadTurns(thread: CodexThread): {
   activeTurnId?: string;
@@ -41,6 +42,9 @@ export function summarizeThreadTurns(thread: CodexThread): {
       ? record.id.trim()
       : `turn_${index}`;
     const providerStatus = typeof record.status === "string" ? record.status : "completed";
+    const startedAt = isoTimestampFromSeconds(record.startedAt);
+    const completedAt = isoTimestampFromSeconds(record.completedAt)
+      || completedAtFromDuration(startedAt, record.durationMs);
     const historyTurn: NonNullable<AiSessionStatus["turns"]>[number] = {
       id: turnId,
       status: providerStatus === "inProgress"
@@ -49,13 +53,11 @@ export function summarizeThreadTurns(thread: CodexThread): {
           ? "failed"
           : "completed",
       revision: 0,
+      ...(startedAt ? { startedAt } : {}),
+      ...(completedAt ? { completedAt, updatedAt: completedAt } : startedAt ? { updatedAt: startedAt } : {}),
     };
     const turnError = providerStatus === "failed" ? codexTurnErrorMessage(record.error) : undefined;
     if (index === turns.length - 1) error = turnError;
-    if (turnError) {
-      historyTurn.summary = compact(turnError, 1000);
-      historyTurn.lastMessage = turnError;
-    }
     if (providerStatus === "inProgress") {
       activeTurnId = turnId;
     }
@@ -98,6 +100,11 @@ export function summarizeThreadTurns(thread: CodexThread): {
     toolActivity: rebuildCodexToolActivity(thread),
     subAgents: rebuildCodexSubAgents(thread, updatedAt),
   };
+}
+
+function completedAtFromDuration(startedAt: string | undefined, durationMs: unknown) {
+  if (!startedAt || typeof durationMs !== "number" || !Number.isFinite(durationMs) || durationMs < 0) return undefined;
+  return new Date(Date.parse(startedAt) + durationMs).toISOString();
 }
 
 function textFromUserMessageItem(item: JsonValue) {

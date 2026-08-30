@@ -10,6 +10,7 @@ import {
   DockerImageService,
 } from "../docker-images.ts";
 import type { NodeAgentState } from "../state.ts";
+import { nowIso as now } from "@task-handoff/core/core/time";
 
 type Diagnostic = (data: Record<string, unknown>, message: string) => void;
 
@@ -20,10 +21,6 @@ type Options = {
   publish(type: string, payload: Record<string, unknown>, instanceId: string): void;
   runInstanceOperation?<T>(instanceId: string, operation: () => Promise<T>): Promise<T>;
 };
-
-function now() {
-  return new Date().toISOString();
-}
 
 function splitTerminalOutput(data: string, maxLength = 60_000) {
   const chunks: string[] = [];

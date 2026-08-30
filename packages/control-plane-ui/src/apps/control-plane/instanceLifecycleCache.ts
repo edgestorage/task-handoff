@@ -1,6 +1,8 @@
 import type { QueryClient } from "@tanstack/vue-query";
-import type { InstanceLifecycleSnapshot } from "@task-handoff/protocol/control-plane";
-import type { InstanceBoardItem } from "../../api/types";
+import type { InstanceLifecycleSnapshot, NodeStateProjectionEvent } from "@task-handoff/protocol/control-plane";
+import type { ControlPlaneNodeFleetState } from "@task-handoff/protocol/control-plane-directory";
+import type { InstanceBoardItem, InstanceBoardPayload } from "../../api/types";
+import type { Node } from "../../api/types";
 import type { ControlPlaneInstanceResourceEntry } from "@task-handoff/control-plane-client";
 import { controlPlaneQueryKeys } from "../../api/queryKeys.ts";
 import { mergeNewerLifecycleProjection } from "../../api/instanceBoardMerge.ts";
@@ -51,4 +53,51 @@ export function applyInstanceLifecycle(queryClient: QueryClient, lifecycle: Inst
     };
   }));
   return matched;
+}
+
+export function applyNodeFleetState(queryClient: QueryClient, state: ControlPlaneNodeFleetState) {
+  let applied = false;
+  queryClient.setQueriesData<InstanceBoardPayload>({ queryKey: controlPlaneQueryKeys.instanceBoard }, (current) => {
+    if (!current?.meta) return current;
+    const nodeStates = current.meta.nodeStates || [];
+    const index = nodeStates.findIndex((candidate) => candidate.nodeId === state.nodeId && candidate.resource === state.resource);
+    const previous = index >= 0 ? nodeStates[index] : undefined;
+    if ((previous?.revision ?? -1) > (state.revision ?? -1)) return current;
+    const nextNodeStates = [...nodeStates];
+    if (index >= 0) nextNodeStates[index] = state;
+    else nextNodeStates.push(state);
+    const replacedRoutes = new Set([previous?.error?.route, state.error?.route].filter((route): route is string => Boolean(route)));
+    const nodeErrors = (current.meta.nodeErrors || []).filter((error) => (
+      error.nodeId !== state.nodeId || !replacedRoutes.has(error.route)
+    ));
+    if (state.error) nodeErrors.push(state.error);
+    applied = true;
+    return {
+      ...current,
+      meta: {
+        ...current.meta,
+        nodeStates: nextNodeStates,
+        nodeErrors,
+      },
+    };
+  });
+  return applied;
+}
+
+export function applyNodeStateProjection(queryClient: QueryClient, state: NodeStateProjectionEvent) {
+  let applied = false;
+  queryClient.setQueryData<Node[]>(controlPlaneQueryKeys.nodes, (current) => current?.map((node) => {
+    if (node.id !== state.nodeId) return node;
+    applied = true;
+    return {
+      ...node,
+      status: state.status,
+      health: state.health,
+      lastSeenAt: state.lastSeenAt ?? undefined,
+      connectionPhase: state.connectionPhase ?? undefined,
+      connectionDiagnostics: state.connectionDiagnostics ?? undefined,
+      proxyState: state.proxyState ?? undefined,
+    };
+  }));
+  return applied;
 }

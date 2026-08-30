@@ -53,7 +53,19 @@ export function runtimeVersionStateForReport(
   actualVersion?: string,
   managedArtifacts = true,
 ) {
-  if (!managedArtifacts) return runtimeVersionStateForActual(actualVersion);
+  if (!managedArtifacts) {
+    const desiredVersion = desiredControlledInstanceVersion();
+    const current = instance.runtimeVersion;
+    // Local Runtime reports are heartbeat observations. Once the same desired
+    // and actual version is matched, preserve the convergence timestamp instead
+    // of manufacturing a new semantic runtime state on every heartbeat.
+    if (
+      current?.phase === "matched"
+      && current.desiredVersion === desiredVersion
+      && current.actualVersion === actualVersion
+    ) return current;
+    return runtimeVersionStateForActual(actualVersion);
+  }
 
   const desiredVersion = desiredControlledInstanceVersion();
   const current = instance.runtimeVersion;

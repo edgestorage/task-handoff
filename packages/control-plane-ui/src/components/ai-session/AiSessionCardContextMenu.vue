@@ -31,6 +31,10 @@
       <ExternalLink :size="14" />
       <span>{{ t("sessions.actions.openApp") }}</span>
     </ContextMenuItem>
+    <ContextMenuItem v-if="canOpenTerminal" class="ai-session-context-menu-item" :disabled="isOpeningTerminal" @select="$emit('openTerminal')">
+      <SquareTerminal :size="14" />
+      <span>{{ t("sessions.actions.openTerminal") }}</span>
+    </ContextMenuItem>
     <ContextMenuSub v-if="canFork">
       <ContextMenuSubTrigger class="ai-session-context-menu-item" :disabled="isForking">
         <Split :size="14" />
@@ -42,14 +46,14 @@
       </ContextMenuSubContent>
     </ContextMenuSub>
     <ContextMenuItem class="ai-session-context-menu-item danger" :disabled="isStoppingAppSession" @select="$emit('closeSession')">
-      <Square :size="13" />
+      <Square :size="14" />
       <span>{{ isStoppingAppSession ? t("sessions.actions.closingSession") : t("sessions.actions.closeSession") }}</span>
     </ContextMenuItem>
   </ContextMenuContent>
 </template>
 
 <script setup lang="ts">
-import { Check, ExternalLink, Split, Square, Zap } from "@lucide/vue";
+import { Check, ExternalLink, Split, Square, SquareTerminal, Zap } from "@lucide/vue";
 import { useI18n } from "vue-i18n";
 import type { ControlPlaneTrigger } from "../../api/types";
 import {
@@ -66,8 +70,10 @@ defineProps<{
   boundTriggerCount: number;
   hasAppSession: boolean;
   canOpenApp: boolean;
+  canOpenTerminal?: boolean;
   canFork?: boolean;
   isForking?: boolean;
+  isOpeningTerminal?: boolean;
   isStoppingAppSession?: boolean;
   isTriggerBound: (configHash: string) => boolean;
   isTriggerBusy: (configHash: string) => boolean;
@@ -78,6 +84,7 @@ defineProps<{
 defineEmits<{
   closeSession: [];
   openApp: [];
+  openTerminal: [];
   forkSession: [mode: "current" | "managed-worktree"];
   toggleTrigger: [configHash: string];
 }>();
@@ -94,13 +101,13 @@ defineEmits<{
   padding: 6px;
 }
 
-:global(.ai-session-context-menu-item) {
+:global(.ai-session-context-menu .ai-session-context-menu-item) {
   display: flex;
   align-items: center;
   gap: 8px;
   min-height: 32px;
   border-radius: 6px;
-  font-size: 12px;
+  font-size: 13px;
   padding: 6px 8px;
 }
 
@@ -116,13 +123,13 @@ defineEmits<{
   min-width: 250px;
 }
 
-:global(.ai-session-context-trigger-item) {
+:global(.ai-session-context-menu .ai-session-context-trigger-item) {
   display: grid;
   grid-template-columns: 16px minmax(0, 1fr) auto;
   gap: 8px;
   min-height: 34px;
   border-radius: 6px;
-  font-size: 12px;
+  font-size: 13px;
   padding: 6px 8px;
 }
 
@@ -141,8 +148,8 @@ defineEmits<{
 
 :global(.ai-session-context-trigger-item strong) {
   color: var(--ai-board-title);
-  font-size: 12px;
-  font-weight: 800;
+  font-size: 13px;
+  font-weight: 500;
   line-height: 1.2;
 }
 

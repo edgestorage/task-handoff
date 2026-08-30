@@ -5,6 +5,7 @@ import test from "node:test";
 const component = fs.readFileSync(new URL("../src/components/ai-session/AiSessionSubAgents.vue", import.meta.url), "utf8");
 const panel = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.vue", import.meta.url), "utf8");
 const result = fs.readFileSync(new URL("../src/components/ai-session/AiSessionResult.vue", import.meta.url), "utf8");
+const conversation = fs.readFileSync(new URL("../src/components/ai-session/AiSessionConversationContent.vue", import.meta.url), "utf8");
 const apiTypes = fs.readFileSync(new URL("../src/api/types.ts", import.meta.url), "utf8");
 
 test("control-plane UI derives the sub-agent type from the protocol", () => {
@@ -14,7 +15,8 @@ test("control-plane UI derives the sub-agent type from the protocol", () => {
 });
 
 test("AI session detail renders sub-agents after the main tool activity", () => {
-  assert.match(panel, /<AiSessionResult/);
+  assert.match(panel, /<AiSessionConversationContent/);
+  assert.match(conversation, /<AiSessionResult/);
   assert.match(result, /<AiSessionToolActivity[\s\S]*?\/>\s*<AiSessionSubAgents/);
   assert.match(result, /v-if="isLatest && session\.subAgents\?\.length"/);
   assert.match(result, /:sub-agents="session\.subAgents"/);

@@ -16,7 +16,7 @@
 
 TaskHandoff 用于集中运行和监管 Codex 等 AI 开发工作。它把分散在不同机器、工作空间和聊天入口中的 AI 会话统一到一个控制面板中，并负责节点接入、实例生命周期、会话管理、应用运行和消息路由。
 
-> 项目正在从独立的任务交接 CLI 演进为完整的 AI 工作空间控制平面，部分能力和接口仍在持续调整。
+> Task Handoff 是开源、自托管的 AI 工作空间控制平面。官方云平台补充账号与加密中转能力，见 `ee/cloud-platform/README.md`。
 
 ## 核心能力
 
@@ -26,6 +26,7 @@ TaskHandoff 用于集中运行和监管 Codex 等 AI 开发工作。它把分散
 - **环境模板**：把 Docker 实例中安装的工具和容器配置保存为节点本地的可复用环境，再与任意 Git 项目或本地目录工作空间组合。
 - **AI 会话中心**：统一查看和控制实例中的 AI 会话，通过 WebSocket 实时同步状态。
 - **仓库协作**：在会话中查看文件、变更、分支和 worktree，并提供保守的远程交付能力。
+- **托管 Git 凭证**：按 remote scope 管理 HTTPS token 或 pinned SSH key，可仅用于首次 provisioning，也可保留给 Agent、Terminal、App 和 Repository 的后续 Git 命令。
 - **聊天入口整合**：通过适配器接入 Telegram、钉钉、微信和飞书/Lark，将消息、审批和操作路由到指定实例。
 - **应用管理**：通过可信内置目录在目标实例中安装、卸载和运行应用。
 - **移动端客户端**：iOS 或 Android 设备可直接连接用户管理的 Control Plane，访问 AI 会话、实例操作、应用和终端。
@@ -183,6 +184,14 @@ sudo task-handoff-node-agent invite --ipc-path /run/task-handoff/node-agent.sock
 
 使用 `--json` 可获得适合自动化处理的输出。远程 TCP 接入仍需邀请令牌和配对后的 HMAC 认证。
 
+卸载独立安装的 Node Agent：
+
+```sh
+sudo task-handoff-node-agent uninstall
+```
+
+该命令会移除 systemd 服务和运行时包，最后询问是否删除 Node Agent 数据目录，默认不删除。非交互执行可显式传入 `--keep-data` 或 `--delete-data`。受管 Docker volume 不会被连带删除。
+
 ## CLI
 
 `@task-handoff/server` 提供统一的 `task-handoff` 命令：
@@ -230,16 +239,17 @@ scripts/                          安装、构建和运行脚本
 
 ### Docker 镜像
 
-Docker 工作流会构建并冒烟测试四种镜像配置：
+Docker 工作流会构建并冒烟测试五种镜像配置：
 
 | 镜像 | Profile 能力 |
 | --- | --- |
 | `task-handoff-controlled-codex` | Terminal、Codex |
+| `task-handoff-controlled-opencode` | Terminal、OpenCode |
 | `task-handoff-controlled-ai` | Terminal、Codex、Claude |
 | `task-handoff-controlled-webcap` | GUI Terminal、Browser、WebCap、Codex、Claude |
 | `task-handoff-controlled-browser` | GUI Terminal、Browser、VS Code Web、Codex、Claude；不包含 WebCap |
 
-四者使用相同的不可变 `sha-<commit>` 标签。推送 `v1.2.3` 形式的语义化版本标签时，对应镜像会提升为该版本；稳定版本同时更新 `latest`。
+五者使用相同的不可变 `sha-<commit>` 标签。推送 `v1.2.3` 形式的语义化版本标签时，对应镜像会提升为该版本；稳定版本同时更新 `latest`。
 
 ### 桌面应用
 

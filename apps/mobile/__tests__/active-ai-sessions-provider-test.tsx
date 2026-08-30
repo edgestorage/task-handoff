@@ -3,6 +3,7 @@ import { Text } from 'react-native';
 
 import {
   ActiveAiSessionsProvider,
+  useActiveAiSessionView,
   useActiveAiSessionsRuntime,
   useActiveAiSessions,
   type ActiveAiSessionsDependencies,
@@ -24,6 +25,24 @@ const profile = {
   capabilities: { authentication: 'required' as const, aiSessions: true, nodes: true, instanceBoard: true, triggers: true },
   createdAt: '2026-08-05T00:00:00.000Z',
   updatedAt: '2026-08-05T00:00:00.000Z',
+  detailRevision: 'detail-1',
+};
+
+const compactSession = {
+  id: 'session-detail',
+  providerSessionId: 'session-detail',
+  creationSource: 'ai-session' as const,
+  agent: 'codex' as const,
+  status: 'idle' as const,
+  phase: 'unknown' as const,
+  startedAt: '2026-08-05T00:00:00.000Z',
+  updatedAt: '2026-08-05T00:00:00.000Z',
+  turnCount: 1,
+  queue: { revision: 0, pendingCount: 0, items: [] },
+  toolCallsSinceLastMessage: 0,
+  subAgentCount: 0,
+  subAgents: [],
+  unread: false,
 };
 
 function Consumer({ name }: { name: string }) {
@@ -40,6 +59,12 @@ function RuntimeConsumer({ onRender }: { onRender(): void }) {
 function MessageCountConsumer() {
   const { state } = useActiveAiSessions();
   return <Text>messages:{Object.keys(state.messages).length}</Text>;
+}
+
+function DetailConsumer() {
+  const { controlPlaneId } = useActiveAiSessionsRuntime();
+  useActiveAiSessionView(controlPlaneId, 'instance-1', 'session-1');
+  return <Text>detail-mounted</Text>;
 }
 
 test('one root provider owns one AI session connection for multiple screens', async () => {
@@ -66,6 +91,7 @@ test('one root provider owns one AI session connection for multiple screens', as
       <Consumer name="detail" />
       <RuntimeConsumer onRender={runtimeRenders} />
       <MessageCountConsumer />
+      <DetailConsumer />
     </ActiveAiSessionsProvider>,
   );
 
@@ -76,6 +102,15 @@ test('one root provider owns one AI session connection for multiple screens', as
     expect(connectEvents).toHaveBeenCalledTimes(1);
   });
   expect(subscribeProfiles).toHaveBeenCalledTimes(1);
+  expect(connectEvents).toHaveBeenCalledWith(expect.objectContaining({
+    topics: ['ai.sessions'],
+    aiSessionTransient: {
+      messageDeltas: { allInstances: false, instanceIds: ['instance-1'] },
+      replaySince: expect.any(String),
+      timelineAllSessions: false,
+      timelineSessions: [{ instanceId: 'instance-1', sessionId: 'session-1' }],
+    },
+  }));
   const stableRuntimeRenderCount = runtimeRenders.mock.calls.length;
 
   await act(async () => {
@@ -86,6 +121,102 @@ test('one root provider owns one AI session connection for multiple screens', as
   });
   await waitFor(() => screen.getByText('messages:1'));
   expect(runtimeRenders).toHaveBeenCalledTimes(stableRuntimeRenderCount);
-  screen.unmount();
+  await screen.unmount();
+  mobileAiSessionStore.clearProfile('cp-provider');
+});
+
+test('selected compact session commits a new Turn projection when the detail refresh fails', async () => {
+  const list = jest.fn().mockResolvedValue({
+    updatedAt: compactSession.updatedAt,
+    instances: [{
+      instanceId: 'instance-detail',
+      streamId: 'stream-detail',
+      revision: 1,
+      aiSessions: { runningCount: 0, waitingCount: 0, staleCount: 0, updatedAt: compactSession.updatedAt, sessions: [{ ...compactSession, detailRevision: 'detail-1', turnsRevision: 'turns-1' }] },
+    }],
+  });
+  const detail = jest.fn()
+    .mockResolvedValueOnce({ kind: 'updated', revision: 'detail-1', detail: { id: compactSession.id, queue: compactSession.queue, subAgents: [] } })
+    .mockRejectedValueOnce(new Error('detail unavailable'));
+  const firstTurn = { id: 'turn-1', status: 'completed' as const, phase: 'responding' as const, revision: 1, bodyRevision: 'body-1', userPrompt: 'question', lastMessage: 'answer', startedAt: compactSession.startedAt, updatedAt: compactSession.updatedAt };
+  const secondTurn = { id: 'turn-2', status: 'completed' as const, phase: 'responding' as const, revision: 1, bodyRevision: 'body-2', userPrompt: 'second question', lastMessage: 'second answer', startedAt: '2026-08-05T00:01:00.000Z', updatedAt: '2026-08-05T00:01:00.000Z' };
+  const completedSecondTurn = { ...secondTurn, revision: 2, bodyRevision: 'body-3', lastMessage: 'completed second answer' };
+  const turnIndex = jest.fn()
+    .mockResolvedValueOnce({ kind: 'updated', revision: 'turns-1', index: { sessionId: compactSession.id, revision: 'turns-1', turns: [firstTurn] } })
+    .mockResolvedValueOnce({ kind: 'updated', revision: 'turns-2', index: { sessionId: compactSession.id, revision: 'turns-2', turns: [firstTurn, secondTurn] } });
+  const turnBody = jest.fn()
+    .mockResolvedValueOnce({ kind: 'updated', revision: firstTurn.bodyRevision, body: { sessionId: compactSession.id, revision: firstTurn.bodyRevision, turn: firstTurn } })
+    .mockResolvedValueOnce({ kind: 'updated', revision: secondTurn.bodyRevision, body: { sessionId: compactSession.id, revision: secondTurn.bodyRevision, turn: secondTurn } })
+    .mockResolvedValueOnce({ kind: 'updated', revision: completedSecondTurn.bodyRevision, body: { sessionId: compactSession.id, revision: completedSecondTurn.bodyRevision, turn: completedSecondTurn } });
+  const dependencies: ActiveAiSessionsDependencies = {
+    activeProfile: jest.fn().mockResolvedValue(profile),
+    subscribeProfiles: () => () => undefined,
+    createClient: () => ({
+      api: { auth: { session: jest.fn().mockResolvedValue({ authenticated: true }) }, aiSessions: { list, detail, turnIndex, turnBody } },
+      transport: { revalidate: jest.fn().mockResolvedValue(undefined), connectEvents: () => ({ close: jest.fn() }) },
+    }) as unknown as ReturnType<ActiveAiSessionsDependencies['createClient']>,
+    subscribeLifecycle: (listener) => { listener('active'); return () => undefined; },
+    subscribeNetwork: (listener) => { listener({ connected: true, internetReachable: true, type: 'wifi' }); return () => undefined; },
+  };
+  function SelectedDetail() {
+    const view = useActiveAiSessionView('cp-provider', 'instance-detail', 'session-detail');
+    return <Text>{view.session?.turns?.at(-1)?.lastMessage || 'loading'}</Text>;
+  }
+
+  const screen = await render(<ActiveAiSessionsProvider dependencies={dependencies}><SelectedDetail /></ActiveAiSessionsProvider>);
+  await waitFor(() => screen.getByText('answer'));
+  expect(detail).toHaveBeenCalledTimes(1);
+
+  const updatedAt = '2026-08-05T00:01:00.000Z';
+  await act(async () => {
+    mobileAiSessionStore.replaceSnapshot('cp-provider', {
+      updatedAt,
+      instances: [{
+        instanceId: 'instance-detail',
+        streamId: 'stream-detail',
+        revision: 2,
+        aiSessions: {
+          runningCount: 0,
+          waitingCount: 0,
+          staleCount: 0,
+          updatedAt,
+          sessions: [{ ...compactSession, updatedAt, detailRevision: 'detail-2', turnsRevision: 'turns-2' }],
+        },
+      }],
+    });
+  });
+  await waitFor(() => screen.getByText('second answer'));
+  expect(detail).toHaveBeenCalledTimes(2);
+  expect(turnIndex).toHaveBeenCalledTimes(2);
+  expect(turnBody).toHaveBeenCalledTimes(2);
+
+  await act(async () => {
+    mobileAiSessionStore.replaceSnapshot('cp-provider', {
+      updatedAt: '2026-08-05T00:02:00.000Z',
+      instances: [{
+        instanceId: 'instance-detail',
+        streamId: 'stream-detail',
+        revision: 3,
+        aiSessions: {
+          runningCount: 0,
+          waitingCount: 0,
+          staleCount: 0,
+          updatedAt: '2026-08-05T00:02:00.000Z',
+          sessions: [{
+            ...compactSession,
+            updatedAt: '2026-08-05T00:02:00.000Z',
+            detailRevision: 'detail-2',
+            turnsRevision: 'turns-2',
+            latestTurnRef: { id: secondTurn.id, bodyRevision: completedSecondTurn.bodyRevision },
+          }],
+        },
+      }],
+    });
+  });
+  await waitFor(() => screen.getByText('completed second answer'));
+  expect(detail).toHaveBeenCalledTimes(2);
+  expect(turnIndex).toHaveBeenCalledTimes(2);
+  expect(turnBody).toHaveBeenCalledTimes(3);
+  await screen.unmount();
   mobileAiSessionStore.clearProfile('cp-provider');
 });

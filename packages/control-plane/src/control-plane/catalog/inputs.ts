@@ -1,13 +1,32 @@
-import { CustomImageProfileSchema, ProjectSchema, ProjectSourceSchema, UpdateChannelSchema, WorkspacePolicySchema } from "@task-handoff/protocol/control-plane";
+import { CustomImageProfileSchema, NodeRuntimeSchema, ProjectSchema, ProjectSourceSchema, UpdateChannelSchema, WorkspacePolicySchema } from "@task-handoff/protocol/control-plane";
 import { z } from "zod";
 
-export const CreateProjectInputSchema = z.object({
+const CreateProjectInputBaseSchema = z.object({
   id: ProjectSchema.shape.id.optional(), name: ProjectSchema.shape.name, source: ProjectSourceSchema,
   defaultImageSelection: ProjectSchema.shape.defaultImageSelection, defaultNodeId: ProjectSchema.shape.defaultNodeId,
-  defaultRuntimeId: ProjectSchema.shape.defaultRuntimeId, workspacePolicy: WorkspacePolicySchema.optional(),
+  workspacePolicy: WorkspacePolicySchema.optional(),
   labels: ProjectSchema.shape.labels.optional(),
-}).strict();
-export const UpdateProjectInputSchema = CreateProjectInputSchema.omit({ id: true }).partial().strict();
+});
+
+// Compatibility for v0.0.21: accept the removed project runtime preference
+// from N-1 clients, but do not expose or persist it in the current model.
+const LegacyProjectRuntimeInputShape = { defaultRuntimeId: NodeRuntimeSchema.shape.id.optional() };
+export const CreateProjectInputSchema = CreateProjectInputBaseSchema
+  .extend(LegacyProjectRuntimeInputShape)
+  .strict()
+  .transform(({ defaultRuntimeId: _defaultRuntimeId, ...input }) => ({
+    ...input,
+    source: ProjectSourceSchema.parse(input.source),
+  }));
+export const UpdateProjectInputSchema = CreateProjectInputBaseSchema
+  .omit({ id: true })
+  .partial()
+  .extend(LegacyProjectRuntimeInputShape)
+  .strict()
+  .transform(({ defaultRuntimeId: _defaultRuntimeId, ...input }) => ({
+    ...input,
+    ...(input.source ? { source: ProjectSourceSchema.parse(input.source) } : {}),
+  }));
 export const DEFAULT_MENTION_TRIGGER = "@";
 export const DEFAULT_COMMAND_TRIGGER = "/";
 

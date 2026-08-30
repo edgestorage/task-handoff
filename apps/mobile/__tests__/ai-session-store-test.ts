@@ -5,7 +5,7 @@ import {
   type ControlPlaneAiSessions,
   type ControlPlaneClient,
 } from '@task-handoff/control-plane-client';
-import { AiSessionEventType, AiSessionUnreadEventType, type AiSessionStreamEvent } from '@task-handoff/protocol/ai-sessions';
+import { AiSessionDetailSchema, AiSessionEventType, AiSessionStatusSchema, AiSessionTurnIndexSchema, AiSessionUnreadEventType, type AiSessionStreamEvent } from '@task-handoff/protocol/ai-sessions';
 import { supportsDirectoryAiSessionTimelineCapability } from '@task-handoff/protocol/control-plane-directory';
 import type { MobileControlPlaneEventHandlers, MobileControlPlaneTransport } from '../src/control-plane/transport';
 
@@ -42,6 +42,84 @@ function snapshot(instanceId: string, sessionId: string): ControlPlaneAiSessions
 }
 
 describe('MobileAiSessionStore identity isolation', () => {
+  test('selected session detail restores compact snapshot turns, queue, and sub-agents', () => {
+    const store = new MobileAiSessionStore();
+    const compact = snapshot('instance-detail', 'session-detail');
+    const summary = compact.instances[0].aiSessions.sessions[0];
+    compact.instances[0].aiSessions.sessions[0] = {
+      ...summary,
+      detailRevision: 'detail-1',
+      turnsRevision: 'turns-1',
+      turnCount: 1,
+      subAgentCount: 1,
+      queue: { revision: 2, pendingCount: 1, items: [] },
+    };
+    store.replaceSnapshot('cp-detail', compact);
+    const { unread: _unread, ...detailBase } = summary;
+    const detail = AiSessionStatusSchema.parse({
+      ...detailBase,
+      turns: [{
+        id: 'turn-1',
+        status: 'completed',
+        phase: 'responding',
+        userPrompt: 'question',
+        lastMessage: 'answer',
+        startedAt: summary.startedAt,
+        updatedAt: summary.updatedAt,
+      }],
+      subAgents: [{ threadId: 'sub-1', status: 'running', message: 'working', updatedAt: summary.updatedAt }],
+      queue: {
+        revision: 2,
+        pendingCount: 1,
+        items: [{ id: 'queue-1', message: 'next', status: 'queued', createdAt: summary.startedAt, updatedAt: summary.startedAt }],
+      },
+      counters: { toolCalls: 0, edits: 0, approvals: 0 },
+    });
+
+    const compactSummary = compact.instances[0].aiSessions.sessions[0];
+    store.setSessionDetail('cp-detail', 'instance-detail', compactSummary.detailRevision!, AiSessionDetailSchema.parse({
+      id: detail.id,
+      appBindingKeys: detail.appBindingKeys,
+      cwd: detail.cwd,
+      error: detail.error,
+      providerMeta: detail.providerMeta,
+      queue: detail.queue,
+      subAgents: detail.subAgents,
+    }));
+    store.setSessionTurnIndex('cp-detail', 'instance-detail', compactSummary.turnsRevision!, AiSessionTurnIndexSchema.parse({
+      sessionId: detail.id,
+      revision: compactSummary.turnsRevision || 'turns-1',
+      turns: detail.turns?.map((turn) => ({
+        id: turn.id,
+        providerTurnId: turn.providerTurnId,
+        status: turn.status,
+        phase: turn.phase,
+        revision: turn.revision,
+        startedAt: turn.startedAt,
+        updatedAt: turn.updatedAt,
+        completedAt: turn.completedAt,
+        bodyRevision: `body-${turn.id}`,
+      })),
+    }));
+    store.setSessionTurn('cp-detail', 'instance-detail', detail.id, 'body-turn-1', detail.turns![0]);
+
+    const selected = store.sessionView('cp-detail', 'instance-detail', 'session-detail').session;
+    expect(selected?.turns?.[0]?.lastMessage).toBe('answer');
+    expect(selected?.queue.items[0]?.message).toBe('next');
+    expect(selected?.subAgents[0]?.threadId).toBe('sub-1');
+
+    compact.instances[0].aiSessions.sessions[0] = {
+      ...compact.instances[0].aiSessions.sessions[0],
+      detailRevision: 'detail-2',
+      queue: { revision: 3, pendingCount: 0, items: [] },
+    };
+    store.replaceSnapshot('cp-detail', compact);
+    const refreshed = store.session('cp-detail', 'instance-detail', 'session-detail');
+    expect(refreshed?.queue).toEqual({ revision: 3, pendingCount: 0, items: [] });
+    expect(refreshed?.turns?.[0]?.lastMessage).toBe('answer');
+    expect(refreshed?.subAgents).toEqual([]);
+  });
+
   test('directory timeline capabilities default old responses to unsupported and remain provider-scoped', () => {
     expect(supportsDirectoryAiSessionTimelineCapability(undefined, 'codex', 'turn-read')).toBe(false);
     expect(supportsDirectoryAiSessionTimelineCapability({ aiSessionTimeline: { turnReadAgents: ['codex'] } }, 'codex', 'turn-read')).toBe(true);
@@ -75,6 +153,35 @@ describe('MobileAiSessionStore identity isolation', () => {
     store.clearProfile('cp-a');
     expect(store.session('cp-a', 'instance-1', 'session-1')).toBeUndefined();
     expect(store.session('cp-b', 'instance-1', 'session-1')?.id).toBe('session-1');
+  });
+
+  test('an older HTTP snapshot cannot overwrite a newer stream projection', () => {
+    const store = new MobileAiSessionStore();
+    const initial = snapshot('instance-1', 'session-1');
+    store.replaceSnapshot('cp-monotonic', initial);
+    const current = initial.instances[0].aiSessions.sessions[0];
+    const { unread: _unread, ...protocolSession } = current;
+    store.applyStreamEvent('cp-monotonic', {
+      type: AiSessionEventType.Patch,
+      payload: {
+        meta: {
+          streamId: initial.instances[0].streamId,
+          instanceId: 'instance-1',
+          revision: 2,
+          previousRevision: 1,
+          traceId: 'trace-newer',
+          generatedAt: '2026-08-05T00:01:00.000Z',
+          reason: 'provider-event',
+        },
+        upserted: [{ ...protocolSession, status: 'running', updatedAt: '2026-08-05T00:01:00.000Z' }],
+        removed: [],
+      },
+    });
+
+    store.replaceSnapshot('cp-monotonic', initial);
+
+    expect(store.profile('cp-monotonic').snapshot?.instances[0].revision).toBe(2);
+    expect(store.session('cp-monotonic', 'instance-1', 'session-1')?.status).toBe('running');
   });
 
   test('message deltas notify only their session and preserve unrelated session view snapshots', () => {
@@ -266,6 +373,20 @@ describe('MobileAiSessionStore identity isolation', () => {
       },
     })).toBe(true);
     expect(Object.values(store.profile('cp-a').messages)[0]?.receivedText).toBe('hello');
+
+    expect(controller.applyEvent({
+      type: AiSessionEventType.MessageDelta,
+      topic: 'ai.sessions',
+      scope: { instanceId: 'instance-1' },
+      payload: {
+        sessionId: 'session-1',
+        turnId: 'turn-1',
+        itemId: 'item-2',
+        delta: 'compact',
+        generatedAt: updatedAt,
+      },
+    })).toBe(true);
+    expect(Object.values(store.profile('cp-a').messages).some((message) => message.receivedText === 'compact')).toBe(true);
 
     expect(controller.applyEvent({
       type: AiSessionEventType.TimelineItem,

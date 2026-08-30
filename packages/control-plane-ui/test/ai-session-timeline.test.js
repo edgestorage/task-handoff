@@ -2,8 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
 import { supportsAiSessionTimelineCapability } from "@task-handoff/protocol/control-plane";
-import { compactTimelineForTurn, conversationTimelineTurns, groupTimelineTurns, turnElapsedEnd } from "../src/components/ai-session/timelineActivities.ts";
-import { shouldDeferTurnTimelineLoad } from "../src/components/ai-session/timelineLoading.ts";
+import { compactTimelineForTurn, conversationTimelineTurns, groupTimelineTurns, turnElapsedEnd, turnElapsedSeconds } from "../src/components/ai-session/timelineActivities.ts";
 import { useAiSessionTimelineStore } from "../src/apps/control-plane/useAiSessionTimelineStore.ts";
 
 const panelUrl = new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.vue", import.meta.url);
@@ -70,6 +69,97 @@ test("turn Timeline cache merges authoritative snapshots with live item upserts"
       output: "ok",
     }],
   });
+});
+
+test("Turn Timeline cache becomes stale when the authoritative Turn revision advances", () => {
+  const store = useAiSessionTimelineStore();
+  const instanceId = "instance-revision";
+  const sessionId = "session-revision";
+  const loadedTurn = { id: "turn-revision", providerTurnId: "provider-turn-revision", revision: 1 };
+  store.cleanupInstance(instanceId);
+  store.resolveTurn(instanceId, sessionId, loadedTurn, [{
+    id: "command-revision",
+    turnId: "provider-turn-revision",
+    type: "activity",
+    activityKind: "commandExecution",
+    title: "Command",
+    status: "running",
+  }]);
+
+  assert.equal(store.turnState(instanceId, sessionId, loadedTurn).status, "ready");
+  const advancedTurn = { ...loadedTurn, revision: 2, status: "completed" };
+  assert.deepEqual(store.turnState(instanceId, sessionId, advancedTurn), {
+    status: "stale",
+    items: [{
+      id: "command-revision",
+      turnId: "provider-turn-revision",
+      type: "activity",
+      activityKind: "commandExecution",
+      title: "Command",
+      status: "running",
+    }],
+  });
+  store.cleanupInstance(instanceId);
+});
+
+test("an older Timeline response remains stale for a newer Turn revision", () => {
+  const store = useAiSessionTimelineStore();
+  const instanceId = "instance-response-race";
+  const sessionId = "session-response-race";
+  const requestedTurn = { id: "turn-response-race", revision: 4 };
+  const currentTurn = { ...requestedTurn, revision: 5 };
+  store.cleanupInstance(instanceId);
+  store.beginTurnLoad(instanceId, sessionId, requestedTurn);
+  store.resolveTurn(instanceId, sessionId, requestedTurn, []);
+
+  assert.equal(store.turnState(instanceId, sessionId, currentTurn).status, "stale");
+  store.cleanupInstance(instanceId);
+});
+
+test("an older Timeline response cannot overwrite a newer resolved revision", () => {
+  const store = useAiSessionTimelineStore();
+  const instanceId = "instance-response-order";
+  const sessionId = "session-response-order";
+  const olderTurn = { id: "turn-response-order", revision: 4 };
+  const newerTurn = { ...olderTurn, revision: 5 };
+  store.cleanupInstance(instanceId);
+  store.beginTurnLoad(instanceId, sessionId, olderTurn);
+  store.beginTurnLoad(instanceId, sessionId, newerTurn);
+  store.resolveTurn(instanceId, sessionId, newerTurn, [{
+    id: "newer-item",
+    turnId: newerTurn.id,
+    type: "activity",
+    activityKind: "commandExecution",
+    title: "Newer",
+    status: "completed",
+  }]);
+  store.apply({
+    instanceId,
+    sessionId,
+    providerSessionId: "thread-response-order",
+    generatedAt: "2026-08-16T00:00:06.000Z",
+    item: {
+      id: "live-after-newer",
+      turnId: newerTurn.id,
+      type: "activity",
+      activityKind: "commandExecution",
+      title: "Live after newer",
+      status: "completed",
+    },
+  });
+  store.resolveTurn(instanceId, sessionId, olderTurn, [{
+    id: "older-item",
+    turnId: olderTurn.id,
+    type: "activity",
+    activityKind: "commandExecution",
+    title: "Older",
+    status: "running",
+  }]);
+
+  const state = store.turnState(instanceId, sessionId, newerTurn);
+  assert.equal(state.status, "ready");
+  assert.deepEqual(state.items.map((item) => item.id), ["newer-item", "live-after-newer"]);
+  store.cleanupInstance(instanceId);
 });
 
 test("realtime Turn state excludes unavailable history snapshots and read errors", () => {
@@ -234,24 +324,18 @@ test("snapshot cache eviction does not delete a newer live Turn bucket", () => {
   store.cleanupInstance(instanceId);
 });
 
-test("latest live Turn defers HTTP Timeline loading until it completes", () => {
-  const completed = { id: "turn-1", status: "completed" };
-  for (const status of ["queued", "running", "waiting"]) {
-    const latest = { id: "turn-2", providerTurnId: "provider-turn-2", status };
-    assert.equal(shouldDeferTurnTimelineLoad([completed, latest], latest, true), true);
-    assert.equal(shouldDeferTurnTimelineLoad([completed, latest], { ...latest, id: "public-alias" }, true), true);
-    assert.equal(shouldDeferTurnTimelineLoad([completed, latest], completed, true), false);
-    assert.equal(shouldDeferTurnTimelineLoad([completed, latest], latest, false), false);
-  }
-  assert.equal(shouldDeferTurnTimelineLoad([completed, { id: "turn-2", status: "completed" }], { id: "turn-2", status: "completed" }, true), false);
-  assert.equal(shouldDeferTurnTimelineLoad([completed, { id: "turn-2", status: "failed" }], { id: "turn-2", status: "failed" }, true), false);
-});
-
 test("Turn elapsed time ends only at an authoritative terminal timestamp", () => {
   assert.equal(turnElapsedEnd({ status: "running", updatedAt: "2026-08-17T00:00:05.000Z" }), undefined);
   assert.equal(turnElapsedEnd({ status: "waiting", updatedAt: "2026-08-17T00:00:05.000Z" }), undefined);
   assert.equal(turnElapsedEnd({ status: "completed", completedAt: "2026-08-17T00:00:09.000Z", updatedAt: "2026-08-17T00:00:08.000Z" }), "2026-08-17T00:00:09.000Z");
-  assert.equal(turnElapsedEnd({ status: "failed", updatedAt: "2026-08-17T00:00:07.000Z" }), "2026-08-17T00:00:07.000Z");
+  assert.equal(turnElapsedEnd({ status: "failed" }), undefined);
+});
+
+test("Turn elapsed time is unavailable when an inactive Turn has no terminal timestamp", () => {
+  const startedAt = "2026-08-17T00:00:00.000Z";
+  assert.equal(turnElapsedSeconds(startedAt, undefined, false, Date.parse("2026-08-21T00:00:00.000Z")), undefined);
+  assert.equal(turnElapsedSeconds(startedAt, undefined, true, Date.parse("2026-08-17T00:00:09.900Z")), 9);
+  assert.equal(turnElapsedSeconds(startedAt, "2026-08-17T00:00:07.500Z", false, Date.parse("2026-08-21T00:00:00.000Z")), 7);
 });
 
 test("Timeline capabilities are provider-scoped, independent, and queried through the protocol model", () => {
@@ -271,34 +355,60 @@ test("Timeline capabilities are provider-scoped, independent, and queried throug
 test("AI session turns render immediately while Timeline loads per turn", () => {
   const panel = fs.readFileSync(panelUrl, "utf8");
   const result = fs.readFileSync(new URL("../src/components/ai-session/AiSessionResult.vue", import.meta.url), "utf8");
+  const presentation = fs.readFileSync(new URL("../src/apps/control-plane/useAiSessionTimelinePresentation.ts", import.meta.url), "utf8");
+  const conversation = fs.readFileSync(new URL("../src/components/ai-session/AiSessionConversationContent.vue", import.meta.url), "utf8");
   const board = fs.readFileSync(new URL("../src/apps/control-plane/ai-board/AiSessionCard.vue", import.meta.url), "utf8");
   assert.match(panel, /:turn-timelines="conversationTurnTimelines"/);
   assert.match(panel, /@load-turn-timeline="loadTurnTimeline"/);
-  assert.match(panel, /getAiSessionTurnTimeline\(instanceId, session\.id, turn\.id\)/);
-  assert.match(panel, /async function loadTurnTimeline[\s\S]*shouldDeferTurnTimelineLoad\(turns, turn, supportsAiSessionLiveTimelineItems\.value\)/);
-  assert.match(panel, /if \(!supportsAiSessionTurnTimeline\.value\)[\s\S]*state\.status === "ready" \|\| state\.status === "loading"[\s\S]*loadFullTimelineForSession\(session, true\)/);
+  assert.match(conversation, /<AiSessionTimelineView/);
+  assert.match(presentation, /getAiSessionTurnTimeline\(instanceId, current\.id, turn\.id\)/);
+  assert.doesNotMatch(presentation, /shouldDeferTurnTimelineLoad/);
+  assert.match(presentation, /if \(!supportsTurnRead\.value\)[\s\S]*state\.status === "ready" \|\| state\.status === "loading"[\s\S]*loadFullTimeline\(current, true\)/);
   assert.match(panel, /selectedTimelineTurn\.value\.id}:\$\{selectedTimelineTurn\.value\.status}/);
   assert.match(panel, /class="session-ai-detail-actions-view-mode"[\s\S]*:model-value="effectiveTimelineViewMode"/);
-  assert.match(panel, /supportsAiSessionTimelineCapability/);
+  assert.match(presentation, /supportsAiSessionTimelineCapability/);
   assert.doesNotMatch(panel, /supportsAiSessionTimeline && selectedSession\.agent === 'codex'/);
   const panelStyles = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.css", import.meta.url), "utf8");
   assert.doesNotMatch(panelStyles, /\.session-ai-detail-head-actions \.session-ai-timeline-mode/);
   assert.match(panelStyles, /\.session-ai-detail-actions-view-mode/);
   assert.doesNotMatch(panel, /request-activity-timeline/);
   assert.doesNotMatch(result, /requestActivityTimeline/);
-  assert.match(panel, /selectedTurnTimelineState\.status/);
-  assert.match(panel, /timelineItemStore\.turnState\(props\.instance\.id, session\.id, turn\)/);
-  assert.match(panel, /supportsAiSessionTimelineReads\.value[\s\S]*timelineItemStore\.realtimeTurnState/);
+  assert.match(panel, /:selected-turn-state="selectedTurnTimelineState"/);
+  assert.match(presentation, /timelineStore\.turnState\(currentInstance\.id, current\.id, turn\)/);
+  assert.match(presentation, /supportsTimelineReads\.value[\s\S]*timelineStore\.realtimeTurnState/);
   assert.doesNotMatch(board, /AiSessionTimelineView|getAiSessionTimeline/);
+});
+
+test("board floating detail consumes the same Timeline presentation as instance detail", () => {
+  const panel = fs.readFileSync(panelUrl, "utf8");
+  const board = fs.readFileSync(new URL("../src/apps/control-plane/ai-board/AiSessionBoardView.vue", import.meta.url), "utf8");
+  const dock = fs.readFileSync(new URL("../src/apps/control-plane/ai-board/AiSessionFloatingDock.vue", import.meta.url), "utf8");
+  const conversation = fs.readFileSync(new URL("../src/components/ai-session/AiSessionConversationContent.vue", import.meta.url), "utf8");
+  for (const source of [panel, board]) {
+    assert.match(source, /useAiSessionConversationProjection/);
+    assert.match(source, /useAiSessionTimelinePresentation/);
+    assert.match(source, /useAiSessionTimelineDemand/);
+    assert.match(source, /conversationTurnTimelines/);
+    assert.match(source, /selectedTurnTimelineState/);
+  }
+  for (const source of [panel, dock]) assert.match(source, /<AiSessionConversationContent/);
+  assert.match(dock, /:mode="timelineMode"/);
+  assert.match(conversation, /v-if="mode === 'full'"[\s\S]*<AiSessionTimelineView[\s\S]*<AiSessionResult/);
+  assert.match(board, /@continue-from-turn="forkCardSession\(selectedCard, 'current', \$event\)"/);
+  assert.doesNotMatch(dock, /<AiSessionResult/);
 });
 
 test("conversation Timeline composes every turn from the same compact result component", () => {
   const panel = fs.readFileSync(panelUrl, "utf8");
   const styles = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.css", import.meta.url), "utf8");
   const timeline = fs.readFileSync(new URL("../src/components/ai-session/AiSessionTimelineView.vue", import.meta.url), "utf8");
+  const projection = fs.readFileSync(new URL("../src/apps/control-plane/useAiSessionConversationProjection.ts", import.meta.url), "utf8");
   const group = fs.readFileSync(new URL("../src/components/ai-session/AiSessionActivityGroup.vue", import.meta.url), "utf8");
   const history = fs.readFileSync(new URL("../src/components/ai-session/AiSessionTurnHistory.vue", import.meta.url), "utf8");
   const result = fs.readFileSync(new URL("../src/components/ai-session/AiSessionResult.vue", import.meta.url), "utf8");
+  const toolActivity = fs.readFileSync(new URL("../src/components/ai-session/AiSessionToolActivity.vue", import.meta.url), "utf8");
+  const turnActions = fs.readFileSync(new URL("../src/components/ai-session/AiSessionTurnActions.vue", import.meta.url), "utf8");
+  const conversation = fs.readFileSync(new URL("../src/components/ai-session/AiSessionConversationContent.vue", import.meta.url), "utf8");
   const streamingMarkdown = fs.readFileSync(new URL("../src/components/ai-session/AiSessionStreamingMarkdown.vue", import.meta.url), "utf8");
   const markdownContent = fs.readFileSync(new URL("../../web-theme/MarkdownContent.vue", import.meta.url), "utf8");
   const english = fs.readFileSync(new URL("../src/i18n/locales/en-US/sessions.ts", import.meta.url), "utf8");
@@ -308,18 +418,32 @@ test("conversation Timeline composes every turn from the same compact result com
   assert.match(timeline, /turn\.lastMessage\?\.trim\(\)/);
   assert.doesNotMatch(timeline, /projected\?\.latestResponse|projected\?\.userMessages/);
   assert.match(timeline, /loadVisibleTurnTimelines/);
+  assert.match(panel, /loadAllSelectedSessionTurns/);
+  assert.match(timeline, /function loadVisibleTurnTimelines\(\)[\s\S]*getBoundingClientRect\(\)[\s\S]*emit\("loadTurnTimeline", turn\.id\)/);
+  assert.match(timeline, /function handleViewportScroll\(\)[\s\S]*scheduleVisibleTurnTimelines\(\)/);
+  assert.match(timeline, /if \(!props\.turnBodiesReady \|\| !timelineScrollIntent\)/);
+  assert.match(timeline, /addEventListener\("wheel", markTimelineScrollIntent/);
+  assert.match(projection, /const allTurnsReady = computed\([\s\S]*index\.turns\.every\(\(turn\) => conversations\.hasCurrentTurn/);
+  assert.match(panel, /:turn-bodies-ready="selectedSessionTurnsReady"/);
+  assert.match(timeline, /@load-activity-history="\$emit\('loadTurnTimeline'/);
+  assert.match(timeline, /watch\(\(\) => props\.turnTimelines,[\s\S]*scheduleStickyUserMessageUpdate/);
   assert.doesNotMatch(timeline, /shouldDeferTurnTimelineLoad/);
-  assert.match(timeline, /sourceTurns\.value\.map\(\(turn\) => `\$\{turn\.id\}:\$\{turn\.status\}`\)\.join\("\|"\)/);
   assert.match(timeline, /\.ai-session-timeline-turn \{[\s\S]*gap: 24px;/);
   assert.match(history, /\.ai-session-turn-history > summary \{[\s\S]*user-select: none;/);
-  assert.match(history, /<details v-else-if="nodes\.length"[\s\S]*<span>\{\{ elapsedLabel \}\}<\/span>/);
+  assert.match(history, /v-else-if="nodes\.length \|\| loadable \|\| loading"[\s\S]*@toggle="requestHistoryIfOpened"[\s\S]*<span>\{\{ elapsedLabel \}\}<\/span>/);
+  assert.match(history, /HTMLDetailsElement\)\.open && props\.loadable\) emit\("load"\)/);
+  assert.match(result, /:loadable="!active && \(activityHistoryStatus === 'idle' \|\| activityHistoryStatus === 'stale'\)"/);
+  assert.match(result, /@load="\$emit\('loadActivityHistory'\)"/);
+  assert.match(timeline, /@load-activity-history="\$emit\('loadTurnTimeline', turns\[virtualTurn\.index\]\.id\)"/);
   assert.match(history, /v-else class="ai-session-turn-history-status ai-session-turn-history-empty"[\s\S]*<Timer[\s\S]*<span>\{\{ elapsedLabel \}\}<\/span>/);
   assert.match(history, /elapsedSeconds[\s\S]*sessions\.timeline\.processedSeconds[\s\S]*sessions\.timeline\.processedMinutes[\s\S]*sessions\.timeline\.processedHours[\s\S]*sessions\.timeline\.processedDays/);
   assert.doesNotMatch(history, /runningElapsed|elapsedUnavailable|elapsedSeconds"|elapsedMinutes|elapsedHours|elapsedDays/);
   assert.match(english, /processedSeconds: "Processed in \{seconds\}s"/);
   assert.match(chinese, /processedSeconds: "已处理 \{seconds\}秒"/);
+  assert.match(english, /processedUnavailable: "-"/);
+  assert.match(chinese, /processedUnavailable: "-"/);
   assert.match(timeline, /\.ai-session-timeline-user-message \{[\s\S]*justify-self: end;[\s\S]*width: fit-content;[\s\S]*max-width: min\(78%, 620px\);/);
-  assert.match(timeline, /\.ai-session-timeline-message\[data-role="user-message"\] \{[\s\S]*border-radius: 14px;[\s\S]*background: var\(--surface-hover\);[\s\S]*padding: 12px 14px;/);
+  assert.match(timeline, /\.ai-session-timeline-message \{[\s\S]*border-radius: 14px;[\s\S]*background: var\(--surface-hover\);[\s\S]*padding: 12px 14px;/);
   assert.doesNotMatch(timeline, /\.ai-session-timeline-message\[data-role="ai-message"\] \{[\s\S]*padding-(?:top|bottom):/);
   assert.match(result, /\.ai-session-result \{[\s\S]*--detail-activity-gap: 16px;/);
   assert.match(result, /\.ai-session-result-detail \.ai-session-result-content \{[\s\S]*gap: 0;/);
@@ -353,8 +477,7 @@ test("conversation Timeline composes every turn from the same compact result com
   assert.match(timeline, /closest<HTMLElement>\("\[data-task-handoff-scroll-viewport\]"\)/);
   assert.match(timeline, /turnVirtualizer\.value\.measureElement\(element\)/);
   assert.match(timeline, /:data-message-id="message\.id"/);
-  assert.match(timeline, /class="ai-session-turn-actions"/);
-  assert.match(timeline, /<AiSessionResult[\s\S]*<template #turn-footer>[\s\S]*class="ai-session-turn-actions"[\s\S]*<\/AiSessionResult>/);
+  assert.match(timeline, /<AiSessionResult[\s\S]*<template #turn-footer>[\s\S]*<AiSessionTurnActions[\s\S]*<\/AiSessionResult>/);
   assert.doesNotMatch(timeline, /<\/AiSessionResult>\s*<footer[^>]*class="ai-session-turn-actions"/);
   assert.match(result, /\.ai-session-result-detail :slotted\(\.ai-session-turn-actions\) \{[\s\S]*margin-top: 8px;/);
   assert.match(timeline, /latestResponse && completedTurn\(turns\[virtualTurn\.index\]\.id\)/);
@@ -362,21 +485,23 @@ test("conversation Timeline composes every turn from the same compact result com
   assert.match(timeline, /class="ai-session-user-message-actions"[\s\S]*v-if="turns\[virtualTurn\.index\]\.startedAt"[\s\S]*formatTurnTime\(turns\[virtualTurn\.index\]\.startedAt \|\| ''\)/);
   assert.match(timeline, /class="ai-session-user-message-actions"[\s\S]*class="ai-session-turn-time"[\s\S]*class="ai-session-user-message-copy"/);
   assert.match(timeline, /startedAt: turn\.startedAt/);
-  assert.match(timeline, /@click="copyMessage\(turns\[virtualTurn\.index\]\.latestResponse\)"/);
+  assert.match(timeline, /:content="turns\[virtualTurn\.index\]\.latestResponse\?\.text \|\| ''"/);
   assert.match(timeline, /copiedMessageId === message\.id/);
   assert.match(timeline, /\.ai-session-timeline-user-message:hover \.ai-session-user-message-actions,[\s\S]*\.ai-session-timeline-user-message:focus-within \.ai-session-user-message-actions \{[\s\S]*opacity: 1;[\s\S]*pointer-events: auto;/);
   assert.match(timeline, /\.ai-session-user-message-actions \{[\s\S]*margin-top: 8px;/);
-  assert.match(timeline, /@click="continueFromTurn\(turns\[virtualTurn\.index\]\.id\)"/);
+  assert.match(timeline, /@continue="continueFromTurn\(turns\[virtualTurn\.index\]\.id\)"/);
   assert.match(timeline, /turn\.id === turnId \|\| turn\.providerTurnId === turnId/);
   assert.match(timeline, /turn\?\.completedAt \|\| turn\?\.updatedAt \|\| turn\?\.startedAt/);
-  assert.match(timeline, /\.ai-session-turn-actions \{[\s\S]*min-height: 26px;[\s\S]*opacity: 0;[\s\S]*pointer-events: none;/);
-  assert.match(timeline, /\.ai-session-turn-actions :deep\(\.ai-session-turn-action\) \{[\s\S]*width: 26px;[\s\S]*height: 26px;[\s\S]*padding: 0;/);
-  assert.match(timeline, /\.ai-session-turn-actions :deep\(\.ai-session-turn-action svg\) \{[\s\S]*width: 13px;[\s\S]*height: 13px;/);
-  assert.match(timeline, /\.ai-session-timeline-turn:hover \.ai-session-turn-actions,[\s\S]*\.ai-session-timeline-turn:focus-within \.ai-session-turn-actions \{[\s\S]*opacity: 1;[\s\S]*pointer-events: auto;/);
+  assert.match(turnActions, /\.ai-session-turn-actions \{[\s\S]*min-height: 26px;[\s\S]*opacity: 0;[\s\S]*pointer-events: none;/);
+  assert.match(turnActions, /\.ai-session-turn-action \{[\s\S]*width: 26px;[\s\S]*height: 26px;[\s\S]*padding: 0;/);
+  assert.match(turnActions, /:global\(\.ai-session-timeline-turn:hover \.ai-session-turn-actions\),[\s\S]*:global\(\.ai-session-result:hover \.ai-session-turn-actions\),[\s\S]*opacity: 1;[\s\S]*pointer-events: auto;/);
+  assert.match(turnActions, /navigator\.clipboard\.writeText\(props\.content\)/);
+  assert.match(conversation, /<AiSessionResult[\s\S]*<template #turn-footer>[\s\S]*<AiSessionTurnActions[\s\S]*:content="compactResponseContent"/);
+  assert.match(conversation, /compactCompletedTurn[\s\S]*compactCanContinue[\s\S]*compactTurnTime/);
   assert.match(panel, /@continue-from-turn="forkSession\(selectedSession, 'current', \$event\)"/);
   assert.match(timeline, /stickyUserMessageChange: \[message: \{ id: string; text: string \} \| undefined\]/);
   assert.match(timeline, /naturalTop <= viewport\.scrollTop \+ 0\.5 && naturalTop > nearestTop/);
-  assert.match(timeline, /scrollElement\.value\?\.removeEventListener\("scroll", scheduleStickyUserMessageUpdate\)/);
+  assert.match(timeline, /detachViewportListeners\(scrollElement\.value\)/);
   assert.match(panel, /@sticky-user-message-change="timelineStickyUserMessage = \$event"/);
   assert.match(panel, /effectiveTimelineViewMode === 'full' && timelineStickyUserMessage[\s\S]*session-ai-timeline-sticky-prompt[\s\S]*timelineStickyUserMessage\.text/);
   assert.match(styles, /\.session-ai-timeline-sticky-prompt \{[\s\S]*position: absolute;[\s\S]*z-index: 5;[\s\S]*height: calc\([\s\S]*background: var\(--workspace-bg\);/);
@@ -393,6 +518,8 @@ test("conversation Timeline composes every turn from the same compact result com
   assert.match(group, /ai-session-activity-title[\s\S]*font-weight: 400;/);
   assert.match(group, /\.ai-session-activity-item-head \{[\s\S]*font-size: 14px;/);
   assert.match(group, /\.ai-session-activity-item-head small \{[\s\S]*font-size: inherit;/);
+  assert.match(group, /\.ai-session-activity-item \{[\s\S]*gap: 0;/);
+  assert.match(group, /\.ai-session-activity-item\[open\] \{ gap: 5px; \}/);
   assert.match(group, /\.ai-session-activity-group > summary small \{[\s\S]*font-size: inherit;[\s\S]*line-height: inherit;/);
   assert.doesNotMatch(group, /sessions\.timeline\.details/);
   assert.match(group, /activity\.activityKind === "fileChange"[\s\S]*activity\.paths\.map\(runtimePathBasename\)/);
@@ -403,6 +530,7 @@ test("conversation Timeline composes every turn from the same compact result com
     "subAgentActivity", "webSearch", "imageView", "sleep", "imageGeneration", "enteredReviewMode", "exitedReviewMode", "contextCompaction",
   ]) assert.match(group, new RegExp(`\\b${kind}:`));
   assert.match(group, /<ChevronRight v-if="!activityIcon\(activity\)" class="ai-session-activity-disclosure-icon"/);
+  assert.match(toolActivity, /\.ai-session-tool-activity-trigger > svg \{[^}]*color: var\(--text-muted\);/);
   assert.match(group, /<component :is="activityIcon\(activity\)" v-else class="ai-session-activity-kind-icon"/);
   assert.match(group, /sessions\.timeline\.commandStatus\.\$\{activity\.status \|\| "unknown"\}/);
   assert.match(group, /isCommandActivity\(activity\)[\s\S]*activity\.input\?\.trim\(\) \|\| ""/);
@@ -471,6 +599,22 @@ test("compact Timeline splits history from only the activities after the latest 
   assert.deepEqual(compact.activities.map((activity) => activity.id), ["activity-2", "activity-3"]);
 });
 
+test("compact Timeline exposes only an active Codex retry warning outside normal activities", () => {
+  const waiting = compactTimelineForTurn([
+    { id: "user", turnId: "turn-1", type: "user-message", text: "question" },
+    { id: "codex_retry:turn-1", turnId: "turn-1", type: "activity", activityKind: "codexRetry", title: "Codex retry", status: "waiting", summary: "Reconnecting to the model stream" },
+  ], { id: "turn-1" });
+  assert.equal(waiting.retryWarning, "Reconnecting to the model stream");
+  assert.deepEqual(waiting.activities, []);
+  assert.equal(waiting.activityNodes.some((node) => node.type === "activities"), false);
+
+  const recovered = compactTimelineForTurn([
+    { id: "codex_retry:turn-1", turnId: "turn-1", type: "activity", activityKind: "codexRetry", title: "Codex retry", status: "completed", summary: "Reconnecting to the model stream" },
+  ], { id: "turn-1" });
+  assert.equal(recovered.retryWarning, undefined);
+  assert.deepEqual(recovered.activityNodes, []);
+});
+
 test("compact Timeline keeps user messages inserted after the primary prompt in earlier process", () => {
   const items = [
     { id: "user-primary", turnId: "turn-1", type: "user-message", text: "initial prompt" },
@@ -521,15 +665,22 @@ test("compact Timeline preserves follow-up user messages before the first AI res
 });
 
 test("compact mode renders history, latest AI response, then only the live activity expansion", () => {
-  const panel = fs.readFileSync(panelUrl, "utf8");
+  const conversation = fs.readFileSync(new URL("../src/components/ai-session/AiSessionConversationContent.vue", import.meta.url), "utf8");
   const result = fs.readFileSync(new URL("../src/components/ai-session/AiSessionResult.vue", import.meta.url), "utf8");
-  assert.match(panel, /aiSessionTurns\(session\)\[promptIndexFor\(session\)\]/);
-  assert.match(panel, /:activities="selectedTurnTimeline\.activities"/);
-  assert.match(panel, /:activity-nodes="selectedTurnTimeline\.activityNodes"/);
-  assert.match(panel, /:activity-history="selectedTurnTimeline\.history"/);
+  assert.match(conversation, /aiSessionTurns\(props\.session\)\[props\.promptIndex\]/);
+  assert.match(conversation, /:activities="selectedTimeline\.activities"/);
+  assert.match(conversation, /:activity-nodes="selectedTimeline\.activityNodes"/);
+  assert.match(conversation, /:activity-history="selectedTimeline\.history"/);
+  assert.match(conversation, /:retry-warning="selectedTimeline\.retryWarning"/);
+  assert.match(result, /<details v-if="retryWarning" class="ai-session-retry-warning" role="status"/);
+  assert.match(result, /retryWarningFirstLine = computed\(\(\) => props\.retryWarning\.split\(\/\\r\\n\|\\r\|\\n\/, 1\)\[0\]\)/);
+  assert.match(result, /class="ai-session-retry-warning-preview">\{\{ retryWarningFirstLine \}\}/);
+  assert.match(result, /class="ai-session-retry-warning-detail">\{\{ retryWarning \}\}/);
+  assert.match(result, /\.ai-session-retry-warning\[open\] \.ai-session-retry-warning-preview \{ display: none; \}/);
+  assert.match(result, /\.ai-session-retry-warning\[open\] \.ai-session-retry-warning-detail \{ display: block; \}/);
   assert.match(result, /<AiSessionTurnHistory[\s\S]*<section[\s\S]*class="ai-session-detail-response"[\s\S]*<AiSessionToolActivity/);
   assert.match(result, /<AiSessionTurnHistory\s+:nodes="activityHistory"/);
-  assert.match(result, /:loading="!active && \(activityHistoryStatus === 'idle' \|\| activityHistoryStatus === 'loading' \|\| activityHistoryStatus === 'stale'\)"/);
+  assert.match(result, /:loading="!active && activityHistoryStatus === 'loading'"/);
   assert.doesNotMatch(result, /<AiSessionTurnHistory\s+v-if=/);
   assert.match(result, /<AiSessionToolActivity\s+v-if="isLatest && active"/);
   assert.doesNotMatch(result, /v-else-if="activities\.length"/);

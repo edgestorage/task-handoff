@@ -9,7 +9,7 @@ test('one-time code input normalizes pasted text to six digits', async () => {
   const screen = await render(<MobileThemeProvider><OneTimeCodeInput accessibilityLabel="Authenticator code" onChangeText={onChangeText} value="12"/></MobileThemeProvider>);
 
   expect(screen.getByTestId('one-time-code-boxes')).toBeTruthy();
-  fireEvent.changeText(screen.getByLabelText('Authenticator code'), '12a 34-5678');
+  await fireEvent.changeText(screen.getByLabelText('Authenticator code'), '12a 34-5678');
   expect(onChangeText).toHaveBeenCalledWith('123456');
-  screen.unmount();
+  await screen.unmount();
 });

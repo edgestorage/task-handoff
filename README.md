@@ -16,7 +16,7 @@
 
 TaskHandoff brings Codex and other AI development work into one control plane. It connects AI sessions spread across machines, workspaces, and chat platforms while managing node enrollment, instance lifecycles, sessions, applications, and message routing.
 
-> TaskHandoff is evolving from a standalone task handoff CLI into a complete AI workspace control plane. Some capabilities and interfaces are still changing.
+> Task Handoff is the open-source, self-hosted control plane for AI workspaces. The official cloud platform adds accounts and encrypted relay; see `ee/cloud-platform/README.md`.
 
 ## Features
 
@@ -26,6 +26,7 @@ TaskHandoff brings Codex and other AI development work into one control plane. I
 - **Environment templates** — Save a Docker instance's installed tools and container configuration as a node-local reusable environment, then combine it with any project or local-folder workspace.
 - **AI session center** — View and control sessions across instances with real-time state delivered over WebSocket.
 - **Repository workflows** — Inspect files, changes, branches, and worktrees, with conservative remote delivery for Git repositories.
+- **Managed Git credentials** — Scope HTTPS tokens or pinned SSH keys to remotes, use them for one-time provisioning, or retain them for Agent, Terminal, App, and Repository Git commands.
 - **Chat integrations** — Route messages, approvals, and actions from Telegram, DingTalk, WeChat, and Feishu/Lark to a selected instance.
 - **Application management** — Install, remove, and run applications on target instances through a trusted built-in catalog.
 - **Mobile client** — Connect an iOS or Android device directly to a user-managed Control Plane for AI sessions, instance operations, applications, and terminals.
@@ -173,6 +174,9 @@ curl -fsSL https://CONTROL_PLANE_HOST/install-node-agent.sh | sudo sh -s -- \
   --version RELEASE_VERSION
 ```
 
+On Debian and Ubuntu, the remote-node installer bootstraps the required Node.js
+24, npm, and native build tools on a fresh host.
+
 Replace `RELEASE_VERSION` with the Control Plane's runtime package version so the Node Agent and controlled-instance runtime use the same release.
 
 An installed Node Agent can also generate a one-time invitation directly on the node:
@@ -182,6 +186,14 @@ sudo task-handoff-node-agent invite --ipc-path /run/task-handoff/node-agent.sock
 ```
 
 Add `--json` for automation-friendly output. Remote TCP access still requires an invitation and paired HMAC authentication.
+
+To remove a standalone Node Agent installation:
+
+```sh
+sudo task-handoff-node-agent uninstall
+```
+
+The command removes the systemd service and runtime packages, then asks whether to delete the Node Agent data directory. The default is No. Use `--keep-data` or `--delete-data` for non-interactive execution. Managed Docker volumes are preserved.
 
 ## CLI
 
@@ -230,16 +242,17 @@ A semantic version tag such as `v1.2.3` builds the controlled-instance runtime a
 
 ### Docker images
 
-The Docker workflow builds and smoke-tests four image profiles:
+The Docker workflow builds and smoke-tests five image profiles:
 
 | Image | Profile capabilities |
 | --- | --- |
 | `task-handoff-controlled-codex` | Terminal and Codex |
+| `task-handoff-controlled-opencode` | Terminal and OpenCode |
 | `task-handoff-controlled-ai` | Terminal, Codex, and Claude |
 | `task-handoff-controlled-webcap` | GUI terminal, browser, WebCap, Codex, and Claude |
 | `task-handoff-controlled-browser` | GUI terminal, browser, VS Code Web, Codex, and Claude; no WebCap |
 
-All four receive the same immutable `sha-<commit>` tag. A semantic version tag such as `v1.2.3` promotes the corresponding images to that version; stable releases also update `latest`.
+All five receive the same immutable `sha-<commit>` tag. A semantic version tag such as `v1.2.3` promotes the corresponding images to that version; stable releases also update `latest`.
 
 ### Desktop application
 

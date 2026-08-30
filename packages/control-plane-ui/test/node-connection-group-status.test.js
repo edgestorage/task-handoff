@@ -14,12 +14,14 @@ test("node-grouped instance list consumes the authoritative node connection phas
 
 test("a connecting node has a visible group even before its instances respond", () => {
   assert.match(instanceList, /for \(const node of props\.nodes\)[\s\S]*?groups\.set\(node\.id,[\s\S]*?instances: \[\]/);
-  assert.match(instanceList, /v-if="loading && !hasConnectingNodes"/);
+  assert.match(instanceList, /v-if="loading && !nodes\.length"/);
   assert.match(instanceList, /v-if="!instances\.length && !loading"/);
   assert.match(instanceList, /\.instance-group-status \{[\s\S]*?font-size: 12px/);
 });
 
-test("connecting nodes suppress the loading placeholder only in node-grouped mode", () => {
-  assert.match(instanceList, /hasConnectingNodes = computed\(\(\) => props\.groupByNode && props\.nodes\.some/);
-  assert.match(instanceList, /v-if="loading && !hasConnectingNodes"/);
+test("node fleet resources load independently after the node directory appears", () => {
+  assert.match(instanceList, /instanceNodeStates = computed/);
+  assert.match(instanceList, /phase === "uninitialized" \|\| phase === "loading"/);
+  assert.match(instanceList, /v-if="loading && !nodes\.length"/);
+  assert.match(instanceList, /v-if="hasPendingNodes && !groupByNode"[\s\S]*instances\.list\.nodesStillLoading/);
 });

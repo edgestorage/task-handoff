@@ -3,6 +3,10 @@ import { z } from "zod";
 import {
   AI_SESSION_HISTORY_DEFAULT_LIMIT,
   AI_SESSION_HISTORY_MAX_LIMIT,
+  AI_SESSION_ATTACHMENT_RETENTION_DEFAULT_DAYS,
+  AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS,
+  AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES,
+  AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES,
   AI_SESSION_MAX_MESSAGE_ATTACHMENT_BYTES,
   AI_SESSION_MAX_MESSAGE_ATTACHMENTS,
   AiSessionMessageAttachmentSchema,
@@ -12,13 +16,22 @@ import {
 } from "./ai-sessions.ts";
 import { TriggerConfigSchema, TriggerDeploymentSchema, TriggerRunSchema, TriggerRuntimeStateSchema } from "./triggers.ts";
 import { ControlPlaneProxyErrorSchema, ProxyTargetStateSchema } from "./control-plane-proxy.ts";
+import {
+  AiSessionProviderCapabilitiesSchema,
+  type AiSessionProviderCapability,
+} from "./ai-session-provider-capabilities.ts";
+export {
+  AiSessionProviderCapabilitiesSchema,
+  AiSessionProviderCapabilitySchema,
+  type AiSessionProviderCapability,
+} from "./ai-session-provider-capabilities.ts";
 
-export const CONTROL_PLANE_PROTOCOL_VERSION = "2026-08-17";
+export const CONTROL_PLANE_PROTOCOL_VERSION = "2026-08-27";
 export const NODE_TUNNEL_PROTOCOL_VERSION = "2026-08-01";
 export const MARKET_CATALOG_PROTOCOL_VERSION = "2026-07-29";
 // Compatibility for v0.0.21: this released protocol already requires appInventory
-// and remains inside the N-1 support window after adding model endpoint probes.
-const APP_INVENTORY_REQUIRED_PROTOCOL_VERSIONS = new Set(["2026-08-01", "2026-08-16", CONTROL_PLANE_PROTOCOL_VERSION]);
+// and remains inside the N-1 support window as later additive features advance the boundary.
+const APP_INVENTORY_REQUIRED_PROTOCOL_VERSIONS = new Set(["2026-08-01", "2026-08-16", "2026-08-17", "2026-08-20", CONTROL_PLANE_PROTOCOL_VERSION]);
 export const ProtocolVersionSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Protocol version must use YYYY-MM-DD format.");
 
 const AiSessionCapabilityAgentSchema = z.string().trim().min(1).max(120);
@@ -31,17 +44,37 @@ function emptyAiSessionTimelineCapabilities() {
   };
 }
 
+function emptyAiSessionConversationAttachmentCapabilities() {
+  return {
+    metadataAgents: [] as string[],
+    contentAgents: [] as string[],
+    uploadAgents: [] as string[],
+    retentionSettings: false,
+    fileSizeLimitSettings: false,
+  };
+}
+
+function emptyAiSessionProviderCapabilities() {
+  return [] as AiSessionProviderCapability[];
+}
+
 function defaultControlledInstanceFeatures() {
   return {
     appRuntime: false,
     tty: false,
     gui: false,
     browser: false,
+    browserTunnel: false,
     screenshots: false,
     logs: false,
     aiSessionWorkspaceSelection: false,
     aiSessionPersistenceSettings: false,
+    privateModelCatalog: false,
+    gitCliCredentialBroker: false,
+    gitCredentialProxy: false,
     aiSessionTimeline: emptyAiSessionTimelineCapabilities(),
+    aiSessionConversationAttachments: emptyAiSessionConversationAttachmentCapabilities(),
+    aiSessionProviders: emptyAiSessionProviderCapabilities(),
   };
 }
 
@@ -59,16 +92,39 @@ export const AiSessionTimelineCapabilitiesSchema = z.object({
   liveItemAgents: z.array(AiSessionCapabilityAgentSchema).max(100).default([]),
 }).passthrough();
 
+export const AiSessionConversationAttachmentCapabilitiesSchema = z.object({
+  metadataAgents: z.array(AiSessionCapabilityAgentSchema).max(100).default([]),
+  contentAgents: z.array(AiSessionCapabilityAgentSchema).max(100).default([]),
+  uploadAgents: z.array(AiSessionCapabilityAgentSchema).max(100).default([]),
+  retentionSettings: z.boolean().default(false),
+  // Compatibility for v0.0.21: older controlled instances do not accept the
+  // additive maxFileAttachmentBytes internal settings field.
+  fileSizeLimitSettings: z.boolean().default(false),
+}).passthrough();
+
 export const ControlledInstanceFeatureCapabilitiesSchema = z.object({
   appRuntime: z.boolean().default(false),
   tty: z.boolean().default(false),
   gui: z.boolean().default(false),
   browser: z.boolean().default(false),
+  // Compatibility for v0.0.23: Browser Tunnel is additive and absent on older instances.
+  browserTunnel: z.boolean().optional(),
   screenshots: z.boolean().default(false),
   logs: z.boolean().default(false),
   aiSessionWorkspaceSelection: z.boolean().default(false),
   aiSessionPersistenceSettings: z.boolean().default(false),
+  // Compatibility for v0.0.23: only current controlled instances accept the
+  // private model catalog live-sync route.
+  privateModelCatalog: z.boolean().optional(),
+  // Additive capability: absent on v0.0.21 controlled instances.
+  gitCliCredentialBroker: z.boolean().optional(),
+  // Additive capability for the node-agent-owned runtime broker architecture.
+  gitCredentialProxy: z.boolean().optional(),
   aiSessionTimeline: AiSessionTimelineCapabilitiesSchema.default(emptyAiSessionTimelineCapabilities),
+  // Compatibility for v0.0.21: the additive wire field must remain optional.
+  aiSessionConversationAttachments: AiSessionConversationAttachmentCapabilitiesSchema.optional(),
+  // Compatibility for v0.0.21: provider capabilities are additive and absent on older instances.
+  aiSessionProviders: AiSessionProviderCapabilitiesSchema.optional(),
 }).passthrough();
 
 /** The single capability document for the controlled-instance/control-plane boundary. */
@@ -78,10 +134,22 @@ export const ControlledInstanceCapabilitiesSchema = z.object({
 
 export type AiSessionTimelineCapabilities = z.infer<typeof AiSessionTimelineCapabilitiesSchema>;
 export type AiSessionTimelineCapability = "session-read" | "turn-read" | "live-items";
+export type AiSessionConversationAttachmentCapabilities = z.infer<typeof AiSessionConversationAttachmentCapabilitiesSchema>;
+export type AiSessionConversationAttachmentCapability = "metadata" | "content" | "upload";
 export type ControlledInstanceCapabilities = z.infer<typeof ControlledInstanceCapabilitiesSchema>;
+type NormalizedControlledInstanceCapabilities = ControlledInstanceCapabilities & {
+  features: ControlledInstanceCapabilities["features"] & {
+    aiSessionConversationAttachments: AiSessionConversationAttachmentCapabilities;
+    aiSessionProviders: AiSessionProviderCapability[];
+    gitCliCredentialBroker: boolean;
+    gitCredentialProxy: boolean;
+    privateModelCatalog: boolean;
+    browserTunnel: boolean;
+  };
+};
 
 /** Normalize the only capability document on this boundary before querying any feature. */
-export function normalizeControlledInstanceCapabilities(capabilities: unknown): ControlledInstanceCapabilities {
+export function normalizeControlledInstanceCapabilities(capabilities: unknown): NormalizedControlledInstanceCapabilities {
   const defaults = defaultControlledInstanceCapabilities();
   if (!capabilities || typeof capabilities !== "object" || Array.isArray(capabilities)) return defaults;
   const document = capabilities as Record<string, unknown>;
@@ -94,20 +162,28 @@ export function normalizeControlledInstanceCapabilities(capabilities: unknown): 
     "tty",
     "gui",
     "browser",
+    "browserTunnel",
     "screenshots",
     "logs",
     "aiSessionWorkspaceSelection",
     "aiSessionPersistenceSettings",
+    "privateModelCatalog",
+    "gitCliCredentialBroker",
+    "gitCredentialProxy",
   ] as const) {
     const parsed = z.boolean().safeParse(features[feature]);
     if (parsed.success) normalizedFeatures[feature] = parsed.data;
   }
   const timeline = AiSessionTimelineCapabilitiesSchema.safeParse(features.aiSessionTimeline);
   if (timeline.success) normalizedFeatures.aiSessionTimeline = timeline.data;
+  const conversationAttachments = AiSessionConversationAttachmentCapabilitiesSchema.safeParse(features.aiSessionConversationAttachments);
+  if (conversationAttachments.success) normalizedFeatures.aiSessionConversationAttachments = conversationAttachments.data;
+  const providers = AiSessionProviderCapabilitiesSchema.safeParse(features.aiSessionProviders);
+  if (providers.success) normalizedFeatures.aiSessionProviders = providers.data;
   return ControlledInstanceCapabilitiesSchema.parse({
     ...document,
     features: { ...features, ...normalizedFeatures },
-  });
+  }) as NormalizedControlledInstanceCapabilities;
 }
 
 export function supportsAiSessionWorkspaceSelection(capabilities: unknown) {
@@ -116,6 +192,61 @@ export function supportsAiSessionWorkspaceSelection(capabilities: unknown) {
 
 export function supportsAiSessionPersistenceSettings(capabilities: unknown) {
   return normalizeControlledInstanceCapabilities(capabilities).features.aiSessionPersistenceSettings;
+}
+
+export function supportsControlledInstancePrivateModelCatalog(capabilities: unknown) {
+  return normalizeControlledInstanceCapabilities(capabilities).features.privateModelCatalog;
+}
+
+export function supportsBrowserTunnel(capabilities: unknown) {
+  return normalizeControlledInstanceCapabilities(capabilities).features.browserTunnel;
+}
+
+export function supportsGitCliCredentialBroker(capabilities: unknown) {
+  const features = normalizeControlledInstanceCapabilities(capabilities).features;
+  return features.gitCredentialProxy || features.gitCliCredentialBroker;
+}
+
+export function supportsGitCredentialProxy(capabilities: unknown) {
+  return normalizeControlledInstanceCapabilities(capabilities).features.gitCredentialProxy;
+}
+
+export function aiSessionConversationAttachmentCapabilities(capabilities: unknown): AiSessionConversationAttachmentCapabilities {
+  return normalizeControlledInstanceCapabilities(capabilities).features.aiSessionConversationAttachments;
+}
+
+export function aiSessionProviderCapabilities(capabilities: unknown) {
+  return normalizeControlledInstanceCapabilities(capabilities).features.aiSessionProviders;
+}
+
+export function aiSessionProviderCapability(capabilities: unknown, agent: string) {
+  return aiSessionProviderCapabilities(capabilities).find((provider) => provider.agent === agent);
+}
+
+export function aiSessionConversationAttachmentCapabilityAgents(
+  capabilities: unknown,
+  capability: AiSessionConversationAttachmentCapability,
+) {
+  const normalized = aiSessionConversationAttachmentCapabilities(capabilities);
+  if (capability === "metadata") return normalized.metadataAgents;
+  if (capability === "content") return normalized.contentAgents;
+  return normalized.uploadAgents;
+}
+
+export function supportsAiSessionConversationAttachmentCapability(
+  capabilities: unknown,
+  agent: string,
+  capability: AiSessionConversationAttachmentCapability,
+) {
+  return aiSessionConversationAttachmentCapabilityAgents(capabilities, capability).includes(agent);
+}
+
+export function supportsAiSessionAttachmentRetentionSettings(capabilities: unknown) {
+  return aiSessionConversationAttachmentCapabilities(capabilities).retentionSettings;
+}
+
+export function supportsAiSessionFileSizeLimitSettings(capabilities: unknown) {
+  return aiSessionConversationAttachmentCapabilities(capabilities).fileSizeLimitSettings === true;
 }
 
 /** Query the structured Timeline feature from the normalized capability document. */
@@ -251,8 +382,12 @@ export const DockerImageDigestSchema = z.string().trim().transform((value, conte
 // and a hash pins the instance to that model.
 export const ModelSelectionSchema = z
   .object({
+    modelEntityIds: z.array(IdSchema).max(64).transform((ids) => [...new Set(ids)]).optional(),
+    // Compatibility for v0.0.23: these hashes remain the single-model projection
+    // consumed by N-1 node agents. Current owners derive them from modelEntityIds.
     codexModelHash: IdSchema.nullable().optional(),
     claudeModelHash: IdSchema.nullable().optional(),
+    opencodeModelHash: IdSchema.nullable().optional(),
   })
   .strict()
   .default({});
@@ -337,9 +472,12 @@ export function migrateLegacyImageSelection(input: unknown, legacyImageId?: unkn
 export function sanitizeStoredProject(input: unknown) {
   if (!input || typeof input !== "object" || Array.isArray(input)) return input;
   const source = input as Record<string, unknown>;
-  const { defaultImageId, ...record } = source;
+  // Compatibility for v0.0.21: projects persisted by older control planes may
+  // carry a runtime preference. Runtime selection is instance-owned now.
+  const { defaultImageId, defaultRuntimeId: _defaultRuntimeId, ...record } = source;
   return {
     ...record,
+    source: sanitizeStoredProjectSource(source.source),
     defaultImageSelection: migrateLegacyImageSelection(source.defaultImageSelection, defaultImageId),
   };
 }
@@ -557,7 +695,6 @@ export const ControlPlaneHealthResponseSchema = z.object({
       component: z.literal("control-plane"),
       packageVersion: z.string().trim().min(1).max(80),
     }).loose(),
-    dataDir: z.string().min(1),
     serverTime: TimestampSchema,
   }).loose(),
 }).loose();
@@ -661,17 +798,24 @@ export const ApplyUpdateRequestSchema = z.object({
   preflightToken: z.string().trim().min(16).max(240),
 }).strict();
 
-export const GitRefSchema = z
-  .object({
-    type: z.enum(["branch", "tag", "commit"]),
-    name: z.string().trim().min(1).max(240).optional(),
-    commit: z.string().trim().max(80).optional(),
-  })
-  .strict();
+const GitNamedRefSchema = z.object({
+  type: z.enum(["branch", "tag"]),
+  name: z.string().trim().min(1).max(240),
+}).strict();
+
+const GitCommitRefSchema = z.object({
+  type: z.literal("commit"),
+  commit: z.string().trim().regex(/^[0-9a-fA-F]{4,64}$/, "commit must be a hexadecimal Git object id"),
+}).strict();
+
+export const GitRefSchema = z.discriminatedUnion("type", [GitNamedRefSchema, GitCommitRefSchema]);
 
 export const GitAuthSchema = z
   .object({
     type: z.enum(["none", "ssh-key", "https-token"]).default("none"),
+    // Compatibility for v0.0.21: preserve the existing field on read. Current
+    // Repository producers use it as a managed credential reference; it never
+    // carries secret material or directly grants an instance assignment.
     secretId: z.string().trim().min(1).max(120).optional(),
   })
   .strict();
@@ -681,7 +825,10 @@ export const GitCloneOptionsSchema = z
     depth: z.number().int().positive().max(100000).optional(),
     submodules: z.boolean().default(false),
     lfs: z.boolean().default(false),
-    subdirectory: z.string().trim().max(240).default(""),
+    subdirectory: z.string().trim().max(240).refine(
+      (value) => !value.startsWith("/") && !value.split("/").some((segment) => segment === ".."),
+      "subdirectory must be a relative path within the repository",
+    ).transform((value) => value.split("/").filter((segment) => segment && segment !== ".").join("/")).default(""),
   })
   .strict();
 
@@ -707,6 +854,7 @@ export const NodeLocalFolderSchema = z
     nodeId: IdSchema,
     name: z.string().trim().min(1).max(160),
     path: z.string().trim().min(1).max(4096),
+    // Compatibility for v0.0.21: accepted from older node-agents, but local folders no longer select images.
     defaultImageSelection: ImageSelectionSchema.optional(),
     labels: LabelsSchema,
     createdAt: TimestampSchema,
@@ -746,6 +894,21 @@ export const ProjectSourceSchema = z.discriminatedUnion("type", [
     .strict(),
 ]);
 
+export type ProjectSource = z.infer<typeof ProjectSourceSchema>;
+
+/** Project auth belongs to the Repository configuration, not the instance/node wire projection. */
+export function projectSourceWithoutGitCredential(input: unknown): ProjectSource {
+  const source = ProjectSourceSchema.parse(input);
+  if (source.type === "local-folder") return source;
+  return ProjectSourceSchema.parse({
+    ...source,
+    auth: { type: "none" },
+  });
+}
+
+/** Compatibility alias for code compiled against the initial managed-credential implementation. */
+export const projectSourceWithoutLegacyGitSecretId = projectSourceWithoutGitCredential;
+
 export const WorkspacePolicySchema = z
   .object({
     mode: z.enum(["local-bind", "git-clone", "empty-volume", "persistent-volume"]),
@@ -755,7 +918,13 @@ export const WorkspacePolicySchema = z
   })
   .strict();
 
-export const ModelAppSchema = z.enum(["codex", "claude"]);
+export const ModelAppSchema = z.enum(["codex", "claude", "opencode"]);
+/** Wire protocols an upstream model endpoint may expose. Kept independent from the consuming app. */
+export const ModelProtocolSchema = z.enum(["openai-responses", "openai-chat-completions", "anthropic-messages"]);
+export const ModelNameEntrySchema = z.object({
+  name: z.string().trim().min(1).max(240),
+  order: z.number().int().min(0).max(1_000_000).default(0),
+}).strict();
 
 export const ProjectSchema = z
   .object({
@@ -764,7 +933,6 @@ export const ProjectSchema = z
     source: ProjectSourceSchema,
     defaultImageSelection: ImageSelectionSchema.optional(),
     defaultNodeId: IdSchema.optional(),
-    defaultRuntimeId: IdSchema.optional(),
     workspacePolicy: WorkspacePolicySchema,
     labels: LabelsSchema,
     createdAt: TimestampSchema,
@@ -779,6 +947,11 @@ export const ModelConfigSchema = z
     endpoint: z.string().trim().min(1).max(2048),
     key: z.string().trim().min(1).max(4096),
     model: z.string().trim().min(1).max(240),
+    // Ordered names served by this endpoint; legacy records are normalized from `model`.
+    modelNames: z.array(ModelNameEntrySchema).max(256).default([]),
+    // Empty is accepted for N-1 records; owners normalize it from the legacy app field.
+    protocols: z.array(ModelProtocolSchema).max(3).default([]),
+    /** @deprecated Compatibility discriminator for pre-protocol model records. */
     app: ModelAppSchema,
     enabled: z.boolean().default(true),
     order: z.number().int().min(0).max(1_000_000).default(0),
@@ -801,10 +974,20 @@ export const NodeModelPublicRecordSchema = PublicModelConfigSchema.extend({
 
 export const NodeModelAssignmentSchema = z.object({
   instanceId: IdSchema,
+  modelEntityIds: z.array(IdSchema).max(64).transform((ids) => [...new Set(ids)]).optional(),
   codexModelHash: IdSchema.optional(),
   claudeModelHash: IdSchema.optional(),
+  opencodeModelHash: IdSchema.optional(),
   updatedAt: TimestampSchema,
-}).strict();
+}).strict().transform((assignment) => ({
+  ...assignment,
+  // Compatibility for v0.0.23: migrate the per-agent hashes into the ordered
+  // entity collection when reading legacy node-agent persistence or responses.
+  modelEntityIds: assignment.modelEntityIds?.length
+    ? assignment.modelEntityIds
+    : [...new Set([assignment.codexModelHash, assignment.claudeModelHash, assignment.opencodeModelHash]
+      .filter((id): id is string => Boolean(id)))],
+}));
 
 export const ModelLocationSchema = z.discriminatedUnion("type", [
   z.object({
@@ -854,13 +1037,24 @@ export const DeployNodeModelSchema = ModelConfigSchema;
 
 export const UpdateNodeModelAssignmentSchema = z.object({
   modelSelection: ModelSelectionSchema,
+  modelEntityIds: z.array(IdSchema).max(64).transform((ids) => [...new Set(ids)]).optional(),
   codexModelHash: IdSchema.optional(),
   claudeModelHash: IdSchema.optional(),
-}).strict();
+  opencodeModelHash: IdSchema.optional(),
+}).strict().transform((assignment) => ({
+  ...assignment,
+  modelEntityIds: assignment.modelEntityIds
+    || assignment.modelSelection.modelEntityIds
+    || [...new Set([assignment.codexModelHash, assignment.claudeModelHash, assignment.opencodeModelHash]
+      .filter((id): id is string => Boolean(id)))],
+}));
 
-export function modelConfigHash(input: Pick<z.infer<typeof ModelConfigSchema>, "app" | "endpoint" | "key" | "model">) {
+export function modelConfigHash(input: Pick<z.infer<typeof ModelConfigSchema>, "app" | "endpoint" | "key" | "model"> & { protocols?: z.infer<typeof ModelProtocolSchema>[] }) {
+  const app = ModelAppSchema.parse(input.app);
   const canonical = {
-    app: ModelAppSchema.parse(input.app),
+    // Compatibility for v0.0.24: N-1 node agents validate this legacy identity shape.
+    // Protocol capabilities remain mutable metadata until the support window advances.
+    app,
     endpoint: ModelConfigSchema.shape.endpoint.parse(input.endpoint),
     key: ModelConfigSchema.shape.key.parse(input.key),
     model: ModelConfigSchema.shape.model.parse(input.model),
@@ -1223,6 +1417,37 @@ export const NodeConnectionPathSchema = z.discriminatedUnion("kind", [
   }).strict(),
 ]);
 
+/** Ephemeral public diagnostics for the control-plane/node-agent connection. */
+export const NodeConnectionDiagnosticsSchema = z.object({
+  // Compatibility for v0.0.21: older Control Plane responses omit this
+  // additive runtime projection, so every consumer must accept its absence.
+  pingRttMs: z.number().nonnegative().optional(),
+  pingRttP95Ms: z.number().nonnegative().optional(),
+  consecutiveReconnects: z.number().int().nonnegative(),
+  nextRetryAt: TimestampSchema.optional(),
+}).strict();
+
+export type NodeConnectionDiagnostics = z.infer<typeof NodeConnectionDiagnosticsSchema>;
+
+export const NodeJoinedEventSchema = z.object({
+  nodeId: IdSchema,
+  // Compatibility for v0.0.21: events emitted by older control planes omit
+  // inviteId. Consumers still refresh topology but cannot complete a wizard.
+  inviteId: IdSchema.optional(),
+}).strict();
+
+export const NodeJoinInviteStatusSchema = z.discriminatedUnion("status", [
+  z.object({
+    id: IdSchema,
+    status: z.literal("pending"),
+  }).strict(),
+  z.object({
+    id: IdSchema,
+    status: z.literal("completed"),
+    nodeId: IdSchema,
+  }).strict(),
+]);
+
 export const NodeControlPlaneProxyStateSchema = z.object({
   reachability: z.enum(["unknown", "reachable", "unreachable"]),
   bindingStatus: z.enum(["unknown", "active", "revoked"]),
@@ -1290,6 +1515,17 @@ export const NodeSchema = z
       });
     }
   });
+
+/** Minimal public projection for converging one node's ephemeral connection state. */
+export const NodeStateProjectionEventSchema = z.object({
+  nodeId: IdSchema,
+  status: z.enum(["unknown", "online", "offline", "degraded"]),
+  health: z.enum(["unknown", "ok", "degraded", "failed"]),
+  lastSeenAt: TimestampSchema.nullable(),
+  connectionPhase: z.enum(["connecting", "handshaking", "healthy", "reconnecting", "suspect", "offline"]).nullable(),
+  connectionDiagnostics: NodeConnectionDiagnosticsSchema.nullable(),
+  proxyState: NodeControlPlaneProxyStateSchema.nullable(),
+}).strict();
 
 export function sanitizeStoredNode(input: unknown, onWarning?: (warning: { field: string }) => void) {
   if (!input || typeof input !== "object" || Array.isArray(input)) return input;
@@ -1372,10 +1608,97 @@ export const InstanceResourceMetricsEventType = {
   Snapshot: "instance.metrics.snapshot",
 } as const;
 
+export const NodeAgentManagedGitCapabilitiesSchema = z.object({
+  registry: z.boolean().default(false),
+  runtimeBroker: z.boolean().default(false),
+  workspaceProvisioning: z.object({
+    docker: z.boolean().default(false),
+    kubernetes: z.boolean().default(false),
+    local: z.boolean().default(false),
+  }).strip().default({ docker: false, kubernetes: false, local: false }),
+}).strip();
+
+export const NodeAgentManagedModelCapabilitiesSchema = z.object({
+  multiEntityAssignment: z.boolean().default(false),
+  privateModelCatalog: z.boolean().default(false),
+}).strip();
+
 export const NodeAgentCapabilitiesSchema = z.object({
   modelEndpointProbe: z.boolean().optional(),
   aiSessionHistoryLimit: z.boolean().optional(),
+  aiSessionAttachmentRetention: z.boolean().optional(),
+  aiSessionFileAttachmentLimit: z.boolean().optional(),
+  folderPlaces: z.boolean().optional(),
+  localFolderNameUpdate: z.boolean().optional(),
+  // Additive capability: absent on v0.0.21 node-agents.
+  managedGitCredentials: NodeAgentManagedGitCapabilitiesSchema.optional(),
+  // Compatibility for v0.0.23: absence keeps the legacy single-model projection.
+  managedModels: NodeAgentManagedModelCapabilitiesSchema.optional(),
 }).strip();
+
+export type NodeAgentCapabilities = z.infer<typeof NodeAgentCapabilitiesSchema>;
+
+export function normalizeNodeAgentCapabilities(capabilities: unknown): NodeAgentCapabilities & {
+  managedGitCredentials: z.infer<typeof NodeAgentManagedGitCapabilitiesSchema>;
+  managedModels: z.infer<typeof NodeAgentManagedModelCapabilitiesSchema>;
+} {
+  const parsed = NodeAgentCapabilitiesSchema.safeParse(capabilities);
+  const current = parsed.success ? parsed.data : {};
+  return {
+    ...current,
+    managedGitCredentials: NodeAgentManagedGitCapabilitiesSchema.parse(current.managedGitCredentials || {}),
+    managedModels: NodeAgentManagedModelCapabilitiesSchema.parse(current.managedModels || {}),
+  };
+}
+
+export function supportsNodeMultiEntityModelAssignment(capabilities: unknown) {
+  return normalizeNodeAgentCapabilities(capabilities).managedModels.multiEntityAssignment;
+}
+
+export function supportsNodePrivateModelCatalog(capabilities: unknown) {
+  return normalizeNodeAgentCapabilities(capabilities).managedModels.privateModelCatalog;
+}
+
+export function supportsNodeManagedGitCredentialRegistry(capabilities: unknown) {
+  return normalizeNodeAgentCapabilities(capabilities).managedGitCredentials.registry;
+}
+
+export function supportsNodeGitCredentialRuntimeBroker(capabilities: unknown) {
+  return normalizeNodeAgentCapabilities(capabilities).managedGitCredentials.runtimeBroker;
+}
+
+export function supportsNodeGitWorkspaceProvisioning(
+  capabilities: unknown,
+  runtime: "docker" | "kubernetes" | "local",
+) {
+  return normalizeNodeAgentCapabilities(capabilities).managedGitCredentials.workspaceProvisioning[runtime];
+}
+
+export function supportsNodeFolderPlaces(capabilities: unknown) {
+  return NodeAgentCapabilitiesSchema.safeParse(capabilities).data?.folderPlaces === true;
+}
+
+export function supportsNodeLocalFolderNameUpdate(capabilities: unknown) {
+  return NodeAgentCapabilitiesSchema.safeParse(capabilities).data?.localFolderNameUpdate === true;
+}
+
+export function supportsNodeAiSessionFileAttachmentLimit(capabilities: unknown) {
+  return NodeAgentCapabilitiesSchema.safeParse(capabilities).data?.aiSessionFileAttachmentLimit === true;
+}
+
+export const NodeAgentEventTransportHealthSchema = z.object({
+  status: z.enum(["healthy", "congested", "recovering"]),
+  activeOutputs: z.number().int().nonnegative(),
+  bufferedBytes: z.number().int().nonnegative(),
+  peakBufferedBytes: z.number().int().nonnegative(),
+  coalescedEvents: z.number().int().nonnegative(),
+  // Compatibility for v0.0.23: older node agents do not report payload limits.
+  oversizedEvents: z.number().int().nonnegative().optional(),
+  peakEventBytes: z.number().int().nonnegative().optional(),
+  congestedSince: TimestampSchema.optional(),
+  lastCongestedAt: TimestampSchema.optional(),
+}).strip();
+export type NodeAgentEventTransportHealth = z.infer<typeof NodeAgentEventTransportHealthSchema>;
 
 export const NodeAgentHealthSchema = z
   .object({
@@ -1405,6 +1728,8 @@ export const NodeAgentHealthSchema = z
       totalDurationMs: z.number().nonnegative(),
       maxResponseBytes: z.number().int().nonnegative(),
     }).partial().strip().optional(),
+    // Additive health diagnostic: absent on node-agents before v0.0.25.
+    eventTransport: NodeAgentEventTransportHealthSchema.optional(),
     serverTime: TimestampSchema.optional(),
   })
   .strip();
@@ -1467,6 +1792,12 @@ export const NodeAgentControlPlaneConnectionSchema = z
     createdAt: TimestampSchema,
     updatedAt: TimestampSchema,
     status: z.enum(["disabled", "connecting", "connected", "reconnecting", "failed"]),
+    // Compatibility for v0.0.21: connection diagnostics are additive because
+    // older node agents omit them and older control planes ignore them.
+    pingRttMs: z.number().nonnegative().optional(),
+    pingRttP95Ms: z.number().nonnegative().optional(),
+    consecutiveReconnects: z.number().int().nonnegative().optional(),
+    nextRetryAt: TimestampSchema.optional(),
     lastConnectedAt: TimestampSchema.optional(),
     lastDisconnectedAt: TimestampSchema.optional(),
     error: z.string().optional(),
@@ -1539,6 +1870,14 @@ export const NodeFolderTreeEntrySchema: z.ZodType<NodeFolderTreeEntry> = z.lazy(
   })
   .passthrough());
 
+export const NodeFolderPlaceSchema = z.object({
+  kind: z.enum(["home", "root"]),
+  name: z.string().trim().min(1),
+  path: z.string().trim().min(1).max(4096),
+}).passthrough();
+
+export type NodeFolderPlace = z.infer<typeof NodeFolderPlaceSchema>;
+
 export const NodeAgentInstanceProxyRawResponseSchema = z
   .object({
     status: z.number().int().min(100).max(599).optional(),
@@ -1557,6 +1896,14 @@ export const InstanceTargetSchema = z
     logs: z.string().trim().max(2048).optional(),
     status: z.enum(["unknown", "reachable", "endpoint-unreachable"]).default("unknown"),
   })
+  .strict();
+
+// Compatibility for v0.0.21: controlled instances used to report the node-owned
+// runtime target. Keep accepting that wire shape during the N-1 window; the
+// node-agent report state transition deliberately discards every field. Runtime
+// adapters are the sole authority for instance endpoints.
+const LegacyControlledInstanceReportedTargetSchema = z
+  .object({ ...InstanceTargetSchema.shape })
   .strict();
 
 export const InstanceAccessSchema = z
@@ -1614,11 +1961,15 @@ export const ControlledInstanceSchema = z
     config: z
       .object({
         autoImportAgentConfigs: z.boolean().default(true),
+        codexConfigEnabled: z.boolean().default(true),
+        codexHomeMode: z.enum(["default", "taskhandoff"]).default("taskhandoff"),
         defaultCodexPermissionMode: AiSessionPermissionModeSchema.default("ask"),
         aiSessionHistoryLimit: z.number().int().min(1).max(AI_SESSION_HISTORY_MAX_LIMIT).default(AI_SESSION_HISTORY_DEFAULT_LIMIT),
+        aiSessionAttachmentRetentionDays: z.number().int().min(0).max(AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS).default(AI_SESSION_ATTACHMENT_RETENTION_DEFAULT_DAYS),
+        aiSessionMaxFileAttachmentBytes: z.number().int().positive().max(AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES).default(AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES),
       })
       .strict()
-      .default({ autoImportAgentConfigs: true, defaultCodexPermissionMode: "ask", aiSessionHistoryLimit: AI_SESSION_HISTORY_DEFAULT_LIMIT }),
+      .default({ autoImportAgentConfigs: true, codexConfigEnabled: true, codexHomeMode: "taskhandoff", defaultCodexPermissionMode: "ask", aiSessionHistoryLimit: AI_SESSION_HISTORY_DEFAULT_LIMIT, aiSessionAttachmentRetentionDays: AI_SESSION_ATTACHMENT_RETENTION_DEFAULT_DAYS, aiSessionMaxFileAttachmentBytes: AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES }),
     workspace: WorkspaceStatusSchema.default({ status: "unknown" }),
     target: InstanceTargetSchema.default({ strategy: "direct-port", status: "unknown" }),
     access: InstanceAccessSchema,
@@ -1671,6 +2022,30 @@ export const ControlledInstanceSchema = z
     updatedAt: TimestampSchema,
   })
   .strict();
+
+const NodeAgentInstanceLifecycleResultWireSchema = z.union([
+  ControlledInstanceSchema.transform((instance) => ({ instance, gitWorkspaceProvisioningOperationId: undefined })),
+  z.object({
+    instance: ControlledInstanceSchema,
+    gitWorkspaceProvisioningOperationId: IdSchema.optional(),
+  }).strict(),
+]);
+
+export const NodeAgentInstanceLifecycleResultSchema = z.preprocess((input) => {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return input;
+  const source = input as Record<string, unknown>;
+  // Compatibility for v0.0.21 bare instance responses, while allowing independently
+  // upgraded node agents to add fields to the lifecycle response and instance snapshot.
+  if (source.instance && typeof source.instance === "object" && !Array.isArray(source.instance)) {
+    return {
+      instance: sanitizeStoredControlledInstance(source.instance),
+      ...(typeof source.gitWorkspaceProvisioningOperationId === "string"
+        ? { gitWorkspaceProvisioningOperationId: source.gitWorkspaceProvisioningOperationId }
+        : {}),
+    };
+  }
+  return sanitizeStoredControlledInstance(source);
+}, NodeAgentInstanceLifecycleResultWireSchema);
 
 export const InstanceLifecycleEventType = {
   Snapshot: "instance.lifecycle.snapshot",
@@ -1742,8 +2117,8 @@ export function sanitizeStoredControlledInstance(
   next.aiSessions = sanitizeStoredAiSessions(source.aiSessions, onWarning, typeof source.id === "string" ? source.id : undefined);
   next.triggers = sanitizeStoredTriggers(source.triggers, onWarning, typeof source.id === "string" ? source.id : undefined);
   next.apps = sanitizeStoredStrictObject(ControlledInstanceSchema.shape.apps.unwrap(), pickObjectFields(source.apps, ["runningCount", "problemCount", "updatedAt", "revision"]), "apps", onWarning, typeof source.id === "string" ? source.id : undefined) || { runningCount: 0, problemCount: 0 };
-  next.config = sanitizeStoredStrictObject(ControlledInstanceSchema.shape.config.unwrap(), pickObjectFields(source.config, ["autoImportAgentConfigs", "defaultCodexPermissionMode", "aiSessionHistoryLimit"]), "config", onWarning, typeof source.id === "string" ? source.id : undefined) || { autoImportAgentConfigs: true, defaultCodexPermissionMode: "ask", aiSessionHistoryLimit: AI_SESSION_HISTORY_DEFAULT_LIMIT };
-  next.modelSelection = sanitizeStoredStrictObject(ModelSelectionSchema.unwrap(), pickObjectFields(source.modelSelection, ["codexModelHash", "claudeModelHash"]), "modelSelection", onWarning, typeof source.id === "string" ? source.id : undefined) || {};
+  next.config = sanitizeStoredStrictObject(ControlledInstanceSchema.shape.config.unwrap(), pickObjectFields(source.config, ["autoImportAgentConfigs", "codexConfigEnabled", "codexHomeMode", "defaultCodexPermissionMode", "aiSessionHistoryLimit", "aiSessionAttachmentRetentionDays", "aiSessionMaxFileAttachmentBytes"]), "config", onWarning, typeof source.id === "string" ? source.id : undefined) || { autoImportAgentConfigs: true, codexConfigEnabled: true, codexHomeMode: "taskhandoff", defaultCodexPermissionMode: "ask", aiSessionHistoryLimit: AI_SESSION_HISTORY_DEFAULT_LIMIT, aiSessionAttachmentRetentionDays: AI_SESSION_ATTACHMENT_RETENTION_DEFAULT_DAYS, aiSessionMaxFileAttachmentBytes: AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES };
+  next.modelSelection = sanitizeStoredStrictObject(ModelSelectionSchema.unwrap(), pickObjectFields(source.modelSelection, ["modelEntityIds", "codexModelHash", "claudeModelHash", "opencodeModelHash"]), "modelSelection", onWarning, typeof source.id === "string" ? source.id : undefined) || {};
   next.imageSnapshot = sanitizeStoredInstanceImageSnapshot(
     source.imageSnapshot,
     source.imageId,
@@ -1854,7 +2229,7 @@ function sanitizeStoredProjectSource(input: unknown, onWarning?: (warning: { ins
       : ["type", "repositoryId", "url", "provider", "ref", "auth", "clone"];
   const candidate = pickObjectFields(source, allowed) as Record<string, unknown>;
   if (type !== "local-folder") {
-    const ref = sanitizeStoredStrictObject(GitRefSchema, pickObjectFields(source.ref, ["type", "name", "commit"]), "source.ref", onWarning, instanceId);
+    const ref = sanitizeStoredGitRef(source.ref, onWarning, instanceId);
     const auth = sanitizeStoredStrictObject(GitAuthSchema, pickObjectFields(source.auth, ["type", "secretId"]), "source.auth", onWarning, instanceId);
     const clone = sanitizeStoredStrictObject(GitCloneOptionsSchema, pickObjectFields(source.clone, ["depth", "submodules", "lfs", "subdirectory"]), "source.clone", onWarning, instanceId);
     if (ref) candidate.ref = ref; else delete candidate.ref;
@@ -1867,6 +2242,24 @@ function sanitizeStoredProjectSource(input: unknown, onWarning?: (warning: { ins
     return parsed;
   }
   return candidate;
+}
+
+function sanitizeStoredGitRef(input: unknown, onWarning?: (warning: { instanceId?: string; field: string }) => void, instanceId?: string) {
+  const source = input && typeof input === "object" && !Array.isArray(input) ? input as Record<string, unknown> : undefined;
+  const direct = GitRefSchema.safeParse(pickObjectFields(source, ["type", "name", "commit"]));
+  if (direct.success) return direct.data;
+  // Compatibility for v0.0.21: malformed ref shapes were accepted. Preserve the
+  // executor's old precedence (commit before name), then fall back to the former default.
+  const commit = typeof source?.commit === "string" ? source.commit.trim() : "";
+  const name = typeof source?.name === "string" ? source.name.trim() : "";
+  const migrated = commit
+    ? GitRefSchema.safeParse({ type: "commit", commit })
+    : name
+      ? GitRefSchema.safeParse({ type: source?.type === "tag" ? "tag" : "branch", name })
+      : GitRefSchema.safeParse({ type: "branch", name: "main" });
+  if (!migrated.success) return undefined;
+  onWarning?.({ instanceId, field: "source.ref" });
+  return migrated.data;
 }
 
 function sanitizeStoredAiSessions(input: unknown, onWarning?: (warning: { instanceId?: string; field: string }) => void, instanceId?: string) {
@@ -2075,7 +2468,7 @@ export const ControlledInstanceRegisterSchema = z
     controlMode: z.enum(["standalone", "controlled"]).default("controlled"),
     capabilities: ControlledInstanceCapabilitiesSchema.default(defaultControlledInstanceCapabilities),
     appInventory: InstanceAppInventorySchema.optional(),
-    target: InstanceTargetSchema.default({ strategy: "direct-port", status: "unknown" }),
+    target: LegacyControlledInstanceReportedTargetSchema.optional(),
     workspace: WorkspaceStatusSchema.default({ status: "unknown" }),
     registrationToken: z.string().trim().max(240).optional(),
     processIncarnationId: z.string().trim().min(1).max(120).optional(),
@@ -2099,7 +2492,7 @@ export const ControlledInstanceHeartbeatSchema = z
     aiSessions: ControlledInstanceSchema.shape.aiSessions.optional(),
     triggers: ControlledInstanceSchema.shape.triggers.optional(),
     workspace: WorkspaceStatusSchema.optional(),
-    target: InstanceTargetSchema.partial().optional(),
+    target: LegacyControlledInstanceReportedTargetSchema.optional(),
     processIncarnationId: z.string().trim().min(1).max(120).optional(),
   })
   .strict()
@@ -2279,6 +2672,9 @@ export type ImagePullTerminalFinished = z.infer<typeof ImagePullTerminalFinished
 export type ImagePullProgress = z.infer<typeof ImagePullProgressSchema>;
 export type NodeImageAvailability = z.infer<typeof NodeImageAvailabilitySchema>;
 export type Node = z.infer<typeof NodeSchema>;
+export type NodeStateProjectionEvent = z.infer<typeof NodeStateProjectionEventSchema>;
+export type NodeJoinedEvent = z.infer<typeof NodeJoinedEventSchema>;
+export type NodeJoinInviteStatus = z.infer<typeof NodeJoinInviteStatusSchema>;
 export type NodeRuntime = z.infer<typeof NodeRuntimeSchema>;
 export type InstanceResourceMetrics = z.infer<typeof InstanceResourceMetricsSchema>;
 export type NodeAgentHealth = z.infer<typeof NodeAgentHealthSchema>;

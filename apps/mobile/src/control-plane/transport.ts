@@ -1,5 +1,11 @@
 import type { z } from 'zod';
 import type { ControlPlaneClientTransport } from '@task-handoff/control-plane-client';
+import {
+  EventWireEnvelopeSchema,
+  normalizeEventEnvelope,
+  type AiSessionTransientSubscription,
+  type EventScope,
+} from '@task-handoff/protocol/events';
 
 import type {
   MobileControlPlaneCapabilities,
@@ -13,14 +19,22 @@ export type MobileControlPlaneProbe = {
 };
 
 export type MobileControlPlaneEvent = {
+  id?: string;
+  replay?: boolean;
   type: string;
   topic?: string;
   payload?: unknown;
   scope?: { instanceId?: string; nodeId?: string };
 };
 
+export function normalizeMobileControlPlaneEvent(input: unknown, fallbackScope?: EventScope): MobileControlPlaneEvent | undefined {
+  const parsed = EventWireEnvelopeSchema.safeParse(input);
+  return parsed.success ? normalizeEventEnvelope(parsed.data, fallbackScope) : undefined;
+}
+
 export type MobileControlPlaneEventHandlers = {
   topics?: readonly string[];
+  aiSessionTransient?: AiSessionTransientSubscription;
   onOpen(): void;
   onEvent(event: MobileControlPlaneEvent): void;
   onError(error: MobileControlPlaneTransportError): void;
@@ -29,6 +43,7 @@ export type MobileControlPlaneEventHandlers = {
 
 export interface MobileControlPlaneEventConnection {
   close(): void;
+  updateAiSessionTransient?(subscription: AiSessionTransientSubscription): void;
 }
 
 export type MobileAppSessionTtyHandlers = {
@@ -49,7 +64,7 @@ export interface MobileAppSessionTtyConnection {
 
 export interface MobileControlPlaneTransport extends ControlPlaneClientTransport {
   readonly profile: MobileControlPlaneProfile;
-  request<T>(path: string, schema: z.ZodType<T>, init?: RequestInit): Promise<T>;
+  request<T>(path: string, schema: z.ZodType<T>, init?: RequestInit, onUploadProgress?: (progress: number) => void): Promise<T>;
   revalidate?(): Promise<void>;
   connectEvents(handlers: MobileControlPlaneEventHandlers): MobileControlPlaneEventConnection;
   connectAppSessionTty(instanceId: string, sessionId: string, handlers: MobileAppSessionTtyHandlers): MobileAppSessionTtyConnection;

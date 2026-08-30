@@ -5,8 +5,23 @@ export const triggers = {
   title: "触发器",
   libraryTitle: "触发器库 · {count}",
   description: "汇总来自控制平面和受控实例的模板。",
+  feedback: {
+    partialFailure: "操作已完成，但有 {count} 个节点或实例未更新：{targets}。请在其恢复后重试。",
+    unknownTarget: "未知目标",
+  },
   empty: "暂无触发器模板。",
+  emptyDescription: "创建触发器，通过计划、文件变更或 AI 会话事件自动执行任务。",
   filter: "筛选模板",
+  filters: {
+    source: "触发来源",
+    status: "触发器状态",
+    allSources: "全部来源",
+    allStatuses: "全部状态",
+    filteredFrom: "共 {count} 个",
+    noMatches: "没有匹配的触发器",
+    noMatchesDescription: "请尝试其他关键词，或清除当前筛选条件。",
+    clear: "清除筛选",
+  },
   overview: { label: "触发器状态概览", templates: "模板", deployments: "部署", running: "运行中", errors: "错误" },
   deployments: {
     title: "部署位置",
@@ -17,7 +32,7 @@ export const triggers = {
     dialogDescription: "选择一个 AI 会话，触发器将在该会话所属的受控实例中运行。",
     noSessions: "暂无可用的 AI 会话。",
   },
-  activity: { title: "最近活动", latest: "最近一次 {time}" },
+  activity: { title: "最近活动", latest: "最近一次 {time}", count: "{count} 次近期运行", empty: "暂无近期运行记录。" },
   create: {
     action: "新建触发器",
     close: "关闭新建触发器对话框",
@@ -160,6 +175,8 @@ export const triggers = {
     errors: "{count} 个错误",
   },
   actions: {
+    configure: "配置",
+    more: "更多操作",
     edit: "编辑",
     editTitle: "编辑触发器模板",
     delete: "删除",
@@ -167,6 +184,8 @@ export const triggers = {
     run: "运行",
     deploy: "部署到会话",
     unbind: "解除部署",
+    deleteConfirmTitle: "删除触发器？",
+    deleteConfirmDescription: "将删除“{name}”及其控制平面部署，此操作无法撤销。",
   },
   status: {
     enabled: "已启用",

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { AiSessionCreateInputSchema, AiSessionGitSelectionSchema, AiSessionRuntimePathSchema } from "./ai-sessions.ts";
+import { AiSessionCreateInputSchema, AiSessionCreateRefInputSchema, AiSessionGitSelectionSchema, AiSessionRuntimePathSchema } from "./ai-sessions.ts";
 
 const IdSchema = z.string().trim().min(1).max(160).regex(/^[a-zA-Z0-9][a-zA-Z0-9_.:-]*$/);
 const TimestampSchema = z.string().datetime();
@@ -270,6 +270,11 @@ export const RepositoryErrorCodeSchema = z.enum([
   "REPOSITORY_HOOK_FAILED",
   "REPOSITORY_SIGNING_FAILED",
   "REPOSITORY_AUTHENTICATION_FAILED",
+  "REPOSITORY_CREDENTIAL_MISSING",
+  "REPOSITORY_CREDENTIAL_AMBIGUOUS",
+  "REPOSITORY_REMOTE_UNSUPPORTED",
+  "REPOSITORY_HOST_KEY_REQUIRED",
+  "REPOSITORY_AUTHENTICATION_REJECTED",
   "REPOSITORY_NON_FAST_FORWARD",
   "REPOSITORY_UPSTREAM_MISSING",
   "REPOSITORY_COMMAND_TIMEOUT",
@@ -341,14 +346,14 @@ export const AiSessionWorkspaceSelectionSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("worktree"), repositoryContextId: IdSchema, worktreeId: IdSchema }).strict(),
 ]);
 export const RepositoryStartAiSessionRequestSchema = z.object({
-  agent: z.enum(["codex", "claude"]),
+  agent: z.enum(["codex", "claude", "opencode"]),
   workspaceSelection: AiSessionWorkspaceSelectionSchema,
   message: z.string().trim().min(1).max(20000),
   clientRequestId: IdSchema,
   permissionMode: z.enum(["ask", "auto-review", "full-access"]).optional(),
 }).strict();
 export const RepositoryCreateWorktreeAiSessionRequestSchema = z.object({
-  agent: z.enum(["codex", "claude"]),
+  agent: z.enum(["codex", "claude", "opencode"]),
   worktree: RepositoryCreateWorktreeRequestSchema,
   message: z.string().trim().min(1).max(20000),
   clientRequestId: IdSchema,
@@ -387,6 +392,11 @@ export const RepositoryAiSessionWorkspaceInspectSchema = z.object({
 export const RepositoryAiSessionGitSelectionSchema = AiSessionGitSelectionSchema;
 
 export const RepositoryWorkspaceAiSessionCreateSchema = AiSessionCreateInputSchema.extend({
+  gitSelection: RepositoryAiSessionGitSelectionSchema,
+}).strict();
+
+export const RepositoryWorkspaceAiSessionCreateRefSchema = AiSessionCreateRefInputSchema.extend({
+  cwd: AiSessionRuntimePathSchema,
   gitSelection: RepositoryAiSessionGitSelectionSchema,
 }).strict();
 

@@ -37,8 +37,10 @@ export function createControlPlaneAppSessionsApi(transport: ControlPlaneClientTr
       const query = instanceId ? `?instanceId=${encodeURIComponent(instanceId)}` : "";
       return requestData(`/api/app-sessions${query}`, ControlPlaneAppSessionsSchema, { signal });
     },
-    refresh(signal?: AbortSignal) {
-      return requestData("/api/app-sessions?refresh=true", ControlPlaneAppSessionsSchema, { signal });
+    refresh(signal?: AbortSignal, instanceId?: string) {
+      const query = new URLSearchParams({ refresh: "true" });
+      if (instanceId) query.set("instanceId", instanceId);
+      return requestData(`/api/app-sessions?${query}`, ControlPlaneAppSessionsSchema, { signal });
     },
     launch(instanceId: string, input: LaunchAppSessionInput) {
       const body = LaunchAppSessionInputSchema.parse(input);

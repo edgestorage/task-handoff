@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { repositoryFileLocation, repositoryRelativeFilePath } from "../src/apps/control-plane/instance-detail/repositoryFilePath.ts";
+import { classifyMarkdownLink } from "../src/components/ai-session/markdown-link-target.ts";
 
 const context = {
   availability: "available",
@@ -29,6 +30,12 @@ test("Markdown file paths resolve against the authoritative repository context",
     ...context,
     repositoryRoot: "//SERVER/Workspace/Project",
   }), "README.md");
+});
+
+test("Markdown link targets distinguish safe web links from file paths and unknown schemes", () => {
+  assert.deepEqual(classifyMarkdownLink("https://example.com/a"), { kind: "web", href: "https://example.com/a", url: "https://example.com/a" });
+  assert.equal(classifyMarkdownLink("javascript:alert(1)").kind, "unsupported");
+  assert.deepEqual(classifyMarkdownLink("README.md", context), { kind: "file", href: "README.md", path: "packages/ui/README.md" });
 });
 
 test("Markdown file paths cannot escape or address a different repository", () => {

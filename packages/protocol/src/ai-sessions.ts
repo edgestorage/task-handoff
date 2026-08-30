@@ -4,7 +4,13 @@ export const AI_SESSION_MAX_MESSAGE_ATTACHMENTS = 6;
 export const AI_SESSION_MAX_REFERENCES = 20;
 export const AI_SESSION_MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 export const AI_SESSION_MAX_INLINE_FILE_BYTES = 500 * 1024;
+export const AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES = AI_SESSION_MAX_INLINE_FILE_BYTES;
+export const AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES = AI_SESSION_MAX_ATTACHMENT_BYTES;
 export const AI_SESSION_MAX_MESSAGE_ATTACHMENT_BYTES = 40 * 1024 * 1024;
+export const AI_SESSION_ATTACHMENT_UPLOAD_BODY_LIMIT = AI_SESSION_MAX_ATTACHMENT_BYTES + 1024 * 1024;
+export const AI_SESSION_ATTACHMENT_DRAFT_STREAM_CHUNK_BYTES = 256 * 1024;
+export const AI_SESSION_ATTACHMENT_DRAFT_STREAM_BODY_LIMIT = 2 * AI_SESSION_ATTACHMENT_DRAFT_STREAM_CHUNK_BYTES;
+export const AI_SESSION_ATTACHMENT_DRAFT_STREAM_TTL_MS = 10 * 60 * 1000;
 export const AiSessionEventTopic = "ai.sessions";
 export const AiSessionEventType = {
   Snapshot: "ai-session.snapshot",
@@ -23,6 +29,71 @@ export const AI_SESSION_DELTA_RETENTION_MS = AI_SESSION_TOMBSTONE_RETENTION_MS;
 export const AiAgentKindSchema = z.string().trim().min(1).max(80);
 
 export const AiSessionCreationSourceSchema = z.enum(["app-session", "ai-session"]);
+
+export const AiSessionAttachmentKindSchema = z.enum(["image", "file"]);
+
+const AiSessionAttachmentDraftFields = {
+  scopeType: z.enum(["session", "create-request"]),
+  scopeId: z.string().trim().min(1).max(160),
+  kind: AiSessionAttachmentKindSchema,
+  name: z.string().trim().min(1).max(240),
+  mime: z.string().trim().min(1).max(120),
+};
+
+export const AiSessionAttachmentDraftUploadQuerySchema = z.object({
+  ...AiSessionAttachmentDraftFields,
+  size: z.coerce.number().int().positive().max(AI_SESSION_MAX_ATTACHMENT_BYTES),
+}).strict();
+
+export const AiSessionAttachmentDraftStreamIdSchema = z.string().regex(/^cia_[a-f0-9]{24}$/);
+
+export const AiSessionAttachmentDraftStreamCreateInputSchema = z.object({
+  attachmentId: AiSessionAttachmentDraftStreamIdSchema,
+  ...AiSessionAttachmentDraftFields,
+  size: z.number().int().positive().max(AI_SESSION_MAX_ATTACHMENT_BYTES),
+}).strict();
+
+export const AiSessionAttachmentDraftStreamOffsetQuerySchema = z.object({
+  offset: z.coerce.number().int().nonnegative(),
+}).strict();
+
+export const AiSessionAttachmentDraftStreamOffsetSchema = z.object({
+  attachmentId: AiSessionAttachmentDraftStreamIdSchema,
+  offset: z.number().int().nonnegative(),
+});
+
+export const AiSessionAttachmentDraftSchema = z.object({
+  id: AiSessionAttachmentDraftStreamIdSchema,
+  kind: AiSessionAttachmentKindSchema,
+  name: z.string().trim().min(1).max(240),
+  mime: z.string().trim().min(1).max(120),
+  size: z.number().int().positive().max(AI_SESSION_MAX_ATTACHMENT_BYTES),
+  expiresAt: z.string().datetime(),
+});
+
+export function isAiSessionInlineImageMime(mime: string) {
+  return ["image/bmp", "image/gif", "image/jpeg", "image/png", "image/webp"].includes(mime.split(";", 1)[0]!.trim().toLowerCase());
+}
+
+const AiSessionMessageAttachmentBaseSchema = z.object({
+  id: z.string().trim().min(1).max(120),
+  kind: AiSessionAttachmentKindSchema,
+  name: z.string().trim().min(1).max(240),
+  mime: z.string().trim().min(1).max(120),
+  size: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+});
+
+export const AiSessionConversationAttachmentContentStateSchema = z.enum(["available", "expired", "missing"]);
+
+export const AiSessionConversationAttachmentSchema = AiSessionMessageAttachmentBaseSchema.extend({
+  contentState: AiSessionConversationAttachmentContentStateSchema.default("available"),
+}).strict();
+
+export const AiSessionUserMessageDetailSchema = z.object({
+  id: z.string().trim().min(1).max(240),
+  text: z.string(),
+  attachments: z.array(AiSessionConversationAttachmentSchema).max(AI_SESSION_MAX_MESSAGE_ATTACHMENTS).default([]),
+}).strict();
 
 export const AiSessionLifecycleSchema = z.enum([
   "running",
@@ -73,6 +144,7 @@ const AiSessionTimelineItemBaseSchema = z.object({
 export const AiSessionTimelineUserMessageSchema = AiSessionTimelineItemBaseSchema.extend({
   type: z.literal("user-message"),
   text: z.string(),
+  attachments: z.array(AiSessionConversationAttachmentSchema).max(AI_SESSION_MAX_MESSAGE_ATTACHMENTS).optional(),
 }).strict();
 
 export const AiSessionTimelineAgentMessageSchema = AiSessionTimelineItemBaseSchema.extend({
@@ -165,16 +237,6 @@ export const AiSessionLineageSchema = z.object({
   parentProviderSessionId: z.string().trim().min(1).max(240),
   throughTurnId: z.string().trim().min(1).max(240).optional(),
 }).strict();
-
-export const AiSessionAttachmentKindSchema = z.enum(["image", "file"]);
-
-const AiSessionMessageAttachmentBaseSchema = z.object({
-  id: z.string().trim().min(1).max(120),
-  kind: AiSessionAttachmentKindSchema,
-  name: z.string().trim().min(1).max(240),
-  mime: z.string().trim().min(1).max(120),
-  size: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
-});
 
 export const AiSessionMessageAttachmentSchema = z.union([
   AiSessionMessageAttachmentBaseSchema.extend({
@@ -354,11 +416,32 @@ export const AiSessionRuntimePathSchema = z.object({
   ),
 }).strict();
 
+// Public wire identity only. Endpoint, protocol and credentials remain in the
+// controlled instance's private model catalog.
+export const AiSessionModelSelectionSchema = z.object({
+  modelEntityId: z.string().trim().min(1).max(120),
+  modelName: z.string().trim().min(1).max(240),
+}).strict();
+
+export const AiSessionReasoningEffortSchema = z.enum([
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+  "ultra",
+]);
+export const AI_SESSION_DEFAULT_REASONING_EFFORT = "medium" as const;
+
 export const AiSessionCreateInputSchema = AiSessionMessageInputSchema.extend({
   agent: AiAgentKindSchema,
   cwd: AiSessionRuntimePathSchema,
   cwdFolderId: z.string().trim().min(1).max(120).optional(),
   clientRequestId: z.string().trim().min(1).max(160),
+  modelSelection: AiSessionModelSelectionSchema.optional(),
+  reasoningEffort: AiSessionReasoningEffortSchema.optional(),
 }).strict();
 
 export const AiSessionGitSelectionSchema = z.object({
@@ -371,6 +454,28 @@ export const AiSessionCreateRefInputSchema = AiSessionMessageRefInputSchema.exte
   cwdFolderId: z.string().trim().min(1).max(120).optional(),
   gitSelection: AiSessionGitSelectionSchema.optional(),
   clientRequestId: z.string().trim().min(1).max(160),
+  modelSelection: AiSessionModelSelectionSchema.optional(),
+  reasoningEffort: AiSessionReasoningEffortSchema.optional(),
+}).strict();
+
+export const AiSessionModelSelectionInputSchema = z.object({
+  clientRequestId: z.string().trim().min(1).max(160),
+  modelSelection: AiSessionModelSelectionSchema,
+}).strict();
+
+export const AiSessionModelSelectionActionResponseSchema = z.object({
+  sessionId: z.string().trim().min(1).max(120),
+  accepted: z.literal(true),
+}).strict();
+
+export const AiSessionReasoningEffortInputSchema = z.object({
+  clientRequestId: z.string().trim().min(1).max(160),
+  reasoningEffort: AiSessionReasoningEffortSchema,
+}).strict();
+
+export const AiSessionReasoningEffortActionResponseSchema = z.object({
+  sessionId: z.string().trim().min(1).max(120),
+  accepted: z.literal(true),
 }).strict();
 
 export const AiSessionCreateResultSchema = z.object({
@@ -462,6 +567,7 @@ export const AiSessionControlErrorSchema = z.object({
 export const AiSessionQueuedMessageSchema = z
   .object({
     id: z.string().trim().min(1).max(120),
+    messageId: z.string().trim().min(1).max(240).optional(),
     message: z.string().trim().min(1).max(20000),
     attachments: z.array(AiSessionMessageAttachmentMetaSchema).max(AI_SESSION_MAX_MESSAGE_ATTACHMENTS).default([]),
     references: AiSessionReferencesSchema,
@@ -507,6 +613,7 @@ export const AiSessionTurnSchema = z
     providerTurnId: z.string().trim().max(240).optional(),
     source: AiSessionSourceSchema.optional(),
     userPrompt: z.string().trim().optional(),
+    userMessages: z.array(AiSessionUserMessageDetailSchema).max(100).optional(),
     status: z.enum(["queued", "running", "waiting", "completed", "failed"]).default("running"),
     phase: AiSessionPhaseSchema.optional(),
     summary: z.string().trim().max(1000).optional(),
@@ -527,6 +634,7 @@ export const AiSessionHistoryTurnSchema = AiSessionTurnSchema.pick({
   id: true,
   providerTurnId: true,
   userPrompt: true,
+  userMessages: true,
   status: true,
   phase: true,
   summary: true,
@@ -547,6 +655,8 @@ export const AiSessionStatusSchema = z
     providerSessionId: z.string().trim().max(240).optional(),
     lineage: AiSessionLineageSchema.optional(),
     providerMeta: z.record(z.string(), z.unknown()).optional(),
+    modelSelection: AiSessionModelSelectionSchema.optional(),
+    reasoningEffort: AiSessionReasoningEffortSchema.optional(),
     appBindingKeys: z.array(z.string().trim().min(1).max(240)).max(20).optional(),
     actions: AiSessionActionsSchema.optional(),
     activeTurnId: z.string().trim().max(240).optional(),
@@ -574,6 +684,79 @@ export const AiSessionStatusSchema = z
   })
   .strict();
 
+// Current detail metadata intentionally excludes Turn bodies. Compatibility
+// for v0.0.23 remains at the client boundary, where a legacy AiSessionStatus
+// response can be projected into this model and its Turns seeded into cache.
+export const AiSessionDetailSchema = AiSessionStatusSchema.pick({
+  id: true,
+  appBindingKeys: true,
+  cwd: true,
+  error: true,
+  providerMeta: true,
+  modelSelection: true,
+  reasoningEffort: true,
+  queue: true,
+  subAgents: true,
+}).strict();
+
+export const AiSessionTurnIndexEntrySchema = AiSessionTurnSchema.pick({
+  id: true,
+  providerTurnId: true,
+  status: true,
+  phase: true,
+  revision: true,
+  startedAt: true,
+  updatedAt: true,
+  completedAt: true,
+}).extend({
+  bodyRevision: z.string().trim().min(1).max(64),
+}).strict();
+
+export const AiSessionTurnIndexSchema = z.object({
+  sessionId: z.string().trim().min(1).max(120),
+  revision: z.string().trim().min(1).max(64),
+  turns: z.array(AiSessionTurnIndexEntrySchema).max(50),
+}).strict();
+
+export const AiSessionTurnBodySchema = z.object({
+  sessionId: z.string().trim().min(1).max(120),
+  revision: z.string().trim().min(1).max(64),
+  turn: AiSessionTurnSchema,
+}).strict();
+
+const AiSessionProjectionRevisionSchema = z.string().trim().min(1).max(64);
+const AiSessionProjectionNotModifiedSchema = z.object({
+  kind: z.literal("not-modified"),
+  revision: AiSessionProjectionRevisionSchema,
+}).strict();
+
+export const AiSessionDetailReadSchema = z.discriminatedUnion("kind", [
+  AiSessionProjectionNotModifiedSchema,
+  z.object({
+    kind: z.literal("updated"),
+    revision: AiSessionProjectionRevisionSchema,
+    detail: AiSessionDetailSchema,
+  }).strict(),
+]);
+
+export const AiSessionTurnIndexReadSchema = z.discriminatedUnion("kind", [
+  AiSessionProjectionNotModifiedSchema,
+  z.object({
+    kind: z.literal("updated"),
+    revision: AiSessionProjectionRevisionSchema,
+    index: AiSessionTurnIndexSchema,
+  }).strict(),
+]);
+
+export const AiSessionTurnBodyReadSchema = z.discriminatedUnion("kind", [
+  AiSessionProjectionNotModifiedSchema,
+  z.object({
+    kind: z.literal("updated"),
+    revision: AiSessionProjectionRevisionSchema,
+    body: AiSessionTurnBodySchema,
+  }).strict(),
+]);
+
 export const AiSessionActionResultSchema = z.object({
   session: AiSessionStatusSchema,
   provider: z.string().trim().min(1).max(80),
@@ -584,17 +767,68 @@ export const AiSessionActionResultSchema = z.object({
   queueId: z.string().trim().min(1).max(120).optional(),
 }).strict();
 
+// Public action acknowledgement. The runtime-owned full session remains an
+// internal reducer result and must not cross HTTP/reverse-proxy boundaries.
+export const AiSessionActionResponseSchema = AiSessionActionResultSchema.omit({ session: true }).extend({
+  sessionId: z.string().trim().min(1).max(120),
+  messageId: z.string().trim().min(1).max(240).optional(),
+}).strict();
+
+export const AiSessionQueueMutationResponseSchema = z.object({
+  sessionId: z.string().trim().min(1).max(120),
+  queueRevision: z.number().int().min(0),
+  action: z.enum(["retry", "remove", "edit", "reorder"]),
+  queueId: z.string().trim().min(1).max(120).optional(),
+}).strict();
+
+export function projectAiSessionActionResponse(result: z.infer<typeof AiSessionActionResultSchema>) {
+  const latestTurn = result.session.turns?.at(-1);
+  const queuedMessageId = result.queueId
+    ? result.session.queue?.items.find((item) => item.id === result.queueId)?.messageId
+    : undefined;
+  const messageId = queuedMessageId || (
+    result.action === "send" || result.action === "queue" || result.action === "steer"
+      ? latestTurn?.userMessages?.at(-1)?.id
+      : undefined
+  );
+  return AiSessionActionResponseSchema.parse({
+    sessionId: result.session.id,
+    provider: result.provider,
+    action: result.action,
+    ...(result.decision ? { decision: result.decision } : {}),
+    ...(result.turnId || result.session.activeTurnId || latestTurn?.id
+      ? { turnId: result.turnId || result.session.activeTurnId || latestTurn?.id }
+      : {}),
+    ...(result.providerTurnId || latestTurn?.providerTurnId
+      ? { providerTurnId: result.providerTurnId || latestTurn?.providerTurnId }
+      : {}),
+    ...(result.queueId ? { queueId: result.queueId } : {}),
+    ...(messageId ? { messageId } : {}),
+  });
+}
+
+// Compatibility for v0.0.23: normalize the former full-session response at
+// the HTTP consumer boundary while current producers send only the ack.
+export const AiSessionActionCompatibleResponseSchema = z.union([
+  AiSessionActionResponseSchema,
+  AiSessionActionResultSchema.transform(projectAiSessionActionResponse),
+]);
+
 export const AI_SESSION_HISTORY_DEFAULT_LIMIT = 50;
 export const AI_SESSION_HISTORY_MAX_LIMIT = 500;
+export const AI_SESSION_ATTACHMENT_RETENTION_DEFAULT_DAYS = 30;
+export const AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS = 365;
 // Compatibility alias for consumers that used the original fixed default.
 export const AI_SESSION_HISTORY_LIMIT = AI_SESSION_HISTORY_DEFAULT_LIMIT;
 
 export const AiSessionHistoryItemSchema = z.object({
   id: z.string().trim().min(1).max(120),
-  agent: z.enum(["codex", "claude"]),
+  agent: AiAgentKindSchema,
   creationSource: AiSessionCreationSourceSchema,
   providerSessionId: z.string().trim().min(1).max(240),
   lineage: AiSessionLineageSchema.optional(),
+  modelSelection: AiSessionModelSelectionSchema.optional(),
+  reasoningEffort: AiSessionReasoningEffortSchema.optional(),
   title: z.string().trim().max(240).optional(),
   userPrompt: z.string().trim().optional(),
   lastMessage: z.string().trim().optional(),
@@ -626,6 +860,8 @@ export const AiSessionResumeResultSchema = z.object({
   creationSource: AiSessionCreationSourceSchema,
 }).strict();
 
+export const AiSessionSummaryTurnSchema = AiSessionTurnSchema.omit({ userMessages: true });
+
 export const AiSessionSummarySchema = AiSessionStatusSchema.pick({
   id: true,
   agent: true,
@@ -635,6 +871,8 @@ export const AiSessionSummarySchema = AiSessionStatusSchema.pick({
   providerSessionId: true,
   lineage: true,
   providerMeta: true,
+  modelSelection: true,
+  reasoningEffort: true,
   appBindingKeys: true,
   actions: true,
   activeTurnId: true,
@@ -655,7 +893,30 @@ export const AiSessionSummarySchema = AiSessionStatusSchema.pick({
   startedAt: true,
   updatedAt: true,
   error: true,
-});
+}).extend({
+  // Compatibility for v0.0.21: list snapshots retain the bounded turn summary
+  // shape when reading an older producer. Current producers omit turns and use
+  // the bounded count/timestamp projection below.
+  turns: z.array(AiSessionSummaryTurnSchema).max(50).optional(),
+  // Version of the fields intentionally omitted or compacted by the list
+  // projection. Detail consumers bind an HTTP response to this value instead
+  // of treating updatedAt as a reason to reload the complete conversation.
+  // Compatibility for v0.0.23: older producers omit it and consumers retain
+  // the list projection as authoritative while only enriching Turn metadata.
+  detailRevision: z.string().trim().min(1).max(64).optional(),
+  // Independent version for the Turn index/body domain. It is not a display
+  // key and must not remount or fade the owning session.
+  turnsRevision: z.string().trim().min(1).max(64).optional(),
+  // Minimal pointer used to refresh the live Turn body without reloading the
+  // complete Turn index. The index revision only describes list structure.
+  latestTurnRef: z.object({
+    id: AiSessionTurnSchema.shape.id,
+    bodyRevision: z.string().trim().min(1).max(64),
+  }).strict().optional(),
+  turnCount: z.number().int().min(0).optional(),
+  subAgentCount: z.number().int().min(0).optional(),
+  lastUserMessageAt: z.string().datetime().optional(),
+}).strict();
 
 export const AiSessionsSnapshotSchema = z
   .object({
@@ -753,13 +1014,37 @@ export const AiSessionMessageDeltaEventSchema = z
     instanceId: z.string().trim().min(1).max(160),
     nodeId: z.string().trim().min(1).max(160).optional(),
     sessionId: z.string().trim().min(1).max(120),
-    providerSessionId: z.string().trim().min(1).max(240),
+    // Compatibility for v0.0.23: compact delta producers omit the provider
+    // identity after resolving the authoritative AI Session id.
+    providerSessionId: z.string().trim().min(1).max(240).optional(),
     turnId: z.string().trim().min(1).max(240),
     itemId: z.string().trim().min(1).max(240),
     delta: z.string().min(1),
     generatedAt: z.string().datetime(),
   })
   .strict();
+
+export const AiSessionMessageDeltaCompactEventSchema = AiSessionMessageDeltaEventSchema
+  .omit({ instanceId: true, nodeId: true, providerSessionId: true })
+  .strict();
+
+export function compactAiSessionMessageDeltaEvent(input: AiSessionMessageDeltaEvent) {
+  return AiSessionMessageDeltaCompactEventSchema.parse({
+    sessionId: input.sessionId,
+    turnId: input.turnId,
+    itemId: input.itemId,
+    delta: input.delta,
+    generatedAt: input.generatedAt,
+  });
+}
+
+export function normalizeAiSessionMessageDeltaEvent(input: unknown, instanceId: string) {
+  const compact = AiSessionMessageDeltaCompactEventSchema.safeParse(input);
+  if (compact.success) {
+    return AiSessionMessageDeltaEventSchema.parse({ instanceId, ...compact.data });
+  }
+  return AiSessionMessageDeltaEventSchema.parse(input);
+}
 
 export const AiSessionTimelineItemEventSchema = z.object({
   instanceId: z.string().trim().min(1).max(160),
@@ -871,6 +1156,8 @@ export const AiSessionSnapshotInputSchema = AiSessionInputBaseSchema.extend({
   providerSessionId: z.string().trim().max(240).optional(),
   lineage: AiSessionLineageSchema.optional(),
   providerMeta: z.record(z.string(), z.unknown()).optional(),
+  modelSelection: AiSessionModelSelectionSchema.optional(),
+  reasoningEffort: AiSessionReasoningEffortSchema.optional(),
   appBindingKeys: z.array(z.string().trim().min(1).max(240)).max(20).optional(),
   actions: AiSessionActionsSchema.optional(),
   title: z.string().trim().max(240).optional(),
@@ -896,10 +1183,13 @@ export const AiSessionSnapshotInputSchema = AiSessionInputBaseSchema.extend({
 export const AiSessionRealtimeInputSchema = AiSessionInputBaseSchema.extend({
   type: z.literal("event"),
   sessionId: z.string().trim().min(1).max(120),
-  kind: z.enum(["lifecycle", "send-ack", "turn-started", "user-message", "assistant-message", "approval-requested", "turn-completed", "session-error", "tool-activity", "sub-agent-activity", "context-compaction"]),
+  kind: z.enum(["lifecycle", "send-ack", "turn-started", "user-message", "assistant-message", "approval-requested", "turn-completed", "session-error", "tool-activity", "sub-agent-activity", "context-compaction", "model-selection", "reasoning-effort"]),
+  modelSelection: AiSessionModelSelectionSchema.optional(),
+  reasoningEffort: AiSessionReasoningEffortSchema.optional(),
   activeTurnId: z.string().trim().max(240).optional(),
   providerTurnId: z.string().trim().max(240).optional(),
   userPrompt: z.string().trim().optional(),
+  userMessage: AiSessionUserMessageDetailSchema.optional(),
   text: z.string().optional(),
   itemId: z.string().trim().max(240).optional(),
   status: AiSessionLifecycleSchema.optional(),
@@ -916,6 +1206,20 @@ export const AiSessionRealtimeInputSchema = AiSessionInputBaseSchema.extend({
     approvals: z.number().int().min(0).optional(),
   }).strict().optional(),
 }).strict().superRefine((input, context) => {
+  if (input.kind === "model-selection") {
+    if (!input.modelSelection) {
+      context.addIssue({ code: "custom", path: ["modelSelection"], message: "model-selection events require modelSelection" });
+    }
+  } else if (input.modelSelection !== undefined) {
+    context.addIssue({ code: "custom", path: ["modelSelection"], message: "modelSelection is only valid for model-selection events" });
+  }
+  if (input.kind === "reasoning-effort") {
+    if (!input.reasoningEffort) {
+      context.addIssue({ code: "custom", path: ["reasoningEffort"], message: "reasoning-effort events require reasoningEffort" });
+    }
+  } else if (input.reasoningEffort !== undefined) {
+    context.addIssue({ code: "custom", path: ["reasoningEffort"], message: "reasoningEffort is only valid for reasoning-effort events" });
+  }
   if (input.kind === "session-error" && !input.error) {
     context.addIssue({ code: "custom", path: ["error"], message: "session-error events require error" });
   }
@@ -925,6 +1229,9 @@ export const AiSessionRealtimeInputSchema = AiSessionInputBaseSchema.extend({
     }
   } else if (input.contextCompaction !== undefined) {
     context.addIssue({ code: "custom", path: ["contextCompaction"], message: "contextCompaction is only valid for context-compaction events" });
+  }
+  if (input.kind !== "send-ack" && input.kind !== "user-message" && input.userMessage !== undefined) {
+    context.addIssue({ code: "custom", path: ["userMessage"], message: "userMessage is only valid for send-ack and user-message events" });
   }
   if (input.kind === "sub-agent-activity") {
     if (!input.subAgents) {
@@ -973,7 +1280,13 @@ export type AiSessionSubAgentActivity = z.infer<typeof AiSessionSubAgentActivity
 export type AiSessionSubAgent = z.infer<typeof AiSessionSubAgentSchema>;
 export type AiSessionSource = z.infer<typeof AiSessionSourceSchema>;
 export type AiSessionContextCompaction = z.infer<typeof AiSessionContextCompactionSchema>;
+export type AiSessionConversationAttachmentContentState = z.infer<typeof AiSessionConversationAttachmentContentStateSchema>;
+export type AiSessionConversationAttachment = z.infer<typeof AiSessionConversationAttachmentSchema>;
+export type AiSessionUserMessageDetail = z.infer<typeof AiSessionUserMessageDetailSchema>;
 export type AiSessionMessageAttachment = z.infer<typeof AiSessionMessageAttachmentSchema>;
+export type AiSessionAttachmentDraftUploadQuery = z.infer<typeof AiSessionAttachmentDraftUploadQuerySchema>;
+export type AiSessionAttachmentDraftStreamCreateInput = z.infer<typeof AiSessionAttachmentDraftStreamCreateInputSchema>;
+export type AiSessionAttachmentDraft = z.infer<typeof AiSessionAttachmentDraftSchema>;
 export type AiSessionMessageAttachmentMeta = z.infer<typeof AiSessionMessageAttachmentMetaSchema>;
 export type AiSessionMessageAttachmentRef = z.infer<typeof AiSessionMessageAttachmentRefSchema>;
 export type AiSessionSendMode = z.infer<typeof AiSessionSendModeSchema>;
@@ -992,8 +1305,14 @@ export type AiSessionMentionFileSearch = z.infer<typeof AiSessionMentionFileSear
 export type AiSessionMessageInput = z.infer<typeof AiSessionMessageInputSchema>;
 export type AiSessionMessageRefInput = z.infer<typeof AiSessionMessageRefInputSchema>;
 export type AiSessionRuntimePath = z.infer<typeof AiSessionRuntimePathSchema>;
+export type AiSessionModelSelection = z.infer<typeof AiSessionModelSelectionSchema>;
+export type AiSessionReasoningEffort = z.infer<typeof AiSessionReasoningEffortSchema>;
 export type AiSessionCreateInput = z.infer<typeof AiSessionCreateInputSchema>;
 export type AiSessionCreateRefInput = z.infer<typeof AiSessionCreateRefInputSchema>;
+export type AiSessionModelSelectionInput = z.infer<typeof AiSessionModelSelectionInputSchema>;
+export type AiSessionModelSelectionActionResponse = z.infer<typeof AiSessionModelSelectionActionResponseSchema>;
+export type AiSessionReasoningEffortInput = z.infer<typeof AiSessionReasoningEffortInputSchema>;
+export type AiSessionReasoningEffortActionResponse = z.infer<typeof AiSessionReasoningEffortActionResponseSchema>;
 export type AiSessionGitSelection = z.infer<typeof AiSessionGitSelectionSchema>;
 export type AiSessionCreateResult = z.infer<typeof AiSessionCreateResultSchema>;
 export type AiSessionForkWorkspace = z.infer<typeof AiSessionForkWorkspaceSchema>;
@@ -1012,8 +1331,18 @@ export type AiSessionControlError = z.infer<typeof AiSessionControlErrorSchema>;
 export type AiSessionQueuedMessage = z.infer<typeof AiSessionQueuedMessageSchema>;
 export type AiSessionQueue = z.infer<typeof AiSessionQueueSchema>;
 export type AiSessionTurn = z.infer<typeof AiSessionTurnSchema>;
+export type AiSessionDetail = z.infer<typeof AiSessionDetailSchema>;
+export type AiSessionTurnIndexEntry = z.infer<typeof AiSessionTurnIndexEntrySchema>;
+export type AiSessionTurnIndex = z.infer<typeof AiSessionTurnIndexSchema>;
+export type AiSessionTurnBody = z.infer<typeof AiSessionTurnBodySchema>;
+export type AiSessionDetailRead = z.infer<typeof AiSessionDetailReadSchema>;
+export type AiSessionTurnIndexRead = z.infer<typeof AiSessionTurnIndexReadSchema>;
+export type AiSessionTurnBodyRead = z.infer<typeof AiSessionTurnBodyReadSchema>;
+export type AiSessionSummaryTurn = z.infer<typeof AiSessionSummaryTurnSchema>;
 export type AiSessionStatus = z.infer<typeof AiSessionStatusSchema>;
 export type AiSessionActionResult = z.infer<typeof AiSessionActionResultSchema>;
+export type AiSessionActionResponse = z.infer<typeof AiSessionActionResponseSchema>;
+export type AiSessionQueueMutationResponse = z.infer<typeof AiSessionQueueMutationResponseSchema>;
 export type AiSessionHistoryItem = z.infer<typeof AiSessionHistoryItemSchema>;
 export type AiSessionHistoryIndex = z.infer<typeof AiSessionHistoryIndexSchema>;
 export type AiSessionHistoryList = z.infer<typeof AiSessionHistoryListSchema>;
@@ -1031,6 +1360,7 @@ export type AiSessionSnapshotEvent = z.infer<typeof AiSessionSnapshotEventSchema
 export type AiSessionPatchEvent = z.infer<typeof AiSessionPatchEventSchema>;
 export type AiSessionRemovedEvent = z.infer<typeof AiSessionRemovedEventSchema>;
 export type AiSessionMessageDeltaEvent = z.infer<typeof AiSessionMessageDeltaEventSchema>;
+export type AiSessionMessageDeltaCompactEvent = z.infer<typeof AiSessionMessageDeltaCompactEventSchema>;
 export type AiSessionTimelineItemEvent = z.infer<typeof AiSessionTimelineItemEventSchema>;
 export type AiSessionDeltaResponse = z.infer<typeof AiSessionDeltaResponseSchema>;
 export type AiSessionSnapshotInput = z.infer<typeof AiSessionSnapshotInputSchema>;

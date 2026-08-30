@@ -2,7 +2,7 @@
   <template v-for="app in apps" :key="app.id">
     <DropdownMenuSub v-if="app.supportsCwdSelection">
       <DropdownMenuSubTrigger class="app-launch-menu-item" :disabled="launching" @click.prevent.stop="$emit('launch', app.id)">
-        <Play :size="14" />
+        <AppLaunchIcon :app-id="app.id" />
         <span>
           <strong>{{ app.label }}</strong>
           <small>{{ app.id }}</small>
@@ -16,7 +16,7 @@
         <DropdownMenuItem v-for="folder in filteredCwdFolders" :key="`${app.id}-${folder.id}`" class="app-launch-menu-item" :disabled="launching" @select="$emit('launch', app.id, folder.id)">
           <Folder :size="14" />
           <span>
-            <strong>{{ folder.name }}</strong>
+            <strong>{{ nodeLocalFolderDisplayName(folder) }}</strong>
             <small>{{ folder.path }}</small>
           </span>
         </DropdownMenuItem>
@@ -29,7 +29,7 @@
       </DropdownMenuSubContent>
     </DropdownMenuSub>
     <DropdownMenuItem v-else class="app-launch-menu-item" :disabled="launching" @select="$emit('launch', app.id)">
-      <Play :size="14" />
+      <AppLaunchIcon :app-id="app.id" />
       <span>
         <strong>{{ app.label }}</strong>
         <small>{{ app.id }}</small>
@@ -41,9 +41,10 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { Folder, FolderPlus, Play, Search } from "@lucide/vue";
+import { Folder, FolderPlus, Search } from "@lucide/vue";
 import type { InstanceBoardItem, NodeLocalFolder } from "../../../api/types";
-import { isSameOrChildNodePath } from "../nodePath";
+import { nodeLocalFolderDisplayName } from "../nodePath";
+import { filterInstanceCwdFolders, selectableInstanceCwdFolders } from "./instanceCwdFolders";
 import {
   DropdownMenuItem,
   DropdownMenuSeparator,
@@ -52,6 +53,7 @@ import {
   DropdownMenuSubTrigger,
 } from "../../../components/ui/dropdown-menu";
 import type { LaunchableApp } from "../useInstanceSessions";
+import AppLaunchIcon from "./AppLaunchIcon.vue";
 
 const props = defineProps<{
   apps: LaunchableApp[];
@@ -68,24 +70,8 @@ defineEmits<{
 }>();
 
 const folderSearch = ref("");
-const cwdFolders = computed(() => {
-  const uniqueFolders = [...new Map((props.folders || []).map((folder) => [folder.id, folder])).values()];
-  if (isLocalRuntime()) {
-    return uniqueFolders;
-  }
-  const source = props.instance.source;
-  if (source.type !== "local-folder") {
-    return [];
-  }
-  return uniqueFolders.filter((folder) => isSameOrChildNodePath(folder.path, source.path));
-});
-const filteredCwdFolders = computed(() => {
-  const query = folderSearch.value.trim().toLowerCase();
-  return cwdFolders.value.filter((folder) => !query || `${folder.name} ${folder.path}`.toLowerCase().includes(query));
-});
-function isLocalRuntime() {
-  return props.instance.runtime?.type === "local" || props.instance.runtime.kind === "local";
-}
+const cwdFolders = computed(() => selectableInstanceCwdFolders(props.instance, props.folders || []));
+const filteredCwdFolders = computed(() => filterInstanceCwdFolders(cwdFolders.value, folderSearch.value));
 
 </script>
 
@@ -118,5 +104,15 @@ function isLocalRuntime() {
   color: var(--text-muted);
   font-size: 12px;
   text-align: center;
+}
+
+:global(.app-launch-menu .app-launch-menu-item strong),
+:global(.board-launch-menu .app-launch-menu-item strong) {
+  font-weight: 500;
+}
+
+:global(.app-launch-menu .app-launch-menu-item small),
+:global(.board-launch-menu .app-launch-menu-item small) {
+  font-weight: 400;
 }
 </style>

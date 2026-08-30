@@ -22,9 +22,39 @@
           class="desktop-window-controls native-window-control-space macos-native-window-control-space"
           aria-hidden="true"
         />
-        <div v-if="settingsMode" class="control-plane-title">
+        <div v-if="settingsMode" class="control-plane-title control-plane-settings-switcher-shell">
           <span class="control-plane-kicker">{{ topbarKicker }}</span>
-          <strong>{{ topbarTitle }}</strong>
+          <DropdownMenu>
+            <DropdownMenuTrigger as-child>
+              <button type="button" class="control-plane-instance-switcher control-plane-settings-switcher" :aria-label="t('settings.sections')" @dblclick.stop>
+                <span class="control-plane-instance-switcher-title">
+                  <strong>{{ topbarTitle }}</strong>
+                  <ChevronDown class="control-plane-instance-switcher-chevron" :size="16" aria-hidden="true" />
+                </span>
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent class="control-plane-settings-menu" align="start" :collision-padding="12" :side-offset="8">
+              <ScrollArea
+                class="control-plane-settings-menu-scroll"
+                :horizontal="false"
+                :style="{ '--settings-menu-height': `${settingsSections.length * 33 + 2}px` }"
+              >
+                <div class="control-plane-settings-menu-list">
+                  <DropdownMenuItem
+                    v-for="item in settingsSections"
+                    :key="item.id"
+                    class="control-plane-settings-menu-item"
+                    :class="{ selected: item.id === settingsSection }"
+                    :aria-current="item.id === settingsSection ? 'true' : undefined"
+                    @select="settingsSection = item.id"
+                  >
+                    <span>{{ item.label }}</span>
+                    <Check v-if="item.id === settingsSection" :size="16" aria-hidden="true" />
+                  </DropdownMenuItem>
+                </div>
+              </ScrollArea>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
         <div v-else class="control-plane-title control-plane-instance-switcher-shell">
           <span v-if="!standaloneMode" class="control-plane-kicker">{{ topbarKicker }}</span>
@@ -124,14 +154,41 @@
           <RefreshCw :size="15" />
           <span>{{ t("common.actions.refresh") }}</span>
         </Button>
-        <Button :variant="settingsMode ? 'default' : 'outline'" size="sm" :aria-label="t('navigation.settings')" :title="t('navigation.settings')" :aria-pressed="settingsMode" @click="toggleSettings">
-          <Settings :size="15" />
-          <span>{{ t("navigation.settings") }}</span>
-        </Button>
-        <Button v-if="authSession.data.value?.enabled" variant="outline" size="sm" :aria-label="t('auth.signOut')" :title="t('auth.signOut')" :disabled="signingOut" @click="signOut">
-          <LogOut :size="15" />
-          <span>{{ signingOut ? t("auth.signingOut") : t("auth.signOut") }}</span>
-        </Button>
+        <template v-if="desktopBridge">
+          <Button :variant="settingsMode ? 'default' : 'outline'" size="sm" :aria-label="t('navigation.settings')" :title="t('navigation.settings')" :aria-pressed="settingsMode" @click="toggleSettings">
+            <Settings :size="15" />
+            <span>{{ t("navigation.settings") }}</span>
+          </Button>
+        </template>
+        <DropdownMenu v-else>
+          <DropdownMenuTrigger as-child>
+            <Button :variant="settingsMode ? 'default' : 'outline'" size="sm" class="control-plane-user-trigger" :aria-label="t('navigation.userMenu')" :title="t('navigation.userMenu')">
+              <UserRound :size="15" />
+              <span>{{ userMenuLabel }}</span>
+              <ChevronDown :size="13" aria-hidden="true" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent class="control-plane-user-menu" align="end" :collision-padding="12" :side-offset="8">
+            <DropdownMenuLabel v-if="authSession.data.value?.enabled" class="control-plane-user-menu-identity">
+              <span>{{ t("navigation.signedInAs") }}</span>
+              <strong>{{ userMenuLabel }}</strong>
+            </DropdownMenuLabel>
+            <DropdownMenuSeparator v-if="authSession.data.value?.enabled" />
+            <DropdownMenuItem v-if="authSession.data.value?.enabled" @select="openAccountSecurity">
+              <UserRound :size="14" />
+              <span>{{ t("settings.account.navigation") }}</span>
+            </DropdownMenuItem>
+            <DropdownMenuItem @select="openSettings()">
+              <Settings :size="14" />
+              <span>{{ t("navigation.settings") }}</span>
+            </DropdownMenuItem>
+            <DropdownMenuSeparator v-if="authSession.data.value?.enabled" />
+            <DropdownMenuItem v-if="authSession.data.value?.enabled" :disabled="signingOut" class="control-plane-user-menu-sign-out" @select="signOut">
+              <LogOut :size="14" />
+              <span>{{ signingOut ? t("auth.signingOut") : t("auth.signOut") }}</span>
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
         <div
           v-if="showWindowsNativeWindowControlSpace"
           class="desktop-window-controls native-window-control-space windows-native-window-control-space"
@@ -150,7 +207,7 @@
         v-if="!standaloneMode && instanceViewMode && !settingsMode && instancesSidebarVisible"
         v-model:filter="instanceFilter"
         :active-action-label="activeActionLabel"
-        :active-instance-id="activeInstance?.id"
+        :active-instance-id="activeInstanceId"
         :can-export-config="canExportConfig"
         :collapsed="instancesCollapsed"
         :error="board.error.value ? errorText(board.error.value) : ''"
@@ -158,7 +215,8 @@
         :instance-display-name="instanceDisplayName"
         :instances="filteredInstances"
         :is-instance-action-busy="isInstanceActionBusy"
-        :loading="board.isLoading.value"
+        :loading="nodes.isLoading.value"
+        :node-states="board.nodeStates.value"
         :nodes="nodes.data.value || []"
         :open-menu-id="openInstanceMenuId"
         v-model:sort-mode="instanceSortMode"
@@ -185,7 +243,7 @@
         v-model:sort-mode="instanceSortMode"
         v-model:status-filter="boardStatusFilter"
         :active-action-label="activeActionLabel"
-        :active-instance-id="activeInstance?.id"
+        :active-instance-id="activeInstanceId"
         :all-filter-value="ALL_BOARD_FILTER_VALUE"
         :app-options="boardAppOptions"
         :board-card-detail="boardCardDetail"
@@ -229,6 +287,7 @@
         :instance-display-name="instanceDisplayName"
         :instances="boardInstancesWithAiSessions"
         :loading="board.isLoading.value"
+        :node-local-folders-by-node-id="nodeLocalFoldersByNodeId"
         @open-ai-session-app="openAiSessionAppFromBoard"
         @resolve-approval="resolveAiSessionApprovalAction"
         @select-instance="selectInstance"
@@ -239,13 +298,14 @@
         :choose-project-folder="desktopBridge?.chooseProjectFolder"
         :initial-section="settingsSection"
         :instances="sortedInstances"
+        :node-joined-event="lastNodeJoinedEvent"
         @back="closeSettings"
         @open-instance-settings="openInstanceSettings"
         @section-change="settingsSection = $event"
       />
 
       <InstanceDetail
-        v-else-if="instanceViewMode && !settingsMode"
+        v-else-if="instanceViewMode && !settingsMode && !workbenchLoadingOverlayVisible"
         :class="{ 'preview-expanded': sessionPreviewExpanded }"
         v-model:app-launch-menu-open="appLaunchMenuOpen"
         v-model:preview-expanded="sessionPreviewExpanded"
@@ -262,6 +322,7 @@
         :app-launch-button-title="appLaunchButtonTitle"
         :can-launch-app="canLaunchApp"
         :copied-text="copiedText"
+        :choose-project-folder="activeProjectFolderChooser"
         :error="standaloneDetailError || (board.error.value ? errorText(board.error.value) : '')"
         :instance="standaloneOwnershipReady ? activeInstanceWithAiSessions : undefined"
         :instance-display-name="instanceDisplayName"
@@ -273,7 +334,7 @@
         :left-session-tabs="leftOrderedSessionTabs"
         :launchable-apps="launchableApps"
         :launching-app="launchingApp"
-        :loading="board.isLoading.value || (standaloneMode && !standaloneOwnershipResolved)"
+        :loading="board.isLoading.value || selectedInstancePending || (standaloneMode && (!standaloneOwnershipResolved || standaloneBoardPending))"
         :standalone="standaloneMode"
         :resource-metrics="activeInstanceResourceMetrics"
         :resource-metrics-error="activeInstanceResourceMetricsError"
@@ -311,6 +372,13 @@
         @stop-session="stopSelectedAppSession"
         @update:instance-sidebar-visible="setInstancesSidebarVisible"
       />
+
+      <EmbeddedBrowserSurfaceLayer
+        :active-instance-id="activeInstanceId"
+        :browser-session-tabs="browserSessionTabs"
+        :browser-surface-state="browserSurfaceState"
+        @update-browser-tab="(instanceId, sessionKey, patch) => updateBrowserTab(instanceId, sessionKey, patch)"
+      />
     </main>
 
     <Transition name="workbench-loading">
@@ -328,6 +396,8 @@
     </Transition>
 
     <NewInstanceModal v-if="!standaloneMode && newInstanceOpen" :choose-project-folder="desktopBridge?.chooseProjectFolder" @close="newInstanceOpen = false" @created="handleInstanceCreated" />
+
+    <AccountSecurityDialog v-model:open="accountSecurityOpen" />
 
     <ConfigSyncDialog
       v-model:open="configSyncDialogOpen"
@@ -379,19 +449,21 @@ import type { SupportedLocale } from "../../i18n/locale";
 import { translateApiError } from "../../i18n/apiError";
 import { useQueries, useQueryClient } from "@tanstack/vue-query";
 import { useEventListener } from "@vueuse/core";
-import { Bot, Boxes, Check, ChevronDown, Container, Download, House, Laptop, LayoutGrid, LoaderCircle, LogOut, Maximize2, Minus, RefreshCw, Settings, X } from "@lucide/vue";
+import { Bot, Boxes, Check, ChevronDown, Container, Download, House, Laptop, LayoutGrid, LoaderCircle, LogOut, Maximize2, Minus, RefreshCw, Settings, UserRound, X } from "@lucide/vue";
 import "@xterm/xterm/css/xterm.css";
-import { controlPlaneQueryKeys, getInstanceAppManagement, getInstanceResourceMetrics, installInstanceApp, instanceBoardQueryOptions, logoutControlPlane, nodeLocalFoldersQueryOptions, renameAppSession, resolveAiSessionApproval, saveEnvironmentTemplate, uninstallInstanceApp, updateControlledInstance, useAuthSessionQuery, useControlPlaneAiSessionsQuery, useControlPlaneAppSessionsQuery, useControlPlaneStatusQuery, useInstanceBoardQuery, useInstanceDirectoryQuery, useModelsQuery, useNodesQuery, useServerUpdateCheckQuery } from "../../api/queries";
+import { controlPlaneQueryKeys, fetchInstanceBoardPayload, getInstanceAppManagement, getInstanceResourceMetrics, installInstanceApp, instanceBoardQueryOptions, logoutControlPlane, nodeLocalFoldersQueryOptions, renameAppSession, resolveAiSessionApproval, saveEnvironmentTemplate, uninstallInstanceApp, updateControlledInstance, useAuthSessionQuery, useControlPlaneAiSessionsQuery, useControlPlaneAppSessionsQuery, useControlPlaneStatusQuery, useCurrentAccessQuery, useInstanceBoardQuery, useInstanceDirectoryQuery, useModelsQuery, useNodesQuery, useServerUpdateCheckQuery } from "../../api/queries";
+import { authorizationCacheEpoch as currentAccessEpoch, authorizationCacheEpochChanged as authorizationEpochChanged, preserveAcrossAuthorizationChange, signedOutAuthSession } from "../../api/authorizationCache";
 import type { ControlPlaneInstanceResourceEntry } from "@task-handoff/control-plane-client";
 import type { ConfigSyncDirection } from "@task-handoff/protocol/config-sync";
 import { type AiSessionSummary, type AppManagementOperation, type InstanceBoardItem, type InstanceBoardItemWithAppSessions, type InstanceResourceMetrics, type NodeLocalFolder, type UpdateControlledInstanceInput } from "../../api/types";
 import { Button } from "../../components/ui/button";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../../components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "../../components/ui/dropdown-menu";
 import { ScrollArea } from "../../components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../components/ui/tooltip";
 import AiSessionBoardView from "./ai-board/AiSessionBoardView.vue";
 import InstanceBoardView from "./board/InstanceBoardView.vue";
 import InstanceDetail from "./instance-detail/InstanceDetail.vue";
+import EmbeddedBrowserSurfaceLayer from "./instance-detail/EmbeddedBrowserSurfaceLayer.vue";
 import InstanceList from "./instance-list/InstanceList.vue";
 import ConfigSyncDialog from "./instance-list/ConfigSyncDialog.vue";
 import InstanceDeleteDialog from "./instance-list/InstanceDeleteDialog.vue";
@@ -399,13 +471,17 @@ import SaveEnvironmentTemplateDialog from "./instance-list/SaveEnvironmentTempla
 import InstanceSettingsDialog from "./instance-settings/InstanceSettingsDialog.vue";
 import { useInstanceAppManagement } from "./instance-settings/useInstanceAppManagement";
 import NewInstanceModal from "./NewInstanceModal.vue";
+import AccountSecurityDialog from "./settings/AccountSecurityDialog.vue";
 import SettingsModal from "./settings/SettingsModal.vue";
+import { buildSettingsSections, type SettingsSection } from "./settings/settingsSections";
+import type { NodeJoinedEvent } from "@task-handoff/protocol/control-plane";
 import { useActiveInstanceSessions } from "./instance-detail/useActiveInstanceSessions";
 import { useBoardTerminalPreviews } from "./board/useBoardTerminalPreviews";
 import { useInstanceActions } from "./useInstanceActions";
 import { useInstanceBoardSessions, type BoardSessionTab } from "./board/useInstanceBoardSessions";
 import { appDisplayName, buildAppSessionTabs, type SessionTab } from "./useInstanceSessions";
 import { isInstanceConnecting } from "./useInstanceStatus";
+import { applyInstanceBoardTargetSnapshot } from "./instanceBoardCache.ts";
 import { useResizableInstancesSidebar } from "./instance-list/useResizableInstancesSidebar";
 import { useWorkbenchInstances } from "./instance-list/useWorkbenchInstances";
 import { useAiSessionStore } from "./useAiSessionStore";
@@ -427,6 +503,8 @@ type DesktopBridge = {
   switchInstanceDetailWindow?: (instanceId: string) => Promise<{ ok: boolean; action?: "switched" | "focused" | "error"; code?: string }>;
   windowDrag?: (phase: "start" | "move" | "end", screenX: number, screenY: number) => void;
   onOpenSettings?: (listener: () => void) => () => void;
+  onBrowserNewTab?: (listener: (input: { instanceId?: string; url?: string }) => void) => () => void;
+  logBrowserDiagnostic?: (input: { message: string; instanceId?: string }) => void;
   windowChrome?: { mode: "custom" | "macos-overlay" | "windows-overlay" };
   windowAction?: (action: "minimize" | "toggle-maximize" | "close") => Promise<{ ok: boolean; maximized?: boolean }>;
 };
@@ -479,7 +557,8 @@ type BoardSize = "small" | "medium" | "large";
 type WorkbenchView = "instance" | "board" | "ai";
 const BOARD_SIZE_STORAGE_KEY = "task-handoff.control-plane.board-size";
 const BOARD_INTERACTIVE_STORAGE_KEY = "task-handoff.control-plane.board-interactive";
-const SESSION_PREVIEW_EXPANDED_STORAGE_KEY = "task-handoff.control-plane.session-preview-expanded";
+const MAIN_SESSION_PREVIEW_EXPANDED_STORAGE_KEY = "task-handoff.control-plane.session-preview-expanded";
+const STANDALONE_SESSION_PREVIEW_EXPANDED_STORAGE_KEY = "task-handoff.control-plane.instance-window.session-preview-expanded";
 const ALL_BOARD_FILTER_VALUE = "__all__";
 const BOARD_SIZE_VALUES = new Set<BoardSize>(["small", "medium", "large"]);
 
@@ -493,25 +572,67 @@ function storedBoardInteractive() {
 }
 
 function storedSessionPreviewExpanded() {
-  return window.localStorage?.getItem(SESSION_PREVIEW_EXPANDED_STORAGE_KEY) === "true";
+  const stored = window.localStorage?.getItem(standaloneMode.value
+    ? STANDALONE_SESSION_PREVIEW_EXPANDED_STORAGE_KEY
+    : MAIN_SESSION_PREVIEW_EXPANDED_STORAGE_KEY);
+  return stored === null || stored === undefined ? standaloneMode.value : stored === "true";
 }
 
 const queryClient = useQueryClient();
 const { locale, t } = useI18n();
 const authSession = useAuthSessionQuery();
+const currentAccess = useCurrentAccessQuery(computed(() => Boolean(authSession.data.value?.enabled && authSession.data.value.authenticated)));
+const canManageUsers = computed(() => currentAccess.data.value?.permissionIds.includes("users:manage") === true);
+const canManageSettings = computed(() => currentAccess.data.value?.permissionIds.includes("settings:manage") === true);
+const canManageSecrets = computed(() => authSession.data.value?.enabled !== true || currentAccess.data.value?.permissionIds.includes("secrets:manage") === true);
+const settingsSections = computed(() => buildSettingsSections(t, {
+  manageSecrets: canManageSecrets.value,
+  manageSettings: canManageSettings.value,
+  manageUsers: canManageUsers.value,
+}));
 const controlPlane = useControlPlaneStatusQuery();
 const sessionQueryInstanceId = computed(() => standaloneMode.value ? standaloneInstanceId.value : "");
 const sessionQueriesEnabled = computed(() => !standaloneMode.value || standaloneOwnershipReady.value);
 const board = useInstanceBoardQuery(sessionQueryInstanceId, sessionQueriesEnabled);
+const instanceDirectoryComplete = computed(() => {
+  if (!board.isSuccess.value) return false;
+  const instanceStates = board.nodeStates.value.filter((state) => state.resource === "instances");
+  // Compatibility for v0.0.21: its blocking board response has no nodeStates.
+  return instanceStates.length === 0 || instanceStates.every((state) => state.phase === "ready");
+});
 const instanceDirectory = useInstanceDirectoryQuery(standaloneMode);
 const controlPlaneAiSessions = useControlPlaneAiSessionsQuery(sessionQueryInstanceId, sessionQueriesEnabled);
 const controlPlaneAppSessions = useControlPlaneAppSessionsQuery(sessionQueryInstanceId, sessionQueriesEnabled);
-const nodes = useNodesQuery(computed(() => !standaloneMode.value));
+// HTTP owns the initial authoritative snapshot. Opening the session stream
+// before both initial queries settle makes every hello descriptor race an
+// empty cache and issue a redundant per-instance recovery request.
+const sessionEventsEnabled = computed(() => sessionQueriesEnabled.value
+  && !controlPlaneAiSessions.isPending.value
+  && !controlPlaneAppSessions.isPending.value);
+// The standalone switcher uses the compact instance directory, so resolve node labels from the shared node directory.
+const nodes = useNodesQuery();
+let authorizationCacheEpoch = "";
+watch(() => currentAccessEpoch(currentAccess.data.value), (epoch) => {
+  if (!epoch || !authorizationCacheEpoch) {
+    authorizationCacheEpoch = epoch;
+    return;
+  }
+  if (!authorizationEpochChanged(authorizationCacheEpoch, epoch)) return;
+  authorizationCacheEpoch = epoch;
+  queryClient.removeQueries({
+    predicate: (query) => !preserveAcrossAuthorizationChange(query.queryKey),
+  });
+}, { immediate: true });
+const standaloneBoardPending = computed(() => standaloneMode.value
+  && !(board.data.value || []).some((instance) => instance.id === standaloneInstanceId.value)
+  && board.nodeStates.value.some((state) => state.resource === "instances" && (state.phase === "uninitialized" || state.phase === "loading")));
 const workbenchLoadingOverlayVisible = computed(() => initialWorkbenchLoadingVisible.value
   || (standaloneMode.value && instanceSwitchLoadingVisible.value));
 
 watch(
-  () => (standaloneMode.value && !standaloneOwnershipResolved.value) || board.isLoading.value,
+  () => standaloneMode.value
+    ? !standaloneOwnershipResolved.value || board.isLoading.value || standaloneBoardPending.value
+    : board.isLoading.value,
   (loading) => {
     if (loading || initialWorkbenchLoadingFinished.value) return;
     initialWorkbenchLoadingFinished.value = true;
@@ -532,7 +653,8 @@ const instanceViewMode = computed(() => workbenchView.value === "instance");
 const boardMode = computed(() => workbenchView.value === "board");
 const aiBoardMode = computed(() => workbenchView.value === "ai");
 const settingsMode = ref(false);
-const settingsSection = ref<"basic" | "chat" | "images" | "environment-templates" | "projects" | "nodes" | "models" | "triggers" | "mobile-sessions" | "account" | "cloud-connectivity">("nodes");
+const settingsSection = ref<SettingsSection>("nodes");
+const accountSecurityOpen = ref(false);
 const boardFilter = ref("");
 const aiBoardFilter = ref("");
 const boardProjectFilter = ref(ALL_BOARD_FILTER_VALUE);
@@ -554,7 +676,7 @@ const configSyncDialogOpen = computed({
   },
 });
 const instanceSettingsId = ref("");
-const instanceSettingsSection = ref<"general" | "models" | "apps">("general");
+const instanceSettingsSection = ref<"general" | "ai" | "models" | "git-credentials" | "apps">("general");
 const instanceSettingsOpen = computed({
   get: () => Boolean(instanceSettingsId.value),
   set: (open: boolean) => {
@@ -572,6 +694,9 @@ const signingOut = ref(false);
 const aiApprovalBusyKey = ref("");
 const boardSessionKeys = reactive<Record<string, string>>({});
 const desktopBridge = (window as Window & { taskHandoffDesktop?: DesktopBridge }).taskHandoffDesktop;
+const userMenuLabel = computed(() => authSession.data.value?.user?.displayName
+  || authSession.data.value?.user?.primaryUsername
+  || t("navigation.user"));
 const stopDesktopOpenSettings = desktopBridge?.onOpenSettings?.(() => {
   if (!standaloneMode.value) openSettings();
 });
@@ -629,9 +754,10 @@ const switcherDuplicateNames = computed(() => {
 const switcherInstanceName = (instance: InstanceBoardItem | ControlPlaneInstanceResourceEntry) => switcherDuplicateNames.value.has(instance.name)
   ? `${instance.name} (${instance.id})`
   : instance.name;
-const switcherNodeName = (instance: InstanceBoardItem | ControlPlaneInstanceResourceEntry) => "node" in instance
-  ? instance.node?.name || instance.nodeId
-  : instance.nodeId;
+const switcherNodeName = (instance: InstanceBoardItem | ControlPlaneInstanceResourceEntry) => {
+  if ("node" in instance && instance.node?.name) return instance.node.name;
+  return nodes.data.value?.find((node) => node.id === instance.nodeId)?.name || instance.nodeId;
+};
 const instanceSettingsInstance = computed(() => boardInstancesWithAppSessions.value.find((instance) => instance.id === instanceSettingsId.value));
 const instanceAppManagement = useInstanceAppManagement({ load: getInstanceAppManagement, errorText });
 const instanceSettingsAppManagement = computed(() => instanceSettingsId.value ? instanceAppManagement.state(instanceSettingsId.value) : undefined);
@@ -649,8 +775,12 @@ const {
   instances: boardInstancesWithAiSessions,
   selection: standaloneMode.value
     ? { mode: "standalone", activeInstanceId: standaloneInstanceId }
-    : { mode: "persistent" },
+    : { mode: "persistent", directoryComplete: instanceDirectoryComplete },
 });
+const selectedInstancePending = computed(() => !standaloneMode.value
+  && Boolean(activeInstanceId.value)
+  && !activeInstance.value
+  && !instanceDirectoryComplete.value);
 const nodeLocalFolderNodeIds = ref<string[]>([]);
 watch([sortedInstances, activeInstanceId], ([instances]) => {
   const visibleInstances = standaloneMode.value && activeInstance.value ? [activeInstance.value] : instances;
@@ -666,10 +796,19 @@ const nodeLocalFoldersByNodeId = computed<Record<string, NodeLocalFolder[]>>(() 
   nodeLocalFolderQueries.value.map((query, index) => [nodeLocalFolderNodeIds.value[index], query.data || []]),
 ));
 const activeInstanceWithAiSessions = computed(() => activeInstance.value);
+const activeProjectFolderChooser = computed(() => {
+  const labels = activeInstance.value?.node?.labels;
+  return desktopBridge?.chooseProjectFolder
+    && labels?.["task-handoff.control-plane.local"] === "true"
+    && labels?.["task-handoff.control-plane.builtin"] === "true"
+    ? desktopBridge.chooseProjectFolder
+    : undefined;
+});
 const standaloneDetailError = computed(() => {
   if (!standaloneMode.value) return "";
   if (!standaloneInstanceId.value) return t("instances.window.invalidRoute");
   if (standaloneOwnershipConflict.value) return t("instances.window.alreadyOpen");
+  if (standaloneBoardPending.value) return "";
   if (standaloneOwnershipResolved.value && !activeInstance.value) return t("instances.window.instanceUnavailable");
   return "";
 });
@@ -677,6 +816,7 @@ const resourceMetricsByInstanceId = reactive<Record<string, InstanceResourceMetr
 const resourceMetricsErrorByInstanceId = reactive<Record<string, string>>({});
 const activeInstanceResourceMetrics = computed(() => activeInstance.value?.runtime?.type === "docker" ? resourceMetricsByInstanceId[activeInstance.value.id] : undefined);
 const activeInstanceResourceMetricsError = computed(() => activeInstance.value?.runtime?.type === "docker" ? resourceMetricsErrorByInstanceId[activeInstance.value.id] : undefined);
+const resourceMetricEventInstanceIds = computed(() => activeInstance.value?.runtime?.type === "docker" ? [activeInstance.value.id] : []);
 const boardSizeOptions = computed<Array<{ value: BoardSize; label: string }>>(() => [
   { value: "small", label: t("instances.board.small") },
   { value: "medium", label: t("instances.board.medium") },
@@ -731,7 +871,7 @@ const boardAppOptions = computed(() => {
 const activeNodeLocalFolders = computed(() => activeInstance.value ? nodeLocalFoldersByNodeId.value[activeInstance.value.nodeId] || [] : []);
 const configSyncInstance = computed(() => sortedInstances.value.find((instance) => instance.id === configSyncInstanceId.value));
 const topbarKicker = computed(() => (settingsMode.value ? t("navigation.settings") : t("common.productName")));
-const selectedInstanceId = computed(() => standaloneMode.value ? standaloneInstanceId.value : activeInstance.value?.id || "");
+const selectedInstanceId = computed(() => standaloneMode.value ? standaloneInstanceId.value : activeInstanceId.value);
 const topbarTitle = computed(() => {
   if (!settingsMode.value) {
     const selectedDetail = !standaloneMode.value || activeInstance.value?.id === standaloneInstanceId.value
@@ -739,7 +879,7 @@ const topbarTitle = computed(() => {
       : undefined;
     return selectedDetail?.name || standaloneDirectoryInstance.value?.name || t("navigation.controlPlane");
   }
-  return settingsSectionTitle(settingsSection.value);
+  return settingsSections.value.find((section) => section.id === settingsSection.value)?.label || t("navigation.settings");
 });
 const topbarRuntimeType = computed(() => {
   if (!standaloneMode.value) return activeInstance.value?.runtime?.type;
@@ -751,9 +891,11 @@ const topbarNodeName = computed(() => {
   return activeInstance.value?.node?.name || "";
 });
 const refreshing = computed(() => board.isFetching.value || controlPlane.isFetching.value);
+const lastNodeJoinedEvent = ref<NodeJoinedEvent>();
 useControlPlaneEvents({
   instanceId: sessionQueryInstanceId,
-  enabled: sessionQueriesEnabled,
+  resourceMetricInstanceIds: resourceMetricEventInstanceIds,
+  enabled: sessionEventsEnabled,
   aiSessions: aiSessionStore,
   appSessions: appSessionStore,
   appManagement: {
@@ -770,6 +912,11 @@ useControlPlaneEvents({
     recoverOpen: loadActiveInstanceResourceMetrics,
   },
   imagePullProgress,
+  nodes: {
+    joined(event) {
+      lastNodeJoinedEvent.value = event;
+    },
+  },
 });
 const lastRefreshLabel = computed(() => formatTime(lastRefreshAt.value, locale.value as SupportedLocale));
 const connectingInstanceIds = computed(() => sortedInstances.value.filter(isInstanceConnecting).map((instance) => instance.id).join("\n"));
@@ -797,6 +944,8 @@ const {
   activeTerminalSocketUrl,
   appLaunchButtonLabel,
   appLaunchButtonTitle,
+  browserSessionTabs,
+  browserSurfaceState,
   canLaunchApp,
   launchableApps,
   launchingApp,
@@ -827,6 +976,9 @@ const {
   setSessionMenuOpen,
   stoppingSessionId,
   stopSelectedAppSession,
+  openBrowserTab,
+  pruneBrowserInstances,
+  updateBrowserTab,
 } = useActiveInstanceSessions({
   activeInstance: activeInstanceWithAiSessions,
   appLaunchMenuOpen,
@@ -837,6 +989,26 @@ const {
   refresh,
   sessionMenuOpen,
   t,
+});
+const authoritativeInstanceIds = computed<ReadonlySet<string> | undefined>(() => {
+  if (standaloneMode.value) {
+    return instanceDirectory.isSuccess.value
+      ? new Set((instanceDirectory.data.value || []).map((instance) => instance.id))
+      : undefined;
+  }
+  return instanceDirectoryComplete.value
+    ? new Set(sortedInstances.value.map((instance) => instance.id))
+    : undefined;
+});
+watch(authoritativeInstanceIds, (instanceIds) => {
+  if (instanceIds) pruneBrowserInstances(instanceIds);
+}, { immediate: true });
+const stopDesktopBrowserNewTab = desktopBridge?.onBrowserNewTab?.(({ instanceId: sourceInstanceId, url }) => {
+  const instanceId = sourceInstanceId || activeInstanceId.value;
+  desktopBridge?.logBrowserDiagnostic?.({ message: `popup event received url=${String(url || "").slice(0, 200)}`, instanceId: instanceId || undefined });
+  if (!instanceId || typeof url !== "string" || !url.trim()) return;
+  openBrowserTab(instanceId, url);
+  desktopBridge?.logBrowserDiagnostic?.({ message: `popup browser tab created url=${url.slice(0, 200)}`, instanceId });
 });
 
 function applyPendingInstanceDetailSelection() {
@@ -870,6 +1042,7 @@ useEventListener(window, "storage", (event) => {
 const { disposeBoardTerminalPreviews, disposeHiddenBoardTerminalPreviews, mountBoardTerminalPreviews, setBoardTerminalHost } = useBoardTerminalPreviews(boardMode, boardInteractive);
 
 let connectingRefreshTimer: ReturnType<typeof setInterval> | undefined;
+const connectingRefreshLoads = new Set<string>();
 
 watch(
   [topbarTitle, standaloneInstanceId],
@@ -911,7 +1084,9 @@ watch(boardBulkAppFilter, (appId) => {
 });
 
 watch(sessionPreviewExpanded, (expanded) => {
-  window.localStorage?.setItem(SESSION_PREVIEW_EXPANDED_STORAGE_KEY, String(expanded));
+  window.localStorage?.setItem(standaloneMode.value
+    ? STANDALONE_SESSION_PREVIEW_EXPANDED_STORAGE_KEY
+    : MAIN_SESSION_PREVIEW_EXPANDED_STORAGE_KEY, String(expanded));
 });
 
 watch(boardInteractive, (interactive) => {
@@ -935,12 +1110,12 @@ watch(
 const resourceMetricsLoads = new Map<string, Promise<void>>();
 
 watch(
-  () => [
-    activeInstanceId.value,
-    activeInstance.value?.runtime?.type,
-    activeInstance.value?.runtime?.containerId,
-    activeInstance.value?.runtime?.containerName,
-  ] as const,
+  [
+    () => activeInstanceId.value,
+    () => activeInstance.value?.runtime?.type,
+    () => activeInstance.value?.runtime?.containerId,
+    () => activeInstance.value?.runtime?.containerName,
+  ],
   () => void loadActiveInstanceResourceMetrics(),
   { immediate: true },
 );
@@ -985,8 +1160,18 @@ watch(
   (ids) => {
     if (ids && !connectingRefreshTimer) {
       connectingRefreshTimer = setInterval(() => {
-        if (!refreshing.value) {
-          void refresh();
+        for (const instanceId of connectingInstanceIds.value.split("\n").filter(Boolean)) {
+          if (connectingRefreshLoads.has(instanceId)) continue;
+          connectingRefreshLoads.add(instanceId);
+          void fetchInstanceBoardPayload(undefined, instanceId)
+            .then((payload) => applyInstanceBoardTargetSnapshot(
+              queryClient,
+              sessionQueryInstanceId.value,
+              instanceId,
+              payload.data.find((instance) => instance.id === instanceId),
+            ))
+            .catch(() => undefined)
+            .finally(() => connectingRefreshLoads.delete(instanceId));
         }
       }, 2000);
       return;
@@ -1003,22 +1188,26 @@ useEventListener(window, "click", handleGlobalClick);
 useEventListener(window, "keydown", handleGlobalKeydown);
 
 onBeforeUnmount(() => {
+  window.removeEventListener("task-handoff:open-instance-git-credentials", openActiveInstanceGitCredentials);
   instanceSwitcherResizeObserver?.disconnect();
   instanceSwitcherResizeObserver = undefined;
   finishInstanceSwitch(instanceSwitchSequence);
   cancelInstanceSwitcherPointer();
   stopDesktopOpenSettings?.();
+  stopDesktopBrowserNewTab?.();
   webWindowCoordinator?.dispose();
   clearToasts();
   if (connectingRefreshTimer) {
     clearInterval(connectingRefreshTimer);
     connectingRefreshTimer = undefined;
   }
+  connectingRefreshLoads.clear();
   disposeBoardTerminalPreviews();
   stopInstanceResize();
 });
 
 onMounted(async () => {
+  window.addEventListener("task-handoff:open-instance-git-credentials", openActiveInstanceGitCredentials);
   if (!standaloneMode.value) return;
   await nextTick();
   observeInstanceSwitcherOverflow();
@@ -1038,6 +1227,11 @@ onMounted(async () => {
   // i18n-audit-allow-next-line code-token: toast presentation variant
   if (result.action === "focused") showToast(t("instances.window.alreadyOpen"), "info");
 });
+
+function openActiveInstanceGitCredentials() {
+  if (standaloneMode.value || !activeInstanceId.value) return;
+  openInstanceSettings(activeInstanceId.value, "git-credentials");
+}
 
 function handleGlobalClick() {
   closeFloatingLayers();
@@ -1168,6 +1362,11 @@ function openSettings(section: typeof settingsSection.value = "nodes") {
   closeFloatingLayers();
 }
 
+function openAccountSecurity() {
+  accountSecurityOpen.value = true;
+  closeFloatingLayers();
+}
+
 function toggleSettings() {
   if (settingsMode.value) {
     closeSettings();
@@ -1179,37 +1378,6 @@ function toggleSettings() {
 function closeSettings() {
   settingsMode.value = false;
   closeFloatingLayers();
-}
-
-function settingsSectionTitle(section: typeof settingsSection.value) {
-  if (section === "basic") {
-    return t("settings.basic");
-  }
-  if (section === "images") {
-    return t("settings.images");
-  }
-  if (section === "environment-templates") {
-    return t("settings.environmentTemplates");
-  }
-  if (section === "nodes") {
-    return t("settings.nodes");
-  }
-  if (section === "models") {
-    return t("settings.models");
-  }
-  if (section === "chat") {
-    return t("settings.chatBridges");
-  }
-  if (section === "triggers") {
-    return t("triggers.title");
-  }
-  if (section === "mobile-sessions") {
-    return t("settings.mobileSessions.navigation");
-  }
-  if (section === "account") {
-    return t("settings.account.navigation");
-  }
-  return t("settings.projects");
 }
 
 function handleInstanceCreated(instance: InstanceBoardItem) {
@@ -1238,7 +1406,7 @@ async function manageInstanceApp(instanceId: string, appId: string, operation: A
   instanceAppManagement.applyJob(instanceId, response.job);
 }
 
-function openInstanceSettings(instanceId: string, section: "general" | "models" | "apps" = "general") {
+function openInstanceSettings(instanceId: string, section: "general" | "ai" | "models" | "git-credentials" | "apps" = "general") {
   if (!boardInstancesWithAppSessions.value.some((instance) => instance.id === instanceId)) return;
   instanceSettingsSection.value = section;
   instanceSettingsId.value = instanceId;
@@ -1422,9 +1590,15 @@ async function signOut() {
   if (signingOut.value) return;
   signingOut.value = true;
   try {
+    const currentSession = authSession.data.value;
     await logoutControlPlane();
-    queryClient.clear();
-    await queryClient.invalidateQueries({ queryKey: ["auth-session"] });
+    await queryClient.cancelQueries();
+    queryClient.removeQueries({ predicate: (query) => String(query.queryKey[0] || "") !== "auth-session" });
+    if (currentSession) {
+      queryClient.setQueryData(["auth-session"], signedOutAuthSession(currentSession));
+    } else {
+      await queryClient.refetchQueries({ queryKey: ["auth-session"], type: "active" });
+    }
   } finally {
     signingOut.value = false;
   }

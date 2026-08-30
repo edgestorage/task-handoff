@@ -5,7 +5,32 @@
       <h1>{{ t("auth.loading") }}</h1>
     </div>
   </div>
-  <slot v-else-if="authSession.data.value?.authenticated" />
+  <slot v-else-if="authSession.data.value?.authenticated && !authSession.data.value.requiresPasswordChange" />
+  <div v-else-if="authSession.data.value?.authenticated" class="auth-shell">
+    <form class="auth-panel" @submit.prevent="changeTemporaryPassword">
+      <span class="auth-kicker">{{ t("auth.controlPlane") }}</span>
+      <h1>{{ t("auth.changeTemporaryPassword") }}</h1>
+      <p>{{ t("auth.changeTemporaryPasswordDescription") }}</p>
+
+      <label>
+        <span>{{ t("auth.currentPassword") }}</span>
+        <Input v-model="currentPassword" type="password" autocomplete="current-password" :disabled="busy" />
+      </label>
+      <label>
+        <span>{{ t("auth.newPassword") }}</span>
+        <Input v-model="newPassword" type="password" autocomplete="new-password" :disabled="busy" />
+      </label>
+      <label>
+        <span>{{ t("auth.confirmPassword") }}</span>
+        <Input v-model="confirmPassword" type="password" autocomplete="new-password" :disabled="busy" />
+      </label>
+
+      <p v-if="passwordValidationError" class="auth-error">{{ passwordValidationError }}</p>
+      <Button class="auth-submit" type="submit" :disabled="busy || !canChangePassword">
+        {{ busy ? t("auth.working") : t("auth.changePassword") }}
+      </Button>
+    </form>
+  </div>
   <div v-else class="auth-shell">
     <form class="auth-panel" @submit.prevent="submit">
       <span class="auth-kicker">{{ t("auth.controlPlane") }}</span>
@@ -35,7 +60,7 @@ import { useI18n } from "vue-i18n";
 import { useQueryClient } from "@tanstack/vue-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { bootstrapAdmin, loginControlPlane, useAuthSessionQuery } from "@/api/queries";
+import { bootstrapAdmin, changeControlPlanePassword, loginControlPlane, useAuthSessionQuery } from "@/api/queries";
 import { translateApiError } from "@/i18n/apiError";
 
 const queryClient = useQueryClient();
@@ -43,9 +68,22 @@ const { t } = useI18n();
 const authSession = useAuthSessionQuery();
 const username = ref("");
 const password = ref("");
+const currentPassword = ref("");
+const newPassword = ref("");
+const confirmPassword = ref("");
 const errorText = ref("");
 const submitting = ref(false);
 const busy = computed(() => submitting.value || authSession.isFetching.value);
+const passwordValidationError = computed(() => {
+  if (newPassword.value && newPassword.value.length < 8) return t("auth.passwordLength");
+  if (confirmPassword.value && newPassword.value !== confirmPassword.value) return t("auth.passwordMismatch");
+  return errorText.value;
+});
+const canChangePassword = computed(() => Boolean(
+  currentPassword.value
+  && newPassword.value.length >= 8
+  && newPassword.value === confirmPassword.value,
+));
 
 async function submit() {
   if (busy.value) return;
@@ -58,6 +96,23 @@ async function submit() {
     }
     await loginControlPlane(payload);
     password.value = "";
+    await queryClient.invalidateQueries({ queryKey: ["auth-session"] });
+  } catch (error) {
+    errorText.value = translateApiError(error, t);
+  } finally {
+    submitting.value = false;
+  }
+}
+
+async function changeTemporaryPassword() {
+  if (busy.value || !canChangePassword.value) return;
+  submitting.value = true;
+  errorText.value = "";
+  try {
+    await changeControlPlanePassword({ currentPassword: currentPassword.value, newPassword: newPassword.value });
+    currentPassword.value = "";
+    newPassword.value = "";
+    confirmPassword.value = "";
     await queryClient.invalidateQueries({ queryKey: ["auth-session"] });
   } catch (error) {
     errorText.value = translateApiError(error, t);

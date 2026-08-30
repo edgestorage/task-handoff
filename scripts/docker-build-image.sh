@@ -9,6 +9,10 @@ case "${IMAGE_PROFILE}" in
     BUILD_TARGET="profile-codex"
     DEFAULT_IMAGE_REF="task-handoff-controlled-codex:local"
     ;;
+  opencode)
+    BUILD_TARGET="profile-opencode"
+    DEFAULT_IMAGE_REF="task-handoff-controlled-opencode:local"
+    ;;
   ai)
     BUILD_TARGET="profile-ai"
     DEFAULT_IMAGE_REF="task-handoff-controlled-ai:local"
@@ -22,7 +26,7 @@ case "${IMAGE_PROFILE}" in
     DEFAULT_IMAGE_REF="task-handoff-controlled-browser:local"
     ;;
   *)
-    echo "Unsupported TASK_HANDOFF_IMAGE_PROFILE: ${IMAGE_PROFILE} (expected codex, ai, webcap, or browser)" >&2
+    echo "Unsupported TASK_HANDOFF_IMAGE_PROFILE: ${IMAGE_PROFILE} (expected codex, opencode, ai, webcap, or browser)" >&2
     exit 1
     ;;
 esac
@@ -38,6 +42,7 @@ set -- \
   --target "${BUILD_TARGET}" \
   --tag "${IMAGE_REF}" \
   --build-arg "CODEX_CLI_PACKAGE=${CODEX_CLI_PACKAGE:-@openai/codex@latest}" \
+  --build-arg "OPENCODE_CLI_PACKAGE=${OPENCODE_CLI_PACKAGE:-opencode-ai@latest}" \
   --build-arg "CLAUDE_CODE_VERSION=${CLAUDE_CODE_VERSION:-2.1.183}" \
   --build-arg "TASK_HANDOFF_ENABLE_CC_SWITCH=${TASK_HANDOFF_ENABLE_CC_SWITCH:-0}" \
   --build-arg "CC_SWITCH_VERSION=${CC_SWITCH_VERSION:-3.16.3}" \

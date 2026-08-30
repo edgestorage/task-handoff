@@ -3,6 +3,7 @@ const { EventEmitter } = require("node:events");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { Readable } = require("node:stream");
 const test = require("node:test");
 const ts = require("typescript");
 const { registerWorkspaceRequire } = require("./workspace-require.js");
@@ -18,6 +19,7 @@ require.extensions[".ts"] = (module, filename) => {
 };
 
 const { AiSessionController } = require("../packages/ai-session-runtime/src/ai-session-control.ts");
+const { AiSessionConversationAttachmentStore } = require("../packages/ai-session-runtime/src/ai-session-conversation-attachment-store.ts");
 const { AiSessionCreateCoordinator } = require("../packages/ai-session-runtime/src/ai-session-create.ts");
 const { AiSessionForkCoordinator } = require("../packages/ai-session-runtime/src/ai-session-fork.ts");
 const { AiSessionCloseCoordinator } = require("../packages/ai-session-runtime/src/ai-session-close.ts");
@@ -126,6 +128,242 @@ test("AI session create coordinator removes the projection and provider thread w
   assert.equal(diagnostics[0].providerSessionId, "thread-failed");
 });
 
+test("AI session create retries the same uploaded attachment after first-turn compensation", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-create-attachment-retry-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const conversationAttachments = new AiSessionConversationAttachmentStore({ dataDir: root });
+  const registry = createAiSessionRegistry({
+    dir: path.join(root, "sessions"),
+    conversationAttachments,
+  });
+  const controller = new AiSessionController(registry);
+  let creates = 0;
+  let starts = 0;
+  controller.register({
+    agent: "codex",
+    async createSession({ cwd }) {
+      creates += 1;
+      return { providerSessionId: `thread-attachment-retry-${creates}`, cwd, creationSource: "ai-session" };
+    },
+    async startMessage(_session, input) {
+      starts += 1;
+      assert.equal(fs.readFileSync(input.attachments[0].retainedPath, "utf8"), "retry");
+      if (starts === 1) throw new Error("first turn failed");
+    },
+    async deleteSession() {},
+  });
+  const draft = await conversationAttachments.createDraft({
+    scopeType: "create-request",
+    scopeId: "create-attachment-retry",
+    kind: "file",
+    name: "retry.txt",
+    mime: "text/plain",
+    size: 5,
+    source: Readable.from(["retry"]),
+  });
+  const coordinator = new AiSessionCreateCoordinator({ registry, controller });
+  const input = {
+    agent: "codex",
+    cwd: root,
+    message: "Retry with the same attachment",
+    clientRequestId: "create-attachment-retry",
+    draftAttachmentIds: [draft.id],
+    draftScopeType: "create-request",
+    draftScopeId: "create-attachment-retry",
+  };
+
+  await assert.rejects(coordinator.create(input), { code: "AI_SESSION_MATERIALIZATION_FAILED" });
+  const result = await coordinator.create(input);
+  assert.equal(result.disposition, "created");
+  assert.equal(creates, 2);
+  assert.equal(starts, 2);
+});
+
+test("AI session queue preserves staged upload ownership until automatic dequeue", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-queue-attachment-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const workspace = path.join(root, "workspace");
+  fs.mkdirSync(workspace);
+  const conversationAttachments = new AiSessionConversationAttachmentStore({ dataDir: root });
+  const registry = createAiSessionRegistry({
+    dir: path.join(root, "sessions"),
+    conversationAttachments,
+  });
+  const controller = new AiSessionController(registry);
+  const starts = [];
+  controller.register({
+    agent: "codex",
+    async startMessage(_session, input) {
+      starts.push(input);
+      assert.equal(fs.readFileSync(input.attachments[0].retainedPath, "utf8"), "image");
+      return { turnId: "turn-queued-attachment" };
+    },
+  });
+  const session = registry.start({
+    agent: "codex",
+    cwd: workspace,
+    activeTurnId: "turn-running",
+    status: "running",
+    phase: "thinking",
+  });
+  const draft = await conversationAttachments.createDraft({
+    scopeType: "session",
+    scopeId: session.id,
+    kind: "image",
+    name: "pasted.png",
+    mime: "image/png",
+    size: 5,
+    source: Readable.from(["image"]),
+  });
+
+  const queued = await controller.sendMessage(session.id, {
+    message: "Inspect the pasted image",
+    draftAttachmentIds: [draft.id],
+    draftScopeType: "session",
+    draftScopeId: session.id,
+  });
+  assert.equal(registry.get(session.id).queue.items[0].messageId, queued.session.queue.items[0].messageId);
+
+  // Compatibility for v0.0.21: affected queue snapshots omitted messageId.
+  const persisted = JSON.parse(fs.readFileSync(registry.sessionPath(session.id), "utf8"));
+  delete persisted.queue.items[0].messageId;
+  fs.writeFileSync(registry.sessionPath(session.id), `${JSON.stringify(persisted, null, 2)}\n`);
+  const restoredRegistry = createAiSessionRegistry({
+    dir: path.join(root, "sessions"),
+    conversationAttachments,
+  });
+  const restoredController = new AiSessionController(restoredRegistry);
+  restoredController.register({
+    agent: "codex",
+    async startMessage(_session, input) {
+      starts.push(input);
+      assert.equal(fs.readFileSync(input.attachments[0].retainedPath, "utf8"), "image");
+      return { turnId: "turn-queued-attachment" };
+    },
+  });
+  assert.equal(restoredRegistry.get(session.id).queue.items[0].messageId, undefined);
+
+  restoredRegistry.complete(session.id, "Done");
+  await restoredController.sendNextQueuedMessage(session.id);
+
+  assert.equal(starts.length, 1);
+  assert.equal(starts[0].messageId, queued.session.queue.items[0].messageId);
+  assert.deepEqual(restoredRegistry.get(session.id).queue.items, []);
+});
+
+test("AI session queue retains staged uploads across a failed automatic dispatch and retry", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-queue-attachment-retry-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const workspace = path.join(root, "workspace");
+  fs.mkdirSync(workspace);
+  const conversationAttachments = new AiSessionConversationAttachmentStore({ dataDir: root });
+  const registry = createAiSessionRegistry({
+    dir: path.join(root, "sessions"),
+    conversationAttachments,
+  });
+  const controller = new AiSessionController(registry);
+  const starts = [];
+  controller.register({
+    agent: "codex",
+    async startMessage(_session, input) {
+      starts.push(input);
+      assert.equal(fs.readFileSync(input.attachments[0].retainedPath, "utf8"), "retry");
+      if (starts.length === 1) throw new Error("transient provider failure");
+      return { turnId: "turn-queued-attachment-retry" };
+    },
+  });
+  const session = registry.start({
+    agent: "codex",
+    cwd: workspace,
+    activeTurnId: "turn-running",
+    status: "running",
+    phase: "thinking",
+  });
+  const draft = await conversationAttachments.createDraft({
+    scopeType: "session",
+    scopeId: session.id,
+    kind: "file",
+    name: "retry.txt",
+    mime: "text/plain",
+    size: 5,
+    source: Readable.from(["retry"]),
+  });
+  const queued = await controller.sendMessage(session.id, {
+    message: "Retry the queued attachment",
+    draftAttachmentIds: [draft.id],
+    draftScopeType: "session",
+    draftScopeId: session.id,
+  });
+
+  registry.complete(session.id, "Done");
+  await assert.rejects(controller.sendNextQueuedMessage(session.id), /transient provider failure/);
+  assert.equal(registry.get(session.id).queue.items[0].status, "failed");
+
+  controller.retryQueuedMessage(session.id, queued.session.queue.items[0].id);
+  await controller.sendNextQueuedMessage(session.id);
+
+  assert.equal(starts.length, 2);
+  assert.equal(starts[1].attachments[0].id, draft.id);
+  assert.deepEqual(registry.get(session.id).queue.items, []);
+});
+
+test("AI session queue reclaims restored upload drafts after a process restart", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-queue-attachment-restart-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const workspace = path.join(root, "workspace");
+  fs.mkdirSync(workspace);
+  const firstAttachments = new AiSessionConversationAttachmentStore({ dataDir: root });
+  const firstRegistry = createAiSessionRegistry({
+    dir: path.join(root, "sessions"),
+    conversationAttachments: firstAttachments,
+  });
+  const firstController = new AiSessionController(firstRegistry);
+  const session = firstRegistry.start({
+    agent: "codex",
+    cwd: workspace,
+    activeTurnId: "turn-running",
+    status: "running",
+    phase: "thinking",
+  });
+  const draft = await firstAttachments.createDraft({
+    scopeType: "session",
+    scopeId: session.id,
+    kind: "file",
+    name: "restart.txt",
+    mime: "text/plain",
+    size: 7,
+    source: Readable.from(["restart"]),
+  });
+  await firstController.sendMessage(session.id, {
+    message: "Dispatch after restart",
+    draftAttachmentIds: [draft.id],
+    draftScopeType: "session",
+    draftScopeId: session.id,
+  });
+
+  const restoredAttachments = new AiSessionConversationAttachmentStore({ dataDir: root });
+  const restoredRegistry = createAiSessionRegistry({
+    dir: path.join(root, "sessions"),
+    conversationAttachments: restoredAttachments,
+  });
+  const restoredController = new AiSessionController(restoredRegistry);
+  const starts = [];
+  restoredController.register({
+    agent: "codex",
+    async startMessage(_session, input) {
+      starts.push(input);
+      assert.equal(fs.readFileSync(input.attachments[0].retainedPath, "utf8"), "restart");
+      return { turnId: "turn-after-restart" };
+    },
+  });
+
+  assert.equal(restoredAttachments.cancelDraft("session", session.id, draft.id), false);
+  restoredRegistry.complete(session.id, "Done");
+  await restoredController.sendNextQueuedMessage(session.id);
+  assert.equal(starts.length, 1);
+  assert.deepEqual(restoredRegistry.get(session.id).queue.items, []);
+});
+
 test("AI session Fork creates an independent Direct session and deduplicates the request", async () => {
   const { registry, controller } = runtime();
   const source = registry.applyAdapterSnapshot({
@@ -134,6 +372,7 @@ test("AI session Fork creates an independent Direct session and deduplicates the
     appSessionId: "shared-runtime",
     providerSessionId: "thread-source",
     cwd: "/workspace",
+    cwdFolderId: "folder-project",
     actions: { send: true, fork: true },
     status: "idle",
   });
@@ -169,6 +408,7 @@ test("AI session Fork creates an independent Direct session and deduplicates the
   assert.equal(calls[0].cwd, undefined);
   assert.equal(calls[0].providerThroughTurnId, undefined);
   assert.equal(registry.get(first.aiSessionId).appSessionId, undefined);
+  assert.equal(registry.get(first.aiSessionId).cwdFolderId, "folder-project");
   assert.deepEqual(registry.get(first.aiSessionId).lineage, { kind: "fork", parentProviderSessionId: "thread-source" });
   assert.equal(registry.get(source.id).providerSessionId, "thread-source");
   assert.throws(
@@ -504,15 +744,125 @@ test("Codex bridge creates a persistent Direct thread on the shared client", asy
   const bridge = new CodexAppServerSessionBridge(registry, client, { threadStartDefaults: { model: "gpt-test", modelProvider: "openai" } });
   await bridge.sync();
   const result = await bridge.createSession({ cwd: "/workspace/project", permissionMode: "auto-review" });
-  assert.deepEqual(result, { providerSessionId: "thread-bridge", cwd: "/workspace/project", creationSource: "ai-session" });
+  assert.deepEqual(result, {
+    providerSessionId: "thread-bridge",
+    cwd: "/workspace/project",
+    creationSource: "ai-session",
+    reasoningEffort: "medium",
+  });
   assert.deepEqual(client.options, {
     cwd: "/workspace/project",
     runtimeWorkspaceRoots: ["/workspace/project"],
     model: "gpt-test",
     modelProvider: "openai",
     permissions: { approvalPolicy: "on-request", approvalsReviewer: "auto_review", permissions: ":workspace" },
+    reasoningEffort: "medium",
   });
   assert.equal(registry.getByProviderSessionId("codex", "thread-bridge").creationSource, "ai-session");
+});
+
+test("Codex send self-heals a missing shared app-server provider", async () => {
+  const { registry } = runtime();
+  const calls = [];
+  class RecoveringClient extends EventEmitter {
+    async start() { calls.push(["client-start"]); }
+    stop() {}
+    async listLoadedThreadIds() { return []; }
+    async resumeThread(threadId) {
+      calls.push(["thread-resume", threadId]);
+      return { id: threadId, cwd: "/workspace", status: { type: "idle" }, turns: [] };
+    }
+    async startTurn(threadId, message) {
+      calls.push(["turn-start", threadId, message]);
+      return { turnId: "turn-recovered" };
+    }
+  }
+  const session = registry.applyAdapterSnapshot({
+    agent: "codex",
+    creationSource: "ai-session",
+    appId: "codex-app-server",
+    providerSessionId: "thread-recover",
+    cwd: "/workspace",
+    status: "idle",
+  });
+  let ensures = 0;
+  const bridge = new CodexAppServerSessionBridge(registry, {
+    createClient(options) {
+      assert.equal(options.socketPath, "/tmp/recovered-app-server.sock");
+      return new RecoveringClient();
+    },
+    async ensureAppSessions() {
+      ensures += 1;
+      return [{
+        id: "__shared_codex_app_server__",
+        appId: "codex",
+        status: "running",
+        ai: { appServer: { socketPath: "/tmp/recovered-app-server.sock", command: "codex" } },
+      }];
+    },
+  });
+
+  const result = await bridge.startMessage(session, { message: "continue" });
+
+  assert.equal(ensures, 1);
+  assert.equal(result.providerTurnId, "turn-recovered");
+  assert.deepEqual(calls, [
+    ["client-start"],
+    ["thread-resume", "thread-recover"],
+    ["turn-start", "thread-recover", "continue"],
+  ]);
+});
+
+test("Close AI Session self-heals a missing shared app-server before archiving", async () => {
+  const { registry, controller } = runtime();
+  const calls = [];
+  class RecoveringClient extends EventEmitter {
+    async start() { calls.push(["client-start"]); }
+    stop() {}
+    async listLoadedThreadIds() { return []; }
+    async resumeThread(threadId) {
+      calls.push(["thread-resume", threadId]);
+      return { id: threadId, cwd: "/workspace", status: { type: "idle" }, turns: [] };
+    }
+    async archiveThread(threadId) { calls.push(["thread-archive", threadId]); }
+    async unsubscribeThread(threadId) { calls.push(["thread-unsubscribe", threadId]); }
+  }
+  const session = registry.applyAdapterSnapshot({
+    agent: "codex",
+    creationSource: "ai-session",
+    appId: "codex-app-server",
+    providerSessionId: "thread-close-recover",
+    cwd: "/workspace",
+    status: "idle",
+  });
+  let ensures = 0;
+  const bridge = new CodexAppServerSessionBridge(registry, {
+    createClient() { return new RecoveringClient(); },
+    async ensureAppSessions() {
+      ensures += 1;
+      return [{
+        id: "__shared_codex_app_server__",
+        appId: "codex",
+        status: "running",
+        ai: { appServer: { socketPath: "/tmp/recovered-close-app-server.sock", command: "codex" } },
+      }];
+    },
+  });
+  controller.register(bridge);
+  const history = new AiSessionHistoryStore({ dataDir: fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-close-recover-")) });
+  const coordinator = new AiSessionCloseCoordinator({ registry, controller, history, stopApp: () => {} });
+
+  const result = await coordinator.close(session.id);
+
+  assert.equal(ensures, 1);
+  assert.equal(result.disposition, "closed");
+  assert.equal(registry.get(session.id), undefined);
+  assert.equal(history.get(session.id).providerSessionId, "thread-close-recover");
+  assert.deepEqual(calls, [
+    ["client-start"],
+    ["thread-archive", "thread-close-recover"],
+    ["thread-unsubscribe", "thread-close-recover"],
+  ]);
 });
 
 test("Codex Direct creation starts its first turn without resuming or reading the new thread", async () => {

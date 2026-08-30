@@ -129,7 +129,7 @@ function isWithin(directory, candidate) {
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
-function checkGraph({ roots, isAllowedDependency, label }) {
+function checkGraph({ roots, isAllowedDependency, forbiddenExternalDependencies = [], label }) {
   const pending = [...roots];
   const visited = new Set();
   const violations = [];
@@ -140,6 +140,10 @@ function checkGraph({ roots, isAllowedDependency, label }) {
     visited.add(importer);
 
     for (const specifier of moduleSpecifiers(importer)) {
+      if (forbiddenExternalDependencies.some((dependency) => specifier === dependency || specifier.startsWith(`${dependency}/`))) {
+        violations.push({ importer, specifier, reason: "forbidden external dependency" });
+        continue;
+      }
       if (!isLocalSpecifier(specifier)) continue;
       const dependency = resolveLocalImport(importer, specifier);
       if (!dependency) {
@@ -172,11 +176,13 @@ const controlPlaneFailed = checkGraph({
 const nodeAgentFailed = checkGraph({
   roots: typescriptFiles(nodeAgentRoot),
   isAllowedDependency: (filePath) => isWithin(nodeAgentRoot, filePath) || isWithin(sharedRoot, filePath),
+  forbiddenExternalDependencies: ["drizzle-orm", "pg"],
   label: "node-agent modules must only import node-agent or shared modules",
 });
 const sharedFailed = checkGraph({
   roots: typescriptFiles(sharedRoot),
   isAllowedDependency: (filePath) => isWithin(sharedRoot, filePath),
+  forbiddenExternalDependencies: ["drizzle-orm", "pg"],
   label: "shared modules must only import shared modules or external packages",
 });
 

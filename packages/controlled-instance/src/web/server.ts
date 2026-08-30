@@ -23,6 +23,8 @@ import { AppRuntimeManager } from "@task-handoff/app-runtime/runtime";
 import type { AppCatalogItem, AppLaunchOptions } from "@task-handoff/app-runtime/types";
 import {
   AiSessionController,
+  AiSessionAttachmentDraftStreams,
+  AiSessionConversationAttachmentStore,
   AiSessionCreateCoordinator,
   AiSessionForkCoordinator,
   AiSessionCloseCoordinator,
@@ -31,16 +33,23 @@ import {
   AiSessionHistoryStore,
   AiSessionResumeCoordinator,
   AiSessionOpenAppCoordinator,
+  AiSessionProviderRegistry,
   ClaudeAppSessionBindingProvider,
   ClaudeControlSockSessionBridge,
   CodexAppServerSessionBridge,
+  OpenCodeSessionBridge,
   createAiSessionRegistry,
+  aiSessionConversationTurns,
+  aiSessionDetailRevision,
+  aiSessionTurnBodyRevision,
+  aiSessionTurnsRevision,
   TranscriptTailDiscoveryProvider,
   type AiSessionRegistry,
 } from "@task-handoff/ai-session-runtime";
 import { NodeAgentRegistrationClient, nodeAgentRegistrationConfigFromEnv } from "./node-agent-client";
 import { nodeAgentApiRoute, publicApiRoute, registerAuth, resolveWebAuth } from "./auth";
 import { AiSessionMessageDeltaCoalescer } from "./ai-session-message-delta-coalescer";
+import { projectAiSessionAuthorityChange } from "./ai-session-authority-events";
 import {
   AiSessionPersistenceSettingsInputSchema,
   AiSessionPersistenceSettingsStore,
@@ -49,8 +58,10 @@ import { WebEventBus } from "./events";
 import { AppManagementManager, AppManagementRequestError } from "./app-management";
 import { configSyncPresets, configSyncPrograms, listConfigSyncFolders, runConfigSync, runConfigSyncBatch } from "./config-sync";
 import { ConfigSyncRequestSchema } from "@task-handoff/protocol/config-sync";
-import { applyManagedCodexModelConfig } from "./codex-model-config";
+import { applyManagedCodexModelConfig, codexProviderId } from "./codex-model-config";
+import { ControlledPrivateModelCatalogSchema, readControlledPrivateModelCatalog, resolveControlledPrivateModelSelection } from "./private-model-catalog";
 import { applyManagedClaudeModelConfig } from "./claude-model-config";
+import { GitCredentialBroker, installGitBrokerEnvironment } from "./git-credential-broker";
 import {
   controlledInstanceCapabilities,
   controlledInstanceSnapshot,
@@ -75,11 +86,24 @@ import {
   themeKasmVncResponseBody,
 } from "./web-proxy-helpers";
 import {
+  AI_SESSION_ATTACHMENT_DRAFT_STREAM_BODY_LIMIT,
+  AI_SESSION_ATTACHMENT_UPLOAD_BODY_LIMIT,
   AI_SESSION_DELTA_RETENTION_MS,
+  AiSessionAttachmentDraftStreamCreateInputSchema,
+  AiSessionAttachmentDraftStreamIdSchema,
+  AiSessionAttachmentDraftStreamOffsetQuerySchema,
+  AiSessionAttachmentDraftUploadQuerySchema,
   AiSessionEventType,
   AiSessionActionResultSchema,
+  projectAiSessionActionResponse,
   AiSessionCreateInputSchema,
+  AiSessionCreateRefInputSchema,
   AiSessionCreateResultSchema,
+  AiSessionModelSelectionInputSchema,
+  AiSessionModelSelectionActionResponseSchema,
+  AiSessionReasoningEffortInputSchema,
+  AiSessionReasoningEffortActionResponseSchema,
+  type AiSessionModelSelection,
   AiSessionForkInputSchema,
   AiSessionForkResultSchema,
   AiSessionCloseInputSchema,
@@ -88,24 +112,39 @@ import {
   AiSessionOpenAppResultSchema,
   AiSessionApprovalInputSchema,
   AiSessionControlErrorSchema,
+  AiSessionDetailSchema,
+  AiSessionDetailReadSchema,
   AiSessionHistoryListSchema,
   AiSessionHistoryDetailSchema,
   AiSessionTimelineSchema,
   AiSessionTurnTimelineSchema,
+  AiSessionTurnIndexSchema,
+  AiSessionTurnIndexReadSchema,
+  AiSessionTurnBodySchema,
+  AiSessionTurnBodyReadSchema,
+  AiSessionQueueMutationResponseSchema,
   AiSessionDeltaResponseSchema,
   AiSessionMessageDeltaEventSchema,
   AiSessionTimelineItemEventSchema,
   type AiSessionEventReason,
+  type AiSessionPatchEvent,
+  type AiSessionRemovedEvent,
+  type AiSessionMessageAttachment,
   type AiSessionSnapshotEvent,
+  type AiSessionStatus,
   type AiSessionsSnapshot,
   AiSessionMessageInputSchema,
+  AiSessionMessageAttachmentSchema,
+  AiSessionMessageRefInputSchema,
   AiSessionCommandInputSchema,
   AiSessionCommandResultSchema,
   AiSessionMentionFileSearchInputSchema,
   AiSessionQueueReorderInputSchema,
   AiSessionQueueEditInputSchema,
   AiSessionResumeResultSchema,
+  isAiSessionInlineImageMime,
 } from "@task-handoff/protocol/ai-sessions";
+import { normalizeAiSessionReasoningEffortCapabilities } from "@task-handoff/protocol/ai-session-provider-capabilities";
 import {
   APP_SESSION_DELTA_RETENTION_MS,
   AppSessionDeltaResponseSchema,
@@ -120,10 +159,11 @@ import {
   type AppSessionsSnapshot,
 } from "@task-handoff/protocol/app-sessions";
 import { TriggerSourceSchema, TriggerActionSchema, TriggerPolicySchema, TriggerTargetSchema } from "@task-handoff/protocol/triggers";
-import { bridgeWebSockets } from "@task-handoff/protocol/websocket-bridge";
+import { bridgeWebSockets, TASK_HANDOFF_WEBSOCKET_SERVER_OPTIONS } from "@task-handoff/protocol/websocket-bridge";
 import { SESSION_STREAM_PROTOCOL_VERSION, SessionStreamsHelloEventType } from "@task-handoff/protocol/events";
 import { AppManagementOperationRequestSchema } from "@task-handoff/protocol/control-plane";
 import { registerRepositoryRoutes, repositoryWorkspaceRootsFromEnv } from "../repository/routes";
+import { attachBrowserTunnel } from "./browser-tunnel";
 
 const WebSocketClient = require("ws");
 
@@ -332,6 +372,7 @@ const AppLaunchSchema = z
   .strict();
 
 const ManagedModelEnvironmentSchema = z.object({
+  CODEX_HOME: z.string().max(4096).optional(),
   OPENAI_API_KEY: z.string().max(4096).optional(),
   OPENAI_BASE_URL: z.string().max(4096).optional(),
   TASK_HANDOFF_CODEX_BASE_URL: z.string().max(4096).optional(),
@@ -353,6 +394,7 @@ function managedAppEnvironment(env: NodeJS.ProcessEnv) {
   const managed = managedModelEnvironment(env);
   return {
     ...managed,
+    ...Object.fromEntries(Object.entries(env).filter(([key, value]) => key.startsWith("TASK_HANDOFF_CODEX_PROVIDER_") && typeof value === "string")),
     // Explicit undefined values shadow the controlled-instance process
     // environment and are omitted by child_process when Claude is launched.
     ANTHROPIC_AUTH_TOKEN: undefined,
@@ -456,6 +498,24 @@ function sendAiSessionControlError(reply: { code: (statusCode: number) => { send
   return reply.code(statusCode).send({ error: AiSessionControlErrorSchema.parse({ code, message: error instanceof Error ? error.message : String(error) }) });
 }
 
+function projectConversationAttachmentTurns<T extends {
+  userMessages?: NonNullable<NonNullable<AiSessionStatus["turns"]>[number]["userMessages"]>;
+}>(
+  sessionId: string,
+  turns: T[] | undefined,
+  store: AiSessionConversationAttachmentStore,
+) {
+  return turns?.map((turn) => ({
+      ...turn,
+      userMessages: turn.userMessages?.map((message) => ({
+        ...message,
+        attachments: message.attachments.map((attachment) => (
+          store.attachmentMetadata(sessionId, message.id, attachment.id) || { ...attachment, contentState: "missing" as const }
+        )),
+      })),
+    }));
+}
+
 function defaultStaticDir() {
   const candidates = [
     path.resolve(process.cwd(), "packages", "controlled-instance-ui", "dist"),
@@ -551,16 +611,22 @@ async function runTriggerOnce(triggers: TriggerStore, executor: TriggerExecutor,
 export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   const startedAt = new Date().toISOString();
   const storagePaths = resolveStoragePaths();
+  let nodeAgentClient!: NodeAgentRegistrationClient;
+  const gitCredentialBroker = new GitCredentialBroker({ nodeAgentClient: () => nodeAgentClient });
+  await gitCredentialBroker.start();
+  const gitCredentialBrokerInstalled = installGitBrokerEnvironment(process.env.TASK_HANDOFF_CLI_PATH, gitCredentialBroker.socketPath);
   const managedModelEnv = { ...process.env };
   logControlledInstanceStart(storagePaths.logDir, storagePaths.dataDir);
-  applyManagedCodexModelConfig(managedModelEnv);
+  let privateModelCatalog = readControlledPrivateModelCatalog(managedModelEnv);
+  let codexManagedConfig = applyManagedCodexModelConfig(managedModelEnv, privateModelCatalog);
+  Object.assign(managedModelEnv, codexManagedConfig.providerEnvironment || {});
   applyManagedClaudeModelConfig(managedModelEnv);
   const auth = resolveWebAuth(storagePaths);
   const events = new WebEventBus();
   const appRuntime = options.appRuntime || new AppRuntimeManager(storagePaths);
   appRuntime.replaceManagedEnvironment(managedAppEnvironment(managedModelEnv));
   const app = Fastify({ logger: options.logger ?? true });
-  let nodeAgentClient!: NodeAgentRegistrationClient;
+  app.addContentTypeParser("application/octet-stream", (_request, payload, done) => done(null, payload));
   const appManagement = options.appManagement || new AppManagementManager({
     stateDir: path.join(storagePaths.runtimeDir, "app-management"),
     installBaseDir: process.env.TASK_HANDOFF_MANAGED_APP_ROOT || path.join(storagePaths.dataDir, "managed-apps"),
@@ -571,17 +637,26 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       if (nodeAgentClient.enabled()) await nodeAgentClient.heartbeat();
     },
   });
-  const aiSessions = options.aiSessionRegistry || createAiSessionRegistry();
   const aiSessionPersistenceSettings = new AiSessionPersistenceSettingsStore(storagePaths, (reason) => {
     app.log.warn({ reason }, "AI session persistence settings were sanitized");
   });
   const initialAiSessionPersistenceSettings = aiSessionPersistenceSettings.get();
+  const aiSessionConversationAttachments = new AiSessionConversationAttachmentStore(storagePaths, {
+    retentionDays: initialAiSessionPersistenceSettings.attachmentRetentionDays,
+    maxFileAttachmentBytes: initialAiSessionPersistenceSettings.maxFileAttachmentBytes,
+    onWarning: (reason) => app.log.warn({ reason }, "AI session conversation attachment was sanitized"),
+  });
+  const attachmentDraftStreams = new AiSessionAttachmentDraftStreams((input) => aiSessionConversationAttachments.createDraft(input));
+  const aiSessionAttachmentGcTimer = setInterval(() => aiSessionConversationAttachments.gc(), 60 * 60 * 1000);
+  aiSessionAttachmentGcTimer.unref?.();
+  const aiSessions = options.aiSessionRegistry || createAiSessionRegistry({ conversationAttachments: aiSessionConversationAttachments });
   const aiSessionHistory = new AiSessionHistoryStore(storagePaths, {
     limit: initialAiSessionPersistenceSettings.historyLimit,
     onWarning: (warning) => app.log.warn({ warning }, "AI session history entry was sanitized"),
+    onRemove: (sessionId) => aiSessionConversationAttachments.releaseSession(sessionId),
   });
-  const aiSessionHistoryLifecycle = new AiSessionHistoryLifecycle(aiSessionHistory);
   const aiSessionController = new AiSessionController(aiSessions);
+  const aiSessionProviderCapabilities = () => aiSessionProviders.capabilities();
   const triggers = new TriggerStore(storagePaths);
   const triggerExecutor = new TriggerExecutor(triggers, aiSessionController);
   const triggerManager = new TriggerManager(triggers, triggerExecutor, storagePaths, (type, payload) => events.publish(type, payload));
@@ -591,9 +666,11 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     aiSessions,
     triggers,
     aiSessionController.timelineCapabilities(),
+    aiSessionProviderCapabilities(),
+    gitCredentialBrokerInstalled,
   ));
 
-  await app.register(websocket);
+  await app.register(websocket, { options: TASK_HANDOFF_WEBSOCKET_SERVER_OPTIONS });
   registerAuth(app, auth);
 
   app.addHook("onReady", async () => {
@@ -603,23 +680,22 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   });
 
   app.addHook("onClose", async () => {
+    clearInterval(aiSessionAttachmentGcTimer);
+    attachmentDraftStreams.dispose();
     nodeAgentClient.stop();
     triggerManager.stop();
     appRuntime.dispose?.();
   });
-  let aiSessionsFingerprint = "";
   const instanceId = process.env.TASK_HANDOFF_INSTANCE_ID || "standalone";
   const aiSessionStreamId = `ais_${instanceId}_${crypto.randomUUID()}`;
   const appSessionStreamId = `aps_${instanceId}_${crypto.randomUUID()}`;
   let aiSessionSnapshotRevision = 0;
-  let lastAiSessionSnapshot: AiSessionsSnapshot = {
-    runningCount: 0,
-    waitingCount: 0,
-    staleCount: 0,
-    sessions: [],
-    updatedAt: startedAt,
-  };
-  const aiSessionEventHistory: Array<{ type: typeof AiSessionEventType.Snapshot; payload: AiSessionSnapshotEvent; createdAtMs: number }> = [];
+  let lastAiSessionSnapshot: AiSessionsSnapshot | undefined;
+  type AiSessionRuntimeEvent =
+    | { type: typeof AiSessionEventType.Snapshot; payload: AiSessionSnapshotEvent }
+    | { type: typeof AiSessionEventType.Patch; payload: AiSessionPatchEvent }
+    | { type: typeof AiSessionEventType.Removed; payload: AiSessionRemovedEvent };
+  const aiSessionEventHistory: Array<AiSessionRuntimeEvent & { createdAtMs: number }> = [];
   const drainingAiSessionIds = new Set<string>();
   const aiSessionLifecycleById = new Map<string, string>();
   let aiSessionTimer: ReturnType<typeof setInterval> | undefined;
@@ -633,7 +709,10 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     | { type: typeof AppSessionEventType.Removed; payload: AppSessionRemovedEvent };
   const appSessionEventHistory: Array<AppSessionRuntimeEvent & { createdAtMs: number }> = [];
   let lastAppSessionSnapshot = appSessionsSnapshotFromRecords([]);
-  const aiSessionDiscovery = options.aiSessionDiscovery || new AiSessionDiscoveryCoordinator();
+  const aiSessionDiscovery = options.aiSessionDiscovery || new AiSessionDiscoveryCoordinator(({ providerId, error }) => {
+    app.log.warn({ err: error, providerId }, "AI session discovery provider failed");
+  });
+  const aiSessionProviders = new AiSessionProviderRegistry(aiSessionController, aiSessionDiscovery);
   const configuredDeltaCoalescingWindow = process.env.TASK_HANDOFF_AI_SESSION_DELTA_COALESCE_MS;
   const aiSessionMessageDeltas = new AiSessionMessageDeltaCoalescer({
     emit: (payload) => events.publish(AiSessionEventType.MessageDelta, payload),
@@ -642,11 +721,37 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       : Number(configuredDeltaCoalescingWindow),
   });
   const codexAppServer = options.codexAppServer || new CodexAppServerSessionBridge(aiSessions, {
+    ensureAppSessions: async () => {
+      appRuntime.ensureSharedResource("codex");
+      return appSessionsWithSharedCodexAppServer();
+    },
     timelineStorePath: path.join(storagePaths.dataDir, "ai-session-timeline", "codex"),
     threadStartDefaults: {
-      model: process.env.TASK_HANDOFF_CODEX_MODEL?.trim() || undefined,
-      modelProvider: process.env.TASK_HANDOFF_CODEX_MODEL?.trim() ? "openai" : undefined,
+      model: codexManagedConfig.model || process.env.TASK_HANDOFF_CODEX_MODEL?.trim() || undefined,
+      modelProvider: codexManagedConfig.modelProvider || (process.env.TASK_HANDOFF_CODEX_MODEL?.trim() ? "openai" : undefined),
     },
+    resolveModelSelection: (selection) => {
+      const resolved = resolveControlledPrivateModelSelection(privateModelCatalog, "codex", selection);
+      return {
+        model: resolved.modelName,
+        modelProvider: codexProviderId(resolved.modelEntityId),
+      };
+    },
+    projectModelSelection: (modelProvider, model) => {
+      const entities = privateModelCatalog?.entities.filter((candidate) => candidate.protocols.includes("openai-responses")) || [];
+      // Codex persists the provider name in its own namespace. Older threads
+      // may report a generic provider (for example `openai`) instead of the
+      // managed provider id we assign to the model entity. Prefer the exact
+      // provider mapping, then reconcile by model name only when that name is
+      // unique in the instance catalog.
+      const entity = entities.find((candidate) => codexProviderId(candidate.id) === modelProvider)
+        || (() => {
+          const matches = entities.filter((candidate) => candidate.modelNames.some((entry) => entry.name === model));
+          return matches.length === 1 ? matches[0] : undefined;
+        })();
+      return entity ? { modelEntityId: entity.id, modelName: model } : undefined;
+    },
+    onDiagnostic: (diagnostic) => app.log.warn({ diagnostic }, "Codex model selection diagnostic"),
     onMessageDelta: (delta) => {
       const payload = AiSessionMessageDeltaEventSchema.parse({
         instanceId,
@@ -658,6 +763,43 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     },
     onEventSourceClose: () => aiSessionMessageDeltas.flushAll("event-source-close"),
   });
+  const openCode = new OpenCodeSessionBridge(aiSessions, {
+    resolveModelSelection: (selection) => {
+      const resolved = resolveControlledPrivateModelSelection(privateModelCatalog, "opencode", selection);
+      return resolved ? { providerID: `task-handoff-${resolved.modelEntityId}`, modelID: resolved.modelName } : undefined;
+    },
+    projectModelSelection: (providerID, modelID) => {
+      const entityId = providerID.startsWith("task-handoff-") ? providerID.slice("task-handoff-".length) : undefined;
+      const entities = privateModelCatalog?.entities.filter((candidate) => candidate.protocols.includes("openai-chat-completions")) || [];
+      const matches = entities.filter((candidate) => (!entityId || candidate.id === entityId) && candidate.modelNames.some((entry) => entry.name === modelID));
+      return matches.length === 1 ? { modelEntityId: matches[0].id, modelName: modelID } : undefined;
+    },
+    connection: () => {
+      appRuntime.ensureSharedResource("opencode");
+      const connection = appRuntime.sharedResourcePrivateConnection("opencode");
+      if (!connection) throw Object.assign(new Error("OpenCode shared server connection is unavailable."), { code: "OPENCODE_SERVER_UNAVAILABLE" });
+      return connection;
+    },
+    workspaceRoots: () => {
+      const configured = repositoryWorkspaceRootsFromEnv();
+      return configured.length ? configured : [process.env.TASK_HANDOFF_WORKSPACE || process.cwd()];
+    },
+    onMessageDelta: (delta) => {
+      const payload = AiSessionMessageDeltaEventSchema.parse({
+        instanceId,
+        nodeId: process.env.TASK_HANDOFF_NODE_ID,
+        ...delta,
+        generatedAt: new Date().toISOString(),
+      });
+      aiSessionMessageDeltas.push(payload);
+    },
+    onEventSourceClose: () => aiSessionMessageDeltas.flushAll("event-source-close"),
+    onDiagnostic: (diagnostic) => app.log.warn({ diagnostic }, "OpenCode adapter diagnostic"),
+  });
+  // OpenCode is an optional managed app. Do not register its session provider
+  // when the executable is unavailable: discovery runs periodically and would
+  // otherwise turn a missing local dependency into a repeated error storm.
+  const openCodeAvailable = appRuntime.catalog().some((app) => app.id === "opencode");
   const retainCodexTimelineHistory = () => {
     if (typeof codexAppServer.retainTimelineHistory !== "function") return;
     try {
@@ -679,14 +821,87 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     message: "Instance registration token is required.",
   }), async (request) => {
     const next = AiSessionPersistenceSettingsInputSchema.parse(request.body || {});
-    aiSessionPersistenceSettings.put(next);
+    const settings = aiSessionPersistenceSettings.put(next);
+    aiSessionConversationAttachments.setRetentionDays(settings.attachmentRetentionDays);
+    aiSessionConversationAttachments.setMaxFileAttachmentBytes(settings.maxFileAttachmentBytes);
     const history = aiSessionHistory.setRetentionLimit(next.historyLimit);
     retainCodexTimelineHistory();
-    return { data: { applied: true, historyLimit: history.limit, removedHistoryCount: history.removed.length } };
+    return { data: {
+      applied: true,
+      historyLimit: history.limit,
+      attachmentRetentionDays: settings.attachmentRetentionDays,
+      maxFileAttachmentBytes: settings.maxFileAttachmentBytes,
+      removedHistoryCount: history.removed.length,
+    } };
   });
   const claudeControlSock = new ClaudeControlSockSessionBridge(aiSessions);
-  aiSessionController.register(codexAppServer);
-  aiSessionController.register(claudeControlSock);
+  aiSessionProviders.register({
+    agent: "codex",
+    controlProvider: codexAppServer,
+    discoveryProvider: codexAppServer,
+    ensureReady: async () => {
+      appRuntime.ensureSharedResource("codex");
+      await codexAppServer.sync(appSessionsWithSharedCodexAppServer());
+    },
+    capability: () => ({
+      agent: "codex",
+      actions: { create: true, send: true, queue: true, steer: true, interrupt: true, archive: true, delete: true, fork: true, approvalDecisions: ["allow", "deny", "skip"] },
+      timeline: { sessionRead: true, turnRead: true, liveItems: true },
+      modelSelection: {
+        selectModelAtCreate: true,
+        selectProviderAtCreate: true,
+        switchModelWithinProvider: codexAppServer.supportsThreadSettingsUpdate(),
+        // Codex thread/settings/update accepts model only; provider is fixed per thread.
+        switchProviderDuringSession: false,
+      },
+      reasoningEffort: {
+        // thread/start has accepted model_reasoning_effort before thread/settings/update existed.
+        selectAtCreate: true,
+        updateDuringSession: codexAppServer.supportsThreadSettingsUpdate(),
+      },
+    }),
+  });
+  aiSessionProviders.register({
+    agent: "claude",
+    controlProvider: claudeControlSock,
+    discoveryProvider: claudeControlSock,
+    capability: {
+      agent: "claude",
+      actions: { create: false, send: true, queue: true, steer: true, interrupt: true, archive: true, delete: false, fork: false, approvalDecisions: [] },
+      timeline: { sessionRead: false, turnRead: false, liveItems: false },
+      modelSelection: {
+        selectModelAtCreate: false,
+        selectProviderAtCreate: false,
+        switchModelWithinProvider: false,
+        switchProviderDuringSession: false,
+      },
+      reasoningEffort: { selectAtCreate: false, updateDuringSession: false },
+    },
+  });
+  if (openCodeAvailable) {
+    aiSessionProviders.register({
+      agent: "opencode",
+      controlProvider: openCode,
+      discoveryProvider: openCode,
+      ensureReady: async () => {
+        appRuntime.ensureSharedResource("opencode");
+        await openCode.ensureReady();
+      },
+      capability: {
+        agent: "opencode",
+        actions: { create: true, send: true, queue: true, steer: false, interrupt: true, archive: true, delete: true, fork: true, approvalDecisions: ["allow", "deny"] },
+        timeline: { sessionRead: true, turnRead: true, liveItems: true },
+        modelSelection: {
+          selectModelAtCreate: true,
+          selectProviderAtCreate: true,
+          switchModelWithinProvider: true,
+          switchProviderDuringSession: true,
+        },
+        reasoningEffort: { selectAtCreate: true, updateDuringSession: true },
+      },
+    });
+  }
+  const aiSessionHistoryLifecycle = new AiSessionHistoryLifecycle(aiSessionHistory, (agent) => Boolean(aiSessionProviders.get(agent)));
   const unsubscribeTimelineItems = aiSessionController.subscribeTimelineItems((timelineItem) => {
     events.publish(AiSessionEventType.TimelineItem, AiSessionTimelineItemEventSchema.parse({
       instanceId,
@@ -697,10 +912,8 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   });
   app.addHook("onClose", async () => unsubscribeTimelineItems());
   aiSessionDiscovery.register(new ClaudeAppSessionBindingProvider());
-  aiSessionDiscovery.register(claudeControlSock);
   aiSessionDiscovery.register(new TranscriptTailDiscoveryProvider());
-  aiSessionDiscovery.register(codexAppServer);
-  const appSessionsWithSharedCodexAppServer = () => {
+  function appSessionsWithSharedCodexAppServer() {
     const appServer = appRuntime.sharedResourceSessionAi("codex")?.appServer;
     if (!appServer) {
       return appRuntime.listSessions();
@@ -716,7 +929,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
         ai: { appServer },
       },
     ];
-  };
+  }
   const aiSessionResume = new AiSessionResumeCoordinator({
     history: aiSessionHistory,
     registry: aiSessions,
@@ -729,9 +942,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       },
     }),
     resumeProvider: async (item) => {
-      await appRuntime.ensureSharedResource(item.agent);
-      await codexAppServer.sync(appSessionsWithSharedCodexAppServer());
-      await aiSessionController.provider(item.agent).resumeSession?.(item.providerSessionId);
+      await aiSessionProviders.resume(item);
     },
   });
   const aiSessionCreate = new AiSessionCreateCoordinator({
@@ -739,9 +950,9 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     controller: aiSessionController,
     operationStorePath: path.join(storagePaths.runtimeDir, "ai-session-create-operations.json"),
     ensureProvider: async (agent) => {
-      await appRuntime.ensureSharedResource(agent);
-      if (agent === "codex") await codexAppServer.sync(appSessionsWithSharedCodexAppServer());
+      await aiSessionProviders.ensureReady(agent);
     },
+    resolveModelSelection: (agent, requested) => resolveControlledPrivateModelSelection(privateModelCatalog, agent, requested),
     onDiagnostic: (diagnostic) => app.log.warn({ diagnostic }, "AI session create compensation"),
   });
   const repositoryAiSessionWorkspace = registerRepositoryRoutes(app, {
@@ -756,8 +967,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     controller: aiSessionController,
     operationStorePath: path.join(storagePaths.runtimeDir, "ai-session-fork-operations.json"),
     ensureProvider: async (agent) => {
-      await appRuntime.ensureSharedResource(agent);
-      if (agent === "codex") await codexAppServer.sync(appSessionsWithSharedCodexAppServer());
+      await aiSessionProviders.ensureReady(agent);
     },
     prepareManagedWorktree: async (source, clientRequestId) => repositoryAiSessionWorkspace.prepareForkWorktree(source.id, clientRequestId),
     validateManagedWorktree: async (source, worktreeId, cwd) => repositoryAiSessionWorkspace.validateForkWorktree(source.id, worktreeId, cwd),
@@ -786,25 +996,27 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   let serviceClosing = false;
   const refreshAiSessions = async () => {
     if (serviceClosing) return;
-    const appSessions = appSessionsWithSharedCodexAppServer();
-    const activeAppIds = new Set(appSessions.filter((session) => !session.status || session.status === "running").map((session) => session.id));
-    const lostBindings = aiSessions.all().flatMap((session) => {
-      const appSessionId = session.appSessionId;
-      return appSessionId && !activeAppIds.has(appSessionId) ? [{ session, appSessionId }] : [];
+    await aiSessions.batchChanges(async () => {
+      const appSessions = appSessionsWithSharedCodexAppServer();
+      const activeAppIds = new Set(appSessions.filter((session) => !session.status || session.status === "running").map((session) => session.id));
+      const lostBindings = aiSessions.all().flatMap((session) => {
+        const appSessionId = session.appSessionId;
+        return appSessionId && !activeAppIds.has(appSessionId) ? [{ session, appSessionId }] : [];
+      });
+      await Promise.all(lostBindings.map(async ({ session, appSessionId }) => {
+        if (serviceClosing) return;
+        try { await aiSessionClose.closeForAppSession(appSessionId); } catch (error: unknown) {
+          app.log.warn({ err: error, aiSessionId: session.id, appSessionId }, "failed to close AI session after App exit");
+        }
+      }));
+      aiSessions.reconcileAppSessionBindings(appSessions);
+      await aiSessionDiscovery.refresh({
+        registry: aiSessions,
+        appSessions,
+      });
+      aiSessionHistoryLifecycle.activate(aiSessions.all(), appSessions);
+      retainCodexTimelineHistory();
     });
-    await Promise.all(lostBindings.map(async ({ session, appSessionId }) => {
-      if (serviceClosing) return;
-      try { await aiSessionClose.closeForAppSession(appSessionId); } catch (error: unknown) {
-        app.log.warn({ err: error, aiSessionId: session.id, appSessionId }, "failed to close AI session after App exit");
-      }
-    }));
-    aiSessions.reconcileAppSessionBindings(appSessions);
-    await aiSessionDiscovery.refresh({
-      registry: aiSessions,
-      appSessions,
-    });
-    aiSessionHistoryLifecycle.activate(aiSessions.all(), appSessions);
-    retainCodexTimelineHistory();
   };
   const aiSessionRefreshScheduler = new AiSessionRefreshScheduler(
     refreshAiSessions,
@@ -813,18 +1025,27 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   const refreshAndPublishAiSessions = (reason: AiSessionEventReason = "discovery-scan") => (
     aiSessionRefreshScheduler.request(reason)
   );
+  const createAiSessionMeta = (reason: AiSessionEventReason) => ({
+    streamId: aiSessionStreamId,
+    instanceId,
+    nodeId: process.env.TASK_HANDOFF_NODE_ID,
+    revision: aiSessionSnapshotRevision,
+    previousRevision: aiSessionSnapshotRevision > 0 ? aiSessionSnapshotRevision - 1 : undefined,
+    traceId: `ais_evt_${Date.now().toString(36)}_${Math.random().toString(16).slice(2, 10)}`,
+    generatedAt: new Date().toISOString(),
+    reason,
+  });
   const createAiSessionSnapshotEvent = (snapshot: AiSessionsSnapshot, reason: AiSessionEventReason): AiSessionSnapshotEvent => ({
-    meta: {
-      streamId: aiSessionStreamId,
-      instanceId,
-      nodeId: process.env.TASK_HANDOFF_NODE_ID,
-      revision: aiSessionSnapshotRevision,
-      previousRevision: aiSessionSnapshotRevision > 0 ? aiSessionSnapshotRevision - 1 : undefined,
-      traceId: `ais_evt_${Date.now().toString(36)}_${Math.random().toString(16).slice(2, 10)}`,
-      generatedAt: new Date().toISOString(),
-      reason,
-    },
+    meta: createAiSessionMeta(reason),
     snapshot,
+  });
+  const createAiSessionPatchEvent = (
+    changes: { upserted: AiSessionsSnapshot["sessions"]; removed: string[] },
+    reason: AiSessionEventReason,
+  ): AiSessionPatchEvent => ({
+    meta: createAiSessionMeta(reason),
+    upserted: changes.upserted,
+    removed: changes.removed,
   });
   const pruneAiSessionEventHistory = () => {
     const cutoff = Date.now() - AI_SESSION_DELTA_RETENTION_MS;
@@ -832,31 +1053,42 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       aiSessionEventHistory.shift();
     }
   };
-  const rememberAiSessionEvent = (payload: AiSessionSnapshotEvent) => {
-    aiSessionEventHistory.push({ type: AiSessionEventType.Snapshot, payload, createdAtMs: Date.now() });
+  const rememberAiSessionEvent = (event: AiSessionRuntimeEvent) => {
+    aiSessionEventHistory.push({ ...event, createdAtMs: Date.now() });
     pruneAiSessionEventHistory();
+  };
+  const publishAiSessionEvent = (event: AiSessionRuntimeEvent, snapshot: AiSessionsSnapshot, reason: AiSessionEventReason) => {
+    rememberAiSessionEvent(event);
+    events.publish(event.type, event.payload);
+    const changedSessionIds = event.type === AiSessionEventType.Patch
+      ? [...event.payload.upserted.map((session) => session.id), ...event.payload.removed]
+      : snapshot.sessions.map((session) => session.id);
+    app.log.info({
+      traceId: event.payload.meta.traceId,
+      instanceId: event.payload.meta.instanceId,
+      streamId: event.payload.meta.streamId,
+      revision: event.payload.meta.revision,
+      reason,
+      eventType: event.type,
+      sessionCount: snapshot.sessions.length,
+      runningCount: snapshot.runningCount,
+      waitingCount: snapshot.waitingCount,
+      changedSessionIds,
+      eventBytes: Buffer.byteLength(JSON.stringify(event.payload), "utf8"),
+      snapshotBytes: Buffer.byteLength(JSON.stringify(snapshot), "utf8"),
+    }, "ai-session.event.published");
   };
   const publishAiSessionSnapshot = (reason: AiSessionEventReason = "provider-event") => {
     aiSessionMessageDeltas.flushAll("authoritative-event");
     const snapshot = aiSessions.boundSnapshot(appSessionsWithSharedCodexAppServer());
-    const fingerprint = JSON.stringify(snapshot.sessions);
-    if (fingerprint !== aiSessionsFingerprint) {
-      aiSessionsFingerprint = fingerprint;
-      lastAiSessionSnapshot = snapshot;
+    const change = projectAiSessionAuthorityChange(lastAiSessionSnapshot, snapshot);
+    if (change.kind !== "unchanged") {
       aiSessionSnapshotRevision += 1;
-      const payload = createAiSessionSnapshotEvent(snapshot, reason);
-      rememberAiSessionEvent(payload);
-      events.publish(AiSessionEventType.Snapshot, payload);
-      app.log.info({
-        traceId: payload.meta.traceId,
-        instanceId: payload.meta.instanceId,
-        streamId: payload.meta.streamId,
-        revision: payload.meta.revision,
-        reason,
-        sessionCount: snapshot.sessions.length,
-        runningCount: snapshot.runningCount,
-        waitingCount: snapshot.waitingCount,
-      }, "ai-session.snapshot.published");
+      const event: AiSessionRuntimeEvent = change.kind === "snapshot"
+        ? { type: AiSessionEventType.Snapshot, payload: createAiSessionSnapshotEvent(snapshot, reason) }
+        : { type: AiSessionEventType.Patch, payload: createAiSessionPatchEvent(change, reason) };
+      publishAiSessionEvent(event, snapshot, reason);
+      lastAiSessionSnapshot = snapshot;
       triggerManager.handleAiSessions(snapshot);
       if (reason === "discovery-scan") {
         streamDiagnostics.aiDiscoveryCorrections += 1;
@@ -1094,10 +1326,13 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       });
     });
     aiSessionTimer = setInterval(() => {
-      void refreshAndPublishAiSessions();
+      void refreshAndPublishAiSessions().catch((error) => {
+        app.log.warn({ err: error }, "periodic AI session discovery failed");
+      });
     }, Number(process.env.TASK_HANDOFF_AI_SESSION_SCAN_INTERVAL_MS) || 30_000);
   });
   app.addHook("onClose", async () => {
+    await gitCredentialBroker.close();
     stopAiSessionChangeListener();
     if (startupAiSessionTask) {
       clearImmediate(startupAiSessionTask);
@@ -1113,6 +1348,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     }
     codexAppServer.stop();
     claudeControlSock.stop();
+    openCode.close();
   });
   app.addHook("preClose", async () => {
     // Provider sessions are durable user state, not process-owned resources.
@@ -1120,6 +1356,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     // exits and Close AI Session remain responsible for provider archival.
     serviceClosing = true;
     codexAppServer.stop();
+    openCode.close();
     aiSessionMessageDeltas.close("service-close");
   });
   const publishAppSessionRuntimeChange = (reason: AppSessionEventReason, session: Record<string, unknown>) => {
@@ -1219,8 +1456,9 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     },
   }));
 
-  app.get("/api/events", { websocket: true }, (socket) => {
-    events.connect(socket);
+  app.get("/api/events", { websocket: true }, (socket, request) => {
+    const query = request.query as { aiSessionAuthoritySnapshot?: string; aiSessionTransient?: string };
+    events.connect(socket, { expectsTransientSubscription: query.aiSessionTransient === "1" });
     events.send(socket, SessionStreamsHelloEventType, {
       protocolVersion: SESSION_STREAM_PROTOCOL_VERSION,
       streams: [
@@ -1240,6 +1478,20 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
         },
       ],
     });
+    if (query.aiSessionAuthoritySnapshot === "1") {
+      // A stateful relay owns no projection when it reconnects, even when this
+      // controlled instance has continued publishing patches. Bootstrap only
+      // that relay connection; ordinary UI subscribers recover over HTTP and
+      // must not receive another full snapshot.
+      events.send(
+        socket,
+        AiSessionEventType.Snapshot,
+        createAiSessionSnapshotEvent(
+          lastAiSessionSnapshot || aiSessions.boundSnapshot(appSessionsWithSharedCodexAppServer()),
+          "startup",
+        ),
+      );
+    }
     events.send(socket, "app.management", appManagement.snapshotEvent());
     void appManagement.refreshSnapshot()
       .then(() => appManagement.publishSnapshot())
@@ -1264,6 +1516,8 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       aiSessions,
       triggers,
       aiSessionController.timelineCapabilities(),
+      aiSessionProviderCapabilities(),
+      gitCredentialBrokerInstalled,
     );
     return {
       data: {
@@ -1276,7 +1530,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   });
 
   app.get("/api/instance/capabilities", async () => ({
-    data: controlledInstanceCapabilities(appRuntime, aiSessionController.timelineCapabilities()),
+    data: controlledInstanceCapabilities(appRuntime, aiSessionController.timelineCapabilities(), aiSessionProviderCapabilities(), gitCredentialBrokerInstalled),
   }));
 
   app.get("/api/workspace/status", async () => ({
@@ -1293,7 +1547,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       streamId: aiSessionStreamId,
       revision: aiSessionSnapshotRevision,
       lastEventAt: aiSessionEventHistory.at(-1)?.payload.meta.generatedAt || startedAt,
-      snapshot: lastAiSessionSnapshot,
+      snapshot: lastAiSessionSnapshot || aiSessions.boundSnapshot(appSessionsWithSharedCodexAppServer()),
     } };
   });
 
@@ -1302,7 +1556,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       streamId: aiSessionStreamId,
       revision: aiSessionSnapshotRevision,
       lastEventAt: aiSessionEventHistory.at(-1)?.payload.meta.generatedAt || startedAt,
-      snapshot: lastAiSessionSnapshot,
+      snapshot: lastAiSessionSnapshot || aiSessions.boundSnapshot(appSessionsWithSharedCodexAppServer()),
     },
   }));
 
@@ -1407,9 +1661,85 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     data: triggers.list().recentRuns,
   }));
 
-  app.get("/api/ai-sessions/history", async () => ({
-    data: AiSessionHistoryListSchema.parse({ items: aiSessionHistory.list() }),
-  }));
+  app.get<{ Querystring: { agents?: string } }>("/api/ai-sessions/history", async (request) => {
+    // Compatibility for v0.0.21: legacy clients parse history agents as codex | claude.
+    const requested = request.query.agents?.split(",").map((agent) => agent.trim()).filter(Boolean);
+    const agents = new Set(requested?.length ? requested : ["codex", "claude"]);
+    return { data: AiSessionHistoryListSchema.parse({ items: aiSessionHistory.list().filter((item) => agents.has(item.agent)) }) };
+  });
+
+  app.post<{ Querystring: Record<string, unknown>; Body: Readable }>("/api/ai-session-attachments/drafts", { bodyLimit: AI_SESSION_ATTACHMENT_UPLOAD_BODY_LIMIT }, async (request, reply) => {
+    try {
+      const input = AiSessionAttachmentDraftUploadQuerySchema.parse(request.query);
+      if (input.scopeType === "session" && !aiSessions.get(input.scopeId)) {
+        return reply.code(404).send({ error: { code: "AI_SESSION_NOT_FOUND", message: "AI session not found." } });
+      }
+      if (input.kind === "image" && !isAiSessionInlineImageMime(input.mime)) {
+        return reply.code(400).send({ error: { code: "AI_SESSION_ATTACHMENT_INVALID", message: "Unsupported image MIME type." } });
+      }
+      const draft = await aiSessionConversationAttachments.createDraft({ ...input, source: request.body });
+      return reply.code(201).send({ data: draft });
+    } catch (error: unknown) {
+      return sendAiSessionControlError(reply, error);
+    }
+  });
+
+  app.post<{ Body: unknown }>("/api/ai-session-attachments/draft-streams", async (request, reply) => {
+    try {
+      const input = AiSessionAttachmentDraftStreamCreateInputSchema.parse(request.body);
+      if (input.scopeType === "session" && !aiSessions.get(input.scopeId)) {
+        return reply.code(404).send({ error: { code: "AI_SESSION_NOT_FOUND", message: "AI session not found." } });
+      }
+      return reply.code(201).send({ data: await attachmentDraftStreams.begin(input) });
+    } catch (error: unknown) {
+      return sendAiSessionControlError(reply, error);
+    }
+  });
+
+  app.put<{ Params: { attachmentId: string }; Querystring: { offset?: string }; Body: Readable }>("/api/ai-session-attachments/draft-streams/:attachmentId", { bodyLimit: AI_SESSION_ATTACHMENT_DRAFT_STREAM_BODY_LIMIT }, async (request, reply) => {
+    try {
+      const attachmentId = AiSessionAttachmentDraftStreamIdSchema.parse(request.params.attachmentId);
+      const { offset } = AiSessionAttachmentDraftStreamOffsetQuerySchema.parse(request.query);
+      return { data: await attachmentDraftStreams.append(attachmentId, offset, request.body) };
+    } catch (error: unknown) {
+      return sendAiSessionControlError(reply, error);
+    }
+  });
+
+  app.post<{ Params: { attachmentId: string }; Body: unknown }>("/api/ai-session-attachments/draft-streams/:attachmentId/complete", async (request, reply) => {
+    try {
+      z.object({}).strict().parse(request.body || {});
+      const attachmentId = AiSessionAttachmentDraftStreamIdSchema.parse(request.params.attachmentId);
+      const draft = await attachmentDraftStreams.complete(attachmentId);
+      return { data: draft };
+    } catch (error: unknown) {
+      return sendAiSessionControlError(reply, error);
+    }
+  });
+
+  app.delete<{ Params: { attachmentId: string } }>("/api/ai-session-attachments/draft-streams/:attachmentId", async (request, reply) => {
+    try {
+      const attachmentId = AiSessionAttachmentDraftStreamIdSchema.parse(request.params.attachmentId);
+      return { data: attachmentDraftStreams.cancel(attachmentId) };
+    } catch (error: unknown) {
+      return sendAiSessionControlError(reply, error);
+    }
+  });
+
+  app.delete<{ Params: { attachmentId: string }; Querystring: Record<string, unknown> }>("/api/ai-session-attachments/drafts/:attachmentId", async (request, reply) => {
+    try {
+      const scope = z.object({
+        scopeType: z.enum(["session", "create-request"]),
+        scopeId: z.string().trim().min(1).max(160),
+      }).strict().parse(request.query);
+      const removed = aiSessionConversationAttachments.cancelDraft(scope.scopeType, scope.scopeId, request.params.attachmentId);
+      return removed
+        ? { data: { removed: true } }
+        : reply.code(404).send({ error: { code: "AI_SESSION_ATTACHMENT_DRAFT_NOT_FOUND", message: "AI session attachment draft not found or expired." } });
+    } catch (error: unknown) {
+      return sendAiSessionControlError(reply, error);
+    }
+  });
 
   app.get<{ Params: { id: string } }>("/api/ai-sessions/history/:id", async (request, reply) => {
     const detail = aiSessionHistory.detail(request.params.id);
@@ -1419,7 +1749,10 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
         message: "AI session history entry not found.",
       }) });
     }
-    return { data: AiSessionHistoryDetailSchema.parse(detail) };
+    return { data: AiSessionHistoryDetailSchema.parse({
+      ...detail,
+      turns: projectConversationAttachmentTurns(detail.item.id, detail.turns, aiSessionConversationAttachments),
+    }) };
   });
 
   app.post<{ Params: { id: string }; Body: unknown }>("/api/ai-sessions/:id/resume", async (request, reply) => {
@@ -1435,10 +1768,29 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
 
   app.post<{ Body: unknown }>("/api/ai-sessions", { bodyLimit: 64 * 1024 * 1024 }, async (request, reply) => {
     try {
-      const body = AiSessionCreateInputSchema.parse(request.body || {});
+      const referenced = AiSessionCreateRefInputSchema.extend({ cwd: AiSessionCreateInputSchema.shape.cwd }).strict().safeParse(request.body || {});
+      const body = referenced.success ? referenced.data : AiSessionCreateInputSchema.parse(request.body || {});
+      if (body.reasoningEffort) {
+        const capability = normalizeAiSessionReasoningEffortCapabilities(aiSessionProviders.get(body.agent)?.capability);
+        if (!capability.selectAtCreate) {
+          throw Object.assign(new Error(`${body.agent} does not support selecting reasoning effort at creation.`), {
+            code: "AI_SESSION_REASONING_EFFORT_UNSUPPORTED",
+            statusCode: 409,
+          });
+        }
+      }
+      const attachments: AiSessionMessageAttachment[] = [];
+      for (const attachment of body.attachments) {
+        if (attachment.source.type !== "upload-ref") attachments.push(AiSessionMessageAttachmentSchema.parse(attachment));
+      }
+      const draftAttachmentIds = (referenced.success ? referenced.data.attachments : [])
+        .filter((attachment) => attachment.source.type === "upload-ref")
+        .map((attachment) => attachment.id);
       const result = AiSessionCreateResultSchema.parse(await aiSessionCreate.create({
         ...body,
         cwd: body.cwd.path,
+        attachments,
+        ...(draftAttachmentIds.length ? { draftAttachmentIds, draftScopeType: "create-request", draftScopeId: body.clientRequestId } : {}),
       }));
       publishAiSessionSnapshot("control-action");
       return { data: result };
@@ -1453,6 +1805,34 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       const result = AiSessionForkResultSchema.parse(await aiSessionFork.fork(request.params.id, body));
       publishAiSessionSnapshot("control-action");
       return { data: result };
+    } catch (error: unknown) {
+      return sendAiSessionControlError(reply, error);
+    }
+  });
+
+  app.put<{ Params: { id: string }; Body: unknown }>("/api/ai-sessions/:id/model-selection", async (request, reply) => {
+    try {
+      const body = AiSessionModelSelectionInputSchema.parse(request.body || {});
+      const session = aiSessions.get(request.params.id);
+      if (!session) throw Object.assign(new Error("AI Session was not found."), { code: "AI_SESSION_NOT_FOUND", statusCode: 404 });
+      const selection = resolveControlledPrivateModelSelection(privateModelCatalog, session.agent, body.modelSelection);
+      if (!selection) throw Object.assign(new Error("Model selection is unavailable."), { code: "AI_SESSION_MODEL_SELECTION_UNAVAILABLE", statusCode: 409 });
+      await aiSessionController.updateModelSelection(session.id, selection);
+      publishAiSessionSnapshot("control-action");
+      return { data: AiSessionModelSelectionActionResponseSchema.parse({ sessionId: session.id, accepted: true }) };
+    } catch (error: unknown) {
+      return sendAiSessionControlError(reply, error);
+    }
+  });
+
+  app.put<{ Params: { id: string }; Body: unknown }>("/api/ai-sessions/:id/reasoning-effort", async (request, reply) => {
+    try {
+      const body = AiSessionReasoningEffortInputSchema.parse(request.body || {});
+      const session = aiSessions.get(request.params.id);
+      if (!session) throw Object.assign(new Error("AI Session was not found."), { code: "AI_SESSION_NOT_FOUND", statusCode: 404 });
+      await aiSessionController.updateReasoningEffort(session.id, body.reasoningEffort);
+      publishAiSessionSnapshot("control-action");
+      return { data: AiSessionReasoningEffortActionResponseSchema.parse({ sessionId: session.id, accepted: true }) };
     } catch (error: unknown) {
       return sendAiSessionControlError(reply, error);
     }
@@ -1480,9 +1860,45 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     }
   });
 
-  app.get<{ Params: { id: string } }>("/api/ai-sessions/:id", async (request, reply) => {
-    const session = aiSessions.get(request.params.id);
-    return session ? { data: session } : reply.code(404).send({ error: { code: "AI_SESSION_NOT_FOUND", message: "AI session not found." } });
+  app.get<{ Params: { id: string }; Querystring: { revision?: string } }>("/api/ai-sessions/:id", async (request, reply) => {
+    const session = aiSessions.conversation(request.params.id);
+    if (!session) return reply.code(404).send({ error: { code: "AI_SESSION_NOT_FOUND", message: "AI session not found." } });
+    const revision = aiSessionDetailRevision(session);
+    if (request.query.revision === revision) {
+      return { data: AiSessionDetailReadSchema.parse({ kind: "not-modified", revision }) };
+    }
+    const detail = AiSessionDetailSchema.parse({
+      id: session.id,
+      appBindingKeys: session.appBindingKeys,
+      cwd: session.cwd,
+      error: session.error,
+      providerMeta: session.providerMeta,
+      queue: session.queue,
+      subAgents: session.subAgents,
+    });
+    return { data: AiSessionDetailReadSchema.parse({ kind: "updated", revision, detail }) };
+  });
+
+  app.get<{ Params: { id: string; messageId: string; attachmentId: string } }>("/api/ai-sessions/:id/messages/:messageId/attachments/:attachmentId/content", async (request, reply) => {
+    try {
+      const content = aiSessionConversationAttachments.content(request.params.id, request.params.messageId, request.params.attachmentId);
+      reply.header("Content-Type", content.attachment.mime);
+      reply.header("Content-Length", String(content.attachment.size));
+      reply.header("ETag", content.etag);
+      // Internal proxy metadata. The control-plane consumes and strips this
+      // header so its derived cache never outlives controlled-instance policy.
+      reply.header("X-Task-Handoff-Attachment-Cache-Until", String(content.cacheUntil));
+      reply.header("X-Task-Handoff-Attachment-Size", String(content.attachment.size));
+      reply.header("Cache-Control", "private, max-age=0, must-revalidate");
+      reply.header("X-Content-Type-Options", "nosniff");
+      reply.header("Accept-Ranges", "none");
+      const inlineRaster = new Set(["image/bmp", "image/gif", "image/jpeg", "image/png", "image/webp"]).has(content.attachment.mime.toLowerCase());
+      reply.header("Content-Disposition", `${inlineRaster ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(content.attachment.name)}`);
+      if (request.headers["if-none-match"] === content.etag) return reply.code(304).send();
+      return reply.send(fs.createReadStream(content.path));
+    } catch (error: unknown) {
+      return sendAiSessionControlError(reply, error);
+    }
   });
 
   app.get<{ Params: { id: string } }>("/api/ai-sessions/:id/timeline", async (request, reply) => {
@@ -1501,14 +1917,37 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     }
   });
 
-  app.get<{ Params: { id: string }; Querystring: { afterTurnId?: string; afterRevision?: string } }>("/api/ai-sessions/:id/turns", async (request, reply) => {
-    const session = aiSessions.get(request.params.id);
+  app.get<{ Params: { id: string }; Querystring: { afterTurnId?: string; afterRevision?: string; projection?: string; revision?: string } }>("/api/ai-sessions/:id/turns", async (request, reply) => {
+    const session = aiSessions.conversation(request.params.id);
     if (!session) {
       return reply.code(404).send({ error: { code: "AI_SESSION_NOT_FOUND", message: "AI session not found." } });
     }
     const afterTurnId = String(request.query.afterTurnId || "").trim();
     const afterRevision = Number(request.query.afterRevision);
     const turns = session.turns || [];
+    const indexedTurns = aiSessionConversationTurns(session);
+    if (request.query.projection === "index") {
+      const revision = aiSessionTurnsRevision(session);
+      if (request.query.revision === revision) {
+        return { data: AiSessionTurnIndexReadSchema.parse({ kind: "not-modified", revision }) };
+      }
+      const index = AiSessionTurnIndexSchema.parse({
+        sessionId: session.id,
+        revision,
+        turns: indexedTurns.map((turn) => ({
+          id: turn.id,
+          providerTurnId: turn.providerTurnId,
+          status: turn.status,
+          phase: turn.phase,
+          revision: turn.revision,
+          startedAt: turn.startedAt,
+          updatedAt: turn.updatedAt,
+          completedAt: turn.completedAt,
+          bodyRevision: aiSessionTurnBodyRevision(turn),
+        })),
+      });
+      return { data: AiSessionTurnIndexReadSchema.parse({ kind: "updated", revision, index }) };
+    }
     const afterIndex = afterTurnId ? turns.findIndex((entry) => entry.id === afterTurnId) : -1;
     const filtered = turns.filter((turn) => {
       if (!afterTurnId) {
@@ -1532,6 +1971,20 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     };
   });
 
+  app.get<{ Params: { id: string; turnId: string }; Querystring: { revision?: string } }>("/api/ai-sessions/:id/turns/:turnId", async (request, reply) => {
+    const session = aiSessions.conversation(request.params.id);
+    if (!session) return reply.code(404).send({ error: { code: "AI_SESSION_NOT_FOUND", message: "AI session not found." } });
+    const turn = (session.turns || [])
+      .find((candidate) => candidate.id === request.params.turnId || candidate.providerTurnId === request.params.turnId);
+    if (!turn) return reply.code(404).send({ error: { code: "AI_SESSION_TURN_NOT_FOUND", message: "AI session Turn not found." } });
+    const revision = aiSessionTurnBodyRevision(turn);
+    if (request.query.revision === revision) {
+      return { data: AiSessionTurnBodyReadSchema.parse({ kind: "not-modified", revision }) };
+    }
+    const body = AiSessionTurnBodySchema.parse({ sessionId: session.id, revision, turn });
+    return { data: AiSessionTurnBodyReadSchema.parse({ kind: "updated", revision, body }) };
+  });
+
   app.get<{ Params: { id: string }; Querystring: { tail?: string } }>("/api/ai-sessions/:id/transcript", async (request, reply) => {
     const session = aiSessions.get(request.params.id);
     if (!session?.transcriptPath) {
@@ -1545,12 +1998,41 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   });
 
   app.post<{ Params: { id: string }; Body: unknown }>("/api/ai-sessions/:id/messages", { bodyLimit: 64 * 1024 * 1024 }, async (request, reply) => {
+    const startedAt = performance.now();
+    const traceIdHeader = request.headers["x-task-handoff-trace-id"];
+    const traceId = Array.isArray(traceIdHeader) ? traceIdHeader[0] : traceIdHeader;
+    const finishTiming = (outcome: "completed" | "failed") => {
+      const durationMs = performance.now() - startedAt;
+      reply.header("server-timing", `instance_action;dur=${durationMs.toFixed(1)}`);
+      if (traceId && /^[A-Za-z0-9._:-]{1,128}$/.test(traceId)) reply.header("x-task-handoff-trace-id", traceId);
+      request.log.info({ traceId, aiSessionId: request.params.id, outcome, durationMs }, "AI session message action timing");
+    };
     try {
-      const body = AiSessionMessageInputSchema.parse(request.body || {});
-      const result = AiSessionActionResultSchema.parse(await aiSessionController.sendMessage(request.params.id, body));
+      // Compatibility for v0.0.21: accept the prior materialized inline model
+      // while newer control-planes send controlled-instance draft handles.
+      const referenced = AiSessionMessageRefInputSchema.safeParse(request.body || {});
+      const body = referenced.success ? referenced.data : AiSessionMessageInputSchema.parse(request.body || {});
+      const draftAttachmentIds = (referenced.success ? referenced.data.attachments : [])
+        .filter((attachment) => attachment.source.type === "upload-ref")
+        .map((attachment) => attachment.id);
+      const attachments: AiSessionMessageAttachment[] = [];
+      for (const attachment of body.attachments) {
+        if (attachment.source.type !== "upload-ref") attachments.push(AiSessionMessageAttachmentSchema.parse(attachment));
+      }
+      const result = AiSessionActionResultSchema.parse(await aiSessionController.sendMessage(request.params.id, {
+        ...body,
+        attachments,
+        ...(draftAttachmentIds.length ? {
+          draftAttachmentIds,
+          draftScopeType: "session",
+          draftScopeId: request.params.id,
+        } : {}),
+      }));
       publishAiSessionSnapshot("control-action");
-      return { data: result };
+      finishTiming("completed");
+      return { data: projectAiSessionActionResponse(result) };
     } catch (error: unknown) {
+      finishTiming("failed");
       return sendAiSessionControlError(reply, error);
     }
   });
@@ -1601,7 +2083,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     try {
       const result = AiSessionActionResultSchema.parse(await aiSessionController.steerQueuedMessage(request.params.id, request.params.queueId));
       publishAiSessionSnapshot("control-action");
-      return { data: result };
+      return { data: projectAiSessionActionResponse(result) };
     } catch (error: unknown) {
       return sendAiSessionControlError(reply, error);
     }
@@ -1611,7 +2093,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     try {
       const session = aiSessionController.retryQueuedMessage(request.params.id, request.params.queueId);
       publishAiSessionSnapshot("control-action");
-      return { data: session };
+      return { data: AiSessionQueueMutationResponseSchema.parse({ sessionId: session.id, queueRevision: session.queue.revision, action: "retry", queueId: request.params.queueId }) };
     } catch (error: unknown) {
       return sendAiSessionControlError(reply, error);
     }
@@ -1621,7 +2103,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     try {
       const session = aiSessionController.removeQueuedMessage(request.params.id, request.params.queueId);
       publishAiSessionSnapshot("control-action");
-      return { data: session };
+      return { data: AiSessionQueueMutationResponseSchema.parse({ sessionId: session.id, queueRevision: session.queue.revision, action: "remove", queueId: request.params.queueId }) };
     } catch (error: unknown) {
       return sendAiSessionControlError(reply, error);
     }
@@ -1632,7 +2114,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       const body = AiSessionQueueEditInputSchema.parse(request.body || {});
       const session = aiSessionController.editQueuedMessage(request.params.id, request.params.queueId, body.expectedRevision, body.message);
       publishAiSessionSnapshot("control-action");
-      return { data: session };
+      return { data: AiSessionQueueMutationResponseSchema.parse({ sessionId: session.id, queueRevision: session.queue.revision, action: "edit", queueId: request.params.queueId }) };
     } catch (error: unknown) {
       return sendAiSessionControlError(reply, error);
     }
@@ -1643,7 +2125,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       const body = AiSessionQueueReorderInputSchema.parse(request.body || {});
       const session = aiSessionController.reorderQueuedMessages(request.params.id, body.expectedRevision, body.queueIds);
       publishAiSessionSnapshot("control-action");
-      return { data: session };
+      return { data: AiSessionQueueMutationResponseSchema.parse({ sessionId: session.id, queueRevision: session.queue.revision, action: "reorder" }) };
     } catch (error: unknown) {
       return sendAiSessionControlError(reply, error);
     }
@@ -1653,7 +2135,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     try {
       const result = AiSessionActionResultSchema.parse(await aiSessionController.interrupt(request.params.id));
       publishAiSessionSnapshot("control-action");
-      return { data: result };
+      return { data: projectAiSessionActionResponse(result) };
     } catch (error: unknown) {
       return sendAiSessionControlError(reply, error);
     }
@@ -1664,7 +2146,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       const body = AiSessionApprovalInputSchema.parse(request.body || {});
       const result = AiSessionActionResultSchema.parse(await aiSessionController.resolveApproval(request.params.id, body.decision));
       publishAiSessionSnapshot("control-action");
-      return { data: result };
+      return { data: projectAiSessionActionResponse(result) };
     } catch (error: unknown) {
       return sendAiSessionControlError(reply, error);
     }
@@ -1747,7 +2229,9 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     message: "Instance registration token is required.",
   }), async (request) => {
     const next = ManagedModelEnvironmentSchema.parse(request.body || {});
-    for (const key of MANAGED_MODEL_ENV_KEYS) delete managedModelEnv[key];
+    for (const key of MANAGED_MODEL_ENV_KEYS) {
+      if (key !== "CODEX_HOME") delete managedModelEnv[key];
+    }
     Object.assign(managedModelEnv, next);
     const codex = applyManagedCodexModelConfig(managedModelEnv);
     const claude = applyManagedClaudeModelConfig(managedModelEnv);
@@ -1758,6 +2242,20 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       claudeAuthConfigured: Boolean(next.ANTHROPIC_API_KEY),
       configUpdated: codex.applied || claude.applied,
     } };
+  });
+
+  app.put<{ Body: unknown }>("/api/internal/model-catalog", nodeAgentApiRoute({
+    code: "MANAGED_MODEL_CATALOG_FORBIDDEN",
+    message: "Instance registration token is required.",
+  }), async (request) => {
+    privateModelCatalog = ControlledPrivateModelCatalogSchema.parse(request.body);
+    for (const key of Object.keys(managedModelEnv)) {
+      if (key.startsWith("TASK_HANDOFF_CODEX_PROVIDER_")) delete managedModelEnv[key];
+    }
+    codexManagedConfig = applyManagedCodexModelConfig(managedModelEnv, privateModelCatalog);
+    Object.assign(managedModelEnv, codexManagedConfig.providerEnvironment || {});
+    appRuntime.replaceManagedEnvironment(managedAppEnvironment(managedModelEnv));
+    return { data: { applied: true, configUpdated: codexManagedConfig.applied } };
   });
 
   app.get("/api/config-sync/presets", async () => ({
@@ -2003,14 +2501,14 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   app.get<{ Params: { id: string } }>("/api/apps/sessions/:id/vnc", { websocket: true }, (socket, request) => {
     const target = appRuntime.vncTarget(request.params.id);
     if (!target) {
-      socket.send(JSON.stringify({ error: { code: "VNC_SESSION_NOT_FOUND", message: "VNC session not found." } }));
+      socket.send(JSON.stringify({ error: { code: "VNC_SESSION_NOT_FOUND", message: "VNC session not found." } }), { compress: false });
       socket.close();
       return;
     }
     const upstream = net.connect(target.port, target.host);
     upstream.on("data", (chunk) => {
       if (socket.readyState === socket.OPEN) {
-        socket.send(chunk);
+        socket.send(chunk, { binary: true, compress: false });
       }
     });
     upstream.on("close", () => socket.close());
@@ -2021,7 +2519,11 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     socket.on("close", () => upstream.destroy());
   });
 
-  const webSocketProxyHandler = (socket: { send: (data: unknown, options?: { binary?: boolean }) => void; close: () => void; on: (event: "message" | "close" | "error", listener: (message?: unknown, isBinary?: boolean) => void) => void; readyState: number; OPEN: number }, request: { params: { id: string }; raw: { url?: string }; headers: http.IncomingHttpHeaders }) => {
+  app.get("/api/browser-tunnel", { websocket: true }, (socket) => {
+    attachBrowserTunnel(socket as any);
+  });
+
+  const webSocketProxyHandler = (socket: { send: (data: unknown, options?: { binary?: boolean; compress?: boolean }) => void; close: () => void; on: (event: "message" | "close" | "error", listener: (message?: unknown, isBinary?: boolean) => void) => void; readyState: number; OPEN: number }, request: { params: { id: string }; raw: { url?: string }; headers: http.IncomingHttpHeaders }) => {
     const target = appRuntime.webTarget(request.params.id);
     if (!target) {
       socket.send(JSON.stringify({ error: { code: "WEB_SESSION_NOT_FOUND", message: "Web session not found." } }));
@@ -2046,6 +2548,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       }
       const upstream = new WebSocketClient(upstreamUrl, upstreamProtocols, {
         headers: proxyWebSocketHeaders(request.headers, target.host, target.port, extraHeaders),
+        perMessageDeflate: false,
       });
       bridgeWebSockets(socket, upstream, {
         onUpstreamCloseBeforeOpen: () => {

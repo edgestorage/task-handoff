@@ -23,18 +23,20 @@
       <Tabs v-else v-model="section" class="instance-settings-tabs">
         <TabsList class="instance-settings-tabs-list" :aria-label="t('instances.settings.sections')">
           <TabsTrigger value="general"><SlidersHorizontal :size="14" />{{ t("instances.settings.general") }}</TabsTrigger>
+          <TabsTrigger value="ai"><Bot :size="14" />{{ t("instances.settings.ai") }}</TabsTrigger>
           <TabsTrigger value="models"><Cpu :size="14" />{{ t("instances.settings.models") }}</TabsTrigger>
+          <TabsTrigger value="git-credentials"><KeyRound :size="14" />{{ t("instances.settings.gitCredentials") }}</TabsTrigger>
           <TabsTrigger value="apps"><Boxes :size="14" />{{ t("instances.settings.apps") }}</TabsTrigger>
         </TabsList>
 
         <ScrollArea class="instance-settings-scroll">
           <TabsContent value="general" class="instance-settings-section">
-            <section class="instance-settings-card">
+            <section class="instance-settings-card instance-settings-group">
               <div class="instance-settings-section-heading">
                 <h3>{{ t("instances.settings.detailsTitle") }}</h3>
                 <p>{{ t("instances.settings.detailsDescription") }}</p>
               </div>
-              <dl class="instance-settings-grid">
+              <dl class="instance-settings-grid instance-settings-surface">
                 <div><dt>{{ t("instances.settings.id") }}</dt><dd><code>{{ instance.id }}</code></dd></div>
                 <div><dt>{{ t("instances.settings.state") }}</dt><dd>{{ instanceStatusLabel(instance.status) }} · {{ connectionStatusLabel(instance.connectionStatus) }}</dd></div>
                 <div><dt>{{ t("instances.settings.node") }}</dt><dd>{{ instance.node?.name || instance.nodeId }}</dd></div>
@@ -46,12 +48,12 @@
               </dl>
             </section>
 
-            <section class="instance-settings-card">
+            <section class="instance-settings-card instance-settings-group">
               <div class="instance-settings-section-heading">
                 <h3>{{ t("instances.settings.configurationTitle") }}</h3>
                 <p>{{ t("instances.settings.configurationDescription") }}</p>
               </div>
-              <div class="instance-settings-control-row">
+              <div class="instance-settings-control-surface instance-settings-surface">
                 <div class="instance-settings-general-controls">
                   <label class="instance-settings-name-control">
                     <span>
@@ -60,77 +62,114 @@
                     </span>
                     <ControlPlaneInput v-model="instanceName" :disabled="savingGeneral" maxlength="160" :placeholder="t('instances.settings.instanceName')" />
                   </label>
-                  <label class="instance-settings-checkbox">
-                    <Checkbox :model-value="autoImportAgentConfigs" :disabled="savingGeneral" @update:model-value="autoImportAgentConfigs = $event === true" />
-                    <span>
-                      <strong>{{ t("instances.settings.autoImport") }}</strong>
-                      <small>{{ t("instances.settings.autoImportDescription") }}</small>
-                    </span>
-                  </label>
-                  <label class="instance-settings-select-control">
-                    <span>
-                      <strong>{{ t("instances.settings.sessionPermissions") }}</strong>
-                      <small>{{ t("instances.settings.sessionPermissionsDescription") }}</small>
-                    </span>
-                    <ControlPlaneSelect v-model="defaultCodexPermissionMode" :disabled="savingGeneral">
-                      <ControlPlaneSelectItem value="ask">{{ t("instances.settings.askApproval") }}</ControlPlaneSelectItem>
-                      <ControlPlaneSelectItem value="auto-review">{{ t("instances.settings.approveForMe") }}</ControlPlaneSelectItem>
-                      <ControlPlaneSelectItem value="full-access">{{ t("instances.settings.fullAccess") }}</ControlPlaneSelectItem>
-                    </ControlPlaneSelect>
-                  </label>
-                  <label class="instance-settings-name-control">
-                    <span>
-                      <strong>{{ t("instances.settings.aiSessionHistoryLimit") }}</strong>
-                      <small>{{ historyLimitSupported ? t("instances.settings.aiSessionHistoryLimitDescription") : t("instances.settings.aiSessionHistoryLimitUnsupported") }}</small>
-                    </span>
-                    <ControlPlaneInput
-                      v-model="aiSessionHistoryLimit"
-                      type="number"
-                      min="1"
-                      :max="AI_SESSION_HISTORY_MAX_LIMIT"
-                      step="1"
-                      :disabled="savingGeneral || !historyLimitSupported"
-                    />
-                  </label>
                 </div>
-                <Button size="sm" :disabled="savingGeneral || !generalChanged || !validInstanceName || !validHistoryLimit" @click="saveGeneral">
-                  {{ savingGeneral ? t("instances.settings.saving") : t("instances.settings.saveChanges") }}
-                </Button>
+                <div class="instance-settings-general-actions">
+                  <Button size="sm" :disabled="savingGeneral || !generalChanged || !validInstanceName || !validHistoryLimit || !validAttachmentRetention || !validFileAttachmentLimit" @click="saveGeneral">
+                    {{ savingGeneral ? t("instances.settings.saving") : t("instances.settings.saveChanges") }}
+                  </Button>
+                </div>
+              </div>
+            </section>
+          </TabsContent>
+
+          <TabsContent value="ai" class="instance-settings-section">
+            <section class="instance-settings-card instance-settings-group">
+              <div class="instance-settings-section-heading">
+                <h3>{{ t("instances.settings.aiConfigurationTitle") }}</h3>
+                <p>{{ t("instances.settings.aiConfigurationDescription") }}</p>
+              </div>
+              <div class="instance-settings-control-surface instance-settings-surface">
+                <div class="instance-settings-general-controls">
+                  <label class="instance-settings-checkbox"><Checkbox :model-value="codexConfigEnabled" :disabled="savingGeneral" @update:model-value="codexConfigEnabled = $event === true" /><span><strong>{{ t("instances.settings.codexConfiguration") }}</strong><small>{{ t("instances.settings.codexConfigurationDescription") }}</small></span></label>
+                  <label class="instance-settings-select-control"><span><strong>{{ t("instances.settings.codexHome") }}</strong><small>{{ t("instances.settings.codexHomeDescription") }}</small></span><ControlPlaneSelect v-model="codexHomeMode" :disabled="savingGeneral || !codexConfigEnabled"><ControlPlaneSelectItem value="default">{{ t("instances.settings.codexHomeDefault") }}</ControlPlaneSelectItem><ControlPlaneSelectItem v-if="instance.runtime?.type === 'local'" value="taskhandoff">{{ t("instances.settings.codexHomeTaskHandoff") }}</ControlPlaneSelectItem></ControlPlaneSelect></label>
+                  <label class="instance-settings-name-control"><span><strong>{{ t("instances.settings.aiSessionFileAttachmentLimit") }}</strong><small>{{ fileAttachmentLimitSupported ? t("instances.settings.aiSessionFileAttachmentLimitDescription") : t("instances.settings.aiSessionFileAttachmentLimitUnsupported") }}</small></span><ControlPlaneInput v-model="aiSessionMaxFileAttachmentKiB" type="number" min="1" :max="AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES / 1024" step="1" :disabled="savingGeneral || !fileAttachmentLimitSupported" /></label>
+                  <label class="instance-settings-name-control"><span><strong>{{ t("instances.settings.aiSessionAttachmentRetention") }}</strong><small>{{ attachmentRetentionSupported ? t("instances.settings.aiSessionAttachmentRetentionDescription") : t("instances.settings.aiSessionAttachmentRetentionUnsupported") }}</small></span><ControlPlaneInput v-model="aiSessionAttachmentRetentionDays" type="number" min="0" :max="AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS" step="1" :disabled="savingGeneral || !attachmentRetentionSupported" /></label>
+                  <p v-if="attachmentRetentionWillShorten" class="instance-settings-help instance-settings-row-note">{{ t("instances.settings.aiSessionAttachmentRetentionWarning") }}</p>
+                  <label class="instance-settings-checkbox"><Checkbox :model-value="autoImportAgentConfigs" :disabled="savingGeneral" @update:model-value="autoImportAgentConfigs = $event === true" /><span><strong>{{ t("instances.settings.autoImport") }}</strong><small>{{ t("instances.settings.autoImportDescription") }}</small></span></label>
+                  <label class="instance-settings-select-control"><span><strong>{{ t("instances.settings.sessionPermissions") }}</strong><small>{{ t("instances.settings.sessionPermissionsDescription") }}</small></span><ControlPlaneSelect v-model="defaultCodexPermissionMode" :disabled="savingGeneral || !codexConfigEnabled"><ControlPlaneSelectItem value="ask">{{ t("instances.settings.askApproval") }}</ControlPlaneSelectItem><ControlPlaneSelectItem value="auto-review">{{ t("instances.settings.approveForMe") }}</ControlPlaneSelectItem><ControlPlaneSelectItem value="full-access">{{ t("instances.settings.fullAccess") }}</ControlPlaneSelectItem></ControlPlaneSelect></label>
+                  <label class="instance-settings-name-control"><span><strong>{{ t("instances.settings.aiSessionHistoryLimit") }}</strong><small>{{ historyLimitSupported ? t("instances.settings.aiSessionHistoryLimitDescription") : t("instances.settings.aiSessionHistoryLimitUnsupported") }}</small></span><ControlPlaneInput v-model="aiSessionHistoryLimit" type="number" min="1" :max="AI_SESSION_HISTORY_MAX_LIMIT" step="1" :disabled="savingGeneral || !historyLimitSupported" /></label>
+                </div>
+                <div class="instance-settings-general-actions"><Button size="sm" :disabled="savingGeneral || !aiChanged || !validHistoryLimit || !validAttachmentRetention || !validFileAttachmentLimit" @click="saveGeneral">{{ savingGeneral ? t("instances.settings.saving") : t("instances.settings.saveChanges") }}</Button></div>
               </div>
             </section>
           </TabsContent>
 
           <TabsContent value="models" class="instance-settings-section">
-            <section class="instance-settings-card">
-              <h3>{{ t("instances.settings.modelSelection") }}</h3>
-              <p class="instance-settings-help">{{ t("instances.settings.modelSelectionDescription") }}</p>
-              <div class="instance-model-grid">
-                <label v-for="app in modelApps" :key="app">
-                  <span>{{ app === "codex" ? t("common.products.codex") : t("common.products.claude") }}</span>
-                  <ControlPlaneSelect :model-value="modelDraftValue(app)" :disabled="savingModels" @update:model-value="setModelDraft(app, $event)">
-                    <ControlPlaneSelectItem :value="noModelValue">{{ t("instances.settings.noModel") }}</ControlPlaneSelectItem>
-                    <ControlPlaneSelectItem :value="defaultModelValue">{{ t("instances.settings.globalDefault") }}</ControlPlaneSelectItem>
-                    <ControlPlaneSelectItem v-if="invalidSelection(app)" :value="draftModelId(app)!">{{ t("instances.settings.unavailableModel", { id: draftModelId(app) }) }}</ControlPlaneSelectItem>
-                    <ControlPlaneSelectItem v-for="model in selectableModels(app)" :key="`${app}-${model.id}`" :value="model.id">{{ modelOptionLabel(model) }}</ControlPlaneSelectItem>
-                  </ControlPlaneSelect>
-                  <small v-if="invalidSelection(app)" class="instance-settings-error">{{ t("instances.settings.invalidModel") }}</small>
-                  <small v-else>{{ t("instances.settings.effectiveModel", { name: effectiveModelLabel(app) }) }}</small>
-                </label>
+            <section class="instance-settings-card instance-settings-group">
+              <div class="instance-settings-section-heading">
+                <h3>{{ t("instances.settings.modelSelection") }}</h3>
+                <p>{{ t("instances.settings.modelSelectionDescription") }}</p>
               </div>
-              <div class="instance-settings-actions">
-                <Button size="sm" :disabled="savingModels || !modelsChanged" @click="saveModels">
-                  {{ savingModels ? t("instances.settings.saving") : t("instances.settings.saveModels") }}
-                </Button>
+              <div class="instance-model-surface instance-settings-surface">
+                <ModelEntitySelection v-model="modelEntityIds" :models="models" :node-id="instance?.nodeId || ''" :disabled="savingModels || !codexConfigEnabled" />
+                <div class="instance-settings-general-actions">
+                  <Button size="sm" :disabled="savingModels || !modelsChanged" @click="saveModels">
+                    {{ savingModels ? t("instances.settings.saving") : t("instances.settings.saveModels") }}
+                  </Button>
+                </div>
+              </div>
+            </section>
+          </TabsContent>
+
+          <TabsContent value="git-credentials" class="instance-settings-section">
+            <section class="instance-settings-card instance-settings-group">
+              <div class="instance-settings-section-heading">
+                <h3>{{ t("instances.settings.gitCredentialsTitle") }}</h3>
+                <p>{{ t("instances.settings.gitCredentialsDescription") }}</p>
+              </div>
+              <div class="instance-git-directory instance-settings-surface">
+                <div v-if="!gitBrokerSupported" class="instance-settings-state">{{ t("instances.settings.gitCredentialsUnsupported") }}</div>
+                <div v-else-if="gitAssignments.error.value || gitCredentials.error.value" class="instance-settings-state instance-settings-state-error" role="alert">
+                  <span>{{ gitCredentialError }}</span>
+                  <Button size="sm" variant="outline" @click="refreshGitCredentials">{{ t("instances.settings.retry") }}</Button>
+                </div>
+                <template v-else>
+                  <div v-if="gitCredentialMatchText" class="instance-git-match-preview" :data-status="gitCredentialMatchStatus">
+                    <Globe2 :size="15" />
+                    <span>{{ gitCredentialMatchText }}</span>
+                    <Badge variant="secondary">{{ t(`instances.settings.gitCredentialMatchStatus.${gitCredentialMatchStatus}`) }}</Badge>
+                  </div>
+                  <div class="instance-git-assignment-create">
+                    <ControlPlaneSelect v-model="selectedGitCredentialId" :placeholder="t('instances.settings.selectGitCredential')" :disabled="gitCredentialBusy">
+                      <ControlPlaneSelectItem :value="noGitCredentialValue">{{ t("instances.settings.selectGitCredential") }}</ControlPlaneSelectItem>
+                      <ControlPlaneSelectItem v-for="credential in assignableGitCredentials" :key="credential.id" :value="credential.id">{{ credential.name }} · {{ credential.scope.host }}{{ credential.scope.pathPrefix }}</ControlPlaneSelectItem>
+                    </ControlPlaneSelect>
+                    <Button size="sm" :disabled="!selectedGitCredentialId || selectedGitCredentialId === noGitCredentialValue || gitCredentialBusy" @click="authorizeGitCredential">
+                      <KeyRound :size="14" />
+                      {{ t("instances.settings.authorizeGitCredential") }}
+                    </Button>
+                  </div>
+                  <div v-if="gitAssignments.isLoading.value" class="instance-settings-state">{{ t("instances.settings.gitCredentialsLoading") }}</div>
+                  <div v-else-if="!gitAssignments.data.value?.length" class="instance-settings-state instance-settings-empty-state">
+                    <KeyRound :size="26" aria-hidden="true" />
+                    <span>{{ t("instances.settings.noGitCredentials") }}</span>
+                  </div>
+                  <div v-else class="instance-app-list instance-directory-list">
+                    <article v-for="assignment in gitAssignments.data.value" :key="assignment.credentialId" class="instance-app-row instance-git-assignment-row">
+                      <div class="instance-directory-identity">
+                        <span class="instance-app-icon" aria-hidden="true"><KeyRound :size="16" /></span>
+                        <div>
+                          <strong>{{ gitCredentialName(assignment.credentialId) }}</strong>
+                          <code>{{ gitCredentialScope(assignment.credentialId) }}</code>
+                        </div>
+                      </div>
+                      <div class="instance-git-assignment-actions">
+                        <Badge :variant="assignment.status === 'synced' ? 'default' : 'secondary'">{{ t(`instances.settings.gitCredentialStatus.${assignment.status}`) }}</Badge>
+                        <Button size="sm" variant="outline" :disabled="gitCredentialBusy" @click="revokeGitCredential(assignment.credentialId)">{{ t("instances.settings.revokeGitCredential") }}</Button>
+                      </div>
+                    </article>
+                  </div>
+                </template>
               </div>
             </section>
           </TabsContent>
 
           <TabsContent value="apps" class="instance-settings-section">
-            <section class="instance-settings-card">
+            <section class="instance-settings-card instance-settings-group">
               <div class="instance-app-heading">
-                <div>
+                <div class="instance-settings-section-heading">
                   <h3>{{ t("instances.settings.managedApps") }}</h3>
-                  <p class="instance-settings-help">{{ t("instances.settings.managedAppsDescription") }}</p>
+                  <p>{{ t("instances.settings.managedAppsDescription") }}</p>
                 </div>
                 <div v-if="appManagement" class="instance-app-heading-actions">
                   <Badge variant="secondary">{{ appManagement.capabilities.platform }} · {{ appManagement.capabilities.arch }}</Badge>
@@ -140,15 +179,15 @@
                 </div>
               </div>
               <p v-if="appManagement" class="instance-settings-observed">{{ t("instances.settings.observed", { time: formatObservedAt(appManagement.observedAt), privilege: appManagement.capabilities.privilege }) }}</p>
-              <div v-if="appManagementLoading && !appManagement" class="instance-settings-empty">{{ t("instances.settings.appsLoading") }}</div>
-              <div v-else-if="appManagementError" class="instance-app-issues" role="alert">
-                <strong>{{ t("instances.settings.appsUnavailable") }}</strong>
-                <p>{{ appManagementError }}</p>
-                <Button size="sm" variant="outline" @click="refreshApps">{{ t("instances.settings.retry") }}</Button>
-              </div>
-              <p v-else-if="!appManagement" class="instance-settings-empty">{{ t("instances.settings.noSnapshot") }}</p>
-              <p v-else-if="!appManagement.apps.length" class="instance-settings-empty">{{ t("instances.settings.noManagedApps") }}</p>
-              <template v-else>
+              <div class="instance-app-directory instance-settings-surface">
+                <div v-if="appManagementLoading && !appManagement" class="instance-settings-state">{{ t("instances.settings.appsLoading") }}</div>
+                <div v-else-if="appManagementError" class="instance-settings-state instance-settings-state-error" role="alert">
+                  <span>{{ t("instances.settings.appsUnavailable") }} · {{ appManagementError }}</span>
+                  <Button size="sm" variant="outline" @click="refreshApps">{{ t("instances.settings.retry") }}</Button>
+                </div>
+                <div v-else-if="!appManagement" class="instance-settings-state">{{ t("instances.settings.noSnapshot") }}</div>
+                <div v-else-if="!appManagement.apps.length" class="instance-settings-state instance-settings-empty-state">{{ t("instances.settings.noManagedApps") }}</div>
+                <template v-else>
                 <div class="instance-app-toolbar" :aria-label="t('instances.settings.appFilters')">
                   <div class="instance-app-filters">
                     <Button v-for="filter in appFilters" :key="filter.value" size="sm" :variant="appFilter === filter.value ? 'secondary' : 'ghost'" :aria-pressed="appFilter === filter.value" @click="appFilter = filter.value">
@@ -157,12 +196,15 @@
                   </div>
                   <small>{{ installableAppCount ? t("instances.settings.readyToInstall", { count: installableAppCount }) : t("instances.settings.noInstalls") }}</small>
                 </div>
-                <p v-if="!filteredManagedApps.length" class="instance-settings-empty">{{ t("instances.settings.noFilterMatches") }}</p>
-                <div v-else class="instance-app-list">
+                <div v-if="!filteredManagedApps.length" class="instance-settings-state">{{ t("instances.settings.noFilterMatches") }}</div>
+                <div v-else class="instance-app-list instance-directory-list">
                   <article v-for="app in filteredManagedApps" :key="app.id" class="instance-app-row instance-managed-app-row">
                     <div class="instance-app-main">
                       <div class="instance-app-identity">
-                        <span class="instance-app-icon" aria-hidden="true"><component :is="managedAppIcon(app)" :size="17" /></span>
+                        <span class="instance-app-icon" aria-hidden="true">
+                          <AiAgentIcon v-if="app.id === 'codex' || app.id === 'claude'" :agent="app.id" :size="17" />
+                          <component :is="managedAppIcon(app)" v-else :size="17" />
+                        </span>
                         <div class="instance-app-copy">
                           <strong>{{ app.name }}</strong>
                           <small v-if="app.description">{{ app.description }}</small>
@@ -193,28 +235,34 @@
                     </div>
                   </article>
                 </div>
-              </template>
+                </template>
+              </div>
             </section>
 
-            <section class="instance-settings-card">
+            <section class="instance-settings-card instance-settings-group">
               <div class="instance-app-heading">
-                <div>
+                <div class="instance-settings-section-heading">
                   <h3>{{ t("instances.settings.customLaunchers") }}</h3>
-                  <p class="instance-settings-help">{{ t("instances.settings.customLaunchersDescription") }}</p>
+                  <p>{{ t("instances.settings.customLaunchersDescription") }}</p>
                 </div>
                 <Badge :variant="inventoryBadgeVariant">{{ inventoryStateLabel }}</Badge>
               </div>
               <p v-if="instance.appInventory" class="instance-settings-observed">{{ t("instances.settings.inventoryObserved", { time: formatObservedAt(instance.appInventory.observedAt) }) }}</p>
-              <p v-if="!customInventoryApps.length" class="instance-settings-empty">{{ t("instances.settings.noCustomLaunchers") }}</p>
-              <div v-else class="instance-app-list">
-                <article v-for="app in customInventoryApps" :key="app.id" class="instance-app-row">
-                  <div><strong>{{ app.name }}</strong><code>{{ app.id }} · {{ app.kind }}</code><small v-if="app.diagnosticCode">{{ t("instances.settings.executableMissing") }}</small></div>
-                  <Badge :variant="app.availability === 'available' ? 'default' : 'secondary'">{{ app.availability }}</Badge>
-                </article>
-              </div>
-              <div v-if="instance.appInventory?.issues.length" class="instance-app-issues" role="status">
-                <strong>{{ t("instances.settings.inventoryDiagnostics") }}</strong>
-                <p v-for="issue in instance.appInventory.issues" :key="issue.code">{{ issue.message }} <code>{{ issue.code }}</code></p>
+              <div class="instance-app-directory instance-settings-surface">
+                <div v-if="!customInventoryApps.length" class="instance-settings-state instance-settings-empty-state">{{ t("instances.settings.noCustomLaunchers") }}</div>
+                <div v-else class="instance-app-list instance-directory-list">
+                  <article v-for="app in customInventoryApps" :key="app.id" class="instance-app-row instance-custom-app-row">
+                    <div class="instance-directory-identity">
+                      <span class="instance-app-icon" aria-hidden="true"><Boxes :size="16" /></span>
+                      <div><strong>{{ app.name }}</strong><code>{{ app.id }} · {{ app.kind }}</code><small v-if="app.diagnosticCode">{{ t("instances.settings.executableMissing") }}</small></div>
+                    </div>
+                    <Badge :variant="app.availability === 'available' ? 'default' : 'secondary'">{{ app.availability }}</Badge>
+                  </article>
+                </div>
+                <div v-if="instance.appInventory?.issues.length" class="instance-app-issues" role="status">
+                  <strong>{{ t("instances.settings.inventoryDiagnostics") }}</strong>
+                  <p v-for="issue in instance.appInventory.issues" :key="issue.code">{{ issue.message }} <code>{{ issue.code }}</code></p>
+                </div>
               </div>
             </section>
           </TabsContent>
@@ -256,12 +304,15 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { Bot, Boxes, Code2, Cpu, Globe2, LoaderCircle, Monitor, RefreshCw, SlidersHorizontal, TerminalSquare, X } from "@lucide/vue";
-import { AI_SESSION_HISTORY_MAX_LIMIT, type AiSessionPermissionMode } from "@task-handoff/protocol/ai-sessions";
-import type { AppManagementJob, AppManagementOperation, AppManagementSnapshot, InstanceBoardItem, ManagedAppProjection, ModelApp, ModelConfig, ModelSelection, UpdateControlledInstanceInput } from "../../../api/types";
+import { Bot, Boxes, Cpu, Globe2, KeyRound, LoaderCircle, Monitor, RefreshCw, SlidersHorizontal, TerminalSquare, X } from "@lucide/vue";
+import { AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS, AI_SESSION_HISTORY_MAX_LIMIT, AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES, type AiSessionPermissionMode } from "@task-handoff/protocol/ai-sessions";
+import { supportsAiSessionFileSizeLimitSettings, supportsGitCredentialProxy, supportsNodeAiSessionFileAttachmentLimit } from "@task-handoff/protocol/control-plane";
+import { resolveGitCredential, type GitCredentialPublic } from "@task-handoff/protocol/managed-git-credentials";
+import type { AppManagementJob, AppManagementOperation, AppManagementSnapshot, InstanceBoardItem, ManagedAppProjection, ModelConfig, ModelSelection, UpdateControlledInstanceInput } from "../../../api/types";
 import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../../components/ui/alert-dialog";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
+import AiAgentIcon from "../../../components/AiAgentIcon.vue";
 import { Checkbox } from "../../../components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
 import { Progress } from "../../../components/ui/progress";
@@ -270,18 +321,19 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../../components/ui
 import ControlPlaneInput from "../shared/ControlPlaneInput.vue";
 import ControlPlaneSelect from "../shared/ControlPlaneSelect.vue";
 import ControlPlaneSelectItem from "../shared/ControlPlaneSelectItem.vue";
-import { effectiveInstanceModel, invalidInstanceModelSelection, selectableInstanceModels } from "./instanceSettingsState";
+import ModelEntitySelection from "../../../components/models/ModelEntitySelection.vue";
 import { useControlPlaneLocale } from "../../../i18n/index";
 import { formatDateTime } from "../../../i18n/presentation";
 import { connectionStatusKeys, instanceStatusKeys, translateStatus } from "../../../i18n/status";
 import { translateApiError } from "../../../i18n/apiError";
+import { authorizeInstanceGitCredential, revokeInstanceGitCredential, useGitCredentialsQuery, useInstanceGitCredentialAssignmentsQuery } from "../../../api/queries";
 
 const { t } = useI18n();
 const { locale } = useControlPlaneLocale();
 const instanceStatusLabel = (status: string) => translateStatus(instanceStatusKeys, status, t);
 const connectionStatusLabel = (status: string) => translateStatus(connectionStatusKeys, status, t);
 
-type InstanceSettingsSection = "general" | "models" | "apps";
+type InstanceSettingsSection = "general" | "ai" | "models" | "git-credentials" | "apps";
 type AppFilter = "all" | "available" | "installed";
 
 const props = defineProps<{
@@ -301,8 +353,12 @@ const emit = defineEmits<{ "update:open": [open: boolean] }>();
 const section = ref<InstanceSettingsSection>("general");
 const instanceName = ref("");
 const autoImportAgentConfigs = ref(true);
+const codexConfigEnabled = ref(true);
+const codexHomeMode = ref<"default" | "taskhandoff">("taskhandoff");
 const defaultCodexPermissionMode = ref<AiSessionPermissionMode>("ask");
 const aiSessionHistoryLimit = ref("50");
+const aiSessionAttachmentRetentionDays = ref("30");
+const aiSessionMaxFileAttachmentKiB = ref("500");
 const modelSelection = ref<ModelSelection>({});
 const savingGeneral = ref(false);
 const savingModels = ref(false);
@@ -311,15 +367,78 @@ const success = ref("");
 const operationSubmitting = ref("");
 const appConfirmation = ref<{ app: ManagedAppProjection; operation: AppManagementOperation }>();
 const appFilter = ref<AppFilter>("all");
-const defaultModelValue = "__default__";
-const noModelValue = "__none__";
-const modelApps: ModelApp[] = ["codex", "claude"];
+const noGitCredentialValue = "__none__";
+const selectedGitCredentialId = ref(noGitCredentialValue);
+const gitCredentialBusy = ref(false);
+const gitBrokerSupported = computed(() => Boolean(props.instance && supportsGitCredentialProxy(props.instance.capabilities)));
+const gitCredentials = useGitCredentialsQuery(computed(() => props.open && section.value === "git-credentials" && gitBrokerSupported.value));
+const gitAssignments = useInstanceGitCredentialAssignmentsQuery(computed(() => props.instance?.id || ""), computed(() => props.open && section.value === "git-credentials" && gitBrokerSupported.value));
+const assignedGitCredentialIds = computed(() => new Set((gitAssignments.data.value || []).map((assignment) => assignment.credentialId)));
+const assignableGitCredentials = computed(() => (gitCredentials.data.value || []).filter((credential) => credential.status === "enabled" && !assignedGitCredentialIds.value.has(credential.id)));
+const gitCredentialError = computed(() => translateApiError(gitAssignments.error.value || gitCredentials.error.value, t, t("instances.settings.gitCredentialsLoadFailed")));
+const gitCredentialMatch = computed(() => {
+  const source = props.instance?.source;
+  if (!source || source.type === "local-folder") return undefined;
+  const syncedIds = new Set((gitAssignments.data.value || [])
+    .filter((assignment) => assignment.status === "synced")
+    .map((assignment) => assignment.credentialId));
+  return resolveGitCredential(source.url, (gitCredentials.data.value || [])
+    .filter((credential) => syncedIds.has(credential.id))
+    .map((credential) => ({
+      id: credential.id,
+      kind: credential.kind,
+      scope: credential.scope,
+      status: credential.status,
+      pinnedKnownHosts: credential.kind === "ssh-key",
+    })));
+});
+const gitCredentialMatchStatus = computed(() => gitCredentialMatch.value?.status || "none");
+const gitCredentialMatchText = computed(() => {
+  const match = gitCredentialMatch.value;
+  if (!match) return "";
+  if (match.status === "unique") return t("instances.settings.gitCredentialMatchUnique", { name: gitCredentialName(match.credential.id) });
+  if (match.status === "ambiguous") return t("instances.settings.gitCredentialMatchAmbiguous", { count: match.credentialIds.length });
+  if (match.status === "missing-host-key") return t("instances.settings.gitCredentialMatchHostKey");
+  if (match.status === "unsupported") return t("instances.settings.gitCredentialMatchUnsupported");
+  return t("instances.settings.gitCredentialMatchNone");
+});
 
-const generalChanged = computed(() => Boolean(props.instance && (
-  instanceName.value.trim() !== props.instance.name
+function gitCredential(credentialId: string): GitCredentialPublic | undefined { return gitCredentials.data.value?.find((item) => item.id === credentialId); }
+function gitCredentialName(credentialId: string) { return gitCredential(credentialId)?.name || credentialId; }
+function gitCredentialScope(credentialId: string) {
+  const credential = gitCredential(credentialId);
+  return credential ? `${credential.scope.scheme}://${credential.scope.host}${credential.scope.port ? `:${credential.scope.port}` : ""}${credential.scope.pathPrefix}` : credentialId;
+}
+async function refreshGitCredentials() { await Promise.all([gitCredentials.refetch(), gitAssignments.refetch()]); }
+async function authorizeGitCredential() {
+  const instance = props.instance;
+  if (!instance || selectedGitCredentialId.value === noGitCredentialValue) return;
+  gitCredentialBusy.value = true;
+  try {
+    await authorizeInstanceGitCredential(instance.id, selectedGitCredentialId.value);
+    selectedGitCredentialId.value = noGitCredentialValue;
+    await refreshGitCredentials();
+  } catch (cause) { error.value = translateApiError(cause, t, t("instances.settings.gitCredentialAuthorizeFailed")); }
+  finally { gitCredentialBusy.value = false; }
+}
+async function revokeGitCredential(credentialId: string) {
+  const instance = props.instance;
+  if (!instance) return;
+  gitCredentialBusy.value = true;
+  try { await revokeInstanceGitCredential(instance.id, credentialId); await refreshGitCredentials(); }
+  catch (cause) { error.value = translateApiError(cause, t, t("instances.settings.gitCredentialRevokeFailed")); }
+  finally { gitCredentialBusy.value = false; }
+}
+
+const generalChanged = computed(() => Boolean(props.instance && instanceName.value.trim() !== props.instance.name));
+const aiChanged = computed(() => Boolean(props.instance && (
+  codexConfigEnabled.value !== props.instance.config.codexConfigEnabled
+  || codexHomeMode.value !== props.instance.config.codexHomeMode
   || autoImportAgentConfigs.value !== props.instance.config.autoImportAgentConfigs
   || defaultCodexPermissionMode.value !== props.instance.config.defaultCodexPermissionMode
   || (historyLimitSupported.value && Number(aiSessionHistoryLimit.value) !== props.instance.config.aiSessionHistoryLimit)
+  || (attachmentRetentionSupported.value && Number(aiSessionAttachmentRetentionDays.value) !== props.instance.config.aiSessionAttachmentRetentionDays)
+  || (fileAttachmentLimitSupported.value && Number(aiSessionMaxFileAttachmentKiB.value) * 1024 !== props.instance.config.aiSessionMaxFileAttachmentBytes)
 )));
 const validInstanceName = computed(() => instanceName.value.trim().length > 0);
 const validHistoryLimit = computed(() => {
@@ -340,7 +459,48 @@ const historyLimitSupported = computed(() => {
     && (features as Record<string, unknown>).aiSessionPersistenceSettings === true);
   return nodeSupported && instanceSupported;
 });
-const modelsChanged = computed(() => JSON.stringify(normalizedSelection(modelSelection.value)) !== JSON.stringify(normalizedSelection(props.instance?.modelSelection || {})));
+const validAttachmentRetention = computed(() => {
+  const value = Number(aiSessionAttachmentRetentionDays.value);
+  return !attachmentRetentionSupported.value || (Number.isInteger(value) && value >= 0 && value <= AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS);
+});
+const attachmentRetentionSupported = computed(() => {
+  const instance = props.instance;
+  if (!instance) return false;
+  const nodeAgent = instance.node?.capabilities?.agent;
+  const nodeCapabilities = nodeAgent && typeof nodeAgent === "object" && !Array.isArray(nodeAgent)
+    ? (nodeAgent as Record<string, unknown>).capabilities
+    : undefined;
+  const nodeSupported = Boolean(nodeCapabilities && typeof nodeCapabilities === "object" && !Array.isArray(nodeCapabilities)
+    && (nodeCapabilities as Record<string, unknown>).aiSessionAttachmentRetention === true);
+  const features = instance.capabilities?.features;
+  const feature = features && typeof features === "object" && !Array.isArray(features)
+    ? (features as Record<string, unknown>).aiSessionConversationAttachments
+    : undefined;
+  return nodeSupported && Boolean(feature && typeof feature === "object" && !Array.isArray(feature) && (feature as Record<string, unknown>).retentionSettings === true);
+});
+const validFileAttachmentLimit = computed(() => {
+  const value = Number(aiSessionMaxFileAttachmentKiB.value);
+  return !fileAttachmentLimitSupported.value || (Number.isInteger(value) && value >= 1 && value <= AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES / 1024);
+});
+const fileAttachmentLimitSupported = computed(() => {
+  const nodeAgent = props.instance?.node?.capabilities?.agent;
+  const nodeCapabilities = nodeAgent && typeof nodeAgent === "object" && !Array.isArray(nodeAgent)
+    ? (nodeAgent as Record<string, unknown>).capabilities
+    : undefined;
+  return supportsNodeAiSessionFileAttachmentLimit(nodeCapabilities)
+    && supportsAiSessionFileSizeLimitSettings(props.instance?.capabilities);
+});
+const attachmentRetentionWillShorten = computed(() => Boolean(
+  props.instance
+  && attachmentRetentionSupported.value
+  && Number(aiSessionAttachmentRetentionDays.value) < props.instance.config.aiSessionAttachmentRetentionDays,
+));
+const legacyModelSelectionNeedsUpgrade = computed(() => {
+  const selection = props.instance?.modelSelection;
+  return Boolean(selection && !selection.modelEntityIds?.length && legacyModelEntityIds(selection).length);
+});
+const modelsChanged = computed(() => legacyModelSelectionNeedsUpgrade.value
+  || JSON.stringify(normalizedSelection(modelSelection.value)) !== JSON.stringify(normalizedSelection(props.instance?.modelSelection || {})));
 const inventoryState = computed<"current" | "stale" | "not-reported" | "empty" | "degraded">(() => {
   const inventory = props.instance?.appInventory;
   if (!inventory) return "not-reported";
@@ -378,9 +538,13 @@ watch(
     section.value = props.initialSection || "general";
     instanceName.value = props.instance.name;
     autoImportAgentConfigs.value = props.instance.config.autoImportAgentConfigs;
+    codexConfigEnabled.value = props.instance.config.codexConfigEnabled;
+    codexHomeMode.value = props.instance.config.codexHomeMode;
     defaultCodexPermissionMode.value = props.instance.config.defaultCodexPermissionMode;
     aiSessionHistoryLimit.value = String(props.instance.config.aiSessionHistoryLimit);
-    modelSelection.value = { ...props.instance.modelSelection };
+    aiSessionAttachmentRetentionDays.value = String(props.instance.config.aiSessionAttachmentRetentionDays);
+    aiSessionMaxFileAttachmentKiB.value = String(props.instance.config.aiSessionMaxFileAttachmentBytes / 1024);
+    modelSelection.value = normalizedSelection(props.instance.modelSelection);
     error.value = "";
     success.value = "";
     appFilter.value = "all";
@@ -409,71 +573,55 @@ function handleOpenChange(open: boolean) {
   emit("update:open", open);
 }
 
-function selectableModels(app: ModelApp) {
-  return selectableInstanceModels(props.models, app, props.instance?.nodeId || "");
-}
+const modelEntityIds = computed<string[]>({
+  get: () => modelSelection.value.modelEntityIds || [],
+  set: (value) => {
+    modelSelection.value = { modelEntityIds: [...new Set(value)] };
+    error.value = "";
+    success.value = "";
+  },
+});
 
-function modelOptionLabel(model: ModelConfig) {
-  const availableFromControlPlane = model.locations?.some((location) => location.type === "control-plane" && location.enabled);
-  return t(availableFromControlPlane ? "instances.create.modelCopyToNode" : "instances.create.modelOnNode", { name: `${model.name} · ${model.model}` });
-}
-
-function draftModelId(app: ModelApp) {
-  return app === "codex" ? modelSelection.value.codexModelHash : modelSelection.value.claudeModelHash;
-}
-
-function modelDraftValue(app: ModelApp) {
-  return draftModelId(app) === null ? noModelValue : draftModelId(app) || defaultModelValue;
-}
-
-function invalidSelection(app: ModelApp) {
-  return invalidInstanceModelSelection(props.models, app, props.instance?.nodeId || "", draftModelId(app));
-}
-
-function effectiveModelLabel(app: ModelApp) {
-  if (draftModelId(app) === null) return t("instances.settings.noModel");
-  const match = effectiveInstanceModel(props.models, app, props.instance?.nodeId || "", draftModelId(app));
-  return match ? `${match.name} · ${match.model}` : t("instances.settings.noEnabledGlobalModel");
-}
-
-function setModelDraft(app: ModelApp, value: string) {
-  const id = value === defaultModelValue ? undefined : value === noModelValue ? null : value;
-  modelSelection.value = normalizedSelection({
-    ...modelSelection.value,
-    ...(app === "codex" ? { codexModelHash: id } : { claudeModelHash: id }),
-  });
-  error.value = "";
-  success.value = "";
+function legacyModelEntityIds(value: ModelSelection) {
+  return [...new Set([value.codexModelHash, value.claudeModelHash, value.opencodeModelHash]
+    .filter((id): id is string => typeof id === "string" && id.length > 0))];
 }
 
 function normalizedSelection(value: ModelSelection): ModelSelection {
-  return {
-    ...(value.codexModelHash !== undefined ? { codexModelHash: value.codexModelHash } : {}),
-    ...(value.claudeModelHash !== undefined ? { claudeModelHash: value.claudeModelHash } : {}),
-  };
+  const ids = [...new Set(value.modelEntityIds?.length ? value.modelEntityIds : legacyModelEntityIds(value))];
+  return ids.length ? { modelEntityIds: ids } : {};
 }
 
 async function saveGeneral() {
-  if (!props.instance || savingGeneral.value || !validInstanceName.value || !validHistoryLimit.value) return;
+  if (!props.instance || savingGeneral.value || !validInstanceName.value || !validHistoryLimit.value || !validAttachmentRetention.value || !validFileAttachmentLimit.value) return;
   savingGeneral.value = true;
   error.value = "";
   success.value = "";
   try {
-    await props.updateInstance(props.instance, {
-      name: instanceName.value.trim(),
+    const input: UpdateControlledInstanceInput = {
       config: {
         autoImportAgentConfigs: autoImportAgentConfigs.value,
+        codexConfigEnabled: codexConfigEnabled.value,
+        codexHomeMode: codexHomeMode.value,
         defaultCodexPermissionMode: defaultCodexPermissionMode.value,
         ...(historyLimitSupported.value ? { aiSessionHistoryLimit: Number(aiSessionHistoryLimit.value) } : {}),
+        ...(attachmentRetentionSupported.value ? { aiSessionAttachmentRetentionDays: Number(aiSessionAttachmentRetentionDays.value) } : {}),
+        ...(fileAttachmentLimitSupported.value ? { aiSessionMaxFileAttachmentBytes: Number(aiSessionMaxFileAttachmentKiB.value) * 1024 } : {}),
       },
-    });
+    };
+    if (generalChanged.value) input.name = instanceName.value.trim();
+    await props.updateInstance(props.instance, input);
     instanceName.value = instanceName.value.trim();
     success.value = t("instances.settings.generalSaved");
   } catch (cause) {
     instanceName.value = props.instance.name;
     autoImportAgentConfigs.value = props.instance.config.autoImportAgentConfigs;
+    codexConfigEnabled.value = props.instance.config.codexConfigEnabled;
+    codexHomeMode.value = props.instance.config.codexHomeMode;
     defaultCodexPermissionMode.value = props.instance.config.defaultCodexPermissionMode;
     aiSessionHistoryLimit.value = String(props.instance.config.aiSessionHistoryLimit);
+    aiSessionAttachmentRetentionDays.value = String(props.instance.config.aiSessionAttachmentRetentionDays);
+    aiSessionMaxFileAttachmentKiB.value = String(props.instance.config.aiSessionMaxFileAttachmentBytes / 1024);
     error.value = translateApiError(cause, t);
   } finally {
     savingGeneral.value = false;
@@ -489,7 +637,7 @@ async function saveModels() {
     await props.updateInstance(props.instance, { modelSelection: normalizedSelection(modelSelection.value) });
     success.value = t("instances.settings.modelsSaved");
   } catch (cause) {
-    modelSelection.value = { ...props.instance.modelSelection };
+    modelSelection.value = normalizedSelection(props.instance.modelSelection);
     error.value = translateApiError(cause, t);
   } finally {
     savingModels.value = false;
@@ -563,7 +711,6 @@ function managedAppStateLabel(state: ManagedAppProjection["state"]) {
 }
 
 function managedAppIcon(app: ManagedAppProjection) {
-  if (app.id === "codex" || app.id === "claude") return app.id === "codex" ? Code2 : Bot;
   if (app.kind === "gui") return app.id === "chromium" ? Globe2 : Monitor;
   if (app.kind === "web") return Globe2;
   return TerminalSquare;
@@ -605,8 +752,8 @@ async function confirmAppOperation() {
 
 <style scoped>
 :global(.instance-settings-dialog[role="dialog"]) {
-  width: min(800px, calc(100vw - 36px));
-  max-width: 800px;
+  width: min(920px, calc(100vw - 36px));
+  max-width: 920px;
   height: 680px;
   max-height: calc(100vh - 36px);
   grid-template-rows: auto minmax(0, 1fr) auto;
@@ -690,7 +837,7 @@ async function confirmAppOperation() {
 
 .instance-settings-tabs-list {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   width: 100%;
   height: auto;
   min-height: 36px;
@@ -739,45 +886,56 @@ async function confirmAppOperation() {
 
 .instance-settings-section {
   display: grid;
-  gap: 16px;
+  gap: 18px;
   margin: 0;
-  padding: 2px 10px 4px 2px;
+  padding: 2px 10px 18px 2px;
+}
+
+.instance-settings-section[hidden] {
+  display: none;
 }
 
 .instance-settings-card {
   display: grid;
   gap: 12px;
-  border-top: 1px solid var(--line);
-  padding-top: 16px;
-}
-
-.instance-settings-card:first-child {
-  border-top: 0;
-  padding-top: 0;
 }
 
 .instance-settings-card h3,
 .instance-app-heading h3 {
   margin: 0;
   color: var(--text-strong);
-  font-size: 13px;
+  font-size: 14px;
+  font-weight: 600;
 }
 
 .instance-settings-section-heading {
   display: grid;
-  gap: 3px;
+  gap: 2px;
+  padding: 0 2px;
 }
 
 .instance-settings-section-heading p {
   margin: 0;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.instance-settings-group {
+  gap: 7px;
+}
+
+.instance-settings-surface {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface-raised);
 }
 
 .instance-settings-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
+  gap: 0;
   margin: 0;
 }
 
@@ -785,24 +943,29 @@ async function confirmAppOperation() {
   display: grid;
   min-width: 0;
   gap: 4px;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  background: var(--surface-raised);
-  padding: 10px;
+  padding: 12px 16px;
+}
+
+.instance-settings-grid div:nth-child(even) {
+  border-left: 1px solid var(--line);
+}
+
+.instance-settings-grid div:nth-child(n + 3) {
+  border-top: 1px solid var(--line);
 }
 
 .instance-settings-grid dt {
   color: var(--text-muted);
-  font-size: 11px;
-  font-weight: 750;
-  text-transform: uppercase;
+  font-size: 12px;
+  font-weight: 500;
 }
 
 .instance-settings-grid dd {
   overflow-wrap: anywhere;
   margin: 0;
   color: var(--text-strong);
-  font-size: 12px;
+  font-size: 13px;
+  line-height: 1.5;
 }
 
 .instance-settings-grid code {
@@ -810,21 +973,35 @@ async function confirmAppOperation() {
   font-size: 11px;
 }
 
-.instance-settings-control-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  background: var(--surface-raised);
-  padding: 12px;
+.instance-settings-control-surface {
+  display: grid;
 }
 
 .instance-settings-general-controls {
   display: grid;
-  flex: 1;
-  gap: 14px;
+  gap: 0;
+}
+
+.instance-settings-general-controls > label {
+  padding: 14px 16px;
+}
+
+.instance-settings-general-controls > label + label,
+.instance-settings-general-controls > .instance-settings-row-note + label,
+.instance-settings-general-controls > label + .instance-settings-row-note {
+  border-top: 1px solid var(--line);
+}
+
+.instance-settings-general-actions {
+  display: flex;
+  justify-content: flex-end;
+  border-top: 1px solid var(--line);
+  padding: 10px 16px;
+}
+
+.instance-settings-row-note {
+  background: var(--surface-inset);
+  padding: 8px 16px;
 }
 
 .instance-settings-checkbox {
@@ -836,8 +1013,7 @@ async function confirmAppOperation() {
 
 .instance-settings-checkbox span,
 .instance-settings-name-control > span,
-.instance-settings-select-control > span,
-.instance-model-grid label {
+.instance-settings-select-control > span {
   display: grid;
   gap: 5px;
 }
@@ -856,7 +1032,8 @@ async function confirmAppOperation() {
 
 .instance-settings-checkbox strong {
   color: var(--text-strong);
-  font-size: 12px;
+  font-size: 13px;
+  font-weight: 500;
 }
 
 .instance-settings-name-control {
@@ -868,7 +1045,8 @@ async function confirmAppOperation() {
 
 .instance-settings-name-control strong {
   color: var(--text-strong);
-  font-size: 12px;
+  font-size: 13px;
+  font-weight: 500;
 }
 
 .instance-settings-select-control {
@@ -880,19 +1058,14 @@ async function confirmAppOperation() {
 
 .instance-settings-select-control strong {
   color: var(--text-strong);
-  font-size: 12px;
+  font-size: 13px;
+  font-weight: 500;
 }
 
-.instance-settings-actions {
-  display: flex;
-  justify-content: flex-end;
-}
-
-.instance-model-grid {
+.instance-model-surface {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
 }
+
 
 .instance-app-heading,
 .instance-app-row {
@@ -914,14 +1087,18 @@ async function confirmAppOperation() {
   height: 28px;
 }
 
+.instance-app-heading > .instance-settings-section-heading {
+  min-width: 0;
+}
+
 .instance-app-toolbar {
   display: flex;
   min-height: 36px;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  border-block: 1px solid var(--line);
-  padding: 6px 0;
+  border-bottom: 1px solid var(--line);
+  padding: 6px 10px;
 }
 
 .instance-app-toolbar > small {
@@ -954,9 +1131,17 @@ async function confirmAppOperation() {
   gap: 8px;
 }
 
-.instance-app-row {
+.instance-directory-list {
+  gap: 0;
+}
+
+.instance-directory-list .instance-app-row {
+  min-height: 68px;
+  padding: 10px 12px;
+}
+
+.instance-directory-list .instance-app-row + .instance-app-row {
   border-top: 1px solid var(--line);
-  padding-top: 10px;
 }
 
 .instance-app-row > div {
@@ -970,14 +1155,7 @@ async function confirmAppOperation() {
   grid-template-columns: minmax(0, 1fr);
   align-items: stretch;
   justify-content: normal;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  background: var(--surface-raised);
-  padding: 12px;
-}
-
-.instance-managed-app-row:first-child {
-  border-top: 1px solid var(--line);
+  background: transparent;
 }
 
 .instance-app-copy {
@@ -1121,8 +1299,9 @@ async function confirmAppOperation() {
 }
 
 .instance-app-issues {
-  border-left: 3px solid var(--status-danger);
-  padding-left: 10px;
+  border-top: 1px solid var(--line);
+  background: var(--surface-inset);
+  padding: 10px 12px;
   color: var(--text);
   font-size: 12px;
 }
@@ -1149,21 +1328,124 @@ async function confirmAppOperation() {
   padding: 18px 0;
 }
 
+.instance-settings-state {
+  display: flex;
+  min-height: 112px;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--text-muted);
+  font-size: 12px;
+  padding: 18px;
+  text-align: center;
+}
+
+.instance-settings-state-error {
+  color: var(--status-danger);
+}
+
+.instance-settings-empty-state {
+  align-content: center;
+  display: grid;
+  gap: 7px;
+  justify-items: center;
+}
+
+.instance-app-directory,
+.instance-git-directory {
+  display: grid;
+}
+
+.instance-git-assignment-create {
+  align-items: center;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  border-bottom: 1px solid var(--line);
+  padding: 10px 12px;
+}
+
+.instance-git-match-preview {
+  align-items: center;
+  background: var(--surface-inset);
+  border-bottom: 1px solid var(--line);
+  color: var(--text-muted);
+  display: grid;
+  font-size: 12px;
+  gap: 8px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  padding: 10px 12px;
+}
+
+.instance-git-match-preview[data-status="unique"] {
+  color: var(--text);
+}
+
+.instance-git-assignment-row > div:first-child {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.instance-git-assignment-row {
+  align-items: center;
+}
+
+.instance-directory-identity {
+  display: flex !important;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 10px !important;
+}
+
+.instance-directory-identity > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.instance-directory-identity strong {
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.instance-custom-app-row {
+  align-items: center;
+}
+
+.instance-git-assignment-row small {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.instance-git-assignment-actions {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
 @media (max-width: 680px) {
-  .instance-settings-grid,
-  .instance-model-grid {
+  .instance-settings-grid {
     grid-template-columns: 1fr;
   }
 
-  .instance-settings-control-row {
-    align-items: stretch;
-    flex-direction: column;
+  .instance-settings-tabs-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .instance-settings-name-control,
   .instance-settings-select-control {
     grid-template-columns: 1fr;
     gap: 8px;
+  }
+
+  .instance-settings-grid div:nth-child(even) {
+    border-left: 0;
+  }
+
+  .instance-settings-grid div:nth-child(n + 2) {
+    border-top: 1px solid var(--line);
   }
 
   .instance-managed-app-row {
@@ -1184,6 +1466,11 @@ async function confirmAppOperation() {
   }
 
   .instance-app-confirmation-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .instance-git-assignment-create {
+    align-items: stretch;
     grid-template-columns: 1fr;
   }
 }

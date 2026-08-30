@@ -2,6 +2,7 @@ import { onBeforeUnmount, onMounted, ref } from "vue";
 
 export type DesktopUpdateChannel = "stable" | "beta" | "alpha";
 export type DesktopUpdatePhase = "unsupported" | "idle" | "checking" | "available" | "downloading" | "downloaded" | "installing" | "up-to-date" | "error";
+export type DesktopUpdateCapabilityReason = "development-build" | "windows-signing-required" | "appimage-required" | "unsupported-platform";
 
 export type DesktopUpdateState = {
   phase: DesktopUpdatePhase;
@@ -12,6 +13,8 @@ export type DesktopUpdateState = {
     check: boolean;
     download: boolean;
     install: boolean;
+    reasonCode?: DesktopUpdateCapabilityReason;
+    /** Compatibility for v0.0.21 desktop shells. New UIs localize reasonCode. */
     reason?: string;
   };
   progress?: {

@@ -84,3 +84,62 @@ test("raw instance proxy cancels a declared oversized upstream response", async 
   assert.equal(response.json().error.code, "INSTANCE_PROXY_RESPONSE_TOO_LARGE");
   assert.equal(cancellations, 1);
 });
+
+test("instance proxy propagates trace id and appends its Server-Timing phase", async (t) => {
+  const diagnostics = [];
+  const app = Fastify({ logger: false });
+  t.after(() => app.close());
+  registerInstanceProxyRoutes(app, {
+    fetchImpl: async (_url, init) => new Response(JSON.stringify({ data: { ok: true } }), {
+      headers: {
+        "content-type": "application/json",
+        "server-timing": "instance_action;dur=12.5",
+        "x-task-handoff-trace-id": init.headers["x-task-handoff-trace-id"],
+      },
+    }),
+    metrics: createInstanceProxyMetrics(),
+    instanceBase: () => "http://instance.invalid",
+    syncModelEnvironment: async () => undefined,
+    diagnostic: (data) => diagnostics.push(data),
+  });
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances/inst_proxy/proxy",
+    payload: {
+      path: "/api/ai-sessions/ais_1/messages",
+      method: "POST",
+      headers: { "content-type": "application/json", "x-task-handoff-trace-id": "trace-message-1" },
+      body: "{}",
+    },
+  });
+
+  assert.equal(response.headers["x-task-handoff-trace-id"], "trace-message-1");
+  assert.match(response.headers["server-timing"], /instance_action;dur=12\.5/);
+  assert.match(response.headers["server-timing"], /node_proxy;dur=/);
+  assert.equal(diagnostics.at(-1).traceId, "trace-message-1");
+});
+
+test("instance proxy reports an unreachable controlled-instance endpoint as a retryable bad gateway", async (t) => {
+  const diagnostics = [];
+  const app = Fastify({ logger: false });
+  t.after(() => app.close());
+  registerInstanceProxyRoutes(app, {
+    fetchImpl: async () => { throw new TypeError("fetch failed"); },
+    metrics: createInstanceProxyMetrics(),
+    instanceBase: () => "http://instance.invalid",
+    syncModelEnvironment: async () => undefined,
+    diagnostic: (data) => diagnostics.push(data),
+  });
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances/inst_unreachable/proxy",
+    payload: { path: "/api/health", method: "GET", headers: {} },
+  });
+
+  assert.equal(response.statusCode, 502);
+  assert.equal(response.json().code, "INSTANCE_PROXY_UPSTREAM_UNREACHABLE");
+  assert.equal(response.json().message, "Instance inst_unreachable web endpoint is not reachable.");
+  assert.ok(diagnostics.some((entry) => entry.action === "proxy.upstream.failed"));
+});

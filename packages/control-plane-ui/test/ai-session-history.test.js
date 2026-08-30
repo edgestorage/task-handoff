@@ -6,6 +6,8 @@ const panel = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail
 const styles = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.css", import.meta.url), "utf8");
 const timeline = fs.readFileSync(new URL("../src/components/ai-session/AiSessionTimelineView.vue", import.meta.url), "utf8");
 const queries = fs.readFileSync(new URL("../src/api/queries.ts", import.meta.url), "utf8");
+const zhSessions = fs.readFileSync(new URL("../src/i18n/locales/zh-CN/sessions.ts", import.meta.url), "utf8");
+const enSessions = fs.readFileSync(new URL("../src/i18n/locales/en-US/sessions.ts", import.meta.url), "utf8");
 
 test("AI session history is an on-demand sidebar mode entered from the current-list footer", () => {
   const emptyIndex = panel.indexOf('t("sessions.panel.noConversations")');
@@ -46,13 +48,24 @@ test("history detail composer resumes, waits for authoritative state, and then s
   assert.match(panel, /session\.providerSessionId === result\.providerSessionId/);
   assert.match(panel, /session\.creationSource === result\.creationSource/);
   assert.match(panel, /result\.appSessionId \? session\.appSessionId === result\.appSessionId : !session\.appSessionId/);
-  assert.match(panel, /for \(let attempt = 0; attempt < 12 && !session; attempt \+= 1\)/);
-  assert.match(panel, /refetchQueries\(\{ queryKey: \["control-plane-ai-sessions"\] \}\)/);
+  assert.match(panel, /waitForAiSessionProjection\(findAuthoritativeSession\)/);
+  assert.doesNotMatch(panel, /for \(let attempt = 0; attempt < 12/);
+  assert.doesNotMatch(panel, /refetchQueries\(\{ queryKey: \["control-plane-ai-sessions"\] \}\)/);
   assert.match(panel, /await sendAiSessionMessage\([\s\S]*session\.id[\s\S]*aiSessionMessageText\(message\)[\s\S]*attachments/);
   assert.match(panel, /emit\("selectAiSession", props\.instance\.id, session\.id\);/);
   assert.match(panel, /showControlPlaneToast/);
   assert.doesNotMatch(panel, />继续对话</);
   assert.doesNotMatch(panel, /historyItems\.value\s*=\s*historyItems\.value\.filter/);
+  assert.match(zhSessions, /continue: "继续对话", continueConversation:/);
+  assert.match(enSessions, /continue: "Continue conversation", continueConversation:/);
+});
+
+test("history continue action shows immediate button loading state", () => {
+  assert.match(panel, /class="session-ai-history-continue"[\s\S]*:disabled="resumingHistoryId === historyDetail\.item\.id"[\s\S]*:aria-busy="resumingHistoryId === historyDetail\.item\.id"/);
+  assert.match(panel, /<LoaderCircle[\s\S]*v-if="resumingHistoryId === historyDetail\.item\.id"[\s\S]*class="session-ai-spin"[\s\S]*:size="14"/);
+  assert.match(panel, /resumingHistoryId === historyDetail\.item\.id \? t\("sessions\.actions\.forking"\) : t\("sessions\.panel\.continue"\)/);
+  assert.match(styles, /\.session-ai-detail-head-actions \.session-ai-history-continue\s*\{[^}]*gap: 6px;/s);
+  assert.match(styles, /\.session-ai-detail-head-actions \.session-ai-history-continue:disabled\s*\{[^}]*cursor: wait;[^}]*opacity: 0\.72;/s);
 });
 
 test("history API clients send only instance and AI session identities", () => {
@@ -79,7 +92,7 @@ test("history reuses path grouping and opens stored turn details without resumin
   assert.match(panel, /async function continueHistoryConversation\(\) \{[\s\S]*resumeHistorySession\(item\)[\s\S]*emit\("selectAiSession", props\.instance\.id, session\.id\);[\s\S]*await leaveHistoryMode\(\);/);
   assert.doesNotMatch(panel, /session-ai-history-detail-head/);
   assert.match(timeline, /sourceTurns = computed\(\(\) => props\.session\?\.turns \|\| props\.storedTurns\)/);
-  assert.match(timeline, /function loadVisibleTurnTimelines\(\) \{\s*if \(!props\.session\) return;/);
+  assert.match(timeline, /function loadVisibleTurnTimelines\(\)[\s\S]*if \(!props\.session \|\| !viewport \|\| !timeline\) return;/);
   assert.doesNotMatch(panel, /<small>你<\/small>/);
   assert.match(panel, /t\("sessions\.panel\.selectHistory"\)/);
   assert.doesNotMatch(panel, /selectHistoryItem[\s\S]{0,500}resumeAiSession/);

@@ -22,7 +22,7 @@ require.extensions[".ts"] = (module, filename) => {
 };
 const { codexItemTimeline } = require("../packages/ai-session-runtime/src/codex-app-server-protocol.ts");
 const { CodexAppServerClient, CodexAppServerSessionBridge } = require("../packages/ai-session-runtime/src/codex-app-server.ts");
-const { createAiSessionRegistry } = require("../packages/ai-session-runtime/src/ai-session-registry.ts");
+const { aiSessionTurnBodyRevision, aiSessionTurnsRevision, createAiSessionRegistry } = require("../packages/ai-session-runtime/src/ai-session-registry.ts");
 const { CodexAppServerRpcError, codexPaginatedTimelineSupported } = require("../packages/ai-session-runtime/src/codex-app-server/client/client.ts");
 const { codexNotification } = require("../packages/ai-session-runtime/src/codex-app-server/protocol/events.ts");
 const { CodexTimelineStore } = require("../packages/ai-session-runtime/src/codex-app-server/session/timeline-store.ts");
@@ -31,6 +31,29 @@ const { AiSessionEventType, AiSessionTimelineSchema, AiSessionTurnTimelineSchema
 const { AiSessionActionService } = require("../packages/control-plane/src/control-plane/sessions/ai-session-actions.ts");
 const { ControlPlaneAiSessionAggregator } = require("../packages/control-plane/src/control-plane/sessions/ai-session-aggregator.ts");
 const { NodeTunnelEventRouter } = require("../packages/control-plane/src/control-plane/nodes/tunnel-event-router.ts");
+const { InstanceLifecycleEventType } = require("../packages/protocol/src/control-plane.ts");
+
+test("AI session Turn structure and body revisions change independently", () => {
+  const startedAt = "2026-08-26T00:00:00.000Z";
+  const base = {
+    id: "session-revisions",
+    agent: "codex",
+    status: "running",
+    phase: "responding",
+    startedAt,
+    updatedAt: startedAt,
+    queue: { revision: 0, pendingCount: 0, items: [] },
+    subAgents: [],
+    turns: [{ id: "turn-1", status: "running", phase: "responding", revision: 1, startedAt, updatedAt: startedAt, lastMessage: "one" }],
+  };
+  const bodyChanged = { ...base, turns: [{ ...base.turns[0], revision: 2, lastMessage: "two" }] };
+  assert.equal(aiSessionTurnsRevision(base), aiSessionTurnsRevision(bodyChanged));
+  assert.notEqual(aiSessionTurnBodyRevision(base.turns[0]), aiSessionTurnBodyRevision(bodyChanged.turns[0]));
+  assert.notEqual(aiSessionTurnsRevision(base), aiSessionTurnsRevision({
+    ...base,
+    turns: [...base.turns, { ...base.turns[0], id: "turn-2" }],
+  }));
+});
 
 test("AI session controller routes Timeline reads through provider capabilities", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-timeline-control-"));
@@ -239,11 +262,14 @@ test("Codex Timeline store restores item order and lifecycle updates after proce
   firstProcess.upsert("thread_1", { id: "message_1", turnId: "turn_1", type: "ai-message", text: "Checking" });
   firstProcess.upsert("thread_1", { id: "command_1", turnId: "turn_1", type: "activity", activityKind: "commandExecution", title: "Command", status: "running" });
   firstProcess.upsert("thread_1", { id: "command_1", turnId: "turn_1", type: "activity", activityKind: "commandExecution", title: "Command", status: "completed", output: "ok", exitCode: 0 });
+  firstProcess.upsert("thread_1", { id: "codex_retry:turn_1", turnId: "turn_1", type: "activity", activityKind: "codexRetry", title: "Codex retry", status: "waiting", summary: "Reconnecting" });
+  firstProcess.upsert("thread_1", { id: "codex_retry:turn_1", turnId: "turn_1", type: "activity", activityKind: "codexRetry", title: "Codex retry", status: "completed", summary: "Reconnecting" });
   firstProcess.upsert("thread_1", { id: "message_2", turnId: "turn_1", type: "ai-message", text: "Done" });
 
   const storedFile = path.join(directory, fs.readdirSync(directory)[0]);
   const legacyRecord = JSON.parse(fs.readFileSync(storedFile, "utf8"));
   legacyRecord.items.push({ id: "reasoning_legacy", turnId: "turn_1", type: "activity", activityKind: "reasoning", title: "Reasoning" });
+  legacyRecord.items.push({ id: "retry_legacy", turnId: "turn_1", type: "activity", activityKind: "codexRetry", title: "Codex retry", status: "waiting", summary: "Reconnecting" });
   fs.writeFileSync(storedFile, JSON.stringify(legacyRecord));
 
   const restartedProcess = new CodexTimelineStore(directory);
@@ -526,7 +552,6 @@ test("complete-session Timeline forwarding is capability-gated by the canonical 
       return { sessionId: "ais_1", providerSessionId: "thread_1", items: [], generatedAt: "2026-08-15T00:00:00.000Z" };
     },
     requireRuntime: async () => ({}),
-    refreshSnapshots: async () => undefined,
   });
   const timeline = await service.timeline("instance_1", "ais_1");
   assert.equal(requestedPath, "/ai-sessions/ais_1/timeline");
@@ -536,7 +561,6 @@ test("complete-session Timeline forwarding is capability-gated by the canonical 
     requireInstance: async () => ({ capabilities: { features: {} } }),
     request: async () => { throw new Error("must not forward"); },
     requireRuntime: async () => ({}),
-    refreshSnapshots: async () => undefined,
   });
   await assert.rejects(() => unsupported.timeline("instance_unsupported", "ais_1"), (error) => error.code === "AI_SESSION_TIMELINE_UNSUPPORTED");
 });
@@ -554,7 +578,6 @@ test("per-turn Timeline forwarding is independently capability-gated", async () 
       return { sessionId: "ais_1", turnId: "turn_2", items: [], generatedAt: "2026-08-15T00:00:00.000Z" };
     },
     requireRuntime: async () => ({}),
-    refreshSnapshots: async () => undefined,
   });
   const timeline = await service.turnTimeline("instance_1", "ais_1", "turn_2");
   assert.equal(requestedPath, "/ai-sessions/ais_1/turns/turn_2/timeline");
@@ -568,7 +591,6 @@ test("per-turn Timeline forwarding is independently capability-gated", async () 
     } } } }),
     request: async () => { throw new Error("must not forward"); },
     requireRuntime: async () => ({}),
-    refreshSnapshots: async () => undefined,
   });
   await assert.rejects(
     () => unsupported.turnTimeline("instance_unsupported", "ais_1", "turn_2"),
@@ -598,7 +620,6 @@ test("Timeline forwarding accepts provider-scoped capabilities", async () => {
       return { sessionId: "ais_1", providerSessionId: "provider_1", items: [], generatedAt: "2026-08-16T00:00:00.000Z" };
     },
     requireRuntime: async () => ({}),
-    refreshSnapshots: async () => undefined,
   });
   await service.timeline("instance_1", "ais_1");
   await service.turnTimeline("instance_1", "ais_1", "turn_1");
@@ -635,4 +656,78 @@ test("control-plane tunnel forwards a validated single Timeline item event", asy
   assert.equal(published[0].type, AiSessionEventType.TimelineItem);
   assert.deepEqual(published[0].payload, itemEvent);
   assert.deepEqual(published[0].options.scope, { nodeId: "node_1", instanceId: "instance_1" });
+});
+
+test("control-plane tunnel converges lifecycle state before publishing it downstream", async () => {
+  const order = [];
+  const router = new NodeTunnelEventRouter({
+    events: { publish: () => order.push("publish") },
+    onInstanceLifecycle: async (nodeId, lifecycle) => {
+      assert.equal(nodeId, "node_1");
+      assert.equal(lifecycle.instanceId, "instance_1");
+      order.push("apply");
+      return true;
+    },
+    validateInstanceScope: async () => {
+      throw new Error("lifecycle ownership is validated while converging the complete fleet snapshot");
+    },
+  });
+  router.handle("node_1", {
+    type: "node-agent.event.forwarded",
+    instanceId: "instance_1",
+    event: {
+      type: InstanceLifecycleEventType.Snapshot,
+      topic: "instances",
+      scope: { instanceId: "instance_1" },
+      payload: {
+        instanceId: "instance_1",
+        revision: 2,
+        updatedAt: "2026-08-26T00:00:00.000Z",
+        status: "running",
+        health: "ok",
+        connectionStatus: "online",
+        accessStatus: "reachable",
+        workspace: { status: "ready" },
+        runtime: { labels: {} },
+        ready: true,
+      },
+    },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(order, ["apply", "publish"]);
+});
+
+test("control-plane tunnel restores compact message delta identity from its validated scope", async () => {
+  const accepted = [];
+  const published = [];
+  const router = new NodeTunnelEventRouter({
+    events: { publish: (type, payload, options) => published.push({ type, payload, options }) },
+    onSessionEvent: (event) => { accepted.push(event); return true; },
+    validateInstanceScope: async (nodeId, instanceId) => nodeId === "node_1" && instanceId === "instance_1",
+  });
+  router.handle("node_1", {
+    type: "node-agent.event.forwarded",
+    event: {
+      v: "2026-08-25",
+      id: "delta-event-1",
+      type: AiSessionEventType.MessageDelta,
+      createdAt: "2026-08-25T00:00:00.000Z",
+      scope: { instanceId: "instance_1" },
+      payload: {
+        sessionId: "session_1",
+        turnId: "turn_1",
+        itemId: "item_1",
+        delta: "hello",
+        generatedAt: "2026-08-25T00:00:00.000Z",
+      },
+    },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(accepted.length, 1);
+  assert.equal(accepted[0].payload.instanceId, "instance_1");
+  assert.equal(accepted[0].payload.providerSessionId, undefined);
+  assert.deepEqual(accepted[0].scope, { nodeId: "node_1", instanceId: "instance_1" });
+  assert.equal(published[0].payload.instanceId, "instance_1");
 });

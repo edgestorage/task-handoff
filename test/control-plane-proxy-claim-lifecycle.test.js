@@ -146,9 +146,39 @@ test("cancel retains a retryable compensation receipt when R is unavailable", as
     service.cancelProxyClaim(receipt.claimId),
     (error) => error.code === "CONTROL_PLANE_PROXY_COMPENSATION_REQUIRED"
       && error.compensationRequired === true
-      && error.retryable === true,
+      && error.retryable === true
+      && error.details.forceDeleteAllowed === true
+      && error.details.forceDeleteReason === "proxy-unavailable",
   );
   assert.equal(service.proxyPrivateStore.pendingClaimByClaimId(receipt.claimId).status, "compensation-required");
+
+  const abandoned = await service.cancelProxyClaim(receipt.claimId, true);
+  assert.deepEqual(abandoned, {
+    deleted: true,
+    compensationRequired: false,
+    remoteRevoke: "not-required",
+    forced: true,
+    orphanRisk: true,
+  });
+  assert.equal(service.proxyPrivateStore.pendingClaimByClaimId(receipt.claimId), undefined);
+});
+
+test("force cancel resolves a persisted pending record id independently from its claim id", async () => {
+  const { service } = fixture(async () => { throw new Error("proxy offline"); });
+  await assert.rejects(service.claimProxyNode({
+    proxyOrigin: "https://proxy.example.test",
+    inviteToken: "i".repeat(32),
+  }));
+  const receipt = service.listPendingProxyClaims()[0];
+  const pending = service.proxyPrivateStore.pendingClaimByClaimId(receipt.claimId);
+  service.proxyPrivateStore.pendingClaims.delete(pending.id);
+  service.proxyPrivateStore.pendingClaims.put({ ...pending, id: "proxy_pending_legacy" });
+
+  const abandoned = await service.cancelProxyClaim("proxy_pending_legacy", true);
+
+  assert.equal(abandoned.deleted, true);
+  assert.equal(service.proxyPrivateStore.pendingClaimByReference("proxy_pending_legacy"), undefined);
+  assert.equal(service.proxyPrivateStore.pendingClaimByClaimId(receipt.claimId), undefined);
 });
 
 test("cancel retains compensation authority when R returns a mismatched 2xx revoke receipt", async () => {
@@ -347,8 +377,9 @@ test("pending claim cancel API awaits remote compensation before responding", as
       delete(route, handler) { handlers.set(route, handler); },
     },
     service: {
-      async cancelProxyClaim(id) {
+      async cancelProxyClaim(id, force) {
         assert.equal(id, "claim_1");
+        assert.equal(force, false);
         await Promise.resolve();
         completed = true;
         return { deleted: true, compensationRequired: false, remoteRevoke: "revoked" };
@@ -363,6 +394,58 @@ test("pending claim cancel API awaits remote compensation before responding", as
   const response = await handlers.get("/api/control-plane-proxy/pending-claims/:id")({ params: { id: "claim_1" } });
   assert.equal(completed, true);
   assert.equal(response.data.remoteRevoke, "revoked");
+});
+
+test("proxy claim starts the shared node event subscriber immediately", async () => {
+  const handlers = new Map();
+  let synchronizations = 0;
+  registerControlPlaneProxyManagementRoutes({
+    app: {
+      get() {},
+      delete() {},
+      post(route, handler) { handlers.set(route, handler); },
+    },
+    service: {
+      async claimProxyNode() { return { node: { id: "node_b" } }; },
+    },
+    proxy: {},
+    runtime: {},
+    events: { publish() {} },
+    syncNodeEvents: () => { synchronizations += 1; },
+    actorId: async () => "user:test",
+  });
+
+  await handlers.get("/api/control-plane-proxy/claims")({ body: {} }, { code: () => ({ send: (value) => value }) });
+  assert.equal(synchronizations, 1);
+});
+
+test("pending claim cancel API forwards explicit force for local abandonment", async () => {
+  const handlers = new Map();
+  registerControlPlaneProxyManagementRoutes({
+    app: {
+      get() {},
+      post() {},
+      delete(route, handler) { handlers.set(route, handler); },
+    },
+    service: {
+      async cancelProxyClaim(id, force) {
+        assert.equal(id, "claim_1");
+        assert.equal(force, true);
+        return { deleted: true, compensationRequired: false, remoteRevoke: "not-required", forced: true, orphanRisk: true };
+      },
+    },
+    proxy: {},
+    runtime: {},
+    events: {},
+    actorId: async () => "user:test",
+  });
+
+  const response = await handlers.get("/api/control-plane-proxy/pending-claims/:id")({
+    params: { id: "claim_1" },
+    query: { force: "true" },
+  });
+  assert.equal(response.data.forced, true);
+  assert.equal(response.data.orphanRisk, true);
 });
 
 test("node delete API forwards explicit force and returns orphan risk without claiming remote revoke", async () => {

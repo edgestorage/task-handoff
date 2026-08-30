@@ -1,5 +1,6 @@
 export type NodeFolderSelectionMode = "native" | "node";
 export type NativeNodeFolderSelection = string | { path: string; ownerNodeId?: string } | undefined;
+export type NativeNodeFolderPicker = () => Promise<NativeNodeFolderSelection>;
 export type NativeNodeFolderSelectionResult =
   | { status: "cancelled" }
   | { status: "invalid-owner" }
@@ -23,6 +24,62 @@ function isWindowsNodePath(value: string) {
   return /^[a-z]:[\\/]/i.test(value) || /^[\\/]{2}[^\\/]+[\\/]+[^\\/]+/.test(value);
 }
 
+export type NodePathBreadcrumb = { label: string; path: string };
+
+export function nodePathParent(value: string) {
+  const nodePath = value.trim();
+  if (!nodePath) return undefined;
+  const windows = isWindowsNodePath(nodePath);
+  const normalized = windows ? nodePath.replace(/\\/g, "/") : nodePath;
+  const unc = normalized.match(/^\/\/([^/]+)\/([^/]+)(?:\/(.*))?$/);
+  if (unc) {
+    const root = `\\\\${unc[1]}\\${unc[2]}`;
+    const segments = (unc[3] || "").split("/").filter(Boolean);
+    return segments.length ? `${root}${segments.length > 1 ? `\\${segments.slice(0, -1).join("\\")}` : ""}` : undefined;
+  }
+  const driveRoot = normalized.match(/^([a-z]:)\/?$/i);
+  if (normalized === "/" || driveRoot) return undefined;
+  const withoutTrailing = normalized.replace(/\/+$/g, "");
+  const separatorIndex = withoutTrailing.lastIndexOf("/");
+  const parent = separatorIndex <= 0 ? "/" : withoutTrailing.slice(0, separatorIndex);
+  if (!windows) return parent;
+  const windowsParent = parent.match(/^[a-z]:$/i) ? `${parent}\\` : parent.replace(/\//g, "\\");
+  return windowsParent;
+}
+
+export function nodePathBreadcrumbs(value: string): NodePathBreadcrumb[] {
+  const nodePath = value.trim();
+  if (!nodePath) return [];
+  const windows = isWindowsNodePath(nodePath);
+  const normalized = windows ? nodePath.replace(/\\/g, "/") : nodePath;
+  const unc = normalized.match(/^\/\/([^/]+)\/([^/]+)(?:\/(.*))?$/);
+  if (unc) {
+    const root = `\\\\${unc[1]}\\${unc[2]}`;
+    const segments = (unc[3] || "").split("/").filter(Boolean);
+    return [
+      { label: root, path: root },
+      ...segments.map((segment, index) => ({ label: segment, path: `${root}\\${segments.slice(0, index + 1).join("\\")}` })),
+    ];
+  }
+  const drive = normalized.match(/^([a-z]:)\/?(.*)$/i);
+  if (drive) {
+    const root = `${drive[1]}\\`;
+    const segments = drive[2].split("/").filter(Boolean);
+    return [
+      { label: drive[1], path: root },
+      ...segments.map((segment, index) => ({
+        label: segment,
+        path: `${drive[1]}\\${segments.slice(0, index + 1).join("\\")}`,
+      })),
+    ];
+  }
+  const segments = normalized.split("/").filter(Boolean);
+  return [
+    { label: "/", path: "/" },
+    ...segments.map((segment, index) => ({ label: segment, path: `/${segments.slice(0, index + 1).join("/")}` })),
+  ];
+}
+
 type ComparableNodePath = {
   root: string;
   segments: string[];
@@ -40,6 +97,10 @@ export function nodePathName(value: string) {
   }
   const separator = isWindowsNodePath(nodePath) ? /[\\/]+/ : /\/+/;
   return withoutTrailingSeparators.split(separator).filter(Boolean).at(-1) || nodePath;
+}
+
+export function nodeLocalFolderDisplayName(folder: { name?: string; path: string }) {
+  return folder.name?.trim() || nodePathName(folder.path);
 }
 
 function comparableNodePath(value: string, windows: boolean): ComparableNodePath | undefined {

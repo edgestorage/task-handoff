@@ -90,7 +90,7 @@ class Socket extends EventEmitter {
   readyState = 1;
   sent = [];
   closes = [];
-  send(data) { this.sent.push(data); }
+  send(data, options) { this.sent.push({ data, options }); }
   close(code, reason) { this.readyState = 3; this.closes.push({ code, reason }); }
 }
 
@@ -132,6 +132,7 @@ test("binding-scoped HTTP proxy streams status/body and only allowlisted applica
             status: 207,
             headers: {
               "content-type": "application/octet-stream",
+              "server-timing": "node_proxy;dur=18.0",
               "x-request-id": "request_b",
               "x-private-node-header": "must-not-cross",
             },
@@ -151,6 +152,7 @@ test("binding-scoped HTTP proxy streams status/body and only allowlisted applica
       "content-type": "application/json",
       authorization: "Bearer application-token",
       "x-request-id": "request_a",
+      "x-task-handoff-trace-id": "trace_proxy_a",
       "x-unrelated": "drop-me",
     },
     payload: { action: "list" },
@@ -160,11 +162,14 @@ test("binding-scoped HTTP proxy streams status/body and only allowlisted applica
   assert.equal(response.body, "first-second");
   assert.equal(response.headers["content-type"], "application/octet-stream");
   assert.equal(response.headers["x-request-id"], "request_a");
+  assert.equal(response.headers["x-task-handoff-trace-id"], "trace_proxy_a");
+  assert.match(response.headers["server-timing"], /node_proxy;dur=18\.0/);
+  assert.match(response.headers["server-timing"], /proxy_forward;dur=/);
   assert.equal(response.headers["x-private-node-header"], undefined);
   assert.equal(requests.length, 1);
   assert.equal(requests[0].target.id, node.id);
   assert.equal(requests[0].route, "/instances?state=active");
-  assert.deepEqual(requests[0].init.headers, { authorization: "Bearer application-token", "content-type": "application/json", "x-request-id": "request_a" });
+  assert.deepEqual(requests[0].init.headers, { authorization: "Bearer application-token", "content-type": "application/json", "x-request-id": "request_a", "x-task-handoff-trace-id": "trace_proxy_a" });
   assert.deepEqual(JSON.parse(Buffer.from(requests[0].init.body).toString()), { action: "list" });
   assert.equal(requests[0].init.signal.aborted, false);
 });
@@ -215,6 +220,14 @@ test("HTTP proxy rejects missing machine auth, encoded traversal, and forged nod
   });
   assert.equal(invalidCorrelation.statusCode, 400, invalidCorrelation.body);
   assert.equal(invalidCorrelation.json().error.code, "CONTROL_PLANE_PROXY_HEADER_INVALID");
+
+  const invalidTrace = await app.inject({
+    method: "GET",
+    url: `/api/node-proxy/bindings/${binding.id}/http/health`,
+    headers: authHeaders({ "x-task-handoff-trace-id": "invalid trace id" }),
+  });
+  assert.equal(invalidTrace.statusCode, 400, invalidTrace.body);
+  assert.equal(invalidTrace.json().error.code, "CONTROL_PLANE_PROXY_HEADER_INVALID");
 
   const unauthenticatedInvalidJson = await app.inject({
     method: "POST",
@@ -339,7 +352,10 @@ test("binding-authenticated WebSocket route uses the target transport and preser
         requestStream() {},
         proxyWebSocket(target, socket, route, protocols, headers) {
           observed = { target, route, protocols, headers };
-          socket.on("message", (data, isBinary) => socket.send(isBinary ? data : `echo:${String(data)}`));
+          socket.on("message", (data, isBinary) => socket.send(
+            isBinary ? data : Buffer.from(`echo:${String(data)}`),
+            { binary: Boolean(isBinary) },
+          ));
         },
       },
     }),
@@ -354,9 +370,10 @@ test("binding-authenticated WebSocket route uses the target transport and preser
     await app.close();
   });
   client.send("hello");
-  const [reply] = await once(client, "message");
+  const [reply, isBinary] = await once(client, "message");
 
   assert.equal(String(reply), "echo:hello");
+  assert.equal(isBinary, false);
   assert.equal(observed.target.id, node.id);
   assert.equal(observed.route, "/terminal?mode=raw");
   assert.equal(observed.protocols, undefined);

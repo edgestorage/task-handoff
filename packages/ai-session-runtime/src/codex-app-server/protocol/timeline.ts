@@ -135,7 +135,7 @@ export type CodexRealtimeTimelineItem = {
 
 export function projectCodexTimelineActivity(id: string, turnId: string, item: JsonValue): AiSessionTimelineActivity {
   const activityKind = stringField(item, "type") || "unknown";
-  const tool = codexToolDescriptor(item);
+  const tool = activityKind === "codexRetry" ? undefined : codexToolDescriptor(item);
   const base = {
     id,
     turnId,
@@ -148,6 +148,8 @@ export function projectCodexTimelineActivity(id: string, turnId: string, item: J
   switch (activityKind) {
     case "plan":
       return compactActivity({ ...base, summary: stringField(item, "text") });
+    case "codexRetry":
+      return compactActivity({ ...base, summary: stringField(item, "message") });
     case "hookPrompt":
       return compactActivity({ ...base, summary: hookPromptText(item) });
     case "commandExecution":
@@ -212,6 +214,7 @@ function activityTitle(kind: string) {
     enteredReviewMode: "Entered review mode",
     exitedReviewMode: "Exited review mode",
     contextCompaction: "Context compaction",
+    codexRetry: "Codex retry",
   };
   return titles[kind] || kind;
 }

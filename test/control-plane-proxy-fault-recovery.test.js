@@ -145,7 +145,7 @@ test("A and R process recovery preserves B lifecycle and deterministically resto
     return socket;
   };
 
-  const firstSubscriber = new ControlPlaneProxyStateSubscriber(firstA, { fetchImpl, openWebSocket, reconnectDelayMs: 1 });
+  const firstSubscriber = new ControlPlaneProxyStateSubscriber(firstA, { fetchImpl, openWebSocket });
   firstSubscriber.start();
   await waitFor(() => sockets.length === 1, "A did not bootstrap its initial R event stream");
   assert.equal(firstA.requirePublicNode("node_b").status, "online");
@@ -159,7 +159,7 @@ test("A and R process recovery preserves B lifecycle and deterministically resto
   restartedA.init();
   assert.ok(restartedA.proxyPrivateStore.nodeCredential("node_b"));
   assert.equal(restartedA.requirePublicNode("node_b").proxyState.target.status, "online");
-  const restartedSubscriber = new ControlPlaneProxyStateSubscriber(restartedA, { fetchImpl, openWebSocket, reconnectDelayMs: 1 });
+  const restartedSubscriber = new ControlPlaneProxyStateSubscriber(restartedA, { fetchImpl, openWebSocket });
   t.after(() => restartedSubscriber.stop());
   restartedSubscriber.start();
   await waitFor(

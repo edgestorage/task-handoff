@@ -7,10 +7,10 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (relative) => fs.readFileSync(path.join(root, relative), "utf8");
 
-test("cloud connectivity settings are visible only to the local administrator", () => {
+test("cloud connectivity settings are visible only with settings management permission", () => {
   const settings = read("src/apps/control-plane/settings/SettingsModal.vue");
-  assert.match(settings, /authSession\.data\.value\?\.user\?\.role === "admin"/);
-  assert.match(settings, /role !== "admin" && settingsSection\.value === "cloud-connectivity"/);
+  assert.match(settings, /permissionIds\.includes\("settings:manage"\)/);
+  assert.match(settings, /!manageSettings && settingsSection\.value === "cloud-connectivity"/);
   assert.match(settings, /setSettingsSection\("nodes"\)/);
 });
 
@@ -37,4 +37,16 @@ test("cloud settings explain background ownership and expose structured non-colo
   assert.match(english, /Closing this page, signing out of the local UI/);
   assert.match(chinese, /关闭此页面、退出本地 UI/);
   assert.doesNotMatch(component, /font-size:(?:[0-9]|1[01])px/);
+});
+
+test("Thandoff account follows the shared settings directory layout", () => {
+  const component = read("src/apps/control-plane/settings/CloudConnectivitySettingsSection.vue");
+
+  assert.match(component, /class="cloud-connectivity-scroll"/);
+  assert.match(component, /class="cloud-connectivity-page"/);
+  assert.match(component, /class="cloud-page-head"/);
+  assert.match(component, /class="cloud-directory"/);
+  assert.match(component, /\.cloud-connectivity-page\{[^}]*var\(--settings-content-max-width,1080px\)/);
+  assert.match(component, /\.cloud-directory\{[^}]*background:var\(--surface-raised\)[^}]*border:1px solid var\(--line\)/);
+  assert.doesNotMatch(component, /settings-panel-surface|modal-section/);
 });

@@ -4,6 +4,7 @@ import test from "node:test";
 
 const workbench = fs.readFileSync(new URL("../src/apps/control-plane/ControlPlaneWorkbench.vue", import.meta.url), "utf8");
 const styles = fs.readFileSync(new URL("../src/apps/control-plane/ControlPlaneWorkbench.css", import.meta.url), "utf8");
+const instanceDetail = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/InstanceDetail.vue", import.meta.url), "utf8");
 const sessionPreviewStyles = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/SessionPreview.css", import.meta.url), "utf8");
 
 test("instance title appends the authoritative node name as muted metadata", () => {
@@ -56,7 +57,7 @@ test("instance title appends the authoritative node name as muted metadata", () 
 
 test("instance switcher menu exposes each instance's node in a portal-safe layout", () => {
   assert.match(workbench, /<span class="control-plane-instance-menu-copy">[\s\S]*?<strong>\{\{ switcherInstanceName\(instance\) \}\}<\/strong>[\s\S]*?<small>\{\{ switcherNodeName\(instance\) \}\}<\/small>/);
-  assert.match(workbench, /const switcherNodeName = [\s\S]*?instance\.node\?\.name \|\| instance\.nodeId/);
+  assert.match(workbench, /const switcherNodeName = [\s\S]*?instance\.node\?\.name[\s\S]*?nodes\.data\.value\?\.find\(\(node\) => node\.id === instance\.nodeId\)\?\.name \|\| instance\.nodeId/);
   assert.match(workbench, /--instance-menu-height': `\$\{Math\.max\(switcherInstances\.length, 1\) \* 52 - 2\}px`/);
   assert.match(workbench, /:class="\{ selected: instance\.id === selectedInstanceId \}"[\s\S]*?:aria-current="instance\.id === selectedInstanceId \? 'true' : undefined"/);
   assert.match(styles, /:global\(\.control-plane-instance-menu\.control-plane-instance-menu\) \{[\s\S]*?width: max\(var\(--reka-dropdown-menu-trigger-width\), 260px\);[\s\S]*?var\(--reka-dropdown-menu-content-available-width\)[\s\S]*?border-radius: 12px;/);
@@ -69,7 +70,7 @@ test("instance switcher menu exposes each instance's node in a portal-safe layou
 
 test("standalone window identity follows the selected directory entry while scoped detail data loads", () => {
   assert.match(workbench, /const standaloneDirectoryInstance = computed\(\(\) => standaloneMode\.value[\s\S]*?instance\.id === standaloneInstanceId\.value/);
-  assert.match(workbench, /const selectedInstanceId = computed\(\(\) => standaloneMode\.value \? standaloneInstanceId\.value : activeInstance\.value\?\.id \|\| ""\);/);
+  assert.match(workbench, /const selectedInstanceId = computed\(\(\) => standaloneMode\.value \? standaloneInstanceId\.value : activeInstanceId\.value\);/);
   assert.match(workbench, /const selectedDetail = !standaloneMode\.value \|\| activeInstance\.value\?\.id === standaloneInstanceId\.value[\s\S]*?return selectedDetail\?\.name \|\| standaloneDirectoryInstance\.value\?\.name/);
   assert.match(workbench, /watch\(\s*\[topbarTitle, standaloneInstanceId\][\s\S]*?document\.title = `\$\{topbarTitle\.value\} · TaskHandoff`/);
 });
@@ -83,8 +84,11 @@ test("standalone switching warms an uncached target before changing the window i
 
 test("initial loading overlay covers both the main workbench and standalone detail before fading out", () => {
   assert.match(workbench, /<Transition name="workbench-loading">[\s\S]*?v-if="workbenchLoadingOverlayVisible"[\s\S]*?class="workbench-loading-overlay"/);
+  assert.match(workbench, /<InstanceDetail\s+[\s\S]*?v-else-if="instanceViewMode && !settingsMode && !workbenchLoadingOverlayVisible"/);
+  assert.doesNotMatch(instanceDetail, /instances\.detail\.loading/);
+  assert.match(instanceDetail, /<section v-else-if="!loading" class="detail-empty">/);
   assert.match(workbench, /const initialWorkbenchLoadingVisible = ref\(true\);[\s\S]*?const initialWorkbenchLoadingFinished = ref\(false\);/);
-  assert.match(workbench, /\(standaloneMode\.value && !standaloneOwnershipResolved\.value\) \|\| board\.isLoading\.value[\s\S]*?window\.requestAnimationFrame\(\(\) => \{\s*initialWorkbenchLoadingVisible\.value = false;/);
+  assert.match(workbench, /standaloneMode\.value[\s\S]*?\? !standaloneOwnershipResolved\.value \|\| board\.isLoading\.value \|\| standaloneBoardPending\.value[\s\S]*?: board\.isLoading\.value[\s\S]*?window\.requestAnimationFrame\(\(\) => \{\s*initialWorkbenchLoadingVisible\.value = false;/);
   assert.match(workbench, /\{ flush: "post", immediate: true \}/);
   assert.match(workbench, /standaloneMode \? "instances\.detail\.loading" : "instances\.list\.loading"/);
   assert.match(styles, /\.workbench-loading-overlay \{[\s\S]*?background: color-mix\(in srgb, var\(--workspace-bg\) 48%, transparent\);[\s\S]*?backdrop-filter: blur\(2px\);/);

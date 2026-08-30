@@ -27,6 +27,7 @@ export class CodexAppServerSessionControl {
       activeTurnId: result.turnId,
       providerTurnId: result.turnId,
       userPrompt: input.message,
+      userMessage: input.messageId ? { id: input.messageId, text: input.message, attachments: input.userMessageAttachments || [] } : undefined,
       source: "control",
     }) || session;
     return { session: updated, provider: "codex", action: result.started ? "send" : "steer", turnId: updated.activeTurnId, providerTurnId: result.turnId };
@@ -43,6 +44,7 @@ export class CodexAppServerSessionControl {
       activeTurnId: result.turnId,
       providerTurnId: result.turnId,
       userPrompt: input.message,
+      userMessage: input.messageId ? { id: input.messageId, text: input.message, attachments: input.userMessageAttachments || [] } : undefined,
       source: "control",
     }) || session;
     return { session: updated, provider: "codex", action: "send", turnId: updated.activeTurnId, providerTurnId: result.turnId };
@@ -59,6 +61,7 @@ export class CodexAppServerSessionControl {
       activeTurnId: result.turnId,
       providerTurnId: result.turnId,
       userPrompt: input.message,
+      userMessage: input.messageId ? { id: input.messageId, text: input.message, attachments: input.userMessageAttachments || [] } : undefined,
       source: "control",
     }) || session;
     return { session: updated, provider: "codex", action: "steer", turnId: updated.activeTurnId, providerTurnId: result.turnId };
@@ -80,35 +83,38 @@ export class CodexAppServerSessionControl {
       const currentTurnId = activeTurnMismatchFoundId(error);
       if (currentTurnId) {
         await client.interruptTurn(threadId, currentTurnId);
-        const updated = this.options.registry.applyRealtimeEvent(session.id, {
-          kind: "lifecycle",
-          activeTurnId: currentTurnId,
-          status: "running",
-          phase: "unknown",
-          source: "control",
-        }) || session;
+        const updated = this.completeInterruptedTurn(session, currentTurnId);
         return { session: updated, provider: "codex", action: "interrupt", providerTurnId: currentTurnId };
       }
       if (!isNoActiveTurnError(error)) {
         throw error;
       }
-      const updated = this.options.registry.applyRealtimeEvent(session.id, {
-        kind: "turn-completed",
-        activeTurnId: undefined,
-        status: "idle",
-        phase: "unknown",
-        text: "Codex turn is no longer active.",
-        source: "control",
-      }) || session;
+      const updated = this.completeInterruptedTurn(session, turnId, "Codex turn is no longer active.");
       return { session: updated, provider: "codex", action: "interrupt", providerTurnId: turnId };
     }
-    const updated = this.options.registry.applyRealtimeEvent(session.id, {
-      kind: "lifecycle",
-      status: "running",
+    const updated = this.completeInterruptedTurn(session, turnId);
+    return { session: updated, provider: "codex", action: "interrupt", providerTurnId: turnId };
+  }
+
+  private completeInterruptedTurn(session: AiSessionStatus, turnId: string, text?: string) {
+    const current = session.activeTurnId === turnId
+      ? session
+      : this.options.registry.applyRealtimeEvent(session.id, {
+          kind: "lifecycle",
+          activeTurnId: turnId,
+          status: "running",
+          phase: "unknown",
+          source: "control",
+        }) || session;
+    return this.options.registry.applyRealtimeEvent(current.id, {
+      kind: "turn-completed",
+      activeTurnId: turnId,
+      providerTurnId: turnId,
+      status: "idle",
       phase: "unknown",
+      text,
       source: "control",
     }) || session;
-    return { session: updated, provider: "codex", action: "interrupt", providerTurnId: turnId };
   }
 
   private async steerTurn(client: CodexAppServerClientLike, threadId: string, session: AiSessionStatus, message: string, references: AiSessionReference[] = [], attachmentInputs: CodexAttachmentInput[] = []) {

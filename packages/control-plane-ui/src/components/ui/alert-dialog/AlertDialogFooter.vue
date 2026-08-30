@@ -11,7 +11,7 @@ const props = defineProps<{
   <div
     :class="
       cn(
-        'flex flex-col-reverse sm:flex-row sm:justify-end sm:gap-x-2',
+        'flex flex-col-reverse [&_button]:h-8 [&_button]:rounded-md [&_button]:px-3 [&_button]:py-0 [&_button]:text-xs sm:flex-row sm:justify-end sm:gap-x-2',
         props.class,
       )
     "
