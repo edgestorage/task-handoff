@@ -15,13 +15,15 @@ test("embedded browser is a local session tab and never launches an AppSession",
 
 test("embedded browser mounts an isolated webview only after desktop context preparation", () => {
   const component = source("instance-detail/EmbeddedBrowserTab.vue");
+  const addresses = source("instance-detail/browserAddressSuggestions.ts");
   assert.match(component, /<webview v-if="context\?\.partition"[\s\S]*?src="about:blank"[\s\S]*?:partition="context\.partition"[\s\S]*?allowpopups/);
   assert.match(component, /@dom-ready="handleGuestDomReady"/);
   assert.match(component, /prepareDesktopBrowserContext\(props\.instanceId\)/);
   assert.match(component, /result\.message \|\| \(result\.code/);
   assert.match(component, /releaseDesktopBrowserContext\(context\.value\.contextId\)/);
   assert.match(component, /if \(disposed\)[\s\S]*?releaseDesktopBrowserContext\(result\.contextId\)/);
-  assert.match(component, /url\.protocol !== "http:" && url\.protocol !== "https:"/);
+  assert.match(component, /normalizeDesktopBrowserUrl\(value\)/);
+  assert.match(addresses, /url\.protocol !== "http:" && url\.protocol !== "https:"/);
 });
 
 test("browser guests stay mounted while another tab in the same pane is selected", () => {
@@ -31,6 +33,16 @@ test("browser guests stay mounted while another tab in the same pane is selected
   assert.match(layer, /v-for="\(tabs, instanceId\) in browserSessionTabs"/);
   assert.match(layer, /<EmbeddedBrowserTab/);
   assert.match(layer, /visibility: visible \? "visible" : "hidden"/);
+});
+
+test("browser tabs are pruned only from a complete authoritative instance directory", () => {
+  const workbench = source("ControlPlaneWorkbench.vue");
+  const sessions = source("instance-detail/useActiveInstanceSessions.ts");
+  assert.match(sessions, /function pruneBrowserInstances\(validInstanceIds: ReadonlySet<string>\)/);
+  assert.match(sessions, /if \(validInstanceIds\.has\(instanceId\)\) continue;[\s\S]*?delete browserSessionTabs\[instanceId\]/);
+  assert.match(workbench, /const authoritativeInstanceIds = computed<ReadonlySet<string> \| undefined>/);
+  assert.match(workbench, /instanceDirectoryComplete\.value[\s\S]*?new Set\(sortedInstances\.value\.map/);
+  assert.match(workbench, /watch\(authoritativeInstanceIds,[\s\S]*?pruneBrowserInstances\(instanceIds\)/);
 });
 
 test("stable browser host lets the start page and guest fill the pane surface", () => {
@@ -53,9 +65,25 @@ test("browser navigation keeps about:blank history and dispatches address bar su
   assert.match(browser, /start-page-active.*webview \{ visibility: hidden; \}/);
 });
 
+test("browser address suggestions use local history and accessible keyboard navigation", () => {
+  const browser = source("instance-detail/EmbeddedBrowserTab.vue");
+  assert.match(browser, /role="combobox"/);
+  assert.match(browser, /aria-autocomplete="list"/);
+  assert.match(browser, /browserAddressSuggestions\(pinned\.value, recent\.value, address\.value\)/);
+  assert.match(browser, /sanitizeBrowserStartPageData\(JSON\.parse/);
+  assert.match(browser, /event\.key === "ArrowDown" \|\| event\.key === "ArrowUp"/);
+  assert.match(browser, /event\.key === "Tab" && activeSuggestionIndex\.value >= 0/);
+  assert.match(browser, /@interact-outside="handleSuggestionsInteractOutside"/);
+  assert.match(browser, /addressAnchor\.value\?\.contains\(target\)[\s\S]*?event\.preventDefault\(\)/);
+  assert.match(browser, /function submitAddress\(\)[\s\S]*?navigate\(suggestion\?\.url \|\| address\.value\)/);
+  assert.match(browser, /onDesktopBrowserFocusAddress\(\(\{ webContentsId \}\) => \{[\s\S]*?getWebContentsId\?\.\(\) !== webContentsId[\s\S]*?focusAddress\(\)/);
+});
+
 test("ordinary web builds keep the browser launcher behind desktop bridge and capability", () => {
   const sessions = source("instance-detail/useActiveInstanceSessions.ts");
   assert.match(sessions, /supportsBrowserTunnel\(activeInstance\.value\.capabilities\) \|\| supportsDirectoryBrowserTunnel\(activeInstance\.value\.capabilities\)/);
+  assert.match(sessions, /if \(catalogApps\.length\) return \[\.\.\.catalogApps, \.\.\.browser\]/);
+  assert.match(sessions, /uniqueLaunchableApps\(\[\.\.\.ids\.map\([\s\S]*?\), \.\.\.browser\]\)/);
 });
 
 test("browser popup requests create a sibling browser tab with its initial URL", () => {
@@ -95,4 +123,12 @@ test("browser tabs publish page title and loading state", () => {
   assert.match(layer, /\$emit\('updateBrowserTab', instanceId, tab\.key, patch\)/);
   assert.match(workbench, /@update-browser-tab="\(instanceId, sessionKey, patch\) => updateBrowserTab\(instanceId, sessionKey, patch\)"/);
   assert.match(sessions, /function updateBrowserTab\(/);
+});
+
+test("browser context lease loss rebuilds the guest instead of leaving a dead surface", () => {
+  const browser = source("instance-detail/EmbeddedBrowserTab.vue");
+  assert.match(browser, /browser context lease renewal rejected; rebuilding context/);
+  assert.match(browser, /void recoverContext\(contextId\)/);
+  assert.match(browser, /context\.value = undefined;[\s\S]*?await nextTick\(\);[\s\S]*?await establishContext\(\)/);
+  assert.match(browser, /startContextHeartbeat\(result\.contextId\)/);
 });

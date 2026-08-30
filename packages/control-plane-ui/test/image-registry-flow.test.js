@@ -227,6 +227,9 @@ test("instance list, board, and detail expose image failure retry", () => {
   ]) {
     const source = read(file);
     assert.match(source, /imageProvisioning/);
-    assert.match(source, /retry-image/);
   }
+  assert.match(read("src/apps/control-plane/instance-list/InstanceList.vue"), /<InstanceActionMenuItems/);
+  assert.match(read("src/apps/control-plane/instance-list/InstanceActionMenuItems.vue"), /retry-image/);
+  assert.match(read("src/apps/control-plane/board/InstanceBoardView.vue"), /retry-image/);
+  assert.match(read("src/apps/control-plane/instance-detail/InstanceDetail.vue"), /retry-image/);
 });

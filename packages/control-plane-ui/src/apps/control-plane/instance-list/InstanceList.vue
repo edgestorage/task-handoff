@@ -134,88 +134,14 @@
                       </button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent class="instance-action-menu" align="end" :side-offset="6">
-                      <DropdownMenuItem v-if="canShowInstanceAction(instance, 'start')" class="instance-action-item" :disabled="isInstanceActionBusy(instance)" @select="$emit('runAction', 'start', instance)">
-                        <Play :size="14" />
-                        <span>{{ activeActionLabel(instance, "start", t("instances.actions.start")) }}</span>
-                      </DropdownMenuItem>
-                      <DropdownMenuItem v-if="canShowInstanceAction(instance, 'stop')" class="instance-action-item" :disabled="isInstanceActionBusy(instance)" @select="$emit('runAction', 'stop', instance)">
-                        <Square :size="14" />
-                        <span>{{ activeActionLabel(instance, "stop", t("instances.actions.stop")) }}</span>
-                      </DropdownMenuItem>
-                      <DropdownMenuItem v-if="canShowInstanceAction(instance, 'restart')" class="instance-action-item" :disabled="isInstanceActionBusy(instance)" @select="$emit('runAction', 'restart', instance)">
-                        <RotateCw :size="14" />
-                        <span>{{ activeActionLabel(instance, "restart", t("instances.actions.restart")) }}</span>
-                      </DropdownMenuItem>
-                      <DropdownMenuItem v-if="canShowInstanceAction(instance, 'retry-image')" class="instance-action-item" :disabled="isInstanceActionBusy(instance)" @select="$emit('runAction', 'retry-image', instance)">
-                        <RotateCw :size="14" />
-                        <span>{{ activeActionLabel(instance, "retry-image", t("instances.actions.retryImage")) }}</span>
-                      </DropdownMenuItem>
-                      <DropdownMenuItem class="instance-action-item" @select="$emit('openConfigSync', 'import', instance)">
-                        <Download :size="14" />
-                        <span>{{ t("instances.actions.importConfig") }}</span>
-                      </DropdownMenuItem>
-                      <DropdownMenuItem class="instance-action-item" :disabled="!canExportConfig(instance)" @select="$emit('openConfigSync', 'export', instance)">
-                        <Upload :size="14" />
-                        <span>{{ t("instances.actions.exportConfig") }}</span>
-                      </DropdownMenuItem>
-                      <DropdownMenuItem class="instance-action-item" @select="$emit('openSettings', instance.id)">
-                        <Settings :size="14" />
-                        <span>{{ t("navigation.settings") }}</span>
-                      </DropdownMenuItem>
-                      <DropdownMenuItem class="instance-action-item" @select="$emit('openWindow', instance)">
-                        <ExternalLink :size="14" />
-                        <span>{{ t("instances.window.openInNewWindow") }}</span>
-                      </DropdownMenuItem>
-                      <DropdownMenuItem class="instance-action-item" :disabled="instance.runtime?.type !== 'docker' || isInstanceActionBusy(instance)" @select="$emit('saveTemplate', instance)">
-                        <PackagePlus :size="14" />
-                        <span>{{ t("instances.actions.saveEnvironmentTemplate") }}</span>
-                      </DropdownMenuItem>
-                      <DropdownMenuItem class="instance-action-item danger" :disabled="isInstanceActionBusy(instance)" @select="$emit('runAction', 'delete', instance)">
-                        <Trash2 :size="14" />
-                        <span>{{ activeActionLabel(instance, "delete", t("instances.actions.delete")) }}</span>
-                      </DropdownMenuItem>
+                      <InstanceActionMenuItems :instance="instance" variant="dropdown" :active-action-label="activeActionLabel" :can-export-config="canExportConfig" :is-instance-action-busy="isInstanceActionBusy" @run-action="(action) => $emit('runAction', action, instance)" @open-config-sync="(direction) => $emit('openConfigSync', direction, instance)" @open-settings="$emit('openSettings', instance.id)" @open-window="$emit('openWindow', instance)" @save-template="$emit('saveTemplate', instance)" />
                     </DropdownMenuContent>
                   </DropdownMenu>
                 </div>
               </div>
             </ContextMenuTrigger>
             <ContextMenuContent class="instance-action-menu">
-              <ContextMenuItem v-if="canShowInstanceAction(instance, 'start')" class="instance-action-item" :disabled="isInstanceActionBusy(instance)" @select="$emit('runAction', 'start', instance)">
-                <Play :size="14" />
-                <span>{{ activeActionLabel(instance, "start", t("instances.actions.start")) }}</span>
-              </ContextMenuItem>
-              <ContextMenuItem v-if="canShowInstanceAction(instance, 'stop')" class="instance-action-item" :disabled="isInstanceActionBusy(instance)" @select="$emit('runAction', 'stop', instance)">
-                <Square :size="14" />
-                <span>{{ activeActionLabel(instance, "stop", t("instances.actions.stop")) }}</span>
-              </ContextMenuItem>
-              <ContextMenuItem v-if="canShowInstanceAction(instance, 'restart')" class="instance-action-item" :disabled="isInstanceActionBusy(instance)" @select="$emit('runAction', 'restart', instance)">
-                <RotateCw :size="14" />
-                <span>{{ activeActionLabel(instance, "restart", t("instances.actions.restart")) }}</span>
-              </ContextMenuItem>
-              <ContextMenuItem v-if="canShowInstanceAction(instance, 'retry-image')" class="instance-action-item" :disabled="isInstanceActionBusy(instance)" @select="$emit('runAction', 'retry-image', instance)">
-                <RotateCw :size="14" />
-                <span>{{ activeActionLabel(instance, "retry-image", t("instances.actions.retryImage")) }}</span>
-              </ContextMenuItem>
-              <ContextMenuItem class="instance-action-item" @select="$emit('openConfigSync', 'import', instance)">
-                <Download :size="14" />
-                <span>{{ t("instances.actions.importConfig") }}</span>
-              </ContextMenuItem>
-              <ContextMenuItem class="instance-action-item" :disabled="!canExportConfig(instance)" @select="$emit('openConfigSync', 'export', instance)">
-                <Upload :size="14" />
-                <span>{{ t("instances.actions.exportConfig") }}</span>
-              </ContextMenuItem>
-              <ContextMenuItem class="instance-action-item" @select="$emit('openSettings', instance.id)">
-                <Settings :size="14" />
-                <span>{{ t("instances.actions.settings") }}</span>
-              </ContextMenuItem>
-              <ContextMenuItem class="instance-action-item" @select="$emit('openWindow', instance)">
-                <ExternalLink :size="14" />
-                <span>{{ t("instances.window.openInNewWindow") }}</span>
-              </ContextMenuItem>
-              <ContextMenuItem class="instance-action-item danger" :disabled="isInstanceActionBusy(instance)" @select="$emit('runAction', 'delete', instance)">
-                <Trash2 :size="14" />
-                <span>{{ activeActionLabel(instance, "delete", t("instances.actions.delete")) }}</span>
-              </ContextMenuItem>
+              <InstanceActionMenuItems :instance="instance" variant="context" :active-action-label="activeActionLabel" :can-export-config="canExportConfig" :is-instance-action-busy="isInstanceActionBusy" @run-action="(action) => $emit('runAction', action, instance)" @open-config-sync="(direction) => $emit('openConfigSync', direction, instance)" @open-settings="$emit('openSettings', instance.id)" @open-window="$emit('openWindow', instance)" @save-template="$emit('saveTemplate', instance)" />
             </ContextMenuContent>
           </ContextMenu>
           </template>
@@ -235,18 +161,19 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { Boxes, ChevronRight, Container, Download, ExternalLink, Laptop, LoaderCircle, MoreHorizontal, PackagePlus, PanelLeftClose, PanelLeftOpen, Play, Plus, RotateCw, Search, Server, Settings, Square, Trash2, Upload } from "@lucide/vue";
+import { Boxes, ChevronRight, Container, Laptop, LoaderCircle, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Plus, Search, Server } from "@lucide/vue";
 import type { InstanceBoardItem, Node, NodeFleetResourceState } from "../../../api/types";
 import type { ConfigSyncDirection } from "@task-handoff/protocol/config-sync";
 import { Button } from "../../../components/ui/button";
-import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "../../../components/ui/context-menu";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
+import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "../../../components/ui/context-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
 import { Popover, PopoverContent, PopoverTrigger } from "../../../components/ui/popover";
 import { ScrollArea } from "../../../components/ui/scroll-area";
 import type { InstanceAction } from "../useInstanceActions";
 import { canShowInstanceAction, imageProvisioningLabel, instanceSourceLabel } from "../useInstanceStatus";
 import type { InstanceListSortMode } from "./useWorkbenchInstances";
 import InstanceViewOptionsMenu from "../shared/InstanceViewOptionsMenu.vue";
+import InstanceActionMenuItems from "./InstanceActionMenuItems.vue";
 
 const { t } = useI18n();
 

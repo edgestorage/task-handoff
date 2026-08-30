@@ -11,6 +11,7 @@ type NativeBrowserModule = {
   browserCapabilities(): Promise<BrowserNativeCapabilities>;
   browserDiagnostics(): Promise<BrowserNativeDiagnostics>;
   prepareBrowserContext(input: PrepareBrowserContextInput): Promise<PreparedBrowserContext>;
+  activateBrowserContext(contextId: string): Promise<void>;
   releaseBrowserContext(contextId: string): Promise<void>;
   releaseAllBrowserContexts(): Promise<void>;
 };
@@ -31,6 +32,7 @@ export default native ?? {
   async prepareBrowserContext(_input: PrepareBrowserContextInput): Promise<PreparedBrowserContext> {
     throw new Error('The native Browser module is unavailable on this build.');
   },
+  async activateBrowserContext(_contextId: string) {},
   async releaseBrowserContext(_contextId: string) {},
   async releaseAllBrowserContexts() {},
 };

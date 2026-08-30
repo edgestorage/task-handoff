@@ -3,6 +3,7 @@ import type { AiSessionTurn } from "@task-handoff/protocol/ai-sessions";
 import { AiSessionConversationCache, aiSessionDetailCacheRevision, aiSessionTurnsCacheRevision } from "@task-handoff/control-plane-client";
 import type { AiSessionSummary } from "../../api/types";
 import { getAiSessionDetail, getAiSessionTurnBody, getAiSessionTurnIndex } from "../../api/queries";
+import { useStreamingMessagesStore } from "./useStreamingMessagesStore";
 
 const conversations = new AiSessionConversationCache(80);
 const activeLoads = new Map<string, Promise<unknown>>();
@@ -23,6 +24,7 @@ export function useAiSessionConversationProjection(options: {
   instanceId: MaybeRefOrGetter<string>;
   summary: MaybeRefOrGetter<AiSessionSummary | undefined>;
 }) {
+  const streamingMessages = useStreamingMessagesStore();
   const cacheRevision = ref(0);
   const state = ref<"loading" | "ready" | "error">("loading");
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
@@ -129,7 +131,10 @@ export function useAiSessionConversationProjection(options: {
         const currentRef = currentSummary.latestTurnRef;
         if (currentRef?.id !== index.id || currentRef.bodyRevision !== read.revision) return false;
       }
-      if (conversations.setTurn(instanceId, currentSummary.id, read.revision, read.body.turn, expectedRevision)) changed();
+      if (conversations.setTurn(instanceId, currentSummary.id, read.revision, read.body.turn, expectedRevision)) {
+        streamingMessages.applyAuthoritativeTurnBody(instanceId, currentSummary.id, read.body.turn);
+        changed();
+      }
       return conversations.hasCurrentTurn(instanceId, currentSummary.id, index.id);
     } catch {
       scheduleRetry();

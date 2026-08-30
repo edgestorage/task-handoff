@@ -19,6 +19,7 @@ export default {
   async prepareBrowserContext(_input: PrepareBrowserContextInput): Promise<PreparedBrowserContext> {
     throw new Error('The native Browser module is unavailable on this platform.');
   },
+  async activateBrowserContext(_contextId: string) {},
   async releaseBrowserContext(_contextId: string) {},
   async releaseAllBrowserContexts() {},
 };

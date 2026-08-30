@@ -30,6 +30,7 @@ internal object MobileBrowserContextManager {
   private val contextIdByKey = mutableMapOf<String, String>()
   private var preparedContexts = 0
   private var releasedContexts = 0
+  private var activeContextId: String? = null
 
   suspend fun prepare(input: PrepareBrowserContextRecord): String = mutex.withLock {
     requireCapabilities()
@@ -44,10 +45,6 @@ internal object MobileBrowserContextManager {
         return id
       }
     }
-    if (contextsById.isNotEmpty()) {
-      throw BrowserPlatformUnsupportedException("Close the active instance Browser context before switching instances.")
-    }
-
     val channel = BrowserTunnelChannel(input.relayUrl, input.token)
     var socks: BrowserSocksServer? = null
     try {
@@ -61,6 +58,7 @@ internal object MobileBrowserContextManager {
       val context = Context(id, key, profileName, port, channel, socks, 1)
       contextsById[id] = context
       contextIdByKey[key] = id
+      activeContextId = id
       preparedContexts += 1
       id
     } catch (error: Throwable) {
@@ -71,6 +69,12 @@ internal object MobileBrowserContextManager {
   }
 
   suspend fun profileName(contextId: String): String? = mutex.withLock { contextsById[contextId]?.profileName }
+
+  suspend fun activate(contextId: String) = mutex.withLock {
+    val context = contextsById[contextId] ?: throw BrowserContextUnavailableException()
+    setProxy(context.socksPort)
+    activeContextId = contextId
+  }
 
   data class DownloadContext(val profileName: String, val socksPort: Int)
   suspend fun downloadContext(contextId: String): DownloadContext? = mutex.withLock {
@@ -84,15 +88,25 @@ internal object MobileBrowserContextManager {
     contextsById.remove(contextId)
     contextIdByKey.remove(context.key)
     releasedContexts += 1
-    clearProxy()
     context.socks.closeAndJoin()
     context.channel.closeAndJoin()
+    if (activeContextId == contextId) {
+      val replacement = contextsById.values.firstOrNull()
+      if (replacement != null) {
+        setProxy(replacement.socksPort)
+        activeContextId = replacement.id
+      } else {
+        clearProxy()
+        activeContextId = null
+      }
+    }
   }
 
   suspend fun releaseAll() = mutex.withLock {
     val active = contextsById.values.toList()
     contextsById.clear()
     contextIdByKey.clear()
+    activeContextId = null
     releasedContexts += active.size
     if (active.isNotEmpty()) clearProxy()
     for (context in active) {
@@ -115,7 +129,12 @@ internal object MobileBrowserContextManager {
   }
 
   private suspend fun setProxy(port: Int) = suspendCancellableCoroutine { continuation ->
-    val config = ProxyConfig.Builder().addProxyRule("socks://127.0.0.1:$port").build()
+    // Chromium commonly bypasses loopback targets unless this rule is explicit.
+    // Browser tunnel targets use the controlled instance's loopback namespace.
+    val config = ProxyConfig.Builder()
+      .addProxyRule("socks://127.0.0.1:$port")
+      .addBypassRule("<-loopback>")
+      .build()
     ProxyController.getInstance().setProxyOverride(config, Runnable::run) { if (continuation.isActive) continuation.resume(Unit) }
   }
 

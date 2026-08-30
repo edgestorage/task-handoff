@@ -243,7 +243,7 @@ async function confirmDelete() { const target = deleteTarget.value?.profile; if 
 .image-directory-head span { color: var(--text-muted); font-size: 12px; }
 .image-state { align-items: center; color: var(--text-muted); display: flex; font-size: 12px; justify-content: center; min-height: 160px; padding: 20px; }
 .image-state-error { gap: 10px; }
-.image-empty-state { display: grid; gap: 7px; justify-items: center; min-height: 220px; text-align: center; }
+.image-empty-state { align-content: center; display: grid; gap: 7px; justify-items: center; min-height: 220px; text-align: center; }
 .image-empty-state strong { color: var(--text-strong); font-size: 13px; font-weight: 500; }
 .image-empty-state p { margin: 0 0 5px; }
 .image-list { display: grid; }

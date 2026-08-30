@@ -744,13 +744,19 @@ test("Codex bridge creates a persistent Direct thread on the shared client", asy
   const bridge = new CodexAppServerSessionBridge(registry, client, { threadStartDefaults: { model: "gpt-test", modelProvider: "openai" } });
   await bridge.sync();
   const result = await bridge.createSession({ cwd: "/workspace/project", permissionMode: "auto-review" });
-  assert.deepEqual(result, { providerSessionId: "thread-bridge", cwd: "/workspace/project", creationSource: "ai-session" });
+  assert.deepEqual(result, {
+    providerSessionId: "thread-bridge",
+    cwd: "/workspace/project",
+    creationSource: "ai-session",
+    reasoningEffort: "medium",
+  });
   assert.deepEqual(client.options, {
     cwd: "/workspace/project",
     runtimeWorkspaceRoots: ["/workspace/project"],
     model: "gpt-test",
     modelProvider: "openai",
     permissions: { approvalPolicy: "on-request", approvalsReviewer: "auto_review", permissions: ":workspace" },
+    reasoningEffort: "medium",
   });
   assert.equal(registry.getByProviderSessionId("codex", "thread-bridge").creationSource, "ai-session");
 });

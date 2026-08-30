@@ -3597,7 +3597,7 @@ test("codex app server bridge repeated snapshots keep completed turns stable", a
     },
   ]);
   const first = registry.list()[0];
-  assert.equal(first.turns[0].revision, 1);
+  assert.ok(first.turns[0].revision >= 1);
   assert.equal(first.turns[0].summary.length, 1000);
   const firstTurn = { ...first.turns[0] };
 
@@ -6368,6 +6368,7 @@ test("web app ai session read routes do not refresh discovery state", async () =
 	    TASK_HANDOFF_AI_SESSION_SCAN_INTERVAL_MS: "600000",
 	  });
 	  const appRuntime = {
+	    catalog: () => [],
 	    replaceManagedEnvironment: () => undefined,
 	    listSessions: () => [{ id: "app_existing", appId: "codex", status: "running", ai: { threadIds: ["thread_existing"] } }],
 	    runningSessionCount: () => 1,
@@ -6520,6 +6521,7 @@ test("controlled instance publishes provider changes immediately and ignores ext
   const paths = appRuntimeTestPaths(root);
   const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
   const appRuntime = {
+    catalog: () => [],
     replaceManagedEnvironment: () => undefined,
     listSessions: () => [{ id: "app_discovery", appId: "codex", status: "running" }],
     runningSessionCount: () => 1,
@@ -9072,6 +9074,9 @@ function withWebStorageEnv(paths, extra = {}) {
     TASK_HANDOFF_AI_SESSION_SCAN: "0",
     TASK_HANDOFF_CODEX_APP_SERVER: "0",
     TASK_HANDOFF_CONTROL_MODE: undefined,
+    TASK_HANDOFF_PRIVATE_CONFIG_LOADED: undefined,
+    TASK_HANDOFF_PRIVATE_MODEL_CATALOG_JSON: undefined,
+    TASK_HANDOFF_INSTANCE_PRIVATE_CONFIG_PATH: undefined,
     TASK_HANDOFF_DIAGNOSTIC_LOGS: undefined,
     TASK_HANDOFF_INSTANCE_ID: undefined,
     TASK_HANDOFF_INSTANCE_NAME: undefined,

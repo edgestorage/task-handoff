@@ -35,6 +35,7 @@ import { NewSessionBranchPicker } from './NewSessionBranchPicker';
 import { NewSessionContextMenu } from './NewSessionContextMenu';
 import { AttachmentMenu, ModelSettingsMenu } from './SessionComposerMenus';
 import { formatMobileAttachmentBytes, formatMobileTextLength } from './attachments';
+import { instanceSelectOptions } from '../directories/instance-select-options';
 
 export function NewSessionForm(props: NewSessionFormProps) {
   const { colors } = useMobileTheme();
@@ -186,8 +187,7 @@ export function NewSessionForm(props: NewSessionFormProps) {
 }
 
 export function newSessionInstanceOptions(instances: readonly ControlPlaneInstanceDirectoryEntry[], nodes: readonly ControlPlaneNodeDirectoryEntry[]): AnchoredSelectOption[] {
-  const nodeNames = new Map(nodes.map((node) => [node.id, node.name]));
-  return instances.map((instance) => ({ label: instance.name, description: nodeNames.get(instance.nodeId) || instance.nodeId, systemImage: 'server.rack', value: instance.id }));
+  return instanceSelectOptions(instances, nodes);
 }
 
 function ContextPill({ disabled, icon, label, onPress }: { disabled?: boolean; icon: { android: 'dns' | 'auto_awesome' | 'folder' | 'account_tree' | 'psychology'; ios: 'server.rack' | 'sparkles' | 'folder' | 'arrow.triangle.branch' | 'brain' }; label: string; onPress?: () => void }) {

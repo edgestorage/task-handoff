@@ -128,7 +128,7 @@ test("detail surfaces omit the legacy running response placeholder", () => {
   assert.match(result, /v-if="displayContent"/);
   assert.doesNotMatch(result, /v-show="displayContent"/);
   assert.match(result, /const displayContent = computed\(\(\) => streamingContent\.value \|\| props\.responseContent\)/);
-  assert.match(result, /props\.isLatest[\s\S]*?streamingMessages\.activeMessage\(props\.instanceId, props\.session\.id\)/);
+  assert.match(result, /props\.isLatest[\s\S]*?streamingMessages\.activeMessage\(props\.instanceId, props\.session\.id\)[\s\S]*?streamingMessageMatchesTurn/);
   assert.match(conversation, /:response-content="detailState === 'ready' \? compactResponseContent : ''"/);
   assert.match(conversation, /compactResponseContent = computed\(\(\) => displayAiSessionResponse\(props\.session, props\.promptIndex, t\)\)/);
   assert.match(sessions, /includeProgress \? aiSessionProgressText\(session, t\) : ""/);
@@ -160,7 +160,7 @@ test("detail content reserves the visible bottom gap outside the floating compos
 test("shared detail responses preserve the previous 14px typography", () => {
   assert.match(result, /--detail-response-line-height: 1\.55/);
   assert.match(result, /ai-session-result-board \{[\s\S]*?--detail-response-line-height: 1\.5/);
-  assert.match(result, /ai-session-detail-response :deep\(> div\) \{[\s\S]*?font-size: 14px;[\s\S]*?line-height: var\(--detail-response-line-height\);/);
+  assert.match(result, /ai-session-detail-response :deep\(\.ai-session-streaming-markdown\),[\s\S]*?font-size: 14px;[\s\S]*?line-height: var\(--detail-response-line-height\);/);
 });
 
 test("floating detail spacing below the prompt divider does not depend on response content", () => {

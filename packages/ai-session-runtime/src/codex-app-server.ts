@@ -260,8 +260,14 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
         providerSessionId,
         cwd,
         creationSource: "ai-session",
-        modelSelection: this.actualModelSelection(thread, input.modelSelection),
-        reasoningEffort: this.actualReasoningEffort(thread, requestedReasoningEffort),
+        ...(() => {
+          const modelSelection = this.actualModelSelection(thread, input.modelSelection);
+          const reasoningEffort = this.actualReasoningEffort(thread, requestedReasoningEffort);
+          return {
+            ...(modelSelection ? { modelSelection } : {}),
+            ...(reasoningEffort ? { reasoningEffort } : {}),
+          };
+        })(),
       };
     } finally {
       this.directCreateRequests -= 1;

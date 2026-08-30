@@ -37,6 +37,7 @@ export function SessionWorkspace({
   maxFileAttachmentBytes,
   modelGroups = [],
   client,
+  refresh,
   onVisible,
   onOpenSession,
   detailMode: controlledDetailMode,
@@ -56,6 +57,7 @@ export function SessionWorkspace({
   maxFileAttachmentBytes?: number;
   modelGroups?: AiSessionModelGroup[];
   client?: ControlPlaneClient;
+  refresh?(): Promise<void>;
   onVisible?(updatedAt: string): void;
   onOpenSession?(sessionId: string): void;
   detailMode?: SessionDetailMode;
@@ -370,11 +372,13 @@ export function SessionWorkspace({
   const updateModelSelection = async (selection: NonNullable<typeof session.modelSelection>) => {
     if (!actions || !authoritativeActionsEnabled || modelSelectionState?.phase === 'busy') return;
     const result = await performAction(t('sessions.model'), () => actions.updateModelSelection(instanceId, session.id, crypto.randomUUID(), selection));
+    if (result.disposition === 'accepted') void refresh?.().catch(() => undefined);
     if (result.disposition !== 'accepted') rerender((value) => value + 1);
   };
   const updateReasoningEffort = async (effort: AiSessionReasoningEffort) => {
     if (!actions || !authoritativeActionsEnabled || reasoningState?.phase === 'busy') return;
     const result = await performAction(t('sessions.reasoningEffort'), () => actions.updateReasoningEffort(instanceId, session.id, crypto.randomUUID(), effort));
+    if (result.disposition === 'accepted') void refresh?.().catch(() => undefined);
     if (result.disposition !== 'accepted') rerender((value) => value + 1);
   };
   const reasoningState = state('reasoning-effort');

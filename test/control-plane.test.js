@@ -583,10 +583,12 @@ test("app inventory protocol is strict and stored legacy app capability is disca
     tty: true,
     gui: false,
     browser: false,
+    browserTunnel: false,
     screenshots: false,
     logs: false,
     aiSessionWorkspaceSelection: false,
     aiSessionPersistenceSettings: false,
+    privateModelCatalog: false,
     gitCliCredentialBroker: false,
     gitCredentialProxy: false,
     aiSessionTimeline: { sessionReadAgents: [], turnReadAgents: [], liveItemAgents: [] },
@@ -1764,9 +1766,13 @@ function createMockNodeAgentFetch(options = {}) {
       const id = decodeURIComponent(instanceModelAssignment[1]);
       const current = instances.get(id);
       if (!current) return errorResponse(`Instance ${id} was not found.`, 404, "NODE_INSTANCE_NOT_FOUND");
-      const instance = { ...current, modelSelection: body.modelSelection, updatedAt: timestamp };
+      const modelSelection = body.modelSelection || {
+        ...(body.codexModelHash !== undefined ? { codexModelHash: body.codexModelHash } : {}),
+        ...(body.claudeModelHash !== undefined ? { claudeModelHash: body.claudeModelHash } : {}),
+      };
+      const instance = { ...current, modelSelection, updatedAt: timestamp };
       instances.set(id, instance);
-      for (const modelHash of [body.codexModelHash, body.claudeModelHash]) {
+      for (const modelHash of [modelSelection.codexModelHash, modelSelection.claudeModelHash]) {
         if (modelHash && nodeModels.has(modelHash)) {
           const model = nodeModels.get(modelHash);
           nodeModels.set(modelHash, { ...model, referenceCount: model.referenceCount + 1 });
@@ -7219,6 +7225,8 @@ test("node agent provisions one built-in local runtime and creates local instanc
   assert.equal(updatedPermissionDefault.statusCode, 200);
   assert.deepEqual(updatedPermissionDefault.json().data.config, {
     autoImportAgentConfigs: true,
+    codexConfigEnabled: true,
+    codexHomeMode: "taskhandoff",
     defaultCodexPermissionMode: "auto-review",
     aiSessionHistoryLimit: 50,
     aiSessionAttachmentRetentionDays: 30,
@@ -7234,6 +7242,8 @@ test("node agent provisions one built-in local runtime and creates local instanc
   assert.equal(mergedConfigUpdate.statusCode, 200);
   assert.deepEqual(mergedConfigUpdate.json().data.config, {
     autoImportAgentConfigs: false,
+    codexConfigEnabled: true,
+    codexHomeMode: "taskhandoff",
     defaultCodexPermissionMode: "auto-review",
     aiSessionHistoryLimit: 50,
     aiSessionAttachmentRetentionDays: 30,
@@ -11303,6 +11313,7 @@ test("control plane models deploy to the target node and instances store assignm
   });
   assert.equal(updated.statusCode, 200);
   assert.deepEqual(updated.body.data.modelSelection, { codexModelHash: first.body.data.id });
+  assert.deepEqual(mock.instances.get(instance.body.data.id).modelSelection, { codexModelHash: first.body.data.id });
 
   const started = await json(app, "POST", `/api/controlled-instances/${instance.body.data.id}/start`);
   assert.equal(started.statusCode, 200);
@@ -11313,7 +11324,7 @@ test("control plane models deploy to the target node and instances store assignm
     config: { autoImportAgentConfigs: false },
   });
   assert.equal(generalUpdated.statusCode, 200);
-  assert.deepEqual(generalUpdated.body.data.config, { autoImportAgentConfigs: false, defaultCodexPermissionMode: "ask", aiSessionHistoryLimit: 50, aiSessionAttachmentRetentionDays: 30, aiSessionMaxFileAttachmentBytes: 500 * 1024 });
+  assert.deepEqual(generalUpdated.body.data.config, { autoImportAgentConfigs: false, codexConfigEnabled: true, codexHomeMode: "taskhandoff", defaultCodexPermissionMode: "ask", aiSessionHistoryLimit: 50, aiSessionAttachmentRetentionDays: 30, aiSessionMaxFileAttachmentBytes: 500 * 1024 });
   const generalUpdateRequest = mock.requests.findLast((request) => request.path === `/instances/${instance.body.data.id}` && request.method === "PATCH" && request.body.config);
   assert.deepEqual(generalUpdateRequest.body.config, { autoImportAgentConfigs: false });
 
@@ -11334,7 +11345,14 @@ test("control plane models deploy to the target node and instances store assignm
   assert.equal(restarted.statusCode, 200);
   const restartRequest = mock.requests.findLast((request) => request.path === `/instances/${instance.body.data.id}/restart`);
   assert.deepEqual(restartRequest.body, {});
+  const latestAssignmentRequest = mock.requests.findLast((request) => request.path === `/instances/${instance.body.data.id}/model-assignment`);
+  assert.deepEqual(latestAssignmentRequest.body.modelSelection, { codexModelHash: first.body.data.id });
 
+  const instancesBeforeDelete = await json(app, "GET", "/api/controlled-instances");
+  assert.deepEqual(
+    instancesBeforeDelete.body.data.find((candidate) => candidate.id === instance.body.data.id).modelSelection,
+    { codexModelHash: first.body.data.id },
+  );
   const deleteBoundModel = await json(app, "DELETE", `/api/models/${first.body.data.id}`);
   assert.equal(deleteBoundModel.statusCode, 409);
   assert.equal(deleteBoundModel.body.error.code, "MODEL_IN_USE");

@@ -64,6 +64,7 @@ let desktopWindowPreferences;
 let desktopWindows;
 let desktopQuitCoordinator;
 let desktopBrowserContexts;
+const desktopBrowserGuests = new Map();
 const desktopServiceSupervisor = createDesktopServiceSupervisor();
 const controlPlaneWindows = createControlPlaneWindowRegistry();
 const windowsTitleBarOverlayHeights = new WeakMap();
@@ -386,7 +387,12 @@ function createDesktopBrowserWindow(options, windowsOverlayHeight, browserTabs =
 }
 
 function configureBrowserTabGuests(host) {
-  host.once("destroyed", () => { void desktopBrowserContexts?.releaseSender(host.id); });
+  host.once("destroyed", () => {
+    for (const [guestId, entry] of desktopBrowserGuests) {
+      if (entry.host === host) desktopBrowserGuests.delete(guestId);
+    }
+    void desktopBrowserContexts?.releaseSender(host.id);
+  });
   host.on("did-start-navigation", (_event, url, _isInPlace, isMainFrame) => {
     if (!isMainFrame) return;
     logInfo(`[desktop-shell] browser context sender navigation host=${host.id} url=${browserDiagnosticUrl(url)}; releasing renderer-owned contexts`);
@@ -407,6 +413,10 @@ function configureBrowserTabGuests(host) {
     webPreferences.nodeIntegration = false;
   });
   host.on("did-attach-webview", (_event, guest) => {
+    desktopBrowserGuests.set(guest.id, { guest, host });
+    guest.once("destroyed", () => {
+      if (desktopBrowserGuests.get(guest.id)?.guest === guest) desktopBrowserGuests.delete(guest.id);
+    });
     logInfo(`[desktop-shell] browser webview did-attach host=${host.id} guest=${guest.id} url=${browserDiagnosticUrl(guest.getURL())}`);
     const allowNavigation = (event, targetUrl) => {
       const allowed = browserTabUrlAllowed(targetUrl);
@@ -425,6 +435,11 @@ function configureBrowserTabGuests(host) {
     });
     guest.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
       logError(`[desktop-shell] browser webview did-fail-load guest=${guest.id} code=${errorCode} description=${String(errorDescription || "").slice(0, 160)} url=${browserDiagnosticUrl(validatedURL)} mainFrame=${Boolean(isMainFrame)}`);
+    });
+    guest.on("before-input-event", (event, input) => {
+      if (input.type !== "keyDown" || input.key?.toLowerCase() !== "l" || (!input.meta && !input.control) || input.alt || input.shift) return;
+      event.preventDefault();
+      if (!host.isDestroyed()) host.send("task-handoff:browser-focus-address", { webContentsId: guest.id });
     });
     guest.on("will-navigate", allowNavigation);
     guest.on("will-frame-navigate", allowNavigation);
@@ -1087,6 +1102,27 @@ ipcMain.handle("task-handoff:open-local-path", async (_event, localPath) => {
   return error ? { ok: false, code: "open-local-path-failed", error } : { ok: true };
 });
 
+ipcMain.handle("task-handoff:reveal-local-path", async (_event, localPath) => {
+  const normalized = typeof localPath === "string" ? localPath.trim() : "";
+  if (!normalized || !path.isAbsolute(normalized)) return { ok: false, code: "invalid-local-path" };
+  try { if (!fs.statSync(normalized).isFile() && !fs.statSync(normalized).isDirectory()) return { ok: false, code: "local-path-unavailable" }; }
+  catch { return { ok: false, code: "local-path-unavailable" }; }
+  shell.showItemInFolder(normalized);
+  return { ok: true };
+});
+
+ipcMain.handle("task-handoff:open-external-url", async (_event, value) => {
+  let url;
+  try {
+    url = new URL(String(value || ""));
+  } catch {
+    return { ok: false, code: "invalid-url" };
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return { ok: false, code: "unsupported-url" };
+  const error = await shell.openExternal(url.toString()).then(() => undefined).catch((cause) => cause instanceof Error ? cause.message : String(cause));
+  return error ? { ok: false, code: "open-external-url-failed", error } : { ok: true };
+});
+
 ipcMain.handle("task-handoff:open-app-window", (_event, url) => {
   createAppWindow(url);
   return { ok: true };
@@ -1115,6 +1151,17 @@ ipcMain.handle("task-handoff:browser-context-prepare", async (event, instanceId)
 ipcMain.handle("task-handoff:browser-context-release", async (event, contextId) => ({
   ok: Boolean(desktopBrowserContexts && await desktopBrowserContexts.release(String(contextId || ""), event.sender.id)),
 }));
+
+ipcMain.handle("task-handoff:browser-context-touch", (event, contextId) => ({
+  ok: Boolean(desktopBrowserContexts?.touch(String(contextId || ""), event.sender.id)),
+}));
+ipcMain.handle("task-handoff:browser-tab-throttled", (event, webContentsId, throttled) => {
+  const id = Number(webContentsId);
+  const entry = Number.isInteger(id) ? desktopBrowserGuests.get(id) : undefined;
+  if (!entry || entry.host !== event.sender || typeof entry.guest.setBackgroundThrottling !== "function") return { ok: false };
+  entry.guest.setBackgroundThrottling(Boolean(throttled));
+  return { ok: true };
+});
 
 ipcMain.on("task-handoff:browser-diagnostic", (event, input) => {
   const message = input && typeof input === "object" && typeof input.message === "string"

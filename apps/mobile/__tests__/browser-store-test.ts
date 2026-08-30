@@ -2,13 +2,14 @@ import type { ControlPlaneClient } from '@task-handoff/control-plane-client';
 
 jest.mock('../src/control-plane/browser-context', () => ({
   prepareMobileBrowserContext: jest.fn(async () => ({ contextId: 'native_context_1' })),
+  activateMobileBrowserContext: jest.fn(async () => undefined),
   releaseBrowserContext: jest.fn(async () => undefined),
 }));
 
 import { MobileBrowserController } from '../src/browser/controller';
 import { MobileBrowserTabStore } from '../src/browser/store';
-import { normalizeBrowserAddress } from '../src/browser/url';
-import { prepareMobileBrowserContext, releaseBrowserContext } from '../src/control-plane/browser-context';
+import { fromBrowserTransportAddress, normalizeBrowserAddress, toBrowserTransportAddress } from '../src/browser/url';
+import { activateMobileBrowserContext, prepareMobileBrowserContext, releaseBrowserContext } from '../src/control-plane/browser-context';
 import type { MobileControlPlaneProfile } from '../src/control-plane/profile';
 
 const profile: MobileControlPlaneProfile = {
@@ -25,6 +26,10 @@ beforeEach(() => jest.clearAllMocks());
 test('Browser addresses default to HTTPS and reject credentials or external schemes', () => {
   expect(normalizeBrowserAddress('example.test/path')).toBe('https://example.test/path');
   expect(normalizeBrowserAddress('http://127.0.0.1:3000')).toBe('http://127.0.0.1:3000/');
+  expect(toBrowserTransportAddress('http://127.0.0.1:3000')).toBe('http://127-0-0-1.internal:3000/');
+  expect(toBrowserTransportAddress('http://127.0.0.2:3000')).toBe('http://127-0-0-2.internal:3000/');
+  expect(fromBrowserTransportAddress('http://127-0-0-1.internal:3000/path')).toBe('http://127.0.0.1:3000/path');
+  expect(fromBrowserTransportAddress('http://127-0-0-2.internal:3000/path')).toBe('http://127.0.0.2:3000/path');
   expect(() => normalizeBrowserAddress('file:///tmp/private')).toThrow(/HTTP or HTTPS/);
   expect(() => normalizeBrowserAddress('https://user:password@example.test')).toThrow(/HTTP or HTTPS/);
 });
@@ -71,7 +76,7 @@ test('a context that resolves after profile cleanup is released instead of resur
   expect(releaseBrowserContext).toHaveBeenCalledWith('native_context_late');
 });
 
-test('activating another instance releases the process-wide context before preparing the next one', async () => {
+test('activating another instance retains both contexts and rebinds the proxy when returning', async () => {
   jest.mocked(prepareMobileBrowserContext)
     .mockResolvedValueOnce({ contextId: 'native_instance_1' })
     .mockResolvedValueOnce({ contextId: 'native_instance_2' });
@@ -82,8 +87,35 @@ test('activating another instance releases the process-wide context before prepa
   const controller = new MobileBrowserController(store);
   await controller.create({ api, profile, instanceId: 'instance_1' });
   await controller.create({ api, profile, instanceId: 'instance_2' });
-  expect(releaseBrowserContext).toHaveBeenCalledWith('native_instance_1');
-  expect(controller.contextId('cp_1', 'instance_1')).toBeUndefined();
+  expect(releaseBrowserContext).not.toHaveBeenCalledWith('native_instance_1');
+  expect(controller.contextId('cp_1', 'instance_1')).toBe('native_instance_1');
   expect(controller.contextId('cp_1', 'instance_2')).toBe('native_instance_2');
+  await controller.activate(api, profile, 'instance_1');
+  expect(activateMobileBrowserContext).toHaveBeenCalledWith('native_instance_1');
   expect(store.tabsFor('cp_1').map((tab) => tab.instanceId)).toEqual(['instance_1', 'instance_2']);
+});
+
+test('browser context suspension is delayed so a blurred route can resume without rebuilding its views', async () => {
+  jest.useFakeTimers();
+  try {
+    const store = new MobileBrowserTabStore(() => 'tab_grace', () => '2026-08-29T00:00:00.000Z');
+    const controller = new MobileBrowserController(store);
+    await controller.create({ api, profile, instanceId: 'instance_grace' });
+    await controller.suspend('cp_1', 'instance_grace');
+    jest.advanceTimersByTime(29_999);
+    expect(releaseBrowserContext).not.toHaveBeenCalled();
+    await controller.activate(api, profile, 'instance_grace');
+    jest.advanceTimersByTime(1_000);
+    expect(releaseBrowserContext).not.toHaveBeenCalled();
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
+test('browser tabs retain loading state for the session list', () => {
+  const store = new MobileBrowserTabStore(() => 'tab_loading', () => '2026-08-29T00:00:00.000Z');
+  const tab = store.create('cp_1', 'instance_1', 'https://example.test/');
+  expect(tab.loading).toBe(false);
+  expect(store.update('cp_1', 'instance_1', tab.id, { loading: true })).toBe(true);
+  expect(store.snapshot().tabs[0]?.loading).toBe(true);
 });

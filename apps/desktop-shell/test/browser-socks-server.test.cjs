@@ -12,6 +12,13 @@ test("SOCKS parser supports domain, IPv4, and IPv6 CONNECT targets", () => {
   assert.deepEqual(parseSocksRequest(ipv6), { command: 1, host: "0:0:0:0:0:0:0:1", port: 443, bytes: 22 });
 });
 
+test("SOCKS parser rejects empty hostnames and port zero", () => {
+  const emptyHost = Buffer.from([5, 1, 0, 3, 0, 0, 80]);
+  assert.throws(() => parseSocksRequest(emptyHost), /hostname is empty/);
+  const zeroPort = Buffer.from([5, 1, 0, 1, 127, 0, 0, 1, 0, 0]);
+  assert.throws(() => parseSocksRequest(zeroPort), /target port is invalid/);
+});
+
 test("SOCKS server maps a CONNECT request to one Browser Tunnel stream", async () => {
   const attached = [];
   const channel = { async attach(target, socket) { attached.push({ target, socket }); } };

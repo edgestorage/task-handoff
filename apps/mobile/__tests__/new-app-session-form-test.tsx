@@ -1,16 +1,22 @@
 import { fireEvent, render, waitFor } from '@testing-library/react-native';
 import { StyleSheet } from 'react-native';
 import type { ControlPlaneInstanceResourceEntry } from '@task-handoff/control-plane-client';
+import type { ControlPlaneNodeDirectoryEntry } from '@task-handoff/protocol/control-plane-directory';
 
 import { NewAppSessionForm } from '../src/app-sessions/NewAppSessionForm';
+import { appLaunchSystemIcon } from '../src/app-sessions/app-launch-icon';
+import { newSessionMenuActions } from '../src/ai-sessions/NewSessionContextMenu.ios';
+import { instanceSelectOptions } from '../src/directories/instance-select-options';
 
 const instance = {
   id: 'instance-1',
+  nodeId: 'node-1',
   name: 'Local workspace',
   runtime: { id: 'local', type: 'local' },
   workspace: { path: '/workspace/mobile' },
   availableApps: [{ id: 'terminal-tty', name: 'Terminal', kind: 'tty', supportsCwdSelection: true }],
 } as ControlPlaneInstanceResourceEntry;
+const node = { id: 'node-1', name: 'Mac Studio' } as ControlPlaneNodeDirectoryEntry;
 
 test('new App session uses full-width anchored selectors for instance, App, and workspace', async () => {
   const screen = await render(<NewAppSessionForm
@@ -18,6 +24,7 @@ test('new App session uses full-width anchored selectors for instance, App, and 
     disabled={false}
     folders={[{ id: 'folder-1', nodeId: 'node-1', name: 'Mobile', path: '/workspace/mobile', labels: {}, createdAt: '2026-08-09T00:00:00.000Z', updatedAt: '2026-08-09T00:00:00.000Z' }]}
     instances={[instance]}
+    nodes={[node]}
     selectedAppId="terminal-tty"
     selectedInstance={instance}
     onAppChange={jest.fn()}
@@ -36,4 +43,27 @@ test('new App session uses full-width anchored selectors for instance, App, and 
     expect(StyleSheet.flatten(folderButton.props.style).width).toBe(334);
   });
   await screen.unmount();
+});
+
+test('new App session instance subtitles use the node name like AI sessions', () => {
+  const actions = newSessionMenuActions(
+    instanceSelectOptions([instance, { ...instance, id: 'instance-2', nodeId: 'node-missing', name: 'Remote workspace' }], [node]),
+    instance.id,
+    { destructiveImage: '#ff6961', image: '#aeaeb2' },
+  );
+
+  expect(actions).toEqual(expect.arrayContaining([
+    expect.objectContaining({ title: 'Local workspace', subtitle: 'Mac Studio' }),
+    expect.objectContaining({ title: 'Remote workspace', subtitle: 'node-missing' }),
+  ]));
+});
+
+test('new App session icons follow the desktop App launch categories', () => {
+  expect(appLaunchSystemIcon('codex')).toEqual({ android: 'auto_awesome', ios: 'sparkles' });
+  expect(appLaunchSystemIcon('claude')).toEqual({ android: 'auto_awesome', ios: 'sparkles' });
+  expect(appLaunchSystemIcon('terminal')).toEqual({ android: 'terminal', ios: 'terminal' });
+  expect(appLaunchSystemIcon('terminal-tty')).toEqual({ android: 'terminal', ios: 'terminal' });
+  expect(appLaunchSystemIcon('gui-terminal')).toEqual({ android: 'terminal', ios: 'terminal' });
+  expect(appLaunchSystemIcon('embedded-browser')).toEqual({ android: 'language', ios: 'globe' });
+  expect(appLaunchSystemIcon('opencode')).toEqual({ android: 'play_arrow', ios: 'play.fill' });
 });

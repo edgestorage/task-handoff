@@ -15,6 +15,8 @@
       >
         <EmbeddedBrowserTab
           :instance-id="instanceId"
+          :session-key="tab.key"
+          :background-throttled="!isActiveTab(instanceId, tab.key)"
           :initial-url="typeof tab.source?.currentUrl === 'string' ? tab.source.currentUrl : typeof tab.source?.initialUrl === 'string' ? tab.source.initialUrl : undefined"
           @update-tab="(patch) => $emit('updateBrowserTab', instanceId, tab.key, patch)"
         />
@@ -101,6 +103,12 @@ function itemStyle(instanceId: string, sessionKey: string): CSSProperties {
     visibility: visible ? "visible" : "hidden",
     pointerEvents: visible ? "auto" : "none",
   };
+}
+
+function isActiveTab(instanceId: string, sessionKey: string) {
+  if (instanceId !== props.activeInstanceId) return false;
+  const state = props.browserSurfaceState[instanceId];
+  return state?.leftSessionKey === sessionKey || state?.rightSessionKey === sessionKey;
 }
 
 onMounted(() => {

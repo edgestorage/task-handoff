@@ -364,7 +364,7 @@ async function confirmDelete() { const target = pendingDelete.value; if (!target
 .model-summary-popover-empty { color: var(--text-muted); font-size: 12px; margin: 0; padding: 10px 9px; }
 .model-state { align-items: center; color: var(--text-muted); display: flex; font-size: 12px; justify-content: center; min-height: 160px; padding: 20px; }
 .model-state-error { gap: 10px; }
-.model-empty-state { display: grid; gap: 7px; justify-items: center; text-align: center; }
+.model-empty-state { align-content: center; display: grid; gap: 7px; justify-items: center; text-align: center; }
 .model-empty-state strong { color: var(--text-strong); font-size: 13px; }
 .model-empty-state p { margin: 0; }
 :global(.model-delete-location-menu) { min-width: 260px; }

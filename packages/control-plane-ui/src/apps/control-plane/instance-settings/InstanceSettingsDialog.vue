@@ -1345,6 +1345,7 @@ async function confirmAppOperation() {
 }
 
 .instance-settings-empty-state {
+  align-content: center;
   display: grid;
   gap: 7px;
   justify-items: center;

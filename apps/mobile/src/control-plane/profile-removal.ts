@@ -1,8 +1,9 @@
-export async function requireRemoteMobileSessionRevocation(logoutMobile: () => Promise<unknown>) {
+export async function attemptRemoteMobileSessionRevocation(logoutMobile: () => Promise<unknown>) {
   try {
     await logoutMobile();
+    return true;
   } catch (cause) {
     const status = cause && typeof cause === 'object' && 'status' in cause ? (cause as { status?: unknown }).status : undefined;
-    if (status !== 401) throw cause;
+    return status === 401;
   }
 }

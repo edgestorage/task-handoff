@@ -11,8 +11,8 @@ import { useAiSessionTimelineStore } from "./useAiSessionTimelineStore";
 const activeTurnTimelineLoads = new Map<string, Promise<void>>();
 const activeSessionTimelineLoads = new Map<string, Promise<void>>();
 
-function timelineLoadKey(instanceId: string, sessionId: string, turnId?: string) {
-  return JSON.stringify([instanceId, sessionId, turnId || ""]);
+function timelineLoadKey(instanceId: string, sessionId: string, turnId?: string, revision?: number | string) {
+  return JSON.stringify([instanceId, sessionId, turnId || "", revision ?? ""]);
 }
 
 export function useAiSessionTimelinePresentation(options: {
@@ -72,12 +72,12 @@ export function useAiSessionTimelinePresentation(options: {
     const currentInstance = instance.value;
     if (!currentInstance || !supportsSessionRead.value) return;
     const instanceId = currentInstance.id;
-    const key = timelineLoadKey(instanceId, current.id);
+    const turns = aiSessionTurns(current);
+    const key = timelineLoadKey(instanceId, current.id, undefined, turns.map((turn) => `${turn.id}:${turn.revision}`).join("|"));
     const existing = activeSessionTimelineLoads.get(key);
     if (existing) return existing;
     const state = timelineStore.sessionState(instanceId, current.id);
     if (!force && state.status === "ready") return;
-    const turns = aiSessionTurns(current);
     timelineStore.beginSessionLoad(instanceId, current.id);
     for (const turn of turns) timelineStore.beginTurnLoad(instanceId, current.id, turn);
     const load = getAiSessionTimeline(instanceId, current.id)
@@ -106,12 +106,14 @@ export function useAiSessionTimelinePresentation(options: {
       return loadFullTimeline(current, true);
     }
     if (!force && (state.status === "ready" || state.status === "loading")) return;
-    const key = timelineLoadKey(instanceId, current.id, turn.id);
+    const key = timelineLoadKey(instanceId, current.id, turn.id, turn.revision);
     const existing = activeTurnTimelineLoads.get(key);
     if (existing) return existing;
     timelineStore.beginTurnLoad(instanceId, current.id, turn);
     const load = getAiSessionTurnTimeline(instanceId, current.id, turn.id)
-      .then((result) => timelineStore.resolveTurn(instanceId, current.id, turn, result.items))
+      .then((result) => {
+        timelineStore.resolveTurn(instanceId, current.id, turn, result.items);
+      })
       .catch((error) => timelineStore.rejectTurn(
         instanceId,
         current.id,
@@ -129,6 +131,16 @@ export function useAiSessionTimelinePresentation(options: {
   }
 
   watch(timelineStore.recoveryRevision, () => void loadSelectedTurnTimeline(true));
+  watch(
+    () => {
+      const currentInstance = instance.value;
+      const current = session.value;
+      const turn = selectedTurn.value;
+      return [currentInstance?.id, current?.id, turn?.id, turn?.revision] as const;
+    },
+    () => void loadSelectedTurnTimeline(),
+    { immediate: true },
+  );
 
   return {
     conversationTurnTimelines,

@@ -151,7 +151,7 @@ export function ModelSettingsMenu(props: ModelSettingsMenuProps) {
     const match = /^model:(\d+):(\d+)$/.exec(id);
     if (!match) return;
     const model = props.modelGroups[Number(match[1])]?.models[Number(match[2])];
-    if (model) props.onModelChange(model);
+    if (model) props.onModelChange({ modelEntityId: model.modelEntityId, modelName: model.modelName });
   };
   return <MenuView
     actions={actions}

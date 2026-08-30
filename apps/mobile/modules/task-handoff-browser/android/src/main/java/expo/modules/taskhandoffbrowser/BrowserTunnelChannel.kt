@@ -39,6 +39,10 @@ internal class BrowserTunnelChannel(
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
   private val mutex = Mutex()
   private val ready = CompletableDeferred<Unit>()
+  // DATA frames are flow-controlled per stream; keep a bounded queue large enough
+  // for every stream's initial window without treating temporary callback backpressure
+  // as a relay failure.
+  private val inboundFrames = Channel<BrowserTunnelProtocol.Frame>(capacity = 2048)
   private val streams = mutableMapOf<Long, Stream>()
   private var nextStreamId = 1L
   private var initialWindow = BrowserTunnelProtocol.INITIAL_WINDOW
@@ -47,6 +51,16 @@ internal class BrowserTunnelChannel(
     Request.Builder().url(url).header("Authorization", "Browser $token").build(),
     Listener()
   )
+  private val inboundConsumer = scope.launch {
+    for (frame in inboundFrames) {
+      try {
+        handle(frame)
+      } catch (_: Throwable) {
+        closeNow()
+        break
+      }
+    }
+  }
 
   suspend fun connect() { withTimeout(15_000) { ready.await() } }
 
@@ -159,6 +173,7 @@ internal class BrowserTunnelChannel(
       streams.values.toList().also { streams.clear() }
     }
     ready.completeExceptionally(IllegalStateException("Browser relay closed."))
+    inboundFrames.close()
     for (stream in active) {
       stream.opened.completeExceptionally(IllegalStateException("Browser relay closed."))
       stream.creditSignal.close()
@@ -195,7 +210,8 @@ internal class BrowserTunnelChannel(
 
     override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
       if (!ready.isCompleted) { close(); return }
-      scope.launch { runCatching { handle(BrowserTunnelProtocol.decode(bytes.toByteArray())) }.onFailure { close() } }
+      val frame = runCatching { BrowserTunnelProtocol.decode(bytes.toByteArray()) }.getOrElse { close(); return }
+      if (inboundFrames.trySend(frame).isFailure) close()
     }
 
     override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {

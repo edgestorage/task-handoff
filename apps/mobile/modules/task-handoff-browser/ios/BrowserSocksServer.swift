@@ -1,21 +1,20 @@
 import Foundation
 import Network
+import OSLog
+
+private let browserLogger = Logger(subsystem: "com.taskhandoff.mobile.dev", category: "task-handoff-browser")
 
 internal final class BrowserSocksServer: @unchecked Sendable {
   struct Address: Sendable { let host: NWEndpoint.Host; let port: NWEndpoint.Port }
 
   private let channel: BrowserTunnelChannel
-  private let username: String
-  private let password: String
   private let queue = DispatchQueue(label: "dev.taskhandoff.browser.socks")
   private var listener: NWListener?
   private let lock = NSLock()
   private var connections: [ObjectIdentifier: NWConnection] = [:]
 
-  init(channel: BrowserTunnelChannel, username: String, password: String) {
+  init(channel: BrowserTunnelChannel) {
     self.channel = channel
-    self.username = username
-    self.password = password
   }
 
   func start() async throws -> Address {
@@ -81,26 +80,21 @@ internal final class BrowserSocksServer: @unchecked Sendable {
   }
 
   private func serve(_ connection: NWConnection) async throws {
-    let greeting = try await connection.readExactly(2)
+    let reader = SocksReader(connection: connection)
+    let greeting = try await reader.readExactly(2)
     guard greeting[0] == 5 else { throw BrowserTunnelProtocolError("Unsupported SOCKS version.") }
-    let methods = try await connection.readExactly(Int(greeting[1]))
-    guard methods.contains(2) else {
+    let methods = try await reader.readExactly(Int(greeting[1]))
+    let supportsNoAuth = methods.contains(0)
+    browserLogger.info("SOCKS greeting methods=\(methods.map(String.init).joined(separator: ","), privacy: .public)")
+    guard supportsNoAuth else {
       try await connection.write(Data([5, 0xff]))
-      throw BrowserTunnelProtocolError("SOCKS authentication is required.")
+      throw BrowserTunnelProtocolError("SOCKS authentication method is unsupported.")
     }
-    try await connection.write(Data([5, 2]))
-    let authHeader = try await connection.readExactly(2)
-    guard authHeader[0] == 1 else { throw BrowserTunnelProtocolError("SOCKS authentication request is invalid.") }
-    let suppliedUsername = String(decoding: try await connection.readExactly(Int(authHeader[1])), as: UTF8.self)
-    let passwordLength = try await connection.readExactly(1)
-    let suppliedPassword = String(decoding: try await connection.readExactly(Int(passwordLength[0])), as: UTF8.self)
-    guard suppliedUsername == username, suppliedPassword == password else {
-      try await connection.write(Data([1, 1]))
-      throw BrowserTunnelProtocolError("SOCKS authentication failed.")
-    }
-    try await connection.write(Data([1, 0]))
+    try await connection.write(Data([5, 0]))
+    browserLogger.info("SOCKS selected no-auth")
 
-    let request = try await readRequest(connection)
+    let request = try await readRequest(reader)
+    browserDiagnostic("SOCKS CONNECT target=\(request.host):\(request.port)")
     guard request.command == 1 else {
       try await connection.write(socksReply(7))
       throw BrowserTunnelProtocolError("Only SOCKS CONNECT is supported.")
@@ -132,31 +126,56 @@ internal final class BrowserSocksServer: @unchecked Sendable {
     }
   }
 
-  private func readRequest(_ connection: NWConnection) async throws -> (command: UInt8, host: String, port: UInt16) {
-    let header = try await connection.readExactly(4)
+  private func readRequest(_ reader: SocksReader) async throws -> (command: UInt8, host: String, port: UInt16) {
+    let header = try await reader.readExactly(4)
     guard header[0] == 5, header[2] == 0 else { throw BrowserTunnelProtocolError("SOCKS request is invalid.") }
     let host: String
     switch header[3] {
     case 1:
-      host = (try await connection.readExactly(4)).map(String.init).joined(separator: ".")
+      host = (try await reader.readExactly(4)).map(String.init).joined(separator: ".")
     case 3:
-      let length = try await connection.readExactly(1)[0]
-      let data = try await connection.readExactly(Int(length))
+      let length = try await reader.readExactly(1)[0]
+      let data = try await reader.readExactly(Int(length))
       guard let value = String(data: data, encoding: .utf8), !value.isEmpty else { throw BrowserTunnelProtocolError("SOCKS hostname is invalid.") }
       host = value
     case 4:
-      let data = try await connection.readExactly(16)
+      let data = try await reader.readExactly(16)
       host = stride(from: 0, to: 16, by: 2).map { String(format: "%x", UInt16(data[$0]) << 8 | UInt16(data[$0 + 1])) }.joined(separator: ":")
     default:
       throw BrowserTunnelProtocolError("SOCKS address type is unsupported.")
     }
-    let portData = try await connection.readExactly(2)
+    let portData = try await reader.readExactly(2)
     let port = UInt16(portData[0]) << 8 | UInt16(portData[1])
     guard port > 0 else { throw BrowserTunnelProtocolError("SOCKS target port is invalid.") }
     return (header[1], host, port)
   }
 
   private func socksReply(_ code: UInt8) -> Data { Data([5, code, 0, 1, 0, 0, 0, 0, 0, 0]) }
+}
+
+private final class SocksReader: @unchecked Sendable {
+  private let connection: NWConnection
+  private var buffer = Data()
+
+  init(connection: NWConnection) { self.connection = connection }
+
+  func readExactly(_ count: Int) async throws -> Data {
+    guard count >= 0, count <= BrowserTunnelProtocol.maxControlBytes else { throw BrowserTunnelProtocolError("SOCKS message is too large.") }
+    while buffer.count < count {
+      guard let next = try await connection.read(maximum: BrowserTunnelProtocol.maxControlBytes), !next.isEmpty else {
+        throw BrowserTunnelProtocolError("SOCKS connection ended unexpectedly.")
+      }
+      buffer.append(next)
+    }
+    let result = buffer.prefix(count)
+    buffer.removeFirst(count)
+    return Data(result)
+  }
+}
+
+private func browserDiagnostic(_ message: String) {
+  NSLog("[task-handoff-browser] %@", message)
+  browserLogger.info("\(message, privacy: .public)")
 }
 
 private extension NWConnection {
@@ -178,7 +197,12 @@ private extension NWConnection {
         if let error { continuation.resume(throwing: error) }
         else if let data, !data.isEmpty { continuation.resume(returning: data) }
         else if complete { continuation.resume(returning: nil) }
-        else { continuation.resume(returning: nil) }
+        else {
+          Task {
+            do { continuation.resume(returning: try await self.read(maximum: maximum)) }
+            catch { continuation.resume(throwing: error) }
+          }
+        }
       }
     }
   }

@@ -4,6 +4,7 @@ import { watch, watchEffect } from "vue";
 
 import {
   createStreamingMessagesStore,
+  streamingMessageMatchesTurn,
   streamingMessageKey,
   useStreamingMessagesStore,
 } from "../src/apps/control-plane/useStreamingMessagesStore.ts";
@@ -54,6 +55,16 @@ test("message keys preserve all four identity dimensions without delimiter colli
   assert.equal(left, streamingMessageKey(identity({ sessionId: "a\u0000b", turnId: "c" })));
 });
 
+test("a session active message can override only its owning Turn", () => {
+  const message = { ...identity({ turnId: "provider-turn-2" }), status: "streaming" };
+
+  assert.equal(streamingMessageMatchesTurn(message, { id: "turn-2", providerTurnId: "provider-turn-2" }), true);
+  assert.equal(streamingMessageMatchesTurn(message, { id: "turn-3", providerTurnId: "provider-turn-3" }), false);
+  assert.equal(streamingMessageMatchesTurn(message, {}), false);
+  assert.equal(streamingMessageMatchesTurn({ ...message, status: "complete" }, { id: "turn-2", providerTurnId: "provider-turn-2" }), false);
+  assert.equal(streamingMessageMatchesTurn({ ...message, status: "waiting" }, { id: "turn-2", providerTurnId: "provider-turn-2" }), false);
+});
+
 test("received text advances directly for the renderer", () => {
   const store = createStreamingMessagesStore();
   const id = identity();
@@ -77,6 +88,83 @@ test("authoritative completion corrects received text and sets its terminal stat
   assert.equal(entry.value.receivedText, "hello");
   assert.equal(entry.value.status, "complete");
   assert.equal(entry.value.settledAt, "2026-07-18T00:00:02.000Z");
+});
+
+test("an authoritative Turn body replaces partial text retained after a compact terminal patch", () => {
+  const store = createStreamingMessagesStore();
+  const id = identity();
+  const entry = store.appendDelta({ identity: id, streamId: "stream_1", delta: "partial response" });
+
+  store.applyPatch({
+    meta: meta({ revision: 2, generatedAt: "2026-07-18T00:00:02.000Z" }),
+    upserted: [session({
+      status: "idle",
+      turns: undefined,
+      lastMessage: "partial response final text omitted from compact projection",
+      lastMessageItemId: "item_1",
+    })],
+    removed: [],
+  });
+  assert.equal(entry.value.receivedText, "partial response");
+  assert.equal(entry.value.status, "complete");
+
+  store.applyAuthoritativeTurnBody("instance_1", "session_1", {
+    id: "turn_1",
+    status: "completed",
+    revision: 3,
+    lastMessage: "complete authoritative response",
+    lastMessageItemId: "item_1",
+    updatedAt: "2026-07-18T00:00:03.000Z",
+    completedAt: "2026-07-18T00:00:03.000Z",
+  });
+
+  assert.equal(entry.value.receivedText, "complete authoritative response");
+  assert.equal(entry.value.status, "complete");
+  assert.equal(entry.value.settledAt, "2026-07-18T00:00:03.000Z");
+});
+
+test("a running Turn body older than the latest delta cannot truncate streamed text", () => {
+  const store = createStreamingMessagesStore();
+  const id = identity();
+  const entry = store.appendDelta({
+    identity: id,
+    streamId: "stream_1",
+    delta: "newer streamed response",
+    generatedAt: "2026-07-18T00:00:03.000Z",
+  });
+
+  store.applyAuthoritativeTurnBody("instance_1", "session_1", {
+    id: "turn_1",
+    status: "running",
+    revision: 2,
+    lastMessage: "older response",
+    lastMessageItemId: "item_1",
+    updatedAt: "2026-07-18T00:00:02.000Z",
+  });
+
+  assert.equal(entry.value.receivedText, "newer streamed response");
+  assert.equal(entry.value.status, "streaming");
+});
+
+test("an authoritative historical Turn body cannot replace the active newer Turn", () => {
+  const store = createStreamingMessagesStore();
+  const historical = identity({ turnId: "turn_old", itemId: "item_old_partial" });
+  const current = identity({ turnId: "turn_new", itemId: "item_new" });
+  store.appendDelta({ identity: historical, streamId: "stream_1", delta: "old partial" });
+  const active = store.appendDelta({ identity: current, streamId: "stream_1", delta: "current response" });
+
+  store.applyAuthoritativeTurnBody("instance_1", "session_1", {
+    id: "turn_old",
+    status: "completed",
+    revision: 3,
+    lastMessage: "old complete response",
+    lastMessageItemId: "item_old_final",
+    completedAt: "2026-07-18T00:00:03.000Z",
+  });
+
+  assert.equal(store.activeMessage("instance_1", "session_1").value, active);
+  assert.equal(active.value.receivedText, "current response");
+  assert.equal(store.message(identity({ turnId: "turn_old", itemId: "item_old_final" })), undefined);
 });
 
 test("a new instance stream discards every stale message projection", () => {

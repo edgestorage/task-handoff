@@ -125,7 +125,11 @@ export function attachBrowserTunnel(socket: BrowserTunnelWebSocket, options: Bro
       send(encodeBrowserTunnelError(streamId, { code: "BROWSER_TUNNEL_STREAM_LIMIT", message: "Browser tunnel stream limit reached." }));
       return;
     }
-    const target = connect(payload.port, payload.host);
+    const loopbackAlias = /^127-(\d{1,3})-(\d{1,3})-(\d{1,3})\.internal$/.exec(payload.host);
+    const targetHost = loopbackAlias && loopbackAlias.slice(1).every((part) => Number(part) <= 255)
+      ? `127.${loopbackAlias[1]}.${loopbackAlias[2]}.${loopbackAlias[3]}`
+      : payload.host;
+    const target = connect(payload.port, targetHost);
     const stream: BrowserTunnelStream = {
       id: streamId,
       socket: target,

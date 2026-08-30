@@ -37,6 +37,14 @@ class TaskHandoffBrowserModule : Module() {
       }
     }
 
+    AsyncFunction("activateBrowserContext") { contextId: String, promise: Promise ->
+      appContext.modulesQueue.launch {
+        runCatching { MobileBrowserContextManager.activate(contextId) }
+          .onSuccess { promise.resolve(null) }
+          .onFailure { promise.reject("BROWSER_CONTEXT_ACTIVATE_FAILED", it.message, it) }
+      }
+    }
+
     AsyncFunction("releaseBrowserContext") { contextId: String, promise: Promise ->
       appContext.modulesQueue.launch {
         runCatching { MobileBrowserContextManager.release(contextId) }

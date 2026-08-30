@@ -244,6 +244,9 @@ importers:
 
   apps/desktop-shell:
     dependencies:
+      '@task-handoff/protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
       electron:
         specifier: 'catalog:'
         version: 43.1.0

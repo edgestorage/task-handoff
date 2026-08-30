@@ -75,11 +75,11 @@ const checkedLabel = (label: string, selected: boolean) => `${selected ? '\u2713
 
 export function ModelSettingsMenu(props: ModelSettingsMenuProps) {
   const chooseModel = (group: AiSessionModelGroup) => {
-    if (group.models.length === 1) return props.onModelChange(group.models[0]);
+    if (group.models.length === 1) return props.onModelChange({ modelEntityId: group.models[0].modelEntityId, modelName: group.models[0].modelName });
     Alert.alert(group.providerName, undefined, [
       ...group.models.map((model) => ({
         text: checkedLabel(model.modelName, props.modelSelection?.modelEntityId === model.modelEntityId && props.modelSelection.modelName === model.modelName),
-        onPress: () => props.onModelChange(model),
+        onPress: () => props.onModelChange({ modelEntityId: model.modelEntityId, modelName: model.modelName }),
       })),
       { text: props.cancelLabel, style: 'cancel' as const },
     ]);

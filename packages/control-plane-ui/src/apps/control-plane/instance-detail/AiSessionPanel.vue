@@ -218,7 +218,9 @@
                       :instance-id="instance.id"
                       file-links
                       :is-latest="true"
+                      :provider-turn-id="session.activeTurnId"
                       :session-id="session.id"
+                      :turn-id="session.latestTurnRef?.id"
                       @open-file="openMarkdownFile(session, $event)"
                     />
                   </div>
@@ -896,7 +898,9 @@
                 :instance-id="instance.id"
                 file-links
                 :is-latest="true"
+                :provider-turn-id="sessionListPreviewSession.activeTurnId"
                 :session-id="sessionListPreviewSession.id"
+                :turn-id="sessionListPreviewSession.latestTurnRef?.id"
                 @open-file="openMarkdownFile(sessionListPreviewSession, $event)"
               />
             </div>
@@ -1057,6 +1061,7 @@ import RepositoryEnvironment from "./RepositoryEnvironment.vue";
 import AiSessionPathGroupContextMenu from "./AiSessionPathGroupContextMenu.vue";
 import { useNodeStorageFolderPicker } from "../settings/useNodeStorageFolderPicker";
 import { groupAiSessionEntriesByPath } from "./aiSessionPathGrouping";
+import { loadCollapsedAiSessionPathGroups, persistCollapsedAiSessionPathGroups } from "./aiSessionPathGroupCollapse";
 import { aiSessionCreationDraftKey, aiSessionMessageText, clearAiSessionDraft, loadAiSessionDraftPayload, persistAiSessionDraftPayload } from "../useAiSessionDraft";
 import {
   aiSessionPermissionKey,
@@ -1541,8 +1546,12 @@ let currentListScrollTop = 0;
 let historyDetailRevision = 0;
 let promptSelectionRevision = 0;
 const promptIndexes = ref<Record<string, { index: number; count: number }>>({});
-const collapsedPathGroups = reactive<Record<string, boolean>>({});
-const collapsedHistoryPathGroups = reactive<Record<string, boolean>>({});
+const collapsedPathGroups = reactive<Record<string, boolean>>(
+  loadCollapsedAiSessionPathGroups(props.instance.id, "current"),
+);
+const collapsedHistoryPathGroups = reactive<Record<string, boolean>>(
+  loadCollapsedAiSessionPathGroups(props.instance.id, "history"),
+);
 const messageDraft = ref("");
 const messageAttachments = ref<AiSessionComposerAttachment[]>([]);
 const messageMentionBindings = ref<AiSessionMentionBinding[]>([]);
@@ -1731,30 +1740,6 @@ function groupLastUserMessageTime(sessions: AiSessionSummary[]) {
   return Math.max(0, ...sessions.map(aiSessionLastUserMessageTime));
 }
 
-watch(
-  displayedSessionGroups,
-  (groups) => {
-    const activeKeys = new Set(groups.map((group) => group.key));
-    for (const key of Object.keys(collapsedPathGroups)) {
-      if (!activeKeys.has(key)) {
-        delete collapsedPathGroups[key];
-      }
-    }
-  },
-  { immediate: true },
-);
-
-watch(
-  displayedHistoryGroups,
-  (groups) => {
-    const activeKeys = new Set(groups.map((group) => group.key));
-    for (const key of Object.keys(collapsedHistoryPathGroups)) {
-      if (!activeKeys.has(key)) delete collapsedHistoryPathGroups[key];
-    }
-  },
-  { immediate: true },
-);
-
 watch(groupSessionsByPath, (value) => {
   window.localStorage?.setItem(GROUP_BY_PATH_STORAGE_KEY, String(value));
 });
@@ -1783,7 +1768,8 @@ watch(() => props.instance.id, () => {
   historyDetailError.value = "";
   historyMessageDraft.value = "";
   historyMessageAttachments.value = [];
-  for (const key of Object.keys(collapsedHistoryPathGroups)) delete collapsedHistoryPathGroups[key];
+  replaceCollapsedPathGroups(collapsedPathGroups, loadCollapsedAiSessionPathGroups(props.instance.id, "current"));
+  replaceCollapsedPathGroups(collapsedHistoryPathGroups, loadCollapsedAiSessionPathGroups(props.instance.id, "history"));
   if (historyMode.value) void loadHistory();
 });
 
@@ -1865,10 +1851,17 @@ function selectDefaultNewSessionBranch(workspace: RepositoryAiSessionWorkspace) 
 
 function togglePathGroup(key: string) {
   collapsedPathGroups[key] = !collapsedPathGroups[key];
+  persistCollapsedAiSessionPathGroups(props.instance.id, "current", collapsedPathGroups);
 }
 
 function toggleHistoryPathGroup(key: string) {
   collapsedHistoryPathGroups[key] = !collapsedHistoryPathGroups[key];
+  persistCollapsedAiSessionPathGroups(props.instance.id, "history", collapsedHistoryPathGroups);
+}
+
+function replaceCollapsedPathGroups(target: Record<string, boolean>, source: Record<string, boolean>) {
+  for (const key of Object.keys(target)) delete target[key];
+  Object.assign(target, source);
 }
 
 function stopSidebarResize() {

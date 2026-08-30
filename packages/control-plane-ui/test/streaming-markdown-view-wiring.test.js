@@ -37,8 +37,9 @@ test("selected session details use the streaming message view", () => {
   assert.match(conversation, /AiSessionResult/);
   assert.match(result, /AiSessionStreamingMarkdown/);
   assert.match(message, /activeMessage\(props\.instanceId, props\.sessionId\)/);
-  assert.match(message, /streamingState\.value\?\.receivedText \?\? props\.content/);
+  assert.match(message, /streamingMessageMatchesTurn\(message, \{ id: props\.turnId, providerTurnId: props\.providerTurnId \}\)/);
   assert.match(result, /streamingMessages\.activeMessage\(props\.instanceId, props\.session\.id\)/);
+  assert.match(result, /streamingMessageMatchesTurn\(activeMessage, \{ id: props\.turnId, providerTurnId: props\.providerTurnId \}\)/);
   assert.match(result, /props\.isLatest/);
 });
 

@@ -1,5 +1,8 @@
 import ExpoModulesCore
 import WebKit
+import OSLog
+
+private let browserModuleLogger = Logger(subsystem: "com.taskhandoff.mobile.dev", category: "task-handoff-browser")
 
 public final class TaskHandoffBrowserModule: Module {
   public func definition() -> ModuleDefinition {
@@ -29,8 +32,16 @@ public final class TaskHandoffBrowserModule: Module {
 
     AsyncFunction("prepareBrowserContext") { (input: PrepareBrowserContextRecord) -> [String: String] in
       guard #available(iOS 17.0, *) else { throw BrowserPlatformUnsupportedException() }
+      NSLog("[task-handoff-browser] prepareBrowserContext instance=%@", input.instanceId)
       let contextId = try await MobileBrowserContextManager.shared.prepare(input)
+      NSLog("[task-handoff-browser] prepareBrowserContext ready context=%@", contextId)
       return ["contextId": contextId]
+    }
+
+    AsyncFunction("activateBrowserContext") { (contextId: String) in
+      guard #available(iOS 17.0, *) else { throw BrowserPlatformUnsupportedException() }
+      NSLog("[task-handoff-browser] activateBrowserContext context=%@", contextId)
+      try await MobileBrowserContextManager.shared.activate(contextId: contextId)
     }
 
     AsyncFunction("releaseBrowserContext") { (contextId: String) in
@@ -45,6 +56,7 @@ public final class TaskHandoffBrowserModule: Module {
       Events("onNavigationStateChange", "onLoadingChange", "onError", "onNewWindow")
 
       Prop("contextId") { (view: TaskHandoffBrowserView, contextId: String) in
+        NSLog("[task-handoff-browser] contextId prop context=%@", contextId)
         view.setContextId(contextId)
       }
       Prop("initialUrl") { (view: TaskHandoffBrowserView, initialUrl: String?) in

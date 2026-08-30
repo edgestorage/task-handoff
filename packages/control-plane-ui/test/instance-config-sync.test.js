@@ -8,6 +8,7 @@ import { ConfigSyncBatchResultSchema } from "@task-handoff/protocol/config-sync"
 
 const read = (path) => fs.readFileSync(new URL(`../src/apps/control-plane/${path}`, import.meta.url), "utf8");
 const instanceList = read("instance-list/InstanceList.vue");
+const instanceActions = read("instance-list/InstanceActionMenuItems.vue");
 const dialog = read("instance-list/ConfigSyncDialog.vue");
 const workbench = read("ControlPlaneWorkbench.vue");
 const apiQueries = fs.readFileSync(new URL("../src/api/queries.ts", import.meta.url), "utf8");
@@ -21,9 +22,10 @@ test("config export remains unavailable for non-folder sources", () => {
 });
 
 test("instance config actions open one dialog without nested program menus", () => {
-  assert.match(instanceList, /\$emit\('openConfigSync', 'import', instance\)/);
-  assert.match(instanceList, /\$emit\('openConfigSync', 'export', instance\)/);
-  assert.doesNotMatch(instanceList, /DropdownMenuSub|ContextMenuSub/);
+  assert.match(instanceList, /@open-config-sync="\(direction\) => \$emit\('openConfigSync', direction, instance\)"/);
+  assert.match(instanceActions, /emit\('openConfigSync', 'import'\)/);
+  assert.match(instanceActions, /emit\('openConfigSync', 'export'\)/);
+  assert.doesNotMatch(instanceActions, /DropdownMenuSub|ContextMenuSub/);
   assert.match(workbench, /<ConfigSyncDialog[\s\S]*v-model:open="configSyncDialogOpen"/);
   assert.doesNotMatch(apiQueries, /useConfigSyncPresetsQuery|syncControlledInstanceConfig\(/);
 });

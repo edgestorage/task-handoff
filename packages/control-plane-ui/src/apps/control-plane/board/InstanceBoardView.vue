@@ -115,7 +115,9 @@
                     :content="displayAiSessionMessage(boardPrimaryAiSession(instance), undefined, t)"
                     :instance-id="instance.id"
                     :is-latest="true"
+                    :provider-turn-id="boardPrimaryAiSession(instance)?.activeTurnId"
                     :session-id="boardPrimaryAiSession(instance)?.id || ''"
+                    :turn-id="boardPrimaryAiSession(instance)?.latestTurnRef?.id"
                   />
                 </div>
                 <AiSessionToolActivity

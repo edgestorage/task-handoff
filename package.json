@@ -60,7 +60,7 @@
     "docker:build:image": "sh scripts/docker-build-image.sh",
     "pack:dry": "pnpm run build:legacy && npm_config_cache=/private/tmp/task-handoff-npm-cache npm pack --dry-run",
     "test": "pnpm run test:node && pnpm --filter @task-handoff/control-plane-client test && pnpm --filter @task-handoff/control-plane-ui test && pnpm --filter @task-handoff/mobile test",
-    "test:node": "node --import ./test/setup-isolated-runtime.mjs --test test/*.test.* apps/*/test/*.test.* packages/protocol/test/*.test.* packages/*/*.test.*"
+    "test:node": "node --import ./test/setup-isolated-runtime.mjs --test --test-timeout=30000 test/*.test.* apps/*/test/*.test.* packages/protocol/test/*.test.* packages/*/*.test.*"
   },
   "engines": {
     "node": ">=24.15.0 <25"

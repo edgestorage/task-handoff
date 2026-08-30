@@ -20,6 +20,7 @@ function loadBrowserTunnelProtocol() {
   try {
     return require(path.resolve(__dirname, "../../../dist/browser-tunnel.js"));
   } catch {
+    // The packaged runtime builds dist first; source tests resolve the workspace export.
     return require("@task-handoff/protocol/browser-tunnel");
   }
 }

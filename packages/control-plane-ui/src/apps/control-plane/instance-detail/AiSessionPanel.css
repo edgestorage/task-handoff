@@ -1330,6 +1330,8 @@
   align-content: start;
   border-top: 1px solid var(--ai-session-card-divider);
   background: var(--ai-session-card-content-bg);
+  font-size: 14px;
+  line-height: 1.35;
   margin: 2px -14px 0;
   min-height: 0;
   overflow-x: hidden;

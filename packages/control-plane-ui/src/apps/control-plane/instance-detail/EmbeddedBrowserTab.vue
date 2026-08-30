@@ -11,10 +11,65 @@
         <X v-if="loading" :size="15" />
         <RotateCw v-else :size="15" />
       </Button>
-      <form class="embedded-browser-address" @submit.prevent="navigate(address)">
-        <Globe2 :size="14" />
-        <input v-model="address" type="text" inputmode="url" autocomplete="off" autocapitalize="none" spellcheck="false" :aria-label="t('sessions.browser.address')" />
-      </form>
+      <Popover :open="suggestionsOpen" @update:open="handleSuggestionsOpenChange">
+        <PopoverAnchor as-child>
+          <form ref="addressAnchor" class="embedded-browser-address" @submit.prevent="submitAddress">
+            <Globe2 :size="14" />
+            <input
+              ref="addressInput"
+              v-model="address"
+              type="text"
+              inputmode="url"
+              autocomplete="off"
+              autocapitalize="none"
+              spellcheck="false"
+              role="combobox"
+              aria-autocomplete="list"
+              :aria-expanded="suggestionsOpen"
+              :aria-controls="suggestionsOpen ? suggestionsListId : undefined"
+              :aria-activedescendant="activeSuggestionId"
+              :aria-label="t('sessions.browser.address')"
+              @focus="handleAddressFocus"
+              @input="handleAddressInput"
+              @keydown="handleAddressKeydown"
+            />
+          </form>
+        </PopoverAnchor>
+        <PopoverContent
+          v-if="suggestions.length"
+          class="embedded-browser-suggestions"
+          align="start"
+          side="bottom"
+          :side-offset="5"
+          :collision-padding="8"
+          :style="{ width: 'var(--reka-popover-trigger-width)', padding: '4px' }"
+          @open-auto-focus.prevent
+          @close-auto-focus.prevent
+          @interact-outside="handleSuggestionsInteractOutside"
+        >
+          <ScrollArea class="embedded-browser-suggestions-scroll" :horizontal="false">
+            <div :id="suggestionsListId" class="embedded-browser-suggestions-list" role="listbox">
+              <button
+                v-for="(suggestion, index) in suggestions"
+                :id="suggestionOptionId(index)"
+                :key="suggestion.id"
+                type="button"
+                role="option"
+                class="embedded-browser-suggestion"
+                :class="{ 'embedded-browser-suggestion-active': activeSuggestionIndex === index }"
+                :aria-selected="activeSuggestionIndex === index"
+                @pointerdown.prevent
+                @pointerenter="activeSuggestionIndex = index"
+                @click="selectSuggestion(suggestion)"
+              >
+                <Pin v-if="suggestion.kind === 'pinned'" :size="14" />
+                <History v-else :size="14" />
+                <span class="embedded-browser-suggestion-copy"><span>{{ suggestion.title }}</span><small>{{ suggestion.url }}</small></span>
+              </button>
+            </div>
+          </ScrollArea>
+        </PopoverContent>
+      </Popover>
     </div>
     <div class="embedded-browser-surface">
       <webview v-if="context?.partition" ref="guest" src="about:blank" :partition="context.partition" allowpopups @dom-ready="handleGuestDomReady" />
@@ -61,18 +116,22 @@
 </template>
 
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { ArrowLeft, ArrowRight, CircleAlert, Globe2, LoaderCircle, Plus, RotateCw, X } from "@lucide/vue";
+import { ArrowLeft, ArrowRight, CircleAlert, Globe2, History, LoaderCircle, Pin, Plus, RotateCw, X } from "@lucide/vue";
 import { Button } from "../../../components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
 import { Input } from "../../../components/ui/input";
-import { logDesktopBrowserDiagnostic, prepareDesktopBrowserContext, releaseDesktopBrowserContext } from "../../../lib/desktopBridge";
+import { Popover, PopoverAnchor, PopoverContent } from "../../../components/ui/popover";
+import { ScrollArea } from "../../../components/ui/scroll-area";
+import { canRenewDesktopBrowserContext, logDesktopBrowserDiagnostic, onDesktopBrowserFocusAddress, prepareDesktopBrowserContext, releaseDesktopBrowserContext, setDesktopBrowserTabThrottled, touchDesktopBrowserContext } from "../../../lib/desktopBridge";
+import { browserAddressSuggestions, normalizeDesktopBrowserUrl, sanitizeBrowserStartPageData, type BrowserAddressSuggestion, type PinnedBrowserShortcut, type RecentBrowserPage } from "./browserAddressSuggestions";
 
 type GuestWebView = HTMLElement & {
   loadURL(url: string): Promise<void>;
   getURL(): string;
   getTitle?(): string;
+  getWebContentsId?(): number;
   canGoBack(): boolean;
   canGoForward(): boolean;
   goBack(): void;
@@ -81,19 +140,26 @@ type GuestWebView = HTMLElement & {
   stop(): void;
 };
 
-const props = defineProps<{ instanceId: string; initialUrl?: string }>();
+const props = defineProps<{ instanceId: string; sessionKey?: string; initialUrl?: string; backgroundThrottled?: boolean }>();
 const emit = defineEmits<{
   updateTab: [patch: { title?: string; url?: string; status?: string }];
 }>();
 const { t } = useI18n();
 const guest = ref<GuestWebView>();
+const addressAnchor = ref<HTMLFormElement>();
+const addressInput = ref<HTMLInputElement>();
 const context = ref<{ contextId: string; partition: string }>();
 const address = ref("");
 const error = ref("");
 const state = ref<"preparing" | "ready" | "error">("preparing");
 const loading = ref(false);
-const pinned = ref<PinnedShortcut[]>([]);
-const recent = ref<RecentPage[]>([]);
+const pinned = ref<PinnedBrowserShortcut[]>([]);
+const recent = ref<RecentBrowserPage[]>([]);
+const suggestionsOpen = ref(false);
+const activeSuggestionIndex = ref(-1);
+const suggestionsListId = `embedded-browser-suggestions-${crypto.randomUUID()}`;
+const suggestions = computed(() => browserAddressSuggestions(pinned.value, recent.value, address.value));
+const activeSuggestionId = computed(() => activeSuggestionIndex.value >= 0 ? suggestionOptionId(activeSuggestionIndex.value) : undefined);
 const showStartPage = ref(true);
 const pinnedDialogOpen = ref(false);
 const pinnedName = ref("");
@@ -105,8 +171,11 @@ let suppressBlankNavigation = false;
 const canGoBack = ref(false);
 const canGoForward = ref(false);
 let removeGuestListeners: (() => void) | undefined;
+let contextHeartbeat: ReturnType<typeof setInterval> | undefined;
+let recoveringContext = false;
 let disposed = false;
 let guestDomReady = false;
+let stopBrowserFocusAddress: (() => void) | undefined;
 let resolveGuestDomReady: (() => void) | undefined;
 let guestDomReadyPromise: Promise<void>;
 function resetGuestReady() {
@@ -115,9 +184,7 @@ function resetGuestReady() {
 }
 resetGuestReady();
 
-onMounted(async () => {
-  loadStartPageData();
-  logDesktopBrowserDiagnostic("browser tab mounted", props.instanceId);
+async function establishContext() {
   let result;
   try {
     result = await prepareDesktopBrowserContext(props.instanceId);
@@ -126,22 +193,24 @@ onMounted(async () => {
     logDesktopBrowserDiagnostic(`browser context threw error=${cause instanceof Error ? cause.message : String(cause)}`, props.instanceId);
     state.value = "error";
     error.value = cause instanceof Error && cause.message ? cause.message : t("sessions.browser.unavailable");
-    return;
+    return false;
   }
   if (disposed) {
     if (result.ok && result.contextId) void releaseDesktopBrowserContext(result.contextId);
-    return;
+    return false;
   }
   if (!result.ok || !result.contextId || !result.partition) {
     state.value = "error";
     error.value = result.message || (result.code ? `${t("sessions.browser.unavailable")} (${result.code})` : t("sessions.browser.unavailable"));
-    return;
+    return false;
   }
   context.value = { contextId: result.contextId, partition: result.partition };
   await nextTick();
+  if (disposed) return false;
   logDesktopBrowserDiagnostic(`browser webview rendered partition=${result.partition}`, props.instanceId);
   bindGuest();
   state.value = "ready";
+  startContextHeartbeat(result.contextId);
   const initialUrl = props.initialUrl?.trim();
   if (!initialUrl || initialUrl === "about:blank") {
     logDesktopBrowserDiagnostic("browser start page ready", props.instanceId);
@@ -151,17 +220,72 @@ onMounted(async () => {
     showStartPage.value = false;
     let url: string;
     try {
-      url = normalizedUrl(initialUrl);
+      url = normalizeDesktopBrowserUrl(initialUrl);
     } catch (cause) {
       logDesktopBrowserDiagnostic(`browser initial navigation failed url=${initialUrl.slice(0, 200)} error=${cause instanceof Error ? cause.message : String(cause)}`, props.instanceId);
       error.value = t("sessions.browser.invalidUrl");
-      return;
+      return false;
     }
     address.value = url;
     logDesktopBrowserDiagnostic(`browser initial navigation url=${url.slice(0, 200)}`, props.instanceId);
     pendingNavigation.value = url;
     void dispatchPendingNavigation(++navigationSequence);
   }
+  return true;
+}
+
+function stopContextHeartbeat() {
+  if (contextHeartbeat) clearInterval(contextHeartbeat);
+  contextHeartbeat = undefined;
+}
+
+function startContextHeartbeat(contextId: string) {
+  stopContextHeartbeat();
+  if (!canRenewDesktopBrowserContext()) return;
+  const renewContextLease = () => {
+    void touchDesktopBrowserContext(contextId).then(({ ok }) => {
+      if (ok || disposed || context.value?.contextId !== contextId) return;
+      logDesktopBrowserDiagnostic("browser context lease renewal rejected; rebuilding context", props.instanceId);
+      void recoverContext(contextId);
+    }).catch((cause) => {
+      if (disposed || context.value?.contextId !== contextId) return;
+      logDesktopBrowserDiagnostic(`browser context lease renewal failed; rebuilding context error=${cause instanceof Error ? cause.message : String(cause)}`, props.instanceId);
+      void recoverContext(contextId);
+    });
+  };
+  renewContextLease();
+  contextHeartbeat = setInterval(renewContextLease, 15_000);
+}
+
+async function recoverContext(lostContextId: string) {
+  if (recoveringContext || disposed || context.value?.contextId !== lostContextId) return;
+  recoveringContext = true;
+  stopContextHeartbeat();
+  removeGuestListeners?.();
+  removeGuestListeners = undefined;
+  resetGuestReady();
+  const oldContextId = context.value?.contextId;
+  context.value = undefined;
+  await nextTick();
+  state.value = "preparing";
+  loading.value = false;
+  suppressBlankNavigation = false;
+  if (oldContextId) await releaseDesktopBrowserContext(oldContextId).catch(() => undefined);
+  try {
+    await establishContext();
+  } finally {
+    recoveringContext = false;
+  }
+}
+
+onMounted(async () => {
+  loadStartPageData();
+  stopBrowserFocusAddress = onDesktopBrowserFocusAddress(({ webContentsId }) => {
+    if (guest.value?.getWebContentsId?.() !== webContentsId) return;
+    focusAddress();
+  });
+  logDesktopBrowserDiagnostic(`browser tab mounted sessionKey=${props.sessionKey || ""}`, props.instanceId);
+  await establishContext();
 });
 
 watch(() => [context.value?.partition, showStartPage.value] as const, async ([partition, startPage]) => {
@@ -172,7 +296,9 @@ watch(() => [context.value?.partition, showStartPage.value] as const, async ([pa
 
 onBeforeUnmount(() => {
   disposed = true;
-  logDesktopBrowserDiagnostic("browser tab unmounted", props.instanceId);
+  logDesktopBrowserDiagnostic(`browser tab unmounted sessionKey=${props.sessionKey || ""} contextId=${context.value?.contextId || ""}`, props.instanceId);
+  stopContextHeartbeat();
+  stopBrowserFocusAddress?.();
   removeGuestListeners?.();
   if (context.value) void releaseDesktopBrowserContext(context.value.contextId);
 });
@@ -237,6 +363,17 @@ function bindGuest() {
   };
 }
 
+function applyBackgroundThrottling() {
+  const id = guest.value?.getWebContentsId?.();
+  if (!Number.isInteger(id)) return;
+  void setDesktopBrowserTabThrottled(id!, props.backgroundThrottled !== false);
+}
+
+watch(() => props.backgroundThrottled, () => {
+  // Electron throws until the guest has emitted dom-ready.
+  if (guestDomReady) applyBackgroundThrottling();
+});
+
 function waitForGuestReady() {
   if (guestDomReady) return Promise.resolve();
   return Promise.race([
@@ -246,6 +383,7 @@ function waitForGuestReady() {
 }
 
 function handleGuestDomReady() {
+  applyBackgroundThrottling();
   if (guestDomReady) return;
   guestDomReady = true;
   // Popup tabs mount their webview after the initial component tick. Bind here
@@ -257,17 +395,10 @@ function handleGuestDomReady() {
   logDesktopBrowserDiagnostic("browser webview dom-ready", props.instanceId);
 }
 
-function normalizedUrl(value: string) {
-  const candidate = /^[a-z][a-z\d+.-]*:/i.test(value.trim()) ? value.trim() : `http://${value.trim()}`;
-  const url = new URL(candidate);
-  if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("Unsupported URL protocol.");
-  return url.toString();
-}
-
 function navigate(value: string) {
   try {
     error.value = "";
-    const url = normalizedUrl(value);
+    const url = normalizeDesktopBrowserUrl(value);
     // Queue the request until Electron has confirmed the guest is ready. The
     // guest remains mounted while the start page is shown, so this also works
     // when submitting a second URL from the address bar.
@@ -297,14 +428,12 @@ async function dispatchPendingNavigation(sequence: number) {
   }
 }
 
-type PinnedShortcut = { id: string; name: string; url: string };
-type RecentPage = { title: string; url: string; visitedAt: number };
 const storageKey = () => `taskhandoff.browser.start.${props.instanceId}`;
 function loadStartPageData() {
   try {
-    const parsed = JSON.parse(window.localStorage.getItem(storageKey()) || "{}");
-    pinned.value = Array.isArray(parsed.pinned) ? parsed.pinned.slice(0, 6) : [];
-    recent.value = Array.isArray(parsed.recent) ? parsed.recent.slice(0, 12) : [];
+    const parsed = sanitizeBrowserStartPageData(JSON.parse(window.localStorage.getItem(storageKey()) || "{}"));
+    pinned.value = parsed.pinned;
+    recent.value = parsed.recent;
   } catch { pinned.value = []; recent.value = []; }
 }
 function persistStartPageData() { try { window.localStorage.setItem(storageKey(), JSON.stringify({ pinned: pinned.value, recent: recent.value })); } catch { /* storage may be unavailable */ } }
@@ -324,7 +453,7 @@ function savePinned() {
   const value = pinnedUrl.value.trim();
   if (!name || !value) return;
   try {
-    pinned.value = [...pinned.value, { id: crypto.randomUUID(), name: name.slice(0, 40), url: normalizedUrl(value) }].slice(0, 6);
+    pinned.value = [...pinned.value, { id: crypto.randomUUID(), name: name.slice(0, 40), url: normalizeDesktopBrowserUrl(value) }].slice(0, 6);
     persistStartPageData();
     pinnedDialogOpen.value = false;
   } catch {
@@ -333,6 +462,80 @@ function savePinned() {
 }
 function removePinned(id: string) { pinned.value = pinned.value.filter((item) => item.id !== id); persistStartPageData(); }
 function clearRecent() { recent.value = []; persistStartPageData(); }
+
+function handleSuggestionsOpenChange(open: boolean) {
+  suggestionsOpen.value = open && suggestions.value.length > 0;
+  if (!suggestionsOpen.value) activeSuggestionIndex.value = -1;
+}
+
+function handleSuggestionsInteractOutside(event: Event) {
+  const target = event.target;
+  if (target instanceof Node && addressAnchor.value?.contains(target)) event.preventDefault();
+}
+
+function handleAddressFocus(event: FocusEvent) {
+  (event.currentTarget as HTMLInputElement).select();
+  activeSuggestionIndex.value = -1;
+  suggestionsOpen.value = suggestions.value.length > 0;
+}
+
+function handleAddressInput() {
+  activeSuggestionIndex.value = suggestions.value.length ? 0 : -1;
+  suggestionsOpen.value = suggestions.value.length > 0;
+}
+
+function handleAddressKeydown(event: KeyboardEvent) {
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "l") {
+    event.preventDefault();
+    focusAddress();
+    return;
+  }
+  if (event.key === "Escape") {
+    if (!suggestionsOpen.value) return;
+    event.preventDefault();
+    handleSuggestionsOpenChange(false);
+    return;
+  }
+  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    if (!suggestions.value.length) return;
+    event.preventDefault();
+    suggestionsOpen.value = true;
+    const offset = event.key === "ArrowDown" ? 1 : -1;
+    activeSuggestionIndex.value = activeSuggestionIndex.value < 0
+      ? (offset > 0 ? 0 : suggestions.value.length - 1)
+      : (activeSuggestionIndex.value + offset + suggestions.value.length) % suggestions.value.length;
+    return;
+  }
+  if (event.key === "Tab" && activeSuggestionIndex.value >= 0) {
+    event.preventDefault();
+    address.value = suggestions.value[activeSuggestionIndex.value]?.url || address.value;
+    handleSuggestionsOpenChange(false);
+  }
+}
+
+function submitAddress() {
+  const suggestion = suggestionsOpen.value && activeSuggestionIndex.value >= 0
+    ? suggestions.value[activeSuggestionIndex.value]
+    : undefined;
+  handleSuggestionsOpenChange(false);
+  navigate(suggestion?.url || address.value);
+}
+
+function selectSuggestion(suggestion: BrowserAddressSuggestion) {
+  address.value = suggestion.url;
+  handleSuggestionsOpenChange(false);
+  navigate(suggestion.url);
+}
+
+function focusAddress() {
+  addressInput.value?.focus();
+  addressInput.value?.select();
+  suggestionsOpen.value = suggestions.value.length > 0;
+}
+
+function suggestionOptionId(index: number) {
+  return `${suggestionsListId}-option-${index}`;
+}
 
 function goBack() { guest.value?.goBack(); }
 function goForward() { guest.value?.goForward(); }
@@ -347,6 +550,15 @@ function stop() { guest.value?.stop(); }
 .embedded-browser-address { display: flex; min-width: 0; height: 30px; flex: 1; align-items: center; gap: 7px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-inset); padding: 0 9px; color: var(--text-muted); }
 .embedded-browser-address:focus-within { border-color: var(--brand-accent); box-shadow: 0 0 0 2px var(--brand-accent-soft); }
 .embedded-browser-address input { min-width: 0; flex: 1; border: 0; outline: 0; background: transparent; color: var(--text); font-size: 13px; font-weight: 400; }
+.embedded-browser-suggestions { max-height: var(--reka-popover-content-available-height); overflow: hidden; background: var(--surface); }
+.embedded-browser-suggestions-scroll { max-height: min(320px, var(--reka-popover-content-available-height)); }
+.embedded-browser-suggestions-list { display: grid; gap: 2px; }
+.embedded-browser-suggestion { display: grid; width: 100%; min-width: 0; grid-template-columns: 18px minmax(0, 1fr); align-items: center; gap: 7px; border: 0; border-radius: 4px; background: transparent; padding: 7px 8px; color: var(--text-muted); cursor: pointer; text-align: left; }
+.embedded-browser-suggestion-active { background: var(--surface-hover); color: var(--text); }
+.embedded-browser-suggestion-copy { display: grid; min-width: 0; gap: 2px; }
+.embedded-browser-suggestion-copy > span, .embedded-browser-suggestion-copy > small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 400; letter-spacing: 0; }
+.embedded-browser-suggestion-copy > span { color: var(--text); font-size: 13px; }
+.embedded-browser-suggestion-copy > small { color: var(--text-muted); font-size: 12px; }
 .embedded-browser-surface { position: relative; min-width: 0; min-height: 0; overflow: hidden; pointer-events: auto; background: #fff; }
 .embedded-browser-surface webview { display: flex; width: 100%; height: 100%; }
 .embedded-browser.start-page-active .embedded-browser-surface webview { visibility: hidden; }

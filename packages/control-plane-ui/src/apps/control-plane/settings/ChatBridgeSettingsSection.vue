@@ -253,7 +253,7 @@ async function confirmDelete(bridge?: ChatBridgeConfig) { if (!bridge) return; c
 .chat-summary span { align-items: center; color: var(--text-muted); display: inline-flex; font-size: 12px; gap: 5px; }
 .chat-row-status, .chat-row-actions { align-items: center; display: flex; }
 .chat-row-actions { gap: 4px; justify-content: flex-end; }
-.chat-empty-state { align-items: center; color: var(--text-muted); display: grid; justify-items: center; min-height: 220px; padding: 28px; text-align: center; }
+.chat-empty-state { align-content: center; align-items: center; color: var(--text-muted); display: grid; justify-items: center; min-height: 220px; padding: 28px; text-align: center; }
 .chat-empty-state strong { color: var(--text-strong); font-size: 14px; font-weight: 500; margin-top: 10px; }
 .chat-empty-state p { font-size: 12px; margin: 5px 0 12px; }
 :global(.chat-editor-dialog) { display: grid; grid-template-rows: auto minmax(0,1fr) auto; height: min(680px,calc(100vh - 40px)); }
