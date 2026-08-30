@@ -50,3 +50,23 @@ test("runtime dependency packaging rejects ambiguous installed workspace version
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("runtime dependency smoke links preserve bundled native packages", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "runtime-dependencies-"));
+  try {
+    writeManifest(path.join(root, "package.json"), { private: true });
+    writeManifest(path.join(root, "packages/control-plane/package.json"), { name: "control-plane" });
+    writeManifest(path.join(root, "packages/control-plane/node_modules/example/package.json"), { name: "example", version: "1.0.0" });
+    fs.mkdirSync(path.join(root, "apps"));
+    const packageRoot = path.join(root, "release/npm/control-plane");
+    writeManifest(path.join(packageRoot, "node_modules/node-pty/package.json"), { name: "node-pty", version: "1.1.0" });
+    const { materializeInstalledDependencies } = await import("../scripts/runtime-dependency-versions.mjs");
+    const cleanup = materializeInstalledDependencies(packageRoot, root, { example: "1.0.0" });
+    assert.equal(fs.existsSync(path.join(packageRoot, "node_modules/example/package.json")), true);
+    cleanup();
+    assert.equal(fs.existsSync(path.join(packageRoot, "node_modules/example")), false);
+    assert.equal(fs.existsSync(path.join(packageRoot, "node_modules/node-pty/package.json")), true);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

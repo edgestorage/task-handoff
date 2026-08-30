@@ -3,7 +3,7 @@ import path from "node:path";
 import writeFileAtomic from "write-file-atomic";
 import type { AiSessionStatus } from "@task-handoff/protocol/ai-sessions";
 import { AiSessionIdentityIndex, providerSessionIdentity } from "./identity-index";
-import { sanitizePersistedAiSession } from "./persistence";
+import { decodePersistedAiSession, encodePersistedAiSession } from "./persistence";
 
 export type AiSessionFileStoreOptions = {
   dir: string;
@@ -36,18 +36,20 @@ function readJson(filePath: string): unknown {
 }
 
 /**
- * Owns all file and provider-index mutations for persisted AI sessions.
- * The index is deliberately self-healing and never authoritative: an index
- * miss scans disk, while every hit is re-read and identity-checked.
+ * Owns the process-local AI Session authority and its restart persistence.
+ * Disk is read once during construction; all runtime reads use the in-memory
+ * map, and successful writes update the map and provider index together.
  */
 export class AiSessionFileStore {
   readonly dir: string;
+  private readonly sessions = new Map<string, AiSessionStatus>();
   private readonly index = new AiSessionIdentityIndex();
   private readonly selectProviderCandidate: (sessions: readonly AiSessionStatus[]) => AiSessionStatus | undefined;
 
   constructor(options: AiSessionFileStoreOptions) {
     this.dir = path.resolve(options.dir);
     this.selectProviderCandidate = options.selectProviderCandidate || newestSession;
+    this.load();
   }
 
   sessionPath(id: string) {
@@ -59,41 +61,26 @@ export class AiSessionFileStore {
     if (!isSafeSessionId(id)) {
       return undefined;
     }
-    const session = sanitizePersistedAiSession(readJson(this.sessionPath(id)));
-    if (!session || session.id !== id) {
-      this.index.remove(id);
-      return undefined;
-    }
-    return session;
+    return this.sessions.get(id);
   }
 
   list() {
-    this.ensureDirectory();
-    let files: string[];
-    try {
-      files = fs.readdirSync(this.dir).filter((name) => name.endsWith(".json"));
-    } catch {
-      return [];
-    }
-    const sessions = files
-      .map((name) => ({
-        expectedId: name.slice(0, -".json".length),
-        session: sanitizePersistedAiSession(readJson(path.join(this.dir, name))),
-      }))
-      .filter(({ expectedId, session }) => session?.id === expectedId)
-      .map(({ session }) => session)
-      .filter((session): session is AiSessionStatus => Boolean(session))
+    return [...this.sessions.values()]
       .sort((lhs, rhs) => Date.parse(rhs.updatedAt) - Date.parse(lhs.updatedAt));
-    this.index.rebuild(sessions);
-    return sessions;
   }
 
   save(session: AiSessionStatus) {
     assertSafeSessionId(session.id);
     this.ensureDirectory();
-    writeFileAtomic.sync(this.sessionPath(session.id), `${JSON.stringify(session, null, 2)}\n`, { encoding: "utf8" });
-    this.index.replace(session);
-    return session;
+    const persisted = encodePersistedAiSession(session);
+    writeFileAtomic.sync(this.sessionPath(session.id), `${JSON.stringify(persisted, null, 2)}\n`, { encoding: "utf8" });
+    const committed = decodePersistedAiSession(persisted);
+    if (!committed) {
+      throw new Error(`Failed to decode persisted AI session ${JSON.stringify(session.id)}`);
+    }
+    this.sessions.set(committed.id, committed);
+    this.index.replace(committed);
+    return committed;
   }
 
   update(id: string, mutate: (current: AiSessionStatus) => AiSessionStatus) {
@@ -110,17 +97,17 @@ export class AiSessionFileStore {
 
   remove(id: string) {
     const filePath = this.sessionPath(id);
-    let removed = false;
+    const existed = this.sessions.has(id);
     try {
       fs.rmSync(filePath);
-      removed = true;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
         throw error;
       }
     }
+    this.sessions.delete(id);
     this.index.remove(id);
-    return removed;
+    return existed;
   }
 
   removeMany(ids: Iterable<string>) {
@@ -138,24 +125,32 @@ export class AiSessionFileStore {
     }
 
     const indexed = this.index.candidates(identity.agent, identity.providerSessionId);
-    const valid = indexed
-      .map((id) => this.get(id))
+    const matches = indexed
+      .map((id) => this.sessions.get(id))
       .filter((session): session is AiSessionStatus => Boolean(
         session
         && session.agent === identity.agent
         && session.providerSessionId === identity.providerSessionId,
       ));
-    if (valid.length) {
-      return this.selectProviderCandidate(valid);
-    }
-
-    // Do not negatively cache misses. A different process may have atomically
-    // added a session since the last index build.
-    const matches = this.list().filter((session) => (
-      session.agent === identity.agent
-      && session.providerSessionId === identity.providerSessionId
-    ));
     return matches.length ? this.selectProviderCandidate(matches) : undefined;
+  }
+
+  private load() {
+    this.ensureDirectory();
+    let files: string[];
+    try {
+      files = fs.readdirSync(this.dir).filter((name) => name.endsWith(".json"));
+    } catch {
+      files = [];
+    }
+    for (const name of files) {
+      const expectedId = name.slice(0, -".json".length);
+      const session = decodePersistedAiSession(readJson(path.join(this.dir, name)));
+      if (session?.id === expectedId) {
+        this.sessions.set(session.id, session);
+      }
+    }
+    this.index.rebuild([...this.sessions.values()]);
   }
 
   private ensureDirectory() {

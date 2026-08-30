@@ -33,8 +33,10 @@ import {
   RepositoryAiSessionWorkspaceInspectSchema,
   RepositoryAiSessionWorkspaceSchema,
   RepositoryWorkspaceAiSessionCreateSchema,
+  RepositoryWorkspaceAiSessionCreateRefSchema,
   RepositoryWriteFileRequestSchema,
 } from "@task-handoff/protocol/repository";
+import { AiSessionMessageAttachmentSchema, type AiSessionMessageAttachment } from "@task-handoff/protocol/ai-sessions";
 import { RepositoryChangesService, RepositoryOperationError } from "./changes";
 import { RepositoryBranchService } from "./branches";
 import { RepositoryFileError, RepositoryFileService } from "./files";
@@ -106,7 +108,10 @@ export function registerRepositoryRoutes(app: FastifyInstance, options: Register
 
   app.post<{ Body: unknown }>("/api/repository/ai-session-workspace/create", async (request, reply) => {
     try {
-      const body = RepositoryWorkspaceAiSessionCreateSchema.parse(request.body || {});
+      // Compatibility for v0.0.21: retain the materialized create payload while
+      // accepting new controlled-instance draft handles.
+      const referenced = RepositoryWorkspaceAiSessionCreateRefSchema.safeParse(request.body || {});
+      const body = referenced.success ? referenced.data : RepositoryWorkspaceAiSessionCreateSchema.parse(request.body || {});
       const fingerprint = aiSessionCreateRequestFingerprint(body);
       const completed = options.aiSessionCreate.completedResult(body.clientRequestId, fingerprint);
       if (completed) return { data: completed };
@@ -447,7 +452,7 @@ async function inspectAiSessionWorkspace(services: WorkspaceServices) {
 async function createWorkspaceAiSession(
   services: WorkspaceServices,
   coordinator: AiSessionCreateCoordinator,
-  body: z.infer<typeof RepositoryWorkspaceAiSessionCreateSchema>,
+  body: z.infer<typeof RepositoryWorkspaceAiSessionCreateSchema> | z.infer<typeof RepositoryWorkspaceAiSessionCreateRefSchema>,
   idempotencyFingerprint: string,
 ) {
   const source = await requireRepository(services.resolve);
@@ -494,7 +499,23 @@ async function createWorkspaceAiSession(
 
   try {
     const { gitSelection: _gitSelection, cwd: _cwd, ...input } = body;
-    return await coordinator.create({ ...input, cwd: workspace, idempotencyFingerprint });
+    const attachments: AiSessionMessageAttachment[] = [];
+    const draftAttachmentIds: string[] = [];
+    for (const attachment of body.attachments) {
+      if (attachment.source.type === "upload-ref") draftAttachmentIds.push(attachment.id);
+      else attachments.push(AiSessionMessageAttachmentSchema.parse(attachment));
+    }
+    return await coordinator.create({
+      ...input,
+      cwd: workspace,
+      attachments,
+      ...(draftAttachmentIds.length ? {
+        draftAttachmentIds,
+        draftScopeType: "create-request",
+        draftScopeId: body.clientRequestId,
+      } : {}),
+      idempotencyFingerprint,
+    });
   } catch (error) {
     if (createdWorktreeId) await compensateFailedWorktreeLaunch(services.worktrees, createdWorktreeId);
     throw error;

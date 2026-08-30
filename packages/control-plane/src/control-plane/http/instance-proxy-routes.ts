@@ -1,20 +1,45 @@
-import type { FastifyInstance, FastifyReply } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { Readable, Transform } from "node:stream";
 import type { ControlPlaneService } from "../application/service.ts";
+import type { ControlPlaneAuth } from "../auth/service.ts";
 import { CONTROL_PLANE_SESSION_COOKIE } from "../auth/service.ts";
 import { PUBLIC_CONTROL_PLANE_ROUTE } from "./auth-boundary.ts";
+import { PROXY_HOP_BY_HOP_HEADERS, proxyWebSocketHeaders, proxyWebSocketProtocols } from "@task-handoff/core/core/http-proxy";
+import { CONTROL_PLANE_CREDENTIAL_HEADERS } from "./proxy-headers.ts";
+import type { AuthorizationConnectionRegistry } from "../auth/authorization-connections.ts";
+import { controlPlaneRequestActor } from "./request-actor.ts";
 
-const HOP_BY_HOP_HEADERS = new Set(["connection", "content-length", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade"]);
-const CONTROL_PLANE_IDENTITY_REQUEST_HEADERS = new Set(["authorization"]);
 const DECODED_RESPONSE_HEADERS = new Set(["content-encoding"]);
+const INSTANCE_WEBSOCKET_BLOCKED_HEADERS = new Set(["host", ...CONTROL_PLANE_CREDENTIAL_HEADERS]);
+const MAX_PROXY_REQUEST_BODY_BYTES = 64 * 1024 * 1024;
 
 export type RegisterInstanceProxyRoutesOptions = {
   app: FastifyInstance;
   service: ControlPlaneService;
+  auth: ControlPlaneAuth;
+  authorizationConnections: AuthorizationConnectionRegistry;
 };
 
-export function registerInstanceProxyRoutes({ app, service }: RegisterInstanceProxyRoutesOptions) {
+export function registerInstanceProxyRoutes({ app, service, auth, authorizationConnections }: RegisterInstanceProxyRoutesOptions) {
   registerRawProxyBodyParsers(app);
+
+  const appAccessTarget = async (token: string, mode: "tty" | "vnc" | "web", suffix = "") => {
+    const target = await service.appAccessProxyTarget(token, mode, suffix);
+    if (target.access.authorization) {
+      await auth.assertAppAccessAuthorization({
+        ...target.access.authorization,
+        instanceId: target.instance.id,
+        nodeId: target.instance.nodeId,
+      });
+    }
+    return target;
+  };
+
+  const trackSocket = (socket: ProxySocket, binding: { userId: string; authorizationRevision: number } | undefined) => {
+    if (!binding) return;
+    const release = authorizationConnections.track(binding, () => socket.close(4001, "Authorization changed."));
+    socket.on("close", release);
+  };
 
   const proxyInstanceWebSocket = async (socket: ProxySocket, request: ProxyRequest) => {
     const params = request.params as { id: string; "*": string };
@@ -22,7 +47,9 @@ export function registerInstanceProxyRoutes({ app, service }: RegisterInstancePr
     const queryIndex = request.url.indexOf("?");
     const query = queryIndex >= 0 ? request.url.slice(queryIndex) : "";
     try {
-      await service.proxyInstanceWebSocket(params.id, socket, `/${suffix}${query}`, proxyWebSocketProtocols(request.headers), proxyWebSocketHeaders(request.headers));
+      const actor = controlPlaneRequestActor(request as FastifyRequest);
+      trackSocket(socket, actor?.type === "user" ? actor : undefined);
+      await service.proxyInstanceWebSocket(params.id, socket, `/${suffix}${query}`, proxyWebSocketProtocols(request.headers), instanceProxyWebSocketHeaders(request.headers));
     } catch {
       socket.close(1011, "Instance websocket endpoint is not reachable.");
     }
@@ -31,7 +58,7 @@ export function registerInstanceProxyRoutes({ app, service }: RegisterInstancePr
   app.get("/api/app-access/session", { config: PUBLIC_CONTROL_PLANE_ROUTE }, async (request) => {
     const token = queryToken(request.url);
     const mode = (request.query as { mode?: string }).mode === "vnc" ? "vnc" : (request.query as { mode?: string }).mode === "web" ? "web" : "tty";
-    const target = await service.appAccessProxyTarget(token, mode);
+    const target = await appAccessTarget(token, mode);
     return {
       data: {
         mode,
@@ -51,8 +78,9 @@ export function registerInstanceProxyRoutes({ app, service }: RegisterInstancePr
 
   app.get("/apps/access/tty/ws", { websocket: true, config: PUBLIC_CONTROL_PLANE_ROUTE }, async (socket, request) => {
     try {
-      const target = await service.appAccessProxyTarget(queryToken(request.url), "tty");
-      await service.proxyInstanceWebSocket(target.instance.id, socket, target.path, proxyWebSocketProtocols(request.headers), proxyWebSocketHeaders(request.headers));
+      const target = await appAccessTarget(queryToken(request.url), "tty");
+      trackSocket(socket, target.access.authorization);
+      await service.proxyInstanceWebSocket(target.instance.id, socket, target.path, proxyWebSocketProtocols(request.headers), instanceProxyWebSocketHeaders(request.headers));
     } catch {
       socket.close(1011, "TTY access link is invalid or expired.");
     }
@@ -61,8 +89,9 @@ export function registerInstanceProxyRoutes({ app, service }: RegisterInstancePr
   const proxyVncAccessWebSocket = async (socket: ProxySocket, request: ProxyRequest) => {
     const params = request.params as { token?: string; "*": string };
     try {
-      const target = await service.appAccessProxyTarget(params.token || queryToken(request.url), "vnc", params["*"] || "");
-      await service.proxyInstanceWebSocket(target.instance.id, socket, target.path, proxyWebSocketProtocols(request.headers), proxyWebSocketHeaders(request.headers));
+      const target = await appAccessTarget(params.token || queryToken(request.url), "vnc", params["*"] || "");
+      trackSocket(socket, target.access.authorization);
+      await service.proxyInstanceWebSocket(target.instance.id, socket, target.path, proxyWebSocketProtocols(request.headers), instanceProxyWebSocketHeaders(request.headers));
     } catch {
       socket.close(1011, "VNC access link is invalid or expired.");
     }
@@ -75,7 +104,7 @@ export function registerInstanceProxyRoutes({ app, service }: RegisterInstancePr
     wsHandler: proxyVncAccessWebSocket,
     handler: async (request, reply) => {
       const params = request.params as { "*": string };
-      const target = await service.appAccessProxyTarget(queryToken(request.url), "vnc", params["*"] || "");
+      const target = await appAccessTarget(queryToken(request.url), "vnc", params["*"] || "");
       const proxied = await proxyInstanceHttp(service, reply, target.instance.id, target.path, {
         method: request.method,
         headers: proxyHeaders(request.headers),
@@ -91,7 +120,7 @@ export function registerInstanceProxyRoutes({ app, service }: RegisterInstancePr
     wsHandler: proxyVncAccessWebSocket,
     handler: async (request, reply) => {
       const params = request.params as { token: string; "*": string };
-      const target = await service.appAccessProxyTarget(params.token, "vnc", params["*"] || "");
+      const target = await appAccessTarget(params.token, "vnc", params["*"] || "");
       const proxied = await proxyInstanceHttp(service, reply, target.instance.id, target.path, {
         method: request.method,
         headers: proxyHeaders(request.headers),
@@ -108,7 +137,7 @@ export function registerInstanceProxyRoutes({ app, service }: RegisterInstancePr
     const proxied = await proxyInstanceHttp(service, reply, params.id, "/", {
       method: request.method,
       headers: proxyHeaders(request.headers),
-      body: requestBody(request.body),
+      body: await requestBody(request.body),
     });
     return replyInstanceProxyResponse(reply, proxied, params.id, "/");
   });
@@ -143,7 +172,7 @@ export function registerInstanceProxyRoutes({ app, service }: RegisterInstancePr
       const proxied = await proxyInstanceHttp(service, reply, params.id, `/${suffix}${query}`, {
         method: request.method,
         headers: proxyHeaders(request.headers),
-        body: requestBody(request.body),
+        body: await requestBody(request.body),
       });
       return replyProxyResponse(reply, proxied);
     },
@@ -152,7 +181,7 @@ export function registerInstanceProxyRoutes({ app, service }: RegisterInstancePr
 
 type ProxySocket = {
   on: (event: string, listener: (...args: unknown[]) => void) => void;
-  send: (data: unknown) => void;
+  send: (data: unknown, options?: { binary?: boolean }) => void;
   close: (code?: number, reason?: string) => void;
   readyState: number;
 };
@@ -168,7 +197,7 @@ function proxyHeaders(headers: Record<string, unknown>) {
     Object.entries(headers)
       .flatMap(([key, value]) => {
         const lower = key.toLowerCase();
-        if (HOP_BY_HOP_HEADERS.has(lower) || CONTROL_PLANE_IDENTITY_REQUEST_HEADERS.has(lower) || typeof value === "undefined") return [];
+        if (PROXY_HOP_BY_HOP_HEADERS.has(lower) || lower === "authorization" || typeof value === "undefined") return [];
         const text = Array.isArray(value) ? value.join(", ") : String(value);
         if (lower !== "cookie") return [[key, text]];
         const forwarded = withoutControlPlaneSessionCookie(text);
@@ -185,26 +214,8 @@ function withoutControlPlaneSessionCookie(value: string) {
     .join("; ");
 }
 
-function proxyWebSocketHeaders(headers: Record<string, unknown>) {
-  return Object.fromEntries(
-    Object.entries(proxyHeaders(headers)).filter(([key]) => {
-      const lower = key.toLowerCase();
-      if (lower === "host" || lower === "cookie" || lower === "authorization") {
-        return false;
-      }
-      return !lower.startsWith("sec-websocket-") || lower === "sec-websocket-origin";
-    }),
-  );
-}
-
-function proxyWebSocketProtocols(headers: Record<string, unknown>) {
-  const value = headers["sec-websocket-protocol"];
-  const text = Array.isArray(value) ? value.join(",") : typeof value === "string" ? value : "";
-  const protocols = text
-    .split(",")
-    .map((protocol) => protocol.trim())
-    .filter(Boolean);
-  return protocols.length ? protocols : undefined;
+function instanceProxyWebSocketHeaders(headers: Record<string, unknown>) {
+  return proxyWebSocketHeaders(proxyHeaders(headers), { blockedHeaders: INSTANCE_WEBSOCKET_BLOCKED_HEADERS });
 }
 
 type StreamingProxyResponse = { status: number; headers: Record<string, string>; body: ReadableStream<Uint8Array> | null };
@@ -225,7 +236,7 @@ function proxyInstanceHttp(
 function replyProxyResponse(reply: FastifyReply, response: StreamingProxyResponse, transform?: Transform) {
   for (const [key, value] of Object.entries(response.headers)) {
     const lower = key.toLowerCase();
-    if (!HOP_BY_HOP_HEADERS.has(lower) && !DECODED_RESPONSE_HEADERS.has(lower)) {
+    if (!PROXY_HOP_BY_HOP_HEADERS.has(lower) && !DECODED_RESPONSE_HEADERS.has(lower)) {
       reply.header(key, value);
     }
   }
@@ -292,10 +303,26 @@ function replyInstanceProxyResponse(reply: FastifyReply, response: StreamingProx
   return replyProxyResponse(reply, response, transform);
 }
 
-function requestBody(body: unknown) {
+async function requestBody(body: unknown) {
   if (Buffer.isBuffer(body)) return body;
   if (body instanceof Uint8Array) return Buffer.from(body);
   if (body instanceof URLSearchParams) return body.toString();
+  if (body && typeof body === "object" && Symbol.asyncIterator in body) {
+    const chunks: Buffer[] = [];
+    let length = 0;
+    for await (const value of body as AsyncIterable<unknown>) {
+      const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value as Uint8Array);
+      length += chunk.length;
+      if (length > MAX_PROXY_REQUEST_BODY_BYTES) {
+        throw Object.assign(new Error("Instance proxy request body exceeds the configured limit."), {
+          statusCode: 413,
+          code: "INSTANCE_PROXY_REQUEST_TOO_LARGE",
+        });
+      }
+      chunks.push(chunk);
+    }
+    return Buffer.concat(chunks, length);
+  }
   return typeof body === "string" ? body : body === undefined || body === null ? undefined : JSON.stringify(body);
 }
 

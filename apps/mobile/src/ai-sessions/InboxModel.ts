@@ -28,7 +28,7 @@ export function inboxCardContent(session: ControlPlaneAiSessionSummary, messages
   return {
     prompt: turn?.userPrompt?.trim() || session.userPrompt?.trim() || session.title?.trim() || t('sessions.untitled'),
     response: streamed || turn?.lastMessage?.trim() || turn?.summary?.trim() || session.lastMessage?.trim() || session.summary?.trim() || t('sessions.noResponse'),
-    turnCount: turns.length,
+    turnCount: session.turnCount ?? turns.length,
     turnIndex: Math.max(0, turns.length - 1),
   };
 }

@@ -1,13 +1,12 @@
 <template>
   <section class="modal-section settings-panel-surface node-detail-panel">
-    <ScrollArea v-if="selectedNode" class="node-detail-content">
-      <div class="node-detail-content-inner">
-        <div class="node-detail-header">
-          <div class="node-detail-identity">
-            <span>{{ status.locationLabel(selectedNode) }}</span>
+    <Tabs v-if="selectedNode" v-model="activeTab" class="node-detail-tabs">
+          <div class="node-detail-fixed-header">
+            <div class="node-detail-header">
+              <div class="node-detail-identity">
             <div class="node-detail-title-row">
               <strong>{{ selectedNode.name }}</strong>
-              <Tooltip>
+              <Tooltip @update:open="refreshNodeConnectionDiagnostics">
                 <RekaTooltipTrigger
                   as="button"
                   type="button"
@@ -24,70 +23,88 @@
                     <span v-if="status.build(selectedNode.id)?.imageRef"><b>{{ t("settings.nodeDetail.image") }}</b><em>{{ status.build(selectedNode.id)?.imageRef }}</em></span>
                     <span v-if="status.build(selectedNode.id)?.builtAt"><b>{{ t("settings.nodeDetail.built") }}</b><em>{{ status.build(selectedNode.id)?.builtAt }}</em></span>
                   </div>
+                  <NodeConnectionDiagnostics class="node-status-connection-diagnostics" :diagnostics="selectedNode.connectionDiagnostics" :event-transport="status.eventTransport(selectedNode.id)" />
+                </TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <RekaTooltipTrigger
+                  as="button"
+                  type="button"
+                  class="node-detail-inline-meta"
+                  :aria-label="`${status.locationLabel(selectedNode)} · ${nodeEndpointDisplay(selectedNode.endpoint) || localizedStatus(nodeConnectionModeKeys, selectedNode.connectionMode)}`"
+                >
+                  <MapPin :size="13" aria-hidden="true" />
+                  <span>{{ status.locationLabel(selectedNode) }}</span>
+                  <span aria-hidden="true">·</span>
+                  <code>{{ nodeEndpointDisplay(selectedNode.endpoint) || localizedStatus(nodeConnectionModeKeys, selectedNode.connectionMode) }}</code>
+                </RekaTooltipTrigger>
+                <TooltipContent class="node-detail-context-tooltip" align="start" side="bottom" :side-offset="6">
+                  <div class="node-diagnostic-tooltip-grid">
+                    <span><b>{{ t("settings.fields.location") }}</b><em>{{ status.locationLabel(selectedNode) }}</em></span>
+                    <span><b>{{ t("settings.fields.endpoint") }}</b><em>{{ nodeEndpointDisplay(selectedNode.endpoint) || t("settings.nodeDetail.unknown") }}</em></span>
+                    <span><b>{{ t("settings.nodeDetail.remote") }}</b><em>{{ localizedStatus(nodeConnectionModeKeys, selectedNode.connectionMode) }}</em></span>
+                  </div>
                 </TooltipContent>
               </Tooltip>
             </div>
-            <div class="node-detail-meta">
-              <code v-if="nodeEndpointDisplay(selectedNode.endpoint)" :title="nodeEndpointDisplay(selectedNode.endpoint)">{{ nodeEndpointDisplay(selectedNode.endpoint) }}</code>
-              <span v-if="nodeEndpointDisplay(selectedNode.endpoint)" aria-hidden="true">·</span>
-              <span class="node-connection-mode">{{ localizedStatus(nodeConnectionModeKeys, selectedNode.connectionMode) }}</span>
-            </div>
-          </div>
-          <div class="node-detail-header-actions">
-            <Button variant="outline" size="sm" :disabled="headerActionState.check.disabled" @click="actions.checkSettingsNode(selectedNode.id)">
-              <RefreshCw :size="14" />
-              <span>{{ headerActionState.check.label }}</span>
-            </Button>
-            <DropdownMenu>
-              <DropdownMenuTrigger as-child>
-                <Button
-                  variant="outline"
-                  size="icon-sm"
-                  :aria-busy="headerActionState.menu.busy"
-                  :aria-label="headerActionState.menu.label"
-                >
-                  <RefreshCw v-if="headerActionState.menu.busy" class="animate-spin motion-reduce:animate-none" :size="16" />
-                  <MoreHorizontal v-else :size="16" />
+              </div>
+              <div class="node-detail-header-actions">
+                <Button variant="outline" size="sm" :disabled="headerActionState.check.disabled" @click="actions.checkSettingsNode(selectedNode.id)">
+                  <RefreshCw :size="14" />
+                  <span>{{ headerActionState.check.label }}</span>
                 </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent class="node-detail-action-menu" align="end" :side-offset="6">
-                <DropdownMenuItem class="node-detail-action-item" :disabled="headerActionState.rename.disabled" @select="actions.openNodeRename(selectedNode)">
-                  <Pencil :size="14" />
-                  <span>
-                    <strong>{{ headerActionState.rename.label }}</strong>
-                    <small>{{ t("settings.nodeDetail.renameDescription") }}</small>
-                  </span>
-                </DropdownMenuItem>
-                <DropdownMenuItem class="node-detail-action-item" :disabled="headerActionState.pairingInvite.disabled" @select="actions.createPairingInviteForNode(selectedNode.id)">
-                  <KeyRound :size="14" />
-                  <span>
-                    <strong>{{ headerActionState.pairingInvite.label }}</strong>
-                    <small>{{ t("settings.nodeDetail.pairingDescription") }}</small>
-                  </span>
-                </DropdownMenuItem>
-                <template v-if="headerActionState.canDelete">
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem class="node-detail-action-item danger" :disabled="headerActionState.remove.disabled" @select="actions.removeNode(selectedNode)">
-                    <Trash2 :size="14" />
-                    <span>
-                      <strong>{{ headerActionState.remove.label }}</strong>
-                      <small>{{ t("settings.nodeDetail.removeDescription") }}</small>
-                    </span>
-                  </DropdownMenuItem>
-                </template>
-              </DropdownMenuContent>
-            </DropdownMenu>
+                <DropdownMenu>
+                  <DropdownMenuTrigger as-child>
+                    <Button
+                      variant="outline"
+                      size="icon-sm"
+                      :aria-busy="headerActionState.menu.busy"
+                      :aria-label="headerActionState.menu.label"
+                    >
+                      <RefreshCw v-if="headerActionState.menu.busy" class="animate-spin motion-reduce:animate-none" :size="16" />
+                      <MoreHorizontal v-else :size="16" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent class="node-detail-action-menu" align="end" :side-offset="6">
+                    <DropdownMenuItem class="node-detail-action-item" :disabled="headerActionState.rename.disabled" @select="actions.openNodeRename(selectedNode)">
+                      <Pencil :size="14" />
+                      <span>
+                        <strong>{{ headerActionState.rename.label }}</strong>
+                        <small>{{ t("settings.nodeDetail.renameDescription") }}</small>
+                      </span>
+                    </DropdownMenuItem>
+                    <DropdownMenuItem class="node-detail-action-item" :disabled="headerActionState.pairingInvite.disabled" @select="actions.createPairingInviteForNode(selectedNode.id)">
+                      <KeyRound :size="14" />
+                      <span>
+                        <strong>{{ headerActionState.pairingInvite.label }}</strong>
+                        <small>{{ t("settings.nodeDetail.pairingDescription") }}</small>
+                      </span>
+                    </DropdownMenuItem>
+                    <template v-if="headerActionState.canDelete">
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem class="node-detail-action-item danger" :disabled="headerActionState.remove.disabled" @select="actions.removeNode(selectedNode)">
+                        <Trash2 :size="14" />
+                        <span>
+                          <strong>{{ headerActionState.remove.label }}</strong>
+                          <small>{{ t("settings.nodeDetail.removeDescription") }}</small>
+                        </span>
+                      </DropdownMenuItem>
+                    </template>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+            </div>
+
+            <TabsList class="node-detail-tab-list" :aria-label="t('settings.nodeDetail.sections')">
+              <TabsTrigger v-for="tab in tabs" :key="tab.value" class="node-detail-tab-trigger" :value="tab.value">
+                <component :is="tab.icon" :size="14" />
+                <span>{{ tab.label }}</span>
+              </TabsTrigger>
+            </TabsList>
           </div>
-        </div>
 
-        <Tabs v-model="activeTab" class="node-detail-tabs">
-          <TabsList class="node-detail-tab-list" :aria-label="t('settings.nodeDetail.sections')">
-            <TabsTrigger v-for="tab in tabs" :key="tab.value" class="node-detail-tab-trigger" :value="tab.value">
-              <component :is="tab.icon" :size="14" />
-              <span>{{ tab.label }}</span>
-            </TabsTrigger>
-          </TabsList>
-
+      <ScrollArea class="node-detail-content">
+        <div class="node-detail-content-inner">
           <TabsContent class="node-detail-tab-content" value="overview">
             <div class="node-metrics">
               <div>
@@ -195,7 +212,7 @@
                     </Button>
                   </div>
                 </div>
-                <p v-if="!resources.runtimes.length" class="settings-empty">{{ t("settings.nodeDetail.noRuntimes") }}</p>
+                <NodeResourceEmptyState v-if="!resources.runtimes.length" :icon="Box" :message="t('settings.nodeDetail.noRuntimes')" />
               </div>
             </div>
           </TabsContent>
@@ -237,7 +254,7 @@
                       </Button>
                     </div>
                   </div>
-                  <p v-if="nodeUpdateCheck" class="section-description">
+                  <p v-if="nodeUpdateCheck" class="managed-update-impact">
                     {{ t("settings.nodeDetail.updateImpact", { restarting: nodeUpdateCheck.impact.restartInstanceCount, active: nodeUpdateCheck.impact.activeInstanceCount, stopped: nodeUpdateCheck.impact.stoppedInstanceCount }) }}
                   </p>
                 </section>
@@ -261,7 +278,7 @@
                         <Badge :variant="instance.runtimeVersion?.phase === 'matched' ? 'default' : 'secondary'">{{ runtimeVersionPhase(instance) }}</Badge>
                       </div>
                     </div>
-                    <p v-if="!resources.instances.length" class="settings-empty">{{ t("settings.nodeDetail.noControlledInstances") }}</p>
+                    <NodeResourceEmptyState v-if="!resources.instances.length" :icon="Boxes" :message="t('settings.nodeDetail.noControlledInstances')" />
                   </div>
                 </section>
               </div>
@@ -286,7 +303,7 @@
                   </div>
                   <Badge :variant="job.status === 'succeeded' ? 'default' : 'secondary'">{{ localizedStatus(updateJobStatusKeys, job.status) }}</Badge>
                 </div>
-                <p v-if="!resources.updateJobs.length" class="settings-empty">{{ t("settings.nodeDetail.noUpdateJobs") }}</p>
+                <NodeResourceEmptyState v-if="!resources.updateJobs.length" :icon="History" :message="t('settings.nodeDetail.noUpdateJobs')" />
               </div>
             </div>
           </TabsContent>
@@ -296,10 +313,6 @@
               <div class="section-head">
                 <span>{{ t("settings.nodeDetail.localFolderCount", { count: resources.localFolders.length }) }}</span>
                 <div class="node-folder-add-controls">
-                  <ControlPlaneSelect :model-value="resources.nodeFolderDefaultImageId || '__none__'" :placeholder="t('settings.nodeDetail.defaultImage')" @update:model-value="actions.updateNodeFolderDefaultImage">
-                    <ControlPlaneSelectItem value="__none__">{{ t("settings.nodeDetail.noDefaultImage") }}</ControlPlaneSelectItem>
-                    <ControlPlaneSelectItem v-for="image in resources.nodeFolderImageOptions" :key="image.id" :value="image.id">{{ image.name }}</ControlPlaneSelectItem>
-                  </ControlPlaneSelect>
                   <Button variant="outline" size="sm" :disabled="busy.creatingNodeLocalFolder" @click="actions.submitNodeLocalFolder">
                     <FolderOpen :size="14" />
                     <span>{{ busy.creatingNodeLocalFolder ? t("settings.nodeDetail.adding") : t("settings.nodeDetail.add") }}</span>
@@ -310,15 +323,21 @@
                 <div class="settings-scroll-content">
                   <div v-for="folder in resources.localFolders" :key="folder.id" class="node-resource-row">
                     <div>
-                      <strong>{{ folder.name }}</strong>
+                      <strong>{{ nodeLocalFolderDisplayName(folder) }}</strong>
                       <code>{{ folder.path }}</code>
                     </div>
-                    <Button variant="outline" size="sm" :disabled="busy.deletingNodeLocalFolderId === folder.id" @click="actions.removeNodeLocalFolder(folder.id)">
-                      <Trash2 :size="14" />
-                      <span>{{ busy.deletingNodeLocalFolderId === folder.id ? t("settings.nodeDetail.deleting") : t("settings.nodeDetail.delete") }}</span>
-                    </Button>
+                    <div class="node-resource-actions">
+                      <Button v-if="canRenameLocalFolders" variant="outline" size="sm" :disabled="Boolean(busy.renamingNodeLocalFolderId || busy.deletingNodeLocalFolderId)" @click="openLocalFolderRename(folder)">
+                        <Pencil :size="14" />
+                        <span>{{ t("settings.nodeDetail.renameLocalFolder") }}</span>
+                      </Button>
+                      <Button variant="outline" size="sm" :disabled="busy.deletingNodeLocalFolderId === folder.id || Boolean(busy.renamingNodeLocalFolderId)" @click="actions.removeNodeLocalFolder(folder.id)">
+                        <Trash2 :size="14" />
+                        <span>{{ busy.deletingNodeLocalFolderId === folder.id ? t("settings.nodeDetail.deleting") : t("settings.nodeDetail.delete") }}</span>
+                      </Button>
+                    </div>
                   </div>
-                  <p v-if="!resources.localFolders.length" class="settings-empty">{{ t("settings.nodeDetail.noLocalFolders") }}</p>
+                  <NodeResourceEmptyState v-if="!resources.localFolders.length" :icon="FolderOpen" :message="t('settings.nodeDetail.noLocalFolders')" />
                 </div>
               </ScrollArea>
               <p v-if="resources.localFoldersError" class="control-plane-error">{{ resources.localFoldersError }}</p>
@@ -342,7 +361,7 @@
                       <code>{{ image.id }} · {{ image.size || t("settings.nodeDetail.unknownSize") }} · {{ image.createdSince || t("settings.nodeDetail.unknownAge") }}</code>
                     </div>
                   </div>
-                  <p v-if="!resources.images.length" class="settings-empty">{{ t("settings.nodeDetail.noImages") }}</p>
+                  <NodeResourceEmptyState v-if="!resources.images.length" :icon="Container" :message="t('settings.nodeDetail.noImages')" />
                 </div>
               </ScrollArea>
               <p v-if="resources.imagesError" class="control-plane-error">{{ resources.imagesError }}</p>
@@ -367,7 +386,7 @@
                       </Button>
                     </div>
                   </div>
-                  <p v-if="!resources.instances.length" class="settings-empty">{{ t("settings.nodeDetail.noInstances") }}</p>
+                  <NodeResourceEmptyState v-if="!resources.instances.length" :icon="Boxes" :message="t('settings.nodeDetail.noInstances')" />
                 </div>
               </ScrollArea>
             </div>
@@ -401,7 +420,7 @@
                     </Button>
                   </div>
                 </div>
-                <p v-if="!resources.controlPlanePairings.length" class="settings-empty">{{ t("settings.nodeDetail.noPairedKeys") }}</p>
+                <NodeResourceEmptyState v-if="!resources.controlPlanePairings.length" :icon="KeyRound" :message="t('settings.nodeDetail.noPairedKeys')" />
               </div>
               <p v-if="resources.remoteKeysError" class="control-plane-error">{{ resources.remoteKeysError }}</p>
             </div>
@@ -422,14 +441,21 @@
                     <small v-if="connection.error" class="control-plane-error">{{ connection.error }}</small>
                   </div>
                   <div class="settings-row-actions">
-                    <Badge :variant="connection.status === 'connected' ? 'default' : 'secondary'">{{ localizedStatus(remoteConnectStatusKeys, connection.status) }}</Badge>
+                    <Tooltip @update:open="refreshConnectionDiagnostics">
+                      <RekaTooltipTrigger as="button" type="button" class="node-connection-status-trigger">
+                        <Badge :variant="connection.status === 'connected' ? 'default' : 'secondary'">{{ localizedStatus(remoteConnectStatusKeys, connection.status) }}</Badge>
+                      </RekaTooltipTrigger>
+                      <TooltipContent class="node-connection-diagnostic-tooltip" align="end" side="bottom" :side-offset="6">
+                        <NodeConnectionDiagnostics :diagnostics="connection" />
+                      </TooltipContent>
+                    </Tooltip>
                     <Button variant="outline" size="sm" :disabled="busy.deletingControlPlaneConnectionId === connection.id" @click="actions.removeControlPlaneConnection(selectedNode.id, connection.id)">
                       <Trash2 :size="14" />
                       <span>{{ busy.deletingControlPlaneConnectionId === connection.id ? t("settings.nodeDetail.deleting") : t("settings.nodeDetail.delete") }}</span>
                     </Button>
                   </div>
                 </div>
-                <p v-if="!resources.controlPlaneConnections.length" class="settings-empty">{{ t("settings.nodeDetail.noActiveConnections") }}</p>
+                <NodeResourceEmptyState v-if="!resources.controlPlaneConnections.length" :icon="Network" :message="t('settings.nodeDetail.noActiveConnections')" />
               </div>
               <p v-if="resources.remoteConnectResultByNodeId[selectedNode.id]" class="settings-success">
                 {{ t("settings.nodeDetail.remoteResult", { status: localizedStatus(remoteConnectStatusKeys, resources.remoteConnectResultByNodeId[selectedNode.id].status) }) }}
@@ -441,9 +467,9 @@
             </div>
             </template>
           </TabsContent>
-        </Tabs>
-      </div>
-    </ScrollArea>
+        </div>
+      </ScrollArea>
+    </Tabs>
     <p v-else class="settings-empty">{{ t("settings.nodeDetail.selectNode") }}</p>
 
     <Dialog :open="remoteConnectionDialogOpen" @update:open="setRemoteConnectionDialogOpen">
@@ -479,15 +505,39 @@
         </form>
       </DialogContent>
     </Dialog>
+    <Dialog :open="Boolean(localFolderRenameTarget)" @update:open="setLocalFolderRenameOpen">
+      <DialogContent class="node-rename-dialog">
+        <DialogHeader>
+          <DialogTitle>{{ t("settings.nodeDetail.renameLocalFolder") }}</DialogTitle>
+          <DialogDescription>{{ t("settings.nodeDetail.renameLocalFolderDescription") }}</DialogDescription>
+        </DialogHeader>
+        <form class="node-rename-form" @submit.prevent="submitLocalFolderRename">
+          <label for="local-folder-name">{{ t("settings.nodeDetail.name") }}</label>
+          <ControlPlaneInput
+            id="local-folder-name"
+            v-model="localFolderRenameDraft"
+            :maxlength="160"
+            :disabled="Boolean(busy.renamingNodeLocalFolderId)"
+            autofocus
+          />
+          <code v-if="localFolderRenameTarget">{{ localFolderRenameTarget.path }}</code>
+          <DialogFooter>
+            <Button type="button" variant="outline" :disabled="Boolean(busy.renamingNodeLocalFolderId)" @click="setLocalFolderRenameOpen(false)">{{ t("common.actions.cancel") }}</Button>
+            <Button type="submit" :disabled="!canSubmitLocalFolderRename">{{ t("common.actions.save") }}</Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   </section>
 </template>
 
 <script setup lang="ts">
 import { computed, ref, watch, type Component } from "vue";
 import { useI18n } from "vue-i18n";
-import { Box, Boxes, Download, FolderOpen, Gauge, KeyRound, Monitor, MoreHorizontal, Network, Pencil, Plus, RefreshCw, ServerCog, Settings, Trash2 } from "@lucide/vue";
+import { Box, Boxes, Container, Download, FolderOpen, Gauge, History, KeyRound, MapPin, Monitor, MoreHorizontal, Network, Pencil, Plus, RefreshCw, ServerCog, Settings, Trash2 } from "@lucide/vue";
 import { TooltipTrigger as RekaTooltipTrigger } from "reka-ui";
-import type { BuildInfo, InstanceBoardItem, LocalDockerImage, Node, NodeAgentExternalListener, NodeControlPlaneConnection, NodeControlPlanePairing, NodeLocalFolder, NodeRuntime, SelectableImage, UpdateChannel, UpdateCheckResult, UpdateJob } from "../../../api/types";
+import type { BuildInfo, InstanceBoardItem, LocalDockerImage, Node, NodeAgentEventTransportHealth, NodeAgentExternalListener, NodeControlPlaneConnection, NodeControlPlanePairing, NodeLocalFolder, NodeRuntime, UpdateChannel, UpdateCheckResult, UpdateJob } from "../../../api/types";
+import { nodeSupportsLocalFolderNameUpdate } from "../../../api/nodeCapabilities";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
@@ -500,6 +550,9 @@ import ControlPlaneSelect from "../shared/ControlPlaneSelect.vue";
 import ControlPlaneSelectItem from "../shared/ControlPlaneSelectItem.vue";
 import ControlPlaneProxyManagementPanel from "./ControlPlaneProxyManagementPanel.vue";
 import ControlPlaneProxyNodePanel from "./ControlPlaneProxyNodePanel.vue";
+import NodeConnectionDiagnostics from "./NodeConnectionDiagnostics.vue";
+import NodeResourceEmptyState from "./NodeResourceEmptyState.vue";
+import { nodeLocalFolderDisplayName } from "../nodePath";
 import { nodeEndpointDisplay } from "./nodeEndpointDisplay";
 import { nodeDetailActionState } from "./nodeDetailActions";
 import { externalListenerSourceKeys, externalListenerStatusKeys, instanceStatusKeys, nodeConnectionModeKeys, nodeRuntimeStatusKeys, remoteConnectStatusKeys, runtimeAccessStrategyKeys, runtimeTypeKeys, runtimeVersionStatusKeys, translateStatus, updateJobStatusKeys } from "../../../i18n/status";
@@ -545,12 +598,12 @@ type NodeDetailActions = {
   openInstanceSettings: (instanceId: string) => void;
   removeNode: (node: Node) => void | Promise<void>;
   removeNodeLocalFolder: (folderId: string) => void | Promise<void>;
+  renameNodeLocalFolder: (folder: NodeLocalFolder, name: string) => boolean | Promise<boolean>;
   removeRemoteKey: (nodeId: string, keyId: string) => void | Promise<void>;
   removeControlPlaneConnection: (nodeId: string, connectionId: string) => void | Promise<void>;
   removeRuntime: (runtime: NodeRuntime) => void | Promise<void>;
   saveExternalListener: () => void | Promise<void>;
   submitNodeLocalFolder: () => void | Promise<void>;
-  updateNodeFolderDefaultImage: (value: string) => void;
   setUpdateChannel: (value: string) => void;
   updateExternalListenerDraft: (field: "bindScope" | "port", value: string) => void;
   updateRemoteConnect: (field: keyof RemoteConnectDraft, value: string) => void;
@@ -566,6 +619,7 @@ type NodeDetailBusy = {
   creatingPairingInviteNodeId: string;
   deletingNodeId: string;
   deletingNodeLocalFolderId: string;
+  renamingNodeLocalFolderId: string;
   deletingRemoteKeyId: string;
   deletingControlPlaneConnectionId: string;
   deletingRuntimeId: string;
@@ -583,8 +637,6 @@ type NodeDetailResources = {
   instances: InstanceBoardItem[];
   localFoldersError: string;
   localFolders: NodeLocalFolder[];
-  nodeFolderDefaultImageId: string;
-  nodeFolderImageOptions: SelectableImage[];
   remoteConnect: RemoteConnectDraft;
   remoteConnectResultByNodeId: Record<string, RemoteConnectResult>;
   controlPlanePairings: NodeControlPlanePairing[];
@@ -607,6 +659,7 @@ type NodeDetailStatus = {
   build: (nodeId: string) => Partial<BuildInfo> | undefined;
   buildLabel: (nodeId: string) => string;
   buildTitle: (nodeId: string) => string;
+  eventTransport: (nodeId: string) => NodeAgentEventTransportHealth | undefined;
   isBuiltinNode: (node: Node) => boolean;
   locationLabel: (node: Node) => string;
   nameById: (nodeId: string) => string;
@@ -626,6 +679,32 @@ const props = defineProps<{
 
 const activeTab = ref<NodeDetailTab>("overview");
 const remoteConnectionDialogOpen = ref(false);
+const localFolderRenameTarget = ref<NodeLocalFolder>();
+const localFolderRenameDraft = ref("");
+const canRenameLocalFolders = computed(() => nodeSupportsLocalFolderNameUpdate(props.selectedNode));
+const canSubmitLocalFolderRename = computed(() => Boolean(
+  localFolderRenameTarget.value
+  && localFolderRenameDraft.value.trim() !== localFolderRenameTarget.value.name
+  && !props.busy.renamingNodeLocalFolderId,
+));
+
+function openLocalFolderRename(folder: NodeLocalFolder) {
+  localFolderRenameTarget.value = folder;
+  localFolderRenameDraft.value = folder.name;
+}
+
+function setLocalFolderRenameOpen(open: boolean) {
+  if (open || props.busy.renamingNodeLocalFolderId) return;
+  localFolderRenameTarget.value = undefined;
+  localFolderRenameDraft.value = "";
+}
+
+async function submitLocalFolderRename() {
+  const folder = localFolderRenameTarget.value;
+  const name = localFolderRenameDraft.value.trim();
+  if (!folder || !name || !canSubmitLocalFolderRename.value) return;
+  if (await props.actions.renameNodeLocalFolder(folder, name)) setLocalFolderRenameOpen(false);
+}
 const localizedStatus = (keys: Record<string, string>, value: string) => translateStatus(keys, value, t);
 const localizedDateTime = (value: string) => {
   const parsed = new Date(value);
@@ -654,6 +733,16 @@ const remoteConnectionSubmitting = computed(() => props.busy.connectingRemoteNod
 function setRemoteConnectionDialogOpen(open: boolean) {
   if (!open && remoteConnectionSubmitting.value) return;
   remoteConnectionDialogOpen.value = open;
+}
+
+function refreshConnectionDiagnostics(open: boolean) {
+  const nodeId = props.selectedNode?.id;
+  if (open && nodeId) void props.actions.loadControlPlaneAccess(nodeId);
+}
+
+function refreshNodeConnectionDiagnostics(open: boolean) {
+  const nodeId = props.selectedNode?.id;
+  if (open && nodeId) void props.actions.checkSettingsNode(nodeId);
 }
 
 async function submitRemoteConnection() {
@@ -720,16 +809,21 @@ watch(
 
 .node-detail-content-inner {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  gap: 14px;
+  grid-template-rows: minmax(0, 1fr);
   min-height: 100%;
   padding-right: 2px;
+}
+
+.node-detail-fixed-header {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
 }
 
 .node-detail-header {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
+  align-items: center;
   gap: 12px;
   min-width: 0;
 }
@@ -740,15 +834,13 @@ watch(
   gap: 4px;
 }
 
-.node-detail-identity > span,
 .node-metrics span {
   color: var(--text-muted);
   font-size: var(--node-detail-body-size);
-  font-weight: 750;
+  font-weight: 400;
 }
 
 .node-detail-title-row,
-.node-detail-meta,
 .node-detail-header-actions {
   display: flex;
   align-items: center;
@@ -759,15 +851,54 @@ watch(
   gap: 8px;
 }
 
-.node-detail-meta {
+.node-detail-title-row > strong {
+  flex: 0 0 auto;
+  max-width: min(180px, 32%);
+}
+
+.node-detail-inline-meta {
+  display: flex;
+  align-items: center;
+  flex: 1 1 auto;
+  max-width: 320px;
+  min-width: 0;
   gap: 5px;
+  overflow: hidden;
+  border: 0;
+  background: transparent;
   color: var(--text-muted);
   font-size: var(--node-detail-body-size);
   line-height: 1.5;
+  padding: 0;
+  cursor: help;
+  outline: none;
+}
+
+.node-detail-inline-meta > svg,
+.node-detail-inline-meta > span[aria-hidden="true"] {
+  flex: 0 0 auto;
+}
+
+.node-detail-inline-meta > span:first-of-type {
+  flex: 0 1 auto;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.node-detail-inline-meta > code {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.node-detail-inline-meta:focus-visible {
+  border-radius: 4px;
+  box-shadow: 0 0 0 2px var(--ring);
 }
 
 .node-detail-header-actions {
-  align-items: flex-start;
+  align-items: center;
   justify-content: flex-end;
   gap: 7px;
   white-space: nowrap;
@@ -823,7 +954,7 @@ watch(
 :global(.node-detail-action-item strong) {
   color: inherit;
   font-size: 12px;
-  font-weight: 750;
+  font-weight: 500;
 }
 
 :global(.node-detail-action-item small) {
@@ -865,13 +996,15 @@ watch(
   overflow: hidden;
   color: var(--text-strong);
   font-size: 13px;
+  font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .node-detail-header strong {
   min-width: 0;
-  font-size: 18px;
+  font-size: 17px;
+  font-weight: 600;
 }
 
 .node-detail-header code,
@@ -882,15 +1015,6 @@ watch(
   line-height: 1.5;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.node-detail-meta code {
-  flex: 0 1 auto;
-}
-
-.node-connection-mode {
-  flex: 0 0 auto;
-  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace);
 }
 
 .node-diagnostic-badge {
@@ -925,7 +1049,7 @@ watch(
 .node-listener-form label > span {
   color: var(--text-muted);
   font-size: var(--node-detail-body-size);
-  font-weight: 750;
+  font-weight: 400;
 }
 
 .node-listener-warning {
@@ -946,7 +1070,7 @@ watch(
 .node-detail-tabs {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  gap: 12px;
+  gap: 14px;
   min-height: 0;
   min-width: 0;
 }
@@ -960,7 +1084,7 @@ watch(
   min-height: 36px;
   border: 1px solid var(--line);
   border-radius: 7px;
-  background: var(--surface-inset);
+  background: var(--surface-raised);
   padding: 2px;
 }
 
@@ -971,7 +1095,7 @@ watch(
   border-radius: 5px;
   color: var(--text-muted);
   font-size: 12px;
-  font-weight: 750;
+  font-weight: 500;
   padding: 0 8px;
 }
 
@@ -1019,17 +1143,22 @@ watch(
 .node-metrics {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
+  gap: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-raised);
 }
 
 .node-metrics > div {
   display: grid;
   gap: 3px;
   min-width: 0;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  background: var(--surface-raised);
-  padding: 10px;
+  padding: 11px 12px;
+}
+
+.node-metrics > div + div {
+  border-left: 1px solid var(--line);
 }
 
 .node-metrics strong {
@@ -1040,21 +1169,26 @@ watch(
 .node-detail-section,
 .node-remote-panel {
   display: grid;
-  gap: 9px;
-  border-top: 1px solid var(--line);
-  padding-top: 12px;
+  gap: 10px;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  padding: 12px;
 }
 
 .flush-section,
 .node-detail-tab-content > .node-remote-panel:first-child {
-  border-top: 0;
-  padding-top: 0;
+  border: 1px solid var(--line);
+  padding: 12px;
 }
 
 .node-resource-list {
   display: grid;
   align-content: start;
-  gap: 7px;
+  gap: 0;
+  overflow: hidden;
+  border-top: 1px solid var(--line);
   min-height: 0;
 }
 
@@ -1086,10 +1220,14 @@ watch(
   align-items: center;
   gap: 9px;
   min-width: 0;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  background: var(--surface-raised);
-  padding: 9px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 10px;
+}
+
+.node-resource-row + .node-resource-row {
+  border-top: 1px solid var(--line);
 }
 
 .node-resource-row > div:first-child {
@@ -1120,7 +1258,7 @@ watch(
   overflow: hidden;
   color: var(--text-muted);
   font-size: var(--node-detail-section-title-size);
-  font-weight: 700;
+  font-weight: 500;
   line-height: 1.5;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1179,7 +1317,14 @@ watch(
 .managed-update-group-head span {
   color: var(--text-muted);
   font-size: var(--node-detail-body-size);
-  font-weight: 600;
+  font-weight: 400;
+  line-height: 1.5;
+}
+
+.managed-update-impact {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--node-detail-body-size);
   line-height: 1.5;
 }
 
@@ -1204,23 +1349,30 @@ watch(
 .remote-connection-fields label > span {
   color: var(--text-muted);
   font-size: 12px;
-  font-weight: 750;
+  font-weight: 400;
 }
 
 .node-diagnostic-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
+  gap: 0;
+  overflow: hidden;
+  border-top: 1px solid var(--line);
 }
 
 .node-diagnostic-grid span {
   display: grid;
   min-width: 0;
   gap: 3px;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  background: var(--surface-raised);
-  padding: 9px;
+  padding: 9px 10px;
+}
+
+.node-diagnostic-grid span:nth-child(even) {
+  border-left: 1px solid var(--line);
+}
+
+.node-diagnostic-grid span:nth-child(n + 3) {
+  border-top: 1px solid var(--line);
 }
 
 .node-diagnostic-grid b,
@@ -1235,27 +1387,33 @@ watch(
 
 .node-diagnostic-grid b {
   color: var(--text-muted);
-  font-weight: 750;
+  font-weight: 400;
 }
 
 .node-diagnostic-grid em {
   color: var(--text-strong);
-  font-weight: 650;
+  font-weight: 500;
 }
 
 .node-diagnostic-log {
   display: grid;
-  gap: 8px;
+  gap: 0;
+  overflow: hidden;
+  border-top: 1px solid var(--line);
 }
 
 .node-diagnostic-log-entry {
   display: grid;
   gap: 7px;
   min-width: 0;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  background: var(--surface-raised);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   padding: 9px;
+}
+
+.node-diagnostic-log-entry + .node-diagnostic-log-entry {
+  border-top: 1px solid var(--line);
 }
 
 .node-diagnostic-log-entry > div {
@@ -1279,7 +1437,7 @@ watch(
   margin: 0;
   color: var(--text-strong);
   font-size: 12px;
-  font-weight: 650;
+  font-weight: 400;
   line-height: 1.4;
 }
 
@@ -1306,7 +1464,7 @@ watch(
 .control-plane-error {
   margin: 0;
   font-size: 12px;
-  font-weight: 650;
+  font-weight: 400;
 }
 
 .settings-empty {
@@ -1327,20 +1485,54 @@ watch(
   gap: 8px;
 }
 
-.node-folder-add-controls {
-  display: grid;
-  grid-template-columns: minmax(150px, 220px) auto;
+.node-resource-actions {
+  display: flex;
   align-items: center;
   gap: 8px;
 }
 
-:global(.node-diagnostic-tooltip) {
+.node-rename-form {
+  display: grid;
+  gap: 12px;
+}
+
+.node-rename-form > label {
+  color: var(--text-strong);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.node-rename-form > code {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.node-folder-add-controls {
+  display: flex;
+  align-items: center;
+}
+
+:global(.node-diagnostic-tooltip),
+:global(.node-detail-context-tooltip) {
   min-width: 230px;
   max-width: min(360px, 80vw);
   border: 1px solid var(--line-strong) !important;
   background: var(--surface-inset) !important;
   color: var(--text) !important;
   box-shadow: var(--shadow-popover);
+}
+
+:global(.node-detail-context-tooltip) {
+  width: min(420px, calc(100vw - 24px));
+}
+
+:global(.node-detail-context-tooltip .node-diagnostic-tooltip-grid em) {
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+  white-space: normal;
 }
 
 :global(.node-diagnostic-tooltip-grid) {
@@ -1368,12 +1560,36 @@ watch(
 
 :global(.node-diagnostic-tooltip-grid b) {
   color: var(--text-muted) !important;
-  font-weight: 750;
+  font-weight: 500;
 }
 
 :global(.node-diagnostic-tooltip-grid em) {
   color: var(--text-strong) !important;
-  font-weight: 650;
+  font-weight: 400;
+}
+
+.node-connection-status-trigger {
+  display: inline-flex;
+  appearance: none;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  cursor: help;
+}
+
+:global(.node-connection-diagnostic-tooltip) {
+  min-width: 236px;
+  max-width: min(320px, calc(100vw - 24px));
+  border: 1px solid var(--line-strong) !important;
+  background: var(--surface-inset) !important;
+  color: var(--text) !important;
+  box-shadow: var(--shadow-popover);
+}
+
+.node-status-connection-diagnostics {
+  margin-top: 9px;
+  border-top: 1px solid var(--line-subtle);
+  padding-top: 9px;
 }
 
 @media (max-width: 780px) {

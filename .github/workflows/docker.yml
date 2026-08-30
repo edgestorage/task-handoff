@@ -37,6 +37,7 @@ concurrency:
 
 env:
   DOCKERHUB_CODEX_IMAGE_NAME: ${{ vars.DOCKERHUB_CODEX_IMAGE_NAME || 'task-handoff-controlled-codex' }}
+  DOCKERHUB_OPENCODE_IMAGE_NAME: ${{ vars.DOCKERHUB_OPENCODE_IMAGE_NAME || 'task-handoff-controlled-opencode' }}
   DOCKERHUB_AI_IMAGE_NAME: ${{ vars.DOCKERHUB_AI_IMAGE_NAME || 'task-handoff-controlled-ai' }}
   DOCKERHUB_WEBCAP_IMAGE_NAME: ${{ vars.DOCKERHUB_WEBCAP_IMAGE_NAME || 'task-handoff-controlled-webcap' }}
   DOCKERHUB_BROWSER_IMAGE_NAME: ${{ vars.DOCKERHUB_BROWSER_IMAGE_NAME || 'task-handoff-controlled-browser' }}
@@ -66,6 +67,7 @@ jobs:
             version="${GITHUB_REF_NAME#v}"
             node -e 'if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(process.argv[1])) process.exit(1)' "$version"
             codex_image_ref="${DOCKERHUB_CODEX_IMAGE_NAME}:${GITHUB_REF_NAME}"
+            opencode_image_ref="${DOCKERHUB_OPENCODE_IMAGE_NAME}:${GITHUB_REF_NAME}"
             ai_image_ref="${DOCKERHUB_AI_IMAGE_NAME}:${GITHUB_REF_NAME}"
             webcap_image_ref="${DOCKERHUB_WEBCAP_IMAGE_NAME}:${GITHUB_REF_NAME}"
             browser_image_ref="${DOCKERHUB_BROWSER_IMAGE_NAME}:${GITHUB_REF_NAME}"
@@ -73,18 +75,21 @@ jobs:
             version="${{ inputs.version }}"
             node -e 'if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(process.argv[1])) process.exit(1)' "$version"
             codex_image_ref="${DOCKERHUB_CODEX_IMAGE_NAME}:v${version}"
+            opencode_image_ref="${DOCKERHUB_OPENCODE_IMAGE_NAME}:v${version}"
             ai_image_ref="${DOCKERHUB_AI_IMAGE_NAME}:v${version}"
             webcap_image_ref="${DOCKERHUB_WEBCAP_IMAGE_NAME}:v${version}"
             browser_image_ref="${DOCKERHUB_BROWSER_IMAGE_NAME}:v${version}"
           else
             version="$(node -p "require('./package.json').version")"
             codex_image_ref="task-handoff-controlled-codex:ci-${{ matrix.arch }}"
+            opencode_image_ref="task-handoff-controlled-opencode:ci-${{ matrix.arch }}"
             ai_image_ref="task-handoff-controlled-ai:ci-${{ matrix.arch }}"
             webcap_image_ref="task-handoff-controlled-webcap:ci-${{ matrix.arch }}"
             browser_image_ref="task-handoff-controlled-browser:ci-${{ matrix.arch }}"
           fi
           echo "value=$version" >> "$GITHUB_OUTPUT"
           echo "codex-image-ref=$codex_image_ref" >> "$GITHUB_OUTPUT"
+          echo "opencode-image-ref=$opencode_image_ref" >> "$GITHUB_OUTPUT"
           echo "ai-image-ref=$ai_image_ref" >> "$GITHUB_OUTPUT"
           echo "webcap-image-ref=$webcap_image_ref" >> "$GITHUB_OUTPUT"
           echo "browser-image-ref=$browser_image_ref" >> "$GITHUB_OUTPUT"
@@ -122,6 +127,23 @@ jobs:
             TASK_HANDOFF_BUILT_AT=${{ github.event.repository.updated_at }}
             TASK_HANDOFF_GIT_COMMIT=${{ github.sha }}
             TASK_HANDOFF_IMAGE_REF=${{ steps.image-version.outputs.ai-image-ref }}
+          cache-from: type=gha,scope=controlled-instance-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=controlled-instance-${{ matrix.arch }}
+
+      - name: Build OpenCode image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          platforms: ${{ matrix.platform }}
+          target: profile-opencode
+          tags: task-handoff-controlled-opencode:ci-${{ matrix.arch }}
+          build-args: |
+            TASK_HANDOFF_VERSION=${{ steps.image-version.outputs.value }}
+            TASK_HANDOFF_BUILD_ID=${{ github.run_id }}
+            TASK_HANDOFF_BUILT_AT=${{ github.event.repository.updated_at }}
+            TASK_HANDOFF_GIT_COMMIT=${{ github.sha }}
+            TASK_HANDOFF_IMAGE_REF=${{ steps.image-version.outputs.opencode-image-ref }}
           cache-from: type=gha,scope=controlled-instance-${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=controlled-instance-${{ matrix.arch }}
 
@@ -163,7 +185,7 @@ jobs:
         env:
           EXPECTED_VERSION: ${{ steps.image-version.outputs.value }}
         run: |
-          for profile in codex ai webcap browser; do
+          for profile in codex opencode ai webcap browser; do
             actual="$(docker image inspect "task-handoff-controlled-${profile}:ci-${{ matrix.arch }}" --format '{{ index .Config.Labels "org.opencontainers.image.version" }}')"
             declared_profile="$(docker image inspect "task-handoff-controlled-${profile}:ci-${{ matrix.arch }}" --format '{{ index .Config.Labels "io.task-handoff.image.profile" }}')"
             test "$actual" = "$EXPECTED_VERSION"
@@ -173,9 +195,11 @@ jobs:
       - name: Smoke test lightweight profiles
         if: ${{ matrix.arch == 'amd64' }}
         run: |
-          for profile in codex ai; do
+          for profile in codex opencode ai; do
             if [ "$profile" = codex ]; then
               port=18081
+            elif [ "$profile" = opencode ]; then
+              port=18084
             else
               port=18082
             fi
@@ -208,8 +232,13 @@ jobs:
             test "$(docker exec "task-handoff-${profile}-ci" sudo -n id -u)" = 0
           done
           docker exec task-handoff-codex-ci codex --version
+          ! docker exec task-handoff-codex-ci sh -lc 'command -v opencode'
           ! docker exec task-handoff-codex-ci sh -lc 'command -v claude'
           ! docker exec task-handoff-codex-ci sh -lc 'command -v chromium'
+          docker exec task-handoff-opencode-ci opencode --version
+          ! docker exec task-handoff-opencode-ci sh -lc 'command -v codex'
+          ! docker exec task-handoff-opencode-ci sh -lc 'command -v claude'
+          ! docker exec task-handoff-opencode-ci sh -lc 'command -v chromium'
           docker exec task-handoff-ai-ci codex --version
           docker exec task-handoff-ai-ci claude --version
           ! docker exec task-handoff-ai-ci sh -lc 'command -v chromium'
@@ -469,7 +498,7 @@ jobs:
 
       - name: Cleanup
         if: ${{ always() && matrix.arch == 'amd64' }}
-        run: docker rm -f task-handoff-web-ci task-handoff-webcap-ci task-handoff-codex-ci task-handoff-ai-ci 2>/dev/null || true
+        run: docker rm -f task-handoff-web-ci task-handoff-webcap-ci task-handoff-codex-ci task-handoff-opencode-ci task-handoff-ai-ci 2>/dev/null || true
 
       - name: Login to Docker Hub
         if: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.version != '' }}
@@ -486,6 +515,7 @@ jobs:
           sha_tag="sha-${GITHUB_SHA::7}-${{ matrix.arch }}"
           for entry in \
             "codex:${DOCKERHUB_CODEX_IMAGE_NAME}" \
+            "opencode:${DOCKERHUB_OPENCODE_IMAGE_NAME}" \
             "ai:${DOCKERHUB_AI_IMAGE_NAME}" \
             "webcap:${DOCKERHUB_WEBCAP_IMAGE_NAME}" \
             "browser:${DOCKERHUB_BROWSER_IMAGE_NAME}"
@@ -518,6 +548,7 @@ jobs:
           sha_tag="sha-${GITHUB_SHA::7}"
           for image_name in \
             "${DOCKERHUB_CODEX_IMAGE_NAME}" \
+            "${DOCKERHUB_OPENCODE_IMAGE_NAME}" \
             "${DOCKERHUB_AI_IMAGE_NAME}" \
             "${DOCKERHUB_WEBCAP_IMAGE_NAME}" \
             "${DOCKERHUB_BROWSER_IMAGE_NAME}"
@@ -569,6 +600,7 @@ jobs:
 
           for image_name in \
             "${DOCKERHUB_CODEX_IMAGE_NAME}" \
+            "${DOCKERHUB_OPENCODE_IMAGE_NAME}" \
             "${DOCKERHUB_AI_IMAGE_NAME}" \
             "${DOCKERHUB_WEBCAP_IMAGE_NAME}" \
             "${DOCKERHUB_BROWSER_IMAGE_NAME}"

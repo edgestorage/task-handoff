@@ -20,6 +20,7 @@ export const repository = {
   errorNotice: {
     retryable: "可重试",
     actionRequired: "需要操作",
+    manageCredentials: "管理凭据",
     recovery: {
       REPOSITORY_SESSION_NOT_FOUND: "该会话已删除。请关闭此视图并返回当前会话列表。",
       REPOSITORY_SESSION_INACTIVE: "该会话已不再活跃。请从活跃会话重新打开环境。",
@@ -42,6 +43,11 @@ export const repository = {
       REPOSITORY_HOOK_FAILED: "请在会话终端中检查失败的 Git hook。本次提交未被报告为成功。",
       REPOSITORY_SIGNING_FAILED: "请修复受控实例中的提交签名，或在会话终端中检查签名配置。",
       REPOSITORY_AUTHENTICATION_FAILED: "请在会话终端中检查受控实例现有的 Git 或 SSH 凭据。",
+      REPOSITORY_CREDENTIAL_MISSING: "请在实例设置中授权匹配凭据，然后显式重试。",
+      REPOSITORY_CREDENTIAL_AMBIGUOUS: "请在实例设置中移除重叠的保留授权，然后显式重试。",
+      REPOSITORY_REMOTE_UNSUPPORTED: "请使用与授权 scope 匹配的 HTTPS、ssh:// 或 scp-like 远端。",
+      REPOSITORY_HOST_KEY_REQUIRED: "请为 SSH 凭据补充固定 known-hosts 信息，然后显式重试。",
+      REPOSITORY_AUTHENTICATION_REJECTED: "请在实例设置中轮换或替换保留凭据，然后显式重试。",
       REPOSITORY_NON_FAST_FORWARD: "请在会话终端中抓取并协调分支。系统不会使用强制模式重试。",
       REPOSITORY_UPSTREAM_MISSING: "使用上游交付操作前，请通过明确的远程和目标发布分支。",
       REPOSITORY_COMMAND_TIMEOUT: "Git 命令已达到时限。重试前请在会话终端中检查仓库。",

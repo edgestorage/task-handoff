@@ -8,8 +8,8 @@ const Fastify = require("fastify");
 
 const { registerInstanceLifecycleRoutes } = require("../packages/control-plane/src/node-agent/instances/lifecycle-routes.ts");
 const { InstanceOperationGate } = require("../packages/control-plane/src/node-agent/instances/instance-operation-gate.ts");
-const { LocalhostRuntimeAdapter } = require("../packages/control-plane/src/node-agent/runtimes/local-adapter.ts");
-const { ControlledInstanceSchema } = require("../packages/protocol/src/control-plane.ts");
+const { LocalhostRuntimeAdapter, localGitBrokerDirectoryPrefix } = require("../packages/control-plane/src/node-agent/runtimes/local-adapter.ts");
+const { ControlledInstanceSchema, NodeAgentInstanceLifecycleResultSchema } = require("../packages/protocol/src/control-plane.ts");
 const { EventEmitter } = require("node:events");
 
 test("node-agent app wires local runtime exits into immediate recovery", () => {
@@ -81,6 +81,19 @@ test("localhost adapter forwards supervised process exits to its recovery callba
   assert.deepEqual(exits, [{ instanceId: "inst_adapter_exit", pid: 701, code: 17, signal: null }]);
 });
 
+test("localhost adapter keeps the macOS Git broker socket below the Unix socket path limit", () => {
+  const longMacTemporaryDirectory = "/var/folders/fn/d8yvkv5s14j7zxw15lg6x1rw0000gn/T";
+  const prefix = localGitBrokerDirectoryPrefix(
+    "inst_a9d717a9fef24c93a7d6",
+    "darwin",
+    longMacTemporaryDirectory,
+  );
+  const socketPath = path.join(`${prefix}${"x".repeat(6)}`, "broker.sock");
+
+  assert.match(prefix, /^\/private\/tmp\/th-git-[a-f0-9]{12}-$/);
+  assert.ok(socketPath.length < 104, `expected a short macOS Unix socket path, received ${socketPath.length} characters`);
+});
+
 test("localhost adapter rejects startup when readiness cannot be committed", async (t) => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-adapter-ready-commit-"));
   const adapter = new LocalhostRuntimeAdapter(
@@ -117,7 +130,7 @@ function lifecycleRouteHarness(options = {}) {
   const baselineInstance = ControlledInstanceSchema.parse({
     id: "inst_routes",
     name: "routes",
-    source: { type: "local-folder", path: "/workspace" },
+    source: options.gitSource || { type: "local-folder", path: "/workspace" },
     sourceSnapshot: {},
     modelSelection: {},
     nodeId: "node_routes",
@@ -142,6 +155,7 @@ function lifecycleRouteHarness(options = {}) {
     updatedAt: "2026-08-02T00:00:00.000Z",
   });
   let instance = baselineInstance;
+  let pendingGitProvisioningOperationId;
   const app = Fastify({ logger: false });
   const state = {
     requireInstance: () => instance,
@@ -164,6 +178,21 @@ function lifecycleRouteHarness(options = {}) {
       return instance;
     },
     context: (target) => ({ instance: target }),
+    setGitWorkspaceProvisioning: (input) => {
+      pendingGitProvisioningOperationId = input.operationId;
+      calls.push(`git-provisioning:${input.operationId}`);
+    },
+    discardGitWorkspaceProvisioning: () => {
+      if (!pendingGitProvisioningOperationId) return false;
+      pendingGitProvisioningOperationId = undefined;
+      calls.push("git-provisioning:discard");
+      return true;
+    },
+    gitWorkspaceProvisioningStatus: () => pendingGitProvisioningOperationId
+      ? { status: options.consumeGitProvisioning ? "consumed" : "pending", operationId: pendingGitProvisioningOperationId }
+      : options.consumedGitProvisioningOperationId
+        ? { status: "consumed", operationId: options.consumedGitProvisioningOperationId }
+        : undefined,
   };
   const adapter = {
     stop: async (context) => {
@@ -289,6 +318,89 @@ test("instance lifecycle routes order recovery suppression and allowance around 
       }
     });
   }
+});
+
+test("instance start acknowledges Git provisioning only after consumption without changing legacy responses", async (t) => {
+  const source = {
+    type: "git-repository",
+    url: "https://git.example.com/team/repo.git",
+    ref: { type: "branch", name: "main" },
+    auth: { type: "none" },
+    clone: { submodules: false, lfs: false, subdirectory: "" },
+  };
+  const managed = lifecycleRouteHarness({ gitSource: source });
+  t.after(() => managed.app.close());
+  const provisioning = {
+    operationId: "gitop_routes",
+    instanceId: "inst_routes",
+    remoteUrl: source.url,
+    ref: source.ref,
+    clone: source.clone,
+    credentials: [],
+  };
+  const accepted = await managed.app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances/inst_routes/start",
+    payload: { gitWorkspaceProvisioning: provisioning },
+  });
+  assert.equal(accepted.statusCode, 200, accepted.body);
+  assert.equal(accepted.json().data.gitWorkspaceProvisioningOperationId, undefined);
+  assert.equal(accepted.json().data.id, "inst_routes");
+  assert.deepEqual(managed.calls.slice(0, 3), ["git-provisioning:gitop_routes", "recovery:allow", "hook:start"]);
+
+  const consumed = lifecycleRouteHarness({ gitSource: source, consumeGitProvisioning: true });
+  t.after(() => consumed.app.close());
+  const completed = await consumed.app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances/inst_routes/start",
+    payload: { gitWorkspaceProvisioning: provisioning },
+  });
+  assert.equal(completed.statusCode, 200, completed.body);
+  assert.equal(completed.json().data.gitWorkspaceProvisioningOperationId, provisioning.operationId);
+  assert.equal(completed.json().data.instance.id, "inst_routes");
+
+  const legacy = lifecycleRouteHarness({ gitSource: source });
+  t.after(() => legacy.app.close());
+  const response = await legacy.app.inject({ method: "POST", url: "/api/node-agent/instances/inst_routes/start", payload: {} });
+  assert.equal(response.statusCode, 200, response.body);
+  assert.equal(response.json().data.id, "inst_routes");
+  assert.equal("instance" in response.json().data, false);
+});
+
+test("instance stop discards an unconsumed Git provisioning grant", async (t) => {
+  const source = {
+    type: "git-repository",
+    url: "https://git.example.com/team/repo.git",
+    ref: { type: "branch", name: "main" },
+    auth: { type: "none" },
+    clone: { submodules: false, lfs: false, subdirectory: "" },
+  };
+  const harness = lifecycleRouteHarness({ gitSource: source });
+  t.after(() => harness.app.close());
+  const provisioning = {
+    operationId: "gitop_cancel",
+    instanceId: "inst_routes",
+    remoteUrl: source.url,
+    ref: source.ref,
+    clone: source.clone,
+    credentials: [],
+  };
+  await harness.app.inject({ method: "POST", url: "/api/node-agent/instances/inst_routes/start", payload: { gitWorkspaceProvisioning: provisioning } });
+  const stopped = await harness.app.inject({ method: "POST", url: "/api/node-agent/instances/inst_routes/stop" });
+  assert.equal(stopped.statusCode, 200, stopped.body);
+  assert.ok(harness.calls.includes("git-provisioning:discard"));
+});
+
+test("lifecycle response sanitizer ignores additive wrapper and instance fields", () => {
+  const { baselineInstance } = lifecycleRouteHarness();
+  const parsed = NodeAgentInstanceLifecycleResultSchema.parse({
+    instance: { ...baselineInstance, futureInstanceDiagnostic: true },
+    gitWorkspaceProvisioningOperationId: "gitop_future",
+    futureWrapperDiagnostic: true,
+  });
+  assert.equal(parsed.instance.id, baselineInstance.id);
+  assert.equal(parsed.gitWorkspaceProvisioningOperationId, "gitop_future");
+  assert.equal("futureInstanceDiagnostic" in parsed.instance, false);
 });
 
 test("deleting a derived instance releases its environment image after instance metadata", async (t) => {
@@ -448,7 +560,7 @@ test("stop cancels in-flight start, reconcile, and restart before waiting for li
 
 test("node-agent app forwards lifecycle cancellation into the start continuation guard", () => {
   const source = fs.readFileSync(path.join(__dirname, "../packages/control-plane/src/node-agent/app.ts"), "utf8");
-  assert.match(source, /start:\s*\(id, shouldContinue\)\s*=>\s*startInstanceWithFailureState\(id, "request", shouldContinue\)/);
+  assert.match(source, /start:\s*\(id, shouldContinue, signal\)\s*=>\s*startInstanceWithFailureState\(id, "request", shouldContinue, signal\)/);
   assert.match(source, /if \(!shouldContinue\(\)\) return state\.requireInstance\(id\);/);
   assert.ok(
     source.indexOf("if (!shouldContinue()) return state.requireInstance(id);")

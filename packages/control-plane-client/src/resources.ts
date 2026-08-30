@@ -2,6 +2,7 @@ import { z } from "zod";
 import {
   ControlPlaneInstanceActionSchema,
   ControlPlaneInstanceDirectorySchema,
+  ControlPlaneFleetDirectoryMetaSchema,
   ControlPlaneNodeDirectorySchema,
   type ControlPlaneInstanceDirectoryEntry,
 } from "@task-handoff/protocol/control-plane-directory";
@@ -9,13 +10,44 @@ import { AiSessionPermissionModeSchema, type AiSessionPermissionMode } from "@ta
 import type { ControlPlaneClientTransport } from "./transport.ts";
 
 const DataSchema = <T extends z.ZodType>(schema: T) => z.object({ data: schema }).passthrough();
+const FleetDirectoryPayloadSchema = z.object({
+  data: ControlPlaneInstanceDirectorySchema,
+  meta: ControlPlaneFleetDirectoryMetaSchema.optional(),
+}).passthrough();
 const InstancePermissionConfigSchema = z.object({
   config: z.object({ defaultCodexPermissionMode: AiSessionPermissionModeSchema }).passthrough(),
+}).passthrough();
+const InstanceWorkspaceSourceSchema = z.object({
+  source: z.object({
+    type: z.string().trim().min(1).max(80),
+    localFolderId: z.string().trim().min(1).max(120).optional(),
+    path: z.string().trim().min(1).max(4096).optional(),
+  }).passthrough(),
 }).passthrough();
 const NamedResourceSchema = z.object({
   id: z.string().trim().min(1).max(160),
   name: z.string().trim().min(1).max(160),
 });
+const PublicModelRegistrySchema = z.object({
+  models: z.array(z.object({
+    id: z.string().trim().min(1).max(120),
+    model: z.object({
+      id: z.string().trim().min(1).max(120),
+      name: z.string().trim().min(1).max(160),
+      model: z.string().trim().min(1).max(240),
+      modelNames: z.array(z.object({ name: z.string(), order: z.number().int() }).strip()).default([]),
+      protocols: z.array(z.string()).default([]),
+      app: z.string().optional(),
+      enabled: z.boolean(),
+      order: z.number().int(),
+    }).passthrough(),
+    locations: z.array(z.object({
+      type: z.enum(["control-plane", "node"]),
+      nodeId: z.string().optional(),
+      enabled: z.boolean(),
+    }).passthrough()),
+  }).passthrough()),
+}).passthrough();
 const InstanceActionResultSchema = z.object({
   id: z.string().trim().min(1).max(160),
   status: z.string().trim().min(1).max(80),
@@ -31,6 +63,13 @@ export const ControlPlaneNodeLocalFolderSchema = z.object({
 }).passthrough();
 export type ControlPlaneNodeLocalFolder = z.infer<typeof ControlPlaneNodeLocalFolderSchema>;
 
+export function controlPlaneLocalFolderDisplayName(folder: Pick<ControlPlaneNodeLocalFolder, "name" | "path">) {
+  const name = folder.name.trim();
+  if (name) return name;
+  const path = folder.path.replace(/[\\/]+$/u, "");
+  return path.split(/[\\/]+/u).filter(Boolean).at(-1) || folder.path;
+}
+
 export type ControlPlaneInstanceResourceEntry = ControlPlaneInstanceDirectoryEntry;
 
 export function createControlPlaneResourcesApi(transport: ControlPlaneClientTransport) {
@@ -43,6 +82,19 @@ export function createControlPlaneResourcesApi(transport: ControlPlaneClientTran
     },
     instanceBoard(signal?: AbortSignal) {
       return requestData("/api/instance-board?projection=directory", ControlPlaneInstanceDirectorySchema, signal);
+    },
+    instanceDirectory(signal?: AbortSignal) {
+      return transport.request("/api/instance-board?projection=directory&progressive=true", FleetDirectoryPayloadSchema, { signal });
+    },
+    models(signal?: AbortSignal) {
+      return requestData("/api/models", PublicModelRegistrySchema, signal);
+    },
+    async instanceWorkspaceSource(instanceId: string, signal?: AbortSignal) {
+      return (await requestData(
+        `/api/controlled-instances/${encodeURIComponent(instanceId)}`,
+        InstanceWorkspaceSourceSchema,
+        signal,
+      )).source;
     },
     async updateInstanceName(instanceId: string, name: string) {
       const response = await transport.request(

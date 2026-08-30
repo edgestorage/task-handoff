@@ -78,8 +78,16 @@
               </DropdownMenuTrigger>
               <DropdownMenuContent class="session-ai-options-menu" align="end" :side-offset="6">
                 <DropdownMenuLabel class="session-ai-options-label">{{ t("sessions.panel.view") }}</DropdownMenuLabel>
+                <DropdownMenuRadioGroup :model-value="sessionListLayout" @update:model-value="sessionListLayout = $event as AiSessionListLayout">
+                  <DropdownMenuRadioItem class="session-ai-options-item option-item" value="cards">{{ t("sessions.panel.cardLayout") }}</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem class="session-ai-options-item option-item" value="list">{{ t("sessions.panel.listLayout") }}</DropdownMenuRadioItem>
+                </DropdownMenuRadioGroup>
+                <DropdownMenuSeparator />
                 <DropdownMenuCheckboxItem class="session-ai-options-item option-item" :model-value="groupSessionsByPath" @update:model-value="(value) => groupSessionsByPath = Boolean(value)">
                   {{ t("sessions.panel.groupByPath") }}
+                </DropdownMenuCheckboxItem>
+                <DropdownMenuCheckboxItem v-if="groupSessionsByPath" class="session-ai-options-item option-item" :model-value="showEmptyPathGroups" @update:model-value="(value) => showEmptyPathGroups = Boolean(value)">
+                  {{ t("sessions.panel.showEmptyPathGroups") }}
                 </DropdownMenuCheckboxItem>
                 <DropdownMenuCheckboxItem class="session-ai-options-item option-item" :model-value="sortSessionsByStatus" @update:model-value="(value) => sortSessionsByStatus = Boolean(value)">
                   {{ t("sessions.panel.sortByStatus") }}
@@ -97,56 +105,83 @@
               v-for="group in displayedSessionGroups"
               :key="group.key"
               class="session-ai-path-group"
+              :class="{ 'is-compact-list': sessionListLayout === 'list' }"
+              :data-collapsed="groupSessionsByPath && collapsedPathGroups[group.key] ? 'true' : undefined"
             >
-              <div
+              <AiSessionPathGroupContextMenu
                 v-if="groupSessionsByPath"
-                class="session-ai-path-group-head"
+                :can-open="canOpenPathGroupFolder"
+                :can-rename="canRenamePathGroup(group)"
+                @open="openPathGroupFolder(group)"
+                @rename="openPathGroupRename(group)"
               >
-                <button
-                  type="button"
-                  class="session-ai-path-group-toggle"
-                  :aria-expanded="!collapsedPathGroups[group.key]"
-                  @click="togglePathGroup(group.key)"
-                >
-                  <Folder v-if="collapsedPathGroups[group.key]" class="session-ai-path-group-icon" :size="15" />
-                  <FolderOpen v-else class="session-ai-path-group-icon" :size="15" />
-                  <span class="session-ai-path-group-text">
-                    <TooltipProvider :delay-duration="120">
-                      <Tooltip>
-                        <TooltipTrigger as-child>
-                          <span class="session-ai-path-group-title">{{ group.label }}</span>
-                        </TooltipTrigger>
-                        <TooltipContent class="ai-session-path-tooltip" side="top" :side-offset="8">{{ group.path }}</TooltipContent>
-                      </Tooltip>
-                    </TooltipProvider>
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  class="session-ai-path-group-add"
-                  :aria-label="`${t('sessions.panel.newSession')} · ${group.label}`"
-                  :title="t('sessions.panel.newSession')"
-                  @click="openNewSessionForGroup(group)"
-                >
-                  <Plus :size="15" />
-                </button>
-              </div>
+                <div class="session-ai-path-group-head">
+                  <button
+                    type="button"
+                    class="session-ai-path-group-toggle"
+                    :aria-expanded="!collapsedPathGroups[group.key]"
+                    @click="togglePathGroup(group.key)"
+                  >
+                    <Folder v-if="collapsedPathGroups[group.key]" class="session-ai-path-group-icon" :size="15" />
+                    <FolderOpen v-else class="session-ai-path-group-icon" :size="15" />
+                    <span class="session-ai-path-group-text">
+                      <TooltipProvider :delay-duration="120">
+                        <Tooltip>
+                          <TooltipTrigger as-child>
+                            <span class="session-ai-path-group-title">{{ group.label }}</span>
+                          </TooltipTrigger>
+                          <TooltipContent class="ai-session-path-tooltip" side="top" :side-offset="8">{{ group.path }}</TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    class="session-ai-path-group-add"
+                    :aria-label="`${t('sessions.panel.newSession')} · ${group.label}`"
+                    :title="t('sessions.panel.newSession')"
+                    @click="openNewSessionForGroup(group)"
+                  >
+                    <Plus :size="15" />
+                  </button>
+                </div>
+              </AiSessionPathGroupContextMenu>
               <template v-if="!groupSessionsByPath || !collapsedPathGroups[group.key]">
                 <ContextMenu
                   v-for="session in group.sessions"
                   :key="session.id"
                 >
                   <ContextMenuTrigger as-child>
+                <button
+                  v-if="sessionListLayout === 'list'"
+                  type="button"
+                  class="session-ai-compact-row"
+                  :class="{ 'is-grouped': groupSessionsByPath }"
+                  :data-state="session.status"
+                  :data-selected="selectedListSessionId === session.id"
+                  :data-unread="session.unread ? 'true' : undefined"
+                  @click="selectSession(session.id)"
+                  @mouseenter="showSessionListPreview($event, session)"
+                  @pointermove="showSessionListPreview($event, session)"
+                  @mouseleave="scheduleSessionListPreviewClose"
+                  @focusin="showSessionListPreview($event, session)"
+                  @focusout="scheduleSessionListPreviewClose"
+                >
+                  <AiSessionStatusIndicator :status="session.status" size="compact" />
+                  <span class="session-ai-compact-title">{{ displayAiSessionTitle(session, latestPromptIndex(session), t) }}</span>
+                  <span v-if="session.unread" class="session-ai-compact-unread" :aria-label="t('sessions.actions.unread')" :title="t('sessions.actions.unread')" />
+                </button>
                 <article
+                  v-else
                   v-ai-session-card-auto-scroll="{ target: '.session-ai-preview-field-assistant', revision: `${session.id}:${latestPromptIndex(session)}` }"
                   class="session-ai-row"
                   :data-state="session.status"
-                  :data-selected="selectedSession?.id === session.id"
+                  :data-selected="selectedListSessionId === session.id"
                   :data-unread="session.unread ? 'true' : undefined"
                   :data-app-session-origin="session.creationSource === 'app-session' ? 'true' : undefined"
                 >
                 <span v-if="session.unread" class="ai-session-unread-dot" :aria-label="t('sessions.actions.unread')" :title="t('sessions.actions.unread')" />
-                <AiSessionOriginMark :creation-source="session.creationSource" />
+                <AiSessionCardMarks :agent="session.agent" :creation-source="session.creationSource" />
                 <div
                   class="session-ai-select"
                   role="button"
@@ -156,7 +191,7 @@
                   @keydown.space.prevent="selectSession(session.id)"
                 >
                   <div class="session-ai-state">
-                    <span class="session-ai-dot" />
+                    <AiSessionStatusIndicator :status="session.status" />
                     <span class="session-ai-state-line">
                       <strong>{{ aiSessionAppDisplayName(aiSessionAppTab(instance, session), session.agent, t) }}</strong>
                       <span v-if="!groupSessionsByPath" class="session-ai-card-workspace">
@@ -183,7 +218,9 @@
                       :instance-id="instance.id"
                       file-links
                       :is-latest="true"
+                      :provider-turn-id="session.activeTurnId"
                       :session-id="session.id"
+                      :turn-id="session.latestTurnRef?.id"
                       @open-file="openMarkdownFile(session, $event)"
                     />
                   </div>
@@ -198,86 +235,18 @@
                   :tool-calls-since-last-message="session.toolCallsSinceLastMessage"
                 />
                 <div v-if="canResolveApproval(session)" class="session-ai-card-approval-actions">
-                  <button type="button" :disabled="aiSessionActionBusy" :title="t('sessions.actions.allow')" @click.stop="resolveApproval(session, 'allow')">
+                  <button v-if="approvalDecisions(session).includes('allow')" type="button" :disabled="aiSessionActionBusy" :title="t('sessions.actions.allow')" @click.stop="resolveApproval(session, 'allow')">
                     <Check :size="13" />
                     <span>{{ t("sessions.actions.allow") }}</span>
                   </button>
-                  <button type="button" :disabled="aiSessionActionBusy" :title="t('sessions.actions.skip')" @click.stop="resolveApproval(session, 'skip')">
+                  <button v-if="approvalDecisions(session).includes('skip')" type="button" :disabled="aiSessionActionBusy" :title="t('sessions.actions.skip')" @click.stop="resolveApproval(session, 'skip')">
                     <Ban :size="13" />
                     <span>{{ t("sessions.actions.skip") }}</span>
                   </button>
-                  <button type="button" :disabled="aiSessionActionBusy" :title="t('sessions.actions.deny')" @click.stop="resolveApproval(session, 'deny')">
+                  <button v-if="approvalDecisions(session).includes('deny')" type="button" :disabled="aiSessionActionBusy" :title="t('sessions.actions.deny')" @click.stop="resolveApproval(session, 'deny')">
                     <X :size="13" />
                     <span>{{ t("sessions.actions.deny") }}</span>
                   </button>
-                </div>
-                <div class="session-ai-card-tools" :aria-label="t('sessions.actions.controls')">
-                  <DropdownMenu>
-                    <DropdownMenuTrigger as-child>
-                      <button type="button" class="session-ai-trigger-button ai-session-card-action" :data-bound="boundTriggers(session).length ? 'true' : undefined" :title="triggerButtonTitle(session)" @click.stop>
-                        <Zap :size="13" />
-                        <small v-if="boundTriggers(session).length">{{ boundTriggers(session).length }}</small>
-                      </button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent class="session-ai-trigger-menu" align="end" :side-offset="6" @click.stop>
-                      <div class="session-ai-trigger-search" @click.stop @keydown.stop>
-                        <input v-model="triggerSearch" type="search" :placeholder="t('sessions.actions.searchTriggers')" :aria-label="t('sessions.actions.searchTriggers')" />
-                      </div>
-                      <DropdownMenuItem v-if="!triggerTemplates.length" class="session-ai-trigger-menu-empty" disabled>{{ t("sessions.actions.noTriggers") }}</DropdownMenuItem>
-                      <DropdownMenuItem v-else-if="!filteredTriggerTemplates.length" class="session-ai-trigger-menu-empty" disabled>{{ t("sessions.actions.noMatchingTriggers") }}</DropdownMenuItem>
-                      <template v-else>
-                        <DropdownMenuItem
-                          v-for="trigger in filteredTriggerTemplates"
-                          :key="`${session.id}:${trigger.configHash}`"
-                          class="session-ai-trigger-menu-item"
-                          :disabled="triggerBusyKey === triggerActionKey(session, trigger.configHash)"
-                          @select="toggleTrigger(session, trigger.configHash)"
-                        >
-                          <Check v-if="isTriggerBound(session, trigger.configHash)" :size="13" />
-                          <Zap v-else :size="13" />
-                          <span>
-                            <strong>{{ trigger.config.name }}</strong>
-                            <small>{{ trigger.config.source.type }} · {{ shortHash(trigger.configHash) }}</small>
-                          </span>
-                          <small>{{ isTriggerBound(session, trigger.configHash) ? t("sessions.actions.remove") : t("sessions.actions.add") }}</small>
-                        </DropdownMenuItem>
-                      </template>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                  <button
-                    v-if="aiSessionAppTab(instance, session) || session.actions?.openApp"
-                    type="button"
-                    class="session-ai-open ai-session-card-action"
-                    :aria-label="t('sessions.actions.openAppFor', { agent: session.agent })"
-                    :title="t('sessions.actions.openApp')"
-                    :disabled="openingAiSessionId === session.id"
-                    @click="openSessionApp(session)"
-                  >
-                    <ExternalLink :size="14" />
-                  </button>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger as-child>
-                      <button type="button" class="session-ai-more ai-session-card-action" :aria-label="t('sessions.actions.moreFor', { agent: session.agent })" :title="t('sessions.actions.more')" @click.stop>
-                        <MoreHorizontal :size="14" />
-                      </button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent class="session-ai-card-menu" align="end" :side-offset="6" @click.stop>
-                      <DropdownMenuSub v-if="session.actions?.fork">
-                        <DropdownMenuSubTrigger class="session-ai-card-menu-item" :disabled="forkingAiSessionId === session.id">
-                          <Split :size="13" />
-                          <span>{{ forkingAiSessionId === session.id ? t("sessions.actions.forking") : t("sessions.actions.fork") }}</span>
-                        </DropdownMenuSubTrigger>
-                        <DropdownMenuSubContent class="session-ai-card-menu">
-                          <DropdownMenuItem class="session-ai-card-menu-item" @select="forkSession(session, 'current')">{{ t("sessions.actions.forkCurrent") }}</DropdownMenuItem>
-                          <DropdownMenuItem class="session-ai-card-menu-item" @select="forkSession(session, 'managed-worktree')">{{ t("sessions.actions.forkWorktree") }}</DropdownMenuItem>
-                        </DropdownMenuSubContent>
-                      </DropdownMenuSub>
-                      <DropdownMenuItem class="session-ai-card-menu-item danger" :disabled="stoppingAppSessionId === session.id" @select="closeSession(session)">
-                        <Square :size="13" />
-                        <span>{{ stoppingAppSessionId === session.id ? t("sessions.actions.closingSession") : t("sessions.actions.closeSession") }}</span>
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
                 </div>
                 </article>
                   </ContextMenuTrigger>
@@ -285,8 +254,10 @@
                     :bound-trigger-count="boundTriggers(session).length"
                     :has-app-session="Boolean(aiSessionAppTab(instance, session))"
                     :can-open-app="Boolean(aiSessionAppTab(instance, session) || session.actions?.openApp)"
+                    :can-open-terminal="Boolean(terminalLaunchAppId)"
                     :can-fork="session.actions?.fork === true"
                     :is-forking="forkingAiSessionId === session.id"
+                    :is-opening-terminal="launchingApp"
                     :is-stopping-app-session="stoppingAppSessionId === session.id"
                     :is-trigger-bound="(configHash) => isTriggerBound(session, configHash)"
                     :is-trigger-busy="(configHash) => triggerBusyKey === triggerActionKey(session, configHash)"
@@ -294,6 +265,7 @@
                     :trigger-templates="triggerTemplates"
                     @close-session="closeSession(session)"
                     @open-app="openSessionApp(session)"
+                    @open-terminal="openSessionTerminal(session)"
                     @fork-session="forkSession(session, $event)"
                     @toggle-trigger="toggleTrigger(session, $event)"
                   />
@@ -320,39 +292,44 @@
             <p v-else-if="!historyItems.length" class="session-ai-history-state">{{ t("sessions.panel.noHistory") }}</p>
             <template v-else>
               <section v-for="group in displayedHistoryGroups" :key="group.key" class="session-ai-path-group session-ai-history-group">
-                <div
+                <AiSessionPathGroupContextMenu
                   v-if="groupSessionsByPath"
-                  class="session-ai-path-group-head"
+                  :can-open="canOpenPathGroupFolder"
+                  :can-rename="canRenamePathGroup(group)"
+                  @open="openPathGroupFolder(group)"
+                  @rename="openPathGroupRename(group)"
                 >
-                  <button
-                    type="button"
-                    class="session-ai-path-group-toggle"
-                    :aria-expanded="!collapsedHistoryPathGroups[group.key]"
-                    @click="toggleHistoryPathGroup(group.key)"
-                  >
-                    <Folder v-if="collapsedHistoryPathGroups[group.key]" class="session-ai-path-group-icon" :size="15" />
-                    <FolderOpen v-else class="session-ai-path-group-icon" :size="15" />
-                    <span class="session-ai-path-group-text">
-                      <TooltipProvider :delay-duration="120">
-                        <Tooltip>
-                          <TooltipTrigger as-child>
-                            <span class="session-ai-path-group-title">{{ group.label }}</span>
-                          </TooltipTrigger>
-                          <TooltipContent class="ai-session-path-tooltip" side="top" :side-offset="8">{{ group.path }}</TooltipContent>
-                        </Tooltip>
-                      </TooltipProvider>
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    class="session-ai-path-group-add"
-                    :aria-label="`${t('sessions.panel.newSession')} · ${group.label}`"
-                    :title="t('sessions.panel.newSession')"
-                    @click="openNewSessionForGroup(group)"
-                  >
-                    <Plus :size="15" />
-                  </button>
-                </div>
+                  <div class="session-ai-path-group-head">
+                    <button
+                      type="button"
+                      class="session-ai-path-group-toggle"
+                      :aria-expanded="!collapsedHistoryPathGroups[group.key]"
+                      @click="toggleHistoryPathGroup(group.key)"
+                    >
+                      <Folder v-if="collapsedHistoryPathGroups[group.key]" class="session-ai-path-group-icon" :size="15" />
+                      <FolderOpen v-else class="session-ai-path-group-icon" :size="15" />
+                      <span class="session-ai-path-group-text">
+                        <TooltipProvider :delay-duration="120">
+                          <Tooltip>
+                            <TooltipTrigger as-child>
+                              <span class="session-ai-path-group-title">{{ group.label }}</span>
+                            </TooltipTrigger>
+                            <TooltipContent class="ai-session-path-tooltip" side="top" :side-offset="8">{{ group.path }}</TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      class="session-ai-path-group-add"
+                      :aria-label="`${t('sessions.panel.newSession')} · ${group.label}`"
+                      :title="t('sessions.panel.newSession')"
+                      @click="openNewSessionForGroup(group)"
+                    >
+                      <Plus :size="15" />
+                    </button>
+                  </div>
+                </AiSessionPathGroupContextMenu>
                 <template v-if="!groupSessionsByPath || !collapsedHistoryPathGroups[group.key]">
                   <article
                     v-for="item in group.items"
@@ -369,7 +346,7 @@
                       @keydown.space.prevent="selectHistoryItem(item)"
                     >
                       <div class="session-ai-history-row-head">
-                        <strong>{{ item.agent === "claude" ? t("common.products.claude") : t("common.products.codex") }}</strong>
+                        <strong>{{ agentDisplayName(item.agent) }}</strong>
                         <time :datetime="item.lastActiveAt">{{ relativeHistoryTime(item.lastActiveAt) }}</time>
                       </div>
                       <p>{{ historyItemTitle(item) }}</p>
@@ -440,14 +417,21 @@
                 type="button"
                 class="session-ai-history-continue"
                 :disabled="resumingHistoryId === historyDetail.item.id"
+                :aria-busy="resumingHistoryId === historyDetail.item.id"
                 @click="continueHistoryConversation"
               >
-                {{ t("sessions.panel.continue") }}
+                <LoaderCircle
+                  v-if="resumingHistoryId === historyDetail.item.id"
+                  class="session-ai-spin"
+                  :size="14"
+                  aria-hidden="true"
+                />
+                <span>{{ resumingHistoryId === historyDetail.item.id ? t("sessions.actions.forking") : t("sessions.panel.continue") }}</span>
               </button>
             </div>
             <header>
               <div>
-                <span>{{ historyDetail.item.agent === "claude" ? t("common.products.claude") : t("common.products.codex") }}</span>
+                <span>{{ agentDisplayName(historyDetail.item.agent) }}</span>
                 <strong>{{ historyItemTitle(historyDetail.item) }}</strong>
               </div>
             </header>
@@ -457,6 +441,7 @@
             <AiSessionTimelineView
               v-else
               :instance-id="instance.id"
+              :conversation-session-id="historyDetail.item.id"
               :stored-turns="historyDetail.turns"
               @sticky-user-message-change="timelineStickyUserMessage = $event"
             />
@@ -481,6 +466,7 @@
             :provider="historyDetail.item.agent"
             :permission-key="historyAiSessionPermissionKey(instance.id, historyDetail.item.id)"
             :default-permission-mode="instance.config.defaultCodexPermissionMode"
+            :max-file-attachment-bytes="instance.config.aiSessionMaxFileAttachmentBytes"
             :placeholder="t('sessions.panel.continueConversation')"
             @run="sendHistoryMessage"
           />
@@ -493,7 +479,7 @@
             <div class="session-ai-new-pills">
               <DropdownMenu>
                 <DropdownMenuTrigger as-child>
-                  <button type="button" class="session-ai-project-pill" :disabled="launchingNewSession">
+                  <button type="button" class="session-ai-project-pill" :disabled="newSessionComposerBusy">
                     <Folder :size="14" />
                     <strong>{{ newSessionProjectLabel }}</strong>
                     <ChevronDown :size="13" />
@@ -502,13 +488,20 @@
                 <DropdownMenuContent class="session-ai-project-menu session-ai-project-picker-menu" align="start" :collision-padding="12" :side-offset="8">
                   <input v-model="newSessionFolderQuery" class="session-ai-project-search" :placeholder="t('sessions.panel.searchProjects')" :aria-label="t('sessions.panel.searchProjects')" />
                   <ScrollArea type="auto" :horizontal="false" class="session-ai-project-list">
-                    <DropdownMenuItem v-for="folder in filteredNewSessionFolders" :key="folder.id" class="session-ai-project-item" @select="newSessionFolderId = folder.id">
-                      <Folder :size="15" /><span>{{ folder.name }}</span><Check v-if="newSessionFolderId === folder.id" :size="15" />
+                    <DropdownMenuItem v-for="folder in filteredNewSessionFolders" :key="folder.id" class="session-ai-project-item session-ai-project-folder-item" @select="newSessionFolderId = folder.id">
+                      <Folder :size="15" />
+                      <span class="session-ai-project-folder-copy">
+                        <strong>{{ folder.name }}</strong>
+                        <small>{{ folder.path }}</small>
+                      </span>
+                      <Check v-if="newSessionFolderId === folder.id" :size="15" />
                     </DropdownMenuItem>
                     <p v-if="!filteredNewSessionFolders.length" class="session-ai-project-empty">{{ t("sessions.panel.noProjects") }}</p>
                   </ScrollArea>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem class="session-ai-project-item" @select="openNewProject"><Plus :size="15" /><span>{{ t("sessions.panel.newProject") }}</span></DropdownMenuItem>
+                  <template v-if="instance.source.type === 'local-folder'">
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem class="session-ai-project-item" @select="openNewProject"><Plus :size="15" /><span>{{ t("sessions.panel.newProject") }}</span></DropdownMenuItem>
+                  </template>
                 </DropdownMenuContent>
               </DropdownMenu>
               <DropdownMenu v-if="newSessionWorkspace?.availability === 'available' && newSessionWorkspace.branches.length">
@@ -567,16 +560,14 @@
               <DropdownMenu>
                 <DropdownMenuTrigger as-child>
                   <button type="button" class="session-ai-app-pill" :disabled="launchingNewSession">
-                    <Bot v-if="newSessionApp === 'claude'" :size="14" />
-                    <Code2 v-else :size="14" />
-                    <strong>{{ newSessionApp === "claude" ? t("common.products.claude") : t("common.products.codex") }}</strong>
+                    <AiAgentIcon :agent="agentIcon(newSessionApp)" :size="14" />
+                    <strong>{{ agentDisplayName(newSessionApp) }}</strong>
                     <ChevronDown :size="13" />
                   </button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent class="session-ai-project-menu" align="start" :side-offset="8">
                   <DropdownMenuItem v-for="app in aiSessionLaunchableApps" :key="app.id" class="session-ai-project-item" @select="newSessionApp = app.id">
-                    <Bot v-if="app.id === 'claude'" :size="14" />
-                    <Code2 v-else :size="14" />
+                    <AiAgentIcon :agent="agentIcon(app.id)" :size="14" />
                     <span>{{ app.label }}</span><Check v-if="newSessionApp === app.id" :size="15" />
                   </DropdownMenuItem>
                 </DropdownMenuContent>
@@ -585,16 +576,25 @@
             <AiSessionComposer
               v-model="newSessionDraft"
               v-model:attachments="messageAttachments"
+              v-model:mention-bindings="newSessionMentionBindings"
               class="session-ai-compose session-ai-new-composer"
               :class="{ 'is-loading': newSessionComposerBusy }"
               :aria-busy="newSessionComposerBusy"
               :busy="newSessionComposerBusy"
+              :disabled="!newSessionFolder || (newSessionWorkspaceLoading && !newSessionWorkspace)"
               :can-interrupt="false"
-              :provider="newSessionApp === 'claude' ? 'claude' : 'codex'"
+              :provider="newSessionApp"
+              :model-groups="newSessionModelGroups"
+              :model-selection="newSessionModelSelection"
+              :reasoning-effort="newSessionReasoningEffort"
+              :reasoning-effort-enabled="newSessionReasoningEffortCapability.selectAtCreate"
               :permission-mode="newSessionPermissionMode"
               :default-permission-mode="instance.config.defaultCodexPermissionMode"
+              :max-file-attachment-bytes="instance.config.aiSessionMaxFileAttachmentBytes"
               :placeholder="t('sessions.panel.promptPlaceholder')"
               @update:permission-mode="updateNewSessionPermissionMode"
+              @select-model="newSessionModelSelection = $event"
+              @select-reasoning-effort="newSessionReasoningEffort = $event"
               @run="createNewSession"
             />
           </div>
@@ -674,7 +674,7 @@
                 />
                 <DropdownMenuSub v-if="compactAiSessionLayout">
                   <DropdownMenuSubTrigger class="session-ai-detail-actions-menu-item">
-                    <CircleHelp :size="16" />
+                    <CircleHelp :size="14" />
                     <span>{{ t("sessions.detail.sessionDetails") }}</span>
                   </DropdownMenuSubTrigger>
                   <DropdownMenuSubContent class="session-ai-detail-info-menu">
@@ -692,8 +692,17 @@
                   :disabled="openingAiSessionId === selectedSession.id"
                   @select="openSessionApp(selectedSession)"
                 >
-                  <ExternalLink :size="16" />
+                  <ExternalLink :size="14" />
                   <span>{{ t("sessions.actions.openApp") }}</span>
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  v-if="terminalLaunchAppId"
+                  class="session-ai-detail-actions-menu-item"
+                  :disabled="launchingApp"
+                  @select="openSessionTerminal(selectedSession)"
+                >
+                  <SquareTerminal :size="14" />
+                  <span>{{ t("sessions.actions.openTerminal") }}</span>
                 </DropdownMenuItem>
                 <DropdownMenuItem
                   v-if="selectedForkTurn"
@@ -701,12 +710,12 @@
                   :disabled="forkingAiSessionId === selectedSession.id"
                   @select="forkSession(selectedSession, 'current', selectedForkTurn.id)"
                 >
-                  <Split :size="16" />
+                  <Split :size="14" />
                   <span>{{ t("sessions.actions.continueFromTurn") }}</span>
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem class="session-ai-detail-actions-menu-item danger" :disabled="stoppingAppSessionId === selectedSession.id" @select="closeSession(selectedSession)">
-                  <Square :size="16" />
+                  <Square :size="14" />
                   <span>{{ t("sessions.actions.closeSession") }}</span>
                 </DropdownMenuItem>
               </DropdownMenuContent>
@@ -717,72 +726,55 @@
               <span>{{ aiSessionAppDisplayName(aiSessionAppTab(instance, selectedSession), selectedSession.agent, t) }}</span>
               <strong>{{ aiSessionStatusLabel(selectedSession, t) }}</strong>
             </div>
-            <section v-if="effectiveTimelineViewMode === 'compact'" ref="detailPromptSectionEl" class="session-ai-detail-block session-ai-detail-block-user">
-              <div
-                ref="promptContentEl"
-                class="session-ai-detail-prompt-content"
-                :class="{ expanded: promptExpanded }"
-              >
-                <MarkdownContent :content="displayAiSessionTitle(selectedSession, promptIndexFor(selectedSession), t)" :code-tools="markdownCodeTools" />
-              </div>
-              <button
-                v-if="promptHasOverflow"
-                type="button"
-                class="session-ai-detail-prompt-toggle"
-                :aria-expanded="promptExpanded"
-                @click="promptExpanded = !promptExpanded"
-              >
-                <span>{{ promptExpanded ? t("sessions.detail.collapsePrompt") : t("sessions.detail.expand") }}</span>
-                <ChevronDown :size="13" :class="{ open: promptExpanded }" />
-              </button>
-            </section>
+            <div v-if="effectiveTimelineViewMode === 'compact'" class="session-ai-detail-prompt-stage">
+              <Transition name="session-ai-prompt-fade" appear>
+                <section :key="selectedSession.id" ref="detailPromptSectionEl" class="session-ai-detail-block session-ai-detail-block-user">
+                  <div
+                    ref="promptContentEl"
+                    class="session-ai-detail-prompt-content"
+                    :class="{ expanded: promptExpanded }"
+                  >
+                    <MarkdownContent
+                      v-if="selectedSessionContentState === 'ready'"
+                      :content="displayAiSessionTitle(selectedConversationSession || selectedSession, promptIndexFor(selectedSession), t)"
+                      :code-tools="markdownCodeTools"
+                    />
+                  </div>
+                  <button
+                    v-if="promptHasOverflow"
+                    type="button"
+                    class="session-ai-detail-prompt-toggle"
+                    :aria-expanded="promptExpanded"
+                    @click="promptExpanded = !promptExpanded"
+                  >
+                    <span>{{ promptExpanded ? t("sessions.detail.collapsePrompt") : t("sessions.detail.expand") }}</span>
+                    <ChevronDown :size="13" :class="{ open: promptExpanded }" />
+                  </button>
+                </section>
+              </Transition>
+            </div>
           </header>
-          <div v-if="effectiveTimelineViewMode === 'full'" class="session-ai-timeline-state">
-            <AiSessionTimelineView
-              v-if="aiSessionTurns(selectedSession).length"
-              :busy="aiSessionActionBusy"
-              :can-interrupt="canInterrupt(selectedSession)"
-              :can-resolve-approval="canResolveApproval(selectedSession)"
-              :instance-id="instance.id"
-              file-links
-              :session="selectedSession"
-              :turn-timelines="conversationTurnTimelines"
-              @edit-queued-message="editQueuedMessage(selectedSession.id, $event)"
-              @open-file="openMarkdownFile(selectedSession, $event)"
-              @steer-queued-message="steerQueuedMessage(selectedSession.id, $event)"
-              @retry-queued-message="retryQueuedMessage(selectedSession.id, $event)"
-              @remove-queued-message="removeQueuedMessage(selectedSession.id, $event)"
-              @reorder-queued-messages="reorderQueuedMessages(selectedSession.id, $event)"
-              @resolve-approval="resolveSelectedApproval"
-              @sticky-user-message-change="timelineStickyUserMessage = $event"
-              @continue-from-turn="forkSession(selectedSession, 'current', $event)"
-              @layout-will-change="beginDetailLayoutAnchor"
-              @layout-committed="commitDetailLayoutAnchor"
-              @load-turn-timeline="loadTurnTimeline"
-            />
-            <span v-else>{{ t("sessions.timeline.noHistory") }}</span>
-          </div>
-          <AiSessionResult
-            v-else
+          <AiSessionConversationContent
+            :class="{ 'session-ai-timeline-state': effectiveTimelineViewMode === 'full' }"
             :busy="aiSessionActionBusy"
             :can-interrupt="canInterrupt(selectedSession)"
             :can-resolve-approval="canResolveApproval(selectedSession)"
+            :approval-decisions="approvalDecisions(selectedSession)"
             :instance-id="instance.id"
+            :detail-state="selectedSessionContentState"
             file-links
-            :is-latest="promptIndexFor(selectedSession) >= promptCount(selectedSession) - 1"
-            :response-content="displayAiSessionResponse(selectedSession, promptIndexFor(selectedSession), t)"
-            :turn-started-at="selectedTimelineTurn?.startedAt"
-            :turn-ended-at="turnElapsedEnd(selectedTimelineTurn)"
-            :session="selectedSession"
-            :activities="selectedTurnTimeline.activities"
-            :activity-nodes="selectedTurnTimeline.activityNodes"
-            :activity-history="selectedTurnTimeline.history"
-            :activity-history-status="selectedTurnTimelineState.status"
-            :activity-history-error="selectedTurnTimelineState.error"
+            :mode="effectiveTimelineViewMode"
+            :prompt-count="promptCount(selectedSession)"
+            :prompt-index="promptIndexFor(selectedSession)"
+            :session="selectedConversationSession || selectedSession"
+            :selected-turn-state="selectedTurnTimelineState"
+            :turn-bodies-ready="selectedSessionTurnsReady"
+            :turn-timelines="conversationTurnTimelines"
             activity-interactive
             @layout-will-change="beginDetailLayoutAnchor"
             @layout-committed="commitDetailLayoutAnchor"
-            @retry-activity-history="loadSelectedTurnTimeline(true)"
+            @retry-detail="loadSelectedSessionDetail"
+            @load-turn-timeline="loadTurnTimeline"
             @edit-queued-message="editQueuedMessage(selectedSession.id, $event)"
             @open-file="openMarkdownFile(selectedSession, $event)"
             @steer-queued-message="steerQueuedMessage(selectedSession.id, $event)"
@@ -790,6 +782,9 @@
             @remove-queued-message="removeQueuedMessage(selectedSession.id, $event)"
             @reorder-queued-messages="reorderQueuedMessages(selectedSession.id, $event)"
             @resolve-approval="resolveSelectedApproval"
+            @sticky-user-message-change="timelineStickyUserMessage = $event"
+            @transitioning-change="setDetailConversationTransitioning"
+            @continue-from-turn="forkSession(selectedSession, 'current', $event)"
           />
           <span ref="detailBottomAnchorEl" class="session-ai-detail-bottom-anchor" aria-hidden="true" />
           </section>
@@ -802,14 +797,18 @@
           <MarkdownContent :content="timelineStickyUserMessage.text" :code-tools="markdownCodeTools" />
         </article>
         <article
-          v-else-if="effectiveTimelineViewMode === 'compact' && detailScrolled"
+          v-else-if="effectiveTimelineViewMode === 'compact' && detailScrolled && !detailConversationTransitioning"
           class="session-ai-timeline-sticky-prompt"
           aria-hidden="true"
         >
-          <MarkdownContent :content="displayAiSessionTitle(selectedSession, promptIndexFor(selectedSession), t)" :code-tools="markdownCodeTools" />
+          <MarkdownContent
+            v-if="selectedSessionContentState === 'ready'"
+            :content="displayAiSessionTitle(selectedConversationSession || selectedSession, promptIndexFor(selectedSession), t)"
+            :code-tools="markdownCodeTools"
+          />
         </article>
         <Button
-          v-if="!isFollowingLatest"
+          v-if="detailCanScroll && !isFollowingLatest"
           class="session-ai-follow-latest"
           size="icon-sm"
           variant="ghost"
@@ -829,8 +828,15 @@
           :busy="aiSessionActionBusy"
           :can-interrupt="canInterrupt(selectedSession)"
           :provider="selectedSession.agent"
+          :model-groups="selectedSessionModelGroups"
+          :model-selection="selectedSessionModelDisplay"
+          :model-selection-pending="modelSelectionPendingSessionId === selectedSession.id"
+          :reasoning-effort="selectedSession.reasoningEffort || (selectedSession.agent === 'codex' ? AI_SESSION_DEFAULT_REASONING_EFFORT : undefined)"
+          :reasoning-effort-enabled="selectedSessionReasoningEffortCapability.updateDuringSession"
+          :reasoning-effort-pending="reasoningEffortPending?.sessionId === selectedSession.id"
           :permission-key="aiSessionPermissionKey(instance.id, selectedSession.id)"
           :default-permission-mode="instance.config.defaultCodexPermissionMode"
+          :max-file-attachment-bytes="instance.config.aiSessionMaxFileAttachmentBytes"
           :mention-context="mentionContext"
           :mention-trigger="mentionTrigger"
           :command-trigger="commandTrigger"
@@ -839,26 +845,136 @@
           @cancel-edit="cancelQueueComposerEdit"
           @command="executeSelectedSessionCommand"
           @run="runSelectedSessionAction"
+          @select-model="selectExistingSessionModel"
+          @select-reasoning-effort="selectExistingSessionReasoningEffort"
           @steer="steerMessageDraft"
         />
       </section>
     </div>
     </Sheet>
+    <Teleport to="body">
+      <Transition name="session-ai-list-preview">
+        <article
+          v-if="sessionListPreviewVisible && sessionListPreviewSession"
+          v-ai-session-card-auto-scroll="{ target: '.session-ai-preview-field-assistant', revision: `${sessionListPreviewSession.id}:${latestPromptIndex(sessionListPreviewSession)}` }"
+          class="session-ai-row session-ai-list-hover-card"
+          :data-state="sessionListPreviewSession.status"
+          :data-unread="sessionListPreviewSession.unread ? 'true' : undefined"
+          :data-app-session-origin="sessionListPreviewSession.creationSource === 'app-session' ? 'true' : undefined"
+          :style="sessionListPreviewStyle"
+          :aria-label="displayAiSessionTitle(sessionListPreviewSession, latestPromptIndex(sessionListPreviewSession), t)"
+          role="dialog"
+          @mouseenter="cancelSessionListPreviewClose"
+          @mouseleave="scheduleSessionListPreviewClose"
+        >
+          <span v-if="sessionListPreviewSession.unread" class="ai-session-unread-dot" :aria-label="t('sessions.actions.unread')" :title="t('sessions.actions.unread')" />
+          <AiSessionCardMarks :agent="sessionListPreviewSession.agent" :creation-source="sessionListPreviewSession.creationSource" />
+          <div
+            class="session-ai-select"
+            role="button"
+            tabindex="0"
+            @click="selectSession(sessionListPreviewSession.id)"
+            @keydown.enter.prevent="selectSession(sessionListPreviewSession.id)"
+            @keydown.space.prevent="selectSession(sessionListPreviewSession.id)"
+          >
+            <div class="session-ai-state">
+              <AiSessionStatusIndicator :status="sessionListPreviewSession.status" />
+              <span class="session-ai-state-line">
+                <strong>{{ aiSessionAppDisplayName(aiSessionAppTab(instance, sessionListPreviewSession), sessionListPreviewSession.agent, t) }}</strong>
+                <span class="session-ai-card-workspace">
+                  <span aria-hidden="true">·</span>
+                  <b>{{ aiSessionBasename(sessionListPreviewSession.cwd) || t("sessions.board.unknownFolder") }}</b>
+                </span>
+              </span>
+            </div>
+            <div class="session-ai-preview-field session-ai-preview-field-user">
+              <MarkdownContent class="session-ai-question" :content="displayAiSessionTitle(sessionListPreviewSession, latestPromptIndex(sessionListPreviewSession), t)" />
+            </div>
+            <div class="session-ai-preview-field session-ai-preview-field-assistant">
+              <AiSessionStreamingMarkdown
+                class="session-ai-message"
+                :code-tools="markdownCodeTools"
+                :content="displayAiSessionMessage(sessionListPreviewSession, latestPromptIndex(sessionListPreviewSession), t)"
+                :instance-id="instance.id"
+                file-links
+                :is-latest="true"
+                :provider-turn-id="sessionListPreviewSession.activeTurnId"
+                :session-id="sessionListPreviewSession.id"
+                :turn-id="sessionListPreviewSession.latestTurnRef?.id"
+                @open-file="openMarkdownFile(sessionListPreviewSession, $event)"
+              />
+            </div>
+          </div>
+          <AiSessionToolActivity
+            v-if="!canResolveApproval(sessionListPreviewSession)"
+            class="session-ai-card-activity"
+            :current-tool="sessionListPreviewSession.currentTool"
+            :phase="sessionListPreviewSession.phase"
+            :status="sessionListPreviewSession.status"
+            :summary="sessionListPreviewSession.summary"
+            :tool-calls-since-last-message="sessionListPreviewSession.toolCallsSinceLastMessage"
+          />
+          <div v-if="canResolveApproval(sessionListPreviewSession)" class="session-ai-card-approval-actions">
+            <button v-if="approvalDecisions(sessionListPreviewSession).includes('allow')" type="button" :disabled="aiSessionActionBusy" :title="t('sessions.actions.allow')" @click.stop="resolveApproval(sessionListPreviewSession, 'allow')">
+              <Check :size="13" />
+              <span>{{ t("sessions.actions.allow") }}</span>
+            </button>
+            <button v-if="approvalDecisions(sessionListPreviewSession).includes('skip')" type="button" :disabled="aiSessionActionBusy" :title="t('sessions.actions.skip')" @click.stop="resolveApproval(sessionListPreviewSession, 'skip')">
+              <Ban :size="13" />
+              <span>{{ t("sessions.actions.skip") }}</span>
+            </button>
+            <button v-if="approvalDecisions(sessionListPreviewSession).includes('deny')" type="button" :disabled="aiSessionActionBusy" :title="t('sessions.actions.deny')" @click.stop="resolveApproval(sessionListPreviewSession, 'deny')">
+              <X :size="13" />
+              <span>{{ t("sessions.actions.deny") }}</span>
+            </button>
+          </div>
+        </article>
+      </Transition>
+    </Teleport>
     <NodeStorageFolderPickerDialog
+      :breadcrumbs="newProjectPicker.breadcrumbs.value"
       :can-confirm="newProjectPicker.canConfirm.value"
+      :can-go-up="newProjectPicker.canGoUp.value"
+      :current-path="newProjectPicker.currentPath.value"
       :error="newProjectPicker.error.value"
       :loading="newProjectPicker.loading.value"
       :node-name="newProjectPicker.targetNode.value?.name || instance.nodeId"
       :open="newProjectPicker.dialogOpen.value"
+      :places="newProjectPicker.places.value"
       :rows="newProjectPicker.rows.value"
       :selected-path="newProjectPicker.selectedPath.value"
       :submit-error="newProjectPicker.submitError.value"
       :submitting="newProjectPicker.submitting.value"
       @confirm="confirmNewProject"
-      @refresh="newProjectPicker.loadRoots(instance.nodeId)"
+      @navigate="newProjectPicker.navigateTo"
+      @refresh="newProjectPicker.refresh"
       @select="newProjectPicker.selectFolder"
+      @up="newProjectPicker.goUp"
       @update:open="newProjectPicker.setOpen"
     />
+    <Dialog :open="Boolean(pathGroupRenameTarget)" @update:open="setPathGroupRenameOpen">
+      <DialogContent class="session-ai-path-rename-dialog">
+        <DialogHeader>
+          <DialogTitle>{{ t("sessions.panel.renameProject") }}</DialogTitle>
+          <DialogDescription>{{ t("sessions.panel.renameProjectDescription") }}</DialogDescription>
+        </DialogHeader>
+        <form class="session-ai-path-rename-form" @submit.prevent="submitPathGroupRename">
+          <label for="session-path-group-name">{{ t("sessions.panel.projectName") }}</label>
+          <ControlPlaneInput
+            id="session-path-group-name"
+            v-model="pathGroupRenameDraft"
+            :maxlength="160"
+            :disabled="renamingPathGroup"
+            autofocus
+          />
+          <code v-if="pathGroupRenameTarget">{{ pathGroupRenameTarget.path }}</code>
+          <DialogFooter>
+            <Button type="button" variant="outline" :disabled="renamingPathGroup" @click="setPathGroupRenameOpen(false)">{{ t("common.actions.cancel") }}</Button>
+            <Button type="submit" :disabled="!canSubmitPathGroupRename">{{ t("common.actions.save") }}</Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
     <AlertDialog :open="Boolean(newSessionBranchSwitchTarget)" @update:open="(open) => !open && (newSessionBranchSwitchTarget = undefined)">
       <AlertDialogContent>
         <AlertDialogHeader>
@@ -893,46 +1009,60 @@ import { useI18n } from "vue-i18n";
 import { formatRelativeTime } from "../../../i18n/presentation";
 import type { SupportedLocale } from "../../../i18n/locale";
 import { translateApiError } from "../../../i18n/apiError";
-import { ArrowLeft, Ban, Bot, Check, ChevronDown, ChevronRight, CircleHelp, Code2, ExternalLink, Filter, Folder, FolderOpen, GitBranch, History, LoaderCircle, MessageSquare, MoreHorizontal, PanelLeftOpen, Plus, SlidersHorizontal, Split, Square, X, Zap } from "@lucide/vue";
+import { waitForAiSessionProjection } from "../ai-session-projection";
+import { ArrowLeft, Ban, Check, ChevronDown, ChevronRight, CircleHelp, ExternalLink, Filter, Folder, FolderOpen, GitBranch, History, LoaderCircle, MessageSquare, MoreHorizontal, PanelLeftOpen, Plus, SlidersHorizontal, Split, Square, SquareTerminal, X } from "@lucide/vue";
 import { useQueryClient } from "@tanstack/vue-query";
 import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
 import AiSessionCardContextMenu from "../../../components/ai-session/AiSessionCardContextMenu.vue";
-import AiSessionOriginMark from "../../../components/ai-session/AiSessionOriginMark.vue";
+import AiSessionCardMarks from "../../../components/ai-session/AiSessionCardMarks.vue";
+import AiSessionStatusIndicator from "../../../components/ai-session/AiSessionStatusIndicator.vue";
+import AiAgentIcon from "../../../components/AiAgentIcon.vue";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../../components/ui/alert-dialog";
-import { bindAiSessionTrigger, closeAiSession, createAiSession, createNodeLocalFolder, editAiSessionQueuedMessage, forkAiSession, getAiSessionHistory, getAiSessionHistoryDetail, getAiSessionTimeline, getAiSessionTurnTimeline, getAiSessionWorkspace, interruptAiSession, listNodeFolderTree, markAiSessionRead, openAiSessionApp, removeAiSessionQueuedMessage, reorderAiSessionQueuedMessages, resolveAiSessionApproval, resumeAiSession, retryAiSessionQueuedMessage, sendAiSessionMessage, steerAiSessionQueuedMessage, unbindAiSessionTrigger, updateControlledInstance, uploadAiSessionAttachment, useControlPlaneSettingsQuery, useControlPlaneTriggersQuery } from "../../../api/queries";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
+import { bindAiSessionTrigger, closeAiSession, createAiSession, createNodeLocalFolder, editAiSessionQueuedMessage, forkAiSession, getAiSessionHistory, getAiSessionHistoryDetail, getAiSessionWorkspace, interruptAiSession, listNodeFolderPlaces, listNodeFolderTree, markAiSessionRead, openAiSessionApp, removeAiSessionQueuedMessage, reorderAiSessionQueuedMessages, resolveAiSessionApproval, resumeAiSession, retryAiSessionQueuedMessage, sendAiSessionMessage, steerAiSessionQueuedMessage, unbindAiSessionTrigger, updateAiSessionModelSelection, updateAiSessionReasoningEffort, updateControlledInstance, updateNodeLocalFolder, uploadAiSessionAttachment, useControlPlaneSettingsQuery, useControlPlaneTriggersQuery, useModelsQuery } from "../../../api/queries";
 import { controlPlaneQueryKeys } from "../../../api/queryKeys.ts";
 import { executeAiSessionCommand } from "../../../api/ai-session-commands";
-import { type AiSessionCommandInput, type AiSessionHistoryDetail, type AiSessionHistoryItem, type AiSessionMessageAttachmentRef, type AiSessionPermissionMode } from "@task-handoff/protocol/ai-sessions";
+import { AI_SESSION_DEFAULT_REASONING_EFFORT, type AiSessionCommandInput, type AiSessionHistoryDetail, type AiSessionHistoryItem, type AiSessionMessageAttachmentRef, type AiSessionModelSelection, type AiSessionPermissionMode, type AiSessionReasoningEffort } from "@task-handoff/protocol/ai-sessions";
+import { normalizeAiSessionModelSelectionCapabilities, normalizeAiSessionReasoningEffortCapabilities } from "@task-handoff/protocol/ai-session-provider-capabilities";
 import type { RepositoryAiSessionWorkspace, RepositoryAiSessionWorkspaceBranch } from "@task-handoff/protocol/repository";
-import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions, NodeLocalFolder, TriggerConfig, TriggerDeployment, TriggerRuntimeState } from "../../../api/types";
+import { directoryAiSessionProviderCapability } from "@task-handoff/protocol/control-plane-directory";
+import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions, NodeLocalFolder } from "../../../api/types";
 import type { LaunchableApp } from "../useInstanceSessions";
-import { updateInstanceBoardData } from "../instanceBoardCache.ts";
+import { isAiSessionTriggerDeployment, removeInstanceTriggerBinding, upsertInstanceTriggerBinding } from "../instanceTriggerCache.ts";
 import AiSessionComposer, { type AiSessionComposerAttachment } from "../../../components/ai-session/AiSessionComposer.vue";
-import AiSessionResult from "../../../components/ai-session/AiSessionResult.vue";
+import { uploadAiSessionComposerAttachment } from "../../../components/ai-session/attachmentUpload";
+import AiSessionConversationContent from "../../../components/ai-session/AiSessionConversationContent.vue";
 import AiSessionStreamingMarkdown from "../../../components/ai-session/AiSessionStreamingMarkdown.vue";
 import { vAiSessionCardAutoScroll } from "../../../components/ai-session/aiSessionCardAutoScroll";
 import AiSessionToolActivity from "../../../components/ai-session/AiSessionToolActivity.vue";
-import { compactTimelineForTurn, turnElapsedEnd } from "../../../components/ai-session/timelineActivities";
-import { shouldDeferTurnTimelineLoad } from "../../../components/ai-session/timelineLoading";
-import { supportsAiSessionTimelineCapability } from "@task-handoff/protocol/control-plane";
-import { useAiSessionTimelineStore } from "../useAiSessionTimelineStore";
+import { useAiSessionTimelinePresentation } from "../useAiSessionTimelinePresentation";
+import { useAiSessionTimelineViewMode } from "../useAiSessionTimelineViewMode";
+import { useAiSessionConversationProjection } from "../useAiSessionConversationProjection";
+import { useAiSessionMessageDeltaDemand, useAiSessionTimelineDemand } from "../useAiSessionEventDemand";
 import AiSessionTimelineView from "../../../components/ai-session/AiSessionTimelineView.vue";
 import { referencesForBindings, type AiSessionMentionBinding } from "../../../components/ai-session/mentions";
 import { desktopRuntimePathAccess } from "../../../components/ai-session/useAiSessionMentions";
 import AiSessionTurnNavigator from "../../../components/ai-session/AiSessionTurnNavigator.vue";
 import { Button } from "../../../components/ui/button";
-import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
 import { ContextMenu, ContextMenuTrigger } from "../../../components/ui/context-menu";
 import { ScrollArea } from "../../../components/ui/scroll-area";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "../../../components/ui/sheet";
 import { ToggleGroup, ToggleGroupItem } from "../../../components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../../components/ui/tooltip";
-import { showControlPlaneToast } from "../useControlPlaneToasts";
-import { relativeNodePathSegments } from "../nodePath";
+import { showControlPlaneToast, showDelayedControlPlaneLoadingToast } from "../useControlPlaneToasts";
+import { nativeNodeFolderSelectionResult, nodeLocalFolderDisplayName, nodePathName, relativeNodePathSegments, type NativeNodeFolderPicker } from "../nodePath";
+import { filterInstanceCwdFolders, selectableInstanceCwdFolders } from "../shared/instanceCwdFolders";
 import NodeStorageFolderPickerDialog from "../settings/NodeStorageFolderPickerDialog.vue";
+import ControlPlaneInput from "../shared/ControlPlaneInput.vue";
+import { nodeSupportsLocalFolderNameUpdate } from "../../../api/nodeCapabilities";
+import { canOpenDesktopLocalPath, openDesktopLocalPath } from "../../../lib/desktopBridge";
 import RepositoryEnvironment from "./RepositoryEnvironment.vue";
+import AiSessionPathGroupContextMenu from "./AiSessionPathGroupContextMenu.vue";
 import { useNodeStorageFolderPicker } from "../settings/useNodeStorageFolderPicker";
-import { aiSessionMessageText, clearAiSessionDraft, loadAiSessionDraftPayload, persistAiSessionDraftPayload } from "../useAiSessionDraft";
+import { groupAiSessionEntriesByPath } from "./aiSessionPathGrouping";
+import { loadCollapsedAiSessionPathGroups, persistCollapsedAiSessionPathGroups } from "./aiSessionPathGroupCollapse";
+import { aiSessionCreationDraftKey, aiSessionMessageText, clearAiSessionDraft, loadAiSessionDraftPayload, persistAiSessionDraftPayload } from "../useAiSessionDraft";
 import {
   aiSessionPermissionKey,
   clearAiSessionPermissionMode,
@@ -941,9 +1071,12 @@ import {
 } from "../useAiSessionPermissionMode";
 import { createStreamingScrollFollow, distanceFromBottom, STREAMING_SCROLL_FOLLOW_THRESHOLD, type ScrollViewport } from "../../../lib/streaming-scroll-follow";
 import { createLayoutScrollAnchor, createUserLayoutChangeGuard } from "../../../lib/layout-scroll-anchor";
+import { createBrowserUuid } from "../../../lib/random-id";
 import {
   aiSessionStatusGroup as sessionStatusGroup,
   canInterruptAiSession,
+  defaultAiSessionModelSelection,
+  deriveAiSessionModelGroups,
   isAiSessionApprovalPending,
 } from "@task-handoff/control-plane-client";
 import {
@@ -963,6 +1096,7 @@ import {
 } from "../useInstanceSessions";
 
 type SessionStatusFilter = "all" | "active" | "waiting" | "idle" | "problem";
+type AiSessionListLayout = "cards" | "list";
 type AiSessionPathGroup = {
   key: string;
   path: string;
@@ -981,9 +1115,10 @@ type AiSessionHistoryPathGroup = {
 };
 
 const GROUP_BY_PATH_STORAGE_KEY = "task-handoff.control-plane.ai-sessions-group-by-path";
+const SHOW_EMPTY_PATH_GROUPS_STORAGE_KEY = "task-handoff.control-plane.ai-sessions-show-empty-path-groups";
 const SORT_BY_STATUS_STORAGE_KEY = "task-handoff.control-plane.ai-sessions-sort-by-status";
+const SESSION_LIST_LAYOUT_STORAGE_KEY = "task-handoff.control-plane.ai-sessions-list-layout";
 const SIDEBAR_WIDTH_STORAGE_KEY = "task-handoff.control-plane.ai-sessions-sidebar-width";
-const TIMELINE_VIEW_MODE_STORAGE_KEY = "task-handoff.control-plane.ai-session-timeline-view-mode";
 const SIDEBAR_WIDTH_DEFAULT = 360;
 const SIDEBAR_WIDTH_MIN = 260;
 const SIDEBAR_WIDTH_MAX = 520;
@@ -992,8 +1127,16 @@ function storedGroupByPath() {
   return window.localStorage?.getItem(GROUP_BY_PATH_STORAGE_KEY) !== "false";
 }
 
+function storedShowEmptyPathGroups() {
+  return window.localStorage?.getItem(SHOW_EMPTY_PATH_GROUPS_STORAGE_KEY) === "true";
+}
+
 function storedSortByStatus() {
   return window.localStorage?.getItem(SORT_BY_STATUS_STORAGE_KEY) !== "false";
+}
+
+function storedSessionListLayout(): AiSessionListLayout {
+  return window.localStorage?.getItem(SESSION_LIST_LAYOUT_STORAGE_KEY) === "list" ? "list" : "cards";
 }
 
 function clampSidebarWidth(value: number) {
@@ -1006,14 +1149,12 @@ function storedSidebarWidth() {
   return Number.isFinite(value) ? clampSidebarWidth(value) : SIDEBAR_WIDTH_DEFAULT;
 }
 
-function storedTimelineViewMode(): "compact" | "full" {
-  return window.localStorage?.getItem(TIMELINE_VIEW_MODE_STORAGE_KEY) === "full" ? "full" : "compact";
-}
-
 const props = defineProps<{
   activeSession: SessionTab;
+  chooseProjectFolder?: NativeNodeFolderPicker;
   instance: InstanceWithAiSessions;
   launchableApps?: LaunchableApp[];
+  launchingApp?: boolean;
   nodeLocalFolders?: NodeLocalFolder[];
   selectedAiSession: (instance: InstanceBoardItem, sessions?: AiSessionSummary[]) => AiSessionSummary | undefined;
 }>();
@@ -1047,7 +1188,24 @@ const sessionListOverlayStyle = computed<CSSProperties>(() => ({
 }));
 const sessionStatusFilter = ref<SessionStatusFilter>("all");
 const groupSessionsByPath = ref(storedGroupByPath());
+const showEmptyPathGroups = ref(storedShowEmptyPathGroups());
 const sortSessionsByStatus = ref(storedSortByStatus());
+const sessionListLayout = ref<AiSessionListLayout>(storedSessionListLayout());
+const sessionListPreviewSession = ref<AiSessionSummary>();
+const sessionListPreviewVisible = ref(false);
+const sessionListPreviewPosition = ref({ left: 12, top: 12 });
+const sessionListPreviewStyle = computed(() => ({
+  left: `${sessionListPreviewPosition.value.left}px`,
+  top: `${sessionListPreviewPosition.value.top}px`,
+}));
+const SESSION_LIST_PREVIEW_DELAY_MS = 1_000;
+const SESSION_LIST_PREVIEW_SKIP_DELAY_MS = 800;
+const SESSION_LIST_PREVIEW_CLOSE_DELAY_MS = 120;
+const SESSION_LIST_PREVIEW_WIDTH = 340;
+const SESSION_LIST_PREVIEW_HEIGHT = 162;
+let sessionListPreviewOpenTimer: ReturnType<typeof setTimeout> | undefined;
+let sessionListPreviewCloseTimer: ReturnType<typeof setTimeout> | undefined;
+let sessionListPreviewClosedAt = 0;
 const statusFilterOptions = computed(() => {
   const sessions = visibleAiSessions.value;
   return [
@@ -1073,72 +1231,59 @@ const displayedSessionGroups = computed<AiSessionPathGroup[]>(() => groupSession
   parentLabel: "",
   sessions: sortedSessions.value,
 }]);
-const selectedSession = computed(() => props.selectedAiSession(props.instance, filteredSessions.value));
-const timelineViewMode = ref<"compact" | "full">(storedTimelineViewMode());
-const timelineItemStore = useAiSessionTimelineStore();
-const activeTurnTimelineLoads = new Map<string, Promise<void>>();
-const activeSessionTimelineLoads = new Map<string, Promise<void>>();
-const supportsAiSessionSessionTimeline = computed(() => {
-  const session = selectedSession.value;
-  return Boolean(session && supportsAiSessionTimelineCapability(props.instance.capabilities, session.agent, "session-read"));
+// Keep the detail selection anchored to the authoritative session set. A status
+// transition (for example running -> idle) must not make the selected session
+// disappear merely because the sidebar filter changed its membership.
+const selectedSession = computed(() => props.selectedAiSession(props.instance, visibleAiSessions.value));
+useAiSessionMessageDeltaDemand(computed(() => ({ instanceIds: [props.instance.id] })));
+useAiSessionTimelineDemand(computed(() => selectedSession.value ? {
+  instanceId: props.instance.id,
+  sessionId: selectedSession.value.id,
+} : undefined));
+const {
+  allTurnsReady: selectedSessionTurnsReady,
+  conversation: selectedConversationSession,
+  loadAllTurns: loadAllSelectedSessionTurns,
+  hasCurrentTurn: hasCurrentSelectedSessionTurn,
+  hasRenderableTurn: hasRenderableSelectedSessionTurn,
+  loadTurn: loadSelectedSessionTurn,
+  refresh: loadSelectedSessionDetail,
+  state: selectedSessionDetailState,
+  turnIndexKey: selectedSessionTurnIndexKey,
+} = useAiSessionConversationProjection({ instanceId: () => props.instance.id, summary: selectedSession });
+const { setViewMode: persistTimelineViewMode, viewMode: timelineViewMode } = useAiSessionTimelineViewMode();
+const {
+  conversationTurnTimelines,
+  loadSelectedTurnTimeline,
+  loadTurnTimeline,
+  selectedTurn: selectedTimelineTurn,
+  selectedTurnState: selectedTurnTimelineState,
+  supportsTimeline: supportsAiSessionTimeline,
+} = useAiSessionTimelinePresentation({
+  instance: () => props.instance,
+  promptIndex: () => selectedSession.value ? promptIndexFor(selectedSession.value) : 0,
+  session: selectedConversationSession,
 });
-const supportsAiSessionTurnTimeline = computed(() => {
-  const session = selectedSession.value;
-  return Boolean(session && supportsAiSessionTimelineCapability(props.instance.capabilities, session.agent, "turn-read"));
-});
-const supportsAiSessionLiveTimelineItems = computed(() => {
-  const session = selectedSession.value;
-  return Boolean(session && supportsAiSessionTimelineCapability(props.instance.capabilities, session.agent, "live-items"));
-});
-const supportsAiSessionTimeline = computed(() => (
-  supportsAiSessionSessionTimeline.value
-  || supportsAiSessionTurnTimeline.value
-  || supportsAiSessionLiveTimelineItems.value
-));
-const supportsAiSessionTimelineReads = computed(() => (
-  supportsAiSessionSessionTimeline.value || supportsAiSessionTurnTimeline.value
-));
 const effectiveTimelineViewMode = computed(() => (
   supportsAiSessionTimeline.value
     ? timelineViewMode.value
     : "compact"
 ));
-const selectedTimelineTurn = computed(() => {
-  const session = selectedSession.value;
-  return session ? aiSessionTurns(session)[promptIndexFor(session)] : undefined;
-});
-const selectedTurnTimelineState = computed(() => {
-  const session = selectedSession.value;
-  const turn = selectedTimelineTurn.value;
-  if (!session || !turn) return { status: "ready" as const, items: [] };
-  if (supportsAiSessionTimelineReads.value) {
-    return timelineItemStore.turnState(props.instance.id, session.id, turn);
+const selectedSessionContentState = computed(() => {
+  if (selectedSessionDetailState.value !== "ready" || effectiveTimelineViewMode.value === "full") {
+    return selectedSessionDetailState.value;
   }
-  return supportsAiSessionLiveTimelineItems.value
-    ? timelineItemStore.realtimeTurnState(props.instance.id, session.id, turn)
-    : { status: "ready" as const, items: [] };
-});
-const selectedTurnTimeline = computed(() => {
-  return compactTimelineForTurn(selectedTurnTimelineState.value.items, selectedTimelineTurn.value);
-});
-const conversationTurnTimelines = computed(() => {
-  const session = selectedSession.value;
-  if (!session) return {};
-  return Object.fromEntries(aiSessionTurns(session).map((turn) => [
-    turn.id,
-    supportsAiSessionTimelineReads.value
-      ? timelineItemStore.turnState(props.instance.id, session.id, turn)
-      : supportsAiSessionLiveTimelineItems.value
-        ? timelineItemStore.realtimeTurnState(props.instance.id, session.id, turn)
-        : { status: "ready" as const, items: [] },
-  ]));
+  const summary = selectedSession.value;
+  const conversation = selectedConversationSession.value;
+  if (!summary || !conversation) return "loading";
+  const turn = aiSessionTurns(conversation)[promptIndexFor(summary)];
+  return !turn || hasRenderableSelectedSessionTurn(turn.id) ? "ready" : "loading";
 });
 
 async function setTimelineViewMode(value: unknown) {
   if (value !== "compact" && value !== "full") return;
   const enteringFullTimeline = value === "full" && timelineViewMode.value !== "full";
-  timelineViewMode.value = value;
-  window.localStorage?.setItem(TIMELINE_VIEW_MODE_STORAGE_KEY, value);
+  persistTimelineViewMode(value);
   if (value === "compact") {
     void loadSelectedTurnTimeline();
     return;
@@ -1149,72 +1294,6 @@ async function setTimelineViewMode(value: unknown) {
   handleDetailScroll();
 }
 
-function timelineLoadKey(instanceId: string, sessionId: string, turnId?: string) {
-  return JSON.stringify([instanceId, sessionId, turnId || ""]);
-}
-
-async function loadFullTimelineForSession(session: AiSessionSummary, force = false) {
-  if (!supportsAiSessionSessionTimeline.value) return;
-  const instanceId = props.instance.id;
-  const key = timelineLoadKey(instanceId, session.id);
-  const existing = activeSessionTimelineLoads.get(key);
-  if (existing) return existing;
-  const sessionState = timelineItemStore.sessionState(instanceId, session.id);
-  if (!force && sessionState.status === "ready") return;
-  const turns = aiSessionTurns(session);
-  timelineItemStore.beginSessionLoad(instanceId, session.id);
-  for (const turn of turns) timelineItemStore.beginTurnLoad(instanceId, session.id, turn);
-  const load = getAiSessionTimeline(instanceId, session.id)
-    .then((result) => timelineItemStore.resolveSession(instanceId, session.id, turns, result))
-    .catch((error) => {
-      const message = translateApiError(error, t, t("sessions.timeline.loadFailed"));
-      timelineItemStore.rejectSession(instanceId, session.id, message);
-      for (const turn of turns) timelineItemStore.rejectTurn(instanceId, session.id, turn, message);
-    })
-    .finally(() => activeSessionTimelineLoads.delete(key));
-  activeSessionTimelineLoads.set(key, load);
-  return load;
-}
-
-async function loadTurnTimeline(turnId: string, force = false) {
-  const session = selectedSession.value;
-  if (!session || (!supportsAiSessionSessionTimeline.value && !supportsAiSessionTurnTimeline.value)) return;
-  const instanceId = props.instance.id;
-  const turns = aiSessionTurns(session);
-  const turn = turns.find((candidate) => candidate.id === turnId || candidate.providerTurnId === turnId);
-  if (!turn) return;
-  if (shouldDeferTurnTimelineLoad(turns, turn, supportsAiSessionLiveTimelineItems.value)) return;
-  const state = timelineItemStore.turnState(instanceId, session.id, turn);
-  // A provider may expose only the complete-session reader; use it as the
-  // authoritative fallback when independent Turn reads are unavailable.
-  if (!supportsAiSessionTurnTimeline.value) {
-    if (!force && (state.status === "ready" || state.status === "loading")) return;
-    return loadFullTimelineForSession(session, true);
-  }
-  if (!force && (state.status === "ready" || state.status === "loading")) return;
-  const key = timelineLoadKey(instanceId, session.id, turn.id);
-  const existing = activeTurnTimelineLoads.get(key);
-  if (existing) return existing;
-  timelineItemStore.beginTurnLoad(instanceId, session.id, turn);
-  const load = getAiSessionTurnTimeline(instanceId, session.id, turn.id)
-    .then((result) => timelineItemStore.resolveTurn(instanceId, session.id, turn, result.items))
-    .catch((error) => timelineItemStore.rejectTurn(
-      instanceId,
-      session.id,
-      turn,
-      translateApiError(error, t, t("sessions.timeline.loadFailed")),
-    ))
-    .finally(() => activeTurnTimelineLoads.delete(key));
-  activeTurnTimelineLoads.set(key, load);
-  return load;
-}
-
-function loadSelectedTurnTimeline(force = false) {
-  const turn = selectedTimelineTurn.value;
-  return turn ? loadTurnTimeline(turn.id, force) : undefined;
-}
-
-watch(timelineItemStore.recoveryRevision, () => void loadSelectedTurnTimeline(true));
 watch(() => ({
   id: selectedSession.value?.id,
   unread: selectedSession.value?.unread,
@@ -1224,11 +1303,12 @@ watch(() => ({
     void markAiSessionRead(props.instance.id, current.id, current.updatedAt).catch(() => undefined);
   }
 }, { immediate: true });
-const repositoryAiAgent = computed<"codex" | "claude" | undefined>(() => {
+const repositoryAiAgent = computed<"codex" | "claude" | "opencode" | undefined>(() => {
   const agent = selectedSession.value?.agent;
-  return agent === "codex" || agent === "claude" ? agent : undefined;
+  return agent === "codex" || agent === "claude" || agent === "opencode" ? agent : undefined;
 });
 const compactAiSessionLayout = useMediaQuery("(max-width: 920px)");
+const supportsSessionListHoverPreview = useMediaQuery("(hover: hover) and (pointer: fine)");
 watch(compactAiSessionLayout, (compact) => {
   if (!compact) sessionListOverlayOpen.value = false;
 });
@@ -1245,9 +1325,45 @@ const selectedForkTurn = computed(() => {
   return turn?.status === "completed" && turn.providerTurnId ? turn : undefined;
 });
 const showNewSession = computed(() => newSessionOpen.value || !selectedSession.value);
+const selectedListSessionId = computed(() => showNewSession.value ? undefined : selectedSession.value?.id);
 const newSessionApp = ref("");
+const modelsQuery = useModelsQuery();
+const newSessionModelSelection = ref<AiSessionModelSelection>();
+const modelSelectionPendingSessionId = ref("");
+const newSessionReasoningEffort = ref<AiSessionReasoningEffort>(AI_SESSION_DEFAULT_REASONING_EFFORT);
+const reasoningEffortPending = ref<{ sessionId: string; target: AiSessionReasoningEffort }>();
+const newSessionModelGroups = computed(() => deriveAiSessionModelGroups({
+  entities: modelsQuery.data.value || [],
+  assignment: props.instance.modelSelection,
+  agent: newSessionApp.value,
+  nodeId: props.instance.nodeId,
+  mode: "create",
+  capability: modelSelectionCapability(newSessionApp.value),
+}));
+const selectedSessionModelGroups = computed(() => {
+  const session = selectedSession.value;
+  if (!session) return [];
+  return deriveAiSessionModelGroups({
+    entities: modelsQuery.data.value || [],
+    assignment: props.instance.modelSelection,
+    agent: session.agent,
+    nodeId: props.instance.nodeId,
+    mode: "existing",
+    currentSelection: session.modelSelection,
+    capability: modelSelectionCapability(session.agent),
+  });
+});
+const selectedSessionModelDisplay = computed(() => {
+  const session = selectedSession.value;
+  return session?.modelSelection;
+});
+const newSessionReasoningEffortCapability = computed(() => reasoningEffortCapability(newSessionApp.value));
+const selectedSessionReasoningEffortCapability = computed(() => reasoningEffortCapability(selectedSession.value?.agent || ""));
 const newSessionFolderId = ref("");
-const newSessionDraft = ref("");
+const activeNewSessionDraftKey = ref(aiSessionCreationDraftKey(props.instance.id));
+const initialNewSessionDraft = loadAiSessionDraftPayload(activeNewSessionDraftKey.value);
+const newSessionDraft = ref(initialNewSessionDraft.value);
+const newSessionMentionBindings = ref(initialNewSessionDraft.bindings);
 const newSessionFolderQuery = ref("");
 const newSessionBranchQuery = ref("");
 const collapsedNewSessionBranchFolders = ref(new Set<string>());
@@ -1263,30 +1379,134 @@ const newSessionCreateAttempt = ref<{
   uploadedAttachments?: AiSessionMessageAttachmentRef[];
 }>();
 const savingNewSessionPermission = ref(false);
+const choosingNewSessionFolder = ref(false);
 const newSessionPermissionMode = ref<AiSessionPermissionMode>(props.instance.config.defaultCodexPermissionMode);
-const newSessionComposerBusy = computed(() => launchingNewSession.value || savingNewSessionPermission.value || newSessionWorkspaceLoading.value);
+const newSessionComposerBusy = computed(() => launchingNewSession.value || savingNewSessionPermission.value || choosingNewSessionFolder.value);
 const aiSessionLaunchableApps = computed(() => (props.launchableApps || []).filter((app) => app.id === "codex"));
-const createdNewSessionFolders = ref<NodeLocalFolder[]>([]);
-const newSessionFolders = computed(() => {
-  const folders = [...(props.nodeLocalFolders || []), ...createdNewSessionFolders.value];
-  return [...new Map(folders.map((folder) => [folder.id, folder])).values()];
+const terminalLaunchAppId = computed(() => ["terminal-tty", "terminal", "gui-terminal"]
+  .find((appId) => props.launchableApps?.some((app) => app.id === appId)));
+
+function modelSelectionCapability(agent: string) {
+  // Controlled-instance capabilities are wrapped in the public `features` document.
+  // Passing the outer record makes the directory helper normalize to unsupported,
+  // which silently hides the model picker even when the runtime advertises it.
+  return normalizeAiSessionModelSelectionCapabilities(directoryAiSessionProviderCapability(props.instance.capabilities?.features, agent));
+}
+
+function reasoningEffortCapability(agent: string) {
+  return normalizeAiSessionReasoningEffortCapabilities(directoryAiSessionProviderCapability(props.instance.capabilities?.features, agent));
+}
+
+watch(newSessionModelGroups, (groups) => {
+  const current = newSessionModelSelection.value;
+  if (current && groups.some((group) => group.models.some((model) => model.modelEntityId === current.modelEntityId && model.modelName === current.modelName))) return;
+  newSessionModelSelection.value = defaultAiSessionModelSelection(groups);
+}, { immediate: true });
+watch(newSessionReasoningEffortCapability, (capability) => {
+  if (!capability.selectAtCreate) newSessionReasoningEffort.value = undefined;
+  else if (newSessionApp.value === "codex" && !newSessionReasoningEffort.value) newSessionReasoningEffort.value = AI_SESSION_DEFAULT_REASONING_EFFORT;
+}, { immediate: true });
+watch(visibleAiSessions, (sessions) => {
+  const pending = reasoningEffortPending.value;
+  if (pending && sessions.find((session) => session.id === pending.sessionId)?.reasoningEffort === pending.target) {
+    reasoningEffortPending.value = undefined;
+  }
 });
+const createdNewSessionFolders = ref<NodeLocalFolder[]>([]);
+const pathGroupRenameTarget = ref<NodeLocalFolder>();
+const pathGroupRenameDraft = ref("");
+const renamingPathGroup = ref(false);
+const canSubmitPathGroupRename = computed(() => Boolean(
+  pathGroupRenameTarget.value
+  && pathGroupRenameDraft.value.trim()
+  && pathGroupRenameDraft.value.trim() !== pathGroupRenameTarget.value.name
+  && !renamingPathGroup.value,
+));
+const INSTANCE_WORKSPACE_FOLDER_ID = "__instance_workspace__";
+type NewSessionFolderOption = Pick<NodeLocalFolder, "id" | "name" | "path"> & { cwdFolderId?: string };
+const newSessionFolders = computed<NewSessionFolderOption[]>(() => {
+  const folders = [...(props.nodeLocalFolders || []), ...createdNewSessionFolders.value];
+  if (props.instance.source.type !== "local-folder") {
+    const workspacePath = props.instance.runtime?.workspacePath || props.instance.workspace.path || "/workspace";
+    return [{
+      id: INSTANCE_WORKSPACE_FOLDER_ID,
+      name: nodePathName(workspacePath),
+      path: workspacePath,
+    }] satisfies NewSessionFolderOption[];
+  }
+  return selectableInstanceCwdFolders(props.instance, folders).map((folder) => ({
+    id: folder.id,
+    cwdFolderId: folder.id,
+    name: nodeLocalFolderDisplayName(folder),
+    path: folder.path,
+  }));
+});
+async function registerNewSessionFolder(nodeId: string, input: { name: string; path: string }) {
+  const folder = await createNodeLocalFolder(nodeId, input);
+  createdNewSessionFolders.value = [...createdNewSessionFolders.value, folder];
+  newSessionFolderId.value = folder.id;
+  return folder;
+}
+
+function registeredPathGroupFolder(group: AiSessionPathGroup | AiSessionHistoryPathGroup) {
+  if (!group.cwdFolderId) return undefined;
+  return [...(props.nodeLocalFolders || []), ...createdNewSessionFolders.value]
+    .find((folder) => folder.id === group.cwdFolderId);
+}
+
+const canOpenPathGroupFolder = computed(() => desktopRuntimePathAccess(props.instance) === "desktop-local" && canOpenDesktopLocalPath());
+
+function canRenamePathGroup(group: AiSessionPathGroup | AiSessionHistoryPathGroup) {
+  return Boolean(registeredPathGroupFolder(group) && nodeSupportsLocalFolderNameUpdate(props.instance.node));
+}
+
+async function openPathGroupFolder(group: AiSessionPathGroup | AiSessionHistoryPathGroup) {
+  const result = await openDesktopLocalPath(group.path);
+  if (!result.ok) showControlPlaneToast(t("sessions.panel.openInFileManagerFailed"));
+}
+
+function openPathGroupRename(group: AiSessionPathGroup | AiSessionHistoryPathGroup) {
+  const folder = registeredPathGroupFolder(group);
+  if (!folder || !nodeSupportsLocalFolderNameUpdate(props.instance.node)) return;
+  pathGroupRenameTarget.value = folder;
+  pathGroupRenameDraft.value = folder.name;
+}
+
+function setPathGroupRenameOpen(open: boolean) {
+  if (open || renamingPathGroup.value) return;
+  pathGroupRenameTarget.value = undefined;
+  pathGroupRenameDraft.value = "";
+}
+
+async function submitPathGroupRename() {
+  const folder = pathGroupRenameTarget.value;
+  const name = pathGroupRenameDraft.value.trim();
+  if (!folder || !name || !canSubmitPathGroupRename.value) return;
+  renamingPathGroup.value = true;
+  let succeeded = false;
+  try {
+    const updated = await updateNodeLocalFolder(folder.nodeId, folder.id, { name });
+    createdNewSessionFolders.value = createdNewSessionFolders.value.map((candidate) => candidate.id === updated.id ? updated : candidate);
+    await queryClient.invalidateQueries({ queryKey: controlPlaneQueryKeys.nodeLocalFolders(folder.nodeId) });
+    succeeded = true;
+  } catch (error) {
+    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.renameProjectFailed")));
+  } finally {
+    renamingPathGroup.value = false;
+    if (succeeded) setPathGroupRenameOpen(false);
+  }
+}
 const newProjectPicker = useNodeStorageFolderPicker({
-  createFolder: async (nodeId, input) => {
-    const folder = await createNodeLocalFolder(nodeId, input);
-    createdNewSessionFolders.value = [...createdNewSessionFolders.value, folder];
-    newSessionFolderId.value = folder.id;
-    return folder;
-  },
+  createFolder: registerNewSessionFolder,
   errorText: (error) => translateApiError(error, t),
   loadFolders: listNodeFolderTree,
+  loadPlaces: listNodeFolderPlaces,
   refresh: async () => {
     await queryClient.invalidateQueries({ queryKey: ["control-plane-node-local-folders", props.instance.nodeId] });
   },
 });
 const filteredNewSessionFolders = computed(() => {
-  const query = newSessionFolderQuery.value.trim().toLowerCase();
-  return newSessionFolders.value.filter((folder) => !query || `${folder.name} ${folder.path}`.toLowerCase().includes(query));
+  return filterInstanceCwdFolders(newSessionFolders.value, newSessionFolderQuery.value);
 });
 const filteredNewSessionBranches = computed(() => {
   const query = newSessionBranchQuery.value.trim().toLowerCase();
@@ -1301,11 +1521,7 @@ type VisibleNewSessionBranchTreeNode =
 const newSessionBranchTree = computed(() => buildNewSessionBranchTree(filteredNewSessionBranches.value));
 const visibleNewSessionBranches = computed(() => flattenNewSessionBranchTree(newSessionBranchTree.value));
 const newSessionFolder = computed(() => newSessionFolders.value.find((folder) => folder.id === newSessionFolderId.value));
-const newSessionProjectLabel = computed(() => {
-  if (newSessionFolder.value?.name) return newSessionFolder.value.name;
-  const sourcePath = props.instance.source.type === "local-folder" ? props.instance.source.path : "";
-  return sourcePath?.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || t("sessions.panel.chooseProject");
-});
+const newSessionProjectLabel = computed(() => newSessionFolder.value?.name || t("sessions.panel.chooseProject"));
 const newSessionSelectedBranchLabel = computed(() => {
   const selected = newSessionWorkspace.value?.branches.find((branch) => branch.name === newSessionBranch.value);
   if (!selected) return t("sessions.panel.chooseBranch");
@@ -1328,9 +1544,14 @@ const historyMessageDraft = ref("");
 const historyMessageAttachments = ref<AiSessionComposerAttachment[]>([]);
 let currentListScrollTop = 0;
 let historyDetailRevision = 0;
+let promptSelectionRevision = 0;
 const promptIndexes = ref<Record<string, { index: number; count: number }>>({});
-const collapsedPathGroups = reactive<Record<string, boolean>>({});
-const collapsedHistoryPathGroups = reactive<Record<string, boolean>>({});
+const collapsedPathGroups = reactive<Record<string, boolean>>(
+  loadCollapsedAiSessionPathGroups(props.instance.id, "current"),
+);
+const collapsedHistoryPathGroups = reactive<Record<string, boolean>>(
+  loadCollapsedAiSessionPathGroups(props.instance.id, "history"),
+);
 const messageDraft = ref("");
 const messageAttachments = ref<AiSessionComposerAttachment[]>([]);
 const messageMentionBindings = ref<AiSessionMentionBinding[]>([]);
@@ -1359,6 +1580,7 @@ const mentionContext = computed(() => {
 const detailEl = ref<HTMLElement>();
 const composerEl = ref<InstanceType<typeof AiSessionComposer>>();
 const detailScrolled = ref(false);
+const detailConversationTransitioning = ref(false);
 const detailHeaderEl = ref<HTMLElement>();
 const detailPromptSectionEl = ref<HTMLElement>();
 const detailActionsEl = ref<HTMLElement>();
@@ -1389,6 +1611,7 @@ const detailLayoutAnchor = createLayoutScrollAnchor(
 );
 const isFollowingLatest = ref(true);
 const isSmoothFollowingLatest = ref(false);
+const detailCanScroll = ref(false);
 let sidebarResizeCleanup: (() => void) | undefined;
 const aiSessionActionBusy = ref(false);
 const stoppingAppSessionId = ref("");
@@ -1397,7 +1620,6 @@ const forkingAiSessionId = ref("");
 const forkRequestIds = new Map<string, string>();
 const pendingBusyFork = ref<{ session: AiSessionSummary; mode: "current" | "managed-worktree"; throughTurnId?: string }>();
 const triggerBusyKey = ref("");
-const triggerSearch = ref("");
 const triggers = useControlPlaneTriggersQuery();
 const triggerTemplates = computed(() => triggers.data.value?.triggers || []);
 
@@ -1422,20 +1644,20 @@ function updateDetailStickyThreshold() {
     + viewport.scrollTop;
   detailStickyThreshold = Math.max(0, Math.ceil(expandedDividerOffset - stickyHeaderHeight));
 }
-const filteredTriggerTemplates = computed(() => {
-  const query = triggerSearch.value.trim().toLowerCase();
-  if (!query) {
-    return triggerTemplates.value;
+
+function setDetailConversationTransitioning(transitioning: boolean) {
+  detailConversationTransitioning.value = transitioning;
+  if (transitioning) {
+    detailScrolled.value = false;
+    return;
   }
-  return triggerTemplates.value.filter((trigger) => {
-    const searchable = [
-      trigger.config.name,
-      trigger.config.source.type,
-      trigger.configHash,
-    ].join(" ").toLowerCase();
-    return searchable.includes(query);
+  void nextTick(() => {
+    if (detailConversationTransitioning.value || detailScrollLayoutPending) return;
+    detailStickyThreshold = 0;
+    updateDetailStickyThreshold();
+    handleDetailScroll();
   });
-});
+}
 const workspaceStyle = computed(
   () =>
     ({
@@ -1444,20 +1666,13 @@ const workspaceStyle = computed(
 );
 
 function groupAiSessionsByPath(sessions: AiSessionSummary[]) {
-  const groups = new Map<string, { cwdFolderId?: string; path: string; sessions: AiSessionSummary[] }>();
-  for (const session of sessions) {
-    const path = aiSessionPath(session);
-    const key = session.cwdFolderId ? `folder:${session.cwdFolderId}` : `cwd:${path}`;
-    const current = groups.get(key);
-    groups.set(key, { cwdFolderId: session.cwdFolderId, path: current?.path || path, sessions: [...(current?.sessions || []), session] });
-  }
-  return [...groups.entries()]
-    .map(([key, group]) => ({
-      key,
+  return groupAiSessionEntriesByPath(sessions, showEmptyPathGroups.value ? newSessionFolders.value : [])
+    .map((group) => ({
+      key: group.key,
       path: aiSessionGroupPath(group.cwdFolderId, group.path),
       cwdFolderId: group.cwdFolderId,
       ...aiSessionGroupLabel(group.cwdFolderId, group.path),
-      sessions: group.sessions,
+      sessions: group.entries,
     }))
     .sort((a, b) => {
       const messageTimeDelta = groupLastUserMessageTime(b.sessions) - groupLastUserMessageTime(a.sessions);
@@ -1466,20 +1681,13 @@ function groupAiSessionsByPath(sessions: AiSessionSummary[]) {
 }
 
 function groupAiSessionHistoryByPath(items: AiSessionHistoryItem[]) {
-  const groups = new Map<string, { cwdFolderId?: string; path: string; items: AiSessionHistoryItem[] }>();
-  for (const item of items) {
-    const path = item.cwd?.trim() || "";
-    const key = item.cwdFolderId ? `folder:${item.cwdFolderId}` : `cwd:${path}`;
-    const current = groups.get(key);
-    groups.set(key, { cwdFolderId: item.cwdFolderId, path: current?.path || path, items: [...(current?.items || []), item] });
-  }
-  return [...groups.entries()]
-    .map(([key, group]) => ({
-      key,
+  return groupAiSessionEntriesByPath(items)
+    .map((group) => ({
+      key: group.key,
       path: aiSessionGroupPath(group.cwdFolderId, group.path),
       cwdFolderId: group.cwdFolderId,
       ...aiSessionGroupLabel(group.cwdFolderId, group.path),
-      items: group.items,
+      items: group.entries,
     }))
     .sort((a, b) => {
       const latestA = Math.max(0, ...a.items.map((item) => Date.parse(item.lastActiveAt) || 0));
@@ -1532,37 +1740,24 @@ function groupLastUserMessageTime(sessions: AiSessionSummary[]) {
   return Math.max(0, ...sessions.map(aiSessionLastUserMessageTime));
 }
 
-watch(
-  displayedSessionGroups,
-  (groups) => {
-    const activeKeys = new Set(groups.map((group) => group.key));
-    for (const key of Object.keys(collapsedPathGroups)) {
-      if (!activeKeys.has(key)) {
-        delete collapsedPathGroups[key];
-      }
-    }
-  },
-  { immediate: true },
-);
-
-watch(
-  displayedHistoryGroups,
-  (groups) => {
-    const activeKeys = new Set(groups.map((group) => group.key));
-    for (const key of Object.keys(collapsedHistoryPathGroups)) {
-      if (!activeKeys.has(key)) delete collapsedHistoryPathGroups[key];
-    }
-  },
-  { immediate: true },
-);
-
 watch(groupSessionsByPath, (value) => {
   window.localStorage?.setItem(GROUP_BY_PATH_STORAGE_KEY, String(value));
+});
+
+watch(showEmptyPathGroups, (value) => {
+  window.localStorage?.setItem(SHOW_EMPTY_PATH_GROUPS_STORAGE_KEY, String(value));
 });
 
 watch(sortSessionsByStatus, (value) => {
   window.localStorage?.setItem(SORT_BY_STATUS_STORAGE_KEY, String(value));
 });
+
+watch(sessionListLayout, (value) => {
+  window.localStorage?.setItem(SESSION_LIST_LAYOUT_STORAGE_KEY, value);
+  closeSessionListPreview();
+});
+
+watch([historyMode, supportsSessionListHoverPreview], closeSessionListPreview);
 
 watch(() => props.instance.id, () => {
   historyDetailRevision += 1;
@@ -1573,7 +1768,8 @@ watch(() => props.instance.id, () => {
   historyDetailError.value = "";
   historyMessageDraft.value = "";
   historyMessageAttachments.value = [];
-  for (const key of Object.keys(collapsedHistoryPathGroups)) delete collapsedHistoryPathGroups[key];
+  replaceCollapsedPathGroups(collapsedPathGroups, loadCollapsedAiSessionPathGroups(props.instance.id, "current"));
+  replaceCollapsedPathGroups(collapsedHistoryPathGroups, loadCollapsedAiSessionPathGroups(props.instance.id, "history"));
   if (historyMode.value) void loadHistory();
 });
 
@@ -1584,6 +1780,19 @@ watch(
   },
   { immediate: true },
 );
+
+watch(() => props.instance.id, (instanceId) => {
+  activeNewSessionDraftKey.value = aiSessionCreationDraftKey(instanceId);
+  const draft = loadAiSessionDraftPayload(activeNewSessionDraftKey.value);
+  newSessionDraft.value = draft.value;
+  newSessionMentionBindings.value = draft.bindings;
+  messageAttachments.value = [];
+  newSessionCreateAttempt.value = undefined;
+});
+
+watch([newSessionDraft, newSessionMentionBindings], ([draft, bindings]) => {
+  persistAiSessionDraftPayload(activeNewSessionDraftKey.value, draft, bindings);
+}, { deep: true });
 
 watch(
   [showNewSession, aiSessionLaunchableApps, newSessionFolders],
@@ -1597,30 +1806,34 @@ watch(
   [() => props.instance.id, newSessionFolderId, showNewSession],
   ([instanceId, folderId, show], _previous, onCleanup) => {
     const revision = ++newSessionWorkspaceRevision;
-    newSessionWorkspace.value = undefined;
     newSessionWorkspaceMode.value = "current-folder";
     newSessionBranch.value = "";
     newSessionBranchQuery.value = "";
     if (!show || !folderId) {
+      newSessionWorkspace.value = undefined;
       newSessionWorkspaceLoading.value = false;
       return;
     }
     const abort = new AbortController();
     onCleanup(() => abort.abort());
+    const cwdFolderId = newSessionFolders.value.find((folder) => folder.id === folderId)?.cwdFolderId;
+    const queryKey = controlPlaneQueryKeys.aiSessionWorkspace(instanceId, cwdFolderId);
+    const cachedWorkspace = queryClient.getQueryData<RepositoryAiSessionWorkspace>(queryKey);
+    newSessionWorkspace.value = cachedWorkspace;
+    if (cachedWorkspace) selectDefaultNewSessionBranch(cachedWorkspace);
     newSessionWorkspaceLoading.value = true;
-    void getAiSessionWorkspace(instanceId, folderId, abort.signal)
+    void getAiSessionWorkspace(instanceId, cwdFolderId, abort.signal)
       .then((workspace) => {
         if (revision !== newSessionWorkspaceRevision) return;
+        queryClient.setQueryData(queryKey, workspace);
         newSessionWorkspace.value = workspace;
-        newSessionBranch.value = workspace.currentBranch
-          || workspace.branches.find((branch) => branch.current)?.name
-          || workspace.branches.find((branch) => branch.currentFolderSelectable)?.name
-          || "";
+        const selected = workspace.branches.find((branch) => branch.name === newSessionBranch.value);
+        if (!selected || !newSessionBranchSelectable(selected)) selectDefaultNewSessionBranch(workspace);
       })
       .catch(() => {
         if (abort.signal.aborted) return;
         // Compatibility for v0.0.21: instances without pre-session repository inspection keep the original cwd-only flow.
-        if (revision === newSessionWorkspaceRevision) newSessionWorkspace.value = undefined;
+        // Keep a cached workspace visible when only the background refresh failed.
       })
       .finally(() => {
         if (revision === newSessionWorkspaceRevision) newSessionWorkspaceLoading.value = false;
@@ -1629,12 +1842,26 @@ watch(
   { immediate: true },
 );
 
+function selectDefaultNewSessionBranch(workspace: RepositoryAiSessionWorkspace) {
+  newSessionBranch.value = workspace.currentBranch
+    || workspace.branches.find((branch) => branch.current)?.name
+    || workspace.branches.find((branch) => branch.currentFolderSelectable)?.name
+    || "";
+}
+
 function togglePathGroup(key: string) {
   collapsedPathGroups[key] = !collapsedPathGroups[key];
+  persistCollapsedAiSessionPathGroups(props.instance.id, "current", collapsedPathGroups);
 }
 
 function toggleHistoryPathGroup(key: string) {
   collapsedHistoryPathGroups[key] = !collapsedHistoryPathGroups[key];
+  persistCollapsedAiSessionPathGroups(props.instance.id, "history", collapsedHistoryPathGroups);
+}
+
+function replaceCollapsedPathGroups(target: Record<string, boolean>, source: Record<string, boolean>) {
+  for (const key of Object.keys(target)) delete target[key];
+  Object.assign(target, source);
 }
 
 function stopSidebarResize() {
@@ -1672,7 +1899,10 @@ function startSidebarResize(event: PointerEvent) {
 }
 
 function promptCount(session: AiSessionSummary) {
-  return aiSessionTurns(session).length;
+  const conversation = selectedConversationSession.value?.id === session.id
+    ? selectedConversationSession.value
+    : session;
+  return conversation.turns ? aiSessionTurns(conversation).length : conversation.turnCount ?? 0;
 }
 
 function latestPromptIndex(session: AiSessionSummary) {
@@ -1701,14 +1931,26 @@ function promptIndexFor(session: AiSessionSummary) {
   return Math.min(Math.max(saved.index, 0), count - 1);
 }
 
-function setPromptIndex(session: AiSessionSummary, index: number) {
+async function setPromptIndex(session: AiSessionSummary, index: number) {
   const count = promptCount(session);
   if (!count) {
     return;
   }
+  const targetIndex = Math.min(Math.max(index, 0), count - 1);
+  const conversation = selectedConversationSession.value?.id === session.id
+    ? selectedConversationSession.value
+    : undefined;
+  const targetTurn = conversation ? aiSessionTurns(conversation)[targetIndex] : undefined;
+  if (targetTurn && !hasCurrentSelectedSessionTurn(targetTurn.id)) {
+    const requestRevision = ++promptSelectionRevision;
+    const loaded = await loadSelectedSessionTurn(targetTurn.id);
+    if (!loaded || requestRevision !== promptSelectionRevision || selectedSession.value?.id !== session.id) return;
+  } else {
+    promptSelectionRevision += 1;
+  }
   promptIndexes.value = {
     ...promptIndexes.value,
-    [session.id]: { index: Math.min(Math.max(index, 0), count - 1), count },
+    [session.id]: { index: targetIndex, count },
   };
   promptExpanded.value = false;
   promptHasOverflow.value = false;
@@ -1716,16 +1958,65 @@ function setPromptIndex(session: AiSessionSummary, index: number) {
 }
 
 function previousPrompt(session: AiSessionSummary) {
-  setPromptIndex(session, promptIndexFor(session) - 1);
+  void setPromptIndex(session, promptIndexFor(session) - 1);
 }
 
 function nextPrompt(session: AiSessionSummary) {
-  setPromptIndex(session, promptIndexFor(session) + 1);
+  void setPromptIndex(session, promptIndexFor(session) + 1);
+}
+
+function cancelSessionListPreviewClose() {
+  if (!sessionListPreviewCloseTimer) return;
+  clearTimeout(sessionListPreviewCloseTimer);
+  sessionListPreviewCloseTimer = undefined;
+}
+
+function closeSessionListPreview() {
+  if (sessionListPreviewOpenTimer) clearTimeout(sessionListPreviewOpenTimer);
+  if (sessionListPreviewCloseTimer) clearTimeout(sessionListPreviewCloseTimer);
+  sessionListPreviewOpenTimer = undefined;
+  sessionListPreviewCloseTimer = undefined;
+  if (sessionListPreviewVisible.value) sessionListPreviewClosedAt = Date.now();
+  sessionListPreviewVisible.value = false;
+}
+
+function scheduleSessionListPreviewClose() {
+  if (sessionListPreviewOpenTimer) clearTimeout(sessionListPreviewOpenTimer);
+  sessionListPreviewOpenTimer = undefined;
+  cancelSessionListPreviewClose();
+  sessionListPreviewCloseTimer = setTimeout(closeSessionListPreview, SESSION_LIST_PREVIEW_CLOSE_DELAY_MS);
+}
+
+function showSessionListPreview(event: Event, session: AiSessionSummary) {
+  if (sessionListLayout.value !== "list" || !supportsSessionListHoverPreview.value || historyMode.value) return;
+  if (!(event.currentTarget instanceof HTMLElement)) return;
+  cancelSessionListPreviewClose();
+  if (sessionListPreviewOpenTimer) clearTimeout(sessionListPreviewOpenTimer);
+  const bounds = event.currentTarget.getBoundingClientRect();
+  const cardWidth = Math.min(SESSION_LIST_PREVIEW_WIDTH, window.innerWidth - 24);
+  const preferredLeft = bounds.right + 8;
+  const left = preferredLeft + cardWidth <= window.innerWidth - 12
+    ? preferredLeft
+    : bounds.left - cardWidth - 8;
+  sessionListPreviewPosition.value = {
+    left: Math.max(12, Math.min(left, window.innerWidth - cardWidth - 12)),
+    top: Math.max(12, Math.min(bounds.top, window.innerHeight - SESSION_LIST_PREVIEW_HEIGHT - 12)),
+  };
+  sessionListPreviewSession.value = session;
+  if (sessionListPreviewVisible.value || Date.now() - sessionListPreviewClosedAt <= SESSION_LIST_PREVIEW_SKIP_DELAY_MS) {
+    sessionListPreviewVisible.value = true;
+    return;
+  }
+  sessionListPreviewOpenTimer = setTimeout(() => {
+    sessionListPreviewVisible.value = true;
+    sessionListPreviewOpenTimer = undefined;
+  }, SESSION_LIST_PREVIEW_DELAY_MS);
 }
 
 function selectSession(sessionId: string) {
   newSessionOpen.value = false;
   sessionListOverlayOpen.value = false;
+  closeSessionListPreview();
   emit("selectAiSession", props.instance.id, sessionId);
 }
 
@@ -1811,16 +2102,7 @@ async function resumeHistorySession(item: AiSessionHistoryItem) {
     && session.creationSource === result.creationSource
     && (result.appSessionId ? session.appSessionId === result.appSessionId : !session.appSessionId)
   ));
-  let session = findAuthoritativeSession();
-  for (let attempt = 0; attempt < 12 && !session; attempt += 1) {
-    await new Promise((resolve) => window.setTimeout(resolve, 250));
-    session = findAuthoritativeSession();
-  }
-  if (!session) {
-    await queryClient.refetchQueries({ queryKey: ["control-plane-ai-sessions"] });
-    await nextTick();
-    session = findAuthoritativeSession();
-  }
+  const session = await waitForAiSessionProjection(findAuthoritativeSession);
   if (!session) throw new Error(t("sessions.panel.resumePending"));
   return session;
 }
@@ -1829,13 +2111,16 @@ async function continueHistoryConversation() {
   const item = historyDetail.value?.item;
   if (!item || resumingHistoryId.value) return;
   resumingHistoryId.value = item.id;
+  const loadingToast = showDelayedControlPlaneLoadingToast(t("sessions.actions.forking"));
   try {
     const session = await resumeHistorySession(item);
     emit("selectAiSession", props.instance.id, session.id);
     await leaveHistoryMode();
   } catch (error) {
+    loadingToast.dismiss();
     showControlPlaneToast(translateApiError(error, t, t("sessions.panel.continueFailed")));
   } finally {
+    loadingToast.dismiss();
     resumingHistoryId.value = "";
   }
 }
@@ -1845,6 +2130,7 @@ async function sendHistoryMessage(permissionMode?: AiSessionPermissionMode) {
   const message = historyMessageDraft.value.trim();
   if (!item || resumingHistoryId.value || (!message && !historyMessageAttachments.value.length)) return;
   resumingHistoryId.value = item.id;
+  const loadingToast = showDelayedControlPlaneLoadingToast(t("sessions.actions.forking"));
   try {
     const session = await resumeHistorySession(item);
     const attachments = await uploadAttachments(props.instance.id, session.id, historyMessageAttachments.value);
@@ -1866,8 +2152,10 @@ async function sendHistoryMessage(permissionMode?: AiSessionPermissionMode) {
     emit("selectAiSession", props.instance.id, session.id);
     await leaveHistoryMode();
   } catch (error) {
+    loadingToast.dismiss();
     showControlPlaneToast(translateApiError(error, t, t("sessions.panel.continueFailed")));
   } finally {
+    loadingToast.dismiss();
     resumingHistoryId.value = "";
   }
 }
@@ -1879,9 +2167,7 @@ function openNewSession() {
   if (wasVisible) {
     return;
   }
-  newSessionDraft.value = "";
   messageAttachments.value = [];
-  messageMentionBindings.value = [];
   newSessionCreateAttempt.value = undefined;
   initializeNewSessionDefaults();
 }
@@ -1891,6 +2177,9 @@ function newSessionFolderIdForPath(sessionPath: string) {
   const sourcePath = props.instance.source.type === "local-folder" ? props.instance.source.path : "";
   const workspacePath = props.instance.runtime?.workspacePath || props.instance.workspace.path || "/workspace";
   return newSessionFolders.value.find((folder) => {
+    if (!folder.cwdFolderId) {
+      return relativeNodePathSegments(folder.path, sessionPath)?.length === 0;
+    }
     if (runtimeIsLocal) {
       return relativeNodePathSegments(folder.path, sessionPath)?.length === 0;
     }
@@ -1937,8 +2226,15 @@ function initializeNewSessionDefaults() {
     newSessionApp.value = aiSessionLaunchableApps.value[0]?.id || "";
   }
   if (!newSessionFolders.value.some((folder) => folder.id === newSessionFolderId.value)) {
+    if (props.instance.source.type !== "local-folder") {
+      newSessionFolderId.value = INSTANCE_WORKSPACE_FOLDER_ID;
+      return;
+    }
     const sourcePath = props.instance.source.type === "local-folder" ? props.instance.source.path : "";
-    newSessionFolderId.value = newSessionFolders.value.find((folder) => folder.path === sourcePath)?.id || "";
+    const sourceFolderId = props.instance.source.type === "local-folder" ? props.instance.source.localFolderId : undefined;
+    newSessionFolderId.value = newSessionFolders.value.find((folder) => folder.id === sourceFolderId)?.id
+      || newSessionFolders.value.find((folder) => relativeNodePathSegments(folder.path, sourcePath)?.length === 0)?.id
+      || "";
   }
 }
 
@@ -2034,7 +2330,6 @@ async function updateNewSessionPermissionMode(permissionMode: AiSessionPermissio
   savingNewSessionPermission.value = true;
   try {
     await updateControlledInstance(props.instance.id, { config: { defaultCodexPermissionMode: permissionMode } });
-    await refreshBoard();
   } catch (error) {
     newSessionPermissionMode.value = previousPermissionMode;
     showControlPlaneToast(translateApiError(error, t, t("sessions.panel.defaultPermissionFailed")));
@@ -2043,8 +2338,30 @@ async function updateNewSessionPermissionMode(permissionMode: AiSessionPermissio
   }
 }
 
-function openNewProject() {
-  void newProjectPicker.openForNode({ id: props.instance.nodeId, name: props.instance.nodeId });
+async function openNewProject() {
+  if (!props.chooseProjectFolder) {
+    await newProjectPicker.openForNode({ id: props.instance.nodeId, name: props.instance.nodeId });
+    return;
+  }
+  if (choosingNewSessionFolder.value) return;
+  choosingNewSessionFolder.value = true;
+  try {
+    const result = nativeNodeFolderSelectionResult(await props.chooseProjectFolder(), props.instance.nodeId);
+    if (result.status === "cancelled") return;
+    if (result.status === "invalid-owner") {
+      showControlPlaneToast(t("settings.nodeDetail.invalidLocalFolderOwner"));
+      return;
+    }
+    await registerNewSessionFolder(props.instance.nodeId, {
+      name: nodePathName(result.path),
+      path: result.path,
+    });
+    await queryClient.invalidateQueries({ queryKey: ["control-plane-node-local-folders", props.instance.nodeId] });
+  } catch (error) {
+    showControlPlaneToast(translateApiError(error, t));
+  } finally {
+    choosingNewSessionFolder.value = false;
+  }
 }
 
 async function confirmNewProject() {
@@ -2053,12 +2370,12 @@ async function confirmNewProject() {
 
 async function createNewSession(permissionMode?: AiSessionPermissionMode) {
   const message = newSessionDraft.value.trim();
-  const cwdFolderId = newSessionFolder.value?.id;
-  if (!newSessionApp.value || !message || newSessionComposerBusy.value) return;
+  const cwdFolderId = newSessionFolder.value?.cwdFolderId;
+  if (!newSessionApp.value || !newSessionFolder.value || !message || newSessionComposerBusy.value || (newSessionWorkspaceLoading.value && !newSessionWorkspace.value)) return;
   const gitSelection = newSessionWorkspace.value?.availability === "available" && newSessionBranch.value
     ? { mode: newSessionWorkspaceMode.value, branch: newSessionBranch.value }
     : undefined;
-  const references = referencesForBindings(newSessionDraft.value, messageMentionBindings.value);
+  const references = referencesForBindings(newSessionDraft.value, newSessionMentionBindings.value);
   const fingerprint = JSON.stringify({
     instanceId: props.instance.id,
     agent: newSessionApp.value,
@@ -2075,15 +2392,17 @@ async function createNewSession(permissionMode?: AiSessionPermissionMode) {
     })),
     references,
     permissionMode,
+    modelSelection: newSessionModelSelection.value,
+    reasoningEffort: newSessionReasoningEffort.value,
   });
   if (newSessionCreateAttempt.value?.fingerprint !== fingerprint) {
-    newSessionCreateAttempt.value = { clientRequestId: crypto.randomUUID(), fingerprint };
+    newSessionCreateAttempt.value = { clientRequestId: createBrowserUuid(), fingerprint };
   }
   const attempt = newSessionCreateAttempt.value;
   launchingNewSession.value = true;
   try {
     const attachments = attempt.uploadedAttachments
-      || await uploadMessageAttachments(props.instance.id, attempt.clientRequestId);
+      || await uploadAttachments(props.instance.id, attempt.clientRequestId, messageAttachments.value, "create-request");
     attempt.uploadedAttachments = attachments;
     const result = await createAiSession(props.instance.id, {
       agent: newSessionApp.value,
@@ -2093,14 +2412,17 @@ async function createNewSession(permissionMode?: AiSessionPermissionMode) {
       attachments,
       references,
       permissionMode,
+      ...(newSessionModelSelection.value ? { modelSelection: newSessionModelSelection.value } : {}),
+      ...(newSessionReasoningEffort.value ? { reasoningEffort: newSessionReasoningEffort.value } : {}),
       clientRequestId: attempt.clientRequestId,
     });
     if (permissionMode) {
       persistAiSessionPermissionMode(aiSessionPermissionKey(props.instance.id, result.aiSessionId), permissionMode);
     }
     emit("selectAiSession", props.instance.id, result.aiSessionId);
+    clearAiSessionDraft(activeNewSessionDraftKey.value);
     newSessionDraft.value = "";
-    messageMentionBindings.value = [];
+    newSessionMentionBindings.value = [];
     messageAttachments.value = [];
     newSessionCreateAttempt.value = undefined;
     newSessionOpen.value = false;
@@ -2111,12 +2433,55 @@ async function createNewSession(permissionMode?: AiSessionPermissionMode) {
   }
 }
 
+async function selectExistingSessionModel(modelSelection: AiSessionModelSelection) {
+  const session = selectedSession.value;
+  if (!session || modelSelectionPendingSessionId.value || (
+    session.modelSelection?.modelEntityId === modelSelection.modelEntityId
+    && session.modelSelection.modelName === modelSelection.modelName
+  )) return;
+  modelSelectionPendingSessionId.value = session.id;
+  try {
+    await updateAiSessionModelSelection(props.instance.id, session.id, createBrowserUuid(), modelSelection);
+  } catch (error) {
+    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.modelSwitchFailed")));
+  } finally {
+    if (modelSelectionPendingSessionId.value === session.id) modelSelectionPendingSessionId.value = "";
+  }
+}
+
+async function selectExistingSessionReasoningEffort(reasoningEffort: AiSessionReasoningEffort) {
+  const session = selectedSession.value;
+  if (!session || reasoningEffortPending.value || session.reasoningEffort === reasoningEffort) return;
+  reasoningEffortPending.value = { sessionId: session.id, target: reasoningEffort };
+  try {
+    await updateAiSessionReasoningEffort(props.instance.id, session.id, createBrowserUuid(), reasoningEffort);
+  } catch (error) {
+    if (reasoningEffortPending.value?.sessionId === session.id) reasoningEffortPending.value = undefined;
+    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.reasoningEffortFailed")));
+  }
+}
+
 function canInterrupt(session: AiSessionSummary) {
   return canInterruptAiSession(session);
 }
 
 function canResolveApproval(session: AiSessionSummary) {
-  return isAiSessionApprovalPending(session);
+  return isAiSessionApprovalPending(session) && approvalDecisions(session).length > 0;
+}
+
+function approvalDecisions(session: AiSessionSummary): Array<"allow" | "deny" | "skip"> {
+  const capability = directoryAiSessionProviderCapability(props.instance.capabilities?.features, session.agent);
+  if (capability) return capability.actions.approvalDecisions;
+  // Compatibility for v0.0.21: provider capabilities were absent and the UI exposed all legacy decisions.
+  return session.agent === "codex" || session.agent === "claude" ? ["allow", "deny", "skip"] : [];
+}
+
+function agentIcon(agent: string): "codex" | "claude" | "opencode" {
+  return agent === "claude" || agent === "opencode" ? agent : "codex";
+}
+
+function agentDisplayName(agent: string) {
+  return agent === "codex" || agent === "claude" || agent === "opencode" ? t(`common.products.${agent}`) : agent;
 }
 
 async function refreshBoard() {
@@ -2142,14 +2507,20 @@ async function runSelectedSessionAction(permissionMode?: AiSessionPermissionMode
   await interruptSelectedSession();
 }
 
-async function uploadAttachments(instanceId: string, sessionId: string, attachments: AiSessionComposerAttachment[]) {
+async function uploadAttachments(instanceId: string, sessionId: string, attachments: AiSessionComposerAttachment[], scopeType: "session" | "create-request" = "session") {
   return Promise.all(attachments.map(async (attachment) => {
-    if (attachment.source.type === "runtime-path") {
-      return { id: attachment.id, kind: attachment.kind, name: attachment.name, mime: attachment.mime, size: attachment.size, source: attachment.source };
-    }
-    if (!attachment.dataUrl) throw new Error(t("sessions.panel.attachmentUnavailable", { name: attachment.name }));
-    const uploaded = await uploadAiSessionAttachment({ instanceId, sessionId, kind: attachment.kind, name: attachment.name, mime: attachment.mime, data: attachment.dataUrl });
-    return { id: uploaded.id, kind: uploaded.kind, source: { type: "upload-ref" as const } };
+    return uploadAiSessionComposerAttachment(attachment, (onProgress) => {
+      if (!attachment.dataUrl) throw new Error(t("sessions.panel.attachmentUnavailable", { name: attachment.name }));
+      return uploadAiSessionAttachment({
+        instanceId,
+        sessionId,
+        scopeType,
+        kind: attachment.kind,
+        name: attachment.name,
+        mime: attachment.mime,
+        data: attachment.dataUrl,
+      }, onProgress);
+    });
   }));
 }
 
@@ -2197,7 +2568,6 @@ async function executeSelectedSessionCommand(input: AiSessionCommandInput) {
     messageDraft.value = "";
     messageMentionBindings.value = [];
     if (input.command === "goal" && !input.argument) showControlPlaneToast(result.value || t("sessions.panel.noGoal"));
-    await refreshBoard();
   } catch (error) {
     showControlPlaneToast(translateApiError(error, t, t("sessions.panel.commandFailed")));
   } finally {
@@ -2219,7 +2589,6 @@ async function steerMessageDraft() {
     messageDraft.value = "";
     messageMentionBindings.value = [];
     messageAttachments.value = [];
-    await refreshBoard();
   } catch (error) {
     showControlPlaneToast(translateApiError(error, t, t("sessions.panel.steerFailed")));
   } finally {
@@ -2275,9 +2644,9 @@ async function saveQueuedMessageEdit() {
   }
   aiSessionActionBusy.value = true;
   try {
-    await editAiSessionQueuedMessage(props.instance.id, session.id, edit.queueId, session.queue.revision, message);
+    const queueRevision = selectedConversationSession.value?.queue.revision ?? session.queue.revision;
+    await editAiSessionQueuedMessage(props.instance.id, session.id, edit.queueId, queueRevision, message);
     cancelQueueComposerEdit();
-    await refreshBoard();
   } catch (error) {
     showControlPlaneToast(translateApiError(error, t, t("sessions.panel.editQueuedFailed")));
   } finally {
@@ -2296,7 +2665,6 @@ async function runQueueAction(action: () => Promise<unknown>, message: string) {
   aiSessionActionBusy.value = true;
   try {
     await action();
-    await refreshBoard();
   } catch (error) {
     showControlPlaneToast(translateApiError(error, t, message));
   } finally {
@@ -2312,7 +2680,6 @@ async function interruptSelectedSession() {
   aiSessionActionBusy.value = true;
   try {
     await interruptAiSession(props.instance.id, session.id);
-    await refreshBoard();
   } catch (error) {
     showControlPlaneToast(translateApiError(error, t, t("sessions.panel.stopFailed")));
   } finally {
@@ -2334,7 +2701,6 @@ async function resolveApproval(session: AiSessionSummary, decision: "allow" | "d
   aiSessionActionBusy.value = true;
   try {
     await resolveAiSessionApproval(props.instance.id, session.id, decision);
-    await refreshBoard();
   } catch (error) {
     showControlPlaneToast(translateApiError(error, t, t("sessions.panel.approvalFailed")));
   } finally {
@@ -2352,7 +2718,7 @@ async function openSessionApp(session: AiSessionSummary) {
   openingAiSessionId.value = session.id;
   try {
     emit("openAiSessionApp", props.instance, session);
-    const result = await openAiSessionApp(props.instance.id, session.id, crypto.randomUUID());
+    const result = await openAiSessionApp(props.instance.id, session.id, createBrowserUuid());
     emit("openAiSessionApp", props.instance, aiSessionAppNavigationTarget(session, result));
   } catch (error) {
     showControlPlaneToast(translateApiError(error, t, t("sessions.panel.openAppFailed")));
@@ -2362,16 +2728,24 @@ async function openSessionApp(session: AiSessionSummary) {
   }
 }
 
+function openSessionTerminal(session: AiSessionSummary) {
+  const appId = terminalLaunchAppId.value;
+  if (!appId || props.launchingApp || !session.cwd) return;
+  emit("launchApp", props.instance, appId, undefined, { cwd: session.cwd });
+}
+
 async function closeSession(session: AiSessionSummary) {
   if (stoppingAppSessionId.value) return;
   stoppingAppSessionId.value = session.id;
+  const loadingToast = showDelayedControlPlaneLoadingToast(t("sessions.actions.closingSession"));
   try {
-    await closeAiSession(props.instance.id, session.id, crypto.randomUUID());
-    await refreshBoard();
+    await closeAiSession(props.instance.id, session.id, createBrowserUuid());
   } catch (error) {
+    loadingToast.dismiss();
     showControlPlaneToast(translateApiError(error, t, t("sessions.panel.closeSessionFailed")));
     await refreshBoard();
   } finally {
+    loadingToast.dismiss();
     stoppingAppSessionId.value = "";
   }
 }
@@ -2394,26 +2768,22 @@ async function performFork(session: AiSessionSummary, mode: "current" | "managed
   if (forkingAiSessionId.value || session.actions?.fork !== true) return;
   forkingAiSessionId.value = session.id;
   const requestKey = `${session.id}:${mode}:${throughTurnId || "latest"}`;
-  const clientRequestId = forkRequestIds.get(requestKey) || crypto.randomUUID();
+  const clientRequestId = forkRequestIds.get(requestKey) || createBrowserUuid();
   forkRequestIds.set(requestKey, clientRequestId);
+  const loadingToast = showDelayedControlPlaneLoadingToast(t("sessions.actions.forking"));
   try {
     const result = await forkAiSession(props.instance.id, session.id, { clientRequestId, ...(throughTurnId ? { throughTurnId } : {}), workspace: { mode } });
-    let forked = props.instance.aiSessions?.sessions.find((candidate) => candidate.id === result.aiSessionId && candidate.providerSessionId === result.providerSessionId);
-    for (let attempt = 0; attempt < 25; attempt += 1) {
-      forked = props.instance.aiSessions?.sessions.find((candidate) => candidate.id === result.aiSessionId && candidate.providerSessionId === result.providerSessionId);
-      if (forked) break;
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-    if (!forked) {
-      await refreshBoard();
-      forked = props.instance.aiSessions?.sessions.find((candidate) => candidate.id === result.aiSessionId && candidate.providerSessionId === result.providerSessionId);
-    }
+    const forked = await waitForAiSessionProjection(() => props.instance.aiSessions?.sessions.find(
+      (candidate) => candidate.id === result.aiSessionId && candidate.providerSessionId === result.providerSessionId,
+    ));
     if (!forked) throw new Error(t("sessions.panel.forkProjectionPending"));
     selectSession(forked.id);
     forkRequestIds.delete(requestKey);
   } catch (error) {
+    loadingToast.dismiss();
     showControlPlaneToast(translateApiError(error, t, t("sessions.panel.forkFailed")));
   } finally {
+    loadingToast.dismiss();
     forkingAiSessionId.value = "";
   }
 }
@@ -2429,21 +2799,12 @@ function parentSessionLabel(session: AiSessionSummary) {
   return parent ? displayAiSessionTitle(parent, 0, t) : parentProviderSessionId;
 }
 
-function isAiSessionTriggerDeployment(deployment: TriggerDeployment, sessionId: string) {
-  return deployment.target.type === "ai-session" && deployment.target.aiSessionId === sessionId;
-}
-
 function isTriggerBound(session: AiSessionSummary, configHash: string) {
   return boundTriggers(session).some((deployment) => deployment.configHash === configHash);
 }
 
 function triggerActionKey(session: AiSessionSummary, configHash: string) {
   return `${props.instance.id}:${session.id}:${configHash}`;
-}
-
-function triggerButtonTitle(session: AiSessionSummary) {
-  const count = boundTriggers(session).length;
-  return count ? t("sessions.actions.triggersBound", { count }) : t("sessions.actions.addTrigger");
 }
 
 async function toggleTrigger(session: AiSessionSummary, configHash: string) {
@@ -2455,15 +2816,12 @@ async function toggleTrigger(session: AiSessionSummary, configHash: string) {
   try {
     if (isTriggerBound(session, configHash)) {
       await unbindAiSessionTrigger(props.instance.id, session.id, configHash);
-      removeLocalTriggerBinding(session, configHash);
+      removeInstanceTriggerBinding(queryClient, props.instance.id, session.id, configHash);
     } else {
-      const created = await bindAiSessionTrigger(props.instance.id, session.id, configHash) as TriggerMutationResult;
-      upsertLocalTriggerBinding(created);
+      const created = await bindAiSessionTrigger(props.instance.id, session.id, configHash);
+      upsertInstanceTriggerBinding(queryClient, props.instance.id, created);
     }
-    await Promise.all([
-      queryClient.invalidateQueries({ queryKey: controlPlaneQueryKeys.instanceBoard }),
-      queryClient.invalidateQueries({ queryKey: ["control-plane-triggers"] }),
-    ]);
+    await queryClient.invalidateQueries({ queryKey: ["control-plane-triggers"] });
   } finally {
     triggerBusyKey.value = "";
   }
@@ -2473,88 +2831,6 @@ function shortHash(value: string) {
   return value.length > 14 ? `${value.slice(0, 10)}...` : value;
 }
 
-type TriggerMutationResult = {
-  config?: TriggerConfig;
-  deployment?: TriggerDeployment;
-  runtime?: TriggerRuntimeState;
-};
-
-type InstanceTriggerSnapshot = NonNullable<InstanceBoardItem["triggers"]>;
-
-function emptyTriggerSnapshot(): InstanceTriggerSnapshot {
-  return {
-    configs: [],
-    recentRuns: [],
-    updatedAt: new Date().toISOString(),
-  };
-}
-
-function upsertLocalTriggerBinding(result: TriggerMutationResult) {
-  if (!result.config || !result.deployment) {
-    return;
-  }
-  updateInstanceBoardData(queryClient, (instances) => instances.map((instance) => {
-    if (instance.id !== props.instance.id) {
-      return instance;
-    }
-    const snapshot = instance.triggers || emptyTriggerSnapshot();
-    const currentConfig = snapshot.configs.find((entry) => entry.configHash === result.config?.configHash);
-    const nextEntry = {
-      configHash: result.config.configHash,
-      config: result.config,
-      deployments: [
-        ...(currentConfig?.deployments || []).filter((deployment) => deployment.deploymentId !== result.deployment?.deploymentId),
-        result.deployment,
-      ],
-      runtime: result.runtime
-        ? [...(currentConfig?.runtime || []).filter((runtime) => runtime.deploymentId !== result.runtime?.deploymentId), result.runtime]
-        : currentConfig?.runtime || [],
-    };
-    return {
-      ...instance,
-      triggers: {
-        ...snapshot,
-        configs: [
-          ...snapshot.configs.filter((entry) => entry.configHash !== result.config?.configHash),
-          nextEntry,
-        ],
-        updatedAt: new Date().toISOString(),
-      },
-    };
-  }));
-}
-
-function removeLocalTriggerBinding(session: AiSessionSummary, configHash: string) {
-  updateInstanceBoardData(queryClient, (instances) => instances.map((instance) => {
-    if (instance.id !== props.instance.id || !instance.triggers) {
-      return instance;
-    }
-    const configs = instance.triggers.configs.flatMap((entry) => {
-      if (entry.configHash !== configHash) {
-        return [entry];
-      }
-      const deployments = entry.deployments.filter((deployment) => !isAiSessionTriggerDeployment(deployment, session.id));
-      if (!deployments.length) {
-        return [];
-      }
-      const deploymentIds = new Set(deployments.map((deployment) => deployment.deploymentId || deployment.configHash));
-      return [{
-        ...entry,
-        deployments,
-        runtime: entry.runtime.filter((runtime) => deploymentIds.has(runtime.deploymentId || runtime.configHash)),
-      }];
-    });
-    return {
-      ...instance,
-      triggers: {
-        ...instance.triggers,
-        configs,
-        updatedAt: new Date().toISOString(),
-      },
-    };
-  }));
-}
-
 function syncComposerOffset() {
   const detail = detailEl.value;
   const composer = (composerEl.value?.$el instanceof HTMLElement ? composerEl.value.$el : undefined);
@@ -2562,7 +2838,12 @@ function syncComposerOffset() {
     return;
   }
   detail.style.setProperty("--session-ai-compose-offset", `${Math.ceil(composer.getBoundingClientRect().height)}px`);
-  scrollFollow?.notifyContentResize();
+  // Session replacement is a layout transaction. The old viewport may still
+  // report a resize while Vue swaps its content; treating that resize as live
+  // streaming growth can snap compact mode to the old/new bottom.
+  if (!detailScrollLayoutPending && !detailConversationTransitioning.value) {
+    scrollFollow?.notifyContentResize();
+  }
 }
 
 function followLatest() {
@@ -2641,6 +2922,7 @@ function observeDetailScroll() {
   const layoutRevision = ++detailScrollLayoutRevision;
   detailScrollLayoutPending = true;
   detailScrolled.value = false;
+  detailCanScroll.value = false;
   detailStickyThreshold = 0;
   const viewport = detailEl.value?.querySelector<HTMLElement>(".session-ai-detail-scroll [data-task-handoff-scroll-viewport]");
   if (!viewport) {
@@ -2661,6 +2943,7 @@ function observeDetailScroll() {
   const content = detailEl.value?.querySelector<HTMLElement>(".session-ai-detail-content");
   if (content && typeof ResizeObserver !== "undefined") {
     streamingResizeObserver = new ResizeObserver(() => {
+      updateDetailCanScroll();
       if (!userDetailLayoutGuard.isActive()) scrollFollow?.notifyContentResize();
     });
     streamingResizeObserver.observe(content);
@@ -2673,24 +2956,35 @@ function observeDetailScroll() {
     if (layoutRevision !== detailScrollLayoutRevision || detailScrollViewport !== viewport) return;
     updateDetailStickyThreshold();
     detailScrollLayoutPending = false;
-    scrollFollow?.jumpLatest();
+    if (effectiveTimelineViewMode.value === "full") {
+      scrollFollow?.jumpLatest();
+    } else {
+      scrollFollow?.stopFollowing();
+      viewport.scrollTop = 0;
+    }
+    updateDetailCanScroll();
     handleDetailScroll();
   });
+}
+
+function updateDetailCanScroll() {
+  const viewport = detailScrollViewport;
+  detailCanScroll.value = Boolean(viewport && viewport.scrollHeight > viewport.clientHeight + 1);
 }
 
 function pauseDetailScrollFollow(event: WheelEvent | TouchEvent) {
   userDetailLayoutGuard.cancel();
   detailLayoutAnchor.cancel();
-  if (event instanceof TouchEvent || event.deltaY < 0) {
-    scrollFollow?.stopFollowing();
-    return;
-  }
-  scrollFollow?.pauseFollowing();
+  // Wheel events fire before the resulting scroll event. Lock following until
+  // the user actually reaches the bottom, so a downward scroll near the bottom
+  // cannot be mistaken for passive following and snapped to the end.
+  scrollFollow?.pauseFollowing(true);
 }
 
 function handleDetailScroll() {
   scrollFollow?.handleScroll();
-  if (detailScrollLayoutPending) {
+  updateDetailCanScroll();
+  if (detailScrollLayoutPending || detailConversationTransitioning.value) {
     return;
   }
   const scrollTop = detailScrollViewport?.scrollTop || 0;
@@ -2709,6 +3003,12 @@ watch([selectedSession, messageAttachments, messageDraft, historyMessageAttachme
 }, { immediate: true });
 
 watch(() => `${props.instance.id}\u0000${selectedSession.value?.id || ""}`, () => {
+  // Freeze the previous viewport before the new session is rendered. This is
+  // especially important in compact mode, where switching sessions must start
+  // at the top instead of inheriting the previous follow state.
+  detailScrollLayoutPending = true;
+  scrollFollow?.stopFollowing();
+  detailLayoutAnchor.cancel();
   void loadSelectedTurnTimeline();
   queueComposerEdit.value = undefined;
   const draft = selectedSession.value ? loadAiSessionDraftPayload(selectedSession.value.id) : { value: "", bindings: [] };
@@ -2751,13 +3051,22 @@ onMounted(() => {
 });
 
 watch(
-  () => selectedTimelineTurn.value ? `${selectedTimelineTurn.value.id}:${selectedTimelineTurn.value.status}` : "",
-  () => void loadSelectedTurnTimeline(),
+  () => selectedTimelineTurn.value ? `${selectedTimelineTurn.value.id}:${selectedTimelineTurn.value.status}:${selectedSessionTurnIndexKey.value}` : "",
+  () => {
+    if (selectedTimelineTurn.value) void loadSelectedSessionTurn(selectedTimelineTurn.value.id);
+    void loadSelectedTurnTimeline();
+  },
+);
+watch(
+  [effectiveTimelineViewMode, selectedSessionTurnIndexKey],
+  ([mode]) => { if (mode === "full") void loadAllSelectedSessionTurns(); },
+  { immediate: true },
 );
 watch(() => props.instance.id, () => {
   sessionListOverlayOpen.value = false;
 });
 onBeforeUnmount(() => {
+  closeSessionListPreview();
   composerResizeObserver?.disconnect();
   detailActionsResizeObserver?.disconnect();
   promptResizeObserver?.disconnect();
@@ -2772,6 +3081,7 @@ onBeforeUnmount(() => {
 });
 
 const emit = defineEmits<{
+  launchApp: [instance: InstanceBoardItem, appId: string, cwdFolderId?: string, options?: Record<string, unknown>];
   openAiSessionApp: [instance: InstanceBoardItem, session?: AiSessionSummary];
   openRepositoryWorkspace: [target: RepositoryWorkspaceTabTarget];
   selectAiSession: [instanceId: string, sessionId: string];
@@ -2788,4 +3098,3 @@ function openMarkdownFile(session: AiSessionSummary, filePath: string) {
 </script>
 
 <style scoped src="./AiSessionPanel.css"></style>
-<style scoped src="../../../components/ai-session/AiSessionCardAction.css"></style>

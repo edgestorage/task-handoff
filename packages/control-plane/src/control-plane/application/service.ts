@@ -11,10 +11,18 @@ import {
   LEGACY_MARKET_IMAGE_IDS,
   NodeImageAvailabilitySchema,
   NodeFolderTreeEntrySchema,
+  NodeFolderPlaceSchema,
   sanitizeStoredImageProfile,
   sanitizeStoredNode,
   sanitizeStoredProject,
+  supportsAiSessionFileSizeLimitSettings,
   supportsAiSessionPersistenceSettings,
+  supportsGitCredentialProxy,
+  supportsNodeFolderPlaces,
+  supportsNodeLocalFolderNameUpdate,
+  supportsNodeAiSessionFileAttachmentLimit,
+  supportsNodeManagedGitCredentialRegistry,
+  supportsNodeGitCredentialRuntimeBroker,
   ModelConfigSchema,
   NodeSchema,
   PendingRouteSchema,
@@ -24,6 +32,7 @@ import {
   type ChatSessionBinding,
   type ControlledInstance,
   type ControlledInstanceHeartbeat,
+  type InstanceLifecycleSnapshot,
   type CustomImageProfile,
   type ModelConfig,
   type Node,
@@ -51,14 +60,17 @@ import {
   type AiSessionCreateInput,
   type AiSessionForkInput,
   type AiSessionMessageAttachment,
+  type AiSessionMessageAttachmentRef,
   type AiSessionPermissionMode,
   type AiSessionReference,
   type AiSessionSendMode,
   type AiSessionsSnapshot,
 } from "@task-handoff/protocol/ai-sessions";
 import { AppSessionDeltaResponseSchema, AppSessionsStateSchema, emptyAppSessionsSnapshot, type AppSessionDeltaResponse, type AppSessionsSnapshot } from "@task-handoff/protocol/app-sessions";
+import type { ControlPlaneTriggerMutationFailure } from "@task-handoff/protocol/triggers";
 import type { RepositoryAiSessionGitSelection } from "@task-handoff/protocol/repository";
 import { AiSessionActionService } from "../sessions/ai-session-actions.ts";
+import type { RequestTimingDiagnostics } from "../../shared/http/server-timing.ts";
 export { assertAiSessionRuntimePathSupport } from "../sessions/ai-session-actions.ts";
 import fs from "node:fs";
 import path from "node:path";
@@ -67,6 +79,7 @@ import { z } from "zod";
 import type { CommandRunner } from "../../shared/process/command-runner.ts";
 import { ControlPlaneNodeAgentClient, type NodeAgentTransport, type NodeAgentWebSocket } from "../nodes/client.ts";
 import { ControlPlaneNodeAgentGateway } from "../nodes/gateway.ts";
+import type { ControlPlaneNodeFleetUpdatedEvent } from "@task-handoff/protocol/control-plane-directory";
 import { createDirectNodeAgentTransport } from "../nodes/direct-transport.ts";
 import { NodeAgentTransportResolver } from "../nodes/transport-resolver.ts";
 import { ControlPlaneProxyNodeAgentTransport } from "../nodes/control-plane-proxy-transport.ts";
@@ -81,6 +94,7 @@ import { ControlledInstanceCreator } from "../instances/creator.ts";
 import { ControlPlaneTriggerService } from "../triggers/service.ts";
 import { ControlPlaneCatalogService } from "../catalog/service.ts";
 import { EmbeddedMarketCatalogProvider, MarketCatalogService } from "../catalog/market.ts";
+import { ControlPlaneGitCredentialService } from "../git-credentials/service.ts";
 import { AppAccessService, type AppAccessMode } from "../instances/app-access-service.ts";
 import { ChatActionTokenService, type ChatActionToken } from "../chat/action-token-service.ts";
 import { ChatBridgeService } from "../chat/bridges/service.ts";
@@ -142,6 +156,7 @@ export type ControlPlaneServiceOptions = {
   nodeAgentTransport?: NodeAgentTransport;
   logger?: ServiceLogger;
   nodeConnectionRuntime?: NodeConnectionRuntime;
+  onFleetStateChanged?: (state: ControlPlaneNodeFleetUpdatedEvent) => void;
 };
 
 function isControlPlaneLocalNode(node: Node) {
@@ -186,6 +201,7 @@ export class ControlPlaneService {
   private readonly controlPlaneTriggerService: ControlPlaneTriggerService;
   private readonly catalogService: ControlPlaneCatalogService;
   private readonly marketCatalogService: MarketCatalogService;
+  readonly gitCredentials: ControlPlaneGitCredentialService;
   private readonly chatBridgeService: ChatBridgeService;
   private readonly chatSessionService: ChatSessionService;
   private readonly chatSessionRuntime: ControlPlaneChatSessionRuntime;
@@ -231,20 +247,17 @@ export class ControlPlaneService {
       request: (node, route, init) => this.nodeAgentFetch(node, route, init),
       logger: this.logger,
     });
-    this.nodeAgentGateway = new ControlPlaneNodeAgentGateway(nodeAgentClient);
+    this.nodeAgentGateway = new ControlPlaneNodeAgentGateway(nodeAgentClient, {
+      onFleetStateChanged: options.onFleetStateChanged,
+    });
     this.controlledInstanceGateway = new ControlledInstanceGateway({
       requireNode: (nodeId) => this.requireNode(nodeId),
       nodeAgentTransport: (node) => this.nodeAgentTransportResolver.resolve(node),
     });
     this.aiSessionActionService = new AiSessionActionService({
       requireInstance: (instanceId) => this.requireControlledInstance(instanceId, true) as Promise<ControlledInstance>,
-      request: (instance, route, init) => this.instanceRequest(instance, route, init),
+      request: (instance, route, init, onTiming) => this.instanceRequest(instance, route, init, onTiming),
       requireRuntime: (nodeId, runtimeId) => this.requireNodeRuntimeOnNode(nodeId, runtimeId),
-      refreshSnapshots: () => Promise.all([
-        this.listAppSessions({ refresh: true }),
-        this.listAiSessions({ refresh: true }),
-      ]),
-      warn: (data, message) => this.logWarn(data, message),
     });
     this.projects = new JsonCollection(paths.projectsDir, { ...storeOptions(ProjectSchema), sanitize: sanitizeStoredProject });
     this.models = new JsonCollection(paths.modelsDir, storeOptions(ModelConfigSchema));
@@ -254,6 +267,9 @@ export class ControlPlaneService {
       listNodes: () => this.listNodes(),
       requireNode: (id) => this.requireNode(id),
       fetchImpl: this.fetchImpl,
+      listInstances: () => this.listCachedNodeInstances(),
+      listAiSessions: () => this.listAiSessions(),
+      listAiSessionHistory: (instanceId) => this.listAiSessionHistory(instanceId),
     });
     this.images = new JsonCollection(paths.imagesDir, {
       ...storeOptions(CustomImageProfileSchema),
@@ -291,12 +307,21 @@ export class ControlPlaneService {
       sanitize: sanitizeStoredConfigSyncPreferenceRecord,
     });
     this.marketCatalogService = new MarketCatalogService();
+    this.gitCredentials = new ControlPlaneGitCredentialService(paths, {
+      repositoryReferences: (credentialId) => this.projects.list().flatMap((project) => {
+        const source = project.source;
+        return source.type !== "local-folder" && source.auth.secretId === credentialId
+          ? [{ id: project.id, name: project.name, url: source.url, authType: source.auth.type as "ssh-key" | "https-token" }]
+          : [];
+      }),
+    });
     this.catalogService = new ControlPlaneCatalogService({
       projects: this.projects,
       images: this.images,
       market: this.marketCatalogService,
       settings: this.settings,
       defaultNodeId: () => this.defaultNodeId(),
+      requireGitCredential: (id) => this.gitCredentials.requirePublic(id),
     });
     this.controlledInstanceCreator = new ControlledInstanceCreator({
       gateway: this.nodeAgentGateway,
@@ -307,10 +332,12 @@ export class ControlPlaneService {
       requireLocalFolder: (node, folderId) => this.requireNodeLocalFolder(node, folderId),
       resolveImageSelection: (selection) => this.catalogService.resolveImageSelection(selection),
       prepareModels: (node, selection) => this.modelService.prepareAssignment(node, selection),
+      gitCredentials: this.gitCredentials,
     });
     this.controlPlaneTriggerService = new ControlPlaneTriggerService({
       triggers: this.triggers,
-      listInstances: () => this.listNodeInstances(),
+      listInstances: () => this.listCachedNodeInstances(),
+      listMutationInstances: () => this.listTriggerMutationInstances(),
       requireInstance: async (instanceId) => this.requireControlledInstance(instanceId, true) as Promise<ControlledInstance>,
       instanceRequest: (instance, route, init) => this.instanceRequest(instance, route, init),
     });
@@ -330,7 +357,7 @@ export class ControlPlaneService {
       boardAsync: () => this.boardAsync(),
       listAiSessions: (options) => this.listAiSessions(options),
       listAppSessions: (options) => this.listAppSessions(options),
-      listNodeInstances: () => this.listNodeInstances(),
+      listNodeInstances: () => this.listBootstrapNodeInstances(),
       listPendingRoutes: () => this.listPendingRoutes(),
       pendingDecisionCallbackData: (routeId, decision) => this.pendingDecisionCallbackData(routeId, decision),
       createChatActionToken: (input) => this.createChatActionToken(input),
@@ -383,6 +410,95 @@ export class ControlPlaneService {
     return this.appSessionSnapshotProvider ? this.appSessionSnapshotProvider(options) : this.bootstrapAppSessionsFromInstances();
   }
 
+  listInstanceGitCredentialAssignments(instanceId: string) {
+    return this.gitCredentials.listAssignments(instanceId);
+  }
+
+  async updateGitCredential(id: string, input: unknown) {
+    const credential = this.gitCredentials.update(id, input);
+    const payload = this.gitCredentials.payload(id, { allowDisabled: true });
+    const deployedNodes = new Set<string>();
+    for (const existing of this.gitCredentials.listAssignments().filter((assignment) => assignment.credentialId === id)) {
+      let assignment = this.gitCredentials.authorize(existing.instanceId, id, { allowDisabled: true });
+      try {
+        const instance = await this.requireControlledInstance(existing.instanceId, true) as ControlledInstance;
+        const node = this.requireNode(instance.nodeId);
+        const agent = node.capabilities.agent;
+        const capabilities = agent && typeof agent === "object" && !Array.isArray(agent)
+          ? (agent as Record<string, unknown>).capabilities
+          : undefined;
+        if (!supportsNodeManagedGitCredentialRegistry(capabilities) || !supportsNodeGitCredentialRuntimeBroker(capabilities) || !supportsGitCredentialProxy(instance.capabilities)) {
+          throw new Error("Managed Git credential synchronization is unsupported by the target.");
+        }
+        if (!deployedNodes.has(node.id)) {
+          await this.nodeAgentGateway.deployGitCredential(node, payload);
+          deployedNodes.add(node.id);
+        }
+        await this.nodeAgentGateway.replaceGitCredentialAuthorizations(node, this.gitCredentials.desiredAuthorizationSet(existing.instanceId));
+        assignment = this.gitCredentials.markAssignmentStatus(existing.instanceId, id, "synced");
+      } catch (error) {
+        assignment = this.gitCredentials.markAssignmentStatus(existing.instanceId, id, "deferred");
+        this.logWarn({ instanceId: existing.instanceId, credentialId: id, credentialRevision: credential.revision, assignmentRevision: assignment.assignmentRevision, error: error instanceof Error ? error.message : String(error) }, "Git credential revision sync deferred");
+      }
+    }
+    return credential;
+  }
+
+  async authorizeInstanceGitCredential(instanceId: string, credentialId: string) {
+    const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
+    const node = this.requireNode(instance.nodeId);
+    if (!supportsGitCredentialProxy(instance.capabilities)) {
+      throw Object.assign(new Error(`Instance ${instance.id} does not support managed Git CLI credentials.`), {
+        code: "GIT_CREDENTIAL_INSTANCE_UNSUPPORTED",
+        statusCode: 409,
+      });
+    }
+    const agent = node.capabilities.agent;
+    const capabilities = agent && typeof agent === "object" && !Array.isArray(agent)
+      ? (agent as Record<string, unknown>).capabilities
+      : undefined;
+    if (!supportsNodeManagedGitCredentialRegistry(capabilities) || !supportsNodeGitCredentialRuntimeBroker(capabilities)) {
+      throw Object.assign(new Error(`Node ${node.id} does not support managed Git credentials.`), {
+        code: "GIT_CREDENTIAL_NODE_UNSUPPORTED",
+        statusCode: 409,
+      });
+    }
+    const payload = this.gitCredentials.payload(credentialId);
+    await this.nodeAgentGateway.deployGitCredential(node, payload);
+    let assignment = this.gitCredentials.authorize(instanceId, credentialId);
+    try {
+      await this.nodeAgentGateway.replaceGitCredentialAuthorizations(node, this.gitCredentials.desiredAuthorizationSet(instanceId));
+      assignment = this.gitCredentials.markAssignmentStatus(instanceId, credentialId, "synced");
+    } catch (error) {
+      assignment = this.gitCredentials.markAssignmentStatus(instanceId, credentialId, "deferred");
+      this.logWarn({ instanceId, credentialId, error: error instanceof Error ? error.message : String(error) }, "Git credential assignment sync deferred");
+    }
+    return assignment;
+  }
+
+  async revokeInstanceGitCredential(instanceId: string, credentialId: string) {
+    const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
+    const node = this.requireNode(instance.nodeId);
+    const current = this.gitCredentials.listAssignments(instanceId).find((item) => item.credentialId === credentialId);
+    if (!current) return false;
+    const revoking = this.gitCredentials.markAssignmentStatus(instanceId, credentialId, "revoking");
+    try {
+      await this.nodeAgentGateway.replaceGitCredentialAuthorizations(node, this.gitCredentials.desiredAuthorizationSet(instanceId));
+      this.gitCredentials.revoke(instanceId, credentialId);
+      const cachedInstances = await this.listCachedNodeInstances();
+      const stillReferencedOnNode = this.gitCredentials.listAssignments().some((item) => {
+        if (item.credentialId !== credentialId) return false;
+        const assigned = cachedInstances.find((candidate) => candidate.id === item.instanceId);
+        return assigned?.nodeId === node.id;
+      });
+      if (!stillReferencedOnNode) await this.nodeAgentGateway.removeGitCredential(node, credentialId).catch(() => undefined);
+      return true;
+    } catch (error) {
+      this.logWarn({ instanceId, credentialId, error: error instanceof Error ? error.message : String(error) }, "Git credential revocation deferred");
+      return false;
+    }
+  }
+
   init() {
     this.runPersistenceMaintenance();
     this.projects.init();
@@ -393,6 +509,7 @@ export class ControlPlaneService {
     this.chatSessions.init();
     this.chatBridges.init();
     this.triggers.init();
+    this.gitCredentials.init();
     this.proxyPrivateStore.init();
     this.proxyPrivateStore.gcNodeCredentials((credential) => {
       const node = this.nodes.get(credential.nodeId);
@@ -406,6 +523,14 @@ export class ControlPlaneService {
     this.diagnosticLogsState = normalizedSettings.diagnosticLogs;
     this.migrateLegacyImageCatalog();
     this.seedDefaults();
+    this.refreshCachedNodeInstances();
+    const nodes = this.listNodes().map((node) => this.projectNodeConnection(node));
+    void this.nodeAgentGateway.refreshFleetRuntimes(nodes).catch((error) => {
+      this.logWarn({ error: errorMessage(error) }, "control plane runtime directory warmup failed");
+    });
+    void this.nodeAgentGateway.refreshFleetModels(nodes).catch((error) => {
+      this.logWarn({ error: errorMessage(error) }, "control plane model directory warmup failed");
+    });
   }
 
   runPersistenceMaintenance() {
@@ -516,20 +641,46 @@ export class ControlPlaneService {
     return this.projectNodeConnection(node);
   }
 
-  recoverPendingPairingRevokes() {
-    return this.nodeConnectionManager.recoverPendingPairingRevokes();
+  async recoverPendingPairingRevokes() {
+    await this.nodeConnectionManager.recoverPendingPairingRevokes();
+    await this.reconcileGitCredentialAssignments();
+  }
+
+  private async reconcileGitCredentialAssignments() {
+    const assignments = this.gitCredentials.listAssignments().filter((assignment) => assignment.status !== "synced");
+    for (const assignment of assignments) {
+      try {
+        const instance = await this.requireControlledInstance(assignment.instanceId, true) as ControlledInstance;
+        const node = this.requireNode(instance.nodeId);
+        if (assignment.status === "revoking") {
+          await this.nodeAgentGateway.replaceGitCredentialAuthorizations(node, this.gitCredentials.desiredAuthorizationSet(assignment.instanceId));
+          this.gitCredentials.revoke(assignment.instanceId, assignment.credentialId);
+          continue;
+        }
+        const payload = this.gitCredentials.payload(assignment.credentialId, { allowDisabled: true });
+        await this.nodeAgentGateway.deployGitCredential(node, payload);
+        await this.nodeAgentGateway.replaceGitCredentialAuthorizations(node, this.gitCredentials.desiredAuthorizationSet(assignment.instanceId));
+        this.gitCredentials.markAssignmentStatus(assignment.instanceId, assignment.credentialId, "synced");
+      } catch (error) {
+        this.logWarn({ instanceId: assignment.instanceId, credentialId: assignment.credentialId, assignmentRevision: assignment.assignmentRevision, error: error instanceof Error ? error.message : String(error) }, "Git credential assignment convergence deferred");
+      }
+    }
   }
 
   listModels() {
     return this.modelService.list();
   }
 
-  listFederatedModels(signal?: AbortSignal) {
-    return this.modelService.listFederated(signal);
+  listFederatedModels(signal?: AbortSignal, progressive = false) {
+    return this.modelService.listFederated(signal, progressive);
   }
 
   createModel(input: unknown) {
     return this.modelService.create(input);
+  }
+
+  copyModel(id: string, input: unknown) {
+    return this.modelService.copy(id, input);
   }
 
   updateModel(id: string, input: unknown) {
@@ -651,9 +802,43 @@ export class ControlPlaneService {
     return this.nodeAgentGateway.listFolderTree(node, input);
   }
 
+  async listNodeFolderPlaces(nodeId: string) {
+    const node = this.requireNode(nodeId);
+    const agentCapabilities = node.capabilities?.agent && typeof node.capabilities.agent === "object"
+      ? (node.capabilities.agent as { capabilities?: unknown }).capabilities
+      : undefined;
+    if (!supportsNodeFolderPlaces(agentCapabilities)) {
+      // Compatibility for v0.0.21: missing capability means the node-agent exposes roots only.
+      const roots = await this.nodeAgentGateway.listFolderTree(node, { depth: 0 });
+      return roots.map((entry) => NodeFolderPlaceSchema.parse({ kind: "root", name: entry.name, path: entry.path }));
+    }
+    try {
+      return await this.nodeAgentGateway.listFolderPlaces(node);
+    } catch (error) {
+      const statusCode = error && typeof error === "object" ? (error as { statusCode?: unknown }).statusCode : undefined;
+      if (statusCode !== 404) throw error;
+      // Compatibility for v0.0.21: tolerate stale capability projections during rolling upgrades.
+      const roots = await this.nodeAgentGateway.listFolderTree(node, { depth: 0 });
+      return roots.map((entry) => NodeFolderPlaceSchema.parse({ kind: "root", name: entry.name, path: entry.path }));
+    }
+  }
+
   async createNodeLocalFolder(nodeId: string, input: unknown) {
     const node = this.requireNode(nodeId);
     return this.nodeAgentGateway.createLocalFolder(node, input);
+  }
+
+  async updateNodeLocalFolder(nodeId: string, folderId: string, input: unknown) {
+    const node = this.requireNode(nodeId);
+    const agentCapabilities = node.capabilities?.agent && typeof node.capabilities.agent === "object"
+      ? (node.capabilities.agent as { capabilities?: unknown }).capabilities
+      : undefined;
+    if (!supportsNodeLocalFolderNameUpdate(agentCapabilities)) {
+      // Compatibility for v0.0.21: older node-agents do not expose local-folder display-name updates.
+      const error = new Error(`Node ${node.id} does not support local folder name updates.`);
+      throw Object.assign(error, { statusCode: 409, code: "NODE_LOCAL_FOLDER_NAME_UPDATE_UNSUPPORTED" });
+    }
+    return this.nodeAgentGateway.updateLocalFolder(node, folderId, input);
   }
 
   async deleteNodeLocalFolder(nodeId: string, folderId: string) {
@@ -744,6 +929,10 @@ export class ControlPlaneService {
     return this.nodeJoinService.createInvite(input);
   }
 
+  getNodeJoinInviteStatus(id: string) {
+    return this.nodeJoinService.status(id);
+  }
+
   completeNodeJoin(input: unknown) {
     return this.nodeJoinService.complete(input);
   }
@@ -782,10 +971,23 @@ export class ControlPlaneService {
     this.catalogService.requireImage(id);
     const project = this.listProjects().find((item) => item.defaultImageSelection?.imageId === id);
     if (project) throw Object.assign(new Error(`Image ${id} is the default for project ${project.name}.`), { statusCode: 409, code: "IMAGE_IN_USE" });
-    const folders = (await Promise.all(this.listNodes().map((node) => this.nodeAgentGateway.listLocalFolders(node)))).flat();
-    const folder = folders.find((item) => item.defaultImageSelection?.imageId === id);
-    if (folder) throw Object.assign(new Error(`Image ${id} is the default for local folder ${folder.name}.`), { statusCode: 409, code: "IMAGE_IN_USE" });
-    const instances = await this.listNodeInstances();
+    const directory = this.readCachedNodeInstances();
+    // A node with no reachable snapshot reports `error`. Preserve the legacy
+    // delete behavior for that explicit offline state; transitional and stale
+    // snapshots still block a destructive decision until they converge.
+    const incomplete = directory.nodeStates.filter((state) => (
+      state.phase === "uninitialized" || state.phase === "loading" || state.phase === "stale"
+    ));
+    if (incomplete.length) {
+      this.refreshCachedNodeInstances();
+      const error = new Error("The instance directory is still loading; retry after every node has reported its instance snapshot.");
+      throw Object.assign(error, {
+        statusCode: 503,
+        code: "INSTANCE_DIRECTORY_LOADING",
+        nodeIds: incomplete.map((state) => state.nodeId),
+      });
+    }
+    const instances = directory.items;
     const instance = instances.find((item) => item.imageSelection?.imageId === id);
     if (instance) throw Object.assign(new Error(`Image ${id} is used by instance ${instance.name}.`), { statusCode: 409, code: "IMAGE_IN_USE" });
     return this.catalogService.deleteImage(id);
@@ -819,8 +1021,8 @@ export class ControlPlaneService {
     return this.proxyLifecycle.resumeClaim(claimId);
   }
 
-  cancelProxyClaim(claimId: string) {
-    return this.proxyLifecycle.cancelClaim(claimId);
+  cancelProxyClaim(claimId: string, force = false) {
+    return this.proxyLifecycle.cancelClaim(claimId, force);
   }
 
   applyProxyTargetSnapshot(nodeId: string, snapshot: ProxyTargetSnapshot) {
@@ -860,7 +1062,12 @@ export class ControlPlaneService {
       Object.assign(error, { statusCode: 400, code: "LOCAL_NODE_CANNOT_BE_DELETED" });
       throw error;
     }
+    this.nodeAgentGateway.forgetNode(id);
     return this.nodes.delete(id);
+  }
+
+  dispose() {
+    this.nodeAgentGateway.dispose();
   }
 
   async deleteNodeWithProxyLifecycle(id: string, force = false) {
@@ -876,8 +1083,13 @@ export class ControlPlaneService {
     return result.items;
   }
 
-  async listNodeRuntimesWithDiagnostics(signal?: AbortSignal) {
-    return this.nodeAgentGateway.listFleetRuntimes(this.listNodes().map((node) => this.projectNodeConnection(node)), { signal });
+  async listNodeRuntimesWithDiagnostics(signal?: AbortSignal, progressive = false) {
+    const nodes = this.listNodes().map((node) => this.projectNodeConnection(node));
+    if (!progressive) return this.nodeAgentGateway.listFleetRuntimes(nodes, { signal });
+    void this.nodeAgentGateway.refreshFleetRuntimes(nodes).catch((error) => {
+      this.logWarn({ error: errorMessage(error) }, "control plane runtime directory refresh failed");
+    });
+    return this.nodeAgentGateway.readFleetRuntimes(nodes);
   }
 
   async createNodeRuntime(nodeId: string, input: unknown) {
@@ -901,14 +1113,19 @@ export class ControlPlaneService {
   }
 
   async listControlledInstances() {
-    return (await this.listNodeInstances()).map(publicInstanceWithAccess);
+    // Compatibility for v0.0.21: this legacy endpoint promises one complete
+    // fleet snapshot. Current Web and mobile clients use the progressive board.
+    const result = await this.listNodeInstancesWithDiagnostics();
+    return result.items.map(publicInstanceWithAccess);
   }
 
   async listControlledInstancesWithDiagnostics() {
+    // Compatibility for v0.0.21: retain the complete legacy fleet snapshot.
     const result = await this.listNodeInstancesWithDiagnostics();
     return {
       items: result.items.map(publicInstanceWithAccess),
       nodeErrors: result.nodeErrors,
+      nodeStates: result.nodeStates,
     };
   }
 
@@ -919,12 +1136,32 @@ export class ControlPlaneService {
 
   async nodeOwnsInstance(nodeId: string, instanceId: string) {
     const node = this.requireNode(nodeId);
+    const snapshot = this.nodeAgentGateway.readFleetInstances([node]);
+    const cached = snapshot.items.some((instance) => instance.id === instanceId && instance.nodeId === nodeId);
+    if (cached) return true;
+    if (snapshot.nodeStates[0]?.phase === "ready") return false;
     const instances = await this.nodeAgentGateway.listInstances(node);
     return instances.some((instance) => instance.id === instanceId && instance.nodeId === nodeId);
   }
 
+  async applyInstanceLifecycle(nodeId: string, lifecycle: InstanceLifecycleSnapshot) {
+    const node = this.requireNode(nodeId);
+    const initial = this.nodeAgentGateway.applyInstanceLifecycle(node, lifecycle);
+    if (initial !== "missing") return true;
+
+    await this.nodeAgentGateway.refreshFleetInstances([node], {}, true);
+    const instance = this.nodeAgentGateway.instanceFromSnapshot([node], lifecycle.instanceId);
+    if (!instance || instance.nodeId !== nodeId) return false;
+    this.nodeAgentGateway.applyInstanceLifecycle(node, lifecycle);
+    return true;
+  }
+
   createControlledInstance(input: unknown) {
     return this.controlledInstanceCreator.create(input);
+  }
+
+  resolveControlledInstanceTargetNodeId(input: unknown) {
+    return this.controlledInstanceCreator.targetNodeId(input);
   }
 
   async updateControlledInstance(id: string, input: unknown) {
@@ -933,6 +1170,12 @@ export class ControlPlaneService {
     const node = this.requireNode(current.nodeId);
     if (parsedInput.config?.aiSessionHistoryLimit !== undefined) {
       requireAiSessionHistoryLimitSupport(node, current);
+    }
+    if (parsedInput.config?.aiSessionAttachmentRetentionDays !== undefined) {
+      requireAiSessionAttachmentRetentionSupport(node, current);
+    }
+    if (parsedInput.config?.aiSessionMaxFileAttachmentBytes !== undefined) {
+      requireAiSessionFileAttachmentLimitSupport(node, current);
     }
     const { modelSelection, ...instancePatch } = parsedInput;
     let instance = Object.keys(instancePatch).length
@@ -950,7 +1193,10 @@ export class ControlPlaneService {
     const current = await this.requireNodeInstance(id);
     const node = this.requireNode(current.nodeId);
     const result = await this.nodeAgentGateway.deleteInstance(node, id, parsedInput);
-    if (result.completed) this.configSyncPreferences.delete(id);
+    if (result.completed) {
+      this.configSyncPreferences.delete(id);
+      this.gitCredentials.revokeInstance(id);
+    }
     return result;
   }
 
@@ -975,8 +1221,12 @@ export class ControlPlaneService {
     const current = await this.requireNodeInstance(id);
     const node = this.requireNode(current.nodeId);
     await this.modelService.ensureInstanceAssignment(current);
-    const instance = await this.nodeAgentGateway.startInstance(node, id);
-    return publicInstanceWithAccess(instance);
+    const gitWorkspaceProvisioning = this.gitCredentials.operationProvisioning(id);
+    const result = await this.nodeAgentGateway.startInstance(node, id, gitWorkspaceProvisioning ? { gitWorkspaceProvisioning } : {});
+    if (gitWorkspaceProvisioning && result.gitWorkspaceProvisioningOperationId === gitWorkspaceProvisioning.operationId) {
+      this.gitCredentials.forgetOperationProvisioning(id);
+    }
+    return publicInstanceWithAccess(result.instance);
   }
 
   async stopControlledInstance(id: string) {
@@ -990,8 +1240,12 @@ export class ControlPlaneService {
     const current = await this.requireNodeInstance(id);
     const node = this.requireNode(current.nodeId);
     await this.modelService.ensureInstanceAssignment(current);
-    const instance = await this.nodeAgentGateway.restartInstance(node, id);
-    return publicInstanceWithAccess(instance);
+    const gitWorkspaceProvisioning = this.gitCredentials.operationProvisioning(id);
+    const result = await this.nodeAgentGateway.restartInstance(node, id, gitWorkspaceProvisioning ? { gitWorkspaceProvisioning } : {});
+    if (gitWorkspaceProvisioning && result.gitWorkspaceProvisioningOperationId === gitWorkspaceProvisioning.operationId) {
+      this.gitCredentials.forgetOperationProvisioning(id);
+    }
+    return publicInstanceWithAccess(result.instance);
   }
 
   async retryControlledInstanceImageProvisioning(id: string) {
@@ -1001,13 +1255,17 @@ export class ControlPlaneService {
   }
 
   async boardAsync() {
-    return (await this.boardWithDiagnostics()).items;
+    // Chat commands must not mistake a cold progressive cache for an
+    // authoritative empty directory. This joins the shared first refresh;
+    // subsequent calls return immediately while the snapshot is fresh.
+    await this.listBootstrapNodeInstances();
+    return (await this.boardWithDiagnostics(undefined, true)).items;
   }
 
-  async boardWithDiagnostics(signal?: AbortSignal) {
+  async boardWithDiagnostics(signal?: AbortSignal, progressive = false) {
     const [runtimeResult, instanceResult] = await Promise.all([
-      this.listNodeRuntimesWithDiagnostics(signal),
-      this.listNodeInstancesWithDiagnostics(signal),
+      this.listNodeRuntimesWithDiagnostics(signal, progressive),
+      this.listNodeInstancesWithDiagnostics(signal, progressive),
     ]);
     return this.instanceBoardReader.read({
       projects: this.listProjects(),
@@ -1016,11 +1274,12 @@ export class ControlPlaneService {
       runtimes: runtimeResult.items,
       instances: instanceResult.items,
       nodeErrors: [...runtimeResult.nodeErrors, ...instanceResult.nodeErrors],
+      nodeStates: [...runtimeResult.nodeStates, ...instanceResult.nodeStates],
     });
   }
 
   async bootstrapAiSessionsFromInstances() {
-    const instances = await this.listNodeInstances();
+    const instances = await this.listBootstrapNodeInstances();
     const states = await Promise.all(
       instances.map(async (instance) => {
         if (!controlledInstanceAcceptsTraffic(instance) || !instance.target.web || (instance.connectionStatus !== "online" && instance.agentStatus !== "online")) {
@@ -1050,7 +1309,7 @@ export class ControlPlaneService {
   }
 
   async bootstrapAppSessionsFromInstances() {
-    const instances = await this.listNodeInstances();
+    const instances = await this.listBootstrapNodeInstances();
     const states = await Promise.all(
       instances.map(async (instance) => {
         if (!controlledInstanceAcceptsTraffic(instance) || !instance.target.web || (instance.connectionStatus !== "online" && instance.agentStatus !== "online")) {
@@ -1147,7 +1406,12 @@ export class ControlPlaneService {
     return this.appAccessService.createToken(input);
   }
 
-  createAppSessionAccessToken(input: { instanceId: string; sessionId: string; ttlMs?: number }) {
+  createAppSessionAccessToken(input: {
+    instanceId: string;
+    sessionId: string;
+    ttlMs?: number;
+    authorization?: { userId: string; authorizationRevision: number };
+  }) {
     return this.appAccessService.createSessionToken(input);
   }
 
@@ -1223,7 +1487,8 @@ export class ControlPlaneService {
     const routes: Array<PendingRoute & { project?: Project; instance: ReturnType<typeof publicInstance> }> = [];
     const aiSessions = await this.listAiSessions();
     const snapshots = new Map(aiSessions.instances.map((entry) => [entry.instanceId, entry.aiSessions]));
-    const instanceResult = await this.nodeAgentGateway.listFleetInstances(this.listNodes());
+    const instanceResult = this.readCachedNodeInstances();
+    this.refreshCachedNodeInstances();
     for (const instance of instanceResult.items) {
       if ((instance.connectionStatus !== "online" && instance.agentStatus !== "online") || !instance.target.web) {
         continue;
@@ -1256,16 +1521,16 @@ export class ControlPlaneService {
   }
 
   async listAiSessionInstanceNames() {
-    const result = await this.nodeAgentGateway.listFleetInstances(this.listNodes());
-    return result.items.map((instance) => ({ id: instance.id, name: instance.name }));
+    const instances = await this.listBootstrapNodeInstances();
+    return instances.map((instance) => ({ id: instance.id, name: instance.name }));
   }
 
   resolveAiSessionApproval(instanceId: string, sessionId: string, decision: "allow" | "deny" | "skip") {
     return this.aiSessionActionService.resolveApproval(instanceId, sessionId, decision);
   }
 
-  listAiSessionHistory(instanceId: string) {
-    return this.aiSessionActionService.listHistory(instanceId);
+  listAiSessionHistory(instanceId: string, agents?: readonly string[]) {
+    return this.aiSessionActionService.listHistory(instanceId, agents);
   }
 
   getAiSessionHistoryDetail(instanceId: string, aiSessionId: string) {
@@ -1284,15 +1549,14 @@ export class ControlPlaneService {
     return this.aiSessionActionService.resume(instanceId, aiSessionId);
   }
 
-  async createAiSession(instanceId: string, input: Omit<AiSessionCreateInput, "cwd"> & {
+  async createAiSession(instanceId: string, input: Omit<AiSessionCreateInput, "cwd" | "attachments"> & {
+    attachments?: Array<AiSessionMessageAttachment | AiSessionMessageAttachmentRef>;
     cwdFolderId?: string;
     gitSelection?: RepositoryAiSessionGitSelection;
   }) {
     const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
     const { cwdFolderId: _cwdFolderId, ...resolvedInput } = input;
-    const cwdPath = input.cwdFolderId
-      ? await this.runtimeCwdForFolderId(instance, input.cwdFolderId)
-      : instance.runtime.workspacePath || instance.workspace.path || workspacePolicyForSource(instance.source).path || "/workspace";
+    const cwdPath = await this.aiSessionRuntimeCwd(instance, input.cwdFolderId);
     const cwd = { type: "runtime-path" as const, path: cwdPath };
     return this.aiSessionActionService.create(instanceId, {
       ...resolvedInput,
@@ -1301,14 +1565,22 @@ export class ControlPlaneService {
     });
   }
 
-  async inspectAiSessionWorkspace(instanceId: string, cwdFolderId: string) {
+  async inspectAiSessionWorkspace(instanceId: string, cwdFolderId?: string) {
     const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
-    const cwd = { type: "runtime-path" as const, path: await this.runtimeCwdForFolderId(instance, cwdFolderId) };
+    const cwd = { type: "runtime-path" as const, path: await this.aiSessionRuntimeCwd(instance, cwdFolderId) };
     return this.aiSessionActionService.inspectWorkspace(instanceId, cwd);
   }
 
   forkAiSession(instanceId: string, aiSessionId: string, input: AiSessionForkInput) {
     return this.aiSessionActionService.fork(instanceId, aiSessionId, input);
+  }
+
+  updateAiSessionModelSelection(instanceId: string, aiSessionId: string, clientRequestId: string, selection: import("@task-handoff/protocol/ai-sessions").AiSessionModelSelection) {
+    return this.aiSessionActionService.updateModelSelection(instanceId, aiSessionId, clientRequestId, selection);
+  }
+
+  updateAiSessionReasoningEffort(instanceId: string, aiSessionId: string, clientRequestId: string, effort: import("@task-handoff/protocol/ai-sessions").AiSessionReasoningEffort) {
+    return this.aiSessionActionService.updateReasoningEffort(instanceId, aiSessionId, clientRequestId, effort);
   }
 
   openAiSessionApp(instanceId: string, aiSessionId: string, clientRequestId: string) {
@@ -1336,7 +1608,6 @@ export class ControlPlaneService {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ appId, ...launchOptions }),
     }) as Record<string, unknown>;
-    await this.listAppSessions({ refresh: true });
     return session;
   }
 
@@ -1347,7 +1618,6 @@ export class ControlPlaneService {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({}),
     }) as Record<string, unknown>;
-    await this.listAppSessions({ refresh: true });
     return session;
   }
 
@@ -1387,7 +1657,6 @@ export class ControlPlaneService {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ title }),
     }) as Record<string, unknown>;
-    await this.listAppSessions({ refresh: true });
     return session;
   }
 
@@ -1396,9 +1665,10 @@ export class ControlPlaneService {
     sessionId: string,
     message: string,
     mode?: AiSessionSendMode,
-    attachments: AiSessionMessageAttachment[] = [],
+    attachments: Array<AiSessionMessageAttachment | AiSessionMessageAttachmentRef> = [],
     references: AiSessionReference[] = [],
     permissionMode?: AiSessionPermissionMode,
+    diagnostics?: { traceId: string; onTiming?: (timing: RequestTimingDiagnostics) => void },
   ) {
     return this.aiSessionActionService.sendMessage(
       instanceId,
@@ -1408,6 +1678,7 @@ export class ControlPlaneService {
       attachments,
       references,
       permissionMode,
+      diagnostics,
     );
   }
 
@@ -1425,6 +1696,18 @@ export class ControlPlaneService {
 
   aiSessionQueue(instanceId: string, sessionId: string) {
     return this.aiSessionActionService.queue(instanceId, sessionId);
+  }
+
+  getAiSessionDetail(instanceId: string, sessionId: string, revision?: string) {
+    return this.aiSessionActionService.detail(instanceId, sessionId, revision);
+  }
+
+  getAiSessionTurnIndex(instanceId: string, sessionId: string, revision?: string) {
+    return this.aiSessionActionService.turnIndex(instanceId, sessionId, revision);
+  }
+
+  getAiSessionTurnBody(instanceId: string, sessionId: string, turnId: string, revision?: string) {
+    return this.aiSessionActionService.turnBody(instanceId, sessionId, turnId, revision);
   }
 
   steerAiSessionQueuedMessage(instanceId: string, sessionId: string, queueId: string) {
@@ -1509,8 +1792,13 @@ export class ControlPlaneService {
     return result;
   }
 
-  private async instanceRequest(instance: ControlledInstance, route: string, init: RequestInit = {}) {
-    return this.controlledInstanceGateway.request(instance, route, init);
+  private async instanceRequest(
+    instance: ControlledInstance,
+    route: string,
+    init: RequestInit = {},
+    onTiming?: (diagnostics: RequestTimingDiagnostics) => void,
+  ) {
+    return this.controlledInstanceGateway.request(instance, route, init, onTiming);
   }
 
   private async reportInstanceHeartbeat(instance: ControlledInstance, input: ControlledInstanceHeartbeat) {
@@ -1532,27 +1820,84 @@ export class ControlPlaneService {
     }
   }
 
-  private async listNodeInstances() {
-    const result = await this.listNodeInstancesWithDiagnostics();
+  private readCachedNodeInstances() {
+    return this.nodeAgentGateway.readFleetInstances(this.listNodes().map((node) => this.projectNodeConnection(node)));
+  }
+
+  private refreshCachedNodeInstances() {
+    const nodes = this.listNodes().map((node) => this.projectNodeConnection(node));
+    void this.nodeAgentGateway.refreshFleetInstances(nodes).catch((error) => {
+      this.logWarn({ error: errorMessage(error) }, "control plane instance directory refresh failed");
+    });
+  }
+
+  private async listCachedNodeInstances() {
+    const result = this.readCachedNodeInstances();
+    this.refreshCachedNodeInstances();
     return result.items;
   }
 
-  private async listNodeInstancesWithDiagnostics(signal?: AbortSignal) {
-    return this.nodeAgentGateway.listFleetInstances(this.listNodes().map((node) => this.projectNodeConnection(node)), { signal });
+  private async listBootstrapNodeInstances() {
+    const nodes = this.listNodes().map((node) => this.projectNodeConnection(node));
+    await this.nodeAgentGateway.refreshFleetInstances(nodes);
+    return this.nodeAgentGateway.readFleetInstances(nodes).items;
   }
 
-  private async requireNodeInstance(id: string) {
-    for (const node of this.listNodes()) {
-      try {
-        const instances = await this.nodeAgentGateway.listInstances(node);
-        const instance = instances.find((item) => item.id === id);
-        if (instance) {
-          return instance;
+  private async listTriggerMutationInstances() {
+    const nodes = this.listNodes().map((node) => this.projectNodeConnection(node));
+    // Join an in-flight first load, but respect the gateway's retry backoff for
+    // nodes already known to be unavailable. Trigger mutations are best-effort:
+    // only ready node snapshots participate in fan-out.
+    await this.nodeAgentGateway.refreshFleetInstances(nodes);
+    const result = this.nodeAgentGateway.readFleetInstances(nodes);
+    const readyNodeIds = new Set(result.nodeStates
+      .filter((state) => state.phase === "ready")
+      .map((state) => state.nodeId));
+    const partialFailures: ControlPlaneTriggerMutationFailure[] = result.nodeStates
+      .filter((state) => state.phase !== "ready")
+      .map((state) => ({
+        scope: "node" as const,
+        nodeId: state.nodeId,
+        code: state.error?.code || "TRIGGER_NODE_DIRECTORY_UNAVAILABLE",
+        message: state.error?.message || `Node ${state.nodeId} instance directory is ${state.phase}; trigger deployment changes were skipped.`,
+      }));
+    return {
+      items: result.items.filter((instance) => readyNodeIds.has(instance.nodeId)),
+      partialFailures,
+    };
+  }
+
+  private async listNodeInstancesWithDiagnostics(signal?: AbortSignal, progressive = false) {
+    const nodes = this.listNodes().map((node) => this.projectNodeConnection(node));
+    if (!progressive) return this.nodeAgentGateway.listFleetInstances(nodes, { signal });
+    void this.nodeAgentGateway.refreshFleetInstances(nodes).catch((error) => {
+      this.logWarn({ error: errorMessage(error) }, "control plane instance directory refresh failed");
+    });
+    return this.nodeAgentGateway.readFleetInstances(nodes);
+  }
+
+  private async requireNodeInstance(id: string, refresh = false) {
+    return this.requireNodeInstanceFromNodes(id, this.listNodes(), refresh);
+  }
+
+  private async requireNodeInstanceFromNodes(id: string, nodes: Node[], refresh = false) {
+    const cached = this.nodeAgentGateway.instanceFromSnapshot(nodes, id);
+    if (cached && refresh) {
+      const node = nodes.find((candidate) => candidate.id === cached.nodeId);
+      if (node) {
+        await this.nodeAgentGateway.refreshFleetInstances([node], {}, true);
+        const refreshed = this.nodeAgentGateway.instanceFromSnapshot([node], id);
+        if (refreshed) return refreshed;
+        const state = this.nodeAgentGateway.readFleetInstances([node]).nodeStates.find((candidate) => candidate.nodeId === node.id);
+        if (state?.phase === "ready") {
+          throwNotFound("CONTROLLED_INSTANCE_NOT_FOUND", `Controlled instance ${id} was not found.`);
         }
-      } catch {
-        // Offline nodes do not block lookup on other nodes.
       }
     }
+    if (cached) return cached;
+    const refreshed = await this.nodeAgentGateway.listFleetInstances(nodes);
+    const instance = refreshed.items.find((item) => item.id === id);
+    if (instance) return instance;
     throwNotFound("CONTROLLED_INSTANCE_NOT_FOUND", `Controlled instance ${id} was not found.`);
   }
 
@@ -1593,6 +1938,12 @@ export class ControlPlaneService {
     return this.appLaunchCwdForFolder(instance, folder, runtime);
   }
 
+  private async aiSessionRuntimeCwd(instance: ControlledInstance, cwdFolderId?: string) {
+    return cwdFolderId
+      ? this.runtimeCwdForFolderId(instance, cwdFolderId)
+      : instance.runtime.workspacePath || instance.workspace.path || workspacePolicyForSource(instance.source).path || "/workspace";
+  }
+
   private appLaunchCwdForFolder(instance: ControlledInstance, folder: NodeLocalFolder, runtime: NodeRuntime) {
     const cwd = runtimeCwdForNodePath(instance, folder.path, runtime);
     if (cwd) return cwd;
@@ -1630,9 +1981,16 @@ export class ControlPlaneService {
     return publicNode(this.projectNodeConnection(this.requireNode(id)));
   }
 
-  async requireControlledInstance(id: string, includeSecret = false) {
-    const record = await this.requireNodeInstance(id);
+  async requireControlledInstance(id: string, includeSecret = false, refresh = false) {
+    const record = await this.requireNodeInstance(id, refresh);
     return includeSecret ? record : publicInstanceWithAccess(record);
+  }
+
+  requireControlledInstanceForAuthorization(id: string, allowedNodeIds?: ReadonlySet<string>) {
+    const nodes = allowedNodeIds ? this.listNodes().filter((node) => allowedNodeIds.has(node.id)) : this.listNodes();
+    const instance = this.nodeAgentGateway.instanceFromSnapshot(nodes, id);
+    if (!instance) throwNotFound("CONTROLLED_INSTANCE_NOT_FOUND", `Controlled instance ${id} was not found.`);
+    return publicInstanceWithAccess(instance);
   }
 }
 
@@ -1651,6 +2009,41 @@ function requireAiSessionHistoryLimitSupport(node: Node, instance: ControlledIns
     throw Object.assign(new Error("This instance does not support managed AI session history retention settings."), {
       statusCode: 409,
       code: "AI_SESSION_HISTORY_LIMIT_UNSUPPORTED",
+    });
+  }
+}
+
+function requireAiSessionAttachmentRetentionSupport(node: Node, instance: ControlledInstance) {
+  const agent = node.capabilities.agent;
+  const agentCapabilities = agent && typeof agent === "object" && !Array.isArray(agent)
+    ? (agent as Record<string, unknown>).capabilities
+    : undefined;
+  const nodeSupported = Boolean(
+    agentCapabilities
+    && typeof agentCapabilities === "object"
+    && !Array.isArray(agentCapabilities)
+    && (agentCapabilities as Record<string, unknown>).aiSessionAttachmentRetention === true,
+  );
+  if (!nodeSupported || instance.capabilities.features.aiSessionConversationAttachments?.retentionSettings !== true) {
+    throw Object.assign(new Error("This instance does not support managed AI session attachment retention settings."), {
+      statusCode: 409,
+      code: "AI_SESSION_ATTACHMENT_RETENTION_UNSUPPORTED",
+    });
+  }
+}
+
+function requireAiSessionFileAttachmentLimitSupport(node: Node, instance: ControlledInstance) {
+  const agent = node.capabilities.agent;
+  const agentCapabilities = agent && typeof agent === "object" && !Array.isArray(agent)
+    ? (agent as Record<string, unknown>).capabilities
+    : undefined;
+  const nodeSupported = supportsNodeAiSessionFileAttachmentLimit(agentCapabilities);
+  if (!nodeSupported || !supportsAiSessionFileSizeLimitSettings(instance.capabilities)) {
+    // Compatibility for v0.0.21: older node agents reject the additive instance
+    // config field and older controlled instances cannot enforce it locally.
+    throw Object.assign(new Error("This instance does not support managed AI session file attachment limits."), {
+      statusCode: 409,
+      code: "AI_SESSION_FILE_ATTACHMENT_LIMIT_UNSUPPORTED",
     });
   }
 }

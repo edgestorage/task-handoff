@@ -4,7 +4,6 @@ import {
   sanitizeStoredProxyAuthority,
   type ControlPlaneProxyAuthority,
   type ProxyBindingRecord,
-  type ProxyInviteRecord,
 } from "./records.ts";
 
 type ProxyStoreLogger = (message: string, details: Record<string, unknown>) => void;
@@ -13,7 +12,7 @@ export class ControlPlaneProxyStore {
   private readonly authority: JsonFile<ControlPlaneProxyAuthority>;
 
   constructor(filePath: string, logger?: ProxyStoreLogger) {
-    this.authority = new JsonFile(filePath, () => ({ revision: 0, invites: [], bindings: [] }), {
+    this.authority = new JsonFile<ControlPlaneProxyAuthority>(filePath, () => ({ revision: 0, invites: [], bindings: [] }), {
       schema: ControlPlaneProxyAuthoritySchema,
       sanitize: (value: unknown) => sanitizeStoredProxyAuthority(
         value,
@@ -27,6 +26,10 @@ export class ControlPlaneProxyStore {
 
   init() {
     this.authority.init();
+    // Compatibility for v0.0.21: sanitize then rewrite once so historical
+    // persisted invite hashes and revoked binding tombstones are removed.
+    const migrated = this.authority.get();
+    this.authority.put(migrated);
   }
 
   snapshot() {
@@ -41,14 +44,6 @@ export class ControlPlaneProxyStore {
       this.authority.put({ ...draft, revision: current.revision + 1 });
     }
     return result;
-  }
-
-  listInvites(): ProxyInviteRecord[] {
-    return this.snapshot().invites;
-  }
-
-  getInvite(id: string) {
-    return this.snapshot().invites.find((invite) => invite.id === id);
   }
 
   listBindings(): ProxyBindingRecord[] {

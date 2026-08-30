@@ -15,10 +15,10 @@
         @keydown.space.prevent="$emit('selectCard', card.key)"
       >
     <span v-if="card.session.unread" class="ai-session-unread-dot" :aria-label="t('sessions.actions.unread')" :title="t('sessions.actions.unread')" />
-    <AiSessionOriginMark :creation-source="card.session.creationSource" />
+    <AiSessionCardMarks :agent="card.session.agent" :creation-source="card.session.creationSource" />
     <div class="ai-board-card-headline" :data-show-workspace="showWorkspace ? 'true' : undefined">
       <button type="button" class="ai-board-instance" @click.stop="$emit('selectCard', card.key)">
-        <span class="ai-board-dot" />
+        <AiSessionStatusIndicator class="ai-board-status-indicator" :status="card.session.status" />
         <span class="ai-board-identity">
           <span class="ai-board-primary-line">
             <strong>{{ instanceDisplayName(card.instance) }}</strong>
@@ -51,7 +51,9 @@
           :content="displayAiSessionMessage(card.session, promptIndex, t)"
           :instance-id="card.instance.id"
           :is-latest="promptIndex >= promptCount - 1"
+          :provider-turn-id="card.session.activeTurnId"
           :session-id="card.session.id"
+          :turn-id="card.session.latestTurnRef?.id"
         />
       </div>
       <span v-if="promptCount > 1" class="ai-board-turn-nav">
@@ -90,66 +92,6 @@
       </button>
     </span>
 
-    <div class="ai-board-card-tools" :aria-label="t('sessions.actions.controls')">
-      <DropdownMenu>
-        <DropdownMenuTrigger as-child>
-          <button type="button" class="ai-board-trigger-button ai-session-card-action" :data-bound="boundTriggers(card).length ? 'true' : undefined" :title="triggerButtonTitle(card)" @click.stop>
-            <Zap :size="13" />
-            <small v-if="boundTriggers(card).length">{{ boundTriggers(card).length }}</small>
-          </button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent class="ai-board-trigger-menu" align="end" :side-offset="6" @click.stop>
-          <div class="ai-board-trigger-search" @click.stop @keydown.stop>
-            <input v-model="triggerSearch" type="search" :placeholder="t('sessions.actions.searchTriggers')" :aria-label="t('sessions.actions.searchTriggers')" />
-          </div>
-          <DropdownMenuItem v-if="!triggerTemplates.length" class="ai-board-trigger-menu-empty" disabled>{{ t("sessions.actions.noTriggers") }}</DropdownMenuItem>
-          <DropdownMenuItem v-else-if="!filteredTriggerTemplates.length" class="ai-board-trigger-menu-empty" disabled>{{ t("sessions.actions.noMatchingTriggers") }}</DropdownMenuItem>
-          <template v-else>
-            <DropdownMenuItem
-              v-for="trigger in filteredTriggerTemplates"
-              :key="`${card.key}:${trigger.configHash}`"
-              class="ai-board-trigger-menu-item"
-              :disabled="triggerBusyKey === triggerActionKey(card, trigger.configHash)"
-              @select="$emit('toggleTrigger', card, trigger.configHash)"
-            >
-              <Check v-if="isTriggerBound(card, trigger.configHash)" :size="13" />
-              <Zap v-else :size="13" />
-              <span>
-                <strong>{{ trigger.config.name }}</strong>
-                <small>{{ trigger.config.source.type }} · {{ shortHash(trigger.configHash) }}</small>
-              </span>
-              <small>{{ isTriggerBound(card, trigger.configHash) ? t("sessions.actions.remove") : t("sessions.actions.add") }}</small>
-            </DropdownMenuItem>
-          </template>
-        </DropdownMenuContent>
-      </DropdownMenu>
-      <button v-if="card.session.appSessionId || card.session.actions?.openApp" type="button" class="ai-board-open ai-session-card-action" :aria-label="t('sessions.actions.openAppFor', { agent: card.session.agent })" :title="t('sessions.actions.openApp')" @click.stop="$emit('openAiSessionApp', card.instance, card.session)">
-        <ExternalLink :size="14" />
-      </button>
-      <DropdownMenu>
-        <DropdownMenuTrigger as-child>
-          <button type="button" class="ai-board-more ai-session-card-action" :aria-label="t('sessions.actions.moreFor', { agent: card.session.agent })" :title="t('sessions.actions.more')" @click.stop>
-            <MoreHorizontal :size="14" />
-          </button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent class="ai-board-card-menu" align="end" :side-offset="6" @click.stop>
-          <DropdownMenuSub v-if="card.session.actions?.fork">
-            <DropdownMenuSubTrigger class="ai-board-card-menu-item" :disabled="isForking">
-              <Split :size="13" />
-              <span>{{ isForking ? t("sessions.actions.forking") : t("sessions.actions.fork") }}</span>
-            </DropdownMenuSubTrigger>
-            <DropdownMenuSubContent class="ai-board-card-menu">
-              <DropdownMenuItem class="ai-board-card-menu-item" @select="$emit('forkSession', card, 'current')">{{ t("sessions.actions.forkCurrent") }}</DropdownMenuItem>
-              <DropdownMenuItem class="ai-board-card-menu-item" @select="$emit('forkSession', card, 'managed-worktree')">{{ t("sessions.actions.forkWorktree") }}</DropdownMenuItem>
-            </DropdownMenuSubContent>
-          </DropdownMenuSub>
-          <DropdownMenuItem class="ai-board-card-menu-item danger" :disabled="isStoppingAppSession" @select="$emit('stopAppSession', card)">
-            <Square :size="13" />
-            <span>{{ isStoppingAppSession ? t("sessions.actions.closingSession") : t("sessions.actions.closeSession") }}</span>
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </div>
       </article>
     </ContextMenuTrigger>
     <AiSessionCardContextMenu
@@ -172,15 +114,15 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed } from "vue";
 import { useI18n } from "vue-i18n";
-import { Ban, Check, ChevronLeft, ChevronRight, ExternalLink, MoreHorizontal, Split, Square, X, Zap } from "@lucide/vue";
+import { Ban, Check, ChevronLeft, ChevronRight, X } from "@lucide/vue";
 import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
 import AiSessionCardContextMenu from "../../../components/ai-session/AiSessionCardContextMenu.vue";
-import AiSessionOriginMark from "../../../components/ai-session/AiSessionOriginMark.vue";
+import AiSessionCardMarks from "../../../components/ai-session/AiSessionCardMarks.vue";
+import AiSessionStatusIndicator from "../../../components/ai-session/AiSessionStatusIndicator.vue";
 import AiSessionToolActivity from "../../../components/ai-session/AiSessionToolActivity.vue";
 import type { AiSessionSummary, ControlPlaneTrigger, InstanceBoardItem, InstanceWithAiSessions, TriggerDeployment } from "../../../api/types";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
 import { ContextMenu, ContextMenuTrigger } from "../../../components/ui/context-menu";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../../components/ui/tooltip";
 import AiSessionStreamingMarkdown from "../../../components/ai-session/AiSessionStreamingMarkdown.vue";
@@ -211,7 +153,6 @@ const props = defineProps<{
   forkingSessionKey?: string;
   triggerActionKey: (card: AiBoardCard, configHash: string) => string;
   triggerBusyKey: string;
-  triggerButtonTitle: (card: AiBoardCard) => string;
   triggerTemplates: ControlPlaneTrigger[];
 }>();
 
@@ -231,23 +172,8 @@ function approvalKey(card: AiBoardCard, decision: "allow" | "deny" | "skip") {
   return `${card.instance.id}:${card.session.id}:${decision}`;
 }
 
-const triggerSearch = ref("");
 const isStoppingAppSession = computed(() => props.stoppingAppSessionKey === props.card.key);
 const isForking = computed(() => props.forkingSessionKey === props.card.key);
-const filteredTriggerTemplates = computed(() => {
-  const query = triggerSearch.value.trim().toLowerCase();
-  if (!query) {
-    return props.triggerTemplates;
-  }
-  return props.triggerTemplates.filter((trigger) => {
-    const searchable = [
-      trigger.config.name,
-      trigger.config.source.type,
-      trigger.configHash,
-    ].join(" ").toLowerCase();
-    return searchable.includes(query);
-  });
-});
 </script>
 
 <style scoped>
@@ -279,7 +205,7 @@ const filteredTriggerTemplates = computed(() => {
 
 .ai-board-instance {
   display: grid;
-  grid-template-columns: 8px minmax(0, 1fr);
+  grid-template-columns: 12px minmax(0, 1fr);
   align-items: start;
   gap: 9px;
   min-width: 0;
@@ -342,7 +268,7 @@ const filteredTriggerTemplates = computed(() => {
 .ai-session-unread-dot {
   position: absolute;
   top: 13px;
-  right: 14px;
+  right: 32px;
   z-index: 4;
   width: 7px;
   height: 7px;
@@ -352,12 +278,12 @@ const filteredTriggerTemplates = computed(() => {
 }
 
 .ai-board-card[data-app-session-origin="true"] .ai-session-unread-dot {
-  right: 36px;
+  right: 50px;
 }
 
-.ai-board-card:hover :deep(.ai-session-origin-mark),
-.ai-board-card:focus-within :deep(.ai-session-origin-mark) {
-  opacity: 0;
+.ai-board-card:hover :deep(.ai-session-card-marks),
+.ai-board-card:focus-within :deep(.ai-session-card-marks) {
+  opacity: 1;
 }
 
 .ai-board-secondary-line {
@@ -386,28 +312,16 @@ const filteredTriggerTemplates = computed(() => {
   font-size: 12px;
 }
 
-.ai-board-dot {
-  width: 8px;
-  height: 8px;
+.ai-board-status-indicator {
+  --ai-session-status-dot: var(--ai-board-dot-active);
+  --ai-session-status-dot-shadow: var(--ai-board-dot-active-shadow);
+  --ai-session-status-waiting: var(--ai-board-dot-waiting);
+  --ai-session-status-waiting-shadow: var(--ai-board-dot-waiting-shadow);
+  --ai-session-status-failed: var(--ai-board-dot-failed);
+  --ai-session-status-failed-shadow: var(--ai-board-dot-failed-shadow);
+  --ai-session-status-idle: var(--ai-board-dot-idle);
+  --ai-session-status-idle-shadow: var(--ai-board-dot-idle-shadow);
   margin-top: 4px;
-  border-radius: 999px;
-  background: var(--ai-board-dot-active);
-  box-shadow: var(--ai-board-dot-active-shadow);
-}
-
-.ai-board-card[data-state="waiting"] .ai-board-dot {
-  background: var(--ai-board-dot-waiting);
-  box-shadow: var(--ai-board-dot-waiting-shadow);
-}
-
-.ai-board-card[data-state="failed"] .ai-board-dot {
-  background: var(--ai-board-dot-failed);
-  box-shadow: var(--ai-board-dot-failed-shadow);
-}
-
-.ai-board-card[data-state="idle"] .ai-board-dot {
-  background: var(--ai-board-dot-idle);
-  box-shadow: var(--ai-board-dot-idle-shadow);
 }
 
 .ai-board-content {
@@ -437,6 +351,8 @@ const filteredTriggerTemplates = computed(() => {
   align-content: start;
   border-top: 1px solid var(--ai-session-card-divider);
   background: var(--ai-session-card-content-bg);
+  font-size: 14px;
+  line-height: 1.35;
   margin: 2px -14px 0;
   min-height: 0;
   overflow-x: hidden;
@@ -539,33 +455,6 @@ const filteredTriggerTemplates = computed(() => {
   color: var(--ai-board-title);
 }
 
-.ai-board-card-tools {
-  display: flex;
-  position: absolute;
-  top: 9px;
-  right: 10px;
-  align-items: center;
-  flex-wrap: nowrap;
-  justify-content: flex-end;
-  gap: 5px;
-  width: max-content;
-  max-width: calc(100% - 20px);
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 120ms ease;
-  z-index: 3;
-}
-
-.ai-board-card:hover .ai-board-card-tools,
-.ai-board-card:focus-within .ai-board-card-tools {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-.ai-board-card[data-unread="true"] .ai-board-card-tools {
-  right: 28px;
-}
-
 .ai-board-turn-nav {
   display: inline-flex;
   position: absolute;
@@ -627,126 +516,6 @@ const filteredTriggerTemplates = computed(() => {
   opacity: 0.32;
 }
 
-.ai-board-trigger-button {
-  gap: 2px;
-  width: auto;
-  padding: 0 5px;
-}
-
-.ai-board-trigger-button:not([data-bound="true"]) {
-  width: 24px;
-  padding: 0;
-}
-
-.ai-board-trigger-button[data-bound="true"] {
-  border-color: var(--ai-board-active-border);
-  color: var(--ai-board-active-text);
-}
-
-.ai-board-trigger-button small {
-  font-size: 10px;
-  font-weight: 850;
-  line-height: 1;
-}
-
-:global(.ai-board-trigger-menu) {
-  min-width: 250px;
-  border: 1px solid var(--ai-board-column-border);
-  background: color-mix(in srgb, var(--ai-board-column-bg) 94%, transparent);
-  color: var(--ai-board-title);
-  -webkit-backdrop-filter: blur(16px) saturate(1.16);
-  backdrop-filter: blur(16px) saturate(1.16);
-  padding: 6px;
-}
-
-:global(.ai-board-trigger-search) {
-  padding: 4px 4px 6px;
-}
-
-:global(.ai-board-trigger-search input) {
-  width: 100%;
-  min-width: 0;
-  height: 28px;
-  border: 1px solid var(--ai-board-floating-border);
-  border-radius: 6px;
-  background: var(--ai-board-floating-bg);
-  color: var(--ai-board-title);
-  font-size: 12px;
-  outline: none;
-  padding: 0 8px;
-}
-
-:global(.ai-board-trigger-search input::placeholder) {
-  color: var(--ai-board-muted);
-}
-
-:global(.ai-board-trigger-search input:focus) {
-  border-color: var(--ai-board-active-border);
-}
-
-:global(.ai-board-trigger-menu-empty) {
-  min-height: 30px;
-  color: var(--ai-board-muted);
-  font-size: 12px;
-}
-
-:global(.ai-board-trigger-menu-item) {
-  display: grid;
-  grid-template-columns: 16px minmax(0, 1fr) auto;
-  gap: 8px;
-  min-height: 34px;
-  border-radius: 6px;
-  font-size: 12px;
-  padding: 6px 8px;
-}
-
-:global(.ai-board-trigger-menu-item span) {
-  display: grid;
-  min-width: 0;
-}
-
-:global(.ai-board-trigger-menu-item strong),
-:global(.ai-board-trigger-menu-item small) {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-:global(.ai-board-trigger-menu-item strong) {
-  color: var(--ai-board-title);
-  font-size: 12px;
-  font-weight: 800;
-  line-height: 1.2;
-}
-
-:global(.ai-board-trigger-menu-item small) {
-  color: var(--ai-board-muted);
-  font-size: 11px;
-  line-height: 1.2;
-}
-
-:global(.ai-board-card-menu) {
-  min-width: 190px;
-  border: 1px solid var(--ai-board-column-border);
-  background: color-mix(in srgb, var(--ai-board-column-bg) 94%, transparent);
-  color: var(--ai-board-title);
-  -webkit-backdrop-filter: blur(16px) saturate(1.16);
-  backdrop-filter: blur(16px) saturate(1.16);
-  padding: 6px;
-}
-
-:global(.ai-board-card-menu-item) {
-  min-height: 32px;
-  border-radius: 6px;
-  font-size: 12px;
-  padding: 6px 8px;
-}
-
-:global(.ai-board-card-menu-item.danger) {
-  color: var(--ai-board-stale-text);
-}
-
 .ai-board-approval-actions {
   display: inline-flex;
   position: absolute;
@@ -789,4 +558,3 @@ const filteredTriggerTemplates = computed(() => {
 }
 
 </style>
-<style scoped src="../../../components/ai-session/AiSessionCardAction.css"></style>

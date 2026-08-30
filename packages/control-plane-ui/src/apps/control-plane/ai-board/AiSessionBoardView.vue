@@ -91,7 +91,6 @@
                 :forking-session-key="forkingSessionKey"
                 :trigger-action-key="triggerActionKey"
                 :trigger-busy-key="triggerBusyKey"
-                :trigger-button-title="triggerButtonTitle"
                 :trigger-templates="triggerTemplates"
                 @next-prompt="nextPrompt"
                 @open-ai-session-app="openCardApp"
@@ -147,7 +146,6 @@
               :forking-session-key="forkingSessionKey"
               :trigger-action-key="triggerActionKey"
               :trigger-busy-key="triggerBusyKey"
-              :trigger-button-title="triggerButtonTitle"
               :trigger-templates="triggerTemplates"
               @next-prompt="nextPrompt"
               @open-ai-session-app="openCardApp"
@@ -176,6 +174,8 @@
           :can-interrupt="canInterrupt(selectedCard.session)"
           :can-resolve-approval="canResolveApproval(selectedCard.session)"
           :card="selectedCard"
+          :conversation-session="selectedCardConversationSession || selectedCard.session"
+          :detail-state="selectedCardContentState"
           :attachments="messageAttachments"
           :draft="messageDraft"
           :editing-label="queueComposerEdit ? t('sessions.composer.editingQueuedMessage') : undefined"
@@ -187,6 +187,10 @@
           :instance-display-name="instanceDisplayName"
           :prompt-count="promptCount(selectedCard.session)"
           :prompt-index="promptIndexFor(selectedCard)"
+          :timeline-mode="effectiveTimelineViewMode"
+          :selected-turn-state="selectedTurnTimelineState"
+          :turn-bodies-ready="selectedCardTurnsReady"
+          :turn-timelines="conversationTurnTimelines"
           @next-prompt="nextPrompt(selectedCard)"
           @open-ai-session-app="openCardApp"
           @previous-prompt="previousPrompt(selectedCard)"
@@ -195,6 +199,9 @@
           @reorder-queued-messages="reorderSelectedQueuedMessages"
           @resolve-approval="resolveSelectedApproval"
           @retry-queued-message="retrySelectedQueuedMessage"
+          @retry-detail="loadSelectedCardSessionDetail"
+          @load-turn-timeline="loadTurnTimeline"
+          @continue-from-turn="forkCardSession(selectedCard, 'current', $event)"
           @run="runSelectedSessionAction"
           @command="executeSelectedSessionCommand"
           @cancel-edit="cancelQueueComposerEdit"
@@ -227,6 +234,7 @@ import { useI18n } from "vue-i18n";
 import { compareNaturalText, compareTechnicalIdentifiers } from "../../../i18n/presentation";
 import type { SupportedLocale } from "../../../i18n/locale";
 import { translateApiError } from "../../../i18n/apiError";
+import { waitForAiSessionProjection } from "../ai-session-projection";
 import { useEventListener } from "@vueuse/core";
 import { Columns3, LayoutGrid, Search, SlidersHorizontal } from "@lucide/vue";
 import { useQueryClient } from "@tanstack/vue-query";
@@ -235,8 +243,9 @@ import { controlPlaneQueryKeys } from "../../../api/queryKeys.ts";
 import { executeAiSessionCommand } from "../../../api/ai-session-commands";
 import type { AiSessionCommandInput, AiSessionPermissionMode } from "@task-handoff/protocol/ai-sessions";
 import { isAiSessionApprovalPending } from "@task-handoff/control-plane-client";
-import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions } from "../../../api/types";
+import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions, NodeLocalFolder } from "../../../api/types";
 import type { AiSessionComposerAttachment } from "../../../components/ai-session/AiSessionComposer.vue";
+import { uploadAiSessionComposerAttachment } from "../../../components/ai-session/attachmentUpload";
 import { referencesForBindings, type AiSessionMentionBinding } from "../../../components/ai-session/mentions";
 import { desktopRuntimePathAccess } from "../../../components/ai-session/useAiSessionMentions";
 import { Button } from "../../../components/ui/button";
@@ -253,7 +262,11 @@ import {
 } from "../../../components/ui/dropdown-menu";
 import { ScrollArea } from "../../../components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../../components/ui/tooltip";
-import { showControlPlaneToast } from "../useControlPlaneToasts";
+import { showControlPlaneToast, showDelayedControlPlaneLoadingToast } from "../useControlPlaneToasts";
+import { useAiSessionTimelinePresentation } from "../useAiSessionTimelinePresentation";
+import { useAiSessionTimelineViewMode } from "../useAiSessionTimelineViewMode";
+import { useAiSessionConversationProjection } from "../useAiSessionConversationProjection";
+import { useAiSessionMessageDeltaDemand, useAiSessionTimelineDemand } from "../useAiSessionEventDemand";
 import { aiSessionMessageText, clearAiSessionDraft, loadAiSessionDraftPayload, persistAiSessionDraftPayload } from "../useAiSessionDraft";
 import {
   aiSessionAppTab,
@@ -271,6 +284,8 @@ import AiSessionCard from "./AiSessionCard.vue";
 import AiSessionFloatingDock from "./AiSessionFloatingDock.vue";
 import type { AiBoardCard, AiBoardColumnKey } from "./aiBoardTypes";
 import { useAiBoardTriggers } from "./useAiBoardTriggers";
+import { nodeLocalFolderDisplayName } from "../nodePath";
+import { createBrowserUuid } from "../../../lib/random-id";
 
 const AI_BOARD_VISIBLE_COLUMNS_STORAGE_KEY = "task-handoff.control-plane.ai-board.visible-columns";
 const AI_BOARD_LAYOUT_STORAGE_KEY = "task-handoff.control-plane.ai-board.layout";
@@ -292,6 +307,7 @@ const props = defineProps<{
   instanceDisplayName: (instance: InstanceBoardItem) => string;
   instances: InstanceWithAiSessions[];
   loading: boolean;
+  nodeLocalFoldersByNodeId: Record<string, NodeLocalFolder[]>;
 }>();
 
 const emit = defineEmits<{
@@ -303,6 +319,7 @@ const emit = defineEmits<{
 const { locale, t } = useI18n();
 
 const promptIndexes = ref<Record<string, { index: number; count: number }>>({});
+let promptSelectionRevision = 0;
 const visibleColumnKeys = ref(loadVisibleColumnKeys());
 const layoutMode = ref<AiBoardLayoutMode>(loadLayoutMode());
 const gridGroupBy = ref<AiBoardGridGroupBy>(loadGridGroupBy());
@@ -324,7 +341,7 @@ const aiSessionActionBusy = ref(false);
 const stoppingAppSessionKey = ref("");
 const forkingSessionKey = ref("");
 const forkRequestIds = new Map<string, string>();
-const pendingBusyFork = ref<{ card: AiBoardCard; mode: "current" | "managed-worktree" }>();
+const pendingBusyFork = ref<{ card: AiBoardCard; mode: "current" | "managed-worktree"; throughTurnId?: string }>();
 const queryClient = useQueryClient();
 const controlPlaneSettings = useControlPlaneSettingsQuery();
 const mentionTrigger = computed(() => controlPlaneSettings.data.value?.mentionTrigger || "@");
@@ -348,9 +365,8 @@ const {
   toggleTrigger,
   triggerActionKey,
   triggerBusyKey,
-  triggerButtonTitle,
   triggerTemplates,
-} = useAiBoardTriggers(t);
+} = useAiBoardTriggers();
 
 const allCards = computed<AiBoardCard[]>(() => {
   const cards: AiBoardCard[] = [];
@@ -395,6 +411,62 @@ const visibleCards = computed(() => {
 
 const totalBoundSessions = computed(() => allCards.value.length);
 const selectedCard = computed(() => allCards.value.find((card) => card.key === selectedCardKey.value));
+useAiSessionMessageDeltaDemand(computed(() => ({ instanceIds: props.instances.map((instance) => instance.id) })));
+useAiSessionTimelineDemand(computed(() => selectedCard.value ? {
+  instanceId: selectedCard.value.instance.id,
+  sessionId: selectedCard.value.session.id,
+} : undefined));
+const {
+  allTurnsReady: selectedCardTurnsReady,
+  conversation: selectedCardConversationSession,
+  loadAllTurns: loadAllSelectedCardTurns,
+  hasCurrentTurn: hasCurrentSelectedCardTurn,
+  hasRenderableTurn: hasRenderableSelectedCardTurn,
+  loadTurn: loadSelectedCardTurn,
+  refresh: loadSelectedCardSessionDetail,
+  state: selectedCardSessionDetailState,
+  turnIndexKey: selectedCardTurnIndexKey,
+} = useAiSessionConversationProjection({
+  instanceId: () => selectedCard.value?.instance.id || "",
+  summary: () => selectedCard.value?.session,
+});
+const { viewMode: timelineViewMode } = useAiSessionTimelineViewMode();
+const {
+  conversationTurnTimelines,
+  loadSelectedTurnTimeline,
+  loadTurnTimeline,
+  selectedTurn: selectedTimelineTurn,
+  selectedTurnState: selectedTurnTimelineState,
+  supportsTimeline: supportsAiSessionTimeline,
+} = useAiSessionTimelinePresentation({
+  instance: () => selectedCard.value?.instance,
+  promptIndex: () => selectedCard.value ? promptIndexFor(selectedCard.value) : 0,
+  session: selectedCardConversationSession,
+});
+const effectiveTimelineViewMode = computed(() => supportsAiSessionTimeline.value ? timelineViewMode.value : "compact");
+const selectedCardContentState = computed(() => {
+  if (selectedCardSessionDetailState.value !== "ready" || effectiveTimelineViewMode.value === "full") {
+    return selectedCardSessionDetailState.value;
+  }
+  const card = selectedCard.value;
+  const conversation = selectedCardConversationSession.value;
+  if (!card || !conversation) return "loading";
+  const turn = aiSessionTurns(conversation)[promptIndexFor(card)];
+  return !turn || hasRenderableSelectedCardTurn(turn.id) ? "ready" : "loading";
+});
+watch(
+  () => selectedTimelineTurn.value ? `${selectedCard.value?.key || ""}:${selectedTimelineTurn.value.id}:${selectedTimelineTurn.value.status}:${selectedCardTurnIndexKey.value}` : "",
+  () => {
+    if (selectedTimelineTurn.value) void loadSelectedCardTurn(selectedTimelineTurn.value.id);
+    void loadSelectedTurnTimeline();
+  },
+  { immediate: true },
+);
+watch(
+  [effectiveTimelineViewMode, selectedCardTurnIndexKey],
+  ([mode]) => { if (mode === "full") void loadAllSelectedCardTurns(); },
+  { immediate: true },
+);
 const layoutVisibleCards = computed(() => visibleCards.value
   .filter((card) => visibleColumnKeys.value.has(cardColumnKey(card)))
   .sort((left, right) => compareAiBoardCards(left, right, layoutMode.value === "grid" && gridSortByStatus.value)));
@@ -507,7 +579,22 @@ function compareAiBoardCards(left: AiBoardCard, right: AiBoardCard, sortByStatus
 
 function aiBoardCardPath(card: AiBoardCard) {
   const path = card.session.cwd?.trim();
-  return { key: path || "__unknown_path__", label: path || t("sessions.board.unknownPath") };
+  const folders = props.nodeLocalFoldersByNodeId[card.instance.nodeId] || [];
+  const normalizedPath = normalizeFolderPath(path);
+  const folder = (card.session.cwdFolderId
+    ? folders.find((candidate) => candidate.id === card.session.cwdFolderId)
+    : undefined)
+    || folders.find((candidate) => normalizeFolderPath(candidate.path) === normalizedPath);
+  return {
+    key: normalizedPath || "__unknown_path__",
+    label: folder ? nodeLocalFolderDisplayName(folder) : path || t("sessions.board.unknownPath"),
+  };
+}
+
+function normalizeFolderPath(value?: string) {
+  const path = value?.trim() || "";
+  if (/^[A-Za-z]:[\\/]/u.test(path)) return path.replace(/\\/gu, "/").replace(/\/+$/u, "").toLowerCase();
+  return path.replace(/\/+$/u, "");
 }
 
 function aiBoardCardGroup(card: AiBoardCard, groupBy: Exclude<AiBoardGridGroupBy, "none">) {
@@ -636,7 +723,7 @@ function setGridSortByStatus(value: boolean) {
 }
 
 function promptCount(session: AiSessionSummary) {
-  return aiSessionTurns(session).length;
+  return session.turnCount ?? aiSessionTurns(session).length;
 }
 
 function promptIndexFor(card: AiBoardCard) {
@@ -655,23 +742,33 @@ function promptIndexFor(card: AiBoardCard) {
   return Math.min(Math.max(saved.index, 0), count - 1);
 }
 
-function setPromptIndex(card: AiBoardCard, index: number) {
+async function setPromptIndex(card: AiBoardCard, index: number) {
   const count = promptCount(card.session);
   if (!count) {
     return;
   }
+  const targetIndex = Math.min(Math.max(index, 0), count - 1);
+  const conversation = selectedCard.value?.key === card.key ? selectedCardConversationSession.value : undefined;
+  const targetTurn = conversation ? aiSessionTurns(conversation)[targetIndex] : undefined;
+  if (targetTurn && !hasCurrentSelectedCardTurn(targetTurn.id)) {
+    const requestRevision = ++promptSelectionRevision;
+    const loaded = await loadSelectedCardTurn(targetTurn.id);
+    if (!loaded || requestRevision !== promptSelectionRevision || selectedCard.value?.key !== card.key) return;
+  } else {
+    promptSelectionRevision += 1;
+  }
   promptIndexes.value = {
     ...promptIndexes.value,
-    [card.key]: { index: Math.min(Math.max(index, 0), count - 1), count },
+    [card.key]: { index: targetIndex, count },
   };
 }
 
 function previousPrompt(card: AiBoardCard) {
-  setPromptIndex(card, promptIndexFor(card) - 1);
+  void setPromptIndex(card, promptIndexFor(card) - 1);
 }
 
 function nextPrompt(card: AiBoardCard) {
-  setPromptIndex(card, promptIndexFor(card) + 1);
+  void setPromptIndex(card, promptIndexFor(card) + 1);
 }
 
 function canResolveApproval(session: AiSessionSummary) {
@@ -732,12 +829,17 @@ async function runSelectedSessionAction(permissionMode?: AiSessionPermissionMode
 
 async function uploadMessageAttachments(instanceId: string, sessionId: string) {
   return Promise.all(messageAttachments.value.map(async (attachment) => {
-    if (attachment.source.type === "runtime-path") {
-      return { id: attachment.id, kind: attachment.kind, name: attachment.name, mime: attachment.mime, size: attachment.size, source: attachment.source };
-    }
-    if (!attachment.dataUrl) throw new Error(t("sessions.panel.attachmentUnavailable", { name: attachment.name }));
-    const uploaded = await uploadAiSessionAttachment({ instanceId, sessionId, kind: attachment.kind, name: attachment.name, mime: attachment.mime, data: attachment.dataUrl });
-    return { id: uploaded.id, kind: uploaded.kind, source: { type: "upload-ref" as const } };
+    return uploadAiSessionComposerAttachment(attachment, (onProgress) => {
+      if (!attachment.dataUrl) throw new Error(t("sessions.panel.attachmentUnavailable", { name: attachment.name }));
+      return uploadAiSessionAttachment({
+        instanceId,
+        sessionId,
+        kind: attachment.kind,
+        name: attachment.name,
+        mime: attachment.mime,
+        data: attachment.dataUrl,
+      }, onProgress);
+    });
   }));
 }
 
@@ -755,7 +857,6 @@ async function sendSelectedSessionMessage(permissionMode?: AiSessionPermissionMo
     messageDraft.value = "";
     messageMentionBindings.value = [];
     messageAttachments.value = [];
-    await refreshBoard();
   } catch (error) {
     showControlPlaneToast(translateApiError(error, t, t("sessions.panel.sendFailed")));
   } finally {
@@ -773,7 +874,6 @@ async function executeSelectedSessionCommand(input: AiSessionCommandInput) {
     messageDraft.value = "";
     messageMentionBindings.value = [];
     if (input.command === "goal" && !input.argument) showControlPlaneToast(result.value || t("sessions.panel.noGoal"));
-    await refreshBoard();
   } catch (error) {
     showControlPlaneToast(translateApiError(error, t, t("sessions.panel.commandFailed")));
   } finally {
@@ -795,7 +895,6 @@ async function steerMessageDraft() {
     messageDraft.value = "";
     messageMentionBindings.value = [];
     messageAttachments.value = [];
-    await refreshBoard();
   } catch (error) {
     showControlPlaneToast(translateApiError(error, t, t("sessions.panel.steerFailed")));
   } finally {
@@ -811,7 +910,6 @@ async function interruptSelectedSession() {
   aiSessionActionBusy.value = true;
   try {
     await interruptAiSession(card.instance.id, card.session.id);
-    await refreshBoard();
   } catch (error) {
     showControlPlaneToast(translateApiError(error, t, t("sessions.panel.stopFailed")));
   } finally {
@@ -827,7 +925,6 @@ async function resolveSelectedApproval(decision: "allow" | "deny" | "skip") {
   aiSessionActionBusy.value = true;
   try {
     await resolveAiSessionApproval(card.instance.id, card.session.id, decision);
-    await refreshBoard();
   } catch (error) {
     showControlPlaneToast(translateApiError(error, t, t("sessions.panel.approvalFailed")));
   } finally {
@@ -883,9 +980,9 @@ async function saveSelectedQueuedMessage() {
   }
   aiSessionActionBusy.value = true;
   try {
-    await editAiSessionQueuedMessage(card.instance.id, card.session.id, edit.queueId, card.session.queue.revision, message);
+    const queueRevision = selectedCardConversationSession.value?.queue.revision ?? card.session.queue.revision;
+    await editAiSessionQueuedMessage(card.instance.id, card.session.id, edit.queueId, queueRevision, message);
     cancelQueueComposerEdit();
-    await refreshBoard();
   } catch (error) {
     showControlPlaneToast(translateApiError(error, t, t("sessions.panel.editQueuedFailed")));
   } finally {
@@ -900,58 +997,58 @@ async function reorderSelectedQueuedMessages(payload: { expectedRevision: number
 async function stopCardAppSession(card: AiBoardCard) {
   if (stoppingAppSessionKey.value) return;
   stoppingAppSessionKey.value = card.key;
+  const loadingToast = showDelayedControlPlaneLoadingToast(t("sessions.actions.closingSession"));
   try {
-    await closeAiSession(card.instance.id, card.session.id, crypto.randomUUID());
-    await refreshBoard();
+    await closeAiSession(card.instance.id, card.session.id, createBrowserUuid());
     if (selectedCardKey.value === card.key) {
       clearSelectedCard();
     }
   } catch (error) {
+    loadingToast.dismiss();
     showControlPlaneToast(translateApiError(error, t, t("sessions.panel.closeSessionFailed")));
     await refreshBoard();
   } finally {
+    loadingToast.dismiss();
     stoppingAppSessionKey.value = "";
   }
 }
 
-async function forkCardSession(card: AiBoardCard, mode: "current" | "managed-worktree" = "current") {
-  if (card.session.status === "running" || card.session.status === "waiting") {
-    pendingBusyFork.value = { card, mode };
+async function forkCardSession(card: AiBoardCard, mode: "current" | "managed-worktree" = "current", throughTurnId?: string) {
+  if (!throughTurnId && (card.session.status === "running" || card.session.status === "waiting")) {
+    pendingBusyFork.value = { card, mode, throughTurnId };
     return;
   }
-  await performCardFork(card, mode);
+  await performCardFork(card, mode, throughTurnId);
 }
 
 function confirmBusyFork() {
   const pending = pendingBusyFork.value;
   pendingBusyFork.value = undefined;
-  if (pending) void performCardFork(pending.card, pending.mode);
+  if (pending) void performCardFork(pending.card, pending.mode, pending.throughTurnId);
 }
 
-async function performCardFork(card: AiBoardCard, mode: "current" | "managed-worktree") {
+async function performCardFork(card: AiBoardCard, mode: "current" | "managed-worktree", throughTurnId?: string) {
   if (forkingSessionKey.value || card.session.actions?.fork !== true) return;
   forkingSessionKey.value = card.key;
-  const requestKey = `${card.key}:${mode}`;
-  const clientRequestId = forkRequestIds.get(requestKey) || crypto.randomUUID();
+  const requestKey = `${card.key}:${mode}:${throughTurnId || "latest"}`;
+  const clientRequestId = forkRequestIds.get(requestKey) || createBrowserUuid();
   forkRequestIds.set(requestKey, clientRequestId);
+  const loadingToast = showDelayedControlPlaneLoadingToast(t("sessions.actions.forking"));
   try {
-    const result = await forkAiSession(card.instance.id, card.session.id, { clientRequestId, workspace: { mode } });
-    let forkedCard: AiBoardCard | undefined;
-    for (let attempt = 0; attempt < 25; attempt += 1) {
-      forkedCard = allCards.value.find((candidate) => candidate.instance.id === card.instance.id && candidate.session.id === result.aiSessionId && candidate.session.providerSessionId === result.providerSessionId);
-      if (forkedCard) break;
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-    if (!forkedCard) {
-      await refreshBoard();
-      forkedCard = allCards.value.find((candidate) => candidate.instance.id === card.instance.id && candidate.session.id === result.aiSessionId && candidate.session.providerSessionId === result.providerSessionId);
-    }
+    const result = await forkAiSession(card.instance.id, card.session.id, { clientRequestId, ...(throughTurnId ? { throughTurnId } : {}), workspace: { mode } });
+    const forkedCard = await waitForAiSessionProjection(() => allCards.value.find(
+      (candidate) => candidate.instance.id === card.instance.id
+        && candidate.session.id === result.aiSessionId
+        && candidate.session.providerSessionId === result.providerSessionId,
+    ));
     if (!forkedCard) throw new Error(t("sessions.panel.forkProjectionPending"));
     selectCard(forkedCard.key);
     forkRequestIds.delete(requestKey);
   } catch (error) {
+    loadingToast.dismiss();
     showControlPlaneToast(translateApiError(error, t, t("sessions.panel.forkFailed")));
   } finally {
+    loadingToast.dismiss();
     forkingSessionKey.value = "";
   }
 }
@@ -964,7 +1061,7 @@ async function openCardApp(instance: InstanceWithAiSessions, session?: AiSession
   }
   try {
     emit("openAiSessionApp", instance, session);
-    const result = await openAiSessionApp(instance.id, session.id, crypto.randomUUID());
+    const result = await openAiSessionApp(instance.id, session.id, createBrowserUuid());
     emit("openAiSessionApp", instance, aiSessionAppNavigationTarget(session, result));
   } catch (error) {
     showControlPlaneToast(translateApiError(error, t, t("sessions.panel.openAppFailed")));
@@ -980,7 +1077,6 @@ async function runSelectedQueueAction(action: (card: AiBoardCard) => Promise<unk
   aiSessionActionBusy.value = true;
   try {
     await action(card);
-    await refreshBoard();
   } catch (error) {
     showControlPlaneToast(translateApiError(error, t, message));
   } finally {

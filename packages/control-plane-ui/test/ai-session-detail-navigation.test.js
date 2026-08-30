@@ -6,6 +6,7 @@ const navigator = fs.readFileSync(new URL("../src/components/ai-session/AiSessio
 const panel = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.vue", import.meta.url), "utf8");
 const floatingDock = fs.readFileSync(new URL("../src/apps/control-plane/ai-board/AiSessionFloatingDock.vue", import.meta.url), "utf8");
 const board = fs.readFileSync(new URL("../src/apps/control-plane/ai-board/AiSessionBoardView.vue", import.meta.url), "utf8");
+const conversation = fs.readFileSync(new URL("../src/components/ai-session/AiSessionConversationContent.vue", import.meta.url), "utf8");
 const displayHelpers = fs.readFileSync(new URL("../src/apps/control-plane/useInstanceSessions.ts", import.meta.url), "utf8");
 const repositoryEnvironment = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/RepositoryEnvironment.vue", import.meta.url), "utf8");
 
@@ -38,17 +39,34 @@ test("all viewport sizes share one compact detail actions menu", () => {
 });
 
 test("AI session details render messages without redundant section titles", () => {
-  assert.match(panel, /class="session-ai-detail-prompt-content"[\s\S]*?<MarkdownContent :content="displayAiSessionTitle/);
-  assert.match(panel, /<AiSessionResult[\s\S]*?:response-content="displayAiSessionResponse/);
-  assert.match(floatingDock, /class="ai-board-floating-prompt-content"[\s\S]*?<MarkdownContent :content="displayAiSessionTitle/);
-  assert.match(floatingDock, /<AiSessionResult[\s\S]*?:response-content="displayAiSessionResponse/);
+  assert.match(panel, /class="session-ai-detail-prompt-content"[\s\S]*?<MarkdownContent[\s\S]*?:content="displayAiSessionTitle/);
+  assert.match(panel, /<AiSessionConversationContent/);
+  assert.match(floatingDock, /class="ai-board-floating-prompt-content"[\s\S]*?<MarkdownContent[\s\S]*?:content="displayAiSessionTitle/);
+  assert.match(floatingDock, /<AiSessionConversationContent/);
+  assert.match(conversation, /<AiSessionResult[\s\S]*?:response-content="detailState === 'ready' \? compactResponseContent : ''"/);
+  assert.match(conversation, /compactResponseContent = computed\(\(\) => displayAiSessionResponse/);
   for (const detail of [panel, floatingDock]) assert.doesNotMatch(detail, /message-section-title|response-section-title/);
 });
 
-test("cards and details count the same display turns", () => {
-  assert.match(panel, /return aiSessionTurns\(session\)\.length;/);
-  assert.match(board, /return aiSessionTurns\(session\)\.length;/);
-  assert.match(displayHelpers, /const turns = aiSessionDisplayTurns\(session\);[\s\S]*?const turn = turns\[index\];[\s\S]*?turn\?\.contextCompactions\?\.length \? "\/compact" : "-"/);
+test("AI session errors render as a semantic block outside assistant responses", () => {
+  assert.match(conversation, /v-if="showSessionError" class="ai-session-conversation-error" role="alert"/);
+  assert.match(conversation, /session\.error \|\| t\("sessions\.detail\.noErrorDetail"\)/);
+  assert.match(conversation, /props\.session\.status === "failed"[\s\S]*?props\.mode === "full"[\s\S]*?props\.promptIndex >= props\.promptCount - 1/);
+  assert.match(conversation, /\.ai-session-conversation-error \{[\s\S]*?background: var\(--status-danger-bg\);[\s\S]*?border: 1px solid var\(--status-danger-border\);/);
+  assert.match(displayHelpers, /if \(session\.error\) \{\s*return includeProgress \? session\.error : "";/);
+});
+
+test("details count retained turns while cards consume bounded summary counts", () => {
+  assert.match(panel, /const conversation = selectedConversationSession\.value\?\.id === session\.id[\s\S]*?conversation\.turns \? aiSessionTurns\(conversation\)\.length : conversation\.turnCount \?\? 0;/);
+  assert.match(board, /return session\.turnCount \?\? aiSessionTurns\(session\)\.length;/);
+  assert.match(displayHelpers, /const turns = aiSessionDisplayTurns\(session\);[\s\S]*?const turn = turns\[index\];[\s\S]*?const turnPrompt = turn\?\.userPrompt\?\.trim\(\);[\s\S]*?if \(turn\?\.contextCompactions\?\.length\) return "\/compact";[\s\S]*?return session\.userPrompt\?\.trim\(\) \|\| "";/);
+});
+
+test("compact Turn navigation loads the target body before committing selection", () => {
+  assert.match(panel, /async function setPromptIndex[\s\S]*?await loadSelectedSessionTurn\(targetTurn\.id\)[\s\S]*?promptIndexes\.value =/);
+  assert.match(board, /async function setPromptIndex[\s\S]*?await loadSelectedCardTurn\(targetTurn\.id\)[\s\S]*?promptIndexes\.value =/);
+  assert.match(panel, /v-if="selectedSessionContentState === 'ready'"/);
+  assert.match(floatingDock, /v-if="detailState === 'ready'"[\s\S]*?:content="displayAiSessionTitle\(conversationSession, promptIndex, t\)"/);
 });
 
 test("current approval summary remains visible while navigating messages", () => {

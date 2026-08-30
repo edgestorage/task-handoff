@@ -4,6 +4,75 @@
 @tailwind components;
 @tailwind utilities;
 
+:root:not(.dark):not([data-theme="dark"]),
+:root[data-theme="light"] {
+  --background: 240 20% 98%;
+  --foreground: 240 6% 10%;
+  --card: 0 0% 100%;
+  --card-foreground: 240 6% 10%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 240 6% 10%;
+  --secondary: 240 12% 97%;
+  --secondary-foreground: 240 6% 10%;
+  --muted: 240 12% 97%;
+  --muted-foreground: 240 4% 40%;
+  --accent: 240 12% 94%;
+  --accent-foreground: 240 6% 10%;
+  --border: 240 6% 85%;
+  --input: 240 6% 81%;
+
+  --surface: #ffffff;
+  --surface-raised: #ffffff;
+  --surface-subtle: #fbfbfc;
+  --surface-inset: #f8f8fa;
+  --surface-overlay: #ffffff;
+  --surface-hover: #f2f2f7;
+  --surface-active: #e9e9ef;
+  --titlebar-overflow-fade: #ffffff;
+  --text: #1c1c1e;
+  --text-strong: #000000;
+  --text-muted: #636366;
+  --text-subtle: #8e8e93;
+  --line: #d1d1d6;
+  --line-subtle: #e5e5ea;
+  --line-strong: #c6c6c8;
+  --workspace-bg: #f8f8fa;
+  --workspace-grid: rgb(28 28 30 / 4%);
+  --terminal-bg: #ffffff;
+  --terminal-surface: #f8f8fa;
+  --terminal-text: #1c1c1e;
+  --terminal-selection: #e9e9ef;
+  --shadow-panel: 0 18px 44px rgb(0 0 0 / 12%);
+  --shadow-popover: 0 14px 34px rgb(0 0 0 / 14%);
+  --shadow-soft: 0 1px 3px rgb(0 0 0 / 9%);
+  --scrollbar-thumb: rgb(99 99 102 / 34%);
+  --scrollbar-thumb-hover: rgb(99 99 102 / 52%);
+
+  --control-plane-cockpit-background: var(--workspace-bg);
+  /* Keep the titlebar close to the workspace while preserving a subtle layer. */
+  --control-plane-topbar-bg: var(--surface-subtle);
+  --control-plane-settings-background: var(--surface-inset);
+  --instance-board-background: var(--workspace-bg);
+  --instance-list-row-hover-bg: var(--surface-inset);
+  --instance-list-title: var(--text-strong);
+  --instance-list-meta: var(--text-muted);
+
+  --ai-board-background: var(--workspace-bg);
+  --ai-board-column-bg: var(--surface);
+  --ai-board-column-head-bg: var(--surface-inset);
+  --ai-board-card-bg: var(--surface);
+  --ai-board-assistant-bg: var(--surface-inset);
+  --ai-board-expanded-bg: var(--surface-inset);
+  --ai-board-floating-bg: var(--surface-subtle);
+  --ai-board-empty-bg: var(--surface-inset);
+
+  --control-plane-select-content-bg: var(--surface);
+  --control-plane-select-item-highlight-text: var(--text-strong);
+  --control-plane-icon-button-bg: var(--surface-subtle);
+  --control-plane-icon-button-hover-text: var(--text-strong);
+  --workspace-button-hover-text: var(--text-strong);
+}
+
 html,
 body,
 #app {

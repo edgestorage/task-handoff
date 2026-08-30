@@ -1,16 +1,20 @@
 import { createContext, createElement, useCallback, useContext, useEffect, useMemo, useSyncExternalStore, type ReactNode } from 'react';
-import type { ControlPlaneTriggerTemplateInput } from '@task-handoff/protocol/triggers';
+import type { ControlPlaneTriggerMutationFailure, ControlPlaneTriggerTemplateInput } from '@task-handoff/protocol/triggers';
 
 import { useMobileControlPlaneRuntime } from '../control-plane/use-mobile-control-plane-runtime';
 import { MobileTriggerController } from './controller';
 import { mobileTriggerStore } from './store';
 
+type TriggerMutationResult = {
+  partialFailures: ControlPlaneTriggerMutationFailure[];
+};
+
 type ActiveTriggers = {
   available: boolean;
   state: ReturnType<typeof mobileTriggerStore.state>;
   create(input: ControlPlaneTriggerTemplateInput): Promise<unknown>;
-  update(configHash: string, input: ControlPlaneTriggerTemplateInput): Promise<unknown>;
-  remove(configHash: string): Promise<unknown>;
+  update(configHash: string, input: ControlPlaneTriggerTemplateInput): Promise<TriggerMutationResult>;
+  remove(configHash: string): Promise<TriggerMutationResult>;
   bindSession(instanceId: string, sessionId: string, configHash: string): Promise<unknown>;
   unbindSession(instanceId: string, sessionId: string, configHash: string): Promise<unknown>;
   run(instanceId: string, configHash: string, deploymentId?: string): Promise<unknown>;

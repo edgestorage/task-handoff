@@ -35,6 +35,35 @@ test("AI prompts and responses remain byte-for-byte identical in both locales", 
   assert.deepEqual(session, snapshot);
 });
 
+test("failed session diagnostics stay out of assistant response content", () => {
+  const session = {
+    id: "ai_failed",
+    agent: "codex",
+    status: "failed",
+    phase: "unknown",
+    error: raw,
+    turns: [],
+  };
+
+  assert.equal(displayAiSessionResponse(session, undefined, english), "");
+  assert.equal(displayAiSessionResponse(session, undefined, chinese), "");
+  assert.equal(displayAiSessionMessage(session, undefined, english), raw);
+});
+
+test("AI session titles fall back to the authoritative latest user prompt when turn summaries omit it", () => {
+  const session = {
+    id: "ai_prompt_fallback",
+    agent: "codex",
+    status: "running",
+    phase: "responding",
+    userPrompt: raw,
+    turns: [{ id: "turn-active", status: "running", phase: "responding", lastMessage: "answer" }],
+  };
+
+  assert.equal(displayAiSessionTitle(session, undefined, chinese), raw);
+  assert.equal(displayAiSessionTitle(session, 0, chinese), "");
+});
+
 test("raw tool names and previews are appended outside localized presentation", () => {
   const session = {
     id: "ai_tool_raw",

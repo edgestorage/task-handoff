@@ -13,7 +13,7 @@ export function useAiSessionPrompts() {
   const promptIndexes = ref<Record<string, { index: number; count: number }>>({});
 
   function promptCount(session: AiSessionSummary) {
-    return aiSessionUserPrompts(session).length;
+    return session.turnCount ?? aiSessionUserPrompts(session).length;
   }
 
   function promptIndexFor(session: AiSessionSummary) {

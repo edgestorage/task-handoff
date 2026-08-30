@@ -353,6 +353,10 @@
   padding: 0 6px;
 }
 
+.control-plane-settings-switcher-shell > .control-plane-kicker {
+  padding: 0 6px;
+}
+
 .control-plane-instance-switcher:hover,
 .control-plane-instance-switcher[data-state="open"] {
   background: hsl(var(--accent) / 0.7);
@@ -480,6 +484,43 @@
   margin-top: 1px;
 }
 
+:global(.control-plane-settings-menu.control-plane-settings-menu) {
+  width: max(var(--reka-dropdown-menu-trigger-width), 220px);
+  max-width: min(320px, var(--reka-dropdown-menu-content-available-width));
+  max-height: var(--reka-dropdown-menu-content-available-height);
+  border-radius: 12px;
+  padding: 4px;
+}
+
+:global(.control-plane-settings-menu-scroll) {
+  height: min(var(--settings-menu-height), 352px, calc(var(--reka-dropdown-menu-content-available-height) - 8px));
+}
+
+:global(.control-plane-settings-menu-list) {
+  display: grid;
+  gap: 1px;
+}
+
+:global(.control-plane-settings-menu-scroll:has([data-orientation="vertical"][data-state="visible"]) .control-plane-settings-menu-list) {
+  padding-right: 8px;
+}
+
+:global(.control-plane-settings-menu .control-plane-settings-menu-item) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 16px;
+  gap: 8px;
+  min-height: 32px;
+  align-items: center;
+  border-radius: 7px;
+  padding: 4px 9px;
+  cursor: pointer;
+}
+
+:global(.control-plane-settings-menu-item.selected) {
+  background: var(--surface-active);
+  color: hsl(var(--primary));
+}
+
 .control-plane-actions {
   -webkit-app-region: no-drag;
   display: flex;
@@ -507,6 +548,40 @@
   height: 32px;
   border-width: 1px;
   border-style: solid;
+}
+
+.control-plane-user-trigger > span {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+:global(.control-plane-user-menu) {
+  min-width: 190px;
+}
+
+:global(.control-plane-user-menu-identity) {
+  display: grid;
+  gap: 2px;
+  font-weight: 400;
+}
+
+:global(.control-plane-user-menu-identity span) {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+:global(.control-plane-user-menu-identity strong) {
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+:global(.control-plane-user-menu-sign-out) {
+  color: var(--status-danger);
 }
 
 .workbench-view-switcher {
@@ -593,6 +668,7 @@
 }
 
 .control-plane-workbench {
+  position: relative;
   display: grid;
   grid-template-columns: var(--instances-width, 292px) minmax(0, 1fr);
   height: calc(var(--control-plane-viewport-height) - var(--control-plane-titlebar-height));

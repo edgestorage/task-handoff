@@ -226,7 +226,12 @@ export class RepositoryBranchService {
     if (error instanceof GitProcessError) {
       const message = `${error.message}\n${error.stderr || ""}`;
       if (/non-fast-forward|fetch first|rejected.*behind|Not possible to fast-forward/i.test(message)) return new RepositoryOperationError("REPOSITORY_NON_FAST_FORWARD", fallback, current);
-      if (/authentication failed|permission denied|could not read Username|terminal prompts disabled|publickey/i.test(message)) return new RepositoryOperationError("REPOSITORY_AUTHENTICATION_FAILED", "Git authentication failed in the controlled instance.", current);
+      if (/TASK_HANDOFF_GIT_CREDENTIAL_ERROR=AMBIGUOUS/.test(message)) return new RepositoryOperationError("REPOSITORY_CREDENTIAL_AMBIGUOUS", "More than one retained credential matches this Git remote.", current);
+      if (/TASK_HANDOFF_GIT_CREDENTIAL_ERROR=UNSUPPORTED/.test(message)) return new RepositoryOperationError("REPOSITORY_REMOTE_UNSUPPORTED", "The Git remote cannot be matched to a managed credential scope.", current);
+      if (/TASK_HANDOFF_GIT_CREDENTIAL_ERROR=MISSING_HOST_KEY/.test(message)) return new RepositoryOperationError("REPOSITORY_HOST_KEY_REQUIRED", "The matching SSH credential does not have a pinned host key.", current);
+      if (/TASK_HANDOFF_GIT_CREDENTIAL_ERROR=REJECTED/.test(message)) return new RepositoryOperationError("REPOSITORY_AUTHENTICATION_REJECTED", "The managed Git credential request was rejected.", current);
+      if (/could not read Username|terminal prompts disabled/i.test(message)) return new RepositoryOperationError("REPOSITORY_CREDENTIAL_MISSING", "No credential is available for this Git remote.", current);
+      if (/authentication failed|permission denied|publickey/i.test(message)) return new RepositoryOperationError("REPOSITORY_AUTHENTICATION_REJECTED", "The Git remote rejected the available credential.", current);
       if (operation === "delete" && /not fully merged|not merged/i.test(message)) return new RepositoryOperationError("REPOSITORY_BRANCH_UNMERGED", "Branch contains commits that are not merged.", current);
       if (operation === "checkout" && /already checked out|used by worktree/i.test(message)) return new RepositoryOperationError("REPOSITORY_BRANCH_OCCUPIED", fallback, current);
       if (operation === "checkout" && /would be overwritten|local changes|untracked working tree files/i.test(message)) return new RepositoryOperationError("REPOSITORY_DIRTY", fallback, current);

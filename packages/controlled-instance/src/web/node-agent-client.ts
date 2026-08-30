@@ -1,5 +1,11 @@
 import crypto from "node:crypto";
+import { StandardReconnectBackoff } from "@task-handoff/core/core/reconnect";
 import type { ImageSelection, InstanceAppInventory } from "@task-handoff/protocol/control-plane";
+import {
+  GitCredentialHttpsResolveResponseSchema,
+  GitCredentialSshAgentResponseSchema,
+  GitCredentialSshPrepareResponseSchema,
+} from "@task-handoff/protocol/managed-git-credentials";
 
 export type NodeAgentRegistrationConfig = {
   controlMode: "standalone" | "controlled";
@@ -41,11 +47,6 @@ export type ControlledInstanceSnapshot = {
 
 export type SnapshotProvider = () => Promise<ControlledInstanceSnapshot>;
 
-export type NodeAgentRegistrationClientOptions = {
-  retryBaseDelayMs?: number;
-  retryMaxDelayMs?: number;
-};
-
 export function nodeAgentRegistrationConfigFromEnv(env: NodeJS.ProcessEnv = process.env): NodeAgentRegistrationConfig {
   return {
     controlMode: env.TASK_HANDOFF_CONTROL_MODE === "controlled" ? "controlled" : "standalone",
@@ -68,25 +69,20 @@ export class NodeAgentRegistrationClient {
   private timer: ReturnType<typeof setTimeout> | undefined;
   private inFlight: Promise<void> | undefined;
   private stopped = true;
-  private consecutiveFailures = 0;
+  private readonly reconnectBackoff = new StandardReconnectBackoff();
   private readonly processIncarnationId = crypto.randomUUID();
   private readonly config: NodeAgentRegistrationConfig;
   private readonly snapshotProvider: SnapshotProvider;
   private readonly fetchImpl: typeof fetch;
-  private readonly retryBaseDelayMs: number;
-  private readonly retryMaxDelayMs: number;
 
   constructor(
     config: NodeAgentRegistrationConfig,
     snapshotProvider: SnapshotProvider,
     fetchImpl: typeof fetch = fetch,
-    options: NodeAgentRegistrationClientOptions = {},
   ) {
     this.config = config;
     this.snapshotProvider = snapshotProvider;
     this.fetchImpl = fetchImpl;
-    this.retryBaseDelayMs = options.retryBaseDelayMs ?? 1_000;
-    this.retryMaxDelayMs = options.retryMaxDelayMs ?? 30_000;
   }
 
   enabled() {
@@ -115,6 +111,35 @@ export class NodeAgentRegistrationClient {
     return this.runExclusive(() => this.heartbeatOnce());
   }
 
+  async resolveGitHttps(remoteUrl: string) {
+    return GitCredentialHttpsResolveResponseSchema.parse(await this.request(
+      `node-agent/instances/${encodeURIComponent(this.requiredInstanceId())}/git-credentials/https`,
+      { remoteUrl },
+    ));
+  }
+
+  async prepareGitSsh(remoteUrl: string) {
+    return GitCredentialSshPrepareResponseSchema.parse(await this.request(
+      `node-agent/instances/${encodeURIComponent(this.requiredInstanceId())}/git-credentials/ssh/prepare`,
+      { remoteUrl },
+    ));
+  }
+
+  async exchangeGitSshAgent(invocationId: string, frame: string) {
+    return GitCredentialSshAgentResponseSchema.parse(await this.request(
+      `node-agent/instances/${encodeURIComponent(this.requiredInstanceId())}/git-credentials/ssh/agent`,
+      { invocationId, frame },
+    ));
+  }
+
+  async releaseGitSsh(invocationId: string) {
+    await this.request(
+      `node-agent/instances/${encodeURIComponent(this.requiredInstanceId())}/git-credentials/ssh/${encodeURIComponent(invocationId)}`,
+      {},
+      "DELETE",
+    );
+  }
+
   private async registerOnce() {
     const snapshot = await this.snapshotProvider();
     const instanceId = this.requiredInstanceId();
@@ -130,7 +155,6 @@ export class NodeAgentRegistrationClient {
       controlMode: "controlled",
       capabilities: snapshot.capabilities,
       appInventory: snapshot.appInventory,
-      target: snapshot.target,
       workspace: snapshot.workspace,
       processIncarnationId: this.processIncarnationId,
     });
@@ -155,7 +179,6 @@ export class NodeAgentRegistrationClient {
         apps: snapshot.apps,
         aiSessions: snapshot.aiSessions,
         workspace: snapshot.workspace,
-        target: snapshot.target,
         processIncarnationId: this.processIncarnationId,
       });
     } catch (error) {
@@ -179,18 +202,13 @@ export class NodeAgentRegistrationClient {
     let succeeded = false;
     try {
       await this.runExclusive(() => this.registeredInstanceId ? this.heartbeatOnce() : this.registerOnce());
-      this.consecutiveFailures = 0;
+      this.reconnectBackoff.reset();
       succeeded = true;
     } catch (error) {
-      this.consecutiveFailures += 1;
       console.warn(`node agent registration sync failed: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
-      if (!this.stopped) this.schedule(succeeded ? this.config.heartbeatIntervalMs : this.retryDelayMs());
+      if (!this.stopped) this.schedule(succeeded ? this.config.heartbeatIntervalMs : this.reconnectBackoff.next().delay);
     }
-  }
-
-  private retryDelayMs() {
-    return Math.min(this.retryMaxDelayMs, this.retryBaseDelayMs * (2 ** Math.max(0, this.consecutiveFailures - 1)));
   }
 
   private runExclusive(operation: () => Promise<void>) {
@@ -202,13 +220,13 @@ export class NodeAgentRegistrationClient {
     return running;
   }
 
-  private async request(path: string, body: Record<string, unknown>) {
+  private async request(path: string, body: Record<string, unknown>, method = "POST") {
     const baseUrl = this.config.nodeAgentUrl?.replace(/\/$/, "");
     if (!baseUrl) {
       throw new Error("Node agent URL is required.");
     }
     const response = await this.fetchImpl(`${baseUrl}/api/${path}`, {
-      method: "POST",
+      method,
       signal: AbortSignal.timeout(5_000),
       headers: {
         "content-type": "application/json",

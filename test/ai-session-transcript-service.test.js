@@ -32,6 +32,8 @@ test("transcript backfill preserves deterministic occurrence-based turn ids", ()
   fs.writeFileSync(transcriptPath, [
     JSON.stringify({ type: "user", message: { content: "repeat" } }),
     JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "first" }] } }),
+    JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id: "call-1", name: "Bash", input: { command: "exit 1" } }] } }),
+    JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "call-1", is_error: true, content: "failed" }] } }),
     JSON.stringify({ type: "user", message: { content: "repeat" } }),
     JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "second" }] } }),
   ].join("\n"));
@@ -65,6 +67,48 @@ test("transcript line ingestion emits transcript-tail events with stable active 
   assert.equal(events[0].activeTurnId, events[0].providerTurnId);
   assert.equal(events[1].activeTurnId, events[0].activeTurnId);
   assert.equal(events[1].source, "transcript-tail");
+});
+
+test("transcript tool activity never becomes an assistant message", () => {
+  const service = new AiSessionTranscriptService({ idleAfterMs: 1000, staleAfterMs: 60_000 });
+  const events = [];
+  const registry = {
+    get: () => undefined,
+    applyRealtimeEvent: (_id, event) => events.push(event),
+  };
+  const state = { calls: new Map() };
+
+  service.ingestLine(registry, "ais_test", JSON.stringify({
+    type: "assistant",
+    message: { content: [{ type: "tool_use", id: "call-1", name: "Bash", input: { command: "exit 1" } }] },
+  }), state);
+  service.ingestLine(registry, "ais_test", JSON.stringify({
+    type: "user",
+    message: { content: [{ type: "tool_result", tool_use_id: "call-1", is_error: true, content: "failed" }] },
+  }), state);
+
+  assert.deepEqual(events, []);
+});
+
+test("transcript records with text and tools preserve only the assistant text", () => {
+  const service = new AiSessionTranscriptService({ idleAfterMs: 1000, staleAfterMs: 60_000 });
+  const events = [];
+  const registry = {
+    get: () => undefined,
+    applyRealtimeEvent: (_id, event) => events.push(event),
+  };
+
+  service.ingestLine(registry, "ais_test", JSON.stringify({
+    type: "assistant",
+    message: { content: [
+      { type: "text", text: "I will inspect the workspace." },
+      { type: "tool_use", id: "call-1", name: "Bash", input: { command: "pwd" } },
+    ] },
+  }), { calls: new Map() });
+
+  assert.equal(events.length, 1);
+  assert.equal(events[0].kind, "assistant-message");
+  assert.equal(events[0].text, "I will inspect the workspace.");
 });
 
 test("transcript scans only reactivate transcript-only sessions when file size grows", () => {

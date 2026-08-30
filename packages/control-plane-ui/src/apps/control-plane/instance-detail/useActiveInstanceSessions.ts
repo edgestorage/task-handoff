@@ -1,4 +1,4 @@
-import { computed, reactive, ref, watch, type ComputedRef, type Ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch, type ComputedRef, type Ref } from "vue";
 import { launchAppSession, markAiSessionRead, stopAppSession } from "../../../api/queries";
 import type { AiSessionSummary, InstanceBoardItem, InstanceBoardItemWithAppSessions, InstanceWithAiSessions } from "../../../api/types";
 import {
@@ -6,8 +6,8 @@ import {
   appDisplayName,
   absoluteInstanceUrl,
   buildSessionTabs,
+  EMBEDDED_BROWSER_APP_ID,
   launchableAppsForInstance,
-  selectedAiSession as resolveSelectedAiSession,
   sessionFrameUrl,
   sessionTerminalSocketUrl,
   uniqueLaunchableApps,
@@ -17,6 +17,9 @@ import {
 import { hasInstanceStatusPage, isInstanceAppReady, isInstanceConnecting } from "../useInstanceStatus";
 import { reorderSessionTabKeys } from "./sessionTabOrder";
 import type { Translate } from "../../../i18n/status";
+import { supportsBrowserTunnel } from "@task-handoff/protocol/control-plane";
+import { supportsDirectoryBrowserTunnel } from "@task-handoff/protocol/control-plane-directory";
+import { canUseDesktopBrowserContext } from "../../../lib/desktopBridge";
 
 export type SessionPaneId = "left" | "right";
 
@@ -53,7 +56,9 @@ export function useActiveInstanceSessions({
   const recentSessionKeys = reactive<Record<string, string[]>>({});
   const sessionTabOrderKeys = reactive<Record<string, string[]>>({});
   const selectedAiSessionKeys = reactive<Record<string, string>>({});
+  const selectedAiSessionSnapshots = reactive<Record<string, AiSessionSummary | undefined>>({});
   const repositorySessionTabs = reactive<Record<string, SessionTab[]>>({});
+  const browserSessionTabs = reactive<Record<string, SessionTab[]>>({});
   const pendingAiSessionAppSelections = new Map<string, AiSessionSummary>();
 
   const sessionTabs = computed(() => {
@@ -61,7 +66,23 @@ export function useActiveInstanceSessions({
     const instanceTabs = buildSessionTabs(activeInstance.value, t);
     return instanceTabs.some((session) => session.kind === "status")
       ? instanceTabs
-      : [...instanceTabs, ...(instanceId ? repositorySessionTabs[instanceId] || [] : [])];
+      : [...instanceTabs, ...(instanceId ? repositorySessionTabs[instanceId] || [] : []), ...(instanceId ? browserSessionTabs[instanceId] || [] : [])];
+  });
+  const browserSurfaceState = computed<Record<string, {
+    leftSessionKey: string;
+    rightSessionKey: string;
+  }>>(() => {
+    const state: Record<string, {
+      leftSessionKey: string;
+      rightSessionKey: string;
+    }> = {};
+    for (const instanceId of Object.keys(browserSessionTabs)) {
+      state[instanceId] = {
+        leftSessionKey: selectedSessionKeys[instanceId] || "",
+        rightSessionKey: rightSelectedSessionKeys[instanceId] || "",
+      };
+    }
+    return state;
   });
   const orderedSessionTabs = computed(() => {
     const instanceId = activeInstance.value?.id;
@@ -143,12 +164,14 @@ export function useActiveInstanceSessions({
     if (!activeInstance.value) {
       return [];
     }
+    const browser = canUseDesktopBrowserContext()
+      && (supportsBrowserTunnel(activeInstance.value.capabilities) || supportsDirectoryBrowserTunnel(activeInstance.value.capabilities))
+      ? [{ id: EMBEDDED_BROWSER_APP_ID, label: t("sessions.tabs.browser") }]
+      : [];
     const catalogApps = launchableAppsForInstance(activeInstance.value, t);
-    if (catalogApps.length) {
-      return catalogApps;
-    }
+    if (catalogApps.length) return [...catalogApps, ...browser];
     const ids = activeInstance.value.image?.optionalApps?.length ? activeInstance.value.image.optionalApps : ["terminal-tty"];
-    return uniqueLaunchableApps(ids.map((id) => ({ id, label: appDisplayName(id, t) })));
+    return uniqueLaunchableApps([...ids.map((id) => ({ id, label: appDisplayName(id, t) })), ...browser]);
   });
 
   watch(
@@ -365,14 +388,23 @@ export function useActiveInstanceSessions({
     sessionTabOrderKeys[instanceId] = reorderSessionTabKeys(currentOrder, sourceKey, targetKey, placement);
   }
 
-  async function launchSelectedApp(instance: InstanceBoardItem, appId: string, cwdFolderId?: string) {
+  async function launchSelectedApp(instance: InstanceBoardItem, appId: string, cwdFolderId?: string, options?: Record<string, unknown>) {
+    if (appId === EMBEDDED_BROWSER_APP_ID) {
+      openBrowserTab(instance.id);
+      appLaunchMenuOpen.value = false;
+      return;
+    }
     if (!isInstanceAppReady(instance) || launchingApp.value) {
       return;
     }
     launchingApp.value = true;
     appLaunchMenuOpen.value = false;
     try {
-      const session = await launchAppSession(instance.id, { appId, ...(cwdFolderId ? { cwdFolderId } : {}) });
+      const session = await launchAppSession(instance.id, {
+        appId,
+        ...(cwdFolderId ? { cwdFolderId } : {}),
+        ...(options ? { options } : {}),
+      });
       const pane = focusedSessionPanes[instance.id] === "right" && rightSelectedSessionKeys[instance.id] ? "right" : "left";
       if (pane === "right") {
         ensurePaneAssignments(instance.id)[session.id] = true;
@@ -392,6 +424,14 @@ export function useActiveInstanceSessions({
 
   async function stopSelectedAppSession(instance: InstanceBoardItem, session: SessionTab) {
     if (session.kind === "ai" || session.kind === "status") {
+      return;
+    }
+    if (session.kind === "embedded-browser") {
+      browserSessionTabs[instance.id] = (browserSessionTabs[instance.id] || []).filter((tab) => tab.key !== session.key);
+      if (selectedSessionKeys[instance.id] === session.key) delete selectedSessionKeys[instance.id];
+      if (rightSelectedSessionKeys[instance.id] === session.key) delete rightSelectedSessionKeys[instance.id];
+      delete rightPaneSessionKeys[instance.id]?.[session.key];
+      normalizeSessionLayout();
       return;
     }
     if (session.kind === "repository") {
@@ -430,7 +470,18 @@ export function useActiveInstanceSessions({
   }
 
   function selectedAiSession(instance: InstanceBoardItem, sessions?: AiSessionSummary[]) {
-    return resolveSelectedAiSession(sessions, selectedAiSessionKeys[instance.id]);
+    const available = sessions || [];
+    const selectedId = selectedAiSessionKeys[instance.id];
+    const selected = available.find((session) => session.id === selectedId);
+    if (selected) {
+      selectedAiSessionSnapshots[instance.id] = selected;
+      return selected;
+    }
+    // Once a user has selected a session, do not silently replace it when a
+    // completion patch temporarily omits it from the projection. This avoids
+    // jumping to an unrelated session while the authoritative snapshot catches up.
+    if (selectedId) return selectedAiSessionSnapshots[instance.id];
+    return undefined;
   }
 
   function openAiSessionApp(instance: InstanceBoardItemWithAppSessions, session?: AiSessionSummary) {
@@ -502,6 +553,68 @@ export function useActiveInstanceSessions({
     normalizeSessionLayout();
   }
 
+  function openBrowserTab(instanceId: string, initialUrl?: string) {
+    const key = `embedded-browser:${crypto.randomUUID()}`;
+    const tabs = browserSessionTabs[instanceId] ||= reactive<SessionTab[]>([]);
+    tabs.push({
+      key,
+      kind: "embedded-browser",
+      label: EMBEDDED_BROWSER_APP_ID,
+      title: t("sessions.tabs.browser"),
+      status: initialUrl ? "loading" : "running",
+      source: { browserTabId: key, ...(initialUrl ? { initialUrl } : {}) },
+    });
+    const pane = focusedSessionPanes[instanceId] === "right" && rightSelectedSessionKeys[instanceId] ? "right" : "left";
+    if (pane === "right") {
+      ensurePaneAssignments(instanceId)[key] = true;
+      rightSelectedSessionKeys[instanceId] = key;
+    } else {
+      selectedSessionKeys[instanceId] = key;
+    }
+    focusedSessionPanes[instanceId] = pane;
+    rememberSessionKey(instanceId, key);
+  }
+
+  function handleMarkdownBrowserRequest(event: Event) {
+    const detail = (event as CustomEvent<{ instanceId?: string; url?: string }>).detail;
+    if (!detail?.url || !detail.instanceId || detail.instanceId !== activeInstance.value?.id) return;
+    try {
+      const url = new URL(detail.url);
+      if (url.protocol !== "http:" && url.protocol !== "https:") return;
+      openBrowserTab(detail.instanceId, url.toString());
+    } catch {
+      // Invalid URLs are rejected by the Markdown link classifier as well.
+    }
+  }
+
+  onMounted(() => window.addEventListener("task-handoff:open-markdown-browser", handleMarkdownBrowserRequest));
+  onBeforeUnmount(() => window.removeEventListener("task-handoff:open-markdown-browser", handleMarkdownBrowserRequest));
+
+  function updateBrowserTab(instanceId: string, sessionKey: string, patch: { title?: string; url?: string; status?: string }) {
+    const session = browserSessionTabs[instanceId]?.find((tab) => tab.key === sessionKey);
+    if (!session) return;
+    if (typeof patch.title === "string" && patch.title.trim()) session.title = patch.title.trim().slice(0, 120);
+    if (typeof patch.url === "string" && patch.url.trim()) session.source = { ...(session.source || {}), currentUrl: patch.url.trim().slice(0, 2000) };
+    if (typeof patch.status === "string" && patch.status.trim()) session.status = patch.status.trim();
+  }
+
+  function pruneBrowserInstances(validInstanceIds: ReadonlySet<string>) {
+    for (const instanceId of Object.keys(browserSessionTabs)) {
+      if (validInstanceIds.has(instanceId)) continue;
+      if (typeof window !== "undefined") {
+        (window as Window & { taskHandoffDesktop?: { logBrowserDiagnostic?: (input: { message: string; instanceId?: string }) => void } }).taskHandoffDesktop?.logBrowserDiagnostic?.({
+          message: `browser instances pruned tabs=${browserSessionTabs[instanceId]?.length || 0}`,
+          instanceId,
+        });
+      }
+      delete browserSessionTabs[instanceId];
+      delete rightPaneSessionKeys[instanceId];
+      delete rightSelectedSessionKeys[instanceId];
+      delete selectedSessionKeys[instanceId];
+      delete focusedSessionPanes[instanceId];
+    }
+  }
+
   return {
     activeAttachUrl,
     activeInstanceConnecting,
@@ -514,6 +627,8 @@ export function useActiveInstanceSessions({
     appLaunchButtonLabel,
     appLaunchButtonTitle,
     canLaunchApp,
+    browserSessionTabs,
+    browserSurfaceState,
     launchableApps,
     launchingApp,
     launchSelectedApp,
@@ -523,6 +638,9 @@ export function useActiveInstanceSessions({
     moveSessionTab,
     moveSessionToPane,
     openAiSessionApp,
+    openBrowserTab,
+    pruneBrowserInstances,
+    updateBrowserTab,
     openRepositoryWorkspace,
     openSessionSplit,
     orderedSessionTabs,

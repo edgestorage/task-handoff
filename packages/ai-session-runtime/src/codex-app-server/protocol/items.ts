@@ -97,6 +97,11 @@ export function isoTimestampFromMs(value: number | undefined) {
   return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
 }
 
+export function isoTimestampFromSeconds(value: unknown) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  return isoTimestampFromMs(value * 1_000);
+}
+
 function projectTool(item: JsonValue, kind: string): { name: string; inputPreview?: string } {
   switch (kind) {
     case "commandExecution": return { name: "Command", inputPreview: stringField(item, "command") };

@@ -2,7 +2,8 @@ const assert = require("node:assert/strict");
 const { EventEmitter } = require("node:events");
 const test = require("node:test");
 
-const { NodeAgentHealthSchema } = require("../packages/protocol/src/control-plane.ts");
+const { CONTROL_PLANE_PROTOCOL_VERSION, ControlledInstanceSchema, NodeAgentControlPlaneConnectionSchema, NodeAgentHealthSchema, NodeConnectionDiagnosticsSchema } = require("../packages/protocol/src/control-plane.ts");
+const { ControlPlaneFleetDirectoryMetaSchema } = require("../packages/protocol/src/control-plane-directory.ts");
 const { ControlPlaneNodeAgentClient } = require("../packages/control-plane/src/control-plane/nodes/client.ts");
 const { ControlPlaneNodeAgentGateway } = require("../packages/control-plane/src/control-plane/nodes/gateway.ts");
 const { NodeConnectionRuntime } = require("../packages/control-plane/src/control-plane/nodes/connection-runtime.ts");
@@ -10,6 +11,7 @@ const { createDirectNodeAgentTransport } = require("../packages/control-plane/sr
 const { ControlPlaneNodeAgentTunnelTransport, ControlPlaneNodeEventSubscriber } = require("../packages/control-plane/src/control-plane/nodes/tunnel.ts");
 const { NodeTunnelIngress } = require("../packages/control-plane/src/control-plane/nodes/tunnel-ingress.ts");
 const { WebSocketConnectionSupervisor } = require("../packages/control-plane/src/shared/transport/websocket-connection-supervisor.ts");
+const { runtimeVersionStateForActual, runtimeVersionStateForReport } = require("../packages/control-plane/src/node-agent/runtime-version-state.ts");
 
 function fakeClock() {
   let timestamp = 0;
@@ -62,9 +64,42 @@ test("shared websocket supervisor detects connect handshake and half-open failur
   clock.advance(6);
   assert.equal(pings, 1);
   clock.advance(4);
+  assert.equal(pings, 2);
+  assert.deepEqual(timeouts, []);
+  clock.advance(4);
   assert.deepEqual(timeouts, ["heartbeat"]);
   assert.equal(supervisor.phase, "failed");
   assert.equal(stable, 0);
+});
+
+test("shared websocket supervisor treats business traffic as liveness and requires consecutive missed probes", () => {
+  const clock = fakeClock();
+  const timeouts = [];
+  let pings = 0;
+  const supervisor = new WebSocketConnectionSupervisor({
+    heartbeatIntervalMs: 6,
+    heartbeatTimeoutMs: 4,
+    heartbeatMissThreshold: 2,
+    ...clock,
+    ping: () => { pings += 1; },
+    onTimeout: (kind) => timeouts.push(kind),
+  });
+  supervisor.start();
+  supervisor.opened();
+  supervisor.healthy();
+
+  clock.advance(6);
+  assert.equal(pings, 1);
+  clock.advance(3);
+  supervisor.activity();
+  clock.advance(6);
+  assert.equal(pings, 2);
+  clock.advance(4);
+  assert.equal(pings, 3);
+  supervisor.pong();
+  clock.advance(6);
+  assert.equal(pings, 4);
+  assert.deepEqual(timeouts, []);
 });
 
 test("shared websocket supervisor resets retry only after a stable healthy window", () => {
@@ -89,6 +124,75 @@ test("shared websocket supervisor resets retry only after a stable healthy windo
   clock.advance(1);
   assert.equal(stable, 1);
   supervisor.close();
+});
+
+test("shared websocket supervisor reports current and recent p95 ping RTT", () => {
+  const clock = fakeClock();
+  const supervisor = new WebSocketConnectionSupervisor({
+    heartbeatIntervalMs: 10,
+    heartbeatTimeoutMs: 100,
+    ...clock,
+    ping() {},
+    onTimeout: () => assert.fail("connection should remain healthy"),
+  });
+  supervisor.start();
+  supervisor.opened();
+  supervisor.healthy();
+
+  for (const rtt of [5, 8, 3, 12]) {
+    clock.advance(10);
+    clock.advance(rtt);
+    supervisor.pong();
+  }
+
+  assert.deepEqual(supervisor.diagnostics(), {
+    phase: "healthy",
+    stable: false,
+    pingRttMs: 12,
+    pingRttP95Ms: 12,
+    lastActivityAt: new Date(clock.now()).toISOString(),
+    lastPongAt: new Date(clock.now()).toISOString(),
+  });
+});
+
+test("control-plane connection diagnostics remain optional across the v0.0.21 boundary", () => {
+  const base = {
+    id: "connection_1",
+    pairingKeyId: "key_1",
+    url: "https://control.example.test",
+    enabled: true,
+    createdAt: "2026-08-18T00:00:00.000Z",
+    updatedAt: "2026-08-18T00:00:00.000Z",
+    status: "connected",
+  };
+  assert.equal(NodeAgentControlPlaneConnectionSchema.safeParse(base).success, true);
+  assert.deepEqual(NodeAgentControlPlaneConnectionSchema.parse({
+    ...base,
+    pingRttMs: 18,
+    pingRttP95Ms: 31,
+    consecutiveReconnects: 2,
+    nextRetryAt: "2026-08-18T00:00:05.000Z",
+  }), {
+    ...base,
+    pingRttMs: 18,
+    pingRttP95Ms: 31,
+    consecutiveReconnects: 2,
+    nextRetryAt: "2026-08-18T00:00:05.000Z",
+  });
+});
+
+test("node connection diagnostics validate the ephemeral public projection", () => {
+  assert.deepEqual(NodeConnectionDiagnosticsSchema.parse({
+    pingRttMs: 9,
+    pingRttP95Ms: 14,
+    consecutiveReconnects: 3,
+    nextRetryAt: "2026-08-20T00:00:05.000Z",
+  }), {
+    pingRttMs: 9,
+    pingRttP95Ms: 14,
+    consecutiveReconnects: 3,
+    nextRetryAt: "2026-08-20T00:00:05.000Z",
+  });
 });
 
 test("runtime projection rejects persisted direct HTTP health until the control API is observed", () => {
@@ -119,14 +223,27 @@ test("runtime projection rejects persisted direct HTTP health until the control 
   assert.equal(runtime.observedReachable(node), true);
   assert.equal(runtime.project(node).status, "online");
   assert.equal(runtime.project(node).connectionPhase, "healthy");
+  assert.deepEqual(runtime.project(node).connectionDiagnostics, { consecutiveReconnects: 0 });
+  assert.equal(runtime.pong(node.id, second, { pingRttMs: 7, pingRttP95Ms: 11 }), true);
+  assert.deepEqual(runtime.project(node).connectionDiagnostics, {
+    pingRttMs: 7,
+    pingRttP95Ms: 11,
+    consecutiveReconnects: 0,
+  });
   const publishedAfterReachable = observations.length;
   const controlChangedAt = runtime.observation(node.id).controlChangedAt;
   assert.equal(runtime.observedReachable(node), true);
   assert.equal(observations.length, publishedAfterReachable);
   assert.equal(runtime.observation(node.id).controlChangedAt, controlChangedAt);
-  runtime.disconnected(node.id, second, { error: "closed" });
+  runtime.disconnected(node.id, second, { error: "closed", nextRetryAt: "2026-08-20T00:00:05.000Z" });
   assert.equal(runtime.project(node).status, "online");
   assert.equal(runtime.project(node).connectionPhase, "healthy");
+  assert.deepEqual(runtime.project(node).connectionDiagnostics, {
+    pingRttMs: 7,
+    pingRttP95Ms: 11,
+    consecutiveReconnects: 1,
+    nextRetryAt: "2026-08-20T00:00:05.000Z",
+  });
   assert.equal(runtime.observedFailure(node, "request timed out"), true);
   assert.equal(runtime.project(node).status, "offline");
   assert.equal(runtime.project(node).health, "failed");
@@ -138,20 +255,41 @@ test("reverse tunnel becomes healthy only after identify and ignores a replaced 
       super();
       this.readyState = 1;
       this.sent = [];
+      this.failSend = false;
     }
-    send(value) { this.sent.push(String(value)); }
+    send(value) {
+      if (this.failSend) throw new Error("reverse subscription send failed");
+      this.sent.push(String(value));
+    }
     ping() {}
     terminate() { this.readyState = 3; this.emit("close", 1006, Buffer.alloc(0)); }
     close(code = 1000, reason = "") { this.readyState = 3; this.emit("close", code, Buffer.from(reason)); }
   }
   const runtime = new NodeConnectionRuntime();
   const transport = new ControlPlaneNodeAgentTunnelTransport(undefined, { connectionRuntime: runtime });
+  transport.setEventSubscription("node_reverse", {
+    legacyAll: false,
+    messageDeltas: { allInstances: false, instanceIds: [] },
+    timelineAllSessions: false,
+    timelineSessions: [],
+  });
   const ingress = new NodeTunnelIngress(transport);
   const first = new Socket();
   ingress.attachMain("node_reverse", first);
+  assert.equal(JSON.parse(first.sent[0]).type, "control-plane.hello");
   assert.equal(runtime.observation("node_reverse").phase, "handshaking");
   first.emit("message", JSON.stringify({ type: "node-agent.identify" }));
   assert.equal(runtime.observation("node_reverse").phase, "healthy");
+  assert.equal(JSON.parse(first.sent[1]).type, "control-plane.identified");
+  assert.deepEqual(JSON.parse(first.sent[2]), {
+    type: "control-plane.event-subscribe",
+    eventEnvelopeVersion: "2026-08-25",
+    aiSessionTransient: {
+      messageDeltas: { allInstances: false, instanceIds: [] },
+      timelineAllSessions: false,
+      timelineSessions: [],
+    },
+  });
 
   const second = new Socket();
   ingress.attachMain("node_reverse", second);
@@ -160,8 +298,20 @@ test("reverse tunnel becomes healthy only after identify and ignores a replaced 
   assert.equal(runtime.observation("node_reverse").phase, "handshaking");
   second.emit("message", JSON.stringify({ type: "node-agent.identify" }));
   assert.equal(runtime.observation("node_reverse").phase, "healthy");
-  second.emit("close", 1006, Buffer.alloc(0));
+  second.failSend = true;
+  assert.doesNotThrow(() => transport.setEventSubscription("node_reverse", {
+    legacyAll: false,
+    messageDeltas: { allInstances: true, instanceIds: [] },
+    timelineAllSessions: false,
+    timelineSessions: [],
+  }));
   assert.equal(runtime.observation("node_reverse").phase, "offline");
+  const third = new Socket();
+  ingress.attachMain("node_reverse", third);
+  assert.equal(JSON.parse(third.sent[0]).type, "control-plane.hello");
+  third.emit("message", JSON.stringify({ type: "node-agent.identify" }));
+  assert.equal(JSON.parse(third.sent[2]).aiSessionTransient.messageDeltas.allInstances, true);
+  third.emit("close", 1000, Buffer.alloc(0));
 });
 
 test("direct requests enforce total and streaming-header deadlines", async () => {
@@ -240,6 +390,533 @@ test("fleet aggregation serves node snapshots without waiting for a slow or reco
   assert.deepEqual(replacedConnection.items, []);
 });
 
+test("instance lookup consumes the current node fleet snapshot without another request", async () => {
+  const timestamp = "2026-08-21T00:00:00.000Z";
+  const instance = ControlledInstanceSchema.parse({
+    id: "inst_cached",
+    name: "Cached instance",
+    source: { type: "local-folder", path: "/workspace" },
+    sourceSnapshot: {},
+    modelSelection: {},
+    nodeId: "node_cached_instance",
+    runtimeId: "runtime_cached",
+    target: { strategy: "node-proxy", status: "reachable", web: "http://127.0.0.1:32100", api: "http://127.0.0.1:32100/api" },
+    runtime: { labels: {} },
+    registrationToken: "instance-secret",
+    protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  });
+  let requests = 0;
+  const client = new ControlPlaneNodeAgentClient({
+    request: async () => {
+      requests += 1;
+      return new Response(JSON.stringify({ data: [instance] }), { status: 200, headers: { "content-type": "application/json" } });
+    },
+  });
+  const gateway = new ControlPlaneNodeAgentGateway(client);
+  const node = {
+    id: instance.nodeId,
+    connectionMode: "direct-http",
+    endpoint: "http://127.0.0.1:8091",
+    status: "online",
+    auth: { mode: "paired-hmac", keyId: "key_cached" },
+    connectionPhase: "healthy",
+  };
+
+  await gateway.listFleetInstances([node]);
+  assert.equal(requests, 1);
+  assert.equal(gateway.instanceFromSnapshot([node], instance.id)?.id, instance.id);
+  assert.equal(requests, 1);
+  assert.equal(gateway.instanceFromSnapshot([{ ...node, endpoint: "http://127.0.0.1:8092" }], instance.id), undefined);
+});
+
+test("instance lifecycle events converge a fresh fleet snapshot by revision", async () => {
+  const timestamp = "2026-08-21T00:00:00.000Z";
+  const instance = ControlledInstanceSchema.parse({
+    id: "inst_lifecycle",
+    name: "Lifecycle instance",
+    source: { type: "local-folder", path: "/workspace" },
+    sourceSnapshot: {},
+    modelSelection: {},
+    nodeId: "node_lifecycle",
+    runtimeId: "runtime_lifecycle",
+    stateRevision: 1,
+    status: "starting",
+    connectionStatus: "offline",
+    runtime: { labels: {} },
+    registrationToken: "instance-secret",
+    protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  });
+  let requests = 0;
+  const client = new ControlPlaneNodeAgentClient({
+    request: async () => {
+      requests += 1;
+      return new Response(JSON.stringify({ data: [instance] }), { status: 200, headers: { "content-type": "application/json" } });
+    },
+  });
+  const gateway = new ControlPlaneNodeAgentGateway(client);
+  const node = {
+    id: instance.nodeId,
+    connectionMode: "direct-http",
+    endpoint: "http://127.0.0.1:8091",
+    status: "online",
+    auth: { mode: "paired-hmac", keyId: "key_lifecycle" },
+    connectionPhase: "healthy",
+  };
+
+  assert.equal(gateway.applyInstanceLifecycle(node, {
+    instanceId: instance.id,
+    revision: 2,
+    updatedAt: "2026-08-21T00:00:01.000Z",
+    status: "running",
+    health: "ok",
+    connectionStatus: "online",
+    accessStatus: "reachable",
+    workspace: { status: "ready", path: "/workspace" },
+    runtime: { pid: 42, labels: {} },
+    ready: true,
+  }), "missing");
+
+  await gateway.listFleetInstances([node]);
+  assert.equal(gateway.applyInstanceLifecycle(node, {
+    instanceId: instance.id,
+    revision: 2,
+    updatedAt: "2026-08-21T00:00:01.000Z",
+    status: "running",
+    health: "ok",
+    connectionStatus: "online",
+    accessStatus: "reachable",
+    workspace: { status: "ready", path: "/workspace" },
+    runtime: { pid: 42, labels: {} },
+    ready: true,
+  }), "applied");
+  assert.equal(gateway.applyInstanceLifecycle(node, {
+    instanceId: instance.id,
+    revision: 1,
+    updatedAt: timestamp,
+    status: "starting",
+    health: "unknown",
+    connectionStatus: "offline",
+    accessStatus: "endpoint-unreachable",
+    workspace: { status: "unknown" },
+    runtime: { labels: {} },
+    ready: false,
+  }), "ignored");
+
+  const converged = gateway.instanceFromSnapshot([node], instance.id);
+  assert.equal(converged.stateRevision, 2);
+  assert.equal(converged.connectionStatus, "online");
+  assert.equal(converged.uiAccessStatus, "reachable");
+  assert.equal(converged.ready, true);
+  assert.equal(converged.runtime.pid, 42);
+  assert.equal(requests, 1);
+});
+
+test("fleet snapshots expose each node as soon as that node finishes", async () => {
+  const timestamp = "2026-08-22T00:00:00.000Z";
+  const runtime = (nodeId) => ({
+    id: `runtime_${nodeId}`,
+    nodeId,
+    name: nodeId,
+    type: "docker",
+    status: "online",
+    accessStrategy: "direct-port",
+    capabilities: {},
+    labels: {},
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  });
+  let resolveSlow;
+  const slowResponse = new Promise((resolve) => { resolveSlow = resolve; });
+  const observed = [];
+  const client = new ControlPlaneNodeAgentClient({
+    request: async (node) => node.id === "node_slow"
+      ? slowResponse
+      : new Response(JSON.stringify({ data: [runtime(node.id)] }), { status: 200, headers: { "content-type": "application/json" } }),
+  });
+  const gateway = new ControlPlaneNodeAgentGateway(client, { onFleetStateChanged: (state) => observed.push(state) });
+  const nodes = ["node_fast", "node_slow"].map((id) => ({
+    id,
+    connectionMode: "direct-http",
+    endpoint: `http://${id}.test`,
+    status: "online",
+    auth: { mode: "paired-hmac", keyId: `key_${id}` },
+    connectionPhase: "healthy",
+  }));
+
+  const refresh = gateway.refreshFleetRuntimes(nodes);
+  await new Promise((resolve) => setImmediate(resolve));
+  const partial = gateway.readFleetRuntimes(nodes);
+  assert.deepEqual(partial.items.map((item) => item.nodeId), ["node_fast"]);
+  assert.equal(partial.nodeStates.find((state) => state.nodeId === "node_fast").phase, "ready");
+  assert.equal(partial.nodeStates.find((state) => state.nodeId === "node_slow").phase, "loading");
+
+  resolveSlow(new Response(JSON.stringify({ data: [runtime("node_slow")] }), { status: 200, headers: { "content-type": "application/json" } }));
+  await refresh;
+  assert.deepEqual(gateway.readFleetRuntimes(nodes).items.map((item) => item.nodeId), ["node_fast", "node_slow"]);
+  assert.ok(observed.some((state) => state.nodeId === "node_fast" && state.phase === "ready"));
+});
+
+test("scoped fleet reads preserve snapshots owned by nodes outside the requested scope", async () => {
+  const timestamp = "2026-08-22T00:00:00.000Z";
+  const runtime = (nodeId) => ({
+    id: `runtime_${nodeId}`,
+    nodeId,
+    name: nodeId,
+    type: "docker",
+    status: "online",
+    accessStrategy: "direct-port",
+    capabilities: {},
+    labels: {},
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  });
+  const client = new ControlPlaneNodeAgentClient({
+    request: async (node) => new Response(JSON.stringify({ data: [runtime(node.id)] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }),
+  });
+  const gateway = new ControlPlaneNodeAgentGateway(client);
+  const nodes = ["node_a", "node_b"].map((id) => ({
+    id,
+    connectionMode: "direct-http",
+    endpoint: `http://${id}.test`,
+    status: "online",
+    auth: { mode: "paired-hmac", keyId: `key_${id}` },
+    connectionPhase: "healthy",
+  }));
+
+  await gateway.refreshFleetRuntimes(nodes);
+  assert.deepEqual(gateway.readFleetRuntimes(nodes).items.map((item) => item.nodeId), ["node_a", "node_b"]);
+  assert.deepEqual(gateway.readFleetRuntimes([nodes[0]]).items.map((item) => item.nodeId), ["node_a"]);
+  assert.deepEqual(gateway.readFleetRuntimes(nodes).items.map((item) => item.nodeId), ["node_a", "node_b"]);
+});
+
+test("fleet revalidation publishes only semantic state changes after the initial snapshot", async () => {
+  const observed = [];
+  let runtimeName = "Runtime A";
+  const runtime = () => ({
+    id: "runtime_stable",
+    nodeId: "node_stable",
+    name: runtimeName,
+    type: "docker",
+    status: "online",
+    accessStrategy: "direct-port",
+    capabilities: {},
+    labels: {},
+    createdAt: "2026-08-22T00:00:00.000Z",
+    updatedAt: "2026-08-22T00:00:00.000Z",
+  });
+  const client = new ControlPlaneNodeAgentClient({
+    request: async () => new Response(JSON.stringify({ data: [runtime()] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }),
+  });
+  const gateway = new ControlPlaneNodeAgentGateway(client, {
+    fleetSnapshotFreshMs: 0,
+    onFleetStateChanged: (state) => observed.push(state),
+  });
+  const node = {
+    id: "node_stable",
+    connectionMode: "direct-http",
+    endpoint: "http://node-stable.test",
+    status: "online",
+    auth: { mode: "paired-hmac", keyId: "key_stable" },
+    connectionPhase: "healthy",
+  };
+
+  await gateway.refreshFleetRuntimes([node]);
+  assert.deepEqual(observed.map((state) => state.phase), ["loading", "ready"]);
+  assert.equal(observed[0].contentChanged, false);
+  assert.equal(observed[1].contentChanged, true);
+
+  observed.length = 0;
+  await gateway.refreshFleetRuntimes([node]);
+  assert.deepEqual(observed, []);
+
+  runtimeName = "Runtime B";
+  await gateway.refreshFleetRuntimes([node]);
+  assert.deepEqual(observed.map((state) => state.phase), ["ready"]);
+  assert.equal(observed[0].contentChanged, true);
+  assert.equal(gateway.readFleetRuntimes([node]).items[0].name, "Runtime B");
+});
+
+test("runtime checks update the fleet snapshot without exposing an empty directory", async () => {
+  const timestamp = "2026-08-22T00:00:00.000Z";
+  let checked = false;
+  const localRuntime = {
+    id: "runtime_local_host",
+    nodeId: "node_runtime_check",
+    name: "Local",
+    type: "local",
+    status: "online",
+    accessStrategy: "node-proxy",
+    capabilities: {},
+    labels: {},
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+  const runtime = () => ({
+    id: "runtime_local_docker",
+    nodeId: "node_runtime_check",
+    name: "Local Docker",
+    type: "docker",
+    status: checked ? "online" : "unknown",
+    accessStrategy: "direct-port",
+    capabilities: {},
+    labels: {},
+    createdAt: timestamp,
+    updatedAt: checked ? "2026-08-22T00:00:01.000Z" : timestamp,
+  });
+  const observed = [];
+  const client = new ControlPlaneNodeAgentClient({
+    request: async (_node, route, init = {}) => {
+      if (route.endsWith("/check") && init.method === "POST") {
+        checked = true;
+        return new Response(JSON.stringify({ data: runtime() }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ data: [localRuntime, runtime()] }), { status: 200, headers: { "content-type": "application/json" } });
+    },
+  });
+  const gateway = new ControlPlaneNodeAgentGateway(client, { onFleetStateChanged: (state) => observed.push(state) });
+  const node = {
+    id: "node_runtime_check",
+    connectionMode: "direct-http",
+    endpoint: "http://node-runtime-check.test",
+    status: "online",
+    auth: { mode: "paired-hmac", keyId: "key_runtime_check" },
+    connectionPhase: "healthy",
+  };
+
+  await gateway.refreshFleetRuntimes([node]);
+  observed.length = 0;
+  await gateway.checkRuntime(node, "runtime_local_docker");
+
+  const snapshot = gateway.readFleetRuntimes([node]);
+  assert.deepEqual(snapshot.items.map((item) => item.id), ["runtime_local_host", "runtime_local_docker"]);
+  assert.equal(snapshot.items[1].status, "online");
+  assert.equal(snapshot.nodeStates[0].phase, "ready");
+  assert.deepEqual(observed.map((state) => ({ phase: state.phase, contentChanged: state.contentChanged })), [
+    { phase: "ready", contentChanged: true },
+  ]);
+});
+
+test("instance heartbeat clocks do not publish fleet content changes", async () => {
+  const timestamp = "2026-08-22T00:00:00.000Z";
+  let heartbeat = 0;
+  const instance = () => ControlledInstanceSchema.parse({
+    id: "inst_heartbeat",
+    name: "Heartbeat instance",
+    source: { type: "local-folder", path: "/workspace" },
+    sourceSnapshot: {},
+    modelSelection: {},
+    nodeId: "node_heartbeat",
+    runtimeId: "runtime_heartbeat",
+    target: { strategy: "node-proxy", status: "reachable", web: "http://127.0.0.1:32100", api: "http://127.0.0.1:32100/api" },
+    runtime: { labels: {} },
+    protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
+    stateRevision: heartbeat,
+    appInventory: {
+      items: [],
+      issues: [],
+      observedAt: new Date(Date.parse(timestamp) + heartbeat * 1_000).toISOString(),
+    },
+    lastHeartbeatAt: new Date(Date.parse(timestamp) + heartbeat * 1_000).toISOString(),
+    createdAt: timestamp,
+    updatedAt: new Date(Date.parse(timestamp) + heartbeat * 1_000).toISOString(),
+  });
+  const observed = [];
+  const client = new ControlPlaneNodeAgentClient({
+    request: async () => new Response(JSON.stringify({ data: [instance()] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }),
+  });
+  const gateway = new ControlPlaneNodeAgentGateway(client, {
+    fleetSnapshotFreshMs: 0,
+    onFleetStateChanged: (state) => observed.push(state),
+  });
+  const node = {
+    id: "node_heartbeat",
+    connectionMode: "direct-http",
+    endpoint: "http://node-heartbeat.test",
+    status: "online",
+    auth: { mode: "paired-hmac", keyId: "key_heartbeat" },
+    connectionPhase: "healthy",
+  };
+
+  await gateway.refreshFleetInstances([node]);
+  observed.length = 0;
+  heartbeat += 1;
+  await gateway.refreshFleetInstances([node]);
+  assert.deepEqual(observed, []);
+});
+
+test("AI Session projections do not publish fleet content changes", async () => {
+  const timestamp = "2026-08-22T00:00:00.000Z";
+  let aiSessionRevision = 1;
+  const instance = () => ControlledInstanceSchema.parse({
+    id: "inst_ai_sessions",
+    name: "AI Session instance",
+    source: { type: "local-folder", path: "/workspace" },
+    sourceSnapshot: {},
+    modelSelection: {},
+    nodeId: "node_ai_sessions",
+    runtimeId: "runtime_ai_sessions",
+    target: { strategy: "node-proxy", status: "reachable", web: "http://127.0.0.1:32100", api: "http://127.0.0.1:32100/api" },
+    runtime: { labels: {} },
+    protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
+    aiSessions: {
+      runningCount: aiSessionRevision,
+      waitingCount: 0,
+      staleCount: 0,
+      sessions: [],
+      updatedAt: new Date(Date.parse(timestamp) + aiSessionRevision * 1_000).toISOString(),
+    },
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  });
+  const observed = [];
+  const client = new ControlPlaneNodeAgentClient({
+    request: async () => new Response(JSON.stringify({ data: [instance()] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }),
+  });
+  const gateway = new ControlPlaneNodeAgentGateway(client, {
+    fleetSnapshotFreshMs: 0,
+    onFleetStateChanged: (state) => observed.push(state),
+  });
+  const node = {
+    id: "node_ai_sessions",
+    connectionMode: "direct-http",
+    endpoint: "http://node-ai-sessions.test",
+    status: "online",
+    auth: { mode: "paired-hmac", keyId: "key_ai_sessions" },
+    connectionPhase: "healthy",
+  };
+
+  await gateway.refreshFleetInstances([node]);
+  observed.length = 0;
+  aiSessionRevision += 1;
+  await gateway.refreshFleetInstances([node]);
+  assert.deepEqual(observed, []);
+});
+
+test("Local Runtime heartbeats preserve the original matched version timestamp", () => {
+  const desiredVersion = runtimeVersionStateForActual().desiredVersion;
+  const current = {
+    desiredVersion,
+    actualVersion: desiredVersion,
+    phase: "matched",
+    attempt: 0,
+    matchedAt: "2026-08-22T00:00:00.000Z",
+  };
+  assert.equal(
+    runtimeVersionStateForReport({ runtimeVersion: current }, desiredVersion, false),
+    current,
+  );
+});
+
+test("failed fleet refreshes retry with backoff without republishing identical failure states", async () => {
+  let requests = 0;
+  let available = false;
+  const observed = [];
+  const runtime = {
+    id: "runtime_retry",
+    nodeId: "node_retry",
+    name: "Retry runtime",
+    type: "docker",
+    status: "online",
+    accessStrategy: "direct-port",
+    capabilities: {},
+    labels: {},
+    createdAt: "2026-08-22T00:00:00.000Z",
+    updatedAt: "2026-08-22T00:00:00.000Z",
+  };
+  const client = new ControlPlaneNodeAgentClient({
+    request: async () => {
+      requests += 1;
+      if (!available) throw Object.assign(new Error("node offline"), { code: "ECONNREFUSED" });
+      return new Response(JSON.stringify({ data: [runtime] }), { status: 200, headers: { "content-type": "application/json" } });
+    },
+  });
+  const gateway = new ControlPlaneNodeAgentGateway(client, {
+    fleetRetryBaseMs: 20,
+    fleetRetryMaxMs: 20,
+    onFleetStateChanged: (state) => observed.push(state),
+  });
+  const node = {
+    id: "node_retry",
+    connectionMode: "direct-http",
+    endpoint: "http://node-retry.test",
+    status: "online",
+    auth: { mode: "paired-hmac", keyId: "key_retry" },
+    connectionPhase: "healthy",
+  };
+
+  await gateway.refreshFleetRuntimes([node]);
+  assert.equal(requests, 1);
+  assert.deepEqual(observed.map((state) => state.phase), ["loading", "error"]);
+  await gateway.refreshFleetRuntimes([node]);
+  assert.equal(requests, 1);
+
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  assert.equal(requests, 2);
+  assert.deepEqual(observed.map((state) => state.phase), ["loading", "error"]);
+
+  available = true;
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  assert.equal(requests, 3);
+  assert.deepEqual(observed.map((state) => state.phase), ["loading", "error", "ready"]);
+  assert.deepEqual(gateway.readFleetRuntimes([node]).items.map((item) => item.id), [runtime.id]);
+});
+
+test("malformed fleet responses do not republish observation-only failure changes", async () => {
+  let requests = 0;
+  const observed = [];
+  const client = new ControlPlaneNodeAgentClient({
+    request: async () => {
+      requests += 1;
+      return new Response(JSON.stringify({ data: [{ id: "inst_malformed" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  const gateway = new ControlPlaneNodeAgentGateway(client, {
+    fleetRetryBaseMs: 20,
+    fleetRetryMaxMs: 20,
+    onFleetStateChanged: (state) => observed.push(state),
+  });
+  const node = {
+    id: "node_malformed",
+    connectionMode: "direct-http",
+    endpoint: "http://node-malformed.test",
+    status: "online",
+    auth: { mode: "paired-hmac", keyId: "key_malformed" },
+    connectionPhase: "healthy",
+  };
+
+  await gateway.refreshFleetInstances([node]);
+  assert.equal(requests, 1);
+  assert.deepEqual(observed.map((state) => state.phase), ["loading", "stale"]);
+
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  assert.equal(requests, 2);
+  assert.deepEqual(observed.map((state) => state.phase), ["loading", "stale"]);
+  gateway.dispose();
+});
+
+test("v0.0.21 directory metadata without node states normalizes to an empty progressive state", () => {
+  assert.deepEqual(ControlPlaneFleetDirectoryMetaSchema.parse({}), { nodeStates: [] });
+});
+
 test("node agent health response drops unknown cross-version fields", () => {
   const parsed = NodeAgentHealthSchema.parse({
     ok: true,
@@ -248,6 +925,7 @@ test("node agent health response drops unknown cross-version fields", () => {
     build: { component: "node-agent", packageVersion: "1.2.3", futureBuildField: true },
     listener: { host: "127.0.0.1", port: 8091, futureListenerField: true },
     process: { pid: 42, startIdentity: "process-start", futureProcessField: true },
+    eventTransport: { status: "congested", activeOutputs: 1, bufferedBytes: 16_777_216, peakBufferedBytes: 16_777_216, coalescedEvents: 12, futureMetric: true },
   });
   assert.deepEqual(parsed, {
     ok: true,
@@ -255,22 +933,13 @@ test("node agent health response drops unknown cross-version fields", () => {
     build: { component: "node-agent", packageVersion: "1.2.3" },
     listener: { host: "127.0.0.1", port: 8091 },
     process: { pid: 42, startIdentity: "process-start" },
+    eventTransport: { status: "congested", activeOutputs: 1, bufferedBytes: 16_777_216, peakBufferedBytes: 16_777_216, coalescedEvents: 12 },
   });
 });
 
 test("direct event connection terminates a half-open socket and publishes reconnecting state", async (t) => {
   const clock = fakeClock();
-  class Socket extends EventEmitter {
-    constructor() {
-      super();
-      this.readyState = 0;
-      this.pings = 0;
-    }
-    ping() { this.pings += 1; }
-    terminate() { this.readyState = 3; this.emit("close", 1006, Buffer.alloc(0)); }
-    close() { this.readyState = 3; this.emit("close", 1000, Buffer.alloc(0)); }
-  }
-  const socket = new Socket();
+  let pings = 0;
   const runtime = new NodeConnectionRuntime();
   const node = {
     id: "node_direct_events",
@@ -279,8 +948,15 @@ test("direct event connection terminates a half-open socket and publishes reconn
     endpoint: "http://127.0.0.1:18080",
     auth: { mode: "local-static-key", secret: "secret" },
   };
+  const transport = {
+    proxyWebSocket(_node, socket, route) {
+      assert.equal(route, "/events?aiSessionTransient=1");
+      queueMicrotask(() => socket.send(JSON.stringify({ type: "node-agent.events.connected" })));
+      return { ping: () => { pings += 1; } };
+    },
+  };
   const subscriber = new ControlPlaneNodeEventSubscriber(
-    { listNodes: () => [node] },
+    { listNodes: () => [node], resolveNodeAgentTransport: () => transport },
     { handleMessage() {} },
     {
       connectionRuntime: runtime,
@@ -290,16 +966,185 @@ test("direct event connection terminates a half-open socket and publishes reconn
       heartbeatTimeoutMs: 5,
       stableThresholdMs: 50,
       ...clock,
-      createSocket: () => socket,
     },
   );
   t.after(() => subscriber.stop());
   subscriber.start();
-  socket.readyState = 1;
-  socket.emit("open");
-  socket.emit("message", JSON.stringify({ type: "node-agent.events.connected" }));
+  await new Promise((resolve) => setImmediate(resolve));
   assert.equal(runtime.observation(node.id).phase, "healthy");
-  clock.advance(10);
-  assert.equal(socket.pings, 1);
+  clock.advance(15);
+  assert.equal(pings, 2);
   assert.equal(runtime.observation(node.id).phase, "reconnecting");
+});
+
+test("proxy node event subscriber opens the authoritative node-agent event stream through the shared transport", async (t) => {
+  const hellos = [];
+  const opened = [];
+  const node = {
+    id: "node_proxy_events",
+    connectionMode: "control-plane-proxy",
+    connectionEnabled: true,
+    connectionPath: {
+      kind: "control-plane-proxy",
+      proxyId: "proxy.example.test",
+      proxyBindingId: "binding_proxy_events",
+      targetNodeId: "node_target_events",
+    },
+    auth: { mode: "paired-hmac" },
+  };
+  const transport = {
+    proxyWebSocket(target, socket, route) {
+      opened.push({ target, route });
+      queueMicrotask(() => socket.send(JSON.stringify({
+        type: "node-agent.streams.hello",
+        instanceId: "inst_proxy_events",
+        payload: {
+          protocolVersion: 1,
+          streams: [],
+        },
+      })));
+    },
+  };
+  const subscriber = new ControlPlaneNodeEventSubscriber(
+    {
+      listNodes: () => [node],
+      resolveNodeAgentTransport: () => transport,
+    },
+    new ControlPlaneNodeAgentTunnelTransport(undefined, {
+      onStreamsHello: (instanceId, hello) => hellos.push({ instanceId, hello }),
+      validateInstanceScope: () => true,
+    }),
+    { safetyIntervalMs: 60_000 },
+  );
+  t.after(() => subscriber.stop());
+
+  subscriber.start();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(opened.length, 1);
+  assert.equal(opened[0].target, node);
+  assert.equal(opened[0].route, "/events?aiSessionTransient=1");
+  assert.equal(hellos.length, 1);
+  assert.equal(hellos[0].instanceId, "inst_proxy_events");
+  assert.equal(subscriber.diagnostics().activeConnections, 1);
+});
+
+test("proxy node event subscriber logs authoritative app-session frames before routing", async (t) => {
+  const logs = [];
+  const node = {
+    id: "node_proxy_app_events",
+    connectionMode: "control-plane-proxy",
+    connectionEnabled: true,
+    connectionPath: {
+      kind: "control-plane-proxy",
+      proxyId: "proxy.example.test",
+      proxyBindingId: "binding_proxy_app_events",
+      targetNodeId: "node_target_app_events",
+    },
+    auth: { mode: "paired-hmac" },
+  };
+  const payload = {
+    meta: {
+      instanceId: "inst_proxy_app_events",
+      streamId: "aps_proxy_app_events",
+      revision: 11,
+      previousRevision: 10,
+      traceId: "aps_evt_proxy_app_events",
+      generatedAt: "2026-08-23T00:00:00.000Z",
+      reason: "app-session-created",
+    },
+    session: { id: "app_proxy", appId: "terminal-tty", status: "running", bindings: [] },
+  };
+  const transport = {
+    proxyWebSocket(_target, socket) {
+      queueMicrotask(() => socket.send(JSON.stringify({
+        type: "node-agent.event.forwarded",
+        event: {
+          v: 1,
+          id: "evt_proxy_app",
+          seq: 11,
+          type: "app-session.patch",
+          topic: "app.sessions",
+          createdAt: "2026-08-23T00:00:00.000Z",
+          payload,
+          scope: { instanceId: payload.meta.instanceId },
+        },
+      })));
+    },
+  };
+  const tunnel = new ControlPlaneNodeAgentTunnelTransport(undefined, {
+    onSessionEvent: () => true,
+    validateInstanceScope: () => true,
+  });
+  const subscriber = new ControlPlaneNodeEventSubscriber(
+    { listNodes: () => [node], resolveNodeAgentTransport: () => transport },
+    tunnel,
+    { safetyIntervalMs: 60_000, logger: { info: (data, message) => logs.push({ data, message }) } },
+  );
+  t.after(() => subscriber.stop());
+
+  subscriber.start();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(logs.find((entry) => entry.message === "app-session.event.transport.received"), {
+    message: "app-session.event.transport.received",
+    data: {
+      nodeId: node.id,
+      instanceId: payload.meta.instanceId,
+      eventType: "app-session.patch",
+      traceId: payload.meta.traceId,
+      streamId: payload.meta.streamId,
+      revision: payload.meta.revision,
+    },
+  });
+});
+
+test("node event subscriber sends aggregated transient demand over the reused upstream", async (t) => {
+  const sent = [];
+  let failControlSend = false;
+  const node = {
+    id: "node_transient_events",
+    connectionMode: "direct-http",
+    connectionEnabled: true,
+    endpoint: "http://127.0.0.1:18080",
+    auth: { mode: "local-static-key", secret: "secret" },
+  };
+  const subscriber = new ControlPlaneNodeEventSubscriber(
+    {
+      listNodes: () => [node],
+      resolveNodeAgentTransport: () => ({
+        proxyWebSocket(_node, socket) {
+          queueMicrotask(() => socket.send(JSON.stringify({ type: "node-agent.events.connected" })));
+          return { send: (value) => {
+            if (failControlSend) throw new Error("subscription transport failed");
+            sent.push(JSON.parse(String(value)));
+          } };
+        },
+      }),
+    },
+    { handleMessage() {} },
+    { safetyIntervalMs: 60_000 },
+  );
+  t.after(() => subscriber.stop());
+  subscriber.setAiSessionTransientDemand({
+    legacyAll: false,
+    messageDeltas: { allInstances: false, instanceIds: ["instance-card"] },
+    timelineAllSessions: false,
+    timelineSessions: [{ instanceId: "instance-detail", sessionId: "session-detail" }],
+  });
+  subscriber.start();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(sent.at(-1).aiSessionTransient, {
+    messageDeltas: { allInstances: false, instanceIds: ["instance-card"] },
+    timelineAllSessions: false,
+    timelineSessions: [{ instanceId: "instance-detail", sessionId: "session-detail" }],
+  });
+  failControlSend = true;
+  assert.doesNotThrow(() => subscriber.setAiSessionTransientDemand({
+    legacyAll: false,
+    messageDeltas: { allInstances: false, instanceIds: [] },
+    timelineAllSessions: false,
+    timelineSessions: [],
+  }));
+  assert.equal(subscriber.diagnostics().activeConnections, 0);
 });

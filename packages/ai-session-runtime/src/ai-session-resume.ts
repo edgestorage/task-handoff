@@ -70,7 +70,7 @@ export class AiSessionResumeCoordinator {
       if (item.creationSource === "ai-session") {
         if (!this.options.resumeProvider) throw new Error("Provider does not support direct AI session resume.");
         await this.options.resumeProvider(item);
-        this.options.history.remove(item.id);
+        this.options.history.activate(item.id);
         return AiSessionResumeResultSchema.parse({
           disposition: "resumed",
           aiSessionId: item.id,
@@ -91,8 +91,8 @@ export class AiSessionResumeCoordinator {
       });
     } catch (error: unknown) {
       if (!previous) this.options.registry.discard(item.id);
-      else this.options.registry.put(previous);
-      if (previousProvider) this.options.registry.put(previousProvider);
+      else this.options.registry.restoreAuthority(previous);
+      if (previousProvider) this.options.registry.restoreAuthority(previousProvider);
       throw resumeError(
         "AI_SESSION_RESUME_UNAVAILABLE",
         error instanceof Error ? error.message : "Provider session could not be resumed.",

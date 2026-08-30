@@ -140,9 +140,13 @@ export class ControlPlaneAiSessionAggregator {
     return this.apply({ type: AiSessionEventType.Removed, payload });
   }
 
-  async list(options: { refresh?: boolean } = {}): Promise<ControlPlaneAiSessionsView> {
-    if (options.refresh || this.snapshots.size === 0) await this.bootstrapFromInstances();
-    return this.view();
+  async list(options: { refresh?: boolean; instanceId?: string } = {}): Promise<ControlPlaneAiSessionsView> {
+    if (options.refresh && options.instanceId && this.recoverSnapshot) {
+      await this.refreshInstance(options.instanceId);
+    } else if (options.refresh || this.snapshots.size === 0) {
+      await this.bootstrapFromInstances();
+    }
+    return this.view(options.instanceId);
   }
 
   async streamDescriptors() {
@@ -242,9 +246,49 @@ export class ControlPlaneAiSessionAggregator {
       const advertisedStreamId = this.advertisedStreams.get(entry.instanceId)?.streamId;
       if (advertisedStreamId && advertisedStreamId !== entry.streamId) continue;
       if (current?.streamId === entry.streamId && current.revision >= entry.revision) continue;
-      if (current?.streamId !== entry.streamId) this.history.delete(entry.instanceId);
-      this.snapshots.set(entry.instanceId, { streamId: entry.streamId, snapshot: entry.aiSessions, revision: entry.revision, lastEventAt: entry.lastEventAt });
+      const event: AiSessionEvent = {
+        type: AiSessionEventType.Snapshot,
+        payload: {
+          meta: {
+            streamId: entry.streamId,
+            instanceId: entry.instanceId,
+            revision: entry.revision,
+            traceId: `ais_bootstrap_${Date.now().toString(36)}`,
+            generatedAt: entry.lastEventAt,
+            reason: "startup",
+          },
+          snapshot: entry.aiSessions,
+        },
+      };
+      // A refreshed HTTP snapshot shares the global projection with WebSocket
+      // consumers. If it advances the revision, publish the same authoritative
+      // transition so another browser cannot miss the later duplicate WS event.
+      if (this.apply(event)) this.onRecoveredEvent?.(event);
     }
+  }
+
+  private async refreshInstance(instanceId: string) {
+    const projectionAtStart = this.snapshots.get(instanceId);
+    const state = await this.recoverSnapshot!(instanceId);
+    if (this.snapshots.get(instanceId) !== projectionAtStart) return;
+    const advertisedStreamId = this.advertisedStreams.get(instanceId)?.streamId;
+    if (advertisedStreamId && advertisedStreamId !== state.streamId) return;
+    if (projectionAtStart?.streamId === state.streamId && projectionAtStart.revision >= state.revision) return;
+    const event: AiSessionEvent = {
+      type: AiSessionEventType.Snapshot,
+      payload: {
+        meta: {
+          streamId: state.streamId,
+          instanceId,
+          revision: state.revision,
+          traceId: `ais_refresh_${Date.now().toString(36)}`,
+          generatedAt: state.lastEventAt,
+          reason: "startup",
+        },
+        snapshot: state.snapshot,
+      },
+    };
+    if (this.apply(event)) this.onRecoveredEvent?.(event);
   }
 
   private recoverStream(instanceId: string, streamId: string, highWater: number) {
@@ -329,10 +373,12 @@ export class ControlPlaneAiSessionAggregator {
     throw new Error("AI_SESSION_DELTA_INSTANCE_ID_REQUIRED");
   }
 
-  private view(): ControlPlaneAiSessionsView {
+  private view(instanceId?: string): ControlPlaneAiSessionsView {
     return {
       updatedAt: new Date().toISOString(),
-      instances: [...this.snapshots.entries()].map(([instanceId, entry]) => ({ instanceId, streamId: entry.streamId, aiSessions: entry.snapshot, revision: entry.revision, lastEventAt: entry.lastEventAt })),
+      instances: [...this.snapshots.entries()]
+        .filter(([candidateId]) => !instanceId || candidateId === instanceId)
+        .map(([candidateId, entry]) => ({ instanceId: candidateId, streamId: entry.streamId, aiSessions: entry.snapshot, revision: entry.revision, lastEventAt: entry.lastEventAt })),
     };
   }
 }

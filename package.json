@@ -18,6 +18,7 @@
     "dist",
     "apps",
     "packages",
+    "shared",
     "scripts/install-server-services.sh",
     "scripts/install-server.sh",
     "README.md",
@@ -59,7 +60,7 @@
     "docker:build:image": "sh scripts/docker-build-image.sh",
     "pack:dry": "pnpm run build:legacy && npm_config_cache=/private/tmp/task-handoff-npm-cache npm pack --dry-run",
     "test": "pnpm run test:node && pnpm --filter @task-handoff/control-plane-client test && pnpm --filter @task-handoff/control-plane-ui test && pnpm --filter @task-handoff/mobile test",
-    "test:node": "node --import ./test/setup-isolated-runtime.mjs --test test/*.test.* apps/*/test/*.test.* packages/protocol/test/*.test.* packages/*/*.test.*"
+    "test:node": "node --import ./test/setup-isolated-runtime.mjs --test --test-timeout=30000 test/*.test.* apps/*/test/*.test.* packages/protocol/test/*.test.* packages/*/*.test.*"
   },
   "engines": {
     "node": ">=24.15.0 <25"
@@ -97,6 +98,7 @@
     ],
     "files": [
       "apps/desktop-shell/src/**/*",
+      "shared/process-start-identity.cjs",
       "bin/task-handoff.js",
       "docker/entrypoint.sh",
       "docker/instance-launcher.sh",
@@ -163,12 +165,14 @@
     "commander": "^14.0.3",
     "cron-parser": "^5.6.2",
     "dingtalk-stream": "2.1.5",
+    "drizzle-orm": "1.0.0-rc.4",
     "electron-updater": "^6.8.9",
     "fastify": "^5.6.2",
     "httpxy": "^0.5.3",
     "ky": "^1.14.1",
     "marked": "^15.0.12",
     "node-pty": "^1.1.0",
+    "pg": "8.16.3",
     "picomatch": "^4.0.5",
     "pinia": "^3.0.4",
     "reka-ui": "^2.6.1",
@@ -205,5 +209,11 @@
     "typescript": "^6.0.3",
     "vite": "^7.3.0",
     "vue-tsc": "^3.1.8"
+  },
+  "pnpm": {
+    "patchedDependencies": {
+      "@react-native-menu/menu@2.0.0": "patches/@react-native-menu__menu@2.0.0.patch",
+      "expo-paste-input@0.2.2": "patches/expo-paste-input@0.2.2.patch"
+    }
   }
 }

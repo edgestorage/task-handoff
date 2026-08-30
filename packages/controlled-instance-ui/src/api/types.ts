@@ -134,7 +134,10 @@ export type AiSessionSummary = Pick<
   "id" | "agent" | "appSessionId" | "appId" | "providerSessionId" | "providerMeta" | "activeTurnId" | "title" | "cwd" | "userPrompt" | "turns" | "status" | "phase" | "summary" | "startedAt" | "updatedAt" | "error"
   | "lastMessage" | "currentTool"
   | "queue"
->;
+> & {
+  turnCount?: number;
+  lastUserMessageAt?: string;
+};
 
 export type AiSessionsSnapshot = {
   runningCount: number;

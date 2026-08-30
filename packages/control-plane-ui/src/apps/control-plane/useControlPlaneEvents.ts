@@ -1,22 +1,33 @@
 import { onBeforeUnmount, onMounted, toValue, watch, type MaybeRefOrGetter } from "vue";
 import { useQueryClient } from "@tanstack/vue-query";
-import { SessionStreamsHelloEventType, SessionStreamsHelloSchema } from "@task-handoff/protocol/events";
+import { StandardReconnectBackoff } from "@task-handoff/core/core/reconnect";
+import { COMPACT_EVENT_ENVELOPE_VERSION, EventKeepalivePongSchema, SessionStreamsHelloEventType, SessionStreamsHelloSchema, normalizeEventEnvelope } from "@task-handoff/protocol/events";
 import {
   InstanceLifecycleEventType,
   InstanceLifecycleSnapshotSchema,
   InstanceResourceMetricsEventType,
   InstanceResourceMetricsSchema,
+  NodeStateProjectionEventSchema,
+  NodeJoinedEventSchema,
   type InstanceLifecycleSnapshot,
+  type NodeJoinedEvent,
 } from "@task-handoff/protocol/control-plane";
-import { AiSessionTimelineItemEventSchema, AiSessionUnreadEventType, AiSessionUnreadStateSchema, type AiSessionTimelineItemEvent, type AiSessionUnreadState } from "@task-handoff/protocol/ai-sessions";
+import { AiSessionEventType as ProtocolAiSessionEventType, AiSessionTimelineItemEventSchema, AiSessionUnreadEventType, AiSessionUnreadStateSchema, normalizeAiSessionMessageDeltaEvent, type AiSessionTimelineItemEvent, type AiSessionUnreadState } from "@task-handoff/protocol/ai-sessions";
 import { safeParseResponse } from "@task-handoff/protocol/response-validation";
+import { ControlPlaneNodeFleetUpdatedEventSchema } from "@task-handoff/protocol/control-plane-directory";
+import { ControlPlaneAiSessionTriggerBoundEventSchema, ControlPlaneAiSessionTriggerUnboundEventSchema } from "@task-handoff/protocol/triggers";
 import type { SessionStreamDescriptor } from "@task-handoff/protocol/events";
 import type { AppManagementEvent } from "../../api/types";
 import type { InstanceResourceMetrics } from "../../api/types";
+import type { InstanceTriggerMutationResult } from "../../api/types";
+import type { InstanceBoardPayload } from "../../api/types";
 import { controlPlaneQueryKeys } from "../../api/queryKeys.ts";
+import { getControlledInstanceTriggers } from "../../api/queries.ts";
 import { controlPlaneDomainQueryKeys } from "../../api/queryInvalidation.ts";
-import { applyInstanceLifecycle } from "./instanceLifecycleCache.ts";
+import { applyInstanceLifecycle, applyNodeFleetState, applyNodeStateProjection } from "./instanceLifecycleCache.ts";
+import { removeInstanceTriggerBinding, replaceInstanceTriggerSnapshot, upsertInstanceTriggerBinding } from "./instanceTriggerCache.ts";
 import { controlPlaneEventDomains } from "./eventInvalidation.ts";
+import { aiSessionMessageDeltaDemand, aiSessionTimelineDemand, aiSessionTransientReplaySince } from "./useAiSessionEventDemand.ts";
 import {
   AiSessionEventType,
   AppSessionEventType,
@@ -26,6 +37,8 @@ import {
 } from "../../api/types";
 
 type EventMessage = {
+  id?: string;
+  replay?: boolean;
   type?: string;
   topic?: string;
   payload?: unknown;
@@ -42,11 +55,12 @@ const LIFECYCLE_COMMAND_NOTIFICATIONS = new Set([
 
 export function useControlPlaneEvents(input: {
   instanceId?: MaybeRefOrGetter<string>;
+  resourceMetricInstanceIds?: MaybeRefOrGetter<string[]>;
   enabled?: MaybeRefOrGetter<boolean>;
   aiSessions: {
     applyEvent: (event: AiSessionDeltaResponse["events"][number]) => boolean;
     applyUnreadEvent: (state: AiSessionUnreadState) => boolean;
-    applyMessageDelta: (payload: AiSessionMessageDeltaEvent) => boolean;
+    applyMessageDelta: (payload: AiSessionMessageDeltaEvent, options?: { replay?: boolean }) => boolean;
     applyTimelineItem: (payload: AiSessionTimelineItemEvent) => boolean;
     recoverTimelineItems: () => void;
     recoverDescriptor: (descriptor: SessionStreamDescriptor) => Promise<void>;
@@ -68,15 +82,20 @@ export function useControlPlaneEvents(input: {
     clear?: (instanceId: string) => void;
     reconcileLifecycle?: (lifecycle: InstanceLifecycleSnapshot) => void;
   };
+  nodes?: {
+    joined: (event: NodeJoinedEvent) => void;
+  };
 }) {
   const queryClient = useQueryClient();
   const pendingInvalidationKeys = new Map<string, readonly unknown[]>();
   let invalidationTimer: ReturnType<typeof setTimeout> | undefined;
   let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+  let keepaliveTimer: ReturnType<typeof setInterval> | undefined;
   let socket: WebSocket | undefined;
   let closing = false;
-  let reconnectAttempt = 0;
+  const reconnectBackoff = new StandardReconnectBackoff();
   let hasOpened = false;
+  const seenTransientEventIds = new Set<string>();
 
   function connect() {
     if (input.enabled !== undefined && !toValue(input.enabled)) return;
@@ -87,22 +106,24 @@ export function useControlPlaneEvents(input: {
     current.addEventListener("open", () => {
       const recovering = hasOpened;
       hasOpened = true;
-      reconnectAttempt = 0;
       const instanceId = toValue(input.instanceId || "");
-      current.send(JSON.stringify({ type: "subscribe", topics: ["*"], ...(instanceId ? { instanceIds: [instanceId] } : {}) }));
+      sendSubscription(current, new Date().toISOString());
+      startKeepalive(current);
       void queryClient.invalidateQueries({ queryKey: controlPlaneQueryKeys.scopedInstanceBoard(toValue(input.instanceId || "")) });
       void input.appManagement?.recoverOpen();
       void input.resourceMetrics?.recoverOpen();
+      for (const triggerInstanceId of cachedInstanceIds(instanceId)) {
+        void recoverInstanceTriggers(triggerInstanceId);
+      }
       if (recovering) input.aiSessions.recoverTimelineItems();
     });
     current.addEventListener("message", (event) => handleMessage(String(event.data)));
     current.addEventListener("close", () => {
       if (socket !== current) return;
+      stopKeepalive();
       socket = undefined;
       if (!closing && !reconnectTimer) {
-        const baseDelay = Math.min(30_000, 1_000 * (2 ** reconnectAttempt));
-        const delay = Math.min(30_000, Math.round(baseDelay * (0.75 + Math.random() * 0.5)));
-        reconnectAttempt += 1;
+        const { delay } = reconnectBackoff.next();
         reconnectTimer = setTimeout(() => {
           reconnectTimer = undefined;
           connect();
@@ -111,9 +132,48 @@ export function useControlPlaneEvents(input: {
     });
   }
 
+  function sendSubscription(target = socket, replaySince: string | undefined = undefined) {
+    if (!target || target.readyState !== WebSocket.OPEN) return;
+    const instanceId = toValue(input.instanceId || "");
+    const messageDeltaDemand = aiSessionMessageDeltaDemand.value;
+    const scopedMessageDeltaDemanded = Boolean(instanceId) && (
+      messageDeltaDemand.allInstances || messageDeltaDemand.instanceIds.includes(instanceId)
+    );
+    target.send(JSON.stringify({
+      v: 1,
+      type: "subscribe",
+      eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION,
+      topics: ["*"],
+      ...(instanceId ? { instanceIds: [instanceId] } : {}),
+      ...(input.resourceMetrics ? { metricInstanceIds: toValue(input.resourceMetricInstanceIds || []) } : {}),
+      aiSessionTransient: {
+        ...(replaySince ? { replaySince } : {}),
+        messageDeltas: instanceId
+          ? { allInstances: false, instanceIds: scopedMessageDeltaDemanded ? [instanceId] : [] }
+          : messageDeltaDemand,
+        timelineAllSessions: false,
+        timelineSessions: aiSessionTimelineDemand.value.filter((entry) => !instanceId || entry.instanceId === instanceId),
+      },
+    }));
+  }
+
+  function startKeepalive(target: WebSocket) {
+    stopKeepalive();
+    keepaliveTimer = setInterval(() => {
+      if (socket !== target || target.readyState !== WebSocket.OPEN) return;
+      target.send(JSON.stringify({ v: 1, type: "ping", sentAt: new Date().toISOString() }));
+    }, 20_000);
+  }
+
+  function stopKeepalive() {
+    if (keepaliveTimer) clearInterval(keepaliveTimer);
+    keepaliveTimer = undefined;
+  }
+
   function handleMessage(raw: string) {
     try {
       const message = JSON.parse(raw) as EventMessage;
+      if (EventKeepalivePongSchema.safeParse(message).success) return;
       const instanceId = toValue(input.instanceId || "");
       if (message.type === SessionStreamsHelloEventType) {
         const parsed = safeParseResponse(SessionStreamsHelloSchema, message.payload);
@@ -124,6 +184,9 @@ export function useControlPlaneEvents(input: {
           return;
         }
         const hello = parsed.data;
+        // Transport open is not recovery: reset only after the authoritative
+        // session-stream handshake succeeds.
+        reconnectBackoff.reset();
         for (const descriptor of hello.streams.filter((stream) => !instanceId || stream.instanceId === instanceId)) {
           if (descriptor.topic === "app.sessions") void input.appSessions.recoverDescriptor(descriptor);
           if (descriptor.topic === "ai.sessions") void input.aiSessions.recoverDescriptor(descriptor);
@@ -142,13 +205,48 @@ export function useControlPlaneEvents(input: {
     if (event.type && LIFECYCLE_COMMAND_NOTIFICATIONS.has(event.type)) {
       return true;
     }
+    if (event.type?.startsWith("instance.ai-session.") || event.type?.startsWith("instance.app-session.")) {
+      // These are operation receipts, not instance resource mutations. AI/App
+      // Session stream events own the resulting state; treating the receipts as
+      // `instances` invalidations refetches the board after every session action.
+      return true;
+    }
+    if (event.type === "trigger.deployment.bound") {
+      const bound = safeParseResponse(ControlPlaneAiSessionTriggerBoundEventSchema, event.payload);
+      if (!bound.success) return false;
+      if (bound.data.mutation) {
+        upsertInstanceTriggerBinding(queryClient, bound.data.instanceId, bound.data.mutation as InstanceTriggerMutationResult);
+      } else {
+        // Compatibility for v0.0.23: recover the authoritative instance
+        // trigger snapshot when the event predates embedded mutation results.
+        void recoverInstanceTriggers(bound.data.instanceId);
+      }
+      queueInvalidation(["control-plane-triggers"]);
+      return true;
+    }
+    if (event.type === "trigger.deployment.unbound") {
+      const unbound = safeParseResponse(ControlPlaneAiSessionTriggerUnboundEventSchema, event.payload);
+      if (!unbound.success) return false;
+      removeInstanceTriggerBinding(queryClient, unbound.data.instanceId, unbound.data.sessionId, unbound.data.configHash);
+      queueInvalidation(["control-plane-triggers"]);
+      return true;
+    }
+    if (event.type?.startsWith("trigger.") && eventInstanceId(event)) {
+      void recoverInstanceTriggers(eventInstanceId(event)!);
+      queueInvalidation(["control-plane-triggers"]);
+      return true;
+    }
     if (event.type?.startsWith("image.pull.")) {
       return input.imagePullProgress?.applyEvent(event.type, event.payload) || false;
     }
     if (event.type === AiSessionEventType.MessageDelta) {
-      return input.aiSessions.applyMessageDelta(event.payload as AiSessionMessageDeltaEvent);
+      if (event.id && seenTransientEventIds.has(event.id)) return true;
+      if (event.id) rememberTransientEventId(event.id);
+      return input.aiSessions.applyMessageDelta(event.payload as AiSessionMessageDeltaEvent, { replay: event.replay });
     }
     if (event.type === AiSessionEventType.TimelineItem) {
+      if (event.id && seenTransientEventIds.has(event.id)) return true;
+      if (event.id) rememberTransientEventId(event.id);
       const item = safeParseResponse(AiSessionTimelineItemEventSchema, event.payload);
       return item.success ? input.aiSessions.applyTimelineItem(item.data) : false;
     }
@@ -177,7 +275,56 @@ export function useControlPlaneEvents(input: {
       input.imagePullProgress?.reconcileLifecycle?.(lifecycle.data);
       return applyInstanceLifecycle(queryClient, lifecycle.data);
     }
+    if (event.type === "node.connection.updated" || event.type === "node.proxy-state.updated") {
+      const state = safeParseResponse(NodeStateProjectionEventSchema, event.payload);
+      // Compatibility for v0.0.23: older producers send internal observation
+      // payloads. Returning false preserves the authoritative query fallback.
+      return state.success ? applyNodeStateProjection(queryClient, state.data) : false;
+    }
+    if (event.type === "node.fleet.updated") {
+      const state = safeParseResponse(ControlPlaneNodeFleetUpdatedEventSchema, event.payload);
+      if (!state.success) return false;
+      // Diagnostic-only fleet changes can be applied in place. The gateway is
+      // the only boundary that can compare the old and new resource projection;
+      // when it reports a semantic content change, recover the authoritative
+      // topic query instead of pretending this metadata-only event contains rows.
+      applyNodeFleetState(queryClient, state.data);
+      // Compatibility for v0.0.23: absence means the old producer could not
+      // distinguish diagnostic churn from a resource change, so recover the
+      // authoritative topic. Current producers explicitly send false.
+      return state.data.contentChanged === false;
+    }
+    if (event.type === "node.joined") {
+      const joined = safeParseResponse(NodeJoinedEventSchema, event.payload);
+      if (!joined.success) return false;
+      input.nodes?.joined(joined.data);
+      return false;
+    }
     return false;
+  }
+
+  async function recoverInstanceTriggers(instanceId: string) {
+    try {
+      replaceInstanceTriggerSnapshot(queryClient, instanceId, await getControlledInstanceTriggers(instanceId));
+    } catch (error) {
+      console.warn("CONTROL_PLANE_TRIGGER_RECOVERY_FAILED", { instanceId, error });
+    }
+  }
+
+  function cachedInstanceIds(scopeInstanceId: string) {
+    const ids = new Set<string>();
+    for (const [, payload] of queryClient.getQueriesData<InstanceBoardPayload>({ queryKey: controlPlaneQueryKeys.instanceBoard })) {
+      for (const instance of payload?.data || []) {
+        if (!scopeInstanceId || instance.id === scopeInstanceId) ids.add(instance.id);
+      }
+    }
+    return ids;
+  }
+
+  function rememberTransientEventId(id: string) {
+    seenTransientEventIds.delete(id);
+    seenTransientEventIds.add(id);
+    while (seenTransientEventIds.size > 10_000) seenTransientEventIds.delete(seenTransientEventIds.values().next().value!);
   }
 
   function scheduleTargetedInvalidation(events: EventMessage[]) {
@@ -206,20 +353,36 @@ export function useControlPlaneEvents(input: {
     closing = true;
     socket?.close();
     socket = undefined;
+    stopKeepalive();
   });
   watch(() => toValue(input.instanceId || ""), () => {
     if (!socket) return;
     closing = true;
+    stopKeepalive();
     socket.close();
     socket = undefined;
     closing = false;
     connect();
   });
+  watch([aiSessionMessageDeltaDemand, aiSessionTimelineDemand, aiSessionTransientReplaySince], () => {
+    const replaySince = aiSessionTransientReplaySince.value;
+    sendSubscription(socket, replaySince);
+    // Timeline/detail queries establish their own authoritative snapshot before
+    // consuming replayed transient events. Reconnect recovery is descriptor-
+    // driven, so expanding transient demand must not refetch the full AI Session
+    // list for every card selection.
+  }, { deep: false });
+  watch(() => JSON.stringify(toValue(input.resourceMetricInstanceIds || [])), () => {
+    // Metrics scope is independent from AI transient replay. Re-sending an old
+    // replay cursor here would incorrectly retrigger the HTTP recovery barrier.
+    sendSubscription(socket);
+  });
   onBeforeUnmount(() => {
     closing = true;
-    reconnectAttempt = 0;
+    reconnectBackoff.reset();
     socket?.close();
     socket = undefined;
+    stopKeepalive();
     if (invalidationTimer) clearTimeout(invalidationTimer);
     if (reconnectTimer) clearTimeout(reconnectTimer);
   });
@@ -227,18 +390,26 @@ export function useControlPlaneEvents(input: {
 
 function eventsUrl(instanceId = "") {
   const url = new URL("/api/events", window.location.origin);
+  url.searchParams.set("aiSessionTransient", "1");
+  url.searchParams.set("resourceMetricsScope", "1");
   if (instanceId) url.searchParams.set("instanceId", instanceId);
   url.protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   return url.toString();
 }
 
 function normalizedEvents(message: EventMessage): EventMessage[] {
-  if (message.type !== "node-agent.event.forwarded") return [message];
-  const forwarded = message.event && typeof message.event === "object" && !Array.isArray(message.event)
-    ? message.event as EventMessage
-    : undefined;
-  if (!forwarded?.type) return [];
-  return [{ ...forwarded, scope: { ...(message.scope || {}), ...(forwarded.scope || {}) } }];
+  const candidate = message.type === "node-agent.event.forwarded" ? message.event : message;
+  const normalized = normalizeEventEnvelope(candidate, message.scope);
+  if (!normalized) return [];
+  const instanceId = normalized.scope?.instanceId;
+  if (normalized.type === ProtocolAiSessionEventType.MessageDelta && instanceId) {
+    try {
+      normalized.payload = normalizeAiSessionMessageDeltaEvent(normalized.payload, instanceId);
+    } catch {
+      return [];
+    }
+  }
+  return [normalized];
 }
 
 function eventInstanceId(event: EventMessage) {

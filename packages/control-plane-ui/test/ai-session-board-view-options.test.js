@@ -35,6 +35,12 @@ test("AI board node and agent groups use authoritative identifiers", () => {
   assert.match(board, /stored === "node" \|\| stored === "agent"/);
 });
 
+test("AI board path groups resolve the authoritative local-folder display name", () => {
+  assert.match(board, /props\.nodeLocalFoldersByNodeId\[card\.instance\.nodeId\]/);
+  assert.match(board, /candidate\.id === card\.session\.cwdFolderId/);
+  assert.match(board, /folder \? nodeLocalFolderDisplayName\(folder\) : path/);
+});
+
 test("sticky AI board column headers own one continuous rounded border", () => {
   assert.doesNotMatch(board, /\.ai-board-column \{[^}]*border: 1px/);
   assert.doesNotMatch(board, /clip-path: inset\(0 round 8px\);/);

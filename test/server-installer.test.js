@@ -6,8 +6,44 @@ const os = require("node:os");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 const test = require("node:test");
+const { currentServerInstallArgs } = require("../packages/core/src/core/server-update-installation.ts");
 
 const root = path.resolve(__dirname, "..");
+
+test("server update installation arguments preserve the authoritative service configuration", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-install-args-"));
+  const controlPlaneEnvFile = path.join(directory, "control-plane.env");
+  const nodeAgentEnvFile = path.join(directory, "node-agent.env");
+  const nodeAgentUnitFile = path.join(directory, "node-agent.service");
+  fs.writeFileSync(controlPlaneEnvFile, [
+    "TASK_HANDOFF_CONTROL_PLANE_DATA_DIR=/srv/control-plane",
+    "TASK_HANDOFF_CONTROL_PLANE_HOST=10.0.0.4",
+    "TASK_HANDOFF_CONTROL_PLANE_PORT=9443",
+    "TASK_HANDOFF_CONTROL_PLANE_AUTH_MODE=disabled",
+    "TASK_HANDOFF_CONTROL_PLANE_STATIC_DIR=/srv/task-handoff/ui",
+  ].join("\n"));
+  fs.writeFileSync(nodeAgentEnvFile, [
+    "TASK_HANDOFF_NODE_AGENT_DATA_DIR=/srv/node-agent",
+    "TASK_HANDOFF_NODE_AGENT_HOST=10.0.0.5",
+    "TASK_HANDOFF_NODE_AGENT_PORT=9555",
+    "TASK_HANDOFF_NODE_AGENT_IPC_PATH=/srv/run/node-agent.sock",
+  ].join("\n"));
+  fs.writeFileSync(nodeAgentUnitFile, "[Service]\nUser=task-handoff\n");
+
+  assert.deepEqual(currentServerInstallArgs({ controlPlaneEnvFile, nodeAgentEnvFile, nodeAgentUnitFile }), [
+    "--service-user", "task-handoff",
+    "--control-plane-data-dir", "/srv/control-plane",
+    "--node-agent-data-dir", "/srv/node-agent",
+    "--control-plane-host", "10.0.0.4",
+    "--control-plane-port", "9443",
+    "--node-agent-host", "10.0.0.5",
+    "--node-agent-port", "9555",
+    "--node-agent-ipc-path", "/srv/run/node-agent.sock",
+    "--auth-mode", "disabled",
+    "--static-dir", "/srv/task-handoff/ui",
+  ]);
+  fs.rmSync(directory, { recursive: true, force: true });
+});
 
 function typescriptSources(directory) {
   return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
@@ -19,7 +55,7 @@ function typescriptSources(directory) {
   });
 }
 
-test("server bootstrap owns the complete Debian and Ubuntu install path", () => {
+test("server bootstrap owns Debian, Ubuntu, RHEL, and CentOS install paths without target-host native builds", () => {
   const bootstrap = fs.readFileSync(path.join(root, "scripts", "install-server.sh"), "utf8");
 
   assert.match(bootstrap, /MIN_NODE_VERSION="24\.15\.0"/);
@@ -28,13 +64,80 @@ test("server bootstrap owns the complete Debian and Ubuntu install path", () => 
   assert.match(bootstrap, /PACKAGE_TARGET="latest"/);
   assert.match(bootstrap, /nodejs\.org\/dist\/latest-v24\.x\/SHASUMS256\.txt/);
   assert.match(bootstrap, /Node\.js archive checksum verification failed/);
-  assert.match(bootstrap, /apt-get install -y --no-install-recommends g\+\+ make python3/);
+  assert.doesNotMatch(bootstrap, /g\+\+|gcc-c\+\+|make python3/);
   assert.match(bootstrap, /apt-get install -y docker\.io/);
+  assert.match(bootstrap, /dnf install -y ca-certificates curl tar xz/);
+  assert.match(bootstrap, /download\.docker\.com\/linux\/\$docker_repo_os\/docker-ce\.repo/);
+  assert.match(bootstrap, /dnf install -y docker-ce docker-ce-cli containerd\.io/);
+  assert.doesNotMatch(bootstrap, /dpkg --compare-versions/);
   assert.match(bootstrap, /npm install -g/);
   assert.match(bootstrap, /@task-handoff\/server@\$PACKAGE_TARGET/);
   assert.match(bootstrap, /task-handoff-server-\$VERSION\.tgz/);
   assert.match(bootstrap, /task-handoff install/);
   assert.match(bootstrap, /--artifacts-dir/);
+});
+
+test("remote node-agent bootstrap installs Node.js portably without a native build environment", () => {
+  const installer = fs.readFileSync(path.join(root, "packages", "control-plane", "src", "control-plane", "nodes", "install-script.ts"), "utf8");
+
+  assert.match(installer, /MIN_NODE_VERSION="24\.15\.0"/);
+  assert.match(installer, /ensure_node_environment/);
+  assert.match(installer, /if node_is_compatible && command -v npm/);
+  assert.match(installer, /apt-get install -y ca-certificates curl xz-utils/);
+  assert.match(installer, /dnf install -y ca-certificates curl tar xz/);
+  assert.match(installer, /nodejs\.org\/dist\/latest-v24\.x\/SHASUMS256\.txt/);
+  assert.match(installer, /Node\.js archive checksum verification failed/);
+  assert.doesNotMatch(installer, /g\+\+|gcc-c\+\+|make python3/);
+  assert.doesNotMatch(installer, /dpkg --compare-versions/);
+  assert.match(installer, /case "\$current_node_version" in[\s\S]*24\.\*/);
+});
+
+test("remote node-agent bootstrap accepts a compatible preinstalled Node without a distro package manager", async () => {
+  const { nodeAgentInstallScript } = await import("../packages/control-plane/src/control-plane/nodes/install-script.ts");
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-node-installer-"));
+  const bin = path.join(directory, "bin");
+  fs.mkdirSync(bin);
+  fs.symlinkSync(process.execPath, path.join(bin, "node"));
+  const npmPath = spawnSync("/usr/bin/which", ["npm"], { encoding: "utf8" }).stdout.trim();
+  assert.ok(npmPath);
+  fs.symlinkSync(npmPath, path.join(bin, "npm"));
+  const commands = {
+    id: "#!/bin/sh\necho 0\n",
+    systemctl: "#!/bin/sh\nexit 0\n",
+    uname: "#!/bin/sh\n[ \"$1\" = \"-s\" ] && echo Linux || echo x86_64\n",
+    getconf: "#!/bin/sh\necho 'glibc 2.28'\n",
+  };
+  for (const [command, contents] of Object.entries(commands)) {
+    fs.writeFileSync(path.join(bin, command), contents, { mode: 0o755 });
+  }
+  const installer = nodeAgentInstallScript().replace("\nensure_node_environment\n", "\nensure_node_environment\nexit 0\n");
+  const result = spawnSync("/bin/sh", ["-s", "--", "--control-plane", "https://control.example.com"], {
+    input: installer,
+    encoding: "utf8",
+    env: { ...process.env, PATH: `${bin}:/usr/bin:/bin` },
+  });
+  try {
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /Using existing Node\.js/);
+    assert.doesNotMatch(result.stdout, /package metadata|prerequisites with dnf/);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("remote node-agent bootstrap restarts and verifies the installed service through IPC", () => {
+  const installer = fs.readFileSync(path.join(root, "packages", "control-plane", "src", "control-plane", "nodes", "install-script.ts"), "utf8");
+  const enable = installer.indexOf("systemctl enable task-handoff-node-agent.service");
+  const restart = installer.indexOf("systemctl restart task-handoff-node-agent.service");
+  const readiness = installer.indexOf('curl --unix-socket "$IPC_PATH" -fsS "http://localhost/api/node-agent/health"');
+  const pairing = installer.indexOf('"http://localhost/api/node-agent/control-plane-connections"');
+
+  assert.ok(enable >= 0);
+  assert.ok(restart > enable);
+  assert.ok(readiness > restart);
+  assert.ok(pairing > readiness);
+  assert.doesNotMatch(installer, /systemctl enable --now task-handoff-node-agent\.service/);
+  assert.match(installer, /Compatibility for v0\.0\.24:/);
 });
 
 test("global server package pins and resolves all three runtime packages", async () => {
@@ -67,6 +170,23 @@ test("server services use writable data directories as working directories", () 
   assert.match(installer, /WorkingDirectory=\$NODE_AGENT_DATA_DIR/);
   assert.match(installer, /WorkingDirectory=\$CONTROL_PLANE_DATA_DIR/);
   assert.doesNotMatch(installer, /WorkingDirectory=\$REPO_DIR/);
+});
+
+test("password-auth installation initializes random administrator credentials before service exposure", () => {
+  const installer = fs.readFileSync(path.join(root, "scripts", "install-server-services.sh"), "utf8");
+  const initialize = installer.indexOf("credentials --initialize-if-needed");
+  const startControlPlane = installer.indexOf("systemctl enable --now task-handoff-control-plane.service");
+
+  assert.match(installer, /randomBytes\(6\)/);
+  assert.match(installer, /randomBytes\(24\)/);
+  assert.match(installer, /printf '%s\\n' "\$ADMIN_PASSWORD" \|/);
+  assert.doesNotMatch(installer, /TASK_HANDOFF_CONTROL_PLANE_(?:ADMIN_)?PASSWORD=/);
+  assert.doesNotMatch(installer, /has_control_plane_admin/);
+  assert.match(installer, /if \[ "\$AUTH_MODE" = "password" \]; then/);
+  assert.ok(initialize >= 0);
+  assert.ok(initialize < startControlPlane);
+  assert.match(installer, /Compatibility for v0\.0\.21:/);
+  assert.match(installer, /credentials \(shown once\)/);
 });
 
 test("server services use a private IPC socket for local control", () => {
@@ -129,9 +249,20 @@ test("server package owns the unified management command and runtimes stay indep
 
   assert.equal(runtimePackages.server.binName, "task-handoff");
   assert.equal(runtimePackages["control-plane"].binName, "task-handoff-control-plane");
+  assert.deepEqual(runtimePackages["control-plane"].bundledDependencies, ["@fastify/compress"]);
+  assert.equal(runtimePackages["control-plane"].dependencies["@fastify/compress"], undefined);
+  assert.equal(runtimePackages["control-plane"].dependencies["drizzle-orm"], "1.0.0-rc.4");
+  assert.equal(runtimePackages["control-plane"].dependencies.pg, "8.16.3");
   assert.equal(runtimePackages["node-agent"].binName, "task-handoff-node-agent");
+  assert.deepEqual(runtimePackages["node-agent"].bundledDependencies, ["@fastify/compress"]);
+  assert.equal(runtimePackages["node-agent"].dependencies["@fastify/compress"], undefined);
+  assert.equal(runtimePackages["node-agent"].dependencies["drizzle-orm"], undefined);
+  assert.equal(runtimePackages["node-agent"].dependencies.pg, undefined);
   assert.equal(runtimePackages["controlled-instance"].binName, "task-handoff-controlled-instance");
   assert.deepEqual(runtimePackages["controlled-instance"].dependencies, { "node-pty": "^1.1.0" });
+  for (const name of ["control-plane", "node-agent", "controlled-instance"]) {
+    assert.deepEqual(runtimePackages[name].bundledNativeDependencies, ["node-pty"]);
+  }
   assert.equal(runtimePackages.server.input, "apps/cli/src/runtime/server.ts");
   assert.doesNotMatch(prepare, /task-handoff-server-install/);
   assert.doesNotMatch(prepare, /name === "control-plane"/);
@@ -158,6 +289,19 @@ test("runtime package archives verify every directly executed helper", () => {
   assert.match(builder, /verifyArchiveExecutables/);
 });
 
+test("runtime package builds transform and execute CommonJS TypeScript workers", () => {
+  const rollup = fs.readFileSync(path.join(root, "rollup.config.mjs"), "utf8");
+  const checker = fs.readFileSync(path.join(root, "scripts", "check-runtime-packages.mjs"), "utf8");
+
+  assert.match(rollup, /extensions: \["\.cjs", "\.cts", "\.js", "\.ts"\]/);
+  assert.match(rollup, /id\.startsWith\("node:"\)/);
+  assert.match(checker, /runtime output references repository source/);
+  assert.match(checker, /update worker smoke test failed/);
+  assert.match(checker, /workerPath, "--help"/);
+  assert.match(checker, /assertNoControlPlaneDatabasePayload/);
+  assert.match(checker, /checkEmbeddedControlledInstance/);
+});
+
 test("standalone node-agent CLI can create pairing invites over local IPC", () => {
   const runtimeCli = fs.readFileSync(path.join(root, "apps", "cli", "src", "runtime", "node-agent.ts"), "utf8");
   const remoteInstaller = fs.readFileSync(path.join(root, "packages", "control-plane", "src", "control-plane", "nodes", "install-script.ts"), "utf8");
@@ -172,6 +316,26 @@ test("standalone node-agent CLI can create pairing invites over local IPC", () =
   assert.match(remoteInstaller, /invite --ipc-path \$IPC_PATH/);
 });
 
+test("standalone node-agent CLI can connect an existing service to a control plane over local IPC", () => {
+  const runtimeCli = fs.readFileSync(path.join(root, "apps", "cli", "src", "runtime", "node-agent.ts"), "utf8");
+  assert.match(runtimeCli, /\.command\("connect"\)/);
+  assert.match(runtimeCli, /\.requiredOption\("--control-plane <url>"/);
+  assert.match(runtimeCli, /\.requiredOption\("--join-token <token>"/);
+  assert.match(runtimeCli, /fetchNodeAgentIpc\(options\.ipcPath!, "\/control-plane-connections"/);
+  assert.match(runtimeCli, /activate: true/);
+});
+
+test("standalone node-agent CLI can uninstall while preserving data by default", () => {
+  const runtimeCli = fs.readFileSync(path.join(root, "apps", "cli", "src", "runtime", "node-agent.ts"), "utf8");
+  const uninstaller = fs.readFileSync(path.join(root, "packages", "control-plane", "src", "node-agent", "uninstall.ts"), "utf8");
+  assert.match(runtimeCli, /\.command\("uninstall"\)/);
+  assert.match(runtimeCli, /\.option\("--delete-data"/);
+  assert.match(runtimeCli, /\.option\("--keep-data"/);
+  assert.match(uninstaller, /\["disable", "--now", NODE_AGENT_SERVICE\]/);
+  assert.match(uninstaller, /await dependencies\.confirmDeleteData\(dataDir\)/);
+  assert.match(uninstaller, /Docker volumes are preserved\. \[y\/N\]/);
+});
+
 test("node-agent installer honors an explicit npm package before an ambient binary", () => {
   const installer = fs.readFileSync(path.join(root, "packages", "control-plane", "src", "control-plane", "nodes", "install-script.ts"), "utf8");
   const explicitPackage = installer.indexOf('elif [ -n "$NPM_PACKAGE" ]; then');
@@ -181,13 +345,16 @@ test("node-agent installer honors an explicit npm package before an ambient bina
   assert.ok(ambientBinary > explicitPackage);
 });
 
-test("server update CLI preserves configuration and restart ordering", () => {
+test("server update CLI delegates configuration, installation, rollback, and restart ordering to the shared worker", () => {
   const updater = fs.readFileSync(path.join(root, "apps", "cli", "src", "runtime", "server.ts"), "utf8");
   const updateLock = fs.readFileSync(path.join(root, "apps", "cli", "src", "runtime", "update-lock.mjs"), "utf8");
+  const installation = fs.readFileSync(path.join(root, "packages", "core", "src", "core", "server-update-installation.ts"), "utf8");
+  const worker = fs.readFileSync(path.join(root, "scripts", "node-update-worker.cts"), "utf8");
   const updateCommand = updater.slice(updater.indexOf('program.command("update")'));
-  const nodeRestart = updateCommand.indexOf('"restart", "task-handoff-node-agent.service"');
-  const socketReady = updateCommand.indexOf("waitForSocket(nodeSocket)");
-  const controlPlaneRestart = updateCommand.indexOf('"restart", "task-handoff-control-plane.service"');
+  const materialize = worker.indexOf("materializeServerServices(prefix)");
+  const controlPlaneRestart = worker.indexOf('run("systemctl", ["restart", "task-handoff-control-plane.service"])', materialize);
+  const healthReady = worker.indexOf("await waitForControlPlaneHealth(controlPlaneHealthUrl)", controlPlaneRestart);
+  const nodeRestart = worker.indexOf('run("systemctl", ["restart", service])', healthReady);
 
   assert.match(updater, /npmVersion\(target, options\.registry\)/);
   assert.match(updater, /channel === "stable" \? "latest" : channel/);
@@ -197,12 +364,15 @@ test("server update CLI preserves configuration and restart ordering", () => {
   assert.match(updater, /updateChannelForVersion\(manifest\.version\)/);
   assert.match(updater, /\.default\(defaultUpdateChannel\)/);
   assert.match(updater, /currentInstallOptions\(\)/);
-  assert.match(updater, /--control-plane-data-dir/);
-  assert.match(updater, /--node-agent-data-dir/);
-  assert.match(updateLock, /task-handoff-server-update\.lock/);
-  assert.match(updater, /\["install", \.\.\.preserved\]/);
-  assert.ok(nodeRestart < socketReady);
-  assert.ok(socketReady < controlPlaneRestart);
+  assert.match(updateLock, /acquireServerUpdateLock/);
+  assert.match(installation, /task-handoff-server-update\.lock/);
+  assert.match(updateCommand, /task-handoff-node-update-worker/);
+  assert.match(updateCommand, /--install-prefix/);
+  assert.match(worker, /--preserve-current/);
+  assert.match(worker, /rollback = async/);
+  assert.ok(materialize < controlPlaneRestart);
+  assert.ok(controlPlaneRestart < healthReady);
+  assert.ok(healthReady < nodeRestart);
 });
 
 test("runtime package versions use one resolver for explicit, bundled, and workspace builds", async () => {

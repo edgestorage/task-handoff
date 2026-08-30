@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { QueryClient } from "@tanstack/vue-query";
-import { mergeInstanceBoardPayload, mergeInstanceBoardQueryData } from "../src/api/instanceBoardMerge.ts";
-import { applyInstanceLifecycle } from "../src/apps/control-plane/instanceLifecycleCache.ts";
+import { markInstanceTriggerProjectionAuthoritative, mergeInstanceBoardPayload, mergeInstanceBoardQueryData } from "../src/api/instanceBoardMerge.ts";
+import { applyInstanceLifecycle, applyNodeFleetState, applyNodeStateProjection } from "../src/apps/control-plane/instanceLifecycleCache.ts";
 import { controlPlaneQueryKeys } from "../src/api/queryKeys.ts";
+import { applyInstanceBoardTargetSnapshot } from "../src/apps/control-plane/instanceBoardCache.ts";
 
 function boardInstance(id, revision, status = "created") {
   return {
@@ -78,6 +79,96 @@ test("instance lifecycle snapshots patch both global and scoped board caches", (
   assert.equal(applyInstanceLifecycle(queryClient, lifecycle(2, "starting")), true);
   assert.equal(queryClient.getQueryData(controlPlaneQueryKeys.instanceBoard).data[0].status, "starting");
   assert.equal(queryClient.getQueryData(controlPlaneQueryKeys.scopedInstanceBoard("inst_target")).data[0].status, "starting");
+});
+
+test("node fleet events update diagnostics without replacing board rows", () => {
+  const queryClient = new QueryClient();
+  const target = boardInstance("inst_target", 4, "running");
+  const previousError = {
+    nodeId: "node_a",
+    route: "/instances",
+    method: "GET",
+    code: "NODE_AGENT_FLEET_TIMEOUT",
+    message: "old timeout",
+  };
+  queryClient.setQueryData(controlPlaneQueryKeys.instanceBoard, {
+    data: [target],
+    meta: {
+      nodeStates: [{ nodeId: "node_a", resource: "instances", phase: "error", revision: 2, error: previousError }],
+      nodeErrors: [previousError],
+    },
+  });
+
+  assert.equal(applyNodeFleetState(queryClient, {
+    nodeId: "node_a",
+    resource: "instances",
+    phase: "ready",
+    revision: 3,
+    updatedAt: "2026-07-25T00:00:03.000Z",
+  }), true);
+  const updated = queryClient.getQueryData(controlPlaneQueryKeys.instanceBoard);
+  assert.equal(updated.data[0], target, "fleet progress must not replace authoritative lifecycle rows");
+  assert.equal(updated.meta.nodeStates[0].phase, "ready");
+  assert.equal(updated.meta.nodeStates[0].revision, 3);
+  assert.deepEqual(updated.meta.nodeErrors, []);
+
+  assert.equal(applyNodeFleetState(queryClient, {
+    nodeId: "node_a",
+    resource: "instances",
+    phase: "loading",
+    revision: 1,
+  }), false);
+  assert.equal(queryClient.getQueryData(controlPlaneQueryKeys.instanceBoard), updated);
+});
+
+test("node state events patch only the target node without refetching the directory", () => {
+  const queryClient = new QueryClient();
+  const target = {
+    id: "node_target",
+    name: "Target",
+    status: "offline",
+    health: "failed",
+    connectionPhase: "reconnecting",
+    capabilities: {},
+    labels: {},
+  };
+  const untouched = { ...target, id: "node_other", name: "Other" };
+  queryClient.setQueryData(controlPlaneQueryKeys.nodes, [target, untouched]);
+
+  assert.equal(applyNodeStateProjection(queryClient, {
+    nodeId: "node_target",
+    status: "online",
+    health: "ok",
+    lastSeenAt: "2026-08-25T06:00:00.000Z",
+    connectionPhase: "healthy",
+    connectionDiagnostics: { consecutiveReconnects: 0, pingRttMs: 12 },
+    proxyState: null,
+  }), true);
+
+  const updated = queryClient.getQueryData(controlPlaneQueryKeys.nodes);
+  assert.equal(updated[0].status, "online");
+  assert.equal(updated[0].connectionPhase, "healthy");
+  assert.equal(updated[0].connectionDiagnostics.pingRttMs, 12);
+  assert.equal(updated[0].proxyState, undefined);
+  assert.equal(updated[1], untouched);
+});
+
+test("connecting recovery replaces only the requested board item", () => {
+  const queryClient = new QueryClient();
+  const target = boardInstance("inst_target", 1, "registering");
+  const untouched = boardInstance("inst_other", 4, "running");
+  queryClient.setQueryData(controlPlaneQueryKeys.instanceBoard, { data: [target, untouched], meta: { nodeErrors: [] } });
+
+  assert.equal(applyInstanceBoardTargetSnapshot(
+    queryClient,
+    "",
+    target.id,
+    boardInstance(target.id, 2, "running"),
+  ), true);
+  const updated = queryClient.getQueryData(controlPlaneQueryKeys.instanceBoard);
+  assert.equal(updated.data[0].status, "running");
+  assert.equal(updated.data[1], untouched);
+  assert.deepEqual(updated.meta, { nodeErrors: [] });
 });
 
 test("instance lifecycle snapshots patch the lightweight instance directory", () => {
@@ -197,6 +288,48 @@ test("board HTTP merge accepts newer revisions and authoritative removals", () =
   assert.equal(merged.data.length, 1);
   assert.equal(merged.data[0].stateRevision, 3);
   assert.equal(merged.data[0].status, "running");
+});
+
+test("a board heartbeat cannot overwrite an authoritative trigger projection", () => {
+  markInstanceTriggerProjectionAuthoritative("inst_target");
+  const previous = {
+    ...boardInstance("inst_target", 2, "running"),
+    lastHeartbeatAt: "2026-08-27T13:18:40.000Z",
+    triggers: {
+      configs: [{ configHash: "trg_new", deployments: [{ configHash: "trg_new" }] }],
+      recentRuns: [],
+      updatedAt: "2026-08-27T13:18:47.000Z",
+    },
+  };
+  const stale = {
+    ...previous,
+    lastHeartbeatAt: "2026-08-27T13:18:45.000Z",
+    triggers: { configs: [], recentRuns: [] },
+  };
+
+  const merged = mergeInstanceBoardPayload({ data: [previous] }, { data: [stale] });
+  assert.equal(merged.data[0].triggers.configs[0].configHash, "trg_new");
+});
+
+test("trigger projections remain independent from later board heartbeats", () => {
+  markInstanceTriggerProjectionAuthoritative("inst_target");
+  const previous = {
+    ...boardInstance("inst_target", 2, "running"),
+    lastHeartbeatAt: "2026-08-27T13:18:40.000Z",
+    triggers: {
+      configs: [{ configHash: "trg_old", deployments: [{ configHash: "trg_old" }] }],
+      recentRuns: [],
+      updatedAt: "2026-08-27T13:18:47.000Z",
+    },
+  };
+  const authoritative = {
+    ...previous,
+    lastHeartbeatAt: "2026-08-27T13:18:50.000Z",
+    triggers: { configs: [{ configHash: "trg_new", deployments: [] }], recentRuns: [] },
+  };
+
+  const merged = mergeInstanceBoardPayload({ data: [previous] }, { data: [authoritative] });
+  assert.equal(merged.data[0].triggers.configs[0].configHash, "trg_old");
 });
 
 test("board structural sharing accepts the item array produced by query select", () => {

@@ -67,6 +67,16 @@ export function embeddedMarketCatalogSnapshot(): MarketCatalogSnapshot {
         optionalApps: ["terminal-tty"],
       }),
       embeddedImage({
+        id: "market_taskhandoff_opencode",
+        slug: "opencode",
+        name: "TaskHandoff OpenCode",
+        description: "Minimal OpenCode runtime with terminal and OpenCode.",
+        localizedDescriptions: { "zh-CN": "最小 OpenCode 运行环境，包含终端和 OpenCode。" },
+        reference: process.env.TASK_HANDOFF_CONTROLLED_OPENCODE_IMAGE || "huadream/task-handoff-controlled-opencode:latest",
+        capabilities: ["terminal", "opencode"],
+        optionalApps: ["terminal-tty"],
+      }),
+      embeddedImage({
         id: "market_taskhandoff_ai",
         slug: "ai",
         name: "TaskHandoff Codex + Claude",

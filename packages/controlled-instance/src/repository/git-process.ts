@@ -54,7 +54,13 @@ export class GitProcessError extends Error {
 }
 
 export class GitProcess {
-  constructor(private readonly cwd: string, private readonly defaults: GitProcessOptions = {}) {}
+  private readonly cwd: string;
+  private readonly defaults: GitProcessOptions;
+
+  constructor(cwd: string, defaults: GitProcessOptions = {}) {
+    this.cwd = cwd;
+    this.defaults = defaults;
+  }
 
   run(subcommand: string, args: string[] = [], options: GitProcessOptions = {}): Promise<GitProcessResult> {
     if (!ALLOWED_SUBCOMMANDS.has(subcommand)) {
@@ -151,18 +157,24 @@ export function gitEnvironment(remote: boolean): NodeJS.ProcessEnv {
   };
   if (remote) {
     env.GCM_INTERACTIVE = "Never";
-    env.GIT_ASKPASS = process.platform === "win32" ? "cmd /c exit 1" : "/bin/false";
-    env.SSH_ASKPASS = env.GIT_ASKPASS;
-    env.SSH_ASKPASS_REQUIRE = "force";
-    env.GIT_SSH_COMMAND = "ssh -oBatchMode=yes -oStrictHostKeyChecking=yes";
+    if (!env.TASK_HANDOFF_GIT_CREDENTIAL_SOCKET) {
+      // Compatibility for v0.0.21: old instances have no broker and retain the
+      // existing non-interactive Repository transport behavior.
+      env.GIT_ASKPASS = process.platform === "win32" ? "cmd /c exit 1" : "/bin/false";
+      env.SSH_ASKPASS = env.GIT_ASKPASS;
+      env.SSH_ASKPASS_REQUIRE = "force";
+      env.GIT_SSH_COMMAND = "ssh -oBatchMode=yes -oStrictHostKeyChecking=yes";
+    }
   }
   return env;
 }
 
 export function redactGitDiagnostic(value: string) {
   return value
+    .replace(/-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g, "***")
     .replace(/([a-z][a-z0-9+.-]*:\/\/)([^\s/@:]+)(?::[^\s/@]*)?@/gi, "$1***@")
     .replace(/\b(?:ghp|github_pat|glpat|xox[baprs])-[-_a-zA-Z0-9]+\b/g, "***")
     .replace(/([?&](?:access_token|token|key|password|signature)=)[^&\s]+/gi, "$1***")
-    .replace(/(Authorization:\s*(?:Bearer|Basic)\s+)[^\s]+/gi, "$1***");
+    .replace(/(Authorization:\s*(?:Bearer|Basic)\s+)[^\s]+/gi, "$1***")
+    .replace(/(?:\/run\/task-handoff\/git-broker|\/private\/tmp\/task-handoff-git-broker|\/tmp\/task-handoff-git-broker)[^\s'\"]*/g, "[git-broker-runtime]");
 }

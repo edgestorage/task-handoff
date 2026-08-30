@@ -1,7 +1,7 @@
 import { computed, ref, watch, type Ref } from "vue";
 import { createChatBridge, deleteChatBridge, startChatBridge, stopChatBridge, updateChatBridge } from "../../../api/queries";
 import type { ChatBridgeConfig, ChatChannel, ChatGatewayStatus } from "../../../api/types";
-import { showControlPlaneToast } from "../useControlPlaneToasts";
+import { showControlPlaneToast, showDelayedControlPlaneLoadingToast } from "../useControlPlaneToasts";
 import type { Translate } from "../../../i18n/status.ts";
 import { translateApiError } from "../../../i18n/apiError.ts";
 import { startSavedChatBridge } from "./chatBridgeToggle.ts";
@@ -22,7 +22,7 @@ export function useChatBridgeSettings({ bridges, errorText, gatewayStatus, refre
   const creatingChatBridge = ref(false);
   const savingChatBridge = ref(false);
   const togglingChatBridge = ref(false);
-  const chatBridgeSuccess = ref("");
+  const initialChatDraft = ref("");
   const chatAllowedUsersText = ref("");
   const chatForm = ref({
     name: "",
@@ -47,6 +47,7 @@ export function useChatBridgeSettings({ bridges, errorText, gatewayStatus, refre
   const selectedChatBridge = computed(() => orderedChatBridges.value.find((bridge) => bridge.id === selectedChatBridgeId.value) || orderedChatBridges.value[0]);
   const selectedChatStatus = computed(() => selectedChatBridge.value ? gatewayStatus.value?.bridges.find((bridge) => bridge.id === selectedChatBridge.value?.id) : undefined);
   const chatBridgeBusy = computed(() => creatingChatBridge.value || savingChatBridge.value || togglingChatBridge.value);
+  const chatDraftDirty = computed(() => serializeChatDraft() !== initialChatDraft.value);
   const chatTokenPlaceholder = computed(() => {
     if (selectedChatBridge.value?.channel === "dingding") return t("settings.chatBridge.clientIdPlaceholder");
     if (selectedChatBridge.value?.channel === "lark") return t("settings.chatBridge.appIdPlaceholder");
@@ -83,31 +84,30 @@ export function useChatBridgeSettings({ bridges, errorText, gatewayStatus, refre
       },
     };
     chatAllowedUsersText.value = (bridge?.allowedUserIds || []).join("\n");
-  }
-
-  function clearChatFeedback() {
-    chatBridgeSuccess.value = "";
+    initialChatDraft.value = serializeChatDraft();
   }
 
   function selectChatBridge(id: string) {
     selectedChatBridgeId.value = id;
-    clearChatFeedback();
   }
 
   async function createBridge(channel: ChatChannel) {
     if (creatingChatBridge.value) {
-      return;
+      return undefined;
     }
     creatingChatBridge.value = true;
-    clearChatFeedback();
+    const loadingToast = showDelayedControlPlaneLoadingToast(t("settings.chatBridge.creating"));
     try {
       const bridge = await createChatBridge({ channel });
       selectedChatBridgeId.value = bridge.id;
-      chatBridgeSuccess.value = t("settings.chatBridge.created", { name: bridge.name });
       await refresh();
+      showControlPlaneToast(t("settings.chatBridge.created", { name: bridge.name }), "success");
+      return bridge;
     } catch (error) {
       showControlPlaneToast(translateError(error));
+      return undefined;
     } finally {
+      loadingToast.dismiss();
       creatingChatBridge.value = false;
     }
   }
@@ -118,7 +118,7 @@ export function useChatBridgeSettings({ bridges, errorText, gatewayStatus, refre
       return false;
     }
     savingChatBridge.value = true;
-    clearChatFeedback();
+    const loadingToast = showDelayedControlPlaneLoadingToast(t("settings.chatBridge.saving"));
     try {
       const settings: Record<string, unknown> = {};
       if (bridge.channel === "wechat") {
@@ -143,14 +143,15 @@ export function useChatBridgeSettings({ bridges, errorText, gatewayStatus, refre
         pollIntervalMs: Math.max(1000, Number(chatForm.value.pollIntervalMs) || 3000),
         settings,
       });
-      chatBridgeSuccess.value = t("settings.chatBridge.saved", { name: chatForm.value.name || bridge.name });
       syncChatForm(updated);
       if (refreshAfterSave) await refresh();
+      showControlPlaneToast(t("settings.chatBridge.saved", { name: updated.name }), "success");
       return true;
     } catch (error) {
       showControlPlaneToast(translateError(error));
       return false;
     } finally {
+      loadingToast.dismiss();
       savingChatBridge.value = false;
     }
   }
@@ -159,50 +160,59 @@ export function useChatBridgeSettings({ bridges, errorText, gatewayStatus, refre
     return persistSelectedChatBridge(true);
   }
 
-  async function toggleSelectedChatBridge() {
-    const bridge = selectedChatBridge.value;
+  async function toggleChatBridge(bridge: ChatBridgeConfig, persistDraft = false) {
     if (!bridge || togglingChatBridge.value) {
-      return;
+      return false;
     }
     togglingChatBridge.value = true;
-    clearChatFeedback();
+    const running = chatBridgeRunning(bridge.id);
+    const loadingToast = showDelayedControlPlaneLoadingToast(running ? t("settings.chatBridge.stopping") : t("settings.chatBridge.starting"));
     try {
-      if (chatBridgeRunning(bridge.id)) {
+      if (running) {
         await stopChatBridge(bridge.id);
-        chatBridgeSuccess.value = t("settings.chatBridge.stopped", { name: bridge.name });
+        await refresh();
+        showControlPlaneToast(t("settings.chatBridge.stopped", { name: bridge.name }), "success");
       } else {
         const started = await startSavedChatBridge({
-          persist: () => persistSelectedChatBridge(false),
+          persist: persistDraft ? () => persistSelectedChatBridge(false) : async () => true,
           start: () => startChatBridge(bridge.id),
           refresh,
         });
-        if (!started) return;
-        chatBridgeSuccess.value = t("settings.chatBridge.started", { name: bridge.name });
-        return;
+        if (!started) return false;
+        showControlPlaneToast(t("settings.chatBridge.started", { name: bridge.name }), "success");
       }
-      await refresh();
+      return true;
     } catch (error) {
       showControlPlaneToast(translateError(error));
+      return false;
     } finally {
+      loadingToast.dismiss();
       togglingChatBridge.value = false;
     }
   }
 
-  async function removeSelectedChatBridge() {
+  function toggleSelectedChatBridge() {
     const bridge = selectedChatBridge.value;
+    return bridge ? toggleChatBridge(bridge, true) : Promise.resolve(false);
+  }
+
+  async function removeChatBridge(bridge: ChatBridgeConfig) {
     if (!bridge || togglingChatBridge.value) {
-      return;
+      return false;
     }
     togglingChatBridge.value = true;
-    clearChatFeedback();
+    const loadingToast = showDelayedControlPlaneLoadingToast(t("settings.chatBridge.deleting"));
     try {
       await deleteChatBridge(bridge.id);
-      selectedChatBridgeId.value = "";
-      chatBridgeSuccess.value = t("settings.chatBridge.deleted", { name: bridge.name });
+      if (selectedChatBridgeId.value === bridge.id) selectedChatBridgeId.value = "";
       await refresh();
+      showControlPlaneToast(t("settings.chatBridge.deleted", { name: bridge.name }), "success");
+      return true;
     } catch (error) {
       showControlPlaneToast(translateError(error));
+      return false;
     } finally {
+      loadingToast.dismiss();
       togglingChatBridge.value = false;
     }
   }
@@ -257,19 +267,19 @@ export function useChatBridgeSettings({ bridges, errorText, gatewayStatus, refre
   return {
     chatAllowedUsersText,
     chatBridgeBusy,
+    chatBridgeStatus,
     chatBridgeDotClass,
     chatBridgeRunning,
     chatBridgeRuntimeLine,
-    chatBridgeSuccess,
+    chatDraftDirty,
     chatChannelLabel,
     chatChannels,
     chatForm,
     chatTokenPlaceholder,
-    clearChatFeedback,
     createBridge,
     creatingChatBridge,
     orderedChatBridges,
-    removeSelectedChatBridge,
+    removeChatBridge,
     saveSelectedChatBridge,
     savingChatBridge,
     selectChatBridge,
@@ -277,7 +287,12 @@ export function useChatBridgeSettings({ bridges, errorText, gatewayStatus, refre
     selectedChatBridgeId,
     selectedChatStatus,
     toggleSelectedChatBridge,
+    toggleChatBridge,
   };
+
+  function serializeChatDraft() {
+    return JSON.stringify({ form: chatForm.value, allowedUsers: chatAllowedUsersText.value });
+  }
 }
 
 function parseAllowedUsers(value: string) {

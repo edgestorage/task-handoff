@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { nodeAgentInstallCommand, normalizeControlPlaneBaseUrl } from "../src/apps/control-plane/settings/nodeAgentInstallCommand.ts";
+import { nodeAgentConnectCommand, nodeAgentInstallCommand, normalizeControlPlaneBaseUrl } from "../src/apps/control-plane/settings/nodeAgentInstallCommand.ts";
 
 test("node-agent install command uses one control-plane URL and the one-time token", () => {
   const command = nodeAgentInstallCommand({
@@ -36,4 +36,15 @@ test("node-agent install command removes browser query and fragment state before
   assert.match(command, /curl -fsSL 'https:\/\/control\.example\.com\/base\/install-node-agent\.sh'/);
   assert.match(command, /--control-plane 'https:\/\/control\.example\.com\/base'/);
   assert.doesNotMatch(command, /source=settings|#nodes/);
+});
+
+test("existing node-agent command configures the connection without reinstalling", () => {
+  const command = nodeAgentConnectCommand({
+    controlPlaneUrl: "https://control.example.com/",
+    joinToken: "join_secret",
+  });
+  assert.match(command, /^sudo task-handoff-node-agent connect/);
+  assert.match(command, /--control-plane 'https:\/\/control\.example\.com'/);
+  assert.match(command, /--join-token 'join_secret'/);
+  assert.doesNotMatch(command, /install-node-agent|npm-package/);
 });

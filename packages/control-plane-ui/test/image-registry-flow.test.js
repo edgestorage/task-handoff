@@ -197,13 +197,26 @@ test("Docker runtime creation guidance follows the selected node platform", () =
 
 test("image settings use registry creation and server-owned deletion conflicts", () => {
   const settings = read("src/apps/control-plane/settings/useImageSettings.ts");
-  const modal = read("src/apps/control-plane/settings/SettingsModal.vue");
+  const section = read("src/apps/control-plane/settings/ImageSettingsSection.vue");
   assert.match(settings, /reference: settingsImage\.reference\.trim\(\)/);
   assert.match(settings, /pullPolicy: "if-not-present"/);
   assert.match(settings, /await deleteImage\(image\.id\)/);
   assert.doesNotMatch(settings, /imageInUse/);
-  assert.match(modal, /useNodeImageAvailabilityQuery\(\(\) => imageCatalogNodeId\.value\)/);
-  assert.match(modal, /settings\.imageRegistry\.reference/);
+  assert.doesNotMatch(settings, /window\.confirm/);
+  assert.match(section, /useNodeImageAvailabilityQuery\(nodeId\)/);
+  assert.match(section, /settings\.imageRegistry\.reference/);
+  assert.match(section, /class="image-toolbar"/);
+  assert.match(section, /class="image-directory"/);
+  assert.match(section, /<AlertDialog :open="Boolean\(deleteTarget\)"/);
+});
+
+test("environment templates use the shared filtered directory pattern", () => {
+  const section = read("src/apps/control-plane/settings/EnvironmentTemplatesSettings.vue");
+  assert.match(section, /class="environment-template-toolbar"/);
+  assert.match(section, /class="environment-template-directory"/);
+  assert.match(section, /v-for="template in filteredTemplates"/);
+  assert.match(section, /<DropdownMenu>[\s\S]*<DropdownMenuContent align="end"/);
+  assert.match(section, /<AlertDialog :open="Boolean\(deleteTarget\)"/);
 });
 
 test("instance list, board, and detail expose image failure retry", () => {
@@ -214,6 +227,9 @@ test("instance list, board, and detail expose image failure retry", () => {
   ]) {
     const source = read(file);
     assert.match(source, /imageProvisioning/);
-    assert.match(source, /retry-image/);
   }
+  assert.match(read("src/apps/control-plane/instance-list/InstanceList.vue"), /<InstanceActionMenuItems/);
+  assert.match(read("src/apps/control-plane/instance-list/InstanceActionMenuItems.vue"), /retry-image/);
+  assert.match(read("src/apps/control-plane/board/InstanceBoardView.vue"), /retry-image/);
+  assert.match(read("src/apps/control-plane/instance-detail/InstanceDetail.vue"), /retry-image/);
 });

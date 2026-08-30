@@ -60,6 +60,7 @@ test("node copy payload carries immutable hash-addressed content", () => {
 test("model assignments contain only hashes and no credentials", () => {
   const assignment = NodeModelAssignmentSchema.parse({ instanceId: "inst_1", codexModelHash: id, updatedAt: timestamp });
   assert.equal(assignment.codexModelHash, id);
+  assert.deepEqual(assignment.modelEntityIds, [id]);
   assert.equal(NodeModelAssignmentSchema.safeParse({ ...assignment, key: "leaked" }).success, false);
   assert.equal(UpdateNodeModelAssignmentSchema.safeParse({
     modelSelection: { codexModelHash: id }, codexModelHash: id, env: { OPENAI_API_KEY: "leaked" },

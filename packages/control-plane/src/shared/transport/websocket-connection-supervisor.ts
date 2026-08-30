@@ -8,6 +8,7 @@ export type WebSocketConnectionSupervisorOptions = {
   handshakeTimeoutMs?: number;
   heartbeatIntervalMs?: number;
   heartbeatTimeoutMs?: number;
+  heartbeatMissThreshold?: number;
   stableThresholdMs?: number;
   now?: () => number;
   setTimeoutFn?: typeof setTimeout;
@@ -20,6 +21,14 @@ export type WebSocketConnectionSupervisorOptions = {
 
 function positive(value: number | undefined, fallback: number) {
   return Number.isFinite(value) && Number(value) > 0 ? Number(value) : fallback;
+}
+
+const RECENT_PING_RTT_SAMPLE_LIMIT = 20;
+
+function percentile95(values: number[]) {
+  if (!values.length) return undefined;
+  const sorted = [...values].sort((left, right) => left - right);
+  return sorted[Math.ceil(sorted.length * 0.95) - 1];
 }
 
 function unref(timer: Timer) {
@@ -36,6 +45,7 @@ export class WebSocketConnectionSupervisor {
   private readonly handshakeTimeoutMs: number;
   private readonly heartbeatIntervalMs: number;
   private readonly heartbeatTimeoutMs: number;
+  private readonly heartbeatMissThreshold: number;
   private readonly stableThresholdMs: number;
   private readonly now: () => number;
   private readonly setTimeoutFn: typeof setTimeout;
@@ -49,17 +59,21 @@ export class WebSocketConnectionSupervisor {
   private heartbeatTimer?: Timer;
   private stableTimer?: Timer;
   private awaitingPongSince?: number;
+  private consecutiveHeartbeatMisses = 0;
   private stable = false;
   private stopped = false;
   private currentPhase: WebSocketConnectionPhase = "connecting";
   private lastActivityAt?: number;
   private lastPongAt?: number;
+  private pingRttMs?: number;
+  private readonly recentPingRttMs: number[] = [];
 
   constructor(options: WebSocketConnectionSupervisorOptions) {
     this.connectTimeoutMs = positive(options.connectTimeoutMs, 10_000);
     this.handshakeTimeoutMs = positive(options.handshakeTimeoutMs, 10_000);
     this.heartbeatIntervalMs = positive(options.heartbeatIntervalMs, 25_000);
-    this.heartbeatTimeoutMs = positive(options.heartbeatTimeoutMs, 10_000);
+    this.heartbeatTimeoutMs = positive(options.heartbeatTimeoutMs, 15_000);
+    this.heartbeatMissThreshold = Math.max(1, Math.floor(positive(options.heartbeatMissThreshold, 2)));
     this.stableThresholdMs = positive(options.stableThresholdMs, 60_000);
     this.now = options.now || Date.now;
     this.setTimeoutFn = options.setTimeoutFn || setTimeout;
@@ -105,13 +119,25 @@ export class WebSocketConnectionSupervisor {
   }
 
   activity() {
-    if (!this.stopped) this.lastActivityAt = this.now();
+    if (this.stopped) return;
+    this.lastActivityAt = this.now();
+    this.awaitingPongSince = undefined;
+    this.consecutiveHeartbeatMisses = 0;
+    if (this.currentPhase === "handshaking" || this.currentPhase === "healthy") {
+      this.scheduleHeartbeat(this.heartbeatIntervalMs);
+    }
   }
 
   pong() {
     if (this.stopped) return;
     const timestamp = this.now();
+    if (this.awaitingPongSince !== undefined) {
+      this.pingRttMs = Math.max(0, timestamp - this.awaitingPongSince);
+      this.recentPingRttMs.push(this.pingRttMs);
+      if (this.recentPingRttMs.length > RECENT_PING_RTT_SAMPLE_LIMIT) this.recentPingRttMs.shift();
+    }
     this.awaitingPongSince = undefined;
+    this.consecutiveHeartbeatMisses = 0;
     this.lastPongAt = timestamp;
     this.lastActivityAt = timestamp;
     this.scheduleHeartbeat(this.heartbeatIntervalMs);
@@ -129,8 +155,11 @@ export class WebSocketConnectionSupervisor {
     return {
       phase: this.currentPhase,
       stable: this.stable,
+      ...(this.pingRttMs === undefined ? {} : { pingRttMs: this.pingRttMs }),
+      ...(this.recentPingRttMs.length ? { pingRttP95Ms: percentile95(this.recentPingRttMs) } : {}),
       ...(this.lastActivityAt === undefined ? {} : { lastActivityAt: new Date(this.lastActivityAt).toISOString() }),
       ...(this.lastPongAt === undefined ? {} : { lastPongAt: new Date(this.lastPongAt).toISOString() }),
+      ...(this.consecutiveHeartbeatMisses ? { consecutiveHeartbeatMisses: this.consecutiveHeartbeatMisses } : {}),
     };
   }
 
@@ -143,21 +172,35 @@ export class WebSocketConnectionSupervisor {
       if (this.awaitingPongSince !== undefined) {
         const elapsed = Math.max(0, this.now() - this.awaitingPongSince);
         if (elapsed >= this.heartbeatTimeoutMs) {
-          this.timeout("heartbeat");
+          this.consecutiveHeartbeatMisses += 1;
+          this.awaitingPongSince = undefined;
+          if (this.consecutiveHeartbeatMisses >= this.heartbeatMissThreshold) {
+            this.timeout("heartbeat");
+            return;
+          }
+          this.sendHeartbeatProbe();
           return;
         }
         this.scheduleHeartbeat(this.heartbeatTimeoutMs - elapsed);
         return;
       }
-      this.awaitingPongSince = this.now();
-      try {
-        this.ping();
-      } catch {
+      this.sendHeartbeatProbe();
+    }, delay));
+  }
+
+  private sendHeartbeatProbe() {
+    this.awaitingPongSince = this.now();
+    try {
+      this.ping();
+    } catch {
+      this.consecutiveHeartbeatMisses += 1;
+      this.awaitingPongSince = undefined;
+      if (this.consecutiveHeartbeatMisses >= this.heartbeatMissThreshold) {
         this.timeout("heartbeat");
         return;
       }
-      this.scheduleHeartbeat(this.heartbeatTimeoutMs);
-    }, delay));
+    }
+    this.scheduleHeartbeat(this.heartbeatTimeoutMs);
   }
 
   private timeout(kind: WebSocketConnectionTimeout) {

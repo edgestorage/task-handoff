@@ -6,6 +6,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { PassThrough } = require("node:stream");
 const { EventEmitter } = require("node:events");
+const { spawnSync } = require("node:child_process");
 const ts = require("typescript");
 const test = require("node:test");
 const WebSocket = require("ws");
@@ -43,6 +44,11 @@ const {
   scanRecentTranscripts,
 } = require("../packages/ai-session-runtime/src/ai-session-registry.ts");
 const {
+  reduceAiSessionRealtime,
+  reduceAiSessionSnapshot,
+} = require("../packages/ai-session-runtime/src/ai-session/state-reducer.ts");
+const { normalizeTurns } = require("../packages/ai-session-runtime/src/ai-session-turns.ts");
+const {
   CodexToolActivityTracker,
   CodexSubAgentTracker,
   codexApprovalRequest,
@@ -59,14 +65,14 @@ const { CodexTimelineStore } = require("../packages/ai-session-runtime/src/codex
 const { CodexAppServerConnectionManager } = require("../packages/ai-session-runtime/src/codex-app-server/client/connection-manager.ts");
 const { CodexAppServerSessionDiscovery } = require("../packages/ai-session-runtime/src/codex-app-server/session/discovery.ts");
 const { ClaudeControlSockSessionBridge } = require("../packages/ai-session-runtime/src/claude-control-sock.ts");
-const { AiSessionEventType, AiSessionSummarySchema } = require("../packages/protocol/src/ai-sessions.ts");
+const { AiSessionActionResultSchema, AiSessionEventType, AiSessionHistoryItemSchema, AiSessionReasoningEffortSchema, AiSessionSummarySchema } = require("../packages/protocol/src/ai-sessions.ts");
 const { APP_SESSION_DELTA_RETENTION_MS } = require("../packages/protocol/src/app-sessions.ts");
 const { summarizeTranscriptLine } = require("../packages/core/src/core/transcript.ts");
 const { summarizeThreadTurns } = require("../packages/ai-session-runtime/src/codex-app-server-protocol.ts");
 const { AppRuntimeManager } = require("../packages/app-runtime/src/runtime.ts");
 const { CodexAppServerConnectionProxy } = require("../packages/app-runtime/src/codex-app-server-proxy.ts");
 const { AiSessionRefreshScheduler, createWebApp } = require("../packages/controlled-instance/src/web/server.ts");
-const { applyManagedCodexModelConfig } = require("../packages/controlled-instance/src/web/codex-model-config.ts");
+const { applyManagedCodexModelConfig, codexProviderId } = require("../packages/controlled-instance/src/web/codex-model-config.ts");
 const { applyManagedClaudeModelConfig } = require("../packages/controlled-instance/src/web/claude-model-config.ts");
 
 test("codex approval parser preserves the request reason", () => {
@@ -781,7 +787,8 @@ test("ai session registry indexes provider sessions without rescanning on every 
 
   assert.equal(registry.getByProviderSessionId("codex", "thread-indexed")?.id, session.id);
   fs.rmSync(registry.sessionPath(session.id));
-  assert.equal(registry.getByProviderSessionId("codex", "thread-indexed"), undefined);
+  assert.equal(registry.getByProviderSessionId("codex", "thread-indexed")?.id, session.id);
+  assert.equal(createAiSessionRegistry({ dir }).getByProviderSessionId("codex", "thread-indexed"), undefined);
 
   const persisted = registry.start({ agent: "codex", providerSessionId: "thread-reloaded" });
   const reloaded = createAiSessionRegistry({ dir });
@@ -821,7 +828,7 @@ test("ai session registry migrates unknown sub-agent fields and caps after dedup
   persisted.subAgents = subAgents;
   fs.writeFileSync(registry.sessionPath(session.id), JSON.stringify(persisted));
 
-  const restored = registry.get(session.id);
+  const restored = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") }).get(session.id);
   assert.equal(restored?.subAgents.length, 50);
   assert.equal(restored?.subAgents.find((agent) => agent.threadId === "thread-00")?.status, "running");
   assert.equal(restored?.subAgents.some((agent) => "futureField" in agent), false);
@@ -884,6 +891,27 @@ test("ai session registry atomically replaces and explicitly clears tool activit
   stop();
 });
 
+test("ai session realtime activity accepts protocol-valid sessions without turns", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-optional-turns-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const created = registry.start({ agent: "codex", providerSessionId: "thread-optional-turns" });
+  const current = { ...created, turns: undefined };
+
+  const updated = reduceAiSessionRealtime(current, {
+    type: "realtime",
+    kind: "tool-activity",
+    source: "control",
+    sourcePriority: 90,
+    sessionId: current.id,
+    observedAt: "2026-08-22T00:00:00.000Z",
+    currentTool: null,
+    toolCallsSinceLastMessage: 1,
+  });
+
+  assert.equal(updated.turns, undefined);
+  assert.equal(updated.toolCallsSinceLastMessage, 1);
+});
+
 test("ai session registry keeps sub-agent state independent from tool activity and responses", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-sub-agents-"));
   const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
@@ -928,6 +956,28 @@ test("ai session registry clears stale current tools at turn completion without 
   });
   assert.equal(completed.currentTool, undefined);
   assert.equal(completed.toolCallsSinceLastMessage, 4);
+});
+
+test("ai session realtime completion records a duration endpoint without observedAt", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-completion-time-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const session = registry.start({ agent: "codex", providerSessionId: "thread-completion-time" });
+  const started = registry.applyRealtimeEvent(session.id, {
+    kind: "turn-started",
+    activeTurnId: "turn-completion-time",
+    providerTurnId: "provider-completion-time",
+    observedAt: "2026-08-28T12:00:00.000Z",
+  });
+  const completed = registry.applyRealtimeEvent(started.id, {
+    kind: "turn-completed",
+    activeTurnId: "turn-completion-time",
+    status: "idle",
+    text: "Done",
+  });
+
+  assert.equal(completed.completedAt, completed.updatedAt);
+  assert.equal(completed.turns.at(-1)?.status, "completed");
+  assert.equal(completed.turns.at(-1)?.completedAt, completed.updatedAt);
 });
 
 test("ai session registry resets tool activity at an assistant message boundary", () => {
@@ -984,6 +1034,23 @@ test("ai session registry migrates historical tool activity and ignores unknown 
   }
   assert.equal(warnings.some((message) => message.includes("futureSessionField")), true);
   assert.equal(warnings.some((message) => message.includes("historicalDetail")), true);
+});
+
+test("ai session registry keeps memory authoritative when persistence fails", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-atomic-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const session = registry.start({ agent: "codex", providerSessionId: "thread-atomic", title: "Before" });
+  const sessionPath = registry.sessionPath(session.id);
+  fs.rmSync(sessionPath);
+  fs.mkdirSync(sessionPath);
+
+  assert.throws(() => registry.applyAdapterSnapshot({
+    agent: "codex",
+    providerSessionId: "thread-atomic",
+    title: "After",
+    status: "running",
+  }));
+  assert.equal(registry.get(session.id)?.title, "Before");
 });
 
 test("ai session registry starts explicit turns without carrying over previous responses", () => {
@@ -1179,7 +1246,41 @@ test("codex app-server thread summary preserves context-compaction-only turns", 
   }]);
 });
 
-test("codex app-server thread summary does not revive an older turn error", () => {
+test("codex app-server thread summary preserves authoritative Turn timing", () => {
+  const summary = summarizeThreadTurns({
+    id: "thread_timing",
+    turns: [{
+      id: "turn_timing",
+      status: "completed",
+      startedAt: 1_756_800_000,
+      completedAt: 1_756_800_007,
+      durationMs: 7_000,
+      items: [{ type: "userMessage", content: [{ type: "text", text: "timed prompt" }] }],
+    }],
+  });
+
+  assert.equal(summary.turns[0].startedAt, "2025-09-02T08:00:00.000Z");
+  assert.equal(summary.turns[0].completedAt, "2025-09-02T08:00:07.000Z");
+  assert.equal(summary.turns[0].updatedAt, "2025-09-02T08:00:07.000Z");
+});
+
+test("codex app-server thread summary derives completion time from duration when needed", () => {
+  const summary = summarizeThreadTurns({
+    id: "thread_duration",
+    turns: [{
+      id: "turn_duration",
+      status: "completed",
+      startedAt: 1_756_800_000,
+      completedAt: null,
+      durationMs: 2_500,
+      items: [{ type: "userMessage", content: [{ type: "text", text: "duration prompt" }] }],
+    }],
+  });
+
+  assert.equal(summary.turns[0].completedAt, "2025-09-02T08:00:02.500Z");
+});
+
+test("codex app-server thread summary keeps turn errors out of assistant messages", () => {
   const summary = summarizeThreadTurns({
     id: "thread_recovered",
     turns: [
@@ -1202,7 +1303,8 @@ test("codex app-server thread summary does not revive an older turn error", () =
 
   assert.equal(summary.error, undefined);
   assert.equal(summary.latestTurnStatus, "completed");
-  assert.equal(summary.turns[0].lastMessage, "Temporary provider failure.");
+  assert.equal(summary.turns[0].lastMessage, undefined);
+  assert.equal(summary.turns[0].summary, undefined);
   assert.equal(summary.turns[1].lastMessage, "Recovered response.");
 });
 
@@ -1285,6 +1387,83 @@ test("ai session registry rebinds orphaned app sessions without creating duplica
   assert.equal(registry.snapshot().sessions.length, 1);
 });
 
+test("ai session registry ignores observation-only adapter snapshots", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-observation-noop-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  let changes = 0;
+  registry.onChange(() => {
+    changes += 1;
+  });
+  const input = {
+    agent: "codex",
+    providerSessionId: "thread-observation-noop",
+    turns: [{
+      id: "turn_1",
+      providerTurnId: "turn_1",
+      userPrompt: "Keep the snapshot stable",
+      status: "completed",
+      phase: "unknown",
+      summary: "Done",
+      lastMessage: "Done",
+      lastMessageItemId: "item_done",
+      revision: 1,
+      updatedAt: "2026-08-21T14:00:00.000Z",
+    }],
+    status: "idle",
+    phase: "unknown",
+    summary: "Done",
+    lastMessage: "Done",
+    lastMessageItemId: "item_done",
+    replaceActivity: true,
+  };
+
+  const first = registry.applyAdapterSnapshot({ ...input, observedAt: "2026-08-21T14:00:00.000Z" });
+  const changesAfterFirstSnapshot = changes;
+  const currentBeforeRepeatedSnapshot = registry.get(first.id);
+  const directRepeated = reduceAiSessionSnapshot(currentBeforeRepeatedSnapshot, {
+    ...input,
+    type: "snapshot",
+    source: "control",
+    sourcePriority: 90,
+    sessionId: first.id,
+    observedAt: "2026-08-21T14:00:30.000Z",
+  });
+  assert.equal(directRepeated, currentBeforeRepeatedSnapshot);
+  assert.equal(reduceAiSessionSnapshot(currentBeforeRepeatedSnapshot, {
+    ...input,
+    type: "snapshot",
+    source: "control",
+    sourcePriority: 90,
+    sessionId: first.id,
+    observedAt: first.updatedAt,
+  }), currentBeforeRepeatedSnapshot);
+  const repeated = registry.applyAdapterSnapshot({
+    ...input,
+    turns: input.turns.map((turn) => ({ ...turn })),
+    observedAt: "2026-08-21T14:00:30.000Z",
+  });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(repeated)), JSON.parse(JSON.stringify(first)));
+  assert.equal(repeated.updatedAt, "2026-08-21T14:00:00.000Z");
+  assert.equal(registry.get(first.id).lastMessageItemId, "item_done");
+  assert.equal(changes, changesAfterFirstSnapshot);
+
+  const sameTimestamp = registry.applyAdapterSnapshot({ ...input, observedAt: first.updatedAt });
+  assert.deepEqual(JSON.parse(JSON.stringify(sameTimestamp)), JSON.parse(JSON.stringify(first)));
+  assert.equal(changes, changesAfterFirstSnapshot);
+
+  const changed = registry.applyAdapterSnapshot({
+    ...input,
+    turns: [{ ...input.turns[0], summary: "Actually changed", lastMessage: "Actually changed", revision: 2 }],
+    summary: "Actually changed",
+    lastMessage: "Actually changed",
+    observedAt: "2026-08-21T14:01:00.000Z",
+  });
+  assert.equal(changed.updatedAt, "2026-08-21T14:01:00.000Z");
+  assert.equal(changed.lastMessage, "Actually changed");
+  assert.equal(changes, changesAfterFirstSnapshot + 1);
+});
+
 test("ai session registry snapshots expose one canonical session per app identity", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-canonical-"));
   const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
@@ -1345,13 +1524,139 @@ test("ai session registry includes user prompt in snapshots", () => {
   const snapshot = registry.snapshot();
   assert.equal(snapshot.sessions[0].userPrompt, "Design the AI session board");
   assert.equal(snapshot.sessions[0].lastMessage, "AI board list updated");
-  assert.equal(snapshot.sessions[0].turns.length, 1);
-  assert.match(snapshot.sessions[0].turns[0].id, /^turn_/);
-  assert.equal(snapshot.sessions[0].turns[0].revision, 1);
-  assert.equal(snapshot.sessions[0].turns[0].userPrompt, "Design the AI session board");
-  assert.equal(snapshot.sessions[0].turns[0].summary, "AI board list updated");
-  assert.equal(snapshot.sessions[0].turns[0].lastMessage, "AI board list updated");
-  assert.equal(typeof snapshot.sessions[0].turns[0].updatedAt, "string");
+  assert.equal(snapshot.sessions[0].turns, undefined);
+  assert.equal(snapshot.sessions[0].turnCount, 1);
+  assert.equal(typeof snapshot.sessions[0].lastUserMessageAt, "string");
+});
+
+test("ai session aggregate snapshots preserve session model selection", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-model-summary-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const modelSelection = {
+    modelEntityId: "mdl_deepseek",
+    modelName: "deepseek-v4-flash",
+  };
+  registry.start({
+    agent: "codex",
+    creationSource: "ai-session",
+    providerSessionId: "thread-model-summary",
+    modelSelection,
+  });
+
+  assert.deepEqual(registry.snapshot().sessions[0].modelSelection, modelSelection);
+  assert.deepEqual(registry.boundSnapshot([]).sessions[0].modelSelection, modelSelection);
+});
+
+test("ai session aggregate snapshots separate turns from list summaries", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-compact-summary-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const turns = [1, 2, 3].map((revision) => ({
+    id: `turn_${revision}`,
+    userPrompt: `Prompt ${revision}`,
+    status: "completed",
+    phase: "unknown",
+    summary: `Done ${revision}`,
+    lastMessage: `Done ${revision}`,
+    revision,
+    updatedAt: `2026-08-21T14:00:0${revision}.000Z`,
+  }));
+  const session = registry.applyAdapterSnapshot({
+    agent: "codex",
+    providerSessionId: "thread-compact-summary",
+    turns,
+    status: "idle",
+    phase: "unknown",
+    summary: "Done 3",
+    lastMessage: "Done 3",
+    observedAt: "2026-08-21T14:00:03.000Z",
+    replaceActivity: true,
+  });
+
+  assert.deepEqual(registry.get(session.id)?.turns?.map((turn) => turn.id), ["turn_1", "turn_2", "turn_3"]);
+  const firstSummary = registry.snapshot().sessions[0];
+  assert.equal(firstSummary.turns, undefined);
+  assert.equal(firstSummary.turnCount, 3);
+  assert.equal(typeof firstSummary.detailRevision, "string");
+  assert.equal(typeof firstSummary.turnsRevision, "string");
+  assert.equal(firstSummary.latestTurnRef?.id, "turn_3");
+
+  registry.applyAdapterSnapshot({
+    agent: "codex",
+    providerSessionId: "thread-compact-summary",
+    turns: turns.map((turn, index) => index === 2 ? { ...turn, lastMessage: "A newer complete response" } : turn),
+    status: "idle",
+    phase: "unknown",
+    summary: "Done 3",
+    lastMessage: "A newer complete response",
+    observedAt: "2026-08-21T14:00:04.000Z",
+    replaceActivity: true,
+  });
+  const updatedSummary = registry.snapshot().sessions[0];
+  assert.equal(updatedSummary.detailRevision, firstSummary.detailRevision);
+  assert.equal(updatedSummary.turnsRevision, firstSummary.turnsRevision);
+  assert.notEqual(updatedSummary.latestTurnRef?.bodyRevision, firstSummary.latestTurnRef?.bodyRevision);
+});
+
+test("ai session list payload stays bounded as turn history grows", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-summary-budget-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const longText = "response ".repeat(8_000);
+  const turns = Array.from({ length: 50 }, (_, index) => ({
+    id: `turn_${index}`,
+    userPrompt: `Prompt ${index}`,
+    status: "completed",
+    lastMessage: longText,
+    revision: index,
+    updatedAt: new Date(Date.UTC(2026, 7, 21, 14, 0, index)).toISOString(),
+  }));
+  const session = registry.applyAdapterSnapshot({
+    agent: "codex",
+    providerSessionId: "thread-summary-budget",
+    turns,
+    status: "idle",
+    lastMessage: longText,
+    observedAt: "2026-08-21T14:01:00.000Z",
+    replaceActivity: true,
+  });
+  const committed = registry.get(session.id);
+  registry.restoreAuthority({
+    ...committed,
+    cwd: `/${"d".repeat(4_095)}`,
+    appBindingKeys: Array.from({ length: 20 }, (_, index) => `binding-${index}-${"x".repeat(220)}`),
+    userPrompt: longText,
+    summary: longText.slice(0, 1_000),
+    error: longText.slice(0, 4_000),
+    currentTool: { id: "tool-id", name: "exec", inputPreview: longText.slice(0, 500), startedAt: committed.updatedAt },
+    subAgents: Array.from({ length: 50 }, (_, index) => ({
+      threadId: `sub-agent-${index}`,
+      status: "running",
+      message: longText.slice(0, 1_000),
+      updatedAt: committed.updatedAt,
+    })),
+    queue: {
+      revision: 100,
+      pendingCount: 100,
+      items: Array.from({ length: 100 }, (_, index) => ({
+        id: `queue-${index}`,
+        message: longText.slice(0, 20_000),
+        attachments: [],
+        references: [],
+        status: "queued",
+        createdAt: committed.updatedAt,
+        updatedAt: committed.updatedAt,
+      })),
+    },
+  });
+
+  assert.equal(registry.get(session.id)?.turns?.length, 50);
+  const summary = registry.snapshot().sessions[0];
+  assert.equal(summary.turns, undefined);
+  assert.equal(summary.turnCount, 50);
+  assert.equal(summary.subAgentCount, 50);
+  assert.equal(summary.subAgents.length, 0);
+  assert.deepEqual(summary.queue, { revision: 100, pendingCount: 100, items: [] });
+  assert.ok(Buffer.byteLength(JSON.stringify(summary)) <= 4 * 1024);
+  assert.ok(Buffer.byteLength(JSON.stringify({ sessions: Array.from({ length: 20 }, () => summary) })) <= 256 * 1024);
 });
 
 test("ai session registry derives the top-level prompt from canonical turns", () => {
@@ -1463,6 +1768,24 @@ test("ai session registry emits change events for realtime publishing", () => {
   assert.deepEqual(changes, ["write", "write", "write"]);
 });
 
+test("ai session registry publishes one final authority change per batch", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-batch-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const session = registry.start({ agent: "codex", providerSessionId: "thread-batch", userPrompt: "Start" });
+  const changes = [];
+  const unsubscribe = registry.onChange((reason) => changes.push(reason));
+
+  await registry.batchChanges(() => {
+    registry.progress(session.id, "Working", "assistant");
+    registry.complete(session.id, "Done");
+  });
+
+  unsubscribe();
+  assert.deepEqual(changes, ["write"]);
+  assert.equal(registry.get(session.id)?.lastMessage, "Done");
+  assert.equal(registry.get(session.id)?.status, "idle");
+});
+
 test("ai session controller rejects approvals without structured provider support", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-control-"));
   const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
@@ -1513,6 +1836,30 @@ test("ai session summaries disable interrupt for idle sessions even when provide
   assert.equal(session.status, "idle");
   assert.equal(session.actions.interrupt, false);
   assert.equal(session.actions.send, true);
+});
+
+test("ai session realtime start enables interrupt after an idle adapter snapshot", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-start-actions-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const idle = registry.applyAdapterSnapshot({
+    agent: "codex",
+    appId: "codex-app-server",
+    providerSessionId: "thread-start-actions",
+    status: "idle",
+    phase: "unknown",
+    actions: { send: true, interrupt: false, approval: false },
+  });
+
+  registry.applyRealtimeEvent(idle.id, {
+    kind: "send-ack",
+    activeTurnId: "turn-start-actions",
+    userPrompt: "continue",
+    source: "control",
+  });
+
+  const session = registry.snapshot().sessions.find((candidate) => candidate.id === idle.id);
+  assert.equal(session.status, "running");
+  assert.equal(session.actions.interrupt, true);
 });
 
 test("ai session controller rejects interrupt for idle sessions", async () => {
@@ -1636,6 +1983,121 @@ test("ai session controller can steer queued messages into active turns", async 
   assert.deepEqual(registry.get(session.id).queue.items, []);
 });
 
+test("AI session queued image attachments are projected before steer and automatic dequeue", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-queue-attachment-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const controller = new AiSessionController(registry);
+  const dispatchedAttachments = [];
+  const image = {
+    id: "image-1",
+    kind: "image",
+    name: "capture.png",
+    mime: "image/png",
+    size: 3,
+    source: { type: "inline", encoding: "base64", data: "cG5n" },
+  };
+  controller.register({
+    agent: "codex",
+    async startMessage(current, input) {
+      dispatchedAttachments.push(input.userMessageAttachments);
+      return AiSessionActionResultSchema.parse({
+        session: {
+          ...current,
+          turns: [{
+            id: "turn-next",
+            status: "running",
+            phase: "thinking",
+            revision: 1,
+            startedAt: current.updatedAt,
+            updatedAt: current.updatedAt,
+            userMessages: [{ id: input.messageId || "message-next", text: input.message, attachments: input.userMessageAttachments }],
+          }],
+        },
+        provider: "codex",
+        action: "send",
+        turnId: "turn-next",
+      });
+    },
+    async steerMessage(current, input) {
+      dispatchedAttachments.push(input.userMessageAttachments);
+      const turnId = current.activeTurnId || "turn-running";
+      return AiSessionActionResultSchema.parse({
+        session: {
+          ...current,
+          turns: [{
+            id: turnId,
+            status: "running",
+            phase: "thinking",
+            revision: 1,
+            startedAt: current.updatedAt,
+            updatedAt: current.updatedAt,
+            userMessages: [{ id: input.messageId || "message-steer", text: input.message, attachments: input.userMessageAttachments }],
+          }],
+        },
+        provider: "codex",
+        action: "steer",
+        turnId,
+      });
+    },
+    async interrupt(current) {
+      return { session: current, provider: "codex", action: "interrupt" };
+    },
+  });
+
+  const steering = registry.start({ agent: "codex", activeTurnId: "turn-running", status: "running", phase: "thinking" });
+  const queuedSteer = registry.enqueueMessage(steering.id, "Look at this", [image]);
+  const steerResult = await controller.steerQueuedMessage(steering.id, queuedSteer.item.id);
+  assert.doesNotThrow(() => AiSessionActionResultSchema.parse(steerResult));
+  assert.deepEqual(dispatchedAttachments[0], [{
+    id: image.id,
+    kind: image.kind,
+    name: image.name,
+    mime: image.mime,
+    size: image.size,
+    contentState: "available",
+  }]);
+
+  const automatic = registry.start({ agent: "codex", activeTurnId: "turn-busy", status: "running", phase: "thinking" });
+  registry.enqueueMessage(automatic.id, "Then this", [image]);
+  registry.complete(automatic.id, "Done");
+  const automaticResult = await controller.sendNextQueuedMessage(automatic.id);
+  assert.doesNotThrow(() => AiSessionActionResultSchema.parse(automaticResult));
+  assert.equal("sourceType" in dispatchedAttachments[1][0], false);
+});
+
+test("AI session Turn normalization removes internal attachment fields", () => {
+  const turns = normalizeTurns([{
+    id: "turn-polluted",
+    status: "running",
+    phase: "thinking",
+    revision: 1,
+    startedAt: "2026-08-26T00:00:00.000Z",
+    updatedAt: "2026-08-26T00:00:00.000Z",
+    userMessages: [{
+      id: "message-polluted",
+      text: "Look at this",
+      attachments: [{
+        id: "image-polluted",
+        kind: "image",
+        name: "capture.png",
+        mime: "image/png",
+        size: 3,
+        sourceType: "inline",
+        contentState: "available",
+      }],
+    }],
+  }]);
+
+  assert.deepEqual(turns[0].userMessages[0].attachments, [{
+    id: "image-polluted",
+    kind: "image",
+    name: "capture.png",
+    mime: "image/png",
+    size: 3,
+    contentState: "available",
+  }]);
+});
+
 test("AI session queue edits and reorders use an exact revisioned queued-message permutation", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-queue-order-"));
   const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
@@ -1668,7 +2130,7 @@ test("AI session queue edits and reorders use an exact revisioned queued-message
   assert.deepEqual(retried.queue.items.filter((item) => item.status === "queued").map((item) => item.id), [third.id, second.id, first.id]);
 });
 
-test("ai session registry does not truncate assistant responses", () => {
+test("ai session detail preserves full assistant responses while list summaries stay bounded", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-registry-"));
   const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
   const fullResponse = `${"A".repeat(5000)}\nfinal line`;
@@ -1680,15 +2142,18 @@ test("ai session registry does not truncate assistant responses", () => {
   });
   registry.progress(session.id, fullResponse, "assistant");
 
+  const detailSession = registry.get(session.id);
   const snapshotSession = registry.snapshot().sessions[0];
-  assert.equal(snapshotSession.lastMessage, fullResponse);
-  assert.equal(snapshotSession.lastMessage.endsWith("final line"), true);
-  assert.equal(snapshotSession.turns[0].lastMessage, fullResponse);
+  assert.equal(detailSession.lastMessage, fullResponse);
+  assert.equal(detailSession.turns[0].lastMessage, fullResponse);
+  assert.equal(snapshotSession.lastMessage.length <= 800, true);
+  assert.equal(snapshotSession.turns, undefined);
   assert.equal(snapshotSession.summary.endsWith("..."), true);
-  assert.equal(AiSessionSummarySchema.parse(snapshotSession).lastMessage, fullResponse);
+  assert.equal(AiSessionSummarySchema.parse(snapshotSession).lastMessage, snapshotSession.lastMessage);
 
   registry.complete(session.id, fullResponse);
-  assert.equal(registry.snapshot().sessions[0].lastMessage, fullResponse);
+  assert.equal(registry.get(session.id).lastMessage, fullResponse);
+  assert.equal(registry.snapshot().sessions[0].lastMessage.length <= 800, true);
 });
 
 test("ai session registry merges resumed claude app sessions by provider id", () => {
@@ -1789,7 +2254,7 @@ test("claude control sock bridge binds daemon jobs and controls by short id", as
   assert.equal(session.providerSessionId, "ac8eaf94-408d-43a2-a270-7e15821b5a47");
   assert.equal(session.providerMeta.short, "ac8eaf94");
   assert.equal(session.providerMeta.controlSock, "/tmp/control.sock");
-  assert.equal(registry.get(session.id).lastMessage, "Claude says hi");
+  assert.equal(registry.get(session.id).lastMessage, undefined);
 
   const beforeSend = registry.get(session.id);
   await bridge.sendMessage(session, { message: "continue" });
@@ -1815,7 +2280,7 @@ test("claude control sock bridge binds daemon jobs and controls by short id", as
   ]);
 });
 
-test("claude control sock bridge ignores startup chrome in stream tail", async () => {
+test("claude control sock bridge does not project raw stream tail as assistant messages", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-claude-startup-tail-"));
   const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
   const bridge = new ClaudeControlSockSessionBridge(registry, {
@@ -1874,7 +2339,7 @@ test("claude control sock bridge ignores startup chrome in stream tail", async (
   assert.equal(session.lastMessage, undefined);
 });
 
-test("claude control sock bridge strips two-byte escape controls from startup tail", async () => {
+test("claude control sock bridge does not project escaped stream tail as assistant messages", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-claude-esc78-tail-"));
   const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
   const bridge = new ClaudeControlSockSessionBridge(registry, {
@@ -1945,7 +2410,7 @@ test("claude control sock bridge strips two-byte escape controls from startup ta
   assert.deepEqual(session.turns, []);
 });
 
-test("claude control sock bridge ignores tui chrome and completed state becomes idle", async () => {
+test("claude control sock bridge does not project TUI tail and completed state becomes idle", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-claude-tui-chrome-"));
   const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
   const bridge = new ClaudeControlSockSessionBridge(registry, {
@@ -2392,7 +2857,7 @@ test("ai session registry backfills user prompt from scanned transcripts", () =>
   assert.equal(session.lastMessage, "Current progress");
 });
 
-test("ai session registry preserves full assistant text from scanned transcripts", () => {
+test("ai session detail preserves full assistant text from scanned transcripts", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-registry-"));
   const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
   const cwd = path.join(root, "repo");
@@ -2403,12 +2868,14 @@ test("ai session registry preserves full assistant text from scanned transcripts
     `${JSON.stringify({ type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: fullResponse }] } })}\n`,
   );
 
-  registry.createFromTranscript("codex", transcriptPath, { providerSessionId: "codex-session", cwd });
+  const created = registry.createFromTranscript("codex", transcriptPath, { providerSessionId: "codex-session", cwd });
 
-  const session = registry.snapshot().sessions[0];
-  assert.equal(session.lastMessage, fullResponse);
-  assert.equal(session.lastMessage.endsWith("not truncated"), true);
-  assert.equal(session.summary.endsWith("..."), true);
+  const detail = registry.get(created.id);
+  const summary = registry.snapshot().sessions[0];
+  assert.equal(detail.lastMessage, fullResponse);
+  assert.equal(detail.lastMessage.endsWith("not truncated"), true);
+  assert.equal(summary.lastMessage.length <= 800, true);
+  assert.equal(summary.summary.endsWith("..."), true);
 });
 
 test("ai session registry treats repeated transcript backfill turns as a snapshot", () => {
@@ -3130,7 +3597,7 @@ test("codex app server bridge repeated snapshots keep completed turns stable", a
     },
   ]);
   const first = registry.list()[0];
-  assert.equal(first.turns[0].revision, 1);
+  assert.ok(first.turns[0].revision >= 1);
   assert.equal(first.turns[0].summary.length, 1000);
   const firstTurn = { ...first.turns[0] };
 
@@ -3181,7 +3648,7 @@ test("codex app server bridge does not expose approval actions before the reques
   bridge.stop();
 });
 
-test("codex app server failed turns expose the turn error message", async () => {
+test("codex app server failed turns keep errors out of assistant messages", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-failed-turn-"));
   const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
   class FakeCodexAppServerClient extends EventEmitter {
@@ -3235,10 +3702,11 @@ test("codex app server failed turns expose the turn error message", async () => 
   const failed = registry.list()[0];
   assert.equal(failed.status, "failed");
   assert.equal(failed.error, "The model request failed.");
-  assert.equal(failed.lastMessage, "The model request failed.");
+  assert.equal(failed.lastMessage, undefined);
   assert.equal(failed.turns.at(-1).id, "turn_failed");
   assert.equal(failed.turns.at(-1).status, "failed");
-  assert.equal(failed.turns.at(-1).lastMessage, "The model request failed.");
+  assert.equal(failed.turns.at(-1).lastMessage, undefined);
+  assert.equal(failed.turns.at(-1).summary, undefined);
   assert.equal(failed.turns[0].lastMessage, "previous answer");
 });
 
@@ -3254,7 +3722,10 @@ test("codex app server waits for final turn failure before exposing retry errors
     stop() {}
   }
   const fake = new FakeCodexAppServerClient();
-  const bridge = new CodexAppServerSessionBridge(registry, fake);
+  const timelineItems = [];
+  const bridge = new CodexAppServerSessionBridge(registry, fake, {
+    onTimelineItem: (event) => timelineItems.push(event.item),
+  });
   await bridge.sync();
   const session = registry.list()[0];
   registry.applyRealtimeEvent(session.id, {
@@ -3273,6 +3744,38 @@ test("codex app server waits for final turn failure before exposing retry errors
   });
   assert.equal(registry.get(session.id).status, "running");
   assert.equal(registry.get(session.id).error, undefined);
+  assert.deepEqual(timelineItems.at(-1), {
+    id: "codex_retry:turn_retry_error",
+    turnId: "turn_retry_error",
+    type: "activity",
+    activityKind: "codexRetry",
+    title: "Codex retry",
+    status: "waiting",
+    durationMs: undefined,
+    summary: "Reconnecting... 1/5\n\nCodex error: responseStreamConnectionFailed (HTTP 502)",
+    input: undefined,
+    output: undefined,
+    paths: undefined,
+  });
+
+  fake.emit("event", {
+    type: "agent-message-delta",
+    threadId: "thread_retry_error",
+    turnId: "turn_retry_error",
+    itemId: "message_after_retry",
+    delta: "Recovered",
+  });
+  assert.equal(timelineItems.at(-1).id, "codex_retry:turn_retry_error");
+  assert.equal(timelineItems.at(-1).status, "completed");
+
+  fake.emit("event", {
+    type: "turn-error",
+    threadId: "thread_retry_error",
+    turnId: "turn_retry_error",
+    error: "Reconnecting... 2/5",
+    willRetry: true,
+  });
+  assert.equal(timelineItems.at(-1).status, "waiting");
 
   fake.emit("event", {
     type: "turn-error",
@@ -3292,6 +3795,12 @@ test("codex app server waits for final turn failure before exposing retry errors
   });
   assert.equal(registry.get(session.id).status, "failed");
   assert.equal(registry.get(session.id).error, "Model stream failed after 5 retries. Codex error: responseTooManyFailedAttempts (HTTP 502)");
+  assert.equal(registry.get(session.id).lastMessage, undefined);
+  assert.equal(registry.get(session.id).turns.at(-1).lastMessage, undefined);
+  assert.equal(registry.get(session.id).turns.at(-1).summary, undefined);
+  assert.equal(timelineItems.at(-1).id, "codex_retry:turn_retry_error");
+  assert.equal(timelineItems.at(-1).status, "completed");
+  assert.equal(timelineItems.at(-1).summary, "Reconnecting... 2/5");
 
   fake.emit("event", { type: "turn-started", threadId: "thread_retry_error", turnId: "turn_realtime_error" });
   assert.equal(registry.get(session.id).error, undefined);
@@ -3336,7 +3845,8 @@ test("codex failed thread snapshots restore the AI session error", async () => {
   assert.equal(failed.status, "failed");
   assert.equal(failed.error, "The restored model request failed. Provider remained unavailable. Codex error: httpConnectionFailed (HTTP 502)");
   assert.equal(failed.turns.at(-1).status, "failed");
-  assert.equal(failed.turns.at(-1).lastMessage, "The restored model request failed.\n\nProvider remained unavailable.\n\nCodex error: httpConnectionFailed (HTTP 502)");
+  assert.equal(failed.turns.at(-1).lastMessage, undefined);
+  assert.equal(failed.turns.at(-1).summary, undefined);
 });
 
 test("codex app server protocol parses failed turn error details", () => {
@@ -3359,6 +3869,29 @@ test("codex app server protocol parses failed turn error details", () => {
     turnId: "turn_failed",
     status: "failed",
     error: "The model request failed.\n\nHTTP 500 from provider.",
+  });
+});
+
+test("codex app server protocol preserves authoritative Turn event timing", () => {
+  assert.deepEqual(codexNotification("turn/started", {
+    threadId: "thread_timed",
+    turn: { id: "turn_timed", status: "inProgress", startedAt: 1_756_800_000 },
+  }), {
+    type: "turn-started",
+    threadId: "thread_timed",
+    turnId: "turn_timed",
+    observedAt: "2025-09-02T08:00:00.000Z",
+  });
+  assert.deepEqual(codexNotification("turn/completed", {
+    threadId: "thread_timed",
+    turn: { id: "turn_timed", status: "completed", completedAt: 1_756_800_007 },
+  }), {
+    type: "turn-completed",
+    threadId: "thread_timed",
+    turnId: "turn_timed",
+    status: "completed",
+    error: undefined,
+    observedAt: "2025-09-02T08:00:07.000Z",
   });
 });
 
@@ -4548,7 +5081,8 @@ test("claude control sock bridge ignores stopped app sessions and prunes undisco
   const sessions = registry.snapshot(10).sessions;
   assert.equal(sessions.length, 1);
   assert.equal(sessions[0].providerSessionId, "live-provider");
-  assert.equal(sessions[0].providerMeta.short, "cafebabe");
+  assert.equal(sessions[0].providerMeta, undefined);
+  assert.equal(registry.get(sessions[0].id).providerMeta.short, "cafebabe");
 });
 
 test("codex app server bridge controls turns through the ai session provider interface", async () => {
@@ -4634,8 +5168,20 @@ test("codex app server bridge controls turns through the ai session provider int
   );
   assert.equal(fake.steeredTurns.length, 1);
 
-  await bridge.interrupt(registry.get(session.id));
+  const interrupted = await bridge.interrupt(registry.get(session.id));
   assert.deepEqual(fake.interruptedTurns, [{ threadId: "thread_control", turnId: "turn_started_1" }]);
+  assert.equal(interrupted.session.status, "idle");
+  assert.equal(interrupted.session.activeTurnId, undefined);
+  assert.equal(registry.get(session.id).status, "idle");
+  assert.equal(registry.get(session.id).activeTurnId, undefined);
+  fake.emit("event", {
+    type: "turn-completed",
+    threadId: "thread_control",
+    turnId: "turn_started_1",
+    status: "interrupted",
+  });
+  assert.equal(registry.get(session.id).status, "idle");
+  assert.equal(registry.get(session.id).activeTurnId, undefined);
 
   registry.update(session.id, { activeTurnId: "stale_turn", status: "running", phase: "thinking" });
   const fallbackSent = await bridge.sendMessage(registry.get(session.id), { message: "stale follow up" });
@@ -4668,7 +5214,8 @@ test("codex app server bridge controls turns through the ai session provider int
     { threadId: "thread_control", turnId: "mismatched_turn" },
     { threadId: "thread_control", turnId: "actual_turn" },
   ]);
-  assert.equal(registry.get(session.id).activeTurnId, "actual_turn");
+  assert.equal(registry.get(session.id).status, "idle");
+  assert.equal(registry.get(session.id).activeTurnId, undefined);
 });
 
 test("codex permission modes map to authoritative app-server turn settings", async () => {
@@ -5203,8 +5750,7 @@ test("codex app server bridge resumes persisted AI sessions after an app-server 
     cwd: "/workspace",
     status: "idle",
   });
-  registry.put({
-    ...closing,
+  registry.patch(closing.id, {
     actions: { send: false, interrupt: false, approval: false, openApp: false, close: false },
   });
   class FakeCodexAppServerClient extends EventEmitter {
@@ -5822,6 +6368,7 @@ test("web app ai session read routes do not refresh discovery state", async () =
 	    TASK_HANDOFF_AI_SESSION_SCAN_INTERVAL_MS: "600000",
 	  });
 	  const appRuntime = {
+	    catalog: () => [],
 	    replaceManagedEnvironment: () => undefined,
 	    listSessions: () => [{ id: "app_existing", appId: "codex", status: "running", ai: { threadIds: ["thread_existing"] } }],
 	    runningSessionCount: () => 1,
@@ -5850,7 +6397,25 @@ test("web app ai session read routes do not refresh discovery state", async () =
 
     const detail = await app.inject({ method: "GET", url: "/api/ai-sessions/ais_existing" });
     assert.equal(detail.statusCode, 200);
-    assert.equal(JSON.parse(detail.payload).data.providerSessionId, "thread_existing");
+    const detailRead = JSON.parse(detail.payload).data;
+    assert.equal(detailRead.kind, "updated");
+    assert.equal(detailRead.detail.id, "ais_existing");
+    const unchangedDetail = await app.inject({ method: "GET", url: `/api/ai-sessions/ais_existing?revision=${encodeURIComponent(detailRead.revision)}` });
+    assert.deepEqual(JSON.parse(unchangedDetail.payload).data, { kind: "not-modified", revision: detailRead.revision });
+
+    const index = await app.inject({ method: "GET", url: "/api/ai-sessions/ais_existing/turns?projection=index" });
+    const indexRead = JSON.parse(index.payload).data;
+    assert.equal(indexRead.kind, "updated");
+    assert.deepEqual(indexRead.index.turns.map((turn) => turn.id), ["turn_existing"]);
+    const unchangedIndex = await app.inject({ method: "GET", url: `/api/ai-sessions/ais_existing/turns?projection=index&revision=${encodeURIComponent(indexRead.revision)}` });
+    assert.deepEqual(JSON.parse(unchangedIndex.payload).data, { kind: "not-modified", revision: indexRead.revision });
+
+    const body = await app.inject({ method: "GET", url: "/api/ai-sessions/ais_existing/turns/turn_existing" });
+    const bodyRead = JSON.parse(body.payload).data;
+    assert.equal(bodyRead.kind, "updated");
+    assert.equal(bodyRead.body.turn.userPrompt, "existing prompt");
+    const unchangedBody = await app.inject({ method: "GET", url: `/api/ai-sessions/ais_existing/turns/turn_existing?revision=${encodeURIComponent(bodyRead.revision)}` });
+    assert.deepEqual(JSON.parse(unchangedBody.payload).data, { kind: "not-modified", revision: bodyRead.revision });
 
     const unsafeDetail = await app.inject({ method: "GET", url: "/api/ai-sessions/parent%5Csession" });
     assert.equal(unsafeDetail.statusCode, 404);
@@ -5865,7 +6430,7 @@ test("web app ai session read routes do not refresh discovery state", async () =
   }
 });
 
-test("web app events websocket sends session handshake and authoritative app-management snapshot", async (t) => {
+test("web app events websocket bootstraps session authority before app-management state", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-web-events-"));
   const paths = appRuntimeTestPaths(root);
   const restoreEnv = withWebStorageEnv(paths, {
@@ -5880,15 +6445,20 @@ test("web app events websocket sends session handshake and authoritative app-man
   await app.listen({ host: "127.0.0.1", port: 0 });
   const address = app.server.address();
   assert.equal(typeof address, "object");
-  const socket = new WebSocket(`ws://127.0.0.1:${address.port}/api/events`);
+  const socket = new WebSocket(`ws://127.0.0.1:${address.port}/api/events?aiSessionAuthoritySnapshot=1`);
   t.after(() => socket.terminate());
-  const firstMessages = withTimeout(webSocketMessageFrames(socket, 2), "initial events");
+  const firstMessages = withTimeout(webSocketMessageFrames(socket, 3), "initial events");
 
   await withTimeout(waitForWebSocketOpen(socket), "controlled instance events websocket open");
-  const [helloFrame, appManagementFrame] = await firstMessages;
+  const [helloFrame, aiSessionFrame, appManagementFrame] = await firstMessages;
   const hello = JSON.parse(helloFrame.message);
   assert.equal(hello.type, "streams.hello");
   assert.deepEqual(hello.payload.streams.map((stream) => stream.topic).sort(), ["ai.sessions", "app.sessions"]);
+  const aiSession = JSON.parse(aiSessionFrame.message);
+  assert.equal(aiSession.type, AiSessionEventType.Snapshot);
+  assert.equal(aiSession.payload.meta.streamId, hello.payload.streams.find((stream) => stream.topic === "ai.sessions").streamId);
+  assert.equal(aiSession.payload.meta.revision, hello.payload.streams.find((stream) => stream.topic === "ai.sessions").latestRevision);
+  assert.deepEqual(aiSession.payload.snapshot.sessions, []);
   const appManagement = JSON.parse(appManagementFrame.message);
   assert.equal(appManagement.type, "app.management");
   assert.equal(appManagement.payload.streamId, appManagement.payload.snapshot.streamId);
@@ -5946,11 +6516,12 @@ test("controlled instance session streams use restart epochs and ordered retaine
   }
 });
 
-test("controlled instance publishes provider changes immediately and discovery corrects missed changes without unchanged revisions", async () => {
+test("controlled instance publishes provider changes immediately and ignores external store writers until restart", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-session-discovery-"));
   const paths = appRuntimeTestPaths(root);
   const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
   const appRuntime = {
+    catalog: () => [],
     replaceManagedEnvironment: () => undefined,
     listSessions: () => [{ id: "app_discovery", appId: "codex", status: "running" }],
     runningSessionCount: () => 1,
@@ -5975,13 +6546,11 @@ test("controlled instance publishes provider changes immediately and discovery c
     await app.ready();
     const appSessionId = "app_discovery";
     const initial = JSON.parse((await app.inject({ method: "GET", url: "/api/ai-sessions/state" })).payload).data;
-    const providerStartedAt = Date.now();
     const providerSession = registry.start({ agent: "codex", appSessionId, providerSessionId: "provider_immediate", status: "idle" });
     const providerState = await waitForCondition(async () => {
       const state = JSON.parse((await app.inject({ method: "GET", url: "/api/ai-sessions/state" })).payload).data;
       return state.revision > initial.revision ? state : undefined;
     }, "provider event projection", 500);
-    assert.ok(Date.now() - providerStartedAt < 500);
     assert.equal(providerState.snapshot.sessions.some((session) => session.providerSessionId === "provider_immediate"), true);
 
     registry.applyRealtimeEvent(providerSession.id, {
@@ -5999,7 +6568,6 @@ test("controlled instance publishes provider changes immediately and discovery c
       id: "tool_immediate",
       kind: "commandExecution",
       name: "Command",
-      inputPreview: "pnpm test",
     });
     assert.equal(toolSession.toolCallsSinceLastMessage, 2);
     const toolDelta = JSON.parse((await app.inject({
@@ -6014,19 +6582,14 @@ test("controlled instance publishes provider changes immediately and discovery c
 
     const externalRegistry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
     externalRegistry.start({ agent: "claude", appSessionId, providerSessionId: "provider_missed", status: "idle" });
-    const correctedState = await waitForCondition(async () => {
-      const state = JSON.parse((await app.inject({ method: "GET", url: "/api/ai-sessions/state" })).payload).data;
-      return state.snapshot.sessions.some((session) => session.providerSessionId === "provider_missed") ? state : undefined;
-    }, "discovery correction", 2500);
-    const correctedRevision = correctedState.revision;
-    const correctedDiagnostics = JSON.parse((await app.inject({ method: "GET", url: "/api/diagnostics" })).payload).data.sessionStreams.ai;
-    assert.ok(correctedDiagnostics.discoveryCorrections >= 1);
-
     await new Promise((resolve) => setTimeout(resolve, 1100));
     const unchangedState = JSON.parse((await app.inject({ method: "GET", url: "/api/ai-sessions/state" })).payload).data;
     const unchangedDiagnostics = JSON.parse((await app.inject({ method: "GET", url: "/api/diagnostics" })).payload).data.sessionStreams.ai;
-    assert.equal(unchangedState.revision, correctedRevision);
+    assert.equal(unchangedState.revision, toolState.revision);
+    assert.equal(unchangedState.snapshot.sessions.some((session) => session.providerSessionId === "provider_missed"), false);
     assert.ok(unchangedDiagnostics.discoveryUnchanged >= 1);
+    const restartedRegistry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+    assert.equal(restartedRegistry.all().some((session) => session.providerSessionId === "provider_missed"), true);
   } finally {
     await app.close();
     restoreEnv();
@@ -6319,6 +6882,455 @@ test("controlled instance leaves user Codex files unchanged when no managed mode
   assert.deepEqual(fs.readdirSync(codexHome).sort(), ["auth.json", "config.toml"]);
 });
 
+test("controlled instance materializes every Responses entity as a secret-free Codex provider", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-provider-catalog-"));
+  const codexHome = path.join(root, ".codex");
+  fs.mkdirSync(codexHome, { recursive: true });
+  const catalog = {
+    protocolVersion: "2026-08-27",
+    instanceId: "inst_one",
+    entities: [
+      { id: "mdl_primary", endpoint: "https://one.example/v1", key: "secret-one", protocols: ["openai-responses"], modelNames: [{ name: "gpt-5.6", order: 100 }, { name: "gpt-5.5", order: 200 }] },
+      { id: "mdl_chat", endpoint: "https://chat.example/v1", key: "secret-chat", protocols: ["openai-chat-completions"], modelNames: [{ name: "chat-model", order: 100 }] },
+      { id: "mdl_secondary", endpoint: "https://two.example/v1", key: "secret-two", protocols: ["openai-responses"], modelNames: [{ name: "gpt-5.4", order: 100 }] },
+    ],
+    updatedAt: "2026-08-27T00:00:00.000Z",
+  };
+  const result = applyManagedCodexModelConfig({
+    TASK_HANDOFF_CONTROL_MODE: "controlled",
+    CODEX_HOME: codexHome,
+  }, catalog);
+  const contents = fs.readFileSync(path.join(codexHome, "config.toml"), "utf8");
+  const config = require("@iarna/toml").parse(contents);
+  const primary = codexProviderId("mdl_primary");
+  const secondary = codexProviderId("mdl_secondary");
+  assert.equal(config.model, "gpt-5.6");
+  assert.equal(config.model_provider, primary);
+  assert.deepEqual(Object.keys(config.model_providers).sort(), [primary, secondary].sort());
+  assert.equal(config.model_providers[primary].base_url, "https://one.example/v1");
+  assert.equal(config.model_providers[secondary].wire_api, "responses");
+  assert.equal(result.providerEnvironment[config.model_providers[primary].env_key], "secret-one");
+  assert.equal(contents.includes("secret-one"), false);
+  assert.equal(contents.includes("secret-two"), false);
+  assert.equal(fs.existsSync(path.join(codexHome, "auth.json")), false);
+});
+
+test("Codex routes unknown model slugs to the selected Responses provider without model discovery", async (t) => {
+  const version = spawnSync("codex", ["--version"], { encoding: "utf8" });
+  if (version.status !== 0) {
+    t.skip("Codex is not installed in this test environment.");
+    return;
+  }
+  const fixtures = await Promise.all([startResponsesFixture("one"), startResponsesFixture("two")]);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-provider-routing-"));
+  const codexHome = path.join(root, ".codex");
+  const workspace = path.join(root, "workspace");
+  fs.mkdirSync(codexHome, { recursive: true });
+  fs.mkdirSync(workspace, { recursive: true });
+  const catalog = {
+    protocolVersion: "2026-08-27",
+    instanceId: "inst_routing",
+    entities: [
+      { id: "mdl_route_one", endpoint: `${fixtures[0].origin}/v1`, key: "fixture-key-one", protocols: ["openai-responses"], modelNames: [{ name: "unknown-shared-slug", order: 100 }] },
+      { id: "mdl_route_two", endpoint: `${fixtures[1].origin}/v1`, key: "fixture-key-two", protocols: ["openai-responses"], modelNames: [{ name: "unknown-shared-slug", order: 100 }] },
+    ],
+    updatedAt: "2026-08-28T00:00:00.000Z",
+  };
+  const managed = applyManagedCodexModelConfig({ TASK_HANDOFF_CONTROL_MODE: "controlled", CODEX_HOME: codexHome }, catalog);
+  const environment = { CODEX_HOME: codexHome, ...managed.providerEnvironment };
+  const previous = new Map(Object.keys(environment).map((key) => [key, process.env[key]]));
+  for (const [key, value] of Object.entries(environment)) process.env[key] = value;
+  const client = new CodexAppServerClient({ command: "codex", requestTimeoutMs: 10_000 });
+  t.after(() => {
+    client.stop();
+    for (const fixture of fixtures) fixture.server.close();
+    for (const [key, value] of previous) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+
+  await client.start();
+  const first = await client.startThread({ cwd: workspace, model: "unknown-shared-slug", modelProvider: codexProviderId("mdl_route_one") });
+  const second = await client.startThread({ cwd: workspace, model: "unknown-shared-slug", modelProvider: codexProviderId("mdl_route_two") });
+  const firstCompleted = waitForCodexTurnCompleted(client, first.id);
+  await client.startTurn(first.id, "route to one");
+  const firstRequest = await fixtures[0].nextRequest();
+  await firstCompleted;
+  const secondCompleted = waitForCodexTurnCompleted(client, second.id);
+  await client.startTurn(second.id, "route to two");
+  const secondRequest = await fixtures[1].nextRequest();
+  await secondCompleted;
+  const requests = [firstRequest, secondRequest];
+
+  assert.deepEqual(requests.map((request) => request.url), ["/v1/responses", "/v1/responses"]);
+  assert.deepEqual(requests.map((request) => request.body.model), ["unknown-shared-slug", "unknown-shared-slug"]);
+  assert.deepEqual(requests.map((request) => request.authorization), ["Bearer fixture-key-one", "Bearer fixture-key-two"]);
+
+  assert.deepEqual(await client.updateThreadSettings(first.id, { model: "unknown-updated-slug" }), {
+    model: "unknown-updated-slug",
+    modelProvider: codexProviderId("mdl_route_one"),
+  });
+  await client.startTurn(first.id, "use the updated model");
+  assert.equal((await fixtures[0].nextRequest()).body.model, "unknown-updated-slug");
+});
+
+function waitForCodexTurnCompleted(client, threadId) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      client.off("event", listener);
+      reject(new Error(`Timed out waiting for Codex turn completion for ${threadId}.`));
+    }, 5_000);
+    const listener = (event) => {
+      if (event.type !== "turn-completed" || event.threadId !== threadId) return;
+      clearTimeout(timer);
+      client.off("event", listener);
+      resolve(event);
+    };
+    client.on("event", listener);
+  });
+}
+
+function startResponsesFixture(id) {
+  const requests = [];
+  const waiters = [];
+  const nextRequest = () => requests.length
+    ? Promise.resolve(requests.shift())
+    : new Promise((resolve) => waiters.push(resolve));
+  const server = http.createServer((incoming, response) => {
+    const chunks = [];
+    incoming.on("data", (chunk) => chunks.push(chunk));
+    incoming.on("end", () => {
+      const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      const captured = { authorization: incoming.headers.authorization, body, url: incoming.url };
+      const waiter = waiters.shift();
+      if (waiter) waiter(captured);
+      else requests.push(captured);
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.end([
+        `data: ${JSON.stringify({ type: "response.created", response: { id: `resp_${id}` } })}`,
+        "",
+        `data: ${JSON.stringify({ type: "response.completed", response: { id: `resp_${id}`, usage: { input_tokens: 0, input_tokens_details: null, output_tokens: 0, output_tokens_details: null, total_tokens: 0 } } })}`,
+        "",
+        "",
+      ].join("\n"));
+    });
+  });
+  return new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      resolve({ origin: `http://127.0.0.1:${address.port}`, nextRequest, server });
+    });
+  });
+}
+
+test("Codex Direct Session creation preserves provider identity and reconciles actual model state", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-model-create-"));
+  const registryDir = path.join(root, "ai-sessions");
+  const registry = createAiSessionRegistry({ dir: registryDir });
+  const calls = [];
+  const diagnostics = [];
+  class FakeCodexModelCreateClient extends EventEmitter {
+    async start() {}
+    stop() {}
+    async listLoadedThreadIds() { return []; }
+    async startThread(options) {
+      calls.push(options);
+      const index = calls.length;
+      const actual = index === 3
+        ? { model: "actual-secondary", modelProvider: codexProviderId("mdl_secondary") }
+        : { model: options.model, modelProvider: options.modelProvider };
+      return { id: `thread_create_${index}`, cwd: options.cwd, ...actual, status: { type: "idle" }, turns: [] };
+    }
+  }
+  const fake = new FakeCodexModelCreateClient();
+  const bridge = new CodexAppServerSessionBridge(registry, fake, {
+    threadStartDefaults: { model: "default-primary", modelProvider: codexProviderId("mdl_primary") },
+    resolveModelSelection: (selection) => ({ model: selection.modelName, modelProvider: codexProviderId(selection.modelEntityId) }),
+    projectModelSelection: (provider, model) => provider === codexProviderId("mdl_primary")
+      ? { modelEntityId: "mdl_primary", modelName: model }
+      : provider === codexProviderId("mdl_secondary") ? { modelEntityId: "mdl_secondary", modelName: model } : undefined,
+    onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+  });
+  await bridge.sync();
+
+  const defaultCreated = await bridge.createSession({ cwd: root });
+  const secondCreated = await bridge.createSession({ cwd: root, modelSelection: { modelEntityId: "mdl_secondary", modelName: "same-name" } });
+  const reconciled = await bridge.createSession({ cwd: root, modelSelection: { modelEntityId: "mdl_primary", modelName: "requested-primary" } });
+
+  assert.deepEqual(calls.map(({ model, modelProvider, reasoningEffort }) => ({ model, modelProvider, reasoningEffort })), [
+    { model: "default-primary", modelProvider: codexProviderId("mdl_primary"), reasoningEffort: "medium" },
+    { model: "same-name", modelProvider: codexProviderId("mdl_secondary"), reasoningEffort: "medium" },
+    { model: "requested-primary", modelProvider: codexProviderId("mdl_primary"), reasoningEffort: "medium" },
+  ]);
+  assert.deepEqual(defaultCreated.modelSelection, { modelEntityId: "mdl_primary", modelName: "default-primary" });
+  assert.deepEqual(secondCreated.modelSelection, { modelEntityId: "mdl_secondary", modelName: "same-name" });
+  assert.deepEqual(reconciled.modelSelection, { modelEntityId: "mdl_secondary", modelName: "actual-secondary" });
+  assert.equal(defaultCreated.reasoningEffort, "medium");
+  assert.equal(secondCreated.reasoningEffort, "medium");
+  assert.equal(diagnostics.at(-1).code, "AI_SESSION_MODEL_SELECTION_RECONCILED");
+  assert.deepEqual(
+    createAiSessionRegistry({ dir: registryDir }).getByProviderSessionId("codex", secondCreated.providerSessionId).modelSelection,
+    secondCreated.modelSelection,
+  );
+});
+
+test("Codex Direct Session switches models only after settings confirmation and rejects provider changes", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-model-switch-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const session = registry.applyAdapterSnapshot({
+    source: "control",
+    agent: "codex",
+    creationSource: "ai-session",
+    appId: "codex-app-server",
+    providerSessionId: "thread_model_switch",
+    cwd: "/workspace",
+    status: "idle",
+    modelSelection: { modelEntityId: "mdl_primary", modelName: "gpt-5.6" },
+  });
+  class FakeCodexModelSwitchClient extends EventEmitter {
+    async start() {}
+    stop() {}
+    async listLoadedThreadIds() { return ["thread_model_switch"]; }
+    async readThread() { return { id: "thread_model_switch", cwd: "/workspace", status: { type: "idle" }, turns: [] }; }
+    supportsThreadSettingsUpdate() { return true; }
+    async updateThreadSettings(threadId, settings) {
+      assert.equal(threadId, "thread_model_switch");
+      assert.equal(registry.get(session.id).modelSelection.modelName, "gpt-5.6");
+      return { model: settings.model, modelProvider: codexProviderId("mdl_primary") };
+    }
+  }
+  const bridge = new CodexAppServerSessionBridge(registry, new FakeCodexModelSwitchClient(), {
+    resolveModelSelection: (selection) => ({ model: selection.modelName, modelProvider: codexProviderId(selection.modelEntityId) }),
+  });
+  assert.deepEqual(registry.get(session.id).modelSelection, { modelEntityId: "mdl_primary", modelName: "gpt-5.6" });
+  await bridge.sync();
+  assert.deepEqual(registry.get(session.id).modelSelection, { modelEntityId: "mdl_primary", modelName: "gpt-5.6" });
+  await bridge.updateModelSelection(registry.get(session.id), { modelEntityId: "mdl_primary", modelName: "gpt-5.5" });
+  assert.equal(registry.get(session.id).modelSelection.modelName, "gpt-5.5");
+  await assert.rejects(
+    bridge.updateModelSelection(registry.get(session.id), { modelEntityId: "mdl_secondary", modelName: "gpt-5.4" }),
+    (error) => error.code === "AI_SESSION_PROVIDER_SWITCH_REQUIRES_NEW_SESSION",
+  );
+  assert.equal(registry.get(session.id).modelSelection.modelEntityId, "mdl_primary");
+});
+
+test("provider-neutral model switching allows native provider changes and serializes session settings", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-provider-model-switch-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const session = registry.start({
+    agent: "opencode",
+    creationSource: "ai-session",
+    providerSessionId: "session_provider_switch",
+    cwd: "/workspace",
+    status: "idle",
+    modelSelection: { modelEntityId: "mdl_one", modelName: "same-name" },
+  });
+  const appOwned = registry.start({
+    agent: "opencode",
+    creationSource: "app-session",
+    providerSessionId: "app_owned_provider_session",
+    cwd: "/workspace",
+    status: "idle",
+    modelSelection: { modelEntityId: "mdl_one", modelName: "same-name" },
+  });
+  const steering = registry.start({
+    agent: "opencode",
+    creationSource: "ai-session",
+    providerSessionId: "session_steering",
+    cwd: "/workspace",
+    status: "running",
+    phase: "thinking",
+    activeTurnId: "turn_running",
+    modelSelection: { modelEntityId: "mdl_one", modelName: "same-name" },
+  });
+  let confirm;
+  const controller = new AiSessionController(registry);
+  controller.register({
+    agent: "opencode",
+    async updateModelSelection(current, selection) {
+      await new Promise((resolve) => { confirm = resolve; });
+      registry.patch(current.id, { modelSelection: selection });
+      return selection;
+    },
+    async updateReasoningEffort(_current, effort) { return effort; },
+    async startMessage() { throw new Error("unused"); },
+    async interrupt() { throw new Error("unused"); },
+  });
+  await assert.rejects(
+    controller.updateModelSelection(appOwned.id, { modelEntityId: "mdl_two", modelName: "same-name" }),
+    (error) => error.code === "AI_SESSION_MODEL_SELECTION_UNSUPPORTED",
+  );
+  await assert.rejects(
+    controller.updateModelSelection(steering.id, { modelEntityId: "mdl_two", modelName: "same-name" }),
+    (error) => error.code === "AI_SESSION_MODEL_SELECTION_CONFLICT",
+  );
+  const pending = controller.updateModelSelection(session.id, { modelEntityId: "mdl_two", modelName: "same-name" });
+  await new Promise((resolve) => setImmediate(resolve));
+  await assert.rejects(
+    controller.updateModelSelection(session.id, { modelEntityId: "mdl_three", modelName: "other" }),
+    (error) => error.code === "AI_SESSION_MODEL_SELECTION_CONFLICT",
+  );
+  await assert.rejects(
+    controller.updateReasoningEffort(session.id, "high"),
+    (error) => error.code === "AI_SESSION_REASONING_EFFORT_CONFLICT",
+  );
+  confirm();
+  assert.deepEqual(await pending, { modelEntityId: "mdl_two", modelName: "same-name" });
+  assert.deepEqual(registry.get(session.id).modelSelection, { modelEntityId: "mdl_two", modelName: "same-name" });
+});
+
+test("AI Session reasoning effort exposes every fixed Codex option and remains optional for old history", () => {
+  const efforts = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
+  assert.deepEqual(efforts.map((effort) => AiSessionReasoningEffortSchema.parse(effort)), efforts);
+  assert.equal(AiSessionReasoningEffortSchema.safeParse("custom").success, false);
+  const history = AiSessionHistoryItemSchema.parse({
+    id: "ais_old_reasoning",
+    agent: "codex",
+    creationSource: "ai-session",
+    providerSessionId: "thread_old_reasoning",
+    cwd: "/workspace",
+    lastActiveAt: "2026-08-27T00:00:00.000Z",
+    archivedAt: "2026-08-27T00:00:00.000Z",
+  });
+  assert.equal(history.reasoningEffort, undefined);
+});
+
+test("Codex client sends reasoning effort in thread config and waits for a matching settings notification", async () => {
+  const client = new CodexAppServerClient({ command: "codex", requestTimeoutMs: 100 });
+  const requests = [];
+  client.supportsThreadSettingsUpdate = () => true;
+  client.request = async (method, params) => {
+    requests.push({ method, params });
+    if (method === "thread/start") {
+      return {
+        thread: { id: "thread_reasoning_client", cwd: "/workspace", status: { type: "idle" }, turns: [] },
+        model: "gpt-5.6",
+        modelProvider: "provider_one",
+        reasoningEffort: "high",
+      };
+    }
+    queueMicrotask(() => {
+      client.emit("notification", {
+        method: "thread/settings/updated",
+        params: { threadId: "thread_reasoning_client", threadSettings: { effort: "low" } },
+      });
+      client.emit("notification", {
+        method: "thread/settings/updated",
+        params: { threadId: "thread_reasoning_client", threadSettings: { effort: "xhigh" } },
+      });
+    });
+    return {};
+  };
+
+  const thread = await client.startThread({ cwd: "/workspace", model: "gpt-5.6", modelProvider: "provider_one", reasoningEffort: "high" });
+  assert.equal(thread.reasoningEffort, "high");
+  const updated = await client.updateThreadSettings("thread_reasoning_client", { effort: "xhigh" });
+  assert.deepEqual(updated, { effort: "xhigh" });
+  assert.deepEqual(requests, [
+    {
+      method: "thread/start",
+      params: {
+        model: "gpt-5.6",
+        modelProvider: "provider_one",
+        cwd: "/workspace",
+        runtimeWorkspaceRoots: ["/workspace"],
+        ephemeral: false,
+        config: { model_reasoning_effort: "high" },
+        sessionStartSource: "startup",
+        threadSource: "user",
+      },
+    },
+    { method: "thread/settings/update", params: { threadId: "thread_reasoning_client", effort: "xhigh" } },
+  ]);
+});
+
+test("Codex Direct Session updates reasoning effort only after authoritative confirmation", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-reasoning-switch-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const session = registry.applyAdapterSnapshot({
+    source: "control",
+    agent: "codex",
+    creationSource: "ai-session",
+    appId: "codex-app-server",
+    providerSessionId: "thread_reasoning_switch",
+    cwd: "/workspace",
+    status: "idle",
+    reasoningEffort: "medium",
+  });
+  let confirm;
+  let shouldFail = false;
+  class FakeCodexReasoningClient extends EventEmitter {
+    async start() {}
+    stop() {}
+    async listLoadedThreadIds() { return ["thread_reasoning_switch"]; }
+    async readThread() { return { id: "thread_reasoning_switch", cwd: "/workspace", status: { type: "idle" }, turns: [] }; }
+    supportsThreadSettingsUpdate() { return true; }
+    async updateThreadSettings(_threadId, settings) {
+      if (shouldFail) throw new Error("settings timeout");
+      await new Promise((resolve) => { confirm = resolve; });
+      return { effort: settings.effort };
+    }
+  }
+  const bridge = new CodexAppServerSessionBridge(registry, new FakeCodexReasoningClient());
+  await bridge.sync();
+  const pending = bridge.updateReasoningEffort(registry.get(session.id), "high");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(registry.get(session.id).reasoningEffort, "medium");
+  confirm();
+  assert.equal(await pending, "high");
+  assert.equal(registry.get(session.id).reasoningEffort, "high");
+  shouldFail = true;
+  await assert.rejects(bridge.updateReasoningEffort(registry.get(session.id), "ultra"), /settings timeout/);
+  assert.equal(registry.get(session.id).reasoningEffort, "high");
+});
+
+test("Codex resume and fork preserve the session provider and model", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-model-resume-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const source = registry.start({
+    agent: "codex",
+    creationSource: "ai-session",
+    providerSessionId: "thread_model_source",
+    cwd: "/workspace",
+    status: "idle",
+    modelSelection: { modelEntityId: "mdl_secondary", modelName: "gpt-5.4" },
+    reasoningEffort: "xhigh",
+  });
+  class FakeCodexModelResumeClient extends EventEmitter {
+    constructor() { super(); this.calls = []; }
+    async start() {}
+    stop() {}
+    async listLoadedThreadIds() { return ["thread_model_source"]; }
+    async readThread() { return { id: "thread_model_source", cwd: "/workspace", status: { type: "idle" }, turns: [] }; }
+    async resumeThread(threadId, options) {
+      this.calls.push(["resume", threadId, options]);
+      return { id: threadId, cwd: "/workspace", model: options.model, modelProvider: options.modelProvider, reasoningEffort: options.reasoningEffort, status: { type: "idle" }, turns: [] };
+    }
+    threadForkCapabilities() { return { fullHistory: true, throughTurn: true }; }
+    async forkThread(options) {
+      this.calls.push(["fork", options]);
+      return { id: "thread_model_fork", cwd: options.cwd || "/workspace", model: options.model, modelProvider: options.modelProvider, reasoningEffort: options.reasoningEffort, status: { type: "idle" }, turns: [] };
+    }
+  }
+  const fake = new FakeCodexModelResumeClient();
+  const bridge = new CodexAppServerSessionBridge(registry, fake, {
+    resolveModelSelection: (selection) => ({ model: selection.modelName, modelProvider: codexProviderId(selection.modelEntityId) }),
+    projectModelSelection: (provider, model) => provider === codexProviderId("mdl_secondary")
+      ? { modelEntityId: "mdl_secondary", modelName: model }
+      : undefined,
+  });
+  await bridge.resumeSession(source.providerSessionId, source.modelSelection, source.reasoningEffort);
+  const forked = await bridge.forkSession({ source });
+  assert.deepEqual(fake.calls, [
+    ["resume", "thread_model_source", { model: "gpt-5.4", modelProvider: codexProviderId("mdl_secondary"), reasoningEffort: "xhigh" }],
+    ["fork", { threadId: "thread_model_source", model: "gpt-5.4", modelProvider: codexProviderId("mdl_secondary"), reasoningEffort: "xhigh" }],
+  ]);
+  assert.deepEqual(forked.modelSelection, source.modelSelection);
+  assert.equal(forked.reasoningEffort, "xhigh");
+});
+
 test("controlled instance materializes its selected Claude model in settings.json", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-claude-model-config-"));
   const claudeHome = path.join(root, ".claude");
@@ -6491,15 +7503,27 @@ test("controlled instance refreshes managed model auth through its registration-
       method: "PUT",
       url: "/api/internal/ai-session-persistence-settings",
       headers: { authorization: "Bearer instance-registration-token" },
-      payload: { historyLimit: 2 },
+      payload: { historyLimit: 2, maxFileAttachmentBytes: 4 },
     });
     assert.equal(appliedPersistenceSettings.statusCode, 200);
     assert.deepEqual(appliedPersistenceSettings.json().data, {
       applied: true,
       historyLimit: 2,
+      attachmentRetentionDays: 30,
+      maxFileAttachmentBytes: 4,
       removedHistoryCount: 1,
     });
-    assert.equal(JSON.parse(fs.readFileSync(path.join(paths.dataDir, "ai-session-persistence", "settings.json"), "utf8")).historyLimit, 2);
+    const persistedAiSessionSettings = JSON.parse(fs.readFileSync(path.join(paths.dataDir, "ai-session-persistence", "settings.json"), "utf8"));
+    assert.equal(persistedAiSessionSettings.historyLimit, 2);
+    assert.equal(persistedAiSessionSettings.maxFileAttachmentBytes, 4);
+    const rejectedFileUpload = await app.inject({
+      method: "POST",
+      url: "/api/ai-session-attachments/drafts?scopeType=create-request&scopeId=settings-test&kind=file&name=four.txt&mime=text%2Fplain&size=4",
+      headers: { "content-type": "application/octet-stream" },
+      payload: Buffer.from("four"),
+    });
+    assert.equal(rejectedFileUpload.statusCode, 413);
+    assert.equal(rejectedFileUpload.json().error.code, "AI_SESSION_ATTACHMENTS_TOO_LARGE");
     assert.deepEqual(new AiSessionHistoryStore(paths, { limit: 2 }).list().map((item) => item.id), ["ai-managed-2", "ai-managed-1"]);
     assert.equal(fs.readdirSync(path.join(paths.dataDir, "ai-session-history", "details")).length, 2);
     assert.equal(fs.readdirSync(timelinePath).length, 2);
@@ -8050,6 +9074,9 @@ function withWebStorageEnv(paths, extra = {}) {
     TASK_HANDOFF_AI_SESSION_SCAN: "0",
     TASK_HANDOFF_CODEX_APP_SERVER: "0",
     TASK_HANDOFF_CONTROL_MODE: undefined,
+    TASK_HANDOFF_PRIVATE_CONFIG_LOADED: undefined,
+    TASK_HANDOFF_PRIVATE_MODEL_CATALOG_JSON: undefined,
+    TASK_HANDOFF_INSTANCE_PRIVATE_CONFIG_PATH: undefined,
     TASK_HANDOFF_DIAGNOSTIC_LOGS: undefined,
     TASK_HANDOFF_INSTANCE_ID: undefined,
     TASK_HANDOFF_INSTANCE_NAME: undefined,

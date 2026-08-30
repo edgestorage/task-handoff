@@ -1,10 +1,12 @@
 import { queryOptions, useQuery } from "@tanstack/vue-query";
 import { computed, toValue, type MaybeRefOrGetter } from "vue";
+import { NodeJoinInviteStatusSchema } from "@task-handoff/protocol/control-plane";
 import { api, ApiError, deleteApiData, getApiData, getApiPayload, patchApiData, postApiData, putApiData, withApiError } from "./client";
 import { mergeInstanceBoardQueryData } from "./instanceBoardMerge.ts";
 import { controlPlaneQueryKeys } from "./queryKeys.ts";
 import { sharedAiSessionsApi, sharedControlPlaneClient } from "./sharedClient.ts";
 import type { ControlPlaneInstanceResourceEntry } from "@task-handoff/control-plane-client";
+import type { GitCredentialCreateRequest, GitCredentialPublic, GitCredentialUpdateRequest, InstanceGitCredentialAssignment } from "@task-handoff/protocol/managed-git-credentials";
 export { controlPlaneQueryKeys } from "./queryKeys.ts";
 import type {
   ControlPlaneStatusResponse,
@@ -12,12 +14,12 @@ import type {
   ControlPlaneAppSessions,
   AppSession,
   AuthSession,
-  AuthUser,
   CreateNodeControlPlaneConnectionInput,
   CreateControlledInstanceInput,
   CreateControlledInstanceResult,
   CreateImageInput,
   CreateModelInput,
+  CopyModelInput,
   CreateNodeInput,
   NodePairingInvite,
   CreateNodeLocalFolderInput,
@@ -30,6 +32,9 @@ import type {
   ControlPlaneAiSessions,
   ControlPlaneTriggers,
   CreateControlPlaneTriggerInput,
+  ControlPlaneTriggerMutationResult,
+  InstanceTriggerIndex,
+  InstanceTriggerMutationResult,
   ChatBridgeConfig,
   ChatChannel,
   AiSessionUploadedAttachment,
@@ -58,6 +63,7 @@ import type {
   NodeFolderTreeEntry,
   NodeJoinInvite,
   NodeLocalFolder,
+  UpdateNodeLocalFolderInput,
   NodeRuntimesPayload,
   NodeControlPlaneConnection,
   NodeControlPlanePairing,
@@ -133,6 +139,69 @@ export function useMobileSessionsQuery(enabled: MaybeRefOrGetter<boolean> = true
 export function revokeMobileSession(sessionId: string) {
   return sharedControlPlaneClient.auth.revokeMobileSession(sessionId);
 }
+
+export function useCurrentAccessQuery(enabled: MaybeRefOrGetter<boolean> = true) {
+  return useQuery({
+    queryKey: controlPlaneQueryKeys.currentAccess,
+    queryFn: ({ signal }) => sharedControlPlaneClient.users.currentAuthorization(signal),
+    enabled: computed(() => toValue(enabled)),
+    retry: false,
+    refetchInterval: 30_000,
+  });
+}
+
+export function useUsersQuery(enabled: MaybeRefOrGetter<boolean> = true, includeArchived = false) {
+  return useQuery({
+    queryKey: [...controlPlaneQueryKeys.users, { includeArchived }],
+    queryFn: ({ signal }) => sharedControlPlaneClient.users.list({ includeArchived }, signal),
+    enabled: computed(() => toValue(enabled)),
+    retry: false,
+  });
+}
+
+export function usePermissionsQuery(enabled: MaybeRefOrGetter<boolean> = true) {
+  return useQuery({ queryKey: controlPlaneQueryKeys.permissions, queryFn: ({ signal }) => sharedControlPlaneClient.users.permissions(signal), enabled: computed(() => toValue(enabled)), retry: false });
+}
+
+export function useRolesQuery(enabled: MaybeRefOrGetter<boolean> = true) {
+  return useQuery({
+    queryKey: controlPlaneQueryKeys.roles,
+    queryFn: ({ signal }) => sharedControlPlaneClient.users.roles(signal),
+    enabled: computed(() => toValue(enabled)),
+    retry: false,
+  });
+}
+
+export function useIdentityProvidersQuery(enabled: MaybeRefOrGetter<boolean> = true) {
+  return useQuery({
+    queryKey: controlPlaneQueryKeys.identityProviders,
+    queryFn: ({ signal }) => sharedControlPlaneClient.users.providers(signal),
+    enabled: computed(() => toValue(enabled)),
+    retry: false,
+  });
+}
+
+export function useExternalIdentityApprovalsQuery(enabled: MaybeRefOrGetter<boolean> = true) {
+  return useQuery({ queryKey: controlPlaneQueryKeys.externalIdentityApprovals, queryFn: ({ signal }) => sharedControlPlaneClient.users.approvals(signal), enabled: computed(() => toValue(enabled)), retry: false });
+}
+
+export const createControlPlaneUser = (input: unknown) => sharedControlPlaneClient.users.create(input);
+export const updateControlPlaneUser = (userId: string, input: import("@task-handoff/protocol/control-plane-access").ControlPlaneUpdateUserInput) => sharedControlPlaneClient.users.update(userId, input);
+export const setControlPlaneUserAccess = (userId: string, input: unknown) => sharedControlPlaneClient.users.setAccess(userId, input);
+export const getControlPlaneUserDetail = (userId: string) => sharedControlPlaneClient.users.detail(userId);
+export const resetControlPlaneUserPassword = (userId: string, input: { password: string; requirePasswordChange?: boolean }) => sharedControlPlaneClient.users.resetPassword(userId, input);
+export const listControlPlaneUserSessions = (userId: string) => sharedControlPlaneClient.users.sessions(userId);
+export const revokeControlPlaneUserSession = (userId: string, sessionId: string) => sharedControlPlaneClient.users.revokeSession(userId, sessionId);
+export const revokeAllControlPlaneUserSessions = (userId: string) => sharedControlPlaneClient.users.revokeAllSessions(userId);
+export const unbindControlPlaneUserExternalIdentity = (userId: string, identityId: string) => sharedControlPlaneClient.users.unbindExternalIdentity(userId, identityId);
+export const createControlPlaneRole = (input: unknown) => sharedControlPlaneClient.users.createRole(input);
+export const updateControlPlaneRole = (roleId: string, input: unknown) => sharedControlPlaneClient.users.updateRole(roleId, input);
+export const archiveControlPlaneRole = (roleId: string) => sharedControlPlaneClient.users.archiveRole(roleId);
+export const createControlPlaneIdentityProvider = (input: unknown) => sharedControlPlaneClient.users.createProvider(input);
+export const updateControlPlaneIdentityProvider = (providerId: string, input: unknown) => sharedControlPlaneClient.users.updateProvider(providerId, input);
+export const removeControlPlaneIdentityProvider = (providerId: string) => sharedControlPlaneClient.users.removeProvider(providerId);
+export const approveControlPlaneExternalIdentity = (approvalId: string, input: unknown) => sharedControlPlaneClient.users.approveIdentity(approvalId, input);
+export const rejectControlPlaneExternalIdentity = (approvalId: string) => sharedControlPlaneClient.users.rejectIdentity(approvalId);
 
 export function useControlPlaneStatusQuery() {
   return useQuery({
@@ -210,7 +279,11 @@ export function useImageOptionsQuery() {
 }
 
 function fetchModelRegistry(signal?: AbortSignal) {
-  return getApiData<FederatedModelRegistry>("models", { signal });
+  return getApiData<FederatedModelRegistry>("models?progressive=true", { signal }).catch((error) => {
+    // Compatibility for v0.0.21: progressive fleet reads are additive.
+    if (!(error instanceof ApiError) || error.status !== 400 || error.code !== "VALIDATION_ERROR") throw error;
+    return getApiData<FederatedModelRegistry>("models", { signal });
+  });
 }
 
 export function modelConfigsFromRegistry(registry: FederatedModelRegistry) {
@@ -235,6 +308,25 @@ export function useModelsQuery(enabled: MaybeRefOrGetter<boolean> = true) {
     queryFn: ({ signal }) => fetchModelRegistry(signal),
     select: modelConfigsFromRegistry,
     enabled: computed(() => toValue(enabled)),
+    retry: false,
+  });
+}
+
+export function useGitCredentialsQuery(enabled: MaybeRefOrGetter<boolean> = true) {
+  return useQuery({
+    queryKey: controlPlaneQueryKeys.gitCredentials,
+    queryFn: ({ signal }) => getApiData<{ items: GitCredentialPublic[] }>("git-credentials", { signal }),
+    select: (value) => value.items,
+    enabled: computed(() => toValue(enabled)),
+    retry: false,
+  });
+}
+
+export function useInstanceGitCredentialAssignmentsQuery(instanceId: MaybeRefOrGetter<string>, enabled: MaybeRefOrGetter<boolean> = true) {
+  return useQuery({
+    queryKey: computed(() => controlPlaneQueryKeys.instanceGitCredentialAssignments(toValue(instanceId))),
+    queryFn: ({ signal }) => getApiData<InstanceGitCredentialAssignment[]>(`controlled-instances/${encodeURIComponent(toValue(instanceId))}/git-credential-assignments`, { signal }),
+    enabled: computed(() => Boolean(toValue(instanceId)) && toValue(enabled)),
     retry: false,
   });
 }
@@ -300,8 +392,8 @@ export function resumeControlPlaneProxyClaim(id: string) {
   return postApiData<ClaimProxyNodeResult>(`control-plane-proxy/pending-claims/${id}/resume`);
 }
 
-export function cancelControlPlaneProxyClaim(id: string) {
-  return deleteApiData<CancelProxyClaimResult>(`control-plane-proxy/pending-claims/${id}`);
+export function cancelControlPlaneProxyClaim(id: string, force = false) {
+  return deleteApiData<CancelProxyClaimResult>(`control-plane-proxy/pending-claims/${id}${force ? "?force=true" : ""}`);
 }
 
 export function checkNodeUpdate(nodeId: string, channel: UpdateChannel) {
@@ -332,7 +424,11 @@ export function listNodeUpdateJobs(nodeId: string) {
 }
 
 function fetchNodeRuntimesPayload(signal?: AbortSignal) {
-  return getApiPayload<NodeRuntime[], NodeRuntimesPayload["meta"]>("node-runtimes", { signal });
+  return getApiPayload<NodeRuntime[], NodeRuntimesPayload["meta"]>("node-runtimes?progressive=true", { signal }).catch((error) => {
+    // Compatibility for v0.0.21: progressive fleet reads are additive.
+    if (!(error instanceof ApiError) || error.status !== 400 || error.code !== "VALIDATION_ERROR") throw error;
+    return getApiPayload<NodeRuntime[], NodeRuntimesPayload["meta"]>("node-runtimes", { signal });
+  });
 }
 
 export function useNodeRuntimesQuery() {
@@ -376,6 +472,10 @@ export function listNodeFolderTree(nodeId: string, input: { path?: string; depth
   }
   const query = params.toString();
   return getApiData<NodeFolderTreeEntry[]>(`nodes/${nodeId}/folders/tree${query ? `?${query}` : ""}`);
+}
+
+export function listNodeFolderPlaces(nodeId: string) {
+  return getApiData<import("./types").NodeFolderPlace[]>(`nodes/${nodeId}/folders/places`);
 }
 
 export function useLocalDockerImagesQuery(nodeId: MaybeRefOrGetter<string>) {
@@ -432,15 +532,19 @@ export function deleteNodeControlPlaneConnection(nodeId: string, connectionId: s
   return deleteApiData<{ deleted: boolean }>(`nodes/${nodeId}/control-plane-connections/${encodeURIComponent(connectionId)}`);
 }
 
-async function fetchInstanceBoardPayload(signal?: AbortSignal, instanceId = "") {
-  const route = instanceId ? `instance-board?instanceId=${encodeURIComponent(instanceId)}` : "instance-board";
+export async function fetchInstanceBoardPayload(signal?: AbortSignal, instanceId = "") {
+  const params = new URLSearchParams();
+  params.set("progressive", "true");
+  if (instanceId) params.set("instanceId", instanceId);
+  const route = `instance-board?${params.toString()}`;
   try {
     return await getApiPayload<InstanceBoardItem[], InstanceBoardPayload["meta"]>(route, { signal });
   } catch (error) {
-    // Compatibility for v0.0.21: its strict query schema rejects instanceId.
-    if (!instanceId || !(error instanceof ApiError) || error.status !== 400 || error.code !== "VALIDATION_ERROR") throw error;
+    // Compatibility for v0.0.21: its strict query schema rejects progressive
+    // and instanceId, so current clients fall back to its blocking snapshot.
+    if (!(error instanceof ApiError) || error.status !== 400 || error.code !== "VALIDATION_ERROR") throw error;
     const payload = await getApiPayload<InstanceBoardItem[], InstanceBoardPayload["meta"]>("instance-board", { signal });
-    return { ...payload, data: payload.data.filter((item) => item.id === instanceId) };
+    return { ...payload, data: instanceId ? payload.data.filter((item) => item.id === instanceId) : payload.data };
   }
 }
 
@@ -449,16 +553,26 @@ export function instanceBoardQueryOptions(instanceId: MaybeRefOrGetter<string> =
     queryKey: computed(() => controlPlaneQueryKeys.scopedInstanceBoard(toValue(instanceId))),
     queryFn: ({ signal }: { signal: AbortSignal }) => fetchInstanceBoardPayload(signal, toValue(instanceId)),
     structuralSharing: mergeInstanceBoardQueryData,
+    // The event stream owns normal convergence. HTTP is reserved for the
+    // initial snapshot and explicit stream/event recovery.
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
     retry: false,
   } as const;
 }
 
 export function useInstanceBoardQuery(instanceId: MaybeRefOrGetter<string> = "", enabled: MaybeRefOrGetter<boolean> = true) {
-  return useQuery({
+  const query = useQuery({
     ...instanceBoardQueryOptions(instanceId),
-    select: (payload) => payload.data,
     enabled: computed(() => toValue(enabled)),
   });
+  return {
+    ...query,
+    data: computed(() => query.data.value?.data),
+    nodeStates: computed(() => query.data.value?.meta?.nodeStates || []),
+    nodeErrors: computed(() => query.data.value?.meta?.nodeErrors || []),
+  };
 }
 
 export function getInstanceResourceMetrics(instanceId: string) {
@@ -472,7 +586,15 @@ export function useInstanceBoardPayloadQuery() {
 export function useInstanceDirectoryQuery(enabled: MaybeRefOrGetter<boolean> = true) {
   return useQuery({
     queryKey: controlPlaneQueryKeys.instanceDirectory,
-    queryFn: ({ signal }) => sharedControlPlaneClient.resources.instanceBoard(signal) as Promise<ControlPlaneInstanceResourceEntry[]>,
+    queryFn: async ({ signal }) => {
+      try {
+        return (await sharedControlPlaneClient.resources.instanceDirectory(signal)).data as ControlPlaneInstanceResourceEntry[];
+      } catch (error) {
+        // Compatibility for v0.0.21: progressive directory query parameters are additive.
+        if (!(error instanceof ApiError) || error.status !== 400 || error.code !== "VALIDATION_ERROR") throw error;
+        return sharedControlPlaneClient.resources.instanceBoard(signal) as Promise<ControlPlaneInstanceResourceEntry[]>;
+      }
+    },
     enabled: computed(() => toValue(enabled)),
     refetchInterval: 15_000,
     retry: false,
@@ -488,6 +610,11 @@ export function useControlPlaneAiSessionsQuery(instanceId: MaybeRefOrGetter<stri
       return scope ? { ...view, instances: view.instances.filter((entry) => entry.instanceId === scope) } : view;
     },
     enabled: computed(() => toValue(enabled)),
+    // Summary state advances through the revisioned AI Session stream. Stream
+    // recovery performs HTTP reads only when the authoritative revision requires it.
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
     retry: false,
   });
 }
@@ -502,6 +629,18 @@ export function getAiSessionHistory(instanceId: string) {
 
 export function getAiSessionHistoryDetail(instanceId: string, aiSessionId: string) {
   return sharedAiSessionsApi.historyDetail(instanceId, aiSessionId);
+}
+
+export function getAiSessionDetail(instanceId: string, aiSessionId: string, revision?: string, signal?: AbortSignal) {
+  return sharedAiSessionsApi.detail(instanceId, aiSessionId, revision, signal);
+}
+
+export function getAiSessionTurnIndex(instanceId: string, aiSessionId: string, revision?: string, signal?: AbortSignal) {
+  return sharedAiSessionsApi.turnIndex(instanceId, aiSessionId, revision, signal);
+}
+
+export function getAiSessionTurnBody(instanceId: string, aiSessionId: string, turnId: string, revision?: string, signal?: AbortSignal) {
+  return sharedAiSessionsApi.turnBody(instanceId, aiSessionId, turnId, revision, signal);
 }
 
 export function getAiSessionTimeline(instanceId: string, aiSessionId: string, signal?: AbortSignal) {
@@ -522,11 +661,19 @@ export function createAiSession(instanceId: string, input: import("@task-handoff
   return sharedAiSessionsApi.create(instanceId, input);
 }
 
+export function updateAiSessionModelSelection(instanceId: string, aiSessionId: string, clientRequestId: string, modelSelection: import("@task-handoff/protocol/ai-sessions").AiSessionModelSelection) {
+  return sharedAiSessionsApi.updateModelSelection(instanceId, aiSessionId, clientRequestId, modelSelection);
+}
+
+export function updateAiSessionReasoningEffort(instanceId: string, aiSessionId: string, clientRequestId: string, reasoningEffort: import("@task-handoff/protocol/ai-sessions").AiSessionReasoningEffort) {
+  return sharedAiSessionsApi.updateReasoningEffort(instanceId, aiSessionId, clientRequestId, reasoningEffort);
+}
+
 export function forkAiSession(instanceId: string, aiSessionId: string, input: import("@task-handoff/protocol/ai-sessions").AiSessionForkInput) {
   return sharedAiSessionsApi.fork(instanceId, aiSessionId, input);
 }
 
-export function getAiSessionWorkspace(instanceId: string, cwdFolderId: string, signal?: AbortSignal) {
+export function getAiSessionWorkspace(instanceId: string, cwdFolderId?: string, signal?: AbortSignal) {
   return sharedAiSessionsApi.workspace(instanceId, cwdFolderId, signal);
 }
 
@@ -568,11 +715,11 @@ export function createControlPlaneTrigger(input: CreateControlPlaneTriggerInput)
 }
 
 export function updateControlPlaneTrigger(configHash: string, input: CreateControlPlaneTriggerInput) {
-  return putApiData<Record<string, unknown>>(`triggers/${configHash}`, input);
+  return putApiData<ControlPlaneTriggerMutationResult>(`triggers/${configHash}`, input);
 }
 
 export function deleteControlPlaneTrigger(configHash: string) {
-  return deleteApiData<Record<string, unknown>>(`triggers/${configHash}`);
+  return deleteApiData<ControlPlaneTriggerMutationResult>(`triggers/${configHash}`);
 }
 
 export function applyControlPlaneTrigger(configHash: string, instanceIds: string[]) {
@@ -580,11 +727,15 @@ export function applyControlPlaneTrigger(configHash: string, instanceIds: string
 }
 
 export function bindAiSessionTrigger(instanceId: string, sessionId: string, configHash: string) {
-  return postApiData<Record<string, unknown>>(`controlled-instances/${instanceId}/ai-sessions/${sessionId}/triggers`, { configHash });
+  return postApiData<InstanceTriggerMutationResult>(`controlled-instances/${instanceId}/ai-sessions/${sessionId}/triggers`, { configHash });
 }
 
 export function unbindAiSessionTrigger(instanceId: string, sessionId: string, configHash: string) {
   return deleteApiData<Record<string, unknown>>(`controlled-instances/${instanceId}/ai-sessions/${sessionId}/triggers/${configHash}`);
+}
+
+export function getControlledInstanceTriggers(instanceId: string) {
+  return getApiData<InstanceTriggerIndex>(`controlled-instances/${instanceId}/triggers`);
 }
 
 export function useChatGatewayStatusQuery() {
@@ -676,8 +827,8 @@ export function getInstanceAppManagementJob(instanceId: string, jobId: string) {
   return getApiData<AppManagementJobResponse>(`controlled-instances/${instanceId}/apps/jobs/${encodeURIComponent(jobId)}`);
 }
 
-export function uploadAiSessionAttachment(input: { instanceId: string; sessionId: string; kind: "image" | "file"; name: string; mime: string; data: string }) {
-  return sharedAiSessionsApi.uploadAttachment(input);
+export function uploadAiSessionAttachment(input: { instanceId: string; sessionId: string; scopeType?: "session" | "create-request"; kind: "image" | "file"; name: string; mime: string; data: string }, onProgress?: (progress: number) => void) {
+  return sharedAiSessionsApi.uploadAttachment(input, onProgress);
 }
 
 export function sendAiSessionMessage(instanceId: string, sessionId: string, message: string, mode?: "auto" | "queue" | "steer" | "immediate", attachments: AiSessionAttachmentRef[] = [], references: AiSessionReference[] = [], permissionMode?: import("@task-handoff/protocol/ai-sessions").AiSessionPermissionMode) {
@@ -752,12 +903,36 @@ export function createModel(input: CreateModelInput) {
   return postApiData<ModelConfig>("models", input);
 }
 
+export function copyModel(id: string, input: CopyModelInput) {
+  return postApiData<ModelConfig>(`models/${id}/copy`, input);
+}
+
 export function updateModel(id: string, input: UpdateModelInput) {
   return patchApiData<ModelConfig>(`models/${id}`, input);
 }
 
 export function deleteModel(id: string) {
   return deleteApiData<{ deleted: boolean }>(`models/${id}`);
+}
+
+export function createGitCredential(input: GitCredentialCreateRequest) {
+  return postApiData<GitCredentialPublic>("git-credentials", input);
+}
+
+export function updateGitCredential(id: string, input: GitCredentialUpdateRequest) {
+  return patchApiData<GitCredentialPublic>(`git-credentials/${id}`, input);
+}
+
+export function deleteGitCredential(id: string) {
+  return deleteApiData<{ deleted: boolean }>(`git-credentials/${id}`);
+}
+
+export function authorizeInstanceGitCredential(instanceId: string, credentialId: string) {
+  return postApiData<InstanceGitCredentialAssignment>(`controlled-instances/${encodeURIComponent(instanceId)}/git-credential-assignments`, { credentialId });
+}
+
+export function revokeInstanceGitCredential(instanceId: string, credentialId: string) {
+  return deleteApiData<{ revoked: boolean }>(`controlled-instances/${encodeURIComponent(instanceId)}/git-credential-assignments/${encodeURIComponent(credentialId)}`);
 }
 
 export function createNodeModel(nodeId: string, input: CreateModelInput) {
@@ -780,7 +955,7 @@ export function discoverModels(input: ModelEndpointDraft, nodeId?: string) {
   return postApiData<ModelDiscoveryResult>(nodeId ? `nodes/${nodeId}/models/discover` : "models/discover", input);
 }
 
-export function testModel(input: ModelEndpointDraft & { model: string; app: "codex" | "claude" }, nodeId?: string) {
+export function testModel(input: ModelEndpointDraft & { model: string; app?: "codex" | "claude" | "opencode" }, nodeId?: string) {
   return postApiData<ModelTestResult>(nodeId ? `nodes/${nodeId}/models/test` : "models/test", input);
 }
 
@@ -836,8 +1011,17 @@ export function createNodeJoinInvite(input: { nodeName?: string } = {}) {
   return postApiData<NodeJoinInvite>("node-join/invites", input);
 }
 
+export function getNodeJoinInviteStatus(id: string, signal?: AbortSignal) {
+  return getApiData<unknown>(`node-join/invites/${encodeURIComponent(id)}`, { signal })
+    .then((value) => NodeJoinInviteStatusSchema.parse(value));
+}
+
 export function createNodeLocalFolder(nodeId: string, input: CreateNodeLocalFolderInput) {
   return postApiData<NodeLocalFolder>(`nodes/${nodeId}/local-folders`, input);
+}
+
+export function updateNodeLocalFolder(nodeId: string, folderId: string, input: UpdateNodeLocalFolderInput) {
+  return patchApiData<NodeLocalFolder>(`nodes/${nodeId}/local-folders/${folderId}`, input);
 }
 
 export function deleteNodeLocalFolder(nodeId: string, folderId: string) {

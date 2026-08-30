@@ -1,11 +1,9 @@
 <template>
   <section class="instance-detail" :aria-label="t('instances.detail.label')">
-    <div v-if="loading" class="detail-empty">{{ t("instances.detail.loading") }}</div>
-    <div v-else-if="error" class="detail-empty error">{{ error }}</div>
+    <div v-if="error" class="detail-empty error">{{ error }}</div>
     <div v-else-if="instance" class="instance-detail-layout" :class="{ 'preview-expanded': previewExpanded }">
       <header v-if="!previewExpanded" class="detail-head">
-        <div>
-          <p>{{ instanceSourceLabel(instance, t) }}</p>
+        <div class="detail-identity">
           <div
             class="detail-name-field"
             :class="{ editing: editingNameId === instance.id }"
@@ -33,7 +31,11 @@
               <span class="detail-name-button-label">{{ instanceDisplayName(instance) }}</span>
             </button>
           </div>
-          <span>{{ instance.image?.name || instance.imageSelection?.imageId }} · {{ instance.node?.name || instance.nodeId }} / {{ instance.runtime?.name || instance.runtimeId }}</span>
+          <div class="detail-meta">
+            <p>{{ instanceSourceLabel(instance, t) }}</p>
+            <span aria-hidden="true">·</span>
+            <span :title="instanceRuntimeSummary(instance)">{{ instanceRuntimeSummary(instance) }}</span>
+          </div>
           <span v-if="instance.imageProvisioning && instance.imageProvisioning.phase !== 'ready' && !instance.imagePullProgress" class="image-provisioning-status">
             {{ imageProvisioningLabel(instance, t) }}<template v-if="instance.imageProvisioning.error"> · {{ instance.imageProvisioning.error }}</template>
           </span>
@@ -130,6 +132,7 @@
         :app-launch-menu-open="appLaunchMenuOpen"
         :can-launch-app="canLaunchApp"
         :copied-text="copiedText"
+        :choose-project-folder="chooseProjectFolder"
         :instance="instance"
         :instance-sidebar-visible="instanceSidebarVisible"
         :is-instance-action-busy="isInstanceActionBusy"
@@ -158,7 +161,7 @@
         :standalone="standalone"
         :toolbar-target="sessionToolbarTarget"
         @copy-registration="$emit('copyRegistration', $event)"
-        @launch-app="(target, appId, cwdFolderId) => $emit('launchApp', target, appId, cwdFolderId)"
+        @launch-app="(target, appId, cwdFolderId, options) => $emit('launchApp', target, appId, cwdFolderId, options)"
         @move-session-tab="(sourceKey, targetKey, placement, targetPane) => $emit('moveSessionTab', sourceKey, targetKey, placement, targetPane)"
         @move-session-to-pane="(sessionKey, pane) => $emit('moveSessionToPane', sessionKey, pane)"
         @focus-session-pane="$emit('focusSessionPane', $event)"
@@ -181,7 +184,7 @@
 
     </div>
 
-    <section v-else class="detail-empty">
+    <section v-else-if="!loading" class="detail-empty">
       <h1>{{ t("instances.detail.emptyTitle") }}</h1>
       <p>{{ t("instances.detail.emptyDescription") }}</p>
       <Button v-if="!standalone" size="sm" @click="$emit('newInstance')">
@@ -208,6 +211,7 @@ import type { SessionPaneId } from "./useActiveInstanceSessions";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
 import { connectionStatusKeys, instanceStatusKeys, translateStatus } from "../../../i18n/status";
 import { translateApiError } from "../../../i18n/apiError";
+import type { NativeNodeFolderPicker } from "../nodePath";
 
 const { t } = useI18n();
 const instanceStatusLabel = (status: string) => translateStatus(instanceStatusKeys, status, t);
@@ -227,6 +231,7 @@ const props = defineProps<{
   appLaunchMenuOpen: boolean;
   canLaunchApp: boolean;
   copiedText: string;
+  chooseProjectFolder?: NativeNodeFolderPicker;
   error?: string;
   instance?: InstanceWithAiSessions;
   instanceDisplayName: (instance: InstanceBoardItem) => string;
@@ -262,7 +267,7 @@ const props = defineProps<{
 
 defineEmits<{
   copyRegistration: [instance: InstanceBoardItem];
-  launchApp: [instance: InstanceBoardItem, appId: string, cwdFolderId?: string];
+  launchApp: [instance: InstanceBoardItem, appId: string, cwdFolderId?: string, options?: Record<string, unknown>];
   moveSessionTab: [sourceKey: string, targetKey: string, placement: "before" | "after", targetPane?: SessionPaneId];
   moveSessionToPane: [sessionKey: string, pane: SessionPaneId];
   focusSessionPane: [pane: SessionPaneId];
@@ -273,7 +278,7 @@ defineEmits<{
   openAiSessionApp: [instance: InstanceBoardItem, session?: AiSessionSummary];
   openRepositoryWorkspace: [target: RepositoryWorkspaceTabTarget];
   openWindow: [instance: InstanceBoardItem];
-  openSettings: [instanceId: string, section?: "general" | "models" | "apps"];
+  openSettings: [instanceId: string, section?: "general" | "ai" | "models" | "apps"];
   openUrl: [url: string];
   runAction: [action: InstanceAction, instance: InstanceBoardItem];
   selectAiSession: [instanceId: string, sessionId: string];
@@ -356,6 +361,10 @@ function buildLabel(instance: InstanceBoardItem) {
 
 function packageLabel(instance: InstanceBoardItem) {
   return instance.build?.packageVersion || instance.instanceVersion || t("common.status.unknown");
+}
+
+function instanceRuntimeSummary(instance: InstanceBoardItem) {
+  return `${instance.image?.name || instance.imageSelection?.imageId} · ${instance.node?.name || instance.nodeId} / ${instance.runtime?.name || instance.runtimeId}`;
 }
 
 function buildTitle(instance: InstanceBoardItem) {

@@ -1,5 +1,11 @@
 import type { ControlledInstance } from "@task-handoff/protocol/control-plane";
-import { ControlPlaneTriggersSchema, triggerConfigHash, type TriggerConfig } from "@task-handoff/protocol/triggers";
+import {
+  ControlPlaneTriggersSchema,
+  TriggerMutationResultSchema,
+  triggerConfigHash,
+  type ControlPlaneTriggerMutationFailure,
+  type TriggerConfig,
+} from "@task-handoff/protocol/triggers";
 import type { JsonCollection } from "../../shared/persistence/store.ts";
 import {
   ApplyControlPlaneTriggerSchema,
@@ -11,9 +17,17 @@ import {
 } from "./inputs.ts";
 import { now, throwNotFound } from "../common/helpers.ts";
 
+const TRIGGER_FANOUT_CONCURRENCY = 8;
+
+type ControlPlaneTriggerMutationDirectory = {
+  items: ControlledInstance[];
+  partialFailures: ControlPlaneTriggerMutationFailure[];
+};
+
 export type ControlPlaneTriggerServiceOptions = {
   triggers: JsonCollection<ControlPlaneTriggerRecord>;
   listInstances: () => Promise<ControlledInstance[]>;
+  listMutationInstances?: () => Promise<ControlPlaneTriggerMutationDirectory>;
   requireInstance: (instanceId: string) => Promise<ControlledInstance>;
   instanceRequest: (instance: ControlledInstance, route: string, init?: RequestInit) => Promise<unknown>;
 };
@@ -21,12 +35,15 @@ export type ControlPlaneTriggerServiceOptions = {
 export class ControlPlaneTriggerService {
   private readonly triggers: JsonCollection<ControlPlaneTriggerRecord>;
   private readonly listInstances: ControlPlaneTriggerServiceOptions["listInstances"];
+  private readonly listMutationInstances: NonNullable<ControlPlaneTriggerServiceOptions["listMutationInstances"]>;
   private readonly requireInstance: ControlPlaneTriggerServiceOptions["requireInstance"];
   private readonly instanceRequest: ControlPlaneTriggerServiceOptions["instanceRequest"];
 
   constructor(options: ControlPlaneTriggerServiceOptions) {
     this.triggers = options.triggers;
     this.listInstances = options.listInstances;
+    this.listMutationInstances = options.listMutationInstances
+      ?? (async () => ({ items: await options.listInstances(), partialFailures: [] }));
     this.requireInstance = options.requireInstance;
     this.instanceRequest = options.instanceRequest;
   }
@@ -149,69 +166,80 @@ export class ControlPlaneTriggerService {
       updatedAt: timestamp,
     });
 
-    const instances = await this.listInstances();
-    const results = [];
-    for (const instance of instances) {
+    const directory = await this.listMutationInstances();
+    const mutations = await mapConcurrent(directory.items, TRIGGER_FANOUT_CONCURRENCY, async (instance) => {
+      const instanceResults = [];
+      const partialFailures: ControlPlaneTriggerMutationFailure[] = [];
       const item = instance.triggers?.configs?.find((entry) => entry.configHash === configHash);
       const deployments = (item?.deployments || []).filter((deployment) => deployment.origin === "control-plane");
       if (nextConfigHash === configHash) {
         if (deployments.length) {
-          results.push({
-            instanceId: instance.id,
-            data: await this.instanceRequest(instance, `/triggers/${encodeURIComponent(configHash)}`, {
+          try {
+            const data = await this.instanceRequest(instance, `/triggers/${encodeURIComponent(configHash)}`, {
               method: "PATCH",
               headers: { "content-type": "application/json" },
               body: JSON.stringify({ name: record.name, description: record.description ?? null }),
-            }),
-          });
+            });
+            instanceResults.push({ instanceId: instance.id, data });
+          } catch (error) {
+            partialFailures.push(triggerInstanceMutationFailure(instance, error));
+          }
         }
-        continue;
+        return { results: instanceResults, partialFailures };
       }
       for (const deployment of deployments) {
         const deploymentId = deployment.target.type === "ai-session"
           ? aiSessionTriggerDeploymentId(deployment.target.aiSessionId, nextConfigHash)
           : deployment.deploymentId;
-        const data = await this.instanceRequest(instance, "/triggers", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            name: record.name,
-            description: record.description,
-            source: record.source,
-            action: record.action,
-            policy: record.policy,
-            deployment: {
-              deploymentId,
-              origin: "control-plane",
-              enabled: deployment.enabled,
-              target: deployment.target,
-              localName: deployment.localName,
-            },
-          }),
-        });
-        const oldDeploymentId = deployment.deploymentId || deployment.configHash;
-        await this.instanceRequest(instance, `/triggers/${encodeURIComponent(configHash)}/deployments/${encodeURIComponent(oldDeploymentId)}`, { method: "DELETE" });
-        results.push({ instanceId: instance.id, deploymentId, data });
+        try {
+          const data = await this.instanceRequest(instance, "/triggers", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              name: record.name,
+              description: record.description,
+              source: record.source,
+              action: record.action,
+              policy: record.policy,
+              deployment: {
+                deploymentId,
+                origin: "control-plane",
+                enabled: deployment.enabled,
+                target: deployment.target,
+                localName: deployment.localName,
+              },
+            }),
+          });
+          const oldDeploymentId = deployment.deploymentId || deployment.configHash;
+          await this.instanceRequest(instance, `/triggers/${encodeURIComponent(configHash)}/deployments/${encodeURIComponent(oldDeploymentId)}`, { method: "DELETE" });
+          instanceResults.push({ instanceId: instance.id, deploymentId, data });
+        } catch (error) {
+          partialFailures.push(triggerInstanceMutationFailure(instance, error));
+        }
       }
-    }
+      return { results: instanceResults, partialFailures };
+    });
+    const results = mutations.flatMap((entry) => entry.results);
+    const partialFailures = [...directory.partialFailures, ...mutations.flatMap((entry) => entry.partialFailures)];
 
     this.triggers.put(record);
     if (nextConfigHash !== configHash) this.triggers.delete(configHash);
-    return { previousConfigHash: configHash, trigger: record, results };
+    return { previousConfigHash: configHash, trigger: record, results, partialFailures };
   }
 
   async deleteTrigger(configHash: string) {
+    const directory = await this.listMutationInstances();
     const deletedTemplate = this.triggers.delete(configHash);
-    const instances = await this.listInstances();
-    const results = [];
-    for (const instance of instances) {
+    const mutations = await mapConcurrent(directory.items, TRIGGER_FANOUT_CONCURRENCY, async (instance) => {
+      const instanceResults = [];
+      const partialFailures: ControlPlaneTriggerMutationFailure[] = [];
       const item = instance.triggers?.configs?.find((entry) => entry.configHash === configHash);
       if (!item) {
-        continue;
+        return { results: instanceResults, partialFailures };
       }
       const controlPlaneDeployments = (item.deployments || []).filter((deployment) => deployment.origin === "control-plane");
       if (!controlPlaneDeployments.length) {
-        continue;
+        return { results: instanceResults, partialFailures };
       }
       const canDeleteWholeConfig = item.deployments.every((deployment) => deployment.origin === "control-plane");
       for (const deployment of controlPlaneDeployments) {
@@ -222,16 +250,24 @@ export class ControlPlaneTriggerService {
               ? `/triggers/${encodeURIComponent(configHash)}`
               : undefined;
           if (!route) {
-            results.push({ instanceId: instance.id, configHash, deploymentId: deployment.deploymentId, deleted: false, skipped: "missing-deployment-id" });
+            instanceResults.push({ instanceId: instance.id, configHash, deploymentId: deployment.deploymentId, deleted: false, skipped: "missing-deployment-id" });
+            partialFailures.push({
+              scope: "instance",
+              nodeId: instance.nodeId,
+              instanceId: instance.id,
+              code: "TRIGGER_DEPLOYMENT_ID_MISSING",
+              message: `Trigger deployment on instance ${instance.name} has no deletable deployment id.`,
+            });
             continue;
           }
           const data = await this.instanceRequest(instance, route, { method: "DELETE" });
-          results.push({ instanceId: instance.id, configHash, deploymentId: deployment.deploymentId, deleted: true, data });
+          instanceResults.push({ instanceId: instance.id, configHash, deploymentId: deployment.deploymentId, deleted: true, data });
           if (!deployment.deploymentId) {
             break;
           }
         } catch (error) {
-          results.push({
+          partialFailures.push(triggerInstanceMutationFailure(instance, error));
+          instanceResults.push({
             instanceId: instance.id,
             configHash,
             deploymentId: deployment.deploymentId,
@@ -240,20 +276,22 @@ export class ControlPlaneTriggerService {
           });
         }
       }
-    }
+      return { results: instanceResults, partialFailures };
+    });
+    const results = mutations.flatMap((entry) => entry.results);
+    const partialFailures = [...directory.partialFailures, ...mutations.flatMap((entry) => entry.partialFailures)];
     if (!deletedTemplate && !results.length) {
       throwNotFound("TRIGGER_NOT_FOUND", `Trigger ${configHash} was not found.`);
     }
-    return { configHash, deletedTemplate, results };
+    return { configHash, deletedTemplate, results, partialFailures };
   }
 
   async applyTrigger(configHash: string, input: unknown) {
     const config = this.requireTrigger(configHash);
     const parsed = ApplyControlPlaneTriggerSchema.parse(input || {});
-    const results = [];
-    for (const instanceId of parsed.instanceIds) {
+    const results = await mapConcurrent(parsed.instanceIds, TRIGGER_FANOUT_CONCURRENCY, async (instanceId) => {
       const instance = await this.requireInstance(instanceId);
-      results.push({
+      return {
         instanceId,
         data: await this.instanceRequest(instance, "/triggers", {
           method: "POST",
@@ -271,8 +309,8 @@ export class ControlPlaneTriggerService {
             },
           }),
         }),
-      });
-    }
+      };
+    });
     return { configHash, results };
   }
 
@@ -285,7 +323,7 @@ export class ControlPlaneTriggerService {
     const parsed = BindAiSessionTriggerSchema.parse(input || {});
     const config = this.requireTrigger(parsed.configHash);
     const instance = await this.requireInstance(instanceId);
-    return this.instanceRequest(instance, "/triggers", {
+    return TriggerMutationResultSchema.parse(await this.instanceRequest(instance, "/triggers", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -301,7 +339,7 @@ export class ControlPlaneTriggerService {
           target: { type: "ai-session", aiSessionId: sessionId },
         },
       }),
-    });
+    }));
   }
 
   async unbindAiSessionTrigger(instanceId: string, sessionId: string, configHash: string) {
@@ -330,6 +368,27 @@ export class ControlPlaneTriggerService {
   }
 }
 
+async function mapConcurrent<T, R>(items: readonly T[], concurrency: number, worker: (item: T, index: number) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  let failed = false;
+  let failure: unknown;
+  const run = async () => {
+    while (!failed && nextIndex < items.length) {
+      const index = nextIndex++;
+      try {
+        results[index] = await worker(items[index], index);
+      } catch (error) {
+        failed = true;
+        failure = error;
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, run));
+  if (failed) throw failure;
+  return results;
+}
+
 function publicTriggerConfig(record: ControlPlaneTriggerRecord): TriggerConfig {
   return {
     configHash: record.configHash,
@@ -340,6 +399,22 @@ function publicTriggerConfig(record: ControlPlaneTriggerRecord): TriggerConfig {
     policy: record.policy,
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
+  };
+}
+
+function triggerInstanceMutationFailure(
+  instance: ControlledInstance,
+  error: unknown,
+): ControlPlaneTriggerMutationFailure {
+  const record = error && typeof error === "object" ? error as { code?: unknown; message?: unknown } : undefined;
+  const code = typeof record?.code === "string" && record.code ? record.code : "TRIGGER_INSTANCE_MUTATION_FAILED";
+  const message = typeof record?.message === "string" && record.message ? record.message : String(error);
+  return {
+    scope: "instance",
+    nodeId: instance.nodeId,
+    instanceId: instance.id,
+    code: code.slice(0, 160),
+    message: message.slice(0, 4000),
   };
 }
 

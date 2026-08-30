@@ -6,7 +6,10 @@ import { SystemIcon } from '../../src/components/SystemIcon';
 import { useMobileTheme } from '../../src/components/theme';
 import { ControlPlaneDetailContent } from '../../src/control-plane/ControlPlaneDetailContent';
 import type { MobileControlPlaneProfile } from '../../src/control-plane/profile';
-import { deleteMobileControlPlaneProfile, mobileProfileStore as profiles } from '../../src/control-plane/runtime';
+import { deleteMobileControlPlaneProfile, mobileProfileStore as profiles, mobileSecureStore } from '../../src/control-plane/runtime';
+import { createDirectControlPlaneClient } from '../../src/control-plane/client';
+import { loadMobileCurrentAccess } from '../../src/control-plane/current-access';
+import type { ControlPlaneCurrentAuthorization } from '@task-handoff/protocol/control-plane-access';
 import { useI18n, type Translate } from '../../src/i18n';
 import { useMobileToast } from '../../src/components/MobileToast';
 
@@ -19,6 +22,7 @@ export default function ControlPlaneDetailScreen() {
   const [active, setActive] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [currentAccess, setCurrentAccess] = useState<ControlPlaneCurrentAuthorization>();
 
   useEffect(() => {
     let live = true;
@@ -27,6 +31,16 @@ export default function ControlPlaneDetailScreen() {
       const match = stored.find((candidate) => candidate.identity.controlPlaneId === controlPlaneId);
       setProfile(match);
       setActive(Boolean(match && current?.identity.controlPlaneId === match.identity.controlPlaneId));
+      if (match) {
+        void loadMobileCurrentAccess(
+          match,
+          (directProfile) => createDirectControlPlaneClient(directProfile, mobileSecureStore).api.users.currentAuthorization(),
+        )
+          .then((access) => { if (live) setCurrentAccess(access); })
+          .catch(() => { if (live) setCurrentAccess(undefined); });
+      } else {
+        setCurrentAccess(undefined);
+      }
       setLoading(false);
     }).catch((cause) => {
       if (!live) return;
@@ -94,6 +108,7 @@ export default function ControlPlaneDetailScreen() {
       <ControlPlaneDetailContent
         active={active}
         busy={busy}
+        currentAccess={currentAccess}
         onMakeActive={() => { void makeActive(); }}
         onRemove={remove}
         profile={profile}

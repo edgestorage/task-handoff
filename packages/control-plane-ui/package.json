@@ -13,10 +13,12 @@
     "typecheck": "vue-tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@lobehub/icons-static-svg": "1.94.0",
     "@lucide/vue": "^1.21.0",
     "@tanstack/vue-query": "^5.91.2",
     "@tanstack/vue-virtual": "^3.13.29",
     "@task-handoff/control-plane-client": "workspace:*",
+    "@task-handoff/core": "workspace:*",
     "@task-handoff/protocol": "workspace:*",
     "@task-handoff/web-theme": "workspace:*",
     "@vueuse/core": "^14.3.0",

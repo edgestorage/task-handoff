@@ -11,12 +11,25 @@ const { ControlPlanePersistenceMaintenance } = require("../packages/control-plan
 const { NodeAgentIdentityService } = require("../packages/control-plane/src/node-agent/identity/service.ts");
 const { nodeAgentStorePaths } = require("../packages/control-plane/src/node-agent/persistence/paths.ts");
 const { NodeAgentPersistenceMaintenance } = require("../packages/control-plane/src/node-agent/persistence/maintenance.ts");
+const { EphemeralTokenStore } = require("../packages/control-plane/src/shared/security/ephemeral-token-store.ts");
 const { copyTruncateOpenLog } = require("../packages/core/src/storage/open-log-retention.ts");
 const { enforceInstanceLogBudget, RotatingLogWriter } = require("../packages/app-runtime/src/log-retention.ts");
 
 function tempDir(name) {
   return fs.mkdtempSync(path.join(os.tmpdir(), `task-handoff-${name}-`));
 }
+
+test("ephemeral token store expires records and consumes each key once", () => {
+  const store = new EphemeralTokenStore();
+  store.put("one", { expiresAt: "2026-08-22T00:00:10.000Z", value: 1 }, Date.parse("2026-08-22T00:00:00.000Z"));
+  assert.equal(store.peek("one", Date.parse("2026-08-22T00:00:05.000Z")).value, 1);
+  assert.equal(store.take("one", Date.parse("2026-08-22T00:00:05.000Z")).value, 1);
+  assert.equal(store.take("one", Date.parse("2026-08-22T00:00:05.000Z")), undefined);
+
+  store.put("expired", { expiresAt: "2026-08-22T00:00:10.000Z" }, Date.parse("2026-08-22T00:00:00.000Z"));
+  assert.equal(store.peek("expired", Date.parse("2026-08-22T00:00:10.000Z")), undefined);
+  assert.deepEqual(store.list(Date.parse("2026-08-22T00:00:10.000Z")), []);
+});
 
 test("temporary node-agent pairing invites never enter identity persistence", () => {
   const paths = nodeAgentStorePaths(tempDir("memory-pairing-invite"));
@@ -116,6 +129,21 @@ test("node-agent maintenance retains active data and ages orphan data through tr
 
   new NodeAgentPersistenceMaintenance(paths, { now: () => 2_501, retentionMs: 500 }).run(["inst_active"]);
   assert.deepEqual(fs.readdirSync(path.join(paths.dataDir, "local-instances-trash")), []);
+});
+
+test("node-agent maintenance copy-truncates its open process logs", () => {
+  const paths = nodeAgentStorePaths(tempDir("node-agent-open-logs"));
+  fs.mkdirSync(paths.logsDir, { recursive: true });
+  const outPath = path.join(paths.logsDir, "node-agent.out.log");
+  const errPath = path.join(paths.logsDir, "node-agent.err.log");
+  fs.writeFileSync(outPath, "o".repeat(10 * 1024 * 1024 + 1));
+  fs.writeFileSync(errPath, "error\n");
+
+  const maintenance = new NodeAgentPersistenceMaintenance(paths);
+  assert.deepEqual(maintenance.capNodeAgentLogs(), [outPath]);
+  assert.equal(fs.statSync(outPath).size, 0);
+  assert.equal(fs.statSync(path.join(paths.logsDir, "node-agent.out.1.log")).size, 10 * 1024 * 1024);
+  assert.equal(fs.readFileSync(errPath, "utf8"), "error\n");
 });
 
 test("rotating log writer bounds each generation", async () => {

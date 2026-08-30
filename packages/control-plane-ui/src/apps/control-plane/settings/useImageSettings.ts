@@ -51,15 +51,16 @@ export function useImageSettings({ errorText, images, onImageDeleted, refreshIma
   }
 
   async function removeImageProfile(image: { id: string; name: string }) {
-    if (deletingImageId.value || !images.value?.some((item) => item.id === image.id)) return;
-    if (!window.confirm(t("settings.imageRegistry.deleteConfirm", { name: image.name }))) return;
+    if (deletingImageId.value || !images.value?.some((item) => item.id === image.id)) return false;
     deletingImageId.value = image.id;
     try {
       await deleteImage(image.id);
       onImageDeleted(image.id);
       await refreshImages();
+      return true;
     } catch (error) {
       showControlPlaneToast(translateError(error));
+      return false;
     } finally {
       deletingImageId.value = "";
     }

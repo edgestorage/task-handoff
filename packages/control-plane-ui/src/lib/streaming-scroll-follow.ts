@@ -14,6 +14,7 @@ export interface StreamingScrollFollowOptions {
 }
 
 export const STREAMING_SCROLL_FOLLOW_THRESHOLD = 48;
+const BOTTOM_RESTORE_EPSILON = 2;
 
 export function distanceFromBottom(viewport: ScrollViewport) {
   return Math.max(0, viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop);
@@ -30,8 +31,10 @@ export function createStreamingScrollFollow(
   let autoScrolling = false;
   let frame: number | undefined;
   let manuallyPaused = false;
+  let restoreOnBottom = false;
   let movedAwayAfterManualPause = false;
   let observedScrollHeight: number | undefined;
+  let observedDistance: number | undefined;
   const smoothApproachDistance = 1600;
 
   function setFollowing(value: boolean) {
@@ -59,14 +62,19 @@ export function createStreamingScrollFollow(
   function handleScroll() {
     const viewport = getViewport();
     if (!viewport) return;
+    const previousScrollHeight = observedScrollHeight;
+    const previousDistance = observedDistance;
     const contentGrew = observedScrollHeight !== undefined
       && viewport.scrollHeight > observedScrollHeight + 0.25;
     observedScrollHeight = viewport.scrollHeight;
+    const distance = distanceFromBottom(viewport);
+    observedDistance = distance;
     if (manuallyPaused) {
       const distance = distanceFromBottom(viewport);
       if (distance > 0.5) movedAwayAfterManualPause = true;
-      if (movedAwayAfterManualPause && distance <= 0.5) {
+      if (distance <= BOTTOM_RESTORE_EPSILON && (movedAwayAfterManualPause || restoreOnBottom && (observedDistance ?? distance) <= BOTTOM_RESTORE_EPSILON)) {
         manuallyPaused = false;
+        restoreOnBottom = false;
         movedAwayAfterManualPause = false;
         setFollowing(true);
       } else {
@@ -75,7 +83,14 @@ export function createStreamingScrollFollow(
       return;
     }
     if (following && !autoScrolling && contentGrew) {
+      const contentGrowth = Math.max(0, viewport.scrollHeight - (previousScrollHeight || viewport.scrollHeight));
+      const expectedDistance = (previousDistance || 0) + contentGrowth;
+      if (distance > expectedDistance + 1) {
+        setFollowing(false);
+        return;
+      }
       viewport.scrollTop = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
+      observedDistance = 0;
       return;
     }
     if (autoScrolling) {
@@ -103,6 +118,7 @@ export function createStreamingScrollFollow(
         viewport.scrollTop = viewport.scrollHeight;
         setAutoScrolling(false);
       }
+      observedDistance = distanceFromBottom(viewport);
     });
   }
 
@@ -116,10 +132,12 @@ export function createStreamingScrollFollow(
     if (!viewport) return;
     observedScrollHeight = viewport.scrollHeight;
     viewport.scrollTop = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
+    observedDistance = 0;
   }
 
   function followLatest() {
     manuallyPaused = false;
+    restoreOnBottom = false;
     movedAwayAfterManualPause = false;
     setFollowing(true);
     setAutoScrolling(true);
@@ -129,24 +147,44 @@ export function createStreamingScrollFollow(
   function jumpLatest() {
     cancelAutomaticScroll();
     manuallyPaused = false;
+    restoreOnBottom = false;
     movedAwayAfterManualPause = false;
     setFollowing(true);
     const viewport = getViewport();
     if (!viewport) return;
     observedScrollHeight = viewport.scrollHeight;
     viewport.scrollTop = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
+    observedDistance = 0;
   }
 
-  function pauseFollowing() {
+  function pauseFollowing(manual = false) {
     cancelAutomaticScroll();
     const viewport = getViewport();
-    if (viewport) observedScrollHeight = viewport.scrollHeight;
+    if (viewport) {
+      observedScrollHeight = viewport.scrollHeight;
+      observedDistance = distanceFromBottom(viewport);
+    }
+    if (manual) {
+      if (viewport && distanceFromBottom(viewport) <= BOTTOM_RESTORE_EPSILON) {
+        manuallyPaused = false;
+        restoreOnBottom = false;
+        movedAwayAfterManualPause = false;
+        setFollowing(true);
+        return;
+      }
+      manuallyPaused = true;
+      restoreOnBottom = true;
+      movedAwayAfterManualPause = Boolean(viewport && distanceFromBottom(viewport) > 0.5);
+      setFollowing(false);
+      return;
+    }
     setFollowing(Boolean(viewport && distanceFromBottom(viewport) <= threshold));
   }
 
   function stopFollowing() {
     cancelAutomaticScroll();
     manuallyPaused = true;
+    restoreOnBottom = false;
     movedAwayAfterManualPause = false;
     setFollowing(false);
   }

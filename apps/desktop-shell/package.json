@@ -10,7 +10,9 @@
     "test": "node --test"
   },
   "dependencies": {
+    "@task-handoff/protocol": "workspace:*",
     "electron": "catalog:",
-    "electron-updater": "^6.8.9"
+    "electron-updater": "^6.8.9",
+    "ws": "^8.21.0"
   }
 }

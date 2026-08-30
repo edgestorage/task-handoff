@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
+import { SAFE_FILE_SYSTEM_COMPONENT_MAX_BYTES, safeFileName } from "@task-handoff/core/core/file-names";
 import {
   AI_SESSION_MAX_ATTACHMENT_BYTES,
   AI_SESSION_MAX_INLINE_FILE_BYTES,
@@ -49,11 +50,6 @@ function attachmentRoot() {
   return path.join(os.tmpdir(), "task-handoff-ai-session-attachments");
 }
 
-function safeName(name: string) {
-  const cleaned = path.basename(name).replace(/[^\w.\- ()\u4e00-\u9fff]/g, "_").slice(0, 160);
-  return cleaned || "attachment";
-}
-
 function decodeDataUrlOrBase64(data: string, fallbackMime: string) {
   const match = /^data:([^;,]+);base64,(.+)$/i.exec(data.trim());
   const mime = match?.[1] || fallbackMime;
@@ -92,8 +88,12 @@ export class AiSessionAttachmentStore {
     const expiresAt = new Date(now.getTime() + this.ttlMs);
     const dir = attachmentRoot();
     fs.mkdirSync(dir, { recursive: true });
-    const name = safeName(parsed.name);
-    const filePath = path.join(dir, `${id}-${name.endsWith(ext) ? name : `${name}${ext}`}`);
+    const name = safeFileName(parsed.name);
+    const prefix = `${id}-`;
+    const fileName = safeFileName(name.endsWith(ext) ? name : `${name}${ext}`, "attachment", {
+      maxBytes: SAFE_FILE_SYSTEM_COMPONENT_MAX_BYTES - Buffer.byteLength(prefix),
+    });
+    const filePath = path.join(dir, `${prefix}${fileName}`);
     fs.writeFileSync(filePath, decoded.buffer);
     const attachment: StoredAiSessionAttachment = {
       id,

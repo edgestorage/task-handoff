@@ -6,6 +6,7 @@ const card = fs.readFileSync(new URL("../src/apps/control-plane/ai-board/AiSessi
 const dock = fs.readFileSync(new URL("../src/apps/control-plane/ai-board/AiSessionFloatingDock.vue", import.meta.url), "utf8");
 const panel = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.vue", import.meta.url), "utf8");
 const result = fs.readFileSync(new URL("../src/components/ai-session/AiSessionResult.vue", import.meta.url), "utf8");
+const conversation = fs.readFileSync(new URL("../src/components/ai-session/AiSessionConversationContent.vue", import.meta.url), "utf8");
 const message = fs.readFileSync(new URL("../src/components/ai-session/AiSessionStreamingMarkdown.vue", import.meta.url), "utf8");
 const timeline = fs.readFileSync(new URL("../src/components/ai-session/AiSessionTimelineView.vue", import.meta.url), "utf8");
 const animatedText = fs.readFileSync(new URL("../src/components/ai-session/AiSessionAnimatedTextNode.vue", import.meta.url), "utf8");
@@ -18,9 +19,10 @@ test("board, instance session cards, and selected details use the streaming Mark
     assert.match(source, /:is-latest=/);
   }
   for (const source of [dock, panel]) {
-    assert.match(source, /AiSessionResult/);
-    assert.match(source, /:is-latest=/);
+    assert.match(source, /AiSessionConversationContent/);
   }
+  assert.match(conversation, /AiSessionResult/);
+  assert.match(conversation, /:is-latest=/);
   assert.match(panel, /<AiSessionStreamingMarkdown/);
   assert.match(panel, /import AiSessionStreamingMarkdown from "\.\.\/\.\.\/\.\.\/components\/ai-session\/AiSessionStreamingMarkdown\.vue"/);
   assert.match(panel, /<AiSessionToolActivity/);
@@ -31,16 +33,18 @@ test("board, instance session cards, and selected details use the streaming Mark
 });
 
 test("selected session details use the streaming message view", () => {
-  assert.match(panel, /AiSessionResult/);
+  assert.match(panel, /AiSessionConversationContent/);
+  assert.match(conversation, /AiSessionResult/);
   assert.match(result, /AiSessionStreamingMarkdown/);
   assert.match(message, /activeMessage\(props\.instanceId, props\.sessionId\)/);
-  assert.match(message, /streamingState\.value\?\.receivedText \?\? props\.content/);
+  assert.match(message, /streamingMessageMatchesTurn\(message, \{ id: props\.turnId, providerTurnId: props\.providerTurnId \}\)/);
   assert.match(result, /streamingMessages\.activeMessage\(props\.instanceId, props\.session\.id\)/);
+  assert.match(result, /streamingMessageMatchesTurn\(activeMessage, \{ id: props\.turnId, providerTurnId: props\.providerTurnId \}\)/);
   assert.match(result, /props\.isLatest/);
 });
 
 test("detail exposes an intent-aware shadcn return-to-latest control", () => {
-  assert.match(panel, /<Button[\s\S]*?v-if="!isFollowingLatest"[\s\S]*?@click="followLatest"/);
+  assert.match(panel, /<Button[\s\S]*?v-if="detailCanScroll && !isFollowingLatest"[\s\S]*?@click="followLatest"/);
   assert.match(panel, /keepFollowingAfterSend = detailScrollViewport[\s\S]*distanceFromBottom\(detailScrollViewport\) <= STREAMING_SCROLL_FOLLOW_THRESHOLD/);
   assert.match(panel, /keepFollowingAfterSend && scrollFollow\?\.isFollowing\(\)[\s\S]*await nextTick\(\);[\s\S]*scrollFollow\?\.followLatest\(\);[\s\S]*scrollFollow\?\.notifyContentResize\(\);/);
   assert.match(panel, /<ChevronDown :size="17" \/>/);
@@ -51,13 +55,13 @@ test("detail exposes an intent-aware shadcn return-to-latest control", () => {
   assert.match(panel, /@layout-committed="commitDetailLayoutAnchor"/);
   assert.match(panel, /function commitDetailLayoutAnchor\(\) \{[\s\S]*?detailLayoutAnchor\.commit\(\);[\s\S]*?scrollFollow\?\.notifyContentResize\(\);/);
   assert.match(timeline, /watch\(virtualTotalSize,[\s\S]*?emit\("layoutCommitted"\)/);
-  assert.match(panel, /function pauseDetailScrollFollow\(event: WheelEvent \| TouchEvent\)[\s\S]*?event instanceof TouchEvent \|\| event\.deltaY < 0[\s\S]*?scrollFollow\?\.stopFollowing\(\)/);
+  assert.match(panel, /function pauseDetailScrollFollow\(event: WheelEvent \| TouchEvent\)[\s\S]*?scrollFollow\?\.pauseFollowing\(true\)/);
   assert.match(result, /onBeforeUpdate\([\s\S]*emit\("layoutWillChange", turnElement\.value\)/);
   assert.match(result, /onUpdated\([\s\S]*emit\("layoutCommitted", turnElement\.value\)/);
   assert.match(panel, /data-task-handoff-scroll-viewport/);
-  assert.match(panel, /watch\(\(\) => `\$\{props\.instance\.id\}\\u0000\$\{selectedSession\.value\?\.id \|\| ""\}`/);
+  assert.match(panel, /useAiSessionConversationProjection/);
   assert.match(panel, /onMounted\(\(\) => \{[\s\S]*if \(!detailScrollViewport\) observeDetailScroll\(\);/);
-  assert.match(panel, /isFollowingLatest\.value = true;[\s\S]*isSmoothFollowingLatest\.value = false;[\s\S]*scrollFollow\?\.jumpLatest\(\);[\s\S]*handleDetailScroll\(\);/);
+  assert.match(panel, /isFollowingLatest\.value = true;[\s\S]*isSmoothFollowingLatest\.value = false;[\s\S]*if \(effectiveTimelineViewMode\.value === "full"\) \{[\s\S]*scrollFollow\?\.jumpLatest\(\);[\s\S]*viewport\.scrollTop = 0;[\s\S]*handleDetailScroll\(\);/);
   assert.match(panel, /enteringFullTimeline = value === "full"[\s\S]*await nextTick\(\);[\s\S]*scrollFollow\?\.jumpLatest\(\);[\s\S]*handleDetailScroll\(\);/);
 });
 

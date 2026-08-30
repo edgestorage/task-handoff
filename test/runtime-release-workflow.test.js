@@ -42,6 +42,7 @@ test("runtime release builds one Linux controlled-instance artifact from support
   assert.match(workflow, /Build Linux controlled instance production runtime/);
   assert.equal((workflow.match(/pnpm runtime:artifact -- --version/g) || []).length, 1);
   assert.match(workflow, /--prebuilds-dir release\/node-pty-prebuilds/);
+  assert.match(workflow, /pattern: node-pty-prebuild-\*[\s\S]*path: release\/node-pty-prebuilds[\s\S]*merge-multiple: true/);
   assert.match(workflow, /release\/runtime-artifacts\/\*/);
   assert.match(workflow, /needs: node-pty-prebuilds/);
   assert.match(workflow, /runtime-packages:\n\s+needs: controlled-instance-artifact/);
@@ -107,13 +108,113 @@ test("detached node update worker does not overwrite rollout completion after se
     "--npm-command", npm,
   ], {
     encoding: "utf8",
-    env: { ...process.env, PATH: `${directory}:${process.env.PATH}`, JOB_FILE: jobFile },
+    env: {
+      ...process.env,
+      PATH: `${directory}:${process.env.PATH}`,
+      JOB_FILE: jobFile,
+      TASK_HANDOFF_SERVER_UPDATE_LOCK_PATH: path.join(directory, "update.lock"),
+    },
   });
   assert.equal(result.status, 0, result.stderr);
+  assert.equal(fs.existsSync(path.join(directory, "update.lock")), false);
   assert.equal(JSON.parse(fs.readFileSync(jobFile, "utf8")).status, "succeeded");
   const npmCalls = fs.readFileSync(npmLog, "utf8");
   assert.match(npmCalls, new RegExp(`view @task-handoff/node-agent@${targetVersion.replaceAll(".", "\\.")} dist\\.integrity --json`));
   assert.match(npmCalls, new RegExp(`install --global --prefix .* @task-handoff/node-agent@${targetVersion.replaceAll(".", "\\.")}`));
+});
+
+test("detached node update worker installs into the prefix that owns the running worker", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "node-update-worker-owned-prefix-"));
+  const activePrefix = path.join(directory, "active");
+  const ambientPrefix = path.join(directory, "ambient");
+  const packagedWorker = path.join(activePrefix, "lib/node_modules/@task-handoff/node-agent/dist/node-update-worker.cts");
+  fs.mkdirSync(path.dirname(packagedWorker), { recursive: true });
+  fs.symlinkSync(path.join(root, "scripts", "node-update-worker.cts"), packagedWorker);
+  const jobFile = path.join(directory, "job.json");
+  const targetVersion = require(path.join(root, "package.json")).version;
+  const timestamp = new Date().toISOString();
+  fs.writeFileSync(jobFile, `${JSON.stringify({
+    id: "update_owned_prefix",
+    nodeId: "node_1",
+    source: "npm",
+    channel: "stable",
+    toVersion: targetVersion,
+    artifactRef: `npm:@task-handoff/node-agent@${targetVersion}#sha512-d29ya2VyLXRlc3Q=`,
+    runtimeArtifacts: [],
+    impact: {
+      runningInstanceCount: 0,
+      stoppedInstanceCount: 0,
+      activeInstanceCount: 0,
+      restartInstanceCount: 0,
+      runningInstanceIds: [],
+      stoppedInstanceIds: [],
+      activeInstanceIds: [],
+    },
+    status: "queued",
+    rollout: {
+      phase: "queued",
+      desiredVersion: targetVersion,
+      expectedInstanceIds: [],
+      expectedInstanceCount: 0,
+      matchedInstanceCount: 0,
+      pendingInstanceCount: 0,
+      failedInstanceCount: 0,
+      deferredInstanceCount: 0,
+    },
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  }, null, 2)}\n`);
+  const npm = path.join(directory, "npm");
+  const npmLog = path.join(directory, "npm.log");
+  fs.writeFileSync(npm, `#!/bin/sh
+printf '%s\\n' "$*" >> "${npmLog}"
+if [ "$1" = "view" ]; then
+  echo '"sha512-d29ya2VyLXRlc3Q="'
+elif [ "$1" = "prefix" ]; then
+  echo "${ambientPrefix}"
+elif [ "$1" = "root" ]; then
+  shift
+  prefix="${ambientPrefix}"
+  while [ "$#" -gt 0 ]; do
+    if [ "$1" = "--prefix" ]; then prefix="$2"; break; fi
+    shift
+  done
+  echo "$prefix/lib/node_modules"
+elif [ "$1" = "install" ]; then
+  shift
+  prefix="${ambientPrefix}"
+  while [ "$#" -gt 0 ]; do
+    if [ "$1" = "--prefix" ]; then prefix="$2"; shift 2; continue; fi
+    shift
+  done
+  mkdir -p "$prefix/lib/node_modules/@task-handoff/node-agent"
+  printf '{"version":"${targetVersion}"}\\n' > "$prefix/lib/node_modules/@task-handoff/node-agent/package.json"
+fi
+exit 0
+`, { mode: 0o755 });
+  fs.writeFileSync(path.join(directory, "systemctl"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+
+  const result = spawnSync(process.execPath, [
+    packagedWorker,
+    "--job-file", jobFile,
+    "--target-version", targetVersion,
+    "--npm-command", npm,
+  ], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      PATH: `${directory}:${process.env.PATH}`,
+      TASK_HANDOFF_SERVER_UPDATE_LOCK_PATH: path.join(directory, "update.lock"),
+    },
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(activePrefix, "lib/node_modules/@task-handoff/node-agent/package.json"), "utf8")).version, targetVersion);
+  assert.equal(fs.existsSync(path.join(ambientPrefix, "lib/node_modules/@task-handoff/node-agent/package.json")), false);
+  const npmCalls = fs.readFileSync(npmLog, "utf8");
+  assert.doesNotMatch(npmCalls, /^prefix --global$/m);
+  assert.ok(npmCalls.includes(`root --global --prefix ${activePrefix}`));
+  assert.ok(npmCalls.includes(`install --global --prefix ${activePrefix} @task-handoff/node-agent@${targetVersion}`));
 });
 
 test("detached node update worker updates both co-installed distributions even when the standalone package already has the target version", () => {
@@ -164,9 +265,12 @@ test("detached node update worker updates both co-installed distributions even w
   fs.mkdirSync(path.join(directory, "lib/node_modules/@task-handoff/node-agent"), { recursive: true });
   fs.writeFileSync(path.join(directory, "lib/node_modules/@task-handoff/node-agent/package.json"), `{"version":"${targetVersion}"}\n`);
   fs.writeFileSync(npm, `#!/bin/sh\nprintf '%s\\n' "$*" >> "${npmLog}"\nif [ "$1" = "view" ]; then\n  echo '"sha512-d29ya2VyLXRlc3Q="'\nelif [ "$1" = "prefix" ]; then\n  echo "${directory}"\nelif [ "$1" = "root" ]; then\n  echo "${directory}/lib/node_modules"\nelif [ "$1" = "install" ]; then\n  case "$*" in\n    *'@task-handoff/server@'*)\n      mkdir -p "${directory}/lib/node_modules/@task-handoff/server/node_modules/@task-handoff/control-plane"\n      mkdir -p "${directory}/lib/node_modules/@task-handoff/server/node_modules/@task-handoff/node-agent"\n      mkdir -p "${directory}/lib/node_modules/@task-handoff/server/node_modules/@task-handoff/controlled-instance"\n      printf '{"version":"${targetVersion}"}\\n' > "${directory}/lib/node_modules/@task-handoff/server/package.json"\n      printf '{"version":"${targetVersion}"}\\n' > "${directory}/lib/node_modules/@task-handoff/server/node_modules/@task-handoff/control-plane/package.json"\n      printf '{"version":"${targetVersion}"}\\n' > "${directory}/lib/node_modules/@task-handoff/server/node_modules/@task-handoff/node-agent/package.json"\n      printf '{"version":"${targetVersion}"}\\n' > "${directory}/lib/node_modules/@task-handoff/server/node_modules/@task-handoff/controlled-instance/package.json"\n      ;;\n    *'@task-handoff/node-agent@'*)\n      mkdir -p "${directory}/lib/node_modules/@task-handoff/node-agent"\n      printf '{"version":"${targetVersion}"}\\n' > "${directory}/lib/node_modules/@task-handoff/node-agent/package.json"\n      ;;\n  esac\nfi\nexit 0\n`, { mode: 0o755 });
+  const taskHandoffLog = path.join(directory, "task-handoff.log");
+  fs.mkdirSync(path.join(directory, "bin"), { recursive: true });
+  fs.writeFileSync(path.join(directory, "bin", "task-handoff"), `#!/bin/sh\nprintf '%s\\n' "$*" >> "${taskHandoffLog}"\nif [ "\${FAIL_MATERIALIZE:-}" = "1" ]; then\n  printf 'changed\\n' > "$CONFIG_FILE"\n  exit 1\nfi\nexit 0\n`, { mode: 0o755 });
   const systemctl = path.join(directory, "systemctl");
   const systemctlLog = path.join(directory, "systemctl.log");
-  fs.writeFileSync(systemctl, `#!/bin/sh\nprintf '%s\\n' "$*" >> "${systemctlLog}"\nif [ "$*" = "restart task-handoff-control-plane.service" ]; then\n  printf '{"data":{"ok":true,"role":"control-plane","protocolVersion":"2026-07-01","build":{"component":"control-plane","packageVersion":"${targetVersion}"},"dataDir":"/tmp/task-handoff-control-plane","serverTime":"2026-08-12T00:00:00.000Z"}}\\n' > "${healthFile}"\nfi\nexit 0\n`, { mode: 0o755 });
+  fs.writeFileSync(systemctl, `#!/bin/sh\nprintf '%s\\n' "$*" >> "${systemctlLog}"\nif [ "$*" = "restart task-handoff-control-plane.service" ]; then\n  printf '{"data":{"ok":true,"role":"control-plane","protocolVersion":"2026-07-01","build":{"component":"control-plane","packageVersion":"${targetVersion}"},"serverTime":"2026-08-12T00:00:00.000Z"}}\\n' > "${healthFile}"\nfi\nexit 0\n`, { mode: 0o755 });
 
   const result = spawnSync(process.execPath, [
     path.join(root, "scripts", "node-update-worker.cts"),
@@ -180,6 +284,7 @@ test("detached node update worker updates both co-installed distributions even w
       ...process.env,
       PATH: `${directory}:${process.env.PATH}`,
       TASK_HANDOFF_UPDATE_WORKER_TEST_HEALTH_FILE: healthFile,
+      TASK_HANDOFF_SERVER_UPDATE_LOCK_PATH: path.join(directory, "update.lock"),
     },
   });
 
@@ -197,6 +302,43 @@ test("detached node update worker updates both co-installed distributions even w
     "restart task-handoff-control-plane.service",
     "restart task-handoff-node-agent.service",
   ]);
+  assert.equal(fs.readFileSync(taskHandoffLog, "utf8").trim(), "install --preserve-current --materialize-only");
+
+  const configurationRoot = path.join(directory, "configuration-root");
+  const controlPlaneEnv = path.join(configurationRoot, "etc/task-handoff/control-plane.env");
+  fs.mkdirSync(path.dirname(controlPlaneEnv), { recursive: true });
+  fs.writeFileSync(controlPlaneEnv, "preserved\n");
+  const retry = JSON.parse(fs.readFileSync(jobFile, "utf8"));
+  fs.writeFileSync(jobFile, `${JSON.stringify({
+    ...retry,
+    id: "update_server_rollback",
+    status: "queued",
+    rollout: { ...retry.rollout, phase: "queued" },
+    completedAt: undefined,
+  }, null, 2)}\n`);
+  const rollbackResult = spawnSync(process.execPath, [
+    path.join(root, "scripts", "node-update-worker.cts"),
+    "--job-file", jobFile,
+    "--target-version", targetVersion,
+    "--npm-command", npm,
+    "--control-plane-health-url", "http://127.0.0.1:8081/api/health",
+  ], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      PATH: `${directory}:${process.env.PATH}`,
+      CONFIG_FILE: controlPlaneEnv,
+      FAIL_MATERIALIZE: "1",
+      TASK_HANDOFF_UPDATE_WORKER_TEST_CONFIGURATION_ROOT: configurationRoot,
+      TASK_HANDOFF_UPDATE_WORKER_TEST_HEALTH_FILE: healthFile,
+      TASK_HANDOFF_SERVER_UPDATE_LOCK_PATH: path.join(directory, "update.lock"),
+    },
+  });
+  assert.equal(rollbackResult.status, 1);
+  assert.equal(fs.existsSync(path.join(directory, "update.lock")), false);
+  assert.equal(fs.readFileSync(controlPlaneEnv, "utf8"), "preserved\n");
+  assert.equal(JSON.parse(fs.readFileSync(jobFile, "utf8")).status, "failed");
+  assert.match(fs.readFileSync(systemctlLog, "utf8"), /daemon-reload/);
 });
 
 test("detached node update worker CAS preserves a terminal write between observation and commit", () => {
@@ -254,10 +396,12 @@ test("detached node update worker CAS preserves a terminal write between observa
       ...process.env,
       PATH: `${directory}:${process.env.PATH}`,
       TASK_HANDOFF_UPDATE_WORKER_TEST_CAS_HOOK: hook,
+      TASK_HANDOFF_SERVER_UPDATE_LOCK_PATH: path.join(directory, "update.lock"),
     },
   });
 
   assert.equal(result.status, 0, result.stderr);
+  assert.equal(fs.existsSync(path.join(directory, "update.lock")), false);
   assert.equal(JSON.parse(fs.readFileSync(jobFile, "utf8")).status, "succeeded");
   assert.equal(fs.existsSync(systemctlMarker), false, "a superseded worker must stop before restarting the service");
 });

@@ -47,7 +47,7 @@ export function registerTriggerRoutes({ app, service, events }: RegisterTriggerR
   app.post("/api/controlled-instances/:id/ai-sessions/:sessionId/triggers", async (request) => {
     const params = InstanceSessionParamsSchema.parse(request.params);
     const result = await service.bindAiSessionTrigger(params.id, params.sessionId, request.body || {});
-    events.publish("trigger.deployment.bound", { instanceId: params.id, sessionId: params.sessionId }, { topic: "triggers", scope: { instanceId: params.id } });
+    events.publish("trigger.deployment.bound", { instanceId: params.id, sessionId: params.sessionId, mutation: result }, { topic: "triggers", scope: { instanceId: params.id } });
     return { data: result };
   });
   app.delete("/api/controlled-instances/:id/ai-sessions/:sessionId/triggers/:configHash", async (request) => {

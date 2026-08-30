@@ -73,8 +73,8 @@ test("Codex attachments use data URLs only for small inline images", (t) => {
   const largeData = Buffer.alloc(AI_SESSION_MAX_INLINE_FILE_BYTES + 1, 1).toString("base64");
   const large = {
     ...small,
-    id: "large_image",
-    name: "large.png",
+    id: "../../large_image",
+    name: `report:final?-${"报告".repeat(120)}.png`,
     size: Buffer.byteLength(largeData, "base64"),
     source: { type: "inline", encoding: "base64", data: largeData },
   };
@@ -84,6 +84,8 @@ test("Codex attachments use data URLs only for small inline images", (t) => {
   assert.deepEqual(prepared.inputs[0], { type: "image", url: "data:image/png;base64,cG5n" });
   assert.equal(prepared.inputs[1].type, "localImage");
   assert.equal(fs.statSync(prepared.inputs[1].path).isFile(), true);
+  assert.equal(path.relative(attachmentDir, prepared.inputs[1].path).startsWith(".."), false);
+  assert.ok(Buffer.byteLength(path.basename(prepared.inputs[1].path)) <= 255);
   assert.doesNotMatch(prepared.message, /图片路径/);
   assert.match(prepared.message, /文件路径：/);
 });

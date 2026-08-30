@@ -6,8 +6,9 @@ import { Animated, FlatList, Keyboard, PixelRatio, StyleSheet, Text } from 'reac
 import { Brain, CornerDownRight, FilePenLine, Minimize2, Pencil, RotateCcw, SquareTerminal, Trash2 } from 'lucide-react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ControlPlaneAiSessionSummarySchema, type ControlPlaneClient } from '@task-handoff/control-plane-client';
+import { AiSessionDetailSchema, AiSessionTurnIndexSchema } from '@task-handoff/protocol/ai-sessions';
 
-import { conversationDetailItems, detailItems, isSessionScrollNearBottom, SessionDetail } from '../src/ai-sessions/SessionDetail';
+import { conversationDetailItems, detailItems, isSessionScrollNearBottom, processedDurationLabel, SessionDetail } from '../src/ai-sessions/SessionDetail';
 import { COMPOSER_BACKDROP_OPACITIES, composerBottomBackdropGeometry, moveQueueId, queueActionIcon, queueDragPreview, queueItemsWithQueuedOrder, queueListScrollEnabled, sessionKeyboardAvoidingBehavior, SessionWorkspace } from '../src/ai-sessions/SessionWorkspace';
 import { MobileAiSessionActionCoordinator } from '../src/ai-sessions/actions';
 import { advanceStreamingMarkdownBlocks, CHARACTER_FADE_MS, hasUnclosedMarkdownFence, initialStreamingText, SafeMarkdown, shouldAnimateMarkdownText, safeMarkdownLink, sanitizeMarkdown, StreamingMarkdownText, streamingMarkdownStableCutoff } from '../src/components/SafeMarkdown';
@@ -59,9 +60,9 @@ test('timeline activity groups stay collapsed until explicitly expanded', async 
   }]} />);
 
   expect(screen.queryByText('Command failed')).toBeNull();
-  await act(async () => { fireEvent.press(screen.getByRole('button', { name: /1 activities/ })); });
+  await fireEvent.press(screen.getByRole('button', { name: /1 activities/ }));
   screen.getByText('Command failed');
-  screen.unmount();
+  await screen.unmount();
 });
 
 test('mobile detail scales Web typography, spacing, and icon metrics upward from 14px to 16px', () => {
@@ -85,6 +86,65 @@ test('detail preserves turn and streaming message identity order', () => {
   expect(items[1]).toEqual(expect.objectContaining({ streamKey: 'turn-1:item-1', streaming: true }));
 });
 
+test('failed detail displays the authoritative session error', () => {
+  const failedSession = ControlPlaneAiSessionSummarySchema.parse({
+    ...session,
+    currentTool: undefined,
+    error: 'Provider rejected the request: invalid authentication token.',
+    status: 'failed',
+    subAgents: [],
+    turns: [{ ...session.turns![0], status: 'failed' }],
+  });
+
+  expect(detailItems(failedSession, []).at(-1)).toEqual(expect.objectContaining({
+    role: 'error',
+    text: 'Provider rejected the request: invalid authentication token.',
+  }));
+});
+
+test('failed detail keeps a localized fallback for older producers without an error', () => {
+  const failedSession = ControlPlaneAiSessionSummarySchema.parse({
+    ...session,
+    currentTool: undefined,
+    status: 'failed',
+    subAgents: [],
+    turns: [{ ...session.turns![0], status: 'failed' }],
+  });
+
+  expect(detailItems(failedSession, []).at(-1)).toEqual(expect.objectContaining({
+    role: 'error',
+    text: 'Session failed. No diagnostic details were provided.',
+  }));
+});
+
+test('retryable Codex errors render as warnings until normal progress clears them', () => {
+  const timeline = {
+    'turn-1': {
+      status: 'ready' as const,
+      items: [{
+        id: 'codex_retry:turn-1',
+        turnId: 'turn-1',
+        type: 'activity' as const,
+        activityKind: 'codexRetry',
+        title: 'Codex retry',
+        status: 'waiting' as const,
+        summary: 'Reconnecting to the model stream',
+      }],
+    },
+  };
+  expect(detailItems(session, [], undefined, undefined, timeline, true).find((item) => item.role === 'warning')).toEqual(expect.objectContaining({
+    text: 'Reconnecting to the model stream',
+  }));
+
+  const recovered = {
+    'turn-1': {
+      ...timeline['turn-1'],
+      items: [{ ...timeline['turn-1'].items[0], status: 'completed' as const }],
+    },
+  };
+  expect(detailItems(session, [], undefined, undefined, recovered, true).some((item) => item.role === 'warning')).toBe(false);
+});
+
 test('short detail content does not force a full viewport scroll range', async () => {
   const shortSession = ControlPlaneAiSessionSummarySchema.parse({
     ...session,
@@ -97,7 +157,7 @@ test('short detail content does not force a full viewport scroll range', async (
 
   expect(contentStyle.flexGrow).toBeUndefined();
   expect(contentStyle.paddingBottom).toBe(114);
-  screen.unmount();
+  await screen.unmount();
 });
 
 test('AI detail allows selecting both user messages and assistant Markdown', async () => {
@@ -119,7 +179,7 @@ test('AI detail allows selecting both user messages and assistant Markdown', asy
     expect(textHost.props.selectable).toBe(true);
     expect(textHost.props.uiTextView).toBe(true);
   }
-  screen.unmount();
+  await screen.unmount();
 });
 
 test('detail pauses scroll following away from the bottom and resumes it from the floating action', async () => {
@@ -128,6 +188,7 @@ test('detail pauses scroll following away from the bottom and resumes it from th
     return 1;
   });
   const cancelFrame = jest.spyOn(globalThis, 'cancelAnimationFrame').mockImplementation(() => undefined);
+  const scrollToEnd = jest.spyOn(FlatList.prototype, 'scrollToEnd').mockImplementation(() => undefined);
   const scrollToOffset = jest.spyOn(FlatList.prototype, 'scrollToOffset').mockImplementation(() => undefined);
   const screen = await render(<SessionDetail messages={[]} session={session} />);
   const list = screen.getByTestId('session-detail-scroll');
@@ -144,9 +205,11 @@ test('detail pauses scroll following away from the bottom and resumes it from th
   });
 
   const resume = await screen.findByRole('button', { name: 'Scroll to latest message' });
+  scrollToEnd.mockClear();
   scrollToOffset.mockClear();
   await fireEvent.press(resume);
-  expect(scrollToOffset).toHaveBeenCalledWith({ animated: true, offset: 1_200 });
+  expect(scrollToEnd).not.toHaveBeenCalled();
+  expect(scrollToOffset).toHaveBeenCalledWith({ animated: true, offset: 700 });
   expect(screen.queryByRole('button', { name: 'Scroll to latest message' })).not.toBeNull();
   await fireEvent.scroll(list, {
     nativeEvent: {
@@ -156,18 +219,20 @@ test('detail pauses scroll following away from the bottom and resumes it from th
     },
   });
   await waitFor(() => expect(screen.queryByRole('button', { name: 'Scroll to latest message' })).toBeNull());
-  screen.unmount();
+  await screen.unmount();
+  scrollToEnd.mockRestore();
   scrollToOffset.mockRestore();
   frame.mockRestore();
   cancelFrame.mockRestore();
 });
 
-test('switching sessions resets scroll following and jumps directly to the latest content', async () => {
+test('compact mode does not force a scroll to the latest content when switching sessions', async () => {
   const frame = jest.spyOn(globalThis, 'requestAnimationFrame').mockImplementation((callback) => {
     callback(0);
     return 1;
   });
   const cancelFrame = jest.spyOn(globalThis, 'cancelAnimationFrame').mockImplementation(() => undefined);
+  const scrollToEnd = jest.spyOn(FlatList.prototype, 'scrollToEnd').mockImplementation(() => undefined);
   const scrollToOffset = jest.spyOn(FlatList.prototype, 'scrollToOffset').mockImplementation(() => undefined);
   const nextSession = ControlPlaneAiSessionSummarySchema.parse({
     ...session,
@@ -188,13 +253,134 @@ test('switching sessions resets scroll following and jumps directly to the lates
       layoutMeasurement: { height: 500, width: 390 },
     },
   });
+  scrollToEnd.mockClear();
   scrollToOffset.mockClear();
 
-  screen.rerender(<SessionDetail messages={[]} session={nextSession} />);
+  await screen.rerender(<SessionDetail messages={[]} session={nextSession} />);
 
-  await waitFor(() => expect(scrollToOffset).toHaveBeenCalledWith({ animated: false, offset: 1_200 }));
+  await waitFor(() => expect(screen.getByText('Newest conversation')).toBeTruthy());
+  expect(scrollToEnd).not.toHaveBeenCalled();
+  expect(scrollToOffset).not.toHaveBeenCalled();
   expect(screen.queryByRole('button', { name: 'Scroll to latest message' })).toBeNull();
-  screen.unmount();
+  await screen.unmount();
+  scrollToEnd.mockRestore();
+  scrollToOffset.mockRestore();
+  frame.mockRestore();
+  cancelFrame.mockRestore();
+});
+
+test('conversation mode anchors its virtual window at the latest logical row', async () => {
+  const frame = jest.spyOn(globalThis, 'requestAnimationFrame').mockImplementation((callback) => {
+    callback(0);
+    return 1;
+  });
+  const cancelFrame = jest.spyOn(globalThis, 'cancelAnimationFrame').mockImplementation(() => undefined);
+  const scrollToEnd = jest.spyOn(FlatList.prototype, 'scrollToEnd').mockImplementation(() => undefined);
+  const longSession = ControlPlaneAiSessionSummarySchema.parse({
+    ...session,
+    currentTool: undefined,
+    status: 'idle',
+    subAgents: [],
+    turns: Array.from({ length: 50 }, (_, index) => ({
+      id: `turn-${index}`,
+      lastMessage: `Response ${index}`,
+      phase: 'responding',
+      revision: index + 1,
+      startedAt: session.startedAt,
+      status: 'completed',
+      updatedAt: session.updatedAt,
+      userPrompt: `Prompt ${index}`,
+    })),
+  });
+  const screen = await render(<SessionDetail messages={[]} mode="conversation" session={longSession} />);
+  const list = screen.getByTestId('session-detail-scroll');
+
+  expect(list.props.inverted).toBeUndefined();
+  expect(list.props.initialNumToRender).toBe(18);
+  expect(list.props.maintainVisibleContentPosition).toEqual({ minIndexForVisible: 0 });
+  expect(list.props.data).toHaveLength(18);
+  expect(list.props.data[0]).toEqual(expect.objectContaining({ role: 'user', text: 'Prompt 44' }));
+  expect(list.props.data.at(-1)).toEqual(expect.objectContaining({ role: 'assistant', text: 'Response 49' }));
+  await waitFor(() => expect(scrollToEnd).toHaveBeenCalledWith({ animated: false }));
+
+  await fireEvent(list, 'layout', { nativeEvent: { layout: { height: 500 } } });
+  await fireEvent(list, 'contentSizeChange', 390, 1_200);
+  await fireEvent(list, 'scrollBeginDrag');
+  await fireEvent.scroll(list, {
+    nativeEvent: {
+      contentOffset: { x: 0, y: 0 },
+      contentSize: { height: 1_200, width: 390 },
+      layoutMeasurement: { height: 500, width: 390 },
+    },
+  });
+  await act(async () => { list.props.onStartReached(); });
+  await waitFor(() => expect(screen.getByTestId('session-detail-scroll').props.data).toHaveLength(36));
+  expect(screen.getByTestId('session-detail-scroll').props.initialNumToRender).toBe(18);
+  expect(screen.getByTestId('session-detail-scroll').props.data[0]).toEqual(expect.objectContaining({ role: 'user', text: 'Prompt 38' }));
+
+  await screen.unmount();
+  scrollToEnd.mockRestore();
+  frame.mockRestore();
+  cancelFrame.mockRestore();
+});
+
+test('switching to conversation clears the previous mode metrics before following its measured bottom', async () => {
+  const frame = jest.spyOn(globalThis, 'requestAnimationFrame').mockImplementation((callback) => {
+    callback(0);
+    return 1;
+  });
+  const cancelFrame = jest.spyOn(globalThis, 'cancelAnimationFrame').mockImplementation(() => undefined);
+  const scrollToEnd = jest.spyOn(FlatList.prototype, 'scrollToEnd').mockImplementation(() => undefined);
+  const scrollToOffset = jest.spyOn(FlatList.prototype, 'scrollToOffset').mockImplementation(() => undefined);
+  const screen = await render(<SessionDetail messages={[]} mode="turn" session={session} />);
+  const turnList = screen.getByTestId('session-detail-scroll');
+
+  await fireEvent(turnList, 'layout', { nativeEvent: { layout: { height: 500 } } });
+  await fireEvent(turnList, 'contentSizeChange', 390, 1_200);
+  await fireEvent(turnList, 'scrollBeginDrag');
+  await fireEvent.scroll(turnList, {
+    nativeEvent: {
+      contentOffset: { x: 0, y: 300 },
+      contentSize: { height: 1_200, width: 390 },
+      layoutMeasurement: { height: 500, width: 390 },
+    },
+  });
+  scrollToEnd.mockClear();
+  scrollToOffset.mockClear();
+
+  await screen.rerender(<SessionDetail messages={[]} mode="conversation" session={session} />);
+  await waitFor(() => expect(scrollToEnd).toHaveBeenCalledWith({ animated: false }));
+  expect(scrollToOffset).not.toHaveBeenCalled();
+
+  const conversationList = screen.getByTestId('session-detail-scroll');
+  await fireEvent(conversationList, 'layout', { nativeEvent: { layout: { height: 500 } } });
+  await fireEvent(conversationList, 'contentSizeChange', 390, 1_500);
+  await waitFor(() => expect(scrollToOffset).toHaveBeenCalledWith({ animated: false, offset: 1_000 }));
+
+  await screen.unmount();
+  scrollToEnd.mockRestore();
+  scrollToOffset.mockRestore();
+  frame.mockRestore();
+  cancelFrame.mockRestore();
+});
+
+test('conversation reanchors after the keyboard viewport settles', async () => {
+  const frame = jest.spyOn(globalThis, 'requestAnimationFrame').mockImplementation((callback) => {
+    callback(0);
+    return 1;
+  });
+  const cancelFrame = jest.spyOn(globalThis, 'cancelAnimationFrame').mockImplementation(() => undefined);
+  const scrollToOffset = jest.spyOn(FlatList.prototype, 'scrollToOffset').mockImplementation(() => undefined);
+  const screen = await render(<SessionDetail keyboardViewportRevision={0} messages={[]} mode="conversation" session={session} />);
+  const list = screen.getByTestId('session-detail-scroll');
+
+  await fireEvent(list, 'layout', { nativeEvent: { layout: { height: 300 } } });
+  await fireEvent(list, 'contentSizeChange', 390, 1_200);
+  scrollToOffset.mockClear();
+  await screen.rerender(<SessionDetail keyboardViewportRevision={1} messages={[]} mode="conversation" session={session} />);
+  await waitFor(() => expect(scrollToOffset).toHaveBeenCalledWith({ animated: false, offset: 900 }));
+
+  await screen.unmount();
   scrollToOffset.mockRestore();
   frame.mockRestore();
   cancelFrame.mockRestore();
@@ -204,6 +390,51 @@ test('scroll following uses a bottom tolerance and treats short content as settl
   expect(isSessionScrollNearBottom({ contentHeight: 400, offsetY: 0, viewportHeight: 500 })).toBe(true);
   expect(isSessionScrollNearBottom({ contentHeight: 1_000, offsetY: 460, viewportHeight: 500 })).toBe(true);
   expect(isSessionScrollNearBottom({ contentHeight: 1_000, offsetY: 300, viewportHeight: 500 })).toBe(false);
+});
+
+test('running Turn elapsed time advances from the authoritative start timestamp', () => {
+  expect(processedDurationLabel({
+    id: 'turn-timed',
+    status: 'running',
+    startedAt: '2026-08-05T00:00:00.000Z',
+    updatedAt: '2026-08-05T00:00:00.000Z',
+  }, undefined, Date.parse('2026-08-05T00:00:07.000Z'))).toBe('Processed in 7s');
+});
+
+test('terminal Turn without an authoritative completion timestamp shows a dash', () => {
+  expect(processedDurationLabel({
+    id: 'turn-stopped-without-time',
+    status: 'completed',
+    startedAt: '2026-08-05T00:00:00.000Z',
+    updatedAt: '2026-08-09T00:00:00.000Z',
+  }, undefined, Date.parse('2026-08-10T00:00:00.000Z'))).toBe('-');
+});
+
+test('terminal Turn duration stays fixed at its authoritative completion timestamp', () => {
+  const turn = {
+    id: 'turn-completed-with-time',
+    status: 'completed' as const,
+    startedAt: '2026-08-05T00:00:00.000Z',
+    updatedAt: '2026-08-05T00:01:00.000Z',
+    completedAt: '2026-08-05T00:01:00.000Z',
+  };
+  expect(processedDurationLabel(turn, undefined, Date.parse('2026-08-05T00:02:00.000Z'))).toBe('Processed in 1m 0s');
+  expect(processedDurationLabel(turn, undefined, Date.parse('2026-08-10T00:00:00.000Z'))).toBe('Processed in 1m 0s');
+});
+
+test('active Turn keeps elapsed time separate from recovered current activity', () => {
+  const projected = detailItems(session, [], undefined, undefined, {
+    'turn-1': {
+      status: 'ready',
+      items: [
+        { id: 'prompt', turnId: 'turn-1', type: 'user-message', text: 'Please **test** this' },
+        { id: 'command', turnId: 'turn-1', type: 'activity', activityKind: 'commandExecution', title: 'Command', status: 'running', input: 'pnpm test' },
+      ],
+    },
+  }, true, true);
+
+  expect(projected.map((item) => item.role)).toEqual(['user', 'history', 'current']);
+  expect(projected[2].history?.map((item) => item.role)).toEqual(['activity']);
 });
 
 test('turn mode replaces the previous assistant item when a new item starts', () => {
@@ -227,27 +458,218 @@ test('detail navigates one authoritative turn and applies streaming only to late
       { id: 'turn-2', userPrompt: 'Second prompt', lastMessage: 'Snapshot response', status: 'running', phase: 'responding', revision: 2, startedAt: session.startedAt, updatedAt: session.updatedAt },
     ],
   });
-  expect(detailItems(multiTurn, [{ instanceId: 'instance', sessionId: multiTurn.id, turnId: 'turn-2', itemId: 'stream', receivedText: 'Live response', status: 'streaming', updatedAt: session.updatedAt }], 0).map((item) => item.text)).toEqual(['First prompt', 'First response']);
+  expect(detailItems(multiTurn, [{ instanceId: 'instance', sessionId: multiTurn.id, turnId: 'turn-2', itemId: 'stream', receivedText: 'Live response', status: 'streaming', updatedAt: session.updatedAt }], 0).map((item) => item.role)).toEqual(['user', 'history', 'assistant']);
   const screen = await render(<SessionDetail messages={[]} session={multiTurn} />);
   screen.getByText('Second prompt');
   screen.getByText('2 / 2');
   expect(screen.queryByText('Prompt')).toBeNull();
   expect(screen.queryByText('codex response')).toBeNull();
-  fireEvent.press(screen.getByRole('button', { name: 'Previous turn' }));
+  await fireEvent.press(screen.getByRole('button', { name: 'Previous turn' }));
   await waitFor(() => screen.getByText('First prompt'));
   expect(screen.queryByText('Second prompt')).toBeNull();
   expect(screen.queryByText('shell · pnpm test')).toBeNull();
-  screen.rerender(<SessionDetail messages={[]} mode="conversation" session={multiTurn} />);
+  await screen.rerender(<SessionDetail messages={[]} mode="conversation" session={multiTurn} />);
   await waitFor(() => screen.getByText('Second prompt'));
   expect(conversationDetailItems(multiTurn, []).map((item) => item.id)).toEqual([
-    'turn-1:user', 'turn-1:assistant', 'turn-2:user', 'turn-2:assistant',
+    'turn-1:user', 'turn-1:timeline-history-status', 'turn-1:assistant', 'turn-2:user', 'turn-2:assistant',
   ]);
   screen.getByText('First prompt');
   screen.getByText('shell · pnpm test');
   expect(screen.queryByText('Turn 1 of 2')).toBeNull();
   expect(screen.queryByText('Prompt')).toBeNull();
   expect(screen.queryByText('codex response')).toBeNull();
-  screen.unmount();
+  await screen.unmount();
+});
+
+test('compact workspace keeps the committed Turn visible and applies only the latest cold-cache selection', async () => {
+  const controlPlaneId = 'cp-atomic-turn';
+  const instanceId = 'instance-atomic-turn';
+  const compact = ControlPlaneAiSessionSummarySchema.parse({
+    ...session,
+    id: 'session-atomic-turn',
+    currentTool: undefined,
+    detailRevision: 'detail-1',
+    turnsRevision: 'turns-1',
+    turnCount: 3,
+    turns: undefined,
+    subAgents: [],
+  });
+  const indexedTurns = ['First', 'Second', 'Third'].map((name, index) => ({
+    id: `turn-${index + 1}`,
+    status: 'completed' as const,
+    phase: 'responding' as const,
+    revision: 1,
+    bodyRevision: `body-${index + 1}`,
+    startedAt: `2026-08-05T00:0${index}:00.000Z`,
+    updatedAt: `2026-08-05T00:0${index}:30.000Z`,
+  }));
+  const turnBodies = indexedTurns.map((turn, index) => ({
+    ...turn,
+    bodyRevision: undefined,
+    userPrompt: `${['First', 'Second', 'Third'][index]} prompt`,
+    lastMessage: `${['First', 'Second', 'Third'][index]} response`,
+  }));
+  mobileAiSessionStore.replaceSnapshot(controlPlaneId, {
+    updatedAt: compact.updatedAt,
+    instances: [{
+      instanceId,
+      streamId: 'stream-atomic-turn',
+      revision: 1,
+      aiSessions: { runningCount: 0, waitingCount: 0, staleCount: 0, updatedAt: compact.updatedAt, sessions: [compact] },
+    }],
+  });
+  mobileAiSessionStore.setSessionDetail(controlPlaneId, instanceId, compact.detailRevision!, AiSessionDetailSchema.parse({
+    id: compact.id,
+    queue: compact.queue,
+    subAgents: [],
+  }));
+  mobileAiSessionStore.setSessionTurnIndex(controlPlaneId, instanceId, compact.turnsRevision!, AiSessionTurnIndexSchema.parse({
+    sessionId: compact.id,
+    revision: compact.turnsRevision,
+    turns: indexedTurns,
+  }));
+  mobileAiSessionStore.setSessionTurn(controlPlaneId, instanceId, compact.id, 'body-3', turnBodies[2]);
+
+  let resolveFirst!: (value: unknown) => void;
+  let resolveSecond!: (value: unknown) => void;
+  const firstRead = new Promise((resolve) => { resolveFirst = resolve; });
+  const secondRead = new Promise((resolve) => { resolveSecond = resolve; });
+  const turnBody = jest.fn((_instanceId: string, _sessionId: string, turnId: string) => (
+    turnId === 'turn-1' ? firstRead : secondRead
+  ));
+  const client = { aiSessions: { turnBody } } as unknown as ControlPlaneClient;
+  function Harness() {
+    const [, rerender] = useReducer((value: number) => value + 1, 0);
+    useEffect(() => mobileAiSessionStore.subscribeSession(controlPlaneId, instanceId, compact.id, rerender), []);
+    const view = mobileAiSessionStore.sessionView(controlPlaneId, instanceId, compact.id);
+    return <SessionWorkspace client={client} controlPlaneId={controlPlaneId} instanceId={instanceId} messages={[]} session={view.session} />;
+  }
+  const screen = await render(<SafeAreaProvider initialMetrics={{ frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { top: 47, right: 0, bottom: 34, left: 0 } }}>
+    <Harness />
+  </SafeAreaProvider>);
+
+  screen.getByText('Third prompt');
+  screen.getByText('3 / 3');
+  await waitFor(() => expect(turnBody).toHaveBeenCalledWith(instanceId, compact.id, 'turn-2', undefined));
+  await fireEvent.press(screen.getByRole('button', { name: 'Previous turn' }));
+  await waitFor(() => expect(screen.getByTestId('session-turn-loading-indicator')).toBeTruthy());
+  expect(screen.getByTestId('session-turn-loading-overlay')).toBeTruthy();
+  expect(within(screen.getByTestId('session-turn-navigator')).queryByTestId('session-turn-loading-indicator')).toBeNull();
+  screen.getByText('Third prompt');
+  screen.getByText('3 / 3');
+
+  await fireEvent.press(screen.getByRole('button', { name: 'Previous turn' }));
+  await waitFor(() => expect(turnBody).toHaveBeenCalledWith(instanceId, compact.id, 'turn-1', undefined));
+  await act(async () => {
+    resolveSecond({ kind: 'updated', revision: 'body-2', body: { sessionId: compact.id, revision: 'body-2', turn: turnBodies[1] } });
+    await secondRead;
+  });
+  screen.getByText('Third prompt');
+  expect(screen.queryByText('Second prompt')).toBeNull();
+
+  await act(async () => {
+    resolveFirst({ kind: 'updated', revision: 'body-1', body: { sessionId: compact.id, revision: 'body-1', turn: turnBodies[0] } });
+    await firstRead;
+  });
+  await waitFor(() => screen.getByText('First prompt'));
+  screen.getByText('1 / 3');
+  expect(turnBody.mock.calls.filter((call) => call[2] === 'turn-2')).toHaveLength(1);
+  await screen.unmount();
+  mobileAiSessionStore.clearProfile(controlPlaneId);
+});
+
+test('compact workspace does not render the list summary before the initial Turn body is ready', async () => {
+  const controlPlaneId = 'cp-initial-turn';
+  const instanceId = 'instance-initial-turn';
+  const compact = ControlPlaneAiSessionSummarySchema.parse({
+    ...session,
+    id: 'session-initial-turn',
+    userPrompt: 'List summary prompt',
+    lastMessage: 'List summary response',
+    detailRevision: 'detail-1',
+    turnsRevision: 'turns-1',
+    latestTurnRef: { id: 'turn-initial', bodyRevision: 'body-initial' },
+    turnCount: 1,
+    turns: undefined,
+    subAgents: [],
+  });
+  mobileAiSessionStore.replaceSnapshot(controlPlaneId, {
+    updatedAt: compact.updatedAt,
+    instances: [{
+      instanceId,
+      streamId: 'stream-initial-turn',
+      revision: 1,
+      aiSessions: { runningCount: 1, waitingCount: 0, staleCount: 0, updatedAt: compact.updatedAt, sessions: [compact] },
+    }],
+  });
+  mobileAiSessionStore.setSessionDetail(controlPlaneId, instanceId, compact.detailRevision!, AiSessionDetailSchema.parse({
+    id: compact.id,
+    queue: compact.queue,
+    subAgents: [],
+  }));
+
+  let resolveBody!: (value: unknown) => void;
+  const bodyRead = new Promise((resolve) => { resolveBody = resolve; });
+  const turnBody = jest.fn().mockReturnValue(bodyRead);
+  const client = { aiSessions: { turnBody } } as unknown as ControlPlaneClient;
+  function Harness() {
+    const [, rerender] = useReducer((value: number) => value + 1, 0);
+    useEffect(() => mobileAiSessionStore.subscribeSession(controlPlaneId, instanceId, compact.id, rerender), []);
+    const view = mobileAiSessionStore.sessionView(controlPlaneId, instanceId, compact.id);
+    return <SessionWorkspace client={client} controlPlaneId={controlPlaneId} instanceId={instanceId} messages={[]} session={view.session} />;
+  }
+  const screen = await render(<SafeAreaProvider initialMetrics={{ frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { top: 47, right: 0, bottom: 34, left: 0 } }}>
+    <Harness />
+  </SafeAreaProvider>);
+
+  expect(screen.queryByText('List summary prompt')).toBeNull();
+  expect(screen.queryByText('List summary response')).toBeNull();
+  expect(screen.queryByText('No messages yet.')).toBeNull();
+  screen.getByTestId('session-turn-loading-indicator');
+
+  await act(async () => mobileAiSessionStore.setSessionTurnIndex(controlPlaneId, instanceId, compact.turnsRevision!, AiSessionTurnIndexSchema.parse({
+    sessionId: compact.id,
+    revision: compact.turnsRevision,
+    turns: [{
+      id: 'turn-initial',
+      status: 'running',
+      phase: 'responding',
+      revision: 1,
+      bodyRevision: 'body-initial',
+      startedAt: compact.startedAt,
+      updatedAt: compact.updatedAt,
+    }],
+  })));
+  await waitFor(() => expect(turnBody).toHaveBeenCalledWith(instanceId, compact.id, 'turn-initial', undefined));
+  expect(screen.queryByText('List summary prompt')).toBeNull();
+
+  await act(async () => {
+    resolveBody({
+      kind: 'updated',
+      revision: 'body-initial',
+      body: {
+        sessionId: compact.id,
+        revision: 'body-initial',
+        turn: {
+          id: 'turn-initial',
+          status: 'running',
+          phase: 'responding',
+          revision: 1,
+          userPrompt: 'Authoritative Turn prompt',
+          lastMessage: 'Authoritative Turn response',
+          startedAt: compact.startedAt,
+          updatedAt: compact.updatedAt,
+        },
+      },
+    });
+    await bodyRead;
+  });
+  await waitFor(() => screen.getByText('Authoritative Turn prompt'));
+  screen.getByText('Authoritative Turn response');
+  expect(screen.queryByText('List summary response')).toBeNull();
+  expect(screen.queryByTestId('session-turn-loading-indicator')).toBeNull();
+  await screen.unmount();
+  mobileAiSessionStore.clearProfile(controlPlaneId);
 });
 
 test('timeline detail follows the Web three-part layout around the final AI response', async () => {
@@ -282,15 +704,15 @@ test('timeline detail follows the Web three-part layout around the final AI resp
   expect(projectedWithoutCurrentItems.at(-1)).toEqual(expect.objectContaining({ role: 'current', history: [], interactive: true }));
 
   const screen = await render(<SessionDetail messages={[]} session={timelineSession} timelineEnabled timelines={timelines} />);
-  screen.getByText(/Processed/);
+  screen.getByText(/^Processed in /);
   screen.getByText('Final answer');
-  await act(async () => { fireEvent.press(screen.getByRole('button', { name: 'Thinking…' })); });
+  await fireEvent.press(screen.getByRole('button', { name: 'Thinking…' }));
   await waitFor(() => screen.getByText('Running command'));
   expect(StyleSheet.flatten(screen.getByTestId('session-current-activity-items').props.style).gap).toBe(7);
   expect(screen.queryByText('1 activities')).toBeNull();
   screen.getByText('· pnpm test');
   expect(screen.queryByText('Interim answer')).toBeNull();
-  await act(async () => { fireEvent.press(screen.getByRole('button', { name: /Processed/ })); });
+  await fireEvent.press(screen.getByRole('button', { name: 'Process details' }));
   await waitFor(() => screen.getByText('Interim answer'));
   const historyItemsStyle = StyleSheet.flatten(screen.getByTestId('session-timeline-history-items').props.style);
   expect(historyItemsStyle).toEqual(expect.objectContaining({
@@ -299,7 +721,7 @@ test('timeline detail follows the Web three-part layout around the final AI resp
     marginLeft: 8,
     paddingLeft: 14,
   }));
-  screen.unmount();
+  await screen.unmount();
 });
 
 test('completed timeline exposes loading, failure retry, and empty history states', async () => {
@@ -308,7 +730,7 @@ test('completed timeline exposes loading, failure retry, and empty history state
     status: 'idle',
     currentTool: undefined,
     subAgents: [],
-    turns: [{ ...session.turns![0], status: 'completed', lastMessage: 'Done' }],
+    turns: [{ ...session.turns![0], status: 'completed', completedAt: '2026-08-05T00:01:00.000Z', lastMessage: 'Done' }],
   });
   const retry = jest.fn();
   expect(detailItems(completed, [], 0, undefined, { 'turn-1': { status: 'loading', items: [] } }, true)).toEqual(expect.arrayContaining([
@@ -317,13 +739,28 @@ test('completed timeline exposes loading, failure retry, and empty history state
   expect(detailItems(completed, [], 0, undefined, { 'turn-1': { status: 'ready', items: [] } }, true)).toEqual(expect.arrayContaining([
     expect.objectContaining({ role: 'history', historyStatus: 'ready' }),
   ]));
+  const loading = await render(<SessionDetail messages={[]} session={completed} timelineEnabled timelines={{ 'turn-1': { status: 'loading', items: [] } }} />);
+  expect(loading.getByTestId('session-timeline-loading-indicator').props.animating).toBe(true);
+  loading.getByText('Processed in 1m 0s · Loading full activity…');
+  await loading.rerender(<SessionDetail messages={[]} session={completed} timelineEnabled timelines={{
+    'turn-1': {
+      status: 'ready',
+      items: [
+        { id: 'activity', turnId: 'turn-1', type: 'activity', activityKind: 'commandExecution', title: 'Command', status: 'completed' },
+        { id: 'answer', turnId: 'turn-1', type: 'ai-message', text: 'Done' },
+      ],
+    },
+  }} />);
+  loading.getByText('Processed in 1m 0s');
+  expect(loading.queryByText('-')).toBeNull();
+  await loading.unmount();
   const failed = await render(<SessionDetail messages={[]} onRetryTimeline={retry} session={completed} timelineEnabled timelines={{ 'turn-1': { status: 'error', items: [], error: 'offline' } }} />);
   expect(StyleSheet.flatten(failed.getByTestId('session-message-actions-user').props.style).justifyContent).toBe('flex-end');
   expect(StyleSheet.flatten(failed.getByTestId('session-message-actions-assistant').props.style).justifyContent).toBe('flex-start');
   const retryButton = failed.getByRole('button', { name: /Failed to load full activity/ });
-  await act(async () => { fireEvent.press(retryButton); });
+  await fireEvent.press(retryButton);
   expect(retry).toHaveBeenCalledWith(expect.objectContaining({ id: 'turn-1' }));
-  failed.unmount();
+  await failed.unmount();
 });
 
 test('workspace retries a failed authoritative turn timeline request', async () => {
@@ -364,11 +801,68 @@ test('workspace retries a failed authoritative turn timeline request', async () 
   </SafeAreaProvider>);
 
   await waitFor(() => expect(mobileAiSessionStore.timelineTurnState('cp-timeline-load', 'instance-timeline-load', completed.id, completed.turns![0]).status).toBe('error'));
-  await act(async () => { fireEvent.press(screen.getByRole('button', { name: /Failed to load full activity/ })); });
+  await fireEvent.press(screen.getByRole('button', { name: /Failed to load full activity/ }));
   await waitFor(() => expect(turnTimeline).toHaveBeenCalledTimes(2));
   await waitFor(() => expect(mobileAiSessionStore.timelineTurnState('cp-timeline-load', 'instance-timeline-load', completed.id, completed.turns![0]).status).toBe('ready'));
-  screen.unmount();
+  await screen.unmount();
   mobileAiSessionStore.clearProfile('cp-timeline-load');
+});
+
+test('workspace keeps an in-flight timeline request authoritative across Turn lifecycle updates', async () => {
+  const controlPlaneId = 'cp-timeline-lifecycle';
+  const instanceId = 'instance-timeline-lifecycle';
+  const running = ControlPlaneAiSessionSummarySchema.parse({
+    ...session,
+    id: 'session-timeline-lifecycle',
+    subAgents: [],
+    turns: [{ ...session.turns![0], id: 'turn-timeline-lifecycle', status: 'running', lastMessage: 'Done' }],
+  });
+  const completed = ControlPlaneAiSessionSummarySchema.parse({
+    ...running,
+    status: 'idle',
+    turns: [{ ...running.turns![0], status: 'completed', completedAt: '2026-08-05T00:01:00.000Z' }],
+  });
+  let resolveTimeline!: (value: unknown) => void;
+  const timelineRead = new Promise((resolve) => { resolveTimeline = resolve; });
+  const turnTimeline = jest.fn().mockReturnValue(timelineRead);
+  const client = { aiSessions: { turnTimeline } } as unknown as ControlPlaneClient;
+  let completeTurn!: () => void;
+  function Harness() {
+    const [current, complete] = useReducer(() => completed, running);
+    const [, rerender] = useReducer((value: number) => value + 1, 0);
+    completeTurn = complete;
+    useEffect(() => mobileAiSessionStore.subscribeSession(controlPlaneId, instanceId, running.id, rerender), []);
+    const turn = current.turns![0];
+    return <SessionWorkspace
+      client={client}
+      controlPlaneId={controlPlaneId}
+      instanceCapabilities={{ aiSessionTimeline: { sessionReadAgents: [], turnReadAgents: ['codex'], liveItemAgents: [] } }}
+      instanceId={instanceId}
+      messages={[]}
+      session={current}
+      timelines={{ [turn.id]: mobileAiSessionStore.timelineTurnState(controlPlaneId, instanceId, current.id, turn) }}
+    />;
+  }
+  const screen = await render(<SafeAreaProvider initialMetrics={{ frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { top: 47, right: 0, bottom: 34, left: 0 } }}>
+    <Harness />
+  </SafeAreaProvider>);
+
+  await waitFor(() => expect(turnTimeline).toHaveBeenCalledTimes(1));
+  await waitFor(() => expect(mobileAiSessionStore.timelineTurnState(controlPlaneId, instanceId, running.id, running.turns![0]).status).toBe('loading'));
+  await act(async () => completeTurn());
+  await act(async () => {
+    resolveTimeline({
+      sessionId: running.id,
+      turnId: running.turns![0].id,
+      items: [{ id: 'answer', turnId: running.turns![0].id, type: 'ai-message', text: 'Done' }],
+      generatedAt: completed.updatedAt,
+    });
+    await timelineRead;
+  });
+  await waitFor(() => expect(mobileAiSessionStore.timelineTurnState(controlPlaneId, instanceId, completed.id, completed.turns![0]).status).toBe('ready'));
+  expect(turnTimeline).toHaveBeenCalledTimes(1);
+  await screen.unmount();
+  mobileAiSessionStore.clearProfile(controlPlaneId);
 });
 
 test('live-only capability renders cached live activity without inventing a history load', async () => {
@@ -388,11 +882,12 @@ test('live-only capability renders cached live activity without inventing a hist
   />);
 
   expect(screen.queryByText(/Loading full activity/)).toBeNull();
+  expect(screen.getByText('-')).toBeTruthy();
   expect(screen.getByText('Done')).toBeTruthy();
-  screen.unmount();
+  await screen.unmount();
 });
 
-test('session-read capability loads older turns while the latest turn uses live items', async () => {
+test('session-read capability loads a recovery snapshot while live items remain enabled', async () => {
   const running = ControlPlaneAiSessionSummarySchema.parse({
     ...session,
     id: 'session-timeline-session-read',
@@ -421,17 +916,22 @@ test('session-read capability loads older turns while the latest turn uses live 
   </SafeAreaProvider>);
 
   await waitFor(() => expect(timeline).toHaveBeenCalledWith('instance-session-read-live', running.id));
-  screen.unmount();
+  await screen.unmount();
   mobileAiSessionStore.clearProfile('cp-session-read-live');
 });
 
-test('workspace defers the latest queued turn timeline while live items are authoritative', async () => {
+test('workspace loads the latest queued turn timeline to recover items emitted before subscription', async () => {
   const queued = ControlPlaneAiSessionSummarySchema.parse({
     ...session,
     id: 'session-timeline-queued',
     turns: [{ ...session.turns![0], id: 'turn-timeline-queued', status: 'queued' }],
   });
-  const turnTimeline = jest.fn();
+  const turnTimeline = jest.fn().mockResolvedValue({
+    sessionId: queued.id,
+    turnId: 'turn-timeline-queued',
+    items: [{ id: 'queued-user', turnId: 'turn-timeline-queued', type: 'user-message', text: 'Queued prompt' }],
+    generatedAt: session.updatedAt,
+  });
   const client = { aiSessions: { turnTimeline } } as unknown as ControlPlaneClient;
   const screen = await render(<SafeAreaProvider initialMetrics={{ frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { top: 47, right: 0, bottom: 34, left: 0 } }}>
     <SessionWorkspace
@@ -444,9 +944,9 @@ test('workspace defers the latest queued turn timeline while live items are auth
     />
   </SafeAreaProvider>);
 
-  await act(async () => undefined);
-  expect(turnTimeline).not.toHaveBeenCalled();
-  screen.unmount();
+  await waitFor(() => expect(turnTimeline).toHaveBeenCalledWith('instance-timeline-queued', queued.id, 'turn-timeline-queued'));
+  await waitFor(() => expect(mobileAiSessionStore.timelineTurnState('cp-timeline-queued', 'instance-timeline-queued', queued.id, queued.turns![0]).status).toBe('ready'));
+  await screen.unmount();
   mobileAiSessionStore.clearProfile('cp-timeline-queued');
 });
 
@@ -518,30 +1018,30 @@ test('fenced code copies raw source and confirms the action', async () => {
   const write = jest.spyOn(Clipboard, 'setStringAsync').mockResolvedValue(true);
   const screen = await render(<SafeMarkdown>{'```typescript\nconst ok = true;\n```'}</SafeMarkdown>);
 
-  await act(async () => fireEvent.press(screen.getByRole('button', { name: 'Copy' })));
+  await fireEvent.press(screen.getByRole('button', { name: 'Copy' }));
   await waitFor(() => expect(write).toHaveBeenCalledWith('const ok = true;'));
   await waitFor(() => screen.getByRole('button', { name: 'Copied' }));
-  screen.unmount();
+  await screen.unmount();
   write.mockRestore();
 });
 
 test('untyped fenced code exposes a plain text language label', async () => {
   const screen = await render(<SafeMarkdown>{'```\nplain\n```'}</SafeMarkdown>);
   screen.getByText('Plain text');
-  screen.unmount();
+  await screen.unmount();
 });
 
 test('fenced code constrains its cross-axis height inside a vertical conversation', async () => {
   const screen = await render(<SafeMarkdown>{'```\nline one\nline two\nline three\n```'}</SafeMarkdown>);
   expect(StyleSheet.flatten(screen.getByTestId('markdown-code-scroll').props.style).height).toBe(Math.ceil(75 * PixelRatio.getFontScale() + 28));
-  screen.unmount();
+  await screen.unmount();
 });
 
 test('fenced code height follows the accessibility font scale', async () => {
   const fontScale = jest.spyOn(PixelRatio, 'getFontScale').mockReturnValue(1.5);
   const screen = await render(<SafeMarkdown>{'```\nline one\nline two\nline three\n```'}</SafeMarkdown>);
   expect(StyleSheet.flatten(screen.getByTestId('markdown-code-scroll').props.style).height).toBe(141);
-  screen.unmount();
+  await screen.unmount();
   fontScale.mockRestore();
 });
 
@@ -560,7 +1060,7 @@ test('inline code remains in the paragraph text flow and wraps long values witho
   const paragraphStyle = StyleSheet.flatten(inlineCode.parent?.props.style);
   expect(paragraphStyle.flexDirection).toBeUndefined();
   expect(paragraphStyle.flexWrap).toBeUndefined();
-  screen.unmount();
+  await screen.unmount();
 });
 
 test('safe markdown can remove the final paragraph spacing inside message bubbles', async () => {
@@ -586,7 +1086,7 @@ test('new text nodes created during streaming run the 150ms character fade', asy
 
   await waitFor(() => expect(timing).toHaveBeenCalled());
   expect(timing.mock.calls.some(([, config]) => config.duration === CHARACTER_FADE_MS && config.toValue === 1 && config.useNativeDriver === false)).toBe(true);
-  screen.unmount();
+  await screen.unmount();
   timing.mockRestore();
 });
 
@@ -594,7 +1094,7 @@ test('iOS streaming Markdown keeps generated text inside a native text child bou
   const screen = await render(<StreamingMarkdownText animate={false} content="Visible native text" nativeSelectable />);
 
   expect(screen.getByTestId('markdown-streaming-native-text').props.children).toBe('Visible native text');
-  screen.unmount();
+  await screen.unmount();
 });
 
 test('active iOS Markdown keeps the animated RN text tree until the response settles', async () => {
@@ -603,7 +1103,7 @@ test('active iOS Markdown keeps the animated RN text tree until the response set
   const paragraph = screen.getByTestId('markdown-selectable-text');
   expect(paragraph.props.selectable).toBe(true);
   expect(paragraph.props.uiTextView).toBeUndefined();
-  screen.unmount();
+  await screen.unmount();
 });
 
 test('independent character animations coalesce their completed state into one frame', async () => {
@@ -628,7 +1128,7 @@ test('independent character animations coalesce their completed state into one f
   await act(async () => { flush?.(0); });
   screen.getByText('ABC');
 
-  screen.unmount();
+  await screen.unmount();
   timing.mockRestore();
   frame.mockRestore();
   cancelFrame.mockRestore();
@@ -734,18 +1234,18 @@ test('queued messages expose edit controls and a drag handle that reorders with 
   expect(queueTitle.props.ellipsizeMode).toBe('tail');
   expect(queueListScrollEnabled('queue-1')).toBe(false);
   expect(queueListScrollEnabled()).toBe(true);
-  await act(async () => { fireEvent(handles[0], 'accessibilityAction', { nativeEvent: { actionName: 'increment' } }); });
+  await fireEvent(handles[0], 'accessibilityAction', { nativeEvent: { actionName: 'increment' } });
   expect(reorderQueue).toHaveBeenCalledWith('instance', session.id, 4, ['queue-2', 'queue-1']);
   expect(screen.getAllByRole('button', { name: 'edit' })).toHaveLength(2);
   const composer = screen.getByTestId('session-message-input');
-  await act(async () => { fireEvent.changeText(composer, 'preserved draft'); });
-  await act(async () => { fireEvent.press(screen.getAllByRole('button', { name: 'edit' })[0]); });
+  await fireEvent.changeText(composer, 'preserved draft');
+  await fireEvent.press(screen.getAllByRole('button', { name: 'edit' })[0]);
   await waitFor(() => expect(screen.getByTestId('session-message-input').props.value).toBe('second queued message'));
   screen.getByText('Edit queued message');
-  fireEvent.changeText(screen.getByTestId('session-message-input'), 'updated queued message');
+  await fireEvent.changeText(screen.getByTestId('session-message-input'), 'updated queued message');
   await waitFor(() => expect(screen.getByTestId('session-message-input').props.value).toBe('updated queued message'));
   await waitFor(() => expect(screen.getByRole('button', { name: 'Save queued message' })).toBeEnabled());
-  await act(async () => { fireEvent.press(screen.getByRole('button', { name: 'Save queued message' })); });
+  await fireEvent.press(screen.getByRole('button', { name: 'Save queued message' }));
   await waitFor(() => expect(editQueue).toHaveBeenCalledWith('instance', session.id, 'queue-2', 4, 'updated queued message'));
   await waitFor(() => expect(screen.getByTestId('session-message-input').props.value).toBe('preserved draft'));
   expect(editQueue).toHaveBeenCalledTimes(1);
@@ -780,13 +1280,13 @@ test('failed queue reorder restores authoritative order and reports the failure 
     </SafeAreaProvider>,
   );
 
-  await act(async () => { fireEvent(screen.getAllByTestId('queue-drag-handle')[0], 'accessibilityAction', { nativeEvent: { actionName: 'increment' } }); });
+  await fireEvent(screen.getAllByTestId('queue-drag-handle')[0], 'accessibilityAction', { nativeEvent: { actionName: 'increment' } });
 
   await waitFor(() => screen.getByText('Reorder queued message failed'));
   screen.getByText(error);
   expect(screen.getByTestId('queued-message-list').props.data.map((item: { id: string }) => item.id)).toEqual(['queue-1', 'queue-2']);
   expect(within(screen.getByTestId('session-actions')).queryByText(error)).toBeNull();
-  screen.unmount();
+  await screen.unmount();
 });
 
 test('queue drag preview reorders queued items without moving the normalized failed group', () => {
@@ -815,18 +1315,19 @@ test('running composer sends in auto mode so the authoritative runtime queues th
   const actions = { subscribe: () => () => undefined, state: () => ({ phase: 'idle' as const }), approval: jest.fn(), interrupt: jest.fn(), queue: jest.fn(), send } as unknown as MobileAiSessionActionCoordinator;
   const screen = await render(<SafeAreaProvider initialMetrics={{ frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { top: 47, right: 0, bottom: 34, left: 0 } }}><SessionWorkspace actions={actions} controlPlaneId="cp" instanceId="instance" messages={[]} session={actionable} /></SafeAreaProvider>);
   screen.getByRole('button', { name: 'Stop' });
-  fireEvent.changeText(screen.getByTestId('session-message-input'), 'Change direction');
+  await fireEvent.changeText(screen.getByTestId('session-message-input'), 'Change direction');
   await waitFor(() => screen.getByRole('button', { name: 'Send' }));
-  fireEvent.press(screen.getByRole('button', { name: 'Send' }));
+  await fireEvent.press(screen.getByRole('button', { name: 'Send' }));
   await waitFor(() => expect(send).toHaveBeenCalledWith('instance', 'session-1', 'Change direction', undefined, [], 'auto'));
-  screen.unmount();
+  await screen.unmount();
 });
 
 test('composer uploads images received from the native input paste action', async () => {
   const fileInfo = jest.spyOn(File.prototype, 'info').mockReturnValue({ exists: true, size: 5 });
   const fileBase64 = jest.spyOn(File.prototype, 'base64').mockResolvedValue('aGVsbG8=');
   const fileDelete = jest.spyOn(File.prototype, 'delete').mockImplementation(() => undefined);
-  const uploadAttachment = jest.fn().mockResolvedValue({ id: 'attachment-1', kind: 'image', mime: 'image/png', name: 'clipboard.png', size: 5 });
+  let resolveUpload!: (value: unknown) => void;
+  const uploadAttachment = jest.fn().mockReturnValue(new Promise((resolve) => { resolveUpload = resolve; }));
   const client = { aiSessions: { uploadAttachment } } as unknown as ControlPlaneClient;
   const actionable = ControlPlaneAiSessionSummarySchema.parse({ ...session, actions: { send: true, interrupt: true }, subAgents: [] });
   const actions = {
@@ -847,14 +1348,17 @@ test('composer uploads images received from the native input paste action', asyn
   });
 
   await waitFor(() => expect(uploadAttachment).toHaveBeenCalledWith(expect.objectContaining({
-    data: 'aGVsbG8=',
+    data: 'data:image/png;base64,aGVsbG8=',
     instanceId: 'instance',
     kind: 'image',
     mime: 'image/png',
     sessionId: session.id,
-  })));
-  screen.getByText('clipboard.png');
-  screen.unmount();
+  }), expect.any(Function)));
+  await waitFor(() => screen.getByText('5 B · uploading'));
+  expect(screen.getByRole('button', { name: 'Send' }).props.accessibilityState.disabled).toBe(true);
+  resolveUpload({ id: 'attachment-1', kind: 'image', mime: 'image/png', name: 'clipboard.png', size: 5 });
+  await waitFor(() => screen.getByText('clipboard.png'));
+  await screen.unmount();
   fileInfo.mockRestore();
   fileBase64.mockRestore();
   fileDelete.mockRestore();
@@ -868,21 +1372,21 @@ test('composer shows authoritative send loading and locks mutable controls until
   const actionable = ControlPlaneAiSessionSummarySchema.parse({ ...session, actions: { send: true, interrupt: true } });
   const screen = await render(<SafeAreaProvider initialMetrics={{ frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { top: 47, right: 0, bottom: 34, left: 0 } }}><SessionWorkspace actions={actions} controlPlaneId="cp" instanceId="instance" messages={[]} session={actionable} /></SafeAreaProvider>);
 
-  fireEvent.changeText(screen.getByTestId('session-message-input'), 'Wait for the backend');
-  fireEvent.press(await waitFor(() => screen.getByRole('button', { name: 'Send' })));
+  await fireEvent.changeText(screen.getByTestId('session-message-input'), 'Wait for the backend');
+  await fireEvent.press(await waitFor(() => screen.getByRole('button', { name: 'Send' })));
 
   await waitFor(() => screen.getByRole('button', { name: 'Sending…' }));
   expect(screen.getByTestId('session-composer-action-loading')).toBeTruthy();
   expect(screen.getByTestId('session-message-input').props.editable).toBe(false);
   expect(screen.getByRole('button', { name: 'Add attachment' }).props.accessibilityState.disabled).toBe(true);
   expect(screen.getByRole('button', { name: 'Permission mode: Ask for approval' }).props.accessibilityState.disabled).toBe(true);
-  fireEvent.press(screen.getByRole('button', { name: 'Sending…' }));
+  await fireEvent.press(screen.getByRole('button', { name: 'Sending…' }));
   expect(sendMessage).toHaveBeenCalledTimes(1);
 
   await act(async () => { resolveRequest({}); await request; });
   await waitFor(() => expect(screen.getByTestId('session-message-input').props.value).toBe(''));
   expect(screen.queryByTestId('session-composer-action-loading')).toBeNull();
-  screen.unmount();
+  await screen.unmount();
 });
 
 test('composer stops loading and preserves the draft after a failed send', async () => {
@@ -892,8 +1396,8 @@ test('composer stops loading and preserves the draft after a failed send', async
   const actionable = ControlPlaneAiSessionSummarySchema.parse({ ...session, actions: { send: true, interrupt: true }, subAgents: [] });
   const screen = await render(<SafeAreaProvider initialMetrics={{ frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { top: 47, right: 0, bottom: 34, left: 0 } }}><MobileToastProvider><SessionWorkspace actions={actions} controlPlaneId="cp" instanceId="instance" messages={[]} session={actionable} /></MobileToastProvider></SafeAreaProvider>);
 
-  fireEvent.changeText(screen.getByTestId('session-message-input'), 'Keep this draft');
-  fireEvent.press(await waitFor(() => screen.getByRole('button', { name: 'Send' })));
+  await fireEvent.changeText(screen.getByTestId('session-message-input'), 'Keep this draft');
+  await fireEvent.press(await waitFor(() => screen.getByRole('button', { name: 'Send' })));
   await waitFor(() => screen.getByRole('button', { name: 'Sending…' }));
   await act(async () => { rejectRequest(Object.assign(new Error('Request rejected'), { status: 400 })); await request.catch(() => undefined); });
 
@@ -904,7 +1408,7 @@ test('composer stops loading and preserves the draft after a failed send', async
   screen.getByText('Request rejected');
   expect(within(screen.getByTestId('session-actions')).queryByText('Request rejected')).toBeNull();
   expect(screen.queryByTestId('session-composer-action-loading')).toBeNull();
-  screen.unmount();
+  await screen.unmount();
 });
 
 test('result-unknown stops loading but keeps send disabled and the draft intact', async () => {
@@ -914,8 +1418,8 @@ test('result-unknown stops loading but keeps send disabled and the draft intact'
   const actionable = ControlPlaneAiSessionSummarySchema.parse({ ...session, actions: { send: true, interrupt: true }, subAgents: [] });
   const screen = await render(<SafeAreaProvider initialMetrics={{ frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { top: 47, right: 0, bottom: 34, left: 0 } }}><MobileToastProvider><SessionWorkspace actions={actions} controlPlaneId="cp" instanceId="instance" messages={[]} session={actionable} /></MobileToastProvider></SafeAreaProvider>);
 
-  fireEvent.changeText(screen.getByTestId('session-message-input'), 'Uncertain draft');
-  fireEvent.press(await waitFor(() => screen.getByRole('button', { name: 'Send' })));
+  await fireEvent.changeText(screen.getByTestId('session-message-input'), 'Uncertain draft');
+  await fireEvent.press(await waitFor(() => screen.getByRole('button', { name: 'Send' })));
   await waitFor(() => screen.getByRole('button', { name: 'Sending…' }));
   await act(async () => { rejectRequest(Object.assign(new Error('Connection lost'), { code: 'DIRECT_NETWORK_FAILED', retryable: true })); await request.catch(() => undefined); });
 
@@ -925,7 +1429,7 @@ test('result-unknown stops loading but keeps send disabled and the draft intact'
   expect(screen.queryByTestId('session-composer-action-loading')).toBeNull();
   await waitFor(() => screen.getByText('Send failed'));
   screen.getByText(/result is unknown/i);
-  screen.unmount();
+  await screen.unmount();
 });
 
 test('session composer restores its persisted permission mode before falling back to the instance default', async () => {
@@ -947,7 +1451,7 @@ test('session composer restores its persisted permission mode before falling bac
   );
 
   await waitFor(() => screen.getByRole('button', { name: 'Permission mode: Approve for me' }));
-  screen.unmount();
+  await screen.unmount();
 });
 
 test('session composer lets the server apply its authoritative permission default while the directory is still loading', async () => {
@@ -956,11 +1460,11 @@ test('session composer lets the server apply its authoritative permission defaul
   const actions = { subscribe: () => () => undefined, state: () => ({ phase: 'idle' as const }), approval: jest.fn(), interrupt: jest.fn(), queue: jest.fn(), send } as unknown as MobileAiSessionActionCoordinator;
   const screen = await render(<SafeAreaProvider initialMetrics={{ frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { top: 47, right: 0, bottom: 34, left: 0 } }}><SessionWorkspace actions={actions} controlPlaneId="cp" instanceId="instance" messages={[]} session={actionable} /></SafeAreaProvider>);
 
-  fireEvent.changeText(screen.getByTestId('session-message-input'), 'Use the instance default');
+  await fireEvent.changeText(screen.getByTestId('session-message-input'), 'Use the instance default');
   await waitFor(() => screen.getByRole('button', { name: 'Send' }));
-  fireEvent.press(screen.getByRole('button', { name: 'Send' }));
+  await fireEvent.press(screen.getByRole('button', { name: 'Send' }));
   await waitFor(() => expect(send).toHaveBeenCalledWith('instance', 'session-1', 'Use the instance default', undefined, [], 'auto'));
-  screen.unmount();
+  await screen.unmount();
 });
 
 test('composer expands to a multiline editor while focused', async () => {
@@ -985,10 +1489,10 @@ test('composer expands to a multiline editor while focused', async () => {
   const permissionTriggerStyle = StyleSheet.flatten(screen.getByTestId('session-permission-menu-trigger-frame').props.style);
   expect(permissionTriggerStyle.height).toBe(38);
   expect(permissionTriggerStyle.width).toBe(permissionFrameStyle.width);
-  fireEvent(input, 'focus');
+  await fireEvent(input, 'focus');
   await waitFor(() => expect(screen.getByTestId('session-composer').props.accessibilityState.expanded).toBe(true));
   within(screen.getByRole('button', { name: 'Permission mode: Ask for approval' })).getByText('Ask for approval');
-  fireEvent(screen.getByTestId('session-message-input'), 'blur');
+  await fireEvent(screen.getByTestId('session-message-input'), 'blur');
   await waitFor(() => expect(screen.getByTestId('session-composer').props.accessibilityState.expanded).toBe(false));
   timing.mockRestore();
 });
@@ -999,7 +1503,7 @@ test('touching outside the composer dismisses the keyboard', async () => {
   const actions = { subscribe: () => () => undefined, state: () => ({ phase: 'idle' as const }), approval: jest.fn(), interrupt: jest.fn(), queue: jest.fn(), send: jest.fn() } as unknown as MobileAiSessionActionCoordinator;
   const screen = await render(<SafeAreaProvider initialMetrics={{ frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { top: 47, right: 0, bottom: 34, left: 0 } }}><SessionWorkspace actions={actions} controlPlaneId="cp" instanceId="instance" messages={[]} session={actionable} /></SafeAreaProvider>);
 
-  fireEvent(screen.getByTestId('session-content'), 'touchStart');
+  await fireEvent(screen.getByTestId('session-content'), 'touchStart');
   expect(dismiss).toHaveBeenCalledTimes(1);
   dismiss.mockRestore();
 });
@@ -1010,12 +1514,16 @@ test('floating composer follows the keyboard without creating an opaque layout s
   const screen = await render(<SafeAreaProvider initialMetrics={{ frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { top: 47, right: 0, bottom: 34, left: 0 } }}><SessionWorkspace actions={actions} controlPlaneId="cp" instanceId="instance" messages={[]} session={actionable} /></SafeAreaProvider>);
 
   const actionsStyle = StyleSheet.flatten(screen.getByTestId('session-actions').props.style);
+  const detailContentStyle = StyleSheet.flatten(screen.getByTestId('session-detail-scroll').props.contentContainerStyle);
+  const workspaceBackgroundStyle = StyleSheet.flatten(screen.getByTestId('session-workspace-background').props.style);
   const workspaceStyle = StyleSheet.flatten(screen.getByTestId('session-workspace').props.style);
   expect(sessionKeyboardAvoidingBehavior('ios')).toBe('height');
   expect(sessionKeyboardAvoidingBehavior('android')).toBeUndefined();
   expect(actionsStyle.position).toBe('absolute');
-  expect(workspaceStyle.backgroundColor).toBeUndefined();
-  screen.unmount();
+  expect(detailContentStyle.paddingBottom).toBe(122);
+  expect(workspaceStyle.backgroundColor).toBe('#ffffff');
+  expect(workspaceBackgroundStyle.backgroundColor).toBe(workspaceStyle.backgroundColor);
+  await screen.unmount();
 });
 
 test('composer backdrop fades from 16px above the input through the safe-area bottom', () => {
@@ -1048,16 +1556,16 @@ test('blurring the mobile composer cancels a queued message edit and restores th
     </SafeAreaProvider>,
   );
 
-  await act(async () => { fireEvent.changeText(screen.getByTestId('session-message-input'), 'preserved draft'); });
-  await act(async () => { fireEvent.press(screen.getByRole('button', { name: 'edit' })); });
+  await fireEvent.changeText(screen.getByTestId('session-message-input'), 'preserved draft');
+  await fireEvent.press(screen.getByRole('button', { name: 'edit' }));
   expect(screen.getByTestId('session-message-input').props.value).toBe('queued message');
-  await act(async () => { fireEvent.changeText(screen.getByTestId('session-message-input'), 'discard this edit'); });
-  await act(async () => { fireEvent(screen.getByTestId('session-message-input'), 'blur'); });
+  await fireEvent.changeText(screen.getByTestId('session-message-input'), 'discard this edit');
+  await fireEvent(screen.getByTestId('session-message-input'), 'blur');
   expect(screen.getByTestId('session-message-input').props.value).toBe('preserved draft');
   expect(screen.queryByText('Edit queued message')).toBeNull();
   expect(editQueue).not.toHaveBeenCalled();
 
-  screen.unmount();
-  act(() => { jest.runOnlyPendingTimers(); });
+  await act(async () => { await jest.runOnlyPendingTimersAsync(); });
+  await screen.unmount();
   jest.useRealTimers();
 });

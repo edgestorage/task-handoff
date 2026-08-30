@@ -6,7 +6,8 @@ import {
   ProjectSourceSchema,
 } from "@task-handoff/protocol/control-plane";
 import { z } from "zod";
-import { AI_SESSION_HISTORY_MAX_LIMIT, AiSessionPermissionModeSchema } from "@task-handoff/protocol/ai-sessions";
+import { AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS, AI_SESSION_HISTORY_MAX_LIMIT, AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES, AiSessionPermissionModeSchema } from "@task-handoff/protocol/ai-sessions";
+import { GitCredentialRetentionSchema } from "@task-handoff/protocol/managed-git-credentials";
 
 export * from "../catalog/inputs.ts";
 export * from "../chat/bridges/inputs.ts";
@@ -28,6 +29,8 @@ export const InstanceConfigInputSchema = z.object({
   autoImportAgentConfigs: z.boolean().optional(),
   defaultCodexPermissionMode: AiSessionPermissionModeSchema.optional(),
   aiSessionHistoryLimit: z.number().int().min(1).max(AI_SESSION_HISTORY_MAX_LIMIT).optional(),
+  aiSessionAttachmentRetentionDays: z.number().int().min(0).max(AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS).optional(),
+  aiSessionMaxFileAttachmentBytes: z.number().int().positive().max(AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES).optional(),
 }).strict();
 
 export const CreateInstanceInputSchema = z.object({
@@ -42,17 +45,21 @@ export const CreateInstanceInputSchema = z.object({
   imageSelection: ControlledInstanceSchema.shape.imageSelection,
   config: InstanceConfigInputSchema.optional(),
   modelSelection: ControlledInstanceSchema.shape.modelSelection.optional(),
+  gitCredentialRetention: GitCredentialRetentionSchema.optional(),
   start: z.boolean().default(false),
 }).strict().superRefine((input, context) => {
   if (input.environmentSource && input.imageSelection) {
     context.addIssue({ code: "custom", path: ["environmentSource"], message: "environmentSource and imageSelection are mutually exclusive." });
+  }
+  if (input.gitCredentialRetention && input.source?.type === "local-folder") {
+    context.addIssue({ code: "custom", path: ["gitCredentialRetention"], message: "Git credential retention requires a Git source." });
   }
 });
 
 export const UpdateInstanceInputSchema = z.object({
   name: ControlledInstanceSchema.shape.name.optional(),
   config: InstanceConfigInputSchema.optional(),
-  modelSelection: ControlledInstanceSchema.shape.modelSelection.optional(),
+  modelSelection: ControlledInstanceSchema.shape.modelSelection.unwrap().optional(),
 }).strict();
 
 export const CreateModelInputSchema = z.object({
@@ -60,10 +67,16 @@ export const CreateModelInputSchema = z.object({
   endpoint: ModelConfigSchema.shape.endpoint,
   key: ModelConfigSchema.shape.key,
   model: ModelConfigSchema.shape.model,
+  modelNames: ModelConfigSchema.shape.modelNames.optional(),
+  protocols: ModelConfigSchema.shape.protocols.optional(),
   app: ModelConfigSchema.shape.app,
   enabled: ModelConfigSchema.shape.enabled.optional(),
   order: ModelConfigSchema.shape.order.optional(),
   labels: ModelConfigSchema.shape.labels.optional(),
+}).strict();
+
+export const CopyModelInputSchema = CreateModelInputSchema.omit({ key: true }).extend({
+  key: ModelConfigSchema.shape.key.optional(),
 }).strict();
 
 export const UpdateModelInputSchema = CreateModelInputSchema.partial().strict();
@@ -76,8 +89,9 @@ export const ModelDiscoveryInputSchema = z.object({
 
 export const ModelTestInputSchema = ModelDiscoveryInputSchema.extend({
   model: ModelConfigSchema.shape.model,
-  app: ModelConfigSchema.shape.app,
-}).strict();
+  app: ModelConfigSchema.shape.app.optional(),
+  protocol: z.enum(["openai-responses", "openai-chat-completions", "anthropic-messages"]).optional(),
+}).strict().refine((input) => Boolean(input.protocol || input.app), { message: "A model protocol is required.", path: ["protocol"] });
 
 export const CreateNodeInputSchema = z.object({
   id: NodeSchema.shape.id.optional(),

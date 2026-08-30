@@ -8,7 +8,7 @@ import {
 } from '../src/control-plane/profile';
 import { MobileControlPlaneProfileStore } from '../src/control-plane/profile-store';
 import type { SecureValueStore } from '../src/platform/secure-storage';
-import { requireRemoteMobileSessionRevocation } from '../src/control-plane/profile-removal';
+import { attemptRemoteMobileSessionRevocation } from '../src/control-plane/profile-removal';
 
 const fingerprint = `sha256:${'a'.repeat(43)}`;
 
@@ -36,14 +36,17 @@ const baseProfile = {
 };
 
 describe('MobileControlPlaneProfile', () => {
-  test('requires remote mobile-session revocation before local profile removal', async () => {
+  test('treats remote mobile-session revocation as best effort for local profile removal', async () => {
     const unavailable = Object.assign(new Error('offline'), { status: undefined });
-    await expect(requireRemoteMobileSessionRevocation(async () => { throw unavailable; })).rejects.toBe(unavailable);
-    await expect(requireRemoteMobileSessionRevocation(async () => { throw Object.assign(new Error('expired'), { status: 401 }); })).resolves.toBeUndefined();
+    await expect(attemptRemoteMobileSessionRevocation(async () => { throw unavailable; })).resolves.toBe(false);
+    await expect(attemptRemoteMobileSessionRevocation(async () => {
+      throw Object.assign(new Error('different signing identity'), { code: 'DIRECT_IDENTITY_CHANGED' });
+    })).resolves.toBe(false);
+    await expect(attemptRemoteMobileSessionRevocation(async () => { throw Object.assign(new Error('expired'), { status: 401 }); })).resolves.toBe(true);
     const forbidden = Object.assign(new Error('forbidden'), { status: 403 });
-    await expect(requireRemoteMobileSessionRevocation(async () => { throw forbidden; })).rejects.toBe(forbidden);
+    await expect(attemptRemoteMobileSessionRevocation(async () => { throw forbidden; })).resolves.toBe(false);
     const logout = jest.fn().mockResolvedValue({ ok: true });
-    await requireRemoteMobileSessionRevocation(logout);
+    await expect(attemptRemoteMobileSessionRevocation(logout)).resolves.toBe(true);
     expect(logout).toHaveBeenCalledTimes(1);
   });
 

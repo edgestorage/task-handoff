@@ -28,13 +28,15 @@ export type SessionTab = {
   label: string;
   title?: string;
   status: string;
-  kind: "terminal" | "browser" | "logs" | "app" | "ai" | "status" | "repository";
+  kind: "terminal" | "browser" | "embedded-browser" | "logs" | "app" | "ai" | "status" | "repository";
   source?: Record<string, unknown>;
   aiSessions?: AiSessionSummary[];
 };
 
+export const EMBEDDED_BROWSER_APP_ID = "embedded-browser";
+
 export type RepositoryWorkspaceTabTarget = {
-  aiAgent?: "codex" | "claude";
+  aiAgent?: "codex" | "claude" | "opencode";
   filePath?: string;
   fileRequestId?: number;
   initialView: "files" | "changes";
@@ -212,6 +214,7 @@ export function appDisplayName(id: string, t: Translate) {
     chromium: "Chromium",
     browser: t("sessions.tabs.browser"),
     "vscode-web": "VS Code",
+    [EMBEDDED_BROWSER_APP_ID]: t("sessions.tabs.browser"),
   };
   return names[id] || id.replace(/[-_]+/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
 }
@@ -489,7 +492,7 @@ function displayAiSessionContent(session: AiSessionSummary | undefined, promptIn
     return session.summary;
   }
   if (session.error) {
-    return session.error;
+    return includeProgress ? session.error : "";
   }
   return includeProgress ? aiSessionProgressText(session, t) : "";
 }
@@ -504,7 +507,7 @@ export function aiSessionUserPrompts(session?: AiSessionSummary) {
 }
 
 export function aiSessionTurns(session?: AiSessionSummary) {
-  return (session?.turns || []).filter((turn) => turn.userPrompt?.trim() || turn.lastMessage?.trim() || turn.summary?.trim() || turn.contextCompactions?.length);
+  return session?.turns || [];
 }
 
 function aiSessionDisplayTurns(session?: AiSessionSummary) {
@@ -532,9 +535,12 @@ export function displayAiSessionTitle(session: AiSessionSummary | undefined, pro
   if (turns.length) {
     const index = promptIndex === undefined ? turns.length - 1 : Math.min(Math.max(promptIndex, 0), turns.length - 1);
     const turn = turns[index];
-    return turn?.userPrompt?.trim() || (turn?.contextCompactions?.length ? "/compact" : "-");
+    const turnPrompt = turn?.userPrompt?.trim();
+    if (turnPrompt) return turnPrompt;
+    if (turn?.contextCompactions?.length) return "/compact";
+    if (promptIndex !== undefined) return "";
   }
-  return "-";
+  return session.userPrompt?.trim() || "";
 }
 
 export function aiSessionContext(session: AiSessionSummary) {

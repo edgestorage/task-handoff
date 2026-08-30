@@ -1,4 +1,4 @@
-import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
+import { fireEvent, render, waitFor } from '@testing-library/react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { TriggerForm } from '../src/triggers/TriggerForm';
@@ -17,13 +17,11 @@ describe('<TriggerForm />', () => {
     expect(screen.getByRole('button', { name: 'New Trigger' })).toBeDisabled();
     expect(screen.queryByText('Cooldown (milliseconds)')).toBeNull();
 
-    fireEvent.press(screen.getByRole('button', { name: 'Advanced settings' }));
+    await fireEvent.press(screen.getByRole('button', { name: 'Advanced settings' }));
     await waitFor(() => expect(screen.getByText('Cooldown (milliseconds)')).toBeTruthy());
-    fireEvent.changeText(screen.getByLabelText('Name'), 'Review documentation');
+    await fireEvent.changeText(screen.getByLabelText('Name'), 'Review documentation');
     await waitFor(() => expect(screen.getByRole('button', { name: 'New Trigger' })).toBeEnabled());
-    await act(async () => {
-      fireEvent.press(screen.getByRole('button', { name: 'New Trigger' }));
-    });
+    await fireEvent.press(screen.getByRole('button', { name: 'New Trigger' }));
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({
       name: 'Review documentation',
@@ -42,11 +40,11 @@ describe('<TriggerForm />', () => {
     </SafeAreaProvider>);
 
     expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
-    fireEvent.press(screen.getByRole('checkbox', { name: 'Mon' }));
+    await fireEvent.press(screen.getByRole('checkbox', { name: 'Mon' }));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled());
 
-    fireEvent.press(screen.getByRole('radio', { name: 'File changes' }));
-    await waitFor(() => fireEvent.changeText(screen.getByLabelText('Runtime roots, comma separated'), ''));
+    await fireEvent.press(screen.getByRole('radio', { name: 'File changes' }));
+    await fireEvent.changeText(screen.getByLabelText('Runtime roots, comma separated'), '');
     await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled());
   });
 });

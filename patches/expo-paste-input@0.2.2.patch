@@ -1,0 +1,246 @@
+diff --git a/android/src/main/java/expo/modules/pasteinput/ExpoPasteInputModule.kt b/android/src/main/java/expo/modules/pasteinput/ExpoPasteInputModule.kt
+index 8ed80e2f10ff5925d9d3d2d0d5b3bfe656c4ffa4..88ed1b4536610953a9776b58f25e11f845ddcf5c 100644
+--- a/android/src/main/java/expo/modules/pasteinput/ExpoPasteInputModule.kt
++++ b/android/src/main/java/expo/modules/pasteinput/ExpoPasteInputModule.kt
+@@ -9,6 +9,9 @@ class ExpoPasteInputModule : Module() {
+     
+     View(ExpoPasteInputView::class) {
+       Events("onPaste")
++      Prop("interceptTextPasteAbove") { view: ExpoPasteInputView, threshold: Int? ->
++        view.interceptTextPasteAbove = (threshold ?: 0).coerceAtLeast(0)
++      }
+     }
+   }
+ }
+diff --git a/android/src/main/java/expo/modules/pasteinput/ExpoPasteInputView.kt b/android/src/main/java/expo/modules/pasteinput/ExpoPasteInputView.kt
+index 99b0fa68814e57404d4c7f97c7fb47ced5ca59f1..5ef1b381fe2d59ef48f93c689555b3b8bb55ec4a 100644
+--- a/android/src/main/java/expo/modules/pasteinput/ExpoPasteInputView.kt
++++ b/android/src/main/java/expo/modules/pasteinput/ExpoPasteInputView.kt
+@@ -21,6 +21,7 @@ import java.io.File
+ import java.io.FileOutputStream
+ 
+ class ExpoPasteInputView(context: Context, appContext: AppContext) : ExpoView(context, appContext) {
++  var interceptTextPasteAbove: Int = 0
+   private val onPaste by EventDispatcher()
+   private var textInputView: EditText? = null
+   private var isMonitoring: Boolean = false
+@@ -188,6 +189,10 @@ class ExpoPasteInputView(context: Context, appContext: AppContext) : ExpoView(co
+       }
+       
+       if (!parsed.textContent.isNullOrEmpty()) {
++        if (shouldInterceptTextPaste(parsed.textContent)) {
++          handleTextPaste(parsed.textContent, intercepted = true)
++          return@OnReceiveContentListener null
++        }
+         handleTextPaste(parsed.textContent)
+         // Keep native text insertion behavior.
+         return@OnReceiveContentListener payload
+@@ -278,6 +283,12 @@ class ExpoPasteInputView(context: Context, appContext: AppContext) : ExpoView(co
+     
+     val text = parsed.textContent
+     if (!text.isNullOrEmpty()) {
++      if (shouldInterceptTextPaste(text)) {
++        handleTextPaste(text, intercepted = true)
++        markSuppressOnReceiveContent()
++        mode?.finish()
++        return true
++      }
+       var handled = originalCallback?.onActionItemClicked(mode, item) ?: false
+       if (!handled) {
+         handled = editText.onTextContextMenuItem(item.itemId)
+@@ -496,11 +507,17 @@ class ExpoPasteInputView(context: Context, appContext: AppContext) : ExpoView(co
+     }
+   }
+   
+-  private fun handleTextPaste(text: String) {
+-    onPaste(mapOf(
++  private fun shouldInterceptTextPaste(text: String): Boolean {
++    return interceptTextPasteAbove > 0 && text.codePointCount(0, text.length) > interceptTextPasteAbove
++  }
++
++  private fun handleTextPaste(text: String, intercepted: Boolean = false) {
++    val payload = mutableMapOf<String, Any>(
+       "type" to "text",
+       "value" to text
+-    ))
++    )
++    if (intercepted) payload["intercepted"] = true
++    onPaste(payload)
+   }
+   
+   private fun handleUnsupportedPaste() {
+diff --git a/build/TextInputWrapper.types.d.ts b/build/TextInputWrapper.types.d.ts
+index 4c430a252ef3e938622e6c56421ed283c6167913..0fec899ad0dcd78631714bd8465140d80a5528c4 100644
+--- a/build/TextInputWrapper.types.d.ts
++++ b/build/TextInputWrapper.types.d.ts
+@@ -2,6 +2,7 @@ import type { ViewProps } from "react-native";
+ export type PasteEventPayload = {
+     type: "text";
+     value: string;
++    intercepted?: true;
+ } | {
+     type: "images";
+     uris: string[];
+@@ -14,6 +15,8 @@ export interface TextInputWrapperViewProps extends ViewProps {
+      * @param payload - The paste event payload containing type and content
+      */
+     onPaste?: (payload: PasteEventPayload) => void;
++    /** Intercept text pastes above this Unicode code-point count before insertion. */
++    interceptTextPasteAbove?: number;
+     /**
+      * Child components to wrap. Typically a TextInput component.
+      */
+diff --git a/build/TextInputWrapperView.js b/build/TextInputWrapperView.js
+index ea1797c0547d5422f392148a63119a2d0d9c04bc..69512039ecfc179ba5505612a097e55a8c73e7b5 100644
+--- a/build/TextInputWrapperView.js
++++ b/build/TextInputWrapperView.js
+@@ -2,14 +2,14 @@ import { requireNativeView } from "expo";
+ import * as React from "react";
+ const NativeTextInputWrapper = requireNativeView("ExpoPasteInput");
+ export const TextInputWrapperView = React.forwardRef((props, ref) => {
+-    const { onPaste, children, ...viewProps } = props;
++    const { onPaste, children, interceptTextPasteAbove, ...viewProps } = props;
+     const handlePaste = React.useCallback((event) => {
+         if (onPaste) {
+             // Expo View events wrap the payload in nativeEvent
+             onPaste(event.nativeEvent);
+         }
+     }, [onPaste]);
+-    return (<NativeTextInputWrapper ref={ref} onPaste={handlePaste} {...viewProps}>
++    return (<NativeTextInputWrapper ref={ref} onPaste={handlePaste} interceptTextPasteAbove={interceptTextPasteAbove} {...viewProps}>
+       {children}
+     </NativeTextInputWrapper>);
+ });
+diff --git a/build/TextInputWrapperView.web.js b/build/TextInputWrapperView.web.js
+index ec27287d41ed37a22c1d74666b4b3626c10317c3..18f60a1ab43a81e1e472c2e2876433b779881c8c 100644
+--- a/build/TextInputWrapperView.web.js
++++ b/build/TextInputWrapperView.web.js
+@@ -1,7 +1,7 @@
+ import * as React from "react";
+ import { View } from "react-native";
+ export const TextInputWrapperView = React.forwardRef((props, ref) => {
+-    const { onPaste, ...viewProps } = props;
++    const { onPaste, interceptTextPasteAbove, ...viewProps } = props;
+     return (<View ref={ref} {...viewProps}>
+       {props.children}
+     </View>);
+diff --git a/ios/ExpoPasteInputModule.swift b/ios/ExpoPasteInputModule.swift
+index 2b9a9148fb1ee3a8aea3fe894da987d621fd5348..4bbdc52c20c634d1bb768a599f6fbe02fad937c8 100644
+--- a/ios/ExpoPasteInputModule.swift
++++ b/ios/ExpoPasteInputModule.swift
+@@ -6,6 +6,9 @@ public class ExpoPasteInputModule: Module {
+     
+     View(ExpoPasteInputView.self) {
+       Events("onPaste")
++      Prop("interceptTextPasteAbove") { (view, threshold: Int?) in
++        view.interceptTextPasteAbove = max(0, threshold ?? 0)
++      }
+     }
+   }
+ }
+diff --git a/ios/ExpoPasteInputView.swift b/ios/ExpoPasteInputView.swift
+index 39b2302ed42bdd56db6084e333b9581e08c18689..163c6bf365119e0e37654f7c5d0eb9e622b52d12 100644
+--- a/ios/ExpoPasteInputView.swift
++++ b/ios/ExpoPasteInputView.swift
+@@ -30,6 +30,7 @@ private enum MediaPayload {
+ }
+ 
+ class ExpoPasteInputView: ExpoView {
++  var interceptTextPasteAbove: Int = 0
+   private let onPaste = EventDispatcher()
+   private let mediaProcessingQueue = DispatchQueue(label: "expo.modules.pasteinput.media-processing", qos: .userInitiated)
+   private var textInputView: UIView?
+@@ -326,7 +327,13 @@ class ExpoPasteInputView: ExpoView {
+             return // Don't call original paste for images
+           }
+           
+-          // Handle text - call original paste first, then notify
++          if let text = pasteboard.string,
++             wrapper.shouldInterceptTextPaste(text) {
++            wrapper.handleTextPaste(text, intercepted: true)
++            return
++          }
++
++          // Handle short text - call original paste first, then notify
+           if let originalIMP = originalPasteIMP {
+             typealias OriginalIMP = @convention(c) (AnyObject, Selector, Any?) -> Void
+             let originalFunction = unsafeBitCast(originalIMP, to: OriginalIMP.self)
+@@ -898,11 +905,17 @@ class ExpoPasteInputView: ExpoView {
+     // No text found - don't trigger unsupported, just ignore
+   }
+   
+-  private func handleTextPaste(_ text: String) {
+-    onPaste([
++  private func shouldInterceptTextPaste(_ text: String) -> Bool {
++    interceptTextPasteAbove > 0 && text.unicodeScalars.count > interceptTextPasteAbove
++  }
++
++  private func handleTextPaste(_ text: String, intercepted: Bool = false) {
++    var payload: [String: Any] = [
+       "type": "text",
+       "value": text
+-    ])
++    ]
++    if intercepted { payload["intercepted"] = true }
++    onPaste(payload)
+   }
+   
+   private func handleUnsupportedPaste() {
+diff --git a/src/TextInputWrapper.types.ts b/src/TextInputWrapper.types.ts
+index a0e8b1b67e0a8db1ff825700f6e4c97037db89ef..354538ec145059470a5c4c857cbf1e3061177254 100644
+--- a/src/TextInputWrapper.types.ts
++++ b/src/TextInputWrapper.types.ts
+@@ -1,7 +1,7 @@
+ import type { ViewProps } from "react-native";
+ 
+ export type PasteEventPayload =
+-  | { type: "text"; value: string }
++  | { type: "text"; value: string; intercepted?: true }
+   | { type: "images"; uris: string[] }
+   | { type: "unsupported" };
+ 
+@@ -12,6 +12,9 @@ export interface TextInputWrapperViewProps extends ViewProps {
+    */
+   onPaste?: (payload: PasteEventPayload) => void;
+ 
++  /** Intercept text pastes above this Unicode code-point count before insertion. */
++  interceptTextPasteAbove?: number;
++
+   /**
+    * Child components to wrap. Typically a TextInput component.
+    */
+diff --git a/src/TextInputWrapperView.tsx b/src/TextInputWrapperView.tsx
+index 867779a550aad161710fff80b45f532348547c6c..fb52cb4809179dfff17972cc38de9323a814fdad 100644
+--- a/src/TextInputWrapperView.tsx
++++ b/src/TextInputWrapperView.tsx
+@@ -12,7 +12,7 @@ export const TextInputWrapperView = React.forwardRef<
+   View,
+   TextInputWrapperViewProps
+ >((props, ref) => {
+-  const { onPaste, children, ...viewProps } = props;
++  const { onPaste, children, interceptTextPasteAbove, ...viewProps } = props;
+ 
+   const handlePaste = React.useCallback(
+     (event: { nativeEvent: PasteEventPayload }) => {
+@@ -25,7 +25,7 @@ export const TextInputWrapperView = React.forwardRef<
+   );
+ 
+   return (
+-    <NativeTextInputWrapper ref={ref} onPaste={handlePaste} {...viewProps}>
++    <NativeTextInputWrapper ref={ref} onPaste={handlePaste} interceptTextPasteAbove={interceptTextPasteAbove} {...viewProps}>
+       {children}
+     </NativeTextInputWrapper>
+   );
+diff --git a/src/TextInputWrapperView.web.tsx b/src/TextInputWrapperView.web.tsx
+index 9712cc0becc2787945ffc421b1315d88e9eace89..9f1c65908ef094b4e21e397c5d3061b32d453f51 100644
+--- a/src/TextInputWrapperView.web.tsx
++++ b/src/TextInputWrapperView.web.tsx
+@@ -6,7 +6,7 @@ export const TextInputWrapperView = React.forwardRef<
+   View,
+   TextInputWrapperViewProps
+ >((props, ref) => {
+-  const { onPaste, ...viewProps } = props;
++  const { onPaste, interceptTextPasteAbove, ...viewProps } = props;
+   return (
+     <View ref={ref} {...viewProps}>
+       {props.children}

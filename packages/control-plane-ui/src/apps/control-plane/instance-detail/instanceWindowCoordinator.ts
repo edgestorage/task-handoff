@@ -1,3 +1,5 @@
+import { createBrowserUuid } from "../../../lib/random-id.ts";
+
 export type WindowClaimResult = { action: "claimed" } | { action: "focused"; focused: boolean };
 
 type WindowMessage = {
@@ -14,7 +16,7 @@ export function createWebInstanceWindowCoordinator(options: {
   onOwnershipLost?: (instanceId: string) => void;
 } = {}) {
   const channel = options.channel || new BroadcastChannel("task-handoff.instance-detail-windows");
-  const windowId = options.windowId || crypto.randomUUID();
+  const windowId = options.windowId || createBrowserUuid();
   const focus = options.focus || (() => window.focus());
   const locks = options.locks === undefined ? globalThis.navigator?.locks : options.locks || undefined;
   let currentInstanceId = "";

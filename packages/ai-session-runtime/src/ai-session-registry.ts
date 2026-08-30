@@ -1,10 +1,12 @@
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { resolveStoragePaths } from "@task-handoff/core/storage/paths";
 import type {
+  AiSessionConversationAttachment,
   AiSessionLifecycle,
   AiSessionLineage,
+  AiSessionModelSelection,
   AiSessionCreationSource,
   AiSessionHistoryItem,
   AiSessionMessageAttachment,
@@ -19,6 +21,7 @@ import type {
   AiSessionSummary,
   AiSessionsSnapshot,
 } from "@task-handoff/protocol/ai-sessions";
+import { AiSessionConversationAttachmentStore, type RetainedAiSessionMessageAttachment } from "./ai-session-conversation-attachment-store";
 import {
   compact,
   messageText,
@@ -38,6 +41,7 @@ import {
   applyAiSessionPatch,
   reduceAiSessionRealtime,
   reduceAiSessionSnapshot,
+  sameAiSessionBusinessState,
   type AiSessionPatch,
 } from "./ai-session/state-reducer";
 import {
@@ -68,6 +72,8 @@ type AiSessionStartInput = {
   appId?: string;
   providerSessionId?: string;
   lineage?: AiSessionLineage;
+  modelSelection?: AiSessionModelSelection;
+  reasoningEffort?: AiSessionStatus["reasoningEffort"];
   title?: string;
   cwd?: string;
   cwdFolderId?: string;
@@ -86,6 +92,7 @@ type RegistryOptions = {
   idleAfterMs?: number;
   staleAfterMs?: number;
   orphanedAppSessionRetentionMs?: number;
+  conversationAttachments?: AiSessionConversationAttachmentStore;
 };
 
 const DEFAULT_RETENTION_MS = 24 * 60 * 60 * 1000;
@@ -105,7 +112,71 @@ function aiSessionDir() {
   return path.join(resolveStoragePaths().dataDir, "ai-sessions");
 }
 
+function canonicalDetailValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalDetailValue);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>)
+    .filter(([, entry]) => entry !== undefined)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, entry]) => [key, canonicalDetailValue(entry)]));
+}
+
+const aiSessionDetailRevisionCache = new WeakMap<AiSessionStatus, string>();
+
+export function aiSessionDetailRevision(session: AiSessionStatus) {
+  const cached = aiSessionDetailRevisionCache.get(session);
+  if (cached) return cached;
+  const detail = canonicalDetailValue({
+    appBindingKeys: session.appBindingKeys,
+    cwd: session.cwd,
+    error: session.error,
+    providerMeta: session.providerMeta,
+    modelSelection: session.modelSelection,
+    reasoningEffort: session.reasoningEffort,
+    queue: session.queue,
+    subAgents: session.subAgents,
+  });
+  const revision = createHash("sha256").update(JSON.stringify(detail)).digest("base64url").slice(0, 22);
+  aiSessionDetailRevisionCache.set(session, revision);
+  return revision;
+}
+
+const aiSessionTurnsRevisionCache = new WeakMap<AiSessionStatus, string>();
+
+export function aiSessionTurnBodyRevision(turn: NonNullable<AiSessionStatus["turns"]>[number]) {
+  return createHash("sha256")
+    .update(JSON.stringify(canonicalDetailValue(turn)))
+    .digest("base64url")
+    .slice(0, 22);
+}
+
+export function aiSessionConversationTurns(session: AiSessionStatus) {
+  return (session.turns || []).filter((turn) => (
+    turn.userPrompt?.trim()
+    || turn.lastMessage?.trim()
+    || turn.summary?.trim()
+    || turn.contextCompactions?.length
+  ));
+}
+
+export function aiSessionTurnsRevision(session: AiSessionStatus) {
+  const cached = aiSessionTurnsRevisionCache.get(session);
+  if (cached) return cached;
+  const index = aiSessionConversationTurns(session).map((turn) => ({
+    id: turn.id,
+    providerTurnId: turn.providerTurnId,
+  }));
+  const revision = createHash("sha256")
+    .update(JSON.stringify(canonicalDetailValue(index)))
+    .digest("base64url")
+    .slice(0, 22);
+  aiSessionTurnsRevisionCache.set(session, revision);
+  return revision;
+}
+
 function summaryForHeartbeat(session: AiSessionStatus): AiSessionSummary {
+  const meaningfulTurns = aiSessionConversationTurns(session);
+  const lastUserTurn = [...meaningfulTurns].reverse().find((turn) => turn.userPrompt?.trim());
   return {
     id: session.id,
     agent: session.agent,
@@ -114,27 +185,36 @@ function summaryForHeartbeat(session: AiSessionStatus): AiSessionSummary {
     appId: session.appId,
     providerSessionId: session.providerSessionId,
     lineage: session.lineage,
-    providerMeta: session.providerMeta,
-    appBindingKeys: session.appBindingKeys,
+    modelSelection: session.modelSelection,
+    reasoningEffort: session.reasoningEffort,
+    appBindingKeys: session.appBindingKeys?.slice(0, 3).map((value) => compact(value, 120)),
     actions: actionsForSession(session),
     activeTurnId: session.activeTurnId,
     title: session.title,
-    cwd: session.cwd,
+    cwd: session.cwd ? compact(session.cwd, 512) : undefined,
     cwdFolderId: session.cwdFolderId,
-    userPrompt: session.userPrompt,
-    turns: session.turns,
+    userPrompt: session.userPrompt ? compact(session.userPrompt, 400) : undefined,
+    detailRevision: aiSessionDetailRevision(session),
+    turnsRevision: aiSessionTurnsRevision(session),
+    latestTurnRef: meaningfulTurns.length ? {
+      id: meaningfulTurns.at(-1)!.id,
+      bodyRevision: aiSessionTurnBodyRevision(meaningfulTurns.at(-1)!),
+    } : undefined,
+    turnCount: meaningfulTurns.length,
+    lastUserMessageAt: lastUserTurn?.startedAt || lastUserTurn?.updatedAt || (session.userPrompt ? session.startedAt : undefined),
     status: session.status,
     phase: session.phase,
-    summary: session.summary,
-    lastMessage: session.lastMessage,
+    summary: session.summary ? compact(session.summary, 300) : undefined,
+    lastMessage: session.lastMessage ? compact(session.lastMessage, 800) : undefined,
     lastMessageItemId: session.lastMessageItemId,
-    currentTool: session.currentTool,
+    currentTool: session.currentTool ? { ...session.currentTool, inputPreview: undefined } : undefined,
     toolCallsSinceLastMessage: session.toolCallsSinceLastMessage,
-    subAgents: session.subAgents,
-    queue: session.queue,
+    subAgentCount: session.subAgents.length,
+    subAgents: [],
+    queue: { revision: session.queue.revision, pendingCount: session.queue.pendingCount, items: [] },
     startedAt: session.startedAt,
     updatedAt: session.updatedAt,
-    error: session.error,
+    error: session.error ? compact(session.error, 300) : undefined,
   };
 }
 
@@ -186,6 +266,9 @@ export class AiSessionRegistry {
   private readonly transcriptService: AiSessionTranscriptService;
   private readonly store: AiSessionFileStore;
   private readonly changes = new EventEmitter();
+  private readonly conversationAttachments?: AiSessionConversationAttachmentStore;
+  private changeBatchDepth = 0;
+  private pendingChangeReason: string | undefined;
 
   constructor(options: RegistryOptions = {}) {
     this.dir = options.dir || aiSessionDir();
@@ -197,7 +280,21 @@ export class AiSessionRegistry {
     this.idleAfterMs = options.idleAfterMs ?? (Number(process.env.TASK_HANDOFF_AI_SESSION_IDLE_AFTER_MS) || DEFAULT_IDLE_AFTER_MS);
     this.staleAfterMs = options.staleAfterMs ?? (Number(process.env.TASK_HANDOFF_AI_SESSION_STALE_AFTER_MS) || DEFAULT_STALE_AFTER_MS);
     this.orphanedAppSessionRetentionMs = options.orphanedAppSessionRetentionMs ?? (Number(process.env.TASK_HANDOFF_AI_SESSION_ORPHAN_RETENTION_MS) || DEFAULT_ORPHANED_APP_SESSION_RETENTION_MS);
+    this.conversationAttachments = options.conversationAttachments;
     this.transcriptService = new AiSessionTranscriptService({ idleAfterMs: this.idleAfterMs, staleAfterMs: this.staleAfterMs });
+    if (this.conversationAttachments) {
+      for (const session of this.readSessions()) {
+        for (const item of session.queue.items) {
+          const attachmentIds = item.attachments.map((attachment) => attachment.id);
+          if (!attachmentIds.length) continue;
+          const messageId = item.messageId
+            || this.conversationAttachments.messageIdForAttachments(session.id, attachmentIds);
+          if (messageId) {
+            this.conversationAttachments.claimMessageAttachments(session.id, messageId, attachmentIds);
+          }
+        }
+      }
+    }
   }
 
   sessionPath(id: string) {
@@ -211,7 +308,25 @@ export class AiSessionRegistry {
     };
   }
 
+  async batchChanges<T>(run: () => Promise<T> | T): Promise<T> {
+    this.changeBatchDepth += 1;
+    try {
+      return await run();
+    } finally {
+      this.changeBatchDepth -= 1;
+      if (this.changeBatchDepth === 0 && this.pendingChangeReason) {
+        const reason = this.pendingChangeReason;
+        this.pendingChangeReason = undefined;
+        this.changes.emit("change", reason);
+      }
+    }
+  }
+
   start(input: AiSessionStartInput, options: { meta?: TurnMeta; timestamp?: string; suppressPromptTurn?: boolean } = {}) {
+    return this.put(this.initialSession(input, options));
+  }
+
+  private initialSession(input: AiSessionStartInput, options: { meta?: TurnMeta; timestamp?: string; suppressPromptTurn?: boolean } = {}) {
     const timestamp = options.timestamp || nowIso();
     const meta = options.meta || turnMeta({ source: "control", observedAt: timestamp });
     const session: AiSessionStatus = {
@@ -223,12 +338,18 @@ export class AiSessionRegistry {
       providerSessionId: input.providerSessionId ? compact(input.providerSessionId, 240) : undefined,
       lineage: input.lineage,
       providerMeta: undefined,
+      modelSelection: input.modelSelection,
+      reasoningEffort: input.reasoningEffort,
       activeTurnId: undefined,
       title: input.title ? compact(input.title, 240) : undefined,
       cwd: input.cwd ? compact(input.cwd, 4096) : undefined,
       cwdFolderId: input.cwdFolderId ? compact(input.cwdFolderId, 120) : undefined,
       userPrompt: input.userPrompt ? messageText(input.userPrompt) : undefined,
-      turns: updateTurns(undefined, { userPrompt: options.suppressPromptTurn ? undefined : input.userPrompt, turns: input.turns }, timestamp, meta),
+      turns: updateTurns(undefined, {
+        userPrompt: options.suppressPromptTurn ? undefined : input.userPrompt,
+        turns: input.turns,
+        status: input.status,
+      }, timestamp, meta),
       status: normalizeLifecycle(input.status || "idle"),
       phase: normalizePhase(input.phase || "unknown"),
       summary: input.summary ? compact(input.summary, 1000) : undefined,
@@ -239,12 +360,33 @@ export class AiSessionRegistry {
       counters: { toolCalls: 0, edits: 0, approvals: 0 },
       queue: emptyQueue(),
     };
-    this.put(session);
     return session;
   }
 
   get(id: string) {
     return this.store.get(id);
+  }
+
+  conversation(id: string) {
+    const session = this.store.get(id);
+    return session ? this.projectConversationAttachments(session) : undefined;
+  }
+
+  private projectConversationAttachments(session: AiSessionStatus): AiSessionStatus {
+    if (!this.conversationAttachments) return session;
+    return {
+      ...session,
+      turns: session.turns?.map((turn) => ({
+        ...turn,
+        userMessages: turn.userMessages?.map((message) => ({
+          ...message,
+          attachments: message.attachments.map((attachment) => (
+            this.conversationAttachments!.attachmentMetadata(session.id, message.id, attachment.id)
+              || { ...attachment, contentState: "missing" as const }
+          )),
+        })),
+      })),
+    };
   }
 
   restoreHistory(item: AiSessionHistoryItem) {
@@ -256,6 +398,8 @@ export class AiSessionRegistry {
       appId: item.agent,
       providerSessionId: item.providerSessionId,
       lineage: item.lineage,
+      modelSelection: item.modelSelection,
+      reasoningEffort: item.reasoningEffort,
       title: item.title,
       cwd: item.cwd,
       cwdFolderId: item.cwdFolderId,
@@ -278,10 +422,22 @@ export class AiSessionRegistry {
     return this.removeStoredSession(id);
   }
 
-  put(session: AiSessionStatus) {
-    this.store.save(session);
+  private put(session: AiSessionStatus) {
+    const current = this.get(session.id);
+    if (current && sameAiSessionBusinessState(current, session)) {
+      return current;
+    }
+    const committed = this.store.save(session);
     this.emitChange("write");
-    return session;
+    return committed;
+  }
+
+  patch(id: string, patch: AiSessionUpdateInput) {
+    return this.update(id, patch);
+  }
+
+  restoreAuthority(session: AiSessionStatus) {
+    return this.put(session);
   }
 
   private removeStoredSession(id: string) {
@@ -311,10 +467,10 @@ export class AiSessionRegistry {
     }));
   }
 
-  enqueueMessage(id: string, message: string, attachments: AiSessionMessageAttachment[] = [], references: AiSessionReference[] = [], permissionMode?: AiSessionPermissionMode) {
+  enqueueMessage(id: string, message: string, attachments: AiSessionMessageAttachment[] = [], references: AiSessionReference[] = [], permissionMode?: AiSessionPermissionMode, messageId?: string) {
     const current = this.get(id);
     if (!current) return undefined;
-    const result = this.queueService.enqueueMessage(current, message, attachments, references, permissionMode);
+    const result = this.queueService.enqueueMessage(current, message, attachments, references, permissionMode, messageId);
     return result ? { ...result, session: this.put(result.session) } : undefined;
   }
 
@@ -326,8 +482,45 @@ export class AiSessionRegistry {
     return this.queueService.nextQueuedMessage(this.get(id));
   }
 
-  queuedMessageAttachments(queueId: string) {
-    return this.queueService.queuedMessageAttachments(queueId);
+  queuedMessageDispatch(queueId: string) {
+    const session = this.readSessions().find((candidate) => candidate.queue.items.some((item) => item.id === queueId));
+    const queuedItem = session?.queue.items.find((item) => item.id === queueId);
+    if (this.conversationAttachments && queuedItem?.attachments.length) {
+      const attachmentIds = queuedItem.attachments.map((attachment) => attachment.id);
+      return {
+        // Compatibility for v0.0.21: affected queue snapshots omitted messageId.
+        messageId: queuedItem.messageId || (session ? this.conversationAttachments.messageIdForAttachments(session.id, attachmentIds) : undefined),
+        attachments: this.conversationAttachments.providerAttachments(attachmentIds),
+      };
+    }
+    return { messageId: queuedItem?.messageId, attachments: this.queueService.queuedMessageAttachments(queueId) };
+  }
+
+  stageMessageAttachments(input: {
+    sessionId: string;
+    messageId: string;
+    attachments?: AiSessionMessageAttachment[];
+    runtimePathRoot?: string;
+    draftScopeType?: "session" | "create-request";
+    draftScopeId?: string;
+    draftAttachmentIds?: readonly string[];
+  }): { attachments: AiSessionConversationAttachment[]; providerAttachments: RetainedAiSessionMessageAttachment[] } {
+    if (!this.conversationAttachments) {
+      return { attachments: [], providerAttachments: input.attachments || [] };
+    }
+    return this.conversationAttachments.stageMessage(input);
+  }
+
+  commitMessageAttachments(sessionId: string, messageId: string, turnId?: string) {
+    return this.conversationAttachments?.commitMessage(sessionId, messageId, turnId) || 0;
+  }
+
+  rollbackMessageAttachments(sessionId: string, messageId: string) {
+    return this.conversationAttachments?.rollbackMessage(sessionId, messageId) || 0;
+  }
+
+  conversationAttachmentStore() {
+    return this.conversationAttachments;
   }
 
   markQueuedMessageSending(id: string, queueId: string) {
@@ -350,7 +543,14 @@ export class AiSessionRegistry {
 
   removeQueuedMessage(id: string, queueId: string) {
     const current = this.get(id);
+    const queuedItem = current?.queue.items.find((item) => item.id === queueId);
+    const attachmentIds = queuedItem?.attachments.map((attachment) => attachment.id) || [];
+    const messageId = queuedItem?.messageId
+      || (current && attachmentIds.length
+        ? this.conversationAttachments?.messageIdForAttachments(current.id, attachmentIds)
+        : undefined);
     const updated = current ? this.queueService.removeQueuedMessage(current, queueId) : undefined;
+    if (messageId) this.rollbackMessageAttachments(id, messageId);
     return updated ? this.put(updated) : undefined;
   }
 
@@ -416,13 +616,15 @@ export class AiSessionRegistry {
       );
     }
     if (!existing) {
-      const session = this.start({
+      const session = this.initialSession({
         agent: input.agent,
         creationSource: input.creationSource,
         appSessionId: input.appSessionId,
         appId: input.appId,
         providerSessionId: input.providerSessionId,
         lineage: input.lineage,
+        modelSelection: input.modelSelection,
+        reasoningEffort: input.reasoningEffort,
         title: input.title,
         cwd: input.cwd,
         cwdFolderId: input.cwdFolderId,
@@ -432,8 +634,10 @@ export class AiSessionRegistry {
         phase: input.phase || "unknown",
         summary: input.summary,
       }, { meta, timestamp: input.observedAt, suppressPromptTurn: !input.turns?.length });
-      return this.update(session.id, {
+      return this.put(applyAiSessionPatch(session, {
         providerMeta: input.providerMeta,
+        modelSelection: input.modelSelection,
+        reasoningEffort: input.reasoningEffort,
         lineage: input.lineage,
         appBindingKeys: input.appBindingKeys,
         actions: input.actions,
@@ -448,10 +652,11 @@ export class AiSessionRegistry {
         transcriptSize: input.transcriptSize,
         status: input.status || session.status,
         phase: input.phase || "unknown",
-      }, { updatedAt: input.observedAt, meta, suppressTurnUpdate: !input.turns?.length });
+      }, { updatedAt: input.observedAt, meta, suppressTurnUpdate: !input.turns?.length }));
     }
     this.reconciliation.clearOrphan(existing.id);
-    return this.put(reduceAiSessionSnapshot(existing, input));
+    const updated = reduceAiSessionSnapshot(existing, input);
+    return updated === existing ? existing : this.put(updated);
   }
 
   attachTranscript(id: string, transcriptPath?: string) {
@@ -528,9 +733,7 @@ export class AiSessionRegistry {
   }
 
   private readSessions() {
-    const now = Date.now();
     return this.store.list()
-      .map((session) => this.withDerivedLifecycle(session, now))
       .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
   }
 
@@ -586,7 +789,7 @@ export class AiSessionRegistry {
       runningCount: sessions.filter((session) => session.status === "running").length,
       waitingCount: sessions.filter((session) => session.status === "waiting").length,
       staleCount: 0,
-      sessions: sessions.map(summaryForHeartbeat),
+      sessions: sessions.map((session) => summaryForHeartbeat(this.projectConversationAttachments(session))),
       updatedAt: nowIso(),
     };
   }
@@ -605,6 +808,10 @@ export class AiSessionRegistry {
   }
 
   private emitChange(reason: string) {
+    if (this.changeBatchDepth > 0) {
+      this.pendingChangeReason ||= reason;
+      return;
+    }
     this.changes.emit("change", reason);
   }
 
@@ -641,20 +848,6 @@ export class AiSessionRegistry {
       });
     }
     return matched;
-  }
-
-  private withDerivedLifecycle(session: AiSessionStatus, now = Date.now()) {
-    if (["idle", "failed", "waiting"].includes(session.status)) {
-      return session;
-    }
-    const age = now - Date.parse(session.updatedAt);
-    if (age > this.staleAfterMs && session.transcriptPath) {
-      return { ...session, status: "idle" as const };
-    }
-    if (age > this.idleAfterMs && session.status === "running") {
-      return { ...session, status: "idle" as const };
-    }
-    return session;
   }
 
 }

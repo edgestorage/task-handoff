@@ -27,6 +27,24 @@ test("app access service derives a scoped VNC lease and revokes it", async () =>
   await assert.rejects(() => service.proxyTarget(access.token, "vnc"), { code: "APP_ACCESS_TOKEN_INVALID" });
 });
 
+test("user app access leases retain only the authorization binding needed for revalidation", async () => {
+  const service = new AppAccessService({
+    requireInstance: async () => ({ id: "instance-1", nodeId: "node-1" }),
+    listAppSessions: async () => snapshot({ id: "gui-1", kind: "gui", status: "running" }),
+  });
+  const access = await service.createSessionToken({
+    instanceId: "instance-1",
+    sessionId: "gui-1",
+    authorization: { userId: "user-1", authorizationRevision: 4 },
+  });
+  assert.deepEqual(access.authorization, {
+    userId: "user-1",
+    authorizationRevision: 4,
+  });
+  assert.equal("nodeId" in access.authorization, false);
+  assert.equal("identityId" in access.authorization, false);
+});
+
 test("app access service rejects non-GUI, stopped, and mismatched sessions", async () => {
   const tty = new AppAccessService({
     requireInstance: async () => ({ id: "instance-1" }),

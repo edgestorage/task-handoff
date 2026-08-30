@@ -5,7 +5,6 @@ import {
   ClaimProxyInviteInputSchema,
   ControlPlaneProxyOriginSchema,
   NodeAgentProxyRouteSchema,
-  ProxyBindingSchema,
   ProxyTargetEventSchema,
   PublicPendingProxyClaimSchema,
   PublicProxyBindingSchema,
@@ -36,11 +35,11 @@ test("node proxy routes reject upstream selection and traversal", () => {
 });
 
 test("binding and public projections never expose credential material", () => {
-  const binding = ProxyBindingSchema.parse({
+  const binding = {
     id: "binding_1", claimId: "claim_1", sourceControlPlaneId: "cp_a", targetNodeId: "node_b",
     bindingKeyId: "key_1", credentialHash: "a".repeat(64), status: "active", revision: 1,
     createdAt: timestamp, updatedAt: timestamp,
-  });
+  };
   assert.equal(PublicProxyBindingSchema.safeParse(binding).success, false);
   const { credentialHash: _hash, ...publicBinding } = binding;
   assert.equal(PublicProxyBindingSchema.parse(publicBinding).id, "binding_1");

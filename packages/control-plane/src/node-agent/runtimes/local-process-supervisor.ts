@@ -50,7 +50,7 @@ function reportLifecycle(reporter: LocalProcessLifecycleReporter | undefined, ev
 }
 
 function processWeb(instance: ControlledInstance) {
-  return instance.runtime.port ? `http://127.0.0.1:${instance.runtime.port}` : instance.target.web;
+  return instance.runtime.port ? `http://127.0.0.1:${instance.runtime.port}` : undefined;
 }
 
 async function fetchProcessIdentity(web: string, registrationToken: string): Promise<LocalProcessIdentity | undefined> {

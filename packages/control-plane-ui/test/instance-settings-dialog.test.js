@@ -33,7 +33,7 @@ test("the instance App menu opens settings directly on app management", () => {
   assert.match(preview, /\$emit\('openSettings', instance\.id, 'apps'\)/);
   assert.match(detail, /\$emit\('openSettings', instanceId, section\)/);
   assert.match(workbench, /:initial-section="instanceSettingsSection"/);
-  assert.match(workbench, /function openInstanceSettings\(instanceId: string, section: "general" \| "models" \| "apps" = "general"\)/);
+  assert.match(workbench, /function openInstanceSettings\(instanceId: string, section: "general" \| "ai" \| "models" \| "git-credentials" \| "apps" = "general"\)/);
   assert.match(dialog, /section\.value = props\.initialSection \|\| "general"/);
 });
 
@@ -49,10 +49,9 @@ test("instance model controls live only in the settings dialog", () => {
   const detail = read("src/apps/control-plane/instance-detail/InstanceDetail.vue");
   const dialog = read("src/apps/control-plane/instance-settings/InstanceSettingsDialog.vue");
   assert.doesNotMatch(detail, /Codex model|Claude model|updateInstanceModels|detail-model-selectors/);
-  assert.match(dialog, /t\("instances\.settings\.globalDefault"\)/);
-  assert.match(dialog, /t\("instances\.settings\.noModel"\)/);
-  assert.ok(dialog.indexOf('t("instances.settings.noModel")') < dialog.indexOf('t("instances.settings.globalDefault")'));
-  assert.match(dialog, /t\("instances\.settings\.unavailableModel"/);
+  assert.match(dialog, /<ModelEntitySelection v-model="modelEntityIds"/);
+  assert.match(dialog, /function normalizedSelection\(value: ModelSelection\)/);
+  assert.match(dialog, /return ids\.length \? \{ modelEntityIds: ids \} : \{\}/);
   assert.match(dialog, /t\("instances\.settings\.modelSelectionDescription"\)/);
   assert.doesNotMatch(dialog, /keyPreview|\.key\b|API key/);
 });
@@ -71,12 +70,21 @@ test("instance settings exposes general, models, apps, and inventory freshness s
   assert.match(dialog, /aiSessionHistoryLimit:\s*Number\(aiSessionHistoryLimit\.value\)/);
 });
 
+test("instance settings configures the ordinary file upload limit through node capability gating", () => {
+  const dialog = read("src/apps/control-plane/instance-settings/InstanceSettingsDialog.vue");
+  assert.match(dialog, /aiSessionFileAttachmentLimit/);
+  assert.match(dialog, /aiSessionMaxFileAttachmentKiB/);
+  assert.match(dialog, /aiSessionMaxFileAttachmentBytes: Number\(aiSessionMaxFileAttachmentKiB\.value\) \* 1024/);
+  assert.match(dialog, /supportsNodeAiSessionFileAttachmentLimit\(nodeCapabilities\)[\s\S]*supportsAiSessionFileSizeLimitSettings\(props\.instance\?\.capabilities\)/);
+  assert.match(dialog, /AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES \/ 1024/);
+});
+
 test("instance settings edits the instance name through the general settings update", () => {
   const dialog = read("src/apps/control-plane/instance-settings/InstanceSettingsDialog.vue");
 
   assert.match(dialog, /<strong>\{\{ t\("instances\.settings\.instanceName"\) \}\}<\/strong>/);
   assert.match(dialog, /<ControlPlaneInput v-model="instanceName"/);
-  assert.match(dialog, /name: instanceName\.value\.trim\(\)/);
+  assert.match(dialog, /if \(generalChanged\.value\) input\.name = instanceName\.value\.trim\(\)/);
   assert.match(dialog, /instanceName\.value\.trim\(\) !== props\.instance\.name/);
 });
 

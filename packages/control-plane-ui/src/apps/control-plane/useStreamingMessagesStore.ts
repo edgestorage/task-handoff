@@ -4,7 +4,7 @@ import type {
   AiSessionRemovedEvent,
   AiSessionSnapshotEvent,
 } from "../../api/types";
-import type { AiSessionSummary, AiSessionsSnapshot } from "@task-handoff/protocol/ai-sessions";
+import type { AiSessionSummary, AiSessionsSnapshot, AiSessionTurn } from "@task-handoff/protocol/ai-sessions";
 import {
   aiSessionAuthoritativeMessageStatus,
   aiSessionMessageKey,
@@ -49,6 +49,7 @@ type AppendDeltaInput = {
   streamId: string;
   delta: string;
   generatedAt?: string;
+  replay?: boolean;
 };
 
 type StreamingMessagesStoreOptions = {
@@ -64,6 +65,14 @@ type AuthoritativeSnapshotInput = {
 
 export function streamingMessageKey(identity: StreamingMessageIdentity) {
   return aiSessionMessageKey(identity);
+}
+
+export function streamingMessageMatchesTurn(
+  message: Pick<StreamingMessageState, "turnId" | "status"> | undefined,
+  turn: { id?: string; providerTurnId?: string },
+) {
+  const identities = [turn.id, turn.providerTurnId].filter((value): value is string => Boolean(value));
+  return Boolean(message?.status === "streaming" && identities.length && identities.includes(message.turnId));
 }
 
 export function createStreamingMessagesStore(options: StreamingMessagesStoreOptions = {}) {
@@ -96,6 +105,10 @@ export function createStreamingMessagesStore(options: StreamingMessagesStoreOpti
     const at = input.generatedAt || now();
     const entry = ensureMessage(input.identity, input.streamId, at);
     const current = entry.value;
+    // A demand transition loads an authoritative snapshot while the source
+    // replays transient events after its cursor. Do not append replay that the
+    // snapshot already incorporates.
+    if (input.replay && current.receivedAt && at <= current.receivedAt) return entry;
     entry.value = appendAiSessionMessageDelta(current, input.delta, at);
     return entry;
   }
@@ -114,6 +127,50 @@ export function createStreamingMessagesStore(options: StreamingMessagesStoreOpti
       updatedAt: at,
     };
     return entry;
+  }
+
+  function applyAuthoritativeTurnBody(instanceId: string, sessionId: string, turn: AiSessionTurn) {
+    const ownerKey = streamingSessionKey(instanceId, sessionId);
+    const identities = new Set([turn.id, turn.providerTurnId].filter((value): value is string => Boolean(value)));
+    const candidates = [...(keysBySession.get(ownerKey) || [])]
+      .map((key) => messages.get(key))
+      .filter((entry): entry is StreamingMessageRef => Boolean(entry && identities.has(entry.value.turnId)));
+    const active = activeMessage(instanceId, sessionId);
+    const activeMatchesTurn = Boolean(active.value && identities.has(active.value.value.turnId));
+    const terminal = turn.status === "completed" || turn.status === "failed";
+    const authoritativeItemId = turn.lastMessageItemId;
+    let target = authoritativeItemId
+      ? candidates.find((entry) => entry.value.itemId === authoritativeItemId)
+      : candidates.sort((left, right) => right.value.updatedAt.localeCompare(left.value.updatedAt))[0];
+
+    if (!target && terminal && authoritativeItemId && candidates.length && (!active.value || activeMatchesTurn)) {
+      const streamId = activeStreams.get(instanceId) || candidates[0]!.value.streamId;
+      target = ensureMessage({ instanceId, sessionId, turnId: turn.id, itemId: authoritativeItemId }, streamId, turn.updatedAt || now());
+    }
+    if (!target || (!terminal && turn.lastMessage === undefined)) return false;
+
+    const generatedAt = turn.completedAt || turn.updatedAt || now();
+    if (!terminal && target.value.receivedAt && generatedAt <= target.value.receivedAt) return false;
+    settleAuthoritative({
+      identity: target.value,
+      streamId: target.value.streamId,
+      text: turn.lastMessage || "",
+      status: turn.status === "failed" ? "failed" : terminal ? "complete" : turn.status === "waiting" ? "waiting" : "streaming",
+      generatedAt,
+    });
+
+    if (!active.value || activeMatchesTurn) active.value = target;
+    return true;
+  }
+
+  function settleProjectedStatus(entry: StreamingMessageRef, status: StreamingMessageStatus, generatedAt: string) {
+    const current = entry.value;
+    entry.value = {
+      ...current,
+      status,
+      settledAt: status === "streaming" ? undefined : generatedAt,
+      updatedAt: generatedAt,
+    };
   }
 
   function applySnapshot(payload: AiSessionSnapshotEvent) {
@@ -236,10 +293,32 @@ export function createStreamingMessagesStore(options: StreamingMessagesStoreOpti
         )
       : activeTurn;
     const authoritativeItemId = turn?.lastMessageItemId || session.lastMessageItemId;
-    const text = turn?.lastMessage ?? (activeTurn ? undefined : session.lastMessage);
     const status = aiSessionAuthoritativeMessageStatus(session, turn?.status);
-    if (target?.value.itemId && authoritativeItemId && target.value.itemId !== authoritativeItemId) {
+    // The current list projection deliberately omits turns and compacts the
+    // top-level lastMessage for previews. It may advance lifecycle state, but
+    // it is not authoritative conversation content and must never replace the
+    // complete text accumulated from message-delta events.
+    if (session.turns === undefined) {
+      if (target) {
+        settleProjectedStatus(target, status, generatedAt);
+      } else if (session.activeTurnId) {
+        // Summary-only patches still establish an authoritative Turn boundary.
+        // Keep the previous Turn cached for history, but never expose it as the
+        // active response while the new Turn is waiting for its first delta.
+        clearActiveMessage(streamingSessionKey(instanceId, session.id));
+      }
       return;
+    }
+    const text = turn?.lastMessage ?? (activeTurn ? undefined : session.lastMessage);
+    if (target?.value.itemId && authoritativeItemId && target.value.itemId !== authoritativeItemId) {
+      if (status === "streaming") return;
+      target = ensureMessage({
+        instanceId,
+        sessionId: session.id,
+        turnId: target.value.turnId,
+        itemId: authoritativeItemId,
+      }, streamId, generatedAt);
+      activeMessage(instanceId, session.id).value = target;
     }
     if (target?.value.itemId && !authoritativeItemId && status === "streaming") {
       return;
@@ -320,6 +399,7 @@ export function createStreamingMessagesStore(options: StreamingMessagesStoreOpti
     message,
     activeMessage,
     appendDelta,
+    applyAuthoritativeTurnBody,
     settleAuthoritative,
     applySnapshot,
     applyAuthoritativeSnapshot,

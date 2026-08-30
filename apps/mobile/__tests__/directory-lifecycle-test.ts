@@ -7,7 +7,7 @@ import { MobileAiSessionStore } from '../src/ai-sessions/store';
 import { MobileDirectoryStore } from '../src/directories/store';
 import { MobileDirectoryController } from '../src/directories/controller';
 import { filterInstances } from '../src/directories/DirectoryLists';
-import { canCreateSession, initialInstanceId, instanceCreateGuidance } from '../src/ai-sessions/new-session-types';
+import { aiSessionFolderOptions, canCreateSession, defaultAiSessionFolderId, initialInstanceId, INSTANCE_WORKSPACE_FOLDER_ID, instanceCreateGuidance } from '../src/ai-sessions/new-session-types';
 import { appLaunchIssue, canLaunchApp, initialAppInstanceId } from '../src/app-sessions/new-app-session-types';
 import { RESOURCE_NAME_MAX_LENGTH, validateResourceName } from '../src/instances/resource-name';
 
@@ -43,6 +43,34 @@ test('new session selection honors a requested instance and exposes readiness gu
   expect(instanceCreateGuidance(offline)).toMatch(/not ready/);
 });
 
+test('new session selects the instance project by authoritative folder id with a path fallback for older data', () => {
+  const folders = [
+    { id: 'folder-default', name: 'Default', path: '/workspace/default' },
+    { id: 'folder-other', name: 'Other', path: '/workspace/other' },
+  ];
+  expect(defaultAiSessionFolderId(
+    { type: 'local-folder', localFolderId: 'folder-default', path: '/stale/path' },
+    '/workspace',
+    folders,
+  )).toBe('folder-default');
+  expect(defaultAiSessionFolderId(
+    { type: 'local-folder', path: '/workspace/other/' },
+    '/workspace',
+    folders,
+  )).toBe('folder-other');
+  expect(defaultAiSessionFolderId({ type: 'git-repository' }, '/workspace', folders)).toBe(INSTANCE_WORKSPACE_FOLDER_ID);
+  expect(aiSessionFolderOptions({ type: 'git-repository' }, '/workspace', folders)).toEqual([
+    { id: INSTANCE_WORKSPACE_FOLDER_ID, name: 'workspace', path: '/workspace' },
+  ]);
+});
+
+test('create uses the instance runtime workspace without materializing a node folder id', async () => {
+  const create = jest.fn().mockResolvedValue({ disposition: 'created', aiSessionId: 'session-1', providerSessionId: 'provider-1', creationSource: 'ai-session' });
+  const api = { aiSessions: { create } } as unknown as ControlPlaneClient;
+  await createMobileAiSession(api, { instance, agent: 'codex', message: 'Build it', clientRequestId: 'mobile-request-workspace' });
+  expect(create.mock.calls[0][1].cwdFolderId).toBeUndefined();
+});
+
 test('directory exposes the authoritative default permission mode used by new sessions', () => {
   expect(instance.config.defaultCodexPermissionMode).toBe('full-access');
 });
@@ -63,11 +91,19 @@ test('create forwards the selected permission mode', async () => {
   expect(create.mock.calls[0][1].permissionMode).toBe('auto-review');
 });
 
+test('create forwards the selected model entity and model name', async () => {
+  const create = jest.fn().mockResolvedValue({ disposition: 'created', aiSessionId: 'session-1', providerSessionId: 'provider-1', creationSource: 'ai-session' });
+  const api = { aiSessions: { create } } as unknown as ControlPlaneClient;
+  const modelSelection = { modelEntityId: 'mdl-secondary', modelName: 'shared-name' };
+  await createMobileAiSession(api, { instance, agent: 'codex', message: 'Build it', modelSelection, clientRequestId: 'mobile-request-model' });
+  expect(create).toHaveBeenCalledWith(instance.id, expect.objectContaining({ modelSelection }));
+});
+
 test('create forwards staged attachment references', async () => {
   const create = jest.fn().mockResolvedValue({ disposition: 'created', aiSessionId: 'session-1', providerSessionId: 'provider-1', creationSource: 'ai-session' });
   const api = { aiSessions: { create } } as unknown as ControlPlaneClient;
   const attachments = [{ id: 'upload-1', kind: 'image' as const, source: { type: 'upload-ref' as const } }];
-  await createMobileAiSession(api, { instance, agent: 'codex', message: 'Review it', attachments, clientRequestId: 'mobile-request-1' });
+  await createMobileAiSession(api, { instance, agent: 'codex', cwdFolderId: 'folder-1', message: 'Review it', attachments, clientRequestId: 'mobile-request-1' });
   expect(create.mock.calls[0][1].attachments).toEqual(attachments);
 });
 
@@ -89,14 +125,14 @@ test('create request identity survives a new store instance and changes only wit
   };
   const ids = ['request-1', 'request-2', 'request-3'];
   const createId = () => ids.shift()!;
-  const payload = { agent: 'codex', cwdFolderId: 'folder-1', message: 'Build it' };
+  const payload = { agent: 'codex', cwdFolderId: 'folder-1', message: 'Build it', modelSelection: { modelEntityId: 'mdl-one', modelName: 'same-name' } };
   const first = new MobileAiSessionCreateRequestStore(storage);
   expect(await first.getOrCreate('cp', 'instance', payload, createId)).toBe('request-1');
   const afterRestart = new MobileAiSessionCreateRequestStore(storage);
   expect(await afterRestart.getOrCreate('cp', 'instance', payload, createId)).toBe('request-1');
   expect(await afterRestart.getOrCreate('cp', 'instance', { ...payload, message: 'Build something else' }, createId)).toBe('request-2');
   await afterRestart.clear('cp', 'instance', 'request-2');
-  expect(await afterRestart.getOrCreate('cp', 'instance', { ...payload, message: 'Build something else' }, createId)).toBe('request-3');
+  expect(await afterRestart.getOrCreate('cp', 'instance', { ...payload, modelSelection: { modelEntityId: 'mdl-two', modelName: 'same-name' }, message: 'Build something else' }, createId)).toBe('request-3');
 });
 
 test('directory and Inbox state remain isolated across Control Planes and data sources', () => {
@@ -203,6 +239,71 @@ test('directory controller applies node connection and instance lifecycle events
   controller.stop();
 });
 
+test('directory controller keeps the newest per-node fleet state', () => {
+  const store = new MobileDirectoryStore();
+  store.set('cp-fleet', {
+    nodeStates: [{ nodeId: 'node-1', resource: 'instances', phase: 'loading', revision: 2 }],
+  });
+  const api = { resources: {} } as unknown as ControlPlaneClient;
+  const controller = new MobileDirectoryController('cp-fleet', api, store);
+
+  expect(controller.applyEvent({
+    type: 'node.fleet.updated', topic: 'instances', scope: { nodeId: 'node-1' },
+    payload: { nodeId: 'node-1', resource: 'instances', phase: 'stale', revision: 1 },
+  })).toBe(false);
+  expect(store.profile('cp-fleet').nodeStates[0].phase).toBe('loading');
+  expect(controller.applyEvent({
+    type: 'node.fleet.updated', topic: 'instances', scope: { nodeId: 'node-1' },
+    payload: { nodeId: 'node-1', resource: 'instances', phase: 'ready', revision: 3, updatedAt: '2026-08-22T00:00:00.000Z', contentChanged: false },
+  })).toBe(true);
+  expect(store.profile('cp-fleet').nodeStates[0].phase).toBe('ready');
+  controller.stop();
+});
+
+test('fleet diagnostics stay local while semantic changes refresh only instances', async () => {
+  jest.useFakeTimers();
+  try {
+    const store = new MobileDirectoryStore();
+    store.set('cp-fleet-targeted', { instances: [instance], phase: 'ready' });
+    const nodes = jest.fn().mockResolvedValue([]);
+    const instanceBoard = jest.fn().mockResolvedValue([instance]);
+    const api = { resources: { nodes, instanceBoard } } as unknown as ControlPlaneClient;
+    const controller = new MobileDirectoryController('cp-fleet-targeted', api, store);
+
+    controller.applyEvent({
+      type: 'node.fleet.updated', topic: 'instances', scope: { nodeId: 'node-1' },
+      payload: { nodeId: 'node-1', resource: 'instances', phase: 'ready', revision: 1, contentChanged: false },
+    });
+    await jest.advanceTimersByTimeAsync(100);
+    expect(nodes).not.toHaveBeenCalled();
+    expect(instanceBoard).not.toHaveBeenCalled();
+
+    controller.applyEvent({
+      type: 'node.fleet.updated', topic: 'instances', scope: { nodeId: 'node-1' },
+      payload: { nodeId: 'node-1', resource: 'instances', phase: 'ready', revision: 2, contentChanged: true },
+    });
+    await jest.advanceTimersByTimeAsync(100);
+    expect(nodes).not.toHaveBeenCalled();
+    expect(instanceBoard).toHaveBeenCalledTimes(1);
+
+    controller.applyEvent({
+      type: 'node.fleet.updated', topic: 'instances', scope: { nodeId: 'node-1' },
+      payload: { nodeId: 'node-1', resource: 'instances', phase: 'ready', revision: 3 },
+    });
+    await jest.advanceTimersByTimeAsync(100);
+    expect(instanceBoard).toHaveBeenCalledTimes(2);
+
+    controller.applyEvent({
+      type: 'instance.ai-session.message.accepted', topic: 'instances', scope: { instanceId: instance.id }, payload: {},
+    });
+    await jest.advanceTimersByTimeAsync(100);
+    expect(instanceBoard).toHaveBeenCalledTimes(2);
+    controller.stop();
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
 test('instance lifecycle actions use the server-projected availability and refresh the directory', async () => {
   const store = new MobileDirectoryStore();
   const running = ControlPlaneInstanceDirectoryEntrySchema.parse({ ...instance, availableActions: ['stop', 'restart'] });
@@ -252,14 +353,11 @@ test('directory renames use shared resource APIs and immediately update the auth
   expect(updateInstanceName).toHaveBeenCalledWith(instance.id, 'Renamed Instance');
 });
 
-test('concurrent directory mutations share one refresh and queue one trailing refresh', async () => {
+test('concurrent instance mutations refresh only instances and queue one trailing refresh', async () => {
   const store = new MobileDirectoryStore();
   store.set('cp-a', { instances: [instance], phase: 'ready' });
-  let resolveNodes!: (value: []) => void;
   let resolveInstances!: (value: typeof instance[]) => void;
-  const nodes = jest.fn()
-    .mockReturnValueOnce(new Promise<[]>((resolve) => { resolveNodes = resolve; }))
-    .mockResolvedValueOnce([]);
+  const nodes = jest.fn().mockResolvedValue([]);
   const instanceBoard = jest.fn()
     .mockReturnValueOnce(new Promise<typeof instance[]>((resolve) => { resolveInstances = resolve; }))
     .mockResolvedValueOnce([instance]);
@@ -278,13 +376,12 @@ test('concurrent directory mutations share one refresh and queue one trailing re
     controller.updateInstanceName(instance.id, 'First'),
     controller.updateInstanceName(instance.id, 'Second'),
   ]);
-  expect(nodes).toHaveBeenCalledTimes(1);
+  expect(nodes).not.toHaveBeenCalled();
   expect(instanceBoard).toHaveBeenCalledTimes(1);
 
-  resolveNodes([]);
   resolveInstances([instance]);
   for (let index = 0; index < 6; index += 1) await Promise.resolve();
-  expect(nodes).toHaveBeenCalledTimes(2);
+  expect(nodes).not.toHaveBeenCalled();
   expect(instanceBoard).toHaveBeenCalledTimes(2);
   controller.stop();
 });

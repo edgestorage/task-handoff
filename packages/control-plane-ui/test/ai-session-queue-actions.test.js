@@ -27,15 +27,25 @@ test("AI session queue edit and reorder actions stay revisioned through both con
   assert.match(dock, /@edit-queued-message="\$emit\('editQueuedMessage', \$event\)"/);
   assert.match(dock, /:editing-label="editingLabel"/);
   assert.match(board, /messageDraft\.value = payload\.message/);
-  assert.match(board, /card\.session\.queue\.revision, message/);
+  assert.match(board, /selectedCardConversationSession\.value\?\.queue\.revision \?\? card\.session\.queue\.revision/);
   assert.match(board, /cancelQueueComposerEdit/);
   assert.match(dock, /@reorder-queued-messages="\$emit\('reorderQueuedMessages', \$event\)"/);
   assert.match(board, /editAiSessionQueuedMessage/);
   assert.match(board, /reorderAiSessionQueuedMessages/);
   assert.match(panel, /editAiSessionQueuedMessage/);
   assert.match(panel, /messageDraft\.value = payload\.message/);
-  assert.match(panel, /session\.queue\.revision, message/);
+  assert.match(panel, /selectedConversationSession\.value\?\.queue\.revision \?\? session\.queue\.revision/);
   assert.match(panel, /reorderAiSessionQueuedMessages/);
   assert.match(queries, /sharedAiSessionsApi\.editQueue/);
   assert.match(queries, /sharedAiSessionsApi\.reorderQueue/);
+});
+
+test("successful AI session actions consume only acknowledgements and wait for authoritative events", () => {
+  const board = read("apps/control-plane/ai-board/AiSessionBoardView.vue");
+  const panel = read("apps/control-plane/instance-detail/AiSessionPanel.vue");
+  for (const surface of [board, panel]) {
+    assert.doesNotMatch(surface, /applySelected(?:Card|Session)Detail|applyActionResult/);
+    assert.match(surface, /await (?:sendAiSessionMessage|editAiSessionQueuedMessage|interruptAiSession|resolveAiSessionApproval)/);
+    assert.doesNotMatch(surface, /await (?:sendAiSessionMessage|interruptAiSession|resolveAiSessionApproval|editAiSessionQueuedMessage)[\s\S]{0,500}await refreshBoard\(\)/);
+  }
 });

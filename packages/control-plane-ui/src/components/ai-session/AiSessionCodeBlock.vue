@@ -24,9 +24,13 @@ const html = computed(() => renderCodeBlock(
 </script>
 
 <style scoped>
+.ai-session-highlighted-code {
+  margin: 0.75em 0;
+}
+
 .ai-session-highlighted-code :deep(.markdown-code-block) {
   max-width: 100%;
-  margin: 0.75em 0;
+  margin: 0;
   overflow: hidden;
   border: 1px solid var(--line, transparent);
   border-radius: 7px;

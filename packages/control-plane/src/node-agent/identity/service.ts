@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { nowIso as now } from "@task-handoff/core/core/time";
 import { createId, createSecret } from "../../shared/persistence/store.ts";
 import { sha256Hex } from "../../shared/security/node-agent-auth.ts";
 import type { NodeAgentStorePaths } from "../persistence/paths.ts";
@@ -21,10 +22,6 @@ type StagedControlPlaneConnection = {
 };
 
 const NODE_AGENT_PAIRING_INVITE_TTL_MS = 10 * 60 * 1000;
-
-function now() {
-  return new Date().toISOString();
-}
 
 export class NodeAgentIdentityService {
   private readonly store: NodeAgentIdentityStore;

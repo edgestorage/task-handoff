@@ -4,15 +4,25 @@ import { runtimeAttachmentFromServerCandidate, uploadMobileAttachment, usableUpl
 
 test('validates image/file MIME and size before reading device content', () => {
   expect(validateMobileLocalFile({ uri: 'file:///cache/a.png', name: 'a.png', mime: 'image/png', size: 10, kind: 'image' }).mime).toBe('image/png');
+  expect(validateMobileLocalFile({ uri: 'file:///cache/a.png', name: 'a.png', mime: 'application/octet-stream', size: 10, kind: 'image' }).mime).toBe('image/png');
+  expect(validateMobileLocalFile({ uri: 'file:///cache/a.docx', name: 'a.docx', mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', size: 10, kind: 'file' }).mime).toBe('application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+  expect(validateMobileLocalFile({ uri: 'file:///cache/a.unknown', name: 'a.unknown', mime: undefined, size: 10, kind: 'file' }).mime).toBe('application/octet-stream');
   expect(() => validateMobileLocalFile({ uri: 'file:///cache/a.svg', name: 'a.svg', mime: 'image/svg+xml', size: 10, kind: 'image' })).toThrow(/Choose a BMP/);
   expect(() => validateMobileLocalFile({ uri: 'file:///cache/a.bin', name: 'a.bin', mime: undefined, size: undefined, kind: 'file' })).toThrow(/readable content or size/);
+});
+
+test('uses the instance-specific ordinary file size limit', () => {
+  const file = { uri: 'file:///cache/large.txt', name: 'large.txt', mime: 'text/plain', size: 700 * 1024, kind: 'file' as const };
+  expect(() => validateMobileLocalFile(file)).toThrow(/smaller than 512000 bytes/);
+  expect(validateMobileLocalFile(file, 1024 * 1024).size).toBe(700 * 1024);
+  expect(() => validateMobileLocalFile({ ...file, size: 1024 * 1024 }, 1024 * 1024)).toThrow(/smaller than 1048576 bytes/);
 });
 
 test('uploads only base64 and scoped business identity, never the device URI', async () => {
   const uploadAttachment = jest.fn().mockResolvedValue({ id: 'att-1', kind: 'file', name: 'note.txt', mime: 'text/plain', size: 5, expiresAt: '2026-08-06T00:00:00.000Z' });
   const client = { aiSessions: { uploadAttachment } } as unknown as ControlPlaneClient;
   const attachment = await uploadMobileAttachment(client, { instanceId: 'instance-1', sessionId: 'session-1' }, { uri: 'file:///private/device-note', name: 'note.txt', mime: 'text/plain', size: 5, kind: 'file' }, { readBase64: async () => 'aGVsbG8=', now: Date.parse('2026-08-05T00:00:00.000Z') });
-  expect(uploadAttachment).toHaveBeenCalledWith({ instanceId: 'instance-1', sessionId: 'session-1', kind: 'file', name: 'note.txt', mime: 'text/plain', data: 'aGVsbG8=' });
+  expect(uploadAttachment).toHaveBeenCalledWith({ instanceId: 'instance-1', sessionId: 'session-1', kind: 'file', name: 'note.txt', mime: 'text/plain', data: 'data:text/plain;base64,aGVsbG8=' }, undefined);
   expect(JSON.stringify(uploadAttachment.mock.calls)).not.toContain('device-note');
   expect(usableUploadRefs([attachment], Date.parse('2026-08-05T00:00:00.000Z'))).toEqual([{ id: 'att-1', kind: 'file', source: { type: 'upload-ref' } }]);
   expect(() => usableUploadRefs([attachment], Date.parse('2026-08-07T00:00:00.000Z'))).toThrow(/expired/);
@@ -22,10 +32,10 @@ test('removes an explicit system-picker cache copy after upload without touching
   const uploadAttachment = jest.fn().mockResolvedValue({ id: 'att-1', kind: 'file', name: 'note.txt', mime: 'text/plain', size: 5, expiresAt: '2026-08-06T00:00:00.000Z' });
   const removeTemporary = jest.fn();
   const client = { aiSessions: { uploadAttachment } } as unknown as ControlPlaneClient;
-  await uploadMobileAttachment(client, { instanceId: 'instance-1', sessionId: 'session-1' }, { uri: 'file:///cache/copied-note', name: 'note.txt', mime: 'text/plain', size: 5, kind: 'file', temporary: true }, { readBase64: async () => 'aGVsbG8=', removeTemporary });
+  await uploadMobileAttachment(client, { instanceId: 'instance-1', sessionId: 'session-1' }, { uri: 'file:///cache/copied-note', name: 'note.txt', mime: 'text/plain', size: 5, kind: 'file', temporary: true }, { readBase64: async () => 'aGVsbG8=', removeTemporary, now: Date.parse('2026-08-05T00:00:00.000Z') });
   expect(removeTemporary).toHaveBeenCalledWith('file:///cache/copied-note');
   removeTemporary.mockClear();
-  await uploadMobileAttachment(client, { instanceId: 'instance-1', sessionId: 'session-1' }, { uri: 'file:///library/photo.png', name: 'photo.png', mime: 'image/png', size: 5, kind: 'image', temporary: false }, { readBase64: async () => 'aGVsbG8=', removeTemporary });
+  await uploadMobileAttachment(client, { instanceId: 'instance-1', sessionId: 'session-1' }, { uri: 'file:///library/photo.png', name: 'photo.png', mime: 'image/png', size: 5, kind: 'image', temporary: false }, { readBase64: async () => 'aGVsbG8=', removeTemporary, now: Date.parse('2026-08-05T00:00:00.000Z') });
   expect(removeTemporary).not.toHaveBeenCalled();
 });
 
@@ -36,6 +46,16 @@ test('network-unknown upload is not converted into a reusable ref', async () => 
   expect(attachment.phase).toBe('result-unknown');
   expect(attachment.uploadRef).toBeUndefined();
   expect(uploadAttachment).toHaveBeenCalledTimes(1);
+});
+
+test('keeps a temporary generated file after a definite failure so the user can retry it', async () => {
+  const uploadAttachment = jest.fn().mockRejectedValue(new Error('offline'));
+  const removeTemporary = jest.fn();
+  const client = { aiSessions: { uploadAttachment } } as unknown as ControlPlaneClient;
+  const local = { uri: 'file:///cache/pasted-text-1.txt', name: 'pasted-text-1.txt', mime: 'text/plain', size: 10_001, kind: 'file' as const, temporary: true, textPresentation: { summary: 'hello', codePointLength: 10_001 } };
+  const attachment = await uploadMobileAttachment(client, { instanceId: 'instance-1', sessionId: 'session-1' }, local, { readBase64: async () => 'aGVsbG8=', removeTemporary });
+  expect(attachment).toMatchObject({ phase: 'failed', retryLocal: local, textPresentation: local.textPresentation });
+  expect(removeTemporary).not.toHaveBeenCalled();
 });
 
 test('runtime attachments can only originate from server file candidates under the absolute session cwd', () => {

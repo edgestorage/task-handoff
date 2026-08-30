@@ -3,7 +3,7 @@
     "name": "TaskHandoff Dev",
     "slug": "task-handoff-mobile",
     "version": "0.0.1",
-    "orientation": "portrait",
+    "orientation": "default",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
     "scheme": "taskhandoff-dev",

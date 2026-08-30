@@ -111,3 +111,11 @@ test("control-plane proxy events invalidate only proxy management projections", 
     expectedDomains.controlPlaneProxy,
   );
 });
+
+test("node joined events invalidate authoritative topology", () => {
+  assert.deepEqual(controlPlaneEventDomains([{ type: "node.joined", topic: "nodes" }]), ["nodeTopology"]);
+  assert.deepEqual(
+    controlPlaneDomainQueryKeys(controlPlaneEventDomains([{ type: "node.joined", topic: "nodes" }])),
+    expectedDomains.nodeTopology,
+  );
+});

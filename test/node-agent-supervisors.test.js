@@ -77,6 +77,49 @@ test("local recovery retries a transient failed state after bounded backoff", as
   assert.equal(restores, 3);
 });
 
+test("Docker image preparation blocks restore and runtime convergence", async () => {
+  const instance = {
+    id: "inst_image_pull",
+    runtimeId: "runtime_docker",
+    status: "starting",
+    ready: false,
+    target: { status: "reachable" },
+    runtimeVersion: { desiredVersion: "2.0.0", phase: "pending" },
+    imageProvisioning: { phase: "pulling-image" },
+  };
+  let restores = 0;
+  let convergences = 0;
+  let provisions = 0;
+  const supervisor = new NodeAgentRecoverySupervisor({
+    state: {
+      listInstances: () => [instance],
+      requireRuntime: () => ({ type: "docker" }),
+      requireInstance: () => instance,
+      applyInstanceLifecycle: () => undefined,
+    },
+    runtimeAdapters: { stopAll: async () => undefined },
+    convergence: {
+      isRunning: () => false,
+      cancel: async () => undefined,
+      schedule: async () => { convergences += 1; },
+    },
+    restoreInstance: async () => { restores += 1; },
+    autoImport: async () => undefined,
+    provisionImage: () => { provisions += 1; },
+    stopImageProvisioning: async () => undefined,
+    usesManagedArtifact: () => true,
+    warn: () => undefined,
+    error: () => undefined,
+  });
+
+  assert.equal(supervisor.markRestored(instance.id), false);
+  await supervisor.restoreManagedInstances();
+  await supervisor.recoverManagedInstances();
+  assert.equal(provisions, 1);
+  assert.equal(restores, 0);
+  assert.equal(convergences, 0);
+});
+
 test("an unexpected local exit wakes the supervisor and restores without waiting for the safety interval", async () => {
   const instance = { id: "inst_local_crash", runtimeId: "runtime_local", status: "running", target: { status: "online" } };
   let restores = 0;

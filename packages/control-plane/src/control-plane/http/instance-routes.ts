@@ -6,11 +6,15 @@ import { IdParamsSchema } from "./route-params.ts";
 import { AppManagementOperationRequestSchema, InstanceDeleteInputSchema } from "@task-handoff/protocol/control-plane";
 import { withRequestSignal } from "./request-signal.ts";
 import { publicInstanceDirectory } from "../public-records.ts";
+import { filterRequestInstances, filterRequestNodes } from "./access-projection.ts";
+import { assertCan } from "../auth/authorization.ts";
+import { controlPlaneRequestActor } from "./request-actor.ts";
 
 export type RegisterInstanceRoutesOptions = {
   app: FastifyInstance;
   service: ControlPlaneService;
   events: ControlPlaneEventBus;
+  onInstanceDeleted?: (instanceId: string) => Promise<void>;
 };
 
 const ConfigSyncFolderQuerySchema = z.object({
@@ -22,16 +26,27 @@ const InstanceAppJobParamsSchema = z.object({ id: z.string().trim().min(1), jobI
 const InstanceBoardQuerySchema = z.object({
   projection: z.literal("directory").optional(),
   instanceId: z.string().trim().min(1).max(120).optional(),
+  progressive: z.enum(["true", "false"]).optional(),
 }).strict();
 
-export function registerInstanceRoutes({ app, service, events }: RegisterInstanceRoutesOptions) {
-  app.get("/api/controlled-instances", async () => ({ data: await service.listControlledInstances() }));
+export function registerInstanceRoutes({ app, service, events, onInstanceDeleted }: RegisterInstanceRoutesOptions) {
+  app.get("/api/controlled-instances", async (request) => ({
+    data: filterRequestInstances(request, await service.listControlledInstances(), (instance) => instance),
+  }));
   app.post("/api/controlled-instances", async (request, reply) => {
+    const body = request.body && typeof request.body === "object" && !Array.isArray(request.body)
+      ? request.body as Record<string, unknown>
+      : {};
+    if (body.gitCredentialRetention === "instance-retained") {
+      const actor = controlPlaneRequestActor(request);
+      if (!actor) throw Object.assign(new Error("Authentication is required."), { code: "CONTROL_PLANE_AUTH_REQUIRED", statusCode: 401 });
+      assertCan(actor, "manage-secrets", { type: "secret" });
+    }
     const instance = await service.createControlledInstance(request.body);
     events.publish("instance.created", { instanceId: instance.id });
     return reply.code(201).send({ data: instance });
   });
-  app.get("/api/controlled-instances/:id", async (request) => ({ data: await service.requireControlledInstance(IdParamsSchema.parse(request.params).id) }));
+  app.get("/api/controlled-instances/:id", async (request) => ({ data: await service.requireControlledInstance(IdParamsSchema.parse(request.params).id, false, true) }));
   app.get("/api/controlled-instances/:id/metrics", async (request) => ({ data: await service.instanceResourceMetrics(IdParamsSchema.parse(request.params).id) }));
   app.get("/api/controlled-instances/:id/apps/management", async (request) => ({ data: await service.instanceAppManagement(IdParamsSchema.parse(request.params).id) }));
   app.post("/api/controlled-instances/:id/apps/:appId/install", async (request) => {
@@ -56,7 +71,10 @@ export function registerInstanceRoutes({ app, service, events }: RegisterInstanc
   app.delete("/api/controlled-instances/:id", async (request) => {
     const id = IdParamsSchema.parse(request.params).id;
     const result = await service.deleteControlledInstance(id, InstanceDeleteInputSchema.parse(request.body));
-    if (result.completed) events.publish("instance.deleted", { instanceId: id, result });
+    if (result.completed) {
+      await onInstanceDeleted?.(id);
+      events.publish("instance.deleted", { instanceId: id, result });
+    }
     return { data: result };
   });
   app.post("/api/controlled-instances/:id/start", async (request) => {
@@ -96,11 +114,14 @@ export function registerInstanceRoutes({ app, service, events }: RegisterInstanc
   });
   app.get("/api/instance-board", async (request, reply) => withRequestSignal(request, reply, async (signal) => {
     const query = InstanceBoardQuerySchema.parse(request.query);
-    const result = await service.boardWithDiagnostics(signal);
+    const result = await service.boardWithDiagnostics(signal, query.progressive === "true");
     return {
-      data: (query.instanceId ? result.items.filter((item) => item.id === query.instanceId) : result.items)
+      data: filterRequestInstances(request, query.instanceId ? result.items.filter((item) => item.id === query.instanceId) : result.items, (item) => item)
         .map((item) => query.projection === "directory" ? publicInstanceDirectory(item) : item),
-      meta: { nodeErrors: result.nodeErrors },
+      meta: {
+        nodeErrors: filterRequestNodes(request, result.nodeErrors, (item) => item.nodeId),
+        nodeStates: filterRequestNodes(request, result.nodeStates, (item) => item.nodeId),
+      },
     };
   }));
 }

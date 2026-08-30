@@ -21,6 +21,14 @@ export type ControlPlaneStorePaths = {
   cloudConnectivityPath: string;
   authUsersDir: string;
   authSessionsDir: string;
+  authMembershipsDir: string;
+  databasePath: string;
+  identityProviderEncryptionKeyPath: string;
+  gitCredentialsDir: string;
+  gitCredentialAssignmentsDir: string;
+  gitCredentialAuditDir: string;
+  gitCredentialProvisioningIntentsDir: string;
+  gitCredentialEncryptionKeyPath: string;
   aiSessionUnreadDir: string;
   logsDir: string;
 };
@@ -51,6 +59,14 @@ export function controlPlaneStorePaths(dataDir = defaultControlPlaneDataDir()): 
     cloudConnectivityPath: path.join(root, "cloud-connectivity.json"),
     authUsersDir: path.join(root, "auth-users"),
     authSessionsDir: path.join(root, "auth-sessions"),
+    authMembershipsDir: path.join(root, "auth-memberships"),
+    databasePath: path.join(root, "control-plane.sqlite"),
+    identityProviderEncryptionKeyPath: path.join(root, "user-access", "identity-provider-encryption-key.json"),
+    gitCredentialsDir: path.join(root, "git-credentials", "credentials"),
+    gitCredentialAssignmentsDir: path.join(root, "git-credentials", "assignments"),
+    gitCredentialAuditDir: path.join(root, "git-credentials", "audit"),
+    gitCredentialProvisioningIntentsDir: path.join(root, "git-credentials", "provisioning-intents"),
+    gitCredentialEncryptionKeyPath: path.join(root, "git-credentials", "encryption-key.json"),
     aiSessionUnreadDir: path.join(root, "ai-session-unread"),
     logsDir: path.join(root, "logs"),
   };

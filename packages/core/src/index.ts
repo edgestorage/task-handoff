@@ -3,6 +3,7 @@ export * from "./core/chat-render";
 export * from "./core/claude-control-sock";
 export * from "./core/diagnostics";
 export * from "./core/persistence";
+export * from "./core/reconnect";
 export * from "./core/telegram-progress";
 export * from "./core/transcript";
 export * from "./storage/domain-store";

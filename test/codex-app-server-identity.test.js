@@ -18,6 +18,7 @@ require.extensions[".ts"] = (module, filename) => {
 
 const {
   CodexAppServerClient,
+  codexThreadSettingsUpdateSupported,
   parseCodexCliVersion,
 } = require("../packages/ai-session-runtime/src/codex-app-server/client/client.ts");
 
@@ -28,7 +29,14 @@ test("parses stable and prerelease Codex CLI versions", () => {
   assert.equal(parseCodexCliVersion("wrapper 1.2.3\n"), undefined);
 });
 
-test("initializes Codex app-server with the official CLI identity and detected version", async () => {
+test("gates thread settings updates at the verified Codex 0.133.0 boundary", () => {
+  assert.equal(codexThreadSettingsUpdateSupported(undefined), false);
+  assert.equal(codexThreadSettingsUpdateSupported("codex-cli/0.132.9"), false);
+  assert.equal(codexThreadSettingsUpdateSupported("codex-cli/0.133.0"), true);
+  assert.equal(codexThreadSettingsUpdateSupported("codex-cli/0.144.1"), true);
+});
+
+test("initializes Codex app-server with the TUI identity and detected version", async () => {
   const versionCommands = [];
   const requests = [];
   const client = new CodexAppServerClient({
@@ -50,7 +58,7 @@ test("initializes Codex app-server with the official CLI identity and detected v
   assert.deepEqual(requests, [{
     method: "initialize",
     params: {
-      clientInfo: { name: "codex_cli_rs", version: "0.145.0-alpha.18" },
+      clientInfo: { name: "codex-tui", version: "0.145.0-alpha.18" },
       capabilities: { experimentalApi: true },
     },
   }]);

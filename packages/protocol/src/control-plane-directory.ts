@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { AiSessionPermissionModeSchema, InstanceBoardAiSummarySchema } from "./ai-sessions.ts";
+import { AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES, AiSessionPermissionModeSchema, InstanceBoardAiSummarySchema } from "./ai-sessions.ts";
+import { AiSessionProviderCapabilitiesSchema } from "./ai-session-provider-capabilities.ts";
 
 const IdSchema = z.string().trim().min(1).max(120).regex(/^[a-zA-Z0-9][a-zA-Z0-9_.:-]*$/);
 const TimestampSchema = z.string().datetime();
@@ -14,11 +15,35 @@ function emptyDirectoryTimelineCapabilities() {
   return { sessionReadAgents: [] as string[], turnReadAgents: [] as string[], liveItemAgents: [] as string[] };
 }
 
+const ControlPlaneDirectoryConversationAttachmentCapabilitiesSchema = z.object({
+  metadataAgents: z.array(z.string().trim().min(1).max(120)).max(100).default([]),
+  contentAgents: z.array(z.string().trim().min(1).max(120)).max(100).default([]),
+  uploadAgents: z.array(z.string().trim().min(1).max(120)).max(100).default([]),
+  retentionSettings: z.boolean().default(false),
+}).passthrough();
+
+function emptyDirectoryConversationAttachmentCapabilities() {
+  return { metadataAgents: [] as string[], contentAgents: [] as string[], uploadAgents: [] as string[], retentionSettings: false };
+}
+
 // Compatibility for v0.0.21: older directory responses omit this additive
 // public capability projection and therefore normalize to unsupported.
 export const ControlPlaneInstanceDirectoryCapabilitiesSchema = z.object({
   aiSessionTimeline: ControlPlaneDirectoryTimelineCapabilitiesSchema.default(emptyDirectoryTimelineCapabilities),
+  aiSessionConversationAttachments: ControlPlaneDirectoryConversationAttachmentCapabilitiesSchema.optional(),
+  aiSessionProviders: AiSessionProviderCapabilitiesSchema.optional(),
+  browserTunnel: z.boolean().optional(),
 }).passthrough();
+
+export function supportsDirectoryBrowserTunnel(capabilities: unknown) {
+  const parsed = ControlPlaneInstanceDirectoryCapabilitiesSchema.safeParse(capabilities);
+  return parsed.success && parsed.data.browserTunnel === true;
+}
+
+export function directoryAiSessionProviderCapability(capabilities: unknown, agent: string) {
+  const parsed = ControlPlaneInstanceDirectoryCapabilitiesSchema.safeParse(capabilities);
+  return parsed.success ? parsed.data.aiSessionProviders?.find((provider) => provider.agent === agent) : undefined;
+}
 
 export function supportsDirectoryAiSessionTimelineCapability(
   capabilities: unknown,
@@ -32,6 +57,25 @@ export function supportsDirectoryAiSessionTimelineCapability(
     : capability === "turn-read" ? timeline.turnReadAgents
       : timeline.liveItemAgents;
   return agents.includes(agent);
+}
+
+export function supportsDirectoryAiSessionConversationAttachmentCapability(
+  capabilities: unknown,
+  agent: string,
+  capability: "metadata" | "content" | "upload",
+) {
+  const parsed = ControlPlaneInstanceDirectoryCapabilitiesSchema.safeParse(capabilities);
+  if (!parsed.success) return false;
+  const attachments = parsed.data.aiSessionConversationAttachments || emptyDirectoryConversationAttachmentCapabilities();
+  const agents = capability === "metadata" ? attachments.metadataAgents
+    : capability === "content" ? attachments.contentAgents
+      : attachments.uploadAgents;
+  return agents.includes(agent);
+}
+
+export function supportsDirectoryAiSessionAttachmentRetentionSettings(capabilities: unknown) {
+  const parsed = ControlPlaneInstanceDirectoryCapabilitiesSchema.safeParse(capabilities);
+  return parsed.success && (parsed.data.aiSessionConversationAttachments?.retentionSettings ?? false);
 }
 
 export const ControlPlaneNodeConnectionPhaseSchema = z.enum([
@@ -66,6 +110,40 @@ const DirectoryErrorSchema = z.object({
   message: z.string().trim().min(1).max(2048),
 }).strict();
 
+export const ControlPlaneFleetResourceSchema = z.enum(["instances", "runtimes", "models"]);
+export const ControlPlaneFleetResourcePhaseSchema = z.enum(["uninitialized", "loading", "ready", "stale", "error"]);
+export const ControlPlaneNodeFleetStateSchema = z.object({
+  nodeId: IdSchema,
+  resource: ControlPlaneFleetResourceSchema,
+  phase: ControlPlaneFleetResourcePhaseSchema,
+  revision: z.number().int().nonnegative().optional(),
+  updatedAt: TimestampSchema.optional(),
+  error: z.object({
+    nodeId: IdSchema,
+    route: z.string().trim().min(1).max(500),
+    method: z.string().trim().min(1).max(20),
+    code: z.string().trim().min(1).max(120),
+    message: z.string().trim().min(1).max(4096),
+    statusCode: z.number().int().optional(),
+    issues: z.array(z.object({
+      path: z.array(z.union([z.string(), z.number()])).optional(),
+      message: z.string(),
+    }).passthrough()).optional(),
+  }).passthrough().optional(),
+}).strict();
+
+// Event wire model is intentionally separate from the directory snapshot.
+// Compatibility for v0.0.23: old producers omit this additive hint. Consumers
+// must treat absence as unknown and recover their authoritative topic; current
+// producers send an explicit false for diagnostic-only changes.
+export const ControlPlaneNodeFleetUpdatedEventSchema = ControlPlaneNodeFleetStateSchema.extend({
+  contentChanged: z.boolean().optional(),
+}).strict();
+
+export const ControlPlaneFleetDirectoryMetaSchema = z.object({
+  nodeStates: z.array(ControlPlaneNodeFleetStateSchema).default([]),
+}).passthrough();
+
 export const ControlPlaneNodeDirectoryEntrySchema = z.object({
   id: IdSchema,
   name: z.string().trim().min(1).max(160),
@@ -88,6 +166,14 @@ export const ControlPlaneAvailableAppSchema = z.object({
   supportsCwdSelection: z.boolean(),
 }).strict();
 
+const ControlPlaneDirectoryModelSelectionSchema = z.object({
+  modelEntityIds: z.array(IdSchema).max(64).transform((ids) => [...new Set(ids)]).optional(),
+  // Compatibility for v0.0.23 directory producers.
+  codexModelHash: IdSchema.nullable().optional(),
+  claudeModelHash: IdSchema.nullable().optional(),
+  opencodeModelHash: IdSchema.nullable().optional(),
+}).strict().default({});
+
 export const ControlPlaneInstanceDirectoryEntrySchema = z.object({
   id: IdSchema,
   name: z.string().trim().min(1).max(160),
@@ -96,10 +182,14 @@ export const ControlPlaneInstanceDirectoryEntrySchema = z.object({
   health: z.enum(["unknown", "ok", "degraded", "failed"]),
   connectionStatus: z.enum(["unknown", "online", "offline", "endpoint-unreachable"]),
   ready: z.boolean(),
-  capabilities: ControlPlaneInstanceDirectoryCapabilitiesSchema.default({ aiSessionTimeline: emptyDirectoryTimelineCapabilities() }),
+  capabilities: ControlPlaneInstanceDirectoryCapabilitiesSchema.default({
+    aiSessionTimeline: emptyDirectoryTimelineCapabilities(),
+  }),
   config: z.object({
     defaultCodexPermissionMode: AiSessionPermissionModeSchema.default("ask"),
-  }).strict().default({ defaultCodexPermissionMode: "ask" }),
+    aiSessionMaxFileAttachmentBytes: z.number().int().positive().default(AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES),
+  }).strict().default({ defaultCodexPermissionMode: "ask", aiSessionMaxFileAttachmentBytes: AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES }),
+  modelSelection: ControlPlaneDirectoryModelSelectionSchema,
   lastHeartbeatAt: TimestampSchema.optional(),
   heartbeatAgeMs: z.number().int().nonnegative().optional(),
   observedAt: TimestampSchema,
@@ -127,7 +217,12 @@ export const ControlPlaneInstanceDirectoryEntrySchema = z.object({
 export const ControlPlaneInstanceDirectorySchema = z.array(ControlPlaneInstanceDirectoryEntrySchema);
 
 export type ControlPlaneNodeDirectoryEntry = z.infer<typeof ControlPlaneNodeDirectoryEntrySchema>;
+export type ControlPlaneInstanceDirectoryCapabilities = z.infer<typeof ControlPlaneInstanceDirectoryCapabilitiesSchema>;
 export type ControlPlaneInstanceDirectoryEntry = z.infer<typeof ControlPlaneInstanceDirectoryEntrySchema>;
 export type ControlPlaneNodeConnectionPhase = z.infer<typeof ControlPlaneNodeConnectionPhaseSchema>;
 export type ControlPlaneInstanceAction = z.infer<typeof ControlPlaneInstanceActionSchema>;
 export type ControlPlaneInstanceLifecycleDirectoryEvent = z.infer<typeof ControlPlaneInstanceLifecycleDirectoryEventSchema>;
+export type ControlPlaneFleetResource = z.infer<typeof ControlPlaneFleetResourceSchema>;
+export type ControlPlaneFleetResourcePhase = z.infer<typeof ControlPlaneFleetResourcePhaseSchema>;
+export type ControlPlaneNodeFleetState = z.infer<typeof ControlPlaneNodeFleetStateSchema>;
+export type ControlPlaneNodeFleetUpdatedEvent = z.infer<typeof ControlPlaneNodeFleetUpdatedEventSchema>;

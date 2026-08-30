@@ -1,6 +1,6 @@
 import {
   AI_SESSION_MAX_MESSAGE_ATTACHMENT_BYTES,
-  AiSessionActionResultSchema,
+  AiSessionActionCompatibleResponseSchema,
   AiSessionCreateResultSchema,
   AiSessionForkResultSchema,
   AiSessionCloseResultSchema,
@@ -16,8 +16,17 @@ import {
   AiSessionQueueEditInputSchema,
   AiSessionQueueReorderInputSchema,
   AiSessionResumeResultSchema,
+  AiSessionModelSelectionActionResponseSchema,
+  AiSessionReasoningEffortActionResponseSchema,
   AiSessionStatusSchema,
-  type AiSessionActionResult,
+  AiSessionDetailSchema,
+  AiSessionDetailReadSchema,
+  AiSessionTurnIndexSchema,
+  AiSessionTurnIndexReadSchema,
+  AiSessionTurnBodySchema,
+  AiSessionTurnBodyReadSchema,
+  AiSessionQueueMutationResponseSchema,
+  type AiSessionActionResponse,
   type AiSessionCommandInput,
   type AiSessionCommandResult,
   type AiSessionCreateResult,
@@ -30,31 +39,74 @@ import {
   type AiSessionTimeline,
   type AiSessionTurnTimeline,
   type AiSessionMessageAttachment,
+  type AiSessionMessageAttachmentRef,
   type AiSessionPermissionMode,
   type AiSessionReference,
   type AiSessionResumeResult,
   type AiSessionSendMode,
+  type AiSessionStatus,
+  type AiSessionModelSelection,
+  type AiSessionReasoningEffort,
+  type AiSessionTurn,
 } from "@task-handoff/protocol/ai-sessions";
 import {
+  aiSessionProviderCapability,
   aiSessionTimelineCapabilityAgents,
   supportsAiSessionWorkspaceSelection,
   type ControlledInstance,
   type NodeRuntime,
 } from "@task-handoff/protocol/control-plane";
+import { normalizeAiSessionModelSelectionCapabilities, normalizeAiSessionReasoningEffortCapabilities } from "@task-handoff/protocol/ai-session-provider-capabilities";
 import { parseResponse } from "@task-handoff/protocol/response-validation";
+import { TRACE_ID_HEADER, type RequestTimingDiagnostics } from "../../shared/http/server-timing.ts";
 import {
   RepositoryAiSessionWorkspaceSchema,
   type RepositoryAiSessionGitSelection,
   type RepositoryAiSessionWorkspace,
 } from "@task-handoff/protocol/repository";
+import { z } from "zod";
+import { createHash } from "node:crypto";
 
 type AiSessionActionServiceOptions = {
   requireInstance: (instanceId: string) => Promise<ControlledInstance>;
-  request: (instance: ControlledInstance, route: string, init?: RequestInit) => Promise<unknown>;
+  request: (
+    instance: ControlledInstance,
+    route: string,
+    init?: RequestInit,
+    onTiming?: (diagnostics: RequestTimingDiagnostics) => void,
+  ) => Promise<unknown>;
   requireRuntime: (nodeId: string, runtimeId: string) => Promise<NodeRuntime>;
-  refreshSnapshots: () => Promise<unknown>;
-  warn?: (data: Record<string, unknown>, message: string) => void;
 };
+
+function projectAiSessionDetail(session: AiSessionStatus) {
+  return AiSessionDetailSchema.parse({
+    id: session.id,
+    appBindingKeys: session.appBindingKeys,
+    cwd: session.cwd,
+    error: session.error,
+    providerMeta: session.providerMeta,
+    queue: session.queue,
+    subAgents: session.subAgents,
+  });
+}
+
+function projectAiSessionTurnIndexEntry(turn: AiSessionTurn) {
+  return {
+    id: turn.id,
+    providerTurnId: turn.providerTurnId,
+    status: turn.status,
+    phase: turn.phase,
+    revision: turn.revision,
+    startedAt: turn.startedAt,
+    updatedAt: turn.updatedAt,
+    completedAt: turn.completedAt,
+    bodyRevision: legacyAiSessionTurnBodyRevision(turn),
+  };
+}
+
+function legacyAiSessionTurnBodyRevision(turn: AiSessionTurn) {
+  return createHash("sha256").update(JSON.stringify(turn)).digest("base64url").slice(0, 22);
+}
 
 export class AiSessionActionService {
   private readonly options: AiSessionActionServiceOptions;
@@ -65,16 +117,80 @@ export class AiSessionActionService {
     this.options = options;
   }
 
-  async resolveApproval(instanceId: string, sessionId: string, decision: "allow" | "deny" | "skip"): Promise<AiSessionActionResult> {
-    return parseResponse(AiSessionActionResultSchema, await this.post(instanceId, sessionRoute(sessionId, "approval"), { decision }));
+  async resolveApproval(instanceId: string, sessionId: string, decision: "allow" | "deny" | "skip"): Promise<AiSessionActionResponse> {
+    return parseResponse(AiSessionActionCompatibleResponseSchema, await this.post(instanceId, sessionRoute(sessionId, "approval"), { decision }));
   }
 
-  async listHistory(instanceId: string): Promise<AiSessionHistoryList> {
-    return parseResponse(AiSessionHistoryListSchema, await this.get(instanceId, "/ai-sessions/history"));
+  async listHistory(instanceId: string, agents?: readonly string[]): Promise<AiSessionHistoryList> {
+    const query = agents?.length ? `?agents=${encodeURIComponent(agents.join(","))}` : "";
+    return parseResponse(AiSessionHistoryListSchema, await this.get(instanceId, `/ai-sessions/history${query}`));
   }
 
   async historyDetail(instanceId: string, aiSessionId: string): Promise<AiSessionHistoryDetail> {
     return parseResponse(AiSessionHistoryDetailSchema, await this.get(instanceId, `/ai-sessions/history/${encodeURIComponent(aiSessionId)}`));
+  }
+
+  async detail(instanceId: string, aiSessionId: string, revision?: string) {
+    const query = revision ? `?revision=${encodeURIComponent(revision)}` : "";
+    const response = await this.get(instanceId, `/ai-sessions/${encodeURIComponent(aiSessionId)}${query}`);
+    const current = AiSessionDetailReadSchema.safeParse(response);
+    if (current.success) return current.data;
+    // Compatibility for v0.0.23: project the legacy full status into the new
+    // metadata-only detail model. Turn bodies are recovered separately.
+    const legacy = parseResponse(AiSessionStatusSchema, response);
+    const legacyRevision = `legacy:${legacy.updatedAt}`;
+    return AiSessionDetailReadSchema.parse({
+      kind: revision === legacyRevision ? "not-modified" : "updated",
+      revision: legacyRevision,
+      ...(revision === legacyRevision ? {} : { detail: projectAiSessionDetail(legacy) }),
+    });
+  }
+
+  async turnIndex(instanceId: string, aiSessionId: string, revision?: string) {
+    const query = new URLSearchParams({ projection: "index" });
+    if (revision) query.set("revision", revision);
+    try {
+      return parseResponse(AiSessionTurnIndexReadSchema, await this.get(instanceId, `${sessionRoute(aiSessionId, "turns")}?${query}`));
+    } catch (error) {
+      if (!splitAiSessionReadUnavailable(error)) throw error;
+      // Compatibility for v0.0.23: the old endpoint ignores projection=index
+      // and the old server has no single-Turn route. Derive both projections
+      // from its complete detail response only at this compatibility boundary.
+      const legacy = await this.legacyStatus(instanceId, aiSessionId);
+      const legacyRevision = `legacy:${legacy.updatedAt}`;
+      if (revision === legacyRevision) return AiSessionTurnIndexReadSchema.parse({ kind: "not-modified", revision: legacyRevision });
+      const index = AiSessionTurnIndexSchema.parse({
+        sessionId: legacy.id,
+        revision: legacyRevision,
+        turns: (legacy.turns || []).filter((turn) => (
+          turn.userPrompt?.trim()
+          || turn.lastMessage?.trim()
+          || turn.summary?.trim()
+          || turn.contextCompactions?.length
+        )).map(projectAiSessionTurnIndexEntry),
+      });
+      return AiSessionTurnIndexReadSchema.parse({ kind: "updated", revision: legacyRevision, index });
+    }
+  }
+
+  async turnBody(instanceId: string, aiSessionId: string, turnId: string, revision?: string) {
+    const query = revision ? `?revision=${encodeURIComponent(revision)}` : "";
+    try {
+      return parseResponse(AiSessionTurnBodyReadSchema, await this.get(instanceId, `${sessionRoute(aiSessionId, "turns")}/${encodeURIComponent(turnId)}${query}`));
+    } catch (error) {
+      if (!splitAiSessionReadUnavailable(error)) throw error;
+      const legacy = await this.legacyStatus(instanceId, aiSessionId);
+      const turn = (legacy.turns || []).find((candidate) => candidate.id === turnId || candidate.providerTurnId === turnId);
+      if (!turn) throw new Error(`AI session Turn ${turnId} was not found.`);
+      const legacyRevision = legacyAiSessionTurnBodyRevision(turn);
+      if (revision === legacyRevision) return AiSessionTurnBodyReadSchema.parse({ kind: "not-modified", revision: legacyRevision });
+      const body = AiSessionTurnBodySchema.parse({ sessionId: legacy.id, revision: legacyRevision, turn });
+      return AiSessionTurnBodyReadSchema.parse({ kind: "updated", revision: legacyRevision, body });
+    }
+  }
+
+  private async legacyStatus(instanceId: string, aiSessionId: string) {
+    return parseResponse(AiSessionStatusSchema, await this.get(instanceId, `/ai-sessions/${encodeURIComponent(aiSessionId)}`));
   }
 
   async timeline(instanceId: string, aiSessionId: string): Promise<AiSessionTimeline> {
@@ -102,9 +218,7 @@ export class AiSessionActionService {
   }
 
   async resume(instanceId: string, aiSessionId: string): Promise<AiSessionResumeResult> {
-    const result = parseResponse(AiSessionResumeResultSchema, await this.post(instanceId, sessionRoute(aiSessionId, "resume"), {}));
-    await this.refreshAfterCommittedResume(instanceId, aiSessionId);
-    return result;
+    return parseResponse(AiSessionResumeResultSchema, await this.post(instanceId, sessionRoute(aiSessionId, "resume"), {}));
   }
 
   async create(
@@ -115,14 +229,34 @@ export class AiSessionActionService {
       cwdFolderId?: string;
       gitSelection?: RepositoryAiSessionGitSelection;
       message: string;
-      attachments?: AiSessionMessageAttachment[];
+      attachments?: Array<AiSessionMessageAttachment | AiSessionMessageAttachmentRef>;
       references?: AiSessionReference[];
       permissionMode?: AiSessionPermissionMode;
       clientRequestId: string;
+      modelSelection?: AiSessionModelSelection;
+      reasoningEffort?: AiSessionReasoningEffort;
     },
   ): Promise<AiSessionCreateResult> {
-    assertAiSessionAttachmentsWithinLimit(input.attachments || []);
+    assertAiSessionAttachmentsWithinLimit((input.attachments || []).filter((attachment): attachment is AiSessionMessageAttachment => attachment.source.type !== "upload-ref"));
     const instance = await this.options.requireInstance(instanceId);
+    if (input.modelSelection) {
+      const capability = normalizeAiSessionModelSelectionCapabilities(aiSessionProviderCapability(instance.capabilities, input.agent));
+      if (!capability.selectModelAtCreate) {
+        throw Object.assign(new Error(`${input.agent} does not support selecting a model at creation.`), {
+          statusCode: 409,
+          code: "AI_SESSION_MODEL_SELECTION_UNSUPPORTED",
+        });
+      }
+    }
+    if (input.reasoningEffort) {
+      const capability = normalizeAiSessionReasoningEffortCapabilities(aiSessionProviderCapability(instance.capabilities, input.agent));
+      if (!capability.selectAtCreate) {
+        throw Object.assign(new Error(`${input.agent} does not support selecting reasoning effort at creation.`), {
+          statusCode: 409,
+          code: "AI_SESSION_REASONING_EFFORT_UNSUPPORTED",
+        });
+      }
+    }
     const supportsWorkspaceSelection = instanceSupportsAiSessionWorkspaceSelection(instance);
     if (input.gitSelection && !supportsWorkspaceSelection) {
       throw aiSessionWorkspaceSelectionUnsupported();
@@ -157,17 +291,54 @@ export class AiSessionActionService {
   }
 
   async fork(instanceId: string, aiSessionId: string, input: AiSessionForkInput): Promise<AiSessionForkResult> {
-    const result = parseResponse(AiSessionForkResultSchema, await this.post(instanceId, sessionRoute(aiSessionId, "fork"), input));
-    try {
-      await this.options.refreshSnapshots();
-    } catch (error) {
-      try {
-        this.options.warn?.({ instanceId, aiSessionId, providerSessionId: result.providerSessionId, code: errorCode(error), message: errorMessage(error) }, "AI session Fork committed but snapshot refresh failed");
-      } catch {
-        // Diagnostics cannot turn a committed remote Fork into an API failure.
-      }
+    return parseResponse(AiSessionForkResultSchema, await this.post(instanceId, sessionRoute(aiSessionId, "fork"), input));
+  }
+
+  async updateModelSelection(instanceId: string, aiSessionId: string, clientRequestId: string, selection: AiSessionModelSelection) {
+    const instance = await this.options.requireInstance(instanceId);
+    const session = instance.aiSessions.sessions.find((candidate) => candidate.id === aiSessionId);
+    if (!session) throw Object.assign(new Error("AI Session was not found."), { statusCode: 404, code: "AI_SESSION_NOT_FOUND" });
+    const capability = normalizeAiSessionModelSelectionCapabilities(aiSessionProviderCapability(instance.capabilities, session.agent));
+    const changesProvider = Boolean(session.modelSelection && session.modelSelection.modelEntityId !== selection.modelEntityId);
+    if (changesProvider ? !capability.switchProviderDuringSession : !capability.switchModelWithinProvider) {
+      const code = changesProvider && session.agent === "codex"
+        ? "AI_SESSION_PROVIDER_SWITCH_REQUIRES_NEW_SESSION"
+        : "AI_SESSION_MODEL_SELECTION_UNSUPPORTED";
+      throw Object.assign(new Error(changesProvider && session.agent === "codex"
+        ? "Codex provider changes require a new session."
+        : `${session.agent} does not support this model change.`), { statusCode: 409, code });
     }
-    return result;
+    return parseResponse(AiSessionModelSelectionActionResponseSchema, await this.options.request(
+      instance,
+      sessionRoute(aiSessionId, "model-selection"),
+      {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ clientRequestId, modelSelection: selection }),
+      },
+    ));
+  }
+
+  async updateReasoningEffort(instanceId: string, aiSessionId: string, clientRequestId: string, effort: AiSessionReasoningEffort) {
+    const instance = await this.options.requireInstance(instanceId);
+    const session = instance.aiSessions.sessions.find((candidate) => candidate.id === aiSessionId);
+    if (!session) throw Object.assign(new Error("AI Session was not found."), { statusCode: 404, code: "AI_SESSION_NOT_FOUND" });
+    const capability = normalizeAiSessionReasoningEffortCapabilities(aiSessionProviderCapability(instance.capabilities, session.agent));
+    if (!capability.updateDuringSession) {
+      throw Object.assign(new Error(`${session.agent} does not support reasoning effort changes.`), {
+        statusCode: 409,
+        code: "AI_SESSION_REASONING_EFFORT_UNSUPPORTED",
+      });
+    }
+    return parseResponse(AiSessionReasoningEffortActionResponseSchema, await this.options.request(
+      instance,
+      sessionRoute(aiSessionId, "reasoning-effort"),
+      {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ clientRequestId, reasoningEffort: effort }),
+      },
+    ));
   }
 
   async openApp(instanceId: string, aiSessionId: string, clientRequestId: string): Promise<AiSessionOpenAppResult> {
@@ -178,27 +349,6 @@ export class AiSessionActionService {
   async close(instanceId: string, aiSessionId: string, clientRequestId: string): Promise<AiSessionCloseResult> {
     const result = parseResponse(AiSessionCloseResultSchema, await this.post(instanceId, sessionRoute(aiSessionId, "close"), { clientRequestId }));
     return result;
-  }
-
-  private async refreshAfterCommittedResume(instanceId: string, aiSessionId: string) {
-    try {
-      await this.options.refreshSnapshots();
-    } catch (error) {
-      const failure = {
-        instanceId,
-        aiSessionId,
-        code: errorCode(error),
-        message: errorMessage(error),
-        occurredAt: new Date().toISOString(),
-      };
-      this.resumeSnapshotRefreshFailures += 1;
-      this.lastResumeSnapshotRefreshFailure = failure;
-      try {
-        this.options.warn?.(failure, "AI session resumed but snapshot refresh failed");
-      } catch {
-        // Diagnostics must never turn an already committed remote resume into an API failure.
-      }
-    }
   }
 
   diagnostics() {
@@ -213,22 +363,27 @@ export class AiSessionActionService {
     sessionId: string,
     message: string,
     mode?: AiSessionSendMode,
-    attachments: AiSessionMessageAttachment[] = [],
+    attachments: Array<AiSessionMessageAttachment | AiSessionMessageAttachmentRef> = [],
     references: AiSessionReference[] = [],
     permissionMode?: AiSessionPermissionMode,
-  ): Promise<AiSessionActionResult> {
-    assertAiSessionAttachmentsWithinLimit(attachments);
+    diagnostics?: { traceId: string; onTiming?: (timing: RequestTimingDiagnostics) => void },
+  ): Promise<AiSessionActionResponse> {
+    const materializedAttachments = attachments.filter((attachment): attachment is AiSessionMessageAttachment => attachment.source.type !== "upload-ref");
+    assertAiSessionAttachmentsWithinLimit(materializedAttachments);
     const instance = await this.options.requireInstance(instanceId);
     if (attachments.some((attachment) => attachment.source.type === "runtime-path")) {
       const runtime = await this.options.requireRuntime(instance.nodeId, instance.runtimeId);
-      assertAiSessionRuntimePathSupport(attachments, runtime.type);
+      assertAiSessionRuntimePathSupport(materializedAttachments, runtime.type);
     }
     const session = instance.aiSessions.sessions.find((candidate) => candidate.id === sessionId);
     const effectivePermissionMode = permissionMode
       || (session?.agent === "codex" ? instance.config.defaultCodexPermissionMode : undefined);
-    return parseResponse(AiSessionActionResultSchema, await this.options.request(instance, sessionRoute(sessionId, "messages"), {
+    return parseResponse(AiSessionActionCompatibleResponseSchema, await this.options.request(instance, sessionRoute(sessionId, "messages"), {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: {
+        "content-type": "application/json",
+        ...(diagnostics?.traceId ? { [TRACE_ID_HEADER]: diagnostics.traceId } : {}),
+      },
       body: JSON.stringify({
         message,
         ...(mode ? { mode } : {}),
@@ -236,7 +391,7 @@ export class AiSessionActionService {
         ...(references.length ? { references } : {}),
         ...(effectivePermissionMode ? { permissionMode: effectivePermissionMode } : {}),
       }),
-    }));
+    }, diagnostics?.onTiming));
   }
 
   async mentionCatalog(instanceId: string, sessionId: string) {
@@ -256,30 +411,30 @@ export class AiSessionActionService {
   }
 
   async steerQueuedMessage(instanceId: string, sessionId: string, queueId: string) {
-    return parseResponse(AiSessionActionResultSchema, await this.post(instanceId, queueRoute(sessionId, queueId, "steer"), {}));
+    return parseResponse(AiSessionActionCompatibleResponseSchema, await this.post(instanceId, queueRoute(sessionId, queueId, "steer"), {}));
   }
 
   async retryQueuedMessage(instanceId: string, sessionId: string, queueId: string) {
-    return parseResponse(AiSessionStatusSchema, await this.post(instanceId, queueRoute(sessionId, queueId, "retry"), {}));
+    return parseResponse(AiSessionQueueMutationResponseSchema, await this.post(instanceId, queueRoute(sessionId, queueId, "retry"), {}));
   }
 
   async removeQueuedMessage(instanceId: string, sessionId: string, queueId: string) {
     const instance = await this.options.requireInstance(instanceId);
-    return parseResponse(AiSessionStatusSchema, await this.options.request(instance, queueRoute(sessionId, queueId), { method: "DELETE" }));
+    return parseResponse(AiSessionQueueMutationResponseSchema, await this.options.request(instance, queueRoute(sessionId, queueId), { method: "DELETE" }));
   }
 
   async editQueuedMessage(instanceId: string, sessionId: string, queueId: string, input: { expectedRevision: number; message: string }) {
     const body = AiSessionQueueEditInputSchema.parse(input);
-    return parseResponse(AiSessionStatusSchema, await this.patch(instanceId, queueRoute(sessionId, queueId), body));
+    return parseResponse(AiSessionQueueMutationResponseSchema, await this.patch(instanceId, queueRoute(sessionId, queueId), body));
   }
 
   async reorderQueuedMessages(instanceId: string, sessionId: string, input: { expectedRevision: number; queueIds: string[] }) {
     const body = AiSessionQueueReorderInputSchema.parse(input);
-    return parseResponse(AiSessionStatusSchema, await this.patch(instanceId, sessionRoute(sessionId, "queue/reorder"), body));
+    return parseResponse(AiSessionQueueMutationResponseSchema, await this.patch(instanceId, sessionRoute(sessionId, "queue/reorder"), body));
   }
 
-  async interrupt(instanceId: string, sessionId: string): Promise<AiSessionActionResult> {
-    return parseResponse(AiSessionActionResultSchema, await this.post(instanceId, sessionRoute(sessionId, "interrupt"), {}));
+  async interrupt(instanceId: string, sessionId: string): Promise<AiSessionActionResponse> {
+    return parseResponse(AiSessionActionCompatibleResponseSchema, await this.post(instanceId, sessionRoute(sessionId, "interrupt"), {}));
   }
 
   private async get(instanceId: string, route: string) {
@@ -333,18 +488,18 @@ function aiSessionWorkspaceSelectionUnsupported() {
   return error;
 }
 
-function errorCode(error: unknown) {
-  return error && typeof error === "object" && "code" in error && typeof error.code === "string"
-    ? error.code
-    : "AI_SESSION_SNAPSHOT_REFRESH_FAILED";
-}
-
-function errorMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
-}
-
 function sessionRoute(sessionId: string, suffix: string) {
   return `/ai-sessions/${encodeURIComponent(sessionId)}/${suffix}`;
+}
+
+function splitAiSessionReadUnavailable(error: unknown) {
+  if (error instanceof z.ZodError) return true;
+  if (!error || typeof error !== "object") return false;
+  const record = error as { statusCode?: unknown; status?: unknown; code?: unknown };
+  const status = record.statusCode ?? record.status;
+  return status === 404
+    && record.code !== "AI_SESSION_NOT_FOUND"
+    && record.code !== "AI_SESSION_TURN_NOT_FOUND";
 }
 
 function queueRoute(sessionId: string, queueId: string, suffix?: string) {

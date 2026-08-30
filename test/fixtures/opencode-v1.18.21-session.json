@@ -1,0 +1,20 @@
+{
+  "session": {
+    "id": "ses_current",
+    "directory": "/workspace/project",
+    "title": "Current session",
+    "version": "1.18.21",
+    "metadata": { "future": true },
+    "time": { "created": 1700000000000, "updated": 1700000003000, "future": 1 }
+  },
+  "status": { "type": "retry", "attempt": 2, "message": "rate limited", "next": 1700000005000, "future": true },
+  "permission": {
+    "id": "per_current",
+    "sessionID": "ses_current",
+    "permission": "edit",
+    "patterns": ["src/index.ts"],
+    "metadata": { "future": true },
+    "always": ["src/**"],
+    "future": true
+  }
+}

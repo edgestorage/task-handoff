@@ -5,10 +5,7 @@ import { z } from "zod";
 import type { NodeAgentStorePaths } from "../persistence/paths.ts";
 import { StoredNodeAgentControlPlaneConnectionSchema, StoredNodeAgentControlPlanePairingSchema, StoredNodeAgentDateTimeSchema, StoredNodeAgentIdSchema } from "./schemas.ts";
 import type { NodeAgentIdentity } from "./types.ts";
-
-function now() {
-  return new Date().toISOString();
-}
+import { nowIso as now } from "@task-handoff/core/core/time";
 
 type IdentityStoreLogger = (message: string, details: Record<string, unknown>) => void;
 

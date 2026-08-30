@@ -60,13 +60,11 @@
 
 :global(.app-launch-menu strong) {
   font-size: 12px;
-  font-weight: 750;
 }
 
 :global(.app-launch-menu small) {
   color: var(--text-muted);
   font-size: 11px;
-  font-weight: 650;
 }
 
 .session-preview-selector {
@@ -593,6 +591,14 @@
   color: var(--text-subtle);
 }
 
+.session-tab-icon-loading {
+  animation: session-tab-icon-spin 1s linear infinite;
+}
+
+@keyframes session-tab-icon-spin {
+  to { transform: rotate(360deg); }
+}
+
 .session-tab-item.active .session-tab-icon {
   color: currentColor;
 }
@@ -855,6 +861,7 @@
 }
 
 .session-pane-layout {
+  position: relative;
   display: grid;
   min-width: 0;
   min-height: 0;
@@ -863,7 +870,7 @@
 }
 
 .session-pane-layout.split {
-  grid-template-columns: minmax(0, var(--session-left-ratio)) 7px minmax(0, calc(100% - var(--session-left-ratio) - 7px));
+  grid-template-columns: minmax(0, var(--session-left-ratio)) minmax(0, calc(100% - var(--session-left-ratio)));
 }
 
 .session-pane {
@@ -876,7 +883,7 @@
 }
 
 .session-pane[data-pane="left"] { grid-column: 1; }
-.session-pane[data-pane="right"] { grid-column: 3; }
+.session-pane[data-pane="right"] { grid-column: 2; }
 
 .session-pane-layout.split .session-pane,
 .session-pane-layout.split .session-pane-resize-handle {
@@ -888,7 +895,12 @@
 }
 
 .session-pane-resize-handle {
-  position: relative;
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--session-left-ratio);
+  width: 7px;
+  transform: translateX(-50%);
   z-index: 4;
   grid-column: 2;
   cursor: col-resize;
@@ -912,7 +924,8 @@
 }
 
 :global(body.session-pane-resizing) { cursor: col-resize; user-select: none; }
-:global(body.session-pane-resizing iframe) { pointer-events: none; }
+:global(body.session-pane-resizing iframe),
+:global(body.session-pane-resizing webview) { pointer-events: none; }
 
 .session-preview-toolbar,
 .session-preview-actions {

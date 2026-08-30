@@ -7,8 +7,9 @@ import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { Argument, Command } from "commander";
+import { list as listTar } from "tar";
 import { runtimePackages } from "../runtime-packages.config.mjs";
-import { materializeInstalledDependencies } from "./runtime-dependency-versions.mjs";
+import { installedDependencyManifests, materializeInstalledDependencies } from "./runtime-dependency-versions.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const rootPackage = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
@@ -21,6 +22,59 @@ const [requestedTarget] = program.processedArgs;
 const selected = requestedTarget
   ? Object.entries(runtimePackages).filter(([name]) => name === requestedTarget)
   : Object.entries(runtimePackages);
+const controlPlaneDatabaseDependencies = ["drizzle-orm", "pg"];
+const controlPlaneDatabasePayloadPatterns = [
+  /require\(["']drizzle-orm(?:["'/])/,
+  /require\(["']pg["']\)/,
+  /require\(["']node:sqlite["']\)/,
+  /cp_migration_ledger/,
+];
+
+function assertNoControlPlaneDatabasePayload(label, manifest, outputs) {
+  for (const dependency of controlPlaneDatabaseDependencies) {
+    if (manifest.dependencies?.[dependency] || manifest.optionalDependencies?.[dependency]) {
+      throw new Error(`${label} must not depend on Control Plane database package ${dependency}.`);
+    }
+  }
+  for (const [filename, content] of outputs) {
+    if (controlPlaneDatabasePayloadPatterns.some((pattern) => pattern.test(content))) {
+      throw new Error(`${label} contains Control Plane database code in ${filename}.`);
+    }
+  }
+}
+
+async function checkEmbeddedControlledInstance(packageDir, name) {
+  if (name !== "node-agent") return;
+  const artifactDir = path.join(packageDir, "runtime-artifacts");
+  const archiveName = fs.readdirSync(artifactDir).find((entry) => entry.endsWith(".tar.gz"));
+  if (!archiveName) throw new Error("node-agent package is missing its controlled-instance runtime artifact.");
+  let manifest;
+  const outputs = [];
+  const reads = [];
+  await listTar({
+    file: path.join(artifactDir, archiveName),
+    onReadEntry(entry) {
+      if (entry.path !== "package.json" && !/^dist\/.*\.(?:js|mjs)$/.test(entry.path)) {
+        entry.resume();
+        return;
+      }
+      reads.push(new Promise((resolve, reject) => {
+        const chunks = [];
+        entry.on("data", (chunk) => chunks.push(chunk));
+        entry.on("error", reject);
+        entry.on("end", () => {
+          const content = Buffer.concat(chunks).toString("utf8");
+          if (entry.path === "package.json") manifest = JSON.parse(content);
+          else outputs.push([entry.path, content]);
+          resolve();
+        });
+      }));
+    },
+  });
+  await Promise.all(reads);
+  if (!manifest) throw new Error("controlled-instance runtime artifact is missing package.json.");
+  assertNoControlPlaneDatabasePayload("controlled-instance runtime artifact", manifest, outputs);
+}
 
 async function availablePort() {
   const server = net.createServer();
@@ -98,6 +152,18 @@ async function checkBundledRuntime(packageDir, manifest, name, definition) {
   }
 }
 
+function materializeHostNodePtyPrebuild(packageDir, manifest) {
+  if (!manifest.bundledDependencies?.includes("node-pty")) return () => {};
+  const targetName = `${process.platform}-${process.arch}`;
+  const targetDir = path.join(packageDir, "node_modules", "node-pty", "prebuilds", targetName);
+  if (fs.existsSync(targetDir)) return () => {};
+  const manifestPath = installedDependencyManifests(root, { "node-pty": manifest.dependencies["node-pty"] })["node-pty"];
+  const sourceDir = path.join(path.dirname(manifestPath), "prebuilds", targetName);
+  if (!fs.existsSync(sourceDir)) throw new Error(`Installed node-pty does not provide the host smoke-test prebuild ${targetName}.`);
+  fs.cpSync(sourceDir, targetDir, { recursive: true });
+  return () => fs.rmSync(targetDir, { recursive: true, force: true });
+}
+
 for (const [name, definition] of selected) {
   const packageDir = path.join(root, "release", "npm", name);
   const manifest = JSON.parse(fs.readFileSync(path.join(packageDir, "package.json"), "utf8"));
@@ -112,6 +178,23 @@ for (const [name, definition] of selected) {
       throw new Error(`${name} package is missing ${legalFile}.`);
     }
   }
+  for (const dependency of definition.bundledNativeDependencies || []) {
+    if (!manifest.bundledDependencies?.includes(dependency)) {
+      throw new Error(`${name} package must declare bundled native dependency ${dependency}.`);
+    }
+    if (dependency === "node-pty") {
+      const bundledRoot = path.join(packageDir, "node_modules", "node-pty");
+      const bundledManifest = JSON.parse(fs.readFileSync(path.join(bundledRoot, "package.json"), "utf8"));
+      if (bundledManifest.scripts || bundledManifest.dependencies) {
+        throw new Error(`${name} bundled node-pty must not retain install-time scripts or dependencies.`);
+      }
+      for (const target of ["linux-x64", "linux-arm64"]) {
+        if (!fs.existsSync(path.join(bundledRoot, "prebuilds", target, "pty.node"))) {
+          throw new Error(`${name} package is missing bundled node-pty prebuild ${target}.`);
+        }
+      }
+    }
+  }
   if (fs.existsSync(path.join(packageDir, "src"))) {
     throw new Error(`${name} package contains a source directory.`);
   }
@@ -119,25 +202,46 @@ for (const [name, definition] of selected) {
     throw new Error(`${name} package is missing its built UI.`);
   }
   if (definition.input) {
+    const runtimeOutputs = [];
     for (const entry of fs.readdirSync(path.join(packageDir, "dist"))) {
       if (!entry.endsWith(".js") && !entry.endsWith(".mjs")) continue;
       const content = fs.readFileSync(path.join(packageDir, "dist", entry), "utf8");
+      runtimeOutputs.push([entry, content]);
       const lineCount = content.split("\n").length;
       if (content.length / lineCount < 500) {
         throw new Error(`${name} runtime output is not minified: dist/${entry}`);
       }
+      const repositoryRequire = content.match(/require\(["'](?:\.\.\/)+(?:apps|packages|scripts)\//);
+      if (repositoryRequire) {
+        throw new Error(`${name} runtime output references repository source in dist/${entry}: ${repositoryRequire[0]}`);
+      }
+    }
+    for (const dependency of definition.bundledDependencies || []) {
+      if (manifest.dependencies?.[dependency]) {
+        throw new Error(`${name} bundled dependency ${dependency} must not be declared as an external package dependency.`);
+      }
+      const escaped = dependency.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const externalRequire = new RegExp(`require\\(["']${escaped}(?:["'/])`);
+      const externalOutput = runtimeOutputs.find(([, content]) => externalRequire.test(content));
+      if (externalOutput) {
+        throw new Error(`${name} runtime output keeps bundled dependency ${dependency} external in dist/${externalOutput[0]}.`);
+      }
+    }
+    if (name === "node-agent" || name === "controlled-instance") {
+      assertNoControlPlaneDatabasePayload(`${name} runtime package`, manifest, runtimeOutputs);
     }
   }
+  await checkEmbeddedControlledInstance(packageDir, name);
   const binNames = Object.keys(manifest.bin);
   if (binNames.length !== 1 || binNames[0] !== definition.binName) {
     throw new Error(`${name} package must expose only the ${definition.binName} executable.`);
   }
   const binPath = path.join(packageDir, manifest.bin[definition.binName]);
-  if (name === "node-agent") {
+  if (definition.updateWorkerInput) {
     const workerPath = path.join(packageDir, "bin", "task-handoff-node-update-worker");
     const workerSyntax = spawnSync(process.execPath, ["--check", workerPath], { cwd: root, encoding: "utf8" });
     if (workerSyntax.status !== 0) {
-      throw new Error(`node-agent update worker syntax check failed:\n${workerSyntax.stderr || workerSyntax.stdout}`);
+      throw new Error(`${name} update worker syntax check failed:\n${workerSyntax.stderr || workerSyntax.stdout}`);
     }
   }
   if (definition.aggregateDependencies) {
@@ -149,6 +253,13 @@ for (const [name, definition] of selected) {
     if (serverCliHelp.status !== 0 || !serverCliHelp.stdout.includes("update")) {
       throw new Error(`${name} package CLI smoke test failed:\n${serverCliHelp.stderr || serverCliHelp.stdout}`);
     }
+    if (definition.updateWorkerInput) {
+      const workerPath = path.join(packageDir, "bin", "task-handoff-node-update-worker");
+      const workerHelp = spawnSync(process.execPath, [workerPath, "--help"], { cwd: packageDir, encoding: "utf8" });
+      if (workerHelp.status !== 0 || !workerHelp.stdout.includes("--job-file")) {
+        throw new Error(`${name} update worker smoke test failed:\n${workerHelp.stderr || workerHelp.stdout}`);
+      }
+    }
     for (const dependency of definition.aggregateDependencies) {
       if (manifest.dependencies[dependency] !== manifest.version) {
         throw new Error(`${name} must depend on ${dependency} at the same version.`);
@@ -156,14 +267,25 @@ for (const [name, definition] of selected) {
     }
     continue;
   }
-  const removeInstalledDependencies = materializeInstalledDependencies(packageDir, root, manifest.dependencies);
+  const externalDependencies = Object.fromEntries(Object.entries(manifest.dependencies)
+    .filter(([dependency]) => !manifest.bundledDependencies?.includes(dependency)));
+  const removeInstalledDependencies = materializeInstalledDependencies(packageDir, root, externalDependencies);
+  const removeHostNodePtyPrebuild = materializeHostNodePtyPrebuild(packageDir, manifest);
   try {
     const help = spawnSync(process.execPath, [binPath, "--help"], { cwd: packageDir, encoding: "utf8" });
     if (help.status !== 0 || !help.stdout.includes(definition.binName)) {
       throw new Error(`${name} package CLI smoke test failed:\n${help.stderr || help.stdout}`);
     }
+    if (definition.updateWorkerInput) {
+      const workerPath = path.join(packageDir, "bin", "task-handoff-node-update-worker");
+      const workerHelp = spawnSync(process.execPath, [workerPath, "--help"], { cwd: packageDir, encoding: "utf8" });
+      if (workerHelp.status !== 0 || !workerHelp.stdout.includes("--job-file")) {
+        throw new Error(`${name} update worker smoke test failed:\n${workerHelp.stderr || workerHelp.stdout}`);
+      }
+    }
     await checkBundledRuntime(packageDir, manifest, name, definition);
   } finally {
+    removeHostNodePtyPrebuild();
     removeInstalledDependencies();
   }
 }

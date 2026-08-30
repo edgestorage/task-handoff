@@ -19,7 +19,7 @@ for (const workspaceDir of ["apps", "packages"]) {
   }
 }
 
-function runtimeDependencies(workspaceRoots, extraNames = []) {
+function runtimeDependencies(workspaceRoots, extraNames = [], bundledNames = []) {
   const dependencies = new Map();
   const pending = [...workspaceRoots];
   const visited = new Set();
@@ -42,8 +42,15 @@ function runtimeDependencies(workspaceRoots, extraNames = []) {
     if (!version) throw new Error(`Runtime dependency ${name} is not declared in the root package.json.`);
     dependencies.set(name, version);
   }
+  for (const name of bundledNames) {
+    if (!dependencies.delete(name)) {
+      throw new Error(`Bundled runtime dependency ${name} is not reachable from the runtime workspace dependencies.`);
+    }
+  }
   return Object.fromEntries([...dependencies].sort(([left], [right]) => left.localeCompare(right)));
 }
+
+const bundledControlPlaneDependencies = ["@fastify/compress"];
 
 export const runtimePackages = {
   server: {
@@ -51,6 +58,8 @@ export const runtimePackages = {
     description: "Complete TaskHandoff server package.",
     input: "apps/cli/src/runtime/server.ts",
     entryFile: "server-cli.js",
+    updateWorkerInput: "scripts/node-update-worker.cts",
+    updateWorkerEntryFile: "node-update-worker.js",
     binName: "task-handoff",
     dependencies: {},
     aggregateDependencies: [
@@ -66,7 +75,16 @@ export const runtimePackages = {
     entryFile: "cli.js",
     binName: "task-handoff-control-plane",
     uiDir: "packages/control-plane-ui/dist",
-    dependencies: runtimeDependencies(["@task-handoff/control-plane"], ["commander"]),
+    // Pure JavaScript compression support belongs in the portable runtime bundle.
+    // Keeping it out of the external dependency set lets Control Plane-only updates
+    // reuse an existing installation even when compression is introduced.
+    bundledDependencies: bundledControlPlaneDependencies,
+    bundledNativeDependencies: ["node-pty"],
+    dependencies: runtimeDependencies(
+      ["@task-handoff/control-plane"],
+      ["commander", "drizzle-orm", "pg"],
+      bundledControlPlaneDependencies,
+    ),
   },
   "node-agent": {
     packageName: "@task-handoff/node-agent",
@@ -75,8 +93,18 @@ export const runtimePackages = {
     entryFile: "cli.js",
     updateWorkerInput: "scripts/node-update-worker.cts",
     updateWorkerEntryFile: "node-update-worker.js",
+    standaloneInputs: [{
+      input: "apps/cli/src/runtime/git-provisioning-helper.ts",
+      entryFile: "git-provisioning-helper.js",
+    }],
     binName: "task-handoff-node-agent",
-    dependencies: runtimeDependencies(["@task-handoff/control-plane"], ["commander"]),
+    bundledDependencies: bundledControlPlaneDependencies,
+    bundledNativeDependencies: ["node-pty"],
+    dependencies: runtimeDependencies(
+      ["@task-handoff/control-plane"],
+      ["commander"],
+      bundledControlPlaneDependencies,
+    ),
   },
   "controlled-instance": {
     packageName: "@task-handoff/controlled-instance",
@@ -85,10 +113,11 @@ export const runtimePackages = {
     entryFile: "controlled-instance-cli.js",
     binName: "task-handoff-controlled-instance",
     uiDir: "packages/controlled-instance-ui/dist",
+    bundledNativeDependencies: ["node-pty"],
     // The controlled-instance application is shipped by node-agent as one
-    // portable bundle. Keep only the native dependency external; Rollup owns
-    // the complete JavaScript dependency graph so the artifact does not carry
-    // a workspace-wide pnpm virtual store.
+    // portable bundle. Rollup owns the JavaScript graph and the release package
+    // carries node-pty prebuilds for the supported Linux targets, so the artifact
+    // does not carry a workspace-wide pnpm virtual store.
     dependencies: {
       "node-pty": rootPackage.dependencies["node-pty"],
     },

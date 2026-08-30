@@ -1,19 +1,45 @@
 import { z } from "zod";
+import { safeParseResponse } from "./response-validation.ts";
+import {
+  ControlPlaneAccessManagementCapabilitySchema,
+  ControlPlaneCurrentAuthorizationSchema,
+  ControlPlaneUserSessionSummarySchema,
+  ControlPlaneUserSummarySchema,
+} from "./control-plane-users.ts";
+export * from "./control-plane-users.ts";
 
 export const PUBLIC_CONTROL_PLANE_IDENTITY_VERSION = 1;
-// Public Direct-client capability boundary. This is intentionally independent
-// from the node-agent / controlled-instance connection protocol version.
-export const CONTROL_PLANE_ACCESS_PROTOCOL_VERSION = "2026-08-09";
+export const CONTROL_PLANE_ACCESS_PROTOCOL_VERSION = "2026-08-23";
 
 export const ControlPlanePublicCapabilitiesSchema = z.object({
   authentication: z.enum(["required", "disabled"]),
   aiSessions: z.boolean(),
   nodes: z.boolean(),
   instanceBoard: z.boolean(),
-  // Added after the original mobile access boundary. Its absence means that
-  // the remote Control Plane does not advertise trigger support.
   triggers: z.boolean().optional(),
+  accessManagement: ControlPlaneAccessManagementCapabilitySchema.optional(),
 }).strict();
+
+export function normalizeControlPlanePublicCapabilities(capabilities: unknown) {
+  const parsed = safeParseResponse(ControlPlanePublicCapabilitiesSchema, capabilities);
+  return parsed.success ? parsed.data : undefined;
+}
+
+export function controlPlaneAccessManagementCapabilities(capabilities: unknown) {
+  return normalizeControlPlanePublicCapabilities(capabilities)?.accessManagement;
+}
+
+export function supportsControlPlaneUserManagement(capabilities: unknown) {
+  return controlPlaneAccessManagementCapabilities(capabilities)?.userManagement.users === true;
+}
+
+export function supportsControlPlaneExternalIdentityLogin(capabilities: unknown) {
+  return controlPlaneAccessManagementCapabilities(capabilities)?.authentication.externalIdentity !== undefined;
+}
+
+export function supportsControlPlaneCustomRoles(capabilities: unknown) {
+  return controlPlaneAccessManagementCapabilities(capabilities)?.authorization.customRoles === true;
+}
 
 export const ControlPlanePublicIdentityPayloadSchema = z.object({
   version: z.literal(PUBLIC_CONTROL_PLANE_IDENTITY_VERSION),
@@ -55,40 +81,37 @@ export const ControlPlaneMobileLoginInputSchema = z.object({
   device: ControlPlaneMobileDeviceSchema,
 }).strict();
 
-export const ControlPlaneAuthenticatedUserSchema = z.object({
-  id: z.string().trim().min(1),
-  username: z.string().trim().min(1).max(80),
-  role: z.enum(["viewer", "operator", "admin"]),
-  createdAt: z.string().datetime(),
-  updatedAt: z.string().datetime(),
-  lastLoginAt: z.string().datetime().optional(),
+export const ControlPlaneAuthenticatedUserSchema = ControlPlaneUserSummarySchema;
+
+export const ControlPlaneMobileSessionSchema = ControlPlaneUserSessionSummarySchema.extend({
+  device: ControlPlaneMobileDeviceSchema,
+  user: ControlPlaneUserSummarySchema,
 }).strict();
 
-export const ControlPlaneMobileSessionSchema = z.object({
-  id: z.string().trim().min(1),
-  expiresAt: z.string().datetime(),
-  createdAt: z.string().datetime(),
-  lastSeenAt: z.string().datetime().optional(),
-  device: ControlPlaneMobileDeviceSchema,
-  user: ControlPlaneAuthenticatedUserSchema,
-}).strict();
+export const ControlPlaneAccessErrorCodeSchema = z.enum([
+  "CONTROL_PLANE_FORBIDDEN",
+  "CONTROL_PLANE_AUTH_REQUIRED",
+  "AUTH_PASSWORD_CHANGE_REQUIRED",
+  "CONTROL_PLANE_USER_DISABLED",
+  "CONTROL_PLANE_AUTHORIZATION_REVISION_CONFLICT",
+  "CONTROL_PLANE_LAST_ACTIVE_ADMIN",
+  "CONTROL_PLANE_USERNAME_CONFLICT",
+  "CONTROL_PLANE_EXTERNAL_IDENTITY_CONFLICT",
+  "CONTROL_PLANE_IDENTITY_PROVIDER_NAMESPACE_IMMUTABLE",
+  "CONTROL_PLANE_IDENTITY_PROVIDER_UNAVAILABLE",
+  "USER_STORE_REINITIALIZATION_REQUIRED",
+]);
 
 export const ControlPlaneMobileLoginResponseSchema = z.object({
   data: z.object({
     sessionToken: z.string().trim().min(32),
     session: ControlPlaneMobileSessionSchema,
+    authorization: ControlPlaneCurrentAuthorizationSchema,
   }).strict(),
 }).strict();
 
-export const ControlPlaneMobileSessionsResponseSchema = z.object({
-  data: z.array(ControlPlaneMobileSessionSchema),
-}).strict();
-
-export const ControlPlaneMobileSessionRevocationResponseSchema = z.object({
-  data: z.object({
-    revoked: z.boolean(),
-  }).strict(),
-}).strict();
+export const ControlPlaneMobileSessionsResponseSchema = z.object({ data: z.array(ControlPlaneMobileSessionSchema) }).strict();
+export const ControlPlaneMobileSessionRevocationResponseSchema = z.object({ data: z.object({ revoked: z.boolean() }).strict() }).strict();
 
 export type ControlPlanePublicCapabilities = z.infer<typeof ControlPlanePublicCapabilitiesSchema>;
 export type ControlPlanePublicIdentityPayload = z.infer<typeof ControlPlanePublicIdentityPayloadSchema>;

@@ -33,6 +33,8 @@ import type {
 } from "@task-handoff/protocol/ai-sessions";
 import { AiSessionEventType as ProtocolAiSessionEventType, AiSessionUnreadEventType as ProtocolAiSessionUnreadEventType } from "@task-handoff/protocol/ai-sessions";
 import type { AiSessionSubAgent as ProtocolAiSessionSubAgent } from "@task-handoff/protocol/ai-sessions";
+import type { ControlPlaneTriggerMutationFailure } from "@task-handoff/protocol/triggers";
+import type { ControlPlaneNodeFleetState } from "@task-handoff/protocol/control-plane-directory";
 import type {
   AppSessionDeltaResponse as ProtocolAppSessionDeltaResponse,
   AppSessionPatchEvent as ProtocolAppSessionPatchEvent,
@@ -48,6 +50,7 @@ import type {
   ImagePullProgress,
   ApplyUpdateRequest,
   NodeRolloutSummary,
+  NodeAgentEventTransportHealth as ProtocolNodeAgentEventTransportHealth,
   NodeUpdateImpact,
   RuntimeVersionState,
   UpdateCheckResult as ProtocolUpdateCheckResult,
@@ -60,7 +63,6 @@ import type {
   ControlPlaneAiSessionsSnapshot as SharedControlPlaneAiSessionsSnapshot,
   ControlPlaneAuthSession as SharedControlPlaneAuthSession,
 } from "@task-handoff/control-plane-client";
-import type { ControlPlaneAuthenticatedUser } from "@task-handoff/protocol/control-plane-access";
 
 export type { AiSessionCloseResult, AiSessionCreateResult, AiSessionForkResult, AiSessionHistoryDetail, AiSessionHistoryItem, AiSessionHistoryList, AiSessionMentionCandidate, AiSessionMentionCatalog, AiSessionMentionDiagnostic, AiSessionMentionFileSearch, AiSessionOpenAppResult, AiSessionReference, AiSessionResumeResult, AiSessionTimeline, AiSessionTurnTimeline };
 
@@ -135,7 +137,6 @@ export type { NodeRolloutSummary, NodeUpdateImpact, RuntimeVersionState };
 export type { ApplyUpdateRequest };
 export type { EnvironmentSource, EnvironmentTemplate };
 
-export type AuthUser = ControlPlaneAuthenticatedUser;
 export type AuthSession = SharedControlPlaneAuthSession;
 
 export type ProjectSource =
@@ -163,20 +164,23 @@ export type Project = {
   source: ProjectSource;
   defaultImageSelection?: ImageSelection;
   defaultNodeId?: string;
-  defaultRuntimeId?: string;
   workspacePolicy: WorkspacePolicy;
   labels: Record<string, string>;
   createdAt: string;
   updatedAt: string;
 };
 
-export type ModelApp = "codex" | "claude";
+export type ModelApp = "codex" | "claude" | "opencode";
+export type ModelProtocol = "openai-responses" | "openai-chat-completions" | "anthropic-messages";
+export type ModelNameEntry = { name: string; order: number };
 
 export type ModelConfig = {
   id: string;
   name: string;
   endpoint: string;
   model: string;
+  modelNames?: ModelNameEntry[];
+  protocols?: ModelProtocol[];
   app: ModelApp;
   enabled: boolean;
   order: number;
@@ -413,6 +417,12 @@ export type Node = {
   status: "unknown" | "online" | "offline" | "degraded";
   health: "unknown" | "ok" | "degraded" | "failed";
   connectionPhase?: "connecting" | "handshaking" | "healthy" | "reconnecting" | "suspect" | "offline";
+  connectionDiagnostics?: {
+    pingRttMs?: number;
+    pingRttP95Ms?: number;
+    consecutiveReconnects: number;
+    nextRetryAt?: string;
+  };
   capabilities: Record<string, unknown>;
   labels: Record<string, string>;
   lastSeenAt?: string;
@@ -430,11 +440,9 @@ export type ControlPlaneProxyError = {
 export type PublicProxyInvite = {
   id: string;
   targetNodeId: string;
-  status: "active" | "consumed" | "revoked" | "expired";
+  status: "active" | "revoked";
   createdBy: string;
   expiresAt: string;
-  consumedByClaimId?: string;
-  consumedAt?: string;
   revokedAt?: string;
   createdAt: string;
   updatedAt: string;
@@ -490,6 +498,9 @@ export type CancelProxyClaimResult = {
   deleted: boolean;
   compensationRequired: boolean;
   remoteRevoke: "not-required" | "not-created" | "already-revoked" | "revoked";
+  /** Added after v0.0.21; absent for normal compensation and older servers. */
+  forced?: true;
+  orphanRisk?: boolean;
 };
 
 export type DeleteNodeResult = {
@@ -539,7 +550,10 @@ export type NodeAgentScopedError = {
 
 export type NodeDiagnosticsMeta = {
   nodeErrors?: NodeAgentScopedError[];
+  nodeStates?: NodeFleetResourceState[];
 };
+
+export type NodeFleetResourceState = ControlPlaneNodeFleetState;
 
 export type NodeRuntimesPayload = {
   data: NodeRuntime[];
@@ -551,7 +565,6 @@ export type NodeLocalFolder = {
   nodeId: string;
   name: string;
   path: string;
-  defaultImageSelection?: ImageSelection;
   labels: Record<string, string>;
   createdAt: string;
   updatedAt: string;
@@ -563,6 +576,12 @@ export type NodeFolderTreeEntry = {
   children: NodeFolderTreeEntry[];
 };
 
+export type NodeFolderPlace = {
+  kind: "home" | "root";
+  name: string;
+  path: string;
+};
+
 export type NodeStatus = {
   id: string;
   status: "online" | "offline" | "unsupported" | string;
@@ -570,6 +589,8 @@ export type NodeStatus = {
   error?: string;
   agent?: Record<string, unknown>;
 };
+
+export type NodeAgentEventTransportHealth = ProtocolNodeAgentEventTransportHealth;
 
 export type NodePairingInvite = {
   nodeId: string;
@@ -632,6 +653,10 @@ export type NodeControlPlaneConnection = {
   createdAt: string;
   updatedAt: string;
   status: "disabled" | "connecting" | "connected" | "reconnecting" | "failed";
+  pingRttMs?: number;
+  pingRttP95Ms?: number;
+  consecutiveReconnects?: number;
+  nextRetryAt?: string;
   lastConnectedAt?: string;
   lastDisconnectedAt?: string;
   error?: string;
@@ -694,8 +719,12 @@ export type ControlledInstance = {
   appInventory?: InstanceAppInventory;
   config: {
     autoImportAgentConfigs: boolean;
+    codexConfigEnabled: boolean;
+    codexHomeMode: "default" | "taskhandoff";
     defaultCodexPermissionMode: AiSessionPermissionMode;
     aiSessionHistoryLimit: number;
+    aiSessionAttachmentRetentionDays: number;
+    aiSessionMaxFileAttachmentBytes: number;
   };
   workspace: {
     mode?: WorkspacePolicy["mode"];
@@ -737,8 +766,10 @@ export type ControlledInstance = {
 };
 
 export type ModelSelection = {
+  modelEntityIds?: string[];
   codexModelHash?: string | null;
   claudeModelHash?: string | null;
+  opencodeModelHash?: string | null;
 };
 
 export type {
@@ -817,6 +848,20 @@ export type TriggerRun = {
   completedAt?: string;
 };
 
+export type InstanceTriggerMutationResult = {
+  config: TriggerConfig;
+  deployment: TriggerDeployment;
+  runtime?: TriggerRuntimeState;
+};
+
+export type InstanceTriggerIndex = {
+  schemaVersion: 1;
+  configs: TriggerConfig[];
+  deployments: TriggerDeployment[];
+  runtime: TriggerRuntimeState[];
+  recentRuns: TriggerRun[];
+};
+
 export type ControlPlaneTrigger = {
   configHash: string;
   config: TriggerConfig;
@@ -863,6 +908,10 @@ export type CreateControlPlaneTriggerInput = {
   source: TriggerSource;
   action: { promptTemplate: string };
   policy?: Partial<TriggerConfig["policy"]>;
+};
+
+export type ControlPlaneTriggerMutationResult = Record<string, unknown> & {
+  partialFailures?: ControlPlaneTriggerMutationFailure[];
 };
 
 export type AiSessionLifecycle = ProtocolAiSessionLifecycle;
@@ -995,10 +1044,15 @@ export type CreateControlledInstanceInput = {
   runtimeId: string;
   config?: {
     autoImportAgentConfigs?: boolean;
+    codexConfigEnabled?: boolean;
+    codexHomeMode?: "default" | "taskhandoff";
     defaultCodexPermissionMode?: AiSessionPermissionMode;
     aiSessionHistoryLimit?: number;
+    aiSessionAttachmentRetentionDays?: number;
+    aiSessionMaxFileAttachmentBytes?: number;
   };
   modelSelection?: ModelSelection;
+  gitCredentialRetention?: "operation-only" | "instance-retained";
   start?: boolean;
 };
 
@@ -1014,8 +1068,12 @@ export type UpdateControlledInstanceInput = {
   name?: string;
   config?: {
     autoImportAgentConfigs?: boolean;
+    codexConfigEnabled?: boolean;
+    codexHomeMode?: "default" | "taskhandoff";
     defaultCodexPermissionMode?: AiSessionPermissionMode;
     aiSessionHistoryLimit?: number;
+    aiSessionAttachmentRetentionDays?: number;
+    aiSessionMaxFileAttachmentBytes?: number;
   };
   modelSelection?: ModelSelection;
 };
@@ -1025,7 +1083,6 @@ export type CreateProjectInput = {
   source: ProjectSource;
   defaultImageSelection?: ImageSelection;
   defaultNodeId?: string;
-  defaultRuntimeId?: string;
 };
 
 export type CreateModelInput = {
@@ -1033,6 +1090,8 @@ export type CreateModelInput = {
   endpoint: string;
   key: string;
   model: string;
+  modelNames?: ModelNameEntry[];
+  protocols?: ModelProtocol[];
   app: ModelApp;
   enabled?: boolean;
   order?: number;
@@ -1041,10 +1100,13 @@ export type CreateModelInput = {
 
 export type UpdateModelInput = Partial<CreateModelInput>;
 
+export type CopyModelInput = Omit<CreateModelInput, "key"> & { key?: string };
+
 export type ModelEndpointDraft = {
   endpoint: string;
   key?: string;
   existingModelId?: string;
+  protocol?: ModelProtocol;
 };
 
 export type DiscoveredModel = {
@@ -1090,9 +1152,10 @@ export type UpdateNodeInput = Pick<Node, "name">;
 export type CreateNodeLocalFolderInput = {
   name: string;
   path: string;
-  defaultImageSelection?: ImageSelection;
   labels?: Record<string, string>;
 };
+
+export type UpdateNodeLocalFolderInput = Pick<NodeLocalFolder, "name">;
 
 export type CreateNodeRuntimeInput = {
   id?: string;

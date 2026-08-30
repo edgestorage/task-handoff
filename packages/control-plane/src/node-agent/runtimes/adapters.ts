@@ -27,6 +27,7 @@ export function finalComputerPlatform(platform: string) {
 }
 
 export type RuntimeAdapter = {
+  resolveInstanceWeb(context: ExecutorContext): Promise<string>;
   start(context: ExecutorContext): Promise<ExecutorStartResult>;
   stop(context: ExecutorContext): Promise<ExecutorStartResult>;
   restart(context: ExecutorContext): Promise<ExecutorStartResult>;
@@ -79,6 +80,10 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
 
   artifactTarget(context?: ExecutorContext) {
     return this.executor.inspectRuntimeTarget(context?.instance.runtime.containerName);
+  }
+
+  resolveInstanceWeb(context: ExecutorContext) {
+    return this.executor.resolveInstanceWeb(context);
   }
 
   async installRuntime(context: ExecutorContext, artifact: ResolvedRuntimeArtifact) {

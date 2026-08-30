@@ -27,10 +27,27 @@ test("plain and payload hooks share one payload cache per resource", () => {
   assert.equal((source.match(/queryKey: controlPlaneQueryKeys\.nodeRuntimes/g) || []).length, 2);
   assert.equal((source.match(/queryFn: \(\{ signal \}\) => fetchNodeRuntimesPayload\(signal\)/g) || []).length, 2);
   assert.match(source, /export function instanceBoardQueryOptions\(instanceId:[\s\S]*queryKey: computed\(\(\) => controlPlaneQueryKeys\.scopedInstanceBoard\(toValue\(instanceId\)\)\)[\s\S]*queryFn: \(\{ signal \}[^)]*\) => fetchInstanceBoardPayload\(signal, toValue\(instanceId\)\)[\s\S]*structuralSharing: mergeInstanceBoardQueryData/);
+  const boardOptions = source.match(/export function instanceBoardQueryOptions[\s\S]*?\n\}/)?.[0] || "";
+  assert.match(boardOptions, /staleTime: Infinity/);
+  assert.match(boardOptions, /refetchOnWindowFocus: false/);
+  assert.match(boardOptions, /refetchOnReconnect: false/);
   assert.match(source, /useInstanceBoardQuery\(instanceId:[\s\S]*\.\.\.instanceBoardQueryOptions\(instanceId\)/);
   assert.match(source, /useInstanceBoardPayloadQuery\(\)[\s\S]*useQuery\(instanceBoardQueryOptions\(\)\)/);
   assert.doesNotMatch(source, /queryKey: \["control-plane-node-runtimes"\]/);
   assert.doesNotMatch(source, /queryKey: \["instance-board"\]/);
+});
+
+test("AI Session summaries recover through their revisioned stream instead of focus refetches", () => {
+  const query = source.match(/export function useControlPlaneAiSessionsQuery[\s\S]*?\n\}/)?.[0] || "";
+  assert.match(query, /staleTime: Infinity/);
+  assert.match(query, /refetchOnWindowFocus: false/);
+  assert.match(query, /refetchOnReconnect: false/);
+});
+
+test("instance directory and scoped board reads stay progressive", () => {
+  assert.match(source, /function fetchInstanceBoardPayload[\s\S]*params\.set\("progressive", "true"\)[\s\S]*if \(instanceId\) params\.set\("instanceId", instanceId\)/);
+  assert.match(source, /useInstanceDirectoryQuery[\s\S]*sharedControlPlaneClient\.resources\.instanceDirectory\(signal\)/);
+  assert.match(workbenchSource, /const standaloneBoardPending = computed\([\s\S]*state\.resource === "instances"[\s\S]*state\.phase === "loading"/);
 });
 
 test("workbench local folders consume the shared query cache", () => {

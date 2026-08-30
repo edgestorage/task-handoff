@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { COMPACT_EVENT_ENVELOPE_VERSION } from '@task-handoff/protocol/events';
 import { RelayControlPlaneTransport, type EncryptedRelayChannel } from '../src/control-plane/relay-transport';
 import type { MobileCloudRelayControlPlaneProfile } from '../src/control-plane/profile';
 
@@ -27,9 +28,63 @@ test('cloud Relay transport multiplexes events, TTY, cancellation and reconnect 
   const terminal = transport.connectAppSessionTty('instance_a', 'session_a', { onOpen: () => tty.push('open'), onSnapshot: (data, pendingEscape, cols, rows) => tty.push(`snapshot:${data}:${pendingEscape}:${cols}x${rows}`), onOutput: (data) => tty.push(data), onResize() {}, onExit() {}, onError() {}, onClose() {} });
   await Promise.resolve(); await Promise.resolve();
   const streamId = (channel.send as jest.Mock).mock.calls.map(([value]) => value).find((value) => value.type === 'tty-open').streamId;
-  emit({ type: 'event', event: { type: 'instance.updated' } }); emit({ type: 'tty-snapshot', streamId, data: 'restored', pendingEscape: '\u001b[2', cols: 120, rows: 32 }); emit({ type: 'tty-output', streamId, data: 'hello' }); terminal.sendInput('ls\n');
-  expect(events).toEqual([{ type: 'instance.updated' }]); expect(tty).toEqual(['snapshot:restored:\u001b[2:120x32', 'hello']); expect(channel.send).toHaveBeenCalledWith(expect.objectContaining({ type: 'tty-input' }));
+  emit({ type: 'event', event: { v: COMPACT_EVENT_ENVELOPE_VERSION, id: 'event_a', type: 'instance.updated', createdAt: '2026-08-26T00:00:00.000Z', payload: {} } }); emit({ type: 'tty-snapshot', streamId, data: 'restored', pendingEscape: '\u001b[2', cols: 120, rows: 32 }); emit({ type: 'tty-output', streamId, data: 'hello' }); terminal.sendInput('ls\n');
+  expect(events).toEqual([expect.objectContaining({ v: 1, id: 'event_a', type: 'instance.updated', topic: 'instances' })]); expect(tty).toEqual(['snapshot:restored:\u001b[2:120x32', 'hello']); expect(channel.send).toHaveBeenCalledWith(expect.objectContaining({ type: 'tty-input' }));
   await transport.revalidate(); expect(open).toHaveBeenLastCalledWith(expect.objectContaining({ epoch: 2 }));
+});
+
+test('cloud Relay transport resets the channel instead of delivering malformed compact events', async () => {
+  const { channel, transport, emit } = harness();
+  const onEvent = jest.fn();
+  const onError = jest.fn();
+  await transport.request('/api/bootstrap', z.object({ data: z.object({ ok: z.literal(true) }) }));
+  transport.connectEvents({ topics: ['instances'], onOpen() {}, onEvent, onError, onClose() {} });
+  await Promise.resolve();
+
+  emit({
+    type: 'event',
+    event: {
+      v: COMPACT_EVENT_ENVELOPE_VERSION,
+      id: 'event-invalid',
+      type: 'instance.updated',
+      createdAt: '2026-08-26T00:00:00.000Z',
+    },
+  });
+
+  expect(onEvent).not.toHaveBeenCalled();
+  expect(onError).toHaveBeenCalledWith(expect.objectContaining({ code: 'RELAY_EVENT_INVALID' }));
+  expect(channel.close).toHaveBeenCalledWith(4000, 'reset');
+});
+
+test('cloud Relay transport aggregates event topics and sends an explicit empty subscription after the last consumer closes', async () => {
+  const { channel, transport } = harness();
+  await transport.request('/api/bootstrap', z.object({ data: z.object({ ok: z.literal(true) }) }));
+  const handlers = (topics?: string[], aiSessionTransient?: any) => ({ topics, aiSessionTransient, onOpen() {}, onEvent() {}, onError() {}, onClose() {} });
+  const transient = { messageDeltas: { allInstances: false, instanceIds: [] }, timelineAllSessions: false, timelineSessions: [] };
+  const ai = transport.connectEvents(handlers(['ai.sessions'], transient));
+  await Promise.resolve(); await Promise.resolve();
+  expect(channel.send).toHaveBeenLastCalledWith({ type: 'event-subscribe', body: { eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION, topics: ['ai.sessions'], aiSessionTransient: transient } });
+
+  const nodes = transport.connectEvents(handlers(['nodes']));
+  await Promise.resolve(); await Promise.resolve();
+  expect(channel.send).toHaveBeenLastCalledWith({ type: 'event-subscribe', body: { eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION, topics: ['ai.sessions', 'nodes'], aiSessionTransient: transient } });
+
+  ai.close();
+  expect(channel.send).toHaveBeenLastCalledWith({ type: 'event-subscribe', body: { eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION, topics: ['nodes'] } });
+  nodes.close();
+  expect(channel.send).toHaveBeenLastCalledWith({ type: 'event-subscribe', body: { eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION, topics: [] } });
+});
+
+test('cloud Relay transport preserves wildcard semantics while any consumer omits topics', async () => {
+  const { channel, transport } = harness();
+  await transport.request('/api/bootstrap', z.object({ data: z.object({ ok: z.literal(true) }) }));
+  const wildcard = transport.connectEvents({ onOpen() {}, onEvent() {}, onError() {}, onClose() {} });
+  const nodes = transport.connectEvents({ topics: ['nodes'], onOpen() {}, onEvent() {}, onError() {}, onClose() {} });
+  await Promise.resolve(); await Promise.resolve();
+  expect(channel.send).toHaveBeenLastCalledWith({ type: 'event-subscribe', body: { eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION, topics: undefined } });
+  wildcard.close();
+  expect(channel.send).toHaveBeenLastCalledWith({ type: 'event-subscribe', body: { eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION, topics: ['nodes'] } });
+  nodes.close();
 });
 
 test('cloud Relay profile cannot inject authorization, cross-origin route or stale binding identity', async () => {

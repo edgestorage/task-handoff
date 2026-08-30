@@ -1,19 +1,28 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { formatBytes } from "../../i18n/presentation";
+import { formatBytes, formatNumber } from "../../i18n/presentation";
 import type { SupportedLocale } from "../../i18n/locale";
-import { AppWindow, ArrowUp, Box, Check, CornerDownRight, File, Folder, Hand, LoaderCircle, Minimize2, Pencil, Plus, Puzzle, ScanSearch, ShieldAlert, ShieldCheck, Square, Target, WandSparkles, X } from "@lucide/vue";
+import { AppWindow, ArrowUp, Box, BrainCircuit, Check, Copy, CornerDownRight, File, FileText, Folder, Hand, LoaderCircle, Minimize2, Pencil, Plus, Puzzle, ScanSearch, ShieldAlert, ShieldCheck, Square, Target, WandSparkles, Waypoints, X } from "@lucide/vue";
 import { PopoverAnchor } from "reka-ui";
 import type { AiSessionMentionCandidate } from "../../api/types";
 import type { AiSessionCommandInput, AiSessionPermissionMode } from "@task-handoff/protocol/ai-sessions";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu";
+import type { AiSessionModelSelection, AiSessionReasoningEffort } from "@task-handoff/protocol/ai-sessions";
+import type { AiSessionModelGroup } from "@task-handoff/control-plane-client";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger } from "../ui/dropdown-menu";
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "../ui/context-menu";
 import { Popover, PopoverContent } from "../ui/popover";
 import { Textarea } from "../ui/textarea";
+import { ScrollArea } from "../ui/scroll-area";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
 import { mentionTokenAt, reconcileMentionBindings, replaceMentionToken, type AiSessionMentionBinding } from "./mentions";
 import { commandTokenAt, matchingCommands, parseAiSessionCommand, replaceCommandToken, type AiSessionCommandCandidate } from "./commands";
 import { useAiSessionMentions, type AiSessionMentionContext } from "./useAiSessionMentions";
 import { useAiSessionPermissionMode } from "../../apps/control-plane/useAiSessionPermissionMode";
+import { showControlPlaneToast } from "../../apps/control-plane/useControlPlaneToasts";
+import { classifyAiSessionPastedText, type AiSessionPastedTextPresentation } from "@task-handoff/control-plane-client";
+import { AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES } from "@task-handoff/protocol/ai-sessions";
+import AiSessionImagePreview from "./AiSessionImagePreview.vue";
 
 export type AiSessionComposerAttachment = {
   id: string;
@@ -25,6 +34,9 @@ export type AiSessionComposerAttachment = {
   dataUrl?: string;
   previewUrl?: string;
   file?: File;
+  uploadProgress?: number;
+  uploadState?: "uploading" | "uploaded" | "failed";
+  textPresentation?: AiSessionPastedTextPresentation;
 };
 
 type DesktopFileBridge = {
@@ -35,11 +47,12 @@ const props = defineProps<{
   modelValue: string;
   attachments?: AiSessionComposerAttachment[];
   busy?: boolean;
+  disabled?: boolean;
   canInterrupt?: boolean;
-  error?: string;
   placeholder?: string;
   mentionBindings?: AiSessionMentionBinding[];
   mentionContext?: AiSessionMentionContext;
+  maxFileAttachmentBytes?: number;
   mentionTrigger?: string;
   commandTrigger?: string;
   sessionBusy?: boolean;
@@ -48,6 +61,12 @@ const props = defineProps<{
   permissionMode?: AiSessionPermissionMode;
   defaultPermissionMode?: AiSessionPermissionMode;
   editingLabel?: string;
+  modelGroups?: AiSessionModelGroup[];
+  modelSelection?: AiSessionModelSelection;
+  modelSelectionPending?: boolean;
+  reasoningEffort?: AiSessionReasoningEffort;
+  reasoningEffortEnabled?: boolean;
+  reasoningEffortPending?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -59,6 +78,8 @@ const emit = defineEmits<{
   (event: "steer"): void;
   (event: "command", value: AiSessionCommandInput): void;
   (event: "cancelEdit"): void;
+  (event: "selectModel", value: AiSessionModelSelection): void;
+  (event: "selectReasoningEffort", value: AiSessionReasoningEffort): void;
 }>();
 const { locale, t } = useI18n();
 
@@ -69,10 +90,8 @@ const draft = computed({
 
 const MAX_ATTACHMENTS = 6;
 const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
-const MAX_INLINE_FILE_BYTES = 500 * 1024;
 const MAX_TOTAL_ATTACHMENT_BYTES = 40 * 1024 * 1024;
 const SUPPORTED_IMAGE_MIME = new Set(["image/bmp", "image/gif", "image/jpeg", "image/png", "image/webp"]);
-const attachmentError = ref("");
 const composerEl = ref<HTMLFormElement>();
 const inputEl = ref<unknown>();
 const attachments = computed(() => props.attachments || []);
@@ -85,6 +104,8 @@ const commandOpen = ref(false);
 const commandQuery = ref("");
 const activeCommandIndex = ref(0);
 const commandCandidates = computed(() => matchingCommands(commandQuery.value));
+const previewAttachment = ref<AiSessionComposerAttachment>();
+const pastedTextSequence = ref(0);
 const editing = computed(() => Boolean(props.editingLabel));
 const overlayOpen = computed(() => !editing.value && !props.busy && (mentions.open.value || commandOpen.value));
 const mentionPopoverRadius = ref("20px");
@@ -97,8 +118,8 @@ const groupedMentionCandidates = computed(() => mentionKinds.map((kind) => ({
 })).filter((group) => group.candidates.length || group.diagnostics.length));
 const hasDraft = computed(() => props.modelValue.trim().length > 0 || attachments.value.length > 0);
 const actionKind = computed(() => editing.value ? "save" : hasDraft.value || !props.canInterrupt ? "send" : "stop");
-const canRun = computed(() => editing.value ? props.modelValue.trim().length > 0 : hasDraft.value || (!props.busy && props.canInterrupt));
-const canSteer = computed(() => !editing.value && props.busy && hasDraft.value);
+const canRun = computed(() => !props.disabled && (editing.value ? props.modelValue.trim().length > 0 : hasDraft.value || (!props.busy && props.canInterrupt)));
+const canSteer = computed(() => !editing.value && props.sessionBusy && hasDraft.value);
 const actionTitle = computed(() => {
   if (props.busy) {
     return actionKind.value === "stop"
@@ -132,6 +153,38 @@ const permissionOptions = computed(() => [
   { value: "full-access", label: t("sessions.permission.fullAccess"), description: t("sessions.composer.fullAccessDescription"), icon: ShieldAlert, danger: true },
 ] satisfies Array<{ value: AiSessionPermissionMode; label: string; description: string; icon: typeof Hand; danger?: boolean }>);
 const selectedPermission = computed(() => permissionOptions.value.find((option) => option.value === permissionMode.value) || permissionOptions.value[0]);
+const modelGroups = computed(() => props.modelGroups || []);
+const modelOptions = computed(() => modelGroups.value.flatMap((group) => group.models));
+const displayedModelSelection = computed(() => props.modelSelection || modelOptions.value[0]);
+const displayedModelName = computed(() => displayedModelSelection.value?.modelName || t("sessions.composer.modelSelectionUnavailable"));
+const reasoningEfforts: AiSessionReasoningEffort[] = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
+const availableReasoningEfforts = computed(() => props.provider === "codex" ? reasoningEfforts : reasoningEfforts.filter((effort) => effort !== "ultra"));
+const modelMenuDisabled = computed(() => Boolean(
+  props.busy
+  || props.sessionBusy
+  || props.modelSelectionPending
+  || props.reasoningEffortPending
+  || (modelOptions.value.length <= 1 && !props.reasoningEffortEnabled),
+));
+
+function isSelectedModel(model: AiSessionModelSelection) {
+  return model.modelEntityId === displayedModelSelection.value?.modelEntityId && model.modelName === displayedModelSelection.value?.modelName;
+}
+
+function selectedModelNameForGroup(group: AiSessionModelGroup) {
+  return props.modelSelection?.modelEntityId === group.modelEntityId
+    ? props.modelSelection.modelName
+    : undefined;
+}
+
+function modelGroupSubtitle(group: AiSessionModelGroup) {
+  const selected = selectedModelNameForGroup(group);
+  if (selected) return selected;
+  const first = group.models[0]?.modelName || "";
+  return group.models.length > 1
+    ? t("sessions.composer.modelGroupSummary", { model: first, count: group.models.length })
+    : first;
+}
 
 function resizeInput() {
   const element = textareaElement();
@@ -185,6 +238,7 @@ watch(attachments, (next, previous) => {
   for (const attachment of previous || []) {
     if (attachment.previewUrl && !next.some((item) => item.id === attachment.id)) URL.revokeObjectURL(attachment.previewUrl);
   }
+  if (previewAttachment.value && !next.some((item) => item.id === previewAttachment.value?.id)) closeImagePreview();
   void nextTick(resizeInput);
 });
 
@@ -201,31 +255,31 @@ function validateFiles(files: File[], runtimePathFiles: Set<File>, outsideWorksp
     const mime = file.type || (kind === "image" ? "image/png" : "application/octet-stream");
     const usesRuntimePath = runtimePathFiles.has(file);
     if (kind === "image" && !SUPPORTED_IMAGE_MIME.has(mime)) {
-      attachmentError.value = t("sessions.composer.supportedImages");
+      showControlPlaneToast(t("sessions.composer.supportedImages"));
       continue;
     }
     if (file.size <= 0) {
-      attachmentError.value = t("sessions.composer.emptyFile");
+      showControlPlaneToast(t("sessions.composer.emptyFile"));
       continue;
     }
     if (!usesRuntimePath && kind === "image" && file.size > MAX_ATTACHMENT_BYTES) {
-      attachmentError.value = t("sessions.composer.imageTooLarge");
+      showControlPlaneToast(t("sessions.composer.imageTooLarge"));
       continue;
     }
-    if (!usesRuntimePath && kind === "file" && file.size >= MAX_INLINE_FILE_BYTES) {
-      attachmentError.value = outsideWorkspaceFiles.has(file)
+    if (!usesRuntimePath && kind === "file" && file.size >= (props.maxFileAttachmentBytes || AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES)) {
+      showControlPlaneToast(outsideWorkspaceFiles.has(file)
         ? t("sessions.composer.runtimePathOutside")
         : props.mentionContext?.runtimeType === "local"
           ? t("sessions.composer.browserPathUnavailable")
-        : t("sessions.composer.fileTooLarge");
+        : t("sessions.composer.fileTooLarge"));
       continue;
     }
     if (attachments.value.length + accepted.length >= MAX_ATTACHMENTS) {
-      attachmentError.value = t("sessions.composer.tooManyAttachments");
+      showControlPlaneToast(t("sessions.composer.tooManyAttachments"));
       continue;
     }
     if (!usesRuntimePath && nextBytes + file.size > MAX_TOTAL_ATTACHMENT_BYTES) {
-      attachmentError.value = t("sessions.composer.totalTooLarge");
+      showControlPlaneToast(t("sessions.composer.totalTooLarge"));
       continue;
     }
     if (!usesRuntimePath) nextBytes += file.size;
@@ -234,7 +288,7 @@ function validateFiles(files: File[], runtimePathFiles: Set<File>, outsideWorksp
   return accepted;
 }
 
-async function addFiles(files: File[]) {
+async function addFiles(files: File[], textPresentations = new Map<File, AiSessionPastedTextPresentation>()) {
   if (props.busy) {
     return;
   }
@@ -256,8 +310,7 @@ async function addFiles(files: File[]) {
   if (!accepted.length) {
     return;
   }
-  void Promise.all(accepted.map((file) => readAttachment(file, runtimePaths.get(file)))).then((items) => {
-    attachmentError.value = "";
+  void Promise.all(accepted.map((file) => readAttachment(file, runtimePaths.get(file), textPresentations.get(file)))).then((items) => {
     emit("update:attachments", [...attachments.value, ...items]);
   });
 }
@@ -279,7 +332,7 @@ function normalizeAbsoluteRuntimePath(value: string) {
   return `/${segments.join("/")}`;
 }
 
-function readAttachment(file: File, runtimePath?: string): Promise<AiSessionComposerAttachment> {
+function readAttachment(file: File, runtimePath?: string, textPresentation?: AiSessionPastedTextPresentation): Promise<AiSessionComposerAttachment> {
   const kind = attachmentKind(file);
   const common = {
     id: `local_${Date.now()}_${Math.random().toString(16).slice(2)}`,
@@ -303,6 +356,7 @@ function readAttachment(file: File, runtimePath?: string): Promise<AiSessionComp
         source: { type: "inline" },
         dataUrl: String(reader.result || ""),
         file,
+        textPresentation,
       });
     });
     reader.addEventListener("error", () => reject(reader.error || new Error(t("sessions.composer.readFailed"))));
@@ -314,12 +368,61 @@ function removeAttachment(id: string) {
   if (props.busy) {
     return;
   }
-  attachmentError.value = "";
   emit("update:attachments", attachments.value.filter((attachment) => attachment.id !== id));
 }
 
 function formatAttachmentSize(size: number) {
   return formatBytes(size, locale.value as SupportedLocale);
+}
+
+function formatTextLength(length: number) {
+  return t("sessions.composer.textLength", { count: formatNumber(length, locale.value as SupportedLocale, { maximumFractionDigits: 0 }) });
+}
+
+function openImagePreview(attachment: AiSessionComposerAttachment) {
+  if (attachment.kind === "image") previewAttachment.value = attachment;
+}
+
+function closeImagePreview() {
+  previewAttachment.value = undefined;
+}
+
+function attachmentProgressLabel(attachment: AiSessionComposerAttachment) {
+  return t("sessions.composer.uploadProgress", { progress: Math.round((attachment.uploadProgress || 0) * 100) });
+}
+
+async function copyAttachmentImage(attachment: AiSessionComposerAttachment) {
+  const source = attachment.previewUrl || attachment.dataUrl;
+  if (!source || !navigator.clipboard?.write || typeof ClipboardItem === "undefined") {
+    showControlPlaneToast(t("sessions.composer.copyImageFailed"));
+    return;
+  }
+  try {
+    const sourceBlob = await fetch(source).then((response) => response.blob());
+    const blob = sourceBlob.type === "image/png" ? sourceBlob : await imageBlobAsPng(sourceBlob);
+    await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+    showControlPlaneToast(t("sessions.composer.imageCopied"));
+  } catch {
+    showControlPlaneToast(t("sessions.composer.copyImageFailed"));
+  }
+}
+
+async function imageBlobAsPng(blob: Blob) {
+  const bitmap = await createImageBitmap(blob);
+  try {
+    const canvas = document.createElement("canvas");
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("Canvas is unavailable.");
+    context.drawImage(bitmap, 0, 0);
+    return await new Promise<Blob>((resolve, reject) => canvas.toBlob((png) => {
+      if (png) resolve(png);
+      else reject(new Error("Image conversion failed."));
+    }, "image/png"));
+  } finally {
+    bitmap.close();
+  }
 }
 
 function handlePaste(event: ClipboardEvent) {
@@ -328,11 +431,22 @@ function handlePaste(event: ClipboardEvent) {
     return;
   }
   const files = Array.from(event.clipboardData?.files || []);
-  if (!files.length) {
+  if (files.length) {
+    event.preventDefault();
+    void addFiles(files);
     return;
   }
+  const text = event.clipboardData?.getData("text/plain") || "";
+  const decision = classifyAiSessionPastedText(text, pastedTextSequence.value + 1, props.maxFileAttachmentBytes || AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES);
+  if (decision.disposition === "inline") return;
   event.preventDefault();
-  void addFiles(files);
+  if (decision.disposition === "rejected") {
+    showControlPlaneToast(t("sessions.composer.fileTooLarge"));
+    return;
+  }
+  pastedTextSequence.value += 1;
+  const file = new globalThis.File([decision.file.text], decision.file.name, { type: decision.file.mime });
+  void addFiles([file], new Map([[file, decision.file.presentation]]));
 }
 
 function handleDrop(event: DragEvent) {
@@ -361,6 +475,27 @@ function submit() {
 function handleInputKeydown(event: KeyboardEvent) {
   if (props.busy) return;
   if (event.isComposing) return;
+  if (
+    event.key === "Enter"
+    && event.ctrlKey
+    && !event.metaKey
+    && !event.altKey
+    && !event.shiftKey
+    && canSteer.value
+  ) {
+    event.preventDefault();
+    event.stopPropagation();
+    emit("steer");
+    return;
+  }
+  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    const moved = moveActiveMention(event.key === "ArrowDown" ? 1 : -1);
+    if (moved) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+    return;
+  }
   if (commandOpen.value) {
     const command = commandCandidates.value[activeCommandIndex.value];
     if ((event.key === "Enter" || event.key === "Tab") && command && !(props.sessionBusy && command.requiresIdle)) {
@@ -394,19 +529,20 @@ function handleInputKeydown(event: KeyboardEvent) {
 }
 
 function moveActiveMention(direction: 1 | -1) {
-  if (props.busy) return;
+  if (props.busy) return false;
   if (commandOpen.value) {
     const length = commandCandidates.value.length;
-    if (!length) return;
+    if (!length) return false;
     activeCommandIndex.value = (activeCommandIndex.value + direction + length) % length;
     void nextTick(() => document.querySelector(".ai-session-mention-popover__item--active")?.scrollIntoView({ block: "nearest" }));
-    return;
+    return true;
   }
-  if (!mentions.open.value) return;
+  if (!mentions.open.value) return false;
   const length = mentions.candidates.value.length;
-  if (!length) return;
+  if (!length) return false;
   activeMentionIndex.value = (activeMentionIndex.value + direction + length) % length;
   void nextTick(() => document.querySelector(".ai-session-mention-popover__item--active")?.scrollIntoView({ block: "nearest" }));
+  return true;
 }
 
 function handleComposerInput(event: Event) {
@@ -551,19 +687,65 @@ watch(() => props.busy, (busy) => {
   <form ref="composerEl" class="ai-session-composer" :aria-busy="busy" @drop="handleDrop" @dragover.prevent @submit.prevent="submit">
     <div v-if="attachments.length" class="ai-session-composer__attachments">
       <figure v-for="attachment in attachments" :key="attachment.id" :class="{ 'ai-session-composer__file': attachment.kind === 'file' }">
-        <img v-if="attachment.kind === 'image'" :alt="attachment.name" :src="attachment.previewUrl || attachment.dataUrl" />
+        <ContextMenu v-if="attachment.kind === 'image'">
+          <ContextMenuTrigger as-child>
+            <button
+              type="button"
+              class="ai-session-composer__image-trigger"
+              :title="t('sessions.composer.previewImage', { name: attachment.name })"
+              :aria-label="t('sessions.composer.previewImage', { name: attachment.name })"
+              @click="openImagePreview(attachment)"
+            >
+              <img :alt="attachment.name" :src="attachment.previewUrl || attachment.dataUrl" />
+            </button>
+          </ContextMenuTrigger>
+          <ContextMenuContent>
+            <ContextMenuItem @select="copyAttachmentImage(attachment)">
+              <Copy :size="15" />
+              <span>{{ t("sessions.composer.copyImage") }}</span>
+            </ContextMenuItem>
+          </ContextMenuContent>
+        </ContextMenu>
         <template v-else>
-          <span class="ai-session-composer__file-icon"><File :size="22" /></span>
+          <span class="ai-session-composer__file-icon">
+            <FileText v-if="attachment.textPresentation" :size="22" />
+            <File v-else :size="22" />
+          </span>
           <figcaption>
             <strong :title="attachment.name">{{ attachment.name }}</strong>
-            <span>{{ formatAttachmentSize(attachment.size) }}<template v-if="attachment.source.type === 'runtime-path'"> · {{ t("sessions.composer.localPath") }}</template></span>
+            <span v-if="attachment.textPresentation" class="ai-session-composer__file-summary" :title="attachment.textPresentation.summary || t('sessions.composer.blankPastedText')">
+              {{ attachment.textPresentation.summary || t("sessions.composer.blankPastedText") }}
+            </span>
+            <span>
+              <template v-if="attachment.textPresentation">{{ formatTextLength(attachment.textPresentation.codePointLength) }} · </template>{{ formatAttachmentSize(attachment.size) }}<template v-if="attachment.source.type === 'runtime-path'"> · {{ t("sessions.composer.localPath") }}</template>
+            </span>
           </figcaption>
         </template>
-        <button type="button" :title="t('sessions.composer.removeAttachment')" :aria-label="t('sessions.composer.removeAttachment')" :disabled="busy" @click="removeAttachment(attachment.id)">
+        <div
+          v-if="attachment.uploadState === 'uploading'"
+          class="ai-session-composer__upload-progress"
+          role="progressbar"
+          :aria-label="attachmentProgressLabel(attachment)"
+          aria-valuemin="0"
+          aria-valuemax="100"
+          :aria-valuenow="Math.round((attachment.uploadProgress || 0) * 100)"
+        >
+          <span>{{ Math.round((attachment.uploadProgress || 0) * 100) }}%</span>
+          <i :style="{ width: `${Math.round((attachment.uploadProgress || 0) * 100)}%` }" />
+        </div>
+        <button class="ai-session-composer__remove" type="button" :title="t('sessions.composer.removeAttachment')" :aria-label="t('sessions.composer.removeAttachment')" :disabled="busy" @click="removeAttachment(attachment.id)">
           <X :size="14" />
         </button>
       </figure>
     </div>
+    <AiSessionImagePreview
+      :open="Boolean(previewAttachment)"
+      :src="previewAttachment?.previewUrl || previewAttachment?.dataUrl"
+      :alt="previewAttachment?.name"
+      :copyable="Boolean(previewAttachment)"
+      @update:open="(open) => { if (!open) closeImagePreview(); }"
+      @copy="previewAttachment && copyAttachmentImage(previewAttachment)"
+    />
     <Popover :open="overlayOpen" @update:open="(open) => { if (!open) { mentions.close(); commandOpen = false; } }">
       <PopoverAnchor as-child>
         <div class="ai-session-composer__input-anchor">
@@ -574,8 +756,6 @@ watch(() => props.busy, (busy) => {
             :disabled="busy"
             :placeholder="placeholder || t('sessions.composer.followUp')"
             rows="3"
-            @keydown.down.stop.prevent="moveActiveMention(1)"
-            @keydown.up.stop.prevent="moveActiveMention(-1)"
             @keydown="handleInputKeydown"
             @input="handleComposerInput"
             @click="updateOverlayMenu()"
@@ -708,12 +888,120 @@ watch(() => props.busy, (busy) => {
           v-if="canSteer"
           type="button"
           class="ai-session-composer__tool"
-          :title="t('sessions.composer.steerTurn')"
+          :title="t('sessions.composer.steerTurnShortcut')"
+          :aria-label="t('sessions.composer.steerTurnShortcut')"
           :disabled="busy"
           @click="emit('steer')"
         >
           <CornerDownRight :size="18" />
         </button>
+        <DropdownMenu v-if="modelOptions.length || reasoningEffortEnabled">
+          <DropdownMenuTrigger as-child>
+            <button
+              type="button"
+              class="ai-session-composer__model-trigger"
+              :disabled="modelMenuDisabled"
+              :title="t('sessions.composer.modelSelectionTitle', { model: displayedModelName })"
+              :aria-label="t('sessions.composer.modelSelectionTitle', { model: displayedModelName })"
+              :aria-busy="modelSelectionPending || undefined"
+            >
+              <LoaderCircle v-if="modelSelectionPending" class="animate-spin motion-reduce:animate-none" :size="14" />
+              <span>{{ displayedModelName }}</span>
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            class="ai-session-model-menu"
+            side="top"
+            align="end"
+            :collision-padding="12"
+            :side-offset="8"
+          >
+            <ScrollArea type="auto" :horizontal="false" class="ai-session-model-menu__scroll">
+              <div class="ai-session-model-menu__list">
+                <template v-for="group in modelGroups" :key="group.modelEntityId">
+                  <DropdownMenuSub v-if="group.models.length > 1">
+                    <DropdownMenuSubTrigger
+                      class="ai-session-model-menu__item ai-session-model-menu__provider-item"
+                      :class="{ 'ai-session-model-menu__item--selected': selectedModelNameForGroup(group) }"
+                    >
+                      <Waypoints class="ai-session-model-menu__icon" :size="17" />
+                      <span class="ai-session-model-menu__copy">
+                        <strong>{{ group.providerName }}</strong>
+                        <small v-if="modelGroupSubtitle(group)">{{ modelGroupSubtitle(group) }}</small>
+                      </span>
+                    </DropdownMenuSubTrigger>
+                    <DropdownMenuSubContent class="ai-session-model-menu ai-session-model-menu--nested" :collision-padding="12">
+                      <DropdownMenuItem
+                        v-for="model in group.models"
+                        :key="`${model.modelEntityId}:${model.modelName}`"
+                        class="ai-session-model-menu__item"
+                        :class="{ 'ai-session-model-menu__item--selected': isSelectedModel(model) }"
+                        @select="emit('selectModel', { modelEntityId: model.modelEntityId, modelName: model.modelName })"
+                      >
+                        <span class="ai-session-model-menu__copy"><strong>{{ model.modelName }}</strong></span>
+                        <Check v-if="isSelectedModel(model)" class="ai-session-model-menu__check" :size="16" />
+                      </DropdownMenuItem>
+                    </DropdownMenuSubContent>
+                  </DropdownMenuSub>
+                  <DropdownMenuItem
+                    v-else
+                    class="ai-session-model-menu__item ai-session-model-menu__provider-item"
+                    :class="{ 'ai-session-model-menu__item--selected': isSelectedModel(group.models[0]) }"
+                    @select="emit('selectModel', { modelEntityId: group.models[0].modelEntityId, modelName: group.models[0].modelName })"
+                  >
+                    <Waypoints class="ai-session-model-menu__icon" :size="17" />
+                    <span class="ai-session-model-menu__copy">
+                      <strong>{{ group.providerName }}</strong>
+                      <small>{{ group.models[0].modelName }}</small>
+                    </span>
+                    <Check v-if="isSelectedModel(group.models[0])" class="ai-session-model-menu__check" :size="16" />
+                  </DropdownMenuItem>
+                </template>
+                <template v-if="reasoningEffortEnabled">
+                  <DropdownMenuSeparator />
+                  <DropdownMenuSub>
+                    <DropdownMenuSubTrigger class="ai-session-model-menu__item ai-session-model-menu__provider-item">
+                      <BrainCircuit class="ai-session-model-menu__icon" :size="17" />
+                      <span class="ai-session-model-menu__copy">
+                        <strong>{{ t("sessions.composer.reasoningEffort") }}</strong>
+                        <small v-if="reasoningEffort">{{ reasoningEffort }}</small>
+                      </span>
+                    </DropdownMenuSubTrigger>
+                    <DropdownMenuSubContent class="ai-session-model-menu ai-session-model-menu--nested ai-session-reasoning-menu" :collision-padding="12">
+                      <DropdownMenuItem
+                        v-for="effort in availableReasoningEfforts"
+                        :key="effort"
+                        class="ai-session-model-menu__item"
+                        :class="{ 'ai-session-model-menu__item--selected': reasoningEffort === effort }"
+                        @select="emit('selectReasoningEffort', effort)"
+                      >
+                        <span class="ai-session-model-menu__copy"><strong>{{ effort }}</strong></span>
+                        <Check v-if="reasoningEffort === effort" class="ai-session-model-menu__check" :size="16" />
+                      </DropdownMenuItem>
+                    </DropdownMenuSubContent>
+                  </DropdownMenuSub>
+                </template>
+              </div>
+            </ScrollArea>
+          </DropdownMenuContent>
+        </DropdownMenu>
+        <TooltipProvider v-else-if="provider" :delay-duration="200">
+          <Tooltip>
+            <TooltipTrigger as-child>
+              <span class="ai-session-composer__model-tooltip-trigger">
+                <button
+                  type="button"
+                  class="ai-session-composer__model-trigger ai-session-composer__model-trigger--unavailable"
+                  disabled
+                  :aria-label="modelSelection ? t('sessions.composer.modelSelectionTitle', { model: displayedModelName }) : t('sessions.composer.modelSelectionUnavailable')"
+                >
+                  <span>{{ displayedModelName }}</span>
+                </button>
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="top" :side-offset="8">{{ t('sessions.composer.modelSelectionUnavailable') }}</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
         <button
           type="submit"
           class="ai-session-composer__primary"
@@ -729,7 +1017,6 @@ watch(() => props.busy, (busy) => {
         </button>
       </div>
     </div>
-    <p v-if="attachmentError || error" class="ai-session-composer__error">{{ attachmentError || error }}</p>
   </form>
 </template>
 
@@ -797,7 +1084,7 @@ watch(() => props.busy, (busy) => {
   display: flex;
   align-items: center;
   gap: 10px;
-  width: min(240px, 62vw);
+  width: min(280px, 72vw);
   padding: 10px 34px 10px 10px;
 }
 
@@ -825,6 +1112,11 @@ watch(() => props.busy, (busy) => {
   white-space: nowrap;
 }
 
+.ai-session-composer__file .ai-session-composer__file-summary {
+  color: var(--ai-composer-text, currentColor);
+  font-size: 12px;
+}
+
 .ai-session-composer__file strong {
   font-size: 13px;
   font-weight: 600;
@@ -838,10 +1130,20 @@ watch(() => props.busy, (busy) => {
 .ai-session-composer__attachments img {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
 }
 
-.ai-session-composer__attachments button {
+.ai-session-composer__image-trigger {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: transparent;
+  cursor: zoom-in;
+  padding: 0;
+}
+
+.ai-session-composer__attachments .ai-session-composer__remove {
   position: absolute;
   top: 4px;
   right: 4px;
@@ -855,6 +1157,34 @@ watch(() => props.busy, (busy) => {
   color: white;
   cursor: pointer;
   padding: 0;
+}
+
+.ai-session-composer__upload-progress {
+  position: absolute;
+  inset: auto 4px 4px;
+  z-index: 1;
+  height: 18px;
+  overflow: hidden;
+  border-radius: 5px;
+  background: rgb(0 0 0 / 72%);
+  color: white;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  line-height: 18px;
+  text-align: center;
+}
+
+.ai-session-composer__upload-progress span {
+  position: relative;
+  z-index: 1;
+}
+
+.ai-session-composer__upload-progress i {
+  position: absolute;
+  inset: auto 0 0;
+  height: 3px;
+  background: var(--primary);
+  transition: width 0.12s linear;
 }
 
 .ai-session-composer__attachments button:disabled,
@@ -1001,6 +1331,156 @@ watch(() => props.busy, (busy) => {
   opacity: 0.55;
 }
 
+.ai-session-composer__model-trigger {
+  display: inline-flex;
+  min-width: 0;
+  max-width: min(180px, 30vw);
+  height: 32px;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ai-composer-muted, currentColor);
+  cursor: pointer;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.ai-session-composer__model-trigger span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-session-composer__model-trigger:disabled {
+  cursor: default;
+  opacity: 0.62;
+}
+
+.ai-session-composer__model-tooltip-trigger {
+  display: inline-flex;
+  min-width: 0;
+}
+
+.ai-session-composer__model-trigger:not(:disabled):is(:hover, :focus-visible) {
+  background: color-mix(in srgb, var(--ai-composer-muted, currentColor) 10%, transparent);
+  outline: none;
+}
+
+:global(.ai-session-model-menu) {
+  width: min(292px, var(--reka-dropdown-menu-content-available-width));
+  max-height: min(360px, var(--reka-dropdown-menu-content-available-height));
+  overflow: hidden;
+  padding: 5px;
+}
+
+:global(.ai-session-model-menu__scroll) {
+  max-height: min(350px, calc(var(--reka-dropdown-menu-content-available-height) - 10px));
+  min-width: 0;
+}
+
+:global(.ai-session-model-menu__list) {
+  display: grid;
+  gap: 1px;
+}
+
+:global(.ai-session-model-menu__provider) {
+  padding: 7px 9px 5px;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  font-weight: 400;
+}
+
+:global(.ai-session-model-menu__item) {
+  min-height: 42px;
+  gap: 10px;
+  border-radius: 6px;
+  padding: 7px 9px;
+}
+
+:global(.ai-session-model-menu__provider-item) {
+  align-items: center;
+}
+
+:global(.ai-session-model-menu__icon) {
+  flex: 0 0 auto;
+  color: hsl(var(--muted-foreground));
+}
+
+:global(.ai-session-model-menu__copy) {
+  display: grid;
+  min-width: 0;
+  flex: 1 1 auto;
+  gap: 1px;
+}
+
+:global(.ai-session-model-menu__copy strong) {
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+:global(.ai-session-model-menu__copy small) {
+  overflow: hidden;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 17px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+:global(.ai-session-model-menu__check) {
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+:global(.ai-session-model-menu__item--selected) {
+  background: var(--surface-active);
+  color: var(--text-strong);
+}
+
+:global(.ai-session-model-menu__item--selected .ai-session-model-menu__icon),
+:global(.ai-session-model-menu__item--selected .ai-session-model-menu__check) {
+  color: hsl(var(--primary));
+}
+
+:global(.ai-session-model-menu__item:is(:focus, [data-highlighted])),
+:global(.ai-session-model-menu__provider-item[data-state="open"]) {
+  background: var(--surface-active);
+  color: var(--text-strong);
+}
+
+:global(.ai-session-model-menu--nested) {
+  width: min(220px, var(--reka-dropdown-menu-content-available-width));
+  max-height: min(360px, var(--reka-dropdown-menu-content-available-height));
+}
+
+:global(.ai-session-model-menu--nested .ai-session-model-menu__item) {
+  min-height: 32px;
+  gap: 8px;
+  padding: 5px 8px;
+}
+
+:global(.ai-session-model-menu--nested .ai-session-model-menu__copy strong) {
+  line-height: 16px;
+}
+
+:global(.ai-session-reasoning-menu) {
+  width: min(190px, var(--reka-dropdown-menu-content-available-width));
+}
+
+:global(.ai-session-reasoning-menu .ai-session-model-menu__item) {
+  min-height: 30px;
+}
+
 :global(.ai-session-permission-menu) {
   width: min(460px, calc(100vw - 24px));
   padding: 6px;
@@ -1092,16 +1572,6 @@ watch(() => props.busy, (busy) => {
 .ai-session-composer__primary:disabled {
   cursor: not-allowed;
   opacity: 0.55;
-}
-
-.ai-session-composer__error {
-  flex: 0 0 auto;
-  margin: 0;
-  padding: 0 14px 10px;
-  color: var(--ai-composer-danger, var(--status-danger));
-  font-size: 12px;
-  line-height: 1.4;
-  overflow-wrap: anywhere;
 }
 
 :global(.ai-session-mention-popover) {

@@ -2,7 +2,11 @@ import {
   applyAiSessionStreamEvent,
   type AiSessionStreamApplyResult,
   type AiSessionStreamEvent,
+  type AiSessionStatus,
+  type AiSessionDetail,
   type AiSessionSummary,
+  type AiSessionSummaryTurn,
+  type AiSessionTurn,
   type AiSessionUnreadState,
   type AiSessionsState,
 } from "@task-handoff/protocol/ai-sessions";
@@ -10,6 +14,19 @@ import type { ControlPlaneAiSessions } from "./ai-sessions.ts";
 
 export type AiSessionStatusGroup = "waiting" | "problem" | "active" | "idle";
 export type AiSessionStreamingMessageStatus = "streaming" | "complete" | "waiting" | "failed" | "interrupted";
+
+export function aiSessionElapsedSeconds(
+  startedAt: string | undefined,
+  endedAt: string | undefined,
+  active: boolean,
+  now = Date.now(),
+) {
+  if (!startedAt || (!endedAt && !active)) return undefined;
+  const startedAtMs = Date.parse(startedAt);
+  const endedAtMs = endedAt ? Date.parse(endedAt) : now;
+  if (!Number.isFinite(startedAtMs) || !Number.isFinite(endedAtMs) || endedAtMs < startedAtMs) return undefined;
+  return Math.floor((endedAtMs - startedAtMs) / 1_000);
+}
 
 export type AiSessionMessageIdentity = {
   instanceId: string;
@@ -74,6 +91,9 @@ export function aiSessionStableSortKey(session: AiSessionSummary) {
 }
 
 export function aiSessionLastUserMessageAt(session: AiSessionSummary) {
+  if (session.lastUserMessageAt && Number.isFinite(Date.parse(session.lastUserMessageAt))) {
+    return session.lastUserMessageAt;
+  }
   let latestValue: string | undefined;
   let latestTime = 0;
   for (const turn of session.turns || []) {
@@ -85,6 +105,52 @@ export function aiSessionLastUserMessageAt(session: AiSessionSummary) {
   }
   if (latestValue) return latestValue;
   return session.userPrompt?.trim() && Number.isFinite(Date.parse(session.startedAt)) ? session.startedAt : undefined;
+}
+
+export function mergeAiSessionSummaryTurnsWithDetail(
+  summaryTurns: readonly AiSessionSummaryTurn[] | undefined,
+  detailTurns: readonly AiSessionTurn[] | undefined,
+): Array<AiSessionSummaryTurn & Pick<AiSessionTurn, "userMessages">> | undefined {
+  if (summaryTurns === undefined) return detailTurns?.map((turn) => ({ ...turn }));
+  if (summaryTurns.length === 0) return [];
+  if (!detailTurns?.length) return [...summaryTurns];
+  const summaryById = new Map(summaryTurns.map((turn) => [turn.id, turn]));
+  const merged = detailTurns.map((detail) => {
+    const summary = summaryById.get(detail.id);
+    if (!summary) return { ...detail };
+    summaryById.delete(detail.id);
+    return { ...summary, ...(detail.userMessages ? { userMessages: detail.userMessages } : {}) };
+  });
+  merged.push(...summaryTurns.filter((turn) => summaryById.has(turn.id)));
+  return merged.slice(-50);
+}
+
+/**
+ * Joins a compact list row with an HTTP detail from the same detailRevision.
+ * Older producers do not expose detailRevision and still put the authoritative
+ * conversation fields in the list row, so only enrich their Turn metadata.
+ */
+export function mergeAiSessionSummaryWithDetail<Summary extends AiSessionSummary>(
+  summary: Summary,
+  detail: AiSessionDetail | AiSessionStatus,
+  turnBodies?: AiSessionStatus["turns"],
+): Summary {
+  const legacyTurns = "turns" in detail ? detail.turns : undefined;
+  const turns = turnBodies ?? legacyTurns;
+  if (!summary.detailRevision) {
+    const mergedTurns = mergeAiSessionSummaryTurnsWithDetail(summary.turns, turns);
+    return { ...summary, turns: mergedTurns } as Summary;
+  }
+  return {
+    ...summary,
+    appBindingKeys: detail.appBindingKeys,
+    cwd: detail.cwd,
+    error: detail.error,
+    providerMeta: detail.providerMeta,
+    queue: detail.queue,
+    subAgents: detail.subAgents,
+    turns,
+  } as Summary;
 }
 
 export function aiSessionLastUserMessageTime(session: AiSessionSummary) {
@@ -152,7 +218,13 @@ export function applyControlPlaneAiSessionStreamEvent(
     streamId: current.streamId,
     revision: current.revision ?? 0,
     lastEventAt: current.lastEventAt ?? current.aiSessions.updatedAt,
-    snapshot: current.aiSessions,
+    // `unread` belongs to the Control Plane projection, not the public AI
+    // Session stream protocol. Passing decorated sessions into the strict
+    // protocol reducer makes every partial patch fail schema validation.
+    snapshot: {
+      ...current.aiSessions,
+      sessions: current.aiSessions.sessions.map(({ unread: _unread, ...session }) => session),
+    },
   } : undefined;
   const result = applyAiSessionStreamEvent(projection, event);
   if (result.kind !== "applied") return { result, entry: current };

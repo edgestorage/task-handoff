@@ -1,40 +1,26 @@
 import crypto from "node:crypto";
+import { StandardReconnectBackoff } from "@task-handoff/core/core/reconnect";
 import type { CloudConnectivityService } from "./service.ts";
-
-export class BoundedReconnectBackoff {
-  private attempt = 0;
-  private readonly minimumMs: number;
-  private readonly maximumMs: number;
-  private readonly random: () => number;
-  constructor(minimumMs = 250, maximumMs = 30_000, random: () => number = Math.random) {
-    this.minimumMs = minimumMs; this.maximumMs = maximumMs; this.random = random;
-  }
-  next() {
-    const ceiling = Math.min(this.maximumMs, this.minimumMs * (2 ** this.attempt++));
-    return Math.max(this.minimumMs, Math.floor(ceiling * (0.5 + this.random() * 0.5)));
-  }
-  reset() { this.attempt = 0; }
-}
 
 type ManagedConnection = { close(reason?: string): Promise<void> | void };
 
 export class CloudControlConnectionManager {
   private connection?: ManagedConnection;
   readonly processInstanceId = `control_plane_process_${crypto.randomUUID().replaceAll("-", "_")}`;
-  private readonly backoff: BoundedReconnectBackoff;
+  private readonly backoff: StandardReconnectBackoff;
   private readonly options: {
     state: CloudConnectivityService;
     connector: { connect(input: Record<string, unknown>): Promise<ManagedConnection> };
     onEvent(event: unknown): Promise<void> | void;
-    backoff?: BoundedReconnectBackoff;
+    backoff?: StandardReconnectBackoff;
   };
 
   constructor(options: {
     state: CloudConnectivityService;
     connector: { connect(input: Record<string, unknown>): Promise<ManagedConnection> };
     onEvent(event: unknown): Promise<void> | void;
-    backoff?: BoundedReconnectBackoff;
-  }) { this.options = options; this.backoff = options.backoff ?? new BoundedReconnectBackoff(); }
+    backoff?: StandardReconnectBackoff;
+  }) { this.options = options; this.backoff = options.backoff ?? new StandardReconnectBackoff(); }
 
   async connectOnce() {
     const credential = this.options.state.backgroundCredential();
@@ -50,7 +36,7 @@ export class CloudControlConnectionManager {
     return { status: "connected" as const, epoch };
   }
 
-  reconnectDelay() { return this.backoff.next(); }
+  reconnectDelay() { return this.backoff.next().delay; }
 
   disconnected() { this.connection = undefined; }
 

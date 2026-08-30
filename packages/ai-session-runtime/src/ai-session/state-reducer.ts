@@ -2,6 +2,7 @@ import type {
   AiSessionRealtimeInput,
   AiSessionSnapshotInput,
   AiSessionStatus,
+  AiSessionUserMessageDetail,
 } from "@task-handoff/protocol/ai-sessions";
 import {
   compact,
@@ -32,6 +33,8 @@ export type AiSessionPatch = Partial<
     | "providerSessionId"
     | "lineage"
     | "providerMeta"
+    | "modelSelection"
+    | "reasoningEffort"
     | "appBindingKeys"
     | "actions"
     | "activeTurnId"
@@ -56,6 +59,7 @@ export type AiSessionPatch = Partial<
   >
 > & {
   counters?: Partial<AiSessionStatus["counters"]>;
+  userMessage?: AiSessionUserMessageDetail;
 };
 
 export type ApplyAiSessionPatchOptions = {
@@ -78,7 +82,7 @@ function latestTurnUserPrompt(turns: AiSessionStatus["turns"]) {
  * Applies a state patch without persistence, clock access, id generation, or
  * event emission. Callers must supply updatedAt when they want to advance time.
  */
-export function applyAiSessionPatch(
+function buildAiSessionPatch(
   current: AiSessionStatus,
   patch: AiSessionPatch,
   options: ApplyAiSessionPatchOptions = {},
@@ -92,10 +96,10 @@ export function applyAiSessionPatch(
   const updatedAt = options.preserveUpdatedAt ? current.updatedAt : options.updatedAt ?? current.updatedAt;
   const turnPatch = options.suppressPromptTurn ? { ...patch, userPrompt: undefined } : patch;
   const turns = options.suppressTurnUpdate
-    ? normalizeTurns(options.replaceTurns ? undefined : current.turns)
+    ? options.replaceTurns ? normalizeTurns(undefined) : current.turns
     : updateTurns(options.replaceTurns ? undefined : current.turns, turnPatch, updatedAt, options.meta);
   const prompt = patch.userPrompt ? messageText(patch.userPrompt) : "";
-  const latestTurn = turns.at(-1);
+  const latestTurn = turns?.at(-1);
   const derivedUserPrompt = latestTurnUserPrompt(turns);
   const startsEmptyTurn = Boolean(
     prompt &&
@@ -104,17 +108,27 @@ export function applyAiSessionPatch(
     !latestTurn.summary &&
     !latestTurn.lastMessage
   );
+  const status = patch.status ? normalizeAiSessionLifecycle(patch.status) : current.status;
+  const actions = {
+    ...(patch.actions || current.actions),
+    // Action availability is part of the lifecycle projection. Adapter snapshots
+    // often record interrupt=false while idle; a realtime turn start must not
+    // carry that stale value into the running state.
+    interrupt: status === "running" || status === "waiting",
+  };
 
+  const { userMessage: _userMessage, ...sessionPatch } = patch;
   return {
     ...current,
-    ...patch,
+    ...sessionPatch,
     id: current.id,
     agent: current.agent,
     creationSource: current.creationSource,
     startedAt: current.startedAt,
     updatedAt,
-    status: patch.status ? normalizeAiSessionLifecycle(patch.status) : current.status,
+    status,
     phase: patch.phase ? normalizeAiSessionPhase(patch.phase) : current.phase,
+    actions,
     summary: options.replaceActivity
       ? patch.summary ? compact(patch.summary, 1000) : undefined
       : options.clearResponse
@@ -134,6 +148,87 @@ export function applyAiSessionPatch(
     queue: patch.queue ? normalizeAiSessionQueue(patch.queue) : current.queue,
     subAgents: patch.subAgents !== undefined ? normalizeAiSessionSubAgents(patch.subAgents) : current.subAgents,
   };
+}
+
+export function applyAiSessionPatch(
+  current: AiSessionStatus,
+  patch: AiSessionPatch,
+  options: ApplyAiSessionPatchOptions = {},
+): AiSessionStatus {
+  return buildAiSessionPatch(current, patch, options);
+}
+
+type AiSessionBusinessKey = Exclude<keyof AiSessionStatus, "updatedAt">;
+
+const AI_SESSION_BUSINESS_KEYS = [
+  "id",
+  "agent",
+  "creationSource",
+  "appSessionId",
+  "appId",
+  "providerSessionId",
+  "lineage",
+  "providerMeta",
+  "modelSelection",
+  "reasoningEffort",
+  "appBindingKeys",
+  "actions",
+  "activeTurnId",
+  "title",
+  "cwd",
+  "cwdFolderId",
+  "userPrompt",
+  "turns",
+  "status",
+  "phase",
+  "summary",
+  "lastMessage",
+  "lastMessageItemId",
+  "currentTool",
+  "toolCallsSinceLastMessage",
+  "subAgents",
+  "transcriptPath",
+  "transcriptSize",
+  "startedAt",
+  "completedAt",
+  "error",
+  "counters",
+  "queue",
+] as const satisfies readonly AiSessionBusinessKey[];
+
+// Keep this list exhaustive when the persisted session model grows.
+const _allAiSessionBusinessKeysCovered: Exclude<AiSessionBusinessKey, typeof AI_SESSION_BUSINESS_KEYS[number]> extends never ? true : never = true;
+void _allAiSessionBusinessKeysCovered;
+
+export function sameAiSessionBusinessState(current: AiSessionStatus, next: AiSessionStatus) {
+  for (const key of AI_SESSION_BUSINESS_KEYS) {
+    const currentValue = current[key];
+    const nextValue = next[key];
+    if (Object.is(currentValue, nextValue)) continue;
+    // Provider discovery may reconstruct an equivalent turn array. Identity is
+    // an implementation detail; only the normalized persisted value advances
+    // the authoritative session and its updatedAt timestamp.
+    if (!samePersistedValue(currentValue, nextValue)) return false;
+  }
+  return true;
+}
+
+function samePersistedValue(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+    return left.every((value, index) => samePersistedValue(value ?? null, right[index] ?? null));
+  }
+  if (left && right && typeof left === "object" && typeof right === "object") {
+    const leftRecord = left as Record<string, unknown>;
+    const rightRecord = right as Record<string, unknown>;
+    const leftKeys = Object.keys(leftRecord).filter((key) => leftRecord[key] !== undefined);
+    const rightKeys = Object.keys(rightRecord).filter((key) => rightRecord[key] !== undefined);
+    if (leftKeys.length !== rightKeys.length) return false;
+    return leftKeys.every((key) => Object.prototype.hasOwnProperty.call(rightRecord, key)
+      && samePersistedValue(leftRecord[key], rightRecord[key]));
+  }
+  return false;
 }
 
 function canonicalRealtimeTurnId(
@@ -169,7 +264,22 @@ export function reduceAiSessionRealtime(
       status: event.status || "running",
       phase: event.phase || "thinking",
       userPrompt,
+      userMessage: event.userMessage,
     }, { updatedAt, meta, clearError: true });
+  }
+  if (event.kind === "model-selection") {
+    return applyAiSessionPatch(current, { modelSelection: event.modelSelection }, {
+      updatedAt,
+      meta,
+      suppressTurnUpdate: true,
+    });
+  }
+  if (event.kind === "reasoning-effort") {
+    return applyAiSessionPatch(current, { reasoningEffort: event.reasoningEffort }, {
+      updatedAt,
+      meta,
+      suppressTurnUpdate: true,
+    });
   }
   if (event.kind === "lifecycle") {
     const status = event.status || current.status;
@@ -196,6 +306,7 @@ export function reduceAiSessionRealtime(
       status: event.status || "running",
       phase: event.phase || "thinking",
       userPrompt: event.userPrompt,
+      userMessage: event.userMessage,
     }, { updatedAt, meta, clearError: true });
   }
   if (event.kind === "assistant-message") {
@@ -262,11 +373,12 @@ export function reduceAiSessionRealtime(
   }
   if (event.kind === "turn-completed") {
     const error = event.error ? compact(event.error, 4000) : undefined;
-    const responseText = event.text || event.summary || (event.status === "failed" ? error : undefined);
+    const responseText = event.text || event.summary;
     return applyAiSessionPatch(current, {
       activeTurnId: !event.activeTurnId || event.activeTurnId === current.activeTurnId ? undefined : current.activeTurnId,
       status: event.status || "idle",
       phase: event.phase || "unknown",
+      completedAt: event.observedAt || updatedAt,
       summary: responseText,
       lastMessage: responseText,
       error,
@@ -303,12 +415,14 @@ export function reduceAiSessionSnapshot(
   );
   const replaceAppBinding = isAuthoritativeAppBindingSnapshot(event);
 
-  return applyAiSessionPatch(current, {
+  const next = buildAiSessionPatch(current, {
     appSessionId: replaceAppBinding ? event.appSessionId : event.appSessionId || current.appSessionId,
     appId: event.appId || current.appId,
     providerSessionId: event.providerSessionId || current.providerSessionId,
     lineage: current.lineage || event.lineage,
     providerMeta: event.providerMeta || current.providerMeta,
+    modelSelection: event.modelSelection || current.modelSelection,
+    reasoningEffort: event.reasoningEffort || current.reasoningEffort,
     appBindingKeys: replaceAppBinding ? event.appBindingKeys : event.appBindingKeys || current.appBindingKeys,
     actions: event.actions || current.actions,
     activeTurnId: nextActiveTurnId(current, event, staleActivitySnapshot),
@@ -358,4 +472,5 @@ export function reduceAiSessionSnapshot(
       !event.lastMessage
     ),
   });
+  return sameAiSessionBusinessState(current, next) ? current : next;
 }

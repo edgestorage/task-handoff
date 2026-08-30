@@ -12,7 +12,8 @@ const autoScroll = fs.readFileSync(new URL("../src/components/ai-session/aiSessi
 test("ai session card navigation stops at the first and last messages", () => {
   assert.match(card, /:disabled="promptIndex <= 0"/);
   assert.match(card, /:disabled="promptIndex >= promptCount - 1"/);
-  assert.match(board, /index: Math\.min\(Math\.max\(index, 0\), count - 1\)/);
+  assert.match(board, /const targetIndex = Math\.min\(Math\.max\(index, 0\), count - 1\)/);
+  assert.match(board, /\[card\.key\]: \{ index: targetIndex, count \}/);
   assert.doesNotMatch(board, /\(index \+ count\) % count/);
 });
 

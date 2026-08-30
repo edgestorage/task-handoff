@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ActivityIndicator, Keyboard, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Keyboard, Linking, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { router, Stack } from 'expo-router';
 
 import { Screen } from '../../src/components/Screen';
@@ -31,11 +31,13 @@ export default function AddControlPlaneScreen() {
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const [passwordChangeRequired, setPasswordChangeRequired] = useState(false);
 
   const verifyAddress = async () => {
     Keyboard.dismiss();
     setBusy(true);
     setError(undefined);
+    setPasswordChangeRequired(false);
     try {
       const verified = await probeDirectControlPlane(address, { allowInsecureHttp: isMobileTestMode });
       const saved = await profiles.list();
@@ -58,12 +60,14 @@ export default function AddControlPlaneScreen() {
     Keyboard.dismiss();
     setBusy(true);
     setError(undefined);
+    setPasswordChangeRequired(false);
     try {
       const profile = await loginDirectControlPlane(target, { username: username.trim(), password }, secureStore);
       await profiles.put(profile);
       setPassword('');
       router.replace('/(tabs)/(main)/inbox');
     } catch (cause) {
+      setPasswordChangeRequired(cause instanceof DirectEnrollmentError && cause.code === 'AUTH_PASSWORD_CHANGE_REQUIRED');
       setError(messageFor(cause, t));
     } finally {
       setBusy(false);
@@ -163,7 +167,7 @@ export default function AddControlPlaneScreen() {
                   autoCapitalize="none"
                   autoCorrect={false}
                   editable={!busy}
-                  onChangeText={(value) => { setUsername(value); setError(undefined); }}
+                  onChangeText={(value) => { setUsername(value); setError(undefined); setPasswordChangeRequired(false); }}
                   placeholder={t('enroll.username')}
                   placeholderTextColor={colors.textMuted}
                   returnKeyType="next"
@@ -178,7 +182,7 @@ export default function AddControlPlaneScreen() {
                 <TextInput
                   accessibilityLabel={t('enroll.password')}
                   editable={!busy}
-                  onChangeText={(value) => { setPassword(value); setError(undefined); }}
+                  onChangeText={(value) => { setPassword(value); setError(undefined); setPasswordChangeRequired(false); }}
                   onSubmitEditing={() => { if (username.trim() && password && !busy) void connect(); }}
                   placeholder={t('enroll.password')}
                   placeholderTextColor={colors.textMuted}
@@ -197,7 +201,7 @@ export default function AddControlPlaneScreen() {
         ) : null}
 
         {busy ? <View style={styles.busyRow}><ActivityIndicator accessibilityLabel={step === 'address' ? t('enroll.verifying') : t('enroll.connecting')} /><Text style={[styles.busyText, { color: colors.textMuted }]}>{step === 'address' ? t('enroll.verifyingIdentity') : t('enroll.signingIn')}</Text></View> : null}
-        {error ? <View style={[styles.errorGroup, { backgroundColor: colors.errorSoft }]}><SystemIcon android="error" color={colors.error} ios="exclamationmark.circle.fill" size={18} /><Text accessibilityLiveRegion="polite" style={[styles.error, { color: colors.error }]}>{error}</Text></View> : null}
+        {error ? <View style={[styles.errorGroup, { backgroundColor: colors.errorSoft }]}><SystemIcon android="error" color={colors.error} ios="exclamationmark.circle.fill" size={18} /><View style={styles.errorContent}><Text accessibilityLiveRegion="polite" style={[styles.error, { color: colors.error }]}>{error}</Text>{passwordChangeRequired && target ? <NativeActionButton compact label={t('enroll.openPasswordChange')} onPress={() => { void Linking.openURL(target.origin).catch((cause) => setError(messageFor(cause, t))); }} /> : null}</View></View> : null}
       </Screen>
     </>
   );
@@ -241,6 +245,7 @@ function descriptionFor(step: EnrollmentStep, t: Translate) {
 }
 
 function messageFor(cause: unknown, t: Translate) {
+  if (cause instanceof DirectEnrollmentError && cause.code === 'AUTH_PASSWORD_CHANGE_REQUIRED') return t('enroll.passwordChangeRequired');
   if (cause instanceof DirectEnrollmentError) return cause.message;
   return cause instanceof Error ? cause.message : t('enroll.error');
 }
@@ -260,6 +265,7 @@ const styles = StyleSheet.create({
   notice: { alignItems: 'flex-start', borderRadius: 12, flexDirection: 'row', gap: 9, paddingHorizontal: 12, paddingVertical: 11 },
   noticeText: { flex: 1, fontSize: 13, lineHeight: 18 },
   noticeStrong: { fontWeight: '700' },
+  errorContent: { flex: 1, gap: 9 },
   divider: { height: StyleSheet.hairlineWidth },
   dividerInset: { marginLeft: 44 },
   identityRow: { alignItems: 'center', flexDirection: 'row', gap: 12, minHeight: 61, paddingHorizontal: 14, paddingVertical: 9 },
@@ -273,5 +279,5 @@ const styles = StyleSheet.create({
   busyRow: { alignItems: 'center', flexDirection: 'row', gap: 9, justifyContent: 'center', minHeight: 32 },
   busyText: { fontSize: 13 },
   errorGroup: { alignItems: 'flex-start', borderRadius: 12, flexDirection: 'row', gap: 9, padding: 12 },
-  error: { flex: 1, fontSize: 13, lineHeight: 19 },
+  error: { fontSize: 13, lineHeight: 19 },
 });

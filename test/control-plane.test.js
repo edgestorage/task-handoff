@@ -5,13 +5,15 @@ const http = require("node:http");
 const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
+const { DatabaseSync } = require("node:sqlite");
 const { spawn } = require("node:child_process");
 const { EventEmitter } = require("node:events");
+const zlib = require("node:zlib");
 const test = require("node:test");
 const WebSocket = require("ws");
 const { z } = require("zod");
 
-const { createControlPlaneApp, replaceControlPlaneCredentials, routeAuthorization } = require("../packages/control-plane/src/server.ts");
+const { createControlPlaneApp, initializeControlPlaneCredentials, replaceControlPlaneCredentials, routeAuthorization } = require("../packages/control-plane/src/server.ts");
 const { connectReverseTunnel, createNodeAgentApp, createReverseTunnelManager, listenNodeAgentIpcServer, mergeRuntimeLifecycleResult, NodeAgentExternalListenerManager, requestRuntimeAppSessionDrain, resolvedDockerImageUpdatePatch, runtimeVersionStateForActual } = require("../packages/control-plane/src/node-agent.ts");
 const { ControlPlaneChatGatewayRuntime, aiSessionDeliveryText, createDingdingStreamClient } = require("../packages/control-plane/src/chat-gateway.ts");
 const { ControlledInstanceGateway } = require("../packages/control-plane/src/control-plane/instances/gateway.ts");
@@ -42,6 +44,7 @@ const { acquireControlPlaneSingletonLock } = require("../packages/control-plane/
 const { acquireNodeAgentSingletonLock } = require("../packages/control-plane/src/node-agent/process/singleton-lock.ts");
 const { EventConnectionRetryTimer, eventConnectionRetryDelay, eventConnectionSafetyIntervalMs } = require("../packages/control-plane/src/shared/events/connection-retry.ts");
 const { JsonCollection, JsonFile } = require("../packages/control-plane/src/shared/persistence/store.ts");
+const { controlPlaneStorePaths } = require("../packages/control-plane/src/control-plane/persistence/paths.ts");
 const { nodeAgentStorePaths } = require("../packages/control-plane/src/node-agent/persistence/paths.ts");
 const { aiSessionUserPrompts, displayAiSessionMessage, displayAiSessionTitle, launchableAppsForInstance: uiLaunchableAppsForInstance } = require("../packages/control-plane-ui/src/apps/control-plane/useInstanceSessions.ts");
 const { launchableAppsForInstance: chatLaunchableAppsForInstance } = require("../packages/control-plane/src/control-plane/chat/rendering.ts");
@@ -49,7 +52,7 @@ const { AiSessionEventType, AiSessionEventTopic, AiSessionUnreadEventType } = re
 const { AppSessionEventType, normalizeAppSessionRecord, normalizeAppSessionStatus } = require("../packages/protocol/src/app-sessions.ts");
 const { ApplyUpdateRequestSchema, CONTROL_PLANE_PROTOCOL_VERSION, ControlledInstanceHeartbeatSchema, ControlledInstanceRegisterSchema, ControlledInstanceSchema, InstanceAppInventorySchema, InstanceLifecycleEventType, RuntimeArtifactIdentitySchema, RuntimeVersionStateSchema, UpdateCheckRequestSchema, UpdateJobSchema, decodeNodeTunnelRequestBody, modelConfigHash, parseStoredControlledInstance, sanitizeStoredControlledInstance } = require("../packages/protocol/src/control-plane.ts");
 const { ChatActionTokenService, parsePendingDecisionCallbackData, pendingDecisionRouteFingerprint } = require("../packages/control-plane/src/control-plane/chat/action-token-service.ts");
-const { ControlPlanePublicIdentityDocumentSchema, ControlPlanePublicIdentityPayloadSchema, controlPlaneIdentitySigningInput } = require("../packages/protocol/src/control-plane-access.ts");
+const { CONTROL_PLANE_PERMISSION_IDS, ControlPlanePublicIdentityDocumentSchema, ControlPlanePublicIdentityPayloadSchema, controlPlaneIdentitySigningInput } = require("../packages/protocol/src/control-plane-access.ts");
 
 const controlledProcessIdentityRouteStubLines = [
   "  if (req.url === '/api/health') { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ data: { ok: true } })); return; }",
@@ -89,7 +92,7 @@ test("runtime app-session drain prefers managed bulk drain and falls back across
   const bulk = await requestRuntimeAppSessionDrain(async (url, init) => {
     bulkCalls.push([String(url), init?.method, init?.headers]);
     return new Response(JSON.stringify({ data: { drained: true } }), { status: 200, headers: { "content-type": "application/json" } });
-  }, baseInstance);
+  }, baseInstance, async () => baseInstance.target.web);
   assert.equal(bulk.requested, 2);
   assert.deepEqual(bulk.failures, []);
   assert.equal(bulkCalls.length, 1);
@@ -114,7 +117,7 @@ test("runtime app-session drain prefers managed bulk drain and falls back across
       }), { status: 200, headers: { "content-type": "application/json" } });
     }
     return new Response(JSON.stringify({ data: { status: "stopped" } }), { status: 200, headers: { "content-type": "application/json" } });
-  }, baseInstance);
+  }, baseInstance, async () => baseInstance.target.web);
   assert.equal(fallback.requested, 1);
   assert.deepEqual(fallback.failures, []);
   assert.deepEqual(fallbackCalls, [
@@ -136,6 +139,35 @@ test("control plane reports the explicit packaged version in health", async (t) 
   const health = await app.inject({ method: "GET", url: "/api/health" });
   assert.equal(health.statusCode, 200);
   assert.equal(health.json().data.build.packageVersion, "9.8.7");
+});
+
+test("control plane compresses large JSON responses but leaves small responses uncompressed", async (t) => {
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-response-compression"),
+    logger: false,
+    auth: { mode: "disabled" },
+  });
+  t.after(() => app.close());
+  app.get("/api/test-large-json-response", async () => ({ data: "x".repeat(10_000) }));
+
+  const large = await app.inject({
+    method: "GET",
+    url: "/api/test-large-json-response",
+    headers: { "accept-encoding": "gzip, deflate, br" },
+  });
+  assert.equal(large.statusCode, 200);
+  assert.equal(large.headers["content-encoding"], "br");
+  assert.equal(large.headers.vary, "accept-encoding");
+  assert.ok(large.rawPayload.length < 1000);
+  assert.deepEqual(JSON.parse(zlib.brotliDecompressSync(large.rawPayload).toString("utf8")), { data: "x".repeat(10_000) });
+
+  const small = await app.inject({
+    method: "GET",
+    url: "/api/health",
+    headers: { "accept-encoding": "gzip, deflate, br" },
+  });
+  assert.equal(small.statusCode, 200);
+  assert.equal(small.headers["content-encoding"], undefined);
 });
 
 test("pending decision callbacks are stable and resolved from the current route", () => {
@@ -238,7 +270,7 @@ function testManagedVolumeInspection(instanceId, name) {
   return { Name: name, Labels: volume.labels };
 }
 
-test("runtime lifecycle result preserves a newer registration heartbeat", () => {
+test("runtime lifecycle result preserves a newer process report and the adapter-owned target", () => {
   const baseline = ControlledInstanceSchema.parse({
     id: "inst_start_race",
     name: "start race",
@@ -297,7 +329,7 @@ test("runtime lifecycle result preserves a newer registration heartbeat", () => 
   assert.equal(merged.health, "ok");
   assert.equal(merged.agentStatus, "online");
   assert.equal(merged.ready, true);
-  assert.equal(merged.target.web, "http://instance:8080");
+  assert.equal(merged.target.web, "http://127.0.0.1:32000");
   assert.equal(merged.workspace.status, "ready");
   assert.equal(merged.runtime.containerName, "task-handoff-inst_start_race");
 });
@@ -368,7 +400,11 @@ function testAppInventory(apps, observedAt = new Date().toISOString()) {
 }
 
 test("controlled instance heartbeat protocol rejects legacy receiver projection", () => {
-  assert.equal(CONTROL_PLANE_PROTOCOL_VERSION, "2026-08-17");
+  assert.equal(CONTROL_PLANE_PROTOCOL_VERSION, "2026-08-27");
+  // Compatibility for v0.0.21: advancing the current protocol must not relax
+  // the appInventory requirement of an already released wire version.
+  assert.equal(ControlledInstanceHeartbeatSchema.safeParse({ protocolVersion: "2026-08-17" }).success, false);
+  assert.equal(ControlledInstanceRegisterSchema.safeParse({ protocolVersion: "2026-08-17" }).success, false);
   assert.equal(ControlledInstanceHeartbeatSchema.safeParse({ protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, receiver: { status: "running", pendingCount: 1 } }).success, false);
   assert.equal(ControlledInstanceHeartbeatSchema.safeParse({ protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, apps: { runningCount: 1 } }).success, false);
   assert.equal(ControlledInstanceHeartbeatSchema.safeParse({ protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION, appInventory: emptyAppInventory(), apps: { runningCount: 1 } }).success, true);
@@ -547,11 +583,17 @@ test("app inventory protocol is strict and stored legacy app capability is disca
     tty: true,
     gui: false,
     browser: false,
+    browserTunnel: false,
     screenshots: false,
     logs: false,
     aiSessionWorkspaceSelection: false,
     aiSessionPersistenceSettings: false,
+    privateModelCatalog: false,
+    gitCliCredentialBroker: false,
+    gitCredentialProxy: false,
     aiSessionTimeline: { sessionReadAgents: [], turnReadAgents: [], liveItemAgents: [] },
+    aiSessionConversationAttachments: { metadataAgents: [], contentAgents: [], uploadAgents: [], retentionSettings: false, fileSizeLimitSettings: false },
+    aiSessionProviders: [],
   } });
   assert.deepEqual(warnings, [{ instanceId: "inst_legacy_apps", field: "capabilities.apps" }]);
 });
@@ -581,6 +623,23 @@ function tempDataDir(name) {
   return fs.mkdtempSync(path.join(os.tmpdir(), `task-handoff-${name}-`));
 }
 
+function installTestLocalRuntimeTarget(app, instanceId, port) {
+  const current = app.nodeAgentState.requireInstance(instanceId);
+  app.nodeAgentState.controlledInstances.put(ControlledInstanceSchema.parse({
+    ...current,
+    runtimeId: "runtime_local_host",
+    runtime: { kind: "local", port, labels: { "task-handoff.runtime-kind": "local" } },
+    target: {
+      strategy: "direct-port",
+      status: "reachable",
+      web: `http://127.0.0.1:${port}`,
+      api: `http://127.0.0.1:${port}/api`,
+    },
+    targetStatus: "reachable",
+    uiAccessStatus: "reachable",
+  }));
+}
+
 async function json(app, method, url, payload, headers) {
   const response = await app.inject({
     method,
@@ -591,6 +650,7 @@ async function json(app, method, url, payload, headers) {
   return {
     statusCode: response.statusCode,
     body: response.json(),
+    headers: response.headers,
   };
 }
 
@@ -783,6 +843,110 @@ test("session aggregators never let an older bootstrap overwrite realtime state"
   const refreshed = await appAggregator.list({ refresh: true });
   assert.equal(refreshed.instances[0].revision, 2);
   assert.deepEqual(refreshed.instances[0].appSessions.sessions.map((session) => session.id), ["current"]);
+});
+
+test("session aggregator refresh broadcasts every snapshot that advances the shared revision", async () => {
+  const timestamp = new Date().toISOString();
+  const aiEvents = [];
+  const aiSnapshot = aiSessionSnapshotPayload(
+    { sessions: [] },
+    { instanceId: "inst_ai_refresh", streamId: "ai_refresh_stream", revision: 2, generatedAt: timestamp },
+  );
+  const aiAggregator = new ControlPlaneAiSessionAggregator({
+    bootstrap: async () => ({
+      instances: [{
+        instanceId: "inst_ai_refresh",
+        streamId: "ai_refresh_stream",
+        revision: 2,
+        lastEventAt: timestamp,
+        aiSessions: aiSnapshot.snapshot,
+      }],
+    }),
+    onRecoveredEvent: (event) => aiEvents.push(event),
+  });
+
+  const aiView = await aiAggregator.list({ refresh: true });
+  assert.equal(aiView.instances[0].revision, 2);
+  assert.equal(aiEvents.length, 1);
+  assert.equal(aiEvents[0].type, AiSessionEventType.Snapshot);
+  assert.equal(aiEvents[0].payload.meta.revision, 2);
+  assert.equal(aiAggregator.applySnapshot(aiSnapshot), false, "the later WS copy remains idempotent");
+
+  const appEvents = [];
+  const appSnapshot = appSessionSnapshotPayload(
+    { sessions: [{ id: "terminal_1", status: "running" }] },
+    { instanceId: "inst_app_refresh", streamId: "app_refresh_stream", revision: 3, generatedAt: timestamp },
+  );
+  const appAggregator = new ControlPlaneAppSessionAggregator({
+    bootstrap: async () => ({
+      instances: [{
+        instanceId: "inst_app_refresh",
+        streamId: "app_refresh_stream",
+        revision: 3,
+        lastEventAt: timestamp,
+        appSessions: appSnapshot.snapshot,
+      }],
+    }),
+    onRecoveredEvent: (event) => appEvents.push(event),
+  });
+
+  const appView = await appAggregator.list({ refresh: true });
+  assert.equal(appView.instances[0].revision, 3);
+  assert.equal(appEvents.length, 1);
+  assert.equal(appEvents[0].type, AppSessionEventType.Snapshot);
+  assert.equal(appEvents[0].payload.meta.revision, 3);
+  assert.equal(appAggregator.applySnapshot(appSnapshot), false, "the later WS copy remains idempotent");
+});
+
+test("session aggregator refresh scopes recovery and response to one controlled instance", async () => {
+  const timestamp = new Date().toISOString();
+  const aiTarget = aiSessionSnapshotPayload(
+    { sessions: [{ id: "ai_target", agent: "codex", status: "idle", phase: "unknown", startedAt: timestamp, updatedAt: timestamp, queue: { pendingCount: 0, items: [] } }] },
+    { instanceId: "inst_target", streamId: "ai_target_stream", revision: 2, generatedAt: timestamp },
+  );
+  let aiBootstrapCount = 0;
+  const aiRecovered = [];
+  const aiAggregator = new ControlPlaneAiSessionAggregator({
+    bootstrap: async () => { aiBootstrapCount += 1; return { instances: [] }; },
+    recoverSnapshot: async (instanceId) => {
+      aiRecovered.push(instanceId);
+      return { streamId: aiTarget.meta.streamId, revision: aiTarget.meta.revision, lastEventAt: timestamp, snapshot: aiTarget.snapshot };
+    },
+  });
+  aiAggregator.applySnapshot(aiSessionSnapshotPayload(
+    { sessions: [] },
+    { instanceId: "inst_other", streamId: "ai_other_stream", revision: 1, generatedAt: timestamp },
+  ));
+
+  const aiView = await aiAggregator.list({ refresh: true, instanceId: "inst_target" });
+  assert.deepEqual(aiRecovered, ["inst_target"]);
+  assert.equal(aiBootstrapCount, 0);
+  assert.deepEqual(aiView.instances.map((entry) => entry.instanceId), ["inst_target"]);
+  assert.equal(aiView.instances[0].revision, 2);
+
+  const appTarget = appSessionSnapshotPayload(
+    { sessions: [{ id: "app_target", status: "running" }] },
+    { instanceId: "inst_target", streamId: "app_target_stream", revision: 3, generatedAt: timestamp },
+  );
+  let appBootstrapCount = 0;
+  const appRecovered = [];
+  const appAggregator = new ControlPlaneAppSessionAggregator({
+    bootstrap: async () => { appBootstrapCount += 1; return { instances: [] }; },
+    recoverSnapshot: async (instanceId) => {
+      appRecovered.push(instanceId);
+      return { streamId: appTarget.meta.streamId, revision: appTarget.meta.revision, lastEventAt: timestamp, snapshot: appTarget.snapshot };
+    },
+  });
+  appAggregator.applySnapshot(appSessionSnapshotPayload(
+    { sessions: [] },
+    { instanceId: "inst_other", streamId: "app_other_stream", revision: 1, generatedAt: timestamp },
+  ));
+
+  const appView = await appAggregator.list({ refresh: true, instanceId: "inst_target" });
+  assert.deepEqual(appRecovered, ["inst_target"]);
+  assert.equal(appBootstrapCount, 0);
+  assert.deepEqual(appView.instances.map((entry) => entry.instanceId), ["inst_target"]);
+  assert.equal(appView.instances[0].revision, 3);
 });
 
 test("controlled instance gateway preserves structured remote errors for every proxied route", async () => {
@@ -1450,6 +1614,10 @@ function createMockNodeAgentFetch(options = {}) {
     if (path === "/folders/tree") {
       return jsonResponse(options.folderTree || []);
     }
+    if (path === "/folders/places") {
+      if (options.folderPlacesUnsupported) return errorResponse("Folder places are unavailable.", 404, "NOT_FOUND");
+      return jsonResponse(options.folderPlaces || []);
+    }
     if (path === "/local-folders" && init.method === "POST") {
       const folder = {
         id: body.id || `folder_${folders.length + 1}`,
@@ -1463,6 +1631,15 @@ function createMockNodeAgentFetch(options = {}) {
       };
       folders.push(folder);
       return jsonResponse(folder, 201);
+    }
+    const folderUpdate = path.match(/^\/local-folders\/([^/]+)$/);
+    if (folderUpdate && init.method === "PATCH") {
+      const id = decodeURIComponent(folderUpdate[1]);
+      const index = folders.findIndex((folder) => folder.id === id);
+      if (index < 0) return errorResponse(`Local folder ${id} was not found.`, 404, "NODE_LOCAL_FOLDER_NOT_FOUND");
+      const fallbackName = folders[index].path.replace(/[\\/]+$/, "").split(/[\\/]+/).filter(Boolean).at(-1) || folders[index].path;
+      folders[index] = { ...folders[index], name: body.name.trim() || fallbackName, updatedAt: timestamp };
+      return jsonResponse(folders[index]);
     }
     if (path === "/models" && (!init.method || init.method === "GET")) {
       if (options.modelsError) throw options.modelsError;
@@ -1546,7 +1723,8 @@ function createMockNodeAgentFetch(options = {}) {
         modelSelection: body.modelSelection || {},
         nodeId,
         runtimeId: body.runtimeId,
-        imageSelection: body.imageSelection,
+        environmentSource: body.environmentSource,
+        imageSelection: body.imageSelection || (body.environmentSource?.type === "image" ? body.environmentSource.imageSelection : undefined),
         imageSnapshot: body.image,
         status: "created",
         health: "unknown",
@@ -1588,9 +1766,13 @@ function createMockNodeAgentFetch(options = {}) {
       const id = decodeURIComponent(instanceModelAssignment[1]);
       const current = instances.get(id);
       if (!current) return errorResponse(`Instance ${id} was not found.`, 404, "NODE_INSTANCE_NOT_FOUND");
-      const instance = { ...current, modelSelection: body.modelSelection, updatedAt: timestamp };
+      const modelSelection = body.modelSelection || {
+        ...(body.codexModelHash !== undefined ? { codexModelHash: body.codexModelHash } : {}),
+        ...(body.claudeModelHash !== undefined ? { claudeModelHash: body.claudeModelHash } : {}),
+      };
+      const instance = { ...current, modelSelection, updatedAt: timestamp };
       instances.set(id, instance);
-      for (const modelHash of [body.codexModelHash, body.claudeModelHash]) {
+      for (const modelHash of [modelSelection.codexModelHash, modelSelection.claudeModelHash]) {
         if (modelHash && nodeModels.has(modelHash)) {
           const model = nodeModels.get(modelHash);
           nodeModels.set(modelHash, { ...model, referenceCount: model.referenceCount + 1 });
@@ -1830,7 +2012,7 @@ test("control plane password auth protects APIs and supports bootstrap login log
       password: "password123",
     });
     assert.equal(bootstrap.statusCode, 201);
-    assert.equal(bootstrap.body.data.username, "admin");
+    assert.equal(bootstrap.body.data.primaryUsername, "admin");
 
     const login = await app.inject({
       method: "POST",
@@ -1851,8 +2033,8 @@ test("control plane password auth protects APIs and supports bootstrap login log
     const session = await json(app, "GET", "/api/auth/session", undefined, { cookie });
     assert.equal(session.statusCode, 200);
     assert.equal(session.body.data.authenticated, true);
-    assert.equal(session.body.data.user.username, "admin");
-    assert.equal(session.body.data.user.role, "admin");
+    assert.equal(session.body.data.user.primaryUsername, "admin");
+    assert.deepEqual(session.body.data.authorization.roleIds, ["role_admin"]);
 
     const logout = await app.inject({
       method: "POST",
@@ -1916,7 +2098,7 @@ test("control plane password change verifies the current password, renews Web, a
   assert.equal(changed.statusCode, 200, changed.body);
   const renewedCookie = changed.headers["set-cookie"];
   assert.ok(renewedCookie);
-  assert.equal(changed.json().data.user.username, "admin");
+  assert.equal(changed.json().data.user.primaryUsername, "admin");
 
   assert.equal((await app.inject({ method: "GET", url: "/api/projects", headers: { cookie: firstCookie } })).statusCode, 401);
   assert.equal((await app.inject({ method: "GET", url: "/api/projects", headers: { cookie: secondCookie } })).statusCode, 401);
@@ -1947,13 +2129,60 @@ test("offline credential replacement reads v0.0.17 account records and revokes e
     { username: "operator", password: "password456" },
     { lockPath },
   );
-  assert.equal(user.username, "operator");
+  assert.equal(user.primaryUsername, "operator");
 
   app = await createControlPlaneApp({ dataDir, logger: false, auth: { mode: "password" } });
   try {
     assert.equal((await app.inject({ method: "GET", url: "/api/projects", headers: { cookie: oldCookie } })).statusCode, 401);
     assert.equal((await app.inject({ method: "POST", url: "/api/auth/login", payload: { username: "admin", password: "password123" } })).statusCode, 401);
     assert.equal((await app.inject({ method: "POST", url: "/api/auth/login", payload: { username: "operator", password: "password456" } })).statusCode, 200);
+  } finally {
+    await app.close();
+  }
+});
+
+test("offline credential initialization refuses corrupt legacy auth before creating an administrator", async () => {
+  const dataDir = tempDataDir("cp-auth-offline-initialize");
+  const authUsersDir = path.join(dataDir, "auth-users");
+  fs.mkdirSync(authUsersDir, { recursive: true });
+  fs.writeFileSync(path.join(authUsersDir, "corrupt-user.json"), "{not-json\n");
+  await assert.rejects(() => initializeControlPlaneCredentials(dataDir, {
+    username: "generated-admin",
+    password: "generated-password-123",
+  }, { lockPath: path.join(dataDir, "initialize.lock") }), { code: "CONTROL_PLANE_LEGACY_AUTH_IMPORT_FAILED" });
+  fs.rmSync(authUsersDir, { recursive: true, force: true });
+  const first = await initializeControlPlaneCredentials(dataDir, {
+    username: "generated-admin",
+    password: "generated-password-123",
+  }, { lockPath: path.join(dataDir, "initialize.lock") });
+  assert.equal(first.created, true);
+  assert.equal(first.user.primaryUsername, "generated-admin");
+
+  const repeated = await initializeControlPlaneCredentials(dataDir, {
+    username: "replacement-admin",
+    password: "replacement-password-456",
+  }, { lockPath: path.join(dataDir, "initialize.lock") });
+  assert.deepEqual(repeated, { created: false });
+
+  const app = await createControlPlaneApp({ dataDir, logger: false, auth: { mode: "password" } });
+  try {
+    const publicBootstrap = await app.inject({
+      method: "POST",
+      url: "/api/auth/bootstrap-admin",
+      payload: { username: "attacker", password: "attacker-password-789" },
+    });
+    assert.equal(publicBootstrap.statusCode, 409);
+    assert.equal(publicBootstrap.json().error.code, "AUTH_BOOTSTRAP_ALREADY_DONE");
+    assert.equal((await app.inject({
+      method: "POST",
+      url: "/api/auth/login",
+      payload: { username: "generated-admin", password: "generated-password-123" },
+    })).statusCode, 200);
+    assert.equal((await app.inject({
+      method: "POST",
+      url: "/api/auth/login",
+      payload: { username: "replacement-admin", password: "replacement-password-456" },
+    })).statusCode, 401);
   } finally {
     await app.close();
   }
@@ -2031,7 +2260,7 @@ test("control plane exposes a stable signed identity and authorizes revocable mo
   const mobileSession = await app.inject({ method: "GET", url: "/api/auth/session", headers: { authorization: `Bearer ${mobileToken}` } });
   assert.equal(mobileSession.statusCode, 200, mobileSession.body);
   assert.equal(mobileSession.json().data.authenticated, true);
-  assert.equal(mobileSession.json().data.user.username, "admin");
+  assert.equal(mobileSession.json().data.user.primaryUsername, "admin");
   const mobileTokenAsCookie = await app.inject({
     method: "GET",
     url: "/api/projects",
@@ -2041,11 +2270,21 @@ test("control plane exposes a stable signed identity and authorizes revocable mo
 
   const authorized = await app.inject({ method: "GET", url: "/api/projects", headers: { authorization: `Bearer ${mobileToken}` } });
   assert.equal(authorized.statusCode, 200, authorized.body);
+  const browserAccessForMissingInstance = await app.inject({
+    method: "POST",
+    url: "/api/controlled-instances/instance_missing/browser-access",
+    headers: { authorization: `Bearer ${mobileToken}` },
+    payload: {},
+  });
+  assert.equal(browserAccessForMissingInstance.statusCode, 404, browserAccessForMissingInstance.body);
+  assert.notEqual(browserAccessForMissingInstance.json().error.code, "BROWSER_ACCESS_USER_REQUIRED");
   const eventSocket = await app.injectWS("/api/events", { headers: { authorization: `Bearer ${mobileToken}` } });
   eventSocket.terminate();
-  const storedMobileSession = fs.readFileSync(path.join(dataDir, "auth-sessions", `${mobileSessionId}.json`), "utf8");
-  assert.equal(storedMobileSession.includes(mobileToken), false);
-  assert.equal(storedMobileSession.includes(mobileToken.split(".")[1]), false);
+  const databaseFiles = [path.join(dataDir, "user-access", "control-plane.sqlite"), path.join(dataDir, "user-access", "control-plane.sqlite-wal")]
+    .filter((filePath) => fs.existsSync(filePath))
+    .map((filePath) => fs.readFileSync(filePath));
+  assert.equal(databaseFiles.some((contents) => contents.includes(Buffer.from(mobileToken))), false);
+  assert.equal(databaseFiles.some((contents) => contents.includes(Buffer.from(mobileToken.split(".")[1]))), false);
 
   const webLogin = await app.inject({ method: "POST", url: "/api/auth/login", payload: { username: "admin", password: "password123" } });
   const cookie = webLogin.headers["set-cookie"];
@@ -2137,7 +2376,12 @@ test("control plane admin bootstrap has exactly one winner under concurrency", a
   assert.equal(winners.length, 1);
   assert.equal(rejected.length, 7);
   assert.equal(rejected.every((response) => response.json().error.code === "AUTH_BOOTSTRAP_IN_PROGRESS"), true);
-  assert.equal(fs.readdirSync(path.join(dataDir, "auth-users")).filter((name) => name.endsWith(".json")).length, 1);
+  const database = new DatabaseSync(controlPlaneStorePaths(dataDir).databasePath, { readOnly: true });
+  try {
+    assert.equal(database.prepare("SELECT count(*) AS count FROM cp_users").get().count, 1);
+  } finally {
+    database.close();
+  }
 
   const repeated = await app.inject({
     method: "POST",
@@ -2158,16 +2402,31 @@ test("control plane viewer cannot reach privileged mutation handlers", async (t)
   });
   t.after(() => app.close());
   await json(app, "POST", "/api/auth/bootstrap-admin", {
-    username: "viewer",
+    username: "admin",
     password: "password123",
   });
-  const userPath = path.join(dataDir, "auth-users", fs.readdirSync(path.join(dataDir, "auth-users")).find((name) => name.endsWith(".json")));
-  const user = JSON.parse(fs.readFileSync(userPath, "utf8"));
-  fs.writeFileSync(userPath, JSON.stringify({ ...user, role: "viewer" }));
+  const adminLogin = await app.inject({
+    method: "POST",
+    url: "/api/auth/login",
+    payload: { username: "admin", password: "password123" },
+  });
+  const adminCookie = adminLogin.headers["set-cookie"];
+  const created = await app.inject({
+    method: "POST",
+    url: "/api/users",
+    headers: { cookie: adminCookie },
+    payload: {
+      username: "viewer",
+      password: "viewer-password-123",
+      roleIds: ["role_viewer"],
+      nodeScope: { kind: "selected", nodeIds: [] },
+    },
+  });
+  assert.equal(created.statusCode, 201, created.body);
   const login = await app.inject({
     method: "POST",
     url: "/api/auth/login",
-    payload: { username: "viewer", password: "password123" },
+    payload: { username: "viewer", password: "viewer-password-123" },
   });
   const cookie = login.headers["set-cookie"];
   assert.equal(login.statusCode, 200);
@@ -2286,13 +2545,25 @@ test("control plane serves the remote node-agent installer without auth", async 
   assert.match(response.headers["content-type"], /text\/x-shellscript/);
   assert.match(response.body, /task-handoff-node-agent\.service/);
   assert.match(response.body, /--control-plane <url>/);
+  assert.match(response.body, /systemctl restart task-handoff-node-agent\.service/);
+  assert.match(response.body, /--unix-socket "\$IPC_PATH"/);
   assert.match(response.body, /api\/node-agent\/control-plane-connections/);
 });
 
 test("control plane authorization role matrix separates viewer operator and admin", () => {
-  const admin = { type: "user", userId: "u_admin", role: "admin" };
-  const operator = { type: "user", userId: "u_operator", role: "operator" };
-  const viewer = { type: "user", userId: "u_viewer", role: "viewer" };
+  const actor = (role, permissionIds) => ({
+    type: "user",
+    userId: `user_${role}`,
+    identityId: `identity_${role}`,
+    roleIds: [`role_${role}`],
+    permissionIds,
+    nodeScope: { kind: "all" },
+    authorizationRevision: 1,
+    requiresPasswordChange: false,
+  });
+  const admin = actor("admin", [...CONTROL_PLANE_PERMISSION_IDS]);
+  const operator = actor("operator", CONTROL_PLANE_PERMISSION_IDS.filter((id) => !["users:", "roles:", "identity-providers:", "settings:", "secrets:", "chat-bridges:"].some((prefix) => id.startsWith(prefix))));
+  const viewer = actor("viewer", CONTROL_PLANE_PERMISSION_IDS.filter((id) => id.endsWith(":read")));
 
   assert.equal(can(admin, "manage-secrets", { type: "model" }), true);
   assert.equal(can(operator, "start", { type: "instance", id: "inst_1" }), true);
@@ -2304,8 +2575,18 @@ test("control plane authorization role matrix separates viewer operator and admi
 });
 
 test("control plane mutation route policies never degrade privileged operations to read", () => {
-  const viewer = { type: "user", userId: "u_viewer", role: "viewer" };
-  const operator = { type: "user", userId: "u_operator", role: "operator" };
+  const actor = (role, permissionIds) => ({
+    type: "user",
+    userId: `user_${role}`,
+    identityId: `identity_${role}`,
+    roleIds: [`role_${role}`],
+    permissionIds,
+    nodeScope: { kind: "all" },
+    authorizationRevision: 1,
+    requiresPasswordChange: false,
+  });
+  const viewer = actor("viewer", CONTROL_PLANE_PERMISSION_IDS.filter((id) => id.endsWith(":read")));
+  const operator = actor("operator", CONTROL_PLANE_PERMISSION_IDS.filter((id) => !["users:", "roles:", "identity-providers:", "settings:", "secrets:", "chat-bridges:"].some((prefix) => id.startsWith(prefix))));
   const operatorRoutes = [
     ["POST", "/api/ai-session-attachments", "send-message", "ai-session"],
     ["POST", "/api/chat-gateway/messages", "send-message", "ai-session"],
@@ -2314,9 +2595,8 @@ test("control plane mutation route policies never degrade privileged operations 
     ["POST", "/api/controlled-instances/:id/ai-sessions/:sessionId/resume", "send-message", "ai-session"],
     ["POST", "/api/controlled-instances/:id/ai-sessions/:sessionId/fork", "send-message", "ai-session"],
     ["POST", "/api/controlled-instances/:id/ai-sessions/:sessionId/commands", "send-message", "ai-session"],
-    ["POST", "/api/controlled-instances/:id/ai-sessions/:sessionId/triggers", "create", "trigger"],
-    ["DELETE", "/api/controlled-instances/:id/ai-sessions/:sessionId/triggers/:configHash", "delete", "trigger"],
-    ["PUT", "/api/triggers/:configHash", "update", "trigger"],
+    ["POST", "/api/controlled-instances/:id/ai-sessions/:sessionId/triggers", "create", "trigger-deployment"],
+    ["DELETE", "/api/controlled-instances/:id/ai-sessions/:sessionId/triggers/:configHash", "delete", "trigger-deployment"],
   ];
   for (const [method, route, expectedAction, expectedResource] of operatorRoutes) {
     const policy = routeAuthorization(method, route);
@@ -2328,10 +2608,16 @@ test("control plane mutation route policies never degrade privileged operations 
 
   for (const method of ["POST", "DELETE"]) {
     const access = routeAuthorization(method, "/api/controlled-instances/:id/apps/sessions/:sessionId/access");
-    assert.equal(access.action, "read", `${method} App Session access lease`);
-    assert.equal(access.resource.type, "instance", `${method} App Session access lease`);
-    assert.equal(can(viewer, access.action, access.resource), true, `${method} App Session access lease viewer`);
+    assert.equal(access.action, "interactive-access", `${method} App Session access lease`);
+    assert.equal(access.resource.type, "app-session", `${method} App Session access lease`);
+    assert.equal(can(viewer, access.action, access.resource), false, `${method} App Session access lease viewer`);
+    assert.equal(can(operator, access.action, access.resource), true, `${method} App Session access lease operator`);
   }
+
+  const triggerTemplateUpdate = routeAuthorization("PUT", "/api/triggers/:configHash");
+  assert.equal(triggerTemplateUpdate.resource.type, "trigger-template");
+  assert.equal(can(viewer, triggerTemplateUpdate.action, triggerTemplateUpdate.resource), false);
+  assert.equal(can(operator, triggerTemplateUpdate.action, triggerTemplateUpdate.resource), false);
 
   const adminOnly = routeAuthorization("POST", "/api/chat-gateway/poll-ai-sessions");
   assert.equal(adminOnly.action, "manage-settings");
@@ -2343,16 +2629,18 @@ test("control plane mutation route policies never degrade privileged operations 
   assert.equal(can(viewer, unknownMutation.action, unknownMutation.resource), false);
   assert.equal(can(operator, unknownMutation.action, unknownMutation.resource), false);
   const unknownAiMutation = routeAuthorization("POST", "/api/controlled-instances/:id/ai-sessions/:sessionId/future-operation");
-  assert.equal(unknownAiMutation.action, "create");
+  assert.equal(unknownAiMutation.action, "manage-settings");
+  assert.equal(unknownAiMutation.resource.type, "control-plane-settings");
   assert.equal(can(viewer, unknownAiMutation.action, unknownAiMutation.resource), false);
   assert.equal(can(operator, unknownAiMutation.action, unknownAiMutation.resource), false);
 });
 
 test("event connection retry timing is bounded, jittered, and safety reconciliation is clamped", () => {
-  assert.equal(eventConnectionRetryDelay(0, () => 0), 750);
-  assert.equal(eventConnectionRetryDelay(1, () => 0.5), 2_000);
-  assert.equal(eventConnectionRetryDelay(10, () => 0.5), 30_000);
-  assert.equal(eventConnectionRetryDelay(10, () => 1), 30_000);
+  assert.equal(eventConnectionRetryDelay(0, () => 0.5), 0);
+  assert.equal(eventConnectionRetryDelay(1, () => 0.5), 250);
+  assert.equal(eventConnectionRetryDelay(2, () => 0), 375);
+  assert.equal(eventConnectionRetryDelay(2, () => 0.5), 500);
+  assert.equal(eventConnectionRetryDelay(20, () => 1), 60_000);
   assert.equal(eventConnectionSafetyIntervalMs(1_000), 30_000);
   assert.equal(eventConnectionSafetyIntervalMs(50_000), 50_000);
   assert.equal(eventConnectionSafetyIntervalMs(120_000), 60_000);
@@ -2369,19 +2657,38 @@ test("event connection retry timer resets after success and cancels removal clea
   const clearTimeoutFn = (handle) => cleared.push(handle);
   const retry = new EventConnectionRetryTimer();
 
-  assert.deepEqual(retry.schedule(() => undefined, { random: () => 0.5, setTimeoutFn }), { attempt: 1, delay: 1_000 });
+  assert.deepEqual(retry.schedule(() => undefined, { setTimeoutFn }), { attempt: 1, delay: 0 });
   assert.equal(retry.pending, true);
   assert.equal(retry.schedule(() => undefined, { random: () => 0.5, setTimeoutFn }), undefined);
   scheduled[0].callback();
   assert.equal(retry.pending, false);
-  assert.deepEqual(retry.schedule(() => undefined, { random: () => 0.5, setTimeoutFn }), { attempt: 2, delay: 2_000 });
+  assert.deepEqual(retry.schedule(() => undefined, { setTimeoutFn }), { attempt: 2, delay: 250 });
   retry.reset(clearTimeoutFn);
   assert.equal(retry.attempts, 0);
   assert.equal(cleared.includes(scheduled[1]), true);
-  assert.deepEqual(retry.schedule(() => undefined, { random: () => 0.5, setTimeoutFn }), { attempt: 1, delay: 1_000 });
+  assert.deepEqual(retry.schedule(() => undefined, { setTimeoutFn }), { attempt: 1, delay: 0 });
   retry.cancel(clearTimeoutFn);
   assert.equal(retry.pending, false);
   assert.equal(cleared.includes(scheduled[2]), true);
+});
+
+test("event connection retry timer reconnects immediately before the shared exponential backoff", () => {
+  const scheduled = [];
+  const setTimeoutFn = (callback, delay) => {
+    const handle = { callback, delay };
+    scheduled.push(handle);
+    return handle;
+  };
+  const retry = new EventConnectionRetryTimer();
+  const options = { setTimeoutFn };
+
+  assert.deepEqual(retry.schedule(() => undefined, options), { attempt: 1, delay: 0 });
+  scheduled[0].callback();
+  assert.deepEqual(retry.schedule(() => undefined, options), { attempt: 2, delay: 250 });
+  scheduled[1].callback();
+  const third = retry.schedule(() => undefined, options);
+  assert.equal(third.attempt, 3);
+  assert.ok(third.delay >= 375 && third.delay <= 625);
 });
 
 test("instance event connections reconcile immediately, clean retries on removal, and safety-repair missed lifecycle changes", () => {
@@ -2444,6 +2751,155 @@ test("instance event connections reconcile immediately, clean retries on removal
   instances.push({ id: "inst_immediate", target: { api: "http://127.0.0.1:18082" } });
   forwarder.syncNow();
   assert.equal(sockets.length, 3);
+  forwarder.stop();
+});
+
+test("node agent narrows transient AI events while retaining authoritative instance subscriptions", () => {
+  const sockets = [];
+  class FakeSocket extends EventEmitter {
+    constructor() {
+      super();
+      this.readyState = WebSocket.CONNECTING;
+      this.sent = [];
+    }
+    send(value) { this.sent.push(JSON.parse(String(value))); }
+    close() {}
+  }
+  const instance = { id: "inst_transient", target: { api: "http://127.0.0.1:18084" } };
+  const forwarder = new NodeAgentInstanceEventForwarder(
+    { listInstances: () => [instance] },
+    undefined,
+    {
+      createSocket: (url) => {
+        const socket = new FakeSocket();
+        socket.url = url;
+        sockets.push(socket);
+        return socket;
+      },
+      setIntervalFn: () => ({ kind: "interval" }),
+      clearIntervalFn: () => undefined,
+    },
+  );
+  const forwarded = [];
+  const outputClosed = [];
+  const output = new EventEmitter();
+  output.readyState = WebSocket.OPEN;
+  output.bufferedAmount = 0;
+  output.send = (value) => forwarded.push(JSON.parse(String(value)));
+  output.close = (code, reason) => outputClosed.push({ code, reason });
+  forwarder.addOutput(output, { expectsTransientSubscription: true });
+  assert.match(sockets[0].url || "", /aiSessionTransient=1/);
+  assert.equal(forwarder.setOutputSubscription(output, {
+    messageDeltas: { allInstances: false, instanceIds: [] },
+    timelineAllSessions: false,
+    timelineSessions: [],
+  }), true);
+  sockets[0].readyState = WebSocket.OPEN;
+  sockets[0].emit("open");
+  assert.ok(sockets[0].sent[0].topics.includes(AiSessionEventType.Snapshot));
+  assert.equal(sockets[0].sent[0].topics.includes(AiSessionEventType.MessageDelta), false);
+  assert.equal(sockets[0].sent[0].topics.includes(AiSessionEventType.TimelineItem), false);
+
+  const replaySince = "2026-08-21T00:00:00.000Z";
+  forwarder.setOutputSubscription(output, {
+    replaySince,
+    messageDeltas: { allInstances: false, instanceIds: [instance.id] },
+    timelineAllSessions: false,
+    timelineSessions: [{ instanceId: instance.id, sessionId: "session-open" }],
+  });
+  const narrowed = sockets[0].sent.at(-1);
+  assert.ok(narrowed.topics.includes(AiSessionEventType.MessageDelta));
+  assert.ok(narrowed.topics.includes(AiSessionEventType.TimelineItem));
+  assert.deepEqual(narrowed.aiSessionTransient.timelineSessions, [{ instanceId: instance.id, sessionId: "session-open" }]);
+  assert.equal(narrowed.aiSessionTransient.replaySince, replaySince);
+
+  const envelope = (type, sessionId) => JSON.stringify({
+    v: 1,
+    id: `event-${sessionId}`,
+    seq: 1,
+    type,
+    topic: "ai.sessions",
+    createdAt: new Date().toISOString(),
+    scope: { instanceId: instance.id },
+    payload: type === AiSessionEventType.MessageDelta
+      ? { instanceId: instance.id, sessionId, providerSessionId: sessionId, turnId: "turn-1", itemId: "item-1", delta: "text", generatedAt: new Date().toISOString() }
+      : { instanceId: instance.id, sessionId, providerSessionId: sessionId, item: { id: `item-${sessionId}`, turnId: "turn-1", type: "ai-message", text: "text" }, generatedAt: new Date().toISOString() },
+  });
+  sockets[0].emit("message", envelope(AiSessionEventType.MessageDelta, "session-card"));
+  sockets[0].emit("message", envelope(AiSessionEventType.TimelineItem, "session-open"));
+  sockets[0].emit("message", envelope(AiSessionEventType.TimelineItem, "session-closed"));
+  assert.deepEqual(forwarded.map((entry) => entry.event.type), [AiSessionEventType.MessageDelta, AiSessionEventType.TimelineItem]);
+  assert.equal(forwarded[1].event.payload.sessionId, "session-open");
+  output.bufferedAmount = 16 * 1024 * 1024;
+  sockets[0].emit("message", envelope(AiSessionEventType.MessageDelta, "session-slow"));
+  assert.equal(forwarded.length, 2);
+  assert.deepEqual(outputClosed, [{ code: 1013, reason: "Event consumer is too slow." }]);
+  forwarder.stop();
+});
+
+test("instance event reconnect backoff resets only after a valid stream handshake", () => {
+  const sockets = [];
+  const scheduled = [];
+  class FakeSocket extends EventEmitter {
+    constructor() {
+      super();
+      this.readyState = WebSocket.CONNECTING;
+      this.sent = [];
+    }
+    send(value) { this.sent.push(String(value)); }
+    close() {}
+  }
+  const instance = {
+    id: "inst_handshake_retry",
+    ready: true,
+    status: "running",
+    health: "ok",
+    connectionStatus: "online",
+    target: { status: "reachable", api: "http://127.0.0.1:18083" },
+  };
+  const forwarder = new NodeAgentInstanceEventForwarder(
+    { listInstances: () => [instance] },
+    undefined,
+    {
+      createSocket: () => {
+        const socket = new FakeSocket();
+        sockets.push(socket);
+        return socket;
+      },
+      setIntervalFn: () => ({ kind: "interval" }),
+      clearIntervalFn: () => undefined,
+      setTimeoutFn: (callback, delay) => {
+        const handle = { callback, delay, unref() {} };
+        scheduled.push(handle);
+        return handle;
+      },
+    },
+  );
+  const output = new EventEmitter();
+  output.readyState = WebSocket.OPEN;
+  output.send = () => undefined;
+  forwarder.addOutput(output);
+
+  sockets[0].readyState = WebSocket.OPEN;
+  sockets[0].emit("open");
+  sockets[0].emit("message", JSON.stringify({ type: "streams.hello", payload: { protocolVersion: 2, streams: [] } }));
+  sockets[0].emit("close");
+  assert.equal(scheduled[0].delay, 0);
+
+  scheduled[0].callback();
+  sockets[1].readyState = WebSocket.OPEN;
+  sockets[1].emit("open");
+  sockets[1].emit("message", JSON.stringify({ type: "streams.hello", payload: { protocolVersion: 2, streams: [] } }));
+  sockets[1].emit("close");
+  assert.equal(scheduled[1].delay, 250);
+
+  scheduled[1].callback();
+  sockets[2].readyState = WebSocket.OPEN;
+  sockets[2].emit("open");
+  sockets[2].emit("message", JSON.stringify({ type: "streams.hello", payload: { protocolVersion: 1, streams: [] } }));
+  sockets[2].emit("close");
+  assert.equal(scheduled[2].delay, 0);
+
   forwarder.stop();
 });
 
@@ -2746,6 +3202,15 @@ test("control plane emits websocket events for mutations", async (t) => {
   await withTimeout(waitForWebSocketOpen(socket), "control plane events websocket open");
   assert.equal(JSON.parse((await connectedMessage).message).type, "streams.hello");
 
+  const projectCreatedEvent = new Promise((resolve) => {
+    const listener = (raw) => {
+      const event = JSON.parse(String(raw));
+      if (event.type !== "project.created") return;
+      socket.off("message", listener);
+      resolve(event);
+    };
+    socket.on("message", listener);
+  });
   const project = await json(app, "POST", "/api/projects", {
     name: "Events Project",
     source: {
@@ -2754,7 +3219,7 @@ test("control plane emits websocket events for mutations", async (t) => {
     },
   });
   assert.equal(project.statusCode, 201);
-  const event = JSON.parse((await withTimeout(onceWebSocketMessageFrame(socket), "project created event")).message);
+  const event = await withTimeout(projectCreatedEvent, "project created event");
   assert.equal(event.type, "project.created");
   assert.equal(event.payload.projectId, project.body.data.id);
 });
@@ -3226,6 +3691,18 @@ test("control plane subscribes to direct node agent websocket events", async (t)
     },
   });
   assert.equal(createdInstance.statusCode, 201);
+  const createdInstanceState = nodeAgent.nodeAgentState.controlledInstances.get("inst_direct_events");
+  nodeAgent.nodeAgentState.controlledInstances.put({
+    ...createdInstanceState,
+    target: {
+      strategy: "direct-port",
+      web: `http://127.0.0.1:${instanceEventsAddress.port}`,
+      api: `http://127.0.0.1:${instanceEventsAddress.port}`,
+      status: "reachable",
+    },
+    targetStatus: "reachable",
+    uiAccessStatus: "reachable",
+  });
   const desiredRuntimeVersion = runtimeVersionStateForActual().desiredVersion;
   const registeredInstance = await nodeAgent.inject({
     method: "POST",
@@ -3325,7 +3802,11 @@ test("control plane subscribes to direct node agent websocket events", async (t)
     7000,
   );
 
-  const event = await waitForCondition(() => receivedEvents.find((entry) => entry.type === AiSessionEventType.Snapshot), "direct node agent ai session event", 7000);
+  const event = await waitForCondition(() => receivedEvents.find((entry) => (
+    entry.type === AiSessionEventType.Snapshot
+    && entry.scope?.nodeId === directNodeId
+    && entry.scope?.instanceId === "inst_direct_events"
+  )), "direct node agent ai session event", 7000);
   assert.equal(event.type, AiSessionEventType.Snapshot);
   assert.equal(event.topic, AiSessionEventTopic);
   assert.equal(event.scope.nodeId, directNodeId);
@@ -3509,7 +3990,7 @@ test("local docker run args include controlled metadata and disable local chat b
   assert.ok(args.includes("TASK_HANDOFF_WORKSPACE_MODE=local-bind"));
   assert.ok(args.includes("bridge"));
   assert.ok(args.includes("host.docker.internal:host-gateway"));
-  assert.ok(args.includes("/tmp:rw,mode=1777"));
+  assert.ok(args.includes("/tmp:rw,nosuid,nodev,exec,mode=1777"));
   assert.ok(args.includes("type=volume,src=task-handoff-inst_1-data,dst=/data"));
   assert.ok(args.includes("type=volume,src=task-handoff-inst_1-agent-home,dst=/home/agent"));
   assert.ok(args.includes("EXTRA_FLAG=1"));
@@ -3601,8 +4082,10 @@ test("node agent update API treats a missing npm channel as no update", async (t
     dataDir: tempDataDir("node-agent-update-missing-channel"),
     logger: false,
     token: "agent-secret",
+    managedUpdateSupport: () => ({ supported: true }),
     updateCommandRunner: async (_command, args) => {
       if (args[0] === "root") return { stdout: globalRoot, stderr: "" };
+      if (args[0] === "prefix") return { stdout: globalRoot, stderr: "" };
       throw Object.assign(new Error("npm ERR! code E404"), {
         details: { stdout: "", stderr: "npm ERR! code E404 npm ERR! 404 No match found for version beta" },
       });
@@ -3675,9 +4158,11 @@ test("node agent update checks default to the stable npm channel", async (t) => 
     dataDir: tempDataDir("node-agent-update-check"),
     logger: false,
     token: "agent-secret",
+    managedUpdateSupport: () => ({ supported: true }),
     updateCommandRunner: async (command, args) => {
       calls.push([command, args]);
       if (args[0] === "root") return { stdout: globalRoot, stderr: "" };
+      if (args[0] === "prefix") return { stdout: globalRoot, stderr: "" };
       return { stdout: JSON.stringify(args.includes("dist.integrity") ? npmIntegrityFixture : "9.8.7"), stderr: "" };
     },
     dockerCommandRunner: async (_command, args) => {
@@ -3713,6 +4198,7 @@ test("node agent update checks default to the stable npm channel", async (t) => 
   assert.equal(response.json().data.availableVersion, "9.8.7");
   assert.deepEqual(calls, [
     ["npm", ["root", "--global"]],
+    ["npm", ["prefix", "--global"]],
     ["npm", ["view", "@task-handoff/node-agent@latest", "version", "--json"]],
     ["npm", ["view", "@task-handoff/node-agent@9.8.7", "dist.integrity", "--json"]],
   ]);
@@ -3728,6 +4214,7 @@ test("node update preflight excludes Local Runtime artifacts on macOS and report
     dataDir: tempDataDir("node-agent-update-runtime-preflight"),
     logger: false,
     token: "agent-secret",
+    managedUpdateSupport: () => ({ supported: true }),
     platform: "darwin",
     arch: "arm64",
     dockerCommandRunner: async (_command, args) => {
@@ -3736,7 +4223,20 @@ test("node update preflight excludes Local Runtime artifacts on macOS and report
     },
     updateCommandRunner: async (command, args) => {
       updateCommands.push(command);
+      if (command === "systemd-run") {
+        const jobFile = args[args.indexOf("--job-file") + 1];
+        const job = JSON.parse(fs.readFileSync(jobFile, "utf8"));
+        fs.writeFileSync(jobFile, JSON.stringify({
+          ...job,
+          status: "updating-node",
+          rollout: { ...job.rollout, phase: "updating-node" },
+          startedAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }));
+        return { stdout: "", stderr: "" };
+      }
       if (args[0] === "root") return { stdout: globalRoot, stderr: "" };
+      if (args[0] === "prefix") return { stdout: globalRoot, stderr: "" };
       return { stdout: JSON.stringify(args.includes("dist.integrity") ? npmIntegrityFixture : "9.8.7"), stderr: "" };
     },
     resolveRuntimeArtifact: async (version, platform, arch) => {
@@ -3930,15 +4430,17 @@ test("node update checks use the package that owns the installed service launche
     ["view", "@task-handoff/server@1.1.0", "dist.integrity", "--json"],
   ]);
   assert.deepEqual(await resolveNodeUpdatePackage(async (_command, args) => {
-    assert.deepEqual(args, ["root", "--global"]);
+    assert.ok(["root", "prefix"].includes(args[0]));
+    assert.deepEqual(args.slice(1), ["--global"]);
     return { stdout: `${globalRoot}\n`, stderr: "" };
-  }), { packageName: "@task-handoff/server", currentVersion: "1.0.0", relatedCurrentVersions: ["0.9.0"] });
+  }), { packageName: "@task-handoff/server", currentVersion: "1.0.0", relatedCurrentVersions: ["0.9.0"], installPrefix: globalRoot });
   fs.rmSync(serverRoot, { recursive: true });
   fs.rmSync(nodeAgentRoot, { recursive: true });
   assert.deepEqual(await resolveNodeUpdatePackage(async () => ({ stdout: globalRoot, stderr: "" })), {
     packageName: "@task-handoff/node-agent",
     currentVersion: undefined,
     relatedCurrentVersions: [],
+    installPrefix: globalRoot,
   });
 
   const companionOnly = await checkNodeAgentUpdate({
@@ -3952,6 +4454,37 @@ test("node update checks use the package that owns the installed service launche
     }),
   });
   assert.equal(companionOnly.updateAvailable, true);
+});
+
+test("node update package resolution prefers the running module over an unrelated npm global prefix", async () => {
+  const prefix = tempDataDir("active-node-update-package");
+  const standaloneRoot = path.join(prefix, "lib", "node_modules", "@task-handoff", "node-agent");
+  fs.mkdirSync(path.join(standaloneRoot, "dist"), { recursive: true });
+  fs.writeFileSync(path.join(standaloneRoot, "package.json"), JSON.stringify({ name: "@task-handoff/node-agent", version: "0.0.18" }));
+
+  assert.deepEqual(await resolveNodeUpdatePackage(async () => {
+    throw new Error("ambient npm root must not be consulted for a packaged runtime");
+  }, path.join(standaloneRoot, "dist")), {
+    packageName: "@task-handoff/node-agent",
+    currentVersion: "0.0.18",
+    relatedCurrentVersions: [],
+    installPrefix: prefix,
+  });
+
+  const serverRoot = path.join(prefix, "lib", "node_modules", "@task-handoff", "server");
+  const nestedNodeAgentRoot = path.join(serverRoot, "node_modules", "@task-handoff", "node-agent");
+  fs.mkdirSync(path.join(nestedNodeAgentRoot, "dist"), { recursive: true });
+  fs.writeFileSync(path.join(serverRoot, "package.json"), JSON.stringify({ name: "@task-handoff/server", version: "0.0.24" }));
+  fs.writeFileSync(path.join(nestedNodeAgentRoot, "package.json"), JSON.stringify({ name: "@task-handoff/node-agent", version: "0.0.23" }));
+
+  assert.deepEqual(await resolveNodeUpdatePackage(async () => {
+    throw new Error("ambient npm root must not be consulted for a packaged runtime");
+  }, path.join(nestedNodeAgentRoot, "dist")), {
+    packageName: "@task-handoff/server",
+    currentVersion: "0.0.24",
+    relatedCurrentVersions: ["0.0.23"],
+    installPrefix: prefix,
+  });
 });
 
 test("node agent resolves update workers in source and bundled runtime layouts", () => {
@@ -3993,9 +4526,23 @@ test("node agent update apply launches the resolved worker through systemd-run",
     dataDir: tempDataDir("node-agent-update-apply-worker"),
     logger: false,
     token: "agent-secret",
+    managedUpdateSupport: () => ({ supported: true }),
     updateCommandRunner: async (command, args) => {
       calls.push([command, args]);
+      if (command === "systemd-run") {
+        const jobFile = args[args.indexOf("--job-file") + 1];
+        const job = JSON.parse(fs.readFileSync(jobFile, "utf8"));
+        fs.writeFileSync(jobFile, JSON.stringify({
+          ...job,
+          status: "updating-node",
+          rollout: { ...job.rollout, phase: "updating-node" },
+          startedAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }));
+        return { stdout: "", stderr: "" };
+      }
       if (command === "npm" && args[0] === "root") return { stdout: globalRoot, stderr: "" };
+      if (command === "npm" && args[0] === "prefix") return { stdout: globalRoot, stderr: "" };
       return command === "npm" ? { stdout: JSON.stringify(args.includes("dist.integrity") ? npmIntegrityFixture : "9.8.7"), stderr: "" } : { stdout: "", stderr: "" };
     },
     platform: "linux",
@@ -4039,14 +4586,17 @@ test("node agent update apply launches the resolved worker through systemd-run",
     },
   });
   assert.equal(response.statusCode, 202);
-  assert.equal(calls.length, 5);
-  assert.equal(calls[4][0], "systemd-run");
-  const args = calls[4][1];
+  assert.equal(response.json().data.status, "updating-node");
+  assert.equal(response.json().data.rollout.phase, "updating-node");
+  assert.equal(calls.length, 7);
+  assert.equal(calls[6][0], "systemd-run");
+  const args = calls[6][1];
   const propertyIndex = args.indexOf("--property=Type=exec");
   assert.equal(args[propertyIndex + 1], process.execPath);
   assert.equal(args[propertyIndex + 2], path.resolve(__dirname, "..", "scripts", "node-update-worker.cts"));
   assert.equal(args[args.indexOf("--target-version") + 1], "9.8.7");
   assert.equal(args[args.indexOf("--npm-command") + 1], "npm");
+  assert.equal(args[args.indexOf("--install-prefix") + 1], globalRoot);
   assert.equal(args[args.indexOf("--control-plane-health-url") + 1], "http://127.0.0.1:8081/api/health");
 });
 
@@ -4785,6 +5335,7 @@ test("node agent runs local docker behind node-local target and auto-imports age
       .map((call) => `${call.method} ${new URL(call.url).pathname}`)
       .filter((call) => call === "GET /api/health" || call.startsWith("POST /api/config-sync/import/")),
     [
+      "GET /api/health",
       "POST /api/config-sync/import/codex",
       "POST /api/config-sync/import/claude",
     ],
@@ -5079,7 +5630,7 @@ test("node agent skips start config auto-import when disabled on the instance", 
     fetchCalls
       .map((call) => `${call.method} ${new URL(call.url).pathname}`)
       .filter((call) => call === "GET /api/health" || call.startsWith("POST /api/config-sync/import/")),
-    [],
+    ["GET /api/health"],
   );
 });
 
@@ -5159,6 +5710,7 @@ test("node agent config auto-import failure does not fail start", async (t) => {
       .map((call) => `${call.method} ${new URL(call.url).pathname}`)
       .filter((call) => call === "GET /api/health" || call.startsWith("POST /api/config-sync/import/")),
     [
+      "GET /api/health",
       "POST /api/config-sync/import/codex",
       "POST /api/config-sync/import/claude",
     ],
@@ -6407,6 +6959,124 @@ test("control plane rejects node join when node id already exists", async (t) =>
   assert.equal(duplicate.body.error.code, "NODE_JOIN_NODE_ALREADY_EXISTS");
 });
 
+test("node joined events carry the consumed invite identity without secret material", async (t) => {
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-node-join-event"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+  });
+  t.after(() => app.close());
+  await app.listen({ host: "127.0.0.1", port: 0 });
+  const address = app.server.address();
+  assert.equal(typeof address, "object");
+  const socket = new WebSocket(`ws://127.0.0.1:${address.port}/api/events`);
+  t.after(() => socket.terminate());
+  const hello = withTimeout(onceWebSocketMessageFrame(socket), "node join events connected");
+  await withTimeout(waitForWebSocketOpen(socket), "node join events websocket open");
+  assert.equal(JSON.parse((await hello).message).type, "streams.hello");
+
+  const invite = await json(app, "POST", "/api/node-join/invites", {});
+  assert.equal(invite.statusCode, 201);
+  const pending = await json(app, "GET", `/api/node-join/invites/${invite.body.data.id}`);
+  assert.deepEqual(pending.body.data, { id: invite.body.data.id, status: "pending" });
+  const joinedEvent = withTimeout(
+    onceWebSocketJsonMatching(socket, (event) => event.type === "node.joined"),
+    "node joined event",
+  );
+  const completed = await json(app, "POST", "/api/node-join/complete", {
+    joinToken: invite.body.data.joinToken,
+    nodeId: "node_join_event",
+    nodeName: "Joined by event",
+    keyId: "key_join_event",
+    secret: "secret-join-event",
+  });
+  assert.equal(completed.statusCode, 201, JSON.stringify(completed.body));
+
+  const recovered = await json(app, "GET", `/api/node-join/invites/${invite.body.data.id}`);
+  assert.deepEqual(recovered.body.data, {
+    id: invite.body.data.id,
+    status: "completed",
+    nodeId: "node_join_event",
+  });
+
+  const event = await joinedEvent;
+  assert.deepEqual(event.payload, { nodeId: "node_join_event", inviteId: invite.body.data.id });
+  assert.equal(JSON.stringify(event).includes(invite.body.data.joinToken), false);
+  assert.equal(JSON.stringify(event).includes("secret-join-event"), false);
+  assert.equal(JSON.stringify(recovered.body).includes(invite.body.data.joinToken), false);
+  assert.equal(JSON.stringify(recovered.body).includes("secret-join-event"), false);
+});
+
+test("controlled instance detail returns not found after an authoritative refresh removes a cached instance", async (t) => {
+  const mock = createMockNodeAgentFetch();
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-instance-detail-refresh-removal"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+    service: { fetchImpl: mock.fetchImpl },
+  });
+  t.after(() => app.close());
+
+  const project = await json(app, "POST", "/api/projects", {
+    name: "Refresh removal project",
+    source: { type: "local-folder", path: "/tmp/refresh-removal-project" },
+  });
+  assert.equal(project.statusCode, 201);
+  const created = await json(app, "POST", "/api/controlled-instances", {
+    name: "refresh-removal-instance",
+    projectId: project.body.data.id,
+    runtimeId: "runtime_local_docker",
+    imageSelection: { imageId: "market_taskhandoff_browser" },
+  });
+  assert.equal(created.statusCode, 201, JSON.stringify(created.body));
+
+  const cached = await json(app, "GET", `/api/controlled-instances/${created.body.data.id}`);
+  assert.equal(cached.statusCode, 200, JSON.stringify(cached.body));
+  mock.instances.delete(created.body.data.id);
+
+  const missing = await json(app, "GET", `/api/controlled-instances/${created.body.data.id}`);
+  assert.equal(missing.statusCode, 404, JSON.stringify(missing.body));
+  assert.equal(missing.body.error.code, "CONTROLLED_INSTANCE_NOT_FOUND");
+});
+
+test("controlled instance detail retains a cached instance when its node refresh is unavailable", async (t) => {
+  const mock = createMockNodeAgentFetch();
+  let instanceReadsUnavailable = false;
+  const fetchImpl = (url, init = {}) => {
+    const parsed = new URL(String(url));
+    if (instanceReadsUnavailable && parsed.pathname.endsWith("/instances") && (!init.method || init.method === "GET")) {
+      throw new Error("node instance snapshot unavailable");
+    }
+    return mock.fetchImpl(url, init);
+  };
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-instance-detail-refresh-stale"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+    service: { fetchImpl },
+  });
+  t.after(() => app.close());
+
+  const project = await json(app, "POST", "/api/projects", {
+    name: "Refresh stale project",
+    source: { type: "local-folder", path: "/tmp/refresh-stale-project" },
+  });
+  const created = await json(app, "POST", "/api/controlled-instances", {
+    name: "refresh-stale-instance",
+    projectId: project.body.data.id,
+    runtimeId: "runtime_local_docker",
+    imageSelection: { imageId: "market_taskhandoff_browser" },
+  });
+  assert.equal(created.statusCode, 201, JSON.stringify(created.body));
+  const cached = await json(app, "GET", `/api/controlled-instances/${created.body.data.id}`);
+  assert.equal(cached.statusCode, 200, JSON.stringify(cached.body));
+  instanceReadsUnavailable = true;
+
+  const stale = await json(app, "GET", `/api/controlled-instances/${created.body.data.id}`);
+  assert.equal(stale.statusCode, 200, JSON.stringify(stale.body));
+  assert.equal(stale.body.data.id, created.body.data.id);
+});
+
 test("control plane does not use local static key for remote direct http node auth", async (t) => {
   const mock = createMockNodeAgentFetch({
     nodeId: "node_remote_auth",
@@ -6555,8 +7225,12 @@ test("node agent provisions one built-in local runtime and creates local instanc
   assert.equal(updatedPermissionDefault.statusCode, 200);
   assert.deepEqual(updatedPermissionDefault.json().data.config, {
     autoImportAgentConfigs: true,
+    codexConfigEnabled: true,
+    codexHomeMode: "taskhandoff",
     defaultCodexPermissionMode: "auto-review",
     aiSessionHistoryLimit: 50,
+    aiSessionAttachmentRetentionDays: 30,
+    aiSessionMaxFileAttachmentBytes: 500 * 1024,
   });
 
   const mergedConfigUpdate = await app.inject({
@@ -6568,8 +7242,12 @@ test("node agent provisions one built-in local runtime and creates local instanc
   assert.equal(mergedConfigUpdate.statusCode, 200);
   assert.deepEqual(mergedConfigUpdate.json().data.config, {
     autoImportAgentConfigs: false,
+    codexConfigEnabled: true,
+    codexHomeMode: "taskhandoff",
     defaultCodexPermissionMode: "auto-review",
     aiSessionHistoryLimit: 50,
+    aiSessionAttachmentRetentionDays: 30,
+    aiSessionMaxFileAttachmentBytes: 500 * 1024,
   });
 
   const updatedHistoryLimit = await app.inject({
@@ -6580,6 +7258,15 @@ test("node agent provisions one built-in local runtime and creates local instanc
   });
   assert.equal(updatedHistoryLimit.statusCode, 200);
   assert.equal(updatedHistoryLimit.json().data.config.aiSessionHistoryLimit, 120);
+
+  const updatedFileAttachmentLimit = await app.inject({
+    method: "PATCH",
+    url: "/api/node-agent/instances/inst_local",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: { config: { aiSessionMaxFileAttachmentBytes: 2 * 1024 * 1024 } },
+  });
+  assert.equal(updatedFileAttachmentLimit.statusCode, 200);
+  assert.equal(updatedFileAttachmentLimit.json().data.config.aiSessionMaxFileAttachmentBytes, 2 * 1024 * 1024);
 
   const duplicateInstance = await app.inject({
     method: "POST",
@@ -8486,6 +9173,7 @@ test("node agent proxies mutating instance API requests while runtime convergenc
       },
     },
   });
+  installTestLocalRuntimeTarget(app, "inst_1", 18080);
 
   const response = await app.inject({
     method: "POST",
@@ -8578,6 +9266,7 @@ test("node agent proxies direct-port instances through the node-local host", asy
       },
     },
   });
+  installTestLocalRuntimeTarget(app, "inst_proxy", 18080);
 
   const response = await app.inject({
     method: "POST",
@@ -8630,6 +9319,15 @@ test("node agent proxies direct-port instances through the node-local host", asy
   const health = await app.inject({ method: "GET", url: "/api/node-agent/health", headers: { authorization: "Bearer agent-secret" } });
   assert.equal(health.json().data.instanceProxy.limitRejected, 1);
   assert.ok(health.json().data.instanceProxy.responseBytes >= Buffer.byteLength("<html>ok</html>"));
+  assert.deepEqual(health.json().data.eventTransport, {
+    status: "healthy",
+    activeOutputs: 0,
+    bufferedBytes: 0,
+    peakBufferedBytes: 0,
+    coalescedEvents: 0,
+    oversizedEvents: 0,
+    peakEventBytes: 0,
+  });
 });
 
 test("node agent proxies instance websocket subprotocols", async (t) => {
@@ -8703,6 +9401,7 @@ test("node agent proxies instance websocket subprotocols", async (t) => {
       },
     },
   });
+  installTestLocalRuntimeTarget(app, "inst_ws", upstreamAddress.port);
 
   await withTimeout(app.listen({ host: "127.0.0.1", port: 0 }), "node agent listen");
   const address = app.server.address();
@@ -8724,9 +9423,10 @@ test("node agent proxies instance websocket subprotocols", async (t) => {
 
 test("control plane checks node agent runtime targets and lists their images", async (t) => {
   const timestamp = new Date().toISOString();
-  const mock = createMockNodeAgentFetch({
+  const nodeAgentOptions = {
     nodeId: "node_agent",
     health: {
+      capabilities: { folderPlaces: true },
       build: {
         component: "node-agent",
         packageName: "@task-handoff/node-agent",
@@ -8770,7 +9470,12 @@ test("control plane checks node agent runtime targets and lists their images", a
         ],
       },
     ],
-  });
+    folderPlaces: [
+      { kind: "home", name: "builder", path: "/home/builder" },
+      { kind: "root", name: "/", path: "/" },
+    ],
+  };
+  const mock = createMockNodeAgentFetch(nodeAgentOptions);
   const app = await createControlPlaneApp({
     dataDir: tempDataDir("control-plane-runtime-check"),
     logger: false,
@@ -8811,6 +9516,7 @@ test("control plane checks node agent runtime targets and lists their images", a
     role: "node-agent",
     nodeId: "node_agent",
     protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
+    capabilities: { folderPlaces: true },
     build: {
       component: "node-agent",
       packageName: "@task-handoff/node-agent",
@@ -8843,12 +9549,25 @@ test("control plane checks node agent runtime targets and lists their images", a
   const folders = await json(app, "GET", "/api/nodes/node_agent/folders/tree?path=%2Fworkspace&depth=1");
   assert.equal(folders.statusCode, 200);
   assert.equal(folders.body.data[0].children[0].path, "/workspace/project");
+  const places = await json(app, "GET", "/api/nodes/node_agent/folders/places");
+  assert.equal(places.statusCode, 200);
+  assert.deepEqual(places.body.data, [
+    { kind: "home", name: "builder", path: "/home/builder" },
+    { kind: "root", name: "/", path: "/" },
+  ]);
+  nodeAgentOptions.folderPlacesUnsupported = true;
+  const legacyPlaces = await json(app, "GET", "/api/nodes/node_agent/folders/places");
+  assert.equal(legacyPlaces.statusCode, 200);
+  assert.deepEqual(legacyPlaces.body.data, [{ kind: "root", name: "workspace", path: "/workspace" }]);
   assert.deepEqual(mock.requests.map((request) => [request.method, request.url, Boolean(request.headers["x-taskhandoff-signature"]), request.headers.authorization]), [
     ["GET", "http://agent.example:8091/api/node-agent/health", true, undefined],
     ["GET", "http://agent.example:8091/api/node-agent/health", true, undefined],
     ["GET", "http://agent.example:8091/api/node-agent/runtimes", true, undefined],
     ["GET", "http://agent.example:8091/api/node-agent/docker/images", true, undefined],
     ["GET", "http://agent.example:8091/api/node-agent/folders/tree?path=%2Fworkspace&depth=1", true, undefined],
+    ["GET", "http://agent.example:8091/api/node-agent/folders/places", true, undefined],
+    ["GET", "http://agent.example:8091/api/node-agent/folders/places", true, undefined],
+    ["GET", "http://agent.example:8091/api/node-agent/folders/tree?depth=0", true, undefined],
   ]);
 });
 
@@ -9028,6 +9747,7 @@ test("control plane registers node connections with the agent node id", async (t
   const timestamp = new Date().toISOString();
   const mock = createMockNodeAgentFetch({
     nodeId: "node_remote",
+    health: { capabilities: { localFolderNameUpdate: true } },
     runtimes: [
       {
         id: "runtime_local_docker",
@@ -9092,6 +9812,15 @@ test("control plane registers node connections with the agent node id", async (t
   assert.equal(folders.statusCode, 200);
   assert.equal(folders.body.data[0].id, "folder_1");
   assert.equal(folders.body.data[0].nodeId, "node_remote");
+
+  const renamedFolder = await json(app, "PATCH", "/api/nodes/node_remote/local-folders/folder_1", { name: "Customer Portal" });
+  assert.equal(renamedFolder.statusCode, 200);
+  assert.equal(renamedFolder.body.data.name, "Customer Portal");
+  assert.equal(renamedFolder.body.data.path, "/home/agent/work");
+  const resetFolderName = await json(app, "PATCH", "/api/nodes/node_remote/local-folders/folder_1", { name: "" });
+  assert.equal(resetFolderName.statusCode, 200);
+  assert.equal(resetFolderName.body.data.name, "work");
+  assert.ok(mock.requests.some((request) => request.method === "PATCH" && request.path === "/local-folders/folder_1"));
 });
 
 test("node agent reverse tunnel survives rejected handshakes and retries", async (t) => {
@@ -9180,11 +9909,12 @@ test("persisted control-plane access suppresses the bootstrap reverse tunnel", a
   await withTimeout(attempted, "persisted reverse tunnel attempt");
   await new Promise((resolve) => setTimeout(resolve, 100));
 
-  assert.equal(attempts, 1);
+  assert.equal(attempts, 2, "one configured tunnel should make its initial and immediate retry attempts");
+  const attemptsBeforeRemoval = attempts;
   assert.equal(identity.deleteControlPlaneConnection(pending.connection.id), true);
   manager.connectConfigured();
   await new Promise((resolve) => setTimeout(resolve, 100));
-  assert.equal(attempts, 1);
+  assert.equal(attempts, attemptsBeforeRemoval, "persisted access should continue suppressing a bootstrap tunnel");
   manager.closeAll();
 });
 
@@ -9274,13 +10004,15 @@ test("deleting a node agent control-plane connection cancels its pending reverse
   manager.connectConfigured();
   await withTimeout(attempted, "deleted reverse tunnel initial attempt");
   await new Promise((resolve) => setTimeout(resolve, 50));
-  assert.equal(attempts, 1);
+  assert.equal(attempts, 2, "the first failed connection should be retried immediately");
 
   const connections = await fetchNodeAgentIpc(ipcPath, "/control-plane-connections");
   assert.equal(connections.status, 200);
   const connectionState = (await connections.json()).data[0];
   assert.equal(connectionState.id, pending.connection.id);
   assert.equal(connectionState.status, "reconnecting");
+  assert.equal(connectionState.consecutiveReconnects, 2);
+  assert.ok(connectionState.nextRetryAt);
   assert.ok(connectionState.lastDisconnectedAt);
 
   const pairingInUse = await fetchNodeAgentIpc(ipcPath, `/control-plane-pairings/${encodeURIComponent(pending.pairing.keyId)}`, {
@@ -9299,7 +10031,7 @@ test("deleting a node agent control-plane connection cancels its pending reverse
   assert.equal(storedAfterDelete.controlPlanePairings.length, 1);
 
   await new Promise((resolve) => setTimeout(resolve, 1_400));
-  assert.equal(attempts, 1);
+  assert.equal(attempts, 2, "deleting the connection should cancel its remaining backoff retries");
 });
 
 test("control plane accepts node agent reverse tunnel handshake", async (t) => {
@@ -9586,6 +10318,107 @@ test("aborting an active fleet query cancels its reverse-WSS node request", asyn
   const nodeAfterAbort = await json(app, "GET", "/api/nodes/node_fleet_query_abort");
   assert.equal(nodeAfterAbort.statusCode, 200);
   assert.equal(nodeAfterAbort.body.data.connectionPhase, "healthy");
+});
+
+test("progressive instance board publishes fast node snapshots without waiting for a slow node", async (t) => {
+  const timestamp = "2026-08-22T00:00:00.000Z";
+  const instance = ControlledInstanceSchema.parse({
+    id: "inst_progressive_fast",
+    name: "Fast instance",
+    source: { type: "local-folder", path: "/workspace" },
+    sourceSnapshot: {},
+    modelSelection: {},
+    nodeId: "node_progressive_fast",
+    runtimeId: "runtime_progressive_fast",
+    target: { strategy: "node-proxy", status: "reachable", web: "http://127.0.0.1:32100", api: "http://127.0.0.1:32100/api" },
+    runtime: { labels: {} },
+    registrationToken: "instance-secret",
+    protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  });
+  const runtime = {
+    id: instance.runtimeId,
+    nodeId: instance.nodeId,
+    name: "Docker",
+    type: "docker",
+    status: "online",
+    accessStrategy: "direct-port",
+    capabilities: {},
+    labels: {},
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+  const slowResolvers = [];
+  const fetchImpl = async (url) => {
+    const parsed = new URL(String(url));
+    const route = parsed.pathname.replace(/^\/api\/node-agent/, "");
+    if (route === "/health") {
+      const nodeId = parsed.hostname === "slow-progressive.example" ? "node_progressive_slow" : "node_progressive_fast";
+      return new Response(JSON.stringify({ data: { ok: true, role: "node-agent", nodeId, protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (parsed.hostname === "slow-progressive.example") {
+      return new Promise((resolve) => slowResolvers.push(() => resolve(new Response(JSON.stringify({ data: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }))));
+    }
+    const data = route === "/instances" ? [instance] : route === "/runtimes" ? [runtime] : [];
+    return new Response(JSON.stringify({ data }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-progressive-board"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+    service: { fetchImpl },
+  });
+  t.after(() => app.close());
+  for (const [id, endpoint] of [
+    ["node_progressive_fast", "http://fast-progressive.example:8091"],
+    ["node_progressive_slow", "http://slow-progressive.example:8091"],
+  ]) {
+    const created = await json(app, "POST", "/api/nodes", {
+      id,
+      name: id,
+      connectionMode: "direct-http",
+      endpoint,
+      auth: { mode: "paired-hmac", keyId: `key_${id}`, secret: `secret_${id}` },
+    });
+    assert.equal(created.statusCode, 201, JSON.stringify(created.body));
+  }
+
+  const initial = await json(app, "GET", "/api/instance-board?progressive=true");
+  assert.equal(initial.statusCode, 200, JSON.stringify(initial.body));
+  await new Promise((resolve) => setImmediate(resolve));
+  const partial = await json(app, "GET", "/api/instance-board?progressive=true");
+  assert.deepEqual(partial.body.data.map((item) => item.id), [instance.id]);
+  const instanceStates = partial.body.meta.nodeStates.filter((state) => state.resource === "instances");
+  assert.equal(instanceStates.find((state) => state.nodeId === "node_progressive_fast").phase, "ready");
+  assert.equal(instanceStates.find((state) => state.nodeId === "node_progressive_slow").phase, "loading");
+
+  const scoped = await json(app, "GET", `/api/instance-board?instanceId=${instance.id}&progressive=true`);
+  assert.deepEqual(scoped.body.data.map((item) => item.id), [instance.id]);
+
+  let chatSettled = false;
+  const chatPromise = json(app, "POST", "/api/chat-gateway/messages", {
+    source: { channel: "telegram", chatSessionId: "progressive-chat", userId: "user-progressive" },
+    message: { text: "/instances" },
+  }).finally(() => { chatSettled = true; });
+  let sessionsSettled = false;
+  const sessionsPromise = json(app, "GET", "/api/ai-sessions").finally(() => { sessionsSettled = true; });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(chatSettled, false);
+  assert.equal(sessionsSettled, false);
+  slowResolvers.forEach((resolve) => resolve());
+  const chat = await chatPromise;
+  assert.equal(chat.statusCode, 200, JSON.stringify(chat.body));
+  assert.deepEqual(chat.body.data.instances.map((entry) => entry.id), [instance.id]);
+  const sessions = await sessionsPromise;
+  assert.equal(sessions.statusCode, 200, JSON.stringify(sessions.body));
+  assert.deepEqual(sessions.body.data.instances.map((entry) => entry.instanceId), [instance.id]);
 });
 
 test("reverse tunnel authenticates forwarded control-plane requests to a paired node agent", async (t) => {
@@ -10480,6 +11313,7 @@ test("control plane models deploy to the target node and instances store assignm
   });
   assert.equal(updated.statusCode, 200);
   assert.deepEqual(updated.body.data.modelSelection, { codexModelHash: first.body.data.id });
+  assert.deepEqual(mock.instances.get(instance.body.data.id).modelSelection, { codexModelHash: first.body.data.id });
 
   const started = await json(app, "POST", `/api/controlled-instances/${instance.body.data.id}/start`);
   assert.equal(started.statusCode, 200);
@@ -10490,7 +11324,7 @@ test("control plane models deploy to the target node and instances store assignm
     config: { autoImportAgentConfigs: false },
   });
   assert.equal(generalUpdated.statusCode, 200);
-  assert.deepEqual(generalUpdated.body.data.config, { autoImportAgentConfigs: false, defaultCodexPermissionMode: "ask", aiSessionHistoryLimit: 50 });
+  assert.deepEqual(generalUpdated.body.data.config, { autoImportAgentConfigs: false, codexConfigEnabled: true, codexHomeMode: "taskhandoff", defaultCodexPermissionMode: "ask", aiSessionHistoryLimit: 50, aiSessionAttachmentRetentionDays: 30, aiSessionMaxFileAttachmentBytes: 500 * 1024 });
   const generalUpdateRequest = mock.requests.findLast((request) => request.path === `/instances/${instance.body.data.id}` && request.method === "PATCH" && request.body.config);
   assert.deepEqual(generalUpdateRequest.body.config, { autoImportAgentConfigs: false });
 
@@ -10511,9 +11345,17 @@ test("control plane models deploy to the target node and instances store assignm
   assert.equal(restarted.statusCode, 200);
   const restartRequest = mock.requests.findLast((request) => request.path === `/instances/${instance.body.data.id}/restart`);
   assert.deepEqual(restartRequest.body, {});
+  const latestAssignmentRequest = mock.requests.findLast((request) => request.path === `/instances/${instance.body.data.id}/model-assignment`);
+  assert.deepEqual(latestAssignmentRequest.body.modelSelection, { codexModelHash: first.body.data.id });
 
+  const instancesBeforeDelete = await json(app, "GET", "/api/controlled-instances");
+  assert.deepEqual(
+    instancesBeforeDelete.body.data.find((candidate) => candidate.id === instance.body.data.id).modelSelection,
+    { codexModelHash: first.body.data.id },
+  );
   const deleteBoundModel = await json(app, "DELETE", `/api/models/${first.body.data.id}`);
-  assert.equal(deleteBoundModel.statusCode, 200);
+  assert.equal(deleteBoundModel.statusCode, 409);
+  assert.equal(deleteBoundModel.body.error.code, "MODEL_IN_USE");
 });
 
 test("control plane deletes an undeployed model without scanning an offline fleet", async (t) => {
@@ -10609,7 +11451,7 @@ test("federated model registry groups one control-plane model across multiple no
   const staleRegistry = await json(app, "GET", "/api/models");
   assert.equal(staleRegistry.statusCode, 200, JSON.stringify(staleRegistry.body));
   const partialGroup = staleRegistry.body.data.models.find((item) => item.id === model.body.data.id);
-  assert.equal(partialGroup.locations.some((item) => item.type === "node" && item.nodeId === "node_two"), false);
+  assert.equal(partialGroup.locations.some((item) => item.type === "node" && item.nodeId === "node_two"), true);
   assert.equal(staleRegistry.body.data.nodeDiagnostics.some((item) => item.nodeId === "node_two"), true);
 
   secondOptions.modelsError = undefined;
@@ -10902,8 +11744,17 @@ test("control plane rejects unknown project request fields", async (t) => {
       type: "local-folder",
       path: "/tmp/workspace",
     },
+    // Compatibility for v0.0.21: accepted from an N-1 client, but ignored.
+    defaultRuntimeId: "runtime_local_docker",
   });
   assert.equal(cleanProject.statusCode, 201);
+  assert.equal("defaultRuntimeId" in cleanProject.body.data, false);
+
+  const legacyRuntimePatch = await json(app, "PATCH", `/api/projects/${cleanProject.body.data.id}`, {
+    defaultRuntimeId: "runtime_local_docker",
+  });
+  assert.equal(legacyRuntimePatch.statusCode, 200);
+  assert.equal("defaultRuntimeId" in legacyRuntimePatch.body.data, false);
 
   const projectIdPatch = await json(app, "PATCH", `/api/projects/${cleanProject.body.data.id}`, {
     id: "project_patch_id",
@@ -10978,6 +11829,50 @@ test("control plane forwards instance config auto-import setting to node agent",
   assert.deepEqual(createRequest.body.config, { autoImportAgentConfigs: false });
 });
 
+test("control plane edits file upload limits only when the node and controlled instance can enforce them", async (t) => {
+  const mockOptions = {
+    health: { capabilities: { aiSessionFileAttachmentLimit: true } },
+    instanceCapabilities: { features: {} },
+  };
+  const mock = createMockNodeAgentFetch(mockOptions);
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-instance-file-upload-limit"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+    service: { fetchImpl: mock.fetchImpl },
+  });
+  t.after(() => app.close());
+
+  const project = await json(app, "POST", "/api/projects", {
+    name: "Attachment Limit Project",
+    source: { type: "local-folder", path: "/tmp/workspace" },
+  });
+  const legacy = await json(app, "POST", "/api/controlled-instances", {
+    name: "legacy-attachment-limit",
+    projectId: project.body.data.id,
+    imageSelection: { imageId: "market_taskhandoff_browser" },
+  });
+  const rejected = await json(app, "PATCH", `/api/controlled-instances/${legacy.body.data.id}`, {
+    config: { aiSessionMaxFileAttachmentBytes: 1024 },
+  });
+  assert.equal(rejected.statusCode, 409);
+  assert.equal(rejected.body.error.code, "AI_SESSION_FILE_ATTACHMENT_LIMIT_UNSUPPORTED");
+
+  mockOptions.instanceCapabilities = {
+    features: { aiSessionConversationAttachments: { fileSizeLimitSettings: true } },
+  };
+  const current = await json(app, "POST", "/api/controlled-instances", {
+    name: "current-attachment-limit",
+    projectId: project.body.data.id,
+    imageSelection: { imageId: "market_taskhandoff_browser" },
+  });
+  const updated = await json(app, "PATCH", `/api/controlled-instances/${current.body.data.id}`, {
+    config: { aiSessionMaxFileAttachmentBytes: 1024 },
+  });
+  assert.equal(updated.statusCode, 200, JSON.stringify(updated.body));
+  assert.equal(updated.body.data.config.aiSessionMaxFileAttachmentBytes, 1024);
+});
+
 test("control plane reports node-scoped image availability and preserves unknown inventory failures", async (t) => {
   const reference = "huadream/task-handoff-controlled-browser:latest";
   const availableAgent = createMockNodeAgentFetch({
@@ -11035,7 +11930,8 @@ test("control plane reports node-scoped image availability and preserves unknown
   assert.ok(offline.body.data[0].error);
 });
 
-test("control plane protects referenced images and keeps instance image snapshots immutable", async (t) => {
+test("control plane protects project and instance images without coupling images to local folders", async (t) => {
+  let offlineImageGuard = false;
   const mock = createMockNodeAgentFetch({
     localFolders: [{
       id: "folder_image_guard",
@@ -11052,7 +11948,16 @@ test("control plane protects referenced images and keeps instance image snapshot
     dataDir: tempDataDir("control-plane-image-delete-guards"),
     logger: false,
     staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
-    service: { fetchImpl: mock.fetchImpl },
+    service: {
+      fetchImpl: (url, init) => {
+        const parsed = new URL(String(url));
+        if (parsed.hostname !== "offline-image-guard.example") return mock.fetchImpl(url, init);
+        if (offlineImageGuard) return Promise.reject(Object.assign(new Error("offline"), { code: "ECONNREFUSED" }));
+        return Promise.resolve(new Response(JSON.stringify({
+          data: { ok: true, role: "node-agent", nodeId: "node_image_guard_offline", protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION },
+        }), { status: 200, headers: { "content-type": "application/json" } }));
+      },
+    },
   });
   t.after(() => app.close());
 
@@ -11085,11 +11990,26 @@ test("control plane protects referenced images and keeps instance image snapshot
   assert.equal(board.statusCode, 200);
   assert.equal(board.body.data.find((item) => item.id === instance.body.data.id).image.requestedReference, "docker.io/example/img_instance_guard:v1");
 
-  for (const id of ["img_project_guard", "img_folder_guard", "img_instance_guard"]) {
+  for (const id of ["img_project_guard", "img_instance_guard"]) {
     const guarded = await json(app, "DELETE", `/api/images/${id}`);
-    assert.equal(guarded.statusCode, 409);
+    assert.equal(guarded.statusCode, 409, `${id}: ${JSON.stringify(guarded.body)}`);
     assert.equal(guarded.body.error.code, "IMAGE_IN_USE");
   }
+  const removedFolderImage = await json(app, "DELETE", "/api/images/img_folder_guard");
+  assert.equal(removedFolderImage.statusCode, 200);
+  assert.equal(removedFolderImage.body.data.deleted, true);
+  const offlineNode = await json(app, "POST", "/api/nodes", {
+    id: "node_image_guard_offline",
+    name: "Offline image guard",
+    connectionMode: "direct-http",
+    endpoint: "http://offline-image-guard.example:8091",
+    auth: { mode: "paired-hmac", keyId: "key_image_guard_offline", secret: "image-guard-secret" },
+  });
+  assert.equal(offlineNode.statusCode, 201, JSON.stringify(offlineNode.body));
+  offlineImageGuard = true;
+  const directoryWithOfflineNode = await json(app, "GET", "/api/instance-board");
+  assert.equal(directoryWithOfflineNode.statusCode, 200, JSON.stringify(directoryWithOfflineNode.body));
+  assert.equal(directoryWithOfflineNode.body.meta.nodeStates.find((state) => state.nodeId === "node_image_guard_offline" && state.resource === "instances")?.phase, "error");
   const removed = await json(app, "DELETE", "/api/images/img_unused");
   assert.equal(removed.statusCode, 200);
   assert.equal(removed.body.data.deleted, true);
@@ -11304,8 +12224,8 @@ test("control plane preserves a renamed built-in node across sync and instance p
   const renamed = await json(app, "PATCH", "/api/nodes/node_mock", { name: "  Local build host  " });
   assert.equal(renamed.statusCode, 200);
   assert.equal(renamed.body.data.name, "Local build host");
-  const { name: _beforeName, updatedAt: _beforeUpdatedAt, lastSeenAt: _beforeLastSeenAt, connectionPhase: _beforeConnectionPhase, ...beforeInvariant } = before.body.data;
-  const { name: _afterName, updatedAt: _afterUpdatedAt, lastSeenAt: _afterLastSeenAt, connectionPhase: _afterConnectionPhase, ...afterInvariant } = renamed.body.data;
+  const { name: _beforeName, updatedAt: _beforeUpdatedAt, lastSeenAt: _beforeLastSeenAt, connectionPhase: _beforeConnectionPhase, connectionDiagnostics: _beforeConnectionDiagnostics, ...beforeInvariant } = before.body.data;
+  const { name: _afterName, updatedAt: _afterUpdatedAt, lastSeenAt: _afterLastSeenAt, connectionPhase: _afterConnectionPhase, connectionDiagnostics: _afterConnectionDiagnostics, ...afterInvariant } = renamed.body.data;
   assert.deepEqual(afterInvariant, beforeInvariant);
 
   const synced = await json(app, "POST", "/api/nodes/local/sync");
@@ -11451,7 +12371,7 @@ test("control plane proxies instance websocket routes while preserving HTTP prox
   await withTimeout(waitForWebSocketOpen(binaryClient), "proxied websocket binary open");
   assert.equal(binaryClient.protocol, "binary");
   assert.deepEqual(await withTimeout(binaryGreeting, "proxied websocket binary greeting"), { message: "RFB 003.008\n", isBinary: true });
-  assert.deepEqual(seen.filter((entry) => entry.url !== "/api/node-agent/events"), [
+  assert.deepEqual(seen.filter((entry) => !entry.url.startsWith("/api/node-agent/events")), [
     {
       url: `/api/node-agent/instances/${createdInstance.body.data.id}/proxy/ws/api/apps/sessions/app_1/tty?token=abc`,
       protocol: "",
@@ -11838,6 +12758,8 @@ test("control plane launches app sessions through the controlled instance API", 
   assert.equal(registered.body.data.target, undefined);
   assert.equal(registered.body.data.access.status, "reachable");
   const heartbeatRequestsBeforeLaunch = mock.requests.filter((request) => request.path.endsWith("/heartbeat")).length;
+  const appSessionStateRequests = () => mock.requests.filter((request) => request.path.endsWith("/proxy") && request.body?.path === "/api/apps/sessions/state").length;
+  const stateRequestsBeforeLaunch = appSessionStateRequests();
 
   const launchedEvent = withTimeout(
     onceWebSocketJsonMatching(eventsSocket, (event) => event.type === "instance.app-session.launched"),
@@ -11863,7 +12785,8 @@ test("control plane launches app sessions through the controlled instance API", 
   assert.equal(launchEvent.payload.instanceId, created.body.data.id);
   assert.equal(launchEvent.payload.sessionId, "app_1");
   assert.equal(launchEvent.payload.appId, "claude");
-  const appSessionsAfterLaunch = await json(app, "GET", "/api/app-sessions");
+  assert.equal(appSessionStateRequests(), stateRequestsBeforeLaunch);
+  const appSessionsAfterLaunch = await json(app, "GET", "/api/app-sessions?refresh=true");
   assert.equal(appSessionsAfterLaunch.statusCode, 200);
   assert.equal(appSessionsAfterLaunch.body.data.instances[0].instanceId, created.body.data.id);
   assert.equal(appSessionsAfterLaunch.body.data.instances[0].appSessions.runningCount, 1);
@@ -11905,19 +12828,25 @@ test("control plane launches app sessions through the controlled instance API", 
     },
   ]);
 
+  const renamedEvent = withTimeout(
+    onceWebSocketJsonMatching(eventsSocket, (event) => event.type === "instance.app-session.renamed"),
+    "app session renamed event",
+  );
+  const stateRequestsBeforeRename = appSessionStateRequests();
   const renamed = await json(app, "PATCH", `/api/controlled-instances/${created.body.data.id}/apps/sessions/app_1`, {
     title: "Control Claude",
   });
   assert.equal(renamed.statusCode, 200);
   assert.equal(renamed.body.data.title, "Control Claude");
-  const renameEvent = JSON.parse((await withTimeout(onceWebSocketMessageFrame(eventsSocket), "app session renamed event")).message);
+  const renameEvent = await renamedEvent;
   assert.equal(renameEvent.type, "instance.app-session.renamed");
   assert.deepEqual(renameEvent.payload, {
     instanceId: created.body.data.id,
     sessionId: "app_1",
     title: "Control Claude",
   });
-  const appSessionsAfterRename = await json(app, "GET", "/api/app-sessions");
+  assert.equal(appSessionStateRequests(), stateRequestsBeforeRename);
+  const appSessionsAfterRename = await json(app, "GET", "/api/app-sessions?refresh=true");
   assert.equal(appSessionsAfterRename.body.data.instances[0].appSessions.sessions[0].title, "Control Claude");
   const renameProxy = mock.requests.find((request) => request.path.endsWith("/proxy") && request.body?.path === "/api/apps/sessions/app_1" && request.body?.method === "PATCH");
   assert.deepEqual({ url: renameProxy.url, method: renameProxy.method, body: renameProxy.body }, {
@@ -11933,14 +12862,20 @@ test("control plane launches app sessions through the controlled instance API", 
     },
   });
 
+  const stoppedEvent = withTimeout(
+    onceWebSocketJsonMatching(eventsSocket, (event) => event.type === "instance.app-session.stopped"),
+    "app session updated event",
+  );
+  const stateRequestsBeforeStop = appSessionStateRequests();
   const stopped = await json(app, "POST", `/api/controlled-instances/${created.body.data.id}/apps/sessions/app_1/stop`);
   assert.equal(stopped.statusCode, 200);
   assert.equal(stopped.body.data.id, "app_1");
-  const stopEvent = JSON.parse((await withTimeout(onceWebSocketMessageFrame(eventsSocket), "app session updated event")).message);
+  const stopEvent = await stoppedEvent;
   assert.equal(stopEvent.type, "instance.app-session.stopped");
   assert.equal(stopEvent.payload.instanceId, created.body.data.id);
   assert.equal(stopEvent.payload.sessionId, "app_1");
-  const appSessionsAfterStop = await json(app, "GET", "/api/app-sessions");
+  assert.equal(appSessionStateRequests(), stateRequestsBeforeStop);
+  const appSessionsAfterStop = await json(app, "GET", "/api/app-sessions?refresh=true");
   assert.equal(appSessionsAfterStop.statusCode, 200);
   assert.equal(appSessionsAfterStop.body.data.instances[0].appSessions.runningCount, 0);
   assert.deepEqual(appSessionsAfterStop.body.data.instances[0].appSessions.sessions, []);
@@ -12482,6 +13417,10 @@ test("control plane chat gateway binds sessions and forwards messages to active 
     }),
   });
 
+  // The test mutates the fake node agent directly, bypassing the real node
+  // session event stream that would update the control-plane aggregators.
+  const refreshedDirectory = await json(app, "GET", "/api/instance-board");
+  assert.equal(refreshedDirectory.statusCode, 200);
   const refreshedAppSessions = await json(app, "GET", "/api/app-sessions?refresh=true");
   assert.equal(refreshedAppSessions.statusCode, 200);
 
@@ -12556,6 +13495,9 @@ test("control plane chat gateway binds sessions and forwards messages to active 
       request.body?.path === "/api/apps/sessions" &&
       innerBody?.appId === "chromium";
   }));
+
+  const refreshedAfterLaunch = await json(app, "GET", "/api/app-sessions?refresh=true");
+  assert.equal(refreshedAfterLaunch.statusCode, 200);
 
   const settingsPatch = await json(app, "PATCH", "/api/control-plane/settings", {
     publicBaseUrl: "https://control.example.test",
@@ -13120,17 +14062,15 @@ test("control plane telegram bridge renders ai session buttons and handles selec
         return {
           routed: true,
           instance: { id: "inst_1" },
+          instanceId: "inst_1",
+          aiSessionId: "ais_2",
+          turnId: "turn_1",
+          providerTurnId: "turn_1",
           aiSession: {
-            session: {
-              id: "ais_2",
-              agent: "claude",
-              activeTurnId: "turn_1",
-              status: "running",
-              phase: "responding",
-              updatedAt: "2026-07-03T00:00:00.000Z",
-            },
+            sessionId: "ais_2",
             provider: "claude",
             action: "send",
+            turnId: "turn_1",
             providerTurnId: "turn_1",
           },
           reply: "Sent to Project / inst / ais_2.",
@@ -14019,20 +14959,11 @@ test("control plane telegram ai session ack remembers action result turn id", as
         activeAiSessionId: "ais_1",
       },
       instance: { id: "inst_1" },
+      instanceId: "inst_1",
+      aiSessionId: "ais_1",
+      turnId: "turn_control_1",
       aiSession: {
-        session: {
-          id: "ais_1",
-          agent: "claude",
-          activeTurnId: "turn_control_1",
-          status: "running",
-          phase: "thinking",
-          turns: [{
-            id: "turn_control_1",
-            userPrompt: message.message.text,
-            updatedAt: "2026-07-03T00:00:00.000Z",
-          }],
-          updatedAt: "2026-07-03T00:00:00.000Z",
-        },
+        sessionId: "ais_1",
         provider: "claude",
         action: "send",
         turnId: "turn_control_1",
@@ -14153,22 +15084,14 @@ test("control plane telegram queued ack replaces and deletes the previous progre
           activeAiSessionId: "ais_1",
         },
         instance: { id: "inst_1" },
+        instanceId: "inst_1",
+        aiSessionId: "ais_1",
+        turnId: "turn_1",
         aiSession: {
-          session: {
-            id: "ais_1",
-            agent: "codex",
-            activeTurnId: "turn_1",
-            status: "running",
-            phase: "thinking",
-            queue: queued ? {
-              pendingCount: 1,
-              items: [{ id: "queue_1", message: message.message.text, status: "queued" }],
-            } : { pendingCount: 0, items: [] },
-            turns: [{ id: "turn_1", userPrompt: "first", updatedAt: "2026-07-10T00:00:00.000Z" }],
-            updatedAt: "2026-07-10T00:00:00.000Z",
-          },
+          sessionId: "ais_1",
           provider: "codex",
           action: queued ? "queue" : "send",
+          turnId: "turn_1",
           ...(queued ? { queueId: "queue_1" } : { turnId: "turn_1", providerTurnId: "turn_1" }),
         },
         reply: queued ? "Queued for ais_1." : "Sent to ais_1.",
@@ -14315,22 +15238,16 @@ test("control plane telegram replies route to the replied ai session and include
           activeAiSessionId: "ais_default",
         },
         instance: { id: target.instanceId },
+        instanceId: target.instanceId,
+        aiSessionId: target.aiSessionId,
+        turnId: target.aiSessionId === "ais_reply" ? "turn_reply" : "turn_default",
+        providerTurnId: target.aiSessionId === "ais_reply" ? "turn_reply" : "turn_default",
         aiSession: {
-          session: {
-            id: target.aiSessionId,
-            agent: "codex",
-            activeTurnId: target.aiSessionId === "ais_reply" ? "turn_reply" : "turn_default",
-            status: "running",
-            phase: "thinking",
-            turns: [{
-              id: target.aiSessionId === "ais_reply" ? "turn_reply" : "turn_default",
-              userPrompt: message.message.text,
-              updatedAt: "2026-07-03T00:00:00.000Z",
-            }],
-            updatedAt: "2026-07-03T00:00:00.000Z",
-          },
+          sessionId: target.aiSessionId,
           provider: "codex",
           action: "send",
+          turnId: target.aiSessionId === "ais_reply" ? "turn_reply" : "turn_default",
+          providerTurnId: target.aiSessionId === "ais_reply" ? "turn_reply" : "turn_default",
         },
         turnId: target.aiSessionId === "ais_reply" ? "turn_reply" : "turn_default",
         providerTurnId: target.aiSessionId === "ais_reply" ? "turn_reply" : "turn_default",
@@ -14468,6 +15385,24 @@ test("control plane ai session delivery keeps response content inside the latest
 
   session.turns[1].lastMessage = "second answer";
   assert.equal(aiSessionDeliveryText(session, "instance-main · claude completed"), "instance-main · claude completed\nsecond answer");
+});
+
+test("control plane ai session delivery reports a failed turn without an assistant response", () => {
+  const session = {
+    id: "ais_failed",
+    agent: "codex",
+    status: "failed",
+    phase: "unknown",
+    error: "Provider rejected the selected model.",
+    turns: [{ id: "turn_failed", userPrompt: "Run it", status: "failed", revision: 1 }],
+    startedAt: "2026-08-29T00:00:00.000Z",
+    updatedAt: "2026-08-29T00:00:01.000Z",
+  };
+
+  assert.equal(
+    aiSessionDeliveryText(session, "instance-main · codex failed"),
+    "instance-main · codex failed\ncodex session failed:\nProvider rejected the selected model.",
+  );
 });
 
 test("control plane ai session delivery appends authoritative tool activity after the latest response", () => {
@@ -15184,17 +16119,15 @@ test("control plane telegram bridge keeps old progress message updating after se
         return {
           routed: true,
           instance: { id: "inst_1" },
+          instanceId: "inst_1",
+          aiSessionId: "ais_1",
+          turnId: "turn_1",
+          providerTurnId: "turn_1",
           aiSession: {
-            session: {
-              id: "ais_1",
-              agent: "codex",
-              activeTurnId: "turn_1",
-              status: "running",
-              phase: "responding",
-              updatedAt: "2026-07-10T00:00:00.000Z",
-            },
+            sessionId: "ais_1",
             provider: "codex",
             action: "send",
+            turnId: "turn_1",
             providerTurnId: "turn_1",
           },
           reply: "Sent to ais_1.",
@@ -18127,7 +19060,11 @@ test("control plane aggregates ai session pending routes and proxies ai session 
           providerTurnId: "turn_continue",
         } }), {
           status: 200,
-          headers: { "content-type": "application/json" },
+          headers: {
+            "content-type": "application/json",
+            "server-timing": "instance_action;dur=7.0, node_proxy;dur=8.0",
+            "x-task-handoff-trace-id": body.headers["x-task-handoff-trace-id"],
+          },
         });
       }
       if (body?.path === "/api/ai-sessions/ais_waiting/fork" && body.method === "POST") {
@@ -18298,6 +19235,7 @@ test("control plane aggregates ai session pending routes and proxies ai session 
   assert.equal(aiPending.kind, "approval");
   assert.match(aiPending.result, /npm install/);
 
+  const instanceReadsBeforeAiActions = mock.requests.filter((request) => request.path === "/instances" && request.method === "GET").length;
   const mentionCatalog = await json(app, "GET", `/api/controlled-instances/${created.body.data.id}/ai-sessions/ais_waiting/mentions`);
   assert.equal(mentionCatalog.statusCode, 200);
   assert.equal(mentionCatalog.body.data.candidates[0].name, "Exact / Plugin");
@@ -18308,6 +19246,15 @@ test("control plane aggregates ai session pending routes and proxies ai session 
   const references = [{ kind: "plugin", name: "Exact / Plugin", path: "plugin://exact-plugin" }];
   const mentionMessage = await json(app, "POST", `/api/controlled-instances/${created.body.data.id}/ai-sessions/ais_waiting/messages`, { message: "Use @Exact", references });
   assert.equal(mentionMessage.statusCode, 200);
+  assert.ok(mentionMessage.headers["x-task-handoff-trace-id"]);
+  assert.match(mentionMessage.headers["server-timing"], /instance_action;dur=7\.0/);
+  assert.match(mentionMessage.headers["server-timing"], /node_proxy;dur=8\.0/);
+  assert.match(mentionMessage.headers["server-timing"], /node_transport;dur=/);
+  assert.match(mentionMessage.headers["server-timing"], /control_plane;dur=/);
+  assert.equal(
+    mock.requests.filter((request) => request.path === "/instances" && request.method === "GET").length,
+    instanceReadsBeforeAiActions,
+  );
   const mentionForwards = requests.filter((request) => request.body.path.includes("/ai-sessions/ais_waiting/")).slice(-3);
   assert.deepEqual(mentionForwards.map((request) => [request.body.method, request.body.path, request.body.body ? JSON.parse(request.body.body) : undefined]), [
     ["GET", "/api/ai-sessions/ais_waiting/mentions", undefined],

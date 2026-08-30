@@ -9,10 +9,12 @@ const {
   MARKET_CATALOG_PROTOCOL_VERSION,
   MarketCatalogSnapshotSchema,
   NodeImageAvailabilitySchema,
+  ProjectSchema,
   parseDockerImageReference,
   sanitizeStoredControlledInstance,
   sanitizeStoredImageProfile,
   sanitizeStoredMarketCatalogSnapshot,
+  sanitizeStoredProject,
 } = require("../packages/protocol/src/control-plane.ts");
 const {
   EmbeddedMarketCatalogProvider,
@@ -80,6 +82,22 @@ test("Market catalog validates date protocols, tags, and optional platform sizes
 
 test("stored custom profiles and controlled instances migrate before strict parsing", () => {
   const now = timestamp();
+  const project = ProjectSchema.parse(sanitizeStoredProject({
+    id: "proj_legacy_runtime",
+    name: "Legacy runtime project",
+    source: { type: "local-folder", path: "/workspace" },
+    defaultImageSelection: { imageId: "img_custom" },
+    defaultNodeId: "node_1",
+    // Compatibility for v0.0.21: no longer part of the project model.
+    defaultRuntimeId: "runtime_local_docker",
+    workspacePolicy: { mode: "local-bind", path: "/workspace", readOnly: false },
+    labels: {},
+    createdAt: now,
+    updatedAt: now,
+  }));
+  assert.equal(project.defaultImageSelection.imageId, "img_custom");
+  assert.equal("defaultRuntimeId" in project, false);
+
   const custom = CustomImageProfileSchema.parse(sanitizeStoredImageProfile({
     id: "img_custom",
     name: "Custom",
@@ -123,23 +141,26 @@ test("stored custom profiles and controlled instances migrate before strict pars
   assert.equal(stored.imageSnapshot.requestedReference, "docker.io/example/codex:latest");
 });
 
-test("embedded provider returns four stable Market images and retains the last valid snapshot", async () => {
+test("embedded provider returns five stable Market images and retains the last valid snapshot", async () => {
   const embedded = await new EmbeddedMarketCatalogProvider().loadCatalog();
   assert.equal(embedded.protocolVersion, MARKET_CATALOG_PROTOCOL_VERSION);
   assert.deepEqual(embedded.items.map((item) => item.id), [
     "market_taskhandoff_codex",
+    "market_taskhandoff_opencode",
     "market_taskhandoff_ai",
     "market_taskhandoff_webcap",
     "market_taskhandoff_browser",
   ]);
   assert.deepEqual(embedded.items.map((item) => item.description), [
     "Minimal Codex runtime with terminal and Codex.",
+    "Minimal OpenCode runtime with terminal and OpenCode.",
     "AI development runtime with Codex, Claude, and terminal.",
     "Browser automation runtime with WebCap, Codex, Claude, Chromium, and VNC.",
     "Full runtime with Codex, Claude, Chromium, VNC, and code-server.",
   ]);
   assert.deepEqual(embedded.items.map((item) => item.localizedDescriptions?.["zh-CN"]), [
     "最小 Codex 运行环境，包含终端和 Codex。",
+    "最小 OpenCode 运行环境，包含终端和 OpenCode。",
     "AI 开发运行环境，包含 Codex、Claude 和终端。",
     "浏览器自动化运行环境，包含 WebCap、Codex、Claude、Chromium 和 VNC。",
     "完整运行环境，包含 Codex、Claude、Chromium、VNC 和 code-server。",
@@ -162,7 +183,7 @@ test("stored Market caches ignore unknown fields and isolate invalid items", asy
     items: [...embedded.items, { id: "broken", future: true }],
   }, (warning) => warnings.push(warning));
   const parsed = MarketCatalogSnapshotSchema.parse(cached);
-  assert.equal(parsed.items.length, 4);
+  assert.equal(parsed.items.length, 5);
   assert.ok(warnings.some((warning) => warning.field === "futureField"));
   assert.ok(warnings.some((warning) => warning.itemId === "broken" && warning.field === "invalid-record"));
 });
@@ -176,7 +197,7 @@ test("catalog keeps Custom CRUD separate while exposing unified selectable image
   assert.equal(custom.origin, "custom");
   assert.equal(duplicate.reference, custom.reference);
   assert.equal(catalog.listImages().length, 2);
-  assert.equal(catalog.listImageOptions().length, 6);
+  assert.equal(catalog.listImageOptions().length, 7);
   assert.equal(catalog.resolveImageSelection({ imageId: "market_taskhandoff_browser" }).tag, "latest");
   assert.throws(() => catalog.requireImage("market_taskhandoff_browser"), (error) => error.code === "MARKET_IMAGE_READ_ONLY");
   assert.throws(() => catalog.resolveImageSelection({ imageId: custom.id, tag: "v2" }), (error) => error.code === "CUSTOM_IMAGE_TAG_OVERRIDE");
@@ -278,7 +299,7 @@ test("HTTP keeps Market, Custom, unified options, and node availability as separ
 
   const market = await app.inject({ method: "GET", url: "/api/market/catalog" });
   assert.equal(market.statusCode, 200, market.body);
-  assert.equal(market.json().data.catalog.items.length, 4);
+  assert.equal(market.json().data.catalog.items.length, 5);
   assert.equal(market.json().data.status.source, "embedded");
 
   const emptyCustom = await app.inject({ method: "GET", url: "/api/images" });

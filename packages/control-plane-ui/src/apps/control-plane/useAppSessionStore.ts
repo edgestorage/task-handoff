@@ -33,7 +33,7 @@ export function useAppSessionStore(input: {
     topic: "app.sessions",
     getEntry: (instanceId) => queryClient.getQueryData<ControlPlaneAppSessions>(input.queryKey())
       ?.instances.find((entry) => entry.instanceId === instanceId),
-    refreshSnapshot: async (instanceId, signal) => (await apiLoader<ControlPlaneAppSessions>("app-sessions?refresh=true", { signal }))
+    refreshSnapshot: async (instanceId, signal) => (await apiLoader<ControlPlaneAppSessions>(`app-sessions?refresh=true&instanceId=${encodeURIComponent(instanceId)}`, { signal }))
       .instances.find((entry) => entry.instanceId === instanceId),
     applySnapshot: applyRecoveredSnapshot,
     loadDelta: (entry, signal) => apiLoader<AppSessionDeltaResponse>(`app-sessions?instanceId=${encodeURIComponent(entry.instanceId)}&streamId=${encodeURIComponent(entry.streamId)}&sinceRevision=${encodeURIComponent(String(entry.revision ?? 0))}`, { signal }),
