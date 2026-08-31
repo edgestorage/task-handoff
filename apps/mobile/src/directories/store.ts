@@ -64,7 +64,14 @@ export class MobileDirectoryStore {
       nodes: current.nodes.map((node) => node.id === nodeId ? { ...node, name } : node),
     });
   }
-  setNodeConnection(controlPlaneId: string, nodeId: string, connectionPhase: ControlPlaneNodeConnectionPhase, changedAt: string, lastSeenAt?: string) {
+  setNodeConnection(
+    controlPlaneId: string,
+    nodeId: string,
+    connectionPhase: ControlPlaneNodeConnectionPhase,
+    changedAt: string,
+    lastSeenAt?: string,
+    projection?: Pick<ControlPlaneNodeDirectoryEntry, 'status' | 'health'>,
+  ) {
     const observationKey = `${controlPlaneId}\u0000${nodeId}`;
     const previousChangedAt = this.nodeConnectionChangedAt.get(observationKey);
     const current = this.profile(controlPlaneId);
@@ -73,7 +80,12 @@ export class MobileDirectoryStore {
     this.nodeConnectionChangedAt.set(observationKey, changedAt);
     return this.set(controlPlaneId, {
       nodes: current.nodes.map((node) => node.id === nodeId
-        ? { ...node, connectionPhase, ...(lastSeenAt ? { lastSeenAt } : {}) }
+        ? {
+          ...node,
+          connectionPhase,
+          ...(projection ?? {}),
+          ...(lastSeenAt ? { lastSeenAt } : {}),
+        }
         : node),
     });
   }

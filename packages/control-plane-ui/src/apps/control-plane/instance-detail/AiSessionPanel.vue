@@ -2413,7 +2413,9 @@ async function createNewSession(permissionMode?: AiSessionPermissionMode) {
       references,
       permissionMode,
       ...(newSessionModelSelection.value ? { modelSelection: newSessionModelSelection.value } : {}),
-      ...(newSessionReasoningEffort.value ? { reasoningEffort: newSessionReasoningEffort.value } : {}),
+      ...(newSessionReasoningEffortCapability.value.selectAtCreate && newSessionReasoningEffort.value
+        ? { reasoningEffort: newSessionReasoningEffort.value }
+        : {}),
       clientRequestId: attempt.clientRequestId,
     });
     if (permissionMode) {

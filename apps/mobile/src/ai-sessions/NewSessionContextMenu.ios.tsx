@@ -10,7 +10,7 @@ type NewSessionMenuColors = {
 };
 
 export function newSessionMenuActions<Value extends string>(options: AnchoredSelectOption<Value>[], selectedValue: Value, colors: NewSessionMenuColors): MenuAction[] {
-  return options.map((option) => ({
+  const action = (option: AnchoredSelectOption<Value>): MenuAction => ({
     attributes: option.danger ? { destructive: true } : undefined,
     id: option.value,
     image: option.systemImage,
@@ -18,7 +18,31 @@ export function newSessionMenuActions<Value extends string>(options: AnchoredSel
     state: option.value === selectedValue ? 'on' : 'off',
     subtitle: option.description,
     title: option.label,
-  }));
+  });
+  if (!options.some((option) => option.groupLabel)) return options.map(action);
+
+  const grouped = new Map<string, AnchoredSelectOption<Value>[]>();
+  const actions: MenuAction[] = [];
+  for (const option of options) {
+    if (!option.groupLabel) {
+      actions.push(action(option));
+      continue;
+    }
+    const group = grouped.get(option.groupLabel) || [];
+    group.push(option);
+    grouped.set(option.groupLabel, group);
+  }
+  for (const [groupLabel, group] of grouped) {
+    actions.push({
+      id: `group:${groupLabel}`,
+      image: 'server.rack',
+      imageColor: colors.image,
+      displayInline: true,
+      subactions: group.map(action),
+      title: groupLabel,
+    });
+  }
+  return actions;
 }
 
 export function NewSessionContextMenu<Value extends string>(props: AnchoredSelectMenuProps<Value>) {

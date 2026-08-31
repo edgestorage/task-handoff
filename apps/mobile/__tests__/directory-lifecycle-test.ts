@@ -239,6 +239,26 @@ test('directory controller applies node connection and instance lifecycle events
   controller.stop();
 });
 
+test('directory controller applies complete node connection projections to replace stale health', () => {
+  const store = new MobileDirectoryStore();
+  const failedNode = ControlPlaneNodeDirectoryEntrySchema.parse({
+    id: 'node-stale', name: 'Node', status: 'offline', health: 'failed', connectionMode: 'reverse-wss',
+    connectionPhase: 'offline', observedAt: '2026-08-05T00:00:00.000Z', capabilities: [],
+  });
+  store.set('cp-stale', { nodes: [failedNode], phase: 'ready' });
+  const controller = new MobileDirectoryController('cp-stale', { resources: {} } as unknown as ControlPlaneClient, store);
+
+  expect(controller.applyEvent({
+    type: 'node.connection.updated', topic: 'node.state', scope: { nodeId: failedNode.id },
+    payload: {
+      nodeId: failedNode.id, phase: 'healthy', status: 'online', health: 'ok',
+      changedAt: '2026-08-05T00:00:02.000Z', lastSeenAt: '2026-08-05T00:00:02.000Z',
+    },
+  })).toBe(true);
+  expect(store.profile('cp-stale').nodes[0]).toMatchObject({ status: 'online', health: 'ok', connectionPhase: 'healthy' });
+  controller.stop();
+});
+
 test('directory controller keeps the newest per-node fleet state', () => {
   const store = new MobileDirectoryStore();
   store.set('cp-fleet', {

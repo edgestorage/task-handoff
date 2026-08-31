@@ -82,9 +82,11 @@ test("provider registry projects version-dependent capabilities on every read", 
       reasoningEffort: { selectAtCreate: settingsSupported, updateDuringSession: settingsSupported },
     }),
   });
+  assert.equal(providers.capability("codex").reasoningEffort.selectAtCreate, false);
   assert.equal(providers.capabilities()[0].modelSelection.switchModelWithinProvider, false);
   assert.equal(providers.capabilities()[0].reasoningEffort.updateDuringSession, false);
   settingsSupported = true;
+  assert.equal(providers.capability("codex").reasoningEffort.selectAtCreate, true);
   assert.equal(providers.capabilities()[0].modelSelection.switchModelWithinProvider, true);
   assert.equal(providers.capabilities()[0].reasoningEffort.updateDuringSession, true);
 });

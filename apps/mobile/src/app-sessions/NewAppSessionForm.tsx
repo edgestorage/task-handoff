@@ -50,7 +50,7 @@ export function NewAppSessionForm(props: Props) {
     ...props.folders.map((folder) => ({ description: folder.path, label: controlPlaneLocalFolderDisplayName(folder), systemImage: 'folder' as const, value: folder.id })),
   ];
 
-  return <Screen>
+  return <Screen alwaysBounceVertical={false} automaticallyAdjustKeyboardInsets={false} contentContainerStyle={styles.screenContent}>
     <View style={styles.intro}>
       <Text style={[styles.heading, { color: colors.text }]}>{t('appSessions.new')}</Text>
       <Text style={[styles.description, { color: colors.textMuted }]}>{t('appSessions.newDescription')}</Text>
@@ -136,6 +136,7 @@ function SelectionRow({ disabled, icon, label, value, width, onPress }: { disabl
 }
 
 const styles = StyleSheet.create({
+  screenContent: { alignSelf: 'center', justifyContent: 'center', maxWidth: 640, paddingVertical: 24, width: '100%' },
   intro: { alignItems: 'center', gap: 8, marginBottom: 8, marginTop: 20, paddingHorizontal: 20 },
   heading: { fontSize: 28, fontWeight: '700', letterSpacing: -0.6, lineHeight: 34, textAlign: 'center' },
   description: { fontSize: 15, lineHeight: 22, textAlign: 'center' },

@@ -14,6 +14,9 @@ const NodeConnectionObservationSchema = z.object({
   phase: ControlPlaneNodeConnectionPhaseSchema,
   changedAt: z.string().datetime(),
   lastSeenAt: z.string().datetime().optional(),
+  // Compatibility for older producers that only sent the connection phase.
+  status: z.enum(['unknown', 'online', 'offline', 'degraded']).optional(),
+  health: z.enum(['unknown', 'ok', 'degraded', 'failed']).optional(),
 }).strip();
 const INSTANCE_LIFECYCLE_SNAPSHOT_EVENT = 'instance.lifecycle.snapshot';
 type DirectoryRefreshDomain = 'nodes' | 'instances';
@@ -186,7 +189,15 @@ export class MobileDirectoryController {
     if (event.type === 'node.connection.updated') {
       const parsed = safeParseResponse(NodeConnectionObservationSchema, event.payload);
       if (!parsed.success || event.scope?.nodeId !== parsed.data.nodeId) return false;
-      this.store.setNodeConnection(this.controlPlaneId, parsed.data.nodeId, parsed.data.phase, parsed.data.changedAt, parsed.data.lastSeenAt);
+      const { status, health } = parsed.data;
+      this.store.setNodeConnection(
+        this.controlPlaneId,
+        parsed.data.nodeId,
+        parsed.data.phase,
+        parsed.data.changedAt,
+        parsed.data.lastSeenAt,
+        status !== undefined && health !== undefined ? { status, health } : undefined,
+      );
       return true;
     }
     if (event.type === INSTANCE_LIFECYCLE_SNAPSHOT_EVENT) {

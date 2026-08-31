@@ -248,15 +248,8 @@ export class AiSessionActionService {
         });
       }
     }
-    if (input.reasoningEffort) {
-      const capability = normalizeAiSessionReasoningEffortCapabilities(aiSessionProviderCapability(instance.capabilities, input.agent));
-      if (!capability.selectAtCreate) {
-        throw Object.assign(new Error(`${input.agent} does not support selecting reasoning effort at creation.`), {
-          statusCode: 409,
-          code: "AI_SESSION_REASONING_EFFORT_UNSUPPORTED",
-        });
-      }
-    }
+    // Reasoning effort is an additive capability. Older instances may omit it;
+    // creation must still proceed without the optional setting.
     const supportsWorkspaceSelection = instanceSupportsAiSessionWorkspaceSelection(instance);
     if (input.gitSelection && !supportsWorkspaceSelection) {
       throw aiSessionWorkspaceSelectionUnsupported();
@@ -264,7 +257,8 @@ export class AiSessionActionService {
     const effectivePermissionMode = input.permissionMode
       || (input.agent === "codex" ? instance.config.defaultCodexPermissionMode : undefined);
     const route = input.gitSelection ? "/repository/ai-session-workspace/create" : "/ai-sessions";
-    const { cwdFolderId, ...baseInput } = input;
+    const { cwdFolderId, reasoningEffort, ...baseInput } = input;
+    const reasoningCapability = normalizeAiSessionReasoningEffortCapabilities(aiSessionProviderCapability(instance.capabilities, input.agent));
     const result = parseResponse(AiSessionCreateResultSchema, await this.options.request(instance, route, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -272,6 +266,9 @@ export class AiSessionActionService {
         ...baseInput,
         // Compatibility for v0.0.21: its strict controlled-instance create schema does not accept cwdFolderId.
         ...(supportsWorkspaceSelection && cwdFolderId ? { cwdFolderId } : {}),
+        // Older controlled instances may omit the additive reasoning capability.
+        // Do not send the optional setting in that case; creation remains usable.
+        ...(reasoningCapability.selectAtCreate && reasoningEffort ? { reasoningEffort } : {}),
         ...(effectivePermissionMode ? { permissionMode: effectivePermissionMode } : {}),
       }),
     }));

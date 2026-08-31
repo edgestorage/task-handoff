@@ -45,17 +45,20 @@ test('new App session uses full-width anchored selectors for instance, App, and 
   await screen.unmount();
 });
 
-test('new App session instance subtitles use the node name like AI sessions', () => {
+test('new App session instance options carry node group labels without subtitles', () => {
+  const options = instanceSelectOptions([instance, { ...instance, id: 'instance-2', nodeId: 'node-missing', name: 'Remote workspace' }], [node]);
   const actions = newSessionMenuActions(
-    instanceSelectOptions([instance, { ...instance, id: 'instance-2', nodeId: 'node-missing', name: 'Remote workspace' }], [node]),
+    options,
     instance.id,
     { destructiveImage: '#ff6961', image: '#aeaeb2' },
   );
 
-  expect(actions).toEqual(expect.arrayContaining([
-    expect.objectContaining({ title: 'Local workspace', subtitle: 'Mac Studio' }),
-    expect.objectContaining({ title: 'Remote workspace', subtitle: 'node-missing' }),
-  ]));
+  expect(actions).toEqual([
+    expect.objectContaining({ displayInline: true, title: 'Mac Studio', subactions: [expect.objectContaining({ title: 'Local workspace', subtitle: undefined })] }),
+    expect.objectContaining({ displayInline: true, title: 'node-missing', subactions: [expect.objectContaining({ title: 'Remote workspace', subtitle: undefined })] }),
+  ]);
+  expect(options.find((option) => option.label === 'Local workspace')?.groupLabel).toBe('Mac Studio');
+  expect(options.find((option) => option.label === 'Remote workspace')?.groupLabel).toBe('node-missing');
 });
 
 test('new App session icons follow the desktop App launch categories', () => {

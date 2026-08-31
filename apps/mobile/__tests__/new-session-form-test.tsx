@@ -91,8 +91,9 @@ describe('<NewSessionForm />', () => {
       { label: 'Codex', systemImage: 'sparkles', value: 'codex' },
       { danger: true, label: 'Full access', systemImage: 'exclamationmark.shield', value: 'full-access' },
     ], instance.id, { destructiveImage: '#ff6961', image: '#aeaeb2' });
-    expect(nativeActions).toEqual(expect.arrayContaining([
-      expect.objectContaining({ image: 'server.rack', imageColor: '#aeaeb2', title: 'Local workspace', subtitle: 'Mac Studio' }),
+    const flattenedNativeActions = nativeActions.flatMap((action) => action.subactions || [action]);
+    expect(flattenedNativeActions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ image: 'server.rack', imageColor: '#aeaeb2', title: 'Local workspace', subtitle: undefined }),
       expect.objectContaining({ image: 'folder', imageColor: '#aeaeb2', title: 'Mobile', subtitle: '/workspace/mobile' }),
       expect.objectContaining({ image: 'sparkles', imageColor: '#aeaeb2', title: 'Codex', subtitle: undefined }),
       expect.objectContaining({ image: 'exclamationmark.shield', imageColor: '#ff6961', title: 'Full access' }),
