@@ -11,6 +11,7 @@ import type {
   AiSessionReference,
 } from "@task-handoff/protocol/ai-sessions";
 import { AiSessionCreateResultSchema } from "@task-handoff/protocol/ai-sessions";
+import { normalizeAiSessionReasoningEffortCapabilities } from "@task-handoff/protocol/ai-session-provider-capabilities";
 import { aiSessionControlError, type AiSessionController } from "./ai-session-control";
 import type { AiSessionRegistry } from "./ai-session-registry";
 
@@ -35,6 +36,7 @@ export type AiSessionCreateCoordinatorOptions = {
   registry: AiSessionRegistry;
   controller: AiSessionController;
   ensureProvider?: (agent: string) => void | Promise<void>;
+  getProviderCapability?: (agent: string) => unknown;
   resolveModelSelection?: (agent: AiAgentKind, requested?: AiSessionModelSelection) => AiSessionModelSelection | undefined;
   materializationTimeoutMs?: number;
   operationStorePath?: string;
@@ -77,6 +79,10 @@ export class AiSessionCreateCoordinator {
 
   private async perform(input: AiSessionCreateCoordinatorInput): Promise<AiSessionCreateResult> {
     await this.options.ensureProvider?.(input.agent);
+    if (input.reasoningEffort && this.options.getProviderCapability
+      && !normalizeAiSessionReasoningEffortCapabilities(this.options.getProviderCapability(input.agent)).selectAtCreate) {
+      throw aiSessionControlError("AI_SESSION_REASONING_EFFORT_UNSUPPORTED", `${input.agent} does not support selecting reasoning effort at creation.`, 409);
+    }
     const provider = this.options.controller.provider(input.agent);
     if (!provider.createSession) {
       throw aiSessionControlError("AI_SESSION_CREATE_UNSUPPORTED", `${input.agent} does not support direct AI session creation.`, 400);

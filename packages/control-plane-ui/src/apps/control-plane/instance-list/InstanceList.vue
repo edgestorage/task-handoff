@@ -317,7 +317,7 @@ function openNewInstanceFromTemporaryList() {
   background: linear-gradient(180deg, var(--surface) 0%, var(--surface-inset) 100%);
   color: var(--terminal-text);
   box-shadow: inset -1px 0 0 var(--workspace-grid);
-  padding: 12px;
+  padding: 10px;
 }
 
 .instance-list.collapsed {
@@ -371,7 +371,7 @@ function openNewInstanceFromTemporaryList() {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  margin-bottom: 10px;
+  margin-bottom: 8px;
 }
 
 .list-head-actions {
@@ -481,8 +481,8 @@ function openNewInstanceFromTemporaryList() {
   grid-template-columns: 18px minmax(0, 1fr);
   align-items: center;
   gap: 6px;
-  min-height: 34px;
-  margin-bottom: 10px;
+  min-height: 32px;
+  margin-bottom: 8px;
   border: 1px solid var(--line-strong);
   border-radius: 7px;
   background: var(--surface-hover);
@@ -565,7 +565,7 @@ function openNewInstanceFromTemporaryList() {
   border-radius: 8px;
   background: var(--instance-list-row-bg);
   color: inherit;
-  margin-bottom: 7px;
+  margin-bottom: 4px;
   padding: 0;
 }
 
@@ -590,7 +590,7 @@ function openNewInstanceFromTemporaryList() {
   background: transparent;
   color: inherit;
   cursor: pointer;
-  padding: 10px;
+  padding: 8px;
   text-align: left;
 }
 
@@ -642,7 +642,7 @@ function openNewInstanceFromTemporaryList() {
   outline: none;
 }
 
-.instance-action-menu {
+:global(.instance-action-menu) {
   display: grid;
   width: 158px;
   gap: 2px;
@@ -658,7 +658,7 @@ function openNewInstanceFromTemporaryList() {
   grid-template-columns: 20px minmax(0, 1fr) auto 16px auto;
   align-items: center;
   width: 100%;
-  min-height: 32px;
+  min-height: 28px;
   gap: 6px;
   border: 0;
   border-radius: 6px;
@@ -668,7 +668,7 @@ function openNewInstanceFromTemporaryList() {
   font: inherit;
   font-size: 13px;
   font-weight: 750;
-  margin: 4px 0 3px;
+  margin: 3px 0 2px;
   padding: 0 4px 0 0;
   text-align: left;
 }
@@ -732,7 +732,7 @@ function openNewInstanceFromTemporaryList() {
   padding: 5px;
 }
 
-.instance-action-item {
+:global(.instance-action-menu .instance-action-item) {
   display: flex;
   align-items: center;
   gap: 7px;
@@ -743,45 +743,45 @@ function openNewInstanceFromTemporaryList() {
   background: transparent;
   color: var(--control-plane-menu-text);
   cursor: pointer;
-  font-size: 12px;
-  font-weight: 700;
+  font-size: 13px;
+  font-weight: 500;
   padding: 0 8px;
   text-align: left;
 }
 
-.instance-action-item span {
+:global(.instance-action-menu .instance-action-item span) {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.instance-action-item svg:last-child:not(:first-child) {
+:global(.instance-action-menu .instance-action-item svg:last-child:not(:first-child)) {
   margin-left: auto;
   color: var(--text-subtle);
 }
 
-.instance-action-item:hover,
-.instance-action-item:focus-visible,
-.instance-action-item[data-highlighted],
-.instance-action-item[data-state="open"] {
+:global(.instance-action-menu .instance-action-item:hover),
+:global(.instance-action-menu .instance-action-item:focus-visible),
+:global(.instance-action-menu .instance-action-item[data-highlighted]),
+:global(.instance-action-menu .instance-action-item[data-state="open"]) {
   background: var(--surface-active);
   color: var(--control-plane-menu-hover-text);
   outline: none;
 }
 
-.instance-action-item.danger {
+:global(.instance-action-menu .instance-action-item.danger) {
   color: var(--status-danger);
 }
 
-.instance-action-item.danger:hover,
-.instance-action-item.danger:focus-visible,
-.instance-action-item.danger[data-highlighted] {
+:global(.instance-action-menu .instance-action-item.danger:hover),
+:global(.instance-action-menu .instance-action-item.danger:focus-visible),
+:global(.instance-action-menu .instance-action-item.danger[data-highlighted]) {
   background: var(--status-danger-bg);
   color: var(--status-danger);
 }
 
-.instance-action-item[data-disabled] {
+:global(.instance-action-menu .instance-action-item[data-disabled]) {
   cursor: default;
   opacity: 0.52;
 }

@@ -37,6 +37,11 @@ export class AiSessionProviderRegistry {
     return this.descriptors.get(agent);
   }
 
+  capability(agent: string) {
+    const capability = this.get(agent)?.capability;
+    return typeof capability === "function" ? capability() : capability;
+  }
+
   require(agent: string) {
     const descriptor = this.get(agent);
     if (!descriptor) {
@@ -63,8 +68,6 @@ export class AiSessionProviderRegistry {
   }
 
   capabilities() {
-    return [...this.descriptors.values()].map((descriptor) => (
-      typeof descriptor.capability === "function" ? descriptor.capability() : descriptor.capability
-    ));
+    return [...this.descriptors.keys()].map((agent) => this.capability(agent)!);
   }
 }

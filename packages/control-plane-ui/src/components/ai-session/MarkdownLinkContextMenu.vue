@@ -1,8 +1,10 @@
 <template>
   <ContextMenu v-model:open="open">
-    <ContextMenuTrigger as-child @contextmenu="captureContextMenu">
-      <div class="markdown-link-menu-host"><slot /></div>
-    </ContextMenuTrigger>
+    <div class="markdown-link-menu-host" @contextmenu.capture="captureContextMenu">
+      <ContextMenuTrigger as-child>
+        <div class="markdown-link-menu-content"><slot /></div>
+      </ContextMenuTrigger>
+    </div>
     <ContextMenuContent v-if="target" class="markdown-link-context-menu">
       <ContextMenuItem v-if="target.kind === 'file' && isAbsolutePath(target.path)" @select="openDesktopFile(target.path)">
         <FolderOpen :size="14" />{{ props.labels.openDesktopFile }}
@@ -51,11 +53,12 @@ function captureContextMenu(event: MouseEvent) {
   const anchor = event.target instanceof Element ? event.target.closest("a[href]") : undefined;
   const href = anchor?.getAttribute("href")?.trim();
   if (!href) {
+    event.stopPropagation();
     open.value = false;
     return;
   }
   target.value = classifyMarkdownLink(href, props.repositoryContext);
-  if (target.value.kind === "unsupported") { open.value = false; return; }
+  if (target.value.kind === "unsupported") { event.stopPropagation(); open.value = false; return; }
   event.preventDefault();
 }
 
@@ -74,5 +77,6 @@ async function openDefaultBrowser(url: string) {
 
 <style scoped>
 .markdown-link-menu-host { display: contents; }
+.markdown-link-menu-content { display: contents; }
 .markdown-link-context-menu :deep(svg) { margin-right: 8px; }
 </style>

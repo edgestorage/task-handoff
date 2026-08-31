@@ -87,6 +87,14 @@ test("streaming Markdown uses markstream pacing with independent character revea
   assert.match(animatedText, /@animationend\.stop="settleSegment\(segment\.id\)"/);
 });
 
+test("streaming Markdown link context menu only captures anchor context menus", () => {
+  const menu = fs.readFileSync(new URL("../src/components/ai-session/MarkdownLinkContextMenu.vue", import.meta.url), "utf8");
+  assert.match(menu, /class="markdown-link-menu-host" @contextmenu\.capture="captureContextMenu"/);
+  assert.match(menu, /event\.target instanceof Element \? event\.target\.closest\("a\[href\]"\)/);
+  assert.match(menu, /event\.stopPropagation\(\);[\s\S]*open\.value = false/);
+  assert.doesNotMatch(message, /ContextMenuTrigger[\s\S]*@contextmenu="captureContextMenu"/);
+});
+
 test("streaming Markdown keeps the existing session typography, semantic colors, code blocks, and tables", () => {
   assert.match(message, /class="ai-session-streaming-markdown"/);
   assert.match(message, /--ms-text-body: 1em/);

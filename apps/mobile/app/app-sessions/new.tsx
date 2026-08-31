@@ -1,4 +1,4 @@
-import { router, Stack, useLocalSearchParams, type Href } from 'expo-router';
+import { router, useLocalSearchParams, type Href } from 'expo-router';
 import { useEffect, useState } from 'react';
 import type { ControlPlaneNodeLocalFolder } from '@task-handoff/control-plane-client';
 
@@ -13,6 +13,8 @@ import { useMobileToast } from '../../src/components/MobileToast';
 import { mobileBrowserCapability } from '../../src/control-plane/browser-context';
 import { useMobileControlPlaneRuntime } from '../../src/control-plane/use-mobile-control-plane-runtime';
 import { mobileBrowserController } from '../../src/browser/controller';
+import { mobileSessionCreationInstanceStore, preferredSessionCreationInstanceId } from '../../src/session-creation/instance-selection';
+import { useInstanceScope } from '../../src/instance-scope/use-instance-scope';
 
 const EMBEDDED_BROWSER_APP_ID = 'embedded-browser';
 
@@ -22,14 +24,20 @@ export default function NewAppSessionRoute() {
   const runtime = useMobileControlPlaneRuntime();
   const { instanceId: requestedInstanceId } = useLocalSearchParams<{ instanceId?: string }>();
   const { controlPlaneId, state } = useActiveDirectories();
+  const { scope } = useInstanceScope();
   const [selection, setSelection] = useState<{ instanceId?: string; appId?: string; folderId?: string }>({});
   const [folderState, setFolderState] = useState<{ nodeId: string; folders: ControlPlaneNodeLocalFolder[] }>({ nodeId: '', folders: [] });
   const [browserCapability, setBrowserCapability] = useState<{ key: string; supported: boolean }>({ key: '', supported: false });
   const [busy, setBusy] = useState(false);
 
+  const preferredInstanceId = preferredSessionCreationInstanceId(
+    state.instances,
+    requestedInstanceId,
+    mobileSessionCreationInstanceStore.read(controlPlaneId, 'app'),
+  );
   const selectedInstanceId = state.instances.some((instance) => instance.id === selection.instanceId)
     ? selection.instanceId!
-    : initialAppInstanceId(state.instances, requestedInstanceId);
+    : initialAppInstanceId(state.instances, preferredInstanceId);
   const selectedInstance = state.instances.find((instance) => instance.id === selectedInstanceId);
   const browserCapabilityKey = runtime.profile && selectedInstance
     ? `${runtime.profile.identity.controlPlaneId}\u0000${selectedInstance.id}\u0000${JSON.stringify(selectedInstance.capabilities)}`
@@ -108,7 +116,6 @@ export default function NewAppSessionRoute() {
   };
 
   return <>
-    <Stack.Screen options={{ title: t('nav.newAppSession') }} />
     <NewAppSessionForm
       instances={state.instances}
       nodes={state.nodes}
@@ -122,6 +129,7 @@ export default function NewAppSessionRoute() {
       error={guidance}
       onInstanceChange={(instanceId) => {
         const instance = state.instances.find((candidate) => candidate.id === instanceId);
+        if (scope.kind === 'all') mobileSessionCreationInstanceStore.write(controlPlaneId, 'app', instanceId);
         setSelection({ instanceId, appId: instance?.availableApps[0]?.id });
       }}
       onAppChange={(appId) => setSelection({ instanceId: selectedInstanceId, appId })}

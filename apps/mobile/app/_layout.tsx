@@ -84,7 +84,7 @@ function LocalizedRootLayout() {
                     <Stack.Screen name="instances/[instanceId]" options={{ title: t('nav.instance'), ...iosTransparentHeaderOptions(dark) }} />
                     <Stack.Screen name="sessions/new" options={{ headerStyle: { backgroundColor: colors.background }, title: '' }} />
                     <Stack.Screen name="sessions/[instanceId]/[sessionId]" options={{ title: t('nav.aiSession'), ...iosTransparentHeaderOptions(dark) }} />
-                    <Stack.Screen name="app-sessions/new" options={{ title: t('nav.newAppSession') }} />
+                    <Stack.Screen name="app-sessions/new" options={{ title: '', ...iosTransparentHeaderOptions(dark) }} />
                     <Stack.Screen name="app-sessions/[instanceId]/[sessionId]" options={{ title: t('nav.terminal') }} />
                     <Stack.Screen name="history/[instanceId]/index" options={{ title: t('nav.history'), ...iosTransparentHeaderOptions(dark) }} />
                     <Stack.Screen name="history/[instanceId]/[historyId]" options={{ title: t('nav.sessionHistory'), ...iosTransparentHeaderOptions(dark) }} />

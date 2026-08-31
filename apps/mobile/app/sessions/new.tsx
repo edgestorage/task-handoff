@@ -21,6 +21,8 @@ import { useActiveDirectories } from '../../src/directories/use-directories';
 import { mobileDirectoryStore } from '../../src/directories/store';
 import { useMobileToast } from '../../src/components/MobileToast';
 import { useI18n } from '../../src/i18n';
+import { mobileSessionCreationInstanceStore, preferredSessionCreationInstanceId } from '../../src/session-creation/instance-selection';
+import { useInstanceScope } from '../../src/instance-scope/use-instance-scope';
 
 export default function NewAiSessionRoute() {
   const insets = useSafeAreaInsets();
@@ -28,6 +30,7 @@ export default function NewAiSessionRoute() {
   const toast = useMobileToast();
   const { instanceId: requestedInstanceId } = useLocalSearchParams<{ instanceId?: string }>();
   const { controlPlaneId, state } = useActiveDirectories();
+  const { scope } = useInstanceScope();
   const [selection, setSelection] = useState<{ instanceId?: string; agent?: string; folderId?: string }>({});
   const [message, setMessage] = useState('');
   const [permissionSelection, setPermissionSelection] = useState<{ instanceId: string; mode: AiSessionPermissionMode }>();
@@ -55,9 +58,14 @@ export default function NewAiSessionRoute() {
     }
   }, []);
 
+  const preferredInstanceId = preferredSessionCreationInstanceId(
+    state.instances,
+    requestedInstanceId,
+    mobileSessionCreationInstanceStore.read(controlPlaneId, 'ai'),
+  );
   const selectedInstanceId = state.instances.some((instance) => instance.id === selection.instanceId)
     ? selection.instanceId!
-    : initialInstanceId(state.instances, requestedInstanceId);
+    : initialInstanceId(state.instances, preferredInstanceId);
   const selectedInstance = state.instances.find((instance) => instance.id === selectedInstanceId);
   const agent = selectedInstance?.availableAgents.some((candidate) => candidate.id === selection.agent)
     ? selection.agent!
@@ -303,6 +311,7 @@ export default function NewAiSessionRoute() {
     visualBalanceInset={newSessionVisualBalanceInset(Platform.OS, insets.top)}
     onInstanceChange={(instanceId) => {
       const instance = state.instances.find((candidate) => candidate.id === instanceId);
+      if (scope.kind === 'all') mobileSessionCreationInstanceStore.write(controlPlaneId, 'ai', instanceId);
       setReasoningEffort(undefined);
       setSelection({ instanceId, agent: instance?.availableAgents[0]?.id });
     }}

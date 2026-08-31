@@ -4,5 +4,17 @@ import type { AnchoredSelectOption } from '../components/AnchoredSelectMenu';
 
 export function instanceSelectOptions(instances: readonly ControlPlaneInstanceDirectoryEntry[], nodes: readonly ControlPlaneNodeDirectoryEntry[]): AnchoredSelectOption[] {
   const nodeNames = new Map(nodes.map((node) => [node.id, node.name]));
-  return instances.map((instance) => ({ label: instance.name, description: nodeNames.get(instance.nodeId) || instance.nodeId, systemImage: 'server.rack', value: instance.id }));
+  const grouped = new Map<string, ControlPlaneInstanceDirectoryEntry[]>();
+  for (const instance of instances) {
+    const key = instance.nodeId;
+    const items = grouped.get(key) || [];
+    items.push(instance);
+    grouped.set(key, items);
+  }
+  return [...grouped.entries()].flatMap(([nodeId, items]) => items.map((instance) => ({
+    groupLabel: nodeNames.get(nodeId) || nodeId,
+    label: instance.name,
+    systemImage: 'server.rack' as const,
+    value: instance.id,
+  })));
 }

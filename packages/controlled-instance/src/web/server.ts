@@ -948,6 +948,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   const aiSessionCreate = new AiSessionCreateCoordinator({
     registry: aiSessions,
     controller: aiSessionController,
+    getProviderCapability: (agent) => aiSessionProviders.capability(agent),
     operationStorePath: path.join(storagePaths.runtimeDir, "ai-session-create-operations.json"),
     ensureProvider: async (agent) => {
       await aiSessionProviders.ensureReady(agent);
@@ -1770,15 +1771,6 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     try {
       const referenced = AiSessionCreateRefInputSchema.extend({ cwd: AiSessionCreateInputSchema.shape.cwd }).strict().safeParse(request.body || {});
       const body = referenced.success ? referenced.data : AiSessionCreateInputSchema.parse(request.body || {});
-      if (body.reasoningEffort) {
-        const capability = normalizeAiSessionReasoningEffortCapabilities(aiSessionProviders.get(body.agent)?.capability);
-        if (!capability.selectAtCreate) {
-          throw Object.assign(new Error(`${body.agent} does not support selecting reasoning effort at creation.`), {
-            code: "AI_SESSION_REASONING_EFFORT_UNSUPPORTED",
-            statusCode: 409,
-          });
-        }
-      }
       const attachments: AiSessionMessageAttachment[] = [];
       for (const attachment of body.attachments) {
         if (attachment.source.type !== "upload-ref") attachments.push(AiSessionMessageAttachmentSchema.parse(attachment));

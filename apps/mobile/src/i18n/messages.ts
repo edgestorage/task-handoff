@@ -266,6 +266,7 @@ export const enUS = {
   'appSessions.instanceNotReady': 'This instance is not ready. Start or repair it from the desktop app.',
   'appSessions.noApps': 'No apps are available on this instance.',
   'browser.sessions': 'Sessions',
+  'browser.webSessions': 'Web Sessions',
   'browser.browser': 'Browser',
   'browser.new': 'New Browser',
   'browser.empty': 'No Browser tabs in this scope.',
@@ -563,6 +564,7 @@ export const enUS = {
 export type MessageKey = keyof typeof enUS;
 
 export const zhCN: Record<MessageKey, string> = {
+  'browser.webSessions': 'Web 会话',
   'nav.apps': 'Apps',
   'browser.sessions': '会话', 'browser.browser': '浏览器', 'browser.new': '新建浏览器', 'browser.empty': '当前范围内没有浏览器标签页。', 'browser.unavailable': '当前实例或连接不支持浏览器。', 'browser.untitled': '新标签页', 'browser.selectInstance': '选择实例', 'browser.createFailed': '无法打开浏览器', 'browser.address': '地址', 'browser.addressPlaceholder': '输入 URL', 'browser.addressInvalid': '请输入有效的 HTTP 或 HTTPS 地址。', 'browser.back': '后退', 'browser.forward': '前进', 'browser.reload': '刷新', 'browser.stop': '停止加载', 'browser.close': '关闭标签页',
   'sessions.detached': 'Detached',
