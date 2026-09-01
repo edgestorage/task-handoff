@@ -84,6 +84,11 @@ function LocalizedRootLayout() {
                     <Stack.Screen name="instances/[instanceId]" options={{ title: t('nav.instance'), ...iosTransparentHeaderOptions(dark) }} />
                     <Stack.Screen name="sessions/new" options={{ headerStyle: { backgroundColor: colors.background }, title: '' }} />
                     <Stack.Screen name="sessions/[instanceId]/[sessionId]" options={{ title: t('nav.aiSession'), ...iosTransparentHeaderOptions(dark) }} />
+                    <Stack.Screen name="stories/[storyId]" options={{ title: t('nav.stories'), ...iosTransparentHeaderOptions(dark) }} />
+                    <Stack.Screen name="stories/new" options={{ title: t('stories.create'), ...iosTransparentHeaderOptions(dark) }} />
+                    <Stack.Screen name="stories/[storyId]/edit" options={{ title: t('stories.edit'), ...iosTransparentHeaderOptions(dark) }} />
+                    <Stack.Screen name="stories/[storyId]/documents/preview" options={{ title: t('stories.document'), ...iosTransparentHeaderOptions(dark) }} />
+                    <Stack.Screen name="stories/[storyId]/actions/[actionId]" options={{ title: t('stories.startAction'), ...iosTransparentHeaderOptions(dark) }} />
                     <Stack.Screen name="app-sessions/new" options={{ title: '', ...iosTransparentHeaderOptions(dark) }} />
                     <Stack.Screen name="app-sessions/[instanceId]/[sessionId]" options={{ title: t('nav.terminal') }} />
                     <Stack.Screen name="history/[instanceId]/index" options={{ title: t('nav.history'), ...iosTransparentHeaderOptions(dark) }} />

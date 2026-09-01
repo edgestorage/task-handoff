@@ -57,6 +57,7 @@ export function aiSessionHistoryItem(
     lineage: session.lineage,
     modelSelection: session.modelSelection,
     reasoningEffort: session.reasoningEffort,
+    storyId: session.storyId,
     title: session.title,
     userPrompt: session.userPrompt,
     lastMessage: session.lastMessage,

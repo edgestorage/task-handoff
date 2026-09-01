@@ -588,9 +588,9 @@
   position: relative;
   isolation: isolate;
   display: inline-grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   height: 32px;
-  width: 216px;
+  width: 288px;
   overflow: hidden;
   border: 1px solid hsl(var(--input));
   border-radius: 999px;
@@ -606,7 +606,7 @@
   bottom: 2px;
   left: 2px;
   z-index: 0;
-  width: calc((100% - 4px) / 3);
+  width: calc((100% - 4px) / 4);
   border-radius: 999px;
   background: hsl(var(--primary));
   box-shadow: 0 1px 2px rgb(0 0 0 / 10%);
@@ -614,11 +614,15 @@
 }
 
 .workbench-view-switcher[data-active-view="board"]::before {
-  left: calc(2px + (100% - 4px) / 3);
+  left: calc(2px + (100% - 4px) / 4);
 }
 
 .workbench-view-switcher[data-active-view="ai"]::before {
-  left: calc(2px + (100% - 4px) * 2 / 3);
+  left: calc(2px + (100% - 4px) / 2);
+}
+
+.workbench-view-switcher[data-active-view="story"]::before {
+  left: calc(2px + (100% - 4px) / 4 + (100% - 4px) / 2);
 }
 
 .workbench-view-option {

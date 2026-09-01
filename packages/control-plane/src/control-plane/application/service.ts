@@ -69,6 +69,7 @@ import {
 import { AppSessionDeltaResponseSchema, AppSessionsStateSchema, emptyAppSessionsSnapshot, type AppSessionDeltaResponse, type AppSessionsSnapshot } from "@task-handoff/protocol/app-sessions";
 import type { ControlPlaneTriggerMutationFailure } from "@task-handoff/protocol/triggers";
 import type { RepositoryAiSessionGitSelection } from "@task-handoff/protocol/repository";
+import { StorySchema } from "@task-handoff/protocol/stories";
 import { AiSessionActionService } from "../sessions/ai-session-actions.ts";
 import type { RequestTimingDiagnostics } from "../../shared/http/server-timing.ts";
 export { assertAiSessionRuntimePathSupport } from "../sessions/ai-session-actions.ts";
@@ -1555,6 +1556,15 @@ export class ControlPlaneService {
     gitSelection?: RepositoryAiSessionGitSelection;
   }) {
     const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
+    if (input.storyId) {
+      const node = this.requireNode(instance.nodeId);
+      const response = await this.resolveNodeAgentTransport(node).request(node, `/stories/${encodeURIComponent(input.storyId)}`);
+      const payload = await response.json().catch(() => ({})) as { data?: unknown; error?: { message?: string; code?: string } };
+      if (!response.ok) throw Object.assign(new Error(payload.error?.message || "Story is unavailable."), { statusCode: response.status, code: payload.error?.code || "STORY_NOT_FOUND" });
+      const story = StorySchema.parse(payload.data);
+      if (story.ownerNodeId !== instance.nodeId) throw Object.assign(new Error("Story and target instance belong to different nodes."), { statusCode: 409, code: "STORY_NODE_MISMATCH" });
+      if (story.archivedAt) throw Object.assign(new Error("Archived Story cannot create new Sessions."), { statusCode: 409, code: "STORY_ARCHIVED" });
+    }
     const { cwdFolderId: _cwdFolderId, ...resolvedInput } = input;
     const cwdPath = await this.aiSessionRuntimeCwd(instance, input.cwdFolderId);
     const cwd = { type: "runtime-path" as const, path: cwdPath };

@@ -63,7 +63,7 @@ export const sessions = {
     continue: "Continue conversation", continueConversation: "Send a message to continue this conversation",
     attachmentUnavailable: "Attachment content is unavailable: {name}",
     backCurrent: "Back to current conversation", history: "Previous conversations", historyOptions: "Previous conversation list options",
-    cardLayout: "Cards", listLayout: "List", groupByPath: "Group by path", showEmptyPathGroups: "Show paths without sessions", sortByStatus: "Sort by status", historyLoadFailed: "Failed to load previous conversations.",
+    cardLayout: "Cards", listLayout: "List", noGrouping: "No grouping", groupByPath: "Group by path", groupByStory: "Group by Story", unassignedStory: "Unassigned Story", showEmptyPathGroups: "Show paths without sessions", sortByStatus: "Sort by status", historyLoadFailed: "Failed to load previous conversations.",
     historyDetailFailed: "Failed to load conversation details.", unnamedConversation: "Untitled conversation",
     resumePending: "The conversation started, but its runtime state is not confirmed yet. Please try again shortly.", continueFailed: "Failed to continue this conversation.",
   },

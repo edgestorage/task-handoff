@@ -12,3 +12,4 @@ export * from "./users.ts";
 export * from "./client.ts";
 export * from "./resources.ts";
 export * from "./triggers.ts";
+export * from "./stories.ts";

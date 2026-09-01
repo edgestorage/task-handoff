@@ -28,11 +28,11 @@ export default function NewAiSessionRoute() {
   const insets = useSafeAreaInsets();
   const { t } = useI18n();
   const toast = useMobileToast();
-  const { instanceId: requestedInstanceId } = useLocalSearchParams<{ instanceId?: string }>();
+  const { instanceId: requestedInstanceId, storyId: requestedStoryId, message: requestedMessage } = useLocalSearchParams<{ instanceId?: string; storyId?: string; message?: string }>();
   const { controlPlaneId, state } = useActiveDirectories();
   const { scope } = useInstanceScope();
   const [selection, setSelection] = useState<{ instanceId?: string; agent?: string; folderId?: string }>({});
-  const [message, setMessage] = useState('');
+  const [message, setMessage] = useState(typeof requestedMessage === 'string' ? requestedMessage : '');
   const [permissionSelection, setPermissionSelection] = useState<{ instanceId: string; mode: AiSessionPermissionMode }>();
   const [savingPermission, setSavingPermission] = useState(false);
   const [modelEntities, setModelEntities] = useState<AiSessionCatalogModelEntity[]>([]);
@@ -205,6 +205,7 @@ export default function NewAiSessionRoute() {
         modelSelection,
         reasoningEffort: effectiveReasoningEffort,
         clientRequestId: requestId,
+        storyId: typeof requestedStoryId === 'string' ? requestedStoryId : undefined,
       });
       if (agent === 'codex') await mobilePermissionStore.write(controlPlaneId, selectedInstance.id, result.aiSessionId, permissionMode).catch(() => undefined);
       await mobileCreateRequestStore.clear(controlPlaneId, selectedInstance.id, requestId);

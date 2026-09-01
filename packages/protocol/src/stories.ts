@@ -1,0 +1,130 @@
+import { z } from "zod";
+
+export const STORY_PROTOCOL_VERSION = "2026-09-01";
+export const STORY_DEFAULT_MAX_FILE_BYTES = 32 * 1024 * 1024;
+export const STORY_DEFAULT_MAX_BATCH_PATHS = 20;
+export const STORY_TEXT_PREVIEW_MAX_BYTES = 1024 * 1024;
+
+export const StoryIdSchema = z.string().trim().min(1).max(120);
+export const StoryPathSchema = z.string().trim().min(1).max(1024).refine((value) => {
+  if (value.startsWith("/") || value.includes("\\")) return false;
+  const segments = value.split("/");
+  return segments.every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
+}, "Story paths must be normalized relative POSIX paths.");
+
+export const StoryRevisionSchema = z.string().regex(/^[a-f0-9]{64}$/);
+
+export const StoryDocumentSchema = z.object({
+  title: z.string().trim().min(1).max(240),
+  storyPath: StoryPathSchema,
+  revision: StoryRevisionSchema,
+}).strict();
+
+export const StoryActionParameterSchema = z.object({
+  name: z.string().trim().min(1).max(80),
+  label: z.string().trim().min(1).max(120),
+  required: z.boolean().default(false),
+  defaultValue: z.string().max(4000).optional(),
+}).strict();
+
+export const StoryActionSchema = z.object({
+  id: z.string().trim().min(1).max(120),
+  title: z.string().trim().min(1).max(120),
+  promptTemplate: z.string().trim().min(1).max(32_000),
+  targetInstanceId: z.string().trim().min(1).max(120).optional(),
+  parameters: z.array(StoryActionParameterSchema).max(20).default([]),
+}).strict();
+
+export const StoryActionInputSchema = StoryActionSchema.omit({ id: true }).strict();
+
+export const StoryActionUpdateInputSchema = StoryActionInputSchema.extend({
+  id: StoryActionSchema.shape.id.optional(),
+}).strict();
+
+export const StorySchema = z.object({
+  id: StoryIdSchema,
+  ownerNodeId: z.string().trim().min(1).max(120),
+  title: z.string().trim().min(1).max(240),
+  description: z.string().trim().max(4000).optional(),
+  documents: z.array(StoryDocumentSchema).max(500).default([]),
+  actions: z.array(StoryActionSchema).max(50).default([]),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+  archivedAt: z.string().datetime().optional(),
+}).strict();
+
+export const StoryListSchema = z.object({
+  stories: z.array(StorySchema).default([]),
+}).strict();
+
+export const StoryCreateInputSchema = z.object({
+  title: StorySchema.shape.title,
+  description: StorySchema.shape.description,
+  actions: z.array(StoryActionInputSchema).max(50).optional(),
+}).strict();
+
+export const StoryUpdateInputSchema = z.object({
+  title: StorySchema.shape.title.optional(),
+  description: StorySchema.shape.description.nullable().optional(),
+  actions: z.array(StoryActionUpdateInputSchema).max(50).optional(),
+}).strict().refine((value) => Object.keys(value).length > 0, "At least one Story field is required.");
+
+export const StoryDocumentUpdateInputSchema = z.object({
+  title: StoryDocumentSchema.shape.title.optional(),
+  storyPath: StoryPathSchema.optional(),
+}).strict().refine((value) => Object.keys(value).length > 0, "At least one document field is required.");
+
+export const StoryDocumentOrderInputSchema = z.object({
+  storyPaths: z.array(StoryPathSchema).max(500),
+}).strict();
+
+export const StoryManagementContentSetInputSchema = z.object({
+  storyPath: StoryPathSchema,
+  title: StoryDocumentSchema.shape.title.optional(),
+  expectedRevision: StoryRevisionSchema.optional(),
+}).strict();
+
+export const StoryContentListSchema = z.object({
+  documents: z.array(StoryDocumentSchema).max(500),
+}).strict();
+
+export const StoryContentPreviewSchema = z.object({
+  storyPath: StoryPathSchema,
+  revision: StoryRevisionSchema,
+  content: z.string(),
+  size: z.number().int().nonnegative(),
+}).strict();
+
+export const StoryContentGetInputSchema = z.object({
+  storyPaths: z.array(StoryPathSchema).min(1).max(STORY_DEFAULT_MAX_BATCH_PATHS),
+  destinationPath: z.string().trim().min(1).max(4096),
+}).strict();
+
+export const StoryContentSetInputSchema = z.object({
+  storyPath: StoryPathSchema,
+  title: StoryDocumentSchema.shape.title.optional(),
+  sourcePath: z.string().trim().min(1).max(4096),
+  expectedRevision: StoryRevisionSchema.optional(),
+}).strict();
+
+export const StoryContentTransferItemSchema = z.object({
+  storyPath: StoryPathSchema,
+  path: z.string().trim().min(1).max(4096).optional(),
+  revision: StoryRevisionSchema.optional(),
+  error: z.object({
+    code: z.string().trim().min(1).max(120),
+    message: z.string().trim().min(1).max(2000),
+  }).strict().optional(),
+}).strict();
+
+export const StoryContentGetResultSchema = z.object({
+  items: z.array(StoryContentTransferItemSchema).min(1).max(STORY_DEFAULT_MAX_BATCH_PATHS),
+}).strict();
+
+export type Story = z.infer<typeof StorySchema>;
+export type StoryAction = z.infer<typeof StoryActionSchema>;
+export type StoryActionInput = z.infer<typeof StoryActionInputSchema>;
+export type StoryCreateInput = z.infer<typeof StoryCreateInputSchema>;
+export type StoryDocument = z.infer<typeof StoryDocumentSchema>;
+export type StoryContentPreview = z.infer<typeof StoryContentPreviewSchema>;
+export type StoryUpdateInput = z.infer<typeof StoryUpdateInputSchema>;

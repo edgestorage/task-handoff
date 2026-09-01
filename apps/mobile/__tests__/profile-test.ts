@@ -81,14 +81,16 @@ describe('MobileControlPlaneProfile', () => {
     expect(profile).not.toHaveProperty('future');
   });
 
-  test('normalizes a missing trigger capability without dropping an older Control Plane', () => {
+  test('normalizes missing additive capabilities without dropping an older Control Plane', () => {
     const { triggers: _triggers, ...legacyCapabilities } = baseProfile.capabilities;
 
     expect(normalizeMobileControlPlaneCapabilities(legacyCapabilities).triggers).toBe(false);
+    expect(normalizeMobileControlPlaneCapabilities(legacyCapabilities).stories).toBe(false);
     expect(parseStoredMobileControlPlaneProfile({
       ...baseProfile,
       capabilities: legacyCapabilities,
     }).capabilities.triggers).toBe(false);
+    expect(normalizeMobileControlPlaneCapabilities({ ...legacyCapabilities, stories: true }).stories).toBe(true);
   });
 
   test('reads a v0.0.19 v1 direct profile through the current discriminated profile', () => {

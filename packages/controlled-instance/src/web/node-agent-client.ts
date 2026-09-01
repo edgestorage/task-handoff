@@ -6,6 +6,11 @@ import {
   GitCredentialSshAgentResponseSchema,
   GitCredentialSshPrepareResponseSchema,
 } from "@task-handoff/protocol/managed-git-credentials";
+import {
+  StoryContentListSchema,
+  StoryRevisionSchema,
+  type StoryDocument,
+} from "@task-handoff/protocol/stories";
 
 export type NodeAgentRegistrationConfig = {
   controlMode: "standalone" | "controlled";
@@ -140,6 +145,55 @@ export class NodeAgentRegistrationClient {
     );
   }
 
+  async listStoryContent(sessionId: string): Promise<StoryDocument[]> {
+    const result = await this.request(
+      `node-agent/instances/${encodeURIComponent(this.requiredInstanceId())}/ai-sessions/${encodeURIComponent(sessionId)}/story-content`,
+      {},
+      "GET",
+    );
+    return StoryContentListSchema.parse(result).documents;
+  }
+
+  async downloadStoryContent(sessionId: string, storyPath: string, signal?: AbortSignal) {
+    const query = new URLSearchParams({ storyPath });
+    const response = await this.rawRequest(
+      `node-agent/instances/${encodeURIComponent(this.requiredInstanceId())}/ai-sessions/${encodeURIComponent(sessionId)}/story-content/file?${query}`,
+      { method: "GET", signal },
+    );
+    const revision = StoryRevisionSchema.parse(response.headers.get("x-story-revision"));
+    if (!response.body) throw new Error("Story content response has no body.");
+    return { body: response.body, revision };
+  }
+
+  async uploadStoryContent(sessionId: string, input: {
+    storyPath: string;
+    title?: string;
+    expectedRevision?: string;
+    body: BodyInit;
+    size: number;
+    signal?: AbortSignal;
+  }) {
+    const query = new URLSearchParams({ storyPath: input.storyPath });
+    if (input.title) query.set("title", input.title);
+    if (input.expectedRevision) query.set("expectedRevision", input.expectedRevision);
+    const response = await this.rawRequest(
+      `node-agent/instances/${encodeURIComponent(this.requiredInstanceId())}/ai-sessions/${encodeURIComponent(sessionId)}/story-content/file?${query}`,
+      {
+        method: "PUT",
+        headers: { "content-type": "application/octet-stream", "content-length": String(input.size) },
+        body: input.body,
+        duplex: "half",
+        signal: input.signal,
+      } as RequestInit,
+    );
+    const payload = (await response.json()) as { data?: { storyPath?: unknown; revision?: unknown; size?: unknown } };
+    return {
+      storyPath: String(payload.data?.storyPath || ""),
+      revision: StoryRevisionSchema.parse(payload.data?.revision),
+      size: Number(payload.data?.size || 0),
+    };
+  }
+
   private async registerOnce() {
     const snapshot = await this.snapshotProvider();
     const instanceId = this.requiredInstanceId();
@@ -221,27 +275,44 @@ export class NodeAgentRegistrationClient {
   }
 
   private async request(path: string, body: Record<string, unknown>, method = "POST") {
+    const response = await this.rawRequest(path, {
+      method,
+      headers: { "content-type": "application/json" },
+      ...(method === "GET" || method === "HEAD" ? {} : { body: JSON.stringify(stripUndefined(body)) }),
+    });
+    const payload = (await response.json().catch(() => ({}))) as { data?: Record<string, unknown> };
+    return payload.data || {};
+  }
+
+  private async rawRequest(path: string, init: RequestInit) {
     const baseUrl = this.config.nodeAgentUrl?.replace(/\/$/, "");
     if (!baseUrl) {
       throw new Error("Node agent URL is required.");
     }
+    const headerTimeout = new AbortController();
+    const timer = setTimeout(() => headerTimeout.abort(Object.assign(new Error("Node agent response header timed out."), {
+      code: "NODE_AGENT_RESPONSE_HEADER_TIMEOUT",
+    })), 30_000);
+    timer.unref?.();
+    const signal = init.signal
+      ? AbortSignal.any([init.signal, headerTimeout.signal])
+      : headerTimeout.signal;
     const response = await this.fetchImpl(`${baseUrl}/api/${path}`, {
-      method,
-      signal: AbortSignal.timeout(5_000),
+      ...init,
+      signal,
       headers: {
-        "content-type": "application/json",
+        ...Object.fromEntries(new Headers(init.headers).entries()),
         authorization: `Bearer ${this.config.registrationToken}`,
       },
-      body: JSON.stringify(stripUndefined(body)),
-    });
-    const payload = (await response.json().catch(() => ({}))) as { data?: Record<string, unknown>; error?: { message?: string } };
+    }).finally(() => clearTimeout(timer));
     if (!response.ok) {
+      const payload = (await response.json().catch(() => ({}))) as { error?: { message?: string } };
       throw Object.assign(
         new Error(payload.error?.message || `Node agent request failed with HTTP ${response.status}`),
         { statusCode: response.status },
       );
     }
-    return payload.data || {};
+    return response;
   }
 
   private requiredInstanceId() {

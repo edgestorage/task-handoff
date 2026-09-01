@@ -72,6 +72,7 @@ export class ControlPlaneIdentityService {
       nodes: true,
       instanceBoard: true,
       triggers: true,
+      stories: true,
       ...(authentication === "required" ? {
         accessManagement: {
           userManagement: {

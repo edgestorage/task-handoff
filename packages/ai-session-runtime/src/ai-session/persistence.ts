@@ -10,6 +10,7 @@ import {
   AiSessionToolSchema,
   AiSessionTurnSchema,
 } from "@task-handoff/protocol/ai-sessions";
+import { StoryIdSchema } from "@task-handoff/protocol/stories";
 import type {
   AiSessionLifecycle,
   AiSessionMessageAttachment,
@@ -22,7 +23,7 @@ import type {
 import { compact, messageText, normalizeTurns } from "../ai-session-turns";
 
 const PERSISTED_AI_SESSION_FIELD_NAMES = [
-  "id", "agent", "creationSource", "appSessionId", "appId", "providerSessionId", "lineage", "providerMeta", "modelSelection", "reasoningEffort", "appBindingKeys", "actions",
+  "id", "agent", "creationSource", "appSessionId", "appId", "providerSessionId", "lineage", "providerMeta", "modelSelection", "reasoningEffort", "storyId", "appBindingKeys", "actions",
   "activeTurnId", "title", "cwd", "cwdFolderId", "userPrompt", "turns", "status", "phase", "summary", "lastMessage", "lastMessageItemId",
   "currentTool", "toolCallsSinceLastMessage", "subAgents", "transcriptPath", "transcriptSize", "startedAt", "updatedAt",
   "completedAt", "error", "counters", "queue",
@@ -260,6 +261,7 @@ export function decodePersistedAiSession(value: unknown): AiSessionStatus | unde
   const lineage = AiSessionLineageSchema.safeParse(record.lineage);
   const modelSelection = AiSessionModelSelectionSchema.safeParse(record.modelSelection);
   const reasoningEffort = AiSessionReasoningEffortSchema.safeParse(record.reasoningEffort);
+  const storyId = StoryIdSchema.safeParse(record.storyId);
   const currentTool = normalizeTool(record.currentTool);
   const completedAt = typeof record.completedAt === "string" && AiSessionStatusSchema.shape.completedAt.safeParse(record.completedAt).success
     ? record.completedAt
@@ -275,6 +277,7 @@ export function decodePersistedAiSession(value: unknown): AiSessionStatus | unde
     ...(record.providerMeta && typeof record.providerMeta === "object" && !Array.isArray(record.providerMeta) ? { providerMeta: record.providerMeta } : {}),
     ...(modelSelection.success ? { modelSelection: modelSelection.data } : {}),
     ...(reasoningEffort.success ? { reasoningEffort: reasoningEffort.data } : {}),
+    ...(storyId.success ? { storyId: storyId.data } : {}),
     ...(appBindingKeys ? { appBindingKeys } : {}),
     ...(actions ? { actions } : {}),
     ...(typeof record.activeTurnId === "string" && record.activeTurnId ? { activeTurnId: compact(record.activeTurnId, 240) } : {}),

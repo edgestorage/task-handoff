@@ -15,6 +15,7 @@ export const MobileControlPlaneIdentitySchema = z.object({
 
 export const MobileControlPlaneCapabilitiesSchema = ControlPlanePublicCapabilitiesSchema.extend({
   triggers: z.boolean(),
+  stories: z.boolean().optional(),
 }).strict();
 
 const MobileControlPlaneProfileBaseSchema = z.object({
@@ -71,6 +72,7 @@ export function normalizeMobileControlPlaneCapabilities(input: ControlPlanePubli
   return MobileControlPlaneCapabilitiesSchema.parse({
     ...input,
     triggers: input.triggers === true,
+    stories: input.stories === true,
   });
 }
 
@@ -80,7 +82,7 @@ const STORED_PROFILE_FIELDS = {
   access: ['kind', 'origin', 'secureSessionKey', 'serviceOrigin', 'bindingId', 'bindingRevision', 'accountSession', 'transport'],
   'access.accountSession': ['id', 'secureCredentialKey'],
   'access.transport': ['request', 'stream', 'webSocket'],
-  capabilities: ['authentication', 'aiSessions', 'nodes', 'instanceBoard', 'triggers'],
+  capabilities: ['authentication', 'aiSessions', 'nodes', 'instanceBoard', 'triggers', 'stories'],
 } as const;
 
 export function storedMobileControlPlaneProfileUnknownFields(input: unknown) {
@@ -113,7 +115,7 @@ export function sanitizeStoredMobileControlPlaneProfile(input: unknown) {
   const profile = pick(input, ['version', 'identity', 'access', 'capabilities', 'createdAt', 'updatedAt']);
   if (!profile || typeof profile !== 'object' || Array.isArray(profile)) return profile;
   const value = profile as Record<string, unknown>;
-  const capabilities = pick(value.capabilities, ['authentication', 'aiSessions', 'nodes', 'instanceBoard', 'triggers']);
+  const capabilities = pick(value.capabilities, ['authentication', 'aiSessions', 'nodes', 'instanceBoard', 'triggers', 'stories']);
   const access = pick(value.access, ['kind', 'origin', 'secureSessionKey', 'serviceOrigin', 'bindingId', 'bindingRevision', 'accountSession', 'transport']);
   const accessRecord = access && typeof access === 'object' && !Array.isArray(access) ? access as Record<string, unknown> : undefined;
   const sanitizedAccess = accessRecord

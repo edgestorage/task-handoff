@@ -381,7 +381,7 @@ export const settings = {
     runtimePending: "Pending", runtimeDraining: "Draining", runtimeInstalling: "Installing", runtimeRestarting: "Restarting", runtimeVerifying: "Verifying", runtimeMatched: "Matched", runtimeFailed: "Update failed",
     listenerListening: "Listening", listenerError: "Error", listenerBootstrap: "Bootstrap configuration", listenerPersisted: "Saved configuration",
     remoteDisabled: "Disabled", remoteSaved: "Saved", remoteConnecting: "Connecting", remoteConnected: "Connected", remoteReconnecting: "Reconnecting", remoteFailed: "Failed",
-    connectionDirectHttp: "Direct HTTP", connectionReverseWss: "Reverse WebSocket", connectionControlPlaneProxy: "Control-plane proxy", runtimeDocker: "Docker", runtimeKubernetes: "Kubernetes", runtimeLocal: "Local",
+    connectionLocalIpc: "Local IPC", connectionLocalLoopback: "Local loopback", connectionDirectHttp: "Direct HTTP", connectionReverseWss: "Reverse WebSocket", connectionControlPlaneProxy: "Control-plane proxy", runtimeDocker: "Docker", runtimeKubernetes: "Kubernetes", runtimeLocal: "Local",
     accessNodeProxy: "Node proxy", accessDirectPort: "Direct port", accessKubernetesIngress: "Kubernetes ingress", accessKubernetesPortForward: "Kubernetes port forward",
     remoteNamePlaceholder: "Remote build host", pairingTokenPlaceholder: "node-agent pairing token",
   },

@@ -74,6 +74,7 @@ type AiSessionStartInput = {
   lineage?: AiSessionLineage;
   modelSelection?: AiSessionModelSelection;
   reasoningEffort?: AiSessionStatus["reasoningEffort"];
+  storyId?: AiSessionStatus["storyId"];
   title?: string;
   cwd?: string;
   cwdFolderId?: string;
@@ -340,6 +341,7 @@ export class AiSessionRegistry {
       providerMeta: undefined,
       modelSelection: input.modelSelection,
       reasoningEffort: input.reasoningEffort,
+      storyId: input.storyId,
       activeTurnId: undefined,
       title: input.title ? compact(input.title, 240) : undefined,
       cwd: input.cwd ? compact(input.cwd, 4096) : undefined,
@@ -400,6 +402,7 @@ export class AiSessionRegistry {
       lineage: item.lineage,
       modelSelection: item.modelSelection,
       reasoningEffort: item.reasoningEffort,
+      storyId: item.storyId,
       title: item.title,
       cwd: item.cwd,
       cwdFolderId: item.cwdFolderId,
@@ -625,6 +628,7 @@ export class AiSessionRegistry {
         lineage: input.lineage,
         modelSelection: input.modelSelection,
         reasoningEffort: input.reasoningEffort,
+        storyId: input.storyId,
         title: input.title,
         cwd: input.cwd,
         cwdFolderId: input.cwdFolderId,
@@ -638,6 +642,7 @@ export class AiSessionRegistry {
         providerMeta: input.providerMeta,
         modelSelection: input.modelSelection,
         reasoningEffort: input.reasoningEffort,
+        storyId: input.storyId || existing?.storyId,
         lineage: input.lineage,
         appBindingKeys: input.appBindingKeys,
         actions: input.actions,

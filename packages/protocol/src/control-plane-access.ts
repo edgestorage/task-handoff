@@ -17,6 +17,7 @@ export const ControlPlanePublicCapabilitiesSchema = z.object({
   nodes: z.boolean(),
   instanceBoard: z.boolean(),
   triggers: z.boolean().optional(),
+  stories: z.boolean().optional(),
   accessManagement: ControlPlaneAccessManagementCapabilitySchema.optional(),
 }).strict();
 

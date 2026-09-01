@@ -15,6 +15,7 @@ export async function createMobileAiSession(client: ControlPlaneClient, input: {
   permissionMode?: AiSessionPermissionMode;
   modelSelection?: AiSessionModelSelection;
   reasoningEffort?: AiSessionReasoningEffort;
+  storyId?: string;
   clientRequestId: string;
 }) {
   if (!input.instance.ready || input.instance.connectionStatus !== 'online') throw lifecycleError('INSTANCE_OFFLINE', 'The instance is offline. Start or repair it from the desktop app.');
@@ -33,6 +34,7 @@ export async function createMobileAiSession(client: ControlPlaneClient, input: {
     reasoningEffort: input.reasoningEffort,
     attachments: input.attachments ?? [],
     references: [],
+    ...(input.storyId ? { storyId: input.storyId } : {}),
   });
 }
 

@@ -16,6 +16,10 @@
   overflow: hidden;
 }
 
+.session-ai-workspace.creation-only {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .session-ai-sidebar-shell {
   display: contents;
 }

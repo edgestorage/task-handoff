@@ -35,6 +35,7 @@ export type AiSessionPatch = Partial<
     | "providerMeta"
     | "modelSelection"
     | "reasoningEffort"
+    | "storyId"
     | "appBindingKeys"
     | "actions"
     | "activeTurnId"
@@ -171,6 +172,7 @@ const AI_SESSION_BUSINESS_KEYS = [
   "providerMeta",
   "modelSelection",
   "reasoningEffort",
+  "storyId",
   "appBindingKeys",
   "actions",
   "activeTurnId",
@@ -423,6 +425,7 @@ export function reduceAiSessionSnapshot(
     providerMeta: event.providerMeta || current.providerMeta,
     modelSelection: event.modelSelection || current.modelSelection,
     reasoningEffort: event.reasoningEffort || current.reasoningEffort,
+    storyId: event.storyId || current.storyId,
     appBindingKeys: replaceAppBinding ? event.appBindingKeys : event.appBindingKeys || current.appBindingKeys,
     actions: event.actions || current.actions,
     activeTurnId: nextActiveTurnId(current, event, staleActivitySnapshot),
