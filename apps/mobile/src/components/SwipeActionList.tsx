@@ -22,7 +22,7 @@ export function SwipeActionList<Item>({
     data={data}
     keyExtractor={keyExtractor}
     ListEmptyComponent={ListEmptyComponent}
-    ListHeaderComponent={ListHeaderComponent}
+    ListHeaderComponent={ListHeaderComponent == null ? null : <>{ListHeaderComponent}</>}
     onRefresh={onRefresh}
     refreshing={refreshing}
     renderItem={(info) => {

@@ -52,6 +52,8 @@ export const nodeRuntimeStatusKeys: Record<string, string> = {
 };
 
 export const nodeConnectionModeKeys: Record<string, string> = {
+  "local-ipc": "settings.nodeDetail.connectionLocalIpc",
+  "local-loopback": "settings.nodeDetail.connectionLocalLoopback",
   "direct-http": "settings.nodeDetail.connectionDirectHttp",
   "reverse-wss": "settings.nodeDetail.connectionReverseWss",
   "control-plane-proxy": "settings.nodeDetail.connectionControlPlaneProxy",

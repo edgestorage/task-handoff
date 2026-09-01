@@ -5,6 +5,7 @@ export const navigation = {
   home: "首页",
   board: "看板",
   ai: "AI",
+  story: "Story",
   settings: "设置",
   user: "用户",
   userMenu: "用户菜单",

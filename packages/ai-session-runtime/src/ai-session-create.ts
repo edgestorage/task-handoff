@@ -10,6 +10,7 @@ import type {
   AiSessionReasoningEffort,
   AiSessionReference,
 } from "@task-handoff/protocol/ai-sessions";
+import type { Story } from "@task-handoff/protocol/stories";
 import { AiSessionCreateResultSchema } from "@task-handoff/protocol/ai-sessions";
 import { normalizeAiSessionReasoningEffortCapabilities } from "@task-handoff/protocol/ai-session-provider-capabilities";
 import { aiSessionControlError, type AiSessionController } from "./ai-session-control";
@@ -30,6 +31,7 @@ export type AiSessionCreateCoordinatorInput = {
   idempotencyFingerprint?: string;
   modelSelection?: AiSessionModelSelection;
   reasoningEffort?: AiSessionReasoningEffort;
+  storyId?: Story["id"];
 };
 
 export type AiSessionCreateCoordinatorOptions = {
@@ -103,6 +105,7 @@ export class AiSessionCreateCoordinator {
         providerSessionId,
         modelSelection: created.modelSelection || modelSelection,
         reasoningEffort: created.reasoningEffort || input.reasoningEffort,
+        storyId: input.storyId,
         cwd: created.cwd || input.cwd,
         cwdFolderId: input.cwdFolderId,
         status: "idle",
@@ -115,6 +118,9 @@ export class AiSessionCreateCoordinator {
     }
     if (input.cwdFolderId && session.cwdFolderId !== input.cwdFolderId) {
       session = this.options.registry.patch(session.id, { cwdFolderId: input.cwdFolderId });
+    }
+    if (input.storyId && session.storyId !== input.storyId) {
+      session = this.options.registry.patch(session.id, { storyId: input.storyId });
     }
     const actualModelSelection = created.modelSelection || modelSelection;
     if (actualModelSelection && session.modelSelection !== actualModelSelection) {

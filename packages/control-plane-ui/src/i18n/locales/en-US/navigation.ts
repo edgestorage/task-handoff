@@ -2,6 +2,7 @@ export const navigation = {
   home: "Home",
   board: "Board",
   ai: "AI",
+  story: "Story",
   settings: "Settings",
   user: "User",
   userMenu: "User menu",

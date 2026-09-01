@@ -19,6 +19,8 @@ export type NodeAgentStorePaths = {
   gitWorkspaceProvisioningIntentsDir: string;
   updatesDir: string;
   logsDir: string;
+  storyRegistryDir: string;
+  storyContentDir: string;
 };
 
 export function defaultNodeAgentDataDir() {
@@ -45,5 +47,7 @@ export function nodeAgentStorePaths(dataDir = defaultNodeAgentDataDir()): NodeAg
     gitWorkspaceProvisioningIntentsDir: path.join(root, "git-credentials", "workspace-provisioning-intents"),
     updatesDir: path.join(root, "updates"),
     logsDir: path.join(root, "logs"),
+    storyRegistryDir: path.join(root, "story-registry"),
+    storyContentDir: path.join(root, "stories"),
   };
 }

@@ -23,6 +23,7 @@ const HISTORY_ITEM_FIELDS = new Set([
   "creationSource",
   "providerSessionId",
   "lineage",
+  "storyId",
   "title",
   "userPrompt",
   "lastMessage",

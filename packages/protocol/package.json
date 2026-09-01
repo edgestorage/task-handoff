@@ -50,6 +50,10 @@
       "types": "./src/repository.ts",
       "default": "./src/repository.ts"
     },
+    "./stories": {
+      "types": "./src/stories.ts",
+      "default": "./src/stories.ts"
+    },
     "./control-plane-proxy": {
       "types": "./src/control-plane-proxy.ts",
       "default": "./src/control-plane-proxy.ts"

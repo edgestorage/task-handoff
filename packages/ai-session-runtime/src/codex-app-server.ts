@@ -5,7 +5,7 @@ import type { AiSessionDiscoveryContext, AiSessionDiscoveryProvider } from "./ai
 import type { AiSessionRegistry } from "./ai-session-registry";
 import { CodexAppServerClient, type CodexAppServerClientOptions } from "./codex-app-server/client/client";
 import type { CodexAppServerClientLike } from "./codex-app-server/client/contract";
-import type { CodexThreadStartOptions } from "./codex-app-server/client/contract";
+import type { CodexDynamicToolCall, CodexDynamicToolCallResult, CodexDynamicToolSpec, CodexThreadStartOptions } from "./codex-app-server/client/contract";
 import { CodexAppServerConnectionManager } from "./codex-app-server/client/connection-manager";
 import type { CodexAppServerEvent, CodexThread, CodexThreadStatus } from "./codex-app-server/protocol/types";
 import { CodexAppServerApprovalCoordinator } from "./codex-app-server/session/approval-coordinator";
@@ -37,6 +37,8 @@ type CodexAppServerBridgeOptions = {
   resolveModelSelection?: (selection: AiSessionModelSelection) => Pick<CodexThreadStartOptions, "model" | "modelProvider">;
   projectModelSelection?: (modelProvider: string, model: string) => AiSessionModelSelection | undefined;
   onDiagnostic?: (diagnostic: Record<string, unknown>) => void;
+  dynamicTools?: CodexDynamicToolSpec[];
+  onDynamicToolCall?: (call: CodexDynamicToolCall) => Promise<CodexDynamicToolCallResult>;
 };
 
 export type { CodexAppServerClientLike } from "./codex-app-server/client/contract";
@@ -244,6 +246,7 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
         ...(client.supportsPaginatedTimeline?.() ? { historyMode: "paginated" as const } : {}),
         permissions: codexPermissionOverrides(input.permissionMode),
         reasoningEffort: requestedReasoningEffort,
+        ...(this.options.dynamicTools?.length ? { dynamicTools: this.options.dynamicTools } : {}),
       });
       const providerSessionId = typeof thread.id === "string" ? thread.id.trim() : "";
       const cwd = typeof thread.cwd === "string" ? thread.cwd.trim() : "";
@@ -609,7 +612,8 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
   }
 
   private createClient(options: CodexAppServerClientOptions) {
-    return this.options.createClient ? this.options.createClient(options) : new CodexAppServerClient(options);
+    const configured = { ...options, onDynamicToolCall: this.options.onDynamicToolCall };
+    return this.options.createClient ? this.options.createClient(configured) : new CodexAppServerClient(configured);
   }
 
   private applyProviderEvent(event: CodexAppServerEvent) {

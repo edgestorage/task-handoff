@@ -46,6 +46,8 @@ import {
 } from "./state.ts";
 import { registerNodeModelRoutes } from "./models/routes.ts";
 import { registerNodeGitCredentialRoutes } from "./git-credentials/routes.ts";
+import { registerNodeStoryRoutes } from "./stories/routes.ts";
+import { NodeStoryStore } from "./stories/store.ts";
 import { registerRuntimeRoutes } from "./runtimes/routes.ts";
 import { registerInstanceManagementRoutes } from "./instances/routes.ts";
 import { registerInstanceLifecycleRoutes } from "./instances/lifecycle-routes.ts";
@@ -249,7 +251,8 @@ function isUnixSocketRequest(request: { ip?: string; socket: { remoteAddress?: s
 function isInstanceReportRoute(url: string) {
   const path = url.split("?")[0];
   return /^\/api\/node-agent\/instances\/[^/]+\/(register|heartbeat)$/.test(path)
-    || /^\/api\/node-agent\/instances\/[^/]+\/git-credentials\//.test(path);
+    || /^\/api\/node-agent\/instances\/[^/]+\/git-credentials\//.test(path)
+    || /^\/api\/node-agent\/instances\/[^/]+\/ai-sessions\/[^/]+\/story-content(?:\/|$)/.test(path);
 }
 
 function isPairingCompleteRoute(url: string) {
@@ -513,6 +516,8 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   state.node.controlEndpoint = controlEndpoint;
   state.node.endpoint = controlEndpoint;
   state.init();
+  const stories = new NodeStoryStore(paths, nodeId);
+  stories.init();
   const dockerCommandRunner = options.dockerCommandRunner || defaultCommandRunner;
   const dockerImageService = new DockerImageService(dockerCommandRunner, options.dockerTerminalCommandRunner);
   const dockerExecutor = new LocalDockerExecutor(dockerCommandRunner, {
@@ -1062,6 +1067,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
         folderPlaces: true,
         localFolderNameUpdate: true,
         managedGitCredentials: { registry: true, runtimeBroker: true, workspaceProvisioning: { docker: true, kubernetes: false, local: false } },
+        stories: { enabled: true, agentTools: true, maxFileBytes: 32 * 1024 * 1024, maxBatchPaths: 20 },
       },
       build: buildInfo("node-agent"),
       instanceProxy: { ...instanceProxyMetrics },
@@ -1116,6 +1122,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   registerNodeModelRoutes(app, state.modelRegistry, (id) => syncAssignedModelEnvironment(fetchImpl, state, id, lifecycleLoggers.warn, resolveInstanceWeb), fetchImpl);
 
   registerNodeGitCredentialRoutes(app, state);
+  registerNodeStoryRoutes(app, state, stories, { fetchImpl, resolveInstanceWeb });
 
   registerEnvironmentTemplateRoutes(app, environmentTemplates);
 

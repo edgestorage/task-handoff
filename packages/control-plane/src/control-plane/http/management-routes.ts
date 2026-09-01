@@ -18,6 +18,7 @@ import { registerEnvironmentTemplateRoutes } from "./environment-template-routes
 import { registerNodeRoutes } from "./node-routes.ts";
 import { registerSessionRoutes } from "./session-routes.ts";
 import { registerTriggerRoutes } from "./trigger-routes.ts";
+import { registerStoryRoutes } from "./story-routes.ts";
 
 type ErrorPayload = (error: unknown) => {
   statusCode: number;
@@ -65,4 +66,5 @@ export function registerControlPlaneManagementRoutes(options: RegisterControlPla
   registerSessionRoutes({ app, service, events, appSessionAggregator, aiSessionAggregator, aiSessionUnread, aiSessionAttachments, aiSessionAttachmentCache });
   registerTriggerRoutes({ app, service, events });
   registerChatGatewayRoutes({ app, service, chatGateway });
+  registerStoryRoutes(app, service);
 }

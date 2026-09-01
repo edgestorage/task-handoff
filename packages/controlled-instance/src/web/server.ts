@@ -47,6 +47,7 @@ import {
   type AiSessionRegistry,
 } from "@task-handoff/ai-session-runtime";
 import { NodeAgentRegistrationClient, nodeAgentRegistrationConfigFromEnv } from "./node-agent-client";
+import { STORY_DYNAMIC_TOOLS, StoryAgentToolService } from "./story-tools";
 import { nodeAgentApiRoute, publicApiRoute, registerAuth, resolveWebAuth } from "./auth";
 import { AiSessionMessageDeltaCoalescer } from "./ai-session-message-delta-coalescer";
 import { projectAiSessionAuthorityChange } from "./ai-session-authority-events";
@@ -103,6 +104,8 @@ import {
   AiSessionModelSelectionActionResponseSchema,
   AiSessionReasoningEffortInputSchema,
   AiSessionReasoningEffortActionResponseSchema,
+  AiSessionStoryInputSchema,
+  AiSessionStoryActionResponseSchema,
   type AiSessionModelSelection,
   AiSessionForkInputSchema,
   AiSessionForkResultSchema,
@@ -669,6 +672,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     aiSessionProviderCapabilities(),
     gitCredentialBrokerInstalled,
   ));
+  const storyAgentTools = new StoryAgentToolService(nodeAgentClient);
 
   await app.register(websocket, { options: TASK_HANDOFF_WEBSOCKET_SERVER_OPTIONS });
   registerAuth(app, auth);
@@ -730,6 +734,15 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       model: codexManagedConfig.model || process.env.TASK_HANDOFF_CODEX_MODEL?.trim() || undefined,
       modelProvider: codexManagedConfig.modelProvider || (process.env.TASK_HANDOFF_CODEX_MODEL?.trim() ? "openai" : undefined),
     },
+    ...(nodeAgentClient.enabled() ? {
+      dynamicTools: STORY_DYNAMIC_TOOLS,
+      onDynamicToolCall: async (call) => {
+        const session = aiSessions.getByProviderSessionId("codex", call.threadId);
+        if (!session) throw Object.assign(new Error("AI Session was not found for the Story tool call."), { code: "AI_SESSION_NOT_FOUND" });
+        const result = await storyAgentTools.invoke(session, call.tool, call.arguments);
+        return { contentItems: [{ type: "inputText" as const, text: JSON.stringify(result) }], success: true };
+      },
+    } : {}),
     resolveModelSelection: (selection) => {
       const resolved = resolveControlledPrivateModelSelection(privateModelCatalog, "codex", selection);
       return {
@@ -1767,6 +1780,36 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     }
   });
 
+  app.get<{ Params: { id: string } }>("/api/ai-sessions/:id/story-content", async (request, reply) => {
+    try {
+      const session = aiSessions.get(request.params.id);
+      if (!session) throw Object.assign(new Error("AI Session was not found."), { code: "AI_SESSION_NOT_FOUND", statusCode: 404 });
+      return { data: { documents: await storyAgentTools.list(session) } };
+    } catch (error: unknown) {
+      return sendAiSessionControlError(reply, error);
+    }
+  });
+
+  app.post<{ Params: { id: string }; Body: unknown }>("/api/ai-sessions/:id/story-content/get", async (request, reply) => {
+    try {
+      const session = aiSessions.get(request.params.id);
+      if (!session) throw Object.assign(new Error("AI Session was not found."), { code: "AI_SESSION_NOT_FOUND", statusCode: 404 });
+      return { data: await storyAgentTools.get(session, request.body) };
+    } catch (error: unknown) {
+      return sendAiSessionControlError(reply, error);
+    }
+  });
+
+  app.post<{ Params: { id: string }; Body: unknown }>("/api/ai-sessions/:id/story-content/set", async (request, reply) => {
+    try {
+      const session = aiSessions.get(request.params.id);
+      if (!session) throw Object.assign(new Error("AI Session was not found."), { code: "AI_SESSION_NOT_FOUND", statusCode: 404 });
+      return { data: await storyAgentTools.set(session, request.body) };
+    } catch (error: unknown) {
+      return sendAiSessionControlError(reply, error);
+    }
+  });
+
   app.post<{ Body: unknown }>("/api/ai-sessions", { bodyLimit: 64 * 1024 * 1024 }, async (request, reply) => {
     try {
       const referenced = AiSessionCreateRefInputSchema.extend({ cwd: AiSessionCreateInputSchema.shape.cwd }).strict().safeParse(request.body || {});
@@ -1825,6 +1868,19 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       await aiSessionController.updateReasoningEffort(session.id, body.reasoningEffort);
       publishAiSessionSnapshot("control-action");
       return { data: AiSessionReasoningEffortActionResponseSchema.parse({ sessionId: session.id, accepted: true }) };
+    } catch (error: unknown) {
+      return sendAiSessionControlError(reply, error);
+    }
+  });
+
+  app.put<{ Params: { id: string }; Body: unknown }>("/api/ai-sessions/:id/story", async (request, reply) => {
+    try {
+      const body = AiSessionStoryInputSchema.parse(request.body || {});
+      const session = aiSessions.get(request.params.id);
+      if (!session) throw Object.assign(new Error("AI Session was not found."), { code: "AI_SESSION_NOT_FOUND", statusCode: 404 });
+      const updated = aiSessions.patch(session.id, { storyId: body.storyId || undefined });
+      publishAiSessionSnapshot("control-action");
+      return { data: AiSessionStoryActionResponseSchema.parse({ sessionId: updated.id, storyId: updated.storyId }) };
     } catch (error: unknown) {
       return sendAiSessionControlError(reply, error);
     }

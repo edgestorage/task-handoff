@@ -3,7 +3,7 @@ import { EventEmitter } from "node:events";
 import { Duplex } from "node:stream";
 import WebSocket from "ws";
 import type { AiSessionApprovalDecision } from "../../ai-session-control";
-import type { CodexThreadForkCapabilities, CodexThreadForkOptions, CodexThreadStartOptions, CodexTurnPermissionOverrides } from "./contract";
+import type { CodexDynamicToolCall, CodexDynamicToolCallResult, CodexThreadForkCapabilities, CodexThreadForkOptions, CodexThreadStartOptions, CodexTurnPermissionOverrides } from "./contract";
 import { approvalResponseForRequest, codexApprovalRequest } from "../protocol/approvals";
 import { codexNotification } from "../protocol/events";
 import { turnIdFromResult } from "../protocol/turn-control";
@@ -25,6 +25,7 @@ export type CodexAppServerClientOptions = {
   requestTimeoutMs?: number;
   resolveVersion?: (command: string) => Promise<string>;
   socketPath?: string;
+  onDynamicToolCall?: (call: CodexDynamicToolCall) => Promise<CodexDynamicToolCallResult>;
 };
 
 type PendingRequest = {
@@ -128,6 +129,7 @@ export class CodexAppServerClient extends EventEmitter {
   private readonly mode: CodexAppServerClientMode;
   private readonly requestTimeoutMs: number;
   private readonly resolveVersion: (command: string) => Promise<string>;
+  private readonly onDynamicToolCall?: CodexAppServerClientOptions["onDynamicToolCall"];
   private versionPromise?: Promise<string>;
   private serverUserAgent?: string;
   private forkMethodAvailable = true;
@@ -146,6 +148,7 @@ export class CodexAppServerClient extends EventEmitter {
       || Number(process.env.TASK_HANDOFF_CODEX_APP_SERVER_TIMEOUT_MS)
       || 5_000;
     this.resolveVersion = options.resolveVersion || resolveCodexCliVersion;
+    this.onDynamicToolCall = options.onDynamicToolCall;
   }
 
   get connected() {
@@ -234,6 +237,7 @@ export class CodexAppServerClient extends EventEmitter {
       ephemeral: false,
       ...(options.historyMode ? { historyMode: options.historyMode } : {}),
       ...(options.reasoningEffort ? { config: { model_reasoning_effort: options.reasoningEffort } } : {}),
+      ...(options.dynamicTools ? { dynamicTools: options.dynamicTools } : {}),
       sessionStartSource: "startup",
       threadSource: "user",
     });
@@ -710,7 +714,8 @@ export class CodexAppServerClient extends EventEmitter {
       return;
     }
     const id = Number(message.id);
-    if (Number.isInteger(id)) {
+    const method = String(message.method || "");
+    if (!method && Number.isInteger(id)) {
       const request = this.pending.get(id);
       if (request) {
         clearTimeout(request.timer);
@@ -730,12 +735,15 @@ export class CodexAppServerClient extends EventEmitter {
         return;
       }
     }
-    const method = String(message.method || "");
     const params = message.params && typeof message.params === "object" ? message.params as JsonValue : {};
     if (Number.isInteger(id)) {
       const approval = codexApprovalRequest(id, method, params);
       if (approval) {
         this.emit("event", { type: "approval-request", request: approval } satisfies CodexAppServerEvent);
+        return;
+      }
+      if (method === "item/tool/call") {
+        void this.respondToDynamicToolCall(id, params);
       }
       return;
     }
@@ -743,6 +751,26 @@ export class CodexAppServerClient extends EventEmitter {
     const event = codexNotification(method, params);
     if (event) {
       this.emit("event", event);
+    }
+  }
+
+  private async respondToDynamicToolCall(id: number, params: JsonValue) {
+    try {
+      if (!this.onDynamicToolCall) throw new Error("Dynamic tools are not configured for this controlled instance.");
+      const call: CodexDynamicToolCall = {
+        threadId: String(params.threadId || ""),
+        turnId: String(params.turnId || ""),
+        callId: String(params.callId || ""),
+        ...(typeof params.namespace === "string" ? { namespace: params.namespace } : {}),
+        tool: String(params.tool || ""),
+        arguments: (params.arguments ?? {}) as JsonValue,
+      };
+      this.sendResponse(id, await this.onDynamicToolCall(call));
+    } catch (error) {
+      this.sendResponse(id, {
+        contentItems: [{ type: "inputText", text: error instanceof Error ? error.message : String(error) }],
+        success: false,
+      });
     }
   }
 }

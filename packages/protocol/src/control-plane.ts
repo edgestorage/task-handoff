@@ -1623,6 +1623,13 @@ export const NodeAgentManagedModelCapabilitiesSchema = z.object({
   privateModelCatalog: z.boolean().default(false),
 }).strip();
 
+export const NodeAgentStoryCapabilitiesSchema = z.object({
+  enabled: z.boolean().default(false),
+  agentTools: z.boolean().default(false),
+  maxFileBytes: z.number().int().positive().default(32 * 1024 * 1024),
+  maxBatchPaths: z.number().int().min(1).max(100).default(20),
+}).strip();
+
 export const NodeAgentCapabilitiesSchema = z.object({
   modelEndpointProbe: z.boolean().optional(),
   aiSessionHistoryLimit: z.boolean().optional(),
@@ -1634,6 +1641,7 @@ export const NodeAgentCapabilitiesSchema = z.object({
   managedGitCredentials: NodeAgentManagedGitCapabilitiesSchema.optional(),
   // Compatibility for v0.0.23: absence keeps the legacy single-model projection.
   managedModels: NodeAgentManagedModelCapabilitiesSchema.optional(),
+  stories: NodeAgentStoryCapabilitiesSchema.optional(),
 }).strip();
 
 export type NodeAgentCapabilities = z.infer<typeof NodeAgentCapabilitiesSchema>;
@@ -1641,6 +1649,7 @@ export type NodeAgentCapabilities = z.infer<typeof NodeAgentCapabilitiesSchema>;
 export function normalizeNodeAgentCapabilities(capabilities: unknown): NodeAgentCapabilities & {
   managedGitCredentials: z.infer<typeof NodeAgentManagedGitCapabilitiesSchema>;
   managedModels: z.infer<typeof NodeAgentManagedModelCapabilitiesSchema>;
+  stories: z.infer<typeof NodeAgentStoryCapabilitiesSchema>;
 } {
   const parsed = NodeAgentCapabilitiesSchema.safeParse(capabilities);
   const current = parsed.success ? parsed.data : {};
@@ -1648,6 +1657,7 @@ export function normalizeNodeAgentCapabilities(capabilities: unknown): NodeAgent
     ...current,
     managedGitCredentials: NodeAgentManagedGitCapabilitiesSchema.parse(current.managedGitCredentials || {}),
     managedModels: NodeAgentManagedModelCapabilitiesSchema.parse(current.managedModels || {}),
+    stories: NodeAgentStoryCapabilitiesSchema.parse(current.stories || {}),
   };
 }
 
@@ -1657,6 +1667,10 @@ export function supportsNodeMultiEntityModelAssignment(capabilities: unknown) {
 
 export function supportsNodePrivateModelCatalog(capabilities: unknown) {
   return normalizeNodeAgentCapabilities(capabilities).managedModels.privateModelCatalog;
+}
+
+export function supportsNodeStories(capabilities: unknown) {
+  return normalizeNodeAgentCapabilities(capabilities).stories.enabled;
 }
 
 export function supportsNodeManagedGitCredentialRegistry(capabilities: unknown) {

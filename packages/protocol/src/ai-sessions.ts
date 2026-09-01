@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { StoryIdSchema } from "./stories.ts";
 
 export const AI_SESSION_MAX_MESSAGE_ATTACHMENTS = 6;
 export const AI_SESSION_MAX_REFERENCES = 20;
@@ -442,6 +443,7 @@ export const AiSessionCreateInputSchema = AiSessionMessageInputSchema.extend({
   clientRequestId: z.string().trim().min(1).max(160),
   modelSelection: AiSessionModelSelectionSchema.optional(),
   reasoningEffort: AiSessionReasoningEffortSchema.optional(),
+  storyId: StoryIdSchema.optional(),
 }).strict();
 
 export const AiSessionGitSelectionSchema = z.object({
@@ -456,6 +458,7 @@ export const AiSessionCreateRefInputSchema = AiSessionMessageRefInputSchema.exte
   clientRequestId: z.string().trim().min(1).max(160),
   modelSelection: AiSessionModelSelectionSchema.optional(),
   reasoningEffort: AiSessionReasoningEffortSchema.optional(),
+  storyId: StoryIdSchema.optional(),
 }).strict();
 
 export const AiSessionModelSelectionInputSchema = z.object({
@@ -476,6 +479,15 @@ export const AiSessionReasoningEffortInputSchema = z.object({
 export const AiSessionReasoningEffortActionResponseSchema = z.object({
   sessionId: z.string().trim().min(1).max(120),
   accepted: z.literal(true),
+}).strict();
+
+export const AiSessionStoryInputSchema = z.object({
+  storyId: StoryIdSchema.nullable(),
+}).strict();
+
+export const AiSessionStoryActionResponseSchema = z.object({
+  sessionId: z.string().trim().min(1).max(120),
+  storyId: StoryIdSchema.optional(),
 }).strict();
 
 export const AiSessionCreateResultSchema = z.object({
@@ -657,6 +669,7 @@ export const AiSessionStatusSchema = z
     providerMeta: z.record(z.string(), z.unknown()).optional(),
     modelSelection: AiSessionModelSelectionSchema.optional(),
     reasoningEffort: AiSessionReasoningEffortSchema.optional(),
+    storyId: StoryIdSchema.optional(),
     appBindingKeys: z.array(z.string().trim().min(1).max(240)).max(20).optional(),
     actions: AiSessionActionsSchema.optional(),
     activeTurnId: z.string().trim().max(240).optional(),
@@ -829,6 +842,7 @@ export const AiSessionHistoryItemSchema = z.object({
   lineage: AiSessionLineageSchema.optional(),
   modelSelection: AiSessionModelSelectionSchema.optional(),
   reasoningEffort: AiSessionReasoningEffortSchema.optional(),
+  storyId: StoryIdSchema.optional(),
   title: z.string().trim().max(240).optional(),
   userPrompt: z.string().trim().optional(),
   lastMessage: z.string().trim().optional(),
@@ -873,6 +887,7 @@ export const AiSessionSummarySchema = AiSessionStatusSchema.pick({
   providerMeta: true,
   modelSelection: true,
   reasoningEffort: true,
+  storyId: true,
   appBindingKeys: true,
   actions: true,
   activeTurnId: true,
@@ -1158,6 +1173,7 @@ export const AiSessionSnapshotInputSchema = AiSessionInputBaseSchema.extend({
   providerMeta: z.record(z.string(), z.unknown()).optional(),
   modelSelection: AiSessionModelSelectionSchema.optional(),
   reasoningEffort: AiSessionReasoningEffortSchema.optional(),
+  storyId: StoryIdSchema.optional(),
   appBindingKeys: z.array(z.string().trim().min(1).max(240)).max(20).optional(),
   actions: AiSessionActionsSchema.optional(),
   title: z.string().trim().max(240).optional(),

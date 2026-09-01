@@ -279,6 +279,15 @@
         @update:interactive="boardInteractive = $event"
       />
 
+      <StoryView
+        v-if="!standaloneMode && storyMode && !settingsMode"
+        :instances="boardInstancesWithAiSessions"
+        :node-local-folders-by-node-id="nodeLocalFoldersByNodeId"
+        :nodes="nodes.data.value || []"
+        @open-session="openAiSessionAppFromBoard"
+        @run-action="runStoryAction"
+      />
+
       <AiSessionBoardView
         v-if="!standaloneMode && aiBoardMode && !settingsMode"
         v-model:filter="aiBoardFilter"
@@ -449,9 +458,9 @@ import type { SupportedLocale } from "../../i18n/locale";
 import { translateApiError } from "../../i18n/apiError";
 import { useQueries, useQueryClient } from "@tanstack/vue-query";
 import { useEventListener } from "@vueuse/core";
-import { Bot, Boxes, Check, ChevronDown, Container, Download, House, Laptop, LayoutGrid, LoaderCircle, LogOut, Maximize2, Minus, RefreshCw, Settings, UserRound, X } from "@lucide/vue";
+import { BookOpen, Bot, Boxes, Check, ChevronDown, Container, Download, House, Laptop, LayoutGrid, LoaderCircle, LogOut, Maximize2, Minus, RefreshCw, Settings, UserRound, X } from "@lucide/vue";
 import "@xterm/xterm/css/xterm.css";
-import { controlPlaneQueryKeys, fetchInstanceBoardPayload, getInstanceAppManagement, getInstanceResourceMetrics, installInstanceApp, instanceBoardQueryOptions, logoutControlPlane, nodeLocalFoldersQueryOptions, renameAppSession, resolveAiSessionApproval, saveEnvironmentTemplate, uninstallInstanceApp, updateControlledInstance, useAuthSessionQuery, useControlPlaneAiSessionsQuery, useControlPlaneAppSessionsQuery, useControlPlaneStatusQuery, useCurrentAccessQuery, useInstanceBoardQuery, useInstanceDirectoryQuery, useModelsQuery, useNodesQuery, useServerUpdateCheckQuery } from "../../api/queries";
+import { controlPlaneQueryKeys, createAiSession, fetchInstanceBoardPayload, getInstanceAppManagement, getInstanceResourceMetrics, installInstanceApp, instanceBoardQueryOptions, logoutControlPlane, nodeLocalFoldersQueryOptions, renameAppSession, resolveAiSessionApproval, saveEnvironmentTemplate, uninstallInstanceApp, updateControlledInstance, useAuthSessionQuery, useControlPlaneAiSessionsQuery, useControlPlaneAppSessionsQuery, useControlPlaneStatusQuery, useCurrentAccessQuery, useInstanceBoardQuery, useInstanceDirectoryQuery, useModelsQuery, useNodesQuery, useServerUpdateCheckQuery } from "../../api/queries";
 import { authorizationCacheEpoch as currentAccessEpoch, authorizationCacheEpochChanged as authorizationEpochChanged, preserveAcrossAuthorizationChange, signedOutAuthSession } from "../../api/authorizationCache";
 import type { ControlPlaneInstanceResourceEntry } from "@task-handoff/control-plane-client";
 import type { ConfigSyncDirection } from "@task-handoff/protocol/config-sync";
@@ -461,6 +470,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import { ScrollArea } from "../../components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../components/ui/tooltip";
 import AiSessionBoardView from "./ai-board/AiSessionBoardView.vue";
+import StoryView from "./story/StoryView.vue";
 import InstanceBoardView from "./board/InstanceBoardView.vue";
 import InstanceDetail from "./instance-detail/InstanceDetail.vue";
 import EmbeddedBrowserSurfaceLayer from "./instance-detail/EmbeddedBrowserSurfaceLayer.vue";
@@ -475,6 +485,7 @@ import AccountSecurityDialog from "./settings/AccountSecurityDialog.vue";
 import SettingsModal from "./settings/SettingsModal.vue";
 import { buildSettingsSections, type SettingsSection } from "./settings/settingsSections";
 import type { NodeJoinedEvent } from "@task-handoff/protocol/control-plane";
+import type { Story, StoryAction } from "@task-handoff/protocol/stories";
 import { useActiveInstanceSessions } from "./instance-detail/useActiveInstanceSessions";
 import { useBoardTerminalPreviews } from "./board/useBoardTerminalPreviews";
 import { useInstanceActions } from "./useInstanceActions";
@@ -554,7 +565,7 @@ function observeInstanceSwitcherOverflow() {
 }
 
 type BoardSize = "small" | "medium" | "large";
-type WorkbenchView = "instance" | "board" | "ai";
+type WorkbenchView = "instance" | "board" | "ai" | "story";
 const BOARD_SIZE_STORAGE_KEY = "task-handoff.control-plane.board-size";
 const BOARD_INTERACTIVE_STORAGE_KEY = "task-handoff.control-plane.board-interactive";
 const MAIN_SESSION_PREVIEW_EXPANDED_STORAGE_KEY = "task-handoff.control-plane.session-preview-expanded";
@@ -648,10 +659,12 @@ const workbenchViewOptions = computed<Array<{ value: WorkbenchView; label: strin
   { value: "instance", label: t("navigation.home"), icon: House },
   { value: "board", label: t("navigation.board"), icon: LayoutGrid },
   { value: "ai", label: t("navigation.ai"), icon: Bot },
+  { value: "story", label: t("navigation.story"), icon: BookOpen },
 ]);
 const instanceViewMode = computed(() => workbenchView.value === "instance");
 const boardMode = computed(() => workbenchView.value === "board");
 const aiBoardMode = computed(() => workbenchView.value === "ai");
+const storyMode = computed(() => workbenchView.value === "story");
 const settingsMode = ref(false);
 const settingsSection = ref<SettingsSection>("nodes");
 const accountSecurityOpen = ref(false);
@@ -1578,6 +1591,33 @@ function openAiSessionAppFromBoard(instance: InstanceBoardItemWithAppSessions, s
   openAiSessionApp(instance, session);
   workbenchView.value = "instance";
   closeFloatingLayers();
+}
+
+async function runStoryAction(story: Story, action: StoryAction) {
+  const target = action.targetInstanceId
+    ? boardInstancesWithAiSessions.value.find((instance) => instance.id === action.targetInstanceId)
+    : boardInstancesWithAiSessions.value.find((instance) => instance.node?.id === story.ownerNodeId);
+  if (!target) { showToast("No target instance is available on the Story owner node.", "error"); return; }
+  let prompt = action.promptTemplate;
+  for (const parameter of action.parameters) {
+    const value = window.prompt(parameter.label, parameter.defaultValue || "") || "";
+    if (parameter.required && !value.trim()) { showToast(`${parameter.label} is required.`, "error"); return; }
+    prompt = prompt.replaceAll(`{{${parameter.name}}}`, value);
+  }
+  try {
+    await createAiSession(target.id, {
+      agent: "codex",
+      clientRequestId: `story-action-${crypto.randomUUID()}`,
+      message: prompt,
+      permissionMode: "ask",
+      storyId: story.id,
+      attachments: [],
+      references: [],
+    });
+    setActiveInstance(target.id);
+    setWorkbenchView("instance");
+    showToast("AI Session created.", "success");
+  } catch (cause) { showToast(cause instanceof Error ? cause.message : String(cause), "error"); }
 }
 
 function setWorkbenchView(view: WorkbenchView) {

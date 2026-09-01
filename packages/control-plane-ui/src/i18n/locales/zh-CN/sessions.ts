@@ -66,7 +66,7 @@ export const sessions = {
     continue: "继续对话", continueConversation: "发送消息以继续这条对话",
     attachmentUnavailable: "附件内容不可用：{name}",
     backCurrent: "返回当前对话", history: "过往对话", historyOptions: "过往对话列表选项",
-    cardLayout: "卡片模式", listLayout: "列表模式", groupByPath: "按路径分组", showEmptyPathGroups: "显示无会话路径", sortByStatus: "按状态排序", historyLoadFailed: "无法读取过往对话。",
+    cardLayout: "卡片模式", listLayout: "列表模式", noGrouping: "不分组", groupByPath: "按路径分组", groupByStory: "按 Story 分组", unassignedStory: "未归属 Story", showEmptyPathGroups: "显示无会话路径", sortByStatus: "按状态排序", historyLoadFailed: "无法读取过往对话。",
     historyDetailFailed: "无法读取对话详情。", unnamedConversation: "未命名对话",
     resumePending: "对话已经启动，但运行状态尚未确认，请稍后重试。", continueFailed: "无法继续该对话。",
   },

@@ -1,8 +1,9 @@
 <template>
   <div ref="panelEl" class="session-ai-panel" :style="workspaceStyle">
     <Sheet v-model:open="sessionListOverlayOpen">
-    <div class="session-ai-workspace">
+    <div class="session-ai-workspace" :class="{ 'creation-only': creationOnly }">
       <component
+        v-if="!creationOnly"
         :is="compactAiSessionLayout ? SheetContent : 'div'"
         class="session-ai-sidebar-shell"
         :class="{ 'session-ai-sidebar-sheet': compactAiSessionLayout }"
@@ -38,9 +39,11 @@
               </DropdownMenuTrigger>
               <DropdownMenuContent class="session-ai-options-menu" align="end" :side-offset="6">
                 <DropdownMenuLabel class="session-ai-options-label">{{ t("sessions.panel.view") }}</DropdownMenuLabel>
-                <DropdownMenuCheckboxItem class="session-ai-options-item option-item" :model-value="groupSessionsByPath" @update:model-value="(value) => groupSessionsByPath = Boolean(value)">
-                  {{ t("sessions.panel.groupByPath") }}
-                </DropdownMenuCheckboxItem>
+                <DropdownMenuRadioGroup v-model="groupMode">
+                  <DropdownMenuRadioItem class="session-ai-options-item option-item" value="none">{{ t("sessions.panel.noGrouping") }}</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem class="session-ai-options-item option-item" value="path">{{ t("sessions.panel.groupByPath") }}</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem class="session-ai-options-item option-item" value="story">{{ t("sessions.panel.groupByStory") }}</DropdownMenuRadioItem>
+                </DropdownMenuRadioGroup>
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
@@ -83,9 +86,11 @@
                   <DropdownMenuRadioItem class="session-ai-options-item option-item" value="list">{{ t("sessions.panel.listLayout") }}</DropdownMenuRadioItem>
                 </DropdownMenuRadioGroup>
                 <DropdownMenuSeparator />
-                <DropdownMenuCheckboxItem class="session-ai-options-item option-item" :model-value="groupSessionsByPath" @update:model-value="(value) => groupSessionsByPath = Boolean(value)">
-                  {{ t("sessions.panel.groupByPath") }}
-                </DropdownMenuCheckboxItem>
+                <DropdownMenuRadioGroup v-model="groupMode">
+                  <DropdownMenuRadioItem class="session-ai-options-item option-item" value="none">{{ t("sessions.panel.noGrouping") }}</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem class="session-ai-options-item option-item" value="path">{{ t("sessions.panel.groupByPath") }}</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem class="session-ai-options-item option-item" value="story">{{ t("sessions.panel.groupByStory") }}</DropdownMenuRadioItem>
+                </DropdownMenuRadioGroup>
                 <DropdownMenuCheckboxItem v-if="groupSessionsByPath" class="session-ai-options-item option-item" :model-value="showEmptyPathGroups" @update:model-value="(value) => showEmptyPathGroups = Boolean(value)">
                   {{ t("sessions.panel.showEmptyPathGroups") }}
                 </DropdownMenuCheckboxItem>
@@ -374,13 +379,14 @@
         />
       </component>
       <button
+        v-if="!creationOnly"
         type="button"
         class="session-ai-sidebar-resize-handle"
         :aria-label="t('sessions.panel.resizeList')"
         :title="t('sessions.panel.resizeList')"
         @pointerdown="startSidebarResize"
       />
-      <TooltipProvider :delay-duration="120">
+      <TooltipProvider v-if="!creationOnly" :delay-duration="120">
         <Tooltip>
           <TooltipTrigger as-child>
             <Button
@@ -1115,6 +1121,7 @@ type AiSessionHistoryPathGroup = {
 };
 
 const GROUP_BY_PATH_STORAGE_KEY = "task-handoff.control-plane.ai-sessions-group-by-path";
+const GROUP_MODE_STORAGE_KEY = "task-handoff.control-plane.ai-sessions-group-mode";
 const SHOW_EMPTY_PATH_GROUPS_STORAGE_KEY = "task-handoff.control-plane.ai-sessions-show-empty-path-groups";
 const SORT_BY_STATUS_STORAGE_KEY = "task-handoff.control-plane.ai-sessions-sort-by-status";
 const SESSION_LIST_LAYOUT_STORAGE_KEY = "task-handoff.control-plane.ai-sessions-list-layout";
@@ -1125,6 +1132,12 @@ const SIDEBAR_WIDTH_MAX = 520;
 
 function storedGroupByPath() {
   return window.localStorage?.getItem(GROUP_BY_PATH_STORAGE_KEY) !== "false";
+}
+
+function storedGroupMode(): "none" | "path" | "story" {
+  const value = window.localStorage?.getItem(GROUP_MODE_STORAGE_KEY);
+  if (value === "none" || value === "story" || value === "path") return value;
+  return storedGroupByPath() ? "path" : "none";
 }
 
 function storedShowEmptyPathGroups() {
@@ -1152,6 +1165,8 @@ function storedSidebarWidth() {
 const props = defineProps<{
   activeSession: SessionTab;
   chooseProjectFolder?: NativeNodeFolderPicker;
+  creationOnly?: boolean;
+  creationStoryId?: string;
   instance: InstanceWithAiSessions;
   launchableApps?: LaunchableApp[];
   launchingApp?: boolean;
@@ -1187,7 +1202,11 @@ const sessionListOverlayStyle = computed<CSSProperties>(() => ({
   padding: "0",
 }));
 const sessionStatusFilter = ref<SessionStatusFilter>("all");
-const groupSessionsByPath = ref(storedGroupByPath());
+const groupMode = ref<"none" | "path" | "story">(storedGroupMode());
+const groupSessionsByPath = computed({
+  get: () => groupMode.value !== "none",
+  set: (value: boolean) => { groupMode.value = value ? "path" : "none"; },
+});
 const showEmptyPathGroups = ref(storedShowEmptyPathGroups());
 const sortSessionsByStatus = ref(storedSortByStatus());
 const sessionListLayout = ref<AiSessionListLayout>(storedSessionListLayout());
@@ -1224,7 +1243,7 @@ const filteredSessions = computed(() => {
   return visibleAiSessions.value.filter((session) => sessionStatusGroup(session) === sessionStatusFilter.value);
 });
 const sortedSessions = computed(() => sortedAiSessionsByLastUserMessage(filteredSessions.value, sortSessionsByStatus.value));
-const displayedSessionGroups = computed<AiSessionPathGroup[]>(() => groupSessionsByPath.value ? groupAiSessionsByPath(sortedSessions.value) : [{
+const displayedSessionGroups = computed<AiSessionPathGroup[]>(() => groupSessionsByPath.value ? (groupMode.value === "story" ? groupAiSessionsByStory(sortedSessions.value) : groupAiSessionsByPath(sortedSessions.value)) : [{
   key: "all",
   path: "",
   label: "",
@@ -1324,7 +1343,7 @@ const selectedForkTurn = computed(() => {
   const turn = aiSessionTurns(session)[promptIndexFor(session)];
   return turn?.status === "completed" && turn.providerTurnId ? turn : undefined;
 });
-const showNewSession = computed(() => newSessionOpen.value || !selectedSession.value);
+const showNewSession = computed(() => props.creationOnly || newSessionOpen.value || !selectedSession.value);
 const selectedListSessionId = computed(() => showNewSession.value ? undefined : selectedSession.value?.id);
 const newSessionApp = ref("");
 const modelsQuery = useModelsQuery();
@@ -1680,6 +1699,20 @@ function groupAiSessionsByPath(sessions: AiSessionSummary[]) {
     });
 }
 
+function storyGroupLabel(storyId: string | undefined) {
+  return storyId ? `Story ${storyId}` : t("sessions.panel.unassignedStory");
+}
+
+function groupAiSessionsByStory(sessions: AiSessionSummary[]) {
+  const groups = new Map<string, AiSessionPathGroup>();
+  for (const session of sessions) {
+    const key = `story:${session.storyId || "unassigned"}`;
+    const current = groups.get(key);
+    groups.set(key, { key, path: session.storyId || "", label: storyGroupLabel(session.storyId), parentLabel: session.storyId || "", sessions: [...(current?.sessions || []), session] });
+  }
+  return [...groups.values()];
+}
+
 function groupAiSessionHistoryByPath(items: AiSessionHistoryItem[]) {
   return groupAiSessionEntriesByPath(items)
     .map((group) => ({
@@ -1696,7 +1729,17 @@ function groupAiSessionHistoryByPath(items: AiSessionHistoryItem[]) {
     });
 }
 
-const displayedHistoryGroups = computed<AiSessionHistoryPathGroup[]>(() => groupSessionsByPath.value ? groupAiSessionHistoryByPath(historyItems.value) : [{
+function groupAiSessionHistoryByStory(items: AiSessionHistoryItem[]) {
+  const groups = new Map<string, AiSessionHistoryPathGroup>();
+  for (const item of items) {
+    const key = `story:${item.storyId || "unassigned"}`;
+    const current = groups.get(key);
+    groups.set(key, { key, path: item.storyId || "", label: storyGroupLabel(item.storyId), parentLabel: item.storyId || "", items: [...(current?.items || []), item] });
+  }
+  return [...groups.values()];
+}
+
+const displayedHistoryGroups = computed<AiSessionHistoryPathGroup[]>(() => groupSessionsByPath.value ? (groupMode.value === "story" ? groupAiSessionHistoryByStory(historyItems.value) : groupAiSessionHistoryByPath(historyItems.value)) : [{
   key: "all",
   path: "",
   label: "",
@@ -1740,8 +1783,9 @@ function groupLastUserMessageTime(sessions: AiSessionSummary[]) {
   return Math.max(0, ...sessions.map(aiSessionLastUserMessageTime));
 }
 
-watch(groupSessionsByPath, (value) => {
-  window.localStorage?.setItem(GROUP_BY_PATH_STORAGE_KEY, String(value));
+watch(groupMode, (value) => {
+  window.localStorage?.setItem(GROUP_MODE_STORAGE_KEY, value);
+  window.localStorage?.setItem(GROUP_BY_PATH_STORAGE_KEY, String(value !== "none"));
 });
 
 watch(showEmptyPathGroups, (value) => {
@@ -2392,6 +2436,7 @@ async function createNewSession(permissionMode?: AiSessionPermissionMode) {
     })),
     references,
     permissionMode,
+    storyId: props.creationStoryId,
     modelSelection: newSessionModelSelection.value,
     reasoningEffort: newSessionReasoningEffort.value,
   });
@@ -2412,6 +2457,7 @@ async function createNewSession(permissionMode?: AiSessionPermissionMode) {
       attachments,
       references,
       permissionMode,
+      ...(props.creationStoryId ? { storyId: props.creationStoryId } : {}),
       ...(newSessionModelSelection.value ? { modelSelection: newSessionModelSelection.value } : {}),
       ...(newSessionReasoningEffortCapability.value.selectAtCreate && newSessionReasoningEffort.value
         ? { reasoningEffort: newSessionReasoningEffort.value }
@@ -2422,6 +2468,7 @@ async function createNewSession(permissionMode?: AiSessionPermissionMode) {
       persistAiSessionPermissionMode(aiSessionPermissionKey(props.instance.id, result.aiSessionId), permissionMode);
     }
     emit("selectAiSession", props.instance.id, result.aiSessionId);
+    emit("sessionCreated", props.instance.id, result.aiSessionId);
     clearAiSessionDraft(activeNewSessionDraftKey.value);
     newSessionDraft.value = "";
     newSessionMentionBindings.value = [];
@@ -3087,6 +3134,7 @@ const emit = defineEmits<{
   openAiSessionApp: [instance: InstanceBoardItem, session?: AiSessionSummary];
   openRepositoryWorkspace: [target: RepositoryWorkspaceTabTarget];
   selectAiSession: [instanceId: string, sessionId: string];
+  sessionCreated: [instanceId: string, sessionId: string];
 }>();
 
 function openMarkdownFile(session: AiSessionSummary, filePath: string) {

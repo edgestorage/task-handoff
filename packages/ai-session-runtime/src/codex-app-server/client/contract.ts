@@ -18,6 +18,29 @@ export type CodexThreadStartOptions = {
   runtimeWorkspaceRoots?: string[];
   permissions?: CodexTurnPermissionOverrides;
   reasoningEffort?: AiSessionReasoningEffort;
+  dynamicTools?: CodexDynamicToolSpec[];
+};
+
+export type CodexDynamicToolSpec = {
+  type: "function";
+  name: string;
+  description: string;
+  inputSchema: JsonValue;
+  deferLoading?: boolean;
+};
+
+export type CodexDynamicToolCall = {
+  threadId: string;
+  turnId: string;
+  callId: string;
+  namespace?: string;
+  tool: string;
+  arguments: JsonValue;
+};
+
+export type CodexDynamicToolCallResult = {
+  contentItems: Array<{ type: "inputText"; text: string }>;
+  success: boolean;
 };
 
 export type CodexThreadForkOptions = {
