@@ -69,6 +69,14 @@ test("compact Turn navigation loads the target body before committing selection"
   assert.match(floatingDock, /v-if="detailState === 'ready'"[\s\S]*?:content="displayAiSessionTitle\(conversationSession, promptIndex, t\)"/);
 });
 
+test("AI session prompt state exists before the timeline's immediate watcher", () => {
+  const promptState = panel.indexOf("const promptIndexes = ref");
+  const timelinePresentation = panel.indexOf("useAiSessionTimelinePresentation({");
+  assert.ok(promptState >= 0);
+  assert.ok(timelinePresentation >= 0);
+  assert.ok(promptState < timelinePresentation);
+});
+
 test("current approval summary remains visible while navigating messages", () => {
   const explicitSelection = displayHelpers.indexOf("if (turns.length && promptIndex !== undefined)");
   const currentApproval = displayHelpers.indexOf('if (session.status === "waiting" && session.phase === "approval"');

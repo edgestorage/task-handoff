@@ -817,6 +817,7 @@
             @sticky-user-message-change="timelineStickyUserMessage = $event"
             @transitioning-change="setDetailConversationTransitioning"
             @continue-from-turn="forkSession(selectedSession, 'current', $event)"
+            @save-as-preset="saveTurnAsPresetAction"
           />
           <span ref="detailBottomAnchorEl" class="session-ai-detail-bottom-anchor" aria-hidden="true" />
           </section>
@@ -1031,6 +1032,15 @@
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
+    <StoryPresetActionDialog
+      :open="presetSaveOpen"
+      :stories="presetSaveStories"
+      :instances="presetSaveInstances"
+      :local-folders-by-instance-id="presetSaveFoldersByInstanceId"
+      :initial="presetSaveInitial"
+      @update:open="presetSaveOpen = $event"
+      @saved="handlePresetSaved"
+    />
   </div>
 </template>
 
@@ -1056,6 +1066,7 @@ import { bindAiSessionTrigger, closeAiSession, createAiSession, createNodeLocalF
 import { controlPlaneQueryKeys } from "../../../api/queryKeys.ts";
 import { executeAiSessionCommand } from "../../../api/ai-session-commands";
 import { AI_SESSION_DEFAULT_REASONING_EFFORT, type AiSessionCommandInput, type AiSessionHistoryDetail, type AiSessionHistoryItem, type AiSessionMessageAttachmentRef, type AiSessionModelSelection, type AiSessionPermissionMode, type AiSessionReasoningEffort } from "@task-handoff/protocol/ai-sessions";
+import type { StorySessionPreset } from "@task-handoff/protocol/stories";
 import { normalizeAiSessionModelSelectionCapabilities, normalizeAiSessionReasoningEffortCapabilities } from "@task-handoff/protocol/ai-session-provider-capabilities";
 import type { RepositoryAiSessionWorkspace, RepositoryAiSessionWorkspaceBranch } from "@task-handoff/protocol/repository";
 import { directoryAiSessionProviderCapability } from "@task-handoff/protocol/control-plane-directory";
@@ -1073,6 +1084,7 @@ import { useAiSessionTimelineViewMode } from "../useAiSessionTimelineViewMode";
 import { useAiSessionConversationProjection } from "../useAiSessionConversationProjection";
 import { useAiSessionMessageDeltaDemand, useAiSessionTimelineDemand } from "../useAiSessionEventDemand";
 import AiSessionTimelineView from "../../../components/ai-session/AiSessionTimelineView.vue";
+import StoryPresetActionDialog from "../story/StoryPresetActionDialog.vue";
 import { referencesForBindings, type AiSessionMentionBinding } from "../../../components/ai-session/mentions";
 import { desktopRuntimePathAccess } from "../../../components/ai-session/useAiSessionMentions";
 import AiSessionTurnNavigator from "../../../components/ai-session/AiSessionTurnNavigator.vue";
@@ -1100,6 +1112,7 @@ import {
   aiSessionPermissionKey,
   clearAiSessionPermissionMode,
   historyAiSessionPermissionKey,
+  loadAiSessionPermissionMode,
   persistAiSessionPermissionMode,
 } from "../useAiSessionPermissionMode";
 import { createStreamingScrollFollow, distanceFromBottom, STREAMING_SCROLL_FOLLOW_THRESHOLD, type ScrollViewport } from "../../../lib/streaming-scroll-follow";
@@ -1277,6 +1290,65 @@ const filteredSessions = computed(() => {
 const sortedSessions = computed(() => sortedAiSessionsByLastUserMessage(filteredSessions.value, sortSessionsByStatus.value));
 const storiesQuery = useStoriesQuery(() => props.instance.nodeId);
 const storyTitlesById = computed(() => new Map((storiesQuery.data.value?.stories || []).map((story) => [story.id, story.title])));
+const presetSaveOpen = ref(false);
+const presetSaveInitial = ref<{
+  storyId?: string;
+  title?: string;
+  promptTemplate?: string;
+  targetInstanceId?: string;
+  sessionPreset?: StorySessionPreset;
+}>({});
+const presetSaveStories = computed(() => (storiesQuery.data.value?.stories || []).filter((story) => !story.archivedAt));
+const presetSaveInstances = computed(() => {
+  const current = { id: props.instance.id, name: props.instance.name };
+  const seen = new Set([current.id]);
+  const entries = [{ ...current }];
+  for (const instance of props.creationInstances || []) {
+    if (seen.has(instance.id)) continue;
+    seen.add(instance.id);
+    entries.push({ id: instance.id, name: instance.name });
+  }
+  return entries;
+});
+const presetSaveFoldersByInstanceId = computed(() => ({
+  [props.instance.id]: props.nodeLocalFolders || [],
+}));
+
+function derivePresetActionTitle(prompt: string) {
+  const line = prompt.split(/\n/).find((entry) => entry.trim())?.trim() || "Preset action";
+  return line.length > 40 ? `${line.slice(0, 40)}…` : line;
+}
+
+function saveTurnAsPresetAction(payload: { turnId: string; prompt: string }) {
+  const session = selectedConversationSession.value || selectedSession.value;
+  if (!session) return;
+  const turns = aiSessionTurns(session);
+  const turn = turns.find((entry) => entry.id === payload.turnId);
+  const prompt = payload.prompt.trim()
+    || turn?.userPrompt?.trim()
+    || (selectedSession.value && displayAiSessionTitle(session, promptIndexFor(selectedSession.value), t))
+    || "";
+  const preset: StorySessionPreset = {};
+  if (session.agent) preset.agent = session.agent;
+  const permission = loadAiSessionPermissionMode(aiSessionPermissionKey(props.instance.id, session.id));
+  if (permission) preset.permissionMode = permission;
+  if (session.modelSelection) preset.modelSelection = session.modelSelection;
+  if (session.reasoningEffort) preset.reasoningEffort = session.reasoningEffort;
+  if (session.cwdFolderId) preset.cwdFolderId = session.cwdFolderId;
+  presetSaveInitial.value = {
+    storyId: session.storyId || props.creationStoryId || "",
+    title: derivePresetActionTitle(prompt),
+    promptTemplate: prompt,
+    targetInstanceId: props.instance.id,
+    sessionPreset: Object.keys(preset).length ? preset : undefined,
+  };
+  presetSaveOpen.value = true;
+}
+
+async function handlePresetSaved() {
+  showControlPlaneToast(t("sessions.panel.presetSaved"), "success");
+  await queryClient.invalidateQueries({ queryKey: controlPlaneQueryKeys.stories(props.instance.nodeId) });
+}
 const displayedSessionGroups = computed<AiSessionPathGroup[]>(() => groupSessionsByPath.value ? (groupMode.value === "story" ? groupAiSessionsByStory(sortedSessions.value) : groupAiSessionsByPath(sortedSessions.value)) : [{
   key: "all",
   path: "",
@@ -1288,6 +1360,7 @@ const displayedSessionGroups = computed<AiSessionPathGroup[]>(() => groupSession
 // transition (for example running -> idle) must not make the selected session
 // disappear merely because the sidebar filter changed its membership.
 const selectedSession = computed(() => props.selectedAiSession(props.instance, visibleAiSessions.value));
+const promptIndexes = ref<Record<string, { index: number; count: number }>>({});
 useAiSessionMessageDeltaDemand(computed(() => ({ instanceIds: [props.instance.id] })));
 useAiSessionTimelineDemand(computed(() => selectedSession.value ? {
   instanceId: props.instance.id,
@@ -1598,7 +1671,6 @@ const historyMessageAttachments = ref<AiSessionComposerAttachment[]>([]);
 let currentListScrollTop = 0;
 let historyDetailRevision = 0;
 let promptSelectionRevision = 0;
-const promptIndexes = ref<Record<string, { index: number; count: number }>>({});
 const collapsedPathGroups = reactive<Record<string, boolean>>(
   loadCollapsedAiSessionPathGroups(props.instance.id, "current"),
 );

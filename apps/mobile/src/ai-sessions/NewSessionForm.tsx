@@ -5,6 +5,7 @@ import type { ControlPlaneInstanceDirectoryEntry, ControlPlaneNodeDirectoryEntry
 import { AI_SESSION_LONG_PASTE_CODE_POINT_THRESHOLD } from '@task-handoff/control-plane-client';
 
 import { AnchoredSelectMenu, type AnchoredSelectOption } from '../components/AnchoredSelectMenu';
+import { ContextPill } from '../components/ContextPill';
 import { Screen } from '../components/Screen';
 import { SystemIcon } from '../components/SystemIcon';
 import { useMobileTheme } from '../components/theme';
@@ -190,15 +191,6 @@ export function newSessionInstanceOptions(instances: readonly ControlPlaneInstan
   return instanceSelectOptions(instances, nodes);
 }
 
-function ContextPill({ disabled, icon, label, onPress }: { disabled?: boolean; icon: { android: 'dns' | 'auto_awesome' | 'folder' | 'account_tree' | 'psychology'; ios: 'server.rack' | 'sparkles' | 'folder' | 'arrow.triangle.branch' | 'brain' }; label: string; onPress?: () => void }) {
-  const { colors } = useMobileTheme();
-  return <Pressable accessibilityLabel={label} accessibilityRole="button" accessibilityState={{ disabled: Boolean(disabled) }} disabled={disabled} onPress={onPress} style={({ pressed }) => [styles.contextPill, { backgroundColor: colors.surfaceMuted }, disabled && styles.disabled, pressed && styles.pressed]}>
-    <SystemIcon android={icon.android} color={colors.textMuted} ios={icon.ios} size={15} />
-    <Text numberOfLines={1} style={[styles.contextLabel, { color: colors.text }]}>{label}</Text>
-    <SystemIcon android="expand_more" color={colors.textMuted} ios="chevron.down" size={11} />
-  </Pressable>;
-}
-
 function PermissionButton({ disabled, mode, onChange }: { disabled?: boolean; mode: NewSessionFormProps['permissionMode']; onChange(value: NewSessionFormProps['permissionMode']): void }) {
   const { colors } = useMobileTheme();
   const { t } = useI18n();
@@ -240,8 +232,6 @@ const styles = StyleSheet.create({
   description: { fontSize: 15, lineHeight: 22, textAlign: 'center' },
   composer: { borderRadius: SESSION_COMPOSER_EXPANDED_RADIUS, borderWidth: StyleSheet.hairlineWidth, minHeight: 320, overflow: 'hidden', paddingBottom: 0, paddingHorizontal: 14, paddingTop: 14 },
   contextRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  contextPill: { alignItems: 'center', borderRadius: 10, flexDirection: 'row', gap: 6, maxWidth: '100%', minHeight: 38, paddingHorizontal: 11 },
-  contextLabel: { flexShrink: 1, fontSize: 14, fontWeight: '600', lineHeight: 20 },
   promptWrapper: { flex: 1, minHeight: 176 },
   prompt: { flex: 1, fontSize: 16, lineHeight: 24, paddingHorizontal: 4, paddingVertical: 16, textAlignVertical: 'top' },
   toolbar: { alignItems: 'center', flexDirection: 'row', height: SESSION_COMPOSER_TOOLBAR_HEIGHT, justifyContent: 'space-between', marginHorizontal: -6 },

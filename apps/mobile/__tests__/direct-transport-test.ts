@@ -130,6 +130,19 @@ describe('DirectControlPlaneTransport', () => {
     expect(probeImpl).toHaveBeenCalledTimes(2);
   });
 
+  test('publishes capabilities from the latest signed identity after revalidation', async () => {
+    const transport = new DirectControlPlaneTransport(profile, secureStore(), {
+      probeImpl: async () => ({
+        ...target,
+        identity: { ...target.identity, capabilities: { ...target.identity.capabilities, stories: true } },
+      }),
+    });
+
+    expect(transport.currentCapabilities).toBeUndefined();
+    await transport.revalidate();
+    expect(transport.currentCapabilities?.stories).toBe(true);
+  });
+
   test('blocks an existing profile when the Control Plane disables authentication', async () => {
     const fetchImpl = jest.fn();
     const transport = new DirectControlPlaneTransport(profile, secureStore(), {

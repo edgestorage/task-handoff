@@ -56,6 +56,60 @@
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
+        <div v-else-if="storyMode && !standaloneMode" class="control-plane-title control-plane-instance-switcher-shell">
+          <span class="control-plane-kicker">{{ topbarKicker }}</span>
+          <DropdownMenu :open="storyNodeFilterOpen" @update:open="storyNodeFilterOpen = $event">
+            <DropdownMenuTrigger as-child>
+              <button
+                type="button"
+                class="control-plane-instance-switcher"
+                :aria-label="t('navigation.nodes')"
+                @dblclick.stop
+              >
+                <span class="control-plane-instance-switcher-title">
+                  <strong>{{ storyNodeFilterTitle }}</strong>
+                  <ChevronDown class="control-plane-instance-switcher-chevron" :size="16" aria-hidden="true" />
+                </span>
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent class="control-plane-story-node-menu" align="start" :collision-padding="12" :side-offset="8">
+              <ScrollArea
+                class="control-plane-story-node-menu-scroll"
+                :horizontal="false"
+                :style="{ '--story-node-menu-height': `${Math.max(storyNodeFilterOptions.length + 1, 1) * 33 + 2}px` }"
+              >
+                <div class="control-plane-story-node-menu-list">
+                  <DropdownMenuItem
+                    class="control-plane-story-node-menu-item"
+                    :class="{ selected: !storyNodeFilter }"
+                    :aria-current="!storyNodeFilter ? 'true' : undefined"
+                    @select="selectStoryNodeFilter('')"
+                  >
+                    <span class="status-dot" />
+                    <span class="control-plane-story-node-menu-copy">
+                      <strong>{{ t("instances.board.allNodes") }}</strong>
+                    </span>
+                    <Check v-if="!storyNodeFilter" class="control-plane-story-node-menu-check" :size="16" aria-hidden="true" />
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    v-for="node in storyNodeFilterOptions"
+                    :key="node.id"
+                    class="control-plane-story-node-menu-item"
+                    :class="{ selected: node.id === storyNodeFilter }"
+                    :aria-current="node.id === storyNodeFilter ? 'true' : undefined"
+                    @select="selectStoryNodeFilter(node.id)"
+                  >
+                    <span class="status-dot" :data-state="node.status" />
+                    <span class="control-plane-story-node-menu-copy">
+                      <strong>{{ node.name }}</strong>
+                    </span>
+                    <Check v-if="node.id === storyNodeFilter" class="control-plane-story-node-menu-check" :size="16" aria-hidden="true" />
+                  </DropdownMenuItem>
+                </div>
+              </ScrollArea>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
         <div v-else class="control-plane-title control-plane-instance-switcher-shell">
           <span v-if="!standaloneMode" class="control-plane-kicker">{{ topbarKicker }}</span>
           <DropdownMenu :open="instanceSwitcherOpen" @update:open="updateInstanceSwitcherOpen">
@@ -281,6 +335,7 @@
 
       <StoryView
         v-if="!standaloneMode && storyMode && !settingsMode"
+        :filter-node-id="storyNodeFilter"
         :instances="boardInstancesWithAiSessions"
         :node-local-folders-by-node-id="nodeLocalFoldersByNodeId"
         :nodes="nodes.data.value || []"
@@ -667,6 +722,18 @@ const instanceViewMode = computed(() => workbenchView.value === "instance");
 const boardMode = computed(() => workbenchView.value === "board");
 const aiBoardMode = computed(() => workbenchView.value === "ai");
 const storyMode = computed(() => workbenchView.value === "story");
+const storyNodeFilter = ref("");
+const storyNodeFilterOpen = ref(false);
+const storyNodeFilterOptions = computed(() => nodes.data.value || []);
+const storyNodeFilterTitle = computed(() => {
+  if (!storyNodeFilter.value) return t("instances.board.allNodes");
+  return storyNodeFilterOptions.value.find((node) => node.id === storyNodeFilter.value)?.name || storyNodeFilter.value;
+});
+function selectStoryNodeFilter(nodeId: string) {
+  storyNodeFilter.value = nodeId;
+  storyNodeFilterOpen.value = false;
+  closeFloatingLayers();
+}
 const settingsMode = ref(false);
 const settingsSection = ref<SettingsSection>("nodes");
 const accountSecurityOpen = ref(false);
@@ -1595,31 +1662,40 @@ function openAiSessionAppFromBoard(instance: InstanceBoardItemWithAppSessions, s
   closeFloatingLayers();
 }
 
+const storyActionErrorToast = "error" as const;
+const storyActionSuccessToast = "success" as const;
+
 async function runStoryAction(story: Story, action: StoryAction) {
   const target = action.targetInstanceId
     ? boardInstancesWithAiSessions.value.find((instance) => instance.id === action.targetInstanceId)
     : boardInstancesWithAiSessions.value.find((instance) => instance.node?.id === story.ownerNodeId);
-  if (!target) { showToast("No target instance is available on the Story owner node.", "error"); return; }
+  if (!target) { showToast(t("stories.run.noTarget"), storyActionErrorToast); return; }
   let prompt = action.promptTemplate;
   for (const parameter of action.parameters) {
     const value = window.prompt(parameter.label, parameter.defaultValue || "") || "";
-    if (parameter.required && !value.trim()) { showToast(`${parameter.label} is required.`, "error"); return; }
+    if (parameter.required && !value.trim()) { showToast(t("stories.run.parameterRequired", { name: parameter.label }), storyActionErrorToast); return; }
     prompt = prompt.replaceAll(`{{${parameter.name}}}`, value);
   }
   try {
+    const preset = action.sessionPreset;
     await createAiSession(target.id, {
-      agent: "codex",
+      agent: preset?.agent || "codex",
       clientRequestId: `story-action-${crypto.randomUUID()}`,
       message: prompt,
-      permissionMode: "ask",
+      permissionMode: preset?.permissionMode ?? "ask",
+      ...(preset?.mode ? { mode: preset.mode } : {}),
+      ...(preset?.cwdFolderId ? { cwdFolderId: preset.cwdFolderId } : {}),
+      ...(preset?.gitSelection ? { gitSelection: preset.gitSelection } : {}),
+      ...(preset?.modelSelection ? { modelSelection: preset.modelSelection } : {}),
+      ...(preset?.reasoningEffort ? { reasoningEffort: preset.reasoningEffort } : {}),
       storyId: story.id,
       attachments: [],
       references: [],
     });
     setActiveInstance(target.id);
     setWorkbenchView("instance");
-    showToast("AI Session created.", "success");
-  } catch (cause) { showToast(cause instanceof Error ? cause.message : String(cause), "error"); }
+    showToast(t("stories.run.created"), storyActionSuccessToast);
+  } catch (cause) { showToast(cause instanceof Error ? cause.message : String(cause), storyActionErrorToast); }
 }
 
 function setWorkbenchView(view: WorkbenchView) {

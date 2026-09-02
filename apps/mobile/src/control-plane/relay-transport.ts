@@ -1,4 +1,5 @@
 import type { z } from 'zod';
+import type { ControlPlanePublicCapabilities } from '@task-handoff/protocol/control-plane-access';
 import { RelayTtySnapshotEnvelopeSchema, type OfficialMobileAccountClient as CloudMobileAccountClient } from '@task-handoff/cloud-contracts/mobile';
 import type { MobileCloudRelayControlPlaneProfile } from './profile';
 import { COMPACT_EVENT_ENVELOPE_VERSION, type AiSessionTransientSubscription } from '@task-handoff/protocol/events';
@@ -10,6 +11,7 @@ export type RelayChannelFactory = (input: { relayUrl: string; clientAttach: unkn
 
 export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
   readonly profile: MobileCloudRelayControlPlaneProfile;
+  readonly currentCapabilities: ControlPlanePublicCapabilities | undefined = undefined;
   private channel?: Promise<EncryptedRelayChannel>;
   private channelValue?: EncryptedRelayChannel;
   private epoch = 0;

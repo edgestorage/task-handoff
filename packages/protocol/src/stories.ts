@@ -1,11 +1,21 @@
 import { z } from "zod";
+import {
+  AiAgentKindSchema,
+  AiSessionGitSelectionSchema,
+  AiSessionModelSelectionSchema,
+  AiSessionPermissionModeSchema,
+  AiSessionReasoningEffortSchema,
+  AiSessionSendModeSchema,
+} from "./ai-sessions.ts";
+import { StoryIdSchema } from "./story-id.ts";
+
+export { StoryIdSchema } from "./story-id.ts";
 
 export const STORY_PROTOCOL_VERSION = "2026-09-01";
 export const STORY_DEFAULT_MAX_FILE_BYTES = 32 * 1024 * 1024;
 export const STORY_DEFAULT_MAX_BATCH_PATHS = 20;
 export const STORY_TEXT_PREVIEW_MAX_BYTES = 1024 * 1024;
 
-export const StoryIdSchema = z.string().trim().min(1).max(120);
 export const StoryPathSchema = z.string().trim().min(1).max(1024).refine((value) => {
   if (value.startsWith("/") || value.includes("\\")) return false;
   const segments = value.split("/");
@@ -27,12 +37,23 @@ export const StoryActionParameterSchema = z.object({
   defaultValue: z.string().max(4000).optional(),
 }).strict();
 
+export const StorySessionPresetSchema = z.object({
+  agent: AiAgentKindSchema.optional(),
+  mode: AiSessionSendModeSchema.optional(),
+  permissionMode: AiSessionPermissionModeSchema.optional(),
+  modelSelection: AiSessionModelSelectionSchema.optional(),
+  reasoningEffort: AiSessionReasoningEffortSchema.optional(),
+  cwdFolderId: z.string().trim().min(1).max(120).optional(),
+  gitSelection: AiSessionGitSelectionSchema.optional(),
+}).strict();
+
 export const StoryActionSchema = z.object({
   id: z.string().trim().min(1).max(120),
   title: z.string().trim().min(1).max(120),
   promptTemplate: z.string().trim().min(1).max(32_000),
   targetInstanceId: z.string().trim().min(1).max(120).optional(),
   parameters: z.array(StoryActionParameterSchema).max(20).default([]),
+  sessionPreset: StorySessionPresetSchema.optional(),
 }).strict();
 
 export const StoryActionInputSchema = StoryActionSchema.omit({ id: true }).strict();
@@ -143,6 +164,7 @@ export const StoryChangedEventSchema = z.object({
 export type Story = z.infer<typeof StorySchema>;
 export type StoryAction = z.infer<typeof StoryActionSchema>;
 export type StoryActionInput = z.infer<typeof StoryActionInputSchema>;
+export type StorySessionPreset = z.infer<typeof StorySessionPresetSchema>;
 export type StoryCreateInput = z.infer<typeof StoryCreateInputSchema>;
 export type StoryDocument = z.infer<typeof StoryDocumentSchema>;
 export type StoryContentPreview = z.infer<typeof StoryContentPreviewSchema>;

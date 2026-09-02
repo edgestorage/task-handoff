@@ -35,7 +35,7 @@ export const sessions = {
     noMatchingTriggers: "没有匹配的触发器", remove: "移除", add: "添加", openAppFor: "打开 {agent} 的应用会话", openApp: "打开应用会话", openTerminal: "打开 Terminal",
     moreFor: "{agent} 的更多操作", more: "更多操作", fork: "继续聊天", forkCurrent: "使用当前工作区", forkWorktree: "创建独立 worktree", continueFromTurn: "从当前回合继续聊天", forkBusyTitle: "在当前回合运行时继续聊天？", forkBusyDescription: "Codex 会基于 interrupted snapshot 开始新的聊天，原回合会继续运行且不会被中断。", forkConfirm: "继续聊天", forking: "正在继续聊天", closingApp: "正在关闭应用会话", closeApp: "关闭应用会话", closingSession: "正在关闭 AI 会话", closeSession: "关闭 AI 会话", unread: "未读 AI 会话", openedFromTerminal: "由终端应用会话打开",
     previousMessage: "{agent} 的上一条用户消息", nextMessage: "{agent} 的下一条用户消息", addTrigger: "添加触发器", triggersBound: "已绑定 {count} 个触发器",
-    addToStory: "添加到 Story", loadingStories: "正在加载 Story…", storiesLoadFailed: "无法加载 Story。", noStories: "暂无 Story", storyAssigned: "已添加到 Story", storyAssignFailed: "无法将 AI 会话添加到 Story",
+    addToStory: "添加到 Story", saveAsPreset: "保存为预设动作", loadingStories: "正在加载 Story…", storiesLoadFailed: "无法加载 Story。", noStories: "暂无 Story", storyAssigned: "已添加到 Story", storyAssignFailed: "无法将 AI 会话添加到 Story",
   },
   detail: {
     selected: "已选 AI 会话", sessionDetails: "会话详情", workspace: "工作区", session: "会话", appBinding: "应用绑定", forkedFrom: "分支来源", unknown: "未知",
@@ -59,7 +59,7 @@ export const sessions = {
     resizeList: "调整 AI 会话列表大小", startIdea: "从一个想法开始", searchProjects: "搜索项目", noProjects: "未找到项目", newProject: "新建项目", openInFileManager: "在文件管理器中打开", openInFileManagerFailed: "无法在系统文件管理器中打开该文件夹。", renameProject: "重命名", renameProjectDescription: "修改项目在文件夹选择器和 AI 会话分组中的名称，不会改变实际路径。", renameProjectFailed: "无法重命名项目。", projectName: "项目名称", currentFolderMode: "当前文件夹", worktreeMode: "独立 worktree", chooseBranch: "选择分支", searchBranches: "搜索分支", detached: "Detached", switchBranchTitle: "切换当前文件夹的分支？", switchBranchDescription: "创建会话时会把当前文件夹切换到“{branch}”。未提交的改动会保留，但这个文件夹中的其他活动会话可能看到新的工作树内容。", confirmBranchSwitch: "确认切换",
     promptPlaceholder: "描述你想做的事", chooseProject: "选择项目", projectUnavailable: "这个项目已不在节点的登记目录中。", startedWorktree: "AI 会话已在所选 worktree 中启动。", backLatest: "返回最新消息",
     defaultPermissionFailed: "无法更新默认 Codex 权限模式。", starting: "新的 AI 会话仍在启动，请稍后重试。",
-    startFailed: "无法启动 AI 会话。", modelSwitchFailed: "无法切换模型。", reasoningEffortFailed: "无法调整思考程度。", sendFailed: "无法发送消息。", noGoal: "没有活跃目标。", commandFailed: "无法运行命令。", steerFailed: "无法追加消息。",
+    startFailed: "无法启动 AI 会话。", presetSaved: "预设动作已保存。", modelSwitchFailed: "无法切换模型。", reasoningEffortFailed: "无法调整思考程度。", sendFailed: "无法发送消息。", noGoal: "没有活跃目标。", commandFailed: "无法运行命令。", steerFailed: "无法追加消息。",
     steerQueuedFailed: "无法调整排队消息。", retryQueuedFailed: "无法重试排队消息。", removeQueuedFailed: "无法移除排队消息。", editQueuedFailed: "无法编辑排队消息。", reorderQueuedFailed: "无法调整排队消息顺序。",
     stopFailed: "无法停止 AI 会话。", forkFailed: "无法继续聊天。", forkProjectionPending: "新聊天已创建，但会话状态尚未确认，请稍后重试。", approvalFailed: "无法处理审批。", closeAppFailed: "无法关闭应用会话。", closeSessionFailed: "无法关闭 AI 会话。", openAppFailed: "无法为 AI 会话打开应用。",
     loadingHistory: "正在读取过往对话…", retry: "重试", noHistory: "暂无过往对话", viewHistory: "查看过往对话",

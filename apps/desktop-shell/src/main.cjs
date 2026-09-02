@@ -1276,6 +1276,7 @@ ipcMain.handle("task-handoff:set-window-chrome-theme", (_event, theme) => {
   if (!targetWindow || targetWindow.isDestroyed() || !["light", "dark"].includes(theme)) {
     return { ok: false };
   }
+  nativeTheme.themeSource = theme;
   targetWindow.setBackgroundColor(desktopWindowBackgroundColor(theme));
   const height = windowsTitleBarOverlayHeights.get(targetWindow);
   if (process.platform === "win32" && height) {
