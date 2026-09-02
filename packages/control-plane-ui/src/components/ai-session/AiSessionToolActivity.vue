@@ -198,7 +198,7 @@ const statusText = computed(() => {
   width: fit-content;
   max-width: min(78%, 620px);
   border-radius: 14px;
-  background: var(--surface-hover);
+  background: var(--ai-session-user-message-bg, var(--surface-hover));
   padding: 12px 14px;
 }
 .ai-session-tool-activity-message :deep(.markdown-content),

@@ -58,9 +58,8 @@
                 </ContextMenu>
                 <ContextMenu v-for="entry in sessionsFor(story)" :key="entry.session.id">
                   <ContextMenuTrigger as-child>
-                    <button type="button" class="story-tree-item" :class="{ active: isSessionSelected(story, entry.session.id), 'story-tree-item-detailed': treeViewMode === 'detailed' }" @click="selectSession(story, entry)">
-                      <span v-if="entry.session.status === 'running'" class="story-session-status"><AiSessionStatusIndicator :status="entry.session.status" /></span>
-                      <MessageSquare v-else :size="14" /><span :class="{ 'story-tree-item-detail': treeViewMode === 'detailed' }"><strong>{{ entry.session.title || entry.session.userPrompt || entry.session.id }}</strong><small v-if="treeViewMode === 'detailed'">{{ entry.instance.name }} · {{ sessionStatusLabel(entry.session.status, t) }}</small></span><small v-if="treeViewMode === 'compact'" class="story-tree-item-hint" aria-hidden="true">{{ entry.instance.name }}</small>
+                    <button type="button" class="story-tree-item" :class="{ active: isSessionSelected(story, entry.session.id), 'story-tree-item-detailed': treeViewMode === 'detailed', 'story-tree-item-unread': entry.session.unread }" :data-state="entry.session.status" :data-unread="entry.session.unread ? 'true' : undefined" @click="selectSession(story, entry)">
+                      <span v-if="entry.session.status === 'running'" class="story-session-status"><AiSessionStatusIndicator :status="entry.session.status" /></span><span v-else class="story-session-icon"><MessageSquare :size="14" /><AiSessionStatusIndicator class="story-session-icon-status" :status="entry.session.status" size="compact" /></span><span :class="{ 'story-tree-item-detail': treeViewMode === 'detailed' }"><strong>{{ entry.session.title || entry.session.userPrompt || entry.session.id }}</strong><small v-if="treeViewMode === 'detailed'">{{ entry.instance.name }} · {{ sessionStatusLabel(entry.session.status, t) }}</small></span><small v-if="treeViewMode === 'compact'" class="story-tree-item-hint" aria-hidden="true">{{ entry.instance.name }}</small><span v-if="entry.session.unread" class="story-session-unread" :aria-label="t('sessions.actions.unread')" :title="t('sessions.actions.unread')" />
                     </button>
                   </ContextMenuTrigger>
                   <AiSessionCardContextMenu
@@ -124,16 +123,17 @@
           <div v-if="previewLoading" class="story-content-state">{{ t("stories.loadingDocument") }}</div>
           <div v-else-if="previewError" class="story-content-state story-error">{{ previewError }}</div>
           <ScrollArea v-else type="auto" :horizontal="false" class="story-document-markdown">
-            <AiSessionStreamingMarkdown
-              class="story-document-markdown-content"
-              :instance-id="documentInstanceId"
-              :session-id="documentMarkdownSessionId"
-              :html-policy="documentHtmlPolicy"
-              :code-tools="markdownCodeTools"
-              :content="previewText"
-              :file-links="true"
-              @open-file="onOpenDocumentLink"
-            />
+            <div class="story-document-markdown-content">
+              <AiSessionStreamingMarkdown
+                :instance-id="documentInstanceId"
+                :session-id="documentMarkdownSessionId"
+                :html-policy="documentHtmlPolicy"
+                :code-tools="markdownCodeTools"
+                :content="previewText"
+                :file-links="true"
+                @open-file="onOpenDocumentLink"
+              />
+            </div>
           </ScrollArea>
         </template>
         <template v-else-if="selectedResource?.kind === 'story'">
@@ -171,7 +171,8 @@
   <Dialog v-model:open="actionEditorOpen">
     <DialogContent class="story-editor-dialog story-action-editor-dialog">
       <DialogHeader><DialogTitle>{{ t(editingActionId ? "stories.actionEditor.editTitle" : "stories.actionEditor.newTitle") }}</DialogTitle><DialogDescription>{{ t("stories.actionEditor.description") }}</DialogDescription></DialogHeader>
-      <div class="story-editor-fields">
+      <ScrollArea class="story-action-editor-scroll" :horizontal="false">
+        <div class="story-editor-fields story-action-editor-fields">
         <label>{{ t("stories.actionEditor.title") }}<Input v-model="actionDraftTitle" :placeholder="t('stories.actionEditor.titlePlaceholder')" /></label>
         <label>{{ t("stories.actionEditor.promptTemplate") }}<Textarea v-model="actionDraftPrompt" :placeholder="t('stories.actionEditor.promptPlaceholder')" /></label>
         <label>{{ t("stories.actionEditor.targetInstance") }}<ControlPlaneSelect v-model="actionDraftTargetInstanceId" :placeholder="t('stories.actionEditor.selectTargetInstance')"><ControlPlaneSelectItem v-for="instance in storyInstances" :key="instance.id" :value="instance.id">{{ instance.name }}</ControlPlaneSelectItem></ControlPlaneSelect></label>
@@ -200,7 +201,8 @@
           </div>
           <div v-if="!actionDraftParameters.length" class="story-empty">{{ t("stories.actionEditor.noParameters") }}</div>
         </div>
-      </div>
+        </div>
+      </ScrollArea>
       <DialogFooter><Button variant="outline" @click="actionEditorOpen = false">{{ t("common.actions.cancel") }}</Button><Button :disabled="!actionDraftTitle.trim() || !actionDraftPrompt.trim() || !actionDraftTargetInstanceId || actionSaving" @click="saveAction">{{ actionSaving ? t("stories.actionEditor.saving") : t("common.actions.save") }}</Button></DialogFooter>
     </DialogContent>
   </Dialog>
@@ -244,7 +246,7 @@ const emit = defineEmits<{
   "open-repository-workspace": [target: RepositoryWorkspaceTabTarget];
   "run-action": [story: Story, action: StoryAction];
 }>();
-type SessionEntry = { instance: InstanceWithAiSessions; session: any };
+type SessionEntry = { instance: InstanceWithAiSessions; session: AiSessionSummary };
 type Resource = { kind: "story"; story: Story } | { kind: "new-session"; story: Story } | { kind: "document"; story: Story; document: Story["documents"][number] } | { kind: "session"; story: Story; entry: SessionEntry };
 type ActionParameterDraft = { name: string; label: string; required: boolean; defaultValue: string };
 const EXPANDED_STORY_KEYS_STORAGE_KEY = "task-handoff.control-plane.stories.expanded";
@@ -272,7 +274,14 @@ function setTreeViewMode(mode: TreeViewMode) {
   treeViewMode.value = mode;
   try { window.localStorage?.setItem(TREE_VIEW_MODE_STORAGE_KEY, mode); } catch { /* Local storage may be unavailable in restricted browser contexts. */ }
 }
-const sidebarWidth = ref(320); const workspaceEl = ref<HTMLElement>(); const resizingSidebar = ref(false); let resizingPointerId: number | undefined;
+const SIDEBAR_WIDTH_STORAGE_KEY = "task-handoff.control-plane.stories.sidebar-width";
+function storedSidebarWidth() {
+  try {
+    const value = Number(window.localStorage?.getItem(SIDEBAR_WIDTH_STORAGE_KEY));
+    return Number.isFinite(value) ? Math.min(520, Math.max(240, value)) : 320;
+  } catch { return 320; }
+}
+const sidebarWidth = ref(storedSidebarWidth()); const workspaceEl = ref<HTMLElement>(); const resizingSidebar = ref(false); let resizingPointerId: number | undefined;
 const previewText = ref(""); const previewLoading = ref(false); const previewError = ref("");
 const editorOpen = ref(false); const editing = ref(false); const draftTitle = ref(""); const draftDescription = ref(""); const draftNodeId = ref(""); const saving = ref(false);
 const newSessionInstanceId = ref(""); const newSessionInitialCwd = ref(""); const newSessionInitialCwdFolderId = ref(""); const assignSessionOpen = ref(false); const assignSessionId = ref(""); const assigningSession = ref(false);
@@ -402,6 +411,7 @@ function openStoryAiSessionApp(instance: InstanceBoardItem, session?: AiSessionS
 function startSidebarResize(event: PointerEvent) { if (window.matchMedia("(max-width: 800px)").matches || !workspaceEl.value) return; resizingSidebar.value = true; resizingPointerId = event.pointerId; (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId); window.addEventListener("pointermove", resizeSidebar); window.addEventListener("pointerup", stopSidebarResize); window.addEventListener("pointercancel", stopSidebarResize); }
 function resizeSidebar(event: PointerEvent) { if (!resizingSidebar.value || event.pointerId !== resizingPointerId || !workspaceEl.value) return; sidebarWidth.value = Math.min(520, Math.max(240, event.clientX - workspaceEl.value.getBoundingClientRect().left)); }
 function stopSidebarResize(event?: PointerEvent) { if (event && resizingPointerId !== undefined && event.pointerId !== resizingPointerId) return; resizingSidebar.value = false; resizingPointerId = undefined; window.removeEventListener("pointermove", resizeSidebar); window.removeEventListener("pointerup", stopSidebarResize); window.removeEventListener("pointercancel", stopSidebarResize); }
+watch(sidebarWidth, (width) => { try { window.localStorage?.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(width)); } catch { /* Local storage may be unavailable in restricted browser contexts. */ } });
 async function load() {
   error.value = "";
   try {
@@ -496,14 +506,14 @@ onBeforeUnmount(stopSidebarResize);
 .story-description { max-width:640px; margin:12px 0 0; line-height:1.5; }
 .story-workspace { display:grid; grid-template-columns:minmax(240px,var(--story-sidebar-width,320px)) 2px minmax(0,1fr); gap:0; flex:1 1 auto; min-height:0; margin-top:0; overflow:hidden; }
 .story-sidebar { display:grid; min-width:0; min-height:0; grid-template-rows:auto minmax(0,1fr); }
-.story-sidebar-actions { padding:0 12px; }
+.story-sidebar-actions { padding:0 10px; }
 .story-new-button { width:100%; padding-block:11px; }
 .story-sidebar-section { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:8px 0 4px 8px; }
 .story-sidebar-section-label { color:var(--text-muted); font-size:12px; font-weight:500; line-height:1; }
 .story-view-mode-button { width:26px; height:26px; color:var(--text-muted); }
 .story-view-mode-button:hover { color:var(--text-strong); }
 .story-sidebar-scroll { min-width:0; min-height:0; }
-.story-sidebar-scroll-inner { min-width:0; padding:0 12px 12px; }
+.story-sidebar-scroll-inner { min-width:0; padding:0 10px 12px; }
 .story-sidebar-scroll :deep([data-task-handoff-scroll-viewport] > div) { width:100%; min-width:0 !important; }
 .story-loading-overlay { position:absolute; inset:0; z-index:5; display:grid; place-items:center; border-radius:8px; background:color-mix(in srgb,var(--surface) 72%,transparent); backdrop-filter:blur(1px); }
 .story-loading-spin { color:var(--text-muted); animation:story-loading-spin 0.9s linear infinite; }
@@ -519,24 +529,29 @@ onBeforeUnmount(stopSidebarResize);
 .story-tree-story-row { position:relative; }
 .story-tree-item { position:relative; display:flex; align-items:center; width:100%; min-width:0; gap:8px; border:0; border-radius:6px; background:transparent; color:inherit; cursor:pointer; padding:8px; text-align:left; }
 .story-tree-story { padding-right:36px; padding-left:32px; padding-block:11px; }
-.story-tree-item:hover,.story-tree-item.active { background:var(--surface-active); }
+.story-tree-item:hover { background:var(--sidebar-row-hover-bg,var(--surface-active)); }
+.story-tree-item.active,.story-tree-item.active:hover { background:var(--sidebar-row-selected-bg,var(--surface-active)); }
 .story-tree-disclosure-button { position:absolute; z-index:1; top:50%; left:4px; display:grid; width:24px; height:24px; place-items:center; border:0; border-radius:4px; background:transparent; color:var(--text-muted); cursor:pointer; padding:0; transform:translateY(-50%); }
 .story-tree-disclosure-button:hover,.story-tree-disclosure-button:focus-visible { background:var(--surface-active); color:var(--text-strong); outline:none; }
 .story-tree-disclosure { flex:0 0 auto; transition:transform 120ms ease; }
 .story-tree-disclosure.expanded { transform:rotate(90deg); }
-.story-session-status { display:grid; width:14px; height:14px; flex:0 0 auto; place-items:center; }
-.story-tree-item > span:not(.story-session-status) { display:flex; align-items:center; min-width:0; flex:1; overflow:hidden; }
-.story-tree-item > span:not(.story-session-status) strong { display:block; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; line-height:1.3; }
+.story-session-status,.story-session-icon { position:relative; display:grid; width:14px; height:14px; flex:0 0 auto; place-items:center; overflow:visible; }
+.story-session-icon-status { position:absolute; top:-2px; right:-5px; }
+.story-tree-item > span:not(.story-session-status):not(.story-session-icon):not(.story-session-unread) { display:flex; align-items:center; min-width:0; flex:1; overflow:hidden; }
+.story-tree-item > span:not(.story-session-status):not(.story-session-icon):not(.story-session-unread) strong { display:block; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; line-height:1.3; }
 .story-tree-item > span.story-tree-item-detail { display:grid; gap:2px; line-height:1.5; overflow:visible; }
 .story-tree-item > span.story-tree-item-detail strong,
 .story-tree-item > span.story-tree-item-detail small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; line-height:1.5; }
 .story-tree-item strong { font-size:13px; font-weight:500; }
-.story-tree-item:not(.story-tree-story):not(.story-new-button):not(.story-tree-item-detailed) > span:not(.story-session-status) strong { font-weight:400; }
+.story-tree-item:not(.story-tree-story):not(.story-new-button):not(.story-tree-item-detailed) > span:not(.story-session-status):not(.story-session-icon):not(.story-session-unread) strong { font-weight:400; }
 .story-tree-item small,.story-tree-empty { color:var(--text-muted); font-size:12px; }
 .story-tree-item:not(.story-tree-story):not(.story-new-button) { height:32px; padding-block:6px; }
 .story-tree-item.story-tree-item-detailed:not(.story-tree-story):not(.story-new-button) { height:auto; padding-block:8px; }
 .story-tree-item-hint { position:absolute; top:50%; right:8px; z-index:1; max-width:64%; overflow:hidden; padding-left:18px; color:var(--text-muted); font-size:12px; white-space:nowrap; text-overflow:ellipsis; pointer-events:none; opacity:0; transform:translateY(-50%); background:linear-gradient(90deg, transparent, var(--surface-active) 18px); transition:opacity 140ms ease; }
-.story-tree-item:hover > .story-tree-item-hint { opacity:1; }
+.story-tree-item:hover > .story-tree-item-hint { background:linear-gradient(90deg,transparent,var(--sidebar-row-hover-bg,var(--surface-active)) 18px); opacity:1; }
+.story-tree-item.active > .story-tree-item-hint { background:linear-gradient(90deg,transparent,var(--sidebar-row-selected-bg,var(--surface-active)) 18px); }
+.story-tree-item-unread > .story-tree-item-hint { right:24px; }
+.story-session-unread { width:7px; height:7px; flex:0 0 auto; border-radius:999px; background:var(--status-info); box-shadow:0 0 0 3px color-mix(in srgb,var(--status-info) 18%,transparent); }
 .story-tree-add { display:grid; grid:1fr/1fr; width:18px; height:18px; place-items:center; border:0; border-radius:4px; background:transparent; color:var(--text-muted); cursor:pointer; padding:0; }
 .story-tree-story-add { position:absolute; top:50%; right:6px; width:24px; height:24px; transform:translateY(-50%); opacity:0; pointer-events:none; transition:opacity 120ms ease; }
 .story-tree-story-row:hover .story-tree-story-add,.story-tree-story-add:focus-visible { opacity:1; pointer-events:auto; }
@@ -548,7 +563,7 @@ onBeforeUnmount(stopSidebarResize);
 .story-content { display:flex; min-width:0; min-height:0; flex-direction:column; overflow:hidden; padding:0 20px; }
 .story-content.story-session-pane { padding:0; }
 .story-content.story-session-pane > .story-session-creator { padding:0; background:transparent; }
-.story-content-header { display:flex; align-items:center; justify-content:space-between; gap:12px; border-bottom:1px solid var(--line); padding:12px 0; flex:0 0 auto; }
+.story-content-header { display:flex; align-items:center; justify-content:space-between; gap:12px; border-bottom:1px solid var(--line); padding:0 0 12px; flex:0 0 auto; }
 .story-content-header > div:first-child:not(.story-content-title) { display:grid; min-width:0; gap:3px; }
 .story-content-header .story-content-title { display:flex; align-items:baseline; gap:10px; min-width:0; }
 .story-content-title h2 { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -580,7 +595,9 @@ onBeforeUnmount(stopSidebarResize);
 .story-action-edit { display:grid; flex:0 0 auto; place-items:center; width:32px; height:32px; margin-right:12px; border:1px solid var(--line); border-radius:7px; background:var(--surface-raised); color:var(--text-muted); cursor:pointer; padding:0; }
 .story-action-edit:hover,.story-action-edit:focus-visible { background:var(--surface-active); color:var(--text-strong); outline:none; }
 .story-action-edit:disabled { cursor:default; opacity:.5; }
-.story-action-editor-dialog { max-width:640px; }
+:global(.story-editor-dialog.story-action-editor-dialog) { max-width:640px; grid-template-rows:auto minmax(0,1fr) auto; overflow:hidden; }
+:global(.story-action-editor-scroll) { min-height:0; }
+.story-action-editor-fields { padding-right:8px; }
 .story-action-preset { display:grid; gap:8px; border-top:1px solid var(--line); padding-top:12px; }
 .story-action-preset-title { color:var(--text-muted); font-size:12px; }
 .story-action-preset-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
@@ -592,7 +609,7 @@ onBeforeUnmount(stopSidebarResize);
 .story-error { color:var(--status-danger); font-size:12px; }
 .story-editor-fields { display:grid; gap:14px; }
 .story-editor-fields label { display:grid; gap:6px; color:var(--text-muted); font-size:12px; }
-.story-editor-dialog { max-width:460px; }
-@media (max-width:800px) { .story-view { padding:16px 0; } .story-workspace { grid-template-columns:minmax(220px,38%) minmax(0,1fr); } .story-sidebar-resize-handle { display:none; } .story-content-header { padding:14px 0; } }
+:global(.story-editor-dialog) { max-width:460px; }
+@media (max-width:800px) { .story-view { padding:16px 0; } .story-workspace { grid-template-columns:minmax(220px,38%) minmax(0,1fr); } .story-sidebar-resize-handle { display:none; } .story-content-header { padding:0 0 14px; } }
 @media (max-width:560px) { .story-view { padding:10px 0; } .story-workspace { grid-template-columns:1fr; } .story-sidebar { max-height:38%; border-right:0; border-bottom:1px solid var(--line); } .story-overview-grid { margin:14px 0; } .story-actions-section { margin:0; } }
 </style>

@@ -53,6 +53,8 @@
   --control-plane-topbar-bg: var(--surface-subtle);
   --control-plane-settings-background: var(--surface-inset);
   --instance-board-background: var(--workspace-bg);
+  --instance-board-accent-text: hsl(var(--primary));
+  --instance-board-card-shadow: 0 0 0 transparent;
   --instance-list-row-hover-bg: var(--surface-inset);
   --instance-list-title: var(--text-strong);
   --instance-list-meta: var(--text-muted);
@@ -65,6 +67,11 @@
   --ai-board-expanded-bg: var(--surface-inset);
   --ai-board-floating-bg: var(--surface-subtle);
   --ai-board-empty-bg: var(--surface-inset);
+  --sidebar-row-hover-bg: #eeeef2;
+  --sidebar-row-selected-bg: #e6e6ec;
+  --ai-session-row-hover-bg: var(--sidebar-row-hover-bg);
+  --ai-session-row-selected-bg: var(--sidebar-row-selected-bg);
+  --ai-session-user-message-bg: #e5e5ea;
 
   --control-plane-select-content-bg: var(--surface);
   --control-plane-select-item-highlight-text: var(--text-strong);

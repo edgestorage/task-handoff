@@ -34,6 +34,20 @@ test("localized resources expose the same semantic keys", () => {
   assert.deepEqual(leafKeys(zhCN).sort(), leafKeys(enUS).sort());
 });
 
+test("all localized resource strings compile", () => {
+  for (const locale of ["en-US", "zh-CN"]) {
+    const i18n = createControlPlaneI18nForTest(locale);
+    for (const key of leafKeys(locale === "en-US" ? enUS : zhCN)) {
+      assert.doesNotThrow(() => i18n.global.t(key), `${locale}:${key}`);
+    }
+  }
+});
+
+test("Story action prompt placeholders render literal template braces", () => {
+  assert.equal(createControlPlaneI18nForTest("en-US").global.t("stories.actionEditor.promptPlaceholder"), "Prompt template, e.g. Fix {{bug}}.");
+  assert.equal(createControlPlaneI18nForTest("zh-CN").global.t("stories.actionEditor.promptPlaceholder"), "提示词模板，例如：修复 {{bug}}。");
+});
+
 test("locale matching normalizes supported English and simplified Chinese tags", () => {
   assert.equal(matchSupportedLocale("zh-Hans-CN"), "zh-CN");
   assert.equal(matchSupportedLocale("zh_CN"), "zh-CN");

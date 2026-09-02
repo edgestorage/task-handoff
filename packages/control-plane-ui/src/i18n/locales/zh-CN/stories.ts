@@ -57,7 +57,7 @@ export const stories = {
     title: "标题",
     titlePlaceholder: "动作标题",
     promptTemplate: "提示词模板",
-    promptPlaceholder: "提示词模板，例如：修复 {{bug}}。",
+    promptPlaceholder: "提示词模板，例如：修复 {'{{bug}}'}。",
     targetInstance: "目标实例",
     selectTargetInstance: "选择目标实例",
     sessionPreset: "会话预设",

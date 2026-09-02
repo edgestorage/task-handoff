@@ -54,7 +54,7 @@ export const stories = {
     title: "Title",
     titlePlaceholder: "Action title",
     promptTemplate: "Prompt template",
-    promptPlaceholder: "Prompt template, e.g. Fix {{bug}}.",
+    promptPlaceholder: "Prompt template, e.g. Fix {'{{bug}}'}.",
     targetInstance: "Target instance",
     selectTargetInstance: "Select target instance",
     sessionPreset: "Session preset",

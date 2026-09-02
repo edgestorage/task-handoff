@@ -96,6 +96,7 @@ test("AI session list supports persistent card and compact-list layouts", () => 
   assert.match(styles, /\.session-ai-compact-title\s*\{[^}]*font-weight: 400;/s);
   assert.match(statusIndicator, /\[data-size="compact"\]\[data-state="idle"\][^{]*\{\s*visibility: hidden;/);
   assert.match(styles, /\.session-ai-compact-row\[data-selected="true"\]\s*\{[\s\S]*background: var\(--ai-session-row-selected-bg\);/);
+  assert.match(styles, /\.session-ai-compact-row:hover,[\s\S]*?background: var\(--ai-session-row-hover-bg, var\(--surface-hover\)\);/);
 });
 
 test("running AI sessions use one theme-aware loading ring across list and board cards", () => {

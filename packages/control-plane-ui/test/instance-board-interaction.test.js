@@ -7,6 +7,7 @@ const read = (path) => fs.readFileSync(new URL(`../src/apps/control-plane/${path
 
 const workbench = read("ControlPlaneWorkbench.vue");
 const board = read("board/InstanceBoardView.vue");
+const appStyles = fs.readFileSync(new URL("../src/styles/app.css", import.meta.url), "utf8");
 const boardSessions = read("board/useInstanceBoardSessions.ts");
 const detailSelection = read("instance-detail/instanceDetailSelection.ts");
 const sessionPreviewStyles = read("instance-detail/SessionPreview.css");
@@ -103,6 +104,19 @@ test("each instance board card opens its current session in the instance detail 
 test("board empty states use the themed inset surface", () => {
   assert.match(board, /\.board-empty \{[\s\S]*?background: var\(--surface-inset\);/);
   assert.doesNotMatch(board, /\.board-empty \{[\s\S]*?background: var\(--white\);/);
+});
+
+test("instance board cards omit elevation in the light theme", () => {
+  assert.match(appStyles, /:root:not\(\.dark\):not\(\[data-theme="dark"\]\),[\s\S]*?--instance-board-card-shadow: 0 0 0 transparent;/);
+  assert.match(board, /\.instance-board-card \{[\s\S]*?box-shadow: var\(--instance-board-card-shadow, var\(--shadow-popover\)\);/);
+  assert.match(board, /\.instance-board-card\.active \{[\s\S]*?0 0 0 1px var\(--focus-ring\),[\s\S]*?var\(--instance-board-card-shadow, var\(--shadow-popover\)\);/);
+});
+
+test("light-theme board accents use the readable primary tone", () => {
+  assert.match(appStyles, /--instance-board-accent-text: hsl\(var\(--primary\)\);/);
+  assert.match(board, /\.board-group-label \{[\s\S]*?color: var\(--instance-board-accent-text, var\(--brand-accent-muted\)\);/);
+  assert.match(board, /\.board-launch-button \{[\s\S]*?color: var\(--instance-board-accent-text, var\(--brand-accent-muted\)\);/);
+  assert.match(board, /\.board-launch-button:hover,[\s\S]*?color: var\(--instance-board-accent-text, var\(--brand-accent-foreground\)\);/);
 });
 
 test("instance directory renders independent node loading states", () => {
