@@ -133,6 +133,9 @@ export function eventTopic(type: string) {
   if (type.startsWith("market.")) {
     return "market";
   }
+  if (type.startsWith("story.")) {
+    return "stories";
+  }
   return "system";
 }
 

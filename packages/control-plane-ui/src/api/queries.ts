@@ -7,6 +7,7 @@ import { controlPlaneQueryKeys } from "./queryKeys.ts";
 import { sharedAiSessionsApi, sharedControlPlaneClient } from "./sharedClient.ts";
 import type { ControlPlaneInstanceResourceEntry } from "@task-handoff/control-plane-client";
 import type { GitCredentialCreateRequest, GitCredentialPublic, GitCredentialUpdateRequest, InstanceGitCredentialAssignment } from "@task-handoff/protocol/managed-git-credentials";
+import type { Story } from "@task-handoff/protocol/stories";
 export { controlPlaneQueryKeys } from "./queryKeys.ts";
 import type {
   ControlPlaneStatusResponse,
@@ -869,6 +870,27 @@ export function interruptAiSession(instanceId: string, sessionId: string) {
 
 export function resolveAiSessionApproval(instanceId: string, sessionId: string, decision: "allow" | "deny" | "skip") {
   return sharedAiSessionsApi.approval(instanceId, sessionId, decision);
+}
+
+export function listStories(nodeId?: string) {
+  const query = nodeId ? `?nodeId=${encodeURIComponent(nodeId)}` : "";
+  return getApiData<{ stories: Story[]; unavailableNodeIds: string[] }>(`stories${query}`);
+}
+
+export function useStoriesQuery(nodeId?: MaybeRefOrGetter<string | undefined>, enabled: MaybeRefOrGetter<boolean> = true) {
+  return useQuery({
+    queryKey: computed(() => controlPlaneQueryKeys.stories(toValue(nodeId))),
+    queryFn: () => listStories(toValue(nodeId)),
+    enabled: computed(() => toValue(enabled)),
+    retry: false,
+  });
+}
+
+export function assignAiSessionToStory(instanceId: string, sessionId: string, storyId: string | null) {
+  return putApiData<Record<string, unknown>>(
+    `controlled-instances/${encodeURIComponent(instanceId)}/ai-sessions/${encodeURIComponent(sessionId)}/story`,
+    { storyId },
+  );
 }
 
 export function getControlledInstanceConfigSyncState(instanceId: string) {

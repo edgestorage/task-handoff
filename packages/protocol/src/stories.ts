@@ -121,6 +121,25 @@ export const StoryContentGetResultSchema = z.object({
   items: z.array(StoryContentTransferItemSchema).min(1).max(STORY_DEFAULT_MAX_BATCH_PATHS),
 }).strict();
 
+export const StoryChangedEventType = "story.changed";
+
+export const StoryChangedEventSchema = z.object({
+  storyId: StoryIdSchema,
+  nodeId: z.string().trim().min(1).max(120),
+  change: z.enum([
+    "created",
+    "updated",
+    "archived",
+    "restored",
+    "deleted",
+    "content.written",
+    "document.updated",
+    "document.reordered",
+    "document.deleted",
+  ]).optional(),
+  storyPath: StoryPathSchema.optional(),
+}).strict();
+
 export type Story = z.infer<typeof StorySchema>;
 export type StoryAction = z.infer<typeof StoryActionSchema>;
 export type StoryActionInput = z.infer<typeof StoryActionInputSchema>;
@@ -128,3 +147,4 @@ export type StoryCreateInput = z.infer<typeof StoryCreateInputSchema>;
 export type StoryDocument = z.infer<typeof StoryDocumentSchema>;
 export type StoryContentPreview = z.infer<typeof StoryContentPreviewSchema>;
 export type StoryUpdateInput = z.infer<typeof StoryUpdateInputSchema>;
+export type StoryChangedEvent = z.infer<typeof StoryChangedEventSchema>;

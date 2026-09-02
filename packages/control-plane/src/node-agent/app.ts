@@ -48,6 +48,7 @@ import { registerNodeModelRoutes } from "./models/routes.ts";
 import { registerNodeGitCredentialRoutes } from "./git-credentials/routes.ts";
 import { registerNodeStoryRoutes } from "./stories/routes.ts";
 import { NodeStoryStore } from "./stories/store.ts";
+import { StoryChangedEventType } from "@task-handoff/protocol/stories";
 import { registerRuntimeRoutes } from "./runtimes/routes.ts";
 import { registerInstanceManagementRoutes } from "./instances/routes.ts";
 import { registerInstanceLifecycleRoutes } from "./instances/lifecycle-routes.ts";
@@ -761,6 +762,13 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   });
   eventForwarder.start();
   app.decorate("nodeAgentEventForwarder", eventForwarder);
+  stories.setOnChange((change, story) => {
+    eventForwarder.publish(StoryChangedEventType, {
+      storyId: story.id,
+      nodeId: story.ownerNodeId,
+      change,
+    }, { nodeId: story.ownerNodeId });
+  });
   const runtimeMetrics = new DockerRuntimeMetricsCollector(
     dockerCommandRunner,
     () => state.listInstances().filter((instance) => state.requireRuntime(instance.runtimeId).type === "docker"),

@@ -104,10 +104,13 @@
       :is-trigger-bound="(configHash) => isTriggerBound(card, configHash)"
       :is-trigger-busy="(configHash) => triggerBusyKey === triggerActionKey(card, configHash)"
       :short-hash="shortHash"
+      :story-target="storyTarget"
       :trigger-templates="triggerTemplates"
       @close-session="$emit('stopAppSession', card)"
       @open-app="$emit('openAiSessionApp', card.instance, card.session)"
       @fork-session="$emit('forkSession', card, $event)"
+      @story-assigned="$emit('storyAssigned', card, $event)"
+      @story-assign-failed="(target, error) => $emit('storyAssignFailed', card, target, error)"
       @toggle-trigger="$emit('toggleTrigger', card, $event)"
     />
   </ContextMenu>
@@ -165,8 +168,17 @@ const emit = defineEmits<{
   selectInstance: [instanceId: string];
   stopAppSession: [card: AiBoardCard];
   forkSession: [card: AiBoardCard, mode: "current" | "managed-worktree"];
+  storyAssigned: [card: AiBoardCard, target: StoryTarget];
+  storyAssignFailed: [card: AiBoardCard, target: StoryTarget, error: unknown];
   toggleTrigger: [card: AiBoardCard, configHash: string];
 }>();
+
+type StoryTarget = {
+  nodeId: string;
+  instanceId: string;
+  sessionId: string;
+  storyId?: string | null;
+};
 
 function approvalKey(card: AiBoardCard, decision: "allow" | "deny" | "skip") {
   return `${card.instance.id}:${card.session.id}:${decision}`;
@@ -174,6 +186,12 @@ function approvalKey(card: AiBoardCard, decision: "allow" | "deny" | "skip") {
 
 const isStoppingAppSession = computed(() => props.stoppingAppSessionKey === props.card.key);
 const isForking = computed(() => props.forkingSessionKey === props.card.key);
+const storyTarget = computed<StoryTarget | undefined>(() => {
+  const instance = props.card.instance;
+  const nodeId = instance.nodeId;
+  if (!nodeId) return undefined;
+  return { nodeId, instanceId: instance.id, sessionId: props.card.session.id, storyId: props.card.session.storyId ?? null };
+});
 </script>
 
 <style scoped>
