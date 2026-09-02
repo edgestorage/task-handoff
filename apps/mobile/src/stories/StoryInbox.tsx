@@ -33,13 +33,14 @@ export function StoryInbox({ onOpen }: { onOpen(story: Story): void }) {
       setStories(result.stories); setUnavailableNodeIds(result.unavailableNodeIds); setPhase('ready');
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); setPhase('error'); }
   }, [runtime.api]);
-  useEffect(() => { void refresh(); }, [refresh]);
+  useEffect(() => { const task = setTimeout(() => { void refresh(); }, 0); return () => clearTimeout(task); }, [refresh]);
   if (phase === 'loading' && stories.length === 0) return <ActivityIndicator accessibilityLabel={t('common.loading')} style={styles.loading} />;
   return <FlatList
     data={stories}
     keyExtractor={(item) => `${item.ownerNodeId}:${item.id}`}
     refreshing={phase === 'loading'}
     onRefresh={() => { void refresh(); }}
+    contentInsetAdjustmentBehavior="automatic"
     contentContainerStyle={[styles.content, { backgroundColor: colors.background }, stories.length === 0 && styles.emptyContent]}
     ListEmptyComponent={<EmptyState icon={phase === 'error' ? { android: 'error_outline', ios: 'exclamationmark.circle' } : { android: 'menu_book', ios: 'book' }} iconColor={phase === 'error' ? colors.error : undefined} message={error || t('stories.empty')} />}
     renderItem={({ item }) => {

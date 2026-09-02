@@ -132,6 +132,9 @@ export class AiSessionForkCoordinator {
       if (source.cwdFolderId && session.cwdFolderId !== source.cwdFolderId) {
         session = this.options.registry.patch(session.id, { cwdFolderId: source.cwdFolderId });
       }
+      if (source.storyId && session.storyId !== source.storyId) {
+        session = this.options.registry.patch(session.id, { storyId: source.storyId });
+      }
       operation.aiSessionId = session.id;
       operation.stage = "materialized";
       this.persist();

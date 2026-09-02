@@ -39,6 +39,7 @@
       <div v-if="mode === 'full'" class="ai-session-conversation-timeline-state">
         <AiSessionTimelineView
           v-if="aiSessionTurns(session).length"
+          :allow-save-preset="allowSavePreset"
           :busy="busy"
           :can-interrupt="canInterrupt"
           :can-resolve-approval="canResolveApproval"
@@ -58,6 +59,7 @@
           @resolve-approval="$emit('resolveApproval', $event)"
           @sticky-user-message-change="$emit('stickyUserMessageChange', $event)"
           @continue-from-turn="$emit('continueFromTurn', $event)"
+          @save-as-preset="$emit('saveAsPreset', $event)"
           @layout-will-change="$emit('layoutWillChange')"
           @layout-committed="$emit('layoutCommitted')"
           @load-turn-timeline="(turnId, force) => $emit('loadTurnTimeline', turnId, force)"
@@ -101,11 +103,13 @@
         <template #turn-footer>
           <AiSessionTurnActions
             v-if="compactCompletedTurn && compactResponseContent"
+            :allow-save-preset="allowSavePreset"
             :busy="busy"
             :can-continue="compactCanContinue"
             :content="compactResponseContent"
             :timestamp="compactTurnTime"
             @continue="$emit('continueFromTurn', compactCompletedTurn.id)"
+            @save-as-preset="$emit('saveAsPreset', { turnId: compactCompletedTurn.id, prompt: compactUserPrompt })"
           />
         </template>
       </AiSessionResult>
@@ -139,6 +143,7 @@ type AiSessionDetailState = "loading" | "ready" | "error";
 
 const props = withDefaults(defineProps<{
   activityInteractive?: boolean;
+  allowSavePreset?: boolean;
   busy?: boolean;
   canInterrupt?: boolean;
   canResolveApproval?: boolean;
@@ -155,6 +160,7 @@ const props = withDefaults(defineProps<{
   turnTimelines?: Record<string, AiSessionTurnTimelineState>;
 }>(), {
   activityInteractive: true,
+  allowSavePreset: true,
   busy: false,
   canInterrupt: false,
   canResolveApproval: false,
@@ -168,6 +174,7 @@ const props = withDefaults(defineProps<{
 
 const emit = defineEmits<{
   continueFromTurn: [turnId: string];
+  saveAsPreset: [payload: { turnId: string; prompt: string }];
   editQueuedMessage: [payload: { queueId: string; message: string }];
   layoutCommitted: [];
   layoutWillChange: [];
@@ -194,6 +201,7 @@ const compactTurnTime = computed(() => {
   const turn = compactCompletedTurn.value;
   return turn?.completedAt || turn?.updatedAt || turn?.startedAt || "";
 });
+const compactUserPrompt = computed(() => selectedTurn.value?.userPrompt?.trim() || "");
 const selectedTimeline = computed(() => compactTimelineForTurn(props.selectedTurnState.items, selectedTurn.value));
 let activeConversationTransitions = 0;
 

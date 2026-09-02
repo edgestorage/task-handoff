@@ -51,6 +51,10 @@ export default function PrimaryTabsLayout() {
           />
           <NativeTabs.Trigger.Label>{t('nav.aiSessions')}</NativeTabs.Trigger.Label>
         </NativeTabs.Trigger>
+        <NativeTabs.Trigger disableAutomaticContentInsets hidden={!runtime?.storyCapability} name="stories">
+          <NativeTabs.Trigger.Icon renderingMode="template" src={<NativeTabs.Trigger.VectorIcon family={storyTabIconFamily} name="book-outline" />} />
+          <NativeTabs.Trigger.Label>{t('nav.stories')}</NativeTabs.Trigger.Label>
+        </NativeTabs.Trigger>
         <NativeTabs.Trigger disableAutomaticContentInsets name="apps">
           <NativeTabs.Trigger.Icon
             renderingMode="template"
@@ -65,10 +69,6 @@ export default function PrimaryTabsLayout() {
           />
           <NativeTabs.Trigger.Label>{t('nav.instances')}</NativeTabs.Trigger.Label>
         </NativeTabs.Trigger>
-        {runtime?.profile?.capabilities.stories === true ? <NativeTabs.Trigger disableAutomaticContentInsets name="stories">
-          <NativeTabs.Trigger.Icon renderingMode="template" src={<NativeTabs.Trigger.VectorIcon family={storyTabIconFamily} name="book-outline" />} />
-          <NativeTabs.Trigger.Label>{t('nav.stories')}</NativeTabs.Trigger.Label>
-        </NativeTabs.Trigger> : null}
       </NativeTabs>
     </SafeAreaView>
   );

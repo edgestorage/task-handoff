@@ -25,6 +25,18 @@
     >
       <Split :size="13" />
     </Button>
+    <DropdownMenu v-if="allowSavePreset">
+      <DropdownMenuTrigger as-child>
+        <Button type="button" size="xs" variant="ghost" class="ai-session-turn-action" :aria-label="t('sessions.actions.more')" :title="t('sessions.actions.more')">
+          <MoreHorizontal :size="13" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" class="ai-session-context-menu">
+        <DropdownMenuItem class="ai-session-context-menu-item" @select="$emit('save-as-preset')">
+          <BookmarkPlus :size="14" /><span>{{ t("sessions.actions.saveAsPreset") }}</span>
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
     <time
       v-if="timestamp"
       class="ai-session-turn-time"
@@ -37,21 +49,24 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { Check, Copy, Split } from "@lucide/vue";
+import { BookmarkPlus, Check, Copy, MoreHorizontal, Split } from "@lucide/vue";
 import { Button } from "../ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu";
 
 const props = withDefaults(defineProps<{
+  allowSavePreset?: boolean;
   busy?: boolean;
   canContinue?: boolean;
   content: string;
   timestamp?: string;
 }>(), {
+  allowSavePreset: true,
   busy: false,
   canContinue: false,
   timestamp: "",
 });
 
-defineEmits<{ continue: [] }>();
+defineEmits<{ continue: []; "save-as-preset": [] }>();
 
 const { locale, t } = useI18n();
 const copied = ref(false);

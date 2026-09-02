@@ -7,6 +7,7 @@ import { navigation } from "./navigation.ts";
 import { repository } from "./repository.ts";
 import { sessions } from "./sessions.ts";
 import { settings } from "./settings.ts";
+import { stories } from "./stories.ts";
 import { triggers } from "./triggers.ts";
 
 export const zhCN = {
@@ -18,5 +19,6 @@ export const zhCN = {
   repository,
   sessions,
   settings,
+  stories,
   triggers,
 } as const satisfies ControlPlaneMessages;

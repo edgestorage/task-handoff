@@ -1,4 +1,5 @@
 import type { z } from 'zod';
+import type { ControlPlanePublicCapabilities } from '@task-handoff/protocol/control-plane-access';
 import type { ControlPlaneClientTransport } from '@task-handoff/control-plane-client';
 import {
   EventWireEnvelopeSchema,
@@ -64,6 +65,7 @@ export interface MobileAppSessionTtyConnection {
 
 export interface MobileControlPlaneTransport extends ControlPlaneClientTransport {
   readonly profile: MobileControlPlaneProfile;
+  readonly currentCapabilities?: ControlPlanePublicCapabilities;
   request<T>(path: string, schema: z.ZodType<T>, init?: RequestInit, onUploadProgress?: (progress: number) => void): Promise<T>;
   revalidate?(): Promise<void>;
   connectEvents(handlers: MobileControlPlaneEventHandlers): MobileControlPlaneEventConnection;

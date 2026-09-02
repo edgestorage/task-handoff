@@ -10,7 +10,7 @@
         :batch-rendering="false"
         :smooth-streaming="false"
         :typewriter="false"
-        html-policy="escape"
+        :html-policy="htmlPolicy"
         mode="chat"
       />
     </div>
@@ -43,6 +43,7 @@ const props = withDefaults(defineProps<{
   codeTools?: MarkdownCodeTools;
   content?: unknown;
   fileLinks?: boolean;
+  htmlPolicy?: "escape" | "safe" | "trusted";
   instanceId: string;
   isLatest?: boolean;
   providerTurnId?: string;
@@ -51,6 +52,7 @@ const props = withDefaults(defineProps<{
   turnId?: string;
 }>(), {
   fileLinks: false,
+  htmlPolicy: "escape",
   isLatest: false,
 });
 

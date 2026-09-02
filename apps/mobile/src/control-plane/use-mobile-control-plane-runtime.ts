@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from 'react';
 import type { ControlPlaneClient } from '@task-handoff/control-plane-client';
+import type { ControlPlanePublicCapabilities } from '@task-handoff/protocol/control-plane-access';
 import { AiSessionTransientSubscriptionSchema, type AiSessionTransientSubscription } from '@task-handoff/protocol/events';
 
 import { isCarPlayConnected, subscribeToCarPlayConnection } from '../carplay/runtime';
@@ -54,6 +55,7 @@ const CONNECT_TIMEOUT_MS = 12_000;
 const STABLE_CONNECTION_MS = 15_000;
 
 export class MobileControlPlaneConnectionCoordinator {
+  currentCapabilities: ControlPlanePublicCapabilities;
   private readonly domains = new Map<string, MobileControlPlaneDomain>();
   private readonly listeners = new Set<() => void>();
   private readonly transientDemands = new Map<symbol, AiSessionTransientSubscription>();
@@ -76,7 +78,9 @@ export class MobileControlPlaneConnectionCoordinator {
     readonly profile: MobileControlPlaneProfile,
     readonly api: ControlPlaneClient,
     readonly transport: MobileControlPlaneTransport,
-  ) {}
+  ) {
+    this.currentCapabilities = profile.capabilities;
+  }
 
   snapshot = () => this.snapshotValue;
   subscribe = (listener: () => void) => {
@@ -176,6 +180,12 @@ export class MobileControlPlaneConnectionCoordinator {
       if (!auth.authenticated) {
         this.publish({ phase: 'session-expired', error: 'The mobile Control Plane session expired.' });
         return;
+      }
+      const identity = await this.api.auth.identity?.().catch(() => undefined);
+      const payload = identity?.data.payload;
+      if (payload?.controlPlaneId === this.profile.identity.controlPlaneId
+        && payload.publicKey.fingerprint === this.profile.identity.publicKeyFingerprint) {
+        this.currentCapabilities = payload.capabilities;
       }
       this.publish({ phase: this.reconnectBackoff.attempts ? 'reconnecting' : 'loading' });
       await Promise.all(desired.map((domain) => domain.start(abortController.signal)));
@@ -321,6 +331,7 @@ export type MobileControlPlaneRuntimeValue = {
   phase: MobileControlPlaneRuntimePhase;
   profile?: MobileControlPlaneProfile;
   triggerCapability: boolean;
+  storyCapability: boolean;
   transport?: MobileControlPlaneTransport;
 };
 
@@ -388,7 +399,8 @@ export function MobileControlPlaneRuntimeProvider({
     coordinator: active?.coordinator,
     phase: activePhase,
     profile: active?.profile,
-    triggerCapability: active?.profile.capabilities.triggers === true,
+    triggerCapability: (active?.coordinator.currentCapabilities.triggers ?? active?.direct.transport.currentCapabilities?.triggers ?? active?.profile.capabilities.triggers) === true,
+    storyCapability: (active?.coordinator.currentCapabilities.stories ?? active?.direct.transport.currentCapabilities?.stories ?? active?.profile.capabilities.stories) === true,
     transport: active?.direct.transport,
   }), [active, activeCarPlayConnected, activePhase]);
   return createElement(Context.Provider, { value }, children);

@@ -51,7 +51,17 @@ function harness() {
     return { close };
   });
   const authSession = jest.fn().mockResolvedValue({ authenticated: true });
-  const api = { auth: { session: authSession } } as unknown as ControlPlaneClient;
+  const identity = jest.fn().mockResolvedValue({ data: { payload: {
+    version: 1,
+    kind: 'control-plane',
+    controlPlaneId: profile.identity.controlPlaneId,
+    publicKey: { algorithm: 'Ed25519', encoding: 'base64url', value: 'a'.repeat(43), fingerprint: profile.identity.publicKeyFingerprint },
+    capabilities: { ...profile.capabilities, stories: true },
+    protocolVersion: profile.identity.protocolVersion,
+    issuedAt: '2026-09-02T00:00:00.000Z',
+    expiresAt: '2026-09-02T00:05:00.000Z',
+  }, signature: 'a'.repeat(86) } });
+  const api = { auth: { session: authSession, identity } } as unknown as ControlPlaneClient;
   const transport = {
     profile,
     revalidate,
@@ -62,6 +72,7 @@ function harness() {
     authSession,
     close,
     connectEvents,
+    identity,
     get handlers() { return handlers; },
     revalidate,
   };
@@ -85,6 +96,8 @@ describe('MobileControlPlaneConnectionCoordinator', () => {
 
     expect(runtime.revalidate).toHaveBeenCalledTimes(1);
     expect(runtime.authSession).toHaveBeenCalledTimes(1);
+    expect(runtime.identity).toHaveBeenCalledTimes(1);
+    expect(runtime.coordinator.currentCapabilities.stories).toBe(true);
     expect(ai.start).toHaveBeenCalledTimes(1);
     expect(directories.start).toHaveBeenCalledTimes(1);
     expect(apps.start).toHaveBeenCalledTimes(1);

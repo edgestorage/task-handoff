@@ -4,6 +4,7 @@ import {
   COMPACT_EVENT_ENVELOPE_VERSION,
   type AiSessionTransientSubscription,
 } from '@task-handoff/protocol/events';
+import type { ControlPlanePublicCapabilities } from '@task-handoff/protocol/control-plane-access';
 
 import type { SecureValueStore } from '../platform/secure-storage';
 import { assertDirectIdentityCompatible, probeDirectControlPlane } from './direct-enrollment';
@@ -84,6 +85,7 @@ function websocketUrl(origin: string) {
 
 export class DirectControlPlaneTransport implements MobileControlPlaneTransport {
   readonly profile: MobileDirectControlPlaneProfile;
+  currentCapabilities?: ControlPlanePublicCapabilities;
   private verified?: Promise<void>;
   private readonly eventSubscribers = new Set<MobileControlPlaneEventHandlers>();
   private eventSocket?: WebSocketLike;
@@ -308,6 +310,7 @@ export class DirectControlPlaneTransport implements MobileControlPlaneTransport 
         fetchImpl: this.options.fetchImpl,
       });
       assertDirectIdentityCompatible(target, [this.profile]);
+      this.currentCapabilities = target.identity.capabilities;
       if (target.identity.capabilities.authentication !== 'required') {
         throw new MobileControlPlaneTransportError(
           'DIRECT_AUTH_REQUIRED',

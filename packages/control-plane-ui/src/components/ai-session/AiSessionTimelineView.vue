@@ -88,11 +88,13 @@
             <template #turn-footer>
               <AiSessionTurnActions
                 v-if="turns[virtualTurn.index].latestResponse && completedTurn(turns[virtualTurn.index].id)"
+                :allow-save-preset="allowSavePreset"
                 :busy="busy"
                 :can-continue="Boolean(continuableTurn(turns[virtualTurn.index].id))"
                 :content="turns[virtualTurn.index].latestResponse?.text || ''"
                 :timestamp="turnTime(turns[virtualTurn.index].id)"
                 @continue="continueFromTurn(turns[virtualTurn.index].id)"
+                @save-as-preset="$emit('saveAsPreset', { turnId: turns[virtualTurn.index].id, prompt: turnUserPrompt(virtualTurn.index) })"
               />
             </template>
           </AiSessionResult>
@@ -128,6 +130,7 @@ import type { TimelineMessage, TimelineTurnNode } from "./timelineActivities";
 import { compactTimelineForTurn, turnElapsedEnd } from "./timelineActivities";
 
 const props = withDefaults(defineProps<{
+  allowSavePreset?: boolean;
   busy?: boolean;
   canInterrupt?: boolean;
   canResolveApproval?: boolean;
@@ -140,6 +143,7 @@ const props = withDefaults(defineProps<{
   turnBodiesReady?: boolean;
   turnTimelines?: Record<string, AiSessionTurnTimelineState>;
 }>(), {
+  allowSavePreset: true,
   approvalDecisions: () => ["allow", "deny", "skip"],
   storedTurns: () => [],
   turnBodiesReady: true,
@@ -155,6 +159,7 @@ const emit = defineEmits<{
   steerQueuedMessage: [queueId: string];
   stickyUserMessageChange: [message: { id: string; text: string } | undefined];
   continueFromTurn: [turnId: string];
+  saveAsPreset: [payload: { turnId: string; prompt: string }];
   layoutWillChange: [];
   layoutCommitted: [];
   loadTurnTimeline: [turnId: string, force?: boolean];
@@ -436,6 +441,13 @@ async function copyMessage(message?: TimelineMessage) {
   copiedTurnTimer = setTimeout(() => {
     if (copiedMessageId.value === message.id) copiedMessageId.value = "";
   }, 1_500);
+}
+
+function turnUserPrompt(index: number) {
+  const turn = turns.value[index];
+  if (!turn) return "";
+  const prompt = turn.userMessages.map((message) => message.text).filter(Boolean).join("\n").trim();
+  return prompt || turn.userMessages[0]?.text || "";
 }
 
 function continueFromTurn(turnId: string) {

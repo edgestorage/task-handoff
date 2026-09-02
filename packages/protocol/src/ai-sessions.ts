@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { StoryIdSchema } from "./stories.ts";
+import { StoryIdSchema } from "./story-id.ts";
 
 export const AI_SESSION_MAX_MESSAGE_ATTACHMENTS = 6;
 export const AI_SESSION_MAX_REFERENCES = 20;

@@ -106,6 +106,7 @@
 
             <AiSessionConversationContent
               class="ai-board-floating-conversation"
+              :allow-save-preset="false"
               :busy="busy"
               :can-interrupt="canInterrupt"
               :can-resolve-approval="canResolveApproval"
