@@ -20,6 +20,10 @@
   grid-template-columns: minmax(0, 1fr);
 }
 
+.session-ai-workspace.detail-only {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .session-ai-sidebar-shell {
   display: contents;
 }
@@ -312,6 +316,17 @@
 }
 
 .session-ai-app-pill strong { font-size: 12px; }
+
+.session-ai-instance-pill--static {
+  cursor: default;
+}
+
+.session-ai-instance-pill--static:hover,
+.session-ai-instance-pill--static:focus-visible {
+  background: transparent;
+  color: var(--text);
+  outline: none;
+}
 
 :global(.session-ai-project-menu) {
   display: grid;

@@ -1,9 +1,9 @@
 <template>
   <div ref="panelEl" class="session-ai-panel" :style="workspaceStyle">
     <Sheet v-model:open="sessionListOverlayOpen">
-    <div class="session-ai-workspace" :class="{ 'creation-only': creationOnly }">
+    <div class="session-ai-workspace" :class="{ 'creation-only': creationOnly, 'detail-only': detailOnly }">
       <component
-        v-if="!creationOnly"
+        v-if="!creationOnly && !detailOnly"
         :is="compactAiSessionLayout ? SheetContent : 'div'"
         class="session-ai-sidebar-shell"
         :class="{ 'session-ai-sidebar-sheet': compactAiSessionLayout }"
@@ -267,11 +267,14 @@
                     :is-trigger-bound="(configHash) => isTriggerBound(session, configHash)"
                     :is-trigger-busy="(configHash) => triggerBusyKey === triggerActionKey(session, configHash)"
                     :short-hash="shortHash"
+                    :story-target="storyTargetFor(session)"
                     :trigger-templates="triggerTemplates"
                     @close-session="closeSession(session)"
                     @open-app="openSessionApp(session)"
                     @open-terminal="openSessionTerminal(session)"
                     @fork-session="forkSession(session, $event)"
+                    @story-assigned="onStoryAssigned"
+                    @story-assign-failed="onStoryAssignFailed"
                     @toggle-trigger="toggleTrigger(session, $event)"
                   />
                 </ContextMenu>
@@ -379,14 +382,14 @@
         />
       </component>
       <button
-        v-if="!creationOnly"
+        v-if="!creationOnly && !detailOnly"
         type="button"
         class="session-ai-sidebar-resize-handle"
         :aria-label="t('sessions.panel.resizeList')"
         :title="t('sessions.panel.resizeList')"
         @pointerdown="startSidebarResize"
       />
-      <TooltipProvider v-if="!creationOnly" :delay-duration="120">
+      <TooltipProvider v-if="!creationOnly && !detailOnly" :delay-duration="120">
         <Tooltip>
           <TooltipTrigger as-child>
             <Button
@@ -483,6 +486,29 @@
           <h1 class="session-ai-new-title">{{ t("sessions.panel.startIdea") }}</h1>
           <div class="session-ai-new-dialog" role="group" :aria-label="t('sessions.panel.newSession')">
             <div class="session-ai-new-pills">
+              <DropdownMenu v-if="creationInstances && creationInstances.length > 1">
+                <DropdownMenuTrigger as-child>
+                  <button type="button" class="session-ai-project-pill session-ai-instance-pill" :disabled="newSessionComposerBusy" :title="instance.name">
+                    <Server :size="14" />
+                    <strong>{{ instance.name }}</strong>
+                    <ChevronDown :size="13" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent class="session-ai-project-menu" align="start" :side-offset="8">
+                  <DropdownMenuItem v-for="candidate in creationInstances" :key="candidate.id" class="session-ai-project-item" @select="emit('update:creationInstance', candidate.id)">
+                    <Server :size="15" />
+                    <span class="session-ai-project-folder-copy">
+                      <strong>{{ candidate.name }}</strong>
+                      <small>{{ instanceStatusLabel(candidate.status) }}</small>
+                    </span>
+                    <Check v-if="candidate.id === instance.id" :size="15" />
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <span v-else-if="creationInstances && creationInstances.length === 1" class="session-ai-project-pill session-ai-instance-pill session-ai-instance-pill--static" :title="instance.name">
+                <Server :size="14" />
+                <strong>{{ instance.name }}</strong>
+              </span>
               <DropdownMenu>
                 <DropdownMenuTrigger as-child>
                   <button type="button" class="session-ai-project-pill" :disabled="newSessionComposerBusy">
@@ -1016,7 +1042,8 @@ import { formatRelativeTime } from "../../../i18n/presentation";
 import type { SupportedLocale } from "../../../i18n/locale";
 import { translateApiError } from "../../../i18n/apiError";
 import { waitForAiSessionProjection } from "../ai-session-projection";
-import { ArrowLeft, Ban, Check, ChevronDown, ChevronRight, CircleHelp, ExternalLink, Filter, Folder, FolderOpen, GitBranch, History, LoaderCircle, MessageSquare, MoreHorizontal, PanelLeftOpen, Plus, SlidersHorizontal, Split, Square, SquareTerminal, X } from "@lucide/vue";
+import { ArrowLeft, Ban, Check, ChevronDown, ChevronRight, CircleHelp, ExternalLink, Filter, Folder, FolderOpen, GitBranch, History, LoaderCircle, MessageSquare, MoreHorizontal, PanelLeftOpen, Plus, Server, SlidersHorizontal, Split, Square, SquareTerminal, X } from "@lucide/vue";
+import { instanceStatusKeys, translateStatus } from "../../../i18n/status";
 import { useQueryClient } from "@tanstack/vue-query";
 import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
 import AiSessionCardContextMenu from "../../../components/ai-session/AiSessionCardContextMenu.vue";
@@ -1025,7 +1052,7 @@ import AiSessionStatusIndicator from "../../../components/ai-session/AiSessionSt
 import AiAgentIcon from "../../../components/AiAgentIcon.vue";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../../components/ui/alert-dialog";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
-import { bindAiSessionTrigger, closeAiSession, createAiSession, createNodeLocalFolder, editAiSessionQueuedMessage, forkAiSession, getAiSessionHistory, getAiSessionHistoryDetail, getAiSessionWorkspace, interruptAiSession, listNodeFolderPlaces, listNodeFolderTree, markAiSessionRead, openAiSessionApp, removeAiSessionQueuedMessage, reorderAiSessionQueuedMessages, resolveAiSessionApproval, resumeAiSession, retryAiSessionQueuedMessage, sendAiSessionMessage, steerAiSessionQueuedMessage, unbindAiSessionTrigger, updateAiSessionModelSelection, updateAiSessionReasoningEffort, updateControlledInstance, updateNodeLocalFolder, uploadAiSessionAttachment, useControlPlaneSettingsQuery, useControlPlaneTriggersQuery, useModelsQuery } from "../../../api/queries";
+import { bindAiSessionTrigger, closeAiSession, createAiSession, createNodeLocalFolder, editAiSessionQueuedMessage, forkAiSession, getAiSessionHistory, getAiSessionHistoryDetail, getAiSessionWorkspace, interruptAiSession, listNodeFolderPlaces, listNodeFolderTree, markAiSessionRead, openAiSessionApp, removeAiSessionQueuedMessage, reorderAiSessionQueuedMessages, resolveAiSessionApproval, resumeAiSession, retryAiSessionQueuedMessage, sendAiSessionMessage, steerAiSessionQueuedMessage, unbindAiSessionTrigger, updateAiSessionModelSelection, updateAiSessionReasoningEffort, updateControlledInstance, updateNodeLocalFolder, uploadAiSessionAttachment, useControlPlaneSettingsQuery, useControlPlaneTriggersQuery, useModelsQuery, useStoriesQuery } from "../../../api/queries";
 import { controlPlaneQueryKeys } from "../../../api/queryKeys.ts";
 import { executeAiSessionCommand } from "../../../api/ai-session-commands";
 import { AI_SESSION_DEFAULT_REASONING_EFFORT, type AiSessionCommandInput, type AiSessionHistoryDetail, type AiSessionHistoryItem, type AiSessionMessageAttachmentRef, type AiSessionModelSelection, type AiSessionPermissionMode, type AiSessionReasoningEffort } from "@task-handoff/protocol/ai-sessions";
@@ -1165,8 +1192,12 @@ function storedSidebarWidth() {
 const props = defineProps<{
   activeSession: SessionTab;
   chooseProjectFolder?: NativeNodeFolderPicker;
+  creationInitialCwd?: string;
+  creationInitialCwdFolderId?: string;
   creationOnly?: boolean;
   creationStoryId?: string;
+  creationInstances?: InstanceWithAiSessions[];
+  detailOnly?: boolean;
   instance: InstanceWithAiSessions;
   launchableApps?: LaunchableApp[];
   launchingApp?: boolean;
@@ -1179,6 +1210,7 @@ const markdownCodeTools = computed(() => ({
   copyLabel: t("sessions.markdown.copy"),
   plainTextLabel: t("sessions.markdown.plainText"),
 }));
+const instanceStatusLabel = (status: string) => translateStatus(instanceStatusKeys, status, t);
 
 const visibleAiSessions = computed(() => props.instance.aiSessions?.sessions || []);
 const sessionListOverlayOpen = ref(false);
@@ -1243,6 +1275,8 @@ const filteredSessions = computed(() => {
   return visibleAiSessions.value.filter((session) => sessionStatusGroup(session) === sessionStatusFilter.value);
 });
 const sortedSessions = computed(() => sortedAiSessionsByLastUserMessage(filteredSessions.value, sortSessionsByStatus.value));
+const storiesQuery = useStoriesQuery(() => props.instance.nodeId);
+const storyTitlesById = computed(() => new Map((storiesQuery.data.value?.stories || []).map((story) => [story.id, story.title])));
 const displayedSessionGroups = computed<AiSessionPathGroup[]>(() => groupSessionsByPath.value ? (groupMode.value === "story" ? groupAiSessionsByStory(sortedSessions.value) : groupAiSessionsByPath(sortedSessions.value)) : [{
   key: "all",
   path: "",
@@ -1700,7 +1734,8 @@ function groupAiSessionsByPath(sessions: AiSessionSummary[]) {
 }
 
 function storyGroupLabel(storyId: string | undefined) {
-  return storyId ? `Story ${storyId}` : t("sessions.panel.unassignedStory");
+  if (!storyId) return t("sessions.panel.unassignedStory");
+  return storyTitlesById.value.get(storyId) || `Story ${storyId}`;
 }
 
 function groupAiSessionsByStory(sessions: AiSessionSummary[]) {
@@ -2265,11 +2300,23 @@ async function openNewSessionForGroup(group: AiSessionPathGroup | AiSessionHisto
   await openNewSessionForPath(group.path);
 }
 
+function creationInitialFolderId() {
+  if (props.creationInitialCwdFolderId && newSessionFolders.value.some((folder) => folder.id === props.creationInitialCwdFolderId)) {
+    return props.creationInitialCwdFolderId;
+  }
+  return props.creationInitialCwd ? newSessionFolderIdForPath(props.creationInitialCwd) : undefined;
+}
+
 function initializeNewSessionDefaults() {
   if (!aiSessionLaunchableApps.value.some((app) => app.id === newSessionApp.value)) {
     newSessionApp.value = aiSessionLaunchableApps.value[0]?.id || "";
   }
   if (!newSessionFolders.value.some((folder) => folder.id === newSessionFolderId.value)) {
+    const initialFolderId = creationInitialFolderId();
+    if (initialFolderId) {
+      newSessionFolderId.value = initialFolderId;
+      return;
+    }
     if (props.instance.source.type !== "local-folder") {
       newSessionFolderId.value = INSTANCE_WORKSPACE_FOLDER_ID;
       return;
@@ -2281,6 +2328,16 @@ function initializeNewSessionDefaults() {
       || "";
   }
 }
+
+watch(
+  [() => props.instance.id, () => props.creationInitialCwd, () => props.creationInitialCwdFolderId],
+  () => {
+    if (!props.creationOnly) return;
+    newSessionFolderId.value = "";
+    initializeNewSessionDefaults();
+  },
+  { immediate: true },
+);
 
 function newSessionBranchSelectable(branch: RepositoryAiSessionWorkspaceBranch) {
   return newSessionWorkspaceMode.value === "worktree" ? branch.worktreeSelectable : branch.currentFolderSelectable;
@@ -2799,6 +2856,28 @@ async function closeSession(session: AiSessionSummary) {
   }
 }
 
+type SessionStoryTarget = {
+  nodeId: string;
+  instanceId: string;
+  sessionId: string;
+  storyId?: string | null;
+};
+
+function storyTargetFor(session: AiSessionSummary): SessionStoryTarget | undefined {
+  const nodeId = props.instance.nodeId;
+  if (!nodeId) return undefined;
+  return { nodeId, instanceId: props.instance.id, sessionId: session.id, storyId: session.storyId ?? null };
+}
+
+function onStoryAssigned(_target: SessionStoryTarget) {
+  showControlPlaneToast(t("sessions.actions.storyAssigned"), "success");
+  void refreshBoard();
+}
+
+function onStoryAssignFailed(_target: SessionStoryTarget, error: unknown) {
+  showControlPlaneToast(translateApiError(error, t, t("sessions.actions.storyAssignFailed")));
+}
+
 async function forkSession(session: AiSessionSummary, mode: "current" | "managed-worktree" = "current", throughTurnId?: string) {
   if (!throughTurnId && (session.status === "running" || session.status === "waiting")) {
     pendingBusyFork.value = { session, mode };
@@ -3135,6 +3214,7 @@ const emit = defineEmits<{
   openRepositoryWorkspace: [target: RepositoryWorkspaceTabTarget];
   selectAiSession: [instanceId: string, sessionId: string];
   sessionCreated: [instanceId: string, sessionId: string];
+  "update:creationInstance": [instanceId: string];
 }>();
 
 function openMarkdownFile(session: AiSessionSummary, filePath: string) {

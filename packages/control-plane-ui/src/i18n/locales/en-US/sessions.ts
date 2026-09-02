@@ -32,6 +32,7 @@ export const sessions = {
     noMatchingTriggers: "No matching triggers", remove: "Remove", add: "Add", openAppFor: "Open app session for {agent}", openApp: "Open app session", openTerminal: "Open Terminal",
     moreFor: "More actions for {agent}", more: "More actions", fork: "Continue chatting", forkCurrent: "Use current workspace", forkWorktree: "Create independent worktree", continueFromTurn: "Continue chatting from this turn", forkBusyTitle: "Continue chatting while this turn is running?", forkBusyDescription: "Codex will start a new chat from the interrupted snapshot. The source turn will continue without interruption.", forkConfirm: "Continue chatting", forking: "Continuing chat", closingApp: "Closing app session", closeApp: "Close app session", closingSession: "Closing AI session", closeSession: "Close AI session", unread: "Unread AI session", openedFromTerminal: "Opened from a terminal app session",
     previousMessage: "Previous user message for {agent}", nextMessage: "Next user message for {agent}", addTrigger: "Add trigger", triggersBound: "{count} triggers bound",
+    addToStory: "Add to Story", loadingStories: "Loading stories…", storiesLoadFailed: "Could not load stories.", noStories: "No Story yet", storyAssigned: "Added to Story", storyAssignFailed: "Could not add AI session to Story",
   },
   detail: {
     selected: "Selected AI session", sessionDetails: "Session details", workspace: "Workspace", session: "Session", appBinding: "App binding", forkedFrom: "Forked from", unknown: "Unknown",

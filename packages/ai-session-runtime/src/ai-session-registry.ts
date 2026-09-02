@@ -188,6 +188,7 @@ function summaryForHeartbeat(session: AiSessionStatus): AiSessionSummary {
     lineage: session.lineage,
     modelSelection: session.modelSelection,
     reasoningEffort: session.reasoningEffort,
+    storyId: session.storyId,
     appBindingKeys: session.appBindingKeys?.slice(0, 3).map((value) => compact(value, 120)),
     actions: actionsForSession(session),
     activeTurnId: session.activeTurnId,

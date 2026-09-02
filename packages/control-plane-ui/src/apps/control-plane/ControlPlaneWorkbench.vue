@@ -284,7 +284,9 @@
         :instances="boardInstancesWithAiSessions"
         :node-local-folders-by-node-id="nodeLocalFoldersByNodeId"
         :nodes="nodes.data.value || []"
+        @launch-app="launchSelectedApp"
         @open-session="openAiSessionAppFromBoard"
+        @open-repository-workspace="openRepositoryWorkspace"
         @run-action="runStoryAction"
       />
 

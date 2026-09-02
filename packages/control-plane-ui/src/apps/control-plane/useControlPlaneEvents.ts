@@ -110,6 +110,7 @@ export function useControlPlaneEvents(input: {
       sendSubscription(current, new Date().toISOString());
       startKeepalive(current);
       void queryClient.invalidateQueries({ queryKey: controlPlaneQueryKeys.scopedInstanceBoard(toValue(input.instanceId || "")) });
+      void queryClient.invalidateQueries({ queryKey: controlPlaneQueryKeys.stories() });
       void input.appManagement?.recoverOpen();
       void input.resourceMetrics?.recoverOpen();
       for (const triggerInstanceId of cachedInstanceIds(instanceId)) {

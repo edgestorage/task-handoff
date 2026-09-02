@@ -44,6 +44,19 @@ export type StoryWriteInput = {
   stream: NodeJS.ReadableStream;
 };
 
+export type StoryChangeReason =
+  | "created"
+  | "updated"
+  | "archived"
+  | "restored"
+  | "deleted"
+  | "content.written"
+  | "document.updated"
+  | "document.reordered"
+  | "document.deleted";
+
+type StoryChangeCallback = (change: StoryChangeReason, story: Story) => void;
+
 function storyError(code: string, message: string, statusCode: number) {
   return Object.assign(new Error(message), { code, statusCode });
 }
@@ -53,15 +66,18 @@ export class NodeStoryStore {
   private readonly paths: NodeAgentStorePaths;
   private readonly ownerNodeId: string;
   private readonly maxFileBytes: number;
+  private onChange?: StoryChangeCallback;
 
   constructor(
     paths: NodeAgentStorePaths,
     ownerNodeId: string,
     maxFileBytes = STORY_DEFAULT_MAX_FILE_BYTES,
+    onChange?: StoryChangeCallback,
   ) {
     this.paths = paths;
     this.ownerNodeId = ownerNodeId;
     this.maxFileBytes = maxFileBytes;
+    this.onChange = onChange;
     this.records = new JsonCollection(paths.storyRegistryDir, { schema: StoredStorySchema });
   }
 
@@ -69,6 +85,10 @@ export class NodeStoryStore {
     this.records.init();
     fs.mkdirSync(this.paths.storyContentDir, { recursive: true, mode: 0o700 });
     fs.chmodSync(this.paths.storyContentDir, 0o700);
+  }
+
+  setOnChange(callback: StoryChangeCallback) {
+    this.onChange = callback;
   }
 
   list() {
@@ -103,7 +123,9 @@ export class NodeStoryStore {
       updatedAt: timestamp,
     });
     fs.mkdirSync(this.storyRoot(id), { recursive: true, mode: 0o700 });
-    return this.project(this.records.put(story));
+    const projected = this.project(this.records.put(story));
+    this.onChange?.("created", projected);
+    return projected;
   }
 
   update(id: string, input: StoryUpdateInput) {
@@ -119,24 +141,33 @@ export class NodeStoryStore {
       })) } : {}),
       updatedAt: new Date().toISOString(),
     }));
-    return this.project(updated);
+    const projected = this.project(updated);
+    this.onChange?.("updated", projected);
+    return projected;
   }
 
   archive(id: string) {
     const current = this.require(id);
     const timestamp = new Date().toISOString();
-    return this.project(this.records.put({ ...current, archivedAt: timestamp, updatedAt: timestamp }));
+    const projected = this.project(this.records.put({ ...current, archivedAt: timestamp, updatedAt: timestamp }));
+    this.onChange?.("archived", projected);
+    return projected;
   }
 
   restore(id: string) {
     const current = this.require(id);
-    return this.project(this.records.put({ ...current, archivedAt: undefined, updatedAt: new Date().toISOString() }));
+    const projected = this.project(this.records.put({ ...current, archivedAt: undefined, updatedAt: new Date().toISOString() }));
+    this.onChange?.("restored", projected);
+    return projected;
   }
 
   delete(id: string) {
-    this.require(id);
+    const existing = this.require(id);
+    const projected = this.project(existing);
     fs.rmSync(this.storyRoot(id), { recursive: true, force: true });
-    return this.records.delete(id);
+    const deleted = this.records.delete(id);
+    this.onChange?.("deleted", projected);
+    return deleted;
   }
 
   listContent(id: string) {
@@ -202,7 +233,8 @@ export class NodeStoryStore {
         ? { ...document, ...(input.title?.trim() ? { title: input.title.trim() } : {}) }
         : document)
       : [...story.documents, { title: input.title!.trim(), storyPath }];
-    this.records.put({ ...story, documents, updatedAt: new Date().toISOString() });
+    const projected = this.project(this.records.put({ ...story, documents, updatedAt: new Date().toISOString() }));
+    this.onChange?.("content.written", projected);
     return { storyPath, revision: this.hashFile(target), size: bytes };
   }
 
@@ -233,7 +265,9 @@ export class NodeStoryStore {
       title: input.title?.trim() || documents[index]!.title,
       storyPath: nextPath,
     };
-    return this.project(this.records.put({ ...story, documents, updatedAt: new Date().toISOString() }));
+    const projected = this.project(this.records.put({ ...story, documents, updatedAt: new Date().toISOString() }));
+    this.onChange?.("document.updated", projected);
+    return projected;
   }
 
   reorderDocuments(id: string, input: unknown) {
@@ -247,7 +281,9 @@ export class NodeStoryStore {
     }
     const byPath = new Map(story.documents.map((document) => [document.storyPath, document]));
     const documents = storyPaths.map((storyPath) => byPath.get(storyPath)!);
-    return this.project(this.records.put({ ...story, documents, updatedAt: new Date().toISOString() }));
+    const projected = this.project(this.records.put({ ...story, documents, updatedAt: new Date().toISOString() }));
+    this.onChange?.("document.reordered", projected);
+    return projected;
   }
 
   deleteDocument(id: string, storyPath: string) {
@@ -255,11 +291,12 @@ export class NodeStoryStore {
     const normalized = StoryPathSchema.parse(storyPath);
     if (!story.documents.some((document) => document.storyPath === normalized)) return false;
     fs.rmSync(this.filePath(id, normalized), { force: true });
-    this.records.put({
+    const projected = this.project(this.records.put({
       ...story,
       documents: story.documents.filter((document) => document.storyPath !== normalized),
       updatedAt: new Date().toISOString(),
-    });
+    }));
+    this.onChange?.("document.deleted", projected);
     return true;
   }
 

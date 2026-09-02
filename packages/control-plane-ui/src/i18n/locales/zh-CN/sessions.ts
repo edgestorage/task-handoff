@@ -35,6 +35,7 @@ export const sessions = {
     noMatchingTriggers: "没有匹配的触发器", remove: "移除", add: "添加", openAppFor: "打开 {agent} 的应用会话", openApp: "打开应用会话", openTerminal: "打开 Terminal",
     moreFor: "{agent} 的更多操作", more: "更多操作", fork: "继续聊天", forkCurrent: "使用当前工作区", forkWorktree: "创建独立 worktree", continueFromTurn: "从当前回合继续聊天", forkBusyTitle: "在当前回合运行时继续聊天？", forkBusyDescription: "Codex 会基于 interrupted snapshot 开始新的聊天，原回合会继续运行且不会被中断。", forkConfirm: "继续聊天", forking: "正在继续聊天", closingApp: "正在关闭应用会话", closeApp: "关闭应用会话", closingSession: "正在关闭 AI 会话", closeSession: "关闭 AI 会话", unread: "未读 AI 会话", openedFromTerminal: "由终端应用会话打开",
     previousMessage: "{agent} 的上一条用户消息", nextMessage: "{agent} 的下一条用户消息", addTrigger: "添加触发器", triggersBound: "已绑定 {count} 个触发器",
+    addToStory: "添加到 Story", loadingStories: "正在加载 Story…", storiesLoadFailed: "无法加载 Story。", noStories: "暂无 Story", storyAssigned: "已添加到 Story", storyAssignFailed: "无法将 AI 会话添加到 Story",
   },
   detail: {
     selected: "已选 AI 会话", sessionDetails: "会话详情", workspace: "工作区", session: "会话", appBinding: "应用绑定", forkedFrom: "分支来源", unknown: "未知",

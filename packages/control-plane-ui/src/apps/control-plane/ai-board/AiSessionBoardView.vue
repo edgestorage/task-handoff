@@ -101,6 +101,8 @@
                 @stop-app-session="stopCardAppSession"
                 @fork-session="forkCardSession"
                 @toggle-trigger="toggleTrigger"
+                @story-assigned="onStoryAssigned"
+                @story-assign-failed="onStoryAssignFailed"
               />
 
               <div v-if="!column.cards.length" class="ai-board-column-empty">
@@ -156,6 +158,8 @@
               @stop-app-session="stopCardAppSession"
               @fork-session="forkCardSession"
               @toggle-trigger="toggleTrigger"
+              @story-assigned="onStoryAssigned"
+              @story-assign-failed="onStoryAssignFailed"
             />
           </template>
 
@@ -367,6 +371,22 @@ const {
   triggerBusyKey,
   triggerTemplates,
 } = useAiBoardTriggers();
+
+type StoryTarget = {
+  nodeId: string;
+  instanceId: string;
+  sessionId: string;
+  storyId?: string | null;
+};
+
+function onStoryAssigned(_card: AiBoardCard, _target: StoryTarget) {
+  showControlPlaneToast(t("sessions.actions.storyAssigned"), "success");
+  void queryClient.invalidateQueries({ queryKey: controlPlaneQueryKeys.instanceBoard });
+}
+
+function onStoryAssignFailed(_card: AiBoardCard, _target: StoryTarget, error: unknown) {
+  showControlPlaneToast(translateApiError(error, t, t("sessions.actions.storyAssignFailed")));
+}
 
 const allCards = computed<AiBoardCard[]>(() => {
   const cards: AiBoardCard[] = [];
