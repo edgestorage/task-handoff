@@ -714,9 +714,9 @@ watch(
 const workbenchView = ref<WorkbenchView>("instance");
 const workbenchViewOptions = computed<Array<{ value: WorkbenchView; label: string; icon: typeof LayoutGrid }>>(() => [
   { value: "instance", label: t("navigation.home"), icon: House },
+  { value: "story", label: t("navigation.story"), icon: BookOpen },
   { value: "board", label: t("navigation.board"), icon: LayoutGrid },
   { value: "ai", label: t("navigation.ai"), icon: Bot },
-  { value: "story", label: t("navigation.story"), icon: BookOpen },
 ]);
 const instanceViewMode = computed(() => workbenchView.value === "instance");
 const boardMode = computed(() => workbenchView.value === "board");

@@ -147,7 +147,7 @@ watch(() => [props.active, props.startedAt, props.endedAt], syncElapsedTimer);
   width: fit-content;
   max-width: min(78%, 620px);
   border-radius: 14px;
-  background: var(--surface-hover);
+  background: var(--ai-session-user-message-bg, var(--surface-hover));
   padding: 12px 14px;
 }
 .ai-session-turn-history-message :deep(.markdown-content),

@@ -534,7 +534,7 @@ watch(() => turns.value.length, () => void nextTick(syncScrollElement));
 .ai-session-timeline-message {
   max-width: 100%;
   border-radius: 14px;
-  background: var(--surface-hover);
+  background: var(--ai-session-user-message-bg, var(--surface-hover));
   padding: 12px 14px;
   color: var(--text);
   font-size: 14px;

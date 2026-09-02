@@ -97,7 +97,7 @@ test("history reuses path grouping and opens stored turn details without resumin
   assert.match(panel, /t\("sessions\.panel\.selectHistory"\)/);
   assert.doesNotMatch(panel, /selectHistoryItem[\s\S]{0,500}resumeAiSession/);
   assert.match(styles, /\.session-ai-history-row\[data-selected="true"\]/);
-  assert.match(styles, /\.session-ai-history-row:hover\s*\{[^}]*background: var\(--surface-hover\);/s);
+  assert.match(styles, /\.session-ai-history-row:hover\s*\{[^}]*background: var\(--ai-session-row-hover-bg, var\(--surface-hover\)\);/s);
   assert.match(styles, /\.session-ai-history-head\s*\{[^}]*grid-template-columns: 30px minmax\(0, 1fr\) 30px;/s);
   assert.match(styles, /\.session-ai-history-head \.session-ai-options-trigger\s*\{[^}]*justify-self: end;/s);
   assert.match(styles, /\.session-ai-detail-head-actions \.session-ai-history-continue\s*\{[^}]*width: auto;/s);

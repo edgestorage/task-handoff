@@ -500,7 +500,7 @@ function canLaunchBoardApp(instance: InstanceBoardItem) {
   gap: 10px;
   min-height: 30px;
   border-bottom: 1px solid var(--line);
-  color: var(--brand-accent-muted);
+  color: var(--instance-board-accent-text, var(--brand-accent-muted));
   font-size: 12px;
   font-weight: 750;
 }
@@ -530,14 +530,14 @@ function canLaunchBoardApp(instance: InstanceBoardItem) {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface-inset);
-  box-shadow: var(--shadow-popover);
+  box-shadow: var(--instance-board-card-shadow, var(--shadow-popover));
 }
 
 .instance-board-card.active {
   border-color: var(--brand-accent);
   box-shadow:
     0 0 0 1px var(--focus-ring),
-    var(--shadow-popover);
+    var(--instance-board-card-shadow, var(--shadow-popover));
 }
 
 .board-card-head {
@@ -585,7 +585,7 @@ function canLaunchBoardApp(instance: InstanceBoardItem) {
 
 .board-card-title:hover strong,
 .board-card-title:focus-visible strong {
-  color: var(--brand-accent-muted);
+  color: var(--instance-board-accent-text, var(--brand-accent-muted));
 }
 
 .board-card-title:focus-visible {
@@ -816,7 +816,7 @@ function canLaunchBoardApp(instance: InstanceBoardItem) {
   gap: 8px;
   border-color: var(--terminal-selection);
   background: var(--surface-raised);
-  color: var(--brand-accent-muted);
+  color: var(--instance-board-accent-text, var(--brand-accent-muted));
   font-weight: 800;
   padding: 0 12px;
 }
@@ -826,7 +826,7 @@ function canLaunchBoardApp(instance: InstanceBoardItem) {
 .board-launch-button[data-state="open"] {
   border-color: var(--brand-accent);
   background: var(--surface-active);
-  color: var(--brand-accent-foreground);
+  color: var(--instance-board-accent-text, var(--brand-accent-foreground));
 }
 
 .board-launch-button span {

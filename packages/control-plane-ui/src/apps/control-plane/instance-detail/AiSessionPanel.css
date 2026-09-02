@@ -807,7 +807,7 @@
 
 .session-ai-history-row:hover {
   border-color: color-mix(in srgb, var(--ai-board-card-active-border) 54%, var(--line));
-  background: var(--surface-hover);
+  background: var(--ai-session-row-hover-bg, var(--surface-hover));
 }
 
 .session-ai-history-row[data-selected="true"]:hover {
@@ -1099,7 +1099,7 @@
 .session-ai-compact-row:hover,
 .session-ai-compact-row:focus-visible {
   outline: none;
-  background: var(--surface-hover);
+  background: var(--ai-session-row-hover-bg, var(--surface-hover));
   color: var(--text-strong);
 }
 

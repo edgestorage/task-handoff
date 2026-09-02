@@ -407,6 +407,7 @@ test("conversation Timeline composes every turn from the same compact result com
   const history = fs.readFileSync(new URL("../src/components/ai-session/AiSessionTurnHistory.vue", import.meta.url), "utf8");
   const result = fs.readFileSync(new URL("../src/components/ai-session/AiSessionResult.vue", import.meta.url), "utf8");
   const toolActivity = fs.readFileSync(new URL("../src/components/ai-session/AiSessionToolActivity.vue", import.meta.url), "utf8");
+  const appStyles = fs.readFileSync(new URL("../src/styles/app.css", import.meta.url), "utf8");
   const turnActions = fs.readFileSync(new URL("../src/components/ai-session/AiSessionTurnActions.vue", import.meta.url), "utf8");
   const conversation = fs.readFileSync(new URL("../src/components/ai-session/AiSessionConversationContent.vue", import.meta.url), "utf8");
   const streamingMarkdown = fs.readFileSync(new URL("../src/components/ai-session/AiSessionStreamingMarkdown.vue", import.meta.url), "utf8");
@@ -443,7 +444,7 @@ test("conversation Timeline composes every turn from the same compact result com
   assert.match(english, /processedUnavailable: "-"/);
   assert.match(chinese, /processedUnavailable: "-"/);
   assert.match(timeline, /\.ai-session-timeline-user-message \{[\s\S]*justify-self: end;[\s\S]*width: fit-content;[\s\S]*max-width: min\(78%, 620px\);/);
-  assert.match(timeline, /\.ai-session-timeline-message \{[\s\S]*border-radius: 14px;[\s\S]*background: var\(--surface-hover\);[\s\S]*padding: 12px 14px;/);
+  assert.match(timeline, /\.ai-session-timeline-message \{[\s\S]*border-radius: 14px;[\s\S]*background: var\(--ai-session-user-message-bg, var\(--surface-hover\)\);[\s\S]*padding: 12px 14px;/);
   assert.doesNotMatch(timeline, /\.ai-session-timeline-message\[data-role="ai-message"\] \{[\s\S]*padding-(?:top|bottom):/);
   assert.match(result, /\.ai-session-result \{[\s\S]*--detail-activity-gap: 16px;/);
   assert.match(result, /\.ai-session-result-detail \.ai-session-result-content \{[\s\S]*gap: 0;/);
@@ -546,7 +547,9 @@ test("conversation Timeline composes every turn from the same compact result com
   assert.match(history, /<Timer :size="15"/);
   assert.doesNotMatch(history, /ai-session-turn-history-empty svg \{ visibility: hidden; \}/);
   assert.match(history, /node\.message\.type === 'user-message'/);
-  assert.match(history, /\.ai-session-turn-history-message-user \{[\s\S]*justify-self: end;[\s\S]*width: fit-content;[\s\S]*max-width: min\(78%, 620px\);[\s\S]*border-radius: 14px;[\s\S]*background: var\(--surface-hover\);[\s\S]*padding: 12px 14px;/);
+  assert.match(history, /\.ai-session-turn-history-message-user \{[\s\S]*justify-self: end;[\s\S]*width: fit-content;[\s\S]*max-width: min\(78%, 620px\);[\s\S]*border-radius: 14px;[\s\S]*background: var\(--ai-session-user-message-bg, var\(--surface-hover\)\);[\s\S]*padding: 12px 14px;/);
+  assert.match(toolActivity, /\.ai-session-tool-activity-message-user \{[\s\S]*background: var\(--ai-session-user-message-bg, var\(--surface-hover\)\);/);
+  assert.match(appStyles, /--ai-session-user-message-bg: #e5e5ea;/);
 });
 
 test("conversation Timeline keeps only the final AI message visible for every turn", () => {
