@@ -41,6 +41,7 @@ const expectedDomains = {
     controlPlaneQueryKeys.instanceBoard,
   ],
   nodeFolders: [controlPlaneQueryKeys.nodeLocalFolders()],
+  stories: [controlPlaneQueryKeys.stories()],
   controlPlaneProxy: [
     controlPlaneQueryKeys.controlPlaneProxyInvites,
     controlPlaneQueryKeys.controlPlaneProxyBindings,

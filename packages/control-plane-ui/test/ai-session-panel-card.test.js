@@ -327,7 +327,7 @@ test("instance and board AI session cards expose their toolbar actions from one 
 });
 
 test("an unselected AI session defaults to the new-session surface", () => {
-  assert.match(panel, /const showNewSession = computed\(\(\) => newSessionOpen\.value \|\| !selectedSession\.value\);/);
+  assert.match(panel, /const showNewSession = computed\(\(\) => props\.creationOnly \|\| newSessionOpen\.value \|\| !selectedSession\.value\);/);
   assert.match(panel, /const selectedListSessionId = computed\(\(\) => showNewSession\.value \? undefined : selectedSession\.value\?\.id\);/);
   assert.match(activeSessions, /if \(selectedId\) return selectedAiSessionSnapshots\[instance\.id\];\s*return undefined;/);
   assert.doesNotMatch(activeSessions, /const initial = sortedAiSessionsByLastUserMessage\(available/);
@@ -349,7 +349,7 @@ test("new-session drafts persist per instance until creation succeeds", () => {
   assert.match(panel, /watch\(\(\) => props\.instance\.id,[\s\S]*loadAiSessionDraftPayload\(activeNewSessionDraftKey\.value\)/);
   assert.match(panel, /v-model="newSessionDraft"[\s\S]*v-model:mention-bindings="newSessionMentionBindings"/);
   assert.doesNotMatch(panel, /function openNewSession\(\)[\s\S]{0,400}newSessionDraft\.value = "";/);
-  assert.match(panel, /emit\("selectAiSession", props\.instance\.id, result\.aiSessionId\);\s*clearAiSessionDraft\(activeNewSessionDraftKey\.value\);\s*newSessionDraft\.value = "";/);
+  assert.match(panel, /emit\("selectAiSession", props\.instance\.id, result\.aiSessionId\);\s*emit\("sessionCreated", props\.instance\.id, result\.aiSessionId\);\s*clearAiSessionDraft\(activeNewSessionDraftKey\.value\);\s*newSessionDraft\.value = "";/);
 });
 
 test("new-session folder picker keeps actions visible while long folder lists scroll", () => {

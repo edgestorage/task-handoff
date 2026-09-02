@@ -30,6 +30,7 @@ WORKDIR /app
 
 FROM build-base AS deps
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY patches ./patches
 COPY packages/protocol/package.json ./packages/protocol/package.json
 COPY packages/core/package.json ./packages/core/package.json
 COPY packages/ai-session-runtime/package.json ./packages/ai-session-runtime/package.json
