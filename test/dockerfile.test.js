@@ -11,6 +11,22 @@ test("Docker runtime uses the supported Node.js 24 release line", () => {
   assert.match(dockerfile, /^FROM node:24-bookworm-slim AS runtime-base$/m);
 });
 
+test("Docker copies pnpm patches before installing dependencies", () => {
+  const dockerfile = fs.readFileSync(path.join(root, "Dockerfile"), "utf8");
+  const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+  const dependencyStage = dockerfile.slice(
+    dockerfile.indexOf("FROM build-base AS deps"),
+    dockerfile.indexOf("FROM deps AS build"),
+  );
+  const copyPatchesAt = dependencyStage.indexOf("COPY patches ./patches");
+  const installAt = dependencyStage.indexOf("RUN pnpm install --frozen-lockfile");
+
+  assert.ok(copyPatchesAt >= 0 && copyPatchesAt < installAt);
+  for (const patchPath of Object.values(packageJson.pnpm.patchedDependencies)) {
+    assert.ok(fs.existsSync(path.join(root, patchPath)), `missing pnpm patch: ${patchPath}`);
+  }
+});
+
 test("Docker profiles run as agent with passwordless container-root escalation", () => {
   const dockerfile = fs.readFileSync(path.join(root, "Dockerfile"), "utf8");
 
