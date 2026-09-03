@@ -10,5 +10,9 @@ export default function StoriesRoute() {
   if (!runtime.storyCapability) {
     return <EmptyState icon={{ android: 'menu_book', ios: 'book' }} message={t('stories.unsupported')} style={{ flex: 1 }} />;
   }
-  return <StoryInbox onOpen={(story) => router.push({ pathname: '/stories/[storyId]' as never, params: { storyId: story.id, nodeId: story.ownerNodeId } })} />;
+  return <StoryInbox
+    onOpen={(story) => router.push({ pathname: '/stories/[storyId]' as never, params: { storyId: story.id, nodeId: story.ownerNodeId } })}
+    onOpenDocument={(story, document) => router.push({ pathname: '/stories/[storyId]/documents/preview' as never, params: { storyId: story.id, nodeId: story.ownerNodeId, storyPath: document.storyPath, title: document.title } })}
+    onOpenSession={(instanceId, sessionId) => router.push({ pathname: '/sessions/[instanceId]/[sessionId]', params: { instanceId, sessionId } })}
+  />;
 }

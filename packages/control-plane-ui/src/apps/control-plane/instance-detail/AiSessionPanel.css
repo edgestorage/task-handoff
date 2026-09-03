@@ -929,16 +929,58 @@
   gap: 2px;
 }
 
-.session-ai-path-group:not([data-collapsed="true"]) {
-  /* Expanded content owns its trailing breathing room, so toggling the next
-     group never changes the gap above that group's header. */
-  padding-bottom: 6px;
-}
-
 .session-ai-path-group + .session-ai-path-group {
   /* The list already contributes an 8px gap. Keep group-to-group rhythm at 2px
      regardless of whether the preceding group is expanded. */
   margin-top: -6px;
+}
+
+.session-ai-path-group-collapse {
+  display: grid;
+  grid-template-rows: 1fr;
+  min-width: 0;
+  opacity: 1;
+  transition: grid-template-rows 180ms ease, opacity 140ms ease;
+}
+
+.session-ai-path-group-collapse.is-grouped {
+  margin-top: -6px;
+}
+
+.session-ai-path-group-collapse-content {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  padding-bottom: 6px;
+}
+
+.session-ai-path-group-collapse.is-grouped > .session-ai-path-group-collapse-content {
+  padding-top: 6px;
+}
+
+.session-ai-path-group.is-compact-list .session-ai-path-group-collapse.is-grouped {
+  margin-top: -2px;
+}
+
+.session-ai-path-group.is-compact-list .session-ai-path-group-collapse-content {
+  gap: 2px;
+}
+
+.session-ai-path-group.is-compact-list .session-ai-path-group-collapse.is-grouped > .session-ai-path-group-collapse-content {
+  padding-top: 2px;
+}
+
+.session-ai-path-group-collapse-enter-from,
+.session-ai-path-group-collapse-leave-to {
+  grid-template-rows: 0fr;
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-ai-path-group-collapse { transition: none; }
 }
 
 .session-ai-path-group-head {
