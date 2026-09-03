@@ -151,8 +151,14 @@
                   </button>
                 </div>
               </AiSessionPathGroupContextMenu>
-              <template v-if="!groupSessionsByPath || !collapsedPathGroups[group.key]">
-                <ContextMenu
+              <Transition name="session-ai-path-group-collapse">
+                <div
+                  v-if="!groupSessionsByPath || !collapsedPathGroups[group.key]"
+                  class="session-ai-path-group-collapse"
+                  :class="{ 'is-grouped': groupSessionsByPath }"
+                >
+                  <div class="session-ai-path-group-collapse-content">
+                    <ContextMenu
                   v-for="session in group.sessions"
                   :key="session.id"
                 >
@@ -277,8 +283,10 @@
                     @story-assign-failed="onStoryAssignFailed"
                     @toggle-trigger="toggleTrigger(session, $event)"
                   />
-                </ContextMenu>
-              </template>
+                    </ContextMenu>
+                  </div>
+                </div>
+              </Transition>
             </section>
             <div v-if="!sortedSessions.length" class="session-ai-empty session-ai-filter-empty" role="status">
               <span class="session-ai-empty-icon">
@@ -338,8 +346,14 @@
                     </button>
                   </div>
                 </AiSessionPathGroupContextMenu>
-                <template v-if="!groupSessionsByPath || !collapsedHistoryPathGroups[group.key]">
-                  <article
+                <Transition name="session-ai-path-group-collapse">
+                  <div
+                    v-if="!groupSessionsByPath || !collapsedHistoryPathGroups[group.key]"
+                    class="session-ai-path-group-collapse"
+                    :class="{ 'is-grouped': groupSessionsByPath }"
+                  >
+                    <div class="session-ai-path-group-collapse-content">
+                      <article
                     v-for="item in group.items"
                     :key="item.id"
                     class="session-ai-history-row"
@@ -360,8 +374,10 @@
                       <p>{{ historyItemTitle(item) }}</p>
                       <small :title="item.cwd">{{ item.cwd }}</small>
                     </div>
-                  </article>
-                </template>
+                      </article>
+                    </div>
+                  </div>
+                </Transition>
               </section>
             </template>
           </div>

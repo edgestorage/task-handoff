@@ -1,12 +1,12 @@
 import { act, render, waitFor } from '@testing-library/react-native';
-import { StyleSheet } from 'react-native';
+import { AccessibilityInfo, StyleSheet } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { aiSessionStatusGroup, ControlPlaneAiSessionsSchema } from '@task-handoff/control-plane-client';
 
 import { AiSessionInbox, inboxCardContent, inboxEntries } from '../src/ai-sessions/Inbox';
 import { inboxStatusMessage, matchesStatusFilter, statusFilterLabel } from '../src/ai-sessions/InboxModel';
 import { sessionActivityText } from '../src/ai-sessions/SessionDetail';
-import { sessionStatusTone } from '../src/ai-sessions/SessionStatusIndicator';
+import { SessionStatusIndicator, sessionStatusTone } from '../src/ai-sessions/SessionStatusIndicator';
 import { mobileLightColors } from '../src/components/theme';
 import { translate } from '../src/i18n';
 
@@ -154,6 +154,19 @@ describe('<InboxRoute />', () => {
     expect(sessionStatusTone('waiting', mobileLightColors).foreground).toBe(mobileLightColors.sessionWaiting);
     expect(sessionStatusTone('problem', mobileLightColors).foreground).toBe(mobileLightColors.error);
     expect(sessionStatusTone('idle', mobileLightColors).foreground).toBe(mobileLightColors.sessionIdle);
+  });
+
+  test('renders the Web-aligned spinner only for a running session', async () => {
+    jest.spyOn(AccessibilityInfo, 'isReduceMotionEnabled').mockResolvedValue(true);
+    const screen = await render(<SessionStatusIndicator group="active" label="Running" />);
+
+    expect(screen.getByTestId('session-status-spinner')).toBeTruthy();
+    expect(screen.queryByTestId('session-status-dot')).toBeNull();
+
+    await screen.rerender(<SessionStatusIndicator group="waiting" label="Waiting" />);
+    expect(screen.queryByTestId('session-status-spinner')).toBeNull();
+    expect(screen.getByTestId('session-status-dot')).toBeTruthy();
+    jest.restoreAllMocks();
   });
 
   test('card activity text uses the active locale instead of the English fallback', () => {

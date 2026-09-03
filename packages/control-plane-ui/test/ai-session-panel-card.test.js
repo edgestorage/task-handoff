@@ -87,7 +87,7 @@ test("AI session list supports persistent card and compact-list layouts", () => 
   assert.match(styles, /\.session-ai-compact-row\s*\{[\s\S]*grid-template-columns: 12px minmax\(0, 1fr\) auto;[\s\S]*gap: 6px;[\s\S]*min-height: 32px;/);
   assert.match(styles, /\.session-ai-compact-unread\s*\{[\s\S]*justify-self: end;[\s\S]*width: 7px;[\s\S]*height: 7px;[\s\S]*background: var\(--status-info\);/);
   assert.match(styles, /\.session-ai-path-group\.is-compact-list\s*\{\s*gap: 2px;/);
-  assert.match(styles, /\.session-ai-path-group:not\(\[data-collapsed="true"\]\)\s*\{[\s\S]*padding-bottom: 6px;/);
+  assert.match(styles, /\.session-ai-path-group-collapse-content\s*\{[\s\S]*padding-bottom: 6px;/);
   assert.doesNotMatch(styles, /\.session-ai-path-group\.is-compact-list[^}]*margin-bottom:/);
   assert.match(styles, /\.session-ai-path-group \+ \.session-ai-path-group\s*\{[\s\S]*margin-top: -6px;/);
   assert.doesNotMatch(styles, /\.session-ai-path-group \+ \.session-ai-path-group\[data-collapsed="true"\]/);
@@ -97,6 +97,15 @@ test("AI session list supports persistent card and compact-list layouts", () => 
   assert.match(statusIndicator, /\[data-size="compact"\]\[data-state="idle"\][^{]*\{\s*visibility: hidden;/);
   assert.match(styles, /\.session-ai-compact-row\[data-selected="true"\]\s*\{[\s\S]*background: var\(--ai-session-row-selected-bg\);/);
   assert.match(styles, /\.session-ai-compact-row:hover,[\s\S]*?background: var\(--ai-session-row-hover-bg, var\(--surface-hover\)\);/);
+});
+
+test("AI session current and history path groups animate when expanded or collapsed", () => {
+  assert.equal((panel.match(/<Transition name="session-ai-path-group-collapse">/g) || []).length, 2);
+  assert.match(panel, /v-if="!groupSessionsByPath \|\| !collapsedPathGroups\[group\.key\]"[\s\S]*class="session-ai-path-group-collapse"/);
+  assert.match(panel, /v-if="!groupSessionsByPath \|\| !collapsedHistoryPathGroups\[group\.key\]"[\s\S]*class="session-ai-path-group-collapse"/);
+  assert.match(styles, /\.session-ai-path-group-collapse\s*\{[\s\S]*grid-template-rows: 1fr;[\s\S]*transition: grid-template-rows 180ms ease, opacity 140ms ease;/);
+  assert.match(styles, /\.session-ai-path-group-collapse-enter-from,[\s\S]*\.session-ai-path-group-collapse-leave-to\s*\{[\s\S]*grid-template-rows: 0fr;/);
+  assert.match(styles, /@media \(prefers-reduced-motion: reduce\)[\s\S]*\.session-ai-path-group-collapse \{ transition: none; \}/);
 });
 
 test("running AI sessions use one theme-aware loading ring across list and board cards", () => {

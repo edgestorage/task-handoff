@@ -3,6 +3,7 @@ import { StyleSheet } from 'react-native';
 import type { ControlPlaneInstanceDirectoryEntry, ControlPlaneNodeDirectoryEntry } from '@task-handoff/protocol/control-plane-directory';
 
 import { NewSessionForm, newSessionInstanceOptions, newSessionKeyboardAvoidingBehavior, newSessionVisualBalanceInset } from '../src/ai-sessions/NewSessionForm';
+import { initialAiSessionFolderId, storyAiSessionCreationDefaults } from '../src/ai-sessions/new-session-types';
 import { newSessionMenuActions } from '../src/ai-sessions/NewSessionContextMenu.ios';
 import { modelSettingsMenuActions } from '../src/ai-sessions/SessionComposerMenus.ios';
 import { modelGroupSubtitle } from '../src/ai-sessions/model-settings-menu';
@@ -25,6 +26,27 @@ const instance = {
 const node = { id: 'node-1', name: 'Mac Studio' } as ControlPlaneNodeDirectoryEntry;
 
 describe('<NewSessionForm />', () => {
+  test('inherits the latest Story session instance and folder like Web', () => {
+    const instances = [instance, { ...instance, id: 'instance-2' }];
+    const defaults = storyAiSessionCreationDefaults(instances, {
+      updatedAt: '2026-09-04T00:03:00.000Z',
+      instances: [{
+        instanceId: 'instance-2', streamId: 'stream-2', aiSessions: { updatedAt: '2026-09-04T00:03:00.000Z', sessions: [
+          { id: 'older', agent: 'codex', storyId: 'story-1', status: 'idle', cwd: '/workspace/old', cwdFolderId: 'folder-old', startedAt: '2026-09-04T00:00:00.000Z', updatedAt: '2026-09-04T00:01:00.000Z', unread: false },
+          { id: 'latest', agent: 'codex', storyId: 'story-1', status: 'idle', cwd: '/workspace/mobile', cwdFolderId: 'folder-mobile', startedAt: '2026-09-04T00:00:00.000Z', updatedAt: '2026-09-04T00:02:00.000Z', unread: false },
+        ] },
+      }],
+    }, 'story-1', 'node-1');
+
+    expect(defaults).toEqual({ instanceId: 'instance-2', cwd: '/workspace/mobile', cwdFolderId: 'folder-mobile' });
+    expect(initialAiSessionFolderId([
+      { id: 'folder-mobile', cwdFolderId: 'folder-mobile', name: 'Mobile', path: '/host/projects/mobile' },
+    ], { ...defaults, runtimeType: 'docker', source: { type: 'local-folder', path: '/host/projects' }, workspacePath: '/workspace' })).toBe('folder-mobile');
+    expect(initialAiSessionFolderId([
+      { id: 'folder-mobile', cwdFolderId: 'folder-mobile', name: 'Mobile', path: '/host/projects/mobile' },
+    ], { cwd: '/workspace/mobile', runtimeType: 'docker', source: { type: 'local-folder', path: '/host/projects' }, workspacePath: '/workspace' })).toBe('folder-mobile');
+  });
+
   test('uses one mobile composer for context, prompt, permission, and send', async () => {
     const onCreate = jest.fn();
     const screen = await render(<NewSessionForm

@@ -11,7 +11,7 @@ import { directoryAiSessionProviderCapability } from '@task-handoff/protocol/con
 import type { RepositoryAiSessionWorkspace } from '@task-handoff/protocol/repository';
 
 import { NewSessionForm, newSessionVisualBalanceInset } from '../../src/ai-sessions/NewSessionForm';
-import { aiSessionFolderOptions, defaultAiSessionFolderId, initialInstanceId, instanceCreateGuidance, type AiSessionFolderOption } from '../../src/ai-sessions/new-session-types';
+import { aiSessionFolderOptions, defaultAiSessionFolderId, initialAiSessionFolderId, initialInstanceId, instanceCreateGuidance, type AiSessionFolderOption } from '../../src/ai-sessions/new-session-types';
 import { createMobileAiSession, lifecycleGuidance } from '../../src/ai-sessions/session-lifecycle';
 import { mobilePastedImage, mobilePastedText, uploadMobileAttachment, usableUploadRefs, validateMobileLocalFile, type MobilePendingAttachment } from '../../src/ai-sessions/attachments';
 import { pickDocument, pickImage, type MobileLocalFile } from '../../src/platform/file-picker';
@@ -28,10 +28,11 @@ export default function NewAiSessionRoute() {
   const insets = useSafeAreaInsets();
   const { t } = useI18n();
   const toast = useMobileToast();
-  const { instanceId: requestedInstanceId, storyId: requestedStoryId, message: requestedMessage } = useLocalSearchParams<{ instanceId?: string; storyId?: string; message?: string }>();
+  const { cwd: requestedCwd, cwdFolderId: requestedCwdFolderId, instanceId: requestedInstanceId, storyId: requestedStoryId, message: requestedMessage } = useLocalSearchParams<{ cwd?: string; cwdFolderId?: string; instanceId?: string; storyId?: string; message?: string }>();
   const { controlPlaneId, state } = useActiveDirectories();
   const { scope } = useInstanceScope();
   const [selection, setSelection] = useState<{ instanceId?: string; agent?: string; folderId?: string }>({});
+  const [useRequestedFolder, setUseRequestedFolder] = useState(true);
   const [message, setMessage] = useState(typeof requestedMessage === 'string' ? requestedMessage : '');
   const [permissionSelection, setPermissionSelection] = useState<{ instanceId: string; mode: AiSessionPermissionMode }>();
   const [savingPermission, setSavingPermission] = useState(false);
@@ -108,12 +109,21 @@ export default function NewAiSessionRoute() {
       if (abort.signal.aborted) return;
       const folderOptions = aiSessionFolderOptions(source, selectedInstance?.workspace.path, nextFolders);
       const defaultFolderId = defaultAiSessionFolderId(source, selectedInstance?.workspace.path, nextFolders);
+      const requestedFolderId = useRequestedFolder && selectedInstanceId === requestedInstanceId
+        ? initialAiSessionFolderId(folderOptions, {
+          cwd: requestedCwd,
+          cwdFolderId: requestedCwdFolderId,
+          runtimeType: selectedInstance?.runtime.type,
+          source,
+          workspacePath: selectedInstance?.workspace.path,
+        })
+        : undefined;
       setFolderState({ nodeId, folders: folderOptions });
       setSelection((current) => {
         const sameInstance = current.instanceId === selectedInstanceId;
         const selectedFolderId = sameInstance && folderOptions.some((folder) => folder.id === current.folderId)
           ? current.folderId
-          : defaultFolderId;
+          : requestedFolderId ?? defaultFolderId;
         return {
           instanceId: selectedInstanceId,
           agent: sameInstance ? current.agent : undefined,
@@ -124,7 +134,7 @@ export default function NewAiSessionRoute() {
       if (!abort.signal.aborted) setFolderState({ nodeId, folders: [] });
     });
     return () => abort.abort();
-  }, [selectedInstance?.nodeId, selectedInstanceId]);
+  }, [requestedCwd, requestedCwdFolderId, requestedInstanceId, selectedInstance?.nodeId, selectedInstance?.runtime.type, selectedInstance?.workspace.path, selectedInstanceId, useRequestedFolder]);
 
   useEffect(() => {
     const abort = new AbortController();
@@ -313,6 +323,7 @@ export default function NewAiSessionRoute() {
     onInstanceChange={(instanceId) => {
       const instance = state.instances.find((candidate) => candidate.id === instanceId);
       if (scope.kind === 'all') mobileSessionCreationInstanceStore.write(controlPlaneId, 'ai', instanceId);
+      setUseRequestedFolder(false);
       setReasoningEffort(undefined);
       setSelection({ instanceId, agent: instance?.availableAgents[0]?.id });
     }}
