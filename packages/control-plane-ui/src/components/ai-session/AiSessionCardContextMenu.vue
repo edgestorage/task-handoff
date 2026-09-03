@@ -53,7 +53,7 @@
               <BookOpen v-else :size="13" />
               <span>
                 <strong>{{ story.title }}</strong>
-                <small>{{ story.ownerNodeId }}</small>
+                <small>{{ storyTargetNodeLabel(storyTarget, story.ownerNodeId) }}</small>
               </span>
             </ContextMenuItem>
           </template>
@@ -92,6 +92,7 @@ import { useI18n } from "vue-i18n";
 import type { ControlPlaneTrigger } from "../../api/types";
 import { assignAiSessionToStory, listStories } from "../../api/queries";
 import type { Story } from "@task-handoff/protocol/stories";
+import { storyTargetNodeLabel, type AiSessionStoryTarget } from "./storyTarget";
 import {
   ContextMenuContent,
   ContextMenuItem,
@@ -99,13 +100,6 @@ import {
   ContextMenuSubContent,
   ContextMenuSubTrigger,
 } from "../ui/context-menu";
-
-type StoryTarget = {
-  nodeId: string;
-  instanceId: string;
-  sessionId: string;
-  storyId?: string | null;
-};
 
 const { t } = useI18n();
 
@@ -120,7 +114,7 @@ const props = withDefaults(defineProps<{
   isStoppingAppSession?: boolean;
   showTriggerActions?: boolean;
   canCloseSession?: boolean;
-  storyTarget?: StoryTarget;
+  storyTarget?: AiSessionStoryTarget;
   isTriggerBound: (configHash: string) => boolean;
   isTriggerBusy: (configHash: string) => boolean;
   shortHash: (value: string) => string;
@@ -136,8 +130,8 @@ const emit = defineEmits<{
   openTerminal: [];
   forkSession: [mode: "current" | "managed-worktree"];
   toggleTrigger: [configHash: string];
-  storyAssigned: [target: StoryTarget];
-  storyAssignFailed: [target: StoryTarget, error: unknown];
+  storyAssigned: [target: AiSessionStoryTarget];
+  storyAssignFailed: [target: AiSessionStoryTarget, error: unknown];
 }>();
 
 const storyLoading = ref(false);

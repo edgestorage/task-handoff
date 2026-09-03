@@ -11,10 +11,17 @@ import { StoryIdSchema } from "./story-id.ts";
 
 export { StoryIdSchema } from "./story-id.ts";
 
-export const STORY_PROTOCOL_VERSION = "2026-09-01";
+export const STORY_PROTOCOL_VERSION = "2026-09-03";
 export const STORY_DEFAULT_MAX_FILE_BYTES = 32 * 1024 * 1024;
 export const STORY_DEFAULT_MAX_BATCH_PATHS = 20;
 export const STORY_TEXT_PREVIEW_MAX_BYTES = 1024 * 1024;
+export const STORY_MIN_IDLE_AI_SESSIONS = 1;
+export const STORY_DEFAULT_MAX_IDLE_AI_SESSIONS = 5;
+export const STORY_MAX_IDLE_AI_SESSIONS = 50;
+
+export const StorySessionRetentionSettingsSchema = z.object({
+  maxIdleAiSessions: z.number().int().min(STORY_MIN_IDLE_AI_SESSIONS).max(STORY_MAX_IDLE_AI_SESSIONS).default(STORY_DEFAULT_MAX_IDLE_AI_SESSIONS),
+}).strict();
 
 export const StoryPathSchema = z.string().trim().min(1).max(1024).refine((value) => {
   if (value.startsWith("/") || value.includes("\\")) return false;
@@ -82,12 +89,14 @@ export const StoryCreateInputSchema = z.object({
   title: StorySchema.shape.title,
   description: StorySchema.shape.description,
   actions: z.array(StoryActionInputSchema).max(50).optional(),
+  maxIdleAiSessions: StorySessionRetentionSettingsSchema.shape.maxIdleAiSessions.optional(),
 }).strict();
 
 export const StoryUpdateInputSchema = z.object({
   title: StorySchema.shape.title.optional(),
   description: StorySchema.shape.description.nullable().optional(),
   actions: z.array(StoryActionUpdateInputSchema).max(50).optional(),
+  maxIdleAiSessions: StorySessionRetentionSettingsSchema.shape.maxIdleAiSessions.optional(),
 }).strict().refine((value) => Object.keys(value).length > 0, "At least one Story field is required.");
 
 export const StoryDocumentUpdateInputSchema = z.object({
@@ -170,3 +179,4 @@ export type StoryDocument = z.infer<typeof StoryDocumentSchema>;
 export type StoryContentPreview = z.infer<typeof StoryContentPreviewSchema>;
 export type StoryUpdateInput = z.infer<typeof StoryUpdateInputSchema>;
 export type StoryChangedEvent = z.infer<typeof StoryChangedEventSchema>;
+export type StorySessionRetentionSettings = z.infer<typeof StorySessionRetentionSettingsSchema>;

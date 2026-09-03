@@ -14,6 +14,9 @@ const appStyles = read("src/styles/app.css");
 
 test("workbench navigation orders Story before Board and AI", () => {
   assert.match(workbench, /const workbenchViewOptions[^]*?value: "instance"[^]*?value: "story"[^]*?value: "board"[^]*?value: "ai"[^]*?\]\);/);
+  assert.match(workbenchStyles, /\[data-active-view="story"\]::before \{\s*left: calc\(2px \+ \(100% - 4px\) \/ 4\);/);
+  assert.match(workbenchStyles, /\[data-active-view="board"\]::before \{\s*left: calc\(2px \+ \(100% - 4px\) \/ 2\);/);
+  assert.match(workbenchStyles, /\[data-active-view="ai"\]::before \{\s*left: calc\(2px \+ \(100% - 4px\) \/ 4 \+ \(100% - 4px\) \/ 2\);/);
 });
 
 test("story mode replaces the instance switcher with a node filter", () => {
@@ -34,7 +37,25 @@ test("story mode replaces the instance switcher with a node filter", () => {
 test("story list filters by the selected owner node", () => {
   assert.match(storyView, /filterNodeId\?: string/);
   assert.match(storyView, /const nodeId = props\.filterNodeId\?\.trim\(\);/);
-  assert.match(storyView, /return nodeId \? allStories\.filter\(\(story\) => story\.ownerNodeId === nodeId\) : allStories;/);
+  assert.match(storyView, /return nodeId \? allStories\.value\.filter\(\(story\) => story\.ownerNodeId === nodeId\) : allStories\.value;/);
+  assert.match(storyView, /const stories = computed\(\(\) => sortStories\(filteredStories\.value, storySortMode\.value, storySortOptions\.value\)\);/);
+});
+
+test("Story list options combine view and sort controls while manual mode drags the complete Story", () => {
+  assert.match(storyView, /<MoreHorizontal :size="16" \/>/);
+  assert.match(storyView, /<DropdownMenuRadioGroup :model-value="treeViewMode"[^]*?<DropdownMenuSeparator[^]*?<DropdownMenuRadioGroup :model-value="storySortMode"/);
+  assert.match(storyView, /class="story-list-options-menu"/);
+  assert.match(storyView, /class="story-list-options-item option-item"/);
+  assert.match(storyView, /:global\(\.story-list-options-item \.absolute svg\) \{ width:9px; height:9px; \}/);
+  assert.match(storyView, /class="story-tree"[^]*?@pointerdown="startStoryPointer\(\$event, story\)"/);
+  assert.doesNotMatch(storyView, /GripVertical/);
+  assert.doesNotMatch(storyView, /:draggable=|@dragstart=/);
+  assert.match(storyView, /const STORY_TOUCH_DRAG_HOLD_MS = 420;/);
+  assert.match(storyView, /distance < STORY_POINTER_DRAG_THRESHOLD/);
+  assert.match(storyView, /storyDropTargetAt\(rows, draggingStoryKey\.value, clientY\)/);
+  assert.match(storyView, /requestAnimationFrame\(scrollStoryDragFrame\)/);
+  assert.match(storyView, /<Teleport to="body">[^]*?class="story-pointer-overlay"/);
+  assert.match(storyView, /@keydown="handleStorySortKeydown\(\$event, story\)"/);
 });
 
 test("story selection follows the node-filtered list", () => {

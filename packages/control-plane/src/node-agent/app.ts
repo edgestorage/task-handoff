@@ -48,6 +48,7 @@ import { registerNodeModelRoutes } from "./models/routes.ts";
 import { registerNodeGitCredentialRoutes } from "./git-credentials/routes.ts";
 import { registerNodeStoryRoutes } from "./stories/routes.ts";
 import { NodeStoryStore } from "./stories/store.ts";
+import { StoryIdleSessionRetentionCoordinator } from "./stories/idle-retention.ts";
 import { StoryChangedEventType } from "@task-handoff/protocol/stories";
 import { registerRuntimeRoutes } from "./runtimes/routes.ts";
 import { registerInstanceManagementRoutes } from "./instances/routes.ts";
@@ -547,6 +548,13 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   );
   const updateCommandRunner = options.updateCommandRunner || options.dockerCommandRunner || defaultCommandRunner;
   const fetchImpl = options.fetchImpl || fetch;
+  const storyIdleRetention = new StoryIdleSessionRetentionCoordinator(
+    state,
+    stories,
+    fetchImpl,
+    resolveInstanceWeb,
+    (data, message) => app.log.warn(data, message),
+  );
   const aiSessionPersistenceSyncKeys = new Map<string, string>();
   // A lifecycle probe can race container startup and record a transient
   // endpoint-unreachable result. Reconcile that projection once the instance
@@ -768,6 +776,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       nodeId: story.ownerNodeId,
       change,
     }, { nodeId: story.ownerNodeId });
+    void storyIdleRetention.reconcile();
   });
   const runtimeMetrics = new DockerRuntimeMetricsCollector(
     dockerCommandRunner,
@@ -1075,7 +1084,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
         folderPlaces: true,
         localFolderNameUpdate: true,
         managedGitCredentials: { registry: true, runtimeBroker: true, workspaceProvisioning: { docker: true, kubernetes: false, local: false } },
-        stories: { enabled: true, agentTools: true, maxFileBytes: 32 * 1024 * 1024, maxBatchPaths: 20 },
+        stories: { enabled: true, agentTools: true, sessionRetention: true, maxFileBytes: 32 * 1024 * 1024, maxBatchPaths: 20 },
       },
       build: buildInfo("node-agent"),
       instanceProxy: { ...instanceProxyMetrics },
@@ -1130,7 +1139,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   registerNodeModelRoutes(app, state.modelRegistry, (id) => syncAssignedModelEnvironment(fetchImpl, state, id, lifecycleLoggers.warn, resolveInstanceWeb), fetchImpl);
 
   registerNodeGitCredentialRoutes(app, state);
-  registerNodeStoryRoutes(app, state, stories, { fetchImpl, resolveInstanceWeb });
+  registerNodeStoryRoutes(app, state, stories, { fetchImpl, resolveInstanceWeb, onRetentionSettingsChanged: () => storyIdleRetention.reconcile() });
 
   registerEnvironmentTemplateRoutes(app, environmentTemplates);
 
@@ -1168,6 +1177,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       eventForwarder.syncNow();
       reconcileReportedEndpoint(instance);
       void syncAiSessionPersistenceSettings(instance.id);
+      void storyIdleRetention.reconcile();
       if (report === "register") {
         logDiagnostic({ instanceId: instance.id, action: report, protocolVersion: instance.protocolVersion, build: instance.build, targetStatus: instance.targetStatus, targetStrategy: instance.target.strategy }, "node instance registered");
       } else {

@@ -886,6 +886,10 @@ export function useStoriesQuery(nodeId?: MaybeRefOrGetter<string | undefined>, e
   });
 }
 
+export function getStoryRetentionSettings(storyId: string, nodeId: string) {
+  return sharedControlPlaneClient.stories.retentionSettings(storyId, nodeId);
+}
+
 export function assignAiSessionToStory(instanceId: string, sessionId: string, storyId: string | null) {
   return putApiData<Record<string, unknown>>(
     `controlled-instances/${encodeURIComponent(instanceId)}/ai-sessions/${encodeURIComponent(sessionId)}/story`,

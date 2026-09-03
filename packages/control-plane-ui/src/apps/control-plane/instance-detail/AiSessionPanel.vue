@@ -1071,6 +1071,7 @@ import { normalizeAiSessionModelSelectionCapabilities, normalizeAiSessionReasoni
 import type { RepositoryAiSessionWorkspace, RepositoryAiSessionWorkspaceBranch } from "@task-handoff/protocol/repository";
 import { directoryAiSessionProviderCapability } from "@task-handoff/protocol/control-plane-directory";
 import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions, NodeLocalFolder } from "../../../api/types";
+import { aiSessionStoryTarget, type AiSessionStoryTarget } from "../../../components/ai-session/storyTarget";
 import type { LaunchableApp } from "../useInstanceSessions";
 import { isAiSessionTriggerDeployment, removeInstanceTriggerBinding, upsertInstanceTriggerBinding } from "../instanceTriggerCache.ts";
 import AiSessionComposer, { type AiSessionComposerAttachment } from "../../../components/ai-session/AiSessionComposer.vue";
@@ -2928,25 +2929,16 @@ async function closeSession(session: AiSessionSummary) {
   }
 }
 
-type SessionStoryTarget = {
-  nodeId: string;
-  instanceId: string;
-  sessionId: string;
-  storyId?: string | null;
-};
-
-function storyTargetFor(session: AiSessionSummary): SessionStoryTarget | undefined {
-  const nodeId = props.instance.nodeId;
-  if (!nodeId) return undefined;
-  return { nodeId, instanceId: props.instance.id, sessionId: session.id, storyId: session.storyId ?? null };
+function storyTargetFor(session: AiSessionSummary): AiSessionStoryTarget | undefined {
+  return aiSessionStoryTarget(props.instance, session);
 }
 
-function onStoryAssigned(_target: SessionStoryTarget) {
+function onStoryAssigned(_target: AiSessionStoryTarget) {
   showControlPlaneToast(t("sessions.actions.storyAssigned"), "success");
   void refreshBoard();
 }
 
-function onStoryAssignFailed(_target: SessionStoryTarget, error: unknown) {
+function onStoryAssignFailed(_target: AiSessionStoryTarget, error: unknown) {
   showControlPlaneToast(translateApiError(error, t, t("sessions.actions.storyAssignFailed")));
 }
 

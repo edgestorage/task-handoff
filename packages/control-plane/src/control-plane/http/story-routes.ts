@@ -11,6 +11,7 @@ import {
   StoryPathSchema,
   StorySchema,
   StoryUpdateInputSchema,
+  StorySessionRetentionSettingsSchema,
 } from "@task-handoff/protocol/stories";
 import type { ControlPlaneService } from "../application/service.ts";
 
@@ -65,6 +66,12 @@ export function registerStoryRoutes(app: FastifyInstance, service: ControlPlaneS
     const { storyId } = StoryRouteSchema.parse(request.params);
     const body = z.object({ nodeId: z.string().trim().min(1).max(120), input: StoryUpdateInputSchema }).strict().parse(request.body);
     return { data: StorySchema.parse(await nodeJson(service, body.nodeId, `/stories/${encodeURIComponent(storyId)}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(body.input) })) };
+  });
+
+  app.get<{ Params: { storyId: string } }>("/api/stories/:storyId/settings", async (request) => {
+    const { storyId } = StoryRouteSchema.parse(request.params);
+    const { nodeId } = StoryRouteQuerySchema.parse(request.query);
+    return { data: StorySessionRetentionSettingsSchema.parse(await nodeJson(service, nodeId, `/stories/${encodeURIComponent(storyId)}/settings`)) };
   });
 
   for (const action of ["archive", "restore"] as const) {
