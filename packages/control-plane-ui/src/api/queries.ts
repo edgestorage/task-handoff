@@ -882,6 +882,12 @@ export function useStoriesQuery(nodeId?: MaybeRefOrGetter<string | undefined>, e
     queryKey: computed(() => controlPlaneQueryKeys.stories(toValue(nodeId))),
     queryFn: () => listStories(toValue(nodeId)),
     enabled: computed(() => toValue(enabled)),
+    // The event stream owns normal convergence. Keep the last authoritative
+    // snapshot across Story view remounts and refetch only after invalidation.
+    staleTime: Infinity,
+    gcTime: Infinity,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
     retry: false,
   });
 }

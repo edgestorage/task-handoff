@@ -44,6 +44,14 @@ test("AI Session summaries recover through their revisioned stream instead of fo
   assert.match(query, /refetchOnReconnect: false/);
 });
 
+test("Story snapshots persist across view remounts and converge through events", () => {
+  const query = source.match(/export function useStoriesQuery[\s\S]*?\n\}/)?.[0] || "";
+  assert.match(query, /staleTime: Infinity/);
+  assert.match(query, /gcTime: Infinity/);
+  assert.match(query, /refetchOnWindowFocus: false/);
+  assert.match(query, /refetchOnReconnect: false/);
+});
+
 test("instance directory and scoped board reads stay progressive", () => {
   assert.match(source, /function fetchInstanceBoardPayload[\s\S]*params\.set\("progressive", "true"\)[\s\S]*if \(instanceId\) params\.set\("instanceId", instanceId\)/);
   assert.match(source, /useInstanceDirectoryQuery[\s\S]*sharedControlPlaneClient\.resources\.instanceDirectory\(signal\)/);

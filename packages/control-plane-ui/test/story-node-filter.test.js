@@ -63,6 +63,12 @@ test("story selection follows the node-filtered list", () => {
   assert.match(storyView, /const filterNodeId = props\.filterNodeId\?\.trim\(\);/);
 });
 
+test("selecting a Story detail does not expand its tree", () => {
+  assert.match(storyView, /function selectStory\(story: Story\) \{ selectedResource\.value = \{ kind: "story", story \}; \}/);
+  assert.doesNotMatch(storyView, /function selectStory\(story: Story\) \{ setStoryExpanded/);
+  assert.match(storyView, /function toggleStoryExpanded\(story: Story\) \{ setStoryExpanded\(story, !isStoryOpen\(story\)\); \}/);
+});
+
 test("Story action folders resolve through the target instance node", () => {
   assert.match(storyView, /const nodeId = targetInstance\(instanceId\)\?\.nodeId;/);
   assert.match(storyView, /props\.nodeLocalFoldersByNodeId\[nodeId\]/);
@@ -82,4 +88,26 @@ test("Story tree rows share distinct light-theme hover and selected states", () 
   assert.match(storyView, /\.story-tree-item:hover \{ background:var\(--sidebar-row-hover-bg,var\(--surface-active\)\); \}/);
   assert.match(storyView, /\.story-tree-item\.active,\.story-tree-item\.active:hover \{ background:var\(--sidebar-row-selected-bg,var\(--surface-active\)\); \}/);
   assert.match(appStyles, /--sidebar-row-hover-bg: #eeeef2;[\s\S]*--sidebar-row-selected-bg: #e6e6ec;[\s\S]*--ai-session-row-hover-bg: var\(--sidebar-row-hover-bg\);[\s\S]*--ai-session-row-selected-bg: var\(--sidebar-row-selected-bg\);/);
+});
+
+test("Story children animate when their tree is expanded or collapsed", () => {
+  assert.match(storyView, /<Transition name="story-tree-collapse">[\s\S]*v-if="isStoryOpen\(story\)" class="story-tree-collapse"[\s\S]*class="story-tree-collapse-inner"/);
+  assert.match(storyView, /\.story-tree-collapse \{[^}]*grid-template-rows:1fr;[^}]*transition:grid-template-rows 180ms ease,opacity 140ms ease;/);
+  assert.match(storyView, /\.story-tree-collapse-enter-from,\.story-tree-collapse-leave-to \{ grid-template-rows:0fr; opacity:0; \}/);
+  assert.match(storyView, /@media \(prefers-reduced-motion: reduce\) \{ \.story-tree-collapse,\.story-tree-disclosure \{ transition:none; \} \}/);
+});
+
+test("Story list blocks only for its initial snapshot", () => {
+  assert.match(storyView, /v-if="storiesPending" class="story-loading-overlay"/);
+  assert.doesNotMatch(storyView, /v-if="storiesFetching" class="story-loading-overlay"/);
+  assert.match(storyView, /:aria-busy="storiesFetching \? 'true' : undefined"/);
+});
+
+test("a newly created Story AI Session is selected from the authoritative session snapshot", () => {
+  assert.match(storyView, /const pendingCreatedStorySession = ref<\{ story: Story; instanceId: string; sessionId: string; sourceResourceKey: string \}>\(\);/);
+  assert.match(storyView, /function finishStorySessionCreation\(instanceId: string, sessionId: string\)[\s\S]*pendingCreatedStorySession\.value = \{ story, instanceId, sessionId, sourceResourceKey: resourceKey\(selectedResource\.value\) \};[\s\S]*selectPendingCreatedStorySession\(\);/);
+  assert.match(storyView, /candidate\.id === pending\.sessionId && candidate\.storyId === pending\.story\.id/);
+  assert.match(storyView, /watch\(\(\) => props\.instances, selectPendingCreatedStorySession\);/);
+  assert.match(storyView, /selectSession\(pending\.story, \{ instance, session \}\);/);
+  assert.doesNotMatch(storyView, /async function finishStorySessionCreation[\s\S]*?selectStory\(refreshed\)/);
 });

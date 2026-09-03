@@ -66,7 +66,10 @@
                 </ContextMenu>
                 <button type="button" class="story-tree-add story-tree-story-add" :aria-label="t('stories.newSession')" :title="t('stories.newSession')" :disabled="Boolean(story.archivedAt) || !instancesForStory(story).length" @click.stop="openNewSession(story)"><MessageSquarePlus :size="14" /></button>
               </div>
-              <div v-if="isStoryOpen(story)" class="story-tree-children">
+              <Transition name="story-tree-collapse">
+                <div v-if="isStoryOpen(story)" class="story-tree-collapse">
+                  <div class="story-tree-collapse-inner">
+                    <div class="story-tree-children">
                 <ContextMenu v-for="document in treeDocumentsFor(story)" :key="document.storyPath">
                   <ContextMenuTrigger as-child>
                     <button type="button" class="story-tree-item" :class="{ active: isDocumentSelected(story, document.storyPath), 'story-tree-item-detailed': treeViewMode === 'detailed' }" @click="selectDocument(story, document.storyPath)">
@@ -103,10 +106,13 @@
                     @story-assign-failed="onStoryAssignFailed"
                   />
                 </ContextMenu>
-                <div v-if="!sessionsFor(story).length" class="story-tree-empty">{{ t("stories.noLinkedSessions") }}</div>
-              </div>
+                      <div v-if="!sessionsFor(story).length" class="story-tree-empty">{{ t("stories.noLinkedSessions") }}</div>
+                    </div>
+                  </div>
+                </div>
+              </Transition>
             </div>
-            <div v-if="storiesFetching" class="story-loading-overlay" role="status" aria-live="polite">
+            <div v-if="storiesPending" class="story-loading-overlay" role="status" aria-live="polite">
               <LoaderCircle class="story-loading-spin" :size="18" />
             </div>
           </div>
@@ -165,9 +171,13 @@
                 <div class="story-content-actions"><Button variant="outline" size="sm" @click="openEdit"><Pencil :size="14" /> {{ t("common.actions.edit") }}</Button><DropdownMenu><DropdownMenuTrigger as-child><Button variant="outline" size="icon-sm" :aria-label="t('stories.moreActions')" :title="t('stories.moreActions')"><MoreHorizontal :size="16" /></Button></DropdownMenuTrigger><DropdownMenuContent align="end"><DropdownMenuItem :disabled="Boolean(selectedResource.story.archivedAt)" @select="openNewSession(selectedResource.story)">{{ t("stories.newSession") }}</DropdownMenuItem><DropdownMenuItem :disabled="Boolean(selectedResource.story.archivedAt) || !availableSessions.length" @select="openAssignSession">{{ t("stories.addExisting") }}</DropdownMenuItem><DropdownMenuItem @select="toggleArchive(selectedResource.story)">{{ t(selectedResource.story.archivedAt ? "common.actions.restore" : "common.actions.archive") }}</DropdownMenuItem></DropdownMenuContent></DropdownMenu></div>
               </header>
               <p v-if="selectedResource.story.description" class="story-description">{{ selectedResource.story.description }}</p>
-              <div class="story-overview-grid"><div><strong>{{ selectedResource.story.documents.length }}</strong><span>{{ t("stories.documents") }}</span></div><div><strong>{{ sessionCount(selectedResource.story) }}</strong><span>{{ t("stories.aiSessions") }}</span></div><div><strong>{{ selectedResource.story.actions.length }}</strong><span>{{ t("stories.presetActions") }}</span></div></div>
-              <section class="story-actions-section">
-                <div class="story-actions-header"><h3>{{ t("stories.presetActions") }}</h3><Button variant="outline" size="sm" :disabled="Boolean(selectedResource.story.archivedAt)" @click="openCreateAction"><Plus :size="14" /> {{ t("stories.addAction") }}</Button></div>
+              <div class="story-overview-summary">
+                <span><strong>{{ selectedResource.story.documents.length }}</strong>{{ t("stories.documents") }}</span>
+                <span><strong>{{ sessionCount(selectedResource.story) }}</strong>{{ t("stories.aiSessions") }}</span>
+                <span><strong>{{ selectedResource.story.actions.length }}</strong>{{ t("stories.presetActions") }}</span>
+              </div>
+              <section class="story-directory story-actions-section">
+                <div class="story-directory-header story-actions-header"><div class="story-directory-heading"><h3>{{ t("stories.presetActions") }}</h3><span>{{ selectedResource.story.actions.length }}</span></div><Button variant="outline" size="sm" :disabled="Boolean(selectedResource.story.archivedAt)" @click="openCreateAction"><Plus :size="14" /> {{ t("stories.addAction") }}</Button></div>
                 <div v-if="!selectedResource.story.actions.length" class="story-empty">{{ t("stories.noPresetActions") }}</div>
                 <div v-for="action in selectedResource.story.actions" :key="action.id" class="story-action-item">
                   <button type="button" class="story-action-run" :disabled="Boolean(selectedResource.story.archivedAt)" @click="$emit('run-action', selectedResource.story, action)">
@@ -181,20 +191,29 @@
                   <button type="button" class="story-action-edit" :disabled="Boolean(selectedResource.story.archivedAt)" :aria-label="t('stories.editNamed', { name: action.title })" :title="t('stories.editNamed', { name: action.title })" @click.stop="openEditAction(action)"><Pencil :size="13" /></button>
                 </div>
               </section>
-              <section class="story-resource-section">
-                <div class="story-resource-header"><h3>{{ t("stories.documents") }}</h3></div>
+              <section class="story-directory story-resource-section">
+                <div class="story-directory-header story-resource-header"><div class="story-directory-heading"><h3>{{ t("stories.documents") }}</h3><span>{{ selectedResource.story.documents.length }}</span></div></div>
                 <div v-if="!selectedResource.story.documents.length" class="story-empty">{{ t("stories.noDocuments") }}</div>
-                <button v-for="document in selectedResource.story.documents" :key="document.storyPath" type="button" class="story-resource-item" :class="{ active: isDocumentSelected(selectedResource.story, document.storyPath) }" @click="selectDocument(selectedResource.story, document.storyPath)">
+                <button v-for="document in pagedStoryDocuments" :key="document.storyPath" type="button" class="story-resource-item" :class="{ active: isDocumentSelected(selectedResource.story, document.storyPath) }" @click="selectDocument(selectedResource.story, document.storyPath)">
                   <span class="story-resource-icon"><FileText :size="15" /></span>
                   <span class="story-resource-copy"><strong>{{ document.title }}</strong><small>{{ document.storyPath }}</small></span>
                 </button>
-              </section>
-              <section class="story-resource-section">
-                <div class="story-resource-header">
-                  <h3>{{ t("stories.aiSessions") }}</h3>
-                  <Button variant="outline" size="sm" @click="toggleStorySessionHistory"><History :size="14" /> {{ t(storySessionHistoryMode ? "stories.currentSessions" : "stories.historySessions") }}</Button>
+                <div v-if="storyDocumentPageCount > 1" class="story-pagination">
+                  <span>{{ t("stories.pagination", { page: storyDocumentPage, total: storyDocumentPageCount }) }}</span>
+                  <div><Button variant="ghost" size="icon-sm" :disabled="storyDocumentPage <= 1" :aria-label="t('stories.previousPage')" :title="t('stories.previousPage')" @click="storyDocumentPage -= 1"><ChevronLeft :size="14" /></Button><Button variant="ghost" size="icon-sm" :disabled="storyDocumentPage >= storyDocumentPageCount" :aria-label="t('stories.nextPage')" :title="t('stories.nextPage')" @click="storyDocumentPage += 1"><ChevronRight :size="14" /></Button></div>
                 </div>
-                <template v-if="storySessionHistoryMode">
+              </section>
+              <section class="story-directory story-resource-section">
+                <div class="story-directory-header story-resource-header">
+                  <div class="story-directory-heading"><h3>{{ t("stories.aiSessions") }}</h3><span>{{ storySessionView === "history" ? storyHistoryEntries.length : sessionCount(selectedResource.story) }}</span></div>
+                  <Tabs :model-value="storySessionView" @update:model-value="setStorySessionView($event as StorySessionView)">
+                    <TabsList class="story-session-tabs" :aria-label="t('stories.aiSessions')">
+                      <TabsTrigger value="current">{{ t("stories.currentSessions") }}</TabsTrigger>
+                      <TabsTrigger value="history">{{ t("stories.historySessions") }}</TabsTrigger>
+                    </TabsList>
+                  </Tabs>
+                </div>
+                <template v-if="storySessionView === 'history'">
                   <div v-if="storyHistoryLoading" class="story-resource-state" role="status">
                     <LoaderCircle class="story-loading-spin" :size="16" />
                     <span>{{ t("stories.loadingHistorySessions") }}</span>
@@ -204,19 +223,27 @@
                     <Button variant="ghost" size="sm" @click="loadStoryHistory">{{ t("sessions.panel.retry") }}</Button>
                   </div>
                   <div v-else-if="!storyHistoryEntries.length" class="story-empty">{{ t("stories.noHistorySessions") }}</div>
-                  <button v-for="entry in storyHistoryEntries" :key="`${entry.instance.id}:${entry.item.id}`" type="button" class="story-resource-item" @click="openStoryHistoryEntry(entry)">
+                  <button v-for="entry in pagedStoryHistoryEntries" :key="`${entry.instance.id}:${entry.item.id}`" type="button" class="story-resource-item" @click="openStoryHistoryEntry(entry)">
                     <span class="story-resource-icon"><History :size="15" /></span>
                     <span class="story-resource-copy"><strong>{{ storyHistoryItemTitle(entry.item) }}</strong><small>{{ entry.instance.name }} · {{ actionAgentLabel(entry.item.agent) }} · {{ formatStoryHistoryTime(entry.item.lastActiveAt) }}</small></span>
                   </button>
+                  <div v-if="storyHistoryPageCount > 1" class="story-pagination">
+                    <span>{{ t("stories.pagination", { page: storyHistoryPage, total: storyHistoryPageCount }) }}</span>
+                    <div><Button variant="ghost" size="icon-sm" :disabled="storyHistoryPage <= 1" :aria-label="t('stories.previousPage')" :title="t('stories.previousPage')" @click="storyHistoryPage -= 1"><ChevronLeft :size="14" /></Button><Button variant="ghost" size="icon-sm" :disabled="storyHistoryPage >= storyHistoryPageCount" :aria-label="t('stories.nextPage')" :title="t('stories.nextPage')" @click="storyHistoryPage += 1"><ChevronRight :size="14" /></Button></div>
+                  </div>
                 </template>
                 <template v-else>
                   <div v-if="!sessionsFor(selectedResource.story).length" class="story-empty">{{ t("stories.noLinkedSessions") }}</div>
-                  <button v-for="entry in sessionsFor(selectedResource.story)" :key="entry.session.id" type="button" class="story-resource-item" :class="{ active: isSessionSelected(selectedResource.story, entry.session.id) }" @click="selectSession(selectedResource.story, entry)">
+                  <button v-for="entry in pagedStoryCurrentSessions" :key="entry.session.id" type="button" class="story-resource-item" :class="{ active: isSessionSelected(selectedResource.story, entry.session.id) }" @click="selectSession(selectedResource.story, entry)">
                     <span v-if="entry.session.status === 'running'" class="story-resource-icon"><AiSessionStatusIndicator :status="entry.session.status" /></span>
                     <span v-else class="story-resource-icon story-resource-session-icon"><MessageSquare :size="15" /><AiSessionStatusIndicator class="story-resource-session-status" :status="entry.session.status" size="compact" /></span>
                     <span class="story-resource-copy"><strong>{{ entry.session.title || entry.session.userPrompt || entry.session.id }}</strong><small>{{ entry.instance.name }} · {{ sessionStatusLabel(entry.session.status, t) }}</small></span>
                     <span v-if="entry.session.unread" class="story-resource-unread" :aria-label="t('sessions.actions.unread')" :title="t('sessions.actions.unread')" />
                   </button>
+                  <div v-if="storyCurrentSessionPageCount > 1" class="story-pagination">
+                    <span>{{ t("stories.pagination", { page: storyCurrentSessionPage, total: storyCurrentSessionPageCount }) }}</span>
+                    <div><Button variant="ghost" size="icon-sm" :disabled="storyCurrentSessionPage <= 1" :aria-label="t('stories.previousPage')" :title="t('stories.previousPage')" @click="storyCurrentSessionPage -= 1"><ChevronLeft :size="14" /></Button><Button variant="ghost" size="icon-sm" :disabled="storyCurrentSessionPage >= storyCurrentSessionPageCount" :aria-label="t('stories.nextPage')" :title="t('stories.nextPage')" @click="storyCurrentSessionPage += 1"><ChevronRight :size="14" /></Button></div>
+                  </div>
                 </template>
               </section>
             </div>
@@ -305,7 +332,7 @@
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useQueryClient } from "@tanstack/vue-query";
-import { BookOpen, ChevronRight, Download, FileText, History, LoaderCircle, MessageSquare, MessageSquarePlus, MoreHorizontal, Pencil, Play, Plus, X } from "@lucide/vue";
+import { BookOpen, ChevronLeft, ChevronRight, Download, FileText, History, LoaderCircle, MessageSquare, MessageSquarePlus, MoreHorizontal, Pencil, Play, Plus, X } from "@lucide/vue";
 import AiSessionStatusIndicator from "../../../components/ai-session/AiSessionStatusIndicator.vue";
 import AiSessionStreamingMarkdown from "../../../components/ai-session/AiSessionStreamingMarkdown.vue";
 import { Button } from "../../../components/ui/button";
@@ -316,6 +343,7 @@ import Input from "../../../components/ui/input/Input.vue";
 import Textarea from "../../../components/ui/textarea/Textarea.vue";
 import { Checkbox } from "../../../components/ui/checkbox";
 import { ScrollArea } from "../../../components/ui/scroll-area";
+import { Tabs, TabsList, TabsTrigger } from "../../../components/ui/tabs";
 import ControlPlaneSelect from "../shared/ControlPlaneSelect.vue";
 import ControlPlaneSelectItem from "../shared/ControlPlaneSelectItem.vue";
 import { ContextMenu, ContextMenuTrigger } from "../../../components/ui/context-menu";
@@ -429,6 +457,7 @@ const stories = computed(() => sortStories(filteredStories.value, storySortMode.
 const storiesPending = computed(() => storiesQuery.isPending.value);
 const storiesFetching = computed(() => storiesQuery.isFetching.value);
 const selectedResource = ref<Resource>(); const expandedStoryKeys = ref(storedExpandedStoryKeys()); const expandedDocumentStoryKeys = ref(new Set<string>()); const error = ref("");
+const pendingCreatedStorySession = ref<{ story: Story; instanceId: string; sessionId: string; sourceResourceKey: string }>();
 type TreeViewMode = "compact" | "detailed";
 const TREE_VIEW_MODE_STORAGE_KEY = "task-handoff.control-plane.stories.tree-view-mode";
 function storedTreeViewMode(): TreeViewMode {
@@ -653,8 +682,24 @@ const foldersForInstance = (instanceId: string) => {
 const actionDraftCwdFolders = computed(() => foldersForInstance(actionDraftTargetInstanceId.value));
 const sessionsFor = (story: Story) => props.instances.flatMap((instance) => (instance.aiSessions.sessions || []).filter((session) => session.storyId === story.id && instance.node?.id === story.ownerNodeId).map((session) => ({ instance, session })));
 const unassignedSessionsFor = (story: Story) => props.instances.flatMap((instance) => (instance.aiSessions.sessions || []).filter((session) => !session.storyId && instance.node?.id === story.ownerNodeId).map((session) => ({ instance, session })));
-const storySessionHistoryMode = ref(false);
+const STORY_DETAIL_PAGE_SIZE = 10;
+const storyDocumentPage = ref(1);
+const storyCurrentSessionPage = ref(1);
+const storyHistoryPage = ref(1);
 const storyHistoryEntries = ref<StoryHistoryEntry[]>([]);
+const storyDetail = computed(() => selectedResource.value?.kind === "story" ? selectedResource.value.story : undefined);
+const storyDetailDocuments = computed(() => storyDetail.value?.documents || []);
+const storyCurrentSessions = computed(() => storyDetail.value ? sessionsFor(storyDetail.value) : []);
+const pageCount = (length: number) => Math.max(1, Math.ceil(length / STORY_DETAIL_PAGE_SIZE));
+const pageItems = <T,>(items: T[], page: number) => items.slice((page - 1) * STORY_DETAIL_PAGE_SIZE, page * STORY_DETAIL_PAGE_SIZE);
+const storyDocumentPageCount = computed(() => pageCount(storyDetailDocuments.value.length));
+const storyCurrentSessionPageCount = computed(() => pageCount(storyCurrentSessions.value.length));
+const storyHistoryPageCount = computed(() => pageCount(storyHistoryEntries.value.length));
+const pagedStoryDocuments = computed(() => pageItems(storyDetailDocuments.value, storyDocumentPage.value));
+const pagedStoryCurrentSessions = computed(() => pageItems(storyCurrentSessions.value, storyCurrentSessionPage.value));
+const pagedStoryHistoryEntries = computed(() => pageItems(storyHistoryEntries.value, storyHistoryPage.value));
+type StorySessionView = "current" | "history";
+const storySessionView = ref<StorySessionView>("current");
 const storyHistoryLoading = ref(false);
 const storyHistoryError = ref("");
 const storyHistoryDetailOpen = ref(false);
@@ -699,9 +744,9 @@ async function loadStoryHistory() {
     if (revision === storyHistoryRequestRevision) storyHistoryLoading.value = false;
   }
 }
-function toggleStorySessionHistory() {
-  storySessionHistoryMode.value = !storySessionHistoryMode.value;
-  if (storySessionHistoryMode.value && !storyHistoryEntries.value.length && !storyHistoryLoading.value) void loadStoryHistory();
+function setStorySessionView(view: StorySessionView) {
+  storySessionView.value = view;
+  if (view === "history" && !storyHistoryEntries.value.length && !storyHistoryLoading.value) void loadStoryHistory();
 }
 function openStoryHistoryEntry(entry: StoryHistoryEntry) {
   storyHistoryDetailEntry.value = entry;
@@ -823,9 +868,30 @@ const hasMoreTreeDocuments = (story: Story) => story.documents.length > STORY_TR
 function showAllTreeDocuments(story: Story) { expandedDocumentStoryKeys.value = new Set(expandedDocumentStoryKeys.value).add(storyKey(story)); }
 function setStoryExpanded(story: Story, expanded: boolean) { const next = new Set(expandedStoryKeys.value); const key = storyKey(story); if (expanded) next.add(key); else next.delete(key); expandedStoryKeys.value = next; persistExpandedStoryKeys(next); }
 function toggleStoryExpanded(story: Story) { setStoryExpanded(story, !isStoryOpen(story)); }
-function selectStory(story: Story) { setStoryExpanded(story, true); selectedResource.value = { kind: "story", story }; }
+function selectStory(story: Story) { selectedResource.value = { kind: "story", story }; }
 function selectDocument(story: Story, path: string) { const document = story.documents.find((item) => item.storyPath === path); if (document) { setStoryExpanded(story, true); if (!treeDocumentsFor(story).includes(document)) showAllTreeDocuments(story); selectedResource.value = { kind: "document", story, document }; } }
 function selectSession(story: Story, entry: SessionEntry) { setStoryExpanded(story, true); selectedResource.value = { kind: "session", story, entry }; }
+function resourceKey(resource: Resource | undefined) {
+  if (!resource) return "";
+  const parentKey = storyKey(resource.story);
+  if (resource.kind === "document") return `${resource.kind}:${parentKey}:${resource.document.storyPath}`;
+  if (resource.kind === "session") return `${resource.kind}:${parentKey}:${resource.entry.instance.id}:${resource.entry.session.id}`;
+  return `${resource.kind}:${parentKey}`;
+}
+function selectPendingCreatedStorySession() {
+  const pending = pendingCreatedStorySession.value;
+  if (!pending) return;
+  if (resourceKey(selectedResource.value) !== pending.sourceResourceKey) {
+    pendingCreatedStorySession.value = undefined;
+    return;
+  }
+  const instance = props.instances.find((candidate) => candidate.id === pending.instanceId);
+  const session = instance?.aiSessions.sessions.find((candidate) => candidate.id === pending.sessionId && candidate.storyId === pending.story.id);
+  if (!instance || !session) return;
+  pendingCreatedStorySession.value = undefined;
+  selectSession(pending.story, { instance, session });
+}
+watch(() => props.instances, selectPendingCreatedStorySession);
 function handleSelectAiSession(instanceId: string, sessionId: string) {
   const resource = selectedResource.value;
   if (resource?.kind !== "session") return;
@@ -849,12 +915,18 @@ async function load() {
 }
 watch(selectedResource, async (resource) => { previewText.value = ""; previewError.value = ""; if (resource?.kind === "document") { previewLoading.value = true; try { const response = await fetch(`/api/stories/${encodeURIComponent(resource.story.id)}/content/file?nodeId=${encodeURIComponent(resource.story.ownerNodeId)}&storyPath=${encodeURIComponent(resource.document.storyPath)}`); if (!response.ok) throw new Error((await response.json()).error?.message || "Could not read document."); previewText.value = await response.text(); } catch (cause) { previewError.value = cause instanceof Error ? cause.message : String(cause); } finally { previewLoading.value = false; } } }, { immediate: true });
 watch(() => selectedResource.value?.kind === "story" ? `${selectedResource.value.story.ownerNodeId}:${selectedResource.value.story.id}` : "", () => {
-  storySessionHistoryMode.value = false;
+  storySessionView.value = "current";
+  storyDocumentPage.value = 1;
+  storyCurrentSessionPage.value = 1;
+  storyHistoryPage.value = 1;
   storyHistoryEntries.value = [];
   storyHistoryLoading.value = false;
   storyHistoryError.value = "";
   storyHistoryRequestRevision += 1;
 });
+watch(storyDocumentPageCount, (total) => { storyDocumentPage.value = Math.min(storyDocumentPage.value, total); });
+watch(storyCurrentSessionPageCount, (total) => { storyCurrentSessionPage.value = Math.min(storyCurrentSessionPage.value, total); });
+watch(storyHistoryPageCount, (total) => { storyHistoryPage.value = Math.min(storyHistoryPage.value, total); });
 watch(stories, (value) => {
   const resource = selectedResource.value;
   if (!resource) {
@@ -938,7 +1010,12 @@ async function saveAction() {
     actionEditorOpen.value = false; await load(); const refreshed = stories.value.find((item) => item.id === story.id && item.ownerNodeId === story.ownerNodeId); if (refreshed) selectStory(refreshed);
   } catch (cause) { error.value = cause instanceof Error ? cause.message : String(cause); } finally { actionSaving.value = false; }
 }
-async function finishStorySessionCreation() { const story = selectedResource.value?.story; await load(); const refreshed = story && stories.value.find((item) => item.id === story.id && item.ownerNodeId === story.ownerNodeId); if (refreshed) selectStory(refreshed); }
+function finishStorySessionCreation(instanceId: string, sessionId: string) {
+  const story = selectedResource.value?.story;
+  if (!story) return;
+  pendingCreatedStorySession.value = { story, instanceId, sessionId, sourceResourceKey: resourceKey(selectedResource.value) };
+  selectPendingCreatedStorySession();
+}
 async function assignExistingSession() { const story = selectedResource.value?.story; const [instanceId, sessionId] = assignSessionId.value.split(":"); if (!story || !instanceId || !sessionId || assigningSession.value) return; assigningSession.value = true; try { const response = await fetch(`/api/controlled-instances/${encodeURIComponent(instanceId)}/ai-sessions/${encodeURIComponent(sessionId)}/story`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ storyId: story.id }) }); if (!response.ok) throw new Error(t("stories.errors.assignFailed")); assignSessionOpen.value = false; await load(); const refreshed = stories.value.find((item) => item.id === story.id && item.ownerNodeId === story.ownerNodeId); if (refreshed) selectStory(refreshed); } catch (cause) { error.value = cause instanceof Error ? cause.message : String(cause); } finally { assigningSession.value = false; } }
 async function saveStory() {
   if (!draftTitle.value.trim() || !draftNodeId.value || saving.value) return;
@@ -978,7 +1055,7 @@ onBeforeUnmount(() => {
 .story-view { display:flex; flex-direction:column; height:100%; min-height:0; overflow:hidden; padding:12px 0; color:var(--text); }
 .story-content-header h2 { margin:0; color:var(--text-strong); font-size:18px; font-weight:500; }
 .story-description,.story-content-header small { color:var(--text-muted); font-size:12px; }
-.story-description { max-width:640px; margin:12px 0 0; line-height:1.5; }
+.story-description { max-width:720px; margin:8px 0 0; line-height:1.5; }
 .story-workspace { display:grid; grid-template-columns:minmax(240px,var(--story-sidebar-width,320px)) 2px minmax(0,1fr); gap:0; flex:1 1 auto; min-height:0; margin-top:0; overflow:hidden; }
 .story-sidebar { display:grid; min-width:0; min-height:0; grid-template-rows:auto minmax(0,1fr); }
 .story-sidebar-actions { padding:0 10px; }
@@ -1017,15 +1094,19 @@ onBeforeUnmount(() => {
 :global(body.story-pointer-dragging),:global(body.story-pointer-dragging *) { cursor:grabbing !important; user-select:none !important; }
 :global(body.story-pointer-dragging iframe),:global(body.story-pointer-dragging webview) { pointer-events:none; }
 .story-tree-children { display:grid; gap:2px; margin:2px 0 8px 16px; padding-left:8px; border-left:1px solid var(--line); }
+.story-tree-collapse { display:grid; grid-template-rows:1fr; opacity:1; transition:grid-template-rows 180ms ease,opacity 140ms ease; }
+.story-tree-collapse-inner { min-height:0; overflow:hidden; }
+.story-tree-collapse-enter-from,.story-tree-collapse-leave-to { grid-template-rows:0fr; opacity:0; }
 .story-tree-story-row { position:relative; }
 .story-tree-item { position:relative; display:flex; align-items:center; width:100%; min-width:0; gap:8px; border:0; border-radius:6px; background:transparent; color:inherit; cursor:pointer; padding:8px; text-align:left; }
-.story-tree-story { padding-right:36px; padding-left:32px; padding-block:11px; }
+.story-tree-story { padding-right:36px; padding-left:32px; padding-block:10px; }
 .story-tree-item:hover { background:var(--sidebar-row-hover-bg,var(--surface-active)); }
 .story-tree-item.active,.story-tree-item.active:hover { background:var(--sidebar-row-selected-bg,var(--surface-active)); }
 .story-tree-disclosure-button { position:absolute; z-index:1; top:50%; left:4px; display:grid; width:24px; height:24px; place-items:center; border:0; border-radius:4px; background:transparent; color:var(--text-muted); cursor:pointer; padding:0; transform:translateY(-50%); }
 .story-tree-disclosure-button:hover,.story-tree-disclosure-button:focus-visible { background:var(--surface-active); color:var(--text-strong); outline:none; }
 .story-tree-disclosure { flex:0 0 auto; transition:transform 120ms ease; }
 .story-tree-disclosure.expanded { transform:rotate(90deg); }
+@media (prefers-reduced-motion: reduce) { .story-tree-collapse,.story-tree-disclosure { transition:none; } }
 .story-session-status,.story-session-icon { position:relative; display:grid; width:14px; height:14px; flex:0 0 auto; place-items:center; overflow:visible; }
 .story-session-icon-status { position:absolute; top:-2px; right:-5px; }
 .story-tree-item > .story-tree-item-copy { display:flex; align-items:center; min-width:0; flex:1; overflow:hidden; }
@@ -1059,7 +1140,7 @@ onBeforeUnmount(() => {
 .story-content.story-session-pane > .story-session-creator { padding:0; background:transparent; }
 .story-detail-scroll { flex:1; min-height:0; }
 .story-detail-scroll :deep([data-task-handoff-scroll-viewport] > div) { width:100%; min-width:0 !important; }
-.story-detail-scroll-inner { min-width:0; padding:0 0 32px; }
+.story-detail-scroll-inner { display:grid; gap:12px; width:min(100%,1080px); min-width:0; margin:0 auto; padding:0 10px 32px 0; }
 .story-content-header { display:flex; align-items:center; justify-content:space-between; gap:12px; border-bottom:1px solid var(--line); padding:0 0 12px; flex:0 0 auto; }
 .story-content-header > div:first-child:not(.story-content-title) { display:grid; min-width:0; gap:3px; }
 .story-content-header .story-content-title { display:flex; align-items:baseline; gap:10px; min-width:0; }
@@ -1073,34 +1154,38 @@ onBeforeUnmount(() => {
 .story-content-download:hover { color:var(--text-strong); }
 .story-content-actions { display:flex; align-items:center; gap:8px; flex:0 0 auto; }
 .story-session-creator { flex:1; min-height:0; }
-.story-overview-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:12px; margin:16px 0 20px; }
-.story-overview-grid > div { display:grid; gap:4px; padding:14px 16px; background:var(--surface-raised); border:1px solid var(--line); border-radius:8px; }
-.story-overview-grid strong { color:var(--text-strong); font-size:18px; font-weight:500; }
-.story-overview-grid span { color:var(--text-muted); font-size:12px; }
-.story-actions-section { margin:4px 0 0; }
-.story-actions-section h3 { margin:0; color:var(--text-strong); font-size:13px; font-weight:500; }
-.story-actions-header { display:flex; align-items:center; justify-content:space-between; gap:8px; }
-.story-resource-section { margin-top:20px; }
-.story-resource-section h3 { margin:0; color:var(--text-strong); font-size:13px; font-weight:500; }
-.story-resource-header { display:flex; align-items:center; justify-content:space-between; gap:8px; }
-.story-resource-item { display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:10px; width:100%; min-width:0; margin-top:8px; border:1px solid var(--line); border-radius:8px; background:var(--surface-raised); color:inherit; cursor:pointer; padding:10px 12px; text-align:left; }
+.story-overview-summary { display:flex; align-items:center; flex-wrap:wrap; gap:0; min-height:20px; color:var(--text-muted); font-size:12px; }
+.story-overview-summary span { display:inline-flex; align-items:baseline; gap:4px; }
+.story-overview-summary span + span::before { margin:0 10px; color:var(--line-strong); content:"/"; }
+.story-overview-summary strong { color:var(--text-strong); font-size:13px; font-weight:500; }
+.story-directory { overflow:hidden; border:1px solid var(--line); border-radius:8px; background:var(--surface-raised); }
+.story-directory-header { display:flex; align-items:center; justify-content:space-between; gap:8px; min-height:38px; border-bottom:1px solid var(--line); padding:0 12px; }
+.story-directory-heading { display:flex; align-items:baseline; gap:7px; min-width:0; }
+.story-directory-heading h3 { margin:0; color:var(--text-strong); font-size:13px; font-weight:500; }
+.story-directory-heading span { color:var(--text-muted); font-size:12px; }
+.story-session-tabs { width:auto; height:28px; min-height:28px; border:1px solid var(--line); border-radius:6px; background:var(--surface-inset); padding:2px; }
+.story-session-tabs :deep(button) { height:22px; min-height:22px; border-radius:4px; font-size:12px; font-weight:400; padding:0 8px; }
+.story-pagination { display:flex; align-items:center; justify-content:flex-end; gap:10px; min-height:36px; border-top:1px solid var(--line); color:var(--text-muted); font-size:12px; padding:3px 8px 3px 12px; }
+.story-pagination > div { display:flex; align-items:center; gap:2px; }
+.story-resource-item { display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:10px; width:100%; min-width:0; border:0; background:transparent; color:inherit; cursor:pointer; padding:10px 12px; text-align:left; }
+.story-resource-item + .story-resource-item { border-top:1px solid var(--line); }
 .story-resource-item:hover, .story-resource-item.active { background:var(--surface-active); }
-.story-resource-item.active { border-color:color-mix(in srgb,var(--brand-accent) 42%,var(--line)); }
 .story-resource-item-static, .story-resource-item-static:hover { cursor:default; background:var(--surface-raised); }
-.story-resource-state { display:flex; align-items:center; gap:8px; margin-top:8px; color:var(--text-muted); font-size:12px; }
+.story-resource-state { display:flex; align-items:center; gap:8px; min-height:64px; color:var(--text-muted); font-size:12px; padding:12px; }
 .story-resource-state.story-error { color:var(--status-danger); }
-.story-resource-icon { display:grid; flex:0 0 auto; width:30px; height:30px; place-items:center; border:1px solid var(--line-subtle); border-radius:7px; background:var(--surface-active); color:var(--text-muted); }
+.story-resource-icon { display:grid; flex:0 0 auto; width:28px; height:28px; place-items:center; color:var(--text-muted); }
 .story-resource-session-icon { position:relative; }
 .story-resource-session-status { position:absolute; top:2px; right:2px; }
 .story-resource-copy { display:grid; gap:3px; min-width:0; }
 .story-resource-copy strong { color:var(--text-strong); font-size:13px; font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .story-resource-copy small { color:var(--text-muted); font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .story-resource-unread { width:7px; height:7px; border-radius:999px; background:var(--status-info); box-shadow:0 0 0 3px color-mix(in srgb,var(--status-info) 18%,transparent); }
-.story-action-item { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:10px; margin-top:8px; border:1px solid var(--line); border-radius:8px; background:var(--surface-raised); }
+.story-action-item { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:10px; background:transparent; }
+.story-action-item + .story-action-item { border-top:1px solid var(--line); }
 .story-action-item:hover { background:var(--surface-active); }
-.story-action-run { display:flex; align-items:flex-start; gap:10px; min-width:0; border:0; background:transparent; color:inherit; cursor:pointer; padding:10px 0 10px 12px; text-align:left; }
+.story-action-run { display:flex; align-items:center; gap:10px; min-width:0; border:0; background:transparent; color:inherit; cursor:pointer; padding:10px 0 10px 12px; text-align:left; }
 .story-action-run:disabled { cursor:default; }
-.story-action-icon { display:flex; flex:0 0 auto; align-items:center; justify-content:center; width:32px; height:32px; border:1px solid var(--line-subtle); border-radius:7px; background:var(--surface-active); color:var(--text-muted); }
+.story-action-icon { display:flex; flex:0 0 auto; align-items:center; justify-content:center; width:28px; height:28px; color:var(--text-muted); }
 .story-action-copy { display:grid; gap:3px; min-width:0; }
 .story-action-copy strong { color:var(--text-strong); font-size:13px; font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .story-action-copy small, .story-action-meta { color:var(--text-muted); font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -1118,6 +1203,7 @@ onBeforeUnmount(() => {
 .story-action-parameters-header { display:flex; align-items:center; justify-content:space-between; gap:8px; color:var(--text-muted); font-size:12px; }
 .story-action-parameter { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)) auto auto; gap:8px; align-items:center; }
 .story-action-parameter-required { display:flex; align-items:center; gap:6px; color:var(--text-muted); font-size:12px; }
+.story-directory > .story-empty { min-height:64px; padding:22px 12px; }
 .story-empty { color:var(--text-muted); font-size:12px; padding:16px; text-align:center; }
 .story-error { color:var(--status-danger); font-size:12px; }
 .story-editor-fields { display:grid; gap:14px; }
@@ -1133,7 +1219,7 @@ onBeforeUnmount(() => {
 .story-dialog-header { flex-direction:row; align-items:flex-start; justify-content:space-between; gap:16px; text-align:left; }
 .story-dialog-close { display:grid; flex:0 0 auto; width:30px; height:30px; place-items:center; border:0; border-radius:6px; background:transparent; color:var(--text-muted); cursor:pointer; padding:0; }
 .story-dialog-close:hover, .story-dialog-close:focus-visible { background:var(--surface-active); color:var(--text-strong); outline:none; }
-@media (max-width:800px) { .story-view { padding:16px 0; } .story-workspace { grid-template-columns:minmax(220px,38%) minmax(0,1fr); } .story-sidebar-resize-handle { display:none; } .story-content-header { padding:0 0 14px; } }
+@media (max-width:800px) { .story-view { padding:16px 0; } .story-workspace { grid-template-columns:minmax(220px,38%) minmax(0,1fr); } .story-sidebar-resize-handle { display:none; } .story-content-header { padding:0 0 14px; } .story-detail-scroll-inner { padding-right:6px; } }
 @media (max-width:820px) { .story-history-drawer-close { top:12px; left:max(10px,calc(10px + var(--native-titlebar-controls-left-width))); } }
-@media (max-width:560px) { .story-view { padding:10px 0; } .story-workspace { grid-template-columns:1fr; } .story-sidebar { max-height:38%; border-right:0; border-bottom:1px solid var(--line); } .story-overview-grid { margin:14px 0; } .story-actions-section { margin:0; } }
+@media (max-width:560px) { .story-view { padding:10px 0; } .story-workspace { grid-template-columns:1fr; } .story-sidebar { max-height:38%; border-right:0; border-bottom:1px solid var(--line); } }
 </style>
