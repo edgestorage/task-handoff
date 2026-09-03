@@ -272,10 +272,7 @@
 }
 
 .macos-native-window-control-space {
-  --macos-native-window-control-width: max(
-    0px,
-    calc(env(titlebar-area-x, 16px) - 16px)
-  );
+  --macos-native-window-control-width: var(--native-titlebar-controls-left-width);
   width: var(--macos-native-window-control-width);
   flex: 0 0 var(--macos-native-window-control-width);
 }
@@ -593,10 +590,7 @@
 }
 
 .windows-native-window-control-space {
-  --windows-native-window-control-width: max(
-    0px,
-    calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw))
-  );
+  --windows-native-window-control-width: var(--native-titlebar-controls-right-width);
   width: var(--windows-native-window-control-width);
   flex: 0 0 var(--windows-native-window-control-width);
 }

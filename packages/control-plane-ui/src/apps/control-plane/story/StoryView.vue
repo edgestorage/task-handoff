@@ -67,7 +67,7 @@
                 <button type="button" class="story-tree-add story-tree-story-add" :aria-label="t('stories.newSession')" :title="t('stories.newSession')" :disabled="Boolean(story.archivedAt) || !instancesForStory(story).length" @click.stop="openNewSession(story)"><MessageSquarePlus :size="14" /></button>
               </div>
               <div v-if="isStoryOpen(story)" class="story-tree-children">
-                <ContextMenu v-for="document in story.documents" :key="document.storyPath">
+                <ContextMenu v-for="document in treeDocumentsFor(story)" :key="document.storyPath">
                   <ContextMenuTrigger as-child>
                     <button type="button" class="story-tree-item" :class="{ active: isDocumentSelected(story, document.storyPath), 'story-tree-item-detailed': treeViewMode === 'detailed' }" @click="selectDocument(story, document.storyPath)">
                       <FileText :size="14" /><span class="story-tree-item-copy" :class="{ 'story-tree-item-detail': treeViewMode === 'detailed' }"><strong>{{ document.title }}</strong><small v-if="treeViewMode === 'detailed'">{{ document.storyPath }}</small></span><small v-if="treeViewMode === 'compact'" class="story-tree-item-hint" aria-hidden="true">{{ document.storyPath }}</small>
@@ -75,6 +75,7 @@
                   </ContextMenuTrigger>
                   <DocumentTreeContextMenu :disabled="Boolean(story.archivedAt)" @open="selectDocument(story, document.storyPath)" @download="downloadDocument(story, document.storyPath)" @rename="renameDocument(story, document.storyPath, document.title)" @delete="deleteDocument(story, document.storyPath)" />
                 </ContextMenu>
+                <button v-if="hasMoreTreeDocuments(story)" type="button" class="story-tree-more-documents" @click="showAllTreeDocuments(story)">{{ t("stories.moreDocuments") }}</button>
                 <ContextMenu v-for="entry in sessionsFor(story)" :key="entry.session.id">
                   <ContextMenuTrigger as-child>
                     <button type="button" class="story-tree-item" :class="{ active: isSessionSelected(story, entry.session.id), 'story-tree-item-detailed': treeViewMode === 'detailed', 'story-tree-item-unread': entry.session.unread }" :data-state="entry.session.status" :data-unread="entry.session.unread ? 'true' : undefined" @click="selectSession(story, entry)">
@@ -157,27 +158,69 @@
           </ScrollArea>
         </template>
         <template v-else-if="selectedResource?.kind === 'story'">
-          <header class="story-content-header">
-            <div class="story-content-title"><h2>{{ selectedResource.story.title }}</h2><small>{{ storyOwnerNodeName(selectedResource.story.ownerNodeId) }}</small></div>
-            <div class="story-content-actions"><Button variant="outline" size="sm" @click="openEdit"><Pencil :size="14" /> {{ t("common.actions.edit") }}</Button><DropdownMenu><DropdownMenuTrigger as-child><Button variant="outline" size="icon-sm" :aria-label="t('stories.moreActions')" :title="t('stories.moreActions')"><MoreHorizontal :size="16" /></Button></DropdownMenuTrigger><DropdownMenuContent align="end"><DropdownMenuItem :disabled="Boolean(selectedResource.story.archivedAt)" @select="openNewSession(selectedResource.story)">{{ t("stories.newSession") }}</DropdownMenuItem><DropdownMenuItem :disabled="Boolean(selectedResource.story.archivedAt) || !availableSessions.length" @select="openAssignSession">{{ t("stories.addExisting") }}</DropdownMenuItem><DropdownMenuItem @select="toggleArchive(selectedResource.story)">{{ t(selectedResource.story.archivedAt ? "common.actions.restore" : "common.actions.archive") }}</DropdownMenuItem></DropdownMenuContent></DropdownMenu></div>
-          </header>
-          <p v-if="selectedResource.story.description" class="story-description">{{ selectedResource.story.description }}</p>
-          <div class="story-overview-grid"><div><strong>{{ selectedResource.story.documents.length }}</strong><span>{{ t("stories.documents") }}</span></div><div><strong>{{ sessionCount(selectedResource.story) }}</strong><span>{{ t("stories.aiSessions") }}</span></div><div><strong>{{ selectedResource.story.actions.length }}</strong><span>{{ t("stories.presetActions") }}</span></div></div>
-          <section class="story-actions-section">
-            <div class="story-actions-header"><h3>{{ t("stories.presetActions") }}</h3><Button variant="outline" size="sm" :disabled="Boolean(selectedResource.story.archivedAt)" @click="openCreateAction"><Plus :size="14" /> {{ t("stories.addAction") }}</Button></div>
-            <div v-if="!selectedResource.story.actions.length" class="story-empty">{{ t("stories.noPresetActions") }}</div>
-            <div v-for="action in selectedResource.story.actions" :key="action.id" class="story-action-item">
-              <button type="button" class="story-action-run" :disabled="Boolean(selectedResource.story.archivedAt)" @click="$emit('run-action', selectedResource.story, action)">
-                <span class="story-action-icon"><Play :size="14" /></span>
-                <span class="story-action-copy">
-                  <strong>{{ action.title }}</strong>
-                  <small>{{ action.promptTemplate }}</small>
-                  <span class="story-action-meta">{{ actionTargetName(selectedResource.story, action) }}<template v-if="action.parameters.length"> · {{ t("stories.parameterCount", { count: action.parameters.length }) }}</template><template v-if="actionSessionPresetSummary(action)"> · {{ actionSessionPresetSummary(action) }}</template></span>
-                </span>
-              </button>
-              <button type="button" class="story-action-edit" :disabled="Boolean(selectedResource.story.archivedAt)" :aria-label="t('stories.editNamed', { name: action.title })" :title="t('stories.editNamed', { name: action.title })" @click.stop="openEditAction(action)"><Pencil :size="13" /></button>
+          <ScrollArea type="auto" :horizontal="false" class="story-detail-scroll">
+            <div class="story-detail-scroll-inner">
+              <header class="story-content-header">
+                <div class="story-content-title"><h2>{{ selectedResource.story.title }}</h2><small>{{ storyOwnerNodeName(selectedResource.story.ownerNodeId) }}</small></div>
+                <div class="story-content-actions"><Button variant="outline" size="sm" @click="openEdit"><Pencil :size="14" /> {{ t("common.actions.edit") }}</Button><DropdownMenu><DropdownMenuTrigger as-child><Button variant="outline" size="icon-sm" :aria-label="t('stories.moreActions')" :title="t('stories.moreActions')"><MoreHorizontal :size="16" /></Button></DropdownMenuTrigger><DropdownMenuContent align="end"><DropdownMenuItem :disabled="Boolean(selectedResource.story.archivedAt)" @select="openNewSession(selectedResource.story)">{{ t("stories.newSession") }}</DropdownMenuItem><DropdownMenuItem :disabled="Boolean(selectedResource.story.archivedAt) || !availableSessions.length" @select="openAssignSession">{{ t("stories.addExisting") }}</DropdownMenuItem><DropdownMenuItem @select="toggleArchive(selectedResource.story)">{{ t(selectedResource.story.archivedAt ? "common.actions.restore" : "common.actions.archive") }}</DropdownMenuItem></DropdownMenuContent></DropdownMenu></div>
+              </header>
+              <p v-if="selectedResource.story.description" class="story-description">{{ selectedResource.story.description }}</p>
+              <div class="story-overview-grid"><div><strong>{{ selectedResource.story.documents.length }}</strong><span>{{ t("stories.documents") }}</span></div><div><strong>{{ sessionCount(selectedResource.story) }}</strong><span>{{ t("stories.aiSessions") }}</span></div><div><strong>{{ selectedResource.story.actions.length }}</strong><span>{{ t("stories.presetActions") }}</span></div></div>
+              <section class="story-actions-section">
+                <div class="story-actions-header"><h3>{{ t("stories.presetActions") }}</h3><Button variant="outline" size="sm" :disabled="Boolean(selectedResource.story.archivedAt)" @click="openCreateAction"><Plus :size="14" /> {{ t("stories.addAction") }}</Button></div>
+                <div v-if="!selectedResource.story.actions.length" class="story-empty">{{ t("stories.noPresetActions") }}</div>
+                <div v-for="action in selectedResource.story.actions" :key="action.id" class="story-action-item">
+                  <button type="button" class="story-action-run" :disabled="Boolean(selectedResource.story.archivedAt)" @click="$emit('run-action', selectedResource.story, action)">
+                    <span class="story-action-icon"><Play :size="14" /></span>
+                    <span class="story-action-copy">
+                      <strong>{{ action.title }}</strong>
+                      <small>{{ action.promptTemplate }}</small>
+                      <span class="story-action-meta">{{ actionTargetName(selectedResource.story, action) }}<template v-if="action.parameters.length"> · {{ t("stories.parameterCount", { count: action.parameters.length }) }}</template><template v-if="actionSessionPresetSummary(action)"> · {{ actionSessionPresetSummary(action) }}</template></span>
+                    </span>
+                  </button>
+                  <button type="button" class="story-action-edit" :disabled="Boolean(selectedResource.story.archivedAt)" :aria-label="t('stories.editNamed', { name: action.title })" :title="t('stories.editNamed', { name: action.title })" @click.stop="openEditAction(action)"><Pencil :size="13" /></button>
+                </div>
+              </section>
+              <section class="story-resource-section">
+                <div class="story-resource-header"><h3>{{ t("stories.documents") }}</h3></div>
+                <div v-if="!selectedResource.story.documents.length" class="story-empty">{{ t("stories.noDocuments") }}</div>
+                <button v-for="document in selectedResource.story.documents" :key="document.storyPath" type="button" class="story-resource-item" :class="{ active: isDocumentSelected(selectedResource.story, document.storyPath) }" @click="selectDocument(selectedResource.story, document.storyPath)">
+                  <span class="story-resource-icon"><FileText :size="15" /></span>
+                  <span class="story-resource-copy"><strong>{{ document.title }}</strong><small>{{ document.storyPath }}</small></span>
+                </button>
+              </section>
+              <section class="story-resource-section">
+                <div class="story-resource-header">
+                  <h3>{{ t("stories.aiSessions") }}</h3>
+                  <Button variant="outline" size="sm" @click="toggleStorySessionHistory"><History :size="14" /> {{ t(storySessionHistoryMode ? "stories.currentSessions" : "stories.historySessions") }}</Button>
+                </div>
+                <template v-if="storySessionHistoryMode">
+                  <div v-if="storyHistoryLoading" class="story-resource-state" role="status">
+                    <LoaderCircle class="story-loading-spin" :size="16" />
+                    <span>{{ t("stories.loadingHistorySessions") }}</span>
+                  </div>
+                  <div v-else-if="storyHistoryError" class="story-resource-state story-error" role="alert">
+                    <span>{{ storyHistoryError }}</span>
+                    <Button variant="ghost" size="sm" @click="loadStoryHistory">{{ t("sessions.panel.retry") }}</Button>
+                  </div>
+                  <div v-else-if="!storyHistoryEntries.length" class="story-empty">{{ t("stories.noHistorySessions") }}</div>
+                  <button v-for="entry in storyHistoryEntries" :key="`${entry.instance.id}:${entry.item.id}`" type="button" class="story-resource-item" @click="openStoryHistoryEntry(entry)">
+                    <span class="story-resource-icon"><History :size="15" /></span>
+                    <span class="story-resource-copy"><strong>{{ storyHistoryItemTitle(entry.item) }}</strong><small>{{ entry.instance.name }} · {{ actionAgentLabel(entry.item.agent) }} · {{ formatStoryHistoryTime(entry.item.lastActiveAt) }}</small></span>
+                  </button>
+                </template>
+                <template v-else>
+                  <div v-if="!sessionsFor(selectedResource.story).length" class="story-empty">{{ t("stories.noLinkedSessions") }}</div>
+                  <button v-for="entry in sessionsFor(selectedResource.story)" :key="entry.session.id" type="button" class="story-resource-item" :class="{ active: isSessionSelected(selectedResource.story, entry.session.id) }" @click="selectSession(selectedResource.story, entry)">
+                    <span v-if="entry.session.status === 'running'" class="story-resource-icon"><AiSessionStatusIndicator :status="entry.session.status" /></span>
+                    <span v-else class="story-resource-icon story-resource-session-icon"><MessageSquare :size="15" /><AiSessionStatusIndicator class="story-resource-session-status" :status="entry.session.status" size="compact" /></span>
+                    <span class="story-resource-copy"><strong>{{ entry.session.title || entry.session.userPrompt || entry.session.id }}</strong><small>{{ entry.instance.name }} · {{ sessionStatusLabel(entry.session.status, t) }}</small></span>
+                    <span v-if="entry.session.unread" class="story-resource-unread" :aria-label="t('sessions.actions.unread')" :title="t('sessions.actions.unread')" />
+                  </button>
+                </template>
+              </section>
             </div>
-          </section>
+          </ScrollArea>
         </template>
         <div v-else class="story-content-state">{{ t("stories.selectResource") }}</div>
       </main>
@@ -233,17 +276,41 @@
       <DialogFooter><Button variant="outline" @click="actionEditorOpen = false">{{ t("common.actions.cancel") }}</Button><Button :disabled="!actionDraftTitle.trim() || !actionDraftPrompt.trim() || !actionDraftTargetInstanceId || actionSaving" @click="saveAction">{{ actionSaving ? t("stories.actionEditor.saving") : t("common.actions.save") }}</Button></DialogFooter>
     </DialogContent>
   </Dialog>
+
+  <Sheet v-model:open="storyHistoryDetailOpen">
+    <SheetContent side="right" :show-close="false" class="story-history-drawer">
+      <SheetTitle class="sr-only">{{ storyHistoryDetailEntry ? storyHistoryItemTitle(storyHistoryDetailEntry.item) : t("stories.historySessions") }}</SheetTitle>
+      <SheetDescription class="sr-only">{{ storyHistoryDetailEntry?.instance.name }}</SheetDescription>
+      <div class="story-history-drawer-drag-region" aria-hidden="true" />
+      <SheetClose as-child><button type="button" class="story-history-drawer-close" :aria-label="t('stories.close')"><X :size="16" /></button></SheetClose>
+      <div class="story-history-panel">
+        <AiSessionPanel
+          v-if="storyHistoryPanelInstance"
+          class="story-history-ai-session-panel"
+          :active-session="storyHistoryPanelSession"
+          detail-only
+          :history-story-id="selectedResource?.story?.id"
+          :initial-history-id="storyHistoryDetailEntry?.item.id"
+          initial-history-mode
+          :instance="storyHistoryPanelInstance"
+          :selected-ai-session="storyHistoryPanelSelectedSession"
+          @select-ai-session="handleStoryHistorySessionSelected"
+        />
+      </div>
+    </SheetContent>
+  </Sheet>
 </template>
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useQueryClient } from "@tanstack/vue-query";
-import { BookOpen, ChevronRight, Download, FileText, LoaderCircle, MessageSquare, MessageSquarePlus, MoreHorizontal, Pencil, Play, Plus, X } from "@lucide/vue";
+import { BookOpen, ChevronRight, Download, FileText, History, LoaderCircle, MessageSquare, MessageSquarePlus, MoreHorizontal, Pencil, Play, Plus, X } from "@lucide/vue";
 import AiSessionStatusIndicator from "../../../components/ai-session/AiSessionStatusIndicator.vue";
 import AiSessionStreamingMarkdown from "../../../components/ai-session/AiSessionStreamingMarkdown.vue";
 import { Button } from "../../../components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
+import { Sheet, SheetClose, SheetContent, SheetDescription, SheetTitle } from "../../../components/ui/sheet";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
 import Input from "../../../components/ui/input/Input.vue";
 import Textarea from "../../../components/ui/textarea/Textarea.vue";
@@ -256,15 +323,17 @@ import AiSessionCardContextMenu from "../../../components/ai-session/AiSessionCa
 import { aiSessionStoryTarget, type AiSessionStoryTarget } from "../../../components/ai-session/storyTarget";
 import StoryTreeContextMenu from "./StoryTreeContextMenu.vue";
 import DocumentTreeContextMenu from "./DocumentTreeContextMenu.vue";
-import { closeAiSession, getStoryRetentionSettings, useStoriesQuery } from "../../../api/queries";
+import { closeAiSession, getAiSessionHistory, getStoryRetentionSettings, useStoriesQuery } from "../../../api/queries";
 import { controlPlaneQueryKeys } from "../../../api/queryKeys.ts";
 import { showControlPlaneToast, showDelayedControlPlaneLoadingToast } from "../useControlPlaneToasts";
 import { translateApiError } from "../../../i18n/apiError";
 import { createBrowserUuid } from "../../../lib/random-id";
 import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions, Node, NodeLocalFolder } from "../../../api/types";
 import { STORY_DEFAULT_MAX_IDLE_AI_SESSIONS, STORY_MAX_IDLE_AI_SESSIONS, STORY_MIN_IDLE_AI_SESSIONS, type Story, type StoryAction, type StorySessionPreset } from "@task-handoff/protocol/stories";
+import type { AiSessionHistoryItem } from "@task-handoff/protocol/ai-sessions";
 import AiSessionPanel from "../instance-detail/AiSessionPanel.vue";
 import { aiSessionLastUserMessageTime, launchableAppsForInstance, sessionStatusLabel, type RepositoryWorkspaceTabTarget, type SessionTab } from "../useInstanceSessions";
+import { latestStoryDocuments, STORY_TREE_DOCUMENT_LIMIT } from "./storyDocuments";
 import { normalizeManualStoryOrder, reorderStoryKeys, sortStories, storyDropTargetAt, storySortKey, type StorySortMode } from "./storySort";
 
 const props = withDefaults(defineProps<{ instances: InstanceWithAiSessions[]; nodes: Node[]; nodeLocalFoldersByNodeId?: Record<string, NodeLocalFolder[]>; filterNodeId?: string }>(), { nodeLocalFoldersByNodeId: () => ({}), filterNodeId: "" });
@@ -276,6 +345,7 @@ const emit = defineEmits<{
   "run-action": [story: Story, action: StoryAction];
 }>();
 type SessionEntry = { instance: InstanceWithAiSessions; session: AiSessionSummary };
+type StoryHistoryEntry = { instance: InstanceWithAiSessions; item: AiSessionHistoryItem };
 type Resource = { kind: "story"; story: Story } | { kind: "new-session"; story: Story } | { kind: "document"; story: Story; document: Story["documents"][number] } | { kind: "session"; story: Story; entry: SessionEntry };
 type ActionParameterDraft = { name: string; label: string; required: boolean; defaultValue: string };
 const EXPANDED_STORY_KEYS_STORAGE_KEY = "task-handoff.control-plane.stories.expanded";
@@ -358,7 +428,7 @@ const storySortOptions = computed(() => ({ locale: locale.value, lastUserMessage
 const stories = computed(() => sortStories(filteredStories.value, storySortMode.value, storySortOptions.value));
 const storiesPending = computed(() => storiesQuery.isPending.value);
 const storiesFetching = computed(() => storiesQuery.isFetching.value);
-const selectedResource = ref<Resource>(); const expandedStoryKeys = ref(storedExpandedStoryKeys()); const error = ref("");
+const selectedResource = ref<Resource>(); const expandedStoryKeys = ref(storedExpandedStoryKeys()); const expandedDocumentStoryKeys = ref(new Set<string>()); const error = ref("");
 type TreeViewMode = "compact" | "detailed";
 const TREE_VIEW_MODE_STORAGE_KEY = "task-handoff.control-plane.stories.tree-view-mode";
 function storedTreeViewMode(): TreeViewMode {
@@ -583,6 +653,77 @@ const foldersForInstance = (instanceId: string) => {
 const actionDraftCwdFolders = computed(() => foldersForInstance(actionDraftTargetInstanceId.value));
 const sessionsFor = (story: Story) => props.instances.flatMap((instance) => (instance.aiSessions.sessions || []).filter((session) => session.storyId === story.id && instance.node?.id === story.ownerNodeId).map((session) => ({ instance, session })));
 const unassignedSessionsFor = (story: Story) => props.instances.flatMap((instance) => (instance.aiSessions.sessions || []).filter((session) => !session.storyId && instance.node?.id === story.ownerNodeId).map((session) => ({ instance, session })));
+const storySessionHistoryMode = ref(false);
+const storyHistoryEntries = ref<StoryHistoryEntry[]>([]);
+const storyHistoryLoading = ref(false);
+const storyHistoryError = ref("");
+const storyHistoryDetailOpen = ref(false);
+const storyHistoryDetailEntry = ref<StoryHistoryEntry>();
+let storyHistoryRequestRevision = 0;
+function storyHistoryItemTitle(item: AiSessionHistoryItem) {
+  return item.title?.trim() || item.userPrompt?.trim() || item.lastMessage?.trim() || t("sessions.panel.unnamedConversation");
+}
+function formatStoryHistoryTime(value: string) {
+  return new Date(value).toLocaleString(locale.value);
+}
+async function loadStoryHistory() {
+  const story = selectedResource.value?.story;
+  if (!story) return;
+  const instances = instancesForStory(story);
+  const revision = ++storyHistoryRequestRevision;
+  storyHistoryLoading.value = true;
+  storyHistoryError.value = "";
+  try {
+    const settled = await Promise.allSettled(instances.map((instance) => getAiSessionHistory(instance.id)));
+    const entries: StoryHistoryEntry[] = [];
+    const failedInstances: string[] = [];
+    settled.forEach((result, index) => {
+      const instance = instances[index];
+      if (!instance) return;
+      if (result.status === "fulfilled") {
+        for (const item of result.value.items) {
+          if (item.storyId === story.id) entries.push({ instance, item });
+        }
+      } else {
+        failedInstances.push(instance.name);
+      }
+    });
+    if (revision !== storyHistoryRequestRevision) return;
+    entries.sort((left, right) => Date.parse(right.item.lastActiveAt) - Date.parse(left.item.lastActiveAt));
+    storyHistoryEntries.value = entries;
+    if (!entries.length && failedInstances.length) storyHistoryError.value = t("stories.historySessionsFailed");
+  } catch (cause) {
+    if (revision !== storyHistoryRequestRevision) return;
+    storyHistoryError.value = cause instanceof Error ? cause.message : String(cause);
+  } finally {
+    if (revision === storyHistoryRequestRevision) storyHistoryLoading.value = false;
+  }
+}
+function toggleStorySessionHistory() {
+  storySessionHistoryMode.value = !storySessionHistoryMode.value;
+  if (storySessionHistoryMode.value && !storyHistoryEntries.value.length && !storyHistoryLoading.value) void loadStoryHistory();
+}
+function openStoryHistoryEntry(entry: StoryHistoryEntry) {
+  storyHistoryDetailEntry.value = entry;
+  storyHistoryDetailOpen.value = true;
+}
+function handleStoryHistorySessionSelected(instanceId: string, sessionId: string) {
+  const story = selectedResource.value?.story;
+  const instance = props.instances.find((candidate) => candidate.id === instanceId);
+  const session = instance?.aiSessions.sessions.find((candidate) => candidate.id === sessionId);
+  if (!story || !instance || !session) return;
+  storyHistoryDetailOpen.value = false;
+  selectedResource.value = { kind: "session", story, entry: { instance, session } };
+}
+const storyHistoryPanelInstance = computed(() => storyHistoryDetailEntry.value?.instance);
+const storyHistoryPanelSession = computed<SessionTab>(() => ({
+  key: "ai",
+  label: t("navigation.ai"),
+  status: "running",
+  kind: "ai",
+  aiSessions: storyHistoryPanelInstance.value?.aiSessions.sessions || [],
+}));
+const storyHistoryPanelSelectedSession = () => undefined as AiSessionSummary | undefined;
 const queryClient = useQueryClient();
 const closingSessionKey = ref("");
 function storyTargetFor(entry: SessionEntry): AiSessionStoryTarget | undefined {
@@ -677,10 +818,13 @@ const isStoryOpen = (story: Story) => expandedStoryKeys.value.has(storyKey(story
 const isStorySelected = (story: Story) => (selectedResource.value?.kind === "story" || selectedResource.value?.kind === "new-session") && isSelectedStory(story);
 const isDocumentSelected = (story: Story, path: string) => selectedResource.value?.kind === "document" && isSelectedStory(story) && selectedResource.value.document.storyPath === path;
 const isSessionSelected = (story: Story, id: string) => selectedResource.value?.kind === "session" && isSelectedStory(story) && selectedResource.value.entry.session.id === id;
+const treeDocumentsFor = (story: Story) => latestStoryDocuments(story.documents, expandedDocumentStoryKeys.value.has(storyKey(story)));
+const hasMoreTreeDocuments = (story: Story) => story.documents.length > STORY_TREE_DOCUMENT_LIMIT && !expandedDocumentStoryKeys.value.has(storyKey(story));
+function showAllTreeDocuments(story: Story) { expandedDocumentStoryKeys.value = new Set(expandedDocumentStoryKeys.value).add(storyKey(story)); }
 function setStoryExpanded(story: Story, expanded: boolean) { const next = new Set(expandedStoryKeys.value); const key = storyKey(story); if (expanded) next.add(key); else next.delete(key); expandedStoryKeys.value = next; persistExpandedStoryKeys(next); }
 function toggleStoryExpanded(story: Story) { setStoryExpanded(story, !isStoryOpen(story)); }
 function selectStory(story: Story) { setStoryExpanded(story, true); selectedResource.value = { kind: "story", story }; }
-function selectDocument(story: Story, path: string) { const document = story.documents.find((item) => item.storyPath === path); if (document) { setStoryExpanded(story, true); selectedResource.value = { kind: "document", story, document }; } }
+function selectDocument(story: Story, path: string) { const document = story.documents.find((item) => item.storyPath === path); if (document) { setStoryExpanded(story, true); if (!treeDocumentsFor(story).includes(document)) showAllTreeDocuments(story); selectedResource.value = { kind: "document", story, document }; } }
 function selectSession(story: Story, entry: SessionEntry) { setStoryExpanded(story, true); selectedResource.value = { kind: "session", story, entry }; }
 function handleSelectAiSession(instanceId: string, sessionId: string) {
   const resource = selectedResource.value;
@@ -704,6 +848,13 @@ async function load() {
   } catch (cause) { error.value = cause instanceof Error ? cause.message : String(cause); }
 }
 watch(selectedResource, async (resource) => { previewText.value = ""; previewError.value = ""; if (resource?.kind === "document") { previewLoading.value = true; try { const response = await fetch(`/api/stories/${encodeURIComponent(resource.story.id)}/content/file?nodeId=${encodeURIComponent(resource.story.ownerNodeId)}&storyPath=${encodeURIComponent(resource.document.storyPath)}`); if (!response.ok) throw new Error((await response.json()).error?.message || "Could not read document."); previewText.value = await response.text(); } catch (cause) { previewError.value = cause instanceof Error ? cause.message : String(cause); } finally { previewLoading.value = false; } } }, { immediate: true });
+watch(() => selectedResource.value?.kind === "story" ? `${selectedResource.value.story.ownerNodeId}:${selectedResource.value.story.id}` : "", () => {
+  storySessionHistoryMode.value = false;
+  storyHistoryEntries.value = [];
+  storyHistoryLoading.value = false;
+  storyHistoryError.value = "";
+  storyHistoryRequestRevision += 1;
+});
 watch(stories, (value) => {
   const resource = selectedResource.value;
   if (!resource) {
@@ -887,6 +1038,9 @@ onBeforeUnmount(() => {
 .story-tree-item small,.story-tree-empty { color:var(--text-muted); font-size:12px; }
 .story-tree-item:not(.story-tree-story):not(.story-new-button) { height:32px; padding-block:6px; }
 .story-tree-item.story-tree-item-detailed:not(.story-tree-story):not(.story-new-button) { height:auto; padding-block:8px; }
+.story-tree-more-documents { width:max-content; min-height:32px; border:0; background:transparent; color:var(--brand-accent); cursor:pointer; font-size:12px; font-weight:400; padding:6px 8px; text-align:left; }
+.story-tree-more-documents:hover { text-decoration:underline; }
+.story-tree-more-documents:focus-visible { border-radius:4px; outline:2px solid var(--focus-ring); outline-offset:-2px; }
 .story-tree-item-hint { position:absolute; top:50%; right:8px; z-index:1; max-width:64%; overflow:hidden; padding-left:18px; color:var(--text-muted); font-size:12px; white-space:nowrap; text-overflow:ellipsis; pointer-events:none; opacity:0; transform:translateY(-50%); background:linear-gradient(90deg, transparent, var(--surface-active) 18px); transition:opacity 140ms ease; }
 .story-tree-item:hover > .story-tree-item-hint { background:linear-gradient(90deg,transparent,var(--sidebar-row-hover-bg,var(--surface-active)) 18px); opacity:1; }
 .story-tree-item.active > .story-tree-item-hint { background:linear-gradient(90deg,transparent,var(--sidebar-row-selected-bg,var(--surface-active)) 18px); }
@@ -903,6 +1057,9 @@ onBeforeUnmount(() => {
 .story-content { display:flex; min-width:0; min-height:0; flex-direction:column; overflow:hidden; padding:0 20px; }
 .story-content.story-session-pane { padding:0; }
 .story-content.story-session-pane > .story-session-creator { padding:0; background:transparent; }
+.story-detail-scroll { flex:1; min-height:0; }
+.story-detail-scroll :deep([data-task-handoff-scroll-viewport] > div) { width:100%; min-width:0 !important; }
+.story-detail-scroll-inner { min-width:0; padding:0 0 32px; }
 .story-content-header { display:flex; align-items:center; justify-content:space-between; gap:12px; border-bottom:1px solid var(--line); padding:0 0 12px; flex:0 0 auto; }
 .story-content-header > div:first-child:not(.story-content-title) { display:grid; min-width:0; gap:3px; }
 .story-content-header .story-content-title { display:flex; align-items:baseline; gap:10px; min-width:0; }
@@ -923,6 +1080,22 @@ onBeforeUnmount(() => {
 .story-actions-section { margin:4px 0 0; }
 .story-actions-section h3 { margin:0; color:var(--text-strong); font-size:13px; font-weight:500; }
 .story-actions-header { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.story-resource-section { margin-top:20px; }
+.story-resource-section h3 { margin:0; color:var(--text-strong); font-size:13px; font-weight:500; }
+.story-resource-header { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.story-resource-item { display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:10px; width:100%; min-width:0; margin-top:8px; border:1px solid var(--line); border-radius:8px; background:var(--surface-raised); color:inherit; cursor:pointer; padding:10px 12px; text-align:left; }
+.story-resource-item:hover, .story-resource-item.active { background:var(--surface-active); }
+.story-resource-item.active { border-color:color-mix(in srgb,var(--brand-accent) 42%,var(--line)); }
+.story-resource-item-static, .story-resource-item-static:hover { cursor:default; background:var(--surface-raised); }
+.story-resource-state { display:flex; align-items:center; gap:8px; margin-top:8px; color:var(--text-muted); font-size:12px; }
+.story-resource-state.story-error { color:var(--status-danger); }
+.story-resource-icon { display:grid; flex:0 0 auto; width:30px; height:30px; place-items:center; border:1px solid var(--line-subtle); border-radius:7px; background:var(--surface-active); color:var(--text-muted); }
+.story-resource-session-icon { position:relative; }
+.story-resource-session-status { position:absolute; top:2px; right:2px; }
+.story-resource-copy { display:grid; gap:3px; min-width:0; }
+.story-resource-copy strong { color:var(--text-strong); font-size:13px; font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.story-resource-copy small { color:var(--text-muted); font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.story-resource-unread { width:7px; height:7px; border-radius:999px; background:var(--status-info); box-shadow:0 0 0 3px color-mix(in srgb,var(--status-info) 18%,transparent); }
 .story-action-item { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:10px; margin-top:8px; border:1px solid var(--line); border-radius:8px; background:var(--surface-raised); }
 .story-action-item:hover { background:var(--surface-active); }
 .story-action-run { display:flex; align-items:flex-start; gap:10px; min-width:0; border:0; background:transparent; color:inherit; cursor:pointer; padding:10px 0 10px 12px; text-align:left; }
@@ -950,9 +1123,17 @@ onBeforeUnmount(() => {
 .story-editor-fields { display:grid; gap:14px; }
 .story-editor-fields label { display:grid; gap:6px; color:var(--text-muted); font-size:12px; }
 :global(.story-editor-dialog) { max-width:460px; }
+.story-history-drawer-drag-region { -webkit-app-region:drag; height:var(--control-plane-titlebar-height); flex:0 0 var(--control-plane-titlebar-height); border-bottom:1px solid var(--line); }
+.story-history-drawer-close { -webkit-app-region:no-drag; position:absolute; top:calc(var(--control-plane-titlebar-height) + 10px); left:-42px; display:grid; width:32px; height:32px; place-items:center; border:1px solid var(--line); border-radius:6px; background:var(--surface-raised); box-shadow:var(--shadow-soft); color:var(--text-muted); cursor:pointer; padding:0; }
+.story-history-drawer-close:hover,.story-history-drawer-close:focus-visible { background:var(--surface-active); color:var(--text-strong); outline:none; }
+.story-history-panel { flex:1; min-height:0; overflow:hidden; }
+.story-history-panel > * { height:100%; min-height:0; }
+.story-history-panel > .story-history-ai-session-panel { --session-ai-scrollbar-outset:0px; }
+:global(.story-history-drawer) { -webkit-app-region:no-drag; display:flex; width:min(760px,100vw) !important; max-width:min(760px,100vw) !important; flex-direction:column; gap:0 !important; overflow:visible; background:var(--workspace-bg); padding:0 !important; }
 .story-dialog-header { flex-direction:row; align-items:flex-start; justify-content:space-between; gap:16px; text-align:left; }
 .story-dialog-close { display:grid; flex:0 0 auto; width:30px; height:30px; place-items:center; border:0; border-radius:6px; background:transparent; color:var(--text-muted); cursor:pointer; padding:0; }
 .story-dialog-close:hover, .story-dialog-close:focus-visible { background:var(--surface-active); color:var(--text-strong); outline:none; }
 @media (max-width:800px) { .story-view { padding:16px 0; } .story-workspace { grid-template-columns:minmax(220px,38%) minmax(0,1fr); } .story-sidebar-resize-handle { display:none; } .story-content-header { padding:0 0 14px; } }
+@media (max-width:820px) { .story-history-drawer-close { top:12px; left:max(10px,calc(10px + var(--native-titlebar-controls-left-width))); } }
 @media (max-width:560px) { .story-view { padding:10px 0; } .story-workspace { grid-template-columns:1fr; } .story-sidebar { max-height:38%; border-right:0; border-bottom:1px solid var(--line); } .story-overview-grid { margin:14px 0; } .story-actions-section { margin:0; } }
 </style>

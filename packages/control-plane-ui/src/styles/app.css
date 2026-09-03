@@ -4,6 +4,18 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  --control-plane-titlebar-height: 56px;
+  --native-titlebar-controls-left-width: max(
+    0px,
+    calc(env(titlebar-area-x, 16px) - 16px)
+  );
+  --native-titlebar-controls-right-width: max(
+    0px,
+    calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw))
+  );
+}
+
 :root:not(.dark):not([data-theme="dark"]),
 :root[data-theme="light"] {
   --background: 240 20% 98%;
