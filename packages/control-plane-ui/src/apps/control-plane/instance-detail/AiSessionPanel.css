@@ -24,6 +24,10 @@
   grid-template-columns: minmax(0, 1fr);
 }
 
+.session-ai-workspace.detail-only .session-ai-history-detail {
+  --session-ai-detail-left-inset: 0px;
+}
+
 .session-ai-sidebar-shell {
   display: contents;
 }

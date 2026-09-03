@@ -421,7 +421,7 @@
             <Button v-if="selectedHistoryItem" variant="ghost" size="sm" @click="selectHistoryItem(selectedHistoryItem)">{{ t("sessions.panel.retry") }}</Button>
           </div>
           <section v-else-if="historyDetail" class="session-ai-detail-content">
-            <div class="session-ai-detail-fixed-actions session-ai-detail-head-actions">
+            <div v-if="!detailOnly" class="session-ai-detail-fixed-actions session-ai-detail-head-actions">
               <button
                 type="button"
                 class="session-ai-history-continue"
@@ -1212,6 +1212,9 @@ const props = defineProps<{
   creationStoryId?: string;
   creationInstances?: InstanceWithAiSessions[];
   detailOnly?: boolean;
+  historyStoryId?: string;
+  initialHistoryId?: string;
+  initialHistoryMode?: boolean;
   instance: InstanceWithAiSessions;
   launchableApps?: LaunchableApp[];
   launchingApp?: boolean;
@@ -1658,7 +1661,7 @@ const newSessionSelectedBranchLabel = computed(() => {
 });
 const queryClient = useQueryClient();
 const sidebarEl = ref<HTMLElement>();
-const historyMode = ref(false);
+const historyMode = ref(Boolean(props.initialHistoryMode));
 const historyItems = ref<AiSessionHistoryItem[]>([]);
 const historyLoading = ref(false);
 const historyError = ref("");
@@ -2198,7 +2201,8 @@ async function loadHistory() {
   historyLoading.value = true;
   historyError.value = "";
   try {
-    historyItems.value = (await getAiSessionHistory(props.instance.id)).items;
+    const items = (await getAiSessionHistory(props.instance.id)).items;
+    historyItems.value = props.historyStoryId ? items.filter((item) => item.storyId === props.historyStoryId) : items;
     if (selectedHistoryId.value && !historyItems.value.some((item) => item.id === selectedHistoryId.value)) {
       selectedHistoryId.value = "";
       historyDetail.value = undefined;
@@ -2209,6 +2213,14 @@ async function loadHistory() {
   } finally {
     historyLoading.value = false;
   }
+}
+
+async function enterInitialHistoryMode() {
+  await enterHistoryMode();
+  const initialId = props.initialHistoryId;
+  if (!initialId) return;
+  const item = historyItems.value.find((candidate) => candidate.id === initialId);
+  if (item) await selectHistoryItem(item);
 }
 
 async function selectHistoryItem(item: AiSessionHistoryItem) {
@@ -3239,6 +3251,7 @@ onMounted(() => {
     observeComposerOffset();
     observeDetailActionsWidth();
     if (!detailScrollViewport) observeDetailScroll();
+    if (props.initialHistoryMode) void enterInitialHistoryMode();
   });
 });
 

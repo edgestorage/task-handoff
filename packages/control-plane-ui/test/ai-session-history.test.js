@@ -30,6 +30,7 @@ test("AI session history is an on-demand sidebar mode entered from the current-l
 });
 
 test("history mode preserves the current-list scroll position and renders all request states", () => {
+  assert.match(panel, /const historyMode = ref\(Boolean\(props\.initialHistoryMode\)\);/);
   assert.match(panel, /currentListScrollTop = sidebarViewport\(\)\?\.scrollTop \|\| 0;/);
   assert.match(panel, /if \(viewport\) viewport\.scrollTop = currentListScrollTop;/);
   assert.match(panel, /historyLoading[\s\S]*historyError[\s\S]*t\("sessions\.panel\.noHistory"\)[\s\S]*v-for="group in displayedHistoryGroups"/);
