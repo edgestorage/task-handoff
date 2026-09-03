@@ -9,14 +9,25 @@ type IdleCandidate = { sessionId: string; storyId: string; status: "idle"; compl
 export class StoryIdleSessionRetentionCoordinator {
   private readonly closed = new Set<string>();
   private readonly pending = new Set<string>();
+  private readonly state: NodeAgentState;
+  private readonly stories: NodeStoryStore;
+  private readonly fetchImpl: typeof fetch;
+  private readonly resolveInstanceWeb: (instance: ControlledInstance) => Promise<string>;
+  private readonly warn: (data: Record<string, unknown>, message: string) => void;
 
   constructor(
-    private readonly state: NodeAgentState,
-    private readonly stories: NodeStoryStore,
-    private readonly fetchImpl: typeof fetch,
-    private readonly resolveInstanceWeb: (instance: ControlledInstance) => Promise<string>,
-    private readonly warn: (data: Record<string, unknown>, message: string) => void,
-  ) {}
+    state: NodeAgentState,
+    stories: NodeStoryStore,
+    fetchImpl: typeof fetch,
+    resolveInstanceWeb: (instance: ControlledInstance) => Promise<string>,
+    warn: (data: Record<string, unknown>, message: string) => void,
+  ) {
+    this.state = state;
+    this.stories = stories;
+    this.fetchImpl = fetchImpl;
+    this.resolveInstanceWeb = resolveInstanceWeb;
+    this.warn = warn;
+  }
 
   async reconcile() {
     const candidatesByStory = new Map<string, Array<IdleCandidate & { instance: ControlledInstance }>>();
