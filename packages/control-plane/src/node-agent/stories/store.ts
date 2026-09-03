@@ -5,6 +5,7 @@ import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { z } from "zod";
 import {
+  STORY_DEFAULT_MAX_IDLE_AI_SESSIONS,
   STORY_DEFAULT_MAX_FILE_BYTES,
   StoryActionSchema,
   StoryCreateInputSchema,
@@ -12,6 +13,8 @@ import {
   StoryDocumentOrderInputSchema,
   StorySchema,
   StoryUpdateInputSchema,
+  StorySessionRetentionSettingsSchema,
+  type StorySessionRetentionSettings,
   type Story,
   type StoryCreateInput,
   type StoryUpdateInput,
@@ -33,6 +36,7 @@ const StoredStorySchema = z.object({
   createdAt: StorySchema.shape.createdAt,
   updatedAt: StorySchema.shape.updatedAt,
   archivedAt: StorySchema.shape.archivedAt,
+  maxIdleAiSessions: StorySessionRetentionSettingsSchema.shape.maxIdleAiSessions.default(STORY_DEFAULT_MAX_IDLE_AI_SESSIONS),
 }).strict();
 
 type StoredStory = z.infer<typeof StoredStorySchema>;
@@ -121,11 +125,16 @@ export class NodeStoryStore {
       documents: [],
       createdAt: timestamp,
       updatedAt: timestamp,
+      maxIdleAiSessions: parsed.maxIdleAiSessions ?? STORY_DEFAULT_MAX_IDLE_AI_SESSIONS,
     });
     fs.mkdirSync(this.storyRoot(id), { recursive: true, mode: 0o700 });
     const projected = this.project(this.records.put(story));
     this.onChange?.("created", projected);
     return projected;
+  }
+
+  retentionSettings(id: string): StorySessionRetentionSettings {
+    return StorySessionRetentionSettingsSchema.parse({ maxIdleAiSessions: this.require(id).maxIdleAiSessions });
   }
 
   update(id: string, input: StoryUpdateInput) {
@@ -139,6 +148,7 @@ export class NodeStoryStore {
         ...action,
         id: action.id || createId("story_action"),
       })) } : {}),
+      ...(parsed.maxIdleAiSessions !== undefined ? { maxIdleAiSessions: parsed.maxIdleAiSessions } : {}),
       updatedAt: new Date().toISOString(),
     }));
     const projected = this.project(updated);
@@ -314,7 +324,8 @@ export class NodeStoryStore {
     if (valid.length !== story.documents.length) {
       story = this.records.put({ ...story, documents: valid.map(({ revision: _revision, ...document }) => document), updatedAt: new Date().toISOString() });
     }
-    return StorySchema.parse({ ...story, ownerNodeId: this.ownerNodeId, documents: valid });
+    const { maxIdleAiSessions: _maxIdleAiSessions, ...publicStory } = story;
+    return StorySchema.parse({ ...publicStory, ownerNodeId: this.ownerNodeId, documents: valid });
   }
 
   private storyRoot(id: string) {

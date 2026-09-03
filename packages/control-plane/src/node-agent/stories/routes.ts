@@ -16,6 +16,7 @@ import { NodeStoryStore } from "./store.ts";
 type NodeStoryRouteOptions = {
   fetchImpl?: typeof fetch;
   resolveInstanceWeb?: (instance: ReturnType<NodeAgentState["requireInstance"]>) => Promise<string>;
+  onRetentionSettingsChanged?: () => void | Promise<void>;
 };
 
 const StoryParamsSchema = z.object({ storyId: StoryIdSchema }).strict();
@@ -59,9 +60,11 @@ export function registerNodeStoryRoutes(app: FastifyInstance, state: NodeAgentSt
 
   app.get("/api/node-agent/stories", async () => ({ data: { stories: store.list() } }));
 
-  app.post("/api/node-agent/stories", async (request, reply) => (
-    reply.code(201).send({ data: store.create(StoryCreateInputSchema.parse(request.body)) })
-  ));
+  app.post("/api/node-agent/stories", async (request, reply) => {
+    const story = store.create(StoryCreateInputSchema.parse(request.body));
+    void options.onRetentionSettingsChanged?.();
+    return reply.code(201).send({ data: story });
+  });
 
   app.get("/api/node-agent/stories/:storyId", async (request) => {
     const { storyId } = StoryParamsSchema.parse(request.params);
@@ -70,7 +73,15 @@ export function registerNodeStoryRoutes(app: FastifyInstance, state: NodeAgentSt
 
   app.patch("/api/node-agent/stories/:storyId", async (request) => {
     const { storyId } = StoryParamsSchema.parse(request.params);
-    return { data: store.update(storyId, StoryUpdateInputSchema.parse(request.body)) };
+    const input = StoryUpdateInputSchema.parse(request.body);
+    const story = store.update(storyId, input);
+    if (input.maxIdleAiSessions !== undefined) void options.onRetentionSettingsChanged?.();
+    return { data: story };
+  });
+
+  app.get("/api/node-agent/stories/:storyId/settings", async (request) => {
+    const { storyId } = StoryParamsSchema.parse(request.params);
+    return { data: store.retentionSettings(storyId) };
   });
 
   app.post("/api/node-agent/stories/:storyId/archive", async (request) => ({

@@ -676,15 +676,15 @@
   transition: left 0.18s ease;
 }
 
-.workbench-view-switcher[data-active-view="board"]::before {
+.workbench-view-switcher[data-active-view="story"]::before {
   left: calc(2px + (100% - 4px) / 4);
 }
 
-.workbench-view-switcher[data-active-view="ai"]::before {
+.workbench-view-switcher[data-active-view="board"]::before {
   left: calc(2px + (100% - 4px) / 2);
 }
 
-.workbench-view-switcher[data-active-view="story"]::before {
+.workbench-view-switcher[data-active-view="ai"]::before {
   left: calc(2px + (100% - 4px) / 4 + (100% - 4px) / 2);
 }
 

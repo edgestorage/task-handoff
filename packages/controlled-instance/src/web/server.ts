@@ -1435,6 +1435,28 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     },
   }));
 
+  // Node Agent retention coordinator consumes this private projection so the
+  // public session summary does not need a compatibility-breaking field.
+  app.get("/api/internal/node-agent/ai-sessions/idle-retention", nodeAgentProcessRoute, async () => ({
+    data: aiSessions.all().map((session) => ({
+      sessionId: session.id,
+      storyId: session.storyId,
+      status: session.status,
+      completedAt: session.completedAt,
+    })).filter((session) => session.storyId && session.status === "idle"),
+  }));
+
+  app.post<{ Params: { id: string }; Body: unknown }>("/api/internal/node-agent/ai-sessions/:id/close", nodeAgentProcessRoute, async (request, reply) => {
+    try {
+      AiSessionCloseInputSchema.parse(request.body || {});
+      const result = AiSessionCloseResultSchema.parse(await aiSessionClose.close(request.params.id));
+      publishAiSessionSnapshot("control-action");
+      return { data: result };
+    } catch (error: unknown) {
+      return sendAiSessionControlError(reply, error);
+    }
+  });
+
   app.post("/api/internal/node-agent/drain", nodeAgentProcessRoute, async () => {
     appRuntime.beginDrain();
     triggerExecutor.beginDrain();

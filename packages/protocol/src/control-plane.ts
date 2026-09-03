@@ -1626,6 +1626,7 @@ export const NodeAgentManagedModelCapabilitiesSchema = z.object({
 export const NodeAgentStoryCapabilitiesSchema = z.object({
   enabled: z.boolean().default(false),
   agentTools: z.boolean().default(false),
+  sessionRetention: z.boolean().default(false),
   maxFileBytes: z.number().int().positive().default(32 * 1024 * 1024),
   maxBatchPaths: z.number().int().min(1).max(100).default(20),
 }).strip();

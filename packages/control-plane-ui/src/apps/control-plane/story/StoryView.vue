@@ -3,18 +3,28 @@
     <div v-if="error" class="story-error" role="alert">{{ error }}</div>
 
     <div ref="workspaceEl" class="story-workspace" :data-resizing="resizingSidebar ? 'true' : undefined" :style="{ '--story-sidebar-width': `${sidebarWidth}px` }">
-      <aside class="story-sidebar" :aria-busy="storiesFetching ? 'true' : undefined" :aria-label="t('stories.region')">
+      <aside ref="storySidebarEl" class="story-sidebar" :aria-busy="storiesFetching ? 'true' : undefined" :aria-label="t('stories.region')">
         <div class="story-sidebar-actions">
-          <button type="button" class="story-tree-item story-new-button" @click="openCreate"><Plus :size="15" /><span><strong>{{ t("stories.newStory") }}</strong></span></button>
+          <button type="button" class="story-tree-item story-new-button" @click="openCreate"><Plus :size="15" /><span class="story-tree-item-copy"><strong>{{ t("stories.newStory") }}</strong></span></button>
           <div class="story-sidebar-section">
             <span class="story-sidebar-section-label">{{ t("stories.section") }}</span>
             <DropdownMenu>
               <DropdownMenuTrigger as-child>
-                <Button variant="ghost" size="icon-sm" class="story-view-mode-button" :aria-label="t('stories.viewMode')" :title="t('stories.viewMode')"><LayoutList :size="15" /></Button>
+                <Button variant="ghost" size="icon-sm" class="story-view-mode-button" :aria-label="t('stories.listOptions')" :title="t('stories.listOptions')"><MoreHorizontal :size="16" /></Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem :aria-current="treeViewMode === 'compact'" @select="setTreeViewMode('compact')"><Check v-if="treeViewMode === 'compact'" :size="13" /><LayoutList :size="13" />{{ t("stories.compactMode") }}</DropdownMenuItem>
-                <DropdownMenuItem :aria-current="treeViewMode === 'detailed'" @select="setTreeViewMode('detailed')"><Check v-if="treeViewMode === 'detailed'" :size="13" /><Rows3 :size="13" />{{ t("stories.detailedMode") }}</DropdownMenuItem>
+              <DropdownMenuContent class="story-list-options-menu" align="end" :side-offset="6">
+                <DropdownMenuLabel class="story-list-options-label">{{ t("stories.viewMode") }}</DropdownMenuLabel>
+                <DropdownMenuRadioGroup :model-value="treeViewMode" @update:model-value="setTreeViewMode($event as TreeViewMode)">
+                  <DropdownMenuRadioItem class="story-list-options-item option-item" value="compact">{{ t("stories.compactMode") }}</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem class="story-list-options-item option-item" value="detailed">{{ t("stories.detailedMode") }}</DropdownMenuRadioItem>
+                </DropdownMenuRadioGroup>
+                <DropdownMenuSeparator class="story-list-options-separator" />
+                <DropdownMenuLabel class="story-list-options-label">{{ t("stories.sort.title") }}</DropdownMenuLabel>
+                <DropdownMenuRadioGroup :model-value="storySortMode" @update:model-value="setStorySortMode($event as StorySortMode)">
+                  <DropdownMenuRadioItem class="story-list-options-item option-item" value="name">{{ t("stories.sort.name") }}</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem class="story-list-options-item option-item" value="last-user-message">{{ t("stories.sort.lastAiSession") }}</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem class="story-list-options-item option-item" value="manual">{{ t("stories.sort.manual") }}</DropdownMenuRadioItem>
+                </DropdownMenuRadioGroup>
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
@@ -22,16 +32,25 @@
         <ScrollArea type="hover" :horizontal="false" class="story-sidebar-scroll">
           <div class="story-sidebar-scroll-inner">
             <div v-if="!stories.length && !storiesPending" class="story-empty">{{ t("stories.empty") }}</div>
-            <div v-for="story in stories" :key="`${story.ownerNodeId}:${story.id}`" class="story-tree">
+            <div
+              v-for="story in stories"
+              :key="storySortKey(story)"
+              class="story-tree"
+              :class="{ 'story-tree-manual': storySortMode === 'manual', 'story-tree-dragging': draggingStoryKey === storySortKey(story) }"
+              :data-story-key="storySortKey(story)"
+              :data-drop-position="dropTargetKey === storySortKey(story) ? dropPosition : undefined"
+              @click.capture="suppressStoryClickAfterDrag"
+              @pointerdown="startStoryPointer($event, story)"
+            >
               <div class="story-tree-story-row">
                 <button type="button" class="story-tree-disclosure-button" :aria-label="t(isStoryOpen(story) ? 'stories.collapse' : 'stories.expand')" :aria-expanded="isStoryOpen(story)" @click.stop="toggleStoryExpanded(story)">
                   <ChevronRight :size="15" class="story-tree-disclosure" :class="{ expanded: isStoryOpen(story) }" />
                 </button>
                 <ContextMenu>
                   <ContextMenuTrigger as-child>
-                    <button type="button" class="story-tree-item story-tree-story" :class="{ active: isStorySelected(story) }" @click="selectStory(story)">
+                    <button type="button" class="story-tree-item story-tree-story" :class="{ active: isStorySelected(story) }" :aria-keyshortcuts="storySortMode === 'manual' ? 'Alt+ArrowUp Alt+ArrowDown' : undefined" @click="selectStory(story)" @keydown="handleStorySortKeydown($event, story)">
                       <BookOpen :size="15" />
-                      <span><strong>{{ story.title }}</strong></span>
+                      <span class="story-tree-item-copy"><strong>{{ story.title }}</strong></span>
                     </button>
                   </ContextMenuTrigger>
                   <StoryTreeContextMenu
@@ -51,7 +70,7 @@
                 <ContextMenu v-for="document in story.documents" :key="document.storyPath">
                   <ContextMenuTrigger as-child>
                     <button type="button" class="story-tree-item" :class="{ active: isDocumentSelected(story, document.storyPath), 'story-tree-item-detailed': treeViewMode === 'detailed' }" @click="selectDocument(story, document.storyPath)">
-                      <FileText :size="14" /><span :class="{ 'story-tree-item-detail': treeViewMode === 'detailed' }"><strong>{{ document.title }}</strong><small v-if="treeViewMode === 'detailed'">{{ document.storyPath }}</small></span><small v-if="treeViewMode === 'compact'" class="story-tree-item-hint" aria-hidden="true">{{ document.storyPath }}</small>
+                      <FileText :size="14" /><span class="story-tree-item-copy" :class="{ 'story-tree-item-detail': treeViewMode === 'detailed' }"><strong>{{ document.title }}</strong><small v-if="treeViewMode === 'detailed'">{{ document.storyPath }}</small></span><small v-if="treeViewMode === 'compact'" class="story-tree-item-hint" aria-hidden="true">{{ document.storyPath }}</small>
                     </button>
                   </ContextMenuTrigger>
                   <DocumentTreeContextMenu :disabled="Boolean(story.archivedAt)" @open="selectDocument(story, document.storyPath)" @download="downloadDocument(story, document.storyPath)" @rename="renameDocument(story, document.storyPath, document.title)" @delete="deleteDocument(story, document.storyPath)" />
@@ -59,7 +78,7 @@
                 <ContextMenu v-for="entry in sessionsFor(story)" :key="entry.session.id">
                   <ContextMenuTrigger as-child>
                     <button type="button" class="story-tree-item" :class="{ active: isSessionSelected(story, entry.session.id), 'story-tree-item-detailed': treeViewMode === 'detailed', 'story-tree-item-unread': entry.session.unread }" :data-state="entry.session.status" :data-unread="entry.session.unread ? 'true' : undefined" @click="selectSession(story, entry)">
-                      <span v-if="entry.session.status === 'running'" class="story-session-status"><AiSessionStatusIndicator :status="entry.session.status" /></span><span v-else class="story-session-icon"><MessageSquare :size="14" /><AiSessionStatusIndicator class="story-session-icon-status" :status="entry.session.status" size="compact" /></span><span :class="{ 'story-tree-item-detail': treeViewMode === 'detailed' }"><strong>{{ entry.session.title || entry.session.userPrompt || entry.session.id }}</strong><small v-if="treeViewMode === 'detailed'">{{ entry.instance.name }} · {{ sessionStatusLabel(entry.session.status, t) }}</small></span><small v-if="treeViewMode === 'compact'" class="story-tree-item-hint" aria-hidden="true">{{ entry.instance.name }}</small><span v-if="entry.session.unread" class="story-session-unread" :aria-label="t('sessions.actions.unread')" :title="t('sessions.actions.unread')" />
+                      <span v-if="entry.session.status === 'running'" class="story-session-status"><AiSessionStatusIndicator :status="entry.session.status" /></span><span v-else class="story-session-icon"><MessageSquare :size="14" /><AiSessionStatusIndicator class="story-session-icon-status" :status="entry.session.status" size="compact" /></span><span class="story-tree-item-copy" :class="{ 'story-tree-item-detail': treeViewMode === 'detailed' }"><strong>{{ entry.session.title || entry.session.userPrompt || entry.session.id }}</strong><small v-if="treeViewMode === 'detailed'">{{ entry.instance.name }} · {{ sessionStatusLabel(entry.session.status, t) }}</small></span><small v-if="treeViewMode === 'compact'" class="story-tree-item-hint" aria-hidden="true">{{ entry.instance.name }}</small><span v-if="entry.session.unread" class="story-session-unread" :aria-label="t('sessions.actions.unread')" :title="t('sessions.actions.unread')" />
                     </button>
                   </ContextMenuTrigger>
                   <AiSessionCardContextMenu
@@ -91,6 +110,7 @@
             </div>
           </div>
         </ScrollArea>
+        <span class="sr-only" aria-live="polite">{{ storyReorderAnnouncement }}</span>
       </aside>
       <button type="button" class="story-sidebar-resize-handle" :aria-label="t('stories.resizeList')" :title="t('stories.resizeList')" @pointerdown.stop.prevent="startSidebarResize" @click.stop @dragstart.prevent />
 
@@ -164,13 +184,20 @@
     </div>
   </section>
 
+  <Teleport to="body">
+    <div v-if="storyPointerDrag" class="story-pointer-overlay" :style="storyPointerOverlayStyle" aria-hidden="true">
+      <BookOpen :size="15" />
+      <span>{{ storyPointerDrag.title }}</span>
+    </div>
+  </Teleport>
+
   <Dialog v-model:open="editorOpen">
-    <DialogContent class="story-editor-dialog"><DialogHeader><DialogTitle>{{ t(editing ? "stories.editor.editTitle" : "stories.editor.newTitle") }}</DialogTitle><DialogDescription>{{ t("stories.editor.description") }}</DialogDescription></DialogHeader><div class="story-editor-fields"><label>{{ t("stories.editor.title") }}<Input v-model="draftTitle" :placeholder="t('stories.editor.titlePlaceholder')" /></label><label>{{ t("stories.editor.descriptionLabel") }}<Textarea v-model="draftDescription" :placeholder="t('stories.editor.descriptionPlaceholder')" /></label><label>{{ t("stories.editor.ownerNode") }}<ControlPlaneSelect v-model="draftNodeId" :disabled="editing"><ControlPlaneSelectItem v-for="node in nodes.filter((candidate) => candidate.status === 'online')" :key="node.id" :value="node.id">{{ node.name }}</ControlPlaneSelectItem></ControlPlaneSelect></label></div><DialogFooter><Button variant="outline" @click="editorOpen = false">{{ t("common.actions.cancel") }}</Button><Button :disabled="!draftTitle.trim() || !draftNodeId || saving" @click="saveStory">{{ saving ? t("stories.editor.saving") : t("common.actions.save") }}</Button></DialogFooter></DialogContent>
+    <DialogContent class="story-editor-dialog"><DialogHeader class="story-dialog-header"><div><DialogTitle>{{ t(editing ? "stories.editor.editTitle" : "stories.editor.newTitle") }}</DialogTitle><DialogDescription>{{ t("stories.editor.description") }}</DialogDescription></div><DialogClose as-child><button type="button" class="story-dialog-close" :aria-label="t('stories.close')"><X :size="16" /></button></DialogClose></DialogHeader><div class="story-editor-fields"><label>{{ t("stories.editor.title") }}<Input v-model="draftTitle" :placeholder="t('stories.editor.titlePlaceholder')" /></label><label>{{ t("stories.editor.descriptionLabel") }}<Textarea v-model="draftDescription" :placeholder="t('stories.editor.descriptionPlaceholder')" /></label><label>{{ t("stories.editor.ownerNode") }}<ControlPlaneSelect v-model="draftNodeId" :disabled="editing"><ControlPlaneSelectItem v-for="node in nodes.filter((candidate) => candidate.status === 'online')" :key="node.id" :value="node.id">{{ node.name }}</ControlPlaneSelectItem></ControlPlaneSelect></label><label>{{ t("stories.editor.maxIdleAiSessions") }}<Input v-model.number="draftMaxIdleAiSessions" type="number" :min="STORY_MIN_IDLE_AI_SESSIONS" :max="STORY_MAX_IDLE_AI_SESSIONS" /></label></div><DialogFooter><Button variant="outline" @click="editorOpen = false">{{ t("common.actions.cancel") }}</Button><Button :disabled="!draftTitle.trim() || !draftNodeId || saving" @click="saveStory">{{ saving ? t("stories.editor.saving") : t("common.actions.save") }}</Button></DialogFooter></DialogContent>
   </Dialog>
-  <Dialog v-model:open="assignSessionOpen"><DialogContent class="story-editor-dialog"><DialogHeader><DialogTitle>{{ t("stories.assign.title") }}</DialogTitle><DialogDescription>{{ t("stories.assign.description") }}</DialogDescription></DialogHeader><div class="story-editor-fields"><label>{{ t("stories.assign.session") }}<ControlPlaneSelect v-model="assignSessionId"><ControlPlaneSelectItem v-for="entry in availableSessions" :key="`${entry.instance.id}:${entry.session.id}`" :value="`${entry.instance.id}:${entry.session.id}`">{{ entry.session.title || entry.session.userPrompt || entry.session.id }} · {{ entry.instance.name }}</ControlPlaneSelectItem></ControlPlaneSelect></label></div><DialogFooter><Button variant="outline" @click="assignSessionOpen = false">{{ t("common.actions.cancel") }}</Button><Button :disabled="!assignSessionId || assigningSession" @click="assignExistingSession">{{ assigningSession ? t("stories.assign.adding") : t("stories.assign.submit") }}</Button></DialogFooter></DialogContent></Dialog>
+  <Dialog v-model:open="assignSessionOpen"><DialogContent class="story-editor-dialog"><DialogHeader class="story-dialog-header"><div><DialogTitle>{{ t("stories.assign.title") }}</DialogTitle><DialogDescription>{{ t("stories.assign.description") }}</DialogDescription></div><DialogClose as-child><button type="button" class="story-dialog-close" :aria-label="t('stories.close')"><X :size="16" /></button></DialogClose></DialogHeader><div class="story-editor-fields"><label>{{ t("stories.assign.session") }}<ControlPlaneSelect v-model="assignSessionId"><ControlPlaneSelectItem v-for="entry in availableSessions" :key="`${entry.instance.id}:${entry.session.id}`" :value="`${entry.instance.id}:${entry.session.id}`">{{ entry.session.title || entry.session.userPrompt || entry.session.id }} · {{ entry.instance.name }}</ControlPlaneSelectItem></ControlPlaneSelect></label></div><DialogFooter><Button variant="outline" @click="assignSessionOpen = false">{{ t("common.actions.cancel") }}</Button><Button :disabled="!assignSessionId || assigningSession" @click="assignExistingSession">{{ assigningSession ? t("stories.assign.adding") : t("stories.assign.submit") }}</Button></DialogFooter></DialogContent></Dialog>
   <Dialog v-model:open="actionEditorOpen">
     <DialogContent class="story-editor-dialog story-action-editor-dialog">
-      <DialogHeader><DialogTitle>{{ t(editingActionId ? "stories.actionEditor.editTitle" : "stories.actionEditor.newTitle") }}</DialogTitle><DialogDescription>{{ t("stories.actionEditor.description") }}</DialogDescription></DialogHeader>
+      <DialogHeader class="story-dialog-header"><div><DialogTitle>{{ t(editingActionId ? "stories.actionEditor.editTitle" : "stories.actionEditor.newTitle") }}</DialogTitle><DialogDescription>{{ t("stories.actionEditor.description") }}</DialogDescription></div><DialogClose as-child><button type="button" class="story-dialog-close" :aria-label="t('stories.close')"><X :size="16" /></button></DialogClose></DialogHeader>
       <ScrollArea class="story-action-editor-scroll" :horizontal="false">
         <div class="story-editor-fields story-action-editor-fields">
         <label>{{ t("stories.actionEditor.title") }}<Input v-model="actionDraftTitle" :placeholder="t('stories.actionEditor.titlePlaceholder')" /></label>
@@ -212,12 +239,12 @@
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useQueryClient } from "@tanstack/vue-query";
-import { BookOpen, Check, ChevronRight, Download, FileText, LayoutList, LoaderCircle, MessageSquare, MessageSquarePlus, MoreHorizontal, Pencil, Play, Plus, Rows3, X } from "@lucide/vue";
+import { BookOpen, ChevronRight, Download, FileText, LoaderCircle, MessageSquare, MessageSquarePlus, MoreHorizontal, Pencil, Play, Plus, X } from "@lucide/vue";
 import AiSessionStatusIndicator from "../../../components/ai-session/AiSessionStatusIndicator.vue";
 import AiSessionStreamingMarkdown from "../../../components/ai-session/AiSessionStreamingMarkdown.vue";
 import { Button } from "../../../components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
 import Input from "../../../components/ui/input/Input.vue";
 import Textarea from "../../../components/ui/textarea/Textarea.vue";
 import { Checkbox } from "../../../components/ui/checkbox";
@@ -226,20 +253,22 @@ import ControlPlaneSelect from "../shared/ControlPlaneSelect.vue";
 import ControlPlaneSelectItem from "../shared/ControlPlaneSelectItem.vue";
 import { ContextMenu, ContextMenuTrigger } from "../../../components/ui/context-menu";
 import AiSessionCardContextMenu from "../../../components/ai-session/AiSessionCardContextMenu.vue";
+import { aiSessionStoryTarget, type AiSessionStoryTarget } from "../../../components/ai-session/storyTarget";
 import StoryTreeContextMenu from "./StoryTreeContextMenu.vue";
 import DocumentTreeContextMenu from "./DocumentTreeContextMenu.vue";
-import { closeAiSession, useStoriesQuery } from "../../../api/queries";
+import { closeAiSession, getStoryRetentionSettings, useStoriesQuery } from "../../../api/queries";
 import { controlPlaneQueryKeys } from "../../../api/queryKeys.ts";
 import { showControlPlaneToast, showDelayedControlPlaneLoadingToast } from "../useControlPlaneToasts";
 import { translateApiError } from "../../../i18n/apiError";
 import { createBrowserUuid } from "../../../lib/random-id";
 import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions, Node, NodeLocalFolder } from "../../../api/types";
-import type { Story, StoryAction, StorySessionPreset } from "@task-handoff/protocol/stories";
+import { STORY_DEFAULT_MAX_IDLE_AI_SESSIONS, STORY_MAX_IDLE_AI_SESSIONS, STORY_MIN_IDLE_AI_SESSIONS, type Story, type StoryAction, type StorySessionPreset } from "@task-handoff/protocol/stories";
 import AiSessionPanel from "../instance-detail/AiSessionPanel.vue";
-import { launchableAppsForInstance, sessionStatusLabel, type RepositoryWorkspaceTabTarget, type SessionTab } from "../useInstanceSessions";
+import { aiSessionLastUserMessageTime, launchableAppsForInstance, sessionStatusLabel, type RepositoryWorkspaceTabTarget, type SessionTab } from "../useInstanceSessions";
+import { normalizeManualStoryOrder, reorderStoryKeys, sortStories, storyDropTargetAt, storySortKey, type StorySortMode } from "./storySort";
 
 const props = withDefaults(defineProps<{ instances: InstanceWithAiSessions[]; nodes: Node[]; nodeLocalFoldersByNodeId?: Record<string, NodeLocalFolder[]>; filterNodeId?: string }>(), { nodeLocalFoldersByNodeId: () => ({}), filterNodeId: "" });
-const { t } = useI18n();
+const { locale, t } = useI18n();
 const emit = defineEmits<{
   "launch-app": [instance: InstanceBoardItem, appId: string, cwdFolderId?: string, options?: Record<string, unknown>];
   "open-session": [instance: InstanceWithAiSessions, session: AiSessionSummary | undefined];
@@ -252,12 +281,81 @@ type ActionParameterDraft = { name: string; label: string; required: boolean; de
 const EXPANDED_STORY_KEYS_STORAGE_KEY = "task-handoff.control-plane.stories.expanded";
 function storedExpandedStoryKeys() { try { const value = JSON.parse(window.localStorage?.getItem(EXPANDED_STORY_KEYS_STORAGE_KEY) || "[]"); return new Set<string>(Array.isArray(value) ? value.filter((key): key is string => typeof key === "string") : []); } catch { return new Set<string>(); } }
 function persistExpandedStoryKeys(keys: Set<string>) { try { window.localStorage?.setItem(EXPANDED_STORY_KEYS_STORAGE_KEY, JSON.stringify([...keys])); } catch { /* Local storage may be unavailable in restricted browser contexts. */ } }
+const STORY_SORT_MODE_STORAGE_KEY = "task-handoff.control-plane.stories.sort-mode";
+const STORY_MANUAL_ORDER_STORAGE_KEY = "task-handoff.control-plane.stories.manual-order";
+function storedStorySortMode(): StorySortMode {
+  try {
+    const value = window.localStorage?.getItem(STORY_SORT_MODE_STORAGE_KEY);
+    return value === "last-user-message" || value === "manual" ? value : "name";
+  } catch { return "name"; }
+}
+function storedManualStoryOrder() {
+  try {
+    const value = JSON.parse(window.localStorage?.getItem(STORY_MANUAL_ORDER_STORAGE_KEY) || "[]");
+    return Array.isArray(value) ? value.filter((key): key is string => typeof key === "string") : [];
+  } catch { return []; }
+}
+function persistManualStoryOrder() {
+  try { window.localStorage?.setItem(STORY_MANUAL_ORDER_STORAGE_KEY, JSON.stringify(manualStoryKeys.value)); } catch { /* Local storage may be unavailable in restricted browser contexts. */ }
+}
+const storySortMode = ref<StorySortMode>(storedStorySortMode());
+const manualStoryKeys = ref(storedManualStoryOrder());
+const draggingStoryKey = ref("");
+const dropTargetKey = ref("");
+const dropPosition = ref<"before" | "after">("before");
+const storyReorderAnnouncement = ref("");
+const storySidebarEl = ref<HTMLElement>();
+type PendingStoryPointer = {
+  pointerId: number;
+  pointerType: string;
+  story: Story;
+  element: HTMLElement;
+  startX: number;
+  startY: number;
+  rowLeft: number;
+  rowWidth: number;
+  rowHeight: number;
+};
+type StoryPointerDrag = { title: string; x: number; y: number; width: number; height: number };
+const storyPointerDrag = ref<StoryPointerDrag>();
+const storyPointerOverlayStyle = computed(() => storyPointerDrag.value ? {
+  width: `${storyPointerDrag.value.width}px`,
+  height: `${storyPointerDrag.value.height}px`,
+  transform: `translate3d(${storyPointerDrag.value.x}px, ${storyPointerDrag.value.y}px, 0)`,
+} : undefined);
+const STORY_POINTER_DRAG_THRESHOLD = 5;
+const STORY_TOUCH_DRAG_HOLD_MS = 420;
+const STORY_TOUCH_MOVE_TOLERANCE = 8;
+let pendingStoryPointer: PendingStoryPointer | undefined;
+let storyTouchDragTimer: number | undefined;
+let storyDragMoved = false;
+let suppressStoryClickUntil = 0;
+let storyAutoScrollFrame = 0;
+let storyPointerClientY = 0;
+let dragStartOrder: string[] = [];
 const storiesQuery = useStoriesQuery();
-const stories = computed(() => {
-  const allStories = storiesQuery.data.value?.stories ?? [];
+const allStories = computed(() => storiesQuery.data.value?.stories ?? []);
+const filteredStories = computed(() => {
   const nodeId = props.filterNodeId?.trim();
-  return nodeId ? allStories.filter((story) => story.ownerNodeId === nodeId) : allStories;
+  return nodeId ? allStories.value.filter((story) => story.ownerNodeId === nodeId) : allStories.value;
 });
+const storyLastUserMessageTimes = computed(() => {
+  const times = new Map<string, number>();
+  const availableStoryKeys = new Set(allStories.value.map(storySortKey));
+  for (const instance of props.instances) {
+    const ownerNodeId = instance.node?.id;
+    if (!ownerNodeId) continue;
+    for (const session of instance.aiSessions.sessions || []) {
+      if (!session.storyId) continue;
+      const key = `${ownerNodeId}:${session.storyId}`;
+      if (!availableStoryKeys.has(key)) continue;
+      times.set(key, Math.max(times.get(key) || 0, aiSessionLastUserMessageTime(session)));
+    }
+  }
+  return times;
+});
+const storySortOptions = computed(() => ({ locale: locale.value, lastUserMessageTimes: storyLastUserMessageTimes.value, manualKeys: manualStoryKeys.value }));
+const stories = computed(() => sortStories(filteredStories.value, storySortMode.value, storySortOptions.value));
 const storiesPending = computed(() => storiesQuery.isPending.value);
 const storiesFetching = computed(() => storiesQuery.isFetching.value);
 const selectedResource = ref<Resource>(); const expandedStoryKeys = ref(storedExpandedStoryKeys()); const error = ref("");
@@ -274,6 +372,195 @@ function setTreeViewMode(mode: TreeViewMode) {
   treeViewMode.value = mode;
   try { window.localStorage?.setItem(TREE_VIEW_MODE_STORAGE_KEY, mode); } catch { /* Local storage may be unavailable in restricted browser contexts. */ }
 }
+function setStorySortMode(mode: StorySortMode) {
+  if (mode === "manual" && storySortMode.value !== "manual") {
+    const currentOrder = sortStories(allStories.value, storySortMode.value, storySortOptions.value).map(storySortKey);
+    manualStoryKeys.value = normalizeManualStoryOrder(allStories.value, currentOrder);
+    persistManualStoryOrder();
+  }
+  storySortMode.value = mode;
+  try { window.localStorage?.setItem(STORY_SORT_MODE_STORAGE_KEY, mode); } catch { /* Local storage may be unavailable in restricted browser contexts. */ }
+}
+function beginStoryReorder(story: Story) {
+  manualStoryKeys.value = normalizeManualStoryOrder(allStories.value, manualStoryKeys.value);
+  dragStartOrder = [...manualStoryKeys.value];
+  draggingStoryKey.value = storySortKey(story);
+}
+
+function startStoryPointer(event: PointerEvent, story: Story) {
+  if (storySortMode.value !== "manual" || event.button !== 0) return;
+  const element = event.currentTarget instanceof HTMLElement ? event.currentTarget : undefined;
+  const row = element?.querySelector<HTMLElement>(".story-tree-story-row");
+  if (!element || !row) return;
+  cancelStoryPointerDrag();
+  const bounds = row.getBoundingClientRect();
+  pendingStoryPointer = {
+    pointerId: event.pointerId,
+    pointerType: event.pointerType,
+    story,
+    element,
+    startX: event.clientX,
+    startY: event.clientY,
+    rowLeft: bounds.left,
+    rowWidth: bounds.width,
+    rowHeight: bounds.height,
+  };
+  window.addEventListener("pointermove", moveStoryPointer, true);
+  window.addEventListener("pointerup", finishStoryPointer, true);
+  window.addEventListener("pointercancel", cancelStoryPointerDrag, true);
+  window.addEventListener("keydown", cancelStoryPointerDragOnEscape, true);
+  window.addEventListener("blur", cancelStoryPointerDrag);
+  if (event.pointerType === "touch") {
+    storyTouchDragTimer = window.setTimeout(() => {
+      const pending = pendingStoryPointer;
+      if (!pending || pending.pointerId !== event.pointerId) return;
+      activateStoryPointerDrag(pending.startX, pending.startY);
+    }, STORY_TOUCH_DRAG_HOLD_MS);
+  }
+}
+
+function moveStoryPointer(event: PointerEvent) {
+  const pending = pendingStoryPointer;
+  if (!pending || event.pointerId !== pending.pointerId) return;
+  const distance = Math.hypot(event.clientX - pending.startX, event.clientY - pending.startY);
+  if (!storyPointerDrag.value && pending.pointerType === "touch") {
+    if (distance > STORY_TOUCH_MOVE_TOLERANCE) cleanupStoryPointerDrag(false, false);
+    return;
+  }
+  if (!storyPointerDrag.value && distance < STORY_POINTER_DRAG_THRESHOLD) return;
+  event.preventDefault();
+  if (!storyPointerDrag.value) activateStoryPointerDrag(event.clientX, event.clientY);
+  const drag = storyPointerDrag.value;
+  if (!drag) return;
+  drag.x = pending.rowLeft + event.clientX - pending.startX;
+  drag.y = event.clientY - drag.height / 2;
+  storyDragMoved = true;
+  storyPointerClientY = event.clientY;
+  updateStoryPointerTarget(event.clientY);
+  startStoryEdgeScroll();
+}
+
+function activateStoryPointerDrag(clientX: number, clientY: number) {
+  const pending = pendingStoryPointer;
+  if (!pending || storyPointerDrag.value) return;
+  clearStoryTouchDragTimer();
+  try { pending.element.setPointerCapture?.(pending.pointerId); } catch { /* Window listeners retain pointer ownership. */ }
+  beginStoryReorder(pending.story);
+  const height = Math.min(40, Math.max(32, pending.rowHeight));
+  storyPointerDrag.value = { title: pending.story.title, x: pending.rowLeft + clientX - pending.startX, y: clientY - height / 2, width: pending.rowWidth, height };
+  document.body.classList.add("story-pointer-dragging");
+}
+
+function storyScrollViewport() {
+  return storySidebarEl.value?.querySelector<HTMLElement>(".story-sidebar-scroll [data-task-handoff-scroll-viewport]");
+}
+
+function updateStoryPointerTarget(clientY: number) {
+  const viewport = storyScrollViewport();
+  if (!viewport || !draggingStoryKey.value) return;
+  const rows = [...viewport.querySelectorAll<HTMLElement>(".story-tree")].flatMap((element) => {
+    const key = element.dataset.storyKey;
+    const row = element.querySelector<HTMLElement>(".story-tree-story-row");
+    if (!key || !row) return [];
+    const bounds = row.getBoundingClientRect();
+    return [{ key, top: bounds.top, height: bounds.height }];
+  });
+  const target = storyDropTargetAt(rows, draggingStoryKey.value, clientY);
+  if (!target) { dropTargetKey.value = ""; return; }
+  if (dropTargetKey.value === target.targetKey && dropPosition.value === target.placement) return;
+  dropTargetKey.value = target.targetKey;
+  dropPosition.value = target.placement;
+  manualStoryKeys.value = reorderStoryKeys(manualStoryKeys.value, draggingStoryKey.value, target.targetKey, target.placement);
+}
+
+function startStoryEdgeScroll() {
+  if (storyAutoScrollFrame) return;
+  storyAutoScrollFrame = requestAnimationFrame(scrollStoryDragFrame);
+}
+
+function scrollStoryDragFrame() {
+  storyAutoScrollFrame = 0;
+  if (!storyPointerDrag.value) return;
+  const viewport = storyScrollViewport();
+  if (!viewport || viewport.scrollHeight <= viewport.clientHeight) return;
+  const bounds = viewport.getBoundingClientRect();
+  const edge = Math.min(48, bounds.height / 4);
+  const topRatio = Math.max(0, Math.min(1, (bounds.top + edge - storyPointerClientY) / edge));
+  const bottomRatio = Math.max(0, Math.min(1, (storyPointerClientY - (bounds.bottom - edge)) / edge));
+  const delta = Math.round((bottomRatio - topRatio) * 14);
+  if (!delta) return;
+  const before = viewport.scrollTop;
+  viewport.scrollTop = Math.max(0, Math.min(viewport.scrollHeight - viewport.clientHeight, before + delta));
+  if (viewport.scrollTop === before) return;
+  updateStoryPointerTarget(storyPointerClientY);
+  storyAutoScrollFrame = requestAnimationFrame(scrollStoryDragFrame);
+}
+
+function finishStoryPointer(event: PointerEvent) {
+  if (!pendingStoryPointer || event.pointerId !== pendingStoryPointer.pointerId) return;
+  const wasDragging = Boolean(storyPointerDrag.value);
+  if (wasDragging && storyDragMoved) {
+    updateStoryPointerTarget(event.clientY);
+    persistManualStoryOrder();
+  }
+  cleanupStoryPointerDrag(wasDragging, true);
+}
+
+function cancelStoryPointerDragOnEscape(event: KeyboardEvent) {
+  if (event.key !== "Escape") return;
+  event.preventDefault();
+  cancelStoryPointerDrag();
+}
+
+function cancelStoryPointerDrag() {
+  cleanupStoryPointerDrag(Boolean(storyPointerDrag.value), false);
+}
+
+function cleanupStoryPointerDrag(suppressClick: boolean, committed: boolean) {
+  clearStoryTouchDragTimer();
+  if (storyAutoScrollFrame) cancelAnimationFrame(storyAutoScrollFrame);
+  storyAutoScrollFrame = 0;
+  window.removeEventListener("pointermove", moveStoryPointer, true);
+  window.removeEventListener("pointerup", finishStoryPointer, true);
+  window.removeEventListener("pointercancel", cancelStoryPointerDrag, true);
+  window.removeEventListener("keydown", cancelStoryPointerDragOnEscape, true);
+  window.removeEventListener("blur", cancelStoryPointerDrag);
+  const pending = pendingStoryPointer;
+  if (pending?.element.hasPointerCapture?.(pending.pointerId)) pending.element.releasePointerCapture(pending.pointerId);
+  if (draggingStoryKey.value && !committed) manualStoryKeys.value = dragStartOrder;
+  pendingStoryPointer = undefined;
+  storyPointerDrag.value = undefined;
+  draggingStoryKey.value = "";
+  dropTargetKey.value = "";
+  dragStartOrder = [];
+  storyDragMoved = false;
+  document.body.classList.remove("story-pointer-dragging");
+  if (suppressClick) suppressStoryClickUntil = Date.now() + 250;
+}
+
+function clearStoryTouchDragTimer() {
+  if (storyTouchDragTimer === undefined) return;
+  window.clearTimeout(storyTouchDragTimer);
+  storyTouchDragTimer = undefined;
+}
+
+function suppressStoryClickAfterDrag(event: MouseEvent) {
+  if (Date.now() >= suppressStoryClickUntil) return;
+  event.preventDefault();
+  event.stopPropagation();
+}
+
+function handleStorySortKeydown(event: KeyboardEvent, story: Story) {
+  if (storySortMode.value !== "manual" || !event.altKey || !["ArrowUp", "ArrowDown"].includes(event.key)) return;
+  const index = stories.value.findIndex((candidate) => storySortKey(candidate) === storySortKey(story));
+  const target = stories.value[index + (event.key === "ArrowUp" ? -1 : 1)];
+  if (!target) return;
+  event.preventDefault();
+  manualStoryKeys.value = normalizeManualStoryOrder(allStories.value, manualStoryKeys.value);
+  manualStoryKeys.value = reorderStoryKeys(manualStoryKeys.value, storySortKey(story), storySortKey(target), event.key === "ArrowUp" ? "before" : "after");
+  persistManualStoryOrder();
+  storyReorderAnnouncement.value = t("stories.sort.reordered", { title: story.title });
+}
 const SIDEBAR_WIDTH_STORAGE_KEY = "task-handoff.control-plane.stories.sidebar-width";
 function storedSidebarWidth() {
   try {
@@ -283,7 +570,7 @@ function storedSidebarWidth() {
 }
 const sidebarWidth = ref(storedSidebarWidth()); const workspaceEl = ref<HTMLElement>(); const resizingSidebar = ref(false); let resizingPointerId: number | undefined;
 const previewText = ref(""); const previewLoading = ref(false); const previewError = ref("");
-const editorOpen = ref(false); const editing = ref(false); const draftTitle = ref(""); const draftDescription = ref(""); const draftNodeId = ref(""); const saving = ref(false);
+const editorOpen = ref(false); const editing = ref(false); const draftTitle = ref(""); const draftDescription = ref(""); const draftNodeId = ref(""); const draftMaxIdleAiSessions = ref(STORY_DEFAULT_MAX_IDLE_AI_SESSIONS); const saving = ref(false);
 const newSessionInstanceId = ref(""); const newSessionInitialCwd = ref(""); const newSessionInitialCwdFolderId = ref(""); const assignSessionOpen = ref(false); const assignSessionId = ref(""); const assigningSession = ref(false);
 const actionEditorOpen = ref(false); const editingActionId = ref<string | null>(null); const actionSaving = ref(false); const actionDraftTitle = ref(""); const actionDraftPrompt = ref(""); const actionDraftTargetInstanceId = ref(""); const actionDraftParameters = ref<ActionParameterDraft[]>([]);
 const actionDraftAgent = ref(""); const actionDraftMode = ref(""); const actionDraftPermissionMode = ref(""); const actionDraftReasoningEffort = ref(""); const actionDraftModelEntityId = ref(""); const actionDraftModelName = ref(""); const actionDraftCwdFolderId = ref(""); const actionDraftGitMode = ref(""); const actionDraftGitBranch = ref("");
@@ -296,13 +583,10 @@ const foldersForInstance = (instanceId: string) => {
 const actionDraftCwdFolders = computed(() => foldersForInstance(actionDraftTargetInstanceId.value));
 const sessionsFor = (story: Story) => props.instances.flatMap((instance) => (instance.aiSessions.sessions || []).filter((session) => session.storyId === story.id && instance.node?.id === story.ownerNodeId).map((session) => ({ instance, session })));
 const unassignedSessionsFor = (story: Story) => props.instances.flatMap((instance) => (instance.aiSessions.sessions || []).filter((session) => !session.storyId && instance.node?.id === story.ownerNodeId).map((session) => ({ instance, session })));
-type StoryTarget = { nodeId: string; instanceId: string; sessionId: string; storyId?: string | null };
 const queryClient = useQueryClient();
 const closingSessionKey = ref("");
-function storyTargetFor(entry: SessionEntry): StoryTarget | undefined {
-  const nodeId = entry.instance.nodeId;
-  if (!nodeId) return undefined;
-  return { nodeId, instanceId: entry.instance.id, sessionId: entry.session.id, storyId: entry.session.storyId ?? null };
+function storyTargetFor(entry: SessionEntry): AiSessionStoryTarget | undefined {
+  return aiSessionStoryTarget(entry.instance, entry.session, props.nodes.find((node) => node.id === entry.instance.nodeId)?.name);
 }
 function shortHash(value: string) { return value.length > 14 ? `${value.slice(0, 10)}...` : value; }
 function storyOwnerNodeName(nodeId: string) { return props.nodes.find((node) => node.id === nodeId)?.name || nodeId; }
@@ -342,11 +626,11 @@ async function closeSession(entry: SessionEntry) {
     closingSessionKey.value = "";
   }
 }
-async function onStoryAssigned(_target: StoryTarget) {
+async function onStoryAssigned(_target: AiSessionStoryTarget) {
   showControlPlaneToast(t("sessions.actions.storyAssigned"), "success");
   await refreshStorySessions();
 }
-function onStoryAssignFailed(_target: StoryTarget, error: unknown) {
+function onStoryAssignFailed(_target: AiSessionStoryTarget, error: unknown) {
   showControlPlaneToast(translateApiError(error, t, t("sessions.actions.storyAssignFailed")));
 }
 const latestSessionFor = (story: Story) => sessionsFor(story).reduce<SessionEntry | undefined>((latest, entry) => !latest || Date.parse(entry.session.updatedAt) > Date.parse(latest.session.updatedAt) ? entry : latest, undefined);
@@ -433,18 +717,34 @@ function openCreate() {
   editing.value = false;
   draftTitle.value = "";
   draftDescription.value = "";
+  draftMaxIdleAiSessions.value = STORY_DEFAULT_MAX_IDLE_AI_SESSIONS;
   const filterNodeId = props.filterNodeId?.trim();
   draftNodeId.value = filterNodeId && props.nodes.some((node) => node.id === filterNodeId && node.status === "online")
     ? filterNodeId
     : props.nodes.find((node) => node.status === "online")?.id || "";
   editorOpen.value = true;
 }
-function openEdit() { const story = selectedResource.value?.story; if (!story) return; editing.value = true; draftTitle.value = story.title; draftDescription.value = story.description || ""; draftNodeId.value = story.ownerNodeId; editorOpen.value = true; }
+async function openEdit() {
+  const story = selectedResource.value?.story;
+  if (!story) return;
+  editing.value = true;
+  draftTitle.value = story.title;
+  draftDescription.value = story.description || "";
+  draftNodeId.value = story.ownerNodeId;
+  draftMaxIdleAiSessions.value = STORY_DEFAULT_MAX_IDLE_AI_SESSIONS;
+  try {
+    const settings = await getStoryRetentionSettings(story.id, story.ownerNodeId);
+    draftMaxIdleAiSessions.value = settings.maxIdleAiSessions;
+    editorOpen.value = true;
+  } catch (cause) {
+    error.value = translateApiError(cause, t, t("stories.errors.retentionLoadFailed"));
+  }
+}
 function openNewSession(story: Story) { if (!story) return; const latest = latestSessionFor(story); setStoryExpanded(story, true); newSessionInstanceId.value = latest?.instance.id || instancesForStory(story)[0]?.id || ""; newSessionInitialCwd.value = latest?.session.cwd || ""; newSessionInitialCwdFolderId.value = latest?.session.cwdFolderId || ""; selectedResource.value = { kind: "new-session", story }; }
 function selectCreationInstance(instanceId: string) { newSessionInstanceId.value = instanceId; newSessionInitialCwd.value = ""; newSessionInitialCwdFolderId.value = ""; }
 function openAssignSession() { assignSessionId.value = availableSessions.value[0] ? `${availableSessions.value[0].instance.id}:${availableSessions.value[0].session.id}` : ""; assignSessionOpen.value = true; }
 function openAssignSessionFor(story: Story) { if (!story || story.archivedAt) return; selectStory(story); openAssignSession(); }
-function editStoryFromTree(story: Story) { if (!story) return; selectStory(story); openEdit(); }
+function editStoryFromTree(story: Story) { if (!story) return; selectStory(story); void openEdit(); }
 function resetActionPreset() { actionDraftAgent.value = ""; actionDraftMode.value = ""; actionDraftPermissionMode.value = ""; actionDraftReasoningEffort.value = ""; actionDraftModelEntityId.value = ""; actionDraftModelName.value = ""; actionDraftCwdFolderId.value = ""; actionDraftGitMode.value = ""; actionDraftGitBranch.value = ""; }
 function openCreateAction() { const story = selectedResource.value?.story; if (!story || story.archivedAt) return; editingActionId.value = null; actionDraftTitle.value = ""; actionDraftPrompt.value = ""; actionDraftTargetInstanceId.value = ""; actionDraftParameters.value = []; resetActionPreset(); actionEditorOpen.value = true; }
 function openEditAction(action: StoryAction) { const story = selectedResource.value?.story; if (!story || story.archivedAt) return; editingActionId.value = action.id; actionDraftTitle.value = action.title; actionDraftPrompt.value = action.promptTemplate; actionDraftTargetInstanceId.value = action.targetInstanceId || ""; actionDraftParameters.value = action.parameters.map((parameter) => ({ name: parameter.name, label: parameter.label, required: parameter.required, defaultValue: parameter.defaultValue || "" })); const preset = action.sessionPreset; actionDraftAgent.value = preset?.agent || ""; actionDraftMode.value = preset?.mode || ""; actionDraftPermissionMode.value = preset?.permissionMode || ""; actionDraftReasoningEffort.value = preset?.reasoningEffort || ""; actionDraftModelEntityId.value = preset?.modelSelection?.modelEntityId || ""; actionDraftModelName.value = preset?.modelSelection?.modelName || ""; actionDraftCwdFolderId.value = preset?.cwdFolderId || ""; actionDraftGitMode.value = preset?.gitSelection?.mode || ""; actionDraftGitBranch.value = preset?.gitSelection?.branch || ""; actionEditorOpen.value = true; }
@@ -489,14 +789,38 @@ async function saveAction() {
 }
 async function finishStorySessionCreation() { const story = selectedResource.value?.story; await load(); const refreshed = story && stories.value.find((item) => item.id === story.id && item.ownerNodeId === story.ownerNodeId); if (refreshed) selectStory(refreshed); }
 async function assignExistingSession() { const story = selectedResource.value?.story; const [instanceId, sessionId] = assignSessionId.value.split(":"); if (!story || !instanceId || !sessionId || assigningSession.value) return; assigningSession.value = true; try { const response = await fetch(`/api/controlled-instances/${encodeURIComponent(instanceId)}/ai-sessions/${encodeURIComponent(sessionId)}/story`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ storyId: story.id }) }); if (!response.ok) throw new Error(t("stories.errors.assignFailed")); assignSessionOpen.value = false; await load(); const refreshed = stories.value.find((item) => item.id === story.id && item.ownerNodeId === story.ownerNodeId); if (refreshed) selectStory(refreshed); } catch (cause) { error.value = cause instanceof Error ? cause.message : String(cause); } finally { assigningSession.value = false; } }
-async function saveStory() { if (!draftTitle.value.trim() || !draftNodeId.value || saving.value) return; saving.value = true; try { const story = selectedResource.value?.story; const response = await fetch(editing.value && story ? `/api/stories/${encodeURIComponent(story.id)}` : "/api/stories", { method: editing.value ? "PATCH" : "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(editing.value ? { nodeId: draftNodeId.value, input: { title: draftTitle.value.trim(), description: draftDescription.value.trim() || null } } : { nodeId: draftNodeId.value, input: { title: draftTitle.value.trim(), description: draftDescription.value.trim() || undefined } }) }); if (!response.ok) throw new Error((await response.json()).error?.message || t("stories.errors.saveFailed")); editorOpen.value = false; await load(); } catch (cause) { error.value = cause instanceof Error ? cause.message : String(cause); } finally { saving.value = false; } }
+async function saveStory() {
+  if (!draftTitle.value.trim() || !draftNodeId.value || saving.value) return;
+  const maxIdleAiSessions = Number(draftMaxIdleAiSessions.value);
+  saving.value = true;
+  try {
+    const story = selectedResource.value?.story;
+    const response = await fetch(editing.value && story ? `/api/stories/${encodeURIComponent(story.id)}` : "/api/stories", {
+      method: editing.value ? "PATCH" : "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(editing.value
+        ? { nodeId: draftNodeId.value, input: { title: draftTitle.value.trim(), description: draftDescription.value.trim() || null, maxIdleAiSessions } }
+        : { nodeId: draftNodeId.value, input: { title: draftTitle.value.trim(), description: draftDescription.value.trim() || undefined, maxIdleAiSessions } }),
+    });
+    if (!response.ok) throw new Error((await response.json()).error?.message || t("stories.errors.saveFailed"));
+    editorOpen.value = false;
+    await load();
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : String(cause);
+  } finally {
+    saving.value = false;
+  }
+}
 async function toggleArchive(story: Story = selectedResource.value?.story) { if (!story) return; const action = story.archivedAt ? "restore" : "archive"; const response = await fetch(`/api/stories/${encodeURIComponent(story.id)}/${action}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ nodeId: story.ownerNodeId }) }); if (!response.ok) { error.value = t("stories.errors.updateFailed"); return; } await load(); const refreshed = stories.value.find((item) => item.id === story.id && item.ownerNodeId === story.ownerNodeId); if (refreshed) selectStory(refreshed); }
 function downloadUrl(story: Story, storyPath: string) { return `/api/stories/${encodeURIComponent(story.id)}/content/file?nodeId=${encodeURIComponent(story.ownerNodeId)}&storyPath=${encodeURIComponent(storyPath)}`; }
 function downloadDocument(story: Story, storyPath: string) { const anchor = document.createElement("a"); anchor.href = downloadUrl(story, storyPath); anchor.download = storyPath.split("/").pop() || storyPath; anchor.click(); }
 async function deleteStory(story: Story) { if (!story) return; if (!window.confirm(t("stories.confirm.deleteStory", { title: story.title }))) return; const response = await fetch(`/api/stories/${encodeURIComponent(story.id)}?nodeId=${encodeURIComponent(story.ownerNodeId)}`, { method: "DELETE" }); if (!response.ok) { error.value = t("stories.errors.deleteFailed"); return; } await load(); const resource = selectedResource.value; if (resource && resource.story.id === story.id && resource.story.ownerNodeId === story.ownerNodeId) selectedResource.value = undefined; }
 async function renameDocument(story: Story, storyPath: string, title: string) { const next = window.prompt(t("stories.confirm.documentTitle"), title)?.trim(); if (!next || next === title) return; const response = await fetch(`/api/stories/${encodeURIComponent(story.id)}/documents/${encodeURIComponent(storyPath)}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ nodeId: story.ownerNodeId, input: { title: next } }) }); if (!response.ok) { error.value = t("stories.errors.renameDocumentFailed"); return; } await load(); const refreshed = stories.value.find((item) => item.id === story.id && item.ownerNodeId === story.ownerNodeId); if (refreshed) selectDocument(refreshed, storyPath); }
 async function deleteDocument(story: Story, storyPath: string) { if (!window.confirm(t("stories.confirm.deleteDocument"))) return; const response = await fetch(`/api/stories/${encodeURIComponent(story.id)}/documents/${encodeURIComponent(storyPath)}`, { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ nodeId: story.ownerNodeId }) }); if (!response.ok) { error.value = t("stories.errors.deleteDocumentFailed"); return; } await load(); const refreshed = stories.value.find((item) => item.id === story.id && item.ownerNodeId === story.ownerNodeId); if (refreshed) selectStory(refreshed); }
-onBeforeUnmount(stopSidebarResize);
+onBeforeUnmount(() => {
+  stopSidebarResize();
+  cancelStoryPointerDrag();
+});
 </script>
 
 <style scoped>
@@ -512,6 +836,13 @@ onBeforeUnmount(stopSidebarResize);
 .story-sidebar-section-label { color:var(--text-muted); font-size:12px; font-weight:500; line-height:1; }
 .story-view-mode-button { width:26px; height:26px; color:var(--text-muted); }
 .story-view-mode-button:hover { color:var(--text-strong); }
+:global(.story-list-options-menu) { display:grid; width:176px; gap:2px; border:1px solid var(--line-strong); border-radius:8px; background:var(--surface-inset); box-shadow:var(--shadow-popover); padding:5px; }
+:global(.story-list-options-label) { color:var(--text-muted); font-size:11px; font-weight:500; line-height:1; padding:7px 8px 5px; }
+:global(.story-list-options-separator) { margin:4px -5px; background:var(--surface-active); }
+:global(.story-list-options-item) { display:flex; align-items:center; gap:7px; width:100%; min-height:30px; border:0; border-radius:6px; background:transparent; color:var(--control-plane-menu-text); cursor:pointer; font-size:12px; font-weight:400; padding:0 8px 0 28px; text-align:left; }
+:global(.story-list-options-item:hover),:global(.story-list-options-item:focus-visible),:global(.story-list-options-item[data-highlighted]) { background:var(--surface-active); color:var(--control-plane-menu-hover-text); outline:none; }
+:global(.story-list-options-item .absolute) { left:8px; width:12px; height:12px; }
+:global(.story-list-options-item .absolute svg) { width:9px; height:9px; }
 .story-sidebar-scroll { min-width:0; min-height:0; }
 .story-sidebar-scroll-inner { min-width:0; padding:0 10px 12px; }
 .story-sidebar-scroll :deep([data-task-handoff-scroll-viewport] > div) { width:100%; min-width:0 !important; }
@@ -525,6 +856,15 @@ onBeforeUnmount(stopSidebarResize);
 .story-sidebar-resize-handle:focus-visible { outline:2px solid var(--focus-ring); outline-offset:-3px; }
 .story-workspace[data-resizing="true"] { user-select:none; cursor:col-resize; }
 .story-tree + .story-tree { margin-top:2px; }
+.story-tree-manual { cursor:grab; touch-action:pan-y; -webkit-touch-callout:none; }
+.story-tree-manual:active { cursor:grabbing; }
+.story-tree-dragging { opacity:.46; }
+.story-tree[data-drop-position="before"] { box-shadow:inset 0 2px 0 var(--brand-accent); }
+.story-tree[data-drop-position="after"] { box-shadow:inset 0 -2px 0 var(--brand-accent); }
+:global(.story-pointer-overlay) { position:fixed; top:0; left:0; z-index:1000; display:flex; align-items:center; gap:8px; overflow:hidden; border:1px solid var(--line-strong); border-radius:6px; background:var(--surface-raised); box-shadow:var(--shadow-popover); color:var(--text-strong); font-size:13px; font-weight:500; padding:0 10px; pointer-events:none; user-select:none; will-change:transform; }
+:global(.story-pointer-overlay span) { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+:global(body.story-pointer-dragging),:global(body.story-pointer-dragging *) { cursor:grabbing !important; user-select:none !important; }
+:global(body.story-pointer-dragging iframe),:global(body.story-pointer-dragging webview) { pointer-events:none; }
 .story-tree-children { display:grid; gap:2px; margin:2px 0 8px 16px; padding-left:8px; border-left:1px solid var(--line); }
 .story-tree-story-row { position:relative; }
 .story-tree-item { position:relative; display:flex; align-items:center; width:100%; min-width:0; gap:8px; border:0; border-radius:6px; background:transparent; color:inherit; cursor:pointer; padding:8px; text-align:left; }
@@ -537,13 +877,13 @@ onBeforeUnmount(stopSidebarResize);
 .story-tree-disclosure.expanded { transform:rotate(90deg); }
 .story-session-status,.story-session-icon { position:relative; display:grid; width:14px; height:14px; flex:0 0 auto; place-items:center; overflow:visible; }
 .story-session-icon-status { position:absolute; top:-2px; right:-5px; }
-.story-tree-item > span:not(.story-session-status):not(.story-session-icon):not(.story-session-unread) { display:flex; align-items:center; min-width:0; flex:1; overflow:hidden; }
-.story-tree-item > span:not(.story-session-status):not(.story-session-icon):not(.story-session-unread) strong { display:block; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; line-height:1.3; }
-.story-tree-item > span.story-tree-item-detail { display:grid; gap:2px; line-height:1.5; overflow:visible; }
-.story-tree-item > span.story-tree-item-detail strong,
-.story-tree-item > span.story-tree-item-detail small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; line-height:1.5; }
+.story-tree-item > .story-tree-item-copy { display:flex; align-items:center; min-width:0; flex:1; overflow:hidden; }
+.story-tree-item > .story-tree-item-copy strong { display:block; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; line-height:1.3; }
+.story-tree-item > .story-tree-item-copy.story-tree-item-detail { display:grid; gap:2px; line-height:1.5; overflow:visible; }
+.story-tree-item > .story-tree-item-copy.story-tree-item-detail strong,
+.story-tree-item > .story-tree-item-copy.story-tree-item-detail small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; line-height:1.5; }
 .story-tree-item strong { font-size:13px; font-weight:500; }
-.story-tree-item:not(.story-tree-story):not(.story-new-button):not(.story-tree-item-detailed) > span:not(.story-session-status):not(.story-session-icon):not(.story-session-unread) strong { font-weight:400; }
+.story-tree-item:not(.story-tree-story):not(.story-new-button):not(.story-tree-item-detailed) > .story-tree-item-copy strong { font-weight:400; }
 .story-tree-item small,.story-tree-empty { color:var(--text-muted); font-size:12px; }
 .story-tree-item:not(.story-tree-story):not(.story-new-button) { height:32px; padding-block:6px; }
 .story-tree-item.story-tree-item-detailed:not(.story-tree-story):not(.story-new-button) { height:auto; padding-block:8px; }
@@ -610,6 +950,9 @@ onBeforeUnmount(stopSidebarResize);
 .story-editor-fields { display:grid; gap:14px; }
 .story-editor-fields label { display:grid; gap:6px; color:var(--text-muted); font-size:12px; }
 :global(.story-editor-dialog) { max-width:460px; }
+.story-dialog-header { flex-direction:row; align-items:flex-start; justify-content:space-between; gap:16px; text-align:left; }
+.story-dialog-close { display:grid; flex:0 0 auto; width:30px; height:30px; place-items:center; border:0; border-radius:6px; background:transparent; color:var(--text-muted); cursor:pointer; padding:0; }
+.story-dialog-close:hover, .story-dialog-close:focus-visible { background:var(--surface-active); color:var(--text-strong); outline:none; }
 @media (max-width:800px) { .story-view { padding:16px 0; } .story-workspace { grid-template-columns:minmax(220px,38%) minmax(0,1fr); } .story-sidebar-resize-handle { display:none; } .story-content-header { padding:0 0 14px; } }
 @media (max-width:560px) { .story-view { padding:10px 0; } .story-workspace { grid-template-columns:1fr; } .story-sidebar { max-height:38%; border-right:0; border-bottom:1px solid var(--line); } .story-overview-grid { margin:14px 0; } .story-actions-section { margin:0; } }
 </style>

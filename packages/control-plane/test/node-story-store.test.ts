@@ -38,3 +38,15 @@ test("missing indexed files are removed but unindexed files are ignored", async 
     assert.equal(fs.existsSync(path.join(dataDir, "stories", story.id, "unindexed.txt")), true);
   } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
 });
+
+test("Story idle Session retention settings default and persist", () => {
+  const { store, dataDir } = createStore();
+  try {
+    const story = store.create({ title: "Retention", actions: [] });
+    assert.equal(store.retentionSettings(story.id).maxIdleAiSessions, 5);
+    store.update(story.id, { maxIdleAiSessions: 7 });
+    assert.equal(store.retentionSettings(story.id).maxIdleAiSessions, 7);
+    assert.throws(() => store.update(story.id, { maxIdleAiSessions: 0 }));
+    assert.throws(() => store.update(story.id, { maxIdleAiSessions: 51 }));
+  } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
+});

@@ -7,6 +7,7 @@ import {
   StoryListSchema,
   StorySchema,
   StoryUpdateInputSchema,
+  StorySessionRetentionSettingsSchema,
   type StoryCreateInput,
   type StoryUpdateInput,
 } from "@task-handoff/protocol/stories";
@@ -24,6 +25,7 @@ export function createControlPlaneStoriesApi(transport: ControlPlaneClientTransp
     preview(storyId: string, nodeId: string, storyPath: string, signal?: AbortSignal) { return requestData(`/api/stories/${encodeURIComponent(storyId)}/content/preview?nodeId=${encodeURIComponent(nodeId)}&storyPath=${encodeURIComponent(storyPath)}`, StoryContentPreviewSchema, { signal }); },
     create(nodeId: string, input: StoryCreateInput) { return requestData("/api/stories", StorySchema, json("POST", { nodeId, input: StoryCreateInputSchema.parse(input) })); },
     update(storyId: string, nodeId: string, input: StoryUpdateInput) { return requestData(`/api/stories/${encodeURIComponent(storyId)}`, StorySchema, json("PATCH", { nodeId, input: StoryUpdateInputSchema.parse(input) })); },
+    retentionSettings(storyId: string, nodeId: string) { return requestData(`/api/stories/${encodeURIComponent(storyId)}/settings?nodeId=${encodeURIComponent(nodeId)}`, StorySessionRetentionSettingsSchema); },
     archive(storyId: string, nodeId: string) { return requestData(`/api/stories/${encodeURIComponent(storyId)}/archive`, StorySchema, json("POST", { nodeId })); },
     restore(storyId: string, nodeId: string) { return requestData(`/api/stories/${encodeURIComponent(storyId)}/restore`, StorySchema, json("POST", { nodeId })); },
     remove(storyId: string, nodeId: string) { return requestData(`/api/stories/${encodeURIComponent(storyId)}?nodeId=${encodeURIComponent(nodeId)}`, z.object({ deleted: z.boolean() }).strict(), json("DELETE")); },

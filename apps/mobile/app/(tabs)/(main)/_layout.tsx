@@ -5,7 +5,6 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { useMobileTheme } from '../../../src/components/theme';
 import { useI18n } from '../../../src/i18n';
-import { useOptionalMobileControlPlaneRuntime } from '../../../src/control-plane/use-mobile-control-plane-runtime';
 
 const TAB_ICON_SIZE = 25;
 
@@ -36,7 +35,6 @@ const storyTabIconFamily = {
 export default function PrimaryTabsLayout() {
   const { colors, dark } = useMobileTheme();
   const { t } = useI18n();
-  const runtime = useOptionalMobileControlPlaneRuntime();
   const liquidGlassTabs = Platform.OS === 'ios' && Number.parseInt(String(Platform.Version), 10) >= 26;
   const nativeTabBlur = Platform.OS === 'ios' && !liquidGlassTabs
     ? dark ? 'systemUltraThinMaterialDark' as const : 'systemUltraThinMaterialLight' as const
@@ -51,7 +49,7 @@ export default function PrimaryTabsLayout() {
           />
           <NativeTabs.Trigger.Label>{t('nav.aiSessions')}</NativeTabs.Trigger.Label>
         </NativeTabs.Trigger>
-        <NativeTabs.Trigger disableAutomaticContentInsets hidden={!runtime?.storyCapability} name="stories">
+        <NativeTabs.Trigger disableAutomaticContentInsets name="stories">
           <NativeTabs.Trigger.Icon renderingMode="template" src={<NativeTabs.Trigger.VectorIcon family={storyTabIconFamily} name="book-outline" />} />
           <NativeTabs.Trigger.Label>{t('nav.stories')}</NativeTabs.Trigger.Label>
         </NativeTabs.Trigger>

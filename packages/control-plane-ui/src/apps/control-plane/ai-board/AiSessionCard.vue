@@ -125,6 +125,7 @@ import AiSessionCardContextMenu from "../../../components/ai-session/AiSessionCa
 import AiSessionCardMarks from "../../../components/ai-session/AiSessionCardMarks.vue";
 import AiSessionStatusIndicator from "../../../components/ai-session/AiSessionStatusIndicator.vue";
 import AiSessionToolActivity from "../../../components/ai-session/AiSessionToolActivity.vue";
+import { aiSessionStoryTarget, type AiSessionStoryTarget } from "../../../components/ai-session/storyTarget";
 import type { AiSessionSummary, ControlPlaneTrigger, InstanceBoardItem, InstanceWithAiSessions, TriggerDeployment } from "../../../api/types";
 import { ContextMenu, ContextMenuTrigger } from "../../../components/ui/context-menu";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../../components/ui/tooltip";
@@ -168,17 +169,10 @@ const emit = defineEmits<{
   selectInstance: [instanceId: string];
   stopAppSession: [card: AiBoardCard];
   forkSession: [card: AiBoardCard, mode: "current" | "managed-worktree"];
-  storyAssigned: [card: AiBoardCard, target: StoryTarget];
-  storyAssignFailed: [card: AiBoardCard, target: StoryTarget, error: unknown];
+  storyAssigned: [card: AiBoardCard, target: AiSessionStoryTarget];
+  storyAssignFailed: [card: AiBoardCard, target: AiSessionStoryTarget, error: unknown];
   toggleTrigger: [card: AiBoardCard, configHash: string];
 }>();
-
-type StoryTarget = {
-  nodeId: string;
-  instanceId: string;
-  sessionId: string;
-  storyId?: string | null;
-};
 
 function approvalKey(card: AiBoardCard, decision: "allow" | "deny" | "skip") {
   return `${card.instance.id}:${card.session.id}:${decision}`;
@@ -186,12 +180,7 @@ function approvalKey(card: AiBoardCard, decision: "allow" | "deny" | "skip") {
 
 const isStoppingAppSession = computed(() => props.stoppingAppSessionKey === props.card.key);
 const isForking = computed(() => props.forkingSessionKey === props.card.key);
-const storyTarget = computed<StoryTarget | undefined>(() => {
-  const instance = props.card.instance;
-  const nodeId = instance.nodeId;
-  if (!nodeId) return undefined;
-  return { nodeId, instanceId: instance.id, sessionId: props.card.session.id, storyId: props.card.session.storyId ?? null };
-});
+const storyTarget = computed(() => aiSessionStoryTarget(props.card.instance, props.card.session));
 </script>
 
 <style scoped>
