@@ -1,5 +1,7 @@
 import { Stack } from 'expo-router';
+import type { NativeStackHeaderItem } from 'expo-router';
 import { Platform, Pressable } from 'react-native';
+import type { ReactNode } from 'react';
 
 import { SystemIcon } from './SystemIcon';
 import { iosTransparentHeaderOptions } from './navigation-header';
@@ -10,10 +12,14 @@ export function PrimaryTabStack({
   title,
   addAccessibilityLabel,
   onAdd,
+  headerRight,
+  headerRightItems,
 }: {
   title: string;
   addAccessibilityLabel?: string;
   onAdd?(): void;
+  headerRight?: () => ReactNode;
+  headerRightItems?: () => NativeStackHeaderItem[];
 }) {
   const { colors, dark } = useMobileTheme();
   const scopeButton = <InstanceScopeHeaderButton />;
@@ -36,11 +42,11 @@ export function PrimaryTabStack({
       headerLargeTitleShadowVisible: true,
       ...iosTransparentHeaderOptions(dark),
       headerLeft: () => scopeButton,
-      ...(addItem ? { unstable_headerRightItems: () => [addItem] } : undefined),
+      ...(headerRightItems ? { unstable_headerRightItems: headerRightItems } : headerRight ? { headerRight } : addItem ? { unstable_headerRightItems: () => [addItem] } : undefined),
     } : {
       headerStyle: { backgroundColor: colors.surface },
       headerLeft: () => scopeButton,
-      ...(addItem ? { headerRight: () => <Pressable accessibilityLabel={addAccessibilityLabel} accessibilityRole="button" hitSlop={10} onPress={onAdd}><SystemIcon android="add" color={colors.primary} ios="plus" size={20} /></Pressable> } : undefined),
+      ...(headerRight ? { headerRight } : addItem ? { headerRight: () => <Pressable accessibilityLabel={addAccessibilityLabel} accessibilityRole="button" hitSlop={10} onPress={onAdd}><SystemIcon android="add" color={colors.primary} ios="plus" size={20} /></Pressable> } : undefined),
     }),
   }} />;
 }

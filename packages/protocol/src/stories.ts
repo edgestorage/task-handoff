@@ -8,6 +8,7 @@ import {
   AiSessionSendModeSchema,
 } from "./ai-sessions.ts";
 import { StoryIdSchema } from "./story-id.ts";
+import { ScheduleSourceSchema, TriggerPolicySchema } from "./triggers.ts";
 
 export { StoryIdSchema } from "./story-id.ts";
 
@@ -68,6 +69,20 @@ export const StoryActionInputSchema = StoryActionSchema.omit({ id: true }).stric
 export const StoryActionUpdateInputSchema = StoryActionInputSchema.extend({
   id: StoryActionSchema.shape.id.optional(),
 }).strict();
+
+export const StoryAutomationSchema = z.object({
+  id: z.string().trim().min(1).max(120),
+  storyId: StoryIdSchema,
+  actionId: StoryActionSchema.shape.id,
+  schedule: ScheduleSourceSchema,
+  enabled: z.boolean().default(true),
+  parameterValues: z.record(z.string(), z.string().max(4000)).default({}),
+  policy: TriggerPolicySchema.default({ maxConcurrentRuns: 1, whenBusy: "skip" }),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+}).strict();
+export const StoryAutomationInputSchema = StoryAutomationSchema.omit({ id: true, createdAt: true, updatedAt: true }).strict();
+export const StoryAutomationUpdateInputSchema = StoryAutomationInputSchema.partial().strict();
 
 export const StorySchema = z.object({
   id: StoryIdSchema,
@@ -173,6 +188,8 @@ export const StoryChangedEventSchema = z.object({
 export type Story = z.infer<typeof StorySchema>;
 export type StoryAction = z.infer<typeof StoryActionSchema>;
 export type StoryActionInput = z.infer<typeof StoryActionInputSchema>;
+export type StoryAutomation = z.infer<typeof StoryAutomationSchema>;
+export type StoryAutomationInput = z.infer<typeof StoryAutomationInputSchema>;
 export type StorySessionPreset = z.infer<typeof StorySessionPresetSchema>;
 export type StoryCreateInput = z.infer<typeof StoryCreateInputSchema>;
 export type StoryDocument = z.infer<typeof StoryDocumentSchema>;

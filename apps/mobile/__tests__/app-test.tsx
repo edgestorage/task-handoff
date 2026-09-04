@@ -4,7 +4,8 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { aiSessionStatusGroup, ControlPlaneAiSessionsSchema } from '@task-handoff/control-plane-client';
 
 import { AiSessionInbox, inboxCardContent, inboxEntries } from '../src/ai-sessions/Inbox';
-import { inboxStatusMessage, matchesStatusFilter, statusFilterLabel } from '../src/ai-sessions/InboxModel';
+import { aiSessionInboxRows, inboxStatusMessage, matchesStatusFilter, statusFilterLabel } from '../src/ai-sessions/InboxModel';
+import type { MobileDirectoryProfileState } from '../src/directories/store';
 import { sessionActivityText } from '../src/ai-sessions/SessionDetail';
 import { SessionStatusIndicator, sessionStatusTone } from '../src/ai-sessions/SessionStatusIndicator';
 import { mobileLightColors } from '../src/components/theme';
@@ -123,6 +124,38 @@ describe('<InboxRoute />', () => {
     expect(inboxStatusMessage({ phase: 'offline' })).toBe('Offline — showing the latest cached snapshot.');
   });
 
+  test('optionally prioritizes session status using the shared Web ordering', () => {
+    const entries = inboxEntries(snapshot);
+    expect(aiSessionInboxRows(entries, undefined, 'none', false).filter((row) => row.type === 'session').map((row) => row.session.id)).toEqual(['running', 'approval']);
+    expect(aiSessionInboxRows(entries, undefined, 'none', true).filter((row) => row.type === 'session').map((row) => row.session.id)).toEqual(['approval', 'running']);
+  });
+
+  test('groups sessions by authoritative path, instance, node, and agent identities', () => {
+    const originalEntries = inboxEntries(snapshot);
+    const entries = [
+      { ...originalEntries[0], session: { ...originalEntries[0].session, cwd: '/work/mobile' } },
+      { ...originalEntries[1], instanceId: 'instance-2', session: { ...originalEntries[1].session, cwd: '/work/server', agent: 'open-code' } },
+    ];
+    const directory = {
+      instances: [
+        { id: 'instance-1', name: 'Phone', nodeId: 'node-1' },
+        { id: 'instance-2', name: 'Server', nodeId: 'node-2' },
+      ],
+      nodes: [
+        { id: 'node-1', name: 'Local Mac' },
+        { id: 'node-2', name: 'Build Node' },
+      ],
+    } as unknown as Pick<MobileDirectoryProfileState, 'nodes' | 'instances'>;
+    const groupLabels = (groupBy: 'path' | 'instance' | 'node' | 'agent') => aiSessionInboxRows(entries, directory, groupBy, false)
+      .filter((row) => row.type === 'group')
+      .map((row) => [row.label, row.count]);
+
+    expect(groupLabels('path')).toEqual([['/work/mobile', 1], ['/work/server', 1]]);
+    expect(groupLabels('instance')).toEqual([['Phone', 1], ['Server', 1]]);
+    expect(groupLabels('node')).toEqual([['Local Mac', 1], ['Build Node', 1]]);
+    expect(groupLabels('agent')).toEqual([['Codex', 1], ['Open Code', 1]]);
+  });
+
   test('filters sessions through the normalized all, node, and instance scopes', () => {
     const instanceNodes = new Map([['instance-1', 'node-1']]);
     expect(inboxEntries(snapshot, { kind: 'node', nodeId: 'node-1' }, instanceNodes)).toHaveLength(2);
@@ -166,6 +199,14 @@ describe('<InboxRoute />', () => {
     await screen.rerender(<SessionStatusIndicator group="waiting" label="Waiting" />);
     expect(screen.queryByTestId('session-status-spinner')).toBeNull();
     expect(screen.getByTestId('session-status-dot')).toBeTruthy();
+    jest.restoreAllMocks();
+  });
+
+  test('keeps the running spinner circular at the larger Story tree size', async () => {
+    jest.spyOn(AccessibilityInfo, 'isReduceMotionEnabled').mockResolvedValue(true);
+    const screen = await render(<SessionStatusIndicator group="active" label="Running" size={20} />);
+
+    expect(StyleSheet.flatten(screen.getByTestId('session-status-spinner-arc').props.style).borderRadius).toBe(10);
     jest.restoreAllMocks();
   });
 

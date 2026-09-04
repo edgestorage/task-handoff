@@ -1,5 +1,5 @@
 <template>
-  <div ref="panelEl" class="session-ai-panel" :style="workspaceStyle">
+  <div ref="panelEl" class="session-ai-panel" :class="{ 'creation-embedded': creationEmbedded }" :style="workspaceStyle">
     <Sheet v-model:open="sessionListOverlayOpen">
     <div class="session-ai-workspace" :class="{ 'creation-only': creationOnly, 'detail-only': detailOnly }">
       <component
@@ -499,7 +499,7 @@
       </section>
       <section v-else-if="showNewSession" class="session-ai-detail session-ai-new-detail">
         <div class="session-ai-new-start">
-          <h1 class="session-ai-new-title">{{ t("sessions.panel.startIdea") }}</h1>
+          <h1 v-if="!creationEmbedded" class="session-ai-new-title">{{ t("sessions.panel.startIdea") }}</h1>
           <div class="session-ai-new-dialog" role="group" :aria-label="t('sessions.panel.newSession')">
             <div class="session-ai-new-pills">
               <DropdownMenu v-if="creationInstances && creationInstances.length > 1">
@@ -556,20 +556,22 @@
                 <DropdownMenuTrigger as-child>
                   <button type="button" class="session-ai-project-pill" :disabled="newSessionComposerBusy">
                     <GitBranch :size="14" />
-                    <strong>{{ newSessionWorkspaceMode === "worktree" ? t("sessions.panel.worktreeMode") : t("sessions.panel.currentFolderMode") }}</strong>
+                    <strong>{{ newSessionWorkspaceMode === "worktree"
+                      ? t("sessions.panel.worktreeMode")
+                      : t(creationMode === "preset" ? "sessions.panel.currentBranchMode" : "sessions.panel.currentFolderMode") }}</strong>
                     <ChevronDown :size="13" />
                   </button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent class="session-ai-project-menu" align="start" :side-offset="8">
                   <DropdownMenuItem class="session-ai-project-item" @select="selectNewSessionWorkspaceMode('current-folder')">
-                    <Folder :size="14" /><span>{{ t("sessions.panel.currentFolderMode") }}</span><Check v-if="newSessionWorkspaceMode === 'current-folder'" :size="15" />
+                    <Folder :size="14" /><span>{{ t(creationMode === "preset" ? "sessions.panel.currentBranchMode" : "sessions.panel.currentFolderMode") }}</span><Check v-if="newSessionWorkspaceMode === 'current-folder'" :size="15" />
                   </DropdownMenuItem>
                   <DropdownMenuItem class="session-ai-project-item" :disabled="!newSessionWorkspace.branches.some((branch) => branch.worktreeSelectable)" @select="selectNewSessionWorkspaceMode('worktree')">
                     <GitBranch :size="14" /><span>{{ t("sessions.panel.worktreeMode") }}</span><Check v-if="newSessionWorkspaceMode === 'worktree'" :size="15" />
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
-              <DropdownMenu v-if="newSessionWorkspace?.availability === 'available' && newSessionWorkspace.branches.length">
+              <DropdownMenu v-if="newSessionWorkspace?.availability === 'available' && newSessionWorkspace.branches.length && (creationMode !== 'preset' || newSessionWorkspaceMode === 'worktree')">
                 <DropdownMenuTrigger as-child>
                   <button type="button" class="session-ai-project-pill" :disabled="newSessionComposerBusy">
                     <GitBranch :size="14" />
@@ -626,11 +628,13 @@
               v-model:attachments="messageAttachments"
               v-model:mention-bindings="newSessionMentionBindings"
               class="session-ai-compose session-ai-new-composer"
-              :class="{ 'is-loading': newSessionComposerBusy }"
-              :aria-busy="newSessionComposerBusy"
-              :busy="newSessionComposerBusy"
-              :disabled="!newSessionFolder || (newSessionWorkspaceLoading && !newSessionWorkspace)"
+              :class="{ 'is-loading': creationComposerBusy }"
+              :aria-busy="creationComposerBusy"
+              :busy="creationComposerBusy"
+              :disabled="creationSubmitDisabled || !newSessionFolder || (newSessionWorkspaceLoading && !newSessionWorkspace)"
               :can-interrupt="false"
+              :attachments-disabled="creationMode === 'preset'"
+              :submit-hidden="creationMode === 'preset'"
               :provider="newSessionApp"
               :model-groups="newSessionModelGroups"
               :model-selection="newSessionModelSelection"
@@ -1158,6 +1162,12 @@ import {
   type SessionTab,
 } from "../useInstanceSessions";
 
+export type AiSessionCreationPresetDraft = {
+  instanceId: string;
+  prompt: string;
+  sessionPreset: StorySessionPreset;
+};
+
 type SessionStatusFilter = "all" | "active" | "waiting" | "idle" | "problem";
 type AiSessionListLayout = "cards" | "list";
 type AiSessionPathGroup = {
@@ -1224,7 +1234,13 @@ const props = defineProps<{
   chooseProjectFolder?: NativeNodeFolderPicker;
   creationInitialCwd?: string;
   creationInitialCwdFolderId?: string;
+  creationInitialPreset?: StorySessionPreset;
+  creationInitialPrompt?: string;
+  creationEmbedded?: boolean;
+  creationMode?: "session" | "preset";
   creationOnly?: boolean;
+  creationSubmitDisabled?: boolean;
+  creationSubmitting?: boolean;
   creationStoryId?: string;
   creationInstances?: InstanceWithAiSessions[];
   detailOnly?: boolean;
@@ -1236,6 +1252,16 @@ const props = defineProps<{
   launchingApp?: boolean;
   nodeLocalFolders?: NodeLocalFolder[];
   selectedAiSession: (instance: InstanceBoardItem, sessions?: AiSessionSummary[]) => AiSessionSummary | undefined;
+}>();
+const emit = defineEmits<{
+  creationPresetSubmit: [draft: AiSessionCreationPresetDraft];
+  launchApp: [instance: InstanceBoardItem, appId: string, cwdFolderId?: string, options?: Record<string, unknown>];
+  openAiSessionApp: [instance: InstanceBoardItem, session?: AiSessionSummary];
+  openRepositoryWorkspace: [target: RepositoryWorkspaceTabTarget];
+  selectAiSession: [instanceId: string, sessionId: string];
+  sessionCreated: [instanceId: string, sessionId: string];
+  "update:creationInstance": [instanceId: string];
+  "update:creationSubmitReady": [ready: boolean];
 }>();
 const { locale, t } = useI18n();
 const markdownCodeTools = computed(() => ({
@@ -1464,6 +1490,7 @@ function keepCompactActionsMenuOpenForRepository(event: Event) {
   if (target instanceof Element && target.closest(".repository-environment-popover")) event.preventDefault();
 }
 const newSessionOpen = ref(false);
+const initialCreationInstanceId = props.instance.id;
 const selectedForkTurn = computed(() => {
   const session = selectedSession.value;
   if (!session || session.actions?.fork !== true) return undefined;
@@ -1472,11 +1499,14 @@ const selectedForkTurn = computed(() => {
 });
 const showNewSession = computed(() => props.creationOnly || newSessionOpen.value || !selectedSession.value);
 const selectedListSessionId = computed(() => showNewSession.value ? undefined : selectedSession.value?.id);
-const newSessionApp = ref("");
+const newSessionApp = ref(props.creationMode === "preset" ? props.creationInitialPreset?.agent || "" : "");
 const modelsQuery = useModelsQuery();
-const newSessionModelSelection = ref<AiSessionModelSelection>();
+const newSessionModelSelection = ref<AiSessionModelSelection | undefined>(props.creationMode === "preset" ? props.creationInitialPreset?.modelSelection : undefined);
 const modelSelectionPendingSessionId = ref("");
 const newSessionReasoningEffort = ref<AiSessionReasoningEffort>(AI_SESSION_DEFAULT_REASONING_EFFORT);
+if (props.creationMode === "preset" && props.creationInitialPreset?.reasoningEffort) {
+  newSessionReasoningEffort.value = props.creationInitialPreset.reasoningEffort;
+}
 const reasoningEffortPending = ref<{ sessionId: string; target: AiSessionReasoningEffort }>();
 const newSessionModelGroups = computed(() => deriveAiSessionModelGroups({
   entities: modelsQuery.data.value || [],
@@ -1507,15 +1537,17 @@ const newSessionReasoningEffortCapability = computed(() => reasoningEffortCapabi
 const selectedSessionReasoningEffortCapability = computed(() => reasoningEffortCapability(selectedSession.value?.agent || ""));
 const newSessionFolderId = ref("");
 const activeNewSessionDraftKey = ref(aiSessionCreationDraftKey(props.instance.id));
-const initialNewSessionDraft = loadAiSessionDraftPayload(activeNewSessionDraftKey.value);
+const initialNewSessionDraft = props.creationMode === "preset"
+  ? { value: props.creationInitialPrompt || "", bindings: [] }
+  : loadAiSessionDraftPayload(activeNewSessionDraftKey.value);
 const newSessionDraft = ref(initialNewSessionDraft.value);
 const newSessionMentionBindings = ref(initialNewSessionDraft.bindings);
 const newSessionFolderQuery = ref("");
 const newSessionBranchQuery = ref("");
 const collapsedNewSessionBranchFolders = ref(new Set<string>());
 const newSessionWorkspace = ref<RepositoryAiSessionWorkspace>();
-const newSessionWorkspaceMode = ref<"current-folder" | "worktree">("current-folder");
-const newSessionBranch = ref("");
+const newSessionWorkspaceMode = ref<"current-folder" | "worktree">(props.creationMode === "preset" ? props.creationInitialPreset?.gitSelection?.mode || "current-folder" : "current-folder");
+const newSessionBranch = ref(props.creationMode === "preset" ? props.creationInitialPreset?.gitSelection?.branch || "" : "");
 const newSessionWorkspaceLoading = ref(false);
 let newSessionWorkspaceRevision = 0;
 const launchingNewSession = ref(false);
@@ -1526,8 +1558,11 @@ const newSessionCreateAttempt = ref<{
 }>();
 const savingNewSessionPermission = ref(false);
 const choosingNewSessionFolder = ref(false);
-const newSessionPermissionMode = ref<AiSessionPermissionMode>(props.instance.config.defaultCodexPermissionMode);
+const newSessionPermissionMode = ref<AiSessionPermissionMode>(props.creationMode === "preset"
+  ? props.creationInitialPreset?.permissionMode || props.instance.config.defaultCodexPermissionMode
+  : props.instance.config.defaultCodexPermissionMode);
 const newSessionComposerBusy = computed(() => launchingNewSession.value || savingNewSessionPermission.value || choosingNewSessionFolder.value);
+const creationComposerBusy = computed(() => newSessionComposerBusy.value || Boolean(props.creationSubmitting));
 const aiSessionLaunchableApps = computed(() => (props.launchableApps || []).filter((app) => app.id === "codex"));
 const terminalLaunchAppId = computed(() => ["terminal-tty", "terminal", "gui-terminal"]
   .find((appId) => props.launchableApps?.some((app) => app.id === appId)));
@@ -1546,6 +1581,9 @@ function reasoningEffortCapability(agent: string) {
 watch(newSessionModelGroups, (groups) => {
   const current = newSessionModelSelection.value;
   if (current && groups.some((group) => group.models.some((model) => model.modelEntityId === current.modelEntityId && model.modelName === current.modelName))) return;
+  if (props.creationMode === "preset" && props.instance.id === initialCreationInstanceId && current
+    && current.modelEntityId === props.creationInitialPreset?.modelSelection?.modelEntityId
+    && current.modelName === props.creationInitialPreset.modelSelection.modelName) return;
   newSessionModelSelection.value = defaultAiSessionModelSelection(groups);
 }, { immediate: true });
 watch(newSessionReasoningEffortCapability, (capability) => {
@@ -1667,6 +1705,15 @@ type VisibleNewSessionBranchTreeNode =
 const newSessionBranchTree = computed(() => buildNewSessionBranchTree(filteredNewSessionBranches.value));
 const visibleNewSessionBranches = computed(() => flattenNewSessionBranchTree(newSessionBranchTree.value));
 const newSessionFolder = computed(() => newSessionFolders.value.find((folder) => folder.id === newSessionFolderId.value));
+const creationSubmitReady = computed(() => Boolean(
+  !props.creationSubmitDisabled
+  && !creationComposerBusy.value
+  && newSessionApp.value
+  && newSessionFolder.value
+  && newSessionDraft.value.trim()
+  && (!newSessionWorkspaceLoading.value || newSessionWorkspace.value),
+));
+watch(creationSubmitReady, (ready) => emit("update:creationSubmitReady", ready), { immediate: true });
 const newSessionProjectLabel = computed(() => newSessionFolder.value?.name || t("sessions.panel.chooseProject"));
 const newSessionSelectedBranchLabel = computed(() => {
   const selected = newSessionWorkspace.value?.branches.find((branch) => branch.name === newSessionBranch.value);
@@ -1947,12 +1994,14 @@ watch(() => props.instance.id, () => {
 watch(
   [() => props.instance.id, () => props.instance.config.defaultCodexPermissionMode],
   ([, permissionMode]) => {
+    if (props.creationMode === "preset" && props.creationInitialPreset?.permissionMode) return;
     newSessionPermissionMode.value = permissionMode;
   },
   { immediate: true },
 );
 
 watch(() => props.instance.id, (instanceId) => {
+  if (props.creationMode === "preset") return;
   activeNewSessionDraftKey.value = aiSessionCreationDraftKey(instanceId);
   const draft = loadAiSessionDraftPayload(activeNewSessionDraftKey.value);
   newSessionDraft.value = draft.value;
@@ -1962,6 +2011,7 @@ watch(() => props.instance.id, (instanceId) => {
 });
 
 watch([newSessionDraft, newSessionMentionBindings], ([draft, bindings]) => {
+  if (props.creationMode === "preset") return;
   persistAiSessionDraftPayload(activeNewSessionDraftKey.value, draft, bindings);
 }, { deep: true });
 
@@ -1977,8 +2027,9 @@ watch(
   [() => props.instance.id, newSessionFolderId, showNewSession],
   ([instanceId, folderId, show], _previous, onCleanup) => {
     const revision = ++newSessionWorkspaceRevision;
-    newSessionWorkspaceMode.value = "current-folder";
-    newSessionBranch.value = "";
+    const initialGitSelection = props.creationMode === "preset" ? props.creationInitialPreset?.gitSelection : undefined;
+    newSessionWorkspaceMode.value = initialGitSelection?.mode || "current-folder";
+    newSessionBranch.value = initialGitSelection?.branch || "";
     newSessionBranchQuery.value = "";
     if (!show || !folderId) {
       newSessionWorkspace.value = undefined;
@@ -2014,6 +2065,8 @@ watch(
 );
 
 function selectDefaultNewSessionBranch(workspace: RepositoryAiSessionWorkspace) {
+  const selected = workspace.branches.find((branch) => branch.name === newSessionBranch.value);
+  if (selected && newSessionBranchSelectable(selected)) return;
   newSessionBranch.value = workspace.currentBranch
     || workspace.branches.find((branch) => branch.current)?.name
     || workspace.branches.find((branch) => branch.currentFolderSelectable)?.name
@@ -2410,6 +2463,7 @@ function creationInitialFolderId() {
 
 function initializeNewSessionDefaults() {
   if (!aiSessionLaunchableApps.value.some((app) => app.id === newSessionApp.value)) {
+    if (props.creationMode === "preset" && props.instance.id === initialCreationInstanceId && newSessionApp.value === props.creationInitialPreset?.agent) return;
     newSessionApp.value = aiSessionLaunchableApps.value[0]?.id || "";
   }
   if (!newSessionFolders.value.some((folder) => folder.id === newSessionFolderId.value)) {
@@ -2527,6 +2581,10 @@ function closeNewSession() {
 
 async function updateNewSessionPermissionMode(permissionMode: AiSessionPermissionMode) {
   if (savingNewSessionPermission.value || permissionMode === newSessionPermissionMode.value) return;
+  if (props.creationMode === "preset") {
+    newSessionPermissionMode.value = permissionMode;
+    return;
+  }
   const previousPermissionMode = newSessionPermissionMode.value;
   newSessionPermissionMode.value = permissionMode;
   savingNewSessionPermission.value = true;
@@ -2573,10 +2631,29 @@ async function confirmNewProject() {
 async function createNewSession(permissionMode?: AiSessionPermissionMode) {
   const message = newSessionDraft.value.trim();
   const cwdFolderId = newSessionFolder.value?.cwdFolderId;
-  if (!newSessionApp.value || !newSessionFolder.value || !message || newSessionComposerBusy.value || (newSessionWorkspaceLoading.value && !newSessionWorkspace.value)) return;
-  const gitSelection = newSessionWorkspace.value?.availability === "available" && newSessionBranch.value
+  if (!newSessionApp.value || !newSessionFolder.value || !message || creationComposerBusy.value || (newSessionWorkspaceLoading.value && !newSessionWorkspace.value)) return;
+  const gitSelection = newSessionWorkspace.value?.availability === "available"
+    && newSessionBranch.value
+    && (props.creationMode !== "preset" || newSessionWorkspaceMode.value === "worktree")
     ? { mode: newSessionWorkspaceMode.value, branch: newSessionBranch.value }
     : undefined;
+  if (props.creationMode === "preset") {
+    emit("creationPresetSubmit", {
+      instanceId: props.instance.id,
+      prompt: message,
+      sessionPreset: {
+        agent: newSessionApp.value,
+        ...(cwdFolderId ? { cwdFolderId } : {}),
+        ...(gitSelection ? { gitSelection } : {}),
+        ...(permissionMode ? { permissionMode } : {}),
+        ...(newSessionModelSelection.value ? { modelSelection: newSessionModelSelection.value } : {}),
+        ...(newSessionReasoningEffortCapability.value.selectAtCreate && newSessionReasoningEffort.value
+          ? { reasoningEffort: newSessionReasoningEffort.value }
+          : {}),
+      },
+    });
+    return;
+  }
   const references = referencesForBindings(newSessionDraft.value, newSessionMentionBindings.value);
   const fingerprint = JSON.stringify({
     instanceId: props.instance.id,
@@ -2639,6 +2716,13 @@ async function createNewSession(permissionMode?: AiSessionPermissionMode) {
     launchingNewSession.value = false;
   }
 }
+
+function submitCreation() {
+  if (!creationSubmitReady.value) return;
+  void createNewSession(newSessionPermissionMode.value);
+}
+
+defineExpose({ submitCreation });
 
 async function selectExistingSessionModel(modelSelection: AiSessionModelSelection) {
   const session = selectedSession.value;
@@ -3300,15 +3384,6 @@ onBeforeUnmount(() => {
   scrollFollow?.dispose();
   stopSidebarResize();
 });
-
-const emit = defineEmits<{
-  launchApp: [instance: InstanceBoardItem, appId: string, cwdFolderId?: string, options?: Record<string, unknown>];
-  openAiSessionApp: [instance: InstanceBoardItem, session?: AiSessionSummary];
-  openRepositoryWorkspace: [target: RepositoryWorkspaceTabTarget];
-  selectAiSession: [instanceId: string, sessionId: string];
-  sessionCreated: [instanceId: string, sessionId: string];
-  "update:creationInstance": [instanceId: string];
-}>();
 
 function openMarkdownFile(session: AiSessionSummary, filePath: string) {
   emit("openRepositoryWorkspace", {

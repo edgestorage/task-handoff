@@ -67,6 +67,10 @@ const props = defineProps<{
   reasoningEffort?: AiSessionReasoningEffort;
   reasoningEffortEnabled?: boolean;
   reasoningEffortPending?: boolean;
+  attachmentsDisabled?: boolean;
+  submitKind?: "send" | "save";
+  submitLabel?: string;
+  submitHidden?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -117,7 +121,7 @@ const groupedMentionCandidates = computed(() => mentionKinds.map((kind) => ({
   diagnostics: mentions.diagnostics.value.filter((diagnostic) => diagnostic.category === (kind === "skill" ? "skills" : kind === "plugin" ? "plugins" : kind === "app" ? "apps" : "files")),
 })).filter((group) => group.candidates.length || group.diagnostics.length));
 const hasDraft = computed(() => props.modelValue.trim().length > 0 || attachments.value.length > 0);
-const actionKind = computed(() => editing.value ? "save" : hasDraft.value || !props.canInterrupt ? "send" : "stop");
+const actionKind = computed(() => editing.value || props.submitKind === "save" ? "save" : hasDraft.value || !props.canInterrupt ? "send" : "stop");
 const canRun = computed(() => !props.disabled && (editing.value ? props.modelValue.trim().length > 0 : hasDraft.value || (!props.busy && props.canInterrupt)));
 const canSteer = computed(() => !editing.value && props.sessionBusy && hasDraft.value);
 const actionTitle = computed(() => {
@@ -128,6 +132,7 @@ const actionTitle = computed(() => {
         ? t("sessions.composer.saving")
         : t("sessions.composer.sending");
   }
+  if (props.submitLabel) return props.submitLabel;
   return actionKind.value === "stop"
     ? t("sessions.composer.stopTurn")
     : actionKind.value === "save"
@@ -426,7 +431,7 @@ async function imageBlobAsPng(blob: Blob) {
 }
 
 function handlePaste(event: ClipboardEvent) {
-  if (editing.value) return;
+  if (editing.value || props.attachmentsDisabled) return;
   if (props.busy) {
     return;
   }
@@ -450,6 +455,10 @@ function handlePaste(event: ClipboardEvent) {
 }
 
 function handleDrop(event: DragEvent) {
+  if (props.attachmentsDisabled) {
+    if (event.dataTransfer?.files.length) event.preventDefault();
+    return;
+  }
   if (props.busy || editing.value) {
     return;
   }
@@ -462,6 +471,7 @@ function handleDrop(event: DragEvent) {
 }
 
 function submit() {
+  if (props.submitHidden) return;
   if (!props.busy && canRun.value) {
     const command = editing.value ? undefined : parseAiSessionCommand(props.modelValue.trim(), commandTrigger.value, props.mentionContext?.provider);
     if (command) {
@@ -524,6 +534,7 @@ function handleInputKeydown(event: KeyboardEvent) {
   if (event.key !== "Enter" || event.shiftKey || event.isComposing) {
     return;
   }
+  if (props.submitHidden) return;
   event.preventDefault();
   submit();
 }
@@ -1003,6 +1014,7 @@ watch(() => props.busy, (busy) => {
           </Tooltip>
         </TooltipProvider>
         <button
+          v-if="!submitHidden"
           type="submit"
           class="ai-session-composer__primary"
           :data-action="actionKind"

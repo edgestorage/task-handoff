@@ -11,19 +11,19 @@ export function sessionStatusTone(group: AiSessionStatusGroup, colors: MobileThe
   return { foreground: colors.sessionIdle, background: colors.sessionIdleSoft };
 }
 
-export function SessionStatusIndicator({ group, label }: { group: AiSessionStatusGroup; label: string }) {
+export function SessionStatusIndicator({ group, label, size = 14 }: { group: AiSessionStatusGroup; label: string; size?: number }) {
   const { colors } = useMobileTheme();
   const tone = sessionStatusTone(group, colors);
   return (
-    <View accessibilityLabel={label} style={styles.container}>
+    <View accessibilityLabel={label} style={[styles.container, { height: size, width: size }]}>
       {group === 'active'
-        ? <RunningSpinner background={tone.background} foreground={tone.foreground} />
-        : <View style={[styles.halo, { backgroundColor: tone.background }]} testID="session-status-dot"><View style={[styles.dot, { backgroundColor: tone.foreground }]} /></View>}
+        ? <RunningSpinner background={tone.background} foreground={tone.foreground} size={size} />
+        : <View style={[styles.halo, { backgroundColor: tone.background, borderRadius: size / 2, height: size, width: size }]} testID="session-status-dot"><View style={[styles.dot, { backgroundColor: tone.foreground, height: Math.max(6, size - 6), width: Math.max(6, size - 6) }]} /></View>}
     </View>
   );
 }
 
-function RunningSpinner({ background, foreground }: { background: string; foreground: string }) {
+function RunningSpinner({ background, foreground, size }: { background: string; foreground: string; size: number }) {
   const [reduceMotion, setReduceMotion] = useState(false);
   const [rotation] = useState(() => new Animated.Value(0));
 
@@ -69,12 +69,13 @@ function RunningSpinner({ background, foreground }: { background: string; foregr
   }, [reduceMotion, rotation]);
 
   return (
-    <View style={[styles.spinnerTrack, { borderColor: background }]} testID="session-status-spinner">
-      <Animated.View style={[styles.spinnerArc, {
+    <View style={[styles.spinnerTrack, { borderColor: background, borderRadius: (size - 2) / 2, height: size - 2, width: size - 2 }]} testID="session-status-spinner">
+      <Animated.View testID="session-status-spinner-arc" style={[styles.spinnerArc, {
         borderBottomColor: foreground,
         borderLeftColor: foreground,
         borderRightColor: foreground,
         borderTopColor: 'transparent',
+        borderRadius: size / 2,
         transform: [{ rotate: rotation.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] }) }],
       }]} />
     </View>
@@ -83,8 +84,8 @@ function RunningSpinner({ background, foreground }: { background: string; foregr
 
 const styles = StyleSheet.create({
   container: { alignItems: 'center', height: 14, justifyContent: 'center', width: 14 },
-  halo: { alignItems: 'center', borderRadius: 7, height: 14, justifyContent: 'center', width: 14 },
-  dot: { borderRadius: 4, height: 8, width: 8 },
-  spinnerArc: { borderRadius: 6, borderWidth: 1.5, bottom: -1.5, left: -1.5, position: 'absolute', right: -1.5, top: -1.5 },
-  spinnerTrack: { borderRadius: 6, borderWidth: 1.5, height: 12, position: 'relative', width: 12 },
+  halo: { alignItems: 'center', justifyContent: 'center' },
+  dot: { borderRadius: 999 },
+  spinnerArc: { borderWidth: 1.5, bottom: -1.5, left: -1.5, position: 'absolute', right: -1.5, top: -1.5 },
+  spinnerTrack: { borderWidth: 1.5, position: 'relative' },
 });

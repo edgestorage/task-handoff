@@ -11,6 +11,7 @@ import {
   aiSessionStableSortKey,
   availableInstanceApps,
   compareAiSessionsByLastUserMessage,
+  sortedAiSessionInboxEntries,
   sortedAiSessions,
   sortedAiSessionsByLastUserMessage,
 } from "@task-handoff/control-plane-client";
@@ -19,6 +20,7 @@ export {
   aiSessionLastUserMessageTime,
   aiSessionStableSortKey,
   compareAiSessionsByLastUserMessage,
+  sortedAiSessionInboxEntries,
   sortedAiSessions,
   sortedAiSessionsByLastUserMessage,
 };

@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-const ScheduleSourceSchema = z.union([
+export const ScheduleSourceSchema = z.union([
   z.object({
     type: z.literal("schedule"),
     scheduleKind: z.literal("interval").default("interval"),

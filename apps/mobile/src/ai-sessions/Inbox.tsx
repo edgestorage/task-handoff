@@ -1,4 +1,4 @@
-import { Profiler, useEffect, useMemo, useState, type ProfilerOnRenderCallback } from 'react';
+import { Profiler, useEffect, useMemo, useState, useSyncExternalStore, type ProfilerOnRenderCallback } from 'react';
 import { ActivityIndicator, Alert, Animated, Pressable, StyleSheet, Text, View } from 'react-native';
 import * as Crypto from 'expo-crypto';
 import {
@@ -21,6 +21,7 @@ import { ToolActivityText } from './ToolActivityText';
 import { SessionStatusIndicator } from './SessionStatusIndicator';
 import { useI18n } from '../i18n';
 import {
+  aiSessionInboxRows,
   inboxCardContent,
   inboxEntries,
   inboxStatusMessage,
@@ -29,6 +30,7 @@ import {
   workspaceLabel,
   type SessionStatusFilter,
 } from './InboxModel';
+import { getAiSessionInboxViewPreferences, subscribeAiSessionInboxViewPreferences } from './inbox-view-preferences';
 import { mobileAiSessionBusyKey, type MobileAiSessionActionCoordinator } from './actions';
 import { formatSessionUpdatedTime } from '../session-time';
 
@@ -60,11 +62,16 @@ export function AiSessionInbox({
   const [statusFilterTrackWidth, setStatusFilterTrackWidth] = useState(0);
   const [statusFilterOffset] = useState(() => new Animated.Value(0));
   const [closingKey, setClosingKey] = useState('');
+  const preferences = useSyncExternalStore(subscribeAiSessionInboxViewPreferences, getAiSessionInboxViewPreferences, getAiSessionInboxViewPreferences);
   const pullToRefresh = usePullToRefresh(onRefresh);
   const instanceNodeIds = useMemo(() => new Map((directory?.instances ?? []).map((instance) => [instance.id, instance.nodeId])), [directory]);
   const instanceNames = useMemo(() => new Map((directory?.instances ?? []).map((instance) => [instance.id, instance.name])), [directory]);
   const allEntries = useMemo(() => inboxEntries(state.snapshot, scope, instanceNodeIds), [state.snapshot, scope, instanceNodeIds]);
   const entries = useMemo(() => allEntries.filter((entry) => matchesStatusFilter(entry.session, statusFilter)), [allEntries, statusFilter]);
+  const rows = useMemo(
+    () => aiSessionInboxRows(entries, directory, preferences.groupBy, preferences.sortByStatus, t),
+    [directory, entries, preferences.groupBy, preferences.sortByStatus, t],
+  );
   const messagesBySession = useMemo(() => {
     const grouped = new Map<string, MobileAiSessionProfileState['messages'][string][]>();
     for (const message of Object.values(state.messages)) {
@@ -97,9 +104,9 @@ export function AiSessionInbox({
       {state.sync.phase === 'loading' && !state.snapshot ? <ActivityIndicator accessibilityLabel={t('sessions.loadingAccessibility')} style={styles.loading} /> : (
         <SwipeActionList
           style={[styles.screen, { backgroundColor: colors.background }]}
-          data={entries}
-          itemContainerStyle={styles.cardContainer}
-          keyExtractor={(item) => `${item.instanceId}:${item.session.id}`}
+          data={rows}
+          itemContainerStyle={(item) => item.type === 'group' ? styles.groupContainer : styles.cardContainer}
+          keyExtractor={(item) => item.type === 'group' ? item.key : `${item.instanceId}:${item.session.id}`}
           ListHeaderComponent={<View style={styles.header}>
             <View
               accessibilityRole="tablist"
@@ -132,6 +139,7 @@ export function AiSessionInbox({
           onRefresh={pullToRefresh.onRefresh}
           refreshing={pullToRefresh.refreshing}
           swipeAction={(item) => {
+            if (item.type === 'group') return null;
             const key = `${item.instanceId}:${item.session.id}`;
             return {
               disabled: !actions || state.sync.phase !== 'ready' || Boolean(closingKey),
@@ -140,6 +148,10 @@ export function AiSessionInbox({
             };
           }}
           renderItem={({ item }) => {
+            if (item.type === 'group') return <View accessibilityRole="header" style={styles.groupHeader} testID="session-group-header">
+              <Text numberOfLines={1} style={[styles.groupLabel, { color: colors.text }]}>{item.label}</Text>
+              <Text style={[styles.groupCount, { color: colors.textMuted }]}>{item.count}</Text>
+            </View>;
             const error = item.session.status === 'failed' ? item.session.error : undefined;
             const content = inboxCardContent(item.session, messagesBySession.get(sessionMessageGroupKey(item.instanceId, item.session.id)), t);
             const approvalPending = isAiSessionApprovalPending(item.session);
@@ -225,6 +237,10 @@ const styles = StyleSheet.create({
   statusFilter: { alignItems: 'center', borderRadius: 999, flex: 1, justifyContent: 'center', minHeight: 34, paddingHorizontal: 4, zIndex: 1 },
   statusFilterText: { fontSize: 14, fontWeight: '600', lineHeight: 20 },
   cardContainer: { borderRadius: 16, marginBottom: 12, marginHorizontal: 20 },
+  groupContainer: { marginHorizontal: 20 },
+  groupHeader: { alignItems: 'center', flexDirection: 'row', gap: 10, minHeight: 36, paddingBottom: 6, paddingHorizontal: 2, paddingTop: 4 },
+  groupLabel: { flex: 1, fontSize: 14, fontWeight: '600', lineHeight: 20 },
+  groupCount: { fontSize: 13, fontWeight: '400', lineHeight: 18 },
   cardContent: { borderRadius: 16, borderWidth: StyleSheet.hairlineWidth, gap: 10, padding: 16, paddingVertical: 12 },
   row: { alignItems: 'center', flexDirection: 'row', gap: 8 },
   rowWithUnread: { paddingRight: 18 },

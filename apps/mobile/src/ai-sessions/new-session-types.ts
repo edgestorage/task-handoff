@@ -72,11 +72,11 @@ export function defaultAiSessionFolderId(
 export function storyAiSessionCreationDefaults(
   instances: readonly Pick<ControlPlaneInstanceDirectoryEntry, 'id' | 'nodeId'>[],
   snapshot: {
-    instances: readonly {
+    instances: readonly ({
       instanceId: string;
       aiSessions: { sessions: readonly ({ id?: string; agent?: string; cwd?: string; cwdFolderId?: string; storyId?: string; updatedAt: string } & Record<string, unknown>)[] } & Record<string, unknown>;
-    }[];
-  } | undefined,
+    } & Record<string, unknown>)[];
+  } & Record<string, unknown> | undefined,
   storyId: string,
   nodeId: string,
 ): { instanceId?: string; cwd?: string; cwdFolderId?: string } {

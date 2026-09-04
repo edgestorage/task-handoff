@@ -91,6 +91,13 @@ test('create forwards the selected permission mode', async () => {
   expect(create.mock.calls[0][1].permissionMode).toBe('auto-review');
 });
 
+test('create forwards a preset action send mode', async () => {
+  const create = jest.fn().mockResolvedValue({ disposition: 'created', aiSessionId: 'session-1', providerSessionId: 'provider-1', creationSource: 'ai-session' });
+  const api = { aiSessions: { create } } as unknown as ControlPlaneClient;
+  await createMobileAiSession(api, { instance, agent: 'codex', message: 'Build it', mode: 'queue', clientRequestId: 'story-action-1' });
+  expect(create).toHaveBeenCalledWith(instance.id, expect.objectContaining({ mode: 'queue' }));
+});
+
 test('create forwards the selected model entity and model name', async () => {
   const create = jest.fn().mockResolvedValue({ disposition: 'created', aiSessionId: 'session-1', providerSessionId: 'provider-1', creationSource: 'ai-session' });
   const api = { aiSessions: { create } } as unknown as ControlPlaneClient;

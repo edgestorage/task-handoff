@@ -180,7 +180,7 @@
                 <div class="story-directory-header story-actions-header"><div class="story-directory-heading"><h3>{{ t("stories.presetActions") }}</h3><span>{{ selectedResource.story.actions.length }}</span></div><Button variant="outline" size="sm" :disabled="Boolean(selectedResource.story.archivedAt)" @click="openCreateAction"><Plus :size="14" /> {{ t("stories.addAction") }}</Button></div>
                 <div v-if="!selectedResource.story.actions.length" class="story-empty">{{ t("stories.noPresetActions") }}</div>
                 <div v-for="action in selectedResource.story.actions" :key="action.id" class="story-action-item">
-                  <button type="button" class="story-action-run" :disabled="Boolean(selectedResource.story.archivedAt)" @click="$emit('run-action', selectedResource.story, action)">
+                  <button type="button" class="story-action-run" :disabled="Boolean(selectedResource.story.archivedAt)" @click="$emit('run-action', selectedResource.story, action, storyActionCreationFinished(selectedResource.story))">
                     <span class="story-action-icon"><Play :size="14" /></span>
                     <span class="story-action-copy">
                       <strong>{{ action.title }}</strong>
@@ -271,22 +271,7 @@
       <ScrollArea class="story-action-editor-scroll" :horizontal="false">
         <div class="story-editor-fields story-action-editor-fields">
         <label>{{ t("stories.actionEditor.title") }}<Input v-model="actionDraftTitle" :placeholder="t('stories.actionEditor.titlePlaceholder')" /></label>
-        <label>{{ t("stories.actionEditor.promptTemplate") }}<Textarea v-model="actionDraftPrompt" :placeholder="t('stories.actionEditor.promptPlaceholder')" /></label>
-        <label>{{ t("stories.actionEditor.targetInstance") }}<ControlPlaneSelect v-model="actionDraftTargetInstanceId" :placeholder="t('stories.actionEditor.selectTargetInstance')"><ControlPlaneSelectItem v-for="instance in storyInstances" :key="instance.id" :value="instance.id">{{ instance.name }}</ControlPlaneSelectItem></ControlPlaneSelect></label>
-        <div class="story-action-preset">
-          <div class="story-action-preset-title">{{ t("stories.actionEditor.sessionPreset") }}</div>
-          <div class="story-action-preset-grid">
-            <label>{{ t("stories.actionEditor.agent") }}<ControlPlaneSelect v-model="actionDraftAgent" :placeholder="t('stories.actionEditor.defaultAgent')"><ControlPlaneSelectItem value="codex">{{ t("common.products.codex") }}</ControlPlaneSelectItem><ControlPlaneSelectItem value="claude">{{ t("common.products.claude") }}</ControlPlaneSelectItem><ControlPlaneSelectItem value="opencode">{{ t("common.products.opencode") }}</ControlPlaneSelectItem></ControlPlaneSelect></label>
-            <label>{{ t("stories.actionEditor.messageMode") }}<ControlPlaneSelect v-model="actionDraftMode" :placeholder="t('stories.actionEditor.defaultValue')"><ControlPlaneSelectItem value="auto">{{ t("stories.actionEditor.auto") }}</ControlPlaneSelectItem><ControlPlaneSelectItem value="queue">{{ t("stories.actionEditor.queue") }}</ControlPlaneSelectItem><ControlPlaneSelectItem value="steer">{{ t("stories.actionEditor.steer") }}</ControlPlaneSelectItem><ControlPlaneSelectItem value="immediate">{{ t("stories.actionEditor.immediate") }}</ControlPlaneSelectItem></ControlPlaneSelect></label>
-            <label>{{ t("stories.actionEditor.permission") }}<ControlPlaneSelect v-model="actionDraftPermissionMode" :placeholder="t('stories.actionEditor.defaultPermission')"><ControlPlaneSelectItem value="ask">{{ t("stories.actionEditor.ask") }}</ControlPlaneSelectItem><ControlPlaneSelectItem value="auto-review">{{ t("stories.actionEditor.autoReview") }}</ControlPlaneSelectItem><ControlPlaneSelectItem value="full-access">{{ t("stories.actionEditor.fullAccess") }}</ControlPlaneSelectItem></ControlPlaneSelect></label>
-            <label>{{ t("stories.actionEditor.reasoningEffort") }}<ControlPlaneSelect v-model="actionDraftReasoningEffort" :placeholder="t('stories.actionEditor.defaultValue')"><ControlPlaneSelectItem v-for="effort in reasoningEfforts" :key="effort" :value="effort">{{ t(`stories.actionEditor.reasoning.${effort}`) }}</ControlPlaneSelectItem></ControlPlaneSelect></label>
-            <label>{{ t("stories.actionEditor.modelEntityId") }}<Input v-model="actionDraftModelEntityId" :placeholder="t('stories.actionEditor.optionalModelId')" /></label>
-            <label>{{ t("stories.actionEditor.modelName") }}<Input v-model="actionDraftModelName" :placeholder="t('stories.actionEditor.optionalModelName')" /></label>
-            <label>{{ t("stories.actionEditor.workingFolder") }}<ControlPlaneSelect v-model="actionDraftCwdFolderId" :placeholder="t('stories.actionEditor.defaultValue')"><ControlPlaneSelectItem v-for="folder in actionDraftCwdFolders" :key="folder.id" :value="folder.id">{{ folder.name }}</ControlPlaneSelectItem></ControlPlaneSelect></label>
-            <label>{{ t("stories.actionEditor.gitMode") }}<ControlPlaneSelect v-model="actionDraftGitMode" :placeholder="t('stories.actionEditor.defaultValue')"><ControlPlaneSelectItem value="current-folder">{{ t("stories.actionEditor.currentFolder") }}</ControlPlaneSelectItem><ControlPlaneSelectItem value="worktree">{{ t("stories.actionEditor.worktree") }}</ControlPlaneSelectItem></ControlPlaneSelect></label>
-            <label>{{ t("stories.actionEditor.gitBranch") }}<Input v-model="actionDraftGitBranch" :placeholder="t('stories.actionEditor.optionalBranch')" /></label>
-          </div>
-        </div>
+        <label>{{ t("stories.actionEditor.messageMode") }}<ControlPlaneSelect v-model="actionDraftMode" :placeholder="t('stories.actionEditor.defaultValue')"><ControlPlaneSelectItem value="auto">{{ t("stories.actionEditor.auto") }}</ControlPlaneSelectItem><ControlPlaneSelectItem value="queue">{{ t("stories.actionEditor.queue") }}</ControlPlaneSelectItem><ControlPlaneSelectItem value="steer">{{ t("stories.actionEditor.steer") }}</ControlPlaneSelectItem><ControlPlaneSelectItem value="immediate">{{ t("stories.actionEditor.immediate") }}</ControlPlaneSelectItem></ControlPlaneSelect></label>
         <div class="story-action-parameters">
           <div class="story-action-parameters-header"><span>{{ t("stories.actionEditor.parameters") }}</span><Button type="button" variant="ghost" size="sm" @click="addActionParameter"><Plus :size="13" /> {{ t("stories.actionEditor.addParameter") }}</Button></div>
           <div v-for="(parameter, index) in actionDraftParameters" :key="index" class="story-action-parameter">
@@ -298,9 +283,33 @@
           </div>
           <div v-if="!actionDraftParameters.length" class="story-empty">{{ t("stories.actionEditor.noParameters") }}</div>
         </div>
+        <AiSessionPanel
+          v-if="actionDraftInstance"
+          :key="actionEditorRevision"
+          ref="actionCreationPanel"
+          class="story-action-creation-panel"
+          :active-session="actionCreationActiveSession"
+          creation-embedded
+          :creation-initial-cwd-folder-id="actionDraftInitialPreset?.cwdFolderId"
+          :creation-initial-preset="actionDraftInitialPreset"
+          :creation-initial-prompt="actionDraftInitialPrompt"
+          :creation-instances="storyInstances"
+          creation-mode="preset"
+          creation-only
+          :creation-submit-disabled="!actionDraftTitle.trim()"
+          :creation-submitting="actionSaving"
+          :instance="actionDraftInstance"
+          :launchable-apps="launchableAppsForInstance(actionDraftInstance, t)"
+          :node-local-folders="nodeLocalFoldersByNodeId[actionDraftInstance.nodeId] || []"
+          :selected-ai-session="noSelectedAiSession"
+          @creation-preset-submit="saveAction"
+          @update:creation-instance="actionDraftTargetInstanceId = $event"
+          @update:creation-submit-ready="actionCreationSubmitReady = $event"
+        />
+        <div v-else class="story-empty">{{ t("stories.noAvailableInstance") }}</div>
         </div>
       </ScrollArea>
-      <DialogFooter><Button variant="outline" @click="actionEditorOpen = false">{{ t("common.actions.cancel") }}</Button><Button :disabled="!actionDraftTitle.trim() || !actionDraftPrompt.trim() || !actionDraftTargetInstanceId || actionSaving" @click="saveAction">{{ actionSaving ? t("stories.actionEditor.saving") : t("common.actions.save") }}</Button></DialogFooter>
+      <DialogFooter><Button variant="outline" :disabled="actionSaving" @click="actionEditorOpen = false">{{ t("common.actions.cancel") }}</Button><Button :disabled="!actionCreationSubmitReady || actionSaving" @click="submitActionCreation">{{ actionSaving ? t("stories.actionEditor.saving") : t("common.actions.save") }}</Button></DialogFooter>
     </DialogContent>
   </Dialog>
 
@@ -359,8 +368,8 @@ import { createBrowserUuid } from "../../../lib/random-id";
 import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions, Node, NodeLocalFolder } from "../../../api/types";
 import { STORY_DEFAULT_MAX_IDLE_AI_SESSIONS, STORY_MAX_IDLE_AI_SESSIONS, STORY_MIN_IDLE_AI_SESSIONS, type Story, type StoryAction, type StorySessionPreset } from "@task-handoff/protocol/stories";
 import type { AiSessionHistoryItem } from "@task-handoff/protocol/ai-sessions";
-import AiSessionPanel from "../instance-detail/AiSessionPanel.vue";
-import { aiSessionLastUserMessageTime, launchableAppsForInstance, sessionStatusLabel, type RepositoryWorkspaceTabTarget, type SessionTab } from "../useInstanceSessions";
+import AiSessionPanel, { type AiSessionCreationPresetDraft } from "../instance-detail/AiSessionPanel.vue";
+import { aiSessionLastUserMessageTime, launchableAppsForInstance, sessionStatusLabel, sortedAiSessionInboxEntries, type RepositoryWorkspaceTabTarget, type SessionTab } from "../useInstanceSessions";
 import { latestStoryDocuments, STORY_TREE_DOCUMENT_LIMIT } from "./storyDocuments";
 import { normalizeManualStoryOrder, reorderStoryKeys, sortStories, storyDropTargetAt, storySortKey, type StorySortMode } from "./storySort";
 
@@ -370,7 +379,7 @@ const emit = defineEmits<{
   "launch-app": [instance: InstanceBoardItem, appId: string, cwdFolderId?: string, options?: Record<string, unknown>];
   "open-session": [instance: InstanceWithAiSessions, session: AiSessionSummary | undefined];
   "open-repository-workspace": [target: RepositoryWorkspaceTabTarget];
-  "run-action": [story: Story, action: StoryAction];
+  "run-action": [story: Story, action: StoryAction, onCreated: (instanceId: string, sessionId: string) => void];
 }>();
 type SessionEntry = { instance: InstanceWithAiSessions; session: AiSessionSummary };
 type StoryHistoryEntry = { instance: InstanceWithAiSessions; item: AiSessionHistoryItem };
@@ -671,16 +680,24 @@ const sidebarWidth = ref(storedSidebarWidth()); const workspaceEl = ref<HTMLElem
 const previewText = ref(""); const previewLoading = ref(false); const previewError = ref("");
 const editorOpen = ref(false); const editing = ref(false); const draftTitle = ref(""); const draftDescription = ref(""); const draftNodeId = ref(""); const draftMaxIdleAiSessions = ref(STORY_DEFAULT_MAX_IDLE_AI_SESSIONS); const saving = ref(false);
 const newSessionInstanceId = ref(""); const newSessionInitialCwd = ref(""); const newSessionInitialCwdFolderId = ref(""); const assignSessionOpen = ref(false); const assignSessionId = ref(""); const assigningSession = ref(false);
-const actionEditorOpen = ref(false); const editingActionId = ref<string | null>(null); const actionSaving = ref(false); const actionDraftTitle = ref(""); const actionDraftPrompt = ref(""); const actionDraftTargetInstanceId = ref(""); const actionDraftParameters = ref<ActionParameterDraft[]>([]);
-const actionDraftAgent = ref(""); const actionDraftMode = ref(""); const actionDraftPermissionMode = ref(""); const actionDraftReasoningEffort = ref(""); const actionDraftModelEntityId = ref(""); const actionDraftModelName = ref(""); const actionDraftCwdFolderId = ref(""); const actionDraftGitMode = ref(""); const actionDraftGitBranch = ref("");
-const reasoningEfforts = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"] as const;
+const actionEditorOpen = ref(false); const actionEditorRevision = ref(0); const actionCreationPanel = ref<InstanceType<typeof AiSessionPanel>>(); const actionCreationSubmitReady = ref(false); const editingActionId = ref<string | null>(null); const actionSaving = ref(false); const actionDraftTitle = ref(""); const actionDraftMode = ref<StorySessionPreset["mode"] | "">(""); const actionDraftTargetInstanceId = ref(""); const actionDraftInitialPrompt = ref(""); const actionDraftInitialPreset = ref<StorySessionPreset>(); const actionDraftParameters = ref<ActionParameterDraft[]>([]);
 const targetInstance = (instanceId: string) => props.instances.find((instance) => instance.id === instanceId);
 const foldersForInstance = (instanceId: string) => {
   const nodeId = targetInstance(instanceId)?.nodeId;
   return nodeId ? props.nodeLocalFoldersByNodeId[nodeId] || [] : [];
 };
-const actionDraftCwdFolders = computed(() => foldersForInstance(actionDraftTargetInstanceId.value));
-const sessionsFor = (story: Story) => props.instances.flatMap((instance) => (instance.aiSessions.sessions || []).filter((session) => session.storyId === story.id && instance.node?.id === story.ownerNodeId).map((session) => ({ instance, session })));
+const actionDraftInstance = computed(() => targetInstance(actionDraftTargetInstanceId.value));
+const actionCreationActiveSession = computed<SessionTab>(() => ({ key: "ai", label: t("navigation.ai"), status: "running", kind: "ai", aiSessions: actionDraftInstance.value?.aiSessions.sessions || [] }));
+const sessionsFor = (story: Story): SessionEntry[] => {
+  const instancesById = new Map(props.instances.map((instance) => [instance.id, instance]));
+  const entries = props.instances.flatMap((instance) => (instance.aiSessions.sessions || [])
+    .filter((session) => session.storyId === story.id && instance.node?.id === story.ownerNodeId)
+    .map((session) => ({ instanceId: instance.id, session })));
+  return sortedAiSessionInboxEntries(entries).map((entry) => ({
+    instance: instancesById.get(entry.instanceId)!,
+    session: entry.session,
+  }));
+};
 const unassignedSessionsFor = (story: Story) => props.instances.flatMap((instance) => (instance.aiSessions.sessions || []).filter((session) => !session.storyId && instance.node?.id === story.ownerNodeId).map((session) => ({ instance, session })));
 const STORY_DETAIL_PAGE_SIZE = 10;
 const storyDocumentPage = ref(1);
@@ -968,34 +985,54 @@ function selectCreationInstance(instanceId: string) { newSessionInstanceId.value
 function openAssignSession() { assignSessionId.value = availableSessions.value[0] ? `${availableSessions.value[0].instance.id}:${availableSessions.value[0].session.id}` : ""; assignSessionOpen.value = true; }
 function openAssignSessionFor(story: Story) { if (!story || story.archivedAt) return; selectStory(story); openAssignSession(); }
 function editStoryFromTree(story: Story) { if (!story) return; selectStory(story); void openEdit(); }
-function resetActionPreset() { actionDraftAgent.value = ""; actionDraftMode.value = ""; actionDraftPermissionMode.value = ""; actionDraftReasoningEffort.value = ""; actionDraftModelEntityId.value = ""; actionDraftModelName.value = ""; actionDraftCwdFolderId.value = ""; actionDraftGitMode.value = ""; actionDraftGitBranch.value = ""; }
-function openCreateAction() { const story = selectedResource.value?.story; if (!story || story.archivedAt) return; editingActionId.value = null; actionDraftTitle.value = ""; actionDraftPrompt.value = ""; actionDraftTargetInstanceId.value = ""; actionDraftParameters.value = []; resetActionPreset(); actionEditorOpen.value = true; }
-function openEditAction(action: StoryAction) { const story = selectedResource.value?.story; if (!story || story.archivedAt) return; editingActionId.value = action.id; actionDraftTitle.value = action.title; actionDraftPrompt.value = action.promptTemplate; actionDraftTargetInstanceId.value = action.targetInstanceId || ""; actionDraftParameters.value = action.parameters.map((parameter) => ({ name: parameter.name, label: parameter.label, required: parameter.required, defaultValue: parameter.defaultValue || "" })); const preset = action.sessionPreset; actionDraftAgent.value = preset?.agent || ""; actionDraftMode.value = preset?.mode || ""; actionDraftPermissionMode.value = preset?.permissionMode || ""; actionDraftReasoningEffort.value = preset?.reasoningEffort || ""; actionDraftModelEntityId.value = preset?.modelSelection?.modelEntityId || ""; actionDraftModelName.value = preset?.modelSelection?.modelName || ""; actionDraftCwdFolderId.value = preset?.cwdFolderId || ""; actionDraftGitMode.value = preset?.gitSelection?.mode || ""; actionDraftGitBranch.value = preset?.gitSelection?.branch || ""; actionEditorOpen.value = true; }
+function openCreateAction() {
+  const story = selectedResource.value?.story;
+  if (!story || story.archivedAt) return;
+  editingActionId.value = null;
+  actionDraftTitle.value = "";
+  actionDraftMode.value = "";
+  actionDraftInitialPrompt.value = "";
+  actionDraftInitialPreset.value = undefined;
+  actionDraftTargetInstanceId.value = storyInstances.value[0]?.id || "";
+  actionDraftParameters.value = [];
+  actionCreationSubmitReady.value = false;
+  actionEditorRevision.value += 1;
+  actionEditorOpen.value = true;
+}
+function openEditAction(action: StoryAction) {
+  const story = selectedResource.value?.story;
+  if (!story || story.archivedAt) return;
+  editingActionId.value = action.id;
+  actionDraftTitle.value = action.title;
+  actionDraftMode.value = action.sessionPreset?.mode || "";
+  actionDraftInitialPrompt.value = action.promptTemplate;
+  actionDraftInitialPreset.value = action.sessionPreset;
+  actionDraftTargetInstanceId.value = action.targetInstanceId || storyInstances.value[0]?.id || "";
+  actionDraftParameters.value = action.parameters.map((parameter) => ({ name: parameter.name, label: parameter.label, required: parameter.required, defaultValue: parameter.defaultValue || "" }));
+  actionCreationSubmitReady.value = false;
+  actionEditorRevision.value += 1;
+  actionEditorOpen.value = true;
+}
 function addActionParameter() { actionDraftParameters.value.push({ name: "", label: "", required: false, defaultValue: "" }); }
 function removeActionParameter(index: number) { actionDraftParameters.value.splice(index, 1); }
-async function saveAction() {
+function submitActionCreation() { actionCreationPanel.value?.submitCreation(); }
+async function saveAction(draft: AiSessionCreationPresetDraft) {
   const story = selectedResource.value?.story;
   if (!story || story.archivedAt || actionSaving.value) return;
   const title = actionDraftTitle.value.trim();
-  const promptTemplate = actionDraftPrompt.value.trim();
+  const promptTemplate = draft.prompt.trim();
   if (!title || !promptTemplate) { error.value = t("stories.actionEditor.validationRequired"); return; }
   const parameters = actionDraftParameters.value
     .filter((parameter) => parameter.name.trim() || parameter.label.trim())
     .map((parameter) => ({ name: parameter.name.trim(), label: parameter.label.trim() || parameter.name.trim(), required: parameter.required, ...(parameter.defaultValue.trim() ? { defaultValue: parameter.defaultValue.trim() } : {}) }));
   if (parameters.some((parameter) => !parameter.name || !parameter.label)) { error.value = t("stories.actionEditor.validationParameter"); return; }
   const actions = [...story.actions];
-  const targetInstanceId = actionDraftTargetInstanceId.value;
+  const targetInstanceId = draft.instanceId;
   if (!targetInstanceId) { error.value = t("stories.actionEditor.validationTarget"); return; }
-  const hasPreset = Boolean(actionDraftAgent.value || actionDraftMode.value || actionDraftPermissionMode.value || actionDraftReasoningEffort.value || (actionDraftModelEntityId.value && actionDraftModelName.value) || actionDraftCwdFolderId.value || (actionDraftGitMode.value && actionDraftGitBranch.value));
-  const sessionPreset = hasPreset ? {
-    ...(actionDraftAgent.value ? { agent: actionDraftAgent.value } : {}),
+  const sessionPreset: StorySessionPreset = {
+    ...draft.sessionPreset,
     ...(actionDraftMode.value ? { mode: actionDraftMode.value } : {}),
-    ...(actionDraftPermissionMode.value ? { permissionMode: actionDraftPermissionMode.value } : {}),
-    ...(actionDraftReasoningEffort.value ? { reasoningEffort: actionDraftReasoningEffort.value } : {}),
-    ...(actionDraftModelEntityId.value && actionDraftModelName.value ? { modelSelection: { modelEntityId: actionDraftModelEntityId.value, modelName: actionDraftModelName.value } } : {}),
-    ...(actionDraftCwdFolderId.value ? { cwdFolderId: actionDraftCwdFolderId.value } : {}),
-    ...(actionDraftGitMode.value && actionDraftGitBranch.value ? { gitSelection: { mode: actionDraftGitMode.value, branch: actionDraftGitBranch.value } } : {}),
-  } as StorySessionPreset : undefined;
+  } satisfies StorySessionPreset;
   if (editingActionId.value) {
     const index = actions.findIndex((action) => action.id === editingActionId.value);
     if (index < 0) { error.value = t("stories.actionEditor.notFound"); return; }
@@ -1010,11 +1047,17 @@ async function saveAction() {
     actionEditorOpen.value = false; await load(); const refreshed = stories.value.find((item) => item.id === story.id && item.ownerNodeId === story.ownerNodeId); if (refreshed) selectStory(refreshed);
   } catch (cause) { error.value = cause instanceof Error ? cause.message : String(cause); } finally { actionSaving.value = false; }
 }
+function queueCreatedStorySession(story: Story, instanceId: string, sessionId: string, sourceResourceKey: string) {
+  pendingCreatedStorySession.value = { story, instanceId, sessionId, sourceResourceKey };
+  selectPendingCreatedStorySession();
+}
 function finishStorySessionCreation(instanceId: string, sessionId: string) {
   const story = selectedResource.value?.story;
-  if (!story) return;
-  pendingCreatedStorySession.value = { story, instanceId, sessionId, sourceResourceKey: resourceKey(selectedResource.value) };
-  selectPendingCreatedStorySession();
+  if (story) queueCreatedStorySession(story, instanceId, sessionId, resourceKey(selectedResource.value));
+}
+function storyActionCreationFinished(story: Story) {
+  const sourceResourceKey = resourceKey(selectedResource.value);
+  return (instanceId: string, sessionId: string) => queueCreatedStorySession(story, instanceId, sessionId, sourceResourceKey);
 }
 async function assignExistingSession() { const story = selectedResource.value?.story; const [instanceId, sessionId] = assignSessionId.value.split(":"); if (!story || !instanceId || !sessionId || assigningSession.value) return; assigningSession.value = true; try { const response = await fetch(`/api/controlled-instances/${encodeURIComponent(instanceId)}/ai-sessions/${encodeURIComponent(sessionId)}/story`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ storyId: story.id }) }); if (!response.ok) throw new Error(t("stories.errors.assignFailed")); assignSessionOpen.value = false; await load(); const refreshed = stories.value.find((item) => item.id === story.id && item.ownerNodeId === story.ownerNodeId); if (refreshed) selectStory(refreshed); } catch (cause) { error.value = cause instanceof Error ? cause.message : String(cause); } finally { assigningSession.value = false; } }
 async function saveStory() {
@@ -1193,12 +1236,10 @@ onBeforeUnmount(() => {
 .story-action-edit { display:grid; flex:0 0 auto; place-items:center; width:32px; height:32px; margin-right:12px; border:1px solid var(--line); border-radius:7px; background:var(--surface-raised); color:var(--text-muted); cursor:pointer; padding:0; }
 .story-action-edit:hover,.story-action-edit:focus-visible { background:var(--surface-active); color:var(--text-strong); outline:none; }
 .story-action-edit:disabled { cursor:default; opacity:.5; }
-:global(.story-editor-dialog.story-action-editor-dialog) { max-width:640px; grid-template-rows:auto minmax(0,1fr) auto; overflow:hidden; }
+:global(.story-editor-dialog.story-action-editor-dialog) { max-width:840px; grid-template-rows:auto minmax(0,1fr) auto; overflow:hidden; }
 :global(.story-action-editor-scroll) { min-height:0; }
 .story-action-editor-fields { padding-right:8px; }
-.story-action-preset { display:grid; gap:8px; border-top:1px solid var(--line); padding-top:12px; }
-.story-action-preset-title { color:var(--text-muted); font-size:12px; }
-.story-action-preset-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
+.story-action-creation-panel { width:100%; }
 .story-action-parameters { display:grid; gap:8px; }
 .story-action-parameters-header { display:flex; align-items:center; justify-content:space-between; gap:8px; color:var(--text-muted); font-size:12px; }
 .story-action-parameter { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)) auto auto; gap:8px; align-items:center; }

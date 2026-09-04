@@ -28,8 +28,9 @@ export function SwipeActionList<Item>({
     renderItem={(info) => {
       const action = swipeAction(info.item);
       const content = renderItem(info);
-      if (!action) return <View style={itemContainerStyle}>{content}</View>;
-      return <SwipeToClose containerStyle={itemContainerStyle} disabled={action.disabled} label={action.label} onClose={action.onPress}>{content}</SwipeToClose>;
+      const containerStyle = typeof itemContainerStyle === 'function' ? itemContainerStyle(info.item, info.index) : itemContainerStyle;
+      if (!action) return <View style={containerStyle}>{content}</View>;
+      return <SwipeToClose containerStyle={containerStyle} disabled={action.disabled} label={action.label} onClose={action.onPress}>{content}</SwipeToClose>;
     }}
     style={style}
     testID="swipe-action-list"

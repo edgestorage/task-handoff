@@ -20,6 +20,22 @@
   grid-template-columns: minmax(0, 1fr);
 }
 
+.session-ai-panel.creation-embedded {
+  min-height: 0;
+  background: transparent;
+  padding: 0;
+}
+
+.session-ai-panel.creation-embedded .session-ai-new-detail {
+  place-items: stretch;
+  padding: 0;
+}
+
+.session-ai-panel.creation-embedded .session-ai-new-start {
+  width: 100%;
+  gap: 0;
+}
+
 .session-ai-workspace.detail-only {
   grid-template-columns: minmax(0, 1fr);
 }

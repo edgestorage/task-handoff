@@ -1,6 +1,6 @@
 import type { ControlPlaneClient } from '@task-handoff/control-plane-client';
 import type { ControlPlaneInstanceDirectoryEntry } from '@task-handoff/protocol/control-plane-directory';
-import { AiAgentKindSchema, type AiSessionGitSelection, type AiSessionMessageAttachmentRef, type AiSessionModelSelection, type AiSessionPermissionMode, type AiSessionReasoningEffort } from '@task-handoff/protocol/ai-sessions';
+import { AiAgentKindSchema, type AiSessionGitSelection, type AiSessionMessageAttachmentRef, type AiSessionModelSelection, type AiSessionPermissionMode, type AiSessionReasoningEffort, type AiSessionSendMode } from '@task-handoff/protocol/ai-sessions';
 import type { ValueStore } from '../platform/secure-storage';
 
 const CREATE_REQUEST_VERSION = 1;
@@ -15,6 +15,7 @@ export async function createMobileAiSession(client: ControlPlaneClient, input: {
   permissionMode?: AiSessionPermissionMode;
   modelSelection?: AiSessionModelSelection;
   reasoningEffort?: AiSessionReasoningEffort;
+  mode?: AiSessionSendMode;
   storyId?: string;
   clientRequestId: string;
 }) {
@@ -28,7 +29,7 @@ export async function createMobileAiSession(client: ControlPlaneClient, input: {
     ...(input.gitSelection ? { gitSelection: input.gitSelection } : {}),
     clientRequestId: input.clientRequestId,
     message: input.message,
-    mode: 'auto',
+    mode: input.mode ?? 'auto',
     permissionMode: agent.data === 'codex' ? input.permissionMode ?? input.instance.config.defaultCodexPermissionMode : undefined,
     modelSelection: input.modelSelection,
     reasoningEffort: input.reasoningEffort,
