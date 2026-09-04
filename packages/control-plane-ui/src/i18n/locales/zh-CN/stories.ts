@@ -150,6 +150,8 @@ export const stories = {
   run: {
     noTarget: "Story 所属节点上没有可用的目标实例。",
     parameterRequired: "请填写{name}。",
+    confirm: "执行预设动作“{name}”并新建 AI 会话吗？",
+    creating: "正在创建 AI 会话",
     created: "AI 会话已创建。",
   },
 } as const satisfies MessageShape<typeof englishStories>;

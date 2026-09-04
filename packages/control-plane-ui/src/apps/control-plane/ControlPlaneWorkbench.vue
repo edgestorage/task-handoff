@@ -555,7 +555,7 @@ import { useWorkbenchInstances } from "./instance-list/useWorkbenchInstances";
 import { useAiSessionStore } from "./useAiSessionStore";
 import { useAppSessionStore } from "./useAppSessionStore";
 import { useControlPlaneEvents } from "./useControlPlaneEvents";
-import { useControlPlaneToasts } from "./useControlPlaneToasts";
+import { showDelayedControlPlaneLoadingToast, useControlPlaneToasts } from "./useControlPlaneToasts";
 import { useImagePullProgress } from "./useImagePullProgress";
 import { buildInstanceDetailPath, openInstanceDetailWindow, switchDesktopInstanceDetailWindow } from "./instance-detail/instanceDetailWindow";
 import { consumeInstanceDetailSelection, instanceDetailSelectionStorageKey, persistInstanceDetailSelection, type InstanceDetailSelection } from "./instance-detail/instanceDetailSelection";
@@ -1665,20 +1665,22 @@ function openAiSessionAppFromBoard(instance: InstanceBoardItemWithAppSessions, s
 const storyActionErrorToast = "error" as const;
 const storyActionSuccessToast = "success" as const;
 
-async function runStoryAction(story: Story, action: StoryAction) {
+async function runStoryAction(story: Story, action: StoryAction, onCreated: (instanceId: string, sessionId: string) => void) {
   const target = action.targetInstanceId
     ? boardInstancesWithAiSessions.value.find((instance) => instance.id === action.targetInstanceId)
     : boardInstancesWithAiSessions.value.find((instance) => instance.node?.id === story.ownerNodeId);
   if (!target) { showToast(t("stories.run.noTarget"), storyActionErrorToast); return; }
+  if (!window.confirm(t("stories.run.confirm", { name: action.title }))) return;
   let prompt = action.promptTemplate;
   for (const parameter of action.parameters) {
     const value = window.prompt(parameter.label, parameter.defaultValue || "") || "";
     if (parameter.required && !value.trim()) { showToast(t("stories.run.parameterRequired", { name: parameter.label }), storyActionErrorToast); return; }
     prompt = prompt.replaceAll(`{{${parameter.name}}}`, value);
   }
+  const loadingToast = showDelayedControlPlaneLoadingToast(t("stories.run.creating"));
   try {
     const preset = action.sessionPreset;
-    await createAiSession(target.id, {
+    const result = await createAiSession(target.id, {
       agent: preset?.agent || "codex",
       clientRequestId: `story-action-${crypto.randomUUID()}`,
       message: prompt,
@@ -1692,10 +1694,10 @@ async function runStoryAction(story: Story, action: StoryAction) {
       attachments: [],
       references: [],
     });
-    setActiveInstance(target.id);
-    setWorkbenchView("instance");
+    onCreated(target.id, result.aiSessionId);
     showToast(t("stories.run.created"), storyActionSuccessToast);
   } catch (cause) { showToast(cause instanceof Error ? cause.message : String(cause), storyActionErrorToast); }
+  finally { loadingToast.dismiss(); }
 }
 
 function setWorkbenchView(view: WorkbenchView) {

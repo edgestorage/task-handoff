@@ -4,6 +4,7 @@ import type {
   ControlPlaneInstanceResourceEntry,
 } from '@task-handoff/control-plane-client';
 import type { Story, StoryDocument } from '@task-handoff/protocol/stories';
+import type { StorySortMode } from './story-view-preferences';
 
 export const STORY_TREE_DOCUMENT_LIMIT = 5;
 
@@ -17,11 +18,21 @@ export function storyTreeKey(story: Pick<Story, 'id' | 'ownerNodeId'>) {
   return `${story.ownerNodeId}:${story.id}`;
 }
 
-export function sortStoryTree(stories: readonly Story[], locale: string) {
+export function sortStoryTree(stories: readonly Story[], locale: string, mode: StorySortMode = 'name', sessionsByStory?: ReadonlyMap<string, StoryTreeSession[]>, manualKeys: readonly string[] = []) {
   const collator = new Intl.Collator(locale, { numeric: true, sensitivity: 'base' });
-  return [...stories].sort((left, right) => (
+  const byName = (left: Story, right: Story) => (
     collator.compare(left.title, right.title) || storyTreeKey(left).localeCompare(storyTreeKey(right))
-  ));
+  );
+  if (mode === 'last-user-message') return [...stories].sort((left, right) => {
+    const leftTime = Math.max(...(sessionsByStory?.get(storyTreeKey(left)) ?? []).map((entry) => Date.parse(entry.session.lastUserMessageAt || entry.session.updatedAt)), 0);
+    const rightTime = Math.max(...(sessionsByStory?.get(storyTreeKey(right)) ?? []).map((entry) => Date.parse(entry.session.lastUserMessageAt || entry.session.updatedAt)), 0);
+    return rightTime - leftTime || byName(left, right);
+  });
+  if (mode === 'manual') {
+    const order = new Map(manualKeys.map((key, index) => [key, index]));
+    return [...stories].sort((left, right) => (order.get(storyTreeKey(left)) ?? Number.MAX_SAFE_INTEGER) - (order.get(storyTreeKey(right)) ?? Number.MAX_SAFE_INTEGER) || byName(left, right));
+  }
+  return [...stories].sort(byName);
 }
 
 export function groupStoryTreeSessions(
@@ -56,4 +67,14 @@ export function visibleStoryTreeDocuments(documents: readonly StoryDocument[], e
   return expanded || documents.length <= STORY_TREE_DOCUMENT_LIMIT
     ? documents
     : documents.slice(-STORY_TREE_DOCUMENT_LIMIT);
+}
+
+export function mergeStoryTreeSnapshot(current: readonly Story[], incoming: readonly Story[], unavailableNodeIds: readonly string[]) {
+  if (!unavailableNodeIds.length) return [...incoming];
+  const unavailable = new Set(unavailableNodeIds);
+  const incomingKeys = new Set(incoming.map(storyTreeKey));
+  return [
+    ...incoming,
+    ...current.filter((story) => unavailable.has(story.ownerNodeId) && !incomingKeys.has(storyTreeKey(story))),
+  ];
 }

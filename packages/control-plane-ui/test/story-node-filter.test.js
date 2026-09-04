@@ -84,6 +84,12 @@ test("Story AI sessions expose status and unread indicators", () => {
   assert.match(storyView, /type SessionEntry = \{ instance: InstanceWithAiSessions; session: AiSessionSummary \};/);
 });
 
+test("Story AI sessions sort by the last user message across instances", () => {
+  assert.match(storyView, /sortedAiSessionInboxEntries\(entries\)\.map/);
+  assert.match(storyView, /\.filter\(\(session\) => session\.storyId === story\.id && instance\.node\?\.id === story\.ownerNodeId\)/);
+  assert.doesNotMatch(storyView, /const sessionsFor = .*updatedAt/);
+});
+
 test("Story tree rows share distinct light-theme hover and selected states", () => {
   assert.match(storyView, /\.story-tree-item:hover \{ background:var\(--sidebar-row-hover-bg,var\(--surface-active\)\); \}/);
   assert.match(storyView, /\.story-tree-item\.active,\.story-tree-item\.active:hover \{ background:var\(--sidebar-row-selected-bg,var\(--surface-active\)\); \}/);
@@ -105,7 +111,8 @@ test("Story list blocks only for its initial snapshot", () => {
 
 test("a newly created Story AI Session is selected from the authoritative session snapshot", () => {
   assert.match(storyView, /const pendingCreatedStorySession = ref<\{ story: Story; instanceId: string; sessionId: string; sourceResourceKey: string \}>\(\);/);
-  assert.match(storyView, /function finishStorySessionCreation\(instanceId: string, sessionId: string\)[\s\S]*pendingCreatedStorySession\.value = \{ story, instanceId, sessionId, sourceResourceKey: resourceKey\(selectedResource\.value\) \};[\s\S]*selectPendingCreatedStorySession\(\);/);
+  assert.match(storyView, /function queueCreatedStorySession\(story: Story, instanceId: string, sessionId: string, sourceResourceKey: string\)[\s\S]*pendingCreatedStorySession\.value = \{ story, instanceId, sessionId, sourceResourceKey \};[\s\S]*selectPendingCreatedStorySession\(\);/);
+  assert.match(storyView, /function finishStorySessionCreation\(instanceId: string, sessionId: string\)[\s\S]*queueCreatedStorySession\(story, instanceId, sessionId, resourceKey\(selectedResource\.value\)\)/);
   assert.match(storyView, /candidate\.id === pending\.sessionId && candidate\.storyId === pending\.story\.id/);
   assert.match(storyView, /watch\(\(\) => props\.instances, selectPendingCreatedStorySession\);/);
   assert.match(storyView, /selectSession\(pending\.story, \{ instance, session \}\);/);

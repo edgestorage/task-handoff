@@ -20,6 +20,7 @@ export type NodeAgentStorePaths = {
   updatesDir: string;
   logsDir: string;
   storyRegistryDir: string;
+  storyAutomationsDir: string;
   storyContentDir: string;
 };
 
@@ -48,6 +49,7 @@ export function nodeAgentStorePaths(dataDir = defaultNodeAgentDataDir()): NodeAg
     updatesDir: path.join(root, "updates"),
     logsDir: path.join(root, "logs"),
     storyRegistryDir: path.join(root, "story-registry"),
+    storyAutomationsDir: path.join(root, "story-automations"),
     storyContentDir: path.join(root, "stories"),
   };
 }

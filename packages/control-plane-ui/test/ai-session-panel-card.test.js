@@ -343,7 +343,7 @@ test("an unselected AI session defaults to the new-session surface", () => {
   assert.match(panel, /:data-selected="selectedListSessionId === session\.id"/);
   assert.doesNotMatch(panel, /:data-selected="selectedSession\?\.id === session\.id"/);
   assert.match(panel, /<section v-else-if="showNewSession" class="session-ai-detail session-ai-new-detail">/);
-  assert.match(panel, /<h1 class="session-ai-new-title">\{\{ t\("sessions\.panel\.startIdea"\) \}\}<\/h1>/);
+  assert.match(panel, /<h1 v-if="!creationEmbedded" class="session-ai-new-title">\{\{ t\("sessions\.panel\.startIdea"\) \}\}<\/h1>/);
   assert.match(styles, /\.session-ai-new-start\s*\{[^}]*width: min\(760px, 100%\);[^}]*gap: 48px;/s);
   assert.match(styles, /\.session-ai-new-title\s*\{[^}]*text-align: center;/s);
   assert.match(styles, /\.session-ai-new-dialog\s*\{[^}]*box-shadow: var\(--shadow-soft\);/s);
@@ -383,7 +383,7 @@ test("new-session Git inspection uses cached workspace data without blocking the
   assert.match(panel, /queryClient\.setQueryData\(queryKey, workspace\)/);
   assert.match(panel, /const newSessionComposerBusy = computed\(\(\) => launchingNewSession\.value \|\| savingNewSessionPermission\.value \|\| choosingNewSessionFolder\.value\);/);
   assert.doesNotMatch(panel, /const newSessionComposerBusy = computed\([^\n]*newSessionWorkspaceLoading/);
-  assert.match(panel, /:disabled="!newSessionFolder \|\| \(newSessionWorkspaceLoading && !newSessionWorkspace\)"/);
+  assert.match(panel, /:disabled="creationSubmitDisabled \|\| !newSessionFolder \|\| \(newSessionWorkspaceLoading && !newSessionWorkspace\)"/);
 });
 
 test("new-session branches use a folder tree and confirm current-folder switches", () => {

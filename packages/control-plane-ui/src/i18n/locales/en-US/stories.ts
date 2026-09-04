@@ -147,6 +147,8 @@ export const stories = {
   run: {
     noTarget: "No target instance is available on the Story owner node.",
     parameterRequired: "{name} is required.",
+    confirm: "Run preset action \"{name}\" and create a new AI Session?",
+    creating: "Creating AI session",
     created: "AI Session created.",
   },
 } as const;

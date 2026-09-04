@@ -4,10 +4,18 @@ import { useMobileTheme } from '../components/theme';
 import { useI18n } from '../i18n';
 import { useMobileControlPlaneRuntime } from '../control-plane/use-mobile-control-plane-runtime';
 import { useActiveDirectories } from '../directories/use-directories';
-import type { Story } from '@task-handoff/protocol/stories';
+import type { Story, StoryAction } from '@task-handoff/protocol/stories';
 
 export function renderStoryActionPrompt(template: string, parameters: readonly { name: string; defaultValue?: string }[], values: Readonly<Record<string, string>>) {
   return template.replace(/\{\{\s*([A-Za-z0-9_-]+)\s*\}\}/g, (_, name: string) => values[name] ?? parameters.find((parameter) => parameter.name === name)?.defaultValue ?? '');
+}
+
+export function resolveStoryActionPrompt(action: StoryAction, values: Readonly<Record<string, string>> = {}):
+  | { ok: true; message: string }
+  | { ok: false; missingParameter: StoryAction['parameters'][number] } {
+  const missingParameter = action.parameters.find((parameter) => parameter.required && !(values[parameter.name] || parameter.defaultValue || '').trim());
+  if (missingParameter) return { ok: false, missingParameter };
+  return { ok: true, message: renderStoryActionPrompt(action.promptTemplate, action.parameters, values) };
 }
 
 export function StoryActionForm({ storyId, actionId, nodeId, onCreated }: { storyId?: string; actionId?: string; nodeId?: string; onCreated(instanceId: string, message: string): void }) {
@@ -15,7 +23,7 @@ export function StoryActionForm({ storyId, actionId, nodeId, onCreated }: { stor
   const [story, setStory] = useState<Story>(); const [values, setValues] = useState<Record<string, string>>({}); const [error, setError] = useState<string>();
   useEffect(() => { if (!runtime.api || !storyId || !nodeId) return; void runtime.api.stories.get(storyId, nodeId).then(setStory).catch((cause) => setError(cause instanceof Error ? cause.message : String(cause))); }, [nodeId, runtime.api, storyId]);
   const action = story?.actions.find((item) => item.id === actionId); const instanceId = action?.targetInstanceId || directory.instances.find((item) => item.nodeId === story?.ownerNodeId && item.ready)?.id;
-  const submit = () => { if (!action) return; if (!instanceId) { setError(t('stories.noAvailableInstance')); return; } const missing = action.parameters.find((parameter) => parameter.required && !(values[parameter.name] || parameter.defaultValue || '').trim()); if (missing) { setError(t('stories.parameterRequired', { name: missing.label })); return; } onCreated(instanceId, renderStoryActionPrompt(action.promptTemplate, action.parameters, values)); };
+  const submit = () => { if (!action) return; if (!instanceId) { setError(t('stories.noAvailableInstance')); return; } const resolved = resolveStoryActionPrompt(action, values); if (!resolved.ok) { setError(t('stories.parameterRequired', { name: resolved.missingParameter.label })); return; } onCreated(instanceId, resolved.message); };
   if (!story && !error) return <ActivityIndicator accessibilityLabel={t('common.loading')} style={styles.loading} />;
   return <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={[styles.content, { backgroundColor: colors.background }]}><Text style={[styles.title, { color: colors.text }]}>{action?.title || t('stories.loadError')}</Text>{action?.parameters.map((parameter) => <View key={parameter.name} style={styles.field}><Text style={[styles.label, { color: colors.text }]}>{parameter.label}{parameter.required ? ' *' : ''}</Text><TextInput value={values[parameter.name] ?? ''} onChangeText={(value) => setValues((current) => ({ ...current, [parameter.name]: value }))} placeholder={parameter.defaultValue} placeholderTextColor={colors.textMuted} style={[styles.input, { backgroundColor: colors.surface, borderColor: colors.border, color: colors.text }]} /></View>)}{error ? <Text style={[styles.error, { color: colors.error }]}>{error}</Text> : null}<Pressable accessibilityRole="button" onPress={submit} style={[styles.submit, { backgroundColor: colors.primary }]}><Text style={styles.submitText}>{t('stories.startAction')}</Text></Pressable></ScrollView>;
 }

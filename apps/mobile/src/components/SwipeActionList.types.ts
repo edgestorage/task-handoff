@@ -10,7 +10,7 @@ export type SwipeAction = {
 export type SwipeActionListProps<Item> = {
   contentContainerStyle?: StyleProp<ViewStyle>;
   data: readonly Item[];
-  itemContainerStyle?: StyleProp<ViewStyle>;
+  itemContainerStyle?: StyleProp<ViewStyle> | ((item: Item, index: number) => StyleProp<ViewStyle>);
   keyExtractor(item: Item, index: number): string;
   ListEmptyComponent?: ReactElement | null;
   ListHeaderComponent?: ReactNode;
