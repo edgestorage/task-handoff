@@ -75,26 +75,11 @@
         <ScrollArea class="ai-board-floating-scroll">
           <div class="ai-board-floating-content">
             <section v-if="timelineMode === 'compact'" ref="promptSectionEl" class="ai-board-floating-block ai-board-floating-block-user">
-              <div
-                ref="promptContentEl"
-                class="ai-board-floating-prompt-content"
-                :class="{ expanded: promptExpanded }"
-              >
-                <MarkdownContent
-                  v-if="detailState === 'ready'"
-                  :content="displayAiSessionTitle(conversationSession, promptIndex, t)"
-                />
-              </div>
-              <button
-                v-if="promptHasOverflow"
-                type="button"
-                class="ai-board-floating-prompt-toggle"
-                :aria-expanded="promptExpanded"
-                @click="togglePrompt"
-              >
-                <span>{{ promptExpanded ? t("sessions.detail.collapsePrompt") : t("sessions.detail.expand") }}</span>
-                <ChevronDown :size="13" :class="{ open: promptExpanded }" />
-              </button>
+              <AiSessionCompactPrompt
+                :content="detailState === 'ready' ? displayAiSessionTitle(conversationSession, promptIndex, t) : ''"
+                :timestamp="promptTimestamp"
+                tone="board"
+              />
             </section>
 
             <div
@@ -175,6 +160,7 @@ import { ChevronDown, ChevronUp, CircleHelp, ExternalLink } from "@lucide/vue";
 import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
 import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions } from "../../../api/types";
 import AiSessionComposer, { type AiSessionComposerAttachment } from "../../../components/ai-session/AiSessionComposer.vue";
+import AiSessionCompactPrompt from "../../../components/ai-session/AiSessionCompactPrompt.vue";
 import AiSessionConversationContent from "../../../components/ai-session/AiSessionConversationContent.vue";
 import type { AiSessionTurnTimelineState } from "../useAiSessionTimelineStore";
 import type { AiSessionMentionBinding } from "../../../components/ai-session/mentions";
@@ -187,6 +173,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../
 import {
   aiSessionAppDisplayName,
   aiSessionBasename,
+  aiSessionTurns,
   displayAiSessionTitle,
 } from "../useInstanceSessions";
 import type { AiBoardCard } from "./aiBoardTypes";
@@ -258,10 +245,11 @@ const detailHeight = ref(DEFAULT_DETAIL_HEIGHT);
 const dockRoot = ref<HTMLElement>();
 const composerEl = ref<InstanceType<typeof AiSessionComposer>>();
 const detailScrolled = ref(false);
-const promptContentEl = ref<HTMLElement>();
 const promptSectionEl = ref<HTMLElement>();
-const promptHasOverflow = ref(false);
-const promptExpanded = ref(false);
+const promptTimestamp = computed(() => (
+  aiSessionTurns(props.conversationSession)[props.promptIndex]?.startedAt
+  || props.conversationSession.startedAt
+));
 const promptStickyPlaceholderHeight = ref(0);
 defineExpose({ focusComposer: () => composerEl.value?.focus() });
 let detailScrollViewport: HTMLElement | undefined;
@@ -380,25 +368,11 @@ function handleViewportResize() {
   clampCurrentSize();
 }
 
-function updatePromptOverflow() {
-  const element = promptContentEl.value;
-  if (promptExpanded.value) return;
-  promptHasOverflow.value = Boolean(element && element.scrollHeight > element.clientHeight + 1);
-}
-
-function togglePrompt() {
-  promptExpanded.value = !promptExpanded.value;
-  if (!promptExpanded.value) {
-    void nextTick(updatePromptOverflow);
-  }
-}
-
 function updatePromptStickyThreshold() {
   if (detailScrolled.value) return;
   const prompt = promptSectionEl.value;
-  const content = promptContentEl.value;
   const viewport = detailScrollViewport;
-  if (!prompt || !content || !viewport) {
+  if (!prompt || !viewport) {
     promptStickyThreshold = 0;
     return;
   }
@@ -417,7 +391,6 @@ function updatePromptStickyThreshold() {
 }
 
 function updatePromptLayout() {
-  updatePromptOverflow();
   updatePromptStickyThreshold();
 }
 
@@ -484,7 +457,6 @@ function observePrompt() {
   promptResizeObserver = undefined;
   if (typeof ResizeObserver !== "undefined") {
     promptResizeObserver = new ResizeObserver(updatePromptLayout);
-    if (promptContentEl.value) promptResizeObserver.observe(promptContentEl.value);
     if (promptSectionEl.value) promptResizeObserver.observe(promptSectionEl.value);
   }
   updatePromptLayout();
@@ -501,8 +473,6 @@ watch(
     detailScrolled.value = false;
     promptStickyPlaceholderHeight.value = 0;
     promptStickyThreshold = 0;
-    promptExpanded.value = false;
-    promptHasOverflow.value = false;
     void nextTick(observePrompt);
   },
 );
@@ -809,51 +779,6 @@ onBeforeUnmount(() => {
   position: relative;
 }
 
-.ai-board-floating-prompt-content {
-  min-width: 0;
-  max-height: calc(1.55em * 3);
-  overflow: hidden;
-  color: var(--ai-board-title);
-  font-size: 14px;
-  line-height: 1.55;
-  white-space: normal;
-}
-
-.ai-board-floating-prompt-content.expanded {
-  max-height: none;
-}
-
-.ai-board-floating-prompt-content :deep(.markdown-content),
-.ai-board-floating-prompt-content :deep(.markdown-content > *) {
-  max-width: 100%;
-  overflow-wrap: anywhere;
-}
-
-.ai-board-floating-prompt-toggle {
-  display: inline-flex;
-  align-items: center;
-  justify-self: start;
-  gap: 3px;
-  border: 0;
-  background: transparent;
-  color: var(--text-muted);
-  cursor: pointer;
-  font-size: 12px;
-  padding: 0;
-}
-
-.ai-board-floating-prompt-toggle:hover {
-  color: var(--text);
-}
-
-.ai-board-floating-prompt-toggle svg {
-  transition: transform 160ms ease;
-}
-
-.ai-board-floating-prompt-toggle svg.open {
-  transform: rotate(180deg);
-}
-
 .ai-board-floating-detail.is-scrolled .ai-board-floating-block-user {
   position: sticky;
   top: 0;
@@ -864,12 +789,12 @@ onBeforeUnmount(() => {
   padding: var(--ai-board-floating-sticky-padding-block) 14px;
 }
 
-.ai-board-floating-detail.is-scrolled .ai-board-floating-prompt-content {
+.ai-board-floating-detail.is-scrolled :deep(.ai-session-user-prompt-content) {
   max-height: 1.55em;
 }
 
-.ai-board-floating-detail.is-scrolled .ai-board-floating-prompt-content :deep(.markdown-content),
-.ai-board-floating-detail.is-scrolled .ai-board-floating-prompt-content :deep(.markdown-content > *) {
+.ai-board-floating-detail.is-scrolled :deep(.ai-session-user-prompt-content .markdown-content),
+.ai-board-floating-detail.is-scrolled :deep(.ai-session-user-prompt-content .markdown-content > *) {
   display: block;
   max-width: 100%;
   margin-block: 0;
@@ -878,7 +803,7 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 
-.ai-board-floating-detail.is-scrolled .ai-board-floating-prompt-toggle {
+.ai-board-floating-detail.is-scrolled :deep(.ai-session-user-prompt-toggle) {
   display: none;
 }
 

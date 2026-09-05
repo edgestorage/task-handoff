@@ -59,6 +59,8 @@
                     :can-add-existing="!Boolean(story.archivedAt) && unassignedSessionsFor(story).length > 0"
                     @new-session="openNewSession(story)"
                     @add-existing="openAssignSessionFor(story)"
+                    @add-action="openCreateActionForStory(story)"
+                    @add-automation="openCreateAutomationForStory(story)"
                     @edit="editStoryFromTree(story)"
                     @toggle-archive="toggleArchive(story)"
                     @delete="deleteStory(story)"
@@ -165,28 +167,39 @@
         </template>
         <template v-else-if="selectedResource?.kind === 'story'">
           <ScrollArea type="auto" :horizontal="false" class="story-detail-scroll">
-            <div class="story-detail-scroll-inner">
-              <header class="story-content-header">
-                <div class="story-content-title"><h2>{{ selectedResource.story.title }}</h2><small>{{ storyOwnerNodeName(selectedResource.story.ownerNodeId) }}</small></div>
-                <div class="story-content-actions"><Button variant="outline" size="sm" @click="openEdit"><Pencil :size="14" /> {{ t("common.actions.edit") }}</Button><DropdownMenu><DropdownMenuTrigger as-child><Button variant="outline" size="icon-sm" :aria-label="t('stories.moreActions')" :title="t('stories.moreActions')"><MoreHorizontal :size="16" /></Button></DropdownMenuTrigger><DropdownMenuContent align="end"><DropdownMenuItem :disabled="Boolean(selectedResource.story.archivedAt)" @select="openNewSession(selectedResource.story)">{{ t("stories.newSession") }}</DropdownMenuItem><DropdownMenuItem :disabled="Boolean(selectedResource.story.archivedAt) || !availableSessions.length" @select="openAssignSession">{{ t("stories.addExisting") }}</DropdownMenuItem><DropdownMenuItem @select="toggleArchive(selectedResource.story)">{{ t(selectedResource.story.archivedAt ? "common.actions.restore" : "common.actions.archive") }}</DropdownMenuItem></DropdownMenuContent></DropdownMenu></div>
-              </header>
-              <p v-if="selectedResource.story.description" class="story-description">{{ selectedResource.story.description }}</p>
-              <div class="story-overview-summary">
-                <span><strong>{{ selectedResource.story.documents.length }}</strong>{{ t("stories.documents") }}</span>
-                <span><strong>{{ sessionCount(selectedResource.story) }}</strong>{{ t("stories.aiSessions") }}</span>
-                <span><strong>{{ selectedResource.story.actions.length }}</strong>{{ t("stories.presetActions") }}</span>
+            <div ref="storyDetailScrollInnerEl" class="story-detail-scroll-inner">
+              <div ref="storyDetailHeadEl" class="story-detail-head">
+                <header class="story-content-header">
+                  <div class="story-content-title"><h2>{{ selectedResource.story.title }}</h2><small>{{ storyOwnerNodeName(selectedResource.story.ownerNodeId) }}</small></div>
+                  <Tabs class="story-detail-header-tabs" :model-value="storyDetailSection" @update:model-value="scrollToStorySection($event as StoryDetailSection)">
+                    <TabsList class="story-detail-tabs" :aria-label="t('stories.detailSections')">
+                      <TabsTrigger value="actions"><span class="story-detail-tab-count">{{ selectedResource.story.actions.length }}</span>{{ t("stories.presetActions") }}</TabsTrigger>
+                      <TabsTrigger value="documents"><span class="story-detail-tab-count">{{ selectedResource.story.documents.length }}</span>{{ t("stories.documents") }}</TabsTrigger>
+                      <TabsTrigger value="sessions"><span class="story-detail-tab-count">{{ sessionCount(selectedResource.story) }}</span>{{ t("stories.aiSessions") }}</TabsTrigger>
+                      <TabsTrigger value="automations"><span class="story-detail-tab-count">{{ storyAutomationEntries.length }}</span>{{ t("stories.automation.title") }}</TabsTrigger>
+                    </TabsList>
+                  </Tabs>
+                  <div class="story-content-actions">
+                    <Button variant="outline" size="sm" @click="openEdit"><Pencil :size="14" /> {{ t("common.actions.edit") }}</Button>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger as-child>
+                        <Button variant="outline" size="icon-sm" :aria-label="t('stories.moreActions')" :title="t('stories.moreActions')"><MoreHorizontal :size="16" /></Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem :disabled="Boolean(selectedResource.story.archivedAt)" @select="openNewSession(selectedResource.story)"><MessageSquarePlus :size="14" /> {{ t("stories.newSession") }}</DropdownMenuItem>
+                        <DropdownMenuItem :disabled="Boolean(selectedResource.story.archivedAt) || !availableSessions.length" @select="openAssignSession"><Link :size="14" /> {{ t("stories.addExisting") }}</DropdownMenuItem>
+                        <DropdownMenuItem :disabled="Boolean(selectedResource.story.archivedAt)" @select="openCreateAction()"><Play :size="14" /> {{ t("stories.addAction") }}</DropdownMenuItem>
+                        <DropdownMenuItem :disabled="Boolean(selectedResource.story.archivedAt)" @select="openCreateAutomation()"><CalendarClock :size="14" /> {{ t("stories.automation.add") }}</DropdownMenuItem>
+                        <DropdownMenuItem @select="toggleArchive(selectedResource.story)"><Archive v-if="!selectedResource.story.archivedAt" :size="14" /><RotateCcw v-else :size="14" /> {{ t(selectedResource.story.archivedAt ? "common.actions.restore" : "common.actions.archive") }}</DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
+                </header>
+                <p v-if="selectedResource.story.description" class="story-description">{{ selectedResource.story.description }}</p>
               </div>
-              <Tabs :model-value="storyDetailSection" @update:model-value="scrollToStorySection($event as StoryDetailSection)">
-                <TabsList class="story-detail-tabs" :aria-label="t('stories.detailSections')">
-                  <TabsTrigger value="actions">{{ t("stories.presetActions") }}</TabsTrigger>
-                  <TabsTrigger value="documents">{{ t("stories.documents") }}</TabsTrigger>
-                  <TabsTrigger value="sessions">{{ t("stories.aiSessions") }}</TabsTrigger>
-                  <TabsTrigger value="automations">{{ t("stories.automation.title") }}</TabsTrigger>
-                </TabsList>
-              </Tabs>
               <section ref="storyActionsSectionEl" class="story-directory story-actions-section">
-                <div class="story-directory-header story-actions-header"><div class="story-directory-heading"><h3>{{ t("stories.presetActions") }}</h3><span>{{ selectedResource.story.actions.length }}</span></div><Button variant="outline" size="sm" :disabled="Boolean(selectedResource.story.archivedAt)" @click="openCreateAction"><Plus :size="14" /> {{ t("stories.addAction") }}</Button></div>
-                <div v-if="!selectedResource.story.actions.length" class="story-empty">{{ t("stories.noPresetActions") }}</div>
+                <div class="story-directory-header story-actions-header"><div class="story-directory-heading"><h3>{{ t("stories.presetActions") }}</h3><span>{{ selectedResource.story.actions.length }}</span></div><Button variant="ghost" size="icon-sm" :disabled="Boolean(selectedResource.story.archivedAt)" :aria-label="t('stories.addAction')" :title="t('stories.addAction')" @click="openCreateAction"><Plus :size="16" /></Button></div>
+                <div v-if="!selectedResource.story.actions.length" class="story-empty story-empty-with-action"><span>{{ t("stories.noPresetActions") }}</span><Button variant="link" size="sm" :disabled="Boolean(selectedResource.story.archivedAt)" @click="openCreateAction">{{ t("stories.addAction") }}</Button></div>
                 <div v-for="action in selectedResource.story.actions" :key="action.id" class="story-action-item">
                   <button type="button" class="story-action-run" :disabled="Boolean(selectedResource.story.archivedAt)" @click="$emit('run-action', selectedResource.story, action, storyActionCreationFinished(selectedResource.story))">
                     <span class="story-action-icon"><Play :size="14" /></span>
@@ -277,6 +290,7 @@
               </section>
               <section ref="storyAutomationsSectionEl" class="story-directory story-automations-section">
                 <StoryActionAutomations
+                  ref="storyAutomationsPanel"
                   :story="selectedResource.story"
                   :actions="selectedResource.story.actions"
                   :create-with-action="createAutomationWithAction"
@@ -357,7 +371,7 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useQueryClient } from "@tanstack/vue-query";
-import { BookOpen, CalendarClock, ChevronLeft, ChevronRight, Download, FileText, History, LoaderCircle, MessageSquare, MessageSquarePlus, MoreHorizontal, Pencil, Play, Plus, X } from "@lucide/vue";
+import { Archive, BookOpen, CalendarClock, ChevronLeft, ChevronRight, Download, FileText, History, Link, LoaderCircle, MessageSquare, MessageSquarePlus, MoreHorizontal, Pencil, Play, Plus, RotateCcw, X } from "@lucide/vue";
 import AiSessionStatusIndicator from "../../../components/ai-session/AiSessionStatusIndicator.vue";
 import AiSessionStreamingMarkdown from "../../../components/ai-session/AiSessionStreamingMarkdown.vue";
 import { Button } from "../../../components/ui/button";
@@ -487,11 +501,15 @@ const selectedResource = ref<Resource>(); const expandedStoryKeys = ref(storedEx
 type StoryDetailSection = "actions" | "documents" | "sessions" | "automations";
 type StoryAutomationView = StoryAutomationStatus & { recentRuns: StoryAutomationRun[] };
 const storyDetailSection = ref<StoryDetailSection>("actions");
+const storyDetailScrollInnerEl = ref<HTMLElement>();
+const storyDetailHeadEl = ref<HTMLElement>();
 const storyActionsSectionEl = ref<HTMLElement>();
 const storyDocumentsSectionEl = ref<HTMLElement>();
 const storySessionsSectionEl = ref<HTMLElement>();
 const storyAutomationsSectionEl = ref<HTMLElement>();
+const storyAutomationsPanel = ref<InstanceType<typeof StoryActionAutomations>>();
 const storyAutomationEntries = ref<StoryAutomationView[]>([]);
+let storyDetailHeadResizeObserver: ResizeObserver | undefined;
 const pendingCreatedStorySession = ref<{ story: Story; instanceId: string; sessionId: string; sourceResourceKey: string }>();
 type TreeViewMode = "compact" | "detailed";
 const TREE_VIEW_MODE_STORAGE_KEY = "task-handoff.control-plane.stories.tree-view-mode";
@@ -924,6 +942,18 @@ function automationScheduleLabel(schedule: StoryAutomationSchedule) {
   }
   return t("stories.automation.monthlyAt", { day: schedule.dayOfMonth, time: schedule.timeOfDay, timezone: schedule.timezone });
 }
+function syncStoryDetailHeadOffset() {
+  if (!storyDetailScrollInnerEl.value || !storyDetailHeadEl.value) return;
+  storyDetailScrollInnerEl.value.style.setProperty("--story-detail-head-height", `${storyDetailHeadEl.value.offsetHeight}px`);
+}
+watch(storyDetailHeadEl, (head) => {
+  storyDetailHeadResizeObserver?.disconnect();
+  if (!head || typeof ResizeObserver === "undefined") return;
+  const update = () => syncStoryDetailHeadOffset();
+  storyDetailHeadResizeObserver = new ResizeObserver(update);
+  storyDetailHeadResizeObserver.observe(head);
+  update();
+}, { immediate: true });
 function storySectionElement(section: StoryDetailSection) {
   return { actions: storyActionsSectionEl.value, documents: storyDocumentsSectionEl.value, sessions: storySessionsSectionEl.value, automations: storyAutomationsSectionEl.value }[section];
 }
@@ -1038,9 +1068,9 @@ function selectCreationInstance(instanceId: string) { newSessionInstanceId.value
 function openAssignSession() { assignSessionId.value = availableSessions.value[0] ? `${availableSessions.value[0].instance.id}:${availableSessions.value[0].session.id}` : ""; assignSessionOpen.value = true; }
 function openAssignSessionFor(story: Story) { if (!story || story.archivedAt) return; selectStory(story); openAssignSession(); }
 function editStoryFromTree(story: Story) { if (!story) return; selectStory(story); void openEdit(); }
-function openCreateAction() {
-  const story = selectedResource.value?.story;
-  if (!story || story.archivedAt) return;
+function openCreateAction(story?: Story) {
+  const target = story || selectedResource.value?.story;
+  if (!target || target.archivedAt) return;
   editingActionId.value = null;
   actionDraftTitle.value = "";
   actionDraftMode.value = "";
@@ -1050,6 +1080,21 @@ function openCreateAction() {
   actionCreationSubmitReady.value = false;
   actionEditorRevision.value += 1;
   actionEditorOpen.value = true;
+}
+function openCreateActionForStory(story: Story) {
+  if (!story || story.archivedAt) return;
+  selectStory(story);
+  openCreateAction(story);
+}
+async function openCreateAutomation(story?: Story) {
+  const target = story || selectedResource.value?.story;
+  if (!target || target.archivedAt) return;
+  if (story) selectStory(story);
+  await nextTick();
+  storyAutomationsPanel.value?.openCreate();
+}
+function openCreateAutomationForStory(story: Story) {
+  void openCreateAutomation(story);
 }
 function handleActionEditorOpenChange(open: boolean) {
   actionEditorOpen.value = open;
@@ -1158,6 +1203,8 @@ async function deleteDocument(story: Story, storyPath: string) { if (!window.con
 onBeforeUnmount(() => {
   stopSidebarResize();
   cancelStoryPointerDrag();
+  storyDetailHeadResizeObserver?.disconnect();
+  storyDetailHeadResizeObserver = undefined;
 });
 </script>
 
@@ -1250,10 +1297,11 @@ onBeforeUnmount(() => {
 .story-content.story-session-pane > .story-session-creator { padding:0; background:transparent; }
 .story-detail-scroll { flex:1; min-height:0; }
 .story-detail-scroll :deep([data-task-handoff-scroll-viewport] > div) { width:100%; min-width:0 !important; }
-.story-detail-scroll-inner { display:grid; gap:12px; width:min(100%,1080px); min-width:0; margin:0 auto; padding:0 10px 32px 0; }
+.story-detail-scroll-inner { --story-detail-head-height:140px; display:grid; gap:12px; width:min(100%,1080px); min-width:0; margin:0 auto; padding:0 10px 32px 0; }
+.story-detail-head { position:sticky; top:0; z-index:3; display:grid; gap:12px; min-width:0; padding-bottom:10px; background:var(--workspace-bg); }
 .story-content-header { display:flex; align-items:center; justify-content:space-between; gap:12px; border-bottom:1px solid var(--line); padding:0 0 12px; flex:0 0 auto; }
 .story-content-header > div:first-child:not(.story-content-title) { display:grid; min-width:0; gap:3px; }
-.story-content-header .story-content-title { display:flex; align-items:baseline; gap:10px; min-width:0; }
+.story-content-header .story-content-title { display:flex; flex:1 1 auto; align-items:baseline; gap:10px; min-width:0; }
 .story-content-title h2 { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .story-content-title small { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .story-content-state { display:grid; flex:1; place-items:center; color:var(--text-muted); font-size:13px; padding:24px; }
@@ -1264,13 +1312,11 @@ onBeforeUnmount(() => {
 .story-content-download:hover { color:var(--text-strong); }
 .story-content-actions { display:flex; align-items:center; gap:8px; flex:0 0 auto; }
 .story-session-creator { flex:1; min-height:0; }
-.story-overview-summary { display:flex; align-items:center; flex-wrap:wrap; gap:0; min-height:20px; color:var(--text-muted); font-size:12px; }
-.story-overview-summary span { display:inline-flex; align-items:baseline; gap:4px; }
-.story-overview-summary span + span::before { margin:0 10px; color:var(--line-strong); content:"/"; }
-.story-overview-summary strong { color:var(--text-strong); font-size:13px; font-weight:500; }
-.story-detail-tabs { position:sticky; top:0; z-index:3; display:inline-flex; align-items:center; width:fit-content; height:32px; min-height:32px; border:1px solid var(--line); border-radius:7px; background:var(--surface-inset); box-shadow:0 4px 10px color-mix(in srgb,var(--workspace-bg) 72%,transparent); padding:2px; }
+.story-detail-header-tabs { flex:0 0 auto; margin-left:auto; min-width:0; }
+.story-detail-tabs { display:inline-flex; align-items:center; width:fit-content; height:32px; min-height:32px; border:1px solid var(--line); border-radius:7px; background:var(--surface-inset); padding:2px; }
 .story-detail-tabs :deep(button) { height:26px; min-height:26px; border-radius:5px; font-size:12px; font-weight:500; padding:0 10px; }
-.story-directory { scroll-margin-top:42px; }
+.story-detail-tab-count { margin-right:4px; color:var(--text-strong); font-weight:500; }
+.story-directory { scroll-margin-top:calc(var(--story-detail-head-height) + 12px); }
 .story-directory { overflow:hidden; border:1px solid var(--line); border-radius:8px; background:var(--surface-raised); }
 .story-directory-header { display:flex; align-items:center; justify-content:space-between; gap:8px; min-height:38px; border-bottom:1px solid var(--line); padding:0 12px; }
 .story-directory-heading { display:flex; align-items:baseline; gap:7px; min-width:0; }
@@ -1327,6 +1373,7 @@ onBeforeUnmount(() => {
 :global(.story-action-editor-scroll) { min-height:0; }
 .story-directory > .story-empty { min-height:64px; padding:22px 12px; }
 .story-empty { color:var(--text-muted); font-size:12px; padding:16px; text-align:center; }
+.story-empty-with-action { display:flex; align-items:center; justify-content:center; gap:8px; }
 .story-error { color:var(--status-danger); font-size:12px; }
 .story-editor-fields { display:grid; gap:14px; }
 .story-editor-fields label { display:grid; gap:6px; color:var(--text-muted); font-size:12px; }
@@ -1341,7 +1388,7 @@ onBeforeUnmount(() => {
 .story-dialog-header { flex-direction:row; align-items:flex-start; justify-content:space-between; gap:16px; text-align:left; }
 .story-dialog-close { display:grid; flex:0 0 auto; width:30px; height:30px; place-items:center; border:0; border-radius:6px; background:transparent; color:var(--text-muted); cursor:pointer; padding:0; }
 .story-dialog-close:hover, .story-dialog-close:focus-visible { background:var(--surface-active); color:var(--text-strong); outline:none; }
-@media (max-width:800px) { .story-view { padding:16px 0; } .story-workspace { grid-template-columns:minmax(220px,38%) minmax(0,1fr); } .story-sidebar-resize-handle { display:none; } .story-content-header { padding:0 0 14px; } .story-detail-scroll-inner { padding-right:6px; } }
+@media (max-width:800px) { .story-view { padding:16px 0; } .story-workspace { grid-template-columns:minmax(220px,38%) minmax(0,1fr); } .story-sidebar-resize-handle { display:none; } .story-content-header { flex-wrap:wrap; padding:0 0 14px; } .story-detail-header-tabs { order:3; width:100%; margin-left:0; } .story-detail-tabs { width:100%; } .story-detail-tabs :deep(button) { flex:1; min-width:0; padding:0 5px; } .story-detail-scroll-inner { padding-right:6px; } }
 @media (max-width:820px) { .story-history-drawer-close { top:12px; left:max(10px,calc(10px + var(--native-titlebar-controls-left-width))); } }
 @media (max-width:560px) { .story-view { padding:10px 0; } .story-workspace { grid-template-columns:1fr; } .story-sidebar { max-height:38%; border-right:0; border-bottom:1px solid var(--line); } .story-detail-tabs { width:100%; } .story-detail-tabs :deep(button) { min-width:0; flex:1; padding:0 5px; } }
 </style>

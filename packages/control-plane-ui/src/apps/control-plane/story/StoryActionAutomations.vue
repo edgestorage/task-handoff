@@ -2,11 +2,14 @@
   <div class="story-automations">
     <div class="story-automations-heading">
       <div><h3>{{ t("stories.automation.title") }}</h3><span>{{ automations.length }}</span></div>
-      <Button variant="outline" size="sm" :disabled="disabled" @click="openCreate"><Plus :size="14" />{{ t("stories.automation.add") }}</Button>
+      <Button variant="ghost" size="icon-sm" :disabled="disabled" :aria-label="t('stories.automation.add')" :title="t('stories.automation.add')" @click="openCreate"><Plus :size="16" /></Button>
     </div>
     <div v-if="loading" class="story-automation-state"><LoaderCircle class="story-automation-spin" :size="14" /> {{ t("stories.automation.loading") }}</div>
     <div v-else-if="error" class="story-automation-state story-automation-error" role="alert">{{ error }}</div>
-    <div v-else-if="!automations.length" class="story-automation-state">{{ t("stories.automation.empty") }}</div>
+    <div v-else-if="!automations.length" class="story-automation-state story-automation-empty-state">
+      <span>{{ t("stories.automation.empty") }}</span>
+      <Button variant="link" size="sm" :disabled="disabled" @click="openCreate">{{ t("stories.automation.add") }}</Button>
+    </div>
     <div v-for="entry in automations" :key="entry.automation.id" class="story-automation-row" :data-automation-id="entry.automation.id" tabindex="-1">
       <CalendarClock :size="15" />
       <div class="story-automation-copy">
@@ -239,6 +242,7 @@ function resetEditor() {
   editorError.value = "";
 }
 function openCreate() { resetEditor(); editorOpen.value = true; }
+defineExpose({ openCreate });
 function openEdit(entry: StoryAutomationStatus) {
   resetEditor();
   editingId.value = entry.automation.id;
@@ -349,6 +353,7 @@ function formatTime(value: string) { return new Intl.DateTimeFormat(locale.value
 .story-automation-action { overflow:hidden; color:var(--text-strong); font-size:13px; font-weight:500; text-overflow:ellipsis; white-space:nowrap; }
 .story-automation-actions { display:flex; flex:0 0 auto; gap:2px; }
 .story-automation-state { min-height:38px; color:var(--text-muted); font-size:12px; padding:11px 12px; }
+.story-automation-empty-state { display:flex; align-items:center; justify-content:center; gap:8px; min-height:64px; padding:16px 12px; }
 .story-automation-error { color:var(--status-danger) !important; font-size:12px; }
 .story-automation-spin { animation:story-automation-spin .9s linear infinite; }
 .story-automation-history-trigger { display:flex; width:max-content; align-items:center; gap:5px; border:0; background:transparent; color:var(--text-muted); cursor:pointer; font-size:12px; padding:0; }
