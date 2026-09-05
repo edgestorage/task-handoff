@@ -68,7 +68,7 @@
                         <ControlPlaneSelectItem value="week">{{ t("triggers.intervalUnit.week") }}</ControlPlaneSelectItem>
                       </ControlPlaneSelect>
                     </div>
-                    <Input v-else v-model="createForm.timeOfDay" type="time" />
+                    <ControlPlaneTimePicker v-else v-model="createForm.timeOfDay" :hour-label="t('triggers.intervalUnit.hour')" :minute-label="t('triggers.intervalUnit.minute')" />
                   </label>
                   <label v-if="createForm.scheduleKind !== 'interval'">
                     <span>{{ t("triggers.create.timezone") }}</span>
@@ -400,6 +400,7 @@ import { Textarea } from "../../../components/ui/textarea";
 import ControlPlaneInput from "../shared/ControlPlaneInput.vue";
 import ControlPlaneSelect from "../shared/ControlPlaneSelect.vue";
 import ControlPlaneSelectItem from "../shared/ControlPlaneSelectItem.vue";
+import ControlPlaneTimePicker from "../shared/ControlPlaneTimePicker.vue";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
 import { formatDateTime } from "../../../i18n/presentation";
 import { translateApiError } from "../../../i18n/apiError";

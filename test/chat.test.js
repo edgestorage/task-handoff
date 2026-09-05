@@ -1547,6 +1547,25 @@ test("ai session aggregate snapshots preserve session model selection", () => {
   assert.deepEqual(registry.boundSnapshot([]).sessions[0].modelSelection, modelSelection);
 });
 
+test("ai session aggregate snapshots retain the configured 150 bound sessions", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-unbounded-snapshot-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const created = Array.from({ length: 155 }, (_, index) => registry.start({
+    agent: "codex",
+    appSessionId: `app-${index}`,
+    providerSessionId: `thread-${index}`,
+  }, {
+    timestamp: new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString(),
+  }));
+
+  const snapshot = registry.boundSnapshot(created.map((session) => ({ id: session.appSessionId, status: "running" })));
+  assert.equal(snapshot.sessions.length, 150);
+  assert.deepEqual(
+    new Set(snapshot.sessions.map((session) => session.id)),
+    new Set(created.slice(5).map((session) => session.id)),
+  );
+});
+
 test("ai session aggregate snapshots separate turns from list summaries", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-compact-summary-"));
   const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
@@ -7076,6 +7095,36 @@ test("Codex Direct Session creation preserves provider identity and reconciles a
   );
 });
 
+test("Codex Direct Session creation accepts an unprojectable unmanaged default", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-unmanaged-default-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  class FakeCodexUnmanagedDefaultClient extends EventEmitter {
+    async start() {}
+    stop() {}
+    async listLoadedThreadIds() { return []; }
+    async startThread(options) {
+      return {
+        id: "thread_unmanaged_default",
+        cwd: options.cwd,
+        model: "gpt-default",
+        modelProvider: "openai",
+        status: { type: "idle" },
+        turns: [],
+      };
+    }
+  }
+  const bridge = new CodexAppServerSessionBridge(registry, new FakeCodexUnmanagedDefaultClient(), {
+    projectModelSelection: () => undefined,
+  });
+  await bridge.sync();
+
+  const created = await bridge.createSession({ cwd: root });
+
+  assert.equal(created.providerSessionId, "thread_unmanaged_default");
+  assert.equal(created.modelSelection, undefined);
+  assert.equal(registry.getByProviderSessionId("codex", created.providerSessionId).modelSelection, undefined);
+});
+
 test("Codex Direct Session switches models only after settings confirmation and rejects provider changes", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-model-switch-"));
   const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
@@ -7564,6 +7613,65 @@ test("controlled instance refreshes managed model auth through its registration-
     });
     assert.equal(fs.readFileSync(path.join(codexHome, "config.toml"), "utf8"), configBeforeNoModel);
     assert.equal(fs.readFileSync(path.join(codexHome, "auth.json"), "utf8"), authBeforeNoModel);
+  } finally {
+    await app.close();
+    restoreEnv();
+  }
+});
+
+test("controlled instance Story Automation create endpoint is private and idempotent", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-story-automation-instance-"));
+  const paths = appRuntimeTestPaths(root);
+  const restoreEnv = withWebStorageEnv(paths, {
+    TASK_HANDOFF_WEB_AUTH: "off",
+    TASK_HANDOFF_CONTROL_MODE: "controlled",
+    TASK_HANDOFF_INSTANCE_ID: "instance_story_automation",
+    TASK_HANDOFF_REGISTRATION_TOKEN: "instance-registration-token",
+    TASK_HANDOFF_CODEX_APP_SERVER: "0",
+    TASK_HANDOFF_AI_SESSION_SCAN: "0",
+  });
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const runtime = new AppRuntimeManager(paths);
+  runtime.ensureSharedResource = () => undefined;
+  const messages = [];
+  let creates = 0;
+  const bridge = {
+    id: "story-automation-codex-stub",
+    agent: "codex",
+    refresh() {},
+    async sync() {},
+    stop() {},
+    supportsThreadSettingsUpdate: () => false,
+    async createSession(input) {
+      creates += 1;
+      return { providerSessionId: "thread_story_automation", creationSource: "ai-session", cwd: input.cwd };
+    },
+    async startMessage(session, input) {
+      messages.push({ sessionId: session.id, storyId: session.storyId, message: input.message });
+      return { session, provider: "codex", action: "send", turnId: "turn_story_automation", providerTurnId: "turn_story_automation" };
+    },
+    async interrupt(session) { return { session, provider: "codex", action: "interrupt" }; },
+  };
+  const app = await createWebApp({ staticDir: path.join(root, "missing-static"), logger: false, appRuntime: runtime, aiSessionRegistry: registry, codexAppServer: bridge });
+  try {
+    const payload = {
+      agent: "codex",
+      cwd: { type: "runtime-path", path: root },
+      message: "Keep {{literal}} text",
+      permissionMode: "ask",
+      clientRequestId: "story-automation-execution-1",
+      storyId: "story_automation_1",
+    };
+    const forbidden = await app.inject({ method: "POST", url: "/api/internal/node-agent/story-automation/ai-sessions", payload });
+    assert.equal(forbidden.statusCode, 403);
+    const first = await app.inject({ method: "POST", url: "/api/internal/node-agent/story-automation/ai-sessions", headers: { authorization: "Bearer instance-registration-token" }, payload });
+    assert.equal(first.statusCode, 200, first.body);
+    const repeated = await app.inject({ method: "POST", url: "/api/internal/node-agent/story-automation/ai-sessions", headers: { authorization: "Bearer instance-registration-token" }, payload });
+    assert.equal(repeated.statusCode, 200, repeated.body);
+    assert.equal(repeated.json().data.aiSessionId, first.json().data.aiSessionId);
+    assert.equal(repeated.json().data.disposition, "already-created");
+    assert.equal(creates, 1);
+    assert.deepEqual(messages, [{ sessionId: first.json().data.aiSessionId, storyId: "story_automation_1", message: "Keep {{literal}} text" }]);
   } finally {
     await app.close();
     restoreEnv();

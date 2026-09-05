@@ -22,6 +22,7 @@ const {
 } = require("../packages/protocol/src/triggers.ts");
 const { TriggerExecutor } = require("../packages/controlled-instance/src/triggers/executor.ts");
 const { fileTriggerMatcher, nextScheduleTime } = require("../packages/controlled-instance/src/triggers/manager.ts");
+const { SchedulerExecutionRuntime, nextSchedulerTime, schedulerExecutionKey } = require("../packages/core/src/core/scheduler-runtime.ts");
 const { sanitizeStoredTriggerIndex } = require("../packages/controlled-instance/src/triggers/store.ts");
 const { ControlPlaneTriggerService } = require("../packages/control-plane/src/control-plane/triggers/service.ts");
 
@@ -52,6 +53,88 @@ test("scheduled trigger calculation observes timezone daylight-saving transition
     timezone: "Asia/Shanghai",
   }, new Date("2026-07-19T00:00:00.000Z"));
   assert.equal(weekly.toISOString(), "2026-07-20T01:15:00.000Z");
+});
+
+test("shared scheduler preserves interval anchors and skips repeated DST wall time", () => {
+  const anchor = new Date("2026-01-01T00:00:00.000Z");
+  assert.equal(
+    nextSchedulerTime({ type: "interval", intervalMs: 60_000 }, new Date("2026-01-01T00:03:12.000Z"), anchor).toISOString(),
+    "2026-01-01T00:04:00.000Z",
+  );
+  const firstFallBack = nextSchedulerTime(
+    { type: "daily", timeOfDay: "01:30", timezone: "America/New_York" },
+    new Date("2026-11-01T04:00:00.000Z"),
+  );
+  assert.equal(firstFallBack.toISOString(), "2026-11-01T05:30:00.000Z");
+  assert.equal(
+    nextSchedulerTime(
+      { type: "daily", timeOfDay: "01:30", timezone: "America/New_York" },
+      firstFallBack,
+    ).toISOString(),
+    "2026-11-02T06:30:00.000Z",
+  );
+});
+
+test("shared scheduler enforces concurrency and drains queued events in FIFO order", async () => {
+  const started = [];
+  const resolvers = [];
+  const runtime = new SchedulerExecutionRuntime({
+    execute: (event) => new Promise((resolve) => {
+      started.push(event);
+      resolvers.push(resolve);
+    }),
+    skipped: () => assert.fail("event should not be skipped"),
+  });
+  const policy = { maxConcurrentRuns: 2, whenBusy: "queue" };
+  for (const event of [1, 2, 3, 4]) runtime.submit("job", event, policy);
+  assert.deepEqual(started, [1, 2]);
+  resolvers.shift()();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(started, [1, 2, 3]);
+  resolvers.shift()();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(started, [1, 2, 3, 4]);
+  resolvers.forEach((resolve) => resolve());
+});
+
+test("shared scheduler reports cooldown, queue-full, stop, and isolates failures", async () => {
+  let now = 1_000;
+  const started = [];
+  const skipped = [];
+  const resolvers = [];
+  const runtime = new SchedulerExecutionRuntime({
+    execute: (event) => {
+      started.push(event);
+      if (event === "failure") return Promise.reject(new Error("expected"));
+      return new Promise((resolve) => resolvers.push(resolve));
+    },
+    skipped: (event, reason) => skipped.push([event, reason]),
+  }, 2, () => now);
+  runtime.submit("cooldown", "first", { cooldownMs: 100, maxConcurrentRuns: 1, whenBusy: "skip" });
+  runtime.submit("cooldown", "second", { cooldownMs: 100, maxConcurrentRuns: 1, whenBusy: "skip" });
+  assert.deepEqual(skipped, [["second", "cooldown"]]);
+
+  runtime.submit("queue", "active", { maxConcurrentRuns: 1, whenBusy: "queue" });
+  runtime.submit("queue", "queued-1", { maxConcurrentRuns: 1, whenBusy: "queue" });
+  runtime.submit("queue", "queued-2", { maxConcurrentRuns: 1, whenBusy: "queue" });
+  runtime.submit("queue", "overflow", { maxConcurrentRuns: 1, whenBusy: "queue" });
+  assert.deepEqual(skipped.at(-1), ["overflow", "queue-full"]);
+  runtime.stop();
+  assert.deepEqual(skipped.slice(-3), [
+    ["overflow", "queue-full"],
+    ["queued-1", "scheduler-stopped"],
+    ["queued-2", "scheduler-stopped"],
+  ]);
+
+  resolvers.forEach((resolve) => resolve());
+  await new Promise((resolve) => setImmediate(resolve));
+  runtime.start();
+  runtime.submit("failure", "failure", { maxConcurrentRuns: 1, whenBusy: "skip" });
+  runtime.submit("other", "other", { maxConcurrentRuns: 1, whenBusy: "skip" });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(started.includes("other"), true);
+  assert.equal(schedulerExecutionKey("job", "schedule", "2026-01-01T00:00:00.000Z"), schedulerExecutionKey("job", "schedule", "2026-01-01T00:00:00.000Z"));
+  resolvers.forEach((resolve) => resolve());
 });
 
 test("trigger config hash ignores display fields and object order", () => {

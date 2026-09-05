@@ -141,7 +141,6 @@ async function save() {
     title: title.value.trim(),
     promptTemplate: promptTemplate.value.trim(),
     targetInstanceId: targetInstanceId.value,
-    parameters: [],
     ...(sessionPreset ? { sessionPreset } : {}),
   });
 

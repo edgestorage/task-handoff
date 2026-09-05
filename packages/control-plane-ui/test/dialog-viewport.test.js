@@ -14,9 +14,11 @@ test("shared dialogs preserve a 50px viewport margin", () => {
 
 test("long Story action dialogs scroll only their form body", () => {
   const story = read("apps/control-plane/story/StoryView.vue");
+  const actionEditor = read("apps/control-plane/story/StoryActionEditorContent.vue");
 
-  assert.match(story, /<ScrollArea class="story-action-editor-scroll" :horizontal="false">\s*<div class="story-editor-fields story-action-editor-fields">/);
-  assert.match(story, /:global\(\.story-editor-dialog\.story-action-editor-dialog\) \{[^}]*grid-template-rows:auto minmax\(0,1fr\) auto;[^}]*overflow:hidden;/);
+  assert.match(story, /<ScrollArea class="story-action-editor-scroll" :horizontal="false">\s*<StoryActionEditorContent/);
+  assert.match(actionEditor, /<div class="story-editor-fields story-action-editor-fields">/);
+  assert.match(story, /:global\(\.story-editor-dialog\.story-action-editor-dialog\) \{[^}]*max-width:840px;[^}]*grid-template-rows:auto minmax\(0,1fr\) auto;[^}]*overflow:hidden;/);
   assert.match(story, /:global\(\.story-action-editor-scroll\) \{ min-height:0; \}/);
   assert.match(story, /:global\(\.story-editor-dialog\) \{ max-width:460px; \}/);
 });

@@ -17,6 +17,8 @@ test("trigger editor exposes the round-tripped fields instead of hiding preserve
   assert.match(view, /<Textarea v-model="createForm\.description"/);
   assert.match(view, /<Input v-model="createForm\.agent"/);
   assert.match(view, /<Input v-model="createForm\.maxConcurrentRuns"[^>]*max="20"/);
+  assert.match(view, /<ControlPlaneTimePicker[^>]+v-model="createForm\.timeOfDay"/);
+  assert.doesNotMatch(view, /type="time"/);
 });
 
 test("editing a different source starts from clean defaults before populating its config", () => {

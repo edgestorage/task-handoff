@@ -132,9 +132,15 @@ export class LocalhostRuntimeAdapter implements RuntimeAdapter {
     const port = configuredPort && configuredPortAvailable ? configuredPort : await allocateLocalPort();
     const dataDir = path.join(this.paths.dataDir, "local-instances", context.instance.id);
     const logDir = path.join(dataDir, "logs");
+    const codexHome = (context.instance.config?.codexConfigEnabled ?? true)
+      && (context.instance.config?.codexHomeMode ?? "taskhandoff") === "taskhandoff"
+      ? path.join(dataDir, "configs", "codex")
+      : undefined;
     fs.mkdirSync(logDir, { recursive: true, mode: 0o700 });
+    if (codexHome) fs.mkdirSync(codexHome, { recursive: true, mode: 0o700 });
     fs.chmodSync(dataDir, 0o700);
     fs.chmodSync(logDir, 0o700);
+    if (codexHome) fs.chmodSync(codexHome, 0o700);
     const [command, ...baseArgs] = localControlledInstanceCommand(this.commandOverride);
     const args = [...baseArgs, "--host", "127.0.0.1", "--port", String(port)];
     const processNonce = crypto.randomUUID();
@@ -178,10 +184,7 @@ export class LocalhostRuntimeAdapter implements RuntimeAdapter {
         // CODEX_HOME belongs to the controlled instance's private config area.
         // Explicitly clear an inherited value when Codex configuration is
         // disabled or the default Codex home is selected.
-        CODEX_HOME: (context.instance.config?.codexConfigEnabled ?? true)
-          && (context.instance.config?.codexHomeMode ?? "taskhandoff") === "taskhandoff"
-          ? path.join(dataDir, "configs", "codex")
-          : undefined,
+        CODEX_HOME: codexHome,
       },
     });
     fs.closeSync(out);

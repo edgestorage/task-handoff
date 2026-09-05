@@ -54,6 +54,10 @@
       "types": "./src/stories.ts",
       "default": "./src/stories.ts"
     },
+    "./story-automation-instance": {
+      "types": "./src/story-automation-instance.ts",
+      "default": "./src/story-automation-instance.ts"
+    },
     "./control-plane-proxy": {
       "types": "./src/control-plane-proxy.ts",
       "default": "./src/control-plane-proxy.ts"

@@ -36,7 +36,11 @@ import {
   RepositoryWorkspaceAiSessionCreateRefSchema,
   RepositoryWriteFileRequestSchema,
 } from "@task-handoff/protocol/repository";
-import { AiSessionMessageAttachmentSchema, type AiSessionMessageAttachment } from "@task-handoff/protocol/ai-sessions";
+import {
+  AiSessionMessageAttachmentSchema,
+  type AiSessionCreateResult,
+  type AiSessionMessageAttachment,
+} from "@task-handoff/protocol/ai-sessions";
 import { RepositoryChangesService, RepositoryOperationError } from "./changes";
 import { RepositoryBranchService } from "./branches";
 import { RepositoryFileError, RepositoryFileService } from "./files";
@@ -96,7 +100,25 @@ export function registerRepositoryRoutes(app: FastifyInstance, options: Register
       branches: new RepositoryBranchService(resolve, worktrees, queue),
     };
   };
-  const workspaceLaunches = new Map<string, { fingerprint: string; promise: Promise<unknown> }>();
+  const workspaceLaunches = new Map<string, { fingerprint: string; promise: Promise<AiSessionCreateResult> }>();
+
+  const createAiSessionWorkspace = async (input: unknown): Promise<AiSessionCreateResult> => {
+    const referenced = RepositoryWorkspaceAiSessionCreateRefSchema.safeParse(input || {});
+    const body = referenced.success ? referenced.data : RepositoryWorkspaceAiSessionCreateSchema.parse(input || {});
+    const fingerprint = aiSessionCreateRequestFingerprint(body);
+    const completed = options.aiSessionCreate.completedResult(body.clientRequestId, fingerprint);
+    if (completed) return completed;
+    const active = workspaceLaunches.get(body.clientRequestId);
+    if (active) {
+      assertAiSessionCreateRequestFingerprint(active.fingerprint, fingerprint);
+      return await active.promise;
+    }
+    const cwd = authorizedWorkspaceCwd(body.cwd.path, options.workspaceRoots);
+    const launch = createWorkspaceAiSession(servicesForWorkspace(cwd), options.aiSessionCreate, body, fingerprint)
+      .finally(() => workspaceLaunches.delete(body.clientRequestId));
+    workspaceLaunches.set(body.clientRequestId, { fingerprint, promise: launch });
+    return await launch;
+  };
 
   app.post<{ Body: unknown }>("/api/repository/ai-session-workspace/inspect", async (request, reply) => {
     try {
@@ -108,23 +130,7 @@ export function registerRepositoryRoutes(app: FastifyInstance, options: Register
 
   app.post<{ Body: unknown }>("/api/repository/ai-session-workspace/create", async (request, reply) => {
     try {
-      // Compatibility for v0.0.21: retain the materialized create payload while
-      // accepting new controlled-instance draft handles.
-      const referenced = RepositoryWorkspaceAiSessionCreateRefSchema.safeParse(request.body || {});
-      const body = referenced.success ? referenced.data : RepositoryWorkspaceAiSessionCreateSchema.parse(request.body || {});
-      const fingerprint = aiSessionCreateRequestFingerprint(body);
-      const completed = options.aiSessionCreate.completedResult(body.clientRequestId, fingerprint);
-      if (completed) return { data: completed };
-      const active = workspaceLaunches.get(body.clientRequestId);
-      if (active) {
-        assertAiSessionCreateRequestFingerprint(active.fingerprint, fingerprint);
-        return { data: await active.promise };
-      }
-      const cwd = authorizedWorkspaceCwd(body.cwd.path, options.workspaceRoots);
-      const launch = createWorkspaceAiSession(servicesForWorkspace(cwd), options.aiSessionCreate, body, fingerprint)
-        .finally(() => workspaceLaunches.delete(body.clientRequestId));
-      workspaceLaunches.set(body.clientRequestId, { fingerprint, promise: launch });
-      return { data: await launch };
+      return { data: await createAiSessionWorkspace(request.body) };
     } catch (error) { return sendRepositoryError(reply, sanitizeAiSessionLaunchError(error)); }
   });
 
@@ -346,6 +352,7 @@ export function registerRepositoryRoutes(app: FastifyInstance, options: Register
   });
 
   return {
+    createAiSessionWorkspace,
     prepareForkWorktree: async (aiSessionId: string, clientRequestId: string) => {
       const services = servicesFor("ai-session", aiSessionId);
       const source = await services.resolve();

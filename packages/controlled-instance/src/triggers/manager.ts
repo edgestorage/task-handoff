@@ -1,14 +1,12 @@
 import path from "node:path";
 import { watch, type FSWatcher } from "chokidar";
-import { CronExpressionParser } from "cron-parser";
 import picomatch from "picomatch";
+import { SchedulerExecutionRuntime, nextSchedulerTime, type SchedulerSkipReason } from "@task-handoff/core/core/scheduler-runtime";
 import type { AiSessionsSnapshot, AiSessionSummary } from "@task-handoff/protocol/ai-sessions";
 import type { TriggerConfig, TriggerDeployment, TriggerRun } from "@task-handoff/protocol/triggers";
 import type { TaskHandoffStoragePaths } from "@task-handoff/core/storage/paths";
 import type { TriggerExecutor } from "./executor.ts";
 import type { TriggerStore } from "./store.ts";
-
-type Timer = ReturnType<typeof setInterval> | ReturnType<typeof setTimeout>;
 
 type WatchState = {
   watcher: FSWatcher;
@@ -17,11 +15,8 @@ type WatchState = {
 };
 
 export class TriggerManager {
-  private readonly timers = new Map<string, Timer>();
   private readonly watches = new Map<string, WatchState>();
-  private readonly running = new Set<string>();
-  private readonly queued = new Map<string, { config: TriggerConfig; deployment: TriggerDeployment; eventType: TriggerRun["eventType"]; eventSummary?: string }>();
-  private readonly lastRunAt = new Map<string, number>();
+  private readonly scheduler: SchedulerExecutionRuntime<TriggerExecutionEvent>;
   private previousAiSessions = new Map<string, AiSessionSummary>();
 
   constructor(
@@ -29,10 +24,16 @@ export class TriggerManager {
     private readonly executor: TriggerExecutor,
     private readonly paths: TaskHandoffStoragePaths,
     private readonly publish?: (type: string, payload: unknown) => void,
-  ) {}
+  ) {
+    this.scheduler = new SchedulerExecutionRuntime({
+      execute: (event) => this.executeNow(event),
+      skipped: (event, reason) => this.skip(event, reason),
+    });
+  }
 
   start() {
     this.stop();
+    this.scheduler.start();
     const index = this.store.list();
     for (const deployment of index.deployments.filter((entry) => entry.enabled)) {
       const config = index.configs.find((entry) => entry.configHash === deployment.configHash);
@@ -53,10 +54,7 @@ export class TriggerManager {
   }
 
   stop() {
-    for (const timer of this.timers.values()) {
-      clearInterval(timer);
-    }
-    this.timers.clear();
+    this.scheduler.stop();
     for (const state of this.watches.values()) {
       void state.watcher.close();
       if (state.debounce) {
@@ -64,7 +62,6 @@ export class TriggerManager {
       }
     }
     this.watches.clear();
-    this.queued.clear();
   }
 
   handleAiSessions(snapshot: AiSessionsSnapshot) {
@@ -105,7 +102,7 @@ export class TriggerManager {
     const source = config.source;
     const key = deploymentKey(deployment);
     if ("intervalMs" in source) {
-      this.timers.set(key, setInterval(() => {
+      this.scheduler.setTimer(key, setInterval(() => {
         void this.execute(config, deployment, "schedule", `Interval ${source.intervalMs}ms`);
       }, source.intervalMs));
       return;
@@ -117,7 +114,7 @@ export class TriggerManager {
         void this.execute(config, deployment, "schedule", scheduleSummary(source));
         scheduleNext();
       }, delay);
-      this.timers.set(key, timer);
+      this.scheduler.setTimer(key, timer);
     };
     scheduleNext();
   }
@@ -179,26 +176,10 @@ export class TriggerManager {
   }
 
   private async execute(config: TriggerConfig, deployment: TriggerDeployment, eventType: TriggerRun["eventType"], eventSummary?: string) {
-    const key = deploymentKey(deployment);
-    const now = Date.now();
-    const cooldownMs = config.policy.cooldownMs || 0;
-    const lastRunAt = this.lastRunAt.get(key) || 0;
-    if (cooldownMs && now - lastRunAt < cooldownMs) {
-      this.store.skipRun(config, deployment, eventType, "Skipped by cooldown policy.");
-      this.publish?.("trigger.run.skipped", { configHash: config.configHash, deploymentId: deployment.deploymentId, reason: "cooldown" });
-      return;
-    }
-    if (this.running.has(key)) {
-      if (config.policy.whenBusy === "queue") {
-        this.queued.set(key, { config, deployment, eventType, eventSummary });
-      } else {
-        this.store.skipRun(config, deployment, eventType, "Skipped because trigger is already running.");
-        this.publish?.("trigger.run.skipped", { configHash: config.configHash, deploymentId: deployment.deploymentId, reason: "busy" });
-      }
-      return;
-    }
-    this.running.add(key);
-    this.lastRunAt.set(key, now);
+    this.scheduler.submit(deploymentKey(deployment), { config, deployment, eventType, eventSummary }, config.policy);
+  }
+
+  private async executeNow({ config, deployment, eventType, eventSummary }: TriggerExecutionEvent) {
     this.publish?.("trigger.run.started", { configHash: config.configHash, deploymentId: deployment.deploymentId, eventType });
     try {
       const result = await this.executor.execute({ config, deployment, eventType, eventSummary });
@@ -207,33 +188,37 @@ export class TriggerManager {
     } catch (error) {
       this.publish?.("trigger.run.failed", { configHash: config.configHash, error: error instanceof Error ? error.message : String(error) });
       this.publish?.("trigger.updated", this.store.list());
-    } finally {
-      this.running.delete(key);
-      const queued = this.queued.get(key);
-      if (queued) {
-        this.queued.delete(key);
-        setTimeout(() => {
-          void this.execute(queued.config, queued.deployment, queued.eventType, queued.eventSummary);
-        }, 0);
-      }
     }
   }
+
+  private skip({ config, deployment, eventType }: TriggerExecutionEvent, reason: SchedulerSkipReason) {
+    const messages: Record<SchedulerSkipReason, string> = {
+      cooldown: "Skipped by cooldown policy.",
+      busy: "Skipped because trigger reached its concurrency limit.",
+      "queue-full": "Skipped because the trigger queue is full.",
+      "scheduler-stopped": "Skipped because the trigger scheduler stopped.",
+      "job-disabled": "Skipped because the trigger was disabled.",
+    };
+    this.store.skipRun(config, deployment, eventType, messages[reason]);
+    this.publish?.("trigger.run.skipped", { configHash: config.configHash, deploymentId: deployment.deploymentId, reason });
+  }
 }
+
+type TriggerExecutionEvent = {
+  config: TriggerConfig;
+  deployment: TriggerDeployment;
+  eventType: TriggerRun["eventType"];
+  eventSummary?: string;
+};
 
 function deploymentKey(deployment: Pick<TriggerDeployment, "configHash" | "deploymentId">) {
   return deployment.deploymentId || deployment.configHash;
 }
 
 export function nextScheduleTime(source: Extract<TriggerConfig["source"], { type: "schedule" }>, now = new Date()) {
-  if ("intervalMs" in source) {
-    return new Date(now.getTime() + source.intervalMs);
-  }
-  const [hour, minute] = source.timeOfDay.split(":").map(Number);
-  const weekdays = source.scheduleKind === "weekly" ? source.weekdays.join(",") : "*";
-  return CronExpressionParser
-    .parse(`0 ${minute} ${hour} * * ${weekdays}`, { currentDate: now, strict: true, tz: source.timezone })
-    .next()
-    .toDate();
+  if ("intervalMs" in source) return nextSchedulerTime({ type: "interval", intervalMs: source.intervalMs }, now, now);
+  if (source.scheduleKind === "daily") return nextSchedulerTime({ type: "daily", timeOfDay: source.timeOfDay, timezone: source.timezone }, now);
+  return nextSchedulerTime({ type: "weekly", weekdays: source.weekdays, timeOfDay: source.timeOfDay, timezone: source.timezone }, now);
 }
 
 function scheduleSummary(source: Extract<TriggerConfig["source"], { type: "schedule" }>) {

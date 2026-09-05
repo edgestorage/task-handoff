@@ -1671,12 +1671,7 @@ async function runStoryAction(story: Story, action: StoryAction, onCreated: (ins
     : boardInstancesWithAiSessions.value.find((instance) => instance.node?.id === story.ownerNodeId);
   if (!target) { showToast(t("stories.run.noTarget"), storyActionErrorToast); return; }
   if (!window.confirm(t("stories.run.confirm", { name: action.title }))) return;
-  let prompt = action.promptTemplate;
-  for (const parameter of action.parameters) {
-    const value = window.prompt(parameter.label, parameter.defaultValue || "") || "";
-    if (parameter.required && !value.trim()) { showToast(t("stories.run.parameterRequired", { name: parameter.label }), storyActionErrorToast); return; }
-    prompt = prompt.replaceAll(`{{${parameter.name}}}`, value);
-  }
+  const prompt = action.promptTemplate;
   const loadingToast = showDelayedControlPlaneLoadingToast(t("stories.run.creating"));
   try {
     const preset = action.sessionPreset;

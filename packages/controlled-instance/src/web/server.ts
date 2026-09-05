@@ -165,6 +165,7 @@ import { TriggerSourceSchema, TriggerActionSchema, TriggerPolicySchema, TriggerT
 import { bridgeWebSockets, TASK_HANDOFF_WEBSOCKET_SERVER_OPTIONS } from "@task-handoff/protocol/websocket-bridge";
 import { SESSION_STREAM_PROTOCOL_VERSION, SessionStreamsHelloEventType } from "@task-handoff/protocol/events";
 import { AppManagementOperationRequestSchema } from "@task-handoff/protocol/control-plane";
+import { StoryAutomationInstanceCreateInputSchema, StoryAutomationInstanceCreateResultSchema } from "@task-handoff/protocol/story-automation-instance";
 import { registerRepositoryRoutes, repositoryWorkspaceRootsFromEnv } from "../repository/routes";
 import { attachBrowserTunnel } from "./browser-tunnel";
 
@@ -1446,12 +1447,38 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     })).filter((session) => session.storyId && session.status === "idle"),
   }));
 
+  app.get("/api/internal/node-agent/ai-sessions/instance-idle-retention", nodeAgentProcessRoute, async () => ({
+    data: aiSessions.all().map((session) => ({
+      sessionId: session.id,
+      status: session.status,
+      completedAt: session.completedAt,
+    })).filter((session) => session.status === "idle"),
+  }));
+
   app.post<{ Params: { id: string }; Body: unknown }>("/api/internal/node-agent/ai-sessions/:id/close", nodeAgentProcessRoute, async (request, reply) => {
     try {
       AiSessionCloseInputSchema.parse(request.body || {});
       const result = AiSessionCloseResultSchema.parse(await aiSessionClose.close(request.params.id));
       publishAiSessionSnapshot("control-action");
       return { data: result };
+    } catch (error: unknown) {
+      return sendAiSessionControlError(reply, error);
+    }
+  });
+
+  app.post<{ Body: unknown }>("/api/internal/node-agent/story-automation/ai-sessions", nodeAgentProcessRoute, async (request, reply) => {
+    try {
+      const body = StoryAutomationInstanceCreateInputSchema.parse(request.body || {});
+      const result = body.gitSelection
+        ? await repositoryAiSessionWorkspace.createAiSessionWorkspace({ ...body, attachments: [], references: [] })
+        : await aiSessionCreate.create({
+            ...body,
+            cwd: body.cwd.path,
+            attachments: [],
+            references: [],
+          });
+      publishAiSessionSnapshot("control-action");
+      return { data: StoryAutomationInstanceCreateResultSchema.parse({ disposition: result.disposition, aiSessionId: result.aiSessionId }) };
     } catch (error: unknown) {
       return sendAiSessionControlError(reply, error);
     }

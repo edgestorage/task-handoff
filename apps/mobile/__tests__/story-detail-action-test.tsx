@@ -1,7 +1,8 @@
 import { act, fireEvent, render } from '@testing-library/react-native';
 import { Alert } from 'react-native';
 import { ControlPlaneInstanceDirectoryEntrySchema } from '@task-handoff/protocol/control-plane-directory';
-import { StorySchema } from '@task-handoff/protocol/stories';
+import { StoryAutomationStatusSchema, StorySchema } from '@task-handoff/protocol/stories';
+import { router } from 'expo-router';
 
 import { StoryDetail } from '../src/stories/StoryDetail';
 import { useMobileControlPlaneRuntime } from '../src/control-plane/use-mobile-control-plane-runtime';
@@ -10,7 +11,10 @@ import { useActiveAiSessionsSnapshot } from '../src/ai-sessions/use-active-sessi
 import { mobilePermissionStore } from '../src/control-plane/runtime';
 
 jest.mock('expo-crypto', () => ({ randomUUID: () => 'action-request-1' }));
-jest.mock('expo-router', () => ({ router: { push: jest.fn() } }));
+jest.mock('expo-router', () => ({
+  router: { push: jest.fn() },
+  useFocusEffect: (callback: () => void | (() => void)) => require('react').useEffect(callback, [callback]),
+}));
 jest.mock('../src/control-plane/use-mobile-control-plane-runtime', () => ({ useMobileControlPlaneRuntime: jest.fn() }));
 jest.mock('../src/directories/use-directories', () => ({ useActiveDirectories: jest.fn() }));
 jest.mock('../src/ai-sessions/use-active-sessions', () => ({ useActiveAiSessionsSnapshot: jest.fn() }));
@@ -42,7 +46,6 @@ const story = StorySchema.parse({
     title: 'Deploy staging',
     promptTemplate: 'Deploy to staging',
     targetInstanceId: instance.id,
-    parameters: [],
     sessionPreset: { agent: 'codex', mode: 'queue', permissionMode: 'auto-review' },
   }],
   documents: [],
@@ -54,12 +57,16 @@ const mockRuntime = jest.mocked(useMobileControlPlaneRuntime);
 const mockDirectories = jest.mocked(useActiveDirectories);
 const mockSessions = jest.mocked(useActiveAiSessionsSnapshot);
 
+beforeEach(() => {
+  jest.clearAllMocks();
+});
+
 test('a preset action confirms before directly creating and opening an AI Session', async () => {
   const create = jest.fn().mockResolvedValue({ disposition: 'created', aiSessionId: 'session-1' });
   const get = jest.fn().mockResolvedValue(story);
   const onOpenSession = jest.fn();
   jest.spyOn(Alert, 'alert').mockImplementation(() => undefined);
-  mockRuntime.mockReturnValue({ api: { stories: { get }, aiSessions: { create } } } as unknown as ReturnType<typeof useMobileControlPlaneRuntime>);
+  mockRuntime.mockReturnValue({ api: { stories: { get, listAutomations: jest.fn().mockResolvedValue({ automations: [] }) }, aiSessions: { create } } } as unknown as ReturnType<typeof useMobileControlPlaneRuntime>);
   mockDirectories.mockReturnValue({ controlPlaneId: 'cp-1', state: { instances: [instance], nodes: [] } } as unknown as ReturnType<typeof useActiveDirectories>);
   mockSessions.mockReturnValue({ instances: [] } as unknown as ReturnType<typeof useActiveAiSessionsSnapshot>);
 
@@ -87,4 +94,38 @@ test('a preset action confirms before directly creating and opening an AI Sessio
     storyId: story.id,
   }));
   expect(mobilePermissionStore.write).toHaveBeenCalledWith('cp-1', instance.id, 'session-1', 'auto-review');
+});
+
+test('shows authoritative automations and can run one manually', async () => {
+  const automation = StoryAutomationStatusSchema.parse({
+    automation: {
+      id: 'automation-1', storyId: story.id, actionId: 'deploy',
+      schedule: { scheduleKind: 'interval', intervalMs: 3_600_000 },
+      enabled: true, policy: { maxConcurrentRuns: 1, whenBusy: 'skip' },
+      createdAt: '2026-09-05T00:00:00.000Z', updatedAt: '2026-09-05T00:00:00.000Z',
+    },
+    effectiveStatus: 'scheduled', nextRunAt: '2026-09-05T01:00:00.000Z', currentRuns: [],
+  });
+  const get = jest.fn().mockResolvedValue(story);
+  const listAutomations = jest.fn().mockResolvedValue({ automations: [automation] });
+  const automationRuns = jest.fn().mockResolvedValue({ runs: [] });
+  const runAutomation = jest.fn().mockResolvedValue({ id: 'run-1' });
+  jest.spyOn(Alert, 'alert').mockImplementation(() => undefined);
+  mockRuntime.mockReturnValue({ api: { stories: { get, listAutomations, automationRuns, runAutomation } } } as unknown as ReturnType<typeof useMobileControlPlaneRuntime>);
+  mockDirectories.mockReturnValue({ controlPlaneId: 'cp-1', state: { instances: [instance], nodes: [] } } as unknown as ReturnType<typeof useActiveDirectories>);
+  mockSessions.mockReturnValue({ instances: [] } as unknown as ReturnType<typeof useActiveAiSessionsSnapshot>);
+
+  const screen = await render(<StoryDetail nodeId="node-1" onOpenSession={jest.fn()} storyId={story.id} />);
+  expect(await screen.findByText('Every 60 minutes')).toBeTruthy();
+  expect(screen.getByText('Scheduled')).toBeTruthy();
+  expect(listAutomations).toHaveBeenCalledWith(story.id, story.ownerNodeId);
+  expect(automationRuns).toHaveBeenCalledWith(story.id, automation.automation.id, story.ownerNodeId);
+
+  fireEvent.press(screen.getByLabelText('Run now'));
+  const buttons = jest.mocked(Alert.alert).mock.calls.at(-1)?.[2]!;
+  await act(async () => { buttons[1].onPress?.(); await new Promise<void>((resolve) => setImmediate(resolve)); });
+  expect(runAutomation).toHaveBeenCalledWith(story.id, automation.automation.id, story.ownerNodeId, { clientRequestId: 'story-automation-action-request-1' });
+
+  fireEvent.press(screen.getByLabelText('Add Automation'));
+  expect(router.push).toHaveBeenCalledWith(expect.objectContaining({ pathname: `/stories/${story.id}/automations/new` }));
 });

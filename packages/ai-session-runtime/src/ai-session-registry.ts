@@ -100,6 +100,7 @@ const DEFAULT_RETENTION_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_IDLE_AFTER_MS = 30 * 1000;
 const DEFAULT_STALE_AFTER_MS = 5 * 60 * 1000;
 const DEFAULT_ORPHANED_APP_SESSION_RETENTION_MS = 5 * 60 * 1000;
+const DEFAULT_AI_SESSION_SNAPSHOT_LIMIT = 150;
 
 function nowIso() {
   return new Date().toISOString();
@@ -770,12 +771,12 @@ export class AiSessionRegistry {
     return { deleted };
   }
 
-  snapshot(limit = 20): AiSessionsSnapshot {
+  snapshot(limit = DEFAULT_AI_SESSION_SNAPSHOT_LIMIT): AiSessionsSnapshot {
     const sessions = this.list().slice(0, limit);
     return this.snapshotFromSessions(sessions);
   }
 
-  boundSnapshot(appSessions: AppSessionPresenceCandidate[] = [], limit = 20): AiSessionsSnapshot {
+  boundSnapshot(appSessions: AppSessionPresenceCandidate[] = [], limit = DEFAULT_AI_SESSION_SNAPSHOT_LIMIT): AiSessionsSnapshot {
     const appSessionIds = new Set(
       appSessions
         .filter((session) => typeof session.status !== "string" || session.status === "running")

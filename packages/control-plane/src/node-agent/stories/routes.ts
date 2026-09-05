@@ -3,6 +3,13 @@ import type { FastifyInstance, FastifyReply } from "fastify";
 import { z } from "zod";
 import {
   STORY_DEFAULT_MAX_FILE_BYTES,
+  StoryAutomationInputSchema,
+  StoryAutomationListSchema,
+  StoryAutomationManualRunInputSchema,
+  StoryAutomationRunsSchema,
+  StoryAutomationStatusSchema,
+  StoryAutomationUpdateInputSchema,
+  StoryAutomationWithActionInputSchema,
   StoryContentListSchema,
   StoryCreateInputSchema,
   StoryDocumentUpdateInputSchema,
@@ -12,15 +19,20 @@ import {
 } from "@task-handoff/protocol/stories";
 import type { NodeAgentState } from "../state.ts";
 import { NodeStoryStore } from "./store.ts";
+import type { StoryCommandService } from "./command-service.ts";
+import type { StoryScheduler } from "./scheduler.ts";
 
 type NodeStoryRouteOptions = {
   fetchImpl?: typeof fetch;
   resolveInstanceWeb?: (instance: ReturnType<NodeAgentState["requireInstance"]>) => Promise<string>;
   onRetentionSettingsChanged?: () => void | Promise<void>;
+  commands?: StoryCommandService;
+  scheduler?: StoryScheduler;
 };
 
 const StoryParamsSchema = z.object({ storyId: StoryIdSchema }).strict();
 const StoryDocumentParamsSchema = StoryParamsSchema.extend({ storyPath: z.string().min(1).max(2048) }).strict();
+const StoryAutomationParamsSchema = StoryParamsSchema.extend({ automationId: z.string().trim().min(1).max(120) }).strict();
 const InstanceSessionParamsSchema = z.object({
   id: z.string().trim().min(1).max(120),
   sessionId: z.string().trim().min(1).max(120),
@@ -74,7 +86,7 @@ export function registerNodeStoryRoutes(app: FastifyInstance, state: NodeAgentSt
   app.patch("/api/node-agent/stories/:storyId", async (request) => {
     const { storyId } = StoryParamsSchema.parse(request.params);
     const input = StoryUpdateInputSchema.parse(request.body);
-    const story = store.update(storyId, input);
+    const story = options.commands ? options.commands.update(storyId, input) : store.update(storyId, input);
     if (input.maxIdleAiSessions !== undefined) void options.onRetentionSettingsChanged?.();
     return { data: story };
   });
@@ -85,19 +97,87 @@ export function registerNodeStoryRoutes(app: FastifyInstance, state: NodeAgentSt
   });
 
   app.post("/api/node-agent/stories/:storyId/archive", async (request) => ({
-    data: store.archive(StoryParamsSchema.parse(request.params).storyId),
+    data: options.commands?.archive(StoryParamsSchema.parse(request.params).storyId)
+      ?? store.archive(StoryParamsSchema.parse(request.params).storyId),
   }));
 
   app.post("/api/node-agent/stories/:storyId/restore", async (request) => ({
-    data: store.restore(StoryParamsSchema.parse(request.params).storyId),
+    data: options.commands?.restore(StoryParamsSchema.parse(request.params).storyId)
+      ?? store.restore(StoryParamsSchema.parse(request.params).storyId),
   }));
 
   app.delete("/api/node-agent/stories/:storyId", async (request) => {
     const { storyId } = StoryParamsSchema.parse(request.params);
-    const referenced = state.listInstances().some((instance) => instance.aiSessions.sessions.some((session) => session.storyId === storyId));
-    if (referenced) throw Object.assign(new Error("Story is still referenced by an AI Session."), { code: "STORY_IN_USE", statusCode: 409 });
-    return { data: { deleted: store.delete(storyId) } };
+    return { data: { deleted: options.commands ? options.commands.delete(storyId) : store.delete(storyId) } };
   });
+
+  if (options.scheduler) {
+    const scheduler = options.scheduler;
+    const requireScopedAutomation = (storyId: string, automationId: string) => {
+      const status = scheduler.status(automationId);
+      if (status.automation.storyId !== storyId) {
+        throw Object.assign(new Error("Story Automation belongs to another Story."), { code: "STORY_AUTOMATION_STORY_MISMATCH", statusCode: 409 });
+      }
+      return status;
+    };
+
+    app.get("/api/node-agent/stories/:storyId/automations", async (request) => {
+      const { storyId } = StoryParamsSchema.parse(request.params);
+      store.require(storyId);
+      return { data: StoryAutomationListSchema.parse({ automations: scheduler.list(storyId) }) };
+    });
+
+    app.post("/api/node-agent/stories/:storyId/automations", async (request, reply) => {
+      const { storyId } = StoryParamsSchema.parse(request.params);
+      const input = StoryAutomationInputSchema.parse(request.body);
+      if (input.storyId !== storyId) throw Object.assign(new Error("Automation storyId does not match the route."), { code: "STORY_AUTOMATION_STORY_MISMATCH", statusCode: 409 });
+      return reply.code(201).send({ data: StoryAutomationStatusSchema.parse(scheduler.create(input)) });
+    });
+
+    app.post("/api/node-agent/stories/:storyId/automations/with-action", async (request, reply) => {
+      const { storyId } = StoryParamsSchema.parse(request.params);
+      if (!options.commands) throw Object.assign(new Error("Story command service is unavailable."), { code: "STORY_COMMAND_UNAVAILABLE", statusCode: 503 });
+      const input = StoryAutomationWithActionInputSchema.parse(request.body);
+      return reply.code(201).send({ data: StoryAutomationStatusSchema.parse(options.commands.createAutomationWithAction(storyId, input)) });
+    });
+
+    app.get("/api/node-agent/stories/:storyId/automations/:automationId", async (request) => {
+      const { storyId, automationId } = StoryAutomationParamsSchema.parse(request.params);
+      return { data: StoryAutomationStatusSchema.parse(requireScopedAutomation(storyId, automationId)) };
+    });
+
+    app.patch("/api/node-agent/stories/:storyId/automations/:automationId", async (request) => {
+      const { storyId, automationId } = StoryAutomationParamsSchema.parse(request.params);
+      requireScopedAutomation(storyId, automationId);
+      return { data: StoryAutomationStatusSchema.parse(scheduler.update(automationId, StoryAutomationUpdateInputSchema.parse(request.body))) };
+    });
+
+    app.delete("/api/node-agent/stories/:storyId/automations/:automationId", async (request) => {
+      const { storyId, automationId } = StoryAutomationParamsSchema.parse(request.params);
+      requireScopedAutomation(storyId, automationId);
+      return { data: { deleted: scheduler.delete(automationId) } };
+    });
+
+    for (const action of ["enable", "disable"] as const) {
+      app.post(`/api/node-agent/stories/:storyId/automations/:automationId/${action}`, async (request) => {
+        const { storyId, automationId } = StoryAutomationParamsSchema.parse(request.params);
+        requireScopedAutomation(storyId, automationId);
+        return { data: StoryAutomationStatusSchema.parse(scheduler.setEnabled(automationId, action === "enable")) };
+      });
+    }
+
+    app.post("/api/node-agent/stories/:storyId/automations/:automationId/run", async (request) => {
+      const { storyId, automationId } = StoryAutomationParamsSchema.parse(request.params);
+      requireScopedAutomation(storyId, automationId);
+      return { data: scheduler.manualRun(automationId, StoryAutomationManualRunInputSchema.parse(request.body)) };
+    });
+
+    app.get("/api/node-agent/stories/:storyId/automations/:automationId/runs", async (request) => {
+      const { storyId, automationId } = StoryAutomationParamsSchema.parse(request.params);
+      requireScopedAutomation(storyId, automationId);
+      return { data: StoryAutomationRunsSchema.parse({ runs: scheduler.runs(automationId) }) };
+    });
+  }
 
   app.get("/api/node-agent/stories/:storyId/content", async (request) => {
     const { storyId } = StoryParamsSchema.parse(request.params);

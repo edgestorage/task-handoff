@@ -507,6 +507,10 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
     if (!this.options.projectModelSelection) return requested;
     const actual = this.options.projectModelSelection?.(thread.modelProvider, thread.model);
     if (!actual) {
+      // An unmanaged Codex default has no public model entity to project. This is
+      // valid when the caller did not request a managed selection; keep the
+      // session model unknown instead of inventing a cross-boundary identity.
+      if (!requested) return undefined;
       throw aiSessionControlError("AI_SESSION_MODEL_SELECTION_INVALID_RESPONSE", "Codex reported an unknown model provider.", 502);
     }
     if (requested && (requested.modelEntityId !== actual.modelEntityId || requested.modelName !== actual.modelName)) {
