@@ -22,6 +22,7 @@ import { useAiSessionPermissionMode } from "../../apps/control-plane/useAiSessio
 import { showControlPlaneToast } from "../../apps/control-plane/useControlPlaneToasts";
 import { classifyAiSessionPastedText, type AiSessionPastedTextPresentation } from "@task-handoff/control-plane-client";
 import { AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES } from "@task-handoff/protocol/ai-sessions";
+import { scrollHorizontalOverflow, updateHorizontalOverflowFromEvent, vHorizontalOverflow } from "../../lib/horizontalOverflow";
 import AiSessionImagePreview from "./AiSessionImagePreview.vue";
 
 export type AiSessionComposerAttachment = {
@@ -696,7 +697,13 @@ watch(() => props.busy, (busy) => {
 
 <template>
   <form ref="composerEl" class="ai-session-composer" :aria-busy="busy" @drop="handleDrop" @dragover.prevent @submit.prevent="submit">
-    <div v-if="attachments.length" class="ai-session-composer__attachments">
+    <div
+      v-if="attachments.length"
+      v-horizontal-overflow
+      class="ai-session-composer__attachments"
+      @scroll="updateHorizontalOverflowFromEvent"
+      @wheel="scrollHorizontalOverflow"
+    >
       <figure v-for="attachment in attachments" :key="attachment.id" :class="{ 'ai-session-composer__file': attachment.kind === 'file' }">
         <ContextMenu v-if="attachment.kind === 'image'">
           <ContextMenuTrigger as-child>
@@ -1049,35 +1056,38 @@ watch(() => props.busy, (busy) => {
 
 .ai-session-composer__attachments {
   display: flex;
+  box-sizing: border-box;
   align-items: center;
   flex: 0 0 auto;
   gap: 8px;
+  width: 100%;
   min-width: 0;
+  max-width: 100%;
   overflow-x: auto;
+  overflow-y: hidden;
   padding: 10px 12px 0;
-  scrollbar-color: var(--ai-composer-scrollbar-thumb) transparent;
-  scrollbar-width: thin;
+  scrollbar-width: none;
+  overscroll-behavior-x: contain;
+  contain: inline-size;
+}
+
+.ai-session-composer__attachments[data-overflow-start="true"][data-overflow-end="false"] {
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 26px);
+  mask-image: linear-gradient(90deg, transparent, #000 26px);
+}
+
+.ai-session-composer__attachments[data-overflow-start="false"][data-overflow-end="true"] {
+  -webkit-mask-image: linear-gradient(270deg, transparent, #000 26px);
+  mask-image: linear-gradient(270deg, transparent, #000 26px);
+}
+
+.ai-session-composer__attachments[data-overflow-start="true"][data-overflow-end="true"] {
+  -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 26px, #000 calc(100% - 26px), transparent 100%);
+  mask-image: linear-gradient(90deg, transparent 0, #000 26px, #000 calc(100% - 26px), transparent 100%);
 }
 
 .ai-session-composer__attachments::-webkit-scrollbar {
-  height: 10px;
-}
-
-.ai-session-composer__attachments::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.ai-session-composer__attachments::-webkit-scrollbar-thumb {
-  min-width: 32px;
-  border: 1px solid transparent;
-  border-radius: 999px;
-  background-clip: content-box;
-  background-color: var(--ai-composer-scrollbar-thumb);
-  transition: background-color 0.16s ease;
-}
-
-.ai-session-composer__attachments::-webkit-scrollbar-thumb:hover {
-  background-color: var(--ai-composer-scrollbar-thumb-hover);
+  display: none;
 }
 
 .ai-session-composer__attachments figure {

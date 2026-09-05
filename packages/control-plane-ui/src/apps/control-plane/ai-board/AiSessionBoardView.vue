@@ -195,6 +195,7 @@
           :selected-turn-state="selectedTurnTimelineState"
           :turn-bodies-ready="selectedCardTurnsReady"
           :turn-timelines="conversationTurnTimelines"
+          @latest-prompt="backToLatestPrompt(selectedCard)"
           @next-prompt="nextPrompt(selectedCard)"
           @open-ai-session-app="openCardApp"
           @previous-prompt="previousPrompt(selectedCard)"
@@ -789,6 +790,10 @@ function previousPrompt(card: AiBoardCard) {
 
 function nextPrompt(card: AiBoardCard) {
   void setPromptIndex(card, promptIndexFor(card) + 1);
+}
+
+function backToLatestPrompt(card: AiBoardCard) {
+  void setPromptIndex(card, promptCount(card.session) - 1);
 }
 
 function canResolveApproval(session: AiSessionSummary) {

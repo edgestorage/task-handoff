@@ -3,7 +3,7 @@
     <div
       ref="contentElement"
       class="ai-session-user-prompt-content"
-      :class="{ expanded }"
+      :class="{ expanded, 'has-overflow': hasOverflow }"
     >
       <MarkdownContent v-if="content" :content="content" :code-tools="codeTools" />
     </div>
@@ -180,6 +180,11 @@ onBeforeUnmount(() => {
 
 .ai-session-user-prompt-content.expanded {
   max-height: none;
+}
+
+.ai-session-user-prompt-content.has-overflow:not(.expanded) {
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 12px), transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 12px), transparent 100%);
 }
 
 .ai-session-user-prompt-content :deep(.markdown-content),

@@ -501,7 +501,12 @@
         <div class="session-ai-new-start">
           <h1 v-if="!creationEmbedded" class="session-ai-new-title">{{ t("sessions.panel.startIdea") }}</h1>
           <div class="session-ai-new-dialog" role="group" :aria-label="t('sessions.panel.newSession')">
-            <div class="session-ai-new-pills">
+            <div
+              v-horizontal-overflow
+              class="session-ai-new-pills"
+              @scroll="updateHorizontalOverflowFromEvent"
+              @wheel="scrollHorizontalOverflow"
+            >
               <DropdownMenu v-if="creationInstances && creationInstances.length > 1">
                 <DropdownMenuTrigger as-child>
                   <button type="button" class="session-ai-project-pill session-ai-instance-pill" :disabled="newSessionComposerBusy" :title="instance.name">
@@ -656,16 +661,6 @@
         <ScrollArea class="session-ai-detail-scroll">
           <section class="session-ai-detail-content" :class="{ 'is-following-latest': isFollowingLatest && !isSmoothFollowingLatest }">
           <div ref="detailActionsEl" class="session-ai-detail-fixed-actions session-ai-detail-head-actions">
-            <AiSessionTurnNavigator
-              v-if="effectiveTimelineViewMode === 'compact'"
-              :count="promptCount(selectedSession)"
-              :index="promptIndexFor(selectedSession)"
-              :aria-label="t('sessions.composer.navigation')"
-              :previous-label="t('sessions.actions.previousMessage', { agent: selectedSession.agent })"
-              :next-label="t('sessions.actions.nextMessage', { agent: selectedSession.agent })"
-              @previous="previousPrompt(selectedSession)"
-              @next="nextPrompt(selectedSession)"
-            />
             <template v-if="!compactAiSessionLayout">
               <RepositoryEnvironment
                 :ai-agent="repositoryAiAgent"
@@ -847,6 +842,19 @@
           <span ref="detailBottomAnchorEl" class="session-ai-detail-bottom-anchor" aria-hidden="true" />
           </section>
         </ScrollArea>
+        <AiSessionTurnNavigator
+          v-if="effectiveTimelineViewMode === 'compact'"
+          class="session-ai-detail-turn-navigator"
+          :count="promptCount(selectedSession)"
+          :index="promptIndexFor(selectedSession)"
+          :aria-label="t('sessions.composer.navigation')"
+          :latest-label="t('sessions.panel.backLatestTurn')"
+          :previous-label="t('sessions.actions.previousMessage', { agent: selectedSession.agent })"
+          :next-label="t('sessions.actions.nextMessage', { agent: selectedSession.agent })"
+          @latest="backToLatestPrompt(selectedSession)"
+          @previous="previousPrompt(selectedSession)"
+          @next="nextPrompt(selectedSession)"
+        />
         <article
           v-if="effectiveTimelineViewMode === 'full' && timelineStickyUserMessage"
           class="session-ai-timeline-sticky-prompt"
@@ -1129,6 +1137,7 @@ import NodeStorageFolderPickerDialog from "../settings/NodeStorageFolderPickerDi
 import ControlPlaneInput from "../shared/ControlPlaneInput.vue";
 import { nodeSupportsLocalFolderNameUpdate } from "../../../api/nodeCapabilities";
 import { canOpenDesktopLocalPath, openDesktopLocalPath } from "../../../lib/desktopBridge";
+import { scrollHorizontalOverflow, updateHorizontalOverflowFromEvent, vHorizontalOverflow } from "../../../lib/horizontalOverflow";
 import RepositoryEnvironment from "./RepositoryEnvironment.vue";
 import AiSessionPathGroupContextMenu from "./AiSessionPathGroupContextMenu.vue";
 import { useNodeStorageFolderPicker } from "../settings/useNodeStorageFolderPicker";
@@ -2206,6 +2215,10 @@ function previousPrompt(session: AiSessionSummary) {
 
 function nextPrompt(session: AiSessionSummary) {
   void setPromptIndex(session, promptIndexFor(session) + 1);
+}
+
+function backToLatestPrompt(session: AiSessionSummary) {
+  void setPromptIndex(session, latestPromptIndex(session));
 }
 
 function cancelSessionListPreviewClose() {

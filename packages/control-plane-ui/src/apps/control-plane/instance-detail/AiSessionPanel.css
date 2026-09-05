@@ -243,6 +243,8 @@
 .session-ai-new-start {
   display: grid;
   width: min(760px, 100%);
+  min-width: 0;
+  max-width: 100%;
   gap: 48px;
 }
 
@@ -259,6 +261,8 @@
 .session-ai-new-dialog {
   display: grid;
   width: 100%;
+  min-width: 0;
+  max-width: 100%;
   gap: 0;
   border: 1px solid var(--line-strong);
   border-radius: 20px;
@@ -285,20 +289,51 @@
 
 .session-ai-new-pills {
   display: flex;
+  box-sizing: border-box;
   align-items: center;
+  flex-wrap: nowrap;
   gap: 8px;
+  width: 100%;
   min-height: 42px;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
   border-bottom: 1px solid var(--line);
   border-radius: 20px 20px 0 0;
   background: color-mix(in srgb, var(--surface-inset) 82%, var(--surface));
   padding: 6px;
+  scrollbar-width: none;
+  overscroll-behavior-x: contain;
+  contain: inline-size;
+}
+
+.session-ai-new-pills[data-overflow-start="true"][data-overflow-end="false"] {
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 26px);
+  mask-image: linear-gradient(90deg, transparent, #000 26px);
+}
+
+.session-ai-new-pills[data-overflow-start="false"][data-overflow-end="true"] {
+  -webkit-mask-image: linear-gradient(270deg, transparent, #000 26px);
+  mask-image: linear-gradient(270deg, transparent, #000 26px);
+}
+
+.session-ai-new-pills[data-overflow-start="true"][data-overflow-end="true"] {
+  -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 26px, #000 calc(100% - 26px), transparent 100%);
+  mask-image: linear-gradient(90deg, transparent 0, #000 26px, #000 calc(100% - 26px), transparent 100%);
+}
+
+.session-ai-new-pills::-webkit-scrollbar {
+  display: none;
 }
 
 .session-ai-project-pill,
 .session-ai-app-pill {
   display: flex;
   align-items: center;
+  flex: 0 0 auto;
   gap: 6px;
+  max-width: min(260px, 70vw);
   min-height: 30px;
   border: 0;
   border-radius: 999px;
@@ -1853,6 +1888,18 @@
 .session-ai-detail-fixed-actions.session-ai-detail-head-actions {
   grid-column: 1;
   grid-row: 1;
+}
+
+.session-ai-detail-turn-navigator {
+  position: absolute;
+  bottom: calc(
+    var(--session-ai-compose-offset, 84px)
+    + var(--session-ai-compose-bottom)
+    + 16px
+  );
+  left: 50%;
+  z-index: 7;
+  box-shadow: var(--shadow-soft);
 }
 
 .session-ai-detail-head-actions button {

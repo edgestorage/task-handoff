@@ -4,6 +4,7 @@ import test from "node:test";
 
 const navigator = fs.readFileSync(new URL("../src/components/ai-session/AiSessionTurnNavigator.vue", import.meta.url), "utf8");
 const panel = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.vue", import.meta.url), "utf8");
+const panelCss = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.css", import.meta.url), "utf8");
 const floatingDock = fs.readFileSync(new URL("../src/apps/control-plane/ai-board/AiSessionFloatingDock.vue", import.meta.url), "utf8");
 const compactPrompt = fs.readFileSync(new URL("../src/components/ai-session/AiSessionCompactPrompt.vue", import.meta.url), "utf8");
 const board = fs.readFileSync(new URL("../src/apps/control-plane/ai-board/AiSessionBoardView.vue", import.meta.url), "utf8");
@@ -23,6 +24,38 @@ test("AI session turn navigation keeps accessible labels without redundant toolt
   assert.match(navigator, /<button type="button" :aria-label="nextLabel \|\| t\('sessions\.actions\.nextMessage'/);
   assert.doesNotMatch(navigator, /Tooltip/);
   assert.match(repositoryEnvironment, /<TooltipContent side="bottom"[^>]*>\{\{ t\("repository\.environment\.title"\) \}\}/);
+});
+
+test("turn navigation belongs to the detail bottom overlay instead of the composer or header", () => {
+  const detailActions = panel.indexOf('ref="detailActionsEl"');
+  const panelNavigator = panel.indexOf('class="session-ai-detail-turn-navigator"');
+  assert.ok(detailActions >= 0);
+  assert.ok(panelNavigator > detailActions);
+  assert.match(panelCss, /\.session-ai-detail-turn-navigator \{[\s\S]*?position: absolute;[\s\S]*?bottom: calc\([\s\S]*?var\(--session-ai-compose-offset, 84px\)[\s\S]*?var\(--session-ai-compose-bottom\)[\s\S]*?\+ 16px/);
+  assert.match(floatingDock, /class="ai-board-floating-detail"[\s\S]*?has-turn-navigator[\s\S]*?class="ai-board-floating-turn-navigator"/);
+  assert.match(floatingDock, /\.ai-board-floating-turn-navigator \{[\s\S]*?position: absolute;[\s\S]*?bottom: 10px;/);
+  assert.match(floatingDock, /\.ai-board-floating-detail\.has-turn-navigator \.ai-board-floating-content \{[\s\S]*?padding-bottom: 56px;/);
+  assert.equal((floatingDock.match(/<AiSessionTurnNavigator/g) || []).length, 1);
+});
+
+test("non-latest turn navigation exposes a combined latest-turn action", () => {
+  assert.match(navigator, /v-if="latestVisible"[\s\S]*class="ai-session-turn-navigator__latest"/);
+  assert.match(navigator, /const latestText = computed\(\(\) => props\.latestLabel \|\| t\("sessions\.panel\.backLatestTurn"\)\)/);
+  assert.match(navigator, /<SkipForward :size="13" \/>/);
+  assert.match(navigator, /@click="\$emit\('latest'\)"/);
+  assert.match(navigator, /\.ai-session-turn-navigator \{[\s\S]*?overflow: hidden;[\s\S]*?transform: translateX\(calc\(-50% \+ var\(--ai-session-turn-latest-offset, 0px\)\)\);/);
+  assert.match(navigator, /\.ai-session-turn-navigator__controls \{[\s\S]*?display: inline-flex;/);
+  assert.match(navigator, /button\.ai-session-turn-navigator__latest \{[\s\S]*?display: inline-flex;[\s\S]*?border-left: 1px solid var\(--line-subtle\);[\s\S]*?border-radius: 0;/);
+  assert.match(navigator, /button\.ai-session-turn-navigator__latest \{[\s\S]*?background: var\(--brand-accent-soft\);[\s\S]*?color: var\(--brand-accent\);/);
+  assert.match(navigator, /data-tone="board"\] button\.ai-session-turn-navigator__latest \{[\s\S]*?background: var\(--ai-board-turn-hover-bg\);[\s\S]*?color: var\(--ai-board-active-text, var\(--brand-accent\)\);/);
+  assert.match(navigator, /latestWidth\.value \/ 2/);
+  assert.match(navigator, /new ResizeObserver\(\(\) => \{\s*latestWidth\.value = latestEl\.value\?\.getBoundingClientRect\(\)\.width/);
+  assert.doesNotMatch(navigator, /latestWidth\.value = entry\?\.contentRect\.width/);
+  assert.match(panel, /:latest-label="t\('sessions\.panel\.backLatestTurn'\)"[\s\S]*?@latest="backToLatestPrompt\(selectedSession\)"/);
+  assert.match(panel, /function backToLatestPrompt\(session: AiSessionSummary\) \{\s*void setPromptIndex\(session, latestPromptIndex\(session\)\);/);
+  assert.match(floatingDock, /:latest-label="t\('sessions\.panel\.backLatestTurn'\)"[\s\S]*?@latest="\$emit\('latestPrompt'\)"/);
+  assert.match(board, /@latest-prompt="backToLatestPrompt\(selectedCard\)"/);
+  assert.match(board, /function backToLatestPrompt\(card: AiBoardCard\) \{\s*void setPromptIndex\(card, promptCount\(card\.session\) - 1\);/);
 });
 
 test("all viewport sizes share one compact detail actions menu", () => {

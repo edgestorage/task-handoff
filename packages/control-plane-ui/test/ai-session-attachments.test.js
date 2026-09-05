@@ -33,6 +33,19 @@ test("composer image attachments expose upload progress, contain previews, and i
   assert.doesNotMatch(transport, /onUploadProgress:/);
 });
 
+test("composer attachments own bounded horizontal overflow", () => {
+  const composer = fs.readFileSync(new URL("../src/components/ai-session/AiSessionComposer.vue", import.meta.url), "utf8");
+  const horizontalOverflow = fs.readFileSync(new URL("../src/lib/horizontalOverflow.ts", import.meta.url), "utf8");
+  assert.ok(composer.includes("v-horizontal-overflow"));
+  assert.ok(composer.includes('@scroll="updateHorizontalOverflowFromEvent"'));
+  assert.ok(composer.includes('@wheel="scrollHorizontalOverflow"'));
+  assert.ok(composer.includes("contain: inline-size;"));
+  assert.ok(composer.includes('data-overflow-start="false"][data-overflow-end="true"'));
+  assert.ok(composer.includes("scrollbar-width: none;"));
+  assert.ok(horizontalOverflow.includes("element.scrollLeft + event.deltaY"));
+  assert.ok(horizontalOverflow.includes("new ResizeObserver"));
+});
+
 test("composer converts only long pure text pastes through the existing file attachment path", () => {
   const composer = fs.readFileSync(new URL("../src/components/ai-session/AiSessionComposer.vue", import.meta.url), "utf8");
   assert.match(composer, /classifyAiSessionPastedText\(text, pastedTextSequence\.value \+ 1, props\.maxFileAttachmentBytes/);
