@@ -77,6 +77,12 @@ export const StoryAutomationScheduleSchema = z.discriminatedUnion("scheduleKind"
     timeOfDay: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
     timezone: z.string().trim().min(1).max(120),
   }).strict(),
+  z.object({
+    scheduleKind: z.literal("monthly"),
+    dayOfMonth: z.number().int().min(-3).max(31).refine((value) => value !== 0, "Day of month must not be zero."),
+    timeOfDay: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+    timezone: z.string().trim().min(1).max(120),
+  }).strict(),
 ]);
 
 export const StoryAutomationPolicySchema = z.object({

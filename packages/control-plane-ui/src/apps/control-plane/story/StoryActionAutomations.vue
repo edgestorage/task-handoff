@@ -35,7 +35,14 @@
                   <div v-for="runEntry in entry.recentRuns" :key="runEntry.id" class="story-automation-history-row">
                     <span>{{ t(`stories.automation.runStatus.${runEntry.status}`) }}</span>
                     <time>{{ formatTime(runEntry.queuedAt) }}</time>
-                    <Button v-if="runEntry.aiSessionId" variant="ghost" size="icon-sm" :disabled="!automationSessionExists(runEntry)" :aria-label="t(automationSessionExists(runEntry) ? 'stories.automation.openRunSession' : 'stories.automation.sessionUnavailable')" :title="t(automationSessionExists(runEntry) ? 'stories.automation.openRunSession' : 'stories.automation.sessionUnavailable')" @click="emit('open-session', runEntry.targetInstanceId, runEntry.aiSessionId)"><ExternalLink :size="12" /></Button>
+                    <TooltipProvider v-if="runEntry.aiSessionId" :delay-duration="120">
+                      <Tooltip>
+                        <TooltipTrigger as-child>
+                          <Button variant="ghost" size="icon-sm" :disabled="!automationSessionExists(runEntry)" :aria-label="t(automationSessionExists(runEntry) ? 'stories.automation.openRunSession' : 'stories.automation.sessionUnavailable')" @click="emit('open-session', runEntry.targetInstanceId, runEntry.aiSessionId)"><ExternalLink :size="12" /></Button>
+                        </TooltipTrigger>
+                        <TooltipContent side="bottom" :side-offset="8">{{ t(automationSessionExists(runEntry) ? 'stories.automation.openRunSession' : 'stories.automation.sessionUnavailable') }}</TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
                   </div>
                 </div>
               </ScrollArea>
@@ -45,12 +52,26 @@
         </div>
         <small v-if="entry.blockedReason || entry.lastRun?.error" class="story-automation-error">{{ (entry.blockedReason || entry.lastRun?.error)?.message }}</small>
       </div>
-      <div class="story-automation-actions">
-        <Button variant="ghost" size="icon-sm" :disabled="busyId === entry.automation.id" :aria-label="t('stories.automation.run')" :title="t('stories.automation.run')" @click="run(entry)"><Play :size="13" /></Button>
-        <Button variant="ghost" size="icon-sm" :disabled="busyId === entry.automation.id" :aria-label="t(entry.automation.enabled ? 'stories.automation.disable' : 'stories.automation.enable')" :title="t(entry.automation.enabled ? 'stories.automation.disable' : 'stories.automation.enable')" @click="toggle(entry)"><Pause v-if="entry.automation.enabled" :size="13" /><Power v-else :size="13" /></Button>
-        <Button variant="ghost" size="icon-sm" :disabled="busyId === entry.automation.id" :aria-label="t('common.actions.edit')" :title="t('common.actions.edit')" @click="openEdit(entry)"><Pencil :size="13" /></Button>
-        <Button variant="ghost" size="icon-sm" :disabled="busyId === entry.automation.id" :aria-label="t('common.actions.delete')" :title="t('common.actions.delete')" @click="remove(entry)"><Trash2 :size="13" /></Button>
-      </div>
+      <TooltipProvider :delay-duration="120">
+        <div class="story-automation-actions">
+          <Tooltip>
+            <TooltipTrigger as-child><Button variant="ghost" size="icon-sm" :disabled="busyId === entry.automation.id" :aria-label="t('stories.automation.run')" @click="run(entry)"><Play :size="13" /></Button></TooltipTrigger>
+            <TooltipContent side="bottom" :side-offset="8">{{ t("stories.automation.run") }}</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger as-child><Button variant="ghost" size="icon-sm" :disabled="busyId === entry.automation.id" :aria-label="t(entry.automation.enabled ? 'stories.automation.disable' : 'stories.automation.enable')" @click="toggle(entry)"><Pause v-if="entry.automation.enabled" :size="13" /><Power v-else :size="13" /></Button></TooltipTrigger>
+            <TooltipContent side="bottom" :side-offset="8">{{ t(entry.automation.enabled ? "stories.automation.disable" : "stories.automation.enable") }}</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger as-child><Button variant="ghost" size="icon-sm" :disabled="busyId === entry.automation.id" :aria-label="t('common.actions.edit')" @click="openEdit(entry)"><Pencil :size="13" /></Button></TooltipTrigger>
+            <TooltipContent side="bottom" :side-offset="8">{{ t("common.actions.edit") }}</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger as-child><Button variant="ghost" size="icon-sm" :disabled="busyId === entry.automation.id" :aria-label="t('common.actions.delete')" @click="remove(entry)"><Trash2 :size="13" /></Button></TooltipTrigger>
+            <TooltipContent side="bottom" :side-offset="8">{{ t("common.actions.delete") }}</TooltipContent>
+          </Tooltip>
+        </div>
+      </TooltipProvider>
     </div>
   </div>
 
@@ -89,9 +110,10 @@
         />
         <div class="story-automation-fields">
           <label v-if="!editingId && actionMode === 'existing'">{{ t("stories.automation.action") }}<ControlPlaneSelect v-model="selectedActionId" :placeholder="t('stories.automation.selectAction')"><ControlPlaneSelectItem v-for="candidate in schedulableActions" :key="candidate.id" :value="candidate.id">{{ candidate.title }}</ControlPlaneSelectItem></ControlPlaneSelect></label>
-        <label>{{ t("stories.automation.scheduleKind") }}<ControlPlaneSelect v-model="scheduleKind"><ControlPlaneSelectItem value="interval">{{ t("stories.automation.interval") }}</ControlPlaneSelectItem><ControlPlaneSelectItem value="daily">{{ t("stories.automation.daily") }}</ControlPlaneSelectItem><ControlPlaneSelectItem value="weekly">{{ t("stories.automation.weekly") }}</ControlPlaneSelectItem></ControlPlaneSelect></label>
+        <label>{{ t("stories.automation.scheduleKind") }}<ControlPlaneSelect v-model="scheduleKind"><ControlPlaneSelectItem value="interval">{{ t("stories.automation.interval") }}</ControlPlaneSelectItem><ControlPlaneSelectItem value="daily">{{ t("stories.automation.daily") }}</ControlPlaneSelectItem><ControlPlaneSelectItem value="weekly">{{ t("stories.automation.weekly") }}</ControlPlaneSelectItem><ControlPlaneSelectItem value="monthly">{{ t("stories.automation.monthly") }}</ControlPlaneSelectItem></ControlPlaneSelect></label>
         <label v-if="scheduleKind === 'interval'">{{ t("stories.automation.intervalMinutes") }}<Input v-model.number="intervalMinutes" type="number" min="1" /></label>
         <template v-else>
+          <label v-if="scheduleKind === 'monthly'">{{ t("stories.automation.dayOfMonth") }}<Input v-model.number="dayOfMonth" type="number" min="-3" max="31" step="1" /></label>
           <label>{{ t("stories.automation.timeOfDay") }}<ControlPlaneTimePicker v-model="timeOfDay" :hour-label="t('stories.automation.hour')" :minute-label="t('stories.automation.minute')" /></label>
           <label>{{ t("stories.automation.timezone") }}<Input v-model="timezone" /></label>
         </template>
@@ -125,6 +147,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Popover, PopoverContent, PopoverTrigger } from "../../../components/ui/popover";
 import { ScrollArea } from "../../../components/ui/scroll-area";
 import { Tabs, TabsList, TabsTrigger } from "../../../components/ui/tabs";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../../components/ui/tooltip";
 import Input from "../../../components/ui/input/Input.vue";
 import ControlPlaneSelect from "../shared/ControlPlaneSelect.vue";
 import ControlPlaneSelectItem from "../shared/ControlPlaneSelectItem.vue";
@@ -153,8 +176,9 @@ const editorOpen = ref(false);
 const editingId = ref("");
 const saving = ref(false);
 const editorError = ref("");
-const scheduleKind = ref<"interval" | "daily" | "weekly">("interval");
+const scheduleKind = ref<"interval" | "daily" | "weekly" | "monthly">("interval");
 const intervalMinutes = ref(60);
+const dayOfMonth = ref(1);
 const timeOfDay = ref("09:00");
 const timezone = ref(Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
 const weekdays = ref<number[]>([1]);
@@ -203,6 +227,7 @@ function resetEditor() {
   editingId.value = "";
   scheduleKind.value = "interval";
   intervalMinutes.value = 60;
+  dayOfMonth.value = 1;
   timeOfDay.value = "09:00";
   timezone.value = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
   weekdays.value = [1];
@@ -221,7 +246,7 @@ function openEdit(entry: StoryAutomationStatus) {
   const schedule = entry.automation.schedule;
   scheduleKind.value = schedule.scheduleKind;
   if (schedule.scheduleKind === "interval") intervalMinutes.value = schedule.intervalMs / 60_000;
-  else { timeOfDay.value = schedule.timeOfDay; timezone.value = schedule.timezone; if (schedule.scheduleKind === "weekly") weekdays.value = [...schedule.weekdays]; }
+  else { timeOfDay.value = schedule.timeOfDay; timezone.value = schedule.timezone; if (schedule.scheduleKind === "weekly") weekdays.value = [...schedule.weekdays]; else if (schedule.scheduleKind === "monthly") dayOfMonth.value = schedule.dayOfMonth; }
   whenBusy.value = entry.automation.policy.whenBusy;
   maxConcurrentRuns.value = entry.automation.policy.maxConcurrentRuns;
   cooldownMinutes.value = (entry.automation.policy.cooldownMs || 0) / 60_000;
@@ -232,7 +257,10 @@ function setWeekday(value: number, selected: boolean) { weekdays.value = selecte
 function scheduleInput(): StoryAutomationSchedule {
   if (scheduleKind.value === "interval") return { scheduleKind: "interval", intervalMs: Math.round(intervalMinutes.value * 60_000) };
   if (scheduleKind.value === "daily") return { scheduleKind: "daily", timeOfDay: timeOfDay.value, timezone: timezone.value.trim() };
-  return { scheduleKind: "weekly", weekdays: weekdays.value, timeOfDay: timeOfDay.value, timezone: timezone.value.trim() };
+  if (scheduleKind.value === "weekly") return { scheduleKind: "weekly", weekdays: weekdays.value, timeOfDay: timeOfDay.value, timezone: timezone.value.trim() };
+  const roundedDay = Math.round(dayOfMonth.value);
+  const normalizedDay = roundedDay === 0 ? 1 : Math.min(31, Math.max(-3, roundedDay));
+  return { scheduleKind: "monthly", dayOfMonth: normalizedDay, timeOfDay: timeOfDay.value, timezone: timezone.value.trim() };
 }
 function automationConfig(): AutomationConfig {
   return { schedule: scheduleInput(), enabled: enabled.value, policy: { maxConcurrentRuns: maxConcurrentRuns.value, whenBusy: whenBusy.value, ...(cooldownMinutes.value ? { cooldownMs: Math.round(cooldownMinutes.value * 60_000) } : {}) } };
@@ -292,7 +320,8 @@ async function mutate(entry: StoryAutomationStatus, operation: () => Promise<unk
 function scheduleLabel(schedule: StoryAutomationSchedule) {
   if (schedule.scheduleKind === "interval") return t("stories.automation.everyMinutes", { count: schedule.intervalMs / 60_000 });
   if (schedule.scheduleKind === "daily") return t("stories.automation.dailyAt", { time: schedule.timeOfDay, timezone: schedule.timezone });
-  return t("stories.automation.weeklyAt", { days: schedule.weekdays.map((day) => weekdayOptions.find((entry) => entry.value === day)?.label).join(", "), time: schedule.timeOfDay, timezone: schedule.timezone });
+  if (schedule.scheduleKind === "weekly") return t("stories.automation.weeklyAt", { days: schedule.weekdays.map((day) => weekdayOptions.find((entry) => entry.value === day)?.label).join(", "), time: schedule.timeOfDay, timezone: schedule.timezone });
+  return t("stories.automation.monthlyAt", { day: schedule.dayOfMonth, time: schedule.timeOfDay, timezone: schedule.timezone });
 }
 function actionTitle(actionId: string) { return props.actions.find((action) => action.id === actionId)?.title || actionId; }
 function automationSessionExists(run: StoryAutomationRun) {

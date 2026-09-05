@@ -23,23 +23,37 @@
       <span ref="activityTextEl" :data-status-text="statusText">{{ statusText }}</span>
     </button>
     <span v-else ref="activityTextEl" :data-status-text="statusText">{{ statusText }}</span>
-    <div v-if="interactive && expanded" class="ai-session-tool-activity-expanded">
-      <span v-if="loading">{{ t("sessions.timeline.loading") }}</span>
-      <span v-else-if="error" role="alert">{{ error }}</span>
-      <template v-else-if="displayNodes.length">
-        <template v-for="node in displayNodes" :key="node.id">
-          <article
-            v-if="node.type === 'message'"
-            class="ai-session-tool-activity-message"
-            :class="{ 'ai-session-tool-activity-message-user': node.message.type === 'user-message' }"
-          >
-            <MarkdownContent :content="node.message.text" :code-tools="markdownCodeTools" />
-          </article>
-          <AiSessionActivityGroup v-else :activities="node.activities" open :summary-visible="false" />
-        </template>
-      </template>
-      <span v-else>{{ t("sessions.timeline.noActivities") }}</span>
-    </div>
+    <Transition
+      name="tool-activity-expand"
+      @before-enter="prepareDisclosureEnter"
+      @enter="runDisclosureEnter"
+      @after-enter="finishDisclosureEnter"
+      @enter-cancelled="cancelDisclosureTransition"
+      @before-leave="prepareDisclosureLeave"
+      @leave="runDisclosureLeave"
+      @after-leave="finishDisclosureLeave"
+      @leave-cancelled="cancelDisclosureTransition"
+    >
+      <div v-if="interactive && expanded" class="ai-session-tool-activity-expanded">
+        <div class="ai-session-tool-activity-expanded-content">
+          <span v-if="loading">{{ t("sessions.timeline.loading") }}</span>
+          <span v-else-if="error" role="alert">{{ error }}</span>
+          <template v-else-if="displayNodes.length">
+            <template v-for="node in displayNodes" :key="node.id">
+              <article
+                v-if="node.type === 'message'"
+                class="ai-session-tool-activity-message"
+                :class="{ 'ai-session-tool-activity-message-user': node.message.type === 'user-message' }"
+              >
+                <MarkdownContent :content="node.message.text" :code-tools="markdownCodeTools" />
+              </article>
+              <AiSessionActivityGroup v-else :activities="node.activities" open :summary-visible="false" />
+            </template>
+          </template>
+          <span v-else>{{ t("sessions.timeline.noActivities") }}</span>
+        </div>
+      </div>
+    </Transition>
   </section>
 </template>
 
@@ -52,6 +66,16 @@ import type { AiSessionLifecycle, AiSessionPhase, AiSessionTool } from "../../ap
 import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
 import AiSessionActivityGroup from "./AiSessionActivityGroup.vue";
 import type { TimelineTurnNode } from "./timelineActivities";
+import {
+  beginDisclosureTransition,
+  cancelDisclosureTransition,
+  finishDisclosureEnter,
+  finishDisclosureLeave,
+  prepareDisclosureEnter,
+  prepareDisclosureLeave,
+  runDisclosureEnter,
+  runDisclosureLeave,
+} from "./disclosureTransition";
 
 const props = withDefaults(defineProps<{
   currentTool?: AiSessionTool;
@@ -119,7 +143,8 @@ watch(activityTextEl, (element) => {
 }, { flush: "post" });
 
 onBeforeUnmount(() => resizeObserver?.disconnect());
-function toggleExpanded() {
+function toggleExpanded(event: MouseEvent) {
+  beginDisclosureTransition(event.currentTarget as Element);
   expanded.value = !expanded.value;
 }
 const statusText = computed(() => {
@@ -189,8 +214,24 @@ const statusText = computed(() => {
 .ai-session-tool-activity-trigger > span { font-weight: 400; }
 .ai-session-tool-activity-trigger > svg { flex: 0 0 auto; color: var(--text-muted); transition: transform 120ms ease; }
 .ai-session-tool-activity-trigger > svg.open { transform: rotate(90deg); }
-.ai-session-tool-activity-expanded { display: grid; flex: 0 0 100%; gap: 6px; min-width: 0; margin-top: 10px; padding-left: 20px; }
-.ai-session-tool-activity-expanded > span { color: var(--text-muted); font-size: 12px; }
+.ai-session-tool-activity-expanded {
+  flex: 0 0 100%;
+  min-width: 0;
+  transition: height 180ms ease, opacity 180ms ease;
+  will-change: height;
+}
+.ai-session-tool-activity-expanded-content {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding-top: 10px;
+  padding-left: 20px;
+}
+.tool-activity-expand-enter-active,
+.tool-activity-expand-leave-active { overflow: hidden; }
+.tool-activity-expand-enter-from,
+.tool-activity-expand-leave-to { opacity: 0; }
+.ai-session-tool-activity-expanded-content > span { color: var(--text-muted); font-size: 12px; }
 .ai-session-tool-activity-message { min-width: 0; color: var(--text); font-size: 14px; line-height: 1.55; }
 .ai-session-tool-activity-message-user {
   justify-self: end;
@@ -256,6 +297,7 @@ const statusText = computed(() => {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .ai-session-tool-activity-expanded { transition-duration: 0ms; }
   .ai-session-tool-activity-running > span::after {
     animation: none;
     content: none;

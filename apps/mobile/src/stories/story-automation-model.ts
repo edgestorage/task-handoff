@@ -13,6 +13,7 @@ export type StoryAutomationDraft = {
   cooldownMinutes: string;
   enabled: boolean;
   intervalMinutes: string;
+  dayOfMonth: string;
   maxConcurrentRuns: string;
   scheduleKind: StoryAutomationSchedule['scheduleKind'];
   timeOfDay: string;
@@ -28,6 +29,7 @@ export function storyAutomationDraft(story: Story, status?: StoryAutomationStatu
     cooldownMinutes: String((status?.automation.policy.cooldownMs || 0) / 60_000),
     enabled: status?.automation.enabled ?? true,
     intervalMinutes: schedule?.scheduleKind === 'interval' ? String(schedule.intervalMs / 60_000) : '60',
+    dayOfMonth: schedule?.scheduleKind === 'monthly' ? String(schedule.dayOfMonth) : '1',
     maxConcurrentRuns: String(status?.automation.policy.maxConcurrentRuns || 1),
     scheduleKind: schedule?.scheduleKind || 'interval',
     timeOfDay: schedule && schedule.scheduleKind !== 'interval' ? schedule.timeOfDay : '09:00',
@@ -48,6 +50,10 @@ export function storyAutomationDraftValid(draft: StoryAutomationDraft, story: St
     return Number.isFinite(intervalMinutes) && intervalMinutes >= 1;
   }
   if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(draft.timeOfDay) || !draft.timezone.trim()) return false;
+  if (draft.scheduleKind === 'monthly') {
+    const day = Number(draft.dayOfMonth);
+    return Number.isInteger(day) && day >= -3 && day <= 31 && day !== 0;
+  }
   return draft.scheduleKind !== 'weekly' || draft.weekdays.length > 0;
 }
 
@@ -58,7 +64,8 @@ export function storyAutomationDraftWithActionValid(draft: StoryAutomationDraft,
 function scheduleInput(draft: StoryAutomationDraft): StoryAutomationSchedule {
   if (draft.scheduleKind === 'interval') return { scheduleKind: 'interval', intervalMs: Math.round(Number(draft.intervalMinutes) * 60_000) };
   if (draft.scheduleKind === 'daily') return { scheduleKind: 'daily', timeOfDay: draft.timeOfDay, timezone: draft.timezone.trim() };
-  return { scheduleKind: 'weekly', weekdays: [...new Set(draft.weekdays)].sort(), timeOfDay: draft.timeOfDay, timezone: draft.timezone.trim() };
+  if (draft.scheduleKind === 'weekly') return { scheduleKind: 'weekly', weekdays: [...new Set(draft.weekdays)].sort(), timeOfDay: draft.timeOfDay, timezone: draft.timezone.trim() };
+  return { scheduleKind: 'monthly', dayOfMonth: Math.round(Number(draft.dayOfMonth)), timeOfDay: draft.timeOfDay, timezone: draft.timezone.trim() };
 }
 
 function mutableInput(draft: StoryAutomationDraft): StoryAutomationWithActionInput['automation'] {

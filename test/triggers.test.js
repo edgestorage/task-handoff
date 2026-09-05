@@ -73,6 +73,41 @@ test("shared scheduler preserves interval anchors and skips repeated DST wall ti
     ).toISOString(),
     "2026-11-02T06:30:00.000Z",
   );
+  assert.equal(
+    nextSchedulerTime(
+      { type: "monthly", dayOfMonth: 15, timeOfDay: "09:00", timezone: "Asia/Shanghai" },
+      new Date("2026-07-16T00:00:00.000Z"),
+    ).toISOString(),
+    "2026-08-15T01:00:00.000Z",
+  );
+  assert.equal(
+    nextSchedulerTime(
+      { type: "monthly", dayOfMonth: -1, timeOfDay: "09:00", timezone: "UTC" },
+      new Date("2026-07-16T00:00:00.000Z"),
+    ).toISOString(),
+    "2026-07-31T09:00:00.000Z",
+  );
+  assert.equal(
+    nextSchedulerTime(
+      { type: "monthly", dayOfMonth: -2, timeOfDay: "09:00", timezone: "UTC" },
+      new Date("2026-07-16T00:00:00.000Z"),
+    ).toISOString(),
+    "2026-07-30T09:00:00.000Z",
+  );
+  assert.equal(
+    nextSchedulerTime(
+      { type: "monthly", dayOfMonth: -3, timeOfDay: "09:00", timezone: "UTC" },
+      new Date("2026-07-16T00:00:00.000Z"),
+    ).toISOString(),
+    "2026-07-29T09:00:00.000Z",
+  );
+  assert.equal(
+    nextSchedulerTime(
+      { type: "monthly", dayOfMonth: -1, timeOfDay: "09:00", timezone: "UTC" },
+      new Date("2026-07-31T10:00:00.000Z"),
+    ).toISOString(),
+    "2026-08-31T09:00:00.000Z",
+  );
 });
 
 test("shared scheduler enforces concurrency and drains queued events in FIFO order", async () => {

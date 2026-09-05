@@ -152,6 +152,7 @@ function IconAction({ busy, destructive, icon, label, onPress }: { busy?: boolea
 function automationScheduleLabel(schedule: StoryAutomationSchedule, t: Translate) {
   if (schedule.scheduleKind === 'interval') return t('stories.everyMinutes', { count: schedule.intervalMs / 60_000 });
   if (schedule.scheduleKind === 'daily') return t('stories.dailyAt', { time: schedule.timeOfDay, timezone: schedule.timezone });
+  if (schedule.scheduleKind === 'monthly') return t('stories.monthlyAt', { day: schedule.dayOfMonth, time: schedule.timeOfDay, timezone: schedule.timezone });
   const days = schedule.weekdays.map((day) => t(`triggers.form.weekday.${['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'][day]}` as Parameters<Translate>[0])).join(', ');
   return t('stories.weeklyAt', { days, time: schedule.timeOfDay, timezone: schedule.timezone });
 }

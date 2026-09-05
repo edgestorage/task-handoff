@@ -918,8 +918,11 @@ function actionAutomations(actionId: string) { return storyAutomationEntries.val
 function automationScheduleLabel(schedule: StoryAutomationSchedule) {
   if (schedule.scheduleKind === "interval") return t("stories.automation.everyMinutes", { count: schedule.intervalMs / 60_000 });
   if (schedule.scheduleKind === "daily") return t("stories.automation.dailyAt", { time: schedule.timeOfDay, timezone: schedule.timezone });
-  const days = schedule.weekdays.map((day) => new Intl.DateTimeFormat(locale.value, { weekday: "short", timeZone: "UTC" }).format(new Date(Date.UTC(2026, 7, 2 + day)))).join(", ");
-  return t("stories.automation.weeklyAt", { days, time: schedule.timeOfDay, timezone: schedule.timezone });
+  if (schedule.scheduleKind === "weekly") {
+    const days = schedule.weekdays.map((day) => new Intl.DateTimeFormat(locale.value, { weekday: "short", timeZone: "UTC" }).format(new Date(Date.UTC(2026, 7, 2 + day)))).join(", ");
+    return t("stories.automation.weeklyAt", { days, time: schedule.timeOfDay, timezone: schedule.timezone });
+  }
+  return t("stories.automation.monthlyAt", { day: schedule.dayOfMonth, time: schedule.timeOfDay, timezone: schedule.timezone });
 }
 function storySectionElement(section: StoryDetailSection) {
   return { actions: storyActionsSectionEl.value, documents: storyDocumentsSectionEl.value, sessions: storySessionsSectionEl.value, automations: storyAutomationsSectionEl.value }[section];
@@ -1159,7 +1162,7 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.story-view { display:flex; flex-direction:column; height:100%; min-height:0; overflow:hidden; padding:12px 0; color:var(--text); }
+.story-view { display:flex; flex-direction:column; height:100%; min-height:0; overflow:hidden; background:var(--workspace-bg); padding:12px 0; color:var(--text); }
 .story-content-header h2 { margin:0; color:var(--text-strong); font-size:18px; font-weight:500; }
 .story-description,.story-content-header small { color:var(--text-muted); font-size:12px; }
 .story-description { max-width:720px; margin:8px 0 0; line-height:1.5; }
