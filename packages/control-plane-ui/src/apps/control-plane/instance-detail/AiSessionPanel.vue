@@ -774,34 +774,39 @@
             </DropdownMenu>
           </div>
           <header ref="detailHeaderEl">
-            <div>
-              <span>{{ aiSessionAppDisplayName(aiSessionAppTab(instance, selectedSession), selectedSession.agent, t) }}</span>
-              <strong>{{ aiSessionStatusLabel(selectedSession, t) }}</strong>
-            </div>
+            <TooltipProvider :delay-duration="120">
+              <div class="session-ai-detail-context">
+                <Tooltip>
+                  <TooltipTrigger as-child>
+                    <span class="session-ai-detail-context-item">
+                      <Folder :size="14" aria-hidden="true" />
+                      <span>{{ selectedSessionFolderName }}</span>
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent class="ai-session-path-tooltip" side="top" :side-offset="8">{{ selectedSessionFolderPath }}</TooltipContent>
+                </Tooltip>
+                <span class="session-ai-detail-context-separator" aria-hidden="true">·</span>
+                <span>{{ aiSessionStatusLabel(selectedSession, t) }}</span>
+                <span class="session-ai-detail-context-separator" aria-hidden="true">·</span>
+                <Tooltip>
+                  <TooltipTrigger as-child>
+                    <span class="session-ai-detail-context-item">
+                      <Boxes :size="14" aria-hidden="true" />
+                      <span>{{ selectedSessionInstanceName }}</span>
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent class="ai-session-path-tooltip" side="top" :side-offset="8">{{ selectedSessionNodeName }}</TooltipContent>
+                </Tooltip>
+              </div>
+            </TooltipProvider>
             <div v-if="effectiveTimelineViewMode === 'compact'" class="session-ai-detail-prompt-stage">
               <Transition name="session-ai-prompt-fade" appear>
                 <section :key="selectedSession.id" ref="detailPromptSectionEl" class="session-ai-detail-block session-ai-detail-block-user">
-                  <div
-                    ref="promptContentEl"
-                    class="session-ai-detail-prompt-content"
-                    :class="{ expanded: promptExpanded }"
-                  >
-                    <MarkdownContent
-                      v-if="selectedSessionContentState === 'ready'"
-                      :content="displayAiSessionTitle(selectedConversationSession || selectedSession, promptIndexFor(selectedSession), t)"
-                      :code-tools="markdownCodeTools"
-                    />
-                  </div>
-                  <button
-                    v-if="promptHasOverflow"
-                    type="button"
-                    class="session-ai-detail-prompt-toggle"
-                    :aria-expanded="promptExpanded"
-                    @click="promptExpanded = !promptExpanded"
-                  >
-                    <span>{{ promptExpanded ? t("sessions.detail.collapsePrompt") : t("sessions.detail.expand") }}</span>
-                    <ChevronDown :size="13" :class="{ open: promptExpanded }" />
-                  </button>
+                  <AiSessionCompactPrompt
+                    :code-tools="markdownCodeTools"
+                    :content="selectedSessionContentState === 'ready' ? displayAiSessionTitle(selectedConversationSession || selectedSession, promptIndexFor(selectedSession), t) : ''"
+                    :timestamp="selectedPromptTimestamp"
+                  />
                 </section>
               </Transition>
             </div>
@@ -1072,7 +1077,7 @@ import { formatRelativeTime } from "../../../i18n/presentation";
 import type { SupportedLocale } from "../../../i18n/locale";
 import { translateApiError } from "../../../i18n/apiError";
 import { waitForAiSessionProjection } from "../ai-session-projection";
-import { ArrowLeft, Ban, Check, ChevronDown, ChevronRight, CircleHelp, ExternalLink, Filter, Folder, FolderOpen, GitBranch, History, LoaderCircle, MessageSquare, MoreHorizontal, PanelLeftOpen, Plus, Server, SlidersHorizontal, Split, Square, SquareTerminal, X } from "@lucide/vue";
+import { ArrowLeft, Ban, Boxes, Check, ChevronDown, ChevronRight, CircleHelp, ExternalLink, Filter, Folder, FolderOpen, GitBranch, History, LoaderCircle, MessageSquare, MoreHorizontal, PanelLeftOpen, Plus, Server, SlidersHorizontal, Split, Square, SquareTerminal, X } from "@lucide/vue";
 import { instanceStatusKeys, translateStatus } from "../../../i18n/status";
 import { useQueryClient } from "@tanstack/vue-query";
 import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
@@ -1097,6 +1102,7 @@ import { isAiSessionTriggerDeployment, removeInstanceTriggerBinding, upsertInsta
 import AiSessionComposer, { type AiSessionComposerAttachment } from "../../../components/ai-session/AiSessionComposer.vue";
 import { uploadAiSessionComposerAttachment } from "../../../components/ai-session/attachmentUpload";
 import AiSessionConversationContent from "../../../components/ai-session/AiSessionConversationContent.vue";
+import AiSessionCompactPrompt from "../../../components/ai-session/AiSessionCompactPrompt.vue";
 import AiSessionStreamingMarkdown from "../../../components/ai-session/AiSessionStreamingMarkdown.vue";
 import { vAiSessionCardAutoScroll } from "../../../components/ai-session/aiSessionCardAutoScroll";
 import AiSessionToolActivity from "../../../components/ai-session/AiSessionToolActivity.vue";
@@ -1451,6 +1457,31 @@ const selectedSessionContentState = computed(() => {
   const turn = aiSessionTurns(conversation)[promptIndexFor(summary)];
   return !turn || hasRenderableSelectedSessionTurn(turn.id) ? "ready" : "loading";
 });
+const selectedPromptTimestamp = computed(() => {
+  const session = selectedConversationSession.value || selectedSession.value;
+  if (!session) return "";
+  return aiSessionTurns(session)[promptIndexFor(session)]?.startedAt || session.startedAt;
+});
+const selectedSessionFolderName = computed(() => {
+  const session = selectedSession.value;
+  if (!session) return t("sessions.board.unknownFolder");
+  const folder = session.cwdFolderId
+    ? (props.nodeLocalFolders || []).find((candidate) => candidate.id === session.cwdFolderId)
+    : undefined;
+  return folder
+    ? nodeLocalFolderDisplayName(folder)
+    : aiSessionBasename(session.cwd) || t("sessions.board.unknownFolder");
+});
+const selectedSessionFolderPath = computed(() => {
+  const session = selectedSession.value;
+  if (!session) return t("sessions.board.unknownPath");
+  if (session.cwd) return session.cwd;
+  return session.cwdFolderId
+    ? (props.nodeLocalFolders || []).find((candidate) => candidate.id === session.cwdFolderId)?.path || t("sessions.board.unknownPath")
+    : t("sessions.board.unknownPath");
+});
+const selectedSessionInstanceName = computed(() => props.instance.name || props.instance.id);
+const selectedSessionNodeName = computed(() => props.instance.node?.name || props.instance.nodeId);
 
 async function setTimelineViewMode(value: unknown) {
   if (value !== "compact" && value !== "full") return;
@@ -1777,9 +1808,6 @@ const detailHeaderEl = ref<HTMLElement>();
 const detailPromptSectionEl = ref<HTMLElement>();
 const detailActionsEl = ref<HTMLElement>();
 const detailBottomAnchorEl = ref<HTMLElement>();
-const promptContentEl = ref<HTMLElement>();
-const promptHasOverflow = ref(false);
-const promptExpanded = ref(false);
 const timelineStickyUserMessage = ref<{ id: string; text: string }>();
 let composerResizeObserver: ResizeObserver | undefined;
 let detailActionsResizeObserver: ResizeObserver | undefined;
@@ -2133,12 +2161,6 @@ function latestPromptIndex(session: AiSessionSummary) {
   return Math.max(0, promptCount(session) - 1);
 }
 
-function updatePromptOverflow() {
-  const element = promptContentEl.value;
-  if (promptExpanded.value) return;
-  promptHasOverflow.value = Boolean(element && element.scrollHeight > element.clientHeight + 1);
-}
-
 function promptIndexFor(session: AiSessionSummary) {
   const count = promptCount(session);
   if (!count) {
@@ -2176,9 +2198,6 @@ async function setPromptIndex(session: AiSessionSummary, index: number) {
     ...promptIndexes.value,
     [session.id]: { index: targetIndex, count },
   };
-  promptExpanded.value = false;
-  promptHasOverflow.value = false;
-  void nextTick(updatePromptOverflow);
 }
 
 function previousPrompt(session: AiSessionSummary) {
@@ -3318,20 +3337,15 @@ watch(() => `${props.instance.id}\u0000${selectedSession.value?.id || ""}`, () =
   const draft = selectedSession.value ? loadAiSessionDraftPayload(selectedSession.value.id) : { value: "", bindings: [] };
   messageDraft.value = draft.value;
   messageMentionBindings.value = draft.bindings;
-  promptExpanded.value = false;
   timelineStickyUserMessage.value = undefined;
-  promptHasOverflow.value = false;
   void nextTick(() => {
-    updatePromptOverflow();
     promptResizeObserver?.disconnect();
     if (typeof ResizeObserver !== "undefined") {
       promptResizeObserver = new ResizeObserver(() => {
-        updatePromptOverflow();
         if (!detailScrolled.value) {
           updateDetailStickyThreshold();
         }
       });
-      if (promptContentEl.value) promptResizeObserver.observe(promptContentEl.value);
       if (detailPromptSectionEl.value) promptResizeObserver.observe(detailPromptSectionEl.value);
       if (detailHeaderEl.value) promptResizeObserver.observe(detailHeaderEl.value);
     }

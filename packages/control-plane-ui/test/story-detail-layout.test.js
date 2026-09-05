@@ -9,7 +9,7 @@ test("Story uses the same solid workspace background as AI Session", () => {
 });
 
 test("Story detail uses settings-style directories instead of standalone item cards", () => {
-  assert.match(storyView, /class="story-overview-summary"/);
+  assert.doesNotMatch(storyView, /class="story-overview-summary"/);
   assert.match(storyView, /class="story-directory story-actions-section"/);
   assert.match(storyView, /class="story-directory story-resource-section"/);
   assert.match(storyView, /\.story-directory \{[^}]*border:1px solid var\(--line\);[^}]*border-radius:8px;[^}]*background:var\(--surface-raised\);/);
@@ -17,6 +17,12 @@ test("Story detail uses settings-style directories instead of standalone item ca
   assert.match(storyView, /\.story-resource-item \+ \.story-resource-item \{ border-top:1px solid var\(--line\); \}/);
   assert.match(storyView, /\.story-action-item \+ \.story-action-item \{ border-top:1px solid var\(--line\); \}/);
   assert.doesNotMatch(storyView, /story-overview-grid/);
+});
+
+test("Story detail tabs merge section counts into the sticky header", () => {
+  assert.match(storyView, /class="story-detail-header-tabs"/);
+  assert.match(storyView, /class="story-detail-tab-count"/);
+  assert.match(storyView, /value="automations"><span class="story-detail-tab-count">\{\{ storyAutomationEntries\.length \}\}<\/span>\{\{ t\("stories\.automation\.title"\) \}\}<\/TabsTrigger>/);
 });
 
 test("Story session directory uses explicit current and history tabs", () => {

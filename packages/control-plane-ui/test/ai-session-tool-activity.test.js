@@ -9,6 +9,7 @@ const panelCss = fs.readFileSync(new URL("../src/apps/control-plane/instance-det
 const card = fs.readFileSync(new URL("../src/apps/control-plane/ai-board/AiSessionCard.vue", import.meta.url), "utf8");
 const floatingDock = fs.readFileSync(new URL("../src/apps/control-plane/ai-board/AiSessionFloatingDock.vue", import.meta.url), "utf8");
 const conversation = fs.readFileSync(new URL("../src/components/ai-session/AiSessionConversationContent.vue", import.meta.url), "utf8");
+const compactPrompt = fs.readFileSync(new URL("../src/components/ai-session/AiSessionCompactPrompt.vue", import.meta.url), "utf8");
 const sessions = fs.readFileSync(new URL("../src/apps/control-plane/useInstanceSessions.ts", import.meta.url), "utf8");
 const types = fs.readFileSync(new URL("../src/api/types.ts", import.meta.url), "utf8");
 
@@ -171,23 +172,39 @@ test("floating detail spacing below the prompt divider does not depend on respon
 });
 
 test("detail user prompts collapse to three lines with a local toggle", () => {
-  assert.match(panel, /ref="promptContentEl"/);
-  assert.match(panel, /promptHasOverflow/);
-  assert.match(panel, /promptExpanded = !promptExpanded/);
-  assert.match(panel, /if \(promptExpanded\.value\) return;/);
+  assert.match(panel, /<AiSessionCompactPrompt[\s\S]*:timestamp="selectedPromptTimestamp"/);
+  assert.match(panel, /aiSessionTurns\(session\)\[promptIndexFor\(session\)\]\?\.startedAt \|\| session\.startedAt/);
+  assert.match(compactPrompt, /class="ai-session-user-prompt-content"[\s\S]*:class="\{ expanded \}"/);
+  assert.match(compactPrompt, /v-if="hasOverflow"[\s\S]*:aria-expanded="expanded"[\s\S]*@click="toggleExpanded"/);
+  assert.match(compactPrompt, /max-height: calc\(1\.55em \* 3\)/);
+  assert.match(compactPrompt, /collapsedPromptHeight[\s\S]*if \(!opening\) element\.style\.maxHeight = "none";[\s\S]*expanded\.value = opening;[\s\S]*element\.animate\([\s\S]*duration: 180[\s\S]*fill: "both"/);
+  assert.match(compactPrompt, /animation\.finished\.then[\s\S]*element\.style\.maxHeight = "";[\s\S]*animation\.cancel\(\)/);
+  assert.match(compactPrompt, /class="ai-session-user-prompt-time"[\s\S]*\{\{ formattedTime \}\}/);
+  assert.match(compactPrompt, /class="ai-session-user-prompt-copy"[\s\S]*@click="copyContent"/);
+  assert.match(compactPrompt, /navigator\.clipboard\.writeText\(props\.content\)/);
+  assert.match(compactPrompt, /\.ai-session-compact-prompt:hover \.ai-session-user-prompt-copy,[\s\S]*opacity: 1;[\s\S]*pointer-events: auto;/);
   assert.match(panel, /watch\(\(\) => `\$\{props\.instance\.id\}\\u0000\$\{selectedSession\.value\?\.id \|\| ""\}`/);
-  assert.doesNotMatch(panel, /watch\(selectedSession, \(\) => \{\s*promptExpanded\.value = false/);
-  assert.match(panelCss, /max-height: calc\(1\.55em \* 3\)/);
-  assert.match(panelCss, /\.session-ai-detail-prompt-content \{[\s\S]*?font-size: 14px;[\s\S]*?line-height: 1\.55;/);
-  assert.match(panelCss, /session-ai-detail-prompt-toggle/);
   assert.match(panel, /v-else-if="effectiveTimelineViewMode === 'compact' && detailScrolled && !detailConversationTransitioning"[\s\S]*class="session-ai-timeline-sticky-prompt"/);
   assert.doesNotMatch(panelCss, /session-ai-detail\.is-scrolled header/);
   assert.doesNotMatch(panel, /session-ai-detail-head-placeholder|detailHeaderPlaceholderHeight/);
 });
 
+test("detail context shows the registered folder, lifecycle, and instance on one line", () => {
+  assert.match(panel, /<TooltipProvider :delay-duration="120">[\s\S]*class="session-ai-detail-context"[\s\S]*<Folder :size="14"[\s\S]*\{\{ selectedSessionFolderName \}\}[\s\S]*aiSessionStatusLabel\(selectedSession, t\)[\s\S]*<Boxes :size="14"[\s\S]*\{\{ selectedSessionInstanceName \}\}/);
+  assert.match(panel, /session\.cwdFolderId[\s\S]*props\.nodeLocalFolders[\s\S]*nodeLocalFolderDisplayName\(folder\)[\s\S]*aiSessionBasename\(session\.cwd\)/);
+  assert.match(panel, /selectedSessionFolderPath[\s\S]*session\.cwd[\s\S]*find\(\(candidate\) => candidate\.id === session\.cwdFolderId\)\?\.path/);
+  assert.match(panel, /props\.instance\.name \|\| props\.instance\.id/);
+  assert.match(panel, /<TooltipTrigger as-child>[\s\S]*selectedSessionFolderName[\s\S]*<TooltipContent class="ai-session-path-tooltip"[\s\S]*selectedSessionFolderPath/);
+  assert.match(panel, /selectedSessionInstanceName[\s\S]*<TooltipContent class="ai-session-path-tooltip"[\s\S]*selectedSessionNodeName/);
+  assert.match(panel, /props\.instance\.node\?\.name \|\| props\.instance\.nodeId/);
+  assert.doesNotMatch(panel, /class="session-ai-detail-context-item"[^>]*:title=/);
+  assert.match(panelCss, /\.session-ai-detail-context \{[\s\S]*display: flex;[\s\S]*align-items: center;[\s\S]*font-size: 13px;[\s\S]*font-weight: 400;/);
+  assert.doesNotMatch(panel, /aiSessionAppDisplayName\(aiSessionAppTab\(instance, selectedSession\)/);
+});
+
 test("floating user prompts collapse to three lines and become compact when sticky", () => {
-  assert.match(floatingDock, /ref="promptContentEl"/);
-  assert.match(floatingDock, /class="ai-board-floating-prompt-toggle"/);
+  assert.match(floatingDock, /<AiSessionCompactPrompt[\s\S]*:timestamp="promptTimestamp"[\s\S]*tone="board"/);
+  assert.match(floatingDock, /aiSessionTurns\(props\.conversationSession\)\[props\.promptIndex\]\?\.startedAt[\s\S]*props\.conversationSession\.startedAt/);
   assert.match(floatingDock, /promptStickyPlaceholderHeight/);
   assert.match(floatingDock, /\.ai-board-floating-scroll \[data-task-handoff-scroll-viewport\]/);
   assert.doesNotMatch(floatingDock, /data-reka-scroll-area-viewport/);
@@ -195,12 +212,11 @@ test("floating user prompts collapse to three lines and become compact when stic
   assert.match(floatingDock, /expandedDividerOffset - stickyHeight/);
   assert.match(floatingDock, /scrollTop > promptStickyThreshold/);
   assert.match(floatingDock, /scrollTop <= promptStickyThreshold/);
-  assert.match(floatingDock, /max-height: calc\(1\.55em \* 3\)/);
   assert.match(floatingDock, /\.ai-board-floating-block-user \{\s*position: relative;/);
   assert.match(floatingDock, /ai-board-floating-detail\.is-scrolled \.ai-board-floating-block-user \{[\s\S]*?position: sticky;[\s\S]*?top: 0;/);
   assert.match(floatingDock, /ai-board-floating-detail\.is-scrolled \.ai-board-floating-block-user \{[\s\S]*?background: var\(--ai-board-column-head-bg\);/);
-  assert.match(floatingDock, /ai-board-floating-detail\.is-scrolled \.ai-board-floating-prompt-content \{\s*max-height: 1\.55em;/);
-  assert.match(floatingDock, /ai-board-floating-detail\.is-scrolled \.ai-board-floating-prompt-toggle \{\s*display: none;/);
+  assert.match(floatingDock, /ai-board-floating-detail\.is-scrolled :deep\(\.ai-session-user-prompt-content\) \{\s*max-height: 1\.55em;/);
+  assert.match(floatingDock, /ai-board-floating-detail\.is-scrolled :deep\(\.ai-session-user-prompt-toggle\) \{\s*display: none;/);
 });
 
 test("detail sticky thresholds follow the complete user prompt height", () => {

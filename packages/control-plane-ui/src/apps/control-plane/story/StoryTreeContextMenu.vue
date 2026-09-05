@@ -6,6 +6,12 @@
     <ContextMenuItem class="ai-session-context-menu-item" :disabled="!canAddExisting" @select="$emit('add-existing')">
       <Link :size="14" /><span>{{ t("stories.addExisting") }}</span>
     </ContextMenuItem>
+    <ContextMenuItem class="ai-session-context-menu-item" :disabled="Boolean(story.archivedAt)" @select="$emit('add-action')">
+      <Play :size="14" /><span>{{ t("stories.addAction") }}</span>
+    </ContextMenuItem>
+    <ContextMenuItem class="ai-session-context-menu-item" :disabled="Boolean(story.archivedAt)" @select="$emit('add-automation')">
+      <CalendarClock :size="14" /><span>{{ t("stories.automation.add") }}</span>
+    </ContextMenuItem>
     <ContextMenuItem class="ai-session-context-menu-item" @select="$emit('edit')">
       <Pencil :size="14" /><span>{{ t("common.actions.edit") }}</span>
     </ContextMenuItem>
@@ -20,7 +26,7 @@
 </template>
 
 <script setup lang="ts">
-import { Archive, Link, MessageSquarePlus, Pencil, RotateCcw, Trash2 } from "@lucide/vue";
+import { Archive, CalendarClock, Link, MessageSquarePlus, Pencil, Play, RotateCcw, Trash2 } from "@lucide/vue";
 import type { Story } from "@task-handoff/protocol/stories";
 import { useI18n } from "vue-i18n";
 import { ContextMenuContent, ContextMenuItem, ContextMenuSeparator } from "../../../components/ui/context-menu";
@@ -34,6 +40,8 @@ defineProps<{
 defineEmits<{
   "new-session": [];
   "add-existing": [];
+  "add-action": [];
+  "add-automation": [];
   edit: [];
   "toggle-archive": [];
   delete: [];

@@ -5,6 +5,7 @@ import test from "node:test";
 const navigator = fs.readFileSync(new URL("../src/components/ai-session/AiSessionTurnNavigator.vue", import.meta.url), "utf8");
 const panel = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.vue", import.meta.url), "utf8");
 const floatingDock = fs.readFileSync(new URL("../src/apps/control-plane/ai-board/AiSessionFloatingDock.vue", import.meta.url), "utf8");
+const compactPrompt = fs.readFileSync(new URL("../src/components/ai-session/AiSessionCompactPrompt.vue", import.meta.url), "utf8");
 const board = fs.readFileSync(new URL("../src/apps/control-plane/ai-board/AiSessionBoardView.vue", import.meta.url), "utf8");
 const conversation = fs.readFileSync(new URL("../src/components/ai-session/AiSessionConversationContent.vue", import.meta.url), "utf8");
 const displayHelpers = fs.readFileSync(new URL("../src/apps/control-plane/useInstanceSessions.ts", import.meta.url), "utf8");
@@ -39,10 +40,11 @@ test("all viewport sizes share one compact detail actions menu", () => {
 });
 
 test("AI session details render messages without redundant section titles", () => {
-  assert.match(panel, /class="session-ai-detail-prompt-content"[\s\S]*?<MarkdownContent[\s\S]*?:content="displayAiSessionTitle/);
+  assert.match(panel, /<AiSessionCompactPrompt[\s\S]*?:content="selectedSessionContentState === 'ready' \? displayAiSessionTitle/);
   assert.match(panel, /<AiSessionConversationContent/);
-  assert.match(floatingDock, /class="ai-board-floating-prompt-content"[\s\S]*?<MarkdownContent[\s\S]*?:content="displayAiSessionTitle/);
+  assert.match(floatingDock, /<AiSessionCompactPrompt[\s\S]*?:content="detailState === 'ready' \? displayAiSessionTitle/);
   assert.match(floatingDock, /<AiSessionConversationContent/);
+  assert.match(compactPrompt, /<MarkdownContent v-if="content" :content="content"/);
   assert.match(conversation, /<AiSessionResult[\s\S]*?:response-content="detailState === 'ready' \? compactResponseContent : ''"/);
   assert.match(conversation, /compactResponseContent = computed\(\(\) => displayAiSessionResponse/);
   for (const detail of [panel, floatingDock]) assert.doesNotMatch(detail, /message-section-title|response-section-title/);
@@ -65,8 +67,8 @@ test("details count retained turns while cards consume bounded summary counts", 
 test("compact Turn navigation loads the target body before committing selection", () => {
   assert.match(panel, /async function setPromptIndex[\s\S]*?await loadSelectedSessionTurn\(targetTurn\.id\)[\s\S]*?promptIndexes\.value =/);
   assert.match(board, /async function setPromptIndex[\s\S]*?await loadSelectedCardTurn\(targetTurn\.id\)[\s\S]*?promptIndexes\.value =/);
-  assert.match(panel, /v-if="selectedSessionContentState === 'ready'"/);
-  assert.match(floatingDock, /v-if="detailState === 'ready'"[\s\S]*?:content="displayAiSessionTitle\(conversationSession, promptIndex, t\)"/);
+  assert.match(panel, /:content="selectedSessionContentState === 'ready' \? displayAiSessionTitle/);
+  assert.match(floatingDock, /:content="detailState === 'ready' \? displayAiSessionTitle\(conversationSession, promptIndex, t\) : ''"/);
 });
 
 test("AI session prompt state exists before the timeline's immediate watcher", () => {
