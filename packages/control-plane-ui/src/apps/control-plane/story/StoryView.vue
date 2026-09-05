@@ -1295,7 +1295,8 @@ onBeforeUnmount(() => {
 .story-content { display:flex; min-width:0; min-height:0; flex-direction:column; overflow:hidden; padding:0 20px; }
 .story-content.story-session-pane { padding:0; }
 .story-content.story-session-pane > .story-session-creator { padding:0; background:transparent; }
-.story-detail-scroll { flex:1; min-height:0; }
+.story-detail-scroll { flex:1; min-height:0; margin-right:-16px; }
+.story-detail-scroll :deep([data-task-handoff-scroll-viewport]) { width:calc(100% - 16px); }
 .story-detail-scroll :deep([data-task-handoff-scroll-viewport] > div) { width:100%; min-width:0 !important; }
 .story-detail-scroll-inner { --story-detail-head-height:140px; display:grid; gap:12px; width:min(100%,1080px); min-width:0; margin:0 auto; padding:0 10px 32px 0; }
 .story-detail-head { position:sticky; top:0; z-index:3; display:grid; gap:12px; min-width:0; padding-bottom:10px; background:var(--workspace-bg); }

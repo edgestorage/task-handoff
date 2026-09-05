@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import { z } from "zod";
 import {
   STORY_DEFAULT_MAX_FILE_BYTES,
   StoryContentGetInputSchema,
@@ -13,17 +14,32 @@ import {
 import type { AiSessionStatus } from "@task-handoff/protocol/ai-sessions";
 import type { NodeAgentRegistrationClient } from "./node-agent-client.ts";
 
+const STORY_CONTENT_DEFAULT_PAGE_SIZE = 20;
+const STORY_CONTENT_MAX_PAGE_SIZE = 100;
+
+const StoryContentListToolInputSchema = z.object({
+  page: z.number().int().min(1).max(500).default(1),
+  pageSize: z.number().int().min(1).max(STORY_CONTENT_MAX_PAGE_SIZE).default(STORY_CONTENT_DEFAULT_PAGE_SIZE),
+}).strict();
+
 export const STORY_DYNAMIC_TOOLS = [
   {
     type: "function" as const,
     name: "story_list_content",
-    description: "List the indexed documents in the Story assigned to the current AI Session.",
-    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    description: "List a page of indexed documents in the Story assigned to the current AI Session, ordered newest to oldest. Start with page 1, increment page while pagination.hasMore is true, then pass selected storyPath values to story_get_content.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        page: { type: "integer", minimum: 1, maximum: 500, default: 1, description: "One-based page number." },
+        pageSize: { type: "integer", minimum: 1, maximum: STORY_CONTENT_MAX_PAGE_SIZE, default: STORY_CONTENT_DEFAULT_PAGE_SIZE, description: "Maximum documents to return per page." },
+      },
+      additionalProperties: false,
+    },
   },
   {
     type: "function" as const,
     name: "story_get_content",
-    description: "Copy one or more explicitly selected Story documents into a directory in the current workspace.",
+    description: "Copy one or more Story documents selected by exact storyPath from story_list_content into a directory in the current workspace. Files retain their Story-relative paths; read the returned local paths with workspace tools.",
     inputSchema: {
       type: "object",
       properties: {
@@ -37,7 +53,7 @@ export const STORY_DYNAMIC_TOOLS = [
   {
     type: "function" as const,
     name: "story_set_content",
-    description: "Create or replace one indexed Story document from a file in the current workspace.",
+    description: "Create or replace one indexed Story document from a regular file in the current workspace. A new document requires title; replacing one requires the expectedRevision returned by story_list_content or story_get_content.",
     inputSchema: {
       type: "object",
       properties: {
@@ -84,7 +100,11 @@ function requireWithinWorkspace(session: AiSessionStatus, candidate: string, mus
 }
 
 export class StoryAgentToolService {
-  constructor(private readonly nodeAgent: NodeAgentRegistrationClient) {}
+  private readonly nodeAgent: NodeAgentRegistrationClient;
+
+  constructor(nodeAgent: NodeAgentRegistrationClient) {
+    this.nodeAgent = nodeAgent;
+  }
 
   list(session: AiSessionStatus) {
     this.requireStory(session);
@@ -93,9 +113,19 @@ export class StoryAgentToolService {
 
   async invoke(session: AiSessionStatus, tool: string, value: unknown) {
     if (tool === "story_list_content") {
-      const input = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
-      if (Object.keys(input).length) throw storyToolError("STORY_TOOL_INPUT_INVALID", "story_list_content does not accept arguments.");
-      return { documents: await this.list(session) };
+      const { page, pageSize } = StoryContentListToolInputSchema.parse(value ?? {});
+      const documents = [...await this.list(session)].reverse();
+      const offset = (page - 1) * pageSize;
+      return {
+        documents: documents.slice(offset, offset + pageSize),
+        pagination: {
+          page,
+          pageSize,
+          totalItems: documents.length,
+          totalPages: Math.ceil(documents.length / pageSize),
+          hasMore: offset + pageSize < documents.length,
+        },
+      };
     }
     if (tool === "story_get_content") return this.get(session, value);
     if (tool === "story_set_content") return this.set(session, value);

@@ -174,9 +174,10 @@ test("floating detail spacing below the prompt divider does not depend on respon
 test("detail user prompts collapse to three lines with a local toggle", () => {
   assert.match(panel, /<AiSessionCompactPrompt[\s\S]*:timestamp="selectedPromptTimestamp"/);
   assert.match(panel, /aiSessionTurns\(session\)\[promptIndexFor\(session\)\]\?\.startedAt \|\| session\.startedAt/);
-  assert.match(compactPrompt, /class="ai-session-user-prompt-content"[\s\S]*:class="\{ expanded \}"/);
+  assert.match(compactPrompt, /class="ai-session-user-prompt-content"[\s\S]*:class="\{ expanded, 'has-overflow': hasOverflow \}"/);
   assert.match(compactPrompt, /v-if="hasOverflow"[\s\S]*:aria-expanded="expanded"[\s\S]*@click="toggleExpanded"/);
   assert.match(compactPrompt, /max-height: calc\(1\.55em \* 3\)/);
+  assert.match(compactPrompt, /\.ai-session-user-prompt-content\.has-overflow:not\(\.expanded\) \{[\s\S]*-webkit-mask-image: linear-gradient\(to bottom, #000 calc\(100% - 12px\), transparent 100%\);[\s\S]*mask-image: linear-gradient\(to bottom, #000 calc\(100% - 12px\), transparent 100%\);/);
   assert.match(compactPrompt, /collapsedPromptHeight[\s\S]*if \(!opening\) element\.style\.maxHeight = "none";[\s\S]*expanded\.value = opening;[\s\S]*element\.animate\([\s\S]*duration: 180[\s\S]*fill: "both"/);
   assert.match(compactPrompt, /animation\.finished\.then[\s\S]*element\.style\.maxHeight = "";[\s\S]*animation\.cancel\(\)/);
   assert.match(compactPrompt, /class="ai-session-user-prompt-time"[\s\S]*\{\{ formattedTime \}\}/);
@@ -216,6 +217,7 @@ test("floating user prompts collapse to three lines and become compact when stic
   assert.match(floatingDock, /ai-board-floating-detail\.is-scrolled \.ai-board-floating-block-user \{[\s\S]*?position: sticky;[\s\S]*?top: 0;/);
   assert.match(floatingDock, /ai-board-floating-detail\.is-scrolled \.ai-board-floating-block-user \{[\s\S]*?background: var\(--ai-board-column-head-bg\);/);
   assert.match(floatingDock, /ai-board-floating-detail\.is-scrolled :deep\(\.ai-session-user-prompt-content\) \{\s*max-height: 1\.55em;/);
+  assert.match(floatingDock, /ai-board-floating-detail\.is-scrolled :deep\(\.ai-session-user-prompt-content\) \{[\s\S]*-webkit-mask-image: none;[\s\S]*mask-image: none;/);
   assert.match(floatingDock, /ai-board-floating-detail\.is-scrolled :deep\(\.ai-session-user-prompt-toggle\) \{\s*display: none;/);
 });
 

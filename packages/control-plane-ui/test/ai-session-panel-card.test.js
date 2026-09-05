@@ -29,6 +29,17 @@ test("project rows show folder paths", () => {
   assert.match(styles, /\.session-ai-project-folder-copy > small\)[^{]*\{[^}]*color: var\(--text-muted\);[^}]*font-size: 12px;[^}]*font-weight: 400;/s);
 });
 
+test("new-session context selectors own bounded horizontal overflow", () => {
+  assert.ok(panel.includes("v-horizontal-overflow"));
+  assert.ok(panel.includes('class="session-ai-new-pills"'));
+  assert.ok(panel.includes('@scroll="updateHorizontalOverflowFromEvent"'));
+  assert.ok(panel.includes('@wheel="scrollHorizontalOverflow"'));
+  assert.ok(styles.includes(".session-ai-new-pills::-webkit-scrollbar"));
+  assert.ok(styles.includes('data-overflow-start="false"][data-overflow-end="true"'));
+  assert.match(styles, /\.session-ai-new-pills \{[^}]*width: 100%;[^}]*min-width: 0;[^}]*max-width: 100%;[^}]*overflow-x: auto;[^}]*scrollbar-width: none;[^}]*contain: inline-size;/s);
+  assert.match(styles, /\.session-ai-project-pill,\s*\.session-ai-app-pill \{[^}]*flex: 0 0 auto;/s);
+});
+
 test("AI session card and detail menus open Terminal at the authoritative session cwd", () => {
   assert.match(panel, /<AiSessionCardContextMenu[\s\S]*:can-open-terminal="Boolean\(terminalLaunchAppId\)"[\s\S]*@open-terminal="openSessionTerminal\(session\)"/);
   assert.match(panel, /<DropdownMenuItem[\s\S]*v-if="terminalLaunchAppId"[\s\S]*@select="openSessionTerminal\(selectedSession\)"[\s\S]*sessions\.actions\.openTerminal/);

@@ -1,7 +1,11 @@
 <template>
   <aside ref="dockRoot" class="ai-board-floating-dock" :aria-label="t('sessions.detail.selected')" :style="dockStyle" @click.stop>
     <Transition name="ai-board-floating-panel-fade" mode="out-in">
-      <section v-if="!collapsed" class="ai-board-floating-detail" :class="{ 'is-scrolled': detailScrolled }">
+      <section
+        v-if="!collapsed"
+        class="ai-board-floating-detail"
+        :class="{ 'is-scrolled': detailScrolled, 'has-turn-navigator': timelineMode === 'compact' && promptCount > 1 }"
+      >
         <div class="ai-board-floating-resize ai-board-floating-resize-top" @pointerdown.stop.prevent="startResize('top', $event)" />
         <div class="ai-board-floating-resize ai-board-floating-resize-left" @pointerdown.stop.prevent="startResize('left', $event)" />
         <div class="ai-board-floating-resize ai-board-floating-resize-right" @pointerdown.stop.prevent="startResize('right', $event)" />
@@ -28,16 +32,6 @@
             </strong>
           </div>
           <div class="ai-board-floating-head-actions">
-            <AiSessionTurnNavigator
-              :count="promptCount"
-              :index="promptIndex"
-              :aria-label="t('sessions.composer.navigation')"
-              :previous-label="t('sessions.actions.previousMessage', { agent: card.session.agent })"
-              :next-label="t('sessions.actions.nextMessage', { agent: card.session.agent })"
-              tone="board"
-              @previous="$emit('previousPrompt')"
-              @next="$emit('nextPrompt')"
-            />
             <TooltipProvider :delay-duration="120">
               <Tooltip>
                 <TooltipTrigger as-child>
@@ -117,6 +111,20 @@
             />
           </div>
         </ScrollArea>
+        <AiSessionTurnNavigator
+          v-if="timelineMode === 'compact'"
+          class="ai-board-floating-turn-navigator"
+          :count="promptCount"
+          :index="promptIndex"
+          :aria-label="t('sessions.composer.navigation')"
+          :latest-label="t('sessions.panel.backLatestTurn')"
+          :previous-label="t('sessions.actions.previousMessage', { agent: card.session.agent })"
+          :next-label="t('sessions.actions.nextMessage', { agent: card.session.agent })"
+          tone="board"
+          @latest="$emit('latestPrompt')"
+          @previous="$emit('previousPrompt')"
+          @next="$emit('nextPrompt')"
+        />
       </section>
 
       <button v-else type="button" class="ai-board-floating-restore" @click="$emit('update:collapsed', false)">
@@ -211,6 +219,7 @@ defineEmits<{
   cancelEdit: [];
   continueFromTurn: [turnId: string];
   editQueuedMessage: [payload: { queueId: string; message: string }];
+  latestPrompt: [];
   loadTurnTimeline: [turnId: string, force?: boolean];
   nextPrompt: [];
   openAiSessionApp: [instance: InstanceWithAiSessions, session?: AiSessionSummary];
@@ -750,6 +759,10 @@ onBeforeUnmount(() => {
   padding: 14px;
 }
 
+.ai-board-floating-detail.has-turn-navigator .ai-board-floating-content {
+  padding-bottom: 56px;
+}
+
 .ai-board-floating-block + .ai-board-floating-conversation {
   margin-top: 16px;
 }
@@ -791,6 +804,8 @@ onBeforeUnmount(() => {
 
 .ai-board-floating-detail.is-scrolled :deep(.ai-session-user-prompt-content) {
   max-height: 1.55em;
+  -webkit-mask-image: none;
+  mask-image: none;
 }
 
 .ai-board-floating-detail.is-scrolled :deep(.ai-session-user-prompt-content .markdown-content),
@@ -811,6 +826,14 @@ onBeforeUnmount(() => {
   min-height: 0;
   margin-top: -8px;
   pointer-events: none;
+}
+
+.ai-board-floating-turn-navigator {
+  position: absolute;
+  bottom: 10px;
+  left: 50%;
+  z-index: 6;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.24);
 }
 
 .ai-board-floating-block :deep(code) {

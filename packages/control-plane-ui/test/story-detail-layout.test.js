@@ -25,6 +25,11 @@ test("Story detail tabs merge section counts into the sticky header", () => {
   assert.match(storyView, /value="automations"><span class="story-detail-tab-count">\{\{ storyAutomationEntries\.length \}\}<\/span>\{\{ t\("stories\.automation\.title"\) \}\}<\/TabsTrigger>/);
 });
 
+test("Story detail moves its scrollbar outward without shifting the content viewport", () => {
+  assert.match(storyView, /\.story-detail-scroll \{[^}]*margin-right:-16px;/);
+  assert.match(storyView, /\.story-detail-scroll :deep\(\[data-task-handoff-scroll-viewport\]\) \{ width:calc\(100% - 16px\); \}/);
+});
+
 test("Story session directory uses explicit current and history tabs", () => {
   assert.match(storyView, /<Tabs :model-value="storySessionView"/);
   assert.match(storyView, /<TabsTrigger value="current">/);
