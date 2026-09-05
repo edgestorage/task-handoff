@@ -43,9 +43,9 @@ test("all localized resource strings compile", () => {
   }
 });
 
-test("Story action prompt placeholders render literal template braces", () => {
-  assert.equal(createControlPlaneI18nForTest("en-US").global.t("stories.actionEditor.promptPlaceholder"), "Prompt template, e.g. Fix {{bug}}.");
-  assert.equal(createControlPlaneI18nForTest("zh-CN").global.t("stories.actionEditor.promptPlaceholder"), "提示词模板，例如：修复 {{bug}}。");
+test("Story action editor describes a final prompt without parameter templates", () => {
+  assert.equal(createControlPlaneI18nForTest("en-US").global.t("stories.actionEditor.promptPlaceholder"), "Prompt sent when this action runs.");
+  assert.equal(createControlPlaneI18nForTest("zh-CN").global.t("stories.actionEditor.promptPlaceholder"), "动作运行时发送的提示词。");
 });
 
 test("locale matching normalizes supported English and simplified Chinese tags", () => {

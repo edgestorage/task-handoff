@@ -1,6 +1,6 @@
 <template>
   <Select :key="locale" v-model="model" :disabled="disabled">
-    <SelectTrigger :class="['control-plane-select', triggerClass]" :disabled="disabled">
+    <SelectTrigger :class="['control-plane-select', triggerClass]" :disabled="disabled" :aria-label="ariaLabel">
       <SelectValue :placeholder="placeholder" />
     </SelectTrigger>
     <SelectContent class="control-plane-select-content">
@@ -15,6 +15,7 @@ import { useI18n } from "vue-i18n";
 import { Select, SelectContent, SelectTrigger, SelectValue } from "../../../components/ui/select";
 
 defineProps<{
+  ariaLabel?: string;
   disabled?: boolean;
   placeholder?: string;
   triggerClass?: HTMLAttributes["class"];

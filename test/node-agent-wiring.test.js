@@ -94,7 +94,7 @@ test("localhost adapter keeps the macOS Git broker socket below the Unix socket 
   assert.ok(socketPath.length < 104, `expected a short macOS Unix socket path, received ${socketPath.length} characters`);
 });
 
-test("localhost adapter rejects startup when readiness cannot be committed", async (t) => {
+test("localhost adapter materializes its private Codex home before startup readiness", async (t) => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-adapter-ready-commit-"));
   const adapter = new LocalhostRuntimeAdapter(
     async () => ({ stdout: "", stderr: "" }),
@@ -122,6 +122,9 @@ test("localhost adapter rejects startup when readiness cannot be committed", asy
     runtime: { id: "runtime_ready_commit" },
     modelEnv: {},
   }), (error) => error.code === "LOCAL_INSTANCE_PROCESS_NOT_READY");
+  const codexHome = path.join(dataDir, "local-instances", "inst_ready_commit", "configs", "codex");
+  assert.equal(fs.statSync(codexHome).isDirectory(), true);
+  assert.equal(fs.statSync(codexHome).mode & 0o777, 0o700);
 });
 
 function lifecycleRouteHarness(options = {}) {

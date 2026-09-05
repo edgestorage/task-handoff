@@ -3,14 +3,15 @@ import fs from "node:fs";
 import test from "node:test";
 
 const storyView = fs.readFileSync(new URL("../src/apps/control-plane/story/StoryView.vue", import.meta.url), "utf8");
+const actionEditor = fs.readFileSync(new URL("../src/apps/control-plane/story/StoryActionEditorContent.vue", import.meta.url), "utf8");
 const composer = fs.readFileSync(new URL("../src/components/ai-session/AiSessionComposer.vue", import.meta.url), "utf8");
 const panel = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.vue", import.meta.url), "utf8");
 
 test("Story preset actions reuse the complete new-session creation panel", () => {
-  assert.match(storyView, /<AiSessionPanel[\s\S]*?creation-embedded[\s\S]*?creation-mode="preset"[\s\S]*?creation-only/);
-  assert.match(storyView, /:creation-instances="storyInstances"[\s\S]*?:launchable-apps="launchableAppsForInstance\(actionDraftInstance, t\)"/);
-  assert.match(storyView, /@creation-preset-submit="saveAction"[\s\S]*?@update:creation-instance="actionDraftTargetInstanceId = \$event"/);
-  assert.match(storyView, /@update:creation-submit-ready="actionCreationSubmitReady = \$event"/);
+  assert.match(actionEditor, /<AiSessionPanel[\s\S]*?creation-embedded[\s\S]*?creation-mode="preset"[\s\S]*?creation-only/);
+  assert.match(actionEditor, /:creation-instances="instances"[\s\S]*?:launchable-apps="launchableAppsForInstance\(selectedInstance, t\)"/);
+  assert.match(actionEditor, /@creation-preset-submit="emit\('submit', \$event\)"[\s\S]*?@update:creation-instance="emit\('update:targetInstanceId', \$event\)"/);
+  assert.match(actionEditor, /@update:creation-submit-ready="emit\('update:submitReady', \$event\)"/);
   assert.match(storyView, /<DialogFooter>[\s\S]*?common\.actions\.cancel[\s\S]*?<Button :disabled="!actionCreationSubmitReady \|\| actionSaving" @click="submitActionCreation"/);
   assert.doesNotMatch(storyView, /actionDraftModelGroups|actionDraftPermissionMode|actionDraftGitBranch/);
   assert.match(panel, /props\.creationMode === "preset"[\s\S]*?emit\("creationPresetSubmit", \{/);

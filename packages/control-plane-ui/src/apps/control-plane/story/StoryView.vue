@@ -176,7 +176,15 @@
                 <span><strong>{{ sessionCount(selectedResource.story) }}</strong>{{ t("stories.aiSessions") }}</span>
                 <span><strong>{{ selectedResource.story.actions.length }}</strong>{{ t("stories.presetActions") }}</span>
               </div>
-              <section class="story-directory story-actions-section">
+              <Tabs :model-value="storyDetailSection" @update:model-value="scrollToStorySection($event as StoryDetailSection)">
+                <TabsList class="story-detail-tabs" :aria-label="t('stories.detailSections')">
+                  <TabsTrigger value="actions">{{ t("stories.presetActions") }}</TabsTrigger>
+                  <TabsTrigger value="documents">{{ t("stories.documents") }}</TabsTrigger>
+                  <TabsTrigger value="sessions">{{ t("stories.aiSessions") }}</TabsTrigger>
+                  <TabsTrigger value="automations">{{ t("stories.automation.title") }}</TabsTrigger>
+                </TabsList>
+              </Tabs>
+              <section ref="storyActionsSectionEl" class="story-directory story-actions-section">
                 <div class="story-directory-header story-actions-header"><div class="story-directory-heading"><h3>{{ t("stories.presetActions") }}</h3><span>{{ selectedResource.story.actions.length }}</span></div><Button variant="outline" size="sm" :disabled="Boolean(selectedResource.story.archivedAt)" @click="openCreateAction"><Plus :size="14" /> {{ t("stories.addAction") }}</Button></div>
                 <div v-if="!selectedResource.story.actions.length" class="story-empty">{{ t("stories.noPresetActions") }}</div>
                 <div v-for="action in selectedResource.story.actions" :key="action.id" class="story-action-item">
@@ -185,13 +193,34 @@
                     <span class="story-action-copy">
                       <strong>{{ action.title }}</strong>
                       <small>{{ action.promptTemplate }}</small>
-                      <span class="story-action-meta">{{ actionTargetName(selectedResource.story, action) }}<template v-if="action.parameters.length"> · {{ t("stories.parameterCount", { count: action.parameters.length }) }}</template><template v-if="actionSessionPresetSummary(action)"> · {{ actionSessionPresetSummary(action) }}</template></span>
+                      <span class="story-action-meta">{{ actionTargetName(selectedResource.story, action) }}<template v-if="actionSessionPresetSummary(action)"> · {{ actionSessionPresetSummary(action) }}</template></span>
                     </span>
                   </button>
-                  <button type="button" class="story-action-edit" :disabled="Boolean(selectedResource.story.archivedAt)" :aria-label="t('stories.editNamed', { name: action.title })" :title="t('stories.editNamed', { name: action.title })" @click.stop="openEditAction(action)"><Pencil :size="13" /></button>
+                  <div class="story-action-controls">
+                    <Popover>
+                      <PopoverTrigger as-child>
+                        <button type="button" class="story-action-automation-count" :aria-label="t('stories.automation.linkedCount', { count: actionAutomations(action.id).length })">
+                          <CalendarClock :size="13" />{{ actionAutomations(action.id).length }}
+                        </button>
+                      </PopoverTrigger>
+                      <PopoverContent class="story-action-automation-popover p-0" align="end" :collision-padding="12" :side-offset="6">
+                        <header class="story-action-automation-popover-head"><strong>{{ action.title }}</strong><span>{{ t("stories.automation.linkedCount", { count: actionAutomations(action.id).length }) }}</span></header>
+                        <ScrollArea v-if="actionAutomations(action.id).length" class="story-action-automation-popover-scroll" :horizontal="false">
+                          <div class="story-action-automation-popover-list">
+                            <button v-for="entry in actionAutomations(action.id)" :key="entry.automation.id" type="button" class="story-action-automation-link" @click="scrollToAutomation(entry.automation.id)">
+                              <span>{{ automationScheduleLabel(entry.automation.schedule) }}</span>
+                              <small>{{ t(`stories.automation.status.${entry.effectiveStatus}`) }}</small>
+                            </button>
+                          </div>
+                        </ScrollArea>
+                        <p v-else class="story-action-automation-empty">{{ t("stories.automation.empty") }}</p>
+                      </PopoverContent>
+                    </Popover>
+                    <button type="button" class="story-action-edit" :disabled="Boolean(selectedResource.story.archivedAt)" :aria-label="t('stories.editNamed', { name: action.title })" :title="t('stories.editNamed', { name: action.title })" @click.stop="openEditAction(action)"><Pencil :size="13" /></button>
+                  </div>
                 </div>
               </section>
-              <section class="story-directory story-resource-section">
+              <section ref="storyDocumentsSectionEl" class="story-directory story-resource-section">
                 <div class="story-directory-header story-resource-header"><div class="story-directory-heading"><h3>{{ t("stories.documents") }}</h3><span>{{ selectedResource.story.documents.length }}</span></div></div>
                 <div v-if="!selectedResource.story.documents.length" class="story-empty">{{ t("stories.noDocuments") }}</div>
                 <button v-for="document in pagedStoryDocuments" :key="document.storyPath" type="button" class="story-resource-item" :class="{ active: isDocumentSelected(selectedResource.story, document.storyPath) }" @click="selectDocument(selectedResource.story, document.storyPath)">
@@ -203,7 +232,7 @@
                   <div><Button variant="ghost" size="icon-sm" :disabled="storyDocumentPage <= 1" :aria-label="t('stories.previousPage')" :title="t('stories.previousPage')" @click="storyDocumentPage -= 1"><ChevronLeft :size="14" /></Button><Button variant="ghost" size="icon-sm" :disabled="storyDocumentPage >= storyDocumentPageCount" :aria-label="t('stories.nextPage')" :title="t('stories.nextPage')" @click="storyDocumentPage += 1"><ChevronRight :size="14" /></Button></div>
                 </div>
               </section>
-              <section class="story-directory story-resource-section">
+              <section ref="storySessionsSectionEl" class="story-directory story-resource-section">
                 <div class="story-directory-header story-resource-header">
                   <div class="story-directory-heading"><h3>{{ t("stories.aiSessions") }}</h3><span>{{ storySessionView === "history" ? storyHistoryEntries.length : sessionCount(selectedResource.story) }}</span></div>
                   <Tabs :model-value="storySessionView" @update:model-value="setStorySessionView($event as StorySessionView)">
@@ -246,6 +275,18 @@
                   </div>
                 </template>
               </section>
+              <section ref="storyAutomationsSectionEl" class="story-directory story-automations-section">
+                <StoryActionAutomations
+                  :story="selectedResource.story"
+                  :actions="selectedResource.story.actions"
+                  :create-with-action="createAutomationWithAction"
+                  :disabled="Boolean(selectedResource.story.archivedAt)"
+                  :instances="storyInstances"
+                  :node-local-folders-by-node-id="nodeLocalFoldersByNodeId"
+                  @loaded="setStoryAutomationEntries"
+                  @open-session="(instanceId, sessionId) => openAutomationSession(selectedResource.story, instanceId, sessionId)"
+                />
+              </section>
             </div>
           </ScrollArea>
         </template>
@@ -265,49 +306,24 @@
     <DialogContent class="story-editor-dialog"><DialogHeader class="story-dialog-header"><div><DialogTitle>{{ t(editing ? "stories.editor.editTitle" : "stories.editor.newTitle") }}</DialogTitle><DialogDescription>{{ t("stories.editor.description") }}</DialogDescription></div><DialogClose as-child><button type="button" class="story-dialog-close" :aria-label="t('stories.close')"><X :size="16" /></button></DialogClose></DialogHeader><div class="story-editor-fields"><label>{{ t("stories.editor.title") }}<Input v-model="draftTitle" :placeholder="t('stories.editor.titlePlaceholder')" /></label><label>{{ t("stories.editor.descriptionLabel") }}<Textarea v-model="draftDescription" :placeholder="t('stories.editor.descriptionPlaceholder')" /></label><label>{{ t("stories.editor.ownerNode") }}<ControlPlaneSelect v-model="draftNodeId" :disabled="editing"><ControlPlaneSelectItem v-for="node in nodes.filter((candidate) => candidate.status === 'online')" :key="node.id" :value="node.id">{{ node.name }}</ControlPlaneSelectItem></ControlPlaneSelect></label><label>{{ t("stories.editor.maxIdleAiSessions") }}<Input v-model.number="draftMaxIdleAiSessions" type="number" :min="STORY_MIN_IDLE_AI_SESSIONS" :max="STORY_MAX_IDLE_AI_SESSIONS" /></label></div><DialogFooter><Button variant="outline" @click="editorOpen = false">{{ t("common.actions.cancel") }}</Button><Button :disabled="!draftTitle.trim() || !draftNodeId || saving" @click="saveStory">{{ saving ? t("stories.editor.saving") : t("common.actions.save") }}</Button></DialogFooter></DialogContent>
   </Dialog>
   <Dialog v-model:open="assignSessionOpen"><DialogContent class="story-editor-dialog"><DialogHeader class="story-dialog-header"><div><DialogTitle>{{ t("stories.assign.title") }}</DialogTitle><DialogDescription>{{ t("stories.assign.description") }}</DialogDescription></div><DialogClose as-child><button type="button" class="story-dialog-close" :aria-label="t('stories.close')"><X :size="16" /></button></DialogClose></DialogHeader><div class="story-editor-fields"><label>{{ t("stories.assign.session") }}<ControlPlaneSelect v-model="assignSessionId"><ControlPlaneSelectItem v-for="entry in availableSessions" :key="`${entry.instance.id}:${entry.session.id}`" :value="`${entry.instance.id}:${entry.session.id}`">{{ entry.session.title || entry.session.userPrompt || entry.session.id }} · {{ entry.instance.name }}</ControlPlaneSelectItem></ControlPlaneSelect></label></div><DialogFooter><Button variant="outline" @click="assignSessionOpen = false">{{ t("common.actions.cancel") }}</Button><Button :disabled="!assignSessionId || assigningSession" @click="assignExistingSession">{{ assigningSession ? t("stories.assign.adding") : t("stories.assign.submit") }}</Button></DialogFooter></DialogContent></Dialog>
-  <Dialog v-model:open="actionEditorOpen">
+  <Dialog :open="actionEditorOpen" @update:open="handleActionEditorOpenChange">
     <DialogContent class="story-editor-dialog story-action-editor-dialog">
       <DialogHeader class="story-dialog-header"><div><DialogTitle>{{ t(editingActionId ? "stories.actionEditor.editTitle" : "stories.actionEditor.newTitle") }}</DialogTitle><DialogDescription>{{ t("stories.actionEditor.description") }}</DialogDescription></div><DialogClose as-child><button type="button" class="story-dialog-close" :aria-label="t('stories.close')"><X :size="16" /></button></DialogClose></DialogHeader>
       <ScrollArea class="story-action-editor-scroll" :horizontal="false">
-        <div class="story-editor-fields story-action-editor-fields">
-        <label>{{ t("stories.actionEditor.title") }}<Input v-model="actionDraftTitle" :placeholder="t('stories.actionEditor.titlePlaceholder')" /></label>
-        <label>{{ t("stories.actionEditor.messageMode") }}<ControlPlaneSelect v-model="actionDraftMode" :placeholder="t('stories.actionEditor.defaultValue')"><ControlPlaneSelectItem value="auto">{{ t("stories.actionEditor.auto") }}</ControlPlaneSelectItem><ControlPlaneSelectItem value="queue">{{ t("stories.actionEditor.queue") }}</ControlPlaneSelectItem><ControlPlaneSelectItem value="steer">{{ t("stories.actionEditor.steer") }}</ControlPlaneSelectItem><ControlPlaneSelectItem value="immediate">{{ t("stories.actionEditor.immediate") }}</ControlPlaneSelectItem></ControlPlaneSelect></label>
-        <div class="story-action-parameters">
-          <div class="story-action-parameters-header"><span>{{ t("stories.actionEditor.parameters") }}</span><Button type="button" variant="ghost" size="sm" @click="addActionParameter"><Plus :size="13" /> {{ t("stories.actionEditor.addParameter") }}</Button></div>
-          <div v-for="(parameter, index) in actionDraftParameters" :key="index" class="story-action-parameter">
-            <Input v-model="parameter.name" :placeholder="t('stories.actionEditor.namePlaceholder')" :aria-label="t('stories.actionEditor.parameterName')" />
-            <Input v-model="parameter.label" :placeholder="t('stories.actionEditor.labelPlaceholder')" :aria-label="t('stories.actionEditor.parameterLabel')" />
-            <Input v-model="parameter.defaultValue" :placeholder="t('stories.actionEditor.defaultValue')" :aria-label="t('stories.actionEditor.parameterDefault')" />
-            <label class="story-action-parameter-required"><Checkbox :model-value="parameter.required" @update:model-value="parameter.required = Boolean($event)" /> {{ t("stories.actionEditor.required") }}</label>
-            <Button type="button" variant="ghost" size="icon" :aria-label="t('stories.actionEditor.removeParameter')" @click="removeActionParameter(index)"><X :size="13" /></Button>
-          </div>
-          <div v-if="!actionDraftParameters.length" class="story-empty">{{ t("stories.actionEditor.noParameters") }}</div>
-        </div>
-        <AiSessionPanel
-          v-if="actionDraftInstance"
-          :key="actionEditorRevision"
+        <StoryActionEditorContent
           ref="actionCreationPanel"
-          class="story-action-creation-panel"
-          :active-session="actionCreationActiveSession"
-          creation-embedded
-          :creation-initial-cwd-folder-id="actionDraftInitialPreset?.cwdFolderId"
-          :creation-initial-preset="actionDraftInitialPreset"
-          :creation-initial-prompt="actionDraftInitialPrompt"
-          :creation-instances="storyInstances"
-          creation-mode="preset"
-          creation-only
-          :creation-submit-disabled="!actionDraftTitle.trim()"
-          :creation-submitting="actionSaving"
-          :instance="actionDraftInstance"
-          :launchable-apps="launchableAppsForInstance(actionDraftInstance, t)"
-          :node-local-folders="nodeLocalFoldersByNodeId[actionDraftInstance.nodeId] || []"
-          :selected-ai-session="noSelectedAiSession"
-          @creation-preset-submit="saveAction"
-          @update:creation-instance="actionDraftTargetInstanceId = $event"
-          @update:creation-submit-ready="actionCreationSubmitReady = $event"
+          v-model:mode="actionDraftMode"
+          v-model:target-instance-id="actionDraftTargetInstanceId"
+          v-model:title="actionDraftTitle"
+          :initial-preset="actionDraftInitialPreset"
+          :initial-prompt="actionDraftInitialPrompt"
+          :instances="storyInstances"
+          :node-local-folders-by-node-id="nodeLocalFoldersByNodeId"
+          :revision="actionEditorRevision"
+          :submitting="actionSaving"
+          @submit="saveAction"
+          @update:submit-ready="actionCreationSubmitReady = $event"
         />
-        <div v-else class="story-empty">{{ t("stories.noAvailableInstance") }}</div>
-        </div>
       </ScrollArea>
       <DialogFooter><Button variant="outline" :disabled="actionSaving" @click="actionEditorOpen = false">{{ t("common.actions.cancel") }}</Button><Button :disabled="!actionCreationSubmitReady || actionSaving" @click="submitActionCreation">{{ actionSaving ? t("stories.actionEditor.saving") : t("common.actions.save") }}</Button></DialogFooter>
     </DialogContent>
@@ -338,10 +354,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useQueryClient } from "@tanstack/vue-query";
-import { BookOpen, ChevronLeft, ChevronRight, Download, FileText, History, LoaderCircle, MessageSquare, MessageSquarePlus, MoreHorizontal, Pencil, Play, Plus, X } from "@lucide/vue";
+import { BookOpen, CalendarClock, ChevronLeft, ChevronRight, Download, FileText, History, LoaderCircle, MessageSquare, MessageSquarePlus, MoreHorizontal, Pencil, Play, Plus, X } from "@lucide/vue";
 import AiSessionStatusIndicator from "../../../components/ai-session/AiSessionStatusIndicator.vue";
 import AiSessionStreamingMarkdown from "../../../components/ai-session/AiSessionStreamingMarkdown.vue";
 import { Button } from "../../../components/ui/button";
@@ -350,9 +366,9 @@ import { Sheet, SheetClose, SheetContent, SheetDescription, SheetTitle } from ".
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
 import Input from "../../../components/ui/input/Input.vue";
 import Textarea from "../../../components/ui/textarea/Textarea.vue";
-import { Checkbox } from "../../../components/ui/checkbox";
 import { ScrollArea } from "../../../components/ui/scroll-area";
 import { Tabs, TabsList, TabsTrigger } from "../../../components/ui/tabs";
+import { Popover, PopoverContent, PopoverTrigger } from "../../../components/ui/popover";
 import ControlPlaneSelect from "../shared/ControlPlaneSelect.vue";
 import ControlPlaneSelectItem from "../shared/ControlPlaneSelectItem.vue";
 import { ContextMenu, ContextMenuTrigger } from "../../../components/ui/context-menu";
@@ -360,13 +376,16 @@ import AiSessionCardContextMenu from "../../../components/ai-session/AiSessionCa
 import { aiSessionStoryTarget, type AiSessionStoryTarget } from "../../../components/ai-session/storyTarget";
 import StoryTreeContextMenu from "./StoryTreeContextMenu.vue";
 import DocumentTreeContextMenu from "./DocumentTreeContextMenu.vue";
+import StoryActionEditorContent from "./StoryActionEditorContent.vue";
+import StoryActionAutomations from "./StoryActionAutomations.vue";
 import { closeAiSession, getAiSessionHistory, getStoryRetentionSettings, useStoriesQuery } from "../../../api/queries";
+import { sharedControlPlaneClient } from "../../../api/sharedClient.ts";
 import { controlPlaneQueryKeys } from "../../../api/queryKeys.ts";
 import { showControlPlaneToast, showDelayedControlPlaneLoadingToast } from "../useControlPlaneToasts";
 import { translateApiError } from "../../../i18n/apiError";
 import { createBrowserUuid } from "../../../lib/random-id";
 import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions, Node, NodeLocalFolder } from "../../../api/types";
-import { STORY_DEFAULT_MAX_IDLE_AI_SESSIONS, STORY_MAX_IDLE_AI_SESSIONS, STORY_MIN_IDLE_AI_SESSIONS, type Story, type StoryAction, type StorySessionPreset } from "@task-handoff/protocol/stories";
+import { STORY_DEFAULT_MAX_IDLE_AI_SESSIONS, STORY_MAX_IDLE_AI_SESSIONS, STORY_MIN_IDLE_AI_SESSIONS, type Story, type StoryAction, type StoryAutomationRun, type StoryAutomationSchedule, type StoryAutomationStatus, type StorySessionPreset } from "@task-handoff/protocol/stories";
 import type { AiSessionHistoryItem } from "@task-handoff/protocol/ai-sessions";
 import AiSessionPanel, { type AiSessionCreationPresetDraft } from "../instance-detail/AiSessionPanel.vue";
 import { aiSessionLastUserMessageTime, launchableAppsForInstance, sessionStatusLabel, sortedAiSessionInboxEntries, type RepositoryWorkspaceTabTarget, type SessionTab } from "../useInstanceSessions";
@@ -384,7 +403,6 @@ const emit = defineEmits<{
 type SessionEntry = { instance: InstanceWithAiSessions; session: AiSessionSummary };
 type StoryHistoryEntry = { instance: InstanceWithAiSessions; item: AiSessionHistoryItem };
 type Resource = { kind: "story"; story: Story } | { kind: "new-session"; story: Story } | { kind: "document"; story: Story; document: Story["documents"][number] } | { kind: "session"; story: Story; entry: SessionEntry };
-type ActionParameterDraft = { name: string; label: string; required: boolean; defaultValue: string };
 const EXPANDED_STORY_KEYS_STORAGE_KEY = "task-handoff.control-plane.stories.expanded";
 function storedExpandedStoryKeys() { try { const value = JSON.parse(window.localStorage?.getItem(EXPANDED_STORY_KEYS_STORAGE_KEY) || "[]"); return new Set<string>(Array.isArray(value) ? value.filter((key): key is string => typeof key === "string") : []); } catch { return new Set<string>(); } }
 function persistExpandedStoryKeys(keys: Set<string>) { try { window.localStorage?.setItem(EXPANDED_STORY_KEYS_STORAGE_KEY, JSON.stringify([...keys])); } catch { /* Local storage may be unavailable in restricted browser contexts. */ } }
@@ -466,6 +484,14 @@ const stories = computed(() => sortStories(filteredStories.value, storySortMode.
 const storiesPending = computed(() => storiesQuery.isPending.value);
 const storiesFetching = computed(() => storiesQuery.isFetching.value);
 const selectedResource = ref<Resource>(); const expandedStoryKeys = ref(storedExpandedStoryKeys()); const expandedDocumentStoryKeys = ref(new Set<string>()); const error = ref("");
+type StoryDetailSection = "actions" | "documents" | "sessions" | "automations";
+type StoryAutomationView = StoryAutomationStatus & { recentRuns: StoryAutomationRun[] };
+const storyDetailSection = ref<StoryDetailSection>("actions");
+const storyActionsSectionEl = ref<HTMLElement>();
+const storyDocumentsSectionEl = ref<HTMLElement>();
+const storySessionsSectionEl = ref<HTMLElement>();
+const storyAutomationsSectionEl = ref<HTMLElement>();
+const storyAutomationEntries = ref<StoryAutomationView[]>([]);
 const pendingCreatedStorySession = ref<{ story: Story; instanceId: string; sessionId: string; sourceResourceKey: string }>();
 type TreeViewMode = "compact" | "detailed";
 const TREE_VIEW_MODE_STORAGE_KEY = "task-handoff.control-plane.stories.tree-view-mode";
@@ -680,14 +706,12 @@ const sidebarWidth = ref(storedSidebarWidth()); const workspaceEl = ref<HTMLElem
 const previewText = ref(""); const previewLoading = ref(false); const previewError = ref("");
 const editorOpen = ref(false); const editing = ref(false); const draftTitle = ref(""); const draftDescription = ref(""); const draftNodeId = ref(""); const draftMaxIdleAiSessions = ref(STORY_DEFAULT_MAX_IDLE_AI_SESSIONS); const saving = ref(false);
 const newSessionInstanceId = ref(""); const newSessionInitialCwd = ref(""); const newSessionInitialCwdFolderId = ref(""); const assignSessionOpen = ref(false); const assignSessionId = ref(""); const assigningSession = ref(false);
-const actionEditorOpen = ref(false); const actionEditorRevision = ref(0); const actionCreationPanel = ref<InstanceType<typeof AiSessionPanel>>(); const actionCreationSubmitReady = ref(false); const editingActionId = ref<string | null>(null); const actionSaving = ref(false); const actionDraftTitle = ref(""); const actionDraftMode = ref<StorySessionPreset["mode"] | "">(""); const actionDraftTargetInstanceId = ref(""); const actionDraftInitialPrompt = ref(""); const actionDraftInitialPreset = ref<StorySessionPreset>(); const actionDraftParameters = ref<ActionParameterDraft[]>([]);
+const actionEditorOpen = ref(false); const actionEditorRevision = ref(0); const actionCreationPanel = ref<InstanceType<typeof StoryActionEditorContent>>(); const actionCreationSubmitReady = ref(false); const editingActionId = ref<string | null>(null); const actionSaving = ref(false); const actionDraftTitle = ref(""); const actionDraftMode = ref<StorySessionPreset["mode"] | "">(""); const actionDraftTargetInstanceId = ref(""); const actionDraftInitialPrompt = ref(""); const actionDraftInitialPreset = ref<StorySessionPreset>();
 const targetInstance = (instanceId: string) => props.instances.find((instance) => instance.id === instanceId);
 const foldersForInstance = (instanceId: string) => {
   const nodeId = targetInstance(instanceId)?.nodeId;
   return nodeId ? props.nodeLocalFoldersByNodeId[nodeId] || [] : [];
 };
-const actionDraftInstance = computed(() => targetInstance(actionDraftTargetInstanceId.value));
-const actionCreationActiveSession = computed<SessionTab>(() => ({ key: "ai", label: t("navigation.ai"), status: "running", kind: "ai", aiSessions: actionDraftInstance.value?.aiSessions.sessions || [] }));
 const sessionsFor = (story: Story): SessionEntry[] => {
   const instancesById = new Map(props.instances.map((instance) => [instance.id, instance]));
   const entries = props.instances.flatMap((instance) => (instance.aiSessions.sessions || [])
@@ -888,6 +912,30 @@ function toggleStoryExpanded(story: Story) { setStoryExpanded(story, !isStoryOpe
 function selectStory(story: Story) { selectedResource.value = { kind: "story", story }; }
 function selectDocument(story: Story, path: string) { const document = story.documents.find((item) => item.storyPath === path); if (document) { setStoryExpanded(story, true); if (!treeDocumentsFor(story).includes(document)) showAllTreeDocuments(story); selectedResource.value = { kind: "document", story, document }; } }
 function selectSession(story: Story, entry: SessionEntry) { setStoryExpanded(story, true); selectedResource.value = { kind: "session", story, entry }; }
+function openAutomationSession(story: Story, instanceId: string, sessionId: string) { const instance = props.instances.find((candidate) => candidate.id === instanceId); const session = instance?.aiSessions.sessions.find((candidate) => candidate.id === sessionId); if (instance && session) selectSession(story, { instance, session }); }
+function setStoryAutomationEntries(entries: StoryAutomationView[]) { storyAutomationEntries.value = entries; }
+function actionAutomations(actionId: string) { return storyAutomationEntries.value.filter((entry) => entry.automation.actionId === actionId); }
+function automationScheduleLabel(schedule: StoryAutomationSchedule) {
+  if (schedule.scheduleKind === "interval") return t("stories.automation.everyMinutes", { count: schedule.intervalMs / 60_000 });
+  if (schedule.scheduleKind === "daily") return t("stories.automation.dailyAt", { time: schedule.timeOfDay, timezone: schedule.timezone });
+  const days = schedule.weekdays.map((day) => new Intl.DateTimeFormat(locale.value, { weekday: "short", timeZone: "UTC" }).format(new Date(Date.UTC(2026, 7, 2 + day)))).join(", ");
+  return t("stories.automation.weeklyAt", { days, time: schedule.timeOfDay, timezone: schedule.timezone });
+}
+function storySectionElement(section: StoryDetailSection) {
+  return { actions: storyActionsSectionEl.value, documents: storyDocumentsSectionEl.value, sessions: storySessionsSectionEl.value, automations: storyAutomationsSectionEl.value }[section];
+}
+async function scrollToStorySection(section: StoryDetailSection) {
+  storyDetailSection.value = section;
+  await nextTick();
+  storySectionElement(section)?.scrollIntoView({ behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" });
+}
+async function scrollToAutomation(automationId: string) {
+  await scrollToStorySection("automations");
+  await nextTick();
+  const row = storyAutomationsSectionEl.value?.querySelector<HTMLElement>(`[data-automation-id="${automationId}"]`);
+  row?.scrollIntoView({ behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "center" });
+  row?.focus({ preventScroll: true });
+}
 function resourceKey(resource: Resource | undefined) {
   if (!resource) return "";
   const parentKey = storyKey(resource.story);
@@ -932,6 +980,8 @@ async function load() {
 }
 watch(selectedResource, async (resource) => { previewText.value = ""; previewError.value = ""; if (resource?.kind === "document") { previewLoading.value = true; try { const response = await fetch(`/api/stories/${encodeURIComponent(resource.story.id)}/content/file?nodeId=${encodeURIComponent(resource.story.ownerNodeId)}&storyPath=${encodeURIComponent(resource.document.storyPath)}`); if (!response.ok) throw new Error((await response.json()).error?.message || "Could not read document."); previewText.value = await response.text(); } catch (cause) { previewError.value = cause instanceof Error ? cause.message : String(cause); } finally { previewLoading.value = false; } } }, { immediate: true });
 watch(() => selectedResource.value?.kind === "story" ? `${selectedResource.value.story.ownerNodeId}:${selectedResource.value.story.id}` : "", () => {
+  storyDetailSection.value = "actions";
+  storyAutomationEntries.value = [];
   storySessionView.value = "current";
   storyDocumentPage.value = 1;
   storyCurrentSessionPage.value = 1;
@@ -994,10 +1044,12 @@ function openCreateAction() {
   actionDraftInitialPrompt.value = "";
   actionDraftInitialPreset.value = undefined;
   actionDraftTargetInstanceId.value = storyInstances.value[0]?.id || "";
-  actionDraftParameters.value = [];
   actionCreationSubmitReady.value = false;
   actionEditorRevision.value += 1;
   actionEditorOpen.value = true;
+}
+function handleActionEditorOpenChange(open: boolean) {
+  actionEditorOpen.value = open;
 }
 function openEditAction(action: StoryAction) {
   const story = selectedResource.value?.story;
@@ -1008,13 +1060,10 @@ function openEditAction(action: StoryAction) {
   actionDraftInitialPrompt.value = action.promptTemplate;
   actionDraftInitialPreset.value = action.sessionPreset;
   actionDraftTargetInstanceId.value = action.targetInstanceId || storyInstances.value[0]?.id || "";
-  actionDraftParameters.value = action.parameters.map((parameter) => ({ name: parameter.name, label: parameter.label, required: parameter.required, defaultValue: parameter.defaultValue || "" }));
   actionCreationSubmitReady.value = false;
   actionEditorRevision.value += 1;
   actionEditorOpen.value = true;
 }
-function addActionParameter() { actionDraftParameters.value.push({ name: "", label: "", required: false, defaultValue: "" }); }
-function removeActionParameter(index: number) { actionDraftParameters.value.splice(index, 1); }
 function submitActionCreation() { actionCreationPanel.value?.submitCreation(); }
 async function saveAction(draft: AiSessionCreationPresetDraft) {
   const story = selectedResource.value?.story;
@@ -1022,10 +1071,6 @@ async function saveAction(draft: AiSessionCreationPresetDraft) {
   const title = actionDraftTitle.value.trim();
   const promptTemplate = draft.prompt.trim();
   if (!title || !promptTemplate) { error.value = t("stories.actionEditor.validationRequired"); return; }
-  const parameters = actionDraftParameters.value
-    .filter((parameter) => parameter.name.trim() || parameter.label.trim())
-    .map((parameter) => ({ name: parameter.name.trim(), label: parameter.label.trim() || parameter.name.trim(), required: parameter.required, ...(parameter.defaultValue.trim() ? { defaultValue: parameter.defaultValue.trim() } : {}) }));
-  if (parameters.some((parameter) => !parameter.name || !parameter.label)) { error.value = t("stories.actionEditor.validationParameter"); return; }
   const actions = [...story.actions];
   const targetInstanceId = draft.instanceId;
   if (!targetInstanceId) { error.value = t("stories.actionEditor.validationTarget"); return; }
@@ -1036,16 +1081,35 @@ async function saveAction(draft: AiSessionCreationPresetDraft) {
   if (editingActionId.value) {
     const index = actions.findIndex((action) => action.id === editingActionId.value);
     if (index < 0) { error.value = t("stories.actionEditor.notFound"); return; }
-    actions[index] = { ...actions[index], title, promptTemplate, targetInstanceId, parameters, sessionPreset };
+    actions[index] = { ...actions[index], title, promptTemplate, targetInstanceId, sessionPreset };
   } else {
-    actions.push({ id: createBrowserUuid(), title, promptTemplate, targetInstanceId, parameters, sessionPreset });
+    actions.push({ id: createBrowserUuid(), title, promptTemplate, targetInstanceId, sessionPreset });
   }
   actionSaving.value = true;
   try {
     const response = await fetch(`/api/stories/${encodeURIComponent(story.id)}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ nodeId: story.ownerNodeId, input: { actions } }) });
     if (!response.ok) throw new Error((await response.json()).error?.message || t("stories.actionEditor.saveFailed"));
-    actionEditorOpen.value = false; await load(); const refreshed = stories.value.find((item) => item.id === story.id && item.ownerNodeId === story.ownerNodeId); if (refreshed) selectStory(refreshed);
+    actionEditorOpen.value = false;
+    await load();
+    const refreshed = stories.value.find((item) => item.id === story.id && item.ownerNodeId === story.ownerNodeId);
+    if (refreshed) selectStory(refreshed);
   } catch (cause) { error.value = cause instanceof Error ? cause.message : String(cause); } finally { actionSaving.value = false; }
+}
+async function createAutomationWithAction(payload: { action: StoryAction; config: { schedule: StoryAutomationSchedule; enabled: boolean; policy: { maxConcurrentRuns: number; whenBusy: "skip" | "queue"; cooldownMs?: number } } }) {
+  const story = selectedResource.value?.story;
+  if (!story || actionSaving.value) return;
+  actionSaving.value = true;
+  error.value = "";
+  try {
+    await sharedControlPlaneClient.stories.createAutomationWithAction(story.id, story.ownerNodeId, { action: payload.action, automation: payload.config });
+    await load();
+    const refreshed = stories.value.find((item) => item.id === story.id && item.ownerNodeId === story.ownerNodeId);
+    if (refreshed) selectStory(refreshed);
+  } catch (cause) {
+    throw cause;
+  } finally {
+    actionSaving.value = false;
+  }
 }
 function queueCreatedStorySession(story: Story, instanceId: string, sessionId: string, sourceResourceKey: string) {
   pendingCreatedStorySession.value = { story, instanceId, sessionId, sourceResourceKey };
@@ -1201,6 +1265,9 @@ onBeforeUnmount(() => {
 .story-overview-summary span { display:inline-flex; align-items:baseline; gap:4px; }
 .story-overview-summary span + span::before { margin:0 10px; color:var(--line-strong); content:"/"; }
 .story-overview-summary strong { color:var(--text-strong); font-size:13px; font-weight:500; }
+.story-detail-tabs { position:sticky; top:0; z-index:3; display:inline-flex; align-items:center; width:fit-content; height:32px; min-height:32px; border:1px solid var(--line); border-radius:7px; background:var(--surface-inset); box-shadow:0 4px 10px color-mix(in srgb,var(--workspace-bg) 72%,transparent); padding:2px; }
+.story-detail-tabs :deep(button) { height:26px; min-height:26px; border-radius:5px; font-size:12px; font-weight:500; padding:0 10px; }
+.story-directory { scroll-margin-top:42px; }
 .story-directory { overflow:hidden; border:1px solid var(--line); border-radius:8px; background:var(--surface-raised); }
 .story-directory-header { display:flex; align-items:center; justify-content:space-between; gap:8px; min-height:38px; border-bottom:1px solid var(--line); padding:0 12px; }
 .story-directory-heading { display:flex; align-items:baseline; gap:7px; min-width:0; }
@@ -1233,17 +1300,28 @@ onBeforeUnmount(() => {
 .story-action-copy strong { color:var(--text-strong); font-size:13px; font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .story-action-copy small, .story-action-meta { color:var(--text-muted); font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .story-action-meta { display:block; }
-.story-action-edit { display:grid; flex:0 0 auto; place-items:center; width:32px; height:32px; margin-right:12px; border:1px solid var(--line); border-radius:7px; background:var(--surface-raised); color:var(--text-muted); cursor:pointer; padding:0; }
+.story-action-controls { display:flex; align-items:center; gap:6px; margin-right:12px; }
+.story-action-automation-count,.story-action-edit { display:flex; flex:0 0 auto; align-items:center; justify-content:center; height:32px; border:1px solid var(--line); border-radius:7px; background:var(--surface-raised); color:var(--text-muted); cursor:pointer; padding:0; }
+.story-action-automation-count { min-width:38px; gap:5px; font-size:12px; padding:0 8px; }
+.story-action-edit { width:32px; }
+.story-action-automation-count:hover,.story-action-automation-count:focus-visible,
 .story-action-edit:hover,.story-action-edit:focus-visible { background:var(--surface-active); color:var(--text-strong); outline:none; }
 .story-action-edit:disabled { cursor:default; opacity:.5; }
+:global(.story-action-automation-popover) { display:grid; width:min(320px,var(--reka-popover-content-available-width)); max-height:min(360px,var(--reka-popover-content-available-height)); grid-template-rows:auto minmax(0,1fr); overflow:hidden; padding:0; }
+:global(.story-action-automation-popover-head) { display:flex; align-items:center; justify-content:space-between; gap:8px; border-bottom:1px solid var(--line); padding:7px 9px; }
+:global(.story-action-automation-popover-head strong) { min-width:0; overflow:hidden; color:var(--text-strong); font-size:12px; font-weight:500; text-overflow:ellipsis; white-space:nowrap; }
+:global(.story-action-automation-popover-head span),:global(.story-action-automation-empty) { color:var(--text-muted); font-size:12px; }
+:global(.story-action-automation-popover-head span) { flex:0 0 auto; }
+:global(.story-action-automation-popover-scroll) { min-height:0; }
+:global(.story-action-automation-popover-list) { display:grid; padding:2px; }
+:global(.story-action-automation-empty) { margin:0; padding:10px 9px; }
+:global(.story-action-automation-link) { display:grid; gap:2px; width:100%; border:0; border-radius:5px; background:transparent; color:var(--text-strong); cursor:pointer; padding:5px 7px; text-align:left; }
+:global(.story-action-automation-link:hover),:global(.story-action-automation-link:focus-visible) { background:var(--surface-active); outline:none; }
+:global(.story-action-automation-link span),:global(.story-action-automation-link small) { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+:global(.story-action-automation-link span) { font-size:12px; }
+:global(.story-action-automation-link small) { color:var(--text-muted); font-size:12px; }
 :global(.story-editor-dialog.story-action-editor-dialog) { max-width:840px; grid-template-rows:auto minmax(0,1fr) auto; overflow:hidden; }
 :global(.story-action-editor-scroll) { min-height:0; }
-.story-action-editor-fields { padding-right:8px; }
-.story-action-creation-panel { width:100%; }
-.story-action-parameters { display:grid; gap:8px; }
-.story-action-parameters-header { display:flex; align-items:center; justify-content:space-between; gap:8px; color:var(--text-muted); font-size:12px; }
-.story-action-parameter { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)) auto auto; gap:8px; align-items:center; }
-.story-action-parameter-required { display:flex; align-items:center; gap:6px; color:var(--text-muted); font-size:12px; }
 .story-directory > .story-empty { min-height:64px; padding:22px 12px; }
 .story-empty { color:var(--text-muted); font-size:12px; padding:16px; text-align:center; }
 .story-error { color:var(--status-danger); font-size:12px; }
@@ -1262,5 +1340,5 @@ onBeforeUnmount(() => {
 .story-dialog-close:hover, .story-dialog-close:focus-visible { background:var(--surface-active); color:var(--text-strong); outline:none; }
 @media (max-width:800px) { .story-view { padding:16px 0; } .story-workspace { grid-template-columns:minmax(220px,38%) minmax(0,1fr); } .story-sidebar-resize-handle { display:none; } .story-content-header { padding:0 0 14px; } .story-detail-scroll-inner { padding-right:6px; } }
 @media (max-width:820px) { .story-history-drawer-close { top:12px; left:max(10px,calc(10px + var(--native-titlebar-controls-left-width))); } }
-@media (max-width:560px) { .story-view { padding:10px 0; } .story-workspace { grid-template-columns:1fr; } .story-sidebar { max-height:38%; border-right:0; border-bottom:1px solid var(--line); } }
+@media (max-width:560px) { .story-view { padding:10px 0; } .story-workspace { grid-template-columns:1fr; } .story-sidebar { max-height:38%; border-right:0; border-bottom:1px solid var(--line); } .story-detail-tabs { width:100%; } .story-detail-tabs :deep(button) { min-width:0; flex:1; padding:0 5px; } }
 </style>

@@ -78,6 +78,7 @@ describe('<StoryInbox />', () => {
 
     await fireEvent.press(screen.getByLabelText('Expand Alpha'));
     await waitFor(() => expect(screen.getByText('Plan')).toBeTruthy());
+    expect(screen.queryByTestId('session-status')).toBeNull();
     await fireEvent.press(screen.getByText('Plan'));
     await fireEvent.press(screen.getByText('Build it'));
     await fireEvent.press(screen.getByText('Alpha'));

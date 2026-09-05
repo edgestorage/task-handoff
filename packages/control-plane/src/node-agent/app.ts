@@ -48,7 +48,10 @@ import { registerNodeModelRoutes } from "./models/routes.ts";
 import { registerNodeGitCredentialRoutes } from "./git-credentials/routes.ts";
 import { registerNodeStoryRoutes } from "./stories/routes.ts";
 import { NodeStoryStore } from "./stories/store.ts";
-import { StoryIdleSessionRetentionCoordinator } from "./stories/idle-retention.ts";
+import { StoryAutomationStore } from "./stories/automation-store.ts";
+import { StoryCommandService } from "./stories/command-service.ts";
+import { StoryScheduler } from "./stories/scheduler.ts";
+import { InstanceIdleSessionRetentionCoordinator, StoryIdleSessionRetentionCoordinator } from "./stories/idle-retention.ts";
 import { StoryChangedEventType } from "@task-handoff/protocol/stories";
 import { registerRuntimeRoutes } from "./runtimes/routes.ts";
 import { registerInstanceManagementRoutes } from "./instances/routes.ts";
@@ -520,6 +523,8 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   state.init();
   const stories = new NodeStoryStore(paths, nodeId);
   stories.init();
+  const storyAutomations = new StoryAutomationStore(paths);
+  storyAutomations.init();
   const dockerCommandRunner = options.dockerCommandRunner || defaultCommandRunner;
   const dockerImageService = new DockerImageService(dockerCommandRunner, options.dockerTerminalCommandRunner);
   const dockerExecutor = new LocalDockerExecutor(dockerCommandRunner, {
@@ -551,6 +556,12 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   const storyIdleRetention = new StoryIdleSessionRetentionCoordinator(
     state,
     stories,
+    fetchImpl,
+    resolveInstanceWeb,
+    (data, message) => app.log.warn(data, message),
+  );
+  const instanceIdleRetention = new InstanceIdleSessionRetentionCoordinator(
+    state,
     fetchImpl,
     resolveInstanceWeb,
     (data, message) => app.log.warn(data, message),
@@ -770,6 +781,17 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   });
   eventForwarder.start();
   app.decorate("nodeAgentEventForwarder", eventForwarder);
+  const storyScheduler = new StoryScheduler(
+    state,
+    stories,
+    storyAutomations,
+    fetchImpl,
+    resolveInstanceWeb,
+    (type, payload, scope) => eventForwarder.publish(type, payload, scope),
+  );
+  const storyCommands = new StoryCommandService(state, stories, storyAutomations, storyScheduler);
+  storyCommands.init();
+  storyScheduler.start();
   stories.setOnChange((change, story) => {
     eventForwarder.publish(StoryChangedEventType, {
       storyId: story.id,
@@ -986,6 +1008,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       error: {
         code: payload.code,
         message: payload.message,
+        ...(payload.details ? { details: payload.details } : {}),
         ...(error && typeof error === "object" && typeof (error as { expectedVersion?: unknown }).expectedVersion === "string"
           ? { expectedVersion: (error as { expectedVersion: string }).expectedVersion }
           : {}),
@@ -1048,6 +1071,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   });
 
   app.addHook("onClose", async () => {
+    storyScheduler.stop();
     clearInterval(persistenceMaintenanceTimer);
     clearInterval(activeLogMaintenanceTimer);
     runtimeMetrics.stop();
@@ -1139,7 +1163,13 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   registerNodeModelRoutes(app, state.modelRegistry, (id) => syncAssignedModelEnvironment(fetchImpl, state, id, lifecycleLoggers.warn, resolveInstanceWeb), fetchImpl);
 
   registerNodeGitCredentialRoutes(app, state);
-  registerNodeStoryRoutes(app, state, stories, { fetchImpl, resolveInstanceWeb, onRetentionSettingsChanged: () => storyIdleRetention.reconcile() });
+  registerNodeStoryRoutes(app, state, stories, {
+    fetchImpl,
+    resolveInstanceWeb,
+    onRetentionSettingsChanged: () => storyIdleRetention.reconcile(),
+    commands: storyCommands,
+    scheduler: storyScheduler,
+  });
 
   registerEnvironmentTemplateRoutes(app, environmentTemplates);
 
@@ -1175,9 +1205,11 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     },
     afterReport: (instance, report) => {
       eventForwarder.syncNow();
+      storyScheduler.reconcileInstances(report === "heartbeat" ? instance.id : undefined);
       reconcileReportedEndpoint(instance);
       void syncAiSessionPersistenceSettings(instance.id);
       void storyIdleRetention.reconcile();
+      void instanceIdleRetention.reconcile();
       if (report === "register") {
         logDiagnostic({ instanceId: instance.id, action: report, protocolVersion: instance.protocolVersion, build: instance.build, targetStatus: instance.targetStatus, targetStrategy: instance.target.strategy }, "node instance registered");
       } else {

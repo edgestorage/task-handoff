@@ -273,7 +273,7 @@ test("node agent rejects an authority snapshot above the hard event budget", () 
   forwarder.addOutput(output, { expectsTransientSubscription: true });
   input.readyState = WebSocket.OPEN;
   input.emit("open");
-  const oversized = snapshot(Array.from({ length: 2_000 }, (_, index) => summary(`session-${index}`)));
+  const oversized = snapshot(Array.from({ length: 20_000 }, (_, index) => summary(`session-${index}`)));
   input.emit("message", envelope(AiSessionEventType.Snapshot, {
     meta: meta(1),
     snapshot: oversized,
@@ -283,7 +283,7 @@ test("node agent rejects an authority snapshot above the hard event budget", () 
   assert.equal(output.closed[0][0], 1009);
   const health = forwarder.eventTransportHealth();
   assert.equal(health.oversizedEvents, 1);
-  assert.ok(health.peakEventBytes > 256 * 1024);
+  assert.ok(health.peakEventBytes > 4 * 1024 * 1024);
   forwarder.stop();
 });
 

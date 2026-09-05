@@ -2,6 +2,14 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import {
   STORY_TEXT_PREVIEW_MAX_BYTES,
+  StoryAutomationInputSchema,
+  StoryAutomationListSchema,
+  StoryAutomationManualRunInputSchema,
+  StoryAutomationRunSchema,
+  StoryAutomationRunsSchema,
+  StoryAutomationStatusSchema,
+  StoryAutomationUpdateInputSchema,
+  StoryAutomationWithActionInputSchema,
   StoryContentPreviewSchema,
   StoryCreateInputSchema,
   StoryDocumentOrderInputSchema,
@@ -17,6 +25,7 @@ import type { ControlPlaneService } from "../application/service.ts";
 
 const NodeQuerySchema = z.object({ nodeId: z.string().trim().min(1).max(120).optional() }).strict();
 const StoryRouteSchema = z.object({ storyId: StoryIdSchema }).strict();
+const StoryAutomationRouteSchema = StoryRouteSchema.extend({ automationId: z.string().trim().min(1).max(120) }).strict();
 const StoryRouteQuerySchema = z.object({ nodeId: z.string().trim().min(1).max(120) }).strict();
 
 async function nodeJson(service: ControlPlaneService, nodeId: string, route: string, init: RequestInit = {}) {
@@ -86,6 +95,73 @@ export function registerStoryRoutes(app: FastifyInstance, service: ControlPlaneS
     const { storyId } = StoryRouteSchema.parse(request.params);
     const { nodeId } = z.object({ nodeId: z.string().trim().min(1).max(120) }).strict().parse(request.query);
     return { data: await nodeJson(service, nodeId, `/stories/${encodeURIComponent(storyId)}`, { method: "DELETE" }) };
+  });
+
+  app.get("/api/stories/:storyId/automations", async (request) => {
+    const { storyId } = StoryRouteSchema.parse(request.params);
+    const { nodeId } = StoryRouteQuerySchema.parse(request.query);
+    return { data: StoryAutomationListSchema.parse(await nodeJson(service, nodeId, `/stories/${encodeURIComponent(storyId)}/automations`)) };
+  });
+
+  app.post("/api/stories/:storyId/automations", async (request, reply) => {
+    const { storyId } = StoryRouteSchema.parse(request.params);
+    const body = z.object({ nodeId: z.string().trim().min(1).max(120), input: StoryAutomationInputSchema }).strict().parse(request.body);
+    if (body.input.storyId !== storyId) throw Object.assign(new Error("Automation storyId does not match the route."), { code: "STORY_AUTOMATION_STORY_MISMATCH", statusCode: 409 });
+    const data = await nodeJson(service, body.nodeId, `/stories/${encodeURIComponent(storyId)}/automations`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body.input),
+    });
+    return reply.code(201).send({ data: StoryAutomationStatusSchema.parse(data) });
+  });
+
+  app.post("/api/stories/:storyId/automations/with-action", async (request, reply) => {
+    const { storyId } = StoryRouteSchema.parse(request.params);
+    const body = z.object({ nodeId: z.string().trim().min(1).max(120), input: StoryAutomationWithActionInputSchema }).strict().parse(request.body);
+    const data = await nodeJson(service, body.nodeId, `/stories/${encodeURIComponent(storyId)}/automations/with-action`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body.input),
+    });
+    return reply.code(201).send({ data: StoryAutomationStatusSchema.parse(data) });
+  });
+
+  app.get("/api/stories/:storyId/automations/:automationId", async (request) => {
+    const { storyId, automationId } = StoryAutomationRouteSchema.parse(request.params);
+    const { nodeId } = StoryRouteQuerySchema.parse(request.query);
+    return { data: StoryAutomationStatusSchema.parse(await nodeJson(service, nodeId, `/stories/${encodeURIComponent(storyId)}/automations/${encodeURIComponent(automationId)}`)) };
+  });
+
+  app.patch("/api/stories/:storyId/automations/:automationId", async (request) => {
+    const { storyId, automationId } = StoryAutomationRouteSchema.parse(request.params);
+    const body = z.object({ nodeId: z.string().trim().min(1).max(120), input: StoryAutomationUpdateInputSchema }).strict().parse(request.body);
+    return { data: StoryAutomationStatusSchema.parse(await nodeJson(service, body.nodeId, `/stories/${encodeURIComponent(storyId)}/automations/${encodeURIComponent(automationId)}`, {
+      method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(body.input),
+    })) };
+  });
+
+  app.delete("/api/stories/:storyId/automations/:automationId", async (request) => {
+    const { storyId, automationId } = StoryAutomationRouteSchema.parse(request.params);
+    const { nodeId } = StoryRouteQuerySchema.parse(request.query);
+    return { data: z.object({ deleted: z.boolean() }).strict().parse(await nodeJson(service, nodeId, `/stories/${encodeURIComponent(storyId)}/automations/${encodeURIComponent(automationId)}`, { method: "DELETE" })) };
+  });
+
+  for (const action of ["enable", "disable"] as const) {
+    app.post(`/api/stories/:storyId/automations/:automationId/${action}`, async (request) => {
+      const { storyId, automationId } = StoryAutomationRouteSchema.parse(request.params);
+      const { nodeId } = z.object({ nodeId: z.string().trim().min(1).max(120) }).strict().parse(request.body);
+      return { data: StoryAutomationStatusSchema.parse(await nodeJson(service, nodeId, `/stories/${encodeURIComponent(storyId)}/automations/${encodeURIComponent(automationId)}/${action}`, { method: "POST" })) };
+    });
+  }
+
+  app.post("/api/stories/:storyId/automations/:automationId/run", async (request) => {
+    const { storyId, automationId } = StoryAutomationRouteSchema.parse(request.params);
+    const body = z.object({ nodeId: z.string().trim().min(1).max(120), input: StoryAutomationManualRunInputSchema }).strict().parse(request.body);
+    return { data: StoryAutomationRunSchema.parse(await nodeJson(service, body.nodeId, `/stories/${encodeURIComponent(storyId)}/automations/${encodeURIComponent(automationId)}/run`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body.input),
+    })) };
+  });
+
+  app.get("/api/stories/:storyId/automations/:automationId/runs", async (request) => {
+    const { storyId, automationId } = StoryAutomationRouteSchema.parse(request.params);
+    const { nodeId } = StoryRouteQuerySchema.parse(request.query);
+    return { data: StoryAutomationRunsSchema.parse(await nodeJson(service, nodeId, `/stories/${encodeURIComponent(storyId)}/automations/${encodeURIComponent(automationId)}/runs`)) };
   });
 
   app.patch<{ Params: { storyId: string; storyPath: string } }>("/api/stories/:storyId/documents/*", async (request) => {

@@ -36,6 +36,7 @@ type StoreOptions<T> = {
   logger?: StoreLogger;
   directoryMode?: number;
   fileMode?: number;
+  rejectInvalid?: boolean;
 };
 
 function defaultStoreLogger(message: string, details: Record<string, unknown>) {
@@ -53,6 +54,7 @@ function parseStored<T>(filePath: string, options: StoreOptions<T>): T | undefin
   try {
     raw = JSON.parse(fs.readFileSync(filePath, "utf8"));
   } catch (error) {
+    if (options.rejectInvalid) throw error;
     logger("stored JSON could not be read", { filePath, ...errorDetails(error) });
     return undefined;
   }
@@ -60,6 +62,7 @@ function parseStored<T>(filePath: string, options: StoreOptions<T>): T | undefin
   const sanitized = options.sanitize ? options.sanitize(raw) : raw;
   const parsed = options.schema.safeParse(sanitized);
   if (parsed.success) return parsed.data;
+  if (options.rejectInvalid) throw parsed.error;
 
   const strip = "strip" in options.schema && typeof options.schema.strip === "function"
     ? options.schema.strip().safeParse(sanitized)
