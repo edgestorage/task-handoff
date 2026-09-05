@@ -1,5 +1,11 @@
 <template>
-  <section ref="timelineElement" class="ai-session-timeline" :aria-label="t('sessions.timeline.full')">
+  <section
+    ref="timelineElement"
+    class="ai-session-timeline"
+    :class="{ 'is-disclosure-animating': disclosureAnimationActive }"
+    :aria-label="t('sessions.timeline.full')"
+    @click.capture="handleDisclosureClick"
+  >
     <div class="ai-session-timeline-virtual-list" :style="{ height: `${virtualTotalSize}px` }">
       <section
         v-for="virtualTurn in virtualTurns"
@@ -225,12 +231,14 @@ const copiedMessageId = ref("");
 const timelineElement = ref<HTMLElement>();
 const scrollElement = ref<HTMLElement>();
 const scrollMargin = ref(0);
+const disclosureAnimationActive = ref(false);
 let stickyUserMessageId = "";
 let stickyUserMessageFrame = 0;
 let copiedTurnTimer: ReturnType<typeof setTimeout> | undefined;
 let visibleTimelineFrame = 0;
 let timelineScrollIntent = false;
 let timelineScrollIntentTimer: ReturnType<typeof setTimeout> | undefined;
+let disclosureAnimationTimer: ReturnType<typeof setTimeout> | undefined;
 const turnVirtualizer = useVirtualizer(computed(() => ({
   count: turns.value.length,
   estimateSize: () => 420,
@@ -243,12 +251,16 @@ const turnVirtualizer = useVirtualizer(computed(() => ({
   scrollMargin: scrollMargin.value,
   measureElement: (element) => Math.ceil(element.getBoundingClientRect().height),
   scrollToFn: (offset, options, instance) => {
-    if (options.adjustments && scrollElement.value?.closest(".is-user-layout-changing")) return;
+    if (options.adjustments && (disclosureAnimationActive.value || scrollElement.value?.closest(".is-user-layout-changing"))) return;
     elementScroll(offset, options, instance);
   },
 })));
 const virtualTurns = computed(() => turnVirtualizer.value.getVirtualItems());
 const virtualTotalSize = computed(() => turnVirtualizer.value.getTotalSize());
+
+watch(disclosureAnimationActive, (active) => {
+  turnVirtualizer.value.shouldAdjustScrollPositionOnItemSizeChange = active ? () => false : undefined;
+}, { immediate: true });
 
 function syncScrollElement() {
   const viewport = timelineElement.value?.closest<HTMLElement>("[data-task-handoff-scroll-viewport]");
@@ -298,6 +310,17 @@ function handleTimelineScrollKey(event: KeyboardEvent) {
   if (["ArrowDown", "ArrowUp", "PageDown", "PageUp", "Home", "End", " "].includes(event.key)) {
     markTimelineScrollIntent();
   }
+}
+
+function handleDisclosureClick(event: MouseEvent) {
+  if (event.button !== 0 || event.defaultPrevented) return;
+  const target = event.target;
+  if (!(target instanceof Element) || !target.closest("button[aria-expanded]")) return;
+  disclosureAnimationActive.value = true;
+  clearTimeout(disclosureAnimationTimer);
+  disclosureAnimationTimer = setTimeout(() => {
+    disclosureAnimationActive.value = false;
+  }, 240);
 }
 
 function handleViewportScroll() {
@@ -464,6 +487,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   clearTimeout(copiedTurnTimer);
   clearTimeout(timelineScrollIntentTimer);
+  clearTimeout(disclosureAnimationTimer);
   cancelAnimationFrame(stickyUserMessageFrame);
   cancelAnimationFrame(visibleTimelineFrame);
   detachViewportListeners(scrollElement.value);
@@ -486,6 +510,11 @@ watch(() => turns.value.length, () => void nextTick(syncScrollElement));
 .ai-session-timeline {
   position: relative;
   min-width: 0;
+}
+
+.ai-session-timeline.is-disclosure-animating,
+.ai-session-timeline.is-disclosure-animating * {
+  overflow-anchor: none !important;
 }
 
 .ai-session-timeline-virtual-list {
@@ -565,6 +594,11 @@ watch(() => turns.value.length, () => void nextTick(syncScrollElement));
   height: 26px;
   padding: 0;
   color: inherit;
+}
+
+.ai-session-user-message-actions :deep(.ai-session-user-message-copy svg) {
+  width: 13px;
+  height: 13px;
 }
 
 .ai-session-user-message-actions .ai-session-turn-time {

@@ -1,54 +1,70 @@
 <template>
-  <component
-    :is="summaryVisible ? 'details' : 'div'"
-    class="ai-session-activity-group"
-    :open="summaryVisible ? open : undefined"
-    @toggle="handleToggle"
-  >
-    <summary v-if="summaryVisible">
+  <section class="ai-session-activity-group">
+    <button v-if="summaryVisible" type="button" class="ai-session-activity-group-summary" :aria-expanded="groupOpen" @click="toggleGroup">
       <ChevronRight :size="15" />
       <span>{{ summaryLabel }}</span>
       <small v-if="latest">{{ latest.title }}</small>
-    </summary>
-    <div class="ai-session-activity-list" :class="{ 'ai-session-activity-list-inline': !summaryVisible }">
-      <component
-        :is="hasDetails(activity) ? 'details' : 'div'"
-        v-for="activity in activities"
-        :key="activity.id"
-        class="ai-session-activity-item"
-        :data-status="activity.status"
-      >
-        <summary v-if="hasDetails(activity)" class="ai-session-activity-item-head">
-          <ChevronRight v-if="!activityIcon(activity)" class="ai-session-activity-disclosure-icon" :size="14" aria-hidden="true" />
-          <component :is="activityIcon(activity)" v-else class="ai-session-activity-kind-icon" :size="14" aria-hidden="true" />
-          <span class="ai-session-activity-title">{{ activityLabel(activity) }}</span>
-          <span v-if="activitySummary(activity)" class="ai-session-activity-summary" :title="activityHoverText(activity)">{{ activitySummary(activity) }}</span>
-          <small v-if="!isCommandActivity(activity) && visibleStatus(activity.status)">{{ statusLabel(activity.status!) }}</small>
-        </summary>
-        <div v-else class="ai-session-activity-item-head">
-          <component :is="activityIcon(activity)" v-if="activityIcon(activity)" class="ai-session-activity-kind-icon" :size="14" aria-hidden="true" />
-          <span class="ai-session-activity-title">{{ activityLabel(activity) }}</span>
-          <span v-if="activitySummary(activity)" class="ai-session-activity-summary" :title="activityHoverText(activity)">{{ activitySummary(activity) }}</span>
-          <small v-if="!isCommandActivity(activity) && visibleStatus(activity.status)">{{ statusLabel(activity.status!) }}</small>
+    </button>
+    <Transition
+      name="activity-disclosure"
+      @before-enter="prepareDisclosureEnter"
+      @enter="runDisclosureEnter"
+      @after-enter="finishDisclosureEnter"
+      @enter-cancelled="cancelDisclosureTransition"
+      @before-leave="prepareDisclosureLeave"
+      @leave="runDisclosureLeave"
+      @after-leave="finishDisclosureLeave"
+      @leave-cancelled="cancelDisclosureTransition"
+    >
+      <div v-if="groupOpen" class="ai-session-activity-list">
+        <div class="ai-session-activity-list-content" :class="{ 'ai-session-activity-list-inline': !summaryVisible }">
+          <div
+            v-for="activity in activities"
+            :key="activity.id"
+            class="ai-session-activity-item"
+            :data-status="activity.status"
+          >
+            <button v-if="hasDetails(activity)" type="button" class="ai-session-activity-item-head" :aria-expanded="activityOpen(activity)" @click="toggleActivity(activity.id, $event)">
+              <ChevronRight v-if="!activityIcon(activity)" class="ai-session-activity-disclosure-icon" :size="14" aria-hidden="true" />
+              <component :is="activityIcon(activity)" v-else class="ai-session-activity-kind-icon" :size="14" aria-hidden="true" />
+              <span class="ai-session-activity-title">{{ activityLabel(activity) }}</span>
+              <span v-if="activitySummary(activity)" class="ai-session-activity-summary" :title="activityHoverText(activity)">{{ activitySummary(activity) }}</span>
+              <small v-if="!isCommandActivity(activity) && visibleStatus(activity.status)">{{ statusLabel(activity.status!) }}</small>
+            </button>
+            <div v-else class="ai-session-activity-item-head">
+              <component :is="activityIcon(activity)" v-if="activityIcon(activity)" class="ai-session-activity-kind-icon" :size="14" aria-hidden="true" />
+              <span class="ai-session-activity-title">{{ activityLabel(activity) }}</span>
+              <span v-if="activitySummary(activity)" class="ai-session-activity-summary" :title="activityHoverText(activity)">{{ activitySummary(activity) }}</span>
+              <small v-if="!isCommandActivity(activity) && visibleStatus(activity.status)">{{ statusLabel(activity.status!) }}</small>
+            </div>
+            <Transition name="activity-disclosure" @before-enter="prepareDisclosureEnter" @enter="runDisclosureEnter" @after-enter="finishDisclosureEnter" @enter-cancelled="cancelDisclosureTransition" @before-leave="prepareDisclosureLeave" @leave="runDisclosureLeave" @after-leave="finishDisclosureLeave" @leave-cancelled="cancelDisclosureTransition">
+              <div v-if="hasDetails(activity) && activityOpen(activity)" class="ai-session-activity-details">
+                <div class="ai-session-activity-details-content">
+                  <section v-if="activity.input">
+                    <small>{{ t("sessions.timeline.input") }}</small>
+                    <ScrollArea type="auto" :horizontal="false" class="ai-session-activity-pre-scroll">
+                      <pre>{{ activity.input }}</pre>
+                    </ScrollArea>
+                  </section>
+                  <section v-if="activity.output">
+                    <small>{{ t("sessions.timeline.output") }}</small>
+                    <ScrollArea type="auto" :horizontal="false" class="ai-session-activity-pre-scroll">
+                      <pre>{{ activity.output }}</pre>
+                    </ScrollArea>
+                  </section>
+                  <small v-if="activity.exitCode !== undefined">{{ t("sessions.timeline.exitCode", { code: activity.exitCode }) }}</small>
+                </div>
+              </div>
+            </Transition>
+          </div>
         </div>
-        <div v-if="hasDetails(activity)" class="ai-session-activity-details">
-          <section v-if="activity.input">
-            <small>{{ t("sessions.timeline.input") }}</small>
-            <pre>{{ activity.input }}</pre>
-          </section>
-          <section v-if="activity.output">
-            <small>{{ t("sessions.timeline.output") }}</small>
-            <pre>{{ activity.output }}</pre>
-          </section>
-          <small v-if="activity.exitCode !== undefined">{{ t("sessions.timeline.exitCode", { code: activity.exitCode }) }}</small>
-        </div>
-      </component>
-    </div>
-  </component>
+      </div>
+    </Transition>
+  </section>
 </template>
 
 <script setup lang="ts">
-import { computed, type Component } from "vue";
+import { computed, ref, watch, type Component } from "vue";
 import { useI18n } from "vue-i18n";
 import {
   Bot,
@@ -69,6 +85,17 @@ import {
   Wrench,
 } from "@lucide/vue";
 import type { AiSessionTimelineActivity } from "@task-handoff/protocol/ai-sessions";
+import { ScrollArea } from "../ui/scroll-area";
+import {
+  beginDisclosureTransition,
+  cancelDisclosureTransition,
+  finishDisclosureEnter,
+  finishDisclosureLeave,
+  prepareDisclosureEnter,
+  prepareDisclosureLeave,
+  runDisclosureEnter,
+  runDisclosureLeave,
+} from "./disclosureTransition";
 
 const activityIcons: Record<string, Component> = {
   reasoning: Brain,
@@ -98,9 +125,12 @@ const emit = defineEmits<{ "update:open": [open: boolean] }>();
 const { t } = useI18n();
 const latest = computed(() => props.activities.at(-1));
 const summaryLabel = computed(() => t("sessions.timeline.activityCount", { count: props.activities.length }));
-function handleToggle(event: Event) {
-  if (props.summaryVisible) emit("update:open", (event.currentTarget as HTMLDetailsElement).open);
-}
+const groupOpen = ref(props.summaryVisible ? props.open : true);
+const openActivities = ref(new Set<string>());
+watch(() => props.open, (value) => { if (props.summaryVisible) groupOpen.value = value; });
+function toggleGroup(event: MouseEvent) { beginDisclosureTransition(event.currentTarget as Element); groupOpen.value = !groupOpen.value; emit("update:open", groupOpen.value); }
+function activityOpen(activity: AiSessionTimelineActivity) { return openActivities.value.has(activity.id); }
+function toggleActivity(id: string, event: MouseEvent) { beginDisclosureTransition(event.currentTarget as Element); const next = new Set(openActivities.value); next.has(id) ? next.delete(id) : next.add(id); openActivities.value = next; }
 function hasDetails(activity: AiSessionTimelineActivity) {
   return Boolean(activity.input || activity.output || activity.exitCode !== undefined);
 }
@@ -142,7 +172,7 @@ function runtimePathBasename(path: string) {
   min-width: 0;
   color: var(--text-muted);
 }
-.ai-session-activity-group > summary {
+.ai-session-activity-group-summary {
   display: flex;
   align-items: center;
   gap: 5px;
@@ -150,21 +180,25 @@ function runtimePathBasename(path: string) {
   max-width: 100%;
   cursor: pointer;
   list-style: none;
-  font-size: 14px;
   user-select: none;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
 }
-.ai-session-activity-group > summary::-webkit-details-marker,
-.ai-session-activity-item > summary::-webkit-details-marker { display: none; }
-.ai-session-activity-group > summary svg {
+.ai-session-activity-group-summary svg {
   flex: 0 0 auto;
   transition: transform 120ms ease;
 }
-.ai-session-activity-group[open] > summary svg { transform: rotate(90deg); }
-.ai-session-activity-group > summary span {
+.ai-session-activity-group-summary[aria-expanded="true"] svg { transform: rotate(90deg); }
+.ai-session-activity-group-summary span {
   color: var(--text-muted);
   font-weight: 400;
 }
-.ai-session-activity-group > summary small {
+.ai-session-activity-group-summary small {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -172,19 +206,21 @@ function runtimePathBasename(path: string) {
   line-height: inherit;
   white-space: nowrap;
 }
-.ai-session-activity-group > summary small::before { content: "\00b7"; margin-right: 5px; }
+.ai-session-activity-group-summary small::before { content: "\00b7"; margin-right: 5px; }
 .ai-session-activity-list {
+  min-width: 0;
+}
+.ai-session-activity-list-content {
   display: grid;
   gap: 6px;
-  margin: 8px 0 0 20px;
+  padding: 8px 0 0 20px;
 }
-.ai-session-activity-list-inline { margin: 0; }
+.ai-session-activity-list-inline { padding: 0; }
 .ai-session-activity-item {
   display: grid;
   gap: 0;
   min-width: 0;
 }
-.ai-session-activity-item[open] { gap: 5px; }
 .ai-session-activity-item-head {
   display: flex;
   align-items: baseline;
@@ -196,7 +232,15 @@ function runtimePathBasename(path: string) {
   list-style: none;
   white-space: nowrap;
 }
-.ai-session-activity-item > summary { cursor: pointer; user-select: none; }
+.ai-session-activity-item > button {
+  cursor: pointer;
+  user-select: none;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  font-family: inherit;
+  text-align: left;
+}
 .ai-session-activity-item-head > svg {
   flex: 0 0 auto;
   align-self: center;
@@ -206,7 +250,7 @@ function runtimePathBasename(path: string) {
   color: var(--text-muted);
   transition: none;
 }
-.ai-session-activity-item[open] > summary > .ai-session-activity-disclosure-icon { transform: rotate(90deg); }
+.ai-session-activity-item > button[aria-expanded="true"] > .ai-session-activity-disclosure-icon { transform: rotate(90deg); }
 .ai-session-activity-item-head > .ai-session-activity-title {
   flex: 0 0 auto;
   color: var(--text-muted);
@@ -229,22 +273,40 @@ function runtimePathBasename(path: string) {
 .ai-session-activity-item[data-status="failed"] .ai-session-activity-kind-icon,
 .ai-session-activity-item[data-status="failed"] .ai-session-activity-title { color: var(--status-danger); }
 .ai-session-activity-details {
-  margin-top: 2px;
-  padding-top: 7px;
-  border-top: 1px solid var(--line-subtle);
+  min-width: 0;
+}
+.ai-session-activity-details-content {
+  padding-top: 15px;
+  background-image: linear-gradient(var(--line-subtle), var(--line-subtle));
+  background-repeat: no-repeat;
+  background-position: 0 7px;
+  background-size: 100% 1px;
 }
 .ai-session-activity-details section { display: grid; gap: 4px; margin-top: 8px; }
-.ai-session-activity-details pre {
+.ai-session-activity-pre-scroll {
+  max-width: 100%;
+  min-width: 0;
+  border-left: 1px solid var(--line-subtle);
+}
+.ai-session-activity-pre-scroll :deep([data-reka-scroll-area-viewport]) {
   max-height: 280px;
+}
+.ai-session-activity-details pre {
   margin: 0;
   padding: 7px 0 7px 10px;
-  overflow: auto;
   border: 0;
-  border-left: 1px solid var(--line-subtle);
   background: transparent;
   color: var(--text);
   font: 12px/1.45 var(--font-mono, monospace);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+.activity-disclosure-enter-active,
+.activity-disclosure-leave-active { overflow: hidden; transition: height 180ms ease, opacity 180ms ease; will-change: height; }
+.activity-disclosure-enter-from,
+.activity-disclosure-leave-to { opacity: 0; }
+@media (prefers-reduced-motion: reduce) {
+  .activity-disclosure-enter-active,
+  .activity-disclosure-leave-active { transition-duration: 0ms; }
 }
 </style>

@@ -1679,9 +1679,9 @@
   --session-ai-detail-right-inset: calc(10px + var(--session-ai-scrollbar-outset, 0px));
   --session-ai-compose-bottom: 10px;
   --session-ai-content-bottom-gap: 36px;
-  --session-ai-sticky-prompt-height: 26px;
-  --session-ai-sticky-padding-top: 12px;
-  --session-ai-sticky-padding-bottom: 18px;
+  --session-ai-sticky-prompt-height: 24px;
+  --session-ai-sticky-padding-top: 2px;
+  --session-ai-sticky-padding-bottom: 12px;
   --session-ai-sticky-border-width: 1px;
   position: relative;
   min-width: 0;
@@ -1762,11 +1762,12 @@
 .session-ai-detail-content > header {
   grid-column: 1;
   grid-row: 1;
+  margin-top: 4px;
 }
 
 .session-ai-detail-fixed-actions {
   position: sticky;
-  top: 10px;
+  top: 0;
   z-index: 6;
   grid-column: 1;
   grid-row: 1;
@@ -1780,6 +1781,8 @@
 }
 
 .session-ai-timeline-sticky-prompt {
+  display: flex;
+  align-items: center;
   position: absolute;
   top: 0;
   right: var(--session-ai-detail-right-inset);

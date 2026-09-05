@@ -367,7 +367,9 @@ function internalSchedule(automation: StoryAutomation): SchedulerSchedule {
   const schedule = automation.schedule;
   if (schedule.scheduleKind === "interval") return { type: "interval", intervalMs: schedule.intervalMs };
   if (schedule.scheduleKind === "daily") return { type: "daily", timeOfDay: schedule.timeOfDay, timezone: schedule.timezone };
-  return { type: "weekly", weekdays: schedule.weekdays, timeOfDay: schedule.timeOfDay, timezone: schedule.timezone };
+  if (schedule.scheduleKind === "weekly") return { type: "weekly", weekdays: schedule.weekdays, timeOfDay: schedule.timeOfDay, timezone: schedule.timezone };
+  if (schedule.scheduleKind === "monthly") return { type: "monthly", dayOfMonth: schedule.dayOfMonth, timeOfDay: schedule.timeOfDay, timezone: schedule.timezone };
+  throw new Error(`Unsupported Story automation schedule kind: ${(schedule as StoryAutomation).schedule.scheduleKind}`);
 }
 
 function instanceRequest(input: StoryAutomationExecutionInput, clientRequestId: string): StoryAutomationInstanceCreateInput {

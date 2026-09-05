@@ -100,6 +100,7 @@ export function StoryAutomationForm({ automationId, nodeId, onSaved, storyId }: 
       <FormSection title={t('stories.automationSchedule')}>
         <SegmentedChoices onSelect={(value) => set('scheduleKind', value as StoryAutomationDraft['scheduleKind'])} options={scheduleOptions(t)} selected={draft.scheduleKind} />
         {draft.scheduleKind === 'interval' ? <Field keyboard="number-pad" label={t('triggers.form.interval')} onChange={(value) => set('intervalMinutes', value)} suffix={t('triggers.form.unit.minute')} value={draft.intervalMinutes} /> : <>
+          {draft.scheduleKind === 'monthly' ? <Field keyboard="number-pad" label={t('stories.monthDay')} onChange={(value) => set('dayOfMonth', value)} suffix={t('stories.monthDaySuffix')} value={draft.dayOfMonth} /> : null}
           <Field label={t('triggers.form.time')} onChange={(value) => set('timeOfDay', value)} placeholder="09:00" value={draft.timeOfDay} />
           <Field label={t('triggers.form.timezone')} onChange={(value) => set('timezone', value)} placeholder="Asia/Shanghai" value={draft.timezone} />
           {draft.scheduleKind === 'weekly' ? <WeekdayChoices onChange={(weekdays) => set('weekdays', weekdays)} selected={draft.weekdays} /> : null}
@@ -145,7 +146,7 @@ function WeekdayChoices({ onChange, selected }: { onChange(value: number[]): voi
   return <View style={styles.field}><Text style={[styles.label, { color: colors.text }]}>{t('triggers.form.weekdays')}</Text><View style={styles.chips}>{weekdayOptions(t).map((option) => { const value = Number(option.value); const active = selected.includes(value); return <Pressable accessibilityRole="checkbox" accessibilityState={{ checked: active }} key={value} onPress={() => onChange(active ? selected.filter((day) => day !== value) : [...selected, value])} style={[styles.chip, { backgroundColor: active ? colors.primarySoft : colors.surfaceMuted, borderColor: active ? colors.primary : colors.border }]}><Text style={[styles.chipText, { color: active ? colors.primary : colors.text }]}>{option.label}</Text></Pressable>; })}</View></View>;
 }
 
-function scheduleOptions(t: Translate) { return [{ value: 'interval', label: t('triggers.form.schedule.interval') }, { value: 'daily', label: t('triggers.form.schedule.daily') }, { value: 'weekly', label: t('triggers.form.schedule.weekly') }]; }
+function scheduleOptions(t: Translate) { return [{ value: 'interval', label: t('triggers.form.schedule.interval') }, { value: 'daily', label: t('triggers.form.schedule.daily') }, { value: 'weekly', label: t('triggers.form.schedule.weekly') }, { value: 'monthly', label: t('triggers.form.schedule.monthly') }]; }
 function busyOptions(t: Translate) { return [{ value: 'skip', label: t('triggers.form.busy.skip') }, { value: 'queue', label: t('triggers.form.busy.queue') }]; }
 function weekdayOptions(t: Translate) { return [['1', 'monday'], ['2', 'tuesday'], ['3', 'wednesday'], ['4', 'thursday'], ['5', 'friday'], ['6', 'saturday'], ['0', 'sunday']].map(([value, day]) => ({ value, label: t(`triggers.form.weekday.${day}` as Parameters<Translate>[0]) })); }
 

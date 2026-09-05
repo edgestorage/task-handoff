@@ -122,9 +122,9 @@ export const stories = {
   automation: {
     title: "Automations", add: "Add automation", edit: "Edit automation", loading: "Loading automations...", empty: "No automations.", targetRequired: "Select a target instance before adding an automation.",
     action: "Linked action", selectAction: "Select a linked action", createAction: "New action", useExistingAction: "Use existing action", actionRequired: "Action title, prompt, and target instance are required.", linkedAction: "Action: {name}", linkedCount: "{count} automations",
-    scheduleKind: "Schedule", interval: "Interval", daily: "Daily", weekly: "Weekly", intervalMinutes: "Interval (minutes)", timeOfDay: "Time", hour: "Hour", minute: "Minute", timezone: "Timezone", weekdays: "Weekdays",
+    scheduleKind: "Schedule", interval: "Interval", daily: "Daily", weekly: "Weekly", monthly: "Monthly", intervalMinutes: "Interval (minutes)", timeOfDay: "Time", hour: "Hour", minute: "Minute", timezone: "Timezone", weekdays: "Weekdays", dayOfMonth: "Day of month (-3–31, -1 last day)",
     whenBusy: "When busy", skip: "Skip", queue: "Queue", maxConcurrentRuns: "Maximum concurrent runs", cooldownMinutes: "Cooldown (minutes)", enabled: "Enabled",
-    everyMinutes: "Every {count} minutes", dailyAt: "Daily at {time} ({timezone})", weeklyAt: "{days} at {time} ({timezone})",
+    everyMinutes: "Every {count} minutes", dailyAt: "Daily at {time} ({timezone})", weeklyAt: "{days} at {time} ({timezone})", monthlyAt: "Monthly on day {day} at {time} ({timezone})",
     run: "Run now", enable: "Enable", disable: "Disable", openRunSession: "Open the AI Session for this run", sessionUnavailable: "This session no longer exists", history: "Run history", historyCount: "{count} runs", historyEmpty: "No run history.", confirmDelete: "Delete this automation?",
     status: { disabled: "Disabled", blocked: "Blocked", scheduled: "Scheduled", running: "Running", error: "Last run failed" },
     runStatus: { queued: "Queued", dispatching: "Dispatching", running: "Running", completed: "Completed", failed: "Failed", skipped: "Skipped" },

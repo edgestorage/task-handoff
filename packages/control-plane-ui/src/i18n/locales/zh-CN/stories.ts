@@ -125,9 +125,9 @@ export const stories = {
   automation: {
     title: "自动化", add: "添加自动化", edit: "编辑自动化", loading: "正在加载自动化...", empty: "暂无自动化。", targetRequired: "请先为动作选择目标实例。",
     action: "关联动作", selectAction: "请选择关联动作", createAction: "新建动作", useExistingAction: "使用已有动作", actionRequired: "动作标题、提示词和目标实例不能为空。", linkedAction: "动作：{name}", linkedCount: "{count} 个自动化",
-    scheduleKind: "计划", interval: "间隔", daily: "每天", weekly: "每周", intervalMinutes: "间隔（分钟）", timeOfDay: "时间", hour: "小时", minute: "分钟", timezone: "时区", weekdays: "星期",
+    scheduleKind: "计划", interval: "间隔", daily: "每天", weekly: "每周", monthly: "每月", intervalMinutes: "间隔（分钟）", timeOfDay: "时间", hour: "小时", minute: "分钟", timezone: "时区", weekdays: "星期", dayOfMonth: "日期（-3–31，-1 为月末）",
     whenBusy: "忙碌时", skip: "跳过", queue: "排队", maxConcurrentRuns: "最大并发运行数", cooldownMinutes: "冷却时间（分钟）", enabled: "启用",
-    everyMinutes: "每 {count} 分钟", dailyAt: "每天 {time}（{timezone}）", weeklyAt: "{days} {time}（{timezone}）",
+    everyMinutes: "每 {count} 分钟", dailyAt: "每天 {time}（{timezone}）", weeklyAt: "{days} {time}（{timezone}）", monthlyAt: "每月 {day} 号 {time}（{timezone}）",
     run: "立即运行", enable: "启用", disable: "停用", openRunSession: "打开此次运行的 AI 会话", sessionUnavailable: "该会话已不存在", history: "运行历史", historyCount: "{count} 次运行", historyEmpty: "暂无运行历史。", confirmDelete: "删除此自动化？",
     status: { disabled: "已停用", blocked: "已阻塞", scheduled: "已计划", running: "运行中", error: "上次运行失败" },
     runStatus: { queued: "排队中", dispatching: "正在派发", running: "运行中", completed: "已完成", failed: "失败", skipped: "已跳过" },

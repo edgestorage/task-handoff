@@ -25,7 +25,7 @@ test("tool activity uses the authoritative API projection", () => {
 test("expanded tool activity consumes live items without triggering timeline reloads", () => {
   const activity = fs.readFileSync(new URL("../src/components/ai-session/AiSessionToolActivity.vue", import.meta.url), "utf8");
   assert.doesNotMatch(activity, /requestExpand|activityRevision|defineEmits/);
-  assert.match(activity, /function toggleExpanded\(\) \{[\s\S]*expanded\.value = !expanded\.value;/);
+  assert.match(activity, /function toggleExpanded\(event: MouseEvent\) \{[\s\S]*beginDisclosureTransition\(event\.currentTarget as Element\);[\s\S]*expanded\.value = !expanded\.value;/);
 });
 
 test("background Timeline loading affects history without hiding authoritative live activity", () => {
@@ -207,7 +207,8 @@ test("detail sticky thresholds follow the complete user prompt height", () => {
   assert.doesNotMatch(floatingDock, /scrollTop > 24|scrollTop <= 24/);
   assert.doesNotMatch(panel, /scrollTop > 64|scrollTop <= 64/);
   assert.match(panel, /ref="detailPromptSectionEl"/);
-  assert.match(panelCss, /--session-ai-sticky-prompt-height: 26px/);
+  assert.match(panelCss, /--session-ai-sticky-prompt-height: 24px/);
+  assert.match(panelCss, /\.session-ai-timeline-sticky-prompt \{[\s\S]*?display: flex;[\s\S]*?align-items: center;/);
   assert.match(panel, /expandedDividerOffset - stickyHeaderHeight/);
   assert.match(panel, /scrollTop > detailStickyThreshold/);
   assert.match(panel, /scrollTop <= detailStickyThreshold/);

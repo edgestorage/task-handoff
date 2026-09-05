@@ -25,6 +25,12 @@ test("Story Automation owns strict schedule and policy wire models without param
   assert.equal(StoryAutomationInputSchema.safeParse(input).success, true);
   assert.equal(StoryAutomationInputSchema.safeParse({ ...input, parameterValues: { environment: "prod" } }).success, false);
   assert.equal(StoryAutomationScheduleSchema.safeParse({ scheduleKind: "interval", intervalMs: 59_999 }).success, false);
+  assert.equal(StoryAutomationScheduleSchema.safeParse({ scheduleKind: "monthly", dayOfMonth: 15, timeOfDay: "09:00", timezone: "UTC" }).success, true);
+  assert.equal(StoryAutomationScheduleSchema.safeParse({ scheduleKind: "monthly", dayOfMonth: -1, timeOfDay: "09:00", timezone: "UTC" }).success, true);
+  assert.equal(StoryAutomationScheduleSchema.safeParse({ scheduleKind: "monthly", dayOfMonth: -2, timeOfDay: "09:00", timezone: "UTC" }).success, true);
+  assert.equal(StoryAutomationScheduleSchema.safeParse({ scheduleKind: "monthly", dayOfMonth: -3, timeOfDay: "09:00", timezone: "UTC" }).success, true);
+  assert.equal(StoryAutomationScheduleSchema.safeParse({ scheduleKind: "monthly", dayOfMonth: 0, timeOfDay: "09:00", timezone: "UTC" }).success, false);
+  assert.equal(StoryAutomationScheduleSchema.safeParse({ scheduleKind: "monthly", dayOfMonth: 32, timeOfDay: "09:00", timezone: "UTC" }).success, false);
 });
 
 test("Story Automation ownership cannot be changed by an update", () => {

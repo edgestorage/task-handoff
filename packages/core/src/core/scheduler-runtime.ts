@@ -4,7 +4,8 @@ import { CronExpressionParser } from "cron-parser";
 export type SchedulerSchedule =
   | { type: "interval"; intervalMs: number }
   | { type: "daily"; timeOfDay: string; timezone: string }
-  | { type: "weekly"; weekdays: number[]; timeOfDay: string; timezone: string };
+  | { type: "weekly"; weekdays: number[]; timeOfDay: string; timezone: string }
+  | { type: "monthly"; dayOfMonth: number; timeOfDay: string; timezone: string };
 
 export type SchedulerPolicy = {
   cooldownMs?: number;
@@ -128,6 +129,42 @@ export class SchedulerExecutionRuntime<T> {
   }
 }
 
+function timezoneDateParts(date: Date, timezone: string) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const value = (type: Intl.DateTimeFormatPartTypes) => Number(parts.find((part) => part.type === type)?.value);
+  return { year: value("year"), month: value("month") - 1, day: value("day") };
+}
+
+function daysInMonth(year: number, month: number) {
+  return new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+}
+
+function monthlyCronTime(dayOfMonth: number, month: number, hour: number, minute: number, timezone: string, now: Date) {
+  return CronExpressionParser
+    .parse(`0 ${minute} ${hour} ${dayOfMonth} ${month} *`, { currentDate: now, strict: true, tz: timezone })
+    .next()
+    .toDate();
+}
+
+function nextRelativeMonthlyTime(dayOfMonth: number, hour: number, minute: number, timezone: string, now: Date) {
+  const current = timezoneDateParts(now, timezone);
+  const candidates: Date[] = [];
+  for (let offset = 0; offset < 12; offset += 1) {
+    const targetMonth = new Date(Date.UTC(current.year, current.month + offset, 1));
+    const year = targetMonth.getUTCFullYear();
+    const month = targetMonth.getUTCMonth();
+    const actualDay = daysInMonth(year, month) + dayOfMonth + 1;
+    candidates.push(monthlyCronTime(actualDay, month + 1, hour, minute, timezone, now));
+  }
+  candidates.sort((a, b) => a.getTime() - b.getTime());
+  return candidates[0]!;
+}
+
 export function nextSchedulerTime(schedule: SchedulerSchedule, now: Date, anchor = now) {
   if (schedule.type === "interval") {
     const elapsed = Math.max(0, now.getTime() - anchor.getTime());
@@ -135,9 +172,13 @@ export function nextSchedulerTime(schedule: SchedulerSchedule, now: Date, anchor
     return new Date(anchor.getTime() + slots * schedule.intervalMs);
   }
   const [hour, minute] = schedule.timeOfDay.split(":").map(Number);
+  if (schedule.type === "monthly" && schedule.dayOfMonth < 0) {
+    return nextRelativeMonthlyTime(schedule.dayOfMonth, hour, minute, schedule.timezone, now);
+  }
   const weekdays = schedule.type === "weekly" ? [...new Set(schedule.weekdays)].sort((a, b) => a - b).join(",") : "*";
+  const daysOfMonth = schedule.type === "monthly" ? String(schedule.dayOfMonth) : "*";
   return CronExpressionParser
-    .parse(`0 ${minute} ${hour} * * ${weekdays}`, { currentDate: now, strict: true, tz: schedule.timezone })
+    .parse(`0 ${minute} ${hour} ${daysOfMonth} * ${weekdays}`, { currentDate: now, strict: true, tz: schedule.timezone })
     .next()
     .toDate();
 }

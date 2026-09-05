@@ -4,6 +4,10 @@ import test from "node:test";
 
 const storyView = fs.readFileSync(new URL("../src/apps/control-plane/story/StoryView.vue", import.meta.url), "utf8");
 
+test("Story uses the same solid workspace background as AI Session", () => {
+  assert.match(storyView, /\.story-view \{[^}]*background:var\(--workspace-bg\);/);
+});
+
 test("Story detail uses settings-style directories instead of standalone item cards", () => {
   assert.match(storyView, /class="story-overview-summary"/);
   assert.match(storyView, /class="story-directory story-actions-section"/);
