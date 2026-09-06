@@ -120,6 +120,8 @@ test("Docker CI builds amd64 and arm64 concurrently and publishes a multi-archit
   assert.match(workflow, /promote-release:\n\s+if:.*refs\/tags\/docker-v.*\n\s+needs: publish-multiarch-image/);
   assert.match(workflow, /REQUESTED_IMAGE_VERSION: \$\{\{ inputs\.image_version \}\}/);
   assert.match(workflow, /version="docker-v\$\{REQUESTED_IMAGE_VERSION\}"/);
+  assert.match(workflow, /release_version="\$\{version#docker-v\}"/);
+  assert.match(workflow, /if \[\[ "\$release_version" != \*-\* \]\]; then/);
   assert.match(workflow, /docker run -d --name/);
   assert.doesNotMatch(workflow, /docker run --rm -d/);
   assert.doesNotMatch(workflow, /Immutable source image was not published within/);

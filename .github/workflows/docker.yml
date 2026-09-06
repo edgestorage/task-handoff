@@ -319,8 +319,9 @@ jobs:
             exit 1
           fi
 
-          if [[ "$version" == *-* ]]; then
-            prerelease="${version#*-}"
+          release_version="${version#docker-v}"
+          if [[ "$release_version" == *-* ]]; then
+            prerelease="${release_version#*-}"
             channel="${prerelease%%.*}"
             if [[ "$channel" != "alpha" && "$channel" != "beta" ]]; then
               echo "::error::Only alpha and beta Docker prerelease channels are supported: $version"
@@ -338,7 +339,7 @@ jobs:
             image="${DOCKERHUB_USERNAME}/${image_name}"
             source="${image}:docker-sha-${GITHUB_SHA::7}"
             tags=(--tag "${image}:${version}")
-            if [[ "$version" != *-* ]]; then
+            if [[ "$release_version" != *-* ]]; then
               tags+=(--tag "${image}:latest")
             else
               tags+=(--tag "${image}:${channel}")
