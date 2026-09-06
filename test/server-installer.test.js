@@ -256,7 +256,7 @@ test("server package owns the unified management command and runtimes stay indep
   assert.equal(runtimePackages["node-agent"].binName, "task-handoff-node-agent");
   assert.deepEqual(runtimePackages["node-agent"].bundledDependencies, ["@fastify/compress"]);
   assert.equal(runtimePackages["node-agent"].dependencies["@fastify/compress"], undefined);
-  assert.equal(runtimePackages["node-agent"].dependencies["drizzle-orm"], undefined);
+  assert.equal(runtimePackages["node-agent"].dependencies["drizzle-orm"], "1.0.0-rc.4");
   assert.equal(runtimePackages["node-agent"].dependencies.pg, undefined);
   assert.equal(runtimePackages["controlled-instance"].binName, "task-handoff-controlled-instance");
   assert.deepEqual(runtimePackages["controlled-instance"].dependencies, { "node-pty": "^1.1.0" });
@@ -601,12 +601,4 @@ test("runtime releases map stable to latest and isolate beta and alpha", () => {
   assert.match(workflow, /publish_or_verify release\/npm\/server/);
   assert.doesNotMatch(workflow, /npm_tag="stable"/);
   assert.doesNotMatch(workflow, /npm dist-tag add .* latest/);
-});
-
-test("Docker releases map stable to latest and isolate preview tags", () => {
-  const workflow = fs.readFileSync(path.join(root, ".github", "workflows", "docker.yml"), "utf8");
-
-  assert.match(workflow, /tags\+=\(--tag "\$\{image\}:latest"\)/);
-  assert.match(workflow, /tags\+=\(--tag "\$\{image\}:\$\{channel\}"\)/);
-  assert.doesNotMatch(workflow, /\$\{image\}:stable/);
 });

@@ -363,6 +363,13 @@ test("an unselected AI session defaults to the new-session surface", () => {
   assert.doesNotMatch(panel, /session-ai-no-selection/);
 });
 
+test("new-session app choices follow provider create capabilities", () => {
+  assert.match(panel, /const aiSessionLaunchableApps = computed\(\(\) => \(props\.launchableApps \|\| \[\]\)\.filter\(\(app\) => \{/);
+  assert.match(panel, /directoryAiSessionProviderCapability\(props\.instance\.capabilities\?\.features, app\.id\)/);
+  assert.match(panel, /return capability \? capability\.actions\.create === true : app\.id === "codex";/);
+  assert.doesNotMatch(panel, /filter\(\(app\) => app\.id === "codex"\)/);
+});
+
 test("new-session drafts persist per instance until creation succeeds", () => {
   assert.match(panel, /activeNewSessionDraftKey = ref\(aiSessionCreationDraftKey\(props\.instance\.id\)\)/);
   assert.match(panel, /watch\(\[newSessionDraft, newSessionMentionBindings\],[\s\S]*persistAiSessionDraftPayload\(activeNewSessionDraftKey\.value, draft, bindings\)/);

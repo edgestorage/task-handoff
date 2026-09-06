@@ -102,6 +102,19 @@ test("Turn Timeline cache becomes stale when the authoritative Turn revision adv
   store.cleanupInstance(instanceId);
 });
 
+test("active Turn revision advances stay on the live timeline without forcing a history reload", () => {
+  const store = useAiSessionTimelineStore();
+  const instanceId = "instance-active-revision";
+  const sessionId = "session-active-revision";
+  const loadedTurn = { id: "turn-active-revision", providerTurnId: "provider-turn-active-revision", revision: 1, status: "running" };
+  store.cleanupInstance(instanceId);
+  store.resolveTurn(instanceId, sessionId, loadedTurn, []);
+
+  const advancedTurn = { ...loadedTurn, revision: 2 };
+  assert.equal(store.turnState(instanceId, sessionId, advancedTurn).status, "ready");
+  store.cleanupInstance(instanceId);
+});
+
 test("an older Timeline response remains stale for a newer Turn revision", () => {
   const store = useAiSessionTimelineStore();
   const instanceId = "instance-response-race";

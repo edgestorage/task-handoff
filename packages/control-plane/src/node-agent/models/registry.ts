@@ -252,18 +252,18 @@ export class NodeModelRegistry {
       ANTHROPIC_BASE_URL: model.endpoint,
       TASK_HANDOFF_CLAUDE_MODEL: model.model,
     };
+    const definition = {
+      npm: "@ai-sdk/openai-compatible",
+      name: "TaskHandoff",
+      options: { baseURL: model.endpoint, apiKey: model.key },
+      models: { [model.model]: { name: model.name, variants: openCodeReasoningVariants() } },
+    };
+    const providerId = `task-handoff-${model.id}`;
     return {
       TASK_HANDOFF_OPENCODE_CONFIG_CONTENT: JSON.stringify({
         $schema: "https://opencode.ai/config.json",
-        model: `task-handoff/${model.model}`,
-        provider: {
-          "task-handoff": {
-            npm: "@ai-sdk/openai-compatible",
-            name: "TaskHandoff",
-            options: { baseURL: model.endpoint, apiKey: model.key },
-            models: { [model.model]: { name: model.name, variants: openCodeReasoningVariants() } },
-          },
-        },
+        model: `${providerId}/${model.model}`,
+        provider: { [providerId]: definition },
       }),
     };
   }

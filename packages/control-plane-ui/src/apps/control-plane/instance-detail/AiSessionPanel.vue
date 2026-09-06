@@ -1604,7 +1604,12 @@ const newSessionPermissionMode = ref<AiSessionPermissionMode>(props.creationMode
   : props.instance.config.defaultCodexPermissionMode);
 const newSessionComposerBusy = computed(() => launchingNewSession.value || savingNewSessionPermission.value || choosingNewSessionFolder.value);
 const creationComposerBusy = computed(() => newSessionComposerBusy.value || Boolean(props.creationSubmitting));
-const aiSessionLaunchableApps = computed(() => (props.launchableApps || []).filter((app) => app.id === "codex"));
+const aiSessionLaunchableApps = computed(() => (props.launchableApps || []).filter((app) => {
+  const capability = directoryAiSessionProviderCapability(props.instance.capabilities?.features, app.id);
+  // Compatibility for older directory snapshots that do not publish provider
+  // capabilities: preserve the historical Codex creation path only.
+  return capability ? capability.actions.create === true : app.id === "codex";
+}));
 const terminalLaunchAppId = computed(() => ["terminal-tty", "terminal", "gui-terminal"]
   .find((appId) => props.launchableApps?.some((app) => app.id === appId)));
 

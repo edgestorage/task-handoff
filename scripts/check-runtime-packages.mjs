@@ -24,7 +24,6 @@ const selected = requestedTarget
   : Object.entries(runtimePackages);
 const controlPlaneDatabaseDependencies = ["drizzle-orm", "pg"];
 const controlPlaneDatabasePayloadPatterns = [
-  /require\(["']drizzle-orm(?:["'/])/,
   /require\(["']pg["']\)/,
   /require\(["']node:sqlite["']\)/,
   /cp_migration_ledger/,
@@ -43,6 +42,35 @@ function assertNoControlPlaneDatabasePayload(label, manifest, outputs) {
   }
 }
 
+function nativeAddonPaths(directory, relative = "") {
+  const addons = [];
+  for (const entry of fs.readdirSync(path.join(directory, relative), { withFileTypes: true })) {
+    const entryRelative = path.join(relative, entry.name);
+    if (entry.isDirectory()) addons.push(...nativeAddonPaths(directory, entryRelative));
+    else if (entry.isFile() && entry.name.endsWith(".node")) addons.push(entryRelative);
+  }
+  return addons;
+}
+
+function assertNodeAgentDatabaseBoundary(packageDir, manifest, outputs) {
+  if (!manifest.dependencies?.["drizzle-orm"] && !manifest.optionalDependencies?.["drizzle-orm"]) {
+    throw new Error("node-agent runtime package must depend on drizzle-orm.");
+  }
+  for (const dependency of ["pg", "better-sqlite3", "sqlite3", "node-gyp"]) {
+    if (manifest.dependencies?.[dependency] || manifest.optionalDependencies?.[dependency]) {
+      throw new Error(`node-agent runtime package must not depend on ${dependency}.`);
+    }
+  }
+  if (!outputs.some(([, content]) => /node:sqlite/.test(content))) {
+    throw new Error("node-agent runtime package is missing its builtin node:sqlite integration.");
+  }
+  const unexpectedAddons = nativeAddonPaths(packageDir).filter((entry) =>
+    !entry.split(path.sep).includes("node-pty"));
+  if (unexpectedAddons.length) {
+    throw new Error(`node-agent runtime package contains unexpected native addons: ${unexpectedAddons.join(", ")}.`);
+  }
+}
+
 async function checkEmbeddedControlledInstance(packageDir, name) {
   if (name !== "node-agent") return;
   const artifactDir = path.join(packageDir, "runtime-artifacts");
@@ -50,10 +78,12 @@ async function checkEmbeddedControlledInstance(packageDir, name) {
   if (!archiveName) throw new Error("node-agent package is missing its controlled-instance runtime artifact.");
   let manifest;
   const outputs = [];
+  const nativeAddons = [];
   const reads = [];
   await listTar({
     file: path.join(artifactDir, archiveName),
     onReadEntry(entry) {
+      if (entry.path.endsWith(".node")) nativeAddons.push(entry.path);
       if (entry.path !== "package.json" && !/^dist\/.*\.(?:js|mjs)$/.test(entry.path)) {
         entry.resume();
         return;
@@ -74,6 +104,10 @@ async function checkEmbeddedControlledInstance(packageDir, name) {
   await Promise.all(reads);
   if (!manifest) throw new Error("controlled-instance runtime artifact is missing package.json.");
   assertNoControlPlaneDatabasePayload("controlled-instance runtime artifact", manifest, outputs);
+  const unexpectedAddons = nativeAddons.filter((entry) => !entry.split("/").includes("node-pty"));
+  if (unexpectedAddons.length) {
+    throw new Error(`controlled-instance runtime artifact contains unexpected native addons: ${unexpectedAddons.join(", ")}.`);
+  }
 }
 
 async function availablePort() {
@@ -227,9 +261,10 @@ for (const [name, definition] of selected) {
         throw new Error(`${name} runtime output keeps bundled dependency ${dependency} external in dist/${externalOutput[0]}.`);
       }
     }
-    if (name === "node-agent" || name === "controlled-instance") {
+    if (name === "controlled-instance") {
       assertNoControlPlaneDatabasePayload(`${name} runtime package`, manifest, runtimeOutputs);
     }
+    if (name === "node-agent") assertNodeAgentDatabaseBoundary(packageDir, manifest, runtimeOutputs);
   }
   await checkEmbeddedControlledInstance(packageDir, name);
   const binNames = Object.keys(manifest.bin);

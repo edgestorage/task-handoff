@@ -8,7 +8,7 @@ export type AiSessionTurnTimelineState = {
   error?: string;
 };
 
-type TurnIdentity = Pick<AiSessionTurn, "id" | "providerTurnId"> & Partial<Pick<AiSessionTurn, "revision">>;
+type TurnIdentity = Pick<AiSessionTurn, "id" | "providerTurnId"> & Partial<Pick<AiSessionTurn, "revision" | "status">>;
 type StoredTurnTimelineState = AiSessionTurnTimelineState & {
   instanceId: string;
   sessionId: string;
@@ -108,7 +108,12 @@ function turnState(instanceId: string, sessionId: string, turn: TurnIdentity): A
   void revision.value;
   const stored = turnStates.get(turnKey(instanceId, sessionId, turn.id));
   const liveItems = liveItemsForTurn(instanceId, sessionId, turnIdentities(turn));
-  const stale = stored?.turnRevision !== undefined && turn.revision !== undefined && stored.turnRevision !== turn.revision;
+  // Active turns receive live timeline item events and can advance their
+  // revision for every item. Their cached history must not be reloaded on each
+  // event; the final completed/failed revision is reconciled once the turn is
+  // no longer active.
+  const active = turn.status === "queued" || turn.status === "running" || turn.status === "waiting";
+  const stale = !active && stored?.turnRevision !== undefined && turn.revision !== undefined && stored.turnRevision !== turn.revision;
   return {
     status: stale ? "stale" : stored?.status || "idle",
     items: mergeAiSessionTimelineItems(stored?.items || [], liveItems),

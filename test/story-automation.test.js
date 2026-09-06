@@ -27,6 +27,21 @@ test("Node Agent owns Story Automation lifecycle and rejects dangling Action upd
   assert.equal(storyResponse.statusCode, 201, storyResponse.body);
   const story = storyResponse.json().data;
   const action = story.actions[0];
+  const contentWrite = await app.inject({
+    method: "PUT",
+    url: `/api/node-agent/stories/${story.id}/content/file?storyPath=missing.txt&title=Missing`,
+    headers: { ...headers, "content-type": "application/octet-stream" },
+    payload: Buffer.from("temporary"),
+  });
+  assert.equal(contentWrite.statusCode, 200, contentWrite.body);
+  fs.rmSync(path.join(dataDir, "stories", story.id, "missing.txt"));
+  const missingContent = await app.inject({
+    method: "GET",
+    url: `/api/node-agent/stories/${story.id}/content/file?storyPath=missing.txt`,
+    headers,
+  });
+  assert.equal(missingContent.statusCode, 404, missingContent.body);
+  assert.equal(missingContent.json().error.code, "STORY_CONTENT_NOT_FOUND");
   const combined = await app.inject({ method: "POST", url: `/api/node-agent/stories/${story.id}/automations/with-action`, headers, payload: {
     action: { id: "action_combined", title: "Verify", promptTemplate: "Verify release", targetInstanceId: "instance_story_automation" },
     automation: { schedule: { scheduleKind: "interval", intervalMs: 120_000 }, enabled: false, policy: { maxConcurrentRuns: 1, whenBusy: "skip" } },

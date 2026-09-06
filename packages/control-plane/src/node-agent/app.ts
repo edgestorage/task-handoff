@@ -51,6 +51,8 @@ import { NodeStoryStore } from "./stories/store.ts";
 import { StoryAutomationStore } from "./stories/automation-store.ts";
 import { StoryCommandService } from "./stories/command-service.ts";
 import { StoryScheduler } from "./stories/scheduler.ts";
+import { openNodeAgentDatabase } from "./stories/database/database.ts";
+import { createNodeAgentRepository } from "./stories/database/repository.ts";
 import { InstanceIdleSessionRetentionCoordinator, StoryIdleSessionRetentionCoordinator } from "./stories/idle-retention.ts";
 import { StoryChangedEventType } from "@task-handoff/protocol/stories";
 import { registerRuntimeRoutes } from "./runtimes/routes.ts";
@@ -124,6 +126,7 @@ declare module "fastify" {
 const AUTO_IMPORT_AGENT_CONFIG_PRESETS = ["codex", "claude"] as const;
 const DEFAULT_AUTO_IMPORT_AGENT_CONFIG_TIMEOUT_MS = 5_000;
 const ACTIVE_LOG_MAINTENANCE_INTERVAL_MS = 60_000;
+const DEFAULT_STORY_DRAIN_DIAGNOSTIC_MS = 30_000;
 const NODE_AGENT_PROCESS_START_IDENTITY = processStartIdentity(process.pid);
 function optionalEnv(name: string) {
   const value = process.env[name]?.trim();
@@ -507,6 +510,9 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   const endpoint = `http://127.0.0.1:${port}`;
   const containerUrl = options.containerUrl || process.env.TASK_HANDOFF_NODE_AGENT_CONTAINER_URL;
   const paths = nodeAgentStorePaths(options.dataDir);
+  const storyDatabase = await openNodeAgentDatabase(paths);
+  try {
+  const storyRepository = createNodeAgentRepository(storyDatabase);
   const remoteSecretOverride = options.remoteSecret || process.env.TASK_HANDOFF_NODE_AGENT_REMOTE_SECRET;
   const remoteKeyIdOverride = options.remoteKeyId || process.env.TASK_HANDOFF_NODE_AGENT_REMOTE_KEY_ID;
   const identity = new NodeAgentIdentityService(paths);
@@ -521,10 +527,10 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   state.node.controlEndpoint = controlEndpoint;
   state.node.endpoint = controlEndpoint;
   state.init();
-  const stories = new NodeStoryStore(paths, nodeId);
-  stories.init();
-  const storyAutomations = new StoryAutomationStore(paths);
-  storyAutomations.init();
+  const stories = new NodeStoryStore(paths, nodeId, storyRepository);
+  await stories.init();
+  const storyAutomations = new StoryAutomationStore(storyRepository);
+  await storyAutomations.init();
   const dockerCommandRunner = options.dockerCommandRunner || defaultCommandRunner;
   const dockerImageService = new DockerImageService(dockerCommandRunner, options.dockerTerminalCommandRunner);
   const dockerExecutor = new LocalDockerExecutor(dockerCommandRunner, {
@@ -789,9 +795,9 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     resolveInstanceWeb,
     (type, payload, scope) => eventForwarder.publish(type, payload, scope),
   );
-  const storyCommands = new StoryCommandService(state, stories, storyAutomations, storyScheduler);
-  storyCommands.init();
-  storyScheduler.start();
+  const storyCommands = new StoryCommandService(state, stories, storyAutomations, storyScheduler, storyRepository);
+  await storyCommands.init();
+  await storyScheduler.start();
   stories.setOnChange((change, story) => {
     eventForwarder.publish(StoryChangedEventType, {
       storyId: story.id,
@@ -1071,7 +1077,20 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   });
 
   app.addHook("onClose", async () => {
-    storyScheduler.stop();
+    stories.stopAccepting();
+    storyRepository.stopAccepting();
+    const drainDiagnosticMs = Number(process.env.TASK_HANDOFF_STORY_DRAIN_DIAGNOSTIC_MS) || DEFAULT_STORY_DRAIN_DIAGNOSTIC_MS;
+    const drainDiagnostic = setTimeout(() => {
+      app.log.warn({ pendingStoryIds: stories.coordinator.pendingStoryIds() }, "Story storage drain deadline reached; waiting for accepted operations and preserving recovery intents");
+    }, drainDiagnosticMs);
+    drainDiagnostic.unref();
+    try {
+      await storyScheduler.stop();
+      await stories.drain();
+      await storyRepository.close();
+    } finally {
+      clearTimeout(drainDiagnostic);
+    }
     clearInterval(persistenceMaintenanceTimer);
     clearInterval(activeLogMaintenanceTimer);
     runtimeMetrics.stop();
@@ -1205,7 +1224,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     },
     afterReport: (instance, report) => {
       eventForwarder.syncNow();
-      storyScheduler.reconcileInstances(report === "heartbeat" ? instance.id : undefined);
+      void storyScheduler.reconcileInstances(report === "heartbeat" ? instance.id : undefined).catch((error) => app.log.warn({ error, instanceId: instance.id }, "Story scheduler reconciliation failed"));
       reconcileReportedEndpoint(instance);
       void syncAiSessionPersistenceSettings(instance.id);
       void storyIdleRetention.reconcile();
@@ -1300,6 +1319,10 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   });
 
   return app;
+  } catch (error) {
+    await storyDatabase.close();
+    throw error;
+  }
 }
 
 

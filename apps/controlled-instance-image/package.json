@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "build": "node -e \"console.log('controlled-instance image build is still handled by the root Dockerfile during monorepo phase 0')\"",
+    "build": "node -e \"console.log('controlled-instance CLI is built by the root runtime package pipeline')\"",
     "check": "pnpm run build",
     "test": "node --test"
   },
