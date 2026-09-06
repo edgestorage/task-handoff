@@ -88,7 +88,9 @@ function LocalizedRootLayout() {
                     <Stack.Screen name="stories/new" options={{ title: t('stories.create'), ...iosTransparentHeaderOptions(dark) }} />
                     <Stack.Screen name="stories/[storyId]/edit" options={{ title: t('stories.edit'), ...iosTransparentHeaderOptions(dark) }} />
                     <Stack.Screen name="stories/[storyId]/documents/preview" options={{ title: t('stories.document'), ...iosTransparentHeaderOptions(dark) }} />
+                    <Stack.Screen name="stories/[storyId]/actions/new" options={{ title: t('stories.createAction'), ...iosTransparentHeaderOptions(dark) }} />
                     <Stack.Screen name="stories/[storyId]/actions/[actionId]" options={{ title: t('stories.startAction'), ...iosTransparentHeaderOptions(dark) }} />
+                    <Stack.Screen name="stories/[storyId]/sessions/assign" options={{ title: t('stories.assignSession'), ...iosTransparentHeaderOptions(dark) }} />
                     <Stack.Screen name="stories/[storyId]/automations/new" options={{ title: t('stories.addAutomation'), ...iosTransparentHeaderOptions(dark) }} />
                     <Stack.Screen name="stories/[storyId]/automations/[automationId]" options={{ title: t('stories.editAutomation'), ...iosTransparentHeaderOptions(dark) }} />
                     <Stack.Screen name="app-sessions/new" options={{ title: '', ...iosTransparentHeaderOptions(dark) }} />

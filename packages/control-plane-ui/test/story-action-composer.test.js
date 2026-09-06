@@ -4,6 +4,7 @@ import test from "node:test";
 
 const storyView = fs.readFileSync(new URL("../src/apps/control-plane/story/StoryView.vue", import.meta.url), "utf8");
 const actionEditor = fs.readFileSync(new URL("../src/apps/control-plane/story/StoryActionEditorContent.vue", import.meta.url), "utf8");
+const presetActionDialog = fs.readFileSync(new URL("../src/apps/control-plane/story/StoryPresetActionDialog.vue", import.meta.url), "utf8");
 const composer = fs.readFileSync(new URL("../src/components/ai-session/AiSessionComposer.vue", import.meta.url), "utf8");
 const panel = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.vue", import.meta.url), "utf8");
 
@@ -18,6 +19,14 @@ test("Story preset actions reuse the complete new-session creation panel", () =>
   assert.match(panel, /:submit-hidden="creationMode === 'preset'"/);
   assert.match(panel, /defineExpose\(\{ submitCreation \}\)/);
   assert.match(storyView, /const sessionPreset: StorySessionPreset = \{\s*\.\.\.draft\.sessionPreset,[\s\S]*?mode: actionDraftMode\.value/);
+});
+
+test("save as preset action reuses the shared Story action editor", () => {
+  assert.match(presetActionDialog, /<StoryActionEditorContent[\s\S]*?v-model:mode="mode"[\s\S]*?v-model:target-instance-id="targetInstanceId"[\s\S]*?v-model:title="title"/);
+  assert.match(presetActionDialog, /:instances="instances"[\s\S]*?:node-local-folders-by-node-id="nodeLocalFoldersByNodeId"/);
+  assert.match(presetActionDialog, /@submit="save"[\s\S]*?@update:submit-ready="submitReady = \$event"/);
+  assert.doesNotMatch(presetActionDialog, /story-action-preset-grid|Textarea v-model="promptTemplate"/);
+  assert.match(panel, /:node-local-folders-by-node-id="presetSaveFoldersByNodeId"/);
 });
 
 test("preset composer mode keeps unsupported attachments out of Story actions", () => {

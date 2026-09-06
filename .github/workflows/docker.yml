@@ -7,24 +7,15 @@ on:
       - "Dockerfile"
       - ".dockerignore"
       - "docker/**"
-      - "apps/**"
-      - "bin/**"
-      - "packages/**"
       - "test/**"
-      - "package.json"
-      - "pnpm-lock.yaml"
-      - "pnpm-workspace.yaml"
-      - "rollup.config.mjs"
-      - "tsconfig.json"
-      - "tsconfig.controlled-instance.json"
-      - "tsconfig.workspace.json"
+      - "scripts/docker-build-image.sh"
   push:
     tags:
-      - "v*"
+      - "docker-v*"
   workflow_dispatch:
     inputs:
-      version:
-        description: "Optional release version to publish (for example 0.0.20); empty only validates images"
+      image_version:
+        description: "Docker image release version without the docker-v prefix (for example 1.0.0)"
         required: false
         type: string
 
@@ -45,7 +36,7 @@ env:
 jobs:
   docker-build:
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 90
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -61,38 +52,29 @@ jobs:
 
       - name: Resolve image version
         id: image-version
+        env:
+          REQUESTED_IMAGE_VERSION: ${{ inputs.image_version }}
         shell: bash
         run: |
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            version="${GITHUB_REF_NAME#v}"
+          if [[ "$GITHUB_REF" == refs/tags/docker-v* ]]; then
+            version="${GITHUB_REF_NAME#docker-v}"
             node -e 'if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(process.argv[1])) process.exit(1)' "$version"
-            codex_image_ref="${DOCKERHUB_CODEX_IMAGE_NAME}:${GITHUB_REF_NAME}"
-            opencode_image_ref="${DOCKERHUB_OPENCODE_IMAGE_NAME}:${GITHUB_REF_NAME}"
-            ai_image_ref="${DOCKERHUB_AI_IMAGE_NAME}:${GITHUB_REF_NAME}"
-            webcap_image_ref="${DOCKERHUB_WEBCAP_IMAGE_NAME}:${GITHUB_REF_NAME}"
-            browser_image_ref="${DOCKERHUB_BROWSER_IMAGE_NAME}:${GITHUB_REF_NAME}"
-          elif [[ -n "${{ inputs.version }}" ]]; then
-            version="${{ inputs.version }}"
+            tag="docker-v${version}"
+          elif [[ -n "${REQUESTED_IMAGE_VERSION}" ]]; then
+            version="${REQUESTED_IMAGE_VERSION}"
             node -e 'if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(process.argv[1])) process.exit(1)' "$version"
-            codex_image_ref="${DOCKERHUB_CODEX_IMAGE_NAME}:v${version}"
-            opencode_image_ref="${DOCKERHUB_OPENCODE_IMAGE_NAME}:v${version}"
-            ai_image_ref="${DOCKERHUB_AI_IMAGE_NAME}:v${version}"
-            webcap_image_ref="${DOCKERHUB_WEBCAP_IMAGE_NAME}:v${version}"
-            browser_image_ref="${DOCKERHUB_BROWSER_IMAGE_NAME}:v${version}"
+            tag="docker-v${version}"
           else
-            version="$(node -p "require('./package.json').version")"
-            codex_image_ref="task-handoff-controlled-codex:ci-${{ matrix.arch }}"
-            opencode_image_ref="task-handoff-controlled-opencode:ci-${{ matrix.arch }}"
-            ai_image_ref="task-handoff-controlled-ai:ci-${{ matrix.arch }}"
-            webcap_image_ref="task-handoff-controlled-webcap:ci-${{ matrix.arch }}"
-            browser_image_ref="task-handoff-controlled-browser:ci-${{ matrix.arch }}"
+            version="ci-${GITHUB_SHA::7}"
+            tag="ci-${GITHUB_SHA::7}"
           fi
           echo "value=$version" >> "$GITHUB_OUTPUT"
-          echo "codex-image-ref=$codex_image_ref" >> "$GITHUB_OUTPUT"
-          echo "opencode-image-ref=$opencode_image_ref" >> "$GITHUB_OUTPUT"
-          echo "ai-image-ref=$ai_image_ref" >> "$GITHUB_OUTPUT"
-          echo "webcap-image-ref=$webcap_image_ref" >> "$GITHUB_OUTPUT"
-          echo "browser-image-ref=$browser_image_ref" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "codex-image-ref=${DOCKERHUB_CODEX_IMAGE_NAME}:${tag}" >> "$GITHUB_OUTPUT"
+          echo "opencode-image-ref=${DOCKERHUB_OPENCODE_IMAGE_NAME}:${tag}" >> "$GITHUB_OUTPUT"
+          echo "ai-image-ref=${DOCKERHUB_AI_IMAGE_NAME}:${tag}" >> "$GITHUB_OUTPUT"
+          echo "webcap-image-ref=${DOCKERHUB_WEBCAP_IMAGE_NAME}:${tag}" >> "$GITHUB_OUTPUT"
+          echo "browser-image-ref=${DOCKERHUB_BROWSER_IMAGE_NAME}:${tag}" >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-buildx-action@v4
 
@@ -105,30 +87,13 @@ jobs:
           target: profile-codex
           tags: task-handoff-controlled-codex:ci-${{ matrix.arch }}
           build-args: |
-            TASK_HANDOFF_VERSION=${{ steps.image-version.outputs.value }}
+            TASK_HANDOFF_IMAGE_VERSION=${{ steps.image-version.outputs.value }}
             TASK_HANDOFF_BUILD_ID=${{ github.run_id }}
             TASK_HANDOFF_BUILT_AT=${{ github.event.repository.updated_at }}
             TASK_HANDOFF_GIT_COMMIT=${{ github.sha }}
             TASK_HANDOFF_IMAGE_REF=${{ steps.image-version.outputs.codex-image-ref }}
-          cache-from: type=gha,scope=controlled-instance-${{ matrix.arch }}
-          cache-to: type=gha,mode=max,scope=controlled-instance-${{ matrix.arch }}
-
-      - name: Build AI image
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          load: true
-          platforms: ${{ matrix.platform }}
-          target: profile-ai
-          tags: task-handoff-controlled-ai:ci-${{ matrix.arch }}
-          build-args: |
-            TASK_HANDOFF_VERSION=${{ steps.image-version.outputs.value }}
-            TASK_HANDOFF_BUILD_ID=${{ github.run_id }}
-            TASK_HANDOFF_BUILT_AT=${{ github.event.repository.updated_at }}
-            TASK_HANDOFF_GIT_COMMIT=${{ github.sha }}
-            TASK_HANDOFF_IMAGE_REF=${{ steps.image-version.outputs.ai-image-ref }}
-          cache-from: type=gha,scope=controlled-instance-${{ matrix.arch }}
-          cache-to: type=gha,mode=max,scope=controlled-instance-${{ matrix.arch }}
+          cache-from: type=gha,scope=docker-image-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=docker-image-${{ matrix.arch }}
 
       - name: Build OpenCode image
         uses: docker/build-push-action@v7
@@ -139,30 +104,30 @@ jobs:
           target: profile-opencode
           tags: task-handoff-controlled-opencode:ci-${{ matrix.arch }}
           build-args: |
-            TASK_HANDOFF_VERSION=${{ steps.image-version.outputs.value }}
+            TASK_HANDOFF_IMAGE_VERSION=${{ steps.image-version.outputs.value }}
             TASK_HANDOFF_BUILD_ID=${{ github.run_id }}
             TASK_HANDOFF_BUILT_AT=${{ github.event.repository.updated_at }}
             TASK_HANDOFF_GIT_COMMIT=${{ github.sha }}
             TASK_HANDOFF_IMAGE_REF=${{ steps.image-version.outputs.opencode-image-ref }}
-          cache-from: type=gha,scope=controlled-instance-${{ matrix.arch }}
-          cache-to: type=gha,mode=max,scope=controlled-instance-${{ matrix.arch }}
+          cache-from: type=gha,scope=docker-image-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=docker-image-${{ matrix.arch }}
 
-      - name: Build Browser image
+      - name: Build AI image
         uses: docker/build-push-action@v7
         with:
           context: .
           load: true
           platforms: ${{ matrix.platform }}
-          target: profile-browser
-          tags: task-handoff-controlled-browser:ci-${{ matrix.arch }}
+          target: profile-ai
+          tags: task-handoff-controlled-ai:ci-${{ matrix.arch }}
           build-args: |
-            TASK_HANDOFF_VERSION=${{ steps.image-version.outputs.value }}
+            TASK_HANDOFF_IMAGE_VERSION=${{ steps.image-version.outputs.value }}
             TASK_HANDOFF_BUILD_ID=${{ github.run_id }}
             TASK_HANDOFF_BUILT_AT=${{ github.event.repository.updated_at }}
             TASK_HANDOFF_GIT_COMMIT=${{ github.sha }}
-            TASK_HANDOFF_IMAGE_REF=${{ steps.image-version.outputs.browser-image-ref }}
-          cache-from: type=gha,scope=controlled-instance-${{ matrix.arch }}
-          cache-to: type=gha,mode=max,scope=controlled-instance-${{ matrix.arch }}
+            TASK_HANDOFF_IMAGE_REF=${{ steps.image-version.outputs.ai-image-ref }}
+          cache-from: type=gha,scope=docker-image-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=docker-image-${{ matrix.arch }}
 
       - name: Build WebCap image
         uses: docker/build-push-action@v7
@@ -173,346 +138,108 @@ jobs:
           target: profile-webcap
           tags: task-handoff-controlled-webcap:ci-${{ matrix.arch }}
           build-args: |
-            TASK_HANDOFF_VERSION=${{ steps.image-version.outputs.value }}
+            TASK_HANDOFF_IMAGE_VERSION=${{ steps.image-version.outputs.value }}
             TASK_HANDOFF_BUILD_ID=${{ github.run_id }}
             TASK_HANDOFF_BUILT_AT=${{ github.event.repository.updated_at }}
             TASK_HANDOFF_GIT_COMMIT=${{ github.sha }}
             TASK_HANDOFF_IMAGE_REF=${{ steps.image-version.outputs.webcap-image-ref }}
-          cache-from: type=gha,scope=controlled-instance-${{ matrix.arch }}
-          cache-to: type=gha,mode=max,scope=controlled-instance-${{ matrix.arch }}
+          cache-from: type=gha,scope=docker-image-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=docker-image-${{ matrix.arch }}
 
-      - name: Verify image version
+      - name: Build Browser image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          platforms: ${{ matrix.platform }}
+          target: profile-browser
+          tags: task-handoff-controlled-browser:ci-${{ matrix.arch }}
+          build-args: |
+            TASK_HANDOFF_IMAGE_VERSION=${{ steps.image-version.outputs.value }}
+            TASK_HANDOFF_BUILD_ID=${{ github.run_id }}
+            TASK_HANDOFF_BUILT_AT=${{ github.event.repository.updated_at }}
+            TASK_HANDOFF_GIT_COMMIT=${{ github.sha }}
+            TASK_HANDOFF_IMAGE_REF=${{ steps.image-version.outputs.browser-image-ref }}
+          cache-from: type=gha,scope=docker-image-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=docker-image-${{ matrix.arch }}
+
+      - name: Verify image metadata and controlled-instance absence
         env:
           EXPECTED_VERSION: ${{ steps.image-version.outputs.value }}
         run: |
+          set -euo pipefail
           for profile in codex opencode ai webcap browser; do
-            actual="$(docker image inspect "task-handoff-controlled-${profile}:ci-${{ matrix.arch }}" --format '{{ index .Config.Labels "org.opencontainers.image.version" }}')"
-            declared_profile="$(docker image inspect "task-handoff-controlled-${profile}:ci-${{ matrix.arch }}" --format '{{ index .Config.Labels "io.task-handoff.image.profile" }}')"
+            image="task-handoff-controlled-${profile}:ci-${{ matrix.arch }}"
+            actual="$(docker image inspect "$image" --format '{{ index .Config.Labels "org.opencontainers.image.version" }}')"
+            declared_profile="$(docker image inspect "$image" --format '{{ index .Config.Labels "io.task-handoff.image.profile" }}')"
             test "$actual" = "$EXPECTED_VERSION"
             test "$declared_profile" = "$profile"
           done
 
-      - name: Smoke test lightweight profiles
+      - name: Smoke test profile environments without embedded runtime
         if: ${{ matrix.arch == 'amd64' }}
+        shell: bash
         run: |
-          for profile in codex opencode ai; do
-            if [ "$profile" = codex ]; then
-              port=18081
-            elif [ "$profile" = opencode ]; then
-              port=18084
-            else
-              port=18082
-            fi
-            docker run -d \
-              --name "task-handoff-${profile}-ci" \
-              -p "${port}:8080" \
-              -e TASK_HANDOFF_WEB_AUTH=off \
-              "task-handoff-controlled-${profile}:ci-amd64" \
-              task-handoff-controlled-instance web --host 0.0.0.0 --port 8080
+          set -euo pipefail
+          containers=()
+          cleanup() {
+            if ((${#containers[@]})); then docker rm -f "${containers[@]}" >/dev/null 2>&1 || true; fi
+          }
+          trap cleanup EXIT
+
+          run_profile() {
+            local profile="$1"
+            shift
+            local name="task-handoff-${profile}-ci"
+            containers+=("$name")
+            docker run -d --name "$name" "task-handoff-controlled-${profile}:ci-amd64" >/dev/null
             for i in $(seq 1 30); do
-              if curl -fsS "http://127.0.0.1:${port}/api/health"; then
+              state="$(docker inspect --format '{{.State.Running}}' "$name" 2>/dev/null || true)"
+              if [ "$state" = true ] && docker logs "$name" 2>&1 | grep -q 'No controlled-instance runtime is active'; then
                 break
               fi
-              if [ "$i" = 30 ]; then
-                docker logs "task-handoff-${profile}-ci"
-                exit 1
-              fi
+              if [ "$i" = 30 ]; then docker logs "$name"; exit 1; fi
               sleep 1
             done
-            diagnostics_response="$(curl -fsS "http://127.0.0.1:${port}/api/diagnostics")"
-            printf '%s\n' "$diagnostics_response" | EXPECTED_PROFILE="$profile" node -e '
-            const fs = require("node:fs");
-            const payload = JSON.parse(fs.readFileSync(0, "utf8")).data;
-            if (!payload.ok) throw new Error(`${process.env.EXPECTED_PROFILE} diagnostics ok=false`);
-            if (payload.image.profile !== process.env.EXPECTED_PROFILE) throw new Error("image profile mismatch");
-            const requiredMissing = payload.commands.filter((command) => command.required && !command.available);
-            if (requiredMissing.length) throw new Error(`required commands missing: ${requiredMissing.map((command) => command.name).join(", ")}`);
-            '
-            test "$(docker exec "task-handoff-${profile}-ci" id -un)" = agent
-            test "$(docker exec "task-handoff-${profile}-ci" sudo -n id -u)" = 0
-          done
-          docker exec task-handoff-codex-ci codex --version
-          ! docker exec task-handoff-codex-ci sh -lc 'command -v opencode'
+            test "$(docker exec "$name" id -un)" = agent
+            test "$(docker exec "$name" sudo -n id -u)" = 0
+            test "$(docker exec "$name" sh -lc 'test ! -e /usr/local/bin/task-handoff-controlled-instance && echo absent')" = absent
+            test "$(docker exec "$name" sh -lc 'test ! -e /usr/local/lib/node_modules/@task-handoff/controlled-instance && echo absent')" = absent
+            for command in "$@"; do docker exec "$name" sh -lc "command -v '$command'" >/dev/null; done
+          }
+
+          run_profile codex codex
+          run_profile opencode opencode
+          run_profile ai codex claude
+          run_profile webcap codex claude chromium vncserver web-cap
+          run_profile browser codex claude chromium vncserver code-server
+
           ! docker exec task-handoff-codex-ci sh -lc 'command -v claude'
           ! docker exec task-handoff-codex-ci sh -lc 'command -v chromium'
-          docker exec task-handoff-opencode-ci opencode --version
           ! docker exec task-handoff-opencode-ci sh -lc 'command -v codex'
           ! docker exec task-handoff-opencode-ci sh -lc 'command -v claude'
-          ! docker exec task-handoff-opencode-ci sh -lc 'command -v chromium'
-          docker exec task-handoff-ai-ci codex --version
-          docker exec task-handoff-ai-ci claude --version
           ! docker exec task-handoff-ai-ci sh -lc 'command -v chromium'
-
-      - name: Smoke test WebCap profile
-        if: ${{ matrix.arch == 'amd64' }}
-        run: |
-          docker run -d \
-            --name task-handoff-webcap-ci \
-            -p 18083:8080 \
-            --shm-size=1g \
-            --security-opt seccomp=unconfined \
-            -e TASK_HANDOFF_WEB_AUTH=off \
-            task-handoff-controlled-webcap:ci-amd64 \
-            task-handoff-controlled-instance web --host 0.0.0.0 --port 8080
-          for i in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:18083/api/health; then
-              break
-            fi
-            if [ "$i" = "30" ]; then
-              docker logs task-handoff-webcap-ci
-              exit 1
-            fi
-            sleep 1
-          done
-          docker exec task-handoff-webcap-ci codex --version
-          docker exec task-handoff-webcap-ci claude --version
-          docker exec task-handoff-webcap-ci sh -lc 'command -v web-cap && (web-cap --version || web-cap --help >/dev/null)'
-          docker exec task-handoff-webcap-ci sh -lc 'command -v chromium'
-          docker exec task-handoff-webcap-ci sh -lc 'command -v vncserver'
-          docker exec task-handoff-webcap-ci test -f /home/agent/.codex/skills/web-cap/SKILL.md
-          docker exec task-handoff-webcap-ci test -f /home/agent/.claude/skills/web-cap/SKILL.md
-          docker exec task-handoff-webcap-ci test -f /opt/task-handoff/chromium-extensions/web-cap/manifest.json
           ! docker exec task-handoff-webcap-ci sh -lc 'command -v code-server'
-
-      - name: Smoke test Browser profile
-        if: ${{ matrix.arch == 'amd64' }}
-        env:
-          EXPECTED_VERSION: ${{ steps.image-version.outputs.value }}
-          EXPECTED_IMAGE_REF: ${{ steps.image-version.outputs.browser-image-ref }}
-        run: |
-          docker run -d \
-            --name task-handoff-web-ci \
-            -p 18080:8080 \
-            --shm-size=1g \
-            --security-opt seccomp=unconfined \
-            -e TASK_HANDOFF_WEB_AUTH=off \
-            task-handoff-controlled-browser:ci-amd64 \
-            task-handoff-controlled-instance web --host 0.0.0.0 --port 8080
-          for i in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:18080/api/health; then
-              break
-            fi
-            if [ "$i" = "30" ]; then
-              docker logs task-handoff-web-ci
-              exit 1
-            fi
-            sleep 1
-          done
-          status_response="$(curl -fsS http://127.0.0.1:18080/api/instance/status)"
-          diagnostics_response="$(curl -fsS http://127.0.0.1:18080/api/diagnostics)"
-          echo "$status_response"
-          echo "$diagnostics_response"
-          STATUS_RESPONSE="$status_response" DIAGNOSTICS_RESPONSE="$diagnostics_response" node -e '
-          const status = JSON.parse(process.env.STATUS_RESPONSE).data;
-          const diagnostics = JSON.parse(process.env.DIAGNOSTICS_RESPONSE).data;
-          const requiredCommands = new Set(["Xvfb", "openbox", "x11vnc", "websockify", "chromium", "xterm", "import", "codex", "claude"]);
-          if (!diagnostics.ok) {
-            throw new Error("diagnostics ok=false");
-          }
-          if (status.build.packageVersion !== process.env.EXPECTED_VERSION) {
-            throw new Error(`controlled-instance version mismatch: expected ${process.env.EXPECTED_VERSION}, got ${status.build.packageVersion}`);
-          }
-          if (status.build.imageRef !== process.env.EXPECTED_IMAGE_REF) {
-            throw new Error(`controlled-instance image ref mismatch: expected ${process.env.EXPECTED_IMAGE_REF}, got ${status.build.imageRef}`);
-          }
-          if (!diagnostics.runtime.linuxRuntime) {
-            throw new Error("diagnostics did not detect linux runtime");
-          }
-          if (!diagnostics.noVnc.available) {
-            throw new Error("noVNC is not available");
-          }
-          for (const command of diagnostics.commands) {
-            requiredCommands.delete(command.name);
-            if (!command.available) {
-              throw new Error(`${command.name} is unavailable`);
-            }
-          }
-          if (requiredCommands.size > 0) {
-            throw new Error(`missing command diagnostics: ${Array.from(requiredCommands).join(", ")}`);
-          }
-          const notWritable = diagnostics.storage.filter((entry) => !entry.writable);
-          if (notWritable.length > 0) {
-            throw new Error(`storage not writable: ${notWritable.map((entry) => entry.key).join(", ")}`);
-          }
-          '
-          docker exec task-handoff-web-ci codex --version
-          docker exec task-handoff-web-ci claude --version
-          test "$(docker exec task-handoff-web-ci id -un)" = agent
-          test "$(docker exec task-handoff-web-ci sudo -n id -u)" = 0
-          terminal_response="$(curl -fsS \
-            -H 'content-type: application/json' \
-            -d '{"appId":"terminal-tty","title":"Terminal Smoke","cwd":"/workspace","args":["-lc","printf launch-options-ready"]}' \
-            http://127.0.0.1:18080/api/apps/sessions)"
-          echo "$terminal_response"
-          echo "$terminal_response" | grep -q '"kind":"tty"'
-          echo "$terminal_response" | grep -q '"title":"Terminal Smoke"'
-          echo "$terminal_response" | grep -q '"cwd":"/workspace"'
-          terminal_id="$(echo "$terminal_response" | node -pe 'JSON.parse(fs.readFileSync(0, "utf8")).data.id')"
-          restart_response="$(curl -fsS \
-            -X POST \
-            http://127.0.0.1:18080/api/apps/sessions/$terminal_id/restart)"
-          echo "$restart_response"
-          echo "$restart_response" | grep -q '"title":"Terminal Smoke"'
-          restarted_id="$(echo "$restart_response" | node -pe 'JSON.parse(fs.readFileSync(0, "utf8")).data.id')"
-          test "$restarted_id" != "$terminal_id"
-          screenshot_status="$(curl -sS -o /tmp/tty-screenshot.json -w '%{http_code}' \
-            http://127.0.0.1:18080/api/apps/sessions/$restarted_id/screenshot)"
-          cat /tmp/tty-screenshot.json
-          test "$screenshot_status" = "409"
-          curl -fsS \
-            -X DELETE \
-            http://127.0.0.1:18080/api/apps/sessions/$terminal_id
-          curl -fsS \
-            -X DELETE \
-            http://127.0.0.1:18080/api/apps/sessions/$restarted_id
-          browser_response="$(curl -fsS \
-            -H 'content-type: application/json' \
-            -d '{"appId":"chromium","title":"Browser Smoke","args":["about:blank"],"display":{"width":1024,"height":768,"depth":24},"env":{"TASK_HANDOFF_SMOKE":"1"}}' \
-            http://127.0.0.1:18080/api/apps/sessions)"
-          echo "$browser_response"
-          echo "$browser_response" | grep -q '"kind":"gui"'
-          echo "$browser_response" | grep -q '"title":"Browser Smoke"'
-          echo "$browser_response" | grep -q '"width":1024'
-          echo "$browser_response" | grep -q '"height":768'
-          browser_id="$(echo "$browser_response" | node -pe 'JSON.parse(fs.readFileSync(0, "utf8")).data.id')"
-          for i in $(seq 1 30); do
-            session_response="$(curl -fsS http://127.0.0.1:18080/api/apps/sessions/$browser_id)"
-            echo "$session_response"
-            if echo "$session_response" | grep -q '"vnc"' && echo "$session_response" | grep -q '"automation"'; then
-              break
-            fi
-            if [ "$i" = "30" ]; then
-              docker logs task-handoff-web-ci
-              exit 1
-            fi
-            sleep 1
-          done
-          for i in $(seq 1 30); do
-            automation_response="$(curl -fsS http://127.0.0.1:18080/api/apps/sessions/$browser_id/automation)"
-            echo "$automation_response"
-            if echo "$automation_response" | grep -q '"ready":true' && echo "$automation_response" | grep -q '"browser"'; then
-              break
-            fi
-            session_response="$(curl -fsS http://127.0.0.1:18080/api/apps/sessions/$browser_id)"
-            if echo "$session_response" | grep -Eq '"status":"(failed|exited)"'; then
-              echo "$session_response"
-              curl -fsS "http://127.0.0.1:18080/api/apps/sessions/$browser_id/logs?maxBytes=524288" || true
-              docker logs task-handoff-web-ci
-              exit 1
-            fi
-            if [ "$i" = "30" ]; then
-              echo "$session_response"
-              curl -fsS "http://127.0.0.1:18080/api/apps/sessions/$browser_id/logs?maxBytes=524288" || true
-              docker logs task-handoff-web-ci
-              exit 1
-            fi
-            sleep 1
-          done
-          curl -fsS "http://127.0.0.1:18080/api/apps/sessions/$browser_id/novnc/vnc.html" >/tmp/novnc-redirect.html
-          for i in $(seq 1 30); do
-            screenshot_status="$(curl -sS -o /tmp/browser-screenshot.png -w '%{http_code}' \
-              http://127.0.0.1:18080/api/apps/sessions/$browser_id/screenshot)"
-            if [ "$screenshot_status" = "200" ]; then
-              break
-            fi
-            if [ "$i" = "30" ]; then
-              cat /tmp/browser-screenshot.png || true
-              docker logs task-handoff-web-ci
-              exit 1
-            fi
-            sleep 1
-          done
-          file /tmp/browser-screenshot.png
-          file /tmp/browser-screenshot.png | grep -q 'PNG image data'
-          test "$(wc -c </tmp/browser-screenshot.png)" -gt 1000
-          browser_delete_status="$(curl -sS -o /tmp/browser-delete.json -w '%{http_code}' \
-            -X DELETE \
-            http://127.0.0.1:18080/api/apps/sessions/$browser_id)"
-          cat /tmp/browser-delete.json
-          test "$browser_delete_status" = "200"
-          gui_terminal_response="$(curl -fsS \
-            -H 'content-type: application/json' \
-            -d '{"appId":"terminal-gui","title":"GUI Terminal Smoke","display":{"width":800,"height":600,"depth":24}}' \
-            http://127.0.0.1:18080/api/apps/sessions)"
-          echo "$gui_terminal_response"
-          echo "$gui_terminal_response" | grep -q '"appId":"terminal-gui"'
-          echo "$gui_terminal_response" | grep -q '"kind":"gui"'
-          echo "$gui_terminal_response" | grep -q '"title":"GUI Terminal Smoke"'
-          gui_terminal_id="$(echo "$gui_terminal_response" | node -pe 'JSON.parse(fs.readFileSync(0, "utf8")).data.id')"
-          for i in $(seq 1 30); do
-            gui_terminal_session="$(curl -fsS http://127.0.0.1:18080/api/apps/sessions/$gui_terminal_id)"
-            echo "$gui_terminal_session"
-            if echo "$gui_terminal_session" | grep -q '"vnc"'; then
-              break
-            fi
-            if [ "$i" = "30" ]; then
-              docker logs task-handoff-web-ci
-              exit 1
-            fi
-            sleep 1
-          done
-          for i in $(seq 1 30); do
-            screenshot_status="$(curl -sS -o /tmp/gui-terminal-screenshot.png -w '%{http_code}' \
-              http://127.0.0.1:18080/api/apps/sessions/$gui_terminal_id/screenshot)"
-            if [ "$screenshot_status" = "200" ]; then
-              break
-            fi
-            if [ "$i" = "30" ]; then
-              cat /tmp/gui-terminal-screenshot.png || true
-              docker logs task-handoff-web-ci
-              exit 1
-            fi
-            sleep 1
-          done
-          file /tmp/gui-terminal-screenshot.png
-          file /tmp/gui-terminal-screenshot.png | grep -q 'PNG image data, 800 x 600'
-          curl -fsS \
-            -X DELETE \
-            http://127.0.0.1:18080/api/apps/sessions/$gui_terminal_id
-          curl -fsS \
-            -H 'content-type: application/json' \
-            -X PATCH \
-            -d '{"items":[{"id":"fail-fast-gui","name":"Fail Fast GUI","kind":"gui","command":"/bin/false","display":{"width":640,"height":480,"depth":24}}]}' \
-            http://127.0.0.1:18080/api/apps/catalog/custom
-          failed_response="$(curl -fsS \
-            -H 'content-type: application/json' \
-            -d '{"appId":"fail-fast-gui"}' \
-            http://127.0.0.1:18080/api/apps/sessions)"
-          echo "$failed_response"
-          failed_id="$(echo "$failed_response" | node -pe 'JSON.parse(fs.readFileSync(0, "utf8")).data.id')"
-          for i in $(seq 1 30); do
-            failed_session="$(curl -fsS http://127.0.0.1:18080/api/apps/sessions/$failed_id)"
-            echo "$failed_session"
-            if echo "$failed_session" | grep -q '"status":"failed"' && echo "$failed_session" | grep -q '"error"'; then
-              break
-            fi
-            if [ "$i" = "30" ]; then
-              docker logs task-handoff-web-ci
-              exit 1
-            fi
-            sleep 1
-          done
-          curl -fsS \
-            -X DELETE \
-            http://127.0.0.1:18080/api/apps/sessions/$failed_id
+          ! docker exec task-handoff-browser-ci sh -lc 'command -v web-cap'
 
       - name: Cleanup
         if: ${{ always() && matrix.arch == 'amd64' }}
-        run: docker rm -f task-handoff-web-ci task-handoff-webcap-ci task-handoff-codex-ci task-handoff-opencode-ci task-handoff-ai-ci 2>/dev/null || true
+        run: docker rm -f task-handoff-codex-ci task-handoff-opencode-ci task-handoff-ai-ci task-handoff-webcap-ci task-handoff-browser-ci 2>/dev/null || true
 
       - name: Login to Docker Hub
-        if: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.version != '' }}
+        if: ${{ startsWith(github.ref, 'refs/tags/docker-v') || inputs.image_version != '' }}
         uses: docker/login-action@v4
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Publish immutable commit image
-        if: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.version != '' }}
+        if: ${{ startsWith(github.ref, 'refs/tags/docker-v') || inputs.image_version != '' }}
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
         run: |
-          sha_tag="sha-${GITHUB_SHA::7}-${{ matrix.arch }}"
+          set -euo pipefail
+          sha_tag="docker-sha-${GITHUB_SHA::7}-${{ matrix.arch }}"
           for entry in \
             "codex:${DOCKERHUB_CODEX_IMAGE_NAME}" \
             "opencode:${DOCKERHUB_OPENCODE_IMAGE_NAME}" \
@@ -528,7 +255,7 @@ jobs:
           done
 
   publish-multiarch-image:
-    if: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.version != '' }}
+    if: ${{ startsWith(github.ref, 'refs/tags/docker-v') || inputs.image_version != '' }}
     needs: docker-build
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -545,7 +272,8 @@ jobs:
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
         run: |
-          sha_tag="sha-${GITHUB_SHA::7}"
+          set -euo pipefail
+          sha_tag="docker-sha-${GITHUB_SHA::7}"
           for image_name in \
             "${DOCKERHUB_CODEX_IMAGE_NAME}" \
             "${DOCKERHUB_OPENCODE_IMAGE_NAME}" \
@@ -562,10 +290,10 @@ jobs:
           done
 
   promote-release:
-    if: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.version != '' }}
+    if: ${{ startsWith(github.ref, 'refs/tags/docker-v') || inputs.image_version != '' }}
     needs: publish-multiarch-image
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 20
     steps:
       - uses: docker/setup-buildx-action@v4
 
@@ -575,17 +303,19 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Promote immutable image to release tags
+      - name: Promote immutable image to Docker release tags
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          REQUESTED_IMAGE_VERSION: ${{ inputs.image_version }}
         run: |
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+          set -euo pipefail
+          if [[ "$GITHUB_REF" == refs/tags/docker-v* ]]; then
             version="$GITHUB_REF_NAME"
           else
-            version="v${{ inputs.version }}"
+            version="docker-v${REQUESTED_IMAGE_VERSION}"
           fi
-          if [[ ! "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
-            echo "::error::Release tag is not a supported semantic version: $version"
+          if [[ ! "$version" =~ ^docker-v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Docker release tag is not a supported semantic version: $version"
             exit 1
           fi
 
@@ -593,7 +323,7 @@ jobs:
             prerelease="${version#*-}"
             channel="${prerelease%%.*}"
             if [[ "$channel" != "alpha" && "$channel" != "beta" ]]; then
-              echo "::error::Only alpha and beta prerelease channels are supported: $version"
+              echo "::error::Only alpha and beta Docker prerelease channels are supported: $version"
               exit 1
             fi
           fi
@@ -606,7 +336,7 @@ jobs:
             "${DOCKERHUB_BROWSER_IMAGE_NAME}"
           do
             image="${DOCKERHUB_USERNAME}/${image_name}"
-            source="${image}:sha-${GITHUB_SHA::7}"
+            source="${image}:docker-sha-${GITHUB_SHA::7}"
             tags=(--tag "${image}:${version}")
             if [[ "$version" != *-* ]]; then
               tags+=(--tag "${image}:latest")

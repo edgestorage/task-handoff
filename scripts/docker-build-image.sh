@@ -31,6 +31,7 @@ case "${IMAGE_PROFILE}" in
     ;;
 esac
 IMAGE_REF="${TASK_HANDOFF_IMAGE_REF:-${DEFAULT_IMAGE_REF}}"
+IMAGE_VERSION="${TASK_HANDOFF_IMAGE_VERSION:-local}"
 DOCKERFILE="${TASK_HANDOFF_DOCKERFILE:-Dockerfile}"
 CONTEXT_DIR="${TASK_HANDOFF_DOCKER_CONTEXT:-.}"
 BUILD_ID="${TASK_HANDOFF_BUILD_ID:-$(git rev-parse --short=12 HEAD 2>/dev/null || date -u +%Y%m%d%H%M%S)}"
@@ -41,6 +42,7 @@ set -- \
   --file "${DOCKERFILE}" \
   --target "${BUILD_TARGET}" \
   --tag "${IMAGE_REF}" \
+  --build-arg "TASK_HANDOFF_IMAGE_VERSION=${IMAGE_VERSION}" \
   --build-arg "CODEX_CLI_PACKAGE=${CODEX_CLI_PACKAGE:-@openai/codex@latest}" \
   --build-arg "OPENCODE_CLI_PACKAGE=${OPENCODE_CLI_PACKAGE:-opencode-ai@latest}" \
   --build-arg "CLAUDE_CODE_VERSION=${CLAUDE_CODE_VERSION:-2.1.183}" \

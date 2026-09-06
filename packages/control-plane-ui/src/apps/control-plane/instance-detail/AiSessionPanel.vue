@@ -1069,7 +1069,7 @@
       :open="presetSaveOpen"
       :stories="presetSaveStories"
       :instances="presetSaveInstances"
-      :local-folders-by-instance-id="presetSaveFoldersByInstanceId"
+      :node-local-folders-by-node-id="presetSaveFoldersByNodeId"
       :initial="presetSaveInitial"
       @update:open="presetSaveOpen = $event"
       @saved="handlePresetSaved"
@@ -1361,19 +1361,20 @@ const presetSaveInitial = ref<{
 }>({});
 const presetSaveStories = computed(() => (storiesQuery.data.value?.stories || []).filter((story) => !story.archivedAt));
 const presetSaveInstances = computed(() => {
-  const current = { id: props.instance.id, name: props.instance.name };
-  const seen = new Set([current.id]);
-  const entries = [{ ...current }];
+  const seen = new Set([props.instance.id]);
+  const entries = [props.instance];
   for (const instance of props.creationInstances || []) {
     if (seen.has(instance.id)) continue;
     seen.add(instance.id);
-    entries.push({ id: instance.id, name: instance.name });
+    entries.push(instance);
   }
   return entries;
 });
-const presetSaveFoldersByInstanceId = computed(() => ({
-  [props.instance.id]: props.nodeLocalFolders || [],
-}));
+const presetSaveFoldersByNodeId = computed(() => {
+  const foldersByNodeId: Record<string, NodeLocalFolder[]> = {};
+  if (props.instance.nodeId) foldersByNodeId[props.instance.nodeId] = props.nodeLocalFolders || [];
+  return foldersByNodeId;
+});
 
 function derivePresetActionTitle(prompt: string) {
   const line = prompt.split(/\n/).find((entry) => entry.trim())?.trim() || "Preset action";
