@@ -27,6 +27,7 @@ export type NewSessionFormProps = {
   workspaceLoading?: boolean;
   message: string;
   permissionMode: AiSessionPermissionMode;
+  permissionModes?: AiSessionPermissionMode[];
   modelGroups?: AiSessionModelGroup[];
   modelSelection?: AiSessionModelSelection;
   reasoningEffort?: AiSessionReasoningEffort;

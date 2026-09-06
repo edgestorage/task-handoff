@@ -311,9 +311,6 @@ export class AiSessionController {
     if (input.references?.length && session.agent !== "codex") {
       throw aiSessionControlError("AI_SESSION_REFERENCES_UNSUPPORTED", `${session.agent} sessions do not support Codex references.`, 400);
     }
-    if (input.permissionMode && session.agent !== "codex") {
-      throw aiSessionControlError("AI_SESSION_PERMISSION_MODE_UNSUPPORTED", `${session.agent} sessions do not support Codex permission modes.`, 400);
-    }
     const mode = input.mode || "auto";
     const prepared = this.prepareMessage(session, { ...input, message });
     if (mode === "queue" || (mode === "auto" && isSessionBusy(session))) {

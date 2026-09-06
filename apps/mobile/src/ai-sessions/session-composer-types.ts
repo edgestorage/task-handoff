@@ -15,8 +15,8 @@ export type SessionComposerProps = {
   focused: boolean;
   focusRequestKey?: number;
   imageDisabled: boolean;
-  permissionEnabled: boolean;
   permissionMode: AiSessionPermissionMode;
+  permissionModes: AiSessionPermissionMode[];
   provider?: string;
   modelGroups?: AiSessionModelGroup[];
   modelSelection?: AiSessionModelSelection;

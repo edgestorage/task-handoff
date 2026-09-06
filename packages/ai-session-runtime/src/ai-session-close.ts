@@ -46,6 +46,12 @@ export class AiSessionCloseCoordinator {
     return session ? this.close(session.id) : undefined;
   }
 
+  closeIfIdle(aiSessionId: string): Promise<AiSessionCloseResult | undefined> {
+    const session = this.options.registry.get(aiSessionId);
+    if (session && session.status !== "idle") return Promise.resolve(undefined);
+    return this.close(aiSessionId);
+  }
+
   private async perform(session: AiSessionStatus): Promise<AiSessionCloseResult> {
     if (!session.providerSessionId) {
       throw aiSessionControlError("AI_SESSION_CLOSE_UNAVAILABLE", "AI session has no provider identity.", 409);

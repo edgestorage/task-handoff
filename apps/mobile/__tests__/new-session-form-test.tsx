@@ -70,6 +70,7 @@ describe('<NewSessionForm />', () => {
       selectedBranch="main"
       message="Build the mobile flow"
       permissionMode="auto-review"
+      permissionModes={['ask', 'auto-review', 'full-access']}
       busy={false}
       disabled={false}
       attachments={[]}

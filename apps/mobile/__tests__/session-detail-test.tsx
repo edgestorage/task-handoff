@@ -7,6 +7,7 @@ import { Brain, CornerDownRight, FilePenLine, Minimize2, Pencil, RotateCcw, Squa
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ControlPlaneAiSessionSummarySchema, type ControlPlaneClient } from '@task-handoff/control-plane-client';
 import { AiSessionDetailSchema, AiSessionTurnIndexSchema } from '@task-handoff/protocol/ai-sessions';
+import { ControlPlaneInstanceDirectoryCapabilitiesSchema } from '@task-handoff/protocol/control-plane-directory';
 
 import { conversationDetailItems, detailItems, isSessionScrollNearBottom, processedDurationLabel, SessionDetail } from '../src/ai-sessions/SessionDetail';
 import { COMPOSER_BACKDROP_OPACITIES, composerBottomBackdropGeometry, moveQueueId, queueActionIcon, queueDragPreview, queueItemsWithQueuedOrder, queueListScrollEnabled, sessionKeyboardAvoidingBehavior, SessionWorkspace } from '../src/ai-sessions/SessionWorkspace';
@@ -29,6 +30,12 @@ const session = ControlPlaneAiSessionSummarySchema.parse({
     activity: 'interacted', message: `Worker ${index}`, updatedAt: '2026-08-05T00:01:00.000Z',
   })),
   startedAt: '2026-08-05T00:00:00.000Z', updatedAt: '2026-08-05T00:01:00.000Z',
+});
+const codexPermissionCapabilities = ControlPlaneInstanceDirectoryCapabilitiesSchema.parse({
+  aiSessionProviders: [{ agent: 'codex', actions: {}, permissionModes: ['ask', 'auto-review', 'full-access'], timeline: {} }],
+});
+const opencodePermissionCapabilities = ControlPlaneInstanceDirectoryCapabilitiesSchema.parse({
+  aiSessionProviders: [{ agent: 'opencode', actions: {}, permissionModes: ['ask', 'auto-review', 'full-access'], timeline: {} }],
 });
 
 function actionClient(sendMessage: jest.Mock) {
@@ -1186,7 +1193,7 @@ test('offline detail keeps cached content visible but disables authoritative act
   } as unknown as MobileAiSessionActionCoordinator;
   const screen = await render(
     <SafeAreaProvider initialMetrics={{ frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { top: 47, right: 0, bottom: 34, left: 0 } }}>
-      <SessionWorkspace actions={actions} controlPlaneId="cp" instanceId="instance" messages={[]} session={actionable} syncPhase="offline" />
+      <SessionWorkspace actions={actions} controlPlaneId="cp" instanceCapabilities={codexPermissionCapabilities} instanceId="instance" messages={[]} session={actionable} syncPhase="offline" />
     </SafeAreaProvider>,
   );
   screen.getByText('Live state is unavailable. Actions are disabled until the Control Plane snapshot recovers.');
@@ -1370,7 +1377,7 @@ test('composer shows authoritative send loading and locks mutable controls until
   const sendMessage = jest.fn().mockReturnValue(request);
   const actions = new MobileAiSessionActionCoordinator('cp', actionClient(sendMessage), new MobileAiSessionStore());
   const actionable = ControlPlaneAiSessionSummarySchema.parse({ ...session, actions: { send: true, interrupt: true } });
-  const screen = await render(<SafeAreaProvider initialMetrics={{ frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { top: 47, right: 0, bottom: 34, left: 0 } }}><SessionWorkspace actions={actions} controlPlaneId="cp" instanceId="instance" messages={[]} session={actionable} /></SafeAreaProvider>);
+  const screen = await render(<SafeAreaProvider initialMetrics={{ frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { top: 47, right: 0, bottom: 34, left: 0 } }}><SessionWorkspace actions={actions} controlPlaneId="cp" instanceCapabilities={codexPermissionCapabilities} instanceId="instance" messages={[]} session={actionable} /></SafeAreaProvider>);
 
   await fireEvent.changeText(screen.getByTestId('session-message-input'), 'Wait for the backend');
   await fireEvent.press(await waitFor(() => screen.getByRole('button', { name: 'Send' })));
@@ -1446,7 +1453,7 @@ test('session composer restores its persisted permission mode before falling bac
 
   const screen = await render(
     <SafeAreaProvider initialMetrics={{ frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { top: 47, right: 0, bottom: 34, left: 0 } }}>
-      <SessionWorkspace actions={actions} controlPlaneId="cp" defaultPermissionMode="full-access" instanceId="instance" messages={[]} permissions={permissions} session={session} />
+      <SessionWorkspace actions={actions} controlPlaneId="cp" defaultPermissionMode="full-access" instanceCapabilities={codexPermissionCapabilities} instanceId="instance" messages={[]} permissions={permissions} session={session} />
     </SafeAreaProvider>,
   );
 
@@ -1467,6 +1474,23 @@ test('session composer lets the server apply its authoritative permission defaul
   await screen.unmount();
 });
 
+test('OpenCode composer sends the advertised full-access permission mode', async () => {
+  const opencodeSession = ControlPlaneAiSessionSummarySchema.parse({
+    ...session,
+    agent: 'opencode',
+    actions: { send: true, interrupt: true },
+  });
+  const send = jest.fn().mockResolvedValue({ disposition: 'accepted' });
+  const actions = { subscribe: () => () => undefined, state: () => ({ phase: 'idle' as const }), approval: jest.fn(), interrupt: jest.fn(), queue: jest.fn(), send } as unknown as MobileAiSessionActionCoordinator;
+  const screen = await render(<SafeAreaProvider initialMetrics={{ frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { top: 47, right: 0, bottom: 34, left: 0 } }}><SessionWorkspace actions={actions} controlPlaneId="cp" defaultPermissionMode="full-access" instanceCapabilities={opencodePermissionCapabilities} instanceId="instance" messages={[]} session={opencodeSession} /></SafeAreaProvider>);
+
+  await waitFor(() => screen.getByRole('button', { name: 'Permission mode: Full access' }));
+  await fireEvent.changeText(screen.getByTestId('session-message-input'), 'Run without approval prompts');
+  await fireEvent.press(screen.getByRole('button', { name: 'Send' }));
+  await waitFor(() => expect(send).toHaveBeenCalledWith('instance', 'session-1', 'Run without approval prompts', 'full-access', [], 'auto'));
+  await screen.unmount();
+});
+
 test('composer expands to a multiline editor while focused', async () => {
   const timing = jest.spyOn(Animated, 'timing').mockImplementation(() => ({
     reset: () => undefined,
@@ -1475,7 +1499,7 @@ test('composer expands to a multiline editor while focused', async () => {
   }));
   const actionable = ControlPlaneAiSessionSummarySchema.parse({ ...session, actions: { send: true, interrupt: true } });
   const actions = { subscribe: () => () => undefined, state: () => ({ phase: 'idle' as const }), approval: jest.fn(), interrupt: jest.fn(), queue: jest.fn(), send: jest.fn() } as unknown as MobileAiSessionActionCoordinator;
-  const screen = await render(<SafeAreaProvider initialMetrics={{ frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { top: 47, right: 0, bottom: 34, left: 0 } }}><SessionWorkspace actions={actions} controlPlaneId="cp" instanceId="instance" messages={[]} session={actionable} /></SafeAreaProvider>);
+  const screen = await render(<SafeAreaProvider initialMetrics={{ frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { top: 47, right: 0, bottom: 34, left: 0 } }}><SessionWorkspace actions={actions} controlPlaneId="cp" instanceCapabilities={codexPermissionCapabilities} instanceId="instance" messages={[]} session={actionable} /></SafeAreaProvider>);
   const input = screen.getByTestId('session-message-input');
 
   expect(screen.getByTestId('session-composer-blur')).toBeTruthy();

@@ -58,13 +58,14 @@ test("Ctrl+Enter steers a running turn without changing normal Enter submission"
   assert.match(composer, /:title="t\('sessions\.composer\.steerTurnShortcut'\)"[\s\S]*:aria-label="t\('sessions\.composer\.steerTurnShortcut'\)"/);
 });
 
-test("the Codex composer exposes exactly three permission modes beside the plus button", () => {
-  assert.match(composer, /class="ai-session-composer__leading">[\s\S]*<Plus :size="18" \/>[\s\S]*<DropdownMenu v-if="permissionProvider === 'codex'">/);
+test("the composer exposes and submits only provider-advertised permission modes", () => {
+  assert.match(composer, /class="ai-session-composer__leading">[\s\S]*<Plus :size="18" \/>[\s\S]*<DropdownMenu v-if="permissionOptions\.length">/);
   assert.match(composer, /value: "ask", label: t\("sessions\.permission\.ask"\)/);
   assert.match(composer, /value: "auto-review", label: t\("sessions\.permission\.autoReview"\)/);
   assert.match(composer, /value: "full-access", label: t\("sessions\.permission\.fullAccess"\)/);
   assert.doesNotMatch(composer, /config\.toml|permissionOptions\.value\.push/);
-  assert.match(composer, /emit\("run", permissionProvider\.value === "codex" \? permissionMode\.value : undefined\)/);
+  assert.match(composer, /options\.filter\(\(option\) => \(props\.permissionModes \|\| \[\]\)\.includes\(option\.value\)\)/);
+  assert.match(composer, /emit\("run", selectedPermission\.value\?\.value\)/);
   assert.match(composer, /useAiSessionPermissionMode/);
   assert.match(composer, /props\.permissionMode !== undefined[\s\S]*emit\("update:permissionMode", value\)/);
   assert.doesNotMatch(composer, /permissionMode\.value = "ask"/);

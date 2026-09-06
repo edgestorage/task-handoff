@@ -29,6 +29,7 @@ const instance = ControlPlaneInstanceDirectoryEntrySchema.parse({
   connectionStatus: 'online',
   ready: true,
   config: { defaultCodexPermissionMode: 'ask' },
+  capabilities: { aiSessionProviders: [{ agent: 'codex', actions: {}, permissionModes: ['ask', 'auto-review', 'full-access'], timeline: {} }] },
   observedAt: '2026-09-05T00:00:00.000Z',
   runtime: { id: 'runtime-1', name: 'Docker', type: 'docker' },
   workspace: { status: 'ready', path: '/workspace' },

@@ -61,6 +61,7 @@ const props = defineProps<{
   permissionKey?: string;
   permissionMode?: AiSessionPermissionMode;
   defaultPermissionMode?: AiSessionPermissionMode;
+  permissionModes?: AiSessionPermissionMode[];
   editingLabel?: string;
   modelGroups?: AiSessionModelGroup[];
   modelSelection?: AiSessionModelSelection;
@@ -153,11 +154,14 @@ const permissionMode = computed<AiSessionPermissionMode>({
     else storedPermissionMode.value = value;
   },
 });
-const permissionOptions = computed(() => [
-  { value: "ask", label: t("sessions.permission.ask"), description: t("sessions.composer.askDescription"), icon: Hand },
-  { value: "auto-review", label: t("sessions.permission.autoReview"), description: t("sessions.composer.autoReviewDescription"), icon: ShieldCheck },
-  { value: "full-access", label: t("sessions.permission.fullAccess"), description: t("sessions.composer.fullAccessDescription"), icon: ShieldAlert, danger: true },
-] satisfies Array<{ value: AiSessionPermissionMode; label: string; description: string; icon: typeof Hand; danger?: boolean }>);
+const permissionOptions = computed(() => {
+  const options: Array<{ value: AiSessionPermissionMode; label: string; description: string; icon: typeof Hand; danger?: boolean }> = [
+    { value: "ask", label: t("sessions.permission.ask"), description: t("sessions.composer.askDescription"), icon: Hand },
+    { value: "auto-review", label: t("sessions.permission.autoReview"), description: t("sessions.composer.autoReviewDescription"), icon: ShieldCheck },
+    { value: "full-access", label: t("sessions.permission.fullAccess"), description: t("sessions.composer.fullAccessDescription"), icon: ShieldAlert, danger: true },
+  ];
+  return options.filter((option) => (props.permissionModes || []).includes(option.value));
+});
 const selectedPermission = computed(() => permissionOptions.value.find((option) => option.value === permissionMode.value) || permissionOptions.value[0]);
 const modelGroups = computed(() => props.modelGroups || []);
 const modelOptions = computed(() => modelGroups.value.flatMap((group) => group.models));
@@ -479,7 +483,7 @@ function submit() {
       emit("command", command);
       return;
     }
-    emit("run", permissionProvider.value === "codex" ? permissionMode.value : undefined);
+    emit("run", selectedPermission.value?.value);
   }
 }
 
@@ -869,7 +873,7 @@ watch(() => props.busy, (busy) => {
         >
           <Plus :size="18" />
         </button>
-        <DropdownMenu v-if="permissionProvider === 'codex'">
+        <DropdownMenu v-if="permissionOptions.length">
           <DropdownMenuTrigger as-child>
             <button
               type="button"

@@ -35,6 +35,8 @@ export const AiSessionProviderCapabilitySchema = z.object({
     fork: z.boolean().default(false),
     approvalDecisions: z.array(z.enum(["allow", "deny", "skip"])).max(3).default([]),
   }).passthrough(),
+  // Compatibility for v0.0.28: absence disables only permission-mode UI/actions.
+  permissionModes: z.array(z.enum(["ask", "auto-review", "full-access"])).max(3).default([]),
   timeline: z.object({
     sessionRead: z.boolean().default(false),
     turnRead: z.boolean().default(false),

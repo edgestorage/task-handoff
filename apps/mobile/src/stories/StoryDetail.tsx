@@ -4,6 +4,7 @@ import { router, useFocusEffect } from 'expo-router';
 import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, View, type LayoutChangeEvent, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
 import type { Story, StoryAction, StoryAutomationRun, StoryAutomationSchedule, StoryAutomationStatus } from '@task-handoff/protocol/stories';
 import { aiSessionStatusGroup } from '@task-handoff/control-plane-client';
+import { directoryAiSessionProviderCapability } from '@task-handoff/protocol/control-plane-directory';
 
 import { SessionStatusIndicator } from '../ai-sessions/SessionStatusIndicator';
 import { mobileAiSessionStatusLabel } from '../ai-sessions/SessionDetail';
@@ -86,6 +87,7 @@ export function StoryDetail({ storyId, nodeId, onOpenSession }: { storyId?: stri
       const preset = action.sessionPreset;
       const agent = preset?.agent ?? 'codex';
       const permissionMode = preset?.permissionMode ?? 'ask';
+      const permissionModes = directoryAiSessionProviderCapability(target.capabilities, agent)?.permissionModes || [];
       const result = await createMobileAiSession(runtime.api, {
         instance: target,
         agent,
@@ -99,7 +101,7 @@ export function StoryDetail({ storyId, nodeId, onOpenSession }: { storyId?: stri
         reasoningEffort: preset?.reasoningEffort,
         storyId: story.id,
       });
-      if (agent === 'codex') await mobilePermissionStore.write(controlPlaneId, target.id, result.aiSessionId, permissionMode).catch(() => undefined);
+      if (permissionModes.includes(permissionMode)) await mobilePermissionStore.write(controlPlaneId, target.id, result.aiSessionId, permissionMode).catch(() => undefined);
       onOpenSession(target.id, result.aiSessionId);
     } catch (cause) {
       Alert.alert(t('stories.actionFailed'), lifecycleGuidance(cause).message);

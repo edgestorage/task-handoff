@@ -141,9 +141,12 @@ export function SessionWorkspace({
     return () => subscription?.remove?.();
   }, []);
   const permissionKey = sessionId ? `${controlPlaneId}\u0000${instanceId}\u0000${sessionId}` : undefined;
-  const permissionMode = permissionSelection && permissionSelection.key === permissionKey
+  const requestedPermissionMode = permissionSelection && permissionSelection.key === permissionKey
     ? permissionSelection.mode
     : defaultPermissionMode ?? 'ask';
+  const providerCapability = session ? directoryAiSessionProviderCapability(instanceCapabilities, session.agent) : undefined;
+  const permissionModes = providerCapability?.permissionModes || [];
+  const permissionMode = permissionModes.includes(requestedPermissionMode) ? requestedPermissionMode : permissionModes[0] ?? requestedPermissionMode;
   const turnCount = session?.turnCount ?? aiSessionDisplayTurns(session).length;
   const latestTurnIndex = Math.max(0, turnCount - 1);
   const timelineTurnSignature = (session?.turns ?? []).map((turn) => (
@@ -169,7 +172,7 @@ export function SessionWorkspace({
     };
   }, [controlPlaneId, drafts, instanceId, sessionId]);
   useEffect(() => {
-    if (!sessionId || session?.agent !== 'codex' || !defaultPermissionMode) return;
+    if (!sessionId || !permissionModes.length || !defaultPermissionMode) return;
     let live = true;
     const key = `${controlPlaneId}\u0000${instanceId}\u0000${sessionId}`;
     setPermissionSelection((current) => current?.key === key
@@ -181,7 +184,7 @@ export function SessionWorkspace({
         : current);
     });
     return () => { live = false; };
-  }, [controlPlaneId, defaultPermissionMode, instanceId, permissions, session?.agent, sessionId]);
+  }, [controlPlaneId, defaultPermissionMode, instanceId, permissionModes.length, permissions, sessionId]);
   useEffect(() => {
     const sameSession = selectionSessionScope.current === turnScope;
     const previousCount = knownTurnCount.current;
@@ -349,7 +352,6 @@ export function SessionWorkspace({
   const isLatestTurn = detailMode === 'conversation' || selectedTurnIndex >= latestTurnIndex;
   const canInterrupt = canInterruptAiSession(session);
   const approvalPending = isAiSessionApprovalPending(session);
-  const providerCapability = directoryAiSessionProviderCapability(instanceCapabilities, session.agent);
   const reasoningCapability = normalizeAiSessionReasoningEffortCapabilities(providerCapability);
   // Compatibility for v0.0.21: older directory responses do not publish provider decision capabilities.
   const approvalDecisions: ('allow' | 'deny' | 'skip')[] = providerCapability?.actions.approvalDecisions
@@ -496,10 +498,13 @@ export function SessionWorkspace({
     let refs;
     try { refs = usableUploadRefs(attachments); }
     catch (cause) { setAttachments((current) => [...current, { localId: 'validation', kind: 'file', name: 'Attachment', mime: 'application/octet-stream', size: 0, phase: 'failed', error: cause instanceof Error ? cause.message : 'Attachment invalid.' }]); return; }
-    const selectedPermissionMode = permissionSelection && permissionSelection.key === permissionKey && permissionSelection.resolved
+    const requestedPermissionMode = permissionSelection && permissionSelection.key === permissionKey && permissionSelection.resolved
       ? permissionSelection.mode
       : defaultPermissionMode;
-    const result = await performAction(t('composer.send'), () => actions.send(instanceId, session.id, aiSessionMessageText(draft.trim()), session.agent === 'codex' ? selectedPermissionMode : undefined, refs, 'auto'));
+    const selectedPermissionMode = requestedPermissionMode && permissionModes.includes(requestedPermissionMode)
+      ? requestedPermissionMode
+      : permissionModes[0];
+    const result = await performAction(t('composer.send'), () => actions.send(instanceId, session.id, aiSessionMessageText(draft.trim()), selectedPermissionMode, refs, 'auto'));
     if (result.disposition === 'accepted') {
       setDraft('');
       latestDraft.current = '';
@@ -608,6 +613,7 @@ export function SessionWorkspace({
     setComposerFocused(focused);
   };
   const updatePermissionMode = (mode: AiSessionPermissionMode) => {
+    if (!permissionModes.includes(mode)) return;
     if (permissionKey) setPermissionSelection({ key: permissionKey, mode, resolved: true });
     if (sessionId && permissions) void permissions.write(controlPlaneId, instanceId, sessionId, mode).catch(() => undefined);
   };
@@ -790,8 +796,8 @@ export function SessionWorkspace({
           onFocusChange={setComposerFocus}
           onPermissionModeChange={updatePermissionMode}
           onValueChange={updateDraft}
-          permissionEnabled={session.agent === 'codex'}
           permissionMode={permissionMode}
+          permissionModes={permissionModes}
           modelGroups={modelGroups}
           modelSelection={session.modelSelection}
           modelSelectionBusy={modelSelectionState?.phase === 'busy'}

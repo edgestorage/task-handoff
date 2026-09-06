@@ -72,7 +72,7 @@ test("AI session canonical identity prefers provider threads over shared app bin
 
 test("AI session app binding reconciliation hides, expires, and restores orphans", () => {
   const service = new AiSessionReconciliationService();
-  const sessions = [session("bound", { appSessionId: "app-1" }), session("free")];
+  const sessions = [session("bound", { appSessionId: "app-1" }), session("free", { creationSource: "ai-session" })];
 
   const hidden = service.reconcileAppSessionBindings({
     sessions,
@@ -102,6 +102,22 @@ test("AI session app binding reconciliation hides, expires, and restores orphans
   });
   assert.deepEqual(present.visibleSessionIds, ["bound", "free"]);
   assert.deepEqual(present.hiddenSessionIds, []);
+});
+
+test("AI session app binding reconciliation removes legacy app-owned sessions without an App identity", () => {
+  const service = new AiSessionReconciliationService();
+  const result = service.reconcileAppSessionBindings({
+    sessions: [
+      session("unbound-app", { creationSource: "app-session", providerSessionId: "thread-old" }),
+      session("direct", { creationSource: "ai-session", providerSessionId: "thread-direct" }),
+    ],
+    appSessions: [],
+    now: 1_000,
+    orphanRetentionMs: 500,
+  });
+
+  assert.deepEqual(result.removeSessionIds, ["unbound-app"]);
+  assert.deepEqual(result.visibleSessionIds, ["direct"]);
 });
 
 test("AI session adapter reconciliation removes only unmatched identified sessions", () => {
