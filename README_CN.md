@@ -239,21 +239,11 @@ scripts/                          安装、构建和运行脚本
 
 ### Docker 镜像
 
-Docker 工作流使用独立的 `docker-vX.Y.Z` tag 发布，并构建、冒烟测试五种镜像配置：
-
-| 镜像 | Profile 能力 |
-| --- | --- |
-| `task-handoff-controlled-codex` | Terminal、Codex |
-| `task-handoff-controlled-opencode` | Terminal、OpenCode |
-| `task-handoff-controlled-ai` | Terminal、Codex、Claude |
-| `task-handoff-controlled-webcap` | GUI Terminal、Browser、WebCap、Codex、Claude |
-| `task-handoff-controlled-browser` | GUI Terminal、Browser、VS Code Web、Codex、Claude；不包含 WebCap |
-
-五者都是 Node Agent 受管 Docker 实例使用的基础镜像，本身不包含
-controlled-instance runtime。容器启动后，Node Agent 会把目标 runtime
-artifact 下载、校验并安装到实例 runtime volume。每次发布都会生成不可变的
-`docker-sha-<commit>` 标签。推送 `docker-v1.2.3` 形式的 Docker 版本标签时，
-对应镜像会提升为该标签；稳定 Docker 版本同时更新 `latest`。
+五个公开基础镜像及其独立的 `docker-vX.Y.Z` 发布流程由
+[TaskHandoff Images 仓库](https://github.com/edgestorage/task-handoff-images)
+维护。镜像只包含系统依赖和开发工具，不包含 controlled-instance runtime。
+Node Agent 继续作为权威所有者挂载 bootstrap bundle，并安装目标 runtime
+artifact。
 
 ### 桌面应用
 

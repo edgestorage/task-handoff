@@ -3,24 +3,16 @@ import crypto from "node:crypto";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import { z } from "zod";
 import {
   STORY_DEFAULT_MAX_FILE_BYTES,
   StoryContentGetInputSchema,
   StoryContentGetResultSchema,
+  StoryContentPageInputSchema,
   StoryContentSetInputSchema,
   StoryPathSchema,
 } from "@task-handoff/protocol/stories";
 import type { AiSessionStatus } from "@task-handoff/protocol/ai-sessions";
 import type { NodeAgentRegistrationClient } from "./node-agent-client.ts";
-
-const STORY_CONTENT_DEFAULT_PAGE_SIZE = 20;
-const STORY_CONTENT_MAX_PAGE_SIZE = 100;
-
-const StoryContentListToolInputSchema = z.object({
-  page: z.number().int().min(1).max(500).default(1),
-  pageSize: z.number().int().min(1).max(STORY_CONTENT_MAX_PAGE_SIZE).default(STORY_CONTENT_DEFAULT_PAGE_SIZE),
-}).strict();
 
 export const STORY_DYNAMIC_TOOLS = [
   {
@@ -31,7 +23,7 @@ export const STORY_DYNAMIC_TOOLS = [
       type: "object",
       properties: {
         page: { type: "integer", minimum: 1, maximum: 500, default: 1, description: "One-based page number." },
-        pageSize: { type: "integer", minimum: 1, maximum: STORY_CONTENT_MAX_PAGE_SIZE, default: STORY_CONTENT_DEFAULT_PAGE_SIZE, description: "Maximum documents to return per page." },
+        pageSize: { type: "integer", minimum: 1, maximum: 100, default: 20, description: "Maximum documents to return per page." },
       },
       additionalProperties: false,
     },
@@ -106,26 +98,15 @@ export class StoryAgentToolService {
     this.nodeAgent = nodeAgent;
   }
 
-  list(session: AiSessionStatus) {
+  list(session: AiSessionStatus, page = 1, pageSize = 20) {
     this.requireStory(session);
-    return this.nodeAgent.listStoryContent(session.id);
+    return this.nodeAgent.listStoryContent(session.id, page, pageSize);
   }
 
   async invoke(session: AiSessionStatus, tool: string, value: unknown) {
     if (tool === "story_list_content") {
-      const { page, pageSize } = StoryContentListToolInputSchema.parse(value ?? {});
-      const documents = [...await this.list(session)].reverse();
-      const offset = (page - 1) * pageSize;
-      return {
-        documents: documents.slice(offset, offset + pageSize),
-        pagination: {
-          page,
-          pageSize,
-          totalItems: documents.length,
-          totalPages: Math.ceil(documents.length / pageSize),
-          hasMore: offset + pageSize < documents.length,
-        },
-      };
+      const { page, pageSize } = StoryContentPageInputSchema.parse(value ?? {});
+      return this.list(session, page, pageSize);
     }
     if (tool === "story_get_content") return this.get(session, value);
     if (tool === "story_set_content") return this.set(session, value);

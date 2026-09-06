@@ -7,9 +7,10 @@ import {
   GitCredentialSshPrepareResponseSchema,
 } from "@task-handoff/protocol/managed-git-credentials";
 import {
-  StoryContentListSchema,
+  sanitizeStoryContentPageResult,
+  StoryContentPageResultSchema,
   StoryRevisionSchema,
-  type StoryDocument,
+  type StoryContentPageResult,
 } from "@task-handoff/protocol/stories";
 
 export type NodeAgentRegistrationConfig = {
@@ -145,13 +146,14 @@ export class NodeAgentRegistrationClient {
     );
   }
 
-  async listStoryContent(sessionId: string): Promise<StoryDocument[]> {
+  async listStoryContent(sessionId: string, page: number, pageSize: number): Promise<StoryContentPageResult> {
+    const query = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
     const result = await this.request(
-      `node-agent/instances/${encodeURIComponent(this.requiredInstanceId())}/ai-sessions/${encodeURIComponent(sessionId)}/story-content`,
+      `node-agent/instances/${encodeURIComponent(this.requiredInstanceId())}/ai-sessions/${encodeURIComponent(sessionId)}/story-content?${query}`,
       {},
       "GET",
     );
-    return StoryContentListSchema.parse(result).documents;
+    return StoryContentPageResultSchema.parse(sanitizeStoryContentPageResult(result));
   }
 
   async downloadStoryContent(sessionId: string, storyPath: string, signal?: AbortSignal) {

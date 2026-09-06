@@ -20,12 +20,6 @@ const identity = {
   sha256: "a".repeat(64),
 };
 
-test("managed image keeps the instance runtime payload root-owned", () => {
-  const dockerfile = fs.readFileSync(path.resolve(__dirname, "../Dockerfile"), "utf8");
-  assert.doesNotMatch(dockerfile, /chown[^\n]*agent[^\n]*instance-runtime/);
-  assert.match(dockerfile, /chmod 0755 \/opt\/task-handoff\/instance-runtime/);
-});
-
 test("Docker runtime install copies, installs through the root-owned updater, verifies payload, and restarts the same container", async () => {
   const calls = [];
   const executor = new LocalDockerExecutor(async (command, args) => {

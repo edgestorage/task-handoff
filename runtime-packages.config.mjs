@@ -102,7 +102,7 @@ export const runtimePackages = {
     bundledNativeDependencies: ["node-pty"],
     dependencies: runtimeDependencies(
       ["@task-handoff/control-plane"],
-      ["commander"],
+      ["commander", "drizzle-orm"],
       bundledControlPlaneDependencies,
     ),
   },

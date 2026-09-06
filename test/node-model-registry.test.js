@@ -137,9 +137,9 @@ test("node model registry uses immutable content hashes, private storage, and ha
   });
   assert.deepEqual(JSON.parse(assignedEnvironment.TASK_HANDOFF_OPENCODE_CONFIG_CONTENT), {
     $schema: "https://opencode.ai/config.json",
-    model: `task-handoff/${opencodeInput.model}`,
+    model: `task-handoff-${opencodeHash}/${opencodeInput.model}`,
     provider: {
-      "task-handoff": {
+      [`task-handoff-${opencodeHash}`]: {
         npm: "@ai-sdk/openai-compatible",
         name: "TaskHandoff",
         options: { baseURL: opencodeInput.endpoint, apiKey: opencodeInput.key },

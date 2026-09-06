@@ -1269,9 +1269,17 @@ export function dockerRunArgs(context: ExecutorContext, containerName: string, o
     }
   }
 
+  const imageRuntimeMetadata = {
+    ...(context.image.labels["task-handoff.image.profile"]
+      ? { TASK_HANDOFF_IMAGE_PROFILE: context.image.labels["task-handoff.image.profile"] }
+      : {}),
+    TASK_HANDOFF_IMAGE_CAPABILITIES: context.image.capabilities.join(","),
+  };
   for (const [key, value] of Object.entries(context.image.defaultEnv)) {
+    if (key in imageRuntimeMetadata) continue;
     appendDockerEnv(args, key, value);
   }
+  for (const [key, value] of Object.entries(imageRuntimeMetadata)) appendDockerEnv(args, key, value);
 
   args.push(
     options.imageReference || context.instance.environmentTemplateOrigin?.imageId || context.image.resolvedReference || context.image.requestedReference!,

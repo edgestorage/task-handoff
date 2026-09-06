@@ -188,6 +188,64 @@ test("controlled instance serializes concurrent heartbeat requests", async () =>
   assert.equal(heartbeatRequests, 2);
 });
 
+test("controlled instance requests and sanitizes paginated Story content", async () => {
+  const requests = [];
+  const client = new NodeAgentRegistrationClient(
+    {
+      controlMode: "controlled",
+      nodeAgentUrl: "http://node.local",
+      registrationToken: "secret-token",
+      instanceId: "inst_story",
+      heartbeatIntervalMs: 10_000,
+    },
+    async () => snapshot(),
+    async (url, init) => {
+      requests.push({ url, method: init.method });
+      return new Response(JSON.stringify({ data: {
+        storyCreatedAt: "2026-09-05T00:00:00.000Z",
+        documents: [{ title: "Document", storyPath: "document.md", revision: "ignored" }],
+        pagination: { page: 2, pageSize: 7, totalItems: 9, totalPages: 2, hasMore: false, cursor: "ignored" },
+        internal: "ignored",
+      } }), { status: 200, headers: { "content-type": "application/json" } });
+    },
+  );
+
+  const result = await client.listStoryContent("session / 1", 2, 7);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url, "http://node.local/api/node-agent/instances/inst_story/ai-sessions/session%20%2F%201/story-content?page=2&pageSize=7");
+  assert.equal(requests[0].method, "GET");
+  assert.deepEqual(result, {
+    storyCreatedAt: "2026-09-05T00:00:00.000Z",
+    documents: [{ title: "Document", storyPath: "document.md" }],
+    pagination: { page: 2, pageSize: 7, totalItems: 9, totalPages: 2, hasMore: false },
+  });
+});
+
+test("controlled instance does not fall back when Story pagination fails", async () => {
+  for (const outcome of [
+    () => new Response(JSON.stringify({ error: { code: "NODE_AGENT_UNAUTHORIZED", message: "unauthorized" } }), { status: 401, headers: { "content-type": "application/json" } }),
+    () => new Response(JSON.stringify({ error: { code: "STORY_SCOPE_INVALID", message: "wrong scope" } }), { status: 409, headers: { "content-type": "application/json" } }),
+    () => new Response(JSON.stringify({ error: { code: "STORY_STORAGE_FAILED", message: "storage failed" } }), { status: 500, headers: { "content-type": "application/json" } }),
+    () => new Response(JSON.stringify({ data: { documents: [], pagination: { page: 1, pageSize: 20, totalItems: 0, totalPages: 0, hasMore: false } } }), { status: 200, headers: { "content-type": "application/json" } }),
+    () => { throw Object.assign(new Error("timed out"), { name: "AbortError" }); },
+  ]) {
+    const requests = [];
+    const client = new NodeAgentRegistrationClient(
+      {
+        controlMode: "controlled",
+        nodeAgentUrl: "http://node.local",
+        registrationToken: "secret-token",
+        instanceId: "inst_story",
+        heartbeatIntervalMs: 10_000,
+      },
+      async () => snapshot(),
+      async (url) => { requests.push(url); return outcome(); },
+    );
+    await assert.rejects(() => client.listStoryContent("session_1", 1, 20));
+    assert.equal(requests.length, 1);
+  }
+});
+
 test("a missing heartbeat registration automatically returns to the register flow", async () => {
   const paths = [];
   let heartbeatCount = 0;

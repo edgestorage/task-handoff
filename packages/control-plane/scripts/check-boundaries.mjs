@@ -176,7 +176,7 @@ const controlPlaneFailed = checkGraph({
 const nodeAgentFailed = checkGraph({
   roots: typescriptFiles(nodeAgentRoot),
   isAllowedDependency: (filePath) => isWithin(nodeAgentRoot, filePath) || isWithin(sharedRoot, filePath),
-  forbiddenExternalDependencies: ["drizzle-orm", "pg"],
+  forbiddenExternalDependencies: ["pg", "better-sqlite3", "sqlite3", "node-gyp"],
   label: "node-agent modules must only import node-agent or shared modules",
 });
 const sharedFailed = checkGraph({

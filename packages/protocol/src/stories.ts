@@ -214,6 +214,45 @@ export const StoryContentListSchema = z.object({
   documents: z.array(StoryDocumentSchema).max(500),
 }).strict();
 
+const StoryContentPageIntegerSchema = z.union([
+  z.number(),
+  z.string().regex(/^\d+$/).transform(Number),
+]);
+
+export const StoryContentPageInputSchema = z.object({
+  page: StoryContentPageIntegerSchema.pipe(z.number().int().min(1).max(500)).default(1),
+  pageSize: StoryContentPageIntegerSchema.pipe(z.number().int().min(1).max(100)).default(20),
+}).strict();
+
+export const StoryContentIndexEntrySchema = z.object({
+  title: StoryDocumentSchema.shape.title,
+  storyPath: StoryPathSchema,
+}).strict();
+
+export const StoryContentPaginationSchema = z.object({
+  page: z.number().int().min(1).max(500),
+  pageSize: z.number().int().min(1).max(100),
+  totalItems: z.number().int().nonnegative(),
+  totalPages: z.number().int().nonnegative(),
+  hasMore: z.boolean(),
+}).strict();
+
+export const StoryContentPageResultSchema = z.object({
+  storyCreatedAt: StorySchema.shape.createdAt,
+  documents: z.array(StoryContentIndexEntrySchema).max(100),
+  pagination: StoryContentPaginationSchema,
+}).strict();
+
+const StoryContentPageConsumerSchema = z.object({
+  storyCreatedAt: StorySchema.shape.createdAt,
+  documents: z.array(StoryContentIndexEntrySchema.strip()).max(100),
+  pagination: StoryContentPaginationSchema.strip(),
+}).strip();
+
+export function sanitizeStoryContentPageResult(input: unknown) {
+  return StoryContentPageConsumerSchema.parse(input);
+}
+
 export const StoryContentPreviewSchema = z.object({
   storyPath: StoryPathSchema,
   revision: StoryRevisionSchema,
@@ -283,6 +322,9 @@ export type StorySessionPreset = z.infer<typeof StorySessionPresetSchema>;
 export type StoryCreateInput = z.infer<typeof StoryCreateInputSchema>;
 export type StoryDocument = z.infer<typeof StoryDocumentSchema>;
 export type StoryContentPreview = z.infer<typeof StoryContentPreviewSchema>;
+export type StoryContentIndexEntry = z.infer<typeof StoryContentIndexEntrySchema>;
+export type StoryContentPageInput = z.infer<typeof StoryContentPageInputSchema>;
+export type StoryContentPageResult = z.infer<typeof StoryContentPageResultSchema>;
 export type StoryUpdateInput = z.infer<typeof StoryUpdateInputSchema>;
 export type StoryChangedEvent = z.infer<typeof StoryChangedEventSchema>;
 export type StorySessionRetentionSettings = z.infer<typeof StorySessionRetentionSettingsSchema>;

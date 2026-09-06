@@ -131,6 +131,10 @@ test("legacy private registration fields migrate to the long-lived credential mo
 
 test("docker config uses a read-only private file and explicit managed mounts without secrets", () => {
   const local = context();
+  local.image.capabilities = ["terminal", "codex"];
+  local.image.labels["task-handoff.image.profile"] = "codex";
+  local.image.defaultEnv.TASK_HANDOFF_IMAGE_CAPABILITIES = "browser";
+  local.image.defaultEnv.TASK_HANDOFF_IMAGE_PROFILE = "browser";
   const args = dockerRunArgs(local, "task-handoff-inst_one");
   assert.ok(args.includes("type=bind,src=/private/inst_one.json,dst=/run/task-handoff/instance-private-config.json,readonly"));
   assert.ok(args.includes("type=volume,src=task-handoff-inst_one-data,dst=/data"));
@@ -140,6 +144,10 @@ test("docker config uses a read-only private file and explicit managed mounts wi
   assert.ok(args.includes("--no-healthcheck"));
   assert.ok(args.includes("/tmp:rw,nosuid,nodev,exec,mode=1777"));
   assert.ok(args.includes("/tmp/workspace:/workspace:rw"));
+  assert.ok(args.includes("TASK_HANDOFF_IMAGE_CAPABILITIES=terminal,codex"));
+  assert.ok(args.includes("TASK_HANDOFF_IMAGE_PROFILE=codex"));
+  assert.equal(args.includes("TASK_HANDOFF_IMAGE_CAPABILITIES=browser"), false);
+  assert.equal(args.includes("TASK_HANDOFF_IMAGE_PROFILE=browser"), false);
   assert.equal(args.some((value) => value.includes("registration-secret") || value.includes("model-secret")), false);
 
   const git = context({

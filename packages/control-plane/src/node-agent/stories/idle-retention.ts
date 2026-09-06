@@ -53,8 +53,7 @@ export class StoryIdleSessionRetentionCoordinator {
         if (!value || typeof value !== "object") continue;
         const candidate = value as Partial<IdleCandidate>;
         if (typeof candidate.sessionId !== "string" || typeof candidate.storyId !== "string" || candidate.status !== "idle") continue;
-        const story = this.stories.get(candidate.storyId);
-        if (!story) continue;
+        if (!await this.stories.exists(candidate.storyId)) continue;
         const key = `${instance.id}:${candidate.sessionId}`;
         observed.add(key);
         if (this.closed.has(key)) continue;
@@ -64,7 +63,7 @@ export class StoryIdleSessionRetentionCoordinator {
       }
     }
     for (const [storyId, candidates] of candidatesByStory) {
-      const limit = this.stories.retentionSettings(storyId).maxIdleAiSessions;
+      const limit = (await this.stories.retentionSettings(storyId)).maxIdleAiSessions;
       while (candidates.length > limit) {
         candidates.sort((a, b) => (timestamp(a.completedAt) - timestamp(b.completedAt)) || `${a.instance.id}:${a.sessionId}`.localeCompare(`${b.instance.id}:${b.sessionId}`));
         const target = candidates.shift()!;

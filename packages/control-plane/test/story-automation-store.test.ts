@@ -1,17 +1,17 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { nodeAgentStorePaths } from "../src/node-agent/persistence/paths.ts";
 import { StoryAutomationStore } from "../src/node-agent/stories/automation-store.ts";
+import { createStoryDatabaseFixture, seedStoryAction } from "./story-database-fixture.ts";
 
-function fixture() {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-story-automation-"));
+async function fixture() {
+  const databaseFixture = await createStoryDatabaseFixture("task-handoff-story-automation-");
+  await seedStoryAction(databaseFixture.repository);
   let tick = 0;
-  const store = new StoryAutomationStore(nodeAgentStorePaths(dataDir), () => new Date(Date.UTC(2026, 8, 5, 0, 0, tick++)));
-  store.init();
-  const automation = store.create({
+  const store = new StoryAutomationStore(databaseFixture.repository, () => new Date(Date.UTC(2026, 8, 5, 0, 0, tick++)));
+  await store.init();
+  const automation = await store.create({
     storyId: "story_1",
     actionId: "action_1",
     schedule: { scheduleKind: "interval", intervalMs: 60_000 },
@@ -32,52 +32,62 @@ function fixture() {
       cwd: "/workspace",
     },
   });
-  return { dataDir, store, automation, createRun };
+  return { ...databaseFixture, store, automation, createRun };
 }
 
-test("Story Automation store enforces one-way run transitions and immutable idempotency input", () => {
-  const { dataDir, store, automation, createRun } = fixture();
+test("Story Automation store enforces one-way run transitions and immutable idempotency input", async () => {
+  const { close, store, automation, createRun } = await fixture();
   try {
-    const run = createRun("execution_1");
-    assert.equal(createRun("execution_1").id, run.id);
-    const dispatching = store.transition(run.id, "dispatching");
-    const running = store.transition(dispatching.id, "running", { aiSessionId: "session_1" });
-    const completed = store.transition(running.id, "completed");
+    const run = await createRun("execution_1");
+    assert.equal((await createRun("execution_1")).id, run.id);
+    const dispatching = await store.transition(run.id, "dispatching");
+    const running = await store.transition(dispatching.id, "running", { aiSessionId: "session_1" });
+    const completed = await store.transition(running.id, "completed");
     assert.equal(completed.executionInput.prompt, "Keep {{literal}} unchanged");
-    assert.throws(() => store.transition(completed.id, "running"), (error: any) => error.code === "STORY_AUTOMATION_RUN_TRANSITION_INVALID");
-    assert.equal(store.runsFor(automation.id)[0]?.aiSessionId, "session_1");
-    assert.equal("executionInput" in store.runsFor(automation.id)[0]!, false);
+    await assert.rejects(() => store.transition(completed.id, "running"), (error: any) => error.code === "STORY_AUTOMATION_RUN_TRANSITION_INVALID");
+    assert.equal((await store.runsFor(automation.id))[0]?.aiSessionId, "session_1");
+    assert.equal("executionInput" in (await store.runsFor(automation.id))[0]!, false);
   } finally {
-    fs.rmSync(dataDir, { recursive: true, force: true });
+    await close();
   }
 });
 
-test("Story Automation store retains all active runs and only the newest 100 terminal runs", () => {
-  const { dataDir, store, automation, createRun } = fixture();
+test("Story Automation execution key remains idempotent under concurrent creation", async () => {
+  const { close, createRun } = await fixture();
   try {
-    const active = createRun("active");
+    const runs = await Promise.all(Array.from({ length: 8 }, () => createRun("execution_concurrent")));
+    assert.equal(new Set(runs.map((run) => run.id)).size, 1);
+  } finally {
+    await close();
+  }
+});
+
+test("Story Automation store retains all active runs and only the newest 100 terminal runs", async () => {
+  const { close, store, automation, createRun } = await fixture();
+  try {
+    const active = await createRun("active");
     for (let index = 0; index < 105; index += 1) {
-      const run = createRun(`terminal_${index}`);
-      store.transition(run.id, "skipped", { error: { code: "TEST", message: "test" } });
+      const run = await createRun(`terminal_${index}`);
+      await store.transition(run.id, "skipped", { error: { code: "TEST", message: "test" } });
     }
-    const runs = store.runsFor(automation.id);
+    const runs = await store.runsFor(automation.id);
     assert.equal(runs.filter((run) => run.status === "skipped").length, 100);
     assert.equal(runs.some((run) => run.id === active.id), true);
-    assert.throws(() => store.delete(automation.id), (error: any) => error.code === "STORY_AUTOMATION_RUN_ACTIVE");
+    await assert.rejects(() => store.delete(automation.id), (error: any) => error.code === "STORY_AUTOMATION_RUN_ACTIVE");
   } finally {
-    fs.rmSync(dataDir, { recursive: true, force: true });
+    await close();
   }
 });
 
-test("Story Automation store rejects unknown persisted fields", () => {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-story-automation-strict-"));
+test("Story Automation store ignores experimental JSON instead of importing it", async () => {
+  const fixture = await createStoryDatabaseFixture("task-handoff-story-automation-strict-");
   try {
-    const paths = nodeAgentStorePaths(dataDir);
-    fs.mkdirSync(paths.storyAutomationsDir, { recursive: true });
-    fs.writeFileSync(path.join(paths.storyAutomationsDir, "index.json"), JSON.stringify({ schemaVersion: 1, automations: [], runs: [], legacy: true }));
-    const store = new StoryAutomationStore(paths);
-    assert.throws(() => store.init());
+    fs.mkdirSync(fixture.paths.storyAutomationsDir, { recursive: true });
+    fs.writeFileSync(path.join(fixture.paths.storyAutomationsDir, "index.json"), JSON.stringify({ schemaVersion: 1, automations: [{ id: "legacy" }], runs: [] }));
+    const store = new StoryAutomationStore(fixture.repository);
+    await store.init();
+    assert.deepEqual(await store.list(), []);
   } finally {
-    fs.rmSync(dataDir, { recursive: true, force: true });
+    await fixture.close();
   }
 });

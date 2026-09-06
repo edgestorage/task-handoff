@@ -6,14 +6,27 @@ function document(index) {
   return {
     title: `Document ${index}`,
     storyPath: `document-${index}.md`,
-    revision: index.toString(16).padStart(64, "0"),
   };
 }
 
 function serviceWithDocuments(documents) {
   return new StoryAgentToolService({
     enabled: () => true,
-    listStoryContent: async () => documents,
+    listStoryContent: async (_sessionId, page, pageSize) => {
+      const newest = [...documents].reverse();
+      const offset = (page - 1) * pageSize;
+      return {
+        storyCreatedAt: "2026-09-05T00:00:00.000Z",
+        documents: newest.slice(offset, offset + pageSize),
+        pagination: {
+          page,
+          pageSize,
+          totalItems: newest.length,
+          totalPages: Math.ceil(newest.length / pageSize),
+          hasMore: offset + pageSize < newest.length,
+        },
+      };
+    },
   });
 }
 
@@ -35,6 +48,7 @@ test("story_list_content keeps the empty input compatible and returns the newest
 
   const result = await service.invoke(session, "story_list_content", {});
 
+  assert.equal(result.storyCreatedAt, "2026-09-05T00:00:00.000Z");
   assert.deepEqual(result.documents.map((item) => item.storyPath), Array.from({ length: 20 }, (_, index) => `document-${23 - index}.md`));
   assert.deepEqual(result.pagination, {
     page: 1,
