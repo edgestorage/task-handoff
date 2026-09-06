@@ -1,5 +1,5 @@
 import type { ControlPlaneClient } from '@task-handoff/control-plane-client';
-import type { ControlPlaneInstanceDirectoryEntry } from '@task-handoff/protocol/control-plane-directory';
+import { directoryAiSessionProviderCapability, type ControlPlaneInstanceDirectoryEntry } from '@task-handoff/protocol/control-plane-directory';
 import { AiAgentKindSchema, type AiSessionGitSelection, type AiSessionMessageAttachmentRef, type AiSessionModelSelection, type AiSessionPermissionMode, type AiSessionReasoningEffort, type AiSessionSendMode } from '@task-handoff/protocol/ai-sessions';
 import type { ValueStore } from '../platform/secure-storage';
 
@@ -23,6 +23,9 @@ export async function createMobileAiSession(client: ControlPlaneClient, input: {
   if (!input.instance.availableAgents.some((agent) => agent.id === input.agent)) throw lifecycleError('AGENT_UNAVAILABLE', 'The selected agent is unavailable. Install or repair it from the desktop app.');
   const agent = AiAgentKindSchema.safeParse(input.agent);
   if (!agent.success) throw lifecycleError('AGENT_UNSUPPORTED', 'The selected application does not provide an AI Session agent. Choose Codex or Claude.');
+  const permissionModes = directoryAiSessionProviderCapability(input.instance.capabilities, agent.data)?.permissionModes || [];
+  const requestedPermissionMode = input.permissionMode ?? input.instance.config.defaultCodexPermissionMode;
+  const permissionMode = permissionModes.includes(requestedPermissionMode) ? requestedPermissionMode : undefined;
   return client.aiSessions.create(input.instance.id, {
     agent: agent.data,
     ...(input.cwdFolderId ? { cwdFolderId: input.cwdFolderId } : {}),
@@ -30,7 +33,7 @@ export async function createMobileAiSession(client: ControlPlaneClient, input: {
     clientRequestId: input.clientRequestId,
     message: input.message,
     mode: input.mode ?? 'auto',
-    permissionMode: agent.data === 'codex' ? input.permissionMode ?? input.instance.config.defaultCodexPermissionMode : undefined,
+    permissionMode,
     modelSelection: input.modelSelection,
     reasoningEffort: input.reasoningEffort,
     attachments: input.attachments ?? [],

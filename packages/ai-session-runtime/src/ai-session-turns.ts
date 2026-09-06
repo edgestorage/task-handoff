@@ -394,18 +394,33 @@ export function updateTurns(
       if (activeTurnId && promptTurn.id !== activeTurnId) {
         promptTurn.id = activeTurnId;
       }
-      promptTurn.userPrompt = prompt;
-      promptTurn.updatedAt = updatedAt;
-      promptTurn.status = turnStatusFromSessionStatus(patch.status);
-      promptTurn.phase = (patch.phase as AiSessionPhase | undefined) || promptTurn.phase || "thinking";
-      Object.assign(promptTurn, meta);
-      promptTurn.revision += 1;
+      const nextStatus = turnStatusFromSessionStatus(patch.status);
+      const nextPhase = (patch.phase as AiSessionPhase | undefined) || promptTurn.phase || "thinking";
+      const changed = promptTurn.userPrompt !== prompt
+        || promptTurn.status !== nextStatus
+        || promptTurn.phase !== nextPhase
+        || Object.entries(meta).some(([key, value]) => promptTurn[key as keyof typeof promptTurn] !== value);
+      if (changed) {
+        promptTurn.userPrompt = prompt;
+        promptTurn.updatedAt = updatedAt;
+        promptTurn.status = nextStatus;
+        promptTurn.phase = nextPhase;
+        Object.assign(promptTurn, meta);
+        promptTurn.revision += 1;
+      }
     } else if (last && !last.lastMessage && !last.summary && last.userPrompt === prompt) {
-      last.updatedAt = updatedAt;
-      last.status = turnStatusFromSessionStatus(patch.status);
-      last.phase = (patch.phase as AiSessionPhase | undefined) || last.phase || "thinking";
-      Object.assign(last, meta);
-      last.revision += 1;
+      const nextStatus = turnStatusFromSessionStatus(patch.status);
+      const nextPhase = (patch.phase as AiSessionPhase | undefined) || last.phase || "thinking";
+      const changed = last.status !== nextStatus
+        || last.phase !== nextPhase
+        || Object.entries(meta).some(([key, value]) => last[key as keyof typeof last] !== value);
+      if (changed) {
+        last.updatedAt = updatedAt;
+        last.status = nextStatus;
+        last.phase = nextPhase;
+        Object.assign(last, meta);
+        last.revision += 1;
+      }
     } else if (!promptAlreadyRepresented) {
       turns.push({
         id: activeTurnId || stableGeneratedTurnId(prompt, updatedAt),

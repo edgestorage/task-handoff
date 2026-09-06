@@ -38,15 +38,16 @@ import type { SessionComposerProps } from './session-composer-types';
 export function SessionComposer(props: SessionComposerProps) {
   const { colors, dark } = useMobileTheme();
   const { t } = useI18n();
-  const permissionDanger = props.permissionMode === 'full-access';
   const attachmentDisabled = props.actionBusy || props.imageDisabled && props.fileDisabled && props.runtimeFileDisabled;
-  const PermissionIcon = props.permissionMode === 'ask' ? Hand : props.permissionMode === 'auto-review' ? ShieldCheck : ShieldAlert;
-  const currentPermissionLabel = permissionLabel(props.permissionMode, t);
-  const permissionOptions: PermissionOption[] = [
+  const permissionOptions: PermissionOption[] = ([
     { value: 'ask', label: t('composer.ask'), description: t('composer.askDescription'), systemImage: 'hand.raised' },
     { value: 'auto-review', label: t('composer.autoReview'), description: t('composer.autoReviewDescription'), systemImage: 'checkmark.shield' },
     { value: 'full-access', label: t('composer.fullAccess'), description: t('composer.fullAccessDescription'), systemImage: 'exclamationmark.shield', danger: true },
-  ];
+  ] satisfies PermissionOption[]).filter((option) => props.permissionModes.includes(option.value));
+  const effectivePermissionMode = permissionOptions.find((option) => option.value === props.permissionMode)?.value || permissionOptions[0]?.value || props.permissionMode;
+  const permissionDanger = effectivePermissionMode === 'full-access';
+  const PermissionIcon = effectivePermissionMode === 'ask' ? Hand : effectivePermissionMode === 'auto-review' ? ShieldCheck : ShieldAlert;
+  const currentPermissionLabel = permissionLabel(effectivePermissionMode, t);
   const modelGroups = props.modelGroups || [];
   const modelControlsVisible = Boolean(modelGroups.length || props.reasoningEffortEnabled);
   const [permissionLabelMeasurement, setPermissionLabelMeasurement] = useState<{ label: string; width: number }>();
@@ -80,7 +81,7 @@ export function SessionComposer(props: SessionComposerProps) {
   };
   const measuredPermissionWidth = permissionLabelMeasurement?.label === currentPermissionLabel
     ? Math.ceil(permissionLabelMeasurement.width) + SESSION_COMPOSER_PERMISSION_WIDTH_OVERHEAD
-    : estimatedPermissionWidth(props.permissionMode);
+    : estimatedPermissionWidth(effectivePermissionMode);
   const permissionWidth = expansion.interpolate({ inputRange: [0, 1], outputRange: [36, measuredPermissionWidth] });
   const permissionTextOpacity = expansion.interpolate({ inputRange: [0, 0.35, 1], outputRange: [0, 0, 1] });
   return (
@@ -124,7 +125,7 @@ export function SessionComposer(props: SessionComposerProps) {
           placeholder={t('composer.placeholder')}
           placeholderTextColor={colors.textPlaceholder}
           scrollEnabled={props.focused}
-          style={[styles.input, props.focused ? styles.inputFocused : [styles.inputCollapsed, { right: sessionComposerCollapsedInputRight(modelControlsVisible) }], !props.focused && !props.permissionEnabled && styles.inputCollapsedWithoutPermission, { color: colors.text }]}
+          style={[styles.input, props.focused ? styles.inputFocused : [styles.inputCollapsed, { right: sessionComposerCollapsedInputRight(modelControlsVisible) }], !props.focused && !permissionOptions.length && styles.inputCollapsedWithoutPermission, { color: colors.text }]}
           textAlignVertical={props.focused ? 'top' : 'center'}
           testID="session-message-input"
           value={props.value}
@@ -163,18 +164,18 @@ export function SessionComposer(props: SessionComposerProps) {
               <Plus color={colors.textMuted} size={SESSION_COMPOSER_ATTACHMENT_ICON_SIZE} strokeWidth={1.9} />
             </Pressable>}
           </AttachmentMenu>
-          {props.permissionEnabled ? <Animated.View style={[styles.permissionButtonFrame, { width: permissionWidth }]} testID="session-permission-button-frame">
+          {permissionOptions.length ? <Animated.View style={[styles.permissionButtonFrame, { width: permissionWidth }]} testID="session-permission-button-frame">
             <PermissionMenu
               cancelLabel={t('common.cancel')}
               disabled={props.actionBusy}
-              mode={props.permissionMode}
+              mode={effectivePermissionMode}
               onChange={props.onPermissionModeChange}
               options={permissionOptions}
               title={t('composer.permissionMode')}
             >
               {(onPress) => <Animated.View style={[styles.permissionMenuTriggerFrame, { width: permissionWidth }]} testID="session-permission-menu-trigger-frame">
                 <Pressable
-                  accessibilityLabel={t('composer.permissionModeValue', { mode: permissionLabel(props.permissionMode, t) })}
+                  accessibilityLabel={t('composer.permissionModeValue', { mode: currentPermissionLabel })}
                   accessibilityRole="button"
                   accessibilityState={{ disabled: props.actionBusy }}
                   disabled={props.actionBusy}
@@ -182,7 +183,7 @@ export function SessionComposer(props: SessionComposerProps) {
                   style={({ pressed }) => [styles.permissionButton, props.actionBusy && styles.disabled, pressed && { backgroundColor: colors.surfaceMuted }]}
                 >
                   <View style={styles.permissionIconSlot}>
-                    <PermissionIcon color={permissionDanger ? colors.error : colors.textMuted} size={sessionComposerPermissionIconSize(props.permissionMode)} strokeWidth={1.8} />
+                    <PermissionIcon color={permissionDanger ? colors.error : colors.textMuted} size={sessionComposerPermissionIconSize(effectivePermissionMode)} strokeWidth={1.8} />
                   </View>
                   <Animated.Text numberOfLines={1} style={[styles.permissionText, { color: permissionDanger ? colors.error : colors.textMuted, opacity: permissionTextOpacity }]}>
                     {currentPermissionLabel}
@@ -194,7 +195,7 @@ export function SessionComposer(props: SessionComposerProps) {
               </Animated.View>}
             </PermissionMenu>
           </Animated.View> : null}
-          {props.permissionEnabled ? <Text
+          {permissionOptions.length ? <Text
             accessibilityElementsHidden
             importantForAccessibility="no-hide-descendants"
             onLayout={(event) => setPermissionLabelMeasurement({ label: currentPermissionLabel, width: event.nativeEvent.layout.width })}

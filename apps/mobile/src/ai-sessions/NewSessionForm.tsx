@@ -160,7 +160,7 @@ export function NewSessionForm(props: NewSessionFormProps) {
                 <Plus color={colors.textMuted} size={SESSION_COMPOSER_ATTACHMENT_ICON_SIZE} strokeWidth={1.9} />
               </Pressable>}
             </AttachmentMenu>
-            {props.selectedAgent === 'codex' ? <PermissionButton disabled={props.busy} mode={props.permissionMode} onChange={props.onPermissionModeChange} /> : null}
+            {props.permissionModes?.length ? <PermissionButton disabled={props.busy} mode={props.permissionMode} modes={props.permissionModes} onChange={props.onPermissionModeChange} /> : null}
           </View>
           <View style={styles.trailingTools}>
             {modelGroups.length || props.reasoningEffortEnabled ? <ModelSettingsMenu provider={props.selectedAgent} cancelLabel={t('common.cancel')} disabled={props.busy} formatModelGroupSummary={(model, count) => t('sessions.modelGroupSummary', { model, count })} modelGroups={modelGroups} modelSelection={props.modelSelection} onModelChange={(selection) => props.onModelSelectionChange?.(selection)} onReasoningChange={(effort) => props.onReasoningEffortChange?.(effort)} reasoningEffort={props.reasoningEffort} reasoningEnabled={Boolean(props.reasoningEffortEnabled)} reasoningTitle={t('sessions.reasoningEffort')} title={t('sessions.model')}>
@@ -191,20 +191,22 @@ export function newSessionInstanceOptions(instances: readonly ControlPlaneInstan
   return instanceSelectOptions(instances, nodes);
 }
 
-function PermissionButton({ disabled, mode, onChange }: { disabled?: boolean; mode: NewSessionFormProps['permissionMode']; onChange(value: NewSessionFormProps['permissionMode']): void }) {
+function PermissionButton({ disabled, mode, modes, onChange }: { disabled?: boolean; mode: NewSessionFormProps['permissionMode']; modes: NonNullable<NewSessionFormProps['permissionModes']>; onChange(value: NewSessionFormProps['permissionMode']): void }) {
   const { colors } = useMobileTheme();
   const { t } = useI18n();
-  const options: AnchoredSelectOption<NewSessionFormProps['permissionMode']>[] = [
+  const allOptions: AnchoredSelectOption<NewSessionFormProps['permissionMode']>[] = [
     { value: 'ask', label: t('composer.ask'), description: t('composer.askDescription'), systemImage: 'hand.raised' },
     { value: 'auto-review', label: t('composer.autoReview'), description: t('composer.autoReviewDescription'), systemImage: 'checkmark.shield' },
     { value: 'full-access', label: t('composer.fullAccess'), description: t('composer.fullAccessDescription'), systemImage: 'exclamationmark.shield', danger: true },
   ];
+  const options = allOptions.filter((option) => modes.includes(option.value));
   const selected = options.find((option) => option.value === mode) || options[0];
-  const PermissionIcon = mode === 'ask' ? Hand : mode === 'auto-review' ? ShieldCheck : ShieldAlert;
-  return <AnchoredSelectMenu cancelLabel={t('common.cancel')} disabled={disabled} onSelect={onChange} options={options} selectedValue={mode} title={t('sessions.permission')}>
+  const selectedMode = selected.value;
+  const PermissionIcon = selectedMode === 'ask' ? Hand : selectedMode === 'auto-review' ? ShieldCheck : ShieldAlert;
+  return <AnchoredSelectMenu cancelLabel={t('common.cancel')} disabled={disabled} onSelect={onChange} options={options} selectedValue={selectedMode} title={t('sessions.permission')}>
     {(onPress) => <Pressable accessibilityLabel={t('composer.permissionModeValue', { mode: selected.label })} accessibilityRole="button" accessibilityState={{ disabled: Boolean(disabled) }} disabled={disabled} onPress={onPress} style={({ pressed }) => [styles.permissionButton, disabled && styles.disabled, pressed && styles.pressed]} testID="new-session-permission-button">
       <View style={styles.permissionIconSlot}>
-        <PermissionIcon color={selected.danger ? colors.error : colors.textMuted} size={sessionComposerPermissionIconSize(mode)} strokeWidth={1.8} />
+        <PermissionIcon color={selected.danger ? colors.error : colors.textMuted} size={sessionComposerPermissionIconSize(selectedMode)} strokeWidth={1.8} />
       </View>
       <Text style={[styles.permissionLabel, { color: selected.danger ? colors.error : colors.textMuted }]}>{selected.label}</Text>
       <View style={styles.permissionChevron}>

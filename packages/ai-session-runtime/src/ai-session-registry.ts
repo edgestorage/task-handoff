@@ -776,18 +776,20 @@ export class AiSessionRegistry {
     return this.snapshotFromSessions(sessions);
   }
 
-  boundSnapshot(appSessions: AppSessionPresenceCandidate[] = [], limit = DEFAULT_AI_SESSION_SNAPSHOT_LIMIT): AiSessionsSnapshot {
+  boundSessions(appSessions: AppSessionPresenceCandidate[] = []) {
     const appSessionIds = new Set(
       appSessions
         .filter((session) => typeof session.status !== "string" || session.status === "running")
         .map((session) => (typeof session.id === "string" ? session.id.trim() : ""))
         .filter(Boolean),
     );
-    const sessions = this.list()
-      .filter((session) => session.appSessionId
+    return this.list().filter((session) => session.appSessionId
         ? appSessionIds.has(session.appSessionId)
-        : session.creationSource === "ai-session" && Boolean(session.providerSessionId))
-      .slice(0, limit);
+        : session.creationSource === "ai-session" && Boolean(session.providerSessionId));
+  }
+
+  boundSnapshot(appSessions: AppSessionPresenceCandidate[] = [], limit = DEFAULT_AI_SESSION_SNAPSHOT_LIMIT): AiSessionsSnapshot {
+    const sessions = this.boundSessions(appSessions).slice(0, limit);
     return this.snapshotFromSessions(sessions);
   }
 

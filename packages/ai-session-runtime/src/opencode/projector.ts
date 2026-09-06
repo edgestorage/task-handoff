@@ -19,8 +19,13 @@ import type {
 export type OpenCodeProjection = {
   snapshot: Omit<AiSessionSnapshotInput, "type" | "source">;
   timeline: AiSessionTimelineItem[];
-  turnByMessageId: Map<string, string>;
+  messageById: Map<string, OpenCodeMessageIdentity>;
   pendingPermission?: OpenCodePermission;
+};
+
+export type OpenCodeMessageIdentity = {
+  turnId: string;
+  role: "user" | "assistant";
 };
 
 export function projectOpenCodeSession(input: {
@@ -33,7 +38,7 @@ export function projectOpenCodeSession(input: {
   const messages = [...input.messages].sort((left, right) => left.info.time.created - right.info.time.created);
   const permissions = input.permissions.filter((permission) => permission.sessionID === input.session.id);
   const pendingPermission = permissions.at(-1);
-  const turnByMessageId = new Map<string, string>();
+  const messageById = new Map<string, OpenCodeMessageIdentity>();
   const timeline: AiSessionTimelineItem[] = [];
   const turns: AiSessionTurn[] = [];
   const userMessages = messages.filter((message) => message.info.role === "user");
@@ -49,8 +54,8 @@ export function projectOpenCodeSession(input: {
   for (const message of userMessages) {
     const turnId = message.info.id;
     const assistants = assistantsByParent.get(turnId) || [];
-    turnByMessageId.set(message.info.id, turnId);
-    for (const assistant of assistants) turnByMessageId.set(assistant.info.id, turnId);
+    messageById.set(message.info.id, { turnId, role: "user" });
+    for (const assistant of assistants) messageById.set(assistant.info.id, { turnId, role: "assistant" });
     const userText = textParts(message.parts).join("\n").trim();
     const attachments = conversationAttachments(message.parts);
     const assistantTextParts = assistants.flatMap((assistant) => assistant.parts.filter(isTextPart));
@@ -135,7 +140,7 @@ export function projectOpenCodeSession(input: {
       replaceActivity: true,
     },
     timeline,
-    turnByMessageId,
+    messageById,
     pendingPermission,
   };
 }
@@ -175,10 +180,10 @@ export function projectOpenCodePart(part: OpenCodePart, turnId: string): AiSessi
   return undefined;
 }
 
-export function openCodePartDelta(event: { partID: string; messageID: string; field: string; delta: string }, turnByMessageId: Map<string, string>) {
+export function openCodePartDelta(event: { partID: string; messageID: string; field: string; delta: string }, messageById: Map<string, OpenCodeMessageIdentity>) {
   if (event.field !== "text" || !event.delta) return undefined;
-  const turnId = turnByMessageId.get(event.messageID);
-  return turnId ? { itemId: event.partID, turnId, delta: event.delta } : undefined;
+  const message = messageById.get(event.messageID);
+  return message?.role === "assistant" ? { itemId: event.partID, turnId: message.turnId, delta: event.delta } : undefined;
 }
 
 function projectLifecycle(status: OpenCodeSessionStatus | undefined, permission: OpenCodePermission | undefined, error?: string): AiSessionLifecycle {

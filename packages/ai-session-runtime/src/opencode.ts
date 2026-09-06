@@ -14,7 +14,7 @@ import {
 import type { AiSessionModelSelection, AiSessionReasoningEffort } from "@task-handoff/protocol/ai-sessions";
 import type { AiSessionDiscoveryContext, AiSessionDiscoveryProvider } from "./ai-session-discovery";
 import type { AiSessionRegistry } from "./ai-session-registry";
-import { OpenCodeClient, type OpenCodeConnection, type OpenCodePromptPart } from "./opencode/client";
+import { OpenCodeClient, type OpenCodeConnection, type OpenCodePermissionRule, type OpenCodePromptPart } from "./opencode/client";
 import { openCodePartDelta, projectOpenCodePart, projectOpenCodeSession, type OpenCodeProjection } from "./opencode/projector";
 import type { OpenCodeGlobalEvent, OpenCodeMessage, OpenCodeSession } from "./opencode/wire";
 
@@ -42,6 +42,7 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
   private readonly reconcileTimers = new Map<string, NodeJS.Timeout>();
   private eventAbort?: AbortController;
   private reconnectTimer?: NodeJS.Timeout;
+  private discoveryRefresh?: Promise<void>;
   private reconnectAttempt = 0;
   private closed = false;
   private readonly warnedVersions = new Set<string>();
@@ -60,6 +61,17 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
   }
 
   async refresh(_context: AiSessionDiscoveryContext) {
+    if (this.discoveryRefresh) return this.discoveryRefresh;
+    const refresh = this.refreshAllSessions();
+    this.discoveryRefresh = refresh;
+    try {
+      await refresh;
+    } finally {
+      if (this.discoveryRefresh === refresh) this.discoveryRefresh = undefined;
+    }
+  }
+
+  private async refreshAllSessions() {
     await this.ensureReady();
     const roots = (await this.options.workspaceRoots()).map((root) => path.resolve(root));
     const activeSessionIds = new Set<string>();
@@ -94,7 +106,7 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
     await this.ensureReady();
     const model = input.modelSelection ? this.modelRef(input.modelSelection, input.reasoningEffort) : undefined;
     if (input.modelSelection && !model) throw aiSessionControlError("AI_SESSION_MODEL_SELECTION_INVALID", "OpenCode model selection is unavailable.", 409);
-    const created = await this.client.createSession(input.cwd, model);
+    const created = await this.client.createSession(input.cwd, model, openCodePermissionRules(input.permissionMode));
     await this.reconcile(created.id, created.directory, created, "ai-session");
     return { providerSessionId: created.id, cwd: created.directory, creationSource: "ai-session" as const, modelSelection: input.modelSelection, reasoningEffort: input.reasoningEffort };
   }
@@ -182,6 +194,7 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
       throw aiSessionControlError("AI_SESSION_SEND_INVALID", "OpenCode session, cwd, and message identity are required.", 409);
     }
     const parts = await promptParts(session.cwd, input);
+    if (input.permissionMode) await this.client.setPermission(session.providerSessionId, session.cwd, openCodePermissionRules(input.permissionMode));
     const pending = this.pendingSettingsBySession.get(session.providerSessionId);
     const selection = pending?.modelSelection || session.modelSelection;
     const model = selection ? this.modelRef(selection, pending?.reasoningEffort || session.reasoningEffort) : undefined;
@@ -237,7 +250,7 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
 
   async timeline(session: AiSessionStatus) {
     if (!session.providerSessionId || !session.cwd) throw aiSessionControlError("AI_SESSION_NOT_FOUND", "OpenCode session identity is missing.", 404);
-    await this.reconcile(session.providerSessionId, session.cwd);
+    await this.refreshProjection(session.providerSessionId, session.cwd);
     return {
       sessionId: session.id,
       providerSessionId: session.providerSessionId,
@@ -269,6 +282,17 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
   }
 
   private async reconcile(providerSessionId: string, directory: string, supplied?: OpenCodeSession, creationSource?: "ai-session" | "app-session") {
+    const projection = await this.refreshProjection(providerSessionId, directory, supplied);
+    const existing = this.registry.getByProviderSessionId(this.agent, providerSessionId);
+    return this.registry.applyAdapterSnapshot({
+      ...projection.snapshot,
+      lineage: this.lineageBySession.get(providerSessionId) || projection.snapshot.lineage,
+      creationSource: existing?.creationSource || creationSource || "ai-session",
+      source: "adapter-snapshot",
+    });
+  }
+
+  private async refreshProjection(providerSessionId: string, directory: string, supplied?: OpenCodeSession) {
     const [session, statuses, messages, permissions] = await Promise.all([
       supplied || this.client.getSession(providerSessionId, directory),
       this.client.status(directory),
@@ -288,13 +312,7 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
       }
     }
     this.projectionBySession.set(providerSessionId, projection);
-    const existing = this.registry.getByProviderSessionId(this.agent, providerSessionId);
-    return this.registry.applyAdapterSnapshot({
-      ...projection.snapshot,
-      lineage: this.lineageBySession.get(providerSessionId) || projection.snapshot.lineage,
-      creationSource: existing?.creationSource || creationSource || "ai-session",
-      source: "adapter-snapshot",
-    });
+    return projection;
   }
 
   private async resolveDirectory(providerSessionId: string) {
@@ -342,13 +360,19 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
   private async onGlobalEvent(event: OpenCodeGlobalEvent) {
     this.reconnectAttempt = 0;
     if (event.payload.type === "server.connected" || event.payload.type === "sync") {
-      await this.reconcileTracked();
+      // The SSE stream has no replay cursor. A session created while this
+      // connection was down would not be in directoryBySession, so reconnect
+      // must perform discovery rather than only refreshing known sessions.
+      await this.refresh({ registry: this.registry, appSessions: [] });
       return;
     }
     const properties = event.payload.properties;
+    const info = asRecord(properties.info);
+    const part = asRecord(properties.part);
     const sessionID = stringValue(properties.sessionID)
-      || stringValue(asRecord(properties.info).id)
-      || stringValue(asRecord(properties.part).sessionID);
+      || stringValue(info.sessionID)
+      || stringValue(part.sessionID)
+      || (event.payload.type.startsWith("session.") ? stringValue(info.id) : "");
     if (!sessionID) return;
     if (event.payload.type === "session.deleted") {
       this.discardSession(sessionID);
@@ -368,23 +392,34 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
       return;
     }
     this.directoryBySession.set(sessionID, directory);
+    if (event.payload.type === "message.updated") {
+      const messageID = stringValue(info.id);
+      const role = stringValue(info.role);
+      const projection = this.projectionBySession.get(sessionID);
+      if (messageID && projection && role === "user") {
+        projection.messageById.set(messageID, { turnId: messageID, role });
+      } else if (messageID && projection && role === "assistant") {
+        const parentID = stringValue(info.parentID);
+        const parent = parentID ? projection.messageById.get(parentID) : undefined;
+        if (parent) projection.messageById.set(messageID, { turnId: parent.turnId, role });
+      }
+    }
     if (event.payload.type === "message.part.delta") {
       const delta = openCodePartDelta({
         partID: stringValue(properties.partID) || "",
         messageID: stringValue(properties.messageID) || "",
         field: stringValue(properties.field) || "",
         delta: stringValue(properties.delta) || "",
-      }, this.projectionBySession.get(sessionID)?.turnByMessageId || new Map());
+      }, this.projectionBySession.get(sessionID)?.messageById || new Map());
       const projected = this.registry.getByProviderSessionId(this.agent, sessionID);
       if (delta && projected) this.options.onMessageDelta?.({ sessionId: projected.id, providerSessionId: sessionID, ...delta });
     }
     if (event.payload.type === "message.part.updated") {
-      const part = asRecord(properties.part);
       const messageID = stringValue(part.messageID);
-      const turnId = messageID ? this.projectionBySession.get(sessionID)?.turnByMessageId.get(messageID) : undefined;
+      const message = messageID ? this.projectionBySession.get(sessionID)?.messageById.get(messageID) : undefined;
       const projectedSession = this.registry.getByProviderSessionId(this.agent, sessionID);
-      if (turnId && projectedSession) {
-        const item = projectOpenCodePart(part as never, turnId);
+      if (message?.role === "assistant" && projectedSession) {
+        const item = projectOpenCodePart(part as never, message.turnId);
         if (item) this.publishTimelineItem(projectedSession.id, sessionID, item);
       }
     }
@@ -405,16 +440,6 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
 
   private publishTimelineItem(sessionId: string, providerSessionId: string, item: AiSessionTimelineItem) {
     for (const listener of this.timelineListeners) listener({ sessionId, providerSessionId, item });
-  }
-
-  private async reconcileTracked() {
-    await Promise.all([...this.directoryBySession.entries()].map(async ([sessionID, directory]) => {
-      try {
-        await this.reconcile(sessionID, directory);
-      } catch (error) {
-        this.options.onDiagnostic?.({ code: "OPENCODE_RECONCILE_FAILED", providerSessionId: sessionID, error: errorText(error) });
-      }
-    }));
   }
 
   private forget(providerSessionId: string) {
@@ -453,6 +478,18 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
       }
     }
   }
+}
+
+function openCodePermissionRules(mode?: import("@task-handoff/protocol/ai-sessions").AiSessionPermissionMode): OpenCodePermissionRule[] | undefined {
+  if (!mode) return undefined;
+  if (mode === "full-access") return [{ permission: "*", pattern: "*", action: "allow" }];
+  if (mode === "auto-review") return [
+    { permission: "*", pattern: "*", action: "ask" },
+    { permission: "read", pattern: "*", action: "allow" },
+    { permission: "grep", pattern: "*", action: "allow" },
+    { permission: "glob", pattern: "*", action: "allow" },
+  ];
+  return [{ permission: "*", pattern: "*", action: "ask" }];
 }
 
 const VERIFIED_OPENCODE_VERSIONS = new Set(["1.18.20", "1.18.21"]);

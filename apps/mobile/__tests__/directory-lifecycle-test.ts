@@ -15,6 +15,7 @@ const instance = {
   ...ControlPlaneInstanceDirectoryEntrySchema.parse({
   id: 'instance-1', name: 'Instance', nodeId: 'node-1', status: 'running', health: 'ok', connectionStatus: 'online', ready: true,
   config: { defaultCodexPermissionMode: 'full-access' },
+  capabilities: { aiSessionProviders: [{ agent: 'codex', actions: {}, permissionModes: ['ask', 'auto-review', 'full-access'], timeline: {} }] },
   observedAt: '2026-08-05T00:00:00.000Z', runtime: { id: 'runtime-1', name: 'Docker', type: 'docker' }, workspace: { status: 'ready', path: '/workspace' },
   protocol: { version: '2026-08-01', compatible: true }, aiSessions: { runningCount: 0, waitingCount: 0, staleCount: 0, idleCount: 0, problemCount: 0, updatedAt: '2026-08-05T00:00:00.000Z' },
   availableAgents: [{ id: 'codex', name: 'Codex', kind: 'tty', supportsCwdSelection: true }],
@@ -89,6 +90,18 @@ test('create forwards the selected permission mode', async () => {
   const api = { aiSessions: { create } } as unknown as ControlPlaneClient;
   await createMobileAiSession(api, { instance, agent: 'codex', cwdFolderId: 'folder-1', message: 'Build it', permissionMode: 'auto-review', clientRequestId: 'mobile-request-1' });
   expect(create.mock.calls[0][1].permissionMode).toBe('auto-review');
+});
+
+test('OpenCode creation forwards an advertised full-access permission mode', async () => {
+  const create = jest.fn().mockResolvedValue({ disposition: 'created', aiSessionId: 'session-1', providerSessionId: 'provider-1', creationSource: 'ai-session' });
+  const api = { aiSessions: { create } } as unknown as ControlPlaneClient;
+  const opencodeInstance = ControlPlaneInstanceDirectoryEntrySchema.parse({
+    ...instance,
+    availableAgents: [...instance.availableAgents, { id: 'opencode', name: 'OpenCode', kind: 'tty' as const, supportsCwdSelection: true }],
+    capabilities: { aiSessionProviders: [{ agent: 'opencode', actions: {}, permissionModes: ['ask', 'auto-review', 'full-access'], timeline: {} }] },
+  });
+  await createMobileAiSession(api, { instance: opencodeInstance, agent: 'opencode', message: 'Build it', permissionMode: 'full-access', clientRequestId: 'mobile-opencode-request-1' });
+  expect(create.mock.calls[0][1].permissionMode).toBe('full-access');
 });
 
 test('create forwards a preset action send mode', async () => {

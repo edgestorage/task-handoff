@@ -114,6 +114,13 @@ export class AiSessionReconciliationService {
     const orphanStateChanges: AiSessionOrphanStateChange[] = [];
 
     for (const session of input.sessions) {
+      // Compatibility for v0.0.28: discovery could persist app-owned sessions
+      // without the App identity required to reconcile their lifecycle.
+      if (session.creationSource === "app-session" && !session.appSessionId) {
+        removeSessionIds.push(session.id);
+        this.recordOrphanClear(session.id, orphanStateChanges);
+        continue;
+      }
       if (!session.appSessionId || appSessionIds.has(session.appSessionId)) {
         this.recordOrphanClear(session.id, orphanStateChanges);
         continue;

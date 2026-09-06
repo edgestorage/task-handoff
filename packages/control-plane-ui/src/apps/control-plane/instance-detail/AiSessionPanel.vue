@@ -489,6 +489,7 @@
             :busy="resumingHistoryId === historyDetail.item.id"
             :can-interrupt="false"
             :provider="historyDetail.item.agent"
+            :permission-modes="providerPermissionModes(historyDetail.item.agent)"
             :permission-key="historyAiSessionPermissionKey(instance.id, historyDetail.item.id)"
             :default-permission-mode="instance.config.defaultCodexPermissionMode"
             :max-file-attachment-bytes="instance.config.aiSessionMaxFileAttachmentBytes"
@@ -641,6 +642,7 @@
               :attachments-disabled="creationMode === 'preset'"
               :submit-hidden="creationMode === 'preset'"
               :provider="newSessionApp"
+              :permission-modes="providerPermissionModes(newSessionApp)"
               :model-groups="newSessionModelGroups"
               :model-selection="newSessionModelSelection"
               :reasoning-effort="newSessionReasoningEffort"
@@ -894,6 +896,7 @@
           :busy="aiSessionActionBusy"
           :can-interrupt="canInterrupt(selectedSession)"
           :provider="selectedSession.agent"
+          :permission-modes="providerPermissionModes(selectedSession.agent)"
           :model-groups="selectedSessionModelGroups"
           :model-selection="selectedSessionModelDisplay"
           :model-selection-pending="modelSelectionPendingSessionId === selectedSession.id"
@@ -1622,6 +1625,10 @@ function modelSelectionCapability(agent: string) {
 
 function reasoningEffortCapability(agent: string) {
   return normalizeAiSessionReasoningEffortCapabilities(directoryAiSessionProviderCapability(props.instance.capabilities?.features, agent));
+}
+
+function providerPermissionModes(agent: string) {
+  return directoryAiSessionProviderCapability(props.instance.capabilities?.features, agent)?.permissionModes || [];
 }
 
 watch(newSessionModelGroups, (groups) => {
@@ -2619,7 +2626,7 @@ function closeNewSession() {
 
 async function updateNewSessionPermissionMode(permissionMode: AiSessionPermissionMode) {
   if (savingNewSessionPermission.value || permissionMode === newSessionPermissionMode.value) return;
-  if (props.creationMode === "preset") {
+  if (props.creationMode === "preset" || newSessionApp.value !== "codex") {
     newSessionPermissionMode.value = permissionMode;
     return;
   }

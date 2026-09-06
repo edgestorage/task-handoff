@@ -2743,16 +2743,32 @@ test("ai session registry hides and prunes sessions whose app binding disappeare
   assert.equal(registry.get(session.id), undefined);
 });
 
-test("ai session registry keeps unbound provider sessions visible", () => {
+test("ai session registry keeps Direct provider sessions visible without an App binding", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-unbound-"));
   const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions"), orphanedAppSessionRetentionMs: 1 });
   registry.start({
     agent: "claude",
+    creationSource: "ai-session",
     providerSessionId: "claude-unbound",
     summary: "No app binding",
   });
   registry.reconcileAppSessionBindings([], 10_000);
   assert.equal(registry.snapshot().sessions.length, 1);
+});
+
+test("ai session registry removes persisted app-owned sessions without an App identity", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-unbound-app-migration-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const invalid = registry.start({
+    agent: "codex",
+    creationSource: "app-session",
+    providerSessionId: "thread-unbound-app",
+  });
+
+  registry.reconcileAppSessionBindings([]);
+
+  assert.equal(registry.get(invalid.id), undefined);
+  assert.equal(fs.existsSync(registry.sessionPath(invalid.id)), false);
 });
 
 test("ai session registry bound snapshots only expose running app-bound sessions", () => {
@@ -2784,6 +2800,13 @@ test("ai session registry bound snapshots only expose running app-bound sessions
     { id: "app-stopped", status: "stopped" },
   ]);
   assert.deepEqual(snapshot.sessions.map((session) => session.providerSessionId), ["thread-live"]);
+  assert.deepEqual(
+    registry.boundSessions([
+      { id: "app-live", status: "running" },
+      { id: "app-stopped", status: "stopped" },
+    ]).map((session) => session.providerSessionId),
+    ["thread-live"],
+  );
   assert.equal(snapshot.runningCount, 0);
 });
 
@@ -2998,6 +3021,22 @@ test("codex app server discovery continues when optional thread-list enrichment 
   await discovery.sync(client);
 
   assert.deepEqual(applied, [{ id: "thread_loaded", name: "Loaded thread" }]);
+});
+
+test("codex app server bridge does not persist discovered threads without an AI or App owner", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-unbound-discovery-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const client = Object.assign(new EventEmitter(), {
+    async start() {},
+    stop() {},
+    async listLoadedThreadIds() { return ["thread-unbound"]; },
+    async readThread() { return { id: "thread-unbound", cwd: "/workspace", status: { type: "idle" }, turns: [] }; },
+  });
+  const bridge = new CodexAppServerSessionBridge(registry, client, { projectUnboundThreads: false });
+
+  await bridge.sync();
+
+  assert.deepEqual(registry.all(), []);
 });
 
 test("codex app server connection manager starts once for concurrent callers", async () => {
@@ -5051,6 +5090,9 @@ test("ai session registry clears stale app binding from authoritative adapter sn
   assert.equal(updated?.appBindingKeys, undefined);
   assert.equal(registry.snapshot().sessions.length, 1);
   assert.equal(registry.snapshot().sessions[0].appSessionId, undefined);
+
+  registry.reconcileAppSessionBindings([], 10_001);
+  assert.equal(registry.get(session.id), undefined);
 });
 
 test("claude control sock bridge ignores stopped app sessions and prunes undiscovered adapter sessions", async () => {
@@ -6710,6 +6752,7 @@ test("web app AI session snapshot exposes Direct sessions without an App binding
     }, "initial Direct AI session snapshot");
     assert.equal(response.statusCode, 200);
     assert.deepEqual(JSON.parse(response.payload).data.snapshot.sessions.map((session) => session.id), ["ais_direct"]);
+    assert.equal(fs.existsSync(path.join(aiSessionDir, "ais_unbound.json")), false);
   } finally {
     await app.close();
     restoreEnv();

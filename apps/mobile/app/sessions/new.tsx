@@ -74,22 +74,25 @@ export default function NewAiSessionRoute() {
   const folderId = selection.instanceId === selectedInstanceId ? selection.folderId : undefined;
   const folders = folderState.nodeId === selectedInstance?.nodeId ? folderState.folders : [];
   const selectedFolder = folders.find((folder) => folder.id === folderId);
-  const permissionMode = permissionSelection?.instanceId === selectedInstanceId
+  const maxFileAttachmentBytes = selectedInstance?.config.aiSessionMaxFileAttachmentBytes;
+  const providerCapability = directoryAiSessionProviderCapability(selectedInstance?.capabilities, agent);
+  const permissionModes = providerCapability?.permissionModes || [];
+  const requestedPermissionMode = permissionSelection?.instanceId === selectedInstanceId
     ? permissionSelection.mode
     : selectedInstance?.config.defaultCodexPermissionMode ?? 'ask';
-  const maxFileAttachmentBytes = selectedInstance?.config.aiSessionMaxFileAttachmentBytes;
+  const permissionMode = permissionModes.includes(requestedPermissionMode) ? requestedPermissionMode : permissionModes[0] ?? requestedPermissionMode;
   const modelGroups = selectedInstance ? deriveAiSessionModelGroups({
     entities: modelEntities,
     assignment: selectedInstance.modelSelection,
     agent,
     nodeId: selectedInstance.nodeId,
     mode: 'create',
-    capability: directoryAiSessionProviderCapability(selectedInstance.capabilities, agent)?.modelSelection,
+    capability: providerCapability?.modelSelection,
   }) : [];
   const modelSelection = modelSelectionDraft?.instanceId === selectedInstanceId && modelSelectionDraft.agent === agent
     ? modelSelectionDraft.value
     : defaultAiSessionModelSelection(modelGroups);
-  const reasoningCapability = normalizeAiSessionReasoningEffortCapabilities(directoryAiSessionProviderCapability(selectedInstance?.capabilities, agent));
+  const reasoningCapability = normalizeAiSessionReasoningEffortCapabilities(providerCapability);
   const effectiveReasoningEffort = reasoningCapability.selectAtCreate
     ? reasoningEffort ?? (agent === 'codex' ? AI_SESSION_DEFAULT_REASONING_EFFORT : undefined)
     : undefined;
@@ -190,7 +193,7 @@ export default function NewAiSessionRoute() {
         cwdFolderId: selectedFolder.cwdFolderId,
         gitSelection,
         message: aiSessionMessageText(message.trim()),
-        permissionMode,
+        permissionMode: permissionModes.includes(permissionMode) ? permissionMode : undefined,
         modelSelection,
         reasoningEffort: effectiveReasoningEffort,
         attachments: attachments.map(({ local }) => ({ kind: local.kind, name: local.name, size: local.size })),
@@ -211,13 +214,13 @@ export default function NewAiSessionRoute() {
         gitSelection,
         message: aiSessionMessageText(message.trim()),
         attachments: usableUploadRefs(uploadedAttachments),
-        permissionMode,
+        permissionMode: permissionModes.includes(permissionMode) ? permissionMode : undefined,
         modelSelection,
         reasoningEffort: effectiveReasoningEffort,
         clientRequestId: requestId,
         storyId: typeof requestedStoryId === 'string' ? requestedStoryId : undefined,
       });
-      if (agent === 'codex') await mobilePermissionStore.write(controlPlaneId, selectedInstance.id, result.aiSessionId, permissionMode).catch(() => undefined);
+      if (permissionModes.includes(permissionMode)) await mobilePermissionStore.write(controlPlaneId, selectedInstance.id, result.aiSessionId, permissionMode).catch(() => undefined);
       await mobileCreateRequestStore.clear(controlPlaneId, selectedInstance.id, requestId);
       router.replace({ pathname: '/sessions/[instanceId]/[sessionId]', params: { instanceId: selectedInstance.id, sessionId: result.aiSessionId } });
     } catch (cause) {
@@ -276,9 +279,10 @@ export default function NewAiSessionRoute() {
   };
 
   const updatePermissionMode = async (next: AiSessionPermissionMode) => {
-    if (!selectedInstance || agent !== 'codex' || !controlPlaneId || savingPermission || next === permissionMode) return;
+    if (!selectedInstance || !permissionModes.includes(next) || !controlPlaneId || savingPermission || next === permissionMode) return;
     const previous = permissionMode;
     setPermissionSelection({ instanceId: selectedInstance.id, mode: next });
+    if (agent !== 'codex') return;
     setSavingPermission(true);
     try {
       const profile = await mobileProfileStore.active();
@@ -310,6 +314,7 @@ export default function NewAiSessionRoute() {
     message={message}
     attachments={attachments.map(({ id, local }) => ({ id, kind: local.kind, name: local.name, size: local.size, textPresentation: local.textPresentation }))}
       permissionMode={permissionMode}
+      permissionModes={permissionModes}
       modelGroups={modelGroups}
       modelSelection={modelSelection}
       reasoningEffort={effectiveReasoningEffort}

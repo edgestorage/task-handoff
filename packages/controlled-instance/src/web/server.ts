@@ -726,6 +726,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       : Number(configuredDeltaCoalescingWindow),
   });
   const codexAppServer = options.codexAppServer || new CodexAppServerSessionBridge(aiSessions, {
+    projectUnboundThreads: false,
     ensureAppSessions: async () => {
       appRuntime.ensureSharedResource("codex");
       return appSessionsWithSharedCodexAppServer();
@@ -860,6 +861,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     capability: () => ({
       agent: "codex",
       actions: { create: true, send: true, queue: true, steer: true, interrupt: true, archive: true, delete: true, fork: true, approvalDecisions: ["allow", "deny", "skip"] },
+      permissionModes: ["ask", "auto-review", "full-access"],
       timeline: { sessionRead: true, turnRead: true, liveItems: true },
       modelSelection: {
         selectModelAtCreate: true,
@@ -882,6 +884,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     capability: {
       agent: "claude",
       actions: { create: false, send: true, queue: true, steer: true, interrupt: true, archive: true, delete: false, fork: false, approvalDecisions: [] },
+      permissionModes: [],
       timeline: { sessionRead: false, turnRead: false, liveItems: false },
       modelSelection: {
         selectModelAtCreate: false,
@@ -904,6 +907,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       capability: {
         agent: "opencode",
         actions: { create: true, send: true, queue: true, steer: false, interrupt: true, archive: true, delete: true, fork: true, approvalDecisions: ["allow", "deny"] },
+        permissionModes: ["ask", "auto-review", "full-access"],
         timeline: { sessionRead: true, turnRead: true, liveItems: true },
         modelSelection: {
           selectModelAtCreate: true,
@@ -1024,11 +1028,11 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
           app.log.warn({ err: error, aiSessionId: session.id, appSessionId }, "failed to close AI session after App exit");
         }
       }));
-      aiSessions.reconcileAppSessionBindings(appSessions);
       await aiSessionDiscovery.refresh({
         registry: aiSessions,
         appSessions,
       });
+      aiSessions.reconcileAppSessionBindings(appSessions);
       aiSessionHistoryLifecycle.activate(aiSessions.all(), appSessions);
       retainCodexTimelineHistory();
     });
@@ -1439,26 +1443,30 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   // Node Agent retention coordinator consumes this private projection so the
   // public session summary does not need a compatibility-breaking field.
   app.get("/api/internal/node-agent/ai-sessions/idle-retention", nodeAgentProcessRoute, async () => ({
-    data: aiSessions.all().map((session) => ({
+    data: aiSessions.boundSessions(appSessionsWithSharedCodexAppServer()).map((session) => ({
       sessionId: session.id,
       storyId: session.storyId,
       status: session.status,
       completedAt: session.completedAt,
+      updatedAt: session.updatedAt,
     })).filter((session) => session.storyId && session.status === "idle"),
   }));
 
   app.get("/api/internal/node-agent/ai-sessions/instance-idle-retention", nodeAgentProcessRoute, async () => ({
-    data: aiSessions.all().map((session) => ({
+    data: aiSessions.boundSessions(appSessionsWithSharedCodexAppServer()).map((session) => ({
       sessionId: session.id,
       status: session.status,
       completedAt: session.completedAt,
+      updatedAt: session.updatedAt,
     })).filter((session) => session.status === "idle"),
   }));
 
   app.post<{ Params: { id: string }; Body: unknown }>("/api/internal/node-agent/ai-sessions/:id/close", nodeAgentProcessRoute, async (request, reply) => {
     try {
       AiSessionCloseInputSchema.parse(request.body || {});
-      const result = AiSessionCloseResultSchema.parse(await aiSessionClose.close(request.params.id));
+      const closed = await aiSessionClose.closeIfIdle(request.params.id);
+      if (!closed) return reply.code(204).send();
+      const result = AiSessionCloseResultSchema.parse(closed);
       publishAiSessionSnapshot("control-action");
       return { data: result };
     } catch (error: unknown) {

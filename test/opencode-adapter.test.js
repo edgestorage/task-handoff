@@ -156,7 +156,8 @@ test("OpenCode projector derives waiting approval, turns, tools, patches, retrie
   assert.equal(projection.snapshot.activeTurnId, "msg_user");
   assert.equal(projection.snapshot.actions.approval, true);
   assert.equal(projection.snapshot.turns[0].status, "waiting");
-  assert.equal(projection.turnByMessageId.get("msg_assistant"), "msg_user");
+  assert.deepEqual(projection.messageById.get("msg_user"), { turnId: "msg_user", role: "user" });
+  assert.deepEqual(projection.messageById.get("msg_assistant"), { turnId: "msg_user", role: "assistant" });
   assert.deepEqual(projection.timeline.map((item) => item.id), ["msg_user", "prt_text", "prt_tool", "prt_patch", "prt_retry"]);
   assert.equal(projection.timeline.find((item) => item.id === "prt_tool").status, "running");
 });
@@ -209,6 +210,96 @@ test("OpenCode retry state stays out of the assistant summary and clears stale a
   assert.equal(projection.snapshot.summary, undefined);
   assert.equal(projection.snapshot.replaceActivity, true);
   assert.equal(registry.applyAdapterSnapshot(projection.snapshot).summary, undefined);
+});
+
+test("OpenCode timeline reads refresh projection without reconciling session state", async () => {
+  const registry = createAiSessionRegistry({ dir: fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-opencode-timeline-read-")) });
+  const providerSession = {
+    id: "ses_timeline",
+    directory: "/workspace",
+    title: "Timeline",
+    version: "1.18.21",
+    time: { created: 1700000000000, updated: 1700000005000 },
+  };
+  const messages = [{
+    info: { id: "msg_timeline", sessionID: providerSession.id, role: "user", time: { created: 1700000001000 } },
+    parts: [{ id: "part_timeline", sessionID: providerSession.id, messageID: "msg_timeline", type: "text", text: "Inspect" }],
+  }];
+  const projection = projectOpenCodeSession({ session: providerSession, status: { type: "idle" }, permissions: [], messages });
+  const session = registry.applyAdapterSnapshot(projection.snapshot);
+  const originalApplyAdapterSnapshot = registry.applyAdapterSnapshot.bind(registry);
+  let snapshotWrites = 0;
+  registry.applyAdapterSnapshot = (...args) => {
+    snapshotWrites += 1;
+    return originalApplyAdapterSnapshot(...args);
+  };
+  const bridge = new OpenCodeSessionBridge(registry, {
+    connection: () => ({ endpoint: "http://unused", headers: {} }),
+    workspaceRoots: () => ["/workspace"],
+  });
+  bridge.client = {
+    getSession: async () => providerSession,
+    status: async () => ({ [providerSession.id]: { type: "idle" } }),
+    messages: async () => messages,
+    permissions: async () => [],
+  };
+
+  const revision = session.turns[0].revision;
+  const first = await bridge.turnTimeline(session, session.turns[0].id);
+  const second = await bridge.turnTimeline(session, session.turns[0].id);
+
+  assert.deepEqual(first.items.map((item) => item.id), ["msg_timeline"]);
+  assert.deepEqual(second.items, first.items);
+  assert.equal(snapshotWrites, 0);
+  assert.equal(registry.get(session.id).turns[0].revision, revision);
+  bridge.close();
+});
+
+test("OpenCode realtime parts publish only assistant text as AI output", async () => {
+  const registry = createAiSessionRegistry({ dir: fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-opencode-realtime-role-")) });
+  const providerSession = {
+    id: "ses_realtime_role",
+    directory: "/workspace",
+    title: "Realtime roles",
+    version: "1.18.21",
+    time: { created: 1700000000000, updated: 1700000005000 },
+  };
+  const messages = [{
+    info: { id: "msg_user", sessionID: providerSession.id, role: "user", time: { created: 1700000001000 } },
+    parts: [{ id: "part_user", sessionID: providerSession.id, messageID: "msg_user", type: "text", text: "User prompt" }],
+  }];
+  const projection = projectOpenCodeSession({ session: providerSession, status: { type: "busy" }, permissions: [], messages });
+  const session = registry.applyAdapterSnapshot(projection.snapshot);
+  const deltas = [];
+  const items = [];
+  const bridge = new OpenCodeSessionBridge(registry, {
+    connection: () => ({ endpoint: "http://unused", headers: {} }),
+    workspaceRoots: () => ["/workspace"],
+    onMessageDelta: (event) => deltas.push(event),
+  });
+  bridge.client = {
+    getSession: async () => providerSession,
+    status: async () => ({ [providerSession.id]: { type: "busy" } }),
+    messages: async () => messages,
+    permissions: async () => [],
+  };
+  bridge.subscribeTimelineItems((event) => items.push(event.item));
+  await bridge.timeline(session);
+
+  const event = (type, properties) => bridge.onGlobalEvent({ directory: "/workspace", payload: { type, properties } });
+  await event("message.part.delta", { sessionID: providerSession.id, messageID: "msg_user", partID: "part_user", field: "text", delta: "User prompt" });
+  await event("message.part.updated", { part: { id: "part_user", sessionID: providerSession.id, messageID: "msg_user", type: "text", text: "User prompt" } });
+  await event("message.updated", { info: { id: "msg_assistant", sessionID: providerSession.id, role: "assistant", parentID: "msg_user", time: { created: 1700000002000 } } });
+  await event("message.part.delta", { sessionID: providerSession.id, messageID: "msg_assistant", partID: "part_assistant", field: "text", delta: "Assistant output" });
+  await event("message.part.updated", { part: { id: "part_assistant", sessionID: providerSession.id, messageID: "msg_assistant", type: "text", text: "Assistant output" } });
+
+  assert.deepEqual(deltas.map((delta) => ({ itemId: delta.itemId, turnId: delta.turnId, delta: delta.delta })), [{
+    itemId: "part_assistant",
+    turnId: "msg_user",
+    delta: "Assistant output",
+  }]);
+  assert.deepEqual(items, [{ id: "part_assistant", turnId: "msg_user", type: "ai-message", text: "Assistant output" }]);
+  bridge.close();
 });
 
 test("OpenCode stages model settings until a real prompt applies them", async () => {
@@ -354,7 +445,8 @@ test("OpenCode bridge implements lifecycle, attachments, inclusive-turn fork, an
   const fake = {
     health: async () => ({ healthy: true, version: "1.18.21" }),
     subscribeGlobal: async (_listener, signal) => new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true })),
-    createSession: async (directory) => {
+    createSession: async (directory, model, permission) => {
+      calls.push(["create", directory, model, permission]);
       const session = { id: "ses_created", directory, title: "Created", version: "1.18.21", time: { created: Date.now(), updated: Date.now() } };
       sessions.set(session.id, session); messages.set(session.id, []); return session;
     },
@@ -362,6 +454,7 @@ test("OpenCode bridge implements lifecycle, attachments, inclusive-turn fork, an
     status: async () => ({}),
     messages: async (id) => messages.get(id) || [],
     permissions: async () => [...permissions.values()],
+    setPermission: async (...args) => { calls.push(["set-permission", ...args]); return sessions.get(args[0]); },
     promptAsync: async (...args) => calls.push(["prompt", ...args]),
     forkSession: async (id, directory, messageID) => {
       calls.push(["fork", id, directory, messageID]);
@@ -375,21 +468,40 @@ test("OpenCode bridge implements lifecycle, attachments, inclusive-turn fork, an
   };
   const bridge = new OpenCodeSessionBridge(registry, { connection: () => ({ endpoint: "http://unused", headers: {} }), workspaceRoots: () => ["/workspace"] });
   bridge.client = fake;
-  const created = await bridge.createSession({ cwd: "/workspace/project" });
+  const created = await bridge.createSession({ cwd: "/workspace/project", permissionMode: "full-access" });
+  assert.deepEqual(calls.find((call) => call[0] === "create"), [
+    "create",
+    "/workspace/project",
+    undefined,
+    [{ permission: "*", pattern: "*", action: "allow" }],
+  ]);
   const session = registry.getByProviderSessionId("opencode", created.providerSessionId);
   const runtimeFile = "/workspace/project/input.txt";
   await bridge.startMessage(session, {
     message: "Hello",
     messageId: "msg_new",
+    permissionMode: "auto-review",
     userMessageAttachments: [],
     attachments: [
       { id: "inline", kind: "file", name: "inline.txt", mime: "text/plain", size: 5, source: { type: "inline", encoding: "base64", data: "aGVsbG8=" } },
       { id: "runtime", kind: "file", name: "input.txt", mime: "text/plain", size: 18, source: { type: "runtime-path", path: runtimeFile } },
     ],
   });
-  assert.deepEqual(calls[0].slice(0, 4), ["prompt", "ses_created", "/workspace/project", "msg_new"]);
-  assert.equal(calls[0][4][1].url, "data:text/plain;base64,aGVsbG8=");
-  assert.equal(calls[0][4][2].url, "file:///workspace/project/input.txt");
+  assert.deepEqual(calls.find((call) => call[0] === "set-permission"), [
+    "set-permission",
+    "ses_created",
+    "/workspace/project",
+    [
+      { permission: "*", pattern: "*", action: "ask" },
+      { permission: "read", pattern: "*", action: "allow" },
+      { permission: "grep", pattern: "*", action: "allow" },
+      { permission: "glob", pattern: "*", action: "allow" },
+    ],
+  ]);
+  const promptCall = calls.find((call) => call[0] === "prompt");
+  assert.deepEqual(promptCall.slice(0, 4), ["prompt", "ses_created", "/workspace/project", "msg_new"]);
+  assert.equal(promptCall[4][1].url, "data:text/plain;base64,aGVsbG8=");
+  assert.equal(promptCall[4][2].url, "file:///workspace/project/input.txt");
   await assert.rejects(() => bridge.startMessage(session, {
     message: "Outside",
     messageId: "msg_outside",

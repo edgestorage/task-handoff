@@ -1106,6 +1106,34 @@ test("App exit preserves a Direct AI session that was opened in the App", async 
   assert.equal(registry.get(session.id).creationSource, "ai-session");
 });
 
+test("idle retention close skips a session that became active before close execution", async () => {
+  const { registry, controller } = runtime();
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-retention-close-"));
+  const archived = [];
+  controller.register({
+    agent: "codex",
+    async archiveSession(id) { archived.push(id); },
+  });
+  const session = registry.applyAdapterSnapshot({
+    agent: "codex",
+    creationSource: "ai-session",
+    providerSessionId: "thread-retention-race",
+    cwd: "/workspace",
+    status: "running",
+    activeTurnId: "turn-running",
+  });
+  const coordinator = new AiSessionCloseCoordinator({
+    registry,
+    controller,
+    history: new AiSessionHistoryStore({ dataDir: root }),
+    stopApp: () => {},
+  });
+
+  assert.equal(await coordinator.closeIfIdle(session.id), undefined);
+  assert.deepEqual(archived, []);
+  assert.equal(registry.get(session.id).status, "running");
+});
+
 test("Close AI Session restores the authoritative current session when provider archive fails", async () => {
   const { registry, controller } = runtime();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-close-fail-"));

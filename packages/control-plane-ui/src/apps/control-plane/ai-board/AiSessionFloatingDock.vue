@@ -147,6 +147,7 @@
       :busy="busy"
       :can-interrupt="canInterrupt"
       :provider="card.session.agent"
+      :permission-modes="permissionModes"
       :permission-key="aiSessionPermissionKey(card.instance.id, card.session.id)"
       :default-permission-mode="card.instance.config.defaultCodexPermissionMode"
       :max-file-attachment-bytes="card.instance.config.aiSessionMaxFileAttachmentBytes"
@@ -173,6 +174,7 @@ import AiSessionConversationContent from "../../../components/ai-session/AiSessi
 import type { AiSessionTurnTimelineState } from "../useAiSessionTimelineStore";
 import type { AiSessionMentionBinding } from "../../../components/ai-session/mentions";
 import type { AiSessionCommandInput, AiSessionPermissionMode } from "@task-handoff/protocol/ai-sessions";
+import { directoryAiSessionProviderCapability } from "@task-handoff/protocol/control-plane-directory";
 import type { AiSessionMentionContext } from "../../../components/ai-session/useAiSessionMentions";
 import { aiSessionPermissionKey } from "../useAiSessionPermissionMode";
 import AiSessionTurnNavigator from "../../../components/ai-session/AiSessionTurnNavigator.vue";
@@ -259,6 +261,10 @@ const promptTimestamp = computed(() => (
   aiSessionTurns(props.conversationSession)[props.promptIndex]?.startedAt
   || props.conversationSession.startedAt
 ));
+const permissionModes = computed(() => directoryAiSessionProviderCapability(
+  props.card.instance.capabilities?.features,
+  props.card.session.agent,
+)?.permissionModes || []);
 const promptStickyPlaceholderHeight = ref(0);
 defineExpose({ focusComposer: () => composerEl.value?.focus() });
 let detailScrollViewport: HTMLElement | undefined;

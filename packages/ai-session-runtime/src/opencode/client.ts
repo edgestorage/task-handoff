@@ -17,11 +17,17 @@ export type OpenCodeConnection = {
   headers: Record<string, string>;
 };
 
+// OpenCode runs in a separate process (and, for managed instances, a
+// separate container). A stalled provider request must not leave an AI
+// session timeline pending forever.
+export const OPENCODE_REQUEST_TIMEOUT_MS = 15_000;
+
 export type OpenCodePromptPart =
   | { type: "text"; text: string }
   | { type: "file"; mime: string; filename?: string; url: string };
 
 export type OpenCodeModelRef = { providerID: string; modelID: string; variant?: string };
+export type OpenCodePermissionRule = { permission: string; pattern: string; action: "allow" | "ask" | "deny" };
 
 export class OpenCodeHttpError extends Error {
   constructor(
@@ -63,7 +69,10 @@ export class OpenCodeClient {
   messages(sessionID: string, directory: string) {
     return this.request(`/session/${encodeURIComponent(sessionID)}/message`, OpenCodeMessageListSchema, {
       directory,
-      query: { limit: 0 },
+      // `0` has different meanings across OpenCode releases. Use an explicit
+      // bounded page and let the caller's reconciliation cycle fetch newer
+      // data on the next snapshot.
+      query: { limit: 1000 },
     });
   }
 
@@ -71,11 +80,22 @@ export class OpenCodeClient {
     return this.request("/permission", OpenCodePermissionListSchema, { directory });
   }
 
-  createSession(directory: string, model?: OpenCodeModelRef) {
+  createSession(directory: string, model?: OpenCodeModelRef, permission?: OpenCodePermissionRule[]) {
     return this.request("/session", OpenCodeSessionSchema, {
       method: "POST",
       directory,
-      body: model ? { model: { id: model.modelID, providerID: model.providerID, ...(model.variant ? { variant: model.variant } : {}) } } : {},
+      body: {
+        ...(model ? { model: { id: model.modelID, providerID: model.providerID, ...(model.variant ? { variant: model.variant } : {}) } } : {}),
+        ...(permission ? { permission } : {}),
+      },
+    });
+  }
+
+  setPermission(sessionID: string, directory: string, permission: OpenCodePermissionRule[]) {
+    return this.request(`/session/${encodeURIComponent(sessionID)}`, OpenCodeSessionSchema, {
+      method: "PATCH",
+      directory,
+      body: { permission },
     });
   }
 
@@ -161,6 +181,7 @@ export class OpenCodeClient {
         ...connection.headers,
       },
       body: options.body === undefined ? undefined : JSON.stringify(options.body),
+      signal: AbortSignal.timeout(OPENCODE_REQUEST_TIMEOUT_MS),
     });
     if (!response.ok) throw new OpenCodeHttpError(response.status, method, path, await responseText(response));
     const raw = response.status === 204 ? undefined : await response.json();

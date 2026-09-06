@@ -39,6 +39,7 @@ type CodexAppServerBridgeOptions = {
   onDiagnostic?: (diagnostic: Record<string, unknown>) => void;
   dynamicTools?: CodexDynamicToolSpec[];
   onDynamicToolCall?: (call: CodexDynamicToolCall) => Promise<CodexDynamicToolCallResult>;
+  projectUnboundThreads?: boolean;
 };
 
 export type { CodexAppServerClientLike } from "./codex-app-server/client/contract";
@@ -656,6 +657,10 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
     }
     this.recordTimelineHistorySource(thread);
     const appSessionId = options.bindAppSession ? this.binding.appSessionIdForThread(id) : undefined;
+    const existing = this.registry.getByProviderSessionId("codex", id);
+    if (this.options.projectUnboundThreads === false && !existing && !appSessionId && !options.creationSource) {
+      return;
+    }
     this.projector.applyThreadSnapshot(thread, { appSessionId, creationSource: options.creationSource });
   }
 
