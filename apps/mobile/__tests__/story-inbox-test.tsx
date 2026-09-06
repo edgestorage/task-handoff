@@ -126,4 +126,32 @@ describe('<StoryInbox />', () => {
     });
     await screen.unmount();
   });
+
+  test('exposes Story shortcuts for existing sessions, actions, and automations', async () => {
+    const story: Story = {
+      id: 'story-1', ownerNodeId: 'node-a', title: 'Alpha', actions: [], documents: [],
+      createdAt: '2026-09-04T00:00:00.000Z', updatedAt: '2026-09-04T00:00:00.000Z',
+    };
+    mockRuntime.mockReturnValue({ api: { stories: { list: jest.fn().mockResolvedValue({ stories: [story], unavailableNodeIds: [] }) } } } as unknown as ReturnType<typeof useMobileControlPlaneRuntime>);
+    mockDirectories.mockReturnValue({ state: { nodes: [{ id: 'node-a', name: 'Node A' }], instances: [{ id: 'instance-a', nodeId: 'node-a', name: 'Instance A' }] } } as unknown as ReturnType<typeof useActiveDirectories>);
+    mockSessions.mockReturnValue(ControlPlaneAiSessionsSchema.parse({
+      updatedAt: '2026-09-04T00:00:00.000Z', instances: [{ instanceId: 'instance-a', streamId: 'stream-a', aiSessions: {
+        updatedAt: '2026-09-04T00:00:00.000Z', sessions: [{ id: 'session-a', agent: 'codex', status: 'idle', startedAt: '2026-09-04T00:00:00.000Z', updatedAt: '2026-09-04T00:00:00.000Z', unread: false }],
+      } }],
+    }));
+    const onAddExisting = jest.fn();
+    const onAddAction = jest.fn();
+    const onAddAutomation = jest.fn();
+    const screen = await render(<StoryInbox onAddAction={onAddAction} onAddAutomation={onAddAutomation} onAddExisting={onAddExisting} onEdit={jest.fn()} onNewSession={jest.fn()} onOpen={jest.fn()} onOpenDocument={jest.fn()} onOpenSession={jest.fn()} />);
+
+    await waitFor(() => expect(screen.getByText('Alpha')).toBeTruthy());
+    await fireEvent.press(screen.getByLabelText('menu-add-existing'));
+    await fireEvent.press(screen.getByLabelText('menu-add-action'));
+    await fireEvent.press(screen.getByLabelText('menu-add-automation'));
+
+    expect(onAddExisting).toHaveBeenCalledWith(story);
+    expect(onAddAction).toHaveBeenCalledWith(story);
+    expect(onAddAutomation).toHaveBeenCalledWith(story);
+    await screen.unmount();
+  });
 });

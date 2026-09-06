@@ -31,9 +31,12 @@ type StoryInboxProps = {
   onOpenSession(instanceId: string, sessionId: string): void;
   onEdit(story: Story): void;
   onNewSession(story: Story, defaults: { instanceId: string; cwd?: string; cwdFolderId?: string }): void;
+  onAddExisting?(story: Story): void;
+  onAddAction?(story: Story): void;
+  onAddAutomation?(story: Story): void;
 };
 
-export function StoryInbox({ onEdit, onNewSession, onOpen, onOpenDocument, onOpenSession }: StoryInboxProps) {
+export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit, onNewSession, onOpen, onOpenDocument, onOpenSession }: StoryInboxProps) {
   const { colors } = useMobileTheme();
   const { locale, t } = useI18n();
   const runtime = useMobileControlPlaneRuntime();
@@ -53,6 +56,15 @@ export function StoryInbox({ onEdit, onNewSession, onOpen, onOpenDocument, onOpe
     () => groupStoryTreeSessions(stories, directory.instances, sessions),
     [directory.instances, sessions, stories],
   );
+  const nodesWithUnassignedSessions = useMemo(() => {
+    const instanceNodes = new Map(directory.instances.map((instance) => [instance.id, instance.nodeId]));
+    const result = new Set<string>();
+    for (const entry of sessions?.instances ?? []) {
+      const nodeId = instanceNodes.get(entry.instanceId);
+      if (nodeId && entry.aiSessions.sessions.some((session) => !session.storyId)) result.add(nodeId);
+    }
+    return result;
+  }, [directory.instances, sessions]);
   const sortedStories = useMemo(() => sortStoryTree(stories, locale, preferences.sortMode, sessionsByStory, preferences.manualKeys), [locale, preferences.manualKeys, preferences.sortMode, sessionsByStory, stories]);
   useEffect(() => {
     if (preferences.sortMode !== 'manual' || preferences.manualKeys.length || !stories.length) return;
@@ -148,6 +160,9 @@ export function StoryInbox({ onEdit, onNewSession, onOpen, onOpenDocument, onOpe
           <MenuView
             actions={[
               { id: 'new-session', image: 'plus.bubble', title: t('sessions.new'), attributes: { disabled: Boolean(story.archivedAt) || !newSessionDefaults.instanceId } },
+              { id: 'add-existing', image: 'link', title: t('stories.addExistingSession'), attributes: { disabled: Boolean(story.archivedAt) || !nodesWithUnassignedSessions.has(story.ownerNodeId) } },
+              { id: 'add-action', image: 'play.fill', title: t('stories.createAction'), attributes: { disabled: Boolean(story.archivedAt) } },
+              { id: 'add-automation', image: 'calendar.badge.clock', title: t('stories.addAutomation'), attributes: { disabled: Boolean(story.archivedAt) } },
               { id: 'edit', image: 'pencil', title: t('stories.edit') },
               { id: 'archive', image: story.archivedAt ? 'arrow.uturn.backward' : 'archivebox', title: t(story.archivedAt ? 'stories.restore' : 'stories.archive') },
               { id: 'delete', image: 'trash', title: t('common.remove'), attributes: { destructive: true } },
@@ -156,6 +171,9 @@ export function StoryInbox({ onEdit, onNewSession, onOpen, onOpenDocument, onOpe
               if (nativeEvent.event === 'new-session' && newSessionDefaults.instanceId) {
                 onNewSession(story, { ...newSessionDefaults, instanceId: newSessionDefaults.instanceId });
               }
+              else if (nativeEvent.event === 'add-existing') onAddExisting?.(story);
+              else if (nativeEvent.event === 'add-action') onAddAction?.(story);
+              else if (nativeEvent.event === 'add-automation') onAddAutomation?.(story);
               else if (nativeEvent.event === 'edit') onEdit(story);
               else if (nativeEvent.event === 'archive') void toggleArchive(story);
               else if (nativeEvent.event === 'delete') removeStory(story);

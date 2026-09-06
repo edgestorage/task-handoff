@@ -118,6 +118,11 @@ test('shows authoritative automations and can run one manually', async () => {
   const screen = await render(<StoryDetail nodeId="node-1" onOpenSession={jest.fn()} storyId={story.id} />);
   expect(await screen.findByText('Every 60 minutes')).toBeTruthy();
   expect(screen.getByText('Scheduled')).toBeTruthy();
+  expect(screen.getByRole('tab', { name: 'Actions' })).toBeTruthy();
+  expect(screen.getByRole('tab', { name: 'Documents' })).toBeTruthy();
+  expect(screen.getByRole('tab', { name: 'Sessions' })).toBeTruthy();
+  expect(screen.getByRole('tab', { name: 'Automations' })).toBeTruthy();
+  expect(screen.getByRole('tab', { name: 'Actions' }).props.accessibilityState.selected).toBe(true);
   expect(listAutomations).toHaveBeenCalledWith(story.id, story.ownerNodeId);
   expect(automationRuns).toHaveBeenCalledWith(story.id, automation.automation.id, story.ownerNodeId);
 

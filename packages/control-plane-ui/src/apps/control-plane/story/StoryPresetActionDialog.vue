@@ -6,63 +6,58 @@
         <DialogDescription>{{ t("stories.actionEditor.saveAsDescription") }}</DialogDescription>
       </DialogHeader>
       <div v-if="saving" class="story-preset-saving">{{ t("stories.actionEditor.saving") }}</div>
-      <div v-else class="story-editor-fields">
-        <label>
-          {{ t("stories.actionEditor.story") }}
-          <ControlPlaneSelect v-model="storyId" :placeholder="t('stories.actionEditor.selectStory')">
-            <ControlPlaneSelectItem v-for="story in stories" :key="story.id" :value="story.id">{{ story.title }}</ControlPlaneSelectItem>
-          </ControlPlaneSelect>
-        </label>
-        <label>{{ t("stories.actionEditor.title") }}<Input v-model="title" :placeholder="t('stories.actionEditor.titlePlaceholder')" /></label>
-        <label>{{ t("stories.actionEditor.promptTemplate") }}<Textarea v-model="promptTemplate" :placeholder="t('stories.actionEditor.promptPlaceholder')" /></label>
-        <label>
-          {{ t("stories.actionEditor.targetInstance") }}
-          <ControlPlaneSelect v-model="targetInstanceId" :placeholder="t('stories.actionEditor.selectTargetInstance')">
-            <ControlPlaneSelectItem v-for="instance in instances" :key="instance.id" :value="instance.id">{{ instance.name }}</ControlPlaneSelectItem>
-          </ControlPlaneSelect>
-        </label>
-        <div class="story-action-preset">
-          <div class="story-action-preset-title">{{ t("stories.actionEditor.sessionPreset") }}</div>
-          <div class="story-action-preset-grid">
-            <label>{{ t("stories.actionEditor.agent") }}<ControlPlaneSelect v-model="agent" :placeholder="t('stories.actionEditor.defaultAgent')"><ControlPlaneSelectItem value="codex">{{ t("common.products.codex") }}</ControlPlaneSelectItem><ControlPlaneSelectItem value="claude">{{ t("common.products.claude") }}</ControlPlaneSelectItem><ControlPlaneSelectItem value="opencode">{{ t("common.products.opencode") }}</ControlPlaneSelectItem></ControlPlaneSelect></label>
-            <label>{{ t("stories.actionEditor.messageMode") }}<ControlPlaneSelect v-model="mode" :placeholder="t('stories.actionEditor.defaultValue')"><ControlPlaneSelectItem value="auto">{{ t("stories.actionEditor.auto") }}</ControlPlaneSelectItem><ControlPlaneSelectItem value="queue">{{ t("stories.actionEditor.queue") }}</ControlPlaneSelectItem><ControlPlaneSelectItem value="steer">{{ t("stories.actionEditor.steer") }}</ControlPlaneSelectItem><ControlPlaneSelectItem value="immediate">{{ t("stories.actionEditor.immediate") }}</ControlPlaneSelectItem></ControlPlaneSelect></label>
-            <label>{{ t("stories.actionEditor.permission") }}<ControlPlaneSelect v-model="permissionMode" :placeholder="t('stories.actionEditor.defaultPermission')"><ControlPlaneSelectItem value="ask">{{ t("stories.actionEditor.ask") }}</ControlPlaneSelectItem><ControlPlaneSelectItem value="auto-review">{{ t("stories.actionEditor.autoReview") }}</ControlPlaneSelectItem><ControlPlaneSelectItem value="full-access">{{ t("stories.actionEditor.fullAccess") }}</ControlPlaneSelectItem></ControlPlaneSelect></label>
-            <label>{{ t("stories.actionEditor.reasoningEffort") }}<ControlPlaneSelect v-model="reasoningEffort" :placeholder="t('stories.actionEditor.defaultValue')"><ControlPlaneSelectItem v-for="effort in reasoningEfforts" :key="effort" :value="effort">{{ t(`stories.actionEditor.reasoning.${effort}`) }}</ControlPlaneSelectItem></ControlPlaneSelect></label>
-            <label>{{ t("stories.actionEditor.modelEntityId") }}<Input v-model="modelEntityId" :placeholder="t('stories.actionEditor.optionalModelId')" /></label>
-            <label>{{ t("stories.actionEditor.modelName") }}<Input v-model="modelName" :placeholder="t('stories.actionEditor.optionalModelName')" /></label>
-            <label>{{ t("stories.actionEditor.workingFolder") }}<ControlPlaneSelect v-model="cwdFolderId" :placeholder="t('stories.actionEditor.defaultValue')"><ControlPlaneSelectItem v-for="folder in cwdFolders" :key="folder.id" :value="folder.id">{{ folder.name }}</ControlPlaneSelectItem></ControlPlaneSelect></label>
-            <label>{{ t("stories.actionEditor.gitMode") }}<ControlPlaneSelect v-model="gitMode" :placeholder="t('stories.actionEditor.defaultValue')"><ControlPlaneSelectItem value="current-folder">{{ t("stories.actionEditor.currentFolder") }}</ControlPlaneSelectItem><ControlPlaneSelectItem value="worktree">{{ t("stories.actionEditor.worktree") }}</ControlPlaneSelectItem></ControlPlaneSelect></label>
-            <label>{{ t("stories.actionEditor.gitBranch") }}<Input v-model="gitBranch" :placeholder="t('stories.actionEditor.optionalBranch')" /></label>
-          </div>
+      <ScrollArea v-else class="story-preset-action-scroll" :horizontal="false">
+        <div class="story-preset-action-fields">
+          <label>
+            {{ t("stories.actionEditor.story") }}
+            <ControlPlaneSelect v-model="storyId" :placeholder="t('stories.actionEditor.selectStory')">
+              <ControlPlaneSelectItem v-for="story in stories" :key="story.id" :value="story.id">{{ story.title }}</ControlPlaneSelectItem>
+            </ControlPlaneSelect>
+          </label>
+          <StoryActionEditorContent
+            ref="actionCreationPanel"
+            v-model:mode="mode"
+            v-model:target-instance-id="targetInstanceId"
+            v-model:title="title"
+            :initial-preset="initialSessionPreset"
+            :initial-prompt="promptTemplate"
+            :instances="instances"
+            :node-local-folders-by-node-id="nodeLocalFoldersByNodeId"
+            :revision="revision"
+            :submitting="saving"
+            @submit="save"
+            @update:submit-ready="submitReady = $event"
+          />
         </div>
-      </div>
+      </ScrollArea>
       <div v-if="errorMessage" class="story-preset-error" role="alert">{{ errorMessage }}</div>
       <DialogFooter>
         <Button variant="outline" :disabled="saving" @click="$emit('update:open', false)">{{ t("common.actions.cancel") }}</Button>
-        <Button :disabled="!storyId || !title.trim() || !promptTemplate.trim() || !targetInstanceId" @click="save">{{ saving ? t("stories.actionEditor.saving") : t("common.actions.save") }}</Button>
+        <Button :disabled="!storyId || !submitReady || saving" @click="submitCreation">{{ saving ? t("stories.actionEditor.saving") : t("common.actions.save") }}</Button>
       </DialogFooter>
     </DialogContent>
   </Dialog>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import type { Story, StorySessionPreset } from "@task-handoff/protocol/stories";
-import type { NodeLocalFolder } from "../../../api/types";
+import type { InstanceWithAiSessions, NodeLocalFolder } from "../../../api/types";
 import { createBrowserUuid } from "../../../lib/random-id";
 import { Button } from "../../../components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
-import Input from "../../../components/ui/input/Input.vue";
-import Textarea from "../../../components/ui/textarea/Textarea.vue";
+import { ScrollArea } from "../../../components/ui/scroll-area";
 import ControlPlaneSelect from "../shared/ControlPlaneSelect.vue";
 import ControlPlaneSelectItem from "../shared/ControlPlaneSelectItem.vue";
+import StoryActionEditorContent from "./StoryActionEditorContent.vue";
+import type { AiSessionCreationPresetDraft } from "../instance-detail/AiSessionPanel.vue";
 
 const props = withDefaults(defineProps<{
   open: boolean;
   stories: Story[];
-  instances: Array<{ id: string; name: string }>;
-  localFoldersByInstanceId?: Record<string, NodeLocalFolder[]>;
+  instances: InstanceWithAiSessions[];
+  nodeLocalFoldersByNodeId?: Record<string, NodeLocalFolder[]>;
   initial?: {
     storyId?: string;
     title?: string;
@@ -71,77 +66,62 @@ const props = withDefaults(defineProps<{
     sessionPreset?: StorySessionPreset;
   };
 }>(), {
-  localFoldersByInstanceId: () => ({}),
+  nodeLocalFoldersByNodeId: () => ({}),
   initial: () => ({}),
 });
 
 const emit = defineEmits<{ "update:open": [value: boolean]; saved: [] }>();
 const { t } = useI18n();
 
-const reasoningEfforts = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"] as const;
-
 const storyId = ref("");
 const title = ref("");
 const promptTemplate = ref("");
 const targetInstanceId = ref("");
-const agent = ref("");
-const mode = ref("");
-const permissionMode = ref("");
-const reasoningEffort = ref("");
-const modelEntityId = ref("");
-const modelName = ref("");
-const cwdFolderId = ref("");
-const gitMode = ref("");
-const gitBranch = ref("");
+const mode = ref<StorySessionPreset["mode"] | "">("");
+const initialSessionPreset = ref<StorySessionPreset | undefined>(undefined);
+const revision = ref(0);
+const submitReady = ref(false);
 const saving = ref(false);
 const errorMessage = ref("");
-
-const cwdFolders = computed(() => props.localFoldersByInstanceId[targetInstanceId.value] || []);
+const actionCreationPanel = ref<InstanceType<typeof StoryActionEditorContent>>();
 
 watch(() => props.open, (open) => {
   if (!open) return;
+  revision.value += 1;
   const initial = props.initial;
   storyId.value = initial.storyId || "";
   title.value = initial.title || "";
   promptTemplate.value = initial.promptTemplate || "";
   targetInstanceId.value = initial.targetInstanceId || props.instances[0]?.id || "";
-  const preset = initial.sessionPreset || {};
-  agent.value = preset.agent || "";
-  mode.value = preset.mode || "";
-  permissionMode.value = preset.permissionMode || "";
-  reasoningEffort.value = preset.reasoningEffort || "";
-  modelEntityId.value = preset.modelSelection?.modelEntityId || "";
-  modelName.value = preset.modelSelection?.modelName || "";
-  cwdFolderId.value = preset.cwdFolderId || "";
-  gitMode.value = preset.gitSelection?.mode || "";
-  gitBranch.value = preset.gitSelection?.branch || "";
+  initialSessionPreset.value = initial.sessionPreset;
+  mode.value = initial.sessionPreset?.mode || "";
+  submitReady.value = false;
   errorMessage.value = "";
 }, { immediate: true });
 
-async function save() {
+function submitCreation() {
+  actionCreationPanel.value?.submitCreation();
+}
+
+async function save(draft: AiSessionCreationPresetDraft) {
   const story = props.stories.find((candidate) => candidate.id === storyId.value);
   if (!story || saving.value) return;
-  if (!title.value.trim() || !promptTemplate.value.trim() || !targetInstanceId.value) return;
+  const trimmedTitle = title.value.trim();
+  const promptTemplate = draft.prompt.trim();
+  const targetInstanceId = draft.instanceId;
+  if (!trimmedTitle || !promptTemplate || !targetInstanceId) return;
 
-  const hasPreset = Boolean(agent.value || mode.value || permissionMode.value || reasoningEffort.value
-    || (modelEntityId.value && modelName.value) || cwdFolderId.value || (gitMode.value && gitBranch.value));
-  const sessionPreset = hasPreset ? {
-    ...(agent.value ? { agent: agent.value } : {}),
+  const sessionPreset: StorySessionPreset = {
+    ...draft.sessionPreset,
     ...(mode.value ? { mode: mode.value } : {}),
-    ...(permissionMode.value ? { permissionMode: permissionMode.value } : {}),
-    ...(reasoningEffort.value ? { reasoningEffort: reasoningEffort.value } : {}),
-    ...(modelEntityId.value && modelName.value ? { modelSelection: { modelEntityId: modelEntityId.value, modelName: modelName.value } } : {}),
-    ...(cwdFolderId.value ? { cwdFolderId: cwdFolderId.value } : {}),
-    ...(gitMode.value && gitBranch.value ? { gitSelection: { mode: gitMode.value, branch: gitBranch.value } } : {}),
-  } as StorySessionPreset : undefined;
-
+  };
   const actions = [...story.actions];
   actions.push({
     id: createBrowserUuid(),
-    title: title.value.trim(),
-    promptTemplate: promptTemplate.value.trim(),
-    targetInstanceId: targetInstanceId.value,
-    ...(sessionPreset ? { sessionPreset } : {}),
+    title: trimmedTitle,
+    promptTemplate,
+    targetInstanceId,
+    sessionPreset,
   });
 
   saving.value = true;
@@ -172,34 +152,21 @@ async function save() {
   max-width: 640px;
 }
 
-.story-editor-fields {
-  display: grid;
-  gap: 14px;
+.story-preset-action-scroll {
+  min-height: 0;
 }
 
-.story-editor-fields label {
+.story-preset-action-fields {
+  display: grid;
+  gap: 14px;
+  padding-right: 8px;
+}
+
+.story-preset-action-fields label {
   display: grid;
   gap: 6px;
   color: var(--text-muted);
   font-size: 12px;
-}
-
-.story-action-preset {
-  display: grid;
-  gap: 8px;
-  border-top: 1px solid var(--line);
-  padding-top: 12px;
-}
-
-.story-action-preset-title {
-  color: var(--text-muted);
-  font-size: 12px;
-}
-
-.story-action-preset-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
 }
 
 .story-preset-saving {

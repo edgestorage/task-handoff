@@ -1,63 +1,9 @@
-FROM node:24-bookworm-slim AS build-base
-
-ENV PNPM_HOME=/pnpm
-ENV PATH=/pnpm:$PATH
-ENV LANG=C.UTF-8
-ENV LC_ALL=C.UTF-8
-ENV TASK_HANDOFF_WEB_HOST=0.0.0.0
-ENV TASK_HANDOFF_WEB_PORT=8080
-ENV TASK_HANDOFF_WORKSPACE=/workspace
-ENV TASK_HANDOFF_DATA_DIR=/data/task-handoff
-ENV TASK_HANDOFF_APP_CATALOG_DIR=/data/task-handoff/app-catalog
-ENV TASK_HANDOFF_ARTIFACT_DIR=/data/artifacts
-ENV TASK_HANDOFF_APP_SESSION_DIR=/data/task-handoff/app-sessions
-ENV TASK_HANDOFF_RUNTIME_DIR=/data/task-handoff/runtime
-ENV TASK_HANDOFF_EVENTS_DIR=/data/task-handoff/events
-ENV TASK_HANDOFF_LOG_DIR=/data/logs
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends \
-    bash \
-    ca-certificates \
-    curl \
-    g++ \
-    git \
-    make \
-    python3 \
-  && rm -rf /var/lib/apt/lists/*
-
-RUN corepack enable
-WORKDIR /app
-
-FROM build-base AS deps
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-COPY patches ./patches
-COPY packages/protocol/package.json ./packages/protocol/package.json
-COPY packages/core/package.json ./packages/core/package.json
-COPY packages/ai-session-runtime/package.json ./packages/ai-session-runtime/package.json
-COPY packages/app-runtime/package.json ./packages/app-runtime/package.json
-COPY packages/controlled-instance/package.json ./packages/controlled-instance/package.json
-COPY packages/control-plane/package.json ./packages/control-plane/package.json
-COPY packages/control-plane-ui/package.json ./packages/control-plane-ui/package.json
-COPY packages/controlled-instance-ui/package.json ./packages/controlled-instance-ui/package.json
-COPY packages/web-theme/package.json ./packages/web-theme/package.json
-COPY apps/cli/package.json ./apps/cli/package.json
-COPY apps/controlled-instance-image/package.json ./apps/controlled-instance-image/package.json
-COPY apps/control-plane-image/package.json ./apps/control-plane-image/package.json
-COPY apps/desktop-shell/package.json ./apps/desktop-shell/package.json
-RUN pnpm install --frozen-lockfile --config.auto-install-peers=false
-
-FROM deps AS build
-ARG TASK_HANDOFF_VERSION=0.0.1
-COPY . .
-RUN pnpm run check:controlled-instance
-RUN TASK_HANDOFF_VERSION="${TASK_HANDOFF_VERSION}" pnpm run runtime:pack:controlled-instance
-
 FROM node:24-bookworm-slim AS runtime-base
-ARG TASK_HANDOFF_VERSION=0.0.1
+ARG TASK_HANDOFF_IMAGE_VERSION=0.0.1
 
 ENV LANG=C.UTF-8
 ENV LC_ALL=C.UTF-8
-ENV TASK_HANDOFF_VERSION=${TASK_HANDOFF_VERSION}
+ENV TASK_HANDOFF_IMAGE_VERSION=${TASK_HANDOFF_IMAGE_VERSION}
 ENV TASK_HANDOFF_WEB_HOST=0.0.0.0
 ENV TASK_HANDOFF_WEB_PORT=8080
 ENV TASK_HANDOFF_WORKSPACE=/workspace
@@ -76,7 +22,7 @@ ENV CLAUDE_HOME=/home/agent/.claude
 ENV NODE_ENV=production
 ENV TASK_HANDOFF_INSTANCE_RUNTIME_ROOT=/opt/task-handoff/instance-runtime
 
-LABEL org.opencontainers.image.version=${TASK_HANDOFF_VERSION}
+LABEL org.opencontainers.image.version=${TASK_HANDOFF_IMAGE_VERSION}
 WORKDIR /app
 
 RUN apt-get update \
@@ -104,14 +50,7 @@ RUN if id -u agent >/dev/null 2>&1; then \
   && chmod 0440 /etc/sudoers.d/task-handoff-agent \
   && visudo -cf /etc/sudoers.d/task-handoff-agent
 
-FROM runtime-base AS runtime-package-install
-COPY --from=build /app/release/npm/artifacts/task-handoff-controlled-instance-[0-9]*.tgz /tmp/
-RUN npm install -g --omit=dev --no-audit --no-fund /tmp/task-handoff-controlled-instance-[0-9]*.tgz \
-  && rm -f /tmp/task-handoff-controlled-instance-[0-9]*.tgz
-
 FROM runtime-base AS runtime-core
-COPY --from=runtime-package-install /usr/local/lib/node_modules/@task-handoff/controlled-instance /usr/local/lib/node_modules/@task-handoff/controlled-instance
-RUN ln -s ../lib/node_modules/@task-handoff/controlled-instance/bin/task-handoff-controlled-instance /usr/local/bin/task-handoff-controlled-instance
 COPY docker/entrypoint.sh /usr/local/bin/task-handoff-entrypoint
 COPY docker/instance-launcher.sh /usr/local/bin/task-handoff-instance-launcher
 COPY docker/runtime-installer.mjs /usr/local/lib/task-handoff/runtime-installer.mjs
