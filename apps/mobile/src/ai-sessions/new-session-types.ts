@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import type { AiSessionModelSelection, AiSessionPermissionMode, AiSessionReasoningEffort } from '@task-handoff/protocol/ai-sessions';
 import type { RepositoryAiSessionWorkspace } from '@task-handoff/protocol/repository';
 import type { ControlPlaneInstanceDirectoryEntry, ControlPlaneNodeDirectoryEntry } from '@task-handoff/protocol/control-plane-directory';
@@ -35,7 +36,11 @@ export type NewSessionFormProps = {
   busy: boolean;
   disabled: boolean;
   error?: string;
+  header?: ReactNode;
+  attachmentsDisabled?: boolean;
   attachments: readonly { id: string; kind: 'image' | 'file'; name: string; size?: number; textPresentation?: AiSessionPastedTextPresentation }[];
+  submitLabel?: string;
+  submittingLabel?: string;
   visualBalanceInset?: number;
   onInstanceChange(value: string): void;
   onAgentChange(value: string): void;

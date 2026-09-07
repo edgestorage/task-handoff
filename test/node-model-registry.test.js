@@ -141,7 +141,13 @@ test("node model registry uses immutable content hashes, private storage, and ha
     provider: {
       [`task-handoff-${opencodeHash}`]: {
         npm: "@ai-sdk/openai-compatible",
-        name: "TaskHandoff",
+        name: opencodeInput.name,
+        options: { baseURL: opencodeInput.endpoint, apiKey: opencodeInput.key },
+        models: { [opencodeInput.model]: { name: opencodeInput.name, variants: openCodeReasoningVariants } },
+      },
+      "task-handoff": {
+        npm: "@ai-sdk/openai-compatible",
+        name: opencodeInput.name,
         options: { baseURL: opencodeInput.endpoint, apiKey: opencodeInput.key },
         models: { [opencodeInput.model]: { name: opencodeInput.name, variants: openCodeReasoningVariants } },
       },
@@ -253,8 +259,9 @@ test("ordered model entities resolve defaults by protocol and preserve provider 
   const responsesId = responses.json().data.id;
 
   const assigned = await request(app, "PUT", "/api/node-agent/instances/inst_multi_models/model-assignment", {
-    modelSelection: { modelEntityIds: [sharedId, responsesId, sharedId] },
+    modelSelection: { modelEntityIds: [sharedId, responsesId, sharedId], opencodeModelHash: sharedId },
     modelEntityIds: [sharedId, responsesId, sharedId],
+    opencodeModelHash: sharedId,
   });
   assert.equal(assigned.statusCode, 200);
   assert.deepEqual(assigned.json().data.assignment.modelEntityIds, [sharedId, responsesId]);
@@ -263,9 +270,11 @@ test("ordered model entities resolve defaults by protocol and preserve provider 
   assert.equal(environment.TASK_HANDOFF_CODEX_MODEL, "shared-first");
   const openCodeConfig = JSON.parse(environment.TASK_HANDOFF_OPENCODE_CONFIG_CONTENT);
   assert.equal(openCodeConfig.model, `task-handoff-${sharedId}/shared-first`);
-  assert.deepEqual(Object.keys(openCodeConfig.provider), [`task-handoff-${sharedId}`, `task-handoff-${responsesId}`]);
+  assert.deepEqual(Object.keys(openCodeConfig.provider), [`task-handoff-${sharedId}`, `task-handoff-${responsesId}`, "task-handoff"]);
   assert.deepEqual(Object.keys(openCodeConfig.provider[`task-handoff-${sharedId}`].models), ["shared-first", "same-name"]);
+  assert.ok(openCodeConfig.provider[`task-handoff-${sharedId}`].models["same-name"], "selected non-default model must be registered");
   assert.deepEqual(openCodeConfig.provider[`task-handoff-${sharedId}`].models["shared-first"].variants, openCodeReasoningVariants);
+  assert.deepEqual(Object.keys(openCodeConfig.provider["task-handoff"].models), ["shared-first"]);
   const catalog = app.nodeAgentState.modelRegistry.privateCatalog("inst_multi_models");
   assert.deepEqual(catalog.entities.map((entity) => entity.id), [sharedId, responsesId]);
   assert.deepEqual(catalog.entities[0].modelNames.map((entry) => entry.name), ["shared-first", "same-name"]);

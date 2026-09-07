@@ -63,6 +63,7 @@ test("conversation detail renders retained image and file metadata without a UI 
   const imageCache = fs.readFileSync(new URL("../src/components/ai-session/attachmentImageCache.ts", import.meta.url), "utf8");
   const timeline = fs.readFileSync(new URL("../src/components/ai-session/AiSessionTimelineView.vue", import.meta.url), "utf8");
   const board = fs.readFileSync(new URL("../src/apps/control-plane/ai-board/AiSessionBoardView.vue", import.meta.url), "utf8");
+  const floatingDock = fs.readFileSync(new URL("../src/apps/control-plane/ai-board/AiSessionFloatingDock.vue", import.meta.url), "utf8");
   const panel = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.vue", import.meta.url), "utf8");
   const projection = fs.readFileSync(new URL("../src/apps/control-plane/useAiSessionConversationProjection.ts", import.meta.url), "utf8");
   assert.match(timeline, /turn\.userMessages/);
@@ -82,6 +83,18 @@ test("conversation detail renders retained image and file metadata without a UI 
   assert.match(attachments, /navigator\.clipboard\.write/);
   assert.match(attachments, /attachment\.contentState === 'expired'/);
   assert.match(attachments, /'Expired' : 'Missing'/);
+  assert.match(attachments, /ai-session-message-attachments-compact/);
+  assert.match(attachments, /class="ai-session-message-attachment-pill image"/);
+  assert.match(attachments, /height: 26px;[\s\S]*font-size: 13px/);
+  assert.match(attachments, /width: 18px; height: 18px; flex: 0 0 18px/);
+  assert.match(attachments, /sessions\.timeline\.image/);
+  assert.match(attachments, /class="ai-session-compact-image-tooltip"/);
+  assert.match(attachments, /<TooltipProvider v-if="compact" :delay-duration="200">/);
+  assert.match(attachments, /<AiSessionImagePreview/);
+  assert.match(panel, /:user-messages="selectedPromptUserMessages"/);
+  assert.match(panel, /"userMessages" in turn && Array\.isArray\(turn\.userMessages\)/);
+  assert.match(floatingDock, /:user-messages="promptUserMessages"/);
+  assert.match(floatingDock, /function retainedPromptUserMessages[\s\S]*"userMessages" in turn && Array\.isArray\(turn\.userMessages\)/);
   assert.match(projection, /getAiSessionDetail/);
   assert.match(projection, /getAiSessionTurnBody/);
   assert.doesNotMatch(projection, /updatedAt[\s\S]{0,200}getAiSessionDetail/);

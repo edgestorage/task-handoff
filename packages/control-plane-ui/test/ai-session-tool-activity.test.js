@@ -175,12 +175,14 @@ test("detail user prompts collapse to three lines with a local toggle", () => {
   assert.match(panel, /<AiSessionCompactPrompt[\s\S]*:timestamp="selectedPromptTimestamp"/);
   assert.match(panel, /aiSessionTurns\(session\)\[promptIndexFor\(session\)\]\?\.startedAt \|\| session\.startedAt/);
   assert.match(compactPrompt, /class="ai-session-user-prompt-content"[\s\S]*:class="\{ expanded, 'has-overflow': hasOverflow \}"/);
+  assert.match(compactPrompt, /<AiSessionMessageAttachments[\s\S]*v-for="message in attachmentMessages"[\s\S]*compact/);
   assert.match(compactPrompt, /v-if="hasOverflow"[\s\S]*:aria-expanded="expanded"[\s\S]*@click="toggleExpanded"/);
   assert.match(compactPrompt, /max-height: calc\(1\.55em \* 3\)/);
   assert.match(compactPrompt, /\.ai-session-user-prompt-content\.has-overflow:not\(\.expanded\) \{[\s\S]*-webkit-mask-image: linear-gradient\(to bottom, #000 calc\(100% - 12px\), transparent 100%\);[\s\S]*mask-image: linear-gradient\(to bottom, #000 calc\(100% - 12px\), transparent 100%\);/);
   assert.match(compactPrompt, /collapsedPromptHeight[\s\S]*if \(!opening\) element\.style\.maxHeight = "none";[\s\S]*expanded\.value = opening;[\s\S]*element\.animate\([\s\S]*duration: 180[\s\S]*fill: "both"/);
   assert.match(compactPrompt, /animation\.finished\.then[\s\S]*element\.style\.maxHeight = "";[\s\S]*animation\.cancel\(\)/);
   assert.match(compactPrompt, /class="ai-session-user-prompt-time"[\s\S]*\{\{ formattedTime \}\}/);
+  assert.match(compactPrompt, /\.ai-session-user-prompt-time \{[\s\S]*padding-inline: 0 3px;/);
   assert.match(compactPrompt, /class="ai-session-user-prompt-copy"[\s\S]*@click="copyContent"/);
   assert.match(compactPrompt, /navigator\.clipboard\.writeText\(props\.content\)/);
   assert.match(compactPrompt, /\.ai-session-compact-prompt:hover \.ai-session-user-prompt-copy,[\s\S]*opacity: 1;[\s\S]*pointer-events: auto;/);
@@ -190,8 +192,10 @@ test("detail user prompts collapse to three lines with a local toggle", () => {
   assert.doesNotMatch(panel, /session-ai-detail-head-placeholder|detailHeaderPlaceholderHeight/);
 });
 
-test("detail context shows the registered folder, lifecycle, and instance on one line", () => {
-  assert.match(panel, /<TooltipProvider :delay-duration="120">[\s\S]*class="session-ai-detail-context"[\s\S]*<Folder :size="14"[\s\S]*\{\{ selectedSessionFolderName \}\}[\s\S]*aiSessionStatusLabel\(selectedSession, t\)[\s\S]*<Boxes :size="14"[\s\S]*\{\{ selectedSessionInstanceName \}\}/);
+test("detail context shows the registered folder, instance, agent, and lifecycle on one line", () => {
+  assert.match(panel, /<TooltipProvider :delay-duration="120">[\s\S]*class="session-ai-detail-context"[\s\S]*<Folder :size="14"[\s\S]*\{\{ selectedSessionFolderName \}\}[\s\S]*<Boxes :size="14"[\s\S]*\{\{ selectedSessionInstanceName \}\}[\s\S]*<AiAgentIcon :agent="selectedSessionAgentIcon" :size="14"[\s\S]*aiSessionStatusLabel\(selectedSession, t\)/);
+  assert.match(panel, /class="session-ai-detail-agent" :aria-label="agentDisplayName\(selectedSession\.agent\)"[\s\S]*<TooltipContent side="top" :side-offset="8">\{\{ agentDisplayName\(selectedSession\.agent\) \}\}<\/TooltipContent>/);
+  assert.match(panel, /selectedSessionAgentIcon = computed<"codex" \| "claude" \| "opencode" \| undefined>[\s\S]*agent === "codex" \|\| agent === "claude" \|\| agent === "opencode" \? agent : undefined/);
   assert.match(panel, /session\.cwdFolderId[\s\S]*props\.nodeLocalFolders[\s\S]*nodeLocalFolderDisplayName\(folder\)[\s\S]*aiSessionBasename\(session\.cwd\)/);
   assert.match(panel, /selectedSessionFolderPath[\s\S]*session\.cwd[\s\S]*find\(\(candidate\) => candidate\.id === session\.cwdFolderId\)\?\.path/);
   assert.match(panel, /props\.instance\.name \|\| props\.instance\.id/);
@@ -200,6 +204,7 @@ test("detail context shows the registered folder, lifecycle, and instance on one
   assert.match(panel, /props\.instance\.node\?\.name \|\| props\.instance\.nodeId/);
   assert.doesNotMatch(panel, /class="session-ai-detail-context-item"[^>]*:title=/);
   assert.match(panelCss, /\.session-ai-detail-context \{[\s\S]*display: flex;[\s\S]*align-items: center;[\s\S]*font-size: 13px;[\s\S]*font-weight: 400;/);
+  assert.match(panelCss, /\.session-ai-detail-agent \{[\s\S]*display: inline-flex;[\s\S]*align-items: center;[\s\S]*flex: 0 0 auto;/);
   assert.doesNotMatch(panel, /aiSessionAppDisplayName\(aiSessionAppTab\(instance, selectedSession\)/);
 });
 

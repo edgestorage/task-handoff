@@ -190,7 +190,9 @@
                         <DropdownMenuItem :disabled="Boolean(selectedResource.story.archivedAt) || !availableSessions.length" @select="openAssignSession"><Link :size="14" /> {{ t("stories.addExisting") }}</DropdownMenuItem>
                         <DropdownMenuItem :disabled="Boolean(selectedResource.story.archivedAt)" @select="openCreateAction()"><Play :size="14" /> {{ t("stories.addAction") }}</DropdownMenuItem>
                         <DropdownMenuItem :disabled="Boolean(selectedResource.story.archivedAt)" @select="openCreateAutomation()"><CalendarClock :size="14" /> {{ t("stories.automation.add") }}</DropdownMenuItem>
+                        <DropdownMenuSeparator />
                         <DropdownMenuItem @select="toggleArchive(selectedResource.story)"><Archive v-if="!selectedResource.story.archivedAt" :size="14" /><RotateCcw v-else :size="14" /> {{ t(selectedResource.story.archivedAt ? "common.actions.restore" : "common.actions.archive") }}</DropdownMenuItem>
+                        <DropdownMenuItem class="story-detail-action-menu-item danger" @select="deleteStory(selectedResource.story)"><Trash2 :size="14" /> {{ t("common.actions.delete") }}</DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>
                   </div>
@@ -371,7 +373,7 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useQueryClient } from "@tanstack/vue-query";
-import { Archive, BookOpen, CalendarClock, ChevronLeft, ChevronRight, Download, FileText, History, Link, LoaderCircle, MessageSquare, MessageSquarePlus, MoreHorizontal, Pencil, Play, Plus, RotateCcw, X } from "@lucide/vue";
+import { Archive, BookOpen, CalendarClock, ChevronLeft, ChevronRight, Download, FileText, History, Link, LoaderCircle, MessageSquare, MessageSquarePlus, MoreHorizontal, Pencil, Play, Plus, RotateCcw, Trash2, X } from "@lucide/vue";
 import AiSessionStatusIndicator from "../../../components/ai-session/AiSessionStatusIndicator.vue";
 import AiSessionStreamingMarkdown from "../../../components/ai-session/AiSessionStreamingMarkdown.vue";
 import { Button } from "../../../components/ui/button";
@@ -1312,6 +1314,8 @@ onBeforeUnmount(() => {
 .story-content-download { display:inline-flex; align-items:center; gap:6px; color:var(--text-muted); font-size:12px; text-decoration:none; }
 .story-content-download:hover { color:var(--text-strong); }
 .story-content-actions { display:flex; align-items:center; gap:8px; flex:0 0 auto; }
+:global(.story-detail-action-menu-item.danger) { color:var(--status-danger); }
+:global(.story-detail-action-menu-item.danger:hover),:global(.story-detail-action-menu-item.danger:focus-visible),:global(.story-detail-action-menu-item.danger[data-highlighted]) { background:var(--status-danger-bg); color:var(--status-danger); }
 .story-session-creator { flex:1; min-height:0; }
 .story-detail-header-tabs { flex:0 0 auto; margin-left:auto; min-width:0; }
 .story-detail-tabs { display:inline-flex; align-items:center; width:fit-content; height:32px; min-height:32px; border:1px solid var(--line); border-radius:7px; background:var(--surface-inset); padding:2px; }

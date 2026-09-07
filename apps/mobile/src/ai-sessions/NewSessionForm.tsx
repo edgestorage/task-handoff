@@ -72,10 +72,10 @@ export function NewSessionForm(props: NewSessionFormProps) {
       contentContainerStyle={[styles.screenContent, { paddingBottom: 24 + (props.visualBalanceInset ?? 0) }]}
       testID="new-session-scroll"
     >
-      <View style={styles.intro}>
+      {props.header ?? <View style={styles.intro}>
         <Text style={[styles.heading, { color: colors.text }]}>{t('sessions.startIdea')}</Text>
         <Text style={[styles.description, { color: colors.textMuted }]}>{t('sessions.ideaDescription')}</Text>
-      </View>
+      </View>}
 
       <View style={[styles.composer, { backgroundColor: colors.surface, borderColor: colors.border }]}>
         <View style={styles.contextRow}>
@@ -97,7 +97,7 @@ export function NewSessionForm(props: NewSessionFormProps) {
         </View>
 
         <TextInputWrapper
-          interceptTextPasteAbove={AI_SESSION_LONG_PASTE_CODE_POINT_THRESHOLD}
+          interceptTextPasteAbove={props.attachmentsDisabled ? undefined : AI_SESSION_LONG_PASTE_CODE_POINT_THRESHOLD}
           onPaste={(payload: PasteEventPayload) => {
             if (payload.type === 'images') props.onPasteImages?.(payload.uris);
             else if (payload.type === 'text' && payload.intercepted) props.onPasteText?.(payload.value);
@@ -135,7 +135,7 @@ export function NewSessionForm(props: NewSessionFormProps) {
 
         <View style={styles.toolbar} testID="new-session-composer-toolbar">
           <View style={styles.leadingTools}>
-            <AttachmentMenu
+            {!props.attachmentsDisabled ? <AttachmentMenu
               cancelLabel={t('common.cancel')}
               fileDisabled={props.busy}
               fileLabel={t('composer.deviceFile')}
@@ -159,7 +159,7 @@ export function NewSessionForm(props: NewSessionFormProps) {
               >
                 <Plus color={colors.textMuted} size={SESSION_COMPOSER_ATTACHMENT_ICON_SIZE} strokeWidth={1.9} />
               </Pressable>}
-            </AttachmentMenu>
+            </AttachmentMenu> : null}
             {props.permissionModes?.length ? <PermissionButton disabled={props.busy} mode={props.permissionMode} modes={props.permissionModes} onChange={props.onPermissionModeChange} /> : null}
           </View>
           <View style={styles.trailingTools}>
@@ -170,7 +170,7 @@ export function NewSessionForm(props: NewSessionFormProps) {
               </Pressable>}
             </ModelSettingsMenu> : null}
             <Pressable
-              accessibilityLabel={props.busy ? t('sessions.creating') : t('sessions.create')}
+              accessibilityLabel={props.busy ? props.submittingLabel ?? t('sessions.creating') : props.submitLabel ?? t('sessions.create')}
               accessibilityRole="button"
               accessibilityState={{ disabled: props.disabled }}
               disabled={props.disabled}

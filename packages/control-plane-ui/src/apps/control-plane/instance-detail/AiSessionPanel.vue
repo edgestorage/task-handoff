@@ -783,8 +783,6 @@
                   <TooltipContent class="ai-session-path-tooltip" side="top" :side-offset="8">{{ selectedSessionFolderPath }}</TooltipContent>
                 </Tooltip>
                 <span class="session-ai-detail-context-separator" aria-hidden="true">·</span>
-                <span>{{ aiSessionStatusLabel(selectedSession, t) }}</span>
-                <span class="session-ai-detail-context-separator" aria-hidden="true">·</span>
                 <Tooltip>
                   <TooltipTrigger as-child>
                     <span class="session-ai-detail-context-item">
@@ -794,6 +792,19 @@
                   </TooltipTrigger>
                   <TooltipContent class="ai-session-path-tooltip" side="top" :side-offset="8">{{ selectedSessionNodeName }}</TooltipContent>
                 </Tooltip>
+                <template v-if="selectedSessionAgentIcon">
+                  <span class="session-ai-detail-context-separator" aria-hidden="true">·</span>
+                  <Tooltip>
+                    <TooltipTrigger as-child>
+                      <span class="session-ai-detail-agent" :aria-label="agentDisplayName(selectedSession.agent)">
+                        <AiAgentIcon :agent="selectedSessionAgentIcon" :size="14" />
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="top" :side-offset="8">{{ agentDisplayName(selectedSession.agent) }}</TooltipContent>
+                  </Tooltip>
+                </template>
+                <span class="session-ai-detail-context-separator" aria-hidden="true">·</span>
+                <span>{{ aiSessionStatusLabel(selectedSession, t) }}</span>
               </div>
             </TooltipProvider>
             <div v-if="effectiveTimelineViewMode === 'compact'" class="session-ai-detail-prompt-stage">
@@ -802,7 +813,10 @@
                   <AiSessionCompactPrompt
                     :code-tools="markdownCodeTools"
                     :content="selectedSessionContentState === 'ready' ? displayAiSessionTitle(selectedConversationSession || selectedSession, promptIndexFor(selectedSession), t) : ''"
+                    :instance-id="instance.id"
+                    :session-id="selectedSession.id"
                     :timestamp="selectedPromptTimestamp"
+                    :user-messages="selectedPromptUserMessages"
                   />
                 </section>
               </Transition>
@@ -1475,6 +1489,13 @@ const selectedPromptTimestamp = computed(() => {
   if (!session) return "";
   return aiSessionTurns(session)[promptIndexFor(session)]?.startedAt || session.startedAt;
 });
+const selectedPromptUserMessages = computed(() => {
+  if (selectedSessionContentState.value !== "ready") return [];
+  const session = selectedConversationSession.value;
+  if (!session) return [];
+  const turn = aiSessionTurns(session)[promptIndexFor(session)];
+  return turn && "userMessages" in turn && Array.isArray(turn.userMessages) ? turn.userMessages : [];
+});
 const selectedSessionFolderName = computed(() => {
   const session = selectedSession.value;
   if (!session) return t("sessions.board.unknownFolder");
@@ -1495,6 +1516,10 @@ const selectedSessionFolderPath = computed(() => {
 });
 const selectedSessionInstanceName = computed(() => props.instance.name || props.instance.id);
 const selectedSessionNodeName = computed(() => props.instance.node?.name || props.instance.nodeId);
+const selectedSessionAgentIcon = computed<"codex" | "claude" | "opencode" | undefined>(() => {
+  const agent = selectedSession.value?.agent;
+  return agent === "codex" || agent === "claude" || agent === "opencode" ? agent : undefined;
+});
 
 async function setTimelineViewMode(value: unknown) {
   if (value !== "compact" && value !== "full") return;

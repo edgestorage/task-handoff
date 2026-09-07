@@ -237,7 +237,7 @@ export class NodeModelRegistry {
     }
   }
 
-  private environmentForRef(app: "codex" | "claude" | "opencode", modelHash?: string) {
+  private environmentForRef(app: "codex" | "claude", modelHash?: string) {
     if (!modelHash) return {};
     this.validateRef(app, modelHash);
     const model = this.requireModel(modelHash);
@@ -247,31 +247,14 @@ export class NodeModelRegistry {
       TASK_HANDOFF_CODEX_BASE_URL: model.endpoint,
       TASK_HANDOFF_CODEX_MODEL: model.model,
     };
-    if (app === "claude") return {
+    return {
       ANTHROPIC_API_KEY: model.key,
       ANTHROPIC_BASE_URL: model.endpoint,
       TASK_HANDOFF_CLAUDE_MODEL: model.model,
     };
-    const definition = {
-      npm: "@ai-sdk/openai-compatible",
-      name: "TaskHandoff",
-      options: { baseURL: model.endpoint, apiKey: model.key },
-      models: { [model.model]: { name: model.name, variants: openCodeReasoningVariants() } },
-    };
-    const providerId = `task-handoff-${model.id}`;
-    return {
-      TASK_HANDOFF_OPENCODE_CONFIG_CONTENT: JSON.stringify({
-        $schema: "https://opencode.ai/config.json",
-        model: `${providerId}/${model.model}`,
-        provider: { [providerId]: definition },
-      }),
-    };
   }
 
   private environmentForOpenCode(assignment: z.infer<typeof NodeModelAssignmentSchema>) {
-    // Compatibility for v0.0.23: legacy assignments use the stable `task-handoff`
-    // provider identity so existing OpenCode sessions remain resumable.
-    if (assignment.opencodeModelHash) return this.environmentForRef("opencode", assignment.opencodeModelHash);
     const entities = assignment.modelEntityIds
       .map((id) => this.requireModel(id))
       .filter((model) => this.modelSupportsApp(model, "opencode"));
@@ -280,13 +263,15 @@ export class NodeModelRegistry {
     const firstModelName = normalizeModelNames(firstEntity.modelNames, firstEntity.model)[0].name;
     const providers = Object.fromEntries(entities.map((model) => [
       `task-handoff-${model.id}`,
-      {
-        npm: "@ai-sdk/openai-compatible",
-        name: model.name,
-        options: { baseURL: model.endpoint, apiKey: model.key },
-        models: Object.fromEntries(normalizeModelNames(model.modelNames, model.model).map((entry) => [entry.name, { name: model.name, variants: openCodeReasoningVariants() }])),
-      },
+      openCodeProvider(model, normalizeModelNames(model.modelNames, model.model).map((entry) => entry.name)),
     ]));
+    // Compatibility for v0.0.23: sessions created from a legacy assignment
+    // persist the stable `task-handoff` provider id. Keep that alias available,
+    // while the ordered entity catalog remains authoritative for new choices.
+    if (assignment.opencodeModelHash) {
+      const legacyModel = this.requireModel(assignment.opencodeModelHash);
+      providers["task-handoff"] = openCodeProvider(legacyModel, [legacyModel.model]);
+    }
     return {
       TASK_HANDOFF_OPENCODE_CONFIG_CONTENT: JSON.stringify({
         $schema: "https://opencode.ai/config.json",
@@ -411,6 +396,18 @@ export class NodeModelRegistry {
 function openCodeReasoningVariants() {
   return Object.fromEntries(["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
     .map((effort) => [effort, { reasoningEffort: effort }]));
+}
+
+function openCodeProvider(model: NodeModelConfig, modelNames: string[]) {
+  return {
+    npm: "@ai-sdk/openai-compatible",
+    name: model.name,
+    options: { baseURL: model.endpoint, apiKey: model.key },
+    models: Object.fromEntries(modelNames.map((name) => [name, {
+      name: model.name,
+      variants: openCodeReasoningVariants(),
+    }])),
+  };
 }
 
 function defaultProtocols(app: "codex" | "claude" | "opencode") {

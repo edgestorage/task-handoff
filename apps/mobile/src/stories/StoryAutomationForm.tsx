@@ -85,7 +85,7 @@ export function StoryAutomationForm({ automationId, nodeId, onSaved, storyId }: 
   if (loading) return <ActivityIndicator accessibilityLabel={t('common.loading')} style={styles.loading} />;
   if (!story || !draft || (automationId && !status)) return <View style={styles.state}><Text style={{ color: colors.error }}>{error || t('stories.automationNotFound')}</Text></View>;
   return <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.fill}>
-    <ScrollView automaticallyAdjustKeyboardInsets contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+    <ScrollView automaticallyAdjustKeyboardInsets contentInsetAdjustmentBehavior="automatic" contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" testID="story-automation-scroll">
       <FormSection title={t('stories.automationAction')}>
         {!automationId ? <SegmentedChoices onSelect={(value) => setActionMode(value as 'existing' | 'new')} options={[{ value: 'existing', label: t('stories.selectAction') }, { value: 'new', label: t('stories.newAction') }]} selected={actionMode} /> : null}
         {actionMode === 'new' && !automationId ? <>
