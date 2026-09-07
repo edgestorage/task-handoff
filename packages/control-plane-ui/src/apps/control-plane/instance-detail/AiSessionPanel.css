@@ -1615,7 +1615,7 @@
   gap: 7px;
   min-width: 0;
   border-bottom: 1px solid var(--line-subtle);
-  padding-bottom: 16px;
+  padding-bottom: 8px;
 }
 
 .session-ai-detail-block > span {
@@ -1744,7 +1744,7 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: flex-start;
-  gap: 12px;
+  gap: 8px;
   border: 0;
   padding: 0;
 }
@@ -1870,6 +1870,14 @@
 
 .session-ai-detail-context-item > svg {
   flex: 0 0 auto;
+}
+
+.session-ai-detail-agent {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  color: var(--text-muted);
 }
 
 .session-ai-detail-context-separator {

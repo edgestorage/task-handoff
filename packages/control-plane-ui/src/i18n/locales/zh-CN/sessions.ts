@@ -95,6 +95,7 @@ export const sessions = {
     compact: "简洁",
     full: "对话",
     user: "你",
+    image: "图片",
     loading: "正在加载完整活动…",
     loadFailed: "无法加载完整活动。",
     noHistory: "暂无完整会话历史。",

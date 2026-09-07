@@ -71,8 +71,11 @@
             <section v-if="timelineMode === 'compact'" ref="promptSectionEl" class="ai-board-floating-block ai-board-floating-block-user">
               <AiSessionCompactPrompt
                 :content="detailState === 'ready' ? displayAiSessionTitle(conversationSession, promptIndex, t) : ''"
+                :instance-id="card.instance.id"
+                :session-id="conversationSession.id"
                 :timestamp="promptTimestamp"
                 tone="board"
+                :user-messages="promptUserMessages"
               />
             </section>
 
@@ -261,6 +264,14 @@ const promptTimestamp = computed(() => (
   aiSessionTurns(props.conversationSession)[props.promptIndex]?.startedAt
   || props.conversationSession.startedAt
 ));
+const promptUserMessages = computed(() => (
+  props.detailState === "ready" ? retainedPromptUserMessages() : []
+));
+
+function retainedPromptUserMessages() {
+  const turn = aiSessionTurns(props.conversationSession)[props.promptIndex];
+  return turn && "userMessages" in turn && Array.isArray(turn.userMessages) ? turn.userMessages : [];
+}
 const permissionModes = computed(() => directoryAiSessionProviderCapability(
   props.card.instance.capabilities?.features,
   props.card.session.agent,

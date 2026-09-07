@@ -25,6 +25,13 @@ test("Story detail tabs merge section counts into the sticky header", () => {
   assert.match(storyView, /value="automations"><span class="story-detail-tab-count">\{\{ storyAutomationEntries\.length \}\}<\/span>\{\{ t\("stories\.automation\.title"\) \}\}<\/TabsTrigger>/);
 });
 
+test("Story detail actions match the tree menu after the standalone edit action", () => {
+  assert.match(
+    storyView,
+    /@select="openCreateAutomation\(\)"[\s\S]*?<DropdownMenuSeparator \/>[\s\S]*?@select="toggleArchive\(selectedResource\.story\)"[\s\S]*?class="story-detail-action-menu-item danger" @select="deleteStory\(selectedResource\.story\)"/,
+  );
+});
+
 test("Story detail moves its scrollbar outward without shifting the content viewport", () => {
   assert.match(storyView, /\.story-detail-scroll \{[^}]*margin-right:-16px;/);
   assert.match(storyView, /\.story-detail-scroll :deep\(\[data-task-handoff-scroll-viewport\]\) \{ width:calc\(100% - 16px\); \}/);

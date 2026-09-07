@@ -92,6 +92,7 @@ export const sessions = {
     compact: "Compact",
     full: "Conversation",
     user: "You",
+    image: "Image",
     loading: "Loading full activity…",
     loadFailed: "Failed to load full activity.",
     noHistory: "No full conversation history is available.",

@@ -4,15 +4,19 @@ import { ControlPlaneInstanceDirectoryEntrySchema } from '@task-handoff/protocol
 import { StoryAutomationStatusSchema, StorySchema } from '@task-handoff/protocol/stories';
 import { router } from 'expo-router';
 
-import { StoryDetail } from '../src/stories/StoryDetail';
+import { layoutFromEvent, StoryDetail } from '../src/stories/StoryDetail';
 import { useMobileControlPlaneRuntime } from '../src/control-plane/use-mobile-control-plane-runtime';
 import { useActiveDirectories } from '../src/directories/use-directories';
 import { useActiveAiSessionsSnapshot } from '../src/ai-sessions/use-active-sessions';
 import { mobilePermissionStore } from '../src/control-plane/runtime';
 
 jest.mock('expo-crypto', () => ({ randomUUID: () => 'action-request-1' }));
+jest.mock('@expo/ui/community/menu', () => ({
+  MenuView: ({ actions, children, onPressAction }: { actions: unknown[]; children: unknown; onPressAction: (event: unknown) => void }) => require('react').createElement(require('react-native').View, { actions, onPressAction, testID: 'story-detail-menu' }, children),
+}));
 jest.mock('expo-router', () => ({
-  router: { push: jest.fn() },
+  router: { back: jest.fn(), push: jest.fn() },
+  Stack: { Screen: ({ options }: { options: { headerRight?: () => unknown } }) => options.headerRight?.() ?? null },
   useFocusEffect: (callback: () => void | (() => void)) => require('react').useEffect(callback, [callback]),
 }));
 jest.mock('../src/control-plane/use-mobile-control-plane-runtime', () => ({ useMobileControlPlaneRuntime: jest.fn() }));
@@ -57,6 +61,12 @@ const story = StorySchema.parse({
 const mockRuntime = jest.mocked(useMobileControlPlaneRuntime);
 const mockDirectories = jest.mocked(useActiveDirectories);
 const mockSessions = jest.mocked(useActiveAiSessionsSnapshot);
+
+test('ignores null native layout events from iOS transitions', () => {
+  expect(layoutFromEvent(null)).toBeUndefined();
+  expect(layoutFromEvent({ nativeEvent: null } as never)).toBeUndefined();
+  expect(layoutFromEvent({ nativeEvent: { layout: { height: 42, width: 100, x: 0, y: 0 } } } as never)).toEqual({ height: 42, width: 100, x: 0, y: 0 });
+});
 
 beforeEach(() => {
   jest.clearAllMocks();
@@ -134,4 +144,21 @@ test('shows authoritative automations and can run one manually', async () => {
 
   fireEvent.press(screen.getByLabelText('Add Automation'));
   expect(router.push).toHaveBeenCalledWith(expect.objectContaining({ pathname: `/stories/${story.id}/automations/new` }));
+});
+
+test('exposes the Web Story detail actions from the navigation menu', async () => {
+  const archive = jest.fn().mockResolvedValue({ ...story, archivedAt: '2026-09-06T00:00:00.000Z' });
+  mockRuntime.mockReturnValue({ api: { stories: { get: jest.fn().mockResolvedValue(story), listAutomations: jest.fn().mockResolvedValue({ automations: [] }), archive } } } as unknown as ReturnType<typeof useMobileControlPlaneRuntime>);
+  mockDirectories.mockReturnValue({ controlPlaneId: 'cp-1', state: { instances: [instance], nodes: [] } } as unknown as ReturnType<typeof useActiveDirectories>);
+  mockSessions.mockReturnValue({ instances: [{ instanceId: instance.id, aiSessions: { sessions: [{ id: 'available', status: 'idle', startedAt: '2026-09-05T00:00:00.000Z', updatedAt: '2026-09-05T00:00:00.000Z', unread: false }] } }] } as unknown as ReturnType<typeof useActiveAiSessionsSnapshot>);
+
+  const screen = await render(<StoryDetail nodeId="node-1" onOpenSession={jest.fn()} storyId={story.id} />);
+  const menu = await screen.findByTestId('story-detail-menu');
+  expect(menu.props.actions.map((action: { id: string }) => action.id)).toEqual(['new-session', 'add-existing', 'add-action', 'add-automation', 'archive', 'delete']);
+
+  await act(async () => {
+    menu.props.onPressAction({ nativeEvent: { event: 'archive' } });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  });
+  expect(archive).toHaveBeenCalledWith(story.id, story.ownerNodeId);
 });

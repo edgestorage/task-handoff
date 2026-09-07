@@ -1,17 +1,23 @@
 import { useEffect, useMemo, useState } from 'react';
 import * as Crypto from 'expo-crypto';
-import { ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
-import type { Story } from '@task-handoff/protocol/stories';
+import { ActivityIndicator, Platform, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { defaultAiSessionModelSelection, deriveAiSessionModelGroups, type AiSessionCatalogModelEntity } from '@task-handoff/control-plane-client';
+import { normalizeAiSessionReasoningEffortCapabilities } from '@task-handoff/protocol/ai-session-provider-capabilities';
+import { directoryAiSessionProviderCapability } from '@task-handoff/protocol/control-plane-directory';
+import { AI_SESSION_DEFAULT_REASONING_EFFORT, type AiSessionGitSelection, type AiSessionModelSelection, type AiSessionPermissionMode, type AiSessionReasoningEffort } from '@task-handoff/protocol/ai-sessions';
+import type { RepositoryAiSessionWorkspace } from '@task-handoff/protocol/repository';
+import type { Story, StorySessionPreset } from '@task-handoff/protocol/stories';
 
-import { NewSessionContextMenu } from '../ai-sessions/NewSessionContextMenu';
-import { ContextPill } from '../components/ContextPill';
-import { SystemIcon } from '../components/SystemIcon';
+import { NewSessionForm, newSessionVisualBalanceInset } from '../ai-sessions/NewSessionForm';
+import { aiSessionFolderOptions, defaultAiSessionFolderId, initialInstanceId, instanceCreateGuidance, type AiSessionFolderOption } from '../ai-sessions/new-session-types';
 import { useMobileTheme } from '../components/theme';
 import { useMobileControlPlaneRuntime } from '../control-plane/use-mobile-control-plane-runtime';
 import { useActiveDirectories } from '../directories/use-directories';
 import { useI18n } from '../i18n';
 
 export function StoryActionEditor({ nodeId, onSaved, storyId }: { nodeId?: string; onSaved(): void; storyId?: string }) {
+  const insets = useSafeAreaInsets();
   const { colors } = useMobileTheme();
   const { t } = useI18n();
   const runtime = useMobileControlPlaneRuntime();
@@ -19,7 +25,19 @@ export function StoryActionEditor({ nodeId, onSaved, storyId }: { nodeId?: strin
   const [story, setStory] = useState<Story>();
   const [title, setTitle] = useState('');
   const [prompt, setPrompt] = useState('');
-  const [targetInstanceId, setTargetInstanceId] = useState('');
+  const [selection, setSelection] = useState<{ instanceId?: string; agent?: string; folderId?: string }>({});
+  const [permissionSelection, setPermissionSelection] = useState<{ instanceId: string; agent: string; value: AiSessionPermissionMode }>();
+  const [modelEntities, setModelEntities] = useState<AiSessionCatalogModelEntity[]>([]);
+  const [modelSelectionDraft, setModelSelectionDraft] = useState<{ instanceId: string; agent: string; value: AiSessionModelSelection }>();
+  const [reasoningSelection, setReasoningSelection] = useState<{ instanceId: string; agent: string; value: AiSessionReasoningEffort }>();
+  const [folderState, setFolderState] = useState<{ nodeId: string; folders: AiSessionFolderOption[] }>({ nodeId: '', folders: [] });
+  const [workspaceState, setWorkspaceState] = useState<{
+    instanceId?: string;
+    folderId?: string;
+    workspace?: RepositoryAiSessionWorkspace;
+    mode: 'current-folder' | 'worktree';
+    branch?: string;
+  }>({ mode: 'current-folder' });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -28,27 +46,139 @@ export function StoryActionEditor({ nodeId, onSaved, storyId }: { nodeId?: strin
     if (!runtime.api || !storyId || !nodeId) return;
     let live = true;
     void runtime.api.stories.get(storyId, nodeId).then((value) => {
-      if (!live) return;
-      setStory(value);
-    }).catch((cause) => { if (live) setError(cause instanceof Error ? cause.message : String(cause)); }).finally(() => { if (live) setLoading(false); });
+      if (live) setStory(value);
+    }).catch((cause) => {
+      if (live) setError(cause instanceof Error ? cause.message : String(cause));
+    }).finally(() => {
+      if (live) setLoading(false);
+    });
     return () => { live = false; };
   }, [nodeId, runtime.api, storyId]);
 
-  const instances = useMemo(() => story ? directory.instances.filter((instance) => instance.nodeId === story.ownerNodeId && instance.ready) : [], [directory.instances, story]);
-  const selectedInstance = instances.find((instance) => instance.id === targetInstanceId) || instances[0];
-  const selectedTargetInstanceId = targetInstanceId || selectedInstance?.id;
-  const valid = Boolean(story && !story.archivedAt && title.trim() && prompt.trim());
+  const instances = useMemo(
+    () => story ? directory.instances.filter((instance) => instance.nodeId === story.ownerNodeId) : [],
+    [directory.instances, story],
+  );
+  const selectedInstanceId = instances.some((instance) => instance.id === selection.instanceId)
+    ? selection.instanceId!
+    : initialInstanceId(instances);
+  const selectedInstance = instances.find((instance) => instance.id === selectedInstanceId);
+  const agent = selectedInstance?.availableAgents.some((candidate) => candidate.id === selection.agent)
+    ? selection.agent!
+    : selectedInstance?.availableAgents[0]?.id ?? '';
+  const folderId = selection.instanceId === selectedInstanceId ? selection.folderId : undefined;
+  const folders = folderState.nodeId === selectedInstance?.nodeId ? folderState.folders : [];
+  const selectedFolder = folders.find((folder) => folder.id === folderId);
+  const providerCapability = directoryAiSessionProviderCapability(selectedInstance?.capabilities, agent);
+  const permissionModes = providerCapability?.permissionModes || [];
+  const requestedPermissionMode = permissionSelection?.instanceId === selectedInstanceId && permissionSelection.agent === agent
+    ? permissionSelection.value
+    : selectedInstance?.config.defaultCodexPermissionMode ?? 'ask';
+  const permissionMode = permissionModes.includes(requestedPermissionMode) ? requestedPermissionMode : permissionModes[0] ?? requestedPermissionMode;
+  const modelGroups = selectedInstance ? deriveAiSessionModelGroups({
+    entities: modelEntities,
+    assignment: selectedInstance.modelSelection,
+    agent,
+    nodeId: selectedInstance.nodeId,
+    mode: 'create',
+    capability: providerCapability?.modelSelection,
+  }) : [];
+  const modelSelection = modelSelectionDraft?.instanceId === selectedInstanceId && modelSelectionDraft.agent === agent
+    ? modelSelectionDraft.value
+    : defaultAiSessionModelSelection(modelGroups);
+  const reasoningCapability = normalizeAiSessionReasoningEffortCapabilities(providerCapability);
+  const reasoningEffort = reasoningCapability.selectAtCreate
+    ? reasoningSelection?.instanceId === selectedInstanceId && reasoningSelection.agent === agent
+      ? reasoningSelection.value
+      : agent === 'codex' ? AI_SESSION_DEFAULT_REASONING_EFFORT : undefined
+    : undefined;
+
+  useEffect(() => {
+    if (!runtime.api || !selectedInstance) return;
+    const abort = new AbortController();
+    void Promise.all([
+      runtime.api.resources.nodeLocalFolders(selectedInstance.nodeId, abort.signal),
+      runtime.api.resources.instanceWorkspaceSource(selectedInstance.id, abort.signal).catch(() => undefined),
+    ]).then(([nodeFolders, source]) => {
+      if (abort.signal.aborted) return;
+      const options = aiSessionFolderOptions(source, selectedInstance.workspace.path, nodeFolders);
+      const defaultFolder = defaultAiSessionFolderId(source, selectedInstance.workspace.path, nodeFolders);
+      setFolderState({ nodeId: selectedInstance.nodeId, folders: options });
+      setSelection((current) => ({
+        instanceId: selectedInstance.id,
+        agent: current.instanceId === selectedInstance.id ? current.agent : undefined,
+        folderId: current.instanceId === selectedInstance.id && options.some((folder) => folder.id === current.folderId)
+          ? current.folderId
+          : defaultFolder,
+      }));
+    }).catch((cause) => {
+      if (!abort.signal.aborted) setError(cause instanceof Error ? cause.message : String(cause));
+    });
+    return () => abort.abort();
+  }, [runtime.api, selectedInstance]);
+
+  useEffect(() => {
+    if (!runtime.api) return;
+    const abort = new AbortController();
+    void runtime.api.resources.models(abort.signal).then((registry) => {
+      if (!abort.signal.aborted) setModelEntities(registry.models.map((group) => ({ ...group.model, locations: group.locations })));
+    }).catch(() => {
+      if (!abort.signal.aborted) setModelEntities([]);
+    });
+    return () => abort.abort();
+  }, [runtime.api]);
+
+  useEffect(() => {
+    if (!runtime.api || !selectedInstanceId || !selectedFolder) return;
+    const abort = new AbortController();
+    void runtime.api.aiSessions.workspace(selectedInstanceId, selectedFolder.cwdFolderId, abort.signal).then((workspace) => {
+      if (abort.signal.aborted) return;
+      setWorkspaceState({
+        instanceId: selectedInstanceId,
+        folderId,
+        workspace,
+        mode: 'current-folder',
+        branch: workspace.currentBranch
+          || workspace.branches.find((candidate) => candidate.current)?.name
+          || workspace.branches.find((candidate) => candidate.currentFolderSelectable)?.name,
+      });
+    }).catch(() => {
+      // Compatibility for v0.0.21: an older Control Plane keeps the cwd-only creation flow.
+      if (!abort.signal.aborted) setWorkspaceState({ instanceId: selectedInstanceId, folderId, mode: 'current-folder' });
+    });
+    return () => abort.abort();
+  }, [folderId, runtime.api, selectedFolder, selectedInstanceId]);
+
+  const workspaceMatchesSelection = workspaceState.instanceId === selectedInstanceId && workspaceState.folderId === folderId;
+  const workspaceLoading = Boolean(selectedInstanceId && folderId && !workspaceMatchesSelection);
+  const gitSelection: AiSessionGitSelection | undefined = workspaceMatchesSelection
+    && workspaceState.workspace?.availability === 'available'
+    && workspaceState.branch
+    ? { mode: workspaceState.mode, branch: workspaceState.branch }
+    : undefined;
+  const guidance = instanceCreateGuidance(selectedInstance);
+  const valid = Boolean(story && !story.archivedAt && title.trim() && prompt.trim() && selectedInstance && selectedFolder && agent && !guidance && !workspaceLoading);
+
   const save = async () => {
-    if (!runtime.api || !story || !valid || saving) return;
+    if (!runtime.api || !story || !selectedInstance || !valid || saving) return;
     setSaving(true);
     setError('');
+    const sessionPreset: StorySessionPreset = {
+      agent,
+      ...(selectedFolder?.cwdFolderId ? { cwdFolderId: selectedFolder.cwdFolderId } : {}),
+      ...(gitSelection ? { gitSelection } : {}),
+      ...(permissionModes.includes(permissionMode) ? { permissionMode } : {}),
+      ...(modelSelection ? { modelSelection } : {}),
+      ...(reasoningEffort ? { reasoningEffort } : {}),
+    };
     try {
       await runtime.api.stories.update(story.id, story.ownerNodeId, {
         actions: [...story.actions, {
           id: `action-${Crypto.randomUUID()}`,
           title: title.trim(),
           promptTemplate: prompt.trim(),
-          ...(selectedTargetInstanceId ? { targetInstanceId: selectedTargetInstanceId } : {}),
+          targetInstanceId: selectedInstance.id,
+          sessionPreset,
         }],
       });
       onSaved();
@@ -61,24 +191,86 @@ export function StoryActionEditor({ nodeId, onSaved, storyId }: { nodeId?: strin
 
   if (loading) return <ActivityIndicator accessibilityLabel={t('common.loading')} style={styles.loading} />;
   if (!story) return <View style={styles.state}><Text style={{ color: colors.error }}>{error || t('stories.loadError')}</Text></View>;
-  return <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.fill}>
-    <ScrollView automaticallyAdjustKeyboardInsets contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-      <View style={styles.field}><Text style={[styles.label, { color: colors.text }]}>{t('stories.actionTitle')}</Text><TextInput accessibilityLabel={t('stories.actionTitle')} autoCapitalize="sentences" onChangeText={setTitle} placeholder={t('stories.actionTitle')} placeholderTextColor={colors.textMuted} style={[styles.input, { backgroundColor: colors.surfaceMuted, borderColor: colors.border, color: colors.text }]} value={title} /></View>
-      <View style={styles.field}><Text style={[styles.label, { color: colors.text }]}>{t('stories.actionPrompt')}</Text><TextInput accessibilityLabel={t('stories.actionPrompt')} autoCapitalize="sentences" multiline onChangeText={setPrompt} placeholder={t('stories.actionPrompt')} placeholderTextColor={colors.textMuted} style={[styles.input, styles.textarea, { backgroundColor: colors.surfaceMuted, borderColor: colors.border, color: colors.text }]} textAlignVertical="top" value={prompt} /></View>
-      <View style={styles.field}><Text style={[styles.label, { color: colors.text }]}>{t('stories.actionTarget')}</Text><NewSessionContextMenu cancelLabel={t('common.cancel')} disabled={saving || !instances.length} onSelect={setTargetInstanceId} options={instances.map((instance) => ({ value: instance.id, label: instance.name, description: instance.id, systemImage: 'server.rack' as const }))} selectedValue={targetInstanceId} title={t('stories.actionTarget')}>
-          {(onPress) => <ContextPill disabled={saving || !instances.length} icon={{ android: 'dns', ios: 'server.rack' }} label={selectedInstance?.name || t('stories.noAvailableInstance')} onPress={onPress} />}
-      </NewSessionContextMenu></View>
-      {error ? <Text accessibilityLiveRegion="polite" style={[styles.error, { backgroundColor: colors.errorSoft, color: colors.error }]}>{error}</Text> : null}
-      <Pressable accessibilityRole="button" accessibilityState={{ disabled: !valid || saving }} disabled={!valid || saving} onPress={() => { void save(); }} style={({ pressed }) => [styles.submit, { backgroundColor: colors.primaryButton }, (!valid || saving) && styles.disabled, pressed && styles.pressed]}>
-        {saving ? <ActivityIndicator color="#fff" /> : <><SystemIcon android="save" color="#fff" ios="checkmark" size={18} /><Text style={styles.submitText}>{t('common.save')}</Text></>}
-      </Pressable>
-    </ScrollView>
-  </KeyboardAvoidingView>;
+
+  return <NewSessionForm
+    key={selectedInstance?.id || 'no-instance'}
+    attachments={[]}
+    attachmentsDisabled
+    busy={saving || workspaceLoading}
+    disabled={!valid || saving}
+    error={error || guidance}
+    folders={folders}
+    header={<View style={styles.titleField}>
+      <Text style={[styles.label, { color: colors.text }]}>{t('stories.actionTitle')}</Text>
+      <TextInput
+        accessibilityLabel={t('stories.actionTitle')}
+        autoCapitalize="sentences"
+        editable={!saving}
+        maxLength={120}
+        onChangeText={setTitle}
+        placeholder={t('stories.actionTitle')}
+        placeholderTextColor={colors.textMuted}
+        style={[styles.titleInput, { backgroundColor: colors.surface, borderColor: colors.border, color: colors.text }]}
+        value={title}
+      />
+    </View>}
+    instances={instances}
+    message={prompt}
+    modelGroups={modelGroups}
+    modelSelection={modelSelection}
+    nodes={directory.nodes}
+    permissionMode={permissionMode}
+    permissionModes={permissionModes}
+    reasoningEffort={reasoningEffort}
+    reasoningEffortEnabled={reasoningCapability.selectAtCreate}
+    selectedAgent={agent}
+    selectedBranch={workspaceMatchesSelection ? workspaceState.branch : undefined}
+    selectedFolderId={folderId}
+    selectedInstance={selectedInstance}
+    selectedInstanceId={selectedInstanceId}
+    submitLabel={t('stories.createAction')}
+    submittingLabel={t('stories.createAction')}
+    visualBalanceInset={newSessionVisualBalanceInset(Platform.OS, insets.top)}
+    workspace={workspaceMatchesSelection ? workspaceState.workspace : undefined}
+    workspaceLoading={workspaceLoading}
+    workspaceMode={workspaceMatchesSelection ? workspaceState.mode : 'current-folder'}
+    onAddFile={() => undefined}
+    onAddImage={() => undefined}
+    onAgentChange={(nextAgent) => {
+      setSelection({ instanceId: selectedInstanceId, agent: nextAgent, folderId });
+      setModelSelectionDraft(undefined);
+      setReasoningSelection(undefined);
+    }}
+    onBranchChange={(branch) => setWorkspaceState((current) => ({ ...current, branch }))}
+    onCreate={() => { void save(); }}
+    onFolderChange={(nextFolderId) => setSelection({ instanceId: selectedInstanceId, agent, folderId: nextFolderId })}
+    onInstanceChange={(instanceId) => {
+      const instance = instances.find((candidate) => candidate.id === instanceId);
+      setSelection({ instanceId, agent: instance?.availableAgents[0]?.id });
+      setModelSelectionDraft(undefined);
+      setReasoningSelection(undefined);
+    }}
+    onMessageChange={setPrompt}
+    onModelSelectionChange={(value) => setModelSelectionDraft({ instanceId: selectedInstanceId, agent, value })}
+    onPermissionModeChange={(value) => setPermissionSelection({ instanceId: selectedInstanceId, agent, value })}
+    onReasoningEffortChange={(value) => setReasoningSelection({ instanceId: selectedInstanceId, agent, value })}
+    onRemoveAttachment={() => undefined}
+    onWorkspaceModeChange={(mode) => {
+      const workspace = workspaceState.workspace;
+      const selected = workspace?.branches.find((candidate) => candidate.name === workspaceState.branch);
+      const selectable = selected && (mode === 'worktree' ? selected.worktreeSelectable : selected.currentFolderSelectable);
+      const branch = selectable
+        ? selected.name
+        : workspace?.branches.find((candidate) => mode === 'worktree' ? candidate.worktreeSelectable : candidate.currentFolderSelectable)?.name;
+      setWorkspaceState((current) => ({ ...current, mode, branch }));
+    }}
+  />;
 }
 
 const styles = StyleSheet.create({
-  fill: { flex: 1 }, loading: { flex: 1 }, state: { alignItems: 'center', flex: 1, justifyContent: 'center', padding: 24 },
-  content: { alignSelf: 'center', gap: 18, maxWidth: 640, padding: 16, paddingBottom: 44, width: '100%' },
-  field: { gap: 7 }, label: { fontSize: 14, fontWeight: '600' }, input: { borderRadius: 10, borderWidth: StyleSheet.hairlineWidth, fontSize: 15, minHeight: 46, paddingHorizontal: 12 }, textarea: { minHeight: 140, paddingVertical: 12 },
-  error: { borderRadius: 10, fontSize: 13, lineHeight: 18, padding: 11 }, submit: { alignItems: 'center', borderRadius: 12, flexDirection: 'row', gap: 8, justifyContent: 'center', minHeight: 50 }, submitText: { color: '#fff', fontSize: 15, fontWeight: '600' }, disabled: { opacity: 0.45 }, pressed: { opacity: 0.7 },
+  loading: { flex: 1 },
+  state: { alignItems: 'center', flex: 1, justifyContent: 'center', padding: 24 },
+  titleField: { gap: 7, paddingHorizontal: 4 },
+  label: { fontSize: 14, fontWeight: '500' },
+  titleInput: { borderRadius: 10, borderWidth: StyleSheet.hairlineWidth, fontSize: 15, minHeight: 46, paddingHorizontal: 12 },
 });

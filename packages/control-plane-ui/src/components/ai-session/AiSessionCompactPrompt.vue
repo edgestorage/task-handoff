@@ -1,5 +1,14 @@
 <template>
   <div class="ai-session-compact-prompt" :class="`ai-session-compact-prompt-${tone}`">
+    <AiSessionMessageAttachments
+      v-for="message in attachmentMessages"
+      :key="message.id"
+      :instance-id="instanceId"
+      :session-id="sessionId"
+      :message-id="message.id"
+      :attachments="message.attachments"
+      compact
+    />
     <div
       ref="contentElement"
       class="ai-session-user-prompt-content"
@@ -44,15 +53,23 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import { useI18n } from "vue-i18n";
 import { Check, ChevronDown, Copy } from "@lucide/vue";
 import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
+import type { AiSessionUserMessageDetail } from "@task-handoff/protocol/ai-sessions";
 import { Button } from "../ui/button";
+import AiSessionMessageAttachments from "./AiSessionMessageAttachments.vue";
 
 const props = withDefaults(defineProps<{
   codeTools?: { copiedLabel: string; copyLabel: string; plainTextLabel: string };
   content: string;
+  instanceId?: string;
+  sessionId?: string;
+  userMessages?: AiSessionUserMessageDetail[];
   timestamp: string;
   tone?: "detail" | "board";
 }>(), {
   codeTools: undefined,
+  instanceId: "",
+  sessionId: "",
+  userMessages: () => [],
   tone: "detail",
 });
 
@@ -74,6 +91,9 @@ const formattedDateTime = computed(() => formatTimestamp(props.timestamp, {
   dateStyle: "medium",
   timeStyle: "medium",
 }));
+const attachmentMessages = computed(() => props.instanceId && props.sessionId
+  ? props.userMessages.filter((message) => message.attachments.length)
+  : []);
 
 function formatTimestamp(value: string, options: Intl.DateTimeFormatOptions) {
   return value ? new Intl.DateTimeFormat(locale.value, options).format(new Date(value)) : "";
@@ -160,7 +180,7 @@ onBeforeUnmount(() => {
 <style scoped>
 .ai-session-compact-prompt {
   display: grid;
-  gap: 7px;
+  gap: 6px;
   min-width: 0;
 }
 
@@ -231,7 +251,7 @@ onBeforeUnmount(() => {
 }
 
 .ai-session-user-prompt-time {
-  padding-inline: 3px;
+  padding-inline: 0 3px;
   white-space: nowrap;
 }
 
