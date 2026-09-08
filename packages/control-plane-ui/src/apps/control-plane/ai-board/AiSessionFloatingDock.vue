@@ -4,7 +4,7 @@
       <section
         v-if="!collapsed"
         class="ai-board-floating-detail"
-        :class="{ 'is-scrolled': detailScrolled, 'has-turn-navigator': timelineMode === 'compact' && promptCount > 1 }"
+        :class="{ 'is-scrolled': detailScrolled }"
       >
         <div class="ai-board-floating-resize ai-board-floating-resize-top" @pointerdown.stop.prevent="startResize('top', $event)" />
         <div class="ai-board-floating-resize ai-board-floating-resize-left" @pointerdown.stop.prevent="startResize('left', $event)" />
@@ -12,26 +12,53 @@
         <div class="ai-board-floating-resize ai-board-floating-resize-top-left" @pointerdown.stop.prevent="startResize('top-left', $event)" />
         <div class="ai-board-floating-resize ai-board-floating-resize-top-right" @pointerdown.stop.prevent="startResize('top-right', $event)" />
         <header class="ai-board-floating-head">
-          <div>
-            <span class="ai-board-floating-primary-line">
-              <span>{{ instanceDisplayName(card.instance) }}</span>
-            </span>
-            <strong class="ai-board-floating-secondary-line">
-              <span>{{ aiSessionAppDisplayName(card.appTab, card.session.agent, t) }}</span>
-              <span aria-hidden="true">·</span>
-              <span class="ai-board-floating-workspace">
-                <TooltipProvider :delay-duration="120">
-                  <Tooltip>
-                    <TooltipTrigger as-child>
-                      <b>{{ aiSessionBasename(card.session.cwd) || t("sessions.board.unknownFolder") }}</b>
-                    </TooltipTrigger>
-                    <TooltipContent class="ai-session-path-tooltip" side="top" :side-offset="8">{{ card.session.cwd || t("sessions.board.unknownPath") }}</TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
-              </span>
-            </strong>
-          </div>
+          <TooltipProvider :delay-duration="120">
+            <div class="ai-board-floating-context">
+              <Tooltip>
+                <TooltipTrigger as-child>
+                  <span class="ai-board-floating-context-item">
+                    <Folder :size="14" aria-hidden="true" />
+                    <span>{{ folderName }}</span>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent class="ai-session-path-tooltip" side="top" :side-offset="8">{{ card.session.cwd || t("sessions.board.unknownPath") }}</TooltipContent>
+              </Tooltip>
+              <span class="ai-board-floating-context-separator" aria-hidden="true">·</span>
+              <Tooltip>
+                <TooltipTrigger as-child>
+                  <span class="ai-board-floating-context-item">
+                    <Boxes :size="14" aria-hidden="true" />
+                    <span>{{ instanceDisplayName(card.instance) }}</span>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent class="ai-session-path-tooltip" side="top" :side-offset="8">{{ card.instance.node?.name || card.instance.nodeId }}</TooltipContent>
+              </Tooltip>
+              <span class="ai-board-floating-context-separator" aria-hidden="true">·</span>
+              <Tooltip>
+                <TooltipTrigger as-child>
+                  <span class="ai-board-floating-context-item ai-board-floating-agent">
+                    <AiAgentIcon v-if="agentIcon" :agent="agentIcon" :size="14" />
+                    <span>{{ agentDisplayName }}</span>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="top" :side-offset="8">{{ agentDisplayName }}</TooltipContent>
+              </Tooltip>
+            </div>
+          </TooltipProvider>
           <div class="ai-board-floating-head-actions">
+            <AiSessionTurnNavigator
+              v-if="timelineMode === 'compact'"
+              :count="promptCount"
+              :index="promptIndex"
+              :aria-label="t('sessions.composer.navigation')"
+              :latest-label="t('sessions.panel.backLatestTurn')"
+              :previous-label="t('sessions.actions.previousMessage', { agent: card.session.agent })"
+              :next-label="t('sessions.actions.nextMessage', { agent: card.session.agent })"
+              stable-latest
+              @latest="$emit('latestPrompt')"
+              @previous="$emit('previousPrompt')"
+              @next="$emit('nextPrompt')"
+            />
             <TooltipProvider :delay-duration="120">
               <Tooltip>
                 <TooltipTrigger as-child>
@@ -114,20 +141,6 @@
             />
           </div>
         </ScrollArea>
-        <AiSessionTurnNavigator
-          v-if="timelineMode === 'compact'"
-          class="ai-board-floating-turn-navigator"
-          :count="promptCount"
-          :index="promptIndex"
-          :aria-label="t('sessions.composer.navigation')"
-          :latest-label="t('sessions.panel.backLatestTurn')"
-          :previous-label="t('sessions.actions.previousMessage', { agent: card.session.agent })"
-          :next-label="t('sessions.actions.nextMessage', { agent: card.session.agent })"
-          tone="board"
-          @latest="$emit('latestPrompt')"
-          @previous="$emit('previousPrompt')"
-          @next="$emit('nextPrompt')"
-        />
       </section>
 
       <button v-else type="button" class="ai-board-floating-restore" @click="$emit('update:collapsed', false)">
@@ -168,7 +181,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { ChevronDown, ChevronUp, CircleHelp, ExternalLink } from "@lucide/vue";
+import { Boxes, ChevronDown, ChevronUp, CircleHelp, ExternalLink, Folder } from "@lucide/vue";
 import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
 import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions } from "../../../api/types";
 import AiSessionComposer, { type AiSessionComposerAttachment } from "../../../components/ai-session/AiSessionComposer.vue";
@@ -181,6 +194,7 @@ import { directoryAiSessionProviderCapability } from "@task-handoff/protocol/con
 import type { AiSessionMentionContext } from "../../../components/ai-session/useAiSessionMentions";
 import { aiSessionPermissionKey } from "../useAiSessionPermissionMode";
 import AiSessionTurnNavigator from "../../../components/ai-session/AiSessionTurnNavigator.vue";
+import AiAgentIcon from "../../../components/AiAgentIcon.vue";
 import { ScrollArea } from "../../../components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../../components/ui/tooltip";
 import {
@@ -206,6 +220,7 @@ const props = defineProps<{
   attachments: AiSessionComposerAttachment[];
   draft: string;
   editingLabel?: string;
+  folderName: string;
   mentionBindings: AiSessionMentionBinding[];
   mentionContext?: AiSessionMentionContext;
   mentionTrigger: string;
@@ -267,6 +282,16 @@ const promptTimestamp = computed(() => (
 const promptUserMessages = computed(() => (
   props.detailState === "ready" ? retainedPromptUserMessages() : []
 ));
+const agentIcon = computed<"codex" | "claude" | "opencode" | undefined>(() => {
+  const agent = props.card.session.agent;
+  return agent === "codex" || agent === "claude" || agent === "opencode" ? agent : undefined;
+});
+const agentDisplayName = computed(() => {
+  const agent = props.card.session.agent;
+  return agent === "codex" || agent === "claude" || agent === "opencode"
+    ? t(`common.products.${agent}`)
+    : agent;
+});
 
 function retainedPromptUserMessages() {
   const turn = aiSessionTurns(props.conversationSession)[props.promptIndex];
@@ -643,7 +668,7 @@ onBeforeUnmount(() => {
 
 .ai-board-floating-head {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 12px;
   min-width: 0;
@@ -652,84 +677,47 @@ onBeforeUnmount(() => {
   padding: 12px 14px;
 }
 
-.ai-board-floating-head > div:first-child {
-  display: grid;
+.ai-board-floating-context {
+  display: flex;
+  align-items: center;
   flex: 1 1 auto;
-  gap: 3px;
+  gap: 6px;
   min-width: 0;
-}
-
-.ai-board-floating-head span {
+  min-height: 26px;
+  overflow: hidden;
   color: var(--ai-board-muted);
-  font-size: 12px;
-}
-
-.ai-board-floating-head strong {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--ai-board-title);
-  font-size: 14px;
-  font-weight: 850;
-  text-overflow: ellipsis;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 20px;
   white-space: nowrap;
 }
 
-.ai-board-floating-workspace {
-  display: flex;
-  align-items: baseline;
-  gap: 7px;
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-}
-
-.ai-board-floating-head .ai-board-floating-workspace {
-  color: color-mix(in srgb, var(--ai-board-muted) 78%, transparent);
-  font-size: inherit;
-  font-weight: inherit;
-}
-
-.ai-board-floating-secondary-line {
-  display: flex;
-  align-items: baseline;
-  gap: 4px;
-}
-
-.ai-board-floating-head .ai-board-floating-secondary-line > span:first-child,
-.ai-board-floating-head .ai-board-floating-secondary-line > span:nth-child(2) {
-  color: color-mix(in srgb, var(--ai-board-muted) 78%, transparent);
-  font-size: inherit;
-  font-weight: inherit;
-}
-
-.ai-board-floating-primary-line {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  min-width: 0;
-}
-
-.ai-board-floating-primary-line > span:first-child {
+.ai-board-floating-context-item {
+  display: inline-flex;
+  align-items: center;
   flex: 0 1 auto;
+  gap: 5px;
+  min-width: 0;
+}
+
+.ai-board-floating-context-item > span {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.ai-board-floating-workspace b {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.ai-board-floating-context-item > svg {
+  flex: 0 0 auto;
 }
 
-.ai-board-floating-workspace b {
-  flex: 1 1 auto;
-  color: inherit;
-  font-size: inherit;
-  font-weight: inherit;
+.ai-board-floating-context-separator {
+  flex: 0 0 auto;
+  color: var(--ai-board-column-border);
+}
+
+.ai-board-floating-agent {
+  flex: 0 0 auto;
 }
 
 .ai-board-floating-head .ai-board-floating-head-actions {
@@ -774,10 +762,6 @@ onBeforeUnmount(() => {
   gap: 0;
   min-width: 0;
   padding: 14px;
-}
-
-.ai-board-floating-detail.has-turn-navigator .ai-board-floating-content {
-  padding-bottom: 56px;
 }
 
 .ai-board-floating-block + .ai-board-floating-conversation {
@@ -843,14 +827,6 @@ onBeforeUnmount(() => {
   min-height: 0;
   margin-top: -8px;
   pointer-events: none;
-}
-
-.ai-board-floating-turn-navigator {
-  position: absolute;
-  bottom: 10px;
-  left: 50%;
-  z-index: 6;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.24);
 }
 
 .ai-board-floating-block :deep(code) {

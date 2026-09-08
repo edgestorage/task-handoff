@@ -2,7 +2,7 @@
   --session-ai-scrollbar-outset: 6px;
   display: grid;
   min-height: 0;
-  overflow: hidden;
+  overflow: visible;
   background: var(--workspace-bg);
   padding: 12px calc(12px - var(--session-ai-scrollbar-outset)) 12px 12px;
 }
@@ -1027,7 +1027,7 @@
 .session-ai-path-group-collapse-enter-from,
 .session-ai-path-group-collapse-leave-to {
   grid-template-rows: 0fr;
-  opacity: 0;
+  opacity: 1;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1147,7 +1147,9 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
+  width: max-content;
+  max-width: 20px;
+  box-sizing: border-box;
   height: 34px;
   margin-bottom: 4px;
   border-radius: 50%;
@@ -1489,7 +1491,7 @@
 .session-ai-message {
   display: block;
   min-width: 0;
-  overflow: visible;
+  overflow: hidden;
   color: var(--ai-session-title);
   font-size: 14px;
   font-weight: 400;
@@ -1629,6 +1631,7 @@
 }
 
 .session-ai-detail-prompt-stage {
+  position: relative;
   display: grid;
   grid-column: 1 / -1;
   min-width: 0;
@@ -1636,6 +1639,7 @@
 
 .session-ai-detail-prompt-stage > .session-ai-detail-block-user {
   grid-area: 1 / 1;
+  align-self: start;
 }
 
 .session-ai-prompt-fade-enter-active,
@@ -1646,6 +1650,14 @@
 .session-ai-prompt-fade-enter-from,
 .session-ai-prompt-fade-leave-to {
   opacity: 0;
+}
+
+.session-ai-prompt-fade-leave-active {
+  position: absolute;
+  inset: 0 0 auto;
+  z-index: 1;
+  width: 100%;
+  pointer-events: none;
 }
 
 .session-ai-detail-block-scroll :deep(div) {
@@ -1770,6 +1782,33 @@
   pointer-events: auto;
 }
 
+.session-ai-compact-turn-overlay {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 8;
+  display: grid;
+  box-sizing: border-box;
+  min-width: 96px;
+  min-height: 52px;
+  place-items: center;
+  transform: translate(-50%, -50%);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface-overlay) 92%, transparent);
+  box-shadow: var(--shadow-strong);
+  color: var(--text-strong);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  padding: 10px 18px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 24px;
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: 0;
+  pointer-events: none;
+}
+
 .session-ai-timeline-sticky-prompt {
   display: flex;
   align-items: center;
@@ -1794,6 +1833,12 @@
   font-size: 14px;
   line-height: var(--session-ai-sticky-prompt-height);
   pointer-events: none;
+}
+
+.session-ai-timeline-sticky-message {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-left: 24px;
 }
 
 .session-ai-timeline-sticky-prompt :deep(.markdown-content) {
@@ -1896,18 +1941,6 @@
 .session-ai-detail-fixed-actions.session-ai-detail-head-actions {
   grid-column: 1;
   grid-row: 1;
-}
-
-.session-ai-detail-turn-navigator {
-  position: absolute;
-  bottom: calc(
-    var(--session-ai-compose-offset, 84px)
-    + var(--session-ai-compose-bottom)
-    + 16px
-  );
-  left: 50%;
-  z-index: 7;
-  box-shadow: var(--shadow-soft);
 }
 
 .session-ai-detail-head-actions button {
@@ -2234,8 +2267,8 @@
   .session-ai-mobile-list-button {
     display: inline-flex;
     position: absolute;
-    top: 10px;
-    left: 4px;
+    top: 0;
+    left: 0;
     z-index: 12;
     width: 26px;
     height: 26px;
@@ -2268,6 +2301,7 @@
   }
 
   .session-ai-timeline-sticky-prompt {
+    --ai-session-sticky-context-left: 24px;
     padding-left: 24px;
   }
 

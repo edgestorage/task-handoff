@@ -219,12 +219,14 @@ function finishConversationTransition() {
 
 <style scoped>
 .ai-session-conversation-stage {
+  position: relative;
   display: grid;
   min-width: 0;
 }
 
 .ai-session-conversation-layer {
   grid-area: 1 / 1;
+  align-self: start;
   min-width: 0;
 }
 
@@ -236,6 +238,14 @@ function finishConversationTransition() {
 .ai-session-message-fade-enter-from,
 .ai-session-message-fade-leave-to {
   opacity: 0;
+}
+
+.ai-session-message-fade-leave-active {
+  position: absolute;
+  inset: 0 0 auto;
+  z-index: 1;
+  width: 100%;
+  pointer-events: none;
 }
 
 .ai-session-conversation-detail-state {

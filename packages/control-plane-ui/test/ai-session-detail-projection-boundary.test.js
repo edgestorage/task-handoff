@@ -3,6 +3,7 @@ import fs from "node:fs";
 import test from "node:test";
 
 const conversation = fs.readFileSync(new URL("../src/components/ai-session/AiSessionConversationContent.vue", import.meta.url), "utf8");
+const stickyContext = fs.readFileSync(new URL("../src/components/ai-session/AiSessionStickyContext.vue", import.meta.url), "utf8");
 const panel = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.vue", import.meta.url), "utf8");
 const panelCss = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.css", import.meta.url), "utf8");
 const board = fs.readFileSync(new URL("../src/apps/control-plane/ai-board/AiSessionBoardView.vue", import.meta.url), "utf8");
@@ -34,7 +35,7 @@ test("AI Session detail does not render the list summary projection as conversat
   assert.ok(stickyRule);
   assert.doesNotMatch(stickyRule[1], /opacity:\s*0/);
   assert.match(panel, /<Transition name="session-ai-prompt-fade" appear>/);
-  assert.match(panel, /:key="selectedSession\.id" ref="detailPromptSectionEl"/);
+  assert.match(panel, /v-if="selectedPromptSnapshot" :key="selectedPromptSnapshot\.sessionId" ref="detailPromptSectionEl"/);
   assert.match(panelCss, /\.session-ai-prompt-fade-enter-active,[\s\S]*?\.session-ai-prompt-fade-leave-active[\s\S]*?transition: opacity 180ms ease/);
   assert.match(board, /:detail-state="selectedCardContentState"/);
   assert.match(projection, /const hadRenderableContent = conversations\.hasRenderableProjection\(instanceId, summary\.id\)/);
@@ -54,6 +55,38 @@ test("compact session switches start at the top while conversation mode follows 
   assert.match(panel, /if \(effectiveTimelineViewMode\.value === "full"\) \{\s*scrollFollow\?\.jumpLatest\(\);\s*\} else \{\s*scrollFollow\?\.stopFollowing\(\);\s*viewport\.scrollTop = 0;\s*\}/);
   assert.match(panel, /v-if="detailCanScroll && !isFollowingLatest"/);
   assert.match(panel, /detailCanScroll\.value = Boolean\(viewport && viewport\.scrollHeight > viewport\.clientHeight \+ 1\)/);
+});
+
+test("sticky prompt context expands over the user message without changing its layout", () => {
+  assert.equal(panel.match(/<AiSessionStickyContext/g)?.length, 2);
+  assert.match(stickyContext, /<span class="ai-session-sticky-context-agent">[\s\S]*?<AiAgentIcon[\s\S]*?<span class="ai-session-sticky-context-details">/);
+  assert.equal(stickyContext.match(/<TooltipTrigger as-child>/g)?.length, 2);
+  assert.match(stickyContext, /<TooltipContent[^>]*>\{\{ folderPath \}\}<\/TooltipContent>/);
+  assert.match(stickyContext, /<TooltipContent[^>]*>\{\{ nodeName \}\}<\/TooltipContent>/);
+  assert.equal(panel.match(/:folder-path="selectedSessionFolderPath"/g)?.length, 2);
+  assert.equal(panel.match(/:node-name="selectedSessionNodeName"/g)?.length, 2);
+  assert.match(stickyContext, /\.ai-session-sticky-context \{[\s\S]*?position: absolute;[\s\S]*?width: max-content;/);
+  assert.match(stickyContext, /left: var\(--ai-session-sticky-context-left, 0px\);/);
+  assert.match(stickyContext, /\.ai-session-sticky-context-surface \{[\s\S]*?width: max-content;[\s\S]*?max-width: 18px;[\s\S]*?overflow: hidden;[\s\S]*?transition: max-width/);
+  assert.match(stickyContext, /\.ai-session-sticky-context:hover \.ai-session-sticky-context-surface \{[\s\S]*?max-width: min\(620px,/);
+  assert.match(stickyContext, /\.ai-session-sticky-context::after \{[\s\S]*?left: 100%;[\s\S]*?linear-gradient\(90deg, var\(--workspace-bg\) 0%, transparent 100%\)/);
+  assert.match(panelCss, /\.session-ai-timeline-sticky-message \{[\s\S]*?margin-left: 24px;/);
+  assert.match(panelCss, /@media \(max-width: 920px\) \{[\s\S]*?\.session-ai-timeline-sticky-prompt \{[\s\S]*?--ai-session-sticky-context-left: 24px;/);
+  assert.doesNotMatch(stickyContext, /display: none/);
+});
+
+test("outgoing session layers do not control incoming conversation layout", () => {
+  assert.match(panelCss, /\.session-ai-detail-prompt-stage \{[\s\S]*?position: relative;[\s\S]*?display: grid;/);
+  assert.match(panelCss, /\.session-ai-detail-prompt-stage > \.session-ai-detail-block-user \{[\s\S]*?grid-area: 1 \/ 1;[\s\S]*?align-self: start;/);
+  assert.match(panelCss, /\.session-ai-prompt-fade-leave-active \{[\s\S]*?position: absolute;[\s\S]*?inset: 0 0 auto;[\s\S]*?pointer-events: none;/);
+  assert.match(conversation, /\.ai-session-conversation-stage \{[\s\S]*?position: relative;[\s\S]*?display: grid;/);
+  assert.match(conversation, /\.ai-session-conversation-layer \{[\s\S]*?grid-area: 1 \/ 1;[\s\S]*?align-self: start;/);
+  assert.match(conversation, /\.ai-session-message-fade-leave-active \{[\s\S]*?position: absolute;[\s\S]*?inset: 0 0 auto;[\s\S]*?pointer-events: none;/);
+  assert.match(panel, /if \(!summary \|\| selectedSessionContentState\.value === "loading"\) return undefined;/);
+  assert.match(panel, /watch\(selectedPromptCandidate, \(candidate\) => \{\s*if \(candidate\) selectedPromptSnapshot\.value = candidate;/);
+  assert.match(panel, /:content="selectedPromptSnapshot\.content"/);
+  assert.match(panel, /:user-messages="selectedPromptSnapshot\.userMessages"/);
+  assert.doesNotMatch(panel, /:content="selectedSessionContentState === 'ready' \? displayAiSessionTitle/);
 });
 
 test("both AI Session detail surfaces expose failed detail recovery", () => {

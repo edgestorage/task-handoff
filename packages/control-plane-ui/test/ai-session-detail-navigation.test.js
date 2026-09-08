@@ -26,20 +26,27 @@ test("AI session turn navigation keeps accessible labels without redundant toolt
   assert.match(repositoryEnvironment, /<TooltipContent side="bottom"[^>]*>\{\{ t\("repository\.environment\.title"\) \}\}/);
 });
 
-test("turn navigation belongs to the detail bottom overlay instead of the composer or header", () => {
+test("turn navigation stays in the sticky top-right actions before Environment", () => {
   const detailActions = panel.indexOf('ref="detailActionsEl"');
-  const panelNavigator = panel.indexOf('class="session-ai-detail-turn-navigator"');
+  const panelNavigator = panel.indexOf("<AiSessionTurnNavigator", detailActions);
+  const environment = panel.indexOf("<RepositoryEnvironment", panelNavigator);
+  const detailHeader = panel.indexOf('ref="detailHeaderEl"');
   assert.ok(detailActions >= 0);
   assert.ok(panelNavigator > detailActions);
-  assert.match(panelCss, /\.session-ai-detail-turn-navigator \{[\s\S]*?position: absolute;[\s\S]*?bottom: calc\([\s\S]*?var\(--session-ai-compose-offset, 84px\)[\s\S]*?var\(--session-ai-compose-bottom\)[\s\S]*?\+ 16px/);
-  assert.match(floatingDock, /class="ai-board-floating-detail"[\s\S]*?has-turn-navigator[\s\S]*?class="ai-board-floating-turn-navigator"/);
-  assert.match(floatingDock, /\.ai-board-floating-turn-navigator \{[\s\S]*?position: absolute;[\s\S]*?bottom: 10px;/);
-  assert.match(floatingDock, /\.ai-board-floating-detail\.has-turn-navigator \.ai-board-floating-content \{[\s\S]*?padding-bottom: 56px;/);
+  assert.ok(environment > panelNavigator);
+  assert.ok(detailHeader > environment);
+  assert.equal((panel.match(/<AiSessionTurnNavigator/g) || []).length, 1);
+  assert.match(panel, /class="session-ai-detail-fixed-actions session-ai-detail-head-actions">[\s\S]*?<AiSessionTurnNavigator[\s\S]*?<template v-if="!compactAiSessionLayout">[\s\S]*?<RepositoryEnvironment/);
+  assert.match(panelCss, /\.session-ai-detail-fixed-actions \{[\s\S]*?position: sticky;[\s\S]*?top: 0;[\s\S]*?justify-self: end;/);
+  assert.doesNotMatch(panel, /session-ai-timeline-sticky-turn-navigator|has-turn-navigation/);
+  assert.match(floatingDock, /class="ai-board-floating-head-actions">[\s\S]*?<AiSessionTurnNavigator[\s\S]*?<CircleHelp/);
+  assert.doesNotMatch(floatingDock, /ai-board-floating-turn-navigator|has-turn-navigator/);
   assert.equal((floatingDock.match(/<AiSessionTurnNavigator/g) || []).length, 1);
 });
 
-test("non-latest turn navigation exposes a combined latest-turn action", () => {
-  assert.match(navigator, /v-if="latestVisible"[\s\S]*class="ai-session-turn-navigator__latest"/);
+test("detail navigators reserve a stable latest-turn action", () => {
+  assert.match(navigator, /v-if="stableLatest \|\| latestVisible"[\s\S]*class="ai-session-turn-navigator__latest"[\s\S]*:disabled="!latestVisible"/);
+  assert.match(navigator, /stableLatest\?: boolean/);
   assert.match(navigator, /const latestText = computed\(\(\) => props\.latestLabel \|\| t\("sessions\.panel\.backLatestTurn"\)\)/);
   assert.match(navigator, /<SkipForward :size="13" \/>/);
   assert.match(navigator, /@click="\$emit\('latest'\)"/);
@@ -52,10 +59,22 @@ test("non-latest turn navigation exposes a combined latest-turn action", () => {
   assert.match(navigator, /new ResizeObserver\(\(\) => \{\s*latestWidth\.value = latestEl\.value\?\.getBoundingClientRect\(\)\.width/);
   assert.doesNotMatch(navigator, /latestWidth\.value = entry\?\.contentRect\.width/);
   assert.match(panel, /:latest-label="t\('sessions\.panel\.backLatestTurn'\)"[\s\S]*?@latest="backToLatestPrompt\(selectedSession\)"/);
+  assert.match(panel, /<AiSessionTurnNavigator[\s\S]*?stable-latest/);
   assert.match(panel, /function backToLatestPrompt\(session: AiSessionSummary\) \{\s*void setPromptIndex\(session, latestPromptIndex\(session\)\);/);
   assert.match(floatingDock, /:latest-label="t\('sessions\.panel\.backLatestTurn'\)"[\s\S]*?@latest="\$emit\('latestPrompt'\)"/);
+  assert.match(floatingDock, /<AiSessionTurnNavigator[\s\S]*?stable-latest/);
   assert.match(board, /@latest-prompt="backToLatestPrompt\(selectedCard\)"/);
   assert.match(board, /function backToLatestPrompt\(card: AiBoardCard\) \{\s*void setPromptIndex\(card, promptCount\(card\.session\) - 1\);/);
+});
+
+test("compact detail supports Ctrl-wheel turn navigation with a centered page overlay", () => {
+  assert.match(panel, /@wheel\.capture="handleCompactTurnWheel"/);
+  assert.match(panel, /v-if="compactTurnNavigationActive && effectiveTimelineViewMode === 'compact' && promptCount\(selectedSession\) > 1"/);
+  assert.match(panel, /class="session-ai-compact-turn-overlay"[\s\S]*?\{\{ promptIndexFor\(selectedSession\) \+ 1 \}\}\/\{\{ promptCount\(selectedSession\) \}\}/);
+  assert.match(panel, /function handleCompactTurnWheel\(event: WheelEvent\)[\s\S]*?event\.ctrlKey[\s\S]*?event\.preventDefault\(\)[\s\S]*?compactTurnWheelDelta[\s\S]*?setPromptIndex\(session, promptIndexFor\(session\) \+ direction\)/);
+  assert.match(panel, /window\.addEventListener\("keydown", handleCompactTurnModifierDown\)[\s\S]*?window\.addEventListener\("keyup", handleCompactTurnModifierUp\)[\s\S]*?window\.addEventListener\("blur", deactivateCompactTurnNavigation\)/);
+  assert.match(panel, /window\.removeEventListener\("keydown", handleCompactTurnModifierDown\)[\s\S]*?window\.removeEventListener\("keyup", handleCompactTurnModifierUp\)[\s\S]*?window\.removeEventListener\("blur", deactivateCompactTurnNavigation\)/);
+  assert.match(panelCss, /\.session-ai-compact-turn-overlay \{[\s\S]*?position: absolute;[\s\S]*?top: 50%;[\s\S]*?left: 50%;[\s\S]*?min-width: 96px;[\s\S]*?border-radius: 8px;[\s\S]*?font-size: 24px;/);
 });
 
 test("all viewport sizes share one compact detail actions menu", () => {
@@ -73,7 +92,7 @@ test("all viewport sizes share one compact detail actions menu", () => {
 });
 
 test("AI session details render messages without redundant section titles", () => {
-  assert.match(panel, /<AiSessionCompactPrompt[\s\S]*?:content="selectedSessionContentState === 'ready' \? displayAiSessionTitle/);
+  assert.match(panel, /<AiSessionCompactPrompt[\s\S]*?:content="selectedPromptSnapshot\.content"/);
   assert.match(panel, /<AiSessionConversationContent/);
   assert.match(floatingDock, /<AiSessionCompactPrompt[\s\S]*?:content="detailState === 'ready' \? displayAiSessionTitle/);
   assert.match(floatingDock, /<AiSessionConversationContent/);
@@ -100,7 +119,8 @@ test("details count retained turns while cards consume bounded summary counts", 
 test("compact Turn navigation loads the target body before committing selection", () => {
   assert.match(panel, /async function setPromptIndex[\s\S]*?await loadSelectedSessionTurn\(targetTurn\.id\)[\s\S]*?promptIndexes\.value =/);
   assert.match(board, /async function setPromptIndex[\s\S]*?await loadSelectedCardTurn\(targetTurn\.id\)[\s\S]*?promptIndexes\.value =/);
-  assert.match(panel, /:content="selectedSessionContentState === 'ready' \? displayAiSessionTitle/);
+  assert.match(panel, /watch\(selectedPromptCandidate, \(candidate\) => \{\s*if \(candidate\) selectedPromptSnapshot\.value = candidate;/);
+  assert.match(panel, /:content="selectedPromptSnapshot\.content"/);
   assert.match(floatingDock, /:content="detailState === 'ready' \? displayAiSessionTitle\(conversationSession, promptIndex, t\) : ''"/);
 });
 

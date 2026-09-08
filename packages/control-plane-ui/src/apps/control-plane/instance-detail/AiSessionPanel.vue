@@ -659,10 +659,29 @@
           </div>
         </div>
       </section>
-      <section v-else-if="selectedSession" ref="detailEl" class="session-ai-detail" :class="{ 'is-scrolled': detailScrolled }">
+      <section
+        v-else-if="selectedSession"
+        ref="detailEl"
+        class="session-ai-detail"
+        :class="{ 'is-scrolled': detailScrolled }"
+        @wheel.capture="handleCompactTurnWheel"
+      >
         <ScrollArea class="session-ai-detail-scroll">
           <section class="session-ai-detail-content" :class="{ 'is-following-latest': isFollowingLatest && !isSmoothFollowingLatest }">
           <div ref="detailActionsEl" class="session-ai-detail-fixed-actions session-ai-detail-head-actions">
+            <AiSessionTurnNavigator
+              v-if="effectiveTimelineViewMode === 'compact'"
+              :count="promptCount(selectedSession)"
+              :index="promptIndexFor(selectedSession)"
+              :aria-label="t('sessions.composer.navigation')"
+              :latest-label="t('sessions.panel.backLatestTurn')"
+              :previous-label="t('sessions.actions.previousMessage', { agent: selectedSession.agent })"
+              :next-label="t('sessions.actions.nextMessage', { agent: selectedSession.agent })"
+              stable-latest
+              @latest="backToLatestPrompt(selectedSession)"
+              @previous="previousPrompt(selectedSession)"
+              @next="nextPrompt(selectedSession)"
+            />
             <template v-if="!compactAiSessionLayout">
               <RepositoryEnvironment
                 :ai-agent="repositoryAiAgent"
@@ -773,50 +792,50 @@
           <header ref="detailHeaderEl">
             <TooltipProvider :delay-duration="120">
               <div class="session-ai-detail-context">
-                <Tooltip>
-                  <TooltipTrigger as-child>
-                    <span class="session-ai-detail-context-item">
-                      <Folder :size="14" aria-hidden="true" />
-                      <span>{{ selectedSessionFolderName }}</span>
-                    </span>
-                  </TooltipTrigger>
-                  <TooltipContent class="ai-session-path-tooltip" side="top" :side-offset="8">{{ selectedSessionFolderPath }}</TooltipContent>
-                </Tooltip>
-                <span class="session-ai-detail-context-separator" aria-hidden="true">·</span>
-                <Tooltip>
-                  <TooltipTrigger as-child>
-                    <span class="session-ai-detail-context-item">
-                      <Boxes :size="14" aria-hidden="true" />
-                      <span>{{ selectedSessionInstanceName }}</span>
-                    </span>
-                  </TooltipTrigger>
-                  <TooltipContent class="ai-session-path-tooltip" side="top" :side-offset="8">{{ selectedSessionNodeName }}</TooltipContent>
-                </Tooltip>
-                <template v-if="selectedSessionAgentIcon">
+                  <Tooltip>
+                    <TooltipTrigger as-child>
+                      <span class="session-ai-detail-context-item">
+                        <Folder :size="14" aria-hidden="true" />
+                        <span>{{ selectedSessionFolderName }}</span>
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent class="ai-session-path-tooltip" side="top" :side-offset="8">{{ selectedSessionFolderPath }}</TooltipContent>
+                  </Tooltip>
                   <span class="session-ai-detail-context-separator" aria-hidden="true">·</span>
                   <Tooltip>
                     <TooltipTrigger as-child>
-                      <span class="session-ai-detail-agent" :aria-label="agentDisplayName(selectedSession.agent)">
-                        <AiAgentIcon :agent="selectedSessionAgentIcon" :size="14" />
+                      <span class="session-ai-detail-context-item">
+                        <Boxes :size="14" aria-hidden="true" />
+                        <span>{{ selectedSessionInstanceName }}</span>
                       </span>
                     </TooltipTrigger>
-                    <TooltipContent side="top" :side-offset="8">{{ agentDisplayName(selectedSession.agent) }}</TooltipContent>
+                    <TooltipContent class="ai-session-path-tooltip" side="top" :side-offset="8">{{ selectedSessionNodeName }}</TooltipContent>
                   </Tooltip>
-                </template>
-                <span class="session-ai-detail-context-separator" aria-hidden="true">·</span>
-                <span>{{ aiSessionStatusLabel(selectedSession, t) }}</span>
+                  <template v-if="selectedSessionAgentIcon">
+                    <span class="session-ai-detail-context-separator" aria-hidden="true">·</span>
+                    <Tooltip>
+                      <TooltipTrigger as-child>
+                        <span class="session-ai-detail-agent" :aria-label="agentDisplayName(selectedSession.agent)">
+                          <AiAgentIcon :agent="selectedSessionAgentIcon" :size="14" />
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent side="top" :side-offset="8">{{ agentDisplayName(selectedSession.agent) }}</TooltipContent>
+                    </Tooltip>
+                  </template>
+                  <span class="session-ai-detail-context-separator" aria-hidden="true">·</span>
+                  <span>{{ aiSessionStatusLabel(selectedSession, t) }}</span>
               </div>
             </TooltipProvider>
             <div v-if="effectiveTimelineViewMode === 'compact'" class="session-ai-detail-prompt-stage">
               <Transition name="session-ai-prompt-fade" appear>
-                <section :key="selectedSession.id" ref="detailPromptSectionEl" class="session-ai-detail-block session-ai-detail-block-user">
+                <section v-if="selectedPromptSnapshot" :key="selectedPromptSnapshot.sessionId" ref="detailPromptSectionEl" class="session-ai-detail-block session-ai-detail-block-user">
                   <AiSessionCompactPrompt
                     :code-tools="markdownCodeTools"
-                    :content="selectedSessionContentState === 'ready' ? displayAiSessionTitle(selectedConversationSession || selectedSession, promptIndexFor(selectedSession), t) : ''"
+                    :content="selectedPromptSnapshot.content"
                     :instance-id="instance.id"
-                    :session-id="selectedSession.id"
-                    :timestamp="selectedPromptTimestamp"
-                    :user-messages="selectedPromptUserMessages"
+                    :session-id="selectedPromptSnapshot.sessionId"
+                    :timestamp="selectedPromptSnapshot.timestamp"
+                    :user-messages="selectedPromptSnapshot.userMessages"
                   />
                 </section>
               </Transition>
@@ -858,36 +877,53 @@
           <span ref="detailBottomAnchorEl" class="session-ai-detail-bottom-anchor" aria-hidden="true" />
           </section>
         </ScrollArea>
-        <AiSessionTurnNavigator
-          v-if="effectiveTimelineViewMode === 'compact'"
-          class="session-ai-detail-turn-navigator"
-          :count="promptCount(selectedSession)"
-          :index="promptIndexFor(selectedSession)"
-          :aria-label="t('sessions.composer.navigation')"
-          :latest-label="t('sessions.panel.backLatestTurn')"
-          :previous-label="t('sessions.actions.previousMessage', { agent: selectedSession.agent })"
-          :next-label="t('sessions.actions.nextMessage', { agent: selectedSession.agent })"
-          @latest="backToLatestPrompt(selectedSession)"
-          @previous="previousPrompt(selectedSession)"
-          @next="nextPrompt(selectedSession)"
-        />
+        <output
+          v-if="compactTurnNavigationActive && effectiveTimelineViewMode === 'compact' && promptCount(selectedSession) > 1"
+          class="session-ai-compact-turn-overlay"
+          aria-live="polite"
+          aria-atomic="true"
+        >
+          {{ promptIndexFor(selectedSession) + 1 }}/{{ promptCount(selectedSession) }}
+        </output>
         <article
           v-if="effectiveTimelineViewMode === 'full' && timelineStickyUserMessage"
           class="session-ai-timeline-sticky-prompt"
           aria-hidden="true"
         >
-          <MarkdownContent :content="timelineStickyUserMessage.text" :code-tools="markdownCodeTools" />
+          <AiSessionStickyContext
+            v-if="selectedSessionAgentIcon"
+            :agent="selectedSessionAgentIcon"
+            :folder-name="selectedSessionFolderName"
+            :folder-path="selectedSessionFolderPath"
+            :instance-name="selectedSessionInstanceName"
+            :node-name="selectedSessionNodeName"
+            :status-label="aiSessionStatusLabel(selectedSession, t)"
+          />
+          <div class="session-ai-timeline-sticky-message">
+            <MarkdownContent :content="timelineStickyUserMessage.text" :code-tools="markdownCodeTools" />
+          </div>
         </article>
         <article
           v-else-if="effectiveTimelineViewMode === 'compact' && detailScrolled && !detailConversationTransitioning"
           class="session-ai-timeline-sticky-prompt"
           aria-hidden="true"
         >
-          <MarkdownContent
-            v-if="selectedSessionContentState === 'ready'"
-            :content="displayAiSessionTitle(selectedConversationSession || selectedSession, promptIndexFor(selectedSession), t)"
-            :code-tools="markdownCodeTools"
+          <AiSessionStickyContext
+            v-if="selectedSessionAgentIcon"
+            :agent="selectedSessionAgentIcon"
+            :folder-name="selectedSessionFolderName"
+            :folder-path="selectedSessionFolderPath"
+            :instance-name="selectedSessionInstanceName"
+            :node-name="selectedSessionNodeName"
+            :status-label="aiSessionStatusLabel(selectedSession, t)"
           />
+          <div class="session-ai-timeline-sticky-message">
+            <MarkdownContent
+              v-if="selectedSessionContentState === 'ready'"
+              :content="displayAiSessionTitle(selectedConversationSession || selectedSession, promptIndexFor(selectedSession), t)"
+              :code-tools="markdownCodeTools"
+            />
+          </div>
         </article>
         <Button
           v-if="detailCanScroll && !isFollowingLatest"
@@ -1109,13 +1145,14 @@ import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
 import AiSessionCardContextMenu from "../../../components/ai-session/AiSessionCardContextMenu.vue";
 import AiSessionCardMarks from "../../../components/ai-session/AiSessionCardMarks.vue";
 import AiSessionStatusIndicator from "../../../components/ai-session/AiSessionStatusIndicator.vue";
+import AiSessionStickyContext from "../../../components/ai-session/AiSessionStickyContext.vue";
 import AiAgentIcon from "../../../components/AiAgentIcon.vue";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../../components/ui/alert-dialog";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
 import { bindAiSessionTrigger, closeAiSession, createAiSession, createNodeLocalFolder, editAiSessionQueuedMessage, forkAiSession, getAiSessionHistory, getAiSessionHistoryDetail, getAiSessionWorkspace, interruptAiSession, listNodeFolderPlaces, listNodeFolderTree, markAiSessionRead, openAiSessionApp, removeAiSessionQueuedMessage, reorderAiSessionQueuedMessages, resolveAiSessionApproval, resumeAiSession, retryAiSessionQueuedMessage, sendAiSessionMessage, steerAiSessionQueuedMessage, unbindAiSessionTrigger, updateAiSessionModelSelection, updateAiSessionReasoningEffort, updateControlledInstance, updateNodeLocalFolder, uploadAiSessionAttachment, useControlPlaneSettingsQuery, useControlPlaneTriggersQuery, useModelsQuery, useStoriesQuery } from "../../../api/queries";
 import { controlPlaneQueryKeys } from "../../../api/queryKeys.ts";
 import { executeAiSessionCommand } from "../../../api/ai-session-commands";
-import { AI_SESSION_DEFAULT_REASONING_EFFORT, type AiSessionCommandInput, type AiSessionHistoryDetail, type AiSessionHistoryItem, type AiSessionMessageAttachmentRef, type AiSessionModelSelection, type AiSessionPermissionMode, type AiSessionReasoningEffort } from "@task-handoff/protocol/ai-sessions";
+import { AI_SESSION_DEFAULT_REASONING_EFFORT, type AiSessionCommandInput, type AiSessionHistoryDetail, type AiSessionHistoryItem, type AiSessionMessageAttachmentRef, type AiSessionModelSelection, type AiSessionPermissionMode, type AiSessionReasoningEffort, type AiSessionUserMessageDetail } from "@task-handoff/protocol/ai-sessions";
 import type { StorySessionPreset } from "@task-handoff/protocol/stories";
 import { normalizeAiSessionModelSelectionCapabilities, normalizeAiSessionReasoningEffortCapabilities } from "@task-handoff/protocol/ai-session-provider-capabilities";
 import type { RepositoryAiSessionWorkspace, RepositoryAiSessionWorkspaceBranch } from "@task-handoff/protocol/repository";
@@ -1484,18 +1521,34 @@ const selectedSessionContentState = computed(() => {
   const turn = aiSessionTurns(conversation)[promptIndexFor(summary)];
   return !turn || hasRenderableSelectedSessionTurn(turn.id) ? "ready" : "loading";
 });
-const selectedPromptTimestamp = computed(() => {
+const selectedPromptCandidate = computed<{
+  content: string;
+  sessionId: string;
+  timestamp: string;
+  userMessages: AiSessionUserMessageDetail[];
+} | undefined>(() => {
+  const summary = selectedSession.value;
+  if (!summary || selectedSessionContentState.value === "loading") return undefined;
   const session = selectedConversationSession.value || selectedSession.value;
-  if (!session) return "";
-  return aiSessionTurns(session)[promptIndexFor(session)]?.startedAt || session.startedAt;
+  if (!session) return undefined;
+  const promptIndex = promptIndexFor(summary);
+  const turn = aiSessionTurns(session)[promptIndex];
+  return {
+    content: displayAiSessionTitle(session, promptIndex, t),
+    sessionId: summary.id,
+    timestamp: turn?.startedAt || session.startedAt,
+    userMessages: selectedSessionContentState.value === "ready"
+      && turn
+      && "userMessages" in turn
+      && Array.isArray(turn.userMessages)
+      ? turn.userMessages
+      : [],
+  };
 });
-const selectedPromptUserMessages = computed(() => {
-  if (selectedSessionContentState.value !== "ready") return [];
-  const session = selectedConversationSession.value;
-  if (!session) return [];
-  const turn = aiSessionTurns(session)[promptIndexFor(session)];
-  return turn && "userMessages" in turn && Array.isArray(turn.userMessages) ? turn.userMessages : [];
-});
+const selectedPromptSnapshot = ref<NonNullable<typeof selectedPromptCandidate.value>>();
+watch(selectedPromptCandidate, (candidate) => {
+  if (candidate) selectedPromptSnapshot.value = candidate;
+}, { immediate: true });
 const selectedSessionFolderName = computed(() => {
   const session = selectedSession.value;
   if (!session) return t("sessions.board.unknownFolder");
@@ -1879,6 +1932,9 @@ const detailLayoutAnchor = createLayoutScrollAnchor(
 const isFollowingLatest = ref(true);
 const isSmoothFollowingLatest = ref(false);
 const detailCanScroll = ref(false);
+const compactTurnNavigationActive = ref(false);
+let compactTurnWheelDelta = 0;
+let compactTurnWheelResetTimer: ReturnType<typeof setTimeout> | undefined;
 let sidebarResizeCleanup: (() => void) | undefined;
 const aiSessionActionBusy = ref(false);
 const stoppingAppSessionId = ref("");
@@ -2253,6 +2309,54 @@ function previousPrompt(session: AiSessionSummary) {
 
 function nextPrompt(session: AiSessionSummary) {
   void setPromptIndex(session, promptIndexFor(session) + 1);
+}
+
+function resetCompactTurnWheelDelta() {
+  compactTurnWheelDelta = 0;
+  if (compactTurnWheelResetTimer) clearTimeout(compactTurnWheelResetTimer);
+  compactTurnWheelResetTimer = undefined;
+}
+
+function handleCompactTurnModifierDown(event: KeyboardEvent) {
+  if (event.key !== "Control") return;
+  const session = selectedSession.value;
+  compactTurnNavigationActive.value = Boolean(
+    session
+    && effectiveTimelineViewMode.value === "compact"
+    && promptCount(session) > 1,
+  );
+}
+
+function handleCompactTurnModifierUp(event: KeyboardEvent) {
+  if (event.key !== "Control") return;
+  compactTurnNavigationActive.value = false;
+  resetCompactTurnWheelDelta();
+}
+
+function deactivateCompactTurnNavigation() {
+  compactTurnNavigationActive.value = false;
+  resetCompactTurnWheelDelta();
+}
+
+function handleCompactTurnWheel(event: WheelEvent) {
+  const session = selectedSession.value;
+  if (!event.ctrlKey || !session || effectiveTimelineViewMode.value !== "compact" || promptCount(session) <= 1) {
+    return;
+  }
+  event.preventDefault();
+  compactTurnNavigationActive.value = true;
+  const deltaScale = event.deltaMode === WheelEvent.DOM_DELTA_LINE
+    ? 16
+    : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
+      ? detailEl.value?.clientHeight || 1
+      : 1;
+  compactTurnWheelDelta += event.deltaY * deltaScale;
+  if (compactTurnWheelResetTimer) clearTimeout(compactTurnWheelResetTimer);
+  compactTurnWheelResetTimer = setTimeout(resetCompactTurnWheelDelta, 160);
+  if (Math.abs(compactTurnWheelDelta) < 40) return;
+  const direction = compactTurnWheelDelta > 0 ? 1 : -1;
+  resetCompactTurnWheelDelta();
+  void setPromptIndex(session, promptIndexFor(session) + direction);
 }
 
 function backToLatestPrompt(session: AiSessionSummary) {
@@ -3412,6 +3516,9 @@ watch([() => selectedSession.value?.id, messageDraft, messageMentionBindings], (
 }, { deep: true });
 
 onMounted(() => {
+  window.addEventListener("keydown", handleCompactTurnModifierDown);
+  window.addEventListener("keyup", handleCompactTurnModifierUp);
+  window.addEventListener("blur", deactivateCompactTurnNavigation);
   void nextTick(() => {
     observeComposerOffset();
     observeDetailActionsWidth();
@@ -3436,6 +3543,10 @@ watch(() => props.instance.id, () => {
   sessionListOverlayOpen.value = false;
 });
 onBeforeUnmount(() => {
+  window.removeEventListener("keydown", handleCompactTurnModifierDown);
+  window.removeEventListener("keyup", handleCompactTurnModifierUp);
+  window.removeEventListener("blur", deactivateCompactTurnNavigation);
+  deactivateCompactTurnNavigation();
   closeSessionListPreview();
   composerResizeObserver?.disconnect();
   detailActionsResizeObserver?.disconnect();

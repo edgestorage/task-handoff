@@ -17,11 +17,13 @@
       </button>
     </span>
     <button
-      v-if="latestVisible"
+      v-if="stableLatest || latestVisible"
       ref="latestEl"
       type="button"
       class="ai-session-turn-navigator__latest"
       :aria-label="latestText"
+      :disabled="!latestVisible"
+      :title="tone === 'panel' ? latestText : undefined"
       @click="$emit('latest')"
     >
       <SkipForward :size="13" />
@@ -44,12 +46,14 @@ const props = withDefaults(defineProps<{
   latestLabel?: string;
   nextLabel?: string;
   previousLabel?: string;
+  stableLatest?: boolean;
   tone?: "board" | "panel";
 }>(), {
   ariaLabel: undefined,
   latestLabel: undefined,
   nextLabel: undefined,
   previousLabel: undefined,
+  stableLatest: false,
   tone: "panel",
 });
 
@@ -106,10 +110,24 @@ defineEmits<{
   color: var(--ai-board-floating-text);
 }
 
+.ai-session-turn-navigator[data-tone="panel"] {
+  height: 26px;
+  gap: 2px;
+  padding: 1px;
+  background: var(--surface-subtle);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 8%);
+  transform: none;
+}
+
 .ai-session-turn-navigator__controls {
   display: inline-flex;
   align-items: center;
   height: 24px;
+}
+
+.ai-session-turn-navigator[data-tone="panel"] .ai-session-turn-navigator__controls {
+  height: 22px;
+  gap: 1px;
 }
 
 .ai-session-turn-navigator button {
@@ -143,6 +161,32 @@ defineEmits<{
   white-space: nowrap;
 }
 
+.ai-session-turn-navigator[data-tone="panel"] button {
+  width: 24px;
+  height: 22px;
+  border-radius: 4px;
+}
+
+.ai-session-turn-navigator[data-tone="panel"] button.ai-session-turn-navigator__latest {
+  width: 24px;
+  min-width: 24px;
+  height: 22px;
+  margin-left: 1px;
+  padding: 0;
+  border-left-color: var(--line-subtle);
+  border-radius: 0 4px 4px 0;
+  background: transparent;
+}
+
+.ai-session-turn-navigator[data-tone="panel"] .ai-session-turn-navigator__latest span {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+
 .ai-session-turn-navigator[data-tone="board"] button.ai-session-turn-navigator__latest {
   border-left-color: var(--ai-board-floating-border);
   background: var(--ai-board-turn-hover-bg);
@@ -165,6 +209,13 @@ defineEmits<{
   padding: 0 8px;
   text-align: center;
   white-space: nowrap;
+}
+
+.ai-session-turn-navigator[data-tone="panel"] small {
+  min-width: 34px;
+  border: 0;
+  padding: 0 4px;
+  font-size: 11px;
 }
 
 .ai-session-turn-navigator[data-tone="board"] small {

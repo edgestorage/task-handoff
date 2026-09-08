@@ -18,7 +18,7 @@ const props = withDefaults(defineProps<{
 });
 
 const terminalAppIds = new Set(["terminal", "terminal-tty", "gui-terminal"]);
-const agent = computed<"codex" | "claude" | undefined>(() => (
-  props.appId === "codex" || props.appId === "claude" ? props.appId : undefined
+const agent = computed<"codex" | "claude" | "opencode" | undefined>(() => (
+  props.appId === "codex" || props.appId === "claude" || props.appId === "opencode" ? props.appId : undefined
 ));
 </script>
