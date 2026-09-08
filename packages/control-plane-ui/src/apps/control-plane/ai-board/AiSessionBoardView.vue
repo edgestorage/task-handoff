@@ -183,6 +183,7 @@
           :attachments="messageAttachments"
           :draft="messageDraft"
           :editing-label="queueComposerEdit ? t('sessions.composer.editingQueuedMessage') : undefined"
+          :folder-name="aiBoardCardPath(selectedCard).label"
           :mention-bindings="messageMentionBindings"
           :mention-context="mentionContext"
           :mention-trigger="mentionTrigger"

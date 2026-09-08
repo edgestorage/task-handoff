@@ -156,6 +156,7 @@ test("app launch menus use product and terminal icons instead of a generic launc
   assert.match(appLaunchItems, /<AppLaunchIcon :app-id="app\.id" \/>/);
   assert.match(appLaunchIcon, /terminalAppIds = new Set\(\["terminal", "terminal-tty", "gui-terminal"\]\)/);
   assert.match(appLaunchIcon, /<AiAgentIcon v-if="agent"/);
+  assert.match(appLaunchIcon, /props\.appId === "codex" \|\| props\.appId === "claude" \|\| props\.appId === "opencode"/);
   assert.match(appLaunchIcon, /<SquareTerminal v-else-if=/);
   assert.match(appLaunchIcon, /<Play v-else/);
 });

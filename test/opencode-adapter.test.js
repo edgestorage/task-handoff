@@ -302,7 +302,7 @@ test("OpenCode realtime parts publish only assistant text as AI output", async (
   bridge.close();
 });
 
-test("OpenCode stages model settings until a real prompt applies them", async () => {
+test("OpenCode projects pending model settings before a real prompt applies them", async () => {
   const registry = createAiSessionRegistry({ dir: fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-opencode-settings-")) });
   const session = registry.start({
     agent: "opencode",
@@ -314,17 +314,37 @@ test("OpenCode stages model settings until a real prompt applies them", async ()
     reasoningEffort: "medium",
   });
   const prompts = [];
+  let messages = [];
   const bridge = new OpenCodeSessionBridge(registry, {
     connection: () => ({ endpoint: "http://unused", headers: {} }),
     workspaceRoots: () => ["/workspace"],
     resolveModelSelection: (selection) => ({ providerID: selection.modelEntityId, modelID: selection.modelName }),
+    projectModelSelection: (providerID, modelID) => ({ modelEntityId: providerID, modelName: modelID }),
   });
-  bridge.client = { promptAsync: async (...args) => prompts.push(args) };
+  bridge.client = {
+    promptAsync: async (...args) => prompts.push(args),
+    status: async () => ({}),
+    messages: async () => messages,
+    permissions: async () => [],
+  };
 
   await bridge.updateModelSelection(session, { modelEntityId: "provider_new", modelName: "new" });
-  await bridge.updateReasoningEffort(session, "high");
-  assert.deepEqual(registry.get(session.id).modelSelection, { modelEntityId: "provider_old", modelName: "old" });
+  assert.deepEqual(registry.get(session.id).modelSelection, { modelEntityId: "provider_new", modelName: "new" });
   assert.equal(registry.get(session.id).reasoningEffort, "medium");
+  await bridge.updateReasoningEffort(session, "high");
+  assert.deepEqual(registry.get(session.id).modelSelection, { modelEntityId: "provider_new", modelName: "new" });
+  assert.equal(registry.get(session.id).reasoningEffort, "high");
+  assert.equal(bridge.pendingSettingsBySession.has("ses_settings"), true);
+
+  await bridge.reconcile("ses_settings", "/workspace", {
+    id: "ses_settings",
+    directory: "/workspace",
+    title: "Settings",
+    model: { id: "old", providerID: "provider_old", variant: "medium" },
+    time: { created: 1700000000000, updated: 1700000001000 },
+  });
+  assert.deepEqual(registry.get(session.id).modelSelection, { modelEntityId: "provider_new", modelName: "new" });
+  assert.equal(registry.get(session.id).reasoningEffort, "high");
 
   await bridge.startMessage(registry.get(session.id), {
     message: "Apply settings",
@@ -333,8 +353,29 @@ test("OpenCode stages model settings until a real prompt applies them", async ()
     userMessageAttachments: [],
   });
   assert.deepEqual(prompts[0][4], { providerID: "provider_new", modelID: "new", variant: "high" });
-  assert.deepEqual(registry.get(session.id).modelSelection, { modelEntityId: "provider_old", modelName: "old" });
-  assert.equal(registry.get(session.id).reasoningEffort, "medium");
+  assert.deepEqual(registry.get(session.id).modelSelection, { modelEntityId: "provider_new", modelName: "new" });
+  assert.equal(registry.get(session.id).reasoningEffort, "high");
+
+  messages = [{
+    info: {
+      id: "msg_settings",
+      sessionID: "ses_settings",
+      role: "user",
+      time: { created: 1700000002000 },
+      model: { providerID: "provider_new", modelID: "new", variant: "high" },
+    },
+    parts: [{ id: "part_settings", sessionID: "ses_settings", messageID: "msg_settings", type: "text", text: "Apply settings" }],
+  }];
+  await bridge.reconcile("ses_settings", "/workspace", {
+    id: "ses_settings",
+    directory: "/workspace",
+    title: "Settings",
+    model: { id: "old", providerID: "provider_old", variant: "medium" },
+    time: { created: 1700000000000, updated: 1700000002000 },
+  });
+  assert.equal(bridge.pendingSettingsBySession.has("ses_settings"), false);
+  assert.deepEqual(registry.get(session.id).modelSelection, { modelEntityId: "provider_new", modelName: "new" });
+  assert.equal(registry.get(session.id).reasoningEffort, "high");
   bridge.close();
 });
 

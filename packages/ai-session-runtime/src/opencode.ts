@@ -127,6 +127,11 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
     const reasoningEffort = pending?.reasoningEffort ?? session.reasoningEffort;
     if (!this.modelRef(selection, reasoningEffort)) throw aiSessionControlError("AI_SESSION_MODEL_SELECTION_INVALID", "OpenCode model selection is unavailable.", 409);
     this.pendingSettingsBySession.set(session.providerSessionId, { modelSelection: selection, reasoningEffort });
+    this.registry.applyRealtimeEvent(session.id, {
+      kind: "model-selection",
+      modelSelection: selection,
+      observedAt: new Date().toISOString(),
+    });
     return selection;
   }
 
@@ -137,6 +142,11 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
     if (!selection) throw aiSessionControlError("AI_SESSION_REASONING_EFFORT_UNKNOWN", "The current OpenCode model is unknown.", 409);
     if (!this.modelRef(selection, effort)) throw aiSessionControlError("AI_SESSION_REASONING_EFFORT_UNSUPPORTED", "OpenCode reasoning variant is unavailable.", 409);
     this.pendingSettingsBySession.set(session.providerSessionId, { modelSelection: selection, reasoningEffort: effort });
+    this.registry.applyRealtimeEvent(session.id, {
+      kind: "reasoning-effort",
+      reasoningEffort: effort,
+      observedAt: new Date().toISOString(),
+    });
     return effort;
   }
 
@@ -300,15 +310,25 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
       this.client.permissions(directory),
     ]);
     this.directoryBySession.set(providerSessionId, session.directory);
-    const projection = projectOpenCodeSession({ session, status: statuses[providerSessionId], messages, permissions, projectModelSelection: this.options.projectModelSelection });
+    const observedProjection = projectOpenCodeSession({ session, status: statuses[providerSessionId], messages, permissions, projectModelSelection: this.options.projectModelSelection });
     const pending = this.pendingSettingsBySession.get(providerSessionId);
+    let projection = observedProjection;
     if (pending) {
-      const observed = projection.snapshot.modelSelection;
-      const observedEffort = projection.snapshot.reasoningEffort;
+      const observed = observedProjection.snapshot.modelSelection;
+      const observedEffort = observedProjection.snapshot.reasoningEffort;
       if (observed?.modelEntityId === pending.modelSelection.modelEntityId
         && observed.modelName === pending.modelSelection.modelName
         && observedEffort === pending.reasoningEffort) {
         this.pendingSettingsBySession.delete(providerSessionId);
+      } else {
+        projection = {
+          ...observedProjection,
+          snapshot: {
+            ...observedProjection.snapshot,
+            modelSelection: pending.modelSelection,
+            ...(pending.reasoningEffort ? { reasoningEffort: pending.reasoningEffort } : {}),
+          },
+        };
       }
     }
     this.projectionBySession.set(providerSessionId, projection);
