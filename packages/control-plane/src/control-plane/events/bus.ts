@@ -1,5 +1,5 @@
 import { COMPACT_EVENT_ENVELOPE_VERSION, AiSessionTransientSubscriptionSchema, EventKeepalivePingSchema, aiSessionTransientSubscriptionAccepts, eventTopic, projectEventEnvelope, type AiSessionTransientSubscription, type EventEnvelope, type EventScope } from "@task-handoff/protocol/events";
-import { AiSessionEventTopic, AiSessionEventType, AiSessionMessageDeltaEventSchema, compactAiSessionMessageDeltaEvent } from "@task-handoff/protocol/ai-sessions";
+import { AiSessionEventTopic, AiSessionEventType, AiSessionMessageDeltaEventSchema, AiSessionTimelineItemDeltaEventSchema, compactAiSessionMessageDeltaEvent, compactAiSessionTimelineItemDeltaEvent } from "@task-handoff/protocol/ai-sessions";
 import type { ControlPlanePermissionId } from "@task-handoff/protocol/control-plane-access";
 
 export type ControlPlaneEvent<T = unknown> = {
@@ -190,7 +190,7 @@ export class ControlPlaneEventBus {
     const subscribesAllAiEvents = selected.has("*") || selected.has(AiSessionEventTopic);
     if (subscribesAllAiEvents) return this.registerAiSessionTransientDemand();
     const subscribesMessageDeltas = selected.has(AiSessionEventType.MessageDelta);
-    const subscribesTimelineItems = selected.has(AiSessionEventType.TimelineItem);
+    const subscribesTimelineItems = selected.has(AiSessionEventType.TimelineItem) || selected.has(AiSessionEventType.TimelineItemDelta);
     if (!subscribesMessageDeltas && !subscribesTimelineItems) return () => undefined;
     return this.registerAiSessionTransientDemand({
       messageDeltas: { allInstances: subscribesMessageDeltas, instanceIds: [] },
@@ -282,7 +282,8 @@ function subscribed(topics: Set<string> | undefined, topic: string, type: string
 
 function subscribedToAiSessionTransient(topics: Set<string> | undefined) {
   return subscribed(topics, AiSessionEventTopic, AiSessionEventType.MessageDelta)
-    || subscribed(topics, AiSessionEventTopic, AiSessionEventType.TimelineItem);
+    || subscribed(topics, AiSessionEventTopic, AiSessionEventType.TimelineItem)
+    || subscribed(topics, AiSessionEventTopic, AiSessionEventType.TimelineItemDelta);
 }
 
 function subscribedInstance(instanceIds: Set<string> | undefined, scope: EventScope | undefined) {
@@ -298,7 +299,7 @@ function subscribedResourceMetrics(client: EventSocket, event: EventEnvelope) {
 }
 
 function subscribedAiSessionTransient(client: EventSocket, event: EventEnvelope) {
-  if (event.type !== "ai-session.message-delta" && event.type !== "ai-session.timeline-item") return true;
+  if (event.type !== AiSessionEventType.MessageDelta && event.type !== AiSessionEventType.TimelineItem && event.type !== AiSessionEventType.TimelineItemDelta) return true;
   if (!client.subscriptionReceived) return false;
   return aiSessionTransientSubscriptionAccepts(client.aiSessionTransient, event);
 }
@@ -402,9 +403,13 @@ export function projectCompactPublicEvent(event: EventEnvelope) {
   const delta = event.type === AiSessionEventType.MessageDelta
     ? AiSessionMessageDeltaEventSchema.safeParse(event.payload)
     : undefined;
+  const timelineDelta = event.type === AiSessionEventType.TimelineItemDelta
+    ? AiSessionTimelineItemDeltaEventSchema.safeParse(event.payload)
+    : undefined;
   return projectEventEnvelope(event, COMPACT_EVENT_ENVELOPE_VERSION, {
     publicScope: true,
     ...(delta?.success ? { payload: compactAiSessionMessageDeltaEvent(delta.data) } : {}),
+    ...(timelineDelta?.success ? { payload: compactAiSessionTimelineItemDeltaEvent(timelineDelta.data) } : {}),
   });
 }
 

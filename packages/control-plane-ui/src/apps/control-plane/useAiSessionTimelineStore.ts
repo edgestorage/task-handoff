@@ -1,5 +1,5 @@
 import { shallowRef } from "vue";
-import { mergeAiSessionTimelineItems, type AiSessionTimeline, type AiSessionTimelineItem, type AiSessionTimelineItemEvent, type AiSessionTurn } from "@task-handoff/protocol/ai-sessions";
+import { mergeAiSessionTimelineItems, type AiSessionTimeline, type AiSessionTimelineItem, type AiSessionTimelineItemDeltaEvent, type AiSessionTimelineItemEvent, type AiSessionTurn } from "@task-handoff/protocol/ai-sessions";
 
 export type AiSessionTurnTimelineStatus = "idle" | "loading" | "ready" | "stale" | "error";
 export type AiSessionTurnTimelineState = {
@@ -28,6 +28,7 @@ const liveTurns = new Map<string, LiveTurnTimeline>();
 const liveTurnKeysBySession = new Map<string, Set<string>>();
 const turnStates = new Map<string, StoredTurnTimelineState>();
 const sessionStates = new Map<string, SessionTimelineState>();
+const pendingDeltas = new Map<string, AiSessionTimelineItemDeltaEvent>();
 const revision = shallowRef(0);
 const recoveryRevision = shallowRef(0);
 const sessionKey = (instanceId: string, sessionId: string) => JSON.stringify([instanceId, sessionId]);
@@ -35,6 +36,12 @@ const turnKey = (instanceId: string, sessionId: string, turnId: string) => `${se
 const MAX_CACHED_TURNS = 500;
 const MAX_CACHED_SESSIONS = 250;
 const MAX_LIVE_ITEMS_PER_TURN = 500;
+const MAX_PENDING_DELTAS = 500;
+const MAX_ACTIVITY_OUTPUT_LENGTH = 1_000_000;
+
+function itemKey(instanceId: string, sessionId: string, turnId: string, itemId: string) {
+  return `${turnKey(instanceId, sessionId, turnId)}\u0000${itemId}`;
+}
 
 function turnIdentities(turn: TurnIdentity) {
   return [...new Set([turn.id, turn.providerTurnId].filter((value): value is string => Boolean(value)))];
@@ -79,7 +86,16 @@ function apply(event: AiSessionTimelineItemEvent) {
     );
   }
   if (bucket.evictedItemIds.has(event.item.id)) return;
-  bucket.events.set(event.item.id, event);
+  const pendingKey = itemKey(event.instanceId, event.sessionId, event.item.turnId, event.item.id);
+  const pending = pendingDeltas.get(pendingKey);
+  const combinedOutput = pending && event.item.type === "activity" && pending.field === "output"
+    ? `${event.item.output || ""}${pending.delta}`
+    : undefined;
+  const item = combinedOutput !== undefined && combinedOutput.length <= MAX_ACTIVITY_OUTPUT_LENGTH
+    ? { ...event.item, output: combinedOutput }
+    : event.item;
+  pendingDeltas.delete(pendingKey);
+  bucket.events.set(event.item.id, { ...event, item });
   while (bucket.events.size > MAX_LIVE_ITEMS_PER_TURN) {
     const oldestItemId = bucket.events.keys().next().value as string;
     bucket.events.delete(oldestItemId);
@@ -92,6 +108,40 @@ function apply(event: AiSessionTimelineItemEvent) {
   liveTurns.set(key, bucket);
   while (liveTurns.size > MAX_CACHED_TURNS) removeLiveTurn(liveTurns.keys().next().value as string);
   revision.value += 1;
+}
+
+function applyDelta(event: AiSessionTimelineItemDeltaEvent) {
+  const key = turnKey(event.instanceId, event.sessionId, event.turnId);
+  const current = liveTurns.get(key)?.events.get(event.itemId);
+  const stored = [...turnStates.values()]
+    .filter((state) => state.instanceId === event.instanceId && state.sessionId === event.sessionId && state.identities.includes(event.turnId))
+    .flatMap((state) => state.items)
+    .find((item) => item.id === event.itemId);
+  const activity = current?.item.type === "activity"
+    ? current.item
+    : stored?.type === "activity"
+      ? stored
+      : undefined;
+  if (activity) {
+    const output = `${activity.output || ""}${event.delta}`;
+    if (output.length > MAX_ACTIVITY_OUTPUT_LENGTH) return false;
+    pendingDeltas.delete(itemKey(event.instanceId, event.sessionId, event.turnId, event.itemId));
+    apply({
+      instanceId: event.instanceId,
+      sessionId: event.sessionId,
+      providerSessionId: event.providerSessionId || "",
+      generatedAt: event.generatedAt,
+      item: { ...activity, output },
+    });
+    return true;
+  }
+  const pendingKey = itemKey(event.instanceId, event.sessionId, event.turnId, event.itemId);
+  const pending = pendingDeltas.get(pendingKey);
+  const delta = `${pending?.delta || ""}${event.delta}`;
+  if (delta.length > MAX_ACTIVITY_OUTPUT_LENGTH) return false;
+  pendingDeltas.set(pendingKey, { ...event, delta });
+  while (pendingDeltas.size > MAX_PENDING_DELTAS) pendingDeltas.delete(pendingDeltas.keys().next().value as string);
+  return true;
 }
 
 function items(instanceId: string, sessionId: string) {
@@ -166,7 +216,13 @@ function resolveTurn(instanceId: string, sessionId: string, turn: TurnIdentity, 
   const identities = turnIdentities(turn);
   const merged = mergeAiSessionTimelineItems(turnItems, liveItemsForTurn(instanceId, sessionId, identities));
   clearLiveTurn(instanceId, sessionId, identities);
-  return setTurnState(instanceId, sessionId, turn, { status: "ready", items: merged });
+  const resolved = setTurnState(instanceId, sessionId, turn, { status: "ready", items: merged });
+  if (resolved) {
+    for (const delta of [...pendingDeltas.values()]) {
+      if (delta.instanceId === instanceId && delta.sessionId === sessionId && identities.includes(delta.turnId)) applyDelta(delta);
+    }
+  }
+  return resolved;
 }
 
 function rejectTurn(instanceId: string, sessionId: string, turn: TurnIdentity, error: string) {
@@ -214,12 +270,14 @@ function cleanupInstance(instanceId: string) {
     const [storedInstanceId] = JSON.parse(key) as [string, string];
     if (storedInstanceId === instanceId) sessionStates.delete(key);
   }
+  for (const [key, event] of pendingDeltas) if (event.instanceId === instanceId) pendingDeltas.delete(key);
   revision.value += 1;
 }
 
 function recoverConnection() {
   liveTurns.clear();
   liveTurnKeysBySession.clear();
+  pendingDeltas.clear();
   for (const [key, state] of turnStates) {
     if (state.status === "ready" || state.status === "loading") turnStates.set(key, { ...state, status: "stale" });
   }
@@ -233,6 +291,7 @@ function recoverConnection() {
 export function useAiSessionTimelineStore() {
   return {
     apply,
+    applyDelta,
     beginSessionLoad,
     beginTurnLoad,
     cleanupInstance,

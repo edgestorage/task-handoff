@@ -622,6 +622,7 @@ export class NodeAgentState {
         codexConfigEnabled: input.config?.codexConfigEnabled ?? true,
         codexHomeMode: input.config?.codexHomeMode ?? (runtime.type === "local" ? "taskhandoff" : "default"),
         defaultCodexPermissionMode: input.config?.defaultCodexPermissionMode ?? (runtime.type === "docker" ? "full-access" : "ask"),
+        ...(input.config?.codexSettings ? { codexSettings: input.config.codexSettings } : {}),
         aiSessionHistoryLimit: input.config?.aiSessionHistoryLimit ?? AI_SESSION_HISTORY_DEFAULT_LIMIT,
         aiSessionAttachmentRetentionDays: input.config?.aiSessionAttachmentRetentionDays ?? 30,
         aiSessionMaxFileAttachmentBytes: input.config?.aiSessionMaxFileAttachmentBytes ?? AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES,
@@ -641,6 +642,7 @@ export class NodeAgentState {
       stored.registrationToken,
       this.resolvedAssignedModelEnvironment(stored.id),
       this.modelRegistry.privateCatalog(stored.id),
+      stored.config.codexSettings,
     );
     if (input.gitWorkspaceProvisioning?.credentials.every((credential) => credential.retention === "operation-only")) {
       this.gitCredentials.putWorkspaceProvisioning(input.gitWorkspaceProvisioning);
@@ -830,6 +832,7 @@ export class NodeAgentState {
       instance.registrationToken,
       effectiveModelEnv,
       this.modelRegistry.privateCatalog(instance.id),
+      instance.config.codexSettings,
     );
     const gitWorkspaceProvisioning = this.gitWorkspaceProvisioningFor(instance);
     return {

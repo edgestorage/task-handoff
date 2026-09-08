@@ -59,7 +59,8 @@ test("AI session detail menu icons match the card context menu", () => {
 });
 
 test("AI session path groups share node-backed rename and desktop-local folder actions", () => {
-  assert.match(panel, /<AiSessionPathGroupContextMenu[\s\S]*:can-open="canOpenPathGroupFolder"[\s\S]*:can-rename="canRenamePathGroup\(group\)"/);
+  assert.match(panel, /<AiSessionPathGroupContextMenu[\s\S]*:can-open="group\.kind === 'path' && canOpenPathGroupFolder"[\s\S]*:can-rename="canRenamePathGroup\(group\)"/);
+  assert.match(panel, /function registeredPathGroupFolder[\s\S]*group\.kind !== "path"[\s\S]*return undefined/);
   assert.match(panel, /function canRenamePathGroup[\s\S]*registeredPathGroupFolder\(group\)[\s\S]*nodeSupportsLocalFolderNameUpdate\(props\.instance\.node\)/);
   assert.match(panel, /updateNodeLocalFolder\(folder\.nodeId, folder\.id, \{ name \}\)/);
   assert.match(panel, /desktopRuntimePathAccess\(props\.instance\) === "desktop-local" && canOpenDesktopLocalPath\(\)/);
@@ -204,6 +205,16 @@ test("AI session path groups create a session in their registered project", () =
   assert.match(styles, /\.session-ai-path-group-head:hover,\s*\.session-ai-path-group-head:focus-within\s*\{[^}]*background: var\(--surface-hover\);/s);
   assert.match(styles, /\.session-ai-path-group-add\s*\{[^}]*background: transparent;[^}]*opacity: 0;[^}]*visibility: hidden;/s);
   assert.match(styles, /\.session-ai-path-group-head:hover \.session-ai-path-group-add,\s*\.session-ai-path-group-head:focus-within \.session-ai-path-group-add\s*\{[^}]*opacity: 1;[^}]*visibility: visible;/s);
+});
+
+test("Story groups create Story-bound sessions without exposing path actions", () => {
+  assert.match(panel, /groups\.set\(key, \{ kind: "story", key, path: "", storyId: session\.storyId/);
+  assert.match(panel, /<TooltipProvider v-if="group\.kind === 'path'"/);
+  assert.match(panel, /if \(group\.kind === "story"\) \{[\s\S]*beginNewSession\(group\.storyId\);[\s\S]*return;/);
+  assert.match(panel, /const entries = "sessions" in group \? group\.sessions : group\.items;[\s\S]*const latest = entries\.reduce/);
+  assert.match(panel, /latest\?\.cwd \? newSessionFolderIdForPath\(latest\.cwd\) : undefined/);
+  assert.match(panel, /storyId: activeNewSessionStoryId\.value/);
+  assert.match(panel, /\.\.\.\(activeNewSessionStoryId\.value \? \{ storyId: activeNewSessionStoryId\.value \} : \{\}\)/);
 });
 
 test("AI session path groups merge the same cwd regardless of folder ID provenance", () => {

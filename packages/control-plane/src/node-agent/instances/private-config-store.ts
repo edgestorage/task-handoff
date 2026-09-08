@@ -3,6 +3,7 @@ import path from "node:path";
 import writeFileAtomic from "write-file-atomic";
 import { z } from "zod";
 import type { NodeAgentStorePaths } from "../persistence/paths.ts";
+import { CodexInstanceSettingsSchema, parseCodexInstanceSettings, type CodexInstanceSettings } from "@task-handoff/protocol/control-plane";
 import {
   InstancePrivateModelCatalogSchema,
   sanitizeInstancePrivateModelCatalog,
@@ -20,6 +21,7 @@ export const InstancePrivateConfigSchema = z.object({
   instanceCredential: z.string().trim().min(1).max(240),
   environment: PrivateEnvironmentSchema,
   modelCatalog: InstancePrivateModelCatalogSchema.optional(),
+  codexSettings: CodexInstanceSettingsSchema.optional(),
   updatedAt: z.string().datetime(),
 }).strict();
 
@@ -57,6 +59,7 @@ export class InstancePrivateConfigStore {
       instanceCredential: source.instanceCredential ?? source.registrationToken,
       environment: source.environment,
       modelCatalog: source.modelCatalog === undefined ? undefined : sanitizeInstancePrivateModelCatalog(source.modelCatalog),
+      codexSettings: source.codexSettings === undefined ? undefined : parseCodexInstanceSettings(source.codexSettings),
       updatedAt: source.updatedAt,
     });
     if (parsed.instanceId !== instanceId) {
@@ -87,6 +90,7 @@ export class InstancePrivateConfigStore {
     instanceCredential: string | undefined,
     environment: Record<string, string>,
     modelCatalog?: InstancePrivateModelCatalog,
+    codexSettings?: CodexInstanceSettings,
   ) {
     if (!instanceCredential) {
       throw Object.assign(new Error(`Instance ${instanceId} does not have a long-lived credential.`), {
@@ -100,6 +104,7 @@ export class InstancePrivateConfigStore {
       instanceCredential,
       environment,
       ...(modelCatalog ? { modelCatalog } : {}),
+      ...(codexSettings ? { codexSettings } : {}),
       updatedAt: new Date().toISOString(),
     });
   }

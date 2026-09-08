@@ -1,4 +1,4 @@
-import { AiSessionEventType, AiSessionMessageDeltaEventSchema, compactAiSessionMessageDeltaEvent } from "@task-handoff/protocol/ai-sessions";
+import { AiSessionEventType, AiSessionMessageDeltaEventSchema, AiSessionTimelineItemDeltaEventSchema, compactAiSessionMessageDeltaEvent, compactAiSessionTimelineItemDeltaEvent } from "@task-handoff/protocol/ai-sessions";
 import { COMPACT_EVENT_ENVELOPE_VERSION, AiSessionTransientSubscriptionSchema, aiSessionTransientSubscriptionAccepts, eventTopic, projectEventEnvelope, type AiSessionTransientSubscription, type EventEnvelope } from "@task-handoff/protocol/events";
 
 export type WebEvent<T = unknown> = {
@@ -77,7 +77,7 @@ export class WebEventBus {
   }
 
   private retainTransient(event: WebEvent, encoded: string, bytes: number) {
-    if (event.type !== "ai-session.message-delta" && event.type !== "ai-session.timeline-item") return;
+    if (event.type !== AiSessionEventType.MessageDelta && event.type !== AiSessionEventType.TimelineItem && event.type !== AiSessionEventType.TimelineItemDelta) return;
     this.transientReplay.push({ event, encoded, bytes });
     this.transientReplayBytes += bytes;
     while (this.transientReplay.length > MAX_TRANSIENT_REPLAY_EVENTS || this.transientReplayBytes > MAX_TRANSIENT_REPLAY_BYTES) {
@@ -212,8 +212,12 @@ function compactEvent(event: EventEnvelope) {
   const delta = event.type === AiSessionEventType.MessageDelta
     ? AiSessionMessageDeltaEventSchema.safeParse(event.payload)
     : undefined;
+  const timelineDelta = event.type === AiSessionEventType.TimelineItemDelta
+    ? AiSessionTimelineItemDeltaEventSchema.safeParse(event.payload)
+    : undefined;
   return projectEventEnvelope(event, COMPACT_EVENT_ENVELOPE_VERSION, {
     ...(delta?.success ? { payload: compactAiSessionMessageDeltaEvent(delta.data) } : {}),
+    ...(timelineDelta?.success ? { payload: compactAiSessionTimelineItemDeltaEvent(timelineDelta.data) } : {}),
   });
 }
 

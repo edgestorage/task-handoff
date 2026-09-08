@@ -17,9 +17,12 @@ import {
   AiSessionRemovedEventSchema,
   AiSessionSnapshotEventSchema,
   AiSessionMessageDeltaEventSchema,
+  AiSessionTimelineItemDeltaEventSchema,
   applyAiSessionStreamEvent,
   compactAiSessionMessageDeltaEvent,
+  compactAiSessionTimelineItemDeltaEvent,
   normalizeAiSessionMessageDeltaEvent,
+  normalizeAiSessionTimelineItemDeltaEvent,
   type AiSessionStreamEvent,
   type AiSessionsState,
 } from "@task-handoff/protocol/ai-sessions";
@@ -302,9 +305,13 @@ export class NodeAgentInstanceEventForwarder {
     const delta = event.type === AiSessionEventType.MessageDelta
       ? AiSessionMessageDeltaEventSchema.safeParse(event.payload)
       : undefined;
+    const timelineDelta = event.type === AiSessionEventType.TimelineItemDelta
+      ? AiSessionTimelineItemDeltaEventSchema.safeParse(event.payload)
+      : undefined;
     const wireEvent = this.outputEnvelopeVersions.get(output) === COMPACT_EVENT_ENVELOPE_VERSION
       ? projectEventEnvelope(event, COMPACT_EVENT_ENVELOPE_VERSION, {
           ...(delta?.success ? { payload: compactAiSessionMessageDeltaEvent(delta.data) } : {}),
+          ...(timelineDelta?.success ? { payload: compactAiSessionTimelineItemDeltaEvent(timelineDelta.data) } : {}),
         })
       : event;
     const encoded = JSON.stringify({ type: "node-agent.event.forwarded", event: wireEvent });
@@ -650,7 +657,7 @@ export class NodeAgentInstanceEventForwarder {
         AiSessionEventType.Patch,
         AiSessionEventType.Removed,
         ...(messageDeltas ? [AiSessionEventType.MessageDelta] : []),
-        ...(timelineAllSessions || timelineSessionIds.length ? [AiSessionEventType.TimelineItem] : []),
+        ...(timelineAllSessions || timelineSessionIds.length ? [AiSessionEventType.TimelineItem, AiSessionEventType.TimelineItemDelta] : []),
         "app.sessions",
         "apps",
         "instances",
@@ -691,7 +698,7 @@ export class NodeAgentInstanceEventForwarder {
     if (event.topic !== AiSessionEventTopic) {
       return;
     }
-    if (event.type === AiSessionEventType.MessageDelta || event.type === AiSessionEventType.TimelineItem) {
+    if (event.type === AiSessionEventType.MessageDelta || event.type === AiSessionEventType.TimelineItem || event.type === AiSessionEventType.TimelineItemDelta) {
       return;
     }
     const authorityEvent = parseAiSessionAuthorityEvent(event);
@@ -929,6 +936,10 @@ function parseForwardedInstanceEvent(raw: unknown, instanceId: string): Forwarde
     if (!event || event.type === "events.connected") return undefined;
     if (event.type === AiSessionEventType.MessageDelta) {
       const payload = normalizeAiSessionMessageDeltaEvent(event.payload, instanceId);
+      return { ...event, payload, scope: { ...event.scope, instanceId } };
+    }
+    if (event.type === AiSessionEventType.TimelineItemDelta) {
+      const payload = normalizeAiSessionTimelineItemDeltaEvent(event.payload, instanceId);
       return { ...event, payload, scope: { ...event.scope, instanceId } };
     }
     return { ...event, scope: { ...event.scope, instanceId } };

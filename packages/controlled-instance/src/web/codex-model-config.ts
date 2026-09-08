@@ -1,9 +1,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import TOML from "@iarna/toml";
 import { atomicWriteFileSync } from "@task-handoff/core/storage/atomic-write";
 import type { ControlledPrivateModelCatalog } from "./private-model-catalog";
+import type { CodexInstanceSettings } from "@task-handoff/protocol/control-plane";
 
 type ConfigObject = Record<string, unknown>;
 type TomlMap = ReturnType<typeof TOML.parse>;
@@ -70,6 +72,7 @@ function atomicWrite(filePath: string, contents: string) {
 export function applyManagedCodexModelConfig(
   env: NodeJS.ProcessEnv = process.env,
   catalog?: ControlledPrivateModelCatalog,
+  settings?: CodexInstanceSettings,
 ): ManagedCodexModelConfigResult {
   if (env.TASK_HANDOFF_CONTROL_MODE !== "controlled") {
     return { applied: false };
@@ -80,14 +83,16 @@ export function applyManagedCodexModelConfig(
   const model = defaultName || (env.TASK_HANDOFF_CODEX_MODEL || "").trim();
   const baseUrl = (env.TASK_HANDOFF_CODEX_BASE_URL || "").trim();
   const apiKey = (env.OPENAI_API_KEY || "").trim();
-  if (catalog ? (!defaultEntity || !model) : (!model || !baseUrl || !apiKey)) {
+  const hasManagedModel = catalog ? Boolean(defaultEntity && model) : Boolean(model && baseUrl && apiKey);
+  if (!hasManagedModel && !settings) {
     return { applied: false };
   }
   const home = codexHome(env);
+  fs.mkdirSync(home, { recursive: true, mode: 0o700 });
   const configPath = path.join(home, "config.toml");
   const authPath = path.join(home, "auth.json");
   let applied = false;
-  if (!catalog && apiKey) {
+  if (hasManagedModel && !catalog && apiKey) {
     let currentKey = "";
     try {
       const currentAuth = JSON.parse(fs.readFileSync(authPath, "utf8")) as Record<string, unknown>;
@@ -118,22 +123,20 @@ export function applyManagedCodexModelConfig(
       wire_api: "responses",
     }];
   }));
-  if (
-    current.config.model === model
-    && current.config.model_provider === modelProvider
-    && (!catalog ? current.config.openai_base_url === baseUrl : JSON.stringify(existingProviders) === JSON.stringify({ ...retainedProviders, ...managedProviders }))
-  ) {
-    return { applied, configPath, authPath, model, modelProvider, providerEnvironment };
-  }
-
   const next: ConfigObject = {
     ...current.config,
-    model,
-    model_provider: modelProvider,
-    ...(!catalog ? { openai_base_url: baseUrl } : {
+    ...(hasManagedModel ? {
+      model,
+      model_provider: modelProvider,
+    } : {}),
+    ...(hasManagedModel && !catalog ? { openai_base_url: baseUrl } : hasManagedModel ? {
       model_providers: { ...retainedProviders, ...managedProviders },
-    }),
+    } : {}),
   };
+  if (settings) applyManagedSettings(next, settings, catalog);
+  if (isDeepStrictEqual(current.config, next)) {
+    return { applied, configPath, authPath, model: model || undefined, modelProvider: hasManagedModel ? modelProvider : undefined, providerEnvironment };
+  }
   let backupPath: string | undefined;
   if (current.contents) {
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
@@ -143,4 +146,34 @@ export function applyManagedCodexModelConfig(
   }
   atomicWrite(configPath, TOML.stringify(next as TomlMap));
   return { applied: true, configPath, authPath, backupPath, model, modelProvider, providerEnvironment };
+}
+
+function applyManagedSettings(config: ConfigObject, settings: CodexInstanceSettings, catalog?: ControlledPrivateModelCatalog) {
+  delete config.model_verbosity;
+  delete config.personality;
+  if (settings.modelVerbosity) config.model_verbosity = settings.modelVerbosity;
+  if (settings.personality) config.personality = settings.personality;
+
+  const agents = { ...asConfigObject(config.agents) };
+  for (const key of ["enabled", "max_concurrent_threads_per_session", "default_subagent_model", "default_subagent_reasoning_effort"]) {
+    delete agents[key];
+  }
+  agents.enabled = settings.multiAgent.enabled;
+  if (settings.multiAgent.maxConcurrentThreads !== undefined) {
+    agents.max_concurrent_threads_per_session = settings.multiAgent.maxConcurrentThreads;
+  }
+  if (settings.multiAgent.defaultModel) {
+    const entity = catalog?.entities.find((candidate) => candidate.id === settings.multiAgent.defaultModel?.modelEntityId
+      && candidate.protocols.includes("openai-responses"));
+    if (!entity?.modelNames.some((entry) => entry.name === settings.multiAgent.defaultModel?.modelName)) {
+      throw Object.assign(new Error("The configured Codex subagent model is not assigned to this instance."), {
+        code: "CODEX_SUBAGENT_MODEL_UNAVAILABLE",
+      });
+    }
+    agents.default_subagent_model = settings.multiAgent.defaultModel.modelName;
+  }
+  if (settings.multiAgent.defaultReasoningEffort) {
+    agents.default_subagent_reasoning_effort = settings.multiAgent.defaultReasoningEffort;
+  }
+  config.agents = agents;
 }

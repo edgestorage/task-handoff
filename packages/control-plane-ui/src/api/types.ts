@@ -49,6 +49,7 @@ import type {
   EnvironmentTemplate,
   ImagePullProgress,
   ApplyUpdateRequest,
+  CodexInstanceSettings,
   NodeRolloutSummary,
   NodeAgentEventTransportHealth as ProtocolNodeAgentEventTransportHealth,
   NodeUpdateImpact,
@@ -192,6 +193,8 @@ export type ModelConfig = {
   locations?: ModelLocation[];
   referenceCount?: number;
 };
+
+export type { CodexInstanceSettings };
 
 export type ModelLocation =
   | { type: "control-plane"; name: string; enabled: boolean; order: number }
@@ -722,6 +725,7 @@ export type ControlledInstance = {
     codexConfigEnabled: boolean;
     codexHomeMode: "default" | "taskhandoff";
     defaultCodexPermissionMode: AiSessionPermissionMode;
+    codexSettings?: CodexInstanceSettings;
     aiSessionHistoryLimit: number;
     aiSessionAttachmentRetentionDays: number;
     aiSessionMaxFileAttachmentBytes: number;
@@ -1047,6 +1051,7 @@ export type CreateControlledInstanceInput = {
     codexConfigEnabled?: boolean;
     codexHomeMode?: "default" | "taskhandoff";
     defaultCodexPermissionMode?: AiSessionPermissionMode;
+    codexSettings?: CodexInstanceSettings;
     aiSessionHistoryLimit?: number;
     aiSessionAttachmentRetentionDays?: number;
     aiSessionMaxFileAttachmentBytes?: number;
@@ -1071,6 +1076,7 @@ export type UpdateControlledInstanceInput = {
     codexConfigEnabled?: boolean;
     codexHomeMode?: "default" | "taskhandoff";
     defaultCodexPermissionMode?: AiSessionPermissionMode;
+    codexSettings?: CodexInstanceSettings;
     aiSessionHistoryLimit?: number;
     aiSessionAttachmentRetentionDays?: number;
     aiSessionMaxFileAttachmentBytes?: number;

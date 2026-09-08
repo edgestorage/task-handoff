@@ -96,6 +96,7 @@ test("instance capabilities are projected from available inventory items", () =>
   assert.equal(capabilities.features.browser, false);
   assert.equal(capabilities.features.screenshots, false);
   assert.equal(capabilities.features.aiSessionPersistenceSettings, true);
+  assert.equal(capabilities.features.codexManagedSettings, true);
   assert.equal(supportsAiSessionPersistenceSettings(capabilities), true);
   assert.equal(supportsAiSessionFileSizeLimitSettings(capabilities), true);
   assert.deepEqual(capabilities.features.aiSessionTimeline, {

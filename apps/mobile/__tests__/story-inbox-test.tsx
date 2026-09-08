@@ -5,7 +5,7 @@ import type { Story } from '@task-handoff/protocol/stories';
 
 import { StoryInbox } from '../src/stories/StoryInbox';
 import { useActiveAiSessionsSnapshot } from '../src/ai-sessions/use-active-sessions';
-import { useMobileControlPlaneRuntime } from '../src/control-plane/use-mobile-control-plane-runtime';
+import { useMobileControlPlaneRuntime, type MobileControlPlaneDomain } from '../src/control-plane/use-mobile-control-plane-runtime';
 import { useActiveDirectories } from '../src/directories/use-directories';
 
 jest.mock('../src/control-plane/use-mobile-control-plane-runtime', () => ({ useMobileControlPlaneRuntime: jest.fn() }));
@@ -36,6 +36,43 @@ const mockDirectories = jest.mocked(useActiveDirectories);
 const mockSessions = jest.mocked(useActiveAiSessionsSnapshot);
 
 describe('<StoryInbox />', () => {
+  test('subscribes to Story events and refreshes from the authoritative snapshot', async () => {
+    const initial: Story = {
+      id: 'story-1', ownerNodeId: 'node-a', title: 'Alpha', actions: [], documents: [],
+      createdAt: '2026-09-04T00:00:00.000Z', updatedAt: '2026-09-04T00:00:00.000Z',
+    };
+    const updated = { ...initial, title: 'Beta', updatedAt: '2026-09-04T00:01:00.000Z' };
+    const list = jest.fn()
+      .mockResolvedValueOnce({ stories: [initial], unavailableNodeIds: [] })
+      .mockResolvedValue({ stories: [updated], unavailableNodeIds: [] });
+    let storyDomain: MobileControlPlaneDomain | undefined;
+    const register = jest.fn((domain: MobileControlPlaneDomain) => {
+      storyDomain = domain;
+      void domain.start(new AbortController().signal);
+      return jest.fn();
+    });
+    mockRuntime.mockReturnValue({
+      api: { stories: { list } },
+      coordinator: { register },
+    } as unknown as ReturnType<typeof useMobileControlPlaneRuntime>);
+    mockDirectories.mockReturnValue({ state: { nodes: [{ id: 'node-a', name: 'Node A' }], instances: [] } } as unknown as ReturnType<typeof useActiveDirectories>);
+    mockSessions.mockReturnValue(ControlPlaneAiSessionsSchema.parse({ updatedAt: '2026-09-04T00:00:00.000Z', instances: [] }));
+
+    const screen = await render(<StoryInbox onEdit={jest.fn()} onNewSession={jest.fn()} onOpen={jest.fn()} onOpenDocument={jest.fn()} onOpenSession={jest.fn()} />);
+    await waitFor(() => expect(screen.getByText('Alpha')).toBeTruthy());
+
+    expect(register).toHaveBeenCalledWith(expect.objectContaining({ topics: ['stories'] }));
+    storyDomain!.onEvent({
+      type: 'story.changed',
+      topic: 'stories',
+      payload: { storyId: initial.id, nodeId: initial.ownerNodeId, change: 'updated' },
+    });
+
+    await waitFor(() => expect(screen.getByText('Beta')).toBeTruthy());
+    expect(list).toHaveBeenCalledTimes(2);
+    await screen.unmount();
+  });
+
   test('shows an unavailable error in a compact empty state when nodes cannot return Stories', async () => {
     mockRuntime.mockReturnValue({ api: { stories: { list: jest.fn().mockResolvedValue({ stories: [], unavailableNodeIds: ['node-a'] }) } } } as unknown as ReturnType<typeof useMobileControlPlaneRuntime>);
     mockDirectories.mockReturnValue({ state: { nodes: [{ id: 'node-a', name: 'Node A' }], instances: [] } } as unknown as ReturnType<typeof useActiveDirectories>);

@@ -3,6 +3,7 @@ import { AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS, AI_SESSION_HISTORY_MAX_LIMIT,
 import { GitWorkspaceProvisioningInputSchema } from "@task-handoff/protocol/managed-git-credentials";
 import {
   ControlledInstanceSchema,
+  CodexInstanceSettingsSchema,
   EnvironmentSourceSchema,
   ImageSelectionSchema,
   InstanceImageSnapshotSchema,
@@ -59,6 +60,7 @@ export const CreateNodeInstanceSchema = z
       codexConfigEnabled: z.boolean().optional(),
       codexHomeMode: z.enum(["default", "taskhandoff"]).optional(),
       defaultCodexPermissionMode: AiSessionPermissionModeSchema.optional(),
+      codexSettings: CodexInstanceSettingsSchema.optional(),
       aiSessionHistoryLimit: z.number().int().min(1).max(AI_SESSION_HISTORY_MAX_LIMIT).optional(),
       aiSessionAttachmentRetentionDays: z.number().int().min(0).max(AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS).optional(),
       aiSessionMaxFileAttachmentBytes: z.number().int().positive().max(AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES).optional(),
@@ -87,6 +89,7 @@ export const UpdateNodeInstanceSchema = z
       codexConfigEnabled: z.boolean().optional(),
       codexHomeMode: z.enum(["default", "taskhandoff"]).optional(),
       defaultCodexPermissionMode: AiSessionPermissionModeSchema.optional(),
+      codexSettings: CodexInstanceSettingsSchema.optional(),
       aiSessionHistoryLimit: z.number().int().min(1).max(AI_SESSION_HISTORY_MAX_LIMIT).optional(),
       aiSessionAttachmentRetentionDays: z.number().int().min(0).max(AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS).optional(),
       aiSessionMaxFileAttachmentBytes: z.number().int().positive().max(AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES).optional(),

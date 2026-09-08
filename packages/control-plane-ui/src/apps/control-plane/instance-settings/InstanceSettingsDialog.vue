@@ -24,6 +24,7 @@
         <TabsList class="instance-settings-tabs-list" :aria-label="t('instances.settings.sections')">
           <TabsTrigger value="general"><SlidersHorizontal :size="14" />{{ t("instances.settings.general") }}</TabsTrigger>
           <TabsTrigger value="ai"><Bot :size="14" />{{ t("instances.settings.ai") }}</TabsTrigger>
+          <TabsTrigger value="codex"><AiAgentIcon agent="codex" :size="14" />{{ t("instances.settings.codex") }}</TabsTrigger>
           <TabsTrigger value="models"><Cpu :size="14" />{{ t("instances.settings.models") }}</TabsTrigger>
           <TabsTrigger value="git-credentials"><KeyRound :size="14" />{{ t("instances.settings.gitCredentials") }}</TabsTrigger>
           <TabsTrigger value="apps"><Boxes :size="14" />{{ t("instances.settings.apps") }}</TabsTrigger>
@@ -80,16 +81,37 @@
               </div>
               <div class="instance-settings-control-surface instance-settings-surface">
                 <div class="instance-settings-general-controls">
-                  <label class="instance-settings-checkbox"><Checkbox :model-value="codexConfigEnabled" :disabled="savingGeneral" @update:model-value="codexConfigEnabled = $event === true" /><span><strong>{{ t("instances.settings.codexConfiguration") }}</strong><small>{{ t("instances.settings.codexConfigurationDescription") }}</small></span></label>
-                  <label class="instance-settings-select-control"><span><strong>{{ t("instances.settings.codexHome") }}</strong><small>{{ t("instances.settings.codexHomeDescription") }}</small></span><ControlPlaneSelect v-model="codexHomeMode" :disabled="savingGeneral || !codexConfigEnabled"><ControlPlaneSelectItem value="default">{{ t("instances.settings.codexHomeDefault") }}</ControlPlaneSelectItem><ControlPlaneSelectItem v-if="instance.runtime?.type === 'local'" value="taskhandoff">{{ t("instances.settings.codexHomeTaskHandoff") }}</ControlPlaneSelectItem></ControlPlaneSelect></label>
                   <label class="instance-settings-name-control"><span><strong>{{ t("instances.settings.aiSessionFileAttachmentLimit") }}</strong><small>{{ fileAttachmentLimitSupported ? t("instances.settings.aiSessionFileAttachmentLimitDescription") : t("instances.settings.aiSessionFileAttachmentLimitUnsupported") }}</small></span><ControlPlaneInput v-model="aiSessionMaxFileAttachmentKiB" type="number" min="1" :max="AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES / 1024" step="1" :disabled="savingGeneral || !fileAttachmentLimitSupported" /></label>
                   <label class="instance-settings-name-control"><span><strong>{{ t("instances.settings.aiSessionAttachmentRetention") }}</strong><small>{{ attachmentRetentionSupported ? t("instances.settings.aiSessionAttachmentRetentionDescription") : t("instances.settings.aiSessionAttachmentRetentionUnsupported") }}</small></span><ControlPlaneInput v-model="aiSessionAttachmentRetentionDays" type="number" min="0" :max="AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS" step="1" :disabled="savingGeneral || !attachmentRetentionSupported" /></label>
                   <p v-if="attachmentRetentionWillShorten" class="instance-settings-help instance-settings-row-note">{{ t("instances.settings.aiSessionAttachmentRetentionWarning") }}</p>
                   <label class="instance-settings-checkbox"><Checkbox :model-value="autoImportAgentConfigs" :disabled="savingGeneral" @update:model-value="autoImportAgentConfigs = $event === true" /><span><strong>{{ t("instances.settings.autoImport") }}</strong><small>{{ t("instances.settings.autoImportDescription") }}</small></span></label>
-                  <label class="instance-settings-select-control"><span><strong>{{ t("instances.settings.sessionPermissions") }}</strong><small>{{ t("instances.settings.sessionPermissionsDescription") }}</small></span><ControlPlaneSelect v-model="defaultCodexPermissionMode" :disabled="savingGeneral || !codexConfigEnabled"><ControlPlaneSelectItem value="ask">{{ t("instances.settings.askApproval") }}</ControlPlaneSelectItem><ControlPlaneSelectItem value="auto-review">{{ t("instances.settings.approveForMe") }}</ControlPlaneSelectItem><ControlPlaneSelectItem value="full-access">{{ t("instances.settings.fullAccess") }}</ControlPlaneSelectItem></ControlPlaneSelect></label>
                   <label class="instance-settings-name-control"><span><strong>{{ t("instances.settings.aiSessionHistoryLimit") }}</strong><small>{{ historyLimitSupported ? t("instances.settings.aiSessionHistoryLimitDescription") : t("instances.settings.aiSessionHistoryLimitUnsupported") }}</small></span><ControlPlaneInput v-model="aiSessionHistoryLimit" type="number" min="1" :max="AI_SESSION_HISTORY_MAX_LIMIT" step="1" :disabled="savingGeneral || !historyLimitSupported" /></label>
                 </div>
                 <div class="instance-settings-general-actions"><Button size="sm" :disabled="savingGeneral || !aiChanged || !validHistoryLimit || !validAttachmentRetention || !validFileAttachmentLimit" @click="saveGeneral">{{ savingGeneral ? t("instances.settings.saving") : t("instances.settings.saveChanges") }}</Button></div>
+              </div>
+            </section>
+          </TabsContent>
+
+          <TabsContent value="codex" class="instance-settings-section">
+            <section class="instance-settings-card instance-settings-group">
+              <div class="instance-settings-section-heading">
+                <h3>{{ t("instances.settings.codexConfigurationTitle") }}</h3>
+                <p>{{ t("instances.settings.codexConfigurationPageDescription") }}</p>
+              </div>
+              <div class="instance-settings-control-surface instance-settings-surface">
+                <div class="instance-settings-general-controls">
+                  <div v-if="!codexSettingsSupported" class="instance-settings-state">{{ t("instances.settings.codexSettingsUnsupported") }}</div>
+                  <label class="instance-settings-checkbox"><Checkbox :model-value="codexConfigEnabled" :disabled="savingCodex" @update:model-value="codexConfigEnabled = $event === true" /><span><strong>{{ t("instances.settings.codexConfiguration") }}</strong><small>{{ t("instances.settings.codexConfigurationDescription") }}</small></span></label>
+                  <label class="instance-settings-select-control"><span><strong>{{ t("instances.settings.codexHome") }}</strong><small>{{ t("instances.settings.codexHomeDescription") }}</small></span><ControlPlaneSelect v-model="codexHomeMode" :disabled="savingCodex || !codexConfigEnabled"><ControlPlaneSelectItem value="default">{{ t("instances.settings.codexHomeDefault") }}</ControlPlaneSelectItem><ControlPlaneSelectItem v-if="instance.runtime?.type === 'local'" value="taskhandoff">{{ t("instances.settings.codexHomeTaskHandoff") }}</ControlPlaneSelectItem></ControlPlaneSelect></label>
+                  <label class="instance-settings-select-control"><span><strong>{{ t("instances.settings.sessionPermissions") }}</strong><small>{{ t("instances.settings.sessionPermissionsDescription") }}</small></span><ControlPlaneSelect v-model="defaultCodexPermissionMode" :disabled="savingCodex || !codexConfigEnabled"><ControlPlaneSelectItem value="ask">{{ t("instances.settings.askApproval") }}</ControlPlaneSelectItem><ControlPlaneSelectItem value="auto-review">{{ t("instances.settings.approveForMe") }}</ControlPlaneSelectItem><ControlPlaneSelectItem value="full-access">{{ t("instances.settings.fullAccess") }}</ControlPlaneSelectItem></ControlPlaneSelect></label>
+                  <label class="instance-settings-select-control"><span><strong>{{ t("instances.settings.codexVerbosity") }}</strong><small>{{ t("instances.settings.codexVerbosityDescription") }}</small></span><ControlPlaneSelect v-model="codexVerbosity" :disabled="codexControlsDisabled"><ControlPlaneSelectItem value="default">{{ t("instances.settings.followCodexDefault") }}</ControlPlaneSelectItem><ControlPlaneSelectItem value="low">{{ t("instances.settings.verbosityLow") }}</ControlPlaneSelectItem><ControlPlaneSelectItem value="medium">{{ t("instances.settings.verbosityMedium") }}</ControlPlaneSelectItem><ControlPlaneSelectItem value="high">{{ t("instances.settings.verbosityHigh") }}</ControlPlaneSelectItem></ControlPlaneSelect></label>
+                  <label class="instance-settings-select-control"><span><strong>{{ t("instances.settings.codexPersonality") }}</strong><small>{{ t("instances.settings.codexPersonalityDescription") }}</small></span><ControlPlaneSelect v-model="codexPersonality" :disabled="codexControlsDisabled"><ControlPlaneSelectItem value="default">{{ t("instances.settings.followCodexDefault") }}</ControlPlaneSelectItem><ControlPlaneSelectItem value="none">{{ t("instances.settings.personalityNone") }}</ControlPlaneSelectItem><ControlPlaneSelectItem value="friendly">{{ t("instances.settings.personalityFriendly") }}</ControlPlaneSelectItem><ControlPlaneSelectItem value="pragmatic">{{ t("instances.settings.personalityPragmatic") }}</ControlPlaneSelectItem></ControlPlaneSelect></label>
+                  <label class="instance-settings-checkbox"><Checkbox :model-value="codexMultiAgentEnabled" :disabled="codexControlsDisabled" @update:model-value="codexMultiAgentEnabled = $event === true" /><span><strong>{{ t("instances.settings.codexMultiAgent") }}</strong><small>{{ t("instances.settings.codexMultiAgentDescription") }}</small></span></label>
+                  <label class="instance-settings-name-control"><span><strong>{{ t("instances.settings.codexMultiAgentConcurrency") }}</strong><small>{{ t("instances.settings.codexMultiAgentConcurrencyDescription") }}</small></span><ControlPlaneInput v-model="codexMultiAgentMaxThreads" type="number" min="1" max="64" step="1" :placeholder="t('instances.settings.followCodexDefault')" :disabled="codexControlsDisabled || !codexMultiAgentEnabled" /></label>
+                  <label class="instance-settings-select-control"><span><strong>{{ t("instances.settings.codexDefaultSubagentModel") }}</strong><small>{{ t("instances.settings.codexDefaultSubagentModelDescription") }}</small></span><ControlPlaneSelect v-model="codexSubagentModel" :disabled="codexControlsDisabled || !codexMultiAgentEnabled"><ControlPlaneSelectItem value="default">{{ t("instances.settings.followCodexDefault") }}</ControlPlaneSelectItem><ControlPlaneSelectItem v-for="option in codexModelOptions" :key="option.value" :value="option.value">{{ option.label }}</ControlPlaneSelectItem></ControlPlaneSelect></label>
+                  <label class="instance-settings-select-control"><span><strong>{{ t("instances.settings.codexSubagentReasoning") }}</strong><small>{{ t("instances.settings.codexSubagentReasoningDescription") }}</small></span><ControlPlaneSelect v-model="codexSubagentReasoning" :disabled="codexControlsDisabled || !codexMultiAgentEnabled"><ControlPlaneSelectItem value="default">{{ t("instances.settings.followCodexDefault") }}</ControlPlaneSelectItem><ControlPlaneSelectItem v-for="effort in codexReasoningEfforts" :key="effort" :value="effort">{{ t(`instances.settings.codexReasoning.${effort}`) }}</ControlPlaneSelectItem></ControlPlaneSelect></label>
+                </div>
+                <div class="instance-settings-general-actions"><Button size="sm" :disabled="savingCodex || !codexChanged || (codexSettingsSupported && !validCodexMaxThreads)" @click="saveCodex">{{ savingCodex ? t("instances.settings.saving") : t("instances.settings.saveChanges") }}</Button></div>
               </div>
             </section>
           </TabsContent>
@@ -305,10 +327,10 @@
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { Bot, Boxes, Cpu, Globe2, KeyRound, LoaderCircle, Monitor, RefreshCw, SlidersHorizontal, TerminalSquare, X } from "@lucide/vue";
-import { AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS, AI_SESSION_HISTORY_MAX_LIMIT, AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES, type AiSessionPermissionMode } from "@task-handoff/protocol/ai-sessions";
-import { supportsAiSessionFileSizeLimitSettings, supportsGitCredentialProxy, supportsNodeAiSessionFileAttachmentLimit } from "@task-handoff/protocol/control-plane";
+import { AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS, AI_SESSION_HISTORY_MAX_LIMIT, AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES, type AiSessionPermissionMode, type AiSessionReasoningEffort } from "@task-handoff/protocol/ai-sessions";
+import { supportsAiSessionFileSizeLimitSettings, supportsControlledInstanceCodexManagedSettings, supportsGitCredentialProxy, supportsNodeAiSessionFileAttachmentLimit, supportsNodeCodexManagedSettings } from "@task-handoff/protocol/control-plane";
 import { resolveGitCredential, type GitCredentialPublic } from "@task-handoff/protocol/managed-git-credentials";
-import type { AppManagementJob, AppManagementOperation, AppManagementSnapshot, InstanceBoardItem, ManagedAppProjection, ModelConfig, ModelSelection, UpdateControlledInstanceInput } from "../../../api/types";
+import type { AppManagementJob, AppManagementOperation, AppManagementSnapshot, CodexInstanceSettings, InstanceBoardItem, ManagedAppProjection, ModelConfig, ModelSelection, UpdateControlledInstanceInput } from "../../../api/types";
 import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../../components/ui/alert-dialog";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
@@ -333,7 +355,7 @@ const { locale } = useControlPlaneLocale();
 const instanceStatusLabel = (status: string) => translateStatus(instanceStatusKeys, status, t);
 const connectionStatusLabel = (status: string) => translateStatus(connectionStatusKeys, status, t);
 
-type InstanceSettingsSection = "general" | "ai" | "models" | "git-credentials" | "apps";
+type InstanceSettingsSection = "general" | "ai" | "codex" | "models" | "git-credentials" | "apps";
 type AppFilter = "all" | "available" | "installed";
 
 const props = defineProps<{
@@ -356,11 +378,19 @@ const autoImportAgentConfigs = ref(true);
 const codexConfigEnabled = ref(true);
 const codexHomeMode = ref<"default" | "taskhandoff">("taskhandoff");
 const defaultCodexPermissionMode = ref<AiSessionPermissionMode>("ask");
+const codexVerbosity = ref<"default" | "low" | "medium" | "high">("default");
+const codexPersonality = ref<"default" | "none" | "friendly" | "pragmatic">("default");
+const codexMultiAgentEnabled = ref(true);
+const codexMultiAgentMaxThreads = ref("");
+const codexSubagentModel = ref("default");
+const codexSubagentReasoning = ref<"default" | AiSessionReasoningEffort>("default");
+const codexReasoningEfforts: AiSessionReasoningEffort[] = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
 const aiSessionHistoryLimit = ref("50");
 const aiSessionAttachmentRetentionDays = ref("30");
 const aiSessionMaxFileAttachmentKiB = ref("500");
 const modelSelection = ref<ModelSelection>({});
 const savingGeneral = ref(false);
+const savingCodex = ref(false);
 const savingModels = ref(false);
 const error = ref("");
 const success = ref("");
@@ -432,14 +462,59 @@ async function revokeGitCredential(credentialId: string) {
 
 const generalChanged = computed(() => Boolean(props.instance && instanceName.value.trim() !== props.instance.name));
 const aiChanged = computed(() => Boolean(props.instance && (
-  codexConfigEnabled.value !== props.instance.config.codexConfigEnabled
-  || codexHomeMode.value !== props.instance.config.codexHomeMode
-  || autoImportAgentConfigs.value !== props.instance.config.autoImportAgentConfigs
-  || defaultCodexPermissionMode.value !== props.instance.config.defaultCodexPermissionMode
+  autoImportAgentConfigs.value !== props.instance.config.autoImportAgentConfigs
   || (historyLimitSupported.value && Number(aiSessionHistoryLimit.value) !== props.instance.config.aiSessionHistoryLimit)
   || (attachmentRetentionSupported.value && Number(aiSessionAttachmentRetentionDays.value) !== props.instance.config.aiSessionAttachmentRetentionDays)
   || (fileAttachmentLimitSupported.value && Number(aiSessionMaxFileAttachmentKiB.value) * 1024 !== props.instance.config.aiSessionMaxFileAttachmentBytes)
 )));
+const codexSettingsSupported = computed(() => {
+  const agent = props.instance?.node?.capabilities?.agent;
+  const nodeCapabilities = agent && typeof agent === "object" && !Array.isArray(agent)
+    ? (agent as { capabilities?: unknown }).capabilities
+    : undefined;
+  return supportsNodeCodexManagedSettings(nodeCapabilities)
+    && supportsControlledInstanceCodexManagedSettings(props.instance?.capabilities);
+});
+const codexControlsDisabled = computed(() => savingCodex.value || !codexConfigEnabled.value || !codexSettingsSupported.value);
+function codexModelValue(modelEntityId: string, modelName: string) {
+  return `${encodeURIComponent(modelEntityId)}:${encodeURIComponent(modelName)}`;
+}
+const codexModelOptions = computed(() => {
+  const assigned = new Set(normalizedSelection(props.instance?.modelSelection || {}).modelEntityIds || []);
+  return props.models
+    .filter((model) => assigned.has(model.id) && model.enabled && (model.protocols?.includes("openai-responses") || (!model.protocols?.length && model.app === "codex")))
+    .flatMap((model) => (model.modelNames?.length ? model.modelNames : [{ name: model.model, order: 0 }])
+      .slice()
+      .sort((left, right) => left.order - right.order || left.name.localeCompare(right.name))
+      .map((entry) => ({ value: codexModelValue(model.id, entry.name), label: `${model.name} · ${entry.name}` })));
+});
+function currentCodexSettings(): CodexInstanceSettings {
+  const selectedModel = codexSubagentModel.value === "default"
+    ? undefined
+    : codexModelOptions.value.find((option) => option.value === codexSubagentModel.value);
+  const [encodedEntityId, encodedModelName] = selectedModel?.value.split(":") || [];
+  return {
+    ...(codexVerbosity.value === "default" ? {} : { modelVerbosity: codexVerbosity.value }),
+    ...(codexPersonality.value === "default" ? {} : { personality: codexPersonality.value }),
+    multiAgent: {
+      enabled: codexMultiAgentEnabled.value,
+      ...(codexMultiAgentMaxThreads.value ? { maxConcurrentThreads: Number(codexMultiAgentMaxThreads.value) } : {}),
+      ...(encodedEntityId && encodedModelName ? { defaultModel: { modelEntityId: decodeURIComponent(encodedEntityId), modelName: decodeURIComponent(encodedModelName) } } : {}),
+      ...(codexSubagentReasoning.value === "default" ? {} : { defaultReasoningEffort: codexSubagentReasoning.value }),
+    },
+  };
+}
+const codexChanged = computed(() => Boolean(props.instance && (
+  codexConfigEnabled.value !== props.instance.config.codexConfigEnabled
+  || codexHomeMode.value !== props.instance.config.codexHomeMode
+  || defaultCodexPermissionMode.value !== props.instance.config.defaultCodexPermissionMode
+  || (codexSettingsSupported.value && JSON.stringify(currentCodexSettings()) !== JSON.stringify(props.instance.config.codexSettings || { multiAgent: { enabled: true } }))
+)));
+const validCodexMaxThreads = computed(() => {
+  if (!codexMultiAgentMaxThreads.value) return true;
+  const value = Number(codexMultiAgentMaxThreads.value);
+  return Number.isInteger(value) && value >= 1 && value <= 64;
+});
 const validInstanceName = computed(() => instanceName.value.trim().length > 0);
 const validHistoryLimit = computed(() => {
   const value = Number(aiSessionHistoryLimit.value);
@@ -541,6 +616,15 @@ watch(
     codexConfigEnabled.value = props.instance.config.codexConfigEnabled;
     codexHomeMode.value = props.instance.config.codexHomeMode;
     defaultCodexPermissionMode.value = props.instance.config.defaultCodexPermissionMode;
+    const codexSettings = props.instance.config.codexSettings;
+    codexVerbosity.value = codexSettings?.modelVerbosity || "default";
+    codexPersonality.value = codexSettings?.personality || "default";
+    codexMultiAgentEnabled.value = codexSettings?.multiAgent.enabled ?? true;
+    codexMultiAgentMaxThreads.value = codexSettings?.multiAgent.maxConcurrentThreads ? String(codexSettings.multiAgent.maxConcurrentThreads) : "";
+    codexSubagentModel.value = codexSettings?.multiAgent.defaultModel
+      ? codexModelValue(codexSettings.multiAgent.defaultModel.modelEntityId, codexSettings.multiAgent.defaultModel.modelName)
+      : "default";
+    codexSubagentReasoning.value = codexSettings?.multiAgent.defaultReasoningEffort || "default";
     aiSessionHistoryLimit.value = String(props.instance.config.aiSessionHistoryLimit);
     aiSessionAttachmentRetentionDays.value = String(props.instance.config.aiSessionAttachmentRetentionDays);
     aiSessionMaxFileAttachmentKiB.value = String(props.instance.config.aiSessionMaxFileAttachmentBytes / 1024);
@@ -601,9 +685,6 @@ async function saveGeneral() {
     const input: UpdateControlledInstanceInput = {
       config: {
         autoImportAgentConfigs: autoImportAgentConfigs.value,
-        codexConfigEnabled: codexConfigEnabled.value,
-        codexHomeMode: codexHomeMode.value,
-        defaultCodexPermissionMode: defaultCodexPermissionMode.value,
         ...(historyLimitSupported.value ? { aiSessionHistoryLimit: Number(aiSessionHistoryLimit.value) } : {}),
         ...(attachmentRetentionSupported.value ? { aiSessionAttachmentRetentionDays: Number(aiSessionAttachmentRetentionDays.value) } : {}),
         ...(fileAttachmentLimitSupported.value ? { aiSessionMaxFileAttachmentBytes: Number(aiSessionMaxFileAttachmentKiB.value) * 1024 } : {}),
@@ -616,15 +697,46 @@ async function saveGeneral() {
   } catch (cause) {
     instanceName.value = props.instance.name;
     autoImportAgentConfigs.value = props.instance.config.autoImportAgentConfigs;
-    codexConfigEnabled.value = props.instance.config.codexConfigEnabled;
-    codexHomeMode.value = props.instance.config.codexHomeMode;
-    defaultCodexPermissionMode.value = props.instance.config.defaultCodexPermissionMode;
     aiSessionHistoryLimit.value = String(props.instance.config.aiSessionHistoryLimit);
     aiSessionAttachmentRetentionDays.value = String(props.instance.config.aiSessionAttachmentRetentionDays);
     aiSessionMaxFileAttachmentKiB.value = String(props.instance.config.aiSessionMaxFileAttachmentBytes / 1024);
     error.value = translateApiError(cause, t);
   } finally {
     savingGeneral.value = false;
+  }
+}
+
+async function saveCodex() {
+  if (!props.instance || savingCodex.value || (codexSettingsSupported.value && !validCodexMaxThreads.value)) return;
+  savingCodex.value = true;
+  error.value = "";
+  success.value = "";
+  try {
+    await props.updateInstance(props.instance, {
+      config: {
+        codexConfigEnabled: codexConfigEnabled.value,
+        codexHomeMode: codexHomeMode.value,
+        defaultCodexPermissionMode: defaultCodexPermissionMode.value,
+        ...(codexSettingsSupported.value ? { codexSettings: currentCodexSettings() } : {}),
+      },
+    });
+    success.value = t("instances.settings.codexSettingsSaved");
+  } catch (cause) {
+    const settings = props.instance.config.codexSettings;
+    codexConfigEnabled.value = props.instance.config.codexConfigEnabled;
+    codexHomeMode.value = props.instance.config.codexHomeMode;
+    defaultCodexPermissionMode.value = props.instance.config.defaultCodexPermissionMode;
+    codexVerbosity.value = settings?.modelVerbosity || "default";
+    codexPersonality.value = settings?.personality || "default";
+    codexMultiAgentEnabled.value = settings?.multiAgent.enabled ?? true;
+    codexMultiAgentMaxThreads.value = settings?.multiAgent.maxConcurrentThreads ? String(settings.multiAgent.maxConcurrentThreads) : "";
+    codexSubagentModel.value = settings?.multiAgent.defaultModel
+      ? codexModelValue(settings.multiAgent.defaultModel.modelEntityId, settings.multiAgent.defaultModel.modelName)
+      : "default";
+    codexSubagentReasoning.value = settings?.multiAgent.defaultReasoningEffort || "default";
+    error.value = translateApiError(cause, t);
+  } finally {
+    savingCodex.value = false;
   }
 }
 
@@ -837,7 +949,7 @@ async function confirmAppOperation() {
 
 .instance-settings-tabs-list {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   width: 100%;
   height: auto;
   min-height: 36px;

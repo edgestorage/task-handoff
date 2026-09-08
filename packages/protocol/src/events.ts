@@ -206,7 +206,7 @@ export function aiSessionTransientSubscriptionAccepts(
   // Compatibility for v0.0.21: absence of the additive subscription model
   // retains the full transient stream selected by legacy topics.
   if (!subscription) return true;
-  if (event.type !== "ai-session.message-delta" && event.type !== "ai-session.timeline-item") return true;
+  if (event.type !== "ai-session.message-delta" && event.type !== "ai-session.timeline-item" && event.type !== "ai-session.timeline-item-delta") return true;
   const payload = event.payload && typeof event.payload === "object" && !Array.isArray(event.payload)
     ? event.payload as Record<string, unknown>
     : {};

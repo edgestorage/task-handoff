@@ -6,6 +6,7 @@ const test = require("node:test");
 
 const {
   ControlledPrivateModelCatalogSchema,
+  readControlledPrivateCodexSettings,
   readControlledPrivateModelCatalog,
   resolveControlledPrivateModelSelection,
 } = require("../packages/controlled-instance/src/web/private-model-catalog.ts");
@@ -51,6 +52,23 @@ test("managed Docker config consumes the catalog loaded before privilege drop", 
   });
 
   assert.deepEqual(actual, catalog);
+});
+
+test("managed Docker config consumes Codex settings loaded before privilege drop", () => {
+  const settings = readControlledPrivateCodexSettings({
+    TASK_HANDOFF_PRIVATE_CONFIG_LOADED: "1",
+    TASK_HANDOFF_PRIVATE_CODEX_SETTINGS_JSON: JSON.stringify({
+      modelVerbosity: "high",
+      multiAgent: { enabled: true, maxConcurrentThreads: 4, future: true },
+      future: true,
+    }),
+    TASK_HANDOFF_INSTANCE_PRIVATE_CONFIG_PATH: "/root/unreadable-private-config.json",
+  });
+
+  assert.deepEqual(settings, {
+    modelVerbosity: "high",
+    multiAgent: { enabled: true, maxConcurrentThreads: 4 },
+  });
 });
 
 test("managed Docker config treats an omitted loaded catalog as authoritative", () => {

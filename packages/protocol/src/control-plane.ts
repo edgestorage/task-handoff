@@ -11,6 +11,7 @@ import {
   AI_SESSION_MAX_MESSAGE_ATTACHMENTS,
   AiSessionMessageAttachmentSchema,
   AiSessionPermissionModeSchema,
+  AiSessionReasoningEffortSchema,
   AiSessionSummarySchema,
   AiSessionsSnapshotSchema,
 } from "./ai-sessions.ts";
@@ -35,6 +36,59 @@ const APP_INVENTORY_REQUIRED_PROTOCOL_VERSIONS = new Set(["2026-08-01", "2026-08
 export const ProtocolVersionSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Protocol version must use YYYY-MM-DD format.");
 
 const AiSessionCapabilityAgentSchema = z.string().trim().min(1).max(120);
+
+export const CodexModelVerbositySchema = z.enum(["low", "medium", "high"]);
+export const CodexPersonalitySchema = z.enum(["none", "friendly", "pragmatic"]);
+export const CodexSubagentModelSchema = z.object({
+  modelEntityId: z.string().trim().min(1).max(120),
+  modelName: z.string().trim().min(1).max(240),
+}).strict();
+export const CodexInstanceSettingsSchema = z.object({
+  modelVerbosity: CodexModelVerbositySchema.optional(),
+  personality: CodexPersonalitySchema.optional(),
+  multiAgent: z.object({
+    enabled: z.boolean().default(true),
+    maxConcurrentThreads: z.number().int().min(1).max(64).optional(),
+    defaultModel: CodexSubagentModelSchema.optional(),
+    defaultReasoningEffort: AiSessionReasoningEffortSchema.optional(),
+  }).strict().default({ enabled: true }),
+}).strict();
+
+export function sanitizeCodexInstanceSettings(input: unknown) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return input;
+  const source = input as Record<string, unknown>;
+  const multiAgent = source.multiAgent;
+  const sanitizedMultiAgent = !multiAgent || typeof multiAgent !== "object" || Array.isArray(multiAgent)
+    ? multiAgent
+    : (() => {
+        const value = multiAgent as Record<string, unknown>;
+        const defaultModel = value.defaultModel;
+        return {
+          ...(value.enabled === undefined ? {} : { enabled: value.enabled }),
+          ...(value.maxConcurrentThreads === undefined ? {} : { maxConcurrentThreads: value.maxConcurrentThreads }),
+          ...(defaultModel === undefined ? {} : {
+            defaultModel: !defaultModel || typeof defaultModel !== "object" || Array.isArray(defaultModel)
+              ? defaultModel
+              : {
+                  modelEntityId: (defaultModel as Record<string, unknown>).modelEntityId,
+                  modelName: (defaultModel as Record<string, unknown>).modelName,
+                },
+          }),
+          ...(value.defaultReasoningEffort === undefined ? {} : { defaultReasoningEffort: value.defaultReasoningEffort }),
+        };
+      })();
+  return {
+    ...(source.modelVerbosity === undefined ? {} : { modelVerbosity: source.modelVerbosity }),
+    ...(source.personality === undefined ? {} : { personality: source.personality }),
+    ...(multiAgent === undefined ? {} : {
+      multiAgent: sanitizedMultiAgent,
+    }),
+  };
+}
+
+export function parseCodexInstanceSettings(input: unknown) {
+  return CodexInstanceSettingsSchema.parse(sanitizeCodexInstanceSettings(input));
+}
 
 function emptyAiSessionTimelineCapabilities() {
   return {
@@ -70,6 +124,7 @@ function defaultControlledInstanceFeatures() {
     aiSessionWorkspaceSelection: false,
     aiSessionPersistenceSettings: false,
     privateModelCatalog: false,
+    codexManagedSettings: false,
     gitCliCredentialBroker: false,
     gitCredentialProxy: false,
     aiSessionTimeline: emptyAiSessionTimelineCapabilities(),
@@ -116,6 +171,8 @@ export const ControlledInstanceFeatureCapabilitiesSchema = z.object({
   // Compatibility for v0.0.23: only current controlled instances accept the
   // private model catalog live-sync route.
   privateModelCatalog: z.boolean().optional(),
+  // Compatibility for v0.0.28: absent means the instance cannot apply managed Codex settings.
+  codexManagedSettings: z.boolean().optional(),
   // Additive capability: absent on v0.0.21 controlled instances.
   gitCliCredentialBroker: z.boolean().optional(),
   // Additive capability for the node-agent-owned runtime broker architecture.
@@ -168,6 +225,7 @@ export function normalizeControlledInstanceCapabilities(capabilities: unknown): 
     "aiSessionWorkspaceSelection",
     "aiSessionPersistenceSettings",
     "privateModelCatalog",
+    "codexManagedSettings",
     "gitCliCredentialBroker",
     "gitCredentialProxy",
   ] as const) {
@@ -196,6 +254,10 @@ export function supportsAiSessionPersistenceSettings(capabilities: unknown) {
 
 export function supportsControlledInstancePrivateModelCatalog(capabilities: unknown) {
   return normalizeControlledInstanceCapabilities(capabilities).features.privateModelCatalog;
+}
+
+export function supportsControlledInstanceCodexManagedSettings(capabilities: unknown) {
+  return normalizeControlledInstanceCapabilities(capabilities).features.codexManagedSettings;
 }
 
 export function supportsBrowserTunnel(capabilities: unknown) {
@@ -1643,6 +1705,8 @@ export const NodeAgentCapabilitiesSchema = z.object({
   // Compatibility for v0.0.23: absence keeps the legacy single-model projection.
   managedModels: NodeAgentManagedModelCapabilitiesSchema.optional(),
   stories: NodeAgentStoryCapabilitiesSchema.optional(),
+  // Compatibility for v0.0.28: absent node-agents reject codexSettings in instance patches.
+  codexManagedSettings: z.boolean().optional(),
 }).strip();
 
 export type NodeAgentCapabilities = z.infer<typeof NodeAgentCapabilitiesSchema>;
@@ -1668,6 +1732,10 @@ export function supportsNodeMultiEntityModelAssignment(capabilities: unknown) {
 
 export function supportsNodePrivateModelCatalog(capabilities: unknown) {
   return normalizeNodeAgentCapabilities(capabilities).managedModels.privateModelCatalog;
+}
+
+export function supportsNodeCodexManagedSettings(capabilities: unknown) {
+  return normalizeNodeAgentCapabilities(capabilities).codexManagedSettings === true;
 }
 
 export function supportsNodeStories(capabilities: unknown) {
@@ -1979,6 +2047,8 @@ export const ControlledInstanceSchema = z
         codexConfigEnabled: z.boolean().default(true),
         codexHomeMode: z.enum(["default", "taskhandoff"]).default("taskhandoff"),
         defaultCodexPermissionMode: AiSessionPermissionModeSchema.default("ask"),
+        // Compatibility for v0.0.28: absent settings preserve Codex defaults.
+        codexSettings: CodexInstanceSettingsSchema.optional(),
         aiSessionHistoryLimit: z.number().int().min(1).max(AI_SESSION_HISTORY_MAX_LIMIT).default(AI_SESSION_HISTORY_DEFAULT_LIMIT),
         aiSessionAttachmentRetentionDays: z.number().int().min(0).max(AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS).default(AI_SESSION_ATTACHMENT_RETENTION_DEFAULT_DAYS),
         aiSessionMaxFileAttachmentBytes: z.number().int().positive().max(AI_SESSION_MAX_CONFIGURABLE_FILE_ATTACHMENT_BYTES).default(AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES),
@@ -2132,7 +2202,7 @@ export function sanitizeStoredControlledInstance(
   next.aiSessions = sanitizeStoredAiSessions(source.aiSessions, onWarning, typeof source.id === "string" ? source.id : undefined);
   next.triggers = sanitizeStoredTriggers(source.triggers, onWarning, typeof source.id === "string" ? source.id : undefined);
   next.apps = sanitizeStoredStrictObject(ControlledInstanceSchema.shape.apps.unwrap(), pickObjectFields(source.apps, ["runningCount", "problemCount", "updatedAt", "revision"]), "apps", onWarning, typeof source.id === "string" ? source.id : undefined) || { runningCount: 0, problemCount: 0 };
-  next.config = sanitizeStoredStrictObject(ControlledInstanceSchema.shape.config.unwrap(), pickObjectFields(source.config, ["autoImportAgentConfigs", "codexConfigEnabled", "codexHomeMode", "defaultCodexPermissionMode", "aiSessionHistoryLimit", "aiSessionAttachmentRetentionDays", "aiSessionMaxFileAttachmentBytes"]), "config", onWarning, typeof source.id === "string" ? source.id : undefined) || { autoImportAgentConfigs: true, codexConfigEnabled: true, codexHomeMode: "taskhandoff", defaultCodexPermissionMode: "ask", aiSessionHistoryLimit: AI_SESSION_HISTORY_DEFAULT_LIMIT, aiSessionAttachmentRetentionDays: AI_SESSION_ATTACHMENT_RETENTION_DEFAULT_DAYS, aiSessionMaxFileAttachmentBytes: AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES };
+  next.config = sanitizeStoredStrictObject(ControlledInstanceSchema.shape.config.unwrap(), pickObjectFields(source.config, ["autoImportAgentConfigs", "codexConfigEnabled", "codexHomeMode", "defaultCodexPermissionMode", "codexSettings", "aiSessionHistoryLimit", "aiSessionAttachmentRetentionDays", "aiSessionMaxFileAttachmentBytes"]), "config", onWarning, typeof source.id === "string" ? source.id : undefined) || { autoImportAgentConfigs: true, codexConfigEnabled: true, codexHomeMode: "taskhandoff", defaultCodexPermissionMode: "ask", aiSessionHistoryLimit: AI_SESSION_HISTORY_DEFAULT_LIMIT, aiSessionAttachmentRetentionDays: AI_SESSION_ATTACHMENT_RETENTION_DEFAULT_DAYS, aiSessionMaxFileAttachmentBytes: AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES };
   next.modelSelection = sanitizeStoredStrictObject(ModelSelectionSchema.unwrap(), pickObjectFields(source.modelSelection, ["modelEntityIds", "codexModelHash", "claudeModelHash", "opencodeModelHash"]), "modelSelection", onWarning, typeof source.id === "string" ? source.id : undefined) || {};
   next.imageSnapshot = sanitizeStoredInstanceImageSnapshot(
     source.imageSnapshot,
@@ -2718,6 +2788,7 @@ export type ApplyUpdateRequest = z.infer<typeof ApplyUpdateRequestSchema>;
 export type UpdateCheckResult = z.infer<typeof UpdateCheckResultSchema>;
 export type UpdateJob = z.infer<typeof UpdateJobSchema>;
 export type ControlledInstance = z.infer<typeof ControlledInstanceSchema>;
+export type CodexInstanceSettings = z.infer<typeof CodexInstanceSettingsSchema>;
 export function controlledInstanceAcceptsTraffic(instance: Pick<ControlledInstance, "ready" | "runtimeVersion">) {
   return instance.ready !== false
     && (!instance.runtimeVersion || ["matched", "failed"].includes(instance.runtimeVersion.phase));

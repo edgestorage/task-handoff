@@ -6944,6 +6944,76 @@ test("controlled instance leaves user Codex files unchanged when no managed mode
   assert.deepEqual(fs.readdirSync(codexHome).sort(), ["auth.json", "config.toml"]);
 });
 
+test("controlled instance materializes managed Codex behavior and multi-agent settings", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-settings-"));
+  const codexHome = path.join(root, ".codex");
+  fs.mkdirSync(codexHome, { recursive: true });
+  fs.writeFileSync(path.join(codexHome, "config.toml"), [
+    'model_verbosity = "medium"',
+    '[agents]',
+    'enabled = false',
+    '[agents.researcher]',
+    'description = "Keep this role"',
+    "",
+  ].join("\n"));
+  const catalog = {
+    protocolVersion: "2026-08-27",
+    instanceId: "inst_settings",
+    entities: [{
+      id: "mdl_codex",
+      endpoint: "https://codex.example/v1",
+      key: "secret",
+      protocols: ["openai-responses"],
+      modelNames: [{ name: "gpt-main", order: 0 }, { name: "gpt-subagent", order: 1 }],
+    }],
+    updatedAt: "2026-09-08T00:00:00.000Z",
+  };
+
+  const environment = {
+    TASK_HANDOFF_CONTROL_MODE: "controlled",
+    CODEX_HOME: codexHome,
+  };
+  const settings = {
+    modelVerbosity: "high",
+    personality: "pragmatic",
+    multiAgent: {
+      enabled: true,
+      maxConcurrentThreads: 6,
+      defaultModel: { modelEntityId: "mdl_codex", modelName: "gpt-subagent" },
+      defaultReasoningEffort: "high",
+    },
+  };
+  applyManagedCodexModelConfig(environment, catalog, settings);
+
+  const config = require("@iarna/toml").parse(fs.readFileSync(path.join(codexHome, "config.toml"), "utf8"));
+  assert.equal(config.model_verbosity, "high");
+  assert.equal(config.personality, "pragmatic");
+  assert.equal(config.agents.enabled, true);
+  assert.equal(config.agents.max_concurrent_threads_per_session, 6);
+  assert.equal(config.agents.default_subagent_model, "gpt-subagent");
+  assert.equal(config.agents.default_subagent_reasoning_effort, "high");
+  assert.equal(config.agents.researcher.description, "Keep this role");
+  assert.equal(applyManagedCodexModelConfig(environment, catalog, settings).applied, false);
+});
+
+test("managed Codex defaults reject an unassigned sub-agent model", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-settings-invalid-"));
+  assert.throws(() => applyManagedCodexModelConfig({
+    TASK_HANDOFF_CONTROL_MODE: "controlled",
+    CODEX_HOME: path.join(root, ".codex"),
+  }, {
+    protocolVersion: "2026-08-27",
+    instanceId: "inst_settings",
+    entities: [],
+    updatedAt: "2026-09-08T00:00:00.000Z",
+  }, {
+    multiAgent: {
+      enabled: true,
+      defaultModel: { modelEntityId: "missing", modelName: "missing" },
+    },
+  }), { code: "CODEX_SUBAGENT_MODEL_UNAVAILABLE" });
+});
+
 test("controlled instance materializes every Responses entity as a secret-free Codex provider", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-provider-catalog-"));
   const codexHome = path.join(root, ".codex");
@@ -7585,6 +7655,30 @@ test("controlled instance refreshes managed model auth through its registration-
       claudeAuthConfigured: true,
       configUpdated: true,
     });
+    const forbiddenCodexSettings = await app.inject({
+      method: "PUT",
+      url: "/api/internal/codex-settings",
+      payload: { multiAgent: { enabled: false } },
+    });
+    assert.equal(forbiddenCodexSettings.statusCode, 403);
+    const appliedCodexSettings = await app.inject({
+      method: "PUT",
+      url: "/api/internal/codex-settings",
+      headers: { authorization: "Bearer instance-registration-token" },
+      payload: {
+        modelVerbosity: "high",
+        personality: "friendly",
+        multiAgent: { enabled: true, maxConcurrentThreads: 3, defaultReasoningEffort: "medium" },
+      },
+    });
+    assert.equal(appliedCodexSettings.statusCode, 200);
+    assert.equal(appliedCodexSettings.json().data.applied, true);
+    const codexSettingsConfig = require("@iarna/toml").parse(fs.readFileSync(path.join(codexHome, "config.toml"), "utf8"));
+    assert.equal(codexSettingsConfig.model_verbosity, "high");
+    assert.equal(codexSettingsConfig.personality, "friendly");
+    assert.equal(codexSettingsConfig.agents.enabled, true);
+    assert.equal(codexSettingsConfig.agents.max_concurrent_threads_per_session, 3);
+    assert.equal(codexSettingsConfig.agents.default_subagent_reasoning_effort, "medium");
     const forbiddenPersistenceSettings = await app.inject({
       method: "PUT",
       url: "/api/internal/ai-session-persistence-settings",
@@ -9226,6 +9320,7 @@ function withWebStorageEnv(paths, extra = {}) {
     TASK_HANDOFF_CODEX_APP_SERVER: "0",
     TASK_HANDOFF_CONTROL_MODE: undefined,
     TASK_HANDOFF_PRIVATE_CONFIG_LOADED: undefined,
+    TASK_HANDOFF_PRIVATE_CODEX_SETTINGS_JSON: undefined,
     TASK_HANDOFF_PRIVATE_MODEL_CATALOG_JSON: undefined,
     TASK_HANDOFF_INSTANCE_PRIVATE_CONFIG_PATH: undefined,
     TASK_HANDOFF_DIAGNOSTIC_LOGS: undefined,

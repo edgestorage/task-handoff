@@ -401,6 +401,7 @@ import ControlPlaneInput from "../shared/ControlPlaneInput.vue";
 import ControlPlaneSelect from "../shared/ControlPlaneSelect.vue";
 import ControlPlaneSelectItem from "../shared/ControlPlaneSelectItem.vue";
 import ControlPlaneTimePicker from "../shared/ControlPlaneTimePicker.vue";
+import { currentTimezone, timezoneOptions as buildTimezoneOptions } from "../../../lib/timezones";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
 import { formatDateTime } from "../../../i18n/presentation";
 import { translateApiError } from "../../../i18n/apiError";
@@ -432,7 +433,7 @@ const createForm = reactive({
   intervalValue: "1",
   intervalUnit: "hour" as IntervalUnit,
   timeOfDay: "09:00",
-  timezone: defaultTimezone(),
+  timezone: currentTimezone(),
   weekdays: [1, 2, 3, 4, 5],
   roots: "/workspace",
   globs: "**/*",
@@ -462,17 +463,7 @@ const intervalUnitMs: Record<IntervalUnit, number> = {
   week: 7 * 24 * 60 * 60 * 1000,
 };
 
-const timezoneOptions = Array.from(new Set([
-  defaultTimezone(),
-  "UTC",
-  "America/Los_Angeles",
-  "America/New_York",
-  "Europe/London",
-  "Europe/Berlin",
-  "Asia/Shanghai",
-  "Asia/Tokyo",
-  "Asia/Singapore",
-])).filter(Boolean);
+const timezoneOptions = computed(() => buildTimezoneOptions(createForm.timezone));
 
 const weekdayOptions = computed(() => [
   { value: 1, label: t("triggers.weekday.monday") },
@@ -644,7 +635,7 @@ function resetCreateForm() {
     intervalValue: "1",
     intervalUnit: "hour",
     timeOfDay: "09:00",
-    timezone: defaultTimezone(),
+    timezone: currentTimezone(),
     weekdays: [1, 2, 3, 4, 5],
     roots: "/workspace",
     globs: "**/*",
@@ -818,7 +809,7 @@ function scheduleSourceFromForm() {
     return {
       scheduleKind: "daily" as const,
       timeOfDay: createForm.timeOfDay,
-      timezone: createForm.timezone || defaultTimezone(),
+      timezone: createForm.timezone || currentTimezone(),
     };
   }
   if (createForm.scheduleKind === "weekly") {
@@ -826,7 +817,7 @@ function scheduleSourceFromForm() {
       scheduleKind: "weekly" as const,
       weekdays: createForm.weekdays.length ? [...createForm.weekdays].sort((a, b) => a - b) : [1],
       timeOfDay: createForm.timeOfDay,
-      timezone: createForm.timezone || defaultTimezone(),
+      timezone: createForm.timezone || currentTimezone(),
     };
   }
   return {
@@ -973,10 +964,6 @@ function selectedOptionText<T extends string>(values: T[] | undefined, options: 
 function formatWeekdays(values: number[]) {
   const labels = new Map(weekdayOptions.value.map((day) => [day.value, day.label]));
   return values.map((value) => labels.get(value) || String(value)).join(", ");
-}
-
-function defaultTimezone() {
-  return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 }
 
 function formatInterval(value: number) {

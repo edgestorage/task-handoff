@@ -113,14 +113,53 @@
         />
         <div class="story-automation-fields">
           <label v-if="!editingId && actionMode === 'existing'">{{ t("stories.automation.action") }}<ControlPlaneSelect v-model="selectedActionId" :placeholder="t('stories.automation.selectAction')"><ControlPlaneSelectItem v-for="candidate in schedulableActions" :key="candidate.id" :value="candidate.id">{{ candidate.title }}</ControlPlaneSelectItem></ControlPlaneSelect></label>
-        <label>{{ t("stories.automation.scheduleKind") }}<ControlPlaneSelect v-model="scheduleKind"><ControlPlaneSelectItem value="interval">{{ t("stories.automation.interval") }}</ControlPlaneSelectItem><ControlPlaneSelectItem value="daily">{{ t("stories.automation.daily") }}</ControlPlaneSelectItem><ControlPlaneSelectItem value="weekly">{{ t("stories.automation.weekly") }}</ControlPlaneSelectItem><ControlPlaneSelectItem value="monthly">{{ t("stories.automation.monthly") }}</ControlPlaneSelectItem></ControlPlaneSelect></label>
-        <label v-if="scheduleKind === 'interval'">{{ t("stories.automation.intervalMinutes") }}<Input v-model.number="intervalMinutes" type="number" min="1" /></label>
-        <template v-else>
-          <label v-if="scheduleKind === 'monthly'">{{ t("stories.automation.dayOfMonth") }}<Input v-model.number="dayOfMonth" type="number" min="-3" max="31" step="1" /></label>
-          <label>{{ t("stories.automation.timeOfDay") }}<ControlPlaneTimePicker v-model="timeOfDay" :hour-label="t('stories.automation.hour')" :minute-label="t('stories.automation.minute')" /></label>
-          <label>{{ t("stories.automation.timezone") }}<Input v-model="timezone" /></label>
-        </template>
-        <label v-if="scheduleKind === 'weekly'">{{ t("stories.automation.weekdays") }}<span class="story-automation-weekdays"><label v-for="weekday in weekdayOptions" :key="weekday.value"><Checkbox :model-value="weekdays.includes(weekday.value)" @update:model-value="setWeekday(weekday.value, Boolean($event))" />{{ weekday.label }}</label></span></label>
+        <fieldset class="story-automation-schedule">
+          <legend>{{ t("stories.automation.scheduleKind") }}</legend>
+          <ToggleGroup type="single" :model-value="scheduleKind" class="story-automation-schedule-kinds" @update:model-value="setScheduleKind">
+            <ToggleGroupItem value="interval">{{ t("stories.automation.interval") }}</ToggleGroupItem>
+            <ToggleGroupItem value="daily">{{ t("stories.automation.daily") }}</ToggleGroupItem>
+            <ToggleGroupItem value="weekly">{{ t("stories.automation.weekly") }}</ToggleGroupItem>
+            <ToggleGroupItem value="monthly">{{ t("stories.automation.monthly") }}</ToggleGroupItem>
+          </ToggleGroup>
+          <div v-if="scheduleKind === 'interval'" class="story-automation-schedule-sentence story-automation-interval-sentence">
+            <span>{{ t("stories.automation.intervalEvery") }}</span>
+            <Input v-model.number="intervalValue" type="number" min="1" step="1" inputmode="numeric" :aria-label="t('stories.automation.intervalEvery')" />
+            <ControlPlaneSelect v-model="intervalUnit" :aria-label="t('stories.automation.intervalUnit')">
+              <ControlPlaneSelectItem value="minute">{{ t("stories.automation.unitMinute") }}</ControlPlaneSelectItem>
+              <ControlPlaneSelectItem value="hour">{{ t("stories.automation.unitHour") }}</ControlPlaneSelectItem>
+              <ControlPlaneSelectItem value="day">{{ t("stories.automation.unitDay") }}</ControlPlaneSelectItem>
+              <ControlPlaneSelectItem value="week">{{ t("stories.automation.unitWeek") }}</ControlPlaneSelectItem>
+            </ControlPlaneSelect>
+            <span>{{ t("stories.automation.intervalRunOnce") }}</span>
+          </div>
+          <template v-else>
+            <div v-if="scheduleKind === 'weekly'" class="story-automation-weekday-field">
+              <span>{{ t("stories.automation.weekdays") }}</span>
+              <ToggleGroup type="multiple" :model-value="weekdays" class="story-automation-weekdays" @update:model-value="setWeekdays">
+                <ToggleGroupItem v-for="weekday in weekdayOptions" :key="weekday.value" :value="weekday.value">{{ weekday.label }}</ToggleGroupItem>
+              </ToggleGroup>
+            </div>
+            <div class="story-automation-timing-row" :class="{ 'story-automation-monthly-timing-row': scheduleKind === 'monthly' }">
+              <div class="story-automation-schedule-sentence" :class="`story-automation-${scheduleKind}-sentence`">
+                <span v-if="scheduleKind === 'daily'">{{ t("stories.automation.daily") }}</span>
+                <span v-else-if="scheduleKind === 'weekly'">{{ t("stories.automation.at") }}</span>
+                <template v-else>
+                  <span>{{ t("stories.automation.monthly") }}</span>
+                  <ControlPlaneSelect v-model="dayOfMonthOption" :aria-label="t('stories.automation.dayOfMonth')">
+                    <ControlPlaneSelectItem v-for="option in dayOfMonthOptions" :key="option.value" :value="option.value">{{ option.label }}</ControlPlaneSelectItem>
+                  </ControlPlaneSelect>
+                </template>
+                <ControlPlaneTimePicker v-model="timeOfDay" :hour-label="t('stories.automation.hour')" :minute-label="t('stories.automation.minute')" :open-label="t('stories.automation.openTimePicker')" />
+              </div>
+              <div class="story-automation-timezone-row">
+                <span>{{ t("stories.automation.timezonePrefix") }}</span>
+                <ControlPlaneTimezonePicker v-model="timezone" :empty-label="t('stories.automation.timezoneEmpty')" :label="t('stories.automation.timezone')" :options="availableTimezoneOptions" :placeholder="t('stories.automation.timezone')" :search-placeholder="t('stories.automation.timezoneSearch')" />
+                <span>{{ t("stories.automation.timezoneSuffix") }}</span>
+              </div>
+            </div>
+          </template>
+        </fieldset>
+        <div class="story-automation-policy-heading">{{ t("stories.automation.runPolicy") }}</div>
         <label>{{ t("stories.automation.whenBusy") }}<ControlPlaneSelect v-model="whenBusy"><ControlPlaneSelectItem value="skip">{{ t("stories.automation.skip") }}</ControlPlaneSelectItem><ControlPlaneSelectItem value="queue">{{ t("stories.automation.queue") }}</ControlPlaneSelectItem></ControlPlaneSelect></label>
         <label>{{ t("stories.automation.maxConcurrentRuns") }}<Input v-model.number="maxConcurrentRuns" type="number" min="1" max="20" /></label>
         <label>{{ t("stories.automation.cooldownMinutes") }}<Input v-model.number="cooldownMinutes" type="number" min="0" max="1440" /></label>
@@ -144,19 +183,23 @@ import type { InstanceWithAiSessions, NodeLocalFolder } from "../../../api/types
 import { sharedControlPlaneClient } from "../../../api/sharedClient.ts";
 import { controlPlaneQueryKeys } from "../../../api/queryKeys.ts";
 import { createBrowserUuid } from "../../../lib/random-id";
+import { currentTimezone, timezoneOptions } from "../../../lib/timezones";
 import { Button } from "../../../components/ui/button";
 import { Checkbox } from "../../../components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "../../../components/ui/popover";
 import { ScrollArea } from "../../../components/ui/scroll-area";
 import { Tabs, TabsList, TabsTrigger } from "../../../components/ui/tabs";
+import { ToggleGroup, ToggleGroupItem } from "../../../components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../../components/ui/tooltip";
 import Input from "../../../components/ui/input/Input.vue";
 import ControlPlaneSelect from "../shared/ControlPlaneSelect.vue";
 import ControlPlaneSelectItem from "../shared/ControlPlaneSelectItem.vue";
 import ControlPlaneTimePicker from "../shared/ControlPlaneTimePicker.vue";
+import ControlPlaneTimezonePicker from "../shared/ControlPlaneTimezonePicker.vue";
 import type { AiSessionCreationPresetDraft } from "../instance-detail/AiSessionPanel.vue";
 import StoryActionEditorContent from "./StoryActionEditorContent.vue";
+import { storyAutomationDayOfMonthLabel } from "./storyAutomationPresentation";
 
 type AutomationView = StoryAutomationStatus & { recentRuns: StoryAutomationRun[] };
 type AutomationConfig = { schedule: StoryAutomationSchedule; enabled: boolean; policy: { maxConcurrentRuns: number; whenBusy: "skip" | "queue"; cooldownMs?: number } };
@@ -180,10 +223,13 @@ const editingId = ref("");
 const saving = ref(false);
 const editorError = ref("");
 const scheduleKind = ref<"interval" | "daily" | "weekly" | "monthly">("interval");
-const intervalMinutes = ref(60);
+type IntervalUnit = "minute" | "hour" | "day" | "week";
+const intervalUnitMs: Record<IntervalUnit, number> = { minute: 60_000, hour: 3_600_000, day: 86_400_000, week: 604_800_000 };
+const intervalValue = ref(1);
+const intervalUnit = ref<IntervalUnit>("hour");
 const dayOfMonth = ref(1);
 const timeOfDay = ref("09:00");
-const timezone = ref(Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
+const timezone = ref(currentTimezone());
 const weekdays = ref<number[]>([1]);
 const whenBusy = ref<"skip" | "queue">("skip");
 const maxConcurrentRuns = ref(1);
@@ -200,6 +246,15 @@ const newActionMode = ref<StorySessionPreset["mode"] | "">("");
 const weekdayOptions = [0, 1, 2, 3, 4, 5, 6].map((value) => ({ value, label: new Intl.DateTimeFormat(locale.value, { weekday: "short", timeZone: "UTC" }).format(new Date(Date.UTC(2026, 7, 2 + value))) }));
 const schedulableActions = computed(() => props.actions.filter((action) => Boolean(action.targetInstanceId)));
 const selectedAction = computed(() => props.actions.find((action) => action.id === selectedActionId.value));
+const availableTimezoneOptions = computed(() => timezoneOptions(timezone.value));
+const dayOfMonthOption = computed({
+  get: () => String(dayOfMonth.value),
+  set: (value: string) => { dayOfMonth.value = Number(value); },
+});
+const dayOfMonthOptions = computed(() => [
+  ...Array.from({ length: 31 }, (_, index) => ({ value: String(index + 1), label: storyAutomationDayOfMonthLabel(index + 1, t) })),
+  ...[-3, -2, -1].map((day) => ({ value: String(day), label: storyAutomationDayOfMonthLabel(day, t) })),
+]);
 const automationQuery = useQuery({
   queryKey: computed(() => [...controlPlaneQueryKeys.stories(props.story.ownerNodeId), props.story.id, "automations"]),
   queryFn: async () => {
@@ -229,10 +284,11 @@ function resetEditor() {
   newActionMode.value = "";
   editingId.value = "";
   scheduleKind.value = "interval";
-  intervalMinutes.value = 60;
+  intervalValue.value = 1;
+  intervalUnit.value = "hour";
   dayOfMonth.value = 1;
   timeOfDay.value = "09:00";
-  timezone.value = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  timezone.value = currentTimezone();
   weekdays.value = [1];
   whenBusy.value = "skip";
   maxConcurrentRuns.value = 1;
@@ -249,7 +305,7 @@ function openEdit(entry: StoryAutomationStatus) {
   selectedActionId.value = entry.automation.actionId;
   const schedule = entry.automation.schedule;
   scheduleKind.value = schedule.scheduleKind;
-  if (schedule.scheduleKind === "interval") intervalMinutes.value = schedule.intervalMs / 60_000;
+  if (schedule.scheduleKind === "interval") setIntervalFromMilliseconds(schedule.intervalMs);
   else { timeOfDay.value = schedule.timeOfDay; timezone.value = schedule.timezone; if (schedule.scheduleKind === "weekly") weekdays.value = [...schedule.weekdays]; else if (schedule.scheduleKind === "monthly") dayOfMonth.value = schedule.dayOfMonth; }
   whenBusy.value = entry.automation.policy.whenBusy;
   maxConcurrentRuns.value = entry.automation.policy.maxConcurrentRuns;
@@ -257,9 +313,25 @@ function openEdit(entry: StoryAutomationStatus) {
   enabled.value = entry.automation.enabled;
   editorOpen.value = true;
 }
-function setWeekday(value: number, selected: boolean) { weekdays.value = selected ? [...new Set([...weekdays.value, value])].sort() : weekdays.value.filter((entry) => entry !== value); }
+function setScheduleKind(value: unknown) {
+  if (value === "interval" || value === "daily" || value === "weekly" || value === "monthly") scheduleKind.value = value;
+}
+function setWeekdays(value: unknown) {
+  if (!Array.isArray(value)) return;
+  const next = value.filter((entry): entry is number => typeof entry === "number" && Number.isInteger(entry) && entry >= 0 && entry <= 6);
+  if (next.length) weekdays.value = [...new Set(next)].sort();
+}
+function setIntervalFromMilliseconds(intervalMs: number) {
+  const unit = (["week", "day", "hour", "minute"] as IntervalUnit[]).find((candidate) => intervalMs % intervalUnitMs[candidate] === 0) || "minute";
+  intervalUnit.value = unit;
+  intervalValue.value = intervalMs / intervalUnitMs[unit];
+}
 function scheduleInput(): StoryAutomationSchedule {
-  if (scheduleKind.value === "interval") return { scheduleKind: "interval", intervalMs: Math.round(intervalMinutes.value * 60_000) };
+  if (scheduleKind.value === "interval") {
+    const numericValue = Number(intervalValue.value);
+    const normalizedValue = Number.isFinite(numericValue) ? Math.max(1, Math.round(numericValue)) : 1;
+    return { scheduleKind: "interval", intervalMs: normalizedValue * intervalUnitMs[intervalUnit.value] };
+  }
   if (scheduleKind.value === "daily") return { scheduleKind: "daily", timeOfDay: timeOfDay.value, timezone: timezone.value.trim() };
   if (scheduleKind.value === "weekly") return { scheduleKind: "weekly", weekdays: weekdays.value, timeOfDay: timeOfDay.value, timezone: timezone.value.trim() };
   const roundedDay = Math.round(dayOfMonth.value);
@@ -325,7 +397,7 @@ function scheduleLabel(schedule: StoryAutomationSchedule) {
   if (schedule.scheduleKind === "interval") return t("stories.automation.everyMinutes", { count: schedule.intervalMs / 60_000 });
   if (schedule.scheduleKind === "daily") return t("stories.automation.dailyAt", { time: schedule.timeOfDay, timezone: schedule.timezone });
   if (schedule.scheduleKind === "weekly") return t("stories.automation.weeklyAt", { days: schedule.weekdays.map((day) => weekdayOptions.find((entry) => entry.value === day)?.label).join(", "), time: schedule.timeOfDay, timezone: schedule.timezone });
-  return t("stories.automation.monthlyAt", { day: schedule.dayOfMonth, time: schedule.timeOfDay, timezone: schedule.timezone });
+  return t("stories.automation.monthlyAt", { day: storyAutomationDayOfMonthLabel(schedule.dayOfMonth, t), time: schedule.timeOfDay, timezone: schedule.timezone });
 }
 function actionTitle(actionId: string) { return props.actions.find((action) => action.id === actionId)?.title || actionId; }
 function automationSessionExists(run: StoryAutomationRun) {
@@ -375,6 +447,25 @@ function formatTime(value: string) { return new Intl.DateTimeFormat(locale.value
 :global(.story-automation-history-empty) { margin:0; padding:11px 9px; }
 .story-automation-fields { display:grid; gap:12px; }
 .story-automation-fields > label { display:grid; gap:6px; color:var(--text-muted); font-size:12px; }
+.story-automation-schedule { display:grid; justify-items:start; gap:8px; min-width:0; margin:0; border:0; padding:0; }
+.story-automation-schedule > legend { margin-bottom:6px; color:var(--text-muted); font-size:12px; }
+.story-automation-schedule-kinds { display:inline-flex; width:fit-content; height:32px; min-height:32px; align-items:center; gap:1px; border:1px solid var(--line); border-radius:7px; background:var(--surface-active); padding:2px; }
+.story-automation-schedule-kinds :deep(button) { min-width:48px; height:26px; min-height:26px; border-radius:5px; color:var(--text-muted); font-size:12px; font-weight:500; padding:0 10px; }
+.story-automation-schedule-kinds :deep(button[data-state="on"]) { background:var(--surface-raised); color:var(--text-strong); box-shadow:0 1px 2px rgb(0 0 0 / 18%); }
+.story-automation-timing-row { display:flex; max-width:100%; align-items:center; gap:12px; color:var(--text-muted); font-size:12px; }
+.story-automation-monthly-timing-row { flex-wrap:wrap; }
+.story-automation-timing-row span { white-space:nowrap; }
+.story-automation-schedule-sentence { display:grid; min-width:0; grid-template-columns:auto minmax(132px,180px); align-items:center; gap:7px; color:inherit; font-size:inherit; }
+.story-automation-schedule-sentence :deep(input),.story-automation-schedule-sentence :deep(.control-plane-select),.story-automation-schedule-sentence :deep(.control-plane-time-picker) { height:32px; min-height:32px; }
+.story-automation-monthly-sentence { grid-template-columns:auto minmax(112px,160px) minmax(132px,180px); }
+.story-automation-interval-sentence { grid-template-columns:auto 72px 104px auto; color:var(--text-muted); font-size:12px; }
+.story-automation-interval-sentence > span { white-space:nowrap; }
+.story-automation-weekday-field { display:grid; gap:6px; color:var(--text-muted); font-size:12px; }
+.story-automation-weekdays { display:grid; width:100%; grid-template-columns:repeat(7,minmax(0,1fr)); gap:5px; }
+.story-automation-weekdays :deep(button) { min-width:0; height:32px; min-height:32px; border:1px solid var(--line); border-radius:6px; color:var(--text-muted); font-size:12px; font-weight:400; }
+.story-automation-weekdays :deep(button[data-state="on"]) { border-color:hsl(var(--accent)); background:hsl(var(--accent)); color:hsl(var(--accent-foreground)); }
+.story-automation-timezone-row { display:grid; min-width:0; grid-template-columns:auto minmax(180px,1fr) auto; align-items:center; gap:7px; color:inherit; font-size:inherit; }
+.story-automation-policy-heading { margin-top:2px; border-top:1px solid var(--line); color:var(--text-muted); font-size:12px; padding-top:12px; }
 .story-automation-dialog-body { display:grid; gap:14px; padding-right:8px; }
 .story-automation-dialog-header-create { display:grid; grid-template-columns:minmax(0,1fr) auto minmax(0,1fr); align-items:center; column-gap:20px; }
 .story-automation-dialog-header.story-automation-dialog-header-create > :not([hidden]) ~ :not([hidden]) { margin-top:0; margin-bottom:0; }
@@ -383,8 +474,6 @@ function formatTime(value: string) { return new Intl.DateTimeFormat(locale.value
 .story-automation-action-mode { grid-column:2; grid-row:1; display:flex; align-self:center; justify-self:center; }
 .story-automation-action-tabs { width:100%; }
 .story-automation-enabled { display:flex !important; align-items:center; }
-.story-automation-weekdays { display:flex; flex-wrap:wrap; gap:10px; }
-.story-automation-weekdays label { display:flex; align-items:center; gap:4px; color:var(--text); font-size:12px; }
 :global(.story-automation-dialog) { max-width:480px; }
 :global(.story-automation-dialog.story-automation-dialog-with-action) { max-width:840px; grid-template-rows:auto minmax(0,1fr) auto; overflow:hidden; }
 .story-automation-dialog-scroll { min-height:0; }
@@ -394,5 +483,11 @@ function formatTime(value: string) { return new Intl.DateTimeFormat(locale.value
   .story-automation-dialog-header-create { grid-template-columns:minmax(0,1fr); grid-template-rows:auto auto; row-gap:12px; }
   .story-automation-dialog-header-create .story-automation-dialog-heading { grid-column:1; grid-row:1; }
   .story-automation-action-mode { grid-column:1; grid-row:2; width:100%; justify-content:center; justify-self:center; }
+  .story-automation-schedule-kinds { display:grid; width:100%; grid-template-columns:repeat(4,minmax(0,1fr)); }
+  .story-automation-schedule-kinds :deep(button) { min-width:0; padding:0 6px; }
+  .story-automation-timing-row { flex-wrap:wrap; }
+  .story-automation-interval-sentence { grid-template-columns:auto 64px minmax(96px,120px); }
+  .story-automation-interval-sentence > span:last-child { grid-column:1 / -1; }
+  .story-automation-weekdays { grid-template-columns:repeat(4,minmax(0,1fr)); }
 }
 </style>

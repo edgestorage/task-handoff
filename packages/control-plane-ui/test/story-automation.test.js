@@ -5,6 +5,11 @@ import test from "node:test";
 const source = fs.readFileSync(new URL("../src/apps/control-plane/story/StoryActionAutomations.vue", import.meta.url), "utf8");
 const storyViewSource = fs.readFileSync(new URL("../src/apps/control-plane/story/StoryView.vue", import.meta.url), "utf8");
 const actionEditorSource = fs.readFileSync(new URL("../src/apps/control-plane/story/StoryActionEditorContent.vue", import.meta.url), "utf8");
+const timezoneSource = fs.readFileSync(new URL("../src/lib/timezones.ts", import.meta.url), "utf8");
+const timezonePickerSource = fs.readFileSync(new URL("../src/apps/control-plane/shared/ControlPlaneTimezonePicker.vue", import.meta.url), "utf8");
+const timePickerSource = fs.readFileSync(new URL("../src/apps/control-plane/shared/ControlPlaneTimePicker.vue", import.meta.url), "utf8");
+const schedulePresentationSource = fs.readFileSync(new URL("../src/apps/control-plane/story/storyAutomationPresentation.ts", import.meta.url), "utf8");
+const commandListSource = fs.readFileSync(new URL("../src/components/ui/command/CommandList.vue", import.meta.url), "utf8");
 
 test("Story Action automation UI uses authoritative API state without parameter values", () => {
   assert.match(source, /listAutomations/);
@@ -82,4 +87,59 @@ test("Automation creation can reuse an existing Action or create one with the sh
   assert.ok(source.indexOf("await props.createWithAction") < source.indexOf("editorOpen.value = false", source.indexOf("async function saveWithNewAction")));
   assert.match(storyViewSource, /sharedControlPlaneClient\.stories\.createAutomationWithAction\(story\.id/);
   assert.equal(actionEditorSource.match(/<AiSessionPanel/g)?.length, 1);
+});
+
+test("Automation timezone uses the shared list and defaults to the browser timezone", () => {
+  assert.match(source, /<ControlPlaneTimezonePicker v-model="timezone"/);
+  assert.match(source, /:options="availableTimezoneOptions"/);
+  assert.doesNotMatch(source, /<Input v-model="timezone"/);
+  assert.match(source, /const timezone = ref\(currentTimezone\(\)\)/);
+  assert.match(source, /timezone\.value = currentTimezone\(\)/);
+  assert.match(timezoneSource, /Intl\.DateTimeFormat\(\)\.resolvedOptions\(\)\.timeZone \|\| "UTC"/);
+  assert.match(timezoneSource, /supportedValuesOf\?: \(key: "timeZone"\)/);
+  assert.match(timezonePickerSource, /<CommandInput/);
+  assert.match(timezonePickerSource, /<ScrollArea class="control-plane-timezone-scroll"/);
+  assert.match(timezonePickerSource, /<CommandList class="control-plane-timezone-list" :scrollable="false">/);
+  assert.match(timezonePickerSource, /--reka-popover-content-available-height/);
+  assert.match(timezonePickerSource, /\.control-plane-timezone-list \[role="option"\]:hover/);
+  assert.match(timezonePickerSource, /\.control-plane-timezone-list \[role="option"\]\[data-highlighted\]/);
+  assert.match(commandListSource, /scrollable:\s*true/);
+  assert.match(commandListSource, /props\.scrollable && 'max-h-\[300px\] overflow-y-auto overflow-x-hidden'/);
+});
+
+test("Automation schedule editor presents semantic controls while preserving the wire model", () => {
+  assert.match(source, /<ToggleGroup type="single"[^>]+story-automation-schedule-kinds/);
+  assert.match(source, /<ToggleGroup type="multiple"[^>]+:model-value="weekdays"/);
+  assert.match(source, /v-for="option in dayOfMonthOptions"/);
+  assert.doesNotMatch(source, /v-model\.number="dayOfMonth"/);
+  assert.match(source, /intervalMs: normalizedValue \* intervalUnitMs\[intervalUnit\.value\]/);
+  assert.match(source, /setIntervalFromMilliseconds\(schedule\.intervalMs\)/);
+  assert.match(schedulePresentationSource, /dayOfMonth === -1/);
+  assert.match(schedulePresentationSource, /stories\.automation\.lastDay/);
+  assert.match(source, /storyAutomationDayOfMonthLabel\(schedule\.dayOfMonth, t\)/);
+  assert.match(storyViewSource, /storyAutomationDayOfMonthLabel\(schedule\.dayOfMonth, t\)/);
+});
+
+test("Automation schedule controls use the compact settings scale", () => {
+  assert.match(source, /\.story-automation-schedule-kinds \{[^}]*display:inline-flex;[^}]*width:fit-content;[^}]*height:32px;/);
+  assert.match(source, /\.story-automation-schedule-kinds :deep\(button\) \{[^}]*height:26px;[^}]*font-size:12px;/);
+  assert.match(source, /\.story-automation-weekdays :deep\(button\) \{[^}]*height:32px; min-height:32px;/);
+  assert.match(source, /\.story-automation-schedule-sentence \{[^}]*color:inherit; font-size:inherit;/);
+  assert.match(source, /\.story-automation-interval-sentence \{[^}]*color:var\(--text-muted\); font-size:12px;/);
+  assert.match(source, /\.story-automation-schedule-sentence :deep\(input\)[^}]*height:32px; min-height:32px;/);
+  assert.match(source, /class="story-automation-timing-row"[^>]*story-automation-monthly-timing-row/);
+  assert.match(source, /\.story-automation-timing-row \{[^}]*display:flex;[^}]*color:var\(--text-muted\);[^}]*font-size:12px;/);
+  assert.match(source, /\.story-automation-weekdays :deep\(button\[data-state="on"\]\) \{[^}]*background:hsl\(var\(--accent\)\);[^}]*color:hsl\(var\(--accent-foreground\)\)/);
+});
+
+test("Shared time picker accepts compact input and uses a constrained portal popover", () => {
+  assert.match(timePickerSource, /digits\.length === 3 \|\| digits\.length === 4/);
+  assert.match(timePickerSource, /@keydown\.up\.prevent="stepTime\(1\)"/);
+  assert.match(timePickerSource, /<PopoverContent class="control-plane-time-picker-popover/);
+  assert.match(timePickerSource, /<ScrollArea class="control-plane-time-picker-scroll"/);
+  assert.match(timePickerSource, /--reka-popover-content-available-height/);
+  assert.match(timePickerSource, /\.control-plane-time-picker:focus-within \{ box-shadow:0 0 0 1px hsl\(var\(--ring\)\); \}/);
+  assert.doesNotMatch(timePickerSource, /border-color:var\(--ring\)/);
+  assert.doesNotMatch(timePickerSource, /control-plane-time-picker:focus-within[^}]*border-color/);
+  assert.match(timePickerSource, /open\.value = false/);
 });

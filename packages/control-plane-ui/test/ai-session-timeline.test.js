@@ -29,6 +29,54 @@ test("live Timeline store replaces item lifecycle updates in place", () => {
   }]);
 });
 
+test("live Timeline store appends activity output deltas before and after item creation", () => {
+  const store = useAiSessionTimelineStore();
+  store.recoverConnection();
+  const base = {
+    instanceId: "instance-reasoning",
+    sessionId: "session-reasoning",
+    turnId: "turn-reasoning",
+    itemId: "reasoning-live",
+    field: "output",
+    generatedAt: "2026-09-08T00:00:00.000Z",
+  };
+  assert.equal(store.applyDelta({ ...base, delta: "Think " }), true);
+  store.apply({
+    instanceId: base.instanceId,
+    sessionId: base.sessionId,
+    providerSessionId: "thread-reasoning",
+    generatedAt: base.generatedAt,
+    item: { id: base.itemId, turnId: base.turnId, type: "activity", activityKind: "reasoning", title: "Reasoning", status: "running" },
+  });
+  assert.equal(store.applyDelta({ ...base, generatedAt: "2026-09-08T00:00:01.000Z", delta: "carefully" }), true);
+  assert.equal(store.items(base.instanceId, base.sessionId)[0].output, "Think carefully");
+});
+
+test("activity output deltas extend an authoritative item loaded after subscription", () => {
+  const store = useAiSessionTimelineStore();
+  store.recoverConnection();
+  const turn = { id: "turn-loaded", providerTurnId: "provider-turn-loaded", status: "running" };
+  store.resolveTurn("instance-loaded", "session-loaded", turn, [{
+    id: "reasoning-loaded",
+    turnId: "provider-turn-loaded",
+    type: "activity",
+    activityKind: "reasoning",
+    title: "Reasoning",
+    status: "running",
+    output: "Loaded ",
+  }]);
+  assert.equal(store.applyDelta({
+    instanceId: "instance-loaded",
+    sessionId: "session-loaded",
+    turnId: "provider-turn-loaded",
+    itemId: "reasoning-loaded",
+    field: "output",
+    delta: "live",
+    generatedAt: "2026-09-08T00:00:01.000Z",
+  }), true);
+  assert.equal(store.turnState("instance-loaded", "session-loaded", turn).items[0].output, "Loaded live");
+});
+
 test("turn Timeline cache merges authoritative snapshots with live item upserts", () => {
   const store = useAiSessionTimelineStore();
   const turn = { id: "turn-public", providerTurnId: "turn-provider" };
@@ -549,7 +597,9 @@ test("conversation Timeline composes every turn from the same compact result com
   assert.match(group, /\.ai-session-activity-item-head small \{[\s\S]*font-size: inherit;/);
   assert.match(group, /\.ai-session-activity-item \{[\s\S]*gap: 0;/);
   assert.doesNotMatch(group, /\.ai-session-activity-item\.is-open \{ gap: 5px; \}/);
-  assert.match(group, /\.ai-session-activity-details-content \{[\s\S]*padding-top: 15px;[\s\S]*background-position: 0 7px;/);
+  assert.match(group, /\.ai-session-activity-details-content \{[\s\S]*padding-top: 9px;[\s\S]*background-position: 0 4px;/);
+  assert.match(group, /\.ai-session-activity-details section \{[^}]*margin-top: 4px;/);
+  assert.match(group, /\.ai-session-activity-details :deep\(\.markdown-content > :first-child\) \{ margin-top: 0; \}/);
   assert.match(group, /\.ai-session-activity-group-summary small \{[\s\S]*font-size: inherit;[\s\S]*line-height: inherit;/);
   assert.doesNotMatch(group, /sessions\.timeline\.details/);
   assert.match(group, /activity\.activityKind === "fileChange"[\s\S]*activity\.paths\.map\(runtimePathBasename\)/);

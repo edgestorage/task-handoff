@@ -67,12 +67,19 @@ export function streamingMessageKey(identity: StreamingMessageIdentity) {
   return aiSessionMessageKey(identity);
 }
 
+export function messageMatchesTurn(
+  message: Pick<StreamingMessageState, "turnId"> | undefined,
+  turn: { id?: string; providerTurnId?: string },
+) {
+  const identities = [turn.id, turn.providerTurnId].filter((value): value is string => Boolean(value));
+  return Boolean(message && identities.length && identities.includes(message.turnId));
+}
+
 export function streamingMessageMatchesTurn(
   message: Pick<StreamingMessageState, "turnId" | "status"> | undefined,
   turn: { id?: string; providerTurnId?: string },
 ) {
-  const identities = [turn.id, turn.providerTurnId].filter((value): value is string => Boolean(value));
-  return Boolean(message?.status === "streaming" && identities.length && identities.includes(message.turnId));
+  return message?.status === "streaming" && messageMatchesTurn(message, turn);
 }
 
 export function createStreamingMessagesStore(options: StreamingMessagesStoreOptions = {}) {

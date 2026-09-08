@@ -5,6 +5,7 @@ import {
   type InstancePrivateModelCatalog,
 } from "@task-handoff/core/core/instance-private-model-catalog";
 import type { AiSessionModelSelection } from "@task-handoff/protocol/ai-sessions";
+import { parseCodexInstanceSettings } from "@task-handoff/protocol/control-plane";
 
 export const ControlledPrivateModelCatalogSchema = InstancePrivateModelCatalogSchema;
 export type ControlledPrivateModelCatalog = InstancePrivateModelCatalog;
@@ -24,6 +25,17 @@ export function readControlledPrivateModelCatalog(env: NodeJS.ProcessEnv = proce
   const root = JSON.parse(fs.readFileSync(filePath, "utf8")) as Record<string, unknown>;
   if (root.modelCatalog === undefined) return undefined;
   return parseControlledPrivateModelCatalog(root.modelCatalog, env);
+}
+
+export function readControlledPrivateCodexSettings(env: NodeJS.ProcessEnv = process.env) {
+  const serializedSettings = env.TASK_HANDOFF_PRIVATE_CODEX_SETTINGS_JSON;
+  if (serializedSettings !== undefined) return parseCodexInstanceSettings(JSON.parse(serializedSettings));
+  if (env.TASK_HANDOFF_PRIVATE_CONFIG_LOADED === "1") return undefined;
+  const filePath = env.TASK_HANDOFF_INSTANCE_PRIVATE_CONFIG_PATH?.trim()
+    || (env.TASK_HANDOFF_RUNTIME_KIND === "docker" ? "/run/task-handoff/instance-private-config.json" : "");
+  if (!filePath || !fs.existsSync(filePath)) return undefined;
+  const root = JSON.parse(fs.readFileSync(filePath, "utf8")) as Record<string, unknown>;
+  return root.codexSettings === undefined ? undefined : parseCodexInstanceSettings(root.codexSettings);
 }
 
 export function resolveControlledPrivateModelSelection(

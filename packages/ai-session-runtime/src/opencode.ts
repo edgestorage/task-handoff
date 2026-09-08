@@ -22,6 +22,7 @@ export type OpenCodeSessionBridgeOptions = {
   connection: () => OpenCodeConnection | Promise<OpenCodeConnection>;
   workspaceRoots: () => string[] | Promise<string[]>;
   onMessageDelta?: (event: { sessionId: string; providerSessionId: string; turnId: string; itemId: string; delta: string }) => void;
+  onTimelineItemDelta?: (event: { sessionId: string; providerSessionId: string; turnId: string; itemId: string; field: "output"; delta: string }) => void;
   onEventSourceClose?: () => void;
   onDiagnostic?: (event: Record<string, unknown>) => void;
   reconnectBaseMs?: number;
@@ -38,6 +39,7 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
   private readonly projectionBySession = new Map<string, OpenCodeProjection>();
   private readonly lineageBySession = new Map<string, AiSessionLineage>();
   private readonly pendingSettingsBySession = new Map<string, { modelSelection: AiSessionModelSelection; reasoningEffort?: AiSessionReasoningEffort }>();
+  private readonly pendingPartDeltas = new Map<string, Map<string, { partID: string; messageID: string; field: string; delta: string }>>();
   private readonly timelineListeners = new Set<AiSessionProviderTimelineItemListener>();
   private readonly reconcileTimers = new Map<string, NodeJS.Timeout>();
   private eventAbort?: AbortController;
@@ -425,22 +427,41 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
       }
     }
     if (event.payload.type === "message.part.delta") {
-      const delta = openCodePartDelta({
+      const rawDelta = {
         partID: stringValue(properties.partID) || "",
         messageID: stringValue(properties.messageID) || "",
         field: stringValue(properties.field) || "",
         delta: stringValue(properties.delta) || "",
-      }, this.projectionBySession.get(sessionID)?.messageById || new Map());
-      const projected = this.registry.getByProviderSessionId(this.agent, sessionID);
-      if (delta && projected) this.options.onMessageDelta?.({ sessionId: projected.id, providerSessionId: sessionID, ...delta });
+      };
+      if (!this.publishPartDelta(sessionID, rawDelta) && rawDelta.partID && rawDelta.messageID && rawDelta.field === "text" && rawDelta.delta) {
+        const message = this.projectionBySession.get(sessionID)?.messageById.get(rawDelta.messageID);
+        if (message?.role === "assistant") {
+          const pending = this.pendingPartDeltas.get(sessionID) || new Map();
+          const previous = pending.get(rawDelta.partID);
+          if (!previous || previous.messageID === rawDelta.messageID) {
+            pending.set(rawDelta.partID, { ...rawDelta, delta: `${previous?.delta || ""}${rawDelta.delta}`.slice(0, 1_000_000) });
+            while (pending.size > 500) pending.delete(pending.keys().next().value as string);
+            this.pendingPartDeltas.set(sessionID, pending);
+          }
+        }
+      }
     }
     if (event.payload.type === "message.part.updated") {
       const messageID = stringValue(part.messageID);
-      const message = messageID ? this.projectionBySession.get(sessionID)?.messageById.get(messageID) : undefined;
+      const projection = this.projectionBySession.get(sessionID);
+      const message = messageID ? projection?.messageById.get(messageID) : undefined;
       const projectedSession = this.registry.getByProviderSessionId(this.agent, sessionID);
       if (message?.role === "assistant" && projectedSession) {
+        const partID = stringValue(part.id);
+        const partType = stringValue(part.type);
+        if (partID && partType) projection?.partById.set(partID, { ...message, messageId: messageID, type: partType });
         const item = projectOpenCodePart(part as never, message.turnId);
         if (item) this.publishTimelineItem(projectedSession.id, sessionID, item);
+        const pending = partID ? this.pendingPartDeltas.get(sessionID)?.get(partID) : undefined;
+        if (pending) {
+          this.pendingPartDeltas.get(sessionID)?.delete(partID);
+          if (!stringValue(part.text)) this.publishPartDelta(sessionID, pending);
+        }
       }
     }
     this.scheduleReconcile(sessionID, directory);
@@ -462,11 +483,25 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
     for (const listener of this.timelineListeners) listener({ sessionId, providerSessionId, item });
   }
 
+  private publishPartDelta(providerSessionId: string, event: { partID: string; messageID: string; field: string; delta: string }) {
+    const projection = this.projectionBySession.get(providerSessionId);
+    const delta = openCodePartDelta(event, projection?.partById || new Map());
+    const session = this.registry.getByProviderSessionId(this.agent, providerSessionId);
+    if (!delta || !session) return false;
+    if (delta.kind === "message") {
+      this.options.onMessageDelta?.({ sessionId: session.id, providerSessionId, turnId: delta.turnId, itemId: delta.itemId, delta: delta.delta });
+    } else {
+      this.options.onTimelineItemDelta?.({ sessionId: session.id, providerSessionId, turnId: delta.turnId, itemId: delta.itemId, field: delta.field, delta: delta.delta });
+    }
+    return true;
+  }
+
   private forget(providerSessionId: string) {
     this.directoryBySession.delete(providerSessionId);
     this.projectionBySession.delete(providerSessionId);
     this.lineageBySession.delete(providerSessionId);
     this.pendingSettingsBySession.delete(providerSessionId);
+    this.pendingPartDeltas.delete(providerSessionId);
     const timer = this.reconcileTimers.get(providerSessionId);
     if (timer) clearTimeout(timer);
     this.reconcileTimers.delete(providerSessionId);

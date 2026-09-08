@@ -115,7 +115,7 @@
             >
               <AiSessionPathGroupContextMenu
                 v-if="groupSessionsByPath"
-                :can-open="canOpenPathGroupFolder"
+                :can-open="group.kind === 'path' && canOpenPathGroupFolder"
                 :can-rename="canRenamePathGroup(group)"
                 @open="openPathGroupFolder(group)"
                 @rename="openPathGroupRename(group)"
@@ -130,7 +130,7 @@
                     <Folder v-if="collapsedPathGroups[group.key]" class="session-ai-path-group-icon" :size="15" />
                     <FolderOpen v-else class="session-ai-path-group-icon" :size="15" />
                     <span class="session-ai-path-group-text">
-                      <TooltipProvider :delay-duration="120">
+                      <TooltipProvider v-if="group.kind === 'path'" :delay-duration="120">
                         <Tooltip>
                           <TooltipTrigger as-child>
                             <span class="session-ai-path-group-title">{{ group.label }}</span>
@@ -138,6 +138,7 @@
                           <TooltipContent class="ai-session-path-tooltip" side="top" :side-offset="8">{{ group.path }}</TooltipContent>
                         </Tooltip>
                       </TooltipProvider>
+                      <span v-else class="session-ai-path-group-title">{{ group.label }}</span>
                     </span>
                   </button>
                   <button
@@ -310,7 +311,7 @@
               <section v-for="group in displayedHistoryGroups" :key="group.key" class="session-ai-path-group session-ai-history-group">
                 <AiSessionPathGroupContextMenu
                   v-if="groupSessionsByPath"
-                  :can-open="canOpenPathGroupFolder"
+                  :can-open="group.kind === 'path' && canOpenPathGroupFolder"
                   :can-rename="canRenamePathGroup(group)"
                   @open="openPathGroupFolder(group)"
                   @rename="openPathGroupRename(group)"
@@ -325,7 +326,7 @@
                       <Folder v-if="collapsedHistoryPathGroups[group.key]" class="session-ai-path-group-icon" :size="15" />
                       <FolderOpen v-else class="session-ai-path-group-icon" :size="15" />
                       <span class="session-ai-path-group-text">
-                        <TooltipProvider :delay-duration="120">
+                        <TooltipProvider v-if="group.kind === 'path'" :delay-duration="120">
                           <Tooltip>
                             <TooltipTrigger as-child>
                               <span class="session-ai-path-group-title">{{ group.label }}</span>
@@ -333,6 +334,7 @@
                             <TooltipContent class="ai-session-path-tooltip" side="top" :side-offset="8">{{ group.path }}</TooltipContent>
                           </Tooltip>
                         </TooltipProvider>
+                        <span v-else class="session-ai-path-group-title">{{ group.label }}</span>
                       </span>
                     </button>
                     <button
@@ -622,7 +624,7 @@
                   </button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent class="session-ai-project-menu" align="start" :side-offset="8">
-                  <DropdownMenuItem v-for="app in aiSessionLaunchableApps" :key="app.id" class="session-ai-project-item" @select="newSessionApp = app.id">
+                  <DropdownMenuItem v-for="app in aiSessionLaunchableApps" :key="app.id" class="session-ai-project-item" @select="selectNewSessionApp(app.id)">
                     <AiAgentIcon :agent="agentIcon(app.id)" :size="14" />
                     <span>{{ app.label }}</span><Check v-if="newSessionApp === app.id" :size="15" />
                   </DropdownMenuItem>
@@ -652,8 +654,8 @@
               :max-file-attachment-bytes="instance.config.aiSessionMaxFileAttachmentBytes"
               :placeholder="t('sessions.panel.promptPlaceholder')"
               @update:permission-mode="updateNewSessionPermissionMode"
-              @select-model="newSessionModelSelection = $event"
-              @select-reasoning-effort="newSessionReasoningEffort = $event"
+              @select-model="selectNewSessionModel"
+              @select-reasoning-effort="selectNewSessionReasoningEffort"
               @run="createNewSession"
             />
           </div>
@@ -792,7 +794,26 @@
           <header ref="detailHeaderEl">
             <TooltipProvider :delay-duration="120">
               <div class="session-ai-detail-context">
-                  <Tooltip>
+                  <ContextMenu v-if="canOpenSelectedSessionFolder">
+                    <Tooltip>
+                      <TooltipTrigger as-child>
+                        <ContextMenuTrigger as-child>
+                          <button type="button" class="session-ai-detail-context-item session-ai-detail-folder" @click="openSelectedSessionFolder">
+                            <Folder :size="14" aria-hidden="true" />
+                            <span>{{ selectedSessionFolderName }}</span>
+                          </button>
+                        </ContextMenuTrigger>
+                      </TooltipTrigger>
+                      <TooltipContent class="ai-session-path-tooltip" side="top" :side-offset="8">{{ selectedSessionFolderPath }}</TooltipContent>
+                    </Tooltip>
+                    <ContextMenuContent class="ai-session-context-menu">
+                      <ContextMenuItem class="ai-session-path-group-menu-item" @select="openSelectedSessionFolder">
+                        <FolderOpen :size="14" />
+                        <span>{{ t("sessions.panel.openInFileManager") }}</span>
+                      </ContextMenuItem>
+                    </ContextMenuContent>
+                  </ContextMenu>
+                  <Tooltip v-else>
                     <TooltipTrigger as-child>
                       <span class="session-ai-detail-context-item">
                         <Folder :size="14" aria-hidden="true" />
@@ -1179,7 +1200,7 @@ import { desktopRuntimePathAccess } from "../../../components/ai-session/useAiSe
 import AiSessionTurnNavigator from "../../../components/ai-session/AiSessionTurnNavigator.vue";
 import { Button } from "../../../components/ui/button";
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
-import { ContextMenu, ContextMenuTrigger } from "../../../components/ui/context-menu";
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "../../../components/ui/context-menu";
 import { ScrollArea } from "../../../components/ui/scroll-area";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "../../../components/ui/sheet";
 import { ToggleGroup, ToggleGroupItem } from "../../../components/ui/toggle-group";
@@ -1197,6 +1218,7 @@ import AiSessionPathGroupContextMenu from "./AiSessionPathGroupContextMenu.vue";
 import { useNodeStorageFolderPicker } from "../settings/useNodeStorageFolderPicker";
 import { groupAiSessionEntriesByPath } from "./aiSessionPathGrouping";
 import { loadCollapsedAiSessionPathGroups, persistCollapsedAiSessionPathGroups } from "./aiSessionPathGroupCollapse";
+import { loadAiSessionCreationPreferences, persistAiSessionCreationPreferences } from "./aiSessionCreationPreferences";
 import { aiSessionCreationDraftKey, aiSessionMessageText, clearAiSessionDraft, loadAiSessionDraftPayload, persistAiSessionDraftPayload } from "../useAiSessionDraft";
 import {
   aiSessionPermissionKey,
@@ -1240,17 +1262,21 @@ export type AiSessionCreationPresetDraft = {
 type SessionStatusFilter = "all" | "active" | "waiting" | "idle" | "problem";
 type AiSessionListLayout = "cards" | "list";
 type AiSessionPathGroup = {
+  kind: "all" | "path" | "story";
   key: string;
   path: string;
   cwdFolderId?: string;
+  storyId?: string;
   label: string;
   parentLabel: string;
   sessions: AiSessionSummary[];
 };
 type AiSessionHistoryPathGroup = {
+  kind: "all" | "path" | "story";
   key: string;
   path: string;
   cwdFolderId?: string;
+  storyId?: string;
   label: string;
   parentLabel: string;
   items: AiSessionHistoryItem[];
@@ -1466,6 +1492,7 @@ async function handlePresetSaved() {
   await queryClient.invalidateQueries({ queryKey: controlPlaneQueryKeys.stories(props.instance.nodeId) });
 }
 const displayedSessionGroups = computed<AiSessionPathGroup[]>(() => groupSessionsByPath.value ? (groupMode.value === "story" ? groupAiSessionsByStory(sortedSessions.value) : groupAiSessionsByPath(sortedSessions.value)) : [{
+  kind: "all",
   key: "all",
   path: "",
   label: "",
@@ -1559,14 +1586,27 @@ const selectedSessionFolderName = computed(() => {
     ? nodeLocalFolderDisplayName(folder)
     : aiSessionBasename(session.cwd) || t("sessions.board.unknownFolder");
 });
-const selectedSessionFolderPath = computed(() => {
+const selectedSessionRuntimePath = computed(() => {
   const session = selectedSession.value;
-  if (!session) return t("sessions.board.unknownPath");
+  if (!session) return "";
   if (session.cwd) return session.cwd;
   return session.cwdFolderId
-    ? (props.nodeLocalFolders || []).find((candidate) => candidate.id === session.cwdFolderId)?.path || t("sessions.board.unknownPath")
-    : t("sessions.board.unknownPath");
+    ? (props.nodeLocalFolders || []).find((candidate) => candidate.id === session.cwdFolderId)?.path || ""
+    : "";
 });
+const selectedSessionFolderPath = computed(() => selectedSessionRuntimePath.value || t("sessions.board.unknownPath"));
+const canOpenSelectedSessionFolder = computed(() => Boolean(
+  selectedSession.value
+  && selectedSessionRuntimePath.value
+  && desktopRuntimePathAccess(props.instance) === "desktop-local"
+  && canOpenDesktopLocalPath()
+));
+
+async function openSelectedSessionFolder() {
+  if (!canOpenSelectedSessionFolder.value) return;
+  const result = await openDesktopLocalPath(selectedSessionRuntimePath.value);
+  if (!result.ok) showControlPlaneToast(t("sessions.panel.openInFileManagerFailed"));
+}
 const selectedSessionInstanceName = computed(() => props.instance.name || props.instance.id);
 const selectedSessionNodeName = computed(() => props.instance.node?.name || props.instance.nodeId);
 const selectedSessionAgentIcon = computed<"codex" | "claude" | "opencode" | undefined>(() => {
@@ -1612,6 +1652,8 @@ function keepCompactActionsMenuOpenForRepository(event: Event) {
   if (target instanceof Element && target.closest(".repository-environment-popover")) event.preventDefault();
 }
 const newSessionOpen = ref(false);
+const newSessionStoryId = ref(props.creationStoryId || "");
+const activeNewSessionStoryId = computed(() => props.creationOnly ? props.creationStoryId : newSessionStoryId.value || undefined);
 const initialCreationInstanceId = props.instance.id;
 const selectedForkTurn = computed(() => {
   const session = selectedSession.value;
@@ -1705,21 +1747,32 @@ function reasoningEffortCapability(agent: string) {
   return normalizeAiSessionReasoningEffortCapabilities(directoryAiSessionProviderCapability(props.instance.capabilities?.features, agent));
 }
 
+function supportedCreationReasoningEffort(agent: string, effort?: AiSessionReasoningEffort) {
+  return effort && (agent === "codex" || effort !== "ultra") ? effort : AI_SESSION_DEFAULT_REASONING_EFFORT;
+}
+
 function providerPermissionModes(agent: string) {
   return directoryAiSessionProviderCapability(props.instance.capabilities?.features, agent)?.permissionModes || [];
 }
 
 watch(newSessionModelGroups, (groups) => {
   const current = newSessionModelSelection.value;
-  if (current && groups.some((group) => group.models.some((model) => model.modelEntityId === current.modelEntityId && model.modelName === current.modelName))) return;
+  if (current && groups.some((group) => group.models.some((model) => model.modelEntityId === current.modelEntityId && model.modelName === current.modelName))) {
+    newSessionModelSelection.value = current;
+    return;
+  }
   if (props.creationMode === "preset" && props.instance.id === initialCreationInstanceId && current
     && current.modelEntityId === props.creationInitialPreset?.modelSelection?.modelEntityId
     && current.modelName === props.creationInitialPreset.modelSelection.modelName) return;
   newSessionModelSelection.value = defaultAiSessionModelSelection(groups);
 }, { immediate: true });
-watch(newSessionReasoningEffortCapability, (capability) => {
+watch([() => props.instance.id, newSessionApp, newSessionReasoningEffortCapability], ([, agent, capability]) => {
   if (!capability.selectAtCreate) newSessionReasoningEffort.value = undefined;
-  else if (newSessionApp.value === "codex" && !newSessionReasoningEffort.value) newSessionReasoningEffort.value = AI_SESSION_DEFAULT_REASONING_EFFORT;
+  else if (props.creationMode !== "preset") {
+    newSessionReasoningEffort.value = supportedCreationReasoningEffort(agent, loadAiSessionCreationPreferences(agent).reasoningEffort);
+  } else if (agent === "codex" && !newSessionReasoningEffort.value) {
+    newSessionReasoningEffort.value = AI_SESSION_DEFAULT_REASONING_EFFORT;
+  }
 }, { immediate: true });
 watch(visibleAiSessions, (sessions) => {
   const pending = reasoningEffortPending.value;
@@ -1764,6 +1817,7 @@ async function registerNewSessionFolder(nodeId: string, input: { name: string; p
 }
 
 function registeredPathGroupFolder(group: AiSessionPathGroup | AiSessionHistoryPathGroup) {
+  if (group.kind !== "path") return undefined;
   if (!group.cwdFolderId) return undefined;
   return [...(props.nodeLocalFolders || []), ...createdNewSessionFolders.value]
     .find((folder) => folder.id === group.cwdFolderId);
@@ -1772,10 +1826,12 @@ function registeredPathGroupFolder(group: AiSessionPathGroup | AiSessionHistoryP
 const canOpenPathGroupFolder = computed(() => desktopRuntimePathAccess(props.instance) === "desktop-local" && canOpenDesktopLocalPath());
 
 function canRenamePathGroup(group: AiSessionPathGroup | AiSessionHistoryPathGroup) {
+  if (group.kind !== "path") return false;
   return Boolean(registeredPathGroupFolder(group) && nodeSupportsLocalFolderNameUpdate(props.instance.node));
 }
 
 async function openPathGroupFolder(group: AiSessionPathGroup | AiSessionHistoryPathGroup) {
+  if (group.kind !== "path") return;
   const result = await openDesktopLocalPath(group.path);
   if (!result.ok) showControlPlaneToast(t("sessions.panel.openInFileManagerFailed"));
 }
@@ -1991,6 +2047,7 @@ const workspaceStyle = computed(
 function groupAiSessionsByPath(sessions: AiSessionSummary[]) {
   return groupAiSessionEntriesByPath(sessions, showEmptyPathGroups.value ? newSessionFolders.value : [])
     .map((group) => ({
+      kind: "path" as const,
       key: group.key,
       path: aiSessionGroupPath(group.cwdFolderId, group.path),
       cwdFolderId: group.cwdFolderId,
@@ -2013,7 +2070,7 @@ function groupAiSessionsByStory(sessions: AiSessionSummary[]) {
   for (const session of sessions) {
     const key = `story:${session.storyId || "unassigned"}`;
     const current = groups.get(key);
-    groups.set(key, { key, path: session.storyId || "", label: storyGroupLabel(session.storyId), parentLabel: session.storyId || "", sessions: [...(current?.sessions || []), session] });
+    groups.set(key, { kind: "story", key, path: "", storyId: session.storyId, label: storyGroupLabel(session.storyId), parentLabel: "", sessions: [...(current?.sessions || []), session] });
   }
   return [...groups.values()];
 }
@@ -2021,6 +2078,7 @@ function groupAiSessionsByStory(sessions: AiSessionSummary[]) {
 function groupAiSessionHistoryByPath(items: AiSessionHistoryItem[]) {
   return groupAiSessionEntriesByPath(items)
     .map((group) => ({
+      kind: "path" as const,
       key: group.key,
       path: aiSessionGroupPath(group.cwdFolderId, group.path),
       cwdFolderId: group.cwdFolderId,
@@ -2039,12 +2097,13 @@ function groupAiSessionHistoryByStory(items: AiSessionHistoryItem[]) {
   for (const item of items) {
     const key = `story:${item.storyId || "unassigned"}`;
     const current = groups.get(key);
-    groups.set(key, { key, path: item.storyId || "", label: storyGroupLabel(item.storyId), parentLabel: item.storyId || "", items: [...(current?.items || []), item] });
+    groups.set(key, { kind: "story", key, path: "", storyId: item.storyId, label: storyGroupLabel(item.storyId), parentLabel: "", items: [...(current?.items || []), item] });
   }
   return [...groups.values()];
 }
 
 const displayedHistoryGroups = computed<AiSessionHistoryPathGroup[]>(() => groupSessionsByPath.value ? (groupMode.value === "story" ? groupAiSessionHistoryByStory(historyItems.value) : groupAiSessionHistoryByPath(historyItems.value)) : [{
+  kind: "all",
   key: "all",
   path: "",
   label: "",
@@ -2109,6 +2168,7 @@ watch(sessionListLayout, (value) => {
 watch([historyMode, supportsSessionListHoverPreview], closeSessionListPreview);
 
 watch(() => props.instance.id, () => {
+  newSessionStoryId.value = props.creationStoryId || "";
   historyDetailRevision += 1;
   historyItems.value = [];
   historyError.value = "";
@@ -2567,8 +2627,9 @@ async function sendHistoryMessage(permissionMode?: AiSessionPermissionMode) {
   }
 }
 
-function openNewSession() {
+function beginNewSession(storyId?: string) {
   const wasVisible = showNewSession.value;
+  newSessionStoryId.value = storyId || "";
   newSessionOpen.value = true;
   sessionListOverlayOpen.value = false;
   if (wasVisible) {
@@ -2577,6 +2638,10 @@ function openNewSession() {
   messageAttachments.value = [];
   newSessionCreateAttempt.value = undefined;
   initializeNewSessionDefaults();
+}
+
+function openNewSession() {
+  beginNewSession(props.creationStoryId);
 }
 
 function newSessionFolderIdForPath(sessionPath: string) {
@@ -2619,6 +2684,22 @@ async function openNewSessionForPath(sessionPath: string) {
 }
 
 async function openNewSessionForGroup(group: AiSessionPathGroup | AiSessionHistoryPathGroup) {
+  if (group.kind === "story") {
+    if (historyMode.value) await leaveHistoryMode();
+    beginNewSession(group.storyId);
+    const entries = "sessions" in group ? group.sessions : group.items;
+    const latest = entries.reduce<AiSessionSummary | AiSessionHistoryItem | undefined>((candidate, entry) => {
+      if (!candidate) return entry;
+      const candidateTime = "updatedAt" in candidate ? candidate.updatedAt : candidate.lastActiveAt;
+      const entryTime = "updatedAt" in entry ? entry.updatedAt : entry.lastActiveAt;
+      return Date.parse(entryTime) > Date.parse(candidateTime) ? entry : candidate;
+    }, undefined);
+    const folderId = latest?.cwdFolderId && newSessionFolders.value.some((folder) => folder.id === latest.cwdFolderId)
+      ? latest.cwdFolderId
+      : latest?.cwd ? newSessionFolderIdForPath(latest.cwd) : undefined;
+    if (folderId) newSessionFolderId.value = folderId;
+    return;
+  }
   if (group.cwdFolderId && newSessionFolders.value.some((folder) => folder.id === group.cwdFolderId)) {
     if (historyMode.value) await leaveHistoryMode();
     openNewSession();
@@ -2638,7 +2719,7 @@ function creationInitialFolderId() {
 function initializeNewSessionDefaults() {
   if (!aiSessionLaunchableApps.value.some((app) => app.id === newSessionApp.value)) {
     if (props.creationMode === "preset" && props.instance.id === initialCreationInstanceId && newSessionApp.value === props.creationInitialPreset?.agent) return;
-    newSessionApp.value = aiSessionLaunchableApps.value[0]?.id || "";
+    selectNewSessionApp(aiSessionLaunchableApps.value[0]?.id || "");
   }
   if (!newSessionFolders.value.some((folder) => folder.id === newSessionFolderId.value)) {
     const initialFolderId = creationInitialFolderId();
@@ -2749,6 +2830,28 @@ function selectNewSessionWorkspaceMode(mode: "current-folder" | "worktree") {
   newSessionBranch.value = newSessionWorkspace.value?.branches.find(newSessionBranchSelectable)?.name || "";
 }
 
+function selectNewSessionApp(agent: string) {
+  newSessionApp.value = agent;
+  if (props.creationMode === "preset") return;
+  const preferences = loadAiSessionCreationPreferences(agent);
+  newSessionModelSelection.value = preferences.modelSelection;
+  newSessionReasoningEffort.value = supportedCreationReasoningEffort(agent, preferences.reasoningEffort);
+}
+
+function selectNewSessionModel(modelSelection: AiSessionModelSelection) {
+  newSessionModelSelection.value = modelSelection;
+  if (props.creationMode !== "preset") {
+    persistAiSessionCreationPreferences(newSessionApp.value, { modelSelection });
+  }
+}
+
+function selectNewSessionReasoningEffort(reasoningEffort: AiSessionReasoningEffort) {
+  newSessionReasoningEffort.value = reasoningEffort;
+  if (props.creationMode !== "preset") {
+    persistAiSessionCreationPreferences(newSessionApp.value, { reasoningEffort });
+  }
+}
+
 function closeNewSession() {
   if (!newSessionComposerBusy.value) newSessionOpen.value = false;
 }
@@ -2845,7 +2948,7 @@ async function createNewSession(permissionMode?: AiSessionPermissionMode) {
     })),
     references,
     permissionMode,
-    storyId: props.creationStoryId,
+    storyId: activeNewSessionStoryId.value,
     modelSelection: newSessionModelSelection.value,
     reasoningEffort: newSessionReasoningEffort.value,
   });
@@ -2866,7 +2969,7 @@ async function createNewSession(permissionMode?: AiSessionPermissionMode) {
       attachments,
       references,
       permissionMode,
-      ...(props.creationStoryId ? { storyId: props.creationStoryId } : {}),
+      ...(activeNewSessionStoryId.value ? { storyId: activeNewSessionStoryId.value } : {}),
       ...(newSessionModelSelection.value ? { modelSelection: newSessionModelSelection.value } : {}),
       ...(newSessionReasoningEffortCapability.value.selectAtCreate && newSessionReasoningEffort.value
         ? { reasoningEffort: newSessionReasoningEffort.value }
@@ -2907,6 +3010,7 @@ async function selectExistingSessionModel(modelSelection: AiSessionModelSelectio
   modelSelectionPendingSessionId.value = session.id;
   try {
     await updateAiSessionModelSelection(props.instance.id, session.id, createBrowserUuid(), modelSelection);
+    persistAiSessionCreationPreferences(session.agent, { modelSelection });
   } catch (error) {
     showControlPlaneToast(translateApiError(error, t, t("sessions.panel.modelSwitchFailed")));
   } finally {
@@ -2920,6 +3024,7 @@ async function selectExistingSessionReasoningEffort(reasoningEffort: AiSessionRe
   reasoningEffortPending.value = { sessionId: session.id, target: reasoningEffort };
   try {
     await updateAiSessionReasoningEffort(props.instance.id, session.id, createBrowserUuid(), reasoningEffort);
+    persistAiSessionCreationPreferences(session.agent, { reasoningEffort });
   } catch (error) {
     if (reasoningEffortPending.value?.sessionId === session.id) reasoningEffortPending.value = undefined;
     showControlPlaneToast(translateApiError(error, t, t("sessions.panel.reasoningEffortFailed")));

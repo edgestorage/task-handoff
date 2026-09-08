@@ -20,9 +20,10 @@ test("composer appends the reasoning effort submenu after provider models", () =
 
 test("new and existing sessions use the same reasoning effort composer control", () => {
   assert.match(panel, /:reasoning-effort="newSessionReasoningEffort"/);
-  assert.match(panel, /@select-reasoning-effort="newSessionReasoningEffort = \$event"/);
+  assert.match(panel, /@select-reasoning-effort="selectNewSessionReasoningEffort"/);
   assert.match(panel, /selectedSession\.reasoningEffort \|\| \(selectedSession\.agent === 'codex' \? AI_SESSION_DEFAULT_REASONING_EFFORT : undefined\)/);
   assert.match(panel, /newSessionReasoningEffort = ref<AiSessionReasoningEffort>\(AI_SESSION_DEFAULT_REASONING_EFFORT\)/);
   assert.match(panel, /@select-reasoning-effort="selectExistingSessionReasoningEffort"/);
   assert.match(panel, /updateAiSessionReasoningEffort/);
+  assert.match(panel, /persistAiSessionCreationPreferences\(session\.agent, \{ reasoningEffort \}\)/);
 });

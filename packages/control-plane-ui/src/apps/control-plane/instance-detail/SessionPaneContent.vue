@@ -5,10 +5,20 @@
         <div class="session-status-overview">
           <RefreshCw v-if="instance.imageProvisioning?.phase !== 'failed'" :size="34" />
           <CircleAlert v-else :size="34" />
-          <div>
+          <div class="session-status-overview-copy">
             <strong>{{ instanceStatusTitle(instance, t) }}</strong>
             <span>{{ instanceStatusDetail(instance, t) }}</span>
           </div>
+          <Button
+            v-if="canShowInstanceAction(instance, 'retry-image')"
+            class="session-status-image-retry"
+            size="sm"
+            :disabled="isInstanceActionBusy(instance)"
+            @click="$emit('runAction', 'retry-image', instance)"
+          >
+            <RotateCw :size="14" />
+            <span>{{ activeActionLabel(instance, "retry-image", t("instances.actions.retryImage")) }}</span>
+          </Button>
         </div>
         <ol class="image-preparation-steps" :aria-label="t('instances.imagePull.preparationStages')">
           <li v-for="(step, index) in imagePreparationSteps" :key="step" :data-state="imagePreparationStepState(index)">
@@ -180,8 +190,10 @@ function imagePreparationStepState(index: number) {
 .session-status-actions button > span { color: inherit; }
 .session-status-image-layout { display: grid; box-sizing: border-box; width: min(840px, 100%); min-height: 0; gap: 18px; text-align: left; }
 .session-status-overview { display: flex; align-items: center; gap: 14px; }
-.session-status-overview > div { display: grid; gap: 4px; }
+.session-status-overview-copy { display: grid; min-width: 0; gap: 4px; }
 .session-status-overview strong, .session-status-overview span { display: block; }
+.session-status-image-retry { flex: 0 0 auto; gap: 7px; margin-inline-start: auto; }
+.session-status-image-retry > span { color: inherit; }
 .image-preparation-steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 0; padding: 0; list-style: none; }
 .image-preparation-steps li { position: relative; display: flex; align-items: center; gap: 8px; color: var(--text-muted); font-size: 12px; font-weight: 700; }
 .image-preparation-steps li:not(:last-child)::after { content: ""; position: absolute; z-index: 0; right: 10px; left: 34px; top: 12px; height: 1px; background: var(--line); }
@@ -194,6 +206,11 @@ function imagePreparationStepState(index: number) {
 .image-preparation-steps li[data-state="failed"] { color: var(--status-danger); }
 .session-status-image-pull { box-sizing: border-box; width: 100%; margin: 0; text-align: left; }
 .session-status-image-note { padding: 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-inset); }
+@media (max-width: 640px) {
+  .session-status-overview { flex-wrap: wrap; }
+  .session-status-overview-copy { flex: 1 1 calc(100% - 48px); }
+  .session-status-image-retry { margin-inline-start: 48px; }
+}
 .session-preview-live { position: relative; min-height: 0; overflow: hidden; background: var(--terminal-bg); }
 .session-preview-frame, .session-terminal { display: block; width: 100%; height: 100%; min-height: 0; border: 0; background: var(--terminal-bg); }
 .session-terminal { position: relative; box-sizing: border-box; overflow: hidden; }

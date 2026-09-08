@@ -12,7 +12,7 @@ import {
   type InstanceLifecycleSnapshot,
   type NodeJoinedEvent,
 } from "@task-handoff/protocol/control-plane";
-import { AiSessionEventType as ProtocolAiSessionEventType, AiSessionTimelineItemEventSchema, AiSessionUnreadEventType, AiSessionUnreadStateSchema, normalizeAiSessionMessageDeltaEvent, type AiSessionTimelineItemEvent, type AiSessionUnreadState } from "@task-handoff/protocol/ai-sessions";
+import { AiSessionEventType as ProtocolAiSessionEventType, AiSessionTimelineItemDeltaEventSchema, AiSessionTimelineItemEventSchema, AiSessionUnreadEventType, AiSessionUnreadStateSchema, normalizeAiSessionMessageDeltaEvent, normalizeAiSessionTimelineItemDeltaEvent, type AiSessionTimelineItemDeltaEvent, type AiSessionTimelineItemEvent, type AiSessionUnreadState } from "@task-handoff/protocol/ai-sessions";
 import { safeParseResponse } from "@task-handoff/protocol/response-validation";
 import { ControlPlaneNodeFleetUpdatedEventSchema } from "@task-handoff/protocol/control-plane-directory";
 import { ControlPlaneAiSessionTriggerBoundEventSchema, ControlPlaneAiSessionTriggerUnboundEventSchema } from "@task-handoff/protocol/triggers";
@@ -23,7 +23,8 @@ import type { InstanceTriggerMutationResult } from "../../api/types";
 import type { InstanceBoardPayload } from "../../api/types";
 import { controlPlaneQueryKeys } from "../../api/queryKeys.ts";
 import { getControlledInstanceTriggers } from "../../api/queries.ts";
-import { controlPlaneDomainQueryKeys } from "../../api/queryInvalidation.ts";
+import { controlPlaneDomainQueryKeys, type ControlPlaneQueryDomain } from "../../api/queryInvalidation.ts";
+import { createAuthoritativeQueryRecovery } from "./authoritativeQueryRecovery.ts";
 import { applyInstanceLifecycle, applyNodeFleetState, applyNodeStateProjection } from "./instanceLifecycleCache.ts";
 import { removeInstanceTriggerBinding, replaceInstanceTriggerSnapshot, upsertInstanceTriggerBinding } from "./instanceTriggerCache.ts";
 import { controlPlaneEventDomains } from "./eventInvalidation.ts";
@@ -62,6 +63,7 @@ export function useControlPlaneEvents(input: {
     applyUnreadEvent: (state: AiSessionUnreadState) => boolean;
     applyMessageDelta: (payload: AiSessionMessageDeltaEvent, options?: { replay?: boolean }) => boolean;
     applyTimelineItem: (payload: AiSessionTimelineItemEvent) => boolean;
+    applyTimelineItemDelta: (payload: AiSessionTimelineItemDeltaEvent) => boolean;
     recoverTimelineItems: () => void;
     recoverDescriptor: (descriptor: SessionStreamDescriptor) => Promise<void>;
   };
@@ -94,6 +96,21 @@ export function useControlPlaneEvents(input: {
   let socket: WebSocket | undefined;
   let closing = false;
   const reconnectBackoff = new StandardReconnectBackoff();
+  const authoritativeRecoveries = ([
+    ["nodes", ["nodeState"]],
+    ["instances", ["instances"]],
+    ["stories", ["stories"]],
+  ] as const).map(([name, domains]) => createAuthoritativeQueryRecovery(
+    () => recoverAuthoritativeDomains(domains),
+    {
+      onFailure: ({ attempt, delay, error }) => console.warn("CONTROL_PLANE_QUERY_RECOVERY_RETRY", {
+        name,
+        attempt,
+        retryDelayMs: delay,
+        error: error instanceof Error ? error.message : String(error),
+      }),
+    },
+  ));
   let hasOpened = false;
   const seenTransientEventIds = new Set<string>();
 
@@ -109,8 +126,7 @@ export function useControlPlaneEvents(input: {
       const instanceId = toValue(input.instanceId || "");
       sendSubscription(current, new Date().toISOString());
       startKeepalive(current);
-      void queryClient.invalidateQueries({ queryKey: controlPlaneQueryKeys.scopedInstanceBoard(toValue(input.instanceId || "")) });
-      void queryClient.invalidateQueries({ queryKey: controlPlaneQueryKeys.stories() });
+      for (const recovery of authoritativeRecoveries) void recovery.start();
       void input.appManagement?.recoverOpen();
       void input.resourceMetrics?.recoverOpen();
       for (const triggerInstanceId of cachedInstanceIds(instanceId)) {
@@ -122,6 +138,7 @@ export function useControlPlaneEvents(input: {
     current.addEventListener("close", () => {
       if (socket !== current) return;
       stopKeepalive();
+      stopAuthoritativeRecovery();
       socket = undefined;
       if (!closing && !reconnectTimer) {
         const { delay } = reconnectBackoff.next();
@@ -251,6 +268,12 @@ export function useControlPlaneEvents(input: {
       const item = safeParseResponse(AiSessionTimelineItemEventSchema, event.payload);
       return item.success ? input.aiSessions.applyTimelineItem(item.data) : false;
     }
+    if (event.type === AiSessionEventType.TimelineItemDelta) {
+      if (event.id && seenTransientEventIds.has(event.id)) return true;
+      if (event.id) rememberTransientEventId(event.id);
+      const delta = safeParseResponse(AiSessionTimelineItemDeltaEventSchema, event.payload);
+      return delta.success ? input.aiSessions.applyTimelineItemDelta(delta.data) : false;
+    }
     if (event.type === AiSessionUnreadEventType.Updated) {
       const state = safeParseResponse(AiSessionUnreadStateSchema, event.payload);
       if (!state.success || event.scope?.instanceId !== state.data.instanceId) return false;
@@ -312,6 +335,17 @@ export function useControlPlaneEvents(input: {
     }
   }
 
+  async function recoverAuthoritativeDomains(domains: readonly ControlPlaneQueryDomain[]) {
+    await Promise.all(controlPlaneDomainQueryKeys(domains).map((queryKey) => queryClient.invalidateQueries(
+      { queryKey },
+      { throwOnError: true },
+    )));
+  }
+
+  function stopAuthoritativeRecovery() {
+    for (const recovery of authoritativeRecoveries) recovery.stop();
+  }
+
   function cachedInstanceIds(scopeInstanceId: string) {
     const ids = new Set<string>();
     for (const [, payload] of queryClient.getQueriesData<InstanceBoardPayload>({ queryKey: controlPlaneQueryKeys.instanceBoard })) {
@@ -352,6 +386,7 @@ export function useControlPlaneEvents(input: {
       return;
     }
     closing = true;
+    stopAuthoritativeRecovery();
     socket?.close();
     socket = undefined;
     stopKeepalive();
@@ -359,6 +394,7 @@ export function useControlPlaneEvents(input: {
   watch(() => toValue(input.instanceId || ""), () => {
     if (!socket) return;
     closing = true;
+    stopAuthoritativeRecovery();
     stopKeepalive();
     socket.close();
     socket = undefined;
@@ -381,6 +417,7 @@ export function useControlPlaneEvents(input: {
   onBeforeUnmount(() => {
     closing = true;
     reconnectBackoff.reset();
+    stopAuthoritativeRecovery();
     socket?.close();
     socket = undefined;
     stopKeepalive();
@@ -406,6 +443,13 @@ function normalizedEvents(message: EventMessage): EventMessage[] {
   if (normalized.type === ProtocolAiSessionEventType.MessageDelta && instanceId) {
     try {
       normalized.payload = normalizeAiSessionMessageDeltaEvent(normalized.payload, instanceId);
+    } catch {
+      return [];
+    }
+  }
+  if (normalized.type === ProtocolAiSessionEventType.TimelineItemDelta && instanceId) {
+    try {
+      normalized.payload = normalizeAiSessionTimelineItemDeltaEvent(normalized.payload, instanceId);
     } catch {
       return [];
     }

@@ -204,7 +204,7 @@
             <span>{{ option.label }}</span>
           </button>
         </div>
-        <Button variant="outline" size="sm" :aria-label="t('common.actions.refresh')" :title="t('common.actions.refresh')" :disabled="refreshing" @click="refresh">
+        <Button v-if="showManualRefresh" variant="outline" size="sm" :aria-label="t('common.actions.refresh')" :title="t('common.actions.refresh')" :disabled="refreshing" @click="refresh">
           <RefreshCw :size="15" />
           <span>{{ t("common.actions.refresh") }}</span>
         </Button>
@@ -758,7 +758,7 @@ const configSyncDialogOpen = computed({
   },
 });
 const instanceSettingsId = ref("");
-const instanceSettingsSection = ref<"general" | "ai" | "models" | "git-credentials" | "apps">("general");
+const instanceSettingsSection = ref<"general" | "ai" | "codex" | "models" | "git-credentials" | "apps">("general");
 const instanceSettingsOpen = computed({
   get: () => Boolean(instanceSettingsId.value),
   set: (open: boolean) => {
@@ -972,6 +972,7 @@ const topbarNodeName = computed(() => {
   if (standaloneMode.value && activeInstance.value?.id !== standaloneInstanceId.value) return "";
   return activeInstance.value?.node?.name || "";
 });
+const showManualRefresh = false;
 const refreshing = computed(() => board.isFetching.value || controlPlane.isFetching.value);
 const lastNodeJoinedEvent = ref<NodeJoinedEvent>();
 useControlPlaneEvents({
@@ -1488,7 +1489,7 @@ async function manageInstanceApp(instanceId: string, appId: string, operation: A
   instanceAppManagement.applyJob(instanceId, response.job);
 }
 
-function openInstanceSettings(instanceId: string, section: "general" | "ai" | "models" | "git-credentials" | "apps" = "general") {
+function openInstanceSettings(instanceId: string, section: "general" | "ai" | "codex" | "models" | "git-credentials" | "apps" = "general") {
   if (!boardInstancesWithAppSessions.value.some((instance) => instance.id === instanceId)) return;
   instanceSettingsSection.value = section;
   instanceSettingsId.value = instanceId;

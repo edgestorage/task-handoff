@@ -2,7 +2,7 @@ import { createElement } from 'react';
 import { render, waitFor } from '@testing-library/react-native';
 
 import { StoryDocumentPreview, htmlPreviewNavigationDisposition, isHtmlStoryPath } from '../src/stories/StoryDocumentPreview';
-import { useMobileControlPlaneRuntime } from '../src/control-plane/use-mobile-control-plane-runtime';
+import { useMobileControlPlaneRuntime, type MobileControlPlaneDomain } from '../src/control-plane/use-mobile-control-plane-runtime';
 
 jest.mock('react-native-webview', () => ({ WebView: 'WebView' }));
 jest.mock('../src/control-plane/use-mobile-control-plane-runtime', () => ({ useMobileControlPlaneRuntime: jest.fn() }));
@@ -43,5 +43,33 @@ describe('mobile Story document HTML preview', () => {
 
     expect(screen.getByTestId('story-html-preview').props.source).toEqual({ html: content, baseUrl: 'about:blank' });
     expect(screen.queryByText(content)).toBeNull();
+  });
+
+  test('refreshes an open document when its Story content changes', async () => {
+    const initial = '<p>Initial</p>';
+    const updated = '<p>Updated</p>';
+    const preview = jest.fn()
+      .mockResolvedValueOnce({ content: initial, revision: 'a'.repeat(64), size: initial.length, storyPath: 'report.html' })
+      .mockResolvedValue({ content: updated, revision: 'b'.repeat(64), size: updated.length, storyPath: 'report.html' });
+    let storyDomain: MobileControlPlaneDomain | undefined;
+    const register = jest.fn((domain: MobileControlPlaneDomain) => {
+      storyDomain = domain;
+      void domain.start(new AbortController().signal);
+      return jest.fn();
+    });
+    mockRuntime.mockReturnValue({ api: { stories: { preview } }, coordinator: { register } } as unknown as ReturnType<typeof useMobileControlPlaneRuntime>);
+
+    const screen = await render(createElement(StoryDocumentPreview, { storyId: 'story-1', nodeId: 'node-1', storyPath: 'report.html' }));
+    await waitFor(() => expect(screen.getByTestId('story-html-preview').props.source.html).toBe(initial));
+
+    storyDomain!.onEvent({
+      type: 'story.changed',
+      topic: 'stories',
+      payload: { storyId: 'story-1', nodeId: 'node-1', change: 'content.written' },
+    });
+
+    await waitFor(() => expect(screen.getByTestId('story-html-preview').props.source.html).toBe(updated));
+    expect(preview).toHaveBeenCalledTimes(2);
+    await screen.unmount();
   });
 });

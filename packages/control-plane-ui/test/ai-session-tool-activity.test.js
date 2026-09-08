@@ -3,6 +3,7 @@ import fs from "node:fs";
 import test from "node:test";
 
 const activity = fs.readFileSync(new URL("../src/components/ai-session/AiSessionToolActivity.vue", import.meta.url), "utf8");
+const activityGroup = fs.readFileSync(new URL("../src/components/ai-session/AiSessionActivityGroup.vue", import.meta.url), "utf8");
 const result = fs.readFileSync(new URL("../src/components/ai-session/AiSessionResult.vue", import.meta.url), "utf8");
 const panel = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.vue", import.meta.url), "utf8");
 const panelCss = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.css", import.meta.url), "utf8");
@@ -27,6 +28,16 @@ test("expanded tool activity consumes live items without triggering timeline rel
   const activity = fs.readFileSync(new URL("../src/components/ai-session/AiSessionToolActivity.vue", import.meta.url), "utf8");
   assert.doesNotMatch(activity, /requestExpand|activityRevision|defineEmits/);
   assert.match(activity, /function toggleExpanded\(event: MouseEvent\) \{[\s\S]*beginDisclosureTransition\(event\.currentTarget as Element\);[\s\S]*expanded\.value = !expanded\.value;/);
+});
+
+test("reasoning activity expands inside the thinking disclosure and renders Markdown", () => {
+  assert.match(activity, /:auto-expand-kinds="\['reasoning'\]"/);
+  assert.match(activityGroup, /activity\.activityKind === 'reasoning'/);
+  assert.match(activityGroup, /<MarkdownContent[\s\S]*:content="activity\.output"/);
+  assert.match(activityGroup, /const autoExpandedActivityIds = new Set<string>\(\)/);
+  assert.match(activityGroup, /!autoExpandedActivityIds\.has\(activity\.id\)/);
+  assert.match(activityGroup, /automatic\.forEach\(\(id\) => autoExpandedActivityIds\.add\(id\)\)/);
+  assert.match(activityGroup, /\.ai-session-activity-details :deep\(\.markdown-content\) \{[\s\S]*font-size: 14px;[\s\S]*line-height: 1\.55;/);
 });
 
 test("background Timeline loading affects history without hiding authoritative live activity", () => {
@@ -129,7 +140,7 @@ test("detail surfaces omit the legacy running response placeholder", () => {
   assert.match(result, /v-if="displayContent"/);
   assert.doesNotMatch(result, /v-show="displayContent"/);
   assert.match(result, /const displayContent = computed\(\(\) => streamingContent\.value \|\| props\.responseContent\)/);
-  assert.match(result, /props\.isLatest[\s\S]*?streamingMessages\.activeMessage\(props\.instanceId, props\.session\.id\)[\s\S]*?streamingMessageMatchesTurn/);
+  assert.match(result, /props\.isLatest[\s\S]*?streamingMessages\.activeMessage\(props\.instanceId, props\.session\.id\)[\s\S]*?messageMatchesTurn/);
   assert.match(conversation, /:response-content="detailState === 'ready' \? compactResponseContent : ''"/);
   assert.match(conversation, /compactResponseContent = computed\(\(\) => displayAiSessionResponse\(props\.session, props\.promptIndex, t\)\)/);
   assert.match(sessions, /includeProgress \? aiSessionProgressText\(session, t\) : ""/);
@@ -206,6 +217,14 @@ test("detail context shows the registered folder, instance, agent, and lifecycle
   assert.match(panelCss, /\.session-ai-detail-context \{[\s\S]*display: flex;[\s\S]*align-items: center;[\s\S]*font-size: 13px;[\s\S]*font-weight: 400;/);
   assert.match(panelCss, /\.session-ai-detail-agent \{[\s\S]*display: inline-flex;[\s\S]*align-items: center;[\s\S]*flex: 0 0 auto;/);
   assert.doesNotMatch(panel, /aiSessionAppDisplayName\(aiSessionAppTab\(instance, selectedSession\)/);
+});
+
+test("detail context folder reuses desktop-local open and context-menu behavior", () => {
+  assert.match(panel, /v-if="canOpenSelectedSessionFolder"[\s\S]*class="session-ai-detail-context-item session-ai-detail-folder"[\s\S]*@click="openSelectedSessionFolder"/);
+  assert.match(panel, /<ContextMenuItem[\s\S]*@select="openSelectedSessionFolder"[\s\S]*sessions\.panel\.openInFileManager/);
+  assert.match(panel, /desktopRuntimePathAccess\(props\.instance\) === "desktop-local"[\s\S]*canOpenDesktopLocalPath\(\)/);
+  assert.match(panel, /openDesktopLocalPath\(selectedSessionRuntimePath\.value\)[\s\S]*openInFileManagerFailed/);
+  assert.match(panelCss, /\.session-ai-detail-folder:hover[\s\S]*\.session-ai-detail-folder:focus-visible/);
 });
 
 test("floating user prompts collapse to three lines and become compact when sticky", () => {

@@ -1906,6 +1906,26 @@
   min-width: 0;
 }
 
+.session-ai-detail-folder {
+  max-width: 100%;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.session-ai-detail-folder:hover {
+  color: var(--text);
+}
+
+.session-ai-detail-folder:focus-visible {
+  border-radius: 3px;
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
 .session-ai-detail-context-item > span {
   min-width: 0;
   overflow: hidden;
