@@ -24,6 +24,7 @@ import {
   STORY_TREE_DOCUMENT_LIMIT,
 } from './story-tree-model';
 import { getStoryViewPreferences, subscribeStoryViewPreferences, updateStoryViewPreferences } from './story-view-preferences';
+import { useStoryEvents } from './use-story-events';
 
 type StoryInboxProps = {
   onOpen(story: Story): void;
@@ -70,16 +71,18 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
     if (preferences.sortMode !== 'manual' || preferences.manualKeys.length || !stories.length) return;
     updateStoryViewPreferences({ manualKeys: sortStoryTree(stories, locale).map(storyTreeKey) });
   }, [locale, preferences.manualKeys.length, preferences.sortMode, stories]);
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (signal?: AbortSignal) => {
     if (!runtime.api) return;
     setPhase('loading');
     setError(undefined);
     try {
-      const result = await runtime.api.stories.list();
+      const result = await runtime.api.stories.list(undefined, signal);
+      if (signal?.aborted) return;
       setStories((current) => mergeStoryTreeSnapshot(current, result.stories, result.unavailableNodeIds));
       setUnavailableNodeIds(result.unavailableNodeIds);
       setPhase('ready');
     } catch (cause) {
+      if (signal?.aborted) return;
       setError(cause instanceof Error ? cause.message : String(cause));
       setPhase('error');
     }
@@ -96,7 +99,7 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
   ]), [runtime.api, t]);
   const removeDocument = useCallback((story: Story, document: StoryDocument) => Alert.alert(t('stories.deleteDocumentTitle', { name: document.title }), t('stories.deleteDocumentDescription'), [
     { text: t('common.cancel'), style: 'cancel' },
-    { text: t('common.remove'), style: 'destructive', onPress: () => { void runtime.api?.stories.removeDocument(story.id, story.ownerNodeId, document.storyPath).then(refresh).catch((cause) => Alert.alert(t('stories.saveError'), cause instanceof Error ? cause.message : String(cause))); } },
+    { text: t('common.remove'), style: 'destructive', onPress: () => { void runtime.api?.stories.removeDocument(story.id, story.ownerNodeId, document.storyPath).then(() => refresh()).catch((cause) => Alert.alert(t('stories.saveError'), cause instanceof Error ? cause.message : String(cause))); } },
   ]), [refresh, runtime.api, t]);
   const saveDocumentTitle = useCallback(async () => {
     const target = renamingDocument;
@@ -112,10 +115,7 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
     [{ text: t('common.cancel'), style: 'cancel' }, { text: t('sessions.closeSession'), style: 'destructive', onPress: () => { void aiSessionRuntime.actions?.close(entry.instanceId, entry.session.id, Crypto.randomUUID()).catch((cause) => Alert.alert(t('sessions.closeFailed'), cause instanceof Error ? cause.message : String(cause))); } }],
   ), [aiSessionRuntime.actions, t]);
 
-  useEffect(() => {
-    const task = setTimeout(() => { void refresh(); }, 0);
-    return () => clearTimeout(task);
-  }, [refresh]);
+  useStoryEvents(refresh);
 
   if (phase === 'loading' && stories.length === 0) return <ActivityIndicator accessibilityLabel={t('common.loading')} style={styles.loading} />;
   const emptyUnavailable = sortedStories.length === 0 && unavailableNodeIds.length > 0;

@@ -47,7 +47,7 @@
               >
                 <MarkdownContent :content="node.message.text" :code-tools="markdownCodeTools" />
               </article>
-              <AiSessionActivityGroup v-else :activities="node.activities" open :summary-visible="false" />
+              <AiSessionActivityGroup v-else :activities="node.activities" open :summary-visible="false" :auto-expand-kinds="['reasoning']" />
             </template>
           </template>
           <span v-else>{{ t("sessions.timeline.noActivities") }}</span>

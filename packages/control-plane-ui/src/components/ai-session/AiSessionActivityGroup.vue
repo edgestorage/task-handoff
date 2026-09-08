@@ -47,10 +47,13 @@
                     </ScrollArea>
                   </section>
                   <section v-if="activity.output">
-                    <small>{{ t("sessions.timeline.output") }}</small>
-                    <ScrollArea type="auto" :horizontal="false" class="ai-session-activity-pre-scroll">
-                      <pre>{{ activity.output }}</pre>
-                    </ScrollArea>
+                    <MarkdownContent v-if="activity.activityKind === 'reasoning'" :content="activity.output" :code-tools="markdownCodeTools" />
+                    <template v-else>
+                      <small>{{ t("sessions.timeline.output") }}</small>
+                      <ScrollArea type="auto" :horizontal="false" class="ai-session-activity-pre-scroll">
+                        <pre>{{ activity.output }}</pre>
+                      </ScrollArea>
+                    </template>
                   </section>
                   <small v-if="activity.exitCode !== undefined">{{ t("sessions.timeline.exitCode", { code: activity.exitCode }) }}</small>
                 </div>
@@ -66,6 +69,7 @@
 <script setup lang="ts">
 import { computed, ref, watch, type Component } from "vue";
 import { useI18n } from "vue-i18n";
+import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
 import {
   Bot,
   Brain,
@@ -120,14 +124,29 @@ const props = withDefaults(defineProps<{
   activities: AiSessionTimelineActivity[];
   open?: boolean;
   summaryVisible?: boolean;
-}>(), { open: false, summaryVisible: true });
+  autoExpandKinds?: string[];
+}>(), { open: false, summaryVisible: true, autoExpandKinds: () => [] });
 const emit = defineEmits<{ "update:open": [open: boolean] }>();
 const { t } = useI18n();
+const markdownCodeTools = computed(() => ({
+  copiedLabel: t("sessions.markdown.copied"),
+  copyLabel: t("sessions.markdown.copy"),
+  plainTextLabel: t("sessions.markdown.plainText"),
+}));
 const latest = computed(() => props.activities.at(-1));
 const summaryLabel = computed(() => t("sessions.timeline.activityCount", { count: props.activities.length }));
 const groupOpen = ref(props.summaryVisible ? props.open : true);
 const openActivities = ref(new Set<string>());
+const autoExpandedActivityIds = new Set<string>();
 watch(() => props.open, (value) => { if (props.summaryVisible) groupOpen.value = value; });
+watch(() => [props.activities, props.autoExpandKinds] as const, ([activities, autoExpandKinds]) => {
+  const automatic = activities
+    .filter((activity) => autoExpandKinds.includes(activity.activityKind) && !autoExpandedActivityIds.has(activity.id))
+    .map((activity) => activity.id);
+  if (!automatic.length) return;
+  automatic.forEach((id) => autoExpandedActivityIds.add(id));
+  openActivities.value = new Set([...openActivities.value, ...automatic]);
+}, { immediate: true, deep: true });
 function toggleGroup(event: MouseEvent) { beginDisclosureTransition(event.currentTarget as Element); groupOpen.value = !groupOpen.value; emit("update:open", groupOpen.value); }
 function activityOpen(activity: AiSessionTimelineActivity) { return openActivities.value.has(activity.id); }
 function toggleActivity(id: string, event: MouseEvent) { beginDisclosureTransition(event.currentTarget as Element); const next = new Set(openActivities.value); next.has(id) ? next.delete(id) : next.add(id); openActivities.value = next; }
@@ -276,13 +295,19 @@ function runtimePathBasename(path: string) {
   min-width: 0;
 }
 .ai-session-activity-details-content {
-  padding-top: 15px;
+  padding-top: 9px;
   background-image: linear-gradient(var(--line-subtle), var(--line-subtle));
   background-repeat: no-repeat;
-  background-position: 0 7px;
+  background-position: 0 4px;
   background-size: 100% 1px;
 }
-.ai-session-activity-details section { display: grid; gap: 4px; margin-top: 8px; }
+.ai-session-activity-details section { display: grid; gap: 4px; margin-top: 4px; }
+.ai-session-activity-details :deep(.markdown-content) {
+  font-size: 14px;
+  line-height: 1.55;
+}
+.ai-session-activity-details :deep(.markdown-content > :first-child) { margin-top: 0; }
+.ai-session-activity-details :deep(.markdown-content > :last-child) { margin-bottom: 0; }
 .ai-session-activity-pre-scroll {
   max-width: 100%;
   min-width: 0;

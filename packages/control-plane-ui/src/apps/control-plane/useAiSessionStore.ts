@@ -1,6 +1,6 @@
 import { computed, watch } from "vue";
 import { useQueryClient } from "@tanstack/vue-query";
-import type { AiSessionStreamEvent, AiSessionTimelineItemEvent } from "@task-handoff/protocol/ai-sessions";
+import type { AiSessionStreamEvent, AiSessionTimelineItemDeltaEvent, AiSessionTimelineItemEvent } from "@task-handoff/protocol/ai-sessions";
 import { applyAiSessionUnreadState, applyControlPlaneAiSessionStreamEvent } from "@task-handoff/control-plane-client";
 import { sharedAiSessionsApi } from "../../api/sharedClient";
 import {
@@ -121,6 +121,11 @@ export function useAiSessionStore(input: {
     return true;
   }
 
+  function applyTimelineItemDelta(payload: AiSessionTimelineItemDeltaEvent) {
+    if (!payload?.instanceId || !payload.sessionId || !acceptsInstance(payload.instanceId)) return false;
+    return timelineItems.applyDelta(payload);
+  }
+
   function applyEvent(event: AiSessionDeltaResponse["events"][number], fromRecovery = false) {
     const instanceId = event.payload.meta.instanceId;
     if (!acceptsInstance(instanceId)) return false;
@@ -188,6 +193,7 @@ export function useAiSessionStore(input: {
     applySnapshotEvent,
     applyMessageDelta,
     applyTimelineItem,
+    applyTimelineItemDelta,
     recoverTimelineItems: timelineItems.recoverConnection,
     applyEvent,
     applyUnreadEvent,

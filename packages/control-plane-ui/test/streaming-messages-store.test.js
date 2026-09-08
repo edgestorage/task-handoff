@@ -4,6 +4,7 @@ import { watch, watchEffect } from "vue";
 
 import {
   createStreamingMessagesStore,
+  messageMatchesTurn,
   streamingMessageMatchesTurn,
   streamingMessageKey,
   useStreamingMessagesStore,
@@ -55,12 +56,15 @@ test("message keys preserve all four identity dimensions without delimiter colli
   assert.equal(left, streamingMessageKey(identity({ sessionId: "a\u0000b", turnId: "c" })));
 });
 
-test("a session active message can override only its owning Turn", () => {
+test("a session active message can render only in its owning Turn", () => {
   const message = { ...identity({ turnId: "provider-turn-2" }), status: "streaming" };
 
+  assert.equal(messageMatchesTurn(message, { id: "turn-2", providerTurnId: "provider-turn-2" }), true);
+  assert.equal(messageMatchesTurn(message, { id: "turn-3", providerTurnId: "provider-turn-3" }), false);
+  assert.equal(messageMatchesTurn(message, {}), false);
+  assert.equal(messageMatchesTurn({ ...message, status: "complete" }, { id: "turn-2", providerTurnId: "provider-turn-2" }), true);
+  assert.equal(messageMatchesTurn({ ...message, status: "waiting" }, { id: "turn-2", providerTurnId: "provider-turn-2" }), true);
   assert.equal(streamingMessageMatchesTurn(message, { id: "turn-2", providerTurnId: "provider-turn-2" }), true);
-  assert.equal(streamingMessageMatchesTurn(message, { id: "turn-3", providerTurnId: "provider-turn-3" }), false);
-  assert.equal(streamingMessageMatchesTurn(message, {}), false);
   assert.equal(streamingMessageMatchesTurn({ ...message, status: "complete" }, { id: "turn-2", providerTurnId: "provider-turn-2" }), false);
   assert.equal(streamingMessageMatchesTurn({ ...message, status: "waiting" }, { id: "turn-2", providerTurnId: "provider-turn-2" }), false);
 });
@@ -107,6 +111,8 @@ test("an authoritative Turn body replaces partial text retained after a compact 
   });
   assert.equal(entry.value.receivedText, "partial response");
   assert.equal(entry.value.status, "complete");
+  assert.equal(messageMatchesTurn(entry.value, { id: "turn_1" }), true);
+  assert.equal(streamingMessageMatchesTurn(entry.value, { id: "turn_1" }), false);
 
   store.applyAuthoritativeTurnBody("instance_1", "session_1", {
     id: "turn_1",

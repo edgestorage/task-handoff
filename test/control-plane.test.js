@@ -2799,6 +2799,7 @@ test("node agent narrows transient AI events while retaining authoritative insta
   assert.ok(sockets[0].sent[0].topics.includes(AiSessionEventType.Snapshot));
   assert.equal(sockets[0].sent[0].topics.includes(AiSessionEventType.MessageDelta), false);
   assert.equal(sockets[0].sent[0].topics.includes(AiSessionEventType.TimelineItem), false);
+  assert.equal(sockets[0].sent[0].topics.includes(AiSessionEventType.TimelineItemDelta), false);
 
   const replaySince = "2026-08-21T00:00:00.000Z";
   forwarder.setOutputSubscription(output, {
@@ -2810,6 +2811,7 @@ test("node agent narrows transient AI events while retaining authoritative insta
   const narrowed = sockets[0].sent.at(-1);
   assert.ok(narrowed.topics.includes(AiSessionEventType.MessageDelta));
   assert.ok(narrowed.topics.includes(AiSessionEventType.TimelineItem));
+  assert.ok(narrowed.topics.includes(AiSessionEventType.TimelineItemDelta));
   assert.deepEqual(narrowed.aiSessionTransient.timelineSessions, [{ instanceId: instance.id, sessionId: "session-open" }]);
   assert.equal(narrowed.aiSessionTransient.replaySince, replaySince);
 
@@ -2823,16 +2825,20 @@ test("node agent narrows transient AI events while retaining authoritative insta
     scope: { instanceId: instance.id },
     payload: type === AiSessionEventType.MessageDelta
       ? { instanceId: instance.id, sessionId, providerSessionId: sessionId, turnId: "turn-1", itemId: "item-1", delta: "text", generatedAt: new Date().toISOString() }
+      : type === AiSessionEventType.TimelineItemDelta
+        ? { instanceId: instance.id, sessionId, providerSessionId: sessionId, turnId: "turn-1", itemId: "item-1", field: "output", delta: "thinking", generatedAt: new Date().toISOString() }
       : { instanceId: instance.id, sessionId, providerSessionId: sessionId, item: { id: `item-${sessionId}`, turnId: "turn-1", type: "ai-message", text: "text" }, generatedAt: new Date().toISOString() },
   });
   sockets[0].emit("message", envelope(AiSessionEventType.MessageDelta, "session-card"));
   sockets[0].emit("message", envelope(AiSessionEventType.TimelineItem, "session-open"));
+  sockets[0].emit("message", envelope(AiSessionEventType.TimelineItemDelta, "session-open"));
+  sockets[0].emit("message", envelope(AiSessionEventType.TimelineItemDelta, "session-closed"));
   sockets[0].emit("message", envelope(AiSessionEventType.TimelineItem, "session-closed"));
-  assert.deepEqual(forwarded.map((entry) => entry.event.type), [AiSessionEventType.MessageDelta, AiSessionEventType.TimelineItem]);
+  assert.deepEqual(forwarded.map((entry) => entry.event.type), [AiSessionEventType.MessageDelta, AiSessionEventType.TimelineItem, AiSessionEventType.TimelineItemDelta]);
   assert.equal(forwarded[1].event.payload.sessionId, "session-open");
   output.bufferedAmount = 16 * 1024 * 1024;
   sockets[0].emit("message", envelope(AiSessionEventType.MessageDelta, "session-slow"));
-  assert.equal(forwarded.length, 2);
+  assert.equal(forwarded.length, 3);
   assert.deepEqual(outputClosed, [{ code: 1013, reason: "Event consumer is too slow." }]);
   forwarder.stop();
 });
@@ -7134,6 +7140,74 @@ test("node agent only accepts local static key from loopback clients", async (t)
   });
   assert.equal(remote.statusCode, 401);
   assert.equal(remote.json().error.code, "NODE_AGENT_LOCAL_TOKEN_REQUIRES_LOOPBACK");
+});
+
+test("node agent persists and live-syncs managed Codex settings", async (t) => {
+  const dataDir = tempDataDir("node-agent-codex-settings-sync");
+  const requests = [];
+  const app = await createNodeAgentApp({
+    dataDir,
+    logger: false,
+    token: "agent-secret",
+    nodeId: "node_codex_settings_sync",
+    fetchImpl: async (url, init = {}) => {
+      requests.push({ url: String(url), method: init.method, headers: init.headers, body: init.body ? JSON.parse(String(init.body)) : undefined });
+      return new Response(JSON.stringify({ data: { applied: true } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  t.after(() => app.close());
+
+  app.nodeAgentState.controlledInstances.put(ControlledInstanceSchema.parse({
+    id: "inst_codex_settings_sync",
+    name: "Codex settings sync",
+    source: { type: "local-folder", path: "/workspace" },
+    sourceSnapshot: {},
+    modelSelection: {},
+    nodeId: "node_codex_settings_sync",
+    runtimeId: "runtime_local_host",
+    status: "running",
+    health: "ok",
+    connectionStatus: "online",
+    agentStatus: "online",
+    targetStatus: "reachable",
+    uiAccessStatus: "reachable",
+    controlMode: "controlled",
+    ready: true,
+    capabilities: { features: { codexManagedSettings: true } },
+    config: {},
+    workspace: { status: "ready", path: "/workspace" },
+    target: { strategy: "node-proxy", status: "reachable", web: "http://127.0.0.1:32123" },
+    apps: { runningCount: 0, problemCount: 0 },
+    aiSessions: { runningCount: 0, waitingCount: 0, sessions: [], updatedAt: new Date().toISOString() },
+    runtime: { kind: "local", port: 32123, labels: {} },
+    registrationToken: "instance-registration-secret",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  }));
+
+  const settings = {
+    modelVerbosity: "medium",
+    personality: "pragmatic",
+    multiAgent: { enabled: true, maxConcurrentThreads: 5, defaultReasoningEffort: "high" },
+  };
+  const updated = await app.inject({
+    method: "PATCH",
+    url: "/api/node-agent/instances/inst_codex_settings_sync",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: { config: { codexSettings: settings } },
+  });
+  assert.equal(updated.statusCode, 200, updated.body);
+  assert.deepEqual(updated.json().data.config.codexSettings, settings);
+
+  const sync = requests.find((request) => request.url === "http://127.0.0.1:32123/api/internal/codex-settings");
+  assert.ok(sync);
+  assert.equal(sync.method, "PUT");
+  assert.deepEqual(sync.body, settings);
+  assert.equal(sync.headers.authorization, "Bearer instance-registration-secret");
+  assert.deepEqual(app.nodeAgentState.instancePrivateConfigs.get("inst_codex_settings_sync").codexSettings, settings);
 });
 
 test("node agent provisions one built-in local runtime and creates local instances without images", async (t) => {
@@ -11871,6 +11945,124 @@ test("control plane edits file upload limits only when the node and controlled i
   });
   assert.equal(updated.statusCode, 200, JSON.stringify(updated.body));
   assert.equal(updated.body.data.config.aiSessionMaxFileAttachmentBytes, 1024);
+});
+
+test("control plane edits managed Codex settings only when both runtime peers can enforce them", async (t) => {
+  const mockOptions = {
+    health: { capabilities: { codexManagedSettings: true } },
+    instanceCapabilities: { features: {} },
+  };
+  const mock = createMockNodeAgentFetch(mockOptions);
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-instance-codex-settings"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+    service: { fetchImpl: mock.fetchImpl },
+  });
+  t.after(() => app.close());
+
+  const project = await json(app, "POST", "/api/projects", {
+    name: "Codex Settings Project",
+    source: { type: "local-folder", path: "/tmp/workspace" },
+  });
+  const legacy = await json(app, "POST", "/api/controlled-instances", {
+    name: "legacy-codex-settings",
+    projectId: project.body.data.id,
+    imageSelection: { imageId: "market_taskhandoff_browser" },
+  });
+  const basicUpdate = await json(app, "PATCH", `/api/controlled-instances/${legacy.body.data.id}`, {
+    config: { codexConfigEnabled: false },
+  });
+  assert.equal(basicUpdate.statusCode, 200, JSON.stringify(basicUpdate.body));
+
+  const rejected = await json(app, "PATCH", `/api/controlled-instances/${legacy.body.data.id}`, {
+    config: { codexSettings: { modelVerbosity: "low", multiAgent: { enabled: false } } },
+  });
+  assert.equal(rejected.statusCode, 409);
+  assert.equal(rejected.body.error.code, "CODEX_MANAGED_SETTINGS_UNSUPPORTED");
+
+  mockOptions.instanceCapabilities = { features: { codexManagedSettings: true } };
+  const current = await json(app, "POST", "/api/controlled-instances", {
+    name: "current-codex-settings",
+    projectId: project.body.data.id,
+    imageSelection: { imageId: "market_taskhandoff_browser" },
+  });
+  const settings = {
+    modelVerbosity: "high",
+    personality: "friendly",
+    multiAgent: { enabled: true, maxConcurrentThreads: 4, defaultReasoningEffort: "medium" },
+  };
+  const updated = await json(app, "PATCH", `/api/controlled-instances/${current.body.data.id}`, {
+    config: { codexSettings: settings },
+  });
+  assert.equal(updated.statusCode, 200, JSON.stringify(updated.body));
+  assert.deepEqual(updated.body.data.config.codexSettings, settings);
+  const forwarded = mock.requests.find((request) => request.method === "PATCH"
+    && request.path === `/instances/${current.body.data.id}`);
+  assert.deepEqual(forwarded.body.config.codexSettings, settings);
+});
+
+test("control plane rejects managed Codex settings during creation for an N-1 node agent", async (t) => {
+  const mock = createMockNodeAgentFetch();
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-create-codex-settings-n-minus-one"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+    service: { fetchImpl: mock.fetchImpl },
+  });
+  t.after(() => app.close());
+
+  const project = await json(app, "POST", "/api/projects", {
+    name: "Legacy Codex Settings Project",
+    source: { type: "local-folder", path: "/tmp/workspace" },
+  });
+  const rejected = await json(app, "POST", "/api/controlled-instances", {
+    name: "unsupported-codex-settings",
+    projectId: project.body.data.id,
+    imageSelection: { imageId: "market_taskhandoff_browser" },
+    config: { codexSettings: { multiAgent: { enabled: true } } },
+  });
+  assert.equal(rejected.statusCode, 409);
+  assert.equal(rejected.body.error.code, "CODEX_MANAGED_SETTINGS_UNSUPPORTED");
+  assert.equal(mock.requests.some((request) => request.path === "/instances" && request.method === "POST"), false);
+});
+
+test("control plane applies creation-time Codex settings after assigning models", async (t) => {
+  const settings = {
+    modelVerbosity: "high",
+    multiAgent: { enabled: true, maxConcurrentThreads: 4 },
+  };
+  const mock = createMockNodeAgentFetch({
+    health: { capabilities: { codexManagedSettings: true } },
+    instanceCapabilities: { features: { codexManagedSettings: true } },
+  });
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-create-codex-settings-order"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+    service: { fetchImpl: mock.fetchImpl },
+  });
+  t.after(() => app.close());
+
+  const project = await json(app, "POST", "/api/projects", {
+    name: "Ordered Codex Settings Project",
+    source: { type: "local-folder", path: "/tmp/workspace" },
+  });
+  const created = await json(app, "POST", "/api/controlled-instances", {
+    name: "ordered-codex-settings",
+    projectId: project.body.data.id,
+    imageSelection: { imageId: "market_taskhandoff_browser" },
+    config: { autoImportAgentConfigs: false, codexSettings: settings },
+  });
+  assert.equal(created.statusCode, 201, JSON.stringify(created.body));
+
+  const createIndex = mock.requests.findIndex((request) => request.path === "/instances" && request.method === "POST");
+  const assignmentIndex = mock.requests.findIndex((request) => request.path.endsWith("/model-assignment") && request.method === "PUT");
+  const settingsIndex = mock.requests.findIndex((request) => request.path === `/instances/${created.body.data.id}` && request.method === "PATCH");
+  assert.ok(createIndex >= 0 && assignmentIndex > createIndex && settingsIndex > assignmentIndex);
+  assert.deepEqual(mock.requests[createIndex].body.config, { autoImportAgentConfigs: false });
+  assert.deepEqual(mock.requests[settingsIndex].body.config.codexSettings, settings);
+  assert.deepEqual(created.body.data.config.codexSettings, settings);
 });
 
 test("control plane reports node-scoped image availability and preserves unknown inventory failures", async (t) => {

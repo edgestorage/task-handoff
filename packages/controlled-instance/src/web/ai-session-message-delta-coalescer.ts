@@ -36,16 +36,16 @@ export interface AiSessionMessageDeltaCoalescerDiagnostics {
   maxFirstBatchWaitMs: number;
 }
 
-export interface AiSessionMessageDeltaCoalescerOptions {
-  emit(payload: AiSessionMessageDeltaEvent): void;
+export interface AiSessionMessageDeltaCoalescerOptions<T extends AiSessionMessageDeltaEvent = AiSessionMessageDeltaEvent> {
+  emit(payload: T): void;
   windowMs?: number;
   clock?: AiSessionMessageDeltaCoalescerClock;
 }
 
-interface PendingDeltaBatch {
+interface PendingDeltaBatch<T extends AiSessionMessageDeltaEvent> {
   chunks: string[];
   firstReceivedAtMs: number;
-  lastPayload: AiSessionMessageDeltaEvent;
+  lastPayload: T;
   timer: unknown;
 }
 
@@ -73,12 +73,12 @@ function validateWindowMs(windowMs: number): number {
   return windowMs;
 }
 
-export class AiSessionMessageDeltaCoalescer {
+export class AiSessionMessageDeltaCoalescer<T extends AiSessionMessageDeltaEvent = AiSessionMessageDeltaEvent> {
   readonly windowMs: number;
 
   private readonly clock: AiSessionMessageDeltaCoalescerClock;
-  private readonly emit: (payload: AiSessionMessageDeltaEvent) => void;
-  private readonly pending = new Map<string, PendingDeltaBatch>();
+  private readonly emit: (payload: T) => void;
+  private readonly pending = new Map<string, PendingDeltaBatch<T>>();
   private readonly diagnosticState: AiSessionMessageDeltaCoalescerDiagnostics = {
     rawDeltaCount: 0,
     emittedEventCount: 0,
@@ -90,7 +90,7 @@ export class AiSessionMessageDeltaCoalescer {
   };
   private isClosed = false;
 
-  constructor(options: AiSessionMessageDeltaCoalescerOptions) {
+  constructor(options: AiSessionMessageDeltaCoalescerOptions<T>) {
     this.emit = options.emit;
     this.clock = options.clock ?? systemClock;
     this.windowMs = validateWindowMs(options.windowMs ?? DEFAULT_AI_SESSION_MESSAGE_DELTA_WINDOW_MS);
@@ -104,7 +104,7 @@ export class AiSessionMessageDeltaCoalescer {
     return this.isClosed;
   }
 
-  push(payload: AiSessionMessageDeltaEvent): void {
+  push(payload: T): void {
     if (this.isClosed) {
       throw new Error("AI session message delta coalescer is closed");
     }
@@ -118,7 +118,7 @@ export class AiSessionMessageDeltaCoalescer {
       return;
     }
 
-    const batch: PendingDeltaBatch = {
+    const batch: PendingDeltaBatch<T> = {
       chunks: [payload.delta],
       firstReceivedAtMs: this.clock.now(),
       lastPayload: payload,

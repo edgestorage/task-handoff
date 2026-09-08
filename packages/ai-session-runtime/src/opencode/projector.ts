@@ -20,12 +20,18 @@ export type OpenCodeProjection = {
   snapshot: Omit<AiSessionSnapshotInput, "type" | "source">;
   timeline: AiSessionTimelineItem[];
   messageById: Map<string, OpenCodeMessageIdentity>;
+  partById: Map<string, OpenCodePartIdentity>;
   pendingPermission?: OpenCodePermission;
 };
 
 export type OpenCodeMessageIdentity = {
   turnId: string;
   role: "user" | "assistant";
+};
+
+export type OpenCodePartIdentity = OpenCodeMessageIdentity & {
+  messageId: string;
+  type: string;
 };
 
 export function projectOpenCodeSession(input: {
@@ -39,6 +45,7 @@ export function projectOpenCodeSession(input: {
   const permissions = input.permissions.filter((permission) => permission.sessionID === input.session.id);
   const pendingPermission = permissions.at(-1);
   const messageById = new Map<string, OpenCodeMessageIdentity>();
+  const partById = new Map<string, OpenCodePartIdentity>();
   const timeline: AiSessionTimelineItem[] = [];
   const turns: AiSessionTurn[] = [];
   const userMessages = messages.filter((message) => message.info.role === "user");
@@ -55,7 +62,11 @@ export function projectOpenCodeSession(input: {
     const turnId = message.info.id;
     const assistants = assistantsByParent.get(turnId) || [];
     messageById.set(message.info.id, { turnId, role: "user" });
-    for (const assistant of assistants) messageById.set(assistant.info.id, { turnId, role: "assistant" });
+    for (const part of message.parts) partById.set(part.id, { turnId, messageId: message.info.id, role: "user", type: part.type });
+    for (const assistant of assistants) {
+      messageById.set(assistant.info.id, { turnId, role: "assistant" });
+      for (const part of assistant.parts) partById.set(part.id, { turnId, messageId: assistant.info.id, role: "assistant", type: part.type });
+    }
     const userText = textParts(message.parts).join("\n").trim();
     const attachments = conversationAttachments(message.parts);
     const assistantTextParts = assistants.flatMap((assistant) => assistant.parts.filter(isTextPart));
@@ -141,6 +152,7 @@ export function projectOpenCodeSession(input: {
     },
     timeline,
     messageById,
+    partById,
     pendingPermission,
   };
 }
@@ -155,7 +167,14 @@ export function projectOpenCodePart(part: OpenCodePart, turnId: string): AiSessi
     const text = typeof record.text === "string" ? record.text.trim() : "";
     return text ? { id: part.id, turnId, type: "ai-message", text } : undefined;
   }
-  if (record.type === "reasoning" || record.type === "step-start" || record.type === "step-finish" || record.type === "snapshot") return undefined;
+  if (record.type === "reasoning") {
+    const text = typeof record.text === "string" ? record.text : "";
+    return activity(part.id, turnId, "reasoning", "Reasoning", {
+      status: reasoningStatus(record),
+      output: text || undefined,
+    });
+  }
+  if (record.type === "step-start" || record.type === "step-finish" || record.type === "snapshot") return undefined;
   if (record.type === "file") {
     return activity(part.id, turnId, "file", "File", { paths: typeof record.filename === "string" ? [record.filename] : undefined });
   }
@@ -180,10 +199,13 @@ export function projectOpenCodePart(part: OpenCodePart, turnId: string): AiSessi
   return undefined;
 }
 
-export function openCodePartDelta(event: { partID: string; messageID: string; field: string; delta: string }, messageById: Map<string, OpenCodeMessageIdentity>) {
+export function openCodePartDelta(event: { partID: string; messageID: string; field: string; delta: string }, partById: Map<string, OpenCodePartIdentity>) {
   if (event.field !== "text" || !event.delta) return undefined;
-  const message = messageById.get(event.messageID);
-  return message?.role === "assistant" ? { itemId: event.partID, turnId: message.turnId, delta: event.delta } : undefined;
+  const part = partById.get(event.partID);
+  if (!part || part.messageId !== event.messageID || part.role !== "assistant") return undefined;
+  if (part.type === "text") return { kind: "message" as const, itemId: event.partID, turnId: part.turnId, delta: event.delta };
+  if (part.type === "reasoning") return { kind: "timeline-item" as const, itemId: event.partID, turnId: part.turnId, field: "output" as const, delta: event.delta };
+  return undefined;
 }
 
 function projectLifecycle(status: OpenCodeSessionStatus | undefined, permission: OpenCodePermission | undefined, error?: string): AiSessionLifecycle {
@@ -196,11 +218,21 @@ function projectLifecycle(status: OpenCodeSessionStatus | undefined, permission:
 function projectPhase(status: OpenCodeSessionStatus | undefined, permission: OpenCodePermission | undefined, messages: OpenCodeMessage[]): AiSessionPhase {
   if (permission) return "approval";
   if (status?.type === "retry") return "thinking";
-  return activeTools(messages).length ? "tool" : status?.type === "busy" ? "responding" : "unknown";
+  return status?.type === "busy" ? activePhase(messages) : "unknown";
 }
 
 function activePhase(messages: OpenCodeMessage[]): AiSessionPhase {
-  return activeTools(messages).length ? "tool" : "responding";
+  if (activeTools(messages).length) return "tool";
+  const latestPart = messages
+    .filter((message) => message.info.role === "assistant")
+    .flatMap((message) => message.parts)
+    .at(-1);
+  return latestPart?.type === "reasoning" ? "thinking" : "responding";
+}
+
+function reasoningStatus(record: Record<string, unknown>) {
+  const time = asRecord(record.time);
+  return isNumber(time.end) ? "completed" as const : "running" as const;
 }
 
 function activeTools(messages: OpenCodeMessage[]) {

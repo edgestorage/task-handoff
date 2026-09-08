@@ -33,7 +33,7 @@ test("the instance App menu opens settings directly on app management", () => {
   assert.match(preview, /\$emit\('openSettings', instance\.id, 'apps'\)/);
   assert.match(detail, /\$emit\('openSettings', instanceId, section\)/);
   assert.match(workbench, /:initial-section="instanceSettingsSection"/);
-  assert.match(workbench, /function openInstanceSettings\(instanceId: string, section: "general" \| "ai" \| "models" \| "git-credentials" \| "apps" = "general"\)/);
+  assert.match(workbench, /function openInstanceSettings\(instanceId: string, section: "general" \| "ai" \| "codex" \| "models" \| "git-credentials" \| "apps" = "general"\)/);
   assert.match(dialog, /section\.value = props\.initialSection \|\| "general"/);
 });
 
@@ -68,6 +68,17 @@ test("instance settings exposes general, models, apps, and inventory freshness s
   assert.match(dialog, /t\("instances\.settings\.sessionPermissionsDescription"\)/);
   assert.match(dialog, /t\("instances\.settings\.aiSessionHistoryLimit"\)/);
   assert.match(dialog, /aiSessionHistoryLimit:\s*Number\(aiSessionHistoryLimit\.value\)/);
+});
+
+test("instance settings exposes managed Codex behavior and multi-agent defaults", () => {
+  const dialog = read("src/apps/control-plane/instance-settings/InstanceSettingsDialog.vue");
+  assert.match(dialog, /<TabsTrigger value="codex"><AiAgentIcon agent="codex" :size="14" \/>/);
+  for (const setting of ["codexVerbosity", "codexPersonality", "codexMultiAgentEnabled", "codexMultiAgentMaxThreads", "codexSubagentModel", "codexSubagentReasoning"]) {
+    assert.match(dialog, new RegExp(setting));
+  }
+  assert.match(dialog, /supportsNodeCodexManagedSettings/);
+  assert.match(dialog, /supportsControlledInstanceCodexManagedSettings/);
+  assert.match(dialog, /codexSettings: currentCodexSettings\(\)/);
 });
 
 test("instance settings configures the ordinary file upload limit through node capability gating", () => {

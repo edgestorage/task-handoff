@@ -208,6 +208,7 @@ export function controlledInstanceCapabilities(
       aiSessionWorkspaceSelection: true,
       aiSessionPersistenceSettings: true,
       privateModelCatalog: true,
+      codexManagedSettings: true,
       gitCliCredentialBroker: gitCredentialBrokerInstalled,
       gitCredentialProxy: gitCredentialBrokerInstalled,
       aiSessionTimeline,

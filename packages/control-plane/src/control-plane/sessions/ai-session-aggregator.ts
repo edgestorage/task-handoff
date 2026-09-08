@@ -7,6 +7,7 @@ import {
   AiSessionRemovedEventSchema,
   AiSessionSnapshotEventSchema,
   AiSessionTimelineItemEventSchema,
+  AiSessionTimelineItemDeltaEventSchema,
   applyAiSessionStreamEvent,
   type AiSessionDeltaResponse,
   type AiSessionPatchEvent,
@@ -68,10 +69,12 @@ export class ControlPlaneAiSessionAggregator {
   }
 
   handleEvent(event: EventEnvelope) {
-    if (event.type === AiSessionEventType.MessageDelta || event.type === AiSessionEventType.TimelineItem) {
+    if (event.type === AiSessionEventType.MessageDelta || event.type === AiSessionEventType.TimelineItem || event.type === AiSessionEventType.TimelineItemDelta) {
       const schema = event.type === AiSessionEventType.MessageDelta
         ? AiSessionMessageDeltaEventSchema
-        : AiSessionTimelineItemEventSchema;
+        : event.type === AiSessionEventType.TimelineItem
+          ? AiSessionTimelineItemEventSchema
+          : AiSessionTimelineItemDeltaEventSchema;
       const parsed = safeParseResponse(schema, event.payload);
       if (!parsed.success) {
         this.logger?.warn?.({ eventType: event.type, issues: parsed.error.issues, errorCode: "AI_SESSION_TRANSIENT_EVENT_INVALID" }, "ai-session.aggregator.transient-event.invalid");

@@ -68,7 +68,7 @@ test("model settings discovers models into an ordered name list with real endpoi
   assert.doesNotMatch(settings, /<ControlPlaneInput v-model="settingsModel\.model"/);
   assert.match(settings, /<PopoverContent class="model-picker-popover [^"]*p-1"[\s\S]*:collision-padding="12"/);
   assert.match(settings, /<Command class="model-picker-command"[\s\S]*<CommandInput class="model-picker-search-input [^"]*text-\[13px\]" :placeholder="t\('settings\.modelRegistry\.searchModels'\)"/);
-  assert.match(settings, /<ScrollArea class="model-picker-scroll" :horizontal="false">[\s\S]*<CommandList class="model-picker-list max-h-none overflow-visible">/);
+  assert.match(settings, /<ScrollArea class="model-picker-scroll" :horizontal="false">[\s\S]*<CommandList class="model-picker-list" :scrollable="false">/);
   assert.match(settings, /v-for="option in discoveredModels"/);
   assert.match(settings, /<span>\{\{ option\.id \}\}<\/span>[\s\S]*<Check :size="14"/);
   assert.match(settings, /:global\(\.model-picker-popover\) \{[\s\S]*height: min\(360px,var\(--reka-popover-content-available-height\)\);[\s\S]*overflow: hidden;[\s\S]*padding: 4px;/);

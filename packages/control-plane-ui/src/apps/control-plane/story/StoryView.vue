@@ -394,6 +394,7 @@ import StoryTreeContextMenu from "./StoryTreeContextMenu.vue";
 import DocumentTreeContextMenu from "./DocumentTreeContextMenu.vue";
 import StoryActionEditorContent from "./StoryActionEditorContent.vue";
 import StoryActionAutomations from "./StoryActionAutomations.vue";
+import { storyAutomationDayOfMonthLabel } from "./storyAutomationPresentation";
 import { closeAiSession, getAiSessionHistory, getStoryRetentionSettings, useStoriesQuery } from "../../../api/queries";
 import { sharedControlPlaneClient } from "../../../api/sharedClient.ts";
 import { controlPlaneQueryKeys } from "../../../api/queryKeys.ts";
@@ -942,7 +943,7 @@ function automationScheduleLabel(schedule: StoryAutomationSchedule) {
     const days = schedule.weekdays.map((day) => new Intl.DateTimeFormat(locale.value, { weekday: "short", timeZone: "UTC" }).format(new Date(Date.UTC(2026, 7, 2 + day)))).join(", ");
     return t("stories.automation.weeklyAt", { days, time: schedule.timeOfDay, timezone: schedule.timezone });
   }
-  return t("stories.automation.monthlyAt", { day: schedule.dayOfMonth, time: schedule.timeOfDay, timezone: schedule.timezone });
+  return t("stories.automation.monthlyAt", { day: storyAutomationDayOfMonthLabel(schedule.dayOfMonth, t), time: schedule.timeOfDay, timezone: schedule.timezone });
 }
 function syncStoryDetailHeadOffset() {
   if (!storyDetailScrollInnerEl.value || !storyDetailHeadEl.value) return;

@@ -23,6 +23,7 @@ import {
   supportsAiSessionPersistenceSettings,
   supportsGitCliCredentialBroker,
   supportsControlledInstancePrivateModelCatalog,
+  supportsControlledInstanceCodexManagedSettings,
   type BuildInfo,
   type ControlledInstance,
   type InstanceResourceMetrics,
@@ -340,7 +341,7 @@ async function syncAssignedModelEnvironment(
   const instance = state.requireInstance(instanceId);
   const modelEnvironment = state.resolvedAssignedModelEnvironment(instanceId);
   const modelCatalog = state.modelRegistry.privateCatalog(instanceId);
-  state.instancePrivateConfigs.materialize(instance.id, instance.registrationToken, modelEnvironment, modelCatalog);
+  state.instancePrivateConfigs.materialize(instance.id, instance.registrationToken, modelEnvironment, modelCatalog, instance.config.codexSettings);
   if (instance.targetStatus !== "reachable") return false;
   let response: Response;
   try {
@@ -644,6 +645,38 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     }
     aiSessionPersistenceSyncKeys.set(id, syncKey);
     return true;
+  };
+  const syncCodexManagedSettings = async (id: string) => {
+    const instance = state.requireInstance(id);
+    state.instancePrivateConfigs.materialize(
+      instance.id,
+      instance.registrationToken,
+      state.resolvedAssignedModelEnvironment(id),
+      state.modelRegistry.privateCatalog(id),
+      instance.config.codexSettings,
+    );
+    if (!instance.config.codexSettings) return true;
+    if (!supportsControlledInstanceCodexManagedSettings(instance.capabilities)
+      || instance.targetStatus !== "reachable"
+      || !instance.registrationToken) return false;
+    try {
+      const response = await fetchWithTimeout(fetchImpl, `${await resolveInstanceWeb(instance)}/api/internal/codex-settings`, {
+        method: "PUT",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${instance.registrationToken}`,
+        },
+        body: JSON.stringify(instance.config.codexSettings || {}),
+      }, DEFAULT_AUTO_IMPORT_AGENT_CONFIG_TIMEOUT_MS);
+      if (!response.ok) {
+        lifecycleLoggers.warn({ instanceId: id, statusCode: response.status }, "node instance Codex settings live sync deferred");
+        return false;
+      }
+      return true;
+    } catch (error) {
+      lifecycleLoggers.warn({ instanceId: id, error: error instanceof Error ? error.message : String(error) }, "node instance Codex settings live sync deferred");
+      return false;
+    }
   };
   const artifactResolver = new RuntimeArtifactResolver({ cacheDir: path.join(paths.dataDir, "runtime-artifacts"), fetchImpl });
   const releaseResolver = options.resolveRuntimeArtifactRelease
@@ -1124,6 +1157,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
         aiSessionHistoryLimit: true,
         aiSessionAttachmentRetention: true,
         aiSessionFileAttachmentLimit: true,
+        codexManagedSettings: true,
         folderPlaces: true,
         localFolderNameUpdate: true,
         managedGitCredentials: { registry: true, runtimeBroker: true, workspaceProvisioning: { docker: true, kubernetes: false, local: false } },
@@ -1200,6 +1234,17 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     retryImageProvisioning: (id) => imageProvisioning.retry(id),
     update: (id, input) => {
       const current = state.requireInstance(id);
+      const subagentModel = input.config?.codexSettings?.multiAgent.defaultModel;
+      if (subagentModel) {
+        const entity = state.modelRegistry.privateCatalog(id).entities.find((candidate) => candidate.id === subagentModel.modelEntityId
+          && candidate.protocols.includes("openai-responses"));
+        if (!entity?.modelNames.some((entry) => entry.name === subagentModel.modelName)) {
+          throw Object.assign(new Error("The Codex subagent model must be assigned to this instance."), {
+            statusCode: 400,
+            code: "CODEX_SUBAGENT_MODEL_UNAVAILABLE",
+          });
+        }
+      }
       return state.controlledInstances.put(ControlledInstanceSchema.parse({
         ...current,
         ...input,
@@ -1220,13 +1265,17 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     },
     afterUpdate: async (instance) => {
       eventForwarder.syncNow();
-      await syncAiSessionPersistenceSettings(instance.id);
+      await Promise.all([
+        syncAiSessionPersistenceSettings(instance.id),
+        syncCodexManagedSettings(instance.id),
+      ]);
     },
     afterReport: (instance, report) => {
       eventForwarder.syncNow();
       void storyScheduler.reconcileInstances(report === "heartbeat" ? instance.id : undefined).catch((error) => app.log.warn({ error, instanceId: instance.id }, "Story scheduler reconciliation failed"));
       reconcileReportedEndpoint(instance);
       void syncAiSessionPersistenceSettings(instance.id);
+      void syncCodexManagedSettings(instance.id);
       void storyIdleRetention.reconcile();
       void instanceIdleRetention.reconcile();
       if (report === "register") {

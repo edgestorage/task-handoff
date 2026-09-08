@@ -43,6 +43,7 @@ test("status page exposes the lifecycle actions in the active pane", () => {
 
   assert.match(pane, /canShowInstanceAction\(instance, 'start'\)[\s\S]*\$emit\('runAction', 'start', instance\)/);
   assert.match(pane, /canShowInstanceAction\(instance, 'retry-image'\)[\s\S]*\$emit\('runAction', 'retry-image', instance\)/);
+  assert.match(pane, /class="session-status-overview"[\s\S]*?class="session-status-image-retry"[\s\S]*?\$emit\('runAction', 'retry-image', instance\)[\s\S]*?<\/div>\s*<ol class="image-preparation-steps"/);
   assert.match(preview, /@run-action="\(action, target\) => \$emit\('runAction', action, target\)"/);
   assert.match(detail, /@run-action="\(action, target\) => \$emit\('runAction', action, target\)"/);
 });

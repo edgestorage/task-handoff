@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useRef, useState, type ReactNode } from 'react';
 import * as Crypto from 'expo-crypto';
-import { router, Stack, useFocusEffect, type NativeStackHeaderItem } from 'expo-router';
+import { router, Stack, type NativeStackHeaderItem } from 'expo-router';
 import { MenuView, type MenuAction } from '@expo/ui/community/menu';
 import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, View, type LayoutChangeEvent, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
 import type { Story, StoryAction, StoryAutomationRun, StoryAutomationSchedule, StoryAutomationStatus } from '@task-handoff/protocol/stories';
@@ -19,6 +19,7 @@ import { mobilePermissionStore } from '../control-plane/runtime';
 import { useMobileControlPlaneRuntime } from '../control-plane/use-mobile-control-plane-runtime';
 import { useActiveDirectories } from '../directories/use-directories';
 import { useI18n, type Translate } from '../i18n';
+import { useStoryEvents } from './use-story-events';
 
 type AutomationView = StoryAutomationStatus & { recentRuns: StoryAutomationRun[] };
 type StorySection = 'actions' | 'documents' | 'sessions' | 'automations';
@@ -53,21 +54,28 @@ export function StoryDetail({ storyId, nodeId, onOpenSession }: { storyId?: stri
     setAutomations(values);
   }, [nodeId, runtime.api, storyId]);
 
-  useFocusEffect(useCallback(() => {
+  const refresh = useCallback(async (signal?: AbortSignal) => {
     if (!runtime.api || !storyId || !nodeId) return;
-    let live = true;
     setLoading(true);
     setError(undefined);
     setAutomationError('');
-    void Promise.all([runtime.api.stories.get(storyId, nodeId), runtime.api.stories.listAutomations(storyId, nodeId)]).then(async ([storyValue, list]) => {
+    try {
+      const [storyValue, list] = await Promise.all([runtime.api.stories.get(storyId, nodeId), runtime.api.stories.listAutomations(storyId, nodeId)]);
       const values = await Promise.all(list.automations.map(async (status): Promise<AutomationView> => ({
         ...status,
         recentRuns: (await runtime.api!.stories.automationRuns(storyId, status.automation.id, nodeId)).runs.slice(0, 3),
       })));
-      if (live) { setStory(storyValue); setAutomations(values); }
-    }).catch((cause) => { if (live) setError(cause instanceof Error ? cause.message : String(cause)); }).finally(() => { if (live) setLoading(false); });
-    return () => { live = false; };
-  }, [nodeId, runtime.api, storyId]));
+      if (signal?.aborted) return;
+      setStory(storyValue);
+      setAutomations(values);
+    } catch (cause) {
+      if (signal?.aborted) return;
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      if (!signal?.aborted) setLoading(false);
+    }
+  }, [nodeId, runtime.api, storyId]);
+  useStoryEvents(refresh, storyId);
 
   const nodeNames = useMemo(() => new Map(directory.nodes.map((node) => [node.id, node.name])), [directory.nodes]);
   const instanceNames = useMemo(() => new Map(directory.instances.map((item) => [item.id, item.name])), [directory.instances]);

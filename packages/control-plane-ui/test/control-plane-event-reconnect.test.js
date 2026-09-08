@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
+import { createAuthoritativeQueryRecovery } from "../src/apps/control-plane/authoritativeQueryRecovery.ts";
 
 const source = fs.readFileSync(new URL("../src/apps/control-plane/useControlPlaneEvents.ts", import.meta.url), "utf8");
 const workbench = fs.readFileSync(new URL("../src/apps/control-plane/ControlPlaneWorkbench.vue", import.meta.url), "utf8");
@@ -10,6 +11,79 @@ test("Control Plane events reset reconnect backoff only after the authoritative 
   const helloHandler = source.match(/if \(message\.type === SessionStreamsHelloEventType\)[\s\S]*?\n        return;/)?.[0] || "";
   assert.doesNotMatch(openHandler, /reconnectBackoff\.reset\(\)/);
   assert.match(helloHandler, /const hello = parsed\.data;[\s\S]*reconnectBackoff\.reset\(\)/);
+});
+
+test("authoritative query recovery retries independently until the snapshot succeeds", async () => {
+  const scheduled = [];
+  const failures = [];
+  let attempts = 0;
+  const recovery = createAuthoritativeQueryRecovery(async () => {
+    attempts += 1;
+    if (attempts < 3) throw new Error(`failure ${attempts}`);
+  }, {
+    random: () => 0.5,
+    setTimeoutFn(callback, delay) {
+      scheduled.push({ callback, delay });
+      return scheduled.length;
+    },
+    clearTimeoutFn() {},
+    onFailure: (failure) => failures.push(failure),
+  });
+
+  await recovery.start();
+  assert.equal(attempts, 1);
+  const retryOne = scheduled.shift();
+  assert.equal(retryOne.delay, 0);
+  retryOne.callback();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(attempts, 2);
+  const retryTwo = scheduled.shift();
+  assert.equal(retryTwo.delay, 250);
+  retryTwo.callback();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(attempts, 3);
+  assert.equal(scheduled.length, 0);
+  assert.deepEqual(failures.map(({ attempt, delay }) => ({ attempt, delay })), [
+    { attempt: 1, delay: 0 },
+    { attempt: 2, delay: 250 },
+  ]);
+});
+
+test("authoritative query recovery cancels a pending retry when its socket generation stops", async () => {
+  let attempts = 0;
+  let scheduledCallback;
+  const cleared = [];
+  const recovery = createAuthoritativeQueryRecovery(async () => {
+    attempts += 1;
+    throw new Error("unavailable");
+  }, {
+    setTimeoutFn(callback) {
+      scheduledCallback = callback;
+      return 0;
+    },
+    clearTimeoutFn(timer) {
+      cleared.push(timer);
+    },
+  });
+
+  await recovery.start();
+  recovery.stop();
+  scheduledCallback();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(attempts, 1);
+  assert.deepEqual(cleared, [0]);
+});
+
+test("event connection recovers Node, Instance, and Story snapshots for each socket generation", () => {
+  assert.match(source, /\["nodes", \["nodeState"\]\]/);
+  assert.match(source, /\["instances", \["instances"\]\]/);
+  assert.match(source, /\["stories", \["stories"\]\]/);
+  assert.match(source, /current\.addEventListener\("open",[\s\S]*for \(const recovery of authoritativeRecoveries\) void recovery\.start\(\)/);
+  assert.match(source, /current\.addEventListener\("close",[\s\S]*stopAuthoritativeRecovery\(\)/);
+  assert.match(source, /invalidateQueries\([\s\S]*throwOnError: true/);
 });
 
 test("Control Plane events declare list delta demand separately from detail timeline demand", () => {

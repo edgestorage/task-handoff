@@ -17,10 +17,12 @@ import {
   sanitizeStoredProject,
   supportsAiSessionFileSizeLimitSettings,
   supportsAiSessionPersistenceSettings,
+  supportsControlledInstanceCodexManagedSettings,
   supportsGitCredentialProxy,
   supportsNodeFolderPlaces,
   supportsNodeLocalFolderNameUpdate,
   supportsNodeAiSessionFileAttachmentLimit,
+  supportsNodeCodexManagedSettings,
   supportsNodeManagedGitCredentialRegistry,
   supportsNodeGitCredentialRuntimeBroker,
   ModelConfigSchema,
@@ -1178,6 +1180,9 @@ export class ControlPlaneService {
     if (parsedInput.config?.aiSessionMaxFileAttachmentBytes !== undefined) {
       requireAiSessionFileAttachmentLimitSupport(node, current);
     }
+    if (parsedInput.config?.codexSettings !== undefined) {
+      requireCodexManagedSettingsSupport(node, current);
+    }
     const { modelSelection, ...instancePatch } = parsedInput;
     let instance = Object.keys(instancePatch).length
       ? await this.nodeAgentGateway.updateInstance(node, id, instancePatch)
@@ -2054,6 +2059,21 @@ function requireAiSessionFileAttachmentLimitSupport(node: Node, instance: Contro
     throw Object.assign(new Error("This instance does not support managed AI session file attachment limits."), {
       statusCode: 409,
       code: "AI_SESSION_FILE_ATTACHMENT_LIMIT_UNSUPPORTED",
+    });
+  }
+}
+
+function requireCodexManagedSettingsSupport(node: Node, instance: ControlledInstance) {
+  const agent = node.capabilities.agent;
+  const agentCapabilities = agent && typeof agent === "object" && !Array.isArray(agent)
+    ? (agent as Record<string, unknown>).capabilities
+    : undefined;
+  if (!supportsNodeCodexManagedSettings(agentCapabilities)
+    || !supportsControlledInstanceCodexManagedSettings(instance.capabilities)) {
+    // Compatibility for v0.0.28: both peers must accept and enforce the additive settings model.
+    throw Object.assign(new Error("This instance does not support managed Codex settings."), {
+      statusCode: 409,
+      code: "CODEX_MANAGED_SETTINGS_UNSUPPORTED",
     });
   }
 }

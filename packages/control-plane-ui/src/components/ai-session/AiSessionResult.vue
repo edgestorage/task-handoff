@@ -150,7 +150,7 @@ import { useI18n } from "vue-i18n";
 import type { AiSessionSummary } from "../../api/types";
 import type { AiSessionTimelineActivity } from "@task-handoff/protocol/ai-sessions";
 import type { TimelineTurnNode } from "./timelineActivities";
-import { streamingMessageMatchesTurn, useStreamingMessagesStore } from "../../apps/control-plane/useStreamingMessagesStore";
+import { messageMatchesTurn, useStreamingMessagesStore } from "../../apps/control-plane/useStreamingMessagesStore";
 import { createLatestTurnHeightBuffer } from "../../lib/latest-turn-height";
 import { ScrollArea } from "../ui/scroll-area";
 import AiSessionStreamingMarkdown from "./AiSessionStreamingMarkdown.vue";
@@ -360,7 +360,7 @@ const streamingContent = computed(() => {
   const activeMessage = props.isLatest
     ? streamingMessages.activeMessage(props.instanceId, props.session.id).value?.value
     : undefined;
-  return streamingMessageMatchesTurn(activeMessage, { id: props.turnId, providerTurnId: props.providerTurnId })
+  return messageMatchesTurn(activeMessage, { id: props.turnId, providerTurnId: props.providerTurnId })
     ? activeMessage!.receivedText
     : "";
 });

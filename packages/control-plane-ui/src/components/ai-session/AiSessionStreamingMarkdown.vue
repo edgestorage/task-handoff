@@ -23,7 +23,7 @@ import { useI18n } from "vue-i18n";
 import MarkdownRender, { enableKatex, enableMermaid, setCustomComponents, useSmoothMarkdownStream } from "markstream-vue";
 import type { MarkdownCodeTools } from "@task-handoff/web-theme/markdown";
 import "markstream-vue/index.css";
-import { streamingMessageMatchesTurn, useStreamingMessagesStore } from "../../apps/control-plane/useStreamingMessagesStore";
+import { messageMatchesTurn, useStreamingMessagesStore } from "../../apps/control-plane/useStreamingMessagesStore";
 import AiSessionMarkdownNode from "./AiSessionMarkdownNode.vue";
 import { aiSessionMarkdownCodeToolsKey, defaultAiSessionMarkdownCodeTools } from "./markdown-code-tools";
 import MarkdownLinkContextMenu from "./MarkdownLinkContextMenu.vue";
@@ -95,7 +95,7 @@ const streamingMessages = useStreamingMessagesStore();
 const activeMessage = computed(() => streamingMessages.activeMessage(props.instanceId, props.sessionId));
 const streamingState = computed(() => {
   const message = props.isLatest ? activeMessage.value.value?.value : undefined;
-  return streamingMessageMatchesTurn(message, { id: props.turnId, providerTurnId: props.providerTurnId }) ? message : undefined;
+  return messageMatchesTurn(message, { id: props.turnId, providerTurnId: props.providerTurnId }) ? message : undefined;
 });
 const receivedContent = computed(() => String(streamingState.value?.receivedText ?? props.content ?? ""));
 const sourceKey = computed(() => streamingState.value?.key || `snapshot:${props.instanceId}:${props.sessionId}`);

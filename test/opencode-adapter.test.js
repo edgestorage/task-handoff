@@ -255,7 +255,7 @@ test("OpenCode timeline reads refresh projection without reconciling session sta
   bridge.close();
 });
 
-test("OpenCode realtime parts publish only assistant text as AI output", async () => {
+test("OpenCode realtime parts separate reasoning activity deltas from assistant output", async () => {
   const registry = createAiSessionRegistry({ dir: fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-opencode-realtime-role-")) });
   const providerSession = {
     id: "ses_realtime_role",
@@ -271,11 +271,13 @@ test("OpenCode realtime parts publish only assistant text as AI output", async (
   const projection = projectOpenCodeSession({ session: providerSession, status: { type: "busy" }, permissions: [], messages });
   const session = registry.applyAdapterSnapshot(projection.snapshot);
   const deltas = [];
+  const timelineDeltas = [];
   const items = [];
   const bridge = new OpenCodeSessionBridge(registry, {
     connection: () => ({ endpoint: "http://unused", headers: {} }),
     workspaceRoots: () => ["/workspace"],
     onMessageDelta: (event) => deltas.push(event),
+    onTimelineItemDelta: (event) => timelineDeltas.push(event),
   });
   bridge.client = {
     getSession: async () => providerSession,
@@ -290,16 +292,62 @@ test("OpenCode realtime parts publish only assistant text as AI output", async (
   await event("message.part.delta", { sessionID: providerSession.id, messageID: "msg_user", partID: "part_user", field: "text", delta: "User prompt" });
   await event("message.part.updated", { part: { id: "part_user", sessionID: providerSession.id, messageID: "msg_user", type: "text", text: "User prompt" } });
   await event("message.updated", { info: { id: "msg_assistant", sessionID: providerSession.id, role: "assistant", parentID: "msg_user", time: { created: 1700000002000 } } });
+  await event("message.part.delta", { sessionID: providerSession.id, messageID: "msg_assistant", partID: "part_reasoning", field: "text", delta: "Inspect the " });
+  await event("message.part.updated", { part: { id: "part_reasoning", sessionID: providerSession.id, messageID: "msg_assistant", type: "reasoning", text: "" } });
+  await event("message.part.delta", { sessionID: providerSession.id, messageID: "msg_assistant", partID: "part_reasoning", field: "text", delta: "repository" });
+  await event("message.part.updated", { part: { id: "part_reasoning", sessionID: providerSession.id, messageID: "msg_assistant", type: "reasoning", text: "Inspect the repository", time: { start: 1700000002000, end: 1700000003000 } } });
   await event("message.part.delta", { sessionID: providerSession.id, messageID: "msg_assistant", partID: "part_assistant", field: "text", delta: "Assistant output" });
+  await event("message.part.updated", { part: { id: "part_assistant", sessionID: providerSession.id, messageID: "msg_assistant", type: "text", text: "" } });
   await event("message.part.updated", { part: { id: "part_assistant", sessionID: providerSession.id, messageID: "msg_assistant", type: "text", text: "Assistant output" } });
+  await event("message.part.delta", { sessionID: providerSession.id, messageID: "msg_assistant", partID: "part_complete", field: "text", delta: "Already complete" });
+  await event("message.part.updated", { part: { id: "part_complete", sessionID: providerSession.id, messageID: "msg_assistant", type: "text", text: "Already complete" } });
 
   assert.deepEqual(deltas.map((delta) => ({ itemId: delta.itemId, turnId: delta.turnId, delta: delta.delta })), [{
     itemId: "part_assistant",
     turnId: "msg_user",
     delta: "Assistant output",
   }]);
-  assert.deepEqual(items, [{ id: "part_assistant", turnId: "msg_user", type: "ai-message", text: "Assistant output" }]);
+  assert.deepEqual(timelineDeltas.map(({ itemId, turnId, field, delta }) => ({ itemId, turnId, field, delta })), [
+    { itemId: "part_reasoning", turnId: "msg_user", field: "output", delta: "Inspect the " },
+    { itemId: "part_reasoning", turnId: "msg_user", field: "output", delta: "repository" },
+  ]);
+  assert.deepEqual(items, [
+    { id: "part_reasoning", turnId: "msg_user", type: "activity", activityKind: "reasoning", title: "Reasoning", status: "running" },
+    { id: "part_reasoning", turnId: "msg_user", type: "activity", activityKind: "reasoning", title: "Reasoning", status: "completed", output: "Inspect the repository" },
+    { id: "part_assistant", turnId: "msg_user", type: "ai-message", text: "Assistant output" },
+    { id: "part_complete", turnId: "msg_user", type: "ai-message", text: "Already complete" },
+  ]);
   bridge.close();
+});
+
+test("OpenCode reasoning snapshots stay in activity history and drive the thinking phase", () => {
+  const projection = projectOpenCodeSession({
+    session: { id: "ses_reasoning", directory: "/workspace", title: "Reasoning", time: { created: 1700000000000, updated: 1700000003000 } },
+    status: { type: "busy" },
+    permissions: [],
+    messages: [
+      {
+        info: { id: "msg_user", sessionID: "ses_reasoning", role: "user", time: { created: 1700000001000 } },
+        parts: [{ id: "part_user", sessionID: "ses_reasoning", messageID: "msg_user", type: "text", text: "Inspect" }],
+      },
+      {
+        info: { id: "msg_assistant", sessionID: "ses_reasoning", role: "assistant", parentID: "msg_user", time: { created: 1700000002000 } },
+        parts: [{ id: "part_reasoning", sessionID: "ses_reasoning", messageID: "msg_assistant", type: "reasoning", text: "Thinking" }],
+      },
+    ],
+  });
+
+  assert.equal(projection.snapshot.phase, "thinking");
+  assert.equal(projection.snapshot.lastMessage, undefined);
+  assert.deepEqual(projection.timeline.at(-1), {
+    id: "part_reasoning",
+    turnId: "msg_user",
+    type: "activity",
+    activityKind: "reasoning",
+    title: "Reasoning",
+    status: "running",
+    output: "Thinking",
+  });
 });
 
 test("OpenCode projects pending model settings before a real prompt applies them", async () => {

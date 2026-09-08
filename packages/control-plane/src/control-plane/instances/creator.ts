@@ -6,7 +6,7 @@ import type {
   Project,
   SelectableImage,
 } from "@task-handoff/protocol/control-plane";
-import { ProjectSourceSchema, projectSourceWithoutGitCredential, supportsNodeAiSessionFileAttachmentLimit, supportsNodeGitCredentialRuntimeBroker, supportsNodeGitWorkspaceProvisioning, supportsNodeManagedGitCredentialRegistry } from "@task-handoff/protocol/control-plane";
+import { ProjectSourceSchema, projectSourceWithoutGitCredential, supportsNodeAiSessionFileAttachmentLimit, supportsNodeCodexManagedSettings, supportsNodeGitCredentialRuntimeBroker, supportsNodeGitWorkspaceProvisioning, supportsNodeManagedGitCredentialRegistry } from "@task-handoff/protocol/control-plane";
 import { resolveGitCredential, type GitCredentialRetention, type GitWorkspaceProvisioningInput } from "@task-handoff/protocol/managed-git-credentials";
 import { CreateInstanceInputSchema } from "../application/inputs.ts";
 import type { ControlPlaneNodeAgentGateway } from "../nodes/gateway.ts";
@@ -63,6 +63,10 @@ export class ControlledInstanceCreator {
         throw publicError("This node does not support managed AI session file attachment limits.", 409, "AI_SESSION_FILE_ATTACHMENT_LIMIT_UNSUPPORTED");
       }
     }
+    if (parsedInput.config?.codexSettings !== undefined && !supportsNodeCodexManagedSettings(agentCapabilities)) {
+      // Compatibility for v0.0.28: older node agents reject the additive Codex settings field.
+      throw publicError("This node does not support managed Codex settings.", 409, "CODEX_MANAGED_SETTINGS_UNSUPPORTED");
+    }
     const runtime = await this.options.requireRuntime(node.id, runtimeId);
     const requiresImage = runtime.capabilities.requiresImage ?? runtime.type !== "local";
     const environmentSource = parsedInput.environmentSource
@@ -103,6 +107,7 @@ export class ControlledInstanceCreator {
       agentCapabilities,
     });
     const preparedModels = await this.options.prepareModels(node, parsedInput.modelSelection || {});
+    const { codexSettings, ...initialConfig } = parsedInput.config || {};
     const imageSnapshot = imageOption ? createImageSnapshot(imageOption) : undefined;
     const retainedPayload = gitProvisioning?.retention === "instance-retained"
       ? gitProvisioning.input.credentials[0].payload
@@ -126,7 +131,7 @@ export class ControlledInstanceCreator {
         projectId: project?.id,
         source: source.value,
         sourceSnapshot: source.snapshot,
-        config: parsedInput.config,
+        ...(parsedInput.config ? { config: initialConfig } : {}),
         modelSelection: {},
         ...(gitProvisioning?.retention === "operation-only" ? { gitWorkspaceProvisioning: gitProvisioning.input } : {}),
       };
@@ -156,6 +161,11 @@ export class ControlledInstanceCreator {
         );
       }
       assigned = (await this.options.gateway.assignInstanceModels(node, instance.id, preparedModels)).instance;
+      if (codexSettings !== undefined) {
+        assigned = await this.options.gateway.updateInstance(node, instance.id, {
+          config: { codexSettings },
+        });
+      }
     } catch (error) {
       let retainedAuthorizationCleanupFailure: unknown;
       if (retainedAuthorized && gitProvisioning?.retention === "instance-retained") {

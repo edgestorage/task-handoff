@@ -11,11 +11,13 @@ import {
 import {
   AiSessionEventType,
   AiSessionMessageDeltaEventSchema,
+  AiSessionTimelineItemDeltaEventSchema,
   AiSessionPatchEventSchema,
   AiSessionRemovedEventSchema,
   AiSessionSnapshotEventSchema,
   AiSessionTimelineItemEventSchema,
   normalizeAiSessionMessageDeltaEvent,
+  normalizeAiSessionTimelineItemDeltaEvent,
 } from "@task-handoff/protocol/ai-sessions";
 import {
   AppSessionEventType,
@@ -33,6 +35,7 @@ const SESSION_EVENT_SCHEMAS = {
   [AiSessionEventType.Removed]: AiSessionRemovedEventSchema,
   [AiSessionEventType.MessageDelta]: AiSessionMessageDeltaEventSchema,
   [AiSessionEventType.TimelineItem]: AiSessionTimelineItemEventSchema,
+  [AiSessionEventType.TimelineItemDelta]: AiSessionTimelineItemDeltaEventSchema,
   [AppSessionEventType.Snapshot]: AppSessionSnapshotEventSchema,
   [AppSessionEventType.Patch]: AppSessionPatchEventSchema,
   [AppSessionEventType.Removed]: AppSessionRemovedEventSchema,
@@ -286,6 +289,13 @@ function parseSessionEvent(eventType: string, payload: unknown, claimedInstanceI
   if (eventType === AiSessionEventType.MessageDelta && claimedInstanceId) {
     try {
       normalizedPayload = normalizeAiSessionMessageDeltaEvent(payload, claimedInstanceId);
+    } catch {
+      return undefined;
+    }
+  }
+  if (eventType === AiSessionEventType.TimelineItemDelta && claimedInstanceId) {
+    try {
+      normalizedPayload = normalizeAiSessionTimelineItemDeltaEvent(payload, claimedInstanceId);
     } catch {
       return undefined;
     }

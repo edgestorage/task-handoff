@@ -19,6 +19,7 @@ export const AiSessionEventType = {
   Removed: "ai-session.removed",
   MessageDelta: "ai-session.message-delta",
   TimelineItem: "ai-session.timeline-item",
+  TimelineItemDelta: "ai-session.timeline-item-delta",
   SyncRequired: "ai-session.sync-required",
 } as const;
 export const AiSessionUnreadEventType = {
@@ -1070,6 +1071,43 @@ export const AiSessionTimelineItemEventSchema = z.object({
   generatedAt: z.string().datetime(),
 }).strict();
 
+export const AiSessionTimelineItemDeltaEventSchema = z.object({
+  // Compatibility for v0.0.28: this remains a separate additive transient
+  // event so older strict consumers can ignore it and recover the final item.
+  instanceId: z.string().trim().min(1).max(160),
+  nodeId: z.string().trim().min(1).max(160).optional(),
+  sessionId: z.string().trim().min(1).max(120),
+  providerSessionId: z.string().trim().min(1).max(240).optional(),
+  turnId: z.string().trim().min(1).max(240),
+  itemId: z.string().trim().min(1).max(240),
+  field: z.literal("output"),
+  delta: z.string().min(1),
+  generatedAt: z.string().datetime(),
+}).strict();
+
+export const AiSessionTimelineItemDeltaCompactEventSchema = AiSessionTimelineItemDeltaEventSchema
+  .omit({ instanceId: true, nodeId: true, providerSessionId: true })
+  .strict();
+
+export function compactAiSessionTimelineItemDeltaEvent(input: AiSessionTimelineItemDeltaEvent) {
+  return AiSessionTimelineItemDeltaCompactEventSchema.parse({
+    sessionId: input.sessionId,
+    turnId: input.turnId,
+    itemId: input.itemId,
+    field: input.field,
+    delta: input.delta,
+    generatedAt: input.generatedAt,
+  });
+}
+
+export function normalizeAiSessionTimelineItemDeltaEvent(input: unknown, instanceId: string) {
+  const compact = AiSessionTimelineItemDeltaCompactEventSchema.safeParse(input);
+  if (compact.success) {
+    return AiSessionTimelineItemDeltaEventSchema.parse({ instanceId, ...compact.data });
+  }
+  return AiSessionTimelineItemDeltaEventSchema.parse(input);
+}
+
 // Compatibility for v0.0.21: keep this additive live event outside the retained
 // revision delta union so older control-plane UIs can ignore it and continue syncing.
 
@@ -1378,6 +1416,8 @@ export type AiSessionRemovedEvent = z.infer<typeof AiSessionRemovedEventSchema>;
 export type AiSessionMessageDeltaEvent = z.infer<typeof AiSessionMessageDeltaEventSchema>;
 export type AiSessionMessageDeltaCompactEvent = z.infer<typeof AiSessionMessageDeltaCompactEventSchema>;
 export type AiSessionTimelineItemEvent = z.infer<typeof AiSessionTimelineItemEventSchema>;
+export type AiSessionTimelineItemDeltaEvent = z.infer<typeof AiSessionTimelineItemDeltaEventSchema>;
+export type AiSessionTimelineItemDeltaCompactEvent = z.infer<typeof AiSessionTimelineItemDeltaCompactEventSchema>;
 export type AiSessionDeltaResponse = z.infer<typeof AiSessionDeltaResponseSchema>;
 export type AiSessionSnapshotInput = z.infer<typeof AiSessionSnapshotInputSchema>;
 export type AiSessionRealtimeInput = z.infer<typeof AiSessionRealtimeInputSchema>;

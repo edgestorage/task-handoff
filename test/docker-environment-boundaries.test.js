@@ -107,6 +107,45 @@ test("private instance config is atomically materialized with restricted permiss
   }
 });
 
+test("private instance config preserves managed Codex settings for restart recovery", () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-private-codex-settings-"));
+  try {
+    const settings = {
+      modelVerbosity: "high",
+      personality: "pragmatic",
+      multiAgent: {
+        enabled: true,
+        maxConcurrentThreads: 6,
+        defaultReasoningEffort: "high",
+      },
+    };
+    const paths = nodeAgentStorePaths(dataDir);
+    new InstancePrivateConfigStore(paths).materialize(
+      "inst_one",
+      "registration-secret",
+      { OPENAI_API_KEY: "model-secret" },
+      undefined,
+      settings,
+    );
+
+    const restored = new InstancePrivateConfigStore(paths).get("inst_one");
+    assert.deepEqual(restored.codexSettings, settings);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(paths.instancePrivateConfigsDir, "inst_one.json"), "utf8")).codexSettings, settings);
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("Docker entrypoints project managed Codex settings before dropping privileges", () => {
+  for (const file of [
+    path.join(__dirname, "../docker/entrypoint.sh"),
+    path.join(__dirname, "../release/npm/node-agent/docker/entrypoint.sh"),
+  ]) {
+    const source = fs.readFileSync(file, "utf8");
+    assert.match(source, /TASK_HANDOFF_PRIVATE_CODEX_SETTINGS_JSON = JSON\.stringify\(value\.codexSettings\)/);
+  }
+});
+
 test("legacy private registration fields migrate to the long-lived credential model", () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-private-config-migration-"));
   try {

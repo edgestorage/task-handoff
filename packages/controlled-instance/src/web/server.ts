@@ -60,7 +60,7 @@ import { AppManagementManager, AppManagementRequestError } from "./app-managemen
 import { configSyncPresets, configSyncPrograms, listConfigSyncFolders, runConfigSync, runConfigSyncBatch } from "./config-sync";
 import { ConfigSyncRequestSchema } from "@task-handoff/protocol/config-sync";
 import { applyManagedCodexModelConfig, codexProviderId } from "./codex-model-config";
-import { ControlledPrivateModelCatalogSchema, readControlledPrivateModelCatalog, resolveControlledPrivateModelSelection } from "./private-model-catalog";
+import { ControlledPrivateModelCatalogSchema, readControlledPrivateCodexSettings, readControlledPrivateModelCatalog, resolveControlledPrivateModelSelection } from "./private-model-catalog";
 import { applyManagedClaudeModelConfig } from "./claude-model-config";
 import { GitCredentialBroker, installGitBrokerEnvironment } from "./git-credential-broker";
 import {
@@ -128,7 +128,9 @@ import {
   AiSessionQueueMutationResponseSchema,
   AiSessionDeltaResponseSchema,
   AiSessionMessageDeltaEventSchema,
+  AiSessionTimelineItemDeltaEventSchema,
   AiSessionTimelineItemEventSchema,
+  type AiSessionTimelineItemDeltaEvent,
   type AiSessionEventReason,
   type AiSessionPatchEvent,
   type AiSessionRemovedEvent,
@@ -164,7 +166,7 @@ import {
 import { TriggerSourceSchema, TriggerActionSchema, TriggerPolicySchema, TriggerTargetSchema } from "@task-handoff/protocol/triggers";
 import { bridgeWebSockets, TASK_HANDOFF_WEBSOCKET_SERVER_OPTIONS } from "@task-handoff/protocol/websocket-bridge";
 import { SESSION_STREAM_PROTOCOL_VERSION, SessionStreamsHelloEventType } from "@task-handoff/protocol/events";
-import { AppManagementOperationRequestSchema } from "@task-handoff/protocol/control-plane";
+import { AppManagementOperationRequestSchema, CodexInstanceSettingsSchema } from "@task-handoff/protocol/control-plane";
 import { StoryAutomationInstanceCreateInputSchema, StoryAutomationInstanceCreateResultSchema } from "@task-handoff/protocol/story-automation-instance";
 import { registerRepositoryRoutes, repositoryWorkspaceRootsFromEnv } from "../repository/routes";
 import { attachBrowserTunnel } from "./browser-tunnel";
@@ -622,7 +624,8 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   const managedModelEnv = { ...process.env };
   logControlledInstanceStart(storagePaths.logDir, storagePaths.dataDir);
   let privateModelCatalog = readControlledPrivateModelCatalog(managedModelEnv);
-  let codexManagedConfig = applyManagedCodexModelConfig(managedModelEnv, privateModelCatalog);
+  let codexManagedSettings = readControlledPrivateCodexSettings(managedModelEnv);
+  let codexManagedConfig = applyManagedCodexModelConfig(managedModelEnv, privateModelCatalog, codexManagedSettings);
   Object.assign(managedModelEnv, codexManagedConfig.providerEnvironment || {});
   applyManagedClaudeModelConfig(managedModelEnv);
   const auth = resolveWebAuth(storagePaths);
@@ -725,6 +728,12 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       ? undefined
       : Number(configuredDeltaCoalescingWindow),
   });
+  const aiSessionTimelineItemDeltas = new AiSessionMessageDeltaCoalescer<AiSessionTimelineItemDeltaEvent>({
+    emit: (payload) => events.publish(AiSessionEventType.TimelineItemDelta, payload),
+    windowMs: configuredDeltaCoalescingWindow === undefined
+      ? undefined
+      : Number(configuredDeltaCoalescingWindow),
+  });
   const codexAppServer = options.codexAppServer || new CodexAppServerSessionBridge(aiSessions, {
     projectUnboundThreads: false,
     ensureAppSessions: async () => {
@@ -808,7 +817,18 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       });
       aiSessionMessageDeltas.push(payload);
     },
-    onEventSourceClose: () => aiSessionMessageDeltas.flushAll("event-source-close"),
+    onTimelineItemDelta: (delta) => {
+      aiSessionTimelineItemDeltas.push(AiSessionTimelineItemDeltaEventSchema.parse({
+        instanceId,
+        nodeId: process.env.TASK_HANDOFF_NODE_ID,
+        ...delta,
+        generatedAt: new Date().toISOString(),
+      }));
+    },
+    onEventSourceClose: () => {
+      aiSessionMessageDeltas.flushAll("event-source-close");
+      aiSessionTimelineItemDeltas.flushAll("event-source-close");
+    },
     onDiagnostic: (diagnostic) => app.log.warn({ diagnostic }, "OpenCode adapter diagnostic"),
   });
   // OpenCode is an optional managed app. Do not register its session provider
@@ -921,6 +941,12 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   }
   const aiSessionHistoryLifecycle = new AiSessionHistoryLifecycle(aiSessionHistory, (agent) => Boolean(aiSessionProviders.get(agent)));
   const unsubscribeTimelineItems = aiSessionController.subscribeTimelineItems((timelineItem) => {
+    aiSessionTimelineItemDeltas.flush({
+      instanceId,
+      sessionId: timelineItem.sessionId,
+      turnId: timelineItem.item.turnId,
+      itemId: timelineItem.item.id,
+    }, "authoritative-event");
     events.publish(AiSessionEventType.TimelineItem, AiSessionTimelineItemEventSchema.parse({
       instanceId,
       nodeId: process.env.TASK_HANDOFF_NODE_ID,
@@ -1377,6 +1403,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     codexAppServer.stop();
     openCode.close();
     aiSessionMessageDeltas.close("service-close");
+    aiSessionTimelineItemDeltas.close("service-close");
   });
   const publishAppSessionRuntimeChange = (reason: AppSessionEventReason, session: Record<string, unknown>) => {
     publishAppSessionSnapshot(reason);
@@ -2338,7 +2365,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       if (key !== "CODEX_HOME") delete managedModelEnv[key];
     }
     Object.assign(managedModelEnv, next);
-    const codex = applyManagedCodexModelConfig(managedModelEnv);
+    const codex = applyManagedCodexModelConfig(managedModelEnv, privateModelCatalog, codexManagedSettings);
     const claude = applyManagedClaudeModelConfig(managedModelEnv);
     appRuntime.replaceManagedEnvironment(managedAppEnvironment(managedModelEnv));
     return { data: {
@@ -2357,9 +2384,18 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     for (const key of Object.keys(managedModelEnv)) {
       if (key.startsWith("TASK_HANDOFF_CODEX_PROVIDER_")) delete managedModelEnv[key];
     }
-    codexManagedConfig = applyManagedCodexModelConfig(managedModelEnv, privateModelCatalog);
+    codexManagedConfig = applyManagedCodexModelConfig(managedModelEnv, privateModelCatalog, codexManagedSettings);
     Object.assign(managedModelEnv, codexManagedConfig.providerEnvironment || {});
     appRuntime.replaceManagedEnvironment(managedAppEnvironment(managedModelEnv));
+    return { data: { applied: true, configUpdated: codexManagedConfig.applied } };
+  });
+
+  app.put<{ Body: unknown }>("/api/internal/codex-settings", nodeAgentApiRoute({
+    code: "CODEX_SETTINGS_FORBIDDEN",
+    message: "Instance registration token is required.",
+  }), async (request) => {
+    codexManagedSettings = CodexInstanceSettingsSchema.parse(request.body || {});
+    codexManagedConfig = applyManagedCodexModelConfig(managedModelEnv, privateModelCatalog, codexManagedSettings);
     return { data: { applied: true, configUpdated: codexManagedConfig.applied } };
   });
 
@@ -2394,7 +2430,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       const input = ConfigSyncRequestSchema.parse(request.body || {});
       const result = runConfigSyncBatch(input);
       if (input.direction === "import") {
-        if (input.programIds.includes("codex")) applyManagedCodexModelConfig(managedModelEnv);
+        if (input.programIds.includes("codex")) applyManagedCodexModelConfig(managedModelEnv, privateModelCatalog, codexManagedSettings);
         if (input.programIds.includes("claude")) applyManagedClaudeModelConfig(managedModelEnv);
       }
       return { data: result };
@@ -2418,7 +2454,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       const body = ConfigSyncLegacyRequestSchema.parse(request.body || {});
       const result = runConfigSync(direction, request.params.preset, body.preset);
       if (direction === "import" && request.params.preset === "codex") {
-        applyManagedCodexModelConfig(managedModelEnv);
+        applyManagedCodexModelConfig(managedModelEnv, privateModelCatalog, codexManagedSettings);
       }
       if (direction === "import" && request.params.preset === "claude") {
         applyManagedClaudeModelConfig(managedModelEnv);

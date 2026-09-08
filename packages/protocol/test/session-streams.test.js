@@ -22,6 +22,9 @@ import {
   AiSessionMessageDeltaEventSchema,
   compactAiSessionMessageDeltaEvent,
   normalizeAiSessionMessageDeltaEvent,
+  AiSessionTimelineItemDeltaEventSchema,
+  compactAiSessionTimelineItemDeltaEvent,
+  normalizeAiSessionTimelineItemDeltaEvent,
   AiSessionMentionCandidateSchema,
   AiSessionMentionFileSearchSchema,
   AiSessionMessageInputSchema,
@@ -617,6 +620,39 @@ test("compact event projection removes only connection-derived message delta fie
     generatedAt: now,
   });
   assert.equal(projectEventEnvelope(event, 1), event);
+});
+
+test("v0.0.28 clients can ignore additive timeline item output deltas", () => {
+  const payload = AiSessionTimelineItemDeltaEventSchema.parse({
+    instanceId: "instance-a",
+    nodeId: "node-a",
+    sessionId: "session-a",
+    providerSessionId: "thread-a",
+    turnId: "turn-a",
+    itemId: "reasoning-a",
+    field: "output",
+    delta: "thinking",
+    generatedAt: now,
+  });
+  assert.equal(AiSessionEventType.TimelineItemDelta, "ai-session.timeline-item-delta");
+  assert.deepEqual(normalizeAiSessionTimelineItemDeltaEvent(compactAiSessionTimelineItemDeltaEvent(payload), "instance-a"), {
+    instanceId: "instance-a",
+    sessionId: "session-a",
+    turnId: "turn-a",
+    itemId: "reasoning-a",
+    field: "output",
+    delta: "thinking",
+    generatedAt: now,
+  });
+  assert.equal(AiSessionDeltaResponseSchema.safeParse({
+    streamId: "stream-a",
+    instanceId: "instance-a",
+    sinceRevision: 1,
+    latestRevision: 1,
+    earliestRetainedRevision: 1,
+    syncRequired: false,
+    events: [{ type: AiSessionEventType.TimelineItemDelta, payload }],
+  }).success, false);
 });
 
 test("event wire envelopes require declared fields while allowing additive fields", () => {

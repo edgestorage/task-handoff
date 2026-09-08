@@ -23,7 +23,7 @@ test("controlled instance emits list deltas broadly but timeline items only for 
   events.connect(client.value);
   client.listeners.message(JSON.stringify({
     type: "subscribe",
-    topics: ["ai-session.snapshot", "ai-session.message-delta", "ai-session.timeline-item"],
+    topics: ["ai-session.snapshot", "ai-session.message-delta", "ai-session.timeline-item", "ai-session.timeline-item-delta"],
     aiSessionTransient: {
       messageDeltas: { allInstances: true, instanceIds: [] },
       timelineAllSessions: false,
@@ -33,13 +33,17 @@ test("controlled instance emits list deltas broadly but timeline items only for 
   events.publish("ai-session.snapshot", { meta: { instanceId: "instance-a" } });
   events.publish("ai-session.message-delta", { instanceId: "instance-a", sessionId: "session-card" });
   events.publish("ai-session.timeline-item", { instanceId: "instance-a", sessionId: "session-open" });
+  events.publish("ai-session.timeline-item-delta", { instanceId: "instance-a", sessionId: "session-open" });
+  events.publish("ai-session.timeline-item-delta", { instanceId: "instance-a", sessionId: "session-closed" });
   events.publish("ai-session.timeline-item", { instanceId: "instance-a", sessionId: "session-closed" });
   assert.deepEqual(client.sent.map((event) => event.type), [
     "ai-session.snapshot",
     "ai-session.message-delta",
     "ai-session.timeline-item",
+    "ai-session.timeline-item-delta",
   ]);
   assert.equal(client.sent[2].payload.sessionId, "session-open");
+  assert.equal(client.sent[3].payload.sessionId, "session-open");
 });
 
 test("controlled instance preserves legacy full-topic subscription behavior", () => {
@@ -49,7 +53,8 @@ test("controlled instance preserves legacy full-topic subscription behavior", ()
   client.listeners.message(JSON.stringify({ type: "subscribe", topics: ["ai.sessions"] }));
   events.publish("ai-session.message-delta", { instanceId: "instance-a", sessionId: "session-a" });
   events.publish("ai-session.timeline-item", { instanceId: "instance-a", sessionId: "session-a" });
-  assert.equal(client.sent.length, 2);
+  events.publish("ai-session.timeline-item-delta", { instanceId: "instance-a", sessionId: "session-a" });
+  assert.equal(client.sent.length, 3);
 });
 
 test("controlled instance sends compact deltas only after explicit projection negotiation", () => {
