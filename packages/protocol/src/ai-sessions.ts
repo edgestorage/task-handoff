@@ -234,11 +234,49 @@ export const AiSessionActionsSchema = z
   })
   .strict();
 
-export const AiSessionLineageSchema = z.object({
-  kind: z.literal("fork"),
-  parentProviderSessionId: z.string().trim().min(1).max(240),
-  throughTurnId: z.string().trim().min(1).max(240).optional(),
-}).strict();
+const AiSessionParentProviderSessionIdSchema = z.string().trim().min(1).max(240);
+
+export const AiSessionLineageSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("fork"),
+    parentProviderSessionId: AiSessionParentProviderSessionIdSchema,
+    throughTurnId: z.string().trim().min(1).max(240).optional(),
+  }).strict(),
+  z.object({
+    kind: z.literal("subagent"),
+    parentProviderSessionId: AiSessionParentProviderSessionIdSchema,
+  }).strict(),
+]);
+
+/** Sanitize lineage read from another version before applying the strict current schema. */
+export function normalizeAiSessionLineage(value: unknown): z.infer<typeof AiSessionLineageSchema> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  if (record.kind === "fork") {
+    const parsed = AiSessionLineageSchema.safeParse({
+      kind: "fork",
+      parentProviderSessionId: record.parentProviderSessionId,
+      ...(typeof record.throughTurnId === "string" ? { throughTurnId: record.throughTurnId } : {}),
+    });
+    return parsed.success ? parsed.data : undefined;
+  }
+  if (record.kind === "subagent") {
+    const parsed = AiSessionLineageSchema.safeParse({
+      kind: "subagent",
+      parentProviderSessionId: record.parentProviderSessionId,
+    });
+    return parsed.success ? parsed.data : undefined;
+  }
+  return undefined;
+}
+
+// Cross-version records sanitize the optional relation before the containing
+// strict Session schema runs. Unknown future kinds therefore flatten only the
+// affected Session instead of invalidating the complete snapshot or history.
+export const AiSessionLineageReadSchema = z.preprocess(
+  normalizeAiSessionLineage,
+  AiSessionLineageSchema.optional(),
+);
 
 export const AiSessionMessageAttachmentSchema = z.union([
   AiSessionMessageAttachmentBaseSchema.extend({
@@ -538,6 +576,12 @@ export const AiSessionCloseResultSchema = z.object({
   creationSource: AiSessionCreationSourceSchema,
 }).strict();
 
+export const AiSessionClearResultSchema = z.object({
+  disposition: z.enum(["cleared", "already-cleared"]),
+  aiSessionId: z.string().trim().min(1).max(120),
+  clearedSessionIds: z.array(z.string().trim().min(1).max(120)),
+}).strict();
+
 export const AiSessionActionErrorSchema = z.object({
   code: z.enum([
     "invalid-request",
@@ -666,7 +710,7 @@ export const AiSessionStatusSchema = z
     appSessionId: z.string().trim().max(120).optional(),
     appId: z.string().trim().max(120).optional(),
     providerSessionId: z.string().trim().max(240).optional(),
-    lineage: AiSessionLineageSchema.optional(),
+    lineage: AiSessionLineageReadSchema,
     providerMeta: z.record(z.string(), z.unknown()).optional(),
     modelSelection: AiSessionModelSelectionSchema.optional(),
     reasoningEffort: AiSessionReasoningEffortSchema.optional(),
@@ -830,6 +874,7 @@ export const AiSessionActionCompatibleResponseSchema = z.union([
 
 export const AI_SESSION_HISTORY_DEFAULT_LIMIT = 50;
 export const AI_SESSION_HISTORY_MAX_LIMIT = 500;
+export const AI_SESSION_HISTORY_MAX_ITEMS = 10_000;
 export const AI_SESSION_ATTACHMENT_RETENTION_DEFAULT_DAYS = 30;
 export const AI_SESSION_ATTACHMENT_RETENTION_MAX_DAYS = 365;
 // Compatibility alias for consumers that used the original fixed default.
@@ -840,7 +885,7 @@ export const AiSessionHistoryItemSchema = z.object({
   agent: AiAgentKindSchema,
   creationSource: AiSessionCreationSourceSchema,
   providerSessionId: z.string().trim().min(1).max(240),
-  lineage: AiSessionLineageSchema.optional(),
+  lineage: AiSessionLineageReadSchema,
   modelSelection: AiSessionModelSelectionSchema.optional(),
   reasoningEffort: AiSessionReasoningEffortSchema.optional(),
   storyId: StoryIdSchema.optional(),
@@ -855,11 +900,11 @@ export const AiSessionHistoryItemSchema = z.object({
 
 export const AiSessionHistoryIndexSchema = z.object({
   schemaVersion: z.literal(1).default(1),
-  items: z.array(AiSessionHistoryItemSchema).max(AI_SESSION_HISTORY_MAX_LIMIT).default([]),
+  items: z.array(AiSessionHistoryItemSchema).max(AI_SESSION_HISTORY_MAX_ITEMS).default([]),
 }).strict();
 
 export const AiSessionHistoryListSchema = z.object({
-  items: z.array(AiSessionHistoryItemSchema).max(AI_SESSION_HISTORY_MAX_LIMIT).default([]),
+  items: z.array(AiSessionHistoryItemSchema).max(AI_SESSION_HISTORY_MAX_ITEMS).default([]),
 }).strict();
 
 export const AiSessionHistoryDetailSchema = z.object({
@@ -1127,6 +1172,93 @@ export const AiSessionDeltaResponseSchema = z
   })
   .strict();
 
+type AiSessionHierarchyConsumer = { subagents?: boolean } | undefined;
+
+function projectSessionLineageForConsumer<T extends { lineage?: z.infer<typeof AiSessionLineageSchema> }>(
+  session: T,
+  consumer: AiSessionHierarchyConsumer,
+): T {
+  if (consumer?.subagents || session.lineage?.kind !== "subagent") return session;
+  const { lineage: _lineage, ...flatSession } = session;
+  return flatSession as T;
+}
+
+/** Compatibility for v0.0.28: preserve child records but flatten their relation. */
+export function projectAiSessionsSnapshotForConsumer(
+  snapshot: AiSessionsSnapshot,
+  consumer: AiSessionHierarchyConsumer,
+): AiSessionsSnapshot {
+  if (consumer?.subagents) return snapshot;
+  return AiSessionsSnapshotSchema.parse({
+    ...snapshot,
+    sessions: snapshot.sessions.map((session) => projectSessionLineageForConsumer(session, consumer)),
+  });
+}
+
+/** Compatibility for v0.0.28 retained snapshot/patch responses. */
+export function projectAiSessionDeltaForConsumer(
+  delta: z.infer<typeof AiSessionDeltaResponseSchema>,
+  consumer: AiSessionHierarchyConsumer,
+): z.infer<typeof AiSessionDeltaResponseSchema> {
+  if (consumer?.subagents) return delta;
+  return AiSessionDeltaResponseSchema.parse({
+    ...delta,
+    events: delta.events.map((event) => {
+      if (event.type === AiSessionEventType.Snapshot) {
+        return {
+          ...event,
+          payload: {
+            ...event.payload,
+            snapshot: projectAiSessionsSnapshotForConsumer(event.payload.snapshot, consumer),
+          },
+        };
+      }
+      if (event.type === AiSessionEventType.Patch) {
+        return {
+          ...event,
+          payload: {
+            ...event.payload,
+            upserted: event.payload.upserted.map((session) => projectSessionLineageForConsumer(session, consumer)),
+          },
+        };
+      }
+      return event;
+    }),
+  });
+}
+
+/** Compatibility for v0.0.28 connection-scoped authority event projection. */
+export function projectAiSessionStreamEventForConsumer(
+  event: AiSessionStreamEvent,
+  consumer: AiSessionHierarchyConsumer,
+): AiSessionStreamEvent {
+  if (consumer?.subagents || event.type === AiSessionEventType.Removed) return event;
+  if (event.type === AiSessionEventType.Snapshot) {
+    return {
+      ...event,
+      payload: {
+        ...event.payload,
+        snapshot: projectAiSessionsSnapshotForConsumer(event.payload.snapshot, consumer),
+      },
+    };
+  }
+  return {
+    ...event,
+    payload: {
+      ...event.payload,
+      upserted: event.payload.upserted.map((session) => projectSessionLineageForConsumer(session, consumer)),
+    },
+  };
+}
+
+/** Compatibility for v0.0.28 history list/detail responses. */
+export function projectAiSessionHistoryItemForConsumer(
+  item: AiSessionHistoryItem,
+  consumer: AiSessionHierarchyConsumer,
+): AiSessionHistoryItem {
+  return AiSessionHistoryItemSchema.parse(projectSessionLineageForConsumer(item, consumer));
+}
+
 export type AiSessionStreamEvent =
   | { type: typeof AiSessionEventType.Snapshot; payload: AiSessionSnapshotEvent }
   | { type: typeof AiSessionEventType.Patch; payload: AiSessionPatchEvent }
@@ -1377,6 +1509,7 @@ export type AiSessionOpenAppInput = z.infer<typeof AiSessionOpenAppInputSchema>;
 export type AiSessionOpenAppResult = z.infer<typeof AiSessionOpenAppResultSchema>;
 export type AiSessionCloseInput = z.infer<typeof AiSessionCloseInputSchema>;
 export type AiSessionCloseResult = z.infer<typeof AiSessionCloseResultSchema>;
+export type AiSessionClearResult = z.infer<typeof AiSessionClearResultSchema>;
 export type AiSessionActionError = z.infer<typeof AiSessionActionErrorSchema>;
 export type AiSessionApprovalInput = z.infer<typeof AiSessionApprovalInputSchema>;
 export type AiSessionQueueEditInput = z.infer<typeof AiSessionQueueEditInputSchema>;
@@ -1422,6 +1555,14 @@ export type AiSessionDeltaResponse = z.infer<typeof AiSessionDeltaResponseSchema
 export type AiSessionSnapshotInput = z.infer<typeof AiSessionSnapshotInputSchema>;
 export type AiSessionRealtimeInput = z.infer<typeof AiSessionRealtimeInputSchema>;
 export type AiSessionReducerInput = z.infer<typeof AiSessionReducerInputSchema>;
+
+export function isAiSessionRetryActivity(
+  item: AiSessionTimelineItem,
+): item is AiSessionTimelineActivity & { activityKind: "retry" | "codexRetry" } {
+  // Compatibility for v0.0.28 and earlier: Codex retry notices used the
+  // provider-specific `codexRetry` kind before retry became provider-neutral.
+  return item.type === "activity" && (item.activityKind === "retry" || item.activityKind === "codexRetry");
+}
 
 /** Merge a partial live item stream into a snapshot while preserving both streams' order constraints. */
 export function mergeAiSessionTimelineItems(

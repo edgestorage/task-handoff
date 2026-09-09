@@ -617,7 +617,11 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
   }
 
   private createClient(options: CodexAppServerClientOptions) {
-    const configured = { ...options, onDynamicToolCall: this.options.onDynamicToolCall };
+    const configured = {
+      ...options,
+      onDynamicToolCall: this.options.onDynamicToolCall,
+      onDiagnostic: this.options.onDiagnostic,
+    };
     return this.options.createClient ? this.options.createClient(configured) : new CodexAppServerClient(configured);
   }
 

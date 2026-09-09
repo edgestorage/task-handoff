@@ -60,6 +60,31 @@ function envelope(type, payload, revision) {
   });
 }
 
+test("controlled instance event projection keeps child sessions flat for unnegotiated consumers", () => {
+  class TestClient extends EventEmitter {
+    constructor() {
+      super();
+      this.OPEN = WebSocket.OPEN;
+      this.readyState = WebSocket.OPEN;
+      this.sent = [];
+    }
+    send(value) { this.sent.push(JSON.parse(String(value))); }
+  }
+  const bus = new WebEventBus();
+  const legacy = new TestClient();
+  const current = new TestClient();
+  bus.connect(legacy);
+  bus.connect(current);
+  current.emit("message", JSON.stringify({ type: "subscribe", aiSessionHierarchy: { subagents: true } }));
+  const child = { ...summary("child"), lineage: { kind: "subagent", parentProviderSessionId: "thread_parent" } };
+
+  bus.publish(AiSessionEventType.Snapshot, { meta: meta(1), snapshot: snapshot([child]) });
+
+  assert.equal(legacy.sent[0].payload.snapshot.sessions.length, 1);
+  assert.equal(legacy.sent[0].payload.snapshot.sessions[0].lineage, undefined);
+  assert.equal(current.sent[0].payload.snapshot.sessions[0].lineage.kind, "subagent");
+});
+
 test("summary lastMessageItemId settles retained message delta without embedding turns", () => {
   class TestClient extends EventEmitter {
     constructor() {
@@ -144,6 +169,55 @@ test("node agent negotiates compact output without changing legacy forwarding", 
   forwarder.stop();
 });
 
+test("node agent projects AI Session hierarchy for each control-plane output", () => {
+  class TestSocket extends EventEmitter {
+    constructor(readyState = WebSocket.OPEN) {
+      super();
+      this.readyState = readyState;
+      this.bufferedAmount = 0;
+      this.sent = [];
+    }
+    send(value) { this.sent.push(JSON.parse(String(value))); }
+    close() {}
+  }
+
+  const input = new TestSocket(WebSocket.CONNECTING);
+  const forwarder = new NodeAgentInstanceEventForwarder(
+    { listInstances: () => [{ id: "inst_authority", target: { api: "http://127.0.0.1:19001" } }] },
+    undefined,
+    {
+      createSocket: () => input,
+      setIntervalFn: () => ({ kind: "interval" }),
+      clearIntervalFn: () => undefined,
+    },
+  );
+  const legacy = new TestSocket();
+  const current = new TestSocket();
+  forwarder.addOutput(legacy, { expectsTransientSubscription: true });
+  forwarder.addOutput(current, { expectsTransientSubscription: true });
+  assert.equal(forwarder.setOutputSubscription(legacy, {}), true);
+  assert.equal(forwarder.setOutputSubscription(current, {}, undefined, { subagents: true }), true);
+  input.readyState = WebSocket.OPEN;
+  input.emit("open");
+
+  const parent = summary("parent");
+  const child = {
+    ...summary("child"),
+    lineage: { kind: "subagent", parentProviderSessionId: parent.providerSessionId },
+  };
+  input.emit("message", envelope(AiSessionEventType.Snapshot, {
+    meta: meta(1),
+    snapshot: snapshot([parent, child]),
+  }, 1));
+
+  const legacySnapshot = legacy.sent.find((message) => message.type === "node-agent.event.forwarded").event.payload.snapshot;
+  const currentSnapshot = current.sent.find((message) => message.type === "node-agent.event.forwarded").event.payload.snapshot;
+  assert.deepEqual(legacySnapshot.sessions.map((session) => session.id), ["parent", "child"]);
+  assert.equal(legacySnapshot.sessions[1].lineage, undefined);
+  assert.equal(currentSnapshot.sessions[1].lineage.kind, "subagent");
+  forwarder.stop();
+});
+
 test("AI session authority emits one initial snapshot and routine minimal deltas", () => {
   const initial = snapshot([summary("one"), summary("two")]);
   assert.equal(projectAiSessionAuthorityChange(undefined, initial).kind, "snapshot");
@@ -204,6 +278,7 @@ test("node agent collapses backpressured AI authority events into the latest sna
   output.bufferedAmount = 300 * 1024;
   forwarder.addOutput(output, { expectsTransientSubscription: true });
   assert.equal(new URL(connectedUrl).searchParams.get("aiSessionAuthoritySnapshot"), "1");
+  assert.equal(new URL(connectedUrl).searchParams.get("aiSessionHierarchy"), "subagents");
   input.readyState = WebSocket.OPEN;
   input.emit("open");
 

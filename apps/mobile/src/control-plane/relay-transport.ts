@@ -69,7 +69,7 @@ export class RelayControlPlaneTransport implements MobileControlPlaneTransport {
       for (const topic of subscriber.topics) topics.add(topic);
     }
     const aiSessionTransient = wildcard ? undefined : aggregateTransientDemand(this.events, topics);
-    channel.send({ type: 'event-subscribe', body: { eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION, topics: wildcard ? undefined : [...topics].sort(), ...(aiSessionTransient ? { aiSessionTransient } : {}) } });
+    channel.send({ type: 'event-subscribe', body: { eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION, aiSessionHierarchy: { subagents: true }, topics: wildcard ? undefined : [...topics].sort(), ...(aiSessionTransient ? { aiSessionTransient } : {}) } });
   }
 
   connectAppSessionTty(instanceId: string, sessionId: string, handlers: MobileAppSessionTtyHandlers): MobileAppSessionTtyConnection {

@@ -218,9 +218,13 @@ export class CodexAppServerSessionProjector {
         approval: sessionStatus === "waiting" && lifecycle.phase === "approval",
         fork: this.options.threadForkSupported(),
       },
-      lineage: context.lineage || existing?.lineage || (typeof thread.forkedFromId === "string" && thread.forkedFromId
-        ? { kind: "fork", parentProviderSessionId: thread.forkedFromId }
-        : undefined),
+      lineage: context.lineage || existing?.lineage || (
+        typeof thread.parentThreadId === "string" && thread.parentThreadId
+          ? { kind: "subagent", parentProviderSessionId: thread.parentThreadId }
+          : typeof thread.forkedFromId === "string" && thread.forkedFromId
+            ? { kind: "fork", parentProviderSessionId: thread.forkedFromId }
+            : undefined
+      ),
       title: typeof thread.name === "string" ? thread.name : undefined,
       cwd: typeof thread.cwd === "string" ? thread.cwd : undefined,
       activeTurnId: history.activeTurnId,

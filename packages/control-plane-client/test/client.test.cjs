@@ -628,6 +628,7 @@ test("shared auth client owns Web and mobile authentication contracts", async ()
         });
       }
       if (path === "/api/auth/mobile/logout") return schema.parse({ data: { ok: true } });
+      if (path === "/api/auth/mobile/renew") return schema.parse({ data: { expiresAt: "2026-09-12T00:00:00.000Z" } });
       if (path === "/api/auth/password") {
         return schema.parse({ data: { user: {
           id: "user-1",
@@ -681,6 +682,7 @@ test("shared auth client owns Web and mobile authentication contracts", async ()
     device: { id: "device-0001", name: "Phone", platform: "ios" },
   });
   await api.auth.logoutMobile();
+  await api.auth.renewMobileSession();
 
   assert.equal(requests[0].path, "/api/auth/session");
   assert.equal(requests[1].path, "/api/auth/password");
@@ -698,6 +700,8 @@ test("shared auth client owns Web and mobile authentication contracts", async ()
   });
   assert.equal(requests[3].path, "/api/auth/mobile/logout");
   assert.equal(requests[3].init.method, "POST");
+  assert.equal(requests[4].path, "/api/auth/mobile/renew");
+  assert.equal(requests[4].init.method, "POST");
 });
 
 test("shared client owns recovery, desktop lifecycle, and command routes used by Web", async () => {
@@ -718,8 +722,8 @@ test("shared client owns recovery, desktop lifecycle, and command routes used by
   await api.aiSessions.close("instance/1", "session 1", "request-close");
   await api.aiSessions.executeCommand("instance/1", "session 1", { command: "rename", argument: "Renamed" });
   assert.deepEqual(requests.map((request) => request.path), [
-    "/api/ai-sessions?refresh=true",
-    "/api/ai-sessions?refresh=true&instanceId=instance%2F1",
+    "/api/ai-sessions?refresh=true&hierarchy=subagents",
+    "/api/ai-sessions?refresh=true&hierarchy=subagents&instanceId=instance%2F1",
     "/api/controlled-instances/instance%2F1/ai-sessions/session%201/open-app",
     "/api/controlled-instances/instance%2F1/ai-sessions/session%201/close",
     "/api/controlled-instances/instance%2F1/ai-sessions/session%201/commands",

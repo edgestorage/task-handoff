@@ -2261,6 +2261,9 @@ test("control plane exposes a stable signed identity and authorizes revocable mo
   assert.equal(mobileSession.statusCode, 200, mobileSession.body);
   assert.equal(mobileSession.json().data.authenticated, true);
   assert.equal(mobileSession.json().data.user.primaryUsername, "admin");
+  const renewedMobileSession = await app.inject({ method: "POST", url: "/api/auth/mobile/renew", headers: { authorization: `Bearer ${mobileToken}` } });
+  assert.equal(renewedMobileSession.statusCode, 200, renewedMobileSession.body);
+  assert.ok(Date.parse(renewedMobileSession.json().data.expiresAt) > Date.now());
   const mobileTokenAsCookie = await app.inject({
     method: "GET",
     url: "/api/projects",
@@ -2288,6 +2291,8 @@ test("control plane exposes a stable signed identity and authorizes revocable mo
 
   const webLogin = await app.inject({ method: "POST", url: "/api/auth/login", payload: { username: "admin", password: "password123" } });
   const cookie = webLogin.headers["set-cookie"];
+  const webRenewal = await app.inject({ method: "POST", url: "/api/auth/mobile/renew", headers: { cookie } });
+  assert.equal(webRenewal.statusCode, 401);
   const webToken = cookie.match(/task_handoff_cp_session=([^;]+)/)[1];
   const webTokenAsBearer = await app.inject({ method: "GET", url: "/api/projects", headers: { authorization: `Bearer ${webToken}` } });
   assert.equal(webTokenAsBearer.statusCode, 401);

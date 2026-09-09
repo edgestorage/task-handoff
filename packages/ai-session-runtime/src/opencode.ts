@@ -15,8 +15,21 @@ import type { AiSessionModelSelection, AiSessionReasoningEffort } from "@task-ha
 import type { AiSessionDiscoveryContext, AiSessionDiscoveryProvider } from "./ai-session-discovery";
 import type { AiSessionRegistry } from "./ai-session-registry";
 import { OpenCodeClient, type OpenCodeConnection, type OpenCodePermissionRule, type OpenCodePromptPart } from "./opencode/client";
-import { openCodePartDelta, projectOpenCodePart, projectOpenCodeSession, type OpenCodeProjection } from "./opencode/projector";
-import type { OpenCodeGlobalEvent, OpenCodeMessage, OpenCodeSession } from "./opencode/wire";
+import {
+  openCodeErrorText,
+  openCodePartDelta,
+  openCodeRetryActivity,
+  projectOpenCodePart,
+  projectOpenCodeSession,
+  type OpenCodeProjection,
+} from "./opencode/projector";
+import {
+  OpenCodeSessionErrorEventPropertiesSchema,
+  OpenCodeSessionStatusEventPropertiesSchema,
+  type OpenCodeGlobalEvent,
+  type OpenCodeMessage,
+  type OpenCodeSession,
+} from "./opencode/wire";
 
 export type OpenCodeSessionBridgeOptions = {
   connection: () => OpenCodeConnection | Promise<OpenCodeConnection>;
@@ -25,6 +38,10 @@ export type OpenCodeSessionBridgeOptions = {
   onTimelineItemDelta?: (event: { sessionId: string; providerSessionId: string; turnId: string; itemId: string; field: "output"; delta: string }) => void;
   onEventSourceClose?: () => void;
   onDiagnostic?: (event: Record<string, unknown>) => void;
+  onProviderLifecycleTransition?: (event: {
+    session: AiSessionStatus;
+    disposition: "closed" | "cleared";
+  }) => void | Promise<void>;
   reconnectBaseMs?: number;
   reconnectMaxMs?: number;
   resolveModelSelection?: (selection: AiSessionModelSelection) => { providerID: string; modelID: string } | undefined;
@@ -40,6 +57,7 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
   private readonly lineageBySession = new Map<string, AiSessionLineage>();
   private readonly pendingSettingsBySession = new Map<string, { modelSelection: AiSessionModelSelection; reasoningEffort?: AiSessionReasoningEffort }>();
   private readonly pendingPartDeltas = new Map<string, Map<string, { partID: string; messageID: string; field: string; delta: string }>>();
+  private readonly retryWarningsBySession = new Map<string, { turnId: string; message: string }>();
   private readonly timelineListeners = new Set<AiSessionProviderTimelineItemListener>();
   private readonly reconcileTimers = new Map<string, NodeJS.Timeout>();
   private eventAbort?: AbortController;
@@ -47,18 +65,12 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
   private discoveryRefresh?: Promise<void>;
   private reconnectAttempt = 0;
   private closed = false;
-  private readonly warnedVersions = new Set<string>();
-
   constructor(private readonly registry: AiSessionRegistry, private readonly options: OpenCodeSessionBridgeOptions) {
     this.client = new OpenCodeClient(options.connection);
   }
 
   async ensureReady() {
-    const health = await this.client.health();
-    if (!VERIFIED_OPENCODE_VERSIONS.has(health.version) && !this.warnedVersions.has(health.version)) {
-      this.warnedVersions.add(health.version);
-      this.options.onDiagnostic?.({ code: "OPENCODE_VERSION_UNVERIFIED", version: health.version });
-    }
+    await this.client.health();
     this.startEventStream();
   }
 
@@ -397,11 +409,11 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
       || (event.payload.type.startsWith("session.") ? stringValue(info.id) : "");
     if (!sessionID) return;
     if (event.payload.type === "session.deleted") {
-      this.discardSession(sessionID);
+      await this.discardSession(sessionID, "cleared");
       return;
     }
     if (event.payload.type === "session.updated" && sessionInfoArchived(properties)) {
-      this.discardSession(sessionID);
+      await this.discardSession(sessionID, "closed");
       return;
     }
     const directory = event.directory || this.directoryBySession.get(sessionID);
@@ -414,6 +426,47 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
       return;
     }
     this.directoryBySession.set(sessionID, directory);
+    const projectedSession = this.registry.getByProviderSessionId(this.agent, sessionID);
+    if (event.payload.type === "session.status" && projectedSession) {
+      const parsed = OpenCodeSessionStatusEventPropertiesSchema.safeParse(properties);
+      const status = parsed.success ? parsed.data.status : undefined;
+      if (status?.type === "retry") {
+        const turnId = projectedSession.activeTurnId;
+        if (turnId) {
+          this.retryWarningsBySession.set(sessionID, { turnId, message: status.message });
+          this.publishTimelineItem(projectedSession.id, sessionID, openCodeRetryActivity(turnId, status.message));
+          this.registry.applyRealtimeEvent(projectedSession.id, {
+            kind: "lifecycle",
+            activeTurnId: turnId,
+            status: "running",
+            phase: "thinking",
+            source: "realtime",
+          });
+        }
+      } else if (status?.type === "busy" || status?.type === "idle") {
+        this.clearRetryWarning(projectedSession.id, sessionID);
+      }
+    }
+    if (event.payload.type === "session.error" && projectedSession) {
+      const parsed = OpenCodeSessionErrorEventPropertiesSchema.safeParse(properties);
+      const error = parsed.success ? openCodeErrorText(parsed.data.error) : undefined;
+      if (error) {
+        const turnId = projectedSession.activeTurnId;
+        this.clearRetryWarning(projectedSession.id, sessionID);
+        this.registry.applyRealtimeEvent(projectedSession.id, turnId ? {
+          kind: "turn-completed",
+          activeTurnId: turnId,
+          providerTurnId: turnId,
+          status: "failed",
+          error,
+          source: "realtime",
+        } : {
+          kind: "session-error",
+          error,
+          source: "realtime",
+        });
+      }
+    }
     if (event.payload.type === "message.updated") {
       const messageID = stringValue(info.id);
       const role = stringValue(info.role);
@@ -450,7 +503,6 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
       const messageID = stringValue(part.messageID);
       const projection = this.projectionBySession.get(sessionID);
       const message = messageID ? projection?.messageById.get(messageID) : undefined;
-      const projectedSession = this.registry.getByProviderSessionId(this.agent, sessionID);
       if (message?.role === "assistant" && projectedSession) {
         const partID = stringValue(part.id);
         const partType = stringValue(part.type);
@@ -483,6 +535,13 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
     for (const listener of this.timelineListeners) listener({ sessionId, providerSessionId, item });
   }
 
+  private clearRetryWarning(sessionId: string, providerSessionId: string) {
+    const warning = this.retryWarningsBySession.get(providerSessionId);
+    if (!warning) return;
+    this.retryWarningsBySession.delete(providerSessionId);
+    this.publishTimelineItem(sessionId, providerSessionId, openCodeRetryActivity(warning.turnId, warning.message, "completed"));
+  }
+
   private publishPartDelta(providerSessionId: string, event: { partID: string; messageID: string; field: string; delta: string }) {
     const projection = this.projectionBySession.get(providerSessionId);
     const delta = openCodePartDelta(event, projection?.partById || new Map());
@@ -502,15 +561,17 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
     this.lineageBySession.delete(providerSessionId);
     this.pendingSettingsBySession.delete(providerSessionId);
     this.pendingPartDeltas.delete(providerSessionId);
+    this.retryWarningsBySession.delete(providerSessionId);
     const timer = this.reconcileTimers.get(providerSessionId);
     if (timer) clearTimeout(timer);
     this.reconcileTimers.delete(providerSessionId);
   }
 
-  private discardSession(providerSessionId: string) {
+  private async discardSession(providerSessionId: string, disposition?: "closed" | "cleared") {
     const projected = this.registry.getByProviderSessionId(this.agent, providerSessionId);
     if (projected) this.registry.discard(projected.id);
     this.forget(providerSessionId);
+    if (projected && disposition) await this.options.onProviderLifecycleTransition?.({ session: projected, disposition });
   }
 
   private async reconcileMissingSessions(activeSessionIds: Set<string>, roots: string[]) {
@@ -520,13 +581,13 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
       try {
         const providerSession = await this.client.getSession(session.providerSessionId, session.cwd);
         if (providerSession.time.archived || !withinRoots(providerSession.directory, roots)) {
-          this.discardSession(session.providerSessionId);
+          await this.discardSession(session.providerSessionId, "closed");
           continue;
         }
         await this.reconcile(providerSession.id, providerSession.directory, providerSession, session.creationSource);
       } catch (error) {
         if (isNotFound(error)) {
-          this.discardSession(session.providerSessionId);
+          await this.discardSession(session.providerSessionId, "cleared");
           continue;
         }
         this.options.onDiagnostic?.({ code: "OPENCODE_SESSION_CONVERGENCE_FAILED", providerSessionId: session.providerSessionId, error: errorText(error) });
@@ -546,8 +607,6 @@ function openCodePermissionRules(mode?: import("@task-handoff/protocol/ai-sessio
   ];
   return [{ permission: "*", pattern: "*", action: "ask" }];
 }
-
-const VERIFIED_OPENCODE_VERSIONS = new Set(["1.18.20", "1.18.21"]);
 
 async function promptParts(cwd: string, input: AiSessionSendInput): Promise<OpenCodePromptPart[]> {
   const parts: OpenCodePromptPart[] = [{ type: "text", text: input.message }];

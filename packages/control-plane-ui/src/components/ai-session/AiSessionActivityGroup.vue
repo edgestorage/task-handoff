@@ -72,15 +72,18 @@ import { useI18n } from "vue-i18n";
 import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
 import {
   Bot,
+  BookOpen,
   Brain,
   ChevronRight,
   CircleHelp,
   ClipboardCheck,
   Clock3,
   FilePenLine,
+  FileSearch,
   Image as ImageIcon,
   ListTodo,
   Minimize2,
+  Download,
   Plug,
   Search,
   Sparkles,
@@ -118,6 +121,13 @@ const activityIcons: Record<string, Component> = {
   enteredReviewMode: ClipboardCheck,
   exitedReviewMode: ClipboardCheck,
   contextCompaction: Minimize2,
+  fileRead: BookOpen,
+  fileSearch: FileSearch,
+  webFetch: Download,
+  todoUpdate: ListTodo,
+  userQuestion: CircleHelp,
+  skillLoad: Brain,
+  exitedPlanMode: ClipboardCheck,
 };
 
 const props = withDefaults(defineProps<{

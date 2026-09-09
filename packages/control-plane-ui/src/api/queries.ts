@@ -584,7 +584,10 @@ export function useInstanceBoardPayloadQuery() {
   return useQuery(instanceBoardQueryOptions());
 }
 
-export function useInstanceDirectoryQuery(enabled: MaybeRefOrGetter<boolean> = true) {
+export function useInstanceDirectoryQuery(
+  enabled: MaybeRefOrGetter<boolean> = true,
+  eventStreamAuthoritative: MaybeRefOrGetter<boolean> = false,
+) {
   return useQuery({
     queryKey: controlPlaneQueryKeys.instanceDirectory,
     queryFn: async ({ signal }) => {
@@ -597,7 +600,15 @@ export function useInstanceDirectoryQuery(enabled: MaybeRefOrGetter<boolean> = t
       }
     },
     enabled: computed(() => toValue(enabled)),
-    refetchInterval: 15_000,
+    // Lifecycle events own normal convergence. The event connection recovers
+    // this authoritative snapshot on every socket generation. Compatibility
+    // for v0.0.28 and older: retain polling until the stream proves that it
+    // supports the authoritative session-stream handshake.
+    staleTime: Infinity,
+    gcTime: Infinity,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    refetchInterval: computed(() => toValue(eventStreamAuthoritative) ? false : 15_000),
     retry: false,
   });
 }

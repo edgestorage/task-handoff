@@ -3,7 +3,7 @@ import fs from "node:fs";
 import crypto from "node:crypto";
 import { Readable, Transform } from "node:stream";
 import { z } from "zod";
-import { AI_SESSION_ATTACHMENT_DRAFT_STREAM_CHUNK_BYTES, AI_SESSION_ATTACHMENT_UPLOAD_BODY_LIMIT, AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES, AiSessionApprovalInputSchema, AiSessionAttachmentDraftSchema, AiSessionAttachmentDraftStreamCreateInputSchema, AiSessionAttachmentDraftStreamOffsetSchema, AiSessionAttachmentDraftUploadQuerySchema, AiSessionCloseInputSchema, AiSessionCommandInputSchema, AiSessionCreateRefInputSchema, AiSessionForkInputSchema, AiSessionMentionFileSearchInputSchema, AiSessionMessageRefInputSchema, AiSessionModelSelectionInputSchema, AiSessionOpenAppInputSchema, AiSessionQueueEditInputSchema, AiSessionQueueReorderInputSchema, AiSessionReasoningEffortInputSchema, AiSessionUnreadEventType, isAiSessionInlineImageMime } from "@task-handoff/protocol/ai-sessions";
+import { AI_SESSION_ATTACHMENT_DRAFT_STREAM_CHUNK_BYTES, AI_SESSION_ATTACHMENT_UPLOAD_BODY_LIMIT, AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES, AiSessionApprovalInputSchema, AiSessionAttachmentDraftSchema, AiSessionAttachmentDraftStreamCreateInputSchema, AiSessionAttachmentDraftStreamOffsetSchema, AiSessionAttachmentDraftUploadQuerySchema, AiSessionCloseInputSchema, AiSessionCommandInputSchema, AiSessionCreateRefInputSchema, AiSessionForkInputSchema, AiSessionMentionFileSearchInputSchema, AiSessionMessageRefInputSchema, AiSessionModelSelectionInputSchema, AiSessionOpenAppInputSchema, AiSessionQueueEditInputSchema, AiSessionQueueReorderInputSchema, AiSessionReasoningEffortInputSchema, AiSessionUnreadEventType, isAiSessionInlineImageMime, projectAiSessionDeltaForConsumer, projectAiSessionHistoryItemForConsumer, projectAiSessionsSnapshotForConsumer } from "@task-handoff/protocol/ai-sessions";
 import type { ControlPlaneService } from "../application/service.ts";
 import type { ControlPlaneEventBus } from "../events/bus.ts";
 import type { ControlPlaneAiSessionAggregator } from "../sessions/ai-session-aggregator.ts";
@@ -188,14 +188,16 @@ export function registerSessionRoutes({
     const entry = view.instances.find((item) => item.instanceId === params.id);
     return { data: entry?.appSessions || { runningCount: 0, problemCount: 0, sessions: [], updatedAt: new Date().toISOString() } };
   });
-  app.get<{ Querystring: { agents?: string } }>("/api/controlled-instances/:id/ai-sessions/history", async (request) => {
+  app.get<{ Querystring: { agents?: string; hierarchy?: string } }>("/api/controlled-instances/:id/ai-sessions/history", async (request) => {
     const params = IdParamsSchema.parse(request.params);
     const agents = request.query.agents?.split(",").map((agent) => agent.trim()).filter(Boolean);
-    return { data: await service.listAiSessionHistory(params.id, agents) };
+    const history = await service.listAiSessionHistory(params.id, agents);
+    return { data: { ...history, items: history.items.map((item) => projectAiSessionHistoryItemForConsumer(item, { subagents: request.query.hierarchy === "subagents" })) } };
   });
-  app.get("/api/controlled-instances/:id/ai-sessions/history/:sessionId", async (request) => {
+  app.get<{ Querystring: { hierarchy?: string } }>("/api/controlled-instances/:id/ai-sessions/history/:sessionId", async (request) => {
     const params = InstanceSessionParamsSchema.parse(request.params);
-    return { data: await service.getAiSessionHistoryDetail(params.id, params.sessionId) };
+    const detail = await service.getAiSessionHistoryDetail(params.id, params.sessionId);
+    return { data: { ...detail, item: projectAiSessionHistoryItemForConsumer(detail.item, { subagents: request.query.hierarchy === "subagents" }) } };
   });
   app.get("/api/controlled-instances/:id/ai-sessions/:sessionId", async (request) => {
     const params = InstanceSessionParamsSchema.parse(request.params);
@@ -599,7 +601,8 @@ export function registerSessionRoutes({
   });
 
   app.get("/api/ai-sessions", async (request, reply) => {
-    const query = request.query as { refresh?: string; sinceRevision?: string; instanceId?: string; streamId?: string };
+    const query = request.query as { refresh?: string; sinceRevision?: string; instanceId?: string; streamId?: string; hierarchy?: string };
+    const hierarchy = { subagents: query.hierarchy === "subagents" };
     if (query.instanceId) await assertRequestInstanceVisible(service, request, query.instanceId);
     if (query.sinceRevision !== undefined) {
       const sinceRevision = Number(query.sinceRevision);
@@ -608,7 +611,7 @@ export function registerSessionRoutes({
       }
       try {
         if (!query.streamId) return reply.code(400).send({ error: "stream_id_required" });
-        return { data: await aiSessionAggregator.delta({ instanceId: query.instanceId, streamId: query.streamId, sinceRevision }) };
+        return { data: projectAiSessionDeltaForConsumer(await aiSessionAggregator.delta({ instanceId: query.instanceId, streamId: query.streamId, sinceRevision }), hierarchy) };
       } catch (error) {
         if ((error as Error).message === "AI_SESSION_DELTA_INSTANCE_ID_REQUIRED") {
           return reply.code(400).send({ error: "instance_id_required" });
@@ -628,7 +631,7 @@ export function registerSessionRoutes({
     for (const entry of view.instances) aiSessionUnread.reconcile(entry.instanceId, entry.aiSessions);
     return { data: {
       ...view,
-      instances: view.instances.map((entry) => ({ ...entry, aiSessions: aiSessionUnread.decorate(entry.instanceId, entry.aiSessions) })),
+      instances: view.instances.map((entry) => ({ ...entry, aiSessions: projectAiSessionsSnapshotForConsumer(aiSessionUnread.decorate(entry.instanceId, entry.aiSessions), hierarchy) })),
     } };
   });
 

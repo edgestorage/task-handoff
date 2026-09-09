@@ -87,6 +87,7 @@ export function useControlPlaneEvents(input: {
   nodes?: {
     joined: (event: NodeJoinedEvent) => void;
   };
+  onAuthoritativeState?: (authoritative: boolean) => void;
 }) {
   const queryClient = useQueryClient();
   const pendingInvalidationKeys = new Map<string, readonly unknown[]>();
@@ -137,6 +138,7 @@ export function useControlPlaneEvents(input: {
     current.addEventListener("message", (event) => handleMessage(String(event.data)));
     current.addEventListener("close", () => {
       if (socket !== current) return;
+      input.onAuthoritativeState?.(false);
       stopKeepalive();
       stopAuthoritativeRecovery();
       socket = undefined;
@@ -161,6 +163,7 @@ export function useControlPlaneEvents(input: {
       v: 1,
       type: "subscribe",
       eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION,
+      aiSessionHierarchy: { subagents: true },
       topics: ["*"],
       ...(instanceId ? { instanceIds: [instanceId] } : {}),
       ...(input.resourceMetrics ? { metricInstanceIds: toValue(input.resourceMetricInstanceIds || []) } : {}),
@@ -205,6 +208,7 @@ export function useControlPlaneEvents(input: {
         // Transport open is not recovery: reset only after the authoritative
         // session-stream handshake succeeds.
         reconnectBackoff.reset();
+        input.onAuthoritativeState?.(true);
         for (const descriptor of hello.streams.filter((stream) => !instanceId || stream.instanceId === instanceId)) {
           if (descriptor.topic === "app.sessions") void input.appSessions.recoverDescriptor(descriptor);
           if (descriptor.topic === "ai.sessions") void input.aiSessions.recoverDescriptor(descriptor);
@@ -386,6 +390,7 @@ export function useControlPlaneEvents(input: {
       return;
     }
     closing = true;
+    input.onAuthoritativeState?.(false);
     stopAuthoritativeRecovery();
     socket?.close();
     socket = undefined;
@@ -394,6 +399,7 @@ export function useControlPlaneEvents(input: {
   watch(() => toValue(input.instanceId || ""), () => {
     if (!socket) return;
     closing = true;
+    input.onAuthoritativeState?.(false);
     stopAuthoritativeRecovery();
     stopKeepalive();
     socket.close();
@@ -416,6 +422,7 @@ export function useControlPlaneEvents(input: {
   });
   onBeforeUnmount(() => {
     closing = true;
+    input.onAuthoritativeState?.(false);
     reconnectBackoff.reset();
     stopAuthoritativeRecovery();
     socket?.close();

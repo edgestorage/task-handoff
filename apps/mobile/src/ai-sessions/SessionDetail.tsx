@@ -4,7 +4,7 @@ import { ScrollViewMarker } from 'react-native-screens/experimental';
 import * as Clipboard from 'expo-clipboard';
 import { Check, ChevronDown, ChevronRight, Copy, Sparkles, Split, Timer } from 'lucide-react-native';
 import { aiSessionElapsedSeconds, aiSessionStatusGroup, isAiSessionApprovalPending, type ControlPlaneAiSessionSummary } from '@task-handoff/control-plane-client';
-import type { AiSessionTimelineActivity, AiSessionTimelineItem, AiSessionTurn } from '@task-handoff/protocol/ai-sessions';
+import { isAiSessionRetryActivity, type AiSessionTimelineActivity, type AiSessionTimelineItem, type AiSessionTurn } from '@task-handoff/protocol/ai-sessions';
 
 import { SafeMarkdown } from '../components/SafeMarkdown';
 import { SystemIcon } from '../components/SystemIcon';
@@ -424,7 +424,7 @@ function turnTimelineDetailItems(turn: DetailTurn, timeline: readonly AiSessionT
   for (const item of timeline) {
     if (!identities.has(item.turnId)) continue;
     if (item.type === 'activity') {
-      if (item.activityKind === 'codexRetry') {
+      if (isAiSessionRetryActivity(item)) {
         if (item.status === 'waiting' && item.summary) items.push({ id: `timeline:${item.id}`, role: 'warning', text: item.summary });
         continue;
       }

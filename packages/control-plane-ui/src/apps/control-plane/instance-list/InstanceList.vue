@@ -394,12 +394,13 @@ function openNewInstanceFromTemporaryList() {
 .list-head span {
   color: var(--text-muted);
   font-size: 12px;
-  font-weight: 750;
+  font-weight: 500;
 }
 
 .list-head strong {
   color: var(--text-strong);
   font-size: 18px;
+  font-weight: 600;
 }
 
 .icon-button {
@@ -447,7 +448,7 @@ function openNewInstanceFromTemporaryList() {
   writing-mode: vertical-rl;
   color: var(--text-muted);
   font-size: 11px;
-  font-weight: 750;
+  font-weight: 500;
   letter-spacing: 0;
   text-transform: uppercase;
 }
@@ -455,6 +456,7 @@ function openNewInstanceFromTemporaryList() {
 .instances-expand-rail strong {
   color: var(--text-strong);
   font-size: 13px;
+  font-weight: 600;
 }
 
 :global(.instances-temporary-popover) {
@@ -519,7 +521,7 @@ function openNewInstanceFromTemporaryList() {
   gap: 4px;
   color: var(--text-muted);
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 400;
 }
 
 .instance-group-status svg {
@@ -667,7 +669,7 @@ function openNewInstanceFromTemporaryList() {
   cursor: pointer;
   font: inherit;
   font-size: 13px;
-  font-weight: 750;
+  font-weight: 500;
   margin: 3px 0 2px;
   padding: 0 4px 0 0;
   text-align: left;
@@ -718,7 +720,7 @@ function openNewInstanceFromTemporaryList() {
   grid-column: 5;
   color: var(--text-muted);
   font-size: 11px;
-  font-weight: 750;
+  font-weight: 500;
 }
 
 .instance-action-submenu {
@@ -841,7 +843,7 @@ function openNewInstanceFromTemporaryList() {
   white-space: nowrap;
   color: var(--instance-list-title);
   font-size: 13px;
-  font-weight: 750;
+  font-weight: 500;
 }
 
 .instance-row-main small,

@@ -23,9 +23,11 @@ import {
   compactAiSessionTimelineItemDeltaEvent,
   normalizeAiSessionMessageDeltaEvent,
   normalizeAiSessionTimelineItemDeltaEvent,
+  projectAiSessionStreamEventForConsumer,
   type AiSessionStreamEvent,
   type AiSessionsState,
 } from "@task-handoff/protocol/ai-sessions";
+import { AiSessionHierarchyCapabilitiesSchema, type AiSessionHierarchyCapabilities } from "@task-handoff/protocol/ai-session-provider-capabilities";
 import {
   AppSessionEventTopic,
   AppSessionEventType,
@@ -91,6 +93,7 @@ export class NodeAgentInstanceEventForwarder {
   private readonly outputs = new Set<WebSocket>();
   private readonly outputSubscriptions = new Map<WebSocket, AiSessionTransientSubscription | undefined>();
   private readonly outputEnvelopeVersions = new Map<WebSocket, 1 | typeof COMPACT_EVENT_ENVELOPE_VERSION>();
+  private readonly outputHierarchy = new Map<WebSocket, AiSessionHierarchyCapabilities>();
   private readonly outputDiagnostics = new Map<WebSocket, EventOutputDiagnostic>();
   private readonly aiSessionProjectionByInstance = new Map<string, AiSessionsState>();
   private readonly appSessionProjectionByInstance = new Map<string, AppSessionsState>();
@@ -152,6 +155,7 @@ export class NodeAgentInstanceEventForwarder {
     this.outputs.clear();
     this.outputSubscriptions.clear();
     this.outputEnvelopeVersions.clear();
+    this.outputHierarchy.clear();
     this.outputDiagnostics.clear();
     for (const timeout of this.pendingAiSessionAuthorityFlush.values()) this.clearTimeoutFn(timeout);
     this.pendingAiSessionAuthorityFlush.clear();
@@ -175,6 +179,8 @@ export class NodeAgentInstanceEventForwarder {
     // Compatibility for v0.0.21: no subscription update means the older control-plane expects the full stream.
     this.outputSubscriptions.set(socket, options.expectsTransientSubscription ? AiSessionTransientSubscriptionSchema.parse({}) : undefined);
     this.outputEnvelopeVersions.set(socket, 1);
+    // Compatibility for v0.0.28: an unnegotiated control-plane consumes a flat Session stream.
+    this.outputHierarchy.set(socket, AiSessionHierarchyCapabilitiesSchema.parse(undefined));
     let legacyFallback: ReturnType<typeof setTimeout> | undefined;
     if (!options.expectsTransientSubscription && options.legacyFallbackMs !== undefined) {
       legacyFallback = this.setTimeoutFn(() => {
@@ -192,6 +198,7 @@ export class NodeAgentInstanceEventForwarder {
       this.outputs.delete(socket);
       this.outputSubscriptions.delete(socket);
       this.outputEnvelopeVersions.delete(socket);
+      this.outputHierarchy.delete(socket);
       this.outputDiagnostics.delete(socket);
       this.sessionAuthorityReplayedOutputs.delete(socket);
       const pendingFlush = this.pendingAiSessionAuthorityFlush.get(socket);
@@ -234,12 +241,14 @@ export class NodeAgentInstanceEventForwarder {
     return remove;
   }
 
-  setOutputSubscription(socket: WebSocket, input: unknown, eventEnvelopeVersion?: unknown) {
+  setOutputSubscription(socket: WebSocket, input: unknown, eventEnvelopeVersion?: unknown, aiSessionHierarchy?: unknown) {
     if (!this.outputs.has(socket)) return false;
     const parsed = AiSessionTransientSubscriptionSchema.safeParse(input);
-    if (!parsed.success) return false;
+    const parsedHierarchy = AiSessionHierarchyCapabilitiesSchema.safeParse(aiSessionHierarchy);
+    if (!parsed.success || !parsedHierarchy.success) return false;
     this.outputSubscriptions.set(socket, parsed.data);
     this.outputEnvelopeVersions.set(socket, eventEnvelopeVersion === COMPACT_EVENT_ENVELOPE_VERSION ? COMPACT_EVENT_ENVELOPE_VERSION : 1);
+    this.outputHierarchy.set(socket, parsedHierarchy.data);
     // Receiving the current subscription cancels the compatibility hold-open
     // and is the authority to establish controlled-instance inputs.
     this.replaySessionAuthority(socket);
@@ -302,6 +311,13 @@ export class NodeAgentInstanceEventForwarder {
   }
 
   private sendForwarded(output: WebSocket, event: EventEnvelope) {
+    const authorityEvent = parseAiSessionAuthorityEvent(event);
+    const projectedAuthorityEvent = authorityEvent
+      ? projectAiSessionStreamEventForConsumer(authorityEvent, this.outputHierarchy.get(output))
+      : undefined;
+    const outputEvent = projectedAuthorityEvent && projectedAuthorityEvent.payload !== event.payload
+      ? { ...event, payload: projectedAuthorityEvent.payload }
+      : event;
     const delta = event.type === AiSessionEventType.MessageDelta
       ? AiSessionMessageDeltaEventSchema.safeParse(event.payload)
       : undefined;
@@ -309,13 +325,13 @@ export class NodeAgentInstanceEventForwarder {
       ? AiSessionTimelineItemDeltaEventSchema.safeParse(event.payload)
       : undefined;
     const wireEvent = this.outputEnvelopeVersions.get(output) === COMPACT_EVENT_ENVELOPE_VERSION
-      ? projectEventEnvelope(event, COMPACT_EVENT_ENVELOPE_VERSION, {
+      ? projectEventEnvelope(outputEvent, COMPACT_EVENT_ENVELOPE_VERSION, {
           ...(delta?.success ? { payload: compactAiSessionMessageDeltaEvent(delta.data) } : {}),
           ...(timelineDelta?.success ? { payload: compactAiSessionTimelineItemDeltaEvent(timelineDelta.data) } : {}),
         })
-      : event;
+      : outputEvent;
     const encoded = JSON.stringify({ type: "node-agent.event.forwarded", event: wireEvent });
-    this.sendOutput(output, encoded, event);
+    this.sendOutput(output, encoded, outputEvent);
   }
 
   private sendOutput(output: WebSocket, encoded: string, event?: ForwardedInstanceEvent) {
@@ -639,7 +655,7 @@ export class NodeAgentInstanceEventForwarder {
     const subscriptions = [...this.outputs].map((output) => this.outputSubscriptions.get(output));
     const legacyAll = subscriptions.some((entry) => entry === undefined);
     if (legacyAll) {
-      socket.send(JSON.stringify({ v: 1, type: "subscribe", eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION, topics: [AiSessionEventTopic, "app.sessions", "apps", "instances"] }));
+      socket.send(JSON.stringify({ v: 1, type: "subscribe", eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION, aiSessionHierarchy: { subagents: true }, topics: [AiSessionEventTopic, "app.sessions", "apps", "instances"] }));
       return;
     }
     const messageDeltas = subscriptions.some((entry) => entry!.messageDeltas.allInstances || entry!.messageDeltas.instanceIds.includes(instanceId));
@@ -652,6 +668,7 @@ export class NodeAgentInstanceEventForwarder {
       v: 1,
       type: "subscribe",
       eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION,
+      aiSessionHierarchy: { subagents: true },
       topics: [
         AiSessionEventType.Snapshot,
         AiSessionEventType.Patch,
@@ -918,6 +935,8 @@ function instanceEventUrl(instance: ControlledInstance) {
     // Compatibility for v0.0.23: older controlled instances ignore this
     // optional bootstrap request and continue emitting full authority events.
     url.searchParams.set("aiSessionAuthoritySnapshot", "1");
+    // Compatibility for v0.0.28: absence asks a current producer for flat sessions.
+    url.searchParams.set("aiSessionHierarchy", "subagents");
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     return url.toString();
   } catch {

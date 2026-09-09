@@ -122,12 +122,13 @@ export class AiSessionActionService {
   }
 
   async listHistory(instanceId: string, agents?: readonly string[]): Promise<AiSessionHistoryList> {
-    const query = agents?.length ? `?agents=${encodeURIComponent(agents.join(","))}` : "";
-    return parseResponse(AiSessionHistoryListSchema, await this.get(instanceId, `/ai-sessions/history${query}`));
+    const query = new URLSearchParams({ hierarchy: "subagents" });
+    if (agents?.length) query.set("agents", agents.join(","));
+    return parseResponse(AiSessionHistoryListSchema, await this.get(instanceId, `/ai-sessions/history?${query}`));
   }
 
   async historyDetail(instanceId: string, aiSessionId: string): Promise<AiSessionHistoryDetail> {
-    return parseResponse(AiSessionHistoryDetailSchema, await this.get(instanceId, `/ai-sessions/history/${encodeURIComponent(aiSessionId)}`));
+    return parseResponse(AiSessionHistoryDetailSchema, await this.get(instanceId, `/ai-sessions/history/${encodeURIComponent(aiSessionId)}?hierarchy=subagents`));
   }
 
   async detail(instanceId: string, aiSessionId: string, revision?: string) {

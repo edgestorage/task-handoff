@@ -159,34 +159,59 @@
                   :class="{ 'is-grouped': groupSessionsByPath }"
                 >
                   <div class="session-ai-path-group-collapse-content">
-                    <ContextMenu
-                  v-for="session in group.sessions"
-                  :key="session.id"
-                >
+                    <TransitionGroup name="session-ai-tree" tag="div" class="session-ai-tree-list">
+                    <div
+                      v-for="{ session, depth, hasChildren } in group.sessions"
+                      :key="session.id"
+                      class="session-ai-tree-item-shell"
+                    >
+                    <ContextMenu>
                   <ContextMenuTrigger as-child>
-                <button
+                <div
                   v-if="sessionListLayout === 'list'"
-                  type="button"
                   class="session-ai-compact-row"
                   :class="{ 'is-grouped': groupSessionsByPath }"
+                  :style="sessionTreeStyle(depth)"
                   :data-state="session.status"
                   :data-selected="selectedListSessionId === session.id"
                   :data-unread="session.unread ? 'true' : undefined"
+                  role="button"
+                  tabindex="0"
                   @click="selectSession(session.id)"
+                  @keydown.enter.prevent="selectSession(session.id)"
+                  @keydown.space.prevent="selectSession(session.id)"
                   @mouseenter="showSessionListPreview($event, session)"
                   @pointermove="showSessionListPreview($event, session)"
                   @mouseleave="scheduleSessionListPreviewClose"
                   @focusin="showSessionListPreview($event, session)"
                   @focusout="scheduleSessionListPreviewClose"
                 >
-                  <AiSessionStatusIndicator :status="session.status" size="compact" />
+                  <span class="session-ai-tree-leading">
+                    <AiSessionStatusIndicator class="session-ai-tree-semantic-icon" :status="session.status" size="compact" />
+                    <button
+                      v-if="hasChildren"
+                      type="button"
+                      class="session-ai-tree-disclosure"
+                      :aria-expanded="expandedSessionIds.has(session.id) || forcedExpandedSessionIds.has(session.id)"
+                      :aria-label="sessionDisclosureLabel(expandedSessionIds.has(session.id) || forcedExpandedSessionIds.has(session.id))"
+                      @click.stop="toggleSessionExpanded(session.id)"
+                      @keydown.stop
+                    >
+                      <ChevronRight
+                        class="session-ai-tree-chevron"
+                        :class="{ expanded: expandedSessionIds.has(session.id) || forcedExpandedSessionIds.has(session.id) }"
+                        :size="14"
+                      />
+                    </button>
+                  </span>
                   <span class="session-ai-compact-title">{{ displayAiSessionTitle(session, latestPromptIndex(session), t) }}</span>
                   <span v-if="session.unread" class="session-ai-compact-unread" :aria-label="t('sessions.actions.unread')" :title="t('sessions.actions.unread')" />
-                </button>
+                </div>
                 <article
                   v-else
                   v-ai-session-card-auto-scroll="{ target: '.session-ai-preview-field-assistant', revision: `${session.id}:${latestPromptIndex(session)}` }"
                   class="session-ai-row"
+                  :style="sessionTreeStyle(depth)"
                   :data-state="session.status"
                   :data-selected="selectedListSessionId === session.id"
                   :data-unread="session.unread ? 'true' : undefined"
@@ -203,7 +228,24 @@
                   @keydown.space.prevent="selectSession(session.id)"
                 >
                   <div class="session-ai-state">
-                    <AiSessionStatusIndicator :status="session.status" />
+                    <span class="session-ai-tree-leading">
+                      <AiSessionStatusIndicator class="session-ai-tree-semantic-icon" :status="session.status" />
+                      <button
+                        v-if="hasChildren"
+                        type="button"
+                        class="session-ai-tree-disclosure"
+                        :aria-expanded="expandedSessionIds.has(session.id) || forcedExpandedSessionIds.has(session.id)"
+                        :aria-label="sessionDisclosureLabel(expandedSessionIds.has(session.id) || forcedExpandedSessionIds.has(session.id))"
+                        @click.stop="toggleSessionExpanded(session.id)"
+                        @keydown.stop
+                      >
+                        <ChevronRight
+                          class="session-ai-tree-chevron"
+                          :class="{ expanded: expandedSessionIds.has(session.id) || forcedExpandedSessionIds.has(session.id) }"
+                          :size="14"
+                        />
+                      </button>
+                    </span>
                     <span class="session-ai-state-line">
                       <strong>{{ aiSessionAppDisplayName(aiSessionAppTab(instance, session), session.agent, t) }}</strong>
                       <span v-if="!groupSessionsByPath" class="session-ai-card-workspace">
@@ -271,6 +313,9 @@
                     :is-forking="forkingAiSessionId === session.id"
                     :is-opening-terminal="launchingApp"
                     :is-stopping-app-session="stoppingAppSessionId === session.id"
+                    :session-id="session.id"
+                    :session-name="session.title || displayAiSessionTitle(session, undefined, t) || session.id"
+                    :session-path="session.cwd"
                     :is-trigger-bound="(configHash) => isTriggerBound(session, configHash)"
                     :is-trigger-busy="(configHash) => triggerBusyKey === triggerActionKey(session, configHash)"
                     :short-hash="shortHash"
@@ -285,6 +330,8 @@
                     @toggle-trigger="toggleTrigger(session, $event)"
                   />
                     </ContextMenu>
+                    </div>
+                    </TransitionGroup>
                   </div>
                 </div>
               </Transition>
@@ -355,10 +402,12 @@
                     :class="{ 'is-grouped': groupSessionsByPath }"
                   >
                     <div class="session-ai-path-group-collapse-content">
+                      <TransitionGroup name="session-ai-tree" tag="div" class="session-ai-tree-list">
                       <article
-                    v-for="item in group.items"
+                    v-for="{ item, depth, hasChildren } in group.items"
                     :key="item.id"
-                    class="session-ai-history-row"
+                    class="session-ai-history-row session-ai-tree-animated-row"
+                    :style="sessionTreeStyle(depth)"
                     :data-selected="selectedHistoryId === item.id"
                   >
                     <div
@@ -369,14 +418,35 @@
                       @keydown.enter.prevent="selectHistoryItem(item)"
                       @keydown.space.prevent="selectHistoryItem(item)"
                     >
-                      <div class="session-ai-history-row-head">
-                        <strong>{{ agentDisplayName(item.agent) }}</strong>
-                        <time :datetime="item.lastActiveAt">{{ relativeHistoryTime(item.lastActiveAt) }}</time>
+                      <span class="session-ai-tree-leading">
+                        <MessageSquare class="session-ai-tree-semantic-icon" :size="14" />
+                        <button
+                          v-if="hasChildren"
+                          type="button"
+                          class="session-ai-tree-disclosure"
+                          :aria-expanded="expandedHistorySessionIds.has(item.id) || forcedExpandedHistorySessionIds.has(item.id)"
+                          :aria-label="sessionDisclosureLabel(expandedHistorySessionIds.has(item.id) || forcedExpandedHistorySessionIds.has(item.id))"
+                          @click.stop="toggleHistorySessionExpanded(item.id)"
+                          @keydown.stop
+                        >
+                          <ChevronRight
+                            class="session-ai-tree-chevron"
+                            :class="{ expanded: expandedHistorySessionIds.has(item.id) || forcedExpandedHistorySessionIds.has(item.id) }"
+                            :size="14"
+                          />
+                        </button>
+                      </span>
+                      <div class="session-ai-history-content">
+                        <div class="session-ai-history-row-head">
+                          <strong>{{ agentDisplayName(item.agent) }}</strong>
+                          <time :datetime="item.lastActiveAt">{{ relativeHistoryTime(item.lastActiveAt) }}</time>
+                        </div>
+                        <p>{{ historyItemTitle(item) }}</p>
+                        <small :title="item.cwd">{{ item.cwd }}</small>
                       </div>
-                      <p>{{ historyItemTitle(item) }}</p>
-                      <small :title="item.cwd">{{ item.cwd }}</small>
                     </div>
                       </article>
+                      </TransitionGroup>
                     </div>
                   </div>
                 </Transition>
@@ -795,17 +865,19 @@
             <TooltipProvider :delay-duration="120">
               <div class="session-ai-detail-context">
                   <ContextMenu v-if="canOpenSelectedSessionFolder">
-                    <Tooltip>
-                      <TooltipTrigger as-child>
-                        <ContextMenuTrigger as-child>
-                          <button type="button" class="session-ai-detail-context-item session-ai-detail-folder" @click="openSelectedSessionFolder">
-                            <Folder :size="14" aria-hidden="true" />
-                            <span>{{ selectedSessionFolderName }}</span>
-                          </button>
-                        </ContextMenuTrigger>
-                      </TooltipTrigger>
-                      <TooltipContent class="ai-session-path-tooltip" side="top" :side-offset="8">{{ selectedSessionFolderPath }}</TooltipContent>
-                    </Tooltip>
+                    <ContextMenuTrigger as-child>
+                      <button type="button" class="session-ai-detail-folder" @click="openSelectedSessionFolder">
+                        <Tooltip>
+                          <TooltipTrigger as-child>
+                            <span class="session-ai-detail-context-item">
+                              <Folder :size="14" aria-hidden="true" />
+                              <span>{{ selectedSessionFolderName }}</span>
+                            </span>
+                          </TooltipTrigger>
+                          <TooltipContent class="ai-session-path-tooltip" side="top" :side-offset="8">{{ selectedSessionFolderPath }}</TooltipContent>
+                        </Tooltip>
+                      </button>
+                    </ContextMenuTrigger>
                     <ContextMenuContent class="ai-session-context-menu">
                       <ContextMenuItem class="ai-session-path-group-menu-item" @select="openSelectedSessionFolder">
                         <FolderOpen :size="14" />
@@ -1174,6 +1246,13 @@ import { bindAiSessionTrigger, closeAiSession, createAiSession, createNodeLocalF
 import { controlPlaneQueryKeys } from "../../../api/queryKeys.ts";
 import { executeAiSessionCommand } from "../../../api/ai-session-commands";
 import { AI_SESSION_DEFAULT_REASONING_EFFORT, type AiSessionCommandInput, type AiSessionHistoryDetail, type AiSessionHistoryItem, type AiSessionMessageAttachmentRef, type AiSessionModelSelection, type AiSessionPermissionMode, type AiSessionReasoningEffort, type AiSessionUserMessageDetail } from "@task-handoff/protocol/ai-sessions";
+import {
+  aiSessionAncestorIds,
+  aiSessionRootNode,
+  deriveAiSessionForest,
+  filterAiSessionForest,
+  flattenAiSessionForest,
+} from "@task-handoff/protocol/ai-session-hierarchy";
 import type { StorySessionPreset } from "@task-handoff/protocol/stories";
 import { normalizeAiSessionModelSelectionCapabilities, normalizeAiSessionReasoningEffortCapabilities } from "@task-handoff/protocol/ai-session-provider-capabilities";
 import type { RepositoryAiSessionWorkspace, RepositoryAiSessionWorkspaceBranch } from "@task-handoff/protocol/repository";
@@ -1216,7 +1295,7 @@ import { scrollHorizontalOverflow, updateHorizontalOverflowFromEvent, vHorizonta
 import RepositoryEnvironment from "./RepositoryEnvironment.vue";
 import AiSessionPathGroupContextMenu from "./AiSessionPathGroupContextMenu.vue";
 import { useNodeStorageFolderPicker } from "../settings/useNodeStorageFolderPicker";
-import { groupAiSessionEntriesByPath } from "./aiSessionPathGrouping";
+import { normalizeAiSessionGroupPath } from "./aiSessionPathGrouping";
 import { loadCollapsedAiSessionPathGroups, persistCollapsedAiSessionPathGroups } from "./aiSessionPathGroupCollapse";
 import { loadAiSessionCreationPreferences, persistAiSessionCreationPreferences } from "./aiSessionCreationPreferences";
 import { aiSessionCreationDraftKey, aiSessionMessageText, clearAiSessionDraft, loadAiSessionDraftPayload, persistAiSessionDraftPayload } from "../useAiSessionDraft";
@@ -1231,6 +1310,7 @@ import { createStreamingScrollFollow, distanceFromBottom, STREAMING_SCROLL_FOLLO
 import { createLayoutScrollAnchor, createUserLayoutChangeGuard } from "../../../lib/layout-scroll-anchor";
 import { createBrowserUuid } from "../../../lib/random-id";
 import {
+  aiSessionPriority,
   aiSessionStatusGroup as sessionStatusGroup,
   canInterruptAiSession,
   defaultAiSessionModelSelection,
@@ -1242,13 +1322,11 @@ import {
   aiSessionAppTab,
   aiSessionAppNavigationTarget,
   aiSessionBasename,
-  aiSessionLastUserMessageTime,
   aiSessionStatusLabel,
   aiSessionTurns,
   displayAiSessionMessage,
   displayAiSessionResponse,
   displayAiSessionTitle,
-  sortedAiSessionsByLastUserMessage,
   type RepositoryWorkspaceTabTarget,
   type SessionTab,
 } from "../useInstanceSessions";
@@ -1261,6 +1339,11 @@ export type AiSessionCreationPresetDraft = {
 
 type SessionStatusFilter = "all" | "active" | "waiting" | "idle" | "problem";
 type AiSessionListLayout = "cards" | "list";
+type AiSessionDisplayEntry = {
+  session: AiSessionSummary;
+  depth: number;
+  hasChildren: boolean;
+};
 type AiSessionPathGroup = {
   kind: "all" | "path" | "story";
   key: string;
@@ -1269,7 +1352,13 @@ type AiSessionPathGroup = {
   storyId?: string;
   label: string;
   parentLabel: string;
-  sessions: AiSessionSummary[];
+  sessions: AiSessionDisplayEntry[];
+};
+type AiSessionHistoryHierarchyItem = AiSessionHistoryItem & { updatedAt: string };
+type AiSessionHistoryDisplayEntry = {
+  item: AiSessionHistoryItem;
+  depth: number;
+  hasChildren: boolean;
 };
 type AiSessionHistoryPathGroup = {
   kind: "all" | "path" | "story";
@@ -1279,7 +1368,7 @@ type AiSessionHistoryPathGroup = {
   storyId?: string;
   label: string;
   parentLabel: string;
-  items: AiSessionHistoryItem[];
+  items: AiSessionHistoryDisplayEntry[];
 };
 
 const GROUP_BY_PATH_STORAGE_KEY = "task-handoff.control-plane.ai-sessions-group-by-path";
@@ -1422,13 +1511,30 @@ const statusFilterOptions = computed(() => {
   ] satisfies Array<{ key: SessionStatusFilter; label: string; count: number }>;
 });
 const selectedStatusFilter = computed(() => statusFilterOptions.value.find((option) => option.key === sessionStatusFilter.value) || statusFilterOptions.value[0]);
-const filteredSessions = computed(() => {
-  if (sessionStatusFilter.value === "all") {
-    return visibleAiSessions.value;
-  }
-  return visibleAiSessions.value.filter((session) => sessionStatusGroup(session) === sessionStatusFilter.value);
-});
-const sortedSessions = computed(() => sortedAiSessionsByLastUserMessage(filteredSessions.value, sortSessionsByStatus.value));
+const sessionForest = computed(() => deriveAiSessionForest(visibleAiSessions.value, { orderBy: "last-user-message" }));
+const expandedSessionIds = reactive(new Set<string>());
+const selectedHierarchySessionId = computed(() => props.selectedAiSession(props.instance, visibleAiSessions.value)?.id);
+const sessionForestFilter = computed(() => sessionStatusFilter.value === "all"
+  ? undefined
+  : filterAiSessionForest(sessionForest.value, (session) => sessionStatusGroup(session) === sessionStatusFilter.value));
+const forcedExpandedSessionIds = computed(() => new Set([
+  ...(sessionForestFilter.value?.expandedSessionIds || []),
+  ...aiSessionAncestorIds(sessionForest.value, selectedHierarchySessionId.value),
+]));
+const displayedSessionForest = computed(() => sortSessionsByStatus.value ? {
+  ...sessionForest.value,
+  roots: [...sessionForest.value.roots].sort((left, right) => aiSessionPriority(right.session) - aiSessionPriority(left.session)),
+} : sessionForest.value);
+const displayedSessionEntries = computed<AiSessionDisplayEntry[]>(() => flattenAiSessionForest(displayedSessionForest.value, {
+  expandedSessionIds,
+  forcedExpandedSessionIds: forcedExpandedSessionIds.value,
+  visibleSessionIds: sessionForestFilter.value?.visibleSessionIds,
+}).map(({ node, depth }) => ({
+  session: node.session,
+  depth,
+  hasChildren: node.children.length > 0,
+})));
+const sortedSessions = computed(() => displayedSessionEntries.value.map((entry) => entry.session));
 const storiesQuery = useStoriesQuery(() => props.instance.nodeId);
 const storyTitlesById = computed(() => new Map((storiesQuery.data.value?.stories || []).map((story) => [story.id, story.title])));
 const presetSaveOpen = ref(false);
@@ -1491,13 +1597,13 @@ async function handlePresetSaved() {
   showControlPlaneToast(t("sessions.panel.presetSaved"), "success");
   await queryClient.invalidateQueries({ queryKey: controlPlaneQueryKeys.stories(props.instance.nodeId) });
 }
-const displayedSessionGroups = computed<AiSessionPathGroup[]>(() => groupSessionsByPath.value ? (groupMode.value === "story" ? groupAiSessionsByStory(sortedSessions.value) : groupAiSessionsByPath(sortedSessions.value)) : [{
+const displayedSessionGroups = computed<AiSessionPathGroup[]>(() => groupSessionsByPath.value ? (groupMode.value === "story" ? groupAiSessionsByStory(displayedSessionEntries.value) : groupAiSessionsByPath(displayedSessionEntries.value)) : [{
   kind: "all",
   key: "all",
   path: "",
   label: "",
   parentLabel: "",
-  sessions: sortedSessions.value,
+  sessions: displayedSessionEntries.value,
 }]);
 // Keep the detail selection anchored to the authoritative session set. A status
 // transition (for example running -> idle) must not make the selected session
@@ -2044,20 +2150,48 @@ const workspaceStyle = computed(
     }) as CSSProperties,
 );
 
-function groupAiSessionsByPath(sessions: AiSessionSummary[]) {
-  return groupAiSessionEntriesByPath(sessions, showEmptyPathGroups.value ? newSessionFolders.value : [])
-    .map((group) => ({
-      kind: "path" as const,
-      key: group.key,
-      path: aiSessionGroupPath(group.cwdFolderId, group.path),
-      cwdFolderId: group.cwdFolderId,
-      ...aiSessionGroupLabel(group.cwdFolderId, group.path),
-      sessions: group.entries,
-    }))
-    .sort((a, b) => {
-      const messageTimeDelta = groupLastUserMessageTime(b.sessions) - groupLastUserMessageTime(a.sessions);
-      return messageTimeDelta || a.key.localeCompare(b.key);
+function currentRootSession(sessionId: string) {
+  return aiSessionRootNode(sessionForest.value, sessionId)?.session;
+}
+
+function groupAiSessionsByPath(entries: AiSessionDisplayEntry[]) {
+  const groups = new Map<string, AiSessionPathGroup>();
+  for (const entry of entries) {
+    const root = currentRootSession(entry.session.id) || entry.session;
+    const path = normalizeAiSessionGroupPath(root.cwd);
+    const key = `cwd:${path}`;
+    const current = groups.get(key);
+    groups.set(key, {
+      kind: "path",
+      key,
+      path: aiSessionGroupPath(current?.cwdFolderId || root.cwdFolderId, path),
+      cwdFolderId: current?.cwdFolderId || root.cwdFolderId,
+      ...aiSessionGroupLabel(current?.cwdFolderId || root.cwdFolderId, path),
+      sessions: [...(current?.sessions || []), entry],
     });
+  }
+  if (showEmptyPathGroups.value) {
+    for (const folder of newSessionFolders.value) {
+      const path = normalizeAiSessionGroupPath(folder.path);
+      if (!path) continue;
+      const key = `cwd:${path}`;
+      if (groups.has(key)) continue;
+      groups.set(key, {
+        kind: "path",
+        key,
+        path: folder.path,
+        cwdFolderId: folder.id,
+        ...aiSessionGroupLabel(folder.id, folder.path),
+        sessions: [],
+      });
+    }
+  }
+  return [...groups.values()].sort((left, right) => {
+    const latest = (group: AiSessionPathGroup) => Math.max(0, ...group.sessions.map((entry) => (
+      entry.depth === 0 ? Date.parse(entry.session.lastUserMessageAt || "") || 0 : 0
+    )));
+    return latest(right) - latest(left) || left.key.localeCompare(right.key);
+  });
 }
 
 function storyGroupLabel(storyId: string | undefined) {
@@ -2065,50 +2199,73 @@ function storyGroupLabel(storyId: string | undefined) {
   return storyTitlesById.value.get(storyId) || `Story ${storyId}`;
 }
 
-function groupAiSessionsByStory(sessions: AiSessionSummary[]) {
+function groupAiSessionsByStory(entries: AiSessionDisplayEntry[]) {
   const groups = new Map<string, AiSessionPathGroup>();
-  for (const session of sessions) {
-    const key = `story:${session.storyId || "unassigned"}`;
+  for (const entry of entries) {
+    const root = currentRootSession(entry.session.id) || entry.session;
+    const key = `story:${root.storyId || "unassigned"}`;
     const current = groups.get(key);
-    groups.set(key, { kind: "story", key, path: "", storyId: session.storyId, label: storyGroupLabel(session.storyId), parentLabel: "", sessions: [...(current?.sessions || []), session] });
+    groups.set(key, { kind: "story", key, path: "", storyId: root.storyId, label: storyGroupLabel(root.storyId), parentLabel: "", sessions: [...(current?.sessions || []), entry] });
   }
   return [...groups.values()];
 }
 
-function groupAiSessionHistoryByPath(items: AiSessionHistoryItem[]) {
-  return groupAiSessionEntriesByPath(items)
-    .map((group) => ({
-      kind: "path" as const,
-      key: group.key,
-      path: aiSessionGroupPath(group.cwdFolderId, group.path),
-      cwdFolderId: group.cwdFolderId,
-      ...aiSessionGroupLabel(group.cwdFolderId, group.path),
-      items: group.entries,
-    }))
-    .sort((a, b) => {
-      const latestA = Math.max(0, ...a.items.map((item) => Date.parse(item.lastActiveAt) || 0));
-      const latestB = Math.max(0, ...b.items.map((item) => Date.parse(item.lastActiveAt) || 0));
-      return latestB - latestA || a.key.localeCompare(b.key);
-    });
+function historyRootItem(itemId: string) {
+  return aiSessionRootNode(historyForest.value, itemId)?.session;
 }
 
-function groupAiSessionHistoryByStory(items: AiSessionHistoryItem[]) {
+function groupAiSessionHistoryByPath(entries: AiSessionHistoryDisplayEntry[]) {
   const groups = new Map<string, AiSessionHistoryPathGroup>();
-  for (const item of items) {
-    const key = `story:${item.storyId || "unassigned"}`;
+  for (const entry of entries) {
+    const root = historyRootItem(entry.item.id) || { ...entry.item, updatedAt: entry.item.lastActiveAt };
+    const path = normalizeAiSessionGroupPath(root.cwd);
+    const key = `cwd:${path}`;
     const current = groups.get(key);
-    groups.set(key, { kind: "story", key, path: "", storyId: item.storyId, label: storyGroupLabel(item.storyId), parentLabel: "", items: [...(current?.items || []), item] });
+    groups.set(key, {
+      kind: "path",
+      key,
+      path,
+      cwdFolderId: root.cwdFolderId,
+      ...aiSessionGroupLabel(root.cwdFolderId, path),
+      items: [...(current?.items || []), entry],
+    });
+  }
+  return [...groups.values()].sort((left, right) => {
+    const latest = (group: AiSessionHistoryPathGroup) => Math.max(0, ...group.items.map((entry) => Date.parse(entry.item.lastActiveAt) || 0));
+    return latest(right) - latest(left) || left.key.localeCompare(right.key);
+  });
+}
+
+function groupAiSessionHistoryByStory(entries: AiSessionHistoryDisplayEntry[]) {
+  const groups = new Map<string, AiSessionHistoryPathGroup>();
+  for (const entry of entries) {
+    const root = historyRootItem(entry.item.id) || { ...entry.item, updatedAt: entry.item.lastActiveAt };
+    const key = `story:${root.storyId || "unassigned"}`;
+    const current = groups.get(key);
+    groups.set(key, { kind: "story", key, path: "", storyId: root.storyId, label: storyGroupLabel(root.storyId), parentLabel: "", items: [...(current?.items || []), entry] });
   }
   return [...groups.values()];
 }
 
-const displayedHistoryGroups = computed<AiSessionHistoryPathGroup[]>(() => groupSessionsByPath.value ? (groupMode.value === "story" ? groupAiSessionHistoryByStory(historyItems.value) : groupAiSessionHistoryByPath(historyItems.value)) : [{
+const historyHierarchyItems = computed<AiSessionHistoryHierarchyItem[]>(() => historyItems.value.map((item) => ({ ...item, updatedAt: item.lastActiveAt })));
+const historyForest = computed(() => deriveAiSessionForest(historyHierarchyItems.value));
+const expandedHistorySessionIds = reactive(new Set<string>());
+const forcedExpandedHistorySessionIds = computed(() => new Set(aiSessionAncestorIds(historyForest.value, selectedHistoryId.value)));
+const displayedHistoryEntries = computed<AiSessionHistoryDisplayEntry[]>(() => flattenAiSessionForest(historyForest.value, {
+  expandedSessionIds: expandedHistorySessionIds,
+  forcedExpandedSessionIds: forcedExpandedHistorySessionIds.value,
+}).map(({ node, depth }) => ({
+  item: node.session,
+  depth,
+  hasChildren: node.children.length > 0,
+})));
+const displayedHistoryGroups = computed<AiSessionHistoryPathGroup[]>(() => groupSessionsByPath.value ? (groupMode.value === "story" ? groupAiSessionHistoryByStory(displayedHistoryEntries.value) : groupAiSessionHistoryByPath(displayedHistoryEntries.value)) : [{
   kind: "all",
   key: "all",
   path: "",
   label: "",
   parentLabel: "",
-  items: historyItems.value,
+  items: displayedHistoryEntries.value,
 }]);
 const selectedHistoryItem = computed(() => historyItems.value.find((item) => item.id === selectedHistoryId.value));
 
@@ -2141,10 +2298,6 @@ function aiSessionPathLabel(path: string) {
     label: normalized.slice(index + 1) || normalized,
     parentLabel: normalized.slice(0, index),
   };
-}
-
-function groupLastUserMessageTime(sessions: AiSessionSummary[]) {
-  return Math.max(0, ...sessions.map(aiSessionLastUserMessageTime));
 }
 
 watch(groupMode, (value) => {
@@ -2478,6 +2631,24 @@ function selectSession(sessionId: string) {
   emit("selectAiSession", props.instance.id, sessionId);
 }
 
+function sessionTreeStyle(depth: number): CSSProperties {
+  return { "--ai-session-tree-indent": `${depth * 14}px` } as CSSProperties;
+}
+
+function sessionDisclosureLabel(expanded: boolean) {
+  return t(expanded ? "sessions.panel.collapseSubSessions" : "sessions.panel.expandSubSessions");
+}
+
+function toggleSessionExpanded(sessionId: string) {
+  if (expandedSessionIds.has(sessionId)) expandedSessionIds.delete(sessionId);
+  else expandedSessionIds.add(sessionId);
+}
+
+function toggleHistorySessionExpanded(sessionId: string) {
+  if (expandedHistorySessionIds.has(sessionId)) expandedHistorySessionIds.delete(sessionId);
+  else expandedHistorySessionIds.add(sessionId);
+}
+
 function sidebarViewport() {
   return sidebarEl.value?.querySelector<HTMLElement>("[data-reka-scroll-area-viewport]");
 }
@@ -2687,7 +2858,9 @@ async function openNewSessionForGroup(group: AiSessionPathGroup | AiSessionHisto
   if (group.kind === "story") {
     if (historyMode.value) await leaveHistoryMode();
     beginNewSession(group.storyId);
-    const entries = "sessions" in group ? group.sessions : group.items;
+    const entries: Array<AiSessionSummary | AiSessionHistoryItem> = "sessions" in group
+      ? group.sessions.map((entry) => entry.session)
+      : group.items.map((entry) => entry.item);
     const latest = entries.reduce<AiSessionSummary | AiSessionHistoryItem | undefined>((candidate, entry) => {
       if (!candidate) return entry;
       const candidateTime = "updatedAt" in candidate ? candidate.updatedAt : candidate.lastActiveAt;

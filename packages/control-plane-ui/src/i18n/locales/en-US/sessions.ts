@@ -33,6 +33,7 @@ export const sessions = {
     moreFor: "More actions for {agent}", more: "More actions", fork: "Continue chatting", forkCurrent: "Use current workspace", forkWorktree: "Create independent worktree", continueFromTurn: "Continue chatting from this turn", forkBusyTitle: "Continue chatting while this turn is running?", forkBusyDescription: "Codex will start a new chat from the interrupted snapshot. The source turn will continue without interruption.", forkConfirm: "Continue chatting", forking: "Continuing chat", closingApp: "Closing app session", closeApp: "Close app session", closingSession: "Closing AI session", closeSession: "Close AI session", unread: "Unread AI session", openedFromTerminal: "Opened from a terminal app session",
     previousMessage: "Previous user message for {agent}", nextMessage: "Next user message for {agent}", addTrigger: "Add trigger", triggersBound: "{count} triggers bound",
     addToStory: "Add to Story", saveAsPreset: "Save as preset action", loadingStories: "Loading stories…", storiesLoadFailed: "Could not load stories.", noStories: "No Story yet", storyAssigned: "Added to Story", storyAssignFailed: "Could not add AI session to Story",
+    copy: "Copy", copyPath: "Copy path", copyName: "Copy name", copySessionId: "Copy Session ID", copied: "Copied", copyFailed: "Could not copy the value.",
   },
   detail: {
     selected: "Selected AI session", sessionDetails: "Session details", workspace: "Workspace", session: "Session", appBinding: "App binding", forkedFrom: "Forked from", unknown: "Unknown",
@@ -64,7 +65,7 @@ export const sessions = {
     continue: "Continue conversation", continueConversation: "Send a message to continue this conversation",
     attachmentUnavailable: "Attachment content is unavailable: {name}",
     backCurrent: "Back to current conversation", history: "Previous conversations", historyOptions: "Previous conversation list options",
-    cardLayout: "Cards", listLayout: "List", noGrouping: "No grouping", groupByPath: "Group by path", groupByStory: "Group by Story", unassignedStory: "Unassigned Story", showEmptyPathGroups: "Show paths without sessions", sortByStatus: "Sort by status", historyLoadFailed: "Failed to load previous conversations.",
+    cardLayout: "Cards", listLayout: "List", noGrouping: "No grouping", groupByPath: "Group by path", groupByStory: "Group by Story", unassignedStory: "Unassigned Story", showEmptyPathGroups: "Show paths without sessions", sortByStatus: "Sort by status", expandSubSessions: "Expand sub sessions", collapseSubSessions: "Collapse sub sessions", historyLoadFailed: "Failed to load previous conversations.",
     historyDetailFailed: "Failed to load conversation details.", unnamedConversation: "Untitled conversation",
     resumePending: "The conversation started, but its runtime state is not confirmed yet. Please try again shortly.", continueFailed: "Failed to continue this conversation.",
   },

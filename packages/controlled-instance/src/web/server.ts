@@ -59,6 +59,7 @@ import { WebEventBus } from "./events";
 import { AppManagementManager, AppManagementRequestError } from "./app-management";
 import { configSyncPresets, configSyncPrograms, listConfigSyncFolders, runConfigSync, runConfigSyncBatch } from "./config-sync";
 import { ConfigSyncRequestSchema } from "@task-handoff/protocol/config-sync";
+import { aiSessionRetentionCandidates, aiSessionRootNode, deriveAiSessionForest } from "@task-handoff/protocol/ai-session-hierarchy";
 import { applyManagedCodexModelConfig, codexProviderId } from "./codex-model-config";
 import { ControlledPrivateModelCatalogSchema, readControlledPrivateCodexSettings, readControlledPrivateModelCatalog, resolveControlledPrivateModelSelection } from "./private-model-catalog";
 import { applyManagedClaudeModelConfig } from "./claude-model-config";
@@ -111,6 +112,7 @@ import {
   AiSessionForkResultSchema,
   AiSessionCloseInputSchema,
   AiSessionCloseResultSchema,
+  AiSessionClearResultSchema,
   AiSessionOpenAppInputSchema,
   AiSessionOpenAppResultSchema,
   AiSessionApprovalInputSchema,
@@ -119,6 +121,9 @@ import {
   AiSessionDetailReadSchema,
   AiSessionHistoryListSchema,
   AiSessionHistoryDetailSchema,
+  projectAiSessionDeltaForConsumer,
+  projectAiSessionHistoryItemForConsumer,
+  projectAiSessionsSnapshotForConsumer,
   AiSessionTimelineSchema,
   AiSessionTurnTimelineSchema,
   AiSessionTurnIndexSchema,
@@ -663,6 +668,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     onRemove: (sessionId) => aiSessionConversationAttachments.releaseSession(sessionId),
   });
   const aiSessionController = new AiSessionController(aiSessions);
+  let aiSessionClose: AiSessionCloseCoordinator | undefined;
   const aiSessionProviderCapabilities = () => aiSessionProviders.capabilities();
   const triggers = new TriggerStore(storagePaths);
   const triggerExecutor = new TriggerExecutor(triggers, aiSessionController);
@@ -830,6 +836,17 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       aiSessionTimelineItemDeltas.flushAll("event-source-close");
     },
     onDiagnostic: (diagnostic) => app.log.warn({ diagnostic }, "OpenCode adapter diagnostic"),
+    onProviderLifecycleTransition: async ({ session, disposition }) => {
+      if (!aiSessionClose) {
+        aiSessions.restoreAuthority(session);
+        return;
+      }
+      try {
+        await aiSessionClose.convergeObservedProviderLifecycle(session, disposition);
+      } catch (error) {
+        app.log.warn({ err: error, aiSessionId: session.id, providerSessionId: session.providerSessionId, disposition }, "failed to converge AI session subtree after provider lifecycle transition");
+      }
+    },
   });
   // OpenCode is an optional managed app. Do not register its session provider
   // when the executable is unavailable: discovery runs periodically and would
@@ -895,6 +912,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
         selectAtCreate: true,
         updateDuringSession: codexAppServer.supportsThreadSettingsUpdate(),
       },
+      hierarchy: { subagents: true },
     }),
   });
   aiSessionProviders.register({
@@ -913,6 +931,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
         switchProviderDuringSession: false,
       },
       reasoningEffort: { selectAtCreate: false, updateDuringSession: false },
+      hierarchy: { subagents: false },
     },
   });
   if (openCodeAvailable) {
@@ -936,6 +955,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
           switchProviderDuringSession: true,
         },
         reasoningEffort: { selectAtCreate: true, updateDuringSession: true },
+        hierarchy: { subagents: true },
       },
     });
   }
@@ -1031,11 +1051,12 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     }),
     stopApp: (appSessionId) => { appRuntime.stop(appSessionId); },
   });
-  const aiSessionClose = new AiSessionCloseCoordinator({
+  aiSessionClose = new AiSessionCloseCoordinator({
     registry: aiSessions,
     controller: aiSessionController,
     history: aiSessionHistory,
     stopApp: (appSessionId) => { appRuntime.stop(appSessionId); },
+    releaseSessionResources: (sessionId) => aiSessionConversationAttachments.releaseSession(sessionId),
     onDiagnostic: (diagnostic) => app.log.warn({ diagnostic }, "AI session close rollback"),
   });
   let serviceClosing = false;
@@ -1469,23 +1490,24 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
 
   // Node Agent retention coordinator consumes this private projection so the
   // public session summary does not need a compatibility-breaking field.
+  const idleRetentionCandidates = () => aiSessionRetentionCandidates(deriveAiSessionForest(
+    aiSessions.boundSessions(appSessionsWithSharedCodexAppServer()),
+  ));
   app.get("/api/internal/node-agent/ai-sessions/idle-retention", nodeAgentProcessRoute, async () => ({
-    data: aiSessions.boundSessions(appSessionsWithSharedCodexAppServer()).map((session) => ({
-      sessionId: session.id,
-      storyId: session.storyId,
-      status: session.status,
-      completedAt: session.completedAt,
-      updatedAt: session.updatedAt,
-    })).filter((session) => session.storyId && session.status === "idle"),
+    data: idleRetentionCandidates().flatMap((candidate) => candidate.root.storyId ? [{
+      sessionId: candidate.root.id,
+      storyId: candidate.root.storyId,
+      status: "idle" as const,
+      updatedAt: candidate.lastActiveAt,
+    }] : []),
   }));
 
   app.get("/api/internal/node-agent/ai-sessions/instance-idle-retention", nodeAgentProcessRoute, async () => ({
-    data: aiSessions.boundSessions(appSessionsWithSharedCodexAppServer()).map((session) => ({
-      sessionId: session.id,
-      status: session.status,
-      completedAt: session.completedAt,
-      updatedAt: session.updatedAt,
-    })).filter((session) => session.status === "idle"),
+    data: idleRetentionCandidates().map((candidate) => ({
+      sessionId: candidate.root.id,
+      status: "idle" as const,
+      updatedAt: candidate.lastActiveAt,
+    })),
   }));
 
   app.post<{ Params: { id: string }; Body: unknown }>("/api/internal/node-agent/ai-sessions/:id/close", nodeAgentProcessRoute, async (request, reply) => {
@@ -1555,8 +1577,9 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   }));
 
   app.get("/api/events", { websocket: true }, (socket, request) => {
-    const query = request.query as { aiSessionAuthoritySnapshot?: string; aiSessionTransient?: string };
-    events.connect(socket, { expectsTransientSubscription: query.aiSessionTransient === "1" });
+    const query = request.query as { aiSessionAuthoritySnapshot?: string; aiSessionTransient?: string; aiSessionHierarchy?: string };
+    const hierarchy = { subagents: query.aiSessionHierarchy === "subagents" };
+    events.connect(socket, { expectsTransientSubscription: query.aiSessionTransient === "1", aiSessionHierarchy: hierarchy });
     events.send(socket, SessionStreamsHelloEventType, {
       protocolVersion: SESSION_STREAM_PROTOCOL_VERSION,
       streams: [
@@ -1585,7 +1608,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
         socket,
         AiSessionEventType.Snapshot,
         createAiSessionSnapshotEvent(
-          lastAiSessionSnapshot || aiSessions.boundSnapshot(appSessionsWithSharedCodexAppServer()),
+          projectAiSessionsSnapshotForConsumer(lastAiSessionSnapshot || aiSessions.boundSnapshot(appSessionsWithSharedCodexAppServer()), hierarchy),
           "startup",
         ),
       );
@@ -1635,26 +1658,27 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     data: workspaceStatus(storagePaths),
   }));
 
-  app.get<{ Querystring: { streamId?: string; sinceRevision?: string } }>("/api/ai-sessions", async (request, reply) => {
+  app.get<{ Querystring: { streamId?: string; sinceRevision?: string; hierarchy?: string } }>("/api/ai-sessions", async (request, reply) => {
+    const hierarchy = { subagents: request.query.hierarchy === "subagents" };
     const sinceRevision = request.query.sinceRevision === undefined ? undefined : Number(request.query.sinceRevision);
     if (Number.isInteger(sinceRevision) && sinceRevision >= 0) {
       if (!request.query.streamId) return reply.code(400).send({ error: { code: "AI_SESSION_DELTA_INVALID", message: "streamId is required with sinceRevision." } });
-      return { data: aiSessionDeltaSince(request.query.streamId, sinceRevision) };
+      return { data: projectAiSessionDeltaForConsumer(aiSessionDeltaSince(request.query.streamId, sinceRevision), hierarchy) };
     }
     return { data: {
       streamId: aiSessionStreamId,
       revision: aiSessionSnapshotRevision,
       lastEventAt: aiSessionEventHistory.at(-1)?.payload.meta.generatedAt || startedAt,
-      snapshot: lastAiSessionSnapshot || aiSessions.boundSnapshot(appSessionsWithSharedCodexAppServer()),
+      snapshot: projectAiSessionsSnapshotForConsumer(lastAiSessionSnapshot || aiSessions.boundSnapshot(appSessionsWithSharedCodexAppServer()), hierarchy),
     } };
   });
 
-  app.get("/api/ai-sessions/state", async () => ({
+  app.get<{ Querystring: { hierarchy?: string } }>("/api/ai-sessions/state", async (request) => ({
     data: {
       streamId: aiSessionStreamId,
       revision: aiSessionSnapshotRevision,
       lastEventAt: aiSessionEventHistory.at(-1)?.payload.meta.generatedAt || startedAt,
-      snapshot: lastAiSessionSnapshot || aiSessions.boundSnapshot(appSessionsWithSharedCodexAppServer()),
+      snapshot: projectAiSessionsSnapshotForConsumer(lastAiSessionSnapshot || aiSessions.boundSnapshot(appSessionsWithSharedCodexAppServer()), { subagents: request.query.hierarchy === "subagents" }),
     },
   }));
 
@@ -1759,11 +1783,12 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     data: triggers.list().recentRuns,
   }));
 
-  app.get<{ Querystring: { agents?: string } }>("/api/ai-sessions/history", async (request) => {
+  app.get<{ Querystring: { agents?: string; hierarchy?: string } }>("/api/ai-sessions/history", async (request) => {
     // Compatibility for v0.0.21: legacy clients parse history agents as codex | claude.
     const requested = request.query.agents?.split(",").map((agent) => agent.trim()).filter(Boolean);
     const agents = new Set(requested?.length ? requested : ["codex", "claude"]);
-    return { data: AiSessionHistoryListSchema.parse({ items: aiSessionHistory.list().filter((item) => agents.has(item.agent)) }) };
+    const hierarchy = { subagents: request.query.hierarchy === "subagents" };
+    return { data: AiSessionHistoryListSchema.parse({ items: aiSessionHistory.list().filter((item) => agents.has(item.agent)).map((item) => projectAiSessionHistoryItemForConsumer(item, hierarchy)) }) };
   });
 
   app.post<{ Querystring: Record<string, unknown>; Body: Readable }>("/api/ai-session-attachments/drafts", { bodyLimit: AI_SESSION_ATTACHMENT_UPLOAD_BODY_LIMIT }, async (request, reply) => {
@@ -1839,7 +1864,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     }
   });
 
-  app.get<{ Params: { id: string } }>("/api/ai-sessions/history/:id", async (request, reply) => {
+  app.get<{ Params: { id: string }; Querystring: { hierarchy?: string } }>("/api/ai-sessions/history/:id", async (request, reply) => {
     const detail = aiSessionHistory.detail(request.params.id);
     if (!detail) {
       return reply.code(404).send({ error: AiSessionControlErrorSchema.parse({
@@ -1849,6 +1874,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     }
     return { data: AiSessionHistoryDetailSchema.parse({
       ...detail,
+      item: projectAiSessionHistoryItemForConsumer(detail.item, { subagents: request.query.hierarchy === "subagents" }),
       turns: projectConversationAttachmentTurns(detail.item.id, detail.turns, aiSessionConversationAttachments),
     }) };
   });
@@ -1962,7 +1988,8 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       const body = AiSessionStoryInputSchema.parse(request.body || {});
       const session = aiSessions.get(request.params.id);
       if (!session) throw Object.assign(new Error("AI Session was not found."), { code: "AI_SESSION_NOT_FOUND", statusCode: 404 });
-      const updated = aiSessions.patch(session.id, { storyId: body.storyId || undefined });
+      const root = aiSessionRootNode(deriveAiSessionForest(aiSessions.all()), session.id)?.session || session;
+      const updated = aiSessions.patch(root.id, { storyId: body.storyId || undefined });
       publishAiSessionSnapshot("control-action");
       return { data: AiSessionStoryActionResponseSchema.parse({ sessionId: updated.id, storyId: updated.storyId }) };
     } catch (error: unknown) {
@@ -1985,6 +2012,16 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     try {
       AiSessionCloseInputSchema.parse(request.body || {});
       const result = AiSessionCloseResultSchema.parse(await aiSessionClose.close(request.params.id));
+      publishAiSessionSnapshot("control-action");
+      return { data: result };
+    } catch (error: unknown) {
+      return sendAiSessionControlError(reply, error);
+    }
+  });
+
+  app.delete<{ Params: { id: string } }>("/api/ai-sessions/:id", async (request, reply) => {
+    try {
+      const result = AiSessionClearResultSchema.parse(await aiSessionClose.clear(request.params.id));
       publishAiSessionSnapshot("control-action");
       return { data: result };
     } catch (error: unknown) {

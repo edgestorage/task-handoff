@@ -26,6 +26,7 @@ export type CodexAppServerClientOptions = {
   resolveVersion?: (command: string) => Promise<string>;
   socketPath?: string;
   onDynamicToolCall?: (call: CodexDynamicToolCall) => Promise<CodexDynamicToolCallResult>;
+  onDiagnostic?: (diagnostic: Record<string, unknown>) => void;
 };
 
 type PendingRequest = {
@@ -51,6 +52,18 @@ const FULL_HISTORY_FORK_MIN_VERSION = [0, 129, 0] as const;
 // paginated threads so Codex owns the authoritative Timeline history.
 const NATIVE_TIMELINE_MIN_VERSION = [0, 145, 0] as const;
 const CODEX_VERSION_PATTERN = /(?:^|\s)codex(?:-cli)?\s+v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)(?=\s|$)/i;
+const CODEX_THREAD_SOURCE_KINDS = [
+  "cli",
+  "vscode",
+  "exec",
+  "appServer",
+  "subAgent",
+  "subAgentReview",
+  "subAgentCompact",
+  "subAgentThreadSpawn",
+  "subAgentOther",
+  "unknown",
+] as const;
 
 export function parseCodexCliVersion(output: string) {
   return output.match(CODEX_VERSION_PATTERN)?.[1];
@@ -130,10 +143,12 @@ export class CodexAppServerClient extends EventEmitter {
   private readonly requestTimeoutMs: number;
   private readonly resolveVersion: (command: string) => Promise<string>;
   private readonly onDynamicToolCall?: CodexAppServerClientOptions["onDynamicToolCall"];
+  private readonly onDiagnostic?: CodexAppServerClientOptions["onDiagnostic"];
   private versionPromise?: Promise<string>;
   private serverUserAgent?: string;
   private forkMethodAvailable = true;
   private threadItemsListAvailable = true;
+  private subagentThreadListAvailable = true;
 
   constructor(options: CodexAppServerClientOptions = {}) {
     super();
@@ -149,6 +164,7 @@ export class CodexAppServerClient extends EventEmitter {
       || 5_000;
     this.resolveVersion = options.resolveVersion || resolveCodexCliVersion;
     this.onDynamicToolCall = options.onDynamicToolCall;
+    this.onDiagnostic = options.onDiagnostic;
   }
 
   get connected() {
@@ -389,6 +405,16 @@ export class CodexAppServerClient extends EventEmitter {
   }
 
   async listThreads() {
+    try {
+      return await this.listThreadsWithCurrentSources();
+    } catch (error) {
+      if (!(error instanceof CodexAppServerRpcError) || error.rpcCode !== -32602 || !this.subagentThreadListAvailable) throw error;
+      this.disableSubagentThreadDiscovery();
+      return this.listThreadsWithCurrentSources();
+    }
+  }
+
+  private async listThreadsWithCurrentSources() {
     const threads: CodexThread[] = [];
     let cursor: string | null | undefined = undefined;
     for (let page = 0; page < 10; page += 1) {
@@ -398,7 +424,7 @@ export class CodexAppServerClient extends EventEmitter {
         sortKey: null,
         sortDirection: null,
         modelProviders: null,
-        sourceKinds: [],
+        sourceKinds: this.subagentThreadListAvailable ? [...CODEX_THREAD_SOURCE_KINDS] : [],
         archived: false,
         cwd: null,
         useStateDbOnly: false,
@@ -422,6 +448,16 @@ export class CodexAppServerClient extends EventEmitter {
   }
 
   async activeThreadExists(threadId: string) {
+    try {
+      return await this.activeThreadExistsWithCurrentSources(threadId);
+    } catch (error) {
+      if (!(error instanceof CodexAppServerRpcError) || error.rpcCode !== -32602 || !this.subagentThreadListAvailable) throw error;
+      this.disableSubagentThreadDiscovery();
+      return this.activeThreadExistsWithCurrentSources(threadId);
+    }
+  }
+
+  private async activeThreadExistsWithCurrentSources(threadId: string) {
     let cursor: string | null = null;
     const seenCursors = new Set<string>();
     while (true) {
@@ -431,7 +467,7 @@ export class CodexAppServerClient extends EventEmitter {
         sortKey: null,
         sortDirection: null,
         modelProviders: null,
-        sourceKinds: [],
+        sourceKinds: this.subagentThreadListAvailable ? [...CODEX_THREAD_SOURCE_KINDS] : [],
         archived: false,
         cwd: null,
         useStateDbOnly: false,
@@ -453,6 +489,14 @@ export class CodexAppServerClient extends EventEmitter {
       seenCursors.add(nextCursor);
       cursor = nextCursor;
     }
+  }
+
+  private disableSubagentThreadDiscovery() {
+    this.subagentThreadListAvailable = false;
+    this.onDiagnostic?.({
+      code: "CODEX_SUBAGENT_THREAD_DISCOVERY_UNSUPPORTED",
+      message: "Codex app-server rejected subagent thread source kinds; falling back to interactive thread discovery.",
+    });
   }
 
   async startTurn(threadId: string, message: string, inputs?: CodexUserInput[], permissions?: CodexTurnPermissionOverrides) {

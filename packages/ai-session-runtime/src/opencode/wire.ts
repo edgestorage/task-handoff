@@ -47,6 +47,16 @@ export const OpenCodeSessionStatusSchema = z.discriminatedUnion("type", [
 ]);
 export const OpenCodeSessionStatusMapSchema = z.record(z.string(), OpenCodeSessionStatusSchema);
 
+export const OpenCodeSessionStatusEventPropertiesSchema = z.object({
+  sessionID: IdentifierSchema,
+  status: OpenCodeSessionStatusSchema,
+}).passthrough();
+
+export const OpenCodeSessionErrorEventPropertiesSchema = z.object({
+  sessionID: IdentifierSchema.optional(),
+  error: z.unknown(),
+}).passthrough();
+
 const OpenCodeMessageBaseSchema = z.object({
   id: IdentifierSchema,
   sessionID: IdentifierSchema,
@@ -94,6 +104,12 @@ const OpenCodeFilePartSchema = OpenCodePartBaseSchema.extend({
   filename: z.string().optional(),
   url: z.string(),
 }).passthrough();
+const OpenCodeToolAttachmentSchema = z.object({
+  type: z.literal("file").optional(),
+  mime: z.string().optional(),
+  filename: z.string().optional(),
+  url: z.string().optional(),
+}).passthrough();
 const OpenCodeToolPartSchema = OpenCodePartBaseSchema.extend({
   type: z.literal("tool"),
   tool: z.string().trim().min(1),
@@ -104,6 +120,8 @@ const OpenCodeToolPartSchema = OpenCodePartBaseSchema.extend({
     title: z.string().optional(),
     output: z.string().optional(),
     error: z.string().optional(),
+    metadata: z.record(z.string(), z.unknown()).optional(),
+    attachments: z.array(OpenCodeToolAttachmentSchema).optional(),
     time: z.object({ start: TimestampSchema, end: TimestampSchema.optional() }).passthrough().optional(),
   }).passthrough(),
 }).passthrough();

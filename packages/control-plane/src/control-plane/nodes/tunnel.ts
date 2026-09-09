@@ -315,6 +315,7 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
       current.socket.send(JSON.stringify({
         type: "control-plane.event-subscribe",
         eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION,
+        aiSessionHierarchy: { subagents: true },
         aiSessionTransient: {
           ...(demand.replaySince ? { replaySince: demand.replaySince } : {}),
           messageDeltas: demand.messageDeltas,
@@ -961,6 +962,7 @@ export class ControlPlaneNodeEventSubscriber {
       v: 1,
       type: "subscribe",
       eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION,
+      aiSessionHierarchy: { subagents: true },
       aiSessionTransient: {
         ...(demand.replaySince ? { replaySince: demand.replaySince } : {}),
         messageDeltas: demand.messageDeltas,
@@ -1133,6 +1135,7 @@ export class ControlPlaneNodeEventSubscriber {
         v: 1,
         type: "subscribe",
         eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION,
+        aiSessionHierarchy: { subagents: true },
         aiSessionTransient: {
           ...(this.transientDemand.replaySince ? { replaySince: this.transientDemand.replaySince } : {}),
           messageDeltas: this.transientDemand.messageDeltas,

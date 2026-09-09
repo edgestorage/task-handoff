@@ -53,6 +53,8 @@ type RuntimeSnapshot = {
 
 const CONNECT_TIMEOUT_MS = 12_000;
 const STABLE_CONNECTION_MS = 15_000;
+const MOBILE_SESSION_RENEWAL_WINDOW_MS = 7 * 24 * 60 * 60_000;
+const MINIMUM_MOBILE_SESSION_RENEWAL_DELAY_MS = 60_000;
 
 export class MobileControlPlaneConnectionCoordinator {
   currentCapabilities: ControlPlanePublicCapabilities;
@@ -63,6 +65,7 @@ export class MobileControlPlaneConnectionCoordinator {
   private connection?: MobileControlPlaneEventConnection;
   private abortController?: AbortController;
   private reconnectTimer?: ReturnType<typeof setTimeout>;
+  private mobileSessionRenewalTimer?: ReturnType<typeof setTimeout>;
   private connectTimer?: ReturnType<typeof setTimeout>;
   private stableTimer?: ReturnType<typeof setTimeout>;
   private epoch = 0;
@@ -72,6 +75,7 @@ export class MobileControlPlaneConnectionCoordinator {
   private readonly reconnectBackoff = new MobileReconnectBackoff();
   private desiredSignature = '';
   private reconcileQueued = false;
+  private mobileSessionRenewalSupported = true;
   private snapshotValue: RuntimeSnapshot = { phase: 'idle' };
 
   constructor(
@@ -176,6 +180,17 @@ export class MobileControlPlaneConnectionCoordinator {
       this.publish({ phase: this.reconnectBackoff.attempts ? 'reconnecting' : 'verifying' });
       await this.transport.revalidate?.();
       if (!this.live(epoch, abortController)) return;
+      if (this.profile.access.kind === 'direct' && this.mobileSessionRenewalSupported) {
+        try {
+          const renewal = await this.api.auth.renewMobileSession(abortController.signal);
+          this.scheduleMobileSessionRenewal(renewal.expiresAt);
+        } catch (cause) {
+          // Compatibility for v0.0.28: older Control Planes do not expose mobile session renewal.
+          const fallback = mobileRenewalFallback(cause);
+          if (!fallback) throw cause;
+          if (fallback === 'unsupported') this.mobileSessionRenewalSupported = false;
+        }
+      }
       const auth = await this.api.auth.session(abortController.signal);
       if (!auth.authenticated) {
         this.publish({ phase: 'session-expired', error: 'The mobile Control Plane session expired.' });
@@ -285,11 +300,25 @@ export class MobileControlPlaneConnectionCoordinator {
     this.connectTimer = undefined;
   }
 
+  private scheduleMobileSessionRenewal(expiresAt: string) {
+    if (this.mobileSessionRenewalTimer) clearTimeout(this.mobileSessionRenewalTimer);
+    const delay = Math.max(
+      MINIMUM_MOBILE_SESSION_RENEWAL_DELAY_MS,
+      Date.parse(expiresAt) - Date.now() - MOBILE_SESSION_RENEWAL_WINDOW_MS,
+    );
+    this.mobileSessionRenewalTimer = setTimeout(() => {
+      this.mobileSessionRenewalTimer = undefined;
+      if (this.desiredSignature) this.reconcile(true);
+    }, delay);
+  }
+
   private clearTimers() {
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     if (this.stableTimer) clearTimeout(this.stableTimer);
+    if (this.mobileSessionRenewalTimer) clearTimeout(this.mobileSessionRenewalTimer);
     this.reconnectTimer = undefined;
     this.stableTimer = undefined;
+    this.mobileSessionRenewalTimer = undefined;
     this.clearConnectTimer();
   }
 
@@ -298,6 +327,14 @@ export class MobileControlPlaneConnectionCoordinator {
     this.snapshotValue = snapshot;
     for (const listener of this.listeners) listener();
   }
+}
+
+function mobileRenewalFallback(cause: unknown) {
+  if (!cause || typeof cause !== 'object') return undefined;
+  const status = 'status' in cause && typeof cause.status === 'number' ? cause.status : undefined;
+  if (status === 404 || status === 405) return 'unsupported' as const;
+  if (status === 401 || status === 403) return 'unauthorized' as const;
+  return undefined;
 }
 
 type DirectClient = ReturnType<typeof createMobileControlPlaneClient>;

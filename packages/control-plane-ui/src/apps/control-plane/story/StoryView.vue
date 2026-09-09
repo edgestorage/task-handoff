@@ -81,11 +81,13 @@
                   <DocumentTreeContextMenu :disabled="Boolean(story.archivedAt)" @open="selectDocument(story, document.storyPath)" @download="downloadDocument(story, document.storyPath)" @rename="renameDocument(story, document.storyPath, document.title)" @delete="deleteDocument(story, document.storyPath)" />
                 </ContextMenu>
                 <button v-if="hasMoreTreeDocuments(story)" type="button" class="story-tree-more-documents" @click="showAllTreeDocuments(story)">{{ t("stories.moreDocuments") }}</button>
-                <ContextMenu v-for="entry in sessionsFor(story)" :key="entry.session.id">
+                <TransitionGroup name="story-session-tree" tag="div" class="story-session-tree-list">
+                <div v-for="entry in sessionsFor(story)" :key="entry.session.id" class="story-session-tree-item-shell">
+                <ContextMenu>
                   <ContextMenuTrigger as-child>
-                    <button type="button" class="story-tree-item" :class="{ active: isSessionSelected(story, entry.session.id), 'story-tree-item-detailed': treeViewMode === 'detailed', 'story-tree-item-unread': entry.session.unread }" :data-state="entry.session.status" :data-unread="entry.session.unread ? 'true' : undefined" @click="selectSession(story, entry)">
-                      <span v-if="entry.session.status === 'running'" class="story-session-status"><AiSessionStatusIndicator :status="entry.session.status" /></span><span v-else class="story-session-icon"><MessageSquare :size="14" /><AiSessionStatusIndicator class="story-session-icon-status" :status="entry.session.status" size="compact" /></span><span class="story-tree-item-copy" :class="{ 'story-tree-item-detail': treeViewMode === 'detailed' }"><strong>{{ entry.session.title || entry.session.userPrompt || entry.session.id }}</strong><small v-if="treeViewMode === 'detailed'">{{ entry.instance.name }} · {{ sessionStatusLabel(entry.session.status, t) }}</small></span><small v-if="treeViewMode === 'compact'" class="story-tree-item-hint" aria-hidden="true">{{ entry.instance.name }}</small><span v-if="entry.session.unread" class="story-session-unread" :aria-label="t('sessions.actions.unread')" :title="t('sessions.actions.unread')" />
-                    </button>
+                    <div class="story-tree-item story-session-tree-row" :class="{ active: isSessionSelected(story, entry.session.id), 'story-tree-item-detailed': treeViewMode === 'detailed', 'story-tree-item-unread': entry.session.unread }" :style="storySessionTreeStyle(entry.depth)" :data-state="entry.session.status" :data-unread="entry.session.unread ? 'true' : undefined" role="button" tabindex="0" @click="selectSession(story, entry)" @keydown.enter.prevent="selectSession(story, entry)" @keydown.space.prevent="selectSession(story, entry)">
+                      <span class="story-session-leading"><span class="story-session-semantic"><span v-if="entry.session.status === 'running'" class="story-session-status"><AiSessionStatusIndicator :status="entry.session.status" /></span><span v-else class="story-session-icon"><MessageSquare :size="14" /><AiSessionStatusIndicator class="story-session-icon-status" :status="entry.session.status" size="compact" /></span></span><button v-if="entry.hasChildren" type="button" class="story-session-disclosure" :aria-expanded="isStorySessionExpanded(entry.session.id)" :aria-label="sessionDisclosureLabel(isStorySessionExpanded(entry.session.id))" @click.stop="toggleStorySessionExpanded(entry.session.id)" @keydown.stop><ChevronRight class="story-session-chevron" :class="{ expanded: isStorySessionExpanded(entry.session.id) }" :size="14" /></button></span><span class="story-tree-item-copy" :class="{ 'story-tree-item-detail': treeViewMode === 'detailed' }"><strong>{{ entry.session.title || entry.session.userPrompt || entry.session.id }}</strong><small v-if="treeViewMode === 'detailed'">{{ entry.instance.name }} · {{ sessionStatusLabel(entry.session.status, t) }}</small></span><small v-if="treeViewMode === 'compact'" class="story-tree-item-hint" aria-hidden="true">{{ entry.instance.name }}</small><span v-if="entry.session.unread" class="story-session-unread" :aria-label="t('sessions.actions.unread')" :title="t('sessions.actions.unread')" />
+                    </div>
                   </ContextMenuTrigger>
                   <AiSessionCardContextMenu
                     :bound-trigger-count="0"
@@ -96,6 +98,9 @@
                     :is-forking="false"
                     :is-opening-terminal="false"
                     :is-stopping-app-session="closingSessionKey === entry.session.id"
+                    :session-id="entry.session.id"
+                    :session-name="entry.session.title || entry.session.userPrompt || entry.session.id"
+                    :session-path="entry.session.cwd"
                     :show-trigger-actions="false"
                     :story-target="storyTargetFor(entry)"
                     :is-trigger-bound="() => false"
@@ -108,6 +113,8 @@
                     @story-assign-failed="onStoryAssignFailed"
                   />
                 </ContextMenu>
+                </div>
+                </TransitionGroup>
                       <div v-if="!sessionsFor(story).length" class="story-tree-empty">{{ t("stories.noLinkedSessions") }}</div>
                     </div>
                   </div>
@@ -125,13 +132,14 @@
 
       <main class="story-content" :class="{ 'story-session-pane': (selectedResource?.kind === 'session' || selectedResource?.kind === 'new-session') }">
         <template v-if="selectedResource?.kind === 'new-session'">
-          <AiSessionPanel v-if="newSessionInstance" class="story-session-creator" :active-session="creationActiveSession" creation-only :creation-story-id="selectedResource.story.id" :creation-initial-cwd="newSessionInitialCwd" :creation-initial-cwd-folder-id="newSessionInitialCwdFolderId" :creation-instances="storyInstances" :instance="newSessionInstance" :launchable-apps="launchableAppsForInstance(newSessionInstance, t)" :node-local-folders="nodeLocalFoldersByNodeId[newSessionInstance.nodeId] || []" :selected-ai-session="noSelectedAiSession" @update:creation-instance="selectCreationInstance" @session-created="finishStorySessionCreation" />
+          <AiSessionPanel v-if="newSessionInstance" class="story-session-creator" :active-session="creationActiveSession" :choose-project-folder="projectFolderChooserFor(newSessionInstance)" creation-only :creation-story-id="selectedResource.story.id" :creation-initial-cwd="newSessionInitialCwd" :creation-initial-cwd-folder-id="newSessionInitialCwdFolderId" :creation-instances="storyInstances" :instance="newSessionInstance" :launchable-apps="launchableAppsForInstance(newSessionInstance, t)" :node-local-folders="nodeLocalFoldersByNodeId[newSessionInstance.nodeId] || []" :selected-ai-session="noSelectedAiSession" @update:creation-instance="selectCreationInstance" @session-created="finishStorySessionCreation" />
           <div v-else class="story-content-state">{{ t("stories.noAvailableInstance") }}</div>
         </template>
         <template v-else-if="selectedResource?.kind === 'session'">
           <AiSessionPanel
             class="story-session-creator"
             :active-session="storySessionTab"
+            :choose-project-folder="projectFolderChooserFor(selectedSessionInstance)"
             detail-only
             :instance="selectedSessionInstance"
             :launchable-apps="launchableAppsForInstance(selectedSessionInstance, t)"
@@ -278,12 +286,13 @@
                 </template>
                 <template v-else>
                   <div v-if="!sessionsFor(selectedResource.story).length" class="story-empty">{{ t("stories.noLinkedSessions") }}</div>
-                  <button v-for="entry in pagedStoryCurrentSessions" :key="entry.session.id" type="button" class="story-resource-item" :class="{ active: isSessionSelected(selectedResource.story, entry.session.id) }" @click="selectSession(selectedResource.story, entry)">
-                    <span v-if="entry.session.status === 'running'" class="story-resource-icon"><AiSessionStatusIndicator :status="entry.session.status" /></span>
-                    <span v-else class="story-resource-icon story-resource-session-icon"><MessageSquare :size="15" /><AiSessionStatusIndicator class="story-resource-session-status" :status="entry.session.status" size="compact" /></span>
+                  <TransitionGroup name="story-session-tree" tag="div" class="story-session-resource-list">
+                  <div v-for="entry in pagedStoryCurrentSessions" :key="entry.session.id" class="story-resource-item story-session-resource-row" :class="{ active: isSessionSelected(selectedResource.story, entry.session.id) }" :style="storySessionTreeStyle(entry.depth)" role="button" tabindex="0" @click="selectSession(selectedResource.story, entry)" @keydown.enter.prevent="selectSession(selectedResource.story, entry)" @keydown.space.prevent="selectSession(selectedResource.story, entry)">
+                    <span class="story-resource-icon story-session-leading"><span class="story-session-semantic"><AiSessionStatusIndicator v-if="entry.session.status === 'running'" :status="entry.session.status" /><span v-else class="story-resource-session-icon"><MessageSquare :size="15" /><AiSessionStatusIndicator class="story-resource-session-status" :status="entry.session.status" size="compact" /></span></span><button v-if="entry.hasChildren" type="button" class="story-session-disclosure story-session-resource-disclosure" :aria-expanded="isStorySessionExpanded(entry.session.id)" :aria-label="sessionDisclosureLabel(isStorySessionExpanded(entry.session.id))" @click.stop="toggleStorySessionExpanded(entry.session.id)" @keydown.stop><ChevronRight class="story-session-chevron" :class="{ expanded: isStorySessionExpanded(entry.session.id) }" :size="16" /></button></span>
                     <span class="story-resource-copy"><strong>{{ entry.session.title || entry.session.userPrompt || entry.session.id }}</strong><small>{{ entry.instance.name }} · {{ sessionStatusLabel(entry.session.status, t) }}</small></span>
                     <span v-if="entry.session.unread" class="story-resource-unread" :aria-label="t('sessions.actions.unread')" :title="t('sessions.actions.unread')" />
-                  </button>
+                  </div>
+                  </TransitionGroup>
                   <div v-if="storyCurrentSessionPageCount > 1" class="story-pagination">
                     <span>{{ t("stories.pagination", { page: storyCurrentSessionPage, total: storyCurrentSessionPageCount }) }}</span>
                     <div><Button variant="ghost" size="icon-sm" :disabled="storyCurrentSessionPage <= 1" :aria-label="t('stories.previousPage')" :title="t('stories.previousPage')" @click="storyCurrentSessionPage -= 1"><ChevronLeft :size="14" /></Button><Button variant="ghost" size="icon-sm" :disabled="storyCurrentSessionPage >= storyCurrentSessionPageCount" :aria-label="t('stories.nextPage')" :title="t('stories.nextPage')" @click="storyCurrentSessionPage += 1"><ChevronRight :size="14" /></Button></div>
@@ -370,7 +379,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, ref, watch, type CSSProperties } from "vue";
 import { useI18n } from "vue-i18n";
 import { useQueryClient } from "@tanstack/vue-query";
 import { Archive, BookOpen, CalendarClock, ChevronLeft, ChevronRight, Download, FileText, History, Link, LoaderCircle, MessageSquare, MessageSquarePlus, MoreHorizontal, Pencil, Play, Plus, RotateCcw, Trash2, X } from "@lucide/vue";
@@ -404,20 +413,31 @@ import { createBrowserUuid } from "../../../lib/random-id";
 import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions, Node, NodeLocalFolder } from "../../../api/types";
 import { STORY_DEFAULT_MAX_IDLE_AI_SESSIONS, STORY_MAX_IDLE_AI_SESSIONS, STORY_MIN_IDLE_AI_SESSIONS, type Story, type StoryAction, type StoryAutomationRun, type StoryAutomationSchedule, type StoryAutomationStatus, type StorySessionPreset } from "@task-handoff/protocol/stories";
 import type { AiSessionHistoryItem } from "@task-handoff/protocol/ai-sessions";
+import {
+  aiSessionAncestorIds,
+  deriveAiSessionForest,
+  flattenAiSessionForest,
+  type AiSessionTreeNode,
+} from "@task-handoff/protocol/ai-session-hierarchy";
 import AiSessionPanel, { type AiSessionCreationPresetDraft } from "../instance-detail/AiSessionPanel.vue";
-import { aiSessionLastUserMessageTime, launchableAppsForInstance, sessionStatusLabel, sortedAiSessionInboxEntries, type RepositoryWorkspaceTabTarget, type SessionTab } from "../useInstanceSessions";
+import { canUseNativeProjectFolderPicker, type NativeNodeFolderPicker } from "../nodePath";
+import { launchableAppsForInstance, sessionStatusLabel, type RepositoryWorkspaceTabTarget, type SessionTab } from "../useInstanceSessions";
 import { latestStoryDocuments, STORY_TREE_DOCUMENT_LIMIT } from "./storyDocuments";
 import { normalizeManualStoryOrder, reorderStoryKeys, sortStories, storyDropTargetAt, storySortKey, type StorySortMode } from "./storySort";
 
-const props = withDefaults(defineProps<{ instances: InstanceWithAiSessions[]; nodes: Node[]; nodeLocalFoldersByNodeId?: Record<string, NodeLocalFolder[]>; filterNodeId?: string }>(), { nodeLocalFoldersByNodeId: () => ({}), filterNodeId: "" });
+const props = withDefaults(defineProps<{ chooseProjectFolder?: NativeNodeFolderPicker; instances: InstanceWithAiSessions[]; nodes: Node[]; nodeLocalFoldersByNodeId?: Record<string, NodeLocalFolder[]>; filterNodeId?: string }>(), { nodeLocalFoldersByNodeId: () => ({}), filterNodeId: "" });
 const { locale, t } = useI18n();
+const projectFolderChooserFor = (instance: InstanceWithAiSessions | undefined) => (
+  canUseNativeProjectFolderPicker(instance, Boolean(props.chooseProjectFolder)) ? props.chooseProjectFolder : undefined
+);
 const emit = defineEmits<{
   "launch-app": [instance: InstanceBoardItem, appId: string, cwdFolderId?: string, options?: Record<string, unknown>];
   "open-session": [instance: InstanceWithAiSessions, session: AiSessionSummary | undefined];
   "open-repository-workspace": [target: RepositoryWorkspaceTabTarget];
   "run-action": [story: Story, action: StoryAction, onCreated: (instanceId: string, sessionId: string) => void];
 }>();
-type SessionEntry = { instance: InstanceWithAiSessions; session: AiSessionSummary };
+type StorySessionRecord = AiSessionSummary & { instanceId: string };
+type SessionEntry = { instance: InstanceWithAiSessions; session: AiSessionSummary; depth?: number; hasChildren?: boolean };
 type StoryHistoryEntry = { instance: InstanceWithAiSessions; item: AiSessionHistoryItem };
 type Resource = { kind: "story"; story: Story } | { kind: "new-session"; story: Story } | { kind: "document"; story: Story; document: Story["documents"][number] } | { kind: "session"; story: Story; entry: SessionEntry };
 const EXPANDED_STORY_KEYS_STORAGE_KEY = "task-handoff.control-plane.stories.expanded";
@@ -481,18 +501,21 @@ const filteredStories = computed(() => {
   const nodeId = props.filterNodeId?.trim();
   return nodeId ? allStories.value.filter((story) => story.ownerNodeId === nodeId) : allStories.value;
 });
+const storySessionRecords = computed<StorySessionRecord[]>(() => props.instances.flatMap((instance) => (
+  (instance.aiSessions.sessions || []).map((session) => ({ ...session, instanceId: instance.id }))
+)));
+const storySessionForest = computed(() => deriveAiSessionForest(storySessionRecords.value, { orderBy: "last-user-message" }));
 const storyLastUserMessageTimes = computed(() => {
   const times = new Map<string, number>();
   const availableStoryKeys = new Set(allStories.value.map(storySortKey));
-  for (const instance of props.instances) {
-    const ownerNodeId = instance.node?.id;
+  for (const root of storySessionForest.value.roots) {
+    const instance = props.instances.find((candidate) => candidate.id === root.session.instanceId);
+    const ownerNodeId = instance?.node?.id;
     if (!ownerNodeId) continue;
-    for (const session of instance.aiSessions.sessions || []) {
-      if (!session.storyId) continue;
-      const key = `${ownerNodeId}:${session.storyId}`;
-      if (!availableStoryKeys.has(key)) continue;
-      times.set(key, Math.max(times.get(key) || 0, aiSessionLastUserMessageTime(session)));
-    }
+    if (!root.session.storyId) continue;
+    const key = `${ownerNodeId}:${root.session.storyId}`;
+    if (!availableStoryKeys.has(key)) continue;
+    times.set(key, Math.max(times.get(key) || 0, Date.parse(root.session.lastUserMessageAt || "") || 0));
   }
   return times;
 });
@@ -733,17 +756,32 @@ const foldersForInstance = (instanceId: string) => {
   const nodeId = targetInstance(instanceId)?.nodeId;
   return nodeId ? props.nodeLocalFoldersByNodeId[nodeId] || [] : [];
 };
-const sessionsFor = (story: Story): SessionEntry[] => {
-  const instancesById = new Map(props.instances.map((instance) => [instance.id, instance]));
-  const entries = props.instances.flatMap((instance) => (instance.aiSessions.sessions || [])
-    .filter((session) => session.storyId === story.id && instance.node?.id === story.ownerNodeId)
-    .map((session) => ({ instanceId: instance.id, session })));
-  return sortedAiSessionInboxEntries(entries).map((entry) => ({
-    instance: instancesById.get(entry.instanceId)!,
-    session: entry.session,
-  }));
-};
-const unassignedSessionsFor = (story: Story) => props.instances.flatMap((instance) => (instance.aiSessions.sessions || []).filter((session) => !session.storyId && instance.node?.id === story.ownerNodeId).map((session) => ({ instance, session })));
+const expandedStorySessionIds = ref(new Set<string>());
+const forcedExpandedStorySessionIds = computed(() => new Set(aiSessionAncestorIds(
+  storySessionForest.value,
+  selectedResource.value?.kind === "session" ? selectedResource.value.entry.session.id : undefined,
+)));
+const storySessionRootsFor = (story: Story) => storySessionForest.value.roots.filter((root) => {
+  const instance = targetInstance(root.session.instanceId);
+  return root.session.storyId === story.id && instance?.node?.id === story.ownerNodeId;
+});
+const sessionEntriesForRoots = (roots: AiSessionTreeNode<StorySessionRecord>[]): SessionEntry[] => flattenAiSessionForest({
+  ...storySessionForest.value,
+  roots,
+}, {
+  expandedSessionIds: expandedStorySessionIds.value,
+  forcedExpandedSessionIds: forcedExpandedStorySessionIds.value,
+}).map(({ node, depth }) => ({
+  instance: targetInstance(node.session.instanceId)!,
+  session: node.session,
+  depth,
+  hasChildren: node.children.length > 0,
+})).filter((entry) => Boolean(entry.instance));
+const sessionsFor = (story: Story): SessionEntry[] => sessionEntriesForRoots(storySessionRootsFor(story));
+const unassignedSessionsFor = (story: Story) => storySessionForest.value.roots.flatMap((root) => {
+  const instance = targetInstance(root.session.instanceId);
+  return !root.session.storyId && instance?.node?.id === story.ownerNodeId ? [{ instance, session: root.session }] : [];
+});
 const STORY_DETAIL_PAGE_SIZE = 10;
 const storyDocumentPage = ref(1);
 const storyCurrentSessionPage = ref(1);
@@ -752,13 +790,14 @@ const storyHistoryEntries = ref<StoryHistoryEntry[]>([]);
 const storyDetail = computed(() => selectedResource.value?.kind === "story" ? selectedResource.value.story : undefined);
 const storyDetailDocuments = computed(() => storyDetail.value?.documents || []);
 const storyCurrentSessions = computed(() => storyDetail.value ? sessionsFor(storyDetail.value) : []);
+const storyCurrentSessionRoots = computed(() => storyDetail.value ? storySessionRootsFor(storyDetail.value) : []);
 const pageCount = (length: number) => Math.max(1, Math.ceil(length / STORY_DETAIL_PAGE_SIZE));
 const pageItems = <T,>(items: T[], page: number) => items.slice((page - 1) * STORY_DETAIL_PAGE_SIZE, page * STORY_DETAIL_PAGE_SIZE);
 const storyDocumentPageCount = computed(() => pageCount(storyDetailDocuments.value.length));
-const storyCurrentSessionPageCount = computed(() => pageCount(storyCurrentSessions.value.length));
+const storyCurrentSessionPageCount = computed(() => pageCount(storyCurrentSessionRoots.value.length));
 const storyHistoryPageCount = computed(() => pageCount(storyHistoryEntries.value.length));
 const pagedStoryDocuments = computed(() => pageItems(storyDetailDocuments.value, storyDocumentPage.value));
-const pagedStoryCurrentSessions = computed(() => pageItems(storyCurrentSessions.value, storyCurrentSessionPage.value));
+const pagedStoryCurrentSessions = computed(() => sessionEntriesForRoots(pageItems(storyCurrentSessionRoots.value, storyCurrentSessionPage.value)));
 const pagedStoryHistoryEntries = computed(() => pageItems(storyHistoryEntries.value, storyHistoryPage.value));
 type StorySessionView = "current" | "history";
 const storySessionView = ref<StorySessionView>("current");
@@ -881,7 +920,12 @@ async function onStoryAssigned(_target: AiSessionStoryTarget) {
 function onStoryAssignFailed(_target: AiSessionStoryTarget, error: unknown) {
   showControlPlaneToast(translateApiError(error, t, t("sessions.actions.storyAssignFailed")));
 }
-const latestSessionFor = (story: Story) => sessionsFor(story).reduce<SessionEntry | undefined>((latest, entry) => !latest || Date.parse(entry.session.updatedAt) > Date.parse(latest.session.updatedAt) ? entry : latest, undefined);
+const latestSessionFor = (story: Story) => {
+  const root = storySessionRootsFor(story)[0];
+  if (!root) return undefined;
+  const instance = targetInstance(root.session.instanceId);
+  return instance ? { instance, session: root.session } : undefined;
+};
 const instancesForStory = (story: Story) => props.instances.filter((instance) => instance.node?.id === story.ownerNodeId);
 const documentResource = computed(() => selectedResource.value?.kind === "document" ? selectedResource.value : undefined);
 const documentInstanceId = computed(() => { const resource = documentResource.value; return resource ? instancesForStory(resource.story)[0]?.id ?? "" : ""; });
@@ -918,7 +962,7 @@ const selectedStorySession = (_instance: InstanceBoardItem, sessions?: AiSession
   return sessions?.find((session) => session.id === entryId) || resource.entry.session;
 };
 const availableSessions = computed(() => { const story = selectedResource.value?.story; return story ? unassignedSessionsFor(story) : []; });
-const sessionCount = (story: Story) => sessionsFor(story).length;
+const sessionCount = (story: Story) => storySessionRootsFor(story).length;
 const storyKey = (story: Story) => `${story.ownerNodeId}:${story.id}`;
 const isSelectedStory = (story: Story) => selectedResource.value?.story.id === story.id && selectedResource.value?.story.ownerNodeId === story.ownerNodeId;
 const isStoryOpen = (story: Story) => expandedStoryKeys.value.has(storyKey(story));
@@ -933,6 +977,14 @@ function toggleStoryExpanded(story: Story) { setStoryExpanded(story, !isStoryOpe
 function selectStory(story: Story) { selectedResource.value = { kind: "story", story }; }
 function selectDocument(story: Story, path: string) { const document = story.documents.find((item) => item.storyPath === path); if (document) { setStoryExpanded(story, true); if (!treeDocumentsFor(story).includes(document)) showAllTreeDocuments(story); selectedResource.value = { kind: "document", story, document }; } }
 function selectSession(story: Story, entry: SessionEntry) { setStoryExpanded(story, true); selectedResource.value = { kind: "session", story, entry }; }
+function storySessionTreeStyle(depth = 0): CSSProperties { return { "--story-session-tree-indent": `${depth * 14}px` } as CSSProperties; }
+function isStorySessionExpanded(sessionId: string) { return expandedStorySessionIds.value.has(sessionId) || forcedExpandedStorySessionIds.value.has(sessionId); }
+function sessionDisclosureLabel(expanded: boolean) { return t(expanded ? "sessions.panel.collapseSubSessions" : "sessions.panel.expandSubSessions"); }
+function toggleStorySessionExpanded(sessionId: string) {
+  const next = new Set(expandedStorySessionIds.value);
+  if (next.has(sessionId)) next.delete(sessionId); else next.add(sessionId);
+  expandedStorySessionIds.value = next;
+}
 function openAutomationSession(story: Story, instanceId: string, sessionId: string) { const instance = props.instances.find((candidate) => candidate.id === instanceId); const session = instance?.aiSessions.sessions.find((candidate) => candidate.id === sessionId); if (instance && session) selectSession(story, { instance, session }); }
 function setStoryAutomationEntries(entries: StoryAutomationView[]) { storyAutomationEntries.value = entries; }
 function actionAutomations(actionId: string) { return storyAutomationEntries.value.filter((entry) => entry.automation.actionId === actionId); }
@@ -1269,6 +1321,38 @@ onBeforeUnmount(() => {
 @media (prefers-reduced-motion: reduce) { .story-tree-collapse,.story-tree-disclosure { transition:none; } }
 .story-session-status,.story-session-icon { position:relative; display:grid; width:14px; height:14px; flex:0 0 auto; place-items:center; overflow:visible; }
 .story-session-icon-status { position:absolute; top:-2px; right:-5px; }
+.story-session-tree-row { padding-left:calc(8px + var(--story-session-tree-indent, 0px)); }
+.story-session-resource-row { padding-left:calc(12px + var(--story-session-tree-indent, 0px)); }
+.story-session-leading { position:relative; display:grid; width:14px; height:14px; flex:0 0 14px; place-items:center; }
+.story-session-semantic,.story-session-disclosure { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); transition:opacity 100ms ease; }
+.story-session-semantic { display:grid; place-items:center; }
+.story-session-disclosure { z-index:1; display:grid; width:20px; height:20px; place-items:center; border:0; border-radius:4px; background:transparent; color:var(--text-muted); cursor:pointer; padding:0; opacity:0; }
+.story-session-chevron { display:block; transform-origin:center; transition:transform 180ms ease; }
+.story-session-chevron.expanded { transform:rotate(90deg); }
+.story-session-disclosure:hover,.story-session-disclosure:focus-visible { color:var(--text-strong); outline:none; }
+.story-session-disclosure:focus-visible { box-shadow:0 0 0 2px var(--focus-ring); opacity:1; }
+.story-session-tree-row:hover .story-session-disclosure,.story-session-tree-row:focus-within .story-session-disclosure,
+.story-session-resource-row:hover .story-session-disclosure,.story-session-resource-row:focus-within .story-session-disclosure { opacity:1; }
+.story-session-tree-row:hover .story-session-leading:has(.story-session-disclosure) .story-session-semantic,
+.story-session-tree-row:focus-within .story-session-leading:has(.story-session-disclosure) .story-session-semantic,
+.story-session-resource-row:hover .story-session-leading:has(.story-session-disclosure) .story-session-semantic,
+.story-session-resource-row:focus-within .story-session-leading:has(.story-session-disclosure) .story-session-semantic { opacity:0; }
+.story-session-resource-disclosure { width:28px; height:28px; }
+.story-session-tree-list { display:grid; gap:2px; min-width:0; }
+.story-session-tree-item-shell { min-width:0; max-height:64px; overflow:hidden; }
+.story-session-resource-list { display:contents; }
+.story-session-resource-row { max-height:72px; overflow:hidden; }
+.story-session-tree-enter-active,.story-session-tree-leave-active { transition:max-height 180ms ease,opacity 140ms ease,transform 180ms ease,padding-block 180ms ease; }
+.story-session-tree-enter-from,.story-session-tree-leave-to { max-height:0; padding-block:0; opacity:0; transform:translateY(-4px); }
+.story-session-tree-leave-active { pointer-events:none; }
+.story-session-tree-move { transition:transform 180ms ease; }
+@media (hover:none) {
+  .story-session-leading:has(.story-session-disclosure) .story-session-semantic { opacity:0; }
+  .story-session-disclosure { opacity:1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .story-session-chevron,.story-session-tree-enter-active,.story-session-tree-leave-active,.story-session-tree-move { transition:none; }
+}
 .story-tree-item > .story-tree-item-copy { display:flex; align-items:center; min-width:0; flex:1; overflow:hidden; }
 .story-tree-item > .story-tree-item-copy strong { display:block; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; line-height:1.3; }
 .story-tree-item > .story-tree-item-copy.story-tree-item-detail { display:grid; gap:2px; line-height:1.5; overflow:visible; }

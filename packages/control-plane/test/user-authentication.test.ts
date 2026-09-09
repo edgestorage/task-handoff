@@ -100,6 +100,72 @@ test("resolving a session tracks activity without persisting the session", async
   }
 });
 
+test("mobile session renewal extends only sessions inside the renewal window", async () => {
+  const current = fixture();
+  try {
+    await current.users.bootstrapAdmin({ username: "admin", password: "password123" });
+    const login = await current.auth.loginLocal({ username: "admin", password: "password123" }, {
+      clientType: "mobile",
+      device: { id: "device_renewal", name: "Phone", platform: "ios" },
+    });
+    const initial = (await current.users.store.sessions.get(login.session.id))!;
+    const nearExpiry = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    await current.users.store.sessions.put({ ...initial, expiresAt: nearExpiry });
+
+    const renewed = await current.auth.renewMobileSession(login.sessionToken);
+    assert.ok(renewed);
+    assert.ok(Date.parse(renewed.expiresAt) > Date.parse(nearExpiry));
+    assert.equal((await current.auth.resolve(login.sessionToken, "mobile"))?.session.expiresAt, renewed.expiresAt);
+
+    const farExpiry = new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString();
+    await current.users.store.sessions.put({ ...(await current.users.store.sessions.get(login.session.id))!, expiresAt: farExpiry });
+    assert.deepEqual(await current.auth.renewMobileSession(login.sessionToken), { expiresAt: farExpiry });
+    assert.equal((await current.users.store.sessions.get(login.session.id))?.expiresAt, farExpiry);
+  } finally {
+    await current.dispose();
+  }
+});
+
+test("mobile session renewal rejects Web and expired credentials", async () => {
+  const current = fixture();
+  try {
+    await current.users.bootstrapAdmin({ username: "admin", password: "password123" });
+    const web = await current.auth.loginLocal({ username: "admin", password: "password123" });
+    assert.equal(await current.auth.renewMobileSession(web.sessionToken), undefined);
+    const mobile = await current.auth.loginLocal({ username: "admin", password: "password123" }, {
+      clientType: "mobile",
+      device: { id: "device_expired", name: "Phone", platform: "ios" },
+    });
+    const stored = (await current.users.store.sessions.get(mobile.session.id))!;
+    await current.users.store.sessions.put({ ...stored, expiresAt: new Date(Date.now() - 1_000).toISOString() });
+    assert.equal(await current.auth.renewMobileSession(mobile.sessionToken), undefined);
+  } finally {
+    await current.dispose();
+  }
+});
+
+test("v0.0.28 mobile session probes renew without changing the session response", async () => {
+  const current = fixture();
+  try {
+    await current.users.bootstrapAdmin({ username: "admin", password: "password123" });
+    const login = await current.auth.loginLocal({ username: "admin", password: "password123" }, {
+      clientType: "mobile",
+      device: { id: "device_legacy", name: "Phone", platform: "ios" },
+    });
+    const stored = (await current.users.store.sessions.get(login.session.id))!;
+    const nearExpiry = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    await current.users.store.sessions.put({ ...stored, expiresAt: nearExpiry });
+
+    const session = await current.auth.currentSession(login.sessionToken, "mobile");
+    assert.equal(session.authenticated, true);
+    assert.ok(Date.parse((await current.users.store.sessions.get(login.session.id))!.expiresAt) > Date.parse(nearExpiry));
+    assert.equal("sessionToken" in session, false);
+    assert.equal("expiresAt" in session, false);
+  } finally {
+    await current.dispose();
+  }
+});
+
 test("local login has a uniform failure and rate limit", async () => {
   const current = fixture();
   try {

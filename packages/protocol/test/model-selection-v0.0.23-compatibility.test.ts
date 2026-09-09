@@ -18,8 +18,10 @@ import {
   AiSessionSummarySchema,
 } from "../src/ai-sessions.ts";
 import {
+  normalizeAiSessionHierarchyCapabilities,
   normalizeAiSessionModelSelectionCapabilities,
   normalizeAiSessionReasoningEffortCapabilities,
+  supportsAiSessionSubagentHierarchy,
 } from "../src/ai-session-provider-capabilities.ts";
 
 const now = "2026-08-27T00:00:00.000Z";
@@ -110,6 +112,20 @@ test("model capabilities default to unsupported for v0.0.23 peers and ignore fut
     selectAtCreate: true,
     updateDuringSession: true,
   });
+});
+
+test("AI Session hierarchy capability defaults to flat v0.0.28 behavior", () => {
+  const legacy = { agent: "codex", actions: {}, timeline: {} };
+  assert.deepEqual(normalizeAiSessionHierarchyCapabilities(legacy), { subagents: false });
+  assert.equal(supportsAiSessionSubagentHierarchy(legacy), false);
+  assert.deepEqual(normalizeAiSessionHierarchyCapabilities({
+    ...legacy,
+    hierarchy: { subagents: true, future: true },
+  }), { subagents: true });
+  assert.equal(supportsAiSessionSubagentHierarchy({
+    ...legacy,
+    hierarchy: { subagents: true },
+  }), true);
 });
 
 test("AI Session model selection is a strict minimal public identity across create, state, history and events", () => {

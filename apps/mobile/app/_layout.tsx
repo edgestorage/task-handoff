@@ -14,6 +14,7 @@ import { TaskStatusSurface } from '../src/task-status/TaskStatusSurface';
 import { TaskStatusSettingsProvider } from '../src/task-status/settings';
 import { CarPlaySurface } from '../src/carplay/CarPlaySurface';
 import { MobileControlPlaneRuntimeProvider } from '../src/control-plane/use-mobile-control-plane-runtime';
+import { MobileSessionRecovery } from '../src/control-plane/MobileSessionRecovery';
 import { MobileToastProvider } from '../src/components/MobileToast';
 import { ActiveTriggersProvider } from '../src/triggers/use-active-triggers';
 
@@ -54,6 +55,7 @@ function LocalizedRootLayout() {
           <StatusBar animated style={dark ? 'light' : 'dark'} />
           <ThemeProvider value={navigationTheme}>
           <MobileControlPlaneRuntimeProvider>
+            <MobileSessionRecovery />
             <ActiveDirectoriesProvider>
               <InstanceScopeProvider>
                 <ActiveAiSessionsProvider>

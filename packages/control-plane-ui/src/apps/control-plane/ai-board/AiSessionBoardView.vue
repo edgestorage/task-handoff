@@ -292,6 +292,7 @@ import type { AiBoardCard, AiBoardColumnKey } from "./aiBoardTypes";
 import { useAiBoardTriggers } from "./useAiBoardTriggers";
 import { nodeLocalFolderDisplayName } from "../nodePath";
 import { createBrowserUuid } from "../../../lib/random-id";
+import { aiSessionSubtreePostorder, deriveAiSessionForest } from "@task-handoff/protocol/ai-session-hierarchy";
 
 const AI_BOARD_VISIBLE_COLUMNS_STORAGE_KEY = "task-handoff.control-plane.ai-board.visible-columns";
 const AI_BOARD_LAYOUT_STORAGE_KEY = "task-handoff.control-plane.ai-board.layout";
@@ -392,19 +393,25 @@ function onStoryAssignFailed(_card: AiBoardCard, _target: StoryTarget, error: un
 
 const allCards = computed<AiBoardCard[]>(() => {
   const cards: AiBoardCard[] = [];
-  for (const instance of props.instances) {
-    for (const session of instance.aiSessions?.sessions || []) {
-      const appTab = aiSessionAppTab(instance, session);
-      cards.push({
-        appTab: appTab || { key: "ai-sessions", label: t("sessions.title"), status: session.status, kind: "ai" },
-        instance,
-        key: `${instance.id}:${session.id}`,
-        session,
-      });
-    }
+  for (const root of boardSessionForest.value.roots) {
+    const instance = props.instances.find((candidate) => candidate.id === root.session.instanceId);
+    if (!instance) continue;
+    const session = root.session;
+    const appTab = aiSessionAppTab(instance, session);
+    cards.push({
+      appTab: appTab || { key: "ai-sessions", label: t("sessions.title"), status: session.status, kind: "ai" },
+      instance,
+      key: `${instance.id}:${session.id}`,
+      session,
+    });
   }
   return cards;
 });
+
+const boardSessionRecords = computed(() => props.instances.flatMap((instance) => (
+  (instance.aiSessions?.sessions || []).map((session) => ({ ...session, instanceId: instance.id }))
+)));
+const boardSessionForest = computed(() => deriveAiSessionForest(boardSessionRecords.value, { orderBy: "last-user-message" }));
 
 const visibleCards = computed(() => {
   const term = props.filter.trim().toLowerCase();
@@ -412,22 +419,26 @@ const visibleCards = computed(() => {
     return allCards.value;
   }
   return allCards.value.filter((card) => {
+    const matches = (session: AiSessionSummary) => {
     const haystack = [
       props.instanceDisplayName(card.instance),
       card.instance.project?.name,
       card.instance.node?.name,
-      card.session.agent,
-      card.session.status,
-      card.session.phase,
-      card.session.cwd,
-      displayAiSessionTitle(card.session, promptIndexFor(card), t),
-      displayAiSessionMessage(card.session, promptIndexFor(card), t),
+      session.agent,
+      session.status,
+      session.phase,
+      session.cwd,
+      displayAiSessionTitle(session, undefined, t),
+      displayAiSessionMessage(session, undefined, t),
       sessionDisplayName(card.appTab, t),
     ]
       .filter(Boolean)
       .join(" ")
       .toLowerCase();
-    return haystack.includes(term);
+      return haystack.includes(term);
+    };
+    return aiSessionSubtreePostorder(boardSessionForest.value, card.session.id)
+      .some((node) => matches(node.session));
   });
 });
 
@@ -591,9 +602,10 @@ function cardColumnKey(card: AiBoardCard): AiBoardColumnKey {
 
 function compareAiBoardCards(left: AiBoardCard, right: AiBoardCard, sortByStatus: boolean) {
   const sessionDelta = compareAiSessionsByLastUserMessage(left.session, right.session, sortByStatus);
-  if (sessionDelta) {
+  if (sortByStatus && sessionDelta) {
     return sessionDelta;
   }
+  if (sessionDelta) return sessionDelta;
   const instanceDelta = compareNaturalText(props.instanceDisplayName(left.instance), props.instanceDisplayName(right.instance), locale.value as SupportedLocale)
     || compareTechnicalIdentifiers(left.instance.id, right.instance.id);
   return instanceDelta || compareTechnicalIdentifiers(aiSessionStableSortKey(left.session), aiSessionStableSortKey(right.session));

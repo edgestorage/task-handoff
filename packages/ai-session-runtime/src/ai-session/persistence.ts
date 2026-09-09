@@ -1,5 +1,5 @@
 import {
-  AiSessionLineageSchema,
+  normalizeAiSessionLineage,
   AiSessionMessageAttachmentMetaSchema,
   AiSessionModelSelectionSchema,
   AiSessionReasoningEffortSchema,
@@ -258,7 +258,7 @@ export function decodePersistedAiSession(value: unknown): AiSessionStatus | unde
   warnUnknownFields(record, PERSISTED_SESSION_FIELDS, "session");
   const appBindingKeys = normalizeStringArray(record.appBindingKeys, 20, 240);
   const actions = normalizeActions(record.actions);
-  const lineage = AiSessionLineageSchema.safeParse(record.lineage);
+  const lineage = normalizeAiSessionLineage(record.lineage);
   const modelSelection = AiSessionModelSelectionSchema.safeParse(record.modelSelection);
   const reasoningEffort = AiSessionReasoningEffortSchema.safeParse(record.reasoningEffort);
   const storyId = StoryIdSchema.safeParse(record.storyId);
@@ -273,7 +273,7 @@ export function decodePersistedAiSession(value: unknown): AiSessionStatus | unde
     ...(typeof record.appSessionId === "string" && record.appSessionId ? { appSessionId: compact(record.appSessionId, 120) } : {}),
     ...(typeof record.appId === "string" && record.appId ? { appId: compact(record.appId, 120) } : {}),
     ...(typeof record.providerSessionId === "string" && record.providerSessionId ? { providerSessionId: compact(record.providerSessionId, 240) } : {}),
-    ...(lineage.success ? { lineage: lineage.data } : {}),
+    ...(lineage ? { lineage } : {}),
     ...(record.providerMeta && typeof record.providerMeta === "object" && !Array.isArray(record.providerMeta) ? { providerMeta: record.providerMeta } : {}),
     ...(modelSelection.success ? { modelSelection: modelSelection.data } : {}),
     ...(reasoningEffort.success ? { reasoningEffort: reasoningEffort.data } : {}),

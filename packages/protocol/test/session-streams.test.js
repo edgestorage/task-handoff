@@ -18,7 +18,9 @@ import {
   AiSessionHistoryDetailSchema,
   AiSessionHistoryItemSchema,
   AiSessionHistoryListSchema,
+  AiSessionLineageSchema,
   AI_SESSION_HISTORY_MAX_LIMIT,
+  AI_SESSION_HISTORY_MAX_ITEMS,
   AiSessionMessageDeltaEventSchema,
   compactAiSessionMessageDeltaEvent,
   normalizeAiSessionMessageDeltaEvent,
@@ -49,6 +51,10 @@ import {
   AiSessionToolSchema,
   applyAiSessionStreamEvent,
   emptyAiSessionsSnapshot,
+  normalizeAiSessionLineage,
+  projectAiSessionDeltaForConsumer,
+  projectAiSessionHistoryItemForConsumer,
+  projectAiSessionsSnapshotForConsumer,
 } from "../src/ai-sessions.ts";
 import {
   AppSessionEventType,
@@ -86,6 +92,101 @@ test("AI session queue schemas expose revisioned edit and reorder inputs", () =>
   assert.deepEqual(AiSessionQueueReorderInputSchema.parse({ expectedRevision: 2, queueIds: ["q-2", "q-1"] }), { expectedRevision: 2, queueIds: ["q-2", "q-1"] });
   assert.equal(AiSessionQueueEditInputSchema.safeParse({ message: "missing revision" }).success, false);
   assert.equal(AiSessionQueueReorderInputSchema.safeParse({ expectedRevision: 2, queueIds: [], extra: true }).success, false);
+});
+
+test("AI session lineage distinguishes user forks from subagents and sanitizes future versions", () => {
+  const fork = { kind: "fork", parentProviderSessionId: "thread-parent", throughTurnId: "turn-2" };
+  const subagent = { kind: "subagent", parentProviderSessionId: "thread-parent" };
+  assert.deepEqual(AiSessionLineageSchema.parse(fork), fork);
+  assert.deepEqual(AiSessionLineageSchema.parse(subagent), subagent);
+  assert.equal(AiSessionLineageSchema.safeParse({ ...subagent, throughTurnId: "turn-invalid" }).success, false);
+  assert.equal(AiSessionLineageSchema.safeParse({ ...subagent, parentSessionId: "derived" }).success, false);
+  assert.deepEqual(normalizeAiSessionLineage({ ...subagent, parentSessionId: "legacy-derived" }), subagent);
+  assert.deepEqual(normalizeAiSessionLineage({ ...fork, futureField: true }), fork);
+  assert.equal(normalizeAiSessionLineage({ kind: "future", parentProviderSessionId: "thread-parent" }), undefined);
+  assert.equal(normalizeAiSessionLineage({ kind: "subagent", parentProviderSessionId: "" }), undefined);
+});
+
+test("AI session response boundaries flatten unknown lineage without dropping sessions", () => {
+  const session = {
+    id: "session-child",
+    agent: "codex",
+    providerSessionId: "thread-child",
+    lineage: { kind: "future-relation", parentProviderSessionId: "thread-parent" },
+    startedAt: now,
+    updatedAt: now,
+  };
+  const snapshot = AiSessionDeltaResponseSchema.parse({
+    streamId: "stream-a",
+    instanceId: "instance-a",
+    sinceRevision: 0,
+    latestRevision: 1,
+    earliestRetainedRevision: 1,
+    events: [{
+      type: AiSessionEventType.Snapshot,
+      payload: {
+        meta: {
+          streamId: "stream-a",
+          instanceId: "instance-a",
+          revision: 1,
+          traceId: "trace-a",
+          generatedAt: now,
+          reason: "startup",
+        },
+        snapshot: { sessions: [session], updatedAt: now },
+      },
+    }],
+  });
+  assert.equal(snapshot.events[0].payload.snapshot.sessions.length, 1);
+  assert.equal(snapshot.events[0].payload.snapshot.sessions[0].lineage, undefined);
+});
+
+test("v0.0.28 projection preserves child records while omitting subagent lineage", () => {
+  const parent = AiSessionSummarySchema.parse({ id: "parent", agent: "codex", providerSessionId: "thread-parent", startedAt: now, updatedAt: now });
+  const child = AiSessionSummarySchema.parse({
+    id: "child",
+    agent: "codex",
+    providerSessionId: "thread-child",
+    lineage: { kind: "subagent", parentProviderSessionId: "thread-parent" },
+    startedAt: now,
+    updatedAt: now,
+  });
+  const snapshot = emptyAiSessionsSnapshot(now);
+  snapshot.sessions = [parent, child];
+  const legacySnapshot = projectAiSessionsSnapshotForConsumer(snapshot, undefined);
+  assert.deepEqual(legacySnapshot.sessions.map((session) => session.id), ["parent", "child"]);
+  assert.equal(legacySnapshot.sessions[1].lineage, undefined);
+  assert.equal(projectAiSessionsSnapshotForConsumer(snapshot, { subagents: true }).sessions[1].lineage?.kind, "subagent");
+
+  const delta = AiSessionDeltaResponseSchema.parse({
+    streamId: "stream-a",
+    instanceId: "instance-a",
+    sinceRevision: 1,
+    latestRevision: 2,
+    earliestRetainedRevision: 1,
+    events: [{
+      type: AiSessionEventType.Patch,
+      payload: {
+        meta: { streamId: "stream-a", instanceId: "instance-a", revision: 2, previousRevision: 1, traceId: "trace-a", generatedAt: now, reason: "provider-event" },
+        upserted: [child],
+        removed: [],
+      },
+    }],
+  });
+  assert.equal(projectAiSessionDeltaForConsumer(delta, undefined).events[0].payload.upserted[0].lineage, undefined);
+
+  const history = AiSessionHistoryItemSchema.parse({
+    id: child.id,
+    agent: child.agent,
+    creationSource: "ai-session",
+    providerSessionId: child.providerSessionId,
+    lineage: child.lineage,
+    cwd: "/workspace",
+    lastActiveAt: now,
+    archivedAt: now,
+  });
+  assert.equal(projectAiSessionHistoryItemForConsumer(history, undefined).lineage, undefined);
+  assert.equal(projectAiSessionHistoryItemForConsumer(history, { subagents: true }).lineage?.kind, "subagent");
 });
 
 test("AI session detail, Turn index, and Turn body are independent strict wire models", () => {
@@ -151,7 +252,7 @@ test("AI session history schemas expose bounded strict summaries and resume resu
   assert.deepEqual(AiSessionHistoryItemSchema.parse(item), item);
   assert.equal(AiSessionHistoryItemSchema.safeParse({ ...item, transcriptPath: "/home/agent/.codex/session.jsonl" }).success, false);
   assert.equal(AiSessionHistoryItemSchema.safeParse({ ...item, agent: "" }).success, false);
-  assert.equal(AiSessionHistoryIndexSchema.safeParse({ schemaVersion: 1, items: Array.from({ length: AI_SESSION_HISTORY_MAX_LIMIT + 1 }, () => item) }).success, false);
+  assert.equal(AiSessionHistoryIndexSchema.safeParse({ schemaVersion: 1, items: Array.from({ length: AI_SESSION_HISTORY_MAX_ITEMS + 1 }, () => item) }).success, false);
   assert.equal(AiSessionHistoryListSchema.safeParse({ items: [item], extra: true }).success, false);
   assert.deepEqual(AiSessionHistoryDetailSchema.parse({
     item,

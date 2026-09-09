@@ -11,6 +11,8 @@ test("Control Plane events reset reconnect backoff only after the authoritative 
   const helloHandler = source.match(/if \(message\.type === SessionStreamsHelloEventType\)[\s\S]*?\n        return;/)?.[0] || "";
   assert.doesNotMatch(openHandler, /reconnectBackoff\.reset\(\)/);
   assert.match(helloHandler, /const hello = parsed\.data;[\s\S]*reconnectBackoff\.reset\(\)/);
+  assert.match(helloHandler, /onAuthoritativeState\?\.\(true\)/);
+  assert.match(source, /current\.addEventListener\("close",[\s\S]*onAuthoritativeState\?\.\(false\)/);
 });
 
 test("authoritative query recovery retries independently until the snapshot succeeds", async () => {

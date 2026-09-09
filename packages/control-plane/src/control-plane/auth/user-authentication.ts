@@ -12,6 +12,7 @@ import { normalizeControlPlaneLoginName, verifyControlPlanePassword } from "./pa
 import type { ControlPlaneUserService } from "./user-service.ts";
 
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 14;
+const MOBILE_SESSION_RENEWAL_WINDOW_MS = 1000 * 60 * 60 * 24 * 7;
 const SESSION_ACTIVITY_PRUNE_INTERVAL_MS = 1000 * 60 * 60;
 const LoginSchema = z.object({
   username: z.string().trim().min(1).max(80),
@@ -231,6 +232,8 @@ export class ControlPlaneUserAuthentication {
   }
 
   async currentSession(token: string | undefined, clientType: "web" | "mobile" = "web") {
+    // Compatibility for v0.0.28: its mobile client probes this endpoint but does not know the renewal route.
+    if (clientType === "mobile") await this.renewMobileSession(token);
     const current = await this.resolve(token, clientType);
     return {
       authenticated: Boolean(current),
@@ -238,6 +241,26 @@ export class ControlPlaneUserAuthentication {
       authorization: current?.authorization,
       requiresPasswordChange: current?.requiresPasswordChange === true,
     };
+  }
+
+  async renewMobileSession(token: string | undefined) {
+    const current = await this.resolve(token, "mobile");
+    if (!current) return undefined;
+    const timestamp = now();
+    if (Date.parse(current.session.expiresAt) - Date.parse(timestamp) > MOBILE_SESSION_RENEWAL_WINDOW_MS) {
+      return { expiresAt: current.session.expiresAt };
+    }
+    const [sessionId, secret] = token?.split(".") || [];
+    if (!sessionId || !secret) return undefined;
+    const renewed = await this.users.store.transaction(async (repository) => {
+      const session = await repository.sessions.get(sessionId);
+      if (!session || session.clientType !== "mobile" || session.tokenHash !== sha256(secret) || session.expiresAt <= timestamp) return undefined;
+      const expiresAt = new Date(Date.parse(timestamp) + SESSION_TTL_MS).toISOString();
+      return repository.sessions.put({ ...session, expiresAt, updatedAt: timestamp });
+    });
+    if (!renewed) return undefined;
+    this.trackSessionActivity(renewed, timestamp);
+    return { expiresAt: renewed.expiresAt };
   }
 
   async listSessions(requestingUserId: string, targetUserId = requestingUserId) {

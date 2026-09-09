@@ -22,6 +22,10 @@ export const AiSessionReasoningEffortCapabilitiesSchema = z.object({
   updateDuringSession: false,
 });
 
+export const AiSessionHierarchyCapabilitiesSchema = z.object({
+  subagents: z.boolean().default(false),
+}).strip().default({ subagents: false });
+
 export const AiSessionProviderCapabilitySchema = z.object({
   agent: AiSessionCapabilityAgentSchema,
   actions: z.object({
@@ -46,6 +50,8 @@ export const AiSessionProviderCapabilitySchema = z.object({
   modelSelection: AiSessionModelSelectionCapabilitiesSchema.optional(),
   // Compatibility for v0.0.23: absence disables only reasoning-effort UI/actions.
   reasoningEffort: AiSessionReasoningEffortCapabilitiesSchema.optional(),
+  // Compatibility for v0.0.28: absence means this provider only exposes a flat Session list.
+  hierarchy: AiSessionHierarchyCapabilitiesSchema.optional(),
 }).passthrough();
 
 export const AiSessionProviderCapabilitiesSchema = z.array(AiSessionProviderCapabilitySchema).max(100).default([]);
@@ -53,6 +59,7 @@ export const AiSessionProviderCapabilitiesSchema = z.array(AiSessionProviderCapa
 export type AiSessionProviderCapability = z.infer<typeof AiSessionProviderCapabilitySchema>;
 export type AiSessionModelSelectionCapabilities = z.infer<typeof AiSessionModelSelectionCapabilitiesSchema>;
 export type AiSessionReasoningEffortCapabilities = z.infer<typeof AiSessionReasoningEffortCapabilitiesSchema>;
+export type AiSessionHierarchyCapabilities = z.infer<typeof AiSessionHierarchyCapabilitiesSchema>;
 
 export function normalizeAiSessionModelSelectionCapabilities(
   capability: unknown,
@@ -70,4 +77,17 @@ export function normalizeAiSessionReasoningEffortCapabilities(
   return AiSessionReasoningEffortCapabilitiesSchema.parse(
     parsed.success ? parsed.data.reasoningEffort : undefined,
   );
+}
+
+export function normalizeAiSessionHierarchyCapabilities(
+  capability: unknown,
+): AiSessionHierarchyCapabilities {
+  const parsed = AiSessionProviderCapabilitySchema.safeParse(capability);
+  return AiSessionHierarchyCapabilitiesSchema.parse(
+    parsed.success ? parsed.data.hierarchy : undefined,
+  );
+}
+
+export function supportsAiSessionSubagentHierarchy(capability: unknown) {
+  return normalizeAiSessionHierarchyCapabilities(capability).subagents;
 }

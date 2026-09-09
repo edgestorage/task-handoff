@@ -1298,7 +1298,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       try {
         const message = JSON.parse(String(raw)) as Record<string, unknown>;
         if (message.type === "subscribe" && message.aiSessionTransient !== undefined) {
-          eventForwarder.setOutputSubscription(ws, message.aiSessionTransient, message.eventEnvelopeVersion);
+          eventForwarder.setOutputSubscription(ws, message.aiSessionTransient, message.eventEnvelopeVersion, message.aiSessionHierarchy);
         }
       } catch {
         // Event subscription updates are additive; malformed updates leave the compatibility stream unchanged.

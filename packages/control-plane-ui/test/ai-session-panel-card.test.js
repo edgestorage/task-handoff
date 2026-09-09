@@ -93,7 +93,8 @@ test("AI session list supports persistent card and compact-list layouts", () => 
   assert.match(panel, /:class="\{ 'is-compact-list': sessionListLayout === 'list' \}"/);
   assert.match(panel, /:data-collapsed="groupSessionsByPath && collapsedPathGroups\[group\.key\] \? 'true' : undefined"/);
   assert.match(panel, /v-if="groupSessionsByPath"[^>]*:model-value="showEmptyPathGroups"/);
-  assert.match(panel, /groupAiSessionEntriesByPath\(sessions, showEmptyPathGroups\.value \? newSessionFolders\.value : \[\]\)/);
+  assert.match(panel, /const root = currentRootSession\(entry\.session\.id\) \|\| entry\.session;/);
+  assert.match(panel, /normalizeAiSessionGroupPath\(root\.cwd\)/);
   assert.match(panel, /watch\(showEmptyPathGroups, \(value\) => \{[\s\S]*localStorage\?\.setItem\(SHOW_EMPTY_PATH_GROUPS_STORAGE_KEY, String\(value\)\)/);
   assert.match(panel, /watch\(sessionListLayout, \(value\) => \{[\s\S]*localStorage\?\.setItem\(SESSION_LIST_LAYOUT_STORAGE_KEY, value\)/);
   assert.match(styles, /\.session-ai-compact-row\s*\{[\s\S]*grid-template-columns: 12px minmax\(0, 1fr\) auto;[\s\S]*gap: 6px;[\s\S]*min-height: 32px;/);
@@ -104,7 +105,7 @@ test("AI session list supports persistent card and compact-list layouts", () => 
   assert.match(styles, /\.session-ai-path-group \+ \.session-ai-path-group\s*\{[\s\S]*margin-top: -6px;/);
   assert.doesNotMatch(styles, /\.session-ai-path-group \+ \.session-ai-path-group\[data-collapsed="true"\]/);
   assert.match(styles, /\.session-ai-path-group-title\s*\{[^}]*font-weight: 500;/s);
-  assert.match(styles, /\.session-ai-compact-row\.is-grouped\s*\{\s*width: 100%;\s*margin-left: 0;\s*padding-left: 8px;/);
+  assert.match(styles, /\.session-ai-compact-row\.is-grouped\s*\{\s*width: 100%;\s*margin-left: 0;\s*padding-left: calc\(8px \+ var\(--ai-session-tree-indent, 0px\)\);/);
   assert.match(styles, /\.session-ai-compact-title\s*\{[^}]*font-weight: 400;/s);
   assert.match(statusIndicator, /\[data-size="compact"\]\[data-state="idle"\][^{]*\{\s*visibility: hidden;/);
   assert.match(styles, /\.session-ai-compact-row\[data-selected="true"\]\s*\{[\s\S]*background: var\(--ai-session-row-selected-bg\);/);
@@ -121,8 +122,8 @@ test("AI session current and history path groups animate when expanded or collap
 });
 
 test("running AI sessions use one theme-aware loading ring across list and board cards", () => {
-  assert.match(panel, /<AiSessionStatusIndicator :status="session\.status" size="compact" \/>/);
-  assert.match(panel, /<AiSessionStatusIndicator :status="session\.status" \/>/);
+  assert.match(panel, /<AiSessionStatusIndicator class="session-ai-tree-semantic-icon" :status="session\.status" size="compact" \/>/);
+  assert.match(panel, /<AiSessionStatusIndicator class="session-ai-tree-semantic-icon" :status="session\.status" \/>/);
   assert.match(panel, /<AiSessionStatusIndicator :status="sessionListPreviewSession\.status" \/>/);
   assert.match(boardCard, /<AiSessionStatusIndicator class="ai-board-status-indicator" :status="card\.session\.status" \/>/);
   assert.match(statusIndicator, /<span v-if="status === 'running'" class="ai-session-status-indicator__spinner" \/>/);
@@ -194,8 +195,8 @@ test("AI session path labels show only the folder and reveal the full path when 
 
 test("AI session path groups create a session in their registered project", () => {
   assert.doesNotMatch(panel, /group\.(?:sessions|items)\.length/);
-  assert.match(panel, /groupAiSessionEntriesByPath\(sessions, showEmptyPathGroups\.value \? newSessionFolders\.value : \[\]\)/);
-  assert.match(panel, /groupAiSessionEntriesByPath\(items\)/);
+  assert.match(panel, /function groupAiSessionsByPath\(entries: AiSessionDisplayEntry\[\]\)/);
+  assert.match(panel, /function groupAiSessionHistoryByPath\(entries: AiSessionHistoryDisplayEntry\[\]\)/);
   assert.match(panel, /class="session-ai-path-group-add"[\s\S]*?@click="openNewSessionForGroup\(group\)"/);
   assert.match(panel, /group\.cwdFolderId && newSessionFolders\.value\.some/);
   assert.match(panel, /newSessionFolderId\.value = group\.cwdFolderId;/);
@@ -208,13 +209,39 @@ test("AI session path groups create a session in their registered project", () =
 });
 
 test("Story groups create Story-bound sessions without exposing path actions", () => {
-  assert.match(panel, /groups\.set\(key, \{ kind: "story", key, path: "", storyId: session\.storyId/);
+  assert.match(panel, /groups\.set\(key, \{ kind: "story", key, path: "", storyId: root\.storyId/);
   assert.match(panel, /<TooltipProvider v-if="group\.kind === 'path'"/);
   assert.match(panel, /if \(group\.kind === "story"\) \{[\s\S]*beginNewSession\(group\.storyId\);[\s\S]*return;/);
-  assert.match(panel, /const entries = "sessions" in group \? group\.sessions : group\.items;[\s\S]*const latest = entries\.reduce/);
+  assert.match(panel, /const entries: Array<AiSessionSummary \| AiSessionHistoryItem> = "sessions" in group[\s\S]*group\.sessions\.map\(\(entry\) => entry\.session\)[\s\S]*group\.items\.map\(\(entry\) => entry\.item\)[\s\S]*const latest = entries\.reduce/);
   assert.match(panel, /latest\?\.cwd \? newSessionFolderIdForPath\(latest\.cwd\) : undefined/);
   assert.match(panel, /storyId: activeNewSessionStoryId\.value/);
   assert.match(panel, /\.\.\.\(activeNewSessionStoryId\.value \? \{ storyId: activeNewSessionStoryId\.value \} : \{\}\)/);
+});
+
+test("AI session current and history lists derive hierarchy without mutating authoritative records", () => {
+  assert.match(panel, /const sessionForest = computed\(\(\) => deriveAiSessionForest\(visibleAiSessions\.value, \{ orderBy: "last-user-message" \}\)\);/);
+  assert.match(panel, /filterAiSessionForest\(sessionForest\.value/);
+  assert.match(panel, /aiSessionAncestorIds\(sessionForest\.value, selectedHierarchySessionId\.value\)/);
+  assert.match(panel, /flattenAiSessionForest\(displayedSessionForest\.value/);
+  assert.match(panel, /const historyForest = computed\(\(\) => deriveAiSessionForest\(historyHierarchyItems\.value\)\);/);
+  assert.match(panel, /class="session-ai-tree-disclosure"[\s\S]*:aria-expanded=/);
+  assert.match(panel, /const expandedSessionIds = reactive\(new Set<string>\(\)\);/);
+  assert.match(panel, /const expandedHistorySessionIds = reactive\(new Set<string>\(\)\);/);
+  assert.match(panel, /forcedExpandedSessionIds[\s\S]*aiSessionAncestorIds\(sessionForest\.value, selectedHierarchySessionId\.value\)/);
+  assert.match(panel, /flattenAiSessionForest\(historyForest\.value,[\s\S]*expandedSessionIds: expandedHistorySessionIds/);
+  assert.match(panel, /@click\.stop="toggleSessionExpanded\(session\.id\)"/);
+  assert.match(styles, /\.session-ai-tree-leading\s*\{[^}]*width: 14px;[^}]*height: 14px;/s);
+  assert.match(styles, /\.session-ai-tree-disclosure\s*\{[^}]*width: 20px;[^}]*height: 20px;[^}]*opacity: 0;/s);
+  assert.match(styles, /\.session-ai-tree-disclosure:focus-visible\s*\{[^}]*opacity: 1;/s);
+  assert.equal((panel.match(/class="session-ai-tree-chevron"/g) || []).length, 3);
+  assert.match(styles, /\.session-ai-tree-semantic-icon,\s*\.session-ai-tree-disclosure\s*\{[^}]*position: absolute;[^}]*top: 50%;[^}]*left: 50%;[^}]*transform: translate\(-50%, -50%\);/s);
+  assert.match(styles, /\.session-ai-tree-chevron\s*\{[^}]*display: block;[^}]*transform-origin: center;[^}]*transition: transform 120ms ease;/s);
+  assert.match(styles, /\.session-ai-tree-chevron\.expanded\s*\{[^}]*transform: rotate\(90deg\);/s);
+  assert.equal((panel.match(/<TransitionGroup name="session-ai-tree"/g) || []).length, 2);
+  assert.match(styles, /\.session-ai-tree-enter-from,\s*\.session-ai-tree-leave-to\s*\{[^}]*max-height: 0;[^}]*opacity: 0;[^}]*transform: translateY\(-4px\);/s);
+  assert.match(styles, /\.session-ai-path-group\.is-compact-list \.session-ai-tree-item-shell\s*\{[^}]*max-height: 32px;/s);
+  assert.match(styles, /\.session-ai-history-row:hover \.session-ai-tree-leading:has\(\.session-ai-tree-disclosure\) \.session-ai-tree-semantic-icon[\s\S]*opacity: 0;/s);
+  assert.match(styles, /@media \(hover: none\)[\s\S]*\.session-ai-tree-disclosure \{ opacity: 1; \}/);
 });
 
 test("AI session path groups merge the same cwd regardless of folder ID provenance", () => {
@@ -355,6 +382,13 @@ test("instance and board AI session cards expose their toolbar actions from one 
   assert.match(contextMenu, /:global\(\.ai-session-context-menu\)[\s\S]*backdrop-filter: blur\(16px\)/);
   assert.match(contextSubMenu, /<ContextMenuPortal>[\s\S]*<ContextMenuSubContent/);
   assert.match(dropdownSubMenu, /<DropdownMenuPortal>[\s\S]*<DropdownMenuSubContent/);
+});
+
+test("AI session context menus copy the authoritative session identity and display metadata", () => {
+  assert.match(contextMenu, /sessions\.actions\.copy[\s\S]*sessions\.actions\.copyPath[\s\S]*sessions\.actions\.copyName[\s\S]*sessions\.actions\.copySessionId/);
+  assert.match(contextMenu, /navigator\.clipboard\.writeText\(value\)/);
+  assert.match(panel, /:session-id="session\.id"[\s\S]*:session-name="session\.title \|\| displayAiSessionTitle\(session, undefined, t\) \|\| session\.id"[\s\S]*:session-path="session\.cwd"/);
+  assert.match(boardCard, /:session-id="card\.session\.id"[\s\S]*:session-name="card\.session\.title \|\| displayAiSessionTitle\(card\.session, undefined, t\) \|\| card\.session\.id"[\s\S]*:session-path="card\.session\.cwd"/);
 });
 
 test("an unselected AI session defaults to the new-session surface", () => {

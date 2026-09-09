@@ -89,6 +89,7 @@ test("conversation detail renders retained image and file metadata without a UI 
   assert.match(attachments, /width: 18px; height: 18px; flex: 0 0 18px/);
   assert.match(attachments, /sessions\.timeline\.image/);
   assert.match(attachments, /class="ai-session-compact-image-tooltip"/);
+  assert.match(attachments, /\.ai-session-compact-image-tooltip\) \{[^}]*padding: 0;/);
   assert.match(attachments, /<TooltipProvider v-if="compact" :delay-duration="200">/);
   assert.match(attachments, /<AiSessionImagePreview/);
   assert.match(panel, /:user-messages="selectedPromptUserMessages"/);

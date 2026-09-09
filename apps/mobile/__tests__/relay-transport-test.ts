@@ -63,16 +63,16 @@ test('cloud Relay transport aggregates event topics and sends an explicit empty 
   const transient = { messageDeltas: { allInstances: false, instanceIds: [] }, timelineAllSessions: false, timelineSessions: [] };
   const ai = transport.connectEvents(handlers(['ai.sessions'], transient));
   await Promise.resolve(); await Promise.resolve();
-  expect(channel.send).toHaveBeenLastCalledWith({ type: 'event-subscribe', body: { eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION, topics: ['ai.sessions'], aiSessionTransient: transient } });
+  expect(channel.send).toHaveBeenLastCalledWith({ type: 'event-subscribe', body: { eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION, aiSessionHierarchy: { subagents: true }, topics: ['ai.sessions'], aiSessionTransient: transient } });
 
   const nodes = transport.connectEvents(handlers(['nodes']));
   await Promise.resolve(); await Promise.resolve();
-  expect(channel.send).toHaveBeenLastCalledWith({ type: 'event-subscribe', body: { eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION, topics: ['ai.sessions', 'nodes'], aiSessionTransient: transient } });
+  expect(channel.send).toHaveBeenLastCalledWith({ type: 'event-subscribe', body: { eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION, aiSessionHierarchy: { subagents: true }, topics: ['ai.sessions', 'nodes'], aiSessionTransient: transient } });
 
   ai.close();
-  expect(channel.send).toHaveBeenLastCalledWith({ type: 'event-subscribe', body: { eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION, topics: ['nodes'] } });
+  expect(channel.send).toHaveBeenLastCalledWith({ type: 'event-subscribe', body: { eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION, aiSessionHierarchy: { subagents: true }, topics: ['nodes'] } });
   nodes.close();
-  expect(channel.send).toHaveBeenLastCalledWith({ type: 'event-subscribe', body: { eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION, topics: [] } });
+  expect(channel.send).toHaveBeenLastCalledWith({ type: 'event-subscribe', body: { eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION, aiSessionHierarchy: { subagents: true }, topics: [] } });
 });
 
 test('cloud Relay transport preserves wildcard semantics while any consumer omits topics', async () => {
@@ -81,9 +81,9 @@ test('cloud Relay transport preserves wildcard semantics while any consumer omit
   const wildcard = transport.connectEvents({ onOpen() {}, onEvent() {}, onError() {}, onClose() {} });
   const nodes = transport.connectEvents({ topics: ['nodes'], onOpen() {}, onEvent() {}, onError() {}, onClose() {} });
   await Promise.resolve(); await Promise.resolve();
-  expect(channel.send).toHaveBeenLastCalledWith({ type: 'event-subscribe', body: { eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION, topics: undefined } });
+  expect(channel.send).toHaveBeenLastCalledWith({ type: 'event-subscribe', body: { eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION, aiSessionHierarchy: { subagents: true }, topics: undefined } });
   wildcard.close();
-  expect(channel.send).toHaveBeenLastCalledWith({ type: 'event-subscribe', body: { eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION, topics: ['nodes'] } });
+  expect(channel.send).toHaveBeenLastCalledWith({ type: 'event-subscribe', body: { eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION, aiSessionHierarchy: { subagents: true }, topics: ['nodes'] } });
   nodes.close();
 });
 

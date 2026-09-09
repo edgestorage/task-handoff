@@ -5,10 +5,13 @@ import type {
 } from '@task-handoff/control-plane-client';
 import type { Story, StoryDocument } from '@task-handoff/protocol/stories';
 import type { StorySortMode } from './story-view-preferences';
+import { deriveAiSessionForest, flattenAiSessionForest } from '@task-handoff/protocol/ai-session-hierarchy';
 
 export const STORY_TREE_DOCUMENT_LIMIT = 5;
 
 export type StoryTreeSession = {
+  depth: number;
+  hasChildren: boolean;
   instanceId: string;
   instanceName: string;
   session: ControlPlaneAiSessionSummary;
@@ -24,8 +27,8 @@ export function sortStoryTree(stories: readonly Story[], locale: string, mode: S
     collator.compare(left.title, right.title) || storyTreeKey(left).localeCompare(storyTreeKey(right))
   );
   if (mode === 'last-user-message') return [...stories].sort((left, right) => {
-    const leftTime = Math.max(...(sessionsByStory?.get(storyTreeKey(left)) ?? []).map((entry) => Date.parse(entry.session.lastUserMessageAt || entry.session.updatedAt)), 0);
-    const rightTime = Math.max(...(sessionsByStory?.get(storyTreeKey(right)) ?? []).map((entry) => Date.parse(entry.session.lastUserMessageAt || entry.session.updatedAt)), 0);
+    const leftTime = Math.max(...(sessionsByStory?.get(storyTreeKey(left)) ?? []).map((entry) => !entry.depth ? Date.parse(entry.session.lastUserMessageAt || '') : 0), 0);
+    const rightTime = Math.max(...(sessionsByStory?.get(storyTreeKey(right)) ?? []).map((entry) => !entry.depth ? Date.parse(entry.session.lastUserMessageAt || '') : 0), 0);
     return rightTime - leftTime || byName(left, right);
   });
   if (mode === 'manual') {
@@ -39,28 +42,42 @@ export function groupStoryTreeSessions(
   stories: readonly Story[],
   instances: readonly ControlPlaneInstanceResourceEntry[],
   snapshot: ControlPlaneAiSessions | undefined,
+  expandedSessionIds: ReadonlySet<string> = new Set(),
 ) {
   const availableStoryKeys = new Set(stories.map(storyTreeKey));
   const instanceDirectory = new Map(instances.map((instance) => [instance.id, instance]));
+  const forest = storyTreeSessionForest(snapshot);
   const grouped = new Map<string, StoryTreeSession[]>();
 
-  for (const instanceSnapshot of snapshot?.instances ?? []) {
-    const instance = instanceDirectory.get(instanceSnapshot.instanceId);
-    if (!instance) continue;
-    for (const session of instanceSnapshot.aiSessions.sessions) {
-      if (!session.storyId) continue;
-      const key = `${instance.nodeId}:${session.storyId}`;
-      if (!availableStoryKeys.has(key)) continue;
-      const entries = grouped.get(key) ?? [];
-      entries.push({ instanceId: instance.id, instanceName: instance.name, session });
-      grouped.set(key, entries);
-    }
-  }
-
-  for (const entries of grouped.values()) {
-    entries.sort((left, right) => Date.parse(right.session.updatedAt) - Date.parse(left.session.updatedAt));
+  for (const root of forest.roots) {
+    const instance = instanceDirectory.get(root.session.instanceId);
+    if (!instance || !root.session.storyId) continue;
+    const key = `${instance.nodeId}:${root.session.storyId}`;
+    if (!availableStoryKeys.has(key)) continue;
+    const entries = grouped.get(key) ?? [];
+    const treeEntries = flattenAiSessionForest({ ...forest, roots: [root] }, { expandedSessionIds });
+    entries.push(...treeEntries.map(({ node, depth }) => ({
+      depth,
+      hasChildren: node.children.length > 0,
+      instanceId: instance.id,
+      instanceName: instance.name,
+      session: node.session,
+    })));
+    grouped.set(key, entries);
   }
   return grouped;
+}
+
+export function storyTreeSessionForest(snapshot: ControlPlaneAiSessions | undefined) {
+  return deriveAiSessionForest((snapshot?.instances ?? []).flatMap((instanceSnapshot) => (
+    instanceSnapshot.aiSessions.sessions.map((session) => ({ ...session, instanceId: instanceSnapshot.instanceId }))
+  )), { orderBy: 'last-user-message' });
+}
+
+export function unassignedStoryRootInstanceIds(snapshot: ControlPlaneAiSessions | undefined) {
+  return new Set(storyTreeSessionForest(snapshot).roots
+    .filter((root) => !root.session.storyId)
+    .map((root) => root.session.instanceId));
 }
 
 export function visibleStoryTreeDocuments(documents: readonly StoryDocument[], expanded: boolean) {
