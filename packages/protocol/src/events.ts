@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { AiSessionHierarchyCapabilities } from "./ai-session-provider-capabilities.ts";
 
 export type EventScope = {
   nodeId?: string;
@@ -80,6 +81,8 @@ export type EventSubscribeMessage = {
    */
   metricInstanceIds?: string[];
   aiSessionTransient?: AiSessionTransientSubscription;
+  /** Optional AI Session wire projection. Absence preserves v0.0.28 flat sessions. */
+  aiSessionHierarchy?: AiSessionHierarchyCapabilities;
 };
 
 export const EventKeepalivePingSchema = z.object({

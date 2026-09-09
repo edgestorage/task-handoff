@@ -10,6 +10,7 @@ import { useMobileTheme } from '../components/theme';
 import { useMobileControlPlaneRuntime } from '../control-plane/use-mobile-control-plane-runtime';
 import { useActiveDirectories } from '../directories/use-directories';
 import { useI18n } from '../i18n';
+import { storyTreeSessionForest } from './story-tree-model';
 
 type SessionCandidate = { value: string; instanceId: string; sessionId: string; label: string; instanceName: string };
 
@@ -35,16 +36,17 @@ export function StorySessionAssignForm({ nodeId, onSaved, storyId }: { nodeId?: 
   const candidates = useMemo<SessionCandidate[]>(() => {
     if (!story) return [];
     const instances = new Map(directory.instances.filter((instance) => instance.nodeId === story.ownerNodeId).map((instance) => [instance.id, instance]));
-    return (sessions?.instances ?? []).flatMap((entry) => {
-      const instance = instances.get(entry.instanceId);
+    return storyTreeSessionForest(sessions).roots.flatMap((root) => {
+      const instance = instances.get(root.session.instanceId);
       if (!instance) return [];
-      return entry.aiSessions.sessions.filter((session) => !session.storyId).map((session) => ({
-        value: `${entry.instanceId}:${session.id}`,
-        instanceId: entry.instanceId,
+      const session = root.session;
+      return session.storyId ? [] : [{
+        value: `${instance.id}:${session.id}`,
+        instanceId: instance.id,
         sessionId: session.id,
         label: session.title || session.userPrompt || session.summary || session.lastMessage || t('sessions.untitled'),
         instanceName: instance.name,
-      }));
+      }];
     });
   }, [directory.instances, sessions, story, t]);
   const selected = candidates.find((candidate) => candidate.value === selectedValue) || candidates[0];

@@ -94,6 +94,11 @@ export class ControlPlaneAuth {
     return { ...await this.state(), ...current };
   }
 
+  async renewMobileSession(token: string | undefined) {
+    this.assertEnabled();
+    return this.sessions.renewMobileSession(token);
+  }
+
   async currentAccess(token: string | undefined, clientType: "web" | "mobile") {
     return (await this.sessions.resolve(token, clientType))?.authorization;
   }

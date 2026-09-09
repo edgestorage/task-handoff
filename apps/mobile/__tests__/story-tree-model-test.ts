@@ -1,7 +1,7 @@
 import { ControlPlaneAiSessionsSchema, type ControlPlaneInstanceResourceEntry } from '@task-handoff/control-plane-client';
 import type { Story } from '@task-handoff/protocol/stories';
 
-import { groupStoryTreeSessions, mergeStoryTreeSnapshot, sortStoryTree, visibleStoryTreeDocuments } from '../src/stories/story-tree-model';
+import { groupStoryTreeSessions, mergeStoryTreeSnapshot, sortStoryTree, unassignedStoryRootInstanceIds, visibleStoryTreeDocuments } from '../src/stories/story-tree-model';
 
 const story = (id: string, ownerNodeId: string, title: string): Story => ({
   id,
@@ -45,6 +45,28 @@ describe('mobile Story tree model', () => {
 
     expect(groupStoryTreeSessions(stories, instances, snapshot).get('node-a:shared')?.map((entry) => entry.session.id)).toEqual(['session-a']);
     expect(groupStoryTreeSessions(stories, instances, snapshot).get('node-b:shared')?.map((entry) => entry.session.id)).toEqual(['session-b']);
+  });
+
+  test('links descendants from the Story root and counts one expandable tree', () => {
+    const stories = [story('story-1', 'node-a', 'A')];
+    const instances = [{ id: 'instance-a', nodeId: 'node-a', name: 'Instance A' }] as ControlPlaneInstanceResourceEntry[];
+    const base = { agent: 'codex', status: 'idle' as const, startedAt: '2026-09-04T00:00:00.000Z', updatedAt: '2026-09-04T00:00:00.000Z', unread: false };
+    const snapshot = ControlPlaneAiSessionsSchema.parse({
+      updatedAt: base.updatedAt,
+      instances: [{ instanceId: 'instance-a', streamId: 'a', aiSessions: { updatedAt: base.updatedAt, sessions: [
+        { ...base, id: 'root', providerSessionId: 'provider-root', storyId: 'story-1' },
+        { ...base, id: 'child', providerSessionId: 'provider-child', lineage: { kind: 'subagent', parentProviderSessionId: 'provider-root' } },
+        { ...base, id: 'grandchild', providerSessionId: 'provider-grandchild', lineage: { kind: 'subagent', parentProviderSessionId: 'provider-child' } },
+      ] } }],
+    });
+
+    expect(groupStoryTreeSessions(stories, instances, snapshot).get('node-a:story-1')?.map((entry) => [entry.session.id, entry.depth, entry.hasChildren])).toEqual([
+      ['root', 0, true],
+    ]);
+    expect(groupStoryTreeSessions(stories, instances, snapshot, new Set(['root', 'child'])).get('node-a:story-1')?.map((entry) => [entry.session.id, entry.depth])).toEqual([
+      ['root', 0], ['child', 1], ['grandchild', 2],
+    ]);
+    expect(unassignedStoryRootInstanceIds(snapshot)).toEqual(new Set());
   });
 
   test('shows only the latest five documents until expanded', () => {

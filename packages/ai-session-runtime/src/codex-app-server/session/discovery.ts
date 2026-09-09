@@ -23,6 +23,7 @@ export class CodexAppServerSessionDiscovery {
           const id = typeof thread.id === "string" ? thread.id : undefined;
           if (id) {
             threadsById.set(id, thread);
+            this.options.applyThreadSnapshot(thread);
           }
         }
       } catch {

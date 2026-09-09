@@ -1,4 +1,5 @@
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import {
   TriggerConfigSchema,
   TriggerDeploymentSchema,
@@ -452,7 +453,7 @@ function parsedStoredEntry<T>(
     onWarning?.({ kind, id, reason: "entry failed current schema and was removed" });
     return [];
   }
-  if (JSON.stringify(candidate) !== JSON.stringify(raw)) {
+  if (!isDeepStrictEqual(candidate, raw)) {
     onWarning?.({ kind, id, reason: "unknown or legacy fields ignored" });
   }
   return [parsed.data];

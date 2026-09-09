@@ -948,6 +948,14 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     const credential = requestSessionCredential(request);
     return { data: await auth.logout(credential.clientType === "mobile" ? credential.token : undefined) };
   });
+  app.post("/api/auth/mobile/renew", async (request, reply) => {
+    reply.header("cache-control", "no-store");
+    const credential = requestSessionCredential(request);
+    const renewed = await auth.renewMobileSession(credential.clientType === "mobile" ? credential.token : undefined);
+    return renewed ? { data: renewed } : reply.code(401).send({
+      error: { code: "CONTROL_PLANE_AUTH_REQUIRED", message: "Sign in to renew the mobile session." },
+    });
+  });
   app.get("/api/auth/mobile/sessions", async (request, reply) => {
     const sessions = await auth.mobileSessions(requestSessionCredential(request).token);
     return sessions ? { data: sessions } : reply.code(401).send({

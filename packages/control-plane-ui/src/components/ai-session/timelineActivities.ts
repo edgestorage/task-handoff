@@ -1,4 +1,4 @@
-import type { AiSessionTimelineActivity, AiSessionTimelineItem, AiSessionTurn } from "@task-handoff/protocol/ai-sessions";
+import { isAiSessionRetryActivity, type AiSessionTimelineActivity, type AiSessionTimelineItem, type AiSessionTurn } from "@task-handoff/protocol/ai-sessions";
 import { aiSessionElapsedSeconds } from "@task-handoff/control-plane-client";
 
 type TurnTiming = Pick<AiSessionTurn, "status" | "completedAt">;
@@ -31,7 +31,7 @@ function turnIdentity(turn: Pick<AiSessionTurn, "id" | "providerTurnId"> | undef
 function groupTurnItems(items: readonly AiSessionTimelineItem[]): TimelineTurnNode[] {
   const nodes: TimelineTurnNode[] = [];
   for (const item of items) {
-    if (item.type === "activity" && item.activityKind === "codexRetry") continue;
+    if (isAiSessionRetryActivity(item)) continue;
     if (item.type !== "activity") {
       nodes.push({ id: item.id, type: "message", message: item });
       continue;
@@ -108,12 +108,9 @@ export function compactTimelineForTurn(
   turn: Pick<AiSessionTurn, "id" | "providerTurnId"> | undefined,
 ) {
   const identities = turnIdentity(turn);
-  const retryWarning = items.findLast((item) => (
-    identities.has(item.turnId)
-    && item.type === "activity"
-    && item.activityKind === "codexRetry"
-    && item.status === "waiting"
-  ));
+  const retryWarning = items
+    .filter(isAiSessionRetryActivity)
+    .findLast((item) => identities.has(item.turnId) && item.status === "waiting");
   const split = splitTimelineTurnNodes(
     groupTurnItems(items.filter((item) => identities.has(item.turnId))),
     true,
@@ -122,6 +119,6 @@ export function compactTimelineForTurn(
     history: split.history,
     activityNodes: split.trailing,
     activities: split.trailing.flatMap((node) => node.type === "activities" ? node.activities : []),
-    retryWarning: retryWarning?.type === "activity" ? retryWarning.summary : undefined,
+    retryWarning: retryWarning?.summary,
   };
 }

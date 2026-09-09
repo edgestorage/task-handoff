@@ -34,6 +34,11 @@ export type OpenCodePartIdentity = OpenCodeMessageIdentity & {
   type: string;
 };
 
+export function openCodeSessionLineage(session: OpenCodeSession) {
+  if (!session.parentID) return undefined;
+  return { kind: "subagent" as const, parentProviderSessionId: session.parentID };
+}
+
 export function projectOpenCodeSession(input: {
   session: OpenCodeSession;
   status?: OpenCodeSessionStatus;
@@ -71,7 +76,7 @@ export function projectOpenCodeSession(input: {
     const attachments = conversationAttachments(message.parts);
     const assistantTextParts = assistants.flatMap((assistant) => assistant.parts.filter(isTextPart));
     const assistantText = assistantTextParts.map((part) => String(part.text)).join("").trim();
-    const assistantError = assistants.map((assistant) => assistant.info.role === "assistant" ? errorText(assistant.info.error) : undefined).find(Boolean);
+    const assistantError = assistants.map((assistant) => assistant.info.role === "assistant" ? openCodeErrorText(assistant.info.error) : undefined).find(Boolean);
     const completedAtMs = assistants.map((assistant) => assistant.info.role === "assistant" ? assistant.info.time.completed : undefined).filter(isNumber).at(-1);
     const isActive = input.status?.type !== "idle" && message === userMessages.at(-1);
     const isWaiting = Boolean(pendingPermission && isActive);
@@ -101,6 +106,11 @@ export function projectOpenCodeSession(input: {
   }
 
   const latestTurn = turns.at(-1);
+  if (input.status?.type === "retry" && latestTurn && !timeline.some((item) => (
+    item.turnId === latestTurn.id && item.type === "activity" && item.activityKind === "retry"
+  ))) {
+    timeline.push(openCodeRetryActivity(latestTurn.id, input.status.message));
+  }
   const latestAssistant = messages.filter((message) => message.info.role === "assistant").at(-1);
   const latestUserInfo = userMessages.at(-1)?.info;
   const latestUserModel = latestUserInfo?.role === "user"
@@ -111,7 +121,7 @@ export function projectOpenCodeSession(input: {
     : input.session.model
       ? { providerID: input.session.model.providerID, modelID: input.session.model.id, variant: input.session.model.variant }
       : undefined;
-  const error = latestAssistant?.info.role === "assistant" ? errorText(latestAssistant.info.error) : undefined;
+  const error = latestAssistant?.info.role === "assistant" ? openCodeErrorText(latestAssistant.info.error) : undefined;
   const lifecycle = projectLifecycle(input.status, pendingPermission, error);
   const phase = projectPhase(input.status, pendingPermission, messages);
   return {
@@ -119,7 +129,7 @@ export function projectOpenCodeSession(input: {
       agent: "opencode",
       creationSource: "ai-session",
       providerSessionId: input.session.id,
-      lineage: input.session.parentID ? { kind: "fork", parentProviderSessionId: input.session.parentID } : undefined,
+      lineage: openCodeSessionLineage(input.session),
       providerMeta: compactRecord({
         version: input.session.version,
         model: input.session.model,
@@ -176,26 +186,25 @@ export function projectOpenCodePart(part: OpenCodePart, turnId: string): AiSessi
   }
   if (record.type === "step-start" || record.type === "step-finish" || record.type === "snapshot") return undefined;
   if (record.type === "file") {
-    return activity(part.id, turnId, "file", "File", { paths: typeof record.filename === "string" ? [record.filename] : undefined });
-  }
-  if (record.type === "tool") {
-    const state = asRecord(record.state);
-    const status = state.status === "error" ? "failed" : state.status === "completed" ? "completed" : "running";
-    return activity(part.id, turnId, "tool", typeof record.tool === "string" ? record.tool : "Tool", {
-      status,
-      summary: typeof state.title === "string" ? state.title : undefined,
-      input: safeJson(state.input),
-      output: typeof state.output === "string" ? state.output : typeof state.error === "string" ? state.error : undefined,
-      durationMs: duration(state),
+    const filename = typeof record.filename === "string" ? record.filename : undefined;
+    const image = typeof record.mime === "string" && record.mime.startsWith("image/");
+    return activity(part.id, turnId, image ? "imageView" : "fileRead", image ? "View image" : "Read file", {
+      paths: filename ? [filename] : undefined,
+      summary: filename,
     });
   }
-  if (record.type === "patch") {
-    const paths = Array.isArray(record.files) ? record.files.filter((value): value is string => typeof value === "string") : [];
-    return activity(part.id, turnId, "patch", "File changes", { paths, summary: paths.join(", ") || undefined, status: "completed" });
+  if (record.type === "tool") {
+    return projectOpenCodeToolActivity(part.id, turnId, typeof record.tool === "string" ? record.tool : "Tool", asRecord(record.state));
   }
+  // OpenCode emits a filesystem snapshot patch after each model step. The
+  // concrete edit/write/apply_patch tool part owns timeline activity; emitting
+  // both would duplicate the same file change.
+  if (record.type === "patch") return undefined;
   if (record.type === "compaction") return activity(part.id, turnId, "contextCompaction", "Context compaction", { status: "completed" });
-  if (record.type === "retry") return activity(part.id, turnId, "retry", "Retry", { status: "waiting", summary: errorText(record.error) });
-  if (record.type === "subtask") return activity(part.id, turnId, "subtask", "Subtask", { summary: typeof record.description === "string" ? record.description : undefined });
+  if (record.type === "retry") return activity(part.id, turnId, "retry", "Retry", { status: "waiting", summary: openCodeErrorText(record.error) });
+  // OpenCode materializes user subtask inputs as an authoritative assistant
+  // `task` tool part; emitting the input part as activity would duplicate it.
+  if (record.type === "subtask") return undefined;
   return undefined;
 }
 
@@ -240,14 +249,162 @@ function activeTools(messages: OpenCodeMessage[]) {
     const record = part as Record<string, unknown>;
     const state = asRecord(record.state);
     if (record.type !== "tool" || (state.status !== "pending" && state.status !== "running")) return [];
+    const projected = openCodeToolDescriptor(typeof record.tool === "string" ? record.tool : "Tool", state);
     return [{
       id: part.id,
-      kind: "tool",
-      name: typeof record.tool === "string" ? record.tool : "Tool",
-      inputPreview: safeJson(state.input)?.slice(0, 500),
+      kind: projected.activityKind,
+      name: projected.title,
+      inputPreview: projected.inputPreview?.slice(0, 500),
       startedAt: isNumber(asRecord(state.time).start) ? iso(asRecord(state.time).start as number) : undefined,
     }];
   }));
+}
+
+function projectOpenCodeToolActivity(id: string, turnId: string, tool: string, state: Record<string, unknown>) {
+  const projected = openCodeToolDescriptor(tool, state);
+  return activity(id, turnId, projected.activityKind, projected.title, {
+    status: toolStatus(state.status, projected.activityKind === "commandExecution" ? projected.exitCode : undefined),
+    summary: projected.summary,
+    input: projected.input,
+    output: toolOutput(state),
+    paths: projected.paths,
+    exitCode: projected.exitCode,
+    durationMs: duration(state),
+  });
+}
+
+function openCodeToolDescriptor(toolName: string, state: Record<string, unknown>) {
+  const tool = toolName.toLocaleLowerCase();
+  const input = asRecord(state.input);
+  const metadata = asRecord(state.metadata);
+  const fallbackTitle = typeof state.title === "string" && state.title.trim() ? state.title : toolName;
+  if (tool === "bash" || tool === "shell") {
+    const command = stringValue(input.command) || stringValue(input.cmd);
+    return {
+      activityKind: "commandExecution",
+      title: "Command",
+      input: command,
+      inputPreview: command,
+      exitCode: integerValue(metadata.exit),
+    };
+  }
+  if (tool === "edit" || tool === "write") {
+    const path = stringValue(input.filePath) || stringValue(input.filepath) || stringValue(metadata.filepath);
+    return {
+      activityKind: "fileChange",
+      title: tool === "write" ? "Write file" : "Edit file",
+      summary: path,
+      input: stringValue(metadata.diff) || safeJson(state.input),
+      inputPreview: path,
+      paths: path ? [path] : undefined,
+    };
+  }
+  if (tool === "apply_patch" || tool === "patch") {
+    const files = arrayRecords(metadata.files);
+    const paths = files.flatMap((file) => stringValue(file.movePath) || stringValue(file.filePath) || stringValue(file.relativePath) || []).filter(unique);
+    return {
+      activityKind: "fileChange",
+      title: "File changes",
+      summary: paths.join(", ") || fallbackTitle,
+      input: files.length ? safeJson(files) : stringValue(input.patchText) || safeJson(state.input),
+      inputPreview: paths.join(", ") || fallbackTitle,
+      paths: paths.length ? paths : undefined,
+    };
+  }
+  if (tool === "task") {
+    const description = stringValue(input.description) || fallbackTitle;
+    const agent = stringValue(input.subagent_type);
+    return {
+      activityKind: "collabAgentToolCall",
+      title: "Sub-agent task",
+      summary: [description, agent ? `@${agent}` : undefined].filter(Boolean).join(" "),
+      input: stringValue(input.prompt) || safeJson(state.input),
+      inputPreview: description,
+    };
+  }
+  if (tool === "websearch") {
+    const query = stringValue(input.query);
+    return { activityKind: "webSearch", title: "Web search", summary: query || fallbackTitle, input: query || safeJson(state.input), inputPreview: query };
+  }
+  if (tool === "read") {
+    const path = stringValue(input.filePath) || stringValue(input.filepath);
+    const image = arrayRecords(state.attachments).some((attachment) => stringValue(attachment.mime)?.startsWith("image/"));
+    return {
+      activityKind: image ? "imageView" : "fileRead",
+      title: image ? "View image" : "Read file",
+      summary: path || fallbackTitle,
+      input: safeJson(state.input),
+      inputPreview: path,
+      paths: path ? [path] : undefined,
+    };
+  }
+  if (tool === "glob" || tool === "grep") {
+    const pattern = stringValue(input.pattern);
+    const path = stringValue(input.path);
+    return {
+      activityKind: "fileSearch",
+      title: tool === "glob" ? "Find files" : "Search files",
+      summary: [pattern, path].filter(Boolean).join(" · ") || fallbackTitle,
+      input: safeJson(state.input),
+      inputPreview: pattern || path,
+      paths: path ? [path] : undefined,
+    };
+  }
+  if (tool === "webfetch") {
+    const url = stringValue(input.url);
+    return { activityKind: "webFetch", title: "Fetch URL", summary: url || fallbackTitle, input: safeJson(state.input), inputPreview: url };
+  }
+  if (tool === "todowrite") {
+    const count = Array.isArray(input.todos) ? input.todos.length : 0;
+    const summary = count ? `${count} task${count === 1 ? "" : "s"}` : fallbackTitle;
+    return { activityKind: "todoUpdate", title: "Update tasks", summary, input: safeJson(state.input), inputPreview: summary };
+  }
+  if (tool === "question") {
+    const questions = Array.isArray(input.questions) ? input.questions.length : 0;
+    const summary = questions ? `${questions} question${questions === 1 ? "" : "s"}` : fallbackTitle;
+    return { activityKind: "userQuestion", title: "Ask user", summary, input: safeJson(state.input), inputPreview: summary };
+  }
+  if (tool === "skill") {
+    const name = stringValue(input.name);
+    return { activityKind: "skillLoad", title: "Load skill", summary: name || fallbackTitle, input: safeJson(state.input), inputPreview: name };
+  }
+  if (tool === "plan_exit") {
+    return { activityKind: "exitedPlanMode", title: "Exit plan mode", summary: fallbackTitle === toolName ? undefined : fallbackTitle, input: safeJson(state.input) };
+  }
+  return { activityKind: "dynamicToolCall", title: toolName, summary: fallbackTitle === toolName ? undefined : fallbackTitle, input: safeJson(state.input), inputPreview: safeJson(state.input) };
+}
+
+function toolStatus(value: unknown, exitCode?: number) {
+  return value === "error" || (value === "completed" && exitCode !== undefined && exitCode !== 0)
+    ? "failed" as const
+    : value === "completed"
+      ? "completed" as const
+      : value === "pending"
+        ? "waiting" as const
+        : "running" as const;
+}
+
+function toolOutput(state: Record<string, unknown>) {
+  if (typeof state.output === "string") return state.output;
+  if (typeof state.error === "string") return state.error;
+  const liveOutput = asRecord(state.metadata).output;
+  return typeof liveOutput === "string" && liveOutput ? liveOutput : undefined;
+}
+
+function arrayRecords(value: unknown) {
+  return Array.isArray(value) ? value.map(asRecord) : [];
+}
+
+function stringValue(value: unknown) {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function integerValue(value: unknown) {
+  return typeof value === "number" && Number.isInteger(value) ? value : undefined;
+}
+
+function unique(value: string, index: number, values: string[]) {
+  return values.indexOf(value) === index;
 }
 
 function conversationAttachments(parts: OpenCodePart[]): AiSessionConversationAttachment[] {
@@ -291,7 +448,11 @@ function duration(state: Record<string, unknown>) {
   return isNumber(time.start) && isNumber(time.end) ? Math.max(0, time.end - time.start) : undefined;
 }
 
-function errorText(value: unknown): string | undefined {
+export function openCodeRetryActivity(turnId: string, message: string, status: "waiting" | "completed" = "waiting"): AiSessionTimelineItem {
+  return activity(`opencode_retry:${turnId}`, turnId, "retry", "Retry", { status, summary: message.slice(0, 4000) });
+}
+
+export function openCodeErrorText(value: unknown): string | undefined {
   if (!value) return undefined;
   if (typeof value === "string") return value.slice(0, 4000);
   const record = asRecord(value);

@@ -243,7 +243,7 @@ async function imageBlobAsPng(blob: Blob) {
 .ai-session-message-attachment-pill.unavailable { padding-left: 8px; }
 .ai-session-message-attachment-pill span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ai-session-message-attachment-pill.unavailable { opacity: .72; }
-:global(.ai-session-compact-image-tooltip) { width: min(280px, calc(100vw - 24px)); max-height: min(280px, calc(100dvh - 24px)); overflow: hidden; border-radius: 7px; padding: 4px; }
+:global(.ai-session-compact-image-tooltip) { width: min(280px, calc(100vw - 24px)); max-height: min(280px, calc(100dvh - 24px)); overflow: hidden; border-radius: 7px; padding: 0; }
 :global(.ai-session-compact-image-tooltip img) { display: block; width: 100%; max-height: 270px; border-radius: 4px; object-fit: contain; }
 .ai-session-message-images { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; width: min(100%, 400px); }
 .ai-session-message-image { box-sizing: border-box; display: grid; width: 64px; height: 64px; overflow: hidden; place-items: center; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-subtle); color: var(--text-muted); padding: 0; }

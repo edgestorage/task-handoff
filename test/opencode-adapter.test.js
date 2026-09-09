@@ -22,8 +22,9 @@ const { AiSessionHistoryListSchema } = require("../packages/protocol/src/ai-sess
 const { aiSessionProviderCapability, normalizeControlledInstanceCapabilities } = require("../packages/protocol/src/control-plane.ts");
 const { directoryAiSessionProviderCapability } = require("../packages/protocol/src/control-plane-directory.ts");
 const { consumeOpenCodeSse, OpenCodeClient } = require("../packages/ai-session-runtime/src/opencode/client.ts");
-const { projectOpenCodeSession } = require("../packages/ai-session-runtime/src/opencode/projector.ts");
+const { openCodeSessionLineage, projectOpenCodePart, projectOpenCodeSession } = require("../packages/ai-session-runtime/src/opencode/projector.ts");
 const {
+  OpenCodePartSchema,
   OpenCodePermissionSchema,
   OpenCodeSessionSchema,
   OpenCodeSessionStatusSchema,
@@ -124,7 +125,7 @@ test("v0.0.21 capability omission disables only provider features while current 
   assert.equal(parsed.items[0].agent, "opencode");
 });
 
-test("OpenCode projector derives waiting approval, turns, tools, patches, retries, and deterministic ids", () => {
+test("OpenCode projector derives waiting approval, turns, tools, retries, and deterministic ids", () => {
   const projection = projectOpenCodeSession({
     session: {
       id: "ses_1", directory: "/workspace/project", title: "Adapter", version: "1.18.21",
@@ -158,8 +159,129 @@ test("OpenCode projector derives waiting approval, turns, tools, patches, retrie
   assert.equal(projection.snapshot.turns[0].status, "waiting");
   assert.deepEqual(projection.messageById.get("msg_user"), { turnId: "msg_user", role: "user" });
   assert.deepEqual(projection.messageById.get("msg_assistant"), { turnId: "msg_user", role: "assistant" });
-  assert.deepEqual(projection.timeline.map((item) => item.id), ["msg_user", "prt_text", "prt_tool", "prt_patch", "prt_retry"]);
-  assert.equal(projection.timeline.find((item) => item.id === "prt_tool").status, "running");
+  assert.deepEqual(projection.timeline.map((item) => item.id), ["msg_user", "prt_text", "prt_tool", "prt_retry"]);
+  const projectedTool = projection.timeline.find((item) => item.id === "prt_tool");
+  assert.equal(projectedTool.status, "running");
+  assert.equal(projectedTool.activityKind, "commandExecution");
+  assert.equal(projectedTool.input, "git status");
+});
+
+test("OpenCode tools project into provider-neutral activity kinds", () => {
+  const part = (id, tool, state) => OpenCodePartSchema.parse({
+    id,
+    sessionID: "ses_tools",
+    messageID: "msg_tools",
+    type: "tool",
+    tool,
+    callID: `call_${id}`,
+    state,
+  });
+  const project = (id, tool, state) => projectOpenCodePart(part(id, tool, state), "turn_tools");
+
+  const runningCommand = project("bash_running", "bash", {
+    status: "running",
+    input: { command: "pnpm test", workdir: "/workspace/project" },
+    metadata: { output: "tests are running" },
+    time: { start: 1700000000000 },
+  });
+  assert.deepEqual(runningCommand, {
+    id: "bash_running",
+    turnId: "turn_tools",
+    type: "activity",
+    activityKind: "commandExecution",
+    title: "Command",
+    status: "running",
+    input: "pnpm test",
+    output: "tests are running",
+  });
+
+  const completedCommand = project("bash_completed", "bash", {
+    status: "completed",
+    input: { command: "git status" },
+    title: "git status",
+    output: "clean",
+    metadata: { exit: 0, output: "clean" },
+    time: { start: 1700000000000, end: 1700000000250 },
+  });
+  assert.equal(completedCommand.activityKind, "commandExecution");
+  assert.equal(completedCommand.exitCode, 0);
+  assert.equal(completedCommand.durationMs, 250);
+
+  const edit = project("edit", "edit", {
+    status: "completed",
+    input: { filePath: "/workspace/src/a.ts", oldString: "a", newString: "b" },
+    title: "src/a.ts",
+    output: "Edit applied successfully.",
+    metadata: { diff: "-a\n+b" },
+    time: { start: 1, end: 2 },
+  });
+  assert.equal(edit.activityKind, "fileChange");
+  assert.deepEqual(edit.paths, ["/workspace/src/a.ts"]);
+  assert.equal(edit.input, "-a\n+b");
+
+  const patch = project("patch", "apply_patch", {
+    status: "completed",
+    input: { patchText: "*** Begin Patch" },
+    title: "Updated files",
+    output: "Success",
+    metadata: { files: [
+      { filePath: "/workspace/src/a.ts", relativePath: "src/a.ts", type: "update", patch: "diff-a" },
+      { filePath: "/workspace/src/b.ts", relativePath: "src/b.ts", movePath: "/workspace/src/c.ts", type: "move", patch: "diff-b" },
+    ] },
+    time: { start: 1, end: 2 },
+  });
+  assert.equal(patch.activityKind, "fileChange");
+  assert.deepEqual(patch.paths, ["/workspace/src/a.ts", "/workspace/src/c.ts"]);
+
+  const failedCommand = project("bash_failed", "bash", {
+    status: "completed",
+    input: { command: "exit 7" },
+    title: "exit 7",
+    output: "(no output)",
+    metadata: { exit: 7 },
+    time: { start: 1, end: 2 },
+  });
+  assert.equal(failedCommand.status, "failed");
+  assert.equal(failedCommand.exitCode, 7);
+
+  const cases = [
+    ["task", { description: "Inspect tests", prompt: "Find the failure", subagent_type: "explore" }, "collabAgentToolCall"],
+    ["websearch", { query: "OpenCode tools" }, "webSearch"],
+    ["read", { filePath: "/workspace/README.md" }, "fileRead"],
+    ["glob", { pattern: "**/*.ts", path: "/workspace" }, "fileSearch"],
+    ["grep", { pattern: "activityKind", path: "/workspace" }, "fileSearch"],
+    ["webfetch", { url: "https://opencode.ai/docs", format: "markdown" }, "webFetch"],
+    ["todowrite", { todos: [{ content: "Fix mapping", status: "pending" }] }, "todoUpdate"],
+    ["question", { questions: [{ question: "Proceed?" }] }, "userQuestion"],
+    ["skill", { name: "release" }, "skillLoad"],
+    ["plan_exit", {}, "exitedPlanMode"],
+    ["lsp", { operation: "definition", filePath: "/workspace/src/a.ts" }, "dynamicToolCall"],
+    ["plugin_custom", { value: 1 }, "dynamicToolCall"],
+  ];
+  for (const [tool, input, expectedKind] of cases) {
+    assert.equal(project(tool, tool, { status: "running", input, time: { start: 1 } }).activityKind, expectedKind, tool);
+  }
+
+  const image = project("read_image", "read", {
+    status: "completed",
+    input: { filePath: "/workspace/image.png" },
+    title: "image.png",
+    output: "Image read successfully",
+    metadata: {},
+    attachments: [{ type: "file", mime: "image/png", url: "data:image/png;base64,AA==" }],
+    time: { start: 1, end: 2 },
+  });
+  assert.equal(image.activityKind, "imageView");
+});
+
+test("OpenCode structural parts avoid duplicate snapshot and subtask activities", () => {
+  const base = { sessionID: "ses_parts", messageID: "msg_parts" };
+  const patch = projectOpenCodePart(OpenCodePartSchema.parse({ id: "patch", ...base, type: "patch", hash: "hash", files: ["src/a.ts"] }), "turn_parts");
+  assert.equal(patch, undefined);
+  const image = projectOpenCodePart(OpenCodePartSchema.parse({ id: "image", ...base, type: "file", mime: "image/png", filename: "image.png", url: "file:///workspace/image.png" }), "turn_parts");
+  assert.equal(image.activityKind, "imageView");
+  const subtask = projectOpenCodePart(OpenCodePartSchema.parse({ id: "subtask", ...base, type: "subtask", prompt: "Inspect", description: "Inspect code", agent: "explore" }), "turn_parts");
+  assert.equal(subtask, undefined);
 });
 
 test("OpenCode projector takes authoritative model settings from the latest user message", () => {
@@ -209,6 +331,15 @@ test("OpenCode retry state stays out of the assistant summary and clears stale a
 
   assert.equal(projection.snapshot.summary, undefined);
   assert.equal(projection.snapshot.replaceActivity, true);
+  assert.deepEqual(projection.timeline.at(-1), {
+    id: "opencode_retry:msg_retry",
+    turnId: "msg_retry",
+    type: "activity",
+    activityKind: "retry",
+    title: "Retry",
+    status: "waiting",
+    summary: "retrying provider",
+  });
   assert.equal(registry.applyAdapterSnapshot(projection.snapshot).summary, undefined);
 });
 
@@ -317,6 +448,66 @@ test("OpenCode realtime parts separate reasoning activity deltas from assistant 
     { id: "part_assistant", turnId: "msg_user", type: "ai-message", text: "Assistant output" },
     { id: "part_complete", turnId: "msg_user", type: "ai-message", text: "Already complete" },
   ]);
+  bridge.close();
+});
+
+test("OpenCode realtime retry warnings recover and terminal session errors fail the active turn", async () => {
+  const registry = createAiSessionRegistry({ dir: fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-opencode-errors-")) });
+  const providerSession = {
+    id: "ses_errors",
+    directory: "/workspace",
+    title: "Errors",
+    version: "1.18.21",
+    time: { created: 1700000000000, updated: 1700000005000 },
+  };
+  const messages = [{
+    info: { id: "msg_user", sessionID: providerSession.id, role: "user", time: { created: 1700000001000 } },
+    parts: [{ id: "part_user", sessionID: providerSession.id, messageID: "msg_user", type: "text", text: "Try it" }],
+  }];
+  const session = registry.applyAdapterSnapshot(projectOpenCodeSession({
+    session: providerSession,
+    status: { type: "busy" },
+    permissions: [],
+    messages,
+  }).snapshot);
+  const items = [];
+  const bridge = new OpenCodeSessionBridge(registry, {
+    connection: () => ({ endpoint: "http://unused", headers: {} }),
+    workspaceRoots: () => ["/workspace"],
+  });
+  bridge.client = {
+    getSession: async () => providerSession,
+    status: async () => ({ [providerSession.id]: { type: "busy" } }),
+    messages: async () => messages,
+    permissions: async () => [],
+  };
+  bridge.subscribeTimelineItems((event) => items.push(event.item));
+
+  const event = (type, properties) => bridge.onGlobalEvent({ directory: "/workspace", payload: { type, properties } });
+  await event("session.status", {
+    sessionID: providerSession.id,
+    status: { type: "retry", attempt: 1, message: "Provider connection failed", next: 1700000006000 },
+  });
+  assert.deepEqual(items.at(-1), {
+    id: "opencode_retry:msg_user",
+    turnId: "msg_user",
+    type: "activity",
+    activityKind: "retry",
+    title: "Retry",
+    status: "waiting",
+    summary: "Provider connection failed",
+  });
+
+  await event("session.status", { sessionID: providerSession.id, status: { type: "busy" } });
+  assert.equal(items.at(-1).status, "completed");
+
+  await event("session.error", {
+    sessionID: providerSession.id,
+    error: { name: "APIError", data: { message: "Provider rejected the request" } },
+  });
+  assert.equal(registry.get(session.id).status, "failed");
+  assert.equal(registry.get(session.id).turns.at(-1).status, "failed");
+  assert.equal(registry.get(session.id).error, "Provider rejected the request");
   bridge.close();
 });
 
@@ -466,10 +657,32 @@ test("OpenCode global discovery requests child sessions", async () => {
   assert.equal(requestUrl.searchParams.get("archived"), "false");
 });
 
+test("OpenCode structured parentID distinguishes roots, forks, and task children across versions", () => {
+  for (const version of ["1.18.20", "1.18.21", "1.18.29", "1.18.30", "1.19.0"]) {
+    const common = { directory: "/workspace", title: "Session", version, time: { created: 1, updated: 2 } };
+    assert.equal(openCodeSessionLineage({ ...common, id: `root-${version}` }), undefined);
+    // These releases return session/fork results without parentID.
+    assert.equal(openCodeSessionLineage({ ...common, id: `fork-${version}`, title: "Session (fork #1)" }), undefined);
+    assert.deepEqual(openCodeSessionLineage({
+      ...common,
+      id: `task-${version}`,
+      parentID: `parent-${version}`,
+      agent: "explore",
+    }), { kind: "subagent", parentProviderSessionId: `parent-${version}` });
+  }
+});
+
 test("OpenCode discovery restores forks and converges archived sessions", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-opencode-discovery-"));
   const registry = createAiSessionRegistry({ dir: root });
   registry.start({ agent: "opencode", providerSessionId: "ses_archived", cwd: "/workspace/project", title: "Archived" });
+  registry.start({
+    agent: "opencode",
+    providerSessionId: "ses_restored_fork",
+    cwd: "/workspace/project",
+    title: "Restored Fork",
+    lineage: { kind: "fork", parentProviderSessionId: "ses_parent", throughTurnId: "turn-a" },
+  });
   const child = {
     id: "ses_child",
     parentID: "ses_parent",
@@ -478,17 +691,30 @@ test("OpenCode discovery restores forks and converges archived sessions", async 
     version: "1.18.21",
     time: { created: 1700000000000, updated: 1700000001000 },
   };
+  const lifecycleTransitions = [];
   const bridge = new OpenCodeSessionBridge(registry, {
     connection: () => ({ endpoint: "http://unused", headers: {} }),
     workspaceRoots: () => ["/workspace"],
+    onProviderLifecycleTransition: (event) => lifecycleTransitions.push({
+      providerSessionId: event.session.providerSessionId,
+      disposition: event.disposition,
+    }),
   });
   bridge.client = {
     health: async () => ({ healthy: true, version: "1.18.21" }),
     subscribeGlobal: async (_listener, signal) => new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true })),
-    listGlobalSessions: async () => ({ data: [child] }),
+    listGlobalSessions: async () => ({ data: [child, {
+      id: "ses_restored_fork",
+      directory: "/workspace/project",
+      title: "Restored Fork",
+      version: "1.18.21",
+      time: { created: 1700000000000, updated: 1700000001000 },
+    }] }),
     getSession: async (id) => id === "ses_archived"
       ? { id, directory: "/workspace/project", title: "Archived", version: "1.18.21", time: { created: 1699999999000, updated: 1700000000000, archived: 1700000000500 } }
-      : child,
+      : id === "ses_restored_fork"
+        ? { id, directory: "/workspace/project", title: "Restored Fork", version: "1.18.21", time: { created: 1700000000000, updated: 1700000001000 } }
+        : child,
     status: async () => ({}),
     messages: async () => [],
     permissions: async () => [],
@@ -496,31 +722,49 @@ test("OpenCode discovery restores forks and converges archived sessions", async 
 
   await bridge.refresh({ registry, appSessions: [] });
   assert.equal(registry.getByProviderSessionId("opencode", "ses_archived"), undefined);
-  assert.equal(registry.getByProviderSessionId("opencode", "ses_child").lineage.parentProviderSessionId, "ses_parent");
+  assert.deepEqual(registry.getByProviderSessionId("opencode", "ses_child").lineage, {
+    kind: "subagent",
+    parentProviderSessionId: "ses_parent",
+  });
+  assert.deepEqual(registry.getByProviderSessionId("opencode", "ses_restored_fork").lineage, {
+    kind: "fork",
+    parentProviderSessionId: "ses_parent",
+    throughTurnId: "turn-a",
+  });
+  assert.deepEqual(lifecycleTransitions, [{ providerSessionId: "ses_archived", disposition: "closed" }]);
 
   await bridge.onGlobalEvent({
     directory: "/workspace/project",
     payload: { type: "session.updated", properties: { info: { ...child, time: { ...child.time, archived: 1700000002000 } } } },
   });
   assert.equal(registry.getByProviderSessionId("opencode", "ses_child"), undefined);
+  assert.deepEqual(lifecycleTransitions, [
+    { providerSessionId: "ses_archived", disposition: "closed" },
+    { providerSessionId: "ses_child", disposition: "closed" },
+  ]);
   bridge.close();
 });
 
-test("OpenCode version diagnostics are visible, non-blocking, and deduplicated", async () => {
+test("OpenCode readiness does not gate structured session fields by provider version", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-opencode-version-"));
   const diagnostics = [];
+  let healthCalls = 0;
   const bridge = new OpenCodeSessionBridge(createAiSessionRegistry({ dir: root }), {
     connection: () => ({ endpoint: "http://unused", headers: {} }),
     workspaceRoots: () => ["/workspace"],
     onDiagnostic: (event) => diagnostics.push(event),
   });
   bridge.client = {
-    health: async () => ({ healthy: true, version: "1.19.0" }),
+    health: async () => {
+      healthCalls += 1;
+      return { healthy: true, version: "1.19.0" };
+    },
     subscribeGlobal: async (_listener, signal) => new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true })),
   };
   await bridge.ensureReady();
   await bridge.ensureReady();
-  assert.deepEqual(diagnostics, [{ code: "OPENCODE_VERSION_UNVERIFIED", version: "1.19.0" }]);
+  assert.equal(healthCalls, 2);
+  assert.deepEqual(diagnostics, []);
   bridge.close();
 });
 
@@ -547,7 +791,7 @@ test("OpenCode bridge implements lifecycle, attachments, inclusive-turn fork, an
     promptAsync: async (...args) => calls.push(["prompt", ...args]),
     forkSession: async (id, directory, messageID) => {
       calls.push(["fork", id, directory, messageID]);
-      const session = { id: "ses_fork", parentID: id, directory, title: "Fork", version: "1.18.21", time: { created: Date.now(), updated: Date.now() } };
+      const session = { id: "ses_fork", directory, title: "Fork", version: "1.18.21", time: { created: Date.now(), updated: Date.now() } };
       sessions.set(session.id, session); messages.set(session.id, []); return session;
     },
     replyPermission: async (...args) => { calls.push(["permission", ...args]); permissions.clear(); return true; },

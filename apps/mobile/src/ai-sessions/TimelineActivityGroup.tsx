@@ -3,6 +3,7 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { AiSessionTimelineActivity } from '@task-handoff/protocol/ai-sessions';
 import {
   Bot,
+  BookOpen,
   Brain,
   ChevronDown,
   ChevronRight,
@@ -10,9 +11,11 @@ import {
   ClipboardCheck,
   Clock3,
   FilePenLine,
+  FileSearch,
   Image as ImageIcon,
   ListTodo,
   Minimize2,
+  Download,
   Plug,
   Search,
   Sparkles,
@@ -129,6 +132,13 @@ export function timelineActivityIcon(kind: string): LucideIcon | undefined {
   if (kind === 'imageGeneration') return Sparkles;
   if (kind === 'enteredReviewMode' || kind === 'exitedReviewMode') return ClipboardCheck;
   if (kind === 'contextCompaction') return Minimize2;
+  if (kind === 'fileRead') return BookOpen;
+  if (kind === 'fileSearch') return FileSearch;
+  if (kind === 'webFetch') return Download;
+  if (kind === 'todoUpdate') return ListTodo;
+  if (kind === 'userQuestion') return CircleHelp;
+  if (kind === 'skillLoad') return Brain;
+  if (kind === 'exitedPlanMode') return ClipboardCheck;
   return undefined;
 }
 

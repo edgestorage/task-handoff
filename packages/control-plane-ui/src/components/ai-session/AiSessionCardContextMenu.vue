@@ -68,6 +68,26 @@
       <SquareTerminal :size="14" />
       <span>{{ t("sessions.actions.openTerminal") }}</span>
     </ContextMenuItem>
+    <ContextMenuSub>
+      <ContextMenuSubTrigger class="ai-session-context-menu-item">
+        <Copy :size="14" />
+        <span>{{ t("sessions.actions.copy") }}</span>
+      </ContextMenuSubTrigger>
+      <ContextMenuSubContent class="ai-session-context-menu">
+        <ContextMenuItem class="ai-session-context-menu-item" :disabled="!sessionPath" @select="copyValue(sessionPath)">
+          <Folder :size="14" />
+          <span>{{ t("sessions.actions.copyPath") }}</span>
+        </ContextMenuItem>
+        <ContextMenuItem class="ai-session-context-menu-item" :disabled="!sessionName" @select="copyValue(sessionName)">
+          <Type :size="14" />
+          <span>{{ t("sessions.actions.copyName") }}</span>
+        </ContextMenuItem>
+        <ContextMenuItem class="ai-session-context-menu-item" @select="copyValue(sessionId)">
+          <Hash :size="14" />
+          <span>{{ t("sessions.actions.copySessionId") }}</span>
+        </ContextMenuItem>
+      </ContextMenuSubContent>
+    </ContextMenuSub>
     <ContextMenuSub v-if="canFork">
       <ContextMenuSubTrigger class="ai-session-context-menu-item" :disabled="isForking">
         <Split :size="14" />
@@ -86,12 +106,13 @@
 </template>
 
 <script setup lang="ts">
-import { BookOpen, Check, ExternalLink, Split, Square, SquareTerminal, Zap } from "@lucide/vue";
+import { BookOpen, Check, Copy, ExternalLink, Folder, Hash, Split, Square, SquareTerminal, Type, Zap } from "@lucide/vue";
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import type { ControlPlaneTrigger } from "../../api/types";
 import { assignAiSessionToStory, listStories } from "../../api/queries";
 import type { Story } from "@task-handoff/protocol/stories";
+import { showControlPlaneToast } from "../../apps/control-plane/useControlPlaneToasts";
 import { storyTargetNodeLabel, type AiSessionStoryTarget } from "./storyTarget";
 import {
   ContextMenuContent,
@@ -112,6 +133,9 @@ const props = withDefaults(defineProps<{
   isForking?: boolean;
   isOpeningTerminal?: boolean;
   isStoppingAppSession?: boolean;
+  sessionId: string;
+  sessionName?: string;
+  sessionPath?: string;
   showTriggerActions?: boolean;
   canCloseSession?: boolean;
   storyTarget?: AiSessionStoryTarget;
@@ -141,6 +165,19 @@ const assigningStoryId = ref<string>();
 const storyMenuBusy = computed(() => Boolean(assigningStoryId.value));
 const currentStoryId = computed(() => props.storyTarget?.storyId || undefined);
 const availableStories = computed(() => stories.value.filter((story) => !story.archivedAt));
+
+async function copyValue(value: string | undefined) {
+  if (!value || !navigator.clipboard?.writeText) {
+    showControlPlaneToast(t("sessions.actions.copyFailed"));
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(value);
+    showControlPlaneToast(t("sessions.actions.copied"), "success");
+  } catch {
+    showControlPlaneToast(t("sessions.actions.copyFailed"));
+  }
+}
 
 async function loadStories() {
   const target = props.storyTarget;

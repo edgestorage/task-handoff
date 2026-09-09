@@ -6,6 +6,22 @@ export type NativeNodeFolderSelectionResult =
   | { status: "invalid-owner" }
   | { status: "selected"; path: string };
 
+type NativeProjectFolderPickerInstance = {
+  node?: { labels?: Record<string, string> };
+  runtime?: { kind?: string; type?: string };
+};
+
+export function canUseNativeProjectFolderPicker(instance: NativeProjectFolderPickerInstance | undefined, hasNativePicker: boolean) {
+  const labels = instance?.node?.labels;
+  const localRuntime = instance?.runtime?.type === "local" || instance?.runtime?.kind === "local";
+  return Boolean(
+    hasNativePicker
+    && localRuntime
+    && labels?.["task-handoff.control-plane.local"] === "true"
+    && labels?.["task-handoff.control-plane.builtin"] === "true",
+  );
+}
+
 export function nodeFolderSelectionMode(isControlPlaneLocalNode: boolean, hasNativePicker: boolean): NodeFolderSelectionMode {
   return isControlPlaneLocalNode && hasNativePicker ? "native" : "node";
 }

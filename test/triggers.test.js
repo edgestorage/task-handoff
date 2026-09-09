@@ -666,6 +666,33 @@ test("stored trigger indexes retain valid AI session entries and remove conversa
   assert.ok(warnings.some((warning) => warning.reason.includes("unknown")));
 });
 
+test("stored trigger sanitation ignores object key order", () => {
+  const timestamp = "2026-07-14T00:00:00.000Z";
+  const warnings = [];
+  const index = sanitizeStoredTriggerIndex({
+    recentRuns: [{
+      completedAt: timestamp,
+      startedAt: timestamp,
+      eventSummary: "manual run",
+      promptPreview: "Continue",
+      target: { aiSessionId: "ai_1", type: "ai-session" },
+      status: "completed",
+      eventType: "manual",
+      instanceId: "inst_1",
+      deploymentId: "dep_ai",
+      configHash: "trg_abcdefgh",
+      id: "run_ai",
+    }],
+    runtime: [],
+    deployments: [],
+    configs: [],
+    schemaVersion: 1,
+  }, (warning) => warnings.push(warning));
+
+  assert.equal(index.recentRuns.length, 1);
+  assert.deepEqual(warnings, []);
+});
+
 test("trigger executor sends directly to the target AI session", async () => {
   const completed = [];
   const store = {

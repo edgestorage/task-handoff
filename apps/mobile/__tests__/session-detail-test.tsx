@@ -3,7 +3,7 @@ import { act, fireEvent, render, waitFor, within } from '@testing-library/react-
 import * as Clipboard from 'expo-clipboard';
 import { File } from 'expo-file-system';
 import { Animated, FlatList, Keyboard, PixelRatio, StyleSheet, Text } from 'react-native';
-import { Brain, CornerDownRight, FilePenLine, Minimize2, Pencil, RotateCcw, SquareTerminal, Trash2 } from 'lucide-react-native';
+import { BookOpen, Brain, CircleHelp, ClipboardCheck, CornerDownRight, Download, FilePenLine, FileSearch, ListTodo, Minimize2, Pencil, RotateCcw, SquareTerminal, Trash2 } from 'lucide-react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ControlPlaneAiSessionSummarySchema, type ControlPlaneClient } from '@task-handoff/control-plane-client';
 import { AiSessionDetailSchema, AiSessionTurnIndexSchema } from '@task-handoff/protocol/ai-sessions';
@@ -52,6 +52,13 @@ test('mobile timeline activities use the latest Web activity-kind icons', () => 
   expect(timelineActivityIcon('fileChange')).toBe(FilePenLine);
   expect(timelineActivityIcon('reasoning')).toBe(Brain);
   expect(timelineActivityIcon('contextCompaction')).toBe(Minimize2);
+  expect(timelineActivityIcon('fileRead')).toBe(BookOpen);
+  expect(timelineActivityIcon('fileSearch')).toBe(FileSearch);
+  expect(timelineActivityIcon('webFetch')).toBe(Download);
+  expect(timelineActivityIcon('todoUpdate')).toBe(ListTodo);
+  expect(timelineActivityIcon('userQuestion')).toBe(CircleHelp);
+  expect(timelineActivityIcon('skillLoad')).toBe(Brain);
+  expect(timelineActivityIcon('exitedPlanMode')).toBe(ClipboardCheck);
   expect(timelineActivityIcon('unknown')).toBeUndefined();
 });
 
@@ -124,7 +131,7 @@ test('failed detail keeps a localized fallback for older producers without an er
   }));
 });
 
-test('retryable Codex errors render as warnings until normal progress clears them', () => {
+test('provider retry errors render as warnings until normal progress clears them', () => {
   const timeline = {
     'turn-1': {
       status: 'ready' as const,
@@ -141,6 +148,16 @@ test('retryable Codex errors render as warnings until normal progress clears the
   };
   expect(detailItems(session, [], undefined, undefined, timeline, true).find((item) => item.role === 'warning')).toEqual(expect.objectContaining({
     text: 'Reconnecting to the model stream',
+  }));
+
+  const openCodeTimeline = {
+    'turn-1': {
+      status: 'ready' as const,
+      items: [{ ...timeline['turn-1'].items[0], id: 'opencode_retry:turn-1', activityKind: 'retry', title: 'Retry', summary: 'Retrying provider request' }],
+    },
+  };
+  expect(detailItems(session, [], undefined, undefined, openCodeTimeline, true).find((item) => item.role === 'warning')).toEqual(expect.objectContaining({
+    text: 'Retrying provider request',
   }));
 
   const recovered = {

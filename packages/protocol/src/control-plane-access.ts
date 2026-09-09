@@ -9,7 +9,7 @@ import {
 export * from "./control-plane-users.ts";
 
 export const PUBLIC_CONTROL_PLANE_IDENTITY_VERSION = 1;
-export const CONTROL_PLANE_ACCESS_PROTOCOL_VERSION = "2026-08-23";
+export const CONTROL_PLANE_ACCESS_PROTOCOL_VERSION = "2026-09-09";
 
 export const ControlPlanePublicCapabilitiesSchema = z.object({
   authentication: z.enum(["required", "disabled"]),
@@ -113,6 +113,9 @@ export const ControlPlaneMobileLoginResponseSchema = z.object({
 
 export const ControlPlaneMobileSessionsResponseSchema = z.object({ data: z.array(ControlPlaneMobileSessionSchema) }).strict();
 export const ControlPlaneMobileSessionRevocationResponseSchema = z.object({ data: z.object({ revoked: z.boolean() }).strict() }).strict();
+export const ControlPlaneMobileSessionRenewalResponseSchema = z.object({
+  data: z.object({ expiresAt: z.string().datetime() }).strict(),
+}).strict();
 
 export type ControlPlanePublicCapabilities = z.infer<typeof ControlPlanePublicCapabilitiesSchema>;
 export type ControlPlanePublicIdentityPayload = z.infer<typeof ControlPlanePublicIdentityPayloadSchema>;

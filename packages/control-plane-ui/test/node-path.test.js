@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  canUseNativeProjectFolderPicker,
   isSameOrChildNodePath,
   nativeNodeFolderSelectionResult,
   nodePathBreadcrumbs,
@@ -10,6 +11,15 @@ import {
   nodePathParent,
   relativeNodePathSegments,
 } from "../src/apps/control-plane/nodePath.ts";
+
+test("native project folder selection is limited to the built-in local node's Local Runtime", () => {
+  const localNode = { labels: { "task-handoff.control-plane.local": "true", "task-handoff.control-plane.builtin": "true" } };
+  assert.equal(canUseNativeProjectFolderPicker({ node: localNode, runtime: { type: "local" } }, true), true);
+  assert.equal(canUseNativeProjectFolderPicker({ node: localNode, runtime: { kind: "local" } }, true), true);
+  assert.equal(canUseNativeProjectFolderPicker({ node: localNode, runtime: { type: "docker" } }, true), false);
+  assert.equal(canUseNativeProjectFolderPicker({ node: { labels: {} }, runtime: { type: "local" } }, true), false);
+  assert.equal(canUseNativeProjectFolderPicker({ node: localNode, runtime: { type: "local" } }, false), false);
+});
 
 test("web local nodes use node browsing when no native picker exists", () => {
   assert.equal(nodeFolderSelectionMode(true, true), "native");

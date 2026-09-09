@@ -22,6 +22,7 @@ import {
   storyTreeKey,
   visibleStoryTreeDocuments,
   STORY_TREE_DOCUMENT_LIMIT,
+  unassignedStoryRootInstanceIds,
 } from './story-tree-model';
 import { getStoryViewPreferences, subscribeStoryViewPreferences, updateStoryViewPreferences } from './story-view-preferences';
 import { useStoryEvents } from './use-story-events';
@@ -49,20 +50,20 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
   const [unavailableNodeIds, setUnavailableNodeIds] = useState<string[]>([]);
   const [expandedStoryKeys, setExpandedStoryKeys] = useState<Set<string>>(() => new Set());
   const [expandedDocumentKeys, setExpandedDocumentKeys] = useState<Set<string>>(() => new Set());
+  const [expandedSessionIds, setExpandedSessionIds] = useState<Set<string>>(() => new Set());
   const [phase, setPhase] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
   const [error, setError] = useState<string>();
   const [renamingDocument, setRenamingDocument] = useState<{ story: Story; document: StoryDocument; title: string }>();
   const nodeNames = useMemo(() => new Map(directory.nodes.map((node) => [node.id, node.name])), [directory.nodes]);
   const sessionsByStory = useMemo(
-    () => groupStoryTreeSessions(stories, directory.instances, sessions),
-    [directory.instances, sessions, stories],
+    () => groupStoryTreeSessions(stories, directory.instances, sessions, expandedSessionIds),
+    [directory.instances, expandedSessionIds, sessions, stories],
   );
   const nodesWithUnassignedSessions = useMemo(() => {
-    const instanceNodes = new Map(directory.instances.map((instance) => [instance.id, instance.nodeId]));
+    const unassignedInstanceIds = unassignedStoryRootInstanceIds(sessions);
     const result = new Set<string>();
-    for (const entry of sessions?.instances ?? []) {
-      const nodeId = instanceNodes.get(entry.instanceId);
-      if (nodeId && entry.aiSessions.sessions.some((session) => !session.storyId)) result.add(nodeId);
+    for (const instance of directory.instances) {
+      if (unassignedInstanceIds.has(instance.id)) result.add(instance.nodeId);
     }
     return result;
   }, [directory.instances, sessions]);
@@ -219,8 +220,23 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
               if (nativeEvent.event === 'open') onOpenSession(entry.instanceId, entry.session.id);
               else if (nativeEvent.event === 'close') closeSession(entry);
             }} shouldOpenOnLongPress style={styles.childMenu} title={entry.session.title || entry.session.userPrompt || entry.session.id}>
-            <Pressable accessibilityRole="button" onPress={() => onOpenSession(entry.instanceId, entry.session.id)} style={({ pressed }) => [styles.childRow, pressed && { backgroundColor: colors.surfaceMuted }]}>
-              {entry.session.status === 'running'
+            <Pressable accessibilityRole="button" onPress={() => onOpenSession(entry.instanceId, entry.session.id)} style={({ pressed }) => [styles.childRow, entry.depth ? { paddingLeft: entry.depth * 14 } : null, pressed && { backgroundColor: colors.surfaceMuted }]}>
+              {entry.hasChildren ? <Pressable
+                accessibilityLabel={t(expandedSessionIds.has(entry.session.id) ? 'sessions.collapseSubSessions' : 'sessions.expandSubSessions')}
+                accessibilityRole="button"
+                accessibilityState={{ expanded: expandedSessionIds.has(entry.session.id) }}
+                hitSlop={8}
+                onPress={(event) => {
+                  event.stopPropagation();
+                  setExpandedSessionIds((current) => {
+                    const next = new Set(current);
+                    if (next.has(entry.session.id)) next.delete(entry.session.id); else next.add(entry.session.id);
+                    return next;
+                  });
+                }}
+                style={styles.nodeIcon}
+                testID="story-session-disclosure"
+              ><SystemIcon android={expandedSessionIds.has(entry.session.id) ? 'expand_more' : 'chevron_right'} color={colors.textMuted} ios={expandedSessionIds.has(entry.session.id) ? 'chevron.down' : 'chevron.right'} size={18} /></Pressable> : entry.session.status === 'running'
                 ? <View style={styles.nodeIcon}><SessionStatusIndicator group={statusGroup} label={mobileAiSessionStatusLabel(entry.session, t)} size={18} /></View>
                 : <View style={styles.sessionIcon}><SystemIcon android="chat_bubble_outline" color={colors.textMuted} ios="bubble.left" size={18} />{entry.session.status !== 'idle' ? <View style={styles.sessionIconStatus}><SessionStatusIndicator group={statusGroup} label={mobileAiSessionStatusLabel(entry.session, t)} size={16} /></View> : null}</View>}
               <View style={styles.rowCopy}><View style={styles.sessionTitleRow}><Text numberOfLines={1} style={[styles.childTitle, { color: colors.text }]}>{entry.session.title || entry.session.userPrompt || entry.session.id}</Text>{entry.session.unread ? <View accessibilityLabel={t('sessions.unread')} style={[styles.unread, { backgroundColor: colors.primary }]} /> : null}</View>{preferences.viewMode === 'detailed' ? <Text numberOfLines={1} style={[styles.meta, { color: colors.textMuted }]}>{entry.instanceName} · {mobileAiSessionStatusLabel(entry.session, t)}</Text> : null}</View>

@@ -57,18 +57,22 @@ test("AI session UI uses authoritative Direct create, Open App, and close action
   }
 });
 
-test("AI session new projects use the Electron folder picker only for the built-in local node", async () => {
-  const [workbench, detail, preview, pane, panel] = await Promise.all([
+test("AI session new projects use the Electron folder picker only for the built-in local node's Local Runtime", async () => {
+  const [workbench, story, detail, preview, pane, panel] = await Promise.all([
     source("apps/control-plane/ControlPlaneWorkbench.vue"),
+    source("apps/control-plane/story/StoryView.vue"),
     source("apps/control-plane/instance-detail/InstanceDetail.vue"),
     source("apps/control-plane/instance-detail/SessionPreview.vue"),
     source("apps/control-plane/instance-detail/SessionPaneContent.vue"),
     source("apps/control-plane/instance-detail/AiSessionPanel.vue"),
   ]);
 
-  assert.match(workbench, /labels\?\.\["task-handoff\.control-plane\.local"\] === "true"/);
-  assert.match(workbench, /labels\?\.\["task-handoff\.control-plane\.builtin"\] === "true"/);
+  assert.match(workbench, /canUseNativeProjectFolderPicker\(activeInstance\.value, Boolean\(desktopBridge\?\.chooseProjectFolder\)\)/);
   assert.match(workbench, /:choose-project-folder="activeProjectFolderChooser"/);
+  assert.match(workbench, /<StoryView[\s\S]*?:choose-project-folder="desktopBridge\?\.chooseProjectFolder"/);
+  assert.match(story, /chooseProjectFolder\?: NativeNodeFolderPicker/);
+  assert.match(story, /canUseNativeProjectFolderPicker\(instance, Boolean\(props\.chooseProjectFolder\)\)/);
+  assert.match(story, /:choose-project-folder="projectFolderChooserFor\(newSessionInstance\)"/);
   for (const component of [detail, preview, pane]) {
     assert.match(component, /chooseProjectFolder\?: NativeNodeFolderPicker/);
     assert.match(component, /:choose-project-folder="chooseProjectFolder"/);

@@ -40,6 +40,12 @@ test("reasoning activity expands inside the thinking disclosure and renders Mark
   assert.match(activityGroup, /\.ai-session-activity-details :deep\(\.markdown-content\) \{[\s\S]*font-size: 14px;[\s\S]*line-height: 1\.55;/);
 });
 
+test("provider-neutral OpenCode activity kinds have dedicated Web icons", () => {
+  for (const kind of ["fileRead", "fileSearch", "webFetch", "todoUpdate", "userQuestion", "skillLoad", "exitedPlanMode"]) {
+    assert.match(activityGroup, new RegExp(`${kind}:`));
+  }
+});
+
 test("background Timeline loading affects history without hiding authoritative live activity", () => {
   assert.match(conversation, /:activity-history-status="selectedTurnState\.status"/);
   assert.match(conversation, /:activity-history-error="selectedTurnState\.error"/);
@@ -220,7 +226,8 @@ test("detail context shows the registered folder, instance, agent, and lifecycle
 });
 
 test("detail context folder reuses desktop-local open and context-menu behavior", () => {
-  assert.match(panel, /v-if="canOpenSelectedSessionFolder"[\s\S]*class="session-ai-detail-context-item session-ai-detail-folder"[\s\S]*@click="openSelectedSessionFolder"/);
+  assert.match(panel, /v-if="canOpenSelectedSessionFolder"[\s\S]*<ContextMenuTrigger as-child>[\s\S]*class="session-ai-detail-folder"[\s\S]*@click="openSelectedSessionFolder"[\s\S]*<TooltipTrigger as-child>[\s\S]*class="session-ai-detail-context-item"/);
+  assert.doesNotMatch(panel, /<TooltipTrigger as-child>\s*<ContextMenuTrigger as-child>/);
   assert.match(panel, /<ContextMenuItem[\s\S]*@select="openSelectedSessionFolder"[\s\S]*sessions\.panel\.openInFileManager/);
   assert.match(panel, /desktopRuntimePathAccess\(props\.instance\) === "desktop-local"[\s\S]*canOpenDesktopLocalPath\(\)/);
   assert.match(panel, /openDesktopLocalPath\(selectedSessionRuntimePath\.value\)[\s\S]*openInFileManagerFailed/);

@@ -20,6 +20,35 @@ function socket() {
   };
 }
 
+test("public event projection keeps child sessions flat until hierarchy is negotiated", () => {
+  const events = new ControlPlaneEventBus();
+  const legacy = socket();
+  const current = socket();
+  events.connect(legacy.value);
+  events.connect(current.value);
+  current.listeners.message(JSON.stringify({ type: "subscribe", aiSessionHierarchy: { subagents: true } }));
+  const now = "2026-09-09T00:00:00.000Z";
+  const child = {
+    id: "child",
+    agent: "codex",
+    creationSource: "ai-session",
+    providerSessionId: "provider-child",
+    lineage: { kind: "subagent", parentProviderSessionId: "provider-parent" },
+    status: "idle",
+    phase: "unknown",
+    startedAt: now,
+    updatedAt: now,
+  };
+  events.publish("ai-session.snapshot", {
+    meta: { streamId: "stream", instanceId: "instance", revision: 1, traceId: "trace", generatedAt: now, reason: "startup" },
+    snapshot: { runningCount: 0, waitingCount: 0, staleCount: 0, sessions: [child], updatedAt: now },
+  }, { scope: { instanceId: "instance" } });
+
+  assert.equal(legacy.sent[0].payload.snapshot.sessions.length, 1);
+  assert.equal(legacy.sent[0].payload.snapshot.sessions[0].lineage, undefined);
+  assert.equal(current.sent[0].payload.snapshot.sessions[0].lineage.kind, "subagent");
+});
+
 test("event bus keeps browser sockets alive with server transport pings", (context) => {
   context.mock.timers.enable({ apis: ["setInterval"] });
   const events = new ControlPlaneEventBus();

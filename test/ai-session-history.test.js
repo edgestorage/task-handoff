@@ -98,6 +98,50 @@ test("AI session history retention limit is configurable and removes evicted det
   assert.deepEqual(removedSessions, ["ai-0"]);
 });
 
+test("AI session history capacity counts root trees and evicts complete subagent trees", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-history-tree-limit-"));
+  const removedSessions = [];
+  const store = new AiSessionHistoryStore({ dataDir: root }, { limit: 2, onRemove: (sessionId) => removedSessions.push(sessionId) });
+  store.upsert(historyItem(2, {
+    id: "old-child",
+    agent: "codex",
+    providerSessionId: "provider-old-child",
+    lineage: { kind: "subagent", parentProviderSessionId: "provider-old-root" },
+  }), [{ id: "old-child-turn", status: "completed" }]);
+  store.upsert(historyItem(1, {
+    id: "old-root",
+    agent: "codex",
+    providerSessionId: "provider-old-root",
+  }), [{ id: "old-root-turn", status: "completed" }]);
+  store.upsert(historyItem(3, { id: "new-root", agent: "codex", providerSessionId: "provider-new-root" }));
+  store.upsert(historyItem(4, { id: "newest-root", agent: "codex", providerSessionId: "provider-newest-root" }));
+
+  assert.deepEqual(store.list().map((item) => item.id), ["newest-root", "new-root"]);
+  assert.deepEqual(new Set(removedSessions), new Set(["old-root", "old-child"]));
+});
+
+test("permanent history removal clears a parent and all of its history resources", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-history-tree-remove-"));
+  const removedSessions = [];
+  const store = new AiSessionHistoryStore({ dataDir: root }, { onRemove: (sessionId) => removedSessions.push(sessionId) });
+  store.upsert(historyItem(2, {
+    id: "child",
+    agent: "codex",
+    providerSessionId: "provider-child",
+    lineage: { kind: "subagent", parentProviderSessionId: "provider-parent" },
+  }), [{ id: "child-turn", status: "completed" }]);
+  store.upsert(historyItem(1, {
+    id: "parent",
+    agent: "codex",
+    providerSessionId: "provider-parent",
+  }), [{ id: "parent-turn", status: "completed" }]);
+
+  assert.equal(store.remove("parent"), true);
+  assert.deepEqual(store.list(), []);
+  assert.deepEqual(new Set(removedSessions), new Set(["parent", "child"]));
+  assert.deepEqual(fs.readdirSync(path.join(path.dirname(store.path()), "details")), []);
+});
+
 test("AI session history restart preserves authoritative user message attachments", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-history-attachments-"));
   const item = historyItem(4);
@@ -347,6 +391,26 @@ test("AI session history preserves minimal fork lineage and ignores lineage exte
     kind: "fork",
     parentProviderSessionId: "parent-thread",
     throughTurnId: "turn-2",
+  });
+});
+
+test("AI session history preserves subagent lineage and removes derived extensions", () => {
+  const index = sanitizeAiSessionHistoryIndex({
+    schemaVersion: 1,
+    items: [{
+      ...historyItem(7),
+      lineage: {
+        kind: "subagent",
+        parentProviderSessionId: "parent-thread",
+        parentSessionId: "derived-and-invalid",
+        throughTurnId: "not-valid-for-subagents",
+      },
+    }],
+  });
+
+  assert.deepEqual(index.items[0].lineage, {
+    kind: "subagent",
+    parentProviderSessionId: "parent-thread",
   });
 });
 

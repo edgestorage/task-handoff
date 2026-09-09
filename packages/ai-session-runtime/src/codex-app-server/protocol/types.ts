@@ -15,6 +15,7 @@ export type CodexThread = {
   id?: unknown;
   sessionId?: unknown;
   forkedFromId?: unknown;
+  parentThreadId?: unknown;
   cwd?: unknown;
   name?: unknown;
   preview?: unknown;

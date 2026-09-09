@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ActivityIndicator, Keyboard, Linking, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
-import { router, Stack } from 'expo-router';
+import { router, Stack, useLocalSearchParams } from 'expo-router';
 
 import { Screen } from '../../src/components/Screen';
 import { NativeActionButton } from '../../src/components/NativeActionButton';
@@ -23,6 +23,7 @@ type EnrollmentStep = 'address' | 'identity' | 'credentials';
 export default function AddControlPlaneScreen() {
   const { colors } = useMobileTheme();
   const { t } = useI18n();
+  const { reauthenticate } = useLocalSearchParams<{ reauthenticate?: string }>();
   const [step, setStep] = useState<EnrollmentStep>('address');
   const [address, setAddress] = useState('');
   const [target, setTarget] = useState<VerifiedDirectControlPlane>();
@@ -32,6 +33,17 @@ export default function AddControlPlaneScreen() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [passwordChangeRequired, setPasswordChangeRequired] = useState(false);
+
+  useEffect(() => {
+    if (!reauthenticate) return;
+    let live = true;
+    void profiles.list().then((saved) => {
+      if (!live) return;
+      const profile = saved.find((candidate) => candidate.identity.controlPlaneId === reauthenticate && candidate.access.kind === 'direct');
+      if (profile?.access.kind === 'direct') setAddress(profile.access.origin);
+    });
+    return () => { live = false; };
+  }, [reauthenticate]);
 
   const verifyAddress = async () => {
     Keyboard.dismiss();
@@ -94,6 +106,13 @@ export default function AddControlPlaneScreen() {
           <Text accessibilityRole="header" style={[styles.title, { color: colors.text }]}>{titleFor(step, t)}</Text>
           <Text style={[styles.description, { color: colors.textMuted }]}>{descriptionFor(step, t)}</Text>
         </View>
+
+        {reauthenticate ? (
+          <View style={[styles.notice, { backgroundColor: colors.notice }]}>
+            <SystemIcon android="lock_clock" color={colors.noticeText} ios="clock.badge.exclamationmark" size={17} />
+            <Text accessibilityLiveRegion="polite" style={[styles.noticeText, { color: colors.noticeText }]}>{t('enroll.sessionExpired')}</Text>
+          </View>
+        ) : null}
 
         <View accessibilityRole="progressbar" accessibilityValue={{ min: 1, max: 3, now: stepNumber(step) }} style={[styles.progressTrack, { backgroundColor: colors.border }]}> 
           <View style={[styles.progressValue, { backgroundColor: colors.primary, width: `${stepNumber(step) * 33.333}%` }]} />

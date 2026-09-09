@@ -77,7 +77,10 @@ test('one root provider owns one AI session connection for multiple screens', as
     subscribeProfiles,
     createClient: () => ({
       api: {
-        auth: { session: jest.fn().mockResolvedValue({ authenticated: true }) },
+        auth: {
+          renewMobileSession: jest.fn().mockResolvedValue({ expiresAt: '2026-09-12T00:00:00.000Z' }),
+          session: jest.fn().mockResolvedValue({ authenticated: true }),
+        },
         aiSessions: { list },
       },
       transport: { revalidate: jest.fn().mockResolvedValue(undefined), connectEvents },
@@ -152,7 +155,13 @@ test('selected compact session commits a new Turn projection when the detail ref
     activeProfile: jest.fn().mockResolvedValue(profile),
     subscribeProfiles: () => () => undefined,
     createClient: () => ({
-      api: { auth: { session: jest.fn().mockResolvedValue({ authenticated: true }) }, aiSessions: { list, detail, turnIndex, turnBody } },
+      api: {
+        auth: {
+          renewMobileSession: jest.fn().mockResolvedValue({ expiresAt: '2026-09-12T00:00:00.000Z' }),
+          session: jest.fn().mockResolvedValue({ authenticated: true }),
+        },
+        aiSessions: { list, detail, turnIndex, turnBody },
+      },
       transport: { revalidate: jest.fn().mockResolvedValue(undefined), connectEvents: () => ({ close: jest.fn() }) },
     }) as unknown as ReturnType<ActiveAiSessionsDependencies['createClient']>,
     subscribeLifecycle: (listener) => { listener('active'); return () => undefined; },

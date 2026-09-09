@@ -683,7 +683,7 @@ test("compact Timeline splits history from only the activities after the latest 
   assert.deepEqual(compact.activities.map((activity) => activity.id), ["activity-2", "activity-3"]);
 });
 
-test("compact Timeline exposes only an active Codex retry warning outside normal activities", () => {
+test("compact Timeline exposes provider retry warnings outside normal activities", () => {
   const waiting = compactTimelineForTurn([
     { id: "user", turnId: "turn-1", type: "user-message", text: "question" },
     { id: "codex_retry:turn-1", turnId: "turn-1", type: "activity", activityKind: "codexRetry", title: "Codex retry", status: "waiting", summary: "Reconnecting to the model stream" },
@@ -691,6 +691,12 @@ test("compact Timeline exposes only an active Codex retry warning outside normal
   assert.equal(waiting.retryWarning, "Reconnecting to the model stream");
   assert.deepEqual(waiting.activities, []);
   assert.equal(waiting.activityNodes.some((node) => node.type === "activities"), false);
+
+  const openCode = compactTimelineForTurn([
+    { id: "opencode_retry:turn-1", turnId: "turn-1", type: "activity", activityKind: "retry", title: "Retry", status: "waiting", summary: "Retrying provider request" },
+  ], { id: "turn-1" });
+  assert.equal(openCode.retryWarning, "Retrying provider request");
+  assert.deepEqual(openCode.activities, []);
 
   const recovered = compactTimelineForTurn([
     { id: "codex_retry:turn-1", turnId: "turn-1", type: "activity", activityKind: "codexRetry", title: "Codex retry", status: "completed", summary: "Reconnecting to the model stream" },

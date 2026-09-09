@@ -727,6 +727,39 @@ test("Codex bridge Fork projects forkedFromId without using thread sessionId as 
   assert.deepEqual(forked.lineage, { kind: "fork", parentProviderSessionId: "thread-source" });
 });
 
+test("Codex discovery projects persisted multi-level subagents independently from activity summaries", async () => {
+  const { registry } = runtime();
+  class FakeClient extends EventEmitter {
+    async start() {}
+    stop() {}
+    async listLoadedThreadIds() { return []; }
+    async listThreads() {
+      return [
+        { id: "thread-parent", cwd: "/workspace", ephemeral: false, turns: [] },
+        { id: "thread-child", parentThreadId: "thread-parent", cwd: "/workspace", ephemeral: false, turns: [] },
+        { id: "thread-grandchild", parentThreadId: "thread-child", cwd: "/workspace", ephemeral: false, turns: [] },
+        { id: "thread-fork", forkedFromId: "thread-parent", cwd: "/workspace", ephemeral: false, turns: [] },
+      ];
+    }
+  }
+  const bridge = new CodexAppServerSessionBridge(registry, new FakeClient());
+  await bridge.sync();
+
+  assert.deepEqual(registry.getByProviderSessionId("codex", "thread-child").lineage, {
+    kind: "subagent",
+    parentProviderSessionId: "thread-parent",
+  });
+  assert.deepEqual(registry.getByProviderSessionId("codex", "thread-grandchild").lineage, {
+    kind: "subagent",
+    parentProviderSessionId: "thread-child",
+  });
+  assert.deepEqual(registry.getByProviderSessionId("codex", "thread-fork").lineage, {
+    kind: "fork",
+    parentProviderSessionId: "thread-parent",
+  });
+  assert.deepEqual(registry.getByProviderSessionId("codex", "thread-parent").subAgents, []);
+});
+
 test("Codex bridge creates a persistent Direct thread on the shared client", async () => {
   const { registry } = runtime();
   class FakeClient extends EventEmitter {
@@ -984,6 +1017,23 @@ test("Codex app-server client verifies active thread identity across unfiltered 
   assert.deepEqual(requests.map((entry) => entry.params.cursor), [null, "page-2"]);
 });
 
+test("Codex app-server discovers subagent source kinds and falls back for old servers", async () => {
+  const diagnostics = [];
+  const client = new CodexAppServerClient({ onDiagnostic: (diagnostic) => diagnostics.push(diagnostic) });
+  const requests = [];
+  client.request = async (_method, params) => {
+    requests.push(params);
+    if (params.sourceKinds.length) throw new CodexAppServerRpcError("Invalid params", -32602);
+    return { data: [{ id: "thread-interactive" }], nextCursor: null };
+  };
+
+  assert.deepEqual(await client.listThreads(), [{ id: "thread-interactive" }]);
+  assert.equal(requests[0].sourceKinds.includes("subAgent"), true);
+  assert.equal(requests[0].sourceKinds.includes("subAgentReview"), true);
+  assert.deepEqual(requests[1].sourceKinds, []);
+  assert.deepEqual(diagnostics.map((diagnostic) => diagnostic.code), ["CODEX_SUBAGENT_THREAD_DISCOVERY_UNSUPPORTED"]);
+});
+
 test("Codex app-server client fails closed when active thread pagination repeats", async () => {
   const client = new CodexAppServerClient();
   client.request = async () => ({ data: [], nextCursor: "same-page" });
@@ -1194,4 +1244,250 @@ test("Close AI Session completes when provider archive reports a session that is
   assert.ok(history.get(session.id));
   assert.deepEqual(resumed, []);
   assert.equal(diagnostics[0].code, "AI_SESSION_CLOSE_PROVIDER_ALREADY_ABSENT");
+});
+
+test("Close AI Session freezes and archives a complete subagent subtree child-first", async () => {
+  const { registry, controller } = runtime();
+  const history = new AiSessionHistoryStore({ dataDir: fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-subtree-close-")) });
+  const archived = [];
+  controller.register({
+    agent: "codex",
+    async archiveSession(id) { archived.push(id); },
+    async unsubscribeSession() {},
+  });
+  const parent = registry.applyAdapterSnapshot({ agent: "codex", providerSessionId: "parent", cwd: "/workspace", status: "idle" });
+  const child = registry.applyAdapterSnapshot({ agent: "codex", providerSessionId: "child", lineage: { kind: "subagent", parentProviderSessionId: "parent" }, cwd: "/workspace", status: "idle" });
+  const grandchild = registry.applyAdapterSnapshot({ agent: "codex", providerSessionId: "grandchild", lineage: { kind: "subagent", parentProviderSessionId: "child" }, cwd: "/workspace", status: "idle" });
+  const coordinator = new AiSessionCloseCoordinator({ registry, controller, history, stopApp: () => {} });
+
+  const result = await coordinator.close(parent.id);
+  assert.equal(result.aiSessionId, parent.id);
+  assert.deepEqual(archived, ["grandchild", "child", "parent"]);
+  assert.deepEqual([parent, child, grandchild].map((entry) => Boolean(history.get(entry.id))), [true, true, true]);
+  assert.deepEqual(registry.all(), []);
+});
+
+test("Close AI Session keeps failed children and ancestors while completing siblings", async () => {
+  const { registry, controller } = runtime();
+  const diagnostics = [];
+  const archived = [];
+  controller.register({
+    agent: "codex",
+    async archiveSession(id) {
+      if (id === "child-failed") throw new Error("child archive failed");
+      archived.push(id);
+    },
+    async activeSessionExists() { return true; },
+    async resumeSession() {},
+    async unsubscribeSession() {},
+  });
+  const parent = registry.applyAdapterSnapshot({ agent: "codex", providerSessionId: "parent", cwd: "/workspace", status: "idle" });
+  const failed = registry.applyAdapterSnapshot({ agent: "codex", providerSessionId: "child-failed", lineage: { kind: "subagent", parentProviderSessionId: "parent" }, cwd: "/workspace", status: "idle" });
+  const sibling = registry.applyAdapterSnapshot({ agent: "codex", providerSessionId: "child-ok", lineage: { kind: "subagent", parentProviderSessionId: "parent" }, cwd: "/workspace", status: "idle" });
+  const coordinator = new AiSessionCloseCoordinator({
+    registry,
+    controller,
+    history: new AiSessionHistoryStore({ dataDir: fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-subtree-fail-")) }),
+    stopApp: () => {},
+    onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+  });
+
+  await assert.rejects(coordinator.close(parent.id), (error) => error.code === "AI_SESSION_CLOSE_FAILED");
+  assert.deepEqual(archived, ["child-ok"]);
+  assert.ok(registry.get(parent.id));
+  assert.ok(registry.get(failed.id));
+  assert.equal(registry.get(sibling.id), undefined);
+  assert.equal(registry.get(parent.id).actions?.send, undefined);
+  assert.equal(diagnostics.some((entry) => entry.code === "AI_SESSION_SUBTREE_CLOSE_FAILED"), true);
+});
+
+test("overlapping parent and child close requests invoke each provider lifecycle once", async () => {
+  const { registry, controller } = runtime();
+  const archived = [];
+  let releaseChild;
+  const childGate = new Promise((resolve) => { releaseChild = resolve; });
+  controller.register({
+    agent: "codex",
+    async archiveSession(id) {
+      archived.push(id);
+      if (id === "child") await childGate;
+    },
+    async unsubscribeSession() {},
+  });
+  const parent = registry.applyAdapterSnapshot({ agent: "codex", providerSessionId: "parent", cwd: "/workspace", status: "idle" });
+  const child = registry.applyAdapterSnapshot({ agent: "codex", providerSessionId: "child", lineage: { kind: "subagent", parentProviderSessionId: "parent" }, cwd: "/workspace", status: "idle" });
+  const coordinator = new AiSessionCloseCoordinator({
+    registry,
+    controller,
+    history: new AiSessionHistoryStore({ dataDir: fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-subtree-concurrent-")) }),
+    stopApp: () => {},
+  });
+
+  const parentClose = coordinator.close(parent.id);
+  const childClose = coordinator.close(child.id);
+  releaseChild();
+  const [, childResult] = await Promise.all([parentClose, childClose]);
+  assert.equal(childResult.aiSessionId, child.id);
+  assert.equal(childResult.disposition, "already-closed");
+  assert.deepEqual(archived, ["child", "parent"]);
+});
+
+test("Clear AI Session permanently deletes an archived subagent subtree child-first", async () => {
+  const { registry, controller } = runtime();
+  const released = [];
+  const history = new AiSessionHistoryStore(
+    { dataDir: fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-subtree-clear-")) },
+    { onRemove: (sessionId) => released.push(sessionId) },
+  );
+  const deleted = [];
+  controller.register({
+    agent: "codex",
+    async archiveSession() {},
+    async deleteSession(id) { deleted.push(id); },
+    async unsubscribeSession() {},
+  });
+  const parent = registry.applyAdapterSnapshot({ agent: "codex", providerSessionId: "parent", cwd: "/workspace", status: "idle" });
+  const child = registry.applyAdapterSnapshot({ agent: "codex", providerSessionId: "child", lineage: { kind: "subagent", parentProviderSessionId: "parent" }, cwd: "/workspace", status: "idle" });
+  const grandchild = registry.applyAdapterSnapshot({ agent: "codex", providerSessionId: "grandchild", lineage: { kind: "subagent", parentProviderSessionId: "child" }, cwd: "/workspace", status: "idle" });
+  const coordinator = new AiSessionCloseCoordinator({ registry, controller, history, stopApp: () => {} });
+
+  await coordinator.close(parent.id);
+  assert.deepEqual([parent, child, grandchild].map((entry) => Boolean(history.detail(entry.id))), [true, true, true]);
+
+  const result = await coordinator.clear(parent.id);
+
+  assert.equal(result.disposition, "cleared");
+  assert.equal(result.aiSessionId, parent.id);
+  assert.deepEqual(result.clearedSessionIds, [grandchild.id, child.id, parent.id]);
+  assert.deepEqual(deleted, ["grandchild", "child", "parent"]);
+  assert.deepEqual(registry.all(), []);
+  assert.deepEqual(history.list(), []);
+  assert.deepEqual([parent, child, grandchild].map((entry) => history.detail(entry.id)), [undefined, undefined, undefined]);
+  assert.deepEqual(released, [grandchild.id, child.id, parent.id]);
+});
+
+test("Clear AI Session keeps a failed child and its ancestors while deleting siblings, then retries", async () => {
+  const { registry, controller } = runtime();
+  const diagnostics = [];
+  const deleted = [];
+  let failChild = true;
+  controller.register({
+    agent: "codex",
+    async deleteSession(id) {
+      if (id === "child-failed" && failChild) throw new Error("child delete failed");
+      deleted.push(id);
+    },
+    async activeSessionExists() { return true; },
+    async unsubscribeSession() {},
+  });
+  const parent = registry.applyAdapterSnapshot({ agent: "codex", providerSessionId: "parent", cwd: "/workspace", status: "idle" });
+  const failed = registry.applyAdapterSnapshot({ agent: "codex", providerSessionId: "child-failed", lineage: { kind: "subagent", parentProviderSessionId: "parent" }, cwd: "/workspace", status: "idle" });
+  const sibling = registry.applyAdapterSnapshot({ agent: "codex", providerSessionId: "child-ok", lineage: { kind: "subagent", parentProviderSessionId: "parent" }, cwd: "/workspace", status: "idle" });
+  const coordinator = new AiSessionCloseCoordinator({
+    registry,
+    controller,
+    history: new AiSessionHistoryStore({ dataDir: fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-subtree-clear-fail-")) }),
+    stopApp: () => {},
+    onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+  });
+
+  await assert.rejects(coordinator.clear(parent.id), (error) => error.code === "AI_SESSION_DELETE_FAILED");
+  assert.deepEqual(deleted, ["child-ok"]);
+  assert.ok(registry.get(parent.id));
+  assert.ok(registry.get(failed.id));
+  assert.equal(registry.get(sibling.id), undefined);
+  assert.equal(diagnostics.some((entry) => entry.code === "AI_SESSION_SUBTREE_DELETE_FAILED"), true);
+
+  failChild = false;
+  const retried = await coordinator.clear(parent.id);
+  assert.deepEqual(retried.clearedSessionIds, [failed.id, parent.id]);
+  assert.deepEqual(deleted, ["child-ok", "child-failed", "parent"]);
+  assert.deepEqual(registry.all(), []);
+});
+
+test("overlapping parent and child clear requests invoke each provider lifecycle once", async () => {
+  const { registry, controller } = runtime();
+  const deleted = [];
+  let releaseChild;
+  const childGate = new Promise((resolve) => { releaseChild = resolve; });
+  controller.register({
+    agent: "codex",
+    async deleteSession(id) {
+      deleted.push(id);
+      if (id === "child") await childGate;
+    },
+    async unsubscribeSession() {},
+  });
+  const parent = registry.applyAdapterSnapshot({ agent: "codex", providerSessionId: "parent", cwd: "/workspace", status: "idle" });
+  const child = registry.applyAdapterSnapshot({ agent: "codex", providerSessionId: "child", lineage: { kind: "subagent", parentProviderSessionId: "parent" }, cwd: "/workspace", status: "idle" });
+  const coordinator = new AiSessionCloseCoordinator({
+    registry,
+    controller,
+    history: new AiSessionHistoryStore({ dataDir: fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-subtree-clear-concurrent-")) }),
+    stopApp: () => {},
+  });
+
+  const parentClear = coordinator.clear(parent.id);
+  const childClear = coordinator.clear(child.id);
+  releaseChild();
+  await Promise.all([parentClear, childClear]);
+
+  assert.deepEqual(deleted, ["child", "parent"]);
+  assert.deepEqual(await coordinator.clear(parent.id), {
+    disposition: "already-cleared",
+    aiSessionId: parent.id,
+    clearedSessionIds: [],
+  });
+});
+
+test("an observed provider parent archive converges descendants without archiving the parent twice", async () => {
+  const { registry, controller } = runtime();
+  const archived = [];
+  controller.register({
+    agent: "codex",
+    async archiveSession(id) { archived.push(id); },
+    async unsubscribeSession() {},
+  });
+  const parent = registry.applyAdapterSnapshot({ agent: "codex", providerSessionId: "parent", cwd: "/workspace", status: "running", activeTurnId: "parent-turn" });
+  const child = registry.applyAdapterSnapshot({ agent: "codex", providerSessionId: "child", lineage: { kind: "subagent", parentProviderSessionId: "parent" }, cwd: "/workspace", status: "idle" });
+  const grandchild = registry.applyAdapterSnapshot({ agent: "codex", providerSessionId: "grandchild", lineage: { kind: "subagent", parentProviderSessionId: "child" }, cwd: "/workspace", status: "idle" });
+  const history = new AiSessionHistoryStore({ dataDir: fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-provider-close-")) });
+  const coordinator = new AiSessionCloseCoordinator({ registry, controller, history, stopApp: () => {} });
+
+  registry.discard(parent.id);
+  const result = await coordinator.convergeObservedProviderLifecycle(parent, "closed");
+
+  assert.equal(result.disposition, "closed");
+  assert.deepEqual(archived, ["grandchild", "child"]);
+  assert.deepEqual(registry.all(), []);
+  assert.deepEqual([parent, child, grandchild].map((entry) => Boolean(history.get(entry.id))), [true, true, true]);
+});
+
+test("an observed provider parent delete permanently clears descendants without deleting the parent twice", async () => {
+  const { registry, controller } = runtime();
+  const deleted = [];
+  const released = [];
+  controller.register({
+    agent: "codex",
+    async deleteSession(id) { deleted.push(id); },
+    async unsubscribeSession() {},
+  });
+  const parent = registry.applyAdapterSnapshot({ agent: "codex", providerSessionId: "parent", cwd: "/workspace", status: "idle" });
+  const child = registry.applyAdapterSnapshot({ agent: "codex", providerSessionId: "child", lineage: { kind: "subagent", parentProviderSessionId: "parent" }, cwd: "/workspace", status: "idle" });
+  const coordinator = new AiSessionCloseCoordinator({
+    registry,
+    controller,
+    history: new AiSessionHistoryStore({ dataDir: fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-provider-delete-")) }),
+    stopApp: () => {},
+    releaseSessionResources: (sessionId) => released.push(sessionId),
+  });
+
+  registry.discard(parent.id);
+  const result = await coordinator.convergeObservedProviderLifecycle(parent, "cleared");
+
+  assert.equal(result.disposition, "cleared");
+  assert.deepEqual(result.clearedSessionIds, [child.id, parent.id]);
+  assert.deepEqual(deleted, ["child"]);
+  assert.deepEqual(registry.all(), []);
+  assert.deepEqual(released, [child.id, parent.id]);
 });

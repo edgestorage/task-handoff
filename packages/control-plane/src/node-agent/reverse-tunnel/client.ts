@@ -17,7 +17,7 @@ export type ReverseTunnelHost = {
   }): Promise<NodeAgentInjectResponse>;
   nodeAgentEventForwarder?: {
     addOutput(socket: WebSocket, options?: { expectsTransientSubscription?: boolean; legacyFallbackMs?: number }): () => void;
-    setOutputSubscription?(socket: WebSocket, input: unknown, eventEnvelopeVersion?: unknown): boolean;
+    setOutputSubscription?(socket: WebSocket, input: unknown, eventEnvelopeVersion?: unknown, aiSessionHierarchy?: unknown): boolean;
   };
   nodeAgentState?: {
     currentListenerPort: number;
@@ -151,7 +151,7 @@ export function connectReverseTunnel(app: ReverseTunnelHost, input: ReverseTunne
     }
     const record = message && typeof message === "object" ? message as Record<string, unknown> : {};
     if (record.type === "control-plane.event-subscribe") {
-      app.nodeAgentEventForwarder?.setOutputSubscription?.(socket, record.aiSessionTransient, record.eventEnvelopeVersion);
+      app.nodeAgentEventForwarder?.setOutputSubscription?.(socket, record.aiSessionTransient, record.eventEnvelopeVersion, record.aiSessionHierarchy);
       return;
     }
     if (record.type === "control-plane.http.open") {

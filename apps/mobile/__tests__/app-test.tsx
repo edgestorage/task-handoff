@@ -4,7 +4,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { aiSessionStatusGroup, ControlPlaneAiSessionsSchema } from '@task-handoff/control-plane-client';
 
 import { AiSessionInbox, inboxCardContent, inboxEntries } from '../src/ai-sessions/Inbox';
-import { aiSessionInboxRows, inboxStatusMessage, matchesStatusFilter, statusFilterLabel } from '../src/ai-sessions/InboxModel';
+import { aiSessionInboxRows, inboxHierarchyEntries, inboxStatusMessage, matchesStatusFilter, statusFilterLabel } from '../src/ai-sessions/InboxModel';
 import type { MobileDirectoryProfileState } from '../src/directories/store';
 import { sessionActivityText } from '../src/ai-sessions/SessionDetail';
 import { SessionStatusIndicator, sessionStatusTone } from '../src/ai-sessions/SessionStatusIndicator';
@@ -162,6 +162,53 @@ describe('<InboxRoute />', () => {
     expect(inboxEntries(snapshot, { kind: 'node', nodeId: 'node-2' }, instanceNodes)).toHaveLength(0);
     expect(inboxEntries(snapshot, { kind: 'instance', instanceId: 'instance-1' }, instanceNodes)).toHaveLength(2);
     expect(inboxEntries(snapshot, { kind: 'instance', instanceId: 'instance-2' }, instanceNodes)).toHaveLength(0);
+  });
+
+  test('derives expandable sub sessions and forces ancestor paths for child status matches', () => {
+    const hierarchySnapshot = ControlPlaneAiSessionsSchema.parse({
+      updatedAt: '2026-08-05T00:03:00.000Z',
+      instances: [{
+        instanceId: 'instance-1', streamId: 'stream-1', aiSessions: {
+          updatedAt: '2026-08-05T00:03:00.000Z',
+          sessions: [
+            { id: 'parent', agent: 'codex', providerSessionId: 'provider-parent', status: 'idle', startedAt: '2026-08-05T00:00:00.000Z', updatedAt: '2026-08-05T00:01:00.000Z' },
+            { id: 'child', agent: 'codex', providerSessionId: 'provider-child', lineage: { kind: 'subagent', parentProviderSessionId: 'provider-parent' }, status: 'waiting', startedAt: '2026-08-05T00:00:00.000Z', updatedAt: '2026-08-05T00:02:00.000Z' },
+            { id: 'grandchild', agent: 'codex', providerSessionId: 'provider-grandchild', lineage: { kind: 'subagent', parentProviderSessionId: 'provider-child' }, status: 'running', startedAt: '2026-08-05T00:00:00.000Z', updatedAt: '2026-08-05T00:03:00.000Z' },
+          ],
+        },
+      }],
+    });
+
+    expect(inboxHierarchyEntries(hierarchySnapshot).map((entry) => [entry.session.id, entry.depth, entry.hasChildren])).toEqual([
+      ['parent', 0, true],
+    ]);
+    expect(inboxHierarchyEntries(hierarchySnapshot, { kind: 'all' }, new Map(), { expandedSessionIds: new Set(['parent', 'child']) }).map((entry) => [entry.session.id, entry.depth])).toEqual([
+      ['parent', 0], ['child', 1], ['grandchild', 2],
+    ]);
+    expect(inboxHierarchyEntries(hierarchySnapshot, { kind: 'all' }, new Map(), { statusFilter: 'active' }).map((entry) => entry.session.id)).toEqual([
+      'parent', 'child', 'grandchild',
+    ]);
+  });
+
+  test('keeps orphan children and old-producer flat sessions visible at the top level', () => {
+    const base = { agent: 'codex', status: 'idle' as const, startedAt: '2026-08-05T00:00:00.000Z', updatedAt: '2026-08-05T00:01:00.000Z' };
+    const mobileSnapshot = ControlPlaneAiSessionsSchema.parse({
+      updatedAt: base.updatedAt,
+      instances: [{ instanceId: 'instance-1', streamId: 'stream-1', aiSessions: {
+        updatedAt: base.updatedAt,
+        sessions: [
+          { ...base, id: 'orphan', providerSessionId: 'provider-orphan', lineage: { kind: 'subagent', parentProviderSessionId: 'missing-parent' } },
+          { ...base, id: 'legacy-parent', providerSessionId: 'provider-parent' },
+          { ...base, id: 'legacy-child', providerSessionId: 'provider-child' },
+        ],
+      } }],
+    });
+
+    expect(inboxHierarchyEntries(mobileSnapshot).map((entry) => [entry.session.id, entry.depth, entry.hasChildren])).toEqual([
+      ['legacy-child', 0, false],
+      ['orphan', 0, false],
+      ['legacy-parent', 0, false],
+    ]);
   });
 
   test('card projects the latest turn prompt and response and filters by status', async () => {

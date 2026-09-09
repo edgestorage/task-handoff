@@ -1348,13 +1348,13 @@ export class ControlPlaneService {
 
   async recoverAiSessionDelta(instanceId: string, streamId: string, sinceRevision: number): Promise<AiSessionDeltaResponse> {
     const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
-    const query = new URLSearchParams({ streamId, sinceRevision: String(sinceRevision) });
+    const query = new URLSearchParams({ streamId, sinceRevision: String(sinceRevision), hierarchy: "subagents" });
     return parseResponse(AiSessionDeltaResponseSchema, await this.instanceRequest(instance, `/ai-sessions?${query}`));
   }
 
   async recoverAiSessionSnapshot(instanceId: string) {
     const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
-    return parseResponse(AiSessionsStateSchema, await this.instanceRequest(instance, "/ai-sessions/state"));
+    return parseResponse(AiSessionsStateSchema, await this.instanceRequest(instance, "/ai-sessions/state?hierarchy=subagents"));
   }
 
   async recoverAppSessionDelta(instanceId: string, streamId: string, sinceRevision: number): Promise<AppSessionDeltaResponse> {

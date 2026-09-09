@@ -54,7 +54,14 @@ test("Story snapshots persist across view remounts and converge through events",
 
 test("instance directory and scoped board reads stay progressive", () => {
   assert.match(source, /function fetchInstanceBoardPayload[\s\S]*params\.set\("progressive", "true"\)[\s\S]*if \(instanceId\) params\.set\("instanceId", instanceId\)/);
-  assert.match(source, /useInstanceDirectoryQuery[\s\S]*sharedControlPlaneClient\.resources\.instanceDirectory\(signal\)/);
+  const directoryQuery = source.match(/export function useInstanceDirectoryQuery[\s\S]*?\n\}/)?.[0] || "";
+  assert.match(directoryQuery, /sharedControlPlaneClient\.resources\.instanceDirectory\(signal\)/);
+  assert.match(directoryQuery, /staleTime: Infinity/);
+  assert.match(directoryQuery, /gcTime: Infinity/);
+  assert.match(directoryQuery, /refetchOnWindowFocus: false/);
+  assert.match(directoryQuery, /refetchOnReconnect: false/);
+  assert.match(directoryQuery, /refetchInterval: computed\(\(\) => toValue\(eventStreamAuthoritative\) \? false : 15_000\)/);
+  assert.match(workbenchSource, /useInstanceDirectoryQuery\(standaloneMode, instanceDirectoryEventsAuthoritative\)/);
   assert.match(workbenchSource, /const standaloneBoardPending = computed\([\s\S]*state\.resource === "instances"[\s\S]*state\.phase === "loading"/);
 });
 

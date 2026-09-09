@@ -4,6 +4,7 @@ import {
   ControlPlaneCurrentAuthorizationSchema,
   ControlPlaneMobileLoginInputSchema,
   ControlPlaneMobileLoginResponseSchema,
+  ControlPlaneMobileSessionRenewalResponseSchema,
   ControlPlaneMobileSessionRevocationResponseSchema,
   ControlPlaneMobileSessionsResponseSchema,
   ControlPlanePublicIdentityDocumentSchema,
@@ -62,6 +63,13 @@ export function createControlPlaneAuthApi(transport: ControlPlaneClientTransport
     },
     logoutMobile() {
       return requestData("/api/auth/mobile/logout", z.object({ ok: z.boolean() }).strict(), post());
+    },
+    renewMobileSession(signal?: AbortSignal) {
+      return transport.request(
+        "/api/auth/mobile/renew",
+        ControlPlaneMobileSessionRenewalResponseSchema,
+        { ...post(), signal },
+      ).then((response) => response.data);
     },
     async loginMobile(input: ControlPlaneMobileLoginInput) {
       return (await transport.request(

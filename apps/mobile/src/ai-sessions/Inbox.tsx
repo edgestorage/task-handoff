@@ -23,9 +23,8 @@ import { useI18n } from '../i18n';
 import {
   aiSessionInboxRows,
   inboxCardContent,
-  inboxEntries,
+  inboxHierarchyEntries,
   inboxStatusMessage,
-  matchesStatusFilter,
   statusFilterLabel,
   workspaceLabel,
   type SessionStatusFilter,
@@ -62,12 +61,15 @@ export function AiSessionInbox({
   const [statusFilterTrackWidth, setStatusFilterTrackWidth] = useState(0);
   const [statusFilterOffset] = useState(() => new Animated.Value(0));
   const [closingKey, setClosingKey] = useState('');
+  const [expandedSessionIds, setExpandedSessionIds] = useState<Set<string>>(() => new Set());
   const preferences = useSyncExternalStore(subscribeAiSessionInboxViewPreferences, getAiSessionInboxViewPreferences, getAiSessionInboxViewPreferences);
   const pullToRefresh = usePullToRefresh(onRefresh);
   const instanceNodeIds = useMemo(() => new Map((directory?.instances ?? []).map((instance) => [instance.id, instance.nodeId])), [directory]);
   const instanceNames = useMemo(() => new Map((directory?.instances ?? []).map((instance) => [instance.id, instance.name])), [directory]);
-  const allEntries = useMemo(() => inboxEntries(state.snapshot, scope, instanceNodeIds), [state.snapshot, scope, instanceNodeIds]);
-  const entries = useMemo(() => allEntries.filter((entry) => matchesStatusFilter(entry.session, statusFilter)), [allEntries, statusFilter]);
+  const entries = useMemo(() => inboxHierarchyEntries(state.snapshot, scope, instanceNodeIds, {
+    expandedSessionIds,
+    statusFilter,
+  }), [expandedSessionIds, instanceNodeIds, scope, state.snapshot, statusFilter]);
   const rows = useMemo(
     () => aiSessionInboxRows(entries, directory, preferences.groupBy, preferences.sortByStatus, t),
     [directory, entries, preferences.groupBy, preferences.sortByStatus, t],
@@ -105,7 +107,7 @@ export function AiSessionInbox({
         <SwipeActionList
           style={[styles.screen, { backgroundColor: colors.background }]}
           data={rows}
-          itemContainerStyle={(item) => item.type === 'group' ? styles.groupContainer : styles.cardContainer}
+          itemContainerStyle={(item) => item.type === 'group' ? styles.groupContainer : [styles.cardContainer, item.depth ? { marginLeft: 20 + item.depth * 14 } : null]}
           keyExtractor={(item) => item.type === 'group' ? item.key : `${item.instanceId}:${item.session.id}`}
           ListHeaderComponent={<View style={styles.header}>
             <View
@@ -168,7 +170,22 @@ export function AiSessionInbox({
                 {item.session.unread ? <View accessibilityLabel={t('sessions.unread')} style={styles.unread} /> : null}
                 <View style={[styles.row, item.session.unread && styles.rowWithUnread]}>
                   <View style={styles.sessionIdentity}>
-                    <SessionStatusIndicator group={statusGroup} label={statusLabel} />
+                    {item.hasChildren ? <Pressable
+                      accessibilityLabel={t(expandedSessionIds.has(item.session.id) ? 'sessions.collapseSubSessions' : 'sessions.expandSubSessions')}
+                      accessibilityRole="button"
+                      accessibilityState={{ expanded: expandedSessionIds.has(item.session.id) }}
+                      hitSlop={8}
+                      onPress={(event) => {
+                        event.stopPropagation();
+                        setExpandedSessionIds((current) => {
+                          const next = new Set(current);
+                          if (next.has(item.session.id)) next.delete(item.session.id); else next.add(item.session.id);
+                          return next;
+                        });
+                      }}
+                      style={styles.disclosure}
+                      testID="session-disclosure"
+                    ><SystemIcon android={expandedSessionIds.has(item.session.id) ? 'expand_more' : 'chevron_right'} color={colors.textMuted} ios={expandedSessionIds.has(item.session.id) ? 'chevron.down' : 'chevron.right'} size={18} /></Pressable> : <View style={styles.leadingIcon}><SessionStatusIndicator group={statusGroup} label={statusLabel} /></View>}
                     <View style={styles.sessionIdentityText}>
                       <Text numberOfLines={1} style={[styles.instanceName, { color: colors.text }]}>{instanceName}</Text>
                       <Text numberOfLines={1} style={[styles.meta, { color: colors.textMuted }]}>{identity}</Text>
@@ -247,6 +264,8 @@ const styles = StyleSheet.create({
   footerRow: { alignItems: 'center', flexDirection: 'row', gap: 12, justifyContent: 'flex-end', minHeight: 18 },
   footerActivity: { alignItems: 'center', flex: 1, flexDirection: 'row', gap: 8, minWidth: 0 },
   sessionIdentity: { alignItems: 'center', flex: 1, flexDirection: 'row', gap: 9, minWidth: 0 },
+  leadingIcon: { alignItems: 'center', height: 28, justifyContent: 'center', width: 28 },
+  disclosure: { alignItems: 'center', height: 28, justifyContent: 'center', width: 28 },
   sessionIdentityText: { flex: 1, gap: 1, minWidth: 0 },
   instanceName: { fontSize: 15, fontWeight: '700', lineHeight: 20 },
   cardTitle: { color: '#0f172a', flex: 1, fontSize: 16, fontWeight: '700' },

@@ -335,6 +335,7 @@
 
       <StoryView
         v-if="!standaloneMode && storyMode && !settingsMode"
+        :choose-project-folder="desktopBridge?.chooseProjectFolder"
         :filter-node-id="storyNodeFilter"
         :instances="boardInstancesWithAiSessions"
         :node-local-folders-by-node-id="nodeLocalFoldersByNodeId"
@@ -560,6 +561,7 @@ import { useImagePullProgress } from "./useImagePullProgress";
 import { buildInstanceDetailPath, openInstanceDetailWindow, switchDesktopInstanceDetailWindow } from "./instance-detail/instanceDetailWindow";
 import { consumeInstanceDetailSelection, instanceDetailSelectionStorageKey, persistInstanceDetailSelection, type InstanceDetailSelection } from "./instance-detail/instanceDetailSelection";
 import { createWebInstanceWindowCoordinator } from "./instance-detail/instanceWindowCoordinator";
+import { canUseNativeProjectFolderPicker } from "./nodePath";
 
 type ProjectFolderSelection = string | { path: string; ownerNodeId?: string };
 
@@ -662,13 +664,14 @@ const controlPlane = useControlPlaneStatusQuery();
 const sessionQueryInstanceId = computed(() => standaloneMode.value ? standaloneInstanceId.value : "");
 const sessionQueriesEnabled = computed(() => !standaloneMode.value || standaloneOwnershipReady.value);
 const board = useInstanceBoardQuery(sessionQueryInstanceId, sessionQueriesEnabled);
+const instanceDirectoryEventsAuthoritative = ref(false);
 const instanceDirectoryComplete = computed(() => {
   if (!board.isSuccess.value) return false;
   const instanceStates = board.nodeStates.value.filter((state) => state.resource === "instances");
   // Compatibility for v0.0.21: its blocking board response has no nodeStates.
   return instanceStates.length === 0 || instanceStates.every((state) => state.phase === "ready");
 });
-const instanceDirectory = useInstanceDirectoryQuery(standaloneMode);
+const instanceDirectory = useInstanceDirectoryQuery(standaloneMode, instanceDirectoryEventsAuthoritative);
 const controlPlaneAiSessions = useControlPlaneAiSessionsQuery(sessionQueryInstanceId, sessionQueriesEnabled);
 const controlPlaneAppSessions = useControlPlaneAppSessionsQuery(sessionQueryInstanceId, sessionQueriesEnabled);
 // HTTP owns the initial authoritative snapshot. Opening the session stream
@@ -879,11 +882,8 @@ const nodeLocalFoldersByNodeId = computed<Record<string, NodeLocalFolder[]>>(() 
 ));
 const activeInstanceWithAiSessions = computed(() => activeInstance.value);
 const activeProjectFolderChooser = computed(() => {
-  const labels = activeInstance.value?.node?.labels;
-  return desktopBridge?.chooseProjectFolder
-    && labels?.["task-handoff.control-plane.local"] === "true"
-    && labels?.["task-handoff.control-plane.builtin"] === "true"
-    ? desktopBridge.chooseProjectFolder
+  return canUseNativeProjectFolderPicker(activeInstance.value, Boolean(desktopBridge?.chooseProjectFolder))
+    ? desktopBridge?.chooseProjectFolder
     : undefined;
 });
 const standaloneDetailError = computed(() => {
@@ -999,6 +999,9 @@ useControlPlaneEvents({
     joined(event) {
       lastNodeJoinedEvent.value = event;
     },
+  },
+  onAuthoritativeState(authoritative) {
+    instanceDirectoryEventsAuthoritative.value = authoritative;
   },
 });
 const lastRefreshLabel = computed(() => formatTime(lastRefreshAt.value, locale.value as SupportedLocale));

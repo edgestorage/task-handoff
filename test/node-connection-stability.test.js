@@ -284,6 +284,7 @@ test("reverse tunnel becomes healthy only after identify and ignores a replaced 
   assert.deepEqual(JSON.parse(first.sent[2]), {
     type: "control-plane.event-subscribe",
     eventEnvelopeVersion: "2026-08-25",
+    aiSessionHierarchy: { subagents: true },
     aiSessionTransient: {
       messageDeltas: { allInstances: false, instanceIds: [] },
       timelineAllSessions: false,

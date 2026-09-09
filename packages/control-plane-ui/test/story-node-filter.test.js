@@ -81,13 +81,27 @@ test("Story AI sessions expose status and unread indicators", () => {
   assert.match(storyView, /v-if="entry\.session\.unread" class="story-session-unread"/);
   assert.match(storyView, /\.story-session-icon-status\s*\{[^}]*position:absolute;[^}]*top:-2px;[^}]*right:-5px;/s);
   assert.match(storyView, /\.story-session-unread\s*\{[^}]*background:var\(--status-info\);/s);
-  assert.match(storyView, /type SessionEntry = \{ instance: InstanceWithAiSessions; session: AiSessionSummary \};/);
+  assert.match(storyView, /type SessionEntry = \{ instance: InstanceWithAiSessions; session: AiSessionSummary; depth\?: number; hasChildren\?: boolean \};/);
 });
 
-test("Story AI sessions sort by the last user message across instances", () => {
-  assert.match(storyView, /sortedAiSessionInboxEntries\(entries\)\.map/);
-  assert.match(storyView, /\.filter\(\(session\) => session\.storyId === story\.id && instance\.node\?\.id === story\.ownerNodeId\)/);
-  assert.doesNotMatch(storyView, /const sessionsFor = .*updatedAt/);
+test("Story AI sessions derive cross-instance trees and sort by each root's own user message", () => {
+  assert.match(storyView, /deriveAiSessionForest\(storySessionRecords\.value, \{ orderBy: "last-user-message" \}\)/);
+  assert.match(storyView, /root\.session\.storyId === story\.id && instance\?\.node\?\.id === story\.ownerNodeId/);
+  assert.match(storyView, /flattenAiSessionForest\(\{[\s\S]*roots,[\s\S]*expandedSessionIds: expandedStorySessionIds\.value/);
+  assert.match(storyView, /Date\.parse\(root\.session\.lastUserMessageAt/);
+  assert.match(storyView, /const sessionCount = \(story: Story\) => storySessionRootsFor\(story\)\.length;/);
+  assert.match(storyView, /sessionEntriesForRoots\(pageItems\(storyCurrentSessionRoots\.value, storyCurrentSessionPage\.value\)\)/);
+  assert.match(storyView, /const expandedStorySessionIds = ref\(new Set<string>\(\)\);/);
+  assert.match(storyView, /isStorySessionExpanded\(entry\.session\.id\)/);
+  assert.match(storyView, /@click\.stop="toggleStorySessionExpanded\(entry\.session\.id\)"/);
+  assert.match(storyView, /\.story-session-leading \{ position:relative; display:grid; width:14px; height:14px; flex:0 0 14px;/);
+  assert.match(storyView, /\.story-session-semantic,\.story-session-disclosure \{ position:absolute; top:50%; left:50%; transform:translate\(-50%,-50%\);/);
+  assert.equal((storyView.match(/class="story-session-chevron"/g) || []).length, 2);
+  assert.match(storyView, /\.story-session-chevron\.expanded \{ transform:rotate\(90deg\); \}/);
+  assert.equal((storyView.match(/<TransitionGroup name="story-session-tree"/g) || []).length, 2);
+  assert.match(storyView, /\.story-session-tree-enter-from,\.story-session-tree-leave-to \{ max-height:0; padding-block:0; opacity:0; transform:translateY\(-4px\); \}/);
+  assert.match(storyView, /\.story-session-disclosure:focus-visible \{[^}]*opacity:1;/s);
+  assert.match(storyView, /@media \(hover:none\)[\s\S]*\.story-session-disclosure \{ opacity:1; \}/);
 });
 
 test("Story tree rows share distinct light-theme hover and selected states", () => {

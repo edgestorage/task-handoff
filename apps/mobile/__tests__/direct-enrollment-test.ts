@@ -115,4 +115,40 @@ describe('direct Control Plane enrollment', () => {
       status: 403,
     });
   });
+
+  test('reauthentication replaces the credential for the same verified profile in place', async () => {
+    const values = new Map<string, string>([['mobile-device-id', 'device-test']]);
+    const storage = {
+      available: async () => true,
+      get: async (key: string) => values.get(key),
+      set: async (key: string, value: string) => { values.set(key, value); },
+      remove: async (key: string) => { values.delete(key); },
+    };
+    const target = {
+      origin: 'https://control.example.com',
+      identity: {
+        version: 1 as const, kind: 'control-plane' as const, controlPlaneId: 'cp',
+        publicKey: { algorithm: 'Ed25519' as const, encoding: 'base64url' as const, value: 'a'.repeat(43), fingerprint: `sha256:${'b'.repeat(43)}` },
+        capabilities: { authentication: 'required' as const, aiSessions: true, nodes: true, instanceBoard: true, triggers: true },
+        protocolVersion: '2026-09-09', issuedAt: '2026-09-09T00:00:00.000Z', expiresAt: '2026-09-09T00:05:00.000Z',
+      },
+    };
+    const secureSessionKey = await mobileSessionStorageKey(target.identity);
+    values.set(secureSessionKey, 'expired-token');
+    const fetchImpl = jest.fn().mockResolvedValue(new Response(JSON.stringify({ data: {
+      sessionToken: 'replacement-mobile-session-token-that-is-long-enough',
+      session: {
+        id: 'msess_reauthenticated', userId: 'user_1', identityId: 'identity_1', clientType: 'mobile',
+        createdAt: '2026-09-09T00:00:00.000Z', expiresAt: '2026-09-23T00:00:00.000Z',
+        device: { id: 'device-test', name: 'Phone', platform: 'ios' },
+        user: { id: 'user_1', displayName: 'Admin', primaryUsername: 'admin', status: 'active', createdAt: '2026-09-09T00:00:00.000Z', updatedAt: '2026-09-09T00:00:00.000Z' },
+      },
+      authorization: { userId: 'user_1', identityId: 'identity_1', roleIds: ['role_admin'], permissionIds: [], nodeScope: { kind: 'all' }, authorizationRevision: 1 },
+    } }), { status: 200, headers: { 'content-type': 'application/json' } }));
+
+    const profile = await loginDirectControlPlane(target, { username: 'admin', password: 'password123' }, storage, { fetchImpl });
+    expect(profile.identity.controlPlaneId).toBe(target.identity.controlPlaneId);
+    expect(profile.access).toEqual({ kind: 'direct', origin: target.origin, secureSessionKey });
+    expect(values.get(secureSessionKey)).toBe('replacement-mobile-session-token-that-is-long-enough');
+  });
 });

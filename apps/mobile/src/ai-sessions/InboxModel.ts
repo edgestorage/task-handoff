@@ -14,6 +14,11 @@ import { activeMobileStreamingMessage, type AiSessionScope, type MobileAiSession
 import { aiSessionDisplayTurns } from './SessionDetail';
 import { translate, type Translate } from '../i18n';
 import type { AiSessionInboxGroupBy } from './inbox-view-preferences';
+import {
+  deriveAiSessionForest,
+  filterAiSessionForest,
+  flattenAiSessionForest,
+} from '@task-handoff/protocol/ai-session-hierarchy';
 
 const english: Translate = (key, params) => translate('en-US', key, params);
 
@@ -21,7 +26,12 @@ export type SessionStatusFilter = 'all' | 'active' | 'waiting' | 'idle' | 'probl
 export type SessionScopeOption = { label: string; scope: AiSessionScope };
 export type AiSessionInboxPresentationRow =
   | { type: 'group'; key: string; label: string; count: number }
-  | ({ type: 'session' } & AiSessionInboxEntry<ControlPlaneAiSessionSummary>);
+  | ({ type: 'session' } & AiSessionHierarchyInboxEntry);
+export type AiSessionHierarchyInboxEntry = AiSessionInboxEntry<ControlPlaneAiSessionSummary> & {
+  depth?: number;
+  hasChildren?: boolean;
+  rootSession?: ControlPlaneAiSessionSummary;
+};
 
 export function inboxCardContent(session: ControlPlaneAiSessionSummary, messages: readonly MobileStreamingMessage[] = [], t: Translate = english) {
   const turns = aiSessionDisplayTurns(session);
@@ -48,8 +58,44 @@ export function inboxEntries(snapshot: ControlPlaneAiSessions | undefined, scope
     .flatMap((entry) => entry.aiSessions.sessions.map((session) => ({ instanceId: entry.instanceId, session }))));
 }
 
+export function inboxHierarchyEntries(
+  snapshot: ControlPlaneAiSessions | undefined,
+  scope: AiSessionScope = { kind: 'all' },
+  instanceNodeIds = new Map<string, string>(),
+  options: { expandedSessionIds?: ReadonlySet<string>; statusFilter?: SessionStatusFilter } = {},
+): AiSessionHierarchyInboxEntry[] {
+  const records = (snapshot?.instances ?? [])
+    .filter((entry) => scope.kind === 'all'
+      || (scope.kind === 'instance' && entry.instanceId === scope.instanceId)
+      || (scope.kind === 'node' && instanceNodeIds.get(entry.instanceId) === scope.nodeId))
+    .flatMap((entry) => entry.aiSessions.sessions.map((session) => ({ ...session, instanceId: entry.instanceId })));
+  const forest = deriveAiSessionForest(records, { orderBy: 'last-user-message' });
+  const filter = options.statusFilter && options.statusFilter !== 'all'
+    ? filterAiSessionForest(forest, (session) => matchesStatusFilter(session, options.statusFilter!))
+    : undefined;
+  return flattenAiSessionForest(forest, {
+    expandedSessionIds: options.expandedSessionIds,
+    forcedExpandedSessionIds: filter?.expandedSessionIds,
+    visibleSessionIds: filter?.visibleSessionIds,
+  }).map(({ node, depth }) => {
+    let root = node;
+    while (root.parentSessionId) {
+      const parent = forest.nodesById.get(root.parentSessionId);
+      if (!parent) break;
+      root = parent;
+    }
+    return {
+      instanceId: node.session.instanceId,
+      session: node.session,
+      rootSession: root.session,
+      depth,
+      hasChildren: node.children.length > 0,
+    };
+  });
+}
+
 export function aiSessionInboxRows(
-  entries: readonly AiSessionInboxEntry<ControlPlaneAiSessionSummary>[],
+  entries: readonly AiSessionHierarchyInboxEntry[],
   directory: Pick<MobileDirectoryProfileState, 'nodes' | 'instances'> | undefined,
   groupBy: AiSessionInboxGroupBy,
   sortByStatus: boolean,
@@ -57,7 +103,8 @@ export function aiSessionInboxRows(
 ): AiSessionInboxPresentationRow[] {
   const instances = new Map((directory?.instances ?? []).map((instance) => [instance.id, instance]));
   const nodes = new Map((directory?.nodes ?? []).map((node) => [node.id, node]));
-  const sorted = [...entries].sort((left, right) => (
+  const hierarchical = entries.some((entry) => entry.depth !== undefined);
+  const sorted = hierarchical ? [...entries] : [...entries].sort((left, right) => (
     compareAiSessionsByLastUserMessage(left.session, right.session, sortByStatus)
       || compareNaturalText(instances.get(left.instanceId)?.name || left.instanceId, instances.get(right.instanceId)?.name || right.instanceId)
       || left.instanceId.localeCompare(right.instanceId)
@@ -74,13 +121,13 @@ export function aiSessionInboxRows(
     groups.set(group.key, current);
   }
   return [...groups].flatMap(([key, group]) => [
-    { type: 'group' as const, key: `group:${groupBy}:${key}`, label: group.label, count: group.entries.length },
+    { type: 'group' as const, key: `group:${groupBy}:${key}`, label: group.label, count: group.entries.filter((entry) => !entry.depth).length },
     ...group.entries.map((entry) => ({ type: 'session' as const, ...entry })),
   ]);
 }
 
 function aiSessionInboxGroup(
-  entry: AiSessionInboxEntry<ControlPlaneAiSessionSummary>,
+  entry: AiSessionHierarchyInboxEntry,
   groupBy: Exclude<AiSessionInboxGroupBy, 'none'>,
   instance: MobileDirectoryProfileState['instances'][number] | undefined,
   node: MobileDirectoryProfileState['nodes'][number] | undefined,
@@ -88,8 +135,9 @@ function aiSessionInboxGroup(
 ) {
   if (groupBy === 'instance') return { key: entry.instanceId, label: instance?.name || entry.instanceId };
   if (groupBy === 'node') return { key: instance?.nodeId || '__unknown_node__', label: node?.name || instance?.nodeId || t('sessions.inbox.unknownNode') };
-  if (groupBy === 'agent') return { key: entry.session.agent, label: appDisplayName(entry.session.agent) };
-  const path = entry.session.cwd?.trim() || '';
+  const groupingSession = entry.rootSession || entry.session;
+  if (groupBy === 'agent') return { key: groupingSession.agent, label: appDisplayName(groupingSession.agent) };
+  const path = groupingSession.cwd?.trim() || '';
   return { key: normalizeFolderPath(path) || '__unknown_path__', label: path || t('sessions.inbox.unknownPath') };
 }
 

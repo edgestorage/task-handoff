@@ -9,11 +9,13 @@ import {
   AiSessionHistoryDetailSchema,
   AiSessionHistoryItemSchema,
   AiSessionHistoryTurnSchema,
+  normalizeAiSessionLineage,
   type AiSessionHistoryDetail,
   type AiSessionHistoryIndex,
   type AiSessionHistoryItem,
   type AiSessionHistoryTurn,
 } from "@task-handoff/protocol/ai-sessions";
+import { aiSessionSubtreePostorder, deriveAiSessionForest } from "@task-handoff/protocol/ai-session-hierarchy";
 import type { TaskHandoffStoragePaths } from "@task-handoff/core/storage/paths";
 
 const HISTORY_INDEX_FIELDS = new Set(["schemaVersion", "items"]);
@@ -88,16 +90,28 @@ export function sortAndLimitAiSessionHistory(
   ));
   const ids = new Set<string>();
   const providerIds = new Set<string>();
-  const normalized: AiSessionHistoryItem[] = [];
+  const deduplicated: AiSessionHistoryItem[] = [];
   for (const item of sorted) {
     const providerId = providerIdentity(item);
     if (ids.has(item.id) || providerIds.has(providerId)) continue;
     ids.add(item.id);
     providerIds.add(providerId);
-    normalized.push(item);
-    if (normalized.length === historyLimit(limit)) break;
+    deduplicated.push(item);
   }
-  return normalized;
+  const records = deduplicated.map((item) => ({ ...item, updatedAt: item.lastActiveAt }));
+  const forest = deriveAiSessionForest(records);
+  const retainedIds = new Set<string>();
+  let retainedRoots = 0;
+  for (const root of forest.roots) {
+    if (root.session.lineage?.kind === "subagent") {
+      for (const node of aiSessionSubtreePostorder(forest, root.session.id)) retainedIds.add(node.session.id);
+      continue;
+    }
+    if (retainedRoots >= historyLimit(limit)) continue;
+    retainedRoots += 1;
+    for (const node of aiSessionSubtreePostorder(forest, root.session.id)) retainedIds.add(node.session.id);
+  }
+  return deduplicated.filter((item) => retainedIds.has(item.id));
 }
 
 export function sanitizeAiSessionHistoryIndex(
@@ -125,7 +139,7 @@ export function sanitizeAiSessionHistoryIndex(
       onWarning?.({ kind: "item", id, reason: "invalid item removed" });
       return [];
     }
-    const lineage = sanitizeLineage(item.lineage);
+    const lineage = normalizeAiSessionLineage(item.lineage);
     const candidate = {
       ...knownFields(item, HISTORY_ITEM_FIELDS),
       creationSource: item.creationSource === "ai-session" ? "ai-session" : "app-session",
@@ -146,16 +160,6 @@ export function sanitizeAiSessionHistoryIndex(
     onWarning?.({ kind: "index", id: "index", reason: "duplicate or excess items removed" });
   }
   return AiSessionHistoryIndexSchema.parse({ schemaVersion: 1, items: normalized });
-}
-
-function sanitizeLineage(value: unknown) {
-  const record = recordValue(value);
-  if (!record || record.kind !== "fork" || typeof record.parentProviderSessionId !== "string") return undefined;
-  return {
-    kind: "fork" as const,
-    parentProviderSessionId: record.parentProviderSessionId,
-    ...(typeof record.throughTurnId === "string" ? { throughTurnId: record.throughTurnId } : {}),
-  };
 }
 
 export class AiSessionHistoryStore {
@@ -236,7 +240,7 @@ export class AiSessionHistoryStore {
   }
 
   remove(id: string) {
-    return this.removeByIds([id], true);
+    return this.removeSubtrees([id], true);
   }
 
   /** Removes an entry from archived history without releasing resources now owned by the active session. */
@@ -245,7 +249,8 @@ export class AiSessionHistoryStore {
   }
 
   removeIdentity(agent: AiSessionHistoryItem["agent"], providerSessionId: string) {
-    return this.removeByIdentity(agent, providerSessionId, true);
+    const item = this.list().find((candidate) => providerIdentity(candidate) === `${agent}:${providerSessionId}`);
+    return item ? this.removeSubtrees([item.id], true) : false;
   }
 
   /** Removes an identity from archived history without releasing resources now owned by the active session. */
@@ -261,6 +266,13 @@ export class AiSessionHistoryStore {
     this.saveIndex({ schemaVersion: 1, items: next });
     this.removeEntries(items.filter((item) => removedIds.has(item.id)).map((item) => item.id), releaseResources);
     return true;
+  }
+
+  private removeSubtrees(ids: readonly string[], releaseResources: boolean) {
+    const items = this.list();
+    const forest = deriveAiSessionForest(items.map((item) => ({ ...item, updatedAt: item.lastActiveAt })));
+    const subtreeIds = new Set(ids.flatMap((id) => aiSessionSubtreePostorder(forest, id).map((node) => node.session.id)));
+    return subtreeIds.size ? this.removeByIds([...subtreeIds], releaseResources) : false;
   }
 
   private removeByIdentity(agent: AiSessionHistoryItem["agent"], providerSessionId: string, releaseResources: boolean) {

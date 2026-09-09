@@ -84,6 +84,8 @@
   --ai-session-row-hover-bg: var(--sidebar-row-hover-bg);
   --ai-session-row-selected-bg: var(--sidebar-row-selected-bg);
   --ai-session-user-message-bg: #e5e5ea;
+  --ai-session-composer-bg: color-mix(in srgb, var(--surface-raised) 56%, transparent);
+  --ai-session-composer-backdrop-filter: blur(16px) brightness(1.02);
 
   --control-plane-select-content-bg: var(--surface);
   --control-plane-select-item-highlight-text: var(--text-strong);

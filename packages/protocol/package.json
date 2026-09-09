@@ -30,6 +30,10 @@
       "types": "./src/ai-sessions.ts",
       "default": "./src/ai-sessions.ts"
     },
+    "./ai-session-hierarchy": {
+      "types": "./src/ai-session-hierarchy.ts",
+      "default": "./src/ai-session-hierarchy.ts"
+    },
     "./ai-session-provider-capabilities": {
       "types": "./src/ai-session-provider-capabilities.ts",
       "default": "./src/ai-session-provider-capabilities.ts"

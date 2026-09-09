@@ -9,6 +9,7 @@ import type {
   MobileControlPlaneEventHandlers,
   MobileControlPlaneTransport,
 } from '../src/control-plane/transport';
+import { MobileControlPlaneTransportError } from '../src/control-plane/transport';
 
 const profile: MobileControlPlaneProfile = {
   version: 1,
@@ -51,6 +52,7 @@ function harness() {
     return { close };
   });
   const authSession = jest.fn().mockResolvedValue({ authenticated: true });
+  const renewMobileSession = jest.fn().mockResolvedValue({ expiresAt: '2026-09-12T00:00:00.000Z' });
   const identity = jest.fn().mockResolvedValue({ data: { payload: {
     version: 1,
     kind: 'control-plane',
@@ -61,7 +63,7 @@ function harness() {
     issuedAt: '2026-09-02T00:00:00.000Z',
     expiresAt: '2026-09-02T00:05:00.000Z',
   }, signature: 'a'.repeat(86) } });
-  const api = { auth: { session: authSession, identity } } as unknown as ControlPlaneClient;
+  const api = { auth: { session: authSession, identity, renewMobileSession } } as unknown as ControlPlaneClient;
   const transport = {
     profile,
     revalidate,
@@ -73,6 +75,7 @@ function harness() {
     close,
     connectEvents,
     identity,
+    renewMobileSession,
     get handlers() { return handlers; },
     revalidate,
   };
@@ -95,6 +98,7 @@ describe('MobileControlPlaneConnectionCoordinator', () => {
     await flushCoordinator();
 
     expect(runtime.revalidate).toHaveBeenCalledTimes(1);
+    expect(runtime.renewMobileSession).toHaveBeenCalledTimes(1);
     expect(runtime.authSession).toHaveBeenCalledTimes(1);
     expect(runtime.identity).toHaveBeenCalledTimes(1);
     expect(runtime.coordinator.currentCapabilities.stories).toBe(true);
@@ -110,8 +114,56 @@ describe('MobileControlPlaneConnectionCoordinator', () => {
     await flushCoordinator();
 
     expect(runtime.revalidate).toHaveBeenCalledTimes(2);
+    expect(runtime.renewMobileSession).toHaveBeenCalledTimes(2);
     expect(runtime.authSession).toHaveBeenCalledTimes(2);
     expect(runtime.connectEvents).toHaveBeenCalledTimes(2);
+    runtime.coordinator.stop();
+  });
+
+  test('continues with session verification when v0.0.28 does not support renewal', async () => {
+    const runtime = harness();
+    runtime.renewMobileSession.mockRejectedValue(new MobileControlPlaneTransportError('DIRECT_HTTP_ERROR', 'Not found', false, 404));
+    const ai = domain('ai', ['ai.sessions']);
+    runtime.coordinator.setEnvironment({ foreground: true, connected: true });
+    runtime.coordinator.register(ai);
+    await flushCoordinator();
+
+    expect(runtime.authSession).toHaveBeenCalledTimes(1);
+    expect(runtime.coordinator.snapshot().phase).toBe('connected');
+    runtime.handlers?.onClose();
+    jest.advanceTimersByTime(1_000);
+    await flushCoordinator();
+    expect(runtime.renewMobileSession).toHaveBeenCalledTimes(1);
+    expect(runtime.authSession).toHaveBeenCalledTimes(2);
+    runtime.coordinator.stop();
+  });
+
+  test('publishes session-expired when renewal and session verification reject the credential', async () => {
+    const runtime = harness();
+    runtime.renewMobileSession.mockRejectedValue(new MobileControlPlaneTransportError('CONTROL_PLANE_AUTH_REQUIRED', 'Unauthorized', false, 401));
+    runtime.authSession.mockResolvedValue({ authenticated: false });
+    const ai = domain('ai', ['ai.sessions']);
+    runtime.coordinator.setEnvironment({ foreground: true, connected: true });
+    runtime.coordinator.register(ai);
+    await flushCoordinator();
+
+    expect(runtime.coordinator.snapshot().phase).toBe('session-expired');
+    expect(runtime.connectEvents).not.toHaveBeenCalled();
+    runtime.coordinator.stop();
+  });
+
+  test('renews again when a continuously active session enters the renewal window', async () => {
+    const runtime = harness();
+    runtime.renewMobileSession.mockResolvedValue({ expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60_000 + 60_000).toISOString() });
+    const ai = domain('ai', ['ai.sessions']);
+    runtime.coordinator.setEnvironment({ foreground: true, connected: true });
+    runtime.coordinator.register(ai);
+    await flushCoordinator();
+
+    expect(runtime.renewMobileSession).toHaveBeenCalledTimes(1);
+    jest.advanceTimersByTime(60_000);
+    await flushCoordinator();
+    expect(runtime.renewMobileSession).toHaveBeenCalledTimes(2);
     runtime.coordinator.stop();
   });
 

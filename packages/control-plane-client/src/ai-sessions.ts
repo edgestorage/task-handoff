@@ -24,6 +24,7 @@ import {
   AiSessionQueueReorderInputSchema,
   AiSessionCloseInputSchema,
   AiSessionCloseResultSchema,
+  AiSessionClearResultSchema,
   AiSessionCommandInputSchema,
   AiSessionCommandResultSchema,
   AiSessionResumeResultSchema,
@@ -91,24 +92,27 @@ export function createControlPlaneAiSessionsApi(transport: ControlPlaneClientTra
 
   return {
     list(signal?: AbortSignal, instanceId?: string) {
-      const query = instanceId ? `?instanceId=${encodeURIComponent(instanceId)}` : "";
-      return requestData(`/api/ai-sessions${query}`, ControlPlaneAiSessionsSchema, { signal });
+      const query = new URLSearchParams({ hierarchy: "subagents" });
+      if (instanceId) query.set("instanceId", instanceId);
+      return requestData(`/api/ai-sessions?${query}`, ControlPlaneAiSessionsSchema, { signal });
     },
     refresh(signal?: AbortSignal, instanceId?: string) {
       const query = new URLSearchParams({ refresh: "true" });
+      query.set("hierarchy", "subagents");
       if (instanceId) query.set("instanceId", instanceId);
       return requestData(`/api/ai-sessions?${query}`, ControlPlaneAiSessionsSchema, { signal });
     },
     delta(instanceId: string, streamId: string, sinceRevision: number, signal?: AbortSignal) {
-      const query = new URLSearchParams({ instanceId, streamId, sinceRevision: String(sinceRevision) });
+      const query = new URLSearchParams({ instanceId, streamId, sinceRevision: String(sinceRevision), hierarchy: "subagents" });
       return requestData(`/api/ai-sessions?${query}`, AiSessionDeltaResponseSchema, { signal });
     },
     history(instanceId: string, signal?: AbortSignal, agents: readonly string[] = ["codex", "claude", "opencode"]) {
-      const query = agents.length ? `?agents=${encodeURIComponent(agents.join(","))}` : "";
-      return requestData(`/api/controlled-instances/${encodeURIComponent(instanceId)}/ai-sessions/history${query}`, AiSessionHistoryListSchema, { signal });
+      const query = new URLSearchParams({ hierarchy: "subagents" });
+      if (agents.length) query.set("agents", agents.join(","));
+      return requestData(`/api/controlled-instances/${encodeURIComponent(instanceId)}/ai-sessions/history?${query}`, AiSessionHistoryListSchema, { signal });
     },
     historyDetail(instanceId: string, aiSessionId: string, signal?: AbortSignal) {
-      return requestData(`/api/controlled-instances/${encodeURIComponent(instanceId)}/ai-sessions/history/${encodeURIComponent(aiSessionId)}`, AiSessionHistoryDetailSchema, { signal });
+      return requestData(`/api/controlled-instances/${encodeURIComponent(instanceId)}/ai-sessions/history/${encodeURIComponent(aiSessionId)}?hierarchy=subagents`, AiSessionHistoryDetailSchema, { signal });
     },
     detail(instanceId: string, aiSessionId: string, revision?: string, signal?: AbortSignal) {
       const query = revision ? `?revision=${encodeURIComponent(revision)}` : "";
@@ -154,6 +158,9 @@ export function createControlPlaneAiSessionsApi(transport: ControlPlaneClientTra
     },
     close(instanceId: string, aiSessionId: string, clientRequestId: string) {
       return requestData(`${sessionRoute(instanceId, aiSessionId)}/close`, AiSessionCloseResultSchema, json("POST", AiSessionCloseInputSchema.parse({ clientRequestId })));
+    },
+    clear(instanceId: string, aiSessionId: string) {
+      return requestData(sessionRoute(instanceId, aiSessionId), AiSessionClearResultSchema, { method: "DELETE" });
     },
     executeCommand(instanceId: string, sessionId: string, input: AiSessionCommandInput) {
       return requestData(`${sessionRoute(instanceId, sessionId)}/commands`, AiSessionCommandResultSchema, json("POST", AiSessionCommandInputSchema.parse(input)));

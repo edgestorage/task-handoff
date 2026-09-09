@@ -1,5 +1,6 @@
 import { COMPACT_EVENT_ENVELOPE_VERSION, AiSessionTransientSubscriptionSchema, EventKeepalivePingSchema, aiSessionTransientSubscriptionAccepts, eventTopic, projectEventEnvelope, type AiSessionTransientSubscription, type EventEnvelope, type EventScope } from "@task-handoff/protocol/events";
-import { AiSessionEventTopic, AiSessionEventType, AiSessionMessageDeltaEventSchema, AiSessionTimelineItemDeltaEventSchema, compactAiSessionMessageDeltaEvent, compactAiSessionTimelineItemDeltaEvent } from "@task-handoff/protocol/ai-sessions";
+import { AiSessionEventTopic, AiSessionEventType, AiSessionMessageDeltaEventSchema, AiSessionPatchEventSchema, AiSessionRemovedEventSchema, AiSessionSnapshotEventSchema, AiSessionTimelineItemDeltaEventSchema, compactAiSessionMessageDeltaEvent, compactAiSessionTimelineItemDeltaEvent, projectAiSessionStreamEventForConsumer, type AiSessionStreamEvent } from "@task-handoff/protocol/ai-sessions";
+import { AiSessionHierarchyCapabilitiesSchema, type AiSessionHierarchyCapabilities } from "@task-handoff/protocol/ai-session-provider-capabilities";
 import type { ControlPlanePermissionId } from "@task-handoff/protocol/control-plane-access";
 
 export type ControlPlaneEvent<T = unknown> = {
@@ -29,6 +30,7 @@ type EventSocket = {
   subscriptionReceived?: boolean;
   authorization?: EventAuthorizationBinding;
   eventEnvelopeVersion?: 1 | typeof COMPACT_EVENT_ENVELOPE_VERSION;
+  aiSessionHierarchy?: AiSessionHierarchyCapabilities;
 };
 
 export type EventAuthorizationBinding = {
@@ -100,6 +102,7 @@ export class ControlPlaneEventBus {
         socket.metricInstanceIds = authorizedMetricInstanceSubscription(socket, message.metricInstanceIds);
         socket.aiSessionTransient = authorizedTransientSubscription(socket, message.aiSessionTransient);
         socket.eventEnvelopeVersion = message.eventEnvelopeVersion ?? 1;
+        socket.aiSessionHierarchy = message.aiSessionHierarchy;
         socket.subscriptionReceived = true;
         this.publishTransientDemand();
       }
@@ -125,9 +128,10 @@ export class ControlPlaneEventBus {
     }
     for (const client of this.clients) {
       if (client.readyState === client.OPEN && authorizedEvent(client, event) && subscribed(client.topics, topic, type) && subscribedInstance(client.instanceIds, event.scope) && subscribedResourceMetrics(client, event) && subscribedAiSessionTransient(client, event)) {
-        const frame = client.eventEnvelopeVersion === COMPACT_EVENT_ENVELOPE_VERSION
-          ? compactFrame ??= encodedCompactPublicEvent(event)
-          : { encoded, bytes: encodedBytes };
+        const projected = projectAuthorityEvent(event, client.aiSessionHierarchy);
+        const frame = projected === event
+          ? client.eventEnvelopeVersion === COMPACT_EVENT_ENVELOPE_VERSION ? compactFrame ??= encodedCompactPublicEvent(event) : { encoded, bytes: encodedBytes }
+          : encodedPublicEvent(projected, client.eventEnvelopeVersion);
         if ((client.bufferedAmount ?? 0) + frame.bytes > MAX_EVENT_CLIENT_BUFFERED_BYTES) {
           this.clients.delete(client);
           try { client.close?.(1013, "Event consumer is too slow."); } catch { /* Consumer cleanup is already complete. */ }
@@ -376,13 +380,13 @@ function normalizedEventScope<T>(scope: EventScope | undefined, payload: T): Eve
   return nodeId || instanceId ? { ...(nodeId ? { nodeId } : {}), ...(instanceId ? { instanceId } : {}) } : scope;
 }
 
-function parseClientMessage(value: unknown): { type?: string; sentAt?: string; topics?: string[]; instanceIds?: string[]; metricInstanceIds?: string[]; aiSessionTransient?: AiSessionTransientSubscription; eventEnvelopeVersion?: 1 | typeof COMPACT_EVENT_ENVELOPE_VERSION } | undefined {
+function parseClientMessage(value: unknown): { type?: string; sentAt?: string; topics?: string[]; instanceIds?: string[]; metricInstanceIds?: string[]; aiSessionTransient?: AiSessionTransientSubscription; aiSessionHierarchy?: AiSessionHierarchyCapabilities; eventEnvelopeVersion?: 1 | typeof COMPACT_EVENT_ENVELOPE_VERSION } | undefined {
   try {
     const parsed = JSON.parse(String(value || "{}"));
     if (!parsed || typeof parsed !== "object") return undefined;
     const keepalive = EventKeepalivePingSchema.safeParse(parsed);
     if (keepalive.success) return keepalive.data;
-    const message = parsed as { type?: string; topics?: unknown; instanceIds?: unknown; metricInstanceIds?: unknown; aiSessionTransient?: unknown; eventEnvelopeVersion?: unknown };
+    const message = parsed as { type?: string; topics?: unknown; instanceIds?: unknown; metricInstanceIds?: unknown; aiSessionTransient?: unknown; aiSessionHierarchy?: unknown; eventEnvelopeVersion?: unknown };
     if (message.metricInstanceIds !== undefined && !Array.isArray(message.metricInstanceIds)) return undefined;
     const transient = message.aiSessionTransient === undefined ? undefined : AiSessionTransientSubscriptionSchema.safeParse(message.aiSessionTransient);
     if (transient && !transient.success) return undefined;
@@ -392,11 +396,29 @@ function parseClientMessage(value: unknown): { type?: string; sentAt?: string; t
       instanceIds: Array.isArray(message.instanceIds) ? message.instanceIds.map(String).map((id) => id.trim()).filter(Boolean) : undefined,
       metricInstanceIds: Array.isArray(message.metricInstanceIds) ? message.metricInstanceIds.map(String).map((id) => id.trim()).filter(Boolean) : undefined,
       ...(transient?.success ? { aiSessionTransient: transient.data } : {}),
+      aiSessionHierarchy: AiSessionHierarchyCapabilitiesSchema.parse(message.aiSessionHierarchy),
       ...(message.eventEnvelopeVersion === COMPACT_EVENT_ENVELOPE_VERSION ? { eventEnvelopeVersion: COMPACT_EVENT_ENVELOPE_VERSION } : {}),
     };
   } catch {
     return undefined;
   }
+}
+
+function projectAuthorityEvent(event: EventEnvelope, hierarchy: AiSessionHierarchyCapabilities | undefined): EventEnvelope {
+  if (event.type !== AiSessionEventType.Snapshot && event.type !== AiSessionEventType.Patch && event.type !== AiSessionEventType.Removed) return event;
+  const schema = event.type === AiSessionEventType.Snapshot ? AiSessionSnapshotEventSchema
+    : event.type === AiSessionEventType.Patch ? AiSessionPatchEventSchema
+      : AiSessionRemovedEventSchema;
+  const payload = schema.safeParse(event.payload);
+  if (!payload.success) return event;
+  const projected = projectAiSessionStreamEventForConsumer({ type: event.type, payload: payload.data } as AiSessionStreamEvent, hierarchy);
+  return projected.payload === event.payload ? event : { ...event, payload: projected.payload };
+}
+
+function encodedPublicEvent(event: EventEnvelope, version: 1 | typeof COMPACT_EVENT_ENVELOPE_VERSION | undefined) {
+  const projected = version === COMPACT_EVENT_ENVELOPE_VERSION ? projectCompactPublicEvent(event) : event;
+  const encoded = JSON.stringify(projected);
+  return { encoded, bytes: Buffer.byteLength(encoded, "utf8") };
 }
 
 export function projectCompactPublicEvent(event: EventEnvelope) {

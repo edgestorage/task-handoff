@@ -101,7 +101,10 @@ describe('<StoryInbox />', () => {
       updatedAt: '2026-09-04T00:00:00.000Z',
       instances: [{ instanceId: 'instance-a', streamId: 'stream-a', aiSessions: {
         updatedAt: '2026-09-04T00:00:00.000Z',
-        sessions: [{ id: 'session-a', agent: 'codex', storyId: 'story-1', title: 'Build it', status: 'idle', startedAt: '2026-09-04T00:00:00.000Z', updatedAt: '2026-09-04T00:00:00.000Z', unread: false }],
+        sessions: [
+          { id: 'session-a', agent: 'codex', providerSessionId: 'provider-a', storyId: 'story-1', title: 'Build it', status: 'idle', startedAt: '2026-09-04T00:00:00.000Z', updatedAt: '2026-09-04T00:00:00.000Z', unread: false },
+          { id: 'session-child', agent: 'codex', providerSessionId: 'provider-child', lineage: { kind: 'subagent', parentProviderSessionId: 'provider-a' }, title: 'Sub task', status: 'running', startedAt: '2026-09-04T00:00:00.000Z', updatedAt: '2026-09-04T00:01:00.000Z', unread: false },
+        ],
       } }],
     }));
     const onOpen = jest.fn();
@@ -116,6 +119,10 @@ describe('<StoryInbox />', () => {
     await fireEvent.press(screen.getByLabelText('Expand Alpha'));
     await waitFor(() => expect(screen.getByText('Plan')).toBeTruthy());
     expect(screen.queryByTestId('session-status')).toBeNull();
+    expect(screen.queryByText('Sub task')).toBeNull();
+    await fireEvent.press(screen.getByTestId('story-session-disclosure'));
+    await waitFor(() => expect(screen.getByText('Sub task')).toBeTruthy());
+    expect(screen.getByTestId('session-status')).toBeTruthy();
     await fireEvent.press(screen.getByText('Plan'));
     await fireEvent.press(screen.getByText('Build it'));
     await fireEvent.press(screen.getByText('Alpha'));
