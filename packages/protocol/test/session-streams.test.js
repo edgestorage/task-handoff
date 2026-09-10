@@ -158,6 +158,14 @@ test("v0.0.28 projection preserves child records while omitting subagent lineage
   assert.equal(legacySnapshot.sessions[1].lineage, undefined);
   assert.equal(projectAiSessionsSnapshotForConsumer(snapshot, { subagents: true }).sessions[1].lineage?.kind, "subagent");
 
+  const decoratedSnapshot = {
+    ...snapshot,
+    sessions: snapshot.sessions.map((entry) => ({ ...entry, unread: entry.id === "child" })),
+  };
+  const projectedDecoratedSnapshot = projectAiSessionsSnapshotForConsumer(decoratedSnapshot, undefined);
+  assert.deepEqual(projectedDecoratedSnapshot.sessions.map((entry) => entry.unread), [false, true]);
+  assert.equal(projectedDecoratedSnapshot.sessions[1].lineage, undefined);
+
   const delta = AiSessionDeltaResponseSchema.parse({
     streamId: "stream-a",
     instanceId: "instance-a",

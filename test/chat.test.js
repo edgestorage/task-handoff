@@ -96,13 +96,16 @@ test("controlled instance mention routes preserve authoritative context and refe
     else process.env.TASK_HANDOFF_CODEX_APP_SERVER = previousAutoStart;
   });
   const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
-  const codex = registry.start({ agent: "codex", providerSessionId: "thread_routes", cwd: "/workspace/project", status: "idle", phase: "unknown" });
+  const codex = registry.start({ agent: "codex", creationSource: "ai-session", providerSessionId: "thread_routes", cwd: "/workspace/project", status: "idle", phase: "unknown" });
   const sends = [];
   const bridge = {
     id: "codex-app-server-test",
     agent: "codex",
     refresh() {},
+    async ensureReady() {},
+    async sync() {},
     stop() {},
+    supportsThreadSettingsUpdate: () => false,
     async mentionCatalog(session) {
       if (session.agent !== "codex") throw Object.assign(new Error("Only Codex sessions support mentions."), { code: "AI_SESSION_MENTIONS_UNSUPPORTED", statusCode: 400 });
       return {
@@ -145,7 +148,7 @@ test("controlled instance mention routes preserve authoritative context and refe
   const renamed = await app.inject({ method: "POST", url: `/api/ai-sessions/${codex.id}/commands`, payload: { command: "rename", argument: "Exact title" } });
   assert.equal(renamed.statusCode, 200);
   assert.deepEqual(JSON.parse(renamed.payload).data, { command: "rename", value: "Exact title" });
-  const claude = registry.start({ agent: "claude", providerSessionId: "claude_routes", cwd: "/workspace/project", status: "idle", phase: "unknown" });
+  const claude = registry.start({ agent: "claude", creationSource: "ai-session", providerSessionId: "claude_routes", cwd: "/workspace/project", status: "idle", phase: "unknown" });
   const unsupported = await app.inject({ method: "GET", url: `/api/ai-sessions/${claude.id}/mentions` });
   assert.equal(unsupported.statusCode, 400);
   assert.equal(JSON.parse(unsupported.payload).error.code, "AI_SESSION_MENTIONS_UNSUPPORTED");
@@ -6507,6 +6510,7 @@ test("web app ai session read routes do not refresh discovery state", async () =
 	    runningSessionCount: () => 1,
 	    sharedResourceSessionAi: () => undefined,
 	    on: () => undefined,
+	    beginDrain: () => undefined,
 	    stopAll: () => undefined,
 	  };
   const aiSessionRegistry = createAiSessionRegistry({ dir: aiSessionDir });
@@ -6660,6 +6664,7 @@ test("controlled instance publishes provider changes immediately and ignores ext
     runningSessionCount: () => 1,
     sharedResourceSessionAi: () => undefined,
     on: () => undefined,
+    beginDrain: () => undefined,
     stopAll: () => undefined,
   };
   const restoreEnv = withWebStorageEnv(paths, {
@@ -7849,6 +7854,7 @@ test("controlled instance Story Automation create endpoint is private and idempo
     agent: "codex",
     refresh() {},
     async sync() {},
+    async ensureReady() {},
     stop() {},
     supportsThreadSettingsUpdate: () => false,
     async createSession(input) {

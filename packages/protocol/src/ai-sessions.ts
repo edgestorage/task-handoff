@@ -1184,15 +1184,15 @@ function projectSessionLineageForConsumer<T extends { lineage?: z.infer<typeof A
 }
 
 /** Compatibility for v0.0.28: preserve child records but flatten their relation. */
-export function projectAiSessionsSnapshotForConsumer(
-  snapshot: AiSessionsSnapshot,
+export function projectAiSessionsSnapshotForConsumer<T extends AiSessionsSnapshot>(
+  snapshot: T,
   consumer: AiSessionHierarchyConsumer,
-): AiSessionsSnapshot {
+): T {
   if (consumer?.subagents) return snapshot;
-  return AiSessionsSnapshotSchema.parse({
+  return {
     ...snapshot,
     sessions: snapshot.sessions.map((session) => projectSessionLineageForConsumer(session, consumer)),
-  });
+  } as T;
 }
 
 /** Compatibility for v0.0.28 retained snapshot/patch responses. */

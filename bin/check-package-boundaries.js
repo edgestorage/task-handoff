@@ -13,13 +13,20 @@ const CSS_IMPORT_SPECIFIER = /@import\s+(?:url\(\s*)?["']([^"']+)["']/g;
 const CSS_URL_SPECIFIER = /\burl\(\s*["']?([^"')]+)["']?\s*\)/g;
 const BUILTINS = new Set(builtinModules.flatMap((name) => [name, `node:${name}`]));
 const CONTROL_PLANE_DATABASE_DEPENDENCIES = new Set(["drizzle-orm", "pg"]);
+const NODE_AGENT_FORBIDDEN_DATABASE_DEPENDENCIES = new Set(["better-sqlite3", "node-gyp", "pg", "sqlite3"]);
+const NODE_AGENT_FORBIDDEN_DRIZZLE_SPECIFIERS = new Set(["drizzle-orm/node-postgres", "drizzle-orm/pg-core"]);
 
-function forbidsControlPlaneDatabaseDependency(root, file) {
+function forbidsDatabaseDependency(root, file, specifier, dependency) {
   const relative = path.relative(root, file).split(path.sep).join("/");
-  return relative.startsWith("packages/control-plane/src/node-agent/")
-    || relative.startsWith("packages/control-plane/src/shared/")
+  if (relative.startsWith("packages/control-plane/src/node-agent/")) {
+    return NODE_AGENT_FORBIDDEN_DATABASE_DEPENDENCIES.has(dependency)
+      || NODE_AGENT_FORBIDDEN_DRIZZLE_SPECIFIERS.has(specifier);
+  }
+  return relative.startsWith("packages/control-plane/src/shared/")
     || relative.startsWith("packages/controlled-instance/")
-    || relative.startsWith("apps/controlled-instance-image/");
+    || relative.startsWith("apps/controlled-instance-image/")
+    ? CONTROL_PLANE_DATABASE_DEPENDENCIES.has(dependency)
+    : false;
 }
 
 function walk(dir) {
@@ -184,8 +191,8 @@ function checkWorkspace(root = DEFAULT_ROOT) {
         const dependency = dependencyName(specifier);
         const target = packagesByName.get(dependency);
 
-        if (forbidsControlPlaneDatabaseDependency(root, file) && CONTROL_PLANE_DATABASE_DEPENDENCIES.has(dependency)) {
-          violations.push(`${relativeFile}: Control Plane database dependency is forbidden in this runtime boundary: ${rawSpecifier}`);
+        if (forbidsDatabaseDependency(root, file, specifier, dependency)) {
+          violations.push(`${relativeFile}: database dependency is forbidden in this runtime boundary: ${rawSpecifier}`);
           continue;
         }
 

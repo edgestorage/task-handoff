@@ -589,6 +589,7 @@ test("app inventory protocol is strict and stored legacy app capability is disca
     aiSessionWorkspaceSelection: false,
     aiSessionPersistenceSettings: false,
     privateModelCatalog: false,
+    codexManagedSettings: false,
     gitCliCredentialBroker: false,
     gitCredentialProxy: false,
     aiSessionTimeline: { sessionReadAgents: [], turnReadAgents: [], liveItemAgents: [] },
@@ -11054,7 +11055,7 @@ test("control plane proxies instance websocket routes through reverse node tunne
     lastEventAt: recoveredAt,
     snapshot: { runningCount: 0, waitingCount: 0, staleCount: 0, sessions: [], updatedAt: recoveredAt },
   }), "reverse tunnel initial recovery request", 5_000);
-  assert.equal(initialRecoveryBody.path, "/api/ai-sessions/state");
+  assert.equal(initialRecoveryBody.path, "/api/ai-sessions/state?hierarchy=subagents");
   await waitForCondition(async () => {
     const response = await json(app, "GET", "/api/ai-sessions");
     return response.body.data.instances.some((entry) => entry.instanceId === created.body.data.id && entry.streamId === "ai_reverse_stream" && entry.revision === 1);
@@ -11602,6 +11603,31 @@ test("control plane manages projects, instances, register, heartbeat, and board 
       if (body.path === "/api/apps/sessions" && body.method === "GET") {
         return jsonResponse([{ id: "app_1", appId: "terminal-tty", kind: "tty", status: "running" }]);
       }
+      if (body.path === "/api/ai-sessions/state?hierarchy=subagents" && body.method === "GET") {
+        const updatedAt = new Date().toISOString();
+        return jsonResponse({
+          streamId: "ai_sessions_control_plane",
+          revision: 1,
+          lastEventAt: updatedAt,
+          snapshot: {
+            runningCount: 1,
+            waitingCount: 0,
+            staleCount: 0,
+            sessions: [{
+              id: "ais_1",
+              agent: "codex",
+              appId: "codex",
+              appSessionId: "app_1",
+              status: "running",
+              phase: "responding",
+              summary: "Working",
+              startedAt: updatedAt,
+              updatedAt,
+            }],
+            updatedAt,
+          },
+        });
+      }
       return jsonResponse({ ok: true });
     },
   });
@@ -11793,7 +11819,7 @@ test("control plane manages projects, instances, register, heartbeat, and board 
   assert.equal("sessions" in board.body.data[0].aiSessions, false);
 
   const aiSessions = await json(app, "GET", "/api/ai-sessions");
-  assert.equal(aiSessions.statusCode, 200);
+  assert.equal(aiSessions.statusCode, 200, JSON.stringify(aiSessions.body));
   assert.equal(aiSessions.body.data.instances.length, 1);
   assert.equal(aiSessions.body.data.instances[0].instanceId, createdInstance.body.data.id);
   assert.equal(aiSessions.body.data.instances[0].aiSessions.sessions[0].id, "ais_1");
@@ -19204,7 +19230,7 @@ test("control plane aggregates ai session pending routes and proxies ai session 
         const sessions = [{ id: "app_waiting", appId: "codex", kind: "tty", status: "running" }];
         return new Response(JSON.stringify({ data: { revision: 1, lastEventAt: updatedAt, snapshot: { runningCount: 1, problemCount: 0, sessions, updatedAt } } }), { status: 200, headers: { "content-type": "application/json" } });
       }
-      if (body?.path === "/api/ai-sessions/state") {
+      if (body?.path === "/api/ai-sessions/state?hierarchy=subagents") {
         const updatedAt = new Date().toISOString();
         const sessions = [{ id: "ais_waiting", agent: "codex", appSessionId: "app_waiting", status: "waiting", phase: "approval", summary: "Approve command: npm install", startedAt: updatedAt, updatedAt }];
         return new Response(JSON.stringify({ data: { revision: 1, lastEventAt: updatedAt, snapshot: { runningCount: 0, waitingCount: 1, staleCount: 0, sessions, updatedAt } } }), { status: 200, headers: { "content-type": "application/json" } });
@@ -19272,7 +19298,7 @@ test("control plane aggregates ai session pending routes and proxies ai session 
           creationSource: "ai-session",
         } }), { status: 200, headers: { "content-type": "application/json" } });
       }
-      if (body?.path === "/api/ai-sessions/history" && body.method === "GET") {
+      if (body?.path === "/api/ai-sessions/history?hierarchy=subagents" && body.method === "GET") {
         return new Response(JSON.stringify({ data: { items: [{
           id: "ais_history_proxy",
           agent: "claude",
@@ -19284,7 +19310,7 @@ test("control plane aggregates ai session pending routes and proxies ai session 
           archivedAt: "2026-07-20T10:01:00.000Z",
         }] } }), { status: 200, headers: { "content-type": "application/json" } });
       }
-      if (body?.path === "/api/ai-sessions/history/ais_history_proxy" && body.method === "GET") {
+      if (body?.path === "/api/ai-sessions/history/ais_history_proxy?hierarchy=subagents" && body.method === "GET") {
         return new Response(JSON.stringify({ data: {
           item: {
             id: "ais_history_proxy",
@@ -19497,10 +19523,10 @@ test("control plane aggregates ai session pending routes and proxies ai session 
   const sessionDiagnostics = await json(app, "GET", "/api/session-streams/diagnostics");
   assert.equal(sessionDiagnostics.statusCode, 200);
   assert.equal(sessionDiagnostics.body.data.aiSessionActions.resumeSnapshotRefreshFailures, 0);
-  const historyForwards = requests.filter((request) => request.body.path === "/api/ai-sessions/history" || request.body.path === "/api/ai-sessions/history/ais_history_proxy" || request.body.path === "/api/ai-sessions/ais_history_proxy/resume");
+  const historyForwards = requests.filter((request) => request.body.path === "/api/ai-sessions/history?hierarchy=subagents" || request.body.path === "/api/ai-sessions/history/ais_history_proxy?hierarchy=subagents" || request.body.path === "/api/ai-sessions/ais_history_proxy/resume");
   assert.deepEqual(historyForwards.map((request) => [request.body.method, request.body.path, request.body.body ? JSON.parse(request.body.body) : undefined]), [
-    ["GET", "/api/ai-sessions/history", undefined],
-    ["GET", "/api/ai-sessions/history/ais_history_proxy", undefined],
+    ["GET", "/api/ai-sessions/history?hierarchy=subagents", undefined],
+    ["GET", "/api/ai-sessions/history/ais_history_proxy?hierarchy=subagents", undefined],
     ["POST", "/api/ai-sessions/ais_history_proxy/resume", {}],
   ]);
 
