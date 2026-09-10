@@ -57,7 +57,7 @@
                   @focusout="scheduleSessionTabDetailClose"
                 >
                   <ContextMenu>
-                    <ContextMenuTrigger as-child :disabled="!sessionSplitAvailable && !windowAlwaysOnTopSupported">
+                    <ContextMenuTrigger as-child>
                       <span
                         class="session-tab-item"
                         :class="{ active: isSessionTabActive(session), focused: isSessionTabFocused(session), 'drag-placeholder': draggingSessionTabKey === session.key }"
@@ -107,7 +107,19 @@
                         </button>
                       </span>
                       </ContextMenuTrigger>
-                    <ContextMenuContent class="instance-action-menu">
+                    <WorkbenchLayoutContextMenu
+                      :instance-sidebar-visible="instanceSidebarVisible"
+                      :show-header-density="!standalone"
+                      :show-instance-sidebar="!standalone"
+                      show-status-bar
+                      :show-window-always-on-top="windowAlwaysOnTopSupported"
+                      :status-bar-visible="sessionStatusBarVisible"
+                      :window-always-on-top="windowAlwaysOnTop"
+                      :window-always-on-top-disabled="windowAlwaysOnTopBusy"
+                      @update:instance-sidebar-visible="$emit('update:instanceSidebarVisible', $event)"
+                      @update:status-bar-visible="sessionStatusBarVisible = $event"
+                      @update:window-always-on-top="setWindowAlwaysOnTop"
+                    >
                       <ContextMenuItem v-if="session.kind !== 'repository' && session.kind !== 'embedded-browser'" class="instance-action-item" @select="beginSessionRename(session)">
                         <Pencil :size="14" />
                         <span>{{ t("sessions.tabs.rename") }}</span>
@@ -120,28 +132,7 @@
                         <PanelRight :size="14" />
                         <span>{{ t("sessions.tabs.moveRight") }}</span>
                       </ContextMenuItem>
-                      <ContextMenuSeparator />
-                      <ContextMenuCheckboxItem
-                        v-if="windowAlwaysOnTopSupported"
-                        :model-value="windowAlwaysOnTop"
-                        class="instance-action-item session-window-menu-item"
-                        :disabled="windowAlwaysOnTopBusy"
-                        @update:model-value="setWindowAlwaysOnTop"
-                      >
-                        {{ t("sessions.tabs.alwaysOnTop") }}
-                      </ContextMenuCheckboxItem>
-                      <ContextMenuCheckboxItem v-model="sessionStatusBarVisible" class="instance-action-item session-toggle-menu-item session-status-bar-menu-item">
-                        {{ t("sessions.tabs.showStatusBar") }}
-                      </ContextMenuCheckboxItem>
-                      <ContextMenuCheckboxItem
-                        v-if="!standalone"
-                        :model-value="instanceSidebarVisible"
-                        class="instance-action-item session-toggle-menu-item session-instance-sidebar-menu-item"
-                        @update:model-value="$emit('update:instanceSidebarVisible', Boolean($event))"
-                      >
-                        {{ t("sessions.tabs.showInstanceSidebar") }}
-                      </ContextMenuCheckboxItem>
-                    </ContextMenuContent>
+                    </WorkbenchLayoutContextMenu>
                   </ContextMenu>
                 </span>
               </TransitionGroup>
@@ -289,28 +280,19 @@
       </div>
     </div>
     </ContextMenuTrigger>
-    <ContextMenuContent class="instance-action-menu">
-      <ContextMenuCheckboxItem
-        v-if="windowAlwaysOnTopSupported"
-        :model-value="windowAlwaysOnTop"
-        class="instance-action-item session-window-menu-item"
-        :disabled="windowAlwaysOnTopBusy"
-        @update:model-value="setWindowAlwaysOnTop"
-      >
-        {{ t("sessions.tabs.alwaysOnTop") }}
-      </ContextMenuCheckboxItem>
-      <ContextMenuCheckboxItem v-model="sessionStatusBarVisible" class="instance-action-item session-toggle-menu-item session-status-bar-menu-item">
-        {{ t("sessions.tabs.showStatusBar") }}
-      </ContextMenuCheckboxItem>
-      <ContextMenuCheckboxItem
-        v-if="!standalone"
-        :model-value="instanceSidebarVisible"
-        class="instance-action-item session-toggle-menu-item session-instance-sidebar-menu-item"
-        @update:model-value="$emit('update:instanceSidebarVisible', Boolean($event))"
-      >
-        {{ t("sessions.tabs.showInstanceSidebar") }}
-      </ContextMenuCheckboxItem>
-    </ContextMenuContent>
+    <WorkbenchLayoutContextMenu
+      :instance-sidebar-visible="instanceSidebarVisible"
+      :show-header-density="!standalone"
+      :show-instance-sidebar="!standalone"
+      show-status-bar
+      :show-window-always-on-top="windowAlwaysOnTopSupported"
+      :status-bar-visible="sessionStatusBarVisible"
+      :window-always-on-top="windowAlwaysOnTop"
+      :window-always-on-top-disabled="windowAlwaysOnTopBusy"
+      @update:instance-sidebar-visible="$emit('update:instanceSidebarVisible', $event)"
+      @update:status-bar-visible="sessionStatusBarVisible = $event"
+      @update:window-always-on-top="setWindowAlwaysOnTop"
+    />
     </ContextMenu>
     </Teleport>
     <Teleport to="body">
@@ -384,19 +366,15 @@
           </p>
         </div>
       </ContextMenuTrigger>
-      <ContextMenuContent class="instance-action-menu">
-        <ContextMenuCheckboxItem v-model="sessionStatusBarVisible" class="instance-action-item session-toggle-menu-item session-status-bar-menu-item">
-          {{ t("sessions.tabs.showStatusBar") }}
-        </ContextMenuCheckboxItem>
-        <ContextMenuCheckboxItem
-          v-if="!standalone"
-          :model-value="instanceSidebarVisible"
-          class="instance-action-item session-toggle-menu-item session-instance-sidebar-menu-item"
-          @update:model-value="$emit('update:instanceSidebarVisible', Boolean($event))"
-        >
-          {{ t("sessions.tabs.showInstanceSidebar") }}
-        </ContextMenuCheckboxItem>
-      </ContextMenuContent>
+      <WorkbenchLayoutContextMenu
+        :instance-sidebar-visible="instanceSidebarVisible"
+        :show-header-density="!standalone"
+        :show-instance-sidebar="!standalone"
+        show-status-bar
+        :status-bar-visible="sessionStatusBarVisible"
+        @update:instance-sidebar-visible="$emit('update:instanceSidebarVisible', $event)"
+        @update:status-bar-visible="sessionStatusBarVisible = $event"
+      />
     </ContextMenu>
     <ProjectFolderPicker
       :node-id="instance.nodeId"
@@ -431,7 +409,7 @@ import { Activity, AppWindow, Bot, Boxes, ChevronDown, Columns2, Folder, FolderG
 import type { RepositorySessionKind } from "@task-handoff/protocol/repository";
 import type { AiSessionSummary, InstanceBoardItem, InstanceResourceMetrics, InstanceWithAiSessions, NodeLocalFolder } from "../../../api/types";
 import { Button } from "../../../components/ui/button";
-import { ContextMenu, ContextMenuCheckboxItem, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from "../../../components/ui/context-menu";
+import { ContextMenu, ContextMenuItem, ContextMenuTrigger } from "../../../components/ui/context-menu";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
 import { useControlPlaneLocale, type SupportedLocale } from "../../../i18n/index.ts";
 import { formatBytes, formatPercent, formatTime } from "../../../i18n/presentation.ts";
@@ -440,6 +418,7 @@ import SessionPaneContent from "./SessionPaneContent.vue";
 import AppLaunchMenuItems from "../shared/AppLaunchMenuItems.vue";
 import ProjectFolderPicker from "../shared/ProjectFolderPicker.vue";
 import RepositoryEnvironment from "./RepositoryEnvironment.vue";
+import WorkbenchLayoutContextMenu from "../shared/WorkbenchLayoutContextMenu.vue";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
 import { pruneTerminalPreviewCache } from "../useTerminalPreview";
 import {

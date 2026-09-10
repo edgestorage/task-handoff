@@ -114,7 +114,9 @@ export function registerRepositoryRoutes(app: FastifyInstance, options: Register
       return await active.promise;
     }
     const cwd = authorizedWorkspaceCwd(body.cwd.path, options.workspaceRoots);
-    const launch = createWorkspaceAiSession(servicesForWorkspace(cwd), options.aiSessionCreate, body, fingerprint)
+    const launch = createWorkspaceAiSession(servicesForWorkspace(cwd), options.aiSessionCreate, body, fingerprint, (durationMs) => {
+      app.log.info({ traceId: body.clientRequestId, clientRequestId: body.clientRequestId, stage: "workspace-prepare", durationMs }, "ai-session.create.workspace");
+    })
       .finally(() => workspaceLaunches.delete(body.clientRequestId));
     workspaceLaunches.set(body.clientRequestId, { fingerprint, promise: launch });
     return await launch;
@@ -414,6 +416,10 @@ function workspaceCwd(worktreeRoot: string, source: ResolvedRepository) {
 
 async function inspectAiSessionWorkspace(services: WorkspaceServices) {
   const state = await services.resolve();
+  return inspectAiSessionWorkspaceFromState(services, state);
+}
+
+async function inspectAiSessionWorkspaceFromState(services: WorkspaceServices, state: ResolvedRepository) {
   if (state.context.availability !== "available") {
     return RepositoryAiSessionWorkspaceSchema.parse({ availability: state.context.availability });
   }
@@ -461,13 +467,15 @@ async function createWorkspaceAiSession(
   coordinator: AiSessionCreateCoordinator,
   body: z.infer<typeof RepositoryWorkspaceAiSessionCreateSchema> | z.infer<typeof RepositoryWorkspaceAiSessionCreateRefSchema>,
   idempotencyFingerprint: string,
+  onPrepared?: (durationMs: number) => void,
 ) {
+  const startedAt = performance.now();
   const source = await requireRepository(services.resolve);
   // AI-session workspace selection is a ref intent, not an edit against a loaded
   // repository snapshot. The mutation services revalidate the selected ref and
   // worktree occupancy under their repository lock, so unrelated file changes
   // must not invalidate a prompt that took time to compose.
-  const inspected = await inspectAiSessionWorkspace(services);
+  const inspected = await inspectAiSessionWorkspaceFromState(services, source);
   // Compatibility for v0.0.21: the selection field remains named `branch` on
   // the wire, while the inspected choice kind is the authoritative ref model.
   const selected = inspected.branches.find((branch) => branch.name === body.gitSelection.branch);
@@ -512,6 +520,7 @@ async function createWorkspaceAiSession(
       if (attachment.source.type === "upload-ref") draftAttachmentIds.push(attachment.id);
       else attachments.push(AiSessionMessageAttachmentSchema.parse(attachment));
     }
+    onPrepared?.(performance.now() - startedAt);
     return await coordinator.create({
       ...input,
       cwd: workspace,

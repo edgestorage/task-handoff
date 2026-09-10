@@ -4,9 +4,11 @@ import { AiSessionConversationCache, aiSessionDetailCacheRevision, aiSessionTurn
 import type { AiSessionSummary } from "../../api/types";
 import { getAiSessionDetail, getAiSessionTurnBody, getAiSessionTurnIndex } from "../../api/queries";
 import { useStreamingMessagesStore } from "./useStreamingMessagesStore";
+import { recordAiSessionRead } from "./aiSessionReadDiagnostics";
 
 const conversations = new AiSessionConversationCache(80);
 const activeLoads = new Map<string, Promise<unknown>>();
+let consumerSequence = 0;
 
 function conversationKey(instanceId: string, sessionId: string) {
   return JSON.stringify([instanceId, sessionId]);
@@ -14,6 +16,7 @@ function conversationKey(instanceId: string, sessionId: string) {
 
 async function deduplicated<T>(key: string, load: () => Promise<T>): Promise<T> {
   const existing = activeLoads.get(key) as Promise<T> | undefined;
+  recordAiSessionRead("deduplicate", { key, reused: Boolean(existing) });
   if (existing) return existing;
   const promise = load().finally(() => activeLoads.delete(key));
   activeLoads.set(key, promise);
@@ -23,7 +26,9 @@ async function deduplicated<T>(key: string, load: () => Promise<T>): Promise<T> 
 export function useAiSessionConversationProjection(options: {
   instanceId: MaybeRefOrGetter<string>;
   summary: MaybeRefOrGetter<AiSessionSummary | undefined>;
+  consumer?: string;
 }) {
+  const consumerId = String(++consumerSequence);
   const streamingMessages = useStreamingMessagesStore();
   const cacheRevision = ref(0);
   const state = ref<"loading" | "ready" | "error">("loading");
@@ -109,7 +114,7 @@ export function useAiSessionConversationProjection(options: {
     return Boolean(summary && instanceId && conversations.hasCurrentTurn(instanceId, summary.id, turnId));
   }
 
-  async function loadTurn(turnId: string, validate = true, expectedRevision?: string): Promise<boolean> {
+  async function loadTurn(turnId: string, validate = true, expectedRevision?: string, source = "consumer"): Promise<boolean> {
     const summary = toValue(options.summary);
     const instanceId = toValue(options.instanceId);
     const key = currentKey.value;
@@ -118,25 +123,52 @@ export function useAiSessionConversationProjection(options: {
     if (!index) return false;
     const cachedRevision = conversations.turnRevision(instanceId, summary.id, index.id);
     const desiredRevision = expectedRevision || index.bodyRevision;
-    if (!validate && cachedRevision === desiredRevision) return true;
+    const diagnostic = {
+      consumerId, consumer: options.consumer, source, instanceId, sessionId: summary.id,
+      turnId: index.id, cachedRevision, desiredRevision, expectedRevision, validate,
+      summaryRevision: summary.latestTurnRef?.bodyRevision,
+    };
+    recordAiSessionRead("turn.requested", diagnostic);
+    if (!validate && cachedRevision === desiredRevision) {
+      recordAiSessionRead("turn.cache-hit", diagnostic);
+      return true;
+    }
+    const startedAt = performance.now();
     try {
       const read = await deduplicated(`${key}:turn:${index.id}:${cachedRevision || "none"}:${desiredRevision}`, () => (
         getAiSessionTurnBody(instanceId, summary.id, index.id, cachedRevision)
       ));
-      if (currentKey.value !== key) return false;
-      if (read.kind === "not-modified") return conversations.hasCurrentTurn(instanceId, summary.id, index.id);
+      recordAiSessionRead("turn.response", { ...diagnostic, kind: read.kind, responseRevision: read.revision, durationMs: performance.now() - startedAt });
+      if (currentKey.value !== key) {
+        recordAiSessionRead("turn.discarded", { ...diagnostic, reason: "selection-changed" });
+        return false;
+      }
+      if (read.kind === "not-modified") {
+        const current = conversations.hasCurrentTurn(instanceId, summary.id, index.id);
+        recordAiSessionRead("turn.not-modified", { ...diagnostic, current });
+        return current;
+      }
       const currentSummary = toValue(options.summary);
-      if (!currentSummary || read.body.sessionId !== currentSummary.id) return false;
+      if (!currentSummary || read.body.sessionId !== currentSummary.id) {
+        recordAiSessionRead("turn.discarded", { ...diagnostic, reason: "session-mismatch" });
+        return false;
+      }
       if (expectedRevision) {
         const currentRef = currentSummary.latestTurnRef;
-        if (currentRef?.id !== index.id || currentRef.bodyRevision !== read.revision) return false;
+        if (currentRef?.id !== index.id || currentRef.bodyRevision !== read.revision) {
+          recordAiSessionRead("turn.discarded", { ...diagnostic, reason: "revision-changed", responseRevision: read.revision, currentRevision: currentRef?.bodyRevision });
+          return false;
+        }
       }
-      if (conversations.setTurn(instanceId, currentSummary.id, read.revision, read.body.turn, expectedRevision)) {
+      const accepted = conversations.setTurn(instanceId, currentSummary.id, read.revision, read.body.turn, expectedRevision);
+      recordAiSessionRead("turn.applied", { ...diagnostic, accepted, responseRevision: read.revision });
+      if (accepted) {
         streamingMessages.applyAuthoritativeTurnBody(instanceId, currentSummary.id, read.body.turn);
         changed();
       }
       return conversations.hasCurrentTurn(instanceId, currentSummary.id, index.id);
     } catch {
+      recordAiSessionRead("turn.failed", { ...diagnostic, durationMs: performance.now() - startedAt, retry: true });
       scheduleRetry();
       return false;
     }
@@ -147,7 +179,7 @@ export function useAiSessionConversationProjection(options: {
     const instanceId = toValue(options.instanceId);
     if (!summary || !instanceId) return;
     const index = conversations.turnIndex(instanceId, summary.id);
-    await Promise.allSettled((index?.turns || []).map((turn) => loadTurn(turn.id, false)));
+    await Promise.allSettled((index?.turns || []).map((turn) => loadTurn(turn.id, false, undefined, "all-turns")));
   }
 
   async function refresh(domains: { detail?: boolean; index?: boolean } = { detail: true, index: true }) {
@@ -164,6 +196,11 @@ export function useAiSessionConversationProjection(options: {
     if (!hadRenderableContent) state.value = "loading";
     const cachedDetailRevision = conversations.detailRevision(instanceId, summary.id);
     const cachedTurnsRevision = conversations.turnsRevision(instanceId, summary.id);
+    recordAiSessionRead("projection.refresh", {
+      consumerId, consumer: options.consumer, instanceId, sessionId: summary.id,
+      detail: Boolean(domains.detail), index: Boolean(domains.index), cachedDetailRevision, cachedTurnsRevision,
+      detailRevision: aiSessionDetailCacheRevision(summary), turnsRevision: aiSessionTurnsCacheRevision(summary),
+    });
     const detailLoad = domains.detail ? deduplicated(`${key}:detail:${cachedDetailRevision || "none"}:${aiSessionDetailCacheRevision(summary)}`, () => (
         getAiSessionDetail(instanceId, summary.id, cachedDetailRevision)
       )) : undefined;
@@ -196,7 +233,7 @@ export function useAiSessionConversationProjection(options: {
       scheduleRetry();
     }
     const latest = currentSummary.latestTurnRef;
-    if (latest) await loadTurn(latest.id, false, latest.bodyRevision);
+    if (latest) await loadTurn(latest.id, false, latest.bodyRevision, "refresh-completed");
   }
 
   watch(
@@ -205,6 +242,11 @@ export function useAiSessionConversationProjection(options: {
       return [currentKey.value, summary?.detailRevision, summary?.turnsRevision, summary?.latestTurnRef?.id, summary?.latestTurnRef?.bodyRevision] as const;
     },
     (next, previous) => {
+      recordAiSessionRead("summary.changed", {
+        consumerId, consumer: options.consumer, instanceId: toValue(options.instanceId),
+        sessionId: toValue(options.summary)?.id, detailRevision: next[1], turnsRevision: next[2],
+        turnId: next[3], revision: next[4], previousRevision: previous?.[4],
+      });
       const keyChanged = !previous || next[0] !== previous[0];
       if (keyChanged) {
         clearRetry();
@@ -215,7 +257,7 @@ export function useAiSessionConversationProjection(options: {
       if (next[1] !== previous[1]) void refresh({ detail: true });
       if (next[2] !== previous[2]) void refresh({ index: true });
       if (next[3] && (next[3] !== previous[3] || next[4] !== previous[4])) {
-        void loadTurn(next[3], false, next[4]);
+        void loadTurn(next[3], false, next[4], "summary-watcher");
       }
     },
     { immediate: true },

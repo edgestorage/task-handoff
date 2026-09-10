@@ -9,8 +9,10 @@ const windowChromeMode = process.platform === "darwin"
 contextBridge.exposeInMainWorld("taskHandoffDesktop", {
   windowChrome: {
     mode: windowChromeMode,
+    supportsDensity: true,
   },
   setWindowChromeTheme: (theme) => ipcRenderer.invoke("task-handoff:set-window-chrome-theme", theme),
+  setWindowChromeDensity: (density) => ipcRenderer.invoke("task-handoff:set-window-chrome-density", density),
   chooseProjectFolder: () => ipcRenderer.invoke("task-handoff:choose-project-folder"),
   openLocalPath: (localPath) => ipcRenderer.invoke("task-handoff:open-local-path", localPath),
   revealLocalPath: (localPath) => ipcRenderer.invoke("task-handoff:reveal-local-path", localPath),
@@ -37,7 +39,6 @@ contextBridge.exposeInMainWorld("taskHandoffDesktop", {
   switchInstanceDetailWindow: (instanceId) => ipcRenderer.invoke("task-handoff:switch-instance-detail-window", instanceId),
   getWindowAlwaysOnTop: () => ipcRenderer.invoke("task-handoff:get-window-always-on-top"),
   setWindowAlwaysOnTop: (enabled) => ipcRenderer.invoke("task-handoff:set-window-always-on-top", enabled),
-  windowDrag: (phase, screenX, screenY) => ipcRenderer.send("task-handoff:window-drag", { phase, screenX, screenY }),
   onOpenSettings: (listener) => {
     const handler = () => listener();
     ipcRenderer.on("task-handoff:open-settings", handler);

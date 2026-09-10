@@ -337,8 +337,9 @@
               </Transition>
             </section>
             <div v-if="!sortedSessions.length" class="session-ai-empty session-ai-filter-empty" role="status">
-              <span class="session-ai-empty-icon">
-                <MessageSquare :size="17" />
+              <span class="session-ai-empty-icon" aria-hidden="true">
+                <SearchX v-if="visibleAiSessions.length" :size="19" />
+                <MessageSquarePlus v-else :size="19" />
               </span>
               <strong>{{ visibleAiSessions.length ? t("sessions.panel.noMatching") : t("sessions.panel.noConversations") }}</strong>
               <span>{{ visibleAiSessions.length ? t("sessions.panel.tryFilter") : t("sessions.panel.startHint") }}</span>
@@ -1231,7 +1232,7 @@ import { formatRelativeTime } from "../../../i18n/presentation";
 import type { SupportedLocale } from "../../../i18n/locale";
 import { translateApiError } from "../../../i18n/apiError";
 import { waitForAiSessionProjection } from "../ai-session-projection";
-import { ArrowLeft, Ban, Boxes, Check, ChevronDown, ChevronRight, CircleHelp, ExternalLink, Filter, Folder, FolderOpen, GitBranch, History, LoaderCircle, MessageSquare, MoreHorizontal, PanelLeftOpen, Plus, Server, SlidersHorizontal, Split, Square, SquareTerminal, X } from "@lucide/vue";
+import { ArrowLeft, Ban, Boxes, Check, ChevronDown, ChevronRight, CircleHelp, ExternalLink, Filter, Folder, FolderOpen, GitBranch, History, LoaderCircle, MessageSquare, MessageSquarePlus, MoreHorizontal, PanelLeftOpen, Plus, SearchX, Server, SlidersHorizontal, Split, Square, SquareTerminal, X } from "@lucide/vue";
 import { instanceStatusKeys, translateStatus } from "../../../i18n/status";
 import { useQueryClient } from "@tanstack/vue-query";
 import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
@@ -1625,11 +1626,10 @@ const {
   refresh: loadSelectedSessionDetail,
   state: selectedSessionDetailState,
   turnIndexKey: selectedSessionTurnIndexKey,
-} = useAiSessionConversationProjection({ instanceId: () => props.instance.id, summary: selectedSession });
+} = useAiSessionConversationProjection({ instanceId: () => props.instance.id, summary: selectedSession, consumer: "instance-panel" });
 const { setViewMode: persistTimelineViewMode, viewMode: timelineViewMode } = useAiSessionTimelineViewMode();
 const {
   conversationTurnTimelines,
-  loadSelectedTurnTimeline,
   loadTurnTimeline,
   selectedTurn: selectedTimelineTurn,
   selectedTurnState: selectedTurnTimelineState,
@@ -1724,10 +1724,7 @@ async function setTimelineViewMode(value: unknown) {
   if (value !== "compact" && value !== "full") return;
   const enteringFullTimeline = value === "full" && timelineViewMode.value !== "full";
   persistTimelineViewMode(value);
-  if (value === "compact") {
-    void loadSelectedTurnTimeline();
-    return;
-  }
+  if (value === "compact") return;
   if (!enteringFullTimeline) return;
   await nextTick();
   scrollFollow?.jumpLatest();
@@ -3765,7 +3762,6 @@ watch(() => `${props.instance.id}\u0000${selectedSession.value?.id || ""}`, () =
   detailScrollLayoutPending = true;
   scrollFollow?.stopFollowing();
   detailLayoutAnchor.cancel();
-  void loadSelectedTurnTimeline();
   queueComposerEdit.value = undefined;
   const draft = selectedSession.value ? loadAiSessionDraftPayload(selectedSession.value.id) : { value: "", bindings: [] };
   messageDraft.value = draft.value;
@@ -3808,8 +3804,7 @@ onMounted(() => {
 watch(
   () => selectedTimelineTurn.value ? `${selectedTimelineTurn.value.id}:${selectedTimelineTurn.value.status}:${selectedSessionTurnIndexKey.value}` : "",
   () => {
-    if (selectedTimelineTurn.value) void loadSelectedSessionTurn(selectedTimelineTurn.value.id);
-    void loadSelectedTurnTimeline();
+    if (selectedTimelineTurn.value) void loadSelectedSessionTurn(selectedTimelineTurn.value.id, true, undefined, "selected-turn-watcher");
   },
 );
 watch(

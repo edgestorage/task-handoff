@@ -43,6 +43,7 @@ export type AiSessionCreateCoordinatorOptions = {
   materializationTimeoutMs?: number;
   operationStorePath?: string;
   onDiagnostic?: (diagnostic: Record<string, unknown>) => void;
+  onTiming?: (timing: { clientRequestId: string; agent: string; stage: string; durationMs: number; outcome: "completed" | "failed" }) => void;
 };
 
 export class AiSessionCreateCoordinator {
@@ -65,7 +66,7 @@ export class AiSessionCreateCoordinator {
       assertAiSessionCreateRequestFingerprint(active.fingerprint, fingerprint);
       return active.promise;
     }
-    const promise = this.perform(input).finally(() => {
+    const promise = this.measure(input, "total", () => this.perform(input)).finally(() => {
       if (this.pending.get(input.clientRequestId)?.promise === promise) this.pending.delete(input.clientRequestId);
     });
     this.pending.set(input.clientRequestId, { fingerprint, promise });
@@ -80,7 +81,7 @@ export class AiSessionCreateCoordinator {
   }
 
   private async perform(input: AiSessionCreateCoordinatorInput): Promise<AiSessionCreateResult> {
-    await this.options.ensureProvider?.(input.agent);
+    await this.measure(input, "ensure-provider", () => this.options.ensureProvider?.(input.agent));
     if (input.reasoningEffort && this.options.getProviderCapability
       && !normalizeAiSessionReasoningEffortCapabilities(this.options.getProviderCapability(input.agent)).selectAtCreate) {
       throw aiSessionControlError("AI_SESSION_REASONING_EFFORT_UNSUPPORTED", `${input.agent} does not support selecting reasoning effort at creation.`, 409);
@@ -90,7 +91,7 @@ export class AiSessionCreateCoordinator {
       throw aiSessionControlError("AI_SESSION_CREATE_UNSUPPORTED", `${input.agent} does not support direct AI session creation.`, 400);
     }
     const modelSelection = this.options.resolveModelSelection?.(input.agent, input.modelSelection) || input.modelSelection;
-    const created = await provider.createSession({ cwd: input.cwd, permissionMode: input.permissionMode, modelSelection, reasoningEffort: input.reasoningEffort });
+    const created = await this.measure(input, "provider-create", () => provider.createSession!({ cwd: input.cwd, permissionMode: input.permissionMode, modelSelection, reasoningEffort: input.reasoningEffort }));
     const providerSessionId = created.providerSessionId.trim();
     if (!providerSessionId || created.creationSource !== "ai-session") {
       throw aiSessionControlError("AI_SESSION_CREATE_INVALID_RESPONSE", "Provider returned an invalid Direct AI session identity.", 502);
@@ -131,7 +132,7 @@ export class AiSessionCreateCoordinator {
       session = this.options.registry.patch(session.id, { reasoningEffort: actualReasoningEffort });
     }
     try {
-      await withTimeout(
+      await this.measure(input, "first-turn", () => withTimeout(
         this.options.controller.startMessage(session.id, {
           message: input.message,
           attachments: input.attachments || [],
@@ -142,7 +143,7 @@ export class AiSessionCreateCoordinator {
           permissionMode: input.permissionMode,
         }),
         this.options.materializationTimeoutMs ?? 15_000,
-      );
+      ));
     } catch (error: unknown) {
       await this.compensate(provider, providerSessionId, session.id, "first-turn-failed", error);
       throw aiSessionControlError(
@@ -159,8 +160,22 @@ export class AiSessionCreateCoordinator {
     });
     const fingerprint = input.idempotencyFingerprint || aiSessionCreateRequestFingerprint(createFingerprintInput(input));
     this.completed.set(input.clientRequestId, { fingerprint, result });
-    this.persistCompleted();
+    await this.measure(input, "persist-operation", () => this.persistCompleted());
     return result;
+  }
+
+  private async measure<T>(input: AiSessionCreateCoordinatorInput, stage: string, operation: () => T | Promise<T>): Promise<T> {
+    const startedAt = performance.now();
+    let outcome: "completed" | "failed" = "failed";
+    try {
+      const result = await operation();
+      outcome = "completed";
+      return result;
+    } finally {
+      try {
+        this.options.onTiming?.({ clientRequestId: input.clientRequestId, agent: input.agent, stage, durationMs: performance.now() - startedAt, outcome });
+      } catch {}
+    }
   }
 
   private restoreCompleted() {

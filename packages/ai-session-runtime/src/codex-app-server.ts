@@ -132,6 +132,7 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
       validateReferences: (session, references) => this.mentions.validateReferences(session, references),
     });
     this.discovery = new CodexAppServerSessionDiscovery({
+      applyThreadListEntry: (thread) => this.upsertThreadListEntry(thread, { bindAppSession: true }),
       applyThreadSnapshot: (thread) => this.upsertThread(thread, { bindAppSession: true }),
       recoverableThreadIds: () => this.registry.list()
         .filter((session) => (
@@ -173,14 +174,28 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
     return this.timelineSourceByThread.get(providerSessionId) || "adapter-store";
   }
 
+  async ensureReady(appSessions: CodexAppSession[] = []) {
+    await this.connect(appSessions);
+  }
+
   async sync(appSessions: CodexAppSession[] = []) {
+    const ready = await this.connect(appSessions);
+    if (!ready || !this.connection.isCurrent(ready)) return;
+    try {
+      await this.discovery.sync(ready.client, () => this.connection.isCurrent(ready));
+    } catch {
+      this.connection.markUnhealthy(ready);
+    }
+  }
+
+  private async connect(appSessions: CodexAppSession[] = []) {
     const previousSocketPath = this.binding.socketPath;
     const previousCommand = this.binding.command;
     const socketPath = this.binding.update(appSessions);
     const command = this.binding.command;
     if (!this.injectedClient && !socketPath && !this.options.allowSpawn) {
       this.stop();
-      return;
+      return undefined;
     }
     if (!this.injectedClient && (
       !this.connection.client
@@ -192,19 +207,12 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
       this.connection.configure();
     }
     if (!this.connection.client) {
-      return;
+      return undefined;
     }
-    let ready;
     try {
-      ready = await this.connection.ready({ respectRetry: true });
+      return await this.connection.ready({ respectRetry: true });
     } catch {
-      return;
-    }
-    if (!ready || !this.connection.isCurrent(ready)) return;
-    try {
-      await this.discovery.sync(ready.client, () => this.connection.isCurrent(ready));
-    } catch {
-      this.connection.markUnhealthy(ready);
+      return undefined;
     }
   }
 
@@ -655,6 +663,18 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
   }
 
   private upsertThread(thread: CodexThread, options: { bindAppSession: boolean; creationSource?: AiSessionStatus["creationSource"] }) {
+    this.upsertThreadProjection(thread, options, "snapshot");
+  }
+
+  private upsertThreadListEntry(thread: CodexThread, options: { bindAppSession: boolean; creationSource?: AiSessionStatus["creationSource"] }) {
+    this.upsertThreadProjection(thread, options, "list-entry");
+  }
+
+  private upsertThreadProjection(
+    thread: CodexThread,
+    options: { bindAppSession: boolean; creationSource?: AiSessionStatus["creationSource"] },
+    projection: "snapshot" | "list-entry",
+  ) {
     const id = typeof thread.id === "string" ? thread.id : undefined;
     if (!id || thread.ephemeral === true) {
       return;
@@ -665,7 +685,9 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
     if (this.options.projectUnboundThreads === false && !existing && !appSessionId && !options.creationSource) {
       return;
     }
-    this.projector.applyThreadSnapshot(thread, { appSessionId, creationSource: options.creationSource });
+    const context = { appSessionId, creationSource: options.creationSource };
+    if (projection === "list-entry") this.projector.applyThreadListEntry(thread, context);
+    else this.projector.applyThreadSnapshot(thread, context);
   }
 
   private recordTimelineHistorySource(thread: CodexThread) {
@@ -717,7 +739,7 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
       throw new Error("Codex app-server is not connected.");
     }
     const appSessions = await this.options.ensureAppSessions();
-    await this.sync(appSessions);
+    await this.ensureReady(appSessions);
     return this.connection.ready();
   }
 

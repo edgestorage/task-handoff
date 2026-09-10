@@ -459,6 +459,22 @@ test("board floating detail consumes the same Timeline presentation as instance 
   assert.doesNotMatch(dock, /<AiSessionResult/);
 });
 
+test("Timeline history reads are disclosure-driven, including v0.0.28 session-read fallback", () => {
+  const presentation = fs.readFileSync(new URL("../src/apps/control-plane/useAiSessionTimelinePresentation.ts", import.meta.url), "utf8");
+  const panel = fs.readFileSync(panelUrl, "utf8");
+  const board = fs.readFileSync(new URL("../src/apps/control-plane/ai-board/AiSessionBoardView.vue", import.meta.url), "utf8");
+  const history = fs.readFileSync(new URL("../src/components/ai-session/AiSessionTurnHistory.vue", import.meta.url), "utf8");
+  const result = fs.readFileSync(new URL("../src/components/ai-session/AiSessionResult.vue", import.meta.url), "utf8");
+  assert.doesNotMatch(presentation, /\bwatch\(|loadSelectedTurnTimeline/);
+  for (const source of [panel, board]) assert.doesNotMatch(source, /loadSelectedTurnTimeline/);
+  assert.match(history, /const historyOpen = ref\(false\)/);
+  assert.match(history, /watch\(\(\) => historyOpen\.value && props\.loadable, \(load\) => \{\s*if \(load\) emit\("load"\);\s*\}\);/);
+  assert.match(history, /function retryHistory\(\) \{\s*historyOpen\.value = true;\s*emit\("retry"\);/);
+  assert.match(result, /<AiSessionTurnHistory\s+:key="turnId"/);
+  assert.match(presentation, /if \(!supportsTurnRead\.value\) \{[\s\S]*state\.status === "ready" \|\| state\.status === "loading"[\s\S]*return loadFullTimeline\(current, true\)/);
+  assert.match(presentation, /const existing = activeTurnTimelineLoads\.get\(key\);\s*if \(existing\) return existing;/);
+});
+
 test("conversation Timeline composes every turn from the same compact result component", () => {
   const panel = fs.readFileSync(panelUrl, "utf8");
   const styles = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.css", import.meta.url), "utf8");
@@ -480,12 +496,9 @@ test("conversation Timeline composes every turn from the same compact result com
   assert.match(timeline, /compactTimelineForTurn\(state\.items, turn\)/);
   assert.match(timeline, /turn\.lastMessage\?\.trim\(\)/);
   assert.doesNotMatch(timeline, /projected\?\.latestResponse|projected\?\.userMessages/);
-  assert.match(timeline, /loadVisibleTurnTimelines/);
+  assert.doesNotMatch(timeline, /loadVisibleTurnTimelines|scheduleVisibleTurnTimelines|timelineScrollIntent/);
   assert.match(panel, /loadAllSelectedSessionTurns/);
-  assert.match(timeline, /function loadVisibleTurnTimelines\(\)[\s\S]*getBoundingClientRect\(\)[\s\S]*emit\("loadTurnTimeline", turn\.id\)/);
-  assert.match(timeline, /function handleViewportScroll\(\)[\s\S]*scheduleVisibleTurnTimelines\(\)/);
-  assert.match(timeline, /if \(!props\.turnBodiesReady \|\| !timelineScrollIntent\)/);
-  assert.match(timeline, /addEventListener\("wheel", markTimelineScrollIntent/);
+  assert.match(timeline, /function handleViewportScroll\(\) \{\s*scheduleStickyUserMessageUpdate\(\);\s*\}/);
   assert.match(projection, /const allTurnsReady = computed\([\s\S]*index\.turns\.every\(\(turn\) => conversations\.hasCurrentTurn/);
   assert.match(panel, /:turn-bodies-ready="selectedSessionTurnsReady"/);
   assert.match(timeline, /@load-activity-history="\$emit\('loadTurnTimeline'/);
@@ -505,10 +518,10 @@ test("conversation Timeline composes every turn from the same compact result com
   assert.match(disclosureTransition, /function scheduleTransitionFrame[\s\S]*cancelAnimationFrame/);
   assert.match(disclosureTransition, /export function cancelDisclosureTransition[\s\S]*pendingScrollAnchorLocks\.set\(viewport, pending - 1\)/);
   assert.match(history, /\.ai-session-turn-history-summary \{[\s\S]*user-select: none;/);
-  assert.match(history, /v-else-if="nodes\.length \|\| loadable \|\| loading"[\s\S]*:aria-expanded="historyOpen"[\s\S]*@click="toggleHistory"[\s\S]*<span>\{\{ elapsedLabel \}\}<\/span>/);
-  assert.match(history, /historyOpen\.value = !historyOpen\.value;[\s\S]*historyOpen\.value && props\.loadable\) emit\("load"\)/);
+  assert.match(history, /v-else-if="nodes\.length \|\| loadable \|\| loading"[\s\S]*:aria-expanded="historyRevealed"[\s\S]*@click="toggleHistory"[\s\S]*<span>\{\{ elapsedLabel \}\}<\/span>/);
+  assert.match(history, /watch\(\(\) => historyOpen\.value && props\.loadable, \(load\) => \{\s*if \(load\) emit\("load"\);/);
   assert.match(history, /<Transition[\s\S]*name="turn-history-disclosure"[\s\S]*@before-enter="prepareDisclosureEnter"[\s\S]*@after-leave="finishDisclosureLeave"/);
-  assert.match(result, /:loadable="!active && \(activityHistoryStatus === 'idle' \|\| activityHistoryStatus === 'stale'\)"/);
+  assert.match(result, /:loadable="activityHistoryStatus === 'idle' \|\| activityHistoryStatus === 'stale'"/);
   assert.match(result, /@load="\$emit\('loadActivityHistory'\)"/);
   assert.match(timeline, /@load-activity-history="\$emit\('loadTurnTimeline', turns\[virtualTurn\.index\]\.id\)"/);
   assert.match(history, /v-else class="ai-session-turn-history-status ai-session-turn-history-empty"[\s\S]*<Timer[\s\S]*<span>\{\{ elapsedLabel \}\}<\/span>/);
@@ -568,13 +581,16 @@ test("conversation Timeline composes every turn from the same compact result com
   assert.match(timeline, /\.ai-session-user-message-actions :deep\(\.ai-session-user-message-copy svg\) \{[\s\S]*width: 13px;[\s\S]*height: 13px;/);
   assert.match(timeline, /@continue="continueFromTurn\(turns\[virtualTurn\.index\]\.id\)"/);
   assert.match(timeline, /turn\.id === turnId \|\| turn\.providerTurnId === turnId/);
-  assert.match(timeline, /turn\?\.completedAt \|\| turn\?\.updatedAt \|\| turn\?\.startedAt/);
+  assert.match(timeline, /turn\?\.completedAt \|\| turn\?\.startedAt/);
+  assert.doesNotMatch(timeline, /turn\?\.completedAt \|\| turn\?\.updatedAt/);
   assert.match(turnActions, /\.ai-session-turn-actions \{[\s\S]*min-height: 26px;[\s\S]*opacity: 0;[\s\S]*pointer-events: none;/);
   assert.match(turnActions, /\.ai-session-turn-action \{[\s\S]*width: 26px;[\s\S]*height: 26px;[\s\S]*padding: 0;/);
   assert.match(turnActions, /:global\(\.ai-session-timeline-turn:hover \.ai-session-turn-actions\),[\s\S]*:global\(\.ai-session-result:hover \.ai-session-turn-actions\),[\s\S]*opacity: 1;[\s\S]*pointer-events: auto;/);
   assert.match(turnActions, /navigator\.clipboard\.writeText\(props\.content\)/);
   assert.match(conversation, /<AiSessionResult[\s\S]*<template #turn-footer>[\s\S]*<AiSessionTurnActions[\s\S]*:content="compactResponseContent"/);
   assert.match(conversation, /compactCompletedTurn[\s\S]*compactCanContinue[\s\S]*compactTurnTime/);
+  assert.match(conversation, /turn\?\.completedAt \|\| turn\?\.startedAt/);
+  assert.doesNotMatch(conversation, /turn\?\.completedAt \|\| turn\?\.updatedAt/);
   assert.match(panel, /@continue-from-turn="forkSession\(selectedSession, 'current', \$event\)"/);
   assert.match(timeline, /stickyUserMessageChange: \[message: \{ id: string; text: string \} \| undefined\]/);
   assert.match(timeline, /naturalTop <= viewport\.scrollTop \+ 0\.5 && naturalTop > nearestTop/);
@@ -624,7 +640,7 @@ test("conversation Timeline composes every turn from the same compact result com
   assert.match(history, /\.ai-session-turn-history-message :deep\(\.markdown-content > :first-child\) \{ margin-top: 0; \}/);
   assert.match(history, /\.ai-session-turn-history-message :deep\(\.markdown-content > :last-child\) \{ margin-bottom: 0; \}/);
   assert.match(history, /v-else class="ai-session-turn-history-status ai-session-turn-history-empty"[\s\S]*<Timer[\s\S]*\{\{ elapsedLabel \}\}/);
-  assert.match(history, /<LoaderCircle class="ai-session-turn-history-loading-icon" :size="15"/);
+  assert.match(history, /<LoaderCircle v-if="historyOpen && \(loading \|\| loadable\)" class="ai-session-turn-history-loading-icon" :size="15"/);
   assert.match(history, /<Timer :size="15"/);
   assert.doesNotMatch(history, /ai-session-turn-history-empty svg \{ visibility: hidden; \}/);
   assert.match(history, /node\.message\.type === 'user-message'/);
@@ -769,8 +785,8 @@ test("compact mode renders history, latest AI response, then only the live activ
   assert.match(result, /\.ai-session-retry-warning\[open\] \.ai-session-retry-warning-preview \{ display: none; \}/);
   assert.match(result, /\.ai-session-retry-warning\[open\] \.ai-session-retry-warning-detail \{ display: block; \}/);
   assert.match(result, /<AiSessionTurnHistory[\s\S]*<section[\s\S]*class="ai-session-detail-response"[\s\S]*<AiSessionToolActivity/);
-  assert.match(result, /<AiSessionTurnHistory\s+:nodes="activityHistory"/);
-  assert.match(result, /:loading="!active && activityHistoryStatus === 'loading'"/);
+  assert.match(result, /<AiSessionTurnHistory\s+:key="turnId"\s+:nodes="activityHistory"/);
+  assert.match(result, /:loading="activityHistoryStatus === 'loading'"/);
   assert.doesNotMatch(result, /<AiSessionTurnHistory\s+v-if=/);
   assert.match(result, /<AiSessionToolActivity\s+v-if="isLatest && active"/);
   assert.doesNotMatch(result, /v-else-if="activities\.length"/);

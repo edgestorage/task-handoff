@@ -58,7 +58,7 @@ import {
 } from "@task-handoff/protocol/control-plane";
 import { normalizeAiSessionModelSelectionCapabilities, normalizeAiSessionReasoningEffortCapabilities } from "@task-handoff/protocol/ai-session-provider-capabilities";
 import { parseResponse } from "@task-handoff/protocol/response-validation";
-import { TRACE_ID_HEADER, type RequestTimingDiagnostics } from "../../shared/http/server-timing.ts";
+import { clientRequestTraceId, TRACE_ID_HEADER, type RequestTimingDiagnostics } from "../../shared/http/server-timing.ts";
 import {
   RepositoryAiSessionWorkspaceSchema,
   type RepositoryAiSessionGitSelection,
@@ -237,6 +237,7 @@ export class AiSessionActionService {
       modelSelection?: AiSessionModelSelection;
       reasoningEffort?: AiSessionReasoningEffort;
     },
+    onTiming?: (timing: RequestTimingDiagnostics) => void,
   ): Promise<AiSessionCreateResult> {
     assertAiSessionAttachmentsWithinLimit((input.attachments || []).filter((attachment): attachment is AiSessionMessageAttachment => attachment.source.type !== "upload-ref"));
     const instance = await this.options.requireInstance(instanceId);
@@ -262,7 +263,7 @@ export class AiSessionActionService {
     const reasoningCapability = normalizeAiSessionReasoningEffortCapabilities(aiSessionProviderCapability(instance.capabilities, input.agent));
     const result = parseResponse(AiSessionCreateResultSchema, await this.options.request(instance, route, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", [TRACE_ID_HEADER]: clientRequestTraceId(input.clientRequestId) },
       body: JSON.stringify({
         ...baseInput,
         // Compatibility for v0.0.21: its strict controlled-instance create schema does not accept cwdFolderId.
@@ -272,7 +273,7 @@ export class AiSessionActionService {
         ...(reasoningCapability.selectAtCreate && reasoningEffort ? { reasoningEffort } : {}),
         ...(effectivePermissionMode ? { permissionMode: effectivePermissionMode } : {}),
       }),
-    }));
+    }, onTiming));
     return result;
   }
 

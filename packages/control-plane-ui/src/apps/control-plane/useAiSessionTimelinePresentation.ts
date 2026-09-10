@@ -1,4 +1,4 @@
-import { computed, toValue, watch, type MaybeRefOrGetter } from "vue";
+import { computed, toValue, type MaybeRefOrGetter } from "vue";
 import { useI18n } from "vue-i18n";
 import { supportsAiSessionTimelineCapability } from "@task-handoff/protocol/control-plane";
 import type { AiSessionSummary, InstanceWithAiSessions } from "../../api/types";
@@ -125,27 +125,9 @@ export function useAiSessionTimelinePresentation(options: {
     return load;
   }
 
-  function loadSelectedTurnTimeline(force = false) {
-    const turn = selectedTurn.value;
-    return turn ? loadTurnTimeline(turn.id, force) : undefined;
-  }
-
-  watch(timelineStore.recoveryRevision, () => void loadSelectedTurnTimeline(true));
-  watch(
-    () => {
-      const currentInstance = instance.value;
-      const current = session.value;
-      const turn = selectedTurn.value;
-      return [currentInstance?.id, current?.id, turn?.id, turn?.revision] as const;
-    },
-    () => void loadSelectedTurnTimeline(),
-    { immediate: true },
-  );
-
   return {
     conversationTurnTimelines,
     loadFullTimeline,
-    loadSelectedTurnTimeline,
     loadTurnTimeline,
     selectedTurn,
     selectedTurnState,

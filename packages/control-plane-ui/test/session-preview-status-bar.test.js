@@ -5,13 +5,13 @@ import test from "node:test";
 const source = async (path) => fs.readFile(new URL(`../src/${path}`, import.meta.url), "utf8");
 
 test("session tab bar menus control persisted workbench visibility preferences", async () => {
-  const [workbench, workbenchStyles, sidebar, detail, preview, styles, english, chinese] = await Promise.all([
+  const [workbench, workbenchStyles, sidebar, detail, preview, layoutMenu, english, chinese] = await Promise.all([
     source("apps/control-plane/ControlPlaneWorkbench.vue"),
     source("apps/control-plane/ControlPlaneWorkbench.css"),
     source("apps/control-plane/instance-list/useResizableInstancesSidebar.ts"),
     source("apps/control-plane/instance-detail/InstanceDetail.vue"),
     source("apps/control-plane/instance-detail/SessionPreview.vue"),
-    source("apps/control-plane/instance-detail/SessionPreview.css"),
+    source("apps/control-plane/shared/WorkbenchLayoutContextMenu.vue"),
     source("i18n/locales/en-US/sessions.ts"),
     source("i18n/locales/zh-CN/sessions.ts"),
   ]);
@@ -32,15 +32,15 @@ test("session tab bar menus control persisted workbench visibility preferences",
   assert.doesNotMatch(preview, /useStorage\(sessionStatusBarStorageKey, computed/);
   assert.match(preview, /<ContextMenuTrigger as-child>\s*<div class="session-preview-toolbar"/);
   assert.match(preview, /<ContextMenu v-if="sessionStatusBarVisible">[\s\S]*?<div class="session-preview-actions">/);
-  assert.equal((preview.match(/t\("sessions\.tabs\.showStatusBar"\)/g) || []).length, 3);
-  assert.equal((preview.match(/<ContextMenuCheckboxItem v-model="sessionStatusBarVisible" class="instance-action-item session-toggle-menu-item session-status-bar-menu-item"/g) || []).length, 3);
-  assert.equal((preview.match(/t\("sessions\.tabs\.showInstanceSidebar"\)/g) || []).length, 3);
-  assert.equal((preview.match(/class="instance-action-item session-toggle-menu-item session-instance-sidebar-menu-item"/g) || []).length, 3);
-  assert.equal((preview.match(/@update:model-value="\$emit\('update:instanceSidebarVisible', Boolean\(\$event\)\)"/g) || []).length, 3);
-  assert.match(preview, /sessions\.tabs\.moveRight[\s\S]*?<ContextMenuSeparator \/>[\s\S]*?sessions\.tabs\.showStatusBar/);
-  assert.match(styles, /\.session-toggle-menu-item\s*\{[^}]*position: relative;[^}]*padding-left: 30px;/s);
-  assert.match(styles, /\.session-toggle-menu-item > span:first-child\s*\{[^}]*position: absolute;[^}]*left: 8px;[^}]*overflow: visible;/s);
-  assert.doesNotMatch(styles, /\.session-preview-toolbar\.in-titlebar \.session-preview-primary-tools/);
+  assert.equal((preview.match(/<WorkbenchLayoutContextMenu/g) || []).length, 3);
+  assert.equal((preview.match(/show-status-bar/g) || []).length, 3);
+  assert.equal((preview.match(/@update:status-bar-visible="sessionStatusBarVisible = \$event"/g) || []).length, 3);
+  assert.equal((preview.match(/@update:instance-sidebar-visible="\$emit\('update:instanceSidebarVisible', \$event\)"/g) || []).length, 3);
+  assert.match(preview, /sessions\.tabs\.moveRight[\s\S]*?<\/WorkbenchLayoutContextMenu>/);
+  assert.match(layoutMenu, /t\("sessions\.tabs\.showStatusBar"\)/);
+  assert.match(layoutMenu, /t\("sessions\.tabs\.showInstanceSidebar"\)/);
+  assert.match(layoutMenu, /\.instance-action-item\.workbench-layout-menu-check\s*\{[\s\S]*?position: relative;[\s\S]*?padding: 0 8px 0 30px;/);
+  assert.match(layoutMenu, /\.instance-action-item\.workbench-layout-menu-check > span:first-child\s*\{[\s\S]*?position: absolute;[\s\S]*?left: 8px;[\s\S]*?min-width: 14px;[\s\S]*?overflow: visible;/);
   assert.match(english, /showStatusBar: "Show bottom status bar"/);
   assert.match(english, /showInstanceSidebar: "Show instance sidebar"/);
   assert.match(chinese, /showStatusBar: "显示底部状态栏"/);
@@ -48,9 +48,9 @@ test("session tab bar menus control persisted workbench visibility preferences",
 });
 
 test("standalone session tab menus control the authoritative desktop window always-on-top state", async () => {
-  const [preview, styles, english, chinese] = await Promise.all([
+  const [preview, layoutMenu, english, chinese] = await Promise.all([
     source("apps/control-plane/instance-detail/SessionPreview.vue"),
-    source("apps/control-plane/instance-detail/SessionPreview.css"),
+    source("apps/control-plane/shared/WorkbenchLayoutContextMenu.vue"),
     source("i18n/locales/en-US/sessions.ts"),
     source("i18n/locales/zh-CN/sessions.ts"),
   ]);
@@ -58,10 +58,11 @@ test("standalone session tab menus control the authoritative desktop window alwa
   assert.match(preview, /windowAlwaysOnTopSupported = computed\(\(\) => Boolean\(props\.standalone/);
   assert.match(preview, /getWindowAlwaysOnTop\?\.\(\)[\s\S]*?windowAlwaysOnTop\.value = result\.alwaysOnTop/);
   assert.match(preview, /setWindowAlwaysOnTop\?\.\(enabled\)[\s\S]*?windowAlwaysOnTop\.value = result\.alwaysOnTop/);
-  assert.equal((preview.match(/t\("sessions\.tabs\.alwaysOnTop"\)/g) || []).length, 2);
-  assert.equal((preview.match(/class="instance-action-item session-window-menu-item"/g) || []).length, 2);
-  assert.match(preview, /:disabled="!sessionSplitAvailable && !windowAlwaysOnTopSupported"/);
-  assert.match(styles, /\.session-window-menu-item\s*\{[^}]*padding-left: 30px;/s);
+  assert.equal((preview.match(/:show-window-always-on-top="windowAlwaysOnTopSupported"/g) || []).length, 2);
+  assert.equal((preview.match(/@update:window-always-on-top="setWindowAlwaysOnTop"/g) || []).length, 2);
+  assert.match(preview, /:show-header-density="!standalone"/);
+  assert.match(layoutMenu, /t\("sessions\.tabs\.alwaysOnTop"\)/);
+  assert.match(layoutMenu, /\.instance-action-item\.workbench-layout-menu-check\s*\{[\s\S]*?padding: 0 8px 0 30px;/);
   assert.match(english, /alwaysOnTop: "Keep window on top"/);
   assert.match(chinese, /alwaysOnTop: "窗口置顶"/);
 });

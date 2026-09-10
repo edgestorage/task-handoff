@@ -281,6 +281,7 @@ export const instances = {
     noMatches: "No matching instances",
     empty: "No instances yet",
     allNodes: "All nodes",
+    selectedNodes: "{count} nodes selected",
     small: "Small",
     medium: "Medium",
     large: "Large",

@@ -20,6 +20,12 @@ function desktopWindowBackgroundColor(theme = "dark") {
   return theme === "light" ? "#eef3f4" : "#071013";
 }
 
+function mainWindowChromeMetrics(density = "normal") {
+  return density === "compact"
+    ? { height: 44, trafficLightPosition: { x: 16, y: 15 } }
+    : { height: 56, trafficLightPosition: { x: 16, y: 21 } };
+}
+
 function desktopTitleBarOptions({
   platform = process.platform,
   height,
@@ -48,10 +54,26 @@ function applyWindowsTitleBarTheme(targetWindow, nativeTheme, { height, theme })
   targetWindow.setTitleBarOverlay(windowsTitleBarOverlayOptions({ height, theme }));
 }
 
+function applyMainWindowChromeDensity(targetWindow, {
+  density,
+  platform = process.platform,
+  theme = "dark",
+} = {}) {
+  const metrics = mainWindowChromeMetrics(density);
+  if (platform === "darwin") {
+    targetWindow.setWindowButtonPosition(metrics.trafficLightPosition);
+  } else if (platform === "win32") {
+    targetWindow.setTitleBarOverlay(windowsTitleBarOverlayOptions({ height: metrics.height, theme }));
+  }
+  return metrics;
+}
+
 module.exports = {
+  applyMainWindowChromeDensity,
   applyWindowsTitleBarTheme,
   desktopTitleBarOptions,
   desktopWindowBackgroundColor,
   desktopWindowChromeMode,
+  mainWindowChromeMetrics,
   windowsTitleBarOverlayOptions,
 };

@@ -73,7 +73,7 @@ import type { ControlPlaneTriggerMutationFailure } from "@task-handoff/protocol/
 import type { RepositoryAiSessionGitSelection } from "@task-handoff/protocol/repository";
 import { StorySchema } from "@task-handoff/protocol/stories";
 import { AiSessionActionService } from "../sessions/ai-session-actions.ts";
-import type { RequestTimingDiagnostics } from "../../shared/http/server-timing.ts";
+import { clientRequestTraceId, type RequestTimingDiagnostics } from "../../shared/http/server-timing.ts";
 export { assertAiSessionRuntimePathSupport } from "../sessions/ai-session-actions.ts";
 import fs from "node:fs";
 import path from "node:path";
@@ -1560,10 +1560,21 @@ export class ControlPlaneService {
     cwdFolderId?: string;
     gitSelection?: RepositoryAiSessionGitSelection;
   }) {
-    const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
+    const measure = async <T>(stage: string, operation: () => Promise<T>): Promise<T> => {
+      const startedAt = performance.now();
+      let outcome = "failed";
+      try {
+        const result = await operation();
+        outcome = "completed";
+        return result;
+      } finally {
+        this.logInfo({ traceId: clientRequestTraceId(input.clientRequestId), clientRequestId: input.clientRequestId, instanceId, stage, outcome, durationMs: performance.now() - startedAt }, "ai-session.create.stage");
+      }
+    };
+    const instance = await measure("require-instance", () => this.requireControlledInstance(instanceId, true)) as ControlledInstance;
     if (input.storyId) {
       const node = this.requireNode(instance.nodeId);
-      const response = await this.resolveNodeAgentTransport(node).request(node, `/stories/${encodeURIComponent(input.storyId)}`);
+      const response = await measure("story-request", () => this.resolveNodeAgentTransport(node).request(node, `/stories/${encodeURIComponent(input.storyId)}`));
       const payload = await response.json().catch(() => ({})) as { data?: unknown; error?: { message?: string; code?: string } };
       if (!response.ok) throw Object.assign(new Error(payload.error?.message || "Story is unavailable."), { statusCode: response.status, code: payload.error?.code || "STORY_NOT_FOUND" });
       const story = StorySchema.parse(payload.data);
@@ -1571,13 +1582,13 @@ export class ControlPlaneService {
       if (story.archivedAt) throw Object.assign(new Error("Archived Story cannot create new Sessions."), { statusCode: 409, code: "STORY_ARCHIVED" });
     }
     const { cwdFolderId: _cwdFolderId, ...resolvedInput } = input;
-    const cwdPath = await this.aiSessionRuntimeCwd(instance, input.cwdFolderId);
+    const cwdPath = await measure("resolve-cwd", () => this.aiSessionRuntimeCwd(instance, input.cwdFolderId));
     const cwd = { type: "runtime-path" as const, path: cwdPath };
-    return this.aiSessionActionService.create(instanceId, {
+    return measure("instance-create", () => this.aiSessionActionService.create(instanceId, {
       ...resolvedInput,
       cwd,
       ...(input.cwdFolderId ? { cwdFolderId: input.cwdFolderId } : {}),
-    });
+    }, (timing) => this.logInfo({ ...timing, clientRequestId: input.clientRequestId, instanceId }, "ai-session.create.transport")));
   }
 
   async inspectAiSessionWorkspace(instanceId: string, cwdFolderId?: string) {

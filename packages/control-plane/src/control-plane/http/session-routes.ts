@@ -11,7 +11,7 @@ import type { ControlPlaneAppSessionAggregator } from "../sessions/app-session-a
 import type { AiSessionAttachmentStore } from "../sessions/ai-session-attachments.ts";
 import type { AiSessionAttachmentCache } from "../sessions/ai-session-attachment-cache.ts";
 import type { AiSessionUnreadStore } from "../sessions/ai-session-unread-store.ts";
-import { appendServerTiming, serverTimingDuration, traceId as normalizedTraceId, TRACE_ID_HEADER, type RequestTimingDiagnostics } from "../../shared/http/server-timing.ts";
+import { appendServerTiming, clientRequestTraceId, serverTimingDuration, traceId as normalizedTraceId, TRACE_ID_HEADER, type RequestTimingDiagnostics } from "../../shared/http/server-timing.ts";
 import {
   IdParamsSchema,
   InstanceSessionParamsSchema,
@@ -411,7 +411,8 @@ export function registerSessionRoutes({
     const query = AiSessionWorkspaceQuerySchema.parse(request.query || {});
     return { data: await service.inspectAiSessionWorkspace(params.id, query.cwdFolderId) };
   });
-  app.post("/api/controlled-instances/:id/ai-sessions", async (request) => {
+  app.post("/api/controlled-instances/:id/ai-sessions", async (request, reply) => {
+    const startedAt = performance.now();
     const params = IdParamsSchema.parse(request.params);
     const parsed = AiSessionCreateRefInputSchema.parse(request.body || {});
     const legacyRefs = parsed.attachments.filter((attachment) => attachment.source.type !== "upload-ref" || !attachment.id.startsWith("cia_"));
@@ -420,7 +421,11 @@ export function registerSessionRoutes({
     const attachments = parsed.attachments.map((attachment) => attachment.source.type === "upload-ref" && attachment.id.startsWith("cia_")
       ? attachment
       : resolvedById.get(attachment.id)!).filter(Boolean);
-    const result = await service.createAiSession(params.id, { ...parsed, attachments });
+    reply.header(TRACE_ID_HEADER, clientRequestTraceId(parsed.clientRequestId));
+    const result = await service.createAiSession(params.id, { ...parsed, attachments }).catch((error: unknown) => {
+      request.log.info({ traceId: clientRequestTraceId(parsed.clientRequestId), clientRequestId: parsed.clientRequestId, instanceId: params.id, outcome: "failed", durationMs: performance.now() - startedAt }, "ai-session.create.request");
+      throw error;
+    });
     const attachmentIds = new Set(parsed.attachments.filter((attachment) => attachment.source.type === "upload-ref" && attachment.id.startsWith("cia_")).map((attachment) => attachment.id));
     if (attachmentIds.size) {
       const retainedDays = (await service.requireControlledInstance(params.id, true)).config.aiSessionAttachmentRetentionDays ?? 30;
@@ -445,6 +450,9 @@ export function registerSessionRoutes({
       }).catch(() => undefined);
     }
     events.publish("instance.ai-session.created", { instanceId: params.id, sessionId: result.aiSessionId, providerSessionId: result.providerSessionId, clientRequestId: parsed.clientRequestId });
+    const durationMs = performance.now() - startedAt;
+    reply.header("server-timing", serverTimingDuration("control_plane_create", durationMs));
+    request.log.info({ traceId: clientRequestTraceId(parsed.clientRequestId), clientRequestId: parsed.clientRequestId, instanceId: params.id, sessionId: result.aiSessionId, providerSessionId: result.providerSessionId, outcome: "completed", durationMs }, "ai-session.create.request");
     return { data: result };
   });
   app.post("/api/controlled-instances/:id/ai-sessions/:sessionId/open-app", async (request) => {

@@ -83,6 +83,41 @@ test("AI session create coordinator deduplicates a request through its first pro
   assert.equal(creates, 1);
 });
 
+test("AI session creation timings correlate stages without logging prompt or credentials", async () => {
+  const { registry, controller } = runtime();
+  const timings = [];
+  controller.register({
+    agent: "codex",
+    async createSession({ cwd }) { return { providerSessionId: "thread-timed", cwd, creationSource: "ai-session" }; },
+    async startMessage(session) { return { session, provider: "codex", action: "send" }; },
+    async interrupt(session) { return { session, provider: "codex", action: "interrupt" }; },
+  });
+  const coordinator = new AiSessionCreateCoordinator({ registry, controller, onTiming: (timing) => timings.push(timing) });
+  const input = { agent: "codex", cwd: "/workspace/private", message: "private prompt", clientRequestId: "timed-create" };
+  const created = await coordinator.create(input);
+  assert.equal(created.disposition, "created");
+  assert.deepEqual(timings.map((entry) => entry.stage), ["ensure-provider", "provider-create", "first-turn", "persist-operation", "total"]);
+  assert.ok(timings.every((entry) => entry.clientRequestId === input.clientRequestId && entry.outcome === "completed" && Number.isFinite(entry.durationMs) && entry.durationMs >= 0));
+  assert.doesNotMatch(JSON.stringify(timings), /private/);
+  const count = timings.length;
+  assert.equal((await coordinator.create(input)).disposition, "already-created");
+  assert.equal(timings.length, count);
+});
+
+test("creation timing records failures and a broken timing sink cannot replace the original error", async () => {
+  const { registry, controller } = runtime();
+  const timings = [];
+  const failure = new Error("provider unavailable");
+  const coordinator = new AiSessionCreateCoordinator({
+    registry,
+    controller,
+    ensureProvider: () => { throw failure; },
+    onTiming: (timing) => { timings.push(timing); throw new Error("logger unavailable"); },
+  });
+  await assert.rejects(coordinator.create({ agent: "codex", cwd: "/workspace", message: "test", clientRequestId: "timed-failure" }), (error) => error === failure);
+  assert.deepEqual(timings.map((entry) => [entry.stage, entry.outcome]), [["ensure-provider", "failed"], ["total", "failed"]]);
+});
+
 test("AI session create coordinator restores committed request identity after restart", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "ai-session-create-store-"));
   const operationStorePath = path.join(root, "operations.json");
@@ -792,6 +827,27 @@ test("Codex bridge creates a persistent Direct thread on the shared client", asy
     reasoningEffort: "medium",
   });
   assert.equal(registry.getByProviderSessionId("codex", "thread-bridge").creationSource, "ai-session");
+});
+
+test("Codex bridge readiness does not run full thread discovery before Direct creation", async () => {
+  const { registry } = runtime();
+  const calls = [];
+  class FakeClient extends EventEmitter {
+    async start() { calls.push("connect"); }
+    stop() {}
+    async listLoadedThreadIds() { calls.push("list-loaded"); return []; }
+    async listThreads() { calls.push("list-threads"); return []; }
+    async startThread(options) {
+      calls.push("start-thread");
+      return { id: "thread-ready", cwd: options.cwd, ephemeral: false, status: { type: "idle" }, turns: [] };
+    }
+  }
+  const bridge = new CodexAppServerSessionBridge(registry, new FakeClient());
+
+  await bridge.ensureReady();
+  await bridge.createSession({ cwd: "/workspace/project" });
+
+  assert.deepEqual(calls, ["connect", "start-thread"]);
 });
 
 test("Codex send self-heals a missing shared app-server provider", async () => {

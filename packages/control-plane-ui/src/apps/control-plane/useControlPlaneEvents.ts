@@ -25,6 +25,7 @@ import { controlPlaneQueryKeys } from "../../api/queryKeys.ts";
 import { getControlledInstanceTriggers } from "../../api/queries.ts";
 import { controlPlaneDomainQueryKeys, type ControlPlaneQueryDomain } from "../../api/queryInvalidation.ts";
 import { createAuthoritativeQueryRecovery } from "./authoritativeQueryRecovery.ts";
+import { recordAiSessionRead } from "./aiSessionReadDiagnostics.ts";
 import { applyInstanceLifecycle, applyNodeFleetState, applyNodeStateProjection } from "./instanceLifecycleCache.ts";
 import { removeInstanceTriggerBinding, replaceInstanceTriggerSnapshot, upsertInstanceTriggerBinding } from "./instanceTriggerCache.ts";
 import { controlPlaneEventDomains } from "./eventInvalidation.ts";
@@ -284,7 +285,15 @@ export function useControlPlaneEvents(input: {
       return input.aiSessions.applyUnreadEvent(state.data);
     }
     if (event.type === AiSessionEventType.Snapshot || event.type === AiSessionEventType.Patch || event.type === AiSessionEventType.Removed) {
-      return input.aiSessions.applyEvent({ type: event.type, payload: event.payload } as AiSessionDeltaResponse["events"][number]);
+      const sessionEvent = { type: event.type, payload: event.payload } as AiSessionDeltaResponse["events"][number];
+      const accepted = input.aiSessions.applyEvent(sessionEvent);
+      const meta = sessionEvent.payload?.meta;
+      recordAiSessionRead("authority.event", {
+        eventId: event.id, eventType: event.type, instanceId: meta?.instanceId,
+        streamId: meta?.streamId, revision: meta?.revision, previousRevision: meta?.previousRevision,
+        traceId: meta?.traceId, accepted,
+      });
+      return accepted;
     }
     if (event.type === AppSessionEventType.Snapshot || event.type === AppSessionEventType.Patch || event.type === AppSessionEventType.Removed) {
       return input.appSessions.applyEvent({ type: event.type, payload: event.payload } as AppSessionDeltaResponse["events"][number]);

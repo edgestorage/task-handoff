@@ -2,6 +2,7 @@ import type { CodexAppServerClientLike } from "../client/contract";
 import type { CodexThread } from "../protocol/types";
 
 type SessionDiscoveryOptions = {
+  applyThreadListEntry: (thread: CodexThread) => void;
   applyThreadSnapshot: (thread: CodexThread) => void;
   ensureThreadSubscribed: (client: CodexAppServerClientLike, threadId: string) => Promise<CodexThread | undefined>;
   reconcileLoadedThreadIds?: (client: CodexAppServerClientLike, loadedThreadIds: readonly string[]) => void;
@@ -23,7 +24,9 @@ export class CodexAppServerSessionDiscovery {
           const id = typeof thread.id === "string" ? thread.id : undefined;
           if (id) {
             threadsById.set(id, thread);
-            this.options.applyThreadSnapshot(thread);
+            // Codex thread/list always returns turns=[]; it is a discovery
+            // summary, not an authoritative empty conversation snapshot.
+            this.options.applyThreadListEntry(thread);
           }
         }
       } catch {

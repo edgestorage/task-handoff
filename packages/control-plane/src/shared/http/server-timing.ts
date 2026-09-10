@@ -1,4 +1,10 @@
+import { createHash } from "node:crypto";
+
 export const TRACE_ID_HEADER = "x-task-handoff-trace-id";
+
+export function clientRequestTraceId(clientRequestId: string) {
+  return traceId(clientRequestId, createHash("sha256").update(clientRequestId).digest("hex"));
+}
 
 export type RequestTimingDiagnostics = {
   traceId?: string;

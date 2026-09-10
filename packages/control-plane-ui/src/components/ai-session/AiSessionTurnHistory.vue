@@ -1,5 +1,5 @@
 <template>
-  <button v-if="error && !nodes.length" type="button" class="ai-session-turn-history-status ai-session-turn-history-retry" @click="$emit('retry')">
+  <button v-if="error && !nodes.length" type="button" class="ai-session-turn-history-status ai-session-turn-history-retry" @click="retryHistory">
     <ChevronRight :size="15" />
     <span>{{ elapsedLabel }} · {{ t("sessions.timeline.loadFailed") }}</span>
   </button>
@@ -7,8 +7,9 @@
     v-else-if="nodes.length || loadable || loading"
     class="ai-session-turn-history"
   >
-    <button type="button" class="ai-session-turn-history-summary" :aria-expanded="historyOpen" @click="toggleHistory">
-      <ChevronRight :size="15" />
+    <button type="button" class="ai-session-turn-history-summary" :aria-expanded="historyRevealed" :aria-busy="historyOpen && (loading || loadable)" @click="toggleHistory">
+      <LoaderCircle v-if="historyOpen && (loading || loadable)" class="ai-session-turn-history-loading-icon" :size="15" :aria-label="t('sessions.timeline.loading')" />
+      <ChevronRight v-else :size="15" />
       <span>{{ elapsedLabel }}</span>
     </button>
     <Transition
@@ -22,12 +23,8 @@
       @after-leave="finishDisclosureLeave"
       @leave-cancelled="cancelDisclosureTransition"
     >
-      <div v-if="historyOpen" class="ai-session-turn-history-disclosure">
+      <div v-if="historyRevealed" class="ai-session-turn-history-disclosure">
         <div class="ai-session-turn-history-content">
-          <div v-if="loading && !nodes.length" class="ai-session-turn-history-status" aria-busy="true">
-            <LoaderCircle class="ai-session-turn-history-loading-icon" :size="15" aria-hidden="true" />
-            <span>{{ t("sessions.timeline.loading") }}</span>
-          </div>
           <template v-for="node in nodes" :key="node.id">
             <article
               v-if="node.type === 'message'"
@@ -79,13 +76,27 @@ const emit = defineEmits<{ load: []; retry: [] }>();
 const { t } = useI18n();
 const now = ref(Date.now());
 const historyOpen = ref(false);
+const historyRevealed = ref(false);
 let elapsedTimer: ReturnType<typeof setInterval> | undefined;
 
 function toggleHistory(event: MouseEvent) {
-  beginDisclosureTransition(event.currentTarget as Element);
+  if (historyRevealed.value) beginDisclosureTransition(event.currentTarget as Element);
   historyOpen.value = !historyOpen.value;
-  if (historyOpen.value && props.loadable) emit("load");
 }
+
+function retryHistory() {
+  historyOpen.value = true;
+  emit("retry");
+}
+
+watch(() => historyOpen.value && props.loadable, (load) => {
+  if (load) emit("load");
+});
+
+watch(() => [historyOpen.value, props.loading, props.loadable, props.nodes.length] as const, ([open, loading, loadable, count]) => {
+  if (!open) historyRevealed.value = false;
+  else if (!loading && !loadable && count > 0) historyRevealed.value = true;
+});
 
 function syncElapsedTimer() {
   clearInterval(elapsedTimer);

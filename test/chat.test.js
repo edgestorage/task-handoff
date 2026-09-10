@@ -3007,6 +3007,7 @@ test("ai session registry only treats transcript scans as active when file size 
 test("codex app server discovery continues when optional thread-list enrichment fails", async () => {
   const applied = [];
   const discovery = new CodexAppServerSessionDiscovery({
+    applyThreadListEntry: (thread) => applied.push(thread),
     applyThreadSnapshot: (thread) => applied.push(thread),
     ensureThreadSubscribed: async () => undefined,
   });
@@ -3021,6 +3022,77 @@ test("codex app server discovery continues when optional thread-list enrichment 
   await discovery.sync(client);
 
   assert.deepEqual(applied, [{ id: "thread_loaded", name: "Loaded thread" }]);
+});
+
+test("codex thread-list summaries preserve authoritative conversation activity before thread reads complete", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-list-summary-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const existing = registry.applyAdapterSnapshot({
+    agent: "codex",
+    providerSessionId: "thread_existing",
+    cwd: "/workspace",
+    turns: [
+      {
+        id: "turn_first",
+        userPrompt: "first prompt",
+        status: "completed",
+        revision: 0,
+        startedAt: "2026-09-09T11:09:35.000Z",
+        updatedAt: "2026-09-09T11:10:00.000Z",
+      },
+      {
+        id: "turn_latest",
+        userPrompt: "latest prompt",
+        status: "completed",
+        revision: 0,
+        startedAt: "2026-09-09T17:48:38.000Z",
+        updatedAt: "2026-09-09T17:49:00.000Z",
+      },
+    ],
+    status: "idle",
+    phase: "unknown",
+    replaceActivity: true,
+    observedAt: "2026-09-09T17:49:00.000Z",
+  });
+  const client = Object.assign(new EventEmitter(), {
+    async start() {},
+    stop() {},
+    async listLoadedThreadIds() { return ["thread_existing"]; },
+    async listThreads() {
+      return [
+        { id: "thread_existing", cwd: "/workspace", name: "Existing", status: { type: "idle" }, turns: [] },
+        { id: "thread_child", parentThreadId: "thread_existing", cwd: "/workspace", name: "Child", status: { type: "idle" }, turns: [] },
+      ];
+    },
+    async readThread(threadId) {
+      assert.equal(registry.snapshot().sessions.find((session) => session.id === existing.id)?.lastUserMessageAt, "2026-09-09T17:48:38.000Z");
+      assert.deepEqual(registry.getByProviderSessionId("codex", "thread_child")?.lineage, {
+        kind: "subagent",
+        parentProviderSessionId: "thread_existing",
+      });
+      return {
+        id: threadId,
+        cwd: "/workspace",
+        name: "Existing",
+        status: { type: "idle" },
+        turns: [
+          {
+            id: "turn_latest",
+            status: "completed",
+            startedAt: Date.parse("2026-09-09T17:48:38.000Z") / 1000,
+            items: [{ type: "userMessage", content: [{ type: "text", text: "latest prompt" }] }],
+          },
+        ],
+      };
+    },
+  });
+
+  await new CodexAppServerSessionBridge(registry, client).sync();
+
+  const session = registry.get(existing.id);
+  assert.equal(session.turns.at(-1).id, "turn_latest");
+  assert.equal(session.turns.at(-1).userPrompt, "latest prompt");
+  assert.equal(registry.snapshot().sessions.find((entry) => entry.id === existing.id)?.lastUserMessageAt, "2026-09-09T17:48:38.000Z");
 });
 
 test("codex app server bridge does not persist discovered threads without an AI or App owner", async () => {

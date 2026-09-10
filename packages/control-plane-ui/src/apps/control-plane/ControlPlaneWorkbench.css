@@ -8,12 +8,16 @@
 
 .control-plane-shell {
   --control-plane-viewport-height: 100vh;
-  --control-plane-titlebar-height: 56px;
+  --control-plane-titlebar-height: 44px;
   position: relative;
   height: var(--control-plane-viewport-height);
   overflow: hidden;
   background: var(--workspace-bg);
   color: var(--text);
+}
+
+.control-plane-shell[data-header-density="normal"] {
+  --control-plane-titlebar-height: 56px;
 }
 
 .workbench-loading-overlay {
@@ -169,10 +173,6 @@
 .standalone-instance-detail .control-plane-instance-switcher[data-state="open"] {
   --instance-switcher-fade-color: color-mix(in srgb, hsl(var(--accent)) 70%, var(--surface));
   background: var(--instance-switcher-fade-color);
-}
-
-.standalone-instance-detail .control-plane-instance-switcher:focus-visible {
-  outline: none;
 }
 
 .standalone-instance-detail .control-plane-instance-switcher::after {
@@ -335,6 +335,7 @@
 .control-plane-instance-switcher {
   -webkit-app-region: no-drag;
   display: block;
+  height: 27px;
   max-width: min(360px, 38vw);
   border: 0;
   border-radius: 6px;
@@ -344,6 +345,43 @@
   font: inherit;
   padding: 3px 6px;
   text-align: left;
+}
+
+.control-plane-shell:not(.standalone-instance-detail)[data-header-density="compact"] .control-plane-title strong {
+  font-size: 15px;
+}
+
+.control-plane-shell:not(.standalone-instance-detail)[data-header-density="compact"] .control-plane-instance-switcher {
+  min-width: 0;
+}
+
+.control-plane-shell:not(.standalone-instance-detail)[data-header-density="compact"] .control-plane-title {
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+}
+
+.control-plane-shell:not(.standalone-instance-detail)[data-header-density="compact"] .control-plane-kicker {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 0;
+}
+
+.control-plane-shell:not(.standalone-instance-detail)[data-header-density="compact"] .control-plane-kicker::after {
+  content: "";
+  width: 1px;
+  height: 12px;
+  flex: 0 0 auto;
+  background: color-mix(in srgb, var(--line-strong) 72%, transparent);
+  margin: 0 3px 0 8px;
+}
+
+.control-plane-shell:not(.standalone-instance-detail)[data-header-density="compact"] .control-plane-instance-switcher-title > strong {
+  flex: 0 1 auto;
 }
 
 .control-plane-instance-switcher-shell > .control-plane-kicker {
@@ -360,8 +398,8 @@
 }
 
 .control-plane-instance-switcher:focus-visible {
-  outline: 2px solid hsl(var(--ring));
-  outline-offset: 2px;
+  outline: 1px solid hsl(var(--ring) / 0.5);
+  outline-offset: -1px;
 }
 
 .control-plane-instance-switcher-title {
@@ -541,13 +579,40 @@
 
 :global(.control-plane-story-node-menu .control-plane-story-node-menu-item) {
   display: grid;
-  grid-template-columns: 8px minmax(0, 1fr) 16px;
-  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) 16px;
+  gap: 4px;
   min-height: 32px;
   align-items: center;
   border-radius: 7px;
-  padding: 4px 9px;
+  padding: 0 9px 0 0;
   cursor: pointer;
+}
+
+:global(.control-plane-story-node-menu .control-plane-story-node-menu-all) {
+  grid-template-columns: 8px minmax(0, 1fr) 16px;
+  gap: 8px;
+  padding: 4px 9px;
+}
+
+:global(.control-plane-story-node-menu-main) {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr);
+  gap: 8px;
+  min-width: 0;
+  height: 32px;
+  align-items: center;
+  border: 0;
+  padding: 4px 5px 4px 9px;
+  color: inherit;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+:global(.control-plane-story-node-menu-item:not(.selected):hover),
+:global(.control-plane-story-node-menu-item:not(.selected):focus-within) {
+  background: hsl(var(--accent));
+  color: hsl(var(--accent-foreground));
 }
 
 :global(.control-plane-story-node-menu-item.selected) {
@@ -579,6 +644,11 @@
 :global(.control-plane-story-node-menu-check) {
   color: hsl(var(--primary));
   margin-top: 0;
+}
+
+:global(.control-plane-story-node-menu-checkbox) {
+  box-shadow: none;
+  cursor: pointer;
 }
 
 .control-plane-actions {
@@ -805,6 +875,10 @@
 }
 
 @media (max-width: 520px) {
+  .control-plane-shell:not(.standalone-instance-detail)[data-header-density="compact"] .control-plane-kicker {
+    display: none;
+  }
+
   .workbench-view-switcher {
     width: 120px;
   }

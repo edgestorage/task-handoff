@@ -14,10 +14,7 @@ test("instance title appends the authoritative node name as muted metadata", () 
   assert.match(workbench, /ref="instanceSwitcherElement"[\s\S]*?:data-overflow="instanceSwitcherOverflow \? 'true' : undefined"/);
   assert.match(workbench, /ref="instanceSwitcherTitleElement" class="control-plane-instance-switcher-title"/);
   assert.match(workbench, /<span v-if="standaloneMode" class="control-plane-instance-switcher-icon" aria-hidden="true">\s*<Laptop v-if="topbarRuntimeType === 'local'" :size="14" \/>\s*<Container v-else-if="topbarRuntimeType === 'docker'" :size="14" \/>\s*<Boxes v-else :size="14" \/>/);
-  assert.match(workbench, /@pointerdown\.capture="startInstanceSwitcherPointer"[\s\S]*@pointermove="moveInstanceSwitcherPointer"[\s\S]*@pointerup="finishInstanceSwitcherPointer"[\s\S]*@click\.capture="consumeInstanceSwitcherClick"/);
-  assert.match(workbench, /Math\.hypot\(event\.screenX - pointer\.startScreenX, event\.screenY - pointer\.startScreenY\) < 5/);
-  assert.match(workbench, /if \(!pointer\.moved\) instanceSwitcherOpen\.value = true/);
-  assert.match(workbench, /function consumeInstanceSwitcherClick\(event: MouseEvent\)[\s\S]*event\.preventDefault\(\);[\s\S]*event\.stopImmediatePropagation\(\);/);
+  assert.doesNotMatch(workbench, /startInstanceSwitcherPointer|moveInstanceSwitcherPointer|finishInstanceSwitcherPointer|cancelInstanceSwitcherPointer|consumeInstanceSwitcherClick|windowDrag/);
   assert.match(workbench, /<small v-if="topbarNodeName" class="control-plane-instance-node-name" :title="topbarNodeName">· \{\{ topbarNodeName \}\}<\/small>/);
   assert.match(workbench, /const topbarRuntimeType = computed\(\(\) => \{[\s\S]*?activeInstance\.value\?\.id === standaloneInstanceId\.value[\s\S]*?standaloneDirectoryInstance\.value\?\.runtime\.type;/);
   assert.match(workbench, /<ChevronDown class="control-plane-instance-switcher-chevron"/);
@@ -27,12 +24,14 @@ test("instance title appends the authoritative node name as muted metadata", () 
   assert.match(workbench, /v-else-if="showNativeWindowControlSpace"[\s\S]*?macos-native-window-control-space[\s\S]*?<div v-if="settingsMode"/);
   assert.match(workbench, /v-else-if="showWindowsNativeWindowControlSpace"[\s\S]*?windows-native-window-control-space/);
   assert.match(styles, /\.control-plane-instance-switcher-shell > \.control-plane-kicker \{[\s\S]*?padding: 0 6px;/);
-  assert.match(styles, /\.control-plane-shell \{[\s\S]*?--control-plane-titlebar-height: 56px;/);
+  assert.match(styles, /\.control-plane-shell \{[\s\S]*?--control-plane-titlebar-height: 44px;/);
+  assert.match(styles, /\.control-plane-shell\[data-header-density="normal"\] \{\s*--control-plane-titlebar-height: 56px;/);
   assert.match(styles, /\.control-plane-shell\.standalone-instance-detail \{\s*--control-plane-titlebar-height: 42px;/);
   assert.match(styles, /\.control-plane-shell\.standalone-instance-detail \.control-plane-topbar \{\s*padding-right: 0;/);
   assert.match(styles, /\.standalone-instance-detail \.control-plane-instance-switcher-shell \{[\s\S]*?display: flex;[\s\S]*?max-width: min\(200px, 28vw\);[\s\S]*?min-width: 100px;[\s\S]*?align-items: center;[\s\S]*?overflow: hidden;/);
   assert.match(styles, /\.standalone-instance-detail \.control-plane-instance-switcher \{[\s\S]*?--instance-switcher-fade-color: var\(--titlebar-overflow-fade\);[\s\S]*?position: relative;[\s\S]*?width: 100%;[\s\S]*?height: 30px;[\s\S]*?max-width: 100%;[\s\S]*?overflow: hidden;/);
-  assert.match(styles, /\.standalone-instance-detail \.control-plane-instance-switcher:focus-visible \{\s*outline: none;/);
+  assert.match(styles, /\.control-plane-instance-switcher:focus-visible \{\s*outline: 1px solid hsl\(var\(--ring\) \/ 0\.5\);\s*outline-offset: -1px;/);
+  assert.doesNotMatch(styles, /\.standalone-instance-detail \.control-plane-instance-switcher:focus-visible \{\s*outline: none;/);
   assert.match(sessionPreviewStyles, /\.session-preview-toolbar\.in-titlebar \.session-tab-strip-frame::after \{[\s\S]*?background: linear-gradient\(270deg, var\(--titlebar-overflow-fade\), transparent\);/);
   assert.match(styles, /\.standalone-instance-detail \.control-plane-instance-switcher-title > strong \{[\s\S]*?overflow: visible;[\s\S]*?color: var\(--text-muted\);[\s\S]*?font-size: 14px;[\s\S]*?text-overflow: clip;/);
   assert.match(styles, /\.standalone-instance-detail \.control-plane-instance-switcher::after \{[\s\S]*?width: 14px;[\s\S]*?opacity: 0;[\s\S]*?background: linear-gradient\(to right, transparent, var\(--instance-switcher-fade-color\) 72%\);/);

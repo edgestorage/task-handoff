@@ -20,24 +20,25 @@ test("workbench navigation orders Story before Board and AI", () => {
 });
 
 test("story mode replaces the instance switcher with a node filter", () => {
-  assert.match(workbench, /const storyNodeFilter = ref\(""\);/);
+  assert.match(workbench, /const storyNodeFilter = ref<StoryNodeFilter>\(allStoryNodes\(\)\);/);
   assert.match(workbench, /const storyNodeFilterOpen = ref\(false\);/);
   assert.match(workbench, /const storyNodeFilterOptions = computed\(\(\) => nodes\.data\.value \|\| \[\]\);/);
-  assert.match(workbench, /function selectStoryNodeFilter\(nodeId: string\) \{[\s\S]*storyNodeFilter\.value = nodeId;/);
+  assert.match(workbench, /function selectStoryNodeFilter\(nodeId: string, event: MouseEvent\) \{[\s\S]*storyNodeFilter\.value = selectOnlyStoryNode\(nodeId\);/);
+  assert.match(workbench, /function toggleStoryNodeFilter\(nodeId: string, checked: boolean\)/);
   assert.match(workbench, /<div v-else-if="storyMode && !standaloneMode" class="control-plane-title control-plane-instance-switcher-shell">/);
   assert.match(workbench, /t\("instances\.board\.allNodes"\)/);
-  assert.match(workbench, /:filter-node-id="storyNodeFilter"/);
-  assert.match(workbench, /@select="selectStoryNodeFilter\(''\)"/);
-  assert.match(workbench, /@select="selectStoryNodeFilter\(node\.id\)"/);
+  assert.match(workbench, /:node-filter="storyNodeFilter"/);
+  assert.match(workbench, /@select="selectAllStoryNodes"/);
+  assert.match(workbench, /@click="selectStoryNodeFilter\(node\.id, \$event\)"/);
+  assert.match(workbench, /@update:model-value="toggleStoryNodeFilter\(node\.id, \$event === true\)"/);
   assert.match(workbench, /class="control-plane-story-node-menu"/);
   assert.match(workbench, /'--story-node-menu-height': `\$\{Math\.max\(storyNodeFilterOptions\.length \+ 1, 1\) \* 33 \+ 2\}px`/);
   assert.match(workbenchStyles, /control-plane-story-node-menu-item[\s\S]*min-height: 32px/);
 });
 
 test("story list filters by the selected owner node", () => {
-  assert.match(storyView, /filterNodeId\?: string/);
-  assert.match(storyView, /const nodeId = props\.filterNodeId\?\.trim\(\);/);
-  assert.match(storyView, /return nodeId \? allStories\.value\.filter\(\(story\) => story\.ownerNodeId === nodeId\) : allStories\.value;/);
+  assert.match(storyView, /nodeFilter\?: StoryNodeFilter/);
+  assert.match(storyView, /allStories\.value\.filter\(\(story\) => storyNodeIsVisible\(props\.nodeFilter, story\.ownerNodeId\)\)/);
   assert.match(storyView, /const stories = computed\(\(\) => sortStories\(filteredStories\.value, storySortMode\.value, storySortOptions\.value\)\);/);
 });
 
@@ -60,7 +61,7 @@ test("Story list options combine view and sort controls while manual mode drags 
 
 test("story selection follows the node-filtered list", () => {
   assert.match(storyView, /watch\(stories, \(value\) => \{[\s\S]*const present = value\.some\(\(story\) => story\.id === resource\.story\.id && story\.ownerNodeId === resource\.story\.ownerNodeId\);[\s\S]*if \(!present\) selectedResource\.value = value\[0\] \? \{ kind: "story", story: value\[0\] \} : undefined;/);
-  assert.match(storyView, /const filterNodeId = props\.filterNodeId\?\.trim\(\);/);
+  assert.match(storyView, /const filteredOnlineNode = props\.nodes\.find/);
 });
 
 test("selecting a Story detail does not expand its tree", () => {
