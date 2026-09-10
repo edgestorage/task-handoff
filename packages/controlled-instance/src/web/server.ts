@@ -1422,6 +1422,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     // Preserve the registry for discovery/recovery after restart; explicit App
     // exits and Close AI Session remain responsible for provider archival.
     serviceClosing = true;
+    appRuntime.beginDrain();
     codexAppServer.stop();
     openCode.close();
     aiSessionMessageDeltas.close("service-close");

@@ -83,7 +83,7 @@ test("history reuses path grouping and opens stored turn details without resumin
   assert.match(panel, /t\("sessions\.panel\.groupByPath"\)/);
   assert.match(panel, /v-for="group in displayedHistoryGroups"/);
   assert.match(panel, /collapsedHistoryPathGroups\[group\.key\]/);
-  assert.match(panel, /groupAiSessionHistoryByPath\(historyItems\.value\)/);
+  assert.match(panel, /groupAiSessionHistoryByPath\(displayedHistoryEntries\.value\)/);
   assert.match(panel, /@click="selectHistoryItem\(item\)"/);
   assert.match(panel, /const detail = await getAiSessionHistoryDetail\(props\.instance\.id, item\.id\);/);
   assert.match(panel, /<AiSessionTimelineView[\s\S]*:stored-turns="historyDetail\.turns"/);
@@ -96,7 +96,8 @@ test("history reuses path grouping and opens stored turn details without resumin
   assert.match(panel, /async function continueHistoryConversation\(\) \{[\s\S]*resumeHistorySession\(item\)[\s\S]*emit\("selectAiSession", props\.instance\.id, session\.id\);[\s\S]*await leaveHistoryMode\(\);/);
   assert.doesNotMatch(panel, /session-ai-history-detail-head/);
   assert.match(timeline, /sourceTurns = computed\(\(\) => props\.session\?\.turns \|\| props\.storedTurns\)/);
-  assert.match(timeline, /function loadVisibleTurnTimelines\(\)[\s\S]*if \(!props\.session \|\| !viewport \|\| !timeline\) return;/);
+  assert.doesNotMatch(timeline, /function loadVisibleTurnTimelines\(/);
+  assert.match(timeline, /@load-activity-history="\$emit\('loadTurnTimeline', turns\[virtualTurn\.index\]\.id\)"/);
   assert.doesNotMatch(panel, /<small>你<\/small>/);
   assert.match(panel, /t\("sessions\.panel\.selectHistory"\)/);
   assert.doesNotMatch(panel, /selectHistoryItem[\s\S]{0,500}resumeAiSession/);

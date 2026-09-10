@@ -92,8 +92,8 @@ test("conversation detail renders retained image and file metadata without a UI 
   assert.match(attachments, /\.ai-session-compact-image-tooltip\) \{[^}]*padding: 0;/);
   assert.match(attachments, /<TooltipProvider v-if="compact" :delay-duration="200">/);
   assert.match(attachments, /<AiSessionImagePreview/);
-  assert.match(panel, /:user-messages="selectedPromptUserMessages"/);
-  assert.match(panel, /"userMessages" in turn && Array\.isArray\(turn\.userMessages\)/);
+  assert.match(panel, /:user-messages="selectedPromptSnapshot\.userMessages"/);
+  assert.match(panel, /"userMessages" in turn\s*&& Array\.isArray\(turn\.userMessages\)/);
   assert.match(floatingDock, /:user-messages="promptUserMessages"/);
   assert.match(floatingDock, /function retainedPromptUserMessages[\s\S]*"userMessages" in turn && Array\.isArray\(turn\.userMessages\)/);
   assert.match(projection, /getAiSessionDetail/);

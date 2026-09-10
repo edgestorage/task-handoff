@@ -99,7 +99,8 @@ test("Story AI sessions derive cross-instance trees and sort by each root's own 
   assert.match(storyView, /\.story-session-semantic,\.story-session-disclosure \{ position:absolute; top:50%; left:50%; transform:translate\(-50%,-50%\);/);
   assert.equal((storyView.match(/class="story-session-chevron"/g) || []).length, 2);
   assert.match(storyView, /\.story-session-chevron\.expanded \{ transform:rotate\(90deg\); \}/);
-  assert.equal((storyView.match(/<TransitionGroup name="story-session-tree"/g) || []).length, 2);
+  assert.equal((storyView.match(/<TransitionGroup name="story-session-tree"/g) || []).length, 1);
+  assert.match(storyView, /<div class="story-session-resource-list">[\s\S]*v-for="entry in pagedStoryCurrentSessions"/);
   assert.match(storyView, /\.story-session-tree-enter-from,\.story-session-tree-leave-to \{ max-height:0; padding-block:0; opacity:0; transform:translateY\(-4px\); \}/);
   assert.match(storyView, /\.story-session-disclosure:focus-visible \{[^}]*opacity:1;/s);
   assert.match(storyView, /@media \(hover:none\)[\s\S]*\.story-session-disclosure \{ opacity:1; \}/);

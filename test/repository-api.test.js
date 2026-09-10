@@ -138,7 +138,7 @@ test("repository API exposes Files, Changes, diff, and authoritative mutation re
   const paths = pathsFor(dataRoot);
   const restore = setEnvironment(paths, fixture.base);
   const aiSessions = createAiSessionRegistry({ dir: path.join(dataRoot, "ai-sessions") });
-  const ai = aiSessions.start({ agent: "codex", cwd: fixture.root, status: "running" });
+  const ai = aiSessions.start({ agent: "codex", creationSource: "ai-session", cwd: fixture.root, status: "running" });
   const app = await createWebApp({ staticDir: path.join(dataRoot, "missing-static"), logger: false, appRuntime: new AppRuntimeManager(paths), aiSessionRegistry: aiSessions, codexAppServer: codexBridgeStub() });
   try {
     const base = `/api/ai-sessions/${ai.id}/repository`;
@@ -183,7 +183,7 @@ test("AI session repository API creates Direct sessions in opaque worktrees and 
   const paths = pathsFor(dataRoot);
   const restore = setEnvironment(paths, fixture.base);
   const aiSessions = createAiSessionRegistry({ dir: path.join(dataRoot, "ai-sessions") });
-  const source = aiSessions.start({ agent: "codex", cwd: fixture.root, status: "running" });
+  const source = aiSessions.start({ agent: "codex", creationSource: "ai-session", cwd: fixture.root, status: "running" });
   const appRuntime = new AppRuntimeManager(paths);
   appRuntime.ensureSharedResource = async () => undefined;
   const providerCreates = [];

@@ -189,8 +189,8 @@ test("floating detail spacing below the prompt divider does not depend on respon
 });
 
 test("detail user prompts collapse to three lines with a local toggle", () => {
-  assert.match(panel, /<AiSessionCompactPrompt[\s\S]*:timestamp="selectedPromptTimestamp"/);
-  assert.match(panel, /aiSessionTurns\(session\)\[promptIndexFor\(session\)\]\?\.startedAt \|\| session\.startedAt/);
+  assert.match(panel, /<AiSessionCompactPrompt[\s\S]*:timestamp="selectedPromptSnapshot\.timestamp"/);
+  assert.match(panel, /timestamp: turn\?\.startedAt \|\| session\.startedAt/);
   assert.match(compactPrompt, /class="ai-session-user-prompt-content"[\s\S]*:class="\{ expanded, 'has-overflow': hasOverflow \}"/);
   assert.match(compactPrompt, /<AiSessionMessageAttachments[\s\S]*v-for="message in attachmentMessages"[\s\S]*compact/);
   assert.match(compactPrompt, /v-if="hasOverflow"[\s\S]*:aria-expanded="expanded"[\s\S]*@click="toggleExpanded"/);

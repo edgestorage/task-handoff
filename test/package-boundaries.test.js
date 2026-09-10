@@ -91,3 +91,37 @@ const iconStyle = \`url("\${icons[current]}")\`;
   assert.doesNotMatch(violations, /\$\{icons\[current\]\}/);
   assert.match(violations, /imports undeclared dependency missing-package/);
 });
+
+test("package boundary checker allows the Node Agent SQLite persistence stack", () => {
+  const root = fixture({
+    "packages/control-plane/package.json": manifest("@example/control-plane", { "drizzle-orm": "1.0.0" }),
+    "packages/control-plane/src/node-agent/database.ts": "import { drizzle } from 'drizzle-orm/node-sqlite';\nimport { sqliteTable } from 'drizzle-orm/sqlite-core';\nvoid drizzle; void sqliteTable;",
+  });
+
+  assert.deepEqual(checkWorkspace(root), []);
+});
+
+test("package boundary checker keeps foreign and native databases out of the Node Agent", () => {
+  const root = fixture({
+    "packages/control-plane/package.json": manifest("@example/control-plane", {
+      "better-sqlite3": "1.0.0",
+      "drizzle-orm": "1.0.0",
+      "pg": "1.0.0",
+    }),
+    "packages/control-plane/src/node-agent/database.ts": "import pg from 'pg';\nimport { drizzle } from 'drizzle-orm/node-postgres';\nimport sqlite from 'better-sqlite3';\nvoid pg; void drizzle; void sqlite;",
+  });
+  const violations = checkWorkspace(root).join("\n");
+
+  assert.match(violations, /runtime boundary: pg/);
+  assert.match(violations, /runtime boundary: drizzle-orm\/node-postgres/);
+  assert.match(violations, /runtime boundary: better-sqlite3/);
+});
+
+test("package boundary checker keeps database implementations out of shared runtime code", () => {
+  const root = fixture({
+    "packages/control-plane/package.json": manifest("@example/control-plane", { "drizzle-orm": "1.0.0" }),
+    "packages/control-plane/src/shared/database.ts": "import { sql } from 'drizzle-orm';\nvoid sql;",
+  });
+
+  assert.match(checkWorkspace(root).join("\n"), /runtime boundary: drizzle-orm/);
+});

@@ -57,6 +57,9 @@ function setRepositoryEnvironment(paths, workspaceRoot) {
 function codexBridgeStub() {
   return {
     id: "repository-proxy-codex-stub", agent: "codex", refresh() {}, stop() {},
+    async ensureReady() {},
+    async sync() {},
+    supportsThreadSettingsUpdate: () => false,
     async mentionCatalog() { return { candidates: [], diagnostics: [] }; },
     async searchMentionFiles() { return { candidates: [], complete: true }; },
     async executeCommand() { throw new Error("not used"); },
@@ -90,7 +93,7 @@ test("repository APIs cross local, direct, and reverse instance proxy transports
   const paths = runtimePaths(dataRoot);
   const restore = setRepositoryEnvironment(paths, fixture.base);
   const aiSessions = createAiSessionRegistry({ dir: path.join(dataRoot, "ai-sessions") });
-  const ai = aiSessions.start({ agent: "codex", cwd: fixture.root, status: "running" });
+  const ai = aiSessions.start({ agent: "codex", creationSource: "ai-session", cwd: fixture.root, status: "running" });
   const controlled = await createWebApp({ staticDir: path.join(dataRoot, "missing-static"), logger: false, appRuntime: new AppRuntimeManager(paths), aiSessionRegistry: aiSessions, codexAppServer: codexBridgeStub() });
   try {
     for (const connectionMode of ["local", "direct-http", "reverse-wss"]) {

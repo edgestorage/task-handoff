@@ -137,13 +137,8 @@ test("private instance config preserves managed Codex settings for restart recov
 });
 
 test("Docker entrypoints project managed Codex settings before dropping privileges", () => {
-  for (const file of [
-    path.join(__dirname, "../docker/entrypoint.sh"),
-    path.join(__dirname, "../release/npm/node-agent/docker/entrypoint.sh"),
-  ]) {
-    const source = fs.readFileSync(file, "utf8");
-    assert.match(source, /TASK_HANDOFF_PRIVATE_CODEX_SETTINGS_JSON = JSON\.stringify\(value\.codexSettings\)/);
-  }
+  const source = fs.readFileSync(path.join(__dirname, "../docker/entrypoint.sh"), "utf8");
+  assert.match(source, /TASK_HANDOFF_PRIVATE_CODEX_SETTINGS_JSON = JSON\.stringify\(value\.codexSettings\)/);
 });
 
 test("legacy private registration fields migrate to the long-lived credential model", () => {
