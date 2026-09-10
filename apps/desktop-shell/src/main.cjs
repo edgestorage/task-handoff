@@ -48,7 +48,7 @@ const {
   stopExistingDesktopNodeAgent,
 } = require("./node-agent-handoff.cjs");
 const { applyDesktopDockIcon, desktopIconPath: resolveDesktopIconPath, desktopTrayIconPath: resolveDesktopTrayIconPath } = require("./icon.cjs");
-const { applyWindowsTitleBarTheme, desktopTitleBarOptions, desktopWindowBackgroundColor, desktopWindowChromeMode } = require("./window-chrome.cjs");
+const { applyMainWindowChromeDensity, applyWindowsTitleBarTheme, desktopTitleBarOptions, desktopWindowBackgroundColor, desktopWindowChromeMode, mainWindowChromeMetrics } = require("./window-chrome.cjs");
 const { appendRotatingLog } = require("./rotating-log.cjs");
 const { DesktopBrowserContextManager } = require("./desktop-browser-contexts.cjs");
 
@@ -68,7 +68,6 @@ const desktopBrowserGuests = new Map();
 const desktopServiceSupervisor = createDesktopServiceSupervisor();
 const controlPlaneWindows = createControlPlaneWindowRegistry();
 const windowsTitleBarOverlayHeights = new WeakMap();
-const windowDragStates = new WeakMap();
 const childProcessSpawnErrors = new WeakMap();
 const NODE_AGENT_IPC_ENDPOINT_PREFIX = "ipc://";
 
@@ -99,9 +98,10 @@ function setDesktopDockIcon() {
 }
 
 function nativeTitleBarWindowOptions() {
+  const metrics = mainWindowChromeMetrics("normal");
   return desktopTitleBarOptions({
-    height: 56,
-    trafficLightPosition: { x: 16, y: 21 },
+    height: metrics.height,
+    trafficLightPosition: metrics.trafficLightPosition,
   });
 }
 
@@ -1246,31 +1246,6 @@ ipcMain.handle("task-handoff:window-action", (_event, action) => {
   return { ok: true, maximized: !targetWindow.isDestroyed() ? targetWindow.isMaximized() : false };
 });
 
-ipcMain.on("task-handoff:window-drag", (event, payload) => {
-  const targetWindow = BrowserWindow.fromWebContents(event.sender);
-  const phase = payload?.phase;
-  const screenX = Number(payload?.screenX);
-  const screenY = Number(payload?.screenY);
-  if (!targetWindow || targetWindow.isDestroyed() || !["start", "move", "end"].includes(phase)) return;
-  if (phase === "end") {
-    windowDragStates.delete(event.sender);
-    return;
-  }
-  if (!Number.isFinite(screenX) || !Number.isFinite(screenY)) return;
-  if (phase === "start") {
-    if (targetWindow.isMaximized() || targetWindow.isFullScreen()) return;
-    const [windowX, windowY] = targetWindow.getPosition();
-    windowDragStates.set(event.sender, { targetWindow, screenX, screenY, windowX, windowY });
-    return;
-  }
-  const drag = windowDragStates.get(event.sender);
-  if (!drag || drag.targetWindow !== targetWindow || targetWindow.isMaximized() || targetWindow.isFullScreen()) return;
-  targetWindow.setPosition(
-    Math.round(drag.windowX + screenX - drag.screenX),
-    Math.round(drag.windowY + screenY - drag.screenY),
-  );
-});
-
 ipcMain.handle("task-handoff:set-window-chrome-theme", (_event, theme) => {
   const targetWindow = BrowserWindow.fromWebContents(_event.sender);
   if (!targetWindow || targetWindow.isDestroyed() || !["light", "dark"].includes(theme)) {
@@ -1282,6 +1257,19 @@ ipcMain.handle("task-handoff:set-window-chrome-theme", (_event, theme) => {
   if (process.platform === "win32" && height) {
     applyWindowsTitleBarTheme(targetWindow, nativeTheme, { height, theme });
   }
+  return { ok: true };
+});
+
+ipcMain.handle("task-handoff:set-window-chrome-density", (event, density) => {
+  const targetWindow = BrowserWindow.fromWebContents(event.sender);
+  if (targetWindow !== mainWindow || targetWindow.isDestroyed() || !["compact", "normal"].includes(density)) {
+    return { ok: false };
+  }
+  const metrics = applyMainWindowChromeDensity(targetWindow, {
+    density,
+    theme: nativeTheme.shouldUseDarkColors ? "dark" : "light",
+  });
+  if (process.platform === "win32") windowsTitleBarOverlayHeights.set(targetWindow, metrics.height);
   return { ok: true };
 });
 

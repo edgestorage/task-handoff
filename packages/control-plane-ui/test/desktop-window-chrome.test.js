@@ -54,3 +54,9 @@ test("an open menu temporarily makes the titlebar clickable for outside dismissa
     /:global\(body:has\(\[role="menu"\]\[data-state="open"\]\) \.control-plane-topbar\),\s*:global\(body:has\(\[role="menu"\]\[data-state="open"\]\) \.instance-detail-titlebar-tabs\),\s*:global\(body:has\(\[role="menu"\]\[data-state="open"\]\) \.session-preview-toolbar\.in-titlebar\),\s*:global\(body:has\(\[role="menu"\]\[data-state="open"\]\) \[role="menu"\]\[data-state="open"\]\) \{\s*-webkit-app-region: no-drag;/,
   );
 });
+
+test("the main titlebar accepts context menus while preserving desktop window dragging", () => {
+  assert.match(styles, /\.control-plane-topbar\s*\{\s*-webkit-app-region: drag;/);
+  assert.match(workbench, /<ContextMenu>[\s\S]*?<ContextMenuTrigger as-child :disabled="standaloneMode">[\s\S]*?<header\s+class="control-plane-topbar"/);
+  assert.doesNotMatch(workbench, /startTopbarPointer|moveTopbarPointer|finishTopbarPointer|cancelTopbarPointer|windowDrag/);
+});

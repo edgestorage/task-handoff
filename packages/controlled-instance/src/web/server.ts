@@ -893,7 +893,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     discoveryProvider: codexAppServer,
     ensureReady: async () => {
       appRuntime.ensureSharedResource("codex");
-      await codexAppServer.sync(appSessionsWithSharedCodexAppServer());
+      await codexAppServer.ensureReady(appSessionsWithSharedCodexAppServer());
     },
     capability: () => ({
       agent: "codex",
@@ -1019,6 +1019,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     },
     resolveModelSelection: (agent, requested) => resolveControlledPrivateModelSelection(privateModelCatalog, agent, requested),
     onDiagnostic: (diagnostic) => app.log.warn({ diagnostic }, "AI session create compensation"),
+    onTiming: (timing) => app.log.info({ ...timing, traceId: timing.clientRequestId }, "ai-session.create.coordinator"),
   });
   const repositoryAiSessionWorkspace = registerRepositoryRoutes(app, {
     appRuntime,

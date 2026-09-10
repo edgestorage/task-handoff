@@ -10,9 +10,10 @@
   >
     <div ref="turnContentElement" class="ai-session-result-content">
       <AiSessionTurnHistory
+        :key="turnId"
         :nodes="activityHistory"
-        :loading="!active && activityHistoryStatus === 'loading'"
-        :loadable="!active && (activityHistoryStatus === 'idle' || activityHistoryStatus === 'stale')"
+        :loading="activityHistoryStatus === 'loading'"
+        :loadable="activityHistoryStatus === 'idle' || activityHistoryStatus === 'stale'"
         :error="activityHistoryError"
         :started-at="turnStartedAt"
         :ended-at="turnEndedAt"

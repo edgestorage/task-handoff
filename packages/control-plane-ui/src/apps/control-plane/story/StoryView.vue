@@ -286,13 +286,13 @@
                 </template>
                 <template v-else>
                   <div v-if="!sessionsFor(selectedResource.story).length" class="story-empty">{{ t("stories.noLinkedSessions") }}</div>
-                  <TransitionGroup name="story-session-tree" tag="div" class="story-session-resource-list">
+                  <div class="story-session-resource-list">
                   <div v-for="entry in pagedStoryCurrentSessions" :key="entry.session.id" class="story-resource-item story-session-resource-row" :class="{ active: isSessionSelected(selectedResource.story, entry.session.id) }" :style="storySessionTreeStyle(entry.depth)" role="button" tabindex="0" @click="selectSession(selectedResource.story, entry)" @keydown.enter.prevent="selectSession(selectedResource.story, entry)" @keydown.space.prevent="selectSession(selectedResource.story, entry)">
                     <span class="story-resource-icon story-session-leading"><span class="story-session-semantic"><AiSessionStatusIndicator v-if="entry.session.status === 'running'" :status="entry.session.status" /><span v-else class="story-resource-session-icon"><MessageSquare :size="15" /><AiSessionStatusIndicator class="story-resource-session-status" :status="entry.session.status" size="compact" /></span></span><button v-if="entry.hasChildren" type="button" class="story-session-disclosure story-session-resource-disclosure" :aria-expanded="isStorySessionExpanded(entry.session.id)" :aria-label="sessionDisclosureLabel(isStorySessionExpanded(entry.session.id))" @click.stop="toggleStorySessionExpanded(entry.session.id)" @keydown.stop><ChevronRight class="story-session-chevron" :class="{ expanded: isStorySessionExpanded(entry.session.id) }" :size="16" /></button></span>
                     <span class="story-resource-copy"><strong>{{ entry.session.title || entry.session.userPrompt || entry.session.id }}</strong><small>{{ entry.instance.name }} · {{ sessionStatusLabel(entry.session.status, t) }}</small></span>
                     <span v-if="entry.session.unread" class="story-resource-unread" :aria-label="t('sessions.actions.unread')" :title="t('sessions.actions.unread')" />
                   </div>
-                  </TransitionGroup>
+                  </div>
                   <div v-if="storyCurrentSessionPageCount > 1" class="story-pagination">
                     <span>{{ t("stories.pagination", { page: storyCurrentSessionPage, total: storyCurrentSessionPageCount }) }}</span>
                     <div><Button variant="ghost" size="icon-sm" :disabled="storyCurrentSessionPage <= 1" :aria-label="t('stories.previousPage')" :title="t('stories.previousPage')" @click="storyCurrentSessionPage -= 1"><ChevronLeft :size="14" /></Button><Button variant="ghost" size="icon-sm" :disabled="storyCurrentSessionPage >= storyCurrentSessionPageCount" :aria-label="t('stories.nextPage')" :title="t('stories.nextPage')" @click="storyCurrentSessionPage += 1"><ChevronRight :size="14" /></Button></div>
@@ -424,8 +424,9 @@ import { canUseNativeProjectFolderPicker, type NativeNodeFolderPicker } from "..
 import { launchableAppsForInstance, sessionStatusLabel, type RepositoryWorkspaceTabTarget, type SessionTab } from "../useInstanceSessions";
 import { latestStoryDocuments, STORY_TREE_DOCUMENT_LIMIT } from "./storyDocuments";
 import { normalizeManualStoryOrder, reorderStoryKeys, sortStories, storyDropTargetAt, storySortKey, type StorySortMode } from "./storySort";
+import { allStoryNodes, storyNodeIsVisible, type StoryNodeFilter } from "./storyNodeFilter";
 
-const props = withDefaults(defineProps<{ chooseProjectFolder?: NativeNodeFolderPicker; instances: InstanceWithAiSessions[]; nodes: Node[]; nodeLocalFoldersByNodeId?: Record<string, NodeLocalFolder[]>; filterNodeId?: string }>(), { nodeLocalFoldersByNodeId: () => ({}), filterNodeId: "" });
+const props = withDefaults(defineProps<{ chooseProjectFolder?: NativeNodeFolderPicker; instances: InstanceWithAiSessions[]; nodes: Node[]; nodeLocalFoldersByNodeId?: Record<string, NodeLocalFolder[]>; nodeFilter?: StoryNodeFilter }>(), { nodeLocalFoldersByNodeId: () => ({}), nodeFilter: allStoryNodes });
 const { locale, t } = useI18n();
 const projectFolderChooserFor = (instance: InstanceWithAiSessions | undefined) => (
   canUseNativeProjectFolderPicker(instance, Boolean(props.chooseProjectFolder)) ? props.chooseProjectFolder : undefined
@@ -497,10 +498,7 @@ let storyPointerClientY = 0;
 let dragStartOrder: string[] = [];
 const storiesQuery = useStoriesQuery();
 const allStories = computed(() => storiesQuery.data.value?.stories ?? []);
-const filteredStories = computed(() => {
-  const nodeId = props.filterNodeId?.trim();
-  return nodeId ? allStories.value.filter((story) => story.ownerNodeId === nodeId) : allStories.value;
-});
+const filteredStories = computed(() => allStories.value.filter((story) => storyNodeIsVisible(props.nodeFilter, story.ownerNodeId)));
 const storySessionRecords = computed<StorySessionRecord[]>(() => props.instances.flatMap((instance) => (
   (instance.aiSessions.sessions || []).map((session) => ({ ...session, instanceId: instance.id }))
 )));
@@ -1096,10 +1094,8 @@ function openCreate() {
   draftTitle.value = "";
   draftDescription.value = "";
   draftMaxIdleAiSessions.value = STORY_DEFAULT_MAX_IDLE_AI_SESSIONS;
-  const filterNodeId = props.filterNodeId?.trim();
-  draftNodeId.value = filterNodeId && props.nodes.some((node) => node.id === filterNodeId && node.status === "online")
-    ? filterNodeId
-    : props.nodes.find((node) => node.status === "online")?.id || "";
+  const filteredOnlineNode = props.nodes.find((node) => node.status === "online" && storyNodeIsVisible(props.nodeFilter, node.id));
+  draftNodeId.value = filteredOnlineNode?.id || props.nodes.find((node) => node.status === "online")?.id || "";
   editorOpen.value = true;
 }
 async function openEdit() {

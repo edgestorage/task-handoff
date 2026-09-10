@@ -60,6 +60,7 @@ function codexBridgeStub(overrides = {}) {
     id: "repository-api-codex-stub",
     agent: "codex",
     refresh() {},
+    async ensureReady() {},
     async sync() {},
     stop() {},
     async createSession(input) {

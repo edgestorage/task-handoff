@@ -460,13 +460,13 @@ const {
   state: selectedCardSessionDetailState,
   turnIndexKey: selectedCardTurnIndexKey,
 } = useAiSessionConversationProjection({
+  consumer: "board-detail",
   instanceId: () => selectedCard.value?.instance.id || "",
   summary: () => selectedCard.value?.session,
 });
 const { viewMode: timelineViewMode } = useAiSessionTimelineViewMode();
 const {
   conversationTurnTimelines,
-  loadSelectedTurnTimeline,
   loadTurnTimeline,
   selectedTurn: selectedTimelineTurn,
   selectedTurnState: selectedTurnTimelineState,
@@ -490,8 +490,7 @@ const selectedCardContentState = computed(() => {
 watch(
   () => selectedTimelineTurn.value ? `${selectedCard.value?.key || ""}:${selectedTimelineTurn.value.id}:${selectedTimelineTurn.value.status}:${selectedCardTurnIndexKey.value}` : "",
   () => {
-    if (selectedTimelineTurn.value) void loadSelectedCardTurn(selectedTimelineTurn.value.id);
-    void loadSelectedTurnTimeline();
+    if (selectedTimelineTurn.value) void loadSelectedCardTurn(selectedTimelineTurn.value.id, true, undefined, "selected-turn-watcher");
   },
   { immediate: true },
 );

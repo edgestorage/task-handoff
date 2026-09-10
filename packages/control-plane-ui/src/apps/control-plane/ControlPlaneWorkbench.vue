@@ -1,5 +1,7 @@
 <template>
-  <div class="control-plane-shell" :class="{ 'standalone-instance-detail': standaloneMode }">
+  <div class="control-plane-shell" :class="{ 'standalone-instance-detail': standaloneMode }" :data-header-density="effectiveHeaderDensity">
+    <ContextMenu>
+      <ContextMenuTrigger as-child :disabled="standaloneMode">
     <header class="control-plane-topbar" @dblclick="controlWindow('toggle-maximize')">
       <div class="topbar-left">
         <div
@@ -80,31 +82,41 @@
               >
                 <div class="control-plane-story-node-menu-list">
                   <DropdownMenuItem
-                    class="control-plane-story-node-menu-item"
-                    :class="{ selected: !storyNodeFilter }"
-                    :aria-current="!storyNodeFilter ? 'true' : undefined"
-                    @select="selectStoryNodeFilter('')"
+                    class="control-plane-story-node-menu-item control-plane-story-node-menu-all"
+                    :class="{ selected: storyNodeFilter.kind === 'all' }"
+                    :aria-current="storyNodeFilter.kind === 'all' ? 'true' : undefined"
+                    @select="selectAllStoryNodes"
                   >
                     <span class="status-dot" />
                     <span class="control-plane-story-node-menu-copy">
                       <strong>{{ t("instances.board.allNodes") }}</strong>
                     </span>
-                    <Check v-if="!storyNodeFilter" class="control-plane-story-node-menu-check" :size="16" aria-hidden="true" />
+                    <Check v-if="storyNodeFilter.kind === 'all'" class="control-plane-story-node-menu-check" :size="16" aria-hidden="true" />
                   </DropdownMenuItem>
-                  <DropdownMenuItem
+                  <div
                     v-for="node in storyNodeFilterOptions"
                     :key="node.id"
                     class="control-plane-story-node-menu-item"
-                    :class="{ selected: node.id === storyNodeFilter }"
-                    :aria-current="node.id === storyNodeFilter ? 'true' : undefined"
-                    @select="selectStoryNodeFilter(node.id)"
+                    :class="{ selected: storyNodeIsSelected(storyNodeFilter, node.id) }"
                   >
-                    <span class="status-dot" :data-state="node.status" />
-                    <span class="control-plane-story-node-menu-copy">
-                      <strong>{{ node.name }}</strong>
-                    </span>
-                    <Check v-if="node.id === storyNodeFilter" class="control-plane-story-node-menu-check" :size="16" aria-hidden="true" />
-                  </DropdownMenuItem>
+                    <button
+                      type="button"
+                      class="control-plane-story-node-menu-main"
+                      :aria-current="storyNodeIsSelected(storyNodeFilter, node.id) ? 'true' : undefined"
+                      @click="selectStoryNodeFilter(node.id, $event)"
+                    >
+                      <span class="status-dot" :data-state="node.status" />
+                      <span class="control-plane-story-node-menu-copy">
+                        <strong>{{ node.name }}</strong>
+                      </span>
+                    </button>
+                    <Checkbox
+                      class="control-plane-story-node-menu-checkbox"
+                      :aria-label="node.name"
+                      :model-value="storyNodeIsSelected(storyNodeFilter, node.id)"
+                      @update:model-value="toggleStoryNodeFilter(node.id, $event === true)"
+                    />
+                  </div>
                 </div>
               </ScrollArea>
             </DropdownMenuContent>
@@ -120,11 +132,6 @@
                 class="control-plane-instance-switcher"
                 :data-overflow="instanceSwitcherOverflow ? 'true' : undefined"
                 :aria-label="t('instances.list.switchInstance')"
-                @pointerdown.capture="startInstanceSwitcherPointer"
-                @pointermove="moveInstanceSwitcherPointer"
-                @pointerup="finishInstanceSwitcherPointer"
-                @pointercancel="cancelInstanceSwitcherPointer"
-                @click.capture="consumeInstanceSwitcherClick"
                 @dblclick.stop
               >
               <span ref="instanceSwitcherTitleElement" class="control-plane-instance-switcher-title">
@@ -255,6 +262,14 @@
         aria-hidden="true"
       />
     </header>
+      </ContextMenuTrigger>
+      <WorkbenchLayoutContextMenu
+        :instance-sidebar-visible="instancesSidebarVisible"
+        :show-header-density="headerDensitySupported"
+        :show-instance-sidebar="instanceViewMode && !settingsMode"
+        @update:instance-sidebar-visible="setInstancesSidebarVisible"
+      />
+    </ContextMenu>
 
     <main class="control-plane-workbench" :class="{ 'instances-collapsed': instancesCollapsed, 'instances-sidebar-hidden': !instancesSidebarVisible, 'board-mode': !instanceViewMode || settingsMode, 'standalone-detail-mode': standaloneMode }" :style="standaloneMode ? undefined : workbenchStyle">
       <InstanceList
@@ -336,7 +351,7 @@
       <StoryView
         v-if="!standaloneMode && storyMode && !settingsMode"
         :choose-project-folder="desktopBridge?.chooseProjectFolder"
-        :filter-node-id="storyNodeFilter"
+        :node-filter="storyNodeFilter"
         :instances="boardInstancesWithAiSessions"
         :node-local-folders-by-node-id="nodeLocalFoldersByNodeId"
         :nodes="nodes.data.value || []"
@@ -524,11 +539,14 @@ import type { ControlPlaneInstanceResourceEntry } from "@task-handoff/control-pl
 import type { ConfigSyncDirection } from "@task-handoff/protocol/config-sync";
 import { type AiSessionSummary, type AppManagementOperation, type InstanceBoardItem, type InstanceBoardItemWithAppSessions, type InstanceResourceMetrics, type NodeLocalFolder, type UpdateControlledInstanceInput } from "../../api/types";
 import { Button } from "../../components/ui/button";
+import { Checkbox } from "../../components/ui/checkbox";
+import { ContextMenu, ContextMenuTrigger } from "../../components/ui/context-menu";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "../../components/ui/dropdown-menu";
 import { ScrollArea } from "../../components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../components/ui/tooltip";
 import AiSessionBoardView from "./ai-board/AiSessionBoardView.vue";
 import StoryView from "./story/StoryView.vue";
+import { allStoryNodes, normalizeStoryNodeFilter, selectOnlyStoryNode, storyNodeIsSelected, toggleStoryNode, type StoryNodeFilter } from "./story/storyNodeFilter";
 import InstanceBoardView from "./board/InstanceBoardView.vue";
 import InstanceDetail from "./instance-detail/InstanceDetail.vue";
 import EmbeddedBrowserSurfaceLayer from "./instance-detail/EmbeddedBrowserSurfaceLayer.vue";
@@ -547,6 +565,7 @@ import type { Story, StoryAction } from "@task-handoff/protocol/stories";
 import { useActiveInstanceSessions } from "./instance-detail/useActiveInstanceSessions";
 import { useBoardTerminalPreviews } from "./board/useBoardTerminalPreviews";
 import { useInstanceActions } from "./useInstanceActions";
+import { useWorkbenchLayoutPreferences } from "./useWorkbenchLayoutPreferences";
 import { useInstanceBoardSessions, type BoardSessionTab } from "./board/useInstanceBoardSessions";
 import { appDisplayName, buildAppSessionTabs, type SessionTab } from "./useInstanceSessions";
 import { isInstanceConnecting } from "./useInstanceStatus";
@@ -562,6 +581,7 @@ import { buildInstanceDetailPath, openInstanceDetailWindow, switchDesktopInstanc
 import { consumeInstanceDetailSelection, instanceDetailSelectionStorageKey, persistInstanceDetailSelection, type InstanceDetailSelection } from "./instance-detail/instanceDetailSelection";
 import { createWebInstanceWindowCoordinator } from "./instance-detail/instanceWindowCoordinator";
 import { canUseNativeProjectFolderPicker } from "./nodePath";
+import WorkbenchLayoutContextMenu from "./shared/WorkbenchLayoutContextMenu.vue";
 
 type ProjectFolderSelection = string | { path: string; ownerNodeId?: string };
 
@@ -571,11 +591,11 @@ type DesktopBridge = {
   openControlPlaneWindow?: (url: string) => Promise<{ ok: boolean }>;
   openInstanceDetailWindow?: (instanceId: string) => Promise<{ ok: boolean; action?: string; code?: string }>;
   switchInstanceDetailWindow?: (instanceId: string) => Promise<{ ok: boolean; action?: "switched" | "focused" | "error"; code?: string }>;
-  windowDrag?: (phase: "start" | "move" | "end", screenX: number, screenY: number) => void;
   onOpenSettings?: (listener: () => void) => () => void;
   onBrowserNewTab?: (listener: (input: { instanceId?: string; url?: string }) => void) => () => void;
   logBrowserDiagnostic?: (input: { message: string; instanceId?: string }) => void;
-  windowChrome?: { mode: "custom" | "macos-overlay" | "windows-overlay" };
+  windowChrome?: { mode: "custom" | "macos-overlay" | "windows-overlay"; supportsDensity?: boolean };
+  setWindowChromeDensity?: (density: "compact" | "normal") => Promise<{ ok: boolean }>;
   windowAction?: (action: "minimize" | "toggle-maximize" | "close") => Promise<{ ok: boolean; maximized?: boolean }>;
 };
 
@@ -587,6 +607,7 @@ const props = withDefaults(defineProps<{
   initialInstanceId: "",
 });
 const standaloneMode = computed(() => props.mode === "standalone");
+const { headerDensity } = useWorkbenchLayoutPreferences();
 const standaloneInstanceId = ref(props.initialInstanceId);
 const pendingInstanceDetailSelection = ref<InstanceDetailSelection | undefined>(standaloneMode.value && props.initialInstanceId
   ? consumeInstanceDetailSelection(props.initialInstanceId)
@@ -601,8 +622,6 @@ const instanceSwitcherOverflow = ref(false);
 const instanceSwitchLoadingVisible = ref(false);
 const initialWorkbenchLoadingVisible = ref(true);
 const initialWorkbenchLoadingFinished = ref(false);
-let instanceSwitcherPointer: { pointerId: number; startScreenX: number; startScreenY: number; moved: boolean } | undefined;
-let suppressInstanceSwitcherClick = false;
 let instanceSwitchLoadingTimer: number | undefined;
 let instanceSwitchSequence = 0;
 let instanceSwitcherResizeObserver: ResizeObserver | undefined;
@@ -725,18 +744,35 @@ const instanceViewMode = computed(() => workbenchView.value === "instance");
 const boardMode = computed(() => workbenchView.value === "board");
 const aiBoardMode = computed(() => workbenchView.value === "ai");
 const storyMode = computed(() => workbenchView.value === "story");
-const storyNodeFilter = ref("");
+const storyNodeFilter = ref<StoryNodeFilter>(allStoryNodes());
 const storyNodeFilterOpen = ref(false);
 const storyNodeFilterOptions = computed(() => nodes.data.value || []);
 const storyNodeFilterTitle = computed(() => {
-  if (!storyNodeFilter.value) return t("instances.board.allNodes");
-  return storyNodeFilterOptions.value.find((node) => node.id === storyNodeFilter.value)?.name || storyNodeFilter.value;
+  if (storyNodeFilter.value.kind === "all") return t("instances.board.allNodes");
+  if (storyNodeFilter.value.nodeIds.length > 1) return t("instances.board.selectedNodes", { count: storyNodeFilter.value.nodeIds.length });
+  const nodeId = storyNodeFilter.value.nodeIds[0] || "";
+  return storyNodeFilterOptions.value.find((node) => node.id === nodeId)?.name || nodeId;
 });
-function selectStoryNodeFilter(nodeId: string) {
-  storyNodeFilter.value = nodeId;
+function selectAllStoryNodes() {
+  storyNodeFilter.value = allStoryNodes();
   storyNodeFilterOpen.value = false;
   closeFloatingLayers();
 }
+function selectStoryNodeFilter(nodeId: string, event: MouseEvent) {
+  if (event.metaKey || event.ctrlKey) {
+    toggleStoryNodeFilter(nodeId, !storyNodeIsSelected(storyNodeFilter.value, nodeId));
+    return;
+  }
+  storyNodeFilter.value = selectOnlyStoryNode(nodeId);
+  storyNodeFilterOpen.value = false;
+  closeFloatingLayers();
+}
+function toggleStoryNodeFilter(nodeId: string, checked: boolean) {
+  storyNodeFilter.value = toggleStoryNode(storyNodeFilter.value, nodeId, checked, storyNodeFilterOptions.value.map((node) => node.id));
+}
+watch(() => storyNodeFilterOptions.value.map((node) => node.id).join("\0"), () => {
+  storyNodeFilter.value = normalizeStoryNodeFilter(storyNodeFilter.value, storyNodeFilterOptions.value.map((node) => node.id));
+});
 const settingsMode = ref(false);
 const settingsSection = ref<SettingsSection>("nodes");
 const accountSecurityOpen = ref(false);
@@ -801,9 +837,17 @@ const serverUpdateAvailable = computed(() => Boolean(serverUpdateQuery.data.valu
 const serverUpdateVersion = computed(() => serverUpdateQuery.data.value?.availableVersion || "");
 const hasDesktopWindowControls = Boolean(desktopBridge?.windowAction);
 const windowChromeMode = desktopBridge?.windowChrome?.mode;
+const headerDensitySupported = !desktopBridge
+  || windowChromeMode === "custom"
+  || desktopBridge.windowChrome?.supportsDensity === true;
+const effectiveHeaderDensity = computed(() => headerDensitySupported ? headerDensity.value : "normal");
 const showCustomWindowControls = hasDesktopWindowControls && windowChromeMode === "custom";
 const showNativeWindowControlSpace = hasDesktopWindowControls && windowChromeMode === "macos-overlay";
 const showWindowsNativeWindowControlSpace = hasDesktopWindowControls && windowChromeMode === "windows-overlay";
+
+watch(effectiveHeaderDensity, (density) => {
+  if (!standaloneMode.value) void desktopBridge?.setWindowChromeDensity?.(density);
+}, { immediate: true });
 const { collapseInstances, expandInstances, instancesCollapsed, instancesSidebarVisible, setInstancesSidebarVisible, startInstanceResize, stopInstanceResize, workbenchStyle } = useResizableInstancesSidebar();
 const imagePullProgress = useImagePullProgress();
 const boardInstances = computed(() => (board.data.value || []).map((instance) => {
@@ -1278,7 +1322,6 @@ onBeforeUnmount(() => {
   instanceSwitcherResizeObserver?.disconnect();
   instanceSwitcherResizeObserver = undefined;
   finishInstanceSwitch(instanceSwitchSequence);
-  cancelInstanceSwitcherPointer();
   stopDesktopOpenSettings?.();
   stopDesktopBrowserNewTab?.();
   webWindowCoordinator?.dispose();
@@ -1510,57 +1553,7 @@ async function controlWindow(action: "minimize" | "toggle-maximize" | "close") {
 }
 
 function updateInstanceSwitcherOpen(open: boolean) {
-  if (open && instanceSwitcherPointer) return;
   instanceSwitcherOpen.value = open;
-}
-
-function startInstanceSwitcherPointer(event: PointerEvent) {
-  if (event.button !== 0 || !desktopBridge?.windowDrag) return;
-  event.preventDefault();
-  event.stopImmediatePropagation();
-  suppressInstanceSwitcherClick = true;
-  const target = event.currentTarget instanceof HTMLElement ? event.currentTarget : undefined;
-  target?.setPointerCapture?.(event.pointerId);
-  instanceSwitcherPointer = {
-    pointerId: event.pointerId,
-    startScreenX: event.screenX,
-    startScreenY: event.screenY,
-    moved: false,
-  };
-  desktopBridge.windowDrag("start", event.screenX, event.screenY);
-}
-
-function moveInstanceSwitcherPointer(event: PointerEvent) {
-  const pointer = instanceSwitcherPointer;
-  if (!pointer || pointer.pointerId !== event.pointerId || !desktopBridge?.windowDrag) return;
-  if (!pointer.moved && Math.hypot(event.screenX - pointer.startScreenX, event.screenY - pointer.startScreenY) < 5) return;
-  pointer.moved = true;
-  instanceSwitcherOpen.value = false;
-  desktopBridge.windowDrag("move", event.screenX, event.screenY);
-}
-
-function finishInstanceSwitcherPointer(event: PointerEvent) {
-  const pointer = instanceSwitcherPointer;
-  if (!pointer || pointer.pointerId !== event.pointerId || !desktopBridge?.windowDrag) return;
-  desktopBridge.windowDrag("end", event.screenX, event.screenY);
-  instanceSwitcherPointer = undefined;
-  if (!pointer.moved) instanceSwitcherOpen.value = true;
-  window.setTimeout(() => { suppressInstanceSwitcherClick = false; }, 0);
-}
-
-function cancelInstanceSwitcherPointer(event?: PointerEvent) {
-  const pointer = instanceSwitcherPointer;
-  if (!pointer || (event && pointer.pointerId !== event.pointerId) || !desktopBridge?.windowDrag) return;
-  desktopBridge.windowDrag("end", event?.screenX ?? pointer.startScreenX, event?.screenY ?? pointer.startScreenY);
-  instanceSwitcherPointer = undefined;
-  suppressInstanceSwitcherClick = false;
-}
-
-function consumeInstanceSwitcherClick(event: MouseEvent) {
-  if (!suppressInstanceSwitcherClick) return;
-  event.preventDefault();
-  event.stopImmediatePropagation();
-  suppressInstanceSwitcherClick = false;
 }
 
 async function openAppUrl(url: string) {

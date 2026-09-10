@@ -27,6 +27,9 @@ test("AI session history is an on-demand sidebar mode entered from the current-l
   assert.match(styles, /\.session-ai-history-entry\s*\{[^}]*position: absolute;[^}]*bottom: var\(--session-ai-list-bottom-inset\);[^}]*left: var\(--session-ai-list-left-inset\);[^}]*width: calc\(100% - var\(--session-ai-list-left-inset\) - var\(--session-ai-list-right-inset\)\);[^}]*height: 30px;[^}]*min-height: 30px;[^}]*padding: 0 6px;/s);
   assert.match(styles, /\.session-ai-history-entry:hover,[\s\S]*?\.session-ai-history-entry:focus-visible\s*\{[^}]*background: var\(--surface-hover\);/s);
   assert.doesNotMatch(styles, /\.session-ai-empty\.session-ai-filter-empty\s*\{[^}]*border:/s);
+  assert.match(panel, /<SearchX v-if="visibleAiSessions\.length" :size="19" \/>[\s\S]*<MessageSquarePlus v-else :size="19" \/>/);
+  assert.match(styles, /\.session-ai-empty-icon\s*\{[^}]*flex: 0 0 36px;[^}]*width: 36px;[^}]*height: 36px;[^}]*border-radius: 50%;/s);
+  assert.doesNotMatch(styles, /\.session-ai-empty-icon\s*\{[^}]*max-width:/s);
 });
 
 test("history mode preserves the current-list scroll position and renders all request states", () => {

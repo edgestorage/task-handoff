@@ -24,6 +24,12 @@ type ProjectorOptions = {
   onTimelineItem?: (event: { sessionId: string; providerSessionId: string; item: AiSessionTimelineItem }) => void;
 };
 
+type ThreadProjectionContext = {
+  appSessionId?: string;
+  creationSource?: AiSessionStatus["creationSource"];
+  lineage?: AiSessionLineage;
+};
+
 export class CodexAppServerSessionProjector {
   private readonly toolActivityByThread = new Map<string, CodexToolActivityTracker>();
   private readonly subAgentsByThread = new Map<string, CodexSubAgentTracker>();
@@ -189,7 +195,7 @@ export class CodexAppServerSessionProjector {
     return false;
   }
 
-  applyThreadSnapshot(thread: CodexThread, context: { appSessionId?: string; creationSource?: AiSessionStatus["creationSource"]; lineage?: AiSessionLineage } = {}) {
+  applyThreadSnapshot(thread: CodexThread, context: ThreadProjectionContext = {}) {
     const threadId = typeof thread.id === "string" ? thread.id : undefined;
     if (!threadId || thread.ephemeral === true) {
       return;
@@ -205,6 +211,39 @@ export class CodexAppServerSessionProjector {
       ? this.replaceThreadActivity(threadId, history.toolActivity, history.subAgents)
       : this.snapshotThreadActivity(threadId);
     return this.options.registry.applyAdapterSnapshot({
+      ...this.threadSnapshotBase(thread, context, existing, { status: sessionStatus, phase: lifecycle.phase }),
+      activeTurnId: history.activeTurnId,
+      userPrompt: history.userPrompt,
+      turns: history.turns,
+      summary: existing ? this.options.latestApprovalSummary(existing.id) || history.summary : history.summary,
+      lastMessage: history.lastMessage,
+      lastMessageItemId: history.lastMessageItemId,
+      error: history.error,
+      currentTool: activity.toolActivity.currentTool,
+      toolCallsSinceLastMessage: activity.toolActivity.toolCallsSinceLastMessage,
+      subAgents: activity.subAgents,
+      replaceActivity: true,
+    });
+  }
+
+  applyThreadListEntry(thread: CodexThread, context: ThreadProjectionContext = {}) {
+    const threadId = typeof thread.id === "string" ? thread.id : undefined;
+    if (!threadId || thread.ephemeral === true) {
+      return;
+    }
+    const existing = this.options.findSession(threadId);
+    const lifecycle = this.options.attachApprovalLifecycle(existing?.id, lifecycleForStatus(thread.status || {}));
+    return this.options.registry.applyAdapterSnapshot(this.threadSnapshotBase(thread, context, existing, lifecycle));
+  }
+
+  private threadSnapshotBase(
+    thread: CodexThread,
+    context: ThreadProjectionContext,
+    existing: AiSessionStatus | undefined,
+    lifecycle: Pick<AiSessionStatus, "status" | "phase">,
+  ) {
+    const threadId = thread.id as string;
+    return {
       source: "adapter-snapshot",
       agent: "codex",
       creationSource: context.creationSource || (context.appSessionId ? "app-session" : existing?.creationSource),
@@ -214,8 +253,8 @@ export class CodexAppServerSessionProjector {
       appBindingKeys: context.appSessionId ? [`app:${context.appSessionId}`] : undefined,
       actions: {
         send: true,
-        interrupt: sessionStatus === "running" || sessionStatus === "waiting",
-        approval: sessionStatus === "waiting" && lifecycle.phase === "approval",
+        interrupt: lifecycle.status === "running" || lifecycle.status === "waiting",
+        approval: lifecycle.status === "waiting" && lifecycle.phase === "approval",
         fork: this.options.threadForkSupported(),
       },
       lineage: context.lineage || existing?.lineage || (
@@ -227,24 +266,13 @@ export class CodexAppServerSessionProjector {
       ),
       title: typeof thread.name === "string" ? thread.name : undefined,
       cwd: typeof thread.cwd === "string" ? thread.cwd : undefined,
-      activeTurnId: history.activeTurnId,
-      userPrompt: history.userPrompt,
-      turns: history.turns,
-      summary: existing ? this.options.latestApprovalSummary(existing.id) || history.summary : history.summary,
-      lastMessage: history.lastMessage,
-      lastMessageItemId: history.lastMessageItemId,
-      error: history.error,
-      currentTool: activity.toolActivity.currentTool,
-      toolCallsSinceLastMessage: activity.toolActivity.toolCallsSinceLastMessage,
-      subAgents: activity.subAgents,
-      status: sessionStatus,
+      status: lifecycle.status,
       phase: lifecycle.phase,
       modelSelection: typeof thread.model === "string" && typeof thread.modelProvider === "string"
         ? this.options.projectModelSelection?.(thread.modelProvider, thread.model)
         : existing?.modelSelection,
       reasoningEffort: AiSessionReasoningEffortSchema.safeParse(thread.reasoningEffort).data || existing?.reasoningEffort,
-      replaceActivity: true,
-    });
+    } as const;
   }
 
   replaceThreadActivity(threadId: string, toolActivity: CodexToolActivityState, subAgents: Parameters<CodexSubAgentTracker["replace"]>[0]) {

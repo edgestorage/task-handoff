@@ -199,7 +199,7 @@ const compactCompletedTurn = computed(() => selectedTurn.value?.status === "comp
 const compactCanContinue = computed(() => Boolean(props.session.actions?.fork && compactCompletedTurn.value?.providerTurnId));
 const compactTurnTime = computed(() => {
   const turn = compactCompletedTurn.value;
-  return turn?.completedAt || turn?.updatedAt || turn?.startedAt || "";
+  return turn?.completedAt || turn?.startedAt || "";
 });
 const compactUserPrompt = computed(() => selectedTurn.value?.userPrompt?.trim() || "");
 const selectedTimeline = computed(() => compactTimelineForTurn(props.selectedTurnState.items, selectedTurn.value));

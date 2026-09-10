@@ -50,11 +50,17 @@ test("the main window and live theme changes keep the native surface aligned wit
   assert.match(mainSource, /ipcMain\.handle\("task-handoff:set-window-chrome-theme"[\s\S]*?targetWindow\.setBackgroundColor\(desktopWindowBackgroundColor\(theme\)\)/);
 });
 
-test("desktop constrains manual titlebar dragging to the sender window", () => {
-  assert.match(mainSource, /ipcMain\.on\("task-handoff:window-drag"/);
-  assert.match(mainSource, /BrowserWindow\.fromWebContents\(event\.sender\)/);
-  assert.match(mainSource, /windowDragStates\.set\(event\.sender/);
-  assert.match(mainSource, /targetWindow\.setPosition\(/);
+test("only the main window can synchronize native chrome density", () => {
+  const handler = mainSource.match(/ipcMain\.handle\("task-handoff:set-window-chrome-density"[\s\S]*?\n\}\);/)?.[0] || "";
+  assert.match(handler, /targetWindow !== mainWindow/);
+  assert.match(handler, /!\["compact", "normal"\]\.includes\(density\)/);
+  assert.match(handler, /applyMainWindowChromeDensity\(targetWindow/);
+  assert.match(handler, /windowsTitleBarOverlayHeights\.set\(targetWindow, metrics\.height\)/);
+});
+
+test("desktop delegates titlebar dragging to the native window region", () => {
+  assert.doesNotMatch(mainSource, /task-handoff:window-drag|windowDragStates|\.setPosition\(/);
+  assert.doesNotMatch(preloadSource, /task-handoff:window-drag|windowDrag/);
 });
 
 test("preload API delegates privileged desktop operations through IPC", async () => {
@@ -93,6 +99,7 @@ test("preload API delegates privileged desktop operations through IPC", async ()
   const api = exposedApi;
 
   assert.equal(api.windowChrome.mode, "macos-overlay");
+  assert.equal(api.windowChrome.supportsDensity, true);
   assert.equal(api.getPathForFile({ name: "project" }), "/files/project");
   await api.openLocalPath("/projects/task-handoff");
   await api.openControlPlaneWindow("/repository-workspace");
@@ -100,7 +107,7 @@ test("preload API delegates privileged desktop operations through IPC", async ()
   await api.switchInstanceDetailWindow("instance-b");
   await api.getWindowAlwaysOnTop();
   await api.setWindowAlwaysOnTop(true);
-  api.windowDrag("start", 120, 80);
+  await api.setWindowChromeDensity("compact");
   let settingsOpened = 0;
   const stopOpenSettings = api.onOpenSettings(() => { settingsOpened += 1; });
   listeners.get("task-handoff:open-settings")();
@@ -117,15 +124,12 @@ test("preload API delegates privileged desktop operations through IPC", async ()
     ["task-handoff:switch-instance-detail-window", "instance-b"],
     ["task-handoff:get-window-always-on-top"],
     ["task-handoff:set-window-always-on-top", true],
+    ["task-handoff:set-window-chrome-density", "compact"],
     ["task-handoff:set-diagnostic-logs-enabled", true],
     ["task-handoff:desktop-update-check"],
     ["task-handoff:desktop-update-install"],
   ]);
-  assert.equal(sends.length, 1);
-  assert.equal(sends[0][0], "task-handoff:window-drag");
-  assert.equal(sends[0][1].phase, "start");
-  assert.equal(sends[0][1].screenX, 120);
-  assert.equal(sends[0][1].screenY, 80);
+  assert.equal(sends.length, 0);
 
   let state;
   const unsubscribe = api.desktopUpdates.onStateChanged((next) => { state = next; });

@@ -235,9 +235,6 @@ const disclosureAnimationActive = ref(false);
 let stickyUserMessageId = "";
 let stickyUserMessageFrame = 0;
 let copiedTurnTimer: ReturnType<typeof setTimeout> | undefined;
-let visibleTimelineFrame = 0;
-let timelineScrollIntent = false;
-let timelineScrollIntentTimer: ReturnType<typeof setTimeout> | undefined;
 let disclosureAnimationTimer: ReturnType<typeof setTimeout> | undefined;
 const turnVirtualizer = useVirtualizer(computed(() => ({
   count: turns.value.length,
@@ -282,34 +279,10 @@ function syncScrollElement() {
 
 function attachViewportListeners(viewport?: HTMLElement | null) {
   viewport?.addEventListener("scroll", handleViewportScroll, { passive: true });
-  viewport?.addEventListener("wheel", markTimelineScrollIntent, { passive: true });
-  viewport?.addEventListener("touchstart", markTimelineScrollIntent, { passive: true });
-  viewport?.addEventListener("touchmove", markTimelineScrollIntent, { passive: true });
-  viewport?.addEventListener("pointerdown", markTimelineScrollIntent, { passive: true });
-  viewport?.addEventListener("keydown", handleTimelineScrollKey);
 }
 
 function detachViewportListeners(viewport?: HTMLElement) {
   viewport?.removeEventListener("scroll", handleViewportScroll);
-  viewport?.removeEventListener("wheel", markTimelineScrollIntent);
-  viewport?.removeEventListener("touchstart", markTimelineScrollIntent);
-  viewport?.removeEventListener("touchmove", markTimelineScrollIntent);
-  viewport?.removeEventListener("pointerdown", markTimelineScrollIntent);
-  viewport?.removeEventListener("keydown", handleTimelineScrollKey);
-}
-
-function markTimelineScrollIntent() {
-  timelineScrollIntent = true;
-  clearTimeout(timelineScrollIntentTimer);
-  timelineScrollIntentTimer = setTimeout(() => {
-    timelineScrollIntent = false;
-  }, 2_000);
-}
-
-function handleTimelineScrollKey(event: KeyboardEvent) {
-  if (["ArrowDown", "ArrowUp", "PageDown", "PageUp", "Home", "End", " "].includes(event.key)) {
-    markTimelineScrollIntent();
-  }
 }
 
 function handleDisclosureClick(event: MouseEvent) {
@@ -325,36 +298,6 @@ function handleDisclosureClick(event: MouseEvent) {
 
 function handleViewportScroll() {
   scheduleStickyUserMessageUpdate();
-  if (!props.turnBodiesReady || !timelineScrollIntent) {
-    timelineScrollIntent = false;
-    return;
-  }
-  scheduleVisibleTurnTimelines();
-  clearTimeout(timelineScrollIntentTimer);
-  timelineScrollIntentTimer = setTimeout(() => {
-    timelineScrollIntent = false;
-  }, 250);
-}
-
-function loadVisibleTurnTimelines() {
-  const viewport = scrollElement.value;
-  const timeline = timelineElement.value;
-  if (!props.session || !viewport || !timeline) return;
-  const viewportBounds = viewport.getBoundingClientRect();
-  for (const element of timeline.querySelectorAll<HTMLElement>(".ai-session-timeline-turn[data-index]")) {
-    const bounds = element.getBoundingClientRect();
-    if (bounds.bottom <= viewportBounds.top || bounds.top >= viewportBounds.bottom) continue;
-    const index = Number(element.dataset.index);
-    if (!Number.isInteger(index)) continue;
-    const turn = turns.value[index];
-    if (!turn || (turn.timelineStatus !== "idle" && turn.timelineStatus !== "stale")) continue;
-    emit("loadTurnTimeline", turn.id);
-  }
-}
-
-function scheduleVisibleTurnTimelines() {
-  cancelAnimationFrame(visibleTimelineFrame);
-  visibleTimelineFrame = requestAnimationFrame(() => requestAnimationFrame(loadVisibleTurnTimelines));
 }
 
 function updateStickyUserMessage(messageId: string) {
@@ -432,7 +375,7 @@ function completedTurn(turnId: string): AiSessionTurn | undefined {
 
 function turnTime(turnId: string) {
   const turn = sessionTurn(turnId);
-  return turn?.completedAt || turn?.updatedAt || turn?.startedAt || "";
+  return turn?.completedAt || turn?.startedAt || "";
 }
 
 function formatTurnTime(value: string) {
@@ -486,21 +429,13 @@ onMounted(() => {
 });
 onBeforeUnmount(() => {
   clearTimeout(copiedTurnTimer);
-  clearTimeout(timelineScrollIntentTimer);
   clearTimeout(disclosureAnimationTimer);
   cancelAnimationFrame(stickyUserMessageFrame);
-  cancelAnimationFrame(visibleTimelineFrame);
   detachViewportListeners(scrollElement.value);
   updateStickyUserMessage("");
   window.removeEventListener("resize", syncScrollElement);
 });
 watch(() => props.turnTimelines, () => void nextTick(scheduleStickyUserMessageUpdate), { flush: "post" });
-watch(() => props.turnBodiesReady, (ready) => {
-  if (ready) return;
-  timelineScrollIntent = false;
-  clearTimeout(timelineScrollIntentTimer);
-  cancelAnimationFrame(visibleTimelineFrame);
-});
 watch(virtualTurns, () => void nextTick(scheduleStickyUserMessageUpdate), { flush: "post" });
 watch(virtualTotalSize, () => void nextTick(() => emit("layoutCommitted")), { flush: "post" });
 watch(() => turns.value.length, () => void nextTick(syncScrollElement));

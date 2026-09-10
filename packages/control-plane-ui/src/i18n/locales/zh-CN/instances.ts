@@ -284,6 +284,7 @@ export const instances = {
     noMatches: "没有匹配的实例",
     empty: "暂无实例",
     allNodes: "全部节点",
+    selectedNodes: "已选 {count} 个节点",
     small: "小",
     medium: "中",
     large: "大",

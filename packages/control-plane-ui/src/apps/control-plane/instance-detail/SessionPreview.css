@@ -457,67 +457,6 @@
   overflow-wrap: anywhere;
 }
 
-.instance-action-menu {
-  display: grid;
-  width: 158px;
-  gap: 2px;
-  border: 1px solid var(--line-strong);
-  border-radius: 8px;
-  background: var(--surface-inset);
-  box-shadow: var(--shadow-popover);
-  padding: 5px;
-}
-
-.instance-action-menu .instance-action-item {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  width: 100%;
-  min-height: 30px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--control-plane-menu-text);
-  cursor: pointer;
-  font-size: 13px;
-  font-weight: 500;
-  padding: 0 8px;
-  text-align: left;
-}
-
-.instance-action-menu .instance-action-item span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.session-toggle-menu-item {
-  position: relative;
-  padding-left: 30px;
-}
-
-.session-toggle-menu-item > span:first-child {
-  position: absolute;
-  left: 8px;
-  width: 14px;
-  height: 14px;
-  overflow: visible;
-}
-
-.session-window-menu-item {
-  position: relative;
-  padding-left: 30px;
-}
-
-.session-window-menu-item > span:first-child {
-  position: absolute;
-  left: 8px;
-  width: 14px;
-  height: 14px;
-  overflow: visible;
-}
-
 .instance-action-item:hover,
 .instance-action-item:focus-visible,
 .instance-action-item[data-highlighted] {
