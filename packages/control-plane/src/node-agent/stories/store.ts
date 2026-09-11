@@ -20,7 +20,7 @@ import {
 } from "@task-handoff/protocol/stories";
 import { createId } from "../../shared/persistence/store.ts";
 import type { NodeAgentStorePaths } from "../persistence/paths.ts";
-import type { NodeAgentRepository, StoryDocumentRecord, StoryRecord } from "./database/repository.ts";
+import type { NodeAgentRepository, StoryDocumentRecord, StoryRecord } from "../persistence/repository.ts";
 import { StoryOperationCoordinator } from "./operation-coordinator.ts";
 
 export type StoryWriteInput = {

@@ -16,7 +16,7 @@ function requireSecretManager(request: Parameters<typeof controlPlaneRequestActo
 export function registerControlPlaneGitCredentialRoutes(app: FastifyInstance, service: ControlPlaneService) {
   app.get("/api/git-credentials", async () => ({ data: { items: service.gitCredentials.list() } }));
   app.post("/api/git-credentials", async (request, reply) => {
-    const credential = service.gitCredentials.create(request.body);
+    const credential = await service.gitCredentials.create(request.body);
     return reply.code(201).send({ data: credential });
   });
   app.get("/api/git-credentials/:id", async (request) => {
@@ -29,7 +29,7 @@ export function registerControlPlaneGitCredentialRoutes(app: FastifyInstance, se
     data: await service.updateGitCredential(IdParamsSchema.parse(request.params).id, request.body),
   }));
   app.delete("/api/git-credentials/:id", async (request) => ({
-    data: { deleted: service.gitCredentials.remove(IdParamsSchema.parse(request.params).id) },
+    data: { deleted: await service.gitCredentials.remove(IdParamsSchema.parse(request.params).id) },
   }));
 
   app.get("/api/controlled-instances/:id/git-credential-assignments", async (request) => {

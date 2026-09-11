@@ -54,7 +54,7 @@ export class ControlPlaneChatSessionRuntime {
 
   async handleChatGatewayMessage(input: ChatGatewayMessage) {
     const parsed = ChatGatewayMessageSchema.parse(input);
-    const binding = this.deps.upsertChatSession({
+    const binding = await this.deps.upsertChatSession({
       channel: parsed.source.channel,
       bridgeId: parsed.source.bridgeId,
       chatSessionId: parsed.source.chatSessionId,
@@ -106,7 +106,7 @@ export class ControlPlaneChatSessionRuntime {
       decision: "allow" | "deny" | "skip";
     };
   }) {
-    const binding = this.deps.upsertChatSession({
+    const binding = await this.deps.upsertChatSession({
       channel: input.source.channel,
       bridgeId: input.source.bridgeId,
       chatSessionId: input.source.chatSessionId,

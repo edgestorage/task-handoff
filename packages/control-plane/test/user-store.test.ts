@@ -22,14 +22,18 @@ function writeRecord(directory: string, record: { id: string } & Record<string, 
   fs.writeFileSync(path.join(directory, `${record.id}.json`), `${JSON.stringify(record, null, 2)}\n`);
 }
 
-test("unreleased database setup is one canonical cp-prefixed migration per dialect", () => {
+test("database setup uses canonical ordered cp-prefixed migrations per dialect", () => {
   for (const migrations of [sqliteMigrations, postgresqlMigrations]) {
-    assert.deepEqual(migrations.map((migration) => migration.id), ["0001_user_access"]);
+    assert.deepEqual(migrations.map((migration) => migration.id), ["0001_user_access", "0002_p0_persistence", "0003_p0_pairing_revoke_phase", "0004_p0_chat_credential_metadata"]);
     assert.doesNotMatch(migrations[0]!.sql, /control_plane_/);
     assert.match(migrations[0]!.sql, /CREATE TABLE cp_user_access_grants/);
     assert.match(migrations[0]!.sql, /CREATE TABLE cp_user_roles/);
     assert.doesNotMatch(migrations[0]!.sql, /role_ids (?:TEXT|JSONB)/);
     assert.match(migrations[0]!.sql, /instance_scope (?:TEXT|JSONB) NOT NULL/);
+    assert.match(migrations[1]!.sql, /CREATE TABLE cp_nodes/);
+    assert.match(migrations[1]!.sql, /CREATE TABLE cp_models/);
+    assert.match(migrations[1]!.sql, /CREATE TABLE cp_chat_bridges/);
+    assert.match(migrations[1]!.sql, /CREATE TABLE cp_git_credentials/);
   }
 });
 
@@ -95,11 +99,20 @@ test("fresh user store defaults to SQLite and initializes canonical system roles
     try {
       const tables = database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'cp_%' ORDER BY name").all().map((row) => row.name);
       assert.deepEqual(tables, [
+        "cp_chat_bridges",
+        "cp_chat_session_bindings",
         "cp_external_identity_approvals",
+        "cp_git_audit",
+        "cp_git_credential_assignments",
+        "cp_git_credentials",
+        "cp_git_provisioning_intents",
         "cp_identity_providers",
         "cp_login_identities",
         "cp_metadata",
         "cp_migration_ledger",
+        "cp_models",
+        "cp_node_pairing_revocations",
+        "cp_nodes",
         "cp_roles",
         "cp_user_access_grants",
         "cp_user_audit",

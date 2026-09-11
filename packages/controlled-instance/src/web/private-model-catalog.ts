@@ -48,7 +48,7 @@ export function resolveControlledPrivateModelSelection(
       : agent === "opencode" ? "openai-chat-completions" : undefined;
   if (!protocol) return undefined;
   if (!catalog) {
-    if (requested) throw Object.assign(new Error("This instance does not have a private model catalog."), {
+    if (requested) throw Object.assign(new Error("The model configuration is not loaded by this instance. Restart the instance to apply the latest model configuration."), {
       code: "AI_SESSION_MODEL_CATALOG_UNAVAILABLE",
       statusCode: 409,
     });
@@ -60,7 +60,7 @@ export function resolveControlledPrivateModelSelection(
     : entities[0];
   if (!entity) {
     if (!requested) return undefined;
-    throw Object.assign(new Error(`Model entity ${requested.modelEntityId} is not assigned for ${agent}.`), {
+    throw Object.assign(new Error("The selected model is not available in this running instance. Restart the instance to apply the latest model configuration."), {
       code: "AI_SESSION_MODEL_ENTITY_UNAVAILABLE",
       statusCode: 409,
     });
@@ -68,7 +68,7 @@ export function resolveControlledPrivateModelSelection(
   const names = entity.modelNames.slice().sort((left, right) => left.order - right.order || left.name.localeCompare(right.name));
   const modelName = requested?.modelName || names[0]?.name;
   if (!modelName || !names.some((entry) => entry.name === modelName)) {
-    throw Object.assign(new Error(`Model ${modelName || ""} is not available from entity ${entity.id}.`), {
+    throw Object.assign(new Error("The selected model is not available in this running instance. Restart the instance to apply the latest model configuration."), {
       code: "AI_SESSION_MODEL_NAME_UNAVAILABLE",
       statusCode: 409,
     });

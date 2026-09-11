@@ -9,8 +9,8 @@ const {
   CONTROL_PLANE_PROXY_PROTOCOL_VERSION,
   ControlPlaneProxyErrorCode,
 } = require("../packages/protocol/src/control-plane-proxy.ts");
-const { ControlPlaneService } = require("../packages/control-plane/src/control-plane/application/service.ts");
 const { controlPlaneStorePaths } = require("../packages/control-plane/src/control-plane/persistence/paths.ts");
+const { createTestControlPlaneService } = require("./fixtures/control-plane-service.js");
 const {
   registerControlPlaneProxyManagementRoutes,
 } = require("../packages/control-plane/src/control-plane/http/control-plane-proxy-management-routes.ts");
@@ -57,17 +57,15 @@ function revokeReceipt(body) {
   };
 }
 
-function fixture(fetchImpl) {
+async function fixture(fetchImpl) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "proxy-claim-lifecycle-"));
-  const service = new ControlPlaneService(controlPlaneStorePaths(dataDir), { fetchImpl });
-  service.init();
-  return { dataDir, service };
+  return { dataDir, ...await createTestControlPlaneService(dataDir, { fetchImpl }) };
 }
 
 test("a lost claim response resumes with the exact persisted identity and creates one local node", async () => {
   const requests = [];
   let first = true;
-  const { service } = fixture(async (_url, init) => {
+  const { service } = await fixture(async (_url, init) => {
     const body = JSON.parse(init.body);
     requests.push(body);
     if (first) {
@@ -102,7 +100,7 @@ test("a lost claim response resumes with the exact persisted identity and create
 test("cancel recovers a remotely committed binding, revokes it, then deletes the pending secret", async () => {
   const calls = [];
   let committedBody;
-  const { service } = fixture(async (url, init) => {
+  const { service } = await fixture(async (url, init) => {
     const parsedUrl = new URL(url);
     calls.push({ url: parsedUrl, init });
     if (init.method === "POST") {
@@ -135,7 +133,7 @@ test("cancel recovers a remotely committed binding, revokes it, then deletes the
 });
 
 test("cancel retains a retryable compensation receipt when R is unavailable", async () => {
-  const { service } = fixture(async () => { throw new Error("proxy offline"); });
+  const { service } = await fixture(async () => { throw new Error("proxy offline"); });
   await assert.rejects(service.claimProxyNode({
     proxyOrigin: "https://proxy.example.test",
     inviteToken: "i".repeat(32),
@@ -164,7 +162,7 @@ test("cancel retains a retryable compensation receipt when R is unavailable", as
 });
 
 test("force cancel resolves a persisted pending record id independently from its claim id", async () => {
-  const { service } = fixture(async () => { throw new Error("proxy offline"); });
+  const { service } = await fixture(async () => { throw new Error("proxy offline"); });
   await assert.rejects(service.claimProxyNode({
     proxyOrigin: "https://proxy.example.test",
     inviteToken: "i".repeat(32),
@@ -183,7 +181,7 @@ test("force cancel resolves a persisted pending record id independently from its
 
 test("cancel retains compensation authority when R returns a mismatched 2xx revoke receipt", async () => {
   let committedBody;
-  const { service } = fixture(async (_url, init) => {
+  const { service } = await fixture(async (_url, init) => {
     if (init.method === "POST") {
       const body = JSON.parse(init.body);
       if (!committedBody) {
@@ -207,7 +205,7 @@ test("cancel retains compensation authority when R returns a mismatched 2xx revo
 });
 
 test("a deterministic claim failure removes the pending credential", async () => {
-  const { service } = fixture(async () => Response.json({
+  const { service } = await fixture(async () => Response.json({
     error: { code: ControlPlaneProxyErrorCode.InviteExpired, message: "Invite expired.", retryable: false },
   }, { status: 410 }));
 
@@ -221,7 +219,7 @@ test("a deterministic claim failure removes the pending credential", async () =>
 test("force deleting a proxy node retries R and reports orphan risk only while R remains unavailable", async () => {
   let calls = 0;
   let mode = "claim";
-  const { service } = fixture(async (_url, init) => {
+  const { service } = await fixture(async (_url, init) => {
     calls += 1;
     if (mode !== "claim") throw new Error("proxy unavailable");
     const body = JSON.parse(init.body);
@@ -250,7 +248,7 @@ test("force deleting a proxy node retries R and reports orphan risk only while R
 test("normal proxy node delete requires an exact revoked binding receipt before removing local authority", async () => {
   let mode = "claim";
   let claimBody;
-  const { service } = fixture(async (_url, init) => {
+  const { service } = await fixture(async (_url, init) => {
     if (mode === "claim") {
       claimBody = JSON.parse(init.body);
       return Response.json({ data: claimResult(claimBody) });
@@ -279,7 +277,7 @@ test("normal proxy node delete requires an exact revoked binding receipt before 
 
 test("force delete cannot bypass a deterministic revoke receipt failure", async () => {
   let mode = "claim";
-  const { service } = fixture(async (_url, init) => {
+  const { service } = await fixture(async (_url, init) => {
     if (mode === "claim") return Response.json({ data: claimResult(JSON.parse(init.body)) });
     return Response.json({ data: { ok: true } });
   });
@@ -297,7 +295,7 @@ test("force delete cannot bypass a deterministic revoke receipt failure", async 
 
 test("normal delete recovers after R committed revoke but A lost the response", async () => {
   let mode = "claim";
-  const { service } = fixture(async (_url, init) => {
+  const { service } = await fixture(async (_url, init) => {
     if (mode === "claim") return Response.json({ data: claimResult(JSON.parse(init.body)) });
     return Response.json({ error: {
       code: ControlPlaneProxyErrorCode.BindingRevoked,
@@ -316,7 +314,7 @@ test("normal delete recovers after R committed revoke but A lost the response", 
 });
 
 test("generic node patch cannot enter, leave, or replace a proxy connection identity", async () => {
-  const { service } = fixture(async (_url, init) => Response.json({ data: claimResult(JSON.parse(init.body)) }));
+  const { service } = await fixture(async (_url, init) => Response.json({ data: claimResult(JSON.parse(init.body)) }));
   await service.claimProxyNode({ proxyOrigin: "https://proxy.example.test", inviteToken: "i".repeat(32) });
 
   for (const patch of [
@@ -324,14 +322,14 @@ test("generic node patch cannot enter, leave, or replace a proxy connection iden
     { connectionPath: { kind: "control-plane-proxy", proxyId: "other.example.test", proxyBindingId: "other_binding", targetNodeId: "node_b" } },
     { auth: { mode: "local-static-key", secret: "replacement" } },
   ]) {
-    assert.throws(
+    await assert.rejects(
       () => service.updateNode("node_b", patch),
       (error) => error.code === "CONTROL_PLANE_PROXY_IDENTITY_IMMUTABLE",
     );
   }
   assert.equal(service.requirePublicNode("node_b").connectionPath.proxyBindingId, "proxy_binding_1");
 
-  service.nodes.put({
+  await service.nodes.put({
     id: "node_direct",
     name: "Direct Node",
     connectionMode: "direct-http",
@@ -346,7 +344,7 @@ test("generic node patch cannot enter, leave, or replace a proxy connection iden
     createdAt: timestamp,
     updatedAt: timestamp,
   });
-  assert.throws(
+  await assert.rejects(
     () => service.updateNode("node_direct", {
       connectionMode: "control-plane-proxy",
       connectionPath: { kind: "control-plane-proxy", proxyId: "proxy.example.test", proxyBindingId: "proxy_binding_1", targetNodeId: "node_b" },
@@ -357,14 +355,18 @@ test("generic node patch cannot enter, leave, or replace a proxy connection iden
 });
 
 test("service startup removes a private proxy credential orphaned after the node delete commit", async () => {
-  const fixtureState = fixture(async (_url, init) => Response.json({ data: claimResult(JSON.parse(init.body)) }));
+  const fixtureState = await fixture(async (_url, init) => Response.json({ data: claimResult(JSON.parse(init.body)) }));
   await fixtureState.service.claimProxyNode({ proxyOrigin: "https://proxy.example.test", inviteToken: "i".repeat(32) });
-  fixtureState.service.nodes.delete("node_b");
+  await fixtureState.service.nodes.delete("node_b");
   assert.ok(fixtureState.service.proxyPrivateStore.nodeCredential("node_b"));
 
-  const restarted = new ControlPlaneService(controlPlaneStorePaths(fixtureState.dataDir));
-  restarted.init();
-  assert.equal(restarted.proxyPrivateStore.nodeCredential("node_b"), undefined);
+  await fixtureState.close();
+  const restarted = await createTestControlPlaneService(fixtureState.dataDir);
+  try {
+    assert.equal(restarted.service.proxyPrivateStore.nodeCredential("node_b"), undefined);
+  } finally {
+    await restarted.close();
+  }
 });
 
 test("pending claim cancel API awaits remote compensation before responding", async () => {

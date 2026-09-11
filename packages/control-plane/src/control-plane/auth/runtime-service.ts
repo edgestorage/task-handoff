@@ -2,11 +2,13 @@ import { z } from "zod";
 import type { ControlPlaneMobileDevice } from "@task-handoff/protocol/control-plane-access";
 import type { ControlPlaneStorePaths } from "../persistence/paths.ts";
 import type { ControlPlaneUserDatabaseConfigInput } from "./database/index.ts";
+import type { ControlPlaneUserRepository } from "./database/repository.ts";
 import { assertCanAccessResolvedResource, type ControlPlaneUserAuthorizationContext } from "./authorization.ts";
 import { ControlPlaneExternalAuthentication } from "./external-authentication.ts";
 import { ControlPlaneIdentityProviderService } from "./identity-provider-service.ts";
 import { ControlPlaneUserAuthentication } from "./user-authentication.ts";
 import { ControlPlaneUserService } from "./user-service.ts";
+import type { SecretEnvelopeService } from "../persistence/secret-envelope.ts";
 
 export const CONTROL_PLANE_SESSION_COOKIE = "task_handoff_cp_session";
 export const ControlPlaneAuthModeSchema = z.enum(["disabled", "password"]);
@@ -32,11 +34,11 @@ export class ControlPlaneAuth {
   readonly external: ControlPlaneExternalAuthentication;
   private readonly onUserAuthorizationChanged?: ControlPlaneAuthOptions["onUserAuthorizationChanged"];
 
-  constructor(paths: ControlPlaneStorePaths, options: ControlPlaneAuthOptions = {}) {
+  constructor(paths: ControlPlaneStorePaths, options: ControlPlaneAuthOptions = {}, runtime: { repository?: ControlPlaneUserRepository; secrets?: SecretEnvelopeService } = {}) {
     this.mode = ControlPlaneAuthModeSchema.parse(options.mode || process.env.TASK_HANDOFF_CONTROL_PLANE_AUTH_MODE || "disabled");
-    this.users = new ControlPlaneUserService(paths, { database: options.database });
+    this.users = new ControlPlaneUserService(paths, { database: options.database, repository: runtime.repository });
     this.sessions = new ControlPlaneUserAuthentication(this.users, options.loginRateLimit);
-    this.identityProviders = new ControlPlaneIdentityProviderService(paths, this.users);
+    this.identityProviders = new ControlPlaneIdentityProviderService(paths, this.users, { secrets: runtime.secrets });
     this.external = new ControlPlaneExternalAuthentication(this.users, this.sessions, this.identityProviders);
     this.onUserAuthorizationChanged = options.onUserAuthorizationChanged;
   }

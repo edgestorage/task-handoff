@@ -1,15 +1,20 @@
-import { and, eq, gt, inArray } from "drizzle-orm";
+import { and, asc, eq, gt, inArray } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import type { z } from "zod";
 import type { ExternalIdentityApprovalRecord, UserAccessGrantRecord } from "../user-records.ts";
 import { postgresqlMigrations } from "./migrations/index.ts";
+import { ControlPlaneMigrationLedgerRecordSchema } from "../../persistence/database/migrations.ts";
 import {
   databaseStartupError,
+  p0RecordSchemas,
   recordFromDatabase,
   rowForDatabase,
   type ControlPlaneApprovalCollection,
   type ControlPlaneGrantCollection,
+  type ControlPlaneGitAssignmentCollection,
+  type ControlPlaneGitAuditCollection,
+  type ControlPlaneGitProvisioningCollection,
   type ControlPlaneIdentityCollection,
   type ControlPlaneRecordCollection,
   type ControlPlaneSessionCollection,
@@ -57,7 +62,7 @@ async function migrate(pool: Pool, schemaName: string) {
 function collection<T extends { id: string }>(db: any, table: any, recordSchema: z.ZodType<T>): ControlPlaneRecordCollection<T> {
   return {
     async list() {
-      const rows = await db.select().from(table);
+      const rows = await db.select().from(table).orderBy(asc(table.id));
       return rows.map((row: Record<string, unknown>) => recordFromDatabase(recordSchema, row));
     },
     async get(id) {
@@ -196,6 +201,50 @@ function approvalCollection(db: any): ControlPlaneApprovalCollection {
   };
 }
 
+function gitAssignmentCollection(db: any): ControlPlaneGitAssignmentCollection {
+  const base = collection(db, schema.gitAssignments, p0RecordSchemas.gitAssignments);
+  return {
+    ...base,
+    async putIfRevision(input, expectedRevision) {
+      const record = p0RecordSchemas.gitAssignments.parse(input);
+      if (expectedRevision === undefined) {
+        const rows = await db.insert(schema.gitAssignments).values(record).onConflictDoNothing().returning({ id: schema.gitAssignments.id });
+        return rows.length > 0;
+      }
+      const { id: _id, ...set } = record;
+      const rows = await db.update(schema.gitAssignments).set(set).where(and(
+        eq(schema.gitAssignments.id, record.id),
+        eq(schema.gitAssignments.assignmentRevision, expectedRevision),
+      )).returning({ id: schema.gitAssignments.id });
+      return rows.length > 0;
+    },
+  };
+}
+
+function gitProvisioningCollection(db: any): ControlPlaneGitProvisioningCollection {
+  const base = collection(db, schema.gitProvisioningIntents, p0RecordSchemas.gitProvisioningIntents);
+  return {
+    ...base,
+    async insert(input) {
+      const record = p0RecordSchemas.gitProvisioningIntents.parse(input);
+      const rows = await db.insert(schema.gitProvisioningIntents).values(record).onConflictDoNothing().returning({ id: schema.gitProvisioningIntents.id });
+      return rows.length > 0;
+    },
+  };
+}
+
+function gitAuditCollection(db: any): ControlPlaneGitAuditCollection {
+  const base = collection(db, schema.gitAudit, p0RecordSchemas.gitAudit);
+  return {
+    list: base.list,
+    get: base.get,
+    async append(input) {
+      const record = p0RecordSchemas.gitAudit.parse(input);
+      await db.insert(schema.gitAudit).values(record);
+    },
+  };
+}
+
 function repositoryFor(db: any, close: () => Promise<void>, inTransaction = false): ControlPlaneUserRepository {
   let repository: ControlPlaneUserRepository;
   const transaction = async <T>(operation: (repository: ControlPlaneUserRepository) => Promise<T>) => {
@@ -212,6 +261,15 @@ function repositoryFor(db: any, close: () => Promise<void>, inTransaction = fals
     providers: collection(db, schema.providers, userRecordSchemas.providers),
     approvals: approvalCollection(db),
     audit: collection(db, schema.audit, userRecordSchemas.audit),
+    nodes: collection(db, schema.nodes, p0RecordSchemas.nodes),
+    pairingRevocations: collection(db, schema.pairingRevocations, p0RecordSchemas.pairingRevocations),
+    models: collection(db, schema.models, p0RecordSchemas.models),
+    chatBridges: collection(db, schema.chatBridges, p0RecordSchemas.chatBridges),
+    chatSessions: collection(db, schema.chatSessions, p0RecordSchemas.chatSessions),
+    gitCredentials: collection(db, schema.gitCredentials, p0RecordSchemas.gitCredentials),
+    gitAssignments: gitAssignmentCollection(db),
+    gitProvisioningIntents: gitProvisioningCollection(db),
+    gitAudit: gitAuditCollection(db),
     async metadata() {
       const rows = await db.select().from(schema.metadata).where(eq(schema.metadata.key, "user_store")).limit(1);
       return (rows[0]?.value || { schemaVersion: 1 }) as ControlPlaneUserStoreMetadata;
@@ -224,6 +282,7 @@ function repositoryFor(db: any, close: () => Promise<void>, inTransaction = fals
       return rows[0];
     },
     async putMigration(record) {
+      record = ControlPlaneMigrationLedgerRecordSchema.parse(record);
       await db.insert(schema.migrationLedger).values(record).onConflictDoUpdate({
         target: schema.migrationLedger.id,
         set: { checksum: record.checksum, appliedAt: record.appliedAt, details: record.details },

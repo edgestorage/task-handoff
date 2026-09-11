@@ -28,6 +28,20 @@ describe('mobile Story tree model', () => {
     expect(sortStoryTree(stories, 'en-US', 'manual', sessions, ['n1:older', 'n1:newer']).map((item) => item.id)).toEqual(['older', 'newer']);
   });
 
+  test('keeps archived Stories after active Stories in every sort mode', () => {
+    const active = story('active', 'n1', 'Z');
+    const archived = { ...story('archived', 'n1', 'A'), archivedAt: '2026-09-06T00:00:00.000Z' };
+    const stories = [archived, active];
+    const sessions = new Map([
+      ['n1:archived', [{ instanceId: 'i', instanceName: 'I', session: { lastUserMessageAt: '2026-09-04T02:00:00.000Z' } } as never]],
+      ['n1:active', [{ instanceId: 'i', instanceName: 'I', session: { lastUserMessageAt: '2026-09-04T01:00:00.000Z' } } as never]],
+    ]);
+
+    for (const mode of ['name', 'last-user-message', 'manual'] as const) {
+      expect(sortStoryTree(stories, 'en-US', mode, sessions, ['n1:archived', 'n1:active']).map((item) => item.id)).toEqual(['active', 'archived']);
+    }
+  });
+
   test('links sessions through both the owning node and Story id', () => {
     const stories = [story('shared', 'node-a', 'A'), story('shared', 'node-b', 'B')];
     const instances = [

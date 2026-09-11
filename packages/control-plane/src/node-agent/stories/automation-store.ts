@@ -17,7 +17,7 @@ import {
   type StoredStoryAutomationRun,
   type StoryAutomationExecutionInput,
 } from "./database/records.ts";
-import type { NodeAgentRepository, StoryAutomationRecord, StoryAutomationRunRecord } from "./database/repository.ts";
+import type { NodeAgentRepository, StoryAutomationRecord, StoryAutomationRunRecord } from "../persistence/repository.ts";
 
 export type { StoredStoryAutomationRun, StoryAutomationExecutionInput } from "./database/records.ts";
 

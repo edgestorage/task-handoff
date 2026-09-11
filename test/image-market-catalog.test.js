@@ -24,8 +24,7 @@ const { ControlPlaneCatalogService } = require("../packages/control-plane/src/co
 const { ControlPlaneSettingsSchema } = require("../packages/control-plane/src/control-plane/catalog/inputs.ts");
 const { JsonCollection, JsonFile } = require("../packages/control-plane/src/shared/persistence/store.ts");
 const { createControlPlaneApp } = require("../packages/control-plane/src/server.ts");
-const { ControlPlaneService } = require("../packages/control-plane/src/control-plane/application/service.ts");
-const { controlPlaneStorePaths } = require("../packages/control-plane/src/control-plane/persistence/paths.ts");
+const { createTestControlPlaneService } = require("./fixtures/control-plane-service.js");
 
 const digest = (letter) => `sha256:${letter.repeat(64)}`;
 const timestamp = () => new Date().toISOString();
@@ -404,12 +403,13 @@ test("legacy embedded image migration backs up first and keeps old records on va
   assert.equal(failedState.code, "PROJECT_REFERENCE_VALIDATION_FAILED");
 });
 
-test("instance creation sends Market default, explicit tag, and Custom references to the node boundary", async () => {
+test("instance creation sends Market default, explicit tag, and Custom references to the node boundary", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "image-market-create-"));
-  const service = new ControlPlaneService(controlPlaneStorePaths(root));
-  service.init();
+  const current = await createTestControlPlaneService(root);
+  t.after(() => current.close());
+  const service = current.service;
   const now = timestamp();
-  service.nodes.put({
+  await service.nodes.put({
     id: "node_create",
     name: "Create node",
     connectionMode: "direct-http",

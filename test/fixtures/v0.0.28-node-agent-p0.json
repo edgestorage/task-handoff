@@ -1,0 +1,154 @@
+{
+  "identity": {
+    "nodeId": "node_v028",
+    "createdAt": "2026-08-01T00:00:00.000Z",
+    "updatedAt": "2026-08-01T00:00:00.000Z",
+    "pairingInvites": [{ "tokenHash": "must-not-migrate", "createdAt": "2026-08-01T00:00:00.000Z", "expiresAt": "2027-08-01T00:00:00.000Z" }],
+    "remoteControlPlanes": [{
+      "id": "cp_v028",
+      "keyId": "key_v028",
+      "name": "Legacy Control Plane",
+      "url": "https://control.example.test/",
+      "secret": "pairing-secret-v028",
+      "pairedAt": "2026-08-01T00:00:00.000Z",
+      "updatedAt": "2026-08-01T00:00:00.000Z",
+      "active": true
+    }],
+    "futureIdentityField": true
+  },
+  "localFolders": [{
+    "id": "folder_v028",
+    "nodeId": "node_v028",
+    "name": "Legacy Workspace",
+    "path": "/workspace/v028",
+    "labels": { "fixture": "v0.0.28" },
+    "createdAt": "2026-08-01T00:00:00.000Z",
+    "updatedAt": "2026-08-01T00:00:00.000Z"
+  }],
+  "runtimes": [{
+    "id": "runtime_v028",
+    "nodeId": "node_v028",
+    "name": "Legacy Docker",
+    "type": "docker",
+    "status": "online",
+    "accessStrategy": "direct-port",
+    "capabilities": {},
+    "labels": {},
+    "createdAt": "2026-08-01T00:00:00.000Z",
+    "updatedAt": "2026-08-01T00:00:00.000Z"
+  }],
+  "instances": [{
+    "id": "instance_v028",
+    "name": "Legacy Instance",
+    "source": { "type": "local-folder", "localFolderId": "folder_v028", "path": "/workspace/v028", "ownerNodeId": "node_v028" },
+    "sourceSnapshot": { "fixture": "v0.0.28" },
+    "modelSelection": { "modelEntityIds": ["mdl_53917c012972033c502767a0834ed0e47cdbf416755c0ba751d042e7a40a51fa"] },
+    "nodeId": "node_v028",
+    "runtimeId": "runtime_v028",
+    "stateRevision": 7,
+    "status": "stopped",
+    "health": "unknown",
+    "connectionStatus": "offline",
+    "agentStatus": "offline",
+    "targetStatus": "unknown",
+    "uiAccessStatus": "unknown",
+    "ready": false,
+    "workspace": { "mode": "local-bind", "status": "ready", "path": "/workspace/v028" },
+    "target": { "strategy": "direct-port", "status": "unknown" },
+    "access": { "strategy": "control-plane-proxy", "status": "unknown" },
+    "runtime": { "kind": "docker", "containerName": "task-handoff-instance_v028", "labels": {} },
+    "createdAt": "2026-08-01T00:00:00.000Z",
+    "updatedAt": "2026-08-01T00:00:00.000Z",
+    "futureInstanceField": "ignored"
+  }],
+  "privateConfigs": [{
+    "version": 1,
+    "instanceId": "instance_v028",
+    "instanceCredential": "instance-secret-v028",
+    "environment": {},
+    "updatedAt": "2026-08-01T00:00:00.000Z"
+  }],
+  "models": [{
+    "id": "mdl_53917c012972033c502767a0834ed0e47cdbf416755c0ba751d042e7a40a51fa",
+    "name": "Legacy Codex",
+    "endpoint": "https://models.example.test/v1",
+    "key": "model-secret-v028",
+    "model": "gpt-v028",
+    "modelNames": [{ "name": "gpt-v028", "order": 0 }],
+    "protocols": ["openai-responses"],
+    "app": "codex",
+    "enabled": true,
+    "order": 10,
+    "labels": {},
+    "createdAt": "2026-08-01T00:00:00.000Z",
+    "updatedAt": "2026-08-01T00:00:00.000Z"
+  }],
+  "modelAssignments": [{
+    "instanceId": "instance_v028",
+    "modelEntityIds": ["mdl_53917c012972033c502767a0834ed0e47cdbf416755c0ba751d042e7a40a51fa"],
+    "codexModelHash": "mdl_53917c012972033c502767a0834ed0e47cdbf416755c0ba751d042e7a40a51fa",
+    "updatedAt": "2026-08-01T00:00:00.000Z"
+  }],
+  "gitPayloads": [{
+    "id": "gitcred_v028",
+    "payload": {
+      "credential": {
+        "id": "gitcred_v028",
+        "name": "Legacy Git Token",
+        "kind": "https-token",
+        "scope": { "scheme": "https", "host": "git.example.test", "pathPrefix": "/team/" },
+        "secretSet": true,
+        "status": "enabled",
+        "revision": 3,
+        "createdAt": "2026-08-01T00:00:00.000Z",
+        "updatedAt": "2026-08-01T00:00:00.000Z"
+      },
+      "secret": { "kind": "https-token", "username": "git", "token": "git-secret-v028" }
+    },
+    "createdAt": "2026-08-01T00:00:00.000Z",
+    "updatedAt": "2026-08-01T00:00:00.000Z"
+  }],
+  "gitAssignments": [{
+    "id": "instance_v028:gitcred_v028",
+    "instanceId": "instance_v028",
+    "credentialId": "gitcred_v028",
+    "credentialRevision": 3,
+    "assignmentRevision": 9,
+    "status": "synced",
+    "authorizedAt": "2026-08-01T00:00:00.000Z",
+    "createdAt": "2026-08-01T00:00:00.000Z",
+    "updatedAt": "2026-08-01T00:00:00.000Z"
+  }],
+  "gitProvisioning": [{
+    "id": "instance_v028",
+    "status": "pending",
+    "input": {
+      "operationId": "gitop_v028",
+      "instanceId": "instance_v028",
+      "remoteUrl": "https://git.example.test/team/repo.git",
+      "ref": { "type": "branch", "name": "main" },
+      "clone": { "submodules": false, "lfs": false, "subdirectory": "" },
+      "credentials": [{
+        "operationId": "gitcredop_v028",
+        "retention": "operation-only",
+        "payload": {
+          "credential": {
+            "id": "gitcred_operation_v028",
+            "name": "Operation Token",
+            "kind": "https-token",
+            "scope": { "scheme": "https", "host": "git.example.test", "pathPrefix": "/team/" },
+            "secretSet": true,
+            "status": "enabled",
+            "revision": 1,
+            "createdAt": "2026-08-01T00:00:00.000Z",
+            "updatedAt": "2026-08-01T00:00:00.000Z"
+          },
+          "secret": { "kind": "https-token", "username": "git", "token": "operation-secret-v028" }
+        }
+      }]
+    },
+    "createdAt": "2026-08-01T00:00:00.000Z",
+    "updatedAt": "2026-08-01T00:00:00.000Z",
+    "expiresAt": "2027-08-01T00:00:00.000Z"
+  }]
+}

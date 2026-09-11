@@ -1376,6 +1376,11 @@
   transform: translateY(-4px);
 }
 
+.session-ai-path-group.is-compact-list .session-ai-tree-item-shell.session-ai-tree-enter-from,
+.session-ai-path-group.is-compact-list .session-ai-tree-item-shell.session-ai-tree-leave-to {
+  max-height: 0;
+}
+
 .session-ai-tree-leave-active {
   pointer-events: none;
 }

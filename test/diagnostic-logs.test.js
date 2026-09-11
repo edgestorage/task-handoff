@@ -6,24 +6,26 @@ const { pipeline } = require("node:stream/promises");
 const test = require("node:test");
 const tar = require("tar");
 
-const { ControlPlaneService } = require("../packages/control-plane/src/control-plane/application/service.ts");
 const { ControlPlaneSettingsSchema, sanitizeStoredControlPlaneSettings } = require("../packages/control-plane/src/control-plane/catalog/inputs.ts");
 const { createControlPlaneDiagnosticLogger, createDiagnosticLogsArchive } = require("../packages/control-plane/src/control-plane/diagnostics/logs.ts");
 const { controlPlaneStorePaths } = require("../packages/control-plane/src/control-plane/persistence/paths.ts");
 const { createControlPlaneApp, routeAuthorization } = require("../packages/control-plane/src/control-plane/http/server.ts");
+const { createTestControlPlaneService } = require("./fixtures/control-plane-service.js");
 
-test("diagnostic log setting migrates from the environment and persists manual changes", () => {
+test("diagnostic log setting migrates from the environment and persists manual changes", async () => {
   const previous = process.env.TASK_HANDOFF_DIAGNOSTIC_LOGS;
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-diagnostic-setting-"));
   process.env.TASK_HANDOFF_DIAGNOSTIC_LOGS = "1";
+  let current;
   try {
-    const service = new ControlPlaneService(controlPlaneStorePaths(dataDir));
-    service.init();
+    current = await createTestControlPlaneService(dataDir);
+    const { service } = current;
     assert.equal(service.getSettings().diagnosticLogs, true);
     assert.equal(JSON.parse(fs.readFileSync(path.join(dataDir, "control-plane-settings.json"), "utf8")).diagnosticLogs, true);
     assert.equal(service.updateSettings({ diagnosticLogs: false }).diagnosticLogs, false);
     assert.equal(JSON.parse(fs.readFileSync(path.join(dataDir, "control-plane-settings.json"), "utf8")).diagnosticLogs, false);
   } finally {
+    await current?.close();
     if (previous === undefined) delete process.env.TASK_HANDOFF_DIAGNOSTIC_LOGS;
     else process.env.TASK_HANDOFF_DIAGNOSTIC_LOGS = previous;
   }
@@ -93,6 +95,10 @@ test("diagnostic export contains only allowlisted log trees", async () => {
   fs.writeFileSync(path.join(nodeAgentDataDir, "local-instances", "instance_1", "logs", "controlled-instance.log"), "instance\n");
   fs.writeFileSync(path.join(nodeAgentDataDir, "local-instances", "instance_1", "runtime.jsonl"), "must-not-export\n");
   fs.writeFileSync(path.join(nodeAgentDataDir, "identity.jsonl"), "must-not-export\n");
+  fs.writeFileSync(path.join(dataDir, "control-plane.sqlite"), "database-ciphertext-must-not-export\n");
+  fs.writeFileSync(path.join(dataDir, "control-plane.sqlite-wal"), "wal-ciphertext-must-not-export\n");
+  fs.mkdirSync(path.join(dataDir, "keystore"), { recursive: true });
+  fs.writeFileSync(path.join(dataDir, "keystore", "database-encryption-key.json"), "root-key-must-not-export\n");
 
   const archive = await createDiagnosticLogsArchive({ dataDir, nodeAgentDataDir, diagnosticLogsEnabled: true });
   const archivePath = path.join(dataDir, "diagnostics.tar.gz");
@@ -107,6 +113,8 @@ test("diagnostic export contains only allowlisted log trees", async () => {
   assert.equal(fs.readFileSync(path.join(extracted, "logs", "local-instances", "instance_1", "controlled-instance.log"), "utf8"), "instance\n");
   assert.equal(fs.existsSync(path.join(extracted, "logs", "node-agent", "identity.jsonl")), false);
   assert.equal(fs.existsSync(path.join(extracted, "logs", "local-instances", "instance_1", "runtime.jsonl")), false);
+  const exportedFiles = fs.readdirSync(extracted, { recursive: true }).join("\n");
+  assert.doesNotMatch(exportedFiles, /control-plane\.sqlite|database-encryption-key/);
 });
 
 test("diagnostic export keeps only the latest 1 MiB of an oversized log", async () => {

@@ -159,10 +159,18 @@ test ! -e "$NEW"
 install -d -m 0755 "$NEW"
 tar -xzf "$REMOTE_STAGE/task-handoff-server-$VERSION.tgz" -C "$NEW" --strip-components=1
 for name in control-plane node-agent controlled-instance; do
+  # npm treats sibling packages under node_modules/@task-handoff as one install
+  # tree and prunes the other runtime packages. Install each package in isolation
+  # before assembling the self-contained server directory.
+  INSTALL_ROOT="$REMOTE_STAGE/.install-$name"
   PACKAGE="$NEW/node_modules/@task-handoff/$name"
-  install -d -m 0755 "$PACKAGE"
-  tar -xzf "$REMOTE_STAGE/task-handoff-$name-$VERSION.tgz" -C "$PACKAGE" --strip-components=1
-  npm install --prefix "$PACKAGE" --omit=dev --ignore-scripts
+  test ! -e "$INSTALL_ROOT"
+  test ! -e "$PACKAGE"
+  install -d -m 0755 "$INSTALL_ROOT"
+  tar -xzf "$REMOTE_STAGE/task-handoff-$name-$VERSION.tgz" -C "$INSTALL_ROOT" --strip-components=1
+  npm install --prefix "$INSTALL_ROOT" --omit=dev --legacy-peer-deps --ignore-scripts
+  install -d -m 0755 "$(dirname "$PACKAGE")"
+  mv "$INSTALL_ROOT" "$PACKAGE"
 done
 node -e '
   const root = process.argv[1];

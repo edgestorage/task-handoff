@@ -8,7 +8,7 @@ import {
   type Node,
   type NodeModelPublicRecord,
 } from "@task-handoff/protocol/control-plane";
-import type { JsonCollection } from "../../shared/persistence/store.ts";
+import type { ControlPlaneModelRepository } from "./repository.ts";
 import type { AiSessionHistoryList } from "@task-handoff/protocol/ai-sessions";
 import { CopyModelInputSchema, CreateModelInputSchema, ModelDiscoveryInputSchema, ModelTestInputSchema, UpdateModelInputSchema, type ModelDiscoveryInput, type ModelTestInput, type UpdateModelInput } from "../application/inputs.ts";
 import { now, throwNotFound } from "../application/helpers.ts";
@@ -17,7 +17,7 @@ import { normalizeModel, publicModel } from "../public-records.ts";
 import { discoverModels, testModelEndpoint } from "../../shared/models/model-endpoint.ts";
 
 type ControlPlaneModelServiceOptions = {
-  models: JsonCollection<ModelConfig>;
+  repository: ControlPlaneModelRepository;
   gateway: ControlPlaneNodeAgentGateway;
   listNodes: () => Node[];
   requireNode: (id: string) => Node;
@@ -29,9 +29,15 @@ type ControlPlaneModelServiceOptions = {
 
 export class ControlPlaneModelService {
   private readonly options: ControlPlaneModelServiceOptions;
+  private readonly databaseModels = new Map<string, ModelConfig>();
 
   constructor(options: ControlPlaneModelServiceOptions) {
     this.options = options;
+  }
+
+  async init() {
+    this.databaseModels.clear();
+    for (const model of await this.options.repository.list()) this.databaseModels.set(model.id, model);
   }
 
   list() {
@@ -97,7 +103,7 @@ export class ControlPlaneModelService {
     });
   }
 
-  create(input: unknown) {
+  async create(input: unknown) {
     const parsedInput = CreateModelInputSchema.parse(input);
     const protocols = parsedInput.protocols?.length
       ? parsedInput.protocols
@@ -108,7 +114,7 @@ export class ControlPlaneModelService {
     const normalizedInput = { ...parsedInput, modelNames, model: modelNames[0].name };
     const timestamp = now();
     const id = modelConfigHash(normalizedInput);
-    const existing = this.options.models.get(id);
+    const existing = this.modelGet(id);
     const model = ModelConfigSchema.parse({
       ...normalizedInput,
       protocols,
@@ -119,10 +125,10 @@ export class ControlPlaneModelService {
       createdAt: existing?.createdAt || timestamp,
       updatedAt: timestamp,
     });
-    return publicModel(this.options.models.put(model));
+    return publicModel(await this.modelPut(model));
   }
 
-  copy(id: string, input: unknown) {
+  async copy(id: string, input: unknown) {
     const source = this.requireSecret(id);
     const parsedInput = CopyModelInputSchema.parse(input);
     const candidate = {
@@ -137,7 +143,7 @@ export class ControlPlaneModelService {
         code: "MODEL_COPY_UNCHANGED",
       });
     }
-    if (this.options.models.get(nextId)) {
+    if (this.modelGet(nextId)) {
       throw Object.assign(new Error(`Model ${nextId} already exists.`), {
         statusCode: 409,
         code: "MODEL_COPY_CONFLICT",
@@ -146,7 +152,7 @@ export class ControlPlaneModelService {
     return this.create(candidate);
   }
 
-  update(id: string, input: unknown) {
+  async update(id: string, input: unknown) {
     const parsedInput: UpdateModelInput = UpdateModelInputSchema.parse(input);
     const current = this.requireSecret(id);
     const modelNames = parsedInput.modelNames?.length
@@ -166,7 +172,17 @@ export class ControlPlaneModelService {
       updatedAt: now(),
     });
     const nextId = modelConfigHash(candidate);
-    return publicModel(this.options.models.put(ModelConfigSchema.parse({ ...candidate, id: nextId })));
+    const next = ModelConfigSchema.parse({ ...candidate, id: nextId });
+    if (nextId !== id) {
+      await this.options.repository.transaction(async (repository) => {
+        await repository.put(next);
+        await repository.delete(id);
+      });
+      this.databaseModels.delete(id);
+      this.databaseModels.set(next.id, next);
+      return publicModel(next);
+    }
+    return publicModel(await this.modelPut(next));
   }
 
   async delete(id: string) {
@@ -179,19 +195,23 @@ export class ControlPlaneModelService {
         details: { references },
       });
     }
-    return this.options.models.delete(id);
+    return this.modelDelete(id);
   }
 
-  reorder(ids: string[]) {
+  async reorder(ids: string[]) {
     const uniqueIds = [...new Set(ids)];
-    const byId = new Map(this.options.models.list().map((model) => [model.id, model]));
+    const byId = new Map(this.modelList().map((model) => [model.id, model]));
     for (const id of uniqueIds) {
       if (!byId.has(id)) throwNotFound("MODEL_NOT_FOUND", `Model ${id} was not found.`);
     }
-    uniqueIds.forEach((id, index) => {
+    const updates = uniqueIds.map((id, index) => {
       const current = byId.get(id)!;
-      this.options.models.put(ModelConfigSchema.parse({ ...current, order: (index + 1) * 100, updatedAt: now() }));
+      return ModelConfigSchema.parse({ ...current, order: (index + 1) * 100, updatedAt: now() });
     });
+    await this.options.repository.transaction(async (repository) => {
+      for (const model of updates) await repository.put(model);
+    });
+    for (const model of updates) this.databaseModels.set(model.id, model);
     return this.list();
   }
 
@@ -273,7 +293,7 @@ export class ControlPlaneModelService {
     const resolve = async (app: "codex" | "claude" | "opencode", selectedId?: string | null) => {
       if (selectedId === null) return undefined;
       const controlPlaneModel = selectedId
-        ? this.listAll().find((model) => model.id === selectedId)
+        ? controlPlaneModels.find((model) => model.id === selectedId)
         : controlPlaneModels.find((model) => model.enabled && modelSupportsApp(model, app));
       if (controlPlaneModel) {
         assertUsableModel(controlPlaneModel, app);
@@ -325,25 +345,44 @@ export class ControlPlaneModelService {
   }
 
   private listAll() {
-    return this.options.models.list()
+    return this.modelList()
       .map((model) => this.normalize(model))
       .sort((a, b) => a.order - b.order || a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
   }
 
   private requireSecret(id: string) {
-    const record = this.options.models.get(id);
+    const record = this.modelGet(id);
     if (!record) throwNotFound("MODEL_NOT_FOUND", `Model ${id} was not found.`);
     return this.normalize(record);
   }
 
   private normalize(record: unknown) {
     const model = normalizeModel(record);
-    if (model !== record) this.options.models.put(model);
     return model;
   }
 
   private nextOrder() {
-    return this.options.models.list().reduce((max, model) => Math.max(max, model.order), 0) + 100;
+    return this.modelList().reduce((max, model) => Math.max(max, model.order), 0) + 100;
+  }
+
+  private modelList() {
+    return [...this.databaseModels.values()];
+  }
+
+  private modelGet(id: string) {
+    return this.databaseModels.get(id);
+  }
+
+  private async modelPut(model: ModelConfig) {
+    const stored = await this.options.repository.put(model);
+    this.databaseModels.set(stored.id, stored);
+    return stored;
+  }
+
+  private async modelDelete(id: string) {
+    const deleted = await this.options.repository.delete(id);
+    if (deleted) this.databaseModels.delete(id);
+    return deleted;
   }
 
   private async references(modelId: string) {

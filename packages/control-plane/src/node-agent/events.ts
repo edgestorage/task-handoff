@@ -110,6 +110,7 @@ export class NodeAgentInstanceEventForwarder {
   private readonly lastAiSessionEventByInstance = new Map<string, { streamId?: string; revision?: number }>();
   private readonly lastAppSessionEventByInstance = new Map<string, { streamId?: string; revision?: number }>();
   private timer: ReturnType<typeof setInterval> | undefined;
+  private stopped = false;
   private reconnectAttempts = 0;
   private safetyReconciliations = 0;
   private localSequence = 0;
@@ -133,6 +134,7 @@ export class NodeAgentInstanceEventForwarder {
   }
 
   start() {
+    this.stopped = false;
     this.sync();
     this.timer = this.setIntervalFn(() => {
       this.safetyReconciliations += 1;
@@ -141,6 +143,7 @@ export class NodeAgentInstanceEventForwarder {
   }
 
   stop() {
+    this.stopped = true;
     if (this.timer) {
       this.clearIntervalFn(this.timer);
       this.timer = undefined;
@@ -207,7 +210,7 @@ export class NodeAgentInstanceEventForwarder {
       this.pendingAiSessionAuthorityByOutput.delete(socket);
       this.refreshEventTransportRecovery();
       if (legacyFallback) clearTimeout(legacyFallback);
-      this.syncNow();
+      if (!this.stopped) this.syncNow();
     };
     socket.on("close", remove);
     socket.on("error", remove);

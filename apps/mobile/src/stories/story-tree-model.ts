@@ -23,19 +23,20 @@ export function storyTreeKey(story: Pick<Story, 'id' | 'ownerNodeId'>) {
 
 export function sortStoryTree(stories: readonly Story[], locale: string, mode: StorySortMode = 'name', sessionsByStory?: ReadonlyMap<string, StoryTreeSession[]>, manualKeys: readonly string[] = []) {
   const collator = new Intl.Collator(locale, { numeric: true, sensitivity: 'base' });
+  const byArchiveState = (left: Story, right: Story) => Number(Boolean(left.archivedAt)) - Number(Boolean(right.archivedAt));
   const byName = (left: Story, right: Story) => (
     collator.compare(left.title, right.title) || storyTreeKey(left).localeCompare(storyTreeKey(right))
   );
   if (mode === 'last-user-message') return [...stories].sort((left, right) => {
     const leftTime = Math.max(...(sessionsByStory?.get(storyTreeKey(left)) ?? []).map((entry) => !entry.depth ? Date.parse(entry.session.lastUserMessageAt || '') : 0), 0);
     const rightTime = Math.max(...(sessionsByStory?.get(storyTreeKey(right)) ?? []).map((entry) => !entry.depth ? Date.parse(entry.session.lastUserMessageAt || '') : 0), 0);
-    return rightTime - leftTime || byName(left, right);
+    return byArchiveState(left, right) || rightTime - leftTime || byName(left, right);
   });
   if (mode === 'manual') {
     const order = new Map(manualKeys.map((key, index) => [key, index]));
-    return [...stories].sort((left, right) => (order.get(storyTreeKey(left)) ?? Number.MAX_SAFE_INTEGER) - (order.get(storyTreeKey(right)) ?? Number.MAX_SAFE_INTEGER) || byName(left, right));
+    return [...stories].sort((left, right) => byArchiveState(left, right) || (order.get(storyTreeKey(left)) ?? Number.MAX_SAFE_INTEGER) - (order.get(storyTreeKey(right)) ?? Number.MAX_SAFE_INTEGER) || byName(left, right));
   }
-  return [...stories].sort(byName);
+  return [...stories].sort((left, right) => byArchiveState(left, right) || byName(left, right));
 }
 
 export function groupStoryTreeSessions(

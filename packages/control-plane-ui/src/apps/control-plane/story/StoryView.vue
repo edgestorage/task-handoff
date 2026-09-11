@@ -36,7 +36,7 @@
               v-for="story in stories"
               :key="storySortKey(story)"
               class="story-tree"
-              :class="{ 'story-tree-manual': storySortMode === 'manual', 'story-tree-dragging': draggingStoryKey === storySortKey(story) }"
+              :class="{ 'story-tree-manual': storySortMode === 'manual', 'story-tree-dragging': draggingStoryKey === storySortKey(story), 'story-tree-archived': Boolean(story.archivedAt) }"
               :data-story-key="storySortKey(story)"
               :data-drop-position="dropTargetKey === storySortKey(story) ? dropPosition : undefined"
               @click.capture="suppressStoryClickAfterDrag"
@@ -57,16 +57,20 @@
                     :story="story"
                     :can-new-session="!Boolean(story.archivedAt) && instancesForStory(story).length > 0"
                     :can-add-existing="!Boolean(story.archivedAt) && unassignedSessionsFor(story).length > 0"
+                    :session-count="allSessionsForStory(story).length"
+                    :closing-all-sessions="closingAllStoryKey === storySortKey(story)"
                     @new-session="openNewSession(story)"
                     @add-existing="openAssignSessionFor(story)"
                     @add-action="openCreateActionForStory(story)"
                     @add-automation="openCreateAutomationForStory(story)"
                     @edit="editStoryFromTree(story)"
+                    @close-all-sessions="confirmCloseAllStorySessions(story)"
                     @toggle-archive="toggleArchive(story)"
                     @delete="deleteStory(story)"
                   />
                 </ContextMenu>
-                <button type="button" class="story-tree-add story-tree-story-add" :aria-label="t('stories.newSession')" :title="t('stories.newSession')" :disabled="Boolean(story.archivedAt) || !instancesForStory(story).length" @click.stop="openNewSession(story)"><MessageSquarePlus :size="14" /></button>
+                <small v-if="story.archivedAt" class="story-tree-archived-label">{{ t("stories.archived") }}</small>
+                <button v-else type="button" class="story-tree-add story-tree-story-add" :aria-label="t('stories.newSession')" :title="t('stories.newSession')" :disabled="!instancesForStory(story).length" @click.stop="openNewSession(story)"><MessageSquarePlus :size="14" /></button>
               </div>
               <Transition name="story-tree-collapse">
                 <div v-if="isStoryOpen(story)" class="story-tree-collapse">
@@ -178,7 +182,35 @@
             <div ref="storyDetailScrollInnerEl" class="story-detail-scroll-inner">
               <div ref="storyDetailHeadEl" class="story-detail-head">
                 <header class="story-content-header">
-                  <div class="story-content-title"><h2>{{ selectedResource.story.title }}</h2><small>{{ storyOwnerNodeName(selectedResource.story.ownerNodeId) }}</small></div>
+                  <div class="story-content-title">
+                    <h2
+                      class="story-title-name-field"
+                      :class="{ editing: editingStoryTitle }"
+                      :style="editingStoryTitle && storyTitleEditWidth ? { '--story-title-edit-width': `${storyTitleEditWidth}px` } : undefined"
+                    >
+                      <input
+                        v-if="editingStoryTitle"
+                        ref="storyTitleInput"
+                        v-model="storyTitleDraft"
+                        class="story-title-name-input"
+                        :aria-label="t('stories.editName', { name: selectedResource.story.title })"
+                        :disabled="savingStoryTitle"
+                        @blur="commitStoryTitleEdit"
+                        @keydown="handleStoryTitleEditKeydown"
+                      />
+                      <button
+                        v-else
+                        type="button"
+                        class="story-title-name-button"
+                        :aria-label="t('stories.editName', { name: selectedResource.story.title })"
+                        :title="t('stories.editNameTitle')"
+                        @click="beginStoryTitleEdit(selectedResource.story, $event)"
+                      >
+                        <span class="story-title-name-button-label">{{ selectedResource.story.title }}</span>
+                      </button>
+                    </h2>
+                    <small>{{ storyOwnerNodeName(selectedResource.story.ownerNodeId) }}</small>
+                  </div>
                   <Tabs class="story-detail-header-tabs" :model-value="storyDetailSection" @update:model-value="scrollToStorySection($event as StoryDetailSection)">
                     <TabsList class="story-detail-tabs" :aria-label="t('stories.detailSections')">
                       <TabsTrigger value="actions"><span class="story-detail-tab-count">{{ selectedResource.story.actions.length }}</span>{{ t("stories.presetActions") }}</TabsTrigger>
@@ -199,6 +231,7 @@
                         <DropdownMenuItem :disabled="Boolean(selectedResource.story.archivedAt)" @select="openCreateAction()"><Play :size="14" /> {{ t("stories.addAction") }}</DropdownMenuItem>
                         <DropdownMenuItem :disabled="Boolean(selectedResource.story.archivedAt)" @select="openCreateAutomation()"><CalendarClock :size="14" /> {{ t("stories.automation.add") }}</DropdownMenuItem>
                         <DropdownMenuSeparator />
+                        <DropdownMenuItem class="story-detail-action-menu-item danger" :disabled="!allSessionsForStory(selectedResource.story).length || Boolean(closingAllStoryKey)" @select="confirmCloseAllStorySessions(selectedResource.story)"><CircleX :size="14" /> {{ t(closingAllStoryKey === storySortKey(selectedResource.story) ? "stories.closingAllSessions" : "stories.closeAllSessions") }}</DropdownMenuItem>
                         <DropdownMenuItem @select="toggleArchive(selectedResource.story)"><Archive v-if="!selectedResource.story.archivedAt" :size="14" /><RotateCcw v-else :size="14" /> {{ t(selectedResource.story.archivedAt ? "common.actions.restore" : "common.actions.archive") }}</DropdownMenuItem>
                         <DropdownMenuItem class="story-detail-action-menu-item danger" @select="deleteStory(selectedResource.story)"><Trash2 :size="14" /> {{ t("common.actions.delete") }}</DropdownMenuItem>
                       </DropdownMenuContent>
@@ -382,7 +415,7 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch, type CSSProperties } from "vue";
 import { useI18n } from "vue-i18n";
 import { useQueryClient } from "@tanstack/vue-query";
-import { Archive, BookOpen, CalendarClock, ChevronLeft, ChevronRight, Download, FileText, History, Link, LoaderCircle, MessageSquare, MessageSquarePlus, MoreHorizontal, Pencil, Play, Plus, RotateCcw, Trash2, X } from "@lucide/vue";
+import { Archive, BookOpen, CalendarClock, ChevronLeft, ChevronRight, CircleX, Download, FileText, History, Link, LoaderCircle, MessageSquare, MessageSquarePlus, MoreHorizontal, Pencil, Play, Plus, RotateCcw, Trash2, X } from "@lucide/vue";
 import AiSessionStatusIndicator from "../../../components/ai-session/AiSessionStatusIndicator.vue";
 import AiSessionStreamingMarkdown from "../../../components/ai-session/AiSessionStreamingMarkdown.vue";
 import { Button } from "../../../components/ui/button";
@@ -400,6 +433,7 @@ import { ContextMenu, ContextMenuTrigger } from "../../../components/ui/context-
 import AiSessionCardContextMenu from "../../../components/ai-session/AiSessionCardContextMenu.vue";
 import { aiSessionStoryTarget, type AiSessionStoryTarget } from "../../../components/ai-session/storyTarget";
 import StoryTreeContextMenu from "./StoryTreeContextMenu.vue";
+import { closeAiSessionBatch } from "../closeAiSessionBatch";
 import DocumentTreeContextMenu from "./DocumentTreeContextMenu.vue";
 import StoryActionEditorContent from "./StoryActionEditorContent.vue";
 import StoryActionAutomations from "./StoryActionAutomations.vue";
@@ -425,13 +459,15 @@ import { launchableAppsForInstance, sessionStatusLabel, type RepositoryWorkspace
 import { latestStoryDocuments, STORY_TREE_DOCUMENT_LIMIT } from "./storyDocuments";
 import { normalizeManualStoryOrder, reorderStoryKeys, sortStories, storyDropTargetAt, storySortKey, type StorySortMode } from "./storySort";
 import { allStoryNodes, storyNodeIsVisible, type StoryNodeFilter } from "./storyNodeFilter";
+import { storySelectionKey, type StorySelection } from "./storySelection";
 
-const props = withDefaults(defineProps<{ chooseProjectFolder?: NativeNodeFolderPicker; instances: InstanceWithAiSessions[]; nodes: Node[]; nodeLocalFoldersByNodeId?: Record<string, NodeLocalFolder[]>; nodeFilter?: StoryNodeFilter }>(), { nodeLocalFoldersByNodeId: () => ({}), nodeFilter: allStoryNodes });
+const props = withDefaults(defineProps<{ chooseProjectFolder?: NativeNodeFolderPicker; instances: InstanceWithAiSessions[]; nodes: Node[]; nodeLocalFoldersByNodeId?: Record<string, NodeLocalFolder[]>; nodeFilter?: StoryNodeFilter; selection?: StorySelection }>(), { nodeLocalFoldersByNodeId: () => ({}), nodeFilter: allStoryNodes });
 const { locale, t } = useI18n();
 const projectFolderChooserFor = (instance: InstanceWithAiSessions | undefined) => (
   canUseNativeProjectFolderPicker(instance, Boolean(props.chooseProjectFolder)) ? props.chooseProjectFolder : undefined
 );
 const emit = defineEmits<{
+  "update:selection": [selection: StorySelection | undefined];
   "launch-app": [instance: InstanceBoardItem, appId: string, cwdFolderId?: string, options?: Record<string, unknown>];
   "open-session": [instance: InstanceWithAiSessions, session: AiSessionSummary | undefined];
   "open-repository-workspace": [target: RepositoryWorkspaceTabTarget];
@@ -747,6 +783,7 @@ function storedSidebarWidth() {
 const sidebarWidth = ref(storedSidebarWidth()); const workspaceEl = ref<HTMLElement>(); const resizingSidebar = ref(false); let resizingPointerId: number | undefined;
 const previewText = ref(""); const previewLoading = ref(false); const previewError = ref("");
 const editorOpen = ref(false); const editing = ref(false); const draftTitle = ref(""); const draftDescription = ref(""); const draftNodeId = ref(""); const draftMaxIdleAiSessions = ref(STORY_DEFAULT_MAX_IDLE_AI_SESSIONS); const saving = ref(false);
+const editingStoryTitle = ref(false); const storyTitleDraft = ref(""); const storyTitleInput = ref<HTMLInputElement>(); const savingStoryTitle = ref(false); const storyTitleEditWidth = ref(0);
 const newSessionInstanceId = ref(""); const newSessionInitialCwd = ref(""); const newSessionInitialCwdFolderId = ref(""); const assignSessionOpen = ref(false); const assignSessionId = ref(""); const assigningSession = ref(false);
 const actionEditorOpen = ref(false); const actionEditorRevision = ref(0); const actionCreationPanel = ref<InstanceType<typeof StoryActionEditorContent>>(); const actionCreationSubmitReady = ref(false); const editingActionId = ref<string | null>(null); const actionSaving = ref(false); const actionDraftTitle = ref(""); const actionDraftMode = ref<StorySessionPreset["mode"] | "">(""); const actionDraftTargetInstanceId = ref(""); const actionDraftInitialPrompt = ref(""); const actionDraftInitialPreset = ref<StorySessionPreset>();
 const targetInstance = (instanceId: string) => props.instances.find((instance) => instance.id === instanceId);
@@ -776,6 +813,10 @@ const sessionEntriesForRoots = (roots: AiSessionTreeNode<StorySessionRecord>[]):
   hasChildren: node.children.length > 0,
 })).filter((entry) => Boolean(entry.instance));
 const sessionsFor = (story: Story): SessionEntry[] => sessionEntriesForRoots(storySessionRootsFor(story));
+const allSessionsForStory = (story: Story): SessionEntry[] => storySessionRecords.value
+  .filter((session) => session.storyId === story.id && session.actions?.close !== false && targetInstance(session.instanceId)?.node?.id === story.ownerNodeId)
+  .map((session) => ({ instance: targetInstance(session.instanceId)!, session, depth: 0, hasChildren: false }))
+  .filter((entry) => Boolean(entry.instance));
 const unassignedSessionsFor = (story: Story) => storySessionForest.value.roots.flatMap((root) => {
   const instance = targetInstance(root.session.instanceId);
   return !root.session.storyId && instance?.node?.id === story.ownerNodeId ? [{ instance, session: root.session }] : [];
@@ -870,6 +911,7 @@ const storyHistoryPanelSession = computed<SessionTab>(() => ({
 const storyHistoryPanelSelectedSession = () => undefined as AiSessionSummary | undefined;
 const queryClient = useQueryClient();
 const closingSessionKey = ref("");
+const closingAllStoryKey = ref("");
 function storyTargetFor(entry: SessionEntry): AiSessionStoryTarget | undefined {
   return aiSessionStoryTarget(entry.instance, entry.session, props.nodes.find((node) => node.id === entry.instance.nodeId)?.name);
 }
@@ -909,6 +951,25 @@ async function closeSession(entry: SessionEntry) {
   } finally {
     loadingToast.dismiss();
     closingSessionKey.value = "";
+  }
+}
+function confirmCloseAllStorySessions(story: Story) {
+  const entries = allSessionsForStory(story);
+  if (!entries.length || closingAllStoryKey.value) return;
+  if (!window.confirm(t("stories.closeAllSessionsConfirm", { count: entries.length, title: story.title }))) return;
+  void closeAllStorySessions(story, entries);
+}
+async function closeAllStorySessions(story: Story, entries: SessionEntry[]) {
+  closingAllStoryKey.value = storySortKey(story);
+  const loadingToast = showDelayedControlPlaneLoadingToast(t("stories.closingAllSessions"));
+  try {
+    const { failed, total } = await closeAiSessionBatch(entries.map((entry) => ({ instanceId: entry.instance.id, sessionId: entry.session.id })));
+    if (failed) showControlPlaneToast(t("stories.closeAllSessionsPartial", { failed, total }));
+    else showControlPlaneToast(t("stories.closeAllSessionsSuccess", { count: total }), "success");
+    await refreshStorySessions();
+  } finally {
+    loadingToast.dismiss();
+    closingAllStoryKey.value = "";
   }
 }
 async function onStoryAssigned(_target: AiSessionStoryTarget) {
@@ -1029,6 +1090,42 @@ function resourceKey(resource: Resource | undefined) {
   if (resource.kind === "session") return `${resource.kind}:${parentKey}:${resource.entry.instance.id}:${resource.entry.session.id}`;
   return `${resource.kind}:${parentKey}`;
 }
+function selectionForResource(resource: Resource | undefined): StorySelection | undefined {
+  if (!resource) return undefined;
+  const story = { ownerNodeId: resource.story.ownerNodeId, storyId: resource.story.id };
+  if (resource.kind === "document") return { kind: "document", ...story, storyPath: resource.document.storyPath };
+  if (resource.kind === "session") return { kind: "session", ...story, instanceId: resource.entry.instance.id, sessionId: resource.entry.session.id };
+  return { kind: "story", ...story };
+}
+function resolveSelection(selection: StorySelection | undefined): Resource | undefined {
+  if (!selection) return undefined;
+  const story = stories.value.find((candidate) => candidate.id === selection.storyId && candidate.ownerNodeId === selection.ownerNodeId);
+  if (!story) return undefined;
+  if (selection.kind === "document") {
+    const document = story.documents.find((candidate) => candidate.storyPath === selection.storyPath);
+    return document ? { kind: "document", story, document } : { kind: "story", story };
+  }
+  if (selection.kind === "session") {
+    const entry = allSessionsForStory(story).find((candidate) => candidate.instance.id === selection.instanceId && candidate.session.id === selection.sessionId);
+    return entry ? { kind: "session", story, entry } : { kind: "story", story };
+  }
+  return { kind: "story", story };
+}
+function refreshResource(resource: Resource): Resource | undefined {
+  const story = stories.value.find((candidate) => candidate.id === resource.story.id && candidate.ownerNodeId === resource.story.ownerNodeId);
+  if (!story) return undefined;
+  if (resource.kind === "new-session") return { kind: "new-session", story };
+  return resolveSelection(selectionForResource(resource));
+}
+watch(() => resourceKey(selectedResource.value), cancelStoryTitleEdit);
+watch(() => storySelectionKey(props.selection), () => {
+  if (storySelectionKey(props.selection) === storySelectionKey(selectionForResource(selectedResource.value))) return;
+  selectedResource.value = resolveSelection(props.selection);
+}, { immediate: true });
+watch(selectedResource, (resource) => {
+  const selection = selectionForResource(resource);
+  if (storySelectionKey(selection) !== storySelectionKey(props.selection)) emit("update:selection", selection);
+});
 function selectPendingCreatedStorySession() {
   const pending = pendingCreatedStorySession.value;
   if (!pending) return;
@@ -1083,11 +1180,13 @@ watch(storyHistoryPageCount, (total) => { storyHistoryPage.value = Math.min(stor
 watch(stories, (value) => {
   const resource = selectedResource.value;
   if (!resource) {
-    if (value[0]) selectStory(value[0]);
+    const restored = resolveSelection(props.selection);
+    if (restored) selectedResource.value = restored;
+    else if (value[0]) selectStory(value[0]);
     return;
   }
-  const present = value.some((story) => story.id === resource.story.id && story.ownerNodeId === resource.story.ownerNodeId);
-  if (!present) selectedResource.value = value[0] ? { kind: "story", story: value[0] } : undefined;
+  const refreshed = refreshResource(resource);
+  selectedResource.value = refreshed || (value[0] ? { kind: "story", story: value[0] } : undefined);
 }, { immediate: true });
 function openCreate() {
   editing.value = false;
@@ -1112,6 +1211,63 @@ async function openEdit() {
     editorOpen.value = true;
   } catch (cause) {
     error.value = translateApiError(cause, t, t("stories.errors.retentionLoadFailed"));
+  }
+}
+async function beginStoryTitleEdit(story: Story, event?: MouseEvent) {
+  if (savingStoryTitle.value) return;
+  storyTitleEditWidth.value = Math.ceil((event?.currentTarget as HTMLElement | undefined)?.getBoundingClientRect().width || 0);
+  editingStoryTitle.value = true;
+  storyTitleDraft.value = story.title;
+  await nextTick();
+  const input = storyTitleInput.value;
+  if (input) {
+    const inputContentWidth = input.scrollWidth + input.offsetWidth - input.clientWidth;
+    storyTitleEditWidth.value = Math.max(storyTitleEditWidth.value, Math.ceil(inputContentWidth));
+  }
+  storyTitleInput.value?.focus();
+  storyTitleInput.value?.select();
+}
+function cancelStoryTitleEdit() {
+  editingStoryTitle.value = false;
+  storyTitleDraft.value = "";
+  storyTitleEditWidth.value = 0;
+}
+function handleStoryTitleEditKeydown(event: KeyboardEvent) {
+  if (event.isComposing) return;
+  if (event.key === "Enter") {
+    event.preventDefault();
+    void commitStoryTitleEdit();
+  } else if (event.key === "Escape") {
+    event.preventDefault();
+    cancelStoryTitleEdit();
+  }
+}
+async function commitStoryTitleEdit() {
+  const story = selectedResource.value?.kind === "story" ? selectedResource.value.story : undefined;
+  if (!story || !editingStoryTitle.value || savingStoryTitle.value) return;
+  const title = storyTitleDraft.value.trim();
+  if (!title || title === story.title) {
+    cancelStoryTitleEdit();
+    return;
+  }
+  savingStoryTitle.value = true;
+  try {
+    const response = await fetch(`/api/stories/${encodeURIComponent(story.id)}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ nodeId: story.ownerNodeId, input: { title } }),
+    });
+    if (!response.ok) throw new Error((await response.json()).error?.message || t("stories.errors.renameFailed"));
+    await load();
+    const refreshed = stories.value.find((candidate) => candidate.id === story.id && candidate.ownerNodeId === story.ownerNodeId);
+    if (refreshed) selectStory(refreshed);
+    cancelStoryTitleEdit();
+  } catch (cause) {
+    showControlPlaneToast(translateApiError(cause, t, t("stories.errors.renameFailed")));
+    await nextTick();
+    storyTitleInput.value?.focus();
+  } finally {
+    savingStoryTitle.value = false;
   }
 }
 function openNewSession(story: Story) { if (!story) return; const latest = latestSessionFor(story); setStoryExpanded(story, true); newSessionInstanceId.value = latest?.instance.id || instancesForStory(story)[0]?.id || ""; newSessionInitialCwd.value = latest?.session.cwd || ""; newSessionInitialCwdFolderId.value = latest?.session.cwdFolderId || ""; selectedResource.value = { kind: "new-session", story }; }
@@ -1262,6 +1418,15 @@ onBeforeUnmount(() => {
 <style scoped>
 .story-view { display:flex; flex-direction:column; height:100%; min-height:0; overflow:hidden; background:var(--workspace-bg); padding:12px 0; color:var(--text); }
 .story-content-header h2 { margin:0; color:var(--text-strong); font-size:18px; font-weight:500; }
+.story-title-name-field { display:grid; flex:0 1 auto; width:max-content; min-width:0; max-width:100%; vertical-align:top; }
+.story-title-name-button,.story-title-name-input { box-sizing:border-box; grid-area:1 / 1; min-width:0; margin:0; font:inherit; font-size:inherit; font-weight:inherit; letter-spacing:0; line-height:1.3; white-space:nowrap; }
+.story-title-name-field.editing { width:min(var(--story-title-edit-width,720px),100%); }
+.story-title-name-button { display:block; width:fit-content; max-width:100%; border:0; padding:0; overflow:visible; background:transparent; color:inherit; cursor:text; text-align:left; }
+.story-title-name-button-label { display:block; box-sizing:border-box; max-width:100%; overflow:hidden; border:1px solid transparent; border-radius:7px; color:inherit; font:inherit; padding:2px 6px 3px; text-overflow:ellipsis; }
+.story-title-name-button:hover .story-title-name-button-label,.story-title-name-button:focus-visible .story-title-name-button-label { border-color:var(--line); background:var(--surface-hover); box-shadow:inset 0 1px 0 var(--workspace-grid); }
+.story-title-name-button:focus-visible { outline:none; }
+.story-title-name-input { width:100%; border:1px solid var(--brand-accent); border-radius:7px; background:var(--surface-inset); color:inherit; padding:2px 6px 3px; outline:none; box-shadow:0 0 0 3px var(--brand-accent-soft),inset 0 1px 0 var(--workspace-grid); }
+.story-title-name-input:disabled { cursor:progress; opacity:.72; }
 .story-description,.story-content-header small { color:var(--text-muted); font-size:12px; }
 .story-description { max-width:720px; margin:8px 0 0; line-height:1.5; }
 .story-workspace { display:grid; grid-template-columns:minmax(240px,var(--story-sidebar-width,320px)) 2px minmax(0,1fr); gap:0; flex:1 1 auto; min-height:0; margin-top:0; overflow:hidden; }
@@ -1308,6 +1473,10 @@ onBeforeUnmount(() => {
 .story-tree-story-row { position:relative; }
 .story-tree-item { position:relative; display:flex; align-items:center; width:100%; min-width:0; gap:8px; border:0; border-radius:6px; background:transparent; color:inherit; cursor:pointer; padding:8px; text-align:left; }
 .story-tree-story { padding-right:36px; padding-left:32px; padding-block:10px; }
+.story-tree-archived { --story-tree-archived-foreground:color-mix(in srgb,var(--text-muted) 72%,transparent); }
+.story-tree-archived .story-tree-item,.story-tree-archived .story-tree-disclosure-button,.story-tree-archived .story-tree-empty { color:var(--story-tree-archived-foreground); }
+.story-tree-archived .story-tree-story { padding-right:68px; }
+.story-tree-archived .story-tree-item svg { opacity:.72; }
 .story-tree-item:hover { background:var(--sidebar-row-hover-bg,var(--surface-active)); }
 .story-tree-item.active,.story-tree-item.active:hover { background:var(--sidebar-row-selected-bg,var(--surface-active)); }
 .story-tree-disclosure-button { position:absolute; z-index:1; top:50%; left:4px; display:grid; width:24px; height:24px; place-items:center; border:0; border-radius:4px; background:transparent; color:var(--text-muted); cursor:pointer; padding:0; transform:translateY(-50%); }
@@ -1351,6 +1520,7 @@ onBeforeUnmount(() => {
 }
 .story-tree-item > .story-tree-item-copy { display:flex; align-items:center; min-width:0; flex:1; overflow:hidden; }
 .story-tree-item > .story-tree-item-copy strong { display:block; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; line-height:1.3; }
+.story-tree-archived-label { position:absolute; z-index:1; top:50%; right:8px; border:1px solid color-mix(in srgb,var(--line) 60%,transparent); border-radius:4px; background:color-mix(in srgb,var(--surface-subtle) 55%,transparent); color:var(--story-tree-archived-foreground); font-size:12px; line-height:18px; padding:0 5px; pointer-events:none; transform:translateY(-50%); }
 .story-tree-item > .story-tree-item-copy.story-tree-item-detail { display:grid; gap:2px; line-height:1.5; overflow:visible; }
 .story-tree-item > .story-tree-item-copy.story-tree-item-detail strong,
 .story-tree-item > .story-tree-item-copy.story-tree-item-detail small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; line-height:1.5; }
@@ -1386,7 +1556,7 @@ onBeforeUnmount(() => {
 .story-content-header { display:flex; align-items:center; justify-content:space-between; gap:12px; border-bottom:1px solid var(--line); padding:0 0 12px; flex:0 0 auto; }
 .story-content-header > div:first-child:not(.story-content-title) { display:grid; min-width:0; gap:3px; }
 .story-content-header .story-content-title { display:flex; flex:1 1 auto; align-items:baseline; gap:10px; min-width:0; }
-.story-content-title h2 { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.story-content-title h2 { min-width:0; }
 .story-content-title small { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .story-content-state { display:grid; flex:1; place-items:center; color:var(--text-muted); font-size:13px; padding:24px; }
 .story-document-markdown { flex:1; min-height:0; color:var(--text); font-size:13px; line-height:1.6; }

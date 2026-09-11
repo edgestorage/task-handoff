@@ -186,4 +186,29 @@ const sharedFailed = checkGraph({
   label: "shared modules must only import shared modules or external packages",
 });
 
-if (controlPlaneFailed || nodeAgentFailed || sharedFailed) process.exitCode = 1;
+const databaseRoot = path.join(controlPlaneRoot, "persistence", "database");
+const databaseBoundaryViolations = [];
+for (const importer of typescriptFiles(controlPlaneRoot)) {
+  const relative = path.relative(controlPlaneRoot, importer);
+  const mayOwnDatabase = isWithin(databaseRoot, importer)
+    || relative.startsWith(`auth${path.sep}database${path.sep}`)
+    || relative === path.join("application", "service.ts")
+    || relative === path.join("http", "server.ts")
+    || relative.endsWith(`${path.sep}repository.ts`);
+  if (mayOwnDatabase) continue;
+  for (const specifier of moduleSpecifiers(importer)) {
+    if (!isLocalSpecifier(specifier)) continue;
+    const dependency = resolveLocalImport(importer, specifier);
+    if (dependency && isWithin(databaseRoot, dependency)) {
+      databaseBoundaryViolations.push({ importer, specifier });
+    }
+  }
+}
+if (databaseBoundaryViolations.length) {
+  console.error("domain services must use typed repositories instead of the Control Plane database contract:");
+  for (const violation of databaseBoundaryViolations) {
+    console.error(`- ${path.relative(packageRoot, violation.importer)} imports ${violation.specifier}`);
+  }
+}
+
+if (controlPlaneFailed || nodeAgentFailed || sharedFailed || databaseBoundaryViolations.length) process.exitCode = 1;

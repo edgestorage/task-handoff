@@ -25,6 +25,10 @@ import { AiSessionAttachmentStore } from "../sessions/ai-session-attachments.ts"
 import { AiSessionAttachmentCache } from "../sessions/ai-session-attachment-cache.ts";
 import { ControlPlaneNodeAgentTunnelTransport, ControlPlaneNodeEventSubscriber } from "../nodes/tunnel.ts";
 import { controlPlaneStorePaths } from "../persistence/paths.ts";
+import { createControlPlaneDatabase } from "../persistence/database/index.ts";
+import { importLegacyP0Json } from "../persistence/database/legacy-p0-import.ts";
+import { migrateLegacyIdentityProviderSecrets } from "../persistence/database/legacy-identity-provider-import.ts";
+import { SecretEnvelopeService } from "../persistence/secret-envelope.ts";
 import { acquireControlPlaneSingletonLock, defaultControlPlaneSingletonLockPath } from "../process/singleton-lock.ts";
 import { assertCan, assertCanAccessResolvedResource, instanceScopeAllows, type ControlPlaneAction, type ControlPlaneActor, type ControlPlaneResource } from "../auth/authorization.ts";
 import { resolveRequestResourceScopes } from "../auth/resource-scope.ts";
@@ -371,6 +375,13 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     globalDecompression: false,
     threshold: 1024,
   });
+  const database = await createControlPlaneDatabase(paths, options.auth?.database);
+  const secrets = new SecretEnvelopeService(paths.databaseEncryptionKeyPath);
+  secrets.init();
+  await importLegacyP0Json(database, secrets, paths, {
+    onWarning: (warning) => app.log.warn(warning, "legacy Control Plane P0 persistence archive deferred"),
+  });
+  await migrateLegacyIdentityProviderSecrets(database, secrets, paths);
   app.addContentTypeParser("application/octet-stream", (_request, payload, done) => done(null, payload));
   const events = new ControlPlaneEventBus();
   const authorizationConnections = new AuthorizationConnectionRegistry();
@@ -381,6 +392,8 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   const nodeConnectionRuntime = new NodeConnectionRuntime();
   const service = new ControlPlaneService(paths, {
     ...options.service,
+    database,
+    secrets,
     logger: diagnosticLogger,
     nodeConnectionRuntime,
     onFleetStateChanged: (state) => {
@@ -406,7 +419,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
       authorizationConnections.invalidate(change.userId, change.authorizationRevision);
       options.auth?.onUserAuthorizationChanged?.(change);
     },
-  });
+  }, { repository: database, secrets });
   const identity = new ControlPlaneIdentityService(
     paths.identitySigningPath,
     () => service.proxyPrivateStore.controlPlaneId(),
@@ -606,7 +619,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   });
   service.setNodeAgentTransport(nodeAgentTunnel);
   await auth.init();
-  service.init();
+  await service.init();
   diagnosticLogsEnabled = service.diagnosticLogsEnabled();
   identity.init();
   cloudConnectivity.init();
@@ -659,6 +672,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     chatGateway.stopAll();
     service.dispose();
     await auth.close();
+    await database.close();
   });
 
   app.setErrorHandler((error, request, reply) => {
@@ -1095,6 +1109,9 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   pairingRecoveryTimer.unref();
   persistenceMaintenanceTimer = setInterval(() => {
     service.runPersistenceMaintenance();
+    void importLegacyP0Json(database, secrets, paths, {
+      onWarning: (warning) => app.log.warn(warning, "legacy Control Plane P0 persistence archive deferred"),
+    }).catch((error) => app.log.warn({ error }, "legacy Control Plane P0 persistence archive retry failed"));
   }, DEFAULT_MAINTENANCE_INTERVAL_MS);
   persistenceMaintenanceTimer.unref();
   return app;

@@ -64,7 +64,7 @@ export function registerCatalogRoutes({ app, service, events }: RegisterCatalogR
     return reply.code(201).send({ data: model });
   });
   app.post("/api/models/:id/copy", async (request, reply) => {
-    const model = service.copyModel(IdParamsSchema.parse(request.params).id, request.body);
+    const model = await service.copyModel(IdParamsSchema.parse(request.params).id, request.body);
     events.publish("model.created", { modelId: model.id });
     return reply.code(201).send({ data: model });
   });
@@ -76,7 +76,7 @@ export function registerCatalogRoutes({ app, service, events }: RegisterCatalogR
     events.publish("model.reordered", { ids: parsed.ids });
     return { data: models };
   });
-  app.get("/api/models/:id", async (request) => ({ data: service.requireModel(IdParamsSchema.parse(request.params).id) }));
+  app.get("/api/models/:id", async (request) => ({ data: await service.requireModel(IdParamsSchema.parse(request.params).id) }));
   app.patch("/api/models/:id", async (request) => {
     const model = await service.updateModel(IdParamsSchema.parse(request.params).id, request.body);
     events.publish("model.updated", { modelId: model.id });

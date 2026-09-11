@@ -7,7 +7,7 @@ import { router } from 'expo-router';
 import { layoutFromEvent, StoryDetail } from '../src/stories/StoryDetail';
 import { useMobileControlPlaneRuntime } from '../src/control-plane/use-mobile-control-plane-runtime';
 import { useActiveDirectories } from '../src/directories/use-directories';
-import { useActiveAiSessionsSnapshot } from '../src/ai-sessions/use-active-sessions';
+import { useActiveAiSessions, useActiveAiSessionsSnapshot } from '../src/ai-sessions/use-active-sessions';
 import { mobilePermissionStore } from '../src/control-plane/runtime';
 
 jest.mock('expo-crypto', () => ({ randomUUID: () => 'action-request-1' }));
@@ -21,7 +21,7 @@ jest.mock('expo-router', () => ({
 }));
 jest.mock('../src/control-plane/use-mobile-control-plane-runtime', () => ({ useMobileControlPlaneRuntime: jest.fn() }));
 jest.mock('../src/directories/use-directories', () => ({ useActiveDirectories: jest.fn() }));
-jest.mock('../src/ai-sessions/use-active-sessions', () => ({ useActiveAiSessionsSnapshot: jest.fn() }));
+jest.mock('../src/ai-sessions/use-active-sessions', () => ({ useActiveAiSessions: jest.fn(), useActiveAiSessionsSnapshot: jest.fn() }));
 jest.mock('../src/control-plane/runtime', () => ({ mobilePermissionStore: { write: jest.fn().mockResolvedValue(undefined) } }));
 
 const instance = ControlPlaneInstanceDirectoryEntrySchema.parse({
@@ -61,6 +61,7 @@ const story = StorySchema.parse({
 const mockRuntime = jest.mocked(useMobileControlPlaneRuntime);
 const mockDirectories = jest.mocked(useActiveDirectories);
 const mockSessions = jest.mocked(useActiveAiSessionsSnapshot);
+const mockActiveSessions = jest.mocked(useActiveAiSessions);
 
 test('ignores null native layout events from iOS transitions', () => {
   expect(layoutFromEvent(null)).toBeUndefined();
@@ -70,6 +71,7 @@ test('ignores null native layout events from iOS transitions', () => {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockActiveSessions.mockReturnValue({ actions: { close: jest.fn() }, refresh: jest.fn().mockResolvedValue(undefined) } as unknown as ReturnType<typeof useActiveAiSessions>);
 });
 
 test('a preset action confirms before directly creating and opening an AI Session', async () => {
@@ -154,7 +156,7 @@ test('exposes the Web Story detail actions from the navigation menu', async () =
 
   const screen = await render(<StoryDetail nodeId="node-1" onOpenSession={jest.fn()} storyId={story.id} />);
   const menu = await screen.findByTestId('story-detail-menu');
-  expect(menu.props.actions.map((action: { id: string }) => action.id)).toEqual(['new-session', 'add-existing', 'add-action', 'add-automation', 'archive', 'delete']);
+  expect(menu.props.actions.map((action: { id: string }) => action.id)).toEqual(['new-session', 'add-existing', 'add-action', 'add-automation', 'close-sessions', 'archive', 'delete']);
 
   await act(async () => {
     menu.props.onPressAction({ nativeEvent: { event: 'archive' } });

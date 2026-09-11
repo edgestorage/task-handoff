@@ -18,6 +18,17 @@ test("composer appends the reasoning effort submenu after provider models", () =
   assert.match(composer, /DropdownMenuSubContent/);
 });
 
+test("model trigger tooltip summarizes the selected provider, model, and reasoning effort", () => {
+  assert.match(composer, /<TooltipContent class="ai-session-model-summary-tooltip"[\s\S]*displayedProviderName[\s\S]*displayedModelName[\s\S]*reasoningEffort/);
+  assert.match(composer, /model\.modelEntityId === displayedModelSelection\.value\?\.modelEntityId[\s\S]*model\.modelName === displayedModelSelection\.value\?\.modelName/);
+  assert.match(composer, /sessions\.composer\.selectionNotSet/);
+  assert.match(composer, /<DropdownMenu[^>]*@update:open="updateModelMenuOpen">\s*<DropdownMenuTrigger as-child>\s*<button/);
+  assert.match(composer, /<Tooltip :open="modelSummaryTooltipOpen">[\s\S]*<TooltipTrigger\s*:reference="modelTriggerEl"/);
+  assert.doesNotMatch(composer, /<TooltipTrigger as-child>[\s\S]{0,120}<DropdownMenuTrigger/);
+  assert.match(composer, /@pointerenter="showModelSummaryTooltip"/);
+  assert.doesNotMatch(composer, /@focus="showModelSummaryTooltip"/);
+});
+
 test("new and existing sessions use the same reasoning effort composer control", () => {
   assert.match(panel, /:reasoning-effort="newSessionReasoningEffort"/);
   assert.match(panel, /@select-reasoning-effort="selectNewSessionReasoningEffort"/);

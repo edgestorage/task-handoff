@@ -7,6 +7,9 @@ import { NodeAgentPairingCompleteSchema, NodeAgentPairingInviteSchema } from "./
 import { NodeAgentIdentityStore } from "./store.ts";
 import type { NodeAgentControlPlaneConnection, NodeAgentControlPlanePairing, NodeAgentIdentity, PublicNodeAgentControlPlanePairing } from "./types.ts";
 import { EphemeralTokenStore } from "../../shared/security/ephemeral-token-store.ts";
+import type { AccessRepository } from "../persistence/access-repository.ts";
+import { createNodeAgentRepository } from "../persistence/repository.ts";
+import { openNodeAgentDatabaseSync } from "../persistence/database.ts";
 
 type NodeAgentPairingInvite = {
   tokenHash: string;
@@ -16,6 +19,7 @@ type NodeAgentPairingInvite = {
 };
 
 type StagedControlPlaneConnection = {
+  operationId: string;
   pairing: NodeAgentControlPlanePairing;
   connection: NodeAgentControlPlaneConnection;
   replacedConnections: NodeAgentControlPlaneConnection[];
@@ -25,12 +29,15 @@ const NODE_AGENT_PAIRING_INVITE_TTL_MS = 10 * 60 * 1000;
 
 export class NodeAgentIdentityService {
   private readonly store: NodeAgentIdentityStore;
+  private readonly repository: AccessRepository;
   private readonly pairingInvites = new EphemeralTokenStore<NodeAgentPairingInvite>();
   private readonly controlPlaneConnectionOperations = new Map<string, Promise<void>>();
 
-  constructor(paths: NodeAgentStorePaths) {
-    this.store = new NodeAgentIdentityStore(paths);
+  constructor(paths: NodeAgentStorePaths, repository?: AccessRepository) {
+    this.repository = repository || createNodeAgentRepository(openNodeAgentDatabaseSync(paths)).access;
+    this.store = new NodeAgentIdentityStore(paths, this.repository);
     this.store.init();
+    this.recoverControlPlaneConnectionOperations();
   }
 
   async runControlPlaneConnectionOperation<T>(controlPlaneUrl: string, operation: () => Promise<T>): Promise<T> {
@@ -110,18 +117,34 @@ export class NodeAgentIdentityService {
     const replacedConnections = (current.controlPlaneConnections || []).filter(
       (item) => item.id === connection.id || item.url.replace(/\/$/, "") === normalizedUrl,
     );
-    this.store.write({
-      ...current,
-      controlPlanePairings: [
-        ...(current.controlPlanePairings || []).filter((item) => item.keyId !== pairing.keyId),
-        pairing,
-      ],
-      controlPlaneConnections: [
-        ...(current.controlPlaneConnections || []).filter((item) => item.id !== connection.id && item.url.replace(/\/$/, "") !== normalizedUrl),
-        connection,
-      ],
+    const staged = { operationId: createId("connection_operation"), pairing, connection, replacedConnections };
+    const timestamp = now();
+    this.repository.transaction(() => {
+      this.store.write({
+        ...current,
+        controlPlanePairings: [
+          ...(current.controlPlanePairings || []).filter((item) => item.keyId !== pairing.keyId),
+          pairing,
+        ],
+        controlPlaneConnections: [
+          ...(current.controlPlaneConnections || []).filter((item) => item.id !== connection.id && item.url.replace(/\/$/, "") !== normalizedUrl),
+          connection,
+        ],
+      });
+      this.repository.putOperation({
+        id: staged.operationId, kind: "create-connection", phase: "prepared",
+        requested: staged as unknown as Record<string, unknown>, pairingKeyId: pairing.keyId, connectionId: connection.id,
+        replacedConnections: replacedConnections as unknown as Array<Record<string, unknown>>,
+        createdAt: timestamp, updatedAt: timestamp,
+      });
     });
-    return { pairing, connection, replacedConnections };
+    return staged;
+  }
+
+  markControlPlaneConnectionRemoteAccepted(staged: StagedControlPlaneConnection) {
+    const current = this.repository.listOperations().find((operation) => operation.id === staged.operationId);
+    if (!current) throw Object.assign(new Error("Control-plane connection operation was not found."), { code: "NODE_AGENT_CONNECTION_OPERATION_NOT_FOUND", statusCode: 409 });
+    this.repository.putOperation({ ...current, phase: "remote-accepted", updatedAt: now() });
   }
 
   commitControlPlaneConnection(staged: StagedControlPlaneConnection, input: { name?: string } = {}) {
@@ -130,19 +153,24 @@ export class NodeAgentIdentityService {
     const connection = { ...staged.connection, ...(input.name ? { name: input.name } : {}) };
     const activePairingKeyIds = new Set((current.controlPlaneConnections || []).map((item) => item.pairingKeyId));
     const replacedPairingKeyIds = new Set(staged.replacedConnections.map((item) => item.pairingKeyId));
-    this.store.write({
-      ...current,
-      controlPlanePairings: [
-        ...(current.controlPlanePairings || []).filter((item) => (
-          item.keyId !== pairing.keyId
-          && (!replacedPairingKeyIds.has(item.keyId) || activePairingKeyIds.has(item.keyId))
-        )),
-        pairing,
-      ],
-      controlPlaneConnections: [
-        ...(current.controlPlaneConnections || []).filter((item) => item.id !== connection.id),
-        connection,
-      ],
+    this.repository.transaction(() => {
+      this.store.write({
+        ...current,
+        controlPlanePairings: [
+          ...(current.controlPlanePairings || []).filter((item) => (
+            item.keyId !== pairing.keyId
+            && (!replacedPairingKeyIds.has(item.keyId) || activePairingKeyIds.has(item.keyId))
+          )),
+          pairing,
+        ],
+        controlPlaneConnections: [
+          ...(current.controlPlaneConnections || []).filter((item) => item.id !== connection.id),
+          connection,
+        ],
+      });
+      const operation = this.repository.listOperations().find((candidate) => candidate.id === staged.operationId);
+      if (operation) this.repository.putOperation({ ...operation, phase: "committed", updatedAt: now() });
+      this.repository.deleteOperation(staged.operationId);
     });
     return { pairing, connection };
   }
@@ -151,16 +179,35 @@ export class NodeAgentIdentityService {
     const current = this.store.read();
     if (!current) return;
     const restoredConnectionIds = new Set(staged.replacedConnections.map((connection) => connection.id));
-    this.store.write({
-      ...current,
-      controlPlanePairings: (current.controlPlanePairings || []).filter((pairing) => pairing.keyId !== staged.pairing.keyId),
-      controlPlaneConnections: [
-        ...(current.controlPlaneConnections || []).filter(
-          (connection) => connection.id !== staged.connection.id && !restoredConnectionIds.has(connection.id),
-        ),
-        ...staged.replacedConnections,
-      ],
+    this.repository.transaction(() => {
+      this.store.write({
+        ...current,
+        controlPlanePairings: (current.controlPlanePairings || []).filter((pairing) => pairing.keyId !== staged.pairing.keyId),
+        controlPlaneConnections: [
+          ...(current.controlPlaneConnections || []).filter(
+            (connection) => connection.id !== staged.connection.id && !restoredConnectionIds.has(connection.id),
+          ),
+          ...staged.replacedConnections,
+        ],
+      });
+      this.repository.deleteOperation(staged.operationId);
     });
+  }
+
+  private recoverControlPlaneConnectionOperations() {
+    for (const operation of this.repository.listOperations(["prepared", "remote-accepted"])) {
+      const staged = operation.requested as unknown as StagedControlPlaneConnection;
+      if (!staged?.pairing?.keyId || !staged?.connection?.id) {
+        this.repository.putOperation({ ...operation, phase: "failed", error: { code: "NODE_AGENT_CONNECTION_OPERATION_INVALID" }, updatedAt: now() });
+        continue;
+      }
+      if (operation.phase === "remote-accepted") {
+        this.repository.putOperation({ ...operation, phase: "committed", updatedAt: now() });
+        this.repository.deleteOperation(operation.id);
+      } else {
+        this.rollbackControlPlaneConnection(staged);
+      }
+    }
   }
 
   private createControlPlaneConnection(input: { url: string; name?: string; enabled?: boolean }) {

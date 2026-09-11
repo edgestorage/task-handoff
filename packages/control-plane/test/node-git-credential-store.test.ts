@@ -26,12 +26,22 @@ function authorization(generation: number, credentialIds = ["gitcred_one"]) {
   return { instanceId: "inst_one", generation, credentialIds, updatedAt: timestamp };
 }
 
+function createState(dataDir: string, instanceIds = ["inst_one"]) {
+  const paths = nodeAgentStorePaths(dataDir);
+  const state = new NodeAgentState(paths, "node_one", "http://127.0.0.1:8091", undefined, 8091, "linux");
+  state.init();
+  for (const id of instanceIds) state.createInstance({
+    id, runtimeId: "runtime_local_docker", imageSelection: { imageId: "img_one" },
+    image: { id: "img_one", origin: "custom", name: "Image", repository: "image", tag: "latest", requestedReference: "image:latest", pullPolicy: "if-not-present", capabilities: [], optionalApps: [], defaultEnv: {}, labels: {}, createdAt: timestamp, updatedAt: timestamp },
+    source: { type: "local-folder", path: "/tmp/workspace" }, sourceSnapshot: {}, modelSelection: {},
+  });
+  return { paths, state, store: state.gitCredentials };
+}
+
 test("node stores one payload per credential and resolves only through an instance authorization set", () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-node-git-"));
   try {
-    const paths = nodeAgentStorePaths(dataDir);
-    const store = new NodeGitCredentialStore(paths);
-    store.init();
+    const { paths, store } = createState(dataDir);
     assert.throws(() => store.putAuthorizationSet(authorization(1)), (error: { code?: string }) => error.code === "GIT_CREDENTIAL_PAYLOAD_MISSING");
     store.putPayload(payload());
     store.putAuthorizationSet(authorization(1));
@@ -43,19 +53,21 @@ test("node stores one payload per credential and resolves only through an instan
     const restored = new NodeGitCredentialStore(paths);
     restored.init();
     assert.deepEqual(restored.getAuthorizationSet("inst_one").credentialIds, ["gitcred_one"]);
-    assert.equal(fs.statSync(paths.gitCredentialPayloadsDir).mode & 0o777, 0o700);
-    assert.equal(fs.statSync(path.join(paths.gitCredentialPayloadsDir, "gitcred_one.json")).mode & 0o777, 0o600);
+    assert.equal(fs.existsSync(paths.gitCredentialPayloadsDir), false);
+    assert.equal(fs.statSync(paths.databasePath).mode & 0o777, 0o600);
   } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
 });
 
 test("payload revision and authorization generation reject stale or conflicting delivery", () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-node-git-revision-"));
   try {
-    const store = new NodeGitCredentialStore(nodeAgentStorePaths(dataDir));
-    store.init();
+    const { store } = createState(dataDir);
     store.putPayload(payload(2));
     assert.throws(() => store.putPayload(payload(1)), (error: { code?: string }) => error.code === "GIT_CREDENTIAL_REVISION_STALE");
     store.putAuthorizationSet(authorization(4));
+    const unchangedAt = store.getAuthorizationSet("inst_one").updatedAt;
+    store.putAuthorizationSet({ ...authorization(4), updatedAt: "2026-08-24T00:00:00.000Z" });
+    assert.equal(store.getAuthorizationSet("inst_one").updatedAt, unchangedAt);
     assert.throws(() => store.putAuthorizationSet(authorization(3, [])), (error: { code?: string }) => error.code === "GIT_CREDENTIAL_REVISION_STALE");
     assert.throws(() => store.putAuthorizationSet(authorization(4, [])), (error: { code?: string }) => error.code === "GIT_CREDENTIAL_REVISION_CONFLICT");
     store.putAuthorizationSet(authorization(5, []));
@@ -64,12 +76,11 @@ test("payload revision and authorization generation reject stale or conflicting 
   } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
 });
 
-test("pre-release per-credential assignments migrate to an atomic authorization set", () => {
+test("legacy per-credential assignments are not a runtime fallback after SQLite migration", () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-node-git-migrate-"));
   try {
     const paths = nodeAgentStorePaths(dataDir);
-    const bootstrap = new NodeGitCredentialStore(paths);
-    bootstrap.init();
+    const { store: bootstrap } = createState(dataDir);
     bootstrap.putPayload(payload());
     fs.mkdirSync(paths.gitCredentialAssignmentsDir, { recursive: true });
     fs.writeFileSync(path.join(paths.gitCredentialAssignmentsDir, "inst_one:gitcred_one.json"), JSON.stringify({
@@ -78,16 +89,14 @@ test("pre-release per-credential assignments migrate to an atomic authorization 
     }));
     const store = new NodeGitCredentialStore(paths);
     store.init();
-    assert.deepEqual(store.getAuthorizationSet("inst_one"), { instanceId: "inst_one", generation: 7, credentialIds: ["gitcred_one"], updatedAt: store.getAuthorizationSet("inst_one").updatedAt });
+    assert.deepEqual(store.getAuthorizationSet("inst_one").credentialIds, []);
   } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
 });
 
 test("node restart keeps shared authorization, rotation reaches every instance, and revoke garbage-collects last use", () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-node-git-shared-"));
   try {
-    const paths = nodeAgentStorePaths(dataDir);
-    const store = new NodeGitCredentialStore(paths);
-    store.init();
+    const { paths, store } = createState(dataDir, ["inst_one", "inst_two"]);
     store.putPayload(payload());
     store.putAuthorizationSet(authorization(1));
     store.putAuthorizationSet({ ...authorization(1), instanceId: "inst_two" });

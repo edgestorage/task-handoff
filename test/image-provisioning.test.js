@@ -459,7 +459,7 @@ test("failed node-agent image provisioning is persisted and can be retried", asy
   assert.equal(ready.imageSnapshot.resolvedDigest, digest("d"));
 });
 
-test("node-agent restart migrates and resumes persisted image provisioning without a control plane", async (t) => {
+test("node-agent restart resumes persisted image provisioning without a control plane", async (t) => {
   const dataDir = tempDataDir("node-image-restore");
   const first = await createNodeAgentApp({
     dataDir,
@@ -486,29 +486,24 @@ test("node-agent restart migrates and resumes persisted image provisioning witho
     },
   });
   await waitFor(() => first.nodeAgentState.controlledInstances.get("inst_restore")?.status === "failed", "initial failed provisioning");
+  const stored = first.nodeAgentState.controlledInstances.get("inst_restore");
+  first.nodeAgentState.controlledInstances.put({
+    ...stored,
+    status: "starting",
+    health: "unknown",
+    imageSnapshot: {
+      ...stored.imageSnapshot,
+      requestedReference: "docker.io/example/controlled:latest",
+    },
+    imageProvisioning: {
+      phase: "checking-image",
+      requestedReference: "docker.io/example/controlled:latest",
+      generation: 1,
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    },
+  });
   await first.close();
-
-  const instancePath = path.join(dataDir, "controlled-instances", "inst_restore.json");
-  const stored = JSON.parse(fs.readFileSync(instancePath, "utf8"));
-  const { requestedReference: _requestedReference, ...legacySnapshot } = stored.imageSnapshot;
-  stored.imageSnapshot = {
-    ...legacySnapshot,
-    image: "docker.io/example/controlled",
-    registry: "legacy-local",
-    futureSnapshotField: true,
-  };
-  stored.status = "starting";
-  stored.health = "unknown";
-  stored.imageProvisioning = {
-    phase: "checking-image",
-    requestedReference: "docker.io/example/controlled:latest",
-    generation: 1,
-    startedAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-    futureProvisioningField: true,
-  };
-  stored.futureInstanceField = true;
-  fs.writeFileSync(instancePath, `${JSON.stringify(stored, null, 2)}\n`);
 
   let available = false;
   const restored = await createNodeAgentApp({

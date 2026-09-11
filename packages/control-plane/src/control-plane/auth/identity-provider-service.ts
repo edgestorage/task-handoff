@@ -5,7 +5,7 @@ import { createId } from "../../shared/persistence/store.ts";
 import type { ControlPlaneStorePaths } from "../persistence/paths.ts";
 import type { ControlPlaneUserRepository } from "./database/repository.ts";
 import { externalIdentityProviderAdapter } from "./external-identity-providers.ts";
-import { ControlPlaneSecretBox } from "./secret-box.ts";
+import { SecretEnvelopeService } from "../persistence/secret-envelope.ts";
 import type { ControlPlaneUserService } from "./user-service.ts";
 import type { IdentityProviderRecord } from "./user-records.ts";
 
@@ -42,12 +42,12 @@ function identityNamespace(kind: IdentityProviderRecord["kind"], issuer?: string
 
 export class ControlPlaneIdentityProviderService {
   private readonly users: ControlPlaneUserService;
-  private readonly secrets: ControlPlaneSecretBox;
+  private readonly secrets: SecretEnvelopeService;
   private readonly fetchImplementation: typeof fetch;
 
-  constructor(paths: ControlPlaneStorePaths, users: ControlPlaneUserService, options: { fetch?: typeof fetch } = {}) {
+  constructor(paths: ControlPlaneStorePaths, users: ControlPlaneUserService, options: { fetch?: typeof fetch; secrets?: SecretEnvelopeService } = {}) {
     this.users = users;
-    this.secrets = new ControlPlaneSecretBox(paths.identityProviderEncryptionKeyPath);
+    this.secrets = options.secrets || new SecretEnvelopeService(paths.databaseEncryptionKeyPath);
     this.fetchImplementation = options.fetch || fetch;
   }
 
@@ -64,15 +64,16 @@ export class ControlPlaneIdentityProviderService {
     externalIdentityProviderAdapter(parsed.kind);
     await this.validateConfiguration(parsed);
     const timestamp = now();
+    const id = createId("idp");
     return this.publicProvider(await this.users.store.providers.put({
-      id: createId("idp"),
+      id,
       name: parsed.name,
       kind: parsed.kind,
       status: parsed.status || "disabled",
       loginPolicy: parsed.loginPolicy || "existing-only",
       issuer: parsed.issuer,
       clientId: parsed.clientId,
-      clientSecretCiphertext: this.secrets.seal(parsed.clientSecret),
+      clientSecretCiphertext: this.secrets.seal(parsed.clientSecret, `identity-provider:${id}:client-secret`),
       callbackUrl: parsed.callbackUrl,
       createdAt: timestamp,
       updatedAt: timestamp,
@@ -111,7 +112,7 @@ export class ControlPlaneIdentityProviderService {
         ...updates,
         kind: nextKind,
         issuer: nextIssuer,
-        clientSecretCiphertext: clientSecret ? this.secrets.seal(clientSecret) : latest.clientSecretCiphertext,
+        clientSecretCiphertext: clientSecret ? this.secrets.seal(clientSecret, `identity-provider:${providerId}:client-secret`) : latest.clientSecretCiphertext,
         updatedAt: now(),
       }));
     });
@@ -129,7 +130,7 @@ export class ControlPlaneIdentityProviderService {
   async clientSecret(providerId: string) {
     const provider = await this.users.store.providers.get(providerId);
     if (!provider) throw Object.assign(new Error("Identity provider was not found."), { code: "CONTROL_PLANE_IDENTITY_PROVIDER_NOT_FOUND", statusCode: 404 });
-    return this.secrets.open(provider.clientSecretCiphertext);
+    return this.secrets.open(provider.clientSecretCiphertext, `identity-provider:${providerId}:client-secret`);
   }
 
   private async validateConfiguration(provider: z.infer<typeof ProviderInputSchema>) {

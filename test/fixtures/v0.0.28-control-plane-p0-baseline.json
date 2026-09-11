@@ -1,0 +1,167 @@
+{
+  "nodes": [
+    {
+      "id": "node_legacy",
+      "name": "Legacy Node",
+      "connectionMode": "direct-http",
+      "connectionPath": { "kind": "direct" },
+      "connectionEnabled": true,
+      "auth": {
+        "mode": "paired-hmac",
+        "keyId": "key_legacy",
+        "secret": "legacy-node-secret",
+        "pairedAt": "2026-08-01T00:00:00.000Z",
+        "pairing": { "status": "paired", "joinToken": "must-not-migrate" }
+      },
+      "endpoint": "https://node.example.com",
+      "status": "online",
+      "health": "ok",
+      "capabilities": { "agent": { "protocolVersion": "2026-08-01" } },
+      "labels": { "environment": "test" },
+      "lastSeenAt": "2026-08-01T00:05:00.000Z",
+      "createdAt": "2026-08-01T00:00:00.000Z",
+      "updatedAt": "2026-08-01T00:05:00.000Z",
+      "futureServerField": "ignored"
+    }
+  ],
+  "pairingRevocations": [
+    {
+      "id": "pairing_revoke_legacy",
+      "endpoint": "https://revoke.example.com",
+      "nodeId": "node_failed",
+      "keyId": "key_failed",
+      "secret": "legacy-revoke-secret",
+      "pairedAt": "2026-08-01T00:00:00.000Z",
+      "createdAt": "2026-08-01T00:01:00.000Z",
+      "updatedAt": "2026-08-01T00:01:00.000Z"
+    }
+  ],
+  "models": [
+    {
+      "id": "model_legacy",
+      "name": "Legacy Model",
+      "endpoint": "https://models.example.com/v1",
+      "key": "legacy-model-key",
+      "model": "gpt-legacy",
+      "apps": ["codex"],
+      "enabled": true,
+      "order": 100,
+      "labels": {},
+      "createdAt": "2026-08-01T00:00:00.000Z",
+      "updatedAt": "2026-08-01T00:00:00.000Z",
+      "futureServerField": true
+    }
+  ],
+  "chatBridges": [
+    {
+      "id": "chat_telegram_legacy",
+      "channel": "telegram",
+      "name": "Telegram",
+      "enabled": true,
+      "token": "telegram-token",
+      "allowedUserIds": [],
+      "pollIntervalMs": 3000,
+      "settings": { "telegramLastUpdateId": 12 },
+      "createdAt": "2026-08-01T00:00:00.000Z",
+      "updatedAt": "2026-08-01T00:00:00.000Z"
+    },
+    {
+      "id": "chat_wechat_legacy",
+      "channel": "wechat",
+      "name": "WeChat",
+      "enabled": true,
+      "token": "wechat-token",
+      "allowedUserIds": [],
+      "pollIntervalMs": 3000,
+      "settings": { "baseUrl": "https://wechat.example.com", "updatesBuf": "cursor", "contextToken": "wechat-context-token" },
+      "createdAt": "2026-08-01T00:00:00.000Z",
+      "updatedAt": "2026-08-01T00:00:00.000Z"
+    },
+    {
+      "id": "chat_dingding_legacy",
+      "channel": "dingding",
+      "name": "DingDing",
+      "enabled": true,
+      "token": "dingding-client-id",
+      "allowedUserIds": [],
+      "pollIntervalMs": 3000,
+      "settings": { "clientSecret": "dingding-client-secret", "sessionWebhook": "https://dingding.example.com/secret-hook", "robotCode": "robot-code", "senderId": "staff-1", "cardUserIdType": 1 },
+      "createdAt": "2026-08-01T00:00:00.000Z",
+      "updatedAt": "2026-08-01T00:00:00.000Z"
+    },
+    {
+      "id": "chat_lark_legacy",
+      "channel": "lark",
+      "name": "Lark",
+      "enabled": true,
+      "token": "lark-app-id",
+      "allowedUserIds": [],
+      "pollIntervalMs": 3000,
+      "settings": { "appSecret": "lark-app-secret", "domain": "feishu" },
+      "createdAt": "2026-08-01T00:00:00.000Z",
+      "updatedAt": "2026-08-01T00:00:00.000Z"
+    }
+  ],
+  "chatSessions": [
+    {
+      "id": "chat_telegram_legacy:room-1",
+      "channel": "telegram",
+      "bridgeId": "chat_telegram_legacy",
+      "chatSessionId": "room-1",
+      "activeInstanceId": "instance_legacy",
+      "lastUsedAt": "2026-08-01T00:02:00.000Z",
+      "createdAt": "2026-08-01T00:00:00.000Z",
+      "updatedAt": "2026-08-01T00:02:00.000Z"
+    }
+  ],
+  "gitCredentials": [
+    {
+      "id": "gitcred_legacy",
+      "name": "Legacy Git",
+      "kind": "https-token",
+      "scope": { "scheme": "https", "host": "git.example.com", "pathPrefix": "/team/" },
+      "status": "enabled",
+      "revision": 1,
+      "secret": { "kind": "https-token", "username": "git", "token": "legacy-git-token" },
+      "createdAt": "2026-08-01T00:00:00.000Z",
+      "updatedAt": "2026-08-01T00:00:00.000Z"
+    }
+  ],
+  "gitAssignments": [
+    {
+      "id": "instance_legacy:gitcred_legacy",
+      "instanceId": "instance_legacy",
+      "credentialId": "gitcred_legacy",
+      "credentialRevision": 1,
+      "assignmentRevision": 2,
+      "status": "synced",
+      "authorizedAt": "2026-08-01T00:01:00.000Z",
+      "createdAt": "2026-08-01T00:01:00.000Z",
+      "updatedAt": "2026-08-01T00:02:00.000Z"
+    }
+  ],
+  "gitProvisioningIntents": [
+    {
+      "id": "instance_provisioning",
+      "instanceId": "instance_provisioning",
+      "credentialId": "gitcred_legacy",
+      "remoteUrl": "https://git.example.com/team/repo.git",
+      "ref": { "type": "branch", "name": "main" },
+      "clone": { "submodules": false, "lfs": false, "subdirectory": "" },
+      "createdAt": "2026-08-01T00:01:00.000Z",
+      "updatedAt": "2026-08-01T00:01:00.000Z"
+    }
+  ],
+  "gitAudit": [
+    {
+      "id": "gitaudit_legacy",
+      "action": "authorize",
+      "credentialId": "gitcred_legacy",
+      "instanceId": "instance_legacy",
+      "credentialRevision": 1,
+      "assignmentRevision": 2,
+      "createdAt": "2026-08-01T00:02:00.000Z",
+      "updatedAt": "2026-08-01T00:02:00.000Z"
+    }
+  ]
+}

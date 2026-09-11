@@ -52,8 +52,8 @@ import { NodeStoryStore } from "./stories/store.ts";
 import { StoryAutomationStore } from "./stories/automation-store.ts";
 import { StoryCommandService } from "./stories/command-service.ts";
 import { StoryScheduler } from "./stories/scheduler.ts";
-import { openNodeAgentDatabase } from "./stories/database/database.ts";
-import { createNodeAgentRepository } from "./stories/database/repository.ts";
+import { openNodeAgentDatabase } from "./persistence/database.ts";
+import { createNodeAgentRepository } from "./persistence/repository.ts";
 import { InstanceIdleSessionRetentionCoordinator, StoryIdleSessionRetentionCoordinator } from "./stories/idle-retention.ts";
 import { StoryChangedEventType } from "@task-handoff/protocol/stories";
 import { registerRuntimeRoutes } from "./runtimes/routes.ts";
@@ -110,6 +110,7 @@ export { connectReverseTunnel, createReverseTunnelManager };
 declare module "fastify" {
   interface FastifyInstance {
     nodeAgentState?: NodeAgentState;
+    nodeAgentIdentityService?: NodeAgentIdentityService;
     nodeAgentEventForwarder?: NodeAgentInstanceEventForwarder;
     nodeAgentRuntimeMetrics?: DockerRuntimeMetricsCollector;
     nodeAgentReverseTunnels?: ReturnType<typeof createReverseTunnelManager>;
@@ -516,14 +517,14 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   const storyRepository = createNodeAgentRepository(storyDatabase);
   const remoteSecretOverride = options.remoteSecret || process.env.TASK_HANDOFF_NODE_AGENT_REMOTE_SECRET;
   const remoteKeyIdOverride = options.remoteKeyId || process.env.TASK_HANDOFF_NODE_AGENT_REMOTE_KEY_ID;
-  const identity = new NodeAgentIdentityService(paths);
+  const identity = new NodeAgentIdentityService(paths, storyRepository.access);
   const nodeId = identity.resolveNodeId(options.nodeId || process.env.TASK_HANDOFF_NODE_ID);
   const connectionMode = options.connectionMode || (process.env.TASK_HANDOFF_NODE_AGENT_CONNECTION_MODE === "local-ipc" ? "local-ipc" : "local-loopback");
   const ipcPath = options.ipcPath || process.env.TASK_HANDOFF_NODE_AGENT_IPC_PATH || nodeAgentIpcPath(paths.dataDir);
   const controlEndpoint = connectionMode === "local-ipc" ? nodeAgentIpcEndpoint(ipcPath) : endpoint;
   const platform = options.platform || process.platform;
   const arch = options.arch || process.arch;
-  const state = new NodeAgentState(paths, nodeId, endpoint, containerUrl, port, platform);
+  const state = new NodeAgentState(paths, nodeId, endpoint, containerUrl, port, platform, storyRepository);
   state.node.connectionMode = connectionMode;
   state.node.controlEndpoint = controlEndpoint;
   state.node.endpoint = controlEndpoint;
@@ -742,6 +743,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   activeLogMaintenanceTimer.unref();
   const instanceProxyMetrics = createInstanceProxyMetrics();
   app.decorate("nodeAgentState", state);
+  app.decorate("nodeAgentIdentityService", identity);
   await app.register(websocket, { options: TASK_HANDOFF_WEBSOCKET_SERVER_OPTIONS });
   const eventForwarder = new NodeAgentInstanceEventForwarder(state, token, { logger: app.log, safetyIntervalMs: Number(process.env.TASK_HANDOFF_EVENT_CONNECTION_SAFETY_INTERVAL_MS) || undefined });
   const convergence = new RuntimeConvergenceCoordinator(state.controlledInstances, desiredControlledInstanceVersion, {
@@ -860,11 +862,12 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   const instanceOperations = new InstanceOperationGate();
   const environmentTemplates = new EnvironmentTemplateService(
     state.environmentTemplates,
-    state.instancePrivateConfigs,
     dockerExecutor,
     (id) => state.requireInstance(id),
     (id) => state.requireRuntime(id),
     (instanceId, operation) => instanceOperations.run(instanceId, operation),
+    (instance) => [instance.registrationToken, ...state.modelRegistry.privateSecretValues(instance.id)]
+      .filter((value): value is string => Boolean(value)),
     (imageId) => state.listInstances().some((instance) => instance.environmentTemplateOrigin?.imageId === imageId),
   );
   const sanitizeCrossVersionInstanceReport = (instanceId: string, report: "register" | "heartbeat", input: unknown) => {
@@ -1119,16 +1122,16 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     drainDiagnostic.unref();
     try {
       await storyScheduler.stop();
+      clearInterval(persistenceMaintenanceTimer);
+      clearInterval(activeLogMaintenanceTimer);
+      runtimeMetrics.stop();
+      eventForwarder.stop();
+      await recoverySupervisor.stop();
       await stories.drain();
       await storyRepository.close();
     } finally {
       clearTimeout(drainDiagnostic);
     }
-    clearInterval(persistenceMaintenanceTimer);
-    clearInterval(activeLogMaintenanceTimer);
-    runtimeMetrics.stop();
-    eventForwarder.stop();
-    await recoverySupervisor.stop();
   });
 
   app.decorate("nodeAgentRestoreManagedInstances", () => recoverySupervisor.restoreManagedInstances());
@@ -1426,13 +1429,15 @@ export async function runNodeAgentServer(options: RunNodeAgentServerOptions) {
     if (!nodeAgentState) {
       throw new Error("Node agent state was not initialized.");
     }
-    const nodeId = new NodeAgentIdentityService(paths).resolveNodeId(options.nodeId || process.env.TASK_HANDOFF_NODE_ID);
+    const identity = app.nodeAgentIdentityService;
+    if (!identity) throw new Error("Node agent identity service was not initialized.");
+    const nodeId = identity.resolveNodeId(options.nodeId || process.env.TASK_HANDOFF_NODE_ID);
     const reverseTunnels = createReverseTunnelManager({
       log: app.log,
       inject: (input) => app.inject(input),
       nodeAgentEventForwarder: app.nodeAgentEventForwarder,
       nodeAgentState,
-    }, effectiveOptions, paths, nodeId);
+    }, effectiveOptions, paths, nodeId, identity);
     app.decorate("nodeAgentReverseTunnels", reverseTunnels);
     const listenerManager = new NodeAgentExternalListenerManager({
       app,

@@ -126,6 +126,7 @@ type ChatGatewayResult = {
 type ChatGatewayService = {
   listChatBridges(): Array<ChatBridgeConfig & { tokenSet?: boolean }>;
   requireChatBridge(id: string): ChatBridgeConfig;
+  resolveChatBridge?: (id: string) => ChatBridgeConfig;
   updateChatBridge?: (id: string, input: unknown) => unknown;
   listChatSessions(): ChatSessionBinding[];
   listPendingRoutes(): Promise<Array<PendingRoute & { instance?: { id: string; name?: string } }>>;
@@ -202,7 +203,7 @@ export class ControlPlaneChatGatewayRuntime {
       () => this.service.listPendingRoutes().catch(() => []),
     );
     this.telegramMessageAggregator = new TelegramMessageAggregator({
-      requireBridge: (id) => this.service.requireChatBridge(id),
+      requireBridge: (id) => this.resolveChatBridge(id),
       send: (bridge, chatId, text, telegramOptions = {}) => this.sendTelegramMessage(bridge, chatId, text, telegramOptions),
       answerCallback: (bridge, callbackQueryId, text) => this.answerTelegramCallback(bridge, callbackQueryId, text),
       dispatch: (bridge, chatId, userId, text, attachments, context) => this.dispatchTelegramGatewayMessage(
@@ -238,14 +239,14 @@ export class ControlPlaneChatGatewayRuntime {
       listRoutes: () => this.service.listPendingRoutes(),
       listBindings: () => this.service.listChatSessions(),
       listBridges: () => this.service.listChatBridges(),
-      requireBridge: (id) => this.service.requireChatBridge(id),
+      requireBridge: (id) => this.resolveChatBridge(id),
       callbackData: (routeId, decision) => this.service.pendingDecisionCallbackData(routeId, decision),
       send: (bridge, chatId, payload) => this.sendViaBridge(bridge, chatId, payload),
       setBridgeError: (bridgeId, error) => this.bridgeErrors.set(bridgeId, error),
     });
     this.telegramProgress = new TelegramProgressAdapter({
       updateIntervalMs: options.telegramProgressUpdateIntervalMs,
-      requireBridge: (id) => this.service.requireChatBridge(id),
+      requireBridge: (id) => this.resolveChatBridge(id),
       send: (bridge, chatId, text, telegramOptions = {}) => this.sendTelegramMessage(bridge, chatId, text, telegramOptions),
       edit: (bridge, chatId, messageId, text, telegramOptions = {}) => this.editTelegramMessage(bridge, chatId, messageId, text, telegramOptions),
       deleteMessage: (bridge, chatId, messageId) => this.deleteTelegramMessage(bridge, chatId, messageId),
@@ -300,6 +301,10 @@ export class ControlPlaneChatGatewayRuntime {
     this.service.updateChatBridge?.(id, input);
   }
 
+  private resolveChatBridge(id: string) {
+    return this.service.resolveChatBridge?.(id) ?? this.service.requireChatBridge(id);
+  }
+
   startEnabled() {
     this.logAiSessionDelivery({
       stage: "runtime-start-enabled",
@@ -321,7 +326,7 @@ export class ControlPlaneChatGatewayRuntime {
       });
       return this.status();
     }
-    const bridge = this.service.requireChatBridge(id);
+    const bridge = this.resolveChatBridge(id);
     this.logAiSessionDelivery({
       stage: "bridge-start",
       bridgeId: bridge.id,
@@ -387,7 +392,7 @@ export class ControlPlaneChatGatewayRuntime {
   }
 
   async pollBridgeNow(id: string) {
-    const bridge = this.service.requireChatBridge(id);
+    const bridge = this.resolveChatBridge(id);
     const generation = this.bridgePollingGeneration(id);
     if (bridge.channel === "telegram") {
       await this.runBridgePoll(bridge, generation, (current, isCurrent) => this.pollTelegram(current, isCurrent));
@@ -448,7 +453,7 @@ export class ControlPlaneChatGatewayRuntime {
     };
     const interval = setInterval(() => {
       if (!isCurrent()) return;
-      const current = this.service.requireChatBridge(bridge.id);
+      const current = this.resolveChatBridge(bridge.id);
       if (!current.enabled) {
         this.stopBridge(bridge.id);
         return;
@@ -463,7 +468,7 @@ export class ControlPlaneChatGatewayRuntime {
       intervalMs: bridge.pollIntervalMs,
     });
     if (bridge.enabled) {
-      const current = this.service.requireChatBridge(bridge.id);
+      const current = this.resolveChatBridge(bridge.id);
       run(current);
     }
     return this.status();
@@ -958,7 +963,7 @@ export class ControlPlaneChatGatewayRuntime {
     if (!binding.bridgeId) {
       return false;
     }
-    const bridge = this.service.requireChatBridge(binding.bridgeId);
+    const bridge = this.resolveChatBridge(binding.bridgeId);
     if (!bridge.enabled) {
       return false;
     }
@@ -1579,7 +1584,7 @@ export class ControlPlaneChatGatewayRuntime {
     pendingApprovals: Map<string, PendingRoute & { instance?: { id: string; name?: string } }>,
   ) {
     for (const owned of this.listTelegramOwnedProgressEntries(instanceId)) {
-      const bridge = this.service.requireChatBridge(owned.route.bridgeId);
+      const bridge = this.resolveChatBridge(owned.route.bridgeId);
       if (bridge.channel !== "telegram" || !bridge.enabled) {
         continue;
       }
@@ -1713,7 +1718,7 @@ export class ControlPlaneChatGatewayRuntime {
       });
       return false;
     }
-    const bridge = this.service.requireChatBridge(binding.bridgeId);
+    const bridge = this.resolveChatBridge(binding.bridgeId);
     if (!bridge.enabled) {
       this.logAiSessionDelivery({
         stage: "chat-update-skip-bridge-state",

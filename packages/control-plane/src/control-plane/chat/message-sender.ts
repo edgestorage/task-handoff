@@ -45,7 +45,7 @@ export class ControlPlaneChatMessageSender {
 
     const defaultAiSessionId = await this.targets.defaultAiSessionIdForInstance(instance.id);
     if (defaultAiSessionId) {
-      const updated = this.deps.upsertChatSession({ ...binding, activeAiSessionId: defaultAiSessionId });
+      const updated = await this.deps.upsertChatSession({ ...binding, activeAiSessionId: defaultAiSessionId });
       const sent = await this.trySendAiSessionMessage(updated, instance.id, defaultAiSessionId, input.message.text, input.message.attachments);
       if (!sent.ok) {
         return this.failedSendResult(sent.binding, project, instance, sent.reply);
@@ -72,7 +72,7 @@ export class ControlPlaneChatMessageSender {
       };
     } catch (error) {
       if (isMissingAiSessionError(error)) {
-        const updated = clearMissingBinding ? this.deps.upsertChatSession({ ...binding, activeAiSessionId: undefined }) : binding;
+        const updated = clearMissingBinding ? await this.deps.upsertChatSession({ ...binding, activeAiSessionId: undefined }) : binding;
         return {
           ok: false as const,
           binding: updated,

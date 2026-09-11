@@ -60,7 +60,8 @@ test("Story list options combine view and sort controls while manual mode drags 
 });
 
 test("story selection follows the node-filtered list", () => {
-  assert.match(storyView, /watch\(stories, \(value\) => \{[\s\S]*const present = value\.some\(\(story\) => story\.id === resource\.story\.id && story\.ownerNodeId === resource\.story\.ownerNodeId\);[\s\S]*if \(!present\) selectedResource\.value = value\[0\] \? \{ kind: "story", story: value\[0\] \} : undefined;/);
+  assert.match(storyView, /const story = stories\.value\.find\(\(candidate\) => candidate\.id === selection\.storyId && candidate\.ownerNodeId === selection\.ownerNodeId\);/);
+  assert.match(storyView, /const refreshed = refreshResource\(resource\);[\s\S]*selectedResource\.value = refreshed \|\| \(value\[0\] \? \{ kind: "story", story: value\[0\] \} : undefined\);/);
   assert.match(storyView, /const filteredOnlineNode = props\.nodes\.find/);
 });
 

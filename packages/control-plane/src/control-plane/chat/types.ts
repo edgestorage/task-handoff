@@ -53,7 +53,7 @@ export type ChatActionTokenInput =
   | { type: "pending-decision"; routeId: string; decision: "allow" | "deny" | "skip"; ttlMs?: number };
 
 export type ChatSessionStoreDeps = {
-  upsertChatSession: (input: Pick<ChatSessionBinding, "channel" | "chatSessionId"> & Partial<ChatSessionBinding>) => ChatSessionBinding;
+  upsertChatSession: (input: Pick<ChatSessionBinding, "channel" | "chatSessionId"> & Partial<ChatSessionBinding>) => Promise<ChatSessionBinding>;
 };
 
 export type ChatBoardDeps = {

@@ -15,21 +15,24 @@ export class NodeAgentPersistenceMaintenance {
   readonly logsDir: string;
   readonly localInstancesRoot: string;
   readonly localInstancesTrashRoot: string;
-  private readonly options: { retentionMs?: number; now?: () => number; logger?: MaintenanceLogger };
+  readonly privateConfigsDir: string;
+  private readonly options: { retentionMs?: number; now?: () => number; logger?: MaintenanceLogger; removeFile?: (filePath: string) => void };
 
   constructor(
     paths: NodeAgentStorePaths,
-    options: { retentionMs?: number; now?: () => number; logger?: MaintenanceLogger } = {},
+    options: { retentionMs?: number; now?: () => number; logger?: MaintenanceLogger; removeFile?: (filePath: string) => void } = {},
   ) {
     this.options = options;
     this.logsDir = paths.logsDir;
     this.localInstancesRoot = path.join(paths.dataDir, "local-instances");
     this.localInstancesTrashRoot = path.join(paths.dataDir, "local-instances-trash");
+    this.privateConfigsDir = paths.instancePrivateConfigsDir;
   }
 
   run(activeInstanceIds: Iterable<string>) {
     this.capNodeAgentLogs();
     const active = new Set(activeInstanceIds);
+    this.removeOrphanPrivateConfigs(active);
     if (fs.existsSync(this.localInstancesRoot)) {
       ensurePrivateDirectory(this.localInstancesRoot);
       for (const entry of fs.readdirSync(this.localInstancesRoot, { withFileTypes: true })) {
@@ -100,6 +103,25 @@ export class NodeAgentPersistenceMaintenance {
         error: error instanceof Error ? error.message : String(error),
       });
       return undefined;
+    }
+  }
+
+  private removeOrphanPrivateConfigs(activeInstanceIds: Set<string>) {
+    if (!fs.existsSync(this.privateConfigsDir)) return;
+    for (const entry of fs.readdirSync(this.privateConfigsDir, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+      const instanceId = entry.name.slice(0, -".json".length);
+      if (activeInstanceIds.has(instanceId)) continue;
+      const filePath = path.join(this.privateConfigsDir, entry.name);
+      try {
+        (this.options.removeFile || ((target) => fs.rmSync(target, { force: true })))(filePath);
+      } catch (error) {
+        this.options.logger?.("orphan instance private config cleanup failed", {
+          instanceId,
+          filePath,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
   }
 

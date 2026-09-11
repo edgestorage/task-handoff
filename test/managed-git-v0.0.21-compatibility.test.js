@@ -77,13 +77,13 @@ test("v0.0.21 Repository authentication error remains valid", () => {
   assert.deepEqual(RepositoryErrorSchema.parse(fixture.repositoryError), fixture.repositoryError);
 });
 
-test("v0.0.21 instance private config migrates without losing its instance credential", () => {
+test("v0.0.21 instance private config remains readable for startup migration", () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-git-v21-"));
   try {
     const store = new InstancePrivateConfigStore(nodeAgentStorePaths(dataDir));
     store.init();
     fs.writeFileSync(store.filePath(fixture.instancePrivateConfig.instanceId), JSON.stringify(fixture.instancePrivateConfig));
-    const migrated = store.get(fixture.instancePrivateConfig.instanceId);
+    const migrated = store.inspectMaterialized(fixture.instancePrivateConfig.instanceId);
     assert.equal(migrated.instanceCredential, fixture.instancePrivateConfig.registrationToken);
     assert.equal("gitCredentials" in migrated, false);
   } finally {

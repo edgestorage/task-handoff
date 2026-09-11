@@ -31,11 +31,15 @@ test("private catalog resolves defaults and rejects stale selections without fal
   });
   assert.throws(
     () => resolveControlledPrivateModelSelection(catalog, "codex", { modelEntityId: "removed", modelName: "model-one" }),
-    (error) => error.code === "AI_SESSION_MODEL_ENTITY_UNAVAILABLE" && error.statusCode === 409,
+    (error) => error.code === "AI_SESSION_MODEL_ENTITY_UNAVAILABLE"
+      && error.statusCode === 409
+      && error.message.includes("Restart the instance"),
   );
   assert.throws(
     () => resolveControlledPrivateModelSelection(catalog, "codex", { modelEntityId: "provider_one", modelName: "removed-model" }),
-    (error) => error.code === "AI_SESSION_MODEL_NAME_UNAVAILABLE" && error.statusCode === 409,
+    (error) => error.code === "AI_SESSION_MODEL_NAME_UNAVAILABLE"
+      && error.statusCode === 409
+      && error.message.includes("Restart the instance"),
   );
   assert.throws(
     () => resolveControlledPrivateModelSelection(catalog, "claude", { modelEntityId: "provider_one", modelName: "model-one" }),

@@ -16,6 +16,9 @@
       <Pencil :size="14" /><span>{{ t("common.actions.edit") }}</span>
     </ContextMenuItem>
     <ContextMenuSeparator />
+    <ContextMenuItem class="ai-session-context-menu-item danger" :disabled="!sessionCount || closingAllSessions" @select="$emit('close-all-sessions')">
+      <CircleX :size="14" /><span>{{ t(closingAllSessions ? "stories.closingAllSessions" : "stories.closeAllSessions") }}</span>
+    </ContextMenuItem>
     <ContextMenuItem class="ai-session-context-menu-item" @select="$emit('toggle-archive')">
       <Archive v-if="!story.archivedAt" :size="14" /><RotateCcw v-else :size="14" /><span>{{ t(story.archivedAt ? "common.actions.restore" : "common.actions.archive") }}</span>
     </ContextMenuItem>
@@ -26,7 +29,7 @@
 </template>
 
 <script setup lang="ts">
-import { Archive, CalendarClock, Link, MessageSquarePlus, Pencil, Play, RotateCcw, Trash2 } from "@lucide/vue";
+import { Archive, CalendarClock, CircleX, Link, MessageSquarePlus, Pencil, Play, RotateCcw, Trash2 } from "@lucide/vue";
 import type { Story } from "@task-handoff/protocol/stories";
 import { useI18n } from "vue-i18n";
 import { ContextMenuContent, ContextMenuItem, ContextMenuSeparator } from "../../../components/ui/context-menu";
@@ -35,6 +38,8 @@ defineProps<{
   story: Story;
   canNewSession: boolean;
   canAddExisting: boolean;
+  sessionCount: number;
+  closingAllSessions: boolean;
 }>();
 
 defineEmits<{
@@ -43,6 +48,7 @@ defineEmits<{
   "add-action": [];
   "add-automation": [];
   edit: [];
+  "close-all-sessions": [];
   "toggle-archive": [];
   delete: [];
 }>();

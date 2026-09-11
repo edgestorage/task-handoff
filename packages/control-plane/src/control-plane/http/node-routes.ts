@@ -145,7 +145,7 @@ export function registerNodeRoutes({
     data: NodeJoinInviteStatusSchema.parse(service.getNodeJoinInviteStatus(IdParamsSchema.parse(request.params).id)),
   }));
   app.post("/api/node-join/complete", { config: PUBLIC_CONTROL_PLANE_ROUTE }, async (request, reply) => {
-    const { node, inviteId } = service.completeNodeJoin(request.body);
+    const { node, inviteId } = await service.completeNodeJoin(request.body);
     nodeEventSubscriber.syncNow();
     events.publish("node.joined", { nodeId: node.id, inviteId });
     return reply.code(201).send({ data: service.requirePublicNode(node.id) });
@@ -213,7 +213,7 @@ export function registerNodeRoutes({
   });
   app.get("/api/nodes/:id", async (request) => ({ data: service.requirePublicNode(IdParamsSchema.parse(request.params).id) }));
   app.patch("/api/nodes/:id", async (request) => {
-    const node = service.updateNode(IdParamsSchema.parse(request.params).id, request.body);
+    const node = await service.updateNode(IdParamsSchema.parse(request.params).id, request.body);
     if (!node.connectionEnabled) nodeAgentTunnel.disconnect(node.id);
     nodeEventSubscriber.syncNow();
     events.publish("node.updated", { nodeId: node.id });

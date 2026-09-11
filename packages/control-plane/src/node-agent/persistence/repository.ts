@@ -2,7 +2,11 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { and, asc, count, desc, eq, inArray, notInArray } from "drizzle-orm";
 import type { NodeSQLiteDatabase } from "drizzle-orm/node-sqlite";
 import type { NodeAgentDatabase } from "./database.ts";
-import * as schema from "./schema.ts";
+import * as schema from "../stories/database/schema.ts";
+import { createTopologyRepositories } from "./topology-repository.ts";
+import { createModelRepositories } from "./model-repository.ts";
+import { AccessRepository } from "./access-repository.ts";
+import { GitPersistenceRepository } from "./git-repository.ts";
 
 export type StoryRecord = typeof schema.stories.$inferSelect;
 export type StoryActionRecord = typeof schema.actions.$inferSelect;
@@ -69,7 +73,12 @@ export function createNodeAgentRepository(database: NodeAgentDatabase) {
     runs: ReturnType<typeof runRepository>;
     fileMutations: ReturnType<typeof fileMutationRepository>;
     deletionIntents: ReturnType<typeof deletionIntentRepository>;
+    topology: ReturnType<typeof createTopologyRepositories>;
+    model: ReturnType<typeof createModelRepositories>;
+    access: AccessRepository;
+    git: GitPersistenceRepository;
     transaction<T>(operation: (repository: NodeAgentRepository) => Promise<T>): Promise<T>;
+    transactionSync<T>(operation: (repository: NodeAgentRepository) => T): T;
     stopAccepting(): void;
     drain(): Promise<void>;
     checkpoint(): Promise<void>;
@@ -91,6 +100,20 @@ export function createNodeAgentRepository(database: NodeAgentDatabase) {
     });
   };
 
+  const transactionSync = <T>(operation: (repository: NodeAgentRepository) => T): T => {
+    assertOpen();
+    if ((database.client as typeof database.client & { isTransaction?: boolean }).isTransaction) return operation(repository as NodeAgentRepository);
+    database.client.exec("BEGIN IMMEDIATE");
+    try {
+      const result = operation(repository as NodeAgentRepository);
+      database.client.exec("COMMIT");
+      return result;
+    } catch (error) {
+      database.client.exec("ROLLBACK");
+      throw error;
+    }
+  };
+
   repository = {
     stories: storyRepository(db, read, mutate),
     actions: actionRepository(db, read, mutate),
@@ -99,7 +122,12 @@ export function createNodeAgentRepository(database: NodeAgentDatabase) {
     runs: runRepository(db, read, mutate),
     fileMutations: fileMutationRepository(db, read, mutate),
     deletionIntents: deletionIntentRepository(db, read, mutate),
+    topology: createTopologyRepositories(database.client),
+    model: createModelRepositories(database.client),
+    access: new AccessRepository(database.client),
+    git: new GitPersistenceRepository(database.client),
     transaction,
+    transactionSync,
     stopAccepting() { queue.stopAccepting(); },
     async drain() { await queue.barrier(); },
     async checkpoint() { await queue.barrier(); await database.checkpoint(); },

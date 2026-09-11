@@ -31,7 +31,8 @@ function fixture(runtimeType = "docker") {
   };
   const runtime = { id: "runtime_one", name: "Runtime", type: runtimeType };
   const gate = new InstanceOperationGate();
-  return { dataDir, paths, store, privateConfigs, instance, runtime, gate };
+  const privateSecretValues = () => ["registration-secret", "model-secret"];
+  return { dataDir, paths, store, privateConfigs, instance, runtime, gate, privateSecretValues };
 }
 
 test("instance operation invalidation aborts the current lifecycle signal", () => {
@@ -57,10 +58,11 @@ test("environment template service commits, validates, persists ready, and safel
     garbageCollectEnvironmentTemplateImage: async () => { calls.push("gc-referenced"); return false; },
   };
   const service = new EnvironmentTemplateService(
-    state.store, state.privateConfigs, docker,
+    state.store, docker,
     () => state.instance,
     () => state.runtime,
     (id, operation) => state.gate.run(id, operation),
+    state.privateSecretValues,
   );
   const ready = await service.create("inst_one", { name: "Configured tools" });
   assert.equal(ready.status, "ready");
@@ -80,7 +82,6 @@ test("failed template creation records diagnostics and compensates the internal 
   let untagged = false;
   const service = new EnvironmentTemplateService(
     state.store,
-    state.privateConfigs,
     {
       inspectContainerConfigSecurity: async () => undefined,
       commitEnvironmentTemplate: async () => imageId,
@@ -92,6 +93,7 @@ test("failed template creation records diagnostics and compensates the internal 
     () => state.instance,
     () => state.runtime,
     (id, operation) => state.gate.run(id, operation),
+    state.privateSecretValues,
   );
   const failed = await service.create("inst_one", { name: "Broken" });
   assert.equal(failed.status, "failed");
@@ -103,17 +105,18 @@ test("non-Docker instances are rejected without creating a template record", asy
   const state = fixture("local");
   t.after(() => fs.rmSync(state.dataDir, { recursive: true, force: true }));
   const service = new EnvironmentTemplateService(
-    state.store, state.privateConfigs, {}, () => state.instance, () => state.runtime,
+    state.store, {}, () => state.instance, () => state.runtime,
     (id, operation) => state.gate.run(id, operation),
+    state.privateSecretValues,
   );
   await assert.rejects(() => service.create("inst_one", { name: "Unsupported" }), (error) => error.code === "ENVIRONMENT_TEMPLATE_RUNTIME_UNSUPPORTED");
   assert.deepEqual(service.list(), []);
 });
 
-test("legacy retained Git credentials are scrubbed before template security inspection", async (t) => {
+test("stale materialized Git credentials cannot influence template security inspection", async (t) => {
   const state = fixture();
   t.after(() => fs.rmSync(state.dataDir, { recursive: true, force: true }));
-  const privateConfig = state.privateConfigs.get("inst_one");
+  const privateConfig = state.privateConfigs.inspectMaterialized("inst_one");
   fs.writeFileSync(state.privateConfigs.filePath("inst_one"), JSON.stringify({
     ...privateConfig,
     gitCredentials: {
@@ -138,7 +141,6 @@ test("legacy retained Git credentials are scrubbed before template security insp
   const calls = [];
   const service = new EnvironmentTemplateService(
     state.store,
-    state.privateConfigs,
     {
       inspectContainerConfigSecurity: async (_container, secrets) => {
         calls.push("inspect");
@@ -151,12 +153,13 @@ test("legacy retained Git credentials are scrubbed before template security insp
     () => state.instance,
     () => state.runtime,
     (id, operation) => state.gate.run(id, operation),
+    state.privateSecretValues,
   );
 
   const created = await service.create("inst_one", { name: "Sanitized" });
   assert.equal(created.status, "ready");
   assert.deepEqual(calls, ["inspect", "commit"]);
-  assert.equal(fs.readFileSync(state.privateConfigs.filePath("inst_one"), "utf8").includes("template-secret"), false);
+  assert.equal(fs.readFileSync(state.privateConfigs.filePath("inst_one"), "utf8").includes("template-secret"), true);
 });
 
 test("Docker executor uses default-pause commit and reference-safe image removal", async () => {
@@ -195,7 +198,7 @@ test("template deletion is serialized with instance creation and skips GC after 
   const creationGate = new Promise((resolve) => { releaseCreation = resolve; });
   const calls = [];
   const service = new EnvironmentTemplateService(
-    state.store, state.privateConfigs,
+    state.store,
     {
       untagEnvironmentTemplate: async () => { calls.push("untag"); return true; },
       garbageCollectEnvironmentTemplateImage: async () => { calls.push("gc"); return true; },
@@ -203,6 +206,7 @@ test("template deletion is serialized with instance creation and skips GC after 
     () => state.instance,
     () => state.runtime,
     (id, operation) => state.gate.run(id, operation),
+    state.privateSecretValues,
     () => referenced,
   );
 
@@ -234,7 +238,7 @@ test("deleting an interrupted template recovers and garbage collects its committ
   state.store.init();
   const calls = [];
   const service = new EnvironmentTemplateService(
-    state.store, state.privateConfigs,
+    state.store,
     {
       untagEnvironmentTemplate: async (_tag, knownImageId) => { calls.push(["untag", knownImageId]); return imageId; },
       garbageCollectEnvironmentTemplateImage: async (candidate) => { calls.push(["gc", candidate]); return true; },
@@ -242,6 +246,7 @@ test("deleting an interrupted template recovers and garbage collects its committ
     () => state.instance,
     () => state.runtime,
     (id, operation) => state.gate.run(id, operation),
+    state.privateSecretValues,
   );
 
   await service.delete("template_interrupted");
