@@ -26,3 +26,9 @@ test("mobile instance actions stay accessible while rendering as icon buttons", 
   assert.match(styles, /\.instance-controls > button\s*\{[^}]*width: 32px;[^}]*height: 32px;[^}]*padding: 0;/s);
   assert.match(styles, /\.instance-controls > button > span\s*\{[^}]*width: 1px;[^}]*clip-path: inset\(50%\);[^}]*white-space: nowrap;/s);
 });
+
+test("instance inline rename leaves Enter and Escape to an active IME composition", () => {
+  assert.match(detail, /@keydown="handleNameEditKeydown"/);
+  assert.match(detail, /function handleNameEditKeydown\(event: KeyboardEvent\) \{[\s\S]*?if \(event\.isComposing\) return;[\s\S]*?event\.key === "Enter"[\s\S]*?commitNameEdit\(\)[\s\S]*?event\.key === "Escape"[\s\S]*?cancelNameEdit\(\)/);
+  assert.doesNotMatch(detail, /class="detail-name-input"[^>]*@keydown\.(?:enter|esc)\.prevent/);
+});

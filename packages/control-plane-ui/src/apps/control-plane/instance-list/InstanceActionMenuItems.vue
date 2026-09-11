@@ -59,6 +59,10 @@
     <PackagePlus :size="14" />
     <span>{{ t("instances.actions.saveEnvironmentTemplate") }}</span>
   </component>
+  <component :is="itemComponent" class="instance-action-item danger" :disabled="!aiSessionCount(instance) || isInstanceActionBusy(instance) || isClosingAllSessions(instance)" @select="emit('closeAllSessions')">
+    <CircleX :size="14" />
+    <span>{{ t(isClosingAllSessions(instance) ? "instances.actions.closingAllSessions" : "instances.actions.closeAllSessions") }}</span>
+  </component>
   <component :is="itemComponent" class="instance-action-item danger" :disabled="isInstanceActionBusy(instance)" @select="emit('runAction', 'delete')">
     <Trash2 :size="14" />
     <span>{{ activeActionLabel(instance, "delete", t("instances.actions.delete")) }}</span>
@@ -70,7 +74,7 @@ import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 import { ContextMenuItem } from "../../../components/ui/context-menu";
 import { DropdownMenuItem } from "../../../components/ui/dropdown-menu";
-import { Download, ExternalLink, PackagePlus, Play, RotateCw, Settings, Square, Trash2, Upload } from "@lucide/vue";
+import { CircleX, Download, ExternalLink, PackagePlus, Play, RotateCw, Settings, Square, Trash2, Upload } from "@lucide/vue";
 import type { InstanceBoardItem } from "../../../api/types";
 import type { ConfigSyncDirection } from "@task-handoff/protocol/config-sync";
 import type { InstanceAction } from "../useInstanceActions";
@@ -83,6 +87,8 @@ const props = defineProps<{
   activeActionLabel: (instance: InstanceBoardItem, action: InstanceAction, idleLabel: string) => string;
   canExportConfig: (instance: InstanceBoardItem) => boolean;
   isInstanceActionBusy: (instance: InstanceBoardItem) => boolean;
+  isClosingAllSessions: (instance: InstanceBoardItem) => boolean;
+  aiSessionCount: (instance: InstanceBoardItem) => number;
 }>();
 const emit = defineEmits<{
   runAction: [action: InstanceAction];
@@ -90,6 +96,7 @@ const emit = defineEmits<{
   openSettings: [];
   openWindow: [];
   saveTemplate: [];
+  closeAllSessions: [];
 }>();
 const itemComponent = computed(() => props.variant === "context" ? ContextMenuItem : DropdownMenuItem);
 </script>

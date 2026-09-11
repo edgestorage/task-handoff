@@ -240,6 +240,7 @@ test("AI session current and history lists derive hierarchy without mutating aut
   assert.equal((panel.match(/<TransitionGroup name="session-ai-tree"/g) || []).length, 2);
   assert.match(styles, /\.session-ai-tree-enter-from,\s*\.session-ai-tree-leave-to\s*\{[^}]*max-height: 0;[^}]*opacity: 0;[^}]*transform: translateY\(-4px\);/s);
   assert.match(styles, /\.session-ai-path-group\.is-compact-list \.session-ai-tree-item-shell\s*\{[^}]*max-height: 32px;/s);
+  assert.match(styles, /\.session-ai-path-group\.is-compact-list \.session-ai-tree-item-shell\.session-ai-tree-enter-from,\s*\.session-ai-path-group\.is-compact-list \.session-ai-tree-item-shell\.session-ai-tree-leave-to\s*\{[^}]*max-height: 0;/s);
   assert.match(styles, /\.session-ai-history-row:hover \.session-ai-tree-leading:has\(\.session-ai-tree-disclosure\) \.session-ai-tree-semantic-icon[\s\S]*opacity: 0;/s);
   assert.match(styles, /@media \(hover: none\)[\s\S]*\.session-ai-tree-disclosure \{ opacity: 1; \}/);
 });

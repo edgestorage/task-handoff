@@ -3,6 +3,7 @@ import test from "node:test";
 import { normalizeManualStoryOrder, reorderStoryKeys, sortStories, storyDropTargetAt, storySortKey } from "../src/apps/control-plane/story/storySort.ts";
 
 const story = (id, title, ownerNodeId = "node-1") => ({ id, title, ownerNodeId, documents: [], actions: [], createdAt: "2026-09-03T00:00:00.000Z", updatedAt: "2026-09-03T00:00:00.000Z" });
+const archivedStory = (id, title, ownerNodeId = "node-1") => ({ ...story(id, title, ownerNodeId), archivedAt: "2026-09-04T00:00:00.000Z" });
 const stories = [story("10", "Story 10"), story("2", "Story 2"), story("empty", "Empty")];
 
 test("Story name sorting is natural and stable", () => {
@@ -14,6 +15,16 @@ test("Story activity sorting uses the latest user message and leaves empty Stori
   const times = new Map([[storySortKey(stories[0]), 10], [storySortKey(stories[1]), 20]]);
   const result = sortStories(stories, "last-user-message", { locale: "en-US", lastUserMessageTimes: times, manualKeys: [] });
   assert.deepEqual(result.map((item) => item.id), ["2", "10", "empty"]);
+});
+
+test("archived Stories remain after active Stories in every sort mode", () => {
+  const mixed = [archivedStory("archived", "A"), story("active", "Z")];
+  const times = new Map([[storySortKey(mixed[0]), 20], [storySortKey(mixed[1]), 10]]);
+  const options = { locale: "en-US", lastUserMessageTimes: times, manualKeys: mixed.map(storySortKey) };
+
+  for (const mode of ["name", "last-user-message", "manual"]) {
+    assert.deepEqual(sortStories(mixed, mode, options).map((item) => item.id), ["active", "archived"]);
+  }
 });
 
 test("manual Story order retains known keys, appends new Stories, and reorders around a target", () => {

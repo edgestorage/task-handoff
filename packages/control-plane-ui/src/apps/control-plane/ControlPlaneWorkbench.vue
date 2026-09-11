@@ -276,6 +276,7 @@
         v-if="!standaloneMode && instanceViewMode && !settingsMode && instancesSidebarVisible"
         v-model:filter="instanceFilter"
         :active-action-label="activeActionLabel"
+        :ai-session-count="instanceAiSessionCount"
         :active-instance-id="activeInstanceId"
         :can-export-config="canExportConfig"
         :collapsed="instancesCollapsed"
@@ -284,6 +285,7 @@
         :instance-display-name="instanceDisplayName"
         :instances="filteredInstances"
         :is-instance-action-busy="isInstanceActionBusy"
+        :is-closing-all-sessions="isClosingAllInstanceSessions"
         :loading="nodes.isLoading.value"
         :node-states="board.nodeStates.value"
         :nodes="nodes.data.value || []"
@@ -298,6 +300,7 @@
         @save-template="openSaveEnvironmentTemplate"
         @resize-start="startInstanceResize"
         @run-action="runRowInstanceAction"
+        @close-all-sessions="confirmCloseAllInstanceSessions"
         @open-config-sync="openConfigSync"
         @select-instance="selectInstance"
         @set-menu-open="setInstanceMenuOpen"
@@ -350,6 +353,7 @@
 
       <StoryView
         v-if="!standaloneMode && storyMode && !settingsMode"
+        v-model:selection="storySelection"
         :choose-project-folder="desktopBridge?.chooseProjectFolder"
         :node-filter="storyNodeFilter"
         :instances="boardInstancesWithAiSessions"
@@ -546,6 +550,7 @@ import { ScrollArea } from "../../components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../components/ui/tooltip";
 import AiSessionBoardView from "./ai-board/AiSessionBoardView.vue";
 import StoryView from "./story/StoryView.vue";
+import type { StorySelection } from "./story/storySelection";
 import { allStoryNodes, normalizeStoryNodeFilter, selectOnlyStoryNode, storyNodeIsSelected, toggleStoryNode, type StoryNodeFilter } from "./story/storyNodeFilter";
 import InstanceBoardView from "./board/InstanceBoardView.vue";
 import InstanceDetail from "./instance-detail/InstanceDetail.vue";
@@ -582,6 +587,7 @@ import { consumeInstanceDetailSelection, instanceDetailSelectionStorageKey, pers
 import { createWebInstanceWindowCoordinator } from "./instance-detail/instanceWindowCoordinator";
 import { canUseNativeProjectFolderPicker } from "./nodePath";
 import WorkbenchLayoutContextMenu from "./shared/WorkbenchLayoutContextMenu.vue";
+import { closeAiSessionBatch } from "./closeAiSessionBatch";
 
 type ProjectFolderSelection = string | { path: string; ownerNodeId?: string };
 
@@ -744,6 +750,7 @@ const instanceViewMode = computed(() => workbenchView.value === "instance");
 const boardMode = computed(() => workbenchView.value === "board");
 const aiBoardMode = computed(() => workbenchView.value === "ai");
 const storyMode = computed(() => workbenchView.value === "story");
+const storySelection = ref<StorySelection>();
 const storyNodeFilter = ref<StoryNodeFilter>(allStoryNodes());
 const storyNodeFilterOpen = ref(false);
 const storyNodeFilterOptions = computed(() => nodes.data.value || []);
@@ -807,6 +814,33 @@ const instanceSettingsOpen = computed({
 const models = useModelsQuery(computed(() => !standaloneMode.value || instanceSettingsOpen.value));
 const copiedText = ref("");
 const { clearToasts, showToast } = useControlPlaneToasts();
+const closingAllSessionInstanceId = ref("");
+const isClosingAllInstanceSessions = (instance: InstanceBoardItem) => closingAllSessionInstanceId.value === instance.id;
+const instanceAiSessions = (instanceId: string) => controlPlaneAiSessions.data.value?.instances
+  .find((entry) => entry.instanceId === instanceId)?.aiSessions.sessions.filter((session) => session.actions?.close !== false) ?? [];
+const instanceAiSessionCount = (instance: InstanceBoardItem) => instanceAiSessions(instance.id).length;
+
+function confirmCloseAllInstanceSessions(instance: InstanceBoardItem) {
+  const sessions = instanceAiSessions(instance.id);
+  if (!sessions.length || closingAllSessionInstanceId.value) return;
+  openInstanceMenuId.value = "";
+  if (!window.confirm(t("instances.actions.closeAllSessionsConfirm", { count: sessions.length, name: instanceDisplayName(instance) }))) return;
+  void closeAllInstanceSessions(instance, sessions);
+}
+
+async function closeAllInstanceSessions(instance: InstanceBoardItem, sessions: AiSessionSummary[]) {
+  closingAllSessionInstanceId.value = instance.id;
+  try {
+    const result = await closeAiSessionBatch(sessions.map((session) => ({ instanceId: instance.id, sessionId: session.id })));
+    const { failed, total } = result;
+    showToast(failed
+      ? t("instances.actions.closeAllSessionsPartial", { failed, total })
+      : t("instances.actions.closeAllSessionsSuccess", { count: total }), failed ? "error" : "success");
+    await refresh();
+  } finally {
+    closingAllSessionInstanceId.value = "";
+  }
+}
 const lastRefreshAt = ref(new Date().toISOString());
 const appLaunchMenuOpen = ref(false);
 const sessionMenuOpen = ref(false);

@@ -17,8 +17,7 @@
               :aria-label="t('instances.detail.editName', { name: instanceDisplayName(instance) })"
               :disabled="savingName"
               @blur="commitNameEdit"
-              @keydown.enter.prevent="commitNameEdit"
-              @keydown.esc.prevent="cancelNameEdit"
+              @keydown="handleNameEditKeydown"
             />
             <button
               v-else
@@ -331,6 +330,17 @@ function cancelNameEdit() {
   editingNameId.value = "";
   instanceNameDraft.value = "";
   editNameWidth.value = 0;
+}
+
+function handleNameEditKeydown(event: KeyboardEvent) {
+  if (event.isComposing) return;
+  if (event.key === "Enter") {
+    event.preventDefault();
+    void commitNameEdit();
+  } else if (event.key === "Escape") {
+    event.preventDefault();
+    cancelNameEdit();
+  }
 }
 
 async function commitNameEdit() {

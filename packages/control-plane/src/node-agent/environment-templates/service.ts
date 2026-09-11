@@ -8,7 +8,6 @@ import { z } from "zod";
 import { createId } from "../../shared/persistence/store.ts";
 import type { LocalDockerExecutor } from "../runtimes/docker.ts";
 import type { EnvironmentTemplateStore } from "./store.ts";
-import type { InstancePrivateConfigStore } from "../instances/private-config-store.ts";
 import { InstanceOperationGate } from "../instances/instance-operation-gate.ts";
 import { nowIso as now } from "@task-handoff/core/core/time";
 
@@ -27,28 +26,28 @@ function operationError(error: unknown, fallbackCode: string, phase: NonNullable
 export class EnvironmentTemplateService {
   private readonly templateOperations = new InstanceOperationGate();
   private readonly store: EnvironmentTemplateStore;
-  private readonly privateConfigs: InstancePrivateConfigStore;
   private readonly docker: LocalDockerExecutor;
   private readonly requireInstanceValue: (id: string) => ControlledInstance;
   private readonly requireRuntimeValue: (id: string) => NodeRuntime;
   private readonly runInstanceOperationValue: <T>(instanceId: string, operation: () => Promise<T>) => Promise<T>;
+  private readonly privateSecretValues: (instance: ControlledInstance) => string[];
   private readonly isImageReferencedValue: (imageId: string) => boolean;
 
   constructor(
     store: EnvironmentTemplateStore,
-    privateConfigs: InstancePrivateConfigStore,
     docker: LocalDockerExecutor,
     requireInstance: (id: string) => ControlledInstance,
     requireRuntime: (id: string) => NodeRuntime,
     runInstanceOperation: <T>(instanceId: string, operation: () => Promise<T>) => Promise<T>,
+    privateSecretValues: (instance: ControlledInstance) => string[],
     isImageReferenced: (imageId: string) => boolean = () => false,
   ) {
     this.store = store;
-    this.privateConfigs = privateConfigs;
     this.docker = docker;
     this.requireInstanceValue = requireInstance;
     this.requireRuntimeValue = requireRuntime;
     this.runInstanceOperationValue = runInstanceOperation;
+    this.privateSecretValues = privateSecretValues;
     this.isImageReferencedValue = isImageReferenced;
   }
 
@@ -106,11 +105,7 @@ export class EnvironmentTemplateService {
         if (this.requireRuntimeValue(authoritative.runtimeId).type !== "docker" || !authoritative.runtime.containerName) {
           throw Object.assign(new Error(`Instance ${source.id} is no longer a valid Docker template source.`), { code: "ENVIRONMENT_TEMPLATE_SOURCE_CHANGED" });
         }
-        const privateConfig = this.privateConfigs.get(source.id);
-        if (!privateConfig) {
-          throw Object.assign(new Error(`Instance ${source.id} private configuration is missing.`), { code: "INSTANCE_PRIVATE_CONFIG_MISSING" });
-        }
-        const secretValues = [privateConfig.instanceCredential, ...Object.values(privateConfig.environment)];
+        const secretValues = this.privateSecretValues(authoritative);
         await this.docker.inspectContainerConfigSecurity(authoritative.runtime.containerName, secretValues);
         committedImageId = await this.docker.commitEnvironmentTemplate(authoritative.runtime.containerName, authoritative.runtime.containerId, internalTag);
         committed = true;

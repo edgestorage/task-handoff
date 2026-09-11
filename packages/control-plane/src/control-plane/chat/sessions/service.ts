@@ -2,37 +2,37 @@ import {
   ChatSessionBindingSchema,
   type ChatSessionBinding,
 } from "@task-handoff/protocol/control-plane";
-import type { JsonCollection } from "../../../shared/persistence/store.ts";
+import type { ControlPlaneChatStore } from "../bridges/repository.ts";
 import { chatSessionBindingId } from "../bridges/records.ts";
 import { now, throwNotFound } from "../../common/helpers.ts";
 
 export type ChatSessionServiceOptions = {
-  chatSessions: JsonCollection<ChatSessionBinding>;
+  store: ControlPlaneChatStore;
 };
 
 export class ChatSessionService {
-  private readonly chatSessions: JsonCollection<ChatSessionBinding>;
+  private readonly store: ControlPlaneChatStore;
 
   constructor(options: ChatSessionServiceOptions) {
-    this.chatSessions = options.chatSessions;
+    this.store = options.store;
   }
 
   list() {
-    return this.chatSessions.list();
+    return this.store.listSessions();
   }
 
   require(id: string) {
-    const record = this.chatSessions.get(id);
+    const record = this.store.getSession(id);
     if (!record) {
       throwNotFound("CHAT_SESSION_NOT_FOUND", `Chat session ${id} was not found.`);
     }
     return record;
   }
 
-  upsert(input: Pick<ChatSessionBinding, "channel" | "chatSessionId"> & Partial<ChatSessionBinding>) {
+  async upsert(input: Pick<ChatSessionBinding, "channel" | "chatSessionId"> & Partial<ChatSessionBinding>) {
     const timestamp = now();
     const id = chatSessionBindingId(input.channel, input.chatSessionId, input.bridgeId);
-    const current = this.chatSessions.get(id);
+    const current = this.store.getSession(id);
     const record = ChatSessionBindingSchema.parse({
       ...(current || {}),
       ...input,
@@ -44,7 +44,7 @@ export class ChatSessionService {
       createdAt: current?.createdAt || timestamp,
       updatedAt: timestamp,
     });
-    this.chatSessions.put(record);
+    await this.store.putSession(record);
     return record;
   }
 }

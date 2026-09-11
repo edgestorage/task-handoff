@@ -2,9 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { drizzle, type NodeSQLiteDatabase } from "drizzle-orm/node-sqlite";
-import type { NodeAgentStorePaths } from "../../persistence/paths.ts";
+import type { NodeAgentStorePaths } from "./paths.ts";
 import { nodeAgentMigrations } from "./migrations.ts";
-import * as schema from "./schema.ts";
+import { migrateLegacyP0State } from "./legacy-migration.ts";
 
 const NODE_AGENT_APPLICATION_ID = 0x54484e41;
 const MINIMUM_NODE_VERSION = { major: 24, minor: 15 } as const;
@@ -82,7 +82,10 @@ function migrate(client: DatabaseSync) {
   }
 }
 
-export async function openNodeAgentDatabase(paths: NodeAgentStorePaths): Promise<NodeAgentDatabase> {
+export function openNodeAgentDatabaseSync(
+  paths: NodeAgentStorePaths,
+  options: { legacyMigration?: { rename?: (source: string, target: string) => void } } = {},
+): NodeAgentDatabase {
   try {
     assertSupportedNodeVersion();
   } catch (error) {
@@ -95,6 +98,7 @@ export async function openNodeAgentDatabase(paths: NodeAgentStorePaths): Promise
     client = new DatabaseSync(paths.databasePath);
     configure(client, paths);
     migrate(client);
+    migrateLegacyP0State(client, paths, options.legacyMigration);
     if (String(scalar(client, "PRAGMA quick_check")) !== "ok") throw new Error("post-migration quick_check failed.");
     chmodDatabaseFiles(paths);
     const db = drizzle({ client });
@@ -118,4 +122,8 @@ export async function openNodeAgentDatabase(paths: NodeAgentStorePaths): Promise
     try { client?.close(); } catch {}
     throw startupError(client ? "initialize" : "connect", error);
   }
+}
+
+export async function openNodeAgentDatabase(paths: NodeAgentStorePaths): Promise<NodeAgentDatabase> {
+  return openNodeAgentDatabaseSync(paths);
 }

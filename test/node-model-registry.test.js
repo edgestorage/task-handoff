@@ -2,6 +2,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { DatabaseSync } = require("node:sqlite");
 const test = require("node:test");
 
 const { createNodeAgentApp } = require("../packages/control-plane/src/node-agent.ts");
@@ -69,28 +70,22 @@ test("node model registry uses immutable content hashes, private storage, and ha
   assert.deepEqual(created.json().data.modelNames, [{ name: codexInput.model, order: 100 }]);
   assert.equal("key" in created.json().data, false);
 
-  const modelPath = path.join(dataDir, "models", `${codexHash}.json`);
-  assert.equal(fs.statSync(path.dirname(modelPath)).mode & 0o777, 0o700);
-  assert.equal(fs.statSync(modelPath).mode & 0o777, 0o600);
-  const storedCodex = JSON.parse(fs.readFileSync(modelPath, "utf8"));
+  const storedDatabase = new DatabaseSync(path.join(dataDir, "node-agent.sqlite"), { readOnly: true });
+  const storedCodex = storedDatabase.prepare("SELECT key, model_names_json, protocols_json FROM na_models WHERE id = ?").get(codexHash);
   assert.equal(storedCodex.key, codexInput.key);
-  assert.deepEqual(storedCodex.modelNames, [{ name: codexInput.model, order: 100 }]);
+  assert.deepEqual(JSON.parse(storedCodex.model_names_json), [{ name: codexInput.model, order: 100 }]);
+  assert.deepEqual(JSON.parse(storedCodex.protocols_json), ["openai-responses"]);
+  storedDatabase.close();
+  assert.equal(fs.existsSync(path.join(dataDir, "models")), false);
 
-  delete storedCodex.modelNames;
-  delete storedCodex.protocols;
-  fs.writeFileSync(modelPath, JSON.stringify(storedCodex));
   const upgradedLegacy = await request(app, "PATCH", `/api/node-agent/models/${codexHash}`, { name: "Saved legacy model" });
   assert.equal(upgradedLegacy.statusCode, 200);
-  const upgradedStoredCodex = JSON.parse(fs.readFileSync(modelPath, "utf8"));
-  assert.deepEqual(upgradedStoredCodex.modelNames, [{ name: codexInput.model, order: 100 }]);
-  assert.deepEqual(upgradedStoredCodex.protocols, ["openai-responses"]);
 
   const duplicate = await request(app, "POST", "/api/node-agent/models", { ...codexInput, name: "Same content" });
   assert.equal(duplicate.statusCode, 201);
   assert.equal(duplicate.json().data.id, codexHash);
   assert.equal((await request(app, "GET", "/api/node-agent/models")).json().data.length, 1);
 
-  fs.writeFileSync(path.join(dataDir, "models", "mdl_tampered.json"), fs.readFileSync(modelPath));
   assert.equal((await request(app, "GET", "/api/node-agent/models")).json().data.length, 1);
 
   const claudeInput = modelInput({ name: "Local Claude", key: "claude-secret", model: "claude-test", app: "claude", order: 200 });
@@ -123,7 +118,10 @@ test("node model registry uses immutable content hashes, private storage, and ha
     opencodeModelHash: opencodeHash,
   });
   assert.equal(assigned.statusCode, 200);
-  assert.deepEqual(assigned.json().data.instance.modelSelection, { codexModelHash: codexHash, claudeModelHash: claudeHash, opencodeModelHash: opencodeHash });
+  assert.deepEqual(assigned.json().data.instance.modelSelection, {
+    modelEntityIds: [codexHash, claudeHash, opencodeHash],
+    codexModelHash: codexHash, claudeModelHash: claudeHash, opencodeModelHash: opencodeHash,
+  });
   const assignedEnvironment = app.nodeAgentState.resolvedAssignedModelEnvironment("inst_models");
   assert.deepEqual({ ...assignedEnvironment, TASK_HANDOFF_OPENCODE_CONFIG_CONTENT: undefined }, {
     OPENAI_API_KEY: codexInput.key,
@@ -159,7 +157,7 @@ test("node model registry uses immutable content hashes, private storage, and ha
   assert.equal(rotated.statusCode, 200);
   assert.equal(rotated.json().data.id, rotatedHash);
   assert.equal(app.nodeAgentState.resolvedAssignedModelEnvironment("inst_models").OPENAI_API_KEY, codexInput.key);
-  assert.equal(fs.existsSync(modelPath), true);
+  assert.equal((await request(app, "GET", "/api/node-agent/models")).json().data.some((model) => model.id === codexHash), true);
 
   assert.equal((await request(app, "DELETE", `/api/node-agent/models/${codexHash}`)).statusCode, 409);
   assert.equal((await request(app, "PUT", "/api/node-agent/instances/inst_models/model-assignment", {
@@ -167,9 +165,7 @@ test("node model registry uses immutable content hashes, private storage, and ha
   })).statusCode, 200);
   assert.equal((await request(app, "DELETE", `/api/node-agent/models/${codexHash}`)).statusCode, 200);
 
-  const assignmentPath = path.join(dataDir, "model-assignments", "inst_models.json");
-  const storedAssignment = JSON.parse(fs.readFileSync(assignmentPath, "utf8"));
-  fs.writeFileSync(assignmentPath, JSON.stringify({ ...storedAssignment, futureField: true }));
+  assert.equal(fs.existsSync(path.join(dataDir, "model-assignments")), false);
   assert.equal(app.nodeAgentState.resolvedAssignedModelEnvironment("inst_models").OPENAI_API_KEY, "rotated-secret");
 
   await app.close();
@@ -220,7 +216,7 @@ test("node model assignment persists private config when live environment sync c
 
   assert.equal(assigned.statusCode, 200);
   assert.equal(
-    app.nodeAgentState.instancePrivateConfigs.get("inst_offline_assignment").environment.OPENAI_API_KEY,
+    app.nodeAgentState.instancePrivateConfigs.inspectMaterialized("inst_offline_assignment").environment.OPENAI_API_KEY,
     "offline-instance-secret",
   );
   assert.equal(fetchCalls, 0, "v0.0.23 controlled instances must not receive the private catalog endpoint call");
@@ -295,7 +291,7 @@ test("ordered model entities resolve defaults by protocol and preserve provider 
   assert.equal(rejected.json().error.code, "NODE_MODEL_DISABLED");
 });
 
-test("node agent migrates complete legacy model sidecars to content hashes and preserves unmappable sidecars", async (t) => {
+test("node agent never treats model sidecars created after SQLite migration as a fallback", async (t) => {
   const dataDir = tempDataDir();
   let app = await createNodeAgentApp({ dataDir, logger: false, token: "agent-secret", nodeId: "node_migration" });
   t.after(async () => app.close());
@@ -314,9 +310,9 @@ test("node agent migrates complete legacy model sidecars to content hashes and p
   fs.writeFileSync(path.join(legacyDir, "inst_unmappable.json"), JSON.stringify({ OPENAI_API_KEY: "incomplete-secret-key" }), { mode: 0o600 });
 
   app = await createNodeAgentApp({ dataDir, logger: false, token: "agent-secret", nodeId: "node_migration" });
-  const hash = modelConfigHash({ app: "codex", endpoint: "https://legacy.example/v1", key: "legacy-secret-key", model: "gpt-legacy" });
-  assert.equal(fs.existsSync(path.join(dataDir, "models", `${hash}.json`)), true);
-  assert.equal(JSON.parse(fs.readFileSync(path.join(dataDir, "model-assignments", "inst_mappable.json"), "utf8")).codexModelHash, hash);
-  assert.equal(fs.existsSync(path.join(legacyDir, "inst_mappable.json")), false);
-  assert.equal(fs.existsSync(path.join(legacyDir, "inst_unmappable.json")), true);
+  assert.deepEqual(app.nodeAgentState.modelRegistry.list(), []);
+  assert.deepEqual(app.nodeAgentState.requireInstance("inst_mappable").modelSelection, {});
+  assert.equal(fs.existsSync(legacyDir), false);
+  assert.equal(fs.existsSync(`${legacyDir}.migrated-v0.0.28/inst_mappable.json`), true);
+  assert.equal(fs.existsSync(`${legacyDir}.migrated-v0.0.28/inst_unmappable.json`), true);
 });

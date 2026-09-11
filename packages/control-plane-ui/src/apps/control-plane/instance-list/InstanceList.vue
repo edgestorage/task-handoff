@@ -12,6 +12,7 @@
         <InstanceList
           class="instances-temporary-list"
           :active-action-label="activeActionLabel"
+          :ai-session-count="aiSessionCount"
           :active-instance-id="activeInstanceId"
           :can-export-config="canExportConfig"
           :collapsed="false"
@@ -22,6 +23,7 @@
           :instance-display-name="instanceDisplayName"
           :instances="instances"
           :is-instance-action-busy="isInstanceActionBusy"
+          :is-closing-all-sessions="isClosingAllSessions"
           :loading="loading"
           :node-states="nodeStates"
           :nodes="nodes"
@@ -36,6 +38,7 @@
           @save-template="(instance) => $emit('saveTemplate', instance)"
           @resize-start="$emit('resizeStart', $event)"
           @run-action="(action, instance) => $emit('runAction', action, instance)"
+          @close-all-sessions="(instance) => $emit('closeAllSessions', instance)"
           @open-config-sync="(direction, instance) => $emit('openConfigSync', direction, instance)"
           @select-instance="selectTemporaryInstance"
           @set-menu-open="(instanceId, open) => $emit('setMenuOpen', instanceId, open)"
@@ -134,14 +137,14 @@
                       </button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent class="instance-action-menu" align="end" :side-offset="6">
-                      <InstanceActionMenuItems :instance="instance" variant="dropdown" :active-action-label="activeActionLabel" :can-export-config="canExportConfig" :is-instance-action-busy="isInstanceActionBusy" @run-action="(action) => $emit('runAction', action, instance)" @open-config-sync="(direction) => $emit('openConfigSync', direction, instance)" @open-settings="$emit('openSettings', instance.id)" @open-window="$emit('openWindow', instance)" @save-template="$emit('saveTemplate', instance)" />
+                      <InstanceActionMenuItems :instance="instance" variant="dropdown" :active-action-label="activeActionLabel" :ai-session-count="aiSessionCount" :can-export-config="canExportConfig" :is-instance-action-busy="isInstanceActionBusy" :is-closing-all-sessions="isClosingAllSessions" @close-all-sessions="$emit('closeAllSessions', instance)" @run-action="(action) => $emit('runAction', action, instance)" @open-config-sync="(direction) => $emit('openConfigSync', direction, instance)" @open-settings="$emit('openSettings', instance.id)" @open-window="$emit('openWindow', instance)" @save-template="$emit('saveTemplate', instance)" />
                     </DropdownMenuContent>
                   </DropdownMenu>
                 </div>
               </div>
             </ContextMenuTrigger>
             <ContextMenuContent class="instance-action-menu">
-              <InstanceActionMenuItems :instance="instance" variant="context" :active-action-label="activeActionLabel" :can-export-config="canExportConfig" :is-instance-action-busy="isInstanceActionBusy" @run-action="(action) => $emit('runAction', action, instance)" @open-config-sync="(direction) => $emit('openConfigSync', direction, instance)" @open-settings="$emit('openSettings', instance.id)" @open-window="$emit('openWindow', instance)" @save-template="$emit('saveTemplate', instance)" />
+              <InstanceActionMenuItems :instance="instance" variant="context" :active-action-label="activeActionLabel" :ai-session-count="aiSessionCount" :can-export-config="canExportConfig" :is-instance-action-busy="isInstanceActionBusy" :is-closing-all-sessions="isClosingAllSessions" @close-all-sessions="$emit('closeAllSessions', instance)" @run-action="(action) => $emit('runAction', action, instance)" @open-config-sync="(direction) => $emit('openConfigSync', direction, instance)" @open-settings="$emit('openSettings', instance.id)" @open-window="$emit('openWindow', instance)" @save-template="$emit('saveTemplate', instance)" />
             </ContextMenuContent>
           </ContextMenu>
           </template>
@@ -181,6 +184,7 @@ defineOptions({ name: "InstanceList" });
 
 const props = defineProps<{
   activeActionLabel: (instance: InstanceBoardItem, action: InstanceAction, idleLabel: string) => string;
+  aiSessionCount: (instance: InstanceBoardItem) => number;
   activeInstanceId?: string;
   canExportConfig: (instance: InstanceBoardItem) => boolean;
   collapsed: boolean;
@@ -191,6 +195,7 @@ const props = defineProps<{
   instanceDisplayName: (instance: InstanceBoardItem) => string;
   instances: InstanceBoardItem[];
   isInstanceActionBusy: (instance: InstanceBoardItem) => boolean;
+  isClosingAllSessions: (instance: InstanceBoardItem) => boolean;
   loading: boolean;
   nodeStates?: NodeFleetResourceState[];
   nodes: Node[];
@@ -208,6 +213,7 @@ const emit = defineEmits<{
   saveTemplate: [instance: InstanceBoardItem];
   resizeStart: [event: PointerEvent];
   runAction: [action: InstanceAction, instance: InstanceBoardItem];
+  closeAllSessions: [instance: InstanceBoardItem];
   openConfigSync: [direction: ConfigSyncDirection, instance: InstanceBoardItem];
   selectInstance: [instanceId: string, source?: "click" | "contextmenu"];
   setMenuOpen: [instanceId: string, open: boolean];

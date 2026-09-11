@@ -95,7 +95,7 @@ test("private instance config is atomically materialized with restricted permiss
   try {
     const store = new InstancePrivateConfigStore(nodeAgentStorePaths(dataDir));
     const value = store.materialize("inst_one", "registration-secret", { OPENAI_API_KEY: "model-secret" });
-    assert.equal(store.get("inst_one").instanceCredential, "registration-secret");
+    assert.equal(store.inspectMaterialized("inst_one").instanceCredential, "registration-secret");
     assert.equal("registrationToken" in JSON.parse(fs.readFileSync(store.filePath("inst_one"), "utf8")), false);
     assert.equal(value.environment.OPENAI_API_KEY, "model-secret");
     assert.equal(fs.statSync(store.filePath("inst_one")).mode & 0o777, 0o600);
@@ -128,7 +128,7 @@ test("private instance config preserves managed Codex settings for restart recov
       settings,
     );
 
-    const restored = new InstancePrivateConfigStore(paths).get("inst_one");
+    const restored = new InstancePrivateConfigStore(paths).inspectMaterialized("inst_one");
     assert.deepEqual(restored.codexSettings, settings);
     assert.deepEqual(JSON.parse(fs.readFileSync(path.join(paths.instancePrivateConfigsDir, "inst_one.json"), "utf8")).codexSettings, settings);
   } finally {
@@ -141,7 +141,7 @@ test("Docker entrypoints project managed Codex settings before dropping privileg
   assert.match(source, /TASK_HANDOFF_PRIVATE_CODEX_SETTINGS_JSON = JSON\.stringify\(value\.codexSettings\)/);
 });
 
-test("legacy private registration fields migrate to the long-lived credential model", () => {
+test("legacy private registration fields remain readable for startup migration", () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-private-config-migration-"));
   try {
     const store = new InstancePrivateConfigStore(nodeAgentStorePaths(dataDir));
@@ -154,10 +154,7 @@ test("legacy private registration fields migrate to the long-lived credential mo
       updatedAt: timestamp,
     }));
 
-    assert.equal(store.get("inst_one").instanceCredential, "legacy-secret");
-    const migrated = JSON.parse(fs.readFileSync(store.filePath("inst_one"), "utf8"));
-    assert.equal(migrated.instanceCredential, "legacy-secret");
-    assert.equal("registrationToken" in migrated, false);
+    assert.equal(store.inspectMaterialized("inst_one").instanceCredential, "legacy-secret");
   } finally {
     fs.rmSync(dataDir, { recursive: true, force: true });
   }

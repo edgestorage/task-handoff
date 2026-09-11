@@ -60,12 +60,12 @@ export function registerChatGatewayRoutes({ app, service, chatGateway }: Registe
   app.get("/api/chat-gateway/status", async () => ({ data: chatGateway.status() }));
   app.post("/api/chat-gateway/poll-ai-sessions", async () => ({ data: await chatGateway.pollAiSessionsNow() }));
   app.get("/api/chat-gateway/bridges", async () => ({ data: service.listChatBridges() }));
-  app.post("/api/chat-gateway/bridges", async (request) => ({ data: service.createChatBridge(request.body) }));
+  app.post("/api/chat-gateway/bridges", async (request) => ({ data: await service.createChatBridge(request.body) }));
   app.patch("/api/chat-gateway/bridges/:id", async (request) => {
     const id = IdParamsSchema.parse(request.params).id;
     const previous = service.requireChatBridge(id);
     const body = UpdateChatBridgeInputSchema.parse(request.body);
-    const updated = service.updateChatBridge(id, request.body);
+    const updated = await service.updateChatBridge(id, request.body);
     const enabled = typeof body.enabled === "boolean"
       ? body.enabled
       : undefined;
@@ -90,7 +90,7 @@ export function registerChatGatewayRoutes({ app, service, chatGateway }: Registe
   app.post("/api/chat-gateway/bridges/:id/start", async (request) => {
     const id = IdParamsSchema.parse(request.params).id;
     const previous = service.requireChatBridge(id);
-    service.updateChatBridge(id, { enabled: true });
+    await service.updateChatBridge(id, { enabled: true });
     app.log.info({
       component: "control-plane-chat-gateway",
       action: "bridge-start-request",
@@ -103,7 +103,7 @@ export function registerChatGatewayRoutes({ app, service, chatGateway }: Registe
   app.post("/api/chat-gateway/bridges/:id/stop", async (request) => {
     const id = IdParamsSchema.parse(request.params).id;
     const previous = service.requireChatBridge(id);
-    service.updateChatBridge(id, { enabled: false });
+    await service.updateChatBridge(id, { enabled: false });
     app.log.info({
       component: "control-plane-chat-gateway",
       action: "bridge-stop-request",
@@ -116,7 +116,7 @@ export function registerChatGatewayRoutes({ app, service, chatGateway }: Registe
   app.delete("/api/chat-gateway/bridges/:id", async (request) => {
     const id = IdParamsSchema.parse(request.params).id;
     chatGateway.stopBridge(id);
-    return { data: { deleted: service.deleteChatBridge(id) } };
+    return { data: { deleted: await service.deleteChatBridge(id) } };
   });
   app.post("/api/chat-gateway/messages", { bodyLimit: 64 * 1024 * 1024 }, async (request) => ({ data: await service.handleChatGatewayMessage(ChatGatewayMessageSchema.parse(request.body)) }));
   app.post("/api/chat-gateway/actions", async (request) => ({ data: await service.handleChatGatewayAction(parseChatGatewayActionInput(request.body)) }));

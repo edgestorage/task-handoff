@@ -36,7 +36,7 @@ export class ControlPlaneChatTargetCommands {
     if (args.length >= 2) {
       const project = this.targets.resolveProject(args[0]);
       const instance = await this.targets.resolveInstance(args[1], project.id);
-      const updated = this.deps.upsertChatSession({
+      const updated = await this.deps.upsertChatSession({
         ...binding,
         activeProjectId: project.id,
         activeInstanceId: instance.id,
@@ -54,7 +54,7 @@ export class ControlPlaneChatTargetCommands {
     const instance = await this.targets.findInstance(target);
     if (instance) {
       const project = instance.projectId ? this.deps.requireProject(instance.projectId) : undefined;
-      const updated = this.deps.upsertChatSession({
+      const updated = await this.deps.upsertChatSession({
         ...binding,
         activeProjectId: project?.id,
         activeInstanceId: instance.id,
@@ -72,7 +72,7 @@ export class ControlPlaneChatTargetCommands {
     const projectInstances = (await this.deps.boardAsync()).filter((item) => item.projectId === project.id);
     const available = projectInstances.filter((item) => item.status === "running" && item.connectionStatus === "online");
     if (available.length === 1) {
-      const updated = this.deps.upsertChatSession({
+      const updated = await this.deps.upsertChatSession({
         ...binding,
         activeProjectId: project.id,
         activeInstanceId: available[0].id,
@@ -86,7 +86,7 @@ export class ControlPlaneChatTargetCommands {
       };
     }
 
-    const updated = this.deps.upsertChatSession({
+    const updated = await this.deps.upsertChatSession({
       ...binding,
       activeProjectId: project.id,
       activeInstanceId: undefined,
@@ -112,7 +112,7 @@ export class ControlPlaneChatTargetCommands {
     }
     const project = this.targets.resolveProject(args[0]);
     const activeInstance = binding.activeInstanceId ? await this.deps.requireControlledInstance(binding.activeInstanceId).catch(() => undefined) : undefined;
-    const updated = this.deps.upsertChatSession({
+    const updated = await this.deps.upsertChatSession({
       ...binding,
       activeProjectId: project.id,
       activeInstanceId: activeInstance?.projectId === project.id ? activeInstance.id : undefined,

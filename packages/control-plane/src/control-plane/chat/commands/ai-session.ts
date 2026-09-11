@@ -62,7 +62,7 @@ export class ControlPlaneChatAiSessionCommands {
       };
     }
     const project = match.instance.projectId ? this.deps.getProject(match.instance.projectId) : undefined;
-    const updated = this.deps.upsertChatSession({
+    const updated = await this.deps.upsertChatSession({
       ...binding,
       activeProjectId: project?.id || binding.activeProjectId,
       activeInstanceId: match.instance.id,
@@ -90,7 +90,7 @@ export class ControlPlaneChatAiSessionCommands {
         replyMarkup: undefined,
       };
     }
-    const updated = this.deps.upsertChatSession({
+    const updated = await this.deps.upsertChatSession({
       ...binding,
       activeProjectId: choice.projectId || binding.activeProjectId,
       activeInstanceId: choice.instance.id,

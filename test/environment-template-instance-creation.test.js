@@ -62,10 +62,9 @@ test("template-derived instances combine with independent Git and local workspac
   assert.equal("managedVolumes" in git.runtime, false);
   assert.equal("managedVolumes" in local.runtime, false);
   assert.notEqual(git.registrationToken, local.registrationToken);
-  assert.equal(state.instancePrivateConfigs.get(git.id).instanceCredential, git.registrationToken);
-  assert.equal(state.instancePrivateConfigs.get(local.id).instanceCredential, local.registrationToken);
-  const persistedGit = JSON.parse(fs.readFileSync(state.paths.controlledInstancesDir + "/inst_git.json", "utf8"));
-  assert.equal("registrationToken" in persistedGit, false);
+  assert.equal(state.instancePrivateConfigs.inspectMaterialized(git.id).instanceCredential, git.registrationToken);
+  assert.equal(state.instancePrivateConfigs.inspectMaterialized(local.id).instanceCredential, local.registrationToken);
+  assert.equal(fs.existsSync(state.paths.controlledInstancesDir), false);
 
   const gitRunArgs = dockerRunArgs(state.context(git), "task-handoff-inst_git");
   const localRunArgs = dockerRunArgs(state.context(local), "task-handoff-inst_local");
@@ -109,19 +108,18 @@ test("template instance creation rejects missing, non-ready, cross-node, and non
   );
 });
 
-test("legacy instance registration tokens migrate into the private credential store", (t) => {
+test("SQLite instance credentials rebuild a missing private config", (t) => {
   const first = fixture();
   t.after(() => fs.rmSync(first.dataDir, { recursive: true, force: true }));
   const created = first.state.createInstance(createInput("inst_legacy_credential", { type: "local-folder", path: "/tmp/local-project" }));
-  const instancePath = path.join(first.state.paths.controlledInstancesDir, `${created.id}.json`);
-  const persistentRecord = JSON.parse(fs.readFileSync(instancePath, "utf8"));
-  fs.writeFileSync(instancePath, JSON.stringify({ ...persistentRecord, registrationToken: created.registrationToken }));
   first.state.instancePrivateConfigs.delete(created.id);
 
   const restored = new NodeAgentState(first.state.paths, "node_one", "http://127.0.0.1:8091", "http://host.docker.internal:8091", 8091, "linux");
   restored.init();
 
   assert.equal(restored.requireInstance(created.id).registrationToken, created.registrationToken);
-  assert.equal(restored.instancePrivateConfigs.get(created.id).instanceCredential, created.registrationToken);
-  assert.equal("registrationToken" in JSON.parse(fs.readFileSync(instancePath, "utf8")), false);
+  assert.equal(restored.instancePrivateConfigs.inspectMaterialized(created.id), undefined);
+  restored.context(restored.requireInstance(created.id));
+  assert.equal(restored.instancePrivateConfigs.inspectMaterialized(created.id).instanceCredential, created.registrationToken);
+  assert.equal(fs.existsSync(first.state.paths.controlledInstancesDir), false);
 });

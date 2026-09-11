@@ -46,6 +46,7 @@ function setEnvironment(paths, workspaceRoot) {
     TASK_HANDOFF_AI_PROCESS_SCAN: "0",
     TASK_HANDOFF_CODEX_APP_SERVER: "0",
     TASK_HANDOFF_CONTROL_MODE: undefined,
+    TASK_HANDOFF_PRIVATE_MODEL_CATALOG_JSON: undefined,
   };
   const previous = Object.fromEntries(Object.keys(patch).map((key) => [key, process.env[key]]));
   for (const [key, value] of Object.entries(patch)) value === undefined ? delete process.env[key] : process.env[key] = value;
@@ -313,6 +314,18 @@ test("pre-session Git workspace selection persists folder identity and creates a
   const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-pre-session-workspace-"));
   const paths = pathsFor(dataRoot);
   const restore = setEnvironment(paths, fixture.base);
+  process.env.TASK_HANDOFF_PRIVATE_MODEL_CATALOG_JSON = JSON.stringify({
+    protocolVersion: "2026-08-27",
+    instanceId: process.env.TASK_HANDOFF_INSTANCE_ID || "inst_repository_test",
+    entities: [{
+      id: "model_current",
+      endpoint: "https://models.example/v1",
+      key: "secret",
+      protocols: ["openai-responses"],
+      modelNames: [{ name: "model-current", order: 0 }],
+    }],
+    updatedAt: "2026-09-11T00:00:00.000Z",
+  });
   const aiSessions = createAiSessionRegistry({ dir: path.join(dataRoot, "ai-sessions") });
   const appRuntime = new AppRuntimeManager(paths);
   appRuntime.ensureSharedResource = async () => undefined;
@@ -349,6 +362,20 @@ test("pre-session Git workspace selection persists folder identity and creates a
       references: [],
       clientRequestId: "pre-session-worktree",
     };
+    const staleModel = await app.inject({
+      method: "POST",
+      url: "/api/repository/ai-session-workspace/create",
+      payload: {
+        ...payload,
+        gitSelection: { mode: "current-folder", branch: "main" },
+        clientRequestId: "pre-session-stale-model",
+        modelSelection: { modelEntityId: "model_reconfigured", modelName: "model-new" },
+      },
+    });
+    assert.equal(staleModel.statusCode, 409);
+    assert.equal(staleModel.json().error.code, "AI_SESSION_MODEL_ENTITY_UNAVAILABLE");
+    assert.match(staleModel.json().error.message, /Restart the instance/);
+
     fixture.write("changed-while-composing.txt", "keep this change\n");
     const created = await app.inject({ method: "POST", url: "/api/repository/ai-session-workspace/create", payload });
     assert.equal(created.statusCode, 200);

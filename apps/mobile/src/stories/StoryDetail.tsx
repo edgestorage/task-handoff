@@ -11,7 +11,7 @@ import { SessionStatusIndicator } from '../ai-sessions/SessionStatusIndicator';
 import { mobileAiSessionStatusLabel } from '../ai-sessions/SessionDetail';
 import { storyAiSessionCreationDefaults } from '../ai-sessions/new-session-types';
 import { createMobileAiSession, lifecycleGuidance } from '../ai-sessions/session-lifecycle';
-import { useActiveAiSessionsSnapshot } from '../ai-sessions/use-active-sessions';
+import { useActiveAiSessions, useActiveAiSessionsSnapshot } from '../ai-sessions/use-active-sessions';
 import { EmptyState } from '../components/EmptyState';
 import { SystemIcon } from '../components/SystemIcon';
 import { useMobileTheme } from '../components/theme';
@@ -30,6 +30,7 @@ export function StoryDetail({ storyId, nodeId, onOpenSession }: { storyId?: stri
   const { colors } = useMobileTheme();
   const { t } = useI18n();
   const runtime = useMobileControlPlaneRuntime();
+  const { actions: aiSessionActions, refresh: refreshAiSessions } = useActiveAiSessions();
   const { controlPlaneId, state: directory } = useActiveDirectories();
   const sessions = useActiveAiSessionsSnapshot();
   const [story, setStory] = useState<Story>();
@@ -37,7 +38,7 @@ export function StoryDetail({ storyId, nodeId, onOpenSession }: { storyId?: stri
   const [error, setError] = useState<string>();
   const [automationError, setAutomationError] = useState('');
   const [loading, setLoading] = useState(true);
-  const [storyMutation, setStoryMutation] = useState<'archive' | 'delete'>();
+  const [storyMutation, setStoryMutation] = useState<'archive' | 'delete' | 'close-sessions'>();
   const [runningActionId, setRunningActionId] = useState<string>();
   const [busyAutomationId, setBusyAutomationId] = useState<string>();
   const scrollRef = useRef<ScrollView>(null);
@@ -87,6 +88,11 @@ export function StoryDetail({ storyId, nodeId, onOpenSession }: { storyId?: stri
     ? groupStoryTreeSessions([story], directory.instances, sessions, expandedSessionIds).get(storyTreeKey(story)) ?? []
     : [], [directory.instances, expandedSessionIds, sessions, story]);
   const linkedSessionRootCount = useMemo(() => linkedSessions.filter((entry) => entry.depth === 0).length, [linkedSessions]);
+  const allLinkedSessions = useMemo(() => story ? (sessions?.instances ?? []).flatMap((entry) => (
+    storyInstanceIds.has(entry.instanceId)
+      ? entry.aiSessions.sessions.filter((session) => session.storyId === story.id && session.actions?.close !== false).map((session) => ({ instanceId: entry.instanceId, sessionId: session.id }))
+      : []
+  )) : [], [sessions, story, storyInstanceIds]);
   const hasUnassignedSessions = useMemo(() => [...unassignedStoryRootInstanceIds(sessions)].some((instanceId) => storyInstanceIds.has(instanceId)), [sessions, storyInstanceIds]);
   const newSessionDefaults = useMemo(() => storyAiSessionCreationDefaults(directory.instances, sessions, storyId || '', storyNodeId), [directory.instances, sessions, storyId, storyNodeId]);
   const automationCount = (actionId: string) => automations.filter((entry) => entry.automation.actionId === actionId).length;
@@ -195,11 +201,25 @@ export function StoryDetail({ storyId, nodeId, onOpenSession }: { storyId?: stri
       } },
     ]);
   };
+  const confirmCloseAllSessions = () => {
+    if (!story || !aiSessionActions || !allLinkedSessions.length || storyMutation) return;
+    Alert.alert(t('sessions.closeAllConfirmTitle'), t('sessions.closeAllConfirmDescription', { count: allLinkedSessions.length, name: story.title }), [
+      { text: t('common.cancel'), style: 'cancel' },
+      { text: t('sessions.closeAll'), style: 'destructive', onPress: () => {
+        setStoryMutation('close-sessions');
+        void aiSessionActions.closeMany(allLinkedSessions, Crypto.randomUUID).then(async ({ failed, total }) => {
+          await refreshAiSessions().catch(() => undefined);
+          Alert.alert(failed ? t('sessions.closeAllPartial', { failed, total }) : t('sessions.closeAllSuccess', { count: total }));
+        }).finally(() => setStoryMutation(undefined));
+      } },
+    ]);
+  };
   const handleStoryMenuAction = (action: string) => {
     if (action === 'new-session') openNewSession();
     else if (action === 'add-existing') openStoryRoute('sessions/assign');
     else if (action === 'add-action') openStoryRoute('actions/new');
     else if (action === 'add-automation') openStoryRoute('automations/new');
+    else if (action === 'close-sessions') confirmCloseAllSessions();
     else if (action === 'archive') void toggleArchive();
     else if (action === 'delete') confirmRemoveStory();
   };
@@ -213,6 +233,7 @@ export function StoryDetail({ storyId, nodeId, onOpenSession }: { storyId?: stri
     { id: 'add-existing', image: 'link', title: t('stories.addExisting'), attributes: { disabled: archived || !hasUnassignedSessions || menuDisabled } },
     { id: 'add-action', image: 'play.fill', title: t('stories.addAction'), attributes: { disabled: archived || menuDisabled } },
     { id: 'add-automation', image: 'calendar.badge.clock', title: t('stories.addAutomation'), attributes: { disabled: archived || menuDisabled } },
+    { id: 'close-sessions', image: 'xmark.circle', title: t(storyMutation === 'close-sessions' ? 'sessions.closingAll' : 'sessions.closeAll'), attributes: { destructive: true, disabled: !allLinkedSessions.length || menuDisabled } },
     { id: 'archive', image: archived ? 'arrow.uturn.backward' : 'archivebox', title: t(archived ? 'stories.restore' : 'stories.archive'), attributes: { disabled: menuDisabled } },
     { id: 'delete', image: 'trash', title: t('common.delete'), attributes: { destructive: true, disabled: menuDisabled } },
   ] satisfies MenuAction[];
@@ -229,6 +250,7 @@ export function StoryDetail({ storyId, nodeId, onOpenSession }: { storyId?: stri
         { type: 'action' as const, label: t('stories.addExisting'), icon: { name: 'link' as const, type: 'sfSymbol' as const }, disabled: archived || !hasUnassignedSessions || menuDisabled, onPress: () => openStoryRoute('sessions/assign') },
         { type: 'action' as const, label: t('stories.addAction'), icon: { name: 'play.fill' as const, type: 'sfSymbol' as const }, disabled: archived || menuDisabled, onPress: () => openStoryRoute('actions/new') },
         { type: 'action' as const, label: t('stories.addAutomation'), icon: { name: 'calendar.badge.clock' as const, type: 'sfSymbol' as const }, disabled: archived || menuDisabled, onPress: () => openStoryRoute('automations/new') },
+        { type: 'action' as const, label: t(storyMutation === 'close-sessions' ? 'sessions.closingAll' : 'sessions.closeAll'), icon: { name: 'xmark.circle' as const, type: 'sfSymbol' as const }, destructive: true, disabled: !allLinkedSessions.length || menuDisabled, onPress: confirmCloseAllSessions },
         {
           type: 'submenu' as const,
           label: '',

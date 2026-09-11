@@ -13,11 +13,12 @@ import {
 import { NodeSchema, type Node } from "@task-handoff/protocol/control-plane";
 import { parseResponse, safeParseResponse } from "@task-handoff/protocol/response-validation";
 import { z } from "zod";
-import { createId, createSecret, type JsonCollection } from "../../shared/persistence/store.ts";
+import { createId, createSecret } from "../../shared/persistence/store.ts";
 import { publicNode } from "../public-records.ts";
 import { now, throwNotFound } from "../application/helpers.ts";
 import { controlPlaneProxyAuthenticationHeaders } from "./control-plane-proxy-transport.ts";
 import type { ControlPlaneProxyPrivateStore } from "./control-plane-proxy-private-store.ts";
+import type { ControlPlaneNodeStorage } from "./repository.ts";
 
 const CreateProxyNodeClaimInputSchema = z.object({
   proxyOrigin: ControlPlaneProxyOriginSchema,
@@ -38,11 +39,11 @@ const ProxyBindingRevocationResponseSchema = z.object({
 type ProxyIdentityPatch = Pick<Partial<Node>, "connectionMode" | "connectionPath" | "auth">;
 
 type ControlPlaneProxyLifecycleOptions = {
-  nodes: JsonCollection<Node>;
+  nodes: ControlPlaneNodeStorage;
   privateStore: ControlPlaneProxyPrivateStore;
   fetchImpl: typeof fetch;
   requireNode: (id: string) => Node;
-  deleteNode: (id: string) => boolean;
+  deleteNode: (id: string) => boolean | Promise<boolean>;
 };
 
 export class ControlPlaneProxyLifecycle {
@@ -227,7 +228,7 @@ export class ControlPlaneProxyLifecycle {
   markUnavailable(nodeId: string, error: ControlPlaneProxyError) {
     const node = this.requireProxyNodeIdentity(nodeId);
     const timestamp = now();
-    return this.options.nodes.put(NodeSchema.parse({
+    const observed = NodeSchema.parse({
       ...node,
       status: "degraded",
       health: "degraded",
@@ -239,13 +240,14 @@ export class ControlPlaneProxyLifecycle {
         updatedAt: timestamp,
       },
       updatedAt: timestamp,
-    }));
+    });
+    return this.observeNode(observed);
   }
 
   markBindingRevoked(nodeId: string, error: ControlPlaneProxyError) {
     const node = this.requireProxyNodeIdentity(nodeId);
     const timestamp = now();
-    return this.options.nodes.put(NodeSchema.parse({
+    const observed = NodeSchema.parse({
       ...node,
       status: "degraded",
       health: "degraded",
@@ -257,7 +259,8 @@ export class ControlPlaneProxyLifecycle {
         updatedAt: timestamp,
       },
       updatedAt: timestamp,
-    }));
+    });
+    return this.observeNode(observed);
   }
 
   assertIdentityPatch(current: Node, input: ProxyIdentityPatch) {
@@ -282,7 +285,7 @@ export class ControlPlaneProxyLifecycle {
 
   async deleteNode(node: Node, force = false) {
     if (node.connectionMode !== "control-plane-proxy") {
-      return { deleted: this.options.deleteNode(node.id), revoke: { mode: "not-proxied" as const, orphanRisk: false } };
+      return { deleted: await this.options.deleteNode(node.id), revoke: { mode: "not-proxied" as const, orphanRisk: false } };
     }
     const credential = this.options.privateStore.nodeCredential(node.id);
     if (!credential) {
@@ -420,14 +423,15 @@ export class ControlPlaneProxyLifecycle {
       createdAt: now(),
       updatedAt: now(),
     });
-    if (!current) this.options.nodes.put(node);
+    if (!current) await this.options.nodes.put(node);
+    const projected = this.options.nodes.observe?.(node) || node;
     try {
       this.options.privateStore.promotePendingClaim(pending.claimId, credential);
     } catch (error) {
-      if (!current) this.options.nodes.delete(node.id);
+      if (!current) await this.options.nodes.delete(node.id);
       throw error;
     }
-    return { node: publicNode(node), binding: result.binding };
+    return { node: publicNode(projected), binding: result.binding };
   }
 
   private requireProxyNodeIdentity(nodeId: string, bindingId?: string, targetNodeId?: string) {
@@ -449,7 +453,7 @@ export class ControlPlaneProxyLifecycle {
     proxyState: Omit<NonNullable<Node["proxyState"]>, "target" | "lastError" | "updatedAt">,
   ) {
     const timestamp = now();
-    return this.options.nodes.put(NodeSchema.parse({
+    const observed = NodeSchema.parse({
       ...node,
       name: target.name,
       status: target.status,
@@ -458,7 +462,15 @@ export class ControlPlaneProxyLifecycle {
       lastSeenAt: target.lastSeenAt,
       proxyState: { ...proxyState, target, updatedAt: timestamp },
       updatedAt: timestamp,
-    }));
+    });
+    return this.observeNode(observed);
+  }
+
+  private observeNode(node: Node): Node {
+    if (this.options.nodes.observe) return this.options.nodes.observe(node);
+    const stored = this.options.nodes.put(node);
+    if (stored instanceof Promise) throw new Error("Asynchronous Node storage must implement an in-memory observation boundary.");
+    return stored;
   }
 
   private requestClaim(pending: PendingProxyClaim, inviteToken?: string) {
@@ -580,14 +592,14 @@ export class ControlPlaneProxyLifecycle {
     }
   }
 
-  private finishRevokedNodeDelete(id: string) {
-    const deleted = this.options.deleteNode(id);
+  private async finishRevokedNodeDelete(id: string) {
+    const deleted = await this.options.deleteNode(id);
     this.options.privateStore.deleteNodeCredential(id);
     return { deleted, revoke: { mode: "revoked" as const, orphanRisk: false } };
   }
 
-  private forceDeleteNode(id: string) {
-    const deleted = this.options.deleteNode(id);
+  private async forceDeleteNode(id: string) {
+    const deleted = await this.options.deleteNode(id);
     this.options.privateStore.deleteNodeCredential(id);
     return { deleted, revoke: { mode: "forced" as const, orphanRisk: true } };
   }

@@ -14,12 +14,9 @@ import {
   type NodeModelPublicRecord,
 } from "@task-handoff/protocol/control-plane";
 import type { NodeAgentStorePaths } from "../persistence/paths.ts";
-import {
-  InstanceModelAssignmentStore,
-  InstanceModelEnvironmentStore,
-  LEGACY_MODEL_ENV_KEYS,
-  NodeModelStore,
-} from "./stores.ts";
+import type { ModelAssignmentRepository, ModelRepository } from "../persistence/model-repository.ts";
+import { createNodeAgentRepository } from "../persistence/repository.ts";
+import { openNodeAgentDatabaseSync } from "../persistence/database.ts";
 import { nowIso as now } from "@task-handoff/core/core/time";
 import { InstancePrivateModelCatalogSchema } from "./private-catalog.ts";
 
@@ -31,9 +28,9 @@ type InstanceAccess = {
 };
 
 export class NodeModelRegistry {
-  private readonly models: NodeModelStore;
-  private readonly assignments: InstanceModelAssignmentStore;
-  private readonly legacyEnvironments: InstanceModelEnvironmentStore;
+  private readonly models: ModelRepository;
+  private readonly assignments: ModelAssignmentRepository;
+  private readonly transaction: <T>(operation: () => T) => T;
   private readonly nodeId: string;
   private readonly instances: InstanceAccess;
 
@@ -41,19 +38,17 @@ export class NodeModelRegistry {
     paths: NodeAgentStorePaths,
     nodeId: string,
     instances: InstanceAccess,
+    persistence?: { models: ModelRepository; assignments: ModelAssignmentRepository; transaction<T>(operation: () => T): T },
   ) {
     this.nodeId = nodeId;
     this.instances = instances;
-    this.models = new NodeModelStore(paths.nodeModelsDir, nodeId);
-    this.assignments = new InstanceModelAssignmentStore(paths.modelAssignmentsDir);
-    this.legacyEnvironments = new InstanceModelEnvironmentStore(paths.modelEnvironmentsDir);
+    const repositories = persistence || createNodeAgentRepository(openNodeAgentDatabaseSync(paths)).model;
+    this.models = repositories.models;
+    this.assignments = repositories.assignments;
+    this.transaction = repositories.transaction.bind(repositories);
   }
 
-  init() {
-    this.models.init();
-    this.assignments.init();
-    this.migrateLegacyEnvironments();
-  }
+  init() {}
 
   list(): NodeModelPublicRecord[] {
     const referenceCounts = new Map<string, number>();
@@ -160,25 +155,17 @@ export class NodeModelRegistry {
     if (input.modelSelection.opencodeModelHash !== undefined && (input.modelSelection.opencodeModelHash ?? undefined) !== input.opencodeModelHash) {
       throw Object.assign(new Error("OpenCode model selection does not match its node assignment."), { statusCode: 400, code: "NODE_MODEL_SELECTION_MISMATCH" });
     }
-    const previous = this.assignments.get(instanceId);
     const assignment = NodeModelAssignmentSchema.parse({ instanceId, modelEntityIds: input.modelEntityIds, codexModelHash: input.codexModelHash, claudeModelHash: input.claudeModelHash, opencodeModelHash: input.opencodeModelHash, updatedAt: now() });
-    this.assignments.put(assignment);
-    try {
+    return this.transaction(() => {
+      const storedAssignment = this.assignments.put(assignment);
       const instance = this.instances.put(ControlledInstanceSchema.parse({ ...current, modelSelection: input.modelSelection, updatedAt: now() }));
-      return { assignment, instance };
-    } catch (error) {
-      if (previous) this.assignments.put(previous);
-      else this.assignments.delete(instanceId);
-      throw error;
-    }
+      return { assignment: storedAssignment, instance };
+    });
   }
 
   resolvedEnvironment(instanceId: string) {
     const assignment = this.assignments.get(instanceId);
     if (!assignment) {
-      if (this.legacyEnvironments.has(instanceId)) {
-        throw Object.assign(new Error(`Legacy model environment for instance ${instanceId} requires manual migration.`), { statusCode: 409, code: "NODE_MODEL_MIGRATION_REQUIRED" });
-      }
       return {};
     }
     const firstCompatible = (app: "codex" | "claude" | "opencode") => assignment.modelEntityIds
@@ -210,9 +197,12 @@ export class NodeModelRegistry {
     });
   }
 
+  privateSecretValues(instanceId: string) {
+    return [...new Set(this.privateCatalog(instanceId).entities.map((entity) => entity.key))];
+  }
+
   deleteInstanceMetadata(instanceId: string) {
     this.assignments.delete(instanceId);
-    this.legacyEnvironments.delete(instanceId);
   }
 
   private validateRef(app: "codex" | "claude" | "opencode", modelHash?: string) {
@@ -304,93 +294,6 @@ export class NodeModelRegistry {
     return this.models.list().reduce((max, model) => Math.max(max, model.order), 0) + 100;
   }
 
-  private migrateLegacyEnvironments() {
-    for (const instanceId of this.legacyEnvironments.listInstanceIds()) {
-      if (!this.instances.has(instanceId)) {
-        this.warnMigration(instanceId, "instance-not-found");
-        continue;
-      }
-      const existingAssignment = this.assignments.get(instanceId);
-      if (existingAssignment) {
-        try {
-          this.resolvedEnvironment(instanceId);
-          this.legacyEnvironments.delete(instanceId);
-        } catch {
-          this.warnMigration(instanceId, "existing-assignment-invalid");
-        }
-        continue;
-      }
-      let environment: Record<string, string>;
-      try {
-        environment = this.legacyEnvironments.get(instanceId);
-      } catch {
-        this.warnMigration(instanceId, "sidecar-invalid");
-        continue;
-      }
-      if (!Object.keys(environment).length) {
-        this.legacyEnvironments.delete(instanceId);
-        continue;
-      }
-      if (Object.keys(environment).some((key) => !LEGACY_MODEL_ENV_KEYS.has(key))) {
-        this.warnMigration(instanceId, "unknown-fields");
-        continue;
-      }
-      const createdModelIds: string[] = [];
-      try {
-        const codex = this.migrateApp(environment, "codex", createdModelIds);
-        const claude = this.migrateApp(environment, "claude", createdModelIds);
-        if (!codex && !claude) throw new Error("no complete model configuration");
-        const modelEntityIds = [...new Set([codex, claude].filter((id): id is string => Boolean(id)))];
-        const modelSelection = { modelEntityIds, ...(codex ? { codexModelHash: codex } : {}), ...(claude ? { claudeModelHash: claude } : {}) };
-        this.assign(instanceId, { modelSelection, modelEntityIds, codexModelHash: codex, claudeModelHash: claude });
-        this.resolvedEnvironment(instanceId);
-        this.legacyEnvironments.delete(instanceId);
-      } catch {
-        this.assignments.delete(instanceId);
-        for (const modelId of createdModelIds) this.models.delete(modelId);
-        this.warnMigration(instanceId, "mapping-failed");
-      }
-    }
-  }
-
-  private migrateApp(environment: Record<string, string>, app: "codex" | "claude", createdModelIds: string[]) {
-    const key = environment[app === "codex" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY"];
-    const endpoint = app === "codex" ? environment.TASK_HANDOFF_CODEX_BASE_URL || environment.OPENAI_BASE_URL : environment.ANTHROPIC_BASE_URL;
-    const modelName = app === "codex" ? environment.TASK_HANDOFF_CODEX_MODEL || environment.CODEX_MODEL : environment.TASK_HANDOFF_CLAUDE_MODEL || environment.CLAUDE_MODEL;
-    if (!key && !endpoint && !modelName) return undefined;
-    if (!key || !endpoint || !modelName) throw new Error("model configuration incomplete");
-    const modelId = modelConfigHash({ app, endpoint, key, model: modelName });
-    const existing = this.models.get(modelId);
-    if (existing) {
-      if (existing.app !== app || existing.key !== key || existing.endpoint !== endpoint || existing.model !== modelName || !existing.enabled) throw new Error("existing model conflicts with legacy environment");
-      return modelId;
-    }
-    const timestamp = now();
-    this.models.put(NodeModelConfigSchema.parse({
-      id: modelId,
-      name: `Migrated ${app === "codex" ? "Codex" : "Claude"} model`,
-      endpoint,
-      key,
-      model: modelName,
-      app,
-      enabled: true,
-      order: this.nextOrder(),
-      labels: { migratedFrom: "instance-model-environment" },
-      createdAt: timestamp,
-      updatedAt: timestamp,
-    }));
-    createdModelIds.push(modelId);
-    return modelId;
-  }
-
-  private warnMigration(instanceId: string, reason: string) {
-    console.warn(JSON.stringify({
-      message: "legacy model environment was preserved because it could not be migrated",
-      nodeId: this.nodeId,
-      instanceId,
-      reason,
-    }));
-  }
 }
 
 function openCodeReasoningVariants() {

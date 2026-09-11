@@ -48,7 +48,7 @@ export class InstancePrivateConfigStore {
     return path.join(this.directory, `${instanceId}.json`);
   }
 
-  get(instanceId: string) {
+  inspectMaterialized(instanceId: string) {
     const filePath = this.filePath(instanceId);
     if (!fs.existsSync(filePath)) return undefined;
     const stored = JSON.parse(fs.readFileSync(filePath, "utf8")) as unknown;
@@ -67,11 +67,6 @@ export class InstancePrivateConfigStore {
         statusCode: 409,
         code: "INSTANCE_PRIVATE_CONFIG_IDENTITY_MISMATCH",
       });
-    }
-    if ((source.instanceCredential === undefined && source.registrationToken !== undefined) || source.gitCredentials !== undefined) {
-      // Compatibility for the pre-release snapshot implementation: read the instance
-      // identity but immediately scrub the obsolete Git secret snapshot from disk.
-      this.put(parsed);
     }
     return parsed;
   }

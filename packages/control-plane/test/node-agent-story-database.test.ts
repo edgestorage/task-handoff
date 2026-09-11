@@ -7,7 +7,7 @@ import { Readable } from "node:stream";
 import test from "node:test";
 import { nodeAgentStorePaths } from "../src/node-agent/persistence/paths.ts";
 import { StoryAutomationStore } from "../src/node-agent/stories/automation-store.ts";
-import { openNodeAgentDatabase } from "../src/node-agent/stories/database/database.ts";
+import { openNodeAgentDatabase } from "../src/node-agent/persistence/database.ts";
 import { NodeStoryStore } from "../src/node-agent/stories/store.ts";
 import { createStoryDatabaseFixture, seedStoryAction } from "./story-database-fixture.ts";
 
@@ -21,7 +21,10 @@ test("Node Agent SQLite initializes identity, migrations, PRAGMAs, and private p
     assert.equal(scalar("PRAGMA busy_timeout"), 5000);
     assert.equal(scalar("PRAGMA synchronous"), 2);
     assert.equal(scalar("PRAGMA quick_check"), "ok");
-    assert.equal(fixture.database.client.prepare("SELECT COUNT(*) AS count FROM na_migration_ledger").get().count, 1);
+    assert.deepEqual(
+      fixture.database.client.prepare("SELECT id FROM na_migration_ledger ORDER BY id").all().map((row) => row.id),
+      ["0001_story_domain", "0002_p0_state_domains", "1000_import_v0_0_28_p0"],
+    );
     assert.equal(fs.statSync(fixture.paths.databasePath).mode & 0o777, 0o600);
     for (const sidecar of [`${fixture.paths.databasePath}-wal`, `${fixture.paths.databasePath}-shm`]) {
       if (fs.existsSync(sidecar)) assert.equal(fs.statSync(sidecar).mode & 0o777, 0o600);
@@ -53,7 +56,7 @@ test("Node Agent SQLite reopens idempotently and repository close drains accepte
     const first = await openNodeAgentDatabase(paths);
     await first.close();
     const second = await openNodeAgentDatabase(paths);
-    const { createNodeAgentRepository } = await import("../src/node-agent/stories/database/repository.ts");
+    const { createNodeAgentRepository } = await import("../src/node-agent/persistence/repository.ts");
     const repository = createNodeAgentRepository(second);
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
@@ -77,9 +80,28 @@ test("Node Agent SQLite reopens idempotently and repository close drains accepte
     await closing;
 
     const verify = new DatabaseSync(paths.databasePath);
-    assert.equal(verify.prepare("SELECT COUNT(*) AS count FROM na_migration_ledger").get().count, 1);
+    assert.deepEqual(
+      verify.prepare("SELECT id FROM na_migration_ledger ORDER BY id").all().map((row) => row.id),
+      ["0001_story_domain", "0002_p0_state_domains", "1000_import_v0_0_28_p0"],
+    );
     verify.close();
   } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
+});
+
+test("P0 topology schema enforces runtime references and releases deleted folder sources", async () => {
+  const fixture = await createStoryDatabaseFixture("task-handoff-p0-schema-");
+  try {
+    const client = fixture.database.client;
+    const timestamp = "2026-09-11T00:00:00.000Z";
+    client.prepare("INSERT INTO na_node_identity (singleton_key, node_id, created_at, updated_at) VALUES (1, ?, ?, ?)").run("node_1", timestamp, timestamp);
+    client.prepare("INSERT INTO na_local_folders (id, node_id, name, path, labels_json, created_at, updated_at) VALUES (?, ?, ?, ?, '{}', ?, ?)").run("folder_1", "node_1", "Workspace", "/workspace", timestamp, timestamp);
+    client.prepare("INSERT INTO na_runtimes (id, node_id, name, type, status, access_strategy, capabilities_json, labels_json, created_at, updated_at) VALUES (?, ?, ?, 'docker', 'online', 'direct-port', '{}', '{}', ?, ?)").run("runtime_1", "node_1", "Docker", timestamp, timestamp);
+    client.prepare("INSERT INTO na_instances (id, node_id, runtime_id, source_local_folder_id, name, status, desired_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'created', '{}', ?, ?)").run("instance_1", "node_1", "runtime_1", "folder_1", "Instance", timestamp, timestamp);
+
+    assert.throws(() => client.prepare("DELETE FROM na_runtimes WHERE id = ?").run("runtime_1"), /FOREIGN KEY constraint failed/);
+    client.prepare("DELETE FROM na_local_folders WHERE id = ?").run("folder_1");
+    assert.equal(client.prepare("SELECT source_local_folder_id FROM na_instances WHERE id = ?").get("instance_1").source_local_folder_id, null);
+  } finally { await fixture.close(); }
 });
 
 test("nested repository transaction rolls back the complete Story aggregate", async () => {

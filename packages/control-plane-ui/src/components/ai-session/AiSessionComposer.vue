@@ -167,6 +167,13 @@ const modelGroups = computed(() => props.modelGroups || []);
 const modelOptions = computed(() => modelGroups.value.flatMap((group) => group.models));
 const displayedModelSelection = computed(() => props.modelSelection || modelOptions.value[0]);
 const displayedModelName = computed(() => displayedModelSelection.value?.modelName || t("sessions.composer.modelSelectionUnavailable"));
+const displayedProviderName = computed(() => modelOptions.value.find((model) => (
+  model.modelEntityId === displayedModelSelection.value?.modelEntityId
+  && model.modelName === displayedModelSelection.value?.modelName
+))?.providerName || t("sessions.composer.selectionNotSet"));
+const modelTriggerEl = ref<HTMLButtonElement>();
+const modelMenuOpen = ref(false);
+const modelSummaryTooltipOpen = ref(false);
 const reasoningEfforts: AiSessionReasoningEffort[] = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
 const availableReasoningEfforts = computed(() => props.provider === "codex" ? reasoningEfforts : reasoningEfforts.filter((effort) => effort !== "ultra"));
 const modelMenuDisabled = computed(() => Boolean(
@@ -194,6 +201,20 @@ function modelGroupSubtitle(group: AiSessionModelGroup) {
   return group.models.length > 1
     ? t("sessions.composer.modelGroupSummary", { model: first, count: group.models.length })
     : first;
+}
+
+function showModelSummaryTooltip(event?: Event) {
+  if (event instanceof PointerEvent && event.pointerType === "touch") return;
+  if (!modelMenuOpen.value) modelSummaryTooltipOpen.value = true;
+}
+
+function hideModelSummaryTooltip() {
+  modelSummaryTooltipOpen.value = false;
+}
+
+function updateModelMenuOpen(open: boolean) {
+  modelMenuOpen.value = open;
+  if (open) hideModelSummaryTooltip();
 }
 
 function resizeInput() {
@@ -917,20 +938,48 @@ watch(() => props.busy, (busy) => {
         >
           <CornerDownRight :size="18" />
         </button>
-        <DropdownMenu v-if="modelOptions.length || reasoningEffortEnabled">
+        <DropdownMenu v-if="modelOptions.length || reasoningEffortEnabled" @update:open="updateModelMenuOpen">
           <DropdownMenuTrigger as-child>
             <button
+              ref="modelTriggerEl"
               type="button"
               class="ai-session-composer__model-trigger"
               :disabled="modelMenuDisabled"
-              :title="t('sessions.composer.modelSelectionTitle', { model: displayedModelName })"
               :aria-label="t('sessions.composer.modelSelectionTitle', { model: displayedModelName })"
               :aria-busy="modelSelectionPending || undefined"
+              @pointerenter="showModelSummaryTooltip"
+              @pointerleave="hideModelSummaryTooltip"
             >
               <LoaderCircle v-if="modelSelectionPending" class="animate-spin motion-reduce:animate-none" :size="14" />
               <span>{{ displayedModelName }}</span>
             </button>
           </DropdownMenuTrigger>
+          <TooltipProvider :delay-duration="200">
+            <Tooltip :open="modelSummaryTooltipOpen">
+              <TooltipTrigger
+                :reference="modelTriggerEl"
+                as="span"
+                aria-hidden="true"
+                class="ai-session-composer__model-tooltip-anchor"
+              />
+              <TooltipContent class="ai-session-model-summary-tooltip" align="end" side="top" :side-offset="8">
+                <dl>
+                  <div>
+                    <dt>{{ t("sessions.composer.provider") }}</dt>
+                    <dd>{{ displayedProviderName }}</dd>
+                  </div>
+                  <div>
+                    <dt>{{ t("sessions.composer.model") }}</dt>
+                    <dd>{{ displayedModelName }}</dd>
+                  </div>
+                  <div>
+                    <dt>{{ t("sessions.composer.reasoningEffort") }}</dt>
+                    <dd>{{ reasoningEffort || t("sessions.composer.selectionNotSet") }}</dd>
+                  </div>
+                </dl>
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
           <DropdownMenuContent
             class="ai-session-model-menu"
             side="top"
@@ -1390,6 +1439,46 @@ watch(() => props.busy, (busy) => {
 .ai-session-composer__model-tooltip-trigger {
   display: inline-flex;
   min-width: 0;
+}
+
+.ai-session-composer__model-tooltip-anchor {
+  position: absolute;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+
+:global(.ai-session-model-summary-tooltip) {
+  max-width: min(360px, calc(100vw - 24px));
+  padding: 9px 11px;
+}
+
+:global(.ai-session-model-summary-tooltip dl) {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+
+:global(.ai-session-model-summary-tooltip div) {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 12px;
+  align-items: baseline;
+}
+
+:global(.ai-session-model-summary-tooltip dt) {
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  font-weight: 400;
+}
+
+:global(.ai-session-model-summary-tooltip dd) {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  font-weight: 500;
+  text-align: right;
 }
 
 .ai-session-composer__model-trigger:not(:disabled):is(:hover, :focus-visible) {

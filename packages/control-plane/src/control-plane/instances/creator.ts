@@ -99,7 +99,7 @@ export class ControlledInstanceCreator {
       imageOption,
     });
     const instanceId = parsedInput.id || createId("inst");
-    const gitProvisioning = this.prepareGitProvisioning({
+    const gitProvisioning = await this.prepareGitProvisioning({
       instanceId,
       runtime,
       source: source.configured,
@@ -118,7 +118,7 @@ export class ControlledInstanceCreator {
     let retainedAuthorized = false;
     try {
       if (gitProvisioning?.retention === "operation-only") {
-        this.options.gitCredentials.rememberOperationProvisioning(gitProvisioning.input);
+        await this.options.gitCredentials.rememberOperationProvisioning(gitProvisioning.input);
       }
       const createInput = {
         id: instanceId,
@@ -151,10 +151,10 @@ export class ControlledInstanceCreator {
         // the caller-assigned instance id is confirmed, before an explicit start.
         retainedPayloadMayBeDeployed = true;
         await this.options.gateway.deployGitCredential(node, retainedPayload!);
-        this.options.gitCredentials.authorize(instance.id, gitProvisioning.credentialId);
+        await this.options.gitCredentials.authorize(instance.id, gitProvisioning.credentialId);
         retainedAuthorized = true;
         await this.options.gateway.replaceGitCredentialAuthorizations(node, this.options.gitCredentials.desiredAuthorizationSet(instance.id));
-        this.options.gitCredentials.markAssignmentStatus(
+        await this.options.gitCredentials.markAssignmentStatus(
           instance.id,
           gitProvisioning.credentialId,
           "synced",
@@ -169,7 +169,7 @@ export class ControlledInstanceCreator {
     } catch (error) {
       let retainedAuthorizationCleanupFailure: unknown;
       if (retainedAuthorized && gitProvisioning?.retention === "instance-retained") {
-        this.options.gitCredentials.revoke(instanceId, gitProvisioning.credentialId);
+        await this.options.gitCredentials.revoke(instanceId, gitProvisioning.credentialId);
         try {
           await this.options.gateway.replaceGitCredentialAuthorizations(node, this.options.gitCredentials.desiredAuthorizationSet(instanceId));
         } catch (cleanupError) {
@@ -194,7 +194,7 @@ export class ControlledInstanceCreator {
           retainedPayloadCleanupFailure = cleanupError;
         }
       }
-      if (compensated && gitProvisioning?.retention === "operation-only") this.options.gitCredentials.forgetOperationProvisioning(instanceId);
+      if (compensated && gitProvisioning?.retention === "operation-only") await this.options.gitCredentials.forgetOperationProvisioning(instanceId);
       if (compensationFailure || retainedAuthorizationCleanupFailure || retainedPayloadCleanupFailure) {
         const failure = publicError(
           `Instance ${instanceId} creation failed and node cleanup could not be confirmed.`,
@@ -226,7 +226,7 @@ export class ControlledInstanceCreator {
         );
         assigned = startResult.instance;
         if (gitProvisioning?.retention === "operation-only" && startResult.gitWorkspaceProvisioningOperationId === gitProvisioning.input.operationId) {
-          this.options.gitCredentials.forgetOperationProvisioning(assigned.id);
+          await this.options.gitCredentials.forgetOperationProvisioning(assigned.id);
         }
         startOutcome = { status: "started" };
       } catch (error) {
@@ -243,13 +243,13 @@ export class ControlledInstanceCreator {
     };
   }
 
-  private prepareGitProvisioning(input: {
+  private async prepareGitProvisioning(input: {
     instanceId: string;
     runtime: NodeRuntime;
     source: Project["source"];
     retention?: GitCredentialRetention;
     agentCapabilities: unknown;
-  }): { credentialId: string; retention: GitCredentialRetention; input: GitWorkspaceProvisioningInput } | undefined {
+  }): Promise<{ credentialId: string; retention: GitCredentialRetention; input: GitWorkspaceProvisioningInput } | undefined> {
     if (input.source.type === "local-folder") {
       if (input.retention) throw publicError("Git credential retention requires a Git source.", 400, "GIT_CREDENTIAL_SOURCE_REQUIRED");
       return undefined;
@@ -267,7 +267,7 @@ export class ControlledInstanceCreator {
     if (!supportsNodeGitWorkspaceProvisioning(input.agentCapabilities, input.runtime.type)) {
       throw publicError(`Runtime ${input.runtime.name} does not support managed Git workspace provisioning.`, 409, "GIT_CREDENTIAL_PROVISIONING_UNSUPPORTED");
     }
-    const payload = this.options.gitCredentials.payload(credentialId);
+    const payload = await this.options.gitCredentials.payload(credentialId);
     if (payload.credential.kind !== input.source.auth.type) {
       throw publicError("The Git Repository auth type does not match its credential.", 409, "GIT_REPOSITORY_CREDENTIAL_KIND_MISMATCH");
     }

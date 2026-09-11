@@ -3,7 +3,7 @@ import path from "node:path";
 import { StoryAutomationWithActionInputSchema, StoryIdSchema, StoryUpdateInputSchema, type Story, type StoryAutomationStatus, type StoryAutomationWithActionInput, type StoryUpdateInput } from "@task-handoff/protocol/stories";
 import type { NodeAgentState } from "../state.ts";
 import type { StoryAutomationStore } from "./automation-store.ts";
-import type { NodeAgentRepository } from "./database/repository.ts";
+import type { NodeAgentRepository } from "../persistence/repository.ts";
 import type { StoryScheduler } from "./scheduler.ts";
 import type { NodeStoryStore } from "./store.ts";
 

@@ -8,13 +8,14 @@ import {
 } from "@task-handoff/protocol/control-plane";
 import { safeParseResponse } from "@task-handoff/protocol/response-validation";
 import { z } from "zod";
-import { createId, type JsonCollection } from "../../shared/persistence/store.ts";
+import { createId } from "../../shared/persistence/store.ts";
 import { createDirectNodeAgentAuthHeaders } from "../../shared/security/node-agent-auth.ts";
 import { parseNodeAgentIpcEndpoint } from "../../shared/transport/node-agent-ipc.ts";
 import { CreateNodeInputSchema } from "../application/inputs.ts";
 import { now } from "../application/helpers.ts";
 import { publicNode, publicNodeAgentCapabilities } from "../public-records.ts";
 import { fetchDirectNodeAgentEndpoint } from "./direct-transport.ts";
+import type { ControlPlaneNodeStorage, ControlPlanePairingRevokeStorage } from "./repository.ts";
 
 type NodeAgentAuthContext = Pick<Node, "id" | "auth" | "connectionMode">;
 type CompletedPairing = {
@@ -35,12 +36,13 @@ export const PendingPairingRevokeSchema = z.object({
   pairedAt: z.string().min(1),
   createdAt: z.string().min(1),
   updatedAt: z.string().min(1),
+  phase: z.enum(["pending-compensation", "compensating"]).default("pending-compensation"),
 }).strict();
 export type PendingPairingRevoke = z.infer<typeof PendingPairingRevokeSchema>;
 
 type NodeConnectionManagerOptions = {
-  nodes: JsonCollection<Node>;
-  pendingPairingRevokes?: JsonCollection<PendingPairingRevoke>;
+  nodes: ControlPlaneNodeStorage;
+  pendingPairingRevokes?: ControlPlanePairingRevokeStorage;
   fetchImpl: typeof fetch;
   localNodeLabel: string;
   builtinNodeLabel: string;
@@ -78,10 +80,10 @@ export class NodeConnectionManager {
     const current = this.options.nodes.get(inspected.nodeId);
     for (const node of this.options.nodes.list()) {
       if (node.labels[this.options.localNodeLabel] === "true" && node.id !== inspected.nodeId) {
-        this.options.nodes.delete(node.id);
+        await this.options.nodes.delete(node.id);
       }
     }
-    return this.options.nodes.put(NodeSchema.parse({
+    const candidate = NodeSchema.parse({
       ...(current || {}),
       id: inspected.nodeId,
       name: current?.name || "Local Node",
@@ -97,7 +99,9 @@ export class NodeConnectionManager {
       labels: { ...(current?.labels || {}), ...labels },
       createdAt: current?.createdAt || timestamp,
       updatedAt: timestamp,
-    }));
+    });
+    const stored = await this.options.nodes.put(candidate);
+    return this.options.nodes.observe?.(candidate) || stored;
   }
 
   async create(input: unknown) {
@@ -129,7 +133,7 @@ export class NodeConnectionManager {
         : undefined;
       if (pendingRevoke) {
         this.activePendingPairingRevokes.add(pendingRevoke.id);
-        this.options.pendingPairingRevokes?.put(pendingRevoke);
+        await this.options.pendingPairingRevokes?.put(pendingRevoke);
       }
       if (pairing) {
         if (pairing.invalidResponse || pairing.unsafePublicIdentifiers) {
@@ -210,14 +214,17 @@ export class NodeConnectionManager {
         });
       }
       nodePersistenceAttempted = true;
-      const stored = this.options.nodes.put(candidate);
-      this.clearPendingPairingRevoke(pendingRevoke, pairing);
-      return stored;
+      const stored = pendingRevoke && this.options.nodes.commitPairing
+        ? await this.options.nodes.commitPairing(candidate, pendingRevoke.id)
+        : await this.options.nodes.put(candidate);
+      const projected = this.options.nodes.observe?.(candidate) || stored;
+      await this.clearPendingPairingRevoke(pendingRevoke, pairing);
+      return projected;
     } catch (error) {
       if (pairing && controlEndpoint) {
         const persistence = this.pairingPersistence(pairing);
         if (persistence.state === "present") {
-          this.clearPendingPairingRevoke(pendingRevoke, pairing);
+          await this.clearPendingPairingRevoke(pendingRevoke, pairing);
           return persistence.node;
         }
         if (persistence.state === "unknown" && nodePersistenceAttempted) {
@@ -226,8 +233,9 @@ export class NodeConnectionManager {
             { statusCode: 503, code: "NODE_AGENT_PAIRING_PERSISTENCE_UNCERTAIN", retryable: true },
           ), pairing.secret);
         }
+        if (pendingRevoke) pendingRevoke = await this.markPendingPairingCompensating(pendingRevoke);
         await this.compensatePairing(controlEndpoint, pairing, error);
-        this.clearPendingPairingRevoke(pendingRevoke, pairing);
+        await this.clearPendingPairingRevoke(pendingRevoke, pairing);
         throw sanitizePostPairingError(error, pairing.secret);
       }
       throw error;
@@ -251,17 +259,18 @@ export class NodeConnectionManager {
         };
         const persistence = this.pairingPersistence(pairing);
         if (persistence.state === "present") {
-          this.clearPendingPairingRevoke(record, pairing);
+          await this.clearPendingPairingRevoke(record, pairing);
           return;
         }
         if (persistence.state === "unknown") {
           return;
         }
-        await this.compensatePairing(record.endpoint, pairing, Object.assign(
+        const compensating = await this.markPendingPairingCompensating(record);
+        await this.compensatePairing(compensating.endpoint, pairing, Object.assign(
           new Error("Recovering a pending pairing revocation."),
           { code: "NODE_AGENT_PAIRING_REVOCATION_PENDING" },
         ));
-        this.clearPendingPairingRevoke(record, pairing);
+        await this.clearPendingPairingRevoke(record, pairing);
       } catch {
         // Keep the private record for the next recovery pass.
       }
@@ -280,7 +289,14 @@ export class NodeConnectionManager {
       pairedAt: pairing.pairedAt,
       createdAt: timestamp,
       updatedAt: timestamp,
+      phase: "pending-compensation",
     });
+  }
+
+  private async markPendingPairingCompensating(record: PendingPairingRevoke) {
+    if (!this.options.pendingPairingRevokes) return record;
+    if (record.phase === "compensating") return record;
+    return this.options.pendingPairingRevokes.put({ ...record, phase: "compensating", updatedAt: now() });
   }
 
   private pairingPersistence(pairing: CompletedPairing):
@@ -300,10 +316,10 @@ export class NodeConnectionManager {
       : { state: "absent" };
   }
 
-  private clearPendingPairingRevoke(record: PendingPairingRevoke | undefined, pairing: CompletedPairing | undefined) {
+  private async clearPendingPairingRevoke(record: PendingPairingRevoke | undefined, pairing: CompletedPairing | undefined) {
     if (!record) return;
     try {
-      this.options.pendingPairingRevokes?.delete(record.id);
+      await this.options.pendingPairingRevokes?.delete(record.id);
     } catch (error) {
       try {
         this.options.warn({

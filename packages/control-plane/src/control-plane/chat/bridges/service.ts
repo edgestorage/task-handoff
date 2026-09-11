@@ -3,45 +3,50 @@ import {
   type ChatBridgeConfig,
   type ChatSessionBinding,
 } from "@task-handoff/protocol/control-plane";
-import type { JsonCollection } from "../../../shared/persistence/store.ts";
+import type { ControlPlaneChatStore } from "./repository.ts";
 import { createId } from "../../../shared/persistence/store.ts";
 import { defaultChatBridgeName, mergeChatBridgeSettings, publicChatBridge } from "./records.ts";
 import { CreateChatBridgeInputSchema, UpdateChatBridgeInputSchema } from "./inputs.ts";
 import { now, throwNotFound } from "../../common/helpers.ts";
 
 export type ChatBridgeServiceOptions = {
-  chatBridges: JsonCollection<ChatBridgeConfig>;
-  chatSessions: JsonCollection<ChatSessionBinding>;
+  store: ControlPlaneChatStore;
 };
 
 export class ChatBridgeService {
-  private readonly chatBridges: JsonCollection<ChatBridgeConfig>;
-  private readonly chatSessions: JsonCollection<ChatSessionBinding>;
+  private readonly store: ControlPlaneChatStore;
 
   constructor(options: ChatBridgeServiceOptions) {
-    this.chatBridges = options.chatBridges;
-    this.chatSessions = options.chatSessions;
+    this.store = options.store;
   }
 
   list() {
-    return this.chatBridges.list().map(publicChatBridge);
+    return this.store.listBridges();
   }
 
   require(id: string) {
-    const bridge = this.chatBridges.get(id);
+    const bridge = this.store.getPublicBridge(id);
     if (!bridge) {
       throwNotFound("CHAT_BRIDGE_NOT_FOUND", `Chat bridge ${id} was not found.`);
     }
     return bridge;
   }
 
-  create(input: unknown) {
+  resolve(id: string) {
+    const bridge = this.store.resolveBridge(id);
+    if (!bridge) {
+      throwNotFound("CHAT_BRIDGE_NOT_FOUND", `Chat bridge ${id} was not found.`);
+    }
+    return bridge;
+  }
+
+  async create(input: unknown) {
     const parsedInput = CreateChatBridgeInputSchema.parse(input);
     const timestamp = now();
     const bridge = ChatBridgeConfigSchema.parse({
       ...parsedInput,
       id: createId(`chat_${parsedInput.channel}`),
-      name: parsedInput.name || defaultChatBridgeName(parsedInput.channel, this.chatBridges.list().filter((item) => item.channel === parsedInput.channel).length + 1),
+      name: parsedInput.name || defaultChatBridgeName(parsedInput.channel, this.store.listBridges().filter((item) => item.channel === parsedInput.channel).length + 1),
       enabled: parsedInput.enabled ?? false,
       allowedUserIds: parsedInput.allowedUserIds || [],
       pollIntervalMs: parsedInput.pollIntervalMs || 3000,
@@ -49,13 +54,13 @@ export class ChatBridgeService {
       createdAt: timestamp,
       updatedAt: timestamp,
     });
-    this.chatBridges.put(bridge);
+    await this.store.putBridge(bridge);
     return publicChatBridge(bridge);
   }
 
-  update(id: string, input: unknown) {
+  async update(id: string, input: unknown) {
     const parsedInput = UpdateChatBridgeInputSchema.parse(input);
-    const current = this.require(id);
+    const current = this.resolve(id);
     const nextSettings = mergeChatBridgeSettings(current.settings, parsedInput.settings);
     const updated = ChatBridgeConfigSchema.parse({
       ...current,
@@ -66,19 +71,11 @@ export class ChatBridgeService {
       settings: nextSettings,
       updatedAt: now(),
     });
-    this.chatBridges.put(updated);
-    return publicChatBridge(updated);
+    await this.store.putBridge(updated);
+    return this.require(id);
   }
 
-  delete(id: string) {
-    const deleted = this.chatBridges.delete(id);
-    if (deleted) {
-      for (const session of this.chatSessions.list()) {
-        if (session.bridgeId === id) {
-          this.chatSessions.delete(session.id);
-        }
-      }
-    }
-    return deleted;
+  async delete(id: string) {
+    return this.store.deleteBridge(id);
   }
 }

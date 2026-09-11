@@ -93,6 +93,7 @@ export function registerNodeAgentIdentityRoutes(app: FastifyInstance, options: O
         identity.rollbackControlPlaneConnection(staged);
         throw error;
       }
+      identity.markControlPlaneConnectionRemoteAccepted(staged);
       const stored = identity.commitControlPlaneConnection(staged, {
         name: input.controlPlaneName || (typeof joined.name === "string" && joined.name ? joined.name : undefined),
       });

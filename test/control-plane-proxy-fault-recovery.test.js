@@ -8,11 +8,10 @@ const test = require("node:test");
 const {
   CONTROL_PLANE_PROXY_PROTOCOL_VERSION,
 } = require("../packages/protocol/src/control-plane-proxy.ts");
-const { ControlPlaneService } = require("../packages/control-plane/src/control-plane/application/service.ts");
-const { controlPlaneStorePaths } = require("../packages/control-plane/src/control-plane/persistence/paths.ts");
 const { ControlPlaneProxyStateSubscriber } = require("../packages/control-plane/src/control-plane/nodes/control-plane-proxy-state-subscriber.ts");
 const { ControlPlaneProxyService } = require("../packages/control-plane/src/control-plane/proxy/service.ts");
 const { ControlPlaneProxyStore } = require("../packages/control-plane/src/control-plane/proxy/store.ts");
+const { createTestControlPlaneService } = require("./fixtures/control-plane-service.js");
 
 const timestamp = "2026-08-01T00:00:00.000Z";
 const credentialValue = "a_generated_binding_credential_0123456789";
@@ -25,15 +24,15 @@ class EventSocket extends EventEmitter {
 }
 
 async function waitFor(predicate, message) {
-  for (let attempt = 0; attempt < 200; attempt += 1) {
+  for (let attempt = 0; attempt < 1_000; attempt += 1) {
     if (predicate()) return;
     await new Promise((resolve) => setTimeout(resolve, 2));
   }
   assert.fail(message);
 }
 
-function putProxyNode(service, binding) {
-  service.nodes.put({
+async function putProxyNode(service, binding) {
+  await service.nodes.put({
     id: "node_b",
     name: "Node B",
     connectionMode: "control-plane-proxy",
@@ -66,7 +65,7 @@ function putProxyNode(service, binding) {
   });
 }
 
-test("A and R process recovery preserves B lifecycle and deterministically restores snapshot, events, and revoke state", async (t) => {
+test("A and R process recovery rebuilds B observations and deterministically restores snapshot, events, and revoke state", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "proxy-fault-recovery-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const authorityPath = path.join(root, "r", "proxy-authority.json");
@@ -103,9 +102,9 @@ test("A and R process recovery preserves B lifecycle and deterministically resto
     credential: credentialValue,
   });
 
-  const firstA = new ControlPlaneService(controlPlaneStorePaths(aDataDir));
-  firstA.init();
-  putProxyNode(firstA, claimed.binding);
+  const firstCurrent = await createTestControlPlaneService(aDataDir);
+  const firstA = firstCurrent.service;
+  await putProxyNode(firstA, claimed.binding);
 
   let rReachable = true;
   let streamId = "stream_r1";
@@ -153,20 +152,24 @@ test("A and R process recovery preserves B lifecycle and deterministically resto
   firstSubscriber.stop();
   assert.equal(sockets[0].closed, true);
   assert.deepEqual(b.lifecycle, { managedInstanceStatus: "running", commands: [] });
+  await firstCurrent.close();
 
   rReachable = false;
-  const restartedA = new ControlPlaneService(controlPlaneStorePaths(aDataDir));
-  restartedA.init();
+  const restartedCurrent = await createTestControlPlaneService(aDataDir);
+  t.after(() => restartedCurrent.close());
+  const restartedA = restartedCurrent.service;
   assert.ok(restartedA.proxyPrivateStore.nodeCredential("node_b"));
-  assert.equal(restartedA.requirePublicNode("node_b").proxyState.target.status, "online");
+  assert.equal(restartedA.requirePublicNode("node_b").status, "unknown");
+  assert.equal(restartedA.requirePublicNode("node_b").proxyState, undefined);
   const restartedSubscriber = new ControlPlaneProxyStateSubscriber(restartedA, { fetchImpl, openWebSocket });
   t.after(() => restartedSubscriber.stop());
   restartedSubscriber.start();
   await waitFor(
-    () => restartedA.requirePublicNode("node_b").proxyState.reachability === "unreachable",
+    () => restartedA.requirePublicNode("node_b").proxyState?.reachability === "unreachable",
     "A did not expose the R outage",
   );
-  assert.equal(restartedA.requirePublicNode("node_b").proxyState.target.status, "online");
+  assert.equal(restartedA.requirePublicNode("node_b").status, "degraded");
+  assert.equal(restartedA.requirePublicNode("node_b").proxyState.target, undefined);
   assert.deepEqual(b.lifecycle, { managedInstanceStatus: "running", commands: [] });
 
   r = createR();

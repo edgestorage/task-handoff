@@ -2,8 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { nodeAgentStorePaths } from "../src/node-agent/persistence/paths.ts";
-import { openNodeAgentDatabase } from "../src/node-agent/stories/database/database.ts";
-import { createNodeAgentRepository } from "../src/node-agent/stories/database/repository.ts";
+import { openNodeAgentDatabase } from "../src/node-agent/persistence/database.ts";
+import { createNodeAgentRepository } from "../src/node-agent/persistence/repository.ts";
 
 export async function createStoryDatabaseFixture(prefix = "task-handoff-story-db-") {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));

@@ -46,6 +46,8 @@ const { EventConnectionRetryTimer, eventConnectionRetryDelay, eventConnectionSaf
 const { JsonCollection, JsonFile } = require("../packages/control-plane/src/shared/persistence/store.ts");
 const { controlPlaneStorePaths } = require("../packages/control-plane/src/control-plane/persistence/paths.ts");
 const { nodeAgentStorePaths } = require("../packages/control-plane/src/node-agent/persistence/paths.ts");
+const { openNodeAgentDatabaseSync } = require("../packages/control-plane/src/node-agent/persistence/database.ts");
+const { createNodeAgentRepository } = require("../packages/control-plane/src/node-agent/persistence/repository.ts");
 const { aiSessionUserPrompts, displayAiSessionMessage, displayAiSessionTitle, launchableAppsForInstance: uiLaunchableAppsForInstance } = require("../packages/control-plane-ui/src/apps/control-plane/useInstanceSessions.ts");
 const { launchableAppsForInstance: chatLaunchableAppsForInstance } = require("../packages/control-plane/src/control-plane/chat/rendering.ts");
 const { AiSessionEventType, AiSessionEventTopic, AiSessionUnreadEventType } = require("../packages/protocol/src/ai-sessions.ts");
@@ -65,6 +67,44 @@ const controlledProcessIdentityRouteStubLines = [
   "    res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ data: { instanceId: process.env.TASK_HANDOFF_INSTANCE_ID, pid: process.pid, processNonce: process.env.TASK_HANDOFF_LOCAL_PROCESS_NONCE, startIdentity } })); return;",
   "  }",
 ];
+
+async function withNodeAgentRepository(dataDir, operation) {
+  const repository = createNodeAgentRepository(openNodeAgentDatabaseSync(nodeAgentStorePaths(dataDir)));
+  try {
+    return await operation(repository);
+  } finally {
+    await repository.close();
+  }
+}
+
+function writeLegacyNodeIdentity(dataDir, nodeId) {
+  const timestamp = new Date().toISOString();
+  fs.writeFileSync(path.join(dataDir, "identity.json"), JSON.stringify({
+    nodeId,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    controlPlanePairings: [],
+    controlPlaneConnections: [],
+  }));
+}
+
+function writeLegacyNodeRuntime(dataDir, nodeId, runtimeId) {
+  const timestamp = new Date().toISOString();
+  const runtimeDir = path.join(dataDir, "node-runtimes");
+  fs.mkdirSync(runtimeDir, { recursive: true });
+  fs.writeFileSync(path.join(runtimeDir, `${runtimeId}.json`), JSON.stringify({
+    id: runtimeId,
+    nodeId,
+    name: "Legacy Docker",
+    type: "docker",
+    status: "online",
+    accessStrategy: "direct-port",
+    capabilities: {},
+    labels: {},
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  }));
+}
 
 test("node agent uses an explicit packaged version as the runtime convergence target", () => {
   const previousVersion = process.env.TASK_HANDOFF_VERSION;
@@ -5191,6 +5231,7 @@ test("node agent runs local docker behind node-local target and auto-imports age
   const fetchCalls = [];
   let modelEnvironmentStatus = 200;
   let containerExists = false;
+  let registrationAfterRestart = Promise.resolve();
   const desiredRuntimeVersion = runtimeVersionStateForActual().desiredVersion;
   let app;
   app = await createNodeAgentApp({
@@ -5263,16 +5304,22 @@ test("node agent runs local docker behind node-local target and auto-imports age
       }
       if (args[0] === "restart" && app) {
         const instance = app.nodeAgentState.controlledInstances.get("inst_1");
-          setImmediate(() => app.nodeAgentState.registerInstance("inst_1", {
-            instanceId: "inst_1",
-            protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
-            appInventory: emptyAppInventory(),
-            controlMode: "controlled",
-            capabilities: {},
-            build: { component: "controlled-instance", packageVersion: desiredRuntimeVersion },
-            target: { strategy: "direct-port", status: "reachable", web: "http://127.0.0.1:18080" },
-            workspace: { status: "ready" },
-          }, instance.registrationToken));
+        registrationAfterRestart = new Promise((resolve, reject) => setImmediate(() => {
+          try {
+            resolve(app.nodeAgentState.registerInstance("inst_1", {
+              instanceId: "inst_1",
+              protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
+              appInventory: emptyAppInventory(),
+              controlMode: "controlled",
+              capabilities: {},
+              build: { component: "controlled-instance", packageVersion: desiredRuntimeVersion },
+              target: { strategy: "direct-port", status: "reachable", web: "http://127.0.0.1:18080" },
+              workspace: { status: "ready" },
+            }, instance.registrationToken));
+          } catch (error) {
+            reject(error);
+          }
+        }));
       }
       return { stdout: "", stderr: "" };
     },
@@ -5358,7 +5405,7 @@ test("node agent runs local docker behind node-local target and auto-imports age
   modelEnvironmentStatus = 503;
   await createAndAssignNodeModel(app, "inst_1", { key: "restart-fallback-key" });
   assert.equal(
-    app.nodeAgentState.instancePrivateConfigs.get("inst_1").environment.OPENAI_API_KEY,
+    app.nodeAgentState.instancePrivateConfigs.inspectMaterialized("inst_1").environment.OPENAI_API_KEY,
     "restart-fallback-key",
   );
 
@@ -5373,6 +5420,7 @@ test("node agent runs local docker behind node-local target and auto-imports age
     payload: {},
   });
   assert.equal(restarted.statusCode, 200);
+  await registrationAfterRestart;
   assert.equal(calls.filter(([, args]) => args[0] === "restart").length, restartCallsBeforeRequest + 1);
   assert.deepEqual(
     fetchCalls
@@ -6169,11 +6217,10 @@ test("node agent allows a paired-HMAC credential to revoke only itself through t
   assert.equal(reused.json().error.code, "NODE_AGENT_HMAC_KEY_INVALID");
 });
 
-test("node agent identity sanitizes unknown stored fields and writes atomically with private permissions", () => {
+test("node agent identity sanitizes v0.0.28 fields into SQLite with private permissions", () => {
   const dataDir = tempDataDir("node-agent-identity-sanitize");
   const paths = nodeAgentStorePaths(dataDir);
   const timestamp = new Date().toISOString();
-  const warnings = [];
   fs.mkdirSync(path.dirname(paths.identityPath), { recursive: true });
   fs.writeFileSync(paths.identityPath, JSON.stringify({
     nodeId: " node_sanitized ",
@@ -6196,24 +6243,28 @@ test("node agent identity sanitizes unknown stored fields and writes atomically 
     }],
   }));
 
-  const store = new NodeAgentIdentityStore(paths, { logger: (message, details) => warnings.push({ message, details }) });
+  const store = new NodeAgentIdentityStore(paths);
   const identity = store.read();
   assert.equal(identity.nodeId, "node_sanitized");
   assert.equal(identity.futureIdentityField, undefined);
   assert.equal(identity.pairingInvites, undefined);
   assert.equal(identity.controlPlanePairings[0].futurePairingField, undefined);
-  assert.equal(warnings.length, 3);
+  const verify = new DatabaseSync(paths.databasePath, { readOnly: true });
+  const migration = verify.prepare("SELECT details FROM na_migration_ledger WHERE id = ?").get("1000_import_v0_0_28_p0");
+  assert.equal(JSON.parse(migration.details).warningCount, 3);
+  verify.close();
 
   store.write(identity);
-  const persisted = JSON.parse(fs.readFileSync(paths.identityPath, "utf8"));
+  const persisted = store.read();
   assert.equal(persisted.futureIdentityField, undefined);
   assert.equal(persisted.pairingInvites, undefined);
   assert.equal(persisted.controlPlanePairings[0].futurePairingField, undefined);
-  assert.equal(fs.statSync(paths.identityPath).mode & 0o777, 0o600);
-  assert.equal(fs.readdirSync(path.dirname(paths.identityPath)).filter((name) => name.includes("identity.json.")).length, 0);
+  assert.equal(fs.existsSync(paths.identityPath), false);
+  assert.equal(fs.existsSync(`${paths.identityPath}.migrated-v0.0.28`), true);
+  assert.equal(fs.statSync(paths.databasePath).mode & 0o777, 0o600);
 });
 
-test("node agent does not replace malformed or truncated identity data", () => {
+test("node agent blocks migration without replacing malformed or truncated v0.0.28 identity data", () => {
   const dataDir = tempDataDir("node-agent-identity-truncated");
   const paths = nodeAgentStorePaths(dataDir);
   const truncated = '{"nodeId":"node_original","remoteControlPlanes":[';
@@ -6222,12 +6273,14 @@ test("node agent does not replace malformed or truncated identity data", () => {
 
   assert.throws(
     () => new NodeAgentIdentityService(paths).resolveNodeId(),
-    (error) => error.code === "NODE_AGENT_IDENTITY_INVALID" && /invalid JSON/.test(error.message),
+    (error) => error.code === "NODE_AGENT_DATABASE_STARTUP_FAILED"
+      && error.cause?.code === "NODE_AGENT_LEGACY_MIGRATION_FAILED"
+      && /could not be read/.test(error.message),
   );
   assert.equal(fs.readFileSync(paths.identityPath, "utf8"), truncated);
 });
 
-test("node agent migrates legacy remote records into separate pairings and outbound connections", () => {
+test("node agent migrates v0.0.28 remote records into SQLite pairings and outbound connections", () => {
   const paths = nodeAgentStorePaths(tempDataDir("node-agent-identity-remote-migration"));
   const timestamp = new Date().toISOString();
   fs.mkdirSync(path.dirname(paths.identityPath), { recursive: true });
@@ -6255,10 +6308,12 @@ test("node agent migrates legacy remote records into separate pairings and outbo
   }]);
 
   store.write(identity);
-  const persisted = JSON.parse(fs.readFileSync(paths.identityPath, "utf8"));
-  assert.equal(persisted.remoteControlPlanes, undefined);
+  const persisted = store.read();
   assert.equal(persisted.controlPlanePairings.length, 2);
   assert.equal(persisted.controlPlaneConnections.length, 1);
+  assert.equal(fs.existsSync(paths.identityPath), false);
+  const archived = JSON.parse(fs.readFileSync(`${paths.identityPath}.migrated-v0.0.28`, "utf8"));
+  assert.equal(archived.remoteControlPlanes.length, 2);
 });
 
 test("node agent does not initialize over an unreadable identity path", (t) => {
@@ -6273,15 +6328,16 @@ test("node agent does not initialize over an unreadable identity path", (t) => {
 
   assert.throws(
     () => new NodeAgentIdentityService(paths).resolveNodeId(),
-    (error) => error.code === "NODE_AGENT_IDENTITY_READ_FAILED",
+    (error) => error.code === "NODE_AGENT_DATABASE_STARTUP_FAILED"
+      && error.cause?.code === "NODE_AGENT_LEGACY_MIGRATION_FAILED"
+      && /regular file/.test(error.message),
   );
   assert.equal(fs.lstatSync(paths.identityPath).isSymbolicLink(), true);
 });
 
-test("node agent identity ignores invalid stored credentials and invite records", () => {
+test("node agent identity migration ignores invalid v0.0.28 credentials and invite records", () => {
   const paths = nodeAgentStorePaths(tempDataDir("node-agent-identity-invalid-records"));
   const timestamp = new Date().toISOString();
-  const warnings = [];
   fs.mkdirSync(path.dirname(paths.identityPath), { recursive: true });
   fs.writeFileSync(paths.identityPath, JSON.stringify({
     nodeId: "node_valid",
@@ -6296,13 +6352,15 @@ test("node agent identity ignores invalid stored credentials and invite records"
     ],
   }));
 
-  const store = new NodeAgentIdentityStore(paths, { logger: (message, details) => warnings.push({ message, details }) });
+  const store = new NodeAgentIdentityStore(paths);
   const stored = store.read();
   assert.equal(stored.pairingInvites, undefined);
   assert.deepEqual(stored.controlPlanePairings, []);
   assert.deepEqual(stored.controlPlaneConnections, []);
-  assert.equal(warnings.filter((warning) => warning.message.includes("was ignored")).length, 2);
-  assert.equal(warnings.filter((warning) => warning.message.includes("pairing invites were discarded")).length, 1);
+  const verify = new DatabaseSync(paths.databasePath, { readOnly: true });
+  const migration = verify.prepare("SELECT details FROM na_migration_ledger WHERE id = ?").get("1000_import_v0_0_28_p0");
+  assert.equal(JSON.parse(migration.details).warningCount, 3);
+  verify.close();
   store.write(stored);
   assert.deepEqual(new NodeAgentIdentityService(paths).remoteSecrets(), []);
 });
@@ -6781,11 +6839,11 @@ test("node agent connects itself to another control plane with a join token", as
   assert.ok(joined.auth.keyId);
   assert.equal(joined.auth.secret, undefined);
 
-  const identity = JSON.parse(fs.readFileSync(path.join(agentDataDir, "identity.json"), "utf8"));
-  const connection = identity.controlPlaneConnections.find((item) => item.url === `http://127.0.0.1:${targetPort}`);
+  const identity = nodeAgent.nodeAgentIdentityService;
+  const connection = identity.listControlPlaneConnections().find((item) => item.url === `http://127.0.0.1:${targetPort}`);
   assert.ok(connection);
   assert.equal(connection.enabled, true);
-  const pairing = identity.controlPlanePairings.find((item) => item.keyId === connection.pairingKeyId);
+  const pairing = identity.listControlPlanePairings().find((item) => item.keyId === connection.pairingKeyId);
   assert.equal(pairing.keyId, joined.auth.keyId);
 });
 
@@ -7213,7 +7271,7 @@ test("node agent persists and live-syncs managed Codex settings", async (t) => {
   assert.equal(sync.method, "PUT");
   assert.deepEqual(sync.body, settings);
   assert.equal(sync.headers.authorization, "Bearer instance-registration-secret");
-  assert.deepEqual(app.nodeAgentState.instancePrivateConfigs.get("inst_codex_settings_sync").codexSettings, settings);
+  assert.deepEqual(app.nodeAgentState.instancePrivateConfigs.inspectMaterialized("inst_codex_settings_sync").codexSettings, settings);
 });
 
 test("node agent provisions one built-in local runtime and creates local instances without images", async (t) => {
@@ -7713,7 +7771,7 @@ test("node agent starts localhost runtime as a host controlled-instance process"
     },
   });
   assert.equal(noModelAssignment.statusCode, 200);
-  assert.deepEqual(noModelAssignment.json().data.instance.modelSelection, { codexModelHash: null });
+  assert.deepEqual(noModelAssignment.json().data.instance.modelSelection, { modelEntityIds: [] });
 
   const restartedWithoutModel = await app.inject({
     method: "POST",
@@ -8264,12 +8322,14 @@ test("node agent shutdown stops localhost processes while preserving active rest
   const signalRows = fs.readFileSync(signalLog, "utf8").trim().split("\n").map((line) => JSON.parse(line));
   assert.deepEqual(signalRows.map((row) => row.signal), ["SIGTERM"]);
 
-  const localRecord = JSON.parse(fs.readFileSync(path.join(dataDir, "controlled-instances", "inst_local_shutdown.json"), "utf8"));
-  assert.equal(localRecord.status, "registering");
-  assert.equal(localRecord.connectionStatus, "offline");
-  const dockerRecord = JSON.parse(fs.readFileSync(path.join(dataDir, "controlled-instances", "inst_docker_shutdown.json"), "utf8"));
-  assert.equal(dockerRecord.status, dockerStatusBeforeShutdown);
-  assert.equal(dockerRecord.connectionStatus, "unknown");
+  await withNodeAgentRepository(dataDir, (repository) => {
+    const localRecord = repository.topology.instances.get("inst_local_shutdown");
+    assert.equal(localRecord.status, "registering");
+    assert.equal(localRecord.connectionStatus, "offline");
+    const dockerRecord = repository.topology.instances.get("inst_docker_shutdown");
+    assert.equal(dockerRecord.status, dockerStatusBeforeShutdown);
+    assert.equal(dockerRecord.connectionStatus, "unknown");
+  });
 });
 
 test("node agent restores localhost runtime processes after graceful shutdown", async (t) => {
@@ -8394,7 +8454,8 @@ test("node agent restores localhost runtime processes after graceful shutdown", 
   assert.deepEqual(envRows.map((row) => row.baseUrl), ["https://restore.example/v1", "https://restore.example/v1"]);
   const modelEnvironmentPath = path.join(dataDir, "model-environments", "inst_local_restore.json");
   assert.equal(fs.existsSync(modelEnvironmentPath), false);
-  assert.equal(fs.statSync(path.join(dataDir, "models", `${restoreModel.id}.json`)).mode & 0o777, 0o600);
+  assert.ok(app.nodeAgentState.modelRegistry.list().some((model) => model.id === restoreModel.id));
+  assert.equal(fs.statSync(nodeAgentStorePaths(dataDir).databasePath).mode & 0o777, 0o600);
 });
 
 test("node agent restores active localhost runtime processes after unclean shutdown state", async (t) => {
@@ -8511,7 +8572,7 @@ test("node agent restores active localhost runtime processes after unclean shutd
       return false;
     }
   }, "orphaned localhost runtime readiness");
-  app.nodeAgentState.controlledInstances.put({
+  await withNodeAgentRepository(dataDir, (repository) => repository.topology.instances.put({
     ...child,
     status: "running",
     connectionStatus: "online",
@@ -8523,7 +8584,7 @@ test("node agent restores active localhost runtime processes after unclean shutd
         "task-handoff.local-process-nonce": orphanNonce,
       },
     },
-  });
+  }));
   app = await createNodeAgentApp({
     dataDir,
     logger: false,
@@ -8922,6 +8983,8 @@ test("node agent migrates legacy local stored endpoint-shaped instances on start
   const timestamp = new Date().toISOString();
   const instanceDir = path.join(dataDir, "controlled-instances");
   fs.mkdirSync(instanceDir, { recursive: true });
+  writeLegacyNodeIdentity(dataDir, "node_current");
+  writeLegacyNodeRuntime(dataDir, "node_current", "runtime_local_docker");
   fs.writeFileSync(
     path.join(instanceDir, "inst_legacy.json"),
     `${JSON.stringify(
@@ -8934,7 +8997,7 @@ test("node agent migrates legacy local stored endpoint-shaped instances on start
           futureSourceField: true,
         },
         sourceSnapshot: {},
-        nodeId: "node_old",
+        nodeId: "node_current",
         runtimeId: "runtime_local_docker",
         imageSelection: { imageId: "market_taskhandoff_browser" },
         status: "running",
@@ -8991,6 +9054,8 @@ test("node agent tolerates extra fields in stored controlled instances", async (
   const instanceFile = path.join(instanceDir, "inst_extra.json");
   const desiredVersion = runtimeVersionStateForActual("0.9.0").desiredVersion;
   fs.mkdirSync(instanceDir, { recursive: true });
+  writeLegacyNodeIdentity(dataDir, "node_current");
+  writeLegacyNodeRuntime(dataDir, "node_current", "runtime_local_docker");
   fs.writeFileSync(
     instanceFile,
     `${JSON.stringify(
@@ -9185,7 +9250,7 @@ test("node agent tolerates extra fields in stored controlled instances", async (
   assert.equal(listed.json().data[0].runtimeVersion.phase, "pending");
   assert.equal(listed.json().data[0].runtimeVersion.attempt, 2);
   assert.equal(listed.json().data[0].runtimeVersion.error.code, "INSTANCE_RUNTIME_INSTALL_FAILED");
-  assert.ok(warnings.some((warning) => warning.includes("legacy controlled instance field was ignored") && warning.includes("inst_extra") && warning.includes("receiver")));
+  assert.ok(warnings.some((warning) => warning.includes("legacy node agent field was ignored") && warning.includes("inst_extra") && warning.includes("receiver")));
 });
 
 test("node agent proxies mutating instance API requests while runtime convergence is pending", async (t) => {

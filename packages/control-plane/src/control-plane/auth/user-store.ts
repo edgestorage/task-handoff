@@ -49,13 +49,17 @@ function systemRole(id: string, name: string, permissionIds: readonly ControlPla
 
 export class ControlPlaneUserStore {
   private repositoryValue: ControlPlaneUserRepository | undefined;
+  private readonly injectedRepository: ControlPlaneUserRepository | undefined;
+  private readonly ownsRepository: boolean;
   private stateValue: { initialized: boolean; legacyDataPresent: boolean; databaseDialect: "sqlite" | "postgresql" } | undefined;
   private readonly paths: ControlPlaneStorePaths;
   private readonly database?: ControlPlaneUserDatabaseConfigInput;
 
-  constructor(paths: ControlPlaneStorePaths, options: { database?: ControlPlaneUserDatabaseConfigInput } = {}) {
+  constructor(paths: ControlPlaneStorePaths, options: { database?: ControlPlaneUserDatabaseConfigInput; repository?: ControlPlaneUserRepository } = {}) {
     this.paths = paths;
     this.database = options.database;
+    this.injectedRepository = options.repository;
+    this.ownsRepository = !options.repository;
   }
 
   get users(): ControlPlaneRecordCollection<UserAccountRecord> { return this.repository().users; }
@@ -69,7 +73,7 @@ export class ControlPlaneUserStore {
 
   async init() {
     if (this.repositoryValue) return this.state();
-    this.repositoryValue = await createControlPlaneUserRepository(this.paths, this.database);
+    this.repositoryValue = this.injectedRepository || await createControlPlaneUserRepository(this.paths, this.database);
     try {
       if (legacyAuthDataPresent(this.paths)) {
         await this.repositoryValue.transaction(async (transaction) => {
@@ -87,7 +91,11 @@ export class ControlPlaneUserStore {
       if (state.initialized) await this.ensureSystemRoles();
       return state;
     } catch (error) {
-      await this.close();
+      if (this.ownsRepository) await this.close();
+      else {
+        this.repositoryValue = undefined;
+        this.stateValue = undefined;
+      }
       throw error;
     }
   }
@@ -114,7 +122,7 @@ export class ControlPlaneUserStore {
     const repository = this.repositoryValue;
     this.repositoryValue = undefined;
     this.stateValue = undefined;
-    await repository?.close();
+    if (this.ownsRepository) await repository?.close();
   }
 
   private repository() {

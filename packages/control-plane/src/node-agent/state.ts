@@ -26,8 +26,11 @@ import {
   type NodeRuntime,
   type Project,
 } from "@task-handoff/protocol/control-plane";
-import { JsonCollection, createId, createSecret } from "../shared/persistence/store.ts";
+import { createId, createSecret } from "../shared/persistence/store.ts";
 import type { NodeAgentStorePaths } from "./persistence/paths.ts";
+import { createNodeAgentRepository, type NodeAgentRepository } from "./persistence/repository.ts";
+import { openNodeAgentDatabaseSync } from "./persistence/database.ts";
+import type { InstanceRepository, LocalFolderRepository, RuntimeRepository } from "./persistence/topology-repository.ts";
 import {
   CreateLocalFolderSchema,
   UpdateLocalFolderSchema,
@@ -143,68 +146,51 @@ function defaultAccessStrategyForRuntime(type: NodeRuntime["type"]) {
   return type === "docker" ? "direct-port" as const : "node-proxy" as const;
 }
 
-export class ControlledInstanceCollection extends JsonCollection<ControlledInstance> {
+export class ControlledInstanceCollection {
   private onStored?: (instance: ControlledInstance) => void;
-  private readonly privateConfigs: InstancePrivateConfigStore;
+  private readonly records: InstanceRepository;
 
-  constructor(
-    directory: string,
-    options: ConstructorParameters<typeof JsonCollection<ControlledInstance>>[1],
-    privateConfigs: InstancePrivateConfigStore,
-  ) {
-    super(directory, options);
-    this.privateConfigs = privateConfigs;
+  constructor(records: InstanceRepository) {
+    this.records = records;
   }
+
+  init() {}
 
   setOnStored(listener: (instance: ControlledInstance) => void) {
     this.onStored = listener;
   }
 
-  override put(record: ControlledInstance) {
-    const persistedRevision = super.get(record.id)?.stateRevision || 0;
-    const existingPrivateConfig = this.privateConfigs.get(record.id);
-    const instanceCredential = record.registrationToken || existingPrivateConfig?.instanceCredential;
-    if (instanceCredential) {
-      this.privateConfigs.materialize(
-        record.id,
-        instanceCredential,
-        existingPrivateConfig?.environment || {},
-        existingPrivateConfig?.modelCatalog,
-      );
-    }
-    const { registrationToken: _registrationToken, ...persistentRecord } = record;
-    const stored = super.put(ControlledInstanceSchema.parse({
-      ...persistentRecord,
-      stateRevision: Math.max(record.stateRevision || 0, persistedRevision) + 1,
-    }));
-    const hydrated = this.hydrate(stored);
+  put(record: ControlledInstance) {
+    const hydrated = this.records.put(ControlledInstanceSchema.parse(record));
     this.onStored?.(hydrated);
     return hydrated;
   }
 
-  override get(id: string) {
-    const stored = super.get(id);
-    return stored ? this.hydrate(stored) : undefined;
+  putObservation(record: ControlledInstance) {
+    const hydrated = this.records.putObservation(ControlledInstanceSchema.parse(record));
+    this.onStored?.(hydrated);
+    return hydrated;
   }
 
-  override list() {
-    return super.list().map((instance) => this.hydrate(instance));
+  get(id: string) {
+    return this.records.get(id);
   }
 
-  private hydrate(instance: ControlledInstance) {
-    const instanceCredential = this.privateConfigs.get(instance.id)?.instanceCredential || instance.registrationToken;
-    return ControlledInstanceSchema.parse({
-      ...instance,
-      registrationToken: instanceCredential,
-    });
+  list() {
+    return this.records.list();
+  }
+
+  delete(id: string) {
+    return this.records.delete(id);
   }
 }
 
 export class NodeAgentState {
   readonly nodeId: string;
   readonly paths: NodeAgentStorePaths;
-  readonly localFolders: JsonCollection<NodeLocalFolder>;
-  readonly nodeRuntimes: JsonCollection<NodeRuntime>;
+  readonly persistence: NodeAgentRepository;
+  readonly localFolders: LocalFolderRepository;
+  readonly nodeRuntimes: RuntimeRepository;
   readonly controlledInstances: ControlledInstanceCollection;
   readonly environmentTemplates: EnvironmentTemplateStore;
   readonly instancePrivateConfigs: InstancePrivateConfigStore;
@@ -216,29 +202,24 @@ export class NodeAgentState {
   private readonly containerUrlOverride?: string;
   private readonly platform: NodeJS.Platform;
 
-  constructor(paths: NodeAgentStorePaths, nodeId: string, endpoint: string | undefined, containerUrl: string | undefined, listenerPort: number, platform: NodeJS.Platform) {
+  constructor(paths: NodeAgentStorePaths, nodeId: string, endpoint: string | undefined, containerUrl: string | undefined, listenerPort: number, platform: NodeJS.Platform, repository?: NodeAgentRepository) {
     this.paths = paths;
     this.nodeId = nodeId;
-    this.localFolders = new JsonCollection(paths.localFoldersDir, { schema: NodeLocalFolderSchema, sanitize: sanitizeStoredNodeLocalFolder });
-    this.nodeRuntimes = new JsonCollection(paths.nodeRuntimesDir, { schema: NodeRuntimeSchema });
+    const persistence = repository || createNodeAgentRepository(openNodeAgentDatabaseSync(paths));
+    this.persistence = persistence;
+    persistence.topology.nodeIdentity.ensure(nodeId, now());
+    this.localFolders = persistence.topology.localFolders;
+    this.nodeRuntimes = persistence.topology.runtimes;
     this.instancePrivateConfigs = new InstancePrivateConfigStore(paths);
-    this.controlledInstances = new ControlledInstanceCollection(paths.controlledInstancesDir, {
-      schema: ControlledInstanceSchema,
-      sanitize: (value) => sanitizeStoredControlledInstance(value, (warning) => {
-        console.warn(JSON.stringify({
-          message: "legacy controlled instance field was ignored",
-          ...warning,
-        }));
-      }),
-    }, this.instancePrivateConfigs);
+    this.controlledInstances = new ControlledInstanceCollection(persistence.topology.instances);
     this.environmentTemplates = new EnvironmentTemplateStore(paths);
-    this.gitCredentials = new NodeGitCredentialStore(paths);
+    this.gitCredentials = new NodeGitCredentialStore(paths, { repository: persistence.git });
     this.modelRegistry = new NodeModelRegistry(paths, nodeId, {
       has: (id) => Boolean(this.controlledInstances.get(id)),
       list: () => this.listInstances(),
       require: (id) => this.requireInstance(id),
       put: (instance) => this.controlledInstances.put(instance),
-    });
+    }, persistence.model);
     this.updateJobs = new NodeUpdateJobs(paths);
     this.listenerPort = listenerPort;
     this.platform = platform;
@@ -262,9 +243,7 @@ export class NodeAgentState {
   }
 
   init() {
-    this.localFolders.init();
     for (const folder of this.localFolders.list()) this.localFolders.put(folder);
-    this.nodeRuntimes.init();
     this.instancePrivateConfigs.init();
     this.controlledInstances.init();
     this.environmentTemplates.init();
@@ -636,7 +615,23 @@ export class NodeAgentState {
       createdAt: timestamp,
       updatedAt: timestamp,
     });
-    const stored = this.controlledInstances.put(instance);
+    const stored = this.persistence.transactionSync(() => {
+      let committed = this.controlledInstances.put(instance);
+      const modelSelection = input.modelSelection;
+      if (modelSelection && Object.values(modelSelection).some((value) => Array.isArray(value) ? value.length > 0 : Boolean(value))) {
+        committed = this.modelRegistry.assign(id, {
+          modelSelection,
+          modelEntityIds: modelSelection.modelEntityIds,
+          codexModelHash: modelSelection.codexModelHash,
+          claudeModelHash: modelSelection.claudeModelHash,
+          opencodeModelHash: modelSelection.opencodeModelHash,
+        }).instance;
+      }
+      if (input.gitWorkspaceProvisioning?.credentials.every((credential) => credential.retention === "operation-only")) {
+        this.gitCredentials.putWorkspaceProvisioning(input.gitWorkspaceProvisioning);
+      }
+      return committed;
+    });
     this.instancePrivateConfigs.materialize(
       stored.id,
       stored.registrationToken,
@@ -644,9 +639,6 @@ export class NodeAgentState {
       this.modelRegistry.privateCatalog(stored.id),
       stored.config.codexSettings,
     );
-    if (input.gitWorkspaceProvisioning?.credentials.every((credential) => credential.retention === "operation-only")) {
-      this.gitCredentials.putWorkspaceProvisioning(input.gitWorkspaceProvisioning);
-    }
     return stored;
   }
 
@@ -754,7 +746,7 @@ export class NodeAgentState {
       lastHeartbeatAt: timestamp,
       updatedAt: timestamp,
     });
-    return this.controlledInstances.put(updated);
+    return this.controlledInstances.putObservation(updated);
   }
 
   heartbeatInstance(id: string, input: ControlledInstanceHeartbeat, token?: string) {
@@ -792,7 +784,7 @@ export class NodeAgentState {
       lastHeartbeatAt: timestamp,
       updatedAt: timestamp,
     });
-    return this.controlledInstances.put(updated);
+    return this.controlledInstances.putObservation(updated);
   }
 
   private validateInstanceReport(existing: ControlledInstance, input: ControlledInstanceRegister, token?: string) {
@@ -826,7 +818,6 @@ export class NodeAgentState {
   context(instance: ControlledInstance, modelEnv: Record<string, string> = this.resolvedAssignedModelEnvironment(instance.id)): ExecutorContext {
     const effectiveModelEnv = modelEnv;
     const image = instance.imageSnapshot || InstanceImageSnapshotSchema.parse({ id: "img_localhost", origin: "custom", name: "Localhost", repository: "localhost", tag: "local", requestedReference: "localhost:local", pullPolicy: "if-not-present", capabilities: [], optionalApps: [], defaultEnv: {}, labels: {}, createdAt: instance.createdAt, updatedAt: instance.updatedAt });
-    const existingPrivateConfig = this.instancePrivateConfigs.get(instance.id);
     const privateConfig = this.instancePrivateConfigs.materialize(
       instance.id,
       instance.registrationToken,

@@ -7,23 +7,14 @@ import test from "node:test";
 import { NodeGitCredentialRuntimeBroker } from "../src/node-agent/git-credentials/runtime-broker.ts";
 import { NodeGitCredentialStore } from "../src/node-agent/git-credentials/store.ts";
 import { nodeAgentStorePaths } from "../src/node-agent/persistence/paths.ts";
+import { NodeAgentState } from "../src/node-agent/state.ts";
 
 const timestamp = "2026-08-23T00:00:00.000Z";
 
 test("an existing SSH invocation is rejected immediately after authorization revocation", async () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-git-ssh-revoke-"));
   try {
-    const store = new NodeGitCredentialStore(nodeAgentStorePaths(dataDir));
-    store.init();
-    store.putPayload({
-      credential: {
-        id: "gitcred_one", name: "SSH", kind: "ssh-key", scope: { scheme: "ssh", host: "git.example.com", pathPrefix: "/team/" },
-        secretSet: true, status: "enabled", revision: 1, createdAt: timestamp, updatedAt: timestamp,
-      },
-      secret: { kind: "ssh-key", privateKey: "unused-in-this-test", pinnedKnownHosts: "git.example.com ssh-ed25519 AAAA" },
-    });
-    store.putAuthorizationSet({ instanceId: "inst_one", generation: 1, credentialIds: ["gitcred_one"], updatedAt: timestamp });
-    const broker = new NodeGitCredentialRuntimeBroker(store);
+    const { store, broker } = authorizedBroker(dataDir);
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-git-ssh-invocation-"));
     (broker as unknown as { invocations: Map<string, unknown> }).invocations.set("invocation_one", {
       instanceId: "inst_one", remoteUrl: "ssh://git.example.com/team/repo.git", credentialId: "gitcred_one", credentialRevision: 1,
@@ -119,8 +110,19 @@ test("SSH agent exchange is bounded by the invocation deadline", async () => {
 });
 
 function authorizedBroker(dataDir: string) {
-  const store = new NodeGitCredentialStore(nodeAgentStorePaths(dataDir));
-  store.init();
+  const paths = nodeAgentStorePaths(dataDir);
+  const state = new NodeAgentState(paths, "node_one", "http://127.0.0.1:8091", undefined, 8091, "linux");
+  state.init();
+  state.createInstance({
+    id: "inst_one", runtimeId: "runtime_local_docker", imageSelection: { imageId: "img_one" },
+    image: {
+      id: "img_one", origin: "custom", name: "Image", repository: "image", tag: "latest",
+      requestedReference: "image:latest", pullPolicy: "if-not-present", capabilities: [], optionalApps: [],
+      defaultEnv: {}, labels: {}, createdAt: timestamp, updatedAt: timestamp,
+    },
+    source: { type: "local-folder", path: "/tmp/workspace" }, sourceSnapshot: {}, modelSelection: {},
+  });
+  const store = state.gitCredentials;
   store.putPayload({
     credential: {
       id: "gitcred_one", name: "SSH", kind: "ssh-key", scope: { scheme: "ssh", host: "git.example.com", pathPrefix: "/team/" },

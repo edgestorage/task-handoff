@@ -1,6 +1,4 @@
 import {
-  ChatBridgeConfigSchema,
-  ChatSessionBindingSchema,
   CONTROL_PLANE_PROTOCOL_VERSION,
   AppManagementJobResponseSchema,
   AppManagementSnapshotSchema,
@@ -13,7 +11,6 @@ import {
   NodeFolderTreeEntrySchema,
   NodeFolderPlaceSchema,
   sanitizeStoredImageProfile,
-  sanitizeStoredNode,
   sanitizeStoredProject,
   supportsAiSessionFileSizeLimitSettings,
   supportsAiSessionPersistenceSettings,
@@ -25,7 +22,6 @@ import {
   supportsNodeCodexManagedSettings,
   supportsNodeManagedGitCredentialRegistry,
   supportsNodeGitCredentialRuntimeBroker,
-  ModelConfigSchema,
   NodeSchema,
   PendingRouteSchema,
   ProjectSchema,
@@ -88,9 +84,10 @@ import { NodeAgentTransportResolver } from "../nodes/transport-resolver.ts";
 import { ControlPlaneProxyNodeAgentTransport } from "../nodes/control-plane-proxy-transport.ts";
 import { ControlPlaneProxyPrivateStore, controlPlaneProxyPrivateStorePaths } from "../nodes/control-plane-proxy-private-store.ts";
 import { ControlPlaneProxyLifecycle } from "../nodes/proxy-lifecycle.ts";
-import { NodeConnectionManager, PendingPairingRevokeSchema, type PendingPairingRevoke } from "../nodes/connection-manager.ts";
+import { NodeConnectionManager } from "../nodes/connection-manager.ts";
 import { NodeJoinService } from "../nodes/join-service.ts";
 import { ControlPlaneModelService } from "../models/service.ts";
+import { ControlPlaneModelRepository } from "../models/repository.ts";
 import { ControlledInstanceGateway } from "../instances/gateway.ts";
 import { InstanceBoardReader } from "../instances/board-reader.ts";
 import { ControlledInstanceCreator } from "../instances/creator.ts";
@@ -98,9 +95,11 @@ import { ControlPlaneTriggerService } from "../triggers/service.ts";
 import { ControlPlaneCatalogService } from "../catalog/service.ts";
 import { EmbeddedMarketCatalogProvider, MarketCatalogService } from "../catalog/market.ts";
 import { ControlPlaneGitCredentialService } from "../git-credentials/service.ts";
+import { ControlPlaneGitRepository } from "../git-credentials/repository.ts";
 import { AppAccessService, type AppAccessMode } from "../instances/app-access-service.ts";
 import { ChatActionTokenService, type ChatActionToken } from "../chat/action-token-service.ts";
 import { ChatBridgeService } from "../chat/bridges/service.ts";
+import { ControlPlaneChatRepository, ControlPlaneChatStore } from "../chat/bridges/repository.ts";
 import { ChatSessionService } from "../chat/sessions/service.ts";
 import { ControlPlaneChatSessionRuntime } from "../chat/sessions/runtime.ts";
 import {
@@ -130,6 +129,16 @@ import { ControlPlanePersistenceMaintenance } from "../persistence/maintenance.t
 import { JsonCollection, JsonFile } from "../../shared/persistence/store.ts";
 import type { ControlPlaneProxyError, ProxyTargetEvent, ProxyTargetSnapshot } from "@task-handoff/protocol/control-plane-proxy";
 import type { NodeConnectionRuntime } from "../nodes/connection-runtime.ts";
+import {
+  ControlPlaneNodeRepository,
+  ControlPlaneNodeStore,
+  ControlPlanePairingRevokeRepository,
+  ControlPlanePairingRevokeStore,
+  type ControlPlaneNodeStorage,
+  type ControlPlanePairingRevokeStorage,
+} from "../nodes/repository.ts";
+import type { ControlPlaneDatabase } from "../persistence/database/index.ts";
+import type { SecretEnvelopeService } from "../persistence/secret-envelope.ts";
 
 export function parseInstanceAppManagementSnapshot(value: unknown) {
   try {
@@ -160,6 +169,8 @@ export type ControlPlaneServiceOptions = {
   logger?: ServiceLogger;
   nodeConnectionRuntime?: NodeConnectionRuntime;
   onFleetStateChanged?: (state: ControlPlaneNodeFleetUpdatedEvent) => void;
+  database?: ControlPlaneDatabase;
+  secrets?: SecretEnvelopeService;
 };
 
 function isControlPlaneLocalNode(node: Node) {
@@ -172,13 +183,13 @@ function isControlPlaneBuiltinNode(node: Node) {
 
 export class ControlPlaneService {
   private readonly projects: JsonCollection<Project>;
-  readonly models: JsonCollection<ModelConfig>;
   private readonly modelService: ControlPlaneModelService;
   private readonly images: JsonCollection<CustomImageProfile>;
-  readonly nodes: JsonCollection<Node>;
-  private readonly pendingPairingRevokes: JsonCollection<PendingPairingRevoke>;
-  readonly chatSessions: JsonCollection<ChatSessionBinding>;
-  readonly chatBridges: JsonCollection<ChatBridgeConfig>;
+  readonly nodes: ControlPlaneNodeStorage;
+  private readonly nodeStore: ControlPlaneNodeStore;
+  private readonly pendingPairingRevokes: ControlPlanePairingRevokeStorage;
+  private readonly pairingRevokeStore: ControlPlanePairingRevokeStore;
+  private readonly chatStore: ControlPlaneChatStore;
   readonly triggers: JsonCollection<ControlPlaneTriggerRecord>;
   private readonly nodeJoinService: NodeJoinService;
   private readonly configSyncPreferences: JsonCollection<ConfigSyncPreferenceRecord>;
@@ -212,6 +223,7 @@ export class ControlPlaneService {
   private appSessionSnapshotProvider: ((options?: { refresh?: boolean }) => Promise<{ updatedAt: string; instances: Array<{ instanceId: string; streamId: string; appSessions: AppSessionsSnapshot; revision: number; lastEventAt: string }> }>) | undefined;
 
   constructor(paths: ControlPlaneStorePaths, options: ControlPlaneServiceOptions = {}) {
+    if (!options.database || !options.secrets) throw new Error("Control Plane database and secret envelope service are required.");
     this.paths = paths;
     this.fetchImpl = options.fetchImpl || fetch;
     this.dockerCommandRunner = options.dockerCommandRunner;
@@ -263,9 +275,8 @@ export class ControlPlaneService {
       requireRuntime: (nodeId, runtimeId) => this.requireNodeRuntimeOnNode(nodeId, runtimeId),
     });
     this.projects = new JsonCollection(paths.projectsDir, { ...storeOptions(ProjectSchema), sanitize: sanitizeStoredProject });
-    this.models = new JsonCollection(paths.modelsDir, storeOptions(ModelConfigSchema));
     this.modelService = new ControlPlaneModelService({
-      models: this.models,
+      repository: new ControlPlaneModelRepository(options.database, options.secrets),
       gateway: this.nodeAgentGateway,
       listNodes: () => this.listNodes(),
       requireNode: (id) => this.requireNode(id),
@@ -278,11 +289,16 @@ export class ControlPlaneService {
       ...storeOptions(CustomImageProfileSchema),
       sanitize: (value) => sanitizeStoredImageProfile(value, (warning) => this.logWarn(warning, "legacy image profile field was migrated")),
     });
-    this.nodes = new JsonCollection(paths.nodesDir, {
-      ...storeOptions(NodeSchema),
-      sanitize: (value) => sanitizeStoredNode(value, (warning) => this.logWarn(warning, "unknown stored node field was ignored")),
+    this.nodeStore = new ControlPlaneNodeStore(new ControlPlaneNodeRepository(options.database, options.secrets), {
+      commitPairing: (node, revokeId) => options.database!.transaction(async (database) => {
+        const stored = await new ControlPlaneNodeRepository(database, options.secrets!).put(node);
+        await database.pairingRevocations.delete(revokeId);
+        return stored;
+      }),
     });
-    this.pendingPairingRevokes = new JsonCollection(paths.pendingPairingRevokesDir, storeOptions(PendingPairingRevokeSchema));
+    this.nodes = this.nodeStore;
+    this.pairingRevokeStore = new ControlPlanePairingRevokeStore(new ControlPlanePairingRevokeRepository(options.database, options.secrets));
+    this.pendingPairingRevokes = this.pairingRevokeStore;
     this.proxyLifecycle = new ControlPlaneProxyLifecycle({
       nodes: this.nodes,
       privateStore: this.proxyPrivateStore,
@@ -299,8 +315,7 @@ export class ControlPlaneService {
       info: (data, message) => this.logInfo(data, message),
       warn: (data, message) => this.logWarn(data, message),
     });
-    this.chatSessions = new JsonCollection(paths.chatSessionsDir, storeOptions(ChatSessionBindingSchema));
-    this.chatBridges = new JsonCollection(paths.chatBridgesDir, storeOptions(ChatBridgeConfigSchema));
+    this.chatStore = new ControlPlaneChatStore(new ControlPlaneChatRepository(options.database, options.secrets));
     this.triggers = new JsonCollection(paths.triggersDir, storeOptions(ControlPlaneTriggerRecordSchema));
     this.nodeJoinService = new NodeJoinService({
       nodes: this.nodes,
@@ -310,7 +325,7 @@ export class ControlPlaneService {
       sanitize: sanitizeStoredConfigSyncPreferenceRecord,
     });
     this.marketCatalogService = new MarketCatalogService();
-    this.gitCredentials = new ControlPlaneGitCredentialService(paths, {
+    this.gitCredentials = new ControlPlaneGitCredentialService(new ControlPlaneGitRepository(options.database, options.secrets), {
       repositoryReferences: (credentialId) => this.projects.list().flatMap((project) => {
         const source = project.source;
         return source.type !== "local-folder" && source.auth.secretId === credentialId
@@ -349,11 +364,10 @@ export class ControlPlaneService {
       listAppSessions: () => this.listAppSessions(),
     });
     this.chatBridgeService = new ChatBridgeService({
-      chatBridges: this.chatBridges,
-      chatSessions: this.chatSessions,
+      store: this.chatStore,
     });
     this.chatSessionService = new ChatSessionService({
-      chatSessions: this.chatSessions,
+      store: this.chatStore,
     });
     this.chatSessionRuntime = new ControlPlaneChatSessionRuntime({
       upsertChatSession: (input) => this.upsertChatSession(input),
@@ -418,11 +432,11 @@ export class ControlPlaneService {
   }
 
   async updateGitCredential(id: string, input: unknown) {
-    const credential = this.gitCredentials.update(id, input);
-    const payload = this.gitCredentials.payload(id, { allowDisabled: true });
+    const credential = await this.gitCredentials.update(id, input);
+    const payload = await this.gitCredentials.payload(id, { allowDisabled: true });
     const deployedNodes = new Set<string>();
     for (const existing of this.gitCredentials.listAssignments().filter((assignment) => assignment.credentialId === id)) {
-      let assignment = this.gitCredentials.authorize(existing.instanceId, id, { allowDisabled: true });
+      let assignment = await this.gitCredentials.authorize(existing.instanceId, id, { allowDisabled: true });
       try {
         const instance = await this.requireControlledInstance(existing.instanceId, true) as ControlledInstance;
         const node = this.requireNode(instance.nodeId);
@@ -438,9 +452,9 @@ export class ControlPlaneService {
           deployedNodes.add(node.id);
         }
         await this.nodeAgentGateway.replaceGitCredentialAuthorizations(node, this.gitCredentials.desiredAuthorizationSet(existing.instanceId));
-        assignment = this.gitCredentials.markAssignmentStatus(existing.instanceId, id, "synced");
+        assignment = await this.gitCredentials.markAssignmentStatus(existing.instanceId, id, "synced");
       } catch (error) {
-        assignment = this.gitCredentials.markAssignmentStatus(existing.instanceId, id, "deferred");
+        assignment = await this.gitCredentials.markAssignmentStatus(existing.instanceId, id, "deferred");
         this.logWarn({ instanceId: existing.instanceId, credentialId: id, credentialRevision: credential.revision, assignmentRevision: assignment.assignmentRevision, error: error instanceof Error ? error.message : String(error) }, "Git credential revision sync deferred");
       }
     }
@@ -466,14 +480,14 @@ export class ControlPlaneService {
         statusCode: 409,
       });
     }
-    const payload = this.gitCredentials.payload(credentialId);
+    const payload = await this.gitCredentials.payload(credentialId);
     await this.nodeAgentGateway.deployGitCredential(node, payload);
-    let assignment = this.gitCredentials.authorize(instanceId, credentialId);
+    let assignment = await this.gitCredentials.authorize(instanceId, credentialId);
     try {
       await this.nodeAgentGateway.replaceGitCredentialAuthorizations(node, this.gitCredentials.desiredAuthorizationSet(instanceId));
-      assignment = this.gitCredentials.markAssignmentStatus(instanceId, credentialId, "synced");
+      assignment = await this.gitCredentials.markAssignmentStatus(instanceId, credentialId, "synced");
     } catch (error) {
-      assignment = this.gitCredentials.markAssignmentStatus(instanceId, credentialId, "deferred");
+      assignment = await this.gitCredentials.markAssignmentStatus(instanceId, credentialId, "deferred");
       this.logWarn({ instanceId, credentialId, error: error instanceof Error ? error.message : String(error) }, "Git credential assignment sync deferred");
     }
     return assignment;
@@ -484,10 +498,10 @@ export class ControlPlaneService {
     const node = this.requireNode(instance.nodeId);
     const current = this.gitCredentials.listAssignments(instanceId).find((item) => item.credentialId === credentialId);
     if (!current) return false;
-    const revoking = this.gitCredentials.markAssignmentStatus(instanceId, credentialId, "revoking");
+    await this.gitCredentials.markAssignmentStatus(instanceId, credentialId, "revoking");
     try {
       await this.nodeAgentGateway.replaceGitCredentialAuthorizations(node, this.gitCredentials.desiredAuthorizationSet(instanceId));
-      this.gitCredentials.revoke(instanceId, credentialId);
+      await this.gitCredentials.revoke(instanceId, credentialId);
       const cachedInstances = await this.listCachedNodeInstances();
       const stillReferencedOnNode = this.gitCredentials.listAssignments().some((item) => {
         if (item.credentialId !== credentialId) return false;
@@ -502,17 +516,16 @@ export class ControlPlaneService {
     }
   }
 
-  init() {
+  async init() {
     this.runPersistenceMaintenance();
     this.projects.init();
-    this.models.init();
     this.images.init();
-    this.nodes.init();
-    this.pendingPairingRevokes.init();
-    this.chatSessions.init();
-    this.chatBridges.init();
+    await this.nodeStore.init();
+    await this.pairingRevokeStore.init();
+    await this.modelService.init();
+    await this.chatStore.init();
     this.triggers.init();
-    this.gitCredentials.init();
+    await this.gitCredentials.init();
     this.proxyPrivateStore.init();
     this.proxyPrivateStore.gcNodeCredentials((credential) => {
       const node = this.nodes.get(credential.nodeId);
@@ -657,13 +670,13 @@ export class ControlPlaneService {
         const node = this.requireNode(instance.nodeId);
         if (assignment.status === "revoking") {
           await this.nodeAgentGateway.replaceGitCredentialAuthorizations(node, this.gitCredentials.desiredAuthorizationSet(assignment.instanceId));
-          this.gitCredentials.revoke(assignment.instanceId, assignment.credentialId);
+          await this.gitCredentials.revoke(assignment.instanceId, assignment.credentialId);
           continue;
         }
-        const payload = this.gitCredentials.payload(assignment.credentialId, { allowDisabled: true });
+        const payload = await this.gitCredentials.payload(assignment.credentialId, { allowDisabled: true });
         await this.nodeAgentGateway.deployGitCredential(node, payload);
         await this.nodeAgentGateway.replaceGitCredentialAuthorizations(node, this.gitCredentials.desiredAuthorizationSet(assignment.instanceId));
-        this.gitCredentials.markAssignmentStatus(assignment.instanceId, assignment.credentialId, "synced");
+        await this.gitCredentials.markAssignmentStatus(assignment.instanceId, assignment.credentialId, "synced");
       } catch (error) {
         this.logWarn({ instanceId: assignment.instanceId, credentialId: assignment.credentialId, assignmentRevision: assignment.assignmentRevision, error: error instanceof Error ? error.message : String(error) }, "Git credential assignment convergence deferred");
       }
@@ -865,9 +878,9 @@ export class ControlPlaneService {
         updatedAt: now(),
       });
       if (agentNodeId !== node.id) {
-        this.nodes.delete(node.id);
+        await this.nodes.delete(node.id);
       }
-      this.nodes.put(updated);
+      this.observeNode(updated);
       this.nodeConnectionRuntime?.observedReachable(updated);
       return {
         id: updated.id,
@@ -882,7 +895,7 @@ export class ControlPlaneService {
         health: "failed",
         updatedAt: now(),
       });
-      this.nodes.put(updated);
+      this.observeNode(updated);
       this.nodeConnectionRuntime?.observedFailure(updated, errorMessage(error));
       return {
         id: node.id,
@@ -1044,7 +1057,7 @@ export class ControlPlaneService {
     return this.proxyLifecycle.markBindingRevoked(nodeId, error);
   }
 
-  updateNode(id: string, input: unknown) {
+  async updateNode(id: string, input: unknown) {
     const parsedInput: UpdateNodeInput = UpdateNodeInputSchema.parse(input);
     const current = this.requireNode(id);
     this.proxyLifecycle.assertIdentityPatch(current, parsedInput);
@@ -1058,7 +1071,7 @@ export class ControlPlaneService {
     return this.nodes.put(updated);
   }
 
-  deleteNode(id: string) {
+  async deleteNode(id: string) {
     const current = this.requireNode(id);
     if (isControlPlaneBuiltinNode(current)) {
       const error = new Error("The built-in local node connection cannot be deleted.");
@@ -1067,6 +1080,13 @@ export class ControlPlaneService {
     }
     this.nodeAgentGateway.forgetNode(id);
     return this.nodes.delete(id);
+  }
+
+  private observeNode(node: Node) {
+    if (this.nodes.observe) return this.nodes.observe(node);
+    const stored = this.nodes.put(node);
+    if (stored instanceof Promise) throw new Error("Asynchronous Node storage must implement an in-memory observation boundary.");
+    return stored;
   }
 
   dispose() {
@@ -1201,7 +1221,7 @@ export class ControlPlaneService {
     const result = await this.nodeAgentGateway.deleteInstance(node, id, parsedInput);
     if (result.completed) {
       this.configSyncPreferences.delete(id);
-      this.gitCredentials.revokeInstance(id);
+      await this.gitCredentials.revokeInstance(id);
     }
     return result;
   }
@@ -1227,10 +1247,10 @@ export class ControlPlaneService {
     const current = await this.requireNodeInstance(id);
     const node = this.requireNode(current.nodeId);
     await this.modelService.ensureInstanceAssignment(current);
-    const gitWorkspaceProvisioning = this.gitCredentials.operationProvisioning(id);
+    const gitWorkspaceProvisioning = await this.gitCredentials.operationProvisioning(id);
     const result = await this.nodeAgentGateway.startInstance(node, id, gitWorkspaceProvisioning ? { gitWorkspaceProvisioning } : {});
     if (gitWorkspaceProvisioning && result.gitWorkspaceProvisioningOperationId === gitWorkspaceProvisioning.operationId) {
-      this.gitCredentials.forgetOperationProvisioning(id);
+      await this.gitCredentials.forgetOperationProvisioning(id);
     }
     return publicInstanceWithAccess(result.instance);
   }
@@ -1246,10 +1266,10 @@ export class ControlPlaneService {
     const current = await this.requireNodeInstance(id);
     const node = this.requireNode(current.nodeId);
     await this.modelService.ensureInstanceAssignment(current);
-    const gitWorkspaceProvisioning = this.gitCredentials.operationProvisioning(id);
+    const gitWorkspaceProvisioning = await this.gitCredentials.operationProvisioning(id);
     const result = await this.nodeAgentGateway.restartInstance(node, id, gitWorkspaceProvisioning ? { gitWorkspaceProvisioning } : {});
     if (gitWorkspaceProvisioning && result.gitWorkspaceProvisioningOperationId === gitWorkspaceProvisioning.operationId) {
-      this.gitCredentials.forgetOperationProvisioning(id);
+      await this.gitCredentials.forgetOperationProvisioning(id);
     }
     return publicInstanceWithAccess(result.instance);
   }
@@ -1454,6 +1474,10 @@ export class ControlPlaneService {
 
   requireChatBridge(id: string) {
     return this.chatBridgeService.require(id);
+  }
+
+  resolveChatBridge(id: string) {
+    return this.chatBridgeService.resolve(id);
   }
 
   createChatBridge(input: unknown) {

@@ -4,6 +4,7 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 const { once } = require("node:events");
+const { DatabaseSync } = require("node:sqlite");
 
 const { controlPlaneStorePaths } = require("../packages/control-plane/src/control-plane/persistence/paths.ts");
 const { createControlPlaneApp } = require("../packages/control-plane/src/server.ts");
@@ -46,8 +47,18 @@ test("temporary node-agent pairing invites never enter identity persistence", ()
 
   const first = new NodeAgentIdentityService(paths);
   const invite = first.createPairingInvite({});
-  const persisted = JSON.parse(fs.readFileSync(paths.identityPath, "utf8"));
-  assert.equal(persisted.pairingInvites, undefined);
+  assert.equal(fs.existsSync(paths.identityPath), false);
+  assert.equal(fs.existsSync(`${paths.identityPath}.migrated-v0.0.28`), true);
+  const verify = new DatabaseSync(paths.databasePath, { readOnly: true });
+  const persisted = JSON.stringify({
+    schema: verify.prepare("SELECT name, sql FROM sqlite_master ORDER BY name").all(),
+    pairings: verify.prepare("SELECT key_id, control_plane_id, secret FROM na_control_plane_pairings").all(),
+    operations: verify.prepare("SELECT requested_json, error_json FROM na_control_plane_connection_operations").all(),
+  });
+  verify.close();
+  assert.equal(persisted.includes(invite.token), false);
+  assert.equal(persisted.includes(invite.tokenHash), false);
+  assert.equal(persisted.includes("pairing_invite"), false);
   assert.throws(
     () => new NodeAgentIdentityService(paths).completePairingInvite({ joinToken: invite.token }),
     (error) => error.code === "NODE_AGENT_PAIRING_INVITE_INVALID",
@@ -116,6 +127,9 @@ test("node-agent maintenance retains active data and ages orphan data through tr
   const root = path.join(paths.dataDir, "local-instances");
   fs.mkdirSync(path.join(root, "inst_active"), { recursive: true });
   fs.mkdirSync(path.join(root, "inst_orphan"), { recursive: true });
+  fs.mkdirSync(paths.instancePrivateConfigsDir, { recursive: true });
+  fs.writeFileSync(path.join(paths.instancePrivateConfigsDir, "inst_active.json"), "active");
+  fs.writeFileSync(path.join(paths.instancePrivateConfigsDir, "inst_orphan.json"), "orphan");
   const external = tempDir("external-workspace");
   if (process.platform !== "win32") {
     fs.symlinkSync(external, path.join(root, "inst_link"));
@@ -124,11 +138,30 @@ test("node-agent maintenance retains active data and ages orphan data through tr
   new NodeAgentPersistenceMaintenance(paths, { now: () => 2_000, retentionMs: 500 }).run(["inst_active"]);
   assert.equal(fs.existsSync(path.join(root, "inst_active")), true);
   assert.equal(fs.existsSync(path.join(root, "inst_orphan")), false);
+  assert.equal(fs.existsSync(path.join(paths.instancePrivateConfigsDir, "inst_active.json")), true);
+  assert.equal(fs.existsSync(path.join(paths.instancePrivateConfigsDir, "inst_orphan.json")), false);
   assert.equal(fs.existsSync(external), true);
   if (process.platform !== "win32") assert.equal(fs.lstatSync(path.join(root, "inst_link")).isSymbolicLink(), true);
 
   new NodeAgentPersistenceMaintenance(paths, { now: () => 2_501, retentionMs: 500 }).run(["inst_active"]);
   assert.deepEqual(fs.readdirSync(path.join(paths.dataDir, "local-instances-trash")), []);
+});
+
+test("node-agent maintenance retries orphan private config cleanup without restoring an instance", () => {
+  const paths = nodeAgentStorePaths(tempDir("node-agent-private-config-retry"));
+  fs.mkdirSync(paths.instancePrivateConfigsDir, { recursive: true });
+  const orphan = path.join(paths.instancePrivateConfigsDir, "inst_deleted.json");
+  fs.writeFileSync(orphan, "stale-secret");
+  const warnings = [];
+  new NodeAgentPersistenceMaintenance(paths, {
+    removeFile: () => { throw new Error("injected cleanup failure"); },
+    logger: (message, details) => warnings.push({ message, details }),
+  }).run([]);
+  assert.equal(fs.existsSync(orphan), true);
+  assert.equal(warnings[0].message, "orphan instance private config cleanup failed");
+
+  new NodeAgentPersistenceMaintenance(paths).run([]);
+  assert.equal(fs.existsSync(orphan), false);
 });
 
 test("node-agent maintenance copy-truncates its open process logs", () => {

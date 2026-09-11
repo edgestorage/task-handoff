@@ -47,6 +47,19 @@ export class MobileAiSessionActionCoordinator {
   close(instanceId: string, sessionId: string, clientRequestId: string) {
     return this.run(instanceId, sessionId, 'close', undefined, () => this.client.aiSessions.close(instanceId, sessionId, clientRequestId));
   }
+  async closeMany(targets: Array<{ instanceId: string; sessionId: string }>, createClientRequestId: () => string, concurrency = 6) {
+    let next = 0;
+    let failed = 0;
+    const worker = async () => {
+      while (next < targets.length) {
+        const target = targets[next++];
+        const result = await this.close(target.instanceId, target.sessionId, createClientRequestId());
+        if (result.disposition !== 'accepted') failed += 1;
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(concurrency, targets.length) }, worker));
+    return { total: targets.length, failed };
+  }
   updateModelSelection(instanceId: string, sessionId: string, clientRequestId: string, selection: AiSessionModelSelection) {
     return this.run(instanceId, sessionId, 'model-selection', undefined, () => this.client.aiSessions.updateModelSelection(instanceId, sessionId, clientRequestId, selection));
   }

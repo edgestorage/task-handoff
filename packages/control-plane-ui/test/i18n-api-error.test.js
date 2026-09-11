@@ -32,6 +32,9 @@ test("stable instance, node, and model errors have localized messages", () => {
     ["NODE_MODEL_SELECTION_MISMATCH", "The model selection does not match the node assignment.", "模型选择与节点分配不一致。"],
     ["NODE_MODEL_HASH_INVALID", "The stored node model does not match its configuration.", "节点上存储的模型与其配置不一致。"],
     ["NODE_MODEL_MIGRATION_REQUIRED", "The instance model configuration requires manual migration.", "实例模型配置需要手动迁移。"],
+    ["AI_SESSION_MODEL_CATALOG_UNAVAILABLE", "The instance has not loaded its model configuration. Restart the instance to apply it.", "实例尚未加载模型配置，请重启实例使配置生效。"],
+    ["AI_SESSION_MODEL_ENTITY_UNAVAILABLE", "The selected model is not active in this instance. Restart the instance to apply the latest model configuration.", "所选模型尚未在实例中生效，请重启实例后重试。"],
+    ["AI_SESSION_MODEL_NAME_UNAVAILABLE", "The selected model is not active in this instance. Restart the instance to apply the latest model configuration.", "所选模型尚未在实例中生效，请重启实例后重试。"],
   ];
 
   for (const [code, englishMessage, chineseMessage] of cases) {

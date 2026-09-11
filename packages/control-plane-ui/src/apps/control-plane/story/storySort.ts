@@ -35,20 +35,23 @@ export function sortStories(
   },
 ) {
   const collator = new Intl.Collator(options.locale, { numeric: true, sensitivity: "base" });
+  const byArchiveState = (left: Story, right: Story) => Number(Boolean(left.archivedAt)) - Number(Boolean(right.archivedAt));
   const byName = (left: Story, right: Story) => (
     collator.compare(left.title, right.title) || storySortKey(left).localeCompare(storySortKey(right))
   );
-  if (mode === "name") return [...stories].sort(byName);
+  if (mode === "name") return [...stories].sort((left, right) => byArchiveState(left, right) || byName(left, right));
   if (mode === "last-user-message") {
     return [...stories].sort((left, right) => (
-      (options.lastUserMessageTimes.get(storySortKey(right)) || 0)
+      byArchiveState(left, right)
+      || (options.lastUserMessageTimes.get(storySortKey(right)) || 0)
       - (options.lastUserMessageTimes.get(storySortKey(left)) || 0)
       || byName(left, right)
     ));
   }
   const order = new Map(normalizeManualStoryOrder(stories, options.manualKeys).map((key, index) => [key, index]));
   return [...stories].sort((left, right) => (
-    (order.get(storySortKey(left)) ?? Number.MAX_SAFE_INTEGER)
+    byArchiveState(left, right)
+    || (order.get(storySortKey(left)) ?? Number.MAX_SAFE_INTEGER)
     - (order.get(storySortKey(right)) ?? Number.MAX_SAFE_INTEGER)
     || byName(left, right)
   ));

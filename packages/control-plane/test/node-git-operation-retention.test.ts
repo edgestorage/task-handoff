@@ -2,12 +2,28 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { NodeAgentState } from "../src/node-agent/state.ts";
 import { NodeGitCredentialStore } from "../src/node-agent/git-credentials/store.ts";
 import { nodeAgentStorePaths } from "../src/node-agent/persistence/paths.ts";
 
 const timestamp = "2026-08-23T00:00:00.000Z";
+
+function seedInstance(state: NodeAgentState, id = "inst_one") {
+  return state.createInstance({
+    id,
+    runtimeId: "runtime_local_docker",
+    imageSelection: { imageId: "img_one" },
+    image: {
+      id: "img_one", origin: "custom" as const, name: "Image", repository: "task-handoff-web", tag: "latest",
+      requestedReference: "task-handoff-web:latest", pullPolicy: "if-not-present" as const,
+      capabilities: [], optionalApps: [], defaultEnv: {}, labels: {}, createdAt: timestamp, updatedAt: timestamp,
+    },
+    source: { type: "local-folder" as const, path: "/tmp/workspace" },
+    sourceSnapshot: {}, modelSelection: {},
+  });
+}
 
 test("operation-only provisioning survives a node-agent restart and is consumed once", () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-git-operation-"));
@@ -53,13 +69,11 @@ test("operation-only provisioning survives a node-agent restart and is consumed 
       },
     };
     state.createInstance(input);
-    const controlledRecord = fs.readFileSync(path.join(paths.controlledInstancesDir, "inst_one.json"), "utf8");
     const privateRecord = fs.readFileSync(state.instancePrivateConfigs.filePath("inst_one"), "utf8");
-    assert.equal(controlledRecord.includes("operation-secret"), false);
+    assert.equal(JSON.stringify(state.requireInstance("inst_one")).includes("operation-secret"), false);
     assert.equal(privateRecord.includes("operation-secret"), false);
-    assert.deepEqual(fs.readdirSync(paths.gitCredentialPayloadsDir), []);
-    const intentPath = path.join(paths.gitWorkspaceProvisioningIntentsDir, "inst_one.json");
-    assert.equal(fs.statSync(intentPath).mode & 0o777, 0o600);
+    assert.equal(fs.existsSync(paths.gitCredentialPayloadsDir), false);
+    assert.equal(state.persistence.git.getProvisioning("inst_one")?.status, "pending");
     const restored = new NodeAgentState(paths, "node_one", "http://127.0.0.1:8091", undefined, 8091, "linux");
     restored.init();
     assert.equal(restored.takeGitWorkspaceProvisioning("inst_one")?.credentials[0]?.payload.secret.kind, "https-token");
@@ -94,7 +108,7 @@ test("instance-retained provisioning snapshots are not persisted beside the auth
         },
       }],
     }), (error: { code?: string }) => error.code === "GIT_CREDENTIAL_PROVISIONING_RETENTION_INVALID");
-    assert.deepEqual(fs.readdirSync(paths.gitWorkspaceProvisioningIntentsDir), []);
+    assert.equal(state.persistence.git.getProvisioning("inst_one"), undefined);
   } finally {
     fs.rmSync(dataDir, { recursive: true, force: true });
   }
@@ -104,7 +118,10 @@ test("operation-only provisioning material is physically removed at its private-
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-git-operation-expiry-"));
   try {
     const paths = nodeAgentStorePaths(dataDir);
-    const store = new NodeGitCredentialStore(paths, { workspaceProvisioningTtlMs: 20 });
+    const state = new NodeAgentState(paths, "node_one", "http://127.0.0.1:8091", undefined, 8091, "linux");
+    state.init();
+    seedInstance(state);
+    const store = new NodeGitCredentialStore(paths, { workspaceProvisioningTtlMs: 20, repository: state.persistence.git });
     store.init();
     store.putWorkspaceProvisioning({
       operationId: "gitop_expiring",
@@ -125,10 +142,9 @@ test("operation-only provisioning material is physically removed at its private-
         },
       }],
     });
-    const intentPath = path.join(paths.gitWorkspaceProvisioningIntentsDir, "inst_one.json");
-    assert.equal(fs.existsSync(intentPath), true);
+    assert.equal(state.persistence.git.getProvisioning("inst_one")?.status, "pending");
     await new Promise((resolve) => setTimeout(resolve, 60));
-    assert.equal(fs.existsSync(intentPath), false);
+    assert.equal(state.persistence.git.getProvisioning("inst_one"), undefined);
   } finally {
     fs.rmSync(dataDir, { recursive: true, force: true });
   }
@@ -138,7 +154,10 @@ test("a consumed operation leaves only a secret-free receipt for asynchronous ac
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-git-operation-receipt-"));
   try {
     const paths = nodeAgentStorePaths(dataDir);
-    const store = new NodeGitCredentialStore(paths);
+    const state = new NodeAgentState(paths, "node_one", "http://127.0.0.1:8091", undefined, 8091, "linux");
+    state.init();
+    seedInstance(state);
+    const store = new NodeGitCredentialStore(paths, { repository: state.persistence.git });
     store.init();
     const input = {
       operationId: "gitop_consumed",
@@ -161,15 +180,18 @@ test("a consumed operation leaves only a secret-free receipt for asynchronous ac
     };
     store.putWorkspaceProvisioning(input);
     assert.equal(store.completeWorkspaceProvisioning("inst_one", input.operationId), true);
+    assert.equal(store.completeWorkspaceProvisioning("inst_one", input.operationId), true);
+    assert.equal(store.completeWorkspaceProvisioning("inst_one", "gitop_other"), false);
     assert.deepEqual(store.workspaceProvisioningStatus("inst_one"), { status: "consumed", operationId: input.operationId });
-    const receiptPath = path.join(paths.gitWorkspaceProvisioningIntentsDir, "inst_one.json");
-    assert.equal(fs.readFileSync(receiptPath, "utf8").includes("consumed-secret"), false);
+    const verify = new DatabaseSync(paths.databasePath, { readOnly: true });
+    assert.equal(verify.prepare("SELECT input_json FROM na_git_workspace_provisioning WHERE instance_id = ?").get("inst_one").input_json, null);
+    verify.close();
 
-    const restored = new NodeGitCredentialStore(paths);
+    const restored = new NodeGitCredentialStore(paths, { repository: state.persistence.git });
     restored.init();
     restored.putWorkspaceProvisioning(input);
     assert.deepEqual(restored.workspaceProvisioningStatus("inst_one"), { status: "consumed", operationId: input.operationId });
-    assert.equal(fs.readFileSync(receiptPath, "utf8").includes("consumed-secret"), false);
+    assert.equal(state.persistence.git.getProvisioning("inst_one")?.status, "consumed");
   } finally {
     fs.rmSync(dataDir, { recursive: true, force: true });
   }

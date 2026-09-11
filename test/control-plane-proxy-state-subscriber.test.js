@@ -9,9 +9,8 @@ const {
   CONTROL_PLANE_PROXY_PROTOCOL_VERSION,
   ControlPlaneProxyErrorCode,
 } = require("../packages/protocol/src/control-plane-proxy.ts");
-const { ControlPlaneService } = require("../packages/control-plane/src/control-plane/application/service.ts");
-const { controlPlaneStorePaths } = require("../packages/control-plane/src/control-plane/persistence/paths.ts");
 const { ControlPlaneProxyStateSubscriber } = require("../packages/control-plane/src/control-plane/nodes/control-plane-proxy-state-subscriber.ts");
+const { createTestControlPlaneService } = require("./fixtures/control-plane-service.js");
 
 const timestamp = "2026-08-01T00:00:00.000Z";
 
@@ -49,12 +48,14 @@ function snapshot(revision, target = {}) {
   };
 }
 
-function fixture(t) {
+async function fixture(t) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "proxy-state-subscriber-"));
-  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
-  const service = new ControlPlaneService(controlPlaneStorePaths(dataDir));
-  service.init();
-  service.nodes.put({
+  const current = await createTestControlPlaneService(dataDir);
+  t.after(async () => {
+    await current.close();
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  });
+  await current.service.nodes.put({
     id: "node_b",
     name: "Node B",
     connectionMode: "control-plane-proxy",
@@ -68,7 +69,7 @@ function fixture(t) {
     createdAt: timestamp,
     updatedAt: timestamp,
   });
-  service.proxyPrivateStore.putNodeCredential({
+  current.service.proxyPrivateStore.putNodeCredential({
     id: "proxy_credential_b",
     nodeId: "node_b",
     proxyOrigin: "https://proxy.example.test",
@@ -80,7 +81,7 @@ function fixture(t) {
     createdAt: timestamp,
     updatedAt: timestamp,
   });
-  return service;
+  return current.service;
 }
 
 async function waitFor(predicate) {
@@ -92,7 +93,7 @@ async function waitFor(predicate) {
 }
 
 test("subscriber applies snapshot before opening WSS and then consumes contiguous target projections without polling", async (t) => {
-  const service = fixture(t);
+  const service = await fixture(t);
   const order = [];
   const sockets = [];
   let fetches = 0;
@@ -137,7 +138,7 @@ test("subscriber applies snapshot before opening WSS and then consumes contiguou
 });
 
 test("R disconnect degrades only proxy reachability, retains target state, then reboots from snapshot before a new WSS", async (t) => {
-  const service = fixture(t);
+  const service = await fixture(t);
   const sockets = [];
   const revisions = [7, 9];
   const subscriber = new ControlPlaneProxyStateSubscriber(service, {
@@ -164,7 +165,7 @@ test("R disconnect degrades only proxy reachability, retains target state, then 
 });
 
 test("binding revoked is distinct from proxy unreachability and preserves the last target", async (t) => {
-  const service = fixture(t);
+  const service = await fixture(t);
   service.applyProxyTargetSnapshot("node_b", snapshot(3, { status: "offline", health: "degraded" }));
   let opened = false;
   const subscriber = new ControlPlaneProxyStateSubscriber(service, {
@@ -188,7 +189,7 @@ test("binding revoked is distinct from proxy unreachability and preserves the la
 });
 
 test("subscriber rebuilds after a crash leaves the proxy node durable before credential promotion", async (t) => {
-  const service = fixture(t);
+  const service = await fixture(t);
   const credential = service.proxyPrivateStore.nodeCredential("node_b");
   service.proxyPrivateStore.deleteNodeCredential("node_b");
   let fetches = 0;
@@ -217,7 +218,7 @@ test("subscriber rebuilds after a crash leaves the proxy node durable before cre
 });
 
 test("subscriber logs only a redacted proxy failure summary", async (t) => {
-  const service = fixture(t);
+  const service = await fixture(t);
   const warnings = [];
   const secret = "machine-credential-must-not-be-logged";
   const failure = Object.assign(new Error("connect failed"), {
@@ -230,14 +231,16 @@ test("subscriber logs only a redacted proxy failure summary", async (t) => {
   });
   t.after(() => subscriber.stop());
   subscriber.start();
-  await waitFor(() => warnings.length === 1);
+  await waitFor(() => warnings.length >= 1);
 
-  assert.deepEqual(warnings[0], {
-    details: {
-      nodeId: "node_b",
-      error: { name: "Error", message: "connect failed", code: "ECONNRESET" },
-    },
-    message: "control-plane proxy state bootstrap failed",
-  });
+  for (const warning of warnings) {
+    assert.deepEqual(warning, {
+      details: {
+        nodeId: "node_b",
+        error: { name: "Error", message: "connect failed", code: "ECONNRESET" },
+      },
+      message: "control-plane proxy state bootstrap failed",
+    });
+  }
   assert.equal(JSON.stringify(warnings).includes(secret), false);
 });

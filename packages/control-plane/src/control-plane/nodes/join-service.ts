@@ -1,10 +1,11 @@
 import { NodeSchema, type Node } from "@task-handoff/protocol/control-plane";
 import crypto from "node:crypto";
 import { z } from "zod";
-import { createId, createSecret, type JsonCollection } from "../../shared/persistence/store.ts";
+import { createId, createSecret } from "../../shared/persistence/store.ts";
 import { CreateNodeJoinInviteInputSchema } from "../application/inputs.ts";
 import { now } from "../application/helpers.ts";
 import { EphemeralTokenStore } from "../../shared/security/ephemeral-token-store.ts";
+import type { ControlPlaneNodeStorage } from "./repository.ts";
 
 const DEFAULT_INVITE_TTL_MS = 10 * 60 * 1000;
 const COMPLETED_INVITE_STATUS_TTL_MS = 10 * 60 * 1000;
@@ -26,7 +27,7 @@ const CompleteNodeJoinInputSchema = z.object({
 }).strict();
 
 type NodeJoinServiceOptions = {
-  nodes: JsonCollection<Node>;
+  nodes: ControlPlaneNodeStorage;
 };
 
 export class NodeJoinService {
@@ -61,7 +62,7 @@ export class NodeJoinService {
     });
   }
 
-  complete(input: unknown) {
+  async complete(input: unknown) {
     const parsedInput = CompleteNodeJoinInputSchema.parse(input);
     const tokenHash = hashToken(parsedInput.joinToken);
     const invite = this.invites.take(tokenHash);
@@ -80,7 +81,7 @@ export class NodeJoinService {
         code: "NODE_JOIN_NODE_ALREADY_EXISTS",
       });
     }
-    const node = this.options.nodes.put(NodeSchema.parse({
+    const node = await this.options.nodes.put(NodeSchema.parse({
       id: parsedInput.nodeId,
       name: parsedInput.nodeName || invite.nodeName || parsedInput.nodeId,
       connectionMode: "reverse-wss",

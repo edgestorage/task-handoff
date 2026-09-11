@@ -53,9 +53,10 @@ export function createReverseTunnelManager(
   options: ReverseTunnelManagerOptions,
   paths: NodeAgentStorePaths,
   nodeId: string,
+  identityService?: NodeAgentIdentityService,
 ) {
   const token = options.token || process.env.TASK_HANDOFF_NODE_AGENT_TOKEN;
-  const identity = new NodeAgentIdentityService(paths);
+  const identity = identityService || new NodeAgentIdentityService(paths);
   type TunnelConfig = { tunnelUrl: string; keyId?: string; secret?: string };
   type TunnelStatus = "connecting" | "connected" | "reconnecting" | "failed";
   type TunnelEntry = {

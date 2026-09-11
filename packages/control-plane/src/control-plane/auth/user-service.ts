@@ -107,7 +107,7 @@ export class ControlPlaneUserService {
   private bootstrapInProgress = false;
   private initPromise: Promise<unknown> | undefined;
 
-  constructor(paths: ControlPlaneStorePaths, options: { database?: ControlPlaneUserDatabaseConfigInput } = {}) {
+  constructor(paths: ControlPlaneStorePaths, options: { database?: ControlPlaneUserDatabaseConfigInput; repository?: ControlPlaneUserRepository } = {}) {
     this.store = new ControlPlaneUserStore(paths, options);
   }
 

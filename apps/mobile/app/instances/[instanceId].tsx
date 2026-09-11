@@ -1,10 +1,12 @@
 import { useState } from 'react';
+import * as Crypto from 'expo-crypto';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
 import { MenuView, type MenuAction } from '@expo/ui/community/menu';
 import { ActivityIndicator, Alert, KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import type { ControlPlaneInstanceAction } from '@task-handoff/protocol/control-plane-directory';
 
 import { mobileAiSessionStore } from '../../src/ai-sessions/store';
+import { useActiveAiSessions } from '../../src/ai-sessions/use-active-sessions';
 import { Screen } from '../../src/components/Screen';
 import { EmptyState } from '../../src/components/EmptyState';
 import { useMobileToast } from '../../src/components/MobileToast';
@@ -22,6 +24,7 @@ export default function InstanceDirectoryDetailRoute() {
   const { colors } = useMobileTheme();
   const { locale, t } = useI18n();
   const toast = useMobileToast();
+  const { actions: aiSessionActions, refresh: refreshAiSessions, state: aiSessionState } = useActiveAiSessions();
   const { instanceId } = useLocalSearchParams<{ instanceId: string }>();
   const { controlPlaneId, runInstanceAction, state, updateInstanceName, updateNodeName } = useActiveDirectories();
   const [renameTarget, setRenameTarget] = useState<RenameTarget>();
@@ -29,6 +32,7 @@ export default function InstanceDirectoryDetailRoute() {
   const [renameError, setRenameError] = useState('');
   const [renaming, setRenaming] = useState(false);
   const [lifecycleAction, setLifecycleAction] = useState<ControlPlaneInstanceAction>();
+  const [closingAllSessions, setClosingAllSessions] = useState(false);
   const instance = state.instances.find((candidate) => candidate.id === instanceId);
   const node = instance ? state.nodes.find((candidate) => candidate.id === instance.nodeId) : undefined;
   if (!instance) {
@@ -36,6 +40,7 @@ export default function InstanceDirectoryDetailRoute() {
   }
 
   const activeSessionCount = instance.aiSessions.runningCount + instance.aiSessions.waitingCount;
+  const instanceSessions = aiSessionState.snapshot?.instances.find((entry) => entry.instanceId === instance.id)?.aiSessions.sessions.filter((session) => session.actions?.close !== false) ?? [];
   const statusColor = instance.ready && instance.connectionStatus === 'online' ? '#34c759' : instance.status === 'failed' || instance.status === 'unhealthy' ? colors.error : colors.textMuted;
   const currentName = renameTarget === 'node' ? node?.name : instance.name;
   const canRename = state.phase === 'ready' && !renaming && !lifecycleAction;
@@ -85,9 +90,23 @@ export default function InstanceDirectoryDetailRoute() {
   }));
   const menuActions: MenuAction[] = [
     ...lifecycleMenuActions,
+    { id: 'close-all-sessions', image: 'xmark.circle', title: t(closingAllSessions ? 'sessions.closingAll' : 'sessions.closeAll'), attributes: { destructive: true, disabled: closingAllSessions || !aiSessionActions || !instanceSessions.length || state.phase !== 'ready' } },
     { id: 'rename-instance', image: 'pencil', title: t('instance.editInstanceName'), attributes: { disabled: !canRename } },
     { id: 'rename-node', image: 'server.rack', title: t('instance.editNodeName'), attributes: { disabled: !canRename || !node } },
   ];
+  const requestCloseAllSessions = () => {
+    if (!aiSessionActions || closingAllSessions || !instanceSessions.length) return;
+    Alert.alert(t('sessions.closeAllConfirmTitle'), t('sessions.closeAllConfirmDescription', { count: instanceSessions.length, name: instance.name }), [
+      { text: t('common.cancel'), style: 'cancel' },
+      { text: t('sessions.closeAll'), style: 'destructive', onPress: () => {
+        setClosingAllSessions(true);
+        void aiSessionActions.closeMany(instanceSessions.map((session) => ({ instanceId: instance.id, sessionId: session.id })), Crypto.randomUUID).then(async ({ failed, total }) => {
+          await refreshAiSessions().catch(() => undefined);
+          toast.show({ title: failed ? t('sessions.closeAllPartial', { failed, total }) : t('sessions.closeAllSuccess', { count: total }), tone: failed ? 'error' : 'success' });
+        }).finally(() => setClosingAllSessions(false));
+      } },
+    ]);
+  };
   const lifecycleActionLabel = (action: ControlPlaneInstanceAction) => t(
     action === 'start' ? 'instance.start' : action === 'stop' ? 'instance.stop' : action === 'restart' ? 'instance.restart' : 'instance.retryImage',
   );
@@ -124,6 +143,7 @@ export default function InstanceDirectoryDetailRoute() {
         actions={menuActions}
         onPressAction={({ nativeEvent }) => {
           if (instance.availableActions.includes(nativeEvent.event as ControlPlaneInstanceAction)) requestLifecycleAction(nativeEvent.event as ControlPlaneInstanceAction);
+          else if (nativeEvent.event === 'close-all-sessions') requestCloseAllSessions();
           else if (nativeEvent.event === 'rename-instance') openRename('instance');
           else if (nativeEvent.event === 'rename-node') openRename('node');
         }}

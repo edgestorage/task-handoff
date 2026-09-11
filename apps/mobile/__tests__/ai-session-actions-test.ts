@@ -49,6 +49,25 @@ test('closes through the shared client with an idempotency key and waits for aut
   expect(api.aiSessions.list).not.toHaveBeenCalled();
 });
 
+test('bulk close limits concurrency and reports individual failures', async () => {
+  let active = 0;
+  let maximumActive = 0;
+  const close = jest.fn().mockImplementation(async (_instanceId: string, sessionId: string) => {
+    active += 1;
+    maximumActive = Math.max(maximumActive, active);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    active -= 1;
+    if (sessionId === 'session-2') throw Object.assign(new Error('rejected'), { status: 409 });
+    return {};
+  });
+  const coordinator = new MobileAiSessionActionCoordinator('cp', client({ close }), new MobileAiSessionStore());
+  const targets = Array.from({ length: 5 }, (_, index) => ({ instanceId: 'instance', sessionId: `session-${index}` }));
+
+  expect(await coordinator.closeMany(targets, (() => { let id = 0; return () => `request-${id++}`; })(), 2)).toEqual({ total: 5, failed: 1 });
+  expect(maximumActive).toBe(2);
+  expect(close.mock.calls.map((call) => call[2])).toEqual(['request-0', 'request-1', 'request-2', 'request-3', 'request-4']);
+});
+
 test('updates model selection through the shared client without mutating local session state', async () => {
   const api = client();
   const store = new MobileAiSessionStore();
