@@ -15,6 +15,7 @@ test("the shared workbench layout menu controls the persisted header density", a
   ]);
 
   assert.match(workbench, /:data-header-density="effectiveHeaderDensity"/);
+  assert.match(workbench, /<StoryView[\s\S]*?:header-density="effectiveHeaderDensity"/);
   assert.match(workbench, /:show-header-density="headerDensitySupported"/);
   assert.match(workbench, /windowChrome\?: \{ mode: "custom" \| "macos-overlay" \| "windows-overlay"; supportsDensity\?: boolean \}/);
   assert.match(workbench, /const effectiveHeaderDensity = computed\(\(\) => headerDensitySupported \? headerDensity\.value : "normal"\)/);

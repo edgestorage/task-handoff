@@ -9,7 +9,7 @@ const appStyles = fs.readFileSync(new URL("../src/styles/app.css", import.meta.u
 
 test("Story history opens one conversation in a right-side drawer", () => {
   assert.match(storyView, /<Sheet v-model:open="storyHistoryDetailOpen">/);
-  assert.match(storyView, /<SheetContent side="right"[^>]*class="story-history-drawer">/);
+  assert.match(storyView, /<SheetContent[\s\S]*?side="right"[\s\S]*?class="story-history-drawer"[\s\S]*?:data-header-density="headerDensity"/);
   assert.match(storyView, /<AiSessionPanel[\s\S]*?detail-only[\s\S]*?:initial-history-id="storyHistoryDetailEntry\?\.item\.id"/);
   assert.match(storyView, /<SheetTitle class="sr-only">/);
   assert.match(storyView, /class="story-history-drawer-drag-region" aria-hidden="true"/);
@@ -17,6 +17,8 @@ test("Story history opens one conversation in a right-side drawer", () => {
   assert.doesNotMatch(storyView, /story-history-drawer-header/);
   assert.match(storyView, /:global\(\.story-history-drawer\) \{[^}]*flex-direction:column;[^}]*gap:0 !important;[^}]*overflow:visible;[^}]*padding:0 !important;/);
   assert.match(storyView, /:global\(\.story-history-drawer\) \{ -webkit-app-region:no-drag;/);
+  assert.match(storyView, /\.story-history-drawer\[data-header-density="compact"\]\) \{ --control-plane-titlebar-height:44px; \}/);
+  assert.match(storyView, /\.story-history-drawer\[data-header-density="normal"\]\) \{ --control-plane-titlebar-height:56px; \}/);
   assert.match(storyView, /\.story-history-drawer-drag-region \{ -webkit-app-region:drag; height:var\(--control-plane-titlebar-height\);/);
   assert.match(storyView, /\.story-history-drawer-close \{ -webkit-app-region:no-drag; position:absolute;[^}]*left:-42px;/);
   assert.match(storyView, /@media \(max-width:820px\) \{ \.story-history-drawer-close \{ top:12px; left:max\(10px,calc\(10px \+ var\(--native-titlebar-controls-left-width\)\)\);/);

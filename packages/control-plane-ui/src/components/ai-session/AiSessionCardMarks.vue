@@ -1,6 +1,6 @@
 <template>
   <span class="ai-session-card-marks" :data-terminal-origin="creationSource === 'app-session' ? 'true' : undefined">
-    <span v-if="brandedAgent" class="ai-session-agent-mark" aria-hidden="true">
+    <span v-if="showAgent !== false && brandedAgent" class="ai-session-agent-mark" aria-hidden="true">
       <AiAgentIcon :agent="brandedAgent" :size="14" />
     </span>
     <AiSessionOriginMark :creation-source="creationSource" />
@@ -15,6 +15,7 @@ import AiSessionOriginMark from "./AiSessionOriginMark.vue";
 const props = defineProps<{
   agent: string;
   creationSource?: "ai-session" | "app-session";
+  showAgent?: boolean;
 }>();
 
 const brandedAgent = computed<"codex" | "claude" | "opencode" | undefined>(() => (

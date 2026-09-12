@@ -23,27 +23,26 @@ test("ai session cards do not render lifecycle status text in their headers", ()
 });
 
 test("ai session board cards show workspace context unless paths already group the grid", () => {
-  assert.match(card, /v-if="showWorkspace" class="ai-board-workspace"/);
+  assert.match(card, /<template v-if="showWorkspace">[\s\S]*class="ai-board-card-context-item"[\s\S]*<Folder :size="14"/);
   assert.match(card, /aiSessionBasename\(card\.session\.cwd\)/);
-  assert.match(card, /class="ai-board-primary-line"/);
-  assert.match(card, /class="ai-board-secondary-line"[\s\S]*aiSessionAppDisplayName[\s\S]*class="ai-board-workspace"[\s\S]*aria-hidden="true">·</);
+  assert.match(card, /<Boxes :size="14"[\s\S]*instanceDisplayName\(card\.instance\)/);
+  assert.match(card, /<template v-if="agentIcon">[\s\S]*class="ai-board-card-agent" :aria-label="agentDisplayName"[\s\S]*<AiAgentIcon :agent="agentIcon" :size="14"/);
+  assert.doesNotMatch(card, /aiSessionAppDisplayName/);
   assert.match(board, /:show-workspace="true"/);
   assert.match(board, /:show-workspace="gridGroupBy !== 'path'"/);
   assert.match(board, /class="ai-board-grid-group-workspace"/);
   assert.match(dock, /class="ai-board-floating-context"/);
-  assert.match(dock, /<Folder :size="14"[\s\S]*\{\{ folderName \}\}[\s\S]*<Boxes :size="14"[\s\S]*instanceDisplayName\(card\.instance\)[\s\S]*<AiAgentIcon v-if="agentIcon"[\s\S]*\{\{ agentDisplayName \}\}/);
+  assert.match(dock, /<Folder :size="14"[\s\S]*\{\{ folderName \}\}[\s\S]*<Boxes :size="14"[\s\S]*instanceDisplayName\(card\.instance\)[\s\S]*<AiAgentIcon :agent="agentIcon"/);
   assert.match(dock, /const agentDisplayName = computed\(\(\) => \{[\s\S]*props\.card\.session\.agent[\s\S]*common\.products\.\$\{agent\}/);
   assert.match(board, /:folder-name="aiBoardCardPath\(selectedCard\)\.label"/);
   assert.match(dock, /aiSessionBasename\(card\.session\.cwd\)/);
-  assert.match(card, /<TooltipTrigger as-child>\s*<b>/);
+  assert.match(card, /<TooltipTrigger as-child>\s*<span class="ai-board-card-context-item">/);
   assert.match(card, /<TooltipContent[^>]*>\{\{ card\.session\.cwd \|\| t\("sessions\.board\.unknownPath"\) \}\}<\/TooltipContent>/);
   assert.match(dock, /<TooltipTrigger as-child>[\s\S]*class="ai-board-floating-context-item"/);
   assert.match(dock, /<TooltipContent[^>]*>\{\{ card\.session\.cwd \|\| t\("sessions\.board\.unknownPath"\) \}\}<\/TooltipContent>/);
   assert.match(board, /:global\(\.ai-session-path-tooltip\)\s*\{[^}]*background: var\(--surface-overlay\) !important;[^}]*font-size: 11px;/s);
-  assert.match(card, /\.ai-board-workspace\s*\{[^}]*flex: 1 1 0;[^}]*color: color-mix\(in srgb, var\(--ai-board-muted\) 78%, transparent\);[^}]*font-size: 12px;/s);
-  assert.match(card, /\.ai-board-workspace b\s*\{[^}]*flex: 1 1 auto;[^}]*color: inherit;[^}]*font-size: inherit;[^}]*font-weight: inherit;/s);
-  assert.match(card, /\.ai-board-secondary-line\s*\{[^}]*gap: 4px;/s);
-  assert.match(card, /\.ai-board-instance strong\s*\{[^}]*color: color-mix\(in srgb, var\(--ai-board-muted\) 78%, transparent\);/s);
+  assert.match(card, /\.ai-board-card-context\s*\{[^}]*display: flex;[^}]*align-items: center;[^}]*font-size: 13px;[^}]*font-weight: 400;/s);
+  assert.match(card, /\.ai-board-card-context-item\s*\{[^}]*display: inline-flex;[^}]*gap: 5px;/s);
   assert.doesNotMatch(card, /\.ai-board-card-headline\s*\{[^}]*padding-right:/s);
   assert.match(dock, /\.ai-board-floating-context\s*\{[^}]*display: flex;[^}]*align-items: center;[^}]*font-size: 13px;[^}]*font-weight: 400;/s);
   assert.match(dock, /\.ai-board-floating-context-item\s*\{[^}]*display: inline-flex;[^}]*gap: 5px;/s);

@@ -482,7 +482,7 @@
 }
 
 :global(.control-plane-instance-menu-item.selected) {
-  background: var(--surface-active);
+  background: var(--workbench-view-switcher-bg, var(--surface-active));
 }
 
 :global(.control-plane-instance-menu-item.selected strong) {
@@ -719,10 +719,10 @@
   height: 32px;
   width: 288px;
   overflow: hidden;
-  border: 1px solid hsl(var(--input));
+  border: 0;
   border-radius: 999px;
-  background: hsl(var(--background));
-  box-shadow: 0 1px 2px rgb(0 0 0 / 5%);
+  background: var(--workbench-view-switcher-bg, var(--surface-active));
+  box-shadow: none;
   padding: 2px;
 }
 
@@ -735,9 +735,13 @@
   z-index: 0;
   width: calc((100% - 4px) / 4);
   border-radius: 999px;
-  background: hsl(var(--primary));
-  box-shadow: 0 1px 2px rgb(0 0 0 / 10%);
-  transition: left 0.18s ease;
+  background: var(--workbench-view-selection-bg, hsl(var(--accent)));
+  box-shadow: none;
+  transition: left 0.18s ease, opacity 0.15s ease;
+}
+
+.workbench-view-switcher.inactive::before {
+  opacity: 0;
 }
 
 .workbench-view-switcher[data-active-view="story"]::before {
@@ -769,7 +773,7 @@
   font-size: 12px;
   font-weight: 500;
   line-height: 1;
-  padding: 0 10px;
+  padding: 0 8px;
   transition: color 0.15s ease;
   white-space: nowrap;
 }
@@ -780,7 +784,7 @@
 
 .workbench-view-option.active {
   background: transparent;
-  color: hsl(var(--primary-foreground));
+  color: hsl(var(--accent-foreground));
   box-shadow: none;
 }
 
@@ -789,6 +793,44 @@
   z-index: 1;
   outline: 1px solid hsl(var(--ring));
   outline-offset: 1px;
+}
+
+.control-plane-settings-trigger.inline-flex {
+  position: relative;
+  height: 32px;
+  margin-left: 12px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  color: hsl(var(--muted-foreground));
+  font-weight: 500;
+  padding-inline: 9px;
+}
+
+.control-plane-settings-trigger.inline-flex::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: -8px;
+  width: 1px;
+  height: 16px;
+  background: color-mix(in srgb, var(--line) 72%, transparent);
+  transform: translateY(-50%);
+}
+
+.control-plane-shell[data-header-density="compact"] .workbench-view-switcher,
+.control-plane-shell[data-header-density="compact"] .control-plane-settings-trigger.inline-flex {
+  height: 30px;
+}
+
+.control-plane-settings-trigger.inline-flex:hover {
+  background: var(--surface-hover);
+  color: hsl(var(--accent-foreground));
+}
+
+.control-plane-settings-trigger.inline-flex.active {
+  background: var(--surface-active);
+  color: hsl(var(--primary));
 }
 
 .control-plane-update-indicator {

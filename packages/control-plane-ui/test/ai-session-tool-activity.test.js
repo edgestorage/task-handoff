@@ -225,6 +225,12 @@ test("detail context shows the registered folder, instance, agent, and lifecycle
   assert.doesNotMatch(panel, /aiSessionAppDisplayName\(aiSessionAppTab\(instance, selectedSession\)/);
 });
 
+test("floating detail context shows the agent as an icon without visible text", () => {
+  assert.match(floatingDock, /<template v-if="agentIcon">[\s\S]*class="ai-board-floating-agent" :aria-label="agentDisplayName"[\s\S]*<AiAgentIcon :agent="agentIcon" :size="14" \/>[\s\S]*<TooltipContent side="top" :side-offset="8">\{\{ agentDisplayName \}\}<\/TooltipContent>/);
+  assert.doesNotMatch(floatingDock, /<span>\{\{ agentDisplayName \}\}<\/span>/);
+  assert.match(floatingDock, /\.ai-board-floating-agent \{[\s\S]*display: inline-flex;[\s\S]*align-items: center;[\s\S]*flex: 0 0 auto;/);
+});
+
 test("detail context folder reuses desktop-local open and context-menu behavior", () => {
   assert.match(panel, /v-if="canOpenSelectedSessionFolder"[\s\S]*<ContextMenuTrigger as-child>[\s\S]*class="session-ai-detail-folder"[\s\S]*@click="openSelectedSessionFolder"[\s\S]*<TooltipTrigger as-child>[\s\S]*class="session-ai-detail-context-item"/);
   assert.doesNotMatch(panel, /<TooltipTrigger as-child>\s*<ContextMenuTrigger as-child>/);
