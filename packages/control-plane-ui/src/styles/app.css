@@ -63,6 +63,8 @@
   --control-plane-cockpit-background: var(--workspace-bg);
   /* Keep the titlebar close to the workspace while preserving a subtle layer. */
   --control-plane-topbar-bg: var(--surface-subtle);
+  --workbench-view-switcher-bg: #f2f2f7;
+  --workbench-view-selection-bg: #ffffff;
   --control-plane-settings-background: var(--surface-inset);
   --instance-board-background: var(--workspace-bg);
   --instance-board-accent-text: hsl(var(--primary));

@@ -36,6 +36,13 @@ test("Story detail tabs merge section counts into the sticky header", () => {
   assert.match(storyView, /value="automations"><span class="story-detail-tab-count">\{\{ storyAutomationEntries\.length \}\}<\/span>\{\{ t\("stories\.automation\.title"\) \}\}<\/TabsTrigger>/);
 });
 
+test("Story tabs distinguish selection without the default active shadow", () => {
+  assert.match(storyView, /\.story-detail-tabs :deep\(button\) \{[^}]*color:var\(--text-muted\);/);
+  assert.match(storyView, /\.story-session-tabs :deep\(button\) \{[^}]*color:var\(--text-muted\);/);
+  assert.match(storyView, /button\[data-state="active"\][^}]*background:var\(--surface-active\);[^}]*color:var\(--text-strong\);[^}]*box-shadow:none;/);
+  assert.match(storyView, /\.story-detail-tab-count \{[^}]*color:inherit;/);
+});
+
 test("Story detail title supports the instance-detail inline rename interaction", () => {
   assert.match(storyView, /class="story-title-name-button"[\s\S]*?@click="beginStoryTitleEdit\(selectedResource\.story, \$event\)"/);
   assert.match(storyView, /class="story-title-name-input"[\s\S]*?@blur="commitStoryTitleEdit"[\s\S]*?@keydown="handleStoryTitleEditKeydown"/);

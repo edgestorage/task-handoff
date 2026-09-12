@@ -388,7 +388,12 @@
   </Dialog>
 
   <Sheet v-model:open="storyHistoryDetailOpen">
-    <SheetContent side="right" :show-close="false" class="story-history-drawer">
+    <SheetContent
+      side="right"
+      :show-close="false"
+      class="story-history-drawer"
+      :data-header-density="headerDensity"
+    >
       <SheetTitle class="sr-only">{{ storyHistoryDetailEntry ? storyHistoryItemTitle(storyHistoryDetailEntry.item) : t("stories.historySessions") }}</SheetTitle>
       <SheetDescription class="sr-only">{{ storyHistoryDetailEntry?.instance.name }}</SheetDescription>
       <div class="story-history-drawer-drag-region" aria-hidden="true" />
@@ -460,8 +465,21 @@ import { latestStoryDocuments, STORY_TREE_DOCUMENT_LIMIT } from "./storyDocument
 import { normalizeManualStoryOrder, reorderStoryKeys, sortStories, storyDropTargetAt, storySortKey, type StorySortMode } from "./storySort";
 import { allStoryNodes, storyNodeIsVisible, type StoryNodeFilter } from "./storyNodeFilter";
 import { storySelectionKey, type StorySelection } from "./storySelection";
+import type { HeaderDensity } from "../useWorkbenchLayoutPreferences";
 
-const props = withDefaults(defineProps<{ chooseProjectFolder?: NativeNodeFolderPicker; instances: InstanceWithAiSessions[]; nodes: Node[]; nodeLocalFoldersByNodeId?: Record<string, NodeLocalFolder[]>; nodeFilter?: StoryNodeFilter; selection?: StorySelection }>(), { nodeLocalFoldersByNodeId: () => ({}), nodeFilter: allStoryNodes });
+const props = withDefaults(defineProps<{
+  chooseProjectFolder?: NativeNodeFolderPicker;
+  headerDensity?: HeaderDensity;
+  instances: InstanceWithAiSessions[];
+  nodes: Node[];
+  nodeLocalFoldersByNodeId?: Record<string, NodeLocalFolder[]>;
+  nodeFilter?: StoryNodeFilter;
+  selection?: StorySelection;
+}>(), {
+  headerDensity: "normal",
+  nodeLocalFoldersByNodeId: () => ({}),
+  nodeFilter: allStoryNodes,
+});
 const { locale, t } = useI18n();
 const projectFolderChooserFor = (instance: InstanceWithAiSessions | undefined) => (
   canUseNativeProjectFolderPicker(instance, Boolean(props.chooseProjectFolder)) ? props.chooseProjectFolder : undefined
@@ -1570,8 +1588,10 @@ onBeforeUnmount(() => {
 .story-session-creator { flex:1; min-height:0; }
 .story-detail-header-tabs { flex:0 0 auto; margin-left:auto; min-width:0; }
 .story-detail-tabs { display:inline-flex; align-items:center; width:fit-content; height:32px; min-height:32px; border:1px solid var(--line); border-radius:7px; background:var(--surface-inset); padding:2px; }
-.story-detail-tabs :deep(button) { height:26px; min-height:26px; border-radius:5px; font-size:12px; font-weight:500; padding:0 10px; }
-.story-detail-tab-count { margin-right:4px; color:var(--text-strong); font-weight:500; }
+.story-detail-tabs :deep(button) { height:26px; min-height:26px; border-radius:5px; color:var(--text-muted); font-size:12px; font-weight:500; padding:0 10px; }
+.story-detail-tabs :deep(button:not([data-state="active"]):hover),.story-session-tabs :deep(button:not([data-state="active"]):hover) { background:var(--surface-hover); color:var(--text-strong); }
+.story-detail-tabs :deep(button[data-state="active"]),.story-session-tabs :deep(button[data-state="active"]) { background:var(--surface-active); color:var(--text-strong); box-shadow:none; }
+.story-detail-tab-count { margin-right:4px; color:inherit; font-weight:500; }
 .story-directory { scroll-margin-top:calc(var(--story-detail-head-height) + 12px); }
 .story-directory { overflow:hidden; border:1px solid var(--line); border-radius:8px; background:var(--surface-raised); }
 .story-directory-header { display:flex; align-items:center; justify-content:space-between; gap:8px; min-height:38px; border-bottom:1px solid var(--line); padding:0 12px; }
@@ -1579,7 +1599,7 @@ onBeforeUnmount(() => {
 .story-directory-heading h3 { margin:0; color:var(--text-strong); font-size:13px; font-weight:500; }
 .story-directory-heading span { color:var(--text-muted); font-size:12px; }
 .story-session-tabs { width:auto; height:28px; min-height:28px; border:1px solid var(--line); border-radius:6px; background:var(--surface-inset); padding:2px; }
-.story-session-tabs :deep(button) { height:22px; min-height:22px; border-radius:4px; font-size:12px; font-weight:400; padding:0 8px; }
+.story-session-tabs :deep(button) { height:22px; min-height:22px; border-radius:4px; color:var(--text-muted); font-size:12px; font-weight:400; padding:0 8px; }
 .story-pagination { display:flex; align-items:center; justify-content:flex-end; gap:10px; min-height:36px; border-top:1px solid var(--line); color:var(--text-muted); font-size:12px; padding:3px 8px 3px 12px; }
 .story-pagination > div { display:flex; align-items:center; gap:2px; }
 .story-resource-item { display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:10px; width:100%; min-width:0; border:0; background:transparent; color:inherit; cursor:pointer; padding:10px 12px; text-align:left; }
@@ -1641,6 +1661,8 @@ onBeforeUnmount(() => {
 .story-history-panel > * { height:100%; min-height:0; }
 .story-history-panel > .story-history-ai-session-panel { --session-ai-scrollbar-outset:0px; }
 :global(.story-history-drawer) { -webkit-app-region:no-drag; display:flex; width:min(760px,100vw) !important; max-width:min(760px,100vw) !important; flex-direction:column; gap:0 !important; overflow:visible; background:var(--workspace-bg); padding:0 !important; }
+:global(.story-history-drawer[data-header-density="compact"]) { --control-plane-titlebar-height:44px; }
+:global(.story-history-drawer[data-header-density="normal"]) { --control-plane-titlebar-height:56px; }
 .story-dialog-header { flex-direction:row; align-items:flex-start; justify-content:space-between; gap:16px; text-align:left; }
 .story-dialog-close { display:grid; flex:0 0 auto; width:30px; height:30px; place-items:center; border:0; border-radius:6px; background:transparent; color:var(--text-muted); cursor:pointer; padding:0; }
 .story-dialog-close:hover, .story-dialog-close:focus-visible { background:var(--surface-active); color:var(--text-strong); outline:none; }

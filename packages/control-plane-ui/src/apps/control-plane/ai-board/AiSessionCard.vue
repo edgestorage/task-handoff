@@ -15,30 +15,47 @@
         @keydown.space.prevent="$emit('selectCard', card.key)"
       >
     <span v-if="card.session.unread" class="ai-session-unread-dot" :aria-label="t('sessions.actions.unread')" :title="t('sessions.actions.unread')" />
-    <AiSessionCardMarks :agent="card.session.agent" :creation-source="card.session.creationSource" />
-    <div class="ai-board-card-headline" :data-show-workspace="showWorkspace ? 'true' : undefined">
-      <button type="button" class="ai-board-instance" @click.stop="$emit('selectCard', card.key)">
-        <AiSessionStatusIndicator class="ai-board-status-indicator" :status="card.session.status" />
-        <span class="ai-board-identity">
-          <span class="ai-board-primary-line">
-            <strong>{{ instanceDisplayName(card.instance) }}</strong>
+    <AiSessionCardMarks :agent="card.session.agent" :creation-source="card.session.creationSource" :show-agent="false" />
+    <div class="ai-board-card-headline">
+      <TooltipProvider :delay-duration="120">
+        <button type="button" class="ai-board-instance" @click.stop="$emit('selectCard', card.key)">
+          <AiSessionStatusIndicator class="ai-board-status-indicator" :status="card.session.status" />
+          <span class="ai-board-card-context">
+            <template v-if="showWorkspace">
+              <Tooltip>
+                <TooltipTrigger as-child>
+                  <span class="ai-board-card-context-item">
+                    <Folder :size="14" aria-hidden="true" />
+                    <span>{{ aiSessionBasename(card.session.cwd) || t("sessions.board.unknownFolder") }}</span>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent class="ai-session-path-tooltip" side="top" :side-offset="8">{{ card.session.cwd || t("sessions.board.unknownPath") }}</TooltipContent>
+              </Tooltip>
+              <span class="ai-board-card-context-separator" aria-hidden="true">·</span>
+            </template>
+            <Tooltip>
+              <TooltipTrigger as-child>
+                <span class="ai-board-card-context-item">
+                  <Boxes :size="14" aria-hidden="true" />
+                  <span>{{ instanceDisplayName(card.instance) }}</span>
+                </span>
+              </TooltipTrigger>
+              <TooltipContent class="ai-session-path-tooltip" side="top" :side-offset="8">{{ card.instance.node?.name || card.instance.nodeId }}</TooltipContent>
+            </Tooltip>
+            <template v-if="agentIcon">
+              <span class="ai-board-card-context-separator" aria-hidden="true">·</span>
+              <Tooltip>
+                <TooltipTrigger as-child>
+                  <span class="ai-board-card-agent" :aria-label="agentDisplayName">
+                    <AiAgentIcon :agent="agentIcon" :size="14" />
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="top" :side-offset="8">{{ agentDisplayName }}</TooltipContent>
+              </Tooltip>
+            </template>
           </span>
-          <small class="ai-board-secondary-line">
-            <span>{{ aiSessionAppDisplayName(card.appTab, card.session.agent, t) }}</span>
-            <span v-if="showWorkspace" class="ai-board-workspace">
-              <span aria-hidden="true">·</span>
-              <TooltipProvider :delay-duration="120">
-                <Tooltip>
-                  <TooltipTrigger as-child>
-                    <b>{{ aiSessionBasename(card.session.cwd) || t("sessions.board.unknownFolder") }}</b>
-                  </TooltipTrigger>
-                  <TooltipContent class="ai-session-path-tooltip" side="top" :side-offset="8">{{ card.session.cwd || t("sessions.board.unknownPath") }}</TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-            </span>
-          </small>
-        </span>
-      </button>
+        </button>
+      </TooltipProvider>
     </div>
 
     <div class="ai-board-content">
@@ -122,8 +139,9 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
-import { Ban, Check, ChevronLeft, ChevronRight, X } from "@lucide/vue";
+import { Ban, Boxes, Check, ChevronLeft, ChevronRight, Folder, X } from "@lucide/vue";
 import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
+import AiAgentIcon from "../../../components/AiAgentIcon.vue";
 import AiSessionCardContextMenu from "../../../components/ai-session/AiSessionCardContextMenu.vue";
 import AiSessionCardMarks from "../../../components/ai-session/AiSessionCardMarks.vue";
 import AiSessionStatusIndicator from "../../../components/ai-session/AiSessionStatusIndicator.vue";
@@ -135,7 +153,6 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../
 import AiSessionStreamingMarkdown from "../../../components/ai-session/AiSessionStreamingMarkdown.vue";
 import { vAiSessionCardAutoScroll } from "../../../components/ai-session/aiSessionCardAutoScroll";
 import {
-  aiSessionAppDisplayName,
   aiSessionBasename,
   displayAiSessionMessage,
   displayAiSessionTitle,
@@ -184,6 +201,14 @@ function approvalKey(card: AiBoardCard, decision: "allow" | "deny" | "skip") {
 const isStoppingAppSession = computed(() => props.stoppingAppSessionKey === props.card.key);
 const isForking = computed(() => props.forkingSessionKey === props.card.key);
 const storyTarget = computed(() => aiSessionStoryTarget(props.card.instance, props.card.session));
+const agentIcon = computed<"codex" | "claude" | "opencode" | undefined>(() => {
+  const agent = props.card.session.agent;
+  return agent === "codex" || agent === "claude" || agent === "opencode" ? agent : undefined;
+});
+const agentDisplayName = computed(() => {
+  const agent = props.card.session.agent;
+  return agentIcon.value ? t(`common.products.${agent}`) : agent;
+});
 </script>
 
 <style scoped>
@@ -216,14 +241,14 @@ const storyTarget = computed(() => aiSessionStoryTarget(props.card.instance, pro
 .ai-board-instance {
   display: grid;
   grid-template-columns: 12px minmax(0, 1fr);
-  align-items: start;
+  align-items: center;
   gap: 9px;
   min-width: 0;
   border: 0;
   background: transparent;
   color: inherit;
   cursor: pointer;
-  padding: 10px 0 8px 14px;
+  padding: 10px 0 10px 14px;
   text-align: left;
 }
 
@@ -231,48 +256,48 @@ const storyTarget = computed(() => aiSessionStoryTarget(props.card.instance, pro
   min-width: 0;
 }
 
-.ai-board-workspace {
+.ai-board-card-context {
   display: flex;
-  align-items: baseline;
-  gap: 4px;
-  flex: 1 1 0;
+  align-items: center;
+  gap: 6px;
   min-width: 0;
-  color: color-mix(in srgb, var(--ai-board-muted) 78%, transparent);
-  font-size: 12px;
-  line-height: 1.2;
+  overflow: hidden;
+  color: var(--ai-board-muted);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 20px;
   white-space: nowrap;
 }
 
-.ai-board-workspace b {
+.ai-board-card-context-item {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 1 auto;
+  gap: 5px;
+  min-width: 0;
+}
+
+.ai-board-card-context-item > span {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.ai-board-workspace b {
-  flex: 1 1 auto;
-  color: inherit;
-  font-size: inherit;
-  font-weight: inherit;
-  line-height: inherit;
+.ai-board-card-context-item > svg,
+.ai-board-card-context-separator,
+.ai-board-card-agent {
+  flex: 0 0 auto;
 }
 
-.ai-board-identity {
-  display: grid;
-  gap: 3px;
-  min-width: 0;
+.ai-board-card-context-separator {
+  color: var(--ai-board-column-border);
 }
 
-.ai-board-primary-line {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  min-width: 0;
-}
-
-.ai-board-primary-line > strong {
-  flex: 0 1 auto;
+.ai-board-card-agent {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .ai-session-unread-dot {
@@ -287,39 +312,9 @@ const storyTarget = computed(() => aiSessionStoryTarget(props.card.instance, pro
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--status-info) 18%, transparent);
 }
 
-.ai-board-card[data-app-session-origin="true"] .ai-session-unread-dot {
-  right: 50px;
-}
-
 .ai-board-card:hover :deep(.ai-session-card-marks),
 .ai-board-card:focus-within :deep(.ai-session-card-marks) {
   opacity: 1;
-}
-
-.ai-board-secondary-line {
-  display: flex;
-  align-items: baseline;
-  gap: 4px;
-}
-
-.ai-board-identity strong,
-.ai-board-identity small {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ai-board-instance strong {
-  color: color-mix(in srgb, var(--ai-board-muted) 78%, transparent);
-  font-size: 13px;
-  font-weight: 700;
-  line-height: 1.2;
-}
-
-.ai-board-instance small {
-  color: var(--ai-board-muted);
-  font-size: 12px;
 }
 
 .ai-board-status-indicator {
@@ -331,7 +326,6 @@ const storyTarget = computed(() => aiSessionStoryTarget(props.card.instance, pro
   --ai-session-status-failed-shadow: var(--ai-board-dot-failed-shadow);
   --ai-session-status-idle: var(--ai-board-dot-idle);
   --ai-session-status-idle-shadow: var(--ai-board-dot-idle-shadow);
-  margin-top: 4px;
 }
 
 .ai-board-content {

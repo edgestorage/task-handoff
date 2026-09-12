@@ -33,16 +33,17 @@
                 </TooltipTrigger>
                 <TooltipContent class="ai-session-path-tooltip" side="top" :side-offset="8">{{ card.instance.node?.name || card.instance.nodeId }}</TooltipContent>
               </Tooltip>
-              <span class="ai-board-floating-context-separator" aria-hidden="true">·</span>
-              <Tooltip>
-                <TooltipTrigger as-child>
-                  <span class="ai-board-floating-context-item ai-board-floating-agent">
-                    <AiAgentIcon v-if="agentIcon" :agent="agentIcon" :size="14" />
-                    <span>{{ agentDisplayName }}</span>
-                  </span>
-                </TooltipTrigger>
-                <TooltipContent side="top" :side-offset="8">{{ agentDisplayName }}</TooltipContent>
-              </Tooltip>
+              <template v-if="agentIcon">
+                <span class="ai-board-floating-context-separator" aria-hidden="true">·</span>
+                <Tooltip>
+                  <TooltipTrigger as-child>
+                    <span class="ai-board-floating-agent" :aria-label="agentDisplayName">
+                      <AiAgentIcon :agent="agentIcon" :size="14" />
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent side="top" :side-offset="8">{{ agentDisplayName }}</TooltipContent>
+                </Tooltip>
+              </template>
             </div>
           </TooltipProvider>
           <div class="ai-board-floating-head-actions">
@@ -717,6 +718,9 @@ onBeforeUnmount(() => {
 }
 
 .ai-board-floating-agent {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex: 0 0 auto;
 }
 

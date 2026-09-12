@@ -197,14 +197,14 @@
             <TooltipContent side="bottom" :side-offset="8">{{ t("settings.appearance.updateAvailableVersion", { version: serverUpdateVersion }) }}</TooltipContent>
           </Tooltip>
         </TooltipProvider>
-        <div class="workbench-view-switcher" :data-active-view="workbenchView" :aria-label="t('navigation.workbenchView')">
+        <div class="workbench-view-switcher" :class="{ inactive: settingsMode }" :data-active-view="workbenchView" :aria-label="t('navigation.workbenchView')">
           <button
             v-for="option in workbenchViewOptions"
             :key="option.value"
             type="button"
             class="workbench-view-option"
-            :class="{ active: workbenchView === option.value }"
-            :aria-pressed="workbenchView === option.value"
+            :class="{ active: !settingsMode && workbenchView === option.value }"
+            :aria-pressed="!settingsMode && workbenchView === option.value"
             @click="setWorkbenchView(option.value)"
           >
             <component :is="option.icon" :size="15" />
@@ -216,7 +216,7 @@
           <span>{{ t("common.actions.refresh") }}</span>
         </Button>
         <template v-if="desktopBridge">
-          <Button :variant="settingsMode ? 'default' : 'outline'" size="sm" :aria-label="t('navigation.settings')" :title="t('navigation.settings')" :aria-pressed="settingsMode" @click="toggleSettings">
+          <Button variant="ghost" size="sm" class="control-plane-settings-trigger" :class="{ active: settingsMode }" :aria-label="t('navigation.settings')" :title="t('navigation.settings')" :aria-pressed="settingsMode" @click="toggleSettings">
             <Settings :size="15" />
             <span>{{ t("navigation.settings") }}</span>
           </Button>
@@ -355,6 +355,7 @@
         v-if="!standaloneMode && storyMode && !settingsMode"
         v-model:selection="storySelection"
         :choose-project-folder="desktopBridge?.chooseProjectFolder"
+        :header-density="effectiveHeaderDensity"
         :node-filter="storyNodeFilter"
         :instances="boardInstancesWithAiSessions"
         :node-local-folders-by-node-id="nodeLocalFoldersByNodeId"

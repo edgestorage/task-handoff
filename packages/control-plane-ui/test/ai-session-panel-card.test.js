@@ -164,17 +164,18 @@ test("AI session cards show the agent mark beside the optional terminal-origin m
   assert.match(originMark, /<SquareTerminal :size="14"/);
   assert.match(originMark, /opacity: 0\.38;/);
   assert.match(cardMarks, /<AiAgentIcon :agent="brandedAgent" :size="14"/);
+  assert.match(cardMarks, /showAgent !== false && brandedAgent/);
   assert.match(cardMarks, /props\.agent === "codex" \|\| props\.agent === "claude" \|\| props\.agent === "opencode" \? props\.agent : undefined/);
   assert.match(cardMarks, /<AiSessionOriginMark :creation-source="creationSource"/);
   assert.match(cardMarks, /\.ai-session-card-marks \{[\s\S]*?opacity: 0;[\s\S]*?transition: opacity 140ms ease;/);
   assert.match(panel, /<AiSessionCardMarks :agent="session\.agent" :creation-source="session\.creationSource"/);
-  assert.match(boardCard, /<AiSessionCardMarks :agent="card\.session\.agent" :creation-source="card\.session\.creationSource"/);
+  assert.match(boardCard, /<AiSessionCardMarks :agent="card\.session\.agent" :creation-source="card\.session\.creationSource" :show-agent="false"/);
   assert.match(styles, /\.session-ai-row:hover :deep\(\.ai-session-card-marks\),[\s\S]*?opacity: 1;/);
   assert.match(boardCard, /\.ai-board-card:hover :deep\(\.ai-session-card-marks\),[\s\S]*?opacity: 1;/);
   assert.match(styles, /\.ai-session-unread-dot \{[\s\S]*?right: 32px;/);
   assert.match(styles, /data-app-session-origin="true"\] \.ai-session-unread-dot \{\s*right: 50px;/);
   assert.match(boardCard, /\.ai-session-unread-dot \{[\s\S]*?right: 32px;/);
-  assert.match(boardCard, /data-app-session-origin="true"\] \.ai-session-unread-dot \{\s*right: 50px;/);
+  assert.doesNotMatch(boardCard, /data-app-session-origin="true"\] \.ai-session-unread-dot/);
   assert.doesNotMatch(originMark, /appSessionId/);
 });
 
