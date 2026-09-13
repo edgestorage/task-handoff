@@ -1,7 +1,7 @@
-import { ControlPlaneAiSessionsSchema, type ControlPlaneInstanceResourceEntry } from '@task-handoff/control-plane-client';
+import { ControlPlaneAiSessionsSchema, normalizeManualStoryOrder, reorderStoryKeys, type ControlPlaneInstanceResourceEntry } from '@task-handoff/control-plane-client';
 import type { Story } from '@task-handoff/protocol/stories';
 
-import { groupStoryTreeSessions, mergeStoryTreeSnapshot, sortStoryTree, unassignedStoryRootInstanceIds, visibleStoryTreeDocuments } from '../src/stories/story-tree-model';
+import { groupStoryTreeSessions, mergeStoryTreeSnapshot, sortStoryTree, storyDragPreview, unassignedStoryRootInstanceIds, visibleStoryTreeDocuments } from '../src/stories/story-tree-model';
 
 const story = (id: string, ownerNodeId: string, title: string): Story => ({
   id,
@@ -26,6 +26,18 @@ describe('mobile Story tree model', () => {
     ]);
     expect(sortStoryTree(stories, 'en-US', 'last-user-message', sessions).map((item) => item.id)).toEqual(['newer', 'older']);
     expect(sortStoryTree(stories, 'en-US', 'manual', sessions, ['n1:older', 'n1:newer']).map((item) => item.id)).toEqual(['older', 'newer']);
+  });
+
+  test('normalizes, reorders, and previews the complete manual Story order', () => {
+    const stories = [story('a', 'n1', 'A'), story('b', 'n1', 'B'), story('c', 'n2', 'C')];
+    const keys = normalizeManualStoryOrder(stories, ['n1:b', 'missing', 'n1:b']);
+    expect(keys).toEqual(['n1:b', 'n1:a', 'n2:c']);
+    expect(reorderStoryKeys(keys, 'n1:b', 'n2:c', 'after')).toEqual(['n1:a', 'n2:c', 'n1:b']);
+    expect(storyDragPreview(keys, 'n1:b', 25, [
+      { key: 'n1:b', center: 25 },
+      { key: 'n1:a', center: 85 },
+      { key: 'n2:c', center: 145 },
+    ], 75).keys).toEqual(['n1:a', 'n1:b', 'n2:c']);
   });
 
   test('keeps archived Stories after active Stories in every sort mode', () => {

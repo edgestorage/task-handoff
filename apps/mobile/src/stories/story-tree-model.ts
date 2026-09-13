@@ -3,6 +3,7 @@ import type {
   ControlPlaneAiSessionSummary,
   ControlPlaneInstanceResourceEntry,
 } from '@task-handoff/control-plane-client';
+import { normalizeManualStoryOrder, reorderStoryKeys } from '@task-handoff/control-plane-client';
 import type { Story, StoryDocument } from '@task-handoff/protocol/stories';
 import type { StorySortMode } from './story-view-preferences';
 import { deriveAiSessionForest, flattenAiSessionForest } from '@task-handoff/protocol/ai-session-hierarchy';
@@ -21,6 +22,17 @@ export function storyTreeKey(story: Pick<Story, 'id' | 'ownerNodeId'>) {
   return `${story.ownerNodeId}:${story.id}`;
 }
 
+export function storyDragPreview(keys: readonly string[], sourceKey: string, sourceCenter: number, targets: readonly { key: string; center: number }[], dy: number) {
+  const pointerCenter = sourceCenter + dy;
+  const target = targets.reduce((closest, candidate) => (
+    Math.abs(candidate.center - pointerCenter) < Math.abs(closest.center - pointerCenter) ? candidate : closest
+  ));
+  return {
+    keys: reorderStoryKeys(keys, sourceKey, target.key, target.center > sourceCenter ? 'after' : 'before'),
+    offsetY: pointerCenter - target.center,
+  };
+}
+
 export function sortStoryTree(stories: readonly Story[], locale: string, mode: StorySortMode = 'name', sessionsByStory?: ReadonlyMap<string, StoryTreeSession[]>, manualKeys: readonly string[] = []) {
   const collator = new Intl.Collator(locale, { numeric: true, sensitivity: 'base' });
   const byArchiveState = (left: Story, right: Story) => Number(Boolean(left.archivedAt)) - Number(Boolean(right.archivedAt));
@@ -33,7 +45,7 @@ export function sortStoryTree(stories: readonly Story[], locale: string, mode: S
     return byArchiveState(left, right) || rightTime - leftTime || byName(left, right);
   });
   if (mode === 'manual') {
-    const order = new Map(manualKeys.map((key, index) => [key, index]));
+    const order = new Map(normalizeManualStoryOrder(stories, manualKeys).map((key, index) => [key, index]));
     return [...stories].sort((left, right) => byArchiveState(left, right) || (order.get(storyTreeKey(left)) ?? Number.MAX_SAFE_INTEGER) - (order.get(storyTreeKey(right)) ?? Number.MAX_SAFE_INTEGER) || byName(left, right));
   }
   return [...stories].sort((left, right) => byArchiveState(left, right) || byName(left, right));

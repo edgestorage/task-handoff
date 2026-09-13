@@ -416,7 +416,7 @@ export class AiSessionRegistry {
       toolCallsSinceLastMessage: 0,
       subAgents: [],
       startedAt: current?.startedAt || item.lastActiveAt,
-      updatedAt: item.lastActiveAt,
+      updatedAt: nowIso(),
       counters: current?.counters || { toolCalls: 0, edits: 0, approvals: 0 },
       queue: current?.queue || emptyQueue(),
     };

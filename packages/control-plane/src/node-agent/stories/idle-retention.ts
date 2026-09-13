@@ -96,6 +96,7 @@ export class StoryIdleSessionRetentionCoordinator {
 
   private async close(target: IdleCandidate & { instance: ControlledInstance }, key: string) {
     try {
+      if (!await this.isUnchangedCandidate(target)) return;
       const response = await this.fetchImpl(`${await this.resolveInstanceWeb(target.instance)}/api/internal/node-agent/ai-sessions/${encodeURIComponent(target.sessionId)}/close`, {
         method: "POST",
         headers: { "content-type": "application/json", authorization: `Bearer ${target.instance.registrationToken}` },
@@ -107,6 +108,23 @@ export class StoryIdleSessionRetentionCoordinator {
     } finally {
       this.pending.delete(key);
     }
+  }
+
+  private async isUnchangedCandidate(target: IdleCandidate & { instance: ControlledInstance }) {
+    const response = await this.fetchImpl(`${await this.resolveInstanceWeb(target.instance)}/api/internal/node-agent/ai-sessions/idle-retention`, {
+      headers: { authorization: `Bearer ${target.instance.registrationToken}` },
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const payload = await response.json().catch(() => ({})) as { data?: unknown };
+    if (!Array.isArray(payload.data)) return false;
+    const current = payload.data.find((value) => {
+      if (!value || typeof value !== "object") return false;
+      const candidate = value as Partial<IdleCandidate>;
+      return candidate.sessionId === target.sessionId
+        && candidate.storyId === target.storyId
+        && candidate.status === "idle";
+    }) as Partial<IdleCandidate> | undefined;
+    return current !== undefined && retentionTimestamp(current) === retentionTimestamp(target);
   }
 }
 

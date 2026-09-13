@@ -41,9 +41,13 @@ export function storyAutomationDraft(story: Story, status?: StoryAutomationStatu
 
 export function storyAutomationDraftValid(draft: StoryAutomationDraft, story: Story) {
   const action = story.actions.find((candidate) => candidate.id === draft.actionId && candidate.targetInstanceId);
+  return Boolean(action) && storyAutomationDraftConfigValid(draft);
+}
+
+export function storyAutomationDraftConfigValid(draft: StoryAutomationDraft) {
   const maxConcurrentRuns = Number(draft.maxConcurrentRuns);
   const cooldownMinutes = Number(draft.cooldownMinutes);
-  if (!action || !Number.isInteger(maxConcurrentRuns) || maxConcurrentRuns < 1 || maxConcurrentRuns > 20) return false;
+  if (!Number.isInteger(maxConcurrentRuns) || maxConcurrentRuns < 1 || maxConcurrentRuns > 20) return false;
   if (!Number.isFinite(cooldownMinutes) || cooldownMinutes < 0 || cooldownMinutes > 1_440) return false;
   if (draft.scheduleKind === 'interval') {
     const intervalMinutes = Number(draft.intervalMinutes);

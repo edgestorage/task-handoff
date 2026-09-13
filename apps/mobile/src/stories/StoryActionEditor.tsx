@@ -7,7 +7,7 @@ import { normalizeAiSessionReasoningEffortCapabilities } from '@task-handoff/pro
 import { directoryAiSessionProviderCapability } from '@task-handoff/protocol/control-plane-directory';
 import { AI_SESSION_DEFAULT_REASONING_EFFORT, type AiSessionGitSelection, type AiSessionModelSelection, type AiSessionPermissionMode, type AiSessionReasoningEffort } from '@task-handoff/protocol/ai-sessions';
 import type { RepositoryAiSessionWorkspace } from '@task-handoff/protocol/repository';
-import type { Story, StorySessionPreset } from '@task-handoff/protocol/stories';
+import type { Story, StoryAction, StorySessionPreset } from '@task-handoff/protocol/stories';
 
 import { NewSessionForm, newSessionVisualBalanceInset } from '../ai-sessions/NewSessionForm';
 import { aiSessionFolderOptions, defaultAiSessionFolderId, initialInstanceId, instanceCreateGuidance, type AiSessionFolderOption } from '../ai-sessions/new-session-types';
@@ -21,8 +21,46 @@ export function StoryActionEditor({ nodeId, onSaved, storyId }: { nodeId?: strin
   const { colors } = useMobileTheme();
   const { t } = useI18n();
   const runtime = useMobileControlPlaneRuntime();
-  const { state: directory } = useActiveDirectories();
   const [story, setStory] = useState<Story>();
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    if (!runtime.api || !storyId || !nodeId) return;
+    let live = true;
+    void runtime.api.stories.get(storyId, nodeId).then((value) => {
+      if (live) setStory(value);
+    }).catch((cause) => {
+      if (live) setError(cause instanceof Error ? cause.message : String(cause));
+    }).finally(() => {
+      if (live) setLoading(false);
+    });
+    return () => { live = false; };
+  }, [nodeId, runtime.api, storyId]);
+  if (loading) return <ActivityIndicator accessibilityLabel={t('common.loading')} style={styles.loading} />;
+  if (!story) return <View style={styles.state}><Text style={{ color: colors.error }}>{error || t('stories.loadError')}</Text></View>;
+  return <StoryActionComposer
+    onSubmit={async (action) => {
+      if (!runtime.api) return;
+      await runtime.api.stories.update(story.id, story.ownerNodeId, { actions: [...story.actions, action] });
+      onSaved();
+    }}
+    story={story}
+    visualBalanceInset={newSessionVisualBalanceInset(Platform.OS, insets.top)}
+  />;
+}
+
+export function StoryActionComposer({ disabled = false, embedded = false, onSubmit, story, submitLabel, visualBalanceInset }: {
+  disabled?: boolean;
+  embedded?: boolean;
+  onSubmit(action: StoryAction): Promise<void>;
+  story: Story;
+  submitLabel?: string;
+  visualBalanceInset?: number;
+}) {
+  const { colors } = useMobileTheme();
+  const { t } = useI18n();
+  const runtime = useMobileControlPlaneRuntime();
+  const { state: directory } = useActiveDirectories();
   const [title, setTitle] = useState('');
   const [prompt, setPrompt] = useState('');
   const [selection, setSelection] = useState<{ instanceId?: string; agent?: string; folderId?: string }>({});
@@ -38,25 +76,11 @@ export function StoryActionEditor({ nodeId, onSaved, storyId }: { nodeId?: strin
     mode: 'current-folder' | 'worktree';
     branch?: string;
   }>({ mode: 'current-folder' });
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
-  useEffect(() => {
-    if (!runtime.api || !storyId || !nodeId) return;
-    let live = true;
-    void runtime.api.stories.get(storyId, nodeId).then((value) => {
-      if (live) setStory(value);
-    }).catch((cause) => {
-      if (live) setError(cause instanceof Error ? cause.message : String(cause));
-    }).finally(() => {
-      if (live) setLoading(false);
-    });
-    return () => { live = false; };
-  }, [nodeId, runtime.api, storyId]);
-
   const instances = useMemo(
-    () => story ? directory.instances.filter((instance) => instance.nodeId === story.ownerNodeId) : [],
+    () => directory.instances.filter((instance) => instance.nodeId === story.ownerNodeId),
     [directory.instances, story],
   );
   const selectedInstanceId = instances.some((instance) => instance.id === selection.instanceId)
@@ -157,10 +181,10 @@ export function StoryActionEditor({ nodeId, onSaved, storyId }: { nodeId?: strin
     ? { mode: workspaceState.mode, branch: workspaceState.branch }
     : undefined;
   const guidance = instanceCreateGuidance(selectedInstance);
-  const valid = Boolean(story && !story.archivedAt && title.trim() && prompt.trim() && selectedInstance && selectedFolder && agent && !guidance && !workspaceLoading);
+  const valid = Boolean(!disabled && !story.archivedAt && title.trim() && prompt.trim() && selectedInstance && selectedFolder && agent && !guidance && !workspaceLoading);
 
   const save = async () => {
-    if (!runtime.api || !story || !selectedInstance || !valid || saving) return;
+    if (!selectedInstance || !valid || saving) return;
     setSaving(true);
     setError('');
     const sessionPreset: StorySessionPreset = {
@@ -172,16 +196,13 @@ export function StoryActionEditor({ nodeId, onSaved, storyId }: { nodeId?: strin
       ...(reasoningEffort ? { reasoningEffort } : {}),
     };
     try {
-      await runtime.api.stories.update(story.id, story.ownerNodeId, {
-        actions: [...story.actions, {
-          id: `action-${Crypto.randomUUID()}`,
-          title: title.trim(),
-          promptTemplate: prompt.trim(),
-          targetInstanceId: selectedInstance.id,
-          sessionPreset,
-        }],
+      await onSubmit({
+        id: `action-${Crypto.randomUUID()}`,
+        title: title.trim(),
+        promptTemplate: prompt.trim(),
+        targetInstanceId: selectedInstance.id,
+        sessionPreset,
       });
-      onSaved();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -189,15 +210,13 @@ export function StoryActionEditor({ nodeId, onSaved, storyId }: { nodeId?: strin
     }
   };
 
-  if (loading) return <ActivityIndicator accessibilityLabel={t('common.loading')} style={styles.loading} />;
-  if (!story) return <View style={styles.state}><Text style={{ color: colors.error }}>{error || t('stories.loadError')}</Text></View>;
-
   return <NewSessionForm
     key={selectedInstance?.id || 'no-instance'}
     attachments={[]}
     attachmentsDisabled
     busy={saving || workspaceLoading}
     disabled={!valid || saving}
+    embedded={embedded}
     error={error || guidance}
     folders={folders}
     header={<View style={styles.titleField}>
@@ -228,9 +247,9 @@ export function StoryActionEditor({ nodeId, onSaved, storyId }: { nodeId?: strin
     selectedFolderId={folderId}
     selectedInstance={selectedInstance}
     selectedInstanceId={selectedInstanceId}
-    submitLabel={t('stories.createAction')}
-    submittingLabel={t('stories.createAction')}
-    visualBalanceInset={newSessionVisualBalanceInset(Platform.OS, insets.top)}
+    submitLabel={submitLabel || t('stories.createAction')}
+    submittingLabel={submitLabel || t('stories.createAction')}
+    visualBalanceInset={embedded ? undefined : visualBalanceInset}
     workspace={workspaceMatchesSelection ? workspaceState.workspace : undefined}
     workspaceLoading={workspaceLoading}
     workspaceMode={workspaceMatchesSelection ? workspaceState.mode : 'current-folder'}

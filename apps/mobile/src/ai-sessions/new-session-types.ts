@@ -36,6 +36,7 @@ export type NewSessionFormProps = {
   busy: boolean;
   disabled: boolean;
   error?: string;
+  embedded?: boolean;
   header?: ReactNode;
   attachmentsDisabled?: boolean;
   attachments: readonly { id: string; kind: 'image' | 'file'; name: string; size?: number; textPresentation?: AiSessionPastedTextPresentation }[];

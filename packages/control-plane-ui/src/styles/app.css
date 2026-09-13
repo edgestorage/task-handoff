@@ -65,6 +65,7 @@
   --control-plane-topbar-bg: var(--surface-subtle);
   --workbench-view-switcher-bg: #f2f2f7;
   --workbench-view-selection-bg: #ffffff;
+  --workbench-view-selection-fg: #1c1c1e;
   --control-plane-settings-background: var(--surface-inset);
   --instance-board-background: var(--workspace-bg);
   --instance-board-accent-text: hsl(var(--primary));
@@ -80,6 +81,7 @@
   --ai-board-assistant-bg: var(--surface-inset);
   --ai-board-expanded-bg: var(--surface-inset);
   --ai-board-floating-bg: var(--surface-subtle);
+  --ai-board-floating-shadow: 0 14px 34px rgb(0 0 0 / 14%);
   --ai-board-empty-bg: var(--surface-inset);
   --sidebar-row-hover-bg: #eeeef2;
   --sidebar-row-selected-bg: #e6e6ec;
@@ -94,6 +96,17 @@
   --control-plane-icon-button-bg: var(--surface-subtle);
   --control-plane-icon-button-hover-text: var(--text-strong);
   --workspace-button-hover-text: var(--text-strong);
+}
+
+:root.dark,
+:root[data-theme="dark"] {
+  --control-plane-cockpit-background: var(--workspace-bg);
+  --control-plane-settings-background: var(--workspace-bg);
+  --instance-board-background: var(--workspace-bg);
+  --ai-board-background: var(--workspace-bg);
+  --workbench-view-switcher-bg: var(--control-plane-pill-bg);
+  --workbench-view-selection-bg: var(--board-control-active-bg);
+  --workbench-view-selection-fg: var(--control-plane-heading);
 }
 
 html,

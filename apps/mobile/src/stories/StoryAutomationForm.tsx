@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from 'react';
-import * as Crypto from 'expo-crypto';
 import { ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import type { Story, StoryAction, StoryAutomationStatus } from '@task-handoff/protocol/stories';
 
@@ -8,13 +7,13 @@ import { ContextPill } from '../components/ContextPill';
 import { SystemIcon } from '../components/SystemIcon';
 import { useMobileTheme } from '../components/theme';
 import { useMobileControlPlaneRuntime } from '../control-plane/use-mobile-control-plane-runtime';
-import { useActiveDirectories } from '../directories/use-directories';
 import { useI18n, type Translate } from '../i18n';
+import { StoryActionComposer } from './StoryActionEditor';
 import {
   storyAutomationCreateInput,
   storyAutomationDraft,
+  storyAutomationDraftConfigValid,
   storyAutomationDraftValid,
-  storyAutomationDraftWithActionValid,
   storyAutomationUpdateInput,
   storyAutomationWithActionInput,
   type StoryAutomationDraft,
@@ -29,7 +28,6 @@ export function StoryAutomationForm({ automationId, nodeId, onSaved, storyId }: 
   const { colors } = useMobileTheme();
   const { t } = useI18n();
   const runtime = useMobileControlPlaneRuntime();
-  const { state: directory } = useActiveDirectories();
   const [story, setStory] = useState<Story>();
   const [status, setStatus] = useState<StoryAutomationStatus>();
   const [draft, setDraft] = useState<StoryAutomationDraft>();
@@ -37,9 +35,6 @@ export function StoryAutomationForm({ automationId, nodeId, onSaved, storyId }: 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [actionMode, setActionMode] = useState<'existing' | 'new'>('existing');
-  const [newActionTitle, setNewActionTitle] = useState('');
-  const [newActionPrompt, setNewActionPrompt] = useState('');
-  const [newActionTargetId, setNewActionTargetId] = useState('');
   useEffect(() => {
     if (!runtime.api || !storyId || !nodeId) return;
     let live = true;
@@ -51,30 +46,34 @@ export function StoryAutomationForm({ automationId, nodeId, onSaved, storyId }: 
       setStory(storyValue);
       setStatus(statusValue);
       setDraft(storyAutomationDraft(storyValue, statusValue));
-      setNewActionTargetId((current) => current || directoryInstances(storyValue, directory.instances)[0]?.id || '');
     }).catch((cause) => { if (live) setError(cause instanceof Error ? cause.message : String(cause)); }).finally(() => { if (live) setLoading(false); });
     return () => { live = false; };
-  }, [automationId, directory.instances, nodeId, runtime.api, storyId]);
-  const instances = useMemo(() => story ? directoryInstances(story, directory.instances) : [], [directory.instances, story]);
+  }, [automationId, nodeId, runtime.api, storyId]);
   const actions = useMemo(() => (story?.actions || []).filter((action) => Boolean(action.targetInstanceId)), [story]);
   const selectedAction = actions.find((action) => action.id === draft?.actionId);
-  const selectedNewActionTarget = instances.find((instance) => instance.id === newActionTargetId);
   const set = <K extends keyof StoryAutomationDraft>(key: K, value: StoryAutomationDraft[K]) => setDraft((current) => current ? { ...current, [key]: value } : current);
-  const newActionDraft: StoryAction = { id: 'draft-action', title: newActionTitle.trim(), promptTemplate: newActionPrompt.trim(), targetInstanceId: newActionTargetId };
-  const newActionValid = Boolean(newActionDraft.title && newActionDraft.promptTemplate && newActionDraft.targetInstanceId);
-  const valid = Boolean(story && draft && (actionMode === 'new'
-    ? newActionValid && storyAutomationDraftWithActionValid(draft, story, newActionDraft)
-    : storyAutomationDraftValid(draft, story)));
+  const configValid = Boolean(draft && storyAutomationDraftConfigValid(draft));
+  const valid = Boolean(story && draft && storyAutomationDraftValid(draft, story));
   const save = async () => {
     if (!runtime.api || !story || !draft || !valid || saving) return;
     setSaving(true);
     setError('');
     try {
-      if (actionMode === 'new' && !automationId) {
-        const action: StoryAction = { id: `action-${Crypto.randomUUID()}`, title: newActionTitle.trim(), promptTemplate: newActionPrompt.trim(), targetInstanceId: newActionTargetId };
-        await runtime.api.stories.createAutomationWithAction(story.id, story.ownerNodeId, storyAutomationWithActionInput(draft, action));
-      } else if (automationId) await runtime.api.stories.updateAutomation(story.id, automationId, story.ownerNodeId, storyAutomationUpdateInput(draft));
+      if (automationId) await runtime.api.stories.updateAutomation(story.id, automationId, story.ownerNodeId, storyAutomationUpdateInput(draft));
       else await runtime.api.stories.createAutomation(story.id, story.ownerNodeId, storyAutomationCreateInput(draft, story.id));
+      onSaved();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setSaving(false);
+    }
+  };
+  const saveWithAction = async (action: StoryAction) => {
+    if (!runtime.api || !story || !draft || !configValid || saving) return;
+    setSaving(true);
+    setError('');
+    try {
+      await runtime.api.stories.createAutomationWithAction(story.id, story.ownerNodeId, storyAutomationWithActionInput(draft, action));
       onSaved();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -88,14 +87,12 @@ export function StoryAutomationForm({ automationId, nodeId, onSaved, storyId }: 
     <ScrollView automaticallyAdjustKeyboardInsets contentInsetAdjustmentBehavior="automatic" contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" testID="story-automation-scroll">
       <FormSection title={t('stories.automationAction')}>
         {!automationId ? <SegmentedChoices onSelect={(value) => setActionMode(value as 'existing' | 'new')} options={[{ value: 'existing', label: t('stories.selectAction') }, { value: 'new', label: t('stories.newAction') }]} selected={actionMode} /> : null}
-        {actionMode === 'new' && !automationId ? <>
-          <Field label={t('stories.actionTitle')} onChange={setNewActionTitle} value={newActionTitle} />
-          <Field label={t('stories.actionPrompt')} multiline onChange={setNewActionPrompt} value={newActionPrompt} />
-          <View style={styles.field}><Text style={[styles.label, { color: colors.text }]}>{t('stories.actionTarget')}</Text><NewSessionContextMenu cancelLabel={t('common.cancel')} disabled={saving || !instances.length} onSelect={setNewActionTargetId} options={instances.map((instance) => ({ value: instance.id, label: instance.name, description: instance.id, systemImage: 'server.rack' }))} selectedValue={newActionTargetId} title={t('stories.actionTarget')}>{(onPress) => <ContextPill disabled={saving || !instances.length} icon={{ android: 'dns', ios: 'server.rack' }} label={selectedNewActionTarget?.name || t('stories.noAvailableInstance')} onPress={onPress} />}</NewSessionContextMenu></View>
-        </> : <NewSessionContextMenu cancelLabel={t('common.cancel')} disabled={Boolean(automationId) || saving || !actions.length} onSelect={(value) => set('actionId', value)} options={actions.map((action) => ({ value: action.id, label: action.title, description: action.promptTemplate, systemImage: 'play.fill' }))} selectedValue={draft.actionId} title={t('stories.automationAction')}>
+        {actionMode !== 'new' || automationId ? <NewSessionContextMenu cancelLabel={t('common.cancel')} disabled={Boolean(automationId) || saving || !actions.length} onSelect={(value) => set('actionId', value)} options={actions.map((action) => ({ value: action.id, label: action.title, description: action.promptTemplate, systemImage: 'play.fill' }))} selectedValue={draft.actionId} title={t('stories.automationAction')}>
           {(onPress) => <ContextPill disabled={Boolean(automationId) || saving || !actions.length} icon={{ android: 'bolt', ios: 'bolt' }} label={selectedAction?.title || t('stories.selectAction')} onPress={onPress} />}
-        </NewSessionContextMenu>}
+        </NewSessionContextMenu> : null}
       </FormSection>
+
+      {actionMode === 'new' && !automationId ? <StoryActionComposer disabled={!configValid || saving} embedded onSubmit={saveWithAction} story={story} submitLabel={t('stories.addAutomation')} /> : null}
 
       <FormSection title={t('stories.automationSchedule')}>
         <SegmentedChoices onSelect={(value) => set('scheduleKind', value as StoryAutomationDraft['scheduleKind'])} options={scheduleOptions(t)} selected={draft.scheduleKind} />
@@ -115,8 +112,8 @@ export function StoryAutomationForm({ automationId, nodeId, onSaved, storyId }: 
       </FormSection>
 
       {error ? <Text accessibilityLiveRegion="polite" style={[styles.error, { backgroundColor: colors.errorSoft, color: colors.error }]}>{error}</Text> : null}
-      {!valid ? <Text style={[styles.hint, { color: colors.textMuted }]}>{t('stories.automationRequiredHint')}</Text> : null}
-      <Pressable accessibilityRole="button" accessibilityState={{ disabled: !valid || saving }} disabled={!valid || saving} onPress={() => { void save(); }} style={({ pressed }) => [styles.submit, { backgroundColor: colors.primaryButton }, (!valid || saving) && styles.disabled, pressed && styles.pressed]}>{saving ? <ActivityIndicator color="#fff" /> : <><SystemIcon android="schedule" color="#fff" ios="calendar.badge.clock" size={18} /><Text style={styles.submitText}>{t(automationId ? 'common.save' : 'stories.addAutomation')}</Text></>}</Pressable>
+      {!(actionMode === 'new' ? configValid : valid) ? <Text style={[styles.hint, { color: colors.textMuted }]}>{t('stories.automationRequiredHint')}</Text> : null}
+      {actionMode !== 'new' || automationId ? <Pressable accessibilityRole="button" accessibilityState={{ disabled: !valid || saving }} disabled={!valid || saving} onPress={() => { void save(); }} style={({ pressed }) => [styles.submit, { backgroundColor: colors.primaryButton }, (!valid || saving) && styles.disabled, pressed && styles.pressed]}>{saving ? <ActivityIndicator color="#fff" /> : <><SystemIcon android="schedule" color="#fff" ios="calendar.badge.clock" size={18} /><Text style={styles.submitText}>{t(automationId ? 'common.save' : 'stories.addAutomation')}</Text></>}</Pressable> : null}
     </ScrollView>
   </KeyboardAvoidingView>;
 }
@@ -129,10 +126,6 @@ function FormSection({ children, title }: { children: React.ReactNode; title: st
 function Field({ keyboard, label, multiline, onChange, placeholder, suffix, value }: { keyboard?: 'number-pad'; label: string; multiline?: boolean; onChange(value: string): void; placeholder?: string; suffix?: string; value: string }) {
   const { colors } = useMobileTheme();
   return <View style={styles.field}><Text style={[styles.label, { color: colors.text }]}>{label}</Text><View style={styles.inputRow}><TextInput accessibilityLabel={label} autoCapitalize="none" keyboardType={keyboard} multiline={multiline} onChangeText={onChange} placeholder={placeholder} placeholderTextColor={colors.textMuted} style={[styles.input, multiline && styles.textarea, { backgroundColor: colors.surfaceMuted, borderColor: colors.border, color: colors.text }]} value={value} />{suffix ? <Text style={[styles.suffix, { color: colors.textMuted }]}>{suffix}</Text> : null}</View></View>;
-}
-
-function directoryInstances(story: Story, instances: readonly { id: string; name: string; nodeId: string; ready: boolean }[]) {
-  return instances.filter((instance) => instance.nodeId === story.ownerNodeId && instance.ready);
 }
 
 function SegmentedChoices({ label, onSelect, options, selected }: { label?: string; onSelect(value: string): void; options: { label: string; value: string }[]; selected: string }) {

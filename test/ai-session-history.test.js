@@ -635,6 +635,7 @@ test("AI session resume coordinator restores Direct history without launching an
   assert.equal(providerResumes, 1);
   assert.equal(registry.get(item.id).creationSource, "ai-session");
   assert.equal(registry.get(item.id).appSessionId, undefined);
+  assert.ok(Date.parse(registry.get(item.id).updatedAt) > Date.parse(item.lastActiveAt));
   assert.equal(history.get(item.id), undefined);
   assert.deepEqual(releasedSessions, []);
 });

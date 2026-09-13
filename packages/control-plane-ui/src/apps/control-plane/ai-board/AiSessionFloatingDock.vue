@@ -579,7 +579,7 @@ onBeforeUnmount(() => {
   background: color-mix(in srgb, var(--ai-board-column-bg) 82%, transparent);
   -webkit-backdrop-filter: blur(16px) saturate(1.24);
   backdrop-filter: blur(16px) saturate(1.24);
-  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.34);
+  box-shadow: var(--ai-board-floating-shadow, 0 18px 48px rgb(0 0 0 / 34%));
 }
 
 .ai-board-floating-detail {
@@ -870,7 +870,7 @@ onBeforeUnmount(() => {
   --ai-composer-stop-bg: var(--ai-board-card-failed-border);
   --ai-composer-stop-text: var(--ai-board-stale-text);
   --ai-composer-danger: var(--ai-board-stale-text);
-  --ai-composer-shadow: 0 18px 48px rgba(0, 0, 0, 0.34);
+  --ai-composer-shadow: var(--ai-board-floating-shadow, 0 18px 48px rgb(0 0 0 / 34%));
   min-height: 86px;
   max-height: min(280px, calc(100vh - 144px));
   -webkit-backdrop-filter: blur(16px) saturate(1.24);

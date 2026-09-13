@@ -1,4 +1,5 @@
 import { StoryActionSchema } from '@task-handoff/protocol/stories';
+import { storyActionCanStart } from '../src/stories/StoryActionForm';
 
 describe('Story action prompt', () => {
   test('keeps double braces as literal prompt text', () => {
@@ -17,5 +18,11 @@ describe('Story action prompt', () => {
       promptTemplate: 'Deploy',
       parameters: [{ name: 'environment', label: 'Environment', required: true }],
     })).toThrow();
+  });
+
+  test('cannot start an Action from an archived Story', () => {
+    const action = { id: 'deploy' };
+    expect(storyActionCanStart({}, action, 'instance-1')).toBe(true);
+    expect(storyActionCanStart({ archivedAt: '2026-09-06T00:00:00.000Z' }, action, 'instance-1')).toBe(false);
   });
 });

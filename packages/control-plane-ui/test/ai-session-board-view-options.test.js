@@ -12,11 +12,13 @@ test("AI board columns remain status lanes sorted only by user prompt recency", 
 
 test("AI board grid alone exposes status sorting and grouping options", () => {
   assert.match(board, /<DropdownMenu v-if="layoutMode === 'grid'">[\s\S]*?t\("sessions\.board\.sortByStatus"\)/);
-  assert.match(board, /value="none">\{\{ t\("sessions\.board\.noGrouping"\) \}\}/);
-  assert.match(board, /value="path">\{\{ t\("sessions\.board\.groupPath"\) \}\}/);
-  assert.match(board, /value="instance">\{\{ t\("sessions\.board\.groupInstance"\) \}\}/);
-  assert.match(board, /value="node">\{\{ t\("sessions\.board\.groupNode"\) \}\}/);
-  assert.match(board, /value="agent">\{\{ t\("sessions\.board\.groupAgent"\) \}\}/);
+  assert.match(board, /<ArrowUpDown class="ai-board-option-icon"[^>]*>[\s\S]*?t\("sessions\.board\.sortByStatus"\)/);
+  assert.match(board, /value="none"><Ungroup class="ai-board-option-icon"[^>]*>\{\{ t\("sessions\.board\.noGrouping"\) \}\}/);
+  assert.match(board, /value="path"><Folder class="ai-board-option-icon"[^>]*>\{\{ t\("sessions\.board\.groupPath"\) \}\}/);
+  assert.match(board, /value="instance"><Boxes class="ai-board-option-icon"[^>]*>\{\{ t\("sessions\.board\.groupInstance"\) \}\}/);
+  assert.match(board, /value="node"><Server class="ai-board-option-icon"[^>]*>\{\{ t\("sessions\.board\.groupNode"\) \}\}/);
+  assert.match(board, /value="agent"><Bot class="ai-board-option-icon"[^>]*>\{\{ t\("sessions\.board\.groupAgent"\) \}\}/);
+  assert.match(board, /\.ai-board-options-item :deep\(\.ai-board-option-icon\) \{[\s\S]*?width: 14px;[\s\S]*?height: 14px;/);
   assert.doesNotMatch(board, /type AiBoardGridGroupBy = [^;]*status/);
 });
 

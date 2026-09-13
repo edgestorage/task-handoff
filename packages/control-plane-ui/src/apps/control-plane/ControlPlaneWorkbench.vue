@@ -223,7 +223,7 @@
         </template>
         <DropdownMenu v-else>
           <DropdownMenuTrigger as-child>
-            <Button :variant="settingsMode ? 'default' : 'outline'" size="sm" class="control-plane-user-trigger" :aria-label="t('navigation.userMenu')" :title="t('navigation.userMenu')">
+            <Button variant="ghost" size="sm" class="control-plane-user-trigger" :class="{ active: settingsMode }" :aria-label="t('navigation.userMenu')" :title="t('navigation.userMenu')">
               <UserRound :size="15" />
               <span>{{ userMenuLabel }}</span>
               <ChevronDown :size="13" aria-hidden="true" />
@@ -552,7 +552,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../
 import AiSessionBoardView from "./ai-board/AiSessionBoardView.vue";
 import StoryView from "./story/StoryView.vue";
 import type { StorySelection } from "./story/storySelection";
-import { allStoryNodes, normalizeStoryNodeFilter, selectOnlyStoryNode, storyNodeIsSelected, toggleStoryNode, type StoryNodeFilter } from "./story/storyNodeFilter";
+import { allStoryNodes, normalizeStoryNodeFilter, selectOnlyStoryNode, storyNodeIsSelected, toggleStoryNode, type StoryNodeFilter } from "@task-handoff/control-plane-client";
 import InstanceBoardView from "./board/InstanceBoardView.vue";
 import InstanceDetail from "./instance-detail/InstanceDetail.vue";
 import EmbeddedBrowserSurfaceLayer from "./instance-detail/EmbeddedBrowserSurfaceLayer.vue";

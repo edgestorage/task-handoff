@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { ActivityIndicator, Alert, FlatList, Modal, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { MenuView, type MenuAction } from '@expo/ui/community/menu';
 import * as Crypto from 'expo-crypto';
-import { aiSessionStatusGroup } from '@task-handoff/control-plane-client';
+import { aiSessionStatusGroup, normalizeManualStoryOrder, reorderStoryKeys, storyNodeIsVisible } from '@task-handoff/control-plane-client';
 import type { Story, StoryDocument } from '@task-handoff/protocol/stories';
 
 import { mobileAiSessionStatusLabel } from '../ai-sessions/SessionDetail';
@@ -10,6 +10,7 @@ import { SessionStatusIndicator } from '../ai-sessions/SessionStatusIndicator';
 import { storyAiSessionCreationDefaults } from '../ai-sessions/new-session-types';
 import { useActiveAiSessionsRuntime, useActiveAiSessionsSnapshot } from '../ai-sessions/use-active-sessions';
 import { EmptyState } from '../components/EmptyState';
+import { ReorderDragHandle } from '../components/ReorderDragHandle';
 import { SystemIcon } from '../components/SystemIcon';
 import { useMobileTheme } from '../components/theme';
 import { useMobileControlPlaneRuntime } from '../control-plane/use-mobile-control-plane-runtime';
@@ -19,6 +20,7 @@ import {
   groupStoryTreeSessions,
   mergeStoryTreeSnapshot,
   sortStoryTree,
+  storyDragPreview,
   storyTreeKey,
   visibleStoryTreeDocuments,
   STORY_TREE_DOCUMENT_LIMIT,
@@ -26,6 +28,7 @@ import {
 } from './story-tree-model';
 import { getStoryViewPreferences, subscribeStoryViewPreferences, updateStoryViewPreferences } from './story-view-preferences';
 import { useStoryEvents } from './use-story-events';
+import { useStoryNodeFilter } from './use-story-node-filter';
 
 type StoryInboxProps = {
   onOpen(story: Story): void;
@@ -45,16 +48,25 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
   const { state: directory } = useActiveDirectories();
   const sessions = useActiveAiSessionsSnapshot();
   const aiSessionRuntime = useActiveAiSessionsRuntime();
+  const { filter: nodeFilter } = useStoryNodeFilter();
   const preferences = useSyncExternalStore(subscribeStoryViewPreferences, getStoryViewPreferences, getStoryViewPreferences);
   const [stories, setStories] = useState<Story[]>([]);
   const [unavailableNodeIds, setUnavailableNodeIds] = useState<string[]>([]);
   const [expandedStoryKeys, setExpandedStoryKeys] = useState<Set<string>>(() => new Set());
   const [expandedDocumentKeys, setExpandedDocumentKeys] = useState<Set<string>>(() => new Set());
   const [expandedSessionIds, setExpandedSessionIds] = useState<Set<string>>(() => new Set());
+  const [manualOrderPreview, setManualOrderPreview] = useState<string[]>();
+  const [draggingStoryKey, setDraggingStoryKey] = useState<string>();
+  const [storyDragOffsetY, setStoryDragOffsetY] = useState(0);
+  const manualOrderPreviewRef = useRef<string[] | undefined>(undefined);
+  const storyRowHeights = useRef(new Map<string, number>());
+  const storyDrag = useRef<{ key: string; sourceCenter: number; sourceOrder: string[]; targets: { key: string; center: number }[] } | undefined>(undefined);
   const [phase, setPhase] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
   const [error, setError] = useState<string>();
   const [renamingDocument, setRenamingDocument] = useState<{ story: Story; document: StoryDocument; title: string }>();
   const nodeNames = useMemo(() => new Map(directory.nodes.map((node) => [node.id, node.name])), [directory.nodes]);
+  const visibleStories = useMemo(() => stories.filter((story) => storyNodeIsVisible(nodeFilter, story.ownerNodeId)), [nodeFilter, stories]);
+  const visibleUnavailableNodeIds = useMemo(() => unavailableNodeIds.filter((nodeId) => storyNodeIsVisible(nodeFilter, nodeId)), [nodeFilter, unavailableNodeIds]);
   const sessionsByStory = useMemo(
     () => groupStoryTreeSessions(stories, directory.instances, sessions, expandedSessionIds),
     [directory.instances, expandedSessionIds, sessions, stories],
@@ -67,11 +79,15 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
     }
     return result;
   }, [directory.instances, sessions]);
-  const sortedStories = useMemo(() => sortStoryTree(stories, locale, preferences.sortMode, sessionsByStory, preferences.manualKeys), [locale, preferences.manualKeys, preferences.sortMode, sessionsByStory, stories]);
+  const displayedManualKeys = manualOrderPreview ?? preferences.manualKeys;
+  const sortedStories = useMemo(() => sortStoryTree(visibleStories, locale, preferences.sortMode, sessionsByStory, displayedManualKeys), [displayedManualKeys, locale, preferences.sortMode, sessionsByStory, visibleStories]);
   useEffect(() => {
-    if (preferences.sortMode !== 'manual' || preferences.manualKeys.length || !stories.length) return;
-    updateStoryViewPreferences({ manualKeys: sortStoryTree(stories, locale).map(storyTreeKey) });
-  }, [locale, preferences.manualKeys.length, preferences.sortMode, stories]);
+    if (!stories.length || manualOrderPreview) return;
+    const manualKeys = preferences.sortMode === 'manual'
+      ? normalizeManualStoryOrder(stories, preferences.manualKeys)
+      : sortStoryTree(stories, locale, preferences.sortMode, sessionsByStory).map(storyTreeKey);
+    if (!sameStringOrder(manualKeys, preferences.manualKeys)) updateStoryViewPreferences({ manualKeys });
+  }, [locale, manualOrderPreview, preferences.manualKeys, preferences.sortMode, sessionsByStory, stories]);
   const refresh = useCallback(async (signal?: AbortSignal) => {
     if (!runtime.api) return;
     setPhase('loading');
@@ -115,11 +131,66 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
     t('sessions.closeConfirmDescription'),
     [{ text: t('common.cancel'), style: 'cancel' }, { text: t('sessions.closeSession'), style: 'destructive', onPress: () => { void aiSessionRuntime.actions?.close(entry.instanceId, entry.session.id, Crypto.randomUUID()).catch((cause) => Alert.alert(t('sessions.closeFailed'), cause instanceof Error ? cause.message : String(cause))); } }],
   ), [aiSessionRuntime.actions, t]);
+  const moveStory = (key: string, offset: -1 | 1) => {
+    const index = sortedStories.findIndex((story) => storyTreeKey(story) === key);
+    const target = sortedStories[index + offset];
+    if (index < 0 || !target) return;
+    const manualKeys = normalizeManualStoryOrder(stories, preferences.manualKeys);
+    updateStoryViewPreferences({ manualKeys: reorderStoryKeys(manualKeys, key, storyTreeKey(target), offset < 0 ? 'before' : 'after') });
+  };
+  const beginStoryDrag = (key: string) => {
+    const sourceOrder = normalizeManualStoryOrder(stories, preferences.manualKeys);
+    let cursor = 0;
+    const targets = sortedStories.flatMap((story) => {
+      const candidateKey = storyTreeKey(story);
+      const height = storyRowHeights.current.get(candidateKey);
+      if (!height) return [];
+      const target = { key: candidateKey, center: cursor + height / 2 };
+      cursor += height + 10;
+      return [target];
+    });
+    const source = targets.find((target) => target.key === key);
+    if (!source || targets.length < 2) return;
+    storyDrag.current = { key, sourceCenter: source.center, sourceOrder, targets };
+    manualOrderPreviewRef.current = sourceOrder;
+    setManualOrderPreview(sourceOrder);
+    setDraggingStoryKey(key);
+    setStoryDragOffsetY(0);
+  };
+  const updateStoryDrag = (key: string, dy: number) => {
+    const drag = storyDrag.current;
+    if (!drag || drag.key !== key) return;
+    const preview = storyDragPreview(drag.sourceOrder, key, drag.sourceCenter, drag.targets, dy);
+    setStoryDragOffsetY(preview.offsetY);
+    if (!sameStringOrder(preview.keys, manualOrderPreviewRef.current)) {
+      manualOrderPreviewRef.current = preview.keys;
+      setManualOrderPreview(preview.keys);
+    }
+  };
+  const finishStoryDrag = (key: string) => {
+    const drag = storyDrag.current;
+    if (!drag || drag.key !== key) return;
+    const manualKeys = manualOrderPreviewRef.current ?? drag.sourceOrder;
+    storyDrag.current = undefined;
+    manualOrderPreviewRef.current = undefined;
+    setManualOrderPreview(undefined);
+    setDraggingStoryKey(undefined);
+    setStoryDragOffsetY(0);
+    if (!sameStringOrder(manualKeys, drag.sourceOrder)) updateStoryViewPreferences({ manualKeys });
+  };
+  const cancelStoryDrag = (key: string) => {
+    if (storyDrag.current?.key !== key) return;
+    storyDrag.current = undefined;
+    manualOrderPreviewRef.current = undefined;
+    setManualOrderPreview(undefined);
+    setDraggingStoryKey(undefined);
+    setStoryDragOffsetY(0);
+  };
 
   useStoryEvents(refresh);
 
   if (phase === 'loading' && stories.length === 0) return <ActivityIndicator accessibilityLabel={t('common.loading')} style={styles.loading} />;
-  const emptyUnavailable = sortedStories.length === 0 && unavailableNodeIds.length > 0;
+  const emptyUnavailable = sortedStories.length === 0 && visibleUnavailableNodeIds.length > 0;
   const emptyError = phase === 'error' || emptyUnavailable;
   return <><FlatList
     contentContainerStyle={[styles.content, { backgroundColor: colors.background }, sortedStories.length === 0 && styles.emptyContent]}
@@ -134,6 +205,7 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
     />}
     onRefresh={() => { void refresh(); }}
     refreshing={phase === 'loading'}
+    scrollEnabled={!draggingStoryKey}
     testID="story-list"
     renderItem={({ item: story }) => {
         const key = storyTreeKey(story);
@@ -142,7 +214,11 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
         const storySessions = sessionsByStory.get(key) ?? [];
         const documents = visibleStoryTreeDocuments(story.documents, expandedDocumentKeys.has(key));
         const newSessionDefaults = storyAiSessionCreationDefaults(directory.instances, sessions, story.id, story.ownerNodeId);
-        return <View style={[styles.storyGroup, { borderColor: colors.border }]}>
+        return <View
+          onLayout={(event) => storyRowHeights.current.set(key, event.nativeEvent.layout.height)}
+          style={[styles.storyGroup, { borderColor: colors.border }, draggingStoryKey === key && styles.storyGroupDragging, draggingStoryKey === key && { transform: [{ translateY: storyDragOffsetY }], zIndex: 1 }]}
+          testID={`story-row-${key}`}
+        >
         <View style={[styles.storyRow, expanded && styles.storyRowExpanded, expanded && { borderBottomColor: colors.border }]}>
           <Pressable
             accessibilityLabel={t(expanded ? 'stories.collapse' : 'stories.expand', { name: story.title })}
@@ -195,6 +271,19 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
             </View>
           </Pressable>
           </MenuView>
+          {preferences.sortMode === 'manual' ? <ReorderDragHandle
+            disabled={sortedStories.length < 2}
+            label={t('stories.sort.reorder', { name: story.title })}
+            moveDownLabel={t('stories.sort.moveDown')}
+            moveUpLabel={t('stories.sort.moveUp')}
+            onDragCancel={() => cancelStoryDrag(key)}
+            onDragEnd={() => finishStoryDrag(key)}
+            onDragMove={(dy) => updateStoryDrag(key, dy)}
+            onDragStart={() => beginStoryDrag(key)}
+            onMoveDown={() => moveStory(key, 1)}
+            onMoveUp={() => moveStory(key, -1)}
+            testID="story-drag-handle"
+          /> : null}
         </View>
         {expanded ? <View style={styles.children}>
           {documents.map((document) => <MenuView actions={[
@@ -263,6 +352,7 @@ const styles = StyleSheet.create({
   emptyContent: { paddingTop: 32 },
   emptyState: { minHeight: 180 },
   storyGroup: { borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, marginBottom: 10, overflow: 'hidden' },
+  storyGroupDragging: { opacity: 0.72 },
   storyRow: { alignItems: 'center', flexDirection: 'row', minHeight: 51 },
   storyRowExpanded: { borderBottomWidth: StyleSheet.hairlineWidth },
   storyMenu: { alignSelf: 'stretch', flex: 1, justifyContent: 'center' },
@@ -295,3 +385,7 @@ const styles = StyleSheet.create({
   renameAction: { alignItems: 'center', justifyContent: 'center', minHeight: 44, minWidth: 72, paddingHorizontal: 10 },
   renameActionText: { fontSize: 15, fontWeight: '500' },
 });
+
+function sameStringOrder(left: readonly string[] | undefined, right: readonly string[] | undefined) {
+  return left?.length === right?.length && left?.every((value, index) => value === right?.[index]);
+}

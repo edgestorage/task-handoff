@@ -63,3 +63,35 @@ test("Story idle retention retries a failed root-tree close without consuming it
   assert.equal(warnings.length, 1);
   assert.equal(warnings[0].data.sessionId, "root-0");
 });
+
+test("Story idle retention does not close a candidate whose activity changed after selection", async () => {
+  const roots = Array.from({ length: 6 }, (_, index) => candidate(index));
+  let inspections = 0;
+  const closePaths = [];
+  const coordinator = coordinatorWith(async (url, init = {}) => {
+    if (init.method === "POST") {
+      closePaths.push(new URL(url).pathname);
+      return { ok: true, status: 200 };
+    }
+    inspections += 1;
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        data: inspections === 1
+          ? roots
+          : roots.map((item) => item.sessionId === "root-0" ? { ...item, updatedAt: "2026-01-01T01:00:00.000Z" } : item),
+      }),
+    };
+  });
+
+  await coordinator.reconcile();
+
+  assert.equal(inspections, 2);
+  assert.deepEqual(closePaths, []);
+
+  await coordinator.reconcile();
+
+  assert.equal(inspections, 4);
+  assert.deepEqual(closePaths, ["/api/internal/node-agent/ai-sessions/root-1/close"]);
+});

@@ -109,6 +109,23 @@ test('a preset action confirms before directly creating and opening an AI Sessio
   expect(mobilePermissionStore.write).toHaveBeenCalledWith('cp-1', instance.id, 'session-1', 'auto-review');
 });
 
+test('an archived Story cannot run a preset action', async () => {
+  const archivedStory = { ...story, archivedAt: '2026-09-06T00:00:00.000Z' };
+  const create = jest.fn();
+  jest.spyOn(Alert, 'alert').mockImplementation(() => undefined);
+  mockRuntime.mockReturnValue({ api: { stories: { get: jest.fn().mockResolvedValue(archivedStory), listAutomations: jest.fn().mockResolvedValue({ automations: [] }) }, aiSessions: { create } } } as unknown as ReturnType<typeof useMobileControlPlaneRuntime>);
+  mockDirectories.mockReturnValue({ controlPlaneId: 'cp-1', state: { instances: [instance], nodes: [] } } as unknown as ReturnType<typeof useActiveDirectories>);
+  mockSessions.mockReturnValue({ instances: [] } as unknown as ReturnType<typeof useActiveAiSessionsSnapshot>);
+
+  const screen = await render(<StoryDetail nodeId="node-1" onOpenSession={jest.fn()} storyId={story.id} />);
+  const action = await screen.findByRole('button', { name: 'Deploy staging' });
+  expect(action).toBeDisabled();
+  await act(async () => { fireEvent.press(action); });
+
+  expect(Alert.alert).not.toHaveBeenCalled();
+  expect(create).not.toHaveBeenCalled();
+});
+
 test('shows authoritative automations and can run one manually', async () => {
   const automation = StoryAutomationStatusSchema.parse({
     automation: {

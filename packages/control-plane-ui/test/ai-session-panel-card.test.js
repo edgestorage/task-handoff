@@ -84,8 +84,9 @@ test("instance AI session cards always show the latest turn independently of det
 test("AI session list supports persistent card and compact-list layouts", () => {
   assert.match(panel, /type AiSessionListLayout = "cards" \| "list";/);
   assert.match(panel, /SESSION_LIST_LAYOUT_STORAGE_KEY = "task-handoff\.control-plane\.ai-sessions-list-layout"/);
-  assert.match(panel, /return window\.localStorage\?\.getItem\(SESSION_LIST_LAYOUT_STORAGE_KEY\) === "list" \? "list" : "cards";/);
+  assert.match(panel, /return window\.localStorage\?\.getItem\(SESSION_LIST_LAYOUT_STORAGE_KEY\) === "cards" \? "cards" : "list";/);
   assert.match(panel, /<DropdownMenuRadioGroup :model-value="sessionListLayout"/);
+  assert.match(panel, /value="list">\{\{ t\("sessions\.panel\.listLayout"\) \}\}<\/DropdownMenuRadioItem>[\s\S]*value="cards">\{\{ t\("sessions\.panel\.cardLayout"\) \}\}<\/DropdownMenuRadioItem>/);
   assert.match(panel, /<DropdownMenuRadioItem[^>]*value="cards"/);
   assert.match(panel, /<DropdownMenuRadioItem[^>]*value="list"/);
   assert.match(panel, /v-if="sessionListLayout === 'list'"[\s\S]*class="session-ai-compact-row"/);

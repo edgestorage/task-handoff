@@ -7,10 +7,13 @@ import { StoryInbox } from '../src/stories/StoryInbox';
 import { useActiveAiSessionsSnapshot } from '../src/ai-sessions/use-active-sessions';
 import { useMobileControlPlaneRuntime, type MobileControlPlaneDomain } from '../src/control-plane/use-mobile-control-plane-runtime';
 import { useActiveDirectories } from '../src/directories/use-directories';
+import { useStoryNodeFilter } from '../src/stories/use-story-node-filter';
+import { updateStoryViewPreferences } from '../src/stories/story-view-preferences';
 
 jest.mock('../src/control-plane/use-mobile-control-plane-runtime', () => ({ useMobileControlPlaneRuntime: jest.fn() }));
 jest.mock('../src/directories/use-directories', () => ({ useActiveDirectories: jest.fn() }));
 jest.mock('../src/ai-sessions/use-active-sessions', () => ({ useActiveAiSessionsRuntime: () => ({}), useActiveAiSessionsSnapshot: jest.fn() }));
+jest.mock('../src/stories/use-story-node-filter', () => ({ useStoryNodeFilter: jest.fn() }));
 jest.mock('@expo/ui/community/menu', () => {
   const React = jest.requireActual<typeof import('react')>('react');
   const { Pressable, Text } = jest.requireActual<typeof import('react-native')>('react-native');
@@ -34,6 +37,12 @@ jest.mock('../src/ai-sessions/SessionStatusIndicator', () => {
 const mockRuntime = jest.mocked(useMobileControlPlaneRuntime);
 const mockDirectories = jest.mocked(useActiveDirectories);
 const mockSessions = jest.mocked(useActiveAiSessionsSnapshot);
+const mockNodeFilter = jest.mocked(useStoryNodeFilter);
+
+beforeEach(() => {
+  mockNodeFilter.mockReturnValue({ filter: { kind: 'all' }, setFilter: jest.fn() });
+  updateStoryViewPreferences({ manualKeys: [], sortMode: 'name', viewMode: 'compact' });
+});
 
 describe('<StoryInbox />', () => {
   test('subscribes to Story events and refreshes from the authoritative snapshot', async () => {
@@ -83,6 +92,51 @@ describe('<StoryInbox />', () => {
     await waitFor(() => expect(screen.getByText('Stories could not be loaded.')).toBeTruthy());
     expect(screen.queryByText('No Stories yet.')).toBeNull();
     expect(StyleSheet.flatten(screen.getByTestId('story-list').props.contentContainerStyle).flexGrow).toBeUndefined();
+    await screen.unmount();
+  });
+
+  test('derives the visible Story list and unavailable state from the selected nodes', async () => {
+    const alpha: Story = {
+      id: 'story-a', ownerNodeId: 'node-a', title: 'Alpha', actions: [], documents: [],
+      createdAt: '2026-09-04T00:00:00.000Z', updatedAt: '2026-09-04T00:00:00.000Z',
+    };
+    const beta: Story = { ...alpha, id: 'story-b', ownerNodeId: 'node-b', title: 'Beta' };
+    const list = jest.fn().mockResolvedValue({ stories: [alpha, beta], unavailableNodeIds: ['node-b'] });
+    mockRuntime.mockReturnValue({ api: { stories: { list } } } as unknown as ReturnType<typeof useMobileControlPlaneRuntime>);
+    mockDirectories.mockReturnValue({ state: {
+      nodes: [{ id: 'node-a', name: 'Node A' }, { id: 'node-b', name: 'Node B' }],
+      instances: [],
+    } } as unknown as ReturnType<typeof useActiveDirectories>);
+    mockSessions.mockReturnValue(ControlPlaneAiSessionsSchema.parse({ updatedAt: '2026-09-04T00:00:00.000Z', instances: [] }));
+    mockNodeFilter.mockReturnValue({ filter: { kind: 'selected', nodeIds: ['node-a'] }, setFilter: jest.fn() });
+
+    const screen = await render(<StoryInbox onEdit={jest.fn()} onNewSession={jest.fn()} onOpen={jest.fn()} onOpenDocument={jest.fn()} onOpenSession={jest.fn()} />);
+
+    await waitFor(() => expect(screen.getByText('Alpha')).toBeTruthy());
+    expect(screen.queryByText('Beta')).toBeNull();
+    expect(screen.queryByText('Stories could not be loaded.')).toBeNull();
+    expect(list).toHaveBeenCalledWith(undefined, expect.any(AbortSignal));
+    await screen.unmount();
+  });
+
+  test('manual mode exposes reorder handles and updates the rendered Story order', async () => {
+    const alpha: Story = {
+      id: 'story-a', ownerNodeId: 'node-a', title: 'Alpha', actions: [], documents: [],
+      createdAt: '2026-09-04T00:00:00.000Z', updatedAt: '2026-09-04T00:00:00.000Z',
+    };
+    const beta: Story = { ...alpha, id: 'story-b', title: 'Beta' };
+    mockRuntime.mockReturnValue({ api: { stories: { list: jest.fn().mockResolvedValue({ stories: [alpha, beta], unavailableNodeIds: [] }) } } } as unknown as ReturnType<typeof useMobileControlPlaneRuntime>);
+    mockDirectories.mockReturnValue({ state: { nodes: [{ id: 'node-a', name: 'Node A' }], instances: [] } } as unknown as ReturnType<typeof useActiveDirectories>);
+    mockSessions.mockReturnValue(ControlPlaneAiSessionsSchema.parse({ updatedAt: '2026-09-04T00:00:00.000Z', instances: [] }));
+    updateStoryViewPreferences({ manualKeys: ['node-a:story-a', 'node-a:story-b'], sortMode: 'manual' });
+
+    const screen = await render(<StoryInbox onEdit={jest.fn()} onNewSession={jest.fn()} onOpen={jest.fn()} onOpenDocument={jest.fn()} onOpenSession={jest.fn()} />);
+    await waitFor(() => expect(screen.getAllByTestId('story-drag-handle')).toHaveLength(2));
+    expect(screen.getAllByTestId(/^story-row-/).map((row) => row.props.testID)).toEqual(['story-row-node-a:story-a', 'story-row-node-a:story-b']);
+
+    await fireEvent(screen.getAllByTestId('story-drag-handle')[0], 'accessibilityAction', { nativeEvent: { actionName: 'increment' } });
+
+    await waitFor(() => expect(screen.getAllByTestId(/^story-row-/).map((row) => row.props.testID)).toEqual(['story-row-node-a:story-b', 'story-row-node-a:story-a']));
     await screen.unmount();
   });
 

@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react';
 import { DrawerContentScrollView, type DrawerContentComponentProps } from 'expo-router/drawer';
-import { router } from 'expo-router';
+import { router, usePathname } from 'expo-router';
 import { ActivityIndicator, Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { allStoryNodes, storyNodeIsSelected, toggleStoryNode } from '@task-handoff/control-plane-client';
 
 import { SystemIcon } from '../components/SystemIcon';
 import { EmptyState } from '../components/EmptyState';
@@ -12,12 +13,16 @@ import { useI18n } from '../i18n';
 import { useInstanceScope } from './use-instance-scope';
 import { useMobileControlPlaneRuntime } from '../control-plane/use-mobile-control-plane-runtime';
 import { useCloudAccountState } from '../control-plane/use-cloud-account-state';
+import { useStoryNodeFilter } from '../stories/use-story-node-filter';
 
 export function InstanceDrawerContent(props: DrawerContentComponentProps) {
   const { colors } = useMobileTheme();
   const { t } = useI18n();
   const { controlPlaneOrigin, state } = useActiveDirectories();
   const { scope, setScope } = useInstanceScope();
+  const { filter: storyNodeFilter, setFilter: setStoryNodeFilter } = useStoryNodeFilter();
+  const pathname = usePathname();
+  const storyMode = pathname.startsWith('/stories');
   const { triggerCapability } = useMobileControlPlaneRuntime();
   const cloudAccount = useCloudAccountState();
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
@@ -35,21 +40,20 @@ export function InstanceDrawerContent(props: DrawerContentComponentProps) {
           <Text numberOfLines={1} style={[styles.controlPlane, { color: colors.textMuted }]}>{controlPlaneOrigin || t('nav.controlPlane')}</Text>
         </View>
       </View>
-      <DrawerRow active={scope.kind === 'all'} count={state.instances.length} icon="all" label={t('scope.allInstances')} onPress={() => select()} />
-      {triggerCapability ? <DrawerRow icon="triggers" label={t('triggers.title')} onPress={() => { props.navigation.closeDrawer(); router.push('/triggers' as never); }} /> : null}
-      <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>{t('nav.instances')}</Text>
-      <View style={styles.nodeGroups}>
-        {state.nodes.map((node) => {
-          const instances = instancesByNode.get(node.id) ?? [];
-          const isCollapsed = collapsed[node.id] === true;
-          const connecting = node.connectionPhase === 'connecting' || node.connectionPhase === 'handshaking' || node.connectionPhase === 'reconnecting';
-          const status = nodeStateLabel(node, t);
-          return <View key={node.id}>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityState={{ expanded: !isCollapsed }}
-              onPress={() => setCollapsed((current) => ({ ...current, [node.id]: !isCollapsed }))}
-              style={({ pressed }) => [styles.nodeRow, pressed && styles.pressed]}
+      {storyMode ? <>
+        <DrawerRow active={storyNodeFilter.kind === 'all'} count={state.nodes.length} icon="nodes" label={t('directories.allNodes')} onPress={() => setStoryNodeFilter(allStoryNodes())} />
+        <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>{t('nav.node')}</Text>
+        <View style={styles.storyNodeList}>
+          {state.nodes.map((node) => {
+            const selected = storyNodeIsSelected(storyNodeFilter, node.id);
+            const connecting = node.connectionPhase === 'connecting' || node.connectionPhase === 'handshaking' || node.connectionPhase === 'reconnecting';
+            const status = nodeStateLabel(node, t);
+            return <Pressable
+              accessibilityRole="checkbox"
+              accessibilityState={{ checked: selected }}
+              key={node.id}
+              onPress={() => setStoryNodeFilter(toggleStoryNode(storyNodeFilter, node.id, !selected, state.nodes.map((candidate) => candidate.id)))}
+              style={({ pressed }) => [styles.nodeRow, selected && { backgroundColor: colors.surfaceMuted }, pressed && styles.pressed]}
             >
               <SystemIcon android="dns" color={colors.textMuted} ios="server.rack" size={16} />
               <View style={styles.nodeCopy}>
@@ -59,23 +63,53 @@ export function InstanceDrawerContent(props: DrawerContentComponentProps) {
                   <Text style={[styles.nodeStatus, { color: connecting ? colors.primary : colors.textMuted }]}>{status}</Text>
                 </View> : null}
               </View>
-              <Text style={[styles.count, { color: colors.textMuted }]}>{instances.length}</Text>
-              <SystemIcon android={isCollapsed ? 'expand_more' : 'expand_less'} color={colors.textMuted} ios={isCollapsed ? 'chevron.down' : 'chevron.up'} size={12} />
-            </Pressable>
-            {!isCollapsed ? <View style={styles.instanceList}>{instances.map((instance) =>
-              <DrawerRow
-                active={scope.kind === 'instance' && scope.instanceId === instance.id}
-                icon="instance"
-                key={instance.id}
-                label={instance.name}
-                nested
-                onPress={() => select(instance.id)}
-                subtitle={instanceStateLabel(instance, t)}
-              />
-            )}</View> : null}
-          </View>;
-        })}
-      </View>
+              <SystemIcon android={selected ? 'check_circle' : 'circle'} color={selected ? colors.primary : colors.border} ios={selected ? 'checkmark.circle.fill' : 'circle'} size={20} />
+            </Pressable>;
+          })}
+        </View>
+      </> : <>
+        <DrawerRow active={scope.kind === 'all'} count={state.instances.length} icon="all" label={t('scope.allInstances')} onPress={() => select()} />
+        <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>{t('nav.instances')}</Text>
+        <View style={styles.nodeGroups}>
+          {state.nodes.map((node) => {
+            const instances = instancesByNode.get(node.id) ?? [];
+            const isCollapsed = collapsed[node.id] === true;
+            const connecting = node.connectionPhase === 'connecting' || node.connectionPhase === 'handshaking' || node.connectionPhase === 'reconnecting';
+            const status = nodeStateLabel(node, t);
+            return <View key={node.id}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityState={{ expanded: !isCollapsed }}
+                onPress={() => setCollapsed((current) => ({ ...current, [node.id]: !isCollapsed }))}
+                style={({ pressed }) => [styles.nodeRow, pressed && styles.pressed]}
+              >
+                <SystemIcon android="dns" color={colors.textMuted} ios="server.rack" size={16} />
+                <View style={styles.nodeCopy}>
+                  <Text numberOfLines={1} style={[styles.nodeLabel, { color: colors.text }]}>{nodeDisplayName(node, t)}</Text>
+                  {status ? <View style={styles.nodeStatusRow}>
+                    {connecting ? <ActivityIndicator color={colors.primary} size="small" /> : <View style={[styles.statusDot, { backgroundColor: node.health === 'ok' && node.status === 'online' ? colors.sessionActive : node.health === 'failed' ? colors.error : colors.textMuted }]} />}
+                    <Text style={[styles.nodeStatus, { color: connecting ? colors.primary : colors.textMuted }]}>{status}</Text>
+                  </View> : null}
+                </View>
+                <Text style={[styles.count, { color: colors.textMuted }]}>{instances.length}</Text>
+                <SystemIcon android={isCollapsed ? 'expand_more' : 'expand_less'} color={colors.textMuted} ios={isCollapsed ? 'chevron.down' : 'chevron.up'} size={12} />
+              </Pressable>
+              {!isCollapsed ? <View style={styles.instanceList}>{instances.map((instance) =>
+                <DrawerRow
+                  active={scope.kind === 'instance' && scope.instanceId === instance.id}
+                  icon="instance"
+                  key={instance.id}
+                  label={instance.name}
+                  nested
+                  onPress={() => select(instance.id)}
+                  subtitle={instanceStateLabel(instance, t)}
+                />
+              )}</View> : null}
+            </View>;
+          })}
+        </View>
+      </>}
+      {triggerCapability ? <DrawerRow icon="triggers" label={t('triggers.title')} onPress={() => { props.navigation.closeDrawer(); router.push('/triggers' as never); }} /> : null}
       {!state.nodes.length && state.phase !== 'loading' ? <EmptyState icon={{ android: 'dns', ios: 'server.rack' }} iconSize={24} message={t('directories.noEntries')} style={styles.empty} /> : null}
     </DrawerContentScrollView>
     <View style={styles.footer}>
@@ -117,9 +151,9 @@ export function InstanceDrawerContent(props: DrawerContentComponentProps) {
   </View>;
 }
 
-function DrawerRow({ active = false, count, icon, label, nested = false, onPress, subtitle }: { active?: boolean; count?: number; icon: 'all' | 'instance' | 'settings' | 'triggers'; label: string; nested?: boolean; onPress(): void; subtitle?: string }) {
+function DrawerRow({ active = false, count, icon, label, nested = false, onPress, subtitle }: { active?: boolean; count?: number; icon: 'all' | 'instance' | 'nodes' | 'settings' | 'triggers'; label: string; nested?: boolean; onPress(): void; subtitle?: string }) {
   const { colors } = useMobileTheme();
-  const icons = icon === 'all' ? { android: 'select_all' as const, ios: 'square.grid.2x2' as const } : icon === 'settings' ? { android: 'settings' as const, ios: 'gearshape' as const } : icon === 'triggers' ? { android: 'bolt' as const, ios: 'bolt' as const } : { android: 'deployed_code' as const, ios: 'shippingbox' as const };
+  const icons = icon === 'all' ? { android: 'select_all' as const, ios: 'square.grid.2x2' as const } : icon === 'nodes' ? { android: 'dns' as const, ios: 'server.rack' as const } : icon === 'settings' ? { android: 'settings' as const, ios: 'gearshape' as const } : icon === 'triggers' ? { android: 'bolt' as const, ios: 'bolt' as const } : { android: 'deployed_code' as const, ios: 'shippingbox' as const };
   return <Pressable accessibilityRole="button" accessibilityState={{ selected: active }} onPress={onPress} style={({ pressed }) => [styles.row, active && { backgroundColor: colors.surfaceMuted }, pressed && !active && styles.pressed]}>
     <View style={[styles.rowContent, nested && styles.nestedRowContent]}>
       <SystemIcon android={icons.android} color={active ? colors.text : colors.textMuted} ios={icons.ios} size={18} />
@@ -141,6 +175,7 @@ const styles = StyleSheet.create({
   product: { fontSize: 22, fontWeight: '700' },
   controlPlane: { fontSize: 12 },
   sectionLabel: { fontSize: 14, fontWeight: '600', paddingBottom: 12, paddingHorizontal: 8, paddingTop: 34 },
+  storyNodeList: { gap: 2 },
   nodeGroups: { gap: 20 },
   row: { borderRadius: 12, minHeight: 54, paddingHorizontal: 12, paddingVertical: 7 },
   rowContent: { alignItems: 'center', flex: 1, flexDirection: 'row', gap: 13, minWidth: 0 },

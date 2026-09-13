@@ -31,9 +31,9 @@
                 </TooltipTrigger>
                 <TooltipContent class="ai-session-path-tooltip" side="top" :side-offset="8">{{ card.session.cwd || t("sessions.board.unknownPath") }}</TooltipContent>
               </Tooltip>
-              <span class="ai-board-card-context-separator" aria-hidden="true">·</span>
             </template>
-            <Tooltip>
+            <span v-if="showWorkspace && showInstance" class="ai-board-card-context-separator" aria-hidden="true">·</span>
+            <Tooltip v-if="showInstance">
               <TooltipTrigger as-child>
                 <span class="ai-board-card-context-item">
                   <Boxes :size="14" aria-hidden="true" />
@@ -42,8 +42,8 @@
               </TooltipTrigger>
               <TooltipContent class="ai-session-path-tooltip" side="top" :side-offset="8">{{ card.instance.node?.name || card.instance.nodeId }}</TooltipContent>
             </Tooltip>
-            <template v-if="agentIcon">
-              <span class="ai-board-card-context-separator" aria-hidden="true">·</span>
+            <template v-if="showAgent && agentIcon">
+              <span v-if="showWorkspace || showInstance" class="ai-board-card-context-separator" aria-hidden="true">·</span>
               <Tooltip>
                 <TooltipTrigger as-child>
                   <span class="ai-board-card-agent" :aria-label="agentDisplayName">
@@ -161,7 +161,7 @@ import type { AiBoardCard } from "./aiBoardTypes";
 
 const { t } = useI18n();
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   approvalBusyKey?: string;
   boundTriggers: (card: AiBoardCard) => TriggerDeployment[];
   canResolveApproval: (session: AiSessionSummary) => boolean;
@@ -171,6 +171,8 @@ const props = defineProps<{
   promptCount: number;
   promptIndex: number;
   selected?: boolean;
+  showAgent?: boolean;
+  showInstance?: boolean;
   showWorkspace?: boolean;
   shortHash: (value: string) => string;
   stoppingAppSessionKey?: string;
@@ -178,7 +180,10 @@ const props = defineProps<{
   triggerActionKey: (card: AiBoardCard, configHash: string) => string;
   triggerBusyKey: string;
   triggerTemplates: ControlPlaneTrigger[];
-}>();
+}>(), {
+  showAgent: true,
+  showInstance: true,
+});
 
 const emit = defineEmits<{
   nextPrompt: [card: AiBoardCard];

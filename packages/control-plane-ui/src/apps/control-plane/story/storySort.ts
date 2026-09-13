@@ -1,28 +1,12 @@
 import type { Story } from "@task-handoff/protocol/stories";
+import { normalizeManualStoryOrder, reorderStoryKeys, storyOrderKey } from "@task-handoff/control-plane-client";
+
+export { normalizeManualStoryOrder, reorderStoryKeys } from "@task-handoff/control-plane-client";
 
 export type StorySortMode = "name" | "last-user-message" | "manual";
 
 export function storySortKey(story: Pick<Story, "id" | "ownerNodeId">) {
-  return `${story.ownerNodeId}:${story.id}`;
-}
-
-export function normalizeManualStoryOrder(stories: readonly Story[], keys: readonly string[]) {
-  const available = new Set(stories.map(storySortKey));
-  const known = new Set<string>();
-  const normalized: string[] = [];
-  for (const key of keys) {
-    if (!available.has(key) || known.has(key)) continue;
-    normalized.push(key);
-    known.add(key);
-  }
-  for (const story of stories) {
-    const key = storySortKey(story);
-    if (!known.has(key)) {
-      normalized.push(key);
-      known.add(key);
-    }
-  }
-  return normalized;
+  return storyOrderKey(story);
 }
 
 export function sortStories(
@@ -55,14 +39,6 @@ export function sortStories(
     - (order.get(storySortKey(right)) ?? Number.MAX_SAFE_INTEGER)
     || byName(left, right)
   ));
-}
-
-export function reorderStoryKeys(keys: readonly string[], sourceKey: string, targetKey: string, placement: "before" | "after") {
-  if (sourceKey === targetKey || !keys.includes(sourceKey) || !keys.includes(targetKey)) return [...keys];
-  const next = keys.filter((key) => key !== sourceKey);
-  const targetIndex = next.indexOf(targetKey);
-  next.splice(targetIndex + (placement === "after" ? 1 : 0), 0, sourceKey);
-  return next;
 }
 
 export type StoryDropRow = { key: string; top: number; height: number };

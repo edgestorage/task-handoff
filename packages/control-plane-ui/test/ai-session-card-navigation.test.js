@@ -8,6 +8,13 @@ const dock = fs.readFileSync(new URL("../src/apps/control-plane/ai-board/AiSessi
 const panel = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.vue", import.meta.url), "utf8");
 const panelStyles = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.css", import.meta.url), "utf8");
 const autoScroll = fs.readFileSync(new URL("../src/components/ai-session/aiSessionCardAutoScroll.ts", import.meta.url), "utf8");
+const appStyles = fs.readFileSync(new URL("../src/styles/app.css", import.meta.url), "utf8");
+
+test("AI board floating dock uses a lighter shadow only in the light theme", () => {
+  assert.match(appStyles, /:root:not\(\.dark\):not\(\[data-theme="dark"\]\),[\s\S]*--ai-board-floating-shadow: 0 14px 34px rgb\(0 0 0 \/ 14%\);/);
+  assert.match(dock, /box-shadow: var\(--ai-board-floating-shadow, 0 18px 48px rgb\(0 0 0 \/ 34%\)\);/);
+  assert.match(dock, /--ai-composer-shadow: var\(--ai-board-floating-shadow, 0 18px 48px rgb\(0 0 0 \/ 34%\)\);/);
+});
 
 test("ai session card navigation stops at the first and last messages", () => {
   assert.match(card, /:disabled="promptIndex <= 0"/);
@@ -22,15 +29,20 @@ test("ai session cards do not render lifecycle status text in their headers", ()
   assert.doesNotMatch(dock, /aiSessionStatusLabel\(card\.session\)/);
 });
 
-test("ai session board cards show workspace context unless paths already group the grid", () => {
+test("ai session board cards omit context already supplied by the grid group", () => {
   assert.match(card, /<template v-if="showWorkspace">[\s\S]*class="ai-board-card-context-item"[\s\S]*<Folder :size="14"/);
   assert.match(card, /aiSessionBasename\(card\.session\.cwd\)/);
-  assert.match(card, /<Boxes :size="14"[\s\S]*instanceDisplayName\(card\.instance\)/);
-  assert.match(card, /<template v-if="agentIcon">[\s\S]*class="ai-board-card-agent" :aria-label="agentDisplayName"[\s\S]*<AiAgentIcon :agent="agentIcon" :size="14"/);
+  assert.match(card, /<Tooltip v-if="showInstance">[\s\S]*<Boxes :size="14"[\s\S]*instanceDisplayName\(card\.instance\)/);
+  assert.match(card, /<template v-if="showAgent && agentIcon">[\s\S]*class="ai-board-card-agent" :aria-label="agentDisplayName"[\s\S]*<AiAgentIcon :agent="agentIcon" :size="14"/);
+  assert.match(card, /v-if="showWorkspace && showInstance" class="ai-board-card-context-separator"/);
+  assert.match(card, /v-if="showWorkspace \|\| showInstance" class="ai-board-card-context-separator"/);
+  assert.match(card, /showAgent\?: boolean;[\s\S]*showInstance\?: boolean;[\s\S]*showAgent: true,[\s\S]*showInstance: true,/);
   assert.doesNotMatch(card, /aiSessionAppDisplayName/);
   assert.match(board, /:show-workspace="true"/);
   assert.match(board, /:show-workspace="gridGroupBy !== 'path'"/);
-  assert.match(board, /class="ai-board-grid-group-workspace"/);
+  assert.match(board, /:show-instance="gridGroupBy !== 'instance'"/);
+  assert.match(board, /:show-agent="gridGroupBy !== 'agent'"/);
+  assert.match(board, /class="ai-board-grid-group-workspace">\s*<Folder :size="14" aria-hidden="true"/);
   assert.match(dock, /class="ai-board-floating-context"/);
   assert.match(dock, /<Folder :size="14"[\s\S]*\{\{ folderName \}\}[\s\S]*<Boxes :size="14"[\s\S]*instanceDisplayName\(card\.instance\)[\s\S]*<AiAgentIcon :agent="agentIcon"/);
   assert.match(dock, /const agentDisplayName = computed\(\(\) => \{[\s\S]*props\.card\.session\.agent[\s\S]*common\.products\.\$\{agent\}/);
@@ -46,6 +58,9 @@ test("ai session board cards show workspace context unless paths already group t
   assert.doesNotMatch(card, /\.ai-board-card-headline\s*\{[^}]*padding-right:/s);
   assert.match(dock, /\.ai-board-floating-context\s*\{[^}]*display: flex;[^}]*align-items: center;[^}]*font-size: 13px;[^}]*font-weight: 400;/s);
   assert.match(dock, /\.ai-board-floating-context-item\s*\{[^}]*display: inline-flex;[^}]*gap: 5px;/s);
+  assert.match(board, /\.ai-board-grid-group-label\s*\{[^}]*font-weight: 500;/s);
+  assert.match(board, /\.ai-board-grid-group-workspace\s*\{[^}]*align-items: center;/s);
+  assert.match(board, /\.ai-board-grid-group-workspace b\s*\{[^}]*font-weight: 500;/s);
 });
 
 test("reselecting the selected AI session card restores collapsed details", () => {

@@ -42,16 +42,17 @@
             <DropdownMenuContent class="ai-board-options-menu" align="end" :side-offset="6">
               <DropdownMenuLabel class="ai-board-options-label">{{ t("sessions.board.sort") }}</DropdownMenuLabel>
               <DropdownMenuCheckboxItem class="ai-board-options-item option-item" :model-value="gridSortByStatus" @update:model-value="setGridSortByStatus(Boolean($event))">
+                <ArrowUpDown class="ai-board-option-icon" :size="14" aria-hidden="true" />
                 {{ t("sessions.board.sortByStatus") }}
               </DropdownMenuCheckboxItem>
               <DropdownMenuSeparator class="ai-board-options-separator" />
               <DropdownMenuLabel class="ai-board-options-label">{{ t("sessions.board.group") }}</DropdownMenuLabel>
               <DropdownMenuRadioGroup :model-value="gridGroupBy" @update:model-value="setGridGroupBy($event as AiBoardGridGroupBy)">
-                <DropdownMenuRadioItem class="ai-board-options-item option-item" value="none">{{ t("sessions.board.noGrouping") }}</DropdownMenuRadioItem>
-                <DropdownMenuRadioItem class="ai-board-options-item option-item" value="path">{{ t("sessions.board.groupPath") }}</DropdownMenuRadioItem>
-                <DropdownMenuRadioItem class="ai-board-options-item option-item" value="instance">{{ t("sessions.board.groupInstance") }}</DropdownMenuRadioItem>
-                <DropdownMenuRadioItem class="ai-board-options-item option-item" value="node">{{ t("sessions.board.groupNode") }}</DropdownMenuRadioItem>
-                <DropdownMenuRadioItem class="ai-board-options-item option-item" value="agent">{{ t("sessions.board.groupAgent") }}</DropdownMenuRadioItem>
+                <DropdownMenuRadioItem class="ai-board-options-item option-item" value="none"><Ungroup class="ai-board-option-icon" :size="14" aria-hidden="true" />{{ t("sessions.board.noGrouping") }}</DropdownMenuRadioItem>
+                <DropdownMenuRadioItem class="ai-board-options-item option-item" value="path"><Folder class="ai-board-option-icon" :size="14" aria-hidden="true" />{{ t("sessions.board.groupPath") }}</DropdownMenuRadioItem>
+                <DropdownMenuRadioItem class="ai-board-options-item option-item" value="instance"><Boxes class="ai-board-option-icon" :size="14" aria-hidden="true" />{{ t("sessions.board.groupInstance") }}</DropdownMenuRadioItem>
+                <DropdownMenuRadioItem class="ai-board-options-item option-item" value="node"><Server class="ai-board-option-icon" :size="14" aria-hidden="true" />{{ t("sessions.board.groupNode") }}</DropdownMenuRadioItem>
+                <DropdownMenuRadioItem class="ai-board-options-item option-item" value="agent"><Bot class="ai-board-option-icon" :size="14" aria-hidden="true" />{{ t("sessions.board.groupAgent") }}</DropdownMenuRadioItem>
               </DropdownMenuRadioGroup>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -118,6 +119,7 @@
           <template v-for="group in gridGroups" :key="group.key">
             <div v-if="gridGroupBy !== 'none'" class="ai-board-grid-group-label">
               <span v-if="gridGroupBy === 'path'" class="ai-board-grid-group-workspace">
+                <Folder :size="14" aria-hidden="true" />
                 <TooltipProvider :delay-duration="120">
                   <Tooltip>
                     <TooltipTrigger as-child>
@@ -142,6 +144,8 @@
               :prompt-count="promptCount(card.session)"
               :prompt-index="promptIndexFor(card)"
               :selected="selectedCardKey === card.key"
+              :show-agent="gridGroupBy !== 'agent'"
+              :show-instance="gridGroupBy !== 'instance'"
               :show-workspace="gridGroupBy !== 'path'"
               :short-hash="shortHash"
               :stopping-app-session-key="stoppingAppSessionKey"
@@ -242,7 +246,7 @@ import type { SupportedLocale } from "../../../i18n/locale";
 import { translateApiError } from "../../../i18n/apiError";
 import { waitForAiSessionProjection } from "../ai-session-projection";
 import { useEventListener } from "@vueuse/core";
-import { Columns3, LayoutGrid, Search, SlidersHorizontal } from "@lucide/vue";
+import { ArrowUpDown, Bot, Boxes, Columns3, Folder, LayoutGrid, Search, Server, SlidersHorizontal, Ungroup } from "@lucide/vue";
 import { useQueryClient } from "@tanstack/vue-query";
 import { closeAiSession, editAiSessionQueuedMessage, forkAiSession, interruptAiSession, markAiSessionRead, openAiSessionApp, removeAiSessionQueuedMessage, reorderAiSessionQueuedMessages, resolveAiSessionApproval, retryAiSessionQueuedMessage, sendAiSessionMessage, steerAiSessionQueuedMessage, uploadAiSessionAttachment, useControlPlaneSettingsQuery } from "../../../api/queries";
 import { controlPlaneQueryKeys } from "../../../api/queryKeys.ts";
@@ -1288,6 +1292,12 @@ watch([() => selectedCard.value?.session.id, messageDraft, messageMentionBinding
   height: 9px;
 }
 
+.ai-board-options-item :deep(.ai-board-option-icon) {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+}
+
 .ai-board-filter-group,
 .ai-board-chips {
   display: flex;
@@ -1596,7 +1606,7 @@ watch([() => selectedCard.value?.session.id, messageDraft, messageMentionBinding
   border-bottom: 1px solid var(--ai-board-column-border);
   color: var(--ai-board-title);
   font-size: 12px;
-  font-weight: 800;
+  font-weight: 500;
   padding: 8px 2px 6px;
 }
 
@@ -1608,9 +1618,13 @@ watch([() => selectedCard.value?.session.id, messageDraft, messageMentionBinding
 
 .ai-board-grid-group-workspace {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 7px;
   min-width: 0;
+}
+
+.ai-board-grid-group-workspace > svg {
+  flex: 0 0 auto;
 }
 
 .ai-board-grid-group-workspace b {
@@ -1619,6 +1633,7 @@ watch([() => selectedCard.value?.session.id, messageDraft, messageMentionBinding
   overflow: hidden;
   color: var(--ai-board-title);
   font-size: 12px;
+  font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1627,6 +1642,7 @@ watch([() => selectedCard.value?.session.id, messageDraft, messageMentionBinding
   flex: 0 0 auto;
   color: var(--ai-board-muted);
   font-size: 11px;
+  font-weight: 500;
 }
 
 :global(.ai-session-path-tooltip) {
