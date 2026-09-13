@@ -82,8 +82,8 @@
               <DropdownMenuContent class="session-ai-options-menu" align="end" :side-offset="6">
                 <DropdownMenuLabel class="session-ai-options-label">{{ t("sessions.panel.view") }}</DropdownMenuLabel>
                 <DropdownMenuRadioGroup :model-value="sessionListLayout" @update:model-value="sessionListLayout = $event as AiSessionListLayout">
-                  <DropdownMenuRadioItem class="session-ai-options-item option-item" value="cards">{{ t("sessions.panel.cardLayout") }}</DropdownMenuRadioItem>
                   <DropdownMenuRadioItem class="session-ai-options-item option-item" value="list">{{ t("sessions.panel.listLayout") }}</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem class="session-ai-options-item option-item" value="cards">{{ t("sessions.panel.cardLayout") }}</DropdownMenuRadioItem>
                 </DropdownMenuRadioGroup>
                 <DropdownMenuSeparator />
                 <DropdownMenuRadioGroup v-model="groupMode">
@@ -1401,7 +1401,7 @@ function storedSortByStatus() {
 }
 
 function storedSessionListLayout(): AiSessionListLayout {
-  return window.localStorage?.getItem(SESSION_LIST_LAYOUT_STORAGE_KEY) === "list" ? "list" : "cards";
+  return window.localStorage?.getItem(SESSION_LIST_LAYOUT_STORAGE_KEY) === "cards" ? "cards" : "list";
 }
 
 function clampSidebarWidth(value: number) {

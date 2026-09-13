@@ -17,6 +17,7 @@ import { MobileControlPlaneRuntimeProvider } from '../src/control-plane/use-mobi
 import { MobileSessionRecovery } from '../src/control-plane/MobileSessionRecovery';
 import { MobileToastProvider } from '../src/components/MobileToast';
 import { ActiveTriggersProvider } from '../src/triggers/use-active-triggers';
+import { StoryNodeFilterProvider } from '../src/stories/use-story-node-filter';
 
 void SplashScreen.preventAutoHideAsync();
 
@@ -57,6 +58,7 @@ function LocalizedRootLayout() {
           <MobileControlPlaneRuntimeProvider>
             <MobileSessionRecovery />
             <ActiveDirectoriesProvider>
+              <StoryNodeFilterProvider>
               <InstanceScopeProvider>
                 <ActiveAiSessionsProvider>
                   <ActiveAppSessionsProvider>
@@ -109,6 +111,7 @@ function LocalizedRootLayout() {
                   </ActiveAppSessionsProvider>
                 </ActiveAiSessionsProvider>
               </InstanceScopeProvider>
+              </StoryNodeFilterProvider>
             </ActiveDirectoriesProvider>
           </MobileControlPlaneRuntimeProvider>
           </ThemeProvider>

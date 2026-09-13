@@ -395,7 +395,7 @@
       :data-header-density="headerDensity"
     >
       <SheetTitle class="sr-only">{{ storyHistoryDetailEntry ? storyHistoryItemTitle(storyHistoryDetailEntry.item) : t("stories.historySessions") }}</SheetTitle>
-      <SheetDescription class="sr-only">{{ storyHistoryDetailEntry?.instance.name }}</SheetDescription>
+      <SheetDescription class="sr-only">{{ storyHistoryPanelInstance?.name }}</SheetDescription>
       <div class="story-history-drawer-drag-region" aria-hidden="true" />
       <SheetClose as-child><button type="button" class="story-history-drawer-close" :aria-label="t('stories.close')"><X :size="16" /></button></SheetClose>
       <div class="story-history-panel">
@@ -463,7 +463,7 @@ import { canUseNativeProjectFolderPicker, type NativeNodeFolderPicker } from "..
 import { launchableAppsForInstance, sessionStatusLabel, type RepositoryWorkspaceTabTarget, type SessionTab } from "../useInstanceSessions";
 import { latestStoryDocuments, STORY_TREE_DOCUMENT_LIMIT } from "./storyDocuments";
 import { normalizeManualStoryOrder, reorderStoryKeys, sortStories, storyDropTargetAt, storySortKey, type StorySortMode } from "./storySort";
-import { allStoryNodes, storyNodeIsVisible, type StoryNodeFilter } from "./storyNodeFilter";
+import { allStoryNodes, storyNodeIsVisible, type StoryNodeFilter } from "@task-handoff/control-plane-client";
 import { storySelectionKey, type StorySelection } from "./storySelection";
 import type { HeaderDensity } from "../useWorkbenchLayoutPreferences";
 
@@ -918,7 +918,10 @@ function handleStoryHistorySessionSelected(instanceId: string, sessionId: string
   storyHistoryDetailOpen.value = false;
   selectedResource.value = { kind: "session", story, entry: { instance, session } };
 }
-const storyHistoryPanelInstance = computed(() => storyHistoryDetailEntry.value?.instance);
+const storyHistoryPanelInstance = computed(() => {
+  const instanceId = storyHistoryDetailEntry.value?.instance.id;
+  return instanceId ? props.instances.find((instance) => instance.id === instanceId) : undefined;
+});
 const storyHistoryPanelSession = computed<SessionTab>(() => ({
   key: "ai",
   label: t("navigation.ai"),

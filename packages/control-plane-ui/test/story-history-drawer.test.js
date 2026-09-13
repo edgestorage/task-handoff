@@ -29,3 +29,10 @@ test("Story history opens one conversation in a right-side drawer", () => {
   assert.doesNotMatch(aiSessionPanelStyles, /\.session-ai-workspace\.detail-only \.session-ai-detail \{/);
   assert.doesNotMatch(storyView, /story-history-dialog/);
 });
+
+test("Story history drawer resolves its instance from the latest authoritative projection", () => {
+  assert.match(storyView, /const instanceId = storyHistoryDetailEntry\.value\?\.instance\.id;/);
+  assert.match(storyView, /props\.instances\.find\(\(instance\) => instance\.id === instanceId\)/);
+  assert.doesNotMatch(storyView, /computed\(\(\) => storyHistoryDetailEntry\.value\?\.instance\)/);
+  assert.match(storyView, /<SheetDescription class="sr-only">\{\{ storyHistoryPanelInstance\?\.name \}\}<\/SheetDescription>/);
+});

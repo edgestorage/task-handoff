@@ -7,6 +7,7 @@ import { SystemIcon } from '../../../../src/components/SystemIcon';
 import { useMobileControlPlaneRuntime } from '../../../../src/control-plane/use-mobile-control-plane-runtime';
 import { useI18n } from '../../../../src/i18n';
 import { getStoryViewPreferences, subscribeStoryViewPreferences, updateStoryViewPreferences } from '../../../../src/stories/story-view-preferences';
+import { StoryNodeFilterHeaderButton } from '../../../../src/stories/StoryNodeFilterHeaderButton';
 
 export default function StoriesLayout() {
   const { t } = useI18n();
@@ -32,8 +33,13 @@ export default function StoriesLayout() {
     { type: 'spacing' as const, spacing: 8 },
     {
       accessibilityLabel: t('stories.listOptions'), icon: { name: 'ellipsis' as const, type: 'sfSymbol' as const }, identifier: 'story-list-options', label: t('stories.listOptions'), sharesBackground: false, tintColor: '#ffffff', type: 'menu' as const,
-      menu: { title: t('stories.listOptions'), items: [
-        ...preferenceActions.slice(0, 2).map((action) => ({ type: 'action' as const, label: action.title, onPress: () => selectPreference(action.id), state: action.state })),
+      menu: { multiselectable: true, title: t('stories.listOptions'), items: [
+        {
+          type: 'submenu' as const,
+          label: '',
+          inline: true,
+          items: preferenceActions.slice(0, 2).map((action) => ({ type: 'action' as const, label: action.title, onPress: () => selectPreference(action.id), state: action.state })),
+        },
         {
           type: 'submenu' as const,
           label: '',
@@ -58,6 +64,7 @@ export default function StoriesLayout() {
     onAdd={runtime.storyCapability ? () => router.push('/stories/new' as never) : undefined}
     headerRight={headerRight}
     headerRightItems={headerRightItems}
+    scopeControl={<StoryNodeFilterHeaderButton />}
     title={t('nav.stories')}
   />;
 }

@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { File } from 'expo-file-system';
 import { CornerDownRight, GripVertical, Pencil, RotateCcw, Trash2, type LucideIcon } from 'lucide-react-native';
-import { ActivityIndicator, Alert, Animated, FlatList, Keyboard, KeyboardAvoidingView, PanResponder, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Animated, FlatList, Keyboard, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Defs, LinearGradient, Rect, Stop } from 'react-native-svg';
 import { aiSessionMessageText, canInterruptAiSession, isAiSessionApprovalPending, type AiSessionModelGroup, type ControlPlaneAiSessionSummary, type ControlPlaneClient } from '@task-handoff/control-plane-client';
@@ -22,6 +22,7 @@ import { useI18n, type Translate } from '../i18n';
 import type { MobileAiSessionPermissionStore } from './permission-store';
 import { useMobileToast } from '../components/MobileToast';
 import { mobileWebMetric, mobileWebType } from '../components/mobile-web-typography';
+import { ReorderDragHandle } from '../components/ReorderDragHandle';
 
 export function SessionWorkspace({
   controlPlaneId,
@@ -724,7 +725,7 @@ export function SessionWorkspace({
                 testID={`queued-message-row-${item.id}`}
               >
                 <View style={styles.queueContent}>
-                  {item.status === 'queued' ? <QueueDragHandle
+                  {item.status === 'queued' ? <ReorderDragHandle
                     disabled={!authoritativeActionsEnabled || !actions || ['busy', 'result-unknown'].includes(state('queue-reorder')?.phase || '')}
                     label={t('workspace.reorderAction')}
                     moveDownLabel={t('workspace.moveDownAction')}
@@ -735,6 +736,7 @@ export function SessionWorkspace({
                     onDragStart={() => beginQueueDrag(item.id)}
                     onMoveDown={() => moveQueuedMessage(item.id, 1)}
                     onMoveUp={() => moveQueuedMessage(item.id, -1)}
+                    testID="queue-drag-handle"
                   /> : <GripVertical color={colors.error} size={mobileWebMetric(17)} strokeWidth={1.8} />}
                   <View style={styles.queueCopy}>
                     <Text ellipsizeMode="tail" numberOfLines={1} style={[styles.queueText, { color: colors.text }]}>{item.message}</Text>
@@ -868,48 +870,6 @@ export function queueActionIcon(action: 'edit' | 'steer' | 'retry' | 'remove'): 
   return Trash2;
 }
 
-function QueueDragHandle({ disabled, label, moveDownLabel, moveUpLabel, onDragCancel, onDragEnd, onDragMove, onDragStart, onMoveDown, onMoveUp }: { disabled?: boolean; label: string; moveDownLabel: string; moveUpLabel: string; onDragCancel(): void; onDragEnd(): void; onDragMove(dy: number): void; onDragStart(): void; onMoveDown(): void; onMoveUp(): void }) {
-  const { colors } = useMobileTheme();
-  const callbacks = useRef({ onDragCancel, onDragEnd, onDragMove, onDragStart });
-  const disabledRef = useRef(disabled);
-  useLayoutEffect(() => {
-    callbacks.current = { onDragCancel, onDragEnd, onDragMove, onDragStart };
-    disabledRef.current = disabled;
-  }, [disabled, onDragCancel, onDragEnd, onDragMove, onDragStart]);
-  // PanResponder stores these functions for native events; the refs are only read after a gesture event fires.
-  // eslint-disable-next-line react-hooks/refs
-  const [responder] = useState(() => PanResponder.create({
-    onMoveShouldSetPanResponderCapture: () => !disabledRef.current,
-    onMoveShouldSetPanResponder: () => !disabledRef.current,
-    onPanResponderGrant: () => callbacks.current.onDragStart(),
-    onPanResponderMove: (_event, gesture) => callbacks.current.onDragMove(gesture.dy),
-    onPanResponderRelease: () => callbacks.current.onDragEnd(),
-    onPanResponderTerminate: () => callbacks.current.onDragCancel(),
-    onPanResponderTerminationRequest: () => false,
-    onShouldBlockNativeResponder: () => true,
-    onStartShouldSetPanResponderCapture: () => !disabledRef.current,
-    onStartShouldSetPanResponder: () => !disabledRef.current,
-  }));
-  return (
-    <View
-      accessibilityActions={[{ name: 'decrement', label: moveUpLabel }, { name: 'increment', label: moveDownLabel }]}
-      accessibilityLabel={label}
-      accessibilityRole="adjustable"
-      accessibilityState={{ disabled: Boolean(disabled) }}
-      onAccessibilityAction={(event) => {
-        if (disabled) return;
-        if (event.nativeEvent.actionName === 'decrement') onMoveUp();
-        if (event.nativeEvent.actionName === 'increment') onMoveDown();
-      }}
-      style={[styles.queueDragHandle, disabled && styles.disabled]}
-      testID="queue-drag-handle"
-      {...responder.panHandlers}
-    >
-      <GripVertical color={colors.textMuted} size={mobileWebMetric(17)} strokeWidth={1.8} />
-    </View>
-  );
-}
-
 export function moveQueueId(queueIds: readonly string[], source: number, target: number) {
   if (source < 0 || target < 0 || source >= queueIds.length || target >= queueIds.length || source === target) return [...queueIds];
   const reordered = [...queueIds];
@@ -980,7 +940,6 @@ const styles = StyleSheet.create({
   queueMeta: { fontSize: mobileWebType.small, lineHeight: mobileWebType.smallLine },
   queueError: { marginTop: 1 },
   queueActions: { alignItems: 'center', flexDirection: 'row', gap: 2 },
-  queueDragHandle: { alignItems: 'center', height: 40, justifyContent: 'center', width: 24 },
   queueAction: { alignItems: 'center', borderRadius: 8, flexDirection: 'row', gap: 4, height: 34, justifyContent: 'center', minWidth: 34, paddingHorizontal: 6 },
   queueActionText: { fontSize: mobileWebType.small, fontWeight: '700', lineHeight: mobileWebType.smallLine },
   notice: { alignItems: 'flex-start', borderRadius: 10, flexDirection: 'row', gap: 8, padding: 12 },

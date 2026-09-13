@@ -65,13 +65,7 @@ export function NewSessionForm(props: NewSessionFormProps) {
   const selectedBranchLabel = branchOptions.find((option) => option.value === props.selectedBranch)?.label || props.selectedBranch || t('sessions.selectBranch');
   const modelGroups = props.modelGroups || [];
 
-  return <KeyboardAvoidingView behavior={newSessionKeyboardAvoidingBehavior(Platform.OS)} style={styles.screen} testID="new-session-keyboard-area">
-    <Screen
-      alwaysBounceVertical={false}
-      automaticallyAdjustKeyboardInsets={false}
-      contentContainerStyle={[styles.screenContent, { paddingBottom: 24 + (props.visualBalanceInset ?? 0) }]}
-      testID="new-session-scroll"
-    >
+  const content = <>
       {props.header ?? <View style={styles.intro}>
         <Text style={[styles.heading, { color: colors.text }]}>{t('sessions.startIdea')}</Text>
         <Text style={[styles.description, { color: colors.textMuted }]}>{t('sessions.ideaDescription')}</Text>
@@ -183,6 +177,16 @@ export function NewSessionForm(props: NewSessionFormProps) {
         </View>
       </View>
       {props.error ? <Text accessibilityLiveRegion="polite" style={[styles.error, { backgroundColor: colors.errorSoft, color: colors.error }]}>{props.error}</Text> : null}
+  </>;
+  if (props.embedded) return <View style={styles.embeddedContent} testID="new-session-embedded">{content}</View>;
+  return <KeyboardAvoidingView behavior={newSessionKeyboardAvoidingBehavior(Platform.OS)} style={styles.screen} testID="new-session-keyboard-area">
+    <Screen
+      alwaysBounceVertical={false}
+      automaticallyAdjustKeyboardInsets={false}
+      contentContainerStyle={[styles.screenContent, { paddingBottom: 24 + (props.visualBalanceInset ?? 0) }]}
+      testID="new-session-scroll"
+    >
+      {content}
     </Screen>
   </KeyboardAvoidingView>;
 }
@@ -228,6 +232,7 @@ export function newSessionVisualBalanceInset(platform: string, safeAreaTop: numb
 
 const styles = StyleSheet.create({
   screen: { flex: 1 },
+  embeddedContent: { gap: 16, width: '100%' },
   screenContent: { alignSelf: 'center', gap: 16, justifyContent: 'center', maxWidth: 640, paddingVertical: 24, width: '100%' },
   intro: { alignItems: 'center', gap: 8, paddingHorizontal: 20 },
   heading: { fontSize: 28, fontWeight: '700', letterSpacing: -0.6, lineHeight: 34, textAlign: 'center' },

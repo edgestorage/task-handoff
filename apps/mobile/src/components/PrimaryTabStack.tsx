@@ -14,15 +14,17 @@ export function PrimaryTabStack({
   onAdd,
   headerRight,
   headerRightItems,
+  scopeControl,
 }: {
   title: string;
   addAccessibilityLabel?: string;
   onAdd?(): void;
   headerRight?: () => ReactNode;
   headerRightItems?: () => NativeStackHeaderItem[];
+  scopeControl?: ReactNode;
 }) {
   const { colors, dark } = useMobileTheme();
-  const scopeButton = <InstanceScopeHeaderButton />;
+  const scopeButton = scopeControl ?? <InstanceScopeHeaderButton />;
   const addItem = addAccessibilityLabel && onAdd ? {
     accessibilityLabel: addAccessibilityLabel,
     icon: { name: 'plus' as const, type: 'sfSymbol' as const },

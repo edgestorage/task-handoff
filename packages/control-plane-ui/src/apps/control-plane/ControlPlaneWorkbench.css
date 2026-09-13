@@ -784,7 +784,7 @@
 
 .workbench-view-option.active {
   background: transparent;
-  color: hsl(var(--accent-foreground));
+  color: var(--workbench-view-selection-fg, hsl(var(--accent-foreground)));
   box-shadow: none;
 }
 
@@ -795,7 +795,8 @@
   outline-offset: 1px;
 }
 
-.control-plane-settings-trigger.inline-flex {
+.control-plane-settings-trigger.inline-flex,
+.control-plane-user-trigger.inline-flex {
   position: relative;
   height: 32px;
   margin-left: 12px;
@@ -807,7 +808,8 @@
   padding-inline: 9px;
 }
 
-.control-plane-settings-trigger.inline-flex::before {
+.control-plane-settings-trigger.inline-flex::before,
+.control-plane-user-trigger.inline-flex::before {
   content: "";
   position: absolute;
   top: 50%;
@@ -819,16 +821,19 @@
 }
 
 .control-plane-shell[data-header-density="compact"] .workbench-view-switcher,
-.control-plane-shell[data-header-density="compact"] .control-plane-settings-trigger.inline-flex {
+.control-plane-shell[data-header-density="compact"] .control-plane-settings-trigger.inline-flex,
+.control-plane-shell[data-header-density="compact"] .control-plane-user-trigger.inline-flex {
   height: 30px;
 }
 
-.control-plane-settings-trigger.inline-flex:hover {
+.control-plane-settings-trigger.inline-flex:hover,
+.control-plane-user-trigger.inline-flex:hover {
   background: var(--surface-hover);
   color: hsl(var(--accent-foreground));
 }
 
-.control-plane-settings-trigger.inline-flex.active {
+.control-plane-settings-trigger.inline-flex.active,
+.control-plane-user-trigger.inline-flex.active {
   background: var(--surface-active);
   color: hsl(var(--primary));
 }
