@@ -341,8 +341,9 @@ export function useControlPlaneEvents(input: {
   }
 
   async function recoverInstanceTriggers(instanceId: string) {
+    const observedAt = new Date().toISOString();
     try {
-      replaceInstanceTriggerSnapshot(queryClient, instanceId, await getControlledInstanceTriggers(instanceId));
+      replaceInstanceTriggerSnapshot(queryClient, instanceId, await getControlledInstanceTriggers(instanceId), observedAt);
     } catch (error) {
       console.warn("CONTROL_PLANE_TRIGGER_RECOVERY_FAILED", { instanceId, error });
     }

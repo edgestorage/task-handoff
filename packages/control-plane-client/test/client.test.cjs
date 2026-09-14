@@ -96,10 +96,11 @@ test("conversation cache keeps the last projection visible while independently c
     detailRevision: "detail-1",
     turnsRevision: "turns-1",
     updatedAt: "2026-08-26T00:00:00.000Z",
-    queue: { revision: 0, pendingCount: 0, items: [] },
+    queue: { revision: 1, pendingCount: 1, items: [] },
     subAgents: [],
   };
-  cache.setDetail("instance-1", summary.detailRevision, { id: summary.id, queue: summary.queue, subAgents: [] });
+  const firstQueue = { revision: 1, pendingCount: 1, items: [{ id: "queue-1", message: "first" }] };
+  cache.setDetail("instance-1", summary.detailRevision, { id: summary.id, queue: firstQueue, subAgents: [] });
   cache.setTurnIndex("instance-1", summary.turnsRevision, {
     sessionId: summary.id,
     revision: "turns-1",
@@ -111,13 +112,29 @@ test("conversation cache keeps the last projection visible while independently c
   assert.equal(cache.hasRenderableTurn("instance-1", summary.id, "turn-1"), true);
   assert.equal(cache.hasCurrentTurn("instance-1", summary.id, "turn-1"), true);
 
-  const changed = { ...summary, detailRevision: "detail-2", turnsRevision: "turns-2", lastMessage: "live" };
+  const changed = {
+    ...summary,
+    detailRevision: "detail-2",
+    turnsRevision: "turns-2",
+    lastMessage: "live",
+    queue: { revision: 2, pendingCount: 2, items: [] },
+  };
   assert.equal(cache.hasProjection("instance-1", summary), true);
   assert.equal(cache.hasDetail("instance-1", changed), false);
   assert.equal(cache.hasTurnIndex("instance-1", changed), false);
   assert.equal(cache.hasRenderableProjection("instance-1", changed.id), true);
   assert.equal(cache.projection("instance-1", changed).turns[0].lastMessage, "visible");
   assert.equal(cache.projection("instance-1", changed).lastMessage, "live");
+  assert.equal(cache.projection("instance-1", changed).queue, changed.queue);
+  assert.equal(cache.projection("instance-1", changed).subAgents, changed.subAgents);
+  const secondQueue = {
+    revision: 2,
+    pendingCount: 2,
+    items: [{ id: "queue-1", message: "first" }, { id: "queue-2", message: "second" }],
+  };
+  cache.setDetail("instance-1", changed.detailRevision, { id: summary.id, queue: secondQueue, subAgents: [] });
+  assert.equal(cache.hasDetail("instance-1", changed), true);
+  assert.equal(cache.projection("instance-1", changed).queue, secondQueue);
   cache.setTurnIndex("instance-1", changed.turnsRevision, {
     sessionId: summary.id,
     revision: "turns-2",

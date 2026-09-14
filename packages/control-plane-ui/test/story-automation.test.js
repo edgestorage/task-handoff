@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
+import { timezoneOffsetLabel } from "../src/lib/timezones.ts";
 
 const source = fs.readFileSync(new URL("../src/apps/control-plane/story/StoryActionAutomations.vue", import.meta.url), "utf8");
 const storyViewSource = fs.readFileSync(new URL("../src/apps/control-plane/story/StoryView.vue", import.meta.url), "utf8");
@@ -103,8 +104,22 @@ test("Automation timezone uses the shared list and defaults to the browser timez
   assert.match(timezonePickerSource, /--reka-popover-content-available-height/);
   assert.match(timezonePickerSource, /\.control-plane-timezone-list \[role="option"\]:hover/);
   assert.match(timezonePickerSource, /\.control-plane-timezone-list \[role="option"\]\[data-highlighted\]/);
+  assert.match(timezonePickerSource, /class="control-plane-timezone-offset"/);
+  assert.match(timezonePickerSource, /color:var\(--text-muted\)/);
   assert.match(commandListSource, /scrollable:\s*true/);
   assert.match(commandListSource, /props\.scrollable && 'max-h-\[300px\] overflow-y-auto overflow-x-hidden'/);
+});
+
+test("Timezone options show their current UTC offset", () => {
+  const summer = new Date("2026-09-14T00:00:00.000Z");
+  const winter = new Date("2026-01-14T00:00:00.000Z");
+
+  assert.equal(timezoneOffsetLabel("Asia/Shanghai", summer), "UTC+8");
+  assert.equal(timezoneOffsetLabel("Asia/Kathmandu", summer), "UTC+5:45");
+  assert.equal(timezoneOffsetLabel("UTC", summer), "UTC+0");
+  assert.equal(timezoneOffsetLabel("America/New_York", summer), "UTC-4");
+  assert.equal(timezoneOffsetLabel("America/New_York", winter), "UTC-5");
+  assert.equal(timezoneOffsetLabel("Invalid/Timezone", summer), undefined);
 });
 
 test("Automation schedule editor presents semantic controls while preserving the wire model", () => {

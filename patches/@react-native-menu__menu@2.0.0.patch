@@ -1,11 +1,89 @@
 diff --git a/ios/NewArch/MenuView.mm b/ios/NewArch/MenuView.mm
-index f4752cc..f1e7e11 100644
 --- a/ios/NewArch/MenuView.mm
 +++ b/ios/NewArch/MenuView.mm
-@@ -102,6 +102,25 @@ using namespace facebook::react;
-         NSMutableArray<NSDictionary *> *subactionsArray = [NSMutableArray arrayWithCapacity:actions.size()];
-         if (action.subactions.size() > 0) {
-             for (const MenuViewActionsSubactionsStruct &subaction : action.subactions) {
+@@ -21,5 +21,6 @@ using namespace facebook::react;
+ @implementation MenuView {
+     UIView <FabricViewImplementationProtocol> * _view;
++    std::shared_ptr<const MenuViewEventEmitter> _presentedEventEmitter;
+ }
+ 
+ + (ComponentDescriptorProvider)componentDescriptorProvider
+@@ -65,29 +66,64 @@ using namespace facebook::react;
+     return std::static_pointer_cast<MenuViewEventEmitter const>(self->_eventEmitter);
+ }
+ 
++- (void)retainPresentedEventEmitter:(std::shared_ptr<const MenuViewEventEmitter>)eventEmitter
++{
++    if (_presentedEventEmitter != eventEmitter) {
++        [self releasePresentedEventEmitter];
++        _presentedEventEmitter = eventEmitter;
++    }
++    {
++        std::lock_guard<std::mutex> lock(EventEmitter::DispatchMutex());
++        std::const_pointer_cast<MenuViewEventEmitter>(eventEmitter)->setEnabled(true);
++    }
++}
++
++- (void)releasePresentedEventEmitter
++{
++    if (_presentedEventEmitter == nullptr) {
++        return;
++    }
++    {
++        std::lock_guard<std::mutex> lock(EventEmitter::DispatchMutex());
++        std::const_pointer_cast<MenuViewEventEmitter>(_presentedEventEmitter)->setEnabled(false);
++    }
++    _presentedEventEmitter.reset();
++}
++
+ - (void)onPressAction:(NSString * _Nonnull)eventString {
+-    // If screen is already unmounted then there will be no event emitter
+-    const auto eventEmitter = [self getEventEmitter];
++    auto eventEmitter = _presentedEventEmitter;
++    if (eventEmitter == nullptr) {
++        eventEmitter = [self getEventEmitter];
++    }
+     if (eventEmitter != nullptr) {
+-
+-        eventEmitter->onPressAction(MenuViewEventEmitter::OnPressAction{
+-            .event = [eventString UTF8String]
+-        });
++        eventEmitter->onPressAction(MenuViewEventEmitter::OnPressAction{
++            .event = [eventString UTF8String]
++        });
+     }
+ }
+ 
+ - (void)onCloseMenu {
+-    // If screen is already unmounted then there will be no event emitter
+-    const auto eventEmitter = [self getEventEmitter];
++    auto eventEmitter = _presentedEventEmitter;
++    if (eventEmitter == nullptr) {
++        eventEmitter = [self getEventEmitter];
++    }
+     if (eventEmitter != nullptr) {
+-        eventEmitter->onCloseMenu({});
++        eventEmitter->onCloseMenu({});
+     }
+ }
++
++- (void)prepareForRecycle
++{
++    [self releasePresentedEventEmitter];
++    [super prepareForRecycle];
++}
+ 
+ - (void)onOpenMenu {
+-    // If screen is already unmounted then there will be no event emitter
+     const auto eventEmitter = [self getEventEmitter];
+     if (eventEmitter != nullptr) {
++        // UIKit retains its menu actions after Fabric may recycle this view.
++        // Keep Fabric's event target enabled for the presented menu lifetime.
++        [self retainPresentedEventEmitter:eventEmitter];
+         eventEmitter->onOpenMenu({});
+     }
+ }
+@@ -107,0 +137,19 @@
 +                NSMutableArray<NSDictionary *> *nestedSubactionsArray = [NSMutableArray arrayWithCapacity:subaction.subactions.size()];
 +                for (const MenuViewActionsSubactionsSubactionsStruct &nestedSubaction : subaction.subactions) {
 +                    NSDictionary *nestedSubactionDict = @{
@@ -25,17 +103,18 @@ index f4752cc..f1e7e11 100644
 +                    };
 +                    [nestedSubactionsArray addObject:nestedSubactionDict];
 +                }
-                 NSDictionary *subactionDict = @{
-                     @"id": [NSString stringWithUTF8String:subaction.id.c_str()],
-                     @"title": [NSString stringWithUTF8String:subaction.title.c_str()],
-@@ -118,6 +141,7 @@ using namespace facebook::react;
-                         @"disabled": @(subaction.attributes.disabled),
-                         @"hidden": @(subaction.attributes.hidden),
-                     },
+@@ -121,0 +170 @@
 +                    @"subactions": nestedSubactionsArray,
-                 };
-                 [subactionsArray addObject:subactionDict];
-             }
+diff --git a/ios/Shared/MenuViewImplementation.swift b/ios/Shared/MenuViewImplementation.swift
+--- a/ios/Shared/MenuViewImplementation.swift
++++ b/ios/Shared/MenuViewImplementation.swift
+@@ -58,0 +59 @@
++        self.addTarget(self, action: #selector(primaryMenuTriggered), for: .menuActionTriggered)
+@@ -61,0 +63,4 @@
++
++    @objc private func primaryMenuTriggered() {
++        sendMenuOpen()
++    }
 diff --git a/ios/Shared/RCTMenuItem.swift b/ios/Shared/RCTMenuItem.swift
 index f5d510d..a5ecaf7 100644
 --- a/ios/Shared/RCTMenuItem.swift

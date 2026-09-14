@@ -250,6 +250,18 @@ function focus() {
 
 defineExpose({ focus });
 
+let restoreFocusAfterAction = false;
+
+function retainFocusAfterAction() {
+  restoreFocusAfterAction = true;
+  void nextTick(() => {
+    if (!props.busy && restoreFocusAfterAction) {
+      restoreFocusAfterAction = false;
+      textareaElement()?.focus();
+    }
+  });
+}
+
 function composerMaxHeight(composer: HTMLFormElement) {
   const maxHeight = Number.parseFloat(getComputedStyle(composer).maxHeight);
   if (Number.isFinite(maxHeight) && maxHeight > 0) {
@@ -499,6 +511,7 @@ function handleDrop(event: DragEvent) {
 function submit() {
   if (props.submitHidden) return;
   if (!props.busy && canRun.value) {
+    retainFocusAfterAction();
     const command = editing.value ? undefined : parseAiSessionCommand(props.modelValue.trim(), commandTrigger.value, props.mentionContext?.provider);
     if (command) {
       emit("command", command);
@@ -716,6 +729,9 @@ watch(() => props.busy, (busy) => {
   if (busy) {
     mentions.close();
     commandOpen.value = false;
+  } else if (restoreFocusAfterAction) {
+    restoreFocusAfterAction = false;
+    focus();
   }
 });
 </script>

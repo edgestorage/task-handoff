@@ -6,24 +6,28 @@ const root = new URL("../src/", import.meta.url);
 const read = (path) => fs.readFileSync(new URL(path, root), "utf8");
 
 test("AI session queue edit and reorder actions stay revisioned through both control-plane surfaces", () => {
+  const queue = read("components/ai-session/AiSessionQueue.vue");
   const result = read("components/ai-session/AiSessionResult.vue");
   const board = read("apps/control-plane/ai-board/AiSessionBoardView.vue");
   const dock = read("apps/control-plane/ai-board/AiSessionFloatingDock.vue");
   const panel = read("apps/control-plane/instance-detail/AiSessionPanel.vue");
   const queries = read("api/queries.ts");
 
-  assert.match(result, /session\.queue\.revision/);
-  assert.match(result, /emit\("reorderQueuedMessages", \{ expectedRevision:/);
-  assert.match(result, /\$emit\('editQueuedMessage', \{ queueId: item\.id, message: item\.message \}\)/);
-  assert.doesNotMatch(result, /queue-editor|editingQueueId/);
-  assert.match(result, /@dragstart="startQueueDrag/);
-  assert.match(result, /@dragenter\.prevent="previewQueueDrag/);
-  assert.match(result, /@drop\.prevent="commitQueueDrag/);
-  assert.match(result, /@dragend="cancelQueueDrag/);
-  assert.match(result, /sessions\.activity\.reorder/);
-  assert.doesNotMatch(result, /ChevronUp|ChevronDown/);
-  assert.match(result, /sessions\.activity\.edit/);
-  assert.match(result, /\.ai-session-detail-queue-item p\s*\{[^}]*-webkit-line-clamp: 2;[^}]*line-clamp: 2;/s);
+  assert.match(queue, /props\.queue\.revision/);
+  assert.match(queue, /emit\("reorderQueuedMessages", \{ expectedRevision:/);
+  assert.match(queue, /\$emit\('editQueuedMessage', \{ queueId: item\.id, message: item\.message \}\)/);
+  assert.doesNotMatch(queue, /queue-editor|editingQueueId/);
+  assert.match(queue, /@dragstart="startQueueDrag/);
+  assert.match(queue, /@dragenter\.prevent="previewQueueDrag/);
+  assert.match(queue, /@drop\.prevent="commitQueueDrag/);
+  assert.match(queue, /@dragend="cancelQueueDrag/);
+  assert.match(queue, /sessions\.activity\.reorder/);
+  assert.doesNotMatch(queue, /ChevronUp|ChevronDown/);
+  assert.match(queue, /sessions\.activity\.edit/);
+  assert.match(result, /<AiSessionQueue[\s\S]*?<AiSessionTurnHistory/);
+  assert.match(queue, /\.ai-session-detail-queue-item\s*\{[^}]*min-height: 38px;[^}]*padding: 4px 9px;/s);
+  assert.match(queue, /\.ai-session-detail-queue-item p\s*\{[^}]*-webkit-line-clamp: 1;[^}]*line-clamp: 1;/s);
+  assert.match(queue, /\[data-placement="composer"\] \.ai-session-detail-queue-list :deep\(\[data-reka-scroll-area-viewport\]\)\s*\{[^}]*max-height: 150px;/s);
   assert.match(dock, /@edit-queued-message="\$emit\('editQueuedMessage', \$event\)"/);
   assert.match(dock, /:editing-label="editingLabel"/);
   assert.match(board, /messageDraft\.value = payload\.message/);
@@ -38,6 +42,32 @@ test("AI session queue edit and reorder actions stay revisioned through both con
   assert.match(panel, /reorderAiSessionQueuedMessages/);
   assert.match(queries, /sharedAiSessionsApi\.editQueue/);
   assert.match(queries, /sharedAiSessionsApi\.reorderQueue/);
+});
+
+test("queued messages use one browser-local placement across detail and board composers", () => {
+  const preference = read("apps/control-plane/useAiSessionQueuePlacement.ts");
+  const appearance = read("apps/control-plane/settings/AppearanceSettingsSection.vue");
+  const conversation = read("components/ai-session/AiSessionConversationContent.vue");
+  const result = read("components/ai-session/AiSessionResult.vue");
+  const panel = read("apps/control-plane/instance-detail/AiSessionPanel.vue");
+  const panelStyles = read("apps/control-plane/instance-detail/AiSessionPanel.css");
+  const dock = read("apps/control-plane/ai-board/AiSessionFloatingDock.vue");
+
+  assert.match(preference, /type AiSessionQueuePlacement = "detail" \| "composer"/);
+  assert.match(preference, /shallowRef<AiSessionQueuePlacement>\("detail"\)/);
+  assert.match(preference, /localStorage\?\.getItem\(STORAGE_KEY\) === "composer" \? "composer" : "detail"/);
+  assert.match(preference, /localStorage\?\.setItem\(STORAGE_KEY, value\)/);
+  assert.match(appearance, /settings\.appearance\.queuePlacement/);
+  assert.match(appearance, /<ToggleGroup[\s\S]*value="detail"[\s\S]*value="composer"/);
+  assert.match(appearance, /\.queue-placement-choice \{[^}]*height: 32px;[^}]*border: 1px solid var\(--line\);[^}]*background: var\(--surface-active\);[^}]*padding: 2px;/s);
+  assert.match(appearance, /\.queue-placement-choice :deep\(button\[data-state="on"\]\) \{[^}]*background: var\(--surface-raised\);[^}]*box-shadow:/s);
+  assert.match(result, /<AiSessionQueue[\s\S]*v-if="showQueue && isLatest/);
+  assert.match(result, /showQueue: false/);
+  assert.match(conversation, /:show-queue="queuePlacement === 'detail'"/);
+  assert.match(panel, /class="session-ai-compose-stack"[\s\S]*effectiveTimelineViewMode === 'full' \|\| queuePlacement === 'composer'[\s\S]*<AiSessionComposer/);
+  assert.match(panel, /composerStackEl\.value \|\| composer/);
+  assert.match(panelStyles, /\.session-ai-compose-stack[\s\S]*position: absolute;/);
+  assert.match(dock, /class="ai-board-floating-compose-stack"[\s\S]*timelineMode === 'full' \|\| queuePlacement === 'composer'[\s\S]*<AiSessionComposer/);
 });
 
 test("successful AI session actions consume only acknowledgements and wait for authoritative events", () => {

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import * as Crypto from 'expo-crypto';
 import { File } from 'expo-file-system';
 import { CornerDownRight, GripVertical, Pencil, RotateCcw, Trash2, type LucideIcon } from 'lucide-react-native';
 import { ActivityIndicator, Alert, Animated, FlatList, Keyboard, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
@@ -369,18 +370,18 @@ export function SessionWorkspace({
   };
   const continueFromTurn = async (turn: { id: string }) => {
     if (!actions || !authoritativeActionsEnabled) return;
-    const result = await performAction(t('sessions.continueFromTurn'), () => actions.fork(instanceId, session.id, turn.id, crypto.randomUUID()));
+    const result = await performAction(t('sessions.continueFromTurn'), () => actions.fork(instanceId, session.id, turn.id, Crypto.randomUUID()));
     if (result.disposition === 'accepted') onOpenSession?.(result.result.aiSessionId);
   };
   const updateModelSelection = async (selection: NonNullable<typeof session.modelSelection>) => {
     if (!actions || !authoritativeActionsEnabled || modelSelectionState?.phase === 'busy') return;
-    const result = await performAction(t('sessions.model'), () => actions.updateModelSelection(instanceId, session.id, crypto.randomUUID(), selection));
+    const result = await performAction(t('sessions.model'), () => actions.updateModelSelection(instanceId, session.id, Crypto.randomUUID(), selection));
     if (result.disposition === 'accepted') void refresh?.().catch(() => undefined);
     if (result.disposition !== 'accepted') rerender((value) => value + 1);
   };
   const updateReasoningEffort = async (effort: AiSessionReasoningEffort) => {
     if (!actions || !authoritativeActionsEnabled || reasoningState?.phase === 'busy') return;
-    const result = await performAction(t('sessions.reasoningEffort'), () => actions.updateReasoningEffort(instanceId, session.id, crypto.randomUUID(), effort));
+    const result = await performAction(t('sessions.reasoningEffort'), () => actions.updateReasoningEffort(instanceId, session.id, Crypto.randomUUID(), effort));
     if (result.disposition === 'accepted') void refresh?.().catch(() => undefined);
     if (result.disposition !== 'accepted') rerender((value) => value + 1);
   };

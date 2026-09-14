@@ -65,11 +65,14 @@
 .detail-meta {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   min-width: 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 20px;
 }
 
-.detail-meta span,
 .detail-identity > .image-provisioning-status {
   display: block;
   max-width: 640px;
@@ -81,8 +84,58 @@
   white-space: nowrap;
 }
 
-.detail-meta span[aria-hidden="true"] {
-  flex: none;
+.detail-meta-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.detail-meta-item > svg,
+.detail-meta-separator {
+  flex: 0 0 auto;
+}
+
+.detail-meta-item > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.detail-meta-separator {
+  color: var(--line-strong);
+}
+
+.detail-meta-folder {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
+}
+
+.detail-meta-folder:hover {
+  color: var(--text);
+}
+
+.detail-meta-folder:focus-visible {
+  border-radius: 3px;
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+:global(.instance-detail-meta-tooltip) {
+  max-width: min(480px, calc(100vw - 24px));
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
 }
 
 .detail-name-field {

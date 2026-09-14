@@ -9,6 +9,8 @@ import {
 } from "../src/components/ai-session/commands.ts";
 
 const composer = fs.readFileSync(new URL("../src/components/ai-session/AiSessionComposer.vue", import.meta.url), "utf8");
+const panel = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.vue", import.meta.url), "utf8");
+const board = fs.readFileSync(new URL("../src/apps/control-plane/ai-board/AiSessionBoardView.vue", import.meta.url), "utf8");
 const settings = fs.readFileSync(new URL("../src/apps/control-plane/settings/SettingsModal.vue", import.meta.url), "utf8");
 const appearance = fs.readFileSync(new URL("../src/apps/control-plane/settings/AppearanceSettingsSection.vue", import.meta.url), "utf8");
 
@@ -56,6 +58,13 @@ test("Ctrl+Enter steers a running turn without changing normal Enter submission"
   assert.match(composer, /event\.key === "Enter"[\s\S]*event\.ctrlKey[\s\S]*!event\.metaKey[\s\S]*!event\.altKey[\s\S]*!event\.shiftKey[\s\S]*canSteer\.value[\s\S]*event\.preventDefault\(\);[\s\S]*event\.stopPropagation\(\);[\s\S]*emit\("steer"\);/);
   assert.match(composer, /if \(event\.key !== "Enter" \|\| event\.shiftKey \|\| event\.isComposing\) \{[\s\S]*submit\(\);/);
   assert.match(composer, /:title="t\('sessions\.composer\.steerTurnShortcut'\)"[\s\S]*:aria-label="t\('sessions\.composer\.steerTurnShortcut'\)"/);
+});
+
+test("the composer restores focus after submitting through a temporary busy state", () => {
+  assert.match(composer, /function submit\(\)[\s\S]*retainFocusAfterAction\(\);[\s\S]*emit\("run"/);
+  assert.match(composer, /watch\(\(\) => props\.busy, \(busy\) => \{[\s\S]*else if \(restoreFocusAfterAction\)[\s\S]*focus\(\);/);
+  assert.match(panel, /async function sendSelectedSessionMessage[\s\S]*finally \{\s*aiSessionActionBusy\.value = false;\s*composerEl\.value\?\.focus\(\);/);
+  assert.match(board, /async function sendSelectedSessionMessage[\s\S]*finally \{\s*aiSessionActionBusy\.value = false;\s*floatingDockEl\.value\?\.focusComposer\(\);/);
 });
 
 test("the composer exposes and submits only provider-advertised permission modes", () => {

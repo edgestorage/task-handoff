@@ -126,14 +126,18 @@ export function mergeAiSessionSummaryTurnsWithDetail(
 }
 
 /**
- * Joins a compact list row with an HTTP detail from the same detailRevision.
- * Older producers do not expose detailRevision and still put the authoritative
- * conversation fields in the list row, so only enrich their Turn metadata.
+ * Joins a compact list row with the latest cached HTTP detail. The detail may
+ * belong to the previous revision while its replacement is loading, which
+ * keeps one coherent detail snapshot visible instead of falling back to the
+ * summary's intentionally empty detail fields. Older producers do not expose
+ * detailRevision and still put the authoritative conversation fields in the
+ * list row, so only enrich their Turn metadata.
  */
 export function mergeAiSessionSummaryWithDetail<Summary extends AiSessionSummary>(
   summary: Summary,
   detail: AiSessionDetail | AiSessionStatus,
   turnBodies?: AiSessionStatus["turns"],
+  detailIsCurrent = true,
 ): Summary {
   const legacyTurns = "turns" in detail ? detail.turns : undefined;
   const turns = turnBodies ?? legacyTurns;
@@ -147,8 +151,8 @@ export function mergeAiSessionSummaryWithDetail<Summary extends AiSessionSummary
     cwd: detail.cwd,
     error: detail.error,
     providerMeta: detail.providerMeta,
-    queue: detail.queue,
-    subAgents: detail.subAgents,
+    queue: detailIsCurrent ? detail.queue : summary.queue,
+    subAgents: detailIsCurrent ? detail.subAgents : summary.subAgents,
     turns,
   } as Summary;
 }

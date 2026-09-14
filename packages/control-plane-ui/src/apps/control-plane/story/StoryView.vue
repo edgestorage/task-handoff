@@ -94,7 +94,7 @@
                     </div>
                   </ContextMenuTrigger>
                   <AiSessionCardContextMenu
-                    :bound-trigger-count="0"
+                    :bound-trigger-count="boundTriggers(entry).length"
                     :has-app-session="Boolean(entry.session.appSessionId)"
                     :can-open-app="Boolean(entry.session.appSessionId || entry.session.actions?.openApp)"
                     :can-open-terminal="false"
@@ -105,16 +105,16 @@
                     :session-id="entry.session.id"
                     :session-name="entry.session.title || entry.session.userPrompt || entry.session.id"
                     :session-path="entry.session.cwd"
-                    :show-trigger-actions="false"
                     :story-target="storyTargetFor(entry)"
-                    :is-trigger-bound="() => false"
-                    :is-trigger-busy="() => false"
+                    :is-trigger-bound="(configHash) => isTriggerBound(entry, configHash)"
+                    :is-trigger-busy="(configHash) => triggerBusyKey === triggerActionKey(entry, configHash)"
                     :short-hash="shortHash"
-                    :trigger-templates="[]"
+                    :trigger-templates="triggerTemplates"
                     @close-session="closeSession(entry)"
                     @open-app="openStoryAiSessionApp(entry.instance, entry.session)"
                     @story-assigned="onStoryAssigned"
                     @story-assign-failed="onStoryAssignFailed"
+                    @toggle-trigger="toggleTrigger(entry, $event)"
                   />
                 </ContextMenu>
                 </div>
@@ -463,6 +463,7 @@ import { canUseNativeProjectFolderPicker, type NativeNodeFolderPicker } from "..
 import { launchableAppsForInstance, sessionStatusLabel, type RepositoryWorkspaceTabTarget, type SessionTab } from "../useInstanceSessions";
 import { latestStoryDocuments, STORY_TREE_DOCUMENT_LIMIT } from "./storyDocuments";
 import { normalizeManualStoryOrder, reorderStoryKeys, sortStories, storyDropTargetAt, storySortKey, type StorySortMode } from "./storySort";
+import { useAiSessionTriggers } from "../useAiSessionTriggers";
 import { allStoryNodes, storyNodeIsVisible, type StoryNodeFilter } from "@task-handoff/control-plane-client";
 import { storySelectionKey, type StorySelection } from "./storySelection";
 import type { HeaderDensity } from "../useWorkbenchLayoutPreferences";
@@ -551,6 +552,7 @@ let storyAutoScrollFrame = 0;
 let storyPointerClientY = 0;
 let dragStartOrder: string[] = [];
 const storiesQuery = useStoriesQuery();
+const { boundTriggers, isTriggerBound, toggleTrigger, triggerActionKey, triggerBusyKey, triggerTemplates } = useAiSessionTriggers();
 const allStories = computed(() => storiesQuery.data.value?.stories ?? []);
 const filteredStories = computed(() => allStories.value.filter((story) => storyNodeIsVisible(props.nodeFilter, story.ownerNodeId)));
 const storySessionRecords = computed<StorySessionRecord[]>(() => props.instances.flatMap((instance) => (

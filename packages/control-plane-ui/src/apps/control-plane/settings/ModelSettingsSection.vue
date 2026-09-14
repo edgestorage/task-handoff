@@ -193,7 +193,7 @@
 
           <section class="model-form-section">
             <header><h3>{{ t("settings.modelRegistry.model") }}</h3><p>{{ t("settings.modelRegistry.manualModelHint") }}</p></header>
-            <div class="model-name-list"><div class="model-name-list-head"><span>{{ t("settings.modelRegistry.modelNames") }}</span><div><Popover v-model:open="modelPickerOpen" @update:open="handleModelPickerOpen"><PopoverTrigger as-child><Button type="button" variant="ghost" size="sm" :disabled="!canDiscoverModels" :aria-label="t('settings.modelRegistry.chooseDiscovered')"><RefreshCw :size="13" :class="{ spin: discoveringModels }" />{{ discoveringModels ? t("settings.modelRegistry.discovering") : t("settings.modelRegistry.chooseDiscovered") }}</Button></PopoverTrigger><PopoverContent class="model-picker-popover w-[min(360px,var(--reka-popover-content-available-width))] overflow-hidden p-1" align="end" :collision-padding="12" :side-offset="6"><Command class="model-picker-command" @update:model-value="selectDiscoveredModel"><CommandInput class="model-picker-search-input h-8 py-0 text-[13px]" :placeholder="t('settings.modelRegistry.searchModels')" /><ScrollArea class="model-picker-scroll" :horizontal="false"><CommandList class="model-picker-list" :scrollable="false"><CommandEmpty>{{ discoveringModels ? t("settings.modelRegistry.discovering") : t("settings.modelRegistry.noModelMatches") }}</CommandEmpty><CommandGroup><CommandItem v-for="option in discoveredModels" :key="option.id" :value="option.id"><span>{{ option.id }}</span><small v-if="option.ownedBy">{{ option.ownedBy }}</small><Check :size="14" :class="{ 'model-option-unselected': !settingsModel.modelNames.some((entry) => entry.name === option.id) }" /></CommandItem></CommandGroup></CommandList></ScrollArea></Command></PopoverContent></Popover><Button type="button" size="sm" variant="ghost" @click="addModelName">{{ t("settings.modelRegistry.addModelName") }}</Button></div></div><div v-for="(entry, index) in settingsModel.modelNames" :key="index" class="model-name-row"><ControlPlaneInput v-model="entry.name" :placeholder="t('settings.modelRegistry.modelNamePlaceholder')" @update:model-value="(value) => index === 0 && (settingsModel.model = value)" /><Button type="button" variant="ghost" size="icon" :disabled="index === 0" @click="moveModelName(index, -1)"><ChevronUp :size="14" /></Button><Button type="button" variant="ghost" size="icon" :disabled="index === settingsModel.modelNames.length - 1" @click="moveModelName(index, 1)"><ChevronDown :size="14" /></Button><Button type="button" variant="ghost" size="icon" :disabled="settingsModel.modelNames.length === 1" @click="removeModelName(index)"><Trash2 :size="14" /></Button></div></div>
+            <div class="model-name-list"><div class="model-name-list-head"><span>{{ t("settings.modelRegistry.modelNames") }}</span><div><Popover v-model:open="modelPickerOpen" @update:open="handleModelPickerOpen"><PopoverTrigger as-child><Button type="button" variant="ghost" size="sm" :disabled="!canDiscoverModels" :aria-label="t('settings.modelRegistry.chooseDiscovered')"><RefreshCw :size="13" :class="{ spin: discoveringModels }" />{{ discoveringModels ? t("settings.modelRegistry.discovering") : t("settings.modelRegistry.chooseDiscovered") }}</Button></PopoverTrigger><PopoverContent class="model-picker-popover w-[min(360px,var(--reka-popover-content-available-width))] overflow-hidden p-1" align="end" :collision-padding="12" :side-offset="6"><Command class="model-picker-command" @update:model-value="selectDiscoveredModel"><CommandInput class="model-picker-search-input h-8 py-0 text-[13px]" :placeholder="t('settings.modelRegistry.searchModels')" /><ScrollArea class="model-picker-scroll" :horizontal="false"><CommandList class="model-picker-list" :scrollable="false"><CommandEmpty>{{ discoveringModels ? t("settings.modelRegistry.discovering") : t("settings.modelRegistry.noModelMatches") }}</CommandEmpty><CommandGroup><CommandItem v-for="option in discoveredModels" :key="option.id" :value="option.id"><span>{{ option.id }}</span><small v-if="option.ownedBy">{{ option.ownedBy }}</small><Check :size="14" :class="{ 'model-option-unselected': !settingsModel.modelNames.some((entry) => entry.name === option.id) }" /></CommandItem></CommandGroup></CommandList></ScrollArea></Command></PopoverContent></Popover><Button type="button" size="sm" variant="ghost" @click="addModelName">{{ t("settings.modelRegistry.addModelName") }}</Button></div></div><TransitionGroup name="model-name-row" tag="div" class="model-name-items" :class="{ 'model-name-items-dragging': draggingModelNameIndex !== undefined, 'model-name-items-settling': modelNameDragSettling }" @dragover.prevent @drop.prevent="commitModelNameDrag"><div v-for="(entry, index) in settingsModel.modelNames" :key="modelNameEntryKey(entry)" class="model-name-row" :class="{ 'model-name-row-dragging': draggingModelNameIndex === index }" :style="modelNameDragStyle(index)" @dragover.prevent="previewModelNameDrag($event, index)"><button type="button" class="model-name-drag-handle" draggable="true" aria-keyshortcuts="ArrowUp ArrowDown" :aria-label="t('settings.modelRegistry.reorderModelName')" :title="t('settings.modelRegistry.reorderModelName')" @dragend="cancelModelNameDrag" @dragstart="startModelNameDrag($event, index)" @keydown="handleModelNameHandleKeydown($event, index)"><GripVertical :size="18" :stroke-width="1.8" aria-hidden="true" /></button><ControlPlaneInput v-model="entry.name" :placeholder="t('settings.modelRegistry.modelNamePlaceholder')" @update:model-value="(value) => index === 0 && (settingsModel.model = value)" /><Button type="button" variant="ghost" size="icon" :disabled="settingsModel.modelNames.length === 1" @click="removeModelName(index)"><Trash2 :size="14" /></Button></div></TransitionGroup></div>
             <small v-if="!selectedNodeSupportsModelEndpointProbe" class="model-form-note">{{ t("settings.modelRegistry.probeUnsupported") }}</small>
           </section>
         </form>
@@ -222,9 +222,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, nextTick, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { Activity, AlertTriangle, Boxes, Check, ChevronDown, ChevronUp, ChevronsUpDown, Copy, KeyRound, Layers, Link2, MapPin, MoreHorizontal, Plus, RefreshCw, Search, Settings, Trash2, X } from "@lucide/vue";
+import { Activity, AlertTriangle, Boxes, Check, ChevronDown, ChevronUp, ChevronsUpDown, Copy, GripVertical, KeyRound, Layers, Link2, MapPin, MoreHorizontal, Plus, RefreshCw, Search, Settings, Trash2, X } from "@lucide/vue";
 import type { ModelApp, ModelConfig, ModelLocation } from "../../../api/types";
 import { useModelRegistryQuery, useModelsQuery, useNodesQuery } from "../../../api/queries";
 import { invalidateControlPlaneDomains } from "../../../api/queryInvalidation";
@@ -259,10 +259,16 @@ const statusFilter = ref<"all" | "enabled" | "disabled">("all");
 const editorOpen = ref(false);
 const closeConfirmationOpen = ref(false);
 const modelPickerOpen = ref(false);
+const draggingModelNameIndex = ref<number>();
+const modelNameDragTargetIndex = ref<number>();
+const modelNameDragStep = ref(0);
+const modelNameDragSettling = ref(false);
+const modelNameEntryKeys = new WeakMap<object, number>();
+let nextModelNameEntryKey = 0;
 const pendingDelete = ref<{ model: ModelConfig; location: ModelLocation }>();
 const refreshModels = () => invalidateControlPlaneDomains(queryClient, ["models"]);
 const translateError = (error: unknown) => translateApiError(error, t, error instanceof Error ? error.message : String(error));
-const { addModelName, canDiscoverModels, canMoveModel, canSaveModel, canTestModel, checkModel, copyingModelId, copyModelDraft, deletingModelId, discoveredModels, discoveringModels, editModel, editingModelId, formModelBusyId, modelDraftDirty, moveModel, moveModelName, removeModel, removeModelName, resetModelForm, saveModel, savingModelId, selectedNodeSupportsModelEndpointProbe, setProtocols, settingsModel, testingModel, fetchModelOptions } = useModelSettings({ errorText: translateError, models: () => models.data.value || [], nodes: () => nodes.data.value || [], onModelDeleted() {}, refreshModels, translate: t });
+const { addModelName, canDiscoverModels, canMoveModel, canSaveModel, canTestModel, checkModel, copyingModelId, copyModelDraft, deletingModelId, discoveredModels, discoveringModels, editModel, editingModelId, formModelBusyId, modelDraftDirty, moveModel, moveModelName, reorderModelName, removeModel, removeModelName, resetModelForm, saveModel, savingModelId, selectedNodeSupportsModelEndpointProbe, setProtocols, settingsModel, testingModel, fetchModelOptions } = useModelSettings({ errorText: translateError, models: () => models.data.value || [], nodes: () => nodes.data.value || [], onModelDeleted() {}, refreshModels, translate: t });
 const modelProtocols = ["openai-responses", "openai-chat-completions", "anthropic-messages"] as const;
 const editingModelLocationCount = computed(() => (models.data.value || []).find((model) => model.id === editingModelId.value)?.locations?.length || 1);
 const hasActiveFilters = computed(() => Boolean(searchQuery.value.trim() || appFilter.value !== "all" || locationFilter.value !== "all" || statusFilter.value !== "all"));
@@ -276,6 +282,13 @@ const filteredModels = computed(() => {
     return true;
   });
 });
+function modelNameEntryKey(entry: object) {
+  const existing = modelNameEntryKeys.get(entry);
+  if (existing !== undefined) return existing;
+  const key = nextModelNameEntryKey++;
+  modelNameEntryKeys.set(entry, key);
+  return key;
+}
 function clearFilters() { searchQuery.value = ""; appFilter.value = "all"; locationFilter.value = "all"; statusFilter.value = "all"; }
 function nodeName(nodeId: string) { return (nodes.data.value || []).find((node) => node.id === nodeId)?.name || nodeId; }
 function modelLocationKey(location: ModelLocation) { return location.type === "control-plane" ? "control-plane" : `node:${location.nodeId}`; }
@@ -288,7 +301,7 @@ function openEditDialog(model: ModelConfig) { editModel(model); editorOpen.value
 function openCopyDialog(model: ModelConfig) { copyModelDraft(model); editorOpen.value = true; }
 function requestCloseEditor() { if (modelDraftDirty.value) closeConfirmationOpen.value = true; else closeEditor(); }
 function handleEditorOpenChange(open: boolean) { if (open) editorOpen.value = true; else requestCloseEditor(); }
-function closeEditor() { editorOpen.value = false; closeConfirmationOpen.value = false; modelPickerOpen.value = false; resetModelForm(); }
+function closeEditor() { editorOpen.value = false; closeConfirmationOpen.value = false; modelPickerOpen.value = false; cancelModelNameDrag(); resetModelForm(); }
 function discardAndClose() { closeEditor(); }
 async function submitModel() { if (await saveModel()) closeEditor(); }
 function handleModelPickerOpen(open: boolean) { if (open && !discoveredModels.value.length && !discoveringModels.value) void fetchModelOptions(); }
@@ -304,6 +317,58 @@ function selectDiscoveredModel(value: unknown) {
     else settingsModel.modelNames.push({ name: value, order: (settingsModel.modelNames.length + 1) * 100 });
   }
   settingsModel.model = settingsModel.modelNames[0]?.name || "";
+}
+function startModelNameDrag(event: DragEvent, index: number) {
+  draggingModelNameIndex.value = index;
+  modelNameDragTargetIndex.value = index;
+  const row = (event.currentTarget as HTMLElement | null)?.closest<HTMLElement>(".model-name-row");
+  const list = row?.parentElement;
+  modelNameDragStep.value = row ? row.offsetHeight + Number.parseFloat(list ? getComputedStyle(list).rowGap || "0" : "0") : 0;
+  if (!event.dataTransfer) return;
+  event.dataTransfer.effectAllowed = "move";
+  event.dataTransfer.setData("text/plain", String(index));
+  if (row) event.dataTransfer.setDragImage(row, 12, row.offsetHeight / 2);
+}
+function previewModelNameDrag(event: DragEvent, targetIndex: number) {
+  const sourceIndex = draggingModelNameIndex.value;
+  if (sourceIndex === undefined) return;
+  const row = event.currentTarget as HTMLElement;
+  const midpoint = row.getBoundingClientRect().top + row.offsetHeight / 2;
+  if (sourceIndex < targetIndex && event.clientY < midpoint) return;
+  if (sourceIndex > targetIndex && event.clientY > midpoint) return;
+  modelNameDragTargetIndex.value = targetIndex;
+}
+function modelNameDragStyle(index: number) {
+  const sourceIndex = draggingModelNameIndex.value;
+  const targetIndex = modelNameDragTargetIndex.value;
+  if (sourceIndex === undefined || targetIndex === undefined || sourceIndex === targetIndex) return undefined;
+  if (sourceIndex < targetIndex && index > sourceIndex && index <= targetIndex) return { transform: `translate3d(0, -${modelNameDragStep.value}px, 0)` };
+  if (sourceIndex > targetIndex && index >= targetIndex && index < sourceIndex) return { transform: `translate3d(0, ${modelNameDragStep.value}px, 0)` };
+  return undefined;
+}
+function commitModelNameDrag() {
+  const sourceIndex = draggingModelNameIndex.value;
+  const targetIndex = modelNameDragTargetIndex.value;
+  if (sourceIndex !== undefined && targetIndex !== undefined && sourceIndex !== targetIndex) {
+    modelNameDragSettling.value = true;
+    reorderModelName(sourceIndex, targetIndex);
+    void nextTick(() => requestAnimationFrame(() => { modelNameDragSettling.value = false; }));
+  }
+  cancelModelNameDrag();
+}
+function cancelModelNameDrag() {
+  draggingModelNameIndex.value = undefined;
+  modelNameDragTargetIndex.value = undefined;
+  modelNameDragStep.value = 0;
+}
+function handleModelNameHandleKeydown(event: KeyboardEvent, index: number) {
+  if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+  const targetIndex = index + (event.key === "ArrowUp" ? -1 : 1);
+  if (targetIndex < 0 || targetIndex >= settingsModel.modelNames.length) return;
+  event.preventDefault();
+  moveModelName(index, event.key === "ArrowUp" ? -1 : 1);
+  const list = (event.currentTarget as HTMLElement | null)?.closest<HTMLElement>(".model-name-list");
+  void nextTick(() => list?.querySelectorAll<HTMLButtonElement>(".model-name-drag-handle")[targetIndex]?.focus());
 }
 function requestDelete(model: ModelConfig, location: ModelLocation) { pendingDelete.value = { model, location }; }
 async function confirmDelete() { const target = pendingDelete.value; if (!target) return; if (await removeModel(target.model, target.location)) pendingDelete.value = undefined; }
@@ -408,7 +473,16 @@ async function confirmDelete() { const target = pendingDelete.value; if (!target
 .model-name-list-head { align-items: center; display: flex; justify-content: space-between; }
 .model-name-list-head > div { align-items: center; display: flex; gap: 4px; }
 .model-name-list-head > span { color: var(--text-muted); font-size: 12px; }
-.model-name-row { align-items: center; display: grid; gap: 4px; grid-template-columns: minmax(0,1fr) repeat(3, auto); }
+.model-name-items { display: grid; gap: 7px; }
+.model-name-row { align-items: center; border-radius: 6px; display: grid; gap: 4px; grid-template-columns: 32px minmax(0,1fr) auto; transition: transform 140ms cubic-bezier(.2,.8,.2,1), background-color 120ms ease, opacity 120ms ease; }
+.model-name-row-move { transition: transform 180ms ease, background-color 120ms ease, opacity 120ms ease; }
+.model-name-items-dragging .model-name-row { will-change: transform; }
+.model-name-items-settling .model-name-row { transition: none; }
+.model-name-drag-handle { align-items: center; align-self: stretch; background: transparent; border: 0; border-radius: 5px; color: var(--text-muted); cursor: grab; display: flex; justify-content: center; min-height: 36px; padding: 0; touch-action: none; }
+.model-name-drag-handle:hover { background: var(--surface-hover); color: var(--text-strong); }
+.model-name-drag-handle:active { cursor: grabbing; }
+.model-name-drag-handle:focus-visible { box-shadow: 0 0 0 2px var(--focus-ring); outline: none; }
+.model-name-row-dragging { opacity: 0; }
 .model-editor-footer { border-top: 1px solid var(--line); display: flex; gap: 8px; justify-content: flex-end; padding: 8px 16px; }
 :global(.model-picker-popover) { height: min(360px,var(--reka-popover-content-available-height)); overflow: hidden; padding: 4px; width: min(360px,var(--reka-popover-content-available-width)); }
 .model-picker-command { display: grid; grid-template-rows: auto minmax(0,1fr); height: 100%; }
@@ -427,6 +501,7 @@ async function confirmDelete() { const target = pendingDelete.value; if (!target
 .model-option-unselected { opacity: 0; }
 .spin { animation: model-spin .8s linear infinite; }
 @keyframes model-spin { to { transform: rotate(360deg); } }
+@media(prefers-reduced-motion:reduce) { .model-name-row, .model-name-row-move { transition: none; } }
 @media(max-width:900px) { .model-toolbar { grid-template-columns: minmax(220px,1fr) repeat(3,minmax(130px,.35fr)); } .model-row-main { grid-template-columns: minmax(210px,1fr) minmax(220px,.8fr) auto; } }
 @media(max-width:720px) { .model-settings-page { padding-right: 7px; } .model-toolbar { grid-template-columns: 1fr 1fr; } .model-search { grid-column: 1/-1; } .model-row-main { align-items: start; grid-template-columns: 1fr auto; gap: 10px; } .model-summary { grid-column: 1/-1; } .model-diagnostic-row { grid-template-columns: 1fr; } .model-protocol-options { grid-template-columns: 1fr; } }
 </style>

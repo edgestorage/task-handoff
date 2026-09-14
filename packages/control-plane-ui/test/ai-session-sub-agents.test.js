@@ -20,7 +20,6 @@ test("AI session detail renders sub-agents after the main tool activity", () => 
   assert.match(result, /<AiSessionToolActivity[\s\S]*?\/>\s*<AiSessionSubAgents/);
   assert.match(result, /v-if="isLatest && session\.subAgents\?\.length"/);
   assert.match(result, /:sub-agents="session\.subAgents"/);
-  assert.match(result, /<AiSessionSubAgents[\s\S]*?<section v-if="isLatest && session\.queue\?\.items\.length"/);
 });
 
 test("sub-agent activity is independent from tool activity", () => {

@@ -1,4 +1,5 @@
 import {
+  isCurrentAiSessionSubAgent,
   normalizeAiSessionLineage,
   AiSessionMessageAttachmentMetaSchema,
   AiSessionModelSelectionSchema,
@@ -97,6 +98,9 @@ export function normalizeAiSessionSubAgents(value: unknown): AiSessionStatus["su
     };
     const parsed = AiSessionSubAgentSchema.safeParse(candidate);
     if (!parsed.success) continue;
+    // Compatibility for v0.0.29: completed agents may still appear in persisted
+    // snapshots and wire events, but the current activity model only owns unfinished work.
+    if (!isCurrentAiSessionSubAgent(parsed.data)) continue;
     const previous = byThreadId.get(parsed.data.threadId);
     if (!previous || Date.parse(parsed.data.updatedAt) >= Date.parse(previous.updatedAt)) {
       byThreadId.set(parsed.data.threadId, parsed.data);

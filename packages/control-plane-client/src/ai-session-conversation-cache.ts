@@ -176,8 +176,13 @@ export class AiSessionConversationCache {
       // elapsed timers running until the client restarts.
       return projectTurn(index, body);
     }) : [...(summary.turns || [])];
-    return entry?.detail && entry.detailRevision === aiSessionDetailCacheRevision(summary)
-      ? mergeAiSessionSummaryWithDetail(summary, entry.detail, turns)
+    return entry?.detail
+      ? mergeAiSessionSummaryWithDetail(
+        summary,
+        entry.detail,
+        turns,
+        entry.detailRevision === aiSessionDetailCacheRevision(summary),
+      )
       : { ...summary, turns };
   }
 

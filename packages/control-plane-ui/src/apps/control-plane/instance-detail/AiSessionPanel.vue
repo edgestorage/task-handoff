@@ -115,8 +115,10 @@
             >
               <AiSessionPathGroupContextMenu
                 v-if="groupSessionsByPath"
+                :can-copy="group.kind === 'path'"
                 :can-open="group.kind === 'path' && canOpenPathGroupFolder"
                 :can-rename="canRenamePathGroup(group)"
+                @copy="copyPathGroupPath(group)"
                 @open="openPathGroupFolder(group)"
                 @rename="openPathGroupRename(group)"
               >
@@ -359,8 +361,10 @@
               <section v-for="group in displayedHistoryGroups" :key="group.key" class="session-ai-path-group session-ai-history-group">
                 <AiSessionPathGroupContextMenu
                   v-if="groupSessionsByPath"
+                  :can-copy="group.kind === 'path'"
                   :can-open="group.kind === 'path' && canOpenPathGroupFolder"
                   :can-rename="canRenamePathGroup(group)"
+                  @copy="copyPathGroupPath(group)"
                   @open="openPathGroupFolder(group)"
                   @rename="openPathGroupRename(group)"
                 >
@@ -703,6 +707,7 @@
               </DropdownMenu>
             </div>
             <AiSessionComposer
+              ref="newSessionComposerEl"
               v-model="newSessionDraft"
               v-model:attachments="messageAttachments"
               v-model:mention-bindings="newSessionMentionBindings"
@@ -1031,37 +1036,52 @@
           <ChevronDown :size="17" />
         </Button>
         <div class="session-ai-compose-gradient" aria-hidden="true" />
-        <AiSessionComposer
-          ref="composerEl"
-          v-model="messageDraft"
-          v-model:attachments="messageAttachments"
-          v-model:mention-bindings="messageMentionBindings"
-          class="session-ai-compose"
-          :busy="aiSessionActionBusy"
-          :can-interrupt="canInterrupt(selectedSession)"
-          :provider="selectedSession.agent"
-          :permission-modes="providerPermissionModes(selectedSession.agent)"
-          :model-groups="selectedSessionModelGroups"
-          :model-selection="selectedSessionModelDisplay"
-          :model-selection-pending="modelSelectionPendingSessionId === selectedSession.id"
-          :reasoning-effort="selectedSession.reasoningEffort || (selectedSession.agent === 'codex' ? AI_SESSION_DEFAULT_REASONING_EFFORT : undefined)"
-          :reasoning-effort-enabled="selectedSessionReasoningEffortCapability.updateDuringSession"
-          :reasoning-effort-pending="reasoningEffortPending?.sessionId === selectedSession.id"
-          :permission-key="aiSessionPermissionKey(instance.id, selectedSession.id)"
-          :default-permission-mode="instance.config.defaultCodexPermissionMode"
-          :max-file-attachment-bytes="instance.config.aiSessionMaxFileAttachmentBytes"
-          :mention-context="mentionContext"
-          :mention-trigger="mentionTrigger"
-          :command-trigger="commandTrigger"
-          :editing-label="queueComposerEdit ? t('sessions.composer.editingQueuedMessage') : undefined"
-          :session-busy="selectedSession?.status === 'running' || selectedSession?.status === 'waiting'"
-          @cancel-edit="cancelQueueComposerEdit"
-          @command="executeSelectedSessionCommand"
-          @run="runSelectedSessionAction"
-          @select-model="selectExistingSessionModel"
-          @select-reasoning-effort="selectExistingSessionReasoningEffort"
-          @steer="steerMessageDraft"
-        />
+        <div ref="composerStackEl" class="session-ai-compose-stack">
+          <AiSessionQueue
+            v-if="(effectiveTimelineViewMode === 'full' || queuePlacement === 'composer') && selectedConversationSession?.queue.items.length"
+            class="session-ai-compose-queue"
+            :busy="aiSessionActionBusy"
+            :can-interrupt="canInterrupt(selectedSession)"
+            placement="composer"
+            :queue="selectedConversationSession.queue"
+            @edit-queued-message="editQueuedMessage(selectedSession.id, $event)"
+            @remove-queued-message="removeQueuedMessage(selectedSession.id, $event)"
+            @reorder-queued-messages="reorderQueuedMessages(selectedSession.id, $event)"
+            @retry-queued-message="retryQueuedMessage(selectedSession.id, $event)"
+            @steer-queued-message="steerQueuedMessage(selectedSession.id, $event)"
+          />
+          <AiSessionComposer
+            ref="composerEl"
+            v-model="messageDraft"
+            v-model:attachments="messageAttachments"
+            v-model:mention-bindings="messageMentionBindings"
+            class="session-ai-compose"
+            :busy="aiSessionActionBusy"
+            :can-interrupt="canInterrupt(selectedSession)"
+            :provider="selectedSession.agent"
+            :permission-modes="providerPermissionModes(selectedSession.agent)"
+            :model-groups="selectedSessionModelGroups"
+            :model-selection="selectedSessionModelDisplay"
+            :model-selection-pending="modelSelectionPendingSessionId === selectedSession.id"
+            :reasoning-effort="selectedSession.reasoningEffort || (selectedSession.agent === 'codex' ? AI_SESSION_DEFAULT_REASONING_EFFORT : undefined)"
+            :reasoning-effort-enabled="selectedSessionReasoningEffortCapability.updateDuringSession"
+            :reasoning-effort-pending="reasoningEffortPending?.sessionId === selectedSession.id"
+            :permission-key="aiSessionPermissionKey(instance.id, selectedSession.id)"
+            :default-permission-mode="instance.config.defaultCodexPermissionMode"
+            :max-file-attachment-bytes="instance.config.aiSessionMaxFileAttachmentBytes"
+            :mention-context="mentionContext"
+            :mention-trigger="mentionTrigger"
+            :command-trigger="commandTrigger"
+            :editing-label="queueComposerEdit ? t('sessions.composer.editingQueuedMessage') : undefined"
+            :session-busy="selectedSession?.status === 'running' || selectedSession?.status === 'waiting'"
+            @cancel-edit="cancelQueueComposerEdit"
+            @command="executeSelectedSessionCommand"
+            @run="runSelectedSessionAction"
+            @select-model="selectExistingSessionModel"
+            @select-reasoning-effort="selectExistingSessionReasoningEffort"
+            @steer="steerMessageDraft"
+          />
+        </div>
       </section>
     </div>
     </Sheet>
@@ -1263,6 +1283,7 @@ import { aiSessionStoryTarget, type AiSessionStoryTarget } from "../../../compon
 import type { LaunchableApp } from "../useInstanceSessions";
 import { isAiSessionTriggerDeployment, removeInstanceTriggerBinding, upsertInstanceTriggerBinding } from "../instanceTriggerCache.ts";
 import AiSessionComposer, { type AiSessionComposerAttachment } from "../../../components/ai-session/AiSessionComposer.vue";
+import AiSessionQueue from "../../../components/ai-session/AiSessionQueue.vue";
 import { uploadAiSessionComposerAttachment } from "../../../components/ai-session/attachmentUpload";
 import AiSessionConversationContent from "../../../components/ai-session/AiSessionConversationContent.vue";
 import AiSessionCompactPrompt from "../../../components/ai-session/AiSessionCompactPrompt.vue";
@@ -1271,6 +1292,7 @@ import { vAiSessionCardAutoScroll } from "../../../components/ai-session/aiSessi
 import AiSessionToolActivity from "../../../components/ai-session/AiSessionToolActivity.vue";
 import { useAiSessionTimelinePresentation } from "../useAiSessionTimelinePresentation";
 import { useAiSessionTimelineViewMode } from "../useAiSessionTimelineViewMode";
+import { useAiSessionQueuePlacement } from "../useAiSessionQueuePlacement";
 import { useAiSessionConversationProjection } from "../useAiSessionConversationProjection";
 import { useAiSessionMessageDeltaDemand, useAiSessionTimelineDemand } from "../useAiSessionEventDemand";
 import AiSessionTimelineView from "../../../components/ai-session/AiSessionTimelineView.vue";
@@ -1933,6 +1955,19 @@ function canRenamePathGroup(group: AiSessionPathGroup | AiSessionHistoryPathGrou
   return Boolean(registeredPathGroupFolder(group) && nodeSupportsLocalFolderNameUpdate(props.instance.node));
 }
 
+async function copyPathGroupPath(group: AiSessionPathGroup | AiSessionHistoryPathGroup) {
+  if (group.kind !== "path" || !navigator.clipboard?.writeText) {
+    showControlPlaneToast(t("sessions.actions.copyFailed"));
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(group.path);
+    showControlPlaneToast(t("sessions.actions.copied"), "success");
+  } catch {
+    showControlPlaneToast(t("sessions.actions.copyFailed"));
+  }
+}
+
 async function openPathGroupFolder(group: AiSessionPathGroup | AiSessionHistoryPathGroup) {
   if (group.kind !== "path") return;
   const result = await openDesktopLocalPath(group.path);
@@ -2061,6 +2096,8 @@ const mentionContext = computed(() => {
 });
 const detailEl = ref<HTMLElement>();
 const composerEl = ref<InstanceType<typeof AiSessionComposer>>();
+const newSessionComposerEl = ref<InstanceType<typeof AiSessionComposer>>();
+const composerStackEl = ref<HTMLElement>();
 const detailScrolled = ref(false);
 const detailConversationTransitioning = ref(false);
 const detailHeaderEl = ref<HTMLElement>();
@@ -2077,6 +2114,7 @@ let detailStickyThreshold = 0;
 let promptResizeObserver: ResizeObserver | undefined;
 let streamingResizeObserver: ResizeObserver | undefined;
 let scrollFollow: ReturnType<typeof createStreamingScrollFollow> | undefined;
+const { queuePlacement } = useAiSessionQueuePlacement();
 const userDetailLayoutGuard = createUserLayoutChangeGuard({
   onActiveChange: (active) => {
     detailEl.value?.classList.toggle("is-user-layout-changing", active);
@@ -2626,6 +2664,7 @@ function selectSession(sessionId: string) {
   sessionListOverlayOpen.value = false;
   closeSessionListPreview();
   emit("selectAiSession", props.instance.id, sessionId);
+  void nextTick(() => composerEl.value?.focus());
 }
 
 function sessionTreeStyle(depth: number): CSSProperties {
@@ -2800,6 +2839,7 @@ function beginNewSession(storyId?: string) {
   newSessionStoryId.value = storyId || "";
   newSessionOpen.value = true;
   sessionListOverlayOpen.value = false;
+  void nextTick(() => newSessionComposerEl.value?.focus());
   if (wasVisible) {
     return;
   }
@@ -3295,6 +3335,7 @@ async function sendSelectedSessionMessage(permissionMode?: AiSessionPermissionMo
     showControlPlaneToast(translateApiError(error, t, t("sessions.panel.sendFailed")));
   } finally {
     aiSessionActionBusy.value = false;
+    composerEl.value?.focus();
   }
 }
 
@@ -3587,10 +3628,11 @@ function shortHash(value: string) {
 function syncComposerOffset() {
   const detail = detailEl.value;
   const composer = (composerEl.value?.$el instanceof HTMLElement ? composerEl.value.$el : undefined);
-  if (!detail || !composer) {
+  const composerLayout = composerStackEl.value || composer;
+  if (!detail || !composerLayout) {
     return;
   }
-  detail.style.setProperty("--session-ai-compose-offset", `${Math.ceil(composer.getBoundingClientRect().height)}px`);
+  detail.style.setProperty("--session-ai-compose-offset", `${Math.ceil(composerLayout.getBoundingClientRect().height)}px`);
   // Session replacement is a layout transaction. The old viewport may still
   // report a resize while Vue swaps its content; treating that resize as live
   // streaming growth can snap compact mode to the old/new bottom.
@@ -3629,12 +3671,13 @@ function observeComposerOffset() {
   composerResizeObserver?.disconnect();
   composerResizeObserver = undefined;
   const composer = (composerEl.value?.$el instanceof HTMLElement ? composerEl.value.$el : undefined);
-  if (!composer) {
+  const composerLayout = composerStackEl.value || composer;
+  if (!composerLayout) {
     syncComposerOffset();
     return;
   }
   composerResizeObserver = new ResizeObserver(syncComposerOffset);
-  composerResizeObserver.observe(composer);
+  composerResizeObserver.observe(composerLayout);
   syncComposerOffset();
 }
 
@@ -3782,6 +3825,15 @@ watch(() => `${props.instance.id}\u0000${selectedSession.value?.id || ""}`, () =
     observeDetailScroll();
   });
 }, { immediate: true });
+
+watch(
+  [() => props.instance.id, showNewSession, () => selectedSession.value?.id, historyMode],
+  ([, creating, sessionId, showingHistory]) => {
+    if (props.creationMode === "preset" || showingHistory || (!creating && !sessionId)) return;
+    void nextTick(() => (creating ? newSessionComposerEl.value : composerEl.value)?.focus());
+  },
+  { immediate: true, flush: "post" },
+);
 
 watch([() => selectedSession.value?.id, messageDraft, messageMentionBindings], ([sessionId, draft, bindings]) => {
   if (sessionId && !queueComposerEdit.value) {

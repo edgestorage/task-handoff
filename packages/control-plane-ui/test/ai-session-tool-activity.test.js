@@ -5,6 +5,7 @@ import test from "node:test";
 const activity = fs.readFileSync(new URL("../src/components/ai-session/AiSessionToolActivity.vue", import.meta.url), "utf8");
 const activityGroup = fs.readFileSync(new URL("../src/components/ai-session/AiSessionActivityGroup.vue", import.meta.url), "utf8");
 const result = fs.readFileSync(new URL("../src/components/ai-session/AiSessionResult.vue", import.meta.url), "utf8");
+const queue = fs.readFileSync(new URL("../src/components/ai-session/AiSessionQueue.vue", import.meta.url), "utf8");
 const panel = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.vue", import.meta.url), "utf8");
 const panelCss = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.css", import.meta.url), "utf8");
 const card = fs.readFileSync(new URL("../src/apps/control-plane/ai-board/AiSessionCard.vue", import.meta.url), "utf8");
@@ -124,7 +125,8 @@ test("both detail surfaces share the complete AI result while cards remain uncha
   assert.match(result, /<AiSessionStreamingMarkdown/);
   assert.match(result, /<AiSessionToolActivity[\s\S]*?:current-tool="session\.currentTool"[\s\S]*?:phase="session\.phase"[\s\S]*?:status="session\.status"[\s\S]*?:summary="session\.summary"[\s\S]*?:tool-calls-since-last-message="session\.toolCallsSinceLastMessage"[\s\S]*?:tone="tone"/);
   assert.match(result, /<AiSessionSubAgents/);
-  assert.match(result, /v-for="item in displayedQueueItems"/);
+  assert.match(result, /<AiSessionQueue/);
+  assert.match(queue, /v-for="item in displayedQueueItems"/);
   assert.match(result, /v-if="isLatest && canResolveApproval"/);
   assert.match(result, /\$emit\('resolveApproval', 'allow'\)/);
   assert.doesNotMatch(conversation, /tone="board"/);

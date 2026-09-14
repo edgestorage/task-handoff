@@ -344,3 +344,23 @@ test("board structural sharing accepts the item array produced by query select",
   assert.equal(merged[0].status, "stopped");
   assert.equal(merged[1].id, "inst_added");
 });
+
+test("board structural sharing advances an authoritative trigger projection", () => {
+  markInstanceTriggerProjectionAuthoritative("inst_target");
+  const previous = [{
+    ...boardInstance("inst_target", 2, "running"),
+    triggers: { configs: [], recentRuns: [], updatedAt: "2026-09-14T16:15:50.158Z" },
+  }];
+  const incoming = [{
+    ...boardInstance("inst_target", 2, "running"),
+    triggers: {
+      configs: [{ configHash: "trg_target", config: {}, deployments: [{ deploymentId: "dep_target" }], runtime: [] }],
+      recentRuns: [],
+      updatedAt: "2026-09-14T16:15:53.025Z",
+    },
+  }];
+
+  const merged = mergeInstanceBoardQueryData(previous, incoming);
+
+  assert.equal(merged[0].triggers.configs[0].deployments[0].deploymentId, "dep_target");
+});
