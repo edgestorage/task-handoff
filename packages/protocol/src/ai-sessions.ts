@@ -214,6 +214,18 @@ export const AiSessionSubAgentSchema = z
   })
   .strict();
 
+export function isCurrentAiSessionSubAgent(
+  subAgent: Pick<z.infer<typeof AiSessionSubAgentSchema>, "status">,
+) {
+  return subAgent.status !== "completed";
+}
+
+// Compatibility for v0.0.29: accept completed entries from older producers,
+// then normalize them out of the current sub-agent activity collection.
+export const AiSessionCurrentSubAgentsSchema = z.array(AiSessionSubAgentSchema)
+  .max(50)
+  .transform((subAgents) => subAgents.filter(isCurrentAiSessionSubAgent));
+
 export const AiSessionCountersSchema = z
   .object({
     toolCalls: z.number().int().min(0).default(0),
@@ -730,7 +742,7 @@ export const AiSessionStatusSchema = z
     lastMessageItemId: z.string().trim().max(240).optional(),
     currentTool: AiSessionToolSchema.optional(),
     toolCallsSinceLastMessage: z.number().int().min(0).default(0),
-    subAgents: z.array(AiSessionSubAgentSchema).max(50).default([]),
+    subAgents: AiSessionCurrentSubAgentsSchema.default([]),
     transcriptPath: z.string().trim().max(4096).optional(),
     transcriptSize: z.number().int().min(0).optional(),
     startedAt: z.string().datetime(),
@@ -1360,7 +1372,7 @@ export const AiSessionSnapshotInputSchema = AiSessionInputBaseSchema.extend({
   error: z.string().trim().max(4000).optional(),
   currentTool: AiSessionToolSchema.optional(),
   toolCallsSinceLastMessage: z.number().int().min(0).optional(),
-  subAgents: z.array(AiSessionSubAgentSchema).max(50).optional(),
+  subAgents: AiSessionCurrentSubAgentsSchema.optional(),
   transcriptPath: z.string().trim().max(4096).optional(),
   transcriptSize: z.number().int().min(0).optional(),
   replaceActivity: z.boolean().optional(),
@@ -1384,7 +1396,7 @@ export const AiSessionRealtimeInputSchema = AiSessionInputBaseSchema.extend({
   error: z.string().trim().max(4000).optional(),
   currentTool: AiSessionToolSchema.nullable().optional(),
   toolCallsSinceLastMessage: z.number().int().min(0).optional(),
-  subAgents: z.array(AiSessionSubAgentSchema).max(50).optional(),
+  subAgents: AiSessionCurrentSubAgentsSchema.optional(),
   contextCompaction: AiSessionContextCompactionSchema.optional(),
   counters: z.object({
     toolCalls: z.number().int().min(0).optional(),

@@ -136,6 +136,10 @@ test("trigger deployment events update the instance trigger projection and recov
   assert.match(source, /event\.type === "trigger\.deployment\.unbound"[\s\S]*removeInstanceTriggerBinding/);
 });
 
+test("trigger recovery timestamps snapshots before starting the request", () => {
+  assert.match(source, /const observedAt = new Date\(\)\.toISOString\(\);\s*try \{\s*replaceInstanceTriggerSnapshot\(queryClient, instanceId, await getControlledInstanceTriggers\(instanceId\), observedAt\)/);
+});
+
 test("the session stream starts only after both initial authoritative snapshots settle", () => {
   assert.match(workbench, /const sessionEventsEnabled = computed\(\(\) => sessionQueriesEnabled\.value[\s\S]*!controlPlaneAiSessions\.isPending\.value[\s\S]*!controlPlaneAppSessions\.isPending\.value\)/);
   assert.match(workbench, /useControlPlaneEvents\(\{[\s\S]*enabled: sessionEventsEnabled/);

@@ -81,6 +81,7 @@
                 :bound-triggers="boundTriggers"
                 :can-resolve-approval="canResolveApproval"
                 :card="card"
+                :folder-name="aiBoardCardPath(card).folderName"
                 :instance-display-name="instanceDisplayName"
                 :is-trigger-bound="isTriggerBound"
                 :prompt-count="promptCount(card.session)"
@@ -139,6 +140,7 @@
               :bound-triggers="boundTriggers"
               :can-resolve-approval="canResolveApproval"
               :card="card"
+              :folder-name="aiBoardCardPath(card).folderName"
               :instance-display-name="instanceDisplayName"
               :is-trigger-bound="isTriggerBound"
               :prompt-count="promptCount(card.session)"
@@ -622,9 +624,11 @@ function aiBoardCardPath(card: AiBoardCard) {
     ? folders.find((candidate) => candidate.id === card.session.cwdFolderId)
     : undefined)
     || folders.find((candidate) => normalizeFolderPath(candidate.path) === normalizedPath);
+  const folderName = folder ? nodeLocalFolderDisplayName(folder) : undefined;
   return {
     key: normalizedPath || "__unknown_path__",
-    label: folder ? nodeLocalFolderDisplayName(folder) : path || t("sessions.board.unknownPath"),
+    label: folderName || path || t("sessions.board.unknownPath"),
+    folderName,
   };
 }
 
@@ -825,6 +829,7 @@ function selectCard(key: string) {
     detailCollapsed.value = false;
   }
   selectedCardKey.value = key;
+  void nextTick(() => floatingDockEl.value?.focusComposer());
 }
 
 function clearSelectedCard() {
@@ -902,6 +907,7 @@ async function sendSelectedSessionMessage(permissionMode?: AiSessionPermissionMo
     showControlPlaneToast(translateApiError(error, t, t("sessions.panel.sendFailed")));
   } finally {
     aiSessionActionBusy.value = false;
+    floatingDockEl.value?.focusComposer();
   }
 }
 
@@ -1152,6 +1158,7 @@ watch(() => selectedCard.value?.session.id, (sessionId) => {
   const draft = sessionId ? loadAiSessionDraftPayload(sessionId) : { value: "", bindings: [] };
   messageDraft.value = draft.value;
   messageMentionBindings.value = draft.bindings;
+  if (sessionId) void nextTick(() => floatingDockEl.value?.focusComposer());
 }, { immediate: true });
 
 watch(() => ({

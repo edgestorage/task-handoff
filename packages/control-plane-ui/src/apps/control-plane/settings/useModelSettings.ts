@@ -87,12 +87,15 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
   function syncPrimaryModelName() { settingsModel.model = settingsModel.modelNames[0]?.name.trim() || ""; }
   function addModelName() { settingsModel.modelNames.push({ name: "", order: (settingsModel.modelNames.length + 1) * 100 }); }
   function removeModelName(index: number) { if (settingsModel.modelNames.length > 1) { settingsModel.modelNames.splice(index, 1); syncPrimaryModelName(); } }
-  function moveModelName(index: number, direction: -1 | 1) {
-    const next = index + direction;
-    if (next < 0 || next >= settingsModel.modelNames.length) return;
-    [settingsModel.modelNames[index], settingsModel.modelNames[next]] = [settingsModel.modelNames[next], settingsModel.modelNames[index]];
-    settingsModel.modelNames.forEach((entry, itemIndex) => { entry.order = (itemIndex + 1) * 100; });
+  function reorderModelName(source: number, target: number) {
+    if (source < 0 || target < 0 || source >= settingsModel.modelNames.length || target >= settingsModel.modelNames.length || source === target) return;
+    const [entry] = settingsModel.modelNames.splice(source, 1);
+    settingsModel.modelNames.splice(target, 0, entry);
+    settingsModel.modelNames.forEach((item, itemIndex) => { item.order = (itemIndex + 1) * 100; });
     syncPrimaryModelName();
+  }
+  function moveModelName(index: number, direction: -1 | 1) {
+    reorderModelName(index, index + direction);
   }
 
   function setProtocols(values: unknown) {
@@ -346,6 +349,7 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
     addModelName,
     removeModelName,
     moveModelName,
+    reorderModelName,
     fetchModelOptions,
   };
 }

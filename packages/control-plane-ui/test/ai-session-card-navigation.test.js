@@ -31,7 +31,8 @@ test("ai session cards do not render lifecycle status text in their headers", ()
 
 test("ai session board cards omit context already supplied by the grid group", () => {
   assert.match(card, /<template v-if="showWorkspace">[\s\S]*class="ai-board-card-context-item"[\s\S]*<Folder :size="14"/);
-  assert.match(card, /aiSessionBasename\(card\.session\.cwd\)/);
+  assert.match(card, /folderName \|\| aiSessionBasename\(card\.session\.cwd\) \|\| t\("sessions\.board\.unknownFolder"\)/);
+  assert.match(card, /folderName\?: string;/);
   assert.match(card, /<Tooltip v-if="showInstance">[\s\S]*<Boxes :size="14"[\s\S]*instanceDisplayName\(card\.instance\)/);
   assert.match(card, /<template v-if="showAgent && agentIcon">[\s\S]*class="ai-board-card-agent" :aria-label="agentDisplayName"[\s\S]*<AiAgentIcon :agent="agentIcon" :size="14"/);
   assert.match(card, /v-if="showWorkspace && showInstance" class="ai-board-card-context-separator"/);
@@ -42,6 +43,7 @@ test("ai session board cards omit context already supplied by the grid group", (
   assert.match(board, /:show-workspace="gridGroupBy !== 'path'"/);
   assert.match(board, /:show-instance="gridGroupBy !== 'instance'"/);
   assert.match(board, /:show-agent="gridGroupBy !== 'agent'"/);
+  assert.equal(board.match(/:folder-name="aiBoardCardPath\(card\)\.folderName"/g)?.length, 2);
   assert.match(board, /class="ai-board-grid-group-workspace">\s*<Folder :size="14" aria-hidden="true"/);
   assert.match(dock, /class="ai-board-floating-context"/);
   assert.match(dock, /<Folder :size="14"[\s\S]*\{\{ folderName \}\}[\s\S]*<Boxes :size="14"[\s\S]*instanceDisplayName\(card\.instance\)[\s\S]*<AiAgentIcon :agent="agentIcon"/);
@@ -64,7 +66,12 @@ test("ai session board cards omit context already supplied by the grid group", (
 });
 
 test("reselecting the selected AI session card restores collapsed details", () => {
-  assert.match(board, /function selectCard\(key: string\) \{\s*if \(selectedCardKey\.value === key && detailCollapsed\.value\) \{\s*detailCollapsed\.value = false;\s*\}\s*selectedCardKey\.value = key;\s*\}/);
+  assert.match(board, /function selectCard\(key: string\) \{\s*if \(selectedCardKey\.value === key && detailCollapsed\.value\) \{\s*detailCollapsed\.value = false;\s*\}\s*selectedCardKey\.value = key;\s*void nextTick\(\(\) => floatingDockEl\.value\?\.focusComposer\(\)\);\s*\}/);
+});
+
+test("selecting an AI board conversation focuses its floating composer", () => {
+  assert.match(board, /function selectCard\(key: string\)[\s\S]*selectedCardKey\.value = key;[\s\S]*floatingDockEl\.value\?\.focusComposer\(\)/);
+  assert.match(board, /watch\(\(\) => selectedCard\.value\?\.session\.id,[\s\S]*if \(sessionId\) void nextTick\(\(\) => floatingDockEl\.value\?\.focusComposer\(\)\);/);
 });
 
 test("ai session board card markdown previews remove paragraph margins", () => {

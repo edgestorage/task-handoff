@@ -816,10 +816,16 @@ test("ai session registry migrates unknown sub-agent fields and caps after dedup
   const base = "2026-07-13T00:00:00.000Z";
   const subAgents = Array.from({ length: 70 }, (_, index) => ({
     threadId: `thread-${String(index).padStart(2, "2")}`,
-    status: "completed",
+    status: "interrupted",
     updatedAt: new Date(Date.parse(base) + index * 1000).toISOString(),
     futureField: "ignored",
   }));
+  subAgents.push({
+    threadId: "thread-completed",
+    status: "completed",
+    updatedAt: "2026-07-13T00:01:30.000Z",
+    futureField: "ignored",
+  });
   // A duplicate appears after the first 50 entries and must still win.
   subAgents.push({
     threadId: "thread-00",
@@ -834,6 +840,7 @@ test("ai session registry migrates unknown sub-agent fields and caps after dedup
   const restored = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") }).get(session.id);
   assert.equal(restored?.subAgents.length, 50);
   assert.equal(restored?.subAgents.find((agent) => agent.threadId === "thread-00")?.status, "running");
+  assert.equal(restored?.subAgents.some((agent) => agent.status === "completed"), false);
   assert.equal(restored?.subAgents.some((agent) => "futureField" in agent), false);
 });
 
@@ -938,8 +945,31 @@ test("ai session registry keeps sub-agent state independent from tool activity a
   const completed = registry.applyRealtimeEvent(session.id, { kind: "turn-completed", status: "idle", text: "Done" });
   assert.equal(completed.subAgents[0].status, "running");
 
-  const cleared = registry.applyRealtimeEvent(session.id, { kind: "sub-agent-activity", subAgents: [] });
+  const cleared = registry.applyRealtimeEvent(session.id, {
+    kind: "sub-agent-activity",
+    subAgents: [{
+      threadId: "thread-child",
+      path: "agent-a",
+      status: "completed",
+      message: "Done",
+      updatedAt: "2026-07-13T00:00:02.000Z",
+    }],
+  });
   assert.deepEqual(cleared.subAgents, []);
+
+  const mixed = registry.applyRealtimeEvent(session.id, {
+    kind: "sub-agent-activity",
+    subAgents: [{
+      threadId: "thread-completed",
+      status: "completed",
+      updatedAt: "2026-07-13T00:00:03.000Z",
+    }, {
+      threadId: "thread-running",
+      status: "running",
+      updatedAt: "2026-07-13T00:00:03.000Z",
+    }],
+  });
+  assert.deepEqual(mixed.subAgents.map((agent) => agent.threadId), ["thread-running"]);
 });
 
 test("ai session registry clears stale current tools at turn completion without clearing the window count", () => {
@@ -3533,7 +3563,7 @@ test("codex app server bridge projects realtime tool activity and replaces it fr
   assert.equal(session.currentTool.id, "new_connection_tool");
 });
 
-test("codex app server bridge publishes sub-agent lifecycle independently from tool activity", async () => {
+test("codex app server bridge removes completed sub-agents independently from tool activity", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-sub-agents-"));
   const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
   class FakeCodexAppServerClient extends EventEmitter {
@@ -3582,8 +3612,7 @@ test("codex app server bridge publishes sub-agent lifecycle independently from t
     status: "completed",
   });
   session = registry.list()[0];
-  assert.equal(session.subAgents[0].status, "completed");
-  assert.equal(session.subAgents[0].path, "agent-a");
+  assert.deepEqual(session.subAgents, []);
 
   fake.emit("event", codexNotification("item/completed", {
     threadId: "thread_parent",
@@ -3596,12 +3625,10 @@ test("codex app server bridge publishes sub-agent lifecycle independently from t
     },
   }));
   session = registry.list()[0];
-  assert.equal(session.subAgents[0].status, "completed");
-  assert.equal(session.subAgents[0].message, "Reviewed tests");
-  assert.equal(session.subAgents[0].path, "agent-a");
+  assert.deepEqual(session.subAgents, []);
 
   fake.emit("event", { type: "agent-message-completed", threadId: "thread_parent", turnId: "turn_parent", text: "Main response" });
-  assert.equal(registry.list()[0].subAgents[0].status, "completed");
+  assert.deepEqual(registry.list()[0].subAgents, []);
 });
 
 test("codex app server bridge reconciles out-of-order child lifecycle with parent sub-agent activity", async () => {
@@ -3632,7 +3659,7 @@ test("codex app server bridge reconciles out-of-order child lifecycle with paren
     item: { type: "subAgentActivity", id: "spawn-1", kind: "started", agentThreadId: "thread_child", agentPath: "/root/child" },
   }));
   let parent = registry.getByProviderSessionId("codex", "thread_parent");
-  assert.equal(parent.subAgents[0].status, "completed");
+  assert.deepEqual(parent.subAgents, []);
 
   fake.emit("event", { type: "turn-started", threadId: "thread_child", turnId: "turn_child_2" });
   parent = registry.getByProviderSessionId("codex", "thread_parent");
@@ -3650,7 +3677,7 @@ test("codex app server bridge reconciles out-of-order child lifecycle with paren
   assert.equal(parent.subAgents[0].message, "child failed");
 });
 
-test("codex app server bridge restores child completion from thread snapshots", async () => {
+test("codex app server bridge omits completed children restored from thread snapshots", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-sub-agent-snapshot-"));
   const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
   class FakeCodexAppServerClient extends EventEmitter {
@@ -3681,9 +3708,7 @@ test("codex app server bridge restores child completion from thread snapshots", 
   await bridge.sync();
 
   const parent = registry.getByProviderSessionId("codex", "thread_parent");
-  assert.equal(parent.subAgents[0].status, "completed");
-  assert.equal(parent.subAgents[0].activity, "interacted");
-  assert.equal(parent.subAgents[0].path, "/root/child");
+  assert.deepEqual(parent.subAgents, []);
 });
 
 test("codex app server bridge repeated snapshots keep completed turns stable", async () => {

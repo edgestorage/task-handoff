@@ -9,7 +9,7 @@ export const triggers = {
     partialFailure: "操作已完成，但有 {count} 个节点或实例未更新：{targets}。请在其恢复后重试。",
     unknownTarget: "未知目标",
   },
-  empty: "暂无触发器模板。",
+  empty: "暂无触发器模板",
   emptyDescription: "创建触发器，通过计划、文件变更或 AI 会话事件自动执行任务。",
   filter: "筛选模板",
   filters: {
@@ -26,13 +26,13 @@ export const triggers = {
   deployments: {
     title: "部署位置",
     description: "此触发器当前运行的位置",
-    empty: "尚未部署到任何 AI 会话。",
+    empty: "尚未部署到任何 AI 会话",
     close: "关闭部署对话框",
     dialogTitle: "部署触发器",
     dialogDescription: "选择一个 AI 会话，触发器将在该会话所属的受控实例中运行。",
-    noSessions: "暂无可用的 AI 会话。",
+    noSessions: "暂无可用的 AI 会话",
   },
-  activity: { title: "最近活动", latest: "最近一次 {time}", count: "{count} 次近期运行", empty: "暂无近期运行记录。" },
+  activity: { title: "最近活动", latest: "最近一次 {time}", count: "{count} 次近期运行", empty: "暂无近期运行记录" },
   create: {
     action: "新建触发器",
     close: "关闭新建触发器对话框",

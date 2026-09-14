@@ -59,12 +59,15 @@ test("AI session detail menu icons match the card context menu", () => {
 });
 
 test("AI session path groups share node-backed rename and desktop-local folder actions", () => {
-  assert.match(panel, /<AiSessionPathGroupContextMenu[\s\S]*:can-open="group\.kind === 'path' && canOpenPathGroupFolder"[\s\S]*:can-rename="canRenamePathGroup\(group\)"/);
+  assert.match(panel, /<AiSessionPathGroupContextMenu[\s\S]*:can-copy="group\.kind === 'path'"[\s\S]*:can-open="group\.kind === 'path' && canOpenPathGroupFolder"[\s\S]*:can-rename="canRenamePathGroup\(group\)"[\s\S]*@copy="copyPathGroupPath\(group\)"/);
   assert.match(panel, /function registeredPathGroupFolder[\s\S]*group\.kind !== "path"[\s\S]*return undefined/);
   assert.match(panel, /function canRenamePathGroup[\s\S]*registeredPathGroupFolder\(group\)[\s\S]*nodeSupportsLocalFolderNameUpdate\(props\.instance\.node\)/);
   assert.match(panel, /updateNodeLocalFolder\(folder\.nodeId, folder\.id, \{ name \}\)/);
   assert.match(panel, /desktopRuntimePathAccess\(props\.instance\) === "desktop-local" && canOpenDesktopLocalPath\(\)/);
   assert.match(panel, /openDesktopLocalPath\(group\.path\)/);
+  assert.match(panel, /function copyPathGroupPath[\s\S]*navigator\.clipboard\.writeText\(group\.path\)[\s\S]*sessions\.actions\.copied/);
+  assert.match(pathGroupContextMenu, /ContextMenu v-if="canCopy \|\| canOpen \|\| canRename"/);
+  assert.match(pathGroupContextMenu, /ContextMenuItem v-if="canCopy" class="ai-session-path-group-menu-item"[\s\S]*sessions\.actions\.copyPath/);
   assert.match(pathGroupContextMenu, /ContextMenuItem v-if="canOpen" class="ai-session-path-group-menu-item"[\s\S]*sessions\.panel\.openInFileManager/);
   assert.match(pathGroupContextMenu, /ContextMenuItem v-if="canRename" class="ai-session-path-group-menu-item"[\s\S]*sessions\.panel\.renameProject/);
   assert.match(pathGroupContextMenu, /\.ai-session-context-menu \.ai-session-path-group-menu-item\) \{\s*gap: 8px;\s*font-size: 13px;/);
@@ -409,6 +412,13 @@ test("an unselected AI session defaults to the new-session surface", () => {
   assert.match(styles, /\.session-ai-new-dialog:focus-within\s*\{[^}]*var\(--shadow-soft\);/s);
   assert.match(panel, /watch\(\s*\[showNewSession, aiSessionLaunchableApps, newSessionFolders\]/);
   assert.doesNotMatch(panel, /session-ai-no-selection/);
+});
+
+test("entering an existing or new AI session focuses its visible composer", () => {
+  assert.match(panel, /ref="newSessionComposerEl"[\s\S]*v-model="newSessionDraft"/);
+  assert.match(panel, /function selectSession\(sessionId: string\)[\s\S]*emit\("selectAiSession", props\.instance\.id, sessionId\);[\s\S]*composerEl\.value\?\.focus\(\)/);
+  assert.match(panel, /function beginNewSession\(storyId\?: string\)[\s\S]*newSessionComposerEl\.value\?\.focus\(\)/);
+  assert.match(panel, /\[\(\) => props\.instance\.id, showNewSession, \(\) => selectedSession\.value\?\.id, historyMode\][\s\S]*props\.creationMode === "preset"[\s\S]*creating \? newSessionComposerEl\.value : composerEl\.value/);
 });
 
 test("new-session app choices follow provider create capabilities", () => {

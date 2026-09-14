@@ -20,7 +20,15 @@ export function mergeInstanceBoardItem(
 
 function preserveNewerTriggerProjection(previous: InstanceBoardItem, incoming: InstanceBoardItem): InstanceBoardItem {
   if (!previous.triggers || !authoritativeInstanceTriggerIds.has(previous.id)) return incoming;
+  if (incoming.triggers && triggerSnapshotTimestamp(incoming.triggers.updatedAt) >= triggerSnapshotTimestamp(previous.triggers.updatedAt)) {
+    return incoming;
+  }
   return { ...incoming, triggers: previous.triggers };
+}
+
+function triggerSnapshotTimestamp(value: string | undefined) {
+  const timestamp = value ? Date.parse(value) : Number.NaN;
+  return Number.isFinite(timestamp) ? timestamp : 0;
 }
 
 /**

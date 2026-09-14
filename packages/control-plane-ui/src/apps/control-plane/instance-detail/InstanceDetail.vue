@@ -30,11 +30,60 @@
               <span class="detail-name-button-label">{{ instanceDisplayName(instance) }}</span>
             </button>
           </div>
-          <div class="detail-meta">
-            <p>{{ instanceSourceLabel(instance, t) }}</p>
-            <span aria-hidden="true">·</span>
-            <span :title="instanceRuntimeSummary(instance)">{{ instanceRuntimeSummary(instance) }}</span>
-          </div>
+          <TooltipProvider :delay-duration="120">
+            <div class="detail-meta">
+              <ContextMenu v-if="canOpenInstanceSourceFolder">
+                <ContextMenuTrigger as-child>
+                  <button type="button" class="detail-meta-folder" @click="openInstanceSourceFolder">
+                    <Tooltip>
+                      <TooltipTrigger as-child>
+                        <span class="detail-meta-item"><Folder :size="14" aria-hidden="true" /><span>{{ instanceSourceLabel(instance, t) }}</span></span>
+                      </TooltipTrigger>
+                      <TooltipContent class="instance-detail-meta-tooltip" side="top" :side-offset="8">{{ instanceSourceLocation(instance) }}</TooltipContent>
+                    </Tooltip>
+                  </button>
+                </ContextMenuTrigger>
+                <ContextMenuContent class="ai-session-context-menu">
+                  <ContextMenuItem class="ai-session-path-group-menu-item" @select="openInstanceSourceFolder">
+                    <FolderOpen :size="14" />
+                    <span>{{ t("sessions.panel.openInFileManager") }}</span>
+                  </ContextMenuItem>
+                </ContextMenuContent>
+              </ContextMenu>
+              <Tooltip v-else>
+                <TooltipTrigger as-child>
+                  <span class="detail-meta-item"><Folder :size="14" aria-hidden="true" /><span>{{ instanceSourceLabel(instance, t) }}</span></span>
+                </TooltipTrigger>
+                <TooltipContent class="instance-detail-meta-tooltip" side="top" :side-offset="8">{{ instanceSourceLocation(instance) }}</TooltipContent>
+              </Tooltip>
+
+              <template v-if="instanceImageLabel(instance)">
+                <span class="detail-meta-separator" aria-hidden="true">·</span>
+                <Tooltip>
+                  <TooltipTrigger as-child>
+                    <span class="detail-meta-item"><Package :size="14" aria-hidden="true" /><span>{{ instanceImageLabel(instance) }}</span></span>
+                  </TooltipTrigger>
+                  <TooltipContent class="instance-detail-meta-tooltip" side="top" :side-offset="8">{{ instanceImageTooltip(instance) }}</TooltipContent>
+                </Tooltip>
+              </template>
+
+              <span class="detail-meta-separator" aria-hidden="true">·</span>
+              <Tooltip>
+                <TooltipTrigger as-child>
+                  <span class="detail-meta-item"><Server :size="14" aria-hidden="true" /><span>{{ instanceNodeLabel(instance) }}</span></span>
+                </TooltipTrigger>
+                <TooltipContent class="instance-detail-meta-tooltip" side="top" :side-offset="8">{{ instance.nodeId }}</TooltipContent>
+              </Tooltip>
+
+              <span class="detail-meta-separator" aria-hidden="true">·</span>
+              <Tooltip>
+                <TooltipTrigger as-child>
+                  <span class="detail-meta-item"><Box :size="14" aria-hidden="true" /><span>{{ instanceRuntimeLabel(instance) }}</span></span>
+                </TooltipTrigger>
+                <TooltipContent class="instance-detail-meta-tooltip" side="top" :side-offset="8">{{ instanceRuntimeTooltip(instance) }}</TooltipContent>
+              </Tooltip>
+            </div>
+          </TooltipProvider>
           <span v-if="instance.imageProvisioning && instance.imageProvisioning.phase !== 'ready' && !instance.imagePullProgress" class="image-provisioning-status">
             {{ imageProvisioningLabel(instance, t) }}<template v-if="instance.imageProvisioning.error"> · {{ instance.imageProvisioning.error }}</template>
           </span>
@@ -196,11 +245,12 @@
 
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
-import { ExternalLink, Play, Plus, RotateCw, Settings, Square, Trash2 } from "@lucide/vue";
+import { Box, ExternalLink, Folder, FolderOpen, Package, Play, Plus, RotateCw, Server, Settings, Square, Trash2 } from "@lucide/vue";
 import { useI18n } from "vue-i18n";
 import type { AiSessionSummary, InstanceBoardItem, InstanceResourceMetrics, InstanceWithAiSessions, NodeLocalFolder } from "../../../api/types";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "../../../components/ui/context-menu";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../../components/ui/tooltip";
 import SessionPreview from "./SessionPreview.vue";
 import type { InstanceAction } from "../useInstanceActions";
@@ -211,6 +261,8 @@ import { showControlPlaneToast } from "../useControlPlaneToasts";
 import { connectionStatusKeys, instanceStatusKeys, translateStatus } from "../../../i18n/status";
 import { translateApiError } from "../../../i18n/apiError";
 import type { NativeNodeFolderPicker } from "../nodePath";
+import { desktopRuntimePathAccess } from "../../../components/ai-session/useAiSessionMentions";
+import { canOpenDesktopLocalPath, openDesktopLocalPath } from "../../../lib/desktopBridge";
 
 const { t } = useI18n();
 const instanceStatusLabel = (status: string) => translateStatus(instanceStatusKeys, status, t);
@@ -373,8 +425,45 @@ function packageLabel(instance: InstanceBoardItem) {
   return instance.build?.packageVersion || instance.instanceVersion || t("common.status.unknown");
 }
 
-function instanceRuntimeSummary(instance: InstanceBoardItem) {
-  return `${instance.image?.name || instance.imageSelection?.imageId} · ${instance.node?.name || instance.nodeId} / ${instance.runtime?.name || instance.runtimeId}`;
+function instanceSourceLocation(instance: InstanceBoardItem) {
+  return instance.source.type === "local-folder" ? instance.source.path : instance.source.url;
+}
+
+const canOpenInstanceSourceFolder = computed(() => Boolean(
+  props.instance?.source.type === "local-folder"
+  && instanceSourceLocation(props.instance)
+  && desktopRuntimePathAccess(props.instance) === "desktop-local"
+  && canOpenDesktopLocalPath()
+));
+
+async function openInstanceSourceFolder() {
+  const instance = props.instance;
+  if (!instance || !canOpenInstanceSourceFolder.value) return;
+  const result = await openDesktopLocalPath(instanceSourceLocation(instance));
+  if (!result.ok) showControlPlaneToast(t("sessions.panel.openInFileManagerFailed"));
+}
+
+function instanceImageLabel(instance: InstanceBoardItem) {
+  return instance.image?.name || instance.imageSelection?.imageId || "";
+}
+
+function instanceImageTooltip(instance: InstanceBoardItem) {
+  const image = instance.image;
+  if (image && "requestedReference" in image) return image.requestedReference;
+  if (image && "reference" in image) return image.reference;
+  return instance.imageSelection?.imageId || "";
+}
+
+function instanceNodeLabel(instance: InstanceBoardItem) {
+  return instance.node?.name || instance.nodeId;
+}
+
+function instanceRuntimeLabel(instance: InstanceBoardItem) {
+  return instance.runtime?.name || instance.runtimeId;
+}
+
+function instanceRuntimeTooltip(instance: InstanceBoardItem) {
+  return [instance.runtime?.type, instance.runtimeId].filter(Boolean).join(" · ");
 }
 
 function buildTitle(instance: InstanceBoardItem) {

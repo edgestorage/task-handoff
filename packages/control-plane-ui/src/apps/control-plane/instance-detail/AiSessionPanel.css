@@ -2258,6 +2258,30 @@
   font-weight: 800;
 }
 
+.session-ai-compose-stack {
+  position: absolute;
+  right: var(--session-ai-detail-right-inset);
+  bottom: var(--session-ai-compose-bottom);
+  left: calc(10px + var(--session-ai-detail-left-inset, 0px));
+  z-index: 5;
+  display: grid;
+  min-width: 0;
+}
+
+.session-ai-compose-stack > .session-ai-compose {
+  position: relative;
+  right: auto;
+  bottom: auto;
+  left: auto;
+  z-index: 1;
+  width: 100%;
+}
+
+.session-ai-compose-queue {
+  z-index: 0;
+  margin: 0 28px -1px;
+}
+
 .session-ai-compose {
   --ai-composer-radius: 20px;
   --ai-composer-border: var(--line);

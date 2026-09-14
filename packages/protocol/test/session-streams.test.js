@@ -457,6 +457,14 @@ test("AI session tool activity schemas remain strict and require atomic realtime
 test("AI session sub-agent state defaults, stays strict, and updates atomically", () => {
   const status = AiSessionStatusSchema.parse(session());
   assert.deepEqual(status.subAgents, []);
+  const restored = AiSessionStatusSchema.parse({
+    ...session(),
+    subAgents: [
+      { threadId: "thread-running", status: "running", updatedAt: now },
+      { threadId: "thread-completed", status: "completed", updatedAt: now },
+    ],
+  });
+  assert.deepEqual(restored.subAgents.map((agent) => agent.threadId), ["thread-running"]);
   assert.equal(AiSessionSubAgentSchema.safeParse({
     threadId: "thread-child",
     path: "agent-a",
@@ -478,7 +486,9 @@ test("AI session sub-agent state defaults, stays strict, and updates atomically"
     kind: "sub-agent-activity",
     subAgents: [{ threadId: "thread-child", status: "completed", updatedAt: now }],
   };
-  assert.equal(AiSessionRealtimeInputSchema.safeParse(event).success, true);
+  const parsedEvent = AiSessionRealtimeInputSchema.safeParse(event);
+  assert.equal(parsedEvent.success, true);
+  assert.deepEqual(parsedEvent.data.subAgents, []);
   assert.equal(AiSessionRealtimeInputSchema.safeParse({ ...event, subAgents: undefined }).success, false);
   assert.equal(AiSessionRealtimeInputSchema.safeParse({ ...event, kind: "turn-started" }).success, false);
 });

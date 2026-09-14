@@ -6,7 +6,7 @@ export const triggers = {
     partialFailure: "The operation completed, but {count} nodes or instances were not updated: {targets}. Retry after they recover.",
     unknownTarget: "unknown target",
   },
-  empty: "No trigger templates yet.",
+  empty: "No trigger templates yet",
   emptyDescription: "Create a trigger to automate work from schedules, file changes, or AI session events.",
   filter: "Filter templates",
   filters: {
@@ -23,13 +23,13 @@ export const triggers = {
   deployments: {
     title: "Deployments",
     description: "Where this trigger is active",
-    empty: "Not deployed to any AI session yet.",
+    empty: "Not deployed to any AI session yet",
     close: "Close deployment dialog",
     dialogTitle: "Deploy trigger",
     dialogDescription: "Choose an AI session. The trigger will run inside that session's controlled instance.",
-    noSessions: "No available AI sessions.",
+    noSessions: "No available AI sessions",
   },
-  activity: { title: "Recent activity", latest: "Latest {time}", count: "{count} recent runs", empty: "No recent runs." },
+  activity: { title: "Recent activity", latest: "Latest {time}", count: "{count} recent runs", empty: "No recent runs" },
   create: {
     action: "New trigger",
     close: "Close create trigger dialog",

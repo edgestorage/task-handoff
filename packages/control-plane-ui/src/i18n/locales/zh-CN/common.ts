@@ -60,7 +60,7 @@ export const common = {
     zhCN: "简体中文",
   },
   appAccess: {
-    loading: "正在加载会话...", vncSession: "VNC 会话", appSession: "应用会话", noDirectView: "此应用会话没有可直接访问的视图。",
+    loading: "正在加载会话...", vncSession: "VNC 会话", appSession: "应用会话", noDirectView: "此应用会话没有可直接访问的视图",
     connecting: "正在连接", unavailable: "不可用", linkExpires: "链接于 {time} 过期", connected: "已连接",
   },
 } as const satisfies MessageShape<typeof englishCommon>;

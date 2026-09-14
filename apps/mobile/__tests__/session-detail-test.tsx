@@ -26,7 +26,7 @@ const session = ControlPlaneAiSessionSummarySchema.parse({
   currentTool: { name: 'shell', inputPreview: 'pnpm test' },
   turns: [{ id: 'turn-1', userPrompt: 'Please **test** this', status: 'running', phase: 'responding', revision: 1, startedAt: '2026-08-05T00:00:00.000Z', updatedAt: '2026-08-05T00:01:00.000Z' }],
   subAgents: Array.from({ length: 50 }, (_, index) => ({
-    threadId: `thread-${index}`, path: `root/worker-${index}`, status: index === 0 ? 'running' : 'completed',
+    threadId: `thread-${index}`, path: `root/worker-${index}`, status: 'running',
     activity: 'interacted', message: `Worker ${index}`, updatedAt: '2026-08-05T00:01:00.000Z',
   })),
   startedAt: '2026-08-05T00:00:00.000Z', updatedAt: '2026-08-05T00:01:00.000Z',
@@ -1188,7 +1188,7 @@ test('interrupted sub-agents expand and render explicit missing-field semantics'
   const screen = await render(<SessionDetail messages={[]} session={interrupted} />);
   screen.getByText('Sub-agents (1) · Hide');
   screen.getByText(/interrupted · activity unknown/);
-  screen.getByText('No message available.');
+  screen.getByText('No message available');
 });
 
 test('offline detail keeps cached content visible but disables authoritative actions', async () => {

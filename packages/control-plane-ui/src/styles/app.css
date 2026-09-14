@@ -42,7 +42,7 @@
   --surface-active: #e9e9ef;
   --titlebar-overflow-fade: #ffffff;
   --text: #1c1c1e;
-  --text-strong: #000000;
+  --text-strong: var(--text);
   --text-muted: #636366;
   --text-subtle: #8e8e93;
   --line: #d1d1d6;
@@ -114,6 +114,10 @@ body,
 #app {
   height: 100%;
   overflow: hidden;
+}
+
+strong {
+  font-weight: 600;
 }
 
 a {

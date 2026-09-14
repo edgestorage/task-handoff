@@ -32,7 +32,7 @@ describe('task status projection', () => {
       props: {
         activeCount: 1,
         detail: 'Mac Studio',
-        message: 'No response yet.',
+        message: 'No response yet',
         problemCount: 1,
         status: 'waiting',
         statusLabel: 'Approval needed',
@@ -87,7 +87,7 @@ describe('task status projection', () => {
       props: {
         activeCount: 1,
         detail: 'Mac Studio',
-        message: 'No response yet.',
+        message: 'No response yet',
         problemCount: 0,
         status: 'active',
         statusLabel: 'Active',

@@ -47,7 +47,8 @@ test("instance title appends the authoritative node name as muted metadata", () 
   assert.match(sessionPreviewStyles, /\.session-ai-home \{[\s\S]*?height: 30px;/);
   assert.match(styles, /\.control-plane-workbench \{[\s\S]*?height: calc\(var\(--control-plane-viewport-height\) - var\(--control-plane-titlebar-height\)\);/);
   assert.match(styles, /\.control-plane-instance-switcher-title \{[\s\S]*?align-items: baseline;/);
-  assert.match(styles, /\.control-plane-instance-switcher-title > strong \{\s*flex: 0 0 auto;/);
+  assert.match(styles, /\.control-plane-title strong \{[\s\S]*?color: var\(--text\);/);
+  assert.match(styles, /\.control-plane-instance-switcher-title > strong \{\s*flex: 0 0 auto;\s*\}/);
   assert.match(styles, /\.control-plane-instance-node-name \{[\s\S]*?flex: 1 1 0;[\s\S]*?min-width: 0;/);
   assert.match(styles, /\.control-plane-instance-switcher-chevron \{[\s\S]*?align-self: center;/);
   assert.match(styles, /\.control-plane-instance-node-name \{[\s\S]*?color: var\(--text-muted\);[\s\S]*?font-size: 12px;[\s\S]*?text-overflow: ellipsis;/);

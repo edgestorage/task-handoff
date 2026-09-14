@@ -104,7 +104,7 @@
   height: var(--control-plane-titlebar-height);
   border-bottom: 1px solid var(--line);
   background: var(--surface);
-  padding: 0 16px;
+  padding: 0 12px;
 }
 
 /*
@@ -326,6 +326,7 @@
 
 .control-plane-title strong {
   overflow: hidden;
+  color: var(--text);
   font-size: 17px;
   line-height: 1.2;
   text-overflow: ellipsis;
@@ -959,10 +960,6 @@
 
 .control-plane-kicker {
   color: var(--control-plane-muted);
-}
-
-.control-plane-title strong {
-  color: var(--control-plane-heading);
 }
 
 .status-dot[data-state="online"] {

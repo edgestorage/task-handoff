@@ -26,7 +26,7 @@
                 <TooltipTrigger as-child>
                   <span class="ai-board-card-context-item">
                     <Folder :size="14" aria-hidden="true" />
-                    <span>{{ aiSessionBasename(card.session.cwd) || t("sessions.board.unknownFolder") }}</span>
+                    <span>{{ folderName || aiSessionBasename(card.session.cwd) || t("sessions.board.unknownFolder") }}</span>
                   </span>
                 </TooltipTrigger>
                 <TooltipContent class="ai-session-path-tooltip" side="top" :side-offset="8">{{ card.session.cwd || t("sessions.board.unknownPath") }}</TooltipContent>
@@ -166,6 +166,7 @@ const props = withDefaults(defineProps<{
   boundTriggers: (card: AiBoardCard) => TriggerDeployment[];
   canResolveApproval: (session: AiSessionSummary) => boolean;
   card: AiBoardCard;
+  folderName?: string;
   instanceDisplayName: (instance: InstanceBoardItem) => string;
   isTriggerBound: (card: AiBoardCard, configHash: string) => boolean;
   promptCount: number;

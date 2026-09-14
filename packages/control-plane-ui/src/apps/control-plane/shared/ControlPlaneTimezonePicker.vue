@@ -15,7 +15,8 @@
             <CommandGroup>
               <CommandItem v-for="option in options" :key="option" :value="option">
                 <Check :size="14" :class="{ invisible: option !== model }" />
-                <span>{{ option }}</span>
+                <span class="control-plane-timezone-name">{{ option }}</span>
+                <span v-if="timezoneOffsets.get(option)" class="control-plane-timezone-offset">{{ timezoneOffsets.get(option) }}</span>
               </CommandItem>
             </CommandGroup>
           </CommandList>
@@ -26,14 +27,15 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from "vue";
+import { computed, ref } from "vue";
 import { Check, ChevronsUpDown } from "@lucide/vue";
 import { Button } from "../../../components/ui/button";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "../../../components/ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "../../../components/ui/popover";
 import { ScrollArea } from "../../../components/ui/scroll-area";
+import { timezoneOffsetLabel } from "../../../lib/timezones";
 
-defineProps<{
+const props = defineProps<{
   emptyLabel: string;
   label: string;
   options: string[];
@@ -43,6 +45,7 @@ defineProps<{
 
 const model = defineModel<string>({ default: "" });
 const open = ref(false);
+const timezoneOffsets = computed(() => new Map(props.options.map((timezone) => [timezone, timezoneOffsetLabel(timezone)])));
 
 function selectTimezone(value: unknown) {
   if (typeof value !== "string") return;
@@ -58,6 +61,8 @@ function selectTimezone(value: unknown) {
 :global(.control-plane-timezone-search) { height:36px; padding-top:0; padding-bottom:0; font-size:13px; }
 :global(.control-plane-timezone-scroll) { height:min(280px,calc(var(--reka-popover-content-available-height) - 38px)); }
 :global(.control-plane-timezone-scroll [data-task-handoff-scroll-viewport]) { padding-right:7px; }
-:global(.control-plane-timezone-list [role="option"]) { cursor:pointer; font-size:13px; }
+:global(.control-plane-timezone-list [role="option"]) { width:100%; min-width:0; cursor:pointer; font-size:13px; }
+:global(.control-plane-timezone-name) { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+:global(.control-plane-timezone-offset) { flex:0 0 auto; margin-left:auto; color:var(--text-muted); font-size:12px; font-weight:400; white-space:nowrap; }
 :global(.control-plane-timezone-list [role="option"]:hover),:global(.control-plane-timezone-list [role="option"]:focus-visible),:global(.control-plane-timezone-list [role="option"][data-highlighted]) { background:var(--surface-active); color:var(--text-strong); outline:none; }
 </style>

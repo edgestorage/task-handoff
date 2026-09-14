@@ -24,6 +24,13 @@
               <Button variant="outline" :class="{ active: themePreference === 'dark' }" :aria-pressed="themePreference === 'dark'" @click="emit('update:themePreference', 'dark')"><Moon :size="16" /><span>{{ t("settings.appearance.dark") }}</span></Button>
             </div>
           </div>
+          <div class="setting-row compact-row">
+            <div class="setting-copy"><strong>{{ t("settings.appearance.queuePlacement") }}</strong><p>{{ t("settings.appearance.queuePlacementDescription") }}</p></div>
+            <ToggleGroup class="queue-placement-choice row-control" type="single" :model-value="queuePlacement" :aria-label="t('settings.appearance.queuePlacement')" @update:model-value="setQueuePlacement">
+              <ToggleGroupItem value="detail" size="sm">{{ t("settings.appearance.queuePlacementDetail") }}</ToggleGroupItem>
+              <ToggleGroupItem value="composer" size="sm">{{ t("settings.appearance.queuePlacementComposer") }}</ToggleGroupItem>
+            </ToggleGroup>
+          </div>
         </div>
       </section>
 
@@ -109,7 +116,9 @@ import type { ThemePreference } from "../../../utils/theme";
 import { Button } from "../../../components/ui/button";
 import { Checkbox } from "../../../components/ui/checkbox";
 import { ScrollArea } from "../../../components/ui/scroll-area";
+import { ToggleGroup, ToggleGroupItem } from "../../../components/ui/toggle-group";
 import { useControlPlaneLocale, type LocalePreference } from "../../../i18n/index.ts";
+import { useAiSessionQueuePlacement } from "../useAiSessionQueuePlacement";
 import ControlPlaneInput from "../shared/ControlPlaneInput.vue";
 import ControlPlaneSelect from "../shared/ControlPlaneSelect.vue";
 import ControlPlaneSelectItem from "../shared/ControlPlaneSelectItem.vue";
@@ -119,6 +128,7 @@ import { translateStatus, updateJobStatusKeys } from "../../../i18n/status.ts";
 const props = defineProps<{ publicBaseUrl: string; publicBaseUrlMessage?: string; mentionTrigger: string; commandTrigger: string; commandTriggerError?: string; mentionTriggerError?: string; savingTriggerSettings?: boolean; triggerSettingsAtDefaults: boolean; triggerSettingsDirty: boolean; triggerSettingsMessage?: string; triggerSettingsMessageError?: boolean; savingPublicBaseUrl?: boolean; serverUpdatesAvailable: boolean; serverUnavailableReason: string; serverCurrentVersion?: string; serverUpdateChannel: UpdateChannel; serverUpdateCheck?: UpdateCheckResult; serverUpdateJob?: UpdateJob; checkingServerUpdate: boolean; applyingServerUpdate: boolean; desktopUpdatesAvailable: boolean; desktopUpdateState?: DesktopUpdateState; themePreference: ThemePreference; diagnosticLogs: boolean; savingDiagnosticLogs: boolean; exportingDiagnosticLogs: boolean }>();
 const { t } = useI18n();
 const { preference, setPreference } = useControlPlaneLocale();
+const { queuePlacement, setQueuePlacement } = useAiSessionQueuePlacement();
 function updateLocalePreference(value: string) { if (value === "system" || value === "en-US" || value === "zh-CN") setPreference(value satisfies LocalePreference); }
 const emit = defineEmits<{ detectPublicBaseUrl: []; checkServerUpdate: []; applyServerUpdate: []; checkDesktopUpdate: []; downloadDesktopUpdate: []; installDesktopUpdate: []; openDesktopRelease: []; savePublicBaseUrl: []; resetTriggers: []; saveTriggers: []; "update:commandTrigger": [value: string]; "update:mentionTrigger": [value: string]; "update:publicBaseUrl": [value: string]; "update:serverUpdateChannel": [value: string]; "update:desktopUpdateChannel": [value: string]; "update:themePreference": [theme: ThemePreference]; "update:diagnosticLogs": [enabled: boolean]; exportDiagnosticLogs: [] }>();
 const desktopUpdateBusy = computed(() => ["checking", "downloading", "installing"].includes(props.desktopUpdateState?.phase || ""));
@@ -157,6 +167,9 @@ const desktopUpdateSummary = computed(() => { const state = props.desktopUpdateS
 .language-select, .update-channel-select { width: 180px; }
 .theme-choice-group, .row-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .theme-choice-group :deep(button.active) { background: var(--surface-active); border-color: var(--accent); color: var(--text-strong); }
+.queue-placement-choice { display: inline-flex; width: fit-content; height: 32px; min-height: 32px; align-items: center; gap: 1px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-active); padding: 2px; }
+.queue-placement-choice :deep(button) { min-width: 82px; height: 26px; min-height: 26px; border-radius: 5px; color: var(--text-muted); font-size: 12px; font-weight: 500; padding: 0 10px; }
+.queue-placement-choice :deep(button[data-state="on"]) { background: var(--surface-raised); color: var(--text-strong); box-shadow: 0 1px 2px rgb(0 0 0 / 18%); }
 .setting-form, .maintenance-control { gap: 8px; min-width: 0; }
 .setting-form label, .composer-fields label { display: grid; gap: 5px; }
 .setting-form label > span { color: var(--text-muted); font-size: 12px; }
@@ -174,6 +187,6 @@ const desktopUpdateSummary = computed(() => { const state = props.desktopUpdateS
 .diagnostic-control { display: grid; gap: 8px; min-width: 0; }
 .diagnostic-toggle { align-items: center; color: var(--text-strong); cursor: pointer; display: flex; font-size: 13px; font-weight: 500; gap: 10px; min-height: 28px; }
 .settings-success, .settings-error { font-size: 12px; margin: 0; }
-@media (max-width: 760px) { .basic-settings-page { gap: 16px; padding-right: 8px; } .setting-row { gap: 10px; grid-template-columns: 1fr; padding: 13px 14px; } .row-control { justify-self: stretch; } .language-select, .update-channel-select { width: 100%; } .update-toolbar { grid-template-columns: 1fr; } .row-actions { justify-content: flex-start; } }
+@media (max-width: 760px) { .basic-settings-page { gap: 16px; padding-right: 8px; } .setting-row { gap: 10px; grid-template-columns: 1fr; padding: 13px 14px; } .row-control { justify-self: stretch; } .language-select, .update-channel-select { width: 100%; } .queue-placement-choice { display: grid; width: 100%; grid-template-columns: repeat(2,minmax(0,1fr)); } .queue-placement-choice :deep(button) { min-width: 0; } .update-toolbar { grid-template-columns: 1fr; } .row-actions { justify-content: flex-start; } }
 @media (max-width: 520px) { .composer-fields, .server-update-job { grid-template-columns: 1fr; } }
 </style>

@@ -78,6 +78,7 @@
         :provider-turn-id="selectedTurn?.providerTurnId"
         :response-content="detailState === 'ready' ? compactResponseContent : ''"
         :retry-warning="selectedTimeline.retryWarning"
+        :show-queue="queuePlacement === 'detail'"
         :turn-started-at="selectedTurn?.startedAt"
         :turn-ended-at="turnElapsedEnd(selectedTurn)"
         :session="session"
@@ -134,6 +135,7 @@ import type { AiSessionSummary } from "../../api/types";
 import type { AiSessionTurnTimelineState } from "../../apps/control-plane/useAiSessionTimelineStore";
 import { aiSessionTurns, displayAiSessionResponse } from "../../apps/control-plane/useInstanceSessions";
 import { compactTimelineForTurn, turnElapsedEnd } from "./timelineActivities";
+import { useAiSessionQueuePlacement } from "../../apps/control-plane/useAiSessionQueuePlacement";
 import AiSessionResult from "./AiSessionResult.vue";
 import AiSessionTimelineView from "./AiSessionTimelineView.vue";
 import AiSessionTurnActions from "./AiSessionTurnActions.vue";
@@ -191,6 +193,7 @@ const emit = defineEmits<{
 }>();
 
 const { t } = useI18n();
+const { queuePlacement } = useAiSessionQueuePlacement();
 const selectedTurn = computed(() => aiSessionTurns(props.session)[props.promptIndex]);
 const compactResponseContent = computed(() => displayAiSessionResponse(props.session, props.promptIndex, t));
 const showSessionError = computed(() => props.session.status === "failed"

@@ -150,32 +150,48 @@
       </button>
     </Transition>
 
-    <AiSessionComposer
-      ref="composerEl"
-      class="ai-board-floating-compose"
-      :model-value="draft"
-      :attachments="attachments"
-      :editing-label="editingLabel"
-      :mention-bindings="mentionBindings"
-      :mention-context="mentionContext"
-      :mention-trigger="mentionTrigger"
-      :command-trigger="commandTrigger"
-      :session-busy="sessionBusy"
-      :busy="busy"
-      :can-interrupt="canInterrupt"
-      :provider="card.session.agent"
-      :permission-modes="permissionModes"
-      :permission-key="aiSessionPermissionKey(card.instance.id, card.session.id)"
-      :default-permission-mode="card.instance.config.defaultCodexPermissionMode"
-      :max-file-attachment-bytes="card.instance.config.aiSessionMaxFileAttachmentBytes"
-      @update:model-value="$emit('update:draft', $event)"
-      @update:attachments="$emit('update:attachments', $event)"
-      @update:mention-bindings="$emit('update:mentionBindings', $event)"
-      @run="$emit('run', $event)"
-      @cancel-edit="$emit('cancelEdit')"
-      @steer="$emit('steer')"
-      @command="$emit('command', $event)"
-    />
+    <div class="ai-board-floating-compose-stack">
+      <AiSessionQueue
+        v-if="(timelineMode === 'full' || queuePlacement === 'composer') && conversationSession.queue.items.length"
+        class="ai-board-floating-compose-queue"
+        :busy="busy"
+        :can-interrupt="canInterrupt"
+        placement="composer"
+        :queue="conversationSession.queue"
+        tone="board"
+        @edit-queued-message="$emit('editQueuedMessage', $event)"
+        @remove-queued-message="$emit('removeQueuedMessage', $event)"
+        @reorder-queued-messages="$emit('reorderQueuedMessages', $event)"
+        @retry-queued-message="$emit('retryQueuedMessage', $event)"
+        @steer-queued-message="$emit('steerQueuedMessage', $event)"
+      />
+      <AiSessionComposer
+        ref="composerEl"
+        class="ai-board-floating-compose"
+        :model-value="draft"
+        :attachments="attachments"
+        :editing-label="editingLabel"
+        :mention-bindings="mentionBindings"
+        :mention-context="mentionContext"
+        :mention-trigger="mentionTrigger"
+        :command-trigger="commandTrigger"
+        :session-busy="sessionBusy"
+        :busy="busy"
+        :can-interrupt="canInterrupt"
+        :provider="card.session.agent"
+        :permission-modes="permissionModes"
+        :permission-key="aiSessionPermissionKey(card.instance.id, card.session.id)"
+        :default-permission-mode="card.instance.config.defaultCodexPermissionMode"
+        :max-file-attachment-bytes="card.instance.config.aiSessionMaxFileAttachmentBytes"
+        @update:model-value="$emit('update:draft', $event)"
+        @update:attachments="$emit('update:attachments', $event)"
+        @update:mention-bindings="$emit('update:mentionBindings', $event)"
+        @run="$emit('run', $event)"
+        @cancel-edit="$emit('cancelEdit')"
+        @steer="$emit('steer')"
+        @command="$emit('command', $event)"
+      />
+    </div>
   </aside>
 </template>
 
@@ -186,6 +202,7 @@ import { Boxes, ChevronDown, ChevronUp, CircleHelp, ExternalLink, Folder } from 
 import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
 import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions } from "../../../api/types";
 import AiSessionComposer, { type AiSessionComposerAttachment } from "../../../components/ai-session/AiSessionComposer.vue";
+import AiSessionQueue from "../../../components/ai-session/AiSessionQueue.vue";
 import AiSessionCompactPrompt from "../../../components/ai-session/AiSessionCompactPrompt.vue";
 import AiSessionConversationContent from "../../../components/ai-session/AiSessionConversationContent.vue";
 import type { AiSessionTurnTimelineState } from "../useAiSessionTimelineStore";
@@ -194,6 +211,7 @@ import type { AiSessionCommandInput, AiSessionPermissionMode } from "@task-hando
 import { directoryAiSessionProviderCapability } from "@task-handoff/protocol/control-plane-directory";
 import type { AiSessionMentionContext } from "../../../components/ai-session/useAiSessionMentions";
 import { aiSessionPermissionKey } from "../useAiSessionPermissionMode";
+import { useAiSessionQueuePlacement } from "../useAiSessionQueuePlacement";
 import AiSessionTurnNavigator from "../../../components/ai-session/AiSessionTurnNavigator.vue";
 import AiAgentIcon from "../../../components/AiAgentIcon.vue";
 import { ScrollArea } from "../../../components/ui/scroll-area";
@@ -207,6 +225,7 @@ import {
 import type { AiBoardCard } from "./aiBoardTypes";
 
 const { t } = useI18n();
+const { queuePlacement } = useAiSessionQueuePlacement();
 
 type AiSessionDetailState = "loading" | "ready" | "error";
 
@@ -675,7 +694,7 @@ onBeforeUnmount(() => {
   min-width: 0;
   border-bottom: 1px solid var(--ai-board-column-border);
   background: var(--ai-board-column-head-bg);
-  padding: 12px 14px;
+  padding: 10px 12px;
 }
 
 .ai-board-floating-context {
@@ -875,6 +894,21 @@ onBeforeUnmount(() => {
   max-height: min(280px, calc(100vh - 144px));
   -webkit-backdrop-filter: blur(16px) saturate(1.24);
   backdrop-filter: blur(16px) saturate(1.24);
+}
+
+.ai-board-floating-compose-stack {
+  display: grid;
+  min-width: 0;
+}
+
+.ai-board-floating-compose-queue {
+  z-index: 0;
+  margin: 0 28px -1px;
+}
+
+.ai-board-floating-compose-stack > .ai-board-floating-compose {
+  position: relative;
+  z-index: 1;
 }
 
 :global(.ai-board-session-info-tooltip) {

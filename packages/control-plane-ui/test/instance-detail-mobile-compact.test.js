@@ -6,11 +6,15 @@ const styles = fs.readFileSync(new URL("../src/apps/control-plane/instance-detai
 const detail = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/InstanceDetail.vue", import.meta.url), "utf8");
 
 test("desktop instance summary compacts identity while keeping status and actions on separate rows", () => {
-  assert.match(detail, /class="detail-meta"[\s\S]*?instanceSourceLabel\(instance, t\)[\s\S]*?aria-hidden="true">·<\/span>[\s\S]*?:title="instanceRuntimeSummary\(instance\)"/);
+  assert.match(detail, /class="detail-meta"[\s\S]*?<Folder :size="14"[\s\S]*?instanceSourceLabel\(instance, t\)[\s\S]*?<Package :size="14"[\s\S]*?<Server :size="14"[\s\S]*?<Box :size="14"/);
+  assert.match(detail, /<ContextMenu v-if="canOpenInstanceSourceFolder">[\s\S]*?class="detail-meta-folder" @click="openInstanceSourceFolder"[\s\S]*?<ContextMenuItem[^>]*@select="openInstanceSourceFolder"/);
+  assert.match(detail, /desktopRuntimePathAccess\(props\.instance\) === "desktop-local"[\s\S]*?canOpenDesktopLocalPath\(\)[\s\S]*?openDesktopLocalPath\(instanceSourceLocation\(instance\)\)/);
+  assert.match(detail, /class="instance-detail-meta-tooltip"[\s\S]*?instanceSourceLocation\(instance\)[\s\S]*?instanceImageTooltip\(instance\)[\s\S]*?instance\.nodeId[\s\S]*?instanceRuntimeTooltip\(instance\)/);
   assert.match(styles, /\.instance-detail\s*\{[^}]*padding: 14px;/s);
   assert.match(styles, /\.detail-head\s*\{[^}]*align-items: center;[^}]*margin-bottom: 10px;/s);
   assert.match(styles, /\.detail-side\s*\{[^}]*display: grid;[^}]*justify-items: end;/s);
-  assert.match(detail, /function instanceRuntimeSummary\(instance: InstanceBoardItem\)[\s\S]*?instance\.image[\s\S]*?instance\.node[\s\S]*?instance\.runtime/);
+  assert.match(styles, /\.detail-meta\s*\{[^}]*font-size: 13px;[^}]*line-height: 20px;/s);
+  assert.match(styles, /\.detail-meta-item\s*\{[^}]*display: inline-flex;[^}]*gap: 5px;/s);
 });
 
 test("mobile instance summary uses a compact two-row layout", () => {

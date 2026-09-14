@@ -41,7 +41,7 @@ describe('<InboxRoute />', () => {
       }} />,
     );
 
-    expect(screen.getByText('No AI Sessions yet.')).toBeTruthy();
+    expect(screen.getByText('No AI Sessions yet')).toBeTruthy();
     expect(screen.getByTestId('empty-state-icon')).toBeTruthy();
   });
 
@@ -59,7 +59,7 @@ describe('<InboxRoute />', () => {
 
     expect(screen.toJSON()).not.toBeNull();
     expect(screen.getByTestId('swipe-action-list').props.contentInsetAdjustmentBehavior).toBe('automatic');
-    const responsePreviews = screen.getAllByText('No response yet.');
+    const responsePreviews = screen.getAllByText('No response yet');
     expect(responsePreviews[0].props.numberOfLines).toBe(3);
     expect(StyleSheet.flatten(responsePreviews[0].props.style).fontSize).toBe(15);
     expect(StyleSheet.flatten(responsePreviews[0].props.style).lineHeight).toBe(20);
