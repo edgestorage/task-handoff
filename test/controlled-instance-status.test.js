@@ -21,6 +21,7 @@ const {
   normalizeControlledInstanceCapabilities,
   supportsAiSessionPersistenceSettings,
   supportsAiSessionFileSizeLimitSettings,
+  supportsControlledInstanceNodeAgentConnectionUpdate,
   supportsAiSessionTimelineCapability,
   supportsAiSessionWorkspaceSelection,
 } = require("../packages/protocol/src/control-plane.ts");
@@ -97,6 +98,8 @@ test("instance capabilities are projected from available inventory items", () =>
   assert.equal(capabilities.features.screenshots, false);
   assert.equal(capabilities.features.aiSessionPersistenceSettings, true);
   assert.equal(capabilities.features.codexManagedSettings, true);
+  assert.equal(capabilities.features.nodeAgentConnectionUpdate, true);
+  assert.equal(supportsControlledInstanceNodeAgentConnectionUpdate(capabilities), true);
   assert.equal(supportsAiSessionPersistenceSettings(capabilities), true);
   assert.equal(supportsAiSessionFileSizeLimitSettings(capabilities), true);
   assert.deepEqual(capabilities.features.aiSessionTimeline, {
@@ -125,6 +128,7 @@ test("controlled instance capability normalization isolates malformed feature do
   assert.equal(supportsAiSessionWorkspaceSelection(normalized), true);
   assert.equal(supportsAiSessionPersistenceSettings(normalized), false);
   assert.equal(supportsAiSessionTimelineCapability(normalized, "codex", "session-read"), false);
+  assert.equal(supportsControlledInstanceNodeAgentConnectionUpdate(normalized), false);
   assert.deepEqual(normalized.features.aiSessionTimeline, {
     sessionReadAgents: [],
     turnReadAgents: [],

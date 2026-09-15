@@ -171,7 +171,7 @@ import {
 import { TriggerSourceSchema, TriggerActionSchema, TriggerPolicySchema, TriggerTargetSchema } from "@task-handoff/protocol/triggers";
 import { bridgeWebSockets, TASK_HANDOFF_WEBSOCKET_SERVER_OPTIONS } from "@task-handoff/protocol/websocket-bridge";
 import { SESSION_STREAM_PROTOCOL_VERSION, SessionStreamsHelloEventType } from "@task-handoff/protocol/events";
-import { AppManagementOperationRequestSchema, CodexInstanceSettingsSchema } from "@task-handoff/protocol/control-plane";
+import { AppManagementOperationRequestSchema, CodexInstanceSettingsSchema, UpdateControlledInstanceNodeAgentConnectionSchema } from "@task-handoff/protocol/control-plane";
 import { StoryAutomationInstanceCreateInputSchema, StoryAutomationInstanceCreateResultSchema } from "@task-handoff/protocol/story-automation-instance";
 import { registerRepositoryRoutes, repositoryWorkspaceRootsFromEnv } from "../repository/routes";
 import { attachBrowserTunnel } from "./browser-tunnel";
@@ -2413,6 +2413,24 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       claudeAuthConfigured: Boolean(next.ANTHROPIC_API_KEY),
       configUpdated: codex.applied || claude.applied,
     } };
+  });
+
+  app.put<{ Body: unknown }>("/api/internal/node-agent-connection", nodeAgentApiRoute({
+    code: "NODE_AGENT_CONNECTION_UPDATE_FORBIDDEN",
+    message: "Instance registration token is required.",
+    requireControlled: true,
+  }), async (request, reply) => {
+    const parsed = UpdateControlledInstanceNodeAgentConnectionSchema.safeParse(request.body || {});
+    if (!parsed.success) {
+      return reply.code(400).send({
+        error: {
+          code: "NODE_AGENT_CONNECTION_UPDATE_INVALID",
+          message: parsed.error.issues.map((issue) => `${issue.path.join(".") || "body"}: ${issue.message}`).join("; "),
+        },
+      });
+    }
+    const input = parsed.data;
+    return { data: { applied: true, nodeAgentUrl: nodeAgentClient.updateNodeAgentUrl(input.nodeAgentUrl) } };
   });
 
   app.put<{ Body: unknown }>("/api/internal/model-catalog", nodeAgentApiRoute({

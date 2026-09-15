@@ -7,20 +7,21 @@ export function storyOrderKey(story: Pick<Story, "id" | "ownerNodeId">) {
 export function normalizeManualStoryOrder(stories: readonly Story[], keys: readonly string[]) {
   const available = new Set(stories.map(storyOrderKey));
   const known = new Set<string>();
-  const normalized: string[] = [];
+  const retained: string[] = [];
   for (const key of keys) {
     if (!available.has(key) || known.has(key)) continue;
-    normalized.push(key);
+    retained.push(key);
     known.add(key);
   }
+  const added: string[] = [];
   for (const story of stories) {
     const key = storyOrderKey(story);
     if (!known.has(key)) {
-      normalized.push(key);
+      added.push(key);
       known.add(key);
     }
   }
-  return normalized;
+  return [...added, ...retained];
 }
 
 export function reorderStoryKeys(keys: readonly string[], sourceKey: string, targetKey: string, placement: "before" | "after") {

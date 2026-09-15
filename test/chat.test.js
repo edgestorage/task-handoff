@@ -7734,6 +7734,30 @@ test("controlled instance refreshes managed model auth through its registration-
     assert.equal(resumed.statusCode, 200);
     assert.deepEqual(resumed.json().data, { resumed: true, instanceId: "inst_managed_model" });
     assert.equal(runtime.isDraining(), false);
+    const forbiddenConnectionUpdate = await app.inject({
+      method: "PUT",
+      url: "/api/internal/node-agent-connection",
+      payload: { nodeAgentUrl: "http://host.docker.internal:18092" },
+    });
+    assert.equal(forbiddenConnectionUpdate.statusCode, 403);
+    const invalidConnectionUpdate = await app.inject({
+      method: "PUT",
+      url: "/api/internal/node-agent-connection",
+      headers: { authorization: "Bearer instance-registration-token" },
+      payload: { nodeAgentUrl: "file:///tmp/node-agent.sock" },
+    });
+    assert.equal(invalidConnectionUpdate.statusCode, 400);
+    const connectionUpdate = await app.inject({
+      method: "PUT",
+      url: "/api/internal/node-agent-connection",
+      headers: { authorization: "Bearer instance-registration-token" },
+      payload: { nodeAgentUrl: "http://host.docker.internal:18092/" },
+    });
+    assert.equal(connectionUpdate.statusCode, 200);
+    assert.deepEqual(connectionUpdate.json().data, {
+      applied: true,
+      nodeAgentUrl: "http://host.docker.internal:18092",
+    });
     const forbidden = await app.inject({ method: "PUT", url: "/api/internal/model-environment", payload: { OPENAI_API_KEY: "should-not-apply" } });
     assert.equal(forbidden.statusCode, 403);
     const applied = await app.inject({

@@ -262,6 +262,7 @@ function handleKeydown(event: KeyboardEvent) {
 
 <style scoped>
 :global(.ai-session-image-preview) {
+  -webkit-app-region: no-drag;
   position: fixed;
   inset: 0;
   left: 0;

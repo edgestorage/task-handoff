@@ -43,10 +43,9 @@ test("Thandoff account follows the shared settings directory layout", () => {
   const component = read("src/apps/control-plane/settings/CloudConnectivitySettingsSection.vue");
 
   assert.match(component, /class="cloud-connectivity-scroll"/);
-  assert.match(component, /class="cloud-connectivity-page"/);
+  assert.match(component, /class="cloud-connectivity-page settings-content-page"/);
   assert.match(component, /class="cloud-page-head"/);
   assert.match(component, /class="cloud-directory"/);
-  assert.match(component, /\.cloud-connectivity-page\{[^}]*var\(--settings-content-max-width,1080px\)/);
   assert.match(component, /\.cloud-directory\{[^}]*background:var\(--surface-raised\)[^}]*border:1px solid var\(--line\)/);
   assert.doesNotMatch(component, /settings-panel-surface|modal-section/);
 });

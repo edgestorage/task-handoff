@@ -23,7 +23,7 @@ test("desktop tray settings command opens settings only in the main window", () 
 
 test("macOS positions its traffic lights explicitly and reserves the system safe area", () => {
   assert.match(workbench, /class="desktop-window-controls native-window-control-space macos-native-window-control-space"/);
-  assert.match(appStyles, /--native-titlebar-controls-left-width:[\s\S]*?calc\(env\(titlebar-area-x, 16px\) - 16px\)/);
+  assert.match(appStyles, /--native-titlebar-controls-left-width:[\s\S]*?calc\(env\(titlebar-area-x, 16px\) - 12px\)/);
   assert.match(styles, /--macos-native-window-control-width: var\(--native-titlebar-controls-left-width\);/);
   assert.match(styles, /flex: 0 0 var\(--macos-native-window-control-width\);/);
   assert.match(styles, /\.topbar-left \{[\s\S]*?gap: 0;/);

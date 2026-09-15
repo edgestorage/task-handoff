@@ -13,7 +13,7 @@
       </div>
 
       <ScrollArea v-if="settingsSection === 'triggers'" class="settings-section-scroll" :horizontal="false">
-        <div class="settings-section-scroll-content settings-content-column">
+        <div class="settings-section-scroll-content settings-content-page">
           <ControlPlaneTriggersView :instances="instances" />
         </div>
       </ScrollArea>
@@ -1377,12 +1377,6 @@ function errorText(error: unknown) {
 
 .settings-section-scroll-content {
   min-width: 0;
-  padding: 0 10px 18px 0;
-}
-
-.settings-content-column {
-  margin: 0 auto;
-  width: min(100%, var(--settings-content-max-width));
 }
 
 .control-settings-page-actions {
@@ -2065,10 +2059,7 @@ function errorText(error: unknown) {
     padding: 12px;
   }
 
-  .settings-section-scroll-content {
-    padding-right: 6px;
-  }
-
 }
 </style>
+<style src="./SettingsPageLayout.css"></style>
 <style src="./SettingsPanelSurface.css"></style>

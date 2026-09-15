@@ -181,23 +181,28 @@ test("desktop force-stops the same owner when graceful shutdown times out", asyn
   assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
 });
 
-test("desktop does not force a replacement lock owner", async () => {
+test("desktop force-stops the original process when it releases its lock before exiting", async () => {
   const existing = owner();
   const replacement = owner({ pid: 5678, token: "replacement-token" });
   let reads = 0;
+  let alive = true;
   const signals = [];
   const result = await stopExistingDesktopNodeAgent({
     dataDir: "/desktop/node-agent",
     readOwner: () => reads++ === 0 ? existing : replacement,
-    isAlive: () => true,
-    processIdentity: () => existing.startIdentity,
-    signal: (_pid, signal) => signals.push(signal),
+    isAlive: (pid) => pid === existing.pid && alive,
+    processIdentity: (pid) => pid === existing.pid && alive ? existing.startIdentity : replacement.startIdentity,
+    signal: (pid, signal) => {
+      signals.push([pid, signal]);
+      if (pid === existing.pid && signal === "SIGKILL") alive = false;
+    },
     wait: async () => {},
     gracefulTimeoutMs: 0,
+    forceTimeoutMs: 1,
   });
 
-  assert.equal(result.status, "stopped");
-  assert.deepEqual(signals, ["SIGTERM"]);
+  assert.equal(result.status, "forced");
+  assert.deepEqual(signals, [[existing.pid, "SIGTERM"], [existing.pid, "SIGKILL"]]);
 });
 
 test("desktop never signals a reused pid from a stale node-agent lock", async () => {

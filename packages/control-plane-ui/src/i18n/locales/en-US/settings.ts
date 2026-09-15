@@ -37,7 +37,7 @@ export const settings = {
   basic: "Basic",
   chat: "Chat",
   nodes: "Nodes",
-  projects: "Projects",
+  projects: "Git Projects",
   models: "Models",
   images: "Images",
   environmentTemplates: "Environment templates",
@@ -340,7 +340,7 @@ export const settings = {
   nodeDetail: {
     protocol: "Protocol", build: "Build", package: "Package", image: "Image", built: "Built",
     renameDescription: "Change this node's display name", pairingDescription: "Authorize another control plane to access this node", removeDescription: "Remove this node from the control plane",
-    sections: "Node detail sections", overview: "Overview", runtimes: "Runtimes", updates: "Updates", storage: "Storage", inventory: "Inventory", remote: "Connections",
+    sections: "Node detail sections", overview: "Overview", runtimes: "Runtimes", updates: "Updates", storage: "Projects", inventory: "Inventory", remote: "Connections",
     instances: "Instances", localFolders: "Local folders", diagnostics: "Agent diagnostics", diagnosticLog: "Diagnostic log · {count}",
     noDiagnostics: "No node protocol errors recorded from the latest refresh", tcpListener: "TCP listener", listenOn: "Listen on", loopback: "127.0.0.1 only",
     allIpv4: "All IPv4 interfaces", port: "Port", applying: "Applying", loading: "Loading", apply: "Apply",

@@ -1,6 +1,6 @@
 <template>
   <ScrollArea class="basic-settings-scroll">
-    <div class="basic-settings-page">
+    <div class="basic-settings-page settings-content-page">
       <section class="settings-group" aria-labelledby="preferences-heading">
         <header class="group-heading">
           <h3 id="preferences-heading">{{ t("settings.appearance.preferences") }}</h3>
@@ -149,7 +149,7 @@ const desktopUpdateSummary = computed(() => { const state = props.desktopUpdateS
 <style scoped>
 .basic-settings-scroll { height: 100%; min-height: 0; width: 100%; }
 .basic-settings-scroll :deep([data-reka-scroll-area-viewport] > div) { min-height: 100%; }
-.basic-settings-page { display: grid; gap: 18px; margin: 0 auto; padding: 0 10px 20px 0; width: min(100%, 1080px); }
+.basic-settings-page { display: grid; gap: 18px; }
 .group-heading, .setting-copy, .setting-form, .maintenance-control { display: grid; }
 .group-heading h3, .group-heading p, .setting-copy p, .setting-note { margin: 0; }
 .group-heading p, .setting-copy p, .setting-note { color: var(--text-muted); font-size: 13px; line-height: 1.5; }
@@ -187,6 +187,6 @@ const desktopUpdateSummary = computed(() => { const state = props.desktopUpdateS
 .diagnostic-control { display: grid; gap: 8px; min-width: 0; }
 .diagnostic-toggle { align-items: center; color: var(--text-strong); cursor: pointer; display: flex; font-size: 13px; font-weight: 500; gap: 10px; min-height: 28px; }
 .settings-success, .settings-error { font-size: 12px; margin: 0; }
-@media (max-width: 760px) { .basic-settings-page { gap: 16px; padding-right: 8px; } .setting-row { gap: 10px; grid-template-columns: 1fr; padding: 13px 14px; } .row-control { justify-self: stretch; } .language-select, .update-channel-select { width: 100%; } .queue-placement-choice { display: grid; width: 100%; grid-template-columns: repeat(2,minmax(0,1fr)); } .queue-placement-choice :deep(button) { min-width: 0; } .update-toolbar { grid-template-columns: 1fr; } .row-actions { justify-content: flex-start; } }
+@media (max-width: 760px) { .basic-settings-page { gap: 16px; } .setting-row { gap: 10px; grid-template-columns: 1fr; padding: 13px 14px; } .row-control { justify-self: stretch; } .language-select, .update-channel-select { width: 100%; } .queue-placement-choice { display: grid; width: 100%; grid-template-columns: repeat(2,minmax(0,1fr)); } .queue-placement-choice :deep(button) { min-width: 0; } .update-toolbar { grid-template-columns: 1fr; } .row-actions { justify-content: flex-start; } }
 @media (max-width: 520px) { .composer-fields, .server-update-job { grid-template-columns: 1fr; } }
 </style>

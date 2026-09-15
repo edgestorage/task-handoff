@@ -200,6 +200,7 @@ function fakeChild(pid) {
   child.killed = false;
   child.exitCode = null;
   child.signalCode = null;
+  child.unref = () => { child.unrefCalled = true; };
   child.kill = (signal) => {
     child.killed = true;
     child.signalCode = signal;
@@ -214,6 +215,7 @@ test("local process supervisor reports only unexpected exits after readiness", a
   const supervisor = new LocalProcessSupervisor(undefined, (event) => exits.push(event));
   const crashed = fakeChild(101);
   supervisor.track("inst_crashed", crashed);
+  assert.equal(crashed.unrefCalled, true);
   supervisor.markReady("inst_crashed", crashed);
   crashed.emit("exit", 17, null);
   assert.deepEqual(exits, [{ instanceId: "inst_crashed", pid: 101, code: 17, signal: null }]);
@@ -657,6 +659,48 @@ test("external listener updates execute serially", async () => {
   assert.deepEqual(persistedPorts, [18092, 18093]);
   assert.deepEqual(publishedPorts, [18092, 18093]);
   assert.equal(manager.current().port, 18093);
+});
+
+test("external listener live update rolls the listener and instances back when endpoint sync fails", async () => {
+  const server = new EventEmitter();
+  const events = [];
+  let activePort = 18091;
+  const manager = new NodeAgentExternalListenerManager({
+    app: { server, log: { error: () => undefined } },
+    state: {
+      runningInstanceCount: () => 1,
+      setListenerPort: (port) => { activePort = port; events.push(`state:${port}`); },
+    },
+    settings: { put: () => events.push("persist") },
+    config: { bindScope: "loopback", port: 18091 },
+    source: "persisted",
+    validateUpdate: (candidate) => events.push(`validate:${candidate.port}`),
+    synchronizeUpdate: (candidate) => {
+      events.push(`sync:${candidate.port}`);
+      if (candidate.port === 18092) throw new Error("instance unavailable");
+    },
+  });
+  manager.stop = async () => { events.push("stop"); };
+  manager.listen = async (config) => { events.push(`listen:${config.port}`); };
+  manager.status = "listening";
+
+  await assert.rejects(
+    () => manager.update({ bindScope: "loopback", port: 18092 }),
+    (error) => error.code === "NODE_AGENT_LISTENER_INSTANCE_SYNC_FAILED",
+  );
+
+  assert.equal(activePort, 18091);
+  assert.deepEqual(events, [
+    "validate:18092",
+    "stop",
+    "listen:18092",
+    "state:18092",
+    "sync:18092",
+    "stop",
+    "listen:18091",
+    "state:18091",
+    "sync:18091",
+  ]);
 });
 
 test("desktop node-agent listener allocation skips an occupied preferred port", async (t) => {

@@ -1,7 +1,6 @@
 .trigger-board {
   display: grid;
   gap: 12px;
-  padding: 0 10px 20px 0;
   width: 100%;
 }
 .trigger-board-head {
@@ -584,7 +583,6 @@
 }
 
 @media (max-width: 720px) {
-  .trigger-board { padding-right: 7px; }
   .trigger-board-toolbar { grid-template-columns: 1fr 1fr; }
   .trigger-board-search { grid-column: 1 / -1; }
   .trigger-board-overview { grid-template-columns: repeat(2, minmax(0, 1fr)); }

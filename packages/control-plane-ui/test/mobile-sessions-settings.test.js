@@ -28,10 +28,9 @@ test("mobile sessions follow the shared settings directory layout", () => {
   const section = read("src/apps/control-plane/settings/MobileSessionsSettingsSection.vue");
 
   assert.match(section, /class="mobile-sessions-scroll"/);
-  assert.match(section, /class="mobile-sessions-page"/);
+  assert.match(section, /class="mobile-sessions-page settings-content-page"/);
   assert.match(section, /class="mobile-sessions-page-head"/);
   assert.match(section, /class="mobile-sessions-directory"/);
-  assert.match(section, /width: min\(100%, var\(--settings-content-max-width, 1080px\)\)/);
   assert.match(section, /\.mobile-session-row \+ \.mobile-session-row \{ border-top: 1px solid var\(--line\); \}/);
   assert.doesNotMatch(section, /settings-panel-surface|modal-section/);
 });

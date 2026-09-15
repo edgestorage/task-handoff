@@ -1,6 +1,6 @@
 <template>
   <ScrollArea class="mobile-sessions-scroll" :horizontal="false">
-    <div class="mobile-sessions-page">
+    <div class="mobile-sessions-page settings-content-page">
       <header class="mobile-sessions-page-head">
         <p>{{ t("settings.mobileSessions.description") }}</p>
         <Button variant="outline" size="sm" :disabled="!canLoadSessions || sessions.isFetching.value" @click="sessions.refetch()">
@@ -124,7 +124,7 @@ async function confirmRevoke() {
 
 <style scoped>
 .mobile-sessions-scroll { height: 100%; min-height: 0; width: 100%; }
-.mobile-sessions-page { display: grid; gap: 12px; margin: 0 auto; padding: 0 10px 20px 0; width: min(100%, var(--settings-content-max-width, 1080px)); }
+.mobile-sessions-page { display: grid; gap: 12px; }
 .mobile-sessions-page-head { align-items: flex-start; display: flex; gap: 16px; justify-content: space-between; }
 .mobile-sessions-page-head p { color: var(--text-muted); font-size: 12px; line-height: 1.45; margin: 0; }
 .mobile-sessions-directory { background: var(--surface-raised); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
@@ -147,7 +147,6 @@ async function confirmRevoke() {
 .spinning { animation: mobile-session-spin 0.8s linear infinite; }
 @keyframes mobile-session-spin { to { transform: rotate(360deg); } }
 @media (max-width: 720px) {
-  .mobile-sessions-page { padding-right: 7px; }
   .mobile-sessions-page-head { align-items: stretch; flex-direction: column; }
   .mobile-sessions-page-head > button { align-self: flex-start; }
   .mobile-session-row { align-items: start; grid-template-columns: auto minmax(0, 1fr); }

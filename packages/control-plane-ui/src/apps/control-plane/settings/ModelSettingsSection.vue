@@ -1,6 +1,6 @@
 <template>
   <ScrollArea class="model-settings-scroll" :horizontal="false">
-    <div class="model-settings-page">
+    <div class="model-settings-page settings-content-page">
       <header class="model-page-head">
         <p>{{ t("settings.modelRegistry.pageDescription") }}</p>
         <Button size="sm" @click="openCreateDialog">
@@ -376,7 +376,7 @@ async function confirmDelete() { const target = pendingDelete.value; if (!target
 
 <style scoped>
 .model-settings-scroll { height: 100%; min-height: 0; width: 100%; }
-.model-settings-page { display: grid; gap: 12px; margin: 0 auto; padding: 0 10px 20px 0; width: min(100%, var(--settings-content-max-width, 1080px)); }
+.model-settings-page { display: grid; gap: 12px; }
 .model-page-head { align-items: flex-start; display: flex; gap: 16px; justify-content: space-between; }
 .model-page-head p, .model-form-section h3, .model-form-section p { margin: 0; }
 .model-page-head p { color: var(--text-muted); font-size: 12px; line-height: 1.45; }
@@ -503,5 +503,5 @@ async function confirmDelete() { const target = pendingDelete.value; if (!target
 @keyframes model-spin { to { transform: rotate(360deg); } }
 @media(prefers-reduced-motion:reduce) { .model-name-row, .model-name-row-move { transition: none; } }
 @media(max-width:900px) { .model-toolbar { grid-template-columns: minmax(220px,1fr) repeat(3,minmax(130px,.35fr)); } .model-row-main { grid-template-columns: minmax(210px,1fr) minmax(220px,.8fr) auto; } }
-@media(max-width:720px) { .model-settings-page { padding-right: 7px; } .model-toolbar { grid-template-columns: 1fr 1fr; } .model-search { grid-column: 1/-1; } .model-row-main { align-items: start; grid-template-columns: 1fr auto; gap: 10px; } .model-summary { grid-column: 1/-1; } .model-diagnostic-row { grid-template-columns: 1fr; } .model-protocol-options { grid-template-columns: 1fr; } }
+@media(max-width:720px) { .model-toolbar { grid-template-columns: 1fr 1fr; } .model-search { grid-column: 1/-1; } .model-row-main { align-items: start; grid-template-columns: 1fr auto; gap: 10px; } .model-summary { grid-column: 1/-1; } .model-diagnostic-row { grid-template-columns: 1fr; } .model-protocol-options { grid-template-columns: 1fr; } }
 </style>

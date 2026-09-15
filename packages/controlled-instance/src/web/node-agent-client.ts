@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { StandardReconnectBackoff } from "@task-handoff/core/core/reconnect";
-import type { ImageSelection, InstanceAppInventory } from "@task-handoff/protocol/control-plane";
+import { UpdateControlledInstanceNodeAgentConnectionSchema, type ImageSelection, type InstanceAppInventory } from "@task-handoff/protocol/control-plane";
 import {
   GitCredentialHttpsResolveResponseSchema,
   GitCredentialSshAgentResponseSchema,
@@ -77,6 +77,7 @@ export class NodeAgentRegistrationClient {
   private stopped = true;
   private readonly reconnectBackoff = new StandardReconnectBackoff();
   private readonly processIncarnationId = crypto.randomUUID();
+  private connectionRevision = 0;
   private readonly config: NodeAgentRegistrationConfig;
   private readonly snapshotProvider: SnapshotProvider;
   private readonly fetchImpl: typeof fetch;
@@ -93,6 +94,19 @@ export class NodeAgentRegistrationClient {
 
   enabled() {
     return Boolean(this.config.controlMode === "controlled" && this.config.nodeAgentUrl && this.config.registrationToken && this.config.instanceId);
+  }
+
+  updateNodeAgentUrl(nodeAgentUrl: string) {
+    const input = UpdateControlledInstanceNodeAgentConnectionSchema.parse({ nodeAgentUrl });
+    const parsed = new URL(input.nodeAgentUrl);
+    const normalized = parsed.origin;
+    if (normalized === this.config.nodeAgentUrl?.replace(/\/$/, "")) return normalized;
+    this.config.nodeAgentUrl = normalized;
+    this.connectionRevision += 1;
+    this.registeredInstanceId = "";
+    this.reconnectBackoff.reset();
+    if (!this.stopped) this.schedule(0);
+    return normalized;
   }
 
   async start() {
@@ -197,6 +211,7 @@ export class NodeAgentRegistrationClient {
   }
 
   private async registerOnce() {
+    const connectionRevision = this.connectionRevision;
     const snapshot = await this.snapshotProvider();
     const instanceId = this.requiredInstanceId();
     const response = await this.request(`node-agent/instances/${encodeURIComponent(instanceId)}/register`, {
@@ -214,6 +229,7 @@ export class NodeAgentRegistrationClient {
       workspace: snapshot.workspace,
       processIncarnationId: this.processIncarnationId,
     });
+    if (connectionRevision !== this.connectionRevision) return;
     this.registeredInstanceId = String(response.id || instanceId);
     await this.heartbeatOnce();
   }
@@ -255,6 +271,7 @@ export class NodeAgentRegistrationClient {
 
   private async runCycle() {
     if (this.stopped) return;
+    const connectionRevision = this.connectionRevision;
     let succeeded = false;
     try {
       await this.runExclusive(() => this.registeredInstanceId ? this.heartbeatOnce() : this.registerOnce());
@@ -263,7 +280,11 @@ export class NodeAgentRegistrationClient {
     } catch (error) {
       console.warn(`node agent registration sync failed: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
-      if (!this.stopped) this.schedule(succeeded ? this.config.heartbeatIntervalMs : this.reconnectBackoff.next().delay);
+      if (!this.stopped) {
+        this.schedule(connectionRevision === this.connectionRevision
+          ? succeeded ? this.config.heartbeatIntervalMs : this.reconnectBackoff.next().delay
+          : 0);
+      }
     }
   }
 

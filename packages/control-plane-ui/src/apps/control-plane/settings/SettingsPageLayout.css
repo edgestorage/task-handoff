@@ -1,0 +1,5 @@
+.settings-content-page {
+  margin-inline: auto;
+  padding-bottom: 20px;
+  width: min(100%, var(--settings-content-max-width, 1080px));
+}

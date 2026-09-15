@@ -53,6 +53,36 @@ test("SOCKS server pauses application bytes until the tunnel stream opens", asyn
   assert.equal(socket.paused, false);
 });
 
+test("SOCKS server contains connection resets during the handshake", () => {
+  const server = new BrowserSocksServer({ async attach() {} });
+  const socket = new TestSocket();
+  server.accept(socket);
+
+  assert.doesNotThrow(() => socket.emit("error", Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" })));
+  assert.equal(socket.destroyed, true);
+  assert.equal(server.sockets.size, 0);
+});
+
+test("SOCKS server contains connection resets while the tunnel stream is opening", async () => {
+  let finishAttach;
+  const channel = {
+    attach() {
+      return new Promise((resolve) => { finishAttach = resolve; });
+    },
+  };
+  const server = new BrowserSocksServer(channel);
+  const socket = new TestSocket();
+  server.accept(socket);
+  socket.emit("data", Buffer.from([5, 1, 0, 5, 1, 0, 1, 127, 0, 0, 1, 0, 80]));
+
+  assert.doesNotThrow(() => socket.emit("error", Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" })));
+  assert.equal(socket.destroyed, true);
+  assert.equal(server.sockets.size, 0);
+
+  finishAttach();
+  await new Promise((resolve) => setImmediate(resolve));
+});
+
 test("browser partitions are stable per authority and isolated across instances", () => {
   assert.equal(partitionName("cp_1", "instance_1"), partitionName("cp_1", "instance_1"));
   assert.notEqual(partitionName("cp_1", "instance_1"), partitionName("cp_1", "instance_2"));
