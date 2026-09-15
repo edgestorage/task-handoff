@@ -1,6 +1,6 @@
 <template>
   <ScrollArea class="environment-template-scroll" :horizontal="false">
-    <div class="environment-template-page">
+    <div class="environment-template-page settings-content-page">
       <header class="environment-template-page-head">
         <p>{{ t("settings.environmentTemplateRegistry.description") }}</p>
       </header>
@@ -144,7 +144,7 @@ async function removeTemplate() {
 
 <style scoped>
 .environment-template-scroll { height: 100%; min-height: 0; width: 100%; }
-.environment-template-page { display: grid; gap: 12px; margin: 0 auto; padding: 0 10px 20px 0; width: min(100%, var(--settings-content-max-width, 1080px)); }
+.environment-template-page { display: grid; gap: 12px; }
 .environment-template-page-head p { color: var(--text-muted); font-size: 12px; line-height: 1.45; margin: 0; }
 .environment-template-toolbar { display: grid; gap: 8px; grid-template-columns: minmax(240px, 1fr) 220px 170px; }
 .environment-template-search { align-items: center; display: flex; min-width: 0; position: relative; }
@@ -175,5 +175,5 @@ async function removeTemplate() {
 .environment-template-diagnostic { color: hsl(var(--destructive)) !important; font-size: 12px; overflow-wrap: anywhere; }
 .spin { animation: environment-template-settings-spin 1s linear infinite; }
 @keyframes environment-template-settings-spin { to { transform: rotate(360deg); } }
-@media(max-width: 800px) { .environment-template-page { padding-right: 7px; } .environment-template-toolbar { grid-template-columns: 1fr 1fr; } .environment-template-search { grid-column: 1 / -1; } .environment-template-row { align-items: start; grid-template-columns: 1fr auto; } .environment-template-summary { grid-column: 1 / -1; } }
+@media(max-width: 800px) { .environment-template-toolbar { grid-template-columns: 1fr 1fr; } .environment-template-search { grid-column: 1 / -1; } .environment-template-row { align-items: start; grid-template-columns: 1fr auto; } .environment-template-summary { grid-column: 1 / -1; } }
 </style>

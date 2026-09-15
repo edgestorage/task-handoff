@@ -24,6 +24,8 @@ import {
   supportsGitCliCredentialBroker,
   supportsControlledInstancePrivateModelCatalog,
   supportsControlledInstanceCodexManagedSettings,
+  supportsControlledInstanceNodeAgentConnectionUpdate,
+  UpdateControlledInstanceNodeAgentConnectionSchema,
   type BuildInfo,
   type ControlledInstance,
   type InstanceResourceMetrics,
@@ -308,6 +310,33 @@ async function fetchWithTimeout(fetchImpl: typeof fetch, url: string, init: Requ
   }
 }
 
+export async function syncControlledInstanceNodeAgentConnection(
+  fetchImpl: typeof fetch,
+  instance: ControlledInstance,
+  nodeAgentUrl: string,
+  resolveInstanceWeb: ResolveInstanceWeb = async (value) => nodeLocalInstanceWebBase(value),
+) {
+  if (!instance.registrationToken) return "unavailable" as const;
+  const input = UpdateControlledInstanceNodeAgentConnectionSchema.parse({ nodeAgentUrl });
+  const response = await fetchWithTimeout(fetchImpl, `${await resolveInstanceWeb(instance)}/api/internal/node-agent-connection`, {
+    method: "PUT",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${instance.registrationToken}`,
+    },
+    body: JSON.stringify(input),
+  }, 5_000);
+  // Compatibility for older controlled instances: endpoint updates are additive.
+  if (response.status === 404) return "unsupported" as const;
+  if (!response.ok) {
+    throw Object.assign(new Error(`Controlled instance rejected the node-agent connection update (HTTP ${response.status}).`), {
+      code: "NODE_AGENT_CONNECTION_UPDATE_FAILED",
+      statusCode: response.status,
+    });
+  }
+  return "applied" as const;
+}
+
 async function autoImportAgentConfig(fetchImpl: typeof fetch, instance: ControlledInstance, action: "start" | "restart", loggers: NodeAgentLifecycleLoggers, resolveInstanceWeb: ResolveInstanceWeb) {
   if (!instance.config.autoImportAgentConfigs) {
     loggers.diagnostic({ instanceId: instance.id, action }, "node instance config auto-import skipped");
@@ -480,16 +509,24 @@ async function startNodeInstance(
   const starting = state.applyInstanceLifecycle(id, { type: "start-requested" });
   const adapter = runtimeAdapters.forRuntime(state.requireRuntime(starting.runtimeId));
   const result = await adapter.start({ ...state.context(starting), signal });
+  const observed = ControlledInstanceSchema.parse({
+    ...starting,
+    ...result,
+    target: { ...starting.target, ...result.target },
+    workspace: result.workspace ? { ...starting.workspace, error: undefined, ...result.workspace } : starting.workspace,
+    runtime: result.runtime ? { ...starting.runtime, ...result.runtime } : starting.runtime,
+    updatedAt: now(),
+  });
   const probedEndpointStatus = result.target?.web
-    ? await probeInstanceEndpoint(fetchImpl, ControlledInstanceSchema.parse({
-        ...starting,
-        ...result,
-        target: { ...starting.target, ...result.target },
-        workspace: result.workspace ? { ...starting.workspace, error: undefined, ...result.workspace } : starting.workspace,
-        runtime: result.runtime ? { ...starting.runtime, ...result.runtime } : starting.runtime,
-        updatedAt: now(),
-      }), resolveInstanceWeb)
+    ? await probeInstanceEndpoint(fetchImpl, observed, resolveInstanceWeb)
     : "unknown" as const;
+  if (state.requireRuntime(starting.runtimeId).type === "docker" && probedEndpointStatus === "reachable") {
+    void syncControlledInstanceNodeAgentConnection(fetchImpl, observed, state.containerUrl, resolveInstanceWeb).then((syncStatus) => {
+      loggers.diagnostic({ instanceId: id, action: "node-agent-connection.sync", reason, syncStatus, nodeAgentUrl: state.containerUrl }, "node instance connection endpoint synchronized");
+    }).catch((error) => {
+      loggers.warn({ instanceId: id, action: "node-agent-connection.sync", reason, error: error instanceof Error ? error.message : String(error) }, "node instance connection endpoint sync deferred");
+    });
+  }
   const stored = state.applyInstanceLifecycle(id, {
     type: "runtime-lifecycle-completed",
     baseline: starting,
@@ -937,6 +974,13 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
             error: instance.runtimeVersion.error,
           }, "node instance started with pending runtime convergence");
         }
+      }
+      if (runtime.type === "docker" && instance.targetStatus === "reachable") {
+        void syncControlledInstanceNodeAgentConnection(fetchImpl, instance, state.containerUrl, resolveInstanceWeb).then((syncStatus) => {
+          lifecycleLoggers.diagnostic({ instanceId: id, action: "node-agent-connection.sync", reason, syncStatus, nodeAgentUrl: state.containerUrl }, "node instance connection endpoint synchronized after runtime convergence");
+        }).catch((error) => {
+          lifecycleLoggers.warn({ instanceId: id, action: "node-agent-connection.sync", reason, error: error instanceof Error ? error.message : String(error) }, "node instance connection endpoint sync after runtime convergence deferred");
+        });
       }
       if (!shouldContinue()) return state.requireInstance(id);
       await autoImportAgentConfig(fetchImpl, instance, "start", lifecycleLoggers, resolveInstanceWeb);
@@ -1407,11 +1451,10 @@ export async function runNodeAgentServer(options: RunNodeAgentServerOptions) {
     const settings = createRuntimeSettingsFile(paths, defaults);
     let listenerConfig = settings.get().externalListener;
     if (process.env.TASK_HANDOFF_NODE_AGENT_PORT_CONFLICT === "allocate") {
-      const allocated = await allocateNodeAgentExternalListener(listenerConfig);
-      if (allocated.port !== listenerConfig.port) {
-        settings.put({ version: 1, externalListener: allocated });
-        listenerConfig = allocated;
-      }
+      // Port allocation is a process-local recovery path. Persisting a temporary fallback
+      // would make a transient duplicate process permanently move the listener and strand
+      // existing Docker instances that still connect to the configured endpoint.
+      listenerConfig = await allocateNodeAgentExternalListener(listenerConfig);
     }
     const publishActiveListener = (listener: ReturnType<NodeAgentExternalListenerManager["current"]>) => {
       if (!lock.updateDetails({
@@ -1446,6 +1489,30 @@ export async function runNodeAgentServer(options: RunNodeAgentServerOptions) {
       config: listenerConfig,
       source: hadPersistedSettings ? "persisted" : "bootstrap",
       onActiveListener: publishActiveListener,
+      validateUpdate: () => {
+        const active = nodeAgentState.listInstances().filter((instance) => !["created", "stopped", "failed"].includes(instance.status));
+        const unsupported = active.filter((instance) => instance.targetStatus !== "reachable"
+          || !supportsControlledInstanceNodeAgentConnectionUpdate(instance.capabilities));
+        if (unsupported.length) {
+          throw Object.assign(new Error(`Cannot change the node agent port while ${unsupported.length} controlled instance(s) cannot switch endpoints live.`), {
+            statusCode: 409,
+            code: "NODE_AGENT_LISTENER_LIVE_UPDATE_UNSUPPORTED",
+            details: { instanceIds: unsupported.map((instance) => instance.id) },
+          });
+        }
+      },
+      synchronizeUpdate: async () => {
+        const active = nodeAgentState.listInstances().filter((instance) => !["created", "stopped", "failed"].includes(instance.status));
+        await Promise.all(active.map((instance) => {
+          const runtime = nodeAgentState.requireRuntime(instance.runtimeId);
+          const nodeAgentUrl = runtime.type === "docker" ? nodeAgentState.containerUrl : nodeAgentState.localNodeAgentUrl;
+          return syncControlledInstanceNodeAgentConnection(options.fetchImpl || fetch, instance, nodeAgentUrl).then((status) => {
+            if (status !== "applied") {
+              throw new Error(`Controlled instance ${instance.id} did not apply the node-agent endpoint update (${status}).`);
+            }
+          });
+        }));
+      },
     });
     app.decorate("nodeAgentListenerManager", listenerManager);
     let ipcServer: http.Server | undefined;

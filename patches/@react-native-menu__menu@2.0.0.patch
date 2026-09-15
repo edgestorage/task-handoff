@@ -83,7 +83,12 @@ diff --git a/ios/NewArch/MenuView.mm b/ios/NewArch/MenuView.mm
          eventEmitter->onOpenMenu({});
      }
  }
-@@ -107,0 +137,19 @@
+@@ -103,8 +133,28 @@ using namespace facebook::react;
+     for (const MenuViewActionsStruct &action : actions) {
+         // first convert the subactions if they exist
+         NSMutableArray<NSDictionary *> *subactionsArray = [NSMutableArray arrayWithCapacity:actions.size()];
+         if (action.subactions.size() > 0) {
+             for (const MenuViewActionsSubactionsStruct &subaction : action.subactions) {
 +                NSMutableArray<NSDictionary *> *nestedSubactionsArray = [NSMutableArray arrayWithCapacity:subaction.subactions.size()];
 +                for (const MenuViewActionsSubactionsSubactionsStruct &nestedSubaction : subaction.subactions) {
 +                    NSDictionary *nestedSubactionDict = @{
@@ -103,8 +108,18 @@ diff --git a/ios/NewArch/MenuView.mm b/ios/NewArch/MenuView.mm
 +                    };
 +                    [nestedSubactionsArray addObject:nestedSubactionDict];
 +                }
-@@ -121,0 +170 @@
++
+                 NSDictionary *subactionDict = @{
+                     @"id": [NSString stringWithUTF8String:subaction.id.c_str()],
+                     @"title": [NSString stringWithUTF8String:subaction.title.c_str()],
+@@ -119,6 +169,7 @@ using namespace facebook::react;
+                         @"disabled": @(subaction.attributes.disabled),
+                         @"hidden": @(subaction.attributes.hidden),
+                     },
 +                    @"subactions": nestedSubactionsArray,
+                 };
+                 [subactionsArray addObject:subactionDict];
+             }
 diff --git a/ios/Shared/MenuViewImplementation.swift b/ios/Shared/MenuViewImplementation.swift
 --- a/ios/Shared/MenuViewImplementation.swift
 +++ b/ios/Shared/MenuViewImplementation.swift

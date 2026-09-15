@@ -14,7 +14,7 @@ const WebSocket = require("ws");
 const { z } = require("zod");
 
 const { createControlPlaneApp, initializeControlPlaneCredentials, replaceControlPlaneCredentials, routeAuthorization } = require("../packages/control-plane/src/server.ts");
-const { connectReverseTunnel, createNodeAgentApp, createReverseTunnelManager, listenNodeAgentIpcServer, mergeRuntimeLifecycleResult, NodeAgentExternalListenerManager, requestRuntimeAppSessionDrain, resolvedDockerImageUpdatePatch, runtimeVersionStateForActual } = require("../packages/control-plane/src/node-agent.ts");
+const { connectReverseTunnel, createNodeAgentApp, createReverseTunnelManager, listenNodeAgentIpcServer, mergeRuntimeLifecycleResult, NodeAgentExternalListenerManager, requestRuntimeAppSessionDrain, resolvedDockerImageUpdatePatch, runtimeVersionStateForActual, syncControlledInstanceNodeAgentConnection } = require("../packages/control-plane/src/node-agent.ts");
 const { ControlPlaneChatGatewayRuntime, aiSessionDeliveryText, createDingdingStreamClient } = require("../packages/control-plane/src/chat-gateway.ts");
 const { ControlledInstanceGateway } = require("../packages/control-plane/src/control-plane/instances/gateway.ts");
 const { parseDingdingCardEvent, sendDingdingActionsCard } = require("../packages/control-plane/src/control-plane/chat/adapters/dingding.ts");
@@ -165,6 +165,35 @@ test("runtime app-session drain prefers managed bulk drain and falls back across
     ["/api/apps/sessions", "GET"],
     ["/api/apps/sessions/app_running/stop", "POST"],
   ]);
+});
+
+test("node agent pushes its active Docker connection endpoint through the authenticated instance channel", async () => {
+  const instance = {
+    id: "inst_connection",
+    registrationToken: "registration-token",
+    target: { strategy: "direct-port", web: "http://127.0.0.1:19000" },
+  };
+  const calls = [];
+  const applied = await syncControlledInstanceNodeAgentConnection(async (url, init) => {
+    calls.push({ url: String(url), method: init.method, headers: init.headers, body: JSON.parse(init.body) });
+    return new Response(JSON.stringify({ data: { applied: true } }), { status: 200 });
+  }, instance, "http://host.docker.internal:18092", async () => instance.target.web);
+
+  assert.equal(applied, "applied");
+  assert.deepEqual(calls, [{
+    url: "http://127.0.0.1:19000/api/internal/node-agent-connection",
+    method: "PUT",
+    headers: { "content-type": "application/json", authorization: "Bearer registration-token" },
+    body: { nodeAgentUrl: "http://host.docker.internal:18092" },
+  }]);
+
+  const unsupported = await syncControlledInstanceNodeAgentConnection(
+    async () => new Response("not found", { status: 404 }),
+    instance,
+    "http://host.docker.internal:18093",
+    async () => instance.target.web,
+  );
+  assert.equal(unsupported, "unsupported");
 });
 
 test("control plane reports the explicit packaged version in health", async (t) => {
@@ -628,9 +657,10 @@ test("app inventory protocol is strict and stored legacy app capability is disca
     logs: false,
     aiSessionWorkspaceSelection: false,
     aiSessionPersistenceSettings: false,
-    privateModelCatalog: false,
-    codexManagedSettings: false,
-    gitCliCredentialBroker: false,
+      privateModelCatalog: false,
+      codexManagedSettings: false,
+      nodeAgentConnectionUpdate: false,
+      gitCliCredentialBroker: false,
     gitCredentialProxy: false,
     aiSessionTimeline: { sessionReadAgents: [], turnReadAgents: [], liveItemAgents: [] },
     aiSessionConversationAttachments: { metadataAgents: [], contentAgents: [], uploadAgents: [], retentionSettings: false, fileSizeLimitSettings: false },
@@ -3014,13 +3044,18 @@ test("node agent process lock enforces one owner independent of port", () => {
   first.release();
 });
 
-test("node agent acquires its singleton before initializing or writing runtime settings", () => {
+test("node agent acquires its singleton before reading settings and does not persist conflict fallback ports", () => {
   const source = fs.readFileSync(path.join(__dirname, "../packages/control-plane/src/node-agent/app.ts"), "utf8");
   const runServer = source.slice(source.indexOf("export async function runNodeAgentServer"));
   const lock = runServer.indexOf("acquireNodeAgentSingletonLock");
+  const settings = runServer.indexOf("createRuntimeSettingsFile");
+  const allocate = runServer.indexOf("allocateNodeAgentExternalListener");
+  const createApp = runServer.indexOf("createNodeAgentApp");
   assert.ok(lock >= 0);
-  assert.ok(lock < runServer.indexOf("createRuntimeSettingsFile"));
-  assert.ok(lock < runServer.indexOf("settings.put"));
+  assert.ok(lock < settings);
+  assert.ok(settings < allocate);
+  assert.ok(allocate < createApp);
+  assert.equal(runServer.slice(allocate, createApp).includes("settings.put"), false);
 });
 
 test("local process exit waits for the forced process exit event", async () => {

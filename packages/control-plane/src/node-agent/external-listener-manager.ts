@@ -66,6 +66,8 @@ export class NodeAgentExternalListenerManager {
   private status: NodeAgentExternalListener["status"] = "error";
   private error?: string;
   private readonly onActiveListener?: (listener: NodeAgentExternalListener) => void;
+  private readonly validateUpdate?: (candidate: NodeAgentExternalListenerConfig) => void | Promise<void>;
+  private readonly synchronizeUpdate?: (candidate: NodeAgentExternalListenerConfig) => void | Promise<void>;
   private updateQueue: Promise<void> = Promise.resolve();
 
   constructor(input: {
@@ -75,6 +77,8 @@ export class NodeAgentExternalListenerManager {
     config: NodeAgentExternalListenerConfig;
     source: NodeAgentExternalListener["source"];
     onActiveListener?: (listener: NodeAgentExternalListener) => void;
+    validateUpdate?: (candidate: NodeAgentExternalListenerConfig) => void | Promise<void>;
+    synchronizeUpdate?: (candidate: NodeAgentExternalListenerConfig) => void | Promise<void>;
   }) {
     this.app = input.app;
     this.state = input.state;
@@ -82,6 +86,8 @@ export class NodeAgentExternalListenerManager {
     this.config = input.config;
     this.source = input.source;
     this.onActiveListener = input.onActiveListener;
+    this.validateUpdate = input.validateUpdate;
+    this.synchronizeUpdate = input.synchronizeUpdate;
     this.app.server.on("connection", (socket) => {
       this.sockets.add(socket);
       socket.once("close", () => this.sockets.delete(socket));
@@ -132,12 +138,13 @@ export class NodeAgentExternalListenerManager {
     if (candidate.bindScope === this.config.bindScope && candidate.port === this.config.port) return this.current();
     if (candidate.port !== this.config.port) {
       const blockingInstanceCount = this.state.runningInstanceCount();
-      if (blockingInstanceCount > 0) {
+      if (blockingInstanceCount > 0 && !this.synchronizeUpdate) {
         throw Object.assign(
           new Error(`Cannot change the node agent port while ${blockingInstanceCount} controlled instance(s) are running.`),
           { statusCode: 409, code: "NODE_AGENT_LISTENER_PORT_IN_USE_BY_INSTANCES", blockingInstanceCount },
         );
       }
+      await this.validateUpdate?.(candidate);
     }
 
     const previous = this.snapshot();
@@ -151,12 +158,29 @@ export class NodeAgentExternalListenerManager {
         { statusCode: 409, code: "NODE_AGENT_LISTENER_BIND_FAILED" },
       );
     }
+    this.state.setListenerPort(candidate.port);
+    try {
+      await this.synchronizeUpdate?.(candidate);
+    } catch (error) {
+      await this.stop();
+      await this.restore(previous);
+      await Promise.resolve(this.synchronizeUpdate?.(previous.config)).catch((rollbackError) => {
+        this.app.log.error({ error: rollbackError instanceof Error ? rollbackError.message : String(rollbackError) }, "node agent listener instance endpoint rollback failed");
+      });
+      throw Object.assign(
+        new Error(`Failed to switch controlled instances to node agent port ${candidate.port}: ${error instanceof Error ? error.message : String(error)}`),
+        { statusCode: 409, code: "NODE_AGENT_LISTENER_INSTANCE_SYNC_FAILED" },
+      );
+    }
 
     try {
       this.settings.put({ version: 1, externalListener: candidate });
     } catch (error) {
       await this.stop();
       await this.restore(previous);
+      await Promise.resolve(this.synchronizeUpdate?.(previous.config)).catch((rollbackError) => {
+        this.app.log.error({ error: rollbackError instanceof Error ? rollbackError.message : String(rollbackError) }, "node agent listener persistence rollback failed");
+      });
       throw Object.assign(
         new Error(`Failed to persist node agent TCP listener: ${error instanceof Error ? error.message : String(error)}`),
         { statusCode: 500, code: "NODE_AGENT_LISTENER_PERSIST_FAILED" },
@@ -167,7 +191,6 @@ export class NodeAgentExternalListenerManager {
     this.source = "persisted";
     this.status = "listening";
     this.error = undefined;
-    this.state.setListenerPort(candidate.port);
     const current = this.current();
     this.onActiveListener?.(current);
     return current;

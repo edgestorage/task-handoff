@@ -107,6 +107,7 @@ test("conversation detail renders retained image and file metadata without a UI 
 
 test("image preview is a transparent fitted pan-and-zoom canvas with bounded dragging", () => {
   const preview = fs.readFileSync(new URL("../src/components/ai-session/AiSessionImagePreview.vue", import.meta.url), "utf8");
+  assert.match(preview, /:global\(\.ai-session-image-preview\) \{\s*-webkit-app-region: no-drag;/);
   assert.match(preview, /background: transparent/);
   assert.match(preview, /width: 100vw/);
   assert.match(preview, /height: 100dvh/);

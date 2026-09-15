@@ -1,6 +1,6 @@
 <template>
   <ScrollArea class="git-credentials-scroll" :horizontal="false">
-    <div class="git-credentials-page">
+    <div class="git-credentials-page settings-content-page">
       <header class="git-credentials-page-head">
         <p>{{ t("settings.gitCredentials.description") }}</p>
         <Button size="sm" @click="openCreate">
@@ -293,7 +293,7 @@ async function removeCredential() {
 
 <style scoped>
 .git-credentials-scroll { height: 100%; min-height: 0; width: 100%; }
-.git-credentials-page { display: grid; gap: 12px; margin: 0 auto; padding: 0 10px 20px 0; width: min(100%, var(--settings-content-max-width, 1080px)); }
+.git-credentials-page { display: grid; gap: 12px; }
 .git-credentials-page-head { align-items: flex-start; display: flex; gap: 16px; justify-content: space-between; }
 .git-credentials-page-head p, .git-credential-form-section h3, .git-credential-form-section p { margin: 0; }
 .git-credentials-page-head p { color: var(--text-muted); font-size: 12px; line-height: 1.45; }
@@ -338,7 +338,6 @@ async function removeCredential() {
 .git-credentials-form-error { color: var(--status-danger); font-size: 12px; margin: 0; }
 .git-credential-dialog-footer { border-top: 1px solid var(--line); display: flex; gap: 8px; justify-content: flex-end; padding: 8px 16px; }
 @media (max-width: 760px) {
-  .git-credentials-page { padding-right: 7px; }
   .git-credentials-toolbar { grid-template-columns: 1fr 1fr; }
   .git-credentials-search { grid-column: 1 / -1; }
   .git-credential-row { align-items: start; }

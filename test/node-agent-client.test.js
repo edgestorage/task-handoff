@@ -153,6 +153,69 @@ test("controlled instance starts serving while registration retries in the backg
   assert.match(requests[2], /\/heartbeat$/);
 });
 
+test("controlled instance switches node-agent origins without restarting", async () => {
+  const requests = [];
+  const client = new NodeAgentRegistrationClient(
+    {
+      controlMode: "controlled",
+      nodeAgentUrl: "http://node-old.local:18091",
+      registrationToken: "secret-token",
+      instanceId: "inst_switch",
+      heartbeatIntervalMs: 10_000,
+    },
+    async () => snapshot(),
+    async (url) => {
+      requests.push(String(url));
+      return new Response(JSON.stringify({ data: url.endsWith("/register") ? { id: "inst_switch" } : { ok: true } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+  );
+
+  await client.register();
+  assert.equal(client.updateNodeAgentUrl("http://node-new.local:18092/"), "http://node-new.local:18092");
+  await client.heartbeat();
+
+  assert.match(requests.at(-1), /^http:\/\/node-new\.local:18092\/api\//);
+  assert.throws(() => client.updateNodeAgentUrl("http://user:secret@node.local/"), /HTTP\(S\) origin/);
+  assert.throws(() => client.updateNodeAgentUrl("file:///tmp/node-agent.sock"), /HTTP\(S\) origin/);
+});
+
+test("an endpoint switch during an in-flight registration immediately retries the new origin", async () => {
+  const requests = [];
+  let releaseOldRequest;
+  const oldRequestGate = new Promise((resolve) => { releaseOldRequest = resolve; });
+  const client = new NodeAgentRegistrationClient(
+    {
+      controlMode: "controlled",
+      nodeAgentUrl: "http://node-old.local:18091",
+      registrationToken: "secret-token",
+      instanceId: "inst_switch_race",
+      heartbeatIntervalMs: 60_000,
+    },
+    async () => snapshot(),
+    async (url) => {
+      requests.push(String(url));
+      if (String(url).startsWith("http://node-old.local")) await oldRequestGate;
+      return new Response(JSON.stringify({ data: url.endsWith("/register") ? { id: "inst_switch_race" } : { ok: true } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+  );
+
+  await client.start();
+  await waitFor(() => requests.length === 1);
+  client.updateNodeAgentUrl("http://node-new.local:18092");
+  releaseOldRequest();
+  await waitFor(() => requests.some((url) => url.startsWith("http://node-new.local:18092")));
+  client.stop();
+
+  assert.match(requests[0], /^http:\/\/node-old\.local:18091\/api\//);
+  assert.match(requests.at(-1), /^http:\/\/node-new\.local:18092\/api\//);
+});
+
 test("controlled instance serializes concurrent heartbeat requests", async () => {
   let heartbeatRequests = 0;
   let releaseHeartbeat;

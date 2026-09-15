@@ -3,13 +3,13 @@ import { shallowRef } from "vue";
 export type AiSessionQueuePlacement = "detail" | "composer";
 
 const STORAGE_KEY = "task-handoff.control-plane.ai-session-queue-placement";
-const queuePlacement = shallowRef<AiSessionQueuePlacement>("detail");
+const queuePlacement = shallowRef<AiSessionQueuePlacement>("composer");
 let initialized = false;
 
 export function useAiSessionQueuePlacement() {
   if (!initialized) {
     initialized = true;
-    queuePlacement.value = window.localStorage?.getItem(STORAGE_KEY) === "composer" ? "composer" : "detail";
+    queuePlacement.value = window.localStorage?.getItem(STORAGE_KEY) === "detail" ? "detail" : "composer";
   }
 
   function setQueuePlacement(value: unknown) {

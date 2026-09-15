@@ -1,6 +1,6 @@
 <template>
   <ScrollArea class="chat-settings-scroll" :horizontal="false">
-    <div class="chat-settings-page">
+    <div class="chat-settings-page settings-content-page">
       <header class="chat-page-head">
         <p>{{ t("settings.chatBridge.pageDescription") }}</p>
         <div class="chat-head-actions">
@@ -221,7 +221,7 @@ async function confirmDelete(bridge?: ChatBridgeConfig) { if (!bridge) return; c
 
 <style scoped>
 .chat-settings-scroll { height: 100%; min-height: 0; width: 100%; }
-.chat-settings-page { display: grid; gap: 12px; margin: 0 auto; padding: 0 10px 20px 0; width: min(100%, var(--settings-content-max-width, 1080px)); }
+.chat-settings-page { display: grid; gap: 12px; }
 .chat-page-head { align-items: flex-start; display: flex; gap: 16px; justify-content: space-between; }
 .chat-page-head p, .chat-form-section h3, .chat-form-section p { margin: 0; }
 .chat-page-head p { color: var(--text-muted); font-size: 12px; line-height: 1.45; }
@@ -274,5 +274,5 @@ async function confirmDelete(bridge?: ChatBridgeConfig) { if (!bridge) return; c
 .spin { animation: spin 900ms linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media(max-width:900px) { .chat-row-main { grid-template-columns: minmax(220px,1fr) minmax(210px,.8fr) auto; } .chat-row-actions { grid-column: 3; grid-row: 1; } .chat-row-status { display: none; } }
-@media(max-width:720px) { .chat-settings-page { padding-right: 7px; } .chat-toolbar { grid-template-columns: 1fr 1fr; } .chat-search { grid-column: 1/-1; } .chat-row-main { align-items: start; grid-template-columns: 1fr auto; } .chat-summary { grid-column: 1/-1; } .chat-row-actions { grid-column: 2; } .chat-form-grid { grid-template-columns: 1fr; } }
+@media(max-width:720px) { .chat-toolbar { grid-template-columns: 1fr 1fr; } .chat-search { grid-column: 1/-1; } .chat-row-main { align-items: start; grid-template-columns: 1fr auto; } .chat-summary { grid-column: 1/-1; } .chat-row-actions { grid-column: 2; } .chat-form-grid { grid-template-columns: 1fr; } }
 </style>

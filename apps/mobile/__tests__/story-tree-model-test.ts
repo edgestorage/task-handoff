@@ -31,8 +31,8 @@ describe('mobile Story tree model', () => {
   test('normalizes, reorders, and previews the complete manual Story order', () => {
     const stories = [story('a', 'n1', 'A'), story('b', 'n1', 'B'), story('c', 'n2', 'C')];
     const keys = normalizeManualStoryOrder(stories, ['n1:b', 'missing', 'n1:b']);
-    expect(keys).toEqual(['n1:b', 'n1:a', 'n2:c']);
-    expect(reorderStoryKeys(keys, 'n1:b', 'n2:c', 'after')).toEqual(['n1:a', 'n2:c', 'n1:b']);
+    expect(keys).toEqual(['n1:a', 'n2:c', 'n1:b']);
+    expect(reorderStoryKeys(keys, 'n1:a', 'n1:b', 'after')).toEqual(['n2:c', 'n1:b', 'n1:a']);
     expect(storyDragPreview(keys, 'n1:b', 25, [
       { key: 'n1:b', center: 25 },
       { key: 'n1:a', center: 85 },

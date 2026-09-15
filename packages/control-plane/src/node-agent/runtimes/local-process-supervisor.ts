@@ -289,6 +289,9 @@ export class LocalProcessSupervisor {
         }
       }
     });
+    // The controlled instance owns its own lifecycle and may outlive this node-agent.
+    // Keep observing it while the agent is active without keeping the agent process alive.
+    child.unref();
   }
 
   markReady(instanceId: string, child: ChildProcessWithoutNullStreams) {

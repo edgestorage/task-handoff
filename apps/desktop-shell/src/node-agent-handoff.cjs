@@ -61,10 +61,6 @@ function readNodeAgentLockOwner(lockPath) {
   }
 }
 
-function sameLockOwner(left, right) {
-  return Boolean(left && right && left.pid === right.pid && left.token === right.token);
-}
-
 function processIsAlive(pid) {
   try {
     process.kill(pid, 0);
@@ -157,12 +153,12 @@ function lockOwnerMatchesProcess(owner, options) {
 async function waitForOwnerExit(owner, options) {
   const deadline = Date.now() + options.timeoutMs;
   while (Date.now() < deadline) {
-    if (!lockOwnerMatchesProcess(owner, options) || !sameLockOwner(options.readOwner(options.lockPath), owner)) {
+    if (!lockOwnerMatchesProcess(owner, options)) {
       return true;
     }
     await options.wait(options.pollMs);
   }
-  return !lockOwnerMatchesProcess(owner, options) || !sameLockOwner(options.readOwner(options.lockPath), owner);
+  return !lockOwnerMatchesProcess(owner, options);
 }
 
 async function stopExistingDesktopNodeAgent(options) {
@@ -192,8 +188,6 @@ async function stopExistingDesktopNodeAgent(options) {
   }
 
   const common = {
-    lockPath,
-    readOwner,
     isAlive,
     processIdentity,
     wait,
@@ -204,10 +198,6 @@ async function stopExistingDesktopNodeAgent(options) {
     return { status: "stopped", owner };
   }
 
-  const currentOwner = readOwner(lockPath);
-  if (!sameLockOwner(currentOwner, owner)) {
-    return { status: "stopped", owner };
-  }
   if (!lockOwnerMatchesProcess(owner, common)) {
     return { status: "stopped", owner };
   }

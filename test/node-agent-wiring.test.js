@@ -58,6 +58,7 @@ function fakeChild(pid) {
   child.killed = false;
   child.exitCode = null;
   child.signalCode = null;
+  child.unref = () => {};
   return child;
 }
 

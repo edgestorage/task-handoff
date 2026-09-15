@@ -1,6 +1,6 @@
 <template>
   <ScrollArea class="image-settings-scroll" :horizontal="false">
-    <div class="image-settings-page">
+    <div class="image-settings-page settings-content-page">
       <header class="image-page-head">
         <p>{{ t("settings.imageRegistry.pageDescription") }}</p>
         <div class="image-head-actions">
@@ -224,7 +224,7 @@ async function confirmDelete() { const target = deleteTarget.value?.profile; if 
 
 <style scoped>
 .image-settings-scroll { height: 100%; min-height: 0; width: 100%; }
-.image-settings-page { display: grid; gap: 12px; margin: 0 auto; padding: 0 10px 20px 0; width: min(100%, var(--settings-content-max-width, 1080px)); }
+.image-settings-page { display: grid; gap: 12px; }
 .image-page-head { align-items: flex-start; display: flex; gap: 16px; justify-content: space-between; }
 .image-page-head p, .image-form-section h3, .image-form-section p { margin: 0; }
 .image-page-head p { color: var(--text-muted); font-size: 12px; line-height: 1.45; }
@@ -270,6 +270,6 @@ async function confirmDelete() { const target = deleteTarget.value?.profile; if 
 .image-form-section label { display: grid; gap: 5px; }
 .image-form-section label > span { color: var(--text-muted); font-size: 12px; }
 .image-editor-footer { border-top: 1px solid var(--line); display: flex; gap: 8px; justify-content: flex-end; padding: 8px 16px; }
-@media(max-width: 800px) { .image-settings-page { padding-right: 7px; } .image-toolbar { grid-template-columns: 1fr 1fr; } .image-search { grid-column: 1 / -1; } .image-row { align-items: start; grid-template-columns: 1fr auto; } .image-summary { grid-column: 1 / -1; } }
+@media(max-width: 800px) { .image-toolbar { grid-template-columns: 1fr 1fr; } .image-search { grid-column: 1 / -1; } .image-row { align-items: start; grid-template-columns: 1fr auto; } .image-summary { grid-column: 1 / -1; } }
 @media(max-width: 620px) { .image-page-head { align-items: stretch; flex-direction: column; } .image-head-actions { grid-template-columns: 1fr auto; } }
 </style>

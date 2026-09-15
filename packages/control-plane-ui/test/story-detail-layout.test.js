@@ -30,6 +30,10 @@ test("archived Stories do not render the new-session icon", () => {
   assert.match(storyView, /<small v-if="story\.archivedAt" class="story-tree-archived-label">[\s\S]*?<button v-else type="button" class="story-tree-add story-tree-story-add"/);
 });
 
+test("Story children keep compact spacing between expanded groups", () => {
+  assert.match(storyView, /\.story-tree-children \{[^}]*margin:2px 0 4px 16px;/);
+});
+
 test("Story detail tabs merge section counts into the sticky header", () => {
   assert.match(storyView, /class="story-detail-header-tabs"/);
   assert.match(storyView, /class="story-detail-tab-count"/);
@@ -69,6 +73,10 @@ test("Story detail actions match the tree menu after the standalone edit action"
 test("Story detail moves its scrollbar outward without shifting the content viewport", () => {
   assert.match(storyView, /\.story-detail-scroll \{[^}]*margin-right:-16px;/);
   assert.match(storyView, /\.story-detail-scroll :deep\(\[data-task-handoff-scroll-viewport\]\) \{ width:calc\(100% - 16px\); \}/);
+});
+
+test("Story session keeps its scrollbar eight pixels from the right edge", () => {
+  assert.match(storyView, /\.story-content\.story-session-pane > \.story-session-creator \{ padding:0 8px 0 0; background:transparent; \}/);
 });
 
 test("Story session directory uses explicit current and history tabs", () => {

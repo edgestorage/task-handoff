@@ -125,6 +125,7 @@ function defaultControlledInstanceFeatures() {
     aiSessionPersistenceSettings: false,
     privateModelCatalog: false,
     codexManagedSettings: false,
+    nodeAgentConnectionUpdate: false,
     gitCliCredentialBroker: false,
     gitCredentialProxy: false,
     aiSessionTimeline: emptyAiSessionTimelineCapabilities(),
@@ -173,6 +174,8 @@ export const ControlledInstanceFeatureCapabilitiesSchema = z.object({
   privateModelCatalog: z.boolean().optional(),
   // Compatibility for v0.0.28: absent means the instance cannot apply managed Codex settings.
   codexManagedSettings: z.boolean().optional(),
+  // Additive capability: older controlled instances keep using their bootstrap environment URL.
+  nodeAgentConnectionUpdate: z.boolean().optional(),
   // Additive capability: absent on v0.0.21 controlled instances.
   gitCliCredentialBroker: z.boolean().optional(),
   // Additive capability for the node-agent-owned runtime broker architecture.
@@ -189,6 +192,18 @@ export const ControlledInstanceCapabilitiesSchema = z.object({
   features: ControlledInstanceFeatureCapabilitiesSchema.default(defaultControlledInstanceFeatures),
 }).passthrough();
 
+export const UpdateControlledInstanceNodeAgentConnectionSchema = z.object({
+  nodeAgentUrl: z.string().trim().url().max(2_048).refine((value) => {
+    const parsed = new URL(value);
+    return /^https?:$/.test(parsed.protocol)
+      && !parsed.username
+      && !parsed.password
+      && parsed.pathname === "/"
+      && !parsed.search
+      && !parsed.hash;
+  }, "Node agent URL must be an HTTP(S) origin."),
+}).strict();
+
 export type AiSessionTimelineCapabilities = z.infer<typeof AiSessionTimelineCapabilitiesSchema>;
 export type AiSessionTimelineCapability = "session-read" | "turn-read" | "live-items";
 export type AiSessionConversationAttachmentCapabilities = z.infer<typeof AiSessionConversationAttachmentCapabilitiesSchema>;
@@ -202,6 +217,7 @@ type NormalizedControlledInstanceCapabilities = ControlledInstanceCapabilities &
     gitCredentialProxy: boolean;
     privateModelCatalog: boolean;
     browserTunnel: boolean;
+    nodeAgentConnectionUpdate: boolean;
   };
 };
 
@@ -226,6 +242,7 @@ export function normalizeControlledInstanceCapabilities(capabilities: unknown): 
     "aiSessionPersistenceSettings",
     "privateModelCatalog",
     "codexManagedSettings",
+    "nodeAgentConnectionUpdate",
     "gitCliCredentialBroker",
     "gitCredentialProxy",
   ] as const) {
@@ -258,6 +275,10 @@ export function supportsControlledInstancePrivateModelCatalog(capabilities: unkn
 
 export function supportsControlledInstanceCodexManagedSettings(capabilities: unknown) {
   return normalizeControlledInstanceCapabilities(capabilities).features.codexManagedSettings;
+}
+
+export function supportsControlledInstanceNodeAgentConnectionUpdate(capabilities: unknown) {
+  return normalizeControlledInstanceCapabilities(capabilities).features.nodeAgentConnectionUpdate;
 }
 
 export function supportsBrowserTunnel(capabilities: unknown) {

@@ -54,8 +54,8 @@ test("queued messages use one browser-local placement across detail and board co
   const dock = read("apps/control-plane/ai-board/AiSessionFloatingDock.vue");
 
   assert.match(preference, /type AiSessionQueuePlacement = "detail" \| "composer"/);
-  assert.match(preference, /shallowRef<AiSessionQueuePlacement>\("detail"\)/);
-  assert.match(preference, /localStorage\?\.getItem\(STORAGE_KEY\) === "composer" \? "composer" : "detail"/);
+  assert.match(preference, /shallowRef<AiSessionQueuePlacement>\("composer"\)/);
+  assert.match(preference, /localStorage\?\.getItem\(STORAGE_KEY\) === "detail" \? "detail" : "composer"/);
   assert.match(preference, /localStorage\?\.setItem\(STORAGE_KEY, value\)/);
   assert.match(appearance, /settings\.appearance\.queuePlacement/);
   assert.match(appearance, /<ToggleGroup[\s\S]*value="detail"[\s\S]*value="composer"/);

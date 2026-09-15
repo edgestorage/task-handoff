@@ -27,10 +27,10 @@ test("archived Stories remain after active Stories in every sort mode", () => {
   }
 });
 
-test("manual Story order retains known keys, appends new Stories, and reorders around a target", () => {
+test("manual Story order puts new Stories first, retains known keys, and reorders around a target", () => {
   const initial = normalizeManualStoryOrder(stories, [storySortKey(stories[1]), "missing", storySortKey(stories[1])]);
-  assert.deepEqual(initial, [storySortKey(stories[1]), storySortKey(stories[0]), storySortKey(stories[2])]);
-  assert.deepEqual(reorderStoryKeys(initial, storySortKey(stories[2]), storySortKey(stories[1]), "after"), [storySortKey(stories[1]), storySortKey(stories[2]), storySortKey(stories[0])]);
+  assert.deepEqual(initial, [storySortKey(stories[0]), storySortKey(stories[2]), storySortKey(stories[1])]);
+  assert.deepEqual(reorderStoryKeys(initial, storySortKey(stories[2]), storySortKey(stories[1]), "after"), [storySortKey(stories[0]), storySortKey(stories[1]), storySortKey(stories[2])]);
 });
 
 test("Story drop targets use title-row centers rather than expanded subtree heights", () => {

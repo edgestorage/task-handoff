@@ -34,6 +34,7 @@ class BrowserSocksServer {
     }
     this.sockets.add(socket);
     socket.once("close", () => this.sockets.delete(socket));
+    socket.on("error", () => socket.destroy());
     socket.setTimeout?.(this.handshakeTimeout, () => socket.destroy());
     let state = "greeting";
     let pending = Buffer.alloc(0);

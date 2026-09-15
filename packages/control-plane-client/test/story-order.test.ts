@@ -13,9 +13,9 @@ const story = (id: string, ownerNodeId: string): Story => ({
   updatedAt: "2026-09-13T00:00:00.000Z",
 });
 
-test("normalizes manual Story order across nodes without losing new Stories", () => {
+test("normalizes manual Story order across nodes with new Stories first", () => {
   const stories = [story("a", "node-a"), story("b", "node-b"), story("c", "node-a")];
-  assert.deepEqual(normalizeManualStoryOrder(stories, ["node-b:b", "missing", "node-b:b"]), ["node-b:b", "node-a:a", "node-a:c"]);
+  assert.deepEqual(normalizeManualStoryOrder(stories, ["node-b:b", "missing", "node-b:b"]), ["node-a:a", "node-a:c", "node-b:b"]);
 });
 
 test("moves a Story relative to another while preserving the complete order", () => {
