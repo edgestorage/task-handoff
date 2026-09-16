@@ -83,3 +83,11 @@ test("node detail actions use icon, title, and description menu items", () => {
   assert.equal((menu.match(/<strong>/g) || []).length, 3);
   assert.equal((menu.match(/<small>/g) || []).length, 3);
 });
+
+test("node detail places projects and inventory directly after overview", () => {
+  const source = fs.readFileSync(path.join(root, "src/apps/control-plane/settings/NodeDetailPanel.vue"), "utf8");
+  const tabs = source.match(/const tabs = computed\(\(\) => \[([\s\S]*?)\]\s+satisfies/)?.[1] || "";
+  const values = [...tabs.matchAll(/value: "([^"]+)"/g)].map((match) => match[1]);
+
+  assert.deepEqual(values, ["overview", "storage", "inventory", "runtimes", "updates", "remote"]);
+});

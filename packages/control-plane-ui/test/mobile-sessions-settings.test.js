@@ -27,7 +27,7 @@ test("settings exposes account-scoped mobile sessions and authoritative revocati
 test("mobile sessions follow the shared settings directory layout", () => {
   const section = read("src/apps/control-plane/settings/MobileSessionsSettingsSection.vue");
 
-  assert.match(section, /class="mobile-sessions-scroll"/);
+  assert.match(section, /class="mobile-sessions-scroll settings-page-scroll"/);
   assert.match(section, /class="mobile-sessions-page settings-content-page"/);
   assert.match(section, /class="mobile-sessions-page-head"/);
   assert.match(section, /class="mobile-sessions-directory"/);

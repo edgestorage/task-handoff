@@ -41,6 +41,13 @@ test("the composer plus button opens the same command menu as the command trigge
   assert.doesNotMatch(composer, /add-context/);
 });
 
+test("command and mention candidates use the shared themed scroll area", () => {
+  assert.match(composer, /<ScrollArea[\s\S]*?class="ai-session-mention-popover__list"[\s\S]*?:style="\{ '--ai-session-mention-list-height': `\$\{overlayListHeight\}px` \}"/);
+  assert.match(composer, /const overlayListHeight = computed\([\s\S]*group\.candidates\.length \* 36/);
+  assert.match(composer, /\.ai-session-mention-popover__list\) \{[^}]*height: min\(var\(--ai-session-mention-list-height\)[^}]*--reka-popover-content-available-height/s);
+  assert.doesNotMatch(composer, /\.ai-session-mention-popover__list\) \{[^}]*overflow-y: auto/s);
+});
+
 test("composer arrow keys are only consumed by a menu with selectable items", () => {
   assert.doesNotMatch(composer, /@keydown\.(?:up|down)(?:\.[^=\s]+)*=/);
   assert.match(composer, /if \(event\.key === "ArrowDown" \|\| event\.key === "ArrowUp"\) \{[\s\S]*const moved = moveActiveMention[\s\S]*if \(moved\) \{[\s\S]*event\.preventDefault\(\);[\s\S]*event\.stopPropagation\(\);/);

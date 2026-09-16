@@ -720,10 +720,10 @@ const headerActionState = computed(() => nodeDetailActionState({
 }, t));
 const tabs = computed(() => [
   { value: "overview", label: t("settings.nodeDetail.overview"), icon: Gauge },
-  { value: "runtimes", label: `${t("settings.nodeDetail.runtimes")} ${props.resources.runtimes.length}`, icon: Box },
-  { value: "updates", label: t("settings.nodeDetail.updates"), icon: Download },
   { value: "storage", label: `${t("settings.nodeDetail.storage")} ${props.resources.localFolders.length}`, icon: FolderOpen },
   { value: "inventory", label: t("settings.nodeDetail.inventory"), icon: Monitor },
+  { value: "runtimes", label: `${t("settings.nodeDetail.runtimes")} ${props.resources.runtimes.length}`, icon: Box },
+  { value: "updates", label: t("settings.nodeDetail.updates"), icon: Download },
   { value: "remote", label: t("settings.nodeDetail.remote"), icon: Network },
 ] satisfies Array<{ value: NodeDetailTab; label: string; icon: Component }>);
 

@@ -150,7 +150,7 @@ test("branch selector groups, searches, tracks, checks out, and safely deletes s
 });
 
 test("Repository workspace opens as a session tab with a resizable ScrollArea sidebar", async () => {
-  const [environment, workspace, workspaceTab, sessionState, tree, repositoryApi, fileEditor, syntaxHighlight] = await Promise.all([
+  const [environment, workspace, workspaceTab, sessionState, tree, repositoryApi, fileEditor, sourceLanguage] = await Promise.all([
     source("apps/control-plane/instance-detail/RepositoryEnvironment.vue"),
     source("apps/control-plane/instance-detail/RepositoryWorkspace.vue"),
     source("apps/control-plane/instance-detail/RepositoryWorkspaceTab.vue"),
@@ -158,7 +158,7 @@ test("Repository workspace opens as a session tab with a resizable ScrollArea si
     source("apps/control-plane/instance-detail/RepositoryFileTree.vue"),
     source("api/repository.ts"),
     source("apps/control-plane/instance-detail/RepositoryFilePreview.vue"),
-    source("apps/control-plane/instance-detail/repositorySyntaxHighlight.ts"),
+    source("components/source-code/sourceLanguage.ts"),
   ]);
 
   assert.match(environment, /emit\("openWorkspace", \{ initialView: view, sessionId: props\.sessionId, sessionKind: props\.sessionKind \}\)/);
@@ -179,7 +179,7 @@ test("Repository workspace opens as a session tab with a resizable ScrollArea si
   assert.match(fileEditor, /highlightSource\(props\.content, language\.value\)/);
   assert.match(fileEditor, /<pre ref="preview" class="repository-file-preview repository-syntax-highlight"/);
   assert.match(fileEditor, /overflow: auto/);
-  assert.match(syntaxHighlight, /tsx: "typescript"/);
+  assert.match(sourceLanguage, /tsx: "typescript"/);
   assert.doesNotMatch(workspace, /stageRepositoryPaths|unstageRepositoryPaths|discardRepositoryWorktree|commitRepositoryIndex/);
   assert.match(workspace, /\.repository-workspace-content \{[^}]*width: 100%;[^}]*height: 100%;/);
   assert.match(workspace, /repository-workspace-empty[^}]*grid-row: 2/);

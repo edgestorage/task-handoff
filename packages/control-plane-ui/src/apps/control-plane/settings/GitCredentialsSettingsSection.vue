@@ -1,5 +1,5 @@
 <template>
-  <ScrollArea class="git-credentials-scroll" :horizontal="false">
+  <ScrollArea class="git-credentials-scroll settings-page-scroll" :horizontal="false">
     <div class="git-credentials-page settings-content-page">
       <header class="git-credentials-page-head">
         <p>{{ t("settings.gitCredentials.description") }}</p>

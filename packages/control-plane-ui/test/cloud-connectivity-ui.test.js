@@ -42,7 +42,7 @@ test("cloud settings explain background ownership and expose structured non-colo
 test("Thandoff account follows the shared settings directory layout", () => {
   const component = read("src/apps/control-plane/settings/CloudConnectivitySettingsSection.vue");
 
-  assert.match(component, /class="cloud-connectivity-scroll"/);
+  assert.match(component, /class="cloud-connectivity-scroll settings-page-scroll"/);
   assert.match(component, /class="cloud-connectivity-page settings-content-page"/);
   assert.match(component, /class="cloud-page-head"/);
   assert.match(component, /class="cloud-directory"/);

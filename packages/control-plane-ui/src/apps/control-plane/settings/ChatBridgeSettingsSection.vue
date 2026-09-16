@@ -1,5 +1,5 @@
 <template>
-  <ScrollArea class="chat-settings-scroll" :horizontal="false">
+  <ScrollArea class="chat-settings-scroll settings-page-scroll" :horizontal="false">
     <div class="chat-settings-page settings-content-page">
       <header class="chat-page-head">
         <p>{{ t("settings.chatBridge.pageDescription") }}</p>

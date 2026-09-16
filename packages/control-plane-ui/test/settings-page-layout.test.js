@@ -28,12 +28,16 @@ test("settings sections use one full-width content contract without a right-only
   assert.match(layout, /margin-inline: auto/);
   assert.match(layout, /width: min\(100%, var\(--settings-content-max-width, 1080px\)\)/);
   assert.doesNotMatch(layout, /padding-(?:left|right|inline)|inline-gutter/);
+  assert.match(layout, /\.control-settings-page > \.settings-page-scroll \{[^}]*width: calc\(100% \+ var\(--settings-scrollbar-outset, 16px\)\);[^}]*margin-right: calc\(-1 \* var\(--settings-scrollbar-outset, 16px\)\);/);
+  assert.match(layout, /\.settings-page-scroll > \[data-task-handoff-scroll-viewport\] \{[^}]*width: calc\(100% - var\(--settings-scrollbar-outset, 16px\)\);/);
+  assert.match(modal, /class="settings-section-scroll settings-page-scroll"/);
   assert.match(modal, /settings-section-scroll-content settings-content-page/);
   assert.match(modal, /<style src="\.\/SettingsPageLayout\.css"><\/style>/);
   assert.doesNotMatch(triggerStyles, /\.trigger-board\s*\{[^}]*padding/);
 
   for (const [file, pageClass] of settingsPages) {
     const component = read(`src/apps/control-plane/settings/${file}`);
+    assert.match(component, /<ScrollArea class="[^"]*settings-page-scroll[^"]*"/);
     assert.match(component, new RegExp(`class="${pageClass} settings-content-page"`));
     assert.doesNotMatch(component, new RegExp(`\\.${pageClass}\\s*\\{[^}]*padding-right`));
   }

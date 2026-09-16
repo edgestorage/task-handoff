@@ -945,7 +945,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       },
       capability: {
         agent: "opencode",
-        actions: { create: true, send: true, queue: true, steer: false, interrupt: true, archive: true, delete: true, fork: true, approvalDecisions: ["allow", "deny"] },
+        actions: { create: true, send: true, queue: true, steer: true, interrupt: true, archive: true, delete: true, fork: true, approvalDecisions: ["allow", "deny"] },
         permissionModes: ["ask", "auto-review", "full-access"],
         timeline: { sessionRead: true, turnRead: true, liveItems: true },
         modelSelection: {

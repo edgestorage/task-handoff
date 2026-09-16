@@ -12,7 +12,7 @@
         </Tabs>
       </div>
 
-      <ScrollArea v-if="settingsSection === 'triggers'" class="settings-section-scroll" :horizontal="false">
+      <ScrollArea v-if="settingsSection === 'triggers'" class="settings-section-scroll settings-page-scroll" :horizontal="false">
         <div class="settings-section-scroll-content settings-content-page">
           <ControlPlaneTriggersView :instances="instances" />
         </div>

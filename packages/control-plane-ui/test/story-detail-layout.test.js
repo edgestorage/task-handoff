@@ -8,6 +8,11 @@ test("Story uses the same solid workspace background as AI Session", () => {
   assert.match(storyView, /\.story-view \{[^}]*background:var\(--workspace-bg\);/);
 });
 
+test("Story list loading state keeps the workspace background", () => {
+  assert.match(storyView, /\.story-loading-overlay \{[^}]*background:var\(--workspace-bg\);/);
+  assert.doesNotMatch(storyView, /\.story-loading-overlay \{[^}]*background:color-mix\([^}]*var\(--surface\)/);
+});
+
 test("Story detail uses settings-style directories instead of standalone item cards", () => {
   assert.doesNotMatch(storyView, /class="story-overview-summary"/);
   assert.match(storyView, /class="story-directory story-actions-section"/);
@@ -73,10 +78,12 @@ test("Story detail actions match the tree menu after the standalone edit action"
 test("Story detail moves its scrollbar outward without shifting the content viewport", () => {
   assert.match(storyView, /\.story-detail-scroll \{[^}]*margin-right:-16px;/);
   assert.match(storyView, /\.story-detail-scroll :deep\(\[data-task-handoff-scroll-viewport\]\) \{ width:calc\(100% - 16px\); \}/);
+  assert.match(storyView, /\.story-detail-scroll-inner \{[^}]*padding:0 0 32px;/);
+  assert.doesNotMatch(storyView, /\.story-detail-scroll-inner \{[^}]*padding-right:/);
 });
 
-test("Story session keeps its scrollbar eight pixels from the right edge", () => {
-  assert.match(storyView, /\.story-content\.story-session-pane > \.story-session-creator \{ padding:0 8px 0 0; background:transparent; \}/);
+test("Story session keeps its scrollbar five pixels from the right edge", () => {
+  assert.match(storyView, /\.story-content\.story-session-pane > \.story-session-creator \{ padding:0 5px 0 0; background:transparent; \}/);
 });
 
 test("Story session directory uses explicit current and history tabs", () => {
