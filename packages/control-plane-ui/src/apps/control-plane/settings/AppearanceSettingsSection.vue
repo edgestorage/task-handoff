@@ -1,5 +1,5 @@
 <template>
-  <ScrollArea class="basic-settings-scroll">
+  <ScrollArea class="basic-settings-scroll settings-page-scroll">
     <div class="basic-settings-page settings-content-page">
       <section class="settings-group" aria-labelledby="preferences-heading">
         <header class="group-heading">

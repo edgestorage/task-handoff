@@ -1,5 +1,5 @@
 <template>
-  <ScrollArea class="user-access-scroll" :horizontal="false">
+  <ScrollArea class="user-access-scroll settings-page-scroll" :horizontal="false">
     <div class="user-access-settings settings-content-page">
       <section class="user-access-panel">
         <header class="user-access-head">

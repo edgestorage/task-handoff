@@ -30,6 +30,7 @@
               <span class="ai-session-activity-title">{{ activityLabel(activity) }}</span>
               <span v-if="activitySummary(activity)" class="ai-session-activity-summary" :title="activityHoverText(activity)">{{ activitySummary(activity) }}</span>
               <small v-if="!isCommandActivity(activity) && visibleStatus(activity.status)">{{ statusLabel(activity.status!) }}</small>
+              <ChevronRight v-if="isCommandActivity(activity)" class="ai-session-command-disclosure-icon" :size="14" aria-hidden="true" />
             </button>
             <div v-else class="ai-session-activity-item-head">
               <component :is="activityIcon(activity)" v-if="activityIcon(activity)" class="ai-session-activity-kind-icon" :size="14" aria-hidden="true" />
@@ -40,13 +41,15 @@
             <Transition name="activity-disclosure" @before-enter="prepareDisclosureEnter" @enter="runDisclosureEnter" @after-enter="finishDisclosureEnter" @enter-cancelled="cancelDisclosureTransition" @before-leave="prepareDisclosureLeave" @leave="runDisclosureLeave" @after-leave="finishDisclosureLeave" @leave-cancelled="cancelDisclosureTransition">
               <div v-if="hasDetails(activity) && activityOpen(activity)" class="ai-session-activity-details">
                 <div class="ai-session-activity-details-content">
-                  <section v-if="activity.input">
+                  <AiSessionFileChanges v-if="fileChanges(activity).length" :changes="fileChanges(activity)" />
+                  <AiSessionCommandResult v-else-if="isCommandActivity(activity)" :command="activity.input" :output="activity.output" :exit-code="activity.exitCode" />
+                  <section v-else-if="activity.input">
                     <small>{{ t("sessions.timeline.input") }}</small>
                     <ScrollArea type="auto" :horizontal="false" class="ai-session-activity-pre-scroll">
                       <pre>{{ activity.input }}</pre>
                     </ScrollArea>
                   </section>
-                  <section v-if="activity.output">
+                  <section v-if="activity.output && !isCommandActivity(activity) && !fileChanges(activity).length">
                     <MarkdownContent v-if="activity.activityKind === 'reasoning'" :content="activity.output" :code-tools="markdownCodeTools" />
                     <template v-else>
                       <small>{{ t("sessions.timeline.output") }}</small>
@@ -55,7 +58,7 @@
                       </ScrollArea>
                     </template>
                   </section>
-                  <small v-if="activity.exitCode !== undefined">{{ t("sessions.timeline.exitCode", { code: activity.exitCode }) }}</small>
+                  <small v-if="activity.exitCode !== undefined && !isCommandActivity(activity)">{{ t("sessions.timeline.exitCode", { code: activity.exitCode }) }}</small>
                 </div>
               </div>
             </Transition>
@@ -93,6 +96,9 @@ import {
 } from "@lucide/vue";
 import type { AiSessionTimelineActivity } from "@task-handoff/protocol/ai-sessions";
 import { ScrollArea } from "../ui/scroll-area";
+import AiSessionCommandResult from "./AiSessionCommandResult.vue";
+import AiSessionFileChanges from "./AiSessionFileChanges.vue";
+import { aiSessionFileChanges } from "./aiSessionFileChanges";
 import {
   beginDisclosureTransition,
   cancelDisclosureTransition,
@@ -145,6 +151,7 @@ const markdownCodeTools = computed(() => ({
 }));
 const latest = computed(() => props.activities.at(-1));
 const summaryLabel = computed(() => t("sessions.timeline.activityCount", { count: props.activities.length }));
+const fileChangesByActivityId = computed(() => new Map(props.activities.map((activity) => [activity.id, aiSessionFileChanges(activity)])));
 const groupOpen = ref(props.summaryVisible ? props.open : true);
 const openActivities = ref(new Set<string>());
 const autoExpandedActivityIds = new Set<string>();
@@ -161,7 +168,11 @@ function toggleGroup(event: MouseEvent) { beginDisclosureTransition(event.curren
 function activityOpen(activity: AiSessionTimelineActivity) { return openActivities.value.has(activity.id); }
 function toggleActivity(id: string, event: MouseEvent) { beginDisclosureTransition(event.currentTarget as Element); const next = new Set(openActivities.value); next.has(id) ? next.delete(id) : next.add(id); openActivities.value = next; }
 function hasDetails(activity: AiSessionTimelineActivity) {
+  if (isCommandActivity(activity)) return Boolean(activity.input || activity.output || activity.exitCode !== undefined);
   return Boolean(activity.input || activity.output || activity.exitCode !== undefined);
+}
+function fileChanges(activity: AiSessionTimelineActivity) {
+  return fileChangesByActivityId.value.get(activity.id) || [];
 }
 function statusLabel(status: NonNullable<AiSessionTimelineActivity["status"]>) {
   return t(`sessions.timeline.status.${status}`);
@@ -187,6 +198,7 @@ function activitySummary(activity: AiSessionTimelineActivity) {
   return activity.summary || activity.paths?.join(", ") || "";
 }
 function activityHoverText(activity: AiSessionTimelineActivity) {
+  if (isCommandActivity(activity)) return activity.input?.trim() || undefined;
   return activity.activityKind === "fileChange" && activity.paths?.length
     ? activity.paths.join("\n")
     : undefined;
@@ -292,6 +304,8 @@ function runtimePathBasename(path: string) {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.ai-session-activity-item-head > .ai-session-command-disclosure-icon { flex: 0 0 auto; margin-left: auto; transition: transform 120ms ease; }
+.ai-session-activity-item-head[aria-expanded="true"] > .ai-session-command-disclosure-icon { transform: rotate(90deg); }
 .ai-session-activity-item-head > .ai-session-activity-summary::before { content: "\00b7"; margin-right: 5px; }
 .ai-session-activity-item-head small {
   flex: 0 0 auto;

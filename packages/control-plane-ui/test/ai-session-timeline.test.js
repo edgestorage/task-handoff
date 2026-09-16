@@ -619,8 +619,15 @@ test("conversation Timeline composes every turn from the same compact result com
   assert.match(group, /\.ai-session-activity-group-summary small \{[\s\S]*font-size: inherit;[\s\S]*line-height: inherit;/);
   assert.doesNotMatch(group, /sessions\.timeline\.details/);
   assert.match(group, /activity\.activityKind === "fileChange"[\s\S]*activity\.paths\.map\(runtimePathBasename\)/);
+  assert.match(group, /<AiSessionFileChanges v-if="fileChanges\(activity\)\.length" :changes="fileChanges\(activity\)"/);
   assert.match(group, /FilePenLine,[\s\S]*Image as ImageIcon,[\s\S]*SquareTerminal,/);
   assert.match(group, /activity\.activityKind === "commandExecution"/);
+  assert.match(group, /<AiSessionCommandResult v-else-if="isCommandActivity\(activity\)" :command="activity\.input" :output="activity\.output" :exit-code="activity\.exitCode"/);
+  assert.match(group, /if \(isCommandActivity\(activity\)\) return Boolean\(activity\.input \|\| activity\.output \|\| activity\.exitCode !== undefined\)/);
+  assert.match(group, /if \(isCommandActivity\(activity\)\) return activity\.input\?\.trim\(\) \|\| undefined/);
+  assert.doesNotMatch(group, /ai-session-activity-item-head-command/);
+  assert.match(group, /\.ai-session-activity-item-head > \.ai-session-activity-summary \{[\s\S]*text-overflow: ellipsis;[\s\S]*white-space: nowrap;/);
+  assert.match(group, /ai-session-command-disclosure-icon[\s\S]*rotate\(90deg\)/);
   for (const kind of [
     "reasoning", "plan", "hookPrompt", "commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall", "collabAgentToolCall",
     "subAgentActivity", "webSearch", "imageView", "sleep", "imageGeneration", "enteredReviewMode", "exitedReviewMode", "contextCompaction",

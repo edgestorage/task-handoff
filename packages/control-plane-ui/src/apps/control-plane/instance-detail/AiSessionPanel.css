@@ -1,5 +1,5 @@
 .session-ai-panel {
-  --session-ai-scrollbar-outset: 6px;
+  --session-ai-scrollbar-outset: 9px;
   display: grid;
   min-height: 0;
   overflow: visible;
@@ -1824,8 +1824,8 @@
 }
 
 .session-ai-detail {
-  --session-ai-detail-left-inset: 12px;
-  --session-ai-detail-right-inset: calc(10px + var(--session-ai-scrollbar-outset, 0px));
+  --session-ai-detail-left-inset: 8px;
+  --session-ai-detail-right-inset: calc(6px + var(--session-ai-scrollbar-outset, 0px));
   --session-ai-compose-bottom: 10px;
   --session-ai-content-bottom-gap: 36px;
   --session-ai-sticky-prompt-height: 24px;

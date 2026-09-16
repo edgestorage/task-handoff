@@ -1,5 +1,5 @@
 <template>
-  <ScrollArea class="image-settings-scroll" :horizontal="false">
+  <ScrollArea class="image-settings-scroll settings-page-scroll" :horizontal="false">
     <div class="image-settings-page settings-content-page">
       <header class="image-page-head">
         <p>{{ t("settings.imageRegistry.pageDescription") }}</p>

@@ -77,7 +77,7 @@ test("access management sub-navigation stays compact inside its grid layout", ()
 });
 
 test("user access follows the shared settings page and directory layout", () => {
-  assert.match(users, /class="user-access-scroll"/);
+  assert.match(users, /class="user-access-scroll settings-page-scroll"/);
   assert.match(users, /class="user-access-settings settings-content-page"/);
   assert.match(users, /class="user-access-head"/);
   assert.match(users, /\.access-tab-content\{[^}]*background:var\(--surface-raised\)[^}]*border:1px solid var\(--line\)/);

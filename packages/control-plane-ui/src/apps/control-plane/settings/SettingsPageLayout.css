@@ -3,3 +3,18 @@
   padding-bottom: 20px;
   width: min(100%, var(--settings-content-max-width, 1080px));
 }
+
+.control-settings-page > .settings-page-scroll {
+  width: calc(100% + var(--settings-scrollbar-outset, 16px));
+  margin-right: calc(-1 * var(--settings-scrollbar-outset, 16px));
+}
+
+.settings-page-scroll > [data-task-handoff-scroll-viewport] {
+  width: calc(100% - var(--settings-scrollbar-outset, 16px));
+}
+
+@media (max-width: 780px) {
+  .control-settings-page {
+    --settings-scrollbar-outset: 10px;
+  }
+}

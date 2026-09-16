@@ -1,5 +1,5 @@
 <template>
-  <ScrollArea class="cloud-connectivity-scroll" :horizontal="false">
+  <ScrollArea class="cloud-connectivity-scroll settings-page-scroll" :horizontal="false">
     <div class="cloud-connectivity-page settings-content-page">
       <header class="cloud-page-head">
         <p>{{ t("settings.cloud.description") }}</p>

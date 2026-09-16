@@ -1,5 +1,5 @@
 <template>
-  <ScrollArea class="environment-template-scroll" :horizontal="false">
+  <ScrollArea class="environment-template-scroll settings-page-scroll" :horizontal="false">
     <div class="environment-template-page settings-content-page">
       <header class="environment-template-page-head">
         <p>{{ t("settings.environmentTemplateRegistry.description") }}</p>

@@ -122,6 +122,13 @@ const groupedMentionCandidates = computed(() => mentionKinds.map((kind) => ({
   candidates: mentions.candidates.value.filter((candidate) => candidate.kind === kind),
   diagnostics: mentions.diagnostics.value.filter((diagnostic) => diagnostic.category === (kind === "skill" ? "skills" : kind === "plugin" ? "plugins" : kind === "app" ? "apps" : "files")),
 })).filter((group) => group.candidates.length || group.diagnostics.length));
+const overlayListHeight = computed(() => {
+  if (commandOpen.value) return commandCandidates.value.length ? 30 + commandCandidates.value.length * 36 : 40;
+  if (!groupedMentionCandidates.value.length) return 40;
+  return groupedMentionCandidates.value.reduce((height, group) => (
+    height + 30 + group.candidates.length * 36 + group.diagnostics.length * 40
+  ), 0);
+});
 const hasDraft = computed(() => props.modelValue.trim().length > 0 || attachments.value.length > 0);
 const actionKind = computed(() => editing.value || props.submitKind === "save" ? "save" : hasDraft.value || !props.canInterrupt ? "send" : "stop");
 const canRun = computed(() => !props.disabled && (editing.value ? props.modelValue.trim().length > 0 : hasDraft.value || (!props.busy && props.canInterrupt)));
@@ -834,7 +841,13 @@ watch(() => props.busy, (busy) => {
         @open-auto-focus.prevent
         @close-auto-focus.prevent
       >
-        <div class="ai-session-mention-popover__list" role="listbox">
+        <ScrollArea
+          type="auto"
+          :horizontal="false"
+          class="ai-session-mention-popover__list"
+          role="listbox"
+          :style="{ '--ai-session-mention-list-height': `${overlayListHeight}px` }"
+        >
           <template v-if="commandOpen">
             <div v-if="!commandCandidates.length" class="ai-session-mention-popover__state">{{ t("sessions.composer.noMatches") }}</div>
             <section v-else class="ai-session-mention-popover__group" role="group" :aria-label="t('sessions.composer.commands')">
@@ -888,7 +901,7 @@ watch(() => props.busy, (busy) => {
               </button>
             <p v-for="diagnostic in group.diagnostics" :key="diagnostic.code" class="ai-session-mention-popover__diagnostic">{{ diagnostic.message }}</p>
           </section>
-        </div>
+        </ScrollArea>
       </PopoverContent>
     </Popover>
     <div class="ai-session-composer__toolbar">
@@ -1711,9 +1724,8 @@ watch(() => props.busy, (busy) => {
 }
 
 :global(.ai-session-mention-popover__list) {
-  max-height: min(360px, 48vh);
-  overflow-x: hidden;
-  overflow-y: auto;
+  height: min(var(--ai-session-mention-list-height), 360px, 48vh, var(--reka-popover-content-available-height, 100vh));
+  min-width: 0;
   padding: 0;
 }
 

@@ -214,6 +214,36 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
   }
 
   async startMessage(session: AiSessionStatus, input: AiSessionSendInput): Promise<AiSessionActionResult> {
+    const messageId = await this.submitMessage(session, input);
+    const updated = this.registry.applyRealtimeEvent(session.id, {
+      kind: "send-ack",
+      activeTurnId: messageId,
+      providerTurnId: messageId,
+      userPrompt: input.message,
+      userMessage: { id: messageId, text: input.message, attachments: input.userMessageAttachments || [] },
+      status: "running",
+      phase: "thinking",
+      source: "realtime",
+    }) || session;
+    return { session: updated, provider: this.agent, action: "send", turnId: messageId, providerTurnId: messageId };
+  }
+
+  async steerMessage(session: AiSessionStatus, input: AiSessionSendInput): Promise<AiSessionActionResult> {
+    const messageId = await this.submitMessage(session, input);
+    const updated = this.registry.applyRealtimeEvent(session.id, {
+      kind: "user-message",
+      activeTurnId: session.activeTurnId,
+      providerTurnId: session.activeTurnId,
+      userPrompt: input.message,
+      userMessage: { id: messageId, text: input.message, attachments: input.userMessageAttachments || [] },
+      status: "running",
+      phase: "thinking",
+      source: "realtime",
+    }) || session;
+    return { session: updated, provider: this.agent, action: "steer", turnId: updated.activeTurnId, providerTurnId: session.activeTurnId };
+  }
+
+  private async submitMessage(session: AiSessionStatus, input: AiSessionSendInput) {
     if (!session.providerSessionId || !session.cwd || !input.messageId) {
       throw aiSessionControlError("AI_SESSION_SEND_INVALID", "OpenCode session, cwd, and message identity are required.", 409);
     }
@@ -222,19 +252,11 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
     const pending = this.pendingSettingsBySession.get(session.providerSessionId);
     const selection = pending?.modelSelection || session.modelSelection;
     const model = selection ? this.modelRef(selection, pending?.reasoningEffort || session.reasoningEffort) : undefined;
+    // Compatibility for OpenCode v1.18.21: prompt_async persists prompts
+    // submitted during an active run and promotes them in its next loop step.
     await this.client.promptAsync(session.providerSessionId, session.cwd, input.messageId, parts, model);
-    const updated = this.registry.applyRealtimeEvent(session.id, {
-      kind: "send-ack",
-      activeTurnId: input.messageId,
-      providerTurnId: input.messageId,
-      userPrompt: input.message,
-      userMessage: { id: input.messageId, text: input.message, attachments: input.userMessageAttachments || [] },
-      status: "running",
-      phase: "thinking",
-      source: "realtime",
-    }) || session;
     this.scheduleReconcile(session.providerSessionId, session.cwd);
-    return { session: updated, provider: this.agent, action: "send", turnId: input.messageId, providerTurnId: input.messageId };
+    return input.messageId;
   }
 
   private modelRef(selection: AiSessionModelSelection, effort?: AiSessionReasoningEffort) {

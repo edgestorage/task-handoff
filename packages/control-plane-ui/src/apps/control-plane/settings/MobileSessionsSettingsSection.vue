@@ -1,5 +1,5 @@
 <template>
-  <ScrollArea class="mobile-sessions-scroll" :horizontal="false">
+  <ScrollArea class="mobile-sessions-scroll settings-page-scroll" :horizontal="false">
     <div class="mobile-sessions-page settings-content-page">
       <header class="mobile-sessions-page-head">
         <p>{{ t("settings.mobileSessions.description") }}</p>

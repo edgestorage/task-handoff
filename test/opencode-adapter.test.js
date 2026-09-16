@@ -51,7 +51,7 @@ test("provider registry is the single registration and capability source", async
   const provider = { agent: "opencode", interrupt: async () => undefined };
   const capability = {
     agent: "opencode",
-    actions: { create: true, send: true, queue: true, steer: false, interrupt: true, archive: true, delete: true, fork: true, approvalDecisions: ["allow", "deny"] },
+    actions: { create: true, send: true, queue: true, steer: true, interrupt: true, archive: true, delete: true, fork: true, approvalDecisions: ["allow", "deny"] },
     timeline: { sessionRead: true, turnRead: true, liveItems: true },
   };
   const providers = new AiSessionProviderRegistry(
@@ -768,7 +768,7 @@ test("OpenCode readiness does not gate structured session fields by provider ver
   bridge.close();
 });
 
-test("OpenCode bridge implements lifecycle, attachments, inclusive-turn fork, and permission replies", async () => {
+test("OpenCode bridge implements lifecycle, steer, attachments, inclusive-turn fork, and permission replies", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-opencode-"));
   const registry = createAiSessionRegistry({ dir: root });
   const calls = [];
@@ -835,6 +835,28 @@ test("OpenCode bridge implements lifecycle, attachments, inclusive-turn fork, an
   assert.deepEqual(promptCall.slice(0, 4), ["prompt", "ses_created", "/workspace/project", "msg_new"]);
   assert.equal(promptCall[4][1].url, "data:text/plain;base64,aGVsbG8=");
   assert.equal(promptCall[4][2].url, "file:///workspace/project/input.txt");
+  const steerResult = await bridge.steerMessage(registry.getByProviderSessionId("opencode", "ses_created"), {
+    message: "Change direction",
+    messageId: "msg_steer",
+    userMessageAttachments: [],
+    attachments: [],
+  });
+  assert.deepEqual(calls.find((call) => call[0] === "prompt" && call[3] === "msg_steer").slice(0, 5), [
+    "prompt",
+    "ses_created",
+    "/workspace/project",
+    "msg_steer",
+    [{ type: "text", text: "Change direction" }],
+  ]);
+  assert.equal(steerResult.action, "steer");
+  assert.equal(steerResult.turnId, "msg_new");
+  assert.equal(steerResult.providerTurnId, "msg_new");
+  assert.equal(steerResult.session.activeTurnId, "msg_new");
+  assert.deepEqual(steerResult.session.turns.at(-1).userMessages.at(-1), {
+    id: "msg_steer",
+    text: "Change direction",
+    attachments: [],
+  });
   await assert.rejects(() => bridge.startMessage(session, {
     message: "Outside",
     messageId: "msg_outside",

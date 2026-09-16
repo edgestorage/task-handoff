@@ -1,5 +1,5 @@
 <template>
-  <ScrollArea class="project-settings-scroll" :horizontal="false">
+  <ScrollArea class="project-settings-scroll settings-page-scroll" :horizontal="false">
     <div class="project-settings-page settings-content-page">
       <header class="project-page-head">
         <p>{{ t("settings.projectRegistry.pageDescription") }}</p>

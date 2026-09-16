@@ -1,5 +1,5 @@
 <template>
-  <ScrollArea class="model-settings-scroll" :horizontal="false">
+  <ScrollArea class="model-settings-scroll settings-page-scroll" :horizontal="false">
     <div class="model-settings-page settings-content-page">
       <header class="model-page-head">
         <p>{{ t("settings.modelRegistry.pageDescription") }}</p>

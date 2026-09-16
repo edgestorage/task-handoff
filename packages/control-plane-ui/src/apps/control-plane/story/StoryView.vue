@@ -1470,7 +1470,7 @@ onBeforeUnmount(() => {
 .story-sidebar-scroll { min-width:0; min-height:0; }
 .story-sidebar-scroll-inner { min-width:0; padding:0 10px 12px; }
 .story-sidebar-scroll :deep([data-task-handoff-scroll-viewport] > div) { width:100%; min-width:0 !important; }
-.story-loading-overlay { position:absolute; inset:0; z-index:5; display:grid; place-items:center; border-radius:8px; background:color-mix(in srgb,var(--surface) 72%,transparent); backdrop-filter:blur(1px); }
+.story-loading-overlay { position:absolute; inset:0; z-index:5; display:grid; place-items:center; border-radius:8px; background:var(--workspace-bg); }
 .story-loading-spin { color:var(--text-muted); animation:story-loading-spin 0.9s linear infinite; }
 @keyframes story-loading-spin { to { transform:rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .story-loading-spin { animation:none; } }
@@ -1570,11 +1570,11 @@ onBeforeUnmount(() => {
 .story-tree-empty { padding:8px; }
 .story-content { display:flex; min-width:0; min-height:0; flex-direction:column; overflow:hidden; padding:0 20px; }
 .story-content.story-session-pane { padding:0; }
-.story-content.story-session-pane > .story-session-creator { padding:0 8px 0 0; background:transparent; }
+.story-content.story-session-pane > .story-session-creator { padding:0 5px 0 0; background:transparent; }
 .story-detail-scroll { flex:1; min-height:0; margin-right:-16px; }
 .story-detail-scroll :deep([data-task-handoff-scroll-viewport]) { width:calc(100% - 16px); }
 .story-detail-scroll :deep([data-task-handoff-scroll-viewport] > div) { width:100%; min-width:0 !important; }
-.story-detail-scroll-inner { --story-detail-head-height:140px; display:grid; gap:12px; width:min(100%,1080px); min-width:0; margin:0 auto; padding:0 10px 32px 0; }
+.story-detail-scroll-inner { --story-detail-head-height:140px; display:grid; gap:12px; width:min(100%,1080px); min-width:0; margin:0 auto; padding:0 0 32px; }
 .story-detail-head { position:sticky; top:0; z-index:3; display:grid; gap:12px; min-width:0; padding-bottom:10px; background:var(--workspace-bg); }
 .story-content-header { display:flex; align-items:center; justify-content:space-between; gap:12px; border-bottom:1px solid var(--line); padding:0 0 12px; flex:0 0 auto; }
 .story-content-header > div:first-child:not(.story-content-title) { display:grid; min-width:0; gap:3px; }
@@ -1671,7 +1671,7 @@ onBeforeUnmount(() => {
 .story-dialog-header { flex-direction:row; align-items:flex-start; justify-content:space-between; gap:16px; text-align:left; }
 .story-dialog-close { display:grid; flex:0 0 auto; width:30px; height:30px; place-items:center; border:0; border-radius:6px; background:transparent; color:var(--text-muted); cursor:pointer; padding:0; }
 .story-dialog-close:hover, .story-dialog-close:focus-visible { background:var(--surface-active); color:var(--text-strong); outline:none; }
-@media (max-width:800px) { .story-view { padding:16px 0; } .story-workspace { grid-template-columns:minmax(220px,38%) minmax(0,1fr); } .story-sidebar-resize-handle { display:none; } .story-content-header { flex-wrap:wrap; padding:0 0 14px; } .story-detail-header-tabs { order:3; width:100%; margin-left:0; } .story-detail-tabs { width:100%; } .story-detail-tabs :deep(button) { flex:1; min-width:0; padding:0 5px; } .story-detail-scroll-inner { padding-right:6px; } }
+@media (max-width:800px) { .story-view { padding:16px 0; } .story-workspace { grid-template-columns:minmax(220px,38%) minmax(0,1fr); } .story-sidebar-resize-handle { display:none; } .story-content-header { flex-wrap:wrap; padding:0 0 14px; } .story-detail-header-tabs { order:3; width:100%; margin-left:0; } .story-detail-tabs { width:100%; } .story-detail-tabs :deep(button) { flex:1; min-width:0; padding:0 5px; } }
 @media (max-width:820px) { .story-history-drawer-close { top:12px; left:max(10px,calc(10px + var(--native-titlebar-controls-left-width))); } }
 @media (max-width:560px) { .story-view { padding:10px 0; } .story-workspace { grid-template-columns:1fr; } .story-sidebar { max-height:38%; border-right:0; border-bottom:1px solid var(--line); } .story-detail-tabs { width:100%; } .story-detail-tabs :deep(button) { min-width:0; flex:1; padding:0 5px; } }
 </style>
