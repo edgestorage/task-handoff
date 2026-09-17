@@ -19,3 +19,4 @@ export * from "./codex-app-server.ts";
 export * from "./codex-app-server-protocol.ts";
 export * from "./opencode.ts";
 export * from "./session-history.ts";
+export * from "./session-title-coordinator.ts";

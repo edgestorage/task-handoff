@@ -142,7 +142,7 @@ export function projectOpenCodeSession(input: {
       reasoningEffort: actualModel?.variant && isReasoningEffort(actualModel.variant)
         ? actualModel.variant
         : undefined,
-      actions: { send: true, interrupt: lifecycle === "running" || lifecycle === "waiting", approval: Boolean(pendingPermission), fork: true, close: true },
+      actions: { send: true, interrupt: lifecycle === "running" || lifecycle === "waiting", approval: Boolean(pendingPermission), fork: true, rename: true, close: true },
       title: input.session.title,
       cwd: input.session.directory,
       activeTurnId: lifecycle === "running" || lifecycle === "waiting" ? latestTurn?.id : undefined,

@@ -97,6 +97,7 @@ test("controlled instance mention routes preserve authoritative context and refe
   });
   const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
   const codex = registry.start({ agent: "codex", creationSource: "ai-session", providerSessionId: "thread_routes", cwd: "/workspace/project", status: "idle", phase: "unknown" });
+  registry.store.save({ ...codex, actions: { rename: true } });
   const sends = [];
   const bridge = {
     id: "codex-app-server-test",
@@ -122,6 +123,17 @@ test("controlled instance mention routes preserve authoritative context and refe
     async executeCommand(_session, input) {
       return { command: input.command, value: input.argument };
     },
+    async renameSession(session, title) {
+      registry.applyAdapterSnapshot({
+        source: "adapter-snapshot",
+        agent: session.agent,
+        appId: session.appId,
+        appSessionId: session.appSessionId,
+        providerSessionId: session.providerSessionId,
+        title,
+      });
+      return { title, authority: "provider" };
+    },
     async startMessage(session, input) {
       sends.push({ session, input });
       return { session, provider: "codex", action: "send", turnId: "turn_routes", providerTurnId: "turn_routes" };
@@ -132,6 +144,8 @@ test("controlled instance mention routes preserve authoritative context and refe
   };
   const app = await createWebApp({ staticDir: path.join(root, "missing-static"), logger: false, aiSessionRegistry: registry, codexAppServer: bridge });
   t.after(() => app.close());
+  await app.ready();
+  registry.store.save({ ...registry.get(codex.id), actions: { ...registry.get(codex.id).actions, rename: true } });
 
   const catalog = await app.inject({ method: "GET", url: `/api/ai-sessions/${codex.id}/mentions` });
   assert.equal(catalog.statusCode, 200);
@@ -146,7 +160,7 @@ test("controlled instance mention routes preserve authoritative context and refe
   assert.equal(files.statusCode, 200);
   assert.equal(JSON.parse(files.payload).data.candidates[0].path, "src/Exact Name.ts");
   const renamed = await app.inject({ method: "POST", url: `/api/ai-sessions/${codex.id}/commands`, payload: { command: "rename", argument: "Exact title" } });
-  assert.equal(renamed.statusCode, 200);
+  assert.equal(renamed.statusCode, 200, renamed.body);
   assert.deepEqual(JSON.parse(renamed.payload).data, { command: "rename", value: "Exact title" });
   const claude = registry.start({ agent: "claude", creationSource: "ai-session", providerSessionId: "claude_routes", cwd: "/workspace/project", status: "idle", phase: "unknown" });
   const unsupported = await app.inject({ method: "GET", url: `/api/ai-sessions/${claude.id}/mentions` });
@@ -159,6 +173,112 @@ test("controlled instance mention routes preserve authoritative context and refe
   const sent = await app.inject({ method: "POST", url: `/api/ai-sessions/${codex.id}/messages`, payload: { message: "Use @Docs", references } });
   assert.equal(sent.statusCode, 200);
   assert.deepEqual(sends[0].input.references, references);
+});
+
+test("controlled instance keeps bound Codex AI and App Session titles independent", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-session-rename-routes-"));
+  const paths = appRuntimeTestPaths(root);
+  const restoreEnv = withWebStorageEnv(paths, {
+    TASK_HANDOFF_WEB_AUTH: "off",
+    TASK_HANDOFF_AI_SESSION_SCAN: "0",
+    TASK_HANDOFF_CODEX_APP_SERVER: "0",
+    TASK_HANDOFF_AI_SESSION_PUBLISH_DEBOUNCE_MS: "5",
+  });
+  const runtime = new AppRuntimeManager(paths);
+  runtime.ensureSharedResource = () => undefined;
+  const timestamp = "2026-09-16T00:00:00.000Z";
+  runtime.sessions.set("app_rename", {
+    metadata: {
+      id: "app_rename",
+      appId: "codex",
+      title: "Original",
+      kind: "tty",
+      status: "running",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      launch: { cwd: "/workspace", title: "Original" },
+      process: { command: "codex" },
+      paths: { sessionDir: path.join(root, "session"), logDir: path.join(root, "logs") },
+    },
+    processes: [],
+    clients: new Set(),
+  });
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const aiSession = registry.applyAdapterSnapshot({
+    source: "adapter-snapshot",
+    agent: "codex",
+    creationSource: "app-session",
+    appId: "codex",
+    appSessionId: "app_rename",
+    providerSessionId: "thread_rename_routes",
+    lineage: { kind: "fork", parentProviderSessionId: "thread_parent", throughTurnId: "turn_parent" },
+    modelSelection: { modelEntityId: "model_entity", modelName: "model_name" },
+    title: "Original",
+    cwd: "/workspace",
+    status: "idle",
+    actions: { rename: true, close: true },
+  });
+  const renameCalls = [];
+  const bridge = {
+    id: "rename-route-codex-stub",
+    agent: "codex",
+    refresh() {}, async sync() {}, async ensureReady() {}, stop() {},
+    supportsThreadSettingsUpdate: () => false,
+    async renameSession(session, title) {
+      renameCalls.push([session.id, title]);
+      registry.patch(session.id, { title: title || undefined });
+      return { title, authority: "adapter" };
+    },
+    async interrupt(session) { return { session, provider: "codex", action: "interrupt" }; },
+  };
+  const app = await createWebApp({ staticDir: path.join(root, "missing-static"), logger: false, appRuntime: runtime, aiSessionRegistry: registry, codexAppServer: bridge });
+  t.after(async () => { await app.close(); restoreEnv(); });
+  await app.ready();
+  const before = registry.get(aiSession.id);
+
+  const renamed = await app.inject({ method: "PUT", url: `/api/ai-sessions/${aiSession.id}/title`, payload: {
+    title: "From AI", expectedTitle: "Original", clientRequestId: "route-ai-rename",
+  } });
+  assert.equal(renamed.statusCode, 200, renamed.body);
+  assert.equal(renamed.json().data.title, "From AI");
+  assert.equal(registry.get(aiSession.id).title, "From AI");
+  assert.equal(runtime.getSession("app_rename").title, "Original");
+  assert.deepEqual(renameCalls, [[aiSession.id, "From AI"]]);
+  assert.deepEqual({
+    id: registry.get(aiSession.id).id,
+    appSessionId: registry.get(aiSession.id).appSessionId,
+    providerSessionId: registry.get(aiSession.id).providerSessionId,
+    lineage: registry.get(aiSession.id).lineage,
+    modelSelection: registry.get(aiSession.id).modelSelection,
+    status: registry.get(aiSession.id).status,
+    cwd: registry.get(aiSession.id).cwd,
+  }, {
+    id: before.id,
+    appSessionId: before.appSessionId,
+    providerSessionId: before.providerSessionId,
+    lineage: before.lineage,
+    modelSelection: before.modelSelection,
+    status: before.status,
+    cwd: before.cwd,
+  });
+
+  const fromApp = await app.inject({ method: "PATCH", url: "/api/apps/sessions/app_rename", payload: { title: "From App" } });
+  assert.equal(fromApp.statusCode, 200, fromApp.body);
+  assert.equal(fromApp.json().data.title, "From App");
+  assert.equal(registry.get(aiSession.id).title, "From AI");
+  assert.equal(runtime.getSession("app_rename").title, "From App");
+
+  // Compatibility for v0.0.31: the old Codex command keeps its response shape.
+  const legacy = await app.inject({ method: "POST", url: `/api/ai-sessions/${aiSession.id}/commands`, payload: { command: "rename", argument: "Legacy command" } });
+  assert.deepEqual(legacy.json().data, { command: "rename", value: "Legacy command" });
+  assert.equal(registry.get(aiSession.id).title, "Legacy command");
+  assert.equal(runtime.getSession("app_rename").title, "From App");
+
+  const invalid = await app.inject({ method: "PUT", url: `/api/ai-sessions/${aiSession.id}/title`, payload: {
+    title: "Invalid", clientRequestId: "route-invalid", extra: true,
+  } });
+  assert.equal(invalid.statusCode, 400);
+  assert.equal(runtime.getSession("app_rename").title, "From App");
 });
 
 test("codex app-server parser projects supported tool items without output fields", () => {
@@ -5558,6 +5678,7 @@ test("codex command facade invokes structured app-server methods", async () => {
     async listLoadedThreadIds() { return ["thread_commands"]; }
     async startReview(threadId) { calls.push(["review", threadId]); return { turnId: "turn_review" }; }
     async setThreadName(threadId, name) { calls.push(["rename", threadId, name]); }
+    async readThread(threadId) { return { id: threadId, name: "New name", cwd: "/workspace", status: { type: "idle" } }; }
     async setThreadGoal(threadId, objective) { calls.push(["goal-set", threadId, objective]); return { goal: { objective } }; }
     async getThreadGoal(threadId) { calls.push(["goal-get", threadId]); return { goal: { objective: "Ship it" } }; }
     async compactThread(threadId) { calls.push(["compact", threadId]); }
@@ -5574,7 +5695,6 @@ test("codex command facade invokes structured app-server methods", async () => {
   assert.deepEqual(await bridge.executeCommand(session, { command: "compact" }), { command: "compact" });
   assert.deepEqual(calls, [
     ["review", "thread_commands"],
-    ["rename", "thread_commands", "New name"],
     ["goal-set", "thread_commands", "Ship it"],
     ["goal-get", "thread_commands"],
     ["compact", "thread_commands"],

@@ -57,6 +57,7 @@ import {
   type AiSessionDeltaResponse,
   type AiSessionCreateInput,
   type AiSessionForkInput,
+  type AiSessionRenameInput,
   type AiSessionMessageAttachment,
   type AiSessionMessageAttachmentRef,
   type AiSessionPermissionMode,
@@ -1621,6 +1622,12 @@ export class ControlPlaneService {
     return this.aiSessionActionService.inspectWorkspace(instanceId, cwd);
   }
 
+  async checkoutAiSessionWorkspaceBranch(instanceId: string, branch: string, cwdFolderId?: string) {
+    const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
+    const cwd = { type: "runtime-path" as const, path: await this.aiSessionRuntimeCwd(instance, cwdFolderId) };
+    return this.aiSessionActionService.checkoutWorkspaceBranch(instanceId, cwd, branch);
+  }
+
   forkAiSession(instanceId: string, aiSessionId: string, input: AiSessionForkInput) {
     return this.aiSessionActionService.fork(instanceId, aiSessionId, input);
   }
@@ -1631,6 +1638,10 @@ export class ControlPlaneService {
 
   updateAiSessionReasoningEffort(instanceId: string, aiSessionId: string, clientRequestId: string, effort: import("@task-handoff/protocol/ai-sessions").AiSessionReasoningEffort) {
     return this.aiSessionActionService.updateReasoningEffort(instanceId, aiSessionId, clientRequestId, effort);
+  }
+
+  renameAiSession(instanceId: string, aiSessionId: string, input: AiSessionRenameInput) {
+    return this.aiSessionActionService.rename(instanceId, aiSessionId, input);
   }
 
   openAiSessionApp(instanceId: string, aiSessionId: string, clientRequestId: string) {

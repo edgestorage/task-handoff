@@ -469,7 +469,7 @@ function testAppInventory(apps, observedAt = new Date().toISOString()) {
 }
 
 test("controlled instance heartbeat protocol rejects legacy receiver projection", () => {
-  assert.equal(CONTROL_PLANE_PROTOCOL_VERSION, "2026-08-27");
+  assert.equal(CONTROL_PLANE_PROTOCOL_VERSION, "2026-09-17");
   // Compatibility for v0.0.21: advancing the current protocol must not relax
   // the appInventory requirement of an already released wire version.
   assert.equal(ControlledInstanceHeartbeatSchema.safeParse({ protocolVersion: "2026-08-17" }).success, false);
@@ -656,6 +656,7 @@ test("app inventory protocol is strict and stored legacy app capability is disca
     screenshots: false,
     logs: false,
     aiSessionWorkspaceSelection: false,
+    aiSessionWorkspaceCheckout: false,
     aiSessionPersistenceSettings: false,
       privateModelCatalog: false,
       codexManagedSettings: false,
@@ -1417,6 +1418,41 @@ test("session aggregators remove projections and descriptors for deleted instanc
   assert.deepEqual((await apps.list()).instances, []);
   assert.deepEqual(await ai.streamDescriptors(), []);
   assert.deepEqual(await apps.streamDescriptors(), []);
+});
+
+test("rename action acknowledgement cannot mutate projections and each store consumes only its authority event", async () => {
+  const timestamp = "2026-09-16T00:00:00.000Z";
+  let aiBootstraps = 0;
+  let appBootstraps = 0;
+  const ai = new ControlPlaneAiSessionAggregator({ bootstrap: async () => { aiBootstraps += 1; return { instances: [] }; } });
+  const apps = new ControlPlaneAppSessionAggregator({ bootstrap: async () => { appBootstraps += 1; return { instances: [] }; } });
+  const aiOriginal = { id: "ai_rename", agent: "codex", appSessionId: "app_rename", providerSessionId: "thread_rename", title: "Original", status: "idle", phase: "unknown", startedAt: timestamp, updatedAt: timestamp, queue: { pendingCount: 0, items: [] } };
+  const appOriginal = { id: "app_rename", appId: "codex", title: "Original", kind: "tty", status: "running", createdAt: timestamp, updatedAt: timestamp };
+  ai.applySnapshot(aiSessionSnapshotPayload({ sessions: [aiOriginal] }, { instanceId: "inst_rename", streamId: "ai_rename_stream", revision: 1, generatedAt: timestamp }));
+  apps.applySnapshot(appSessionSnapshotPayload({ sessions: [appOriginal] }, { instanceId: "inst_rename", streamId: "app_rename_stream", revision: 1, generatedAt: timestamp }));
+
+  const actionAck = { disposition: "renamed", aiSessionId: "ai_rename", appSessionId: "app_rename", title: "Renamed" };
+  assert.equal(actionAck.title, "Renamed");
+  assert.equal((await ai.list()).instances[0].aiSessions.sessions[0].title, "Original");
+  assert.equal((await apps.list()).instances[0].appSessions.sessions[0].title, "Original");
+  assert.equal(aiBootstraps, 0);
+  assert.equal(appBootstraps, 0);
+
+  ai.applyPatch({
+    meta: { instanceId: "inst_rename", streamId: "ai_rename_stream", revision: 2, previousRevision: 1, traceId: "ai_rename_2", generatedAt: timestamp, reason: "provider-event" },
+    upserted: [{ ...aiOriginal, title: "Renamed", updatedAt: "2026-09-16T00:00:01.000Z" }],
+    removed: [],
+  });
+  assert.equal((await ai.list()).instances[0].aiSessions.sessions[0].title, "Renamed");
+  assert.equal((await apps.list()).instances[0].appSessions.sessions[0].title, "Original");
+
+  apps.applyPatch({
+    meta: { instanceId: "inst_rename", streamId: "app_rename_stream", revision: 2, previousRevision: 1, traceId: "app_rename_2", generatedAt: timestamp, reason: "app-session-updated" },
+    session: { ...appOriginal, title: "Renamed", updatedAt: "2026-09-16T00:00:01.000Z" },
+  });
+  assert.equal((await apps.list()).instances[0].appSessions.sessions[0].title, "Renamed");
+  assert.equal(aiBootstraps, 0);
+  assert.equal(appBootstraps, 0);
 });
 
 async function waitForProcessExit(pid, label, timeoutMs = 3000) {
@@ -8734,6 +8770,7 @@ test("node agent accepts incompatible controlled instance protocol versions and 
     },
   });
   assert.equal(rejectedRegister.statusCode, 201);
+  assert.equal(rejectedRegister.headers["x-task-handoff-node-agent-protocol-version"], CONTROL_PLANE_PROTOCOL_VERSION);
   assert.equal(rejectedRegister.json().data.protocolVersion, "2026-01-01");
 
   const registered = await app.inject({

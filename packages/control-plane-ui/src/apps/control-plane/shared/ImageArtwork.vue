@@ -110,15 +110,22 @@ watch(remoteCover, () => { coverFailed.value = false; });
   width: 100%;
   height: 100%;
   transform: translate(-50%, -50%);
-  border-color: color-mix(in srgb, var(--artwork-accent) 42%, var(--line));
+  border-color: color-mix(in srgb, var(--artwork-accent) 28%, var(--line));
   border-radius: inherit;
-  background: #0b181c;
-  box-shadow: none;
+  background: linear-gradient(
+    145deg,
+    color-mix(in srgb, var(--artwork-accent) 11%, var(--surface-raised)),
+    color-mix(in srgb, var(--artwork-accent) 4%, var(--surface-subtle))
+  );
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--text-strong) 7%, transparent),
+    0 1px 2px color-mix(in srgb, var(--text-strong) 8%, transparent);
 }
 
 .image-artwork--compact {
   min-height: 0;
-  background: #0b181c;
+  background: var(--surface-subtle);
+  color: color-mix(in srgb, var(--artwork-accent) 76%, var(--text-strong));
 }
 
 .image-artwork--compact::before,

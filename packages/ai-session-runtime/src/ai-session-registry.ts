@@ -229,6 +229,7 @@ function actionsForSession(session: AiSessionStatus): AiSessionStatus["actions"]
     interrupt: Boolean(active && configured.interrupt !== false),
     approval: Boolean(session.status === "waiting" && session.phase === "approval" && configured.approval !== false),
     fork: configured.fork ?? false,
+    rename: configured.rename ?? false,
     openApp: configured.openApp ?? Boolean(session.providerSessionId && !session.appSessionId),
     close: configured.close ?? Boolean(session.providerSessionId),
   };

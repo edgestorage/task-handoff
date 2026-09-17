@@ -14,6 +14,7 @@ import { CodexAppServerSessionControl } from "./codex-app-server/session/control
 import { codexPermissionOverrides } from "./codex-app-server/session/control";
 import { CodexAppServerSessionDiscovery } from "./codex-app-server/session/discovery";
 import { CodexAppServerSessionProjector } from "./codex-app-server/session/projector";
+import { CodexThreadTitleGenerator } from "./codex-app-server/session/title-generator";
 import { CodexTimelineStore } from "./codex-app-server/session/timeline-store";
 import { CodexAppServerMentions } from "./codex-app-server/mentions";
 import { codexItemTimeline, codexThreadTimeline, mergeCodexTimelineItems } from "./codex-app-server/protocol/timeline";
@@ -53,6 +54,7 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
   private readonly control: CodexAppServerSessionControl;
   private readonly discovery: CodexAppServerSessionDiscovery;
   private readonly projector: CodexAppServerSessionProjector;
+  private readonly titleGenerator: CodexThreadTitleGenerator;
   private readonly mentions: CodexAppServerMentions;
   private readonly timelineStore?: CodexTimelineStore;
   private readonly injectedClient?: CodexAppServerClientLike;
@@ -93,6 +95,7 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
         this.options.onEventSourceClose?.();
         this.approvalCoordinator?.resetConnection();
         this.projector?.resetConnection();
+        this.titleGenerator?.resetConnection();
         this.mentions?.resetConnection();
       },
     });
@@ -120,6 +123,16 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
         this.options.onTimelineItem?.(event);
         for (const listener of this.timelineItemListeners) listener(event);
       },
+    });
+    this.titleGenerator = new CodexThreadTitleGenerator({
+      currentClient: () => this.connection.client,
+      findSession: (threadId) => this.registry.getByProviderSessionId("codex", threadId),
+      applyTitle: (threadId, title) => {
+        const session = this.registry.getByProviderSessionId("codex", threadId);
+        if (session && !session.title?.trim()) this.registry.patch(session.id, { title });
+      },
+      resolveModelSelection: this.options.resolveModelSelection,
+      onDiagnostic: this.options.onDiagnostic,
     });
     this.mentions = new CodexAppServerMentions({
       readyClient: () => this.requireReadyClient(),
@@ -268,6 +281,7 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
       this.connection.registerStartedThread(client, providerSessionId);
       this.recordTimelineHistorySource(thread);
       this.projector.applyThreadSnapshot(thread, { creationSource: "ai-session" });
+      this.titleGenerator.arm(providerSessionId);
       return {
         providerSessionId,
         cwd,
@@ -398,6 +412,7 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
       this.connection.registerStartedThread(client, providerSessionId);
       this.recordTimelineHistorySource(thread);
       this.projector.applyThreadSnapshot(thread, { creationSource: "ai-session", lineage });
+      this.titleGenerator.arm(providerSessionId);
       return {
         providerSessionId,
         cwd,
@@ -609,9 +624,8 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
       return { command: input.command };
     }
     if (input.command === "rename") {
-      if (!client.setThreadName) throw aiSessionControlError("AI_SESSION_COMMAND_UNSUPPORTED", "Codex app-server does not support renaming threads.", 409);
-      await client.setThreadName(threadId, input.argument || "");
-      return { command: input.command, value: input.argument };
+      const result = await this.renameSession(session, input.argument || "");
+      return { command: input.command, value: result.title };
     }
     if (input.argument) {
       if (!client.setThreadGoal) throw aiSessionControlError("AI_SESSION_COMMAND_UNSUPPORTED", "Codex app-server does not support goals.", 409);
@@ -622,6 +636,17 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
     const result = await client.getThreadGoal(threadId);
     const goal = result.goal && typeof result.goal === "object" ? result.goal as Record<string, unknown> : undefined;
     return { command: input.command, value: typeof goal?.objective === "string" ? goal.objective : "No active goal." };
+  }
+
+  async renameSession(session: AiSessionStatus, title: string) {
+    if (session.agent !== "codex" || !session.providerSessionId) {
+      throw aiSessionControlError("AI_SESSION_RENAME_UNSUPPORTED", "Only Codex app-server sessions support this rename adapter.", 409);
+    }
+    this.titleGenerator.cancel(session.providerSessionId);
+    const normalized = title.trim();
+    const updated = this.registry.patch(session.id, { title: normalized || undefined });
+    if (!updated) throw aiSessionControlError("AI_SESSION_NOT_FOUND", "AI session not found.", 404);
+    return { title: normalized, authority: "adapter" as const };
   }
 
   private createClient(options: CodexAppServerClientOptions) {
@@ -646,20 +671,10 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
       return;
     }
     if (event.type === "thread-name") {
-      const session = this.registry.getByProviderSessionId("codex", event.threadId);
-      if (session) {
-        this.registry.applyAdapterSnapshot({
-          source: "adapter-snapshot",
-          agent: "codex",
-          appId: session.appId,
-          appSessionId: session.appSessionId,
-          providerSessionId: event.threadId,
-          title: event.name,
-        });
-      }
       return;
     }
     this.projector.apply(event);
+    this.titleGenerator.handle(event);
   }
 
   private upsertThread(thread: CodexThread, options: { bindAppSession: boolean; creationSource?: AiSessionStatus["creationSource"] }) {

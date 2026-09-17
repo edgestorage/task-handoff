@@ -34,6 +34,8 @@ import {
   AiSessionResumeCoordinator,
   AiSessionOpenAppCoordinator,
   AiSessionProviderRegistry,
+  SessionRenameIntentStore,
+  SessionTitleCoordinator,
   ClaudeAppSessionBindingProvider,
   ClaudeControlSockSessionBridge,
   CodexAppServerSessionBridge,
@@ -105,6 +107,8 @@ import {
   AiSessionModelSelectionActionResponseSchema,
   AiSessionReasoningEffortInputSchema,
   AiSessionReasoningEffortActionResponseSchema,
+  AiSessionRenameInputSchema,
+  AiSessionRenameResultSchema,
   AiSessionStoryInputSchema,
   AiSessionStoryActionResponseSchema,
   type AiSessionModelSelection,
@@ -897,7 +901,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     },
     capability: () => ({
       agent: "codex",
-      actions: { create: true, send: true, queue: true, steer: true, interrupt: true, archive: true, delete: true, fork: true, approvalDecisions: ["allow", "deny", "skip"] },
+      actions: { create: true, send: true, queue: true, steer: true, interrupt: true, archive: true, delete: true, fork: true, rename: true, approvalDecisions: ["allow", "deny", "skip"] },
       permissionModes: ["ask", "auto-review", "full-access"],
       timeline: { sessionRead: true, turnRead: true, liveItems: true },
       modelSelection: {
@@ -921,7 +925,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     discoveryProvider: claudeControlSock,
     capability: {
       agent: "claude",
-      actions: { create: false, send: true, queue: true, steer: true, interrupt: true, archive: true, delete: false, fork: false, approvalDecisions: [] },
+      actions: { create: false, send: true, queue: true, steer: true, interrupt: true, archive: true, delete: false, fork: false, rename: false, approvalDecisions: [] },
       permissionModes: [],
       timeline: { sessionRead: false, turnRead: false, liveItems: false },
       modelSelection: {
@@ -945,7 +949,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       },
       capability: {
         agent: "opencode",
-        actions: { create: true, send: true, queue: true, steer: true, interrupt: true, archive: true, delete: true, fork: true, approvalDecisions: ["allow", "deny"] },
+        actions: { create: true, send: true, queue: true, steer: true, interrupt: true, archive: true, delete: true, fork: true, rename: true, approvalDecisions: ["allow", "deny"] },
         permissionModes: ["ask", "auto-review", "full-access"],
         timeline: { sessionRead: true, turnRead: true, liveItems: true },
         modelSelection: {
@@ -1059,6 +1063,17 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     stopApp: (appSessionId) => { appRuntime.stop(appSessionId); },
     releaseSessionResources: (sessionId) => aiSessionConversationAttachments.releaseSession(sessionId),
     onDiagnostic: (diagnostic) => app.log.warn({ diagnostic }, "AI session close rollback"),
+  });
+  const sessionTitles = new SessionTitleCoordinator({
+    registry: aiSessions,
+    controller: aiSessionController,
+    appRuntime,
+    intents: new SessionRenameIntentStore(storagePaths.dataDir, (warning) => {
+      app.log.warn({ warning }, "AI session rename intent was sanitized");
+    }),
+    isAppDerivedTitle: (session) => session.agent === "claude" && Boolean(session.appSessionId),
+    isIndependentTitle: (session) => session.agent === "codex",
+    onDiagnostic: (diagnostic) => app.log.warn({ diagnostic }, "AI session title convergence diagnostic"),
   });
   let serviceClosing = false;
   const refreshAiSessions = async () => {
@@ -1365,6 +1380,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     if (changeReason === "delete") retainCodexTimelineHistory();
     scheduleAiSessionPublish();
     for (const session of aiSessions.list()) {
+      void sessionTitles.observeProviderTitle(session.id);
       const previousStatus = aiSessionLifecycleById.get(session.id);
       aiSessionLifecycleById.set(session.id, session.status);
       if (previousStatus && previousStatus !== "idle" && session.status === "idle" && session.queue.pendingCount > 0) {
@@ -1388,9 +1404,11 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     startupAiSessionTask = setImmediate(() => {
       startupAiSessionTask = undefined;
       if (serviceClosing) return;
-      void refreshAndPublishAiSessions("startup").catch((error) => {
-        app.log.warn({ err: error }, "initial AI session discovery failed");
-      });
+      void refreshAndPublishAiSessions("startup")
+        .then(() => sessionTitles.recover())
+        .catch((error) => {
+          app.log.warn({ err: error }, "initial AI session discovery or title recovery failed");
+        });
     });
     aiSessionTimer = setInterval(() => {
       void refreshAndPublishAiSessions().catch((error) => {
@@ -1430,6 +1448,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   });
   const publishAppSessionRuntimeChange = (reason: AppSessionEventReason, session: Record<string, unknown>) => {
     publishAppSessionSnapshot(reason);
+    if (typeof session.id === "string") void sessionTitles.observeAppSessionTitle(session.id);
     const aiReason: AiSessionEventReason = reason === "app-session-recovered" ? "discovery-scan" : reason;
     void refreshAndPublishAiSessions(aiReason).catch((error) => {
       app.log.warn({ err: error, reason, sessionId: session.id }, "failed to refresh AI sessions after app session event");
@@ -1985,6 +2004,16 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     }
   });
 
+  app.put<{ Params: { id: string }; Body: unknown }>("/api/ai-sessions/:id/title", async (request, reply) => {
+    try {
+      const input = AiSessionRenameInputSchema.parse(request.body || {});
+      const result = AiSessionRenameResultSchema.parse(await sessionTitles.renameAiSession(request.params.id, input));
+      return { data: result };
+    } catch (error: unknown) {
+      return sendAiSessionControlError(reply, error);
+    }
+  });
+
   app.put<{ Params: { id: string }; Body: unknown }>("/api/ai-sessions/:id/story", async (request, reply) => {
     try {
       const body = AiSessionStoryInputSchema.parse(request.body || {});
@@ -2234,7 +2263,16 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     if (!session) return reply.code(404).send({ error: { code: "AI_SESSION_NOT_FOUND", message: "AI session not found." } });
     try {
       const input = AiSessionCommandInputSchema.parse(request.body || {});
-      const result = AiSessionCommandResultSchema.parse(await codexAppServer.executeCommand(session, input));
+      // Compatibility for v0.0.31: the composer exposed rename as a Codex command.
+      const result = input.command === "rename"
+        ? AiSessionCommandResultSchema.parse({
+            command: "rename",
+            value: (await sessionTitles.renameAiSession(session.id, {
+              title: input.argument || "",
+              clientRequestId: `legacy_command_rename_${crypto.randomUUID()}`,
+            })).title,
+          })
+        : AiSessionCommandResultSchema.parse(await codexAppServer.executeCommand(session, input));
       publishAiSessionSnapshot("control-action");
       return { data: result };
     } catch (error: unknown) {
@@ -2594,7 +2632,9 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   app.patch<{ Params: { id: string }; Body: unknown }>("/api/apps/sessions/:id", async (request, reply) => {
     try {
       const { title } = AppSessionRenameSchema.parse(request.body || {});
-      return { data: appRuntime.rename(request.params.id, title) };
+      // Compatibility for v0.0.31: preserve the AppSession PATCH response while
+      // routing linked sessions through the shared title coordinator.
+      return { data: await sessionTitles.renameAppSession(request.params.id, title) };
     } catch (error: unknown) {
       if (error instanceof z.ZodError) {
         return reply.code(400).send({ error: { code: "APP_SESSION_UPDATE_INVALID", message: appLaunchInvalidMessage(error) } });

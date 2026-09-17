@@ -67,6 +67,15 @@ export type CodexThreadSettingsResult = CodexThreadSettings & {
   modelProvider?: string;
 };
 
+export type CodexEphemeralStructuredTurnOptions = {
+  cwd: string;
+  prompt: string;
+  outputSchema: JsonValue;
+  model: string;
+  modelProvider: string;
+  reasoningEffort?: AiSessionReasoningEffort;
+};
+
 export type CodexThreadForkCapabilities = {
   fullHistory: boolean;
   throughTurn: boolean;
@@ -105,5 +114,6 @@ export type CodexAppServerClientLike = EventEmitter & {
   setThreadGoal?: (threadId: string, objective: string) => Promise<JsonValue>;
   getThreadGoal?: (threadId: string) => Promise<JsonValue>;
   compactThread?: (threadId: string) => Promise<void>;
+  runEphemeralStructuredTurn?: (options: CodexEphemeralStructuredTurnOptions) => Promise<string>;
   respondToApproval?: (request: CodexApprovalRequest, decision: CodexApprovalDecision) => Promise<void>;
 };

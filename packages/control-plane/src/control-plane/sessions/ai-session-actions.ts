@@ -18,6 +18,8 @@ import {
   AiSessionResumeResultSchema,
   AiSessionModelSelectionActionResponseSchema,
   AiSessionReasoningEffortActionResponseSchema,
+  AiSessionRenameInputSchema,
+  AiSessionRenameResultSchema,
   AiSessionStatusSchema,
   AiSessionDetailSchema,
   AiSessionDetailReadSchema,
@@ -47,11 +49,14 @@ import {
   type AiSessionStatus,
   type AiSessionModelSelection,
   type AiSessionReasoningEffort,
+  type AiSessionRenameInput,
+  type AiSessionRenameResult,
   type AiSessionTurn,
 } from "@task-handoff/protocol/ai-sessions";
 import {
   aiSessionProviderCapability,
   aiSessionTimelineCapabilityAgents,
+  supportsAiSessionWorkspaceCheckout,
   supportsAiSessionWorkspaceSelection,
   type ControlledInstance,
   type NodeRuntime,
@@ -289,6 +294,21 @@ export class AiSessionActionService {
     }));
   }
 
+  async checkoutWorkspaceBranch(instanceId: string, cwd: { type: "runtime-path"; path: string }, branch: string): Promise<RepositoryAiSessionWorkspace> {
+    const instance = await this.options.requireInstance(instanceId);
+    if (!supportsAiSessionWorkspaceCheckout(instance.capabilities)) {
+      throw Object.assign(new Error("This controlled instance does not support pre-session branch checkout."), {
+        statusCode: 409,
+        code: "AI_SESSION_WORKSPACE_CHECKOUT_UNSUPPORTED",
+      });
+    }
+    return parseResponse(RepositoryAiSessionWorkspaceSchema, await this.options.request(instance, "/repository/ai-session-workspace/checkout", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ cwd, branch }),
+    }));
+  }
+
   async fork(instanceId: string, aiSessionId: string, input: AiSessionForkInput): Promise<AiSessionForkResult> {
     return parseResponse(AiSessionForkResultSchema, await this.post(instanceId, sessionRoute(aiSessionId, "fork"), input));
   }
@@ -405,6 +425,21 @@ export class AiSessionActionService {
     return parseResponse(AiSessionCommandResultSchema, await this.post(instanceId, sessionRoute(sessionId, "commands"), input));
   }
 
+  async rename(instanceId: string, sessionId: string, input: AiSessionRenameInput): Promise<AiSessionRenameResult> {
+    const body = AiSessionRenameInputSchema.parse(input);
+    const instance = await this.options.requireInstance(instanceId);
+    const session = instance.aiSessions.sessions.find((candidate) => candidate.id === sessionId);
+    if (!session) throw Object.assign(new Error("AI Session was not found."), { statusCode: 404, code: "AI_SESSION_NOT_FOUND" });
+    if (session.actions?.rename !== true) {
+      throw Object.assign(new Error("This AI session does not support renaming."), { statusCode: 409, code: "AI_SESSION_RENAME_UNSUPPORTED" });
+    }
+    return parseResponse(AiSessionRenameResultSchema, await this.options.request(instance, sessionRoute(sessionId, "title"), {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }));
+  }
+
   async queue(instanceId: string, sessionId: string) {
     return parseResponse(AiSessionQueueSchema, await this.get(instanceId, sessionRoute(sessionId, "queue")));
   }
@@ -455,6 +490,7 @@ export class AiSessionActionService {
       body: JSON.stringify(body),
     });
   }
+
 }
 
 function instanceSupportsAiSessionWorkspaceSelection(instance: ControlledInstance) {

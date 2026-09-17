@@ -124,6 +124,7 @@ function normalizeActions(value: unknown): AiSessionStatus["actions"] {
     interrupt: typeof record.interrupt === "boolean" ? record.interrupt : undefined,
     approval: typeof record.approval === "boolean" ? record.approval : undefined,
     fork: typeof record.fork === "boolean" ? record.fork : undefined,
+    rename: typeof record.rename === "boolean" ? record.rename : undefined,
     openApp: typeof record.openApp === "boolean" ? record.openApp : undefined,
     close: typeof record.close === "boolean" ? record.close : undefined,
   };

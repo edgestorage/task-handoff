@@ -233,13 +233,16 @@ test("floating detail context shows the agent as an icon without visible text", 
   assert.match(floatingDock, /\.ai-board-floating-agent \{[\s\S]*display: inline-flex;[\s\S]*align-items: center;[\s\S]*flex: 0 0 auto;/);
 });
 
-test("detail context folder reuses desktop-local open and context-menu behavior", () => {
-  assert.match(panel, /v-if="canOpenSelectedSessionFolder"[\s\S]*<ContextMenuTrigger as-child>[\s\S]*class="session-ai-detail-folder"[\s\S]*@click="openSelectedSessionFolder"[\s\S]*<TooltipTrigger as-child>[\s\S]*class="session-ai-detail-context-item"/);
-  assert.doesNotMatch(panel, /<TooltipTrigger as-child>\s*<ContextMenuTrigger as-child>/);
-  assert.match(panel, /<ContextMenuItem[\s\S]*@select="openSelectedSessionFolder"[\s\S]*sessions\.panel\.openInFileManager/);
+test("detail context folder reuses the shared path menu for desktop-local open and copy path", () => {
+  assert.match(panel, /<AiSessionPathContextMenu[\s\S]*:can-copy="canCopySelectedSessionFolderPath"[\s\S]*:can-open="canOpenSelectedSessionFolder"[\s\S]*:can-rename="false"[\s\S]*@copy="copySelectedSessionFolderPath"[\s\S]*@open="openSelectedSessionFolder"/);
+  assert.match(panel, /<button v-if="canOpenSelectedSessionFolder" type="button" class="session-ai-detail-folder" @click="openSelectedSessionFolder">[\s\S]*<TooltipTrigger as-child>[\s\S]*class="session-ai-detail-context-item"/);
+  assert.match(panel, /<span v-else class="session-ai-detail-context-path">[\s\S]*<TooltipTrigger as-child>[\s\S]*class="session-ai-detail-context-item"/);
   assert.match(panel, /desktopRuntimePathAccess\(props\.instance\) === "desktop-local"[\s\S]*canOpenDesktopLocalPath\(\)/);
   assert.match(panel, /openDesktopLocalPath\(selectedSessionRuntimePath\.value\)[\s\S]*openInFileManagerFailed/);
+  assert.match(panel, /canCopySelectedSessionFolderPath = computed\(\(\) => selectedSessionRuntimePath\.value !== ""\)/);
+  assert.match(panel, /function copySelectedSessionFolderPath[\s\S]*copyRuntimePathToClipboard\(selectedSessionRuntimePath\.value\)/);
   assert.match(panelCss, /\.session-ai-detail-folder:hover[\s\S]*\.session-ai-detail-folder:focus-visible/);
+  assert.match(panelCss, /\.session-ai-detail-context-path \{[\s\S]*display: inline-flex;[\s\S]*min-width: 0;[\s\S]*max-width: 100%;/);
 });
 
 test("floating user prompts collapse to three lines and become compact when sticky", () => {

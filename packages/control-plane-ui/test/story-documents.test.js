@@ -27,3 +27,9 @@ test("Story tree exposes an inline control that expands truncated documents", ()
   assert.match(storyView, /v-if="hasMoreTreeDocuments\(story\)"[^>]*@click="showAllTreeDocuments\(story\)"/);
   assert.match(storyView, /t\("stories\.moreDocuments"\)/);
 });
+
+test("document previews reload only when the selected document identity changes", () => {
+  assert.match(storyView, /watch\(documentMarkdownSessionId, async \(documentKey, _previousDocumentKey, onCleanup\) => \{/);
+  assert.match(storyView, /onCleanup\(\(\) => \{[\s\S]*controller\.abort\(\);/);
+  assert.doesNotMatch(storyView, /watch\(selectedResource, async \(resource\)/);
+});

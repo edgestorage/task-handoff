@@ -68,6 +68,10 @@
       <SquareTerminal :size="14" />
       <span>{{ t("sessions.actions.openTerminal") }}</span>
     </ContextMenuItem>
+    <ContextMenuItem v-if="canRename" class="ai-session-context-menu-item" @select="$emit('renameSession')">
+      <Pencil :size="14" />
+      <span>{{ t("sessions.actions.rename") }}</span>
+    </ContextMenuItem>
     <ContextMenuSub>
       <ContextMenuSubTrigger class="ai-session-context-menu-item">
         <Copy :size="14" />
@@ -106,7 +110,7 @@
 </template>
 
 <script setup lang="ts">
-import { BookOpen, Check, Copy, ExternalLink, Folder, Hash, Split, Square, SquareTerminal, Type, Zap } from "@lucide/vue";
+import { BookOpen, Check, Copy, ExternalLink, Folder, Hash, Pencil, Split, Square, SquareTerminal, Type, Zap } from "@lucide/vue";
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import type { ControlPlaneTrigger } from "../../api/types";
@@ -130,6 +134,7 @@ const props = withDefaults(defineProps<{
   canOpenApp: boolean;
   canOpenTerminal?: boolean;
   canFork?: boolean;
+  canRename?: boolean;
   isForking?: boolean;
   isOpeningTerminal?: boolean;
   isStoppingAppSession?: boolean;
@@ -152,6 +157,7 @@ const emit = defineEmits<{
   closeSession: [];
   openApp: [];
   openTerminal: [];
+  renameSession: [];
   forkSession: [mode: "current" | "managed-worktree"];
   toggleTrigger: [configHash: string];
   storyAssigned: [target: AiSessionStoryTarget];

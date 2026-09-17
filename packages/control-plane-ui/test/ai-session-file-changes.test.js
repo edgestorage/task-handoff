@@ -49,6 +49,7 @@ test("parses unified diff line numbers while excluding patch metadata", () => {
     "-before",
     "+after",
     "+extra",
+    "",
   ].join("\n"));
   assert.deepEqual(lines, [
     { kind: "context", content: "same", oldLine: 10, newLine: 10 },

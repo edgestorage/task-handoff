@@ -116,6 +116,7 @@
       :has-app-session="Boolean(card.session.appSessionId)"
       :can-open-app="Boolean(card.session.appSessionId || card.session.actions?.openApp)"
       :can-fork="card.session.actions?.fork === true"
+      :can-rename="card.session.actions?.rename === true"
       :is-forking="isForking"
       :is-stopping-app-session="isStoppingAppSession"
       :session-id="card.session.id"
@@ -128,6 +129,7 @@
       :trigger-templates="triggerTemplates"
       @close-session="$emit('stopAppSession', card)"
       @open-app="$emit('openAiSessionApp', card.instance, card.session)"
+      @rename-session="$emit('renameSession', card)"
       @fork-session="$emit('forkSession', card, $event)"
       @story-assigned="$emit('storyAssigned', card, $event)"
       @story-assign-failed="(target, error) => $emit('storyAssignFailed', card, target, error)"
@@ -191,6 +193,7 @@ const emit = defineEmits<{
   openAiSessionApp: [instance: InstanceWithAiSessions, session?: AiSessionSummary];
   previousPrompt: [card: AiBoardCard];
   resolveApproval: [instance: InstanceWithAiSessions, session: AiSessionSummary, decision: "allow" | "deny" | "skip"];
+  renameSession: [card: AiBoardCard];
   selectCard: [key: string];
   selectInstance: [instanceId: string];
   stopAppSession: [card: AiBoardCard];

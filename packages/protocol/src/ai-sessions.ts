@@ -241,10 +241,10 @@ export const AiSessionActionsSchema = z
     interrupt: z.boolean().optional(),
     approval: z.boolean().optional(),
     fork: z.boolean().optional(),
+    rename: z.boolean().optional(),
     openApp: z.boolean().optional(),
     close: z.boolean().optional(),
-  })
-  .strict();
+  });
 
 const AiSessionParentProviderSessionIdSchema = z.string().trim().min(1).max(240);
 
@@ -359,6 +359,19 @@ export const AiSessionCommandResultSchema = z.object({
   command: AiSessionCommandNameSchema,
   value: z.string().max(4000).optional(),
   turnId: z.string().trim().min(1).max(240).optional(),
+}).strict();
+
+export const AiSessionRenameInputSchema = z.object({
+  title: z.string().trim().max(120),
+  expectedTitle: z.string().trim().max(240).optional(),
+  clientRequestId: z.string().trim().min(1).max(160),
+}).strict();
+
+export const AiSessionRenameResultSchema = z.object({
+  disposition: z.enum(["renamed", "already-named"]),
+  aiSessionId: z.string().trim().min(1).max(120),
+  appSessionId: z.string().trim().min(1).max(120).optional(),
+  title: z.string().trim().max(120),
 }).strict();
 
 export const AiSessionReferenceKindSchema = z.enum(["skill", "app", "plugin"]);
@@ -525,6 +538,11 @@ export const AiSessionModelSelectionActionResponseSchema = z.object({
 export const AiSessionReasoningEffortInputSchema = z.object({
   clientRequestId: z.string().trim().min(1).max(160),
   reasoningEffort: AiSessionReasoningEffortSchema,
+}).strict();
+
+export const AiSessionWorkspaceCheckoutInputSchema = z.object({
+  cwdFolderId: z.string().trim().min(1).max(120).optional(),
+  branch: z.string().trim().min(1).max(1024),
 }).strict();
 
 export const AiSessionReasoningEffortActionResponseSchema = z.object({
@@ -1492,6 +1510,8 @@ export type AiSessionPermissionMode = z.infer<typeof AiSessionPermissionModeSche
 export type AiSessionCommandName = z.infer<typeof AiSessionCommandNameSchema>;
 export type AiSessionCommandInput = z.infer<typeof AiSessionCommandInputSchema>;
 export type AiSessionCommandResult = z.infer<typeof AiSessionCommandResultSchema>;
+export type AiSessionRenameInput = z.infer<typeof AiSessionRenameInputSchema>;
+export type AiSessionRenameResult = z.infer<typeof AiSessionRenameResultSchema>;
 export type AiSessionReferenceKind = z.infer<typeof AiSessionReferenceKindSchema>;
 export type AiSessionReference = z.infer<typeof AiSessionReferenceSchema>;
 export type AiSessionMentionKind = z.infer<typeof AiSessionMentionKindSchema>;

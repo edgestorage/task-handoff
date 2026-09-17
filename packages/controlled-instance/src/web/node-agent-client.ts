@@ -1,6 +1,13 @@
 import crypto from "node:crypto";
 import { StandardReconnectBackoff } from "@task-handoff/core/core/reconnect";
-import { UpdateControlledInstanceNodeAgentConnectionSchema, type ImageSelection, type InstanceAppInventory } from "@task-handoff/protocol/control-plane";
+import {
+  NODE_AGENT_PROTOCOL_VERSION_HEADER,
+  projectControlledInstanceHeartbeatForNodeAgentProtocol,
+  ProtocolVersionSchema,
+  UpdateControlledInstanceNodeAgentConnectionSchema,
+  type ImageSelection,
+  type InstanceAppInventory,
+} from "@task-handoff/protocol/control-plane";
 import {
   GitCredentialHttpsResolveResponseSchema,
   GitCredentialSshAgentResponseSchema,
@@ -78,6 +85,7 @@ export class NodeAgentRegistrationClient {
   private readonly reconnectBackoff = new StandardReconnectBackoff();
   private readonly processIncarnationId = crypto.randomUUID();
   private connectionRevision = 0;
+  private nodeAgentProtocolVersion: string | undefined;
   private readonly config: NodeAgentRegistrationConfig;
   private readonly snapshotProvider: SnapshotProvider;
   private readonly fetchImpl: typeof fetch;
@@ -103,6 +111,7 @@ export class NodeAgentRegistrationClient {
     if (normalized === this.config.nodeAgentUrl?.replace(/\/$/, "")) return normalized;
     this.config.nodeAgentUrl = normalized;
     this.connectionRevision += 1;
+    this.nodeAgentProtocolVersion = undefined;
     this.registeredInstanceId = "";
     this.reconnectBackoff.reset();
     if (!this.stopped) this.schedule(0);
@@ -214,7 +223,7 @@ export class NodeAgentRegistrationClient {
     const connectionRevision = this.connectionRevision;
     const snapshot = await this.snapshotProvider();
     const instanceId = this.requiredInstanceId();
-    const response = await this.request(`node-agent/instances/${encodeURIComponent(instanceId)}/register`, {
+    const response = await this.registerRequest(`node-agent/instances/${encodeURIComponent(instanceId)}/register`, {
       instanceId: this.config.instanceId,
       projectId: this.config.projectId,
       nodeId: this.config.nodeId,
@@ -241,7 +250,7 @@ export class NodeAgentRegistrationClient {
     }
     const snapshot = await this.snapshotProvider();
     try {
-      await this.request(`node-agent/instances/${encodeURIComponent(instanceId)}/heartbeat`, {
+      const heartbeat = projectControlledInstanceHeartbeatForNodeAgentProtocol({
         status: snapshot.status,
         health: snapshot.health,
         protocolVersion: snapshot.protocolVersion,
@@ -252,7 +261,8 @@ export class NodeAgentRegistrationClient {
         aiSessions: snapshot.aiSessions,
         workspace: snapshot.workspace,
         processIncarnationId: this.processIncarnationId,
-      });
+      }, this.nodeAgentProtocolVersion);
+      await this.request(`node-agent/instances/${encodeURIComponent(instanceId)}/heartbeat`, heartbeat);
     } catch (error) {
       if (requestStatus(error) === 404) this.registeredInstanceId = "";
       throw error;
@@ -303,6 +313,18 @@ export class NodeAgentRegistrationClient {
       headers: { "content-type": "application/json" },
       ...(method === "GET" || method === "HEAD" ? {} : { body: JSON.stringify(stripUndefined(body)) }),
     });
+    const payload = (await response.json().catch(() => ({}))) as { data?: Record<string, unknown> };
+    return payload.data || {};
+  }
+
+  private async registerRequest(path: string, body: Record<string, unknown>) {
+    const response = await this.rawRequest(path, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(stripUndefined(body)),
+    });
+    const peerProtocol = ProtocolVersionSchema.safeParse(response.headers.get(NODE_AGENT_PROTOCOL_VERSION_HEADER));
+    this.nodeAgentProtocolVersion = peerProtocol.success ? peerProtocol.data : undefined;
     const payload = (await response.json().catch(() => ({}))) as { data?: Record<string, unknown> };
     return payload.data || {};
   }

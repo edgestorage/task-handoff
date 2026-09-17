@@ -42,3 +42,15 @@ test("settings sections use one full-width content contract without a right-only
     assert.doesNotMatch(component, new RegExp(`\\.${pageClass}\\s*\\{[^}]*padding-right`));
   }
 });
+
+test("settings content reaches the bottom edge and fades beneath the section tabs", () => {
+  const layout = read("src/apps/control-plane/settings/SettingsPageLayout.css");
+  const modal = read("src/apps/control-plane/settings/SettingsModal.vue");
+
+  assert.match(modal, /--settings-top-fade-height: 18px/);
+  assert.match(modal, /gap: 0/);
+  assert.match(modal, /padding: 18px 18px 0/);
+  assert.match(modal, /padding: 12px 12px 0/);
+  assert.match(layout, /padding-top: var\(--settings-top-fade-height, 18px\)/);
+  assert.match(layout, /mask-image: linear-gradient\(\s*to bottom,\s*transparent,\s*#000 var\(--settings-top-fade-height, 18px\)\s*\)/);
+});

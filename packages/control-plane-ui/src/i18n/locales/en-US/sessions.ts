@@ -30,11 +30,12 @@ export const sessions = {
   actions: {
     allow: "Allow", skip: "Skip", deny: "Deny", controls: "AI session card controls", searchTriggers: "Search triggers", noTriggers: "No trigger templates",
     noMatchingTriggers: "No matching triggers", remove: "Remove", add: "Add", openAppFor: "Open app session for {agent}", openApp: "Open app session", openTerminal: "Open Terminal",
-    moreFor: "More actions for {agent}", more: "More actions", fork: "Continue chatting", forkCurrent: "Use current workspace", forkWorktree: "Create independent worktree", continueFromTurn: "Continue chatting from this turn", forkBusyTitle: "Continue chatting while this turn is running?", forkBusyDescription: "Codex will start a new chat from the interrupted snapshot. The source turn will continue without interruption.", forkConfirm: "Continue chatting", forking: "Continuing chat", closingApp: "Closing app session", closeApp: "Close app session", closingSession: "Closing AI session", closeSession: "Close AI session", unread: "Unread AI session", openedFromTerminal: "Opened from a terminal app session",
+    moreFor: "More actions for {agent}", more: "More actions", rename: "Rename", fork: "Continue chatting", forkCurrent: "Use current workspace", forkWorktree: "Create independent worktree", continueFromTurn: "Continue chatting from this turn", forkBusyTitle: "Continue chatting while this turn is running?", forkBusyDescription: "Codex will start a new chat from the interrupted snapshot. The source turn will continue without interruption.", forkConfirm: "Continue chatting", forking: "Continuing chat", closingApp: "Closing app session", closeApp: "Close app session", closingSession: "Closing AI session", closeSession: "Close AI session", unread: "Unread AI session", openedFromTerminal: "Opened from a terminal app session",
     previousMessage: "Previous user message for {agent}", nextMessage: "Next user message for {agent}", addTrigger: "Add trigger", triggersBound: "{count} triggers bound",
     addToStory: "Add to Story", saveAsPreset: "Save as preset action", loadingStories: "Loading stories…", storiesLoadFailed: "Could not load stories.", noStories: "No Story yet", storyAssigned: "Added to Story", storyAssignFailed: "Could not add AI session to Story",
     copy: "Copy", copyPath: "Copy path", copyName: "Copy name", copySessionId: "Copy Session ID", copied: "Copied", copyFailed: "Could not copy the value.",
   },
+  rename: { title: "Rename AI session", description: "Leave blank to use the latest prompt.", label: "Session title", failed: "Failed to rename AI session." },
   detail: {
     selected: "Selected AI session", sessionDetails: "Session details", workspace: "Workspace", session: "Session", appBinding: "App binding", forkedFrom: "Forked from", unknown: "Unknown",
     notBound: "Not bound", collapse: "Collapse details", expand: "Expand", collapsePrompt: "Collapse",
@@ -52,6 +53,7 @@ export const sessions = {
     copyLink: "Copy link",
   },
   panel: {
+    switchBranchFailed: "Failed to switch the current folder branch.",
     view: "View", status: "Status", listOptions: "AI session list options", sessionList: "AI session list", sessionListDescription: "Choose a conversation to show in the detail view.", newSession: "New AI session", allStatuses: "All statuses", active: "Active", waiting: "Waiting", problem: "Problem",
     noMatching: "No matching sessions", noConversations: "No conversations yet", tryFilter: "Try another status filter.", startHint: "Use the + button above to start a conversation.",
     resizeList: "Resize AI session list", startIdea: "Start with an idea", searchProjects: "Search projects", noProjects: "No projects found", newProject: "New project", openInFileManager: "Open in file manager", openInFileManagerFailed: "Failed to open the folder in the system file manager.", renameProject: "Rename", renameProjectDescription: "Change the project name shown in folder pickers and AI session groups without changing its path.", renameProjectFailed: "Failed to rename the project.", projectName: "Project name", currentBranchMode: "Current branch", currentFolderMode: "Current folder", worktreeMode: "Worktree", chooseBranch: "Choose branch", searchBranches: "Search branches", detached: "Detached", switchBranchTitle: "Switch the current folder branch?", switchBranchDescription: "Starting the session will switch the current folder to “{branch}”. Uncommitted changes remain, but other active sessions in this folder may observe the new working tree.", confirmBranchSwitch: "Confirm switch",
@@ -125,7 +127,7 @@ export const sessions = {
   },
   tabs: {
     views: "Session views", paneViews: "{pane} session views", paneTabs: "{pane} session tabs", status: "Status", close: "Close session", closeNamed: "Close {name}",
-    rename: "Rename session", moveLeft: "Move to left", moveRight: "Move to right", manageApps: "Manage apps", manageAppsDescription: "Install or uninstall apps",
+    rename: "Rename session", renameUnavailable: "Update the controlled instance to rename this linked session", moveLeft: "Move to left", moveRight: "Move to right", manageApps: "Manage apps", manageAppsDescription: "Install or uninstall apps",
     paneMenu: "Sessions in this pane", emptyPane: "No sessions in this pane", closeSplit: "Close split view", split: "Split session view", restore: "Restore session preview",
     expand: "Expand session preview", restoreShort: "Restore preview", expandShort: "Expand preview", resizePanes: "Resize session panes", instanceStatus: "Instance status", headerDensity: "Header height", headerCompact: "Compact", headerNormal: "Normal", showStatusBar: "Show bottom status bar", showInstanceSidebar: "Show instance sidebar", alwaysOnTop: "Keep window on top", alwaysOnTopReadFailed: "Failed to read the window always-on-top setting.", alwaysOnTopFailed: "Failed to update the window always-on-top setting.",
     health: "Health {status}", workspace: "Workspace {status}", waitingMetrics: "Waiting for the first resource sample.", resourcesUnavailable: "Resources unavailable",

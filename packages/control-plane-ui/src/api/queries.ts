@@ -689,6 +689,10 @@ export function getAiSessionWorkspace(instanceId: string, cwdFolderId?: string, 
   return sharedAiSessionsApi.workspace(instanceId, cwdFolderId, signal);
 }
 
+export function checkoutAiSessionWorkspaceBranch(instanceId: string, input: { cwdFolderId?: string; branch: string }) {
+  return sharedAiSessionsApi.checkoutWorkspaceBranch(instanceId, input);
+}
+
 export function openAiSessionApp(instanceId: string, aiSessionId: string, clientRequestId: string) {
   return sharedAiSessionsApi.openApp(instanceId, aiSessionId, clientRequestId);
 }
@@ -821,6 +825,10 @@ export function stopAppSession(instanceId: string, sessionId: string) {
 
 export function renameAppSession(instanceId: string, sessionId: string, title: string) {
   return sharedControlPlaneClient.appSessions.rename(instanceId, sessionId, title);
+}
+
+export function renameAiSession(instanceId: string, sessionId: string, input: import("@task-handoff/protocol/ai-sessions").AiSessionRenameInput) {
+  return sharedAiSessionsApi.rename(instanceId, sessionId, input);
 }
 
 export function getInstanceAppManagement(instanceId: string) {

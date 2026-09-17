@@ -206,6 +206,7 @@ export function controlledInstanceCapabilities(
       screenshots: available.some((item) => item.kind === "gui") && Boolean(executablePath("import")),
       logs: true,
       aiSessionWorkspaceSelection: true,
+      aiSessionWorkspaceCheckout: true,
       aiSessionPersistenceSettings: true,
       privateModelCatalog: true,
       codexManagedSettings: true,

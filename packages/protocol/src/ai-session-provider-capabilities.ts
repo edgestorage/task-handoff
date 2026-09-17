@@ -37,6 +37,8 @@ export const AiSessionProviderCapabilitySchema = z.object({
     archive: z.boolean().default(false),
     delete: z.boolean().default(false),
     fork: z.boolean().default(false),
+    // Compatibility for v0.0.31: absence means provider-native rename is unsupported.
+    rename: z.boolean().default(false),
     approvalDecisions: z.array(z.enum(["allow", "deny", "skip"])).max(3).default([]),
   }).passthrough(),
   // Compatibility for v0.0.28: absence disables only permission-mode UI/actions.
@@ -90,4 +92,9 @@ export function normalizeAiSessionHierarchyCapabilities(
 
 export function supportsAiSessionSubagentHierarchy(capability: unknown) {
   return normalizeAiSessionHierarchyCapabilities(capability).subagents;
+}
+
+export function supportsAiSessionProviderRename(capability: unknown) {
+  const parsed = AiSessionProviderCapabilitySchema.safeParse(capability);
+  return parsed.success && parsed.data.actions.rename;
 }

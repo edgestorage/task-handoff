@@ -9,6 +9,17 @@ export function storySortKey(story: Pick<Story, "id" | "ownerNodeId">) {
   return storyOrderKey(story);
 }
 
+export function reuseEqualStoryActivityTimes(
+  previous: ReadonlyMap<string, number> | undefined,
+  next: ReadonlyMap<string, number>,
+) {
+  if (!previous || previous.size !== next.size) return next;
+  for (const [key, value] of next) {
+    if (previous.get(key) !== value) return next;
+  }
+  return previous;
+}
+
 export function sortStories(
   stories: readonly Story[],
   mode: StorySortMode,

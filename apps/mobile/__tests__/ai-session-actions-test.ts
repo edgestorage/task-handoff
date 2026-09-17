@@ -11,6 +11,7 @@ function client(overrides: Partial<ControlPlaneClient['aiSessions']> = {}) {
     list: jest.fn().mockResolvedValue(snapshot),
     sendMessage: jest.fn().mockResolvedValue({}), approval: jest.fn().mockResolvedValue({}), interrupt: jest.fn().mockResolvedValue({}),
     close: jest.fn().mockResolvedValue({}),
+    rename: jest.fn().mockResolvedValue({ disposition: 'renamed', aiSessionId: 'session', title: 'Renamed' }),
     updateModelSelection: jest.fn().mockResolvedValue({}),
     fork: jest.fn().mockResolvedValue({ disposition: 'created', aiSessionId: 'forked-session', providerSessionId: 'forked-provider', creationSource: 'ai-session' }),
     steerQueue: jest.fn().mockResolvedValue({}), retryQueue: jest.fn().mockResolvedValue({}), removeQueue: jest.fn().mockResolvedValue({}),
@@ -47,6 +48,18 @@ test('closes through the shared client with an idempotency key and waits for aut
   expect((await coordinator.close('instance', 'session', 'close-request-1')).disposition).toBe('accepted');
   expect(api.aiSessions.close).toHaveBeenCalledWith('instance', 'session', 'close-request-1');
   expect(api.aiSessions.list).not.toHaveBeenCalled();
+});
+
+test('renames through the shared client without mutating the authoritative store', async () => {
+  const api = client();
+  const store = new MobileAiSessionStore();
+  const coordinator = new MobileAiSessionActionCoordinator('cp', api, store);
+  const input = { title: 'Renamed', expectedTitle: 'Original', clientRequestId: 'rename-request-1' };
+
+  expect((await coordinator.rename('instance', 'session', input)).disposition).toBe('accepted');
+  expect(api.aiSessions.rename).toHaveBeenCalledWith('instance', 'session', input);
+  expect(api.aiSessions.list).not.toHaveBeenCalled();
+  expect(store.session('cp', 'instance', 'session')).toBeUndefined();
 });
 
 test('bulk close limits concurrency and reports individual failures', async () => {

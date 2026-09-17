@@ -1,7 +1,9 @@
 import type { FastifyInstance } from "fastify";
 import {
+  CONTROL_PLANE_PROTOCOL_VERSION,
   ControlledInstanceHeartbeatSchema,
   ControlledInstanceRegisterSchema,
+  NODE_AGENT_PROTOCOL_VERSION_HEADER,
   type ControlledInstance,
   type ControlledInstanceHeartbeat,
   type ControlledInstanceRegister,
@@ -58,7 +60,10 @@ export function registerInstanceManagementRoutes(app: FastifyInstance, operation
     const payload = operations.sanitizeReport(id, "register", request.body);
     const instance = operations.register(id, ControlledInstanceRegisterSchema.parse(payload), bearerToken(request.headers));
     operations.afterReport(instance, "register");
-    return reply.code(201).send({ data: instance });
+    return reply
+      .header(NODE_AGENT_PROTOCOL_VERSION_HEADER, CONTROL_PLANE_PROTOCOL_VERSION)
+      .code(201)
+      .send({ data: instance });
   });
 
   app.post("/api/node-agent/instances/:id/heartbeat", async (request) => {

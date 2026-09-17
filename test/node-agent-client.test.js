@@ -99,6 +99,81 @@ test("controlled instance node agent client posts register and heartbeat payload
   assert.equal(requests[2].url, "http://node.local/api/node-agent/instances/inst_registered/heartbeat");
 });
 
+test("v0.0.31 node agents receive heartbeats without the newer rename action", async () => {
+  const requests = [];
+  const currentSnapshot = {
+    ...snapshot(),
+    protocolVersion: "2026-09-17",
+    aiSessions: {
+      runningCount: 1,
+      waitingCount: 0,
+      staleCount: 0,
+      updatedAt: "2026-09-17T00:00:00.000Z",
+      sessions: [{ id: "ais_1", agent: "codex", actions: { send: true, rename: true } }],
+    },
+  };
+  const client = new NodeAgentRegistrationClient(
+    {
+      controlMode: "controlled",
+      nodeAgentUrl: "http://node.local",
+      registrationToken: "secret-token",
+      instanceId: "inst_legacy_node",
+      heartbeatIntervalMs: 10_000,
+    },
+    async () => currentSnapshot,
+    async (url, init) => {
+      requests.push({ url: String(url), body: init.body ? JSON.parse(init.body) : undefined });
+      const data = String(url).endsWith("/register") ? { id: "inst_legacy_node" } : { ok: true };
+      return new Response(JSON.stringify({ data }), { status: 200, headers: { "content-type": "application/json" } });
+    },
+  );
+
+  await client.register();
+
+  assert.deepEqual(requests.map((request) => new URL(request.url).pathname.split("/").at(-1)), ["register", "heartbeat"]);
+  assert.deepEqual(requests[1].body.aiSessions.sessions[0].actions, { send: true });
+  assert.equal(currentSnapshot.aiSessions.sessions[0].actions.rename, true, "projection must not mutate the runtime snapshot");
+});
+
+test("current node-agent registration preserves current heartbeat actions", async () => {
+  const heartbeats = [];
+  const currentSnapshot = {
+    ...snapshot(),
+    protocolVersion: "2026-09-17",
+    aiSessions: {
+      runningCount: 1,
+      waitingCount: 0,
+      staleCount: 0,
+      updatedAt: "2026-09-17T00:00:00.000Z",
+      sessions: [{ id: "ais_1", agent: "codex", actions: { send: true, rename: true } }],
+    },
+  };
+  const client = new NodeAgentRegistrationClient(
+    {
+      controlMode: "controlled",
+      nodeAgentUrl: "http://node.local",
+      registrationToken: "secret-token",
+      instanceId: "inst_current_node",
+      heartbeatIntervalMs: 10_000,
+    },
+    async () => currentSnapshot,
+    async (url, init) => {
+      if (String(url).endsWith("/heartbeat")) heartbeats.push(JSON.parse(init.body));
+      return new Response(JSON.stringify({ data: String(url).endsWith("/register") ? { id: "inst_current_node" } : { ok: true } }), {
+        status: 200,
+        headers: {
+          "content-type": "application/json",
+          "x-task-handoff-node-agent-protocol-version": "2026-09-17",
+        },
+      });
+    },
+  );
+
+  await client.register();
+
+  assert.equal(heartbeats[0].aiSessions.sessions[0].actions.rename, true);
+});
+
 test("controlled instance node agent config reads env and stays disabled for standalone", () => {
   const standalone = nodeAgentRegistrationConfigFromEnv({
     TASK_HANDOFF_CONTROL_MODE: "standalone",

@@ -33,11 +33,12 @@ export const sessions = {
   actions: {
     allow: "允许", skip: "跳过", deny: "拒绝", controls: "AI 会话卡片控制", searchTriggers: "搜索触发器", noTriggers: "没有触发器模板",
     noMatchingTriggers: "没有匹配的触发器", remove: "移除", add: "添加", openAppFor: "打开 {agent} 的应用会话", openApp: "打开应用会话", openTerminal: "打开 Terminal",
-    moreFor: "{agent} 的更多操作", more: "更多操作", fork: "继续聊天", forkCurrent: "使用当前工作区", forkWorktree: "创建独立 worktree", continueFromTurn: "从当前回合继续聊天", forkBusyTitle: "在当前回合运行时继续聊天？", forkBusyDescription: "Codex 会基于 interrupted snapshot 开始新的聊天，原回合会继续运行且不会被中断。", forkConfirm: "继续聊天", forking: "正在继续聊天", closingApp: "正在关闭应用会话", closeApp: "关闭应用会话", closingSession: "正在关闭 AI 会话", closeSession: "关闭 AI 会话", unread: "未读 AI 会话", openedFromTerminal: "由终端应用会话打开",
+    moreFor: "{agent} 的更多操作", more: "更多操作", rename: "重命名", fork: "继续聊天", forkCurrent: "使用当前工作区", forkWorktree: "创建独立 worktree", continueFromTurn: "从当前回合继续聊天", forkBusyTitle: "在当前回合运行时继续聊天？", forkBusyDescription: "Codex 会基于 interrupted snapshot 开始新的聊天，原回合会继续运行且不会被中断。", forkConfirm: "继续聊天", forking: "正在继续聊天", closingApp: "正在关闭应用会话", closeApp: "关闭应用会话", closingSession: "正在关闭 AI 会话", closeSession: "关闭 AI 会话", unread: "未读 AI 会话", openedFromTerminal: "由终端应用会话打开",
     previousMessage: "{agent} 的上一条用户消息", nextMessage: "{agent} 的下一条用户消息", addTrigger: "添加触发器", triggersBound: "已绑定 {count} 个触发器",
     addToStory: "添加到 Story", saveAsPreset: "保存为预设动作", loadingStories: "正在加载 Story…", storiesLoadFailed: "无法加载 Story。", noStories: "暂无 Story", storyAssigned: "已添加到 Story", storyAssignFailed: "无法将 AI 会话添加到 Story",
     copy: "复制", copyPath: "复制路径", copyName: "复制名称", copySessionId: "复制 Session ID", copied: "已复制", copyFailed: "无法复制该内容。",
   },
+  rename: { title: "重命名 AI 会话", description: "留空时显示最近一轮提示词。", label: "会话标题", failed: "无法重命名 AI 会话。" },
   detail: {
     selected: "已选 AI 会话", sessionDetails: "会话详情", workspace: "工作区", session: "会话", appBinding: "应用绑定", forkedFrom: "分支来源", unknown: "未知",
     notBound: "未绑定", collapse: "收起详情", expand: "展开", collapsePrompt: "收起",
@@ -55,6 +56,7 @@ export const sessions = {
     copyLink: "复制链接",
   },
   panel: {
+    switchBranchFailed: "无法切换当前文件夹分支。",
     view: "视图", status: "状态", listOptions: "AI 会话列表选项", sessionList: "AI 会话列表", sessionListDescription: "选择一个会话并在详情区域中查看。", newSession: "新建 AI 会话", allStatuses: "全部状态", active: "活跃", waiting: "等待中", problem: "异常",
     noMatching: "没有匹配的会话", noConversations: "尚无对话", tryFilter: "请尝试其他状态筛选。", startHint: "使用上方的 + 按钮开始对话。",
     resizeList: "调整 AI 会话列表大小", startIdea: "从一个想法开始", searchProjects: "搜索项目", noProjects: "未找到项目", newProject: "新建项目", openInFileManager: "在文件管理器中打开", openInFileManagerFailed: "无法在系统文件管理器中打开该文件夹。", renameProject: "重命名", renameProjectDescription: "修改项目在文件夹选择器和 AI 会话分组中的名称，不会改变实际路径。", renameProjectFailed: "无法重命名项目。", projectName: "项目名称", currentBranchMode: "当前分支", currentFolderMode: "当前文件夹", worktreeMode: "独立 worktree", chooseBranch: "选择分支", searchBranches: "搜索分支", detached: "Detached", switchBranchTitle: "切换当前文件夹的分支？", switchBranchDescription: "创建会话时会把当前文件夹切换到“{branch}”。未提交的改动会保留，但这个文件夹中的其他活动会话可能看到新的工作树内容。", confirmBranchSwitch: "确认切换",
@@ -128,7 +130,7 @@ export const sessions = {
   },
   tabs: {
     views: "会话视图", paneViews: "{pane} 会话视图", paneTabs: "{pane} 会话标签", status: "状态", close: "关闭会话", closeNamed: "关闭 {name}",
-    rename: "重命名会话", moveLeft: "移到左侧", moveRight: "移到右侧", manageApps: "管理应用", manageAppsDescription: "安装或卸载应用",
+    rename: "重命名会话", renameUnavailable: "请更新受控实例后再重命名此关联会话", moveLeft: "移到左侧", moveRight: "移到右侧", manageApps: "管理应用", manageAppsDescription: "安装或卸载应用",
     paneMenu: "此窗格中的会话", emptyPane: "此窗格中没有会话", closeSplit: "关闭分栏视图", split: "分栏显示会话", restore: "还原会话预览",
     expand: "展开会话预览", restoreShort: "还原预览", expandShort: "展开预览", resizePanes: "调整会话窗格大小", instanceStatus: "实例状态", headerDensity: "头部高度", headerCompact: "紧凑", headerNormal: "正常", showStatusBar: "显示底部状态栏", showInstanceSidebar: "显示实例侧栏", alwaysOnTop: "窗口置顶", alwaysOnTopReadFailed: "无法读取窗口置顶设置。", alwaysOnTopFailed: "无法更新窗口置顶设置。",
     health: "健康状态 {status}", workspace: "工作区 {status}", waitingMetrics: "正在等待第一份资源采样。", resourcesUnavailable: "资源不可用",

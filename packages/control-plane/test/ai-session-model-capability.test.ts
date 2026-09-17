@@ -42,3 +42,31 @@ test("v0.0.23 controlled instance disables only explicit model selection at crea
   );
   assert.equal(requests.length, 1);
 });
+
+test("v0.0.31 controlled instance disables only rename and does not receive the new route", async () => {
+  const requests: string[] = [];
+  const legacySessionInstance = {
+    ...legacyInstance,
+    aiSessions: { sessions: [{
+      id: "session_legacy",
+      agent: "codex",
+      status: "waiting",
+      phase: "approval",
+      actions: { send: true, interrupt: true, approval: true, close: true },
+    }] },
+  } as unknown as ControlledInstance;
+  const service = new AiSessionActionService({
+    requireInstance: async () => legacySessionInstance,
+    requireRuntime: async () => ({} as NodeRuntime),
+    request: async (_instance, route) => { requests.push(route); return {}; },
+  });
+
+  await assert.rejects(
+    service.rename("inst_legacy", "session_legacy", { title: "Renamed", expectedTitle: "Original", clientRequestId: "rename-legacy" }),
+    (error: unknown) => (error as { code?: string }).code === "AI_SESSION_RENAME_UNSUPPORTED",
+  );
+  assert.deepEqual(requests, []);
+  assert.equal(legacySessionInstance.aiSessions.sessions[0].actions?.send, true);
+  assert.equal(legacySessionInstance.aiSessions.sessions[0].actions?.approval, true);
+  assert.equal(legacySessionInstance.aiSessions.sessions[0].actions?.close, true);
+});

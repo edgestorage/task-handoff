@@ -27,7 +27,9 @@ export {
   type AiSessionProviderCapability,
 } from "./ai-session-provider-capabilities.ts";
 
-export const CONTROL_PLANE_PROTOCOL_VERSION = "2026-08-27";
+export const CONTROL_PLANE_PROTOCOL_VERSION = "2026-09-17";
+export const AI_SESSION_RENAME_PROTOCOL_VERSION = "2026-09-17";
+export const NODE_AGENT_PROTOCOL_VERSION_HEADER = "x-task-handoff-node-agent-protocol-version";
 export const NODE_TUNNEL_PROTOCOL_VERSION = "2026-08-01";
 export const MARKET_CATALOG_PROTOCOL_VERSION = "2026-07-29";
 // Compatibility for v0.0.21: this released protocol already requires appInventory
@@ -122,6 +124,7 @@ function defaultControlledInstanceFeatures() {
     screenshots: false,
     logs: false,
     aiSessionWorkspaceSelection: false,
+    aiSessionWorkspaceCheckout: false,
     aiSessionPersistenceSettings: false,
     privateModelCatalog: false,
     codexManagedSettings: false,
@@ -168,6 +171,8 @@ export const ControlledInstanceFeatureCapabilitiesSchema = z.object({
   screenshots: z.boolean().default(false),
   logs: z.boolean().default(false),
   aiSessionWorkspaceSelection: z.boolean().default(false),
+  // Compatibility for v0.0.31: absence disables pre-session current-folder checkout.
+  aiSessionWorkspaceCheckout: z.boolean().optional(),
   aiSessionPersistenceSettings: z.boolean().default(false),
   // Compatibility for v0.0.23: only current controlled instances accept the
   // private model catalog live-sync route.
@@ -213,6 +218,7 @@ type NormalizedControlledInstanceCapabilities = ControlledInstanceCapabilities &
   features: ControlledInstanceCapabilities["features"] & {
     aiSessionConversationAttachments: AiSessionConversationAttachmentCapabilities;
     aiSessionProviders: AiSessionProviderCapability[];
+    aiSessionWorkspaceCheckout: boolean;
     gitCliCredentialBroker: boolean;
     gitCredentialProxy: boolean;
     privateModelCatalog: boolean;
@@ -239,6 +245,7 @@ export function normalizeControlledInstanceCapabilities(capabilities: unknown): 
     "screenshots",
     "logs",
     "aiSessionWorkspaceSelection",
+    "aiSessionWorkspaceCheckout",
     "aiSessionPersistenceSettings",
     "privateModelCatalog",
     "codexManagedSettings",
@@ -263,6 +270,10 @@ export function normalizeControlledInstanceCapabilities(capabilities: unknown): 
 
 export function supportsAiSessionWorkspaceSelection(capabilities: unknown) {
   return normalizeControlledInstanceCapabilities(capabilities).features.aiSessionWorkspaceSelection;
+}
+
+export function supportsAiSessionWorkspaceCheckout(capabilities: unknown) {
+  return normalizeControlledInstanceCapabilities(capabilities).features.aiSessionWorkspaceCheckout;
 }
 
 export function supportsAiSessionPersistenceSettings(capabilities: unknown) {
@@ -2651,6 +2662,36 @@ export function sanitizeCrossVersionControlledInstanceHeartbeat(
     if (!acceptedKeys.has(key)) onWarning?.({ field: key, action: "ignored" });
   }
   return pickObjectFields(input, knownKeys);
+}
+
+export function projectControlledInstanceHeartbeatForNodeAgentProtocol(
+  input: Record<string, unknown>,
+  nodeAgentProtocolVersion?: string,
+) {
+  if (nodeAgentProtocolVersion && nodeAgentProtocolVersion >= AI_SESSION_RENAME_PROTOCOL_VERSION) return input;
+  const aiSessions = input.aiSessions;
+  if (!aiSessions || typeof aiSessions !== "object" || Array.isArray(aiSessions)) return input;
+  const sessions = (aiSessions as Record<string, unknown>).sessions;
+  if (!Array.isArray(sessions)) return input;
+  let changed = false;
+  const compatibleSessions = sessions.map((session) => {
+    if (!session || typeof session !== "object" || Array.isArray(session)) return session;
+    const actions = (session as Record<string, unknown>).actions;
+    if (!actions || typeof actions !== "object" || Array.isArray(actions) || !("rename" in actions)) return session;
+    const { rename: _rename, ...compatibleActions } = actions as Record<string, unknown>;
+    changed = true;
+    return { ...session, actions: compatibleActions };
+  });
+  if (!changed) return input;
+  // Compatibility for v0.0.31: its strict action schema rejects the additive
+  // rename capability, so newer controlled instances project the N-1 wire model.
+  return {
+    ...input,
+    aiSessions: {
+      ...aiSessions,
+      sessions: compatibleSessions,
+    },
+  };
 }
 
 export const ChatChannelSchema = z.enum(["web", "telegram", "wechat", "dingding", "lark"]);

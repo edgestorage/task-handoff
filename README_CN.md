@@ -18,6 +18,16 @@ TaskHandoff 用于集中运行和监管 Codex 等 AI 开发工作。它把分散
 
 > Task Handoff 是开源、自托管的 AI 工作空间控制平面。官方云平台补充账号与加密中转能力，见 `ee/cloud-platform/README.md`。
 
+## 产品界面
+
+### 工作台
+
+![TaskHandoff 工作台](https://raw.githubusercontent.com/edgestorage/task-handoff-docs/main/docs/public/images/workbench-dark-en.png)
+
+### Story
+
+![TaskHandoff Story 工作区](https://raw.githubusercontent.com/edgestorage/task-handoff-docs/main/docs/public/images/story-workspace-light-en.png)
+
 ## 核心能力
 
 - **多节点管理**：接入本机或远程节点，集中查看节点、运行资源和受控实例状态。

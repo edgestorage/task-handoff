@@ -5,6 +5,7 @@ import test from "node:test";
 import {
   aiSessionLastUserMessageTime,
   sortedAiSessionsByLastUserMessage,
+  terminalAppIdForLaunchableApps,
 } from "../src/apps/control-plane/useInstanceSessions.ts";
 
 const panel = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.vue", import.meta.url), "utf8");
@@ -99,4 +100,11 @@ test("instance detail sidebar uses the local user-message sorter", () => {
   assert.doesNotMatch(panel, /aiSessionActivityTime|groupLastRunningAt/);
   assert.match(panel, /t\("sessions\.panel\.sortByStatus"\)/);
   assert.match(panel, /SORT_BY_STATUS_STORAGE_KEY/);
+});
+
+test("terminal launch selection uses the shared provider priority", () => {
+  assert.equal(terminalAppIdForLaunchableApps([{ id: "gui-terminal" }, { id: "terminal-tty" }]), "terminal-tty");
+  assert.equal(terminalAppIdForLaunchableApps([{ id: "terminal" }, { id: "gui-terminal" }]), "terminal");
+  assert.equal(terminalAppIdForLaunchableApps([{ id: "codex" }]), undefined);
+  assert.equal(terminalAppIdForLaunchableApps(undefined), undefined);
 });

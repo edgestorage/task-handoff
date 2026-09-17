@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { Alert, Pressable, StyleSheet } from 'react-native';
 import * as Crypto from 'expo-crypto';
@@ -13,6 +13,7 @@ import { mobileAiSessionStore } from '../../../src/ai-sessions/store';
 import { useActiveDirectories } from '../../../src/directories/use-directories';
 import { useMobileTheme } from '../../../src/components/theme';
 import { SystemIcon } from '../../../src/components/SystemIcon';
+import { SessionRenameModal } from '../../../src/components/SessionRenameModal';
 import { useI18n } from '../../../src/i18n';
 import { useTaskStatusSettings } from '../../../src/task-status/settings';
 import { useActiveTriggers } from '../../../src/triggers/use-active-triggers';
@@ -38,6 +39,10 @@ export default function SessionDetailRoute() {
     : undefined;
   const [detailMode, setDetailMode] = useState<SessionDetailMode>('turn');
   const [closing, setClosing] = useState(false);
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [renameError, setRenameError] = useState('');
+  const [renaming, setRenaming] = useState(false);
+  const renameRequestId = useRef('');
   const [modelEntities, setModelEntities] = useState<AiSessionCatalogModelEntity[]>([]);
   const defaultPermissionMode = instance?.config.defaultCodexPermissionMode;
   const markVisible = useCallback((sessionUpdatedAt: string) => {
@@ -53,6 +58,7 @@ export default function SessionDetailRoute() {
     && trackedSession.instanceId === params.instanceId
     && trackedSession.sessionId === params.sessionId);
   const canTrack = session?.status === 'running' || session?.status === 'waiting';
+  const canRename = session?.actions?.rename === true;
   const modelGroups = instance && session ? deriveAiSessionModelGroups({
     entities: modelEntities,
     assignment: instance.modelSelection,
@@ -92,6 +98,28 @@ export default function SessionDetailRoute() {
       }).finally(() => setClosing(false));
     } },
   ]);
+  const openRename = () => {
+    if (!canRename) return;
+    renameRequestId.current = Crypto.randomUUID();
+    setRenameError('');
+    setRenameOpen(true);
+  };
+  const submitRename = (nextTitle: string) => {
+    if (!actions || !session || !canRename || renaming) return;
+    setRenaming(true);
+    setRenameError('');
+    void actions.rename(params.instanceId, params.sessionId, {
+      title: nextTitle,
+      expectedTitle: session.title?.trim() || '',
+      clientRequestId: renameRequestId.current,
+    }).then((result) => {
+      if (result.disposition === 'accepted') {
+        setRenameOpen(false);
+        return;
+      }
+      setRenameError(result.disposition === 'duplicate-blocked' ? t('sessions.renameBusy') : result.error);
+    }).finally(() => setRenaming(false));
+  };
   return <>
     <Stack.Screen options={{
       title,
@@ -100,6 +128,7 @@ export default function SessionDetailRoute() {
           actions={[
             { id: 'view-turn', image: 'rectangle.stack', state: detailMode === 'turn' ? 'on' : 'off', title: t('sessions.compact') },
             { id: 'view-conversation', image: 'text.bubble', state: detailMode === 'conversation' ? 'on' : 'off', title: t('sessions.conversation') },
+            ...(canRename ? [{ id: 'rename', image: 'pencil', title: renaming ? t('sessions.renaming') : t('sessions.rename'), attributes: { disabled: renaming || !actions || sessionView.syncPhase !== 'ready' } } as MenuAction] : []),
             ...(liveActivityAction ? [liveActivityAction] : []),
             ...(triggers.available ? [{ id: 'triggers', image: 'bolt', title: t('triggers.sessionTitle') } as MenuAction] : []),
             { id: 'close', image: 'xmark.circle', title: closing ? t('sessions.closing') : t('sessions.closeSession'), attributes: { destructive: true, disabled: closing || !actions || sessionView.syncPhase !== 'ready' } },
@@ -107,6 +136,7 @@ export default function SessionDetailRoute() {
           onPressAction={({ nativeEvent }) => {
             if (nativeEvent.event === 'view-turn') setDetailMode('turn');
             else if (nativeEvent.event === 'view-conversation') setDetailMode('conversation');
+            else if (nativeEvent.event === 'rename') openRename();
             else if (nativeEvent.event === 'live-activity') {
               if (trackedHere) void taskStatus.stopTracking();
               else if (controlPlaneId) void taskStatus.startTracking({ controlPlaneId, instanceId: params.instanceId, sessionId: params.sessionId });
@@ -142,6 +172,14 @@ export default function SessionDetailRoute() {
     session={session}
     syncPhase={sessionView.syncPhase}
     timelines={sessionView.timelines}
+    />
+    <SessionRenameModal
+      busy={renaming}
+      error={renameError}
+      initialTitle={title}
+      onClose={() => { if (!renaming) setRenameOpen(false); }}
+      onSubmit={submitRename}
+      open={renameOpen}
     />
   </>;
 }

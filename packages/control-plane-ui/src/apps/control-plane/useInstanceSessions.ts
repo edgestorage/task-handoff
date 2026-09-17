@@ -60,6 +60,7 @@ export type LaunchableApp = {
 };
 
 const CWD_SELECTABLE_APP_IDS = new Set(["codex", "claude", "terminal-tty", "gui-terminal", "terminal"]);
+const TERMINAL_APP_IDS = ["terminal-tty", "terminal", "gui-terminal"] as const;
 
 function instanceWebBase(instance: InstanceBoardItem) {
   return `/instances/${encodeURIComponent(instance.id)}`;
@@ -241,6 +242,10 @@ export function launchableAppsForInstance(instance: InstanceBoardItem, t: Transl
       })
       .filter((app): app is LaunchableApp => Boolean(app)),
   );
+}
+
+export function terminalAppIdForLaunchableApps(apps: readonly Pick<LaunchableApp, "id">[] | undefined) {
+  return TERMINAL_APP_IDS.find((appId) => apps?.some((app) => app.id === appId));
 }
 
 export function supportsAppCwdSelection(appId: string) {
