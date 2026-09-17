@@ -216,6 +216,7 @@ test("managed Git capabilities normalize N-1 absence and ignore future fields", 
     local: false,
   });
   assert.equal(normalizeControlledInstanceCapabilities({ features: { future: true } }).features.gitCliCredentialBroker, false);
+  assert.equal(normalizeControlledInstanceCapabilities({ features: { aiSessionWorkspaceSelection: true } }).features.aiSessionWorkspaceCheckout, false);
 });
 
 test("public response readers ignore future fields without retaining secrets", () => {

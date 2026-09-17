@@ -1,5 +1,6 @@
 .settings-content-page {
   margin-inline: auto;
+  padding-top: var(--settings-top-fade-height, 18px);
   padding-bottom: 20px;
   width: min(100%, var(--settings-content-max-width, 1080px));
 }
@@ -11,6 +12,16 @@
 
 .settings-page-scroll > [data-task-handoff-scroll-viewport] {
   width: calc(100% - var(--settings-scrollbar-outset, 16px));
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent,
+    #000 var(--settings-top-fade-height, 18px)
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    transparent,
+    #000 var(--settings-top-fade-height, 18px)
+  );
 }
 
 @media (max-width: 780px) {

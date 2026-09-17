@@ -99,6 +99,14 @@ export class OpenCodeClient {
     });
   }
 
+  renameSession(sessionID: string, directory: string, title: string) {
+    return this.request(`/session/${encodeURIComponent(sessionID)}`, OpenCodeSessionSchema, {
+      method: "PATCH",
+      directory,
+      body: { title },
+    });
+  }
+
   forkSession(sessionID: string, directory: string, messageID?: string) {
     return this.request(`/session/${encodeURIComponent(sessionID)}/fork`, OpenCodeSessionSchema, {
       method: "POST",

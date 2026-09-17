@@ -8,7 +8,7 @@ const activeSessions = fs.readFileSync(new URL("../src/apps/control-plane/instan
 const styles = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.css", import.meta.url), "utf8");
 const boardCard = fs.readFileSync(new URL("../src/apps/control-plane/ai-board/AiSessionCard.vue", import.meta.url), "utf8");
 const contextMenu = fs.readFileSync(new URL("../src/components/ai-session/AiSessionCardContextMenu.vue", import.meta.url), "utf8");
-const pathGroupContextMenu = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPathGroupContextMenu.vue", import.meta.url), "utf8");
+const pathContextMenu = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPathContextMenu.vue", import.meta.url), "utf8");
 const originMark = fs.readFileSync(new URL("../src/components/ai-session/AiSessionOriginMark.vue", import.meta.url), "utf8");
 const cardMarks = fs.readFileSync(new URL("../src/components/ai-session/AiSessionCardMarks.vue", import.meta.url), "utf8");
 const statusIndicator = fs.readFileSync(new URL("../src/components/ai-session/AiSessionStatusIndicator.vue", import.meta.url), "utf8");
@@ -59,18 +59,19 @@ test("AI session detail menu icons match the card context menu", () => {
 });
 
 test("AI session path groups share node-backed rename and desktop-local folder actions", () => {
-  assert.match(panel, /<AiSessionPathGroupContextMenu[\s\S]*:can-copy="group\.kind === 'path'"[\s\S]*:can-open="group\.kind === 'path' && canOpenPathGroupFolder"[\s\S]*:can-rename="canRenamePathGroup\(group\)"[\s\S]*@copy="copyPathGroupPath\(group\)"/);
+  assert.match(panel, /<AiSessionPathContextMenu[\s\S]*:can-copy="group\.kind === 'path'"[\s\S]*:can-open="group\.kind === 'path' && canOpenPathGroupFolder"[\s\S]*:can-rename="canRenamePathGroup\(group\)"[\s\S]*@copy="copyPathGroupPath\(group\)"/);
   assert.match(panel, /function registeredPathGroupFolder[\s\S]*group\.kind !== "path"[\s\S]*return undefined/);
   assert.match(panel, /function canRenamePathGroup[\s\S]*registeredPathGroupFolder\(group\)[\s\S]*nodeSupportsLocalFolderNameUpdate\(props\.instance\.node\)/);
   assert.match(panel, /updateNodeLocalFolder\(folder\.nodeId, folder\.id, \{ name \}\)/);
   assert.match(panel, /desktopRuntimePathAccess\(props\.instance\) === "desktop-local" && canOpenDesktopLocalPath\(\)/);
   assert.match(panel, /openDesktopLocalPath\(group\.path\)/);
-  assert.match(panel, /function copyPathGroupPath[\s\S]*navigator\.clipboard\.writeText\(group\.path\)[\s\S]*sessions\.actions\.copied/);
-  assert.match(pathGroupContextMenu, /ContextMenu v-if="canCopy \|\| canOpen \|\| canRename"/);
-  assert.match(pathGroupContextMenu, /ContextMenuItem v-if="canCopy" class="ai-session-path-group-menu-item"[\s\S]*sessions\.actions\.copyPath/);
-  assert.match(pathGroupContextMenu, /ContextMenuItem v-if="canOpen" class="ai-session-path-group-menu-item"[\s\S]*sessions\.panel\.openInFileManager/);
-  assert.match(pathGroupContextMenu, /ContextMenuItem v-if="canRename" class="ai-session-path-group-menu-item"[\s\S]*sessions\.panel\.renameProject/);
-  assert.match(pathGroupContextMenu, /\.ai-session-context-menu \.ai-session-path-group-menu-item\) \{\s*gap: 8px;\s*font-size: 13px;/);
+  assert.match(panel, /function copyPathGroupPath[\s\S]*copyRuntimePathToClipboard\(group\.path\)/);
+  assert.match(panel, /function copyRuntimePathToClipboard\(path: string\)[\s\S]*navigator\.clipboard\.writeText\(path\)[\s\S]*sessions\.actions\.copied/);
+  assert.match(pathContextMenu, /ContextMenu v-if="canCopy \|\| canOpen \|\| canRename"/);
+  assert.match(pathContextMenu, /ContextMenuItem v-if="canCopy" class="ai-session-path-group-menu-item"[\s\S]*sessions\.actions\.copyPath/);
+  assert.match(pathContextMenu, /ContextMenuItem v-if="canOpen" class="ai-session-path-group-menu-item"[\s\S]*sessions\.panel\.openInFileManager/);
+  assert.match(pathContextMenu, /ContextMenuItem v-if="canRename" class="ai-session-path-group-menu-item"[\s\S]*sessions\.panel\.renameProject/);
+  assert.match(pathContextMenu, /\.ai-session-context-menu \.ai-session-path-group-menu-item\) \{\s*gap: 8px;\s*font-size: 13px;/);
 });
 
 test("instance AI session cards always show the latest turn independently of detail navigation", () => {
@@ -446,6 +447,14 @@ test("new-session folder picker keeps actions visible while long folder lists sc
   assert.match(scrollArea, /<ScrollBar v-if="horizontal" orientation="horizontal" \/>/);
 });
 
+test("new-session instance switching preserves a matching folder path before falling back to defaults", () => {
+  assert.match(panel, /const newSessionFolderPathsByInstance = new Map<string, string>\(\);/);
+  assert.match(panel, /watch\(newSessionFolderId, \(folderId\) => \{[\s\S]*newSessionFolderPathsByInstance\.set\(props\.instance\.id, folder\.path\);[\s\S]*flush: "sync"/);
+  assert.match(panel, /const previousFolderPath = previousInstanceId && previousInstanceId !== instanceId[\s\S]*newSessionFolderPathsByInstance\.get\(previousInstanceId\)/);
+  assert.match(panel, /findInstanceCwdFolderByPath\(newSessionFolders\.value, previousFolderPath\)/);
+  assert.match(panel, /if \(matchingFolder\) \{\s*newSessionFolderId\.value = matchingFolder\.id;\s*return;\s*\}\s*initializeNewSessionDefaults\(\);/);
+});
+
 test("new-session Git inspection reacts only to stable selection changes", () => {
   assert.match(panel, /watch\(\s*\[\(\) => props\.instance\.id, newSessionFolderId, showNewSession\]/);
   assert.doesNotMatch(panel, /\(\) => \[props\.instance\.id, newSessionFolderId\.value, showNewSession\.value\]/);
@@ -457,19 +466,23 @@ test("new-session Git inspection uses cached workspace data without blocking the
   assert.match(panel, /controlPlaneQueryKeys\.aiSessionWorkspace\(instanceId, cwdFolderId\)/);
   assert.match(panel, /getQueryData<RepositoryAiSessionWorkspace>\(queryKey\)[\s\S]*newSessionWorkspace\.value = cachedWorkspace[\s\S]*getAiSessionWorkspace\(instanceId, cwdFolderId, abort\.signal\)/);
   assert.match(panel, /queryClient\.setQueryData\(queryKey, workspace\)/);
-  assert.match(panel, /const newSessionComposerBusy = computed\(\(\) => launchingNewSession\.value \|\| savingNewSessionPermission\.value \|\| choosingNewSessionFolder\.value\);/);
+  assert.match(panel, /const newSessionComposerBusy = computed\(\(\) => launchingNewSession\.value \|\| savingNewSessionPermission\.value \|\| choosingNewSessionFolder\.value \|\| switchingNewSessionBranch\.value\);/);
   assert.doesNotMatch(panel, /const newSessionComposerBusy = computed\([^\n]*newSessionWorkspaceLoading/);
   assert.match(panel, /:disabled="creationSubmitDisabled \|\| !newSessionFolder \|\| \(newSessionWorkspaceLoading && !newSessionWorkspace\)"/);
 });
 
-test("new-session branches use a folder tree and confirm current-folder switches", () => {
+test("new-session branches use a folder tree and immediately converge current-folder switches", () => {
   assert.match(panel, /branch\.name\.split\("\/"\)\.filter\(Boolean\)/);
   assert.match(panel, /node\.kind === 'folder' \? toggleNewSessionBranchFolder\(\$event, node\.id\) : selectNewSessionBranch\(node\.branch\)/);
   assert.match(panel, /newSessionWorkspaceMode\.value === "worktree" \|\| branch\.current/);
-  assert.match(panel, /newSessionBranchSwitchTarget\.value = branch;/);
-  assert.match(panel, /<AlertDialog :open="Boolean\(newSessionBranchSwitchTarget\)"/);
-  assert.match(panel, /confirmNewSessionBranchSwitch/);
-  assert.match(panel, /newSessionWorkspaceMode\.value === "worktree" \? branch\.worktreeSelectable : branch\.currentFolderSelectable/);
+  assert.match(panel, /void checkoutNewSessionBranch\(branch\);/);
+  assert.match(panel, /checkoutAiSessionWorkspaceBranch\(instanceId, \{ branch: branch\.name/);
+  assert.match(panel, /queryClient\.setQueryData\(controlPlaneQueryKeys\.aiSessionWorkspace\(instanceId, cwdFolderId\), workspace\)/);
+  assert.match(panel, /@update:open="refreshNewSessionWorkspaceOnOpen"/);
+  assert.doesNotMatch(panel, /newSessionBranchSwitchTarget|confirmNewSessionBranchSwitch/);
+  assert.match(panel, /supportsAiSessionWorkspaceCheckout\(props\.instance\.capabilities\) && branch\.currentFolderSelectable/);
+  assert.match(panel, /if \(mode === "current-folder" && newSessionWorkspace\.value\) \{\s*syncNewSessionBranchFromWorkspace\(newSessionWorkspace\.value\);/);
+  assert.match(panel, /finally \{\s*newSessionWorkspaceLoading\.value = false;\s*switchingNewSessionBranch\.value = false;/);
 });
 
 test("new-session permission edits update the authoritative instance default", () => {

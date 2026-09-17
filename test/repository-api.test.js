@@ -352,6 +352,25 @@ test("pre-session Git workspace selection persists folder identity and creates a
     assert.equal(isolated.currentFolderSelectable, true);
     assert.equal(isolated.worktreeSelectable, true);
 
+    const checkedOut = await app.inject({
+      method: "POST",
+      url: "/api/repository/ai-session-workspace/checkout",
+      payload: { cwd: { type: "runtime-path", path: selectedFolder }, branch: "feature/in-place" },
+    });
+    assert.equal(checkedOut.statusCode, 200);
+    assert.equal(checkedOut.json().data.currentBranch, "feature/in-place");
+    assert.equal(checkedOut.json().data.branches.find((branch) => branch.name === "feature/in-place").current, true);
+    assert.equal(fixture.git(["branch", "--show-current"]), "feature/in-place");
+
+    const checkedOutBack = await app.inject({
+      method: "POST",
+      url: "/api/repository/ai-session-workspace/checkout",
+      payload: { cwd: { type: "runtime-path", path: selectedFolder }, branch: "main" },
+    });
+    assert.equal(checkedOutBack.statusCode, 200);
+    assert.equal(checkedOutBack.json().data.currentBranch, "main");
+    assert.equal(fixture.git(["branch", "--show-current"]), "main");
+
     const payload = {
       agent: "codex",
       cwd: { type: "runtime-path", path: selectedFolder },

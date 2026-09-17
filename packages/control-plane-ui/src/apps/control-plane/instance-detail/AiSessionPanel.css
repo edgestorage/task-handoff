@@ -2080,6 +2080,17 @@
   outline-offset: 2px;
 }
 
+.session-ai-detail-context-path {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.session-ai-detail-context-path > .session-ai-detail-context-item {
+  max-width: 100%;
+}
+
 .session-ai-detail-context-item > span {
   min-width: 0;
   overflow: hidden;

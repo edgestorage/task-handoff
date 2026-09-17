@@ -82,6 +82,11 @@ export type AiSessionProviderTimelineItemEvent = {
 
 export type AiSessionProviderTimelineItemListener = (event: AiSessionProviderTimelineItemEvent) => void;
 
+export type AiSessionProviderRenameResult = {
+  title: string;
+  authority: "provider" | "app-session" | "adapter";
+};
+
 function queuedConversationAttachments(attachments: readonly AiSessionMessageAttachmentMeta[]) {
   return attachments.map((attachment) => AiSessionConversationAttachmentSchema.parse({
     id: attachment.id,
@@ -105,6 +110,7 @@ export interface AiSessionControlProvider {
   updateModelSelection?(session: AiSessionStatus, selection: AiSessionModelSelection): Promise<AiSessionModelSelection>;
   updateReasoningEffort?(session: AiSessionStatus, effort: AiSessionReasoningEffort): Promise<AiSessionReasoningEffort>;
   forkSession?(input: AiSessionProviderForkInput): Promise<AiSessionProviderForkResult>;
+  renameSession?(session: AiSessionStatus, title: string): Promise<AiSessionProviderRenameResult>;
   readSession?(providerSessionId: string): Promise<void>;
   resumeSession?(providerSessionId: string, modelSelection?: AiSessionModelSelection, reasoningEffort?: AiSessionReasoningEffort): Promise<void>;
   archiveSession?(providerSessionId: string): Promise<void>;
@@ -300,6 +306,15 @@ export class AiSessionController {
     } finally {
       this.pendingSettings.delete(session.id);
     }
+  }
+
+  async renameSession(sessionId: string, title: string) {
+    const session = this.requireSession(sessionId);
+    const provider = this.requireProvider(session);
+    if (!provider.renameSession) {
+      throw aiSessionControlError("AI_SESSION_RENAME_UNSUPPORTED", `${session.agent} sessions do not support renaming.`, 409);
+    }
+    return provider.renameSession(session, title);
   }
 
   async sendMessage(sessionId: string, input: AiSessionSendInput) {

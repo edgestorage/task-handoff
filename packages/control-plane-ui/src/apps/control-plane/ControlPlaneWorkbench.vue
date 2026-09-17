@@ -358,6 +358,7 @@
         :header-density="effectiveHeaderDensity"
         :node-filter="storyNodeFilter"
         :instances="boardInstancesWithAiSessions"
+        :launching-app="launchingApp"
         :node-local-folders-by-node-id="nodeLocalFoldersByNodeId"
         :nodes="nodes.data.value || []"
         @launch-app="launchSelectedApp"
@@ -1580,7 +1581,6 @@ function openInstanceSettings(instanceId: string, section: "general" | "ai" | "c
 async function renameSession(instance: InstanceBoardItem, session: SessionTab, title: string) {
   const sessionId = typeof session.source?.id === "string" ? session.source.id : session.key;
   await renameAppSession(instance.id, sessionId, title);
-  await queryClient.refetchQueries({ queryKey: ["control-plane-app-sessions"] });
 }
 
 async function controlWindow(action: "minimize" | "toggle-maximize" | "close") {

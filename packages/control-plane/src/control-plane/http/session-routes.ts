@@ -3,7 +3,7 @@ import fs from "node:fs";
 import crypto from "node:crypto";
 import { Readable, Transform } from "node:stream";
 import { z } from "zod";
-import { AI_SESSION_ATTACHMENT_DRAFT_STREAM_CHUNK_BYTES, AI_SESSION_ATTACHMENT_UPLOAD_BODY_LIMIT, AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES, AiSessionApprovalInputSchema, AiSessionAttachmentDraftSchema, AiSessionAttachmentDraftStreamCreateInputSchema, AiSessionAttachmentDraftStreamOffsetSchema, AiSessionAttachmentDraftUploadQuerySchema, AiSessionCloseInputSchema, AiSessionCommandInputSchema, AiSessionCreateRefInputSchema, AiSessionForkInputSchema, AiSessionMentionFileSearchInputSchema, AiSessionMessageRefInputSchema, AiSessionModelSelectionInputSchema, AiSessionOpenAppInputSchema, AiSessionQueueEditInputSchema, AiSessionQueueReorderInputSchema, AiSessionReasoningEffortInputSchema, AiSessionUnreadEventType, isAiSessionInlineImageMime, projectAiSessionDeltaForConsumer, projectAiSessionHistoryItemForConsumer, projectAiSessionsSnapshotForConsumer } from "@task-handoff/protocol/ai-sessions";
+import { AI_SESSION_ATTACHMENT_DRAFT_STREAM_CHUNK_BYTES, AI_SESSION_ATTACHMENT_UPLOAD_BODY_LIMIT, AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES, AiSessionApprovalInputSchema, AiSessionAttachmentDraftSchema, AiSessionAttachmentDraftStreamCreateInputSchema, AiSessionAttachmentDraftStreamOffsetSchema, AiSessionAttachmentDraftUploadQuerySchema, AiSessionCloseInputSchema, AiSessionCommandInputSchema, AiSessionCreateRefInputSchema, AiSessionForkInputSchema, AiSessionMentionFileSearchInputSchema, AiSessionMessageRefInputSchema, AiSessionModelSelectionInputSchema, AiSessionOpenAppInputSchema, AiSessionQueueEditInputSchema, AiSessionQueueReorderInputSchema, AiSessionReasoningEffortInputSchema, AiSessionRenameInputSchema, AiSessionUnreadEventType, AiSessionWorkspaceCheckoutInputSchema, isAiSessionInlineImageMime, projectAiSessionDeltaForConsumer, projectAiSessionHistoryItemForConsumer, projectAiSessionsSnapshotForConsumer } from "@task-handoff/protocol/ai-sessions";
 import type { ControlPlaneService } from "../application/service.ts";
 import type { ControlPlaneEventBus } from "../events/bus.ts";
 import type { ControlPlaneAiSessionAggregator } from "../sessions/ai-session-aggregator.ts";
@@ -411,6 +411,11 @@ export function registerSessionRoutes({
     const query = AiSessionWorkspaceQuerySchema.parse(request.query || {});
     return { data: await service.inspectAiSessionWorkspace(params.id, query.cwdFolderId) };
   });
+  app.post("/api/controlled-instances/:id/ai-sessions/workspace/checkout", async (request) => {
+    const params = IdParamsSchema.parse(request.params);
+    const input = AiSessionWorkspaceCheckoutInputSchema.parse(request.body || {});
+    return { data: await service.checkoutAiSessionWorkspaceBranch(params.id, input.branch, input.cwdFolderId) };
+  });
   app.post("/api/controlled-instances/:id/ai-sessions", async (request, reply) => {
     const startedAt = performance.now();
     const params = IdParamsSchema.parse(request.params);
@@ -478,6 +483,20 @@ export function registerSessionRoutes({
     const params = InstanceSessionParamsSchema.parse(request.params);
     const parsed = AiSessionReasoningEffortInputSchema.parse(request.body || {});
     return { data: await service.updateAiSessionReasoningEffort(params.id, params.sessionId, parsed.clientRequestId, parsed.reasoningEffort) };
+  });
+  app.put("/api/controlled-instances/:id/ai-sessions/:sessionId/title", async (request) => {
+    const params = InstanceSessionParamsSchema.parse(request.params);
+    const parsed = AiSessionRenameInputSchema.parse(request.body || {});
+    const result = await service.renameAiSession(params.id, params.sessionId, parsed);
+    request.log.info({
+      clientRequestId: parsed.clientRequestId,
+      instanceId: params.id,
+      aiSessionId: result.aiSessionId,
+      appSessionId: result.appSessionId,
+      outcome: result.disposition,
+    }, "ai-session.rename.request");
+    events.publish("instance.ai-session.renamed", { instanceId: params.id, sessionId: result.aiSessionId, appSessionId: result.appSessionId });
+    return { data: result };
   });
   app.post("/api/controlled-instances/:id/ai-sessions/:sessionId/close", async (request) => {
     const params = InstanceSessionParamsSchema.parse(request.params);

@@ -3,7 +3,7 @@ import { EventEmitter } from "node:events";
 import { Duplex } from "node:stream";
 import WebSocket from "ws";
 import type { AiSessionApprovalDecision } from "../../ai-session-control";
-import type { CodexDynamicToolCall, CodexDynamicToolCallResult, CodexThreadForkCapabilities, CodexThreadForkOptions, CodexThreadStartOptions, CodexTurnPermissionOverrides } from "./contract";
+import type { CodexDynamicToolCall, CodexDynamicToolCallResult, CodexEphemeralStructuredTurnOptions, CodexThreadForkCapabilities, CodexThreadForkOptions, CodexThreadStartOptions, CodexTurnPermissionOverrides } from "./contract";
 import { approvalResponseForRequest, codexApprovalRequest } from "../protocol/approvals";
 import { codexNotification } from "../protocol/events";
 import { turnIdFromResult } from "../protocol/turn-control";
@@ -51,6 +51,38 @@ const FULL_HISTORY_FORK_MIN_VERSION = [0, 129, 0] as const;
 // threads. Starting with v0.0.22, capable Codex versions are asked to create
 // paginated threads so Codex owns the authoritative Timeline history.
 const NATIVE_TIMELINE_MIN_VERSION = [0, 145, 0] as const;
+const STRUCTURED_TURN_TIMEOUT_MS = 30_000;
+const STRUCTURED_RESPONSE_MAX_BYTES = 8 * 1024;
+const TEMPORARY_THREAD_DISABLED_CONFIG: JsonValue = {
+  "features.apps": false,
+  "features.code_mode": false,
+  "features.code_mode_only": false,
+  "features.context_management": false,
+  "features.current_time_reminder": false,
+  "features.deferred_executor": false,
+  "features.enable_fanout": false,
+  "features.goals": false,
+  "features.hooks": false,
+  "features.image_generation": false,
+  "features.memories": false,
+  "features.multi_agent": false,
+  "features.multi_agent_v2": false,
+  "features.plugins": false,
+  "features.request_permissions_tool": false,
+  "features.shell_snapshot": false,
+  "features.shell_tool": false,
+  "features.standalone_web_search": false,
+  "features.token_budget": false,
+  "features.tool_suggest": false,
+  "features.unified_exec": false,
+  "features.view_image": false,
+  "orchestrator.skills.enabled": false,
+  "skills.include_instructions": false,
+  "token_budget.use_history_notes_extension": false,
+  "tools.experimental_request_user_input.enabled": false,
+  "tools.update_plan.enabled": false,
+  web_search: "disabled",
+};
 const CODEX_VERSION_PATTERN = /(?:^|\s)codex(?:-cli)?\s+v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)(?=\s|$)/i;
 const CODEX_THREAD_SOURCE_KINDS = [
   "cli",
@@ -597,6 +629,115 @@ export class CodexAppServerClient extends EventEmitter {
     await this.request("thread/compact/start", { threadId });
   }
 
+  async runEphemeralStructuredTurn(options: CodexEphemeralStructuredTurnOptions) {
+    type RawNotification = { method: string; params: JsonValue };
+    const effective = await this.request("config/read", { includeLayers: false, cwd: options.cwd });
+    const effectiveConfig = asRecord(effective.config);
+    const effectiveMcpServers = asRecord(effectiveConfig.mcp_servers);
+    const disabledMcpServers = Object.fromEntries(
+      Object.keys(effectiveMcpServers).map((name) => [name, { enabled: false }]),
+    );
+    const started = await this.request("thread/start", {
+      model: options.model,
+      modelProvider: options.modelProvider,
+      cwd: options.cwd,
+      approvalPolicy: "never",
+      sandbox: "read-only",
+      runtimeWorkspaceRoots: [],
+      ephemeral: true,
+      threadSource: "system",
+      environments: [],
+      dynamicTools: [],
+      selectedCapabilityRoots: [],
+      config: {
+        ...TEMPORARY_THREAD_DISABLED_CONFIG,
+        mcp_servers: disabledMcpServers,
+      },
+    });
+    const thread = asRecord(started.thread);
+    const threadId = typeof thread.id === "string" ? thread.id : "";
+    if (!threadId) throw new Error("Codex temporary structured thread returned no identity.");
+    try {
+      if (thread.ephemeral !== true) {
+        throw new Error("Codex temporary structured thread did not return an ephemeral identity.");
+      }
+      if (started.model !== options.model || started.modelProvider !== options.modelProvider) {
+        throw new Error("Codex temporary structured thread did not preserve the selected model and provider.");
+      }
+      if (asRecord(started.sandbox).type !== "readOnly") {
+        throw new Error("Codex temporary structured thread did not start with read-only permissions.");
+      }
+
+      let listener: ((notification: RawNotification) => void) | undefined;
+      let turnId: string | undefined;
+      let latestResponse: string | undefined;
+      let settle: ((error?: Error) => void) | undefined;
+      const queued: RawNotification[] = [];
+      const completed = new Promise<void>((resolve, reject) => {
+        settle = (error) => error ? reject(error) : resolve();
+      });
+      void completed.catch(() => undefined);
+      const processNotification = (notification: RawNotification) => {
+        const params = notification.params;
+        if (!turnId || params.threadId !== threadId) return;
+        if (notification.method === "item/completed" && params.turnId === turnId) {
+          const item = asRecord(params.item);
+          if (item.type !== "agentMessage" || typeof item.text !== "string") return;
+          if (Buffer.byteLength(item.text, "utf8") > STRUCTURED_RESPONSE_MAX_BYTES) {
+            settle?.(new Error(`Codex temporary structured response exceeds ${STRUCTURED_RESPONSE_MAX_BYTES} bytes.`));
+            return;
+          }
+          latestResponse = item.text;
+          return;
+        }
+        if (notification.method !== "turn/completed") return;
+        const turn = asRecord(params.turn);
+        if (turn.id !== turnId) return;
+        if (turn.status !== "completed") {
+          settle?.(new Error(`Codex temporary structured turn ended with status ${String(turn.status || "unknown")}.`));
+          return;
+        }
+        settle?.(latestResponse ? undefined : new Error("Codex temporary structured turn completed without a response."));
+      };
+      listener = (notification) => {
+        if (turnId) processNotification(notification);
+        else if (notification.params.threadId === threadId) queued.push(notification);
+      };
+      this.on("notification", listener);
+
+      try {
+        const turn = await this.request("turn/start", {
+          threadId,
+          input: [{ type: "text", text: options.prompt, text_elements: [] }],
+          outputSchema: options.outputSchema,
+          ...(options.reasoningEffort ? { effort: options.reasoningEffort } : {}),
+        });
+        turnId = turnIdFromResult(turn);
+        if (!turnId) throw new Error("Codex temporary structured turn returned no turn identity.");
+        for (const notification of queued) processNotification(notification);
+        await promiseWithTimeout(
+          completed,
+          STRUCTURED_TURN_TIMEOUT_MS,
+          "Codex temporary structured turn timed out.",
+        );
+        if (!latestResponse) throw new Error("Codex temporary structured turn completed without a response.");
+        return latestResponse;
+      } finally {
+        if (listener) this.off("notification", listener);
+      }
+    } finally {
+      try {
+        await this.request("thread/unsubscribe", { threadId });
+      } catch (error) {
+        this.onDiagnostic?.({
+          code: "CODEX_TEMPORARY_THREAD_UNSUBSCRIBE_FAILED",
+          threadId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  }
+
   async respondToApproval(request: CodexApprovalRequest, decision: AiSessionApprovalDecision) {
     this.sendResponse(request.id, approvalResponseForRequest(request, decision));
   }
@@ -826,6 +967,23 @@ function withThreadModelResult(thread: CodexThread, result: JsonValue): CodexThr
     ...(typeof result.modelProvider === "string" ? { modelProvider: result.modelProvider } : {}),
     ...(typeof result.reasoningEffort === "string" ? { reasoningEffort: result.reasoningEffort } : {}),
   };
+}
+
+function asRecord(value: unknown): JsonValue {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as JsonValue : {};
+}
+
+function promiseWithTimeout<T>(operation: Promise<T>, timeoutMs: number, message: string) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    operation,
+    new Promise<T>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+      timer.unref?.();
+    }),
+  ]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
 }
 
 function websocketProxyStream(child: ChildProcessWithoutNullStreams) {

@@ -39,7 +39,7 @@ test("story mode replaces the instance switcher with a node filter", () => {
 test("story list filters by the selected owner node", () => {
   assert.match(storyView, /nodeFilter\?: StoryNodeFilter/);
   assert.match(storyView, /allStories\.value\.filter\(\(story\) => storyNodeIsVisible\(props\.nodeFilter, story\.ownerNodeId\)\)/);
-  assert.match(storyView, /const stories = computed\(\(\) => sortStories\(filteredStories\.value, storySortMode\.value, storySortOptions\.value\)\);/);
+  assert.match(storyView, /const stories = computed\(\(\) => \{[\s\S]*return sortStories\(filteredStories\.value, mode, storySortOptions\(mode\)\);/);
 });
 
 test("Story list options combine view and sort controls while manual mode drags the complete Story", () => {
@@ -60,9 +60,17 @@ test("Story list options combine view and sort controls while manual mode drags 
 });
 
 test("story selection follows the node-filtered list", () => {
-  assert.match(storyView, /const story = stories\.value\.find\(\(candidate\) => candidate\.id === selection\.storyId && candidate\.ownerNodeId === selection\.ownerNodeId\);/);
-  assert.match(storyView, /const refreshed = refreshResource\(resource\);[\s\S]*selectedResource\.value = refreshed \|\| \(value\[0\] \? \{ kind: "story", story: value\[0\] \} : undefined\);/);
+  assert.match(storyView, /const story = filteredStories\.value\.find\(\(candidate\) => candidate\.id === selection\.storyId && candidate\.ownerNodeId === selection\.ownerNodeId\);/);
+  assert.match(storyView, /watch\(filteredStories, \(\) => \{/);
+  assert.doesNotMatch(storyView, /watch\(stories, \(value\) => \{/);
+  assert.match(storyView, /const refreshed = refreshResource\(resource\);[\s\S]*selectedResource\.value = refreshed \|\| \(stories\.value\[0\] \? \{ kind: "story", story: stories\.value\[0\] \} : undefined\);/);
   assert.match(storyView, /const filteredOnlineNode = props\.nodes\.find/);
+});
+
+test("Story sorting subscribes only to the state used by its active mode", () => {
+  assert.match(storyView, /lastUserMessageTimes: mode === "last-user-message" \? storyLastUserMessageTimes\.value : emptyStoryActivityTimes/);
+  assert.match(storyView, /manualKeys: mode === "manual" \? manualStoryKeys\.value : emptyManualStoryKeys/);
+  assert.match(storyView, /reuseEqualStoryActivityTimes\(previous, times\)/);
 });
 
 test("selecting a Story detail does not expand its tree", () => {
@@ -84,6 +92,15 @@ test("Story AI sessions expose status and unread indicators", () => {
   assert.match(storyView, /\.story-session-icon-status\s*\{[^}]*position:absolute;[^}]*top:-2px;[^}]*right:-5px;/s);
   assert.match(storyView, /\.story-session-unread\s*\{[^}]*background:var\(--status-info\);/s);
   assert.match(storyView, /type SessionEntry = \{ instance: InstanceWithAiSessions; session: AiSessionSummary; depth\?: number; hasChildren\?: boolean \};/);
+});
+
+test("Story AI sessions open a supported terminal in the session working directory", () => {
+  assert.match(storyView, /:can-open-terminal="Boolean\(storyTerminalAppId\(entry\.instance\)\)"/);
+  assert.match(storyView, /:is-opening-terminal="launchingApp"/);
+  assert.match(storyView, /@open-terminal="openStorySessionTerminal\(entry\)"/);
+  assert.match(storyView, /function storyTerminalAppId\(instance: InstanceWithAiSessions\)[\s\S]*terminalAppIdForLaunchableApps\(launchableAppsForInstance\(instance, t\)\)/);
+  assert.match(storyView, /function openStorySessionTerminal\(entry: SessionEntry\)[\s\S]*!entry\.session\.cwd[\s\S]*emit\("launch-app", entry\.instance, appId, undefined, \{ cwd: entry\.session\.cwd \}\)/);
+  assert.match(workbench, /<StoryView[\s\S]*:launching-app="launchingApp"[\s\S]*@launch-app="launchSelectedApp"/);
 });
 
 test("Story AI sessions derive cross-instance trees and sort by each root's own user message", () => {

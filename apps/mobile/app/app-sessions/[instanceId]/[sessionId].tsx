@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { TerminalView, type TerminalViewRef } from 'expo-libghostty';
 import { MenuView, type MenuAction } from '@expo/ui/community/menu';
@@ -7,11 +7,13 @@ import { WebView } from 'react-native-webview';
 import { appSessionAccessMode, type AppSessionAccessLease } from '@task-handoff/protocol/app-sessions';
 
 import { useActiveAppSessions } from '../../../src/app-sessions/use-active-app-sessions';
+import { useActiveAiSessionsSnapshot } from '../../../src/ai-sessions/use-active-sessions';
 import { AppSessionAccessLeaseController, shouldRenewAppSessionAccessAfterHttpStatus } from '../../../src/app-sessions/access-lease';
 import { canCloseAppSession } from '../../../src/app-sessions/status';
 import { AppSessionTerminalInputNormalizer } from '../../../src/app-sessions/terminal-input';
 import { APP_SESSION_TERMINAL_FONT_SIZE, appSessionTerminalKeyboardBehavior, appSessionTerminalKeyboardOffset } from '../../../src/app-sessions/terminal-layout';
 import { SystemIcon } from '../../../src/components/SystemIcon';
+import { SessionRenameModal } from '../../../src/components/SessionRenameModal';
 import { useMobileTheme } from '../../../src/components/theme';
 import { useMobileToast } from '../../../src/components/MobileToast';
 import type { MobileAppSessionTtyConnection } from '../../../src/control-plane/transport';
@@ -29,6 +31,7 @@ export default function AppSessionRoute() {
   const sessionId = first(params.sessionId);
   const router = useRouter();
   const { closeSession, createAccess, renameSession, revokeAccess, state, transport } = useActiveAppSessions();
+  const aiSessionsSnapshot = useActiveAiSessionsSnapshot();
   const { colors } = useMobileTheme();
   const { t } = useI18n();
   const toast = useMobileToast();
@@ -50,6 +53,10 @@ export default function AppSessionRoute() {
     .find((entry) => entry.instanceId === instanceId)
     ?.appSessions.sessions.find((entry) => entry.id === sessionId), [instanceId, sessionId, state.snapshot]);
   const accessMode = session ? appSessionAccessMode(session) : undefined;
+  const linkedAiSession = aiSessionsSnapshot?.instances
+    .find((entry) => entry.instanceId === instanceId)
+    ?.aiSessions.sessions.find((entry) => entry.appSessionId === sessionId);
+  const renameSupported = !linkedAiSession || linkedAiSession.actions?.rename === true;
   const activeAccess = session?.status === 'running' && access?.instanceId === instanceId && access.sessionId === sessionId ? access : undefined;
 
   useEffect(() => {
@@ -135,14 +142,14 @@ export default function AppSessionRoute() {
 
   const title = session?.title || session?.appId || t('nav.appSessions');
   const closeDisabled = closing || state.sync.phase !== 'ready' || session?.status === 'stopping';
-  const renameDisabled = renaming || state.sync.phase !== 'ready';
+  const renameDisabled = renaming || state.sync.phase !== 'ready' || !renameSupported;
   const openRename = () => {
     setRenameDraft(title);
     setRenameError('');
     setRenameOpen(true);
   };
-  const submitRename = () => {
-    const nextTitle = renameDraft.trim();
+  const submitRename = (submittedTitle = renameDraft) => {
+    const nextTitle = submittedTitle.trim();
     if (!nextTitle) {
       setRenameError(t('appSessions.titleRequired'));
       return;
@@ -156,6 +163,7 @@ export default function AppSessionRoute() {
     void renameSession(instanceId, sessionId, nextTitle).then(() => {
       setRenameOpen(false);
     }).catch((cause) => {
+      setRenameError(cause instanceof Error && cause.message ? cause.message : t('appSessions.renameFailed'));
       toast.show({
         detail: cause instanceof Error && cause.message ? cause.message : t('appSessions.renameFailed'),
         title: t('toast.actionFailed', { action: t('appSessions.rename') }),
@@ -178,7 +186,7 @@ export default function AppSessionRoute() {
     } },
   ]);
   const menuActions: MenuAction[] = [
-    { id: 'rename', image: 'pencil', title: renaming ? t('appSessions.renaming') : t('appSessions.rename'), attributes: { disabled: renameDisabled } },
+    { id: 'rename', image: 'pencil', title: renameSupported ? (renaming ? t('appSessions.renaming') : t('appSessions.rename')) : t('appSessions.renameUnavailable'), attributes: { disabled: renameDisabled } },
   ];
   if (session && canCloseAppSession(session.status)) {
     menuActions.push({ id: 'close', image: 'xmark.circle', title: closing || session.status === 'stopping' ? t('appSessions.closing') : t('appSessions.closeSession'), attributes: { destructive: true, disabled: closeDisabled } });
@@ -260,32 +268,15 @@ export default function AppSessionRoute() {
       style={[styles.screen, styles.terminalKeyboardBackground]}
       testID="app-session-terminal-keyboard-area"
     >{sessionContent}</KeyboardAvoidingView>
-  </View> : <View style={[styles.screen, { backgroundColor: colors.code }]}>{sessionContent}</View>}<Modal animationType="fade" onRequestClose={() => !renaming && setRenameOpen(false)} transparent visible={renameOpen}>
-    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.renameOverlay}>
-      <Pressable disabled={renaming} onPress={() => setRenameOpen(false)} style={styles.renameBackdrop} />
-      <View style={[styles.renameDialog, { backgroundColor: colors.surface }]}>
-        <Text style={[styles.renameTitle, { color: colors.text }]}>{t('appSessions.rename')}</Text>
-        <TextInput
-          autoFocus
-          editable={!renaming}
-          maxLength={120}
-          onChangeText={(value) => { setRenameDraft(value); setRenameError(''); }}
-          onSubmitEditing={submitRename}
-          placeholder={t('appSessions.renamePlaceholder')}
-          placeholderTextColor={colors.textMuted}
-          returnKeyType="done"
-          selectTextOnFocus
-          style={[styles.renameInput, { borderColor: renameError ? colors.error : colors.border, color: colors.text }]}
-          value={renameDraft}
-        />
-        {renameError ? <Text accessibilityLiveRegion="polite" style={[styles.renameError, { color: colors.error }]}>{renameError}</Text> : null}
-        <View style={styles.renameActions}>
-          <Pressable disabled={renaming} onPress={() => setRenameOpen(false)} style={({ pressed }) => [styles.renameAction, pressed && styles.menuButtonPressed]}><Text style={[styles.renameActionText, { color: colors.textMuted }]}>{t('common.cancel')}</Text></Pressable>
-          <Pressable disabled={renaming} onPress={submitRename} style={({ pressed }) => [styles.renameAction, renaming && styles.renameActionDisabled, pressed && styles.menuButtonPressed]}><Text style={[styles.renameActionText, { color: colors.primary }]}>{renaming ? t('appSessions.renaming') : t('appSessions.rename')}</Text></Pressable>
-        </View>
-      </View>
-    </KeyboardAvoidingView>
-  </Modal></>;
+  </View> : <View style={[styles.screen, { backgroundColor: colors.code }]}>{sessionContent}</View>}
+  <SessionRenameModal
+    busy={renaming}
+    error={renameError}
+    initialTitle={title}
+    onClose={() => { if (!renaming) setRenameOpen(false); }}
+    onSubmit={submitRename}
+    open={renameOpen}
+  /></>;
 }
 
 function first(value: string | string[] | undefined) {
@@ -310,16 +301,6 @@ const styles = StyleSheet.create({
   statusText: { fontSize: 12, lineHeight: 16 },
   menuButton: { alignItems: 'center', height: 34, justifyContent: 'center', width: 34 },
   menuButtonPressed: { opacity: 0.65 },
-  renameOverlay: { alignItems: 'center', flex: 1, justifyContent: 'center', padding: 24 },
-  renameBackdrop: { backgroundColor: 'rgba(0,0,0,0.35)', bottom: 0, left: 0, position: 'absolute', right: 0, top: 0 },
-  renameDialog: { borderRadius: 16, gap: 12, maxWidth: 420, padding: 18, width: '100%' },
-  renameTitle: { fontSize: 18, fontWeight: '700', lineHeight: 24 },
-  renameInput: { borderRadius: 10, borderWidth: StyleSheet.hairlineWidth, fontSize: 16, minHeight: 44, paddingHorizontal: 12, paddingVertical: 9 },
-  renameError: { fontSize: 13, lineHeight: 18 },
-  renameActions: { flexDirection: 'row', justifyContent: 'flex-end' },
-  renameAction: { alignItems: 'center', justifyContent: 'center', minHeight: 40, paddingHorizontal: 12 },
-  renameActionDisabled: { opacity: 0.45 },
-  renameActionText: { fontSize: 15, fontWeight: '600' },
   unavailable: { alignItems: 'center', flex: 1, justifyContent: 'center', padding: 24 },
   unavailableText: { fontSize: 14, textAlign: 'center' },
 });

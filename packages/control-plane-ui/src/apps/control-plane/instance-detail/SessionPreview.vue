@@ -120,7 +120,13 @@
                       @update:status-bar-visible="sessionStatusBarVisible = $event"
                       @update:window-always-on-top="setWindowAlwaysOnTop"
                     >
-                      <ContextMenuItem v-if="session.kind !== 'repository' && session.kind !== 'embedded-browser'" class="instance-action-item" @select="beginSessionRename(session)">
+                      <ContextMenuItem
+                        v-if="session.kind !== 'repository' && session.kind !== 'embedded-browser'"
+                        class="instance-action-item"
+                        :disabled="!canRenameAppSession(session)"
+                        :title="canRenameAppSession(session) ? undefined : t('sessions.tabs.renameUnavailable')"
+                        @select="beginSessionRename(session)"
+                      >
                         <Pencil :size="14" />
                         <span>{{ t("sessions.tabs.rename") }}</span>
                       </ContextMenuItem>
@@ -817,12 +823,19 @@ function setRenameInput(element: Element | ComponentPublicInstance | null) {
 }
 
 async function beginSessionRename(session: SessionTab) {
+  if (!canRenameAppSession(session)) return;
   editingSessionKey.value = session.key;
   sessionTitleDraft.value = sessionDisplayName(session, t);
   sessionRenameError.value = "";
   await nextTick();
   renameInput.value?.focus();
   renameInput.value?.select();
+}
+
+function canRenameAppSession(session: SessionTab) {
+  const appSessionId = typeof session.source?.id === "string" ? session.source.id : session.key;
+  const linkedAiSession = props.instance.aiSessions?.sessions.find((candidate) => candidate.appSessionId === appSessionId);
+  return !linkedAiSession || linkedAiSession.actions?.rename === true;
 }
 
 function cancelSessionRename() {

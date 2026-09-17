@@ -256,6 +256,7 @@ export class CodexAppServerSessionProjector {
         interrupt: lifecycle.status === "running" || lifecycle.status === "waiting",
         approval: lifecycle.status === "waiting" && lifecycle.phase === "approval",
         fork: this.options.threadForkSupported(),
+        rename: true,
       },
       lineage: context.lineage || existing?.lineage || (
         typeof thread.parentThreadId === "string" && thread.parentThreadId
@@ -264,7 +265,6 @@ export class CodexAppServerSessionProjector {
             ? { kind: "fork", parentProviderSessionId: thread.forkedFromId }
             : undefined
       ),
-      title: typeof thread.name === "string" ? thread.name : undefined,
       cwd: typeof thread.cwd === "string" ? thread.cwd : undefined,
       status: lifecycle.status,
       phase: lifecycle.phase,

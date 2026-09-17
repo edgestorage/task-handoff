@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { filterInstanceCwdFolders, selectableInstanceCwdFolders } from "../src/apps/control-plane/shared/instanceCwdFolders.ts";
+import { filterInstanceCwdFolders, findInstanceCwdFolderByPath, selectableInstanceCwdFolders } from "../src/apps/control-plane/shared/instanceCwdFolders.ts";
 
 const folders = [
   { id: "project", name: "Project", path: "/workspace/project" },
@@ -32,4 +32,12 @@ test("container cwd selection has no registered folder override for non-local so
 test("cwd folder search matches display names and paths", () => {
   assert.deepEqual(filterInstanceCwdFolders(folders, "client").map((folder) => folder.id), ["child"]);
   assert.deepEqual(filterInstanceCwdFolders(folders, "OTHER").map((folder) => folder.id), ["other"]);
+});
+
+test("cwd folder selection matches normalized paths across instances", () => {
+  assert.equal(findInstanceCwdFolderByPath(folders, "/workspace/project/")?.id, "project");
+  assert.equal(findInstanceCwdFolderByPath([
+    { id: "windows", path: "C:\\Workspace\\Project" },
+  ], "c:/workspace/project/")?.id, "windows");
+  assert.equal(findInstanceCwdFolderByPath(folders, "/workspace/missing"), undefined);
 });

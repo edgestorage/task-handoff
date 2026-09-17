@@ -98,6 +98,7 @@
                 @open-ai-session-app="openCardApp"
                 @previous-prompt="previousPrompt"
                 @resolve-approval="(instance, session, decision) => emit('resolveApproval', instance, session, decision)"
+                @rename-session="renameSessionTarget = $event"
                 @select-card="selectCard"
                 @select-instance="emit('selectInstance', $event)"
                 @stop-app-session="stopCardAppSession"
@@ -159,6 +160,7 @@
               @open-ai-session-app="openCardApp"
               @previous-prompt="previousPrompt"
               @resolve-approval="(instance, session, decision) => emit('resolveApproval', instance, session, decision)"
+              @rename-session="renameSessionTarget = $event"
               @select-card="selectCard"
               @select-instance="emit('selectInstance', $event)"
               @stop-app-session="stopCardAppSession"
@@ -236,6 +238,12 @@
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+      <AiSessionRenameDialog
+        :instance-id="renameSessionTarget?.instance.id || ''"
+        :open="Boolean(renameSessionTarget)"
+        :session="renameSessionTarget?.session"
+        @update:open="(open) => !open && (renameSessionTarget = undefined)"
+      />
     </template>
   </section>
 </template>
@@ -293,6 +301,7 @@ import {
   sessionDisplayName,
 } from "../useInstanceSessions";
 import AiSessionCard from "./AiSessionCard.vue";
+import AiSessionRenameDialog from "../../../components/ai-session/AiSessionRenameDialog.vue";
 import AiSessionFloatingDock from "./AiSessionFloatingDock.vue";
 import type { AiBoardCard, AiBoardColumnKey } from "./aiBoardTypes";
 import { useAiBoardTriggers } from "./useAiBoardTriggers";
@@ -353,6 +362,7 @@ const queueComposerEdit = ref<{
 const aiSessionActionBusy = ref(false);
 const stoppingAppSessionKey = ref("");
 const forkingSessionKey = ref("");
+const renameSessionTarget = ref<AiBoardCard>();
 const forkRequestIds = new Map<string, string>();
 const pendingBusyFork = ref<{ card: AiBoardCard; mode: "current" | "managed-worktree"; throughTurnId?: string }>();
 const queryClient = useQueryClient();

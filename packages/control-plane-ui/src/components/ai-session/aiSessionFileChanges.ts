@@ -32,7 +32,9 @@ export function parseAiSessionDiff(diff: string): AiSessionDiffLine[] {
   const result: AiSessionDiffLine[] = [];
   let oldLine: number | undefined;
   let newLine: number | undefined;
-  for (const rawLine of diff.split("\n")) {
+  const rawLines = diff.split("\n");
+  if (rawLines.at(-1) === "") rawLines.pop();
+  for (const rawLine of rawLines) {
     if (result.length >= maxRenderedLines) break;
     const hunk = rawLine.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
     if (hunk) {

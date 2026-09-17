@@ -74,6 +74,9 @@ test("instance and settings surfaces preserve Market and Custom ownership", () =
   assert.doesNotMatch(artwork, /<Bot|<Monitor/);
   assert.doesNotMatch(artwork, /image-artwork-wordmark/);
   assert.match(artwork, /coverFailed = true/);
+  assert.match(artwork, /\.image-artwork--compact\s*\{[^}]*background: var\(--surface-subtle\)/s);
+  assert.match(artwork, /\.image-artwork--compact \.image-artwork-mark\s*\{[^}]*var\(--surface-raised\)[^}]*var\(--surface-subtle\)/s);
+  assert.doesNotMatch(artwork, /\.image-artwork--compact[\s\S]*?background: #0b181c/);
 
   const project = fs.readFileSync(path.join(__dirname, "../src/apps/control-plane/settings/useProjectSettings.ts"), "utf8");
   assert.match(project, /defaultImageSelection/);

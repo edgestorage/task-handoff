@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { normalizeManualStoryOrder, reorderStoryKeys, sortStories, storyDropTargetAt, storySortKey } from "../src/apps/control-plane/story/storySort.ts";
+import { normalizeManualStoryOrder, reorderStoryKeys, reuseEqualStoryActivityTimes, sortStories, storyDropTargetAt, storySortKey } from "../src/apps/control-plane/story/storySort.ts";
 
 const story = (id, title, ownerNodeId = "node-1") => ({ id, title, ownerNodeId, documents: [], actions: [], createdAt: "2026-09-03T00:00:00.000Z", updatedAt: "2026-09-03T00:00:00.000Z" });
 const archivedStory = (id, title, ownerNodeId = "node-1") => ({ ...story(id, title, ownerNodeId), archivedAt: "2026-09-04T00:00:00.000Z" });
@@ -15,6 +15,13 @@ test("Story activity sorting uses the latest user message and leaves empty Stori
   const times = new Map([[storySortKey(stories[0]), 10], [storySortKey(stories[1]), 20]]);
   const result = sortStories(stories, "last-user-message", { locale: "en-US", lastUserMessageTimes: times, manualKeys: [] });
   assert.deepEqual(result.map((item) => item.id), ["2", "10", "empty"]);
+});
+
+test("unchanged Story activity projections preserve their reactive identity", () => {
+  const previous = new Map([["node-1:story-1", 10], ["node-1:story-2", 20]]);
+
+  assert.equal(reuseEqualStoryActivityTimes(previous, new Map(previous)), previous);
+  assert.notEqual(reuseEqualStoryActivityTimes(previous, new Map([["node-1:story-1", 11], ["node-1:story-2", 20]])), previous);
 });
 
 test("archived Stories remain after active Stories in every sort mode", () => {

@@ -18,6 +18,9 @@ import {
   AiSessionModelSelectionInputSchema,
   AiSessionReasoningEffortActionResponseSchema,
   AiSessionReasoningEffortInputSchema,
+  AiSessionWorkspaceCheckoutInputSchema,
+  AiSessionRenameInputSchema,
+  AiSessionRenameResultSchema,
   AiSessionOpenAppInputSchema,
   AiSessionOpenAppResultSchema,
   AiSessionQueueEditInputSchema,
@@ -41,6 +44,7 @@ import {
   type AiSessionMessageAttachmentRef,
   type AiSessionModelSelection,
   type AiSessionReasoningEffort,
+  type AiSessionRenameInput,
   type AiSessionPermissionMode,
   type AiSessionQueueEditInput,
   type AiSessionQueueReorderInput,
@@ -146,12 +150,19 @@ export function createControlPlaneAiSessionsApi(transport: ControlPlaneClientTra
       const body = AiSessionReasoningEffortInputSchema.parse({ clientRequestId, reasoningEffort });
       return requestData(`${sessionRoute(instanceId, aiSessionId)}/reasoning-effort`, AiSessionReasoningEffortActionResponseSchema, json("PUT", body));
     },
+    rename(instanceId: string, aiSessionId: string, input: AiSessionRenameInput) {
+      return requestData(`${sessionRoute(instanceId, aiSessionId)}/title`, AiSessionRenameResultSchema, json("PUT", AiSessionRenameInputSchema.parse(input)));
+    },
     fork(instanceId: string, aiSessionId: string, input: AiSessionForkInput) {
       return requestData(`${sessionRoute(instanceId, aiSessionId)}/fork`, AiSessionForkResultSchema, json("POST", AiSessionForkInputSchema.parse(input)));
     },
     workspace(instanceId: string, cwdFolderId?: string, signal?: AbortSignal) {
       const query = cwdFolderId ? `?${new URLSearchParams({ cwdFolderId })}` : "";
       return requestData(`/api/controlled-instances/${encodeURIComponent(instanceId)}/ai-sessions/workspace${query}`, RepositoryAiSessionWorkspaceSchema, { signal });
+    },
+    checkoutWorkspaceBranch(instanceId: string, input: { cwdFolderId?: string; branch: string }) {
+      const body = AiSessionWorkspaceCheckoutInputSchema.parse(input);
+      return requestData(`/api/controlled-instances/${encodeURIComponent(instanceId)}/ai-sessions/workspace/checkout`, RepositoryAiSessionWorkspaceSchema, json("POST", body));
     },
     openApp(instanceId: string, aiSessionId: string, clientRequestId: string) {
       return requestData(`${sessionRoute(instanceId, aiSessionId)}/open-app`, AiSessionOpenAppResultSchema, json("POST", AiSessionOpenAppInputSchema.parse({ clientRequestId })));

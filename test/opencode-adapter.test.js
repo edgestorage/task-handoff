@@ -768,6 +768,19 @@ test("OpenCode readiness does not gate structured session fields by provider ver
   bridge.close();
 });
 
+test("OpenCode rename uses the structured PATCH session contract", async () => {
+  const client = new OpenCodeClient(async () => ({ endpoint: "http://unused", headers: {} }));
+  const calls = [];
+  client.request = async (...args) => { calls.push(args); return { id: "ses_rename", directory: "/workspace", title: "Renamed" }; };
+
+  assert.equal((await client.renameSession("ses_rename", "/workspace", "Renamed")).title, "Renamed");
+  assert.deepEqual(calls, [[
+    "/session/ses_rename",
+    OpenCodeSessionSchema,
+    { method: "PATCH", directory: "/workspace", body: { title: "Renamed" } },
+  ]]);
+});
+
 test("OpenCode bridge implements lifecycle, steer, attachments, inclusive-turn fork, and permission replies", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-opencode-"));
   const registry = createAiSessionRegistry({ dir: root });
@@ -788,6 +801,12 @@ test("OpenCode bridge implements lifecycle, steer, attachments, inclusive-turn f
     messages: async (id) => messages.get(id) || [],
     permissions: async () => [...permissions.values()],
     setPermission: async (...args) => { calls.push(["set-permission", ...args]); return sessions.get(args[0]); },
+    renameSession: async (id, directory, title) => {
+      calls.push(["rename", id, directory, title]);
+      const updated = { ...sessions.get(id), title, time: { ...sessions.get(id).time, updated: Date.now() } };
+      sessions.set(id, updated);
+      return updated;
+    },
     promptAsync: async (...args) => calls.push(["prompt", ...args]),
     forkSession: async (id, directory, messageID) => {
       calls.push(["fork", id, directory, messageID]);
@@ -809,6 +828,9 @@ test("OpenCode bridge implements lifecycle, steer, attachments, inclusive-turn f
     [{ permission: "*", pattern: "*", action: "allow" }],
   ]);
   const session = registry.getByProviderSessionId("opencode", created.providerSessionId);
+  assert.deepEqual(await bridge.renameSession(session, "Renamed OpenCode"), { title: "Renamed OpenCode", authority: "provider" });
+  assert.deepEqual(calls.find((call) => call[0] === "rename"), ["rename", "ses_created", "/workspace/project", "Renamed OpenCode"]);
+  assert.equal(registry.getByProviderSessionId("opencode", "ses_created").title, "Renamed OpenCode");
   const runtimeFile = "/workspace/project/input.txt";
   await bridge.startMessage(session, {
     message: "Hello",

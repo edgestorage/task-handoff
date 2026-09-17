@@ -164,6 +164,19 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
     return effort;
   }
 
+  async renameSession(session: AiSessionStatus, title: string) {
+    if (!session.providerSessionId || !session.cwd) {
+      throw aiSessionControlError("AI_SESSION_RENAME_UNSUPPORTED", "OpenCode session identity is incomplete.", 409);
+    }
+    const updated = await this.client.renameSession(session.providerSessionId, session.cwd, title);
+    await this.reconcile(updated.id, updated.directory, updated, "ai-session");
+    const actual = this.registry.getByProviderSessionId(this.agent, session.providerSessionId)?.title;
+    if (actual !== title) {
+      throw aiSessionControlError("AI_SESSION_RENAME_NOT_CONFIRMED", "OpenCode did not confirm the requested session title.", 502);
+    }
+    return { title: actual, authority: "provider" as const };
+  }
+
   async activeSessionExists(providerSessionId: string) {
     try {
       await this.ensureReady();

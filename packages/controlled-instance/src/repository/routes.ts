@@ -31,6 +31,7 @@ import {
   RepositoryStartAiSessionRequestSchema,
   RepositoryUnstageRequestSchema,
   RepositoryAiSessionWorkspaceInspectSchema,
+  RepositoryAiSessionWorkspaceCheckoutSchema,
   RepositoryAiSessionWorkspaceSchema,
   RepositoryWorkspaceAiSessionCreateSchema,
   RepositoryWorkspaceAiSessionCreateRefSchema,
@@ -127,6 +128,21 @@ export function registerRepositoryRoutes(app: FastifyInstance, options: Register
       const body = RepositoryAiSessionWorkspaceInspectSchema.parse(request.body || {});
       const cwd = authorizedWorkspaceCwd(body.cwd.path, options.workspaceRoots);
       return { data: await inspectAiSessionWorkspace(servicesForWorkspace(cwd)) };
+    } catch (error) { return sendRepositoryError(reply, error); }
+  });
+
+  app.post<{ Body: unknown }>("/api/repository/ai-session-workspace/checkout", async (request, reply) => {
+    try {
+      const body = RepositoryAiSessionWorkspaceCheckoutSchema.parse(request.body || {});
+      const cwd = authorizedWorkspaceCwd(body.cwd.path, options.workspaceRoots);
+      const services = servicesForWorkspace(cwd);
+      const inspected = await inspectAiSessionWorkspace(services);
+      const selected = inspected.branches.find((branch) => branch.name === body.branch);
+      if (!selected || selected.kind !== "branch" || !selected.currentFolderSelectable) {
+        throw new RepositoryOperationError("REPOSITORY_BRANCH_INVALID", "Selected local branch cannot be checked out in the current folder.", await services.resolve());
+      }
+      if (!selected.current) await services.branches.checkoutForAiSession(selected.name);
+      return { data: await inspectAiSessionWorkspace(services) };
     } catch (error) { return sendRepositoryError(reply, error); }
   });
 

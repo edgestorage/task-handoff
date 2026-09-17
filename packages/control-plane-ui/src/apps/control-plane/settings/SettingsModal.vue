@@ -1342,18 +1342,19 @@ function errorText(error: unknown) {
 <style scoped>
 .control-settings-page {
   --settings-content-max-width: 1080px;
+  --settings-top-fade-height: 18px;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   align-items: start;
   min-width: 0;
   height: 100%;
   overflow: hidden;
-  gap: 18px;
+  gap: 0;
   background: var(--control-plane-settings-background,
     radial-gradient(circle at 62% -10%, var(--brand-accent-soft), transparent 28rem),
     var(--surface-inset));
   color: var(--text);
-  padding: 18px;
+  padding: 18px 18px 0;
 }
 
 .modal-head {
@@ -1443,6 +1444,7 @@ function errorText(error: unknown) {
   height: 100%;
   min-height: 0;
   overflow: hidden;
+  padding-top: var(--settings-top-fade-height);
 }
 
 .node-list-panel,
@@ -2056,7 +2058,8 @@ function errorText(error: unknown) {
   }
 
   .control-settings-page {
-    padding: 12px;
+    --settings-top-fade-height: 12px;
+    padding: 12px 12px 0;
   }
 
 }

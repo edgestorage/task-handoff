@@ -64,6 +64,22 @@ test("AI session titles fall back to the authoritative latest user prompt when t
   assert.equal(displayAiSessionTitle(session, 0, chinese), "");
 });
 
+test("an AI session without a custom title displays its latest user turn", () => {
+  const session = {
+    id: "ai_latest_prompt_title",
+    agent: "codex",
+    status: "idle",
+    phase: "unknown",
+    userPrompt: "Second prompt",
+    turns: [
+      { id: "turn-one", status: "completed", phase: "unknown", userPrompt: "First prompt" },
+      { id: "turn-two", status: "completed", phase: "unknown", userPrompt: "Second prompt" },
+    ],
+  };
+
+  assert.equal(displayAiSessionTitle(session, undefined, chinese), "Second prompt");
+});
+
 test("raw tool names and previews are appended outside localized presentation", () => {
   const session = {
     id: "ai_tool_raw",

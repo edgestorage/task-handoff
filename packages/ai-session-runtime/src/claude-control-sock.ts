@@ -198,7 +198,7 @@ export class ClaudeControlSockSessionBridge implements AiSessionControlProvider,
       appSessionId: compact(appSession?.id, 120),
       providerSessionId,
       appBindingKeys: claudeAppBindingKeys(appSession, short),
-      actions: claudeActions(lifecycle),
+      actions: claudeActions(lifecycle, compact(appSession?.id, 120)),
       providerMeta: {
         short,
         controlSock,
@@ -264,7 +264,7 @@ export class ClaudeControlSockSessionBridge implements AiSessionControlProvider,
           appSessionId: session.appSessionId,
           providerSessionId: session.providerSessionId,
           appBindingKeys: session.appBindingKeys,
-          actions: claudeActions(lifecycle),
+          actions: claudeActions(lifecycle, session.appSessionId),
           providerMeta: { ...(session.providerMeta || {}), short, controlSock, state: stateInfo.observedState, stateSource: stateInfo.source },
           status: lifecycle?.status,
           phase: lifecycle?.phase,
@@ -377,12 +377,13 @@ function claudeLifecycle(value: unknown, options: { hasWorkSignal?: boolean; isA
   return { status: "idle", phase: "unknown" };
 }
 
-function claudeActions(lifecycle?: { status: AiSessionLifecycle }) {
+function claudeActions(lifecycle?: { status: AiSessionLifecycle }, appSessionId?: string) {
   const active = lifecycle?.status === "running" || lifecycle?.status === "waiting";
   return {
     send: true,
     interrupt: active,
     approval: false,
+    rename: Boolean(appSessionId),
   };
 }
 

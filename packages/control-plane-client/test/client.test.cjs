@@ -529,11 +529,14 @@ test("shared AI Session client inspects either a node folder or the instance run
 
   await api.aiSessions.workspace("instance/1", "folder/1");
   await api.aiSessions.workspace("instance/1");
+  await api.aiSessions.checkoutWorkspaceBranch("instance/1", { cwdFolderId: "folder/1", branch: "feature/direct" });
 
   assert.deepEqual(requests.map((request) => request.path), [
     "/api/controlled-instances/instance%2F1/ai-sessions/workspace?cwdFolderId=folder%2F1",
     "/api/controlled-instances/instance%2F1/ai-sessions/workspace",
+    "/api/controlled-instances/instance%2F1/ai-sessions/workspace/checkout",
   ]);
+  assert.deepEqual(JSON.parse(requests[2].init.body), { cwdFolderId: "folder/1", branch: "feature/direct" });
 });
 
 test("shared resource client reads the instance workspace source used for default project selection", async () => {
@@ -729,6 +732,7 @@ test("shared client owns recovery, desktop lifecycle, and command routes used by
       if (path.startsWith("/api/ai-sessions?refresh=true")) return schema.parse({ data: { updatedAt: "2026-08-05T00:00:00.000Z", instances: [] } });
       if (path.endsWith("/open-app")) return schema.parse({ data: { disposition: "opened", aiSessionId: "session", providerSessionId: "provider", appSessionId: "app", creationSource: "ai-session" } });
       if (path.endsWith("/close")) return schema.parse({ data: { disposition: "closed", aiSessionId: "session", providerSessionId: "provider", creationSource: "ai-session" } });
+      if (path.endsWith("/title")) return schema.parse({ data: { disposition: "renamed", aiSessionId: "session", appSessionId: "app", title: "Renamed" } });
       return schema.parse({ data: { command: "rename", value: "Renamed" } });
     },
   };
@@ -737,14 +741,18 @@ test("shared client owns recovery, desktop lifecycle, and command routes used by
   await api.aiSessions.refresh(undefined, "instance/1");
   await api.aiSessions.openApp("instance/1", "session 1", "request-open");
   await api.aiSessions.close("instance/1", "session 1", "request-close");
+  await api.aiSessions.rename("instance/1", "session 1", { title: " Renamed ", expectedTitle: "Original", clientRequestId: "request-rename" });
   await api.aiSessions.executeCommand("instance/1", "session 1", { command: "rename", argument: "Renamed" });
   assert.deepEqual(requests.map((request) => request.path), [
     "/api/ai-sessions?refresh=true&hierarchy=subagents",
     "/api/ai-sessions?refresh=true&hierarchy=subagents&instanceId=instance%2F1",
     "/api/controlled-instances/instance%2F1/ai-sessions/session%201/open-app",
     "/api/controlled-instances/instance%2F1/ai-sessions/session%201/close",
+    "/api/controlled-instances/instance%2F1/ai-sessions/session%201/title",
     "/api/controlled-instances/instance%2F1/ai-sessions/session%201/commands",
   ]);
+  assert.equal(requests[4].init.method, "PUT");
+  assert.deepEqual(JSON.parse(requests[4].init.body), { title: "Renamed", expectedTitle: "Original", clientRequestId: "request-rename" });
 });
 
 test("shared resource client validates declared fields and drops unknown response fields", async () => {

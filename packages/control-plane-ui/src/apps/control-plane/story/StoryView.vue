@@ -97,10 +97,11 @@
                     :bound-trigger-count="boundTriggers(entry).length"
                     :has-app-session="Boolean(entry.session.appSessionId)"
                     :can-open-app="Boolean(entry.session.appSessionId || entry.session.actions?.openApp)"
-                    :can-open-terminal="false"
+                    :can-open-terminal="Boolean(storyTerminalAppId(entry.instance))"
                     :can-fork="false"
+                    :can-rename="entry.session.actions?.rename === true"
                     :is-forking="false"
-                    :is-opening-terminal="false"
+                    :is-opening-terminal="launchingApp"
                     :is-stopping-app-session="closingSessionKey === entry.session.id"
                     :session-id="entry.session.id"
                     :session-name="entry.session.title || entry.session.userPrompt || entry.session.id"
@@ -112,6 +113,8 @@
                     :trigger-templates="triggerTemplates"
                     @close-session="closeSession(entry)"
                     @open-app="openStoryAiSessionApp(entry.instance, entry.session)"
+                    @open-terminal="openStorySessionTerminal(entry)"
+                    @rename-session="renameSessionTarget = entry"
                     @story-assigned="onStoryAssigned"
                     @story-assign-failed="onStoryAssignFailed"
                     @toggle-trigger="toggleTrigger(entry, $event)"
@@ -136,7 +139,7 @@
 
       <main class="story-content" :class="{ 'story-session-pane': (selectedResource?.kind === 'session' || selectedResource?.kind === 'new-session') }">
         <template v-if="selectedResource?.kind === 'new-session'">
-          <AiSessionPanel v-if="newSessionInstance" class="story-session-creator" :active-session="creationActiveSession" :choose-project-folder="projectFolderChooserFor(newSessionInstance)" creation-only :creation-story-id="selectedResource.story.id" :creation-initial-cwd="newSessionInitialCwd" :creation-initial-cwd-folder-id="newSessionInitialCwdFolderId" :creation-instances="storyInstances" :instance="newSessionInstance" :launchable-apps="launchableAppsForInstance(newSessionInstance, t)" :node-local-folders="nodeLocalFoldersByNodeId[newSessionInstance.nodeId] || []" :selected-ai-session="noSelectedAiSession" @update:creation-instance="selectCreationInstance" @session-created="finishStorySessionCreation" />
+          <AiSessionPanel v-if="newSessionInstance" class="story-session-creator" :active-session="creationActiveSession" :choose-project-folder="projectFolderChooserFor(newSessionInstance)" creation-only :creation-story-id="selectedResource.story.id" :creation-initial-cwd="newSessionInitialCwd" :creation-initial-cwd-folder-id="newSessionInitialCwdFolderId" :creation-instances="storyInstances" :instance="newSessionInstance" :launchable-apps="launchableAppsForInstance(newSessionInstance, t)" :launching-app="launchingApp" :node-local-folders="nodeLocalFoldersByNodeId[newSessionInstance.nodeId] || []" :selected-ai-session="noSelectedAiSession" @update:creation-instance="selectCreationInstance" @session-created="finishStorySessionCreation" />
           <div v-else class="story-content-state">{{ t("stories.noAvailableInstance") }}</div>
         </template>
         <template v-else-if="selectedResource?.kind === 'session'">
@@ -147,6 +150,7 @@
             detail-only
             :instance="selectedSessionInstance"
             :launchable-apps="launchableAppsForInstance(selectedSessionInstance, t)"
+            :launching-app="launchingApp"
             :node-local-folders="nodeLocalFoldersByNodeId[selectedSessionInstance?.nodeId || ''] || []"
             :selected-ai-session="selectedStorySession"
             @select-ai-session="handleSelectAiSession"
@@ -360,6 +364,13 @@
     </div>
   </Teleport>
 
+  <AiSessionRenameDialog
+    :instance-id="renameSessionTarget?.instance.id || ''"
+    :open="Boolean(renameSessionTarget)"
+    :session="renameSessionTarget?.session"
+    @update:open="(open) => !open && (renameSessionTarget = undefined)"
+  />
+
   <Dialog v-model:open="editorOpen">
     <DialogContent class="story-editor-dialog"><DialogHeader class="story-dialog-header"><div><DialogTitle>{{ t(editing ? "stories.editor.editTitle" : "stories.editor.newTitle") }}</DialogTitle><DialogDescription>{{ t("stories.editor.description") }}</DialogDescription></div><DialogClose as-child><button type="button" class="story-dialog-close" :aria-label="t('stories.close')"><X :size="16" /></button></DialogClose></DialogHeader><div class="story-editor-fields"><label>{{ t("stories.editor.title") }}<Input v-model="draftTitle" :placeholder="t('stories.editor.titlePlaceholder')" /></label><label>{{ t("stories.editor.descriptionLabel") }}<Textarea v-model="draftDescription" :placeholder="t('stories.editor.descriptionPlaceholder')" /></label><label>{{ t("stories.editor.ownerNode") }}<ControlPlaneSelect v-model="draftNodeId" :disabled="editing"><ControlPlaneSelectItem v-for="node in nodes.filter((candidate) => candidate.status === 'online')" :key="node.id" :value="node.id">{{ node.name }}</ControlPlaneSelectItem></ControlPlaneSelect></label><label>{{ t("stories.editor.maxIdleAiSessions") }}<Input v-model.number="draftMaxIdleAiSessions" type="number" :min="STORY_MIN_IDLE_AI_SESSIONS" :max="STORY_MAX_IDLE_AI_SESSIONS" /></label></div><DialogFooter><Button variant="outline" @click="editorOpen = false">{{ t("common.actions.cancel") }}</Button><Button :disabled="!draftTitle.trim() || !draftNodeId || saving" @click="saveStory">{{ saving ? t("stories.editor.saving") : t("common.actions.save") }}</Button></DialogFooter></DialogContent>
   </Dialog>
@@ -436,6 +447,7 @@ import ControlPlaneSelect from "../shared/ControlPlaneSelect.vue";
 import ControlPlaneSelectItem from "../shared/ControlPlaneSelectItem.vue";
 import { ContextMenu, ContextMenuTrigger } from "../../../components/ui/context-menu";
 import AiSessionCardContextMenu from "../../../components/ai-session/AiSessionCardContextMenu.vue";
+import AiSessionRenameDialog from "../../../components/ai-session/AiSessionRenameDialog.vue";
 import { aiSessionStoryTarget, type AiSessionStoryTarget } from "../../../components/ai-session/storyTarget";
 import StoryTreeContextMenu from "./StoryTreeContextMenu.vue";
 import { closeAiSessionBatch } from "../closeAiSessionBatch";
@@ -460,9 +472,9 @@ import {
 } from "@task-handoff/protocol/ai-session-hierarchy";
 import AiSessionPanel, { type AiSessionCreationPresetDraft } from "../instance-detail/AiSessionPanel.vue";
 import { canUseNativeProjectFolderPicker, type NativeNodeFolderPicker } from "../nodePath";
-import { launchableAppsForInstance, sessionStatusLabel, type RepositoryWorkspaceTabTarget, type SessionTab } from "../useInstanceSessions";
+import { launchableAppsForInstance, sessionStatusLabel, terminalAppIdForLaunchableApps, type RepositoryWorkspaceTabTarget, type SessionTab } from "../useInstanceSessions";
 import { latestStoryDocuments, STORY_TREE_DOCUMENT_LIMIT } from "./storyDocuments";
-import { normalizeManualStoryOrder, reorderStoryKeys, sortStories, storyDropTargetAt, storySortKey, type StorySortMode } from "./storySort";
+import { normalizeManualStoryOrder, reorderStoryKeys, reuseEqualStoryActivityTimes, sortStories, storyDropTargetAt, storySortKey, type StorySortMode } from "./storySort";
 import { useAiSessionTriggers } from "../useAiSessionTriggers";
 import { allStoryNodes, storyNodeIsVisible, type StoryNodeFilter } from "@task-handoff/control-plane-client";
 import { storySelectionKey, type StorySelection } from "./storySelection";
@@ -472,12 +484,14 @@ const props = withDefaults(defineProps<{
   chooseProjectFolder?: NativeNodeFolderPicker;
   headerDensity?: HeaderDensity;
   instances: InstanceWithAiSessions[];
+  launchingApp?: boolean;
   nodes: Node[];
   nodeLocalFoldersByNodeId?: Record<string, NodeLocalFolder[]>;
   nodeFilter?: StoryNodeFilter;
   selection?: StorySelection;
 }>(), {
   headerDensity: "normal",
+  launchingApp: false,
   nodeLocalFoldersByNodeId: () => ({}),
   nodeFilter: allStoryNodes,
 });
@@ -559,7 +573,7 @@ const storySessionRecords = computed<StorySessionRecord[]>(() => props.instances
   (instance.aiSessions.sessions || []).map((session) => ({ ...session, instanceId: instance.id }))
 )));
 const storySessionForest = computed(() => deriveAiSessionForest(storySessionRecords.value, { orderBy: "last-user-message" }));
-const storyLastUserMessageTimes = computed(() => {
+const storyLastUserMessageTimes = computed<ReadonlyMap<string, number>>((previous) => {
   const times = new Map<string, number>();
   const availableStoryKeys = new Set(allStories.value.map(storySortKey));
   for (const root of storySessionForest.value.roots) {
@@ -571,10 +585,21 @@ const storyLastUserMessageTimes = computed(() => {
     if (!availableStoryKeys.has(key)) continue;
     times.set(key, Math.max(times.get(key) || 0, Date.parse(root.session.lastUserMessageAt || "") || 0));
   }
-  return times;
+  return reuseEqualStoryActivityTimes(previous, times);
 });
-const storySortOptions = computed(() => ({ locale: locale.value, lastUserMessageTimes: storyLastUserMessageTimes.value, manualKeys: manualStoryKeys.value }));
-const stories = computed(() => sortStories(filteredStories.value, storySortMode.value, storySortOptions.value));
+const emptyStoryActivityTimes = new Map<string, number>();
+const emptyManualStoryKeys: readonly string[] = [];
+function storySortOptions(mode: StorySortMode) {
+  return {
+    locale: locale.value,
+    lastUserMessageTimes: mode === "last-user-message" ? storyLastUserMessageTimes.value : emptyStoryActivityTimes,
+    manualKeys: mode === "manual" ? manualStoryKeys.value : emptyManualStoryKeys,
+  };
+}
+const stories = computed(() => {
+  const mode = storySortMode.value;
+  return sortStories(filteredStories.value, mode, storySortOptions(mode));
+});
 const storiesPending = computed(() => storiesQuery.isPending.value);
 const storiesFetching = computed(() => storiesQuery.isFetching.value);
 const selectedResource = ref<Resource>(); const expandedStoryKeys = ref(storedExpandedStoryKeys()); const expandedDocumentStoryKeys = ref(new Set<string>()); const error = ref("");
@@ -606,7 +631,8 @@ function setTreeViewMode(mode: TreeViewMode) {
 }
 function setStorySortMode(mode: StorySortMode) {
   if (mode === "manual" && storySortMode.value !== "manual") {
-    const currentOrder = sortStories(allStories.value, storySortMode.value, storySortOptions.value).map(storySortKey);
+    const currentMode = storySortMode.value;
+    const currentOrder = sortStories(allStories.value, currentMode, storySortOptions(currentMode)).map(storySortKey);
     manualStoryKeys.value = normalizeManualStoryOrder(allStories.value, currentOrder);
     persistManualStoryOrder();
   }
@@ -934,9 +960,18 @@ const storyHistoryPanelSession = computed<SessionTab>(() => ({
 const storyHistoryPanelSelectedSession = () => undefined as AiSessionSummary | undefined;
 const queryClient = useQueryClient();
 const closingSessionKey = ref("");
+const renameSessionTarget = ref<SessionEntry>();
 const closingAllStoryKey = ref("");
 function storyTargetFor(entry: SessionEntry): AiSessionStoryTarget | undefined {
   return aiSessionStoryTarget(entry.instance, entry.session, props.nodes.find((node) => node.id === entry.instance.nodeId)?.name);
+}
+function storyTerminalAppId(instance: InstanceWithAiSessions) {
+  return terminalAppIdForLaunchableApps(launchableAppsForInstance(instance, t));
+}
+function openStorySessionTerminal(entry: SessionEntry) {
+  const appId = storyTerminalAppId(entry.instance);
+  if (!appId || props.launchingApp || !entry.session.cwd) return;
+  emit("launch-app", entry.instance, appId, undefined, { cwd: entry.session.cwd });
 }
 function shortHash(value: string) { return value.length > 14 ? `${value.slice(0, 10)}...` : value; }
 function storyOwnerNodeName(nodeId: string) { return props.nodes.find((node) => node.id === nodeId)?.name || nodeId; }
@@ -1122,7 +1157,7 @@ function selectionForResource(resource: Resource | undefined): StorySelection | 
 }
 function resolveSelection(selection: StorySelection | undefined): Resource | undefined {
   if (!selection) return undefined;
-  const story = stories.value.find((candidate) => candidate.id === selection.storyId && candidate.ownerNodeId === selection.ownerNodeId);
+  const story = filteredStories.value.find((candidate) => candidate.id === selection.storyId && candidate.ownerNodeId === selection.ownerNodeId);
   if (!story) return undefined;
   if (selection.kind === "document") {
     const document = story.documents.find((candidate) => candidate.storyPath === selection.storyPath);
@@ -1135,7 +1170,7 @@ function resolveSelection(selection: StorySelection | undefined): Resource | und
   return { kind: "story", story };
 }
 function refreshResource(resource: Resource): Resource | undefined {
-  const story = stories.value.find((candidate) => candidate.id === resource.story.id && candidate.ownerNodeId === resource.story.ownerNodeId);
+  const story = filteredStories.value.find((candidate) => candidate.id === resource.story.id && candidate.ownerNodeId === resource.story.ownerNodeId);
   if (!story) return undefined;
   if (resource.kind === "new-session") return { kind: "new-session", story };
   return resolveSelection(selectionForResource(resource));
@@ -1184,7 +1219,34 @@ async function load() {
     if (result.error) error.value = result.error instanceof Error ? result.error.message : String(result.error);
   } catch (cause) { error.value = cause instanceof Error ? cause.message : String(cause); }
 }
-watch(selectedResource, async (resource) => { previewText.value = ""; previewError.value = ""; if (resource?.kind === "document") { previewLoading.value = true; try { const response = await fetch(`/api/stories/${encodeURIComponent(resource.story.id)}/content/file?nodeId=${encodeURIComponent(resource.story.ownerNodeId)}&storyPath=${encodeURIComponent(resource.document.storyPath)}`); if (!response.ok) throw new Error((await response.json()).error?.message || "Could not read document."); previewText.value = await response.text(); } catch (cause) { previewError.value = cause instanceof Error ? cause.message : String(cause); } finally { previewLoading.value = false; } } }, { immediate: true });
+watch(documentMarkdownSessionId, async (documentKey, _previousDocumentKey, onCleanup) => {
+  previewText.value = "";
+  previewError.value = "";
+  previewLoading.value = Boolean(documentKey);
+  if (!documentKey) return;
+
+  const resource = documentResource.value;
+  if (!resource) return;
+  const controller = new AbortController();
+  let active = true;
+  onCleanup(() => {
+    active = false;
+    controller.abort();
+  });
+
+  try {
+    const response = await fetch(`/api/stories/${encodeURIComponent(resource.story.id)}/content/file?nodeId=${encodeURIComponent(resource.story.ownerNodeId)}&storyPath=${encodeURIComponent(resource.document.storyPath)}`, {
+      signal: controller.signal,
+    });
+    if (!response.ok) throw new Error((await response.json()).error?.message || "Could not read document.");
+    const text = await response.text();
+    if (active) previewText.value = text;
+  } catch (cause) {
+    if (active) previewError.value = cause instanceof Error ? cause.message : String(cause);
+  } finally {
+    if (active) previewLoading.value = false;
+  }
+}, { immediate: true });
 watch(() => selectedResource.value?.kind === "story" ? `${selectedResource.value.story.ownerNodeId}:${selectedResource.value.story.id}` : "", () => {
   storyDetailSection.value = "actions";
   storyAutomationEntries.value = [];
@@ -1200,16 +1262,16 @@ watch(() => selectedResource.value?.kind === "story" ? `${selectedResource.value
 watch(storyDocumentPageCount, (total) => { storyDocumentPage.value = Math.min(storyDocumentPage.value, total); });
 watch(storyCurrentSessionPageCount, (total) => { storyCurrentSessionPage.value = Math.min(storyCurrentSessionPage.value, total); });
 watch(storyHistoryPageCount, (total) => { storyHistoryPage.value = Math.min(storyHistoryPage.value, total); });
-watch(stories, (value) => {
+watch(filteredStories, () => {
   const resource = selectedResource.value;
   if (!resource) {
     const restored = resolveSelection(props.selection);
     if (restored) selectedResource.value = restored;
-    else if (value[0]) selectStory(value[0]);
+    else if (stories.value[0]) selectStory(stories.value[0]);
     return;
   }
   const refreshed = refreshResource(resource);
-  selectedResource.value = refreshed || (value[0] ? { kind: "story", story: value[0] } : undefined);
+  selectedResource.value = refreshed || (stories.value[0] ? { kind: "story", story: stories.value[0] } : undefined);
 }, { immediate: true });
 function openCreate() {
   editing.value = false;

@@ -389,6 +389,11 @@ export const RepositoryAiSessionWorkspaceInspectSchema = z.object({
   cwd: AiSessionRuntimePathSchema,
 }).strict();
 
+export const RepositoryAiSessionWorkspaceCheckoutSchema = z.object({
+  cwd: AiSessionRuntimePathSchema,
+  branch: GitNameSchema,
+}).strict();
+
 export const RepositoryAiSessionGitSelectionSchema = AiSessionGitSelectionSchema;
 
 export const RepositoryWorkspaceAiSessionCreateSchema = AiSessionCreateInputSchema.extend({
