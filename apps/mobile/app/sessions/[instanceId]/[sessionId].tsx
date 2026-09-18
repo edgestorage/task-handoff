@@ -8,7 +8,7 @@ import { SessionWorkspace } from '../../../src/ai-sessions/SessionWorkspace';
 import type { SessionDetailMode } from '../../../src/ai-sessions/SessionDetail';
 import { mobileAiSessionBusyKey } from '../../../src/ai-sessions/actions';
 import { useActiveAiSessionView, useActiveAiSessionsRuntime } from '../../../src/ai-sessions/use-active-sessions';
-import { mobileDraftStore, mobilePermissionStore } from '../../../src/control-plane/runtime';
+import { mobileDraftStore, mobilePermissionStore, mobileProfileStore, mobileSecureStore } from '../../../src/control-plane/runtime';
 import { mobileAiSessionStore } from '../../../src/ai-sessions/store';
 import { useActiveDirectories } from '../../../src/directories/use-directories';
 import { useMobileTheme } from '../../../src/components/theme';
@@ -20,7 +20,6 @@ import { useActiveTriggers } from '../../../src/triggers/use-active-triggers';
 import { deriveAiSessionModelGroups, type AiSessionCatalogModelEntity } from '@task-handoff/control-plane-client';
 import { directoryAiSessionProviderCapability } from '@task-handoff/protocol/control-plane-directory';
 import { createMobileControlPlaneClient } from '../../../src/control-plane/client';
-import { mobileProfileStore, mobileSecureStore } from '../../../src/control-plane/runtime';
 
 export default function SessionDetailRoute() {
   const params = useLocalSearchParams<{ instanceId: string; sessionId: string }>();

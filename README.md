@@ -267,7 +267,7 @@ Closing the Desktop control-panel window keeps TaskHandoff running in the system
 
 ### Mobile application
 
-A stable tag in the exact form `mobile-vX.Y.Z` runs the mobile release checks and starts independent Android and iOS release jobs. Android produces an APK and attaches it to the corresponding GitHub Release. After approval through the `ios-production` environment, iOS builds are submitted to App Store Connect/TestFlight; final App Store review remains a manual action. Android is not submitted to Google Play by this workflow.
+A stable tag in the exact form `mobile-vX.Y.Z` runs the mobile release checks and starts independent Android and iOS release jobs. Android uses EAS to produce an APK and attaches it to the corresponding GitHub Release. After approval through the `ios-production` environment, a GitHub-hosted macOS runner builds and signs iOS with Xcode, then uploads it directly to App Store Connect/TestFlight; final App Store review remains a manual action. Android is not submitted to Google Play by this workflow.
 
 See [`apps/mobile/README.md`](apps/mobile/README.md) for the client boundary and development commands, and [`apps/mobile/RELEASE.md`](apps/mobile/RELEASE.md) for credentials, first-build setup, and release operations.
 

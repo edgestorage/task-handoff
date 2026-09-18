@@ -50,7 +50,7 @@ export class MobileAiSessionActionCoordinator {
   rename(instanceId: string, sessionId: string, input: AiSessionRenameInput) {
     return this.run(instanceId, sessionId, 'rename', undefined, () => this.client.aiSessions.rename(instanceId, sessionId, input));
   }
-  async closeMany(targets: Array<{ instanceId: string; sessionId: string }>, createClientRequestId: () => string, concurrency = 6) {
+  async closeMany(targets: { instanceId: string; sessionId: string }[], createClientRequestId: () => string, concurrency = 6) {
     let next = 0;
     let failed = 0;
     const worker = async () => {

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { useI18n } from '../i18n';
@@ -14,16 +14,15 @@ type SessionRenameModalProps = {
 };
 
 export function SessionRenameModal({ busy, error, initialTitle, onClose, onSubmit, open }: SessionRenameModalProps) {
+  if (!open) return null;
+  return <SessionRenameModalContent busy={busy} error={error} initialTitle={initialTitle} key={initialTitle} onClose={onClose} onSubmit={onSubmit} />;
+}
+
+function SessionRenameModalContent({ busy, error, initialTitle, onClose, onSubmit }: Omit<SessionRenameModalProps, 'open'>) {
   const { colors } = useMobileTheme();
   const { t } = useI18n();
   const [draft, setDraft] = useState(initialTitle);
   const [validationError, setValidationError] = useState('');
-
-  useEffect(() => {
-    if (!open) return;
-    setDraft(initialTitle);
-    setValidationError('');
-  }, [initialTitle, open]);
 
   const submit = () => {
     const title = draft.trim();
@@ -40,7 +39,7 @@ export function SessionRenameModal({ busy, error, initialTitle, onClose, onSubmi
   };
   const visibleError = validationError || error;
 
-  return <Modal animationType="fade" onRequestClose={() => !busy && onClose()} transparent visible={open}>
+  return <Modal animationType="fade" onRequestClose={() => !busy && onClose()} transparent visible>
     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.overlay}>
       <Pressable accessibilityLabel={t('common.cancel')} disabled={busy} onPress={onClose} style={styles.backdrop} />
       <View accessibilityViewIsModal style={[styles.dialog, { backgroundColor: colors.surface }]}>
