@@ -1133,6 +1133,196 @@ test("ai session realtime completion records a duration endpoint without observe
   assert.equal(completed.turns.at(-1)?.completedAt, completed.updatedAt);
 });
 
+test("ai session lifecycle events update session state without rewriting turn authority", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-lifecycle-authority-"));
+  const diagnostics = [];
+  const registry = createAiSessionRegistry({
+    dir: path.join(root, "ai-sessions"),
+    onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+  });
+  const session = registry.start({ agent: "codex", providerSessionId: "thread-lifecycle-authority" });
+  const prompted = registry.applyRealtimeEvent(session.id, {
+    kind: "user-message",
+    activeTurnId: "turn-lifecycle-authority",
+    providerTurnId: "provider-turn-lifecycle-authority",
+    userPrompt: "Keep the authoritative turn timestamps",
+    observedAt: "2026-09-18T06:25:45.000Z",
+  });
+  const completed = registry.applyRealtimeEvent(prompted.id, {
+    kind: "turn-completed",
+    activeTurnId: "turn-lifecycle-authority",
+    status: "idle",
+    text: "Done",
+    observedAt: "2026-09-18T06:30:00.000Z",
+  });
+  const authoritativeTurn = structuredClone(completed.turns.at(-1));
+
+  const restoredIdle = registry.applyRealtimeEvent(completed.id, {
+    kind: "lifecycle",
+    source: "realtime",
+    status: "idle",
+    phase: "unknown",
+    observedAt: "2026-09-18T07:00:00.000Z",
+  });
+  assert.equal(restoredIdle.status, "idle");
+  assert.equal(restoredIdle.updatedAt, completed.updatedAt);
+  assert.deepEqual(restoredIdle.turns.at(-1), authoritativeTurn);
+  assert.equal(diagnostics.length, 0);
+
+  const running = registry.applyRealtimeEvent(restoredIdle.id, {
+    kind: "user-message",
+    source: "realtime",
+    activeTurnId: "turn-next",
+    userPrompt: "Next turn",
+    status: "running",
+    phase: "thinking",
+    observedAt: "2026-09-18T07:00:30.000Z",
+  });
+  const waiting = registry.applyRealtimeEvent(running.id, {
+    kind: "lifecycle",
+    source: "realtime",
+    activeTurnId: "turn-next",
+    status: "waiting",
+    phase: "approval",
+    observedAt: "2026-09-18T07:01:00.000Z",
+  });
+  assert.equal(waiting.status, "waiting");
+  assert.equal(waiting.phase, "approval");
+  assert.equal(waiting.activeTurnId, "turn-next");
+  assert.equal(waiting.updatedAt, "2026-09-18T07:01:00.000Z");
+  assert.equal(waiting.turns.at(-1).status, "waiting");
+  assert.equal(waiting.turns.at(-1).phase, "approval");
+
+  const lifecycleCompleted = registry.applyRealtimeEvent(waiting.id, {
+    kind: "lifecycle",
+    source: "realtime",
+    activeTurnId: "turn-next",
+    status: "idle",
+    phase: "unknown",
+    observedAt: "2026-09-18T07:02:00.000Z",
+  });
+  assert.equal(lifecycleCompleted.status, "idle");
+  assert.equal(lifecycleCompleted.turns.at(-1).status, "completed");
+  assert.equal(lifecycleCompleted.turns.at(-1).completedAt, "2026-09-18T07:02:00.000Z");
+  assert.deepEqual(lifecycleCompleted.turns.at(-2), authoritativeTurn);
+});
+
+test("ai session lifecycle ignores terminal state while the active turn is pending", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-pending-lifecycle-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const session = registry.start({ agent: "codex", providerSessionId: "thread-pending-lifecycle" });
+  const pending = registry.applyRealtimeEvent(session.id, {
+    kind: "user-message",
+    activeTurnId: "turn-pending-lifecycle",
+    userPrompt: "Still running",
+    observedAt: "2026-09-18T08:00:00.000Z",
+  });
+
+  const afterIdle = registry.applyRealtimeEvent(pending.id, {
+    kind: "lifecycle",
+    source: "realtime",
+    status: "idle",
+    observedAt: "2026-09-18T08:01:00.000Z",
+  });
+
+  assert.deepEqual(afterIdle, pending);
+});
+
+test("ai session repeated completion preserves terminal timing", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-timing-diagnostic-"));
+  const diagnostics = [];
+  const registry = createAiSessionRegistry({
+    dir: path.join(root, "ai-sessions"),
+    onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+  });
+  const session = registry.start({ agent: "codex", providerSessionId: "thread-timing-diagnostic" });
+  const prompted = registry.applyRealtimeEvent(session.id, {
+    kind: "user-message",
+    activeTurnId: "turn-timing-diagnostic",
+    providerTurnId: "turn-timing-diagnostic",
+    userPrompt: "Sensitive prompt",
+    observedAt: "2026-09-18T06:25:45.000Z",
+  });
+  const completed = registry.applyRealtimeEvent(prompted.id, {
+    kind: "turn-completed",
+    activeTurnId: "turn-timing-diagnostic",
+    status: "idle",
+    text: "Sensitive response",
+    observedAt: "2026-09-18T06:30:00.000Z",
+  });
+  const repeated = registry.applyRealtimeEvent(completed.id, {
+    kind: "turn-completed",
+    activeTurnId: "turn-timing-diagnostic",
+    status: "idle",
+    observedAt: "2026-09-18T07:00:00.000Z",
+  });
+
+  assert.equal(repeated.completedAt, "2026-09-18T06:30:00.000Z");
+  assert.equal(repeated.updatedAt, completed.updatedAt);
+  assert.equal(repeated.turns.at(-1).completedAt, "2026-09-18T06:30:00.000Z");
+  assert.equal(repeated.turns.at(-1).updatedAt, completed.turns.at(-1).updatedAt);
+  assert.equal(repeated.turns.at(-1).observedAt, completed.turns.at(-1).observedAt);
+  assert.equal(repeated.turns.at(-1).revision, completed.turns.at(-1).revision);
+  assert.equal(repeated.turns.at(-1).source, completed.turns.at(-1).source);
+  assert.equal(diagnostics.length, 0);
+});
+
+test("ai session registry diagnoses authoritative completedAt corrections with reducer provenance", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-timing-diagnostic-"));
+  const diagnostics = [];
+  const registry = createAiSessionRegistry({
+    dir: path.join(root, "ai-sessions"),
+    onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+  });
+  const session = registry.applyAdapterSnapshot({
+    source: "adapter-snapshot",
+    agent: "codex",
+    providerSessionId: "thread-timing-correction",
+    status: "idle",
+    turns: [{
+      id: "turn-timing-correction",
+      providerTurnId: "turn-timing-correction",
+      userPrompt: "Sensitive prompt",
+      lastMessage: "Sensitive response",
+      status: "completed",
+      revision: 1,
+      completedAt: "2026-09-18T06:30:00.000Z",
+      updatedAt: "2026-09-18T06:30:00.000Z",
+      observedAt: "2026-09-18T06:30:00.000Z",
+    }],
+    observedAt: "2026-09-18T06:30:00.000Z",
+  });
+  registry.applyAdapterSnapshot({
+    source: "control",
+    agent: "codex",
+    providerSessionId: "thread-timing-correction",
+    status: "idle",
+    turns: [{
+      ...session.turns.at(-1),
+      source: "control",
+      sourcePriority: 90,
+      lastMessage: "Corrected sensitive response",
+      revision: 2,
+      completedAt: "2026-09-18T06:31:00.000Z",
+      updatedAt: "2026-09-18T06:31:00.000Z",
+      observedAt: "2026-09-18T06:31:00.000Z",
+    }],
+    observedAt: "2026-09-18T06:31:00.000Z",
+  });
+
+  assert.equal(diagnostics.length, 1);
+  assert.equal(diagnostics[0].code, "AI_SESSION_COMPLETED_AT_CHANGED");
+  assert.equal(diagnostics[0].inputType, "snapshot");
+  assert.equal(diagnostics[0].source, "control");
+  assert.equal(diagnostics[0].kind, undefined);
+  assert.equal(diagnostics[0].inputObservedAt, "2026-09-18T06:31:00.000Z");
+  const turnChange = diagnostics[0].changes.find((change) => change.scope === "turn");
+  assert.equal(turnChange.turnId, "turn-timing-correction");
+  assert.equal(turnChange.previous.completedAt, "2026-09-18T06:30:00.000Z");
+  assert.equal(turnChange.next.completedAt, "2026-09-18T06:31:00.000Z");
+  assert.equal(JSON.stringify(diagnostics[0]).includes("Sensitive"), false);
+});
+
 test("ai session registry resets tool activity at an assistant message boundary", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-tool-message-"));
   const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
@@ -9275,9 +9465,13 @@ test("codex app server uses a short unix socket path outside deep runtime direct
   try {
     assert.equal(spawned.length, 1);
     assert.equal(spawned[0].command, "codex");
-    assert.equal(spawned[0].args[0], "app-server");
-    assert.equal(spawned[0].args[1], "--listen");
-    assert.equal(spawned[0].args[2], `unix://${session.details.socketPath}`);
+    const appServerIndex = spawned[0].args.indexOf("app-server");
+    assert.notEqual(appServerIndex, -1);
+    assert.deepEqual(spawned[0].args.slice(appServerIndex, appServerIndex + 3), [
+      "app-server",
+      "--listen",
+      `unix://${session.details.socketPath}`,
+    ]);
     assert.equal(session.details.socketPath.startsWith(path.join(paths.runtimeDir, "codex-app-server")), false);
     const socketRoot = process.platform === "darwin" ? "/private/tmp" : fs.realpathSync(os.tmpdir());
     assert.equal(session.details.socketPath.startsWith(`${socketRoot}/task-handoff-codex-`), true);

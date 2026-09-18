@@ -2,7 +2,7 @@
   <section class="instance-detail" :aria-label="t('instances.detail.label')">
     <div v-if="error" class="detail-empty error">{{ error }}</div>
     <div v-else-if="instance" class="instance-detail-layout" :class="{ 'preview-expanded': previewExpanded }">
-      <header v-if="!previewExpanded" class="detail-head">
+      <header v-if="!previewExpanded" ref="detailHeadEl" class="detail-head">
         <div class="detail-identity">
           <div
             class="detail-name-field"
@@ -88,7 +88,7 @@
             {{ imageProvisioningLabel(instance, t) }}<template v-if="instance.imageProvisioning.error"> · {{ instance.imageProvisioning.error }}</template>
           </span>
         </div>
-        <div class="detail-side">
+        <div ref="detailSideEl" class="detail-side">
           <TooltipProvider :delay-duration="120">
             <div class="detail-badges">
               <Tooltip>
@@ -128,9 +128,9 @@
               </Tooltip>
             </div>
           </TooltipProvider>
-          <div class="instance-controls" :aria-label="t('instances.detail.controls')">
-            <TooltipProvider v-if="!standalone" :delay-duration="120">
-              <Tooltip>
+          <TooltipProvider :delay-duration="120">
+            <div ref="instanceControlsEl" class="instance-controls" :class="{ compact: compactInstanceControls }" :aria-label="t('instances.detail.controls')">
+              <Tooltip v-if="!standalone">
                 <TooltipTrigger as-child>
                   <Button variant="outline" size="icon-sm" :aria-label="t('instances.window.openInNewWindow')" @click="$emit('openWindow', instance)">
                     <ExternalLink :size="14" />
@@ -138,32 +138,62 @@
                 </TooltipTrigger>
                 <TooltipContent side="bottom">{{ t("instances.window.openInNewWindow") }}</TooltipContent>
               </Tooltip>
-            </TooltipProvider>
-            <Button v-if="canShowInstanceAction(instance, 'start')" variant="outline" size="sm" :disabled="isInstanceActionBusy(instance)" @click="$emit('runAction', 'start', instance)">
-              <Play :size="14" />
-              <span>{{ activeActionLabel(instance, "start", t("instances.actions.start")) }}</span>
-            </Button>
-            <Button v-if="canShowInstanceAction(instance, 'stop')" variant="outline" size="sm" :disabled="isInstanceActionBusy(instance)" @click="$emit('runAction', 'stop', instance)">
-              <Square :size="14" />
-              <span>{{ activeActionLabel(instance, "stop", t("instances.actions.stop")) }}</span>
-            </Button>
-            <Button v-if="canShowInstanceAction(instance, 'restart')" variant="outline" size="sm" :disabled="isInstanceActionBusy(instance)" @click="$emit('runAction', 'restart', instance)">
-              <RotateCw :size="14" />
-              <span>{{ activeActionLabel(instance, "restart", t("instances.actions.restart")) }}</span>
-            </Button>
-            <Button v-if="canShowInstanceAction(instance, 'retry-image')" variant="outline" size="sm" :disabled="isInstanceActionBusy(instance)" @click="$emit('runAction', 'retry-image', instance)">
-              <RotateCw :size="14" />
-              <span>{{ activeActionLabel(instance, "retry-image", t("instances.actions.retryImage")) }}</span>
-            </Button>
-            <Button variant="outline" size="sm" @click="$emit('openSettings', instance.id)">
-              <Settings :size="14" />
-              <span>{{ t("instances.actions.settings") }}</span>
-            </Button>
-            <Button variant="destructive" size="sm" :disabled="isInstanceActionBusy(instance)" @click="$emit('runAction', 'delete', instance)">
-              <Trash2 :size="14" />
-              <span>{{ activeActionLabel(instance, "delete", t("instances.actions.delete")) }}</span>
-            </Button>
-          </div>
+              <Tooltip v-if="canShowInstanceAction(instance, 'start')">
+                <TooltipTrigger as-child>
+                  <Button variant="outline" size="sm" :aria-label="activeActionLabel(instance, 'start', t('instances.actions.start'))" :disabled="isInstanceActionBusy(instance)" @click="$emit('runAction', 'start', instance)">
+                    <Play :size="14" />
+                    <span class="instance-action-label">{{ activeActionLabel(instance, "start", t("instances.actions.start")) }}</span>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">{{ activeActionLabel(instance, "start", t("instances.actions.start")) }}</TooltipContent>
+              </Tooltip>
+              <Tooltip v-if="canShowInstanceAction(instance, 'stop')">
+                <TooltipTrigger as-child>
+                  <Button variant="outline" size="sm" :aria-label="activeActionLabel(instance, 'stop', t('instances.actions.stop'))" :disabled="isInstanceActionBusy(instance)" @click="$emit('runAction', 'stop', instance)">
+                    <Square :size="14" />
+                    <span class="instance-action-label">{{ activeActionLabel(instance, "stop", t("instances.actions.stop")) }}</span>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">{{ activeActionLabel(instance, "stop", t("instances.actions.stop")) }}</TooltipContent>
+              </Tooltip>
+              <Tooltip v-if="canShowInstanceAction(instance, 'restart')">
+                <TooltipTrigger as-child>
+                  <Button variant="outline" size="sm" :aria-label="activeActionLabel(instance, 'restart', t('instances.actions.restart'))" :disabled="isInstanceActionBusy(instance)" @click="$emit('runAction', 'restart', instance)">
+                    <RotateCw :size="14" />
+                    <span class="instance-action-label">{{ activeActionLabel(instance, "restart", t("instances.actions.restart")) }}</span>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">{{ activeActionLabel(instance, "restart", t("instances.actions.restart")) }}</TooltipContent>
+              </Tooltip>
+              <Tooltip v-if="canShowInstanceAction(instance, 'retry-image')">
+                <TooltipTrigger as-child>
+                  <Button variant="outline" size="sm" :aria-label="activeActionLabel(instance, 'retry-image', t('instances.actions.retryImage'))" :disabled="isInstanceActionBusy(instance)" @click="$emit('runAction', 'retry-image', instance)">
+                    <RotateCw :size="14" />
+                    <span class="instance-action-label">{{ activeActionLabel(instance, "retry-image", t("instances.actions.retryImage")) }}</span>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">{{ activeActionLabel(instance, "retry-image", t("instances.actions.retryImage")) }}</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger as-child>
+                  <Button variant="outline" size="sm" :aria-label="t('instances.actions.settings')" @click="$emit('openSettings', instance.id)">
+                    <Settings :size="14" />
+                    <span class="instance-action-label">{{ t("instances.actions.settings") }}</span>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">{{ t("instances.actions.settings") }}</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger as-child>
+                  <Button variant="destructive" size="sm" :aria-label="activeActionLabel(instance, 'delete', t('instances.actions.delete'))" :disabled="isInstanceActionBusy(instance)" @click="$emit('runAction', 'delete', instance)">
+                    <Trash2 :size="14" />
+                    <span class="instance-action-label">{{ activeActionLabel(instance, "delete", t("instances.actions.delete")) }}</span>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">{{ activeActionLabel(instance, "delete", t("instances.actions.delete")) }}</TooltipContent>
+              </Tooltip>
+            </div>
+          </TooltipProvider>
         </div>
       </header>
       <SessionPreview
@@ -244,7 +274,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { Box, ExternalLink, Folder, FolderOpen, Package, Play, Plus, RotateCw, Server, Settings, Square, Trash2 } from "@lucide/vue";
 import { useI18n } from "vue-i18n";
 import type { AiSessionSummary, InstanceBoardItem, InstanceResourceMetrics, InstanceWithAiSessions, NodeLocalFolder } from "../../../api/types";
@@ -346,6 +376,79 @@ const instanceNameDraft = ref("");
 const nameInput = ref<HTMLInputElement | null>(null);
 const savingName = ref(false);
 const editNameWidth = ref(0);
+const detailHeadEl = ref<HTMLElement | null>(null);
+const detailSideEl = ref<HTMLElement | null>(null);
+const instanceControlsEl = ref<HTMLElement | null>(null);
+const compactInstanceControls = ref(false);
+let instanceControlsResizeObserver: ResizeObserver | undefined;
+let instanceControlsExpandAtWidth = 0;
+let instanceControlsLayoutFrame = 0;
+
+function instanceControlsOverflowWidth() {
+  const head = detailHeadEl.value;
+  const controls = instanceControlsEl.value;
+  if (!head || !controls) return 0;
+  return Math.max(
+    0,
+    controls.scrollWidth - controls.clientWidth,
+    controls.getBoundingClientRect().right - head.getBoundingClientRect().right,
+  );
+}
+
+function syncInstanceControlsLayout(forceExpandedProbe = false) {
+  const head = detailHeadEl.value;
+  if (!head) return;
+  const headWidth = head.clientWidth;
+  if (compactInstanceControls.value) {
+    if (!forceExpandedProbe && headWidth < instanceControlsExpandAtWidth) return;
+    compactInstanceControls.value = false;
+    void nextTick(() => syncInstanceControlsLayout());
+    return;
+  }
+  const overflowWidth = instanceControlsOverflowWidth();
+  if (overflowWidth > 1) {
+    instanceControlsExpandAtWidth = headWidth + Math.ceil(overflowWidth) + 8;
+    compactInstanceControls.value = true;
+  } else {
+    instanceControlsExpandAtWidth = 0;
+  }
+}
+
+function scheduleInstanceControlsLayout(forceExpandedProbe = false) {
+  if (instanceControlsLayoutFrame) cancelAnimationFrame(instanceControlsLayoutFrame);
+  instanceControlsLayoutFrame = requestAnimationFrame(() => {
+    instanceControlsLayoutFrame = 0;
+    syncInstanceControlsLayout(forceExpandedProbe);
+  });
+}
+
+watch([detailHeadEl, detailSideEl, instanceControlsEl], () => {
+  instanceControlsResizeObserver?.disconnect();
+  instanceControlsResizeObserver = undefined;
+  const elements = [detailHeadEl.value, detailSideEl.value, instanceControlsEl.value].filter((element): element is HTMLElement => Boolean(element));
+  if (typeof ResizeObserver !== "undefined" && elements.length) {
+    instanceControlsResizeObserver = new ResizeObserver(() => scheduleInstanceControlsLayout());
+    for (const element of elements) instanceControlsResizeObserver.observe(element);
+  }
+  scheduleInstanceControlsLayout(true);
+}, { flush: "post" });
+
+const visibleInstanceActionLabels = computed(() => {
+  const instance = props.instance;
+  if (!instance) return "";
+  return (["start", "stop", "restart", "retry-image", "delete"] as const)
+    .filter((action) => action === "delete" || canShowInstanceAction(instance, action))
+    .map((action) => props.activeActionLabel(instance, action, t(`instances.actions.${action === "retry-image" ? "retryImage" : action}`)))
+    .concat(t("instances.actions.settings"))
+    .join("\u0000");
+});
+
+watch(visibleInstanceActionLabels, () => scheduleInstanceControlsLayout(true), { flush: "post" });
+
+onBeforeUnmount(() => {
+  instanceControlsResizeObserver?.disconnect();
+  if (instanceControlsLayoutFrame) cancelAnimationFrame(instanceControlsLayoutFrame);
+});
 
 watch(
   () => props.instance?.id,

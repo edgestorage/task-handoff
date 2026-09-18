@@ -1,5 +1,6 @@
 .instance-detail {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
   height: 100%;
   min-height: 0;
@@ -298,7 +299,25 @@
 }
 
 .instance-controls {
-  max-width: 420px;
+  flex-wrap: nowrap;
+}
+
+.instance-controls.compact > button {
+  position: relative;
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  padding: 0;
+}
+
+.instance-controls.compact > button > .instance-action-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .instance-detail button.bg-destructive,

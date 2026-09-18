@@ -5,6 +5,7 @@ import { CodexAppServerConnectionProxy } from "../../codex-app-server-proxy";
 import { codexAppServerSocketPath } from "../../runtime-utils";
 import type { AppSession } from "../../types";
 import type { ManagedAppRuntimeExtension, ManagedAppRuntimeHost, ManagedAppTtyLaunchInput } from "../types";
+import { codexStoryMcpArgs } from "./story-mcp-config";
 
 type SharedCodexAppServer = {
   status: "running";
@@ -23,11 +24,17 @@ function disabled() {
 
 export class CodexRuntimeExtension implements ManagedAppRuntimeExtension {
   private shared?: SharedCodexAppServer;
+  private privateEnvironment: NodeJS.ProcessEnv = {};
   private readonly sessionAi = new Map<string, NonNullable<AppSession["ai"]>>();
 
   constructor(private readonly host: ManagedAppRuntimeHost) {}
 
   readonly sharedResource = {
+    replacePrivateEnvironment: (env: NodeJS.ProcessEnv) => {
+      if (JSON.stringify(this.privateEnvironment) === JSON.stringify(env)) return;
+      this.privateEnvironment = { ...env };
+      this.stopAll();
+    },
     ensure: ({ app, cwd, env }: { app: ManagedAppTtyLaunchInput["app"]; cwd: string; env: NodeJS.ProcessEnv }) => {
       const command = app.command || process.env.TASK_HANDOFF_CODEX_COMMAND || "codex";
       if (!this.host.hasCommand(command)) {
@@ -120,13 +127,14 @@ export class CodexRuntimeExtension implements ManagedAppRuntimeExtension {
     const socketPath = codexAppServerSocketPath(runtimeDir);
     const endpoint = `unix://${socketPath}`;
     const appServerCommand = process.env.TASK_HANDOFF_CODEX_APP_SERVER_COMMAND || command;
-    const args = ["app-server", "--listen", endpoint];
+    const childEnvironment = { ...env, ...this.privateEnvironment };
+    const args = [...codexStoryMcpArgs(childEnvironment), "app-server", "--listen", endpoint];
     fs.mkdirSync(runtimeDir, { recursive: true });
     fs.mkdirSync(logDir, { recursive: true });
     fs.mkdirSync(path.dirname(socketPath), { recursive: true, mode: 0o700 });
     fs.rmSync(socketPath, { force: true });
 
-    const child = this.host.spawnLogged(appServerCommand, args, env, logDir, "codex-app-server.log", cwd);
+    const child = this.host.spawnLogged(appServerCommand, args, childEnvironment, logDir, "codex-app-server.log", cwd);
     const appServer: SharedCodexAppServer = {
       status: "running",
       command: appServerCommand,

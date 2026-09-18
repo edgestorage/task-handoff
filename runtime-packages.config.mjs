@@ -111,6 +111,11 @@ export const runtimePackages = {
     description: "Prebuilt TaskHandoff controlled instance runtime.",
     input: "apps/controlled-instance-image/src/cli.ts",
     entryFile: "controlled-instance-cli.js",
+    standaloneInputs: [{
+      input: "packages/controlled-instance/src/opencode-story-plugin.ts",
+      entryFile: "opencode-story-plugin.mjs",
+      format: "es",
+    }],
     binName: "task-handoff-controlled-instance",
     uiDir: "packages/controlled-instance-ui/dist",
     bundledNativeDependencies: ["node-pty"],

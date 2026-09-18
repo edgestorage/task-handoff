@@ -285,6 +285,10 @@ export function reduceAiSessionRealtime(
   }
   if (event.kind === "lifecycle") {
     const status = event.status || current.status;
+    const lifecycleTurnId = event.activeTurnId || current.activeTurnId;
+    const hasLifecycleTurn = Boolean(
+      lifecycleTurnId && normalizeTurns(current.turns).some((turn) => turn.id === lifecycleTurnId),
+    );
     if ((status === "idle" || status === "failed") && currentActiveTurnIsPending(current)) {
       return current;
     }
@@ -293,7 +297,12 @@ export function reduceAiSessionRealtime(
       status,
       phase: event.phase || current.phase,
       currentTool: status === "idle" || status === "failed" ? undefined : current.currentTool,
-    }, { updatedAt, meta, clearError: status === "running" || status === "waiting" });
+    }, {
+      updatedAt,
+      meta,
+      clearError: status === "running" || status === "waiting",
+      suppressTurnUpdate: !hasLifecycleTurn,
+    });
   }
   if (event.kind === "turn-started") {
     return applyAiSessionPatch(current, {
@@ -376,16 +385,28 @@ export function reduceAiSessionRealtime(
   if (event.kind === "turn-completed") {
     const error = event.error ? compact(event.error, 4000) : undefined;
     const responseText = event.text || event.summary;
+    const completedTurnId = event.activeTurnId || current.activeTurnId;
+    const completedTurn = completedTurnId
+      ? normalizeTurns(current.turns).find((turn) => turn.id === completedTurnId)
+      : normalizeTurns(current.turns).at(-1);
+    const completedAt = completedTurn?.completedAt && (completedTurn.status === "completed" || completedTurn.status === "failed")
+      ? completedTurn.completedAt
+      : event.observedAt || updatedAt;
     return applyAiSessionPatch(current, {
       activeTurnId: !event.activeTurnId || event.activeTurnId === current.activeTurnId ? undefined : current.activeTurnId,
       status: event.status || "idle",
       phase: event.phase || "unknown",
-      completedAt: event.observedAt || updatedAt,
+      completedAt,
       summary: responseText,
       lastMessage: responseText,
       error,
       currentTool: undefined,
-    }, { updatedAt, meta, clearResponse: !responseText, clearError: event.status !== "failed" });
+    }, {
+      updatedAt,
+      meta,
+      clearResponse: !responseText && !completedTurn?.completedAt,
+      clearError: event.status !== "failed",
+    });
   }
   return undefined;
 }

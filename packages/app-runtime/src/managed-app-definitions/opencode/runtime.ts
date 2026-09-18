@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import type { ManagedAppRuntimeExtension, ManagedAppRuntimeHost, ManagedAppTtyLaunchInput } from "../types";
+import { openCodeServerConfig } from "./server-config";
 
 type SharedOpenCodeServer = {
   command: string;
@@ -18,10 +19,16 @@ type SharedOpenCodeServer = {
 
 export class OpenCodeRuntimeExtension implements ManagedAppRuntimeExtension {
   private shared?: SharedOpenCodeServer;
+  private privateEnvironment: NodeJS.ProcessEnv = {};
 
   constructor(private readonly host: ManagedAppRuntimeHost) {}
 
   readonly sharedResource = {
+    replacePrivateEnvironment: (env: NodeJS.ProcessEnv) => {
+      if (JSON.stringify(this.privateEnvironment) === JSON.stringify(env)) return;
+      this.privateEnvironment = { ...env };
+      this.stopAll();
+    },
     ensure: ({ app, cwd, env }: { app: ManagedAppTtyLaunchInput["app"]; cwd: string; env: NodeJS.ProcessEnv }) => {
       const command = app.command || process.env.TASK_HANDOFF_OPENCODE_COMMAND || "opencode";
       return this.publicInfo(this.acquire(command, cwd, env, "__shared_opencode_server__"));
@@ -67,7 +74,8 @@ export class OpenCodeRuntimeExtension implements ManagedAppRuntimeExtension {
   }
 
   private acquire(command: string, cwd: string, env: NodeJS.ProcessEnv, consumerId: string) {
-    if (!this.host.hasCommand(command, env, cwd)) {
+    const childEnvironment = { ...env, ...this.privateEnvironment };
+    if (!this.host.hasCommand(command, childEnvironment, cwd)) {
       throw Object.assign(new Error(`Missing required command: ${command}`), { code: "APP_DEPENDENCY_MISSING" });
     }
     if (this.shared && this.isRunning(this.shared)) {
@@ -84,13 +92,11 @@ export class OpenCodeRuntimeExtension implements ManagedAppRuntimeExtension {
     const logDir = path.join(this.host.paths.logDir, "app-sessions", "opencode-server");
     fs.mkdirSync(logDir, { recursive: true });
     const serverEnv = {
-      ...env,
+      ...childEnvironment,
       OPENCODE_SERVER_USERNAME: username,
       OPENCODE_SERVER_PASSWORD: password,
       OPENCODE_CLIENT: "task-handoff",
-      ...(env.TASK_HANDOFF_OPENCODE_CONFIG_CONTENT
-        ? { OPENCODE_CONFIG_CONTENT: env.TASK_HANDOFF_OPENCODE_CONFIG_CONTENT }
-        : {}),
+      OPENCODE_CONFIG_CONTENT: JSON.stringify(openCodeServerConfig(childEnvironment)),
     };
     const child = this.host.spawnLogged(command, ["serve", "--hostname=127.0.0.1", `--port=${port}`], serverEnv, logDir, "opencode-server.log", cwd);
     const server: SharedOpenCodeServer = {

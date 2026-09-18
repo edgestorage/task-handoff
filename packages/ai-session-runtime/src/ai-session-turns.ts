@@ -520,10 +520,12 @@ export function updateTurns(
     if (last) {
       const status = turnStatusFromSessionStatus(patch.status, last.status);
       const phase = (patch.phase as AiSessionPhase | undefined) || last.phase;
-      const completedAt = patch.status === "idle" || patch.status === "failed" ? updatedAt : last.completedAt;
+      const completedAt = patch.status === "idle" || patch.status === "failed"
+        ? last.completedAt || patch.completedAt || updatedAt
+        : last.completedAt;
       const changed = last.status !== status || last.phase !== phase || last.completedAt !== completedAt;
-      Object.assign(last, { status, phase, completedAt, updatedAt: changed ? updatedAt : last.updatedAt, ...meta });
       if (changed) {
+        Object.assign(last, { status, phase, completedAt, updatedAt, ...meta });
         last.revision += 1;
       }
     }

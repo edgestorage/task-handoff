@@ -106,6 +106,15 @@ const controlledInstanceBuild = [
     external: isExternal,
     plugins: [cleanDist, ...plugins],
   },
+  {
+    input: "packages/controlled-instance/src/opencode-story-plugin.ts",
+    output: {
+      file: "dist/opencode-story-plugin.mjs",
+      format: "es",
+    },
+    external: isNodeBuiltin,
+    plugins,
+  },
 ];
 
 const cleanedRuntimeDirs = new Set();
@@ -177,7 +186,7 @@ function runtimeBuild(name, definition) {
       input: standalone.input,
       output: {
         file: `${outputDir}/${standalone.entryFile}`,
-        format: "cjs",
+        format: standalone.format || "cjs",
         exports: "auto",
         inlineDynamicImports: true,
       },
