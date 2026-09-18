@@ -74,6 +74,7 @@ export default function NewAiSessionRoute() {
   const folderId = selection.instanceId === selectedInstanceId ? selection.folderId : undefined;
   const folders = folderState.nodeId === selectedInstance?.nodeId ? folderState.folders : [];
   const selectedFolder = folders.find((folder) => folder.id === folderId);
+  const selectedCwdFolderId = selectedFolder?.cwdFolderId;
   const maxFileAttachmentBytes = selectedInstance?.config.aiSessionMaxFileAttachmentBytes;
   const providerCapability = directoryAiSessionProviderCapability(selectedInstance?.capabilities, agent);
   const permissionModes = providerCapability?.permissionModes || [];
@@ -151,11 +152,11 @@ export default function NewAiSessionRoute() {
   }, [controlPlaneId]);
 
   useEffect(() => {
-    if (!selectedInstanceId || !selectedFolder) return;
+    if (!selectedInstanceId || !selectedCwdFolderId) return;
     const abort = new AbortController();
     void mobileProfileStore.active().then(async (profile) => {
       if (!profile || abort.signal.aborted) return;
-      const workspace = await createMobileControlPlaneClient(profile, mobileSecureStore).api.aiSessions.workspace(selectedInstanceId, selectedFolder.cwdFolderId, abort.signal);
+      const workspace = await createMobileControlPlaneClient(profile, mobileSecureStore).api.aiSessions.workspace(selectedInstanceId, selectedCwdFolderId, abort.signal);
       if (abort.signal.aborted) return;
       setWorkspaceState({
         instanceId: selectedInstanceId,
@@ -171,7 +172,7 @@ export default function NewAiSessionRoute() {
       if (!abort.signal.aborted) setWorkspaceState({ instanceId: selectedInstanceId, folderId, mode: 'current-folder' });
     });
     return () => abort.abort();
-  }, [selectedInstanceId, folderId, selectedFolder?.cwdFolderId]);
+  }, [selectedInstanceId, folderId, selectedCwdFolderId]);
 
   const workspaceMatchesSelection = workspaceState.instanceId === selectedInstanceId && workspaceState.folderId === folderId;
   const workspaceLoading = Boolean(selectedInstanceId && folderId && !workspaceMatchesSelection);
