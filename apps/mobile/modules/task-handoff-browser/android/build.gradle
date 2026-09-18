@@ -8,9 +8,14 @@ version = '0.0.1'
 
 android {
   namespace 'expo.modules.taskhandoffbrowser'
+
+  defaultConfig {
+    versionName project.version
+  }
 }
 
 dependencies {
+  implementation 'com.facebook.react:react-android'
   implementation 'androidx.webkit:webkit:1.15.0'
   implementation 'com.squareup.okhttp3:okhttp:4.12.0'
   implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2'

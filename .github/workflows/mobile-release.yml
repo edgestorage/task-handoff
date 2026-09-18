@@ -119,8 +119,6 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - uses: android-actions/setup-android@v3
-
       - uses: gradle/actions/setup-gradle@v5
 
       - run: pnpm install --frozen-lockfile
@@ -335,8 +333,6 @@ jobs:
 
       - name: Archive and export signed iOS application
         env:
-          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
-          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
           APP_PROFILE_NAME: ${{ steps.signing.outputs.app_profile_name }}
           WIDGET_PROFILE_NAME: ${{ steps.signing.outputs.widget_profile_name }}
@@ -350,18 +346,41 @@ jobs:
           export_options_path="$RUNNER_TEMP/TaskHandoff-ExportOptions.plist"
           build_number="$GITHUB_RUN_NUMBER"
 
+          ruby <<'RUBY'
+          require "xcodeproj"
+
+          project = Xcodeproj::Project.open("ios/TaskHandoff.xcodeproj")
+          profiles = {
+            "TaskHandoff" => ENV.fetch("APP_PROFILE_NAME"),
+            "ExpoWidgetsTarget" => ENV.fetch("WIDGET_PROFILE_NAME"),
+          }
+
+          profiles.each do |target_name, profile_name|
+            target = project.targets.find { |candidate| candidate.name == target_name }
+            abort("Missing expected Xcode target: #{target_name}") unless target
+
+            configuration = target.build_configurations.find { |candidate| candidate.name == "Release" }
+            abort("Missing Release configuration for Xcode target: #{target_name}") unless configuration
+
+            configuration.build_settings.merge!(
+              "CODE_SIGN_IDENTITY" => "Apple Distribution",
+              "CODE_SIGN_STYLE" => "Manual",
+              "DEVELOPMENT_TEAM" => ENV.fetch("APPLE_TEAM_ID"),
+              "PROVISIONING_PROFILE_SPECIFIER" => profile_name,
+            )
+          end
+          project.save
+          RUBY
+
           xcodebuild archive \
             -workspace ios/TaskHandoff.xcworkspace \
             -scheme TaskHandoff \
             -configuration Release \
             -destination 'generic/platform=iOS' \
             -archivePath "$archive_path" \
-            -allowProvisioningUpdates \
-            -authenticationKeyPath "${{ steps.signing.outputs.api_key_path }}" \
-            -authenticationKeyID "$APPLE_API_KEY_ID" \
-            -authenticationKeyIssuerID "$APPLE_API_ISSUER" \
             DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
-            CODE_SIGN_STYLE=Automatic \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="Apple Distribution" \
             CURRENT_PROJECT_VERSION="$build_number" \
             MARKETING_VERSION="$RELEASE_VERSION"
 
