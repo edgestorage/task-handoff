@@ -49,5 +49,5 @@ test("collapsed instance switcher forwards open-window to the workbench", () => 
 
 test("instance detail uses the compact pop-out action only in the main workbench", () => {
   const source = readFileSync(new URL("../src/apps/control-plane/instance-detail/InstanceDetail.vue", import.meta.url), "utf8");
-  assert.match(source, /<TooltipProvider v-if="!standalone" :delay-duration="120">[\s\S]*?<Button variant="outline" size="icon-sm" :aria-label="t\('instances\.window\.openInNewWindow'\)"/);
+  assert.match(source, /<TooltipProvider :delay-duration="120">[\s\S]*?<Tooltip v-if="!standalone">[\s\S]*?<Button variant="outline" size="icon-sm" :aria-label="t\('instances\.window\.openInNewWindow'\)"/);
 });

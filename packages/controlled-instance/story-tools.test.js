@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { STORY_DYNAMIC_TOOLS, StoryAgentToolService } from "./src/web/story-tools.ts";
+import { STORY_TOOL_DESCRIPTIONS } from "./src/story-tool-contract.ts";
+import { StoryAgentToolService } from "./src/web/story-tools.ts";
 
 function document(index) {
   return {
@@ -33,14 +34,10 @@ function serviceWithDocuments(documents) {
 const session = { id: "session-1", storyId: "story-1" };
 
 test("Story tool descriptions explain the list-get-set workflow", () => {
-  const tools = new Map(STORY_DYNAMIC_TOOLS.map((tool) => [tool.name, tool]));
-
-  assert.match(tools.get("story_list_content").description, /ordered newest to oldest/);
-  assert.match(tools.get("story_list_content").description, /page 1/);
-  assert.match(tools.get("story_get_content").description, /story_list_content/);
-  assert.match(tools.get("story_set_content").description, /expectedRevision/);
-  assert.equal(tools.get("story_list_content").inputSchema.properties.page.default, 1);
-  assert.equal(tools.get("story_list_content").inputSchema.properties.pageSize.default, 20);
+  assert.match(STORY_TOOL_DESCRIPTIONS.story_list_content, /ordered newest to oldest/);
+  assert.match(STORY_TOOL_DESCRIPTIONS.story_list_content, /page 1/);
+  assert.match(STORY_TOOL_DESCRIPTIONS.story_get_content, /story_list_content/);
+  assert.match(STORY_TOOL_DESCRIPTIONS.story_set_content, /expectedRevision/);
 });
 
 test("story_list_content keeps the empty input compatible and returns the newest documents first", async () => {

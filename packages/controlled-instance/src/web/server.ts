@@ -45,11 +45,11 @@ import {
   aiSessionDetailRevision,
   aiSessionTurnBodyRevision,
   aiSessionTurnsRevision,
-  TranscriptTailDiscoveryProvider,
   type AiSessionRegistry,
 } from "@task-handoff/ai-session-runtime";
 import { NodeAgentRegistrationClient, nodeAgentRegistrationConfigFromEnv } from "./node-agent-client";
-import { STORY_DYNAMIC_TOOLS, StoryAgentToolService } from "./story-tools";
+import { StoryAgentToolService } from "./story-tools";
+import { StoryAgentToolBridge } from "./story-agent-tool-bridge";
 import { nodeAgentApiRoute, publicApiRoute, registerAuth, resolveWebAuth } from "./auth";
 import { AiSessionMessageDeltaCoalescer } from "./ai-session-message-delta-coalescer";
 import { projectAiSessionAuthorityChange } from "./ai-session-authority-events";
@@ -248,6 +248,7 @@ type RunWebServerOptions = {
 
 type CreateWebAppOptions = {
   staticDir?: string;
+  agentToolsBaseUrl?: string;
   logger?: FastifyServerOptions["logger"];
   appRuntime?: AppRuntimeManager;
   aiSessionRegistry?: AiSessionRegistry;
@@ -640,7 +641,6 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   const auth = resolveWebAuth(storagePaths);
   const events = new WebEventBus();
   const appRuntime = options.appRuntime || new AppRuntimeManager(storagePaths);
-  appRuntime.replaceManagedEnvironment(managedAppEnvironment(managedModelEnv));
   const app = Fastify({ logger: options.logger ?? true });
   app.addContentTypeParser("application/octet-stream", (_request, payload, done) => done(null, payload));
   const appManagement = options.appManagement || new AppManagementManager({
@@ -665,7 +665,10 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   const attachmentDraftStreams = new AiSessionAttachmentDraftStreams((input) => aiSessionConversationAttachments.createDraft(input));
   const aiSessionAttachmentGcTimer = setInterval(() => aiSessionConversationAttachments.gc(), 60 * 60 * 1000);
   aiSessionAttachmentGcTimer.unref?.();
-  const aiSessions = options.aiSessionRegistry || createAiSessionRegistry({ conversationAttachments: aiSessionConversationAttachments });
+  const aiSessions = options.aiSessionRegistry || createAiSessionRegistry({
+    conversationAttachments: aiSessionConversationAttachments,
+    onDiagnostic: (diagnostic) => app.log.warn({ diagnostic }, "AI session timing changed"),
+  });
   const aiSessionHistory = new AiSessionHistoryStore(storagePaths, {
     limit: initialAiSessionPersistenceSettings.historyLimit,
     onWarning: (warning) => app.log.warn({ warning }, "AI session history entry was sanitized"),
@@ -687,9 +690,22 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     gitCredentialBrokerInstalled,
   ));
   const storyAgentTools = new StoryAgentToolService(nodeAgentClient);
+  const bundledOpenCodeStoryPlugin = path.join(__dirname, "opencode-story-plugin.mjs");
+  const storyAgentToolBridge = nodeAgentClient.enabled() ? new StoryAgentToolBridge({
+    service: storyAgentTools,
+    resolveSession: (provider, providerSessionId) => aiSessions.getByProviderSessionId(provider, providerSessionId),
+    endpoint: `${(options.agentToolsBaseUrl || `http://127.0.0.1:${process.env.TASK_HANDOFF_WEB_PORT || 8080}`).replace(/\/$/, "")}/api/internal/agent-tools`,
+    pluginPath: fs.existsSync(bundledOpenCodeStoryPlugin) ? bundledOpenCodeStoryPlugin : undefined,
+  }) : undefined;
+  const replaceManagedAppEnvironment = () => appRuntime.replaceManagedEnvironment(managedAppEnvironment(managedModelEnv));
+  replaceManagedAppEnvironment();
+  const storyAgentToolEnvironment = storyAgentToolBridge?.runtimeEnvironment() || {};
+  appRuntime.replaceSharedResourcePrivateEnvironment?.("codex", storyAgentToolEnvironment);
+  appRuntime.replaceSharedResourcePrivateEnvironment?.("opencode", storyAgentToolBridge?.openCodeRuntimeEnvironment() || {});
 
   await app.register(websocket, { options: TASK_HANDOFF_WEBSOCKET_SERVER_OPTIONS });
   registerAuth(app, auth);
+  storyAgentToolBridge?.register(app);
 
   app.addHook("onReady", async () => {
     if (nodeAgentClient.enabled()) {
@@ -755,15 +771,6 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       model: codexManagedConfig.model || process.env.TASK_HANDOFF_CODEX_MODEL?.trim() || undefined,
       modelProvider: codexManagedConfig.modelProvider || (process.env.TASK_HANDOFF_CODEX_MODEL?.trim() ? "openai" : undefined),
     },
-    ...(nodeAgentClient.enabled() ? {
-      dynamicTools: STORY_DYNAMIC_TOOLS,
-      onDynamicToolCall: async (call) => {
-        const session = aiSessions.getByProviderSessionId("codex", call.threadId);
-        if (!session) throw Object.assign(new Error("AI Session was not found for the Story tool call."), { code: "AI_SESSION_NOT_FOUND" });
-        const result = await storyAgentTools.invoke(session, call.tool, call.arguments);
-        return { contentItems: [{ type: "inputText" as const, text: JSON.stringify(result) }], success: true };
-      },
-    } : {}),
     resolveModelSelection: (selection) => {
       const resolved = resolveControlledPrivateModelSelection(privateModelCatalog, "codex", selection);
       return {
@@ -980,7 +987,6 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   });
   app.addHook("onClose", async () => unsubscribeTimelineItems());
   aiSessionDiscovery.register(new ClaudeAppSessionBindingProvider());
-  aiSessionDiscovery.register(new TranscriptTailDiscoveryProvider());
   function appSessionsWithSharedCodexAppServer() {
     const appServer = appRuntime.sharedResourceSessionAi("codex")?.appServer;
     if (!appServer) {
@@ -2444,7 +2450,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     Object.assign(managedModelEnv, next);
     const codex = applyManagedCodexModelConfig(managedModelEnv, privateModelCatalog, codexManagedSettings);
     const claude = applyManagedClaudeModelConfig(managedModelEnv);
-    appRuntime.replaceManagedEnvironment(managedAppEnvironment(managedModelEnv));
+    replaceManagedAppEnvironment();
     return { data: {
       applied: true,
       codexAuthConfigured: Boolean(next.OPENAI_API_KEY),
@@ -2481,7 +2487,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     }
     codexManagedConfig = applyManagedCodexModelConfig(managedModelEnv, privateModelCatalog, codexManagedSettings);
     Object.assign(managedModelEnv, codexManagedConfig.providerEnvironment || {});
-    appRuntime.replaceManagedEnvironment(managedAppEnvironment(managedModelEnv));
+    replaceManagedAppEnvironment();
     return { data: { applied: true, configUpdated: codexManagedConfig.applied } };
   });
 
@@ -2917,7 +2923,7 @@ export async function runWebServer(options: Partial<RunWebServerOptions> = {}) {
       }, process.env.TASK_HANDOFF_LOCAL_CONTROLLED_INSTANCE_LOCK_PATH)
     : undefined;
   try {
-    const app = await createWebApp(options);
+    const app = await createWebApp({ ...options, agentToolsBaseUrl: `http://127.0.0.1:${port}` });
     if (localLock) app.addHook("onClose", async () => localLock.release());
     installGracefulShutdown(app);
     await app.listen({ host, port });

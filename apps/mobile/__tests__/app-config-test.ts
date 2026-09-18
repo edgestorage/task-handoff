@@ -1,14 +1,11 @@
 describe('mobile native feature variants', () => {
   const originalVariant = process.env.TASK_HANDOFF_MOBILE_VARIANT;
-  const originalExpoProjectId = process.env.EXPO_PROJECT_ID;
   const originalStagingOrigin = process.env.TASK_HANDOFF_CLOUD_STAGING_ORIGIN;
   const originalCloudRelayEnabled = process.env.TASK_HANDOFF_CLOUD_RELAY_ENABLED;
 
   afterEach(() => {
     if (originalVariant === undefined) delete process.env.TASK_HANDOFF_MOBILE_VARIANT;
     else process.env.TASK_HANDOFF_MOBILE_VARIANT = originalVariant;
-    if (originalExpoProjectId === undefined) delete process.env.EXPO_PROJECT_ID;
-    else process.env.EXPO_PROJECT_ID = originalExpoProjectId;
     if (originalStagingOrigin === undefined) delete process.env.TASK_HANDOFF_CLOUD_STAGING_ORIGIN;
     else process.env.TASK_HANDOFF_CLOUD_STAGING_ORIGIN = originalStagingOrigin;
     if (originalCloudRelayEnabled === undefined) delete process.env.TASK_HANDOFF_CLOUD_RELAY_ENABLED;
@@ -47,14 +44,13 @@ describe('mobile native feature variants', () => {
     expect(JSON.stringify(config.plugins)).not.toMatch(/carplay/i);
   });
 
-  test('binds CI production builds to the configured EAS project', () => {
+  test('configures native production identifiers and Android release signing', () => {
     process.env.TASK_HANDOFF_MOBILE_VARIANT = 'production';
-    process.env.EXPO_PROJECT_ID = '00000000-0000-0000-0000-000000000000';
     const config = require('../app.config.js')();
     expect(config.name).toBe('TaskHandoff');
     expect(config.ios.bundleIdentifier).toBe('com.taskhandoff.mobile');
     expect(config.android.package).toBe('com.taskhandoff.mobile');
-    expect(config.extra.eas.projectId).toBe(process.env.EXPO_PROJECT_ID);
+    expect(config.plugins).toContain('./plugins/with-task-handoff-android-release');
   });
 
   test('production does not expose an override while staging pins an explicit HTTPS origin', () => {

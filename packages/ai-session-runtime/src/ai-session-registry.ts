@@ -94,6 +94,15 @@ type RegistryOptions = {
   staleAfterMs?: number;
   orphanedAppSessionRetentionMs?: number;
   conversationAttachments?: AiSessionConversationAttachmentStore;
+  onDiagnostic?: (diagnostic: Record<string, unknown>) => void;
+};
+
+type AiSessionMutationContext = {
+  inputType?: AiSessionReducerInput["type"];
+  source?: AiSessionSource;
+  kind?: AiSessionRealtimeInput["kind"];
+  observedAt?: string;
+  snapshotVersion?: number;
 };
 
 const DEFAULT_RETENTION_MS = 24 * 60 * 60 * 1000;
@@ -271,6 +280,7 @@ export class AiSessionRegistry {
   private readonly store: AiSessionFileStore;
   private readonly changes = new EventEmitter();
   private readonly conversationAttachments?: AiSessionConversationAttachmentStore;
+  private readonly onDiagnostic?: RegistryOptions["onDiagnostic"];
   private changeBatchDepth = 0;
   private pendingChangeReason: string | undefined;
 
@@ -285,6 +295,7 @@ export class AiSessionRegistry {
     this.staleAfterMs = options.staleAfterMs ?? (Number(process.env.TASK_HANDOFF_AI_SESSION_STALE_AFTER_MS) || DEFAULT_STALE_AFTER_MS);
     this.orphanedAppSessionRetentionMs = options.orphanedAppSessionRetentionMs ?? (Number(process.env.TASK_HANDOFF_AI_SESSION_ORPHAN_RETENTION_MS) || DEFAULT_ORPHANED_APP_SESSION_RETENTION_MS);
     this.conversationAttachments = options.conversationAttachments;
+    this.onDiagnostic = options.onDiagnostic;
     this.transcriptService = new AiSessionTranscriptService({ idleAfterMs: this.idleAfterMs, staleAfterMs: this.staleAfterMs });
     if (this.conversationAttachments) {
       for (const session of this.readSessions()) {
@@ -428,14 +439,68 @@ export class AiSessionRegistry {
     return this.removeStoredSession(id);
   }
 
-  private put(session: AiSessionStatus) {
+  private put(session: AiSessionStatus, context: AiSessionMutationContext = {}) {
     const current = this.get(session.id);
     if (current && sameAiSessionBusinessState(current, session)) {
       return current;
     }
+    if (current) {
+      this.reportCompletedAtChanges(current, session, context);
+    }
     const committed = this.store.save(session);
     this.emitChange("write");
     return committed;
+  }
+
+  private reportCompletedAtChanges(current: AiSessionStatus, next: AiSessionStatus, context: AiSessionMutationContext) {
+    const changes: Array<Record<string, unknown>> = [];
+    if (current.completedAt && current.completedAt !== next.completedAt) {
+      changes.push({
+        scope: "session",
+        previous: { completedAt: current.completedAt, updatedAt: current.updatedAt },
+        next: { completedAt: next.completedAt, updatedAt: next.updatedAt },
+      });
+    }
+    const nextTurns = new Map((next.turns || []).map((turn) => [turn.id, turn]));
+    for (const turn of current.turns || []) {
+      if (!turn.completedAt) continue;
+      const nextTurn = nextTurns.get(turn.id);
+      if (!nextTurn || turn.completedAt === nextTurn.completedAt) continue;
+      changes.push({
+        scope: "turn",
+        turnId: turn.id,
+        providerTurnId: turn.providerTurnId,
+        previous: {
+          completedAt: turn.completedAt,
+          updatedAt: turn.updatedAt,
+          observedAt: turn.observedAt,
+          status: turn.status,
+          revision: turn.revision,
+          source: turn.source,
+        },
+        next: {
+          completedAt: nextTurn.completedAt,
+          updatedAt: nextTurn.updatedAt,
+          observedAt: nextTurn.observedAt,
+          status: nextTurn.status,
+          revision: nextTurn.revision,
+          source: nextTurn.source,
+        },
+      });
+    }
+    if (!changes.length) return;
+    this.onDiagnostic?.({
+      code: "AI_SESSION_COMPLETED_AT_CHANGED",
+      sessionId: current.id,
+      agent: current.agent,
+      providerSessionId: current.providerSessionId,
+      inputType: context.inputType || "internal",
+      source: context.source,
+      kind: context.kind,
+      inputObservedAt: context.observedAt,
+      snapshotVersion: context.snapshotVersion,
+      changes,
+    });
   }
 
   patch(id: string, patch: AiSessionUpdateInput) {
@@ -603,7 +668,13 @@ export class AiSessionRegistry {
     const current = this.get(event.sessionId);
     if (!current) return undefined;
     const updated = reduceAiSessionRealtime(current, event);
-    return updated === current ? current : updated ? this.put(updated) : undefined;
+    return updated === current ? current : updated ? this.put(updated, {
+      inputType: event.type,
+      source: event.source,
+      kind: event.kind,
+      observedAt: event.observedAt,
+      snapshotVersion: event.snapshotVersion,
+    }) : undefined;
   }
 
   applyAdapterSnapshot(input: Omit<AiSessionSnapshotInput, "type" | "source"> & { source?: AiSessionSource }) {
@@ -664,7 +735,12 @@ export class AiSessionRegistry {
     }
     this.reconciliation.clearOrphan(existing.id);
     const updated = reduceAiSessionSnapshot(existing, input);
-    return updated === existing ? existing : this.put(updated);
+    return updated === existing ? existing : this.put(updated, {
+      inputType: input.type,
+      source: input.source,
+      observedAt: input.observedAt,
+      snapshotVersion: input.snapshotVersion,
+    });
   }
 
   attachTranscript(id: string, transcriptPath?: string) {

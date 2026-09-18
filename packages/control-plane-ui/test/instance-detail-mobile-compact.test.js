@@ -10,11 +10,20 @@ test("desktop instance summary compacts identity while keeping status and action
   assert.match(detail, /<ContextMenu v-if="canOpenInstanceSourceFolder">[\s\S]*?class="detail-meta-folder" @click="openInstanceSourceFolder"[\s\S]*?<ContextMenuItem[^>]*@select="openInstanceSourceFolder"/);
   assert.match(detail, /desktopRuntimePathAccess\(props\.instance\) === "desktop-local"[\s\S]*?canOpenDesktopLocalPath\(\)[\s\S]*?openDesktopLocalPath\(instanceSourceLocation\(instance\)\)/);
   assert.match(detail, /class="instance-detail-meta-tooltip"[\s\S]*?instanceSourceLocation\(instance\)[\s\S]*?instanceImageTooltip\(instance\)[\s\S]*?instance\.nodeId[\s\S]*?instanceRuntimeTooltip\(instance\)/);
-  assert.match(styles, /\.instance-detail\s*\{[^}]*padding: 14px;/s);
+  assert.match(styles, /\.instance-detail\s*\{[^}]*grid-template-columns: minmax\(0, 1fr\);[^}]*padding: 14px;/s);
   assert.match(styles, /\.detail-head\s*\{[^}]*align-items: center;[^}]*margin-bottom: 10px;/s);
   assert.match(styles, /\.detail-side\s*\{[^}]*display: grid;[^}]*justify-items: end;/s);
   assert.match(styles, /\.detail-meta\s*\{[^}]*font-size: 13px;[^}]*line-height: 20px;/s);
   assert.match(styles, /\.detail-meta-item\s*\{[^}]*display: inline-flex;[^}]*gap: 5px;/s);
+  assert.match(styles, /\.instance-controls\s*\{[^}]*flex-wrap: nowrap;/s);
+  assert.doesNotMatch(styles, /\.instance-controls\s*\{[^}]*max-width:\s*420px;/s);
+  assert.match(styles, /\.instance-controls\.compact > button\s*\{[^}]*width: 32px;[^}]*min-width: 32px;[^}]*padding: 0;/s);
+  assert.match(styles, /\.instance-controls\.compact > button > \.instance-action-label\s*\{[^}]*width: 1px;[^}]*clip-path: inset\(50%\);/s);
+  assert.match(detail, /<TooltipProvider :delay-duration="120">[\s\S]*?class="instance-controls"[\s\S]*?<TooltipContent side="bottom">/);
+  assert.match(detail, /function instanceControlsOverflowWidth\(\)[\s\S]*?controls\.scrollWidth - controls\.clientWidth[\s\S]*?controls\.getBoundingClientRect\(\)\.right - head\.getBoundingClientRect\(\)\.right/);
+  assert.match(detail, /new ResizeObserver\(\(\) => scheduleInstanceControlsLayout\(\)\)/);
+  assert.match(detail, /instanceControlsExpandAtWidth = headWidth \+ Math\.ceil\(overflowWidth\) \+ 8/);
+  assert.doesNotMatch(styles, /@container \(max-width: 1280px\)/);
 });
 
 test("mobile instance summary uses a compact two-row layout", () => {

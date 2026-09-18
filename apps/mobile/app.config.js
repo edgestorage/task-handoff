@@ -26,7 +26,6 @@ module.exports = () => {
   }
   const taskStatusWidgetsEnabled = process.env.TASK_HANDOFF_WIDGETS_ENABLED !== '0';
   const carPlayEnabled = variantName === 'development' && process.env.TASK_HANDOFF_CARPLAY_ENABLED === '1';
-  const easProjectId = process.env.EXPO_PROJECT_ID || baseConfig.extra?.eas?.projectId;
   const plugins = [
     ...(baseConfig.plugins || []),
     './modules/task-handoff-browser/plugin/withTaskHandoffBrowser',
@@ -47,6 +46,7 @@ module.exports = () => {
       './plugins/with-task-handoff-carplay',
       { entitlement: 'com.apple.developer.carplay-driving-task' },
     ]] : []),
+    ...(variantName === 'production' ? ['./plugins/with-task-handoff-android-release'] : []),
   ];
 
   return {
@@ -78,7 +78,6 @@ module.exports = () => {
       carPlayEnabled,
       cloudRelayEnabled: process.env.TASK_HANDOFF_CLOUD_RELAY_ENABLED !== '0',
       ...(variantName === 'staging' ? { cloudServiceOrigin: new URL(requiredEnv('TASK_HANDOFF_CLOUD_STAGING_ORIGIN')).origin } : {}),
-      ...(easProjectId ? { eas: { ...baseConfig.extra?.eas, projectId: easProjectId } } : {}),
     },
   };
 };

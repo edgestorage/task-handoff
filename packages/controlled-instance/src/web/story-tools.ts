@@ -14,52 +14,6 @@ import {
 import type { AiSessionStatus } from "@task-handoff/protocol/ai-sessions";
 import type { NodeAgentRegistrationClient } from "./node-agent-client.ts";
 
-export const STORY_DYNAMIC_TOOLS = [
-  {
-    type: "function" as const,
-    name: "story_list_content",
-    description: "List a page of indexed documents in the Story assigned to the current AI Session, ordered newest to oldest. Start with page 1, increment page while pagination.hasMore is true, then pass selected storyPath values to story_get_content.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        page: { type: "integer", minimum: 1, maximum: 500, default: 1, description: "One-based page number." },
-        pageSize: { type: "integer", minimum: 1, maximum: 100, default: 20, description: "Maximum documents to return per page." },
-      },
-      additionalProperties: false,
-    },
-  },
-  {
-    type: "function" as const,
-    name: "story_get_content",
-    description: "Copy one or more Story documents selected by exact storyPath from story_list_content into a directory in the current workspace. Files retain their Story-relative paths; read the returned local paths with workspace tools.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        storyPaths: { type: "array", minItems: 1, maxItems: 20, items: { type: "string" } },
-        destinationPath: { type: "string" },
-      },
-      required: ["storyPaths", "destinationPath"],
-      additionalProperties: false,
-    },
-  },
-  {
-    type: "function" as const,
-    name: "story_set_content",
-    description: "Create or replace one indexed Story document from a regular file in the current workspace. A new document requires title; replacing one requires the expectedRevision returned by story_list_content or story_get_content.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        storyPath: { type: "string" },
-        title: { type: "string" },
-        sourcePath: { type: "string" },
-        expectedRevision: { type: "string", pattern: "^[a-f0-9]{64}$" },
-      },
-      required: ["storyPath", "sourcePath"],
-      additionalProperties: false,
-    },
-  },
-];
-
 function storyToolError(code: string, message: string, statusCode = 400) {
   return Object.assign(new Error(message), { code, statusCode });
 }
@@ -103,13 +57,13 @@ export class StoryAgentToolService {
     return this.nodeAgent.listStoryContent(session.id, page, pageSize);
   }
 
-  async invoke(session: AiSessionStatus, tool: string, value: unknown) {
+  async invoke(session: AiSessionStatus, tool: string, value: unknown, signal?: AbortSignal) {
     if (tool === "story_list_content") {
       const { page, pageSize } = StoryContentPageInputSchema.parse(value ?? {});
       return this.list(session, page, pageSize);
     }
-    if (tool === "story_get_content") return this.get(session, value);
-    if (tool === "story_set_content") return this.set(session, value);
+    if (tool === "story_get_content") return this.get(session, value, signal);
+    if (tool === "story_set_content") return this.set(session, value, signal);
     throw storyToolError("STORY_TOOL_NOT_FOUND", `Unknown Story tool: ${tool}`, 404);
   }
 

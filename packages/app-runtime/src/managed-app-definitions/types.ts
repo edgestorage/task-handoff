@@ -71,6 +71,7 @@ export type ManagedAppSharedResourceInfo = {
 };
 
 export type ManagedAppSharedResource = {
+  replacePrivateEnvironment?(env: NodeJS.ProcessEnv): void;
   ensure(input: { app: AppCatalogItem; cwd: string; env: NodeJS.ProcessEnv }): ManagedAppSharedResourceInfo;
   acquire(command: string, cwd: string, env: NodeJS.ProcessEnv, consumerId: string): ManagedAppSharedResourceInfo;
   release(consumerId: string): void;

@@ -1,6 +1,6 @@
 # Mobile releases
 
-GitHub Actions owns the mobile release workflow. iOS is generated from the Expo configuration, built and signed on a GitHub-hosted macOS runner, and uploaded directly to App Store Connect. Android continues to use Expo Application Services (EAS) for its keystore and APK build.
+GitHub Actions owns the mobile release workflow. Expo generates both native projects. GitHub-hosted Linux and macOS runners build and sign Android and iOS respectively; iOS is uploaded directly to App Store Connect.
 
 ## One-time Apple setup
 
@@ -21,12 +21,11 @@ base64 -i TaskHandoff-AppStore.mobileprovision | pbcopy
 base64 -i TaskHandoff-Widget-AppStore.mobileprovision | pbcopy
 ```
 
-Add these GitHub repository variables:
+Add this GitHub repository variable:
 
 | Variable | Value |
 | --- | --- |
 | `APPLE_TEAM_ID` | Apple Developer team identifier used by both iOS targets |
-| `EXPO_PROJECT_ID` | EAS project UUID used only by the Android release job |
 
 Add these GitHub Actions secrets. The iOS-only values may be scoped to the protected `ios-production` environment:
 
@@ -39,19 +38,34 @@ Add these GitHub Actions secrets. The iOS-only values may be scoped to the prote
 | `IOS_DISTRIBUTION_CERTIFICATE_PASSWORD` | Password used when exporting the `.p12` |
 | `IOS_APP_PROVISIONING_PROFILE` | Base64-encoded App Store profile for `com.taskhandoff.mobile` |
 | `IOS_WIDGET_PROVISIONING_PROFILE` | Base64-encoded App Store profile for `com.taskhandoff.mobile.widgets` |
-| `EXPO_TOKEN` | Expo access token used only by the Android release job |
 
 Create a protected GitHub environment named `ios-production` and require a reviewer. Protect the `mobile-v*` tag namespace so only release maintainers can create or update release tags. Pull requests and untrusted forks must never receive release secrets.
 
 ## One-time Android setup
 
-Create or select the Expo project that owns the Android application, then initialize its keystore with one interactive EAS build from `apps/mobile`:
+Create a long-lived Android release keystore before the first published build. This key is the application identity for direct APK upgrades and cannot be replaced without breaking upgrade compatibility. Keep an offline backup of the keystore and its passwords.
 
 ```sh
-TASK_HANDOFF_MOBILE_VARIANT=production EXPO_PROJECT_ID=<project-id> eas build --platform android --profile android-release
+keytool -genkeypair -v \
+  -keystore TaskHandoff-Android-Release.jks \
+  -storetype JKS \
+  -alias taskhandoff \
+  -keyalg RSA \
+  -keysize 4096 \
+  -validity 10000
+base64 -i TaskHandoff-Android-Release.jks | pbcopy
 ```
 
-Use a dedicated Expo robot user where the account plan supports it.
+Create a protected GitHub environment named `android-production`, require a reviewer, and add these secrets:
+
+| Secret | Value |
+| --- | --- |
+| `ANDROID_KEYSTORE_BASE64` | One-line Base64 encoding of the release keystore |
+| `ANDROID_KEYSTORE_PASSWORD` | Keystore password |
+| `ANDROID_KEY_ALIAS` | Release key alias, such as `taskhandoff` |
+| `ANDROID_KEY_PASSWORD` | Private key password |
+
+Restrict both production environments to the `mobile-v*` tag namespace.
 
 ## Release
 
@@ -66,7 +80,7 @@ The `oss` remote is the public GitHub repository in the standard local checkout.
 
 The `Mobile Release` workflow validates the production Expo configuration and runs the complete mobile release check, then starts two independent jobs:
 
-- Android uses EAS to build an installable production APK and attaches it as `TaskHandoff-<version>-android.apk` to the tag's GitHub Release.
+- Android waits at the protected `android-production` environment, generates the native project, builds a signed release APK with Gradle, verifies its signature, and attaches it as `TaskHandoff-<version>-android.apk` to the tag's GitHub Release. Its integer version code is the monotonically increasing GitHub Actions run number.
 - iOS waits at the protected `ios-production` environment. After approval, a GitHub-hosted macOS runner generates the native project, imports the Apple Distribution certificate and both provisioning profiles into temporary signing stores, archives and exports the IPA with Xcode, and uploads it to App Store Connect. The build number is the monotonically increasing GitHub Actions run number.
 
 The iOS upload appears in App Store Connect/TestFlight after Apple finishes processing it. App metadata, screenshots, privacy answers, age rating, pricing, export compliance, review notes, phased release, and the final `Submit for Review` action remain controlled in App Store Connect. Android is not submitted to Google Play by this workflow.

@@ -198,6 +198,10 @@ export class AppRuntimeManager extends EventEmitter {
     return this.sharedAppResource(appId)?.privateConnection?.();
   }
 
+  replaceSharedResourcePrivateEnvironment(appId: string, env: NodeJS.ProcessEnv) {
+    this.sharedAppResource(appId)?.replacePrivateEnvironment?.(env);
+  }
+
   ensureSharedResource(appId: string) {
     this.requireLaunchAdmission();
     const resource = this.sharedAppResource(appId);

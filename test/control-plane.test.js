@@ -10068,7 +10068,7 @@ test("node agent reverse tunnel survives rejected handshakes and retries", async
   const identity = new NodeAgentIdentityService(paths);
   identity.resolveNodeId("node_rejected");
   identity.commitControlPlaneConnection(identity.stageControlPlaneConnection({ url: `http://127.0.0.1:${rejectingServer.address().port}` }));
-  const app = await createNodeAgentApp({ dataDir, logger: false, port: 8091 });
+  const app = await createNodeAgentApp({ dataDir, logger: false, port: 8091, nodeId: "node_rejected" });
   const manager = createReverseTunnelManager(app, { host: "127.0.0.1", port: 8091, dataDir }, paths, "node_rejected");
   t.after(async () => {
     manager.closeAll();
@@ -10116,7 +10116,7 @@ test("persisted control-plane access suppresses the bootstrap reverse tunnel", a
     else process.env.TASK_HANDOFF_CONTROL_PLANE_URL = previousControlPlaneUrl;
   });
 
-  const app = await createNodeAgentApp({ dataDir, logger: false, port: 8091 });
+  const app = await createNodeAgentApp({ dataDir, logger: false, port: 8091, nodeId: "node_single_reverse_tunnel" });
   const manager = createReverseTunnelManager(app, { host: "127.0.0.1", port: 8091, dataDir }, paths, "node_single_reverse_tunnel");
   t.after(async () => {
     manager.closeAll();
@@ -10160,7 +10160,7 @@ test("an explicit reverse tunnel remains active alongside persisted control-plan
   const identity = new NodeAgentIdentityService(paths);
   identity.resolveNodeId("node_explicit_and_persisted_tunnels");
   identity.commitControlPlaneConnection(identity.stageControlPlaneConnection({ url: `http://127.0.0.1:${address.port}` }));
-  const app = await createNodeAgentApp({ dataDir, logger: false, port: 8091 });
+  const app = await createNodeAgentApp({ dataDir, logger: false, port: 8091, nodeId: "node_explicit_and_persisted_tunnels" });
   const manager = createReverseTunnelManager(app, {
     host: "127.0.0.1",
     port: 8091,
@@ -10207,7 +10207,14 @@ test("deleting a node agent control-plane connection cancels its pending reverse
   const pending = identity.commitControlPlaneConnection(identity.stageControlPlaneConnection({ url: `http://127.0.0.1:${address.port}` }));
 
   const ipcPath = nodeAgentIpcPath(dataDir);
-  const app = await createNodeAgentApp({ dataDir, logger: false, port: 8091, connectionMode: "local-ipc", ipcPath });
+  const app = await createNodeAgentApp({
+    dataDir,
+    logger: false,
+    port: 8091,
+    nodeId: "node_deleted",
+    connectionMode: "local-ipc",
+    ipcPath,
+  });
   const manager = createReverseTunnelManager(app, { host: "127.0.0.1", port: 8091, dataDir, connectionMode: "local-ipc", ipcPath }, paths, "node_deleted");
   app.decorate("nodeAgentReverseTunnels", manager);
   await app.ready();
