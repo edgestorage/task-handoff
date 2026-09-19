@@ -3937,7 +3937,7 @@ onMounted(() => {
 watch(
   () => selectedTimelineTurn.value ? `${selectedTimelineTurn.value.id}:${selectedTimelineTurn.value.status}:${selectedSessionTurnIndexKey.value}` : "",
   () => {
-    if (selectedTimelineTurn.value) void loadSelectedSessionTurn(selectedTimelineTurn.value.id, true, undefined, "selected-turn-watcher");
+    if (selectedTimelineTurn.value) void loadSelectedSessionTurn(selectedTimelineTurn.value.id, false, undefined, "selected-turn-watcher");
   },
 );
 watch(

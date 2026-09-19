@@ -174,9 +174,9 @@ test("binding-scoped HTTP proxy streams status/body and only allowlisted applica
   assert.equal(requests[0].init.signal.aborted, false);
 });
 
-test("HTTP proxy rejects missing machine auth, encoded traversal, and forged node transport headers", async (t) => {
+test("HTTP proxy permits encoded query values but rejects encoded path separators and forged headers", async (t) => {
   const app = Fastify({ logger: false });
-  let forwarded = 0;
+  const forwarded = [];
   registerNodeProxyRoutes({
     app,
     authority: authority(),
@@ -185,7 +185,7 @@ test("HTTP proxy rejects missing machine auth, encoded traversal, and forged nod
     resolveTarget: async () => ({
       node,
       transport: {
-        async requestStream() { forwarded += 1; return new Response("unexpected"); },
+        async requestStream(_target, route) { forwarded.push(route); return new Response("ok"); },
         request() {},
         proxyWebSocket() {},
       },
@@ -196,6 +196,22 @@ test("HTTP proxy rejects missing machine auth, encoded traversal, and forged nod
   const unauthenticated = await app.inject({ method: "GET", url: `/api/node-proxy/bindings/${binding.id}/http/health` });
   assert.equal(unauthenticated.statusCode, 426);
   assert.equal(unauthenticated.json().error.code, "CONTROL_PLANE_PROXY_PROTOCOL_UNSUPPORTED");
+
+  const encodedQuery = await app.inject({
+    method: "GET",
+    url: `/api/node-proxy/bindings/${binding.id}/http/folders/tree?path=%2F&depth=1`,
+    headers: authHeaders(),
+  });
+  assert.equal(encodedQuery.statusCode, 200, encodedQuery.body);
+  assert.deepEqual(forwarded, ["/folders/tree?path=%2F&depth=1"]);
+
+  const encodedSeparator = await app.inject({
+    method: "GET",
+    url: `/api/node-proxy/bindings/${binding.id}/http/folders%2Ftree`,
+    headers: authHeaders(),
+  });
+  assert.equal(encodedSeparator.statusCode, 400, encodedSeparator.body);
+  assert.equal(encodedSeparator.json().error.code, "CONTROL_PLANE_PROXY_ROUTE_INVALID");
 
   const traversal = await app.inject({
     method: "GET",
@@ -267,7 +283,7 @@ test("HTTP proxy rejects missing machine auth, encoded traversal, and forged nod
   });
   assert.equal(targetOverride.statusCode, 409, targetOverride.body);
   assert.equal(targetOverride.json().error.code, "CONTROL_PLANE_PROXY_TARGET_MISMATCH");
-  assert.equal(forwarded, 0);
+  assert.deepEqual(forwarded, ["/folders/tree?path=%2F&depth=1"]);
 });
 
 test("snapshot, websocket, and event establishment revalidate the same active binding after target resolution", async () => {

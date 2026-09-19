@@ -14,6 +14,7 @@ import {
 import type { AiSessionModelSelection, AiSessionReasoningEffort } from "@task-handoff/protocol/ai-sessions";
 import type { AiSessionDiscoveryContext, AiSessionDiscoveryProvider } from "./ai-session-discovery";
 import type { AiSessionRegistry } from "./ai-session-registry";
+import { isRetainedAiSessionAttachment, materializeAiSessionAttachments } from "./ai-session-attachments";
 import { OpenCodeClient, type OpenCodeConnection, type OpenCodePermissionRule, type OpenCodePromptPart } from "./opencode/client";
 import {
   openCodeErrorText,
@@ -648,6 +649,11 @@ async function promptParts(cwd: string, input: AiSessionSendInput): Promise<Open
   for (const attachment of input.attachments || []) {
     if (attachment.source.type === "inline") {
       parts.push({ type: "file", mime: attachment.mime, filename: attachment.name, url: `data:${attachment.mime};base64,${attachment.source.data}` });
+      continue;
+    }
+    if (isRetainedAiSessionAttachment(attachment)) {
+      const retained = materializeAiSessionAttachments([attachment], cwd)[0];
+      parts.push({ type: "file", mime: retained.mime, filename: retained.name, url: pathToFileURL(retained.path).href });
       continue;
     }
     if (!path.isAbsolute(attachment.source.path)) {

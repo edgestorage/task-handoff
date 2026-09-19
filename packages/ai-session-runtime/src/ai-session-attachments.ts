@@ -9,10 +9,16 @@ export type CodexAttachmentInput =
   | { type: "image"; url: string }
   | { type: "localImage"; path: string };
 
-type MaterializableAiSessionAttachment = AiSessionMessageAttachment & {
+export type MaterializableAiSessionAttachment = AiSessionMessageAttachment & {
   /** Internal-only path owned by the controlled-instance retention store. */
   retainedPath?: string;
 };
+
+export function isRetainedAiSessionAttachment(
+  attachment: AiSessionMessageAttachment,
+): attachment is MaterializableAiSessionAttachment & { retainedPath: string } {
+  return "retainedPath" in attachment && typeof attachment.retainedPath === "string";
+}
 
 const IMAGE_MIME_EXTENSIONS: Record<string, string> = {
   "image/bmp": ".bmp",

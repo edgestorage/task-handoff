@@ -475,6 +475,16 @@ test("Timeline history reads are disclosure-driven, including v0.0.28 session-re
   assert.match(presentation, /const existing = activeTurnTimelineLoads\.get\(key\);\s*if \(existing\) return existing;/);
 });
 
+test("selected Turn watchers trust the authoritative index revision before issuing a body read", () => {
+  const panel = fs.readFileSync(panelUrl, "utf8");
+  const board = fs.readFileSync(new URL("../src/apps/control-plane/ai-board/AiSessionBoardView.vue", import.meta.url), "utf8");
+  assert.match(panel, /loadSelectedSessionTurn\(selectedTimelineTurn\.value\.id, false, undefined, "selected-turn-watcher"\)/);
+  assert.match(board, /loadSelectedCardTurn\(selectedTimelineTurn\.value\.id, false, undefined, "selected-turn-watcher"\)/);
+  for (const source of [panel, board]) {
+    assert.doesNotMatch(source, /loadSelected(?:Session|Card)Turn\([^\n]+true, undefined, "selected-turn-watcher"\)/);
+  }
+});
+
 test("conversation Timeline composes every turn from the same compact result component", () => {
   const panel = fs.readFileSync(panelUrl, "utf8");
   const styles = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.css", import.meta.url), "utf8");

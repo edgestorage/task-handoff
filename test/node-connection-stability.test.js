@@ -707,20 +707,41 @@ test("runtime checks update the fleet snapshot without exposing an empty directo
   ]);
 });
 
-test("instance heartbeat clocks do not publish fleet content changes", async () => {
+test("event-owned instance projections do not publish fleet content changes", async () => {
   const timestamp = "2026-08-22T00:00:00.000Z";
   let heartbeat = 0;
+  let instanceName = "Heartbeat instance";
   const instance = () => ControlledInstanceSchema.parse({
     id: "inst_heartbeat",
-    name: "Heartbeat instance",
+    name: instanceName,
     source: { type: "local-folder", path: "/workspace" },
     sourceSnapshot: {},
     modelSelection: {},
     nodeId: "node_heartbeat",
     runtimeId: "runtime_heartbeat",
     target: { strategy: "node-proxy", status: "reachable", web: "http://127.0.0.1:32100", api: "http://127.0.0.1:32100/api" },
-    runtime: { labels: {} },
     protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
+    status: heartbeat ? "running" : "starting",
+    health: heartbeat ? "ok" : "unknown",
+    connectionStatus: heartbeat ? "online" : "offline",
+    ready: Boolean(heartbeat),
+    access: { strategy: "node-proxy", status: heartbeat ? "reachable" : "unknown" },
+    workspace: { status: heartbeat ? "ready" : "pending", path: "/workspace" },
+    runtime: { pid: heartbeat ? 42 : undefined, labels: {} },
+    runtimeVersion: {
+      desiredVersion: "1.0.0",
+      actualVersion: "1.0.0",
+      phase: "matched",
+      attempt: heartbeat,
+      matchedAt: timestamp,
+      lastAttemptAt: new Date(Date.parse(timestamp) + heartbeat * 1_000).toISOString(),
+    },
+    apps: {
+      runningCount: heartbeat,
+      problemCount: 0,
+      revision: heartbeat,
+      updatedAt: new Date(Date.parse(timestamp) + heartbeat * 1_000).toISOString(),
+    },
     stateRevision: heartbeat,
     appInventory: {
       items: [],
@@ -756,6 +777,12 @@ test("instance heartbeat clocks do not publish fleet content changes", async () 
   heartbeat += 1;
   await gateway.refreshFleetInstances([node]);
   assert.deepEqual(observed, []);
+
+  instanceName = "Renamed instance";
+  await gateway.refreshFleetInstances([node]);
+  assert.deepEqual(observed.map((state) => ({ resource: state.resource, contentChanged: state.contentChanged })), [
+    { resource: "instances", contentChanged: true },
+  ]);
 });
 
 test("AI Session projections do not publish fleet content changes", async () => {

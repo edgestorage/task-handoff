@@ -759,6 +759,84 @@ test("runtime reconciliation installs as soon as its drain request clears active
   assert.equal(updated.runtimeVersion.phase, "matched");
 });
 
+test("runtime reconciliation retries a transiently unavailable drain endpoint", async () => {
+  let clock = 0;
+  const active = instance({ apps: { runningCount: 1, problemCount: 0 } });
+  const store = memoryStore(active);
+  const calls = [];
+  let drainRequests = 0;
+  const coordinator = new RuntimeConvergenceCoordinator(store, () => "2.0.0", {
+    async beginDrain(value) {
+      drainRequests += 1;
+      calls.push(`drain-${drainRequests}`);
+      if (drainRequests === 1) return false;
+      store.put(ControlledInstanceSchema.parse({
+        ...store.get(value.id),
+        apps: { runningCount: 0, problemCount: 0 },
+      }));
+      return true;
+    },
+    async endDrain() { calls.push("resume"); },
+    async onForcedDrain() { calls.push("forced"); },
+    async install() { calls.push("install"); },
+    async restart(value) {
+      calls.push("restart");
+      store.put(ControlledInstanceSchema.parse({
+        ...store.get(value.id),
+        build: { component: "controlled-instance", packageVersion: "2.0.0" },
+      }));
+    },
+  }, {
+    now: () => new Date(clock),
+    delay: async (milliseconds) => { clock += milliseconds; },
+    drainTimeoutMs: 5_000,
+    drainRequestRetryMs: 1_000,
+    verificationTimeoutMs: 0,
+  });
+
+  const updated = await coordinator.schedule("inst_runtime");
+  assert.deepEqual(calls, ["drain-1", "drain-2", "install", "restart", "resume"]);
+  assert.equal(clock, 1_000);
+  assert.equal(updated.runtimeVersion.phase, "matched");
+});
+
+test("runtime reconciliation bounds unavailable drain retries by the existing deadline", async () => {
+  let clock = 0;
+  const active = instance({ apps: { runningCount: 1, problemCount: 0 } });
+  const store = memoryStore(active);
+  let drainRequests = 0;
+  let forced = 0;
+  let resumed = 0;
+  const coordinator = new RuntimeConvergenceCoordinator(store, () => "2.0.0", {
+    async beginDrain() {
+      drainRequests += 1;
+      return false;
+    },
+    async endDrain() { resumed += 1; },
+    async onForcedDrain() { forced += 1; },
+    async install() {},
+    async restart(value) {
+      store.put(ControlledInstanceSchema.parse({
+        ...store.get(value.id),
+        build: { component: "controlled-instance", packageVersion: "2.0.0" },
+      }));
+    },
+  }, {
+    now: () => new Date(clock),
+    delay: async (milliseconds) => { clock += milliseconds; },
+    drainTimeoutMs: 10,
+    drainRequestRetryMs: 4,
+    verificationTimeoutMs: 0,
+  });
+
+  const updated = await coordinator.schedule("inst_runtime");
+  assert.equal(clock, 10);
+  assert.equal(drainRequests, 4);
+  assert.equal(forced, 1);
+  assert.equal(resumed, 0);
+  assert.equal(updated.runtimeVersion.phase, "matched");
+});
+
 test("runtime reconciliation closes admission before install even when no work is active", async () => {
   const store = memoryStore(instance());
   const calls = [];

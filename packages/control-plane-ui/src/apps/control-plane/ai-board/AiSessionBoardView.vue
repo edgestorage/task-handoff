@@ -506,7 +506,7 @@ const selectedCardContentState = computed(() => {
 watch(
   () => selectedTimelineTurn.value ? `${selectedCard.value?.key || ""}:${selectedTimelineTurn.value.id}:${selectedTimelineTurn.value.status}:${selectedCardTurnIndexKey.value}` : "",
   () => {
-    if (selectedTimelineTurn.value) void loadSelectedCardTurn(selectedTimelineTurn.value.id, true, undefined, "selected-turn-watcher");
+    if (selectedTimelineTurn.value) void loadSelectedCardTurn(selectedTimelineTurn.value.id, false, undefined, "selected-turn-watcher");
   },
   { immediate: true },
 );
