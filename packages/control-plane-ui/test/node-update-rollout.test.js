@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import { createControlPlaneI18nForTest } from "../src/i18n/testing.ts";
 import { runtimeVersionStatusKeys, updateJobStatusKeys } from "../src/i18n/status.ts";
-import { refreshNodeUpdateHttpState } from "../src/apps/control-plane/settings/nodeUpdatePolling.ts";
+import { findTrackedTerminalNodeUpdate, refreshNodeUpdateHttpState } from "../src/apps/control-plane/settings/nodeUpdatePolling.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), "utf8");
@@ -27,7 +27,8 @@ test("node update clients expose one rollout without an instance target", () => 
 test("active Node rollouts refresh authoritative jobs only while non-terminal", () => {
   const settings = read("src/apps/control-plane/settings/useNodeSettings.ts");
   assert.match(settings, /isActiveNodeUpdate\(job\.status\)/);
-  assert.match(settings, /setTimeout\(\(\) => void loadManagedUpdateJobs\(nodeId, true\), 2_000\)/);
+  assert.match(settings, /const refreshNodeId = trackedUpdateJob\.value\?\.nodeId \|\| nodeId/);
+  assert.match(settings, /setTimeout\(\(\) => void loadManagedUpdateJobs\(refreshNodeId, true\), 2_000\)/);
   assert.match(settings, /refreshNodeUpdateHttpState\(\{/);
   assert.match(settings, /refreshRuntimeState: refreshNodeRuntimeState/);
   assert.doesNotMatch(settings, /Promise\.all\(\[checkSettingsNode\(nodeId\), refresh/);
@@ -44,6 +45,31 @@ test("an active Node rollout refreshes runtime state without issuing a redundant
   });
 
   assert.deepEqual(calls, ["runtime-state"]);
+});
+
+test("a queued update is correlated by job id and reports only its authoritative terminal outcome", () => {
+  const jobs = [
+    { id: "older", status: "succeeded" },
+    { id: "current", status: "restarting-node" },
+  ];
+
+  assert.equal(findTrackedTerminalNodeUpdate("current", jobs), undefined);
+  const completed = { id: "current", status: "succeeded" };
+  assert.equal(findTrackedTerminalNodeUpdate("current", [jobs[0], completed]), completed);
+  assert.equal(findTrackedTerminalNodeUpdate("missing", [completed]), undefined);
+});
+
+test("the tracked server update prompts for one explicit refresh after reconnect", () => {
+  const settings = read("src/apps/control-plane/settings/useNodeSettings.ts");
+
+  assert.match(settings, /const job = await applyNodeUpdate/);
+  assert.match(settings, /trackedUpdateJob\.value = \{ id: job\.id, nodeId, nodeName, target \}/);
+  assert.match(settings, /findTrackedTerminalNodeUpdate\(tracked\?\.id, jobs\)/);
+  assert.match(settings, /trackedUpdateJob\.value = undefined/);
+  assert.match(settings, /duration: Infinity/);
+  assert.match(settings, /onClick: \(\) => window\.location\.reload\(\)/);
+  assert.match(settings, /if \(tracked\.target === "node-agent"\)[\s\S]*?return;[\s\S]*?duration: Infinity/);
+  assert.match(settings, /job\.error\?\.message/);
 });
 
 test("settings mutations use domain refresh callbacks instead of a global refresh", () => {
@@ -81,7 +107,7 @@ test("node update impact uses the panel body typography instead of browser parag
   assert.match(panel, /\.managed-update-impact\s*\{[\s\S]*?margin:\s*0;[\s\S]*?font-size:\s*var\(--node-detail-body-size\);/);
 });
 
-test("node rollout presents converging, successful, and degraded authoritative phases", () => {
+test("node update clients retain v0.0.32 rollout statuses while instance state remains independent", () => {
   const t = createControlPlaneI18nForTest("en-US").global.t;
 
   assert.equal(t(updateJobStatusKeys["converging-instances"]), "Converging instances");
@@ -96,19 +122,28 @@ test("node rollout presents converging, successful, and degraded authoritative p
   }), /Update failed · still running 0\.0\.8 → desired 0\.0\.9 · 3 attempts/);
 });
 
-test("node rollout confirmation discloses every restart impact before apply", () => {
+test("server and remote Node Agent confirmations disclose independent update ownership", () => {
   const t = createControlPlaneI18nForTest("en-US").global.t;
-  const message = t("settings.nodeDetail.updateConfirm", {
+  const input = {
+    name: "Remote node",
     current: "0.0.8",
     available: "0.0.9",
     restarting: 3,
     active: 1,
     stopped: 2,
-  });
+  };
+  const serverMessage = t("settings.nodeDetail.updateServerConfirm", input);
+  const nodeMessage = t("settings.nodeDetail.updateNodeAgentConfirm", input);
 
-  assert.match(message, /0\.0\.8[\s\S]*0\.0\.9/);
-  assert.match(message, /3 running managed instance/);
-  assert.match(message, /active work[\s\S]*interrupted/);
-  assert.match(message, /2 stopped instance[\s\S]*before their next start/);
-  assert.match(message, /containers will not be removed or recreated/i);
+  for (const message of [serverMessage, nodeMessage]) {
+    assert.match(message, /0\.0\.8[\s\S]*0\.0\.9/);
+    assert.match(message, /does not wait for instance convergence/i);
+    assert.match(message, /other nodes/i);
+    assert.match(message, /3 running managed instance/);
+    assert.match(message, /active work[\s\S]*interrupted/);
+    assert.match(message, /2 stopped instance[\s\S]*before their next start/);
+    assert.match(message, /containers will not be removed or recreated/i);
+  }
+  assert.match(serverMessage, /control plane and its built-in node agent/i);
+  assert.match(nodeMessage, /Only this node agent will restart/i);
 });

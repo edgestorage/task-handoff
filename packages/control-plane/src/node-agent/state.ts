@@ -250,7 +250,7 @@ export class NodeAgentState {
     this.gitCredentials.init();
     this.modelRegistry.init();
     this.updateJobs.init();
-    this.updateJobs.reconcileRollouts(this.controlledInstances.list(), desiredControlledInstanceVersion(), { processStarted: true });
+    this.updateJobs.reconcileServerUpdates(desiredControlledInstanceVersion(), { processStarted: true });
     if (!this.nodeRuntimes.get("runtime_local_docker")) {
       const timestamp = now();
       this.nodeRuntimes.put(

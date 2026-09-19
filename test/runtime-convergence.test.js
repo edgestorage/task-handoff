@@ -798,7 +798,7 @@ test("verification failures remain diagnostic without moving away from the desir
   assert.equal(updated.ready, false);
 });
 
-test("Node rollout succeeds only after every expected running instance matches", () => {
+test("server update succeeds as soon as the target Node Agent version starts", () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-rollout-"));
   const jobs = new NodeUpdateJobs(nodeAgentStorePaths(dataDir));
   jobs.init();
@@ -823,28 +823,25 @@ test("Node rollout succeeds only after every expected running instance matches",
   };
   const created = jobs.create("node_1", check);
   jobs.patch(created.id, {
-    status: "converging-instances",
-    rollout: { ...created.rollout, phase: "converging-instances", nodeVersion: "2.0.0" },
+    status: "restarting-node",
+    rollout: { ...created.rollout, phase: "restarting-node" },
   });
 
-  jobs.reconcileRollouts([
-    { id: "inst_1", ready: true, runtimeVersion: { desiredVersion: "2.0.0", actualVersion: "2.0.0", phase: "matched" } },
-    { id: "inst_2", ready: false, runtimeVersion: { desiredVersion: "2.0.0", actualVersion: "1.0.0", phase: "installing" } },
-  ], "2.0.0");
-  assert.equal(jobs.records.get(created.id).status, "converging-instances");
-  assert.equal(jobs.records.get(created.id).rollout.matchedInstanceCount, 1);
-
-  jobs.reconcileRollouts([
-    { id: "inst_1", ready: true, runtimeVersion: { desiredVersion: "2.0.0", actualVersion: "2.0.0", phase: "matched" } },
-    { id: "inst_2", ready: true, runtimeVersion: { desiredVersion: "2.0.0", actualVersion: "2.0.0", phase: "matched" } },
-  ], "2.0.0");
+  jobs.reconcileServerUpdates("2.0.0", { processStarted: true });
   const succeeded = jobs.records.get(created.id);
   assert.equal(succeeded.status, "succeeded");
-  assert.equal(succeeded.rollout.matchedInstanceCount, 2);
+  assert.equal(succeeded.rollout.phase, "succeeded");
+  assert.equal(succeeded.rollout.nodeVersion, "2.0.0");
+  assert.deepEqual(succeeded.rollout.expectedInstanceIds, []);
+  assert.equal(succeeded.rollout.expectedInstanceCount, 0);
+  assert.equal(succeeded.rollout.matchedInstanceCount, 0);
   assert.equal(succeeded.rollout.pendingInstanceCount, 0);
+  assert.equal(succeeded.rollout.failedInstanceCount, 0);
+  assert.equal(succeeded.rollout.deferredInstanceCount, 0);
+  assert.ok(succeeded.completedAt);
 });
 
-test("Node rollout recovers after node restart and succeeds immediately with no running instances", () => {
+test("v0.0.32 instance-convergence jobs close when the upgraded Node Agent starts", () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-rollout-recovery-"));
   const jobs = new NodeUpdateJobs(nodeAgentStorePaths(dataDir));
   jobs.init();
@@ -855,12 +852,12 @@ test("Node rollout recovers after node restart and succeeds immediately with no 
     availableVersion: "2.0.0",
     runtimeArtifacts: [],
     impact: {
-      runningInstanceCount: 0,
-      stoppedInstanceCount: 1,
+      runningInstanceCount: 1,
+      stoppedInstanceCount: 0,
       activeInstanceCount: 0,
-      restartInstanceCount: 0,
-      runningInstanceIds: [],
-      stoppedInstanceIds: ["inst_stopped"],
+      restartInstanceCount: 1,
+      runningInstanceIds: ["inst_pending"],
+      stoppedInstanceIds: [],
       activeInstanceIds: [],
     },
     updateAvailable: true,
@@ -869,22 +866,28 @@ test("Node rollout recovers after node restart and succeeds immediately with no 
   };
   const created = jobs.create("node_1", check);
   jobs.patch(created.id, {
-    status: "restarting-node",
-    rollout: { ...created.rollout, phase: "restarting-node" },
+    status: "converging-instances",
+    rollout: {
+      ...created.rollout,
+      phase: "converging-instances",
+      nodeVersion: "2.0.0",
+      expectedInstanceIds: ["inst_pending"],
+      expectedInstanceCount: 1,
+      pendingInstanceCount: 1,
+    },
   });
 
-  jobs.reconcileRollouts([
-    { id: "inst_stopped", status: "stopped", ready: false, runtimeVersion: { desiredVersion: "1.0.0", actualVersion: "1.0.0", phase: "matched" } },
-  ], "2.0.0");
+  jobs.reconcileServerUpdates("2.0.0", { processStarted: true });
 
   const succeeded = jobs.records.get(created.id);
   assert.equal(succeeded.status, "succeeded");
   assert.equal(succeeded.rollout.nodeVersion, "2.0.0");
-  assert.equal(succeeded.rollout.deferredInstanceCount, 1);
+  assert.deepEqual(succeeded.rollout.expectedInstanceIds, []);
+  assert.equal(succeeded.rollout.expectedInstanceCount, 0);
   assert.equal(succeeded.rollout.pendingInstanceCount, 0);
 });
 
-test("Node rollout records a restarted process that still runs the wrong version", () => {
+test("server update records a restarted Node Agent that still runs the wrong version", () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-rollout-version-mismatch-"));
   const jobs = new NodeUpdateJobs(nodeAgentStorePaths(dataDir));
   jobs.init();
@@ -912,7 +915,7 @@ test("Node rollout records a restarted process that still runs the wrong version
     rollout: { ...created.rollout, phase: "restarting-node" },
   });
 
-  jobs.reconcileRollouts([], "1.0.0", { processStarted: true });
+  jobs.reconcileServerUpdates("1.0.0", { processStarted: true });
 
   const failed = jobs.records.get(created.id);
   assert.equal(failed.status, "failed");
@@ -920,82 +923,4 @@ test("Node rollout records a restarted process that still runs the wrong version
   assert.equal(failed.rollout.nodeVersion, "1.0.0");
   assert.equal(failed.error.code, "NODE_UPDATE_FAILED");
   assert.match(failed.error.message, /restarted with version 1\.0\.0, expected 2\.0\.0/);
-});
-
-test("instances stopped during rollout are deferred instead of blocking forever", () => {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-rollout-deferred-"));
-  const jobs = new NodeUpdateJobs(nodeAgentStorePaths(dataDir));
-  jobs.init();
-  const check = {
-    source: "npm",
-    channel: "stable",
-    currentVersion: "1.0.0",
-    availableVersion: "2.0.0",
-    runtimeArtifacts: [],
-    impact: {
-      runningInstanceCount: 1,
-      stoppedInstanceCount: 0,
-      activeInstanceCount: 0,
-      restartInstanceCount: 1,
-      runningInstanceIds: ["inst_stopped"],
-      stoppedInstanceIds: [],
-      activeInstanceIds: [],
-    },
-    updateAvailable: true,
-    supported: true,
-    checkedAt: new Date().toISOString(),
-  };
-  const created = jobs.create("node_1", check);
-  jobs.patch(created.id, {
-    status: "converging-instances",
-    rollout: { ...created.rollout, phase: "converging-instances", nodeVersion: "2.0.0" },
-  });
-
-  jobs.reconcileRollouts([
-    { id: "inst_stopped", status: "stopped", ready: false, runtimeVersion: { desiredVersion: "2.0.0", actualVersion: "1.0.0", phase: "pending" } },
-  ], "2.0.0");
-
-  const succeeded = jobs.records.get(created.id);
-  assert.equal(succeeded.status, "succeeded");
-  assert.equal(succeeded.rollout.deferredInstanceCount, 1);
-  assert.equal(succeeded.rollout.pendingInstanceCount, 0);
-});
-
-test("instances stopped by a convergence failure degrade the rollout", () => {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-rollout-failed-stop-"));
-  const jobs = new NodeUpdateJobs(nodeAgentStorePaths(dataDir));
-  jobs.init();
-  const timestamp = new Date().toISOString();
-  const created = jobs.create("node_1", {
-    source: "npm",
-    channel: "stable",
-    currentVersion: "1.0.0",
-    availableVersion: "2.0.0",
-    runtimeArtifacts: [],
-    impact: {
-      runningInstanceCount: 1,
-      stoppedInstanceCount: 0,
-      activeInstanceCount: 0,
-      restartInstanceCount: 1,
-      runningInstanceIds: ["inst_failed"],
-      stoppedInstanceIds: [],
-      activeInstanceIds: [],
-    },
-    updateAvailable: true,
-    supported: true,
-    checkedAt: timestamp,
-  });
-  jobs.patch(created.id, { status: "converging-instances", rollout: { ...created.rollout, phase: "converging-instances", nodeVersion: "2.0.0" } });
-
-  jobs.reconcileRollouts([{
-    id: "inst_failed",
-    status: "failed",
-    ready: false,
-    runtimeVersion: { desiredVersion: "2.0.0", actualVersion: "1.0.0", phase: "failed" },
-  }], "2.0.0");
-
-  const degraded = jobs.records.get(created.id);
-  assert.equal(degraded.status, "degraded");
-  assert.equal(degraded.rollout.failedInstanceCount, 1);
-  assert.equal(degraded.rollout.deferredInstanceCount, 0);
 });

@@ -235,7 +235,7 @@
                     <ServerCog :size="18" />
                     <div>
                       <strong>{{ t("settings.nodeDetail.nodeAgent") }}</strong>
-                      <span>{{ t("settings.nodeDetail.nodeAgentUpdateDescription") }}</span>
+                      <span>{{ t(status.isBuiltinNode(selectedNode) ? "settings.nodeDetail.serverUpdateDescription" : "settings.nodeDetail.nodeAgentUpdateDescription") }}</span>
                     </div>
                   </div>
                   <div class="node-resource-row">
@@ -255,7 +255,7 @@
                     </div>
                   </div>
                   <p v-if="nodeUpdateCheck" class="managed-update-impact">
-                    {{ t("settings.nodeDetail.updateImpact", { restarting: nodeUpdateCheck.impact.restartInstanceCount, active: nodeUpdateCheck.impact.activeInstanceCount, stopped: nodeUpdateCheck.impact.stoppedInstanceCount }) }}
+                    {{ t(status.isBuiltinNode(selectedNode) ? "settings.nodeDetail.serverUpdateImpact" : "settings.nodeDetail.nodeAgentUpdateImpact", { name: selectedNode.name, restarting: nodeUpdateCheck.impact.restartInstanceCount, active: nodeUpdateCheck.impact.activeInstanceCount, stopped: nodeUpdateCheck.impact.stoppedInstanceCount }) }}
                   </p>
                 </section>
 
@@ -299,7 +299,6 @@
                       <strong>{{ selectedNode.name }}</strong>
                     </span>
                     <code>{{ job.fromVersion || t("settings.nodeDetail.unknown") }} → {{ job.toVersion }}<span v-if="job.error"> · {{ job.error.message }}</span></code>
-                    <small>{{ t("settings.nodeDetail.rolloutProgress", { matched: job.rollout.matchedInstanceCount, expected: job.rollout.expectedInstanceCount, failed: job.rollout.failedInstanceCount, deferred: job.rollout.deferredInstanceCount }) }}</small>
                   </div>
                   <Badge :variant="job.status === 'succeeded' ? 'default' : 'secondary'">{{ localizedStatus(updateJobStatusKeys, job.status) }}</Badge>
                 </div>

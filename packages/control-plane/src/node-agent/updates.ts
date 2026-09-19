@@ -323,15 +323,17 @@ export class NodeUpdateJobs {
       runtimeArtifacts: check.runtimeArtifacts,
       impact: check.impact,
       status: "queued",
+      // Compatibility for v0.0.32: these required wire fields used to own
+      // instance convergence. Server update jobs now end at Node Agent restart.
       rollout: {
         phase: "queued",
         desiredVersion: check.availableVersion,
-        expectedInstanceIds: check.impact.runningInstanceIds,
-        expectedInstanceCount: check.impact.runningInstanceCount,
+        expectedInstanceIds: [],
+        expectedInstanceCount: 0,
         matchedInstanceCount: 0,
-        pendingInstanceCount: check.impact.runningInstanceCount,
+        pendingInstanceCount: 0,
         failedInstanceCount: 0,
-        deferredInstanceCount: check.impact.stoppedInstanceCount,
+        deferredInstanceCount: 0,
       },
       createdAt: timestamp,
       updatedAt: timestamp,
@@ -344,12 +346,7 @@ export class NodeUpdateJobs {
     return this.records.put(UpdateJobSchema.parse({ ...current, ...patch, id, createdAt: current.createdAt, updatedAt: now() }));
   }
 
-  reconcileRollouts(
-    instances: Array<{ id: string; status?: string; ready: boolean; runtimeVersion?: { actualVersion?: string; desiredVersion: string; phase: string } }>,
-    nodeVersion: string,
-    options: { processStarted?: boolean } = {},
-  ) {
-    const byId = new Map(instances.map((instance) => [instance.id, instance]));
+  reconcileServerUpdates(nodeVersion: string, options: { processStarted?: boolean } = {}) {
     if (options.processStarted) {
       // Compatibility for v0.0.22-v0.0.24: recover jobs stranded before the
       // packaged worker's first transition so they no longer block retries.
@@ -366,8 +363,12 @@ export class NodeUpdateJobs {
         });
       }
     }
+    // Compatibility for v0.0.32: close jobs that were persisted while waiting
+    // for instances; the restarted Node Agent owns that convergence separately.
     for (const persisted of this.list().filter((candidate) => ["updating-node", "restarting-node", "converging-instances"].includes(candidate.status))) {
-      if (options.processStarted && persisted.status === "restarting-node" && nodeVersion !== persisted.toVersion) {
+      if (options.processStarted
+        && ["restarting-node", "converging-instances"].includes(persisted.status)
+        && nodeVersion !== persisted.toVersion) {
         this.patch(persisted.id, {
           status: "failed",
           rollout: { ...persisted.rollout, phase: "failed", nodeVersion },
@@ -380,51 +381,24 @@ export class NodeUpdateJobs {
         });
         continue;
       }
-      const job = persisted.status !== "converging-instances" && nodeVersion === persisted.toVersion
-        ? this.patch(persisted.id, {
-            status: "converging-instances",
-            rollout: { ...persisted.rollout, phase: "converging-instances", nodeVersion },
-          })
-        : persisted;
-      if (job.status !== "converging-instances") continue;
-      const expectedIds = job.rollout.expectedInstanceIds;
-      const expected = expectedIds.map((id) => byId.get(id));
-      const matched = expected.filter((instance) => instance?.ready && instance.runtimeVersion?.phase === "matched" && instance.runtimeVersion.actualVersion === job.toVersion).length;
-      const deferred = expected.filter((instance) => instance && ["created", "stopped", "failed"].includes(instance.status || "") && instance.runtimeVersion?.phase !== "failed").length;
-      const failed = expected.filter((instance) => !instance || instance.runtimeVersion?.phase === "failed").length;
-      const pending = Math.max(0, expectedIds.length - matched - failed - deferred);
-      const phase = failed > 0 ? "degraded" : pending === 0 ? "succeeded" : "converging-instances";
-      this.patch(job.id, {
-        status: phase,
+      if (nodeVersion !== persisted.toVersion) continue;
+      this.patch(persisted.id, {
+        status: "succeeded",
         rollout: {
-          ...job.rollout,
-          phase,
+          ...persisted.rollout,
+          phase: "succeeded",
           nodeVersion,
-          expectedInstanceCount: expectedIds.length,
-          matchedInstanceCount: matched,
-          pendingInstanceCount: pending,
-          failedInstanceCount: failed,
-          deferredInstanceCount: job.impact.stoppedInstanceCount + deferred,
+          expectedInstanceIds: [],
+          expectedInstanceCount: 0,
+          matchedInstanceCount: 0,
+          pendingInstanceCount: 0,
+          failedInstanceCount: 0,
+          deferredInstanceCount: 0,
         },
-        ...(phase === "succeeded" || phase === "degraded" ? { completedAt: now() } : {}),
+        error: undefined,
+        completedAt: now(),
       });
     }
   }
 
-  run(job: UpdateJob, execute: (job: UpdateJob) => Promise<void>) {
-    void (async () => {
-      this.patch(job.id, { status: "updating-node", rollout: { ...job.rollout, phase: "updating-node" }, startedAt: now(), error: undefined });
-      try {
-        await execute(job);
-        this.patch(job.id, { status: "succeeded", completedAt: now() });
-      } catch (error) {
-        this.patch(job.id, {
-          status: "failed",
-          rollout: { ...job.rollout, phase: "failed" },
-          error: { code: "NODE_UPDATE_FAILED", message: error instanceof Error ? error.message : String(error), retryable: false },
-          completedAt: now(),
-        });
-      }
-    })();
-  }
 }

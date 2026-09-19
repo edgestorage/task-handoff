@@ -5,7 +5,7 @@ import { showControlPlaneToast } from "../useControlPlaneToasts";
 import { useNodeRename } from "./useNodeRename";
 import type { Translate } from "../../../i18n/status.ts";
 import { translateApiError } from "../../../i18n/apiError.ts";
-import { isActiveNodeUpdate, isTerminalNodeUpdate, refreshNodeUpdateHttpState } from "./nodeUpdatePolling.ts";
+import { findTrackedTerminalNodeUpdate, isActiveNodeUpdate, isTerminalNodeUpdate, refreshNodeUpdateHttpState } from "./nodeUpdatePolling.ts";
 import { proxyForceDeleteAllowed } from "./controlPlaneProxyUi.ts";
 
 type UseNodeSettingsInput = {
@@ -48,6 +48,12 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
   const updateJobs = ref<UpdateJob[]>([]);
   const checkingUpdateNodeId = ref("");
   const applyingUpdateNodeId = ref("");
+  const trackedUpdateJob = ref<{
+    id: string;
+    nodeId: string;
+    nodeName: string;
+    target: "control-plane-server" | "node-agent";
+  }>();
   let updateJobsRefreshTimer: ReturnType<typeof setTimeout> | undefined;
   let updateJobsLoadRevision = 0;
   const settingsNode = reactive({
@@ -249,7 +255,13 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
   async function applyManagedUpdate(nodeId: string, checkOverride?: UpdateCheckResult) {
     const check = checkOverride || updateChecks[nodeId];
     if (!check?.supported || !check.updateAvailable || !check.preflightToken || applyingUpdateNodeId.value) return;
-    if (!window.confirm(t("settings.nodeDetail.updateConfirm", {
+    const node = nodes().find((candidate) => candidate.id === nodeId);
+    const target = node?.labels[CONTROL_PLANE_BUILTIN_NODE_LABEL] === "true" ? "control-plane-server" : "node-agent";
+    const nodeName = node?.name || nodeId;
+    if (!window.confirm(t(target === "control-plane-server"
+      ? "settings.nodeDetail.updateServerConfirm"
+      : "settings.nodeDetail.updateNodeAgentConfirm", {
+      name: nodeName,
       current: check.currentVersion || t("settings.nodeDetail.unknown"),
       available: check.availableVersion,
       restarting: check.impact.restartInstanceCount,
@@ -258,13 +270,16 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
     }))) return;
     applyingUpdateNodeId.value = nodeId;
     try {
-      await applyNodeUpdate(nodeId, {
+      const job = await applyNodeUpdate(nodeId, {
         channel: check.channel,
         targetVersion: check.availableVersion,
         preflightToken: check.preflightToken,
       });
+      trackedUpdateJob.value = { id: job.id, nodeId, nodeName, target };
+      notify(t(target === "control-plane-server"
+        ? "settings.nodeDetail.updateServerQueued"
+        : "settings.nodeDetail.updateNodeAgentQueued", { name: nodeName }), "success");
       await loadManagedUpdateJobs(nodeId, true);
-      showControlPlaneToast(t("settings.nodeDetail.updateQueued"), "success");
     } catch (error) {
       showControlPlaneToast(translateError(error));
     } finally {
@@ -274,9 +289,49 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
 
   function scheduleManagedUpdateJobsRefresh(nodeId: string) {
     if (updateJobsRefreshTimer) clearTimeout(updateJobsRefreshTimer);
-    const active = updateJobs.value.some((job) => isActiveNodeUpdate(job.status));
+    const active = Boolean(trackedUpdateJob.value) || updateJobs.value.some((job) => isActiveNodeUpdate(job.status));
     if (!active) return;
-    updateJobsRefreshTimer = setTimeout(() => void loadManagedUpdateJobs(nodeId, true), 2_000);
+    const refreshNodeId = trackedUpdateJob.value?.nodeId || nodeId;
+    updateJobsRefreshTimer = setTimeout(() => void loadManagedUpdateJobs(refreshNodeId, true), 2_000);
+  }
+
+  function notifyTrackedUpdateOutcome(jobs: UpdateJob[]) {
+    const tracked = trackedUpdateJob.value;
+    const job = findTrackedTerminalNodeUpdate(tracked?.id, jobs);
+    if (!tracked || !job) return;
+    trackedUpdateJob.value = undefined;
+
+    if (job.status === "failed") {
+      notify(t(tracked.target === "control-plane-server"
+        ? "settings.nodeDetail.updateServerFailed"
+        : "settings.nodeDetail.updateNodeAgentFailed", {
+        name: tracked.nodeName,
+        version: job.toVersion,
+        error: job.error?.message || t("settings.nodeDetail.unknown"),
+      }));
+      return;
+    }
+
+    if (tracked.target === "node-agent") {
+      notify(t(job.status === "degraded"
+        ? "settings.nodeDetail.updateNodeAgentDegraded"
+        : "settings.nodeDetail.updateNodeAgentSucceeded", {
+        name: tracked.nodeName,
+        version: job.toVersion,
+      }), job.status === "degraded" ? "info" : "success");
+      return;
+    }
+
+    notify(t(job.status === "degraded"
+      ? "settings.nodeDetail.updateServerDegraded"
+      : "settings.nodeDetail.updateServerSucceeded", { version: job.toVersion }),
+    job.status === "degraded" ? "info" : "success", {
+      duration: Infinity,
+      action: {
+        label: t("settings.nodeDetail.refreshPage"),
+        onClick: () => window.location.reload(),
+      },
+    });
   }
 
   async function loadManagedUpdateJobs(nodeId: string, silent = false) {
@@ -287,6 +342,7 @@ export function useNodeSettings({ errorText, notify = showControlPlaneToast, onN
       const jobs = await listNodeUpdateJobs(nodeId);
       if (revision !== updateJobsLoadRevision) return;
       updateJobs.value = jobs;
+      notifyTrackedUpdateOutcome(jobs);
       const latest = jobs[0];
       if (isTerminalNodeUpdate(latest?.status)) delete updateChecks[nodeId];
       await refreshNodeUpdateHttpState({

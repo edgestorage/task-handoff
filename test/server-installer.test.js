@@ -196,7 +196,7 @@ test("server services use writable data directories as working directories", () 
 
 test("password-auth installation initializes random administrator credentials before service exposure", () => {
   const installer = fs.readFileSync(path.join(root, "scripts", "install-server-services.sh"), "utf8");
-  const initialize = installer.indexOf("credentials --initialize-if-needed");
+  const initialize = installer.search(/credentials \\\n\s+--initialize-if-needed/);
   const startControlPlane = installer.indexOf("systemctl enable --now task-handoff-control-plane.service");
 
   assert.match(installer, /randomBytes\(6\)/);
@@ -209,6 +209,17 @@ test("password-auth installation initializes random administrator credentials be
   assert.ok(initialize < startControlPlane);
   assert.match(installer, /Compatibility for v0\.0\.21:/);
   assert.match(installer, /credentials \(shown once\)/);
+});
+
+test("credential initialization uses the authoritative Control Plane data directory", () => {
+  const installer = fs.readFileSync(path.join(root, "scripts", "install-server-services.sh"), "utf8");
+  const controlPlaneCli = fs.readFileSync(path.join(root, "apps", "cli", "src", "runtime", "control-plane.ts"), "utf8");
+
+  assert.match(controlPlaneCli, /Compatibility for v0\.0\.31:/);
+  assert.match(controlPlaneCli, /const dataDir = options\.dataDir \?\? program\.opts<\{ dataDir\?: string \}>\(\)\.dataDir/);
+  assert.match(installer, /TASK_HANDOFF_CONTROL_PLANE_DATA_DIR="\$CONTROL_PLANE_DATA_DIR"/);
+  assert.match(installer, /\$CONTROL_PLANE_COMMAND --data-dir "\$CONTROL_PLANE_DATA_DIR" credentials \\\n\s+--initialize-if-needed/);
+  assert.doesNotMatch(installer, /credentials --initialize-if-needed[^\n]*--data-dir/);
 });
 
 test("server services use a private IPC socket for local control", () => {

@@ -862,7 +862,6 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   });
   state.controlledInstances.setOnStored((instance) => {
     eventForwarder.publishInstanceLifecycle(instance);
-    state.updateJobs.reconcileRollouts(state.listInstances(), desiredControlledInstanceVersion());
   });
   eventForwarder.start();
   app.decorate("nodeAgentEventForwarder", eventForwarder);

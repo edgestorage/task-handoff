@@ -60,6 +60,8 @@ async function main() {
     .option("--user-id <userId>", "Select the account by its local user ID")
     .option("--target-username <username>", "Select the account by its current username")
     .option("--initialize-if-needed", "Create the administrator only when none exists")
+    // Compatibility for v0.0.31: accept --data-dir after the credentials
+    // subcommand even though it is owned by the top-level Control Plane CLI.
     .option("--data-dir <path>", "Control plane data directory")
     .action(async (options: { username: string; passwordStdin: boolean; userId?: string; targetUsername?: string; initializeIfNeeded?: boolean; dataDir?: string }) => {
       if (process.stdin.isTTY) {
@@ -68,15 +70,16 @@ async function main() {
       const chunks: Buffer[] = [];
       for await (const chunk of process.stdin) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
       const password = Buffer.concat(chunks).toString("utf8").replace(/\r?\n$/, "");
+      const dataDir = options.dataDir ?? program.opts<{ dataDir?: string }>().dataDir;
       if (options.initializeIfNeeded) {
-        const result = await initializeControlPlaneCredentials(options.dataDir, {
+        const result = await initializeControlPlaneCredentials(dataDir, {
           username: options.username,
           password,
         });
         console.log(result.created ? "created" : "unchanged");
         return;
       }
-      const user = await replaceControlPlaneCredentials(options.dataDir, {
+      const user = await replaceControlPlaneCredentials(dataDir, {
         username: options.username,
         password,
         userId: options.userId,
