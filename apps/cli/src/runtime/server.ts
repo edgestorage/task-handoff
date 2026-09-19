@@ -141,6 +141,7 @@ function installArgs(options: Record<string, string | undefined>) {
     ["--node-agent-ipc-path", options.nodeAgentIpcPath],
     ["--auth-mode", options.authMode],
     ["--static-dir", options.staticDir],
+    ["--npm-registry", options.npmRegistry],
   ].flatMap(([flag, value]) => value === undefined ? [] : [flag, value]);
 }
 
@@ -173,6 +174,7 @@ async function main() {
     .option("--node-agent-ipc-path <path>")
     .option("--auth-mode <mode>")
     .option("--static-dir <path>")
+    .option("--npm-registry <url>")
     .option("--preserve-current", "Reuse the installed service configuration")
     .option("--materialize-only", "Rewrite service configuration without starting services")
     .action((options) => {

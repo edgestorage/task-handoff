@@ -1,15 +1,41 @@
 <template>
   <section class="control-settings-page" :aria-label="t('settings.title')">
-      <div class="control-settings-page-actions">
-        <Button variant="outline" size="sm" @click="emit('back')">
-          <ArrowLeft :size="14" />
-          <span>{{ t("common.actions.back") }}</span>
-        </Button>
-        <Tabs :model-value="settingsSection" @update:model-value="(value) => setSettingsSection(value as SettingsSection)">
+      <div ref="settingsNavigationElement" class="control-settings-page-actions">
+        <div ref="settingsBackElement" class="control-settings-back">
+          <Button variant="outline" size="sm" @click="emit('back')">
+            <ArrowLeft :size="14" />
+            <span>{{ t("common.actions.back") }}</span>
+          </Button>
+        </div>
+        <Tabs v-show="!compactSettingsNavigation" :model-value="settingsSection" @update:model-value="(value) => setSettingsSection(value as SettingsSection)">
           <TabsList class="control-settings-tabs" :aria-label="t('settings.sections')">
             <TabsTrigger v-for="item in settingsSections" :key="item.id" :value="item.id">{{ item.label }}</TabsTrigger>
           </TabsList>
         </Tabs>
+        <DropdownMenu v-if="compactSettingsNavigation">
+          <DropdownMenuTrigger as-child>
+            <Button variant="outline" size="sm" class="control-settings-section-trigger">
+              <span>{{ currentSettingsSectionLabel }}</span>
+              <ChevronDown :size="14" aria-hidden="true" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent class="control-settings-section-menu p-0" align="start" :collision-padding="12" :side-offset="6">
+            <ScrollArea
+              class="control-settings-section-menu-scroll"
+              :horizontal="false"
+              :style="{ '--settings-section-count': settingsSections.length }"
+            >
+              <DropdownMenuRadioGroup class="control-settings-section-menu-list" :model-value="settingsSection" @update:model-value="(value) => setSettingsSection(value as SettingsSection)">
+                <DropdownMenuRadioItem v-for="item in settingsSections" :key="item.id" :value="item.id">
+                  {{ item.label }}
+                </DropdownMenuRadioItem>
+              </DropdownMenuRadioGroup>
+            </ScrollArea>
+          </DropdownMenuContent>
+        </DropdownMenu>
+        <div ref="settingsTabsMeasureElement" class="control-settings-tabs control-settings-tabs-measure" aria-hidden="true">
+          <span v-for="item in settingsSections" :key="item.id" class="control-settings-tab-measure">{{ item.label }}</span>
+        </div>
       </div>
 
       <ScrollArea v-if="settingsSection === 'triggers'" class="settings-section-scroll settings-page-scroll" :horizontal="false">
@@ -416,7 +442,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useQueryClient } from "@tanstack/vue-query";
 import { AlertTriangle, ArrowLeft, ChevronDown, Download, Eye, EyeOff, KeyRound, MonitorCog, Plus, RefreshCw, Server, ShieldAlert, Sparkles, Trash2 } from "@lucide/vue";
@@ -428,7 +454,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Button } from "../../../components/ui/button";
 import { Checkbox } from "../../../components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
 import { ScrollArea } from "../../../components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../../components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../../components/ui/tooltip";
@@ -502,6 +528,43 @@ const settingsSections = computed(() => buildSettingsSections(t, {
 }));
 
 const settingsSection = ref<SettingsSection>(props.initialSection || "nodes");
+const currentSettingsSectionLabel = computed(() => settingsSections.value.find((item) => item.id === settingsSection.value)?.label || "");
+const settingsNavigationElement = ref<HTMLElement>();
+const settingsBackElement = ref<HTMLElement>();
+const settingsTabsMeasureElement = ref<HTMLElement>();
+const compactSettingsNavigation = ref(false);
+let settingsNavigationResizeObserver: ResizeObserver | undefined;
+
+function syncSettingsNavigationLayout() {
+  const navigation = settingsNavigationElement.value;
+  const back = settingsBackElement.value;
+  const tabs = settingsTabsMeasureElement.value;
+  if (!navigation || !back || !tabs) return;
+
+  const gap = Number.parseFloat(getComputedStyle(navigation).columnGap) || 0;
+  const availableWidth = navigation.clientWidth - back.offsetWidth - gap;
+  compactSettingsNavigation.value = tabs.offsetWidth > availableWidth;
+}
+
+onMounted(() => {
+  syncSettingsNavigationLayout();
+  if (typeof ResizeObserver === "undefined") return;
+  settingsNavigationResizeObserver = new ResizeObserver(syncSettingsNavigationLayout);
+  if (settingsNavigationElement.value) settingsNavigationResizeObserver.observe(settingsNavigationElement.value);
+  if (settingsBackElement.value) settingsNavigationResizeObserver.observe(settingsBackElement.value);
+  if (settingsTabsMeasureElement.value) settingsNavigationResizeObserver.observe(settingsTabsMeasureElement.value);
+});
+
+onBeforeUnmount(() => {
+  settingsNavigationResizeObserver?.disconnect();
+  settingsNavigationResizeObserver = undefined;
+});
+
+watch(settingsSections, async () => {
+  await nextTick();
+  syncSettingsNavigationLayout();
+});
+
 const queryClient = useQueryClient();
 const models = useModelsQuery();
 const nodes = useNodesQuery();
@@ -1384,8 +1447,13 @@ function errorText(error: unknown) {
   display: flex;
   align-items: center;
   justify-content: flex-start;
+  position: relative;
   min-width: 0;
   gap: 10px;
+}
+
+.control-settings-back {
+  flex: none;
 }
 
 .control-settings-tabs,
@@ -1407,7 +1475,10 @@ function errorText(error: unknown) {
 }
 
 .control-settings-tabs button,
+.control-settings-tab-measure,
 .source-toggle button {
+  display: inline-flex;
+  align-items: center;
   height: 26px;
   min-height: 26px;
   border: 0;
@@ -1418,6 +1489,40 @@ function errorText(error: unknown) {
   font-size: 12px;
   font-weight: 750;
   padding: 0 10px;
+  white-space: nowrap;
+}
+
+.control-settings-tabs-measure {
+  position: absolute;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.control-settings-section-trigger {
+  display: flex;
+  flex: 0 1 320px;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.control-settings-section-trigger span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+:global(.control-settings-section-menu) {
+  width: min(320px, var(--reka-dropdown-menu-content-available-width));
+  max-height: min(440px, var(--reka-dropdown-menu-content-available-height));
+  overflow: hidden;
+}
+
+:global(.control-settings-section-menu-scroll) {
+  height: min(calc(var(--settings-section-count) * 32px + 8px), calc(var(--reka-dropdown-menu-content-available-height) - 8px));
+}
+
+:global(.control-settings-section-menu-list) {
+  padding: 4px;
 }
 
 .source-toggle button {

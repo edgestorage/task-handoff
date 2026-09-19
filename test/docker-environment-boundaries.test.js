@@ -166,12 +166,17 @@ test("docker config uses a read-only private file and explicit managed mounts wi
   local.image.labels["task-handoff.image.profile"] = "codex";
   local.image.defaultEnv.TASK_HANDOFF_IMAGE_CAPABILITIES = "browser";
   local.image.defaultEnv.TASK_HANDOFF_IMAGE_PROFILE = "browser";
-  const args = dockerRunArgs(local, "task-handoff-inst_one");
+  const args = dockerRunArgs(local, "task-handoff-inst_one", {
+    nodeAgentContainerIpcPath: "/run/task-handoff/container/node-agent.sock",
+  });
   assert.ok(args.includes("type=bind,src=/private/inst_one.json,dst=/run/task-handoff/instance-private-config.json,readonly"));
   assert.ok(args.includes("type=volume,src=task-handoff-inst_one-data,dst=/data"));
   assert.ok(args.includes("type=volume,src=task-handoff-inst_one-agent-home,dst=/home/agent"));
   assert.ok(args.includes("type=volume,src=task-handoff-inst_one-runtime,dst=/opt/task-handoff/instance-runtime"));
   assert.ok(args.includes("/run/task-handoff/bootstrap/entrypoint.sh"));
+  assert.ok(args.includes("type=bind,src=/run/task-handoff/container,dst=/run/task-handoff/node-agent-transport,readonly"));
+  assert.ok(args.includes("TASK_HANDOFF_NODE_AGENT_SOCKET_PATH=/run/task-handoff/node-agent-transport/node-agent.sock"));
+  assert.ok(args.includes("TASK_HANDOFF_NODE_AGENT_URL=http://127.0.0.1:19001"));
   assert.ok(args.includes("--no-healthcheck"));
   assert.ok(args.includes("/tmp:rw,nosuid,nodev,exec,mode=1777"));
   assert.ok(args.includes("/tmp/workspace:/workspace:rw"));
@@ -410,7 +415,7 @@ test("Git provisioning script only replaces instance-owned staging and rejects u
   assert.doesNotMatch(script, /rm -rf -- "\$\{workspace\}"/);
 });
 
-test("docker executor refreshes the published endpoint when starting an existing container", async () => {
+test("docker executor keeps an existing container when stable bootstrap and container IPC mounts match", async () => {
   const value = context();
   const containerName = "task-handoff-inst_one";
   const containerId = "existing-container-id";
@@ -423,10 +428,10 @@ test("docker executor refreshes the published endpoint when starting an existing
         Id: containerId,
         State: { Running: false },
         Config: {
-          Entrypoint: ["/bin/bash"],
+          Entrypoint: ["/usr/local/bin/legacy-entrypoint"],
           Cmd: ["/run/task-handoff/bootstrap/entrypoint.sh", "task-handoff", "web"],
           Labels: {
-            "task-handoff.bootstrap-abi": "1",
+            "task-handoff.bootstrap-abi": "0",
             "task-handoff.instance-id": value.instance.id,
           },
         },
@@ -434,6 +439,7 @@ test("docker executor refreshes the published endpoint when starting an existing
           ...persistentVolumes(value).map((volume) => ({ Type: "volume", Name: volume.name, Destination: volume.mountPath })),
           { Type: "volume", Name: runtimeVolume.name, Destination: runtimeVolume.mountPath },
           { Type: "bind", Source: path.resolve("docker"), Destination: "/run/task-handoff/bootstrap" },
+          { Type: "bind", Source: "/run/task-handoff/container", Destination: "/run/task-handoff/node-agent-transport" },
           { Type: "bind", Source: path.resolve(value.project.source.path), Destination: value.project.workspacePolicy.path },
         ],
       }), stderr: "" };
@@ -444,7 +450,10 @@ test("docker executor refreshes the published endpoint when starting an existing
     }
     if (args[0] === "port") return { stdout: "127.0.0.1:19090", stderr: "" };
     return { stdout: "", stderr: "" };
-  }, { launcherAssetsDir: path.resolve("docker") });
+  }, {
+    launcherAssetsDir: path.resolve("docker"),
+    nodeAgentContainerIpcPath: "/run/task-handoff/container/node-agent.sock",
+  });
 
   const result = await executor.start({
     ...value,
@@ -457,49 +466,72 @@ test("docker executor refreshes the published endpoint when starting an existing
 
   assert.equal(result.target.web, "http://127.0.0.1:19090");
   assert.equal(result.target.api, "http://127.0.0.1:19090/api");
+  assert.equal(result.runtime.labels["task-handoff.bootstrap-abi"], "0");
   assert.ok(calls.some((args) => args[0] === "start" && args[1] === containerName));
   assert.ok(calls.some((args) => args[0] === "port" && args[1] === containerName && args[2] === "8080/tcp"));
+  assert.equal(calls.some((args) => ["rename", "rm", "run"].includes(args[0])), false);
+  assert.equal(await executor.resolveNodeAgentUrl({
+    ...value,
+    instance: { ...value.instance, runtime: { ...value.instance.runtime, containerName, containerId } },
+  }), "http://127.0.0.1:19001");
 });
 
-test("legacy containers are rebuilt from the same image under the node-agent bootstrap without starting the old entrypoint", async () => {
+test("existing containers keep their original bootstrap and TCP node-agent transport", async () => {
   const value = context();
+  const containerName = "task-handoff-inst_one";
+  const containerId = "existing-tcp-container-id";
+  const packageBootstrap = "/usr/lib/node_modules/@task-handoff/node-agent/docker";
+  const runtimeVolume = volumeForInspection(value, `task-handoff-${value.instance.id}-runtime`);
+  const volumes = [...persistentVolumes(value), runtimeVolume];
   const calls = [];
   const executor = new LocalDockerExecutor(async (_command, args) => {
     calls.push(args);
     if (args[0] === "inspect" && args.includes("{{json .}}")) {
       return { stdout: JSON.stringify({
-        Id: "legacy-container-id",
-        Image: "sha256:legacy-image-id",
-        State: { Running: true },
-        Config: { Entrypoint: ["/usr/local/bin/legacy-entrypoint"], Labels: { "task-handoff.instance-id": value.instance.id } },
-        Mounts: persistentVolumes(value).map((volume) => ({ Type: "volume", Name: volume.name, Destination: volume.mountPath })),
+        Id: containerId,
+        State: { Running: false },
+        Config: {
+          Entrypoint: ["/usr/local/bin/legacy-entrypoint"],
+          Cmd: ["/run/task-handoff/bootstrap/entrypoint.sh", "task-handoff", "web"],
+          Labels: {
+            "task-handoff.bootstrap-abi": "1",
+            "task-handoff.instance-id": value.instance.id,
+          },
+        },
+        Mounts: [
+          ...volumes.map((volume) => ({ Type: "volume", Name: volume.name, Destination: volume.mountPath })),
+          { Type: "bind", Source: packageBootstrap, Destination: "/run/task-handoff/bootstrap" },
+          { Type: "bind", Source: path.resolve(value.project.source.path), Destination: value.project.workspacePolicy.path },
+        ],
       }), stderr: "" };
     }
     if (args[0] === "volume" && args[1] === "inspect") {
       const volume = volumeForInspection(value, args.at(-1));
-      return { stdout: JSON.stringify({ Name: volume.name, Labels: volume.role === "runtime" ? volume.labels : null }), stderr: "" };
+      return { stdout: JSON.stringify({ Name: volume.name, Labels: volume.labels }), stderr: "" };
     }
-    if (args[0] === "run") return { stdout: "current-container-id", stderr: "" };
+    if (args[0] === "port") return { stdout: "127.0.0.1:19090", stderr: "" };
     return { stdout: "", stderr: "" };
-  }, { launcherAssetsDir: "C:\\Program Files\\Task Handoff\\bootstrap" });
+  }, {
+    launcherAssetsDir: "/var/lib/task-handoff/node-agent/docker-bootstrap",
+    nodeAgentContainerIpcPath: "/run/task-handoff/container/node-agent.sock",
+  });
 
   const result = await executor.start({
     ...value,
     instance: {
       ...value.instance,
-      runtime: { ...value.instance.runtime, containerName: "task-handoff-inst_one", containerId: "legacy-container-id" },
+      runtime: { ...value.instance.runtime, containerName, containerId },
     },
   });
 
-  assert.deepEqual(calls.filter((args) => ["stop", "rename"].includes(args[0])).map((args) => args[0]), ["stop", "rename"]);
-  assert.equal(calls.some((args) => args[0] === "start"), false);
-  const run = calls.find((args) => args[0] === "run");
-  assert.equal(run.at(-4), "sha256:legacy-image-id");
-  assert.ok(run.includes(`type=bind,src=${path.resolve("C:\\Program Files\\Task Handoff\\bootstrap")},dst=/run/task-handoff/bootstrap,readonly`));
-  assert.ok(run.includes("/run/task-handoff/bootstrap/entrypoint.sh"));
-  assert.equal(result.status, "starting");
-  assert.equal(result.runtime.containerId, "current-container-id");
-  assert.match(result.runtime.labels["task-handoff.bootstrap-backup"], /legacy-conta/);
+  assert.equal(result.runtime.containerId, containerId);
+  assert.equal(result.runtime.labels["task-handoff.bootstrap-abi"], "1");
+  assert.ok(calls.some((args) => args[0] === "start" && args[1] === containerName));
+  assert.equal(calls.some((args) => ["stop", "rename", "rm", "run"].includes(args[0])), false);
+  assert.equal(await executor.resolveNodeAgentUrl({
+    ...value,
+    instance: { ...value.instance, runtime: { ...value.instance.runtime, containerName, containerId } },
+  }), value.nodeAgentUrl);
 });
 
 test("new docker instances reject an unrelated unlabeled volume with a colliding canonical name", async () => {
@@ -521,46 +553,6 @@ test("new docker instances reject an unrelated unlabeled volume with a colliding
     () => executor.start(value),
     (error) => error.code === "INSTANCE_VOLUME_IDENTITY_MISMATCH",
   );
-});
-
-test("failed bootstrap migration restores a previously running legacy container", async () => {
-  const value = context();
-  const calls = [];
-  const executor = new LocalDockerExecutor(async (_command, args) => {
-    calls.push(args);
-    if (args[0] === "inspect" && args.includes("{{json .}}")) {
-      return { stdout: JSON.stringify({
-        Id: "legacy-container-id",
-        Image: "sha256:legacy-image-id",
-        State: { Running: true },
-        Config: { Labels: { "task-handoff.instance-id": value.instance.id } },
-        Mounts: [],
-      }), stderr: "" };
-    }
-    if (args[0] === "volume" && args[1] === "inspect") {
-      const volume = volumeForInspection(value, args.at(-1));
-      return { stdout: JSON.stringify({ Name: volume.name, Labels: volume.labels }), stderr: "" };
-    }
-    if (args[0] === "run") throw new Error("create failed");
-    return { stdout: "", stderr: "" };
-  }, { launcherAssetsDir: "/current/bootstrap" });
-
-  await assert.rejects(() => executor.start({
-    ...value,
-    instance: {
-      ...value.instance,
-      runtime: { ...value.instance.runtime, containerName: "task-handoff-inst_one", containerId: "legacy-container-id" },
-    },
-  }), /Could not recreate Docker container/);
-
-  assert.deepEqual(calls.filter((args) => ["stop", "rename", "run", "rm", "start"].includes(args[0])).map((args) => args[0]), [
-    "stop",
-    "rename",
-    "run",
-    "rm",
-    "rename",
-    "start",
-  ]);
 });
 
 test("managed volume deletion returns partial failures and retained resources", async () => {

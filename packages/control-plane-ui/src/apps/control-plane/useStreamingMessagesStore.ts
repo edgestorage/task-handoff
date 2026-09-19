@@ -166,7 +166,11 @@ export function createStreamingMessagesStore(options: StreamingMessagesStoreOpti
       generatedAt,
     });
 
-    if (!active.value || activeMatchesTurn) active.value = target;
+    // A running Turn body can lag behind message-delta delivery because the
+    // provider does not project the new assistant item until it completes.
+    // Settle the item named by the body without reactivating it over a newer
+    // item in the same Turn. A terminal body owns the final item selection.
+    if (!active.value || active.value === target || (terminal && activeMatchesTurn)) active.value = target;
     return true;
   }
 

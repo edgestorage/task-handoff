@@ -31,6 +31,7 @@ import {
   type InstanceResourceMetrics,
 } from "@task-handoff/protocol/control-plane";
 import { defaultCommandRunner, LocalDockerExecutor, listLocalDockerImages, type CommandRunner, type ExecutorContext } from "./runtimes/docker.ts";
+import { materializeDockerBootstrapAssets } from "./runtimes/bootstrap-assets.ts";
 import { DockerImageService } from "./docker-images.ts";
 import { NodeAgentInstanceEventForwarder } from "./events.ts";
 import { DockerRuntimeMetricsCollector } from "./runtime-metrics.ts";
@@ -120,6 +121,7 @@ declare module "fastify" {
     nodeAgentRestoreManagedInstances?: () => Promise<void>;
     nodeAgentRecoverManagedInstances?: () => Promise<void>;
     nodeAgentStartRecoverySupervisor?: () => void;
+    nodeAgentResolveInstanceNodeAgentUrl?: (instance: ControlledInstance) => Promise<string>;
   }
 
   interface FastifyRequest {
@@ -132,6 +134,8 @@ const DEFAULT_AUTO_IMPORT_AGENT_CONFIG_TIMEOUT_MS = 5_000;
 const ACTIVE_LOG_MAINTENANCE_INTERVAL_MS = 60_000;
 const DEFAULT_STORY_DRAIN_DIAGNOSTIC_MS = 30_000;
 const NODE_AGENT_PROCESS_START_IDENTITY = processStartIdentity(process.pid);
+// Container IPC is a separate trust boundary from the full-access local control socket.
+const containerIpcRequests = new WeakSet<http.IncomingMessage>();
 function optionalEnv(name: string) {
   const value = process.env[name]?.trim();
   return value || undefined;
@@ -157,6 +161,7 @@ export type CreateNodeAgentAppOptions = {
   remoteKeyId?: string;
   connectionMode?: "local-ipc" | "local-loopback";
   ipcPath?: string;
+  containerIpcPath?: string;
   port?: number | string;
   containerUrl?: string;
   nodeId?: string;
@@ -521,8 +526,9 @@ async function startNodeInstance(
     ? await probeInstanceEndpoint(fetchImpl, observed, resolveInstanceWeb)
     : "unknown" as const;
   if (state.requireRuntime(starting.runtimeId).type === "docker" && probedEndpointStatus === "reachable") {
-    void syncControlledInstanceNodeAgentConnection(fetchImpl, observed, state.containerUrl, resolveInstanceWeb).then((syncStatus) => {
-      loggers.diagnostic({ instanceId: id, action: "node-agent-connection.sync", reason, syncStatus, nodeAgentUrl: state.containerUrl }, "node instance connection endpoint synchronized");
+    const nodeAgentUrl = await adapter.resolveNodeAgentUrl?.(state.context(observed)) || state.containerUrl;
+    void syncControlledInstanceNodeAgentConnection(fetchImpl, observed, nodeAgentUrl, resolveInstanceWeb).then((syncStatus) => {
+      loggers.diagnostic({ instanceId: id, action: "node-agent-connection.sync", reason, syncStatus, nodeAgentUrl }, "node instance connection endpoint synchronized");
     }).catch((error) => {
       loggers.warn({ instanceId: id, action: "node-agent-connection.sync", reason, error: error instanceof Error ? error.message : String(error) }, "node instance connection endpoint sync deferred");
     });
@@ -572,9 +578,14 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   await storyAutomations.init();
   const dockerCommandRunner = options.dockerCommandRunner || defaultCommandRunner;
   const dockerImageService = new DockerImageService(dockerCommandRunner, options.dockerTerminalCommandRunner);
+  // New containers bind one node-owned directory inode so npm upgrades can update
+  // bootstrap files in place. Existing containers retain their original bind and transport.
+  const dockerBootstrapDir = materializeDockerBootstrapAssets(paths.dockerBootstrapDir);
   const dockerExecutor = new LocalDockerExecutor(dockerCommandRunner, {
     publishHost: "127.0.0.1",
     imageService: dockerImageService,
+    launcherAssetsDir: dockerBootstrapDir,
+    nodeAgentContainerIpcPath: options.containerIpcPath,
   });
   let recoverySupervisor!: NodeAgentRecoverySupervisor;
   const runtimeAdapters = new RuntimeAdapterRegistry(
@@ -732,6 +743,11 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     return artifactResolver.resolve(published.identity, published.source);
   };
   const adapterForInstance = (instance: ControlledInstance) => runtimeAdapters.forRuntime(state.requireRuntime(instance.runtimeId));
+  const resolveNodeAgentUrlForInstance = async (instance: ControlledInstance) => {
+    const runtime = state.requireRuntime(instance.runtimeId);
+    if (runtime.type !== "docker") return state.localNodeAgentUrl;
+    return await adapterForInstance(instance).resolveNodeAgentUrl?.(state.context(instance)) || state.containerUrl;
+  };
   const managedAdapterForInstance = (instance: ControlledInstance) => {
     const adapter = adapterForInstance(instance);
     return isManagedRuntimeAdapter(adapter) ? adapter : undefined;
@@ -781,22 +797,13 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   const instanceProxyMetrics = createInstanceProxyMetrics();
   app.decorate("nodeAgentState", state);
   app.decorate("nodeAgentIdentityService", identity);
+  app.decorate("nodeAgentResolveInstanceNodeAgentUrl", resolveNodeAgentUrlForInstance);
   await app.register(websocket, { options: TASK_HANDOFF_WEBSOCKET_SERVER_OPTIONS });
   const eventForwarder = new NodeAgentInstanceEventForwarder(state, token, { logger: app.log, safetyIntervalMs: Number(process.env.TASK_HANDOFF_EVENT_CONNECTION_SAFETY_INTERVAL_MS) || undefined });
   const convergence = new RuntimeConvergenceCoordinator(state.controlledInstances, desiredControlledInstanceVersion, {
     isInstalled: async (instance, desiredVersion) => {
       const artifact = await resolveArtifactForInstance(instance, desiredVersion);
       const installed = await requireManagedAdapterForInstance(instance).inspectRuntime(state.context(instance), artifact.identity);
-      if (installed && instance.runtime.labels["task-handoff.bootstrap-backup"]) {
-        const current = state.requireInstance(instance.id);
-        const labels = { ...current.runtime.labels };
-        delete labels["task-handoff.bootstrap-backup"];
-        state.controlledInstances.put(ControlledInstanceSchema.parse({
-          ...current,
-          runtime: { ...current.runtime, labels },
-          updatedAt: now(),
-        }));
-      }
       return installed;
     },
     beginDrain: async (instance) => {
@@ -976,8 +983,9 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
         }
       }
       if (runtime.type === "docker" && instance.targetStatus === "reachable") {
-        void syncControlledInstanceNodeAgentConnection(fetchImpl, instance, state.containerUrl, resolveInstanceWeb).then((syncStatus) => {
-          lifecycleLoggers.diagnostic({ instanceId: id, action: "node-agent-connection.sync", reason, syncStatus, nodeAgentUrl: state.containerUrl }, "node instance connection endpoint synchronized after runtime convergence");
+        const nodeAgentUrl = await runtimeAdapters.forRuntime(runtime).resolveNodeAgentUrl?.(state.context(instance)) || state.containerUrl;
+        void syncControlledInstanceNodeAgentConnection(fetchImpl, instance, nodeAgentUrl, resolveInstanceWeb).then((syncStatus) => {
+          lifecycleLoggers.diagnostic({ instanceId: id, action: "node-agent-connection.sync", reason, syncStatus, nodeAgentUrl }, "node instance connection endpoint synchronized after runtime convergence");
         }).catch((error) => {
           lifecycleLoggers.warn({ instanceId: id, action: "node-agent-connection.sync", reason, error: error instanceof Error ? error.message : String(error) }, "node instance connection endpoint sync after runtime convergence deferred");
         });
@@ -1115,6 +1123,12 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   });
 
   app.addHook("preHandler", async (request) => {
+    if (containerIpcRequests.has(request.raw)) {
+      if (isInstanceReportRoute(request.url)) return;
+      const error = new Error("Container IPC only accepts instance-scoped node agent requests.");
+      Object.assign(error, { statusCode: 401, code: "NODE_AGENT_CONTAINER_IPC_ROUTE_FORBIDDEN" });
+      throw error;
+    }
     const hmacKeyId = pairedHmac.verify(request);
     if (hmacKeyId) {
       if (identity.isRevokedPairing(hmacKeyId) && !isPairingSelfRevokeRoute(request.url)) {
@@ -1440,6 +1454,28 @@ export async function listenNodeAgentIpcServer(app: Awaited<ReturnType<typeof cr
   return ipcServer;
 }
 
+export function nodeAgentContainerIpcPath(dataDir: string) {
+  // Docker bind mounts retain the directory inode across node-agent restarts.
+  // Keep this outside systemd RuntimeDirectory, which may be removed and recreated.
+  return path.join(path.resolve(dataDir), "container-ipc", "node-agent.sock");
+}
+
+export async function listenNodeAgentContainerIpcServer(app: Awaited<ReturnType<typeof createNodeAgentApp>>, socketPath: string) {
+  prepareNodeAgentIpcPath(socketPath);
+  const server = http.createServer((request, response) => {
+    containerIpcRequests.add(request);
+    app.server.emit("request", request, response);
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(socketPath, () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+  return server;
+}
+
 export async function runNodeAgentServer(options: RunNodeAgentServerOptions) {
   const paths = nodeAgentStorePaths(options.dataDir);
   const lock = acquireNodeAgentSingletonLock(defaultNodeAgentSingletonLockPath(), {
@@ -1466,7 +1502,17 @@ export async function runNodeAgentServer(options: RunNodeAgentServerOptions) {
         throw new Error("Node agent singleton ownership changed while publishing listener state.");
       }
     };
-    const effectiveOptions = { ...options, port: listenerConfig.port };
+    const ipcPath = options.ipcPath || process.env.TASK_HANDOFF_NODE_AGENT_IPC_PATH || nodeAgentIpcPath(paths.dataDir);
+    const useContainerIpc = (options.platform || process.platform) === "linux";
+    const containerIpcPath = useContainerIpc
+      ? options.containerIpcPath || process.env.TASK_HANDOFF_NODE_AGENT_CONTAINER_IPC_PATH || nodeAgentContainerIpcPath(paths.dataDir)
+      : undefined;
+    const effectiveOptions = {
+      ...options,
+      port: listenerConfig.port,
+      ipcPath,
+      containerIpcPath,
+    };
     const app = await createNodeAgentApp(effectiveOptions);
     const nodeAgentState = app.nodeAgentState;
     if (!nodeAgentState) {
@@ -1474,6 +1520,8 @@ export async function runNodeAgentServer(options: RunNodeAgentServerOptions) {
     }
     const identity = app.nodeAgentIdentityService;
     if (!identity) throw new Error("Node agent identity service was not initialized.");
+    const resolveInstanceNodeAgentUrl = app.nodeAgentResolveInstanceNodeAgentUrl;
+    if (!resolveInstanceNodeAgentUrl) throw new Error("Node agent runtime transport resolver was not initialized.");
     const nodeId = identity.resolveNodeId(options.nodeId || process.env.TASK_HANDOFF_NODE_ID);
     const reverseTunnels = createReverseTunnelManager({
       log: app.log,
@@ -1503,9 +1551,8 @@ export async function runNodeAgentServer(options: RunNodeAgentServerOptions) {
       },
       synchronizeUpdate: async () => {
         const active = nodeAgentState.listInstances().filter((instance) => !["created", "stopped", "failed"].includes(instance.status));
-        await Promise.all(active.map((instance) => {
-          const runtime = nodeAgentState.requireRuntime(instance.runtimeId);
-          const nodeAgentUrl = runtime.type === "docker" ? nodeAgentState.containerUrl : nodeAgentState.localNodeAgentUrl;
+        await Promise.all(active.map(async (instance) => {
+          const nodeAgentUrl = await resolveInstanceNodeAgentUrl(instance);
           return syncControlledInstanceNodeAgentConnection(options.fetchImpl || fetch, instance, nodeAgentUrl).then((status) => {
             if (status !== "applied") {
               throw new Error(`Controlled instance ${instance.id} did not apply the node-agent endpoint update (${status}).`);
@@ -1516,18 +1563,21 @@ export async function runNodeAgentServer(options: RunNodeAgentServerOptions) {
     });
     app.decorate("nodeAgentListenerManager", listenerManager);
     let ipcServer: http.Server | undefined;
+    let containerIpcServer: http.Server | undefined;
     installGracefulShutdown(app, () => {
       reverseTunnels.closeAll();
       ipcServer?.close();
+      containerIpcServer?.close();
     });
     app.addHook("onClose", async () => {
       ipcServer?.close();
+      containerIpcServer?.close();
       lock.release();
     });
     try {
       await app.ready();
-      const ipcPath = options.ipcPath || process.env.TASK_HANDOFF_NODE_AGENT_IPC_PATH || nodeAgentIpcPath(paths.dataDir);
       ipcServer = await listenNodeAgentIpcServer(app, ipcPath);
+      if (containerIpcPath) containerIpcServer = await listenNodeAgentContainerIpcServer(app, containerIpcPath);
       await listenerManager.start();
       reverseTunnels.connectConfigured();
       app.nodeAgentStartRecoverySupervisor?.();

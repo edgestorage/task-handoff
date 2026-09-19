@@ -8,6 +8,7 @@ const test = require("node:test");
 
 const { LocalDockerExecutor } = require("../packages/control-plane/src/node-agent/runtimes/docker.ts");
 const { DockerRuntimeAdapter } = require("../packages/control-plane/src/node-agent/runtimes/adapters.ts");
+const { materializeDockerBootstrapAssets } = require("../packages/control-plane/src/node-agent/runtimes/bootstrap-assets.ts");
 
 const identity = {
   packageName: "@task-handoff/controlled-instance",
@@ -19,6 +20,43 @@ const identity = {
   entrypoint: "dist/controlled-instance.js",
   sha256: "a".repeat(64),
 };
+
+test("Docker bootstrap assets update in place without replacing the mounted directory inode", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-bootstrap-assets-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const source = path.join(root, "source");
+  const target = path.join(root, "target");
+  fs.mkdirSync(source);
+  for (const name of ["entrypoint.sh", "git-provision.sh", "git-provisioning-helper.js", "instance-launcher.sh", "node-agent-unix-proxy.mjs", "runtime-installer.mjs"]) {
+    fs.writeFileSync(path.join(source, name), `old:${name}\n`, { mode: 0o755 });
+  }
+  fs.mkdirSync(target);
+  fs.writeFileSync(path.join(target, "retired-helper"), "remove me\n");
+
+  assert.equal(materializeDockerBootstrapAssets(target, source), path.resolve(target));
+  const inode = fs.statSync(target).ino;
+  fs.writeFileSync(path.join(source, "runtime-installer.mjs"), "new installer\n", { mode: 0o755 });
+  materializeDockerBootstrapAssets(target, source);
+
+  assert.equal(fs.statSync(target).ino, inode);
+  assert.equal(fs.readFileSync(path.join(target, "runtime-installer.mjs"), "utf8"), "new installer\n");
+  assert.equal(fs.existsSync(path.join(target, "retired-helper")), false);
+  assert.equal(fs.statSync(path.join(target, "runtime-installer.mjs")).mode & 0o777, 0o755);
+});
+
+test("Docker bootstrap materialization validates the package before changing the stable directory", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-bootstrap-invalid-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const source = path.join(root, "source");
+  const target = path.join(root, "target");
+  fs.mkdirSync(source);
+  fs.mkdirSync(target);
+  fs.writeFileSync(path.join(source, "entrypoint.sh"), "incomplete\n");
+  fs.writeFileSync(path.join(target, "existing"), "preserve\n");
+
+  assert.throws(() => materializeDockerBootstrapAssets(target, source), /bootstrap assets are incomplete/);
+  assert.equal(fs.readFileSync(path.join(target, "existing"), "utf8"), "preserve\n");
+});
 
 test("Docker runtime install copies, installs through the root-owned updater, verifies payload, and restarts the same container", async () => {
   const calls = [];
@@ -219,7 +257,7 @@ test("Linux launcher sources and package preparation enforce LF line endings", (
   }
   const preparation = fs.readFileSync(path.resolve(__dirname, "../scripts/prepare-runtime-packages.mjs"), "utf8");
   assert.match(preparation, /replace\(\/\\r\\n\?\/g, "\\n"\)/);
-  for (const file of ["entrypoint.sh", "instance-launcher.sh", "runtime-installer.mjs"]) {
+  for (const file of ["entrypoint.sh", "instance-launcher.sh", "node-agent-unix-proxy.mjs", "runtime-installer.mjs"]) {
     const contents = fs.readFileSync(path.resolve(__dirname, "../docker", file));
     assert.equal(contents.includes(Buffer.from("\r\n")), false, `${file} must use LF line endings`);
   }

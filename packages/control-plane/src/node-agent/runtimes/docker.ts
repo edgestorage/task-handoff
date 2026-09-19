@@ -1,12 +1,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { InstanceDeleteResultSchema, RuntimeArtifactIdentitySchema, type ControlledInstance, type InstanceDeleteInput, type InstanceDeleteResult, type InstanceImageSnapshot, type LocalDockerImage, type Node, type NodeRuntime, type Project, type RuntimeArtifactIdentity } from "@task-handoff/protocol/control-plane";
 import { safeParseResponse } from "@task-handoff/protocol/response-validation";
 import { defaultCommandRunner, type CommandRunner } from "../../shared/process/command-runner.ts";
 import { DockerImageService, listDockerImages } from "../docker-images.ts";
 import type { GitWorkspaceProvisioningInput } from "@task-handoff/protocol/managed-git-credentials";
+import { packagedDockerBootstrapAssetsDir } from "./bootstrap-assets.ts";
 
 export { defaultCommandRunner, type CommandResult, type CommandRunner } from "../../shared/process/command-runner.ts";
 
@@ -47,10 +47,11 @@ export type DockerExecutorOptions = {
   publishHost?: string;
   imageService?: DockerImageService;
   launcherAssetsDir?: string;
+  nodeAgentContainerIpcPath?: string;
   portResolutionRetryDelaysMs?: readonly number[];
 };
 
-type DockerRunOptions = Pick<DockerExecutorOptions, "publishHost" | "launcherAssetsDir"> & {
+type DockerRunOptions = Pick<DockerExecutorOptions, "publishHost" | "launcherAssetsDir" | "nodeAgentContainerIpcPath"> & {
   imageReference?: string;
 };
 
@@ -184,13 +185,15 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
   private readonly publishHost: string;
   private readonly images: DockerImageService;
   private readonly launcherAssetsDir: string;
+  private readonly nodeAgentContainerIpcPath?: string;
   private readonly portResolutionRetryDelaysMs: readonly number[];
 
   constructor(runCommand: CommandRunner = defaultCommandRunner, options: DockerExecutorOptions = {}) {
     this.runCommand = runCommand;
     this.images = options.imageService || new DockerImageService(runCommand);
     this.publishHost = options.publishHost || "127.0.0.1";
-    this.launcherAssetsDir = options.launcherAssetsDir || defaultLauncherAssetsDir();
+    this.launcherAssetsDir = options.launcherAssetsDir || packagedDockerBootstrapAssetsDir();
+    this.nodeAgentContainerIpcPath = options.nodeAgentContainerIpcPath;
     this.portResolutionRetryDelaysMs = options.portResolutionRetryDelaysMs?.length
       ? options.portResolutionRetryDelaysMs
       : [0, 100, 250, 500, 1_000];
@@ -209,21 +212,8 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
           `Docker container ${containerName} belongs to ${owner || "an unknown instance"}, not ${context.instance.id}.`,
         );
       }
-      const bootstrapMount = existing.mounts.find((mount) => mount.type === "bind" && mount.destination === DOCKER_BOOTSTRAP_CONTAINER_DIR);
-      const authoritativeBootstrap = existing.labels["task-handoff.bootstrap-abi"] === DOCKER_BOOTSTRAP_ABI
-        && existing.entrypoint[0] === DOCKER_BOOTSTRAP_EXECUTABLE
-        && existing.command[0] === DOCKER_BOOTSTRAP_ENTRYPOINT
-        && bootstrapMount?.source
-        && path.resolve(bootstrapMount.source) === path.resolve(this.launcherAssetsDir);
-      if (!authoritativeBootstrap) {
-        const legacyMountedVolumeNames = new Set(persistentVolumesForContext(context).flatMap((volume) => (
-          existing.mounts.some((mount) => mount.type === "volume" && mount.name === volume.name && mount.destination === volume.mountPath)
-            ? [volume.name]
-            : []
-        )));
-        await this.createPersistentVolumes(context, legacyMountedVolumeNames);
-        return this.recreateWithAuthoritativeBootstrap(context, containerName, existing);
-      }
+      // Docker mounts are immutable. Existing containers keep the transport and
+      // bootstrap they were created with so upgrades never discard their writable layer.
       await this.createRuntimeVolume(context);
       await this.validatePersistentVolumes(context, existing.mounts);
       try {
@@ -231,7 +221,7 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
       } catch (cause) {
         throw runtimeExecutorError("RUNTIME_EXECUTOR_FAILED", `Could not start Docker container ${containerName}.`, cause);
       }
-      return this.resumedContainerResult(context, containerName, existing.id);
+      return this.resumedContainerResult(context, containerName, existing.id, existing.labels);
     }
     if (context.instance.environmentTemplateOrigin) {
       const inspected = await this.inspectEnvironmentTemplateImage(context.instance.environmentTemplateOrigin.imageId);
@@ -255,6 +245,7 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
       runResult = await this.runCommand("docker", dockerRunArgs(context, containerName, {
         publishHost: this.publishHost,
         launcherAssetsDir: this.launcherAssetsDir,
+        nodeAgentContainerIpcPath: this.nodeAgentContainerIpcPath,
       }));
     } catch (cause) {
       throw runtimeExecutorError("RUNTIME_EXECUTOR_FAILED", `Could not create Docker container ${containerName}.`, cause);
@@ -305,34 +296,6 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
       if (credential.payload.secret.passphrase) write(credentialDirectory, "passphrase", credential.payload.secret.passphrase);
       write(credentialDirectory, "ssh-askpass.sh", `#!/usr/bin/env bash\ncat /run/task-handoff/git-runtime/credential-${index}/passphrase 2>/dev/null || true\n`);
     });
-  }
-
-  private async recreateWithAuthoritativeBootstrap(
-    context: ExecutorContext,
-    containerName: string,
-    existing: { id: string; image?: string; running: boolean },
-  ): Promise<ExecutorStartResult> {
-    const backupName = `${containerName}-pre-bootstrap-${existing.id.slice(0, 12)}`;
-    if (existing.running) await this.runCommand("docker", ["stop", containerName]);
-    try {
-      await this.runCommand("docker", ["rename", containerName, backupName]);
-    } catch (cause) {
-      if (existing.running) await this.runCommand("docker", ["start", containerName]).catch(() => ({ stdout: "", stderr: "" }));
-      throw runtimeExecutorError("RUNTIME_EXECUTOR_FAILED", `Could not preserve Docker container ${containerName} before bootstrap migration.`, cause);
-    }
-    try {
-      const result = await this.runCommand("docker", dockerRunArgs(context, containerName, {
-        publishHost: this.publishHost,
-        launcherAssetsDir: this.launcherAssetsDir,
-        imageReference: existing.image,
-      }));
-      return this.bootstrapResult(context, containerName, result.stdout || undefined, backupName);
-    } catch (cause) {
-      await this.runCommand("docker", ["rm", "-f", containerName]).catch(() => ({ stdout: "", stderr: "" }));
-      await this.runCommand("docker", ["rename", backupName, containerName]).catch(() => ({ stdout: "", stderr: "" }));
-      if (existing.running) await this.runCommand("docker", ["start", containerName]).catch(() => ({ stdout: "", stderr: "" }));
-      throw runtimeExecutorError("RUNTIME_EXECUTOR_FAILED", `Could not recreate Docker container ${containerName} with the node-agent bootstrap.`, cause);
-    }
   }
 
   async inspectContainerConfigSecurity(containerName: string, secretValues: readonly string[]) {
@@ -546,13 +509,22 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
     };
   }
 
-  private async resumedContainerResult(context: ExecutorContext, containerName: string, containerId: string): Promise<ExecutorStartResult> {
+  private async resumedContainerResult(
+    context: ExecutorContext,
+    containerName: string,
+    containerId: string,
+    containerLabels: Record<string, string>,
+  ): Promise<ExecutorStartResult> {
     const result = this.bootstrapResult(context, containerName, containerId);
     return {
       ...result,
       target: {
         ...result.target,
         ...await this.publishedEndpoint(containerName),
+      },
+      runtime: {
+        ...result.runtime,
+        labels: { ...context.instance.runtime.labels, ...containerLabels },
       },
     };
   }
@@ -578,7 +550,24 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
     return (await this.publishedEndpoint(containerName)).web;
   }
 
-  private bootstrapResult(context: ExecutorContext, containerName: string, containerId?: string, backupName?: string): ExecutorStartResult {
+  async resolveNodeAgentUrl(context: ExecutorContext) {
+    const fallback = context.nodeAgentUrl || context.node?.endpoint || "";
+    if (!this.nodeAgentContainerIpcPath) return fallback;
+    const containerName = context.instance.runtime.containerName || containerNameForInstance(context.instance.id);
+    const existing = await this.inspectContainerForStart(containerName);
+    if (!existing) return fallback;
+    assertExpectedContainerId(containerName, existing.id, context.instance.runtime.containerId, "while resolving its node-agent transport", "RUNTIME_EXECUTOR_FAILED");
+    if (existing.labels["task-handoff.instance-id"] !== context.instance.id) {
+      throw runtimeExecutorError("RUNTIME_EXECUTOR_FAILED", `Docker container ${containerName} does not belong to ${context.instance.id}.`);
+    }
+    const expectedSource = path.dirname(path.resolve(this.nodeAgentContainerIpcPath));
+    const hasContainerIpc = existing.mounts.some((mount) => mount.type === "bind"
+      && mount.destination === "/run/task-handoff/node-agent-transport"
+      && path.resolve(mount.source || "") === expectedSource);
+    return hasContainerIpc ? "http://127.0.0.1:19001" : fallback;
+  }
+
+  private bootstrapResult(context: ExecutorContext, containerName: string, containerId?: string): ExecutorStartResult {
     return {
       status: "starting",
       health: "unknown",
@@ -600,7 +589,6 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
         labels: {
           ...context.instance.runtime.labels,
           "task-handoff.bootstrap-abi": DOCKER_BOOTSTRAP_ABI,
-          ...(backupName ? { "task-handoff.bootstrap-backup": backupName } : {}),
         },
       },
     };
@@ -836,15 +824,6 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
     } catch {
       return { containerId };
     }
-  }
-
-  async removeBootstrapBackup(backupName: string, instanceId: string): Promise<void> {
-    const inspected = await this.inspectContainerForStart(backupName);
-    if (!inspected) return;
-    if (inspected.labels["task-handoff.instance-id"] !== instanceId) {
-      throw runtimeExecutorError("RUNTIME_EXECUTOR_FAILED", `Docker bootstrap backup ${backupName} does not belong to ${instanceId}.`);
-    }
-    await this.runCommand("docker", ["rm", "-f", backupName]);
   }
 
   async inspectRuntimeTarget(containerName?: string): Promise<DockerRuntimeTarget> {
@@ -1083,16 +1062,6 @@ function normalizeDockerArchitecture(value: unknown) {
   return undefined;
 }
 
-function defaultLauncherAssetsDir() {
-  const moduleDir = import.meta.url ? path.dirname(fileURLToPath(import.meta.url)) : __dirname;
-  const candidates = [
-    path.resolve(moduleDir, "../../../../../docker"),
-    path.resolve(moduleDir, "../docker"),
-    path.resolve(moduleDir, "../../docker"),
-  ];
-  return candidates.find((candidate) => fs.existsSync(path.join(candidate, "runtime-installer.mjs"))) || candidates[0];
-}
-
 function environmentTemplateRetentionTag(imageId: string) {
   return `task-handoff/environment-image:${imageId.replace(/^sha256:/, "")}`;
 }
@@ -1172,7 +1141,7 @@ function appendDockerEnv(args: string[], key: string, value: string) {
 
 export function dockerRunArgs(context: ExecutorContext, containerName: string, options: DockerRunOptions = {}) {
   const publishHost = options.publishHost || "127.0.0.1";
-  const launcherAssetsDir = path.resolve(options.launcherAssetsDir || defaultLauncherAssetsDir());
+  const launcherAssetsDir = path.resolve(options.launcherAssetsDir || packagedDockerBootstrapAssetsDir());
   const nodeId = context.node?.id || "node_unset";
   const runtimeId = context.runtime?.id || "runtime_local_docker";
   const args = [
@@ -1224,6 +1193,16 @@ export function dockerRunArgs(context: ExecutorContext, containerName: string, o
     DOCKER_BOOTSTRAP_EXECUTABLE,
   );
 
+  const containerIpcPath = options.nodeAgentContainerIpcPath
+    ? `/run/task-handoff/node-agent-transport/${path.basename(options.nodeAgentContainerIpcPath)}`
+    : undefined;
+  if (options.nodeAgentContainerIpcPath && containerIpcPath) {
+    args.push(
+      "--mount",
+      `type=bind,src=${path.dirname(options.nodeAgentContainerIpcPath)},dst=/run/task-handoff/node-agent-transport,readonly`,
+    );
+  }
+
   for (const volume of persistentVolumesForContext(context)) {
     args.push("--mount", `type=volume,src=${volume.name},dst=${volume.mountPath}`);
   }
@@ -1232,7 +1211,8 @@ export function dockerRunArgs(context: ExecutorContext, containerName: string, o
 
   const runtimeEnv = {
     TASK_HANDOFF_CONTROL_MODE: "controlled",
-    TASK_HANDOFF_NODE_AGENT_URL: context.nodeAgentUrl || context.node?.endpoint || "",
+    TASK_HANDOFF_NODE_AGENT_URL: containerIpcPath ? "http://127.0.0.1:19001" : context.nodeAgentUrl || context.node?.endpoint || "",
+    ...(containerIpcPath ? { TASK_HANDOFF_NODE_AGENT_SOCKET_PATH: containerIpcPath } : {}),
     TASK_HANDOFF_INSTANCE_ID: context.instance.id,
     TASK_HANDOFF_INSTANCE_NAME: context.instance.name,
     TASK_HANDOFF_PROJECT_ID: context.project.id,
@@ -1300,7 +1280,7 @@ export function dockerGitProvisionArgs(
   if (!input || context.project.source.type === "local-folder") {
     throw Object.assign(new Error("Git provisioning requires a Git source and operation input."), { code: "GIT_WORKSPACE_PROVISIONING_INVALID", statusCode: 400 });
   }
-  const launcherAssetsDir = path.resolve(options.launcherAssetsDir || defaultLauncherAssetsDir());
+  const launcherAssetsDir = path.resolve(options.launcherAssetsDir || packagedDockerBootstrapAssetsDir());
   const workspace = persistentVolumesForContext(context).find((volume) => volume.role === "workspace");
   if (!workspace) throw Object.assign(new Error("Git workspace volume was not found."), { code: "GIT_WORKSPACE_VOLUME_MISSING", statusCode: 409 });
   const args = [

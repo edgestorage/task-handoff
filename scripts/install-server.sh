@@ -5,7 +5,11 @@ MIN_NODE_VERSION="24.15.0"
 VERSION=""
 CHANNEL="stable"
 ARTIFACTS_DIR=""
-NPM_REGISTRY=""
+INSTALL_SOURCE="${TASK_HANDOFF_INSTALL_SOURCE:-auto}"
+NODE_DIST_URL="${TASK_HANDOFF_NODE_DIST_URL:-}"
+NPM_REGISTRY="${TASK_HANDOFF_NPM_REGISTRY:-}"
+EFFECTIVE_INSTALL_SOURCE=""
+APT_SOURCE_FILE=""
 INSTALL_DOCKER="1"
 SERVICE_USER="root"
 CONTROL_PLANE_HOST="0.0.0.0"
@@ -30,6 +34,8 @@ Package options:
   --channel <channel>               npm channel: stable, beta, or alpha; default stable
   --version <version>               Install an exact runtime package version
   --artifacts-dir <path>            Install the four release tarballs from this directory
+  --install-source <source>         Source profile: auto, official, or china; default auto
+  --node-dist-url <url>             Override the Node.js distribution base URL
   --npm-registry <url>              npm registry used for published runtime packages
   --skip-docker                     Do not install or start Docker
 
@@ -58,6 +64,8 @@ while [ "$#" -gt 0 ]; do
     --version) VERSION="${2:-}"; shift 2 ;;
     --channel) CHANNEL="${2:-}"; shift 2 ;;
     --artifacts-dir) ARTIFACTS_DIR="${2:-}"; shift 2 ;;
+    --install-source) INSTALL_SOURCE="${2:-}"; shift 2 ;;
+    --node-dist-url) NODE_DIST_URL="${2:-}"; shift 2 ;;
     --npm-registry) NPM_REGISTRY="${2:-}"; shift 2 ;;
     --skip-docker) INSTALL_DOCKER="0"; shift ;;
     --service-user) SERVICE_USER="${2:-}"; shift 2 ;;
@@ -74,9 +82,105 @@ done
 
 [ "$CHANNEL" = "stable" ] || [ "$CHANNEL" = "beta" ] || [ "$CHANNEL" = "alpha" ] || die "--channel must be stable, beta, or alpha"
 [ "$AUTH_MODE" = "password" ] || [ "$AUTH_MODE" = "disabled" ] || die "--auth-mode must be password or disabled"
+[ "$INSTALL_SOURCE" = "auto" ] || [ "$INSTALL_SOURCE" = "official" ] || [ "$INSTALL_SOURCE" = "china" ] \
+  || die "--install-source must be auto, official, or china"
+NODE_DIST_URL_OVERRIDE="$NODE_DIST_URL"
+NPM_REGISTRY_OVERRIDE="$NPM_REGISTRY"
 
 need_root
 command -v systemctl >/dev/null 2>&1 || die "systemd is required"
+
+china_environment_hint() {
+  if [ -n "${TZ:-}" ]; then
+    case "$TZ" in Asia/Shanghai|Asia/Chongqing) return 0 ;; esac
+  elif [ -r /etc/timezone ] && grep -Eq '^Asia/(Shanghai|Chongqing)$' /etc/timezone; then
+    return 0
+  fi
+  case "${LANG:-}${LC_ALL:-}" in *zh_CN*) return 0 ;; esac
+  return 1
+}
+
+select_install_source() {
+  EFFECTIVE_INSTALL_SOURCE="$INSTALL_SOURCE"
+  if [ "$EFFECTIVE_INSTALL_SOURCE" = "auto" ]; then
+    if china_environment_hint; then
+      EFFECTIVE_INSTALL_SOURCE="china"
+    elif command -v curl >/dev/null 2>&1 && ! curl -4 -fsSL \
+      --connect-timeout 3 --max-time 8 \
+      https://nodejs.org/dist/latest-v24.x/SHASUMS256.txt -o /dev/null; then
+      EFFECTIVE_INSTALL_SOURCE="china"
+    else
+      EFFECTIVE_INSTALL_SOURCE="official"
+    fi
+  fi
+  NODE_DIST_URL="$NODE_DIST_URL_OVERRIDE"
+  NPM_REGISTRY="$NPM_REGISTRY_OVERRIDE"
+  if [ -z "$NODE_DIST_URL" ]; then
+    if [ "$EFFECTIVE_INSTALL_SOURCE" = "china" ]; then
+      NODE_DIST_URL="https://npmmirror.com/mirrors/node"
+    else
+      NODE_DIST_URL="https://nodejs.org/dist"
+    fi
+  fi
+  if [ -z "$NPM_REGISTRY" ] && [ "$EFFECTIVE_INSTALL_SOURCE" = "china" ]; then
+    NPM_REGISTRY="https://registry.npmmirror.com"
+  fi
+  echo "Using $EFFECTIVE_INSTALL_SOURCE install sources (Node.js: $NODE_DIST_URL${NPM_REGISTRY:+, npm: $NPM_REGISTRY})."
+}
+
+prepare_apt_source() {
+  [ -r /etc/os-release ] || return 1
+  os_id="$(. /etc/os-release && printf '%s' "$ID")"
+  os_codename="$(. /etc/os-release && printf '%s' "${VERSION_CODENAME:-}")"
+  [ -n "$os_codename" ] || return 1
+  APT_SOURCE_FILE="$(mktemp)"
+  # APT authenticates signed repository metadata, so HTTP can bootstrap ca-certificates safely.
+  case "$os_id:$EFFECTIVE_INSTALL_SOURCE" in
+    debian:china)
+      printf '%s\n' \
+        "deb http://mirrors.tuna.tsinghua.edu.cn/debian/ $os_codename main" \
+        "deb http://mirrors.tuna.tsinghua.edu.cn/debian/ $os_codename-updates main" \
+        "deb http://mirrors.tuna.tsinghua.edu.cn/debian-security $os_codename-security main" > "$APT_SOURCE_FILE"
+      ;;
+    debian:*)
+      printf '%s\n' \
+        "deb http://deb.debian.org/debian $os_codename main" \
+        "deb http://deb.debian.org/debian $os_codename-updates main" \
+        "deb http://security.debian.org/debian-security $os_codename-security main" > "$APT_SOURCE_FILE"
+      ;;
+    ubuntu:china)
+      case "$(uname -m)" in x86_64|amd64) apt_base="ubuntu" ;; *) apt_base="ubuntu-ports" ;; esac
+      printf '%s\n' \
+        "deb http://mirrors.tuna.tsinghua.edu.cn/$apt_base/ $os_codename main universe" \
+        "deb http://mirrors.tuna.tsinghua.edu.cn/$apt_base/ $os_codename-updates main universe" \
+        "deb http://mirrors.tuna.tsinghua.edu.cn/$apt_base/ $os_codename-security main universe" > "$APT_SOURCE_FILE"
+      ;;
+    ubuntu:*)
+      case "$(uname -m)" in
+        x86_64|amd64) apt_host="archive.ubuntu.com/ubuntu"; apt_security_host="security.ubuntu.com/ubuntu" ;;
+        *) apt_host="ports.ubuntu.com/ubuntu-ports"; apt_security_host="$apt_host" ;;
+      esac
+      printf '%s\n' \
+        "deb http://$apt_host/ $os_codename main universe" \
+        "deb http://$apt_host/ $os_codename-updates main universe" \
+        "deb http://$apt_security_host/ $os_codename-security main universe" > "$APT_SOURCE_FILE"
+      ;;
+    *) rm -f "$APT_SOURCE_FILE"; APT_SOURCE_FILE=""; return 1 ;;
+  esac
+}
+
+apt_get() {
+  if [ -n "$APT_SOURCE_FILE" ]; then
+    apt-get -o "Dir::Etc::sourcelist=$APT_SOURCE_FILE" -o "Dir::Etc::sourceparts=-" "$@"
+  else
+    apt-get "$@"
+  fi
+}
+
+HAD_CURL="0"
+if command -v curl >/dev/null 2>&1; then HAD_CURL="1"; fi
+select_install_source
+if command -v apt-get >/dev/null 2>&1; then prepare_apt_source || true; fi
 
 version_is_at_least() {
   awk -v current="$1" -v minimum="$2" 'BEGIN {
@@ -102,8 +206,8 @@ install_node_prerequisites() {
   if command -v apt-get >/dev/null 2>&1; then
     export DEBIAN_FRONTEND=noninteractive
     echo "[1/5] Refreshing apt package metadata"
-    apt-get update
-    apt-get install -y ca-certificates curl xz-utils
+    apt_get update
+    apt_get install -y ca-certificates curl xz-utils
   elif command -v dnf >/dev/null 2>&1; then
     echo "[1/5] Installing Node.js archive prerequisites with dnf"
     dnf install -y ca-certificates curl tar xz
@@ -130,16 +234,24 @@ if node_is_compatible && command -v npm >/dev/null 2>&1; then
   ensure_supported_linux_runtime
   echo "Using existing Node.js $(node --version) and npm $(npm --version)"
 else
-  echo "Installing the current official Node.js 24 build with its bundled npm."
+  echo "Installing the current Node.js 24 build with its bundled npm."
   install_node_prerequisites
+  if [ "$HAD_CURL" = "0" ] && [ "$INSTALL_SOURCE" = "auto" ]; then
+    select_install_source
+    rm -f "$APT_SOURCE_FILE"
+    APT_SOURCE_FILE=""
+    if command -v apt-get >/dev/null 2>&1; then prepare_apt_source || true; fi
+  fi
   for command in awk curl getconf mktemp sha256sum tar uname; do command -v "$command" >/dev/null 2>&1 || die "$command is required"; done
   ensure_supported_linux_runtime
   node_tmp="$(mktemp -d)"
   trap 'rm -rf "$node_tmp"' EXIT HUP INT TERM
-  curl -fsSL https://nodejs.org/dist/latest-v24.x/SHASUMS256.txt -o "$node_tmp/SHASUMS256.txt"
+  curl -fsSL --connect-timeout 10 --max-time 60 --retry 2 \
+    "$NODE_DIST_URL/latest-v24.x/SHASUMS256.txt" -o "$node_tmp/SHASUMS256.txt"
   node_archive="$(awk -v suffix="linux-$node_arch.tar.xz" '$2 ~ suffix "$" { print $2; exit }' "$node_tmp/SHASUMS256.txt")"
-  [ -n "$node_archive" ] || die "could not find the official Node.js 24 archive for $node_arch"
-  curl -fsSL "https://nodejs.org/dist/latest-v24.x/$node_archive" -o "$node_tmp/$node_archive"
+  [ -n "$node_archive" ] || die "could not find the Node.js 24 archive for $node_arch at $NODE_DIST_URL"
+  curl --fail --location --show-error --connect-timeout 10 --max-time 600 --retry 2 \
+    "$NODE_DIST_URL/latest-v24.x/$node_archive" -o "$node_tmp/$node_archive"
   expected_checksum="$(awk -v archive="$node_archive" '$2 == archive { print $1; exit }' "$node_tmp/SHASUMS256.txt")"
   actual_checksum="$(sha256sum "$node_tmp/$node_archive" | awk '{ print $1 }')"
   [ "$actual_checksum" = "$expected_checksum" ] || die "Node.js archive checksum verification failed"
@@ -154,8 +266,8 @@ echo "[3/5] Ensuring Docker is available"
 if [ "$INSTALL_DOCKER" = "1" ]; then
   if ! command -v docker >/dev/null 2>&1; then
     if command -v apt-get >/dev/null 2>&1; then
-      apt-get update
-      apt-get install -y docker.io
+      apt_get update
+      apt_get install -y docker.io
     elif command -v dnf >/dev/null 2>&1; then
       os_id="$(. /etc/os-release && printf '%s' "$ID")"
       case "$os_id" in
@@ -176,6 +288,8 @@ else
   echo "Docker installation skipped by request."
 fi
 
+rm -f "$APT_SOURCE_FILE"
+
 if [ -n "$VERSION" ]; then
   PACKAGE_TARGET="$VERSION"
 elif [ "$CHANNEL" = "stable" ]; then
@@ -195,7 +309,11 @@ if [ -n "$ARTIFACTS_DIR" ]; then
   [ -f "$node_agent_artifact" ] || die "missing artifact: $node_agent_artifact"
   [ -f "$controlled_instance_artifact" ] || die "missing artifact: $controlled_instance_artifact"
   [ -f "$server_artifact" ] || die "missing artifact: $server_artifact"
-  npm install -g "$control_plane_artifact" "$node_agent_artifact" "$controlled_instance_artifact" "$server_artifact"
+  if [ -n "$NPM_REGISTRY" ]; then
+    npm install -g --registry "$NPM_REGISTRY" "$control_plane_artifact" "$node_agent_artifact" "$controlled_instance_artifact" "$server_artifact"
+  else
+    npm install -g "$control_plane_artifact" "$node_agent_artifact" "$controlled_instance_artifact" "$server_artifact"
+  fi
 else
   if [ -n "$NPM_REGISTRY" ]; then
     npm install -g --registry "$NPM_REGISTRY" "@task-handoff/server@$PACKAGE_TARGET"
@@ -214,6 +332,7 @@ task-handoff install \
   --node-agent-host "$NODE_AGENT_HOST" \
   --node-agent-port "$NODE_AGENT_PORT" \
   --node-agent-ipc-path "$NODE_AGENT_IPC_PATH" \
+  --npm-registry "$NPM_REGISTRY" \
   --auth-mode "$AUTH_MODE"
 
 echo "TaskHandoff installation completed."

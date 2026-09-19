@@ -142,7 +142,13 @@ docker compose up -d --build
 curl -fsSL https://github.com/edgestorage/task-handoff/releases/latest/download/install-server.sh | sudo sh
 ```
 
-脚本会检查运行环境，按需安装 Node.js 24 和 Docker，通过 npm 安装最新稳定版 `@task-handoff/server`，然后创建并启动 Control Plane 与 Node Agent 两个 systemd 服务。默认控制平面监听 `8081` 端口并启用密码认证；可通过安装参数修改端口、认证模式、发布渠道等设置。
+脚本会检查运行环境，按需安装 Node.js 24 和 Docker，通过 npm 安装最新稳定版 `@task-handoff/server`，然后创建并启动 Control Plane 与 Node Agent 两个 systemd 服务。安装源默认为 `auto`：中国时区或中文环境直接使用清华 APT 镜像和 npmmirror；其他环境短时探测官方 Node.js 源，无法连接时自动切换中国镜像。APT 镜像只用于本次安装，不会覆盖系统源配置。默认控制平面监听 `8081` 端口并启用密码认证；可通过安装参数修改端口、认证模式、发布渠道等设置。
+
+需要明确指定来源时，可传入 `--install-source china` 或 `--install-source official`：
+
+```sh
+curl -fsSL https://github.com/edgestorage/task-handoff/releases/latest/download/install-server.sh | sudo sh -s -- --install-source china
+```
 
 ### 已具备 Node.js 和 Docker
 
@@ -185,6 +191,8 @@ curl -fsSL https://CONTROL_PLANE_HOST/install-node-agent.sh | sudo sh -s -- \
 ```
 
 请把 `RELEASE_VERSION` 替换为 Control Plane 的运行时包版本，确保 Node Agent 与受控实例运行时使用同一发布版本。
+
+远程节点安装器使用相同的自动源选择逻辑，也可以在界面生成的命令末尾追加 `--install-source china`。选择的 npm registry 会写入 Node Agent 服务环境，供后续托管更新继续使用。
 
 也可以直接在已安装 Node Agent 的机器上生成一次性邀请令牌：
 

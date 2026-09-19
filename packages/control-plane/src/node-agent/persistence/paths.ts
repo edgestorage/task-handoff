@@ -18,6 +18,7 @@ export type NodeAgentStorePaths = {
   gitCredentialAuthorizationSetsDir: string;
   gitWorkspaceProvisioningIntentsDir: string;
   updatesDir: string;
+  dockerBootstrapDir: string;
   logsDir: string;
   databasePath: string;
   storyRegistryDir: string;
@@ -50,6 +51,7 @@ export function nodeAgentStorePaths(dataDir = defaultNodeAgentDataDir()): NodeAg
     gitCredentialAuthorizationSetsDir: path.join(root, "git-credentials", "authorization-sets"),
     gitWorkspaceProvisioningIntentsDir: path.join(root, "git-credentials", "workspace-provisioning-intents"),
     updatesDir: path.join(root, "updates"),
+    dockerBootstrapDir: path.join(root, "docker-bootstrap"),
     logsDir: path.join(root, "logs"),
     databasePath: path.join(root, "node-agent.sqlite"),
     storyRegistryDir: path.join(root, "story-registry"),
