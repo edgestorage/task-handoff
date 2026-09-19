@@ -8,6 +8,10 @@ export function aiSessionCreationDraftKey(instanceId: string) {
   return `new-session:${instanceId}`;
 }
 
+export function aiSessionStoryCreationDraftKey(storyId: string) {
+  return `new-story-session:${storyId}`;
+}
+
 type StoredDraft = {
   value: string;
   bindings: AiSessionMentionBinding[];

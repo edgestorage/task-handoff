@@ -142,30 +142,33 @@ export class RuntimeConvergenceCoordinator {
         if (this.cancelled.has(instanceId)) return this.storePhase(this.requireInstance(instanceId), "pending");
         let failure: RuntimeConvergenceError;
         try {
-          instance = this.storePhase(instance, "draining");
-          const drainDeadline = this.now().getTime() + this.drainTimeoutMs;
-          let drainAccepted = false;
-          while (!drainAccepted) {
-            drainAccepted = await this.hooks.beginDrain?.(instance) !== false;
-            if (drainAccepted) {
-              drainStarted = true;
-              break;
-            }
-            if (this.cancelled.has(instanceId)) return this.storePhase(this.requireInstance(instanceId), "pending");
-            const remainingMs = drainDeadline - this.now().getTime();
-            if (remainingMs <= 0) break;
-            await this.delay(Math.min(this.drainRequestRetryMs, remainingMs));
-            instance = this.requireInstance(instanceId);
-          }
           instance = this.requireInstance(instanceId);
-          if (!drainAccepted || hasActiveWork(instance)) {
-            const remainingMs = Math.max(0, drainDeadline - this.now().getTime());
-            const drained = drainAccepted
-              && await this.waitUntil(instanceId, remainingMs, (candidate) => !hasActiveWork(candidate));
+          if (hasRegisteredRuntime(instance)) {
+            instance = this.storePhase(instance, "draining");
+            const drainDeadline = this.now().getTime() + this.drainTimeoutMs;
+            let drainAccepted = false;
+            while (!drainAccepted) {
+              drainAccepted = await this.hooks.beginDrain?.(instance) !== false;
+              if (drainAccepted) {
+                drainStarted = true;
+                break;
+              }
+              if (this.cancelled.has(instanceId)) return this.storePhase(this.requireInstance(instanceId), "pending");
+              const remainingMs = drainDeadline - this.now().getTime();
+              if (remainingMs <= 0) break;
+              await this.delay(Math.min(this.drainRequestRetryMs, remainingMs));
+              instance = this.requireInstance(instanceId);
+            }
             instance = this.requireInstance(instanceId);
-            if (!drained) {
-              if (this.cancelled.has(instanceId)) return this.storePhase(instance, "pending");
-              await this.hooks.onForcedDrain?.(instance);
+            if (!drainAccepted || hasActiveWork(instance)) {
+              const remainingMs = Math.max(0, drainDeadline - this.now().getTime());
+              const drained = drainAccepted
+                && await this.waitUntil(instanceId, remainingMs, (candidate) => !hasActiveWork(candidate));
+              instance = this.requireInstance(instanceId);
+              if (!drained) {
+                if (this.cancelled.has(instanceId)) return this.storePhase(instance, "pending");
+                await this.hooks.onForcedDrain?.(instance);
+              }
             }
           }
 
@@ -332,6 +335,15 @@ export function reportedVersion(instance: ControlledInstance | undefined) {
 
 export function hasActiveWork(instance: ControlledInstance) {
   return instance.apps.runningCount > 0 || instance.aiSessions.runningCount > 0;
+}
+
+function hasRegisteredRuntime(instance: ControlledInstance) {
+  // A fresh managed container has no runtime to admit work or drain. Older
+  // registered runtimes retain at least one of these authoritative signals.
+  return Boolean(reportedVersion(instance))
+    || instance.connectionStatus === "online"
+    || instance.agentStatus === "online"
+    || hasActiveWork(instance);
 }
 
 export function instanceImagePreparationPending(instance: Pick<ControlledInstance, "imageProvisioning">) {

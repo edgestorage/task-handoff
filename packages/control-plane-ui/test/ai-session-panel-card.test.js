@@ -429,13 +429,17 @@ test("new-session app choices follow provider create capabilities", () => {
   assert.doesNotMatch(panel, /filter\(\(app\) => app\.id === "codex"\)/);
 });
 
-test("new-session drafts persist per instance until creation succeeds", () => {
-  assert.match(panel, /activeNewSessionDraftKey = ref\(aiSessionCreationDraftKey\(props\.instance\.id\)\)/);
+test("new-session drafts persist in their instance or Story scope until creation succeeds", () => {
+  assert.match(panel, /const newSessionDraftKey = computed\(\(\) => props\.creationOnly && props\.creationStoryId[\s\S]*?aiSessionStoryCreationDraftKey\(props\.creationStoryId\)[\s\S]*?aiSessionCreationDraftKey\(props\.instance\.id\)\)/);
+  assert.match(panel, /activeNewSessionDraftKey = ref\(newSessionDraftKey\.value\)/);
   assert.match(panel, /watch\(\[newSessionDraft, newSessionMentionBindings\],[\s\S]*persistAiSessionDraftPayload\(activeNewSessionDraftKey\.value, draft, bindings\)/);
-  assert.match(panel, /watch\(\(\) => props\.instance\.id,[\s\S]*loadAiSessionDraftPayload\(activeNewSessionDraftKey\.value\)/);
+  assert.match(panel, /watch\(newSessionDraftKey,[\s\S]*loadAiSessionDraftPayload\(activeNewSessionDraftKey\.value\)/);
+  assert.match(panel, /watch\(messageAttachments,[\s\S]*persistAiSessionAttachmentDraft\(activeNewSessionDraftKey\.value, attachments\)/);
+  assert.match(panel, /restoreNewSessionAttachmentDraft\(draftKey\)/);
+  assert.doesNotMatch(panel, /watch\(\(\) => props\.instance\.id, \(\) => \{[\s\S]{0,160}messageAttachments\.value = \[\]/);
   assert.match(panel, /v-model="newSessionDraft"[\s\S]*v-model:mention-bindings="newSessionMentionBindings"/);
   assert.doesNotMatch(panel, /function openNewSession\(\)[\s\S]{0,400}newSessionDraft\.value = "";/);
-  assert.match(panel, /emit\("selectAiSession", props\.instance\.id, result\.aiSessionId\);\s*emit\("sessionCreated", props\.instance\.id, result\.aiSessionId\);\s*clearAiSessionDraft\(activeNewSessionDraftKey\.value\);\s*newSessionDraft\.value = "";/);
+  assert.match(panel, /emit\("selectAiSession", props\.instance\.id, result\.aiSessionId\);\s*emit\("sessionCreated", props\.instance\.id, result\.aiSessionId\);\s*clearAiSessionDraft\(activeNewSessionDraftKey\.value\);\s*void clearAiSessionAttachmentDraft\(activeNewSessionDraftKey\.value\);/);
 });
 
 test("new-session folder picker keeps actions visible while long folder lists scroll", () => {

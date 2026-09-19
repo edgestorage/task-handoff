@@ -193,7 +193,38 @@
 
           <section class="model-form-section">
             <header><h3>{{ t("settings.modelRegistry.model") }}</h3><p>{{ t("settings.modelRegistry.manualModelHint") }}</p></header>
-            <div class="model-name-list"><div class="model-name-list-head"><span>{{ t("settings.modelRegistry.modelNames") }}</span><div><Popover v-model:open="modelPickerOpen" @update:open="handleModelPickerOpen"><PopoverTrigger as-child><Button type="button" variant="ghost" size="sm" :disabled="!canDiscoverModels" :aria-label="t('settings.modelRegistry.chooseDiscovered')"><RefreshCw :size="13" :class="{ spin: discoveringModels }" />{{ discoveringModels ? t("settings.modelRegistry.discovering") : t("settings.modelRegistry.chooseDiscovered") }}</Button></PopoverTrigger><PopoverContent class="model-picker-popover w-[min(360px,var(--reka-popover-content-available-width))] overflow-hidden p-1" align="end" :collision-padding="12" :side-offset="6"><Command class="model-picker-command" @update:model-value="selectDiscoveredModel"><CommandInput class="model-picker-search-input h-8 py-0 text-[13px]" :placeholder="t('settings.modelRegistry.searchModels')" /><ScrollArea class="model-picker-scroll" :horizontal="false"><CommandList class="model-picker-list" :scrollable="false"><CommandEmpty>{{ discoveringModels ? t("settings.modelRegistry.discovering") : t("settings.modelRegistry.noModelMatches") }}</CommandEmpty><CommandGroup><CommandItem v-for="option in discoveredModels" :key="option.id" :value="option.id"><span>{{ option.id }}</span><small v-if="option.ownedBy">{{ option.ownedBy }}</small><Check :size="14" :class="{ 'model-option-unselected': !settingsModel.modelNames.some((entry) => entry.name === option.id) }" /></CommandItem></CommandGroup></CommandList></ScrollArea></Command></PopoverContent></Popover><Button type="button" size="sm" variant="ghost" @click="addModelName">{{ t("settings.modelRegistry.addModelName") }}</Button></div></div><TransitionGroup name="model-name-row" tag="div" class="model-name-items" :class="{ 'model-name-items-dragging': draggingModelNameIndex !== undefined, 'model-name-items-settling': modelNameDragSettling }" @dragover.prevent @drop.prevent="commitModelNameDrag"><div v-for="(entry, index) in settingsModel.modelNames" :key="modelNameEntryKey(entry)" class="model-name-row" :class="{ 'model-name-row-dragging': draggingModelNameIndex === index }" :style="modelNameDragStyle(index)" @dragover.prevent="previewModelNameDrag($event, index)"><button type="button" class="model-name-drag-handle" draggable="true" aria-keyshortcuts="ArrowUp ArrowDown" :aria-label="t('settings.modelRegistry.reorderModelName')" :title="t('settings.modelRegistry.reorderModelName')" @dragend="cancelModelNameDrag" @dragstart="startModelNameDrag($event, index)" @keydown="handleModelNameHandleKeydown($event, index)"><GripVertical :size="18" :stroke-width="1.8" aria-hidden="true" /></button><ControlPlaneInput v-model="entry.name" :placeholder="t('settings.modelRegistry.modelNamePlaceholder')" @update:model-value="(value) => index === 0 && (settingsModel.model = value)" /><Button type="button" variant="ghost" size="icon" :disabled="settingsModel.modelNames.length === 1" @click="removeModelName(index)"><Trash2 :size="14" /></Button></div></TransitionGroup></div>
+            <div class="model-name-list">
+              <div class="model-name-list-head"><span>{{ t("settings.modelRegistry.modelNames") }}</span><div><Popover v-model:open="modelPickerOpen" @update:open="handleModelPickerOpen"><PopoverTrigger as-child><Button type="button" variant="ghost" size="sm" :disabled="!canDiscoverModels" :aria-label="t('settings.modelRegistry.chooseDiscovered')"><RefreshCw :size="13" :class="{ spin: discoveringModels }" />{{ discoveringModels ? t("settings.modelRegistry.discovering") : t("settings.modelRegistry.chooseDiscovered") }}</Button></PopoverTrigger><PopoverContent class="model-picker-popover w-[min(360px,var(--reka-popover-content-available-width))] overflow-hidden p-1" align="end" :collision-padding="12" :side-offset="6"><Command class="model-picker-command" @update:model-value="selectDiscoveredModel"><CommandInput class="model-picker-search-input h-8 py-0 text-[13px]" :placeholder="t('settings.modelRegistry.searchModels')" /><ScrollArea class="model-picker-scroll" :horizontal="false"><CommandList class="model-picker-list" :scrollable="false"><CommandEmpty>{{ discoveringModels ? t("settings.modelRegistry.discovering") : t("settings.modelRegistry.noModelMatches") }}</CommandEmpty><CommandGroup><CommandItem v-for="option in discoveredModels" :key="option.id" :value="option.id"><span>{{ option.id }}</span><small v-if="option.ownedBy">{{ option.ownedBy }}</small><Check :size="14" :class="{ 'model-option-unselected': !settingsModel.modelNames.some((entry) => entry.name === option.id) }" /></CommandItem></CommandGroup></CommandList></ScrollArea></Command></PopoverContent></Popover><Button type="button" size="sm" variant="ghost" @click="addModelName">{{ t("settings.modelRegistry.addModelName") }}</Button></div></div>
+              <TransitionGroup name="model-name-row" tag="div" class="model-name-items" :class="{ 'model-name-items-dragging': draggingModelNameIndex !== undefined, 'model-name-items-settling': modelNameDragSettling }" @dragover.prevent @drop.prevent="commitModelNameDrag">
+                <div v-for="(entry, index) in settingsModel.modelNames" :key="modelNameEntryKey(entry)" class="model-name-row" :class="{ 'model-name-row-dragging': draggingModelNameIndex === index }" :style="modelNameDragStyle(index)" @dragover.prevent="previewModelNameDrag($event, index)">
+                  <DropdownMenu :open="openModelNameMenuKey === modelNameEntryKey(entry)" @update:open="handleModelNameMenuOpenChange($event, modelNameEntryKey(entry))">
+                    <DropdownMenuTrigger as-child>
+                      <button
+                        type="button"
+                        class="model-name-drag-handle"
+                        draggable="true"
+                        aria-keyshortcuts="ArrowUp ArrowDown"
+                        :aria-label="t('settings.modelRegistry.reorderModelName')"
+                        :title="t('settings.modelRegistry.reorderModelName')"
+                        @click="toggleModelNameMenu($event, modelNameEntryKey(entry))"
+                        @dragend="cancelModelNameDrag"
+                        @dragstart="startModelNameDrag($event, index)"
+                        @keydown.capture="handleModelNameHandleKeydown($event, index, modelNameEntryKey(entry))"
+                        @pointerdown.capture="rememberModelNameMenuState(modelNameEntryKey(entry))"
+                      >
+                        <GripVertical :size="18" :stroke-width="1.8" aria-hidden="true" />
+                      </button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start" :side-offset="6">
+                      <DropdownMenuItem :disabled="index === 0" @select="moveModelName(index, -1)"><ChevronUp :size="14" /><span>{{ t("settings.modelRegistry.moveModelNameUp") }}</span></DropdownMenuItem>
+                      <DropdownMenuItem :disabled="index === settingsModel.modelNames.length - 1" @select="moveModelName(index, 1)"><ChevronDown :size="14" /><span>{{ t("settings.modelRegistry.moveModelNameDown") }}</span></DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                  <ControlPlaneInput v-model="entry.name" :placeholder="t('settings.modelRegistry.modelNamePlaceholder')" @update:model-value="(value) => index === 0 && (settingsModel.model = value)" />
+                  <Button type="button" variant="ghost" size="icon" :disabled="settingsModel.modelNames.length === 1" @click="removeModelName(index)"><Trash2 :size="14" /></Button>
+                </div>
+              </TransitionGroup>
+            </div>
             <small v-if="!selectedNodeSupportsModelEndpointProbe" class="model-form-note">{{ t("settings.modelRegistry.probeUnsupported") }}</small>
           </section>
         </form>
@@ -263,6 +294,8 @@ const draggingModelNameIndex = ref<number>();
 const modelNameDragTargetIndex = ref<number>();
 const modelNameDragStep = ref(0);
 const modelNameDragSettling = ref(false);
+const openModelNameMenuKey = ref<number>();
+const modelNameMenuOpenOnPointerDownKey = ref<number>();
 const modelNameEntryKeys = new WeakMap<object, number>();
 let nextModelNameEntryKey = 0;
 const pendingDelete = ref<{ model: ModelConfig; location: ModelLocation }>();
@@ -319,6 +352,8 @@ function selectDiscoveredModel(value: unknown) {
   settingsModel.model = settingsModel.modelNames[0]?.name || "";
 }
 function startModelNameDrag(event: DragEvent, index: number) {
+  openModelNameMenuKey.value = undefined;
+  modelNameMenuOpenOnPointerDownKey.value = undefined;
   draggingModelNameIndex.value = index;
   modelNameDragTargetIndex.value = index;
   const row = (event.currentTarget as HTMLElement | null)?.closest<HTMLElement>(".model-name-row");
@@ -361,11 +396,29 @@ function cancelModelNameDrag() {
   modelNameDragTargetIndex.value = undefined;
   modelNameDragStep.value = 0;
 }
-function handleModelNameHandleKeydown(event: KeyboardEvent, index: number) {
+function rememberModelNameMenuState(key: number) {
+  modelNameMenuOpenOnPointerDownKey.value = openModelNameMenuKey.value === key ? key : undefined;
+}
+function toggleModelNameMenu(event: MouseEvent, key: number) {
+  const wasOpen = event.detail === 0 ? openModelNameMenuKey.value === key : modelNameMenuOpenOnPointerDownKey.value === key;
+  openModelNameMenuKey.value = wasOpen ? undefined : key;
+  modelNameMenuOpenOnPointerDownKey.value = undefined;
+}
+function handleModelNameMenuOpenChange(open: boolean, key: number) {
+  if (!open && openModelNameMenuKey.value === key) openModelNameMenuKey.value = undefined;
+}
+function handleModelNameHandleKeydown(event: KeyboardEvent, index: number, key: number) {
+  if (event.key === "Enter" || event.key === " ") {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    openModelNameMenuKey.value = openModelNameMenuKey.value === key ? undefined : key;
+    return;
+  }
   if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
   const targetIndex = index + (event.key === "ArrowUp" ? -1 : 1);
   if (targetIndex < 0 || targetIndex >= settingsModel.modelNames.length) return;
   event.preventDefault();
+  event.stopImmediatePropagation();
   moveModelName(index, event.key === "ArrowUp" ? -1 : 1);
   const list = (event.currentTarget as HTMLElement | null)?.closest<HTMLElement>(".model-name-list");
   void nextTick(() => list?.querySelectorAll<HTMLButtonElement>(".model-name-drag-handle")[targetIndex]?.focus());

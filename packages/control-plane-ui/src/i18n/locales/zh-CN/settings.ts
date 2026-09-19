@@ -248,7 +248,7 @@ export const settings = {
     deleting: "正在删除", deleteFrom: "从位置删除", inUseBy: "被 {count} 个实例使用", deleteLocation: "仅删除此位置", empty: "尚未配置模型",
     diagnostics: "部分节点模型无法加载", retrying: "正在重试", edit: "编辑模型", add: "添加模型", copyTitle: "复制模型", copyDescription: "基于控制面板保存的配置创建新模型，并安全继承现有密钥。", copyName: "{name} 副本", copyIdentityHint: "请修改默认模型、端点或 API 密钥，以创建独立模型。", copyCredential: "留空将继承原模型密钥；填写内容则使用新密钥。", createCopy: "创建副本",
     editDescription: "变更将应用到全部 {count} 个位置；旧配置仍会保留。", addDescription: "在一个位置创建私有模型配置。", new: "新建模型",
-    controlPlane: "控制面板", allLocations: "全部 {count} 个位置", model: "模型", modelNames: "模型名称", addModelName: "添加模型名称", modelNamePlaceholder: "输入模型 ID", reorderModelName: "拖拽调整模型名称顺序", keepKey: "留空以保留当前密钥",
+    controlPlane: "控制面板", allLocations: "全部 {count} 个位置", model: "模型", modelNames: "模型名称", addModelName: "添加模型名称", modelNamePlaceholder: "输入模型 ID", reorderModelName: "拖拽调整模型名称顺序，或单击查看更多操作", moveModelNameUp: "上移", moveModelNameDown: "下移", keepKey: "留空以保留当前密钥",
     protocols: "接口协议", protocolsDescription: "可多选。实例会根据程序所需协议筛选可用模型。", protocol: { "openai-responses": "OpenAI Responses", "openai-chat-completions": "Chat Completions", "anthropic-messages": "Anthropic Messages" }, protocolDescription: { "openai-responses": "/responses", "openai-chat-completions": "/chat/completions", "anthropic-messages": "/messages" },
     keepCredential: "留空以保留所有位置的当前凭据。", save: "保存模型", create: "创建模型", saving: "正在保存", saved: "{name} 已保存。",
     deleteConfirm: "确认从 {location} 删除 {name}？其他位置将保留。", selectLocation: "选择位置", selectApp: "选择应用", namePlaceholder: "OpenAI 主配置", nodeLocation: "节点 · {name}",

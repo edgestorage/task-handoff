@@ -4327,12 +4327,10 @@ test("node agent update checks default to the stable npm channel", async (t) => 
   ]);
 });
 
-test("node update preflight excludes Local Runtime artifacts on macOS and reports stopped impact", async (t) => {
-  const resolved = [];
+test("node update preflight relies only on immutable npm metadata and reports stopped impact", async (t) => {
   const updateCommands = [];
+  let artifactResolutionCalls = 0;
   const globalRoot = tempDataDir("node-agent-update-runtime-preflight-root");
-  let failArtifact = false;
-  let artifactSha = "c".repeat(64);
   const app = await createNodeAgentApp({
     dataDir: tempDataDir("node-agent-update-runtime-preflight"),
     logger: false,
@@ -4362,23 +4360,9 @@ test("node update preflight excludes Local Runtime artifacts on macOS and report
       if (args[0] === "prefix") return { stdout: globalRoot, stderr: "" };
       return { stdout: JSON.stringify(args.includes("dist.integrity") ? npmIntegrityFixture : "9.8.7"), stderr: "" };
     },
-    resolveRuntimeArtifact: async (version, platform, arch) => {
-      if (failArtifact) throw Object.assign(new Error("runtime artifact missing"), { code: "INSTANCE_RUNTIME_ARTIFACT_UNAVAILABLE", retryable: false });
-      resolved.push([version, platform, arch]);
-      return {
-        archivePath: "/cache/runtime.tar.gz",
-        cacheHit: false,
-        identity: {
-          packageName: "@task-handoff/controlled-instance",
-          version,
-          platform,
-          arch,
-          formatVersion: 1,
-          launcherAbi: 1,
-          entrypoint: "dist/controlled-instance-cli.js",
-          sha256: artifactSha,
-        },
-      };
+    resolveRuntimeArtifact: async () => {
+      artifactResolutionCalls += 1;
+      throw new Error("update preflight must not use a runtime release source");
     },
   });
   t.after(() => app.close());
@@ -4403,10 +4387,10 @@ test("node update preflight excludes Local Runtime artifacts on macOS and report
     payload: { channel: "stable" },
   });
   assert.equal(response.statusCode, 200, response.body);
-  assert.deepEqual(resolved, [["9.8.7", "linux", "x64"]]);
   assert.equal(response.json().data.impact.stoppedInstanceCount, 1);
   assert.equal(response.json().data.impact.restartInstanceCount, 0);
-  assert.deepEqual(response.json().data.runtimeArtifacts.map((artifact) => artifact.version), ["9.8.7"]);
+  assert.deepEqual(response.json().data.runtimeArtifacts, []);
+  assert.equal(artifactResolutionCalls, 0);
   assert.ok(response.json().data.preflightToken);
 
   const apply = await app.inject({
@@ -4420,7 +4404,7 @@ test("node update preflight excludes Local Runtime artifacts on macOS and report
     },
   });
   assert.equal(apply.statusCode, 202, apply.body);
-  assert.equal(resolved.length, 2);
+  assert.equal(artifactResolutionCalls, 0);
   assert.equal(updateCommands.includes("systemd-run"), true);
 
   const replay = await app.inject({
@@ -4436,7 +4420,6 @@ test("node update preflight excludes Local Runtime artifacts on macOS and report
   assert.equal(replay.statusCode, 409);
   assert.equal(replay.json().error.code, "UPDATE_PREFLIGHT_EXPIRED");
 
-  failArtifact = false;
   const secondCheck = await app.inject({
     method: "POST",
     url: "/api/node-agent/updates/check",
@@ -4480,26 +4463,6 @@ test("node update preflight excludes Local Runtime artifacts on macOS and report
   });
   assert.equal(staleImpact.statusCode, 409);
   assert.equal(staleImpact.json().error.code, "UPDATE_PREFLIGHT_STALE");
-
-  const artifactCheck = await app.inject({
-    method: "POST",
-    url: "/api/node-agent/updates/check",
-    headers: { authorization: "Bearer agent-secret" },
-    payload: { channel: "stable" },
-  });
-  artifactSha = "e".repeat(64);
-  const staleArtifact = await app.inject({
-    method: "POST",
-    url: "/api/node-agent/updates/apply",
-    headers: { authorization: "Bearer agent-secret" },
-    payload: {
-      channel: "stable",
-      targetVersion: artifactCheck.json().data.availableVersion,
-      preflightToken: artifactCheck.json().data.preflightToken,
-    },
-  });
-  assert.equal(staleArtifact.statusCode, 409);
-  assert.equal(staleArtifact.json().error.code, "UPDATE_PREFLIGHT_STALE");
 });
 
 test("node agent update checks use the configured absolute npm command", async (t) => {
