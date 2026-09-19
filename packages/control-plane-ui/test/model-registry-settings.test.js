@@ -65,7 +65,7 @@ test("model settings discovers models into an ordered name list with real endpoi
   const state = read("src/apps/control-plane/settings/useModelSettings.ts");
   assert.match(settings, /v-for="\(entry, index\) in settingsModel\.modelNames"/);
   assert.match(settings, /<ControlPlaneInput v-model="entry\.name"/);
-  assert.match(settings, /class="model-name-drag-handle" draggable="true"/);
+  assert.match(settings, /class="model-name-drag-handle"\s+draggable="true"/);
   assert.match(settings, /<TransitionGroup name="model-name-row" tag="div" class="model-name-items"[^>]*>/);
   assert.match(settings, /:key="modelNameEntryKey\(entry\)"/);
   assert.match(settings, /\.model-name-row-move \{ transition: transform 180ms ease/);
@@ -78,7 +78,10 @@ test("model settings discovers models into an ordered name list with real endpoi
   assert.match(settings, /modelNameDragSettling\.value = true;[\s\S]*requestAnimationFrame\(\(\) => \{ modelNameDragSettling\.value = false; \}\)/);
   assert.match(settings, /\.model-name-items-settling \.model-name-row \{ transition: none; \}/);
   assert.match(state, /function reorderModelName\(source: number, target: number\)/);
-  assert.match(settings, /@keydown="handleModelNameHandleKeydown\(\$event, index\)"/);
+  assert.match(settings, /:open="openModelNameMenuKey === modelNameEntryKey\(entry\)"/);
+  assert.match(settings, /@click="toggleModelNameMenu\(\$event, modelNameEntryKey\(entry\)\)"/);
+  assert.match(settings, /<DropdownMenuContent align="start"[\s\S]*moveModelNameUp[\s\S]*moveModelNameDown/);
+  assert.match(settings, /@keydown\.capture="handleModelNameHandleKeydown\(\$event, index, modelNameEntryKey\(entry\)\)"/);
   assert.match(settings, /<GripVertical :size="18"/);
   assert.doesNotMatch(settings, /:disabled="index === 0" @click="moveModelName\(index, -1\)"/);
   assert.doesNotMatch(settings, /:disabled="index === settingsModel\.modelNames\.length - 1" @click="moveModelName\(index, 1\)"/);

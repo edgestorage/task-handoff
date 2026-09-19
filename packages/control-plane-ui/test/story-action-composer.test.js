@@ -38,7 +38,7 @@ test("preset composer mode keeps unsupported attachments out of Story actions", 
 
 test("preset mode does not mutate session defaults or persisted new-session drafts", () => {
   assert.match(panel, /if \(props\.creationMode === "preset" \|\| newSessionApp\.value !== "codex"\) \{\s*newSessionPermissionMode\.value = permissionMode;\s*return;\s*\}/);
-  assert.match(panel, /watch\(\(\) => props\.instance\.id, \(instanceId\) => \{\s*if \(props\.creationMode === "preset"\) return;/);
+  assert.match(panel, /watch\(newSessionDraftKey, \(draftKey\) => \{\s*if \(props\.creationMode === "preset"\) return;/);
   assert.match(panel, /watch\(\[newSessionDraft, newSessionMentionBindings\],[\s\S]*?if \(props\.creationMode === "preset"\) return;[\s\S]*?persistAiSessionDraftPayload/);
   const presetBranch = panel.indexOf('if (props.creationMode === "preset") {', panel.indexOf("async function createNewSession"));
   assert.ok(presetBranch > 0);

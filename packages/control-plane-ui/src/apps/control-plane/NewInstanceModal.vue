@@ -14,17 +14,17 @@
         </DialogClose>
       </div>
 
-      <ScrollArea class="new-instance-body">
-        <div class="new-instance-body-content">
-          <fieldset class="new-instance-fields" :disabled="creating">
-            <div class="wizard-layout">
-              <nav class="wizard-steps" :aria-label="t('instances.create.stepsLabel')">
-                <button v-for="item in wizardSteps" :key="item.id" type="button" :class="{ active: step === item.id, complete: stepIndex(item.id) < activeStepIndex }" @click="goToStep(item.id)">
-                  <span>{{ stepIndex(item.id) + 1 }}</span>
-                  <strong>{{ item.label }}</strong>
-                </button>
-              </nav>
+      <div class="new-instance-body">
+        <fieldset class="new-instance-fields" :disabled="creating">
+          <div class="wizard-layout">
+            <nav class="wizard-steps" :aria-label="t('instances.create.stepsLabel')">
+              <button v-for="item in wizardSteps" :key="item.id" type="button" :class="{ active: step === item.id, complete: stepIndex(item.id) < activeStepIndex }" @click="goToStep(item.id)">
+                <span>{{ stepIndex(item.id) + 1 }}</span>
+                <strong>{{ item.label }}</strong>
+              </button>
+            </nav>
 
+            <ScrollArea class="wizard-panel-scroll" :horizontal="false">
               <div class="wizard-panel">
                 <SourceStep
                   v-if="step === 'source'"
@@ -87,24 +87,24 @@
                   @create-image="createQuickImage"
                 />
               </div>
-            </div>
-          </fieldset>
-
-          <div class="modal-actions">
-            <span v-if="currentBlockedReason" class="create-blocked-reason">{{ currentBlockedReason }}</span>
-            <Button variant="outline" size="sm" :disabled="creating" @click="step === 'source' ? $emit('close') : previousStep()">{{ step === "source" ? t("instances.create.cancel") : t("instances.create.back") }}</Button>
-            <Button v-if="step === 'source'" size="sm" :disabled="!canContinue || creating" @click="nextStep">
-              <ArrowRight :size="15" />
-              <span>{{ t("instances.create.continue") }}</span>
-            </Button>
-            <Button v-else size="sm" :disabled="!canCreateInstance || creating" :aria-label="t(creating ? 'instances.create.creating' : 'instances.create.create')" @click="createInstance">
-              <LoaderCircle v-if="creating" class="animate-spin motion-reduce:animate-none" :size="15" />
-              <Plus v-else :size="15" />
-              <span>{{ creating ? t("instances.create.creating") : t("instances.create.create") }}</span>
-            </Button>
+            </ScrollArea>
           </div>
-        </div>
-      </ScrollArea>
+        </fieldset>
+      </div>
+
+      <div class="modal-actions">
+        <span v-if="currentBlockedReason" class="create-blocked-reason">{{ currentBlockedReason }}</span>
+        <Button variant="outline" size="sm" :disabled="creating" @click="step === 'source' ? $emit('close') : previousStep()">{{ step === "source" ? t("instances.create.cancel") : t("instances.create.back") }}</Button>
+        <Button v-if="step === 'source'" size="sm" :disabled="!canContinue || creating" @click="nextStep">
+          <ArrowRight :size="15" />
+          <span>{{ t("instances.create.continue") }}</span>
+        </Button>
+        <Button v-else size="sm" :disabled="!canCreateInstance || creating" :aria-label="t(creating ? 'instances.create.creating' : 'instances.create.create')" @click="createInstance">
+          <LoaderCircle v-if="creating" class="animate-spin motion-reduce:animate-none" :size="15" />
+          <Plus v-else :size="15" />
+          <span>{{ creating ? t("instances.create.creating") : t("instances.create.create") }}</span>
+        </Button>
+      </div>
     </DialogContent>
   </Dialog>
 </template>
@@ -851,7 +851,7 @@ function errorText(error: unknown) {
 <style scoped>
 :global(.new-instance-modal) {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
   width: min(900px, calc(100vw - 36px)) !important;
   max-width: calc(100vw - 36px) !important;
   max-height: calc(100vh - 36px);
@@ -867,13 +867,7 @@ function errorText(error: unknown) {
 
 .new-instance-body {
   min-height: 0;
-}
-
-.new-instance-body-content {
-  display: grid;
-  gap: 12px;
-  min-height: 100%;
-  padding-right: 2px;
+  overflow: hidden;
 }
 
 .modal-head {
@@ -909,7 +903,7 @@ function errorText(error: unknown) {
   border: 0;
   border-radius: 6px;
   background: var(--surface-hover);
-  color: var(--brand-accent-muted);
+  color: var(--text-muted);
   cursor: pointer;
 }
 
@@ -926,7 +920,9 @@ function errorText(error: unknown) {
 }
 
 .new-instance-fields {
+  height: 100%;
   min-width: 0;
+  min-height: 0;
   margin: 0;
   border: 0;
   padding: 0;
@@ -935,6 +931,7 @@ function errorText(error: unknown) {
 .wizard-layout {
   display: grid;
   grid-template-columns: 170px minmax(0, 1fr);
+  height: 100%;
   min-height: 410px;
   overflow: hidden;
   border: 1px solid var(--line);
@@ -976,7 +973,7 @@ function errorText(error: unknown) {
 }
 
 .wizard-steps button.complete {
-  color: var(--brand-accent-muted);
+  color: var(--brand-accent);
 }
 
 .wizard-steps span {
@@ -1001,7 +998,12 @@ function errorText(error: unknown) {
 
 .wizard-panel {
   min-width: 0;
-  padding: 14px;
+  padding: 14px 18px 14px 14px;
+}
+
+.wizard-panel-scroll {
+  min-width: 0;
+  min-height: 0;
 }
 
 .modal-actions {
@@ -1028,6 +1030,8 @@ function errorText(error: unknown) {
 
   .wizard-layout {
     grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
+    min-height: 0;
   }
 
   .wizard-steps {

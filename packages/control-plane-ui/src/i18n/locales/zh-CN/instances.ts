@@ -10,8 +10,9 @@ export const instances = {
     availableHint: "添加此实例需要向 AI 会话提供的模型 Provider。",
     add: "添加",
     remove: "移除 {name}",
-    moveUp: "上移 {name}",
-    moveDown: "下移 {name}",
+    moveUpAction: "上移",
+    moveDownAction: "下移",
+    reorder: "拖拽调整 {name} 顺序，或单击查看更多操作",
     empty: "当前节点没有可用的模型 Provider",
   },
   window: {

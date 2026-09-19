@@ -395,6 +395,7 @@ function readAttachment(file: File, runtimePath?: string, textPresentation?: AiS
     return Promise.resolve({
       ...common,
       source: { type: "runtime-path", path: runtimePath },
+      ...(kind === "image" ? { file } : {}),
       ...(kind === "image" ? { previewUrl: URL.createObjectURL(file) } : {}),
     });
   }

@@ -1328,7 +1328,8 @@ import { useNodeStorageFolderPicker } from "../settings/useNodeStorageFolderPick
 import { normalizeAiSessionGroupPath } from "./aiSessionPathGrouping";
 import { loadCollapsedAiSessionPathGroups, persistCollapsedAiSessionPathGroups } from "./aiSessionPathGroupCollapse";
 import { loadAiSessionCreationPreferences, persistAiSessionCreationPreferences } from "./aiSessionCreationPreferences";
-import { aiSessionCreationDraftKey, aiSessionMessageText, clearAiSessionDraft, loadAiSessionDraftPayload, persistAiSessionDraftPayload } from "../useAiSessionDraft";
+import { aiSessionCreationDraftKey, aiSessionMessageText, aiSessionStoryCreationDraftKey, clearAiSessionDraft, loadAiSessionDraftPayload, persistAiSessionDraftPayload } from "../useAiSessionDraft";
+import { clearAiSessionAttachmentDraft, loadAiSessionAttachmentDraft, persistAiSessionAttachmentDraft } from "../useAiSessionAttachmentDraft";
 import {
   aiSessionPermissionKey,
   clearAiSessionPermissionMode,
@@ -1852,7 +1853,10 @@ const selectedSessionModelDisplay = computed(() => {
 const newSessionReasoningEffortCapability = computed(() => reasoningEffortCapability(newSessionApp.value));
 const selectedSessionReasoningEffortCapability = computed(() => reasoningEffortCapability(selectedSession.value?.agent || ""));
 const newSessionFolderId = ref("");
-const activeNewSessionDraftKey = ref(aiSessionCreationDraftKey(props.instance.id));
+const newSessionDraftKey = computed(() => props.creationOnly && props.creationStoryId
+  ? aiSessionStoryCreationDraftKey(props.creationStoryId)
+  : aiSessionCreationDraftKey(props.instance.id));
+const activeNewSessionDraftKey = ref(newSessionDraftKey.value);
 const initialNewSessionDraft = props.creationMode === "preset"
   ? { value: props.creationInitialPrompt || "", bindings: [] }
   : loadAiSessionDraftPayload(activeNewSessionDraftKey.value);
@@ -2098,6 +2102,8 @@ const collapsedHistoryPathGroups = reactive<Record<string, boolean>>(
 );
 const messageDraft = ref("");
 const messageAttachments = ref<AiSessionComposerAttachment[]>([]);
+let newSessionAttachmentDraftRevision = 0;
+let restoringNewSessionAttachmentDraft = false;
 const messageMentionBindings = ref<AiSessionMentionBinding[]>([]);
 const queueComposerEdit = ref<{
   queueId: string;
@@ -2385,6 +2391,7 @@ watch([historyMode, supportsSessionListHoverPreview], closeSessionListPreview);
 
 watch(() => props.instance.id, () => {
   newSessionStoryId.value = props.creationStoryId || "";
+  newSessionCreateAttempt.value = undefined;
   historyDetailRevision += 1;
   historyItems.value = [];
   historyError.value = "";
@@ -2407,20 +2414,39 @@ watch(
   { immediate: true },
 );
 
-watch(() => props.instance.id, (instanceId) => {
+watch(newSessionDraftKey, (draftKey) => {
   if (props.creationMode === "preset") return;
-  activeNewSessionDraftKey.value = aiSessionCreationDraftKey(instanceId);
+  activeNewSessionDraftKey.value = draftKey;
   const draft = loadAiSessionDraftPayload(activeNewSessionDraftKey.value);
   newSessionDraft.value = draft.value;
   newSessionMentionBindings.value = draft.bindings;
-  messageAttachments.value = [];
-  newSessionCreateAttempt.value = undefined;
+  void restoreNewSessionAttachmentDraft(draftKey);
 });
 
 watch([newSessionDraft, newSessionMentionBindings], ([draft, bindings]) => {
   if (props.creationMode === "preset") return;
   persistAiSessionDraftPayload(activeNewSessionDraftKey.value, draft, bindings);
 }, { deep: true });
+
+watch(messageAttachments, (attachments) => {
+  if (props.creationMode === "preset" || restoringNewSessionAttachmentDraft) return;
+  newSessionAttachmentDraftRevision += 1;
+  void persistAiSessionAttachmentDraft(activeNewSessionDraftKey.value, attachments);
+}, { flush: "sync" });
+
+async function restoreNewSessionAttachmentDraft(draftKey: string) {
+  const revision = ++newSessionAttachmentDraftRevision;
+  restoringNewSessionAttachmentDraft = true;
+  messageAttachments.value = [];
+  restoringNewSessionAttachmentDraft = false;
+  const attachments = await loadAiSessionAttachmentDraft(draftKey);
+  if (revision !== newSessionAttachmentDraftRevision || draftKey !== activeNewSessionDraftKey.value) return;
+  restoringNewSessionAttachmentDraft = true;
+  messageAttachments.value = attachments;
+  restoringNewSessionAttachmentDraft = false;
+}
+
+if (props.creationMode !== "preset") void restoreNewSessionAttachmentDraft(activeNewSessionDraftKey.value);
 
 watch(
   [showNewSession, aiSessionLaunchableApps, newSessionFolders],
@@ -3273,6 +3299,7 @@ async function createNewSession(permissionMode?: AiSessionPermissionMode) {
     emit("selectAiSession", props.instance.id, result.aiSessionId);
     emit("sessionCreated", props.instance.id, result.aiSessionId);
     clearAiSessionDraft(activeNewSessionDraftKey.value);
+    void clearAiSessionAttachmentDraft(activeNewSessionDraftKey.value);
     newSessionDraft.value = "";
     newSessionMentionBindings.value = [];
     messageAttachments.value = [];

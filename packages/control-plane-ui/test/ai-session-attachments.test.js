@@ -13,6 +13,7 @@ test("composer supports generic files and Local Runtime path references", () => 
   assert.match(composer, /showControlPlaneToast\(outsideWorkspaceFiles\.has\(file\)/);
   assert.doesNotMatch(composer, /ai-session-composer__error/);
   assert.match(composer, /source: \{ type: "runtime-path", path: runtimePath \}/);
+  assert.match(composer, /source: \{ type: "runtime-path", path: runtimePath \},\s*\.\.\.\(kind === "image" \? \{ file \} : \{\}\)/);
   assert.match(composer, /attachment\.kind === 'file'/);
 });
 

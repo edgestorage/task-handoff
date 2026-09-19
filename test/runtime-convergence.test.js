@@ -163,6 +163,48 @@ test("runtime reconciliation remains pending until Docker image preparation comp
   assert.equal(restarts, 0);
 });
 
+test("a first start without a registered runtime installs immediately instead of waiting for drain", async () => {
+  let clock = 0;
+  const store = memoryStore(instance({
+    status: "starting",
+    health: "unknown",
+    connectionStatus: "unknown",
+    agentStatus: "unknown",
+    targetStatus: "unknown",
+    uiAccessStatus: "unknown",
+    build: undefined,
+    instanceVersion: undefined,
+    ready: false,
+  }));
+  const calls = [];
+  const coordinator = new RuntimeConvergenceCoordinator(store, () => "2.0.0", {
+    async beginDrain() {
+      calls.push("drain");
+      return false;
+    },
+    async onForcedDrain() { calls.push("forced"); },
+    async install() { calls.push("install"); },
+    async restart(value) {
+      calls.push("restart");
+      store.put(ControlledInstanceSchema.parse({
+        ...store.get(value.id),
+        status: "running",
+        build: { component: "controlled-instance", packageVersion: "2.0.0" },
+      }));
+    },
+  }, {
+    now: () => new Date(clock),
+    delay: async (milliseconds) => { clock += milliseconds; },
+    drainTimeoutMs: 5 * 60_000,
+    verificationTimeoutMs: 0,
+  });
+
+  const updated = await coordinator.schedule("inst_runtime", { startRequested: true });
+  assert.deepEqual(calls, ["install", "restart"]);
+  assert.equal(clock, 0);
+  assert.equal(updated.runtimeVersion.phase, "matched");
+});
+
 test("an explicit stop cancels restart after an in-flight install", async () => {
   const store = memoryStore(instance());
   let finishInstall;

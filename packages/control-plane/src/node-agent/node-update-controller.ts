@@ -4,7 +4,6 @@ import {
   UpdateCheckRequestSchema,
   UpdateCheckResultSchema,
   type ControlledInstance,
-  type RuntimeArtifactIdentity,
   type UpdateCheckResult,
 } from "@task-handoff/protocol/control-plane";
 import { createSecret } from "../shared/persistence/store.ts";
@@ -28,7 +27,6 @@ type Options = {
   runCommand: CommandRunner;
   currentRuntimeVersion(): string;
   listInstances(): ControlledInstance[];
-  resolveRuntimeArtifacts(version: string): Promise<RuntimeArtifactIdentity[]>;
   moduleDir: string;
   managedUpdateSupport?(selection: { packageName: string; installPrefix: string }): { supported: boolean; reason?: string };
   workerClaimTimeoutMs?: number;
@@ -92,7 +90,10 @@ export class NodeUpdateController {
     if (!check.updateAvailable) return check;
     const result: UpdateCheckResult = {
       ...check,
-      runtimeArtifacts: await this.options.resolveRuntimeArtifacts(check.availableVersion),
+      // Compatibility for v0.0.32: keep the public field empty. The target
+      // Node Agent npm package owns and validates its bundled runtime after
+      // restart, so an old agent must not require a parallel release source.
+      runtimeArtifacts: [],
       preflightToken: createSecret(),
     };
     this.preflights.set(result.preflightToken!, {
@@ -198,8 +199,6 @@ export class NodeUpdateController {
       && check.artifactRef?.startsWith(`npm:${selection.packageName}@`) === true
       && JSON.stringify(check.impact) === JSON.stringify(updateImpact(this.options.listInstances()));
     if (!unchanged) this.throwStale();
-    const artifacts = await this.options.resolveRuntimeArtifacts(check.availableVersion);
-    if (JSON.stringify(check.runtimeArtifacts) !== JSON.stringify(artifacts)) this.throwStale();
     return { check, selection };
   }
 

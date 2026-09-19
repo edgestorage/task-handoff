@@ -7,8 +7,9 @@ export const instances = {
     availableHint: "Add any provider this instance should make available to AI sessions.",
     add: "Add",
     remove: "Remove {name}",
-    moveUp: "Move {name} up",
-    moveDown: "Move {name} down",
+    moveUpAction: "Move up",
+    moveDownAction: "Move down",
+    reorder: "Drag to reorder {name} or click for options",
     empty: "No model providers are available on this node",
   },
   window: {

@@ -1037,32 +1037,12 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     runInstanceOperation: (instanceId, operation) => instanceOperations.run(instanceId, operation),
   });
 
-  const resolvePreflightRuntimeArtifacts = async (version: string) => {
-    const adapters = new Map<string, { adapter: ManagedRuntimeAdapter; context?: ExecutorContext }>();
-    for (const adapter of runtimeAdapters.managedAdapters()) {
-      const target = await adapter.artifactTarget();
-      adapters.set(`${target.platform}-${target.arch}`, { adapter });
-    }
-    for (const instance of state.listInstances()) {
-      const adapter = managedAdapterForInstance(instance);
-      if (!adapter) continue;
-      const context = state.context(instance);
-      const target = await adapter.artifactTarget(context);
-      adapters.set(`${target.platform}-${target.arch}`, { adapter, context });
-    }
-    const artifacts = await Promise.all([...adapters.values()].map(({ adapter, context }) => resolveArtifactForAdapter(version, adapter, context)));
-    return artifacts.sort((left, right) => `${left.identity.platform}/${left.identity.arch}`.localeCompare(`${right.identity.platform}/${right.identity.arch}`));
-  };
-
   const updateController = new NodeUpdateController({
     nodeId,
     jobs: state.updateJobs,
     runCommand: updateCommandRunner,
     currentRuntimeVersion: desiredControlledInstanceVersion,
     listInstances: () => state.listInstances(),
-    resolveRuntimeArtifacts: async (version) => (
-      await resolvePreflightRuntimeArtifacts(version)
-    ).map((artifact) => artifact.identity),
     moduleDir: import.meta.url ? path.dirname(fileURLToPath(import.meta.url)) : __dirname,
     managedUpdateSupport: options.managedUpdateSupport || ((selection) => {
       if ((options.platform || process.platform) !== "linux") {
