@@ -841,6 +841,8 @@ export const NodeUpdateImpactSchema = z.object({
   activeInstanceIds: z.array(IdSchema).max(1024).default([]),
 }).strict();
 export const NodeRolloutSummarySchema = z.object({
+  // Compatibility for v0.0.32: instance rollout phases and counters remain
+  // readable, but current server update jobs do not own instance convergence.
   phase: z.enum(["queued", "updating-node", "restarting-node", "converging-instances", "succeeded", "degraded", "failed"]),
   desiredVersion: z.string().trim().min(1).max(80),
   nodeVersion: z.string().trim().min(1).max(80).optional(),

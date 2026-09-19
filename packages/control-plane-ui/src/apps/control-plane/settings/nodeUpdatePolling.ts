@@ -2,11 +2,13 @@ const ACTIVE_UPDATE_STATUSES = new Set([
   "queued",
   "updating-node",
   "restarting-node",
+  // Compatibility for v0.0.32: server jobs waited for instance convergence.
   "converging-instances",
 ]);
 
 const TERMINAL_UPDATE_STATUSES = new Set([
   "succeeded",
+  // Compatibility for v0.0.32: instance failures degraded the server job.
   "degraded",
   "failed",
 ]);
@@ -17,6 +19,15 @@ export function isActiveNodeUpdate(status?: string) {
 
 export function isTerminalNodeUpdate(status?: string) {
   return Boolean(status && TERMINAL_UPDATE_STATUSES.has(status));
+}
+
+export function findTrackedTerminalNodeUpdate<T extends { id: string; status: string }>(
+  jobId: string | undefined,
+  jobs: T[],
+) {
+  if (!jobId) return undefined;
+  const job = jobs.find((candidate) => candidate.id === jobId);
+  return isTerminalNodeUpdate(job?.status) ? job : undefined;
 }
 
 export async function refreshNodeUpdateHttpState(input: {

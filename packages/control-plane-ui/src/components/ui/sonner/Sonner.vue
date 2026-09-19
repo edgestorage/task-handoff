@@ -77,7 +77,7 @@ useMutationObserver(document.documentElement, syncTheme, { attributes: true, att
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: start;
   gap: 10px;
-  width: min(420px, calc(100vw - 36px));
+  width: 100%;
   min-height: 48px;
   border: 1px solid var(--line-strong) !important;
   border-left: 3px solid var(--brand-accent);
@@ -120,6 +120,16 @@ useMutationObserver(document.documentElement, syncTheme, { attributes: true, att
   height: 26px;
   place-items: center;
   padding: 0;
+}
+
+.task-handoff-toast-action,
+.task-handoff-toast-cancel {
+  grid-column: 2;
+  font: inherit;
+  font-weight: 500;
+  justify-self: start;
+  min-height: 28px;
+  padding: 4px 10px;
 }
 
 .task-handoff-toast-close:hover,

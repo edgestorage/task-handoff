@@ -135,7 +135,7 @@ test("node agent startup fails an update job left queued by an unclaimed worker"
     updatedAt: timestamp,
   });
 
-  jobs.reconcileRollouts([], "1.0.0", { processStarted: true });
+  jobs.reconcileServerUpdates("1.0.0", { processStarted: true });
 
   const stored = jobs.records.get("update_unclaimed_restart");
   assert.equal(stored.status, "failed");

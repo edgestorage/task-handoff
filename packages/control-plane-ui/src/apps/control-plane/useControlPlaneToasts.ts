@@ -1,6 +1,13 @@
 import { toast } from "vue-sonner";
 
 export type ControlPlaneToastKind = "error" | "info" | "success";
+export type ControlPlaneToastOptions = {
+  action?: {
+    label: string;
+    onClick: () => void;
+  };
+  duration?: number;
+};
 
 export const CONTROL_PLANE_LOADING_TOAST_DELAY_MS = 800;
 
@@ -16,8 +23,16 @@ export function clearControlPlaneToasts() {
   toast.dismiss();
 }
 
-export function showControlPlaneToast(message: string, kind: ControlPlaneToastKind = "error") {
-  toast[kind](message, { duration: 6000, closeButton: true });
+export function showControlPlaneToast(
+  message: string,
+  kind: ControlPlaneToastKind = "error",
+  options: ControlPlaneToastOptions = {},
+) {
+  toast[kind](message, {
+    duration: options.duration ?? 6000,
+    closeButton: true,
+    ...(options.action ? { action: options.action } : {}),
+  });
 }
 
 export function showDelayedControlPlaneLoadingToast(

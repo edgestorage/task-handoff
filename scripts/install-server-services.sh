@@ -187,6 +187,19 @@ assert_service_command_accessible "$NPM_COMMAND" "npm command"
 mkdir -p "$ENV_DIR" "$CONTROL_PLANE_DATA_DIR" "$NODE_AGENT_DATA_DIR"
 chown -R "$SERVICE_USER":"$SERVICE_USER" "$CONTROL_PLANE_DATA_DIR" "$NODE_AGENT_DATA_DIR" 2>/dev/null || true
 
+initialize_control_plane_admin() {
+  username="$1"
+  if [ "$SERVICE_USER" = "root" ]; then
+    env TASK_HANDOFF_CONTROL_PLANE_DATA_DIR="$CONTROL_PLANE_DATA_DIR" \
+      $CONTROL_PLANE_COMMAND --data-dir "$CONTROL_PLANE_DATA_DIR" credentials \
+      --initialize-if-needed --username "$username" --password-stdin
+  else
+    runuser -u "$SERVICE_USER" -- env TASK_HANDOFF_CONTROL_PLANE_DATA_DIR="$CONTROL_PLANE_DATA_DIR" \
+      $CONTROL_PLANE_COMMAND --data-dir "$CONTROL_PLANE_DATA_DIR" credentials \
+      --initialize-if-needed --username "$username" --password-stdin
+  fi
+}
+
 ADMIN_USERNAME=""
 ADMIN_PASSWORD=""
 if [ "$AUTH_MODE" = "password" ]; then
@@ -197,11 +210,7 @@ if [ "$AUTH_MODE" = "password" ]; then
   systemctl stop task-handoff-control-plane.service 2>/dev/null || true
   ADMIN_USERNAME="$(node -e 'process.stdout.write(`admin-${require("node:crypto").randomBytes(6).toString("hex")}`)')"
   ADMIN_PASSWORD="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(24).toString("base64url"))')"
-  if [ "$SERVICE_USER" = "root" ]; then
-    ADMIN_INITIALIZATION_RESULT="$(printf '%s\n' "$ADMIN_PASSWORD" | $CONTROL_PLANE_COMMAND credentials --initialize-if-needed --username "$ADMIN_USERNAME" --password-stdin --data-dir "$CONTROL_PLANE_DATA_DIR")"
-  else
-    ADMIN_INITIALIZATION_RESULT="$(printf '%s\n' "$ADMIN_PASSWORD" | runuser -u "$SERVICE_USER" -- $CONTROL_PLANE_COMMAND credentials --initialize-if-needed --username "$ADMIN_USERNAME" --password-stdin --data-dir "$CONTROL_PLANE_DATA_DIR")"
-  fi
+  ADMIN_INITIALIZATION_RESULT="$(printf '%s\n' "$ADMIN_PASSWORD" | initialize_control_plane_admin "$ADMIN_USERNAME")"
   if [ "$ADMIN_INITIALIZATION_RESULT" != "created" ]; then
     ADMIN_USERNAME=""
     ADMIN_PASSWORD=""

@@ -104,6 +104,7 @@ test("Electron unpacks the server runtime needed by its bundled Node process", (
     "bin/**/*",
     "docker/entrypoint.sh",
     "docker/instance-launcher.sh",
+    "docker/node-agent-unix-proxy.mjs",
     "docker/runtime-installer.mjs",
     "dist/**/*",
     "packages/control-plane-ui/dist/**/*",
@@ -113,6 +114,7 @@ test("Electron unpacks the server runtime needed by its bundled Node process", (
   for (const launcherAsset of [
     "docker/entrypoint.sh",
     "docker/instance-launcher.sh",
+    "docker/node-agent-unix-proxy.mjs",
     "docker/runtime-installer.mjs",
   ]) {
     assert.ok(packageJson.build.files.includes(launcherAsset), `${launcherAsset} must be packaged`);
