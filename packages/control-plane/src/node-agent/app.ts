@@ -814,8 +814,10 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
         } else {
           app.log.info({ instanceId: instance.id, requested: result.requested }, "runtime convergence requested app session drain");
         }
+        return true;
       } catch (error) {
         app.log.warn({ instanceId: instance.id, error: error instanceof Error ? error.message : String(error) }, "runtime convergence could not request app session drain");
+        return false;
       }
     },
     endDrain: async (instance) => {

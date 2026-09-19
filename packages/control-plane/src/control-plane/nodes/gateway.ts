@@ -827,26 +827,39 @@ export class ControlPlaneNodeAgentGateway {
     if (resource !== "instances") return items;
     return items.map((item) => {
       if (!item || typeof item !== "object" || Array.isArray(item)) return item;
-      // Instance heartbeats advance persistence/observation clocks without
-      // changing the authoritative fleet resource. Lifecycle events own these
-      // fields and must not turn a fleet refresh into a board refetch.
       const {
         stateRevision: _stateRevision,
         updatedAt: _updatedAt,
         lastHeartbeatAt: _lastHeartbeatAt,
+        status: _status,
+        health: _health,
+        connectionStatus: _connectionStatus,
+        imageProvisioning: _imageProvisioning,
+        workspace: _workspace,
+        runtime: _runtime,
+        runtimeVersion: _runtimeVersion,
+        ready: _ready,
         aiSessions: _aiSessions,
+        apps: _apps,
+        triggers: _triggers,
         appInventory,
+        access,
         ...semantic
       } = item as Record<string, unknown>;
-      // AI Sessions have their own authoritative summary stream. Comparing the
-      // compatibility projection embedded in /instances would turn every Turn
-      // into a fleet content change and make all browser windows refetch board.
-      // App inventory remains part of the directory, but its observation clock
-      // advances on every heartbeat even when items and issues are unchanged.
+      // Lifecycle, AI/App Session, and trigger events own their respective
+      // projections. Fleet comparison only detects directory/config changes;
+      // heartbeat observations must not request another authoritative snapshot.
       const comparableAppInventory = appInventory && typeof appInventory === "object" && !Array.isArray(appInventory)
         ? (({ observedAt: _observedAt, ...inventory }) => inventory)(appInventory as Record<string, unknown>)
         : appInventory;
-      return { ...semantic, ...(comparableAppInventory ? { appInventory: comparableAppInventory } : {}) };
+      const comparableAccess = access && typeof access === "object" && !Array.isArray(access)
+        ? (({ status: _status, ...topology }) => topology)(access as Record<string, unknown>)
+        : access;
+      return {
+        ...semantic,
+        ...(comparableAccess ? { access: comparableAccess } : {}),
+        ...(comparableAppInventory ? { appInventory: comparableAppInventory } : {}),
+      };
     });
   }
 

@@ -2,6 +2,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { pathToFileURL } = require("node:url");
 const test = require("node:test");
 const ts = require("typescript");
 const { registerWorkspaceRequire } = require("./workspace-require.js");
@@ -832,6 +833,8 @@ test("OpenCode bridge implements lifecycle, steer, attachments, inclusive-turn f
   assert.deepEqual(calls.find((call) => call[0] === "rename"), ["rename", "ses_created", "/workspace/project", "Renamed OpenCode"]);
   assert.equal(registry.getByProviderSessionId("opencode", "ses_created").title, "Renamed OpenCode");
   const runtimeFile = "/workspace/project/input.txt";
+  const retainedImage = path.join(root, "retained-image.png");
+  fs.writeFileSync(retainedImage, "image");
   await bridge.startMessage(session, {
     message: "Hello",
     messageId: "msg_new",
@@ -840,6 +843,7 @@ test("OpenCode bridge implements lifecycle, steer, attachments, inclusive-turn f
     attachments: [
       { id: "inline", kind: "file", name: "inline.txt", mime: "text/plain", size: 5, source: { type: "inline", encoding: "base64", data: "aGVsbG8=" } },
       { id: "runtime", kind: "file", name: "input.txt", mime: "text/plain", size: 18, source: { type: "runtime-path", path: runtimeFile } },
+      { id: "uploaded", kind: "image", name: "pasted.png", mime: "image/png", size: 5, source: { type: "runtime-path", path: retainedImage }, retainedPath: retainedImage },
     ],
   });
   assert.deepEqual(calls.find((call) => call[0] === "set-permission"), [
@@ -857,6 +861,7 @@ test("OpenCode bridge implements lifecycle, steer, attachments, inclusive-turn f
   assert.deepEqual(promptCall.slice(0, 4), ["prompt", "ses_created", "/workspace/project", "msg_new"]);
   assert.equal(promptCall[4][1].url, "data:text/plain;base64,aGVsbG8=");
   assert.equal(promptCall[4][2].url, "file:///workspace/project/input.txt");
+  assert.equal(promptCall[4][3].url, pathToFileURL(fs.realpathSync(retainedImage)).href);
   const steerResult = await bridge.steerMessage(registry.getByProviderSessionId("opencode", "ses_created"), {
     message: "Change direction",
     messageId: "msg_steer",

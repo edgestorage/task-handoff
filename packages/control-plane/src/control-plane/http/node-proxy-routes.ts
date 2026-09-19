@@ -334,10 +334,12 @@ function assertNoTargetOverride(binding: ProxyBinding, route: string, body: unkn
 function httpProxyRoute(request: FastifyRequest) {
   const raw = request.raw.url || request.url;
   const match = /^\/api\/node-proxy\/bindings\/[^/]+\/http(\/[^#]*)$/.exec(raw);
-  if (!match || /%(?:2f|5c)/i.test(match[1])) {
+  const rawRoute = match?.[1];
+  const rawPath = rawRoute?.split("?", 1)[0];
+  if (!rawRoute || !rawPath || /%(?:2f|5c)/i.test(rawPath)) {
     throw proxyRouteError(ControlPlaneProxyErrorCode.RouteInvalid, "Proxy route is invalid.", 400);
   }
-  const parsed = NodeAgentProxyRouteSchema.safeParse(match[1]);
+  const parsed = NodeAgentProxyRouteSchema.safeParse(rawRoute);
   if (!parsed.success) {
     throw proxyRouteError(ControlPlaneProxyErrorCode.RouteInvalid, parsed.error.issues[0]?.message || "Proxy route is invalid.", 400);
   }

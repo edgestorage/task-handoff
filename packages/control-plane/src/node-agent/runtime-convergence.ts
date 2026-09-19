@@ -13,7 +13,7 @@ type ConvergenceStore = {
 
 export type RuntimeConvergenceHooks = {
   isInstalled?(instance: ControlledInstance, desiredVersion: string): Promise<boolean>;
-  beginDrain?(instance: ControlledInstance): Promise<void> | void;
+  beginDrain?(instance: ControlledInstance): Promise<boolean | void> | boolean | void;
   endDrain?(instance: ControlledInstance): Promise<void> | void;
   install(instance: ControlledInstance, desiredVersion: string): Promise<void>;
   restart(instance: ControlledInstance): Promise<void>;
@@ -22,6 +22,7 @@ export type RuntimeConvergenceHooks = {
 
 export type RuntimeConvergenceOptions = {
   drainTimeoutMs?: number;
+  drainRequestRetryMs?: number;
   verificationTimeoutMs?: number;
   pollIntervalMs?: number;
   maxAttempts?: number;
@@ -41,6 +42,7 @@ export class RuntimeConvergenceCoordinator {
   private readonly now: () => Date;
   private readonly delay: (milliseconds: number) => Promise<void>;
   private readonly drainTimeoutMs: number;
+  private readonly drainRequestRetryMs: number;
   private readonly verificationTimeoutMs: number;
   private readonly pollIntervalMs: number;
   private readonly maxAttempts: number;
@@ -59,6 +61,7 @@ export class RuntimeConvergenceCoordinator {
     this.now = options.now || (() => new Date());
     this.delay = options.delay || ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
     this.drainTimeoutMs = options.drainTimeoutMs ?? 5 * 60_000;
+    this.drainRequestRetryMs = positiveNumber(options.drainRequestRetryMs ?? 1_000, "drainRequestRetryMs");
     this.verificationTimeoutMs = options.verificationTimeoutMs ?? 60_000;
     this.pollIntervalMs = options.pollIntervalMs ?? 250;
     this.maxAttempts = positiveInteger(options.maxAttempts ?? 3, "maxAttempts");
@@ -140,11 +143,25 @@ export class RuntimeConvergenceCoordinator {
         let failure: RuntimeConvergenceError;
         try {
           instance = this.storePhase(instance, "draining");
-          await this.hooks.beginDrain?.(instance);
-          drainStarted = true;
+          const drainDeadline = this.now().getTime() + this.drainTimeoutMs;
+          let drainAccepted = false;
+          while (!drainAccepted) {
+            drainAccepted = await this.hooks.beginDrain?.(instance) !== false;
+            if (drainAccepted) {
+              drainStarted = true;
+              break;
+            }
+            if (this.cancelled.has(instanceId)) return this.storePhase(this.requireInstance(instanceId), "pending");
+            const remainingMs = drainDeadline - this.now().getTime();
+            if (remainingMs <= 0) break;
+            await this.delay(Math.min(this.drainRequestRetryMs, remainingMs));
+            instance = this.requireInstance(instanceId);
+          }
           instance = this.requireInstance(instanceId);
-          if (hasActiveWork(instance)) {
-            const drained = await this.waitUntil(instanceId, this.drainTimeoutMs, (candidate) => !hasActiveWork(candidate));
+          if (!drainAccepted || hasActiveWork(instance)) {
+            const remainingMs = Math.max(0, drainDeadline - this.now().getTime());
+            const drained = drainAccepted
+              && await this.waitUntil(instanceId, remainingMs, (candidate) => !hasActiveWork(candidate));
             instance = this.requireInstance(instanceId);
             if (!drained) {
               if (this.cancelled.has(instanceId)) return this.storePhase(instance, "pending");
@@ -407,5 +424,10 @@ function positiveInteger(value: number, name: string) {
 
 function nonnegativeNumber(value: number, name: string) {
   if (!Number.isFinite(value) || value < 0) throw new TypeError(`${name} must be a nonnegative finite number.`);
+  return value;
+}
+
+function positiveNumber(value: number, name: string) {
+  if (!Number.isFinite(value) || value <= 0) throw new TypeError(`${name} must be a positive finite number.`);
   return value;
 }
