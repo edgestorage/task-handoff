@@ -14,7 +14,7 @@ const WebSocket = require("ws");
 const { z } = require("zod");
 
 const { createControlPlaneApp, initializeControlPlaneCredentials, replaceControlPlaneCredentials, routeAuthorization } = require("../packages/control-plane/src/server.ts");
-const { connectReverseTunnel, createNodeAgentApp, createReverseTunnelManager, listenNodeAgentIpcServer, mergeRuntimeLifecycleResult, NodeAgentExternalListenerManager, requestRuntimeAppSessionDrain, resolvedDockerImageUpdatePatch, runtimeVersionStateForActual, syncControlledInstanceNodeAgentConnection } = require("../packages/control-plane/src/node-agent.ts");
+const { connectReverseTunnel, createNodeAgentApp, createReverseTunnelManager, listenNodeAgentContainerIpcServer, listenNodeAgentIpcServer, mergeRuntimeLifecycleResult, nodeAgentContainerIpcPath, NodeAgentExternalListenerManager, requestRuntimeAppSessionDrain, resolvedDockerImageUpdatePatch, runtimeVersionStateForActual, syncControlledInstanceNodeAgentConnection } = require("../packages/control-plane/src/node-agent.ts");
 const { ControlPlaneChatGatewayRuntime, aiSessionDeliveryText, createDingdingStreamClient } = require("../packages/control-plane/src/chat-gateway.ts");
 const { ControlledInstanceGateway } = require("../packages/control-plane/src/control-plane/instances/gateway.ts");
 const { parseDingdingCardEvent, sendDingdingActionsCard } = require("../packages/control-plane/src/control-plane/chat/adapters/dingding.ts");
@@ -6015,6 +6015,13 @@ test("node agent local-ipc path uses windows named pipe format on win32", () => 
   assert.equal(nodeAgentIpcEndpoint(pipePath).startsWith("ipc://"), true);
 });
 
+test("container IPC socket uses the stable node-agent data directory", () => {
+  assert.equal(
+    nodeAgentContainerIpcPath("/var/lib/task-handoff/node-agent"),
+    "/var/lib/task-handoff/node-agent/container-ipc/node-agent.sock",
+  );
+});
+
 test("node agent accepts paired HMAC APIs but denies listener management over TCP", async (t) => {
   const app = await createNodeAgentApp({
     dataDir: tempDataDir("node-agent-hmac"),
@@ -6058,6 +6065,118 @@ test("node agent accepts paired HMAC APIs but denies listener management over TC
   });
   assert.equal(signedListener.statusCode, 403);
   assert.equal(signedListener.json().error.code, "NODE_AGENT_LISTENER_LOCAL_IPC_ONLY");
+});
+
+test("Docker bridge clients can report only with an instance token and cannot use local management APIs", async (t) => {
+  const app = await createNodeAgentApp({
+    dataDir: tempDataDir("node-agent-docker-bridge-auth"),
+    logger: false,
+    token: "agent-secret",
+  });
+  t.after(() => app.close());
+
+  const deniedManagement = await app.inject({
+    method: "GET",
+    url: "/api/node-agent/health",
+    headers: { authorization: "Bearer agent-secret" },
+    remoteAddress: "172.17.0.2",
+  });
+  assert.equal(deniedManagement.statusCode, 401);
+  assert.equal(deniedManagement.json().error.code, "NODE_AGENT_LOCAL_TOKEN_REQUIRES_LOOPBACK");
+
+  const created = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {
+      id: "inst_docker_bridge_auth",
+      name: "Docker bridge auth",
+      runtimeId: "runtime_local_docker",
+      imageSelection: { imageId: "img_1" },
+      image: testInstanceImage("task-handoff-web:local", "img_1", "Image"),
+      source: { type: "local-folder", path: "/workspace" },
+    },
+  });
+  assert.equal(created.statusCode, 201, created.body);
+  const registrationToken = created.json().data.registrationToken;
+
+  const deniedRegister = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances/inst_docker_bridge_auth/register",
+    headers: { authorization: "Bearer wrong-token" },
+    remoteAddress: "172.17.0.2",
+    payload: {
+      instanceId: "inst_docker_bridge_auth",
+      protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
+      appInventory: emptyAppInventory(),
+    },
+  });
+  assert.equal(deniedRegister.statusCode, 403);
+  assert.equal(deniedRegister.json().error.code, "INSTANCE_REGISTRATION_TOKEN_INVALID");
+
+  const acceptedRegister = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances/inst_docker_bridge_auth/register",
+    headers: { authorization: `Bearer ${registrationToken}` },
+    remoteAddress: "172.17.0.2",
+    payload: {
+      instanceId: "inst_docker_bridge_auth",
+      protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
+      appInventory: emptyAppInventory(),
+    },
+  });
+  assert.equal(acceptedRegister.statusCode, 201, acceptedRegister.body);
+});
+
+test("container IPC accepts instance-token routes but denies node agent management routes", async (t) => {
+  const dataDir = tempDataDir("node-agent-container-ipc-auth");
+  const socketPath = path.join(os.tmpdir(), `th-container-${process.pid}-${crypto.randomUUID().slice(0, 8)}.sock`);
+  const app = await createNodeAgentApp({ dataDir, logger: false, token: "agent-secret" });
+  let server;
+  t.after(async () => {
+    server?.closeAllConnections();
+    if (server) await new Promise((resolve) => server.close(resolve));
+    await app.close();
+    fs.rmSync(socketPath, { force: true });
+  });
+  await app.ready();
+  server = await listenNodeAgentContainerIpcServer(app, socketPath);
+
+  const deniedManagement = await fetchNodeAgentIpc(socketPath, "/health", {
+    headers: { authorization: "Bearer agent-secret" },
+  });
+  assert.equal(deniedManagement.status, 401);
+  assert.equal((await deniedManagement.json()).error.code, "NODE_AGENT_CONTAINER_IPC_ROUTE_FORBIDDEN");
+
+  const created = await app.inject({
+    method: "POST",
+    url: "/api/node-agent/instances",
+    headers: { authorization: "Bearer agent-secret" },
+    payload: {
+      id: "inst_container_ipc_auth",
+      name: "Container IPC auth",
+      runtimeId: "runtime_local_docker",
+      imageSelection: { imageId: "img_1" },
+      image: testInstanceImage("task-handoff-web:local", "img_1", "Image"),
+      source: { type: "local-folder", path: "/workspace" },
+    },
+  });
+  assert.equal(created.statusCode, 201, created.body);
+  const registrationToken = created.json().data.registrationToken;
+
+  const acceptedRegister = await fetchNodeAgentIpc(socketPath, "/instances/inst_container_ipc_auth/register", {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${registrationToken}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      instanceId: "inst_container_ipc_auth",
+      protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
+      appInventory: emptyAppInventory(),
+    }),
+  });
+  assert.equal(acceptedRegister.status, 201, await acceptedRegister.text());
 });
 
 test("node agent pairs additional control planes with one-time join tokens", async (t) => {

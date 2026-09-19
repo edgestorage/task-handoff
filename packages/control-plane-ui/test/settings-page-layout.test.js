@@ -54,3 +54,18 @@ test("settings content reaches the bottom edge and fades beneath the section tab
   assert.match(layout, /padding-top: var\(--settings-top-fade-height, 18px\)/);
   assert.match(layout, /mask-image: linear-gradient\(\s*to bottom,\s*transparent,\s*#000 var\(--settings-top-fade-height, 18px\)\s*\)/);
 });
+
+test("settings navigation replaces overflowing tabs with the current-section menu", () => {
+  const modal = read("src/apps/control-plane/settings/SettingsModal.vue");
+  const radioItem = read("src/components/ui/dropdown-menu/DropdownMenuRadioItem.vue");
+
+  assert.match(modal, /tabs\.offsetWidth > availableWidth/);
+  assert.match(modal, /new ResizeObserver\(syncSettingsNavigationLayout\)/);
+  assert.match(modal, /v-show="!compactSettingsNavigation"/);
+  assert.match(modal, /<DropdownMenu v-if="compactSettingsNavigation">/);
+  assert.match(modal, /\{\{ currentSettingsSectionLabel \}\}/);
+  assert.match(modal, /<DropdownMenuRadioItem v-for="item in settingsSections"/);
+  assert.match(modal, /class="control-settings-section-menu-scroll"/);
+  assert.match(modal, /var\(--reka-dropdown-menu-content-available-height\)/);
+  assert.match(radioItem, /<Circle class="h-2 w-2 fill-current" \/>/);
+});

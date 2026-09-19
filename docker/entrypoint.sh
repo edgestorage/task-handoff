@@ -33,6 +33,15 @@ load_private_config() {
   fi
 }
 
+start_node_agent_unix_proxy() {
+  if [ -z "${TASK_HANDOFF_NODE_AGENT_SOCKET_PATH:-}" ]; then
+    return
+  fi
+  node /run/task-handoff/bootstrap/node-agent-unix-proxy.mjs \
+    "${TASK_HANDOFF_NODE_AGENT_SOCKET_PATH}" \
+    "${TASK_HANDOFF_NODE_AGENT_PROXY_PORT:-19001}" &
+}
+
 if [ -n "${TASK_HANDOFF_WORKSPACE_SUBDIRECTORY:-}" ]; then
   export TASK_HANDOFF_WORKSPACE="${TASK_HANDOFF_WORKSPACE:-/workspace}/${TASK_HANDOFF_WORKSPACE_SUBDIRECTORY}"
   unset TASK_HANDOFF_WORKSPACE_SUBDIRECTORY
@@ -40,6 +49,7 @@ fi
 
 if [ "$(id -u)" = "0" ] && [ "${TASK_HANDOFF_PRIVILEGE_DROPPED:-0}" != "1" ]; then
   load_private_config
+  start_node_agent_unix_proxy
   mkdir -p /data /home/agent
   chown agent:agent /data /home/agent
   if [ "${TASK_HANDOFF_WORKSPACE_MODE:-}" = "git-clone" ]; then

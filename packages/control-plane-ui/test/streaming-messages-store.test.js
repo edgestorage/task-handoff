@@ -173,6 +173,37 @@ test("an authoritative historical Turn body cannot replace the active newer Turn
   assert.equal(store.message(identity({ turnId: "turn_old", itemId: "item_old_final" })), undefined);
 });
 
+test("a running Turn body cannot reactivate an older assistant item in the same Turn", () => {
+  const store = createStreamingMessagesStore();
+  const previous = identity({ itemId: "item_previous" });
+  const current = identity({ itemId: "item_current" });
+  const previousEntry = store.appendDelta({
+    identity: previous,
+    streamId: "stream_1",
+    delta: "previous response",
+    generatedAt: "2026-07-18T00:00:01.000Z",
+  });
+  const currentEntry = store.appendDelta({
+    identity: current,
+    streamId: "stream_1",
+    delta: "current response",
+    generatedAt: "2026-07-18T00:00:03.000Z",
+  });
+
+  store.applyAuthoritativeTurnBody("instance_1", "session_1", {
+    id: "turn_1",
+    status: "running",
+    revision: 3,
+    lastMessage: "previous authoritative response",
+    lastMessageItemId: "item_previous",
+    updatedAt: "2026-07-18T00:00:04.000Z",
+  });
+
+  assert.equal(previousEntry.value.receivedText, "previous authoritative response");
+  assert.equal(store.activeMessage("instance_1", "session_1").value, currentEntry);
+  assert.equal(currentEntry.value.receivedText, "current response");
+});
+
 test("a new instance stream discards every stale message projection", () => {
   const store = createStreamingMessagesStore();
   const first = identity();

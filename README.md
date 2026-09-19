@@ -142,7 +142,13 @@ On a Debian or Ubuntu server running systemd, run the latest stable installer as
 curl -fsSL https://github.com/edgestorage/task-handoff/releases/latest/download/install-server.sh | sudo sh
 ```
 
-The script checks the host, installs Node.js 24 and Docker when needed, installs the latest stable `@task-handoff/server` package from npm, and then creates and starts the Control Plane and Node Agent systemd services. By default, the control plane listens on port `8081` with password authentication enabled. Installer options can change the port, authentication mode, release channel, and other service settings.
+The script checks the host, installs Node.js 24 and Docker when needed, installs the latest stable `@task-handoff/server` package from npm, and then creates and starts the Control Plane and Node Agent systemd services. The default `auto` source profile uses Tsinghua APT mirrors and npmmirror for Chinese locale or timezone environments, and also falls back to those mirrors when the official Node.js source is unreachable. Its temporary APT source list does not overwrite the host's source configuration. By default, the control plane listens on port `8081` with password authentication enabled. Installer options can change the port, authentication mode, release channel, and other service settings.
+
+Use `--install-source china` or `--install-source official` to select a source profile explicitly:
+
+```sh
+curl -fsSL https://github.com/edgestorage/task-handoff/releases/latest/download/install-server.sh | sudo sh -s -- --install-source china
+```
 
 ### Install with Node.js and Docker already available
 
@@ -185,7 +191,9 @@ curl -fsSL https://CONTROL_PLANE_HOST/install-node-agent.sh | sudo sh -s -- \
 ```
 
 On Debian and Ubuntu, the remote-node installer bootstraps the required Node.js
-24, npm, and native build tools on a fresh host.
+24 and npm on a fresh host. It uses the same automatic source selection; append
+`--install-source china` to force Chinese mirrors. The selected npm registry is
+preserved in the Node Agent service environment for subsequent managed updates.
 
 Replace `RELEASE_VERSION` with the Control Plane's runtime package version so the Node Agent and controlled-instance runtime use the same release.
 

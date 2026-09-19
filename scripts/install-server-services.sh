@@ -21,6 +21,7 @@ NODE_AGENT_HOST="127.0.0.1"
 NODE_AGENT_PORT="8091"
 NODE_AGENT_IPC_PATH="/run/task-handoff/node-agent.sock"
 AUTH_MODE="password"
+NPM_REGISTRY=""
 STATIC_DIR=""
 MATERIALIZE_ONLY="0"
 
@@ -47,6 +48,7 @@ Options:
   --node-agent-port <port>          Local node-agent port, default 8091
   --node-agent-ipc-path <path>      Local control socket, default /run/task-handoff/node-agent.sock
   --auth-mode <mode>                Control-plane auth mode: password or disabled
+  --npm-registry <url>              npm registry inherited by managed updates
   --static-dir <path>               Built control-plane UI directory
   --materialize-only                Rewrite env and systemd units without starting services
 USAGE
@@ -75,6 +77,7 @@ while [ "$#" -gt 0 ]; do
     --node-agent-port) NODE_AGENT_PORT="${2:-}"; shift 2 ;;
     --node-agent-ipc-path) NODE_AGENT_IPC_PATH="${2:-}"; shift 2 ;;
     --auth-mode) AUTH_MODE="${2:-}"; shift 2 ;;
+    --npm-registry) NPM_REGISTRY="${2:-}"; shift 2 ;;
     --static-dir) STATIC_DIR="${2:-}"; shift 2 ;;
     --materialize-only) MATERIALIZE_ONLY="1"; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -214,6 +217,7 @@ TASK_HANDOFF_NODE_AGENT_IPC_PATH=$NODE_AGENT_IPC_PATH
 TASK_HANDOFF_NODE_AGENT_CONTAINER_URL=http://host.docker.internal:$NODE_AGENT_PORT
 TASK_HANDOFF_LOCAL_CONTROLLED_COMMAND=$CONTROLLED_INSTANCE_COMMAND
 TASK_HANDOFF_NPM_COMMAND=$NPM_COMMAND
+${NPM_REGISTRY:+NPM_CONFIG_REGISTRY=$NPM_REGISTRY}
 TASK_HANDOFF_CONTROL_PLANE_HEALTH_URL=http://127.0.0.1:$CONTROL_PLANE_PORT/api/health
 EOF
 chmod 0640 "$ENV_DIR/node-agent.env"

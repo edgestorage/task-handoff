@@ -27,6 +27,7 @@ test("server update installation arguments preserve the authoritative service co
     "TASK_HANDOFF_NODE_AGENT_HOST=10.0.0.5",
     "TASK_HANDOFF_NODE_AGENT_PORT=9555",
     "TASK_HANDOFF_NODE_AGENT_IPC_PATH=/srv/run/node-agent.sock",
+    "NPM_CONFIG_REGISTRY=https://registry.npmmirror.com",
   ].join("\n"));
   fs.writeFileSync(nodeAgentUnitFile, "[Service]\nUser=task-handoff\n");
 
@@ -40,6 +41,7 @@ test("server update installation arguments preserve the authoritative service co
     "--node-agent-port", "9555",
     "--node-agent-ipc-path", "/srv/run/node-agent.sock",
     "--auth-mode", "disabled",
+    "--npm-registry", "https://registry.npmmirror.com",
     "--static-dir", "/srv/task-handoff/ui",
   ]);
   fs.rmSync(directory, { recursive: true, force: true });
@@ -62,10 +64,14 @@ test("server bootstrap owns Debian, Ubuntu, RHEL, and CentOS install paths witho
   assert.match(bootstrap, /CHANNEL="stable"/);
   assert.match(bootstrap, /\[ "\$CHANNEL" = "stable" \]/);
   assert.match(bootstrap, /PACKAGE_TARGET="latest"/);
-  assert.match(bootstrap, /nodejs\.org\/dist\/latest-v24\.x\/SHASUMS256\.txt/);
+  assert.match(bootstrap, /INSTALL_SOURCE="\$\{TASK_HANDOFF_INSTALL_SOURCE:-auto\}"/);
+  assert.match(bootstrap, /https:\/\/nodejs\.org\/dist/);
+  assert.match(bootstrap, /https:\/\/npmmirror\.com\/mirrors\/node/);
+  assert.match(bootstrap, /--connect-timeout 10 --max-time 600 --retry 2/);
   assert.match(bootstrap, /Node\.js archive checksum verification failed/);
   assert.doesNotMatch(bootstrap, /g\+\+|gcc-c\+\+|make python3/);
-  assert.match(bootstrap, /apt-get install -y docker\.io/);
+  assert.match(bootstrap, /apt_get install -y docker\.io/);
+  assert.match(bootstrap, /mirrors\.tuna\.tsinghua\.edu\.cn\/debian/);
   assert.match(bootstrap, /dnf install -y ca-certificates curl tar xz/);
   assert.match(bootstrap, /download\.docker\.com\/linux\/\$docker_repo_os\/docker-ce\.repo/);
   assert.match(bootstrap, /dnf install -y docker-ce docker-ce-cli containerd\.io/);
@@ -83,9 +89,11 @@ test("remote node-agent bootstrap installs Node.js portably without a native bui
   assert.match(installer, /MIN_NODE_VERSION="24\.15\.0"/);
   assert.match(installer, /ensure_node_environment/);
   assert.match(installer, /if node_is_compatible && command -v npm/);
-  assert.match(installer, /apt-get install -y ca-certificates curl xz-utils/);
+  assert.match(installer, /apt_get install -y ca-certificates curl xz-utils/);
   assert.match(installer, /dnf install -y ca-certificates curl tar xz/);
-  assert.match(installer, /nodejs\.org\/dist\/latest-v24\.x\/SHASUMS256\.txt/);
+  assert.match(installer, /https:\/\/nodejs\.org\/dist/);
+  assert.match(installer, /https:\/\/npmmirror\.com\/mirrors\/node/);
+  assert.match(installer, /--connect-timeout 10 --max-time 600 --retry 2/);
   assert.match(installer, /Node\.js archive checksum verification failed/);
   assert.doesNotMatch(installer, /g\+\+|gcc-c\+\+|make python3/);
   assert.doesNotMatch(installer, /dpkg --compare-versions/);
@@ -111,15 +119,29 @@ test("remote node-agent bootstrap accepts a compatible preinstalled Node without
     fs.writeFileSync(path.join(bin, command), contents, { mode: 0o755 });
   }
   const installer = nodeAgentInstallScript().replace("\nensure_node_environment\n", "\nensure_node_environment\nexit 0\n");
-  const result = spawnSync("/bin/sh", ["-s", "--", "--control-plane", "https://control.example.com"], {
+  const result = spawnSync("/bin/sh", [
+    "-s", "--",
+    "--control-plane", "https://control.example.com",
+    "--install-source", "china",
+  ], {
     input: installer,
     encoding: "utf8",
     env: { ...process.env, PATH: `${bin}:/usr/bin:/bin` },
   });
   try {
     assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /Using china install sources \(Node\.js: https:\/\/npmmirror\.com\/mirrors\/node, npm: https:\/\/registry\.npmmirror\.com\)/);
     assert.match(result.stdout, /Using existing Node\.js/);
     assert.doesNotMatch(result.stdout, /package metadata|prerequisites with dnf/);
+
+    fs.writeFileSync(path.join(bin, "curl"), "#!/bin/sh\nexit 28\n", { mode: 0o755 });
+    const fallback = spawnSync("/bin/sh", ["-s", "--", "--control-plane", "https://control.example.com"], {
+      input: installer,
+      encoding: "utf8",
+      env: { ...process.env, PATH: `${bin}:/usr/bin:/bin`, TZ: "UTC", LANG: "C", LC_ALL: "C" },
+    });
+    assert.equal(fallback.status, 0, fallback.stderr);
+    assert.match(fallback.stdout, /Using china install sources/);
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
@@ -216,9 +238,11 @@ test("node agent services persist the absolute npm command for managed updates",
 
   assert.match(installer, /NPM_COMMAND="\$\(command -v npm\)"/);
   assert.match(installer, /TASK_HANDOFF_NPM_COMMAND=\$NPM_COMMAND/);
+  assert.match(installer, /NPM_CONFIG_REGISTRY=\$NPM_REGISTRY/);
   assert.match(installer, /TASK_HANDOFF_CONTROL_PLANE_HEALTH_URL=http:\/\/127\.0\.0\.1:\$CONTROL_PLANE_PORT\/api\/health/);
   assert.match(remoteInstaller, /NPM_COMMAND="\$\(command -v npm\)"/);
   assert.match(remoteInstaller, /TASK_HANDOFF_NPM_COMMAND=\$NPM_COMMAND/);
+  assert.match(remoteInstaller, /NPM_CONFIG_REGISTRY=\$NPM_REGISTRY/);
   assert.match(worker, /process\.env\.TASK_HANDOFF_NPM_COMMAND \|\| "npm"/);
   assert.match(updater, /process\.env\.TASK_HANDOFF_NPM_COMMAND \|\| "npm"/);
 });
@@ -280,6 +304,7 @@ test("runtime package archives verify every directly executed helper", () => {
     "bin/task-handoff-install-server-services",
     "bin/task-handoff-node-update-worker",
     "docker/entrypoint.sh",
+    "docker/node-agent-unix-proxy.mjs",
     "docker/instance-launcher.sh",
     "docker/runtime-installer.mjs",
   ]) {

@@ -28,6 +28,7 @@ export function finalComputerPlatform(platform: string) {
 
 export type RuntimeAdapter = {
   resolveInstanceWeb(context: ExecutorContext): Promise<string>;
+  resolveNodeAgentUrl?(context: ExecutorContext): Promise<string>;
   start(context: ExecutorContext): Promise<ExecutorStartResult>;
   stop(context: ExecutorContext): Promise<ExecutorStartResult>;
   restart(context: ExecutorContext): Promise<ExecutorStartResult>;
@@ -86,6 +87,10 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     return this.executor.resolveInstanceWeb(context);
   }
 
+  resolveNodeAgentUrl(context: ExecutorContext) {
+    return this.executor.resolveNodeAgentUrl(context);
+  }
+
   async installRuntime(context: ExecutorContext, artifact: ResolvedRuntimeArtifact) {
     const containerName = context.instance.runtime.containerName;
     if (!containerName) {
@@ -105,10 +110,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
   async inspectRuntime(context: ExecutorContext, expected: RuntimeArtifactIdentity) {
     const containerName = context.instance.runtime.containerName;
     if (!containerName) return false;
-    const matches = artifactIdentityMatches(await this.executor.inspectRuntimeVersion(containerName), expected);
-    const backupName = context.instance.runtime.labels["task-handoff.bootstrap-backup"];
-    if (matches && backupName) await this.executor.removeBootstrapBackup(backupName, context.instance.id);
-    return matches;
+    return artifactIdentityMatches(await this.executor.inspectRuntimeVersion(containerName), expected);
   }
 
   start(context: ExecutorContext) {

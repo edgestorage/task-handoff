@@ -73,6 +73,9 @@ export function currentServerInstallArgs(options: {
     "--node-agent-port", nodeAgent.TASK_HANDOFF_NODE_AGENT_PORT || "8091",
     "--node-agent-ipc-path", nodeAgent.TASK_HANDOFF_NODE_AGENT_IPC_PATH || "/run/task-handoff/node-agent.sock",
     "--auth-mode", controlPlane.TASK_HANDOFF_CONTROL_PLANE_AUTH_MODE || "password",
+    ...(nodeAgent.NPM_CONFIG_REGISTRY
+      ? ["--npm-registry", nodeAgent.NPM_CONFIG_REGISTRY]
+      : []),
     ...(controlPlane.TASK_HANDOFF_CONTROL_PLANE_STATIC_DIR
       ? ["--static-dir", controlPlane.TASK_HANDOFF_CONTROL_PLANE_STATIC_DIR]
       : []),
