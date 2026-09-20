@@ -72,18 +72,21 @@ export class StoryAutomationStore {
     return publicAutomation(record);
   }
 
-  async update(id: string, input: unknown) {
+  async update(id: string, input: unknown, expectedUpdatedAt?: string) {
     const patch = StoryAutomationUpdateInputSchema.parse(input);
-    const current = await this.repository.automations.get(id);
-    if (!current) return undefined;
-    const timestamp = this.now().toISOString();
-    const resetAnchor = patch.schedule !== undefined || (patch.enabled === true && !current.enabled);
-    const updated = await this.repository.automations.update(id, {
-      ...patch,
-      ...(resetAnchor ? { scheduleAnchorAt: timestamp } : {}),
-      updatedAt: timestamp,
+    return this.repository.transaction(async (repository) => {
+      const current = await repository.automations.get(id);
+      if (!current) return undefined;
+      assertExpectedUpdatedAt(current.updatedAt, expectedUpdatedAt);
+      const timestamp = nextUpdatedAt(this.now(), current.updatedAt);
+      const resetAnchor = patch.schedule !== undefined || (patch.enabled === true && !current.enabled);
+      const updated = await repository.automations.update(id, {
+        ...patch,
+        ...(resetAnchor ? { scheduleAnchorAt: timestamp } : {}),
+        updatedAt: timestamp,
+      });
+      return updated ? publicAutomation(updated) : undefined;
     });
-    return updated ? publicAutomation(updated) : undefined;
   }
 
   referencingActions(storyId: string, actionIds: Iterable<string>) {
@@ -98,10 +101,16 @@ export class StoryAutomationStore {
     return this.repository.runs.activeForStory(storyId).then((runs) => runs.map(storedRun));
   }
 
-  async delete(id: string) {
-    if (!await this.repository.automations.get(id)) return false;
-    if (await this.hasActiveRuns(id)) throw automationError("STORY_AUTOMATION_RUN_ACTIVE", "Automation has a non-terminal run.", 409);
-    return this.repository.automations.delete(id);
+  async delete(id: string, expectedUpdatedAt?: string) {
+    return this.repository.transaction(async (repository) => {
+      const current = await repository.automations.get(id);
+      if (!current) return false;
+      assertExpectedUpdatedAt(current.updatedAt, expectedUpdatedAt);
+      if ((await repository.runs.list(id)).some((run) => !terminalStatuses.has(run.status))) {
+        throw automationError("STORY_AUTOMATION_RUN_ACTIVE", "Automation has a non-terminal run.", 409);
+      }
+      return repository.automations.delete(id);
+    });
   }
 
   async deleteForStory(storyId: string) {
@@ -205,4 +214,14 @@ function publicRun(record: StoryAutomationRunRecord): StoryAutomationRun {
 
 function automationError(code: string, message: string, statusCode: number) {
   return Object.assign(new Error(message), { code, statusCode });
+}
+
+function assertExpectedUpdatedAt(actual: string, expected?: string) {
+  if (expected !== undefined && actual !== expected) {
+    throw automationError("STORY_AUTOMATION_CONFLICT", "Automation was changed by another request.", 409);
+  }
+}
+
+function nextUpdatedAt(now: Date, current: string) {
+  return new Date(Math.max(now.getTime(), Date.parse(current) + 1)).toISOString();
 }

@@ -154,8 +154,16 @@ CREATE TABLE na_git_workspace_provisioning (
 CREATE INDEX na_git_workspace_provisioning_expiry_idx ON na_git_workspace_provisioning(expires_at);
 `;
 
+const storyAgentToolPolicy = `
+ALTER TABLE na_stories ADD COLUMN agent_tools_content INTEGER NOT NULL DEFAULT 1 CHECK(agent_tools_content IN (0, 1));
+ALTER TABLE na_stories ADD COLUMN agent_tools_actions INTEGER NOT NULL DEFAULT 0 CHECK(agent_tools_actions IN (0, 1));
+ALTER TABLE na_stories ADD COLUMN agent_tools_automations INTEGER NOT NULL DEFAULT 0 CHECK(agent_tools_automations IN (0, 1));
+ALTER TABLE na_stories ADD COLUMN agent_tools_ai_sessions INTEGER NOT NULL DEFAULT 0 CHECK(agent_tools_ai_sessions IN (0, 1));
+`;
+
 // All Node Agent domains share this immutable migration sequence.
 export const nodeAgentMigrations = [
   migration("0001_story_domain", initialStoryDomain),
   migration("0002_p0_state_domains", p0StateDomains),
+  migration("0003_story_agent_tool_policy", storyAgentToolPolicy),
 ] as const;

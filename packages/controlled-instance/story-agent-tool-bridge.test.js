@@ -4,6 +4,7 @@ import Fastify from "fastify";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { StoryAgentToolBridge } from "./src/web/story-agent-tool-bridge.ts";
+import { STORY_AGENT_TOOL_NAMES } from "@task-handoff/protocol/story-agent-tools";
 
 function testBridge(invocations) {
   return new StoryAgentToolBridge({
@@ -12,6 +13,7 @@ function testBridge(invocations) {
     service: {
       invoke: async (session, tool, args) => {
         invocations.push({ session, tool, args });
+        if (tool === "story_run_action") return { session: { instanceId: "instance-1", sessionId: "created-session" } };
         return { source: session.id, tool, args };
       },
     },
@@ -90,26 +92,43 @@ test("Codex MCP bridge uses trusted request metadata to resolve an existing AI S
   try {
     await client.connect(transport);
     const listed = await client.listTools();
-    assert.deepEqual(listed.tools.map((tool) => tool.name).sort(), [
-      "story_get_content",
+    assert.deepEqual(listed.tools.map((tool) => tool.name).sort(), [...STORY_AGENT_TOOL_NAMES].sort());
+    const readOnlyTools = listed.tools
+      .filter((tool) => tool.annotations?.readOnlyHint === true)
+      .map((tool) => tool.name)
+      .sort();
+    assert.deepEqual(readOnlyTools, [
+      "story_get_ai_session",
+      "story_get_ai_session_turn",
+      "story_list_actions",
+      "story_list_ai_sessions",
+      "story_list_automation_runs",
+      "story_list_automations",
       "story_list_content",
-      "story_set_content",
     ]);
+    assert.equal(listed.tools.find((tool) => tool.name === "story_get_content")?.annotations?.readOnlyHint, undefined);
+    assert.equal(listed.tools.find((tool) => tool.name === "story_set_content")?.annotations?.readOnlyHint, undefined);
+    assert.equal(listed.tools.find((tool) => tool.name === "story_run_action")?.annotations?.readOnlyHint, undefined);
     for (const tool of listed.tools) {
-      assert.equal("sessionId" in (tool.inputSchema.properties || {}), false);
+      assert.ok(tool.outputSchema);
       assert.equal("storyId" in (tool.inputSchema.properties || {}), false);
+      assert.equal("nodeId" in (tool.inputSchema.properties || {}), false);
+      assert.equal("providerSessionId" in (tool.inputSchema.properties || {}), false);
     }
     const unidentified = await client.callTool({ name: "story_list_content", arguments: {} });
     assert.equal(unidentified.isError, true);
     assert.equal(invocations.length, 0);
     const result = await client.callTool({
-      name: "story_list_content",
-      arguments: {},
+      name: "story_run_action",
+      arguments: { actionId: "action_1", clientRequestId: "request_1" },
       _meta: { threadId: "codex-provider-session", sessionId: "codex-provider-session" },
     });
     assert.equal(result.isError, undefined);
-    assert.equal(JSON.parse(result.content[0].text).source, "codex-ai-session");
+    assert.deepEqual(JSON.parse(result.content[0].text), { session: { instanceId: "instance-1", sessionId: "created-session" } });
+    assert.deepEqual(result.structuredContent, { session: { instanceId: "instance-1", sessionId: "created-session" } });
     assert.equal(invocations[0].session.storyId, "story-1");
+    assert.equal(invocations[0].tool, "story_run_action");
+    assert.deepEqual(invocations[0].args, { actionId: "action_1", clientRequestId: "request_1" });
   } finally {
     await client.close();
     await app.close();

@@ -177,6 +177,10 @@ import { bridgeWebSockets, TASK_HANDOFF_WEBSOCKET_SERVER_OPTIONS } from "@task-h
 import { SESSION_STREAM_PROTOCOL_VERSION, SessionStreamsHelloEventType } from "@task-handoff/protocol/events";
 import { AppManagementOperationRequestSchema, CodexInstanceSettingsSchema, UpdateControlledInstanceNodeAgentConnectionSchema } from "@task-handoff/protocol/control-plane";
 import { StoryAutomationInstanceCreateInputSchema, StoryAutomationInstanceCreateResultSchema } from "@task-handoff/protocol/story-automation-instance";
+import {
+  StoryAgentAiSessionInstanceReadResultSchema,
+  StoryAgentAiSessionInstanceTurnResultSchema,
+} from "@task-handoff/protocol/story-agent-tools";
 import { registerRepositoryRoutes, repositoryWorkspaceRootsFromEnv } from "../repository/routes";
 import { attachBrowserTunnel } from "./browser-tunnel";
 
@@ -674,7 +678,11 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     onWarning: (warning) => app.log.warn({ warning }, "AI session history entry was sanitized"),
     onRemove: (sessionId) => aiSessionConversationAttachments.releaseSession(sessionId),
   });
-  const aiSessionController = new AiSessionController(aiSessions);
+  const aiSessionController = new AiSessionController(aiSessions, async (session) => (
+    session.storyId && nodeAgentClient.enabled()
+      ? (await nodeAgentClient.resolveStoryAgentToolsForSession(session.id, session.storyId)).enabledTools
+      : []
+  ));
   let aiSessionClose: AiSessionCloseCoordinator | undefined;
   const aiSessionProviderCapabilities = () => aiSessionProviders.capabilities();
   const triggers = new TriggerStore(storagePaths);
@@ -1015,8 +1023,13 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
         providerSessionId: item.providerSessionId,
       },
     }),
-    resumeProvider: async (item) => {
-      await aiSessionProviders.resume(item);
+    resolveStoryAgentTools: async (item) => (
+      item.storyId && nodeAgentClient.enabled()
+        ? (await nodeAgentClient.resolveStoryAgentToolsForStory(item.storyId)).enabledTools
+        : []
+    ),
+    resumeProvider: async (item, storyAgentTools) => {
+      await aiSessionProviders.resume(item, storyAgentTools);
     },
   });
   const aiSessionCreate = new AiSessionCreateCoordinator({
@@ -1028,6 +1041,11 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       await aiSessionProviders.ensureReady(agent);
     },
     resolveModelSelection: (agent, requested) => resolveControlledPrivateModelSelection(privateModelCatalog, agent, requested),
+    resolveStoryAgentTools: async (storyId) => (
+      storyId && nodeAgentClient.enabled()
+        ? (await nodeAgentClient.resolveStoryAgentToolsForStory(storyId)).enabledTools
+        : []
+    ),
     onDiagnostic: (diagnostic) => app.log.warn({ diagnostic }, "AI session create compensation"),
     onTiming: (timing) => app.log.info({ ...timing, traceId: timing.clientRequestId }, "ai-session.create.coordinator"),
   });
@@ -1048,6 +1066,11 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     prepareManagedWorktree: async (source, clientRequestId) => repositoryAiSessionWorkspace.prepareForkWorktree(source.id, clientRequestId),
     validateManagedWorktree: async (source, worktreeId, cwd) => repositoryAiSessionWorkspace.validateForkWorktree(source.id, worktreeId, cwd),
     removeManagedWorktree: async (source, worktreeId) => repositoryAiSessionWorkspace.removeForkWorktree(source.id, worktreeId),
+    resolveStoryAgentTools: async (source) => (
+      source.storyId && nodeAgentClient.enabled()
+        ? (await nodeAgentClient.resolveStoryAgentToolsForSession(source.id, source.storyId)).enabledTools
+        : []
+    ),
     onDiagnostic: (diagnostic) => app.log.warn({ diagnostic }, "AI session Fork compensation"),
   });
   const aiSessionOpenApp = new AiSessionOpenAppCoordinator({
@@ -1537,6 +1560,10 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     })),
   }));
 
+  app.post<{ Body: unknown }>("/api/internal/node-agent/story-agent-tools/invalidate", nodeAgentProcessRoute, async (request) => ({
+    data: { invalidated: nodeAgentClient.invalidateStoryAgentTools(request.body) },
+  }));
+
   app.post<{ Params: { id: string }; Body: unknown }>("/api/internal/node-agent/ai-sessions/:id/close", nodeAgentProcessRoute, async (request, reply) => {
     try {
       AiSessionCloseInputSchema.parse(request.body || {});
@@ -1566,6 +1593,51 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     } catch (error: unknown) {
       return sendAiSessionControlError(reply, error);
     }
+  });
+
+  app.get<{ Params: { id: string } }>("/api/internal/node-agent/story-ai-sessions/:id", nodeAgentProcessRoute, async (request, reply) => {
+    const session = aiSessions.conversation(request.params.id);
+    if (!session) return reply.code(404).send({ error: { code: "AI_SESSION_NOT_FOUND", message: "AI session not found." } });
+    const turns = aiSessionConversationTurns(session);
+    return { data: StoryAgentAiSessionInstanceReadResultSchema.parse({
+      detail: {
+        id: session.id,
+        appBindingKeys: session.appBindingKeys,
+        cwd: session.cwd,
+        error: session.error,
+        providerMeta: session.providerMeta,
+        modelSelection: session.modelSelection,
+        reasoningEffort: session.reasoningEffort,
+        queue: session.queue,
+        subAgents: session.subAgents,
+      },
+      turnIndex: {
+        sessionId: session.id,
+        revision: aiSessionTurnsRevision(session),
+        turns: turns.map((turn) => ({
+          id: turn.id,
+          providerTurnId: turn.providerTurnId,
+          status: turn.status,
+          phase: turn.phase,
+          revision: turn.revision,
+          startedAt: turn.startedAt,
+          updatedAt: turn.updatedAt,
+          completedAt: turn.completedAt,
+          bodyRevision: aiSessionTurnBodyRevision(turn),
+        })),
+      },
+    }) };
+  });
+
+  app.get<{ Params: { id: string; turnId: string } }>("/api/internal/node-agent/story-ai-sessions/:id/turns/:turnId", nodeAgentProcessRoute, async (request, reply) => {
+    const session = aiSessions.conversation(request.params.id);
+    if (!session) return reply.code(404).send({ error: { code: "AI_SESSION_NOT_FOUND", message: "AI session not found." } });
+    const turn = (session.turns || []).find((candidate) => candidate.id === request.params.turnId || candidate.providerTurnId === request.params.turnId);
+    if (!turn) return reply.code(404).send({ error: { code: "AI_SESSION_TURN_NOT_FOUND", message: "AI session Turn not found." } });
+    return { data: StoryAgentAiSessionInstanceTurnResultSchema.parse({
+      body: { sessionId: session.id, revision: aiSessionTurnBodyRevision(turn), turn },
+      timeline: await aiSessionController.turnTimeline(session.id, turn.id),
+    }) };
   });
 
   app.post("/api/internal/node-agent/drain", nodeAgentProcessRoute, async () => {
@@ -2027,6 +2099,9 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       if (!session) throw Object.assign(new Error("AI Session was not found."), { code: "AI_SESSION_NOT_FOUND", statusCode: 404 });
       const root = aiSessionRootNode(deriveAiSessionForest(aiSessions.all()), session.id)?.session || session;
       const updated = aiSessions.patch(root.id, { storyId: body.storyId || undefined });
+      if (body.storyId && nodeAgentClient.enabled()) {
+        await nodeAgentClient.resolveStoryAgentToolsForStory(body.storyId);
+      }
       publishAiSessionSnapshot("control-action");
       return { data: AiSessionStoryActionResponseSchema.parse({ sessionId: updated.id, storyId: updated.storyId }) };
     } catch (error: unknown) {

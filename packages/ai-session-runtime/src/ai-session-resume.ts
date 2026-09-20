@@ -3,6 +3,7 @@ import {
   type AiSessionHistoryItem,
   type AiSessionResumeResult,
 } from "@task-handoff/protocol/ai-sessions";
+import type { StoryAgentToolName } from "@task-handoff/protocol/story-agent-tools";
 import type { AiSessionRegistry } from "./ai-session-registry";
 import type { AiSessionHistoryStore } from "./ai-session-history-store";
 
@@ -16,7 +17,8 @@ export type AiSessionResumeCoordinatorOptions = {
   registry: AiSessionRegistry;
   appSessions: () => readonly AiSessionResumeAppSession[];
   startApp: (item: AiSessionHistoryItem) => AiSessionResumeAppSession | Promise<AiSessionResumeAppSession>;
-  resumeProvider?: (item: AiSessionHistoryItem) => void | Promise<void>;
+  resumeProvider?: (item: AiSessionHistoryItem, storyAgentTools: StoryAgentToolName[]) => void | Promise<void>;
+  resolveStoryAgentTools?: (item: AiSessionHistoryItem) => Promise<StoryAgentToolName[]>;
 };
 
 export class AiSessionResumeCoordinator {
@@ -69,7 +71,8 @@ export class AiSessionResumeCoordinator {
     try {
       if (item.creationSource === "ai-session") {
         if (!this.options.resumeProvider) throw new Error("Provider does not support direct AI session resume.");
-        await this.options.resumeProvider(item);
+        const storyAgentTools = await this.options.resolveStoryAgentTools?.(item) || [];
+        await this.options.resumeProvider(item, storyAgentTools);
         this.options.history.activate(item.id);
         return AiSessionResumeResultSchema.parse({
           disposition: "resumed",

@@ -6,13 +6,19 @@ import { pipeline } from "node:stream/promises";
 import {
   STORY_DEFAULT_MAX_FILE_BYTES,
   StoryContentGetInputSchema,
-  StoryContentGetResultSchema,
-  StoryContentPageInputSchema,
   StoryContentSetInputSchema,
   StoryPathSchema,
 } from "@task-handoff/protocol/stories";
 import type { AiSessionStatus } from "@task-handoff/protocol/ai-sessions";
 import type { NodeAgentRegistrationClient } from "./node-agent-client.ts";
+import {
+  StoryAgentContentGetResultSchema,
+  StoryAgentContentListInputSchema,
+  StoryAgentContentListResultSchema,
+  StoryAgentContentSetResultSchema,
+  StoryAgentToolNameSchema,
+  storyAgentPagination,
+} from "@task-handoff/protocol/story-agent-tools";
 
 function storyToolError(code: string, message: string, statusCode = 400) {
   return Object.assign(new Error(message), { code, statusCode });
@@ -52,19 +58,25 @@ export class StoryAgentToolService {
     this.nodeAgent = nodeAgent;
   }
 
-  list(session: AiSessionStatus, page = 1, pageSize = 20) {
+  async list(session: AiSessionStatus, page = 1, pageSize = 20) {
     this.requireStory(session);
-    return this.nodeAgent.listStoryContent(session.id, page, pageSize);
+    const result = await this.nodeAgent.listStoryContent(session.id, page, pageSize);
+    return StoryAgentContentListResultSchema.parse({
+      documents: result.documents,
+      pagination: storyAgentPagination(result.pagination.totalItems, page, pageSize),
+    });
   }
 
   async invoke(session: AiSessionStatus, tool: string, value: unknown, signal?: AbortSignal) {
     if (tool === "story_list_content") {
-      const { page, pageSize } = StoryContentPageInputSchema.parse(value ?? {});
+      const { page, pageSize } = StoryAgentContentListInputSchema.parse(value ?? {});
       return this.list(session, page, pageSize);
     }
     if (tool === "story_get_content") return this.get(session, value, signal);
     if (tool === "story_set_content") return this.set(session, value, signal);
-    throw storyToolError("STORY_TOOL_NOT_FOUND", `Unknown Story tool: ${tool}`, 404);
+    const name = StoryAgentToolNameSchema.parse(tool);
+    this.requireStory(session);
+    return this.nodeAgent.invokeStoryAgentTool(session.id, name, value);
   }
 
   async get(session: AiSessionStatus, value: unknown, signal?: AbortSignal) {
@@ -94,7 +106,7 @@ export class StoryAgentToolService {
         } });
       }
     }
-    return StoryContentGetResultSchema.parse({ items });
+    return StoryAgentContentGetResultSchema.parse({ items });
   }
 
   async set(session: AiSessionStatus, value: unknown, signal?: AbortSignal) {
@@ -104,14 +116,14 @@ export class StoryAgentToolService {
     const stat = fs.lstatSync(sourcePath);
     if (stat.isSymbolicLink() || !stat.isFile()) throw storyToolError("STORY_SOURCE_NOT_FILE", "Story source must be a regular file.");
     if (stat.size > STORY_DEFAULT_MAX_FILE_BYTES) throw storyToolError("STORY_FILE_TOO_LARGE", "Story source exceeds the node limit.", 413);
-    return this.nodeAgent.uploadStoryContent(session.id, {
+    return StoryAgentContentSetResultSchema.parse(await this.nodeAgent.uploadStoryContent(session.id, {
       storyPath: input.storyPath,
       title: input.title,
       expectedRevision: input.expectedRevision,
       body: Readable.toWeb(fs.createReadStream(sourcePath)) as BodyInit,
       size: stat.size,
       signal,
-    });
+    }));
   }
 
   private requireStory(session: AiSessionStatus) {

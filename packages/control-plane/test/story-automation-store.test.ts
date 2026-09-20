@@ -62,6 +62,26 @@ test("Story Automation execution key remains idempotent under concurrent creatio
   }
 });
 
+test("Story Automation update and delete enforce atomic expectedUpdatedAt", async () => {
+  const { close, store, automation } = await fixture();
+  try {
+    await assert.rejects(
+      () => store.update(automation.id, { enabled: false }, "2026-01-01T00:00:00.000Z"),
+      (error: any) => error.code === "STORY_AUTOMATION_CONFLICT",
+    );
+    const updated = await store.update(automation.id, { enabled: false }, automation.updatedAt);
+    assert.equal(updated?.enabled, false);
+    assert.notEqual(updated?.updatedAt, automation.updatedAt);
+    await assert.rejects(
+      () => store.delete(automation.id, automation.updatedAt),
+      (error: any) => error.code === "STORY_AUTOMATION_CONFLICT",
+    );
+    assert.equal(await store.delete(automation.id, updated!.updatedAt), true);
+  } finally {
+    await close();
+  }
+});
+
 test("Story Automation store retains all active runs and only the newest 100 terminal runs", async () => {
   const { close, store, automation, createRun } = await fixture();
   try {

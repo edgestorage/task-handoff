@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { Alert, Linking, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
-import { router, Stack } from 'expo-router';
+import { Redirect, router, Stack } from 'expo-router';
 import { NativeActionButton } from '../src/components/NativeActionButton';
 import { OneTimeCodeInput } from '../src/components/OneTimeCodeInput';
 import { Screen } from '../src/components/Screen';
@@ -8,8 +8,14 @@ import { useMobileTheme } from '../src/components/theme';
 import { cloudMobileErrorMessage } from '../src/control-plane/cloud-error';
 import { hasActiveCloudAccount, logoutActiveCloudAccount, restoreActiveCloudAccountSession } from '../src/control-plane/runtime';
 import { useI18n } from '../src/i18n';
+import { isMobileCloudRelayEnabled } from '../src/platform/build-variant';
 
 export default function CloudAccountSecurityScreen() {
+  if (!isMobileCloudRelayEnabled) return <Redirect href="/profiles" />;
+  return <CloudAccountSecurityContent />;
+}
+
+function CloudAccountSecurityContent() {
   const { colors } = useMobileTheme(); const { locale } = useI18n(); const zh = locale === 'zh-CN';
   const [profile, setProfile] = useState<any>(); const [devices, setDevices] = useState<any[]>([]); const [providers, setProviders] = useState<any[]>([]);
   const [currentDeviceId, setCurrentDeviceId] = useState<string>();

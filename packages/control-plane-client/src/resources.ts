@@ -28,6 +28,10 @@ const NamedResourceSchema = z.object({
   id: z.string().trim().min(1).max(160),
   name: z.string().trim().min(1).max(160),
 });
+const PublicNodeCapabilityRecordSchema = z.object({
+  id: z.string().trim().min(1).max(160),
+  capabilities: z.record(z.string(), z.unknown()).default({}),
+}).passthrough();
 const PublicModelRegistrySchema = z.object({
   models: z.array(z.object({
     id: z.string().trim().min(1).max(120),
@@ -79,6 +83,9 @@ export function createControlPlaneResourcesApi(transport: ControlPlaneClientTran
   return {
     nodes(signal?: AbortSignal) {
       return requestData("/api/nodes?projection=directory", ControlPlaneNodeDirectorySchema, signal);
+    },
+    node(nodeId: string, signal?: AbortSignal) {
+      return requestData(`/api/nodes/${encodeURIComponent(nodeId)}`, PublicNodeCapabilityRecordSchema, signal);
     },
     instanceBoard(signal?: AbortSignal) {
       return requestData("/api/instance-board?projection=directory", ControlPlaneInstanceDirectorySchema, signal);

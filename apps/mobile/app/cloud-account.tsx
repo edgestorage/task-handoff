@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Keyboard, Linking, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
-import { router, Stack } from 'expo-router';
+import { Redirect, router, Stack } from 'expo-router';
 
 import { NativeActionButton } from '../src/components/NativeActionButton';
 import { CloudAuthHint, CloudAuthLabel, CloudAuthScaffold } from '../src/components/CloudAuthScaffold';
@@ -9,11 +9,17 @@ import { useMobileTheme } from '../src/components/theme';
 import { cloudMobileErrorMessage } from '../src/control-plane/cloud-error';
 import { hasActiveCloudAccount, mobileCloudAccountSession as account, saveActiveCloudAccountReference } from '../src/control-plane/runtime';
 import { useI18n } from '../src/i18n';
+import { isMobileCloudRelayEnabled } from '../src/platform/build-variant';
 
 type Mode = 'login' | 'register' | 'verify';
 const REDIRECT_URI = 'taskhandoff://cloud-auth/callback';
 
 export default function CloudAccountScreen() {
+  if (!isMobileCloudRelayEnabled) return <Redirect href="/profiles" />;
+  return <CloudAccountContent />;
+}
+
+function CloudAccountContent() {
   const { colors } = useMobileTheme();
   const { locale, t } = useI18n();
   const [email, setEmail] = useState('');

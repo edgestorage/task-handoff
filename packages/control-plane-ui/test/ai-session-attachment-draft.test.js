@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { effectScope, isProxy, reactive, ref } from "vue";
 import {
   restoreAiSessionAttachmentDraft,
   serializeAiSessionAttachmentDraft,
+  useAiSessionAttachmentDraft,
 } from "../src/apps/control-plane/useAiSessionAttachmentDraft.ts";
 
 test("attachment drafts preserve source content without transient upload state", () => {
@@ -60,4 +62,61 @@ test("attachment drafts restore inline data and reject malformed records", () =>
     source: { type: "inline" },
     dataUrl: "data:text/plain;base64,aGVsbG8=",
   }]);
+});
+
+test("attachment drafts strip Vue proxies before IndexedDB structured cloning", () => {
+  const attachment = reactive({
+    id: "local_image",
+    kind: "image",
+    name: "pasted.png",
+    mime: "image/png",
+    size: 5,
+    source: { type: "inline" },
+    dataUrl: "data:image/png;base64,aW1hZ2U=",
+    textPresentation: { summary: "pasted", codePointLength: 6 },
+  });
+  assert.equal(isProxy(attachment.source), true);
+  assert.throws(() => structuredClone({ source: attachment.source }), { name: "DataCloneError" });
+
+  const [serialized] = serializeAiSessionAttachmentDraft([attachment]);
+  assert.equal(isProxy(serialized.source), false);
+  assert.equal(isProxy(serialized.textPresentation), false);
+  assert.deepEqual(structuredClone(serialized), serialized);
+});
+
+test("attachment draft state revokes preview URLs when its key changes or scope is disposed", () => {
+  const originalRevokeObjectUrl = URL.revokeObjectURL;
+  const revoked = [];
+  URL.revokeObjectURL = (url) => revoked.push(url);
+  try {
+    const draftKey = ref("");
+    const scope = effectScope();
+    const attachments = scope.run(() => useAiSessionAttachmentDraft(draftKey));
+    attachments.value = [{
+      id: "local_image_a",
+      kind: "image",
+      name: "a.png",
+      mime: "image/png",
+      size: 1,
+      source: { type: "runtime-path", path: "/workspace/a.png" },
+      previewUrl: "blob:preview-a",
+    }];
+
+    draftKey.value = "session-b";
+    assert.deepEqual(revoked, ["blob:preview-a"]);
+    attachments.value = [{
+      id: "local_image_b",
+      kind: "image",
+      name: "b.png",
+      mime: "image/png",
+      size: 1,
+      source: { type: "runtime-path", path: "/workspace/b.png" },
+      previewUrl: "blob:preview-b",
+    }];
+
+    scope.stop();
+    assert.deepEqual(revoked, ["blob:preview-a", "blob:preview-b"]);
+  } finally {
+    URL.revokeObjectURL = originalRevokeObjectUrl;
+  }
 });

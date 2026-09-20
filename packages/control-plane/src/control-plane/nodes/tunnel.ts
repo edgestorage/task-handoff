@@ -358,9 +358,11 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
 
   markHealthy(nodeId: string, socket: ReverseTunnelSocket) {
     const current = this.sockets.get(nodeId);
-    if (!current || current.socket !== socket || current.runtimeGeneration === undefined) return false;
+    if (!current || current.socket !== socket) return false;
     current.supervisor?.healthy();
-    const connected = this.connectionRuntime?.connected(nodeId, current.runtimeGeneration) ?? true;
+    const connected = current.runtimeGeneration === undefined
+      ? true
+      : this.connectionRuntime?.connected(nodeId, current.runtimeGeneration) ?? true;
     const subscription = this.eventSubscriptions.get(nodeId);
     if (subscription) this.sendEventSubscription(nodeId, subscription);
     return connected;
@@ -1197,7 +1199,18 @@ export function registerNodeAgentTunnelRoutes(options: {
   errorPayload: (error: unknown) => TunnelErrorPayload;
 }) {
   const { app, service, nodeAgentTunnel, errorPayload } = options;
-  const ingress = new NodeTunnelIngress(nodeAgentTunnel);
+  const ingress = new NodeTunnelIngress(nodeAgentTunnel, {
+    onIdentified: async (nodeId) => {
+      try {
+        await service.checkNode(nodeId);
+      } catch (error) {
+        app.log?.warn?.({
+          nodeId,
+          error: error instanceof Error ? error.message : String(error),
+        }, "reverse tunnel node capability refresh failed");
+      }
+    },
+  });
   const requireTunnelEnabled = (node: Node) => {
     if (node.connectionEnabled === false) {
       const error = new Error("Node agent connection is disabled locally.");

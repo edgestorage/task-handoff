@@ -19,6 +19,15 @@ import {
   StoryRevisionSchema,
   type StoryContentPageResult,
 } from "@task-handoff/protocol/stories";
+import { StoryAgentContentSetResultSchema } from "@task-handoff/protocol/story-agent-tools";
+import {
+  sanitizeStoryAgentToolResolution,
+  type StoryAgentToolName,
+  type StoryAgentToolPolicyInvalidated,
+  type StoryAgentToolResolution,
+} from "@task-handoff/protocol/story-agent-tools";
+import { STORY_AGENT_TOOL_SCHEMAS } from "@task-handoff/protocol/story-agent-tools";
+import { StoryToolPolicyCache } from "./story-tool-policy-cache.ts";
 
 export type NodeAgentRegistrationConfig = {
   controlMode: "standalone" | "controlled";
@@ -60,6 +69,20 @@ export type ControlledInstanceSnapshot = {
 
 export type SnapshotProvider = () => Promise<ControlledInstanceSnapshot>;
 
+export type StoryAgentToolAccess = {
+  storyId: string;
+  enabledTools: StoryAgentToolName[];
+  revision?: string;
+  source: "node-agent" | "legacy-v0.0.32" | "fail-closed";
+  diagnostic?: string;
+};
+
+const LEGACY_STORY_CONTENT_TOOLS: StoryAgentToolName[] = [
+  "story_list_content",
+  "story_get_content",
+  "story_set_content",
+];
+
 export function nodeAgentRegistrationConfigFromEnv(env: NodeJS.ProcessEnv = process.env): NodeAgentRegistrationConfig {
   return {
     controlMode: env.TASK_HANDOFF_CONTROL_MODE === "controlled" ? "controlled" : "standalone",
@@ -89,6 +112,8 @@ export class NodeAgentRegistrationClient {
   private readonly config: NodeAgentRegistrationConfig;
   private readonly snapshotProvider: SnapshotProvider;
   private readonly fetchImpl: typeof fetch;
+  private readonly storyToolPolicies = new StoryToolPolicyCache();
+  private storyToolPolicyCapability: "unknown" | "supported" | "legacy-content-only" = "unknown";
 
   constructor(
     config: NodeAgentRegistrationConfig,
@@ -112,6 +137,8 @@ export class NodeAgentRegistrationClient {
     this.config.nodeAgentUrl = normalized;
     this.connectionRevision += 1;
     this.nodeAgentProtocolVersion = undefined;
+    this.storyToolPolicyCapability = "unknown";
+    this.storyToolPolicies.clear();
     this.registeredInstanceId = "";
     this.reconnectBackoff.reset();
     if (!this.stopped) this.schedule(0);
@@ -211,12 +238,74 @@ export class NodeAgentRegistrationClient {
         signal: input.signal,
       } as RequestInit,
     );
-    const payload = (await response.json()) as { data?: { storyPath?: unknown; revision?: unknown; size?: unknown } };
-    return {
-      storyPath: String(payload.data?.storyPath || ""),
-      revision: StoryRevisionSchema.parse(payload.data?.revision),
-      size: Number(payload.data?.size || 0),
-    };
+    const payload = (await response.json()) as { data?: unknown };
+    return StoryAgentContentSetResultSchema.strip().parse(payload.data);
+  }
+
+  async invokeStoryAgentTool(sessionId: string, tool: StoryAgentToolName, args: unknown) {
+    const input = STORY_AGENT_TOOL_SCHEMAS[tool].input.parse(args ?? {});
+    const result = await this.request(
+      `node-agent/instances/${encodeURIComponent(this.requiredInstanceId())}/ai-sessions/${encodeURIComponent(sessionId)}/story-agent-tools/${encodeURIComponent(tool)}`,
+      { input },
+    );
+    return STORY_AGENT_TOOL_SCHEMAS[tool].output.parse(result);
+  }
+
+  async resolveStoryAgentToolsForStory(storyId: string): Promise<StoryAgentToolAccess> {
+    return this.resolveStoryAgentTools(
+      storyId,
+      `node-agent/instances/${encodeURIComponent(this.requiredInstanceId())}/story-agent-tools?${new URLSearchParams({ storyId })}`,
+    );
+  }
+
+  async resolveStoryAgentToolsForSession(sessionId: string, storyId: string): Promise<StoryAgentToolAccess> {
+    return this.resolveStoryAgentTools(
+      storyId,
+      `node-agent/instances/${encodeURIComponent(this.requiredInstanceId())}/ai-sessions/${encodeURIComponent(sessionId)}/story-agent-tools`,
+    );
+  }
+
+  cachedStoryAgentTools(storyId: string) {
+    return this.storyToolPolicies.get(storyId);
+  }
+
+  invalidateStoryAgentTools(input: StoryAgentToolPolicyInvalidated | unknown) {
+    return this.storyToolPolicies.invalidate(input);
+  }
+
+  storyAgentToolCapability() {
+    return this.storyToolPolicyCapability;
+  }
+
+  private async resolveStoryAgentTools(storyId: string, path: string): Promise<StoryAgentToolAccess> {
+    try {
+      const resolution = sanitizeStoryAgentToolResolution(await this.request(path, {}, "GET"));
+      if (resolution.storyId !== storyId) {
+        throw Object.assign(new Error("Node agent returned Story tool permissions for another Story."), {
+          code: "STORY_AGENT_TOOL_SCOPE_MISMATCH",
+        });
+      }
+      this.storyToolPolicyCapability = "supported";
+      this.storyToolPolicies.remember(resolution);
+      return accessFromResolution(resolution);
+    } catch (error) {
+      // Compatibility for v0.0.32: the node-agent advertised only the original
+      // Content tools and did not expose the private policy resolution route.
+      if (requestStatus(error) === 404 && !requestCode(error)) {
+        this.storyToolPolicyCapability = "legacy-content-only";
+        return {
+          storyId,
+          enabledTools: [...LEGACY_STORY_CONTENT_TOOLS],
+          source: "legacy-v0.0.32",
+        };
+      }
+      return {
+        storyId,
+        enabledTools: [],
+        source: "fail-closed",
+        diagnostic: error instanceof Error ? error.message : String(error),
+      };
+    }
   }
 
   private async registerOnce() {
@@ -351,10 +440,10 @@ export class NodeAgentRegistrationClient {
       },
     }).finally(() => clearTimeout(timer));
     if (!response.ok) {
-      const payload = (await response.json().catch(() => ({}))) as { error?: { message?: string } };
+      const payload = (await response.json().catch(() => ({}))) as { error?: { code?: string; message?: string } };
       throw Object.assign(
         new Error(payload.error?.message || `Node agent request failed with HTTP ${response.status}`),
-        { statusCode: response.status },
+        { statusCode: response.status, ...(payload.error?.code ? { code: payload.error.code } : {}) },
       );
     }
     return response;
@@ -372,6 +461,21 @@ function requestStatus(error: unknown) {
   return error && typeof error === "object" && "statusCode" in error
     ? Number((error as { statusCode?: unknown }).statusCode)
     : undefined;
+}
+
+function requestCode(error: unknown) {
+  return error && typeof error === "object" && "code" in error
+    ? String((error as { code?: unknown }).code || "") || undefined
+    : undefined;
+}
+
+function accessFromResolution(resolution: StoryAgentToolResolution): StoryAgentToolAccess {
+  return {
+    storyId: resolution.storyId,
+    enabledTools: [...resolution.enabledTools],
+    revision: resolution.revision,
+    source: "node-agent",
+  };
 }
 
 function stripUndefined(value: Record<string, unknown>) {

@@ -19,10 +19,13 @@ test("Story content uses storyPath identity and hash revisions", async () => {
   try {
     const story = await store.create({ title: "Release", actions: [] });
     const first = await store.writeContent(story.id, { storyPath: "notes/readme.md", title: "Readme", stream: Readable.from(["one"]) });
+    assert.equal(first.title, "Readme");
+    assert.equal(first.size, 3);
     assert.equal((await store.listContent(story.id))[0]?.storyPath, "notes/readme.md");
     assert.equal(first.revision.length, 64);
     await assert.rejects(() => store.writeContent(story.id, { storyPath: "notes/readme.md", stream: Readable.from(["two"]), expectedRevision: "0".repeat(64) }), (error: any) => error.code === "STORY_REVISION_CONFLICT");
     const second = await store.writeContent(story.id, { storyPath: "notes/readme.md", stream: Readable.from(["two"]), expectedRevision: first.revision });
+    assert.equal(second.title, "Readme");
     assert.notEqual(second.revision, first.revision);
   } finally { await close(); }
 });

@@ -14,11 +14,12 @@ test("a preset action stays in Story and selects its newly created AI Session", 
     workbench.indexOf("async function runStoryAction"),
     workbench.indexOf("function setWorkbenchView", workbench.indexOf("async function runStoryAction")),
   );
-  assert.ok(runStoryAction.indexOf('window.confirm(t("stories.run.confirm"') < runStoryAction.indexOf('const result = await createAiSession'));
+  assert.ok(runStoryAction.indexOf('window.confirm(t("stories.run.confirm"') < runStoryAction.indexOf('sharedControlPlaneClient.stories.runAction'));
   assert.match(runStoryAction, /showDelayedControlPlaneLoadingToast\(t\("stories\.run\.creating"\)\)/);
   assert.match(runStoryAction, /window\.confirm\(t\("stories\.run\.confirm", \{ name: action\.title \}\)\)/);
-  assert.match(runStoryAction, /const result = await createAiSession/);
-  assert.match(runStoryAction, /onCreated\(target\.id, result\.aiSessionId\)/);
+  assert.match(runStoryAction, /sharedControlPlaneClient\.stories\.runAction\(story\.id, action\.id, story\.ownerNodeId/);
+  assert.match(runStoryAction, /onCreated\(result\.targetInstanceId, result\.aiSessionId\)/);
+  assert.doesNotMatch(runStoryAction, /createAiSession|boardInstancesWithAiSessions/);
   assert.match(runStoryAction, /finally \{ loadingToast\.dismiss\(\); \}/);
   assert.doesNotMatch(runStoryAction, /setActiveInstance|setWorkbenchView\("instance"\)/);
 });

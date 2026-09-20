@@ -3,21 +3,32 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { AiSessionStatus } from "@task-handoff/protocol/ai-sessions";
-import {
-  StoryContentGetInputSchema,
-  StoryContentPageInputSchema,
-  StoryContentSetInputSchema,
-} from "@task-handoff/protocol/stories";
 import { z } from "zod";
 import type { StoryAgentToolService } from "./story-tools.ts";
-import { STORY_TOOL_DESCRIPTIONS } from "../story-tool-contract.ts";
+import {
+  STORY_AGENT_TOOL_DESCRIPTIONS,
+  STORY_AGENT_TOOL_NAMES,
+  STORY_AGENT_TOOL_SCHEMAS,
+  StoryAgentToolNameSchema,
+  type StoryAgentToolName,
+} from "@task-handoff/protocol/story-agent-tools";
 
 const InvocationSchema = z.object({
   provider: z.literal("opencode"),
   providerSessionId: z.string().min(1).max(240),
-  tool: z.enum(["story_list_content", "story_get_content", "story_set_content"]),
+  tool: StoryAgentToolNameSchema,
   arguments: z.unknown().optional(),
 }).strict();
+
+const STORY_AGENT_READ_ONLY_TOOLS = new Set<StoryAgentToolName>([
+  "story_list_content",
+  "story_list_actions",
+  "story_list_automations",
+  "story_list_automation_runs",
+  "story_list_ai_sessions",
+  "story_get_ai_session",
+  "story_get_ai_session_turn",
+]);
 
 type StoryAgentToolBridgeOptions = {
   service: StoryAgentToolService;
@@ -128,26 +139,25 @@ export class StoryAgentToolBridge {
 
   private createMcpServer() {
     const server = new McpServer({ name: "task-handoff-story", version: "1.0.0" });
-    const invoke = async (tool: string, args: unknown, extra: { _meta?: Record<string, unknown>; signal: AbortSignal }) => {
+    const invoke = async (tool: StoryAgentToolName, args: unknown, extra: { _meta?: Record<string, unknown>; signal: AbortSignal }) => {
       const threadId = typeof extra._meta?.threadId === "string" ? extra._meta.threadId : undefined;
       if (!threadId) throw Object.assign(new Error("Codex did not provide a thread identity for the Story tool call."), { code: "AI_SESSION_IDENTITY_REQUIRED", statusCode: 400 });
       const session = this.options.resolveSession("codex", threadId);
       if (!session) throw Object.assign(new Error("AI Session was not found for the Story tool call."), { code: "AI_SESSION_NOT_FOUND", statusCode: 404 });
-      const result = await this.options.service.invoke(session, tool, args, extra.signal);
-      return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+      const result = STORY_AGENT_TOOL_SCHEMAS[tool].output.parse(await this.options.service.invoke(session, tool, args, extra.signal));
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(result) }],
+        structuredContent: result,
+      };
     };
-    server.registerTool("story_list_content", {
-      description: STORY_TOOL_DESCRIPTIONS.story_list_content,
-      inputSchema: StoryContentPageInputSchema,
-    }, (args, extra) => invoke("story_list_content", args, extra));
-    server.registerTool("story_get_content", {
-      description: STORY_TOOL_DESCRIPTIONS.story_get_content,
-      inputSchema: StoryContentGetInputSchema,
-    }, (args, extra) => invoke("story_get_content", args, extra));
-    server.registerTool("story_set_content", {
-      description: STORY_TOOL_DESCRIPTIONS.story_set_content,
-      inputSchema: StoryContentSetInputSchema,
-    }, (args, extra) => invoke("story_set_content", args, extra));
+    for (const name of STORY_AGENT_TOOL_NAMES) {
+      server.registerTool(name, {
+        description: STORY_AGENT_TOOL_DESCRIPTIONS[name],
+        inputSchema: STORY_AGENT_TOOL_SCHEMAS[name].input as z.ZodObject,
+        outputSchema: STORY_AGENT_TOOL_SCHEMAS[name].output as z.ZodObject,
+        ...(STORY_AGENT_READ_ONLY_TOOLS.has(name) ? { annotations: { readOnlyHint: true } } : {}),
+      }, (args, extra) => invoke(name, args, extra));
+    }
     return server;
   }
 }

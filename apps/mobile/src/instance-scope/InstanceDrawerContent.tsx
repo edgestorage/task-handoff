@@ -13,6 +13,7 @@ import { useI18n } from '../i18n';
 import { useInstanceScope } from './use-instance-scope';
 import { useMobileControlPlaneRuntime } from '../control-plane/use-mobile-control-plane-runtime';
 import { useCloudAccountState } from '../control-plane/use-cloud-account-state';
+import { isMobileCloudRelayEnabled } from '../platform/build-variant';
 import { useStoryNodeFilter } from '../stories/use-story-node-filter';
 
 export function InstanceDrawerContent(props: DrawerContentComponentProps) {
@@ -113,7 +114,7 @@ export function InstanceDrawerContent(props: DrawerContentComponentProps) {
       {!state.nodes.length && state.phase !== 'loading' ? <EmptyState icon={{ android: 'dns', ios: 'server.rack' }} iconSize={24} message={t('directories.noEntries')} style={styles.empty} /> : null}
     </DrawerContentScrollView>
     <View style={styles.footer}>
-      <Pressable
+      {isMobileCloudRelayEnabled ? <Pressable
         accessibilityLabel={cloudAccount.phase === 'signed-in' ? t('cloudAccount.settings') : t('cloudAccount.signIn')}
         accessibilityRole="button"
         accessibilityState={{ disabled: cloudAccount.phase === 'loading' }}
@@ -138,7 +139,7 @@ export function InstanceDrawerContent(props: DrawerContentComponentProps) {
           </Text>
         </View>
         <SystemIcon android="chevron_right" color={colors.textMuted} ios="chevron.right" size={13} />
-      </Pressable>
+      </Pressable> : null}
       <Pressable
         accessibilityLabel={t('nav.settings')}
         accessibilityRole="button"

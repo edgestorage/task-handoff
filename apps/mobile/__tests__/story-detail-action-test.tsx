@@ -8,7 +8,6 @@ import { layoutFromEvent, StoryDetail } from '../src/stories/StoryDetail';
 import { useMobileControlPlaneRuntime } from '../src/control-plane/use-mobile-control-plane-runtime';
 import { useActiveDirectories } from '../src/directories/use-directories';
 import { useActiveAiSessions, useActiveAiSessionsSnapshot } from '../src/ai-sessions/use-active-sessions';
-import { mobilePermissionStore } from '../src/control-plane/runtime';
 
 jest.mock('expo-crypto', () => ({ randomUUID: () => 'action-request-1' }));
 jest.mock('@expo/ui/community/menu', () => ({
@@ -22,7 +21,6 @@ jest.mock('expo-router', () => ({
 jest.mock('../src/control-plane/use-mobile-control-plane-runtime', () => ({ useMobileControlPlaneRuntime: jest.fn() }));
 jest.mock('../src/directories/use-directories', () => ({ useActiveDirectories: jest.fn() }));
 jest.mock('../src/ai-sessions/use-active-sessions', () => ({ useActiveAiSessions: jest.fn(), useActiveAiSessionsSnapshot: jest.fn() }));
-jest.mock('../src/control-plane/runtime', () => ({ mobilePermissionStore: { write: jest.fn().mockResolvedValue(undefined) } }));
 
 const instance = ControlPlaneInstanceDirectoryEntrySchema.parse({
   id: 'instance-1',
@@ -74,19 +72,19 @@ beforeEach(() => {
   mockActiveSessions.mockReturnValue({ actions: { close: jest.fn() }, refresh: jest.fn().mockResolvedValue(undefined) } as unknown as ReturnType<typeof useActiveAiSessions>);
 });
 
-test('a preset action confirms before directly creating and opening an AI Session', async () => {
-  const create = jest.fn().mockResolvedValue({ disposition: 'created', aiSessionId: 'session-1' });
+test('a preset action confirms before using the authoritative Story Action runner', async () => {
+  const runAction = jest.fn().mockResolvedValue({ targetInstanceId: instance.id, aiSessionId: 'session-1' });
   const get = jest.fn().mockResolvedValue(story);
   const onOpenSession = jest.fn();
   jest.spyOn(Alert, 'alert').mockImplementation(() => undefined);
-  mockRuntime.mockReturnValue({ api: { stories: { get, listAutomations: jest.fn().mockResolvedValue({ automations: [] }) }, aiSessions: { create } } } as unknown as ReturnType<typeof useMobileControlPlaneRuntime>);
+  mockRuntime.mockReturnValue({ api: { stories: { get, listAutomations: jest.fn().mockResolvedValue({ automations: [] }), runAction } } } as unknown as ReturnType<typeof useMobileControlPlaneRuntime>);
   mockDirectories.mockReturnValue({ controlPlaneId: 'cp-1', state: { instances: [instance], nodes: [] } } as unknown as ReturnType<typeof useActiveDirectories>);
   mockSessions.mockReturnValue({ instances: [] } as unknown as ReturnType<typeof useActiveAiSessionsSnapshot>);
 
   const screen = await render(<StoryDetail nodeId="node-1" onOpenSession={onOpenSession} storyId={story.id} />);
   await act(async () => { fireEvent.press(await screen.findByText('Deploy staging')); });
 
-  expect(create).not.toHaveBeenCalled();
+  expect(runAction).not.toHaveBeenCalled();
   expect(Alert.alert).toHaveBeenCalledWith(
     'Run Deploy staging?',
     'This immediately creates a new AI Session using this preset action.',
@@ -99,21 +97,14 @@ test('a preset action confirms before directly creating and opening an AI Sessio
   });
 
   expect(onOpenSession).toHaveBeenCalledWith(instance.id, 'session-1');
-  expect(create).toHaveBeenCalledWith(instance.id, expect.objectContaining({
-    clientRequestId: 'story-action-action-request-1',
-    message: 'Deploy to staging',
-    mode: 'queue',
-    permissionMode: 'auto-review',
-    storyId: story.id,
-  }));
-  expect(mobilePermissionStore.write).toHaveBeenCalledWith('cp-1', instance.id, 'session-1', 'auto-review');
+  expect(runAction).toHaveBeenCalledWith(story.id, 'deploy', story.ownerNodeId, 'story-action-action-request-1');
 });
 
 test('an archived Story cannot run a preset action', async () => {
   const archivedStory = { ...story, archivedAt: '2026-09-06T00:00:00.000Z' };
-  const create = jest.fn();
+  const runAction = jest.fn();
   jest.spyOn(Alert, 'alert').mockImplementation(() => undefined);
-  mockRuntime.mockReturnValue({ api: { stories: { get: jest.fn().mockResolvedValue(archivedStory), listAutomations: jest.fn().mockResolvedValue({ automations: [] }) }, aiSessions: { create } } } as unknown as ReturnType<typeof useMobileControlPlaneRuntime>);
+  mockRuntime.mockReturnValue({ api: { stories: { get: jest.fn().mockResolvedValue(archivedStory), listAutomations: jest.fn().mockResolvedValue({ automations: [] }), runAction } } } as unknown as ReturnType<typeof useMobileControlPlaneRuntime>);
   mockDirectories.mockReturnValue({ controlPlaneId: 'cp-1', state: { instances: [instance], nodes: [] } } as unknown as ReturnType<typeof useActiveDirectories>);
   mockSessions.mockReturnValue({ instances: [] } as unknown as ReturnType<typeof useActiveAiSessionsSnapshot>);
 
@@ -123,7 +114,7 @@ test('an archived Story cannot run a preset action', async () => {
   await act(async () => { fireEvent.press(action); });
 
   expect(Alert.alert).not.toHaveBeenCalled();
-  expect(create).not.toHaveBeenCalled();
+  expect(runAction).not.toHaveBeenCalled();
 });
 
 test('shows authoritative automations and can run one manually', async () => {

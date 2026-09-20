@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { StoryAutomationWithActionInputSchema, StoryIdSchema, StoryUpdateInputSchema, type Story, type StoryAutomationStatus, type StoryAutomationWithActionInput, type StoryUpdateInput } from "@task-handoff/protocol/stories";
+import { StoryAutomationWithActionInputSchema, StoryCreateInputSchema, StoryIdSchema, StoryUpdateInputSchema, type Story, type StoryAutomationStatus, type StoryAutomationWithActionInput, type StoryCreateInput, type StoryUpdateInput } from "@task-handoff/protocol/stories";
 import type { NodeAgentState } from "../state.ts";
 import type { StoryAutomationStore } from "./automation-store.ts";
 import type { NodeAgentRepository } from "../persistence/repository.ts";
@@ -45,13 +45,21 @@ export class StoryCommandService {
 
   async update(storyId: string, input: StoryUpdateInput) {
     const parsed = StoryUpdateInputSchema.parse(input);
+    if (parsed.actions) this.assertActionTargets(parsed.actions);
     const story = await this.stories.update(storyId, parsed);
     await this.scheduler.refresh();
     return story;
   }
 
+  async create(input: StoryCreateInput) {
+    const parsed = StoryCreateInputSchema.parse(input);
+    this.assertActionTargets(parsed.actions || []);
+    return this.stories.create(parsed);
+  }
+
   async createAutomationWithAction(storyId: string, input: StoryAutomationWithActionInput): Promise<StoryAutomationStatus> {
     const parsed = StoryAutomationWithActionInputSchema.parse(input);
+    this.assertActionTargets([parsed.action]);
     const current = await this.stories.automationContext(storyId);
     if (!current) throw commandError("STORY_NOT_FOUND", "Story was not found.", 404);
     if (current.archivedAt) throw commandError("STORY_ARCHIVED", "Archived Story cannot create an Automation.", 409);
@@ -149,6 +157,14 @@ export class StoryCommandService {
   }
 
   private storyRoot(storyId: string) { return path.join(this.state.paths.storyContentDir, StoryIdSchema.parse(storyId)); }
+  private assertActionTargets(actions: Array<{ targetInstanceId: string }>) {
+    for (const action of actions) {
+      const instance = this.state.requireInstance(action.targetInstanceId);
+      if (instance.nodeId !== this.state.node.id) {
+        throw commandError("STORY_NODE_MISMATCH", "Story Action target belongs to another node.", 409);
+      }
+    }
+  }
   private fsyncDirectory(directory: string) { if (process.platform === "win32") return; const fd = fs.openSync(directory, "r"); try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); } }
 }
 

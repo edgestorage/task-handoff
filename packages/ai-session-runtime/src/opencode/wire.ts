@@ -2,6 +2,11 @@ import { z } from "zod";
 
 const TimestampSchema = z.number().finite().nonnegative();
 const IdentifierSchema = z.string().trim().min(1).max(240);
+export const OpenCodePermissionRuleSchema = z.object({
+  permission: z.string(),
+  pattern: z.string(),
+  action: z.enum(["allow", "ask", "deny"]),
+}).passthrough();
 
 export const OpenCodeHealthSchema = z.object({
   healthy: z.literal(true),
@@ -20,6 +25,7 @@ export const OpenCodeSessionSchema = z.object({
     variant: z.string().optional(),
   }).passthrough().optional(),
   version: z.string().optional(),
+  permission: z.array(OpenCodePermissionRuleSchema).optional(),
   time: z.object({
     created: TimestampSchema,
     updated: TimestampSchema,

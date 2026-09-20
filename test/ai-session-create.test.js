@@ -96,7 +96,7 @@ test("AI session creation timings correlate stages without logging prompt or cre
   const input = { agent: "codex", cwd: "/workspace/private", message: "private prompt", clientRequestId: "timed-create" };
   const created = await coordinator.create(input);
   assert.equal(created.disposition, "created");
-  assert.deepEqual(timings.map((entry) => entry.stage), ["ensure-provider", "provider-create", "first-turn", "persist-operation", "total"]);
+  assert.deepEqual(timings.map((entry) => entry.stage), ["ensure-provider", "story-agent-tools", "provider-create", "first-turn", "persist-operation", "total"]);
   assert.ok(timings.every((entry) => entry.clientRequestId === input.clientRequestId && entry.outcome === "completed" && Number.isFinite(entry.durationMs) && entry.durationMs >= 0));
   assert.doesNotMatch(JSON.stringify(timings), /private/);
   const count = timings.length;
@@ -825,6 +825,7 @@ test("Codex bridge creates a persistent Direct thread on the shared client", asy
     modelProvider: "openai",
     permissions: { approvalPolicy: "on-request", approvalsReviewer: "auto_review", permissions: ":workspace" },
     reasoningEffort: "medium",
+    storyAgentTools: [],
   });
   assert.equal(registry.getByProviderSessionId("codex", "thread-bridge").creationSource, "ai-session");
 });
@@ -1018,6 +1019,27 @@ test("Codex app-server client sends strict thread lifecycle requests", async () 
   assert.equal(requests[0].params.ephemeral, false);
   assert.equal(requests[0].params.threadSource, "user");
   assert.equal(requests[0].params.cwd, "/workspace");
+});
+
+test("Codex app-server lifecycle requests preserve the managed Story MCP transport", async () => {
+  const client = new CodexAppServerClient();
+  client.serverUserAgent = "codex-cli/0.143.0-alpha.32 (Darwin)";
+  const requests = [];
+  client.request = async (method, params) => {
+    requests.push({ method, params });
+    return { thread: { id: method === "thread/fork" ? "thread-fork" : "thread-story", cwd: "/workspace", ephemeral: false } };
+  };
+  const storyAgentTools = ["story_list_content", "story_list_actions"];
+
+  await client.startThread({ cwd: "/workspace", storyAgentTools });
+  await client.resumeThread("thread-story", { storyAgentTools });
+  await client.forkThread({ threadId: "thread-story", storyAgentTools });
+
+  assert.deepEqual(requests.map(({ params }) => params.config), Array.from({ length: 3 }, () => ({
+    "mcp_servers.task_handoff_story.enabled": true,
+    "mcp_servers.task_handoff_story.enabled_tools": storyAgentTools,
+  })));
+  assert.equal(requests.every(({ params }) => !("mcp_servers" in params.config)), true);
 });
 
 test("Codex app-server capability gate follows released thread/fork wire versions", () => {

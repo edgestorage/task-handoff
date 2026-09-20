@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import { Duplex } from "node:stream";
 import WebSocket from "ws";
 import type { AiSessionApprovalDecision } from "../../ai-session-control";
+import type { StoryAgentToolName } from "@task-handoff/protocol/story-agent-tools";
 import type { CodexDynamicToolCall, CodexDynamicToolCallResult, CodexEphemeralStructuredTurnOptions, CodexThreadForkCapabilities, CodexThreadForkOptions, CodexThreadStartOptions, CodexTurnPermissionOverrides } from "./contract";
 import { approvalResponseForRequest, codexApprovalRequest } from "../protocol/approvals";
 import { codexNotification } from "../protocol/events";
@@ -15,6 +16,7 @@ import type {
   CodexUserInput,
   JsonValue,
 } from "../protocol/types";
+import { codexThreadConfig } from "../story-tool-config.ts";
 
 export type CodexAppServerClientMode =
   | { type: "stdio"; command: string }
@@ -96,6 +98,21 @@ const CODEX_THREAD_SOURCE_KINDS = [
   "subAgentOther",
   "unknown",
 ] as const;
+const CODEX_CONFIG_PATH_SEGMENT = /^[A-Za-z0-9_-]+$/;
+
+function disabledCodexMcpServerConfig(serverNames: string[]): JsonValue {
+  return Object.fromEntries(serverNames.map((name) => {
+    if (!CODEX_CONFIG_PATH_SEGMENT.test(name)) {
+      throw new Error(`Codex MCP server name cannot be represented as a thread config path: ${name}`);
+    }
+    return [`mcp_servers.${name}.enabled`, false];
+  }));
+}
+
+function codexThreadConfigParam(reasoningEffort?: string, storyAgentTools?: StoryAgentToolName[]) {
+  const config = codexThreadConfig(reasoningEffort, storyAgentTools);
+  return Object.keys(config).length > 0 ? { config } : {};
+}
 
 export function parseCodexCliVersion(output: string) {
   return output.match(CODEX_VERSION_PATTERN)?.[1];
@@ -284,7 +301,7 @@ export class CodexAppServerClient extends EventEmitter {
       ...(options.permissions || {}),
       ephemeral: false,
       ...(options.historyMode ? { historyMode: options.historyMode } : {}),
-      ...(options.reasoningEffort ? { config: { model_reasoning_effort: options.reasoningEffort } } : {}),
+      ...codexThreadConfigParam(options.reasoningEffort, options.storyAgentTools),
       ...(options.dynamicTools ? { dynamicTools: options.dynamicTools } : {}),
       sessionStartSource: "startup",
       threadSource: "user",
@@ -369,7 +386,7 @@ export class CodexAppServerClient extends EventEmitter {
         ...(options.cwd ? { cwd: options.cwd } : {}),
         ...(options.model ? { model: options.model } : {}),
         ...(options.modelProvider ? { modelProvider: options.modelProvider } : {}),
-        ...(options.reasoningEffort ? { config: { model_reasoning_effort: options.reasoningEffort } } : {}),
+        ...codexThreadConfigParam(options.reasoningEffort, options.storyAgentTools),
         ephemeral: false,
       });
       const thread = result.thread && typeof result.thread === "object" && !Array.isArray(result.thread)
@@ -582,7 +599,7 @@ export class CodexAppServerClient extends EventEmitter {
       threadId,
       ...(options.model ? { model: options.model } : {}),
       ...(options.modelProvider ? { modelProvider: options.modelProvider } : {}),
-      ...(options.reasoningEffort ? { config: { model_reasoning_effort: options.reasoningEffort } } : {}),
+      ...codexThreadConfigParam(options.reasoningEffort, options.storyAgentTools),
     });
     return result.thread && typeof result.thread === "object"
       ? withThreadModelResult(result.thread as CodexThread, result)
@@ -634,9 +651,7 @@ export class CodexAppServerClient extends EventEmitter {
     const effective = await this.request("config/read", { includeLayers: false, cwd: options.cwd });
     const effectiveConfig = asRecord(effective.config);
     const effectiveMcpServers = asRecord(effectiveConfig.mcp_servers);
-    const disabledMcpServers = Object.fromEntries(
-      Object.keys(effectiveMcpServers).map((name) => [name, { enabled: false }]),
-    );
+    const disabledMcpServers = disabledCodexMcpServerConfig(Object.keys(effectiveMcpServers));
     const started = await this.request("thread/start", {
       model: options.model,
       modelProvider: options.modelProvider,
@@ -651,7 +666,7 @@ export class CodexAppServerClient extends EventEmitter {
       selectedCapabilityRoots: [],
       config: {
         ...TEMPORARY_THREAD_DISABLED_CONFIG,
-        mcp_servers: disabledMcpServers,
+        ...disabledMcpServers,
       },
     });
     const thread = asRecord(started.thread);

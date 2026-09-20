@@ -1,5 +1,10 @@
 import { z } from "zod";
-import { STORY_TOOL_DESCRIPTIONS, type StoryToolName } from "./story-tool-contract.ts";
+import {
+  STORY_AGENT_TOOL_DESCRIPTIONS,
+  STORY_AGENT_TOOL_NAMES,
+  STORY_AGENT_TOOL_SCHEMAS,
+  type StoryAgentToolName,
+} from "@task-handoff/protocol/story-agent-tools";
 
 type OpenCodeToolContext = {
   sessionID: string;
@@ -12,7 +17,7 @@ type PluginOptions = {
   fetch?: typeof globalThis.fetch;
 };
 
-async function invoke(options: PluginOptions, tool: StoryToolName, args: unknown, context: OpenCodeToolContext) {
+async function invoke(options: PluginOptions, tool: StoryAgentToolName, args: unknown, context: OpenCodeToolContext) {
   const endpoint = options.endpoint?.trim();
   const token = options.token?.trim();
   if (!endpoint || !token) throw new Error("TaskHandoff Story tools are not configured.");
@@ -38,35 +43,18 @@ export function createOpenCodeStoryPlugin(options: PluginOptions = {
   token: process.env.TASK_HANDOFF_AGENT_TOOLS_TOKEN,
 }) {
   return async () => ({
-    tool: {
-      story_list_content: {
-        description: STORY_TOOL_DESCRIPTIONS.story_list_content,
-        args: {
-          page: z.number().int().min(1).max(500).default(1).describe("One-based page number."),
-          pageSize: z.number().int().min(1).max(100).default(20).describe("Maximum documents to return per page."),
-        },
-        execute: (args: unknown, context: OpenCodeToolContext) => invoke(options, "story_list_content", args, context),
-      },
-      story_get_content: {
-        description: STORY_TOOL_DESCRIPTIONS.story_get_content,
-        args: {
-          storyPaths: z.array(z.string()).min(1).max(20),
-          destinationPath: z.string(),
-        },
-        execute: (args: unknown, context: OpenCodeToolContext) => invoke(options, "story_get_content", args, context),
-      },
-      story_set_content: {
-        description: STORY_TOOL_DESCRIPTIONS.story_set_content,
-        args: {
-          storyPath: z.string(),
-          title: z.string().optional(),
-          sourcePath: z.string(),
-          expectedRevision: z.string().regex(/^[a-f0-9]{64}$/).optional(),
-        },
-        execute: (args: unknown, context: OpenCodeToolContext) => invoke(options, "story_set_content", args, context),
-      },
-    },
+    tool: Object.fromEntries(STORY_AGENT_TOOL_NAMES.map((name) => [name, {
+      description: STORY_AGENT_TOOL_DESCRIPTIONS[name],
+      args: inputShape(name),
+      execute: (args: unknown, context: OpenCodeToolContext) => invoke(options, name, args, context),
+    }])),
   });
+}
+
+function inputShape(name: StoryAgentToolName) {
+  const schema = STORY_AGENT_TOOL_SCHEMAS[name].input;
+  if (!(schema instanceof z.ZodObject)) throw new Error(`Story tool ${name} input must be an object schema.`);
+  return schema.shape;
 }
 
 export default createOpenCodeStoryPlugin();

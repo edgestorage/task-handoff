@@ -1,4 +1,5 @@
 import type { AiSessionPastedTextPresentation } from "@task-handoff/control-plane-client";
+import { onScopeDispose, ref, toRaw, toValue, watch, type MaybeRefOrGetter } from "vue";
 import type { AiSessionComposerAttachment } from "../../components/ai-session/AiSessionComposer.vue";
 import { AI_SESSION_DRAFT_TTL_MS } from "./useAiSessionDraft.ts";
 
@@ -55,19 +56,29 @@ function requestResult<T>(request: IDBRequest<T>) {
 }
 
 function storedAttachment(attachment: AiSessionComposerAttachment): StoredAttachment {
+  const source = attachment.source.type === "runtime-path"
+    ? { type: "runtime-path" as const, path: attachment.source.path }
+    : { type: "inline" as const };
+  const file = attachment.file ? toRaw(attachment.file) : undefined;
+  const textPresentation = attachment.textPresentation
+    ? {
+        summary: attachment.textPresentation.summary,
+        codePointLength: attachment.textPresentation.codePointLength,
+      }
+    : undefined;
   return {
     id: attachment.id,
     kind: attachment.kind,
     name: attachment.name,
     mime: attachment.mime,
     size: attachment.size,
-    source: attachment.source,
+    source,
     ...(attachment.dataUrl ? { dataUrl: attachment.dataUrl } : {}),
-    ...(attachment.kind === "image" && attachment.source.type === "runtime-path"
-      && attachment.file && attachment.file.size <= MAX_PERSISTED_PREVIEW_BYTES
-      ? { file: attachment.file }
+    ...(attachment.kind === "image" && source.type === "runtime-path"
+      && file && file.size <= MAX_PERSISTED_PREVIEW_BYTES
+      ? { file }
       : {}),
-    ...(attachment.textPresentation ? { textPresentation: attachment.textPresentation } : {}),
+    ...(textPresentation ? { textPresentation } : {}),
   };
 }
 
@@ -162,4 +173,59 @@ export async function loadAiSessionAttachmentDraft(draftKey: string, now = Date.
 
 export function clearAiSessionAttachmentDraft(draftKey: string) {
   return persistAiSessionAttachmentDraft(draftKey, []);
+}
+
+function revokeAttachmentPreviews(attachments: AiSessionComposerAttachment[]) {
+  if (typeof URL === "undefined" || typeof URL.revokeObjectURL !== "function") return;
+  for (const attachment of attachments) {
+    if (attachment.previewUrl) URL.revokeObjectURL(attachment.previewUrl);
+  }
+}
+
+export function useAiSessionAttachmentDraft(
+  draftKey: MaybeRefOrGetter<string>,
+  options: { persistWhen?: () => boolean } = {},
+) {
+  const attachments = ref<AiSessionComposerAttachment[]>([]);
+  let activeDraftKey = "";
+  let revision = 0;
+  let restoring = false;
+
+  async function restore(nextDraftKey: string) {
+    const restoreRevision = ++revision;
+    activeDraftKey = nextDraftKey;
+    restoring = true;
+    revokeAttachmentPreviews(attachments.value);
+    attachments.value = [];
+    restoring = false;
+    if (!nextDraftKey) return;
+
+    const restored = await loadAiSessionAttachmentDraft(nextDraftKey);
+    if (restoreRevision !== revision || activeDraftKey !== nextDraftKey || toValue(draftKey) !== nextDraftKey) {
+      revokeAttachmentPreviews(restored);
+      return;
+    }
+    restoring = true;
+    attachments.value = restored;
+    restoring = false;
+  }
+
+  watch(() => toValue(draftKey), (nextDraftKey) => {
+    void restore(nextDraftKey);
+  }, { immediate: true, flush: "sync" });
+
+  watch(attachments, (nextAttachments) => {
+    if (restoring) return;
+    revision += 1;
+    if (!activeDraftKey || activeDraftKey !== toValue(draftKey) || options.persistWhen?.() === false) return;
+    void persistAiSessionAttachmentDraft(activeDraftKey, nextAttachments);
+  }, { flush: "sync" });
+
+  onScopeDispose(() => {
+    revision += 1;
+    activeDraftKey = "";
+    revokeAttachmentPreviews(attachments.value);
+  });
+
+  return attachments;
 }

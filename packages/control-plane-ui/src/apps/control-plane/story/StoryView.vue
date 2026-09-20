@@ -372,7 +372,21 @@
   />
 
   <Dialog v-model:open="editorOpen">
-    <DialogContent class="story-editor-dialog"><DialogHeader class="story-dialog-header"><div><DialogTitle>{{ t(editing ? "stories.editor.editTitle" : "stories.editor.newTitle") }}</DialogTitle><DialogDescription>{{ t("stories.editor.description") }}</DialogDescription></div><DialogClose as-child><button type="button" class="story-dialog-close" :aria-label="t('stories.close')"><X :size="16" /></button></DialogClose></DialogHeader><div class="story-editor-fields"><label>{{ t("stories.editor.title") }}<Input v-model="draftTitle" :placeholder="t('stories.editor.titlePlaceholder')" /></label><label>{{ t("stories.editor.descriptionLabel") }}<Textarea v-model="draftDescription" :placeholder="t('stories.editor.descriptionPlaceholder')" /></label><label>{{ t("stories.editor.ownerNode") }}<ControlPlaneSelect v-model="draftNodeId" :disabled="editing"><ControlPlaneSelectItem v-for="node in nodes.filter((candidate) => candidate.status === 'online')" :key="node.id" :value="node.id">{{ node.name }}</ControlPlaneSelectItem></ControlPlaneSelect></label><label>{{ t("stories.editor.maxIdleAiSessions") }}<Input v-model.number="draftMaxIdleAiSessions" type="number" :min="STORY_MIN_IDLE_AI_SESSIONS" :max="STORY_MAX_IDLE_AI_SESSIONS" /></label></div><DialogFooter><Button variant="outline" @click="editorOpen = false">{{ t("common.actions.cancel") }}</Button><Button :disabled="!draftTitle.trim() || !draftNodeId || saving" @click="saveStory">{{ saving ? t("stories.editor.saving") : t("common.actions.save") }}</Button></DialogFooter></DialogContent>
+    <DialogContent class="story-editor-dialog"><DialogHeader class="story-dialog-header"><div><DialogTitle>{{ t(editing ? "stories.editor.editTitle" : "stories.editor.newTitle") }}</DialogTitle><DialogDescription>{{ t("stories.editor.description") }}</DialogDescription></div><DialogClose as-child><button type="button" class="story-dialog-close" :aria-label="t('stories.close')"><X :size="16" /></button></DialogClose></DialogHeader><div class="story-editor-fields"><label>{{ t("stories.editor.title") }}<Input v-model="draftTitle" :placeholder="t('stories.editor.titlePlaceholder')" /></label><label>{{ t("stories.editor.descriptionLabel") }}<Textarea v-model="draftDescription" :placeholder="t('stories.editor.descriptionPlaceholder')" /></label><label>{{ t("stories.editor.ownerNode") }}<ControlPlaneSelect v-model="draftNodeId" :disabled="editing"><ControlPlaneSelectItem v-for="node in nodes.filter((candidate) => candidate.status === 'online')" :key="node.id" :value="node.id">{{ node.name }}</ControlPlaneSelectItem></ControlPlaneSelect></label><label>{{ t("stories.editor.maxIdleAiSessions") }}<Input v-model.number="draftMaxIdleAiSessions" type="number" :min="STORY_MIN_IDLE_AI_SESSIONS" :max="STORY_MAX_IDLE_AI_SESSIONS" /></label>
+      <fieldset v-if="editing" class="story-agent-tool-settings" :disabled="saving || agentToolSettingsState !== 'ready'">
+        <legend>{{ t("stories.editor.agentTools") }}</legend>
+        <div v-if="agentToolSettingsState === 'loading'" class="story-agent-tool-state" role="status">{{ t("stories.editor.agentToolsLoading") }}</div>
+        <div v-else-if="agentToolSettingsState === 'unsupported'" class="story-agent-tool-state">{{ t("stories.editor.agentToolsUnsupported") }}</div>
+        <div v-else-if="agentToolSettingsState === 'unavailable'" class="story-agent-tool-state" role="alert">{{ agentToolSettingsError || t("stories.editor.agentToolsUnavailable") }}</div>
+        <template v-else>
+          <label class="story-agent-tool-option"><Checkbox :model-value="draftAgentToolPolicy.content" @update:model-value="draftAgentToolPolicy.content = $event === true" /><span>{{ t("stories.editor.agentToolContent") }}</span></label>
+          <label class="story-agent-tool-option"><Checkbox :model-value="draftAgentToolPolicy.actions" @update:model-value="draftAgentToolPolicy.actions = $event === true" /><span>{{ t("stories.editor.agentToolActions") }}</span></label>
+          <label class="story-agent-tool-option"><Checkbox :model-value="draftAgentToolPolicy.automations" @update:model-value="draftAgentToolPolicy.automations = $event === true" /><span>{{ t("stories.editor.agentToolAutomations") }}</span></label>
+          <label class="story-agent-tool-option"><Checkbox :model-value="draftAgentToolPolicy.aiSessions" @update:model-value="draftAgentToolPolicy.aiSessions = $event === true" /><span>{{ t("stories.editor.agentToolAiSessions") }}</span></label>
+        </template>
+      </fieldset>
+      <div v-if="storyEditorError" class="story-editor-error" role="alert">{{ storyEditorError }}</div>
+    </div><DialogFooter><Button variant="outline" @click="editorOpen = false">{{ t("common.actions.cancel") }}</Button><Button :disabled="!draftTitle.trim() || !draftNodeId || saving" @click="saveStory">{{ saving ? t("stories.editor.saving") : t("common.actions.save") }}</Button></DialogFooter></DialogContent>
   </Dialog>
   <Dialog v-model:open="assignSessionOpen"><DialogContent class="story-editor-dialog"><DialogHeader class="story-dialog-header"><div><DialogTitle>{{ t("stories.assign.title") }}</DialogTitle><DialogDescription>{{ t("stories.assign.description") }}</DialogDescription></div><DialogClose as-child><button type="button" class="story-dialog-close" :aria-label="t('stories.close')"><X :size="16" /></button></DialogClose></DialogHeader><div class="story-editor-fields"><label>{{ t("stories.assign.session") }}<ControlPlaneSelect v-model="assignSessionId"><ControlPlaneSelectItem v-for="entry in availableSessions" :key="`${entry.instance.id}:${entry.session.id}`" :value="`${entry.instance.id}:${entry.session.id}`">{{ entry.session.title || entry.session.userPrompt || entry.session.id }} · {{ entry.instance.name }}</ControlPlaneSelectItem></ControlPlaneSelect></label></div><DialogFooter><Button variant="outline" @click="assignSessionOpen = false">{{ t("common.actions.cancel") }}</Button><Button :disabled="!assignSessionId || assigningSession" @click="assignExistingSession">{{ assigningSession ? t("stories.assign.adding") : t("stories.assign.submit") }}</Button></DialogFooter></DialogContent></Dialog>
   <Dialog :open="actionEditorOpen" @update:open="handleActionEditorOpenChange">
@@ -435,6 +449,7 @@ import { Archive, BookOpen, CalendarClock, ChevronLeft, ChevronRight, CircleX, D
 import AiSessionStatusIndicator from "../../../components/ai-session/AiSessionStatusIndicator.vue";
 import AiSessionStreamingMarkdown from "../../../components/ai-session/AiSessionStreamingMarkdown.vue";
 import { Button } from "../../../components/ui/button";
+import { Checkbox } from "../../../components/ui/checkbox";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
 import { Sheet, SheetClose, SheetContent, SheetDescription, SheetTitle } from "../../../components/ui/sheet";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
@@ -463,6 +478,8 @@ import { translateApiError } from "../../../i18n/apiError";
 import { createBrowserUuid } from "../../../lib/random-id";
 import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions, Node, NodeLocalFolder } from "../../../api/types";
 import { STORY_DEFAULT_MAX_IDLE_AI_SESSIONS, STORY_MAX_IDLE_AI_SESSIONS, STORY_MIN_IDLE_AI_SESSIONS, type Story, type StoryAction, type StoryAutomationRun, type StoryAutomationSchedule, type StoryAutomationStatus, type StorySessionPreset } from "@task-handoff/protocol/stories";
+import { DEFAULT_STORY_AGENT_TOOL_POLICY, type StoryAgentToolPolicy } from "@task-handoff/protocol/story-agent-tools";
+import { nodeAgentCapabilitiesFromPublicNode, nodeStoryAgentToolCapabilities } from "@task-handoff/protocol/node-agent-capabilities";
 import type { AiSessionHistoryItem } from "@task-handoff/protocol/ai-sessions";
 import {
   aiSessionAncestorIds,
@@ -829,6 +846,11 @@ function storedSidebarWidth() {
 const sidebarWidth = ref(storedSidebarWidth()); const workspaceEl = ref<HTMLElement>(); const resizingSidebar = ref(false); let resizingPointerId: number | undefined;
 const previewText = ref(""); const previewLoading = ref(false); const previewError = ref("");
 const editorOpen = ref(false); const editing = ref(false); const draftTitle = ref(""); const draftDescription = ref(""); const draftNodeId = ref(""); const draftMaxIdleAiSessions = ref(STORY_DEFAULT_MAX_IDLE_AI_SESSIONS); const saving = ref(false);
+const draftAgentToolPolicy = ref<StoryAgentToolPolicy>({ ...DEFAULT_STORY_AGENT_TOOL_POLICY });
+const savedAgentToolPolicy = ref<StoryAgentToolPolicy>({ ...DEFAULT_STORY_AGENT_TOOL_POLICY });
+const agentToolSettingsState = ref<"hidden" | "loading" | "ready" | "unsupported" | "unavailable">("hidden");
+const agentToolSettingsError = ref("");
+const storyEditorError = ref("");
 const editingStoryTitle = ref(false); const storyTitleDraft = ref(""); const storyTitleInput = ref<HTMLInputElement>(); const savingStoryTitle = ref(false); const storyTitleEditWidth = ref(0);
 const newSessionInstanceId = ref(""); const newSessionInitialCwd = ref(""); const newSessionInitialCwdFolderId = ref(""); const assignSessionOpen = ref(false); const assignSessionId = ref(""); const assigningSession = ref(false);
 const actionEditorOpen = ref(false); const actionEditorRevision = ref(0); const actionCreationPanel = ref<InstanceType<typeof StoryActionEditorContent>>(); const actionCreationSubmitReady = ref(false); const editingActionId = ref<string | null>(null); const actionSaving = ref(false); const actionDraftTitle = ref(""); const actionDraftMode = ref<StorySessionPreset["mode"] | "">(""); const actionDraftTargetInstanceId = ref(""); const actionDraftInitialPrompt = ref(""); const actionDraftInitialPreset = ref<StorySessionPreset>();
@@ -1275,6 +1297,8 @@ watch(filteredStories, () => {
 }, { immediate: true });
 function openCreate() {
   editing.value = false;
+  storyEditorError.value = "";
+  agentToolSettingsState.value = "hidden";
   draftTitle.value = "";
   draftDescription.value = "";
   draftMaxIdleAiSessions.value = STORY_DEFAULT_MAX_IDLE_AI_SESSIONS;
@@ -1286,16 +1310,36 @@ async function openEdit() {
   const story = selectedResource.value?.story;
   if (!story) return;
   editing.value = true;
+  storyEditorError.value = "";
+  agentToolSettingsError.value = "";
   draftTitle.value = story.title;
   draftDescription.value = story.description || "";
   draftNodeId.value = story.ownerNodeId;
   draftMaxIdleAiSessions.value = STORY_DEFAULT_MAX_IDLE_AI_SESSIONS;
+  draftAgentToolPolicy.value = { ...DEFAULT_STORY_AGENT_TOOL_POLICY };
+  savedAgentToolPolicy.value = { ...DEFAULT_STORY_AGENT_TOOL_POLICY };
+  const ownerNode = props.nodes.find((node) => node.id === story.ownerNodeId);
+  agentToolSettingsState.value = ownerNode?.status === "online"
+    ? (nodeStoryAgentToolCapabilities(nodeAgentCapabilitiesFromPublicNode(ownerNode.capabilities)).policy ? "loading" : "unsupported")
+    : "unavailable";
   try {
     const settings = await getStoryRetentionSettings(story.id, story.ownerNodeId);
     draftMaxIdleAiSessions.value = settings.maxIdleAiSessions;
     editorOpen.value = true;
   } catch (cause) {
     error.value = translateApiError(cause, t, t("stories.errors.retentionLoadFailed"));
+    return;
+  }
+  if (agentToolSettingsState.value === "loading") {
+    try {
+      const settings = await sharedControlPlaneClient.stories.agentToolSettings(story.id, story.ownerNodeId);
+      draftAgentToolPolicy.value = { ...settings.policy };
+      savedAgentToolPolicy.value = { ...settings.policy };
+      agentToolSettingsState.value = "ready";
+    } catch (cause) {
+      agentToolSettingsState.value = "unavailable";
+      agentToolSettingsError.value = translateApiError(cause, t, t("stories.editor.agentToolsUnavailable"));
+    }
   }
 }
 async function beginStoryTitleEdit(story: Story, event?: MouseEvent) {
@@ -1441,7 +1485,11 @@ async function createAutomationWithAction(payload: { action: StoryAction; config
   actionSaving.value = true;
   error.value = "";
   try {
-    await sharedControlPlaneClient.stories.createAutomationWithAction(story.id, story.ownerNodeId, { action: payload.action, automation: payload.config });
+    if (!payload.action.targetInstanceId) throw new Error(t("stories.actionEditor.validationTarget"));
+    await sharedControlPlaneClient.stories.createAutomationWithAction(story.id, story.ownerNodeId, {
+      action: { ...payload.action, targetInstanceId: payload.action.targetInstanceId },
+      automation: payload.config,
+    });
     await load();
     const refreshed = stories.value.find((item) => item.id === story.id && item.ownerNodeId === story.ownerNodeId);
     if (refreshed) selectStory(refreshed);
@@ -1468,6 +1516,7 @@ async function saveStory() {
   if (!draftTitle.value.trim() || !draftNodeId.value || saving.value) return;
   const maxIdleAiSessions = Number(draftMaxIdleAiSessions.value);
   saving.value = true;
+  storyEditorError.value = "";
   try {
     const story = selectedResource.value?.story;
     const response = await fetch(editing.value && story ? `/api/stories/${encodeURIComponent(story.id)}` : "/api/stories", {
@@ -1478,10 +1527,20 @@ async function saveStory() {
         : { nodeId: draftNodeId.value, input: { title: draftTitle.value.trim(), description: draftDescription.value.trim() || undefined, maxIdleAiSessions } }),
     });
     if (!response.ok) throw new Error((await response.json()).error?.message || t("stories.errors.saveFailed"));
+    const agentToolsChanged = editing.value
+      && story
+      && agentToolSettingsState.value === "ready"
+      && JSON.stringify(draftAgentToolPolicy.value) !== JSON.stringify(savedAgentToolPolicy.value);
+    if (agentToolsChanged && story) {
+      const settings = await sharedControlPlaneClient.stories.updateAgentToolSettings(story.id, story.ownerNodeId, draftAgentToolPolicy.value);
+      draftAgentToolPolicy.value = { ...settings.policy };
+      savedAgentToolPolicy.value = { ...settings.policy };
+      showControlPlaneToast(t("stories.editor.agentToolsSaved"));
+    }
     editorOpen.value = false;
     await load();
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : String(cause);
+    storyEditorError.value = translateApiError(cause, t, t("stories.errors.saveFailed"));
   } finally {
     saving.value = false;
   }
@@ -1720,6 +1779,12 @@ onBeforeUnmount(() => {
 .story-error { color:var(--status-danger); font-size:12px; }
 .story-editor-fields { display:grid; gap:14px; }
 .story-editor-fields label { display:grid; gap:6px; color:var(--text-muted); font-size:12px; }
+.story-agent-tool-settings { display:grid; gap:0; min-width:0; border:1px solid var(--line); border-radius:7px; padding:0 12px 4px; }
+.story-agent-tool-settings legend { padding:0 6px; color:var(--text-muted); font-size:12px; font-weight:500; }
+.story-agent-tool-option { display:flex !important; grid-template-columns:none !important; flex-direction:row; align-items:center; min-height:38px; gap:10px !important; color:var(--text-strong) !important; }
+.story-agent-tool-option + .story-agent-tool-option { border-top:1px solid var(--line); }
+.story-agent-tool-state,.story-editor-error { color:var(--text-muted); font-size:12px; line-height:1.5; padding:10px 0; }
+.story-editor-error { color:var(--danger); padding:0; }
 :global(.story-editor-dialog) { max-width:460px; }
 .story-history-drawer-drag-region { -webkit-app-region:drag; height:var(--control-plane-titlebar-height); flex:0 0 var(--control-plane-titlebar-height); border-bottom:1px solid var(--line); }
 .story-history-drawer-close { -webkit-app-region:no-drag; position:absolute; top:calc(var(--control-plane-titlebar-height) + 10px); left:-42px; display:grid; width:32px; height:32px; place-items:center; border:1px solid var(--line); border-radius:6px; background:var(--surface-raised); box-shadow:var(--shadow-soft); color:var(--text-muted); cursor:pointer; padding:0; }

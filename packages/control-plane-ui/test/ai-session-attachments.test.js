@@ -47,6 +47,18 @@ test("composer attachments own bounded horizontal overflow", () => {
   assert.ok(horizontalOverflow.includes("new ResizeObserver"));
 });
 
+test("attachment drafts follow the active composer key in instance and board session switching", () => {
+  const draft = fs.readFileSync(new URL("../src/apps/control-plane/useAiSessionAttachmentDraft.ts", import.meta.url), "utf8");
+  const panel = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.vue", import.meta.url), "utf8");
+  const board = fs.readFileSync(new URL("../src/apps/control-plane/ai-board/AiSessionBoardView.vue", import.meta.url), "utf8");
+  assert.match(draft, /watch\(\(\) => toValue\(draftKey\)[\s\S]*void restore\(nextDraftKey\)/);
+  assert.match(draft, /activeDraftKey !== toValue\(draftKey\)/);
+  assert.match(draft, /restoreRevision !== revision/);
+  assert.match(panel, /useAiSessionAttachmentDraft\(newSessionAttachmentDraftKey\)/);
+  assert.match(panel, /computed\(\(\) => selectedSession\.value\?\.id \|\| ""\)/);
+  assert.match(board, /computed\(\(\) => selectedCard\.value\?\.session\.id \|\| ""\)/);
+});
+
 test("composer converts only long pure text pastes through the existing file attachment path", () => {
   const composer = fs.readFileSync(new URL("../src/components/ai-session/AiSessionComposer.vue", import.meta.url), "utf8");
   assert.match(composer, /classifyAiSessionPastedText\(text, pastedTextSequence\.value \+ 1, props\.maxFileAttachmentBytes/);

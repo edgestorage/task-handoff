@@ -19,9 +19,17 @@ export const stories = sqliteTable("na_stories", {
   archivedAt: text("archived_at"),
   maxIdleAiSessions: integer("max_idle_ai_sessions").notNull().default(5),
   nextDocumentSequence: integer("next_document_sequence").notNull().default(1),
+  agentToolsContent: integer("agent_tools_content", { mode: "boolean" }).notNull().default(true),
+  agentToolsActions: integer("agent_tools_actions", { mode: "boolean" }).notNull().default(false),
+  agentToolsAutomations: integer("agent_tools_automations", { mode: "boolean" }).notNull().default(false),
+  agentToolsAiSessions: integer("agent_tools_ai_sessions", { mode: "boolean" }).notNull().default(false),
 }, (table) => [
   check("na_stories_max_idle_check", sql`${table.maxIdleAiSessions} BETWEEN 1 AND 50`),
   check("na_stories_next_document_sequence_check", sql`${table.nextDocumentSequence} > 0`),
+  check("na_stories_agent_tools_content_check", sql`${table.agentToolsContent} IN (0, 1)`),
+  check("na_stories_agent_tools_actions_check", sql`${table.agentToolsActions} IN (0, 1)`),
+  check("na_stories_agent_tools_automations_check", sql`${table.agentToolsAutomations} IN (0, 1)`),
+  check("na_stories_agent_tools_ai_sessions_check", sql`${table.agentToolsAiSessions} IN (0, 1)`),
   index("na_stories_created_idx").on(table.createdAt),
 ]);
 

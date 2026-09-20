@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 
 import { hasActiveCloudAccount, restoreActiveCloudAccountSession, subscribeCloudAccountState } from './runtime';
+import { isMobileCloudRelayEnabled } from '../platform/build-variant';
 
 type CloudAccountProfile = {
   id?: string;
@@ -14,9 +15,10 @@ export type CloudAccountState =
   | { phase: 'signed-in'; profile?: CloudAccountProfile };
 
 export function useCloudAccountState() {
-  const [state, setState] = useState<CloudAccountState>({ phase: 'loading' });
+  const [state, setState] = useState<CloudAccountState>(isMobileCloudRelayEnabled ? { phase: 'loading' } : { phase: 'signed-out' });
 
   useEffect(() => {
+    if (!isMobileCloudRelayEnabled) return;
     let live = true;
     let request = 0;
     const load = async () => {

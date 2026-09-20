@@ -13,12 +13,16 @@ async function waitFor(predicate: () => boolean | Promise<boolean>) {
   assert.fail("condition was not reached");
 }
 
-async function fixture(fetchImpl: typeof fetch, whenBusy: "queue" | "skip" = "queue") {
+async function fixture(
+  fetchImpl: typeof fetch,
+  whenBusy: "queue" | "skip" = "queue",
+  policyOverrides: { cooldownMs?: number; maxConcurrentRuns?: number } = {},
+) {
   const database = await createStoryDatabaseFixture("task-handoff-story-scheduler-");
   await seedStoryAction(database.repository);
   const store = new StoryAutomationStore(database.repository);
   const instance = {
-    id: "instance_1", registrationToken: "registration-token", runtimeId: "runtime_1",
+    id: "instance_1", nodeId: "node_1", registrationToken: "registration-token", runtimeId: "runtime_1",
     runtime: { workspacePath: "/workspace" }, workspace: { path: "/workspace" },
     source: { type: "local-folder", path: "/workspace" }, aiSessions: { sessions: [] as Array<{ id: string; status: string }> },
   };
@@ -33,10 +37,35 @@ async function fixture(fetchImpl: typeof fetch, whenBusy: "queue" | "skip" = "qu
   const scheduler = new StoryScheduler(state as any, stories as any, store, fetchImpl, async () => "http://instance");
   const automation = await store.create({
     storyId: "story_1", actionId: "action_1", schedule: { scheduleKind: "interval", intervalMs: 60_000 }, enabled: false,
-    policy: { maxConcurrentRuns: 1, whenBusy },
+    policy: { maxConcurrentRuns: policyOverrides.maxConcurrentRuns ?? 1, whenBusy, ...(policyOverrides.cooldownMs === undefined ? {} : { cooldownMs: policyOverrides.cooldownMs }) },
   });
   return { ...database, store, scheduler, automation, instance, state, stories };
 }
+
+test("Story Scheduler returns the same manual run for a repeated clientRequestId", async () => {
+  const context = await fixture(async () => new Response(JSON.stringify({ data: { disposition: "created", aiSessionId: "session_1" } }), { status: 200, headers: { "content-type": "application/json" } }));
+  try {
+    await context.scheduler.start();
+    const first = await context.scheduler.manualRun(context.automation.id, { clientRequestId: "manual_retry" });
+    const second = await context.scheduler.manualRun(context.automation.id, { clientRequestId: "manual_retry" });
+    assert.equal(second?.id, first?.id);
+    assert.equal((await context.store.runsFor(context.automation.id)).length, 1);
+    await context.scheduler.stop();
+  } finally { await context.close(); }
+});
+
+test("Story Scheduler records a manual run skipped by cooldown", async () => {
+  let sessionIndex = 0;
+  const context = await fixture(async () => new Response(JSON.stringify({ data: { disposition: "created", aiSessionId: `session_${++sessionIndex}` } }), { status: 200, headers: { "content-type": "application/json" } }), "skip", { cooldownMs: 60_000, maxConcurrentRuns: 2 });
+  try {
+    await context.scheduler.start();
+    await context.scheduler.manualRun(context.automation.id, { clientRequestId: "cooldown_first" });
+    const second = await context.scheduler.manualRun(context.automation.id, { clientRequestId: "cooldown_second" });
+    await waitFor(async () => (await context.store.run(second!.id))?.status === "skipped");
+    assert.equal((await context.store.run(second!.id))?.error?.code, "STORY_AUTOMATION_COOLDOWN");
+    await context.scheduler.stop();
+  } finally { await context.close(); }
+});
 
 test("Story Scheduler retries an ambiguous dispatch with the same immutable request", async () => {
   const requests: string[] = [];

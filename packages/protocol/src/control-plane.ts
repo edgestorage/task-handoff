@@ -17,6 +17,8 @@ import {
 } from "./ai-sessions.ts";
 import { TriggerConfigSchema, TriggerDeploymentSchema, TriggerRunSchema, TriggerRuntimeStateSchema } from "./triggers.ts";
 import { ControlPlaneProxyErrorSchema, ProxyTargetStateSchema } from "./control-plane-proxy.ts";
+import { NodeAgentCapabilitiesSchema } from "./node-agent-capabilities.ts";
+export * from "./node-agent-capabilities.ts";
 import {
   AiSessionProviderCapabilitiesSchema,
   type AiSessionProviderCapability,
@@ -1703,105 +1705,6 @@ export const InstanceResourceMetricsSchema = z.object({
 export const InstanceResourceMetricsEventType = {
   Snapshot: "instance.metrics.snapshot",
 } as const;
-
-export const NodeAgentManagedGitCapabilitiesSchema = z.object({
-  registry: z.boolean().default(false),
-  runtimeBroker: z.boolean().default(false),
-  workspaceProvisioning: z.object({
-    docker: z.boolean().default(false),
-    kubernetes: z.boolean().default(false),
-    local: z.boolean().default(false),
-  }).strip().default({ docker: false, kubernetes: false, local: false }),
-}).strip();
-
-export const NodeAgentManagedModelCapabilitiesSchema = z.object({
-  multiEntityAssignment: z.boolean().default(false),
-  privateModelCatalog: z.boolean().default(false),
-}).strip();
-
-export const NodeAgentStoryCapabilitiesSchema = z.object({
-  enabled: z.boolean().default(false),
-  agentTools: z.boolean().default(false),
-  sessionRetention: z.boolean().default(false),
-  maxFileBytes: z.number().int().positive().default(32 * 1024 * 1024),
-  maxBatchPaths: z.number().int().min(1).max(100).default(20),
-}).strip();
-
-export const NodeAgentCapabilitiesSchema = z.object({
-  modelEndpointProbe: z.boolean().optional(),
-  aiSessionHistoryLimit: z.boolean().optional(),
-  aiSessionAttachmentRetention: z.boolean().optional(),
-  aiSessionFileAttachmentLimit: z.boolean().optional(),
-  folderPlaces: z.boolean().optional(),
-  localFolderNameUpdate: z.boolean().optional(),
-  // Additive capability: absent on v0.0.21 node-agents.
-  managedGitCredentials: NodeAgentManagedGitCapabilitiesSchema.optional(),
-  // Compatibility for v0.0.23: absence keeps the legacy single-model projection.
-  managedModels: NodeAgentManagedModelCapabilitiesSchema.optional(),
-  stories: NodeAgentStoryCapabilitiesSchema.optional(),
-  // Compatibility for v0.0.28: absent node-agents reject codexSettings in instance patches.
-  codexManagedSettings: z.boolean().optional(),
-}).strip();
-
-export type NodeAgentCapabilities = z.infer<typeof NodeAgentCapabilitiesSchema>;
-
-export function normalizeNodeAgentCapabilities(capabilities: unknown): NodeAgentCapabilities & {
-  managedGitCredentials: z.infer<typeof NodeAgentManagedGitCapabilitiesSchema>;
-  managedModels: z.infer<typeof NodeAgentManagedModelCapabilitiesSchema>;
-  stories: z.infer<typeof NodeAgentStoryCapabilitiesSchema>;
-} {
-  const parsed = NodeAgentCapabilitiesSchema.safeParse(capabilities);
-  const current = parsed.success ? parsed.data : {};
-  return {
-    ...current,
-    managedGitCredentials: NodeAgentManagedGitCapabilitiesSchema.parse(current.managedGitCredentials || {}),
-    managedModels: NodeAgentManagedModelCapabilitiesSchema.parse(current.managedModels || {}),
-    stories: NodeAgentStoryCapabilitiesSchema.parse(current.stories || {}),
-  };
-}
-
-export function supportsNodeMultiEntityModelAssignment(capabilities: unknown) {
-  return normalizeNodeAgentCapabilities(capabilities).managedModels.multiEntityAssignment;
-}
-
-export function supportsNodePrivateModelCatalog(capabilities: unknown) {
-  return normalizeNodeAgentCapabilities(capabilities).managedModels.privateModelCatalog;
-}
-
-export function supportsNodeCodexManagedSettings(capabilities: unknown) {
-  return normalizeNodeAgentCapabilities(capabilities).codexManagedSettings === true;
-}
-
-export function supportsNodeStories(capabilities: unknown) {
-  return normalizeNodeAgentCapabilities(capabilities).stories.enabled;
-}
-
-export function supportsNodeManagedGitCredentialRegistry(capabilities: unknown) {
-  return normalizeNodeAgentCapabilities(capabilities).managedGitCredentials.registry;
-}
-
-export function supportsNodeGitCredentialRuntimeBroker(capabilities: unknown) {
-  return normalizeNodeAgentCapabilities(capabilities).managedGitCredentials.runtimeBroker;
-}
-
-export function supportsNodeGitWorkspaceProvisioning(
-  capabilities: unknown,
-  runtime: "docker" | "kubernetes" | "local",
-) {
-  return normalizeNodeAgentCapabilities(capabilities).managedGitCredentials.workspaceProvisioning[runtime];
-}
-
-export function supportsNodeFolderPlaces(capabilities: unknown) {
-  return NodeAgentCapabilitiesSchema.safeParse(capabilities).data?.folderPlaces === true;
-}
-
-export function supportsNodeLocalFolderNameUpdate(capabilities: unknown) {
-  return NodeAgentCapabilitiesSchema.safeParse(capabilities).data?.localFolderNameUpdate === true;
-}
-
-export function supportsNodeAiSessionFileAttachmentLimit(capabilities: unknown) {
-  return NodeAgentCapabilitiesSchema.safeParse(capabilities).data?.aiSessionFileAttachmentLimit === true;
-}
 
 export const NodeAgentEventTransportHealthSchema = z.object({
   status: z.enum(["healthy", "congested", "recovering"]),

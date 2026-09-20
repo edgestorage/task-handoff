@@ -64,7 +64,14 @@ describe('mobile native feature variants', () => {
     expect(() => require('../app.config.js')()).toThrow(/must use HTTPS/);
   });
 
-  test('cloud Relay can be disabled independently without changing direct profiles', () => {
+  test('cloud Relay is disabled by default without changing direct profiles', () => {
+    delete process.env.TASK_HANDOFF_CLOUD_RELAY_ENABLED;
+    expect(require('../app.config.js')().extra.cloudRelayEnabled).toBe(false);
+  });
+
+  test('cloud Relay requires an explicit build-time opt-in', () => {
+    process.env.TASK_HANDOFF_CLOUD_RELAY_ENABLED = '1';
+    expect(require('../app.config.js')().extra.cloudRelayEnabled).toBe(true);
     process.env.TASK_HANDOFF_CLOUD_RELAY_ENABLED = '0';
     expect(require('../app.config.js')().extra.cloudRelayEnabled).toBe(false);
   });
