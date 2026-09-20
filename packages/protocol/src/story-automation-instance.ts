@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   AiAgentKindSchema,
+  AiSessionCreateWorkspaceSelectionSchema,
   AiSessionGitSelectionSchema,
   AiSessionModelSelectionSchema,
   AiSessionPermissionModeSchema,
@@ -15,13 +16,17 @@ export const StoryAutomationInstanceCreateInputSchema = z.object({
   cwd: AiSessionRuntimePathSchema,
   cwdFolderId: z.string().trim().min(1).max(120).optional(),
   gitSelection: AiSessionGitSelectionSchema.optional(),
+  workspaceSelection: AiSessionCreateWorkspaceSelectionSchema.optional(),
   message: z.string().trim().min(1).max(32_000),
   permissionMode: AiSessionPermissionModeSchema.optional(),
   clientRequestId: z.string().trim().min(1).max(160),
   modelSelection: AiSessionModelSelectionSchema.optional(),
   reasoningEffort: AiSessionReasoningEffortSchema.optional(),
   storyId: StoryIdSchema,
-}).strict();
+}).strict().refine((value) => !(value.gitSelection && value.workspaceSelection), {
+  message: "gitSelection and workspaceSelection are mutually exclusive.",
+  path: ["workspaceSelection"],
+});
 
 export const StoryAutomationInstanceCreateResultSchema = z.object({
   disposition: z.enum(["created", "already-created"]),

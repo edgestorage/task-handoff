@@ -47,8 +47,9 @@ test("preset mode does not mutate session defaults or persisted new-session draf
   assert.match(panel, /props\.creationMode === "preset" && props\.instance\.id === initialCreationInstanceId && newSessionApp\.value === props\.creationInitialPreset\?\.agent/);
 });
 
-test("preset Git options keep the current branch immutable and select branches only for worktrees", () => {
+test("preset Git options use the same existing-worktree picker as direct session creation", () => {
   assert.match(panel, /creationMode === "preset" \? "sessions\.panel\.currentBranchMode" : "sessions\.panel\.currentFolderMode"/);
-  assert.match(panel, /newSessionWorkspace\.branches\.length && \(creationMode !== 'preset' \|\| newSessionWorkspaceMode === 'worktree'\)/);
-  assert.match(panel, /props\.creationMode !== "preset" \|\| newSessionWorkspaceMode\.value === "worktree"/);
+  assert.match(panel, /const usesExistingWorktreePicker = computed\(\(\) => newSessionWorkspaceMode\.value === "worktree"\)/);
+  assert.match(panel, /workspaceSelection \? \{ workspaceSelection \} : \{\}/);
+  assert.doesNotMatch(panel, /props\.creationMode !== "preset" && newSessionWorkspaceMode\.value === "worktree"/);
 });

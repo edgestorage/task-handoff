@@ -7,6 +7,7 @@ function fixture(overrides: {
   targetInstanceId?: string;
   instanceNodeId?: string;
   fetchImpl?: typeof fetch;
+  workspaceSelection?: { type: "existing-worktree"; repositoryContextId: string; worktreeId: string };
 } = {}) {
   const instance = {
     id: "instance_1",
@@ -30,6 +31,7 @@ function fixture(overrides: {
         permissionMode: "auto-review",
         cwdFolderId: "folder_1",
         modelSelection: { modelEntityId: "model_1", modelName: "gpt-5" },
+        ...(overrides.workspaceSelection ? { workspaceSelection: overrides.workspaceSelection } : {}),
       },
     }],
   };
@@ -86,6 +88,13 @@ test("Story Action execution preserves the client request id across retries", as
   await service.run("story_1", "action_1", "stable_request");
   await service.run("story_1", "action_1", "stable_request");
   assert.deepEqual(requests.map((request) => (request.body as { clientRequestId: string }).clientRequestId), ["stable_request", "stable_request"]);
+});
+
+test("Story Action execution forwards an existing worktree selection", async () => {
+  const workspaceSelection = { type: "existing-worktree" as const, repositoryContextId: "repo-context-1", worktreeId: "wt-1" };
+  const { service, requests } = fixture({ workspaceSelection });
+  await service.run("story_1", "action_1", "request_1");
+  assert.deepEqual((requests[0]?.body as { workspaceSelection?: unknown }).workspaceSelection, workspaceSelection);
 });
 
 test("historical targetless, archived, and cross-node Actions fail before dispatch", async () => {

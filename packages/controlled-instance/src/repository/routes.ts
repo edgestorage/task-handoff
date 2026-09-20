@@ -458,6 +458,9 @@ async function inspectAiSessionWorkspaceFromState(services: WorkspaceServices, s
     availability: "available",
     currentBranch: state.context.head?.state === "branch" ? state.context.head.branch : undefined,
     dirty,
+    repositoryContextId: worktrees.repositoryContextId,
+    snapshotId: state.context.snapshotId,
+    worktrees: worktrees.items,
     branches: [...headChoice, ...branches.branches.filter((branch) => branch.kind === "local").map((branch) => {
       const checkedOutElsewhere = !branch.current && branch.checkedOutWorktreeIds.length > 0;
       const currentFolderReason = branch.current
@@ -492,16 +495,20 @@ async function createWorkspaceAiSession(
   // worktree occupancy under their repository lock, so unrelated file changes
   // must not invalidate a prompt that took time to compose.
   const inspected = await inspectAiSessionWorkspaceFromState(services, source);
-  // Compatibility for v0.0.21: the selection field remains named `branch` on
-  // the wire, while the inspected choice kind is the authoritative ref model.
-  const selected = inspected.branches.find((branch) => branch.name === body.gitSelection.branch);
-  if (!selected || (selected.kind === "head" && body.gitSelection.mode !== "worktree")) {
-    throw new RepositoryOperationError("REPOSITORY_BRANCH_INVALID", "Selected local branch does not exist.", source);
-  }
+  const selection = body.workspaceSelection || (body.gitSelection
+    ? body.gitSelection.mode === "current-folder"
+      ? { type: "current-folder" as const, branch: body.gitSelection.branch }
+      : { type: "legacy-worktree" as const, branch: body.gitSelection.branch }
+    : undefined);
+  if (!selection) throw new RepositoryOperationError("REPOSITORY_OPERATION_FAILED", "A workspace selection is required.", source);
 
   let workspace = body.cwd.path;
   let createdWorktreeId: string | undefined;
-  if (body.gitSelection.mode === "current-folder") {
+  if (selection.type === "current-folder") {
+    const selected = inspected.branches.find((branch) => branch.name === selection.branch);
+    if (!selected || selected.kind === "head") {
+      throw new RepositoryOperationError("REPOSITORY_BRANCH_INVALID", "Selected local branch does not exist.", source);
+    }
     if (!selected.current) {
       if (!selected.currentFolderSelectable) {
         const code = selected.currentFolderReason === "branch-occupied" ? "REPOSITORY_BRANCH_OCCUPIED" : "REPOSITORY_WORKTREE_OCCUPIED";
@@ -509,7 +516,32 @@ async function createWorkspaceAiSession(
       }
       await services.branches.checkoutForAiSession(selected.name);
     }
+  } else if (selection.type === "existing-worktree") {
+    if (selection.repositoryContextId !== inspected.repositoryContextId) {
+      throw new RepositoryOperationError("REPOSITORY_STATE_STALE", "The selected worktree list is stale.", source);
+    }
+    const target = inspected.worktrees.find((item) => item.id === selection.worktreeId);
+    if (!target) throw new RepositoryOperationError("REPOSITORY_WORKTREE_NOT_FOUND", "The selected worktree is unavailable.", source);
+    if (!target.canCreateAiSession) {
+      throw new RepositoryOperationError("REPOSITORY_WORKTREE_UNSAFE", "The selected worktree cannot host a new AI session.", source);
+    }
+    const root = await services.worktrees.resolveWorkspace(selection.repositoryContextId, selection.worktreeId);
+    workspace = workspaceCwd(root, source);
+  } else if (selection.type === "new-worktree") {
+    const created = await services.worktrees.create(RepositoryCreateWorktreeRequestSchema.parse({
+      mode: "new-branch",
+      branchName: selection.branchName,
+      startRef: selection.startRef,
+      expectedSnapshotId: selection.expectedSnapshotId,
+    }));
+    createdWorktreeId = created.worktreeId;
+    const target = created.worktrees.items.find((item) => item.id === created.worktreeId);
+    if (!target) throw new RepositoryOperationError("REPOSITORY_WORKTREE_NOT_FOUND", "The new worktree is unavailable.", await services.resolve());
+    const root = await services.worktrees.resolveWorkspace(created.worktrees.repositoryContextId, target.id);
+    workspace = workspaceCwd(root, source);
   } else {
+    const selected = inspected.branches.find((branch) => branch.name === selection.branch);
+    if (!selected) throw new RepositoryOperationError("REPOSITORY_BRANCH_INVALID", "Selected local branch does not exist.", source);
     const created = await services.worktrees.createForAiSession({
       ref: selected.kind === "head" ? { type: "head" } : { type: "branch", name: selected.name },
       clientRequestId: body.clientRequestId,
@@ -520,16 +552,16 @@ async function createWorkspaceAiSession(
     if (!target) throw new RepositoryOperationError("REPOSITORY_WORKTREE_NOT_FOUND", "The selected branch worktree is unavailable.", await services.resolve());
     const root = await services.worktrees.resolveWorkspace(worktrees.repositoryContextId, target.id);
     workspace = workspaceCwd(root, source);
-    try {
-      if (!fs.statSync(workspace).isDirectory()) throw new Error("not a directory");
-    } catch {
-      if (createdWorktreeId) await compensateFailedWorktreeLaunch(services.worktrees, createdWorktreeId);
-      throw new RepositoryOperationError("REPOSITORY_CWD_INACCESSIBLE", "The selected folder does not exist in the worktree.", await services.resolve());
-    }
+  }
+  try {
+    if (!fs.statSync(workspace).isDirectory()) throw new Error("not a directory");
+  } catch {
+    if (createdWorktreeId) await compensateFailedWorktreeLaunch(services.worktrees, createdWorktreeId);
+    throw new RepositoryOperationError("REPOSITORY_CWD_INACCESSIBLE", "The selected folder does not exist in the worktree.", await services.resolve());
   }
 
   try {
-    const { gitSelection: _gitSelection, cwd: _cwd, ...input } = body;
+    const { gitSelection: _gitSelection, workspaceSelection: _workspaceSelection, cwd: _cwd, ...input } = body;
     const attachments: AiSessionMessageAttachment[] = [];
     const draftAttachmentIds: string[] = [];
     for (const attachment of body.attachments) {

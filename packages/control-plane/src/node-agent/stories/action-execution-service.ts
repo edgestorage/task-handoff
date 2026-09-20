@@ -53,6 +53,7 @@ export class StoryActionExecutionService {
       cwd: { type: "runtime-path", path: input.cwd },
       cwdFolderId: preset?.cwdFolderId,
       gitSelection: preset?.gitSelection,
+      workspaceSelection: preset?.workspaceSelection,
       message: input.prompt,
       permissionMode: preset?.permissionMode || "ask",
       clientRequestId,

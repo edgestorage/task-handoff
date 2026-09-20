@@ -48,10 +48,10 @@ export function NewSessionForm(props: NewSessionFormProps) {
   const instanceOptions = newSessionInstanceOptions(props.instances, props.nodes);
   const folderOptions: AnchoredSelectOption[] = props.folders.map((folder) => ({ label: folder.name, description: folder.path, systemImage: 'folder' as const, value: folder.id }));
   const agentOptions: AnchoredSelectOption[] = (props.selectedInstance?.availableAgents ?? []).map((agent) => ({ label: agent.name, systemImage: 'sparkles', value: agent.id }));
-  const gitWorkspace = props.workspace?.availability === 'available' && props.workspace.branches.length ? props.workspace : undefined;
+  const gitWorkspace = props.workspace?.availability === 'available' && (props.workspace.branches.length || props.workspace.snapshotId) ? props.workspace : undefined;
   const workspaceModeOptions: AnchoredSelectOption<'current-folder' | 'worktree'>[] = [
     { label: t('sessions.currentFolderMode'), systemImage: 'folder', value: 'current-folder' },
-    ...(gitWorkspace?.branches.some((branch) => branch.worktreeSelectable)
+    ...(gitWorkspace?.snapshotId
       ? [{ label: t('sessions.worktreeMode'), systemImage: 'arrow.triangle.branch' as const, value: 'worktree' as const }]
       : []),
   ];
@@ -63,6 +63,16 @@ export function NewSessionForm(props: NewSessionFormProps) {
       value: branch.name,
     }));
   const selectedBranchLabel = branchOptions.find((option) => option.value === props.selectedBranch)?.label || props.selectedBranch || t('sessions.selectBranch');
+  const worktreeOptions: AnchoredSelectOption[] = [
+    ...(gitWorkspace?.worktrees || []).filter((worktree) => worktree.canCreateAiSession).map((worktree) => ({
+      label: worktree.head.state === 'branch' ? worktree.head.branch || t('sessions.unknownBranch') : t('sessions.detachedAt', { commit: worktree.head.oid?.slice(0, 8) || '-' }),
+      description: worktree.isCurrent ? t('sessions.currentWorktree') : worktree.managed ? t('sessions.managedWorktree') : t('sessions.externalWorktree'),
+      systemImage: 'arrow.triangle.branch' as const,
+      value: worktree.id,
+    })),
+    ...(gitWorkspace?.snapshotId ? [{ label: t('sessions.newWorktree'), systemImage: 'arrow.triangle.branch' as const, value: '__new_worktree__' }] : []),
+  ];
+  const selectedWorktreeLabel = worktreeOptions.find((option) => option.value === props.selectedWorktree)?.label || t('sessions.selectWorktree');
   const modelGroups = props.modelGroups || [];
 
   const content = <>
@@ -82,9 +92,12 @@ export function NewSessionForm(props: NewSessionFormProps) {
           {gitWorkspace ? <NewSessionContextMenu cancelLabel={t('common.cancel')} disabled={props.busy} onSelect={(value) => props.onWorkspaceModeChange?.(value)} options={workspaceModeOptions} selectedValue={workspaceMode} title={t('sessions.workspaceMode')}>
             {(onPress) => <ContextPill disabled={props.busy || props.workspaceLoading} icon={{ android: 'account_tree', ios: 'arrow.triangle.branch' }} label={workspaceMode === 'worktree' ? t('sessions.worktreeMode') : t('sessions.currentFolderMode')} onPress={onPress} />}
           </NewSessionContextMenu> : null}
-          {gitWorkspace ? <NewSessionBranchPicker branches={gitWorkspace.branches} disabled={props.busy || props.workspaceLoading} mode={workspaceMode} onSelect={(value) => props.onBranchChange?.(value)} selectedValue={props.selectedBranch || ''} title={t('sessions.branch')}>
+          {gitWorkspace && workspaceMode === 'current-folder' ? <NewSessionBranchPicker branches={gitWorkspace.branches} disabled={props.busy || props.workspaceLoading} mode={workspaceMode} onSelect={(value) => props.onBranchChange?.(value)} selectedValue={props.selectedBranch || ''} title={t('sessions.branch')}>
             {(onPress) => <ContextPill disabled={props.busy || props.workspaceLoading || !branchOptions.length} icon={{ android: 'account_tree', ios: 'arrow.triangle.branch' }} label={selectedBranchLabel} onPress={onPress} />}
           </NewSessionBranchPicker> : null}
+          {gitWorkspace && workspaceMode === 'worktree' ? <NewSessionContextMenu cancelLabel={t('common.cancel')} disabled={props.busy || props.workspaceLoading} onSelect={(value) => props.onWorktreeChange?.(value)} options={worktreeOptions} selectedValue={props.selectedWorktree || ''} title={t('sessions.worktreeMode')}>
+            {(onPress) => <ContextPill disabled={props.busy || props.workspaceLoading || !worktreeOptions.length} icon={{ android: 'account_tree', ios: 'arrow.triangle.branch' }} label={selectedWorktreeLabel} onPress={onPress} />}
+          </NewSessionContextMenu> : null}
           <NewSessionContextMenu cancelLabel={t('common.cancel')} disabled={props.busy} onSelect={props.onAgentChange} options={agentOptions} selectedValue={props.selectedAgent} title={t('sessions.agent')}>
             {(onPress) => <ContextPill disabled={props.busy || !agentOptions.length} icon={{ android: 'auto_awesome', ios: 'sparkles' }} label={selectedAgentName || t('sessions.selectAgent')} onPress={onPress} />}
           </NewSessionContextMenu>

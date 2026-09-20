@@ -308,6 +308,7 @@ test("pre-session Git workspace selection persists folder identity and creates a
   const outsideFixture = createGitFixture();
   fixture.write("packages/app/readme.txt", "app\n");
   fixture.commit("add nested workspace");
+  const existingWorktree = fixture.createWorktree("existing-pre-session", "feature/existing-pre-session");
   fixture.git(["branch", "feature/isolated"]);
   fixture.git(["branch", "feature/in-place"]);
   const selectedFolder = path.join(fixture.root, "packages", "app");
@@ -351,6 +352,58 @@ test("pre-session Git workspace selection persists folder identity and creates a
     const isolated = inspect.json().data.branches.find((branch) => branch.name === "feature/isolated");
     assert.equal(isolated.currentFolderSelectable, true);
     assert.equal(isolated.worktreeSelectable, true);
+    const inspectedExisting = inspect.json().data.worktrees.find((worktree) => worktree.head.branch === "feature/existing-pre-session");
+    assert.ok(inspectedExisting);
+    const worktreeCountBeforeExistingSelection = inspect.json().data.worktrees.length;
+    const selectedExisting = await app.inject({
+      method: "POST",
+      url: "/api/repository/ai-session-workspace/create",
+      payload: {
+        agent: "codex",
+        cwd: { type: "runtime-path", path: selectedFolder },
+        cwdFolderId: "folder-project",
+        workspaceSelection: {
+          type: "existing-worktree",
+          repositoryContextId: inspect.json().data.repositoryContextId,
+          worktreeId: inspectedExisting.id,
+        },
+        message: "Use the existing worktree.",
+        attachments: [],
+        references: [],
+        clientRequestId: "pre-session-existing-worktree",
+      },
+    });
+    assert.equal(selectedExisting.statusCode, 200);
+    assert.equal(aiSessions.get(selectedExisting.json().data.aiSessionId).cwd, path.join(fs.realpathSync(existingWorktree), "packages", "app"));
+    assert.equal(fixture.git(["worktree", "list", "--porcelain"]).split("\nworktree ").length, worktreeCountBeforeExistingSelection);
+
+    const refreshedForNew = (await app.inject({
+      method: "POST",
+      url: "/api/repository/ai-session-workspace/inspect",
+      payload: { cwd: { type: "runtime-path", path: selectedFolder } },
+    })).json().data;
+    const createdNew = await app.inject({
+      method: "POST",
+      url: "/api/repository/ai-session-workspace/create",
+      payload: {
+        agent: "codex",
+        cwd: { type: "runtime-path", path: selectedFolder },
+        workspaceSelection: {
+          type: "new-worktree",
+          branchName: "feature/new-pre-session",
+          startRef: "main",
+          expectedSnapshotId: refreshedForNew.snapshotId,
+        },
+        message: "Use a new worktree.",
+        attachments: [],
+        references: [],
+        clientRequestId: "pre-session-new-worktree",
+      },
+    });
+    assert.equal(createdNew.statusCode, 200, JSON.stringify(createdNew.json()));
+    const createdNewSession = aiSessions.get(createdNew.json().data.aiSessionId);
+    assert.equal(require("node:child_process").execFileSync("git", ["branch", "--show-current"], { cwd: createdNewSession.cwd, encoding: "utf8" }).trim(), "feature/new-pre-session");
+    assert.equal(fixture.git(["worktree", "list", "--porcelain"]).split("\nworktree ").length, worktreeCountBeforeExistingSelection + 1);
 
     const checkedOut = await app.inject({
       method: "POST",

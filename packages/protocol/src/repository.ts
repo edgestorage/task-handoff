@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { AiSessionCreateInputSchema, AiSessionCreateRefInputSchema, AiSessionGitSelectionSchema, AiSessionRuntimePathSchema } from "./ai-sessions.ts";
+import { AiSessionCreateInputSchema, AiSessionCreateRefInputSchema, AiSessionCreateWorkspaceSelectionSchema, AiSessionGitSelectionSchema, AiSessionRuntimePathSchema } from "./ai-sessions.ts";
 
 const IdSchema = z.string().trim().min(1).max(160).regex(/^[a-zA-Z0-9][a-zA-Z0-9_.:-]*$/);
 const TimestampSchema = z.string().datetime();
@@ -383,6 +383,9 @@ export const RepositoryAiSessionWorkspaceSchema = z.object({
   currentBranch: z.string().min(1).max(1024).optional(),
   dirty: z.boolean().default(false),
   branches: z.array(RepositoryAiSessionWorkspaceBranchSchema).max(100_000).default([]),
+  repositoryContextId: IdSchema.optional(),
+  snapshotId: IdSchema.optional(),
+  worktrees: z.array(RepositoryWorktreeSchema).max(10_000).default([]),
 }).strict();
 
 export const RepositoryAiSessionWorkspaceInspectSchema = z.object({
@@ -396,14 +399,15 @@ export const RepositoryAiSessionWorkspaceCheckoutSchema = z.object({
 
 export const RepositoryAiSessionGitSelectionSchema = AiSessionGitSelectionSchema;
 
-export const RepositoryWorkspaceAiSessionCreateSchema = AiSessionCreateInputSchema.extend({
-  gitSelection: RepositoryAiSessionGitSelectionSchema,
-}).strict();
+export const RepositoryWorkspaceAiSessionCreateSchema = z.union([
+  AiSessionCreateInputSchema.safeExtend({ gitSelection: AiSessionGitSelectionSchema, workspaceSelection: z.never().optional() }).strict(),
+  AiSessionCreateInputSchema.safeExtend({ gitSelection: z.never().optional(), workspaceSelection: AiSessionCreateWorkspaceSelectionSchema }).strict(),
+]);
 
-export const RepositoryWorkspaceAiSessionCreateRefSchema = AiSessionCreateRefInputSchema.extend({
-  cwd: AiSessionRuntimePathSchema,
-  gitSelection: RepositoryAiSessionGitSelectionSchema,
-}).strict();
+export const RepositoryWorkspaceAiSessionCreateRefSchema = z.union([
+  AiSessionCreateRefInputSchema.safeExtend({ cwd: AiSessionRuntimePathSchema, gitSelection: AiSessionGitSelectionSchema, workspaceSelection: z.never().optional() }).strict(),
+  AiSessionCreateRefInputSchema.safeExtend({ cwd: AiSessionRuntimePathSchema, gitSelection: z.never().optional(), workspaceSelection: AiSessionCreateWorkspaceSelectionSchema }).strict(),
+]);
 
 export const RepositoryCreateBranchRequestSchema = SnapshotMutationSchema.extend({ name: GitNameSchema }).strict();
 export const RepositoryCheckoutBranchRequestSchema = SnapshotMutationSchema.extend({ branch: z.string().trim().min(1).max(2048) }).strict();

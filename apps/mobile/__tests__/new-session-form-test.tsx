@@ -61,6 +61,7 @@ describe('<NewSessionForm />', () => {
         availability: 'available',
         currentBranch: 'main',
         dirty: false,
+        worktrees: [],
         branches: [
           { name: 'main', kind: 'branch', current: true, currentFolderSelectable: true, worktreeSelectable: false, worktreeCheckout: 'attached', worktreeReason: 'current-branch' },
           { name: 'feature/cwd', kind: 'branch', current: false, currentFolderSelectable: true, worktreeSelectable: true, worktreeCheckout: 'attached' },

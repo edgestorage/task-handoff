@@ -96,6 +96,19 @@ test("managed worktree creation launches a new session without a client filesyst
   assert.match(worktreesTab, /agent === "codex" \|\| agent === "claude"/);
 });
 
+test("new-session worktree dialog restores branch selection and detached checkout semantics", async () => {
+  const panel = await source("apps/control-plane/instance-detail/AiSessionPanel.vue");
+
+  assert.match(panel, /ToggleGroupItem value="existing-branch"/);
+  assert.match(panel, /ToggleGroupItem value="new-branch"/);
+  assert.match(panel, /branch\.worktreeSelectable && \(!query \|\| branch\.name\.toLowerCase\(\)\.includes\(query\)\)/);
+  assert.match(panel, /newSessionWorktreeBranchDetached\(node\.branch\)[\s\S]*sessions\.panel\.detached/);
+  assert.match(panel, /newWorktreeDetachedDescription/);
+  assert.match(panel, /\{ mode: "worktree", branch: newSessionManagedWorktreeBranch\.value \}/);
+  assert.match(panel, /\|\| newSessionManagedWorktreeBranch\.value[\s\S]*\? undefined/);
+  assert.match(panel, /newSessionWorktreeId\.value = "";[\s\S]*newSessionCreateNewWorktree\.value = false/);
+});
+
 test("managed worktree removal is AI-only, confirmed, non-force, and retains the branch", async () => {
   const [panel, repositoryApi] = await Promise.all([
     source("apps/control-plane/instance-detail/RepositoryWorktreesPanel.vue"),

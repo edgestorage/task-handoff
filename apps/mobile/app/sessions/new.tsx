@@ -4,7 +4,7 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import { Platform } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { AI_SESSION_DEFAULT_REASONING_EFFORT, type AiSessionGitSelection, type AiSessionModelSelection, type AiSessionPermissionMode, type AiSessionReasoningEffort } from '@task-handoff/protocol/ai-sessions';
+import { AI_SESSION_DEFAULT_REASONING_EFFORT, type AiSessionCreateWorkspaceSelection, type AiSessionGitSelection, type AiSessionModelSelection, type AiSessionPermissionMode, type AiSessionReasoningEffort } from '@task-handoff/protocol/ai-sessions';
 import { normalizeAiSessionReasoningEffortCapabilities } from '@task-handoff/protocol/ai-session-provider-capabilities';
 import { aiSessionMessageText, defaultAiSessionModelSelection, deriveAiSessionModelGroups, type AiSessionCatalogModelEntity } from '@task-handoff/control-plane-client';
 import { directoryAiSessionProviderCapability } from '@task-handoff/protocol/control-plane-directory';
@@ -46,6 +46,8 @@ export default function NewAiSessionRoute() {
     workspace?: RepositoryAiSessionWorkspace;
     mode: 'current-folder' | 'worktree';
     branch?: string;
+    worktreeId?: string;
+    newWorktree?: { branchName: string; startRef: string };
   }>({ mode: 'current-folder' });
   const [busy, setBusy] = useState(false);
   const [attachments, setAttachments] = useState<NewSessionLocalAttachment[]>([]);
@@ -166,6 +168,8 @@ export default function NewAiSessionRoute() {
         branch: workspace.currentBranch
           || workspace.branches.find((candidate) => candidate.current)?.name
           || workspace.branches.find((candidate) => candidate.currentFolderSelectable)?.name,
+        worktreeId: workspace.worktrees.find((candidate) => !candidate.isCurrent && candidate.canCreateAiSession)?.id
+          || workspace.worktrees.find((candidate) => candidate.canCreateAiSession)?.id,
       });
     }).catch(() => {
       // Compatibility for v0.0.21: an older Control Plane keeps the cwd-only creation flow.
@@ -180,7 +184,17 @@ export default function NewAiSessionRoute() {
   const gitSelection: AiSessionGitSelection | undefined = workspaceMatchesSelection
     && workspaceState.workspace?.availability === 'available'
     && workspaceState.branch
+    && workspaceState.mode === 'current-folder'
     ? { mode: workspaceState.mode, branch: workspaceState.branch }
+    : undefined;
+  const workspaceSelection: AiSessionCreateWorkspaceSelection | undefined = workspaceMatchesSelection
+    && workspaceState.workspace?.availability === 'available'
+    && workspaceState.mode === 'worktree'
+    ? workspaceState.newWorktree && workspaceState.workspace.snapshotId
+      ? { type: 'new-worktree', ...workspaceState.newWorktree, expectedSnapshotId: workspaceState.workspace.snapshotId }
+      : workspaceState.worktreeId && workspaceState.workspace.repositoryContextId
+        ? { type: 'existing-worktree', repositoryContextId: workspaceState.workspace.repositoryContextId, worktreeId: workspaceState.worktreeId }
+        : undefined
     : undefined;
 
   const create = async () => {
@@ -193,6 +207,7 @@ export default function NewAiSessionRoute() {
         agent,
         cwdFolderId: selectedFolder.cwdFolderId,
         gitSelection,
+        workspaceSelection,
         message: aiSessionMessageText(message.trim()),
         permissionMode: permissionModes.includes(permissionMode) ? permissionMode : undefined,
         modelSelection,
@@ -213,6 +228,7 @@ export default function NewAiSessionRoute() {
         agent,
         cwdFolderId: selectedFolder.cwdFolderId,
         gitSelection,
+        workspaceSelection,
         message: aiSessionMessageText(message.trim()),
         attachments: usableUploadRefs(uploadedAttachments),
         permissionMode: permissionModes.includes(permissionMode) ? permissionMode : undefined,
@@ -311,6 +327,7 @@ export default function NewAiSessionRoute() {
     workspace={workspaceMatchesSelection ? workspaceState.workspace : undefined}
     workspaceMode={workspaceMatchesSelection ? workspaceState.mode : 'current-folder'}
     selectedBranch={workspaceMatchesSelection ? workspaceState.branch : undefined}
+    selectedWorktree={workspaceMatchesSelection ? workspaceState.newWorktree ? '__new_worktree__' : workspaceState.worktreeId : undefined}
     workspaceLoading={workspaceLoading}
     message={message}
     attachments={attachments.map(({ id, local }) => ({ id, kind: local.kind, name: local.name, size: local.size, textPresentation: local.textPresentation }))}
@@ -323,7 +340,7 @@ export default function NewAiSessionRoute() {
       onModelSelectionChange={(value) => setModelSelectionDraft({ instanceId: selectedInstanceId, agent, value })}
       onReasoningEffortChange={setReasoningEffort}
     busy={busy || savingPermission || workspaceLoading}
-    disabled={busy || savingPermission || workspaceLoading || Boolean(guidance) || !agent || !selectedFolder || (!message.trim() && !attachments.length)}
+    disabled={busy || savingPermission || workspaceLoading || Boolean(guidance) || !agent || !selectedFolder || (!message.trim() && !attachments.length) || (workspaceState.mode === 'worktree' && !workspaceSelection)}
     error={guidance}
     visualBalanceInset={newSessionVisualBalanceInset(Platform.OS, insets.top)}
     onInstanceChange={(instanceId) => {
@@ -338,13 +355,16 @@ export default function NewAiSessionRoute() {
     onWorkspaceModeChange={(mode) => {
       const workspace = workspaceState.workspace;
       const selected = workspace?.branches.find((candidate) => candidate.name === workspaceState.branch);
-      const selectable = selected && (mode === 'worktree' ? selected.worktreeSelectable : selected.currentFolderSelectable);
-      const branch = selectable
-        ? selected.name
-        : workspace?.branches.find((candidate) => mode === 'worktree' ? candidate.worktreeSelectable : candidate.currentFolderSelectable)?.name;
-      setWorkspaceState((current) => ({ ...current, mode, branch }));
+      const branch = selected?.currentFolderSelectable ? selected.name : workspace?.branches.find((candidate) => candidate.currentFolderSelectable)?.name;
+      const worktreeId = workspaceState.worktreeId
+        || workspace?.worktrees.find((candidate) => !candidate.isCurrent && candidate.canCreateAiSession)?.id
+        || workspace?.worktrees.find((candidate) => candidate.canCreateAiSession)?.id;
+      setWorkspaceState((current) => ({ ...current, mode, branch, worktreeId, newWorktree: undefined }));
     }}
     onBranchChange={(branch) => setWorkspaceState((current) => ({ ...current, branch }))}
+    onWorktreeChange={(value) => setWorkspaceState((current) => value === '__new_worktree__'
+      ? { ...current, worktreeId: undefined, newWorktree: { branchName: `session/${Crypto.randomUUID().slice(0, 8)}`, startRef: current.workspace?.currentBranch || 'HEAD' } }
+      : { ...current, worktreeId: value, newWorktree: undefined })}
     onMessageChange={setMessage}
     onAddImage={() => { void addAttachment('image'); }}
     onAddFile={() => { void addAttachment('file'); }}
