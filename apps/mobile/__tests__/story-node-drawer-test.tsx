@@ -8,6 +8,7 @@ import { useInstanceScope } from '../src/instance-scope/use-instance-scope';
 import { useStoryNodeFilter } from '../src/stories/use-story-node-filter';
 
 let mockPathname = '/stories';
+let mockCloudRelayEnabled = false;
 jest.mock('expo-router', () => ({ router: { push: jest.fn() }, usePathname: () => mockPathname }));
 jest.mock('expo-router/drawer', () => {
   const React = jest.requireActual<typeof import('react')>('react');
@@ -16,6 +17,9 @@ jest.mock('expo-router/drawer', () => {
 });
 jest.mock('../src/control-plane/use-mobile-control-plane-runtime', () => ({ useMobileControlPlaneRuntime: jest.fn() }));
 jest.mock('../src/control-plane/use-cloud-account-state', () => ({ useCloudAccountState: jest.fn() }));
+jest.mock('../src/platform/build-variant', () => ({
+  get isMobileCloudRelayEnabled() { return mockCloudRelayEnabled; },
+}));
 jest.mock('../src/directories/use-directories', () => ({ useActiveDirectories: jest.fn() }));
 jest.mock('../src/instance-scope/use-instance-scope', () => ({ useInstanceScope: jest.fn() }));
 jest.mock('../src/stories/use-story-node-filter', () => ({ useStoryNodeFilter: jest.fn() }));
@@ -31,6 +35,7 @@ const drawerProps = { navigation: { closeDrawer } } as unknown as Parameters<typ
 beforeEach(() => {
   jest.clearAllMocks();
   mockPathname = '/stories';
+  mockCloudRelayEnabled = false;
   mockRuntime.mockReturnValue({ triggerCapability: false } as ReturnType<typeof useMobileControlPlaneRuntime>);
   mockCloudAccount.mockReturnValue({ phase: 'signed-out' } as ReturnType<typeof useCloudAccountState>);
   mockDirectories.mockReturnValue({ controlPlaneOrigin: 'https://control.example', state: {
@@ -43,6 +48,17 @@ beforeEach(() => {
   } } as unknown as ReturnType<typeof useActiveDirectories>);
   mockInstanceScope.mockReturnValue({ scope: { kind: 'all' }, setScope: jest.fn() });
   mockStoryNodeFilter.mockReturnValue({ filter: { kind: 'all' }, setFilter: jest.fn() });
+});
+
+test('drawer hides the Thandoff account entry unless cloud Relay is enabled', async () => {
+  const hidden = await render(<InstanceDrawerContent {...drawerProps} />);
+  expect(hidden.queryByText('Sign in to Thandoff account')).toBeNull();
+  await hidden.unmount();
+
+  mockCloudRelayEnabled = true;
+  const enabled = await render(<InstanceDrawerContent {...drawerProps} />);
+  expect(enabled.getByText('Sign in to Thandoff account')).toBeTruthy();
+  await enabled.unmount();
 });
 
 test('Story drawer switches to node multi-select without changing other tab instance scope', async () => {

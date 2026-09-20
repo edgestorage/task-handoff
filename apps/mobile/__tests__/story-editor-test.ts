@@ -56,6 +56,112 @@ describe('StoryEditor', () => {
     expect(update).toHaveBeenCalledWith('story-1', 'node-1', expect.objectContaining({ maxIdleAiSessions: 9 }));
   });
 
+  test('loads the four authoritative Agent tool categories and saves changed policy', async () => {
+    const story = StorySchema.parse({
+      id: 'story-1', ownerNodeId: 'node-1', title: 'Release', actions: [], documents: [],
+      createdAt: '2026-09-05T00:00:00.000Z', updatedAt: '2026-09-05T00:00:00.000Z',
+    });
+    const updateAgentToolSettings = jest.fn().mockResolvedValue({
+      policy: { content: true, actions: false, automations: true, aiSessions: false },
+      revision: 'b'.repeat(64),
+    });
+    const agentToolSettings = jest.fn().mockResolvedValue({
+      policy: { content: true, actions: false, automations: false, aiSessions: false },
+      revision: 'a'.repeat(64),
+    });
+    mockDirectories.mockReturnValue({ state: { instances: [], nodes: [{
+      id: 'node-1', name: 'Node', connectionPhase: 'healthy',
+      capabilities: [],
+    }] } } as unknown as ReturnType<typeof useActiveDirectories>);
+    const node = jest.fn().mockResolvedValue({
+      id: 'node-1',
+      capabilities: { agent: { capabilities: { stories: { agentToolCapabilities: { policy: true } } } } },
+    });
+    mockRuntime.mockReturnValue({ api: { resources: { node }, stories: {
+      get: jest.fn().mockResolvedValue(story),
+      retentionSettings: jest.fn().mockResolvedValue({ maxIdleAiSessions: 5 }),
+      agentToolSettings,
+      update: jest.fn().mockResolvedValue(story),
+      updateAgentToolSettings,
+    } } } as unknown as ReturnType<typeof useMobileControlPlaneRuntime>);
+
+    const screen = await render(createElement(StoryEditor, { nodeId: 'node-1', onSaved: jest.fn(), storyId: 'story-1' }));
+    expect((await screen.findByLabelText('Content')).props.value).toBe(true);
+    expect(screen.getByLabelText('Preset actions').props.value).toBe(false);
+    expect(screen.getByLabelText('Automations').props.value).toBe(false);
+    expect(screen.getByLabelText('AI Sessions').props.value).toBe(false);
+
+    await act(async () => { fireEvent(screen.getByLabelText('Automations'), 'valueChange', true); });
+    await act(async () => {
+      fireEvent.press(screen.getByText('Save'));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    });
+
+    expect(agentToolSettings).toHaveBeenCalledWith('story-1', 'node-1');
+    expect(node).toHaveBeenCalledWith('node-1');
+    expect(updateAgentToolSettings).toHaveBeenCalledWith('story-1', 'node-1', {
+      content: true, actions: false, automations: true, aiSessions: false,
+    });
+  });
+
+  test('disables Agent tool settings when the node capability is absent', async () => {
+    const story = StorySchema.parse({
+      id: 'story-1', ownerNodeId: 'node-1', title: 'Release', actions: [], documents: [],
+      createdAt: '2026-09-05T00:00:00.000Z', updatedAt: '2026-09-05T00:00:00.000Z',
+    });
+    const agentToolSettings = jest.fn();
+    mockDirectories.mockReturnValue({ state: { instances: [], nodes: [{
+      id: 'node-1', name: 'Node', connectionPhase: 'healthy', capabilities: [],
+    }] } } as unknown as ReturnType<typeof useActiveDirectories>);
+    mockRuntime.mockReturnValue({ api: { resources: { node: jest.fn().mockResolvedValue({
+      id: 'node-1',
+      capabilities: { agent: { capabilities: { stories: { enabled: true, agentTools: true } } } },
+    }) }, stories: {
+      get: jest.fn().mockResolvedValue(story),
+      retentionSettings: jest.fn().mockResolvedValue({ maxIdleAiSessions: 5 }),
+      agentToolSettings,
+    } } } as unknown as ReturnType<typeof useMobileControlPlaneRuntime>);
+
+    const screen = await render(createElement(StoryEditor, { nodeId: 'node-1', onSaved: jest.fn(), storyId: 'story-1' }));
+    expect(await screen.findByText('Tool settings are not supported by this node agent.')).toBeTruthy();
+    expect(agentToolSettings).not.toHaveBeenCalled();
+    expect(screen.queryByLabelText('Content')).toBeNull();
+  });
+
+  test('keeps the editor open when Agent tool policy save conflicts', async () => {
+    const story = StorySchema.parse({
+      id: 'story-1', ownerNodeId: 'node-1', title: 'Release', actions: [], documents: [],
+      createdAt: '2026-09-05T00:00:00.000Z', updatedAt: '2026-09-05T00:00:00.000Z',
+    });
+    const onSaved = jest.fn();
+    mockDirectories.mockReturnValue({ state: { instances: [], nodes: [{
+      id: 'node-1', name: 'Node', connectionPhase: 'healthy',
+      capabilities: [],
+    }] } } as unknown as ReturnType<typeof useActiveDirectories>);
+    mockRuntime.mockReturnValue({ api: { resources: { node: jest.fn().mockResolvedValue({
+      id: 'node-1',
+      capabilities: { agent: { capabilities: { stories: { agentToolCapabilities: { policy: true } } } } },
+    }) }, stories: {
+      get: jest.fn().mockResolvedValue(story),
+      retentionSettings: jest.fn().mockResolvedValue({ maxIdleAiSessions: 5 }),
+      agentToolSettings: jest.fn().mockResolvedValue({ policy: { content: true, actions: false, automations: false, aiSessions: false }, revision: 'a'.repeat(64) }),
+      update: jest.fn().mockResolvedValue(story),
+      updateAgentToolSettings: jest.fn().mockRejectedValue(new Error('Story tool settings changed.')),
+    } } } as unknown as ReturnType<typeof useMobileControlPlaneRuntime>);
+
+    const screen = await render(createElement(StoryEditor, { nodeId: 'node-1', onSaved, storyId: 'story-1' }));
+    await screen.findByLabelText('Preset actions');
+    await act(async () => { fireEvent(screen.getByLabelText('Preset actions'), 'valueChange', true); });
+    await act(async () => {
+      fireEvent.press(screen.getByText('Save'));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    });
+
+    expect(await screen.findByText('Story tool settings changed.')).toBeTruthy();
+    expect(onSaved).not.toHaveBeenCalled();
+    expect(screen.getByLabelText('Preset actions').props.value).toBe(true);
+  });
+
   test('creates a Story with the Web editor retention default', async () => {
     const created = StorySchema.parse({
       id: 'story-1', ownerNodeId: 'node-1', title: 'Release', actions: [], documents: [],

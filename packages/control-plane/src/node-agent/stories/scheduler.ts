@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import path from "node:path";
 import {
   SchedulerExecutionRuntime,
   nextSchedulerTime,
@@ -16,11 +15,10 @@ import {
   type StoryAutomationRun,
   type StoryAutomationStatus,
 } from "@task-handoff/protocol/stories";
-import { StoryAutomationInstanceCreateResultSchema, type StoryAutomationInstanceCreateInput } from "@task-handoff/protocol/story-automation-instance";
-import type { ControlledInstance } from "@task-handoff/protocol/control-plane";
 import type { NodeAgentState } from "../state.ts";
 import type { NodeStoryStore, StoryAutomationContext } from "./store.ts";
 import { StoryAutomationStore, type StoredStoryAutomationRun, type StoryAutomationExecutionInput } from "./automation-store.ts";
+import { StoryActionExecutionService } from "./action-execution-service.ts";
 
 type StorySchedulerEvent = { runId: string };
 type Publish = (type: string, payload: unknown, scope?: { nodeId?: string; instanceId?: string }) => void;
@@ -34,27 +32,26 @@ export class StoryScheduler {
   private readonly state: NodeAgentState;
   private readonly stories: NodeStoryStore;
   private readonly automations: StoryAutomationStore;
-  private readonly fetchImpl: typeof fetch;
-  private readonly resolveInstanceWeb: (instance: ControlledInstance) => Promise<string>;
   private readonly publish?: Publish;
   private readonly now: () => Date;
+  private readonly actionExecution: StoryActionExecutionService;
 
   constructor(
     state: NodeAgentState,
     stories: NodeStoryStore,
     automations: StoryAutomationStore,
     fetchImpl: typeof fetch,
-    resolveInstanceWeb: (instance: ControlledInstance) => Promise<string>,
+    resolveInstanceWeb: ConstructorParameters<typeof StoryActionExecutionService>[3],
     publish?: Publish,
     now: () => Date = () => new Date(),
+    actionExecution?: StoryActionExecutionService,
   ) {
     this.state = state;
     this.stories = stories;
     this.automations = automations;
-    this.fetchImpl = fetchImpl;
-    this.resolveInstanceWeb = resolveInstanceWeb;
     this.publish = publish;
     this.now = now;
+    this.actionExecution = actionExecution || new StoryActionExecutionService(state, stories, fetchImpl, resolveInstanceWeb);
     this.runtime = new SchedulerExecutionRuntime({
       execute: ({ runId }) => this.executeRun(runId),
       skipped: ({ runId }, reason) => this.trackMutation(this.skipRun(runId, reason)),
@@ -146,11 +143,11 @@ export class StoryScheduler {
     return this.status(id);
   }
 
-  async update(id: string, input: unknown) {
+  async update(id: string, input: unknown, expectedUpdatedAt?: string) {
     const current = await this.requireAutomation(id);
     const candidate = { ...current, ...(input as Record<string, unknown>) };
     await this.validateReferences(candidate as StoryAutomation);
-    const automation = await this.automations.update(id, input);
+    const automation = await this.automations.update(id, input, expectedUpdatedAt);
     if (!automation) return undefined;
     await this.refresh();
     await this.publishStatus(id, "updated");
@@ -161,9 +158,9 @@ export class StoryScheduler {
     return this.update(id, { enabled });
   }
 
-  async delete(id: string) {
+  async delete(id: string, expectedUpdatedAt?: string) {
     const automation = await this.requireAutomation(id);
-    const deleted = await this.automations.delete(id);
+    const deleted = await this.automations.delete(id, expectedUpdatedAt);
     if (deleted) {
       this.runtime.clearTimer(id);
       this.nextRunAt.delete(id);
@@ -233,7 +230,7 @@ export class StoryScheduler {
 
   private async prepareRun(automation: StoryAutomation, eventType: StoryAutomationRun["eventType"], scheduledFor: string, executionKey: string) {
     const executionInput = await this.executionInput(automation);
-    const request = instanceRequest(executionInput, executionKey);
+    const request = this.actionExecution.request(executionInput, executionKey);
     return this.automations.createRun({
       automationId: automation.id,
       eventType,
@@ -260,25 +257,17 @@ export class StoryScheduler {
     if (run.status === "queued") run = await this.automations.transition(run.id, "dispatching");
     if (run.status === "dispatching") {
       try {
-        const instance = this.state.requireInstance(run.targetInstanceId);
-        if (!instance.registrationToken) throw schedulerError("STORY_AUTOMATION_INSTANCE_CREDENTIAL_MISSING", "Target instance has no registration credential.", 503);
-        const url = `${await this.resolveInstanceWeb(instance)}/api/internal/node-agent/story-automation/ai-sessions`;
-        let response: Response;
         try {
-          response = await this.fetchImpl(url, {
-            method: "POST",
-            headers: { "content-type": "application/json", authorization: `Bearer ${instance.registrationToken}` },
-            body: JSON.stringify(instanceRequest(run.executionInput, run.executionKey)),
-          });
-        } catch {
-          await this.publishStatus(run.automationId, "status");
-          return;
+          const result = await this.actionExecution.dispatch(run.executionInput, run.executionKey);
+          run = await this.automations.transition(run.id, "running", { aiSessionId: result.aiSessionId });
+          await this.publishRun(run);
+        } catch (error) {
+          if (error && typeof error === "object" && "retryable" in error && error.retryable === true) {
+            await this.publishStatus(run.automationId, "status");
+            return;
+          }
+          throw error;
         }
-        const payload = await response.json().catch(() => ({})) as { data?: unknown; error?: { code?: string; message?: string } };
-        if (!response.ok) throw schedulerError(payload.error?.code || "STORY_AUTOMATION_DISPATCH_FAILED", payload.error?.message || `Target instance returned HTTP ${response.status}.`, response.status);
-        const result = StoryAutomationInstanceCreateResultSchema.parse(payload.data);
-        run = await this.automations.transition(run.id, "running", { aiSessionId: result.aiSessionId });
-        await this.publishRun(run);
       } catch (error) {
         const failed = await this.automations.transition(run.id, "failed", { error: errorProjection(error) });
         await this.publishRun(failed);
@@ -297,34 +286,7 @@ export class StoryScheduler {
   }
 
   private async executionInput(automation: StoryAutomation, storyOverride?: StoryAutomationContext): Promise<StoryAutomationExecutionInput> {
-    const story = storyOverride?.id === automation.storyId ? storyOverride : await this.stories.automationContext(automation.storyId);
-    if (!story) throw schedulerError("STORY_NOT_FOUND", "Story was not found.", 404);
-    if (story.archivedAt) throw schedulerError("STORY_ARCHIVED", "Archived Story cannot run Automation.", 409);
-    const action = story.actions.find((candidate) => candidate.id === automation.actionId);
-    if (!action) throw schedulerError("STORY_ACTION_NOT_FOUND", "Story Action was not found.", 404);
-    if (!action.targetInstanceId) throw schedulerError("STORY_ACTION_TARGET_REQUIRED", "Automated Story Action requires a target instance.", 409);
-    const instance = this.state.requireInstance(action.targetInstanceId);
-    return {
-      storyId: story.id,
-      actionId: action.id,
-      targetInstanceId: instance.id,
-      prompt: action.promptTemplate,
-      sessionPreset: action.sessionPreset,
-      cwd: this.runtimeCwd(instance, action.sessionPreset?.cwdFolderId),
-    };
-  }
-
-  private runtimeCwd(instance: ControlledInstance, cwdFolderId?: string) {
-    if (!cwdFolderId) return instance.runtime.workspacePath || instance.workspace.path || "/workspace";
-    const folder = this.state.localFolders.get(cwdFolderId);
-    if (!folder) throw schedulerError("NODE_LOCAL_FOLDER_NOT_FOUND", "Story Action working folder was not found.", 404);
-    const runtime = this.state.requireRuntime(instance.runtimeId);
-    if (runtime.type === "local") return path.resolve(folder.path);
-    if (instance.source.type !== "local-folder") throw schedulerError("AI_SESSION_CWD_UNAVAILABLE", "Working folder is unavailable for this instance source.", 409);
-    const relative = path.relative(path.resolve(instance.source.path), path.resolve(folder.path));
-    if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw schedulerError("AI_SESSION_CWD_OUTSIDE_WORKSPACE", "Working folder is outside the instance workspace.", 409);
-    const workspace = instance.runtime.workspacePath || instance.workspace.path || "/workspace";
-    return relative ? path.posix.join(workspace, ...relative.split(path.sep)) : workspace;
+    return this.actionExecution.resolve(automation.storyId, automation.actionId, storyOverride);
   }
 
   private async validateInput(input: unknown) {
@@ -394,22 +356,6 @@ function internalSchedule(automation: StoryAutomation): SchedulerSchedule {
   if (schedule.scheduleKind === "weekly") return { type: "weekly", weekdays: schedule.weekdays, timeOfDay: schedule.timeOfDay, timezone: schedule.timezone };
   if (schedule.scheduleKind === "monthly") return { type: "monthly", dayOfMonth: schedule.dayOfMonth, timeOfDay: schedule.timeOfDay, timezone: schedule.timezone };
   throw new Error(`Unsupported Story automation schedule kind: ${(schedule as StoryAutomation).schedule.scheduleKind}`);
-}
-
-function instanceRequest(input: StoryAutomationExecutionInput, clientRequestId: string): StoryAutomationInstanceCreateInput {
-  const preset = input.sessionPreset;
-  return {
-    agent: preset?.agent || "codex",
-    cwd: { type: "runtime-path", path: input.cwd },
-    cwdFolderId: preset?.cwdFolderId,
-    gitSelection: preset?.gitSelection,
-    message: input.prompt,
-    permissionMode: preset?.permissionMode || "ask",
-    clientRequestId,
-    modelSelection: preset?.modelSelection,
-    reasoningEffort: preset?.reasoningEffort,
-    storyId: input.storyId,
-  };
 }
 
 function fingerprint(value: unknown) {

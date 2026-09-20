@@ -55,10 +55,19 @@ export const StoryActionSchema = z.object({
   sessionPreset: StorySessionPresetSchema.optional(),
 }).strict();
 
-export const StoryActionInputSchema = StoryActionSchema.omit({ id: true }).strict();
+// Compatibility for v0.0.32: persisted/read Action records may omit a target,
+// but every current create or update must choose one explicitly.
+export const StoryActionInputSchema = StoryActionSchema.omit({ id: true, targetInstanceId: true }).extend({
+  targetInstanceId: StoryActionSchema.shape.targetInstanceId.unwrap(),
+}).strict();
 
 export const StoryActionUpdateInputSchema = StoryActionInputSchema.extend({
   id: StoryActionSchema.shape.id.optional(),
+}).strict();
+
+export const StoryActionRunResultSchema = z.object({
+  targetInstanceId: z.string().trim().min(1).max(120),
+  aiSessionId: z.string().trim().min(1).max(120),
 }).strict();
 
 export const StoryAutomationScheduleSchema = z.discriminatedUnion("scheduleKind", [
@@ -103,7 +112,7 @@ export const StoryAutomationSchema = z.object({
 }).strict();
 export const StoryAutomationInputSchema = StoryAutomationSchema.omit({ id: true, createdAt: true, updatedAt: true }).strict();
 export const StoryAutomationWithActionInputSchema = z.object({
-  action: StoryActionSchema,
+  action: StoryActionSchema.extend({ targetInstanceId: StoryActionSchema.shape.targetInstanceId.unwrap() }).strict(),
   automation: StoryAutomationInputSchema.omit({ storyId: true, actionId: true }).strict(),
 }).strict();
 export const StoryAutomationUpdateInputSchema = z.object({

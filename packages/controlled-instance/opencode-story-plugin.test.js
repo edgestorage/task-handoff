@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createOpenCodeStoryPlugin } from "./src/opencode-story-plugin.ts";
+import { STORY_AGENT_TOOL_NAMES } from "@task-handoff/protocol/story-agent-tools";
 
 test("OpenCode Story plugin forwards the host-provided session identity", async () => {
   let request;
@@ -34,6 +35,7 @@ test("OpenCode Story plugin forwards the host-provided session identity", async 
 
 test("OpenCode Story plugin does not expose session identity as a model argument", async () => {
   const hooks = await createOpenCodeStoryPlugin()();
+  assert.deepEqual(Object.keys(hooks.tool), [...STORY_AGENT_TOOL_NAMES]);
   assert.deepEqual(Object.keys(hooks.tool.story_get_content.args), ["storyPaths", "destinationPath"]);
   assert.equal("sessionID" in hooks.tool.story_get_content.args, false);
   assert.equal("storyId" in hooks.tool.story_get_content.args, false);

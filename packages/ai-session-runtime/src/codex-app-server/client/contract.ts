@@ -1,5 +1,6 @@
 import type { EventEmitter } from "node:events";
 import type { AiSessionApprovalInput, AiSessionReasoningEffort } from "@task-handoff/protocol/ai-sessions";
+import type { StoryAgentToolName } from "@task-handoff/protocol/story-agent-tools";
 import type { CodexApprovalRequest, CodexThread, CodexThreadItemEntry, CodexUserInput, JsonValue } from "../protocol/types";
 
 type CodexApprovalDecision = AiSessionApprovalInput["decision"];
@@ -19,6 +20,7 @@ export type CodexThreadStartOptions = {
   permissions?: CodexTurnPermissionOverrides;
   reasoningEffort?: AiSessionReasoningEffort;
   dynamicTools?: CodexDynamicToolSpec[];
+  storyAgentTools?: StoryAgentToolName[];
 };
 
 export type CodexDynamicToolSpec = {
@@ -50,12 +52,14 @@ export type CodexThreadForkOptions = {
   model?: string;
   modelProvider?: string;
   reasoningEffort?: AiSessionReasoningEffort;
+  storyAgentTools?: StoryAgentToolName[];
 };
 
 export type CodexThreadResumeOptions = {
   model?: string;
   modelProvider?: string;
   reasoningEffort?: AiSessionReasoningEffort;
+  storyAgentTools?: StoryAgentToolName[];
 };
 
 export type CodexThreadSettings = {

@@ -41,7 +41,14 @@ export function StoryActionEditor({ nodeId, onSaved, storyId }: { nodeId?: strin
   return <StoryActionComposer
     onSubmit={async (action) => {
       if (!runtime.api) return;
-      await runtime.api.stories.update(story.id, story.ownerNodeId, { actions: [...story.actions, action] });
+      const existing = story.actions.map((item) => {
+        if (!item.targetInstanceId) throw new Error(t('stories.noAvailableInstance'));
+        return { ...item, targetInstanceId: item.targetInstanceId };
+      });
+      if (!action.targetInstanceId) throw new Error(t('stories.noAvailableInstance'));
+      await runtime.api.stories.update(story.id, story.ownerNodeId, {
+        actions: [...existing, { ...action, targetInstanceId: action.targetInstanceId }],
+      });
       onSaved();
     }}
     story={story}

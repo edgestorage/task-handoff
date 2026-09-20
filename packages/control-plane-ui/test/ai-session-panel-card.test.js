@@ -434,12 +434,21 @@ test("new-session drafts persist in their instance or Story scope until creation
   assert.match(panel, /activeNewSessionDraftKey = ref\(newSessionDraftKey\.value\)/);
   assert.match(panel, /watch\(\[newSessionDraft, newSessionMentionBindings\],[\s\S]*persistAiSessionDraftPayload\(activeNewSessionDraftKey\.value, draft, bindings\)/);
   assert.match(panel, /watch\(newSessionDraftKey,[\s\S]*loadAiSessionDraftPayload\(activeNewSessionDraftKey\.value\)/);
-  assert.match(panel, /watch\(messageAttachments,[\s\S]*persistAiSessionAttachmentDraft\(activeNewSessionDraftKey\.value, attachments\)/);
-  assert.match(panel, /restoreNewSessionAttachmentDraft\(draftKey\)/);
+  assert.match(panel, /newSessionAttachmentDraftKey = computed\(\(\) => props\.creationMode === "preset" \? "" : activeNewSessionDraftKey\.value\)/);
+  assert.match(panel, /newSessionAttachments = useAiSessionAttachmentDraft\(newSessionAttachmentDraftKey\)/);
+  assert.match(panel, /v-model="newSessionDraft"[\s\S]*v-model:attachments="newSessionAttachments"/);
   assert.doesNotMatch(panel, /watch\(\(\) => props\.instance\.id, \(\) => \{[\s\S]{0,160}messageAttachments\.value = \[\]/);
   assert.match(panel, /v-model="newSessionDraft"[\s\S]*v-model:mention-bindings="newSessionMentionBindings"/);
   assert.doesNotMatch(panel, /function openNewSession\(\)[\s\S]{0,400}newSessionDraft\.value = "";/);
-  assert.match(panel, /emit\("selectAiSession", props\.instance\.id, result\.aiSessionId\);\s*emit\("sessionCreated", props\.instance\.id, result\.aiSessionId\);\s*clearAiSessionDraft\(activeNewSessionDraftKey\.value\);\s*void clearAiSessionAttachmentDraft\(activeNewSessionDraftKey\.value\);/);
+  assert.match(panel, /emit\("selectAiSession", props\.instance\.id, result\.aiSessionId\);\s*emit\("sessionCreated", props\.instance\.id, result\.aiSessionId\);\s*clearAiSessionDraft\(activeNewSessionDraftKey\.value\);\s*newSessionDraft\.value = "";\s*newSessionMentionBindings\.value = \[\];\s*newSessionAttachments\.value = \[\];/);
+  assert.doesNotMatch(panel, /clearAiSessionAttachmentDraft/);
+});
+
+test("existing-session attachment drafts follow the selected session independently from creation drafts", () => {
+  assert.match(panel, /const messageAttachments = useAiSessionAttachmentDraft\(\s*computed\(\(\) => selectedSession\.value\?\.id \|\| ""\)/);
+  assert.match(panel, /persistWhen: \(\) => !queueComposerEdit\.value/);
+  assert.match(panel, /v-model="messageDraft"[\s\S]*v-model:attachments="messageAttachments"/);
+  assert.doesNotMatch(panel, /v-model="newSessionDraft"[\s\S]{0,200}v-model:attachments="messageAttachments"/);
 });
 
 test("new-session folder picker keeps actions visible while long folder lists scroll", () => {

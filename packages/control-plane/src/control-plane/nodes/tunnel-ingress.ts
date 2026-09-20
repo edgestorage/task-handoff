@@ -8,11 +8,17 @@ export type NodeAgentTunnelSocket = {
   readyState: number;
 };
 
+type NodeTunnelIngressOptions = {
+  onIdentified?: (nodeId: string) => void | Promise<void>;
+};
+
 export class NodeTunnelIngress {
   private readonly transport: ControlPlaneNodeAgentTunnelTransport;
+  private readonly onIdentified?: (nodeId: string) => void | Promise<void>;
 
-  constructor(transport: ControlPlaneNodeAgentTunnelTransport) {
+  constructor(transport: ControlPlaneNodeAgentTunnelTransport, options: NodeTunnelIngressOptions = {}) {
     this.transport = transport;
+    this.onIdentified = options.onIdentified;
   }
 
   attachMain(nodeId: string, socket: NodeAgentTunnelSocket) {
@@ -55,7 +61,13 @@ export class NodeTunnelIngress {
     }
     if (record.type === "node-agent.identify") {
       socket.send(JSON.stringify({ type: "control-plane.identified", nodeId, serverTime: new Date().toISOString() }));
-      this.transport.markHealthy(nodeId, socket);
+      if (this.transport.markHealthy(nodeId, socket) && this.onIdentified) {
+        try {
+          void Promise.resolve(this.onIdentified(nodeId)).catch(() => undefined);
+        } catch {
+          // Identification remains healthy when post-handshake refresh work fails.
+        }
+      }
       return;
     }
     socket.send(JSON.stringify({ type: "control-plane.error", code: "UNSUPPORTED_MESSAGE" }));

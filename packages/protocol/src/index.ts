@@ -3,6 +3,7 @@ export const protocolPackage = "@task-handoff/protocol";
 export * from "./ai-sessions.ts";
 export * from "./ai-session-hierarchy.ts";
 export * from "./ai-session-provider-capabilities.ts";
+export * from "./story-agent-tools.ts";
 export * from "./app-sessions.ts";
 export * from "./browser-tunnel.ts";
 export * from "./control-plane-access.ts";

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  StoryActionRunResultSchema,
   StoryCreateInputSchema,
   StoryAutomationInputSchema,
   StoryAutomationListSchema,
@@ -24,6 +25,13 @@ import {
   type StoryUpdateInput,
 } from "@task-handoff/protocol/stories";
 import type { ControlPlaneClientTransport } from "./transport.ts";
+import {
+  StoryAgentToolPolicySettingsSchema,
+  StoryAgentToolPolicyUpdateInputSchema,
+  sanitizeStoryAgentToolPolicySettings,
+  type StoryAgentToolPolicy,
+  StoryAgentActionRunInputSchema,
+} from "@task-handoff/protocol/story-agent-tools";
 
 const DataSchema = <T extends z.ZodType>(schema: T) => z.object({ data: schema }).passthrough();
 export function createControlPlaneStoriesApi(transport: ControlPlaneClientTransport) {
@@ -38,6 +46,19 @@ export function createControlPlaneStoriesApi(transport: ControlPlaneClientTransp
     create(nodeId: string, input: StoryCreateInput) { return requestData("/api/stories", StorySchema, json("POST", { nodeId, input: StoryCreateInputSchema.parse(input) })); },
     update(storyId: string, nodeId: string, input: StoryUpdateInput) { return requestData(`/api/stories/${encodeURIComponent(storyId)}`, StorySchema, json("PATCH", { nodeId, input: StoryUpdateInputSchema.parse(input) })); },
     retentionSettings(storyId: string, nodeId: string) { return requestData(`/api/stories/${encodeURIComponent(storyId)}/settings?nodeId=${encodeURIComponent(nodeId)}`, StorySessionRetentionSettingsSchema); },
+    async agentToolSettings(storyId: string, nodeId: string) {
+      const data = await requestData(`/api/stories/${encodeURIComponent(storyId)}/settings/agent-tools?nodeId=${encodeURIComponent(nodeId)}`, z.unknown());
+      return StoryAgentToolPolicySettingsSchema.parse(sanitizeStoryAgentToolPolicySettings(data));
+    },
+    async updateAgentToolSettings(storyId: string, nodeId: string, policy: StoryAgentToolPolicy) {
+      const input = StoryAgentToolPolicyUpdateInputSchema.parse({ policy });
+      const data = await requestData(`/api/stories/${encodeURIComponent(storyId)}/settings/agent-tools`, z.unknown(), json("PUT", { nodeId, input }));
+      return StoryAgentToolPolicySettingsSchema.parse(sanitizeStoryAgentToolPolicySettings(data));
+    },
+    runAction(storyId: string, actionId: string, nodeId: string, clientRequestId: string) {
+      const input = StoryAgentActionRunInputSchema.omit({ actionId: true }).parse({ clientRequestId });
+      return requestData(`/api/stories/${encodeURIComponent(storyId)}/actions/${encodeURIComponent(actionId)}/run`, StoryActionRunResultSchema, json("POST", { nodeId, input }));
+    },
     archive(storyId: string, nodeId: string) { return requestData(`/api/stories/${encodeURIComponent(storyId)}/archive`, StorySchema, json("POST", { nodeId })); },
     restore(storyId: string, nodeId: string) { return requestData(`/api/stories/${encodeURIComponent(storyId)}/restore`, StorySchema, json("POST", { nodeId })); },
     remove(storyId: string, nodeId: string) { return requestData(`/api/stories/${encodeURIComponent(storyId)}?nodeId=${encodeURIComponent(nodeId)}`, z.object({ deleted: z.boolean() }).strict(), json("DELETE")); },

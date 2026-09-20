@@ -11,6 +11,7 @@ import type {
   AiSessionReference,
 } from "@task-handoff/protocol/ai-sessions";
 import type { Story } from "@task-handoff/protocol/stories";
+import type { StoryAgentToolName } from "@task-handoff/protocol/story-agent-tools";
 import { AiSessionCreateResultSchema } from "@task-handoff/protocol/ai-sessions";
 import { normalizeAiSessionReasoningEffortCapabilities } from "@task-handoff/protocol/ai-session-provider-capabilities";
 import { aiSessionControlError, type AiSessionController } from "./ai-session-control";
@@ -44,6 +45,7 @@ export type AiSessionCreateCoordinatorOptions = {
   operationStorePath?: string;
   onDiagnostic?: (diagnostic: Record<string, unknown>) => void;
   onTiming?: (timing: { clientRequestId: string; agent: string; stage: string; durationMs: number; outcome: "completed" | "failed" }) => void;
+  resolveStoryAgentTools?: (storyId?: Story["id"]) => Promise<StoryAgentToolName[]>;
 };
 
 export class AiSessionCreateCoordinator {
@@ -91,7 +93,16 @@ export class AiSessionCreateCoordinator {
       throw aiSessionControlError("AI_SESSION_CREATE_UNSUPPORTED", `${input.agent} does not support direct AI session creation.`, 400);
     }
     const modelSelection = this.options.resolveModelSelection?.(input.agent, input.modelSelection) || input.modelSelection;
-    const created = await this.measure(input, "provider-create", () => provider.createSession!({ cwd: input.cwd, permissionMode: input.permissionMode, modelSelection, reasoningEffort: input.reasoningEffort }));
+    const storyAgentTools = await this.measure(input, "story-agent-tools", async () => (
+      this.options.resolveStoryAgentTools?.(input.storyId) || []
+    ));
+    const created = await this.measure(input, "provider-create", () => provider.createSession!({
+      cwd: input.cwd,
+      permissionMode: input.permissionMode,
+      modelSelection,
+      reasoningEffort: input.reasoningEffort,
+      storyAgentTools,
+    }));
     const providerSessionId = created.providerSessionId.trim();
     if (!providerSessionId || created.creationSource !== "ai-session") {
       throw aiSessionControlError("AI_SESSION_CREATE_INVALID_RESPONSE", "Provider returned an invalid Direct AI session identity.", 502);

@@ -124,13 +124,25 @@ for name in server control-plane node-agent controlled-instance; do
 done
 test -f "release/runtime-artifacts/controlled-instance-runtime-$VERSION-linux-universal.tar.gz"
 test -f "release/npm/node-agent/runtime-artifacts/controlled-instance-runtime-$VERSION-linux-universal.tar.gz"
-node -e '
-  const fs = require("node:fs");
-  for (const name of ["server", "control-plane", "node-agent", "controlled-instance"]) {
-    const current = JSON.parse(fs.readFileSync(`release/npm/${name}/package.json`, "utf8"));
-    if (current.version !== process.argv[1]) throw new Error(`${name}: ${current.version}`);
-  }
-' "$VERSION"
+if [ "$REUSE_ARTIFACTS" = 1 ]; then
+  for name in server control-plane node-agent controlled-instance; do
+    tar -xOf "$ARTIFACT_DIR/task-handoff-$name-$VERSION.tgz" package/package.json | node -e '
+      let input = "";
+      process.stdin.on("data", (chunk) => input += chunk).on("end", () => {
+        const manifest = JSON.parse(input);
+        if (manifest.version !== process.argv[1]) throw new Error(`${manifest.name}: ${manifest.version}`);
+      });
+    ' "$VERSION"
+  done
+else
+  node -e '
+    const fs = require("node:fs");
+    for (const name of ["server", "control-plane", "node-agent", "controlled-instance"]) {
+      const current = JSON.parse(fs.readFileSync(`release/npm/${name}/package.json`, "utf8"));
+      if (current.version !== process.argv[1]) throw new Error(`${name}: ${current.version}`);
+    }
+  ' "$VERSION"
+fi
 
 shasum -a 256 \
   "$ARTIFACT_DIR/task-handoff-server-$VERSION.tgz" \

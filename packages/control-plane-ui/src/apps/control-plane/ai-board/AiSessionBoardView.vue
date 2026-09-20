@@ -288,6 +288,7 @@ import { useAiSessionTimelineViewMode } from "../useAiSessionTimelineViewMode";
 import { useAiSessionConversationProjection } from "../useAiSessionConversationProjection";
 import { useAiSessionMessageDeltaDemand, useAiSessionTimelineDemand } from "../useAiSessionEventDemand";
 import { aiSessionMessageText, clearAiSessionDraft, loadAiSessionDraftPayload, persistAiSessionDraftPayload } from "../useAiSessionDraft";
+import { useAiSessionAttachmentDraft } from "../useAiSessionAttachmentDraft";
 import {
   aiSessionAppTab,
   aiSessionAppNavigationTarget,
@@ -349,7 +350,6 @@ const gridSortByStatus = ref(loadGridSortByStatus());
 const selectedCardKey = ref("");
 const detailCollapsed = ref(false);
 const messageDraft = ref("");
-const messageAttachments = ref<AiSessionComposerAttachment[]>([]);
 const messageMentionBindings = ref<AiSessionMentionBinding[]>([]);
 const floatingDockEl = ref<InstanceType<typeof AiSessionFloatingDock>>();
 const queueComposerEdit = ref<{
@@ -460,6 +460,10 @@ const visibleCards = computed(() => {
 
 const totalBoundSessions = computed(() => allCards.value.length);
 const selectedCard = computed(() => allCards.value.find((card) => card.key === selectedCardKey.value));
+const messageAttachments = useAiSessionAttachmentDraft(
+  computed(() => selectedCard.value?.session.id || ""),
+  { persistWhen: () => !queueComposerEdit.value },
+);
 useAiSessionMessageDeltaDemand(computed(() => ({ instanceIds: props.instances.map((instance) => instance.id) })));
 useAiSessionTimelineDemand(computed(() => selectedCard.value ? {
   instanceId: selectedCard.value.instance.id,

@@ -5,6 +5,7 @@ import type { AiSessionForkInput, AiSessionForkResult, AiSessionStatus } from "@
 import { AiSessionForkInputSchema, AiSessionForkResultSchema } from "@task-handoff/protocol/ai-sessions";
 import { aiSessionControlError, type AiSessionController } from "./ai-session-control";
 import type { AiSessionRegistry } from "./ai-session-registry";
+import type { StoryAgentToolName } from "@task-handoff/protocol/story-agent-tools";
 
 type ForkStage = "validated" | "workspace-prepared" | "provider-created" | "materialized" | "completed";
 
@@ -33,6 +34,7 @@ export type AiSessionForkCoordinatorOptions = {
   materializationTimeoutMs?: number;
   operationStorePath?: string;
   onDiagnostic?: (diagnostic: Record<string, unknown>) => void;
+  resolveStoryAgentTools?: (source: AiSessionStatus) => Promise<StoryAgentToolName[]>;
 };
 
 export class AiSessionForkCoordinator {
@@ -109,9 +111,11 @@ export class AiSessionForkCoordinator {
       }
 
       if (!operation.providerSessionId) {
+        const storyAgentTools = await this.options.resolveStoryAgentTools?.(source) || [];
         const created = await this.options.controller.forkSession(source.id, {
           throughTurnId: operation.input.throughTurnId,
           ...(operation.input.workspace.mode === "managed-worktree" ? { cwd: operation.cwd } : {}),
+          storyAgentTools,
         });
         operation.providerSessionId = created.providerSessionId;
         operation.stage = "provider-created";

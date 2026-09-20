@@ -31,7 +31,12 @@ test("Story deletion recovery restores staged content when database deletion did
     const timestamp = "2026-09-05T00:00:00.000Z";
     await fixture.repository.deletionIntents.put({ storyId: story.id, phase: "files-staged", trashName, createdAt: timestamp, updatedAt: timestamp });
     const automations = new StoryAutomationStore(fixture.repository);
-    const state = { paths: fixture.paths, listInstances: () => [] };
+    const state = {
+      paths: fixture.paths,
+      node: { id: "node_1" },
+      listInstances: () => [],
+      requireInstance: () => ({ id: "instance_1", nodeId: "node_1" }),
+    };
     const commands = new StoryCommandService(state as any, stories, automations, schedulerStub() as any, fixture.repository);
 
     await commands.init();
@@ -52,7 +57,12 @@ test("creating an Automation with a new Action rolls the transaction back when A
     const story = await stories.create({ title: "Release", actions: [] });
     const automations = new StoryAutomationStore(fixture.repository);
     automations.create = async () => { throw Object.assign(new Error("Invalid target."), { code: "STORY_AUTOMATION_TARGET_INVALID" }); };
-    const state = { paths: fixture.paths, listInstances: () => [] };
+    const state = {
+      paths: fixture.paths,
+      node: { id: "node_1" },
+      listInstances: () => [],
+      requireInstance: () => ({ id: "instance_1", nodeId: "node_1" }),
+    };
     const commands = new StoryCommandService(state as any, stories, automations, schedulerStub() as any, fixture.repository);
 
     await assert.rejects(() => commands.createAutomationWithAction(story.id, {
@@ -61,6 +71,34 @@ test("creating an Automation with a new Action rolls the transaction back when A
     }), /Invalid target/);
     assert.deepEqual((await stories.require(story.id)).id, story.id);
     assert.deepEqual((await stories.get(story.id))?.actions, []);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("current Story Action writes reject missing and cross-node targets", async () => {
+  const fixture = await createStoryDatabaseFixture("task-handoff-story-action-target-");
+  try {
+    const stories = new NodeStoryStore(fixture.paths, "node_1", fixture.repository);
+    await stories.init();
+    const automations = new StoryAutomationStore(fixture.repository);
+    const state = {
+      paths: fixture.paths,
+      node: { id: "node_1" },
+      listInstances: () => [],
+      requireInstance: () => ({ id: "instance_other", nodeId: "node_2" }),
+    };
+    const commands = new StoryCommandService(state as any, stories, automations, schedulerStub() as any, fixture.repository);
+
+    await assert.rejects(
+      () => commands.create({ title: "Missing target", actions: [{ title: "Run", promptTemplate: "Run" }] } as any),
+      (error: any) => error.name === "ZodError",
+    );
+    await assert.rejects(
+      () => commands.create({ title: "Cross node", actions: [{ title: "Run", promptTemplate: "Run", targetInstanceId: "instance_other" }] }),
+      (error: any) => error.code === "STORY_NODE_MISMATCH",
+    );
+    assert.deepEqual(await stories.list(), []);
   } finally {
     await fixture.close();
   }

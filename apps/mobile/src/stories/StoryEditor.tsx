@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import {
   STORY_DEFAULT_MAX_IDLE_AI_SESSIONS,
   STORY_MAX_IDLE_AI_SESSIONS,
   STORY_MIN_IDLE_AI_SESSIONS,
   type Story,
 } from '@task-handoff/protocol/stories';
+import { DEFAULT_STORY_AGENT_TOOL_POLICY, type StoryAgentToolPolicy } from '@task-handoff/protocol/story-agent-tools';
+import { nodeAgentCapabilitiesFromPublicNode, nodeStoryAgentToolCapabilities } from '@task-handoff/protocol/node-agent-capabilities';
 
 import { NewSessionContextMenu } from '../ai-sessions/NewSessionContextMenu';
 import { ContextPill } from '../components/ContextPill';
@@ -36,6 +38,9 @@ export function StoryEditor({ storyId, nodeId, onSaved }: { storyId?: string; no
   const [maxIdleAiSessions, setMaxIdleAiSessions] = useState(String(STORY_DEFAULT_MAX_IDLE_AI_SESSIONS));
   const [ownerNodeId, setOwnerNodeId] = useState(() => resolveStoryOwnerNodeId(nodeId || '', nodes));
   const [story, setStory] = useState<Story>();
+  const [agentToolPolicy, setAgentToolPolicy] = useState<StoryAgentToolPolicy>({ ...DEFAULT_STORY_AGENT_TOOL_POLICY });
+  const [savedAgentToolPolicy, setSavedAgentToolPolicy] = useState<StoryAgentToolPolicy>({ ...DEFAULT_STORY_AGENT_TOOL_POLICY });
+  const [agentToolState, setAgentToolState] = useState<'hidden' | 'loading' | 'ready' | 'unsupported' | 'unavailable'>(storyId ? 'loading' : 'hidden');
   const [busy, setBusy] = useState(Boolean(storyId));
   const [error, setError] = useState<string>();
   const selectedOwnerNodeId = resolveStoryOwnerNodeId(ownerNodeId, nodes);
@@ -43,23 +48,58 @@ export function StoryEditor({ storyId, nodeId, onSaved }: { storyId?: string; no
 
   useEffect(() => {
     if (!storyId || !nodeId || !runtime.api) return;
+    const api = runtime.api;
     let cancelled = false;
+    const ownerNode = directory.nodes.find((node) => node.id === nodeId);
+    const nodeAvailable = Boolean(ownerNode && ownerNode.connectionPhase !== 'offline');
+    const ownerNodeRequest = nodeAvailable
+      ? api.resources.node(nodeId).then((value) => ({ ok: true as const, value }), () => ({ ok: false as const }))
+      : Promise.resolve({ ok: false as const });
+    setAgentToolState(nodeAvailable ? 'loading' : 'unavailable');
     void Promise.all([
-      runtime.api.stories.get(storyId, nodeId),
-      runtime.api.stories.retentionSettings(storyId, nodeId),
-    ]).then(([value, settings]) => {
+      api.stories.get(storyId, nodeId),
+      api.stories.retentionSettings(storyId, nodeId),
+      ownerNodeRequest,
+    ]).then(async ([value, settings, ownerNodeResult]) => {
       if (cancelled) return;
       setStory(value);
       setTitle(value.title);
       setDescription(value.description || '');
       setMaxIdleAiSessions(String(settings.maxIdleAiSessions));
+      if (!ownerNodeResult.ok) {
+        setAgentToolState('unavailable');
+        return;
+      }
+      const toolsSupported = nodeStoryAgentToolCapabilities(
+        nodeAgentCapabilitiesFromPublicNode(ownerNodeResult.value.capabilities),
+      ).policy;
+      if (!toolsSupported) {
+        setAgentToolState('unsupported');
+        return;
+      }
+      const toolSettings = await api.stories.agentToolSettings(storyId, nodeId).catch(() => undefined);
+      if (cancelled) return;
+      if (toolSettings) {
+        setAgentToolPolicy({ ...toolSettings.policy });
+        setSavedAgentToolPolicy({ ...toolSettings.policy });
+        setAgentToolState('ready');
+      } else {
+        setAgentToolState('unavailable');
+      }
     }).catch((cause) => {
-      if (!cancelled) setError(cause instanceof Error ? cause.message : String(cause));
+      if (!cancelled) {
+        setError(cause instanceof Error ? cause.message : String(cause));
+        setAgentToolState('unavailable');
+      }
     }).finally(() => {
       if (!cancelled) setBusy(false);
     });
     return () => { cancelled = true; };
-  }, [nodeId, runtime.api, storyId]);
+  }, [directory.nodes, nodeId, runtime.api, storyId]);
+
+  const setAgentTool = (category: keyof StoryAgentToolPolicy, value: boolean) => {
+    setAgentToolPolicy((current) => ({ ...current, [category]: value }));
+  };
 
   const save = async () => {
     if (!runtime.api || !title.trim() || !selectedOwnerNodeId || parsedMaxIdleAiSessions === undefined) return;
@@ -77,6 +117,11 @@ export function StoryEditor({ storyId, nodeId, onSaved }: { storyId?: string; no
           description: description.trim() || undefined,
           maxIdleAiSessions: parsedMaxIdleAiSessions,
         });
+      if (story && agentToolState === 'ready' && JSON.stringify(agentToolPolicy) !== JSON.stringify(savedAgentToolPolicy)) {
+        const settings = await runtime.api.stories.updateAgentToolSettings(story.id, story.ownerNodeId, agentToolPolicy);
+        setAgentToolPolicy({ ...settings.policy });
+        setSavedAgentToolPolicy({ ...settings.policy });
+      }
       onSaved(saved);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -114,6 +159,18 @@ export function StoryEditor({ storyId, nodeId, onSaved }: { storyId?: string; no
         style={[styles.input, { backgroundColor: colors.surface, borderColor: parsedMaxIdleAiSessions === undefined ? colors.error : colors.border, color: colors.text }]}
       />
     </View>
+    {storyId ? <View style={[styles.toolSettings, { borderColor: colors.border, backgroundColor: colors.surface }]}>
+      <Text style={[styles.sectionTitle, { color: colors.text }]}>{t('stories.agentTools')}</Text>
+      {agentToolState === 'loading' ? <Text style={[styles.stateText, { color: colors.textMuted }]}>{t('stories.agentToolsLoading')}</Text> : null}
+      {agentToolState === 'unsupported' ? <Text style={[styles.stateText, { color: colors.textMuted }]}>{t('stories.agentToolsUnsupported')}</Text> : null}
+      {agentToolState === 'unavailable' ? <Text style={[styles.stateText, { color: colors.error }]}>{t('stories.agentToolsUnavailable')}</Text> : null}
+      {agentToolState === 'ready' ? <>
+        <ToolSwitch label={t('stories.agentToolContent')} value={agentToolPolicy.content} disabled={busy} onChange={(value) => setAgentTool('content', value)} colors={colors} />
+        <ToolSwitch label={t('stories.agentToolActions')} value={agentToolPolicy.actions} disabled={busy} onChange={(value) => setAgentTool('actions', value)} colors={colors} />
+        <ToolSwitch label={t('stories.agentToolAutomations')} value={agentToolPolicy.automations} disabled={busy} onChange={(value) => setAgentTool('automations', value)} colors={colors} />
+        <ToolSwitch label={t('stories.agentToolAiSessions')} value={agentToolPolicy.aiSessions} disabled={busy} onChange={(value) => setAgentTool('aiSessions', value)} colors={colors} />
+      </> : null}
+    </View> : null}
     {error ? <Text style={[styles.error, { color: colors.error }]}>{error}</Text> : null}
     <Pressable disabled={saveDisabled} onPress={() => { void save(); }} style={[styles.primary, { backgroundColor: colors.primary }, saveDisabled && styles.disabled]}>
       <Text style={styles.primaryText}>{t('common.save')}</Text>
@@ -121,11 +178,29 @@ export function StoryEditor({ storyId, nodeId, onSaved }: { storyId?: string; no
   </ScrollView>;
 }
 
+function ToolSwitch({ label, value, disabled, onChange, colors }: {
+  label: string;
+  value: boolean;
+  disabled: boolean;
+  onChange(value: boolean): void;
+  colors: ReturnType<typeof useMobileTheme>['colors'];
+}) {
+  return <View style={[styles.switchRow, { borderTopColor: colors.border }]}>
+    <Text style={[styles.switchLabel, { color: colors.text }]}>{label}</Text>
+    <Switch accessibilityLabel={label} disabled={disabled} onValueChange={onChange} trackColor={{ false: colors.border, true: colors.primary }} value={value} />
+  </View>;
+}
+
 const styles = StyleSheet.create({
   loading: { flex: 1 },
   content: { gap: 18, padding: 16 },
   field: { gap: 7 },
   label: { fontSize: 14, fontWeight: '500' },
+  toolSettings: { borderRadius: 8, borderWidth: StyleSheet.hairlineWidth, paddingHorizontal: 12 },
+  sectionTitle: { fontSize: 14, fontWeight: '500', paddingVertical: 12 },
+  stateText: { fontSize: 13, lineHeight: 19, paddingBottom: 12 },
+  switchRow: { alignItems: 'center', borderTopWidth: StyleSheet.hairlineWidth, flexDirection: 'row', justifyContent: 'space-between', minHeight: 48 },
+  switchLabel: { flex: 1, fontSize: 14, fontWeight: '400', paddingRight: 12 },
   input: { borderRadius: 10, borderWidth: StyleSheet.hairlineWidth, fontSize: 15, minHeight: 44, paddingHorizontal: 12 },
   textarea: { minHeight: 110, paddingTop: 11, textAlignVertical: 'top' },
   error: { fontSize: 14 },

@@ -76,7 +76,7 @@ module.exports = () => {
       variant: variantName,
       taskStatusWidgetsEnabled,
       carPlayEnabled,
-      cloudRelayEnabled: process.env.TASK_HANDOFF_CLOUD_RELAY_ENABLED !== '0',
+      cloudRelayEnabled: process.env.TASK_HANDOFF_CLOUD_RELAY_ENABLED === '1',
       ...(variantName === 'staging' ? { cloudServiceOrigin: new URL(requiredEnv('TASK_HANDOFF_CLOUD_STAGING_ORIGIN')).origin } : {}),
     },
   };

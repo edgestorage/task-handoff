@@ -1,7 +1,7 @@
 import { OfficialMobileAccountClient as CloudMobileAccountClient, type MobileTokenResponse } from '@task-handoff/cloud-contracts/mobile';
 import * as Crypto from 'expo-crypto';
 import type { SecureValueStore } from '../platform/secure-storage';
-import { isMobileCloudRelayEnabled, isMobileStagingMode, isMobileTestMode, mobileStagingCloudOrigin } from '../platform/build-variant';
+import { isMobileStagingMode, isMobileTestMode, mobileStagingCloudOrigin } from '../platform/build-variant';
 
 export const CLOUD_PRODUCTION_ORIGIN = 'https://cloud.thandoff.com';
 type TokenSet = Omit<MobileTokenResponse, 'tokenType'>;
@@ -18,7 +18,6 @@ export class MobileCloudAccountSession {
   private restoration?: Promise<unknown>;
 
   constructor(private readonly secureStore: SecureValueStore, options: { origin?: string; request?: typeof fetch; allowNonProductionOrigin?: boolean; reference?: { id: string; secureCredentialKey: string } } = {}) {
-    if (!isMobileCloudRelayEnabled) throw cloudError('CLOUD_RELAY_FEATURE_DISABLED');
     this.origin = new URL(options.origin ?? CLOUD_PRODUCTION_ORIGIN).origin;
     const trustedDevelopment = isMobileTestMode && options.allowNonProductionOrigin === true;
     const trustedStaging = isMobileStagingMode && Boolean(mobileStagingCloudOrigin) && this.origin === mobileStagingCloudOrigin;

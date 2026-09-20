@@ -539,7 +539,8 @@ import { useQueries, useQueryClient } from "@tanstack/vue-query";
 import { useEventListener } from "@vueuse/core";
 import { BookOpen, Bot, Boxes, Check, ChevronDown, Container, Download, House, Laptop, LayoutGrid, LoaderCircle, LogOut, Maximize2, Minus, RefreshCw, Settings, UserRound, X } from "@lucide/vue";
 import "@xterm/xterm/css/xterm.css";
-import { controlPlaneQueryKeys, createAiSession, fetchInstanceBoardPayload, getInstanceAppManagement, getInstanceResourceMetrics, installInstanceApp, instanceBoardQueryOptions, logoutControlPlane, nodeLocalFoldersQueryOptions, renameAppSession, resolveAiSessionApproval, saveEnvironmentTemplate, uninstallInstanceApp, updateControlledInstance, useAuthSessionQuery, useControlPlaneAiSessionsQuery, useControlPlaneAppSessionsQuery, useControlPlaneStatusQuery, useCurrentAccessQuery, useInstanceBoardQuery, useInstanceDirectoryQuery, useModelsQuery, useNodesQuery, useServerUpdateCheckQuery } from "../../api/queries";
+import { controlPlaneQueryKeys, fetchInstanceBoardPayload, getInstanceAppManagement, getInstanceResourceMetrics, installInstanceApp, instanceBoardQueryOptions, logoutControlPlane, nodeLocalFoldersQueryOptions, renameAppSession, resolveAiSessionApproval, saveEnvironmentTemplate, uninstallInstanceApp, updateControlledInstance, useAuthSessionQuery, useControlPlaneAiSessionsQuery, useControlPlaneAppSessionsQuery, useControlPlaneStatusQuery, useCurrentAccessQuery, useInstanceBoardQuery, useInstanceDirectoryQuery, useModelsQuery, useNodesQuery, useServerUpdateCheckQuery } from "../../api/queries";
+import { sharedControlPlaneClient } from "../../api/sharedClient";
 import { authorizationCacheEpoch as currentAccessEpoch, authorizationCacheEpochChanged as authorizationEpochChanged, preserveAcrossAuthorizationChange, signedOutAuthSession } from "../../api/authorizationCache";
 import type { ControlPlaneInstanceResourceEntry } from "@task-handoff/control-plane-client";
 import type { ConfigSyncDirection } from "@task-handoff/protocol/config-sync";
@@ -1698,30 +1699,12 @@ const storyActionErrorToast = "error" as const;
 const storyActionSuccessToast = "success" as const;
 
 async function runStoryAction(story: Story, action: StoryAction, onCreated: (instanceId: string, sessionId: string) => void) {
-  const target = action.targetInstanceId
-    ? boardInstancesWithAiSessions.value.find((instance) => instance.id === action.targetInstanceId)
-    : boardInstancesWithAiSessions.value.find((instance) => instance.node?.id === story.ownerNodeId);
-  if (!target) { showToast(t("stories.run.noTarget"), storyActionErrorToast); return; }
+  if (!action.targetInstanceId) { showToast(t("stories.run.noTarget"), storyActionErrorToast); return; }
   if (!window.confirm(t("stories.run.confirm", { name: action.title }))) return;
-  const prompt = action.promptTemplate;
   const loadingToast = showDelayedControlPlaneLoadingToast(t("stories.run.creating"));
   try {
-    const preset = action.sessionPreset;
-    const result = await createAiSession(target.id, {
-      agent: preset?.agent || "codex",
-      clientRequestId: `story-action-${crypto.randomUUID()}`,
-      message: prompt,
-      permissionMode: preset?.permissionMode ?? "ask",
-      ...(preset?.mode ? { mode: preset.mode } : {}),
-      ...(preset?.cwdFolderId ? { cwdFolderId: preset.cwdFolderId } : {}),
-      ...(preset?.gitSelection ? { gitSelection: preset.gitSelection } : {}),
-      ...(preset?.modelSelection ? { modelSelection: preset.modelSelection } : {}),
-      ...(preset?.reasoningEffort ? { reasoningEffort: preset.reasoningEffort } : {}),
-      storyId: story.id,
-      attachments: [],
-      references: [],
-    });
-    onCreated(target.id, result.aiSessionId);
+    const result = await sharedControlPlaneClient.stories.runAction(story.id, action.id, story.ownerNodeId, `story-action-${crypto.randomUUID()}`);
+    onCreated(result.targetInstanceId, result.aiSessionId);
     showToast(t("stories.run.created"), storyActionSuccessToast);
   } catch (cause) { showToast(cause instanceof Error ? cause.message : String(cause), storyActionErrorToast); }
   finally { loadingToast.dismiss(); }

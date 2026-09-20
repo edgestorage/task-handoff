@@ -712,7 +712,7 @@
             <AiSessionComposer
               ref="newSessionComposerEl"
               v-model="newSessionDraft"
-              v-model:attachments="messageAttachments"
+              v-model:attachments="newSessionAttachments"
               v-model:mention-bindings="newSessionMentionBindings"
               class="session-ai-compose session-ai-new-composer"
               :class="{ 'is-loading': creationComposerBusy }"
@@ -1329,7 +1329,7 @@ import { normalizeAiSessionGroupPath } from "./aiSessionPathGrouping";
 import { loadCollapsedAiSessionPathGroups, persistCollapsedAiSessionPathGroups } from "./aiSessionPathGroupCollapse";
 import { loadAiSessionCreationPreferences, persistAiSessionCreationPreferences } from "./aiSessionCreationPreferences";
 import { aiSessionCreationDraftKey, aiSessionMessageText, aiSessionStoryCreationDraftKey, clearAiSessionDraft, loadAiSessionDraftPayload, persistAiSessionDraftPayload } from "../useAiSessionDraft";
-import { clearAiSessionAttachmentDraft, loadAiSessionAttachmentDraft, persistAiSessionAttachmentDraft } from "../useAiSessionAttachmentDraft";
+import { useAiSessionAttachmentDraft } from "../useAiSessionAttachmentDraft";
 import {
   aiSessionPermissionKey,
   clearAiSessionPermissionMode,
@@ -1857,6 +1857,7 @@ const newSessionDraftKey = computed(() => props.creationOnly && props.creationSt
   ? aiSessionStoryCreationDraftKey(props.creationStoryId)
   : aiSessionCreationDraftKey(props.instance.id));
 const activeNewSessionDraftKey = ref(newSessionDraftKey.value);
+const newSessionAttachmentDraftKey = computed(() => props.creationMode === "preset" ? "" : activeNewSessionDraftKey.value);
 const initialNewSessionDraft = props.creationMode === "preset"
   ? { value: props.creationInitialPrompt || "", bindings: [] }
   : loadAiSessionDraftPayload(activeNewSessionDraftKey.value);
@@ -2101,9 +2102,6 @@ const collapsedHistoryPathGroups = reactive<Record<string, boolean>>(
   loadCollapsedAiSessionPathGroups(props.instance.id, "history"),
 );
 const messageDraft = ref("");
-const messageAttachments = ref<AiSessionComposerAttachment[]>([]);
-let newSessionAttachmentDraftRevision = 0;
-let restoringNewSessionAttachmentDraft = false;
 const messageMentionBindings = ref<AiSessionMentionBinding[]>([]);
 const queueComposerEdit = ref<{
   queueId: string;
@@ -2112,6 +2110,11 @@ const queueComposerEdit = ref<{
   previousAttachments: AiSessionComposerAttachment[];
   previousMentionBindings: AiSessionMentionBinding[];
 }>();
+const newSessionAttachments = useAiSessionAttachmentDraft(newSessionAttachmentDraftKey);
+const messageAttachments = useAiSessionAttachmentDraft(
+  computed(() => selectedSession.value?.id || ""),
+  { persistWhen: () => !queueComposerEdit.value },
+);
 const controlPlaneSettings = useControlPlaneSettingsQuery();
 const mentionTrigger = computed(() => controlPlaneSettings.data.value?.mentionTrigger || "@");
 const commandTrigger = computed(() => controlPlaneSettings.data.value?.commandTrigger || "/");
@@ -2420,33 +2423,12 @@ watch(newSessionDraftKey, (draftKey) => {
   const draft = loadAiSessionDraftPayload(activeNewSessionDraftKey.value);
   newSessionDraft.value = draft.value;
   newSessionMentionBindings.value = draft.bindings;
-  void restoreNewSessionAttachmentDraft(draftKey);
 });
 
 watch([newSessionDraft, newSessionMentionBindings], ([draft, bindings]) => {
   if (props.creationMode === "preset") return;
   persistAiSessionDraftPayload(activeNewSessionDraftKey.value, draft, bindings);
 }, { deep: true });
-
-watch(messageAttachments, (attachments) => {
-  if (props.creationMode === "preset" || restoringNewSessionAttachmentDraft) return;
-  newSessionAttachmentDraftRevision += 1;
-  void persistAiSessionAttachmentDraft(activeNewSessionDraftKey.value, attachments);
-}, { flush: "sync" });
-
-async function restoreNewSessionAttachmentDraft(draftKey: string) {
-  const revision = ++newSessionAttachmentDraftRevision;
-  restoringNewSessionAttachmentDraft = true;
-  messageAttachments.value = [];
-  restoringNewSessionAttachmentDraft = false;
-  const attachments = await loadAiSessionAttachmentDraft(draftKey);
-  if (revision !== newSessionAttachmentDraftRevision || draftKey !== activeNewSessionDraftKey.value) return;
-  restoringNewSessionAttachmentDraft = true;
-  messageAttachments.value = attachments;
-  restoringNewSessionAttachmentDraft = false;
-}
-
-if (props.creationMode !== "preset") void restoreNewSessionAttachmentDraft(activeNewSessionDraftKey.value);
 
 watch(
   [showNewSession, aiSessionLaunchableApps, newSessionFolders],
@@ -2925,7 +2907,6 @@ function beginNewSession(storyId?: string) {
   if (wasVisible) {
     return;
   }
-  messageAttachments.value = [];
   newSessionCreateAttempt.value = undefined;
   initializeNewSessionDefaults();
 }
@@ -3255,7 +3236,7 @@ async function createNewSession(permissionMode?: AiSessionPermissionMode) {
     cwdFolderId,
     gitSelection,
     message: aiSessionMessageText(message),
-    attachments: messageAttachments.value.map((attachment) => ({
+    attachments: newSessionAttachments.value.map((attachment) => ({
       id: attachment.id,
       kind: attachment.kind,
       name: attachment.name,
@@ -3276,7 +3257,7 @@ async function createNewSession(permissionMode?: AiSessionPermissionMode) {
   launchingNewSession.value = true;
   try {
     const attachments = attempt.uploadedAttachments
-      || await uploadAttachments(props.instance.id, attempt.clientRequestId, messageAttachments.value, "create-request");
+      || await uploadAttachments(props.instance.id, attempt.clientRequestId, newSessionAttachments.value, "create-request");
     attempt.uploadedAttachments = attachments;
     const result = await createAiSession(props.instance.id, {
       agent: newSessionApp.value,
@@ -3299,10 +3280,9 @@ async function createNewSession(permissionMode?: AiSessionPermissionMode) {
     emit("selectAiSession", props.instance.id, result.aiSessionId);
     emit("sessionCreated", props.instance.id, result.aiSessionId);
     clearAiSessionDraft(activeNewSessionDraftKey.value);
-    void clearAiSessionAttachmentDraft(activeNewSessionDraftKey.value);
     newSessionDraft.value = "";
     newSessionMentionBindings.value = [];
-    messageAttachments.value = [];
+    newSessionAttachments.value = [];
     newSessionCreateAttempt.value = undefined;
     newSessionOpen.value = false;
   } catch (error) {

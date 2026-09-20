@@ -269,6 +269,7 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
         permissions: codexPermissionOverrides(input.permissionMode),
         reasoningEffort: requestedReasoningEffort,
         ...(this.options.dynamicTools?.length ? { dynamicTools: this.options.dynamicTools } : {}),
+        storyAgentTools: input.storyAgentTools || [],
       });
       const providerSessionId = typeof thread.id === "string" ? thread.id.trim() : "";
       const cwd = typeof thread.cwd === "string" ? thread.cwd.trim() : "";
@@ -398,6 +399,7 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
         ...(input.cwd ? { cwd: input.cwd } : {}),
         ...requestedModel,
         reasoningEffort: requestedReasoningEffort,
+        storyAgentTools: input.storyAgentTools || [],
       });
       const providerSessionId = typeof thread.id === "string" ? thread.id.trim() : "";
       const cwd = typeof thread.cwd === "string" ? thread.cwd.trim() : "";
@@ -505,7 +507,7 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
     ));
   }
 
-  async resumeSession(providerSessionId: string, modelSelection?: AiSessionModelSelection, reasoningEffort?: AiSessionReasoningEffort) {
+  async resumeSession(providerSessionId: string, modelSelection?: AiSessionModelSelection, reasoningEffort?: AiSessionReasoningEffort, storyAgentTools: import("@task-handoff/protocol/story-agent-tools").StoryAgentToolName[] = []) {
     const client = await this.requireReadyClient();
     if (client.unarchiveThread) await client.unarchiveThread(providerSessionId);
     const requestedModel = modelSelection ? this.options.resolveModelSelection?.(modelSelection) : undefined;
@@ -513,7 +515,7 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
       throw aiSessionControlError("AI_SESSION_MODEL_SELECTION_UNAVAILABLE", "The Codex provider for this session is no longer available.", 409);
     }
     const thread = client.resumeThread
-      ? await client.resumeThread(providerSessionId, { ...requestedModel, reasoningEffort: reasoningEffort ?? AI_SESSION_DEFAULT_REASONING_EFFORT })
+      ? await client.resumeThread(providerSessionId, { ...requestedModel, reasoningEffort: reasoningEffort ?? AI_SESSION_DEFAULT_REASONING_EFFORT, storyAgentTools })
       : client.readThread ? await client.readThread(providerSessionId, { includeTurns: true }) : undefined;
     if (!thread) throw aiSessionControlError("AI_SESSION_RESUME_UNSUPPORTED", "Codex app-server could not resume the thread.", 409);
     this.recordTimelineHistorySource(thread);

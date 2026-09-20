@@ -5,17 +5,14 @@ import { MenuView, type MenuAction } from '@expo/ui/community/menu';
 import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, View, type LayoutChangeEvent, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
 import type { Story, StoryAction, StoryAutomationRun, StoryAutomationSchedule, StoryAutomationStatus } from '@task-handoff/protocol/stories';
 import { aiSessionStatusGroup } from '@task-handoff/control-plane-client';
-import { directoryAiSessionProviderCapability } from '@task-handoff/protocol/control-plane-directory';
 
 import { SessionStatusIndicator } from '../ai-sessions/SessionStatusIndicator';
 import { mobileAiSessionStatusLabel } from '../ai-sessions/SessionDetail';
 import { storyAiSessionCreationDefaults } from '../ai-sessions/new-session-types';
-import { createMobileAiSession, lifecycleGuidance } from '../ai-sessions/session-lifecycle';
 import { useActiveAiSessions, useActiveAiSessionsSnapshot } from '../ai-sessions/use-active-sessions';
 import { EmptyState } from '../components/EmptyState';
 import { SystemIcon } from '../components/SystemIcon';
 import { useMobileTheme } from '../components/theme';
-import { mobilePermissionStore } from '../control-plane/runtime';
 import { useMobileControlPlaneRuntime } from '../control-plane/use-mobile-control-plane-runtime';
 import { useActiveDirectories } from '../directories/use-directories';
 import { useI18n, type Translate } from '../i18n';
@@ -31,7 +28,7 @@ export function StoryDetail({ storyId, nodeId, onOpenSession }: { storyId?: stri
   const { t } = useI18n();
   const runtime = useMobileControlPlaneRuntime();
   const { actions: aiSessionActions, refresh: refreshAiSessions } = useActiveAiSessions();
-  const { controlPlaneId, state: directory } = useActiveDirectories();
+  const { state: directory } = useActiveDirectories();
   const sessions = useActiveAiSessionsSnapshot();
   const [story, setStory] = useState<Story>();
   const [automations, setAutomations] = useState<AutomationView[]>([]);
@@ -99,34 +96,14 @@ export function StoryDetail({ storyId, nodeId, onOpenSession }: { storyId?: stri
   const automationPath = (automationId: string) => ({ pathname: `/stories/${story!.id}/automations/${automationId}` as never, params: { storyId: story!.id, automationId, nodeId: story!.ownerNodeId } });
 
   const runAction = async (action: StoryAction) => {
-    if (!runtime.api || !controlPlaneId || !story || story.archivedAt || runningActionId) return;
-    const target = action.targetInstanceId
-      ? directory.instances.find((instance) => instance.id === action.targetInstanceId)
-      : directory.instances.find((instance) => instance.nodeId === story.ownerNodeId && instance.ready);
-    if (!target) { Alert.alert(t('stories.actionFailed'), t('stories.noAvailableInstance')); return; }
+    if (!runtime.api || !story || story.archivedAt || runningActionId) return;
+    if (!action.targetInstanceId) { Alert.alert(t('stories.actionFailed'), t('stories.noAvailableInstance')); return; }
     setRunningActionId(action.id);
     try {
-      const preset = action.sessionPreset;
-      const agent = preset?.agent ?? 'codex';
-      const permissionMode = preset?.permissionMode ?? 'ask';
-      const permissionModes = directoryAiSessionProviderCapability(target.capabilities, agent)?.permissionModes || [];
-      const result = await createMobileAiSession(runtime.api, {
-        instance: target,
-        agent,
-        clientRequestId: `story-action-${Crypto.randomUUID()}`,
-        message: action.promptTemplate,
-        permissionMode,
-        mode: preset?.mode,
-        cwdFolderId: preset?.cwdFolderId,
-        gitSelection: preset?.gitSelection,
-        modelSelection: preset?.modelSelection,
-        reasoningEffort: preset?.reasoningEffort,
-        storyId: story.id,
-      });
-      if (permissionModes.includes(permissionMode)) await mobilePermissionStore.write(controlPlaneId, target.id, result.aiSessionId, permissionMode).catch(() => undefined);
-      onOpenSession(target.id, result.aiSessionId);
+      const result = await runtime.api.stories.runAction(story.id, action.id, story.ownerNodeId, `story-action-${Crypto.randomUUID()}`);
+      onOpenSession(result.targetInstanceId, result.aiSessionId);
     } catch (cause) {
-      Alert.alert(t('stories.actionFailed'), lifecycleGuidance(cause).message);
+      Alert.alert(t('stories.actionFailed'), cause instanceof Error ? cause.message : String(cause));
     } finally {
       setRunningActionId(undefined);
     }

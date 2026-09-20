@@ -295,7 +295,9 @@ export class NodeStoryStore {
         fs.closeSync(opened.fd);
         const projected = await this.get(id);
         if (projected) this.onChange?.("content.written", projected);
-        return { storyPath, revision: opened.revision, size: bytes };
+        const document = await this.repository.documents.get(id, storyPath);
+        if (!document) throw storyError("STORY_CONTENT_NOT_INDEXED", "Story content is not indexed.", 500);
+        return { title: document.title, storyPath, revision: opened.revision, size: bytes };
       } catch (error) {
         if (!committed) await this.rollbackFileMutation(mutationId, target, temporary, backup, Boolean(existing));
         throw error;

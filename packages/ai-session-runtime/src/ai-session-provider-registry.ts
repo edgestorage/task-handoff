@@ -1,6 +1,7 @@
 import type { AiSessionProviderCapability } from "@task-handoff/protocol/control-plane";
 import type { AiSessionHistoryItem } from "@task-handoff/protocol/ai-sessions";
 import type { AiSessionControlProvider, AiSessionController } from "./ai-session-control";
+import type { StoryAgentToolName } from "@task-handoff/protocol/story-agent-tools";
 import type { AiSessionDiscoveryCoordinator, AiSessionDiscoveryProvider } from "./ai-session-discovery";
 
 export type AiSessionProviderDescriptor = {
@@ -8,7 +9,7 @@ export type AiSessionProviderDescriptor = {
   controlProvider: AiSessionControlProvider;
   discoveryProvider?: AiSessionDiscoveryProvider;
   ensureReady?: () => void | Promise<void>;
-  resume?: (item: AiSessionHistoryItem) => void | Promise<void>;
+  resume?: (item: AiSessionHistoryItem, storyAgentTools: StoryAgentToolName[]) => void | Promise<void>;
   capability: AiSessionProviderCapability | (() => AiSessionProviderCapability);
 };
 
@@ -57,14 +58,14 @@ export class AiSessionProviderRegistry {
     await this.require(agent).ensureReady?.();
   }
 
-  async resume(item: AiSessionHistoryItem) {
+  async resume(item: AiSessionHistoryItem, storyAgentTools: StoryAgentToolName[] = []) {
     const descriptor = this.require(item.agent);
     await descriptor.ensureReady?.();
     if (descriptor.resume) {
-      await descriptor.resume(item);
+      await descriptor.resume(item, storyAgentTools);
       return;
     }
-    await descriptor.controlProvider.resumeSession?.(item.providerSessionId, item.modelSelection, item.reasoningEffort);
+    await descriptor.controlProvider.resumeSession?.(item.providerSessionId, item.modelSelection, item.reasoningEffort, storyAgentTools);
   }
 
   capabilities() {

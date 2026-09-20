@@ -760,6 +760,13 @@ test("shared resource client validates declared fields and drops unknown respons
   const transport = {
     async request(path, schema, init) {
       requests.push({ path, init });
+      if (path === "/api/nodes/node%2F1") {
+        return schema.parse({ data: {
+          id: "node/1",
+          capabilities: { agent: { capabilities: { stories: { agentToolCapabilities: { policy: true } } } } },
+          ignored: true,
+        } });
+      }
       if (path.startsWith("/api/nodes")) {
         if (init?.method === "PATCH") return schema.parse({ data: { id: "node-1", name: "Renamed Node", ignored: true } });
         return schema.parse({ data: [{
@@ -808,6 +815,7 @@ test("shared resource client validates declared fields and drops unknown respons
   const api = createControlPlaneClient(transport);
 
   await api.resources.nodes();
+  const node = await api.resources.node("node/1");
   const instances = await api.resources.instanceBoard();
   const savedPermission = await api.resources.updateInstanceDefaultPermissionMode("instance/1", "auto-review");
   const renamedInstance = await api.resources.updateInstanceName("instance/1", "Renamed Instance");
@@ -815,6 +823,8 @@ test("shared resource client validates declared fields and drops unknown respons
   const restarted = await api.resources.instanceAction("instance/1", "restart");
 
   assert.equal(instances[0].config.defaultCodexPermissionMode, "full-access");
+  assert.equal(node.id, "node/1");
+  assert.equal(node.capabilities.agent.capabilities.stories.agentToolCapabilities.policy, true);
   assert.equal(instances[0].availableApps[0].id, "terminal-tty");
   assert.equal(savedPermission, "auto-review");
   assert.deepEqual(renamedInstance, { id: "instance-1", name: "Renamed Instance" });
@@ -823,17 +833,18 @@ test("shared resource client validates declared fields and drops unknown respons
 
   assert.deepEqual(requests.map((request) => request.path), [
     "/api/nodes?projection=directory",
+    "/api/nodes/node%2F1",
     "/api/instance-board?projection=directory",
     "/api/controlled-instances/instance%2F1",
     "/api/controlled-instances/instance%2F1",
     "/api/nodes/node-1",
     "/api/controlled-instances/instance%2F1/restart",
   ]);
-  assert.equal(requests[2].init.method, "PATCH");
-  assert.deepEqual(JSON.parse(requests[2].init.body), { config: { defaultCodexPermissionMode: "auto-review" } });
-  assert.deepEqual(JSON.parse(requests[3].init.body), { name: "Renamed Instance" });
-  assert.deepEqual(JSON.parse(requests[4].init.body), { name: "Renamed Node" });
-  assert.equal(requests[5].init.method, "POST");
+  assert.equal(requests[3].init.method, "PATCH");
+  assert.deepEqual(JSON.parse(requests[3].init.body), { config: { defaultCodexPermissionMode: "auto-review" } });
+  assert.deepEqual(JSON.parse(requests[4].init.body), { name: "Renamed Instance" });
+  assert.deepEqual(JSON.parse(requests[5].init.body), { name: "Renamed Node" });
+  assert.equal(requests[6].init.method, "POST");
 
   const compatibleApi = createControlPlaneClient({
     request(path, schema) {

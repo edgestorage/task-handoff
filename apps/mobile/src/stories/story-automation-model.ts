@@ -94,5 +94,6 @@ export function storyAutomationUpdateInput(draft: StoryAutomationDraft): StoryAu
 }
 
 export function storyAutomationWithActionInput(draft: StoryAutomationDraft, action: StoryAction): StoryAutomationWithActionInput {
-  return { action, automation: mutableInput(draft) };
+  if (!action.targetInstanceId) throw new Error('Story Action requires a target instance.');
+  return { action: { ...action, targetInstanceId: action.targetInstanceId }, automation: mutableInput(draft) };
 }

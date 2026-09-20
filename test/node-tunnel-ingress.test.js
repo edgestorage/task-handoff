@@ -58,6 +58,57 @@ test("node tunnel ingress owns hello and main message handling", () => {
   assert.equal(JSON.parse(socket.sent.at(-1).data).type, "control-plane.identified");
 });
 
+test("node tunnel ingress refreshes the identified node without destabilizing the tunnel", async () => {
+  const transport = new ControlPlaneNodeAgentTunnelTransport();
+  const identified = [];
+  const socket = new TestSocket();
+  new NodeTunnelIngress(transport, {
+    onIdentified: async (nodeId) => {
+      identified.push(nodeId);
+      throw new Error("capability refresh failed");
+    },
+  }).attachMain("node_refresh", socket);
+
+  socket.emit("message", JSON.stringify({ type: "node-agent.identify" }));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(identified, ["node_refresh"]);
+  assert.equal(transport.isCurrentSocket("node_refresh", socket), true);
+  assert.equal(socket.closes.length, 0);
+  assert.equal(JSON.parse(socket.sent.at(-1).data).type, "control-plane.identified");
+});
+
+test("reverse tunnel route refreshes public node capabilities after identify", async () => {
+  const handlers = new Map();
+  const checked = [];
+  const transport = new ControlPlaneNodeAgentTunnelTransport();
+  registerNodeAgentTunnelRoutes({
+    app: {
+      get(path, _options, handler) { handlers.set(path, handler); },
+    },
+    service: {
+      requireNode(id) { return { id, auth: { mode: "paired-hmac", keyId: "key_1", secret: "secret_1" } }; },
+      async checkNode(id) { checked.push(id); },
+    },
+    nodeAgentTunnel: transport,
+    errorPayload(error) {
+      return { code: error.code || "INTERNAL_ERROR", message: error.message };
+    },
+  });
+  const socket = new TestSocket();
+  const url = "/api/node-tunnel?nodeId=node_refresh";
+  const headers = createNodeAgentHmacHeaders({
+    nodeId: "node_refresh", keyId: "key_1", secret: "secret_1", method: "GET", pathWithQuery: url,
+  });
+
+  handlers.get("/api/node-tunnel")(socket, { query: { nodeId: "node_refresh" }, params: {}, headers, url });
+  socket.emit("message", JSON.stringify({ type: "node-agent.identify" }));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(checked, ["node_refresh"]);
+  assert.equal(transport.isCurrentSocket("node_refresh", socket), true);
+});
+
 test("node tunnel protocol preserves UTF-8 and binary request bodies with an explicit date version", async () => {
   assert.match(NODE_TUNNEL_PROTOCOL_VERSION, /^\d{4}-\d{2}-\d{2}$/);
   const textBody = encodeNodeTunnelRequestBody("你好 tunnel");

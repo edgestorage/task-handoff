@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   StoryActionSchema,
+  StoryActionInputSchema,
   StoryAutomationInputSchema,
   StoryAutomationScheduleSchema,
   StoryAutomationUpdateInputSchema,
@@ -12,6 +13,13 @@ test("Story Action treats braces literally and rejects removed parameters", () =
   const action = StoryActionSchema.parse({ id: "action_1", title: "Deploy", promptTemplate: "Deploy {{environment}}" });
   assert.equal(action.promptTemplate, "Deploy {{environment}}");
   assert.equal(StoryActionSchema.safeParse({ ...action, parameters: [] }).success, false);
+});
+
+test("current Action writes require a target while v0.0.32 records remain readable", () => {
+  const historical = { id: "action_1", title: "Deploy", promptTemplate: "Deploy" };
+  assert.equal(StoryActionSchema.safeParse(historical).success, true);
+  assert.equal(StoryActionInputSchema.safeParse({ title: "Deploy", promptTemplate: "Deploy" }).success, false);
+  assert.equal(StoryActionInputSchema.safeParse({ title: "Deploy", promptTemplate: "Deploy", targetInstanceId: "instance_1" }).success, true);
 });
 
 test("Story Automation owns strict schedule and policy wire models without parameter values", () => {

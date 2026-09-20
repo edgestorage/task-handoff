@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import {
   STORY_TEXT_PREVIEW_MAX_BYTES,
+  StoryActionRunResultSchema,
   StoryAutomationInputSchema,
   StoryAutomationListSchema,
   StoryAutomationManualRunInputSchema,
@@ -21,11 +22,18 @@ import {
   StoryUpdateInputSchema,
   StorySessionRetentionSettingsSchema,
 } from "@task-handoff/protocol/stories";
+import {
+  StoryAgentToolPolicySettingsSchema,
+  StoryAgentToolPolicyUpdateInputSchema,
+  StoryAgentActionRunInputSchema,
+  sanitizeStoryAgentToolPolicySettings,
+} from "@task-handoff/protocol/story-agent-tools";
 import type { ControlPlaneService } from "../application/service.ts";
 
 const NodeQuerySchema = z.object({ nodeId: z.string().trim().min(1).max(120).optional() }).strict();
 const StoryRouteSchema = z.object({ storyId: StoryIdSchema }).strict();
 const StoryAutomationRouteSchema = StoryRouteSchema.extend({ automationId: z.string().trim().min(1).max(120) }).strict();
+const StoryActionRouteSchema = StoryRouteSchema.extend({ actionId: z.string().trim().min(1).max(120) }).strict();
 const StoryRouteQuerySchema = z.object({ nodeId: z.string().trim().min(1).max(120) }).strict();
 
 async function nodeJson(service: ControlPlaneService, nodeId: string, route: string, init: RequestInit = {}) {
@@ -38,6 +46,17 @@ async function nodeJson(service: ControlPlaneService, nodeId: string, route: str
     code: payload.error?.code || "NODE_AGENT_REQUEST_FAILED",
   });
   return payload.data;
+}
+
+async function requireStoryOnNode(service: ControlPlaneService, storyId: string, nodeId: string) {
+  const story = StorySchema.parse(await nodeJson(service, nodeId, `/stories/${encodeURIComponent(storyId)}`));
+  if (story.ownerNodeId !== nodeId) {
+    throw Object.assign(new Error("Story and requested node do not match."), {
+      statusCode: 409,
+      code: "STORY_NODE_MISMATCH",
+    });
+  }
+  return story;
 }
 
 export function registerStoryRoutes(app: FastifyInstance, service: ControlPlaneService) {
@@ -81,6 +100,44 @@ export function registerStoryRoutes(app: FastifyInstance, service: ControlPlaneS
     const { storyId } = StoryRouteSchema.parse(request.params);
     const { nodeId } = StoryRouteQuerySchema.parse(request.query);
     return { data: StorySessionRetentionSettingsSchema.parse(await nodeJson(service, nodeId, `/stories/${encodeURIComponent(storyId)}/settings`)) };
+  });
+
+  app.get<{ Params: { storyId: string } }>("/api/stories/:storyId/settings/agent-tools", async (request) => {
+    const { storyId } = StoryRouteSchema.parse(request.params);
+    const { nodeId } = StoryRouteQuerySchema.parse(request.query);
+    await requireStoryOnNode(service, storyId, nodeId);
+    const data = await nodeJson(service, nodeId, `/stories/${encodeURIComponent(storyId)}/settings/agent-tools`);
+    return { data: StoryAgentToolPolicySettingsSchema.parse(sanitizeStoryAgentToolPolicySettings(data)) };
+  });
+
+  app.put<{ Params: { storyId: string } }>("/api/stories/:storyId/settings/agent-tools", async (request) => {
+    const { storyId } = StoryRouteSchema.parse(request.params);
+    const body = z.object({
+      nodeId: z.string().trim().min(1).max(120),
+      input: StoryAgentToolPolicyUpdateInputSchema,
+    }).strict().parse(request.body);
+    await requireStoryOnNode(service, storyId, body.nodeId);
+    const data = await nodeJson(service, body.nodeId, `/stories/${encodeURIComponent(storyId)}/settings/agent-tools`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body.input),
+    });
+    return { data: StoryAgentToolPolicySettingsSchema.parse(sanitizeStoryAgentToolPolicySettings(data)) };
+  });
+
+  app.post("/api/stories/:storyId/actions/:actionId/run", async (request) => {
+    const { storyId, actionId } = StoryActionRouteSchema.parse(request.params);
+    const body = z.object({
+      nodeId: z.string().trim().min(1).max(120),
+      input: StoryAgentActionRunInputSchema.omit({ actionId: true }),
+    }).strict().parse(request.body);
+    await requireStoryOnNode(service, storyId, body.nodeId);
+    return { data: StoryActionRunResultSchema.parse(await nodeJson(
+      service,
+      body.nodeId,
+      `/stories/${encodeURIComponent(storyId)}/actions/${encodeURIComponent(actionId)}/run`,
+      { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body.input) },
+    )) };
   });
 
   for (const action of ["archive", "restore"] as const) {

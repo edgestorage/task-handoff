@@ -18,6 +18,9 @@ concurrency:
   group: mobile-release
   cancel-in-progress: false
 
+env:
+  TASK_HANDOFF_CLOUD_RELAY_ENABLED: ${{ vars.TASK_HANDOFF_CLOUD_RELAY_ENABLED || '0' }}
+
 jobs:
   verify:
     name: Verify mobile release
@@ -82,6 +85,10 @@ jobs:
             }
             if (config.android?.package !== "com.taskhandoff.mobile") {
               throw new Error(`Unexpected Android package: ${config.android?.package}`);
+            }
+            const expectedCloudRelay = process.env.TASK_HANDOFF_CLOUD_RELAY_ENABLED === "1";
+            if (config.extra?.cloudRelayEnabled !== expectedCloudRelay) {
+              throw new Error(`Unexpected cloud Relay feature state: ${config.extra?.cloudRelayEnabled}`);
             }
           ' "$config"
 

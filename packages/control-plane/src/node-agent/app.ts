@@ -55,6 +55,10 @@ import { NodeStoryStore } from "./stories/store.ts";
 import { StoryAutomationStore } from "./stories/automation-store.ts";
 import { StoryCommandService } from "./stories/command-service.ts";
 import { StoryScheduler } from "./stories/scheduler.ts";
+import { StoryToolPolicyService } from "./stories/tool-policy-service.ts";
+import { StoryToolPolicyInvalidationNotifier } from "./stories/tool-policy-invalidation.ts";
+import { StoryActionExecutionService } from "./stories/action-execution-service.ts";
+import { StoryAiSessionReadService } from "./stories/ai-session-read-service.ts";
 import { openNodeAgentDatabase } from "./persistence/database.ts";
 import { createNodeAgentRepository } from "./persistence/repository.ts";
 import { InstanceIdleSessionRetentionCoordinator, StoryIdleSessionRetentionCoordinator } from "./stories/idle-retention.ts";
@@ -269,6 +273,9 @@ function isInstanceReportRoute(url: string) {
   const path = url.split("?")[0];
   return /^\/api\/node-agent\/instances\/[^/]+\/(register|heartbeat)$/.test(path)
     || /^\/api\/node-agent\/instances\/[^/]+\/git-credentials\//.test(path)
+    || /^\/api\/node-agent\/instances\/[^/]+\/story-agent-tools$/.test(path)
+    || /^\/api\/node-agent\/instances\/[^/]+\/ai-sessions\/[^/]+\/story-agent-tools$/.test(path)
+    || /^\/api\/node-agent\/instances\/[^/]+\/ai-sessions\/[^/]+\/story-agent-tools\/[^/]+$/.test(path)
     || /^\/api\/node-agent\/instances\/[^/]+\/ai-sessions\/[^/]+\/story-content(?:\/|$)/.test(path);
 }
 
@@ -574,6 +581,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   state.init();
   const stories = new NodeStoryStore(paths, nodeId, storyRepository);
   await stories.init();
+  const storyToolPolicy = new StoryToolPolicyService(storyRepository);
   const storyAutomations = new StoryAutomationStore(storyRepository);
   await storyAutomations.init();
   const dockerCommandRunner = options.dockerCommandRunner || defaultCommandRunner;
@@ -617,6 +625,12 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     (data, message) => app.log.warn(data, message),
   );
   const instanceIdleRetention = new InstanceIdleSessionRetentionCoordinator(
+    state,
+    fetchImpl,
+    resolveInstanceWeb,
+    (data, message) => app.log.warn(data, message),
+  );
+  const storyToolPolicyInvalidation = new StoryToolPolicyInvalidationNotifier(
     state,
     fetchImpl,
     resolveInstanceWeb,
@@ -867,6 +881,8 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   });
   eventForwarder.start();
   app.decorate("nodeAgentEventForwarder", eventForwarder);
+  const storyActionExecution = new StoryActionExecutionService(state, stories, fetchImpl, resolveInstanceWeb);
+  const storyAiSessionRead = new StoryAiSessionReadService(state, fetchImpl, resolveInstanceWeb);
   const storyScheduler = new StoryScheduler(
     state,
     stories,
@@ -874,6 +890,8 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     fetchImpl,
     resolveInstanceWeb,
     (type, payload, scope) => eventForwarder.publish(type, payload, scope),
+    undefined,
+    storyActionExecution,
   );
   const storyCommands = new StoryCommandService(state, stories, storyAutomations, storyScheduler, storyRepository);
   await storyCommands.init();
@@ -1203,7 +1221,14 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
         folderPlaces: true,
         localFolderNameUpdate: true,
         managedGitCredentials: { registry: true, runtimeBroker: true, workspaceProvisioning: { docker: true, kubernetes: false, local: false } },
-        stories: { enabled: true, agentTools: true, sessionRetention: true, maxFileBytes: 32 * 1024 * 1024, maxBatchPaths: 20 },
+        stories: {
+          enabled: true,
+          agentTools: true,
+          agentToolCapabilities: { policy: true, actions: true, automations: true, aiSessionRead: true },
+          sessionRetention: true,
+          maxFileBytes: 32 * 1024 * 1024,
+          maxBatchPaths: 20,
+        },
       },
       build: buildInfo("node-agent"),
       instanceProxy: { ...instanceProxyMetrics },
@@ -1264,6 +1289,10 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     onRetentionSettingsChanged: () => storyIdleRetention.reconcile(),
     commands: storyCommands,
     scheduler: storyScheduler,
+    toolPolicy: storyToolPolicy,
+    actionExecution: storyActionExecution,
+    aiSessionRead: storyAiSessionRead,
+    onToolPolicyInvalidated: (event) => storyToolPolicyInvalidation.notify(event),
   });
 
   registerEnvironmentTemplateRoutes(app, environmentTemplates);

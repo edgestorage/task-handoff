@@ -23,7 +23,7 @@ test("Node Agent SQLite initializes identity, migrations, PRAGMAs, and private p
     assert.equal(scalar("PRAGMA quick_check"), "ok");
     assert.deepEqual(
       fixture.database.client.prepare("SELECT id FROM na_migration_ledger ORDER BY id").all().map((row) => row.id),
-      ["0001_story_domain", "0002_p0_state_domains", "1000_import_v0_0_28_p0"],
+      ["0001_story_domain", "0002_p0_state_domains", "0003_story_agent_tool_policy", "1000_import_v0_0_28_p0"],
     );
     assert.equal(fs.statSync(fixture.paths.databasePath).mode & 0o777, 0o600);
     for (const sidecar of [`${fixture.paths.databasePath}-wal`, `${fixture.paths.databasePath}-shm`]) {
@@ -82,7 +82,7 @@ test("Node Agent SQLite reopens idempotently and repository close drains accepte
     const verify = new DatabaseSync(paths.databasePath);
     assert.deepEqual(
       verify.prepare("SELECT id FROM na_migration_ledger ORDER BY id").all().map((row) => row.id),
-      ["0001_story_domain", "0002_p0_state_domains", "1000_import_v0_0_28_p0"],
+      ["0001_story_domain", "0002_p0_state_domains", "0003_story_agent_tool_policy", "1000_import_v0_0_28_p0"],
     );
     verify.close();
   } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
