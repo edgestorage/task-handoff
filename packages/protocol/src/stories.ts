@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   AiAgentKindSchema,
+  AiSessionCreateWorkspaceSelectionSchema,
   AiSessionGitSelectionSchema,
   AiSessionModelSelectionSchema,
   AiSessionPermissionModeSchema,
@@ -45,7 +46,11 @@ export const StorySessionPresetSchema = z.object({
   reasoningEffort: AiSessionReasoningEffortSchema.optional(),
   cwdFolderId: z.string().trim().min(1).max(120).optional(),
   gitSelection: AiSessionGitSelectionSchema.optional(),
-}).strict();
+  workspaceSelection: AiSessionCreateWorkspaceSelectionSchema.optional(),
+}).strict().refine((value) => !(value.gitSelection && value.workspaceSelection), {
+  message: "gitSelection and workspaceSelection are mutually exclusive.",
+  path: ["workspaceSelection"],
+});
 
 export const StoryActionSchema = z.object({
   id: z.string().trim().min(1).max(120),

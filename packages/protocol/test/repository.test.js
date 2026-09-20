@@ -24,7 +24,9 @@ import {
   RepositoryStartAiSessionRequestSchema,
   RepositoryUnstageRequestSchema,
   RepositoryWriteFileRequestSchema,
+  RepositoryWorkspaceAiSessionCreateRefSchema,
 } from "../src/repository.ts";
+import { AiSessionCreateRefInputSchema } from "../src/ai-sessions.ts";
 import { normalizeAppSessionRecord } from "../src/app-sessions.ts";
 
 const snapshot = "snapshot-1";
@@ -93,6 +95,33 @@ test("workspace selection uses opaque server-issued identifiers, never a path", 
     worktree: { mode: "new-branch", branchName: "feature/isolated", startRef: "HEAD", expectedSnapshotId: snapshot, worktreePath: "/tmp/escape" },
     message: "Implement the requested change.",
     clientRequestId: "request-2",
+  }).success, false);
+});
+
+test("pre-session creation distinguishes existing and new worktrees", () => {
+  const base = {
+    agent: "codex",
+    message: "Implement the requested change.",
+    clientRequestId: "request-worktree",
+  };
+  assert.equal(AiSessionCreateRefInputSchema.safeParse({
+    ...base,
+    workspaceSelection: { type: "existing-worktree", repositoryContextId: "repo-context-1", worktreeId: "wt-1" },
+  }).success, true);
+  assert.equal(AiSessionCreateRefInputSchema.safeParse({
+    ...base,
+    workspaceSelection: { type: "new-worktree", branchName: "feature/new", startRef: "main", expectedSnapshotId: snapshot },
+  }).success, true);
+  assert.equal(AiSessionCreateRefInputSchema.safeParse({
+    ...base,
+    workspaceSelection: { type: "existing-worktree", repositoryContextId: "repo-context-1", worktreeId: "wt-1", path: "/tmp/escape" },
+  }).success, false);
+  const routed = { ...base, cwd: { type: "runtime-path", path: "/workspace" } };
+  assert.equal(RepositoryWorkspaceAiSessionCreateRefSchema.safeParse(routed).success, false);
+  assert.equal(RepositoryWorkspaceAiSessionCreateRefSchema.safeParse({
+    ...routed,
+    gitSelection: { mode: "current-folder", branch: "main" },
+    workspaceSelection: { type: "existing-worktree", repositoryContextId: "repo-context-1", worktreeId: "wt-1" },
   }).success, false);
 });
 

@@ -200,6 +200,97 @@
   white-space: nowrap;
 }
 
+:global([role="dialog"].session-ai-worktree-dialog) {
+  width: min(520px, calc(100vw - 32px));
+}
+
+.session-ai-worktree-form,
+.session-ai-worktree-field {
+  display: grid;
+  gap: 8px;
+}
+
+.session-ai-worktree-form {
+  gap: 16px;
+}
+
+.session-ai-worktree-field > label {
+  color: var(--text-strong);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.session-ai-worktree-modes {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-raised);
+  padding: 3px;
+}
+
+.session-ai-worktree-modes > button {
+  gap: 6px;
+  min-width: 0;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.session-ai-worktree-modes > button[data-state="on"] {
+  background: var(--surface-active);
+  color: var(--text-strong);
+}
+
+.session-ai-worktree-branch-trigger {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  min-height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-raised);
+  color: var(--text);
+  padding: 0 10px;
+  text-align: left;
+}
+
+.session-ai-worktree-branch-trigger:hover,
+.session-ai-worktree-branch-trigger:focus-visible,
+.session-ai-worktree-branch-trigger[data-state="open"] {
+  border-color: var(--focus-ring);
+  outline: none;
+}
+
+.session-ai-worktree-branch-trigger > strong {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-ai-worktree-branch-trigger > small,
+.session-ai-worktree-detached-hint {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.session-ai-worktree-detached-hint {
+  line-height: 1.45;
+}
+
+:global(.session-ai-worktree-branch-menu) {
+  width: min(420px, var(--reka-dropdown-menu-content-available-width));
+  max-height: var(--reka-dropdown-menu-content-available-height);
+}
+
 .session-ai-sidebar-actions {
   display: flex;
   align-items: center;
@@ -461,7 +552,7 @@
 :global(.session-ai-branch-tree-toggle) { display: grid; flex: 0 0 9px; width: 9px; height: 13px; place-items: center; }
 :global(.session-ai-branch-tree-toggle > svg) { width: 9px; height: 9px; transition: transform 120ms ease; }
 :global(.session-ai-branch-tree-toggle > svg.expanded) { transform: rotate(90deg); }
-:global(.session-ai-branch-tree-item small) { margin-left: auto; color: var(--text-muted); font-size: 10px; }
+:global(.session-ai-branch-tree-item small) { margin-left: auto; color: var(--text-muted); font-size: 12px; }
 :global(.session-ai-project-item:hover),
 :global(.session-ai-project-item:focus-visible),
 :global(.session-ai-project-item[data-highlighted]) {

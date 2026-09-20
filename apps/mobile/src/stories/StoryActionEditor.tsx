@@ -5,7 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { defaultAiSessionModelSelection, deriveAiSessionModelGroups, type AiSessionCatalogModelEntity } from '@task-handoff/control-plane-client';
 import { normalizeAiSessionReasoningEffortCapabilities } from '@task-handoff/protocol/ai-session-provider-capabilities';
 import { directoryAiSessionProviderCapability } from '@task-handoff/protocol/control-plane-directory';
-import { AI_SESSION_DEFAULT_REASONING_EFFORT, type AiSessionGitSelection, type AiSessionModelSelection, type AiSessionPermissionMode, type AiSessionReasoningEffort } from '@task-handoff/protocol/ai-sessions';
+import { AI_SESSION_DEFAULT_REASONING_EFFORT, type AiSessionCreateWorkspaceSelection, type AiSessionGitSelection, type AiSessionModelSelection, type AiSessionPermissionMode, type AiSessionReasoningEffort } from '@task-handoff/protocol/ai-sessions';
 import type { RepositoryAiSessionWorkspace } from '@task-handoff/protocol/repository';
 import type { Story, StoryAction, StorySessionPreset } from '@task-handoff/protocol/stories';
 
@@ -82,6 +82,8 @@ export function StoryActionComposer({ disabled = false, embedded = false, onSubm
     workspace?: RepositoryAiSessionWorkspace;
     mode: 'current-folder' | 'worktree';
     branch?: string;
+    worktreeId?: string;
+    newWorktree?: { branchName: string; startRef: string };
   }>({ mode: 'current-folder' });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -172,6 +174,8 @@ export function StoryActionComposer({ disabled = false, embedded = false, onSubm
         branch: workspace.currentBranch
           || workspace.branches.find((candidate) => candidate.current)?.name
           || workspace.branches.find((candidate) => candidate.currentFolderSelectable)?.name,
+        worktreeId: (workspace.worktrees || []).find((candidate) => !candidate.isCurrent && candidate.canCreateAiSession)?.id
+          || (workspace.worktrees || []).find((candidate) => candidate.canCreateAiSession)?.id,
       });
     }).catch(() => {
       // Compatibility for v0.0.21: an older Control Plane keeps the cwd-only creation flow.
@@ -185,10 +189,21 @@ export function StoryActionComposer({ disabled = false, embedded = false, onSubm
   const gitSelection: AiSessionGitSelection | undefined = workspaceMatchesSelection
     && workspaceState.workspace?.availability === 'available'
     && workspaceState.branch
-    ? { mode: workspaceState.mode, branch: workspaceState.branch }
+    && workspaceState.mode === 'current-folder'
+    ? { mode: 'current-folder', branch: workspaceState.branch }
+    : undefined;
+  const workspaceSelection: AiSessionCreateWorkspaceSelection | undefined = workspaceMatchesSelection
+    && workspaceState.workspace?.availability === 'available'
+    && workspaceState.mode === 'worktree'
+    ? workspaceState.newWorktree && workspaceState.workspace.snapshotId
+      ? { type: 'new-worktree', ...workspaceState.newWorktree, expectedSnapshotId: workspaceState.workspace.snapshotId }
+      : workspaceState.worktreeId && workspaceState.workspace.repositoryContextId
+        ? { type: 'existing-worktree', repositoryContextId: workspaceState.workspace.repositoryContextId, worktreeId: workspaceState.worktreeId }
+        : undefined
     : undefined;
   const guidance = instanceCreateGuidance(selectedInstance);
-  const valid = Boolean(!disabled && !story.archivedAt && title.trim() && prompt.trim() && selectedInstance && selectedFolder && agent && !guidance && !workspaceLoading);
+  const valid = Boolean(!disabled && !story.archivedAt && title.trim() && prompt.trim() && selectedInstance && selectedFolder && agent && !guidance && !workspaceLoading
+    && (workspaceState.mode !== 'worktree' || workspaceSelection));
 
   const save = async () => {
     if (!selectedInstance || !valid || saving) return;
@@ -198,6 +213,7 @@ export function StoryActionComposer({ disabled = false, embedded = false, onSubm
       agent,
       ...(selectedFolder?.cwdFolderId ? { cwdFolderId: selectedFolder.cwdFolderId } : {}),
       ...(gitSelection ? { gitSelection } : {}),
+      ...(workspaceSelection ? { workspaceSelection } : {}),
       ...(permissionModes.includes(permissionMode) ? { permissionMode } : {}),
       ...(modelSelection ? { modelSelection } : {}),
       ...(reasoningEffort ? { reasoningEffort } : {}),
@@ -251,6 +267,7 @@ export function StoryActionComposer({ disabled = false, embedded = false, onSubm
     reasoningEffortEnabled={reasoningCapability.selectAtCreate}
     selectedAgent={agent}
     selectedBranch={workspaceMatchesSelection ? workspaceState.branch : undefined}
+    selectedWorktree={workspaceMatchesSelection ? workspaceState.newWorktree ? '__new_worktree__' : workspaceState.worktreeId : undefined}
     selectedFolderId={folderId}
     selectedInstance={selectedInstance}
     selectedInstanceId={selectedInstanceId}
@@ -268,6 +285,9 @@ export function StoryActionComposer({ disabled = false, embedded = false, onSubm
       setReasoningSelection(undefined);
     }}
     onBranchChange={(branch) => setWorkspaceState((current) => ({ ...current, branch }))}
+    onWorktreeChange={(value) => setWorkspaceState((current) => value === '__new_worktree__'
+      ? { ...current, worktreeId: undefined, newWorktree: { branchName: `session/${Crypto.randomUUID().slice(0, 8)}`, startRef: current.workspace?.currentBranch || 'HEAD' } }
+      : { ...current, worktreeId: value, newWorktree: undefined })}
     onCreate={() => { void save(); }}
     onFolderChange={(nextFolderId) => setSelection({ instanceId: selectedInstanceId, agent, folderId: nextFolderId })}
     onInstanceChange={(instanceId) => {
@@ -284,11 +304,11 @@ export function StoryActionComposer({ disabled = false, embedded = false, onSubm
     onWorkspaceModeChange={(mode) => {
       const workspace = workspaceState.workspace;
       const selected = workspace?.branches.find((candidate) => candidate.name === workspaceState.branch);
-      const selectable = selected && (mode === 'worktree' ? selected.worktreeSelectable : selected.currentFolderSelectable);
-      const branch = selectable
-        ? selected.name
-        : workspace?.branches.find((candidate) => mode === 'worktree' ? candidate.worktreeSelectable : candidate.currentFolderSelectable)?.name;
-      setWorkspaceState((current) => ({ ...current, mode, branch }));
+      const branch = selected?.currentFolderSelectable ? selected.name : workspace?.branches.find((candidate) => candidate.currentFolderSelectable)?.name;
+      const worktreeId = workspaceState.worktreeId
+        || workspace?.worktrees?.find((candidate) => !candidate.isCurrent && candidate.canCreateAiSession)?.id
+        || workspace?.worktrees?.find((candidate) => candidate.canCreateAiSession)?.id;
+      setWorkspaceState((current) => ({ ...current, mode, branch, worktreeId, newWorktree: undefined }));
     }}
   />;
 }

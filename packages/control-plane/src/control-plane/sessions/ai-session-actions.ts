@@ -31,6 +31,7 @@ import {
   type AiSessionActionResponse,
   type AiSessionCommandInput,
   type AiSessionCommandResult,
+  type AiSessionCreateWorkspaceSelection,
   type AiSessionCreateResult,
   type AiSessionForkInput,
   type AiSessionForkResult,
@@ -234,6 +235,7 @@ export class AiSessionActionService {
       cwd: { type: "runtime-path"; path: string };
       cwdFolderId?: string;
       gitSelection?: RepositoryAiSessionGitSelection;
+      workspaceSelection?: AiSessionCreateWorkspaceSelection;
       message: string;
       attachments?: Array<AiSessionMessageAttachment | AiSessionMessageAttachmentRef>;
       references?: AiSessionReference[];
@@ -258,12 +260,12 @@ export class AiSessionActionService {
     // Reasoning effort is an additive capability. Older instances may omit it;
     // creation must still proceed without the optional setting.
     const supportsWorkspaceSelection = instanceSupportsAiSessionWorkspaceSelection(instance);
-    if (input.gitSelection && !supportsWorkspaceSelection) {
+    if ((input.gitSelection || input.workspaceSelection) && !supportsWorkspaceSelection) {
       throw aiSessionWorkspaceSelectionUnsupported();
     }
     const effectivePermissionMode = input.permissionMode
       || (input.agent === "codex" ? instance.config.defaultCodexPermissionMode : undefined);
-    const route = input.gitSelection ? "/repository/ai-session-workspace/create" : "/ai-sessions";
+    const route = input.gitSelection || input.workspaceSelection ? "/repository/ai-session-workspace/create" : "/ai-sessions";
     const { cwdFolderId, reasoningEffort, ...baseInput } = input;
     const reasoningCapability = normalizeAiSessionReasoningEffortCapabilities(aiSessionProviderCapability(instance.capabilities, input.agent));
     const result = parseResponse(AiSessionCreateResultSchema, await this.options.request(instance, route, {

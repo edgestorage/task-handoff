@@ -1580,7 +1580,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   app.post<{ Body: unknown }>("/api/internal/node-agent/story-automation/ai-sessions", nodeAgentProcessRoute, async (request, reply) => {
     try {
       const body = StoryAutomationInstanceCreateInputSchema.parse(request.body || {});
-      const result = body.gitSelection
+      const result = body.gitSelection || body.workspaceSelection
         ? await repositoryAiSessionWorkspace.createAiSessionWorkspace({ ...body, attachments: [], references: [] })
         : await aiSessionCreate.create({
             ...body,

@@ -500,25 +500,46 @@ export const AiSessionReasoningEffortSchema = z.enum([
 ]);
 export const AI_SESSION_DEFAULT_REASONING_EFFORT = "medium" as const;
 
-export const AiSessionCreateInputSchema = AiSessionMessageInputSchema.extend({
-  agent: AiAgentKindSchema,
-  cwd: AiSessionRuntimePathSchema,
-  cwdFolderId: z.string().trim().min(1).max(120).optional(),
-  clientRequestId: z.string().trim().min(1).max(160),
-  modelSelection: AiSessionModelSelectionSchema.optional(),
-  reasoningEffort: AiSessionReasoningEffortSchema.optional(),
-  storyId: StoryIdSchema.optional(),
-}).strict();
+export const AiSessionCreateWorkspaceSelectionSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("current-folder"),
+    branch: z.string().trim().min(1).max(1024),
+  }).strict(),
+  z.object({
+    type: z.literal("existing-worktree"),
+    repositoryContextId: z.string().trim().min(1).max(160),
+    worktreeId: z.string().trim().min(1).max(160),
+  }).strict(),
+  z.object({
+    type: z.literal("new-worktree"),
+    branchName: z.string().trim().min(1).max(255),
+    startRef: z.string().trim().min(1).max(2048),
+    expectedSnapshotId: z.string().trim().min(1).max(160),
+  }).strict(),
+]);
 
 export const AiSessionGitSelectionSchema = z.object({
   mode: z.enum(["current-folder", "worktree"]),
   branch: z.string().trim().min(1).max(1024),
 }).strict();
 
+export const AiSessionCreateInputSchema = AiSessionMessageInputSchema.extend({
+  agent: AiAgentKindSchema,
+  cwd: AiSessionRuntimePathSchema,
+  cwdFolderId: z.string().trim().min(1).max(120).optional(),
+  gitSelection: AiSessionGitSelectionSchema.optional(),
+  workspaceSelection: AiSessionCreateWorkspaceSelectionSchema.optional(),
+  clientRequestId: z.string().trim().min(1).max(160),
+  modelSelection: AiSessionModelSelectionSchema.optional(),
+  reasoningEffort: AiSessionReasoningEffortSchema.optional(),
+  storyId: StoryIdSchema.optional(),
+}).strict();
+
 export const AiSessionCreateRefInputSchema = AiSessionMessageRefInputSchema.extend({
   agent: AiAgentKindSchema,
   cwdFolderId: z.string().trim().min(1).max(120).optional(),
   gitSelection: AiSessionGitSelectionSchema.optional(),
+  workspaceSelection: AiSessionCreateWorkspaceSelectionSchema.optional(),
   clientRequestId: z.string().trim().min(1).max(160),
   modelSelection: AiSessionModelSelectionSchema.optional(),
   reasoningEffort: AiSessionReasoningEffortSchema.optional(),
@@ -1532,6 +1553,7 @@ export type AiSessionModelSelectionActionResponse = z.infer<typeof AiSessionMode
 export type AiSessionReasoningEffortInput = z.infer<typeof AiSessionReasoningEffortInputSchema>;
 export type AiSessionReasoningEffortActionResponse = z.infer<typeof AiSessionReasoningEffortActionResponseSchema>;
 export type AiSessionGitSelection = z.infer<typeof AiSessionGitSelectionSchema>;
+export type AiSessionCreateWorkspaceSelection = z.infer<typeof AiSessionCreateWorkspaceSelectionSchema>;
 export type AiSessionCreateResult = z.infer<typeof AiSessionCreateResultSchema>;
 export type AiSessionForkWorkspace = z.infer<typeof AiSessionForkWorkspaceSchema>;
 export type AiSessionForkInput = z.infer<typeof AiSessionForkInputSchema>;

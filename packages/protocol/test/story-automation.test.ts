@@ -7,6 +7,7 @@ import {
   StoryAutomationScheduleSchema,
   StoryAutomationUpdateInputSchema,
   StoryAutomationWithActionInputSchema,
+  StorySessionPresetSchema,
 } from "../src/stories.ts";
 
 test("Story Action treats braces literally and rejects removed parameters", () => {
@@ -20,6 +21,15 @@ test("current Action writes require a target while v0.0.32 records remain readab
   assert.equal(StoryActionSchema.safeParse(historical).success, true);
   assert.equal(StoryActionInputSchema.safeParse({ title: "Deploy", promptTemplate: "Deploy" }).success, false);
   assert.equal(StoryActionInputSchema.safeParse({ title: "Deploy", promptTemplate: "Deploy", targetInstanceId: "instance_1" }).success, true);
+});
+
+test("Story Action presets persist existing worktree selections without mixing legacy Git selection", () => {
+  const workspaceSelection = { type: "existing-worktree", repositoryContextId: "repo-context-1", worktreeId: "wt-1" } as const;
+  assert.deepEqual(StorySessionPresetSchema.parse({ agent: "codex", workspaceSelection }), { agent: "codex", workspaceSelection });
+  assert.equal(StorySessionPresetSchema.safeParse({
+    gitSelection: { mode: "worktree", branch: "feature/legacy" },
+    workspaceSelection,
+  }).success, false);
 });
 
 test("Story Automation owns strict schedule and policy wire models without parameter values", () => {

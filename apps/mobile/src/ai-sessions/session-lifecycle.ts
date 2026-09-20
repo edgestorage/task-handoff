@@ -1,6 +1,6 @@
 import type { ControlPlaneClient } from '@task-handoff/control-plane-client';
 import { directoryAiSessionProviderCapability, type ControlPlaneInstanceDirectoryEntry } from '@task-handoff/protocol/control-plane-directory';
-import { AiAgentKindSchema, type AiSessionGitSelection, type AiSessionMessageAttachmentRef, type AiSessionModelSelection, type AiSessionPermissionMode, type AiSessionReasoningEffort, type AiSessionSendMode } from '@task-handoff/protocol/ai-sessions';
+import { AiAgentKindSchema, type AiSessionCreateWorkspaceSelection, type AiSessionGitSelection, type AiSessionMessageAttachmentRef, type AiSessionModelSelection, type AiSessionPermissionMode, type AiSessionReasoningEffort, type AiSessionSendMode } from '@task-handoff/protocol/ai-sessions';
 import type { ValueStore } from '../platform/secure-storage';
 
 const CREATE_REQUEST_VERSION = 1;
@@ -10,6 +10,7 @@ export async function createMobileAiSession(client: ControlPlaneClient, input: {
   agent: string;
   cwdFolderId?: string;
   gitSelection?: AiSessionGitSelection;
+  workspaceSelection?: AiSessionCreateWorkspaceSelection;
   message: string;
   attachments?: AiSessionMessageAttachmentRef[];
   permissionMode?: AiSessionPermissionMode;
@@ -30,6 +31,7 @@ export async function createMobileAiSession(client: ControlPlaneClient, input: {
     agent: agent.data,
     ...(input.cwdFolderId ? { cwdFolderId: input.cwdFolderId } : {}),
     ...(input.gitSelection ? { gitSelection: input.gitSelection } : {}),
+    ...(input.workspaceSelection ? { workspaceSelection: input.workspaceSelection } : {}),
     clientRequestId: input.clientRequestId,
     message: input.message,
     mode: input.mode ?? 'auto',
@@ -58,7 +60,7 @@ export class MobileAiSessionCreateRequestStore {
   getOrCreate(
     controlPlaneId: string,
     instanceId: string,
-    input: { agent: string; cwdFolderId?: string; gitSelection?: AiSessionGitSelection; message: string; permissionMode?: AiSessionPermissionMode; modelSelection?: AiSessionModelSelection; attachments?: readonly { kind: string; name: string; size: number }[] },
+    input: { agent: string; cwdFolderId?: string; gitSelection?: AiSessionGitSelection; workspaceSelection?: AiSessionCreateWorkspaceSelection; message: string; permissionMode?: AiSessionPermissionMode; modelSelection?: AiSessionModelSelection; attachments?: readonly { kind: string; name: string; size: number }[] },
     createId: () => string,
   ) {
     return this.enqueue(async () => {
