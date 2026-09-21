@@ -371,12 +371,14 @@ export class AiSessionController {
       throw aiSessionControlError("AI_SESSION_SEND_UNSUPPORTED", `${session.agent} sessions do not support starting turns.`, 400);
     }
     try {
-      const storyAgentTools = this.resolveStoryAgentTools
+      const storyAgentTools = input.storyAgentTools !== undefined
+        ? input.storyAgentTools
+        : session.storyId && this.resolveStoryAgentTools
         ? await this.resolveStoryAgentTools(session)
-        : input.storyAgentTools;
+        : undefined;
       const result = await start.call(provider, session, {
         ...input,
-        ...(storyAgentTools ? { storyAgentTools } : {}),
+        ...(storyAgentTools !== undefined ? { storyAgentTools } : {}),
       });
       if (input.messageId) this.registry.commitMessageAttachments(session.id, input.messageId, result?.turnId);
       return result;

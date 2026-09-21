@@ -10,6 +10,8 @@ import type {
   RepositoryFileContent,
   RepositoryFileMutationResult,
   RepositoryMutationResult,
+  RepositoryCreateWorktreeRequest,
+  RepositoryCreateWorktreeResult,
   RepositoryCreateWorktreeAiSessionRequest,
   RepositorySessionKind,
   RepositoryStartAiSessionRequest,
@@ -44,6 +46,14 @@ export async function getRepositoryWorktrees(target: RepositorySessionTarget, op
     throw new Error("The controlled instance returned an incompatible worktree response. Restart the instance to load the current protocol.");
   }
   return parsed.data satisfies RepositoryWorktrees;
+}
+
+export function createRepositoryWorktree(
+  target: RepositorySessionTarget,
+  input: RepositoryCreateWorktreeRequest,
+  options?: { signal?: AbortSignal },
+) {
+  return postUrlData<RepositoryCreateWorktreeResult>(`${repositoryTargetBasePath(target)}/worktrees`, input, options);
 }
 
 export function startRepositoryAiSession(

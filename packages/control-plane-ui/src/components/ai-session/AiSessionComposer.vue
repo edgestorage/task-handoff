@@ -85,6 +85,7 @@ const emit = defineEmits<{
   (event: "command", value: AiSessionCommandInput): void;
   (event: "cancelEdit"): void;
   (event: "selectModel", value: AiSessionModelSelection): void;
+  (event: "openModelSettings"): void;
   (event: "selectReasoningEffort", value: AiSessionReasoningEffort): void;
 }>();
 const { locale, t } = useI18n();
@@ -190,6 +191,7 @@ const modelMenuDisabled = computed(() => Boolean(
   || props.reasoningEffortPending
   || (modelOptions.value.length <= 1 && !props.reasoningEffortEnabled),
 ));
+const noModelAvailable = computed(() => modelOptions.value.length === 0);
 
 function isSelectedModel(model: AiSessionModelSelection) {
   return model.modelEntityId === displayedModelSelection.value?.modelEntityId && model.modelName === displayedModelSelection.value?.modelName;
@@ -968,7 +970,23 @@ watch(() => props.busy, (busy) => {
         >
           <CornerDownRight :size="18" />
         </button>
-        <DropdownMenu v-if="modelOptions.length || reasoningEffortEnabled" @update:open="updateModelMenuOpen">
+        <TooltipProvider v-if="noModelAvailable" :delay-duration="200">
+          <Tooltip>
+            <TooltipTrigger as-child>
+              <button
+                type="button"
+                class="ai-session-composer__model-trigger"
+                :aria-label="t('sessions.composer.noModelConfigured')"
+                :disabled="busy || sessionBusy || modelSelectionPending"
+                @click="emit('openModelSettings')"
+              >
+                <span>{{ t("sessions.composer.noModelConfigured") }}</span>
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="top" :side-offset="8">{{ t("sessions.composer.openModelSettings") }}</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+        <DropdownMenu v-else-if="modelOptions.length || reasoningEffortEnabled" @update:open="updateModelMenuOpen">
           <DropdownMenuTrigger as-child>
             <button
               ref="modelTriggerEl"

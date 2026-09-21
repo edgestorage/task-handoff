@@ -111,11 +111,13 @@ export class AiSessionForkCoordinator {
       }
 
       if (!operation.providerSessionId) {
-        const storyAgentTools = await this.options.resolveStoryAgentTools?.(source) || [];
+        const storyAgentTools = source.storyId
+          ? await this.options.resolveStoryAgentTools?.(source) || []
+          : undefined;
         const created = await this.options.controller.forkSession(source.id, {
           throughTurnId: operation.input.throughTurnId,
           ...(operation.input.workspace.mode === "managed-worktree" ? { cwd: operation.cwd } : {}),
-          storyAgentTools,
+          ...(storyAgentTools !== undefined ? { storyAgentTools } : {}),
         });
         operation.providerSessionId = created.providerSessionId;
         operation.stage = "provider-created";

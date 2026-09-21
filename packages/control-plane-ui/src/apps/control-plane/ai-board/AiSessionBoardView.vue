@@ -1030,6 +1030,16 @@ function cancelQueueComposerEdit() {
   messageMentionBindings.value = edit.previousMentionBindings;
 }
 
+function reconcileQueueComposerEdit() {
+  const edit = queueComposerEdit.value;
+  const session = selectedCardConversationSession.value || selectedCard.value?.session;
+  if (!edit || !session) return;
+  const item = session.queue.items.find((entry) => entry.id === edit.queueId);
+  if (!item || item.status !== "queued") {
+    cancelQueueComposerEdit();
+  }
+}
+
 async function saveSelectedQueuedMessage() {
   const card = selectedCard.value;
   const edit = queueComposerEdit.value;
@@ -1174,6 +1184,15 @@ watch(() => selectedCard.value?.session.id, (sessionId) => {
   messageMentionBindings.value = draft.bindings;
   if (sessionId) void nextTick(() => floatingDockEl.value?.focusComposer());
 }, { immediate: true });
+
+watch(
+  () => {
+    const session = selectedCardConversationSession.value || selectedCard.value?.session;
+    return session ? `${session.id}:${session.queue.revision}:${session.queue.items.map((item) => `${item.id}:${item.status}`).join(",")}` : "";
+  },
+  reconcileQueueComposerEdit,
+  { immediate: true },
+);
 
 watch(() => ({
   key: selectedCard.value?.key,

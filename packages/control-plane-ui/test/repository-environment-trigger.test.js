@@ -14,7 +14,11 @@ test("repository environment matches detail actions without changing the tab too
   assert.match(environment, /triggerAppearance\?: "toolbar" \| "detail" \| "menu"/);
   assert.match(environment, /<PopoverTrigger as-child>\s*<button[\s\S]*?<TooltipTrigger as-child>\s*<span class="repository-environment-trigger-content">/);
   assert.doesNotMatch(environment, /<TooltipTrigger as-child>\s*<PopoverTrigger as-child>/);
-  assert.match(environment, /\.repository-environment-trigger-detail \{[^}]*width: 26px;[^}]*height: 26px;[^}]*border-radius: 6px;[^}]*background: var\(--surface-subtle\)/);
+  assert.match(environment, /triggerAppearance === 'detail' && triggerBranchSummary[\s\S]*class="repository-environment-trigger-branch"/);
+  assert.match(environment, /canQuery\.value && \(open\.value \|\| props\.triggerAppearance === "detail"\)/);
+  assert.match(environment, /const triggerBranchSummary = computed\([\s\S]*head\.state === "branch"[\s\S]*head\.branch/);
+  assert.match(environment, /\.repository-environment-trigger-detail \{[^}]*width: auto;[^}]*max-width: min\(220px, 32vw\);[^}]*height: 26px;[^}]*border-radius: 6px;[^}]*padding: 0 7px;/s);
+  assert.match(environment, /\.repository-environment-trigger-branch \{[^}]*overflow: hidden;[^}]*font-size: 12px;[^}]*font-weight: 400;[^}]*text-overflow: ellipsis;[^}]*white-space: nowrap;/s);
   assert.match(environment, /\.repository-environment-trigger-menu \{[^}]*width: 100%;[^}]*align-items: center;[^}]*justify-content: flex-start;[^}]*gap: 8px;[^}]*color: var\(--text\);[^}]*font-family: inherit;[^}]*font-size: 14px;[^}]*line-height: 20px;/s);
   assert.match(environment, /\.repository-environment-trigger-menu span \{[^}]*font-size: inherit;/s);
   assert.match(environment, /\.repository-environment-trigger-menu:hover,[\s\S]*?background: var\(--accent\);[\s\S]*?color: var\(--accent-foreground\);/);

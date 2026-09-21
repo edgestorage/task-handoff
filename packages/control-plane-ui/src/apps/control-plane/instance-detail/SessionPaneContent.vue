@@ -71,6 +71,7 @@
       @launch-app="(target, appId, cwdFolderId, options) => $emit('launchApp', target, appId, cwdFolderId, options)"
       @open-ai-session-app="(target, aiSession) => $emit('openAiSessionApp', target, aiSession)"
       @open-repository-workspace="$emit('openRepositoryWorkspace', $event)"
+      @open-settings="(instanceId, section) => $emit('openSettings', instanceId, section)"
       @select-ai-session="(instanceId, sessionId) => $emit('selectAiSession', instanceId, sessionId)"
     />
     <RepositoryChangesReviewTab v-else-if="session?.kind === 'repository' && session.source?.page === 'changes-review'" :instance-id="instance.id" :session="session" @open-workspace="$emit('openRepositoryWorkspace', $event)" />
@@ -142,6 +143,7 @@ defineEmits<{
   launchApp: [instance: InstanceBoardItem, appId: string, cwdFolderId?: string, options?: Record<string, unknown>];
   openAiSessionApp: [instance: InstanceBoardItem, session?: AiSessionSummary];
   openRepositoryWorkspace: [target: RepositoryWorkspaceTabTarget];
+  openSettings: [instanceId: string, section?: "apps" | "models"];
   openLaunchMenu: [];
   runAction: [action: InstanceAction, instance: InstanceBoardItem];
   selectAiSession: [instanceId: string, sessionId: string];

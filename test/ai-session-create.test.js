@@ -83,6 +83,44 @@ test("AI session create coordinator deduplicates a request through its first pro
   assert.equal(creates, 1);
 });
 
+test("AI session provider inputs preserve omitted and explicitly empty Story tool policies", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-create-story-policy-"));
+  const registry = createAiSessionRegistry({ dir: root });
+  const resolved = [];
+  const controller = new AiSessionController(registry, async (session) => {
+    resolved.push(session.storyId);
+    return [];
+  });
+  const creates = [];
+  const turns = [];
+  controller.register({
+    agent: "opencode",
+    async createSession(input) {
+      creates.push(input);
+      return { providerSessionId: `session-${creates.length}`, cwd: input.cwd, creationSource: "ai-session" };
+    },
+    async startMessage(session, input) {
+      turns.push(input);
+      return { session, provider: "opencode", action: "send" };
+    },
+    async interrupt(session) { return { session, provider: "opencode", action: "interrupt" }; },
+  });
+  const coordinator = new AiSessionCreateCoordinator({
+    registry,
+    controller,
+    resolveStoryAgentTools: async () => [],
+  });
+
+  await coordinator.create({ agent: "opencode", cwd: "/workspace/plain", message: "Plain", clientRequestId: "plain" });
+  await coordinator.create({ agent: "opencode", cwd: "/workspace/story", message: "Story", storyId: "story_1", clientRequestId: "story" });
+
+  assert.equal(Object.hasOwn(creates[0], "storyAgentTools"), false);
+  assert.equal(Object.hasOwn(turns[0], "storyAgentTools"), false);
+  assert.deepEqual(creates[1].storyAgentTools, []);
+  assert.deepEqual(turns[1].storyAgentTools, []);
+  assert.deepEqual(resolved, ["story_1"]);
+});
+
 test("AI session creation timings correlate stages without logging prompt or credentials", async () => {
   const { registry, controller } = runtime();
   const timings = [];

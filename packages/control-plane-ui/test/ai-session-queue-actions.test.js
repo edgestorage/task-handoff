@@ -33,6 +33,8 @@ test("AI session queue edit and reorder actions stay revisioned through both con
   assert.match(board, /messageDraft\.value = payload\.message/);
   assert.match(board, /selectedCardConversationSession\.value\?\.queue\.revision \?\? card\.session\.queue\.revision/);
   assert.match(board, /cancelQueueComposerEdit/);
+  assert.match(board, /item\.status !== "queued"/);
+  assert.match(board, /selectedCardConversationSession\.value \|\| selectedCard\.value\?\.session/);
   assert.match(dock, /@reorder-queued-messages="\$emit\('reorderQueuedMessages', \$event\)"/);
   assert.match(board, /editAiSessionQueuedMessage/);
   assert.match(board, /reorderAiSessionQueuedMessages/);
@@ -40,6 +42,8 @@ test("AI session queue edit and reorder actions stay revisioned through both con
   assert.match(panel, /messageDraft\.value = payload\.message/);
   assert.match(panel, /selectedConversationSession\.value\?\.queue\.revision \?\? session\.queue\.revision/);
   assert.match(panel, /reorderAiSessionQueuedMessages/);
+  assert.match(panel, /item\.status !== "queued"/);
+  assert.match(panel, /selectedConversationSession\.value \|\| selectedSession\.value/);
   assert.match(queries, /sharedAiSessionsApi\.editQueue/);
   assert.match(queries, /sharedAiSessionsApi\.reorderQueue/);
 });

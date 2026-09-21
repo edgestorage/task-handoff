@@ -73,6 +73,7 @@
   --instance-list-row-hover-bg: var(--surface-inset);
   --instance-list-title: var(--text-strong);
   --instance-list-meta: var(--text-muted);
+  --repository-current-text: hsl(var(--primary));
 
   --ai-board-background: var(--workspace-bg);
   --ai-board-column-bg: var(--surface);
@@ -107,6 +108,7 @@
   --workbench-view-switcher-bg: var(--control-plane-pill-bg);
   --workbench-view-selection-bg: var(--board-control-active-bg);
   --workbench-view-selection-fg: var(--control-plane-heading);
+  --repository-current-text: var(--brand-accent-muted);
 }
 
 html,

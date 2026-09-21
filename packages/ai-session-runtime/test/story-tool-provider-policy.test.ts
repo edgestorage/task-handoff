@@ -33,3 +33,15 @@ test("OpenCode explicit permission mode remains ahead of Story-specific last-mat
   assert.deepEqual(rules[0], { permission: "*", pattern: "*", action: "allow" });
   assert.equal(rules.at(-1)?.action, "deny");
 });
+
+test("OpenCode distinguishes omitted Story policy from an explicit empty allowlist", () => {
+  assert.equal(openCodeSessionPermissionRules(undefined, undefined), undefined);
+
+  const denied = openCodeSessionPermissionRules(undefined, [], [
+    { permission: "bash", pattern: "*", action: "ask" },
+    { permission: "story_list_content", pattern: "*", action: "allow" },
+  ]);
+  assert.equal(denied.length, STORY_AGENT_TOOL_NAMES.length + 1);
+  assert.deepEqual(denied[0], { permission: "bash", pattern: "*", action: "ask" });
+  assert.ok(STORY_AGENT_TOOL_NAMES.every((name) => denied.findLast((rule) => rule.permission === name)?.action === "deny"));
+});

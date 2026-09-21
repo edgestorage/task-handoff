@@ -8,17 +8,18 @@
           'repository-environment-trigger-detail': triggerAppearance === 'detail',
           'repository-environment-trigger-menu': triggerAppearance === 'menu',
         }"
-        :aria-label="t('repository.environment.title')"
+        :aria-label="triggerLabel"
       >
         <TooltipProvider :delay-duration="120">
           <Tooltip>
             <TooltipTrigger as-child>
               <span class="repository-environment-trigger-content">
-              <FolderGit2 :size="triggerAppearance === 'menu' ? 16 : 15" />
-              <span v-if="triggerAppearance === 'menu'">{{ t("repository.environment.title") }}</span>
+                <FolderGit2 :size="triggerAppearance === 'menu' ? 16 : 15" />
+                <span v-if="triggerAppearance === 'menu'">{{ t("repository.environment.title") }}</span>
+                <span v-else-if="triggerAppearance === 'detail' && triggerBranchSummary" class="repository-environment-trigger-branch" :title="triggerBranchSummary">{{ triggerBranchSummary }}</span>
               </span>
             </TooltipTrigger>
-            <TooltipContent side="bottom" :side-offset="8">{{ t("repository.environment.title") }}</TooltipContent>
+            <TooltipContent side="bottom" :side-offset="8">{{ triggerLabel }}</TooltipContent>
           </Tooltip>
         </TooltipProvider>
       </button>
@@ -209,9 +210,17 @@ const contextQuery = useRepositoryContextQuery(
     sessionKind: props.sessionKind,
     sessionId: props.sessionId,
   })),
-  computed(() => open.value && canQuery.value),
+  computed(() => canQuery.value && (open.value || props.triggerAppearance === "detail")),
 );
 const context = computed<RepositoryContext | undefined>(() => contextQuery.data.value);
+const triggerBranchSummary = computed(() => {
+  const head = context.value?.head;
+  if (context.value?.availability !== "available" || !head) return "";
+  if (head.state === "branch") return head.branch || t("repository.common.unknownBranch");
+  if (head.state === "unborn") return t("repository.common.unbornBranch");
+  return t("repository.common.detachedAt", { commit: head.oid?.slice(0, 8) || t("repository.environmentExtra.unknownCommit") });
+});
+const triggerLabel = computed(() => [t("repository.environment.title"), triggerBranchSummary.value].filter(Boolean).join(" · "));
 const changeCount = computed(() => {
   const summary = context.value?.changes;
   return summary ? summary.conflicts + summary.staged + summary.unstaged + summary.untracked : 0;
@@ -332,12 +341,31 @@ function runPrimaryAction(action: RepositoryPrimaryAction) {
 }
 
 .repository-environment-trigger-detail {
-  width: 26px;
+  width: auto;
+  max-width: min(220px, 32vw);
   height: 26px;
   border-color: var(--line-subtle);
   border-radius: 6px;
   background: var(--surface-subtle);
   color: var(--text-muted);
+  padding: 0 7px;
+}
+
+.repository-environment-trigger-detail .repository-environment-trigger-content {
+  width: auto;
+  gap: 5px;
+  min-width: 0;
+}
+
+.repository-environment-trigger-branch {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .repository-environment-trigger-detail:hover,

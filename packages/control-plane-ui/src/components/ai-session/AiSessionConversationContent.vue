@@ -52,6 +52,7 @@
           :turn-timelines="turnTimelines"
           @edit-queued-message="$emit('editQueuedMessage', $event)"
           @open-file="$emit('openFile', $event)"
+          @add-to-conversation="$emit('addToConversation', $event)"
           @steer-queued-message="$emit('steerQueuedMessage', $event)"
           @retry-queued-message="$emit('retryQueuedMessage', $event)"
           @remove-queued-message="$emit('removeQueuedMessage', $event)"
@@ -95,6 +96,7 @@
         @retry-activity-history="$emit('loadTurnTimeline', selectedTurn?.id || '', true)"
         @edit-queued-message="$emit('editQueuedMessage', $event)"
         @open-file="$emit('openFile', $event)"
+        @add-to-conversation="$emit('addToConversation', $event)"
         @steer-queued-message="$emit('steerQueuedMessage', $event)"
         @retry-queued-message="$emit('retryQueuedMessage', $event)"
         @remove-queued-message="$emit('removeQueuedMessage', $event)"
@@ -182,6 +184,7 @@ const emit = defineEmits<{
   layoutWillChange: [];
   loadTurnTimeline: [turnId: string, force?: boolean];
   openFile: [href: string];
+  addToConversation: [content: string];
   removeQueuedMessage: [queueId: string];
   reorderQueuedMessages: [payload: { expectedRevision: number; queueIds: string[] }];
   resolveApproval: [decision: "allow" | "deny" | "skip"];

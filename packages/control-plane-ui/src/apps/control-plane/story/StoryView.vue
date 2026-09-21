@@ -36,7 +36,7 @@
               v-for="story in stories"
               :key="storySortKey(story)"
               class="story-tree"
-              :class="{ 'story-tree-manual': storySortMode === 'manual', 'story-tree-dragging': draggingStoryKey === storySortKey(story), 'story-tree-archived': Boolean(story.archivedAt) }"
+              :class="{ 'story-tree-manual': storySortMode === 'manual', 'story-tree-dragging': draggingStoryKey === storySortKey(story), 'story-tree-archived': Boolean(story.archivedAt), 'story-tree-unavailable': !storyIsOnline(story) }"
               :data-story-key="storySortKey(story)"
               :data-drop-position="dropTargetKey === storySortKey(story) ? dropPosition : undefined"
               @click.capture="suppressStoryClickAfterDrag"
@@ -47,8 +47,8 @@
                   <ChevronRight :size="15" class="story-tree-disclosure" :class="{ expanded: isStoryOpen(story) }" />
                 </button>
                 <ContextMenu>
-                  <ContextMenuTrigger as-child>
-                    <button type="button" class="story-tree-item story-tree-story" :class="{ active: isStorySelected(story) }" :aria-keyshortcuts="storySortMode === 'manual' ? 'Alt+ArrowUp Alt+ArrowDown' : undefined" @click="selectStory(story)" @keydown="handleStorySortKeydown($event, story)">
+                  <ContextMenuTrigger as-child :disabled="!storyIsOnline(story)">
+                    <button type="button" class="story-tree-item story-tree-story" :class="{ active: isStorySelected(story) }" :aria-keyshortcuts="storySortMode === 'manual' ? 'Alt+ArrowUp Alt+ArrowDown' : undefined" :disabled="!storyIsOnline(story)" @click="selectStory(story)" @keydown="handleStorySortKeydown($event, story)">
                       <BookOpen :size="15" />
                       <span class="story-tree-item-copy"><strong>{{ story.title }}</strong></span>
                     </button>
@@ -70,15 +70,15 @@
                   />
                 </ContextMenu>
                 <small v-if="story.archivedAt" class="story-tree-archived-label">{{ t("stories.archived") }}</small>
-                <button v-else type="button" class="story-tree-add story-tree-story-add" :aria-label="t('stories.newSession')" :title="t('stories.newSession')" :disabled="!instancesForStory(story).length" @click.stop="openNewSession(story)"><MessageSquarePlus :size="14" /></button>
+                <button v-else type="button" class="story-tree-add story-tree-story-add" :aria-label="t('stories.newSession')" :title="t('stories.newSession')" :disabled="!storyIsOnline(story) || !instancesForStory(story).length" @click.stop="openNewSession(story)"><MessageSquarePlus :size="14" /></button>
               </div>
               <Transition name="story-tree-collapse">
                 <div v-if="isStoryOpen(story)" class="story-tree-collapse">
                   <div class="story-tree-collapse-inner">
                     <div class="story-tree-children">
                 <ContextMenu v-for="document in treeDocumentsFor(story)" :key="document.storyPath">
-                  <ContextMenuTrigger as-child>
-                    <button type="button" class="story-tree-item" :class="{ active: isDocumentSelected(story, document.storyPath), 'story-tree-item-detailed': treeViewMode === 'detailed' }" @click="selectDocument(story, document.storyPath)">
+                  <ContextMenuTrigger as-child :disabled="!storyIsOnline(story)">
+                    <button type="button" class="story-tree-item" :class="{ active: isDocumentSelected(story, document.storyPath), 'story-tree-item-detailed': treeViewMode === 'detailed' }" :disabled="!storyIsOnline(story)" @click="selectDocument(story, document.storyPath)">
                       <FileText :size="14" /><span class="story-tree-item-copy" :class="{ 'story-tree-item-detail': treeViewMode === 'detailed' }"><strong>{{ document.title }}</strong><small v-if="treeViewMode === 'detailed'">{{ document.storyPath }}</small></span><small v-if="treeViewMode === 'compact'" class="story-tree-item-hint" aria-hidden="true">{{ document.storyPath }}</small>
                     </button>
                   </ContextMenuTrigger>
@@ -88,8 +88,8 @@
                 <TransitionGroup name="story-session-tree" tag="div" class="story-session-tree-list">
                 <div v-for="entry in sessionsFor(story)" :key="entry.session.id" class="story-session-tree-item-shell">
                 <ContextMenu>
-                  <ContextMenuTrigger as-child>
-                    <div class="story-tree-item story-session-tree-row" :class="{ active: isSessionSelected(story, entry.session.id), 'story-tree-item-detailed': treeViewMode === 'detailed', 'story-tree-item-unread': entry.session.unread }" :style="storySessionTreeStyle(entry.depth)" :data-state="entry.session.status" :data-unread="entry.session.unread ? 'true' : undefined" role="button" tabindex="0" @click="selectSession(story, entry)" @keydown.enter.prevent="selectSession(story, entry)" @keydown.space.prevent="selectSession(story, entry)">
+                  <ContextMenuTrigger as-child :disabled="!sessionIsOnline(story, entry)">
+                    <div class="story-tree-item story-session-tree-row" :class="{ active: isSessionSelected(story, entry.session.id), 'story-tree-item-detailed': treeViewMode === 'detailed', 'story-tree-item-unread': entry.session.unread, 'story-tree-item-unavailable': !sessionIsOnline(story, entry) }" :style="storySessionTreeStyle(entry.depth)" :data-state="entry.session.status" :data-unread="entry.session.unread ? 'true' : undefined" role="button" :aria-disabled="!sessionIsOnline(story, entry)" :tabindex="sessionIsOnline(story, entry) ? 0 : -1" @click="selectSession(story, entry)" @keydown.enter.prevent="selectSession(story, entry)" @keydown.space.prevent="selectSession(story, entry)">
                       <span class="story-session-leading"><span class="story-session-semantic"><span v-if="entry.session.status === 'running'" class="story-session-status"><AiSessionStatusIndicator :status="entry.session.status" /></span><span v-else class="story-session-icon"><MessageSquare :size="14" /><AiSessionStatusIndicator class="story-session-icon-status" :status="entry.session.status" size="compact" /></span></span><button v-if="entry.hasChildren" type="button" class="story-session-disclosure" :aria-expanded="isStorySessionExpanded(entry.session.id)" :aria-label="sessionDisclosureLabel(isStorySessionExpanded(entry.session.id))" @click.stop="toggleStorySessionExpanded(entry.session.id)" @keydown.stop><ChevronRight class="story-session-chevron" :class="{ expanded: isStorySessionExpanded(entry.session.id) }" :size="14" /></button></span><span class="story-tree-item-copy" :class="{ 'story-tree-item-detail': treeViewMode === 'detailed' }"><strong>{{ entry.session.title || entry.session.userPrompt || entry.session.id }}</strong><small v-if="treeViewMode === 'detailed'">{{ entry.instance.name }} · {{ sessionStatusLabel(entry.session.status, t) }}</small></span><small v-if="treeViewMode === 'compact'" class="story-tree-item-hint" aria-hidden="true">{{ entry.instance.name }}</small><span v-if="entry.session.unread" class="story-session-unread" :aria-label="t('sessions.actions.unread')" :title="t('sessions.actions.unread')" />
                     </div>
                   </ContextMenuTrigger>
@@ -139,7 +139,7 @@
 
       <main class="story-content" :class="{ 'story-session-pane': (selectedResource?.kind === 'session' || selectedResource?.kind === 'new-session') }">
         <template v-if="selectedResource?.kind === 'new-session'">
-          <AiSessionPanel v-if="newSessionInstance" class="story-session-creator" :active-session="creationActiveSession" :choose-project-folder="projectFolderChooserFor(newSessionInstance)" creation-only :creation-story-id="selectedResource.story.id" :creation-initial-cwd="newSessionInitialCwd" :creation-initial-cwd-folder-id="newSessionInitialCwdFolderId" :creation-instances="storyInstances" :instance="newSessionInstance" :launchable-apps="launchableAppsForInstance(newSessionInstance, t)" :launching-app="launchingApp" :node-local-folders="nodeLocalFoldersByNodeId[newSessionInstance.nodeId] || []" :selected-ai-session="noSelectedAiSession" @update:creation-instance="selectCreationInstance" @session-created="finishStorySessionCreation" />
+          <AiSessionPanel v-if="newSessionInstance" class="story-session-creator" :active-session="creationActiveSession" :choose-project-folder="projectFolderChooserFor(newSessionInstance)" creation-only :creation-story-id="selectedResource.story.id" :creation-initial-cwd="newSessionInitialCwd" :creation-initial-cwd-folder-id="newSessionInitialCwdFolderId" :creation-instances="storyInstances" :creation-instance-disabled="(candidate) => !aiSessionLaunchableAppsForInstance(candidate, t).length" :instance="newSessionInstance" :launchable-apps="launchableAppsForInstance(newSessionInstance, t)" :launching-app="launchingApp" :node-local-folders="nodeLocalFoldersByNodeId[newSessionInstance.nodeId] || []" :selected-ai-session="noSelectedAiSession" @open-settings="(instanceId, section) => emit('open-settings', instanceId, section)" @update:creation-instance="selectCreationInstance" @session-created="finishStorySessionCreation" />
           <div v-else class="story-content-state">{{ t("stories.noAvailableInstance") }}</div>
         </template>
         <template v-else-if="selectedResource?.kind === 'session'">
@@ -312,7 +312,7 @@
                     <Button variant="ghost" size="sm" @click="loadStoryHistory">{{ t("sessions.panel.retry") }}</Button>
                   </div>
                   <div v-else-if="!storyHistoryEntries.length" class="story-empty">{{ t("stories.noHistorySessions") }}</div>
-                  <button v-for="entry in pagedStoryHistoryEntries" :key="`${entry.instance.id}:${entry.item.id}`" type="button" class="story-resource-item" @click="openStoryHistoryEntry(entry)">
+                  <button v-for="entry in pagedStoryHistoryEntries" :key="`${entry.instance.id}:${entry.item.id}`" type="button" class="story-resource-item" :class="{ 'story-resource-item-unavailable': !storyHistoryEntryIsOnline(entry) }" :disabled="!storyHistoryEntryIsOnline(entry)" @click="openStoryHistoryEntry(entry)">
                     <span class="story-resource-icon"><History :size="15" /></span>
                     <span class="story-resource-copy"><strong>{{ storyHistoryItemTitle(entry.item) }}</strong><small>{{ entry.instance.name }} · {{ actionAgentLabel(entry.item.agent) }} · {{ formatStoryHistoryTime(entry.item.lastActiveAt) }}</small></span>
                   </button>
@@ -324,7 +324,7 @@
                 <template v-else>
                   <div v-if="!sessionsFor(selectedResource.story).length" class="story-empty">{{ t("stories.noLinkedSessions") }}</div>
                   <div class="story-session-resource-list">
-                  <div v-for="entry in pagedStoryCurrentSessions" :key="entry.session.id" class="story-resource-item story-session-resource-row" :class="{ active: isSessionSelected(selectedResource.story, entry.session.id) }" :style="storySessionTreeStyle(entry.depth)" role="button" tabindex="0" @click="selectSession(selectedResource.story, entry)" @keydown.enter.prevent="selectSession(selectedResource.story, entry)" @keydown.space.prevent="selectSession(selectedResource.story, entry)">
+                  <div v-for="entry in pagedStoryCurrentSessions" :key="entry.session.id" class="story-resource-item story-session-resource-row" :class="{ active: isSessionSelected(selectedResource.story, entry.session.id), 'story-resource-item-unavailable': !sessionIsOnline(selectedResource.story, entry) }" :style="storySessionTreeStyle(entry.depth)" role="button" :aria-disabled="!sessionIsOnline(selectedResource.story, entry)" :tabindex="sessionIsOnline(selectedResource.story, entry) ? 0 : -1" @click="selectSession(selectedResource.story, entry)" @keydown.enter.prevent="selectSession(selectedResource.story, entry)" @keydown.space.prevent="selectSession(selectedResource.story, entry)">
                     <span class="story-resource-icon story-session-leading"><span class="story-session-semantic"><AiSessionStatusIndicator v-if="entry.session.status === 'running'" :status="entry.session.status" /><span v-else class="story-resource-session-icon"><MessageSquare :size="15" /><AiSessionStatusIndicator class="story-resource-session-status" :status="entry.session.status" size="compact" /></span></span><button v-if="entry.hasChildren" type="button" class="story-session-disclosure story-session-resource-disclosure" :aria-expanded="isStorySessionExpanded(entry.session.id)" :aria-label="sessionDisclosureLabel(isStorySessionExpanded(entry.session.id))" @click.stop="toggleStorySessionExpanded(entry.session.id)" @keydown.stop><ChevronRight class="story-session-chevron" :class="{ expanded: isStorySessionExpanded(entry.session.id) }" :size="16" /></button></span>
                     <span class="story-resource-copy"><strong>{{ entry.session.title || entry.session.userPrompt || entry.session.id }}</strong><small>{{ entry.instance.name }} · {{ sessionStatusLabel(entry.session.status, t) }}</small></span>
                     <span v-if="entry.session.unread" class="story-resource-unread" :aria-label="t('sessions.actions.unread')" :title="t('sessions.actions.unread')" />
@@ -489,9 +489,10 @@ import {
 } from "@task-handoff/protocol/ai-session-hierarchy";
 import AiSessionPanel, { type AiSessionCreationPresetDraft } from "../instance-detail/AiSessionPanel.vue";
 import { canUseNativeProjectFolderPicker, type NativeNodeFolderPicker } from "../nodePath";
-import { launchableAppsForInstance, sessionStatusLabel, terminalAppIdForLaunchableApps, type RepositoryWorkspaceTabTarget, type SessionTab } from "../useInstanceSessions";
+import { aiSessionLaunchableAppsForInstance, launchableAppsForInstance, sessionStatusLabel, terminalAppIdForLaunchableApps, type RepositoryWorkspaceTabTarget, type SessionTab } from "../useInstanceSessions";
 import { latestStoryDocuments, STORY_TREE_DOCUMENT_LIMIT } from "./storyDocuments";
 import { normalizeManualStoryOrder, reorderStoryKeys, reuseEqualStoryActivityTimes, sortStories, storyDropTargetAt, storySortKey, type StorySortMode } from "./storySort";
+import { isStoryOnline, isStorySessionOnline } from "./storyAvailability";
 import { useAiSessionTriggers } from "../useAiSessionTriggers";
 import { allStoryNodes, storyNodeIsVisible, type StoryNodeFilter } from "@task-handoff/control-plane-client";
 import { storySelectionKey, type StorySelection } from "./storySelection";
@@ -521,6 +522,7 @@ const emit = defineEmits<{
   "launch-app": [instance: InstanceBoardItem, appId: string, cwdFolderId?: string, options?: Record<string, unknown>];
   "open-session": [instance: InstanceWithAiSessions, session: AiSessionSummary | undefined];
   "open-repository-workspace": [target: RepositoryWorkspaceTabTarget];
+  "open-settings": [instanceId: string, section?: "apps" | "models"];
   "run-action": [story: Story, action: StoryAction, onCreated: (instanceId: string, sessionId: string) => void];
 }>();
 type StorySessionRecord = AiSessionSummary & { instanceId: string };
@@ -957,6 +959,7 @@ function setStorySessionView(view: StorySessionView) {
   if (view === "history" && !storyHistoryEntries.value.length && !storyHistoryLoading.value) void loadStoryHistory();
 }
 function openStoryHistoryEntry(entry: StoryHistoryEntry) {
+  if (!storyHistoryEntryIsOnline(entry)) return;
   storyHistoryDetailEntry.value = entry;
   storyHistoryDetailOpen.value = true;
 }
@@ -1066,6 +1069,12 @@ const latestSessionFor = (story: Story) => {
   return instance ? { instance, session: root.session } : undefined;
 };
 const instancesForStory = (story: Story) => props.instances.filter((instance) => instance.node?.id === story.ownerNodeId);
+const storyIsOnline = (story: Story) => isStoryOnline(story, props.nodes);
+const sessionIsOnline = (story: Story, entry: SessionEntry) => isStorySessionOnline(story, props.nodes, entry.instance);
+const storyHistoryEntryIsOnline = (entry: StoryHistoryEntry) => {
+  const story = selectedResource.value?.story;
+  return Boolean(story && isStorySessionOnline(story, props.nodes, entry.instance));
+};
 const documentResource = computed(() => selectedResource.value?.kind === "document" ? selectedResource.value : undefined);
 const documentInstanceId = computed(() => { const resource = documentResource.value; return resource ? instancesForStory(resource.story)[0]?.id ?? "" : ""; });
 const documentMarkdownSessionId = computed(() => { const resource = documentResource.value; return resource ? `${resource.story.ownerNodeId}:${resource.story.id}:${resource.document.storyPath}` : ""; });
@@ -1113,9 +1122,9 @@ const hasMoreTreeDocuments = (story: Story) => story.documents.length > STORY_TR
 function showAllTreeDocuments(story: Story) { expandedDocumentStoryKeys.value = new Set(expandedDocumentStoryKeys.value).add(storyKey(story)); }
 function setStoryExpanded(story: Story, expanded: boolean) { const next = new Set(expandedStoryKeys.value); const key = storyKey(story); if (expanded) next.add(key); else next.delete(key); expandedStoryKeys.value = next; persistExpandedStoryKeys(next); }
 function toggleStoryExpanded(story: Story) { setStoryExpanded(story, !isStoryOpen(story)); }
-function selectStory(story: Story) { selectedResource.value = { kind: "story", story }; }
-function selectDocument(story: Story, path: string) { const document = story.documents.find((item) => item.storyPath === path); if (document) { setStoryExpanded(story, true); if (!treeDocumentsFor(story).includes(document)) showAllTreeDocuments(story); selectedResource.value = { kind: "document", story, document }; } }
-function selectSession(story: Story, entry: SessionEntry) { setStoryExpanded(story, true); selectedResource.value = { kind: "session", story, entry }; }
+function selectStory(story: Story) { if (storyIsOnline(story)) selectedResource.value = { kind: "story", story }; }
+function selectDocument(story: Story, path: string) { if (!storyIsOnline(story)) return; const document = story.documents.find((item) => item.storyPath === path); if (document) { setStoryExpanded(story, true); if (!treeDocumentsFor(story).includes(document)) showAllTreeDocuments(story); selectedResource.value = { kind: "document", story, document }; } }
+function selectSession(story: Story, entry: SessionEntry) { if (!sessionIsOnline(story, entry)) return; setStoryExpanded(story, true); selectedResource.value = { kind: "session", story, entry }; }
 function storySessionTreeStyle(depth = 0): CSSProperties { return { "--story-session-tree-indent": `${depth * 14}px` } as CSSProperties; }
 function isStorySessionExpanded(sessionId: string) { return expandedStorySessionIds.value.has(sessionId) || forcedExpandedStorySessionIds.value.has(sessionId); }
 function sessionDisclosureLabel(expanded: boolean) { return t(expanded ? "sessions.panel.collapseSubSessions" : "sessions.panel.expandSubSessions"); }
@@ -1180,20 +1189,20 @@ function selectionForResource(resource: Resource | undefined): StorySelection | 
 function resolveSelection(selection: StorySelection | undefined): Resource | undefined {
   if (!selection) return undefined;
   const story = filteredStories.value.find((candidate) => candidate.id === selection.storyId && candidate.ownerNodeId === selection.ownerNodeId);
-  if (!story) return undefined;
+  if (!story || !storyIsOnline(story)) return undefined;
   if (selection.kind === "document") {
     const document = story.documents.find((candidate) => candidate.storyPath === selection.storyPath);
     return document ? { kind: "document", story, document } : { kind: "story", story };
   }
   if (selection.kind === "session") {
     const entry = allSessionsForStory(story).find((candidate) => candidate.instance.id === selection.instanceId && candidate.session.id === selection.sessionId);
-    return entry ? { kind: "session", story, entry } : { kind: "story", story };
+    return entry && sessionIsOnline(story, entry) ? { kind: "session", story, entry } : { kind: "story", story };
   }
   return { kind: "story", story };
 }
 function refreshResource(resource: Resource): Resource | undefined {
   const story = filteredStories.value.find((candidate) => candidate.id === resource.story.id && candidate.ownerNodeId === resource.story.ownerNodeId);
-  if (!story) return undefined;
+  if (!story || !storyIsOnline(story)) return undefined;
   if (resource.kind === "new-session") return { kind: "new-session", story };
   return resolveSelection(selectionForResource(resource));
 }
@@ -1284,16 +1293,20 @@ watch(() => selectedResource.value?.kind === "story" ? `${selectedResource.value
 watch(storyDocumentPageCount, (total) => { storyDocumentPage.value = Math.min(storyDocumentPage.value, total); });
 watch(storyCurrentSessionPageCount, (total) => { storyCurrentSessionPage.value = Math.min(storyCurrentSessionPage.value, total); });
 watch(storyHistoryPageCount, (total) => { storyHistoryPage.value = Math.min(storyHistoryPage.value, total); });
-watch(filteredStories, () => {
+watch([filteredStories, () => props.nodes, () => props.instances], () => {
   const resource = selectedResource.value;
   if (!resource) {
     const restored = resolveSelection(props.selection);
     if (restored) selectedResource.value = restored;
-    else if (stories.value[0]) selectStory(stories.value[0]);
+    else {
+      const firstOnlineStory = stories.value.find(storyIsOnline);
+      if (firstOnlineStory) selectStory(firstOnlineStory);
+    }
     return;
   }
   const refreshed = refreshResource(resource);
-  selectedResource.value = refreshed || (stories.value[0] ? { kind: "story", story: stories.value[0] } : undefined);
+  const firstOnlineStory = stories.value.find(storyIsOnline);
+  selectedResource.value = refreshed || (firstOnlineStory ? { kind: "story", story: firstOnlineStory } : undefined);
 }, { immediate: true });
 function openCreate() {
   editing.value = false;
@@ -1399,7 +1412,7 @@ async function commitStoryTitleEdit() {
     savingStoryTitle.value = false;
   }
 }
-function openNewSession(story: Story) { if (!story) return; const latest = latestSessionFor(story); setStoryExpanded(story, true); newSessionInstanceId.value = latest?.instance.id || instancesForStory(story)[0]?.id || ""; newSessionInitialCwd.value = latest?.session.cwd || ""; newSessionInitialCwdFolderId.value = latest?.session.cwdFolderId || ""; selectedResource.value = { kind: "new-session", story }; }
+function openNewSession(story: Story) { if (!storyIsOnline(story)) return; const latest = latestSessionFor(story); setStoryExpanded(story, true); newSessionInstanceId.value = latest?.instance.id || instancesForStory(story)[0]?.id || ""; newSessionInitialCwd.value = latest?.session.cwd || ""; newSessionInitialCwdFolderId.value = latest?.session.cwdFolderId || ""; selectedResource.value = { kind: "new-session", story }; }
 function selectCreationInstance(instanceId: string) { newSessionInstanceId.value = instanceId; newSessionInitialCwd.value = ""; newSessionInitialCwdFolderId.value = ""; }
 function openAssignSession() { assignSessionId.value = availableSessions.value[0] ? `${availableSessions.value[0].instance.id}:${availableSessions.value[0].session.id}` : ""; assignSessionOpen.value = true; }
 function openAssignSessionFor(story: Story) { if (!story || story.archivedAt) return; selectStory(story); openAssignSession(); }
@@ -1621,6 +1634,9 @@ onBeforeUnmount(() => {
 .story-tree-archived .story-tree-item,.story-tree-archived .story-tree-disclosure-button,.story-tree-archived .story-tree-empty { color:var(--story-tree-archived-foreground); }
 .story-tree-archived .story-tree-story { padding-right:68px; }
 .story-tree-archived .story-tree-item svg { opacity:.72; }
+.story-tree-unavailable .story-tree-item,.story-tree-unavailable .story-tree-disclosure-button,.story-tree-item-unavailable,.story-resource-item-unavailable { color:var(--text-muted); opacity:.5; }
+.story-tree-item:disabled,.story-tree-item-unavailable,.story-resource-item-unavailable { cursor:not-allowed; }
+.story-tree-item:disabled:hover,.story-tree-item.story-tree-item-unavailable:hover,.story-resource-item.story-resource-item-unavailable:hover { background:transparent; }
 .story-tree-item:hover { background:var(--sidebar-row-hover-bg,var(--surface-active)); }
 .story-tree-item.active,.story-tree-item.active:hover { background:var(--sidebar-row-selected-bg,var(--surface-active)); }
 .story-tree-disclosure-button { position:absolute; z-index:1; top:50%; left:4px; display:grid; width:24px; height:24px; place-items:center; border:0; border-radius:4px; background:transparent; color:var(--text-muted); cursor:pointer; padding:0; transform:translateY(-50%); }

@@ -15,6 +15,7 @@ import {
   sortedAiSessions,
   sortedAiSessionsByLastUserMessage,
 } from "@task-handoff/control-plane-client";
+import { directoryAiSessionProviderCapability } from "@task-handoff/protocol/control-plane-directory";
 
 export {
   aiSessionLastUserMessageTime,
@@ -242,6 +243,13 @@ export function launchableAppsForInstance(instance: InstanceBoardItem, t: Transl
       })
       .filter((app): app is LaunchableApp => Boolean(app)),
   );
+}
+
+export function aiSessionLaunchableAppsForInstance(instance: InstanceBoardItem, t: Translate): LaunchableApp[] {
+  return launchableAppsForInstance(instance, t).filter((app) => {
+    const capability = directoryAiSessionProviderCapability(instance.capabilities?.features, app.id);
+    return capability ? capability.actions.create === true : app.id === "codex";
+  });
 }
 
 export function terminalAppIdForLaunchableApps(apps: readonly Pick<LaunchableApp, "id">[] | undefined) {

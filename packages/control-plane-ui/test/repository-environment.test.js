@@ -74,39 +74,48 @@ test("Worktrees use opaque server ids and expose AI-session creation without cwd
   assert.match(repositoryApi, /target\.sessionKind !== "ai-session"/);
 });
 
-test("managed worktree creation launches a new session without a client filesystem path", async () => {
-  const [panel, worktreesTab, repositoryApi] = await Promise.all([
+test("managed worktree creation reuses the shared dialog without starting an AI session", async () => {
+  const [panel, dialog, worktreesTab, repositoryApi] = await Promise.all([
     source("apps/control-plane/instance-detail/RepositoryWorktreesPanel.vue"),
+    source("apps/control-plane/instance-detail/NewWorktreeDialog.vue"),
     source("apps/control-plane/instance-detail/RepositoryWorktreesTab.vue"),
     source("api/repository.ts"),
   ]);
 
-  assert.match(panel, /repository\.worktreesPanel\.newTitle/);
-  assert.match(panel, /mode: "new-branch", branchName, startRef, expectedSnapshotId/);
-  assert.match(panel, /repository\.worktreesPanel\.newHint/);
-  assert.match(panel, /worktreeRemoved/);
-  assert.match(panel, /recoverable/);
+  assert.match(panel, /<NewWorktreeDialog/);
+  assert.match(panel, /createRepositoryWorktree\(target\.value, \{ \.\.\.selection, expectedSnapshotId: worktrees\.value\.snapshotId \}\)/);
+  assert.match(dialog, /sessions\.panel\.newWorktreeDescription/);
+  assert.match(dialog, /value="existing-branch"/);
+  assert.match(dialog, /value="new-branch"/);
+  assert.doesNotMatch(panel, /createMessage|createRepositoryWorktreeAiSession/);
   assert.match(panel, /\.repository-worktree-list \{[\s\S]*gap: 2px/);
   assert.match(panel, /\.repository-worktree-card \{[\s\S]*gap: 5px;[\s\S]*border: 0;[\s\S]*background: transparent;[\s\S]*padding: 7px 8px/);
   assert.match(panel, /\.repository-worktree-card\[data-current="true"\] \{[\s\S]*background: color-mix\(in srgb, var\(--brand-accent\) 9%, transparent\)/);
-  assert.match(panel, /\.repository-worktree-card\[data-current="true"\] \.repository-worktree-branch strong,[\s\S]*color: var\(--brand-accent-muted, var\(--brand-accent\)\)/);
-  assert.match(repositoryApi, /\/worktrees\/ai-sessions/);
+  assert.match(panel, /\.repository-worktree-card\[data-current="true"\] \.repository-worktree-branch strong,[\s\S]*color: var\(--repository-current-text, var\(--brand-accent-muted, var\(--brand-accent\)\)\)/);
+  assert.match(repositoryApi, /repositoryTargetBasePath\(target\)\}\/worktrees`/);
   assert.doesNotMatch(panel, /worktree:\s*\{[^}]*\b(path|cwd)\s*:/);
   assert.match(worktreesTab, /props\.session\.source\?\.aiAgent/);
   assert.match(worktreesTab, /agent === "codex" \|\| agent === "claude"/);
 });
 
 test("new-session worktree dialog restores branch selection and detached checkout semantics", async () => {
-  const panel = await source("apps/control-plane/instance-detail/AiSessionPanel.vue");
+  const [panel, dialog, branchPicker] = await Promise.all([
+    source("apps/control-plane/instance-detail/AiSessionPanel.vue"),
+    source("apps/control-plane/instance-detail/NewWorktreeDialog.vue"),
+    source("apps/control-plane/instance-detail/NewWorktreeBranchPicker.vue"),
+  ]);
 
-  assert.match(panel, /ToggleGroupItem value="existing-branch"/);
-  assert.match(panel, /ToggleGroupItem value="new-branch"/);
-  assert.match(panel, /branch\.worktreeSelectable && \(!query \|\| branch\.name\.toLowerCase\(\)\.includes\(query\)\)/);
-  assert.match(panel, /newSessionWorktreeBranchDetached\(node\.branch\)[\s\S]*sessions\.panel\.detached/);
-  assert.match(panel, /newWorktreeDetachedDescription/);
+  assert.match(panel, /<NewWorktreeDialog/);
+  assert.match(dialog, /ToggleGroupItem value="existing-branch"/);
+  assert.match(dialog, /ToggleGroupItem value="new-branch"/);
+  assert.match(dialog, /id="new-worktree-existing-branch"[\s\S]*v-model="branchName"[\s\S]*selectable-only/);
+  assert.match(dialog, /id="new-worktree-start-ref"[\s\S]*v-model="startRef"[\s\S]*:branches="branches"/);
+  assert.match(branchPicker, /\(!props\.selectableOnly \|\| branch\.worktreeSelectable\)/);
+  assert.match(branchPicker, /showDetached && node\.branch\.worktreeCheckout === 'detached'/);
+  assert.match(dialog, /newWorktreeDetachedDescription/);
   assert.match(panel, /\{ mode: "worktree", branch: newSessionManagedWorktreeBranch\.value \}/);
   assert.match(panel, /\|\| newSessionManagedWorktreeBranch\.value[\s\S]*\? undefined/);
-  assert.match(panel, /newSessionWorktreeId\.value = "";[\s\S]*newSessionCreateNewWorktree\.value = false/);
+  assert.match(panel, /selection\.mode === "existing-branch"[\s\S]*newSessionWorktreeId\.value = "";[\s\S]*newSessionCreateNewWorktree\.value = false/);
 });
 
 test("managed worktree removal is AI-only, confirmed, non-force, and retains the branch", async () => {
@@ -373,7 +382,7 @@ test("Repository navigation keeps portal, keyboard, path, and confirmation contr
   assert.match(workspace, /<RepositoryFilePreview :content="activeTab\.content"/);
 
   assert.match(worktrees, /workspaceSelection:[\s\S]*repositoryContextId:[\s\S]*worktreeId:/);
-  assert.match(worktrees, /repository\.worktreesPanel\.newHint/);
+  assert.match(worktrees, /<NewWorktreeDialog/);
   assert.match(workspace, /confirm: true/);
   assert.doesNotMatch(workspace, /data-discard-cancel|This commits the current index only/);
 });

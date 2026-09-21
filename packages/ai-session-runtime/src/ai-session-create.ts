@@ -94,14 +94,14 @@ export class AiSessionCreateCoordinator {
     }
     const modelSelection = this.options.resolveModelSelection?.(input.agent, input.modelSelection) || input.modelSelection;
     const storyAgentTools = await this.measure(input, "story-agent-tools", async () => (
-      this.options.resolveStoryAgentTools?.(input.storyId) || []
+      input.storyId ? await this.options.resolveStoryAgentTools?.(input.storyId) || [] : undefined
     ));
     const created = await this.measure(input, "provider-create", () => provider.createSession!({
       cwd: input.cwd,
       permissionMode: input.permissionMode,
       modelSelection,
       reasoningEffort: input.reasoningEffort,
-      storyAgentTools,
+      ...(storyAgentTools !== undefined ? { storyAgentTools } : {}),
     }));
     const providerSessionId = created.providerSessionId.trim();
     if (!providerSessionId || created.creationSource !== "ai-session") {

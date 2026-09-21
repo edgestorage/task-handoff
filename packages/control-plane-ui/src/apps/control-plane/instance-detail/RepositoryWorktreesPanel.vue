@@ -10,15 +10,13 @@
       </span>
       <span class="repository-worktree-header-actions">
         <button
-          v-if="canStartAiSession"
+          v-if="canManageWorktrees"
           type="button"
-          :aria-label="t('repository.worktreesPanel.createSession')"
-          :title="t('repository.worktreesPanel.createSession')"
-          :aria-expanded="createOpen"
-          @click="toggleCreate"
+          :aria-label="t('repository.worktreesPanel.create')"
+          :title="t('repository.worktreesPanel.create')"
+          @click="openCreateDialog"
         >
-          <X v-if="createOpen" :size="14" />
-          <Plus v-else :size="14" />
+          <Plus :size="14" />
         </button>
         <button
           type="button"
@@ -32,38 +30,6 @@
         </button>
       </span>
     </header>
-
-    <form v-if="createOpen" class="repository-worktree-create" @submit.prevent="createManagedWorktreeSession">
-      <div>
-        <strong>{{ t("repository.worktreesPanel.newTitle") }}</strong>
-        <small>{{ t("repository.worktreesPanel.newHint") }}</small>
-      </div>
-      <label>
-        <span>{{ t("repository.worktreesPanel.newBranch") }}</span>
-        <!-- i18n-audit-allow-next-line code-token: example Git branch name -->
-        <input v-model="createBranchName" name="branchName" autocomplete="off" placeholder="feature/my-change" :disabled="creatingManagedSession" />
-      </label>
-      <label>
-        <span>{{ t("repository.worktreesPanel.startRef") }}</span>
-        <!-- i18n-audit-allow-next-line code-token: Git revision token -->
-        <input v-model="createStartRef" name="startRef" autocomplete="off" placeholder="HEAD" :disabled="creatingManagedSession" />
-      </label>
-      <label>
-        <span>{{ t("repository.worktreesPanel.task") }}</span>
-        <textarea v-model="createMessage" name="message" :placeholder="t('repository.worktreesPanel.taskPlaceholder')" :disabled="creatingManagedSession" />
-      </label>
-      <RepositoryErrorNotice v-if="createError" :error="createError" :fallback="t('repository.worktreesPanel.createError')" />
-      <small v-if="createRecoveryKey" class="repository-worktree-recovery">{{ t(createRecoveryKey) }}</small>
-      <button
-        type="submit"
-        class="repository-worktree-create-submit"
-        :disabled="creatingManagedSession || !worktrees?.snapshotId || !createBranchName.trim() || !createStartRef.trim() || !createMessage.trim()"
-      >
-        <LoaderCircle v-if="creatingManagedSession" class="repository-worktree-spin" :size="14" />
-        <GitFork v-else :size="14" />
-        <span>{{ t(creatingManagedSession ? "repository.worktreesPanel.creating" : "repository.worktreesPanel.create") }}</span>
-      </button>
-    </form>
 
     <label v-if="worktrees?.items.length" class="repository-worktree-search">
       <Search :size="15" />
@@ -160,6 +126,21 @@
       </div>
     </ScrollArea>
 
+    <NewWorktreeDialog
+      :branches="createBranches"
+      :busy="creatingManagedSession"
+      :busy-label="t('repository.worktreesPanel.creating')"
+      :confirm-enabled="Boolean(worktrees?.snapshotId)"
+      :confirm-label="t('repository.worktreesPanel.create')"
+      :default-start-ref="createStartRef"
+      :description="t('repository.worktreesPanel.createDescription')"
+      :open="createOpen"
+      @confirm="createWorktree"
+      @update:open="setCreateDialogOpen"
+    >
+      <RepositoryErrorNotice v-if="createError" :error="createError" :fallback="t('repository.worktreesPanel.createError')" />
+    </NewWorktreeDialog>
+
     <Dialog v-model:open="removeDialogOpen">
       <DialogContent class="repository-worktree-remove-dialog">
         <DialogHeader>
@@ -189,16 +170,16 @@
 
 <script setup lang="ts">
 import type { RepositoryAiSessionLaunchResult, RepositorySessionKind, RepositoryWorktree, RepositoryWorktreeBlocker } from "@task-handoff/protocol/repository";
-import { Check, GitBranch, GitCommitHorizontal, GitFork, LoaderCircle, Plus, RefreshCw, Search, Trash2, X } from "@lucide/vue";
+import { Check, GitBranch, GitCommitHorizontal, GitFork, LoaderCircle, Plus, RefreshCw, Search, Trash2 } from "@lucide/vue";
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { ApiError } from "../../../api/client";
-import { createRepositoryWorktreeAiSession, removeRepositoryWorktree, startRepositoryAiSession, useRepositoryWorktreesQuery } from "../../../api/repository";
+import { createRepositoryWorktree, removeRepositoryWorktree, startRepositoryAiSession, useRepositoryBranchesQuery, useRepositoryWorktreesQuery } from "../../../api/repository";
 import { Button } from "../../../components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
 import { ScrollArea } from "../../../components/ui/scroll-area";
 import RepositoryErrorNotice from "./RepositoryErrorNotice.vue";
 import { createBrowserUuid } from "../../../lib/random-id";
+import NewWorktreeDialog, { type NewWorktreeBranch, type NewWorktreeSelection } from "./NewWorktreeDialog.vue";
 
 const props = withDefaults(defineProps<{
   aiAgent?: "codex" | "claude" | "opencode";
@@ -239,15 +220,13 @@ const filteredWorktrees = computed(() => {
 });
 const canStartAiSession = computed(() => props.sessionKind === "ai-session" && Boolean(props.aiAgent));
 const canManageWorktrees = computed(() => props.sessionKind === "ai-session");
+const branchesQuery = useRepositoryBranchesQuery(target, computed(() => props.open && canManageWorktrees.value));
 const startingWorktreeId = ref("");
 const startError = ref<unknown>();
 const createOpen = ref(false);
-const createBranchName = ref("");
 const createStartRef = ref("HEAD");
-const createMessage = ref("");
 const creatingManagedSession = ref(false);
 const createError = ref<unknown>();
-const createRecoveryKey = ref("");
 const removeDialogOpen = ref(false);
 const removeTarget = ref<RepositoryWorktree>();
 const removingWorktree = ref(false);
@@ -255,6 +234,13 @@ const removeError = ref<unknown>();
 const removeSuccessKey = ref("");
 const startingComposerWorktreeId = ref("");
 const startMessage = ref("");
+const createBranches = computed<NewWorktreeBranch[]>(() => (branchesQuery.data.value?.branches || [])
+  .filter((branch) => branch.kind === "local")
+  .map((branch) => ({
+    name: branch.name,
+    worktreeCheckout: branch.checkedOutWorktreeIds.length ? "detached" : "attached",
+    worktreeSelectable: true,
+  })));
 
 function worktreeLabel(worktree: RepositoryWorktree) {
   if (worktree.head.state === "branch") return worktree.head.branch || t("repository.common.unknownBranch");
@@ -323,46 +309,28 @@ async function removeSelectedWorktree() {
   }
 }
 
-function toggleCreate() {
-  createOpen.value = !createOpen.value;
+function openCreateDialog() {
   createError.value = undefined;
-  createRecoveryKey.value = "";
-  if (createOpen.value && createStartRef.value === "HEAD") {
-    const current = worktrees.value?.items.find((item) => item.isCurrent);
-    createStartRef.value = current?.head.branch || current?.head.oid || "HEAD";
-  }
+  const current = worktrees.value?.items.find((item) => item.isCurrent);
+  createStartRef.value = current?.head.branch || current?.head.oid || "HEAD";
+  createOpen.value = true;
 }
 
-async function createManagedWorktreeSession() {
-  if (!props.aiAgent || !worktrees.value?.snapshotId || creatingManagedSession.value) return;
-  const branchName = createBranchName.value.trim();
-  const startRef = createStartRef.value.trim();
-  const message = createMessage.value.trim();
-  if (!branchName || !startRef || !message) return;
+function setCreateDialogOpen(open: boolean) {
+  if (creatingManagedSession.value) return;
+  createOpen.value = open;
+}
+
+async function createWorktree(selection: NewWorktreeSelection) {
+  if (!canManageWorktrees.value || !worktrees.value?.snapshotId || creatingManagedSession.value) return;
   createError.value = undefined;
-  createRecoveryKey.value = "";
   creatingManagedSession.value = true;
   try {
-    const result = await createRepositoryWorktreeAiSession(target.value, {
-      agent: props.aiAgent,
-      worktree: { mode: "new-branch", branchName, startRef, expectedSnapshotId: worktrees.value.snapshotId },
-      message,
-      clientRequestId: createBrowserUuid(),
-    });
-    emit("aiSessionStarted", result);
-    createBranchName.value = "";
-    createMessage.value = "";
+    await createRepositoryWorktree(target.value, { ...selection, expectedSnapshotId: worktrees.value.snapshotId });
     createOpen.value = false;
     await worktreesQuery.refetch();
   } catch (error) {
     createError.value = error;
-    if (error instanceof ApiError) {
-      if (error.details?.worktreeRemoved === true) {
-        createRecoveryKey.value = "repository.worktreeDirectoryRemoved";
-      } else if (error.details?.recoverable === true) {
-        createRecoveryKey.value = "repository.worktreesPanel.recovery";
-      }
-    }
     await worktreesQuery.refetch();
   } finally {
     creatingManagedSession.value = false;
@@ -502,44 +470,6 @@ async function startAiSession(worktree: RepositoryWorktree) {
   color: var(--text);
 }
 
-.repository-worktree-create {
-  display: grid;
-  gap: 9px;
-  margin-bottom: 8px;
-  border: 1px solid color-mix(in srgb, var(--focus-ring) 45%, var(--line-subtle));
-  border-radius: 9px;
-  background: var(--workspace-bg, var(--background));
-  padding: 10px;
-}
-
-.repository-worktree-create > div:first-child,
-.repository-worktree-create label,
-.repository-worktree-create-error > span {
-  display: grid;
-  gap: 3px;
-}
-
-.repository-worktree-create strong,
-.repository-worktree-create label > span {
-  color: var(--text-strong);
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.repository-worktree-create small {
-  color: var(--text-muted);
-  font-size: 12px;
-  line-height: 1.4;
-}
-
-.repository-worktree-recovery {
-  color: var(--text-muted);
-  font-size: 12px;
-  line-height: 1.4;
-}
-
-.repository-worktree-create input,
-.repository-worktree-create textarea,
 .repository-worktree-start-composer textarea {
   width: 100%;
   border: 1px solid var(--line-subtle);
@@ -551,18 +481,11 @@ async function startAiSession(worktree: RepositoryWorktree) {
   font-size: 12px;
 }
 
-.repository-worktree-create input {
-  height: 31px;
-}
-
-.repository-worktree-create textarea,
 .repository-worktree-start-composer textarea {
   min-height: 68px;
   resize: vertical;
 }
 
-.repository-worktree-create input:focus-visible,
-.repository-worktree-create textarea:focus-visible,
 .repository-worktree-start-composer textarea:focus-visible {
   border-color: var(--focus-ring);
 }
@@ -576,38 +499,6 @@ async function startAiSession(worktree: RepositoryWorktree) {
   display: flex;
   justify-content: flex-end;
   gap: 6px;
-}
-
-.repository-worktree-create-error {
-  display: flex;
-  align-items: flex-start;
-  gap: 7px;
-  color: var(--status-warning);
-}
-
-.repository-worktree-create-error strong,
-.repository-worktree-create-error small {
-  color: inherit;
-}
-
-.repository-worktree-create-submit {
-  display: flex;
-  min-height: 33px;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  border: 1px solid var(--focus-ring);
-  border-radius: 7px;
-  background: color-mix(in srgb, var(--focus-ring) 16%, var(--surface-subtle));
-  color: var(--text-strong);
-  cursor: pointer;
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.repository-worktree-create-submit:disabled {
-  cursor: not-allowed;
-  opacity: 0.55;
 }
 
 .repository-worktree-search {
@@ -729,7 +620,7 @@ async function startAiSession(worktree: RepositoryWorktree) {
 
 .repository-worktree-card[data-current="true"] .repository-worktree-branch strong,
 .repository-worktree-card[data-current="true"] .repository-worktree-current {
-  color: var(--brand-accent-muted, var(--brand-accent));
+  color: var(--repository-current-text, var(--brand-accent-muted, var(--brand-accent)));
 }
 
 .repository-worktree-card-head {
@@ -762,7 +653,7 @@ async function startAiSession(worktree: RepositoryWorktree) {
 .repository-worktree-current {
   flex: 0 0 auto;
   gap: 3px;
-  color: var(--brand-accent-muted, var(--brand-accent));
+  color: var(--repository-current-text, var(--brand-accent-muted, var(--brand-accent)));
   font-size: 12px;
   font-weight: 700;
 }
