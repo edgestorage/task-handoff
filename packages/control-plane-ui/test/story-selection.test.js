@@ -27,6 +27,13 @@ test("StoryView restores stable selections from current authoritative data", () 
   assert.doesNotMatch(storyView, /emit\("update:selection", resource\)/);
 });
 
+test("StoryView does not restore or retain unavailable detail selections", () => {
+  assert.match(storyView, /if \(!story \|\| !storyIsOnline\(story\)\) return undefined;/);
+  assert.match(storyView, /entry && sessionIsOnline\(story, entry\) \? \{ kind: "session", story, entry \} : \{ kind: "story", story \}/);
+  assert.match(storyView, /watch\(\[filteredStories, \(\) => props\.nodes, \(\) => props\.instances\]/);
+  assert.match(storyView, /const firstOnlineStory = stories\.value\.find\(storyIsOnline\);/);
+});
+
 test("authoritative Story refreshes preserve an open new-session surface", () => {
   assert.match(storyView, /function refreshResource\(resource: Resource\): Resource \| undefined/);
   assert.match(storyView, /if \(resource\.kind === "new-session"\) return \{ kind: "new-session", story \};/);

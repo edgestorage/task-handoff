@@ -347,6 +347,7 @@
           @launch-app="(target, appId, cwdFolderId, options) => $emit('launchApp', target, appId, cwdFolderId, options)"
           @open-ai-session-app="(target, session) => $emit('openAiSessionApp', target, session)"
           @open-repository-workspace="$emit('openRepositoryWorkspace', $event)"
+          @open-settings="(instanceId, section) => $emit('openSettings', instanceId, section)"
           @open-launch-menu="updateAppLaunchMenuOpen(pane.id, true)"
           @run-action="(action, target) => $emit('runAction', action, target)"
           @select-ai-session="(instanceId, sessionId) => $emit('selectAiSession', instanceId, sessionId)"

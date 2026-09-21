@@ -181,6 +181,6 @@ export function instanceCreateGuidance(instance?: ControlPlaneInstanceDirectoryE
   if (!instance) return 'Choose an instance to continue.';
   if (!instance.ready || instance.connectionStatus !== 'online') return 'This instance is not ready. Start or repair it from the desktop app.';
   if (!instance.workspace.path) return 'This instance has not reported a workspace.';
-  if (!instance.availableAgents.length) return 'No AI agents are available on this instance.';
+  if (!instance.availableAgents.length) return 'No AI agents are installed on this instance. Open the Web Control Plane and go to Instance settings > App management to install one.';
   return undefined;
 }

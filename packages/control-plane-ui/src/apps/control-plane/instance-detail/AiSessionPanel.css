@@ -200,97 +200,6 @@
   white-space: nowrap;
 }
 
-:global([role="dialog"].session-ai-worktree-dialog) {
-  width: min(520px, calc(100vw - 32px));
-}
-
-.session-ai-worktree-form,
-.session-ai-worktree-field {
-  display: grid;
-  gap: 8px;
-}
-
-.session-ai-worktree-form {
-  gap: 16px;
-}
-
-.session-ai-worktree-field > label {
-  color: var(--text-strong);
-  font-size: 12px;
-  font-weight: 500;
-}
-
-.session-ai-worktree-modes {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 4px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--surface-raised);
-  padding: 3px;
-}
-
-.session-ai-worktree-modes > button {
-  gap: 6px;
-  min-width: 0;
-  border-radius: 4px;
-  font-size: 12px;
-  font-weight: 400;
-}
-
-.session-ai-worktree-modes > button[data-state="on"] {
-  background: var(--surface-active);
-  color: var(--text-strong);
-}
-
-.session-ai-worktree-branch-trigger {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  min-width: 0;
-  min-height: 36px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--surface-raised);
-  color: var(--text);
-  padding: 0 10px;
-  text-align: left;
-}
-
-.session-ai-worktree-branch-trigger:hover,
-.session-ai-worktree-branch-trigger:focus-visible,
-.session-ai-worktree-branch-trigger[data-state="open"] {
-  border-color: var(--focus-ring);
-  outline: none;
-}
-
-.session-ai-worktree-branch-trigger > strong {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  font-size: 13px;
-  font-weight: 500;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.session-ai-worktree-branch-trigger > small,
-.session-ai-worktree-detached-hint {
-  color: var(--text-muted);
-  font-size: 12px;
-  font-weight: 400;
-}
-
-.session-ai-worktree-detached-hint {
-  line-height: 1.45;
-}
-
-:global(.session-ai-worktree-branch-menu) {
-  width: min(420px, var(--reka-dropdown-menu-content-available-width));
-  max-height: var(--reka-dropdown-menu-content-available-height);
-}
-
 .session-ai-sidebar-actions {
   display: flex;
   align-items: center;
@@ -367,6 +276,25 @@
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus-ring) 16%, transparent), var(--shadow-soft);
 }
 
+.session-ai-new-dialog-empty {
+  justify-items: center;
+  gap: 10px;
+  padding: 28px 24px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.session-ai-new-dialog-empty strong {
+  color: var(--text);
+  font-size: 15px;
+}
+
+.session-ai-new-dialog-empty > span {
+  max-width: 420px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 .session-ai-new-composer {
   --ai-composer-border: transparent;
   --ai-composer-bg: var(--surface);
@@ -383,7 +311,7 @@
   box-sizing: border-box;
   align-items: center;
   flex-wrap: nowrap;
-  gap: 8px;
+  gap: 4px;
   width: 100%;
   min-height: 42px;
   min-width: 0;

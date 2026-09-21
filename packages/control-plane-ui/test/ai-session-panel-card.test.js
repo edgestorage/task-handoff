@@ -4,6 +4,8 @@ import test from "node:test";
 import { groupAiSessionEntriesByPath } from "../src/apps/control-plane/instance-detail/aiSessionPathGrouping.ts";
 
 const panel = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.vue", import.meta.url), "utf8");
+const sessionPaneContent = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/SessionPaneContent.vue", import.meta.url), "utf8");
+const sessionPreview = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/SessionPreview.vue", import.meta.url), "utf8");
 const activeSessions = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/useActiveInstanceSessions.ts", import.meta.url), "utf8");
 const styles = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.css", import.meta.url), "utf8");
 const boardCard = fs.readFileSync(new URL("../src/apps/control-plane/ai-board/AiSessionCard.vue", import.meta.url), "utf8");
@@ -38,6 +40,12 @@ test("new-session context selectors own bounded horizontal overflow", () => {
   assert.ok(styles.includes('data-overflow-start="false"][data-overflow-end="true"'));
   assert.match(styles, /\.session-ai-new-pills \{[^}]*width: 100%;[^}]*min-width: 0;[^}]*max-width: 100%;[^}]*overflow-x: auto;[^}]*scrollbar-width: none;[^}]*contain: inline-size;/s);
   assert.match(styles, /\.session-ai-project-pill,\s*\.session-ai-app-pill \{[^}]*flex: 0 0 auto;/s);
+});
+
+test("new-session app management guidance reaches the instance settings dialog", () => {
+  assert.match(panel, /emit\('openSettings', instance\.id, 'apps'\)/);
+  assert.match(sessionPaneContent, /@open-settings="\(instanceId, section\) => \$emit\('openSettings', instanceId, section\)"/);
+  assert.match(sessionPreview, /@open-settings="\(instanceId, section\) => \$emit\('openSettings', instanceId, section\)"/);
 });
 
 test("AI session card and detail menus open Terminal at the authoritative session cwd", () => {

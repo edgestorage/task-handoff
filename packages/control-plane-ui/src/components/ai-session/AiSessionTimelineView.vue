@@ -83,6 +83,7 @@
             @layout-committed="commitVirtualTurnLayout(virtualTurn.index, $event)"
             @edit-queued-message="$emit('editQueuedMessage', $event)"
             @open-file="$emit('openFile', $event)"
+            @add-to-conversation="$emit('addToConversation', $event)"
             @steer-queued-message="$emit('steerQueuedMessage', $event)"
             @retry-queued-message="$emit('retryQueuedMessage', $event)"
             @remove-queued-message="$emit('removeQueuedMessage', $event)"
@@ -158,6 +159,7 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{
   editQueuedMessage: [payload: { queueId: string; message: string }];
   openFile: [href: string];
+  addToConversation: [content: string];
   removeQueuedMessage: [queueId: string];
   reorderQueuedMessages: [payload: { expectedRevision: number; queueIds: string[] }];
   resolveApproval: [decision: "allow" | "deny" | "skip"];

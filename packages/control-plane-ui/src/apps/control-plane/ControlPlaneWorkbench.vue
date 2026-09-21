@@ -363,6 +363,7 @@
         :nodes="nodes.data.value || []"
         @launch-app="launchSelectedApp"
         @open-session="openAiSessionAppFromBoard"
+        @open-settings="openInstanceSettings"
         @open-repository-workspace="openRepositoryWorkspace"
         @run-action="runStoryAction"
       />
@@ -836,9 +837,10 @@ async function closeAllInstanceSessions(instance: InstanceBoardItem, sessions: A
   try {
     const result = await closeAiSessionBatch(sessions.map((session) => ({ instanceId: instance.id, sessionId: session.id })));
     const { failed, total } = result;
+    const toastVariant = failed ? "error" : "success";
     showToast(failed
       ? t("instances.actions.closeAllSessionsPartial", { failed, total })
-      : t("instances.actions.closeAllSessionsSuccess", { count: total }), failed ? "error" : "success");
+      : t("instances.actions.closeAllSessionsSuccess", { count: total }), toastVariant);
     await refresh();
   } finally {
     closingAllSessionInstanceId.value = "";

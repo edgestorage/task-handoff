@@ -123,7 +123,7 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
     await this.ensureReady();
     const model = input.modelSelection ? this.modelRef(input.modelSelection, input.reasoningEffort) : undefined;
     if (input.modelSelection && !model) throw aiSessionControlError("AI_SESSION_MODEL_SELECTION_INVALID", "OpenCode model selection is unavailable.", 409);
-    const created = await this.client.createSession(input.cwd, model, openCodeSessionPermissionRules(input.permissionMode, input.storyAgentTools || []));
+    const created = await this.client.createSession(input.cwd, model, openCodeSessionPermissionRules(input.permissionMode, input.storyAgentTools));
     await this.reconcile(created.id, created.directory, created, "ai-session");
     return { providerSessionId: created.id, cwd: created.directory, creationSource: "ai-session" as const, modelSelection: input.modelSelection, reasoningEffort: input.reasoningEffort };
   }
@@ -133,11 +133,12 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
     await this.reconcile(providerSessionId, await this.resolveDirectory(providerSessionId), undefined, "ai-session");
   }
 
-  async resumeSession(providerSessionId: string, _modelSelection?: AiSessionModelSelection, _reasoningEffort?: AiSessionReasoningEffort, storyAgentTools: StoryAgentToolName[] = []) {
+  async resumeSession(providerSessionId: string, _modelSelection?: AiSessionModelSelection, _reasoningEffort?: AiSessionReasoningEffort, storyAgentTools?: StoryAgentToolName[]) {
     await this.readSession(providerSessionId);
+    if (storyAgentTools === undefined) return;
     const directory = await this.resolveDirectory(providerSessionId);
     const current = await this.client.getSession(providerSessionId, directory);
-    await this.client.setPermission(providerSessionId, directory, openCodeSessionPermissionRules(undefined, storyAgentTools, current.permission));
+    await this.client.setPermission(providerSessionId, directory, openCodeSessionPermissionRules(undefined, storyAgentTools, current.permission)!);
   }
 
   async updateModelSelection(session: AiSessionStatus, selection: AiSessionModelSelection) {
@@ -221,8 +222,10 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
     const messages = await this.client.messages(providerSessionId, input.source.cwd || directory);
     const messageID = input.providerThroughTurnId ? nextUserMessageId(messages, input.providerThroughTurnId) : undefined;
     const forked = await this.client.forkSession(providerSessionId, directory, messageID);
-    const sourceSession = await this.client.getSession(providerSessionId, input.source.cwd || directory);
-    await this.client.setPermission(forked.id, forked.directory, openCodeSessionPermissionRules(undefined, input.storyAgentTools || [], sourceSession.permission));
+    if (input.storyAgentTools !== undefined) {
+      const sourceSession = await this.client.getSession(providerSessionId, input.source.cwd || directory);
+      await this.client.setPermission(forked.id, forked.directory, openCodeSessionPermissionRules(undefined, input.storyAgentTools, sourceSession.permission)!);
+    }
     const lineage = { kind: "fork" as const, parentProviderSessionId: providerSessionId, throughTurnId: input.throughTurnId };
     this.lineageBySession.set(forked.id, lineage);
     await this.reconcile(forked.id, forked.directory, forked, "ai-session");
@@ -269,12 +272,16 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
       throw aiSessionControlError("AI_SESSION_SEND_INVALID", "OpenCode session, cwd, and message identity are required.", 409);
     }
     const parts = await promptParts(session.cwd, input);
-    const current = await this.client.getSession(session.providerSessionId, session.cwd);
-    await this.client.setPermission(
-      session.providerSessionId,
-      session.cwd,
-      openCodeSessionPermissionRules(input.permissionMode, input.storyAgentTools || [], current.permission),
-    );
+    if (input.permissionMode !== undefined || input.storyAgentTools !== undefined) {
+      const current = input.permissionMode === undefined
+        ? await this.client.getSession(session.providerSessionId, session.cwd)
+        : undefined;
+      await this.client.setPermission(
+        session.providerSessionId,
+        session.cwd,
+        openCodeSessionPermissionRules(input.permissionMode, input.storyAgentTools, current?.permission)!,
+      );
+    }
     const pending = this.pendingSettingsBySession.get(session.providerSessionId);
     const selection = pending?.modelSelection || session.modelSelection;
     const model = selection ? this.modelRef(selection, pending?.reasoningEffort || session.reasoningEffort) : undefined;

@@ -47,23 +47,17 @@
         </summary>
       </details>
 
-      <section
-        v-if="displayContent"
-        class="ai-session-detail-response"
-        :class="{ 'ai-session-detail-response-active': active }"
-      >
-        <AiSessionStreamingMarkdown
-          :code-tools="markdownCodeTools"
-          :content="responseContent"
-          :file-links="fileLinks"
-          :instance-id="instanceId"
-          :is-latest="isLatest"
-          :provider-turn-id="providerTurnId"
-          :session-id="session.id"
-          :turn-id="turnId"
-          @open-file="$emit('openFile', $event)"
-        />
-      </section>
+      <ContextMenu v-if="displayContent">
+        <ContextMenuTrigger as-child>
+          <section class="ai-session-detail-response" :class="{ 'ai-session-detail-response-active': active }">
+            <AiSessionStreamingMarkdown :code-tools="markdownCodeTools" :content="responseContent" :file-links="fileLinks" :instance-id="instanceId" :is-latest="isLatest" :provider-turn-id="providerTurnId" :session-id="session.id" :turn-id="turnId" @open-file="$emit('openFile', $event)" />
+          </section>
+        </ContextMenuTrigger>
+        <ContextMenuContent>
+          <ContextMenuItem @select="$emit('addToConversation', responseContent)"><MessageSquarePlus :size="14" />{{ t("sessions.actions.addToConversation") }}</ContextMenuItem>
+          <ContextMenuItem @select="copyResponse"><Copy :size="14" />{{ t("sessions.markdown.copy") }}</ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
 
       <AiSessionToolActivity
         v-if="isLatest && active"
@@ -106,7 +100,7 @@
 </template>
 
 <script setup lang="ts">
-import { Ban, Check, ChevronRight, TriangleAlert, X } from "@lucide/vue";
+import { Ban, Check, ChevronRight, Copy, MessageSquarePlus, TriangleAlert, X } from "@lucide/vue";
 import { computed, nextTick, onBeforeUnmount, onBeforeUpdate, onUpdated, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import type { AiSessionSummary } from "../../api/types";
@@ -119,6 +113,7 @@ import AiSessionStreamingMarkdown from "./AiSessionStreamingMarkdown.vue";
 import AiSessionTurnHistory from "./AiSessionTurnHistory.vue";
 import AiSessionSubAgents from "./AiSessionSubAgents.vue";
 import AiSessionToolActivity from "./AiSessionToolActivity.vue";
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "../ui/context-menu";
 
 const { t } = useI18n();
 const markdownCodeTools = computed(() => ({
@@ -176,6 +171,7 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{
   editQueuedMessage: [payload: { queueId: string; message: string }];
   openFile: [href: string];
+  addToConversation: [content: string];
   removeQueuedMessage: [queueId: string];
   reorderQueuedMessages: [payload: { expectedRevision: number; queueIds: string[] }];
   resolveApproval: [decision: "allow" | "deny" | "skip"];
@@ -189,6 +185,10 @@ const emit = defineEmits<{
 
 const retryWarningFirstLine = computed(() => props.retryWarning.split(/\r\n|\r|\n/, 1)[0]);
 const active = computed(() => props.isLatest && (props.session.status === "running" || props.session.status === "waiting"));
+
+async function copyResponse() {
+  try { await navigator.clipboard.writeText(props.responseContent); } catch { /* Clipboard may be unavailable in embedded contexts. */ }
+}
 const turnElement = ref<HTMLElement>();
 const turnContentElement = ref<HTMLElement>();
 const turnMinHeight = ref(0);

@@ -23,7 +23,7 @@ test("AI session turn navigation keeps accessible labels without redundant toolt
   assert.match(navigator, /<button type="button" :aria-label="previousLabel \|\| t\('sessions\.actions\.previousMessage'/);
   assert.match(navigator, /<button type="button" :aria-label="nextLabel \|\| t\('sessions\.actions\.nextMessage'/);
   assert.doesNotMatch(navigator, /Tooltip/);
-  assert.match(repositoryEnvironment, /<TooltipContent side="bottom"[^>]*>\{\{ t\("repository\.environment\.title"\) \}\}/);
+  assert.match(repositoryEnvironment, /<TooltipContent side="bottom"[^>]*>\{\{ triggerLabel \}\}/);
 });
 
 test("turn navigation stays in the sticky top-right actions before Environment", () => {

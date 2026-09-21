@@ -580,7 +580,24 @@
       <section v-else-if="showNewSession" class="session-ai-detail session-ai-new-detail">
         <div class="session-ai-new-start">
           <h1 v-if="!creationEmbedded" class="session-ai-new-title">{{ t("sessions.panel.startIdea") }}</h1>
-          <div class="session-ai-new-dialog" role="group" :aria-label="t('sessions.panel.newSession')">
+          <div v-if="!aiSessionLaunchableApps.length" class="session-ai-new-dialog session-ai-new-dialog-empty" role="status">
+            <strong>{{ t("sessions.panel.noAgentsTitle") }}</strong>
+            <span>{{ t("sessions.panel.noAgentsDescription") }}</span>
+            <DropdownMenu v-if="creationInstances && creationInstances.length > 1">
+              <DropdownMenuTrigger as-child>
+                <Button type="button" variant="outline" size="sm"><Server :size="14" />{{ instance.name }}<ChevronDown :size="13" /></Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent class="session-ai-project-menu" align="center" :side-offset="8">
+                <DropdownMenuItem v-for="candidate in creationInstances" :key="candidate.id" class="session-ai-project-item" :disabled="creationInstanceDisabled?.(candidate)" @select="emit('update:creationInstance', candidate.id)">
+                  <Server :size="15" /><span>{{ candidate.name }}</span><Check v-if="candidate.id === instance.id" :size="15" />
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <Button type="button" variant="outline" size="sm" @click="emit('openSettings', instance.id, 'apps')">
+              <Boxes :size="14" />{{ t("sessions.panel.openAppManagement") }}
+            </Button>
+          </div>
+          <div v-else class="session-ai-new-dialog" role="group" :aria-label="t('sessions.panel.newSession')">
             <div
               v-horizontal-overflow
               class="session-ai-new-pills"
@@ -596,7 +613,7 @@
                   </button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent class="session-ai-project-menu" align="start" :side-offset="8">
-                  <DropdownMenuItem v-for="candidate in creationInstances" :key="candidate.id" class="session-ai-project-item" @select="emit('update:creationInstance', candidate.id)">
+                  <DropdownMenuItem v-for="candidate in creationInstances" :key="candidate.id" class="session-ai-project-item" :disabled="creationInstanceDisabled?.(candidate)" @select="emit('update:creationInstance', candidate.id)">
                     <Server :size="15" />
                     <span class="session-ai-project-folder-copy">
                       <strong>{{ candidate.name }}</strong>
@@ -618,8 +635,20 @@
                     <ChevronDown :size="13" />
                   </button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent class="session-ai-project-menu session-ai-project-picker-menu" align="start" :collision-padding="12" :side-offset="8">
-                  <input v-model="newSessionFolderQuery" class="session-ai-project-search" :placeholder="t('sessions.panel.searchProjects')" :aria-label="t('sessions.panel.searchProjects')" />
+                <DropdownMenuContent
+                  class="session-ai-project-menu session-ai-project-picker-menu"
+                  align="start"
+                  :collision-padding="12"
+                  :side-offset="8"
+                  @open-auto-focus="focusNewSessionFolderSearch"
+                >
+                  <input
+                    ref="newSessionFolderSearchEl"
+                    v-model="newSessionFolderQuery"
+                    class="session-ai-project-search"
+                    :placeholder="t('sessions.panel.searchProjects')"
+                    :aria-label="t('sessions.panel.searchProjects')"
+                  />
                   <ScrollArea type="auto" :horizontal="false" class="session-ai-project-list">
                     <DropdownMenuItem v-for="folder in filteredNewSessionFolders" :key="folder.id" class="session-ai-project-item session-ai-project-folder-item" @select="newSessionFolderId = folder.id">
                       <Folder :size="15" />
@@ -749,6 +778,7 @@
               :placeholder="t('sessions.panel.promptPlaceholder')"
               @update:permission-mode="updateNewSessionPermissionMode"
               @select-model="selectNewSessionModel"
+              @open-model-settings="emit('openSettings', instance.id, 'models')"
               @select-reasoning-effort="selectNewSessionReasoningEffort"
               @run="createNewSession"
             />
@@ -989,6 +1019,7 @@
             @load-turn-timeline="loadTurnTimeline"
             @edit-queued-message="editQueuedMessage(selectedSession.id, $event)"
             @open-file="openMarkdownFile(selectedSession, $event)"
+            @add-to-conversation="addResponseToConversation"
             @steer-queued-message="steerQueuedMessage(selectedSession.id, $event)"
             @retry-queued-message="retryQueuedMessage(selectedSession.id, $event)"
             @remove-queued-message="removeQueuedMessage(selectedSession.id, $event)"
@@ -1104,6 +1135,7 @@
             @command="executeSelectedSessionCommand"
             @run="runSelectedSessionAction"
             @select-model="selectExistingSessionModel"
+            @open-model-settings="emit('openSettings', instance.id, 'models')"
             @select-reasoning-effort="selectExistingSessionReasoningEffort"
             @steer="steerMessageDraft"
           />
@@ -1234,79 +1266,14 @@
         </form>
       </DialogContent>
     </Dialog>
-    <Dialog :open="newSessionWorktreeDialogOpen" @update:open="setNewSessionWorktreeDialogOpen">
-      <DialogContent class="session-ai-worktree-dialog">
-        <DialogHeader>
-          <DialogTitle>{{ t("sessions.panel.newWorktree") }}</DialogTitle>
-          <DialogDescription>{{ t("sessions.panel.newWorktreeDescription") }}</DialogDescription>
-        </DialogHeader>
-        <form class="session-ai-worktree-form" @submit.prevent="confirmNewSessionWorktree">
-          <ToggleGroup
-            type="single"
-            class="session-ai-worktree-modes"
-            :aria-label="t('sessions.panel.newWorktreeMode')"
-            :model-value="newSessionWorktreeDialogMode"
-            @update:model-value="setNewSessionWorktreeDialogMode"
-          >
-            <ToggleGroupItem value="existing-branch" size="sm"><GitBranch :size="14" />{{ t("sessions.panel.existingBranch") }}</ToggleGroupItem>
-            <ToggleGroupItem value="new-branch" size="sm"><Plus :size="14" />{{ t("sessions.panel.newBranch") }}</ToggleGroupItem>
-          </ToggleGroup>
-
-          <div v-if="newSessionWorktreeDialogMode === 'existing-branch'" class="session-ai-worktree-field">
-            <label for="session-new-worktree-existing-branch">{{ t("sessions.panel.branch") }}</label>
-            <DropdownMenu>
-              <DropdownMenuTrigger as-child>
-                <button id="session-new-worktree-existing-branch" type="button" class="session-ai-worktree-branch-trigger">
-                  <GitBranch :size="15" />
-                  <strong>{{ newSessionWorktreeDialogBranchLabel }}</strong>
-                  <small v-if="newSessionWorktreeDialogBranchDetached">{{ t("sessions.panel.detached") }}</small>
-                  <ChevronDown :size="14" />
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent class="session-ai-project-menu session-ai-project-picker-menu session-ai-worktree-branch-menu" align="start" :collision-padding="12" :side-offset="6">
-                <input v-model="newSessionWorktreeBranchQuery" class="session-ai-project-search" :placeholder="t('sessions.panel.searchBranches')" :aria-label="t('sessions.panel.searchBranches')" />
-                <ScrollArea type="auto" :horizontal="false" class="session-ai-project-list">
-                  <DropdownMenuItem
-                    v-for="node in visibleNewSessionWorktreeBranches"
-                    :key="node.id"
-                    class="session-ai-project-item session-ai-branch-tree-item"
-                    :class="{ 'is-folder': node.kind === 'folder' }"
-                    :style="newSessionBranchTreeLayout(node.depth)"
-                    @select="node.kind === 'folder' ? toggleNewSessionWorktreeBranchFolder($event, node.id) : selectNewSessionWorktreeBranch(node.branch)"
-                  >
-                    <template v-if="node.kind === 'folder'">
-                      <i class="session-ai-branch-tree-toggle" aria-hidden="true"><ChevronRight :class="{ expanded: node.expanded }" :size="9" /></i>
-                      <FolderOpen v-if="node.expanded" :size="14" /><Folder v-else :size="14" /><span>{{ node.label }}</span><small>{{ node.count }}</small>
-                    </template>
-                    <template v-else>
-                      <i class="session-ai-branch-tree-toggle" aria-hidden="true" />
-                      <GitBranch :size="14" /><span :title="node.branch.name">{{ node.label }}</span><small v-if="newSessionWorktreeBranchDetached(node.branch)">{{ t("sessions.panel.detached") }}</small><Check v-if="newSessionWorktreeDialogBranch === node.branch.name" :size="15" />
-                    </template>
-                  </DropdownMenuItem>
-                  <p v-if="!visibleNewSessionWorktreeBranches.length" class="session-ai-project-empty">{{ t("sessions.panel.noBranches") }}</p>
-                </ScrollArea>
-              </DropdownMenuContent>
-            </DropdownMenu>
-            <small v-if="newSessionWorktreeDialogBranchDetached" class="session-ai-worktree-detached-hint">{{ t("sessions.panel.newWorktreeDetachedDescription") }}</small>
-          </div>
-
-          <template v-else>
-            <div class="session-ai-worktree-field">
-              <label for="session-new-worktree-branch">{{ t("sessions.panel.newWorktreeBranch") }}</label>
-              <ControlPlaneInput id="session-new-worktree-branch" v-model="newSessionWorktreeBranchName" :maxlength="255" autofocus />
-            </div>
-            <div class="session-ai-worktree-field">
-              <label for="session-new-worktree-start-ref">{{ t("sessions.panel.newWorktreeStartRef") }}</label>
-              <ControlPlaneInput id="session-new-worktree-start-ref" v-model="newSessionWorktreeStartRef" :maxlength="2048" />
-            </div>
-          </template>
-          <DialogFooter>
-            <Button type="button" variant="outline" @click="setNewSessionWorktreeDialogOpen(false)">{{ t("common.actions.cancel") }}</Button>
-            <Button type="submit" :disabled="!canConfirmNewSessionWorktree">{{ t("sessions.panel.useNewWorktree") }}</Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
+    <NewWorktreeDialog
+      :branches="newSessionWorkspace?.branches || []"
+      :default-start-ref="newSessionWorkspace?.currentBranch || 'HEAD'"
+      :initial-selection="newSessionWorktreeDialogInitialSelection"
+      :open="newSessionWorktreeDialogOpen"
+      @confirm="confirmNewSessionWorktree"
+      @update:open="setNewSessionWorktreeDialogOpen"
+    />
     <AlertDialog :open="Boolean(pendingBusyFork)" @update:open="(open) => !open && (pendingBusyFork = undefined)">
       <AlertDialogContent>
         <AlertDialogHeader>
@@ -1411,6 +1378,7 @@ import { nodeSupportsLocalFolderNameUpdate } from "../../../api/nodeCapabilities
 import { canOpenDesktopLocalPath, openDesktopLocalPath } from "../../../lib/desktopBridge";
 import { scrollHorizontalOverflow, updateHorizontalOverflowFromEvent, vHorizontalOverflow } from "../../../lib/horizontalOverflow";
 import RepositoryEnvironment from "./RepositoryEnvironment.vue";
+import NewWorktreeDialog, { type NewWorktreeSelection } from "./NewWorktreeDialog.vue";
 import AiSessionPathContextMenu from "./AiSessionPathContextMenu.vue";
 import { useNodeStorageFolderPicker } from "../settings/useNodeStorageFolderPicker";
 import { normalizeAiSessionGroupPath } from "./aiSessionPathGrouping";
@@ -1547,6 +1515,7 @@ const props = defineProps<{
   creationSubmitting?: boolean;
   creationStoryId?: string;
   creationInstances?: InstanceWithAiSessions[];
+  creationInstanceDisabled?: (instance: InstanceWithAiSessions) => boolean;
   detailOnly?: boolean;
   historyStoryId?: string;
   initialHistoryId?: string;
@@ -1565,6 +1534,7 @@ const emit = defineEmits<{
   selectAiSession: [instanceId: string, sessionId: string];
   sessionCreated: [instanceId: string, sessionId: string];
   "update:creationInstance": [instanceId: string];
+  openSettings: [instanceId: string, section?: "apps" | "models"];
   "update:creationSubmitReady": [ready: boolean];
 }>();
 const { locale, t } = useI18n();
@@ -1961,10 +1931,6 @@ const newSessionBranch = ref(props.creationMode === "preset" ? props.creationIni
 const newSessionWorktreeId = ref("");
 const newSessionWorktreeQuery = ref("");
 const newSessionWorktreeDialogOpen = ref(false);
-const newSessionWorktreeDialogMode = ref<"existing-branch" | "new-branch">("existing-branch");
-const newSessionWorktreeDialogBranch = ref("");
-const newSessionWorktreeBranchQuery = ref("");
-const collapsedNewSessionWorktreeBranchFolders = ref(new Set<string>());
 const newSessionManagedWorktreeBranch = ref("");
 const newSessionWorktreeBranchName = ref("");
 const newSessionWorktreeStartRef = ref("HEAD");
@@ -2153,10 +2119,6 @@ const filteredNewSessionBranches = computed(() => {
   const query = newSessionBranchQuery.value.trim().toLowerCase();
   return (newSessionWorkspace.value?.branches || []).filter((branch) => !query || branch.name.toLowerCase().includes(query));
 });
-const filteredNewSessionWorktreeBranches = computed(() => {
-  const query = newSessionWorktreeBranchQuery.value.trim().toLowerCase();
-  return (newSessionWorkspace.value?.branches || []).filter((branch) => branch.worktreeSelectable && (!query || branch.name.toLowerCase().includes(query)));
-});
 const usesExistingWorktreePicker = computed(() => newSessionWorkspaceMode.value === "worktree");
 const canSelectNewSessionWorktreeMode = computed(() => Boolean(newSessionWorkspace.value?.snapshotId));
 const filteredNewSessionWorktrees = computed(() => {
@@ -2180,12 +2142,6 @@ type VisibleNewSessionBranchTreeNode =
   | { branch: RepositoryAiSessionWorkspaceBranch; depth: number; id: string; kind: "branch"; label: string };
 const newSessionBranchTree = computed(() => buildNewSessionBranchTree(filteredNewSessionBranches.value));
 const visibleNewSessionBranches = computed(() => flattenNewSessionBranchTree(newSessionBranchTree.value));
-const newSessionWorktreeBranchTree = computed(() => buildNewSessionBranchTree(filteredNewSessionWorktreeBranches.value));
-const visibleNewSessionWorktreeBranches = computed(() => flattenNewSessionBranchTree(
-  newSessionWorktreeBranchTree.value,
-  collapsedNewSessionWorktreeBranchFolders.value,
-  Boolean(newSessionWorktreeBranchQuery.value.trim()),
-));
 const newSessionFolder = computed(() => newSessionFolders.value.find((folder) => folder.id === newSessionFolderId.value));
 const creationSubmitReady = computed(() => Boolean(
   !props.creationSubmitDisabled
@@ -2221,17 +2177,17 @@ const newSessionWorkspaceTargetLabel = computed(() => {
   const selected = newSessionWorkspace.value?.worktrees?.find((worktree) => worktree.id === newSessionWorktreeId.value);
   return selected ? newSessionWorktreeLabel(selected) : t("sessions.panel.chooseWorktree");
 });
-const newSessionWorktreeDialogBranchSelection = computed(() => newSessionWorkspace.value?.branches.find((branch) => branch.name === newSessionWorktreeDialogBranch.value));
-const newSessionWorktreeDialogBranchDetached = computed(() => Boolean(
-  newSessionWorktreeDialogBranchSelection.value && newSessionWorktreeBranchDetached(newSessionWorktreeDialogBranchSelection.value),
-));
-const newSessionWorktreeDialogBranchLabel = computed(() => newSessionWorktreeDialogBranchSelection.value?.name || t("sessions.panel.chooseBranch"));
-const canConfirmNewSessionWorktree = computed(() => Boolean(
-  (newSessionWorktreeDialogMode.value === "existing-branch"
-    ? newSessionWorktreeDialogBranchSelection.value?.worktreeSelectable
-    : newSessionWorktreeBranchName.value.trim() && newSessionWorktreeStartRef.value.trim())
-  && newSessionWorkspace.value?.snapshotId,
-));
+const newSessionWorktreeDialogInitialSelection = computed<NewWorktreeSelection | undefined>(() => {
+  if (newSessionCreateNewWorktree.value) {
+    return {
+      mode: "new-branch",
+      branchName: newSessionWorktreeBranchName.value,
+      startRef: newSessionWorktreeStartRef.value || newSessionWorkspace.value?.currentBranch || "HEAD",
+    };
+  }
+  const branchName = newSessionManagedWorktreeBranch.value || newSessionWorkspace.value?.currentBranch;
+  return branchName ? { mode: "existing-branch", branchName } : undefined;
+});
 const queryClient = useQueryClient();
 const sidebarEl = ref<HTMLElement>();
 const historyMode = ref(Boolean(props.initialHistoryMode));
@@ -2255,6 +2211,10 @@ const collapsedHistoryPathGroups = reactive<Record<string, boolean>>(
   loadCollapsedAiSessionPathGroups(props.instance.id, "history"),
 );
 const messageDraft = ref("");
+function addResponseToConversation(content: string) {
+  messageDraft.value = [messageDraft.value.trimEnd(), content.trim()].filter(Boolean).join("\n\n");
+  void nextTick(() => composerEl.value?.focus?.());
+}
 const messageMentionBindings = ref<AiSessionMentionBinding[]>([]);
 const queueComposerEdit = ref<{
   queueId: string;
@@ -3267,14 +3227,6 @@ function toggleNewSessionBranchFolder(event: Event, id: string) {
   collapsedNewSessionBranchFolders.value = next;
 }
 
-function toggleNewSessionWorktreeBranchFolder(event: Event, id: string) {
-  event.preventDefault();
-  const next = new Set(collapsedNewSessionWorktreeBranchFolders.value);
-  if (next.has(id)) next.delete(id);
-  else next.add(id);
-  collapsedNewSessionWorktreeBranchFolders.value = next;
-}
-
 function newSessionBranchTreeLayout(depth: number) {
   return { paddingInlineStart: `${8 + depth * 16}px` };
 }
@@ -3347,14 +3299,6 @@ function selectNewSessionWorktree(worktree: RepositoryWorktree) {
 }
 
 function openNewSessionWorktreeDialog() {
-  newSessionWorktreeDialogMode.value = "existing-branch";
-  newSessionWorktreeDialogBranch.value = newSessionManagedWorktreeBranch.value
-    || newSessionWorkspace.value?.currentBranch
-    || newSessionWorkspace.value?.branches.find((branch) => branch.worktreeSelectable)?.name
-    || "";
-  newSessionWorktreeBranchQuery.value = "";
-  newSessionWorktreeBranchName.value = "";
-  newSessionWorktreeStartRef.value = newSessionWorkspace.value?.currentBranch || "HEAD";
   newSessionWorktreeDialogOpen.value = true;
 }
 
@@ -3362,26 +3306,16 @@ function setNewSessionWorktreeDialogOpen(open: boolean) {
   newSessionWorktreeDialogOpen.value = open;
 }
 
-function setNewSessionWorktreeDialogMode(value: unknown) {
-  if (value === "existing-branch" || value === "new-branch") newSessionWorktreeDialogMode.value = value;
-}
-
-function selectNewSessionWorktreeBranch(branch: RepositoryAiSessionWorkspaceBranch) {
-  if (!branch.worktreeSelectable) return;
-  newSessionWorktreeDialogBranch.value = branch.name;
-}
-
-function confirmNewSessionWorktree() {
-  if (!canConfirmNewSessionWorktree.value) return;
-  if (newSessionWorktreeDialogMode.value === "existing-branch") {
-    newSessionManagedWorktreeBranch.value = newSessionWorktreeDialogBranch.value;
+function confirmNewSessionWorktree(selection: NewWorktreeSelection) {
+  if (selection.mode === "existing-branch") {
+    newSessionManagedWorktreeBranch.value = selection.branchName;
     newSessionWorktreeId.value = "";
     newSessionCreateNewWorktree.value = false;
     newSessionWorktreeDialogOpen.value = false;
     return;
   }
-  newSessionWorktreeBranchName.value = newSessionWorktreeBranchName.value.trim();
-  newSessionWorktreeStartRef.value = newSessionWorktreeStartRef.value.trim();
+  newSessionWorktreeBranchName.value = selection.branchName;
+  newSessionWorktreeStartRef.value = selection.startRef;
   newSessionManagedWorktreeBranch.value = "";
   newSessionWorktreeId.value = "";
   newSessionCreateNewWorktree.value = true;
@@ -3782,6 +3716,16 @@ function cancelQueueComposerEdit() {
   messageDraft.value = edit.previousDraft;
   messageAttachments.value = edit.previousAttachments;
   messageMentionBindings.value = edit.previousMentionBindings;
+}
+
+function reconcileQueueComposerEdit() {
+  const edit = queueComposerEdit.value;
+  const session = selectedConversationSession.value || selectedSession.value;
+  if (!edit || !session) return;
+  const item = session.queue.items.find((entry) => entry.id === edit.queueId);
+  if (!item || item.status !== "queued") {
+    cancelQueueComposerEdit();
+  }
 }
 
 async function saveQueuedMessageEdit() {
@@ -4195,6 +4139,15 @@ watch(() => `${props.instance.id}\u0000${selectedSession.value?.id || ""}`, () =
     observeDetailScroll();
   });
 }, { immediate: true });
+
+watch(
+  () => {
+    const session = selectedConversationSession.value || selectedSession.value;
+    return session ? `${session.id}:${session.queue.revision}:${session.queue.items.map((item) => `${item.id}:${item.status}`).join(",")}` : "";
+  },
+  reconcileQueueComposerEdit,
+  { immediate: true },
+);
 
 watch(
   [() => props.instance.id, showNewSession, () => selectedSession.value?.id, historyMode],

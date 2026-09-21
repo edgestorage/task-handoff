@@ -61,9 +61,9 @@ test("Story list options combine view and sort controls while manual mode drags 
 
 test("story selection follows the node-filtered list", () => {
   assert.match(storyView, /const story = filteredStories\.value\.find\(\(candidate\) => candidate\.id === selection\.storyId && candidate\.ownerNodeId === selection\.ownerNodeId\);/);
-  assert.match(storyView, /watch\(filteredStories, \(\) => \{/);
+  assert.match(storyView, /watch\(\[filteredStories, \(\) => props\.nodes, \(\) => props\.instances\], \(\) => \{/);
   assert.doesNotMatch(storyView, /watch\(stories, \(value\) => \{/);
-  assert.match(storyView, /const refreshed = refreshResource\(resource\);[\s\S]*selectedResource\.value = refreshed \|\| \(stories\.value\[0\] \? \{ kind: "story", story: stories\.value\[0\] \} : undefined\);/);
+  assert.match(storyView, /const refreshed = refreshResource\(resource\);[\s\S]*const firstOnlineStory = stories\.value\.find\(storyIsOnline\);[\s\S]*selectedResource\.value = refreshed \|\| \(firstOnlineStory \? \{ kind: "story", story: firstOnlineStory \} : undefined\);/);
   assert.match(storyView, /const filteredOnlineNode = props\.nodes\.find/);
 });
 
@@ -74,7 +74,7 @@ test("Story sorting subscribes only to the state used by its active mode", () =>
 });
 
 test("selecting a Story detail does not expand its tree", () => {
-  assert.match(storyView, /function selectStory\(story: Story\) \{ selectedResource\.value = \{ kind: "story", story \}; \}/);
+  assert.match(storyView, /function selectStory\(story: Story\) \{ if \(storyIsOnline\(story\)\) selectedResource\.value = \{ kind: "story", story \}; \}/);
   assert.doesNotMatch(storyView, /function selectStory\(story: Story\) \{ setStoryExpanded/);
   assert.match(storyView, /function toggleStoryExpanded\(story: Story\) \{ setStoryExpanded\(story, !isStoryOpen\(story\)\); \}/);
 });
