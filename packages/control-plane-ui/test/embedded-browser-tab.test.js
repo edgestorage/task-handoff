@@ -121,7 +121,8 @@ test("browser tabs publish page title and loading state", () => {
   assert.match(preview, /sessionDisplayName\(session, t\)/);
   assert.match(preview, /session\.kind === "embedded-browser"[\s\S]*?currentUrl/);
   assert.match(layer, /\$emit\('updateBrowserTab', instanceId, tab\.key, patch\)/);
-  assert.match(workbench, /@update-browser-tab="\(instanceId, sessionKey, patch\) => updateBrowserTab\(instanceId, sessionKey, patch\)"/);
+  assert.match(workbench, /@update-browser-tab="updateCombinedBrowserTab"/);
+  assert.match(workbench, /function updateCombinedBrowserTab\(instanceId: string, sessionKey: string, patch:/);
   assert.match(sessions, /function updateBrowserTab\(/);
 });
 

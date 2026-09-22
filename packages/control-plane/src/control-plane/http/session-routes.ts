@@ -136,7 +136,10 @@ export function registerSessionRoutes({
   app.post("/api/controlled-instances/:id/apps/sessions", async (request) => {
     const params = IdParamsSchema.parse(request.params);
     const parsed = AppLaunchRequestSchema.parse(request.body);
-    const session = await service.launchAppSession(params.id, parsed.appId, { ...parsed.options, ...(parsed.cwdFolderId ? { cwdFolderId: parsed.cwdFolderId } : {}) });
+    const session = await service.launchAppSession(params.id, parsed.appId, {
+      ...parsed.options,
+      ...(parsed.cwdFolderId ? { cwdFolderId: parsed.cwdFolderId } : {}),
+    });
     events.publish("instance.app-session.launched", { instanceId: params.id, sessionId: typeof session.id === "string" ? session.id : undefined, appId: parsed.appId });
     return { data: session };
   });

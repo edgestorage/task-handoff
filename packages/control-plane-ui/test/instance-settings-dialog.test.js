@@ -51,7 +51,7 @@ test("instance model controls live only in the settings dialog", () => {
   assert.doesNotMatch(detail, /Codex model|Claude model|updateInstanceModels|detail-model-selectors/);
   assert.match(dialog, /<ModelEntitySelection v-model="modelEntityIds"/);
   assert.match(dialog, /function normalizedSelection\(value: ModelSelection\)/);
-  assert.match(dialog, /return ids\.length \? \{ modelEntityIds: ids \} : \{\}/);
+  assert.match(dialog, /return \{ modelEntityIds: \[\.\.\.new Set\(ids\)\] \}/);
   assert.match(dialog, /t\("instances\.settings\.modelSelectionDescription"\)/);
   assert.doesNotMatch(dialog, /keyPreview|\.key\b|API key/);
 });

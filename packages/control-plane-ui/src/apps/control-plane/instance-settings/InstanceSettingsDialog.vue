@@ -672,8 +672,10 @@ function legacyModelEntityIds(value: ModelSelection) {
 }
 
 function normalizedSelection(value: ModelSelection): ModelSelection {
-  const ids = [...new Set(value.modelEntityIds?.length ? value.modelEntityIds : legacyModelEntityIds(value))];
-  return ids.length ? { modelEntityIds: ids } : {};
+  const ids = value.modelEntityIds !== undefined
+    ? value.modelEntityIds
+    : legacyModelEntityIds(value);
+  return { modelEntityIds: [...new Set(ids)] };
 }
 
 async function saveGeneral() {

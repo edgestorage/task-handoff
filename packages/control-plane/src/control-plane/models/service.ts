@@ -256,11 +256,12 @@ export class ControlPlaneModelService {
 
   async prepareAssignment(node: Node, selection: { modelEntityIds?: string[]; codexModelHash?: string | null; claudeModelHash?: string | null; opencodeModelHash?: string | null }) {
     const nodeModels = await this.options.gateway.listModels(node);
+    const hasEntitySelection = selection.modelEntityIds !== undefined;
     const storedSelection: {
       modelEntityIds?: string[];
       codexModelHash?: string | null; claudeModelHash?: string | null; opencodeModelHash?: string | null;
     } = {
-      ...(selection.modelEntityIds?.length ? { modelEntityIds: [...new Set(selection.modelEntityIds.map((id) => id.trim()).filter(Boolean))] } : {}),
+      ...(hasEntitySelection ? { modelEntityIds: [...new Set(selection.modelEntityIds!.map((id) => id.trim()).filter(Boolean))] } : {}),
       ...(selection.codexModelHash === null
         ? { codexModelHash: null }
         : selection.codexModelHash?.trim() ? { codexModelHash: selection.codexModelHash.trim() } : {}),
@@ -312,9 +313,15 @@ export class ControlPlaneModelService {
       storedSelection.claudeModelHash = firstFor("claude");
       storedSelection.opencodeModelHash = firstFor("opencode");
     }
-    const codexModelHash = entityIds.length ? storedSelection.codexModelHash : await resolve("codex", storedSelection.codexModelHash);
-    const claudeModelHash = entityIds.length ? storedSelection.claudeModelHash : await resolve("claude", storedSelection.claudeModelHash);
-    const opencodeModelHash = entityIds.length ? storedSelection.opencodeModelHash : await resolve("opencode", storedSelection.opencodeModelHash);
+    const codexModelHash = hasEntitySelection
+      ? storedSelection.codexModelHash
+      : await resolve("codex", storedSelection.codexModelHash);
+    const claudeModelHash = hasEntitySelection
+      ? storedSelection.claudeModelHash
+      : await resolve("claude", storedSelection.claudeModelHash);
+    const opencodeModelHash = hasEntitySelection
+      ? storedSelection.opencodeModelHash
+      : await resolve("opencode", storedSelection.opencodeModelHash);
     const prepared = {
       modelSelection: storedSelection,
       modelEntityIds: entityIds,
@@ -330,8 +337,15 @@ export class ControlPlaneModelService {
     // Compatibility for v0.0.23: its strict update schema only accepts the
     // per-agent hashes, so do not send either ordered-array field.
     const { modelEntityIds: _modelEntityIds, ...legacySelection } = storedSelection;
+    const legacyModelSelection = hasEntitySelection
+      ? {
+          codexModelHash: codexModelHash ?? null,
+          claudeModelHash: claudeModelHash ?? null,
+          opencodeModelHash: opencodeModelHash ?? null,
+        }
+      : legacySelection;
     return {
-      modelSelection: legacySelection,
+      modelSelection: legacyModelSelection,
       codexModelHash,
       claudeModelHash,
       opencodeModelHash,

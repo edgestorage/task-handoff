@@ -701,7 +701,7 @@ async function createInstance() {
       config: {
         autoImportAgentConfigs: instanceDraft.autoImportAgentConfigs,
       },
-      modelSelection: instanceDraft.modelEntityIds.length ? { modelEntityIds: instanceDraft.modelEntityIds } : {},
+      modelSelection: { modelEntityIds: [...instanceDraft.modelEntityIds] },
       ...(selectedProjectGitCredentialId.value && instanceDraft.retainGitCredential
         ? { gitCredentialRetention: "instance-retained" as const }
         : {}),

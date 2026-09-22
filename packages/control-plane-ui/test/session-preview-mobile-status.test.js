@@ -4,6 +4,7 @@ import test from "node:test";
 
 const styles = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/SessionPreview.css", import.meta.url), "utf8");
 const preview = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/SessionPreview.vue", import.meta.url), "utf8");
+const tabItem = fs.readFileSync(new URL("../src/apps/control-plane/shared/ResourceTabItem.vue", import.meta.url), "utf8");
 
 test("mobile session previews omit the bottom instance status bar", () => {
   assert.match(styles, /@media \(max-width: 780px\)\s*\{[\s\S]*?\.session-preview\s*\{[^}]*grid-template-rows: auto minmax\(0, 1fr\);/);
@@ -15,7 +16,7 @@ test("narrow desktop windows and mobile keep only AI, launch, and session menu c
   assert.match(preview, /const compactSessionToolbar = useMediaQuery\("\(max-width: 600px\)"\);/);
   assert.match(preview, /const sessionSplitAvailable = useMediaQuery\("\(min-width: 601px\)"\);/);
   assert.match(preview, /v-if="tabGroup\.statusTab && !compactSessionToolbar"/);
-  assert.match(preview, /v-if="!compactSessionToolbar && previewSessionTabs\(tabGroup\.id, tabGroup\.appTabs\)\.length" class="session-tab-strip-frame"/);
+  assert.match(preview, /<ResourceTabStrip\s+[\s\S]*?v-if="!compactSessionToolbar && previewSessionTabs\(tabGroup\.id, tabGroup\.appTabs\)\.length"/);
   assert.equal((preview.match(/v-if="compactSessionToolbar \|\| !tabGroup\.statusTab"/g) || []).length, 2);
   assert.match(preview, /<button v-if="sessionSplitAvailable" type="button" class="preview-expand-button"[^>]*closeSessionSplit/);
   assert.match(preview, /watch\(\[sessionSplitAvailable, \(\) => props\.hasSessionSplit\],[\s\S]*if \(!available && split\) emit\("closeSessionSplit"\);/);
@@ -24,7 +25,7 @@ test("narrow desktop windows and mobile keep only AI, launch, and session menu c
 });
 
 test("mobile session tabs require a long press before dragging", () => {
-  assert.match(styles, /@media \(max-width: 780px\)[\s\S]*?\.session-tab-item\s*\{[^}]*touch-action: pan-x;[^}]*-webkit-touch-callout: none;/);
+  assert.match(tabItem, /@media \(max-width: 780px\)[\s\S]*?\.session-tab-item\s*\{[^}]*touch-action: pan-x;[^}]*-webkit-touch-callout: none;/);
   assert.match(preview, /const mobileSessionTabDragHoldMs = 420;/);
   assert.match(preview, /<ContextMenuTrigger as-child>[\s\S]*<WorkbenchLayoutContextMenu/);
   assert.match(preview, /!sessionSplitAvailable\.value && event\.pointerType === "touch"/);

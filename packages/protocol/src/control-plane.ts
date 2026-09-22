@@ -1081,7 +1081,7 @@ export const NodeModelAssignmentSchema = z.object({
   ...assignment,
   // Compatibility for v0.0.23: migrate the per-agent hashes into the ordered
   // entity collection when reading legacy node-agent persistence or responses.
-  modelEntityIds: assignment.modelEntityIds?.length
+  modelEntityIds: assignment.modelEntityIds !== undefined
     ? assignment.modelEntityIds
     : [...new Set([assignment.codexModelHash, assignment.claudeModelHash, assignment.opencodeModelHash]
       .filter((id): id is string => Boolean(id)))],

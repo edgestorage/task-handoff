@@ -13,8 +13,8 @@
           :model-value="mode"
           @update:model-value="setMode"
         >
-          <ToggleGroupItem value="existing-branch" size="sm"><GitBranch :size="14" />{{ t("sessions.panel.existingBranch") }}</ToggleGroupItem>
-          <ToggleGroupItem value="new-branch" size="sm"><Plus :size="14" />{{ t("sessions.panel.newBranch") }}</ToggleGroupItem>
+          <ToggleGroupItem value="existing-branch" size="xs"><GitBranch :size="13" />{{ t("sessions.panel.existingBranch") }}</ToggleGroupItem>
+          <ToggleGroupItem value="new-branch" size="xs"><Plus :size="13" />{{ t("sessions.panel.newBranch") }}</ToggleGroupItem>
         </ToggleGroup>
 
         <div v-if="mode === 'existing-branch'" class="new-worktree-field">
