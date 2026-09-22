@@ -6,6 +6,7 @@ const workbench = fs.readFileSync(new URL("../src/apps/control-plane/ControlPlan
 const workbenchStyles = fs.readFileSync(new URL("../src/apps/control-plane/ControlPlaneWorkbench.css", import.meta.url), "utf8");
 const detailStyles = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/InstanceDetail.css", import.meta.url), "utf8");
 const previewStyles = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/SessionPreview.css", import.meta.url), "utf8");
+const tabViewport = fs.readFileSync(new URL("../src/apps/control-plane/shared/ResourceTabViewport.vue", import.meta.url), "utf8");
 const themeStyles = fs.readFileSync(new URL("../../web-theme/theme.css", import.meta.url), "utf8");
 
 test("expanded instance preview removes only the detail gutter", () => {
@@ -23,9 +24,9 @@ test("expanded instance preview removes only the detail gutter", () => {
   assert.match(previewStyles, /\.session-preview-toolbar\.in-titlebar\s*{[\s\S]*?-webkit-app-region: drag;/);
   assert.match(previewStyles, /\.session-preview-toolbar\.in-titlebar :is\(button, input, \[role="tab"\], \[role="button"\]\),[\s\S]*?\.session-preview-toolbar\.in-titlebar \.session-tab-sortable-shell,[\s\S]*?-webkit-app-region: no-drag;/);
   assert.doesNotMatch(previewStyles, /session-tab-overflow-mask-bg/);
-  assert.match(previewStyles, /\.session-tab-strip\[data-overflow-start="true"\]\[data-overflow-end="false"\] \{[\s\S]*?mask-image: linear-gradient\(90deg, transparent, #000 28px\);/);
-  assert.match(previewStyles, /\.session-tab-strip\[data-overflow-start="false"\]\[data-overflow-end="true"\] \{[\s\S]*?mask-image: linear-gradient\(270deg, transparent, #000 28px\);/);
-  assert.match(previewStyles, /\.session-tab-strip\[data-overflow-start="true"\]\[data-overflow-end="true"\] \{[\s\S]*?transparent 0,[\s\S]*?transparent 100%/);
+  assert.match(tabViewport, /\.session-tab-strip\[data-overflow-start="true"\]\[data-overflow-end="false"\]\s*\{[^}]*mask-image:\s*linear-gradient\(90deg,\s*transparent,\s*#000 28px\);/);
+  assert.match(tabViewport, /\.session-tab-strip\[data-overflow-start="false"\]\[data-overflow-end="true"\]\s*\{[^}]*mask-image:\s*linear-gradient\(270deg,\s*transparent,\s*#000 28px\);/);
+  assert.match(tabViewport, /\.session-tab-strip\[data-overflow-start="true"\]\[data-overflow-end="true"\]\s*\{[^}]*transparent 0,[^}]*transparent 100%/);
   assert.match(previewStyles, /\.session-preview-toolbar\.in-titlebar \.session-tab-strip \{[\s\S]*?mask-image: none;/);
   assert.match(previewStyles, /\.session-preview-toolbar\.in-titlebar \.session-tab-strip-frame::before \{[\s\S]*?linear-gradient\(90deg, var\(--titlebar-overflow-fade\), transparent\)/);
   assert.match(previewStyles, /\.session-preview-toolbar\.in-titlebar \.session-tab-strip-frame::after \{[\s\S]*?linear-gradient\(270deg, var\(--titlebar-overflow-fade\), transparent\)/);

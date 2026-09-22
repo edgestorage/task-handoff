@@ -45,6 +45,17 @@ test("v0.0.23 model assignments normalize to an ordered entity list without losi
     codexModelHash: "mdl_hash_one",
     updatedAt: now,
   });
+  assert.deepEqual(NodeModelAssignmentSchema.parse({
+    instanceId: "inst_empty",
+    modelEntityIds: [],
+    codexModelHash: "mdl_legacy_default",
+    updatedAt: now,
+  }), {
+    instanceId: "inst_empty",
+    modelEntityIds: [],
+    codexModelHash: "mdl_legacy_default",
+    updatedAt: now,
+  });
 });
 
 test("unreleased active model overlay fields are removed at the stored instance boundary", () => {

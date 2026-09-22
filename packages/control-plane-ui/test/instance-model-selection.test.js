@@ -10,7 +10,7 @@ const instanceSettings = fs.readFileSync(new URL("../src/apps/control-plane/inst
 test("new instances default to no model while preserving ordered explicit choices", () => {
   assert.match(runtimeStep, /<ModelEntitySelection v-model="instanceDraft\.modelEntityIds"/);
   assert.match(newInstanceModal, /modelEntityIds: \[\]/);
-  assert.match(newInstanceModal, /modelSelection: instanceDraft\.modelEntityIds\.length \? \{ modelEntityIds: instanceDraft\.modelEntityIds \} : \{\}/);
+  assert.match(newInstanceModal, /modelSelection: \{ modelEntityIds: \[\.\.\.instanceDraft\.modelEntityIds\] \}/);
   assert.match(newInstanceModal, /instanceDraft\.modelEntityIds = \[\]/);
 });
 
