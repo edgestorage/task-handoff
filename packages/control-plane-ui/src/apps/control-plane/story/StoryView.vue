@@ -156,7 +156,7 @@
             @select-ai-session="handleSelectAiSession"
             @launch-app="(target, appId, cwdFolderId, options) => emit('launch-app', target, appId, cwdFolderId, options)"
             @open-ai-session-app="(target, session) => openStoryAiSessionApp(target, session)"
-            @open-repository-workspace="$emit('open-repository-workspace', $event)"
+            @open-repository-workspace="openStoryRepositoryWorkspace"
             @session-created="finishStorySessionCreation"
           />
         </template>
@@ -521,7 +521,7 @@ const emit = defineEmits<{
   "update:selection": [selection: StorySelection | undefined];
   "launch-app": [instance: InstanceBoardItem, appId: string, cwdFolderId?: string, options?: Record<string, unknown>];
   "open-session": [instance: InstanceWithAiSessions, session: AiSessionSummary | undefined];
-  "open-repository-workspace": [target: RepositoryWorkspaceTabTarget];
+  "open-repository-workspace": [target: RepositoryWorkspaceTabTarget & { instanceId: string }];
   "open-settings": [instanceId: string, section?: "apps" | "models"];
   "run-action": [story: Story, action: StoryAction, onCreated: (instanceId: string, sessionId: string) => void];
 }>();
@@ -1238,6 +1238,10 @@ function handleSelectAiSession(instanceId: string, sessionId: string) {
 }
 function openStoryAiSessionApp(instance: InstanceBoardItem, session?: AiSessionSummary) {
   emit("open-session", instance as InstanceWithAiSessions, session);
+}
+function openStoryRepositoryWorkspace(target: RepositoryWorkspaceTabTarget) {
+  if (!selectedSessionInstance.value) return;
+  emit("open-repository-workspace", { ...target, instanceId: selectedSessionInstance.value.id });
 }
 function startSidebarResize(event: PointerEvent) { if (window.matchMedia("(max-width: 800px)").matches || !workspaceEl.value) return; resizingSidebar.value = true; resizingPointerId = event.pointerId; (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId); window.addEventListener("pointermove", resizeSidebar); window.addEventListener("pointerup", stopSidebarResize); window.addEventListener("pointercancel", stopSidebarResize); }
 function resizeSidebar(event: PointerEvent) { if (!resizingSidebar.value || event.pointerId !== resizingPointerId || !workspaceEl.value) return; sidebarWidth.value = Math.min(520, Math.max(240, event.clientX - workspaceEl.value.getBoundingClientRect().left)); }

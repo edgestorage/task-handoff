@@ -43,9 +43,18 @@
             <span>AI</span>
           </button>
           <span v-if="!compactSessionToolbar && tabGroup.aiTab && previewSessionTabs(tabGroup.id, tabGroup.appTabs).length" class="session-tab-divider" aria-hidden="true" />
-          <div v-if="!compactSessionToolbar && previewSessionTabs(tabGroup.id, tabGroup.appTabs).length" class="session-tab-strip-frame">
-            <div v-session-tab-overflow class="session-tab-strip" @scroll="updateSessionTabOverflowFromEvent" @wheel="scrollSessionTabs">
-              <TransitionGroup name="session-tab-reorder" tag="div" class="session-tab-strip-content" role="tablist" :aria-label="hasSessionSplit ? t('sessions.tabs.paneTabs', { pane: tabGroup.id }) : t('sessions.tabs.views')">
+          <ResourceTabStrip
+            v-if="!compactSessionToolbar && previewSessionTabs(tabGroup.id, tabGroup.appTabs).length"
+            :items="previewSessionTabs(tabGroup.id, tabGroup.appTabs)"
+            :active-key="tabGroup.id === 'left' ? leftSessionKey : rightSessionKey"
+            @select="$emit('selectSession', $event, tabGroup.id)"
+            v-slot="{ onKeydown }"
+          >
+          <ResourceTabViewport
+            :active-key="tabGroup.id === 'left' ? leftSessionKey : rightSessionKey"
+            :item-count="previewSessionTabs(tabGroup.id, tabGroup.appTabs).length"
+          >
+              <TransitionGroup name="session-tab-reorder" tag="div" class="session-tab-strip-content" role="tablist" :aria-label="hasSessionSplit ? t('sessions.tabs.paneTabs', { pane: tabGroup.id }) : t('sessions.tabs.views')" @keydown="onKeydown">
                 <span
                   v-for="session in previewSessionTabs(tabGroup.id, tabGroup.appTabs)"
                   :key="session.key"
@@ -58,54 +67,46 @@
                 >
                   <ContextMenu>
                     <ContextMenuTrigger as-child>
-                      <span
-                        class="session-tab-item"
-                        :class="{ active: isSessionTabActive(session), focused: isSessionTabFocused(session), 'drag-placeholder': draggingSessionTabKey === session.key }"
+                      <ResourceTabItem
+                        :label="sessionDisplayName(session, t)"
+                        :active="isSessionTabActive(session)"
+                        :focused="isSessionTabFocused(session)"
+                        :drag-placeholder="draggingSessionTabKey === session.key"
+                        :closing="Boolean(stoppingSessionId)"
+                        :close-label="t('sessions.tabs.closeNamed', { name: sessionDisplayName(session, t) })"
+                        :close-title="t('sessions.tabs.close')"
                         :data-kind="session.kind"
                         :data-pane="hasSessionSplit ? sessionPaneId(session) : undefined"
                         :data-session-tab-key="session.key"
-                        role="tab"
-                        tabindex="0"
-                        :aria-selected="isSessionTabActive(session)"
-                        @click="selectSessionFromTab($event, session.key)"
+                        :data-resource-tab-key="session.key"
+                        @select="selectSessionFromTab($event, session.key)"
+                        @close="$emit('stopSession', instance, session)"
                         @pointerdown="startSessionTabPointer($event, session, tabGroup.id)"
-                        @keydown.enter.prevent="$emit('selectSession', session.key)"
-                        @keydown.space.prevent="$emit('selectSession', session.key)"
                       >
-                        <span class="session-tab-button">
+                        <template #icon>
                           <FolderGit2 v-if="session.kind === 'repository'" :size="14" class="session-tab-icon" />
                           <LoaderCircle v-else-if="session.kind === 'embedded-browser' && session.status === 'loading'" :size="14" class="session-tab-icon session-tab-icon-loading" />
                           <Globe2 v-else-if="session.kind === 'embedded-browser'" :size="14" class="session-tab-icon" />
                           <AppWindow v-else :size="14" class="session-tab-icon" />
-                          <input
-                            v-if="editingSessionKey === session.key"
-                            :ref="setRenameInput"
-                            v-model="sessionTitleDraft"
-                            class="session-tab-title-input"
-                            :aria-invalid="Boolean(sessionRenameError)"
-                            :disabled="renamingSession"
-                            :title="sessionRenameError"
-                            maxlength="120"
-                            @click.stop
-                            @blur="commitSessionRename(session)"
-                            @keydown.enter.stop.prevent="commitSessionRename(session)"
-                            @keydown.escape.stop.prevent="cancelSessionRename"
-                          />
-                          <span v-else class="session-tab-text">
-                            <strong>{{ sessionDisplayName(session, t) }}</strong>
-                          </span>
+                        </template>
+                        <input
+                          v-if="editingSessionKey === session.key"
+                          :ref="setRenameInput"
+                          v-model="sessionTitleDraft"
+                          class="session-tab-title-input"
+                          :aria-invalid="Boolean(sessionRenameError)"
+                          :disabled="renamingSession"
+                          :title="sessionRenameError"
+                          maxlength="120"
+                          @click.stop
+                          @blur="commitSessionRename(session)"
+                          @keydown.enter.stop.prevent="commitSessionRename(session)"
+                          @keydown.escape.stop.prevent="cancelSessionRename"
+                        />
+                        <span v-else class="session-tab-text">
+                          <strong>{{ sessionDisplayName(session, t) }}</strong>
                         </span>
-                        <button
-                          type="button"
-                          class="session-tab-close"
-                          :disabled="Boolean(stoppingSessionId)"
-                          :aria-label="t('sessions.tabs.closeNamed', { name: sessionDisplayName(session, t) })"
-                          :title="t('sessions.tabs.close')"
-                          @click.stop="$emit('stopSession', instance, session)"
-                        >
-                          <X :size="13" />
-                        </button>
-                      </span>
+                      </ResourceTabItem>
                       </ContextMenuTrigger>
                     <WorkbenchLayoutContextMenu
                       :instance-sidebar-visible="instanceSidebarVisible"
@@ -142,8 +143,8 @@
                   </ContextMenu>
                 </span>
               </TransitionGroup>
-            </div>
-          </div>
+          </ResourceTabViewport>
+          </ResourceTabStrip>
           <div v-if="compactSessionToolbar || !tabGroup.statusTab" class="app-launcher" :class="{ open: appLaunchMenuOpen && appLaunchMenuPane === tabGroup.id }" @click.stop>
             <DropdownMenu :open="appLaunchMenuOpen && appLaunchMenuPane === tabGroup.id" @update:open="updateAppLaunchMenuOpen(tabGroup.id, $event)">
               <DropdownMenuTrigger as-child>
@@ -409,7 +410,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type ComponentPublicInstance, type ObjectDirective } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type ComponentPublicInstance } from "vue";
 import { useI18n } from "vue-i18n";
 import { useMediaQuery, useNow, useStorage } from "@vueuse/core";
 import { Activity, AppWindow, Bot, Boxes, ChevronDown, Columns2, Folder, FolderGit2, Globe2, LoaderCircle, Maximize2, Minimize2, PanelLeft, PanelRight, PanelRightClose, Pencil, Plus, X } from "@lucide/vue";
@@ -426,6 +427,9 @@ import AppLaunchMenuItems from "../shared/AppLaunchMenuItems.vue";
 import ProjectFolderPicker from "../shared/ProjectFolderPicker.vue";
 import RepositoryEnvironment from "./RepositoryEnvironment.vue";
 import WorkbenchLayoutContextMenu from "../shared/WorkbenchLayoutContextMenu.vue";
+import ResourceTabItem from "../shared/ResourceTabItem.vue";
+import ResourceTabStrip from "../shared/ResourceTabStrip.vue";
+import ResourceTabViewport from "../shared/ResourceTabViewport.vue";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
 import { pruneTerminalPreviewCache } from "../useTerminalPreview";
 import {
@@ -574,7 +578,6 @@ const activeRepositorySessionId = computed(() => {
   return typeof props.activeSession.source?.id === "string" ? props.activeSession.source.id : props.activeSession.key;
 });
 const resourceMetricsDisplay = computed(() => formatResourceMetrics(props.resourceMetrics, resourceMetricsNow.value.getTime(), locale.value, t));
-const sessionTabOverflowObservers = new WeakMap<HTMLElement, ResizeObserver>();
 const sessionTabDetailSession = ref<SessionTab>();
 const sessionTabDetailVisible = ref(false);
 const sessionTabDetailPosition = ref({ left: 12, top: 12 });
@@ -641,59 +644,6 @@ function showSessionTabDetail(event: Event, session: SessionTab) {
     sessionTabDetailVisible.value = true;
     sessionTabDetailOpenTimer = undefined;
   }, SESSION_TAB_DETAIL_DELAY_MS);
-}
-
-function updateSessionTabOverflow(tabList: HTMLElement) {
-  const maxScrollLeft = Math.max(0, tabList.scrollWidth - tabList.clientWidth);
-  tabList.dataset.overflowStart = String(tabList.scrollLeft > 1);
-  tabList.dataset.overflowEnd = String(tabList.scrollLeft < maxScrollLeft - 1);
-}
-
-function updateSessionTabOverflowFromEvent(event: Event) {
-  if (event.currentTarget instanceof HTMLElement) updateSessionTabOverflow(event.currentTarget);
-}
-
-function revealSelectedSessionTab(tabList: HTMLElement) {
-  const selectedTab = tabList.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
-  if (!selectedTab) return;
-  const viewportBounds = tabList.getBoundingClientRect();
-  const tabBounds = selectedTab.getBoundingClientRect();
-  let nextScrollLeft = tabList.scrollLeft;
-  if (tabBounds.left < viewportBounds.left) nextScrollLeft -= viewportBounds.left - tabBounds.left;
-  else if (tabBounds.right > viewportBounds.right) nextScrollLeft += tabBounds.right - viewportBounds.right;
-  tabList.scrollLeft = Math.max(0, Math.min(tabList.scrollWidth - tabList.clientWidth, nextScrollLeft));
-}
-
-function syncSessionTabViewport(tabList: HTMLElement) {
-  revealSelectedSessionTab(tabList);
-  updateSessionTabOverflow(tabList);
-}
-
-const vSessionTabOverflow: ObjectDirective<HTMLElement> = {
-  mounted(tabList) {
-    const observer = new ResizeObserver(() => syncSessionTabViewport(tabList));
-    observer.observe(tabList);
-    if (tabList.firstElementChild instanceof HTMLElement) observer.observe(tabList.firstElementChild);
-    sessionTabOverflowObservers.set(tabList, observer);
-    syncSessionTabViewport(tabList);
-  },
-  updated(tabList) {
-    void nextTick(() => syncSessionTabViewport(tabList));
-  },
-  unmounted(tabList) {
-    sessionTabOverflowObservers.get(tabList)?.disconnect();
-    sessionTabOverflowObservers.delete(tabList);
-  },
-};
-
-function scrollSessionTabs(event: WheelEvent) {
-  const tabList = event.currentTarget as HTMLElement | null;
-  if (!tabList || Math.abs(event.deltaX) >= Math.abs(event.deltaY) || tabList.scrollWidth <= tabList.clientWidth) return;
-  const nextScrollLeft = Math.max(0, Math.min(tabList.scrollWidth - tabList.clientWidth, tabList.scrollLeft + event.deltaY));
-  if (nextScrollLeft === tabList.scrollLeft) return;
-  event.preventDefault();
-  tabList.scrollLeft = nextScrollLeft;
-  updateSessionTabOverflow(tabList);
 }
 
 function formatResourceMetrics(metrics: InstanceResourceMetrics | undefined, currentTime: number, locale: SupportedLocale, translate: typeof t) {
@@ -911,8 +861,8 @@ function setSessionTabSelector(pane: SessionPaneId, element: Element | Component
   sessionTabSelectors.delete(pane);
 }
 
-function selectSessionFromTab(event: MouseEvent, sessionKey: string) {
-  if (Date.now() < suppressSessionTabClickUntil) {
+function selectSessionFromTab(event: MouseEvent | KeyboardEvent, sessionKey: string) {
+  if (event instanceof MouseEvent && Date.now() < suppressSessionTabClickUntil) {
     event.preventDefault();
     event.stopPropagation();
     return;
@@ -1029,7 +979,6 @@ function scrollSessionTabDragViewport(selector: HTMLElement, clientX: number) {
   const delta = clientX < bounds.left + edge ? -12 : clientX > bounds.right - edge ? 12 : 0;
   if (!delta) return;
   tabList.scrollLeft = Math.max(0, Math.min(tabList.scrollWidth - tabList.clientWidth, tabList.scrollLeft + delta));
-  updateSessionTabOverflow(tabList);
 }
 
 function finishSessionTabPointer(event: PointerEvent) {

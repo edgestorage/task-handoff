@@ -250,6 +250,28 @@
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
+        <span class="story-resource-toggle-divider" aria-hidden="true" />
+        <TooltipProvider :delay-duration="120">
+          <Tooltip>
+            <TooltipTrigger as-child>
+              <span class="story-resource-toggle-trigger">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  class="story-resource-toggle"
+                  :class="{ active: storyResourceSidebar.visible.value }"
+                  :disabled="!storyResourceTargetAiSessionId"
+                  :aria-label="t(storyResourceSidebar.visible.value ? 'stories.resources.collapse' : 'stories.resources.expand')"
+                  :aria-pressed="storyResourceSidebar.visible.value"
+                  @click="storyResourceSidebar.visible.value = !storyResourceSidebar.visible.value"
+                >
+                  <PanelRight :size="16" stroke-width="1.8" />
+                </Button>
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" :side-offset="8">{{ t(storyResourceSidebar.visible.value ? "stories.resources.collapse" : "stories.resources.expand") }}</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
         <div
           v-if="showWindowsNativeWindowControlSpace"
           class="desktop-window-controls native-window-control-space windows-native-window-control-space"
@@ -351,22 +373,68 @@
         @update:interactive="boardInteractive = $event"
       />
 
-      <StoryView
+      <div
         v-if="!standaloneMode && storyMode && !settingsMode"
-        v-model:selection="storySelection"
-        :choose-project-folder="desktopBridge?.chooseProjectFolder"
-        :header-density="effectiveHeaderDensity"
-        :node-filter="storyNodeFilter"
-        :instances="boardInstancesWithAiSessions"
-        :launching-app="launchingApp"
-        :node-local-folders-by-node-id="nodeLocalFoldersByNodeId"
-        :nodes="nodes.data.value || []"
-        @launch-app="launchSelectedApp"
-        @open-session="openAiSessionAppFromBoard"
-        @open-settings="openInstanceSettings"
-        @open-repository-workspace="openRepositoryWorkspace"
-        @run-action="runStoryAction"
-      />
+        ref="storyResourceLayoutElement"
+        class="story-resource-layout"
+        :class="{ 'sidebar-visible': storyResourceSidebar.visible.value, 'overlay-mode': storyResourceOverlay, resizing: storyResourceResizing, 'context-changing': storyResourceContextChanging }"
+        :style="{ '--story-resource-width': `${storyResourceSidebar.width.value}px` }"
+        @keydown.esc="closeStoryResourceOverlay"
+      >
+        <StoryView
+          v-model:selection="storySelection"
+          :choose-project-folder="desktopBridge?.chooseProjectFolder"
+          :header-density="effectiveHeaderDensity"
+          :node-filter="storyNodeFilter"
+          :instances="boardInstancesWithAiSessions"
+          :launching-app="storyResourceLaunching"
+          :node-local-folders-by-node-id="nodeLocalFoldersByNodeId"
+          :nodes="nodes.data.value || []"
+          @launch-app="launchStoryResourceApp"
+          @open-session="openStoryAiSessionResource"
+          @open-settings="openInstanceSettings"
+          @open-repository-workspace="openStoryRepositoryWorkspace"
+          @run-action="runStoryAction"
+        />
+        <button
+          type="button"
+          class="story-resource-resize-handle"
+          :class="{ hidden: !storyResourceSidebar.visible.value || storyResourceOverlay }"
+          role="separator"
+          aria-orientation="vertical"
+          :aria-hidden="!storyResourceSidebar.visible.value || storyResourceOverlay"
+          :aria-label="t('stories.resources.resize')"
+          :aria-valuemin="STORY_RESOURCE_SIDEBAR_MIN_WIDTH"
+          :aria-valuemax="storyResourceMaxWidth"
+          :aria-valuenow="storyResourceSidebar.width.value"
+          :disabled="!storyResourceSidebar.visible.value || storyResourceOverlay"
+          :tabindex="storyResourceSidebar.visible.value && !storyResourceOverlay ? 0 : -1"
+          @pointerdown.prevent="startStoryResourceResize"
+          @keydown="resizeStoryResourceWithKeyboard"
+        />
+        <Transition name="story-resource-scrim" :css="!storyResourceContextChanging">
+          <button v-if="storyResourceSidebar.visible.value && storyResourceOverlay" type="button" class="story-resource-scrim" :aria-label="t('stories.resources.collapse')" @click="closeStoryResourceOverlay" />
+        </Transition>
+        <Transition name="story-resource-panel" :css="!storyResourceContextChanging">
+          <StoryResourceSidebar
+            v-if="storyResourceSidebar.visible.value"
+            class="story-resource-panel"
+          :resources="storyResourceSidebar.resources.value"
+          :active-key="storyResourceSidebar.activeKey.value"
+          :instances="boardInstancesWithAiSessions"
+          :target-instance="storyResourceTargetInstance"
+          :target-ai-session-id="storyResourceTargetAiSessionId"
+            :launching="storyResourceLaunching"
+            :closing-key="storyResourceClosingKey"
+            :node-local-folders-by-node-id="nodeLocalFoldersByNodeId"
+            @select="storyResourceSidebar.activeKey.value = $event"
+            @close="closeStoryResource"
+            @reorder="storyResourceSidebar.reorder"
+            @launch-app="launchStoryResourceApp"
+            @open-repository="openStoryRepositoryResource"
+          />
+        </Transition>
+      </div>
 
       <AiSessionBoardView
         v-if="!standaloneMode && aiBoardMode && !settingsMode"
@@ -463,10 +531,10 @@
       />
 
       <EmbeddedBrowserSurfaceLayer
-        :active-instance-id="activeInstanceId"
-        :browser-session-tabs="browserSessionTabs"
-        :browser-surface-state="browserSurfaceState"
-        @update-browser-tab="(instanceId, sessionKey, patch) => updateBrowserTab(instanceId, sessionKey, patch)"
+        :active-instance-id="browserLayerActiveInstanceId"
+        :browser-session-tabs="combinedBrowserSessionTabs"
+        :browser-surface-state="combinedBrowserSurfaceState"
+        @update-browser-tab="updateCombinedBrowserTab"
       />
     </main>
 
@@ -538,9 +606,9 @@ import type { SupportedLocale } from "../../i18n/locale";
 import { translateApiError } from "../../i18n/apiError";
 import { useQueries, useQueryClient } from "@tanstack/vue-query";
 import { useEventListener } from "@vueuse/core";
-import { BookOpen, Bot, Boxes, Check, ChevronDown, Container, Download, House, Laptop, LayoutGrid, LoaderCircle, LogOut, Maximize2, Minus, RefreshCw, Settings, UserRound, X } from "@lucide/vue";
+import { BookOpen, Bot, Boxes, Check, ChevronDown, Container, Download, House, Laptop, LayoutGrid, LoaderCircle, LogOut, Maximize2, Minus, PanelRight, RefreshCw, Settings, UserRound, X } from "@lucide/vue";
 import "@xterm/xterm/css/xterm.css";
-import { controlPlaneQueryKeys, fetchInstanceBoardPayload, getInstanceAppManagement, getInstanceResourceMetrics, installInstanceApp, instanceBoardQueryOptions, logoutControlPlane, nodeLocalFoldersQueryOptions, renameAppSession, resolveAiSessionApproval, saveEnvironmentTemplate, uninstallInstanceApp, updateControlledInstance, useAuthSessionQuery, useControlPlaneAiSessionsQuery, useControlPlaneAppSessionsQuery, useControlPlaneStatusQuery, useCurrentAccessQuery, useInstanceBoardQuery, useInstanceDirectoryQuery, useModelsQuery, useNodesQuery, useServerUpdateCheckQuery } from "../../api/queries";
+import { controlPlaneQueryKeys, fetchInstanceBoardPayload, getInstanceAppManagement, getInstanceResourceMetrics, installInstanceApp, instanceBoardQueryOptions, launchAppSession, logoutControlPlane, nodeLocalFoldersQueryOptions, renameAppSession, resolveAiSessionApproval, saveEnvironmentTemplate, stopAppSession, uninstallInstanceApp, updateControlledInstance, useAuthSessionQuery, useControlPlaneAiSessionsQuery, useControlPlaneAppSessionsQuery, useControlPlaneStatusQuery, useCurrentAccessQuery, useInstanceBoardQuery, useInstanceDirectoryQuery, useModelsQuery, useNodesQuery, useServerUpdateCheckQuery } from "../../api/queries";
 import { sharedControlPlaneClient } from "../../api/sharedClient";
 import { authorizationCacheEpoch as currentAccessEpoch, authorizationCacheEpochChanged as authorizationEpochChanged, preserveAcrossAuthorizationChange, signedOutAuthSession } from "../../api/authorizationCache";
 import type { ControlPlaneInstanceResourceEntry } from "@task-handoff/control-plane-client";
@@ -555,6 +623,10 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../
 import AiSessionBoardView from "./ai-board/AiSessionBoardView.vue";
 import StoryView from "./story/StoryView.vue";
 import type { StorySelection } from "./story/storySelection";
+import StoryResourceSidebar from "./story/StoryResourceSidebar.vue";
+import { closeStoryResourceTarget, repositoryResource, storyResourceKey, type StoryRepositoryPage } from "./story/storyResources";
+import { storyResourceSidebarKeyboardWidth, storyResourceSidebarMaxWidth, storyResourceSidebarMode, storyResourceSidebarProportionalWidth } from "./story/storyResourceLayout";
+import { STORY_RESOURCE_SIDEBAR_MIN_WIDTH, normalizeStoryResourceSidebarWidth, useStoryResourceSidebar } from "./story/useStoryResourceSidebar";
 import { allStoryNodes, normalizeStoryNodeFilter, selectOnlyStoryNode, storyNodeIsSelected, toggleStoryNode, type StoryNodeFilter } from "@task-handoff/control-plane-client";
 import InstanceBoardView from "./board/InstanceBoardView.vue";
 import InstanceDetail from "./instance-detail/InstanceDetail.vue";
@@ -569,14 +641,15 @@ import NewInstanceModal from "./NewInstanceModal.vue";
 import AccountSecurityDialog from "./settings/AccountSecurityDialog.vue";
 import SettingsModal from "./settings/SettingsModal.vue";
 import { buildSettingsSections, type SettingsSection } from "./settings/settingsSections";
-import type { NodeJoinedEvent } from "@task-handoff/protocol/control-plane";
+import { type NodeJoinedEvent } from "@task-handoff/protocol/control-plane";
+import type { RepositorySessionKind } from "@task-handoff/protocol/repository";
 import type { Story, StoryAction } from "@task-handoff/protocol/stories";
 import { useActiveInstanceSessions } from "./instance-detail/useActiveInstanceSessions";
 import { useBoardTerminalPreviews } from "./board/useBoardTerminalPreviews";
 import { useInstanceActions } from "./useInstanceActions";
 import { useWorkbenchLayoutPreferences } from "./useWorkbenchLayoutPreferences";
 import { useInstanceBoardSessions, type BoardSessionTab } from "./board/useInstanceBoardSessions";
-import { appDisplayName, buildAppSessionTabs, type SessionTab } from "./useInstanceSessions";
+import { appDisplayName, buildAppSessionTabs, EMBEDDED_BROWSER_APP_ID, type RepositoryWorkspaceTabTarget, type SessionTab } from "./useInstanceSessions";
 import { isInstanceConnecting } from "./useInstanceStatus";
 import { applyInstanceBoardTargetSnapshot } from "./instanceBoardCache.ts";
 import { useResizableInstancesSidebar } from "./instance-list/useResizableInstancesSidebar";
@@ -907,6 +980,111 @@ const aiSessionStore = useAiSessionStore({
   queryKey: () => controlPlaneQueryKeys.aiSessions(sessionQueryInstanceId.value),
 });
 const boardInstancesWithAiSessions = aiSessionStore.boardInstancesWithAiSessions;
+const storyResourceTargetAiSessionId = computed(() => storyMode.value && !settingsMode.value && storySelection.value?.kind === "session" ? storySelection.value.sessionId : "");
+const storyResourceTargetInstanceId = computed(() => storyMode.value && !settingsMode.value && storySelection.value?.kind === "session" ? storySelection.value.instanceId : "");
+const storyResourceTargetInstance = computed(() => {
+  const selection = storySelection.value;
+  return selection?.kind === "session"
+    ? boardInstancesWithAiSessions.value.find((instance) => instance.id === selection.instanceId)
+    : undefined;
+});
+const storyResourceSidebar = useStoryResourceSidebar({
+  aiSessionId: storyResourceTargetAiSessionId,
+  instanceId: storyResourceTargetInstanceId,
+  instances: boardInstancesWithAiSessions,
+});
+const activeStoryBrowserResource = computed(() => (
+  storyMode.value
+  && storyResourceSidebar.visible.value
+  && storyResourceSidebar.activeResource.value?.kind === "embedded-browser"
+    ? storyResourceSidebar.activeResource.value
+    : undefined
+));
+const storyResourceLaunching = ref(false);
+const storyResourceClosingKey = ref("");
+const storyResourceLayoutElement = ref<HTMLElement>();
+const storyResourceLayoutWidth = ref(0);
+const storyResourceResizing = ref(false);
+const storyResourceContextChanging = ref(false);
+const storyResourceContextKey = computed(() => `${storyResourceTargetInstanceId.value}:${storyResourceTargetAiSessionId.value}`);
+const storyResourceOverlay = computed(() => storyResourceSidebarMode(storyResourceLayoutWidth.value) === "overlay");
+const storyResourceMaxWidth = computed(() => storyResourceSidebarMaxWidth(storyResourceLayoutWidth.value));
+let storyResourceResizeObserver: ResizeObserver | undefined;
+let storyResourceResizePointerId: number | undefined;
+
+function observeStoryResourceLayout() {
+  storyResourceResizeObserver?.disconnect();
+  const element = storyResourceLayoutElement.value;
+  if (!element || typeof ResizeObserver === "undefined") return;
+  storyResourceResizeObserver = new ResizeObserver(([entry]) => {
+    const previousLayoutWidth = storyResourceLayoutWidth.value;
+    const nextLayoutWidth = entry?.contentRect.width || element.clientWidth;
+    storyResourceLayoutWidth.value = nextLayoutWidth;
+    storyResourceSidebar.width.value = storyResourceSidebar.visible.value
+      ? storyResourceSidebarProportionalWidth(storyResourceSidebar.width.value, previousLayoutWidth, nextLayoutWidth)
+      : Math.min(storyResourceSidebar.width.value, storyResourceMaxWidth.value);
+  });
+  storyResourceResizeObserver.observe(element);
+}
+
+watch([storyMode, settingsMode], async ([isStory, isSettings]) => {
+  if (!isStory || isSettings) {
+    storyResourceResizeObserver?.disconnect();
+    storyResourceLayoutWidth.value = 0;
+    return;
+  }
+  await nextTick();
+  observeStoryResourceLayout();
+}, { immediate: true });
+
+watch(storyResourceContextKey, async () => {
+  storyResourceContextChanging.value = true;
+  await nextTick();
+  storyResourceContextChanging.value = false;
+}, { flush: "sync", immediate: true });
+
+watch([() => storyResourceSidebar.visible.value, storyResourceOverlay], async ([visible, overlay]) => {
+  if (!visible || !overlay) return;
+  await nextTick();
+  (document.querySelector(".story-resource-panel") as HTMLElement | null)?.focus();
+});
+
+function startStoryResourceResize(event: PointerEvent) {
+  if (storyResourceOverlay.value) return;
+  storyResourceResizing.value = true;
+  storyResourceResizePointerId = event.pointerId;
+  (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId);
+  window.addEventListener("pointermove", resizeStoryResource);
+  window.addEventListener("pointerup", stopStoryResourceResize);
+  window.addEventListener("pointercancel", stopStoryResourceResize);
+}
+
+function resizeStoryResource(event: PointerEvent) {
+  if (event.pointerId !== storyResourceResizePointerId || !storyResourceLayoutElement.value) return;
+  const bounds = storyResourceLayoutElement.value.getBoundingClientRect();
+  storyResourceSidebar.width.value = Math.min(storyResourceMaxWidth.value, normalizeStoryResourceSidebarWidth(bounds.right - event.clientX));
+}
+
+function stopStoryResourceResize(event?: PointerEvent) {
+  if (event && event.pointerId !== storyResourceResizePointerId) return;
+  storyResourceResizing.value = false;
+  storyResourceResizePointerId = undefined;
+  window.removeEventListener("pointermove", resizeStoryResource);
+  window.removeEventListener("pointerup", stopStoryResourceResize);
+  window.removeEventListener("pointercancel", stopStoryResourceResize);
+}
+
+function resizeStoryResourceWithKeyboard(event: KeyboardEvent) {
+  if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+  event.preventDefault();
+  storyResourceSidebar.width.value = storyResourceSidebarKeyboardWidth(storyResourceSidebar.width.value, event.key, storyResourceMaxWidth.value);
+}
+
+function closeStoryResourceOverlay() {
+  if (!storyResourceOverlay.value || !storyResourceSidebar.visible.value) return;
+  storyResourceSidebar.visible.value = false;
+  nextTick(() => (document.querySelector(".story-resource-toggle") as HTMLElement | null)?.focus());
+}
 const switcherInstances = computed<Array<InstanceBoardItem | ControlPlaneInstanceResourceEntry>>(() => {
   if (!standaloneMode.value) return sortedInstances.value;
   return [...(instanceDirectory.data.value || [])].sort((a, b) => a.nodeId.localeCompare(b.nodeId) || a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
@@ -1159,6 +1337,56 @@ const {
   sessionMenuOpen,
   t,
 });
+const storyBrowserSessionTabs = computed<Record<string, SessionTab[]>>(() => {
+  const tabs: Record<string, SessionTab[]> = {};
+  for (const resource of storyResourceSidebar.allBrowserResources.value) {
+    (tabs[resource.instanceId] ||= []).push({
+      key: storyResourceKey(resource),
+      kind: "embedded-browser",
+      label: EMBEDDED_BROWSER_APP_ID,
+      title: resource.title || t("sessions.tabs.browser"),
+      status: resource.status || "running",
+      source: {
+        browserTabId: resource.browserTabId,
+        ...(resource.initialUrl ? { initialUrl: resource.initialUrl } : {}),
+        ...(resource.currentUrl ? { currentUrl: resource.currentUrl } : {}),
+      },
+    });
+  }
+  return tabs;
+});
+const combinedBrowserSessionTabs = computed<Record<string, SessionTab[]>>(() => {
+  const instanceIds = new Set([...Object.keys(browserSessionTabs), ...Object.keys(storyBrowserSessionTabs.value)]);
+  return Object.fromEntries([...instanceIds].map((instanceId) => [
+    instanceId,
+    [...(browserSessionTabs[instanceId] || []), ...(storyBrowserSessionTabs.value[instanceId] || [])],
+  ]));
+});
+const combinedBrowserSurfaceState = computed(() => {
+  if (!storyMode.value) return browserSurfaceState.value;
+  const resource = activeStoryBrowserResource.value;
+  if (!resource) return {};
+  return {
+    [resource.instanceId]: {
+      leftSessionKey: storyResourceKey(resource),
+      rightSessionKey: "",
+    },
+  };
+});
+const browserLayerActiveInstanceId = computed(() => storyMode.value
+  ? activeStoryBrowserResource.value?.instanceId || ""
+  : activeInstanceId.value);
+
+function updateCombinedBrowserTab(instanceId: string, sessionKey: string, patch: { title?: string; url?: string; status?: string }) {
+  const storyResource = storyResourceSidebar.allBrowserResources.value.find((resource) => (
+    resource.instanceId === instanceId && storyResourceKey(resource) === sessionKey
+  ));
+  if (storyResource) {
+    storyResourceSidebar.updateBrowser(storyResource, patch);
+    return;
+  }
+  updateBrowserTab(instanceId, sessionKey, patch);
+}
 const authoritativeInstanceIds = computed<ReadonlySet<string> | undefined>(() => {
   if (standaloneMode.value) {
     return instanceDirectory.isSuccess.value
@@ -1173,10 +1401,12 @@ watch(authoritativeInstanceIds, (instanceIds) => {
   if (instanceIds) pruneBrowserInstances(instanceIds);
 }, { immediate: true });
 const stopDesktopBrowserNewTab = desktopBridge?.onBrowserNewTab?.(({ instanceId: sourceInstanceId, url }) => {
-  const instanceId = sourceInstanceId || activeInstanceId.value;
+  const instanceId = sourceInstanceId || activeStoryBrowserResource.value?.instanceId || activeInstanceId.value;
   desktopBridge?.logBrowserDiagnostic?.({ message: `popup event received url=${String(url || "").slice(0, 200)}`, instanceId: instanceId || undefined });
   if (!instanceId || typeof url !== "string" || !url.trim()) return;
-  openBrowserTab(instanceId, url);
+  if (storyMode.value) {
+    if (storyResourceTargetAiSessionId.value && storyResourceTargetInstanceId.value === instanceId) storyResourceSidebar.openBrowser(instanceId, url);
+  } else openBrowserTab(instanceId, url);
   desktopBridge?.logBrowserDiagnostic?.({ message: `popup browser tab created url=${url.slice(0, 200)}`, instanceId });
 });
 
@@ -1372,6 +1602,9 @@ onBeforeUnmount(() => {
   connectingRefreshLoads.clear();
   disposeBoardTerminalPreviews();
   stopInstanceResize();
+  storyResourceResizeObserver?.disconnect();
+  storyResourceResizeObserver = undefined;
+  stopStoryResourceResize();
 });
 
 onMounted(async () => {
@@ -1695,6 +1928,79 @@ function openAiSessionAppFromBoard(instance: InstanceBoardItemWithAppSessions, s
   openAiSessionApp(instance, session);
   workbenchView.value = "instance";
   closeFloatingLayers();
+}
+
+const storyResourceErrorToast = "error" as const;
+
+async function launchStoryResourceApp(instance: InstanceBoardItem, appId: string, cwdFolderId?: string, options?: Record<string, unknown>) {
+  const aiSessionId = storyResourceTargetAiSessionId.value;
+  if (!aiSessionId || storyResourceTargetInstanceId.value !== instance.id || storyResourceLaunching.value) return;
+  if (appId === EMBEDDED_BROWSER_APP_ID) {
+    storyResourceSidebar.openBrowser(instance.id);
+    return;
+  }
+  storyResourceLaunching.value = true;
+  try {
+    const session = await launchAppSession(instance.id, {
+      appId,
+      ...(cwdFolderId ? { cwdFolderId } : {}),
+      ...(options ? { options } : {}),
+    });
+    await controlPlaneAppSessions.refetch();
+    if (storyResourceTargetAiSessionId.value === aiSessionId && storyResourceTargetInstanceId.value === instance.id) {
+      storyResourceSidebar.focusApp(instance.id, session.id);
+    }
+  } catch (error) {
+    showToast(errorText(error), storyResourceErrorToast);
+  } finally {
+    storyResourceLaunching.value = false;
+  }
+}
+
+function openStoryAiSessionResource(instance: InstanceBoardItemWithAppSessions, session?: AiSessionSummary) {
+  if (session?.appSessionId) storyResourceSidebar.focusApp(instance.id, session.appSessionId);
+}
+
+function openStoryRepositoryWorkspace(target: RepositoryWorkspaceTabTarget & { instanceId: string }) {
+  openStoryRepositoryResource(
+    target.instanceId,
+    target.sessionKind,
+    target.sessionId,
+    target.page === "changes-review" || target.page === "worktrees" ? target.page : "files",
+    target.filePath,
+  );
+}
+
+function openStoryRepositoryResource(
+  instanceId: string,
+  sessionKind: RepositorySessionKind,
+  sessionId: string,
+  page: StoryRepositoryPage,
+  filePath?: string,
+) {
+  const aiSessionId = storyResourceTargetAiSessionId.value;
+  if (!aiSessionId || storyResourceTargetInstanceId.value !== instanceId || !boardInstancesWithAiSessions.value.some((instance) => instance.id === instanceId)) return;
+  storyResourceSidebar.openRepository(repositoryResource(aiSessionId, instanceId, sessionKind, sessionId, page, filePath));
+}
+
+async function closeStoryResource(key: string) {
+  const resource = storyResourceSidebar.resources.value.find((candidate) => storyResourceKey(candidate) === key);
+  if (!resource || storyResourceClosingKey.value) return;
+  if (resource.kind === "app-session") storyResourceClosingKey.value = key;
+  try {
+    await closeStoryResourceTarget(resource, {
+      stopAppSession: async (instanceId, sessionId) => {
+        await stopAppSession(instanceId, sessionId);
+        await controlPlaneAppSessions.refetch();
+      },
+      closeRepository: storyResourceSidebar.removeRepository,
+      closeEmbeddedBrowser: storyResourceSidebar.removeBrowser,
+    });
+  } catch (error) {
+    showToast(errorText(error), storyResourceErrorToast);
+  } finally {
+    storyResourceClosingKey.value = "";
+  }
 }
 
 const storyActionErrorToast = "error" as const;

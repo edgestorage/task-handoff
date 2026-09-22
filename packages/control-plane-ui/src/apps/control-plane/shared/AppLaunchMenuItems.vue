@@ -1,6 +1,6 @@
 <template>
   <template v-for="app in apps" :key="app.id">
-    <DropdownMenuSub v-if="app.supportsCwdSelection">
+    <DropdownMenuSub v-if="app.supportsCwdSelection && cwdSelection">
       <DropdownMenuSubTrigger class="app-launch-menu-item" :disabled="launching" @click.prevent.stop="$emit('launch', app.id)">
         <AppLaunchIcon :app-id="app.id" />
         <span>
@@ -55,13 +55,16 @@ import {
 import type { LaunchableApp } from "../useInstanceSessions";
 import AppLaunchIcon from "./AppLaunchIcon.vue";
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   apps: LaunchableApp[];
+  cwdSelection?: boolean;
   folders?: NodeLocalFolder[];
   instance: InstanceBoardItem;
   launching: boolean;
   submenuClass?: string;
-}>();
+}>(), {
+  cwdSelection: true,
+});
 const { t } = useI18n();
 
 defineEmits<{
@@ -76,6 +79,69 @@ const filteredCwdFolders = computed(() => filterInstanceCwdFolders(cwdFolders.va
 </script>
 
 <style scoped>
+:global(.app-launch-menu) {
+  display: grid;
+  width: min(220px, var(--reka-dropdown-menu-content-available-width));
+  max-height: var(--reka-dropdown-menu-content-available-height);
+  gap: 2px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface-inset);
+  box-shadow: var(--shadow-popover);
+  padding: 5px;
+}
+
+:global(.app-launch-menu-item) {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 42px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--control-plane-menu-text);
+  cursor: pointer;
+  padding: 0 9px;
+  text-align: left;
+}
+
+:global(.app-launch-menu-item:hover),
+:global(.app-launch-menu-item:focus-visible),
+:global(.app-launch-menu-item[data-highlighted]) {
+  background: var(--surface-active);
+  color: var(--control-plane-menu-hover-text);
+  outline: none;
+}
+
+:global(.app-launch-menu-item[data-disabled]) {
+  cursor: default;
+  opacity: 0.52;
+}
+
+:global(.app-launch-menu .app-launch-menu-item span) {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+:global(.app-launch-menu .app-launch-menu-item strong),
+:global(.app-launch-menu .app-launch-menu-item small) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.25;
+}
+
+:global(.app-launch-menu .app-launch-menu-item strong) {
+  font-size: 12px;
+}
+
+:global(.app-launch-menu .app-launch-menu-item small) {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
 :global(.app-launch-project-search) {
   display: flex;
   align-items: center;
