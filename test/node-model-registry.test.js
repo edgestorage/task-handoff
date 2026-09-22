@@ -283,6 +283,14 @@ test("ordered model entities resolve defaults by protocol and preserve provider 
   assert.equal(reordered.statusCode, 200);
   assert.equal(app.nodeAgentState.resolvedAssignedModelEnvironment("inst_multi_models").TASK_HANDOFF_CODEX_MODEL, "same-name");
 
+  const cleared = await request(app, "PUT", "/api/node-agent/instances/inst_multi_models/model-assignment", {
+    modelSelection: { modelEntityIds: [] },
+    modelEntityIds: [],
+  });
+  assert.equal(cleared.statusCode, 200);
+  assert.deepEqual(cleared.json().data.instance.modelSelection, { modelEntityIds: [] });
+  assert.equal(app.nodeAgentState.resolvedAssignedModelEnvironment("inst_multi_models").OPENAI_API_KEY, undefined);
+
   const rejected = await request(app, "PUT", "/api/node-agent/instances/inst_multi_models/model-assignment", {
     modelSelection: { modelEntityIds: [disabled.json().data.id] },
     modelEntityIds: [disabled.json().data.id],

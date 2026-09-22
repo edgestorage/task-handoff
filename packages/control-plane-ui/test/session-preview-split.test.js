@@ -28,12 +28,13 @@ test("session split follows the focused pane for selection and new app sessions"
 });
 
 test("session preview splits the original tab row into pane-aligned tab groups", async () => {
-  const [workbench, preview, pane, styles, terminalPreview] = await Promise.all([
+  const [workbench, preview, pane, styles, terminalPreview, viewport] = await Promise.all([
     source("apps/control-plane/ControlPlaneWorkbench.vue"),
     source("apps/control-plane/instance-detail/SessionPreview.vue"),
     source("apps/control-plane/instance-detail/SessionPaneContent.vue"),
     source("apps/control-plane/instance-detail/SessionPreview.css"),
     source("apps/control-plane/useTerminalPreview.ts"),
+    source("apps/control-plane/shared/ResourceTabViewport.vue"),
   ]);
 
   assert.match(workbench, /:session-toolbar-target="standaloneMode && sessionPreviewExpanded && !hasSessionSplit \? '#instance-detail-titlebar-tabs' : undefined"/);
@@ -67,20 +68,13 @@ test("session preview splits the original tab row into pane-aligned tab groups",
   assert.match(styles, /\.session-preview:has\(\.session-pane\[data-pane="right"\]:hover\) \.session-preview-selector\[data-pane="right"\] \.session-tab-menu-trigger/);
   assert.match(styles, /\.session-toolbar-split-divider::after\s*\{[\s\S]*width:\s*2px/);
   assert.match(styles, /\.session-toolbar-split-divider\s*\{[\s\S]*position:\s*absolute;[\s\S]*left:\s*var\(--session-left-ratio\);[\s\S]*width:\s*7px/);
-  assert.match(preview, /class="session-tab-strip-frame"[\s\S]*v-session-tab-overflow class="session-tab-strip" @scroll="updateSessionTabOverflowFromEvent" @wheel="scrollSessionTabs"/);
-  assert.match(preview, /function scrollSessionTabs\(event: WheelEvent\)[\s\S]*tabList\.scrollLeft \+ event\.deltaY/);
-  assert.match(preview, /event\.preventDefault\(\);[\s\S]*tabList\.scrollLeft = nextScrollLeft/);
-  assert.match(preview, /tabList\.dataset\.overflowStart = String\(tabList\.scrollLeft > 1\)/);
-  assert.match(preview, /tabList\.dataset\.overflowEnd = String\(tabList\.scrollLeft < maxScrollLeft - 1\)/);
-  assert.match(preview, /querySelector<HTMLElement>\('\[role="tab"\]\[aria-selected="true"\]'\)/);
-  assert.match(preview, /tabBounds\.right > viewportBounds\.right[\s\S]*tabList\.scrollLeft = Math\.max\(0, Math\.min\(tabList\.scrollWidth - tabList\.clientWidth, nextScrollLeft\)\)/);
-  assert.match(preview, /new ResizeObserver\(\(\) => syncSessionTabViewport\(tabList\)\)/);
-  assert.match(preview, /updated\(tabList\) \{[\s\S]*nextTick\(\(\) => syncSessionTabViewport\(tabList\)\)/);
-  assert.match(styles, /\.session-tab-strip \{[^}]*overflow-x:\s*auto;[^}]*overflow-y:\s*hidden;[^}]*scrollbar-width:\s*none;/);
-  assert.match(styles, /\.session-tab-strip::-webkit-scrollbar\s*\{[\s\S]*display:\s*none;/);
-  assert.match(styles, /data-overflow-start="true"\]\[data-overflow-end="false"[\s\S]*mask-image:\s*linear-gradient\(90deg, transparent, #000 28px\)/);
-  assert.match(styles, /data-overflow-start="false"\]\[data-overflow-end="true"[\s\S]*mask-image:\s*linear-gradient\(270deg, transparent, #000 28px\)/);
-  assert.match(styles, /data-overflow-start="true"\]\[data-overflow-end="true"[\s\S]*#000 calc\(100% - 28px\), transparent 100%/);
+  assert.match(preview, /<ResourceTabViewport[\s\S]*:active-key/);
+  assert.match(viewport, /function scrollWithWheel\(event: WheelEvent\)[\s\S]*event\.preventDefault\(\)/);
+  assert.match(viewport, /function revealActiveTab/);
+  assert.match(viewport, /new ResizeObserver\(revealActiveTab\)/);
+  assert.match(viewport, /data-overflow-start="true"\]\[data-overflow-end="false"[\s\S]*mask-image:\s*linear-gradient\(90deg,transparent,#000 28px\)/);
+  assert.match(viewport, /data-overflow-start="false"\]\[data-overflow-end="true"[\s\S]*mask-image:\s*linear-gradient\(270deg,transparent,#000 28px\)/);
+  assert.match(viewport, /data-overflow-start="true"\]\[data-overflow-end="true"[\s\S]*#000 calc\(100% - 28px\),transparent 100%/);
   assert.match(styles, /\.app-launcher\.open \.session-tab-add-button\s*\{[\s\S]*background:\s*color-mix\(in srgb, var\(--surface-raised\) 92%, var\(--white\) 4%\)/);
   assert.match(preview, /hasSessionSplit \? t\('sessions\.tabs\.closeSplit'\) : t\('sessions\.tabs\.split'\)/);
   assert.match(preview, /role="separator"/);
@@ -101,10 +95,12 @@ test("session preview splits the original tab row into pane-aligned tab groups",
 });
 
 test("session tab dragging follows the pointer, reorders live, and accepts pane whitespace", async () => {
-  const [preview, state, styles] = await Promise.all([
+  const [preview, state, styles, sharedItem, sharedViewport] = await Promise.all([
     source("apps/control-plane/instance-detail/SessionPreview.vue"),
     source("apps/control-plane/instance-detail/useActiveInstanceSessions.ts"),
     source("apps/control-plane/instance-detail/SessionPreview.css"),
+    source("apps/control-plane/shared/ResourceTabItem.vue"),
+    source("apps/control-plane/shared/ResourceTabViewport.vue"),
   ]);
 
   assert.match(preview, /@pointerdown="startSessionTabPointer\(\$event, session, tabGroup\.id\)"/);
@@ -123,10 +119,10 @@ test("session tab dragging follows the pointer, reorders live, and accepts pane 
   assert.doesNotMatch(preview, /draggable="true"|setDragImage|@dragstart/);
   assert.match(state, /isPinnedLeft\(sourceSession\)/);
   assert.match(state, /if \(!targetKey\)[\s\S]*targetPaneKeys[\s\S]*reorderSessionTabKeys\(currentOrder, sourceKey, "", placement, targetPaneKeys\)/);
-  assert.match(styles, /\.session-tab-item\.drag-placeholder[\s\S]*border: 1px dashed/);
-  assert.match(styles, /\.session-tab-reorder-move[\s\S]*transition: transform 160ms/);
-  assert.match(styles, /:global\(\.session-tab-pointer-overlay\)[\s\S]*will-change: transform/);
-  assert.match(styles, /body\.session-tab-pointer-dragging iframe[\s\S]*pointer-events: none/);
+  assert.match(sharedItem, /\.session-tab-item\.drag-placeholder[\s\S]*border: 1px dashed/);
+  assert.match(sharedViewport, /\.session-tab-reorder-move[\s\S]*transition:transform 160ms/);
+  assert.match(sharedItem, /\.session-tab-pointer-overlay[\s\S]*will-change: transform/);
+  assert.match(sharedItem, /body\.session-tab-pointer-dragging iframe[\s\S]*pointer-events: none/);
 });
 
 test("session tab ordering uses the same insertion invariant for tabs and pane whitespace", () => {
