@@ -31,7 +31,7 @@ export type AiSessionComposerAttachment = {
   name: string;
   mime: string;
   size: number;
-  source: { type: "inline" } | { type: "runtime-path"; path: string };
+  source: { type: "inline" } | { type: "runtime-path"; path: string } | { type: "retained" };
   dataUrl?: string;
   previewUrl?: string;
   file?: File;
@@ -288,7 +288,7 @@ watch(() => props.modelValue, () => {
 
 watch(attachments, (next, previous) => {
   for (const attachment of previous || []) {
-    if (attachment.previewUrl && !next.some((item) => item.id === attachment.id)) URL.revokeObjectURL(attachment.previewUrl);
+    if (attachment.previewUrl && attachment.source.type !== "retained" && !next.some((item) => item.id === attachment.id)) URL.revokeObjectURL(attachment.previewUrl);
   }
   if (previewAttachment.value && !next.some((item) => item.id === previewAttachment.value?.id)) closeImagePreview();
   void nextTick(resizeInput);

@@ -1,6 +1,7 @@
 import {
   AiSessionResumeResultSchema,
   type AiSessionHistoryItem,
+  type AiSessionModelSelection,
   type AiSessionResumeResult,
 } from "@task-handoff/protocol/ai-sessions";
 import type { StoryAgentToolName } from "@task-handoff/protocol/story-agent-tools";
@@ -17,7 +18,7 @@ export type AiSessionResumeCoordinatorOptions = {
   registry: AiSessionRegistry;
   appSessions: () => readonly AiSessionResumeAppSession[];
   startApp: (item: AiSessionHistoryItem) => AiSessionResumeAppSession | Promise<AiSessionResumeAppSession>;
-  resumeProvider?: (item: AiSessionHistoryItem, storyAgentTools?: StoryAgentToolName[]) => void | Promise<void>;
+  resumeProvider?: (item: AiSessionHistoryItem, storyAgentTools?: StoryAgentToolName[]) => AiSessionModelSelection | void | Promise<AiSessionModelSelection | void>;
   resolveStoryAgentTools?: (item: AiSessionHistoryItem) => Promise<StoryAgentToolName[]>;
 };
 
@@ -29,7 +30,7 @@ export class AiSessionResumeCoordinator {
     this.options = options;
   }
 
-  resume(aiSessionId: string) {
+  resume(aiSessionId: string, modelSelection?: AiSessionModelSelection) {
     const item = this.options.history.get(aiSessionId);
     if (!item) {
       throw resumeError("AI_SESSION_HISTORY_NOT_FOUND", "AI session history entry not found.", 404);
@@ -37,7 +38,7 @@ export class AiSessionResumeCoordinator {
     const keys = [`ai:${item.id}`, `provider:${item.agent}:${item.providerSessionId}`];
     const active = keys.map((key) => this.pending.get(key)).find(Boolean);
     if (active) return active;
-    const promise = this.perform(item).finally(() => {
+    const promise = this.perform(item, modelSelection).finally(() => {
       for (const key of keys) {
         if (this.pending.get(key) === promise) this.pending.delete(key);
       }
@@ -46,7 +47,8 @@ export class AiSessionResumeCoordinator {
     return promise;
   }
 
-  private async perform(item: AiSessionHistoryItem): Promise<AiSessionResumeResult> {
+  private async perform(item: AiSessionHistoryItem, requestedModelSelection?: AiSessionModelSelection): Promise<AiSessionResumeResult> {
+    const resumeItem = requestedModelSelection ? { ...item, modelSelection: requestedModelSelection } : item;
     const runningAppIds = new Set(this.options.appSessions()
       .filter((session) => typeof session.status !== "string" || session.status === "running")
       .map((session) => session.id));
@@ -67,14 +69,19 @@ export class AiSessionResumeCoordinator {
     const previous = this.options.registry.get(item.id);
     const previousProvider = providerSession?.id === item.id ? undefined : providerSession;
     if (providerSession && providerSession.id !== item.id) this.options.registry.discard(providerSession.id);
-    this.options.registry.restoreHistory(item);
+    this.options.registry.restoreHistory(resumeItem);
     try {
       if (item.creationSource === "ai-session") {
         if (!this.options.resumeProvider) throw new Error("Provider does not support direct AI session resume.");
         const storyAgentTools = item.storyId
           ? await this.options.resolveStoryAgentTools?.(item) || []
           : undefined;
-        await this.options.resumeProvider(item, storyAgentTools);
+        const actualModelSelection = await this.options.resumeProvider(resumeItem, storyAgentTools);
+        if (requestedModelSelection && (!actualModelSelection
+          || actualModelSelection.modelEntityId !== requestedModelSelection.modelEntityId
+          || actualModelSelection.modelName !== requestedModelSelection.modelName)) {
+          throw new Error("Provider resumed the session with a different model selection.");
+        }
         this.options.history.activate(item.id);
         return AiSessionResumeResultSchema.parse({
           disposition: "resumed",

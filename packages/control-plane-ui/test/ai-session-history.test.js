@@ -45,9 +45,15 @@ test("history mode preserves the current-list scroll position and renders all re
 test("history detail composer resumes, waits for authoritative state, and then sends", () => {
   assert.match(panel, /v-model="historyMessageDraft"/);
   assert.match(panel, /v-model:attachments="historyMessageAttachments"/);
+  assert.match(panel, /:model-groups="historyModelGroups"/);
+  assert.match(panel, /:model-selection="historyModelSelection"/);
+  assert.match(panel, /@select-model="historyModelSelection = \$event"/);
+  assert.match(panel, /const historyModelFallbackSelection = computed\(\(\) =>/);
+  assert.match(panel, /mode: "create"/);
+  assert.match(panel, /historyModelSelection\.value = defaultAiSessionModelSelection\(groups\) \|\| historyModelFallbackSelection\.value/);
   assert.match(panel, /@run="sendHistoryMessage"/);
   assert.match(panel, /if \(!item \|\| resumingHistoryId\.value/);
-  assert.match(panel, /const result = await resumeAiSession\(props\.instance\.id, item\.id\);/);
+  assert.match(panel, /const result = await resumeAiSession\(props\.instance\.id, item\.id, selection \? \{ modelSelection: selection \} : \{\}\);/);
   assert.match(panel, /session\.id === result\.aiSessionId/);
   assert.match(panel, /session\.providerSessionId === result\.providerSessionId/);
   assert.match(panel, /session\.creationSource === result\.creationSource/);
@@ -72,10 +78,10 @@ test("history continue action shows immediate button loading state", () => {
   assert.match(styles, /\.session-ai-detail-head-actions \.session-ai-history-continue:disabled\s*\{[^}]*cursor: wait;[^}]*opacity: 0\.72;/s);
 });
 
-test("history API clients send only instance and AI session identities", () => {
+test("history API clients send identities plus an optional resume selection", () => {
   assert.match(queries, /getAiSessionHistory\(instanceId: string\)[\s\S]*sharedAiSessionsApi\.history\(instanceId\)/);
   assert.match(queries, /getAiSessionHistoryDetail\(instanceId: string, aiSessionId: string\)[\s\S]*sharedAiSessionsApi\.historyDetail\(instanceId, aiSessionId\)/);
-  assert.match(queries, /resumeAiSession\(instanceId: string, aiSessionId: string\)[\s\S]*sharedAiSessionsApi\.resume\(instanceId, aiSessionId\)/);
+  assert.match(queries, /resumeAiSession\(instanceId: string, aiSessionId: string, input: import\("@task-handoff\/protocol\/ai-sessions"\)\.AiSessionResumeInput = \{\}\)[\s\S]*sharedAiSessionsApi\.resume\(instanceId, aiSessionId, input\)/);
   assert.doesNotMatch(queries, /resumeAiSession\([^)]*providerSessionId/);
 });
 

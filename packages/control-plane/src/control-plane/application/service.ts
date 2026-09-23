@@ -62,6 +62,7 @@ import {
   type AiSessionMessageAttachmentRef,
   type AiSessionPermissionMode,
   type AiSessionReference,
+  type AiSessionResumeInput,
   type AiSessionSendMode,
   type AiSessionsSnapshot,
 } from "@task-handoff/protocol/ai-sessions";
@@ -1576,8 +1577,8 @@ export class ControlPlaneService {
     return this.aiSessionActionService.turnTimeline(instanceId, aiSessionId, turnId);
   }
 
-  resumeAiSession(instanceId: string, aiSessionId: string) {
-    return this.aiSessionActionService.resume(instanceId, aiSessionId);
+  resumeAiSession(instanceId: string, aiSessionId: string, input: AiSessionResumeInput = {}) {
+    return this.aiSessionActionService.resume(instanceId, aiSessionId, input);
   }
 
   async createAiSession(instanceId: string, input: Omit<AiSessionCreateInput, "cwd" | "attachments"> & {
