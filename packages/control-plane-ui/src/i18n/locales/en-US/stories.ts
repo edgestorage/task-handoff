@@ -181,7 +181,7 @@ export const stories = {
     deleteDocumentFailed: "Document delete failed.",
   },
   confirm: {
-    deleteStory: "Delete Story \"{title}\"? This removes its file directory.",
+    deleteStory: "Delete Story \"{title}\"? This closes its linked AI Sessions and removes its file directory.",
     documentTitle: "Document title",
     deleteDocument: "Delete this Story document?",
   },

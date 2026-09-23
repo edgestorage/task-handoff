@@ -1,5 +1,5 @@
 import type { ControlPlaneClient } from '@task-handoff/control-plane-client';
-import type { AiSessionForkResult, AiSessionMessageAttachmentRef, AiSessionModelSelection, AiSessionPermissionMode, AiSessionReasoningEffort, AiSessionRenameInput, AiSessionSendMode } from '@task-handoff/protocol/ai-sessions';
+import type { AiSessionForkResult, AiSessionMessageAttachmentRef, AiSessionModelSelection, AiSessionPermissionMode, AiSessionQueueEditInput, AiSessionReasoningEffort, AiSessionRenameInput, AiSessionSendMode } from '@task-handoff/protocol/ai-sessions';
 
 import type { ValueStore } from '../platform/secure-storage';
 import type { MobileAiSessionStore } from './store';
@@ -105,8 +105,12 @@ export class MobileAiSessionActionCoordinator {
           : this.client.aiSessions.removeQueue(instanceId, sessionId, queueId)
     ));
   }
-  editQueue(instanceId: string, sessionId: string, queueId: string, expectedRevision: number, message: string) {
-    return this.run(instanceId, sessionId, 'queue-edit', queueId, () => this.client.aiSessions.editQueue(instanceId, sessionId, queueId, { expectedRevision, message }));
+  editQueue(instanceId: string, sessionId: string, queueId: string, expectedRevision: number, message: string, attachments?: AiSessionQueueEditInput['attachments']) {
+    return this.run(instanceId, sessionId, 'queue-edit', queueId, () => this.client.aiSessions.editQueue(instanceId, sessionId, queueId, {
+      expectedRevision,
+      message,
+      ...(attachments === undefined ? {} : { attachments }),
+    }));
   }
   reorderQueue(instanceId: string, sessionId: string, expectedRevision: number, queueIds: string[]) {
     return this.run(instanceId, sessionId, 'queue-reorder', undefined, () => this.client.aiSessions.reorderQueue(instanceId, sessionId, { expectedRevision, queueIds }));

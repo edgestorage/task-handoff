@@ -129,7 +129,13 @@ export class AiSessionQueueService {
     return this.withQueue(current, items, this.now());
   }
 
-  editQueuedMessage(current: AiSessionStatus, queueId: string, expectedRevision: number, message: string): AiSessionQueueEditResult {
+  editQueuedMessage(
+    current: AiSessionStatus,
+    queueId: string,
+    expectedRevision: number,
+    message: string,
+    attachmentUpdate?: { attachments: AiSessionQueuedMessage["attachments"]; payloads: AiSessionMessageAttachment[]; messageId: string },
+  ): AiSessionQueueEditResult {
     if (current.queue.revision !== expectedRevision) {
       return { kind: "revision-conflict", currentRevision: current.queue.revision };
     }
@@ -137,11 +143,20 @@ export class AiSessionQueueService {
     if (!item) return { kind: "not-found" };
     if (item.status !== "queued") return { kind: "not-editable" };
     const normalizedMessage = messageText(message);
-    if (item.message === normalizedMessage) return { kind: "unchanged", session: current };
+    if (item.message === normalizedMessage && !attachmentUpdate) return { kind: "unchanged", session: current };
     const timestamp = this.now();
     const items = this.queuedMessages(current).items.map((entry) => entry.id === queueId
-      ? { ...entry, message: normalizedMessage, updatedAt: timestamp }
+      ? {
+          ...entry,
+          message: normalizedMessage,
+          ...(attachmentUpdate ? { attachments: attachmentUpdate.attachments, messageId: attachmentUpdate.messageId } : {}),
+          updatedAt: timestamp,
+        }
       : entry);
+    if (attachmentUpdate) {
+      if (attachmentUpdate.payloads.length) this.queuedAttachmentPayloads.set(queueId, attachmentUpdate.payloads);
+      else this.queuedAttachmentPayloads.delete(queueId);
+    }
     return { kind: "updated", session: this.withQueue(current, items, timestamp) };
   }
 

@@ -165,8 +165,10 @@ test('edits and reorders queued messages with the authoritative queue revision',
   const api = client();
   const coordinator = new MobileAiSessionActionCoordinator('cp', api, new MobileAiSessionStore());
   await coordinator.editQueue('instance', 'session', 'queue-1', 7, 'revised');
+  await coordinator.editQueue('instance', 'session', 'queue-2', 8, 'with attachment', [{ id: 'attachment-1', source: { type: 'retained' } }]);
   await coordinator.reorderQueue('instance', 'session', 8, ['queue-2', 'queue-1']);
   expect(api.aiSessions.editQueue).toHaveBeenCalledWith('instance', 'session', 'queue-1', { expectedRevision: 7, message: 'revised' });
+  expect(api.aiSessions.editQueue).toHaveBeenCalledWith('instance', 'session', 'queue-2', { expectedRevision: 8, message: 'with attachment', attachments: [{ id: 'attachment-1', source: { type: 'retained' } }] });
   expect(api.aiSessions.reorderQueue).toHaveBeenCalledWith('instance', 'session', { expectedRevision: 8, queueIds: ['queue-2', 'queue-1'] });
 });
 

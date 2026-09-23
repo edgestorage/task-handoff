@@ -43,6 +43,7 @@ export type MobilePendingAttachment = {
   error?: string;
   textPresentation?: AiSessionPastedTextPresentation;
   retryLocal?: MobileLocalFile;
+  retained?: boolean;
 };
 
 const PASTED_IMAGE_MIMES: Record<string, string> = {
@@ -166,6 +167,12 @@ export function usableUploadRefs(attachments: readonly MobilePendingAttachment[]
     if (attachment.expiresAt && Date.parse(attachment.expiresAt) <= now) throw attachmentError('ATTACHMENT_EXPIRED', `${attachment.name} expired. Upload it again.`);
     return attachment.uploadRef;
   });
+}
+
+export function usableQueueEditRefs(attachments: readonly MobilePendingAttachment[], now = Date.now()) {
+  return attachments.map((attachment) => attachment.retained
+    ? { id: attachment.localId, source: { type: 'retained' as const } }
+    : usableUploadRefs([attachment], now)[0]!);
 }
 
 export function runtimeAttachmentFromServerCandidate(candidate: AiSessionMentionCandidate, cwd: string): AiSessionMessageAttachmentRef {

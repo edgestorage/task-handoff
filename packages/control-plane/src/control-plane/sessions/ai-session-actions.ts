@@ -15,6 +15,7 @@ import {
   AiSessionQueueSchema,
   AiSessionQueueEditInputSchema,
   AiSessionQueueReorderInputSchema,
+  AiSessionResumeInputSchema,
   AiSessionResumeResultSchema,
   AiSessionModelSelectionActionResponseSchema,
   AiSessionReasoningEffortActionResponseSchema,
@@ -31,6 +32,7 @@ import {
   type AiSessionActionResponse,
   type AiSessionCommandInput,
   type AiSessionCommandResult,
+  type AiSessionQueueEditInput,
   type AiSessionCreateWorkspaceSelection,
   type AiSessionCreateResult,
   type AiSessionForkInput,
@@ -45,6 +47,7 @@ import {
   type AiSessionMessageAttachmentRef,
   type AiSessionPermissionMode,
   type AiSessionReference,
+  type AiSessionResumeInput,
   type AiSessionResumeResult,
   type AiSessionSendMode,
   type AiSessionStatus,
@@ -224,8 +227,12 @@ export class AiSessionActionService {
     ));
   }
 
-  async resume(instanceId: string, aiSessionId: string): Promise<AiSessionResumeResult> {
-    return parseResponse(AiSessionResumeResultSchema, await this.post(instanceId, sessionRoute(aiSessionId, "resume"), {}));
+  async resume(instanceId: string, aiSessionId: string, input: AiSessionResumeInput = {}): Promise<AiSessionResumeResult> {
+    return parseResponse(AiSessionResumeResultSchema, await this.post(
+      instanceId,
+      sessionRoute(aiSessionId, "resume"),
+      AiSessionResumeInputSchema.parse(input),
+    ));
   }
 
   async create(
@@ -459,7 +466,7 @@ export class AiSessionActionService {
     return parseResponse(AiSessionQueueMutationResponseSchema, await this.options.request(instance, queueRoute(sessionId, queueId), { method: "DELETE" }));
   }
 
-  async editQueuedMessage(instanceId: string, sessionId: string, queueId: string, input: { expectedRevision: number; message: string }) {
+  async editQueuedMessage(instanceId: string, sessionId: string, queueId: string, input: AiSessionQueueEditInput) {
     const body = AiSessionQueueEditInputSchema.parse(input);
     return parseResponse(AiSessionQueueMutationResponseSchema, await this.patch(instanceId, queueRoute(sessionId, queueId), body));
   }
