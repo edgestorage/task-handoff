@@ -1,8 +1,10 @@
 import { router, Stack, useLocalSearchParams } from 'expo-router';
-import { useEffect, useState } from 'react';
-import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+import { useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import type { AiSessionHistoryDetail } from '@task-handoff/protocol/ai-sessions';
+import type { AiSessionHistoryDetail, AiSessionModelSelection } from '@task-handoff/protocol/ai-sessions';
+import { defaultAiSessionModelSelection, deriveAiSessionModelGroups, type AiSessionCatalogModelEntity } from '@task-handoff/control-plane-client';
+import { directoryAiSessionProviderCapability } from '@task-handoff/protocol/control-plane-directory';
 
 import { SafeMarkdown } from '../../../src/components/SafeMarkdown';
 import { Screen } from '../../../src/components/Screen';
@@ -14,6 +16,8 @@ import { mobileProfileStore, mobileSecureStore } from '../../../src/control-plan
 import { lifecycleGuidance } from '../../../src/ai-sessions/session-lifecycle';
 import { useMobileTheme } from '../../../src/components/theme';
 import { NativePrimaryButton } from '../../../src/ai-sessions/NativeSessionControls';
+import { ModelSettingsMenu } from '../../../src/ai-sessions/SessionComposerMenus';
+import { useActiveDirectories } from '../../../src/directories/use-directories';
 import { useI18n } from '../../../src/i18n';
 
 export default function HistoryDetailRoute() {
@@ -21,21 +25,45 @@ export default function HistoryDetailRoute() {
   const { colors } = useMobileTheme();
   const { locale, t } = useI18n();
   const toast = useMobileToast();
+  const directories = useActiveDirectories();
   const { instanceId, historyId } = useLocalSearchParams<{ instanceId: string; historyId: string }>();
   const [detail, setDetail] = useState<AiSessionHistoryDetail>();
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
+  const [modelEntities, setModelEntities] = useState<AiSessionCatalogModelEntity[]>([]);
+  const [modelSelection, setModelSelection] = useState<AiSessionModelSelection>();
   const [actionsHeight, setActionsHeight] = useState(0);
   const actionsBottom = Math.max(insets.bottom, 12);
   useEffect(() => {
     let live = true;
-    void withClient((api) => api.aiSessions.historyDetail(instanceId, historyId)).then((result) => { if (live) setDetail(result); }).catch((cause) => { if (live) setError(lifecycleGuidance(cause).message); });
+    void withClient((api) => api.aiSessions.historyDetail(instanceId, historyId)).then((result) => { if (live) { setDetail(result); setModelSelection(result.item.modelSelection); } }).catch((cause) => { if (live) setError(lifecycleGuidance(cause).message); });
     return () => { live = false; };
   }, [historyId, instanceId]);
+  useEffect(() => {
+    const abort = new AbortController();
+    void withClient((api) => api.resources.models(abort.signal)).then((registry) => {
+      if (!abort.signal.aborted) setModelEntities(registry.models.map((group) => ({ ...group.model, locations: group.locations })));
+    }).catch(() => { if (!abort.signal.aborted) setModelEntities([]); });
+    return () => abort.abort();
+  }, [directories.controlPlaneId]);
+  const instance = directories.state.instances.find((candidate) => candidate.id === instanceId);
+  const modelGroups = useMemo(() => instance && detail?.item.creationSource === 'ai-session' ? deriveAiSessionModelGroups({
+    entities: modelEntities,
+    assignment: instance.modelSelection,
+    agent: detail.item.agent,
+    nodeId: instance.nodeId,
+    mode: 'resume',
+    currentSelection: detail.item.modelSelection,
+    capability: directoryAiSessionProviderCapability(instance.capabilities, detail.item.agent)?.modelSelection,
+  }) : [], [detail, instance, modelEntities]);
+  useEffect(() => {
+    if (modelSelection && modelGroups.some((group) => group.models.some((model) => model.modelEntityId === modelSelection.modelEntityId && model.modelName === modelSelection.modelName))) return;
+    setModelSelection(defaultAiSessionModelSelection(modelGroups));
+  }, [modelGroups, modelSelection]);
   const resume = async () => {
     setBusy(true);
     try {
-      const result = await withClient((api) => api.aiSessions.resume(instanceId, historyId));
+      const result = await withClient((api) => api.aiSessions.resume(instanceId, historyId, modelGroups.length && modelSelection ? { modelSelection } : {}));
       router.replace({ pathname: '/sessions/[instanceId]/[sessionId]', params: { instanceId, sessionId: result.aiSessionId } });
     } catch (cause) {
       toast.show({ detail: lifecycleGuidance(cause).message, title: t('toast.actionFailed', { action: t('history.resume') }), tone: 'error' });
@@ -77,6 +105,23 @@ export default function HistoryDetailRoute() {
     style={[styles.actions, { bottom: actionsBottom }]}
     testID="history-resume-actions"
   >
+    {modelGroups.length ? <ModelSettingsMenu
+      cancelLabel={t('common.cancel')}
+      disabled={busy}
+      formatModelGroupSummary={(model, count) => t('sessions.modelGroupSummary', { model, count })}
+      modelGroups={modelGroups}
+      modelSelection={modelSelection}
+      onModelChange={setModelSelection}
+      onReasoningChange={() => undefined}
+      provider={detail.item.agent}
+      reasoningEnabled={false}
+      reasoningTitle={t('sessions.reasoningEffort')}
+      title={t('sessions.model')}
+    >{(onPress) => <Pressable accessibilityRole="button" disabled={!onPress} onPress={onPress} style={[styles.modelButton, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+      <SystemIcon android="tune" color={colors.primary} ios="slider.horizontal.3" size={16} />
+      <Text numberOfLines={1} style={[styles.modelButtonText, { color: colors.text }]}>{modelSelection?.modelName || t('sessions.model')}</Text>
+      <SystemIcon android="expand_more" color={colors.textMuted} ios="chevron.down" size={12} />
+    </Pressable>}</ModelSettingsMenu> : null}
     <NativePrimaryButton busy={busy} disabled={busy} label={busy ? t('composer.resuming') : t('history.resume')} systemImage="play.fill" onPress={() => { void resume(); }} />
   </View> : null}
   </View>
@@ -100,6 +145,8 @@ async function withClient<T>(operation: (client: ReturnType<typeof createMobileC
 const styles = StyleSheet.create({
   page: { flex: 1 },
   actions: { gap: 8, left: 0, paddingHorizontal: 16, position: 'absolute', right: 0, zIndex: 10 },
+  modelButton: { alignItems: 'center', borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 8, minHeight: 44, paddingHorizontal: 14 },
+  modelButtonText: { flex: 1, fontSize: 14, lineHeight: 20 },
   header: { alignItems: 'flex-start', flexDirection: 'row', gap: 12 },
   historyIcon: { alignItems: 'center', borderRadius: 12, height: 44, justifyContent: 'center', width: 44 },
   headerText: { flex: 1, gap: 6 },

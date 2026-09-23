@@ -75,6 +75,8 @@ test("model capabilities default to unsupported for v0.0.23 peers and ignore fut
   }), {
     selectModelAtCreate: false,
     selectProviderAtCreate: false,
+    selectModelAtResume: false,
+    selectProviderAtResume: false,
     switchModelWithinProvider: false,
     switchProviderDuringSession: false,
   });
@@ -92,6 +94,8 @@ test("model capabilities default to unsupported for v0.0.23 peers and ignore fut
   }), {
     selectModelAtCreate: true,
     selectProviderAtCreate: true,
+    selectModelAtResume: false,
+    selectProviderAtResume: false,
     switchModelWithinProvider: true,
     switchProviderDuringSession: false,
   });

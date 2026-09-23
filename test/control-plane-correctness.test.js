@@ -397,9 +397,12 @@ test("AI session resume returns the committed result without refreshing the shar
   let requests = 0;
   const service = new AiSessionActionService({
     requireInstance: async () => ({}),
-    request: async (_instance, route) => {
+    request: async (_instance, route, init) => {
       requests += 1;
       assert.equal(route, "/ai-sessions/ai_session_1/resume");
+      assert.deepEqual(JSON.parse(init.body), {
+        modelSelection: { modelEntityId: "model_provider_2", modelName: "model_2" },
+      });
       return {
         disposition: "resumed",
         aiSessionId: "ai_session_1",
@@ -411,7 +414,9 @@ test("AI session resume returns the committed result without refreshing the shar
     requireRuntime: async () => ({}),
   });
 
-  const result = await service.resume("instance_1", "ai_session_1");
+  const result = await service.resume("instance_1", "ai_session_1", {
+    modelSelection: { modelEntityId: "model_provider_2", modelName: "model_2" },
+  });
   assert.equal(result.disposition, "resumed");
   assert.equal(requests, 1);
   assert.equal(service.diagnostics().resumeSnapshotRefreshFailures, 0);

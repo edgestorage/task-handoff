@@ -11,6 +11,7 @@ import type {
   AiSessionHistoryItem,
   AiSessionMessageAttachment,
   AiSessionPermissionMode,
+  AiSessionQueuedMessage,
   AiSessionReference,
   AiSessionPhase,
   AiSessionReducerInput,
@@ -571,6 +572,7 @@ export class AiSessionRegistry {
     sessionId: string;
     messageId: string;
     attachments?: AiSessionMessageAttachment[];
+    retainedAttachmentIds?: readonly string[];
     runtimePathRoot?: string;
     draftScopeType?: "session" | "create-request";
     draftScopeId?: string;
@@ -625,10 +627,16 @@ export class AiSessionRegistry {
     return updated ? this.put(updated) : undefined;
   }
 
-  editQueuedMessage(id: string, queueId: string, expectedRevision: number, message: string) {
+  editQueuedMessage(
+    id: string,
+    queueId: string,
+    expectedRevision: number,
+    message: string,
+    attachmentUpdate?: { attachments: AiSessionQueuedMessage["attachments"]; payloads: AiSessionMessageAttachment[]; messageId: string },
+  ) {
     const current = this.get(id);
     if (!current) return undefined;
-    const result = this.queueService.editQueuedMessage(current, queueId, expectedRevision, message);
+    const result = this.queueService.editQueuedMessage(current, queueId, expectedRevision, message, attachmentUpdate);
     return result.kind === "updated" ? { ...result, session: this.put(result.session) } : result;
   }
 

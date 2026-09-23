@@ -22,3 +22,8 @@ test("allows a native cross-provider adapter to expose every compatible provider
   const groups = deriveAiSessionModelGroups({ entities, assignment: { modelEntityIds: ["one", "two"] }, agent: "opencode", nodeId: "node-1", mode: "existing", currentSelection: { modelEntityId: "two", modelName: "same" }, capability: { switchModelWithinProvider: true, switchProviderDuringSession: true } });
   assert.deepEqual(groups.map((group) => group.modelEntityId), ["two"]);
 });
+
+test("derives resume choices independently from active-session switching", () => {
+  const groups = deriveAiSessionModelGroups({ entities, assignment: { modelEntityIds: ["one", "two"] }, agent: "codex", nodeId: "node-1", mode: "resume", currentSelection: { modelEntityId: "one", modelName: "small" }, capability: { selectModelAtResume: true, selectProviderAtResume: true, switchProviderDuringSession: false } });
+  assert.deepEqual(groups.map((group) => group.modelEntityId), ["one", "two"]);
+});

@@ -8,6 +8,7 @@ import { sharedAiSessionsApi, sharedControlPlaneClient } from "./sharedClient.ts
 import type { ControlPlaneInstanceResourceEntry } from "@task-handoff/control-plane-client";
 import type { GitCredentialCreateRequest, GitCredentialPublic, GitCredentialUpdateRequest, InstanceGitCredentialAssignment } from "@task-handoff/protocol/managed-git-credentials";
 import type { Story } from "@task-handoff/protocol/stories";
+import type { AiSessionQueueEditInput } from "@task-handoff/protocol/ai-sessions";
 export { controlPlaneQueryKeys } from "./queryKeys.ts";
 import type {
   ControlPlaneStatusResponse,
@@ -663,8 +664,8 @@ export function getAiSessionTurnTimeline(instanceId: string, aiSessionId: string
   return sharedAiSessionsApi.turnTimeline(instanceId, aiSessionId, turnId, signal);
 }
 
-export function resumeAiSession(instanceId: string, aiSessionId: string) {
-  return sharedAiSessionsApi.resume(instanceId, aiSessionId);
+export function resumeAiSession(instanceId: string, aiSessionId: string, input: import("@task-handoff/protocol/ai-sessions").AiSessionResumeInput = {}) {
+  return sharedAiSessionsApi.resume(instanceId, aiSessionId, input);
 }
 
 export function createAiSession(instanceId: string, input: import("@task-handoff/protocol/ai-sessions").AiSessionCreateRefInput & {
@@ -875,8 +876,15 @@ export function removeAiSessionQueuedMessage(instanceId: string, sessionId: stri
   return sharedAiSessionsApi.removeQueue(instanceId, sessionId, queueId);
 }
 
-export function editAiSessionQueuedMessage(instanceId: string, sessionId: string, queueId: string, expectedRevision: number, message: string) {
-  return sharedAiSessionsApi.editQueue(instanceId, sessionId, queueId, { expectedRevision, message });
+export function editAiSessionQueuedMessage(
+  instanceId: string,
+  sessionId: string,
+  queueId: string,
+  expectedRevision: number,
+  message: string,
+  attachments?: AiSessionQueueEditInput["attachments"],
+) {
+  return sharedAiSessionsApi.editQueue(instanceId, sessionId, queueId, { expectedRevision, message, attachments });
 }
 
 export function reorderAiSessionQueuedMessages(instanceId: string, sessionId: string, expectedRevision: number, queueIds: string[]) {

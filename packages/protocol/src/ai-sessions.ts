@@ -662,6 +662,13 @@ export const AiSessionQueueReorderInputSchema = z.object({
 export const AiSessionQueueEditInputSchema = z.object({
   expectedRevision: z.number().int().min(0),
   message: z.string().trim().min(1).max(20000),
+  attachments: z.array(z.union([
+    z.object({
+      id: z.string().trim().min(1).max(120),
+      source: z.object({ type: z.literal("retained") }).strict(),
+    }).strict(),
+    AiSessionMessageAttachmentRefSchema,
+  ])).max(AI_SESSION_MAX_MESSAGE_ATTACHMENTS).optional(),
 }).strict();
 
 export const AiSessionControlErrorSchema = z.object({
@@ -961,6 +968,10 @@ export const AiSessionHistoryListSchema = z.object({
 export const AiSessionHistoryDetailSchema = z.object({
   item: AiSessionHistoryItemSchema,
   turns: z.array(AiSessionHistoryTurnSchema).max(50).default([]),
+}).strict();
+
+export const AiSessionResumeInputSchema = z.object({
+  modelSelection: AiSessionModelSelectionSchema.optional(),
 }).strict();
 
 export const AiSessionResumeResultSchema = z.object({
@@ -1552,6 +1563,7 @@ export type AiSessionModelSelectionInput = z.infer<typeof AiSessionModelSelectio
 export type AiSessionModelSelectionActionResponse = z.infer<typeof AiSessionModelSelectionActionResponseSchema>;
 export type AiSessionReasoningEffortInput = z.infer<typeof AiSessionReasoningEffortInputSchema>;
 export type AiSessionReasoningEffortActionResponse = z.infer<typeof AiSessionReasoningEffortActionResponseSchema>;
+export type AiSessionResumeInput = z.infer<typeof AiSessionResumeInputSchema>;
 export type AiSessionGitSelection = z.infer<typeof AiSessionGitSelectionSchema>;
 export type AiSessionCreateWorkspaceSelection = z.infer<typeof AiSessionCreateWorkspaceSelectionSchema>;
 export type AiSessionCreateResult = z.infer<typeof AiSessionCreateResultSchema>;
