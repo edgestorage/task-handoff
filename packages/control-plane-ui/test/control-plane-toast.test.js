@@ -6,6 +6,7 @@ const toasts = fs.readFileSync(new URL("../src/apps/control-plane/useControlPlan
 const toastSurface = fs.readFileSync(new URL("../src/components/ui/sonner/Sonner.vue", import.meta.url), "utf8");
 const sessionPanel = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.vue", import.meta.url), "utf8");
 const sessionBoard = fs.readFileSync(new URL("../src/apps/control-plane/ai-board/AiSessionBoardView.vue", import.meta.url), "utf8");
+const storyView = fs.readFileSync(new URL("../src/apps/control-plane/story/StoryView.vue", import.meta.url), "utf8");
 
 test("control-plane toast semantics include informational outcomes", () => {
   assert.match(toasts, /ControlPlaneToastKind = "error" \| "info" \| "success"/);
@@ -31,4 +32,10 @@ test("long-running session actions use a delayed loading toast", () => {
     assert.match(source, /showDelayedControlPlaneLoadingToast\(t\("sessions\.actions\.forking"\)\)/);
     assert.match(source, /loadingToast\.dismiss\(\)/);
   }
+});
+
+test("Story deletion failures use the global toast instead of the page error surface", () => {
+  const deleteStory = storyView.match(/async function deleteStory[\s\S]*?(?=\nasync function renameDocument)/)?.[0] || "";
+  assert.match(deleteStory, /showControlPlaneToast\(translateApiError\(/);
+  assert.doesNotMatch(deleteStory, /error\.value\s*=/);
 });

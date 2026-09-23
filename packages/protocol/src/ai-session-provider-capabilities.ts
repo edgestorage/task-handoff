@@ -5,11 +5,16 @@ const AiSessionCapabilityAgentSchema = z.string().trim().min(1).max(120);
 export const AiSessionModelSelectionCapabilitiesSchema = z.object({
   selectModelAtCreate: z.boolean().default(false),
   selectProviderAtCreate: z.boolean().default(false),
+  // Compatibility for v0.0.32: absence disables resume-time selection.
+  selectModelAtResume: z.boolean().default(false),
+  selectProviderAtResume: z.boolean().default(false),
   switchModelWithinProvider: z.boolean().default(false),
   switchProviderDuringSession: z.boolean().default(false),
 }).strip().default({
   selectModelAtCreate: false,
   selectProviderAtCreate: false,
+  selectModelAtResume: false,
+  selectProviderAtResume: false,
   switchModelWithinProvider: false,
   switchProviderDuringSession: false,
 });

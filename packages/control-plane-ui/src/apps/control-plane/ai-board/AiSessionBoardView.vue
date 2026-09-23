@@ -265,7 +265,7 @@ import type { AiSessionCommandInput, AiSessionPermissionMode } from "@task-hando
 import { isAiSessionApprovalPending } from "@task-handoff/control-plane-client";
 import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions, NodeLocalFolder } from "../../../api/types";
 import type { AiSessionComposerAttachment } from "../../../components/ai-session/AiSessionComposer.vue";
-import { uploadAiSessionComposerAttachment } from "../../../components/ai-session/attachmentUpload";
+import { prepareQueuedMessageEditAttachments, queuedMessageComposerAttachments, uploadAiSessionComposerAttachment } from "../../../components/ai-session/attachmentUpload";
 import { referencesForBindings, type AiSessionMentionBinding } from "../../../components/ai-session/mentions";
 import { desktopRuntimePathAccess } from "../../../components/ai-session/useAiSessionMentions";
 import { Button } from "../../../components/ui/button";
@@ -355,6 +355,7 @@ const floatingDockEl = ref<InstanceType<typeof AiSessionFloatingDock>>();
 const queueComposerEdit = ref<{
   queueId: string;
   originalMessage: string;
+  originalAttachmentIds: string[];
   previousDraft: string;
   previousAttachments: AiSessionComposerAttachment[];
   previousMentionBindings: AiSessionMentionBinding[];
@@ -1006,16 +1007,21 @@ async function removeSelectedQueuedMessage(queueId: string) {
 }
 
 function editSelectedQueuedMessage(payload: { queueId: string; message: string }) {
+  const card = selectedCard.value;
+  const session = selectedCardConversationSession.value || card?.session;
+  const item = session?.queue.items.find((entry) => entry.id === payload.queueId);
+  if (!card || !item) return;
   const previous = queueComposerEdit.value;
   queueComposerEdit.value = {
     queueId: payload.queueId,
     originalMessage: payload.message,
+    originalAttachmentIds: item.attachments.map((attachment) => attachment.id),
     previousDraft: previous?.previousDraft ?? messageDraft.value,
     previousAttachments: previous?.previousAttachments ?? messageAttachments.value,
     previousMentionBindings: previous?.previousMentionBindings ?? messageMentionBindings.value,
   };
   messageDraft.value = payload.message;
-  messageAttachments.value = [];
+  messageAttachments.value = queuedMessageComposerAttachments(card.instance.id, card.session.id, item);
   messageMentionBindings.value = [];
   detailCollapsed.value = false;
   void nextTick(() => floatingDockEl.value?.focusComposer());
@@ -1045,14 +1051,29 @@ async function saveSelectedQueuedMessage() {
   const edit = queueComposerEdit.value;
   const message = messageDraft.value.trim();
   if (!card || !edit || !message || aiSessionActionBusy.value) return;
-  if (message === edit.originalMessage.trim()) {
+  const attachmentIds = messageAttachments.value.map((attachment) => attachment.id);
+  if (message === edit.originalMessage.trim() && attachmentIds.length === edit.originalAttachmentIds.length
+    && attachmentIds.every((id, index) => id === edit.originalAttachmentIds[index])) {
     cancelQueueComposerEdit();
     return;
   }
   aiSessionActionBusy.value = true;
   try {
     const queueRevision = selectedCardConversationSession.value?.queue.revision ?? card.session.queue.revision;
-    await editAiSessionQueuedMessage(card.instance.id, card.session.id, edit.queueId, queueRevision, message);
+    const attachments = await prepareQueuedMessageEditAttachments(messageAttachments.value, async (attachment) => {
+      return uploadAiSessionComposerAttachment(attachment, (onProgress) => {
+        if (!attachment.dataUrl) throw new Error(t("sessions.panel.attachmentUnavailable", { name: attachment.name }));
+        return uploadAiSessionAttachment({
+          instanceId: card.instance.id,
+          sessionId: card.session.id,
+          kind: attachment.kind,
+          name: attachment.name,
+          mime: attachment.mime,
+          data: attachment.dataUrl,
+        }, onProgress);
+      });
+    });
+    await editAiSessionQueuedMessage(card.instance.id, card.session.id, edit.queueId, queueRevision, message, attachments);
     cancelQueueComposerEdit();
   } catch (error) {
     showControlPlaneToast(translateApiError(error, t, t("sessions.panel.editQueuedFailed")));

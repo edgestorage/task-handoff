@@ -569,11 +569,15 @@
             :can-interrupt="false"
             :provider="historyDetail.item.agent"
             :permission-modes="providerPermissionModes(historyDetail.item.agent)"
+            :model-groups="historyModelGroups"
+            :model-selection="historyModelSelection"
             :permission-key="historyAiSessionPermissionKey(instance.id, historyDetail.item.id)"
             :default-permission-mode="instance.config.defaultCodexPermissionMode"
             :max-file-attachment-bytes="instance.config.aiSessionMaxFileAttachmentBytes"
             :placeholder="t('sessions.panel.continueConversation')"
             @run="sendHistoryMessage"
+            @select-model="historyModelSelection = $event"
+            @open-model-settings="emit('openSettings', instance.id, 'models')"
           />
         </template>
       </section>
@@ -1346,7 +1350,7 @@ import type { LaunchableApp } from "../useInstanceSessions";
 import { isAiSessionTriggerDeployment, removeInstanceTriggerBinding, upsertInstanceTriggerBinding } from "../instanceTriggerCache.ts";
 import AiSessionComposer, { type AiSessionComposerAttachment } from "../../../components/ai-session/AiSessionComposer.vue";
 import AiSessionQueue from "../../../components/ai-session/AiSessionQueue.vue";
-import { uploadAiSessionComposerAttachment } from "../../../components/ai-session/attachmentUpload";
+import { prepareQueuedMessageEditAttachments, queuedMessageComposerAttachments, uploadAiSessionComposerAttachment } from "../../../components/ai-session/attachmentUpload";
 import AiSessionConversationContent from "../../../components/ai-session/AiSessionConversationContent.vue";
 import AiSessionCompactPrompt from "../../../components/ai-session/AiSessionCompactPrompt.vue";
 import AiSessionStreamingMarkdown from "../../../components/ai-session/AiSessionStreamingMarkdown.vue";
@@ -2199,8 +2203,47 @@ const historyDetail = ref<AiSessionHistoryDetail>();
 const historyDetailLoading = ref(false);
 const historyDetailError = ref("");
 const resumingHistoryId = ref("");
+const historyModelSelection = ref<AiSessionModelSelection>();
 const historyMessageDraft = ref("");
 const historyMessageAttachments = ref<AiSessionComposerAttachment[]>([]);
+const historyModelGroups = computed(() => {
+  const item = historyDetail.value?.item;
+  if (!item || item.creationSource !== "ai-session") return [];
+  return deriveAiSessionModelGroups({
+    entities: modelsQuery.data.value || [],
+    assignment: props.instance.modelSelection,
+    agent: item.agent,
+    nodeId: props.instance.nodeId,
+    mode: "resume",
+    currentSelection: item.modelSelection,
+    capability: modelSelectionCapability(item.agent),
+  });
+});
+const historyModelFallbackSelection = computed(() => {
+  const item = historyDetail.value?.item;
+  if (!item || item.creationSource !== "ai-session") return undefined;
+  if (item.modelSelection) return item.modelSelection;
+  const groups = deriveAiSessionModelGroups({
+    entities: modelsQuery.data.value || [],
+    assignment: props.instance.modelSelection,
+    agent: item.agent,
+    nodeId: props.instance.nodeId,
+    mode: "create",
+    capability: modelSelectionCapability(item.agent),
+  });
+  return defaultAiSessionModelSelection(groups);
+});
+watch(historyModelGroups, (groups) => {
+  const current = historyModelSelection.value;
+  if (current && groups.some((group) => group.models.some((model) => (
+    model.modelEntityId === current.modelEntityId && model.modelName === current.modelName
+  )))) return;
+  if (!groups.length && current) return;
+  historyModelSelection.value = defaultAiSessionModelSelection(groups) || historyModelFallbackSelection.value;
+});
+watch(historyModelFallbackSelection, (selection) => {
+  if (!historyModelGroups.value.length && !historyModelSelection.value) historyModelSelection.value = selection;
+});
 let currentListScrollTop = 0;
 let historyDetailRevision = 0;
 let promptSelectionRevision = 0;
@@ -2219,6 +2262,7 @@ const messageMentionBindings = ref<AiSessionMentionBinding[]>([]);
 const queueComposerEdit = ref<{
   queueId: string;
   originalMessage: string;
+  originalAttachmentIds: string[];
   previousDraft: string;
   previousAttachments: AiSessionComposerAttachment[];
   previousMentionBindings: AiSessionMentionBinding[];
@@ -2513,6 +2557,7 @@ watch(() => props.instance.id, () => {
   historyError.value = "";
   selectedHistoryId.value = "";
   historyDetail.value = undefined;
+  historyModelSelection.value = undefined;
   historyDetailError.value = "";
   historyMessageDraft.value = "";
   historyMessageAttachments.value = [];
@@ -2941,12 +2986,14 @@ async function selectHistoryItem(item: AiSessionHistoryItem) {
   const revision = ++historyDetailRevision;
   selectedHistoryId.value = item.id;
   historyDetail.value = undefined;
+  historyModelSelection.value = undefined;
   historyDetailError.value = "";
   historyDetailLoading.value = true;
   try {
     const detail = await getAiSessionHistoryDetail(props.instance.id, item.id);
     if (revision === historyDetailRevision && historyMode.value && selectedHistoryId.value === item.id) {
       historyDetail.value = detail;
+      historyModelSelection.value = detail.item.modelSelection;
     }
   } catch (error) {
     if (revision === historyDetailRevision && historyMode.value && selectedHistoryId.value === item.id) {
@@ -2966,7 +3013,8 @@ function relativeHistoryTime(value: string) {
 }
 
 async function resumeHistorySession(item: AiSessionHistoryItem) {
-  const result = await resumeAiSession(props.instance.id, item.id);
+  const selection = historyModelGroups.value.length ? historyModelSelection.value : undefined;
+  const result = await resumeAiSession(props.instance.id, item.id, selection ? { modelSelection: selection } : {});
   const findAuthoritativeSession = () => visibleAiSessions.value.find((session) => (
     session.id === result.aiSessionId
     && session.providerSessionId === result.providerSessionId
@@ -3695,16 +3743,20 @@ async function removeQueuedMessage(sessionId: string, queueId: string) {
 
 function editQueuedMessage(sessionId: string, payload: { queueId: string; message: string }) {
   if (selectedSession.value?.id !== sessionId) return;
+  const session = selectedConversationSession.value || selectedSession.value;
+  const item = session.queue.items.find((entry) => entry.id === payload.queueId);
+  if (!item) return;
   const previous = queueComposerEdit.value;
   queueComposerEdit.value = {
     queueId: payload.queueId,
     originalMessage: payload.message,
+    originalAttachmentIds: item.attachments.map((attachment) => attachment.id),
     previousDraft: previous?.previousDraft ?? messageDraft.value,
     previousAttachments: previous?.previousAttachments ?? messageAttachments.value,
     previousMentionBindings: previous?.previousMentionBindings ?? messageMentionBindings.value,
   };
   messageDraft.value = payload.message;
-  messageAttachments.value = [];
+  messageAttachments.value = queuedMessageComposerAttachments(props.instance.id, sessionId, item);
   messageMentionBindings.value = [];
   void nextTick(() => composerEl.value?.focus());
 }
@@ -3733,14 +3785,19 @@ async function saveQueuedMessageEdit() {
   const edit = queueComposerEdit.value;
   const message = messageDraft.value.trim();
   if (!session || !edit || !message || aiSessionActionBusy.value) return;
-  if (message === edit.originalMessage.trim()) {
+  const attachmentIds = messageAttachments.value.map((attachment) => attachment.id);
+  if (message === edit.originalMessage.trim() && attachmentIds.length === edit.originalAttachmentIds.length
+    && attachmentIds.every((id, index) => id === edit.originalAttachmentIds[index])) {
     cancelQueueComposerEdit();
     return;
   }
   aiSessionActionBusy.value = true;
   try {
     const queueRevision = selectedConversationSession.value?.queue.revision ?? session.queue.revision;
-    await editAiSessionQueuedMessage(props.instance.id, session.id, edit.queueId, queueRevision, message);
+    const attachments = await prepareQueuedMessageEditAttachments(messageAttachments.value, async (attachment) => (
+      await uploadAttachments(props.instance.id, session.id, [attachment])
+    )[0]!);
+    await editAiSessionQueuedMessage(props.instance.id, session.id, edit.queueId, queueRevision, message, attachments);
     cancelQueueComposerEdit();
   } catch (error) {
     showControlPlaneToast(translateApiError(error, t, t("sessions.panel.editQueuedFailed")));

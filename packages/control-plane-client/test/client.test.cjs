@@ -260,6 +260,34 @@ test("shared Browser client owns access route encoding and strict handshake pars
   }]);
 });
 
+test("shared AI Session client sends an optional resume model selection", async () => {
+  const requests = [];
+  const transport = {
+    async request(path, schema, init) {
+      requests.push({ path, init });
+      return schema.parse({ data: {
+        disposition: "resumed",
+        aiSessionId: "session resume",
+        providerSessionId: "thread-resume",
+        creationSource: "ai-session",
+      } });
+    },
+  };
+  const api = createControlPlaneClient(transport);
+  await api.aiSessions.resume("instance/one", "session resume", {
+    modelSelection: { modelEntityId: "provider-two", modelName: "model-two" },
+  });
+  assert.deepEqual(requests, [{
+    path: "/api/controlled-instances/instance%2Fone/ai-sessions/session%20resume/resume",
+    init: {
+      method: "POST",
+      signal: undefined,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ modelSelection: { modelEntityId: "provider-two", modelName: "model-two" } }),
+    },
+  }]);
+});
+
 test("shared AI Session client sends strict reasoning effort actions", async () => {
   const requests = [];
   const transport = {

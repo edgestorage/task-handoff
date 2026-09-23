@@ -242,6 +242,11 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
     return this.connection.current()?.client.supportsThreadSettingsUpdate?.() === true;
   }
 
+  supportsProviderReload() {
+    const client = this.connection.current()?.client;
+    return Boolean(client?.archiveThread && client.unarchiveThread && client.resumeThread);
+  }
+
   async sendMessage(session: AiSessionStatus, input: AiSessionSendInput): Promise<AiSessionActionResult> {
     return this.control.sendMessage(session, input);
   }
@@ -306,15 +311,41 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
     if (!threadId || !session.modelSelection) {
       throw aiSessionControlError("AI_SESSION_MODEL_SELECTION_UNKNOWN", "The current Codex provider is unknown.", 409);
     }
-    if (selection.modelEntityId !== session.modelSelection.modelEntityId) {
-      throw aiSessionControlError("AI_SESSION_PROVIDER_SWITCH_REQUIRES_NEW_SESSION", "Codex provider changes require a new session.", 409);
-    }
     if (this.pendingThreadSettings.has(session.id)) {
       throw aiSessionControlError("AI_SESSION_MODEL_SELECTION_CONFLICT", "A model change is already pending.", 409);
     }
     this.pendingThreadSettings.add(session.id);
     try {
       const client = await this.requireReadyThreadClient(threadId);
+      if (selection.modelEntityId !== session.modelSelection.modelEntityId) {
+        if (session.lineage?.kind === "subagent" || this.registry.all().some((candidate) => (
+          candidate.lineage?.kind === "subagent"
+          && candidate.lineage.parentProviderSessionId === threadId
+        ))) {
+          throw aiSessionControlError("AI_SESSION_PROVIDER_SWITCH_HAS_ACTIVE_DESCENDANTS", "Provider switching is unavailable for sessions with a live subagent hierarchy.", 409);
+        }
+        if (!client.archiveThread || !client.unarchiveThread || !client.resumeThread) {
+          throw aiSessionControlError("AI_SESSION_PROVIDER_SWITCH_UNSUPPORTED", "This Codex version does not support provider switching.", 409);
+        }
+        const previousSelection = session.modelSelection;
+        await client.archiveThread(threadId);
+        try {
+          return await this.resumeArchivedThread(client, threadId, selection, session.reasoningEffort);
+        } catch (error: unknown) {
+          try {
+            await client.archiveThread(threadId);
+            await this.resumeArchivedThread(client, threadId, previousSelection, session.reasoningEffort);
+          } catch (rollbackError: unknown) {
+            this.options.onDiagnostic?.({
+              code: "AI_SESSION_PROVIDER_SWITCH_ROLLBACK_FAILED",
+              aiSessionId: session.id,
+              providerSessionId: threadId,
+              error: rollbackError instanceof Error ? rollbackError.message : String(rollbackError),
+            });
+          }
+          throw error;
+        }
+      }
       if (!client.updateThreadSettings || client.supportsThreadSettingsUpdate?.() !== true) {
         throw aiSessionControlError("AI_SESSION_MODEL_SELECTION_UNSUPPORTED", "This Codex version does not support model switching.", 409);
       }
@@ -509,23 +540,71 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
 
   async resumeSession(providerSessionId: string, modelSelection?: AiSessionModelSelection, reasoningEffort?: AiSessionReasoningEffort, storyAgentTools: import("@task-handoff/protocol/story-agent-tools").StoryAgentToolName[] = []) {
     const client = await this.requireReadyClient();
-    if (client.unarchiveThread) await client.unarchiveThread(providerSessionId);
     const requestedModel = modelSelection ? this.options.resolveModelSelection?.(modelSelection) : undefined;
     if (modelSelection && !requestedModel) {
       throw aiSessionControlError("AI_SESSION_MODEL_SELECTION_UNAVAILABLE", "The Codex provider for this session is no longer available.", 409);
     }
-    const thread = client.resumeThread
-      ? await client.resumeThread(providerSessionId, { ...requestedModel, reasoningEffort: reasoningEffort ?? AI_SESSION_DEFAULT_REASONING_EFFORT, storyAgentTools })
-      : client.readThread ? await client.readThread(providerSessionId, { includeTurns: true }) : undefined;
-    if (!thread) throw aiSessionControlError("AI_SESSION_RESUME_UNSUPPORTED", "Codex app-server could not resume the thread.", 409);
-    this.recordTimelineHistorySource(thread);
-    this.projector.applyThreadSnapshot(thread, { creationSource: "ai-session" });
+    try {
+      if (client.unarchiveThread) await client.unarchiveThread(providerSessionId);
+      const thread = client.resumeThread
+        ? await client.resumeThread(providerSessionId, { ...requestedModel, reasoningEffort: reasoningEffort ?? AI_SESSION_DEFAULT_REASONING_EFFORT, storyAgentTools })
+        : client.readThread ? await client.readThread(providerSessionId, { includeTurns: true }) : undefined;
+      if (!thread) throw aiSessionControlError("AI_SESSION_RESUME_UNSUPPORTED", "Codex app-server could not resume the thread.", 409);
+      const actualSelection = this.verifiedModelSelection(thread, modelSelection);
+      this.recordTimelineHistorySource(thread);
+      this.projector.applyThreadSnapshot(thread, { creationSource: "ai-session" });
+      return actualSelection;
+    } catch (error: unknown) {
+      try { await client.archiveThread?.(providerSessionId); } catch {}
+      throw error;
+    }
   }
 
   async archiveSession(providerSessionId: string) {
+    const session = this.registry.getByProviderSessionId("codex", providerSessionId);
+    if (session && this.pendingThreadSettings.has(session.id)) {
+      throw aiSessionControlError("AI_SESSION_MODEL_SELECTION_CONFLICT", "A session setting change is already pending.", 409);
+    }
     const client = await this.requireReadyClient();
     if (!client.archiveThread) throw aiSessionControlError("AI_SESSION_CLOSE_UNSUPPORTED", "Codex app-server does not support thread archive.", 400);
     await client.archiveThread(providerSessionId);
+  }
+
+  private async resumeArchivedThread(
+    client: CodexAppServerClientLike,
+    threadId: string,
+    selection: AiSessionModelSelection,
+    reasoningEffort?: AiSessionReasoningEffort,
+  ) {
+    const requestedModel = this.options.resolveModelSelection?.(selection);
+    if (!requestedModel) {
+      throw aiSessionControlError("AI_SESSION_MODEL_SELECTION_UNAVAILABLE", "The Codex provider for this session is no longer available.", 409);
+    }
+    await client.unarchiveThread?.(threadId);
+    const thread = await client.resumeThread?.(threadId, {
+      ...requestedModel,
+      reasoningEffort: reasoningEffort ?? AI_SESSION_DEFAULT_REASONING_EFFORT,
+    });
+    if (!thread) throw aiSessionControlError("AI_SESSION_RESUME_UNSUPPORTED", "Codex app-server could not reload the thread.", 409);
+    const actualSelection = this.verifiedModelSelection(thread, selection);
+    this.recordTimelineHistorySource(thread);
+    this.projector.applyThreadSnapshot(thread, { creationSource: "ai-session" });
+    return actualSelection;
+  }
+
+  private verifiedModelSelection(thread: CodexThread, requested?: AiSessionModelSelection) {
+    if (requested && (typeof thread.model !== "string"
+      || typeof thread.modelProvider !== "string"
+      || !this.options.projectModelSelection)) {
+      throw aiSessionControlError("AI_SESSION_MODEL_SELECTION_INVALID_RESPONSE", "Codex did not confirm the resumed provider and model.", 502);
+    }
+    const actual = this.actualModelSelection(thread, requested);
+    if (requested && (!actual
+      || actual.modelEntityId !== requested.modelEntityId
+      || actual.modelName !== requested.modelName)) {
+      throw aiSessionControlError("AI_SESSION_MODEL_SELECTION_INVALID_RESPONSE", "Codex resumed the thread with a different provider or model.", 502);
+    }
+    return actual;
   }
 
   private actualModelSelection(thread: CodexThread, requested?: AiSessionModelSelection) {

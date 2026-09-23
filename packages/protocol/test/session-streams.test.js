@@ -89,6 +89,11 @@ test("AI session queue schemas expose revisioned edit and reorder inputs", () =>
   });
   assert.deepEqual(session.queue, { revision: 0, pendingCount: 0, items: [] });
   assert.deepEqual(AiSessionQueueEditInputSchema.parse({ expectedRevision: 2, message: "  updated  " }), { expectedRevision: 2, message: "updated" });
+  assert.deepEqual(AiSessionQueueEditInputSchema.parse({
+    expectedRevision: 2,
+    message: "updated",
+    attachments: [{ id: "att-existing", source: { type: "retained" } }, { id: "cia_0123456789abcdef01234567", source: { type: "upload-ref" } }],
+  }).attachments.map((attachment) => attachment.source.type), ["retained", "upload-ref"]);
   assert.deepEqual(AiSessionQueueReorderInputSchema.parse({ expectedRevision: 2, queueIds: ["q-2", "q-1"] }), { expectedRevision: 2, queueIds: ["q-2", "q-1"] });
   assert.equal(AiSessionQueueEditInputSchema.safeParse({ message: "missing revision" }).success, false);
   assert.equal(AiSessionQueueReorderInputSchema.safeParse({ expectedRevision: 2, queueIds: [], extra: true }).success, false);

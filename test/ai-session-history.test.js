@@ -59,10 +59,18 @@ test("AI session history store persists atomically and isolates instance data", 
   const first = new AiSessionHistoryStore({ dataDir: path.join(root, "instance-a") });
   const second = new AiSessionHistoryStore({ dataDir: path.join(root, "instance-b") });
 
-  first.upsert(historyItem(1));
+  first.upsert(historyItem(1, {
+    modelSelection: { modelEntityId: "model-one", modelName: "gpt-test" },
+    reasoningEffort: "high",
+  }));
 
   assert.deepEqual(first.list().map((item) => item.id), ["ai-1"]);
   assert.deepEqual(new AiSessionHistoryStore({ dataDir: path.join(root, "instance-a") }).list().map((item) => item.id), ["ai-1"]);
+  assert.deepEqual(new AiSessionHistoryStore({ dataDir: path.join(root, "instance-a") }).get("ai-1").modelSelection, {
+    modelEntityId: "model-one",
+    modelName: "gpt-test",
+  });
+  assert.equal(new AiSessionHistoryStore({ dataDir: path.join(root, "instance-a") }).get("ai-1").reasoningEffort, "high");
   assert.deepEqual(second.list(), []);
   assert.equal(fs.statSync(first.path()).mode & 0o777, 0o600);
   assert.deepEqual(fs.readdirSync(path.dirname(first.path())).filter((name) => name !== "index.json"), []);
@@ -612,7 +620,11 @@ test("AI session resume coordinator restores Direct history without launching an
   const releasedSessions = [];
   const history = new AiSessionHistoryStore({ dataDir: root }, { onRemove: (sessionId) => releasedSessions.push(sessionId) });
   const registry = createAiSessionRegistry({ dir: path.join(root, "registry") });
-  const item = historyItem(15, { id: "ai-direct-resume", creationSource: "ai-session" });
+  const item = historyItem(15, {
+    id: "ai-direct-resume",
+    creationSource: "ai-session",
+    modelSelection: { modelEntityId: "model-old", modelName: "old-model" },
+  });
   history.upsert(item);
   let providerResumes = 0;
   const coordinator = new AiSessionResumeCoordinator({
@@ -623,10 +635,12 @@ test("AI session resume coordinator restores Direct history without launching an
     resumeProvider: async (entry) => {
       providerResumes += 1;
       assert.equal(entry.providerSessionId, item.providerSessionId);
+      assert.deepEqual(entry.modelSelection, { modelEntityId: "model-new", modelName: "new-model" });
+      return entry.modelSelection;
     },
   });
 
-  assert.deepEqual(await coordinator.resume(item.id), {
+  assert.deepEqual(await coordinator.resume(item.id, { modelEntityId: "model-new", modelName: "new-model" }), {
     disposition: "resumed",
     aiSessionId: item.id,
     providerSessionId: item.providerSessionId,
@@ -634,6 +648,7 @@ test("AI session resume coordinator restores Direct history without launching an
   });
   assert.equal(providerResumes, 1);
   assert.equal(registry.get(item.id).creationSource, "ai-session");
+  assert.deepEqual(registry.get(item.id).modelSelection, { modelEntityId: "model-new", modelName: "new-model" });
   assert.equal(registry.get(item.id).appSessionId, undefined);
   assert.ok(Date.parse(registry.get(item.id).updatedAt) > Date.parse(item.lastActiveAt));
   assert.equal(history.get(item.id), undefined);

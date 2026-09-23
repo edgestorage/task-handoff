@@ -30,6 +30,7 @@ import {
   AiSessionClearResultSchema,
   AiSessionCommandInputSchema,
   AiSessionCommandResultSchema,
+  AiSessionResumeInputSchema,
   AiSessionResumeResultSchema,
   AiSessionSummarySchema,
   AiSessionDetailReadSchema,
@@ -49,6 +50,7 @@ import {
   type AiSessionQueueEditInput,
   type AiSessionQueueReorderInput,
   type AiSessionReference,
+  type AiSessionResumeInput,
   type AiSessionSendMode,
 } from "@task-handoff/protocol/ai-sessions";
 import type { ControlPlaneClientTransport } from "./transport.ts";
@@ -136,8 +138,8 @@ export function createControlPlaneAiSessionsApi(transport: ControlPlaneClientTra
     turnTimeline(instanceId: string, aiSessionId: string, turnId: string, signal?: AbortSignal) {
       return requestData(`${sessionRoute(instanceId, aiSessionId)}/turns/${encodeURIComponent(turnId)}/timeline`, AiSessionTurnTimelineSchema, { signal });
     },
-    resume(instanceId: string, aiSessionId: string) {
-      return requestData(`${sessionRoute(instanceId, aiSessionId)}/resume`, AiSessionResumeResultSchema, json("POST"));
+    resume(instanceId: string, aiSessionId: string, input: AiSessionResumeInput = {}) {
+      return requestData(`${sessionRoute(instanceId, aiSessionId)}/resume`, AiSessionResumeResultSchema, json("POST", AiSessionResumeInputSchema.parse(input)));
     },
     create(instanceId: string, input: AiSessionCreateRefInput) {
       return requestData(`/api/controlled-instances/${encodeURIComponent(instanceId)}/ai-sessions`, AiSessionCreateResultSchema, json("POST", AiSessionCreateRefInputSchema.parse(input)));

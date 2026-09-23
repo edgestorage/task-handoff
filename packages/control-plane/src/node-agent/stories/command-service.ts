@@ -6,6 +6,7 @@ import type { StoryAutomationStore } from "./automation-store.ts";
 import type { NodeAgentRepository } from "../persistence/repository.ts";
 import type { StoryScheduler } from "./scheduler.ts";
 import type { NodeStoryStore } from "./store.ts";
+import type { StoryAiSessionCloser } from "./ai-session-close-service.ts";
 
 export class StoryCommandService {
   private readonly state: NodeAgentState;
@@ -13,6 +14,7 @@ export class StoryCommandService {
   private readonly automations: StoryAutomationStore;
   private readonly scheduler: StoryScheduler;
   private readonly repository: NodeAgentRepository;
+  private readonly aiSessionCloser?: StoryAiSessionCloser;
 
   constructor(
     state: NodeAgentState,
@@ -20,12 +22,14 @@ export class StoryCommandService {
     automations: StoryAutomationStore,
     scheduler: StoryScheduler,
     repository: NodeAgentRepository,
+    aiSessionCloser?: StoryAiSessionCloser,
   ) {
     this.state = state;
     this.stories = stories;
     this.automations = automations;
     this.scheduler = scheduler;
     this.repository = repository;
+    this.aiSessionCloser = aiSessionCloser;
   }
 
   async init() {
@@ -101,18 +105,28 @@ export class StoryCommandService {
     return this.stories.coordinator.run(storyId, async () => {
       const story = await this.stories.get(storyId);
       if (!story) return false;
-      await this.assertStoryCanBeDeleted(storyId);
+      await this.prepareStoryDeletion(storyId);
       return this.deleteCoordinated(story);
     });
   }
 
-  private async assertStoryCanBeDeleted(storyId: string) {
-    const sessions = this.state.listInstances().flatMap((instance) => instance.aiSessions.sessions
-      .filter((session) => session.storyId === storyId)
-      .map((session) => ({ instanceId: instance.id, aiSessionId: session.id })));
-    if (sessions.length) throw commandError("STORY_IN_USE", "Story is still referenced by an AI Session.", 409, { sessions });
+  private async prepareStoryDeletion(storyId: string) {
     const activeRuns = await this.automations.activeRunsForStory(storyId);
     if (activeRuns.length) throw commandError("STORY_AUTOMATION_RUN_ACTIVE", "Story has a non-terminal Automation run.", 409, { runIds: activeRuns.map((run) => run.id) });
+    const sessions = this.state.listInstances().flatMap((instance) => instance.aiSessions.sessions
+      .filter((session) => session.storyId === storyId)
+      .map((session) => ({ instance, sessionId: session.id, storyId })));
+    if (!sessions.length) return;
+    if (!this.aiSessionCloser) throw commandError("STORY_AI_SESSION_CLOSE_UNAVAILABLE", "AI Sessions cannot be closed for Story deletion.", 503);
+    const results = await Promise.allSettled(sessions.map((target) => this.aiSessionCloser!.close(target)));
+    const failures = results.flatMap((result, index) => result.status === "rejected" ? [{
+      instanceId: sessions[index]!.instance.id,
+      aiSessionId: sessions[index]!.sessionId,
+      message: result.reason instanceof Error ? result.reason.message : String(result.reason),
+    }] : []);
+    if (failures.length) {
+      throw commandError("STORY_AI_SESSION_CLOSE_FAILED", "One or more AI Sessions could not be closed.", 409, { sessions: failures });
+    }
   }
 
   private async deleteCoordinated(story: Story) {

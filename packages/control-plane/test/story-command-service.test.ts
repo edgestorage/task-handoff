@@ -174,7 +174,7 @@ test("Story Action reference preflight rejects the complete update transaction",
   }
 });
 
-test("Story deletion accepts a lazy directory and rejects authoritative Session references", async () => {
+test("Story deletion accepts a lazy directory and closes authoritative Session references", async () => {
   const fixture = await createStoryDatabaseFixture("task-handoff-story-delete-preflight-");
   try {
     const stories = new NodeStoryStore(fixture.paths, "node_1", fixture.repository);
@@ -192,12 +192,27 @@ test("Story deletion accepts a lazy directory and rejects authoritative Session 
       paths: fixture.paths,
       listInstances: () => [{ id: "instance_1", aiSessions: { sessions: [{ id: "session_1", storyId: referenced.id }] } }],
     };
-    const referencedCommands = new StoryCommandService(referencedState as any, stories, automations, schedulerStub() as any, fixture.repository);
+    const closed: Array<{ instanceId: string; sessionId: string; storyId: string }> = [];
+    const referencedCommands = new StoryCommandService(referencedState as any, stories, automations, schedulerStub() as any, fixture.repository, {
+      close: async (target) => { closed.push({ instanceId: target.instance.id, sessionId: target.sessionId, storyId: target.storyId }); },
+    });
+    assert.equal(await referencedCommands.delete(referenced.id), true);
+    assert.deepEqual(closed, [{ instanceId: "instance_1", sessionId: "session_1", storyId: referenced.id }]);
+    assert.equal(await fixture.repository.stories.get(referenced.id), undefined);
+
+    const closeFailure = await stories.create({ title: "Close failure", actions: [] });
+    const failedCommands = new StoryCommandService({
+      paths: fixture.paths,
+      listInstances: () => [{ id: "instance_1", aiSessions: { sessions: [{ id: "session_2", storyId: closeFailure.id }] } }],
+    } as any, stories, automations, schedulerStub() as any, fixture.repository, {
+      close: async () => { throw new Error("instance unavailable"); },
+    });
     await assert.rejects(
-      () => referencedCommands.delete(referenced.id),
-      (error: any) => error.code === "STORY_IN_USE" && error.details?.sessions?.[0]?.aiSessionId === "session_1",
+      () => failedCommands.delete(closeFailure.id),
+      (error: any) => error.code === "STORY_AI_SESSION_CLOSE_FAILED"
+        && error.details?.sessions?.[0]?.aiSessionId === "session_2",
     );
-    assert.ok(await fixture.repository.stories.get(referenced.id));
+    assert.ok(await fixture.repository.stories.get(closeFailure.id));
 
     const active = await stories.create({ title: "Active run", actions: [{ title: "Run", promptTemplate: "Run", targetInstanceId: "instance_1" }] });
     const automation = await automations.create({

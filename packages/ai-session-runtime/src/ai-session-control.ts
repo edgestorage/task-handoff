@@ -21,6 +21,7 @@ import type {
 import type { AiSessionTimelineCapabilities } from "@task-handoff/protocol/control-plane";
 import type { StoryAgentToolName } from "@task-handoff/protocol/story-agent-tools";
 import type { AiSessionRegistry } from "./ai-session-registry";
+import { aiSessionAttachmentMetas } from "./ai-session/persistence";
 
 export type AiSessionSendInput = {
   message: string;
@@ -41,6 +42,14 @@ export type AiSessionSendInput = {
 
 export type AiSessionApprovalDecision = AiSessionApprovalInput["decision"];
 export type { AiSessionActionResult } from "@task-handoff/protocol/ai-sessions";
+
+export type AiSessionQueueAttachmentEdit = {
+  retainedAttachmentIds: string[];
+  attachments: AiSessionMessageAttachment[];
+  draftAttachmentIds: string[];
+  draftScopeType: "session";
+  draftScopeId: string;
+};
 
 export type AiSessionProviderCreateInput = {
   cwd: string;
@@ -117,7 +126,7 @@ export interface AiSessionControlProvider {
   forkSession?(input: AiSessionProviderForkInput): Promise<AiSessionProviderForkResult>;
   renameSession?(session: AiSessionStatus, title: string): Promise<AiSessionProviderRenameResult>;
   readSession?(providerSessionId: string): Promise<void>;
-  resumeSession?(providerSessionId: string, modelSelection?: AiSessionModelSelection, reasoningEffort?: AiSessionReasoningEffort, storyAgentTools?: StoryAgentToolName[]): Promise<void>;
+  resumeSession?(providerSessionId: string, modelSelection?: AiSessionModelSelection, reasoningEffort?: AiSessionReasoningEffort, storyAgentTools?: StoryAgentToolName[]): Promise<AiSessionModelSelection | void>;
   archiveSession?(providerSessionId: string): Promise<void>;
   activeSessionExists?(providerSessionId: string): Promise<boolean>;
   deleteSession?(providerSessionId: string): Promise<void>;
@@ -327,6 +336,7 @@ export class AiSessionController {
 
   async sendMessage(sessionId: string, input: AiSessionSendInput) {
     const session = this.requireSession(sessionId);
+    this.assertNoSettingsUpdate(session.id);
     const message = input.message.trim();
     if (!message) {
       throw aiSessionControlError("AI_SESSION_MESSAGE_EMPTY", "Message is required.");
@@ -354,6 +364,7 @@ export class AiSessionController {
 
   async startMessage(sessionId: string, input: AiSessionSendInput) {
     const session = this.requireSession(sessionId);
+    this.assertNoSettingsUpdate(session.id);
     if (isSessionBusy(session)) {
       throw aiSessionControlError("AI_SESSION_BUSY", "AI session is busy. Queue the message or steer it into the running turn.", 409);
     }
@@ -392,6 +403,7 @@ export class AiSessionController {
 
   async steerMessage(sessionId: string, input: string | AiSessionSendInput) {
     const session = this.requireSession(sessionId);
+    this.assertNoSettingsUpdate(session.id);
     if (!isSessionBusy(session)) {
       throw aiSessionControlError("AI_SESSION_NOT_ACTIVE", "AI session is not active.", 409);
     }
@@ -503,8 +515,39 @@ export class AiSessionController {
     return session;
   }
 
-  editQueuedMessage(sessionId: string, queueId: string, expectedRevision: number, message: string) {
-    const result = this.registry.editQueuedMessage(sessionId, queueId, expectedRevision, message);
+  editQueuedMessage(sessionId: string, queueId: string, expectedRevision: number, message: string, attachmentEdit?: AiSessionQueueAttachmentEdit) {
+    const session = this.requireSession(sessionId);
+    const item = session.queue.items.find((entry) => entry.id === queueId);
+    if (!item) throw aiSessionControlError("AI_SESSION_QUEUE_ITEM_NOT_FOUND", "Queued message not found.", 404);
+    let attachmentUpdate: Parameters<AiSessionRegistry["editQueuedMessage"]>[4];
+    let replacementMessageId: string | undefined;
+    if (attachmentEdit) {
+      const existingIds = new Set(item.attachments.map((attachment) => attachment.id));
+      if (attachmentEdit.retainedAttachmentIds.some((id) => !existingIds.has(id))) {
+        throw aiSessionControlError("AI_SESSION_QUEUE_ATTACHMENT_INVALID", "Queued message attachment was not found.", 409);
+      }
+      const attachmentStore = this.registry.conversationAttachmentStore();
+      const retainedPayloads = attachmentStore ? [] : this.registry.queuedMessageDispatch(queueId).attachments
+        .filter((attachment) => attachmentEdit.retainedAttachmentIds.includes(attachment.id));
+      replacementMessageId = `msg_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
+      const staged = this.registry.stageMessageAttachments({
+        sessionId,
+        messageId: replacementMessageId,
+        attachments: [...retainedPayloads, ...attachmentEdit.attachments],
+        retainedAttachmentIds: attachmentStore ? attachmentEdit.retainedAttachmentIds : [],
+        runtimePathRoot: session.cwd,
+        draftAttachmentIds: attachmentEdit.draftAttachmentIds,
+        draftScopeType: attachmentEdit.draftScopeType,
+        draftScopeId: attachmentEdit.draftScopeId,
+      });
+      attachmentUpdate = {
+        attachments: aiSessionAttachmentMetas(staged.providerAttachments),
+        payloads: staged.providerAttachments,
+        messageId: replacementMessageId,
+      };
+    }
+    const result = this.registry.editQueuedMessage(sessionId, queueId, expectedRevision, message, attachmentUpdate);
+    if (result && result.kind !== "updated" && replacementMessageId) this.registry.rollbackMessageAttachments(sessionId, replacementMessageId);
     if (!result) throw aiSessionControlError("AI_SESSION_NOT_FOUND", "AI session not found.", 404);
     if (result.kind === "revision-conflict") {
       throw aiSessionControlError("AI_SESSION_QUEUE_REVISION_CONFLICT", `AI session queue changed at revision ${result.currentRevision}.`, 409);
@@ -514,6 +557,11 @@ export class AiSessionController {
     }
     if (result.kind === "not-editable") {
       throw aiSessionControlError("AI_SESSION_QUEUE_ITEM_NOT_EDITABLE", "Only queued messages can be edited.", 409);
+    }
+    if (result.kind === "updated" && attachmentUpdate) {
+      const previousMessageId = item.messageId
+        || this.registry.conversationAttachmentStore()?.messageIdForAttachments(sessionId, item.attachments.map((attachment) => attachment.id));
+      if (previousMessageId) this.registry.rollbackMessageAttachments(sessionId, previousMessageId);
     }
     return result.session;
   }
@@ -534,10 +582,17 @@ export class AiSessionController {
 
   async interrupt(sessionId: string) {
     const session = this.requireSession(sessionId);
+    this.assertNoSettingsUpdate(session.id);
     if (session.status !== "running" && session.status !== "waiting") {
       throw aiSessionControlError("AI_SESSION_NOT_ACTIVE", "AI session is not active.", 400);
     }
     return this.requireProvider(session).interrupt(session);
+  }
+
+  private assertNoSettingsUpdate(sessionId: string) {
+    if (this.pendingSettings.has(sessionId)) {
+      throw aiSessionControlError("AI_SESSION_MODEL_SELECTION_CONFLICT", "A session setting change is already pending.", 409);
+    }
   }
 
   async timeline(sessionId: string) {

@@ -7650,7 +7650,7 @@ test("Codex Direct Session creation accepts an unprojectable unmanaged default",
   assert.equal(registry.getByProviderSessionId("codex", created.providerSessionId).modelSelection, undefined);
 });
 
-test("Codex Direct Session switches models only after settings confirmation and rejects provider changes", async () => {
+test("Codex Direct Session switches models in place and reloads the thread for provider changes", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-model-switch-"));
   const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
   const session = registry.applyAdapterSnapshot({
@@ -7664,6 +7664,7 @@ test("Codex Direct Session switches models only after settings confirmation and 
     modelSelection: { modelEntityId: "mdl_primary", modelName: "gpt-5.6" },
   });
   class FakeCodexModelSwitchClient extends EventEmitter {
+    constructor() { super(); this.calls = []; }
     async start() {}
     stop() {}
     async listLoadedThreadIds() { return ["thread_model_switch"]; }
@@ -7674,20 +7675,144 @@ test("Codex Direct Session switches models only after settings confirmation and 
       assert.equal(registry.get(session.id).modelSelection.modelName, "gpt-5.6");
       return { model: settings.model, modelProvider: codexProviderId("mdl_primary") };
     }
+    async archiveThread(threadId) { this.calls.push(["archive", threadId]); }
+    async unarchiveThread(threadId) { this.calls.push(["unarchive", threadId]); }
+    async resumeThread(threadId, options) {
+      this.calls.push(["resume", threadId, options]);
+      return { id: threadId, cwd: "/workspace", model: options.model, modelProvider: options.modelProvider, status: { type: "idle" }, turns: [] };
+    }
   }
-  const bridge = new CodexAppServerSessionBridge(registry, new FakeCodexModelSwitchClient(), {
+  const fake = new FakeCodexModelSwitchClient();
+  const bridge = new CodexAppServerSessionBridge(registry, fake, {
     resolveModelSelection: (selection) => ({ model: selection.modelName, modelProvider: codexProviderId(selection.modelEntityId) }),
+    projectModelSelection: (provider, model) => ({ modelEntityId: provider === codexProviderId("mdl_secondary") ? "mdl_secondary" : "mdl_primary", modelName: model }),
   });
   assert.deepEqual(registry.get(session.id).modelSelection, { modelEntityId: "mdl_primary", modelName: "gpt-5.6" });
   await bridge.sync();
+  fake.calls = [];
   assert.deepEqual(registry.get(session.id).modelSelection, { modelEntityId: "mdl_primary", modelName: "gpt-5.6" });
   await bridge.updateModelSelection(registry.get(session.id), { modelEntityId: "mdl_primary", modelName: "gpt-5.5" });
   assert.equal(registry.get(session.id).modelSelection.modelName, "gpt-5.5");
+  await bridge.updateModelSelection(registry.get(session.id), { modelEntityId: "mdl_secondary", modelName: "gpt-5.4" });
+  assert.deepEqual(fake.calls, [
+    ["archive", "thread_model_switch"],
+    ["unarchive", "thread_model_switch"],
+    ["resume", "thread_model_switch", { model: "gpt-5.4", modelProvider: codexProviderId("mdl_secondary"), reasoningEffort: "medium" }],
+  ]);
+  assert.equal(registry.get(session.id).providerSessionId, "thread_model_switch");
+  assert.deepEqual(registry.get(session.id).modelSelection, { modelEntityId: "mdl_secondary", modelName: "gpt-5.4" });
+
+  registry.applyAdapterSnapshot({
+    agent: "codex",
+    creationSource: "ai-session",
+    providerSessionId: "thread_model_switch_child",
+    lineage: { kind: "subagent", parentProviderSessionId: "thread_model_switch" },
+    cwd: "/workspace",
+    status: "idle",
+  });
   await assert.rejects(
-    bridge.updateModelSelection(registry.get(session.id), { modelEntityId: "mdl_secondary", modelName: "gpt-5.4" }),
-    (error) => error.code === "AI_SESSION_PROVIDER_SWITCH_REQUIRES_NEW_SESSION",
+    bridge.updateModelSelection(registry.get(session.id), { modelEntityId: "mdl_primary", modelName: "gpt-5.6" }),
+    (error) => error.code === "AI_SESSION_PROVIDER_SWITCH_HAS_ACTIVE_DESCENDANTS",
   );
-  assert.equal(registry.get(session.id).modelSelection.modelEntityId, "mdl_primary");
+  assert.equal(fake.calls.length, 3);
+});
+
+test("Codex provider switching rolls back to the previous provider after resume failure", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-provider-rollback-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const session = registry.applyAdapterSnapshot({
+    agent: "codex",
+    creationSource: "ai-session",
+    providerSessionId: "thread_provider_rollback",
+    cwd: "/workspace",
+    status: "idle",
+    modelSelection: { modelEntityId: "mdl_primary", modelName: "old-model" },
+  });
+  class FakeCodexProviderRollbackClient extends EventEmitter {
+    constructor() { super(); this.calls = []; }
+    async start() {}
+    stop() {}
+    async listLoadedThreadIds() { return ["thread_provider_rollback"]; }
+    async readThread() { return { id: "thread_provider_rollback", cwd: "/workspace", status: { type: "idle" }, turns: [] }; }
+    async archiveThread(threadId) { this.calls.push(["archive", threadId]); }
+    async unarchiveThread(threadId) { this.calls.push(["unarchive", threadId]); }
+    async resumeThread(threadId, options) {
+      this.calls.push(["resume", options.modelProvider]);
+      if (options.modelProvider === codexProviderId("mdl_secondary")) throw new Error("new provider unavailable");
+      return { id: threadId, cwd: "/workspace", model: options.model, modelProvider: options.modelProvider, status: { type: "idle" }, turns: [] };
+    }
+  }
+  const fake = new FakeCodexProviderRollbackClient();
+  const bridge = new CodexAppServerSessionBridge(registry, fake, {
+    resolveModelSelection: (selection) => ({ model: selection.modelName, modelProvider: codexProviderId(selection.modelEntityId) }),
+    projectModelSelection: (provider, model) => ({ modelEntityId: provider === codexProviderId("mdl_secondary") ? "mdl_secondary" : "mdl_primary", modelName: model }),
+  });
+  await bridge.sync();
+  fake.calls = [];
+
+  await assert.rejects(
+    bridge.updateModelSelection(registry.get(session.id), { modelEntityId: "mdl_secondary", modelName: "new-model" }),
+    /new provider unavailable/,
+  );
+  assert.deepEqual(fake.calls, [
+    ["archive", "thread_provider_rollback"],
+    ["unarchive", "thread_provider_rollback"],
+    ["resume", codexProviderId("mdl_secondary")],
+    ["archive", "thread_provider_rollback"],
+    ["unarchive", "thread_provider_rollback"],
+    ["resume", codexProviderId("mdl_primary")],
+  ]);
+  assert.deepEqual(registry.get(session.id).modelSelection, { modelEntityId: "mdl_primary", modelName: "old-model" });
+});
+
+test("Codex provider switching rolls back when resume does not confirm the provider and model", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-provider-confirmation-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const session = registry.applyAdapterSnapshot({
+    agent: "codex",
+    creationSource: "ai-session",
+    providerSessionId: "thread_provider_confirmation",
+    cwd: "/workspace",
+    status: "idle",
+    modelSelection: { modelEntityId: "mdl_primary", modelName: "old-model" },
+  });
+  class FakeCodexProviderConfirmationClient extends EventEmitter {
+    constructor() { super(); this.calls = []; }
+    async start() {}
+    stop() {}
+    async listLoadedThreadIds() { return ["thread_provider_confirmation"]; }
+    async readThread() { return { id: "thread_provider_confirmation", cwd: "/workspace", status: { type: "idle" }, turns: [] }; }
+    async archiveThread(threadId) { this.calls.push(["archive", threadId]); }
+    async unarchiveThread(threadId) { this.calls.push(["unarchive", threadId]); }
+    async resumeThread(threadId, options) {
+      this.calls.push(["resume", options.modelProvider]);
+      if (options.modelProvider === codexProviderId("mdl_secondary")) {
+        return { id: threadId, cwd: "/workspace", status: { type: "idle" }, turns: [] };
+      }
+      return { id: threadId, cwd: "/workspace", model: options.model, modelProvider: options.modelProvider, status: { type: "idle" }, turns: [] };
+    }
+  }
+  const fake = new FakeCodexProviderConfirmationClient();
+  const bridge = new CodexAppServerSessionBridge(registry, fake, {
+    resolveModelSelection: (selection) => ({ model: selection.modelName, modelProvider: codexProviderId(selection.modelEntityId) }),
+    projectModelSelection: (provider, model) => ({ modelEntityId: provider === codexProviderId("mdl_secondary") ? "mdl_secondary" : "mdl_primary", modelName: model }),
+  });
+  await bridge.sync();
+  fake.calls = [];
+
+  await assert.rejects(
+    bridge.updateModelSelection(registry.get(session.id), { modelEntityId: "mdl_secondary", modelName: "new-model" }),
+    (error) => error.code === "AI_SESSION_MODEL_SELECTION_INVALID_RESPONSE",
+  );
+  assert.deepEqual(fake.calls, [
+    ["archive", "thread_provider_confirmation"],
+    ["unarchive", "thread_provider_confirmation"],
+    ["resume", codexProviderId("mdl_secondary")],
+    ["archive", "thread_provider_confirmation"],
+    ["unarchive", "thread_provider_confirmation"],
+    ["resume", codexProviderId("mdl_primary")],
+  ]);
+  assert.deepEqual(registry.get(session.id).modelSelection, { modelEntityId: "mdl_primary", modelName: "old-model" });
 });
 
 test("provider-neutral model switching allows native provider changes and serializes session settings", async () => {
@@ -7898,8 +8023,8 @@ test("Codex resume and fork preserve the session provider and model", async () =
   await bridge.resumeSession(source.providerSessionId, source.modelSelection, source.reasoningEffort);
   const forked = await bridge.forkSession({ source });
   assert.deepEqual(fake.calls, [
-    ["resume", "thread_model_source", { model: "gpt-5.4", modelProvider: codexProviderId("mdl_secondary"), reasoningEffort: "xhigh" }],
-    ["fork", { threadId: "thread_model_source", model: "gpt-5.4", modelProvider: codexProviderId("mdl_secondary"), reasoningEffort: "xhigh" }],
+    ["resume", "thread_model_source", { model: "gpt-5.4", modelProvider: codexProviderId("mdl_secondary"), reasoningEffort: "xhigh", storyAgentTools: [] }],
+    ["fork", { threadId: "thread_model_source", model: "gpt-5.4", modelProvider: codexProviderId("mdl_secondary"), reasoningEffort: "xhigh", storyAgentTools: [] }],
   ]);
   assert.deepEqual(forked.modelSelection, source.modelSelection);
   assert.equal(forked.reasoningEffort, "xhigh");

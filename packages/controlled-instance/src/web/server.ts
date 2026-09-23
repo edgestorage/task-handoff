@@ -155,10 +155,12 @@ import {
   AiSessionMentionFileSearchInputSchema,
   AiSessionQueueReorderInputSchema,
   AiSessionQueueEditInputSchema,
+  AiSessionResumeInputSchema,
   AiSessionResumeResultSchema,
   isAiSessionInlineImageMime,
 } from "@task-handoff/protocol/ai-sessions";
-import { normalizeAiSessionReasoningEffortCapabilities } from "@task-handoff/protocol/ai-session-provider-capabilities";
+import { normalizeAiSessionModelSelectionCapabilities, normalizeAiSessionReasoningEffortCapabilities } from "@task-handoff/protocol/ai-session-provider-capabilities";
+import { StoryIdSchema } from "@task-handoff/protocol/stories";
 import {
   APP_SESSION_DELTA_RETENTION_MS,
   AppSessionDeltaResponseSchema,
@@ -922,9 +924,10 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       modelSelection: {
         selectModelAtCreate: true,
         selectProviderAtCreate: true,
+        selectModelAtResume: codexAppServer.supportsProviderReload(),
+        selectProviderAtResume: codexAppServer.supportsProviderReload(),
         switchModelWithinProvider: codexAppServer.supportsThreadSettingsUpdate(),
-        // Codex thread/settings/update accepts model only; provider is fixed per thread.
-        switchProviderDuringSession: false,
+        switchProviderDuringSession: codexAppServer.supportsProviderReload(),
       },
       reasoningEffort: {
         // thread/start has accepted model_reasoning_effort before thread/settings/update existed.
@@ -946,6 +949,8 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       modelSelection: {
         selectModelAtCreate: false,
         selectProviderAtCreate: false,
+        selectModelAtResume: false,
+        selectProviderAtResume: false,
         switchModelWithinProvider: false,
         switchProviderDuringSession: false,
       },
@@ -970,6 +975,8 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
         modelSelection: {
           selectModelAtCreate: true,
           selectProviderAtCreate: true,
+          selectModelAtResume: false,
+          selectProviderAtResume: false,
           switchModelWithinProvider: true,
           switchProviderDuringSession: true,
         },
@@ -1029,7 +1036,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
         : []
     ),
     resumeProvider: async (item, storyAgentTools) => {
-      await aiSessionProviders.resume(item, storyAgentTools);
+      return aiSessionProviders.resume(item, storyAgentTools);
     },
   });
   const aiSessionCreate = new AiSessionCreateCoordinator({
@@ -1577,6 +1584,24 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     }
   });
 
+  app.post<{ Params: { id: string }; Body: unknown }>("/api/internal/node-agent/ai-sessions/:id/close-for-story-deletion", nodeAgentProcessRoute, async (request, reply) => {
+    try {
+      const body = AiSessionCloseInputSchema.extend({ storyId: StoryIdSchema }).strict().parse(request.body || {});
+      const session = aiSessions.get(request.params.id);
+      if (session && session.storyId !== body.storyId) {
+        throw Object.assign(new Error("AI Session no longer belongs to the Story being deleted."), {
+          code: "AI_SESSION_STORY_MISMATCH",
+          statusCode: 409,
+        });
+      }
+      const result = AiSessionCloseResultSchema.parse(await aiSessionClose.close(request.params.id));
+      publishAiSessionSnapshot("control-action");
+      return { data: result };
+    } catch (error: unknown) {
+      return sendAiSessionControlError(reply, error);
+    }
+  });
+
   app.post<{ Body: unknown }>("/api/internal/node-agent/story-automation/ai-sessions", nodeAgentProcessRoute, async (request, reply) => {
     try {
       const body = StoryAutomationInstanceCreateInputSchema.parse(request.body || {});
@@ -1980,8 +2005,23 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
 
   app.post<{ Params: { id: string }; Body: unknown }>("/api/ai-sessions/:id/resume", async (request, reply) => {
     try {
-      z.object({}).strict().parse(request.body || {});
-      const result = AiSessionResumeResultSchema.parse(await aiSessionResume.resume(request.params.id));
+      const body = AiSessionResumeInputSchema.parse(request.body || {});
+      const item = aiSessionHistory.get(request.params.id);
+      if (!item) throw Object.assign(new Error("AI session history entry not found."), { code: "AI_SESSION_HISTORY_NOT_FOUND", statusCode: 404 });
+      let selection: AiSessionModelSelection | undefined;
+      if (body.modelSelection) {
+        if (item.creationSource !== "ai-session") {
+          throw Object.assign(new Error("Only Direct AI Sessions support selecting a model while resuming."), { code: "AI_SESSION_MODEL_SELECTION_UNSUPPORTED", statusCode: 409 });
+        }
+        const capability = normalizeAiSessionModelSelectionCapabilities(aiSessionProviders.capability(item.agent));
+        if (!capability.selectModelAtResume
+          || (body.modelSelection.modelEntityId !== item.modelSelection?.modelEntityId && !capability.selectProviderAtResume)) {
+          throw Object.assign(new Error("Model selection is unavailable while resuming this session."), { code: "AI_SESSION_MODEL_SELECTION_UNSUPPORTED", statusCode: 409 });
+        }
+        selection = resolveControlledPrivateModelSelection(privateModelCatalog, item.agent, body.modelSelection);
+        if (!selection) throw Object.assign(new Error("Model selection is unavailable."), { code: "AI_SESSION_MODEL_SELECTION_UNAVAILABLE", statusCode: 409 });
+      }
+      const result = AiSessionResumeResultSchema.parse(await aiSessionResume.resume(request.params.id, selection));
       await refreshAndPublishAiSessions("control-action");
       return { data: result };
     } catch (error: unknown) {
@@ -2402,7 +2442,24 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   app.patch<{ Params: { id: string; queueId: string }; Body: unknown }>("/api/ai-sessions/:id/queue/:queueId", async (request, reply) => {
     try {
       const body = AiSessionQueueEditInputSchema.parse(request.body || {});
-      const session = aiSessionController.editQueuedMessage(request.params.id, request.params.queueId, body.expectedRevision, body.message);
+      const retainedAttachmentIds = body.attachments?.flatMap((attachment) => attachment.source.type === "retained" ? [attachment.id] : []) || [];
+      const draftAttachmentIds = body.attachments?.flatMap((attachment) => attachment.source.type === "upload-ref" ? [attachment.id] : []) || [];
+      const attachments = body.attachments?.flatMap((attachment) => attachment.source.type === "runtime-path"
+        ? [AiSessionMessageAttachmentSchema.parse(attachment)]
+        : []) || [];
+      const session = aiSessionController.editQueuedMessage(
+        request.params.id,
+        request.params.queueId,
+        body.expectedRevision,
+        body.message,
+        body.attachments === undefined ? undefined : {
+          retainedAttachmentIds,
+          attachments,
+          draftAttachmentIds,
+          draftScopeType: "session",
+          draftScopeId: request.params.id,
+        },
+      );
       publishAiSessionSnapshot("control-action");
       return { data: AiSessionQueueMutationResponseSchema.parse({ sessionId: session.id, queueRevision: session.queue.revision, action: "edit", queueId: request.params.queueId }) };
     } catch (error: unknown) {
