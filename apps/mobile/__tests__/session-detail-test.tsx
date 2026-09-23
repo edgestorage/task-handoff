@@ -1234,7 +1234,7 @@ test('queued messages expose edit controls and a drag handle that reorders with 
       pendingCount: 2,
       items: [
         { id: 'queue-1', message: 'first queued message', attachments: [], references: [], status: 'queued', createdAt: session.startedAt, updatedAt: session.updatedAt },
-        { id: 'queue-2', message: 'second queued message', attachments: [], references: [], status: 'queued', createdAt: session.startedAt, updatedAt: session.updatedAt },
+        { id: 'queue-2', messageId: 'message-2', message: 'second queued message', attachments: [{ id: 'attachment-2', kind: 'image', name: 'queued.png', mime: 'image/png', size: 42, sourceType: 'inline' }], references: [], status: 'queued', createdAt: session.startedAt, updatedAt: session.updatedAt },
       ],
     },
   });
@@ -1266,11 +1266,12 @@ test('queued messages expose edit controls and a drag handle that reorders with 
   await fireEvent.press(screen.getAllByRole('button', { name: 'edit' })[0]);
   await waitFor(() => expect(screen.getByTestId('session-message-input').props.value).toBe('second queued message'));
   screen.getByText('Edit queued message');
+  screen.getByText('queued.png');
   await fireEvent.changeText(screen.getByTestId('session-message-input'), 'updated queued message');
   await waitFor(() => expect(screen.getByTestId('session-message-input').props.value).toBe('updated queued message'));
   await waitFor(() => expect(screen.getByRole('button', { name: 'Save queued message' })).toBeEnabled());
   await fireEvent.press(screen.getByRole('button', { name: 'Save queued message' }));
-  await waitFor(() => expect(editQueue).toHaveBeenCalledWith('instance', session.id, 'queue-2', 4, 'updated queued message'));
+  await waitFor(() => expect(editQueue).toHaveBeenCalledWith('instance', session.id, 'queue-2', 4, 'updated queued message', [{ id: 'attachment-2', source: { type: 'retained' } }]));
   await waitFor(() => expect(screen.getByTestId('session-message-input').props.value).toBe('preserved draft'));
   expect(editQueue).toHaveBeenCalledTimes(1);
 });

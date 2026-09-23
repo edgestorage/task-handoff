@@ -6,7 +6,7 @@ import { ActivityIndicator, Alert, Animated, FlatList, Keyboard, KeyboardAvoidin
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Defs, LinearGradient, Rect, Stop } from 'react-native-svg';
 import { aiSessionMessageText, canInterruptAiSession, isAiSessionApprovalPending, type AiSessionModelGroup, type ControlPlaneAiSessionSummary, type ControlPlaneClient } from '@task-handoff/control-plane-client';
-import { AI_SESSION_DEFAULT_REASONING_EFFORT, type AiSessionMentionCandidate, type AiSessionPermissionMode, type AiSessionReasoningEffort } from '@task-handoff/protocol/ai-sessions';
+import { AI_SESSION_DEFAULT_REASONING_EFFORT, type AiSessionMentionCandidate, type AiSessionPermissionMode, type AiSessionQueuedMessage, type AiSessionReasoningEffort } from '@task-handoff/protocol/ai-sessions';
 import { directoryAiSessionProviderCapability, supportsDirectoryAiSessionTimelineCapability, type ControlPlaneInstanceDirectoryEntry } from '@task-handoff/protocol/control-plane-directory';
 import { normalizeAiSessionReasoningEffortCapabilities } from '@task-handoff/protocol/ai-session-provider-capabilities';
 
@@ -14,7 +14,7 @@ import { mobileAiSessionBusyKey, MobileAiSessionActionCoordinator, MobileAiSessi
 import { aiSessionDisplayTurns, SessionDetail, type SessionDetailMode } from './SessionDetail';
 import { mobileAiSessionStore, type MobileStreamingMessage, type MobileTurnTimelineState } from './store';
 import { pickDocument, pickImage, type MobileLocalFile } from '../platform/file-picker';
-import { formatMobileAttachmentBytes, formatMobileTextLength, mobilePastedImage, mobilePastedText, runtimeAttachmentFromServerCandidate, uploadingMobileAttachment, uploadMobileAttachment, usableUploadRefs, type MobilePendingAttachment } from './attachments';
+import { formatMobileAttachmentBytes, formatMobileTextLength, mobilePastedImage, mobilePastedText, runtimeAttachmentFromServerCandidate, uploadingMobileAttachment, uploadMobileAttachment, usableQueueEditRefs, usableUploadRefs, type MobilePendingAttachment } from './attachments';
 import { useMobileTheme } from '../components/theme';
 import { SystemIcon } from '../components/SystemIcon';
 import { SessionComposer } from './SessionComposer';
@@ -101,6 +101,7 @@ export function SessionWorkspace({
     sessionId: string;
     queueId: string;
     originalMessage: string;
+    originalAttachmentIds: string[];
     previousDraft: string;
     previousAttachments: MobilePendingAttachment[];
     previousRuntimeCandidates: AiSessionMentionCandidate[];
@@ -470,29 +471,44 @@ export function SessionWorkspace({
     if (draftTimer.current) clearTimeout(draftTimer.current);
     void drafts?.write(controlPlaneId, instanceId, session.id, edit.previousDraft);
   };
-  const beginQueueEdit = (queueId: string, message: string) => {
+  const beginQueueEdit = (item: AiSessionQueuedMessage) => {
     const previous = activeQueueEdit;
     setQueueEdit({
       sessionId: session.id,
-      queueId,
-      originalMessage: message,
+      queueId: item.id,
+      originalMessage: item.message,
+      originalAttachmentIds: item.attachments.map((attachment) => attachment.id),
       previousDraft: previous?.previousDraft ?? draft,
       previousAttachments: previous?.previousAttachments ?? attachments,
       previousRuntimeCandidates: previous?.previousRuntimeCandidates ?? runtimeCandidates,
     });
-    setDraft(message);
-    setAttachments([]);
+    setDraft(item.message);
+    setAttachments(item.attachments.map((attachment) => ({
+      localId: attachment.id,
+      kind: attachment.kind,
+      name: attachment.name,
+      mime: attachment.mime,
+      size: attachment.size,
+      phase: 'uploaded',
+      retained: true,
+    })));
     setRuntimeCandidates([]);
     setComposerFocused(true);
     setComposerFocusRequest((value) => value + 1);
   };
   const saveQueueEdit = async () => {
     if (!actions || !activeQueueEdit || !draft.trim()) return;
-    if (draft.trim() === activeQueueEdit.originalMessage.trim()) {
+    const attachmentIds = attachments.map((attachment) => attachment.localId);
+    if (draft.trim() === activeQueueEdit.originalMessage.trim()
+      && attachmentIds.length === activeQueueEdit.originalAttachmentIds.length
+      && attachmentIds.every((id, index) => id === activeQueueEdit.originalAttachmentIds[index])) {
       restoreDraftAfterQueueEdit(activeQueueEdit);
       return;
     }
-    const result = await performAction(t('workspace.saveAction'), () => actions.editQueue(instanceId, session.id, activeQueueEdit.queueId, session.queue.revision, draft.trim()));
+    let refs;
+    try { refs = usableQueueEditRefs(attachments); }
+    catch (cause) { setAttachments((current) => [...current, { localId: 'validation', kind: 'file', name: 'Attachment', mime: 'application/octet-stream', size: 0, phase: 'failed', error: cause instanceof Error ? cause.message : 'Attachment invalid.' }]); return; }
+    const result = await performAction(t('workspace.saveAction'), () => actions.editQueue(instanceId, session.id, activeQueueEdit.queueId, session.queue.revision, draft.trim(), refs));
     if (result.disposition === 'accepted') restoreDraftAfterQueueEdit(activeQueueEdit);
   };
   const send = async () => {
@@ -746,7 +762,7 @@ export function SessionWorkspace({
                   </View>
                 </View>
                 <View style={styles.queueActions}>
-                  {item.status === 'queued' ? <QueueActionButton icon={queueActionIcon('edit')} label={t('workspace.editAction')} disabled={!authoritativeActionsEnabled || !actions || ['busy', 'result-unknown'].includes(state('queue-edit', item.id)?.phase || '')} onPress={() => beginQueueEdit(item.id, item.message)} /> : null}
+                  {item.status === 'queued' ? <QueueActionButton icon={queueActionIcon('edit')} label={t('workspace.editAction')} disabled={!authoritativeActionsEnabled || !actions || ['busy', 'result-unknown'].includes(state('queue-edit', item.id)?.phase || '')} onPress={() => beginQueueEdit(item)} /> : null}
                   <QueueActionButton icon={queueActionIcon('steer')} label={t('workspace.steerAction')} disabled={!authoritativeActionsEnabled || !actions || !canInterrupt || ['busy', 'result-unknown'].includes(state('queue-steer', item.id)?.phase || '')} onPress={() => { if (actions) void performAction(t('workspace.steerAction'), () => actions.queue(instanceId, session.id, item.id, 'steer')); }} showLabel />
                   {item.status === 'failed' ? <QueueActionButton icon={queueActionIcon('retry')} label={t('workspace.retryAction')} disabled={!authoritativeActionsEnabled || !actions || ['busy', 'result-unknown'].includes(state('queue-retry', item.id)?.phase || '')} onPress={() => { if (actions) void performAction(t('workspace.retryAction'), () => actions.queue(instanceId, session.id, item.id, 'retry')); }} /> : null}
                   <QueueActionButton destructive icon={queueActionIcon('remove')} label={t('workspace.removeAction')} disabled={!authoritativeActionsEnabled || !actions || ['busy', 'result-unknown'].includes(state('queue-remove', item.id)?.phase || '')} onPress={() => { if (actions) void performAction(t('workspace.removeAction'), () => actions.queue(instanceId, session.id, item.id, 'remove')); }} />

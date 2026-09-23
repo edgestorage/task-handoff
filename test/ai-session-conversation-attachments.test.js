@@ -66,6 +66,28 @@ test("runtime-path content is snapshotted inside the session workspace and survi
   }), { code: "AI_SESSION_RUNTIME_PATH_OUTSIDE_WORKSPACE" });
 });
 
+test("queued message edits can retain stored attachments under a new message identity", () => {
+  const dataDir = tempDir();
+  const store = new AiSessionConversationAttachmentStore({ dataDir });
+  const original = store.stageMessage({
+    sessionId: "session-a",
+    messageId: "message-a",
+    attachments: [inlineAttachment("input-a", "image bytes")],
+  });
+  const replacement = store.stageMessage({
+    sessionId: "session-a",
+    messageId: "message-b",
+    retainedAttachmentIds: [original.attachments[0].id],
+  });
+
+  assert.equal(fs.readFileSync(store.content("session-a", "message-a", original.attachments[0].id).path, "utf8"), "image bytes");
+  assert.equal(replacement.attachments.length, 1);
+  assert.notEqual(replacement.attachments[0].id, original.attachments[0].id);
+  assert.equal(replacement.attachments[0].name, original.attachments[0].name);
+  assert.equal(fs.readFileSync(replacement.providerAttachments[0].retainedPath, "utf8"), "image bytes");
+  assert.equal(fs.readdirSync(path.join(dataDir, "ai-session-attachments", "blobs")).length, 1);
+});
+
 test("attachment store restores staged input as retryable draft and expires it without replay", () => {
   const dataDir = tempDir();
   let now = Date.parse("2026-08-20T00:00:00.000Z");

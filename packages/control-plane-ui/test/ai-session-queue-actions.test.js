@@ -12,6 +12,7 @@ test("AI session queue edit and reorder actions stay revisioned through both con
   const dock = read("apps/control-plane/ai-board/AiSessionFloatingDock.vue");
   const panel = read("apps/control-plane/instance-detail/AiSessionPanel.vue");
   const queries = read("api/queries.ts");
+  const attachmentUpload = read("components/ai-session/attachmentUpload.ts");
 
   assert.match(queue, /props\.queue\.revision/);
   assert.match(queue, /emit\("reorderQueuedMessages", \{ expectedRevision:/);
@@ -31,6 +32,8 @@ test("AI session queue edit and reorder actions stay revisioned through both con
   assert.match(dock, /@edit-queued-message="\$emit\('editQueuedMessage', \$event\)"/);
   assert.match(dock, /:editing-label="editingLabel"/);
   assert.match(board, /messageDraft\.value = payload\.message/);
+  assert.match(board, /queuedMessageComposerAttachments\(card\.instance\.id, card\.session\.id, item\)/);
+  assert.match(board, /prepareQueuedMessageEditAttachments\(messageAttachments\.value/);
   assert.match(board, /selectedCardConversationSession\.value\?\.queue\.revision \?\? card\.session\.queue\.revision/);
   assert.match(board, /cancelQueueComposerEdit/);
   assert.match(board, /item\.status !== "queued"/);
@@ -40,12 +43,16 @@ test("AI session queue edit and reorder actions stay revisioned through both con
   assert.match(board, /reorderAiSessionQueuedMessages/);
   assert.match(panel, /editAiSessionQueuedMessage/);
   assert.match(panel, /messageDraft\.value = payload\.message/);
+  assert.match(panel, /queuedMessageComposerAttachments\(props\.instance\.id, sessionId, item\)/);
+  assert.match(panel, /prepareQueuedMessageEditAttachments\(messageAttachments\.value/);
   assert.match(panel, /selectedConversationSession\.value\?\.queue\.revision \?\? session\.queue\.revision/);
   assert.match(panel, /reorderAiSessionQueuedMessages/);
   assert.match(panel, /item\.status !== "queued"/);
   assert.match(panel, /selectedConversationSession\.value \|\| selectedSession\.value/);
   assert.match(queries, /sharedAiSessionsApi\.editQueue/);
   assert.match(queries, /sharedAiSessionsApi\.reorderQueue/);
+  assert.match(attachmentUpload, /source: \{ type: "retained" \}/);
+  assert.match(attachmentUpload, /messages\/\$\{encodeURIComponent\(item\.messageId\)\}\/attachments/);
 });
 
 test("queued messages use one browser-local placement across detail and board composers", () => {

@@ -3,7 +3,7 @@ import fs from "node:fs";
 import crypto from "node:crypto";
 import { Readable, Transform } from "node:stream";
 import { z } from "zod";
-import { AI_SESSION_ATTACHMENT_DRAFT_STREAM_CHUNK_BYTES, AI_SESSION_ATTACHMENT_UPLOAD_BODY_LIMIT, AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES, AiSessionApprovalInputSchema, AiSessionAttachmentDraftSchema, AiSessionAttachmentDraftStreamCreateInputSchema, AiSessionAttachmentDraftStreamOffsetSchema, AiSessionAttachmentDraftUploadQuerySchema, AiSessionCloseInputSchema, AiSessionCommandInputSchema, AiSessionCreateRefInputSchema, AiSessionForkInputSchema, AiSessionMentionFileSearchInputSchema, AiSessionMessageRefInputSchema, AiSessionModelSelectionInputSchema, AiSessionOpenAppInputSchema, AiSessionQueueEditInputSchema, AiSessionQueueReorderInputSchema, AiSessionReasoningEffortInputSchema, AiSessionRenameInputSchema, AiSessionUnreadEventType, AiSessionWorkspaceCheckoutInputSchema, isAiSessionInlineImageMime, projectAiSessionDeltaForConsumer, projectAiSessionHistoryItemForConsumer, projectAiSessionsSnapshotForConsumer } from "@task-handoff/protocol/ai-sessions";
+import { AI_SESSION_ATTACHMENT_DRAFT_STREAM_CHUNK_BYTES, AI_SESSION_ATTACHMENT_UPLOAD_BODY_LIMIT, AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES, AiSessionApprovalInputSchema, AiSessionAttachmentDraftSchema, AiSessionAttachmentDraftStreamCreateInputSchema, AiSessionAttachmentDraftStreamOffsetSchema, AiSessionAttachmentDraftUploadQuerySchema, AiSessionCloseInputSchema, AiSessionCommandInputSchema, AiSessionCreateRefInputSchema, AiSessionForkInputSchema, AiSessionMentionFileSearchInputSchema, AiSessionMessageRefInputSchema, AiSessionModelSelectionInputSchema, AiSessionOpenAppInputSchema, AiSessionQueueEditInputSchema, AiSessionQueueReorderInputSchema, AiSessionReasoningEffortInputSchema, AiSessionRenameInputSchema, AiSessionResumeInputSchema, AiSessionUnreadEventType, AiSessionWorkspaceCheckoutInputSchema, isAiSessionInlineImageMime, projectAiSessionDeltaForConsumer, projectAiSessionHistoryItemForConsumer, projectAiSessionsSnapshotForConsumer } from "@task-handoff/protocol/ai-sessions";
 import type { ControlPlaneService } from "../application/service.ts";
 import type { ControlPlaneEventBus } from "../events/bus.ts";
 import type { ControlPlaneAiSessionAggregator } from "../sessions/ai-session-aggregator.ts";
@@ -398,8 +398,8 @@ export function registerSessionRoutes({
   });
   app.post("/api/controlled-instances/:id/ai-sessions/:sessionId/resume", async (request) => {
     const params = InstanceSessionParamsSchema.parse(request.params);
-    EmptyRequestSchema.parse(request.body || {});
-    const result = await service.resumeAiSession(params.id, params.sessionId);
+    const input = AiSessionResumeInputSchema.parse(request.body || {});
+    const result = await service.resumeAiSession(params.id, params.sessionId, input);
     events.publish("instance.ai-session.resumed", {
       instanceId: params.id,
       sessionId: result.aiSessionId,

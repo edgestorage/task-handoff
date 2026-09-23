@@ -50,7 +50,7 @@ export function deriveAiSessionModelGroups(input: {
   assignment: AiSessionCatalogAssignment;
   agent: AiSessionCatalogAgent;
   nodeId: string;
-  mode: "create" | "existing";
+  mode: "create" | "existing" | "resume";
   currentSelection?: AiSessionModelSelection;
   capability?: Partial<AiSessionModelSelectionCapabilities>;
 }): AiSessionModelGroup[] {
@@ -59,10 +59,14 @@ export function deriveAiSessionModelGroups(input: {
   const capability = input.capability || {};
   const providerSelectionAllowed = input.mode === "create"
     ? capability.selectProviderAtCreate === true
-    : capability.switchProviderDuringSession === true;
+    : input.mode === "resume"
+      ? capability.selectProviderAtResume === true
+      : capability.switchProviderDuringSession === true;
   const modelSelectionAllowed = input.mode === "create"
     ? capability.selectModelAtCreate === true
-    : capability.switchModelWithinProvider === true;
+    : input.mode === "resume"
+      ? capability.selectModelAtResume === true
+      : capability.switchModelWithinProvider === true;
   if (!modelSelectionAllowed) return [];
 
   return ids.flatMap((id) => {

@@ -25,6 +25,8 @@ const HISTORY_ITEM_FIELDS = new Set([
   "creationSource",
   "providerSessionId",
   "lineage",
+  "modelSelection",
+  "reasoningEffort",
   "storyId",
   "title",
   "userPrompt",

@@ -19737,7 +19737,8 @@ test("control plane aggregates ai session pending routes and proxies ai session 
   const timeline = await json(app, "GET", `/api/controlled-instances/${created.body.data.id}/ai-sessions/ais_waiting/timeline`);
   assert.equal(timeline.statusCode, 200);
   assert.deepEqual(timeline.body.data.items.map((item) => [item.type, item.id]), [["ai-message", "agent_1"]]);
-  const resumed = await json(app, "POST", `/api/controlled-instances/${created.body.data.id}/ai-sessions/ais_history_proxy/resume`, {});
+  const resumeInput = { modelSelection: { modelEntityId: "model_provider_2", modelName: "model_2" } };
+  const resumed = await json(app, "POST", `/api/controlled-instances/${created.body.data.id}/ai-sessions/ais_history_proxy/resume`, resumeInput);
   assert.equal(resumed.statusCode, 200);
   assert.deepEqual(resumed.body.data, {
     disposition: "resumed",
@@ -19753,7 +19754,7 @@ test("control plane aggregates ai session pending routes and proxies ai session 
   assert.deepEqual(historyForwards.map((request) => [request.body.method, request.body.path, request.body.body ? JSON.parse(request.body.body) : undefined]), [
     ["GET", "/api/ai-sessions/history?hierarchy=subagents", undefined],
     ["GET", "/api/ai-sessions/history/ais_history_proxy?hierarchy=subagents", undefined],
-    ["POST", "/api/ai-sessions/ais_history_proxy/resume", {}],
+    ["POST", "/api/ai-sessions/ais_history_proxy/resume", resumeInput],
   ]);
 
   const invalidResume = await json(app, "POST", `/api/controlled-instances/${created.body.data.id}/ai-sessions/ais_history_proxy/resume`, { providerSessionId: "untrusted" });

@@ -1565,7 +1565,21 @@ async function saveStory() {
 async function toggleArchive(story: Story = selectedResource.value?.story) { if (!story) return; const action = story.archivedAt ? "restore" : "archive"; const response = await fetch(`/api/stories/${encodeURIComponent(story.id)}/${action}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ nodeId: story.ownerNodeId }) }); if (!response.ok) { error.value = t("stories.errors.updateFailed"); return; } await load(); const refreshed = stories.value.find((item) => item.id === story.id && item.ownerNodeId === story.ownerNodeId); if (refreshed) selectStory(refreshed); }
 function downloadUrl(story: Story, storyPath: string) { return `/api/stories/${encodeURIComponent(story.id)}/content/file?nodeId=${encodeURIComponent(story.ownerNodeId)}&storyPath=${encodeURIComponent(storyPath)}`; }
 function downloadDocument(story: Story, storyPath: string) { const anchor = document.createElement("a"); anchor.href = downloadUrl(story, storyPath); anchor.download = storyPath.split("/").pop() || storyPath; anchor.click(); }
-async function deleteStory(story: Story) { if (!story) return; if (!window.confirm(t("stories.confirm.deleteStory", { title: story.title }))) return; const response = await fetch(`/api/stories/${encodeURIComponent(story.id)}?nodeId=${encodeURIComponent(story.ownerNodeId)}`, { method: "DELETE" }); if (!response.ok) { error.value = t("stories.errors.deleteFailed"); return; } await load(); const resource = selectedResource.value; if (resource && resource.story.id === story.id && resource.story.ownerNodeId === story.ownerNodeId) selectedResource.value = undefined; }
+async function deleteStory(story: Story) {
+  if (!story || !window.confirm(t("stories.confirm.deleteStory", { title: story.title }))) return;
+  try {
+    const response = await fetch(`/api/stories/${encodeURIComponent(story.id)}?nodeId=${encodeURIComponent(story.ownerNodeId)}`, { method: "DELETE" });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => undefined) as { error?: unknown } | undefined;
+      throw payload?.error || new Error(t("stories.errors.deleteFailed"));
+    }
+    await load();
+    const resource = selectedResource.value;
+    if (resource && resource.story.id === story.id && resource.story.ownerNodeId === story.ownerNodeId) selectedResource.value = undefined;
+  } catch (cause) {
+    showControlPlaneToast(translateApiError(cause, t, t("stories.errors.deleteFailed")));
+  }
+}
 async function renameDocument(story: Story, storyPath: string, title: string) { const next = window.prompt(t("stories.confirm.documentTitle"), title)?.trim(); if (!next || next === title) return; const response = await fetch(`/api/stories/${encodeURIComponent(story.id)}/documents/${encodeURIComponent(storyPath)}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ nodeId: story.ownerNodeId, input: { title: next } }) }); if (!response.ok) { error.value = t("stories.errors.renameDocumentFailed"); return; } await load(); const refreshed = stories.value.find((item) => item.id === story.id && item.ownerNodeId === story.ownerNodeId); if (refreshed) selectDocument(refreshed, storyPath); }
 async function deleteDocument(story: Story, storyPath: string) { if (!window.confirm(t("stories.confirm.deleteDocument"))) return; const response = await fetch(`/api/stories/${encodeURIComponent(story.id)}/documents/${encodeURIComponent(storyPath)}`, { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ nodeId: story.ownerNodeId }) }); if (!response.ok) { error.value = t("stories.errors.deleteDocumentFailed"); return; } await load(); const refreshed = stories.value.find((item) => item.id === story.id && item.ownerNodeId === story.ownerNodeId); if (refreshed) selectStory(refreshed); }
 onBeforeUnmount(() => {

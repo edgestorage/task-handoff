@@ -184,7 +184,7 @@ export const stories = {
     deleteDocumentFailed: "无法删除文档。",
   },
   confirm: {
-    deleteStory: "删除 Story“{title}”？其文件目录也会被删除。",
+    deleteStory: "删除 Story“{title}”？关联的 AI 会话将被关闭，其文件目录也会被删除。",
     documentTitle: "文档标题",
     deleteDocument: "删除此 Story 文档？",
   },

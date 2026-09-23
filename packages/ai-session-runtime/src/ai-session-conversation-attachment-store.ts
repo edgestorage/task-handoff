@@ -261,17 +261,19 @@ export class AiSessionConversationAttachmentStore {
     sessionId: string;
     messageId: string;
     attachments?: AiSessionMessageAttachment[];
+    retainedAttachmentIds?: readonly string[];
     runtimePathRoot?: string;
     draftScopeType?: DraftManifest["scopeType"];
     draftScopeId?: string;
     draftAttachmentIds?: readonly string[];
   }): StagedAiSessionMessageAttachments {
     const attachments = input.attachments || [];
+    const retainedAttachmentIds = input.retainedAttachmentIds || [];
     const draftAttachmentIds = input.draftAttachmentIds || [];
-    if (attachments.length + draftAttachmentIds.length > AI_SESSION_MAX_MESSAGE_ATTACHMENTS) {
+    if (attachments.length + retainedAttachmentIds.length + draftAttachmentIds.length > AI_SESSION_MAX_MESSAGE_ATTACHMENTS) {
       throw attachmentError("AI_SESSION_ATTACHMENT_TOO_MANY", `Messages may contain at most ${AI_SESSION_MAX_MESSAGE_ATTACHMENTS} attachments.`, 400);
     }
-    if (!attachments.length && !draftAttachmentIds.length) return { messageId: input.messageId, attachments: [], providerAttachments: [] };
+    if (!attachments.length && !retainedAttachmentIds.length && !draftAttachmentIds.length) return { messageId: input.messageId, attachments: [], providerAttachments: [] };
     const existing = this.messageManifests(input.sessionId, input.messageId);
     if (existing.length) {
       return {
@@ -281,6 +283,13 @@ export class AiSessionConversationAttachmentStore {
       };
     }
     this.gc();
+    const retained = retainedAttachmentIds.map((id) => {
+      const manifest = this.manifests.get(id);
+      if (!manifest || manifest.sessionId !== input.sessionId || !this.blobAvailable(manifest)) {
+        throw attachmentError("AI_SESSION_ATTACHMENT_NOT_FOUND", "AI session attachment content is unavailable.", 404);
+      }
+      return manifest;
+    });
     const drafts = draftAttachmentIds.map((id) => {
       const draft = this.drafts.get(id);
       if (!draft || !input.draftScopeType || !input.draftScopeId
@@ -296,13 +305,32 @@ export class AiSessionConversationAttachmentStore {
         this.assertUploadedFileSize(snapshot.attachment.kind, snapshot.content.length);
       }
     }
-    const totalBytes = snapshots.reduce((sum, entry) => sum + entry.content.length, drafts.reduce((sum, draft) => sum + draft.size, 0));
+    const totalBytes = retained.reduce((sum, manifest) => sum + manifest.size, snapshots.reduce((sum, entry) => sum + entry.content.length, drafts.reduce((sum, draft) => sum + draft.size, 0)));
     if (totalBytes > AI_SESSION_MAX_MESSAGE_ATTACHMENT_BYTES) {
       throw attachmentError("AI_SESSION_ATTACHMENT_MESSAGE_TOO_LARGE", `Attachments must be ${AI_SESSION_MAX_MESSAGE_ATTACHMENT_BYTES} bytes or less in total.`, 400);
     }
     this.assertCapacity(snapshots);
     const created: AttachmentManifest[] = [];
     try {
+      for (const source of retained) {
+        const manifest = ManifestSchema.parse({
+          schemaVersion: 1,
+          id: `att_${crypto.randomUUID().replace(/-/g, "").slice(0, 24)}`,
+          inputId: source.inputId,
+          sessionId: input.sessionId,
+          messageId: input.messageId,
+          kind: source.kind,
+          name: source.name,
+          mime: source.mime,
+          size: source.size,
+          blobHash: source.blobHash,
+          sourceType: source.sourceType,
+          state: "staged",
+          createdAt: new Date(this.now()).toISOString(),
+        });
+        this.saveManifest(manifest);
+        created.push(manifest);
+      }
       for (const draft of drafts) {
         const manifest = ManifestSchema.parse({
           schemaVersion: 1,
@@ -433,7 +461,8 @@ export class AiSessionConversationAttachmentStore {
   content(sessionId: string, messageId: string, attachmentId: string): AiSessionAttachmentContent {
     this.gc();
     const manifest = this.manifests.get(attachmentId);
-    if (!manifest || manifest.sessionId !== sessionId || manifest.messageId !== messageId || manifest.state !== "committed") {
+    if (!manifest || manifest.sessionId !== sessionId || manifest.messageId !== messageId
+      || (manifest.state !== "committed" && manifest.state !== "staged")) {
       throw attachmentError("AI_SESSION_ATTACHMENT_NOT_FOUND", "AI session attachment not found.", 404);
     }
     const attachment = this.publicAttachment(manifest);
@@ -447,7 +476,9 @@ export class AiSessionConversationAttachmentStore {
       attachment,
       path: this.blobPath(manifest.blobHash),
       etag: `"att-${crypto.createHash("sha256").update(`${manifest.id}:${manifest.blobHash}`).digest("hex").slice(0, 32)}"`,
-      cacheUntil: Date.parse(manifest.committedAt!) + this.retentionDays * DAY_MS,
+      cacheUntil: manifest.committedAt
+        ? Date.parse(manifest.committedAt) + this.retentionDays * DAY_MS
+        : this.now(),
     };
   }
 
