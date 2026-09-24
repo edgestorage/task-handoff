@@ -7,10 +7,10 @@ import { MobileCloudRelayControlPlaneProfileSchema } from '../src/control-plane/
 import { mobileProfileStore, restoreActiveCloudAccountSession } from '../src/control-plane/runtime';
 import { cloudMobileErrorMessage } from '../src/control-plane/cloud-error';
 import { useI18n } from '../src/i18n';
-import { isMobileCloudRelayEnabled } from '../src/platform/build-variant';
+import { isMobileFeatureEnabled } from '../src/platform/build-variant';
 
 export default function CloudControlPlanesScreen() {
-  if (!isMobileCloudRelayEnabled) return <Redirect href="/profiles" />;
+  if (!isMobileFeatureEnabled('officialAccount')) return <Redirect href="/profiles" />;
   return <CloudControlPlanesContent />;
 }
 

@@ -85,7 +85,28 @@ type AiSessionActionServiceOptions = {
     onTiming?: (diagnostics: RequestTimingDiagnostics) => void,
   ) => Promise<unknown>;
   requireRuntime: (nodeId: string, runtimeId: string) => Promise<NodeRuntime>;
+  /**
+   * Re-pushes the node-agent model catalog to the instance. The instance keeps
+   * the catalog it resolved models against in its own memory, so a switch can
+   * target a model the assignment already contains while the runtime still holds
+   * an older snapshot.
+   */
+  syncInstanceModels?: (instanceId: string) => Promise<void>;
 };
+
+// The instance reports a stale or missing catalog either with the switch-scoped
+// target code or, on older instances, with the resume/send scoped codes.
+const INSTANCE_MODEL_CATALOG_STALE_CODES = new Set([
+  "AI_SESSION_MODEL_TARGET_UNAVAILABLE",
+  "AI_SESSION_MODEL_CATALOG_UNAVAILABLE",
+  "AI_SESSION_MODEL_ENTITY_UNAVAILABLE",
+  "AI_SESSION_MODEL_NAME_UNAVAILABLE",
+]);
+
+function isInstanceModelCatalogStaleError(error: unknown) {
+  if (!error || typeof error !== "object" || !("code" in error)) return false;
+  return INSTANCE_MODEL_CATALOG_STALE_CODES.has(String((error as { code?: unknown }).code));
+}
 
 function projectAiSessionDetail(session: AiSessionStatus) {
   return AiSessionDetailSchema.parse({
@@ -336,7 +357,7 @@ export class AiSessionActionService {
         ? "Codex provider changes require a new session."
         : `${session.agent} does not support this model change.`), { statusCode: 409, code });
     }
-    return parseResponse(AiSessionModelSelectionActionResponseSchema, await this.options.request(
+    const applySelection = async () => parseResponse(AiSessionModelSelectionActionResponseSchema, await this.options.request(
       instance,
       sessionRoute(aiSessionId, "model-selection"),
       {
@@ -345,6 +366,16 @@ export class AiSessionActionService {
         body: JSON.stringify({ clientRequestId, modelSelection: selection }),
       },
     ));
+    try {
+      return await applySelection();
+    } catch (error) {
+      // A rejected target is retried once after re-pushing the authoritative
+      // catalog. The instance resolves the target before mutating the session, so
+      // a retry cannot double-apply the switch.
+      if (!this.options.syncInstanceModels || !isInstanceModelCatalogStaleError(error)) throw error;
+      await this.options.syncInstanceModels(instanceId).catch(() => undefined);
+      return await applySelection();
+    }
   }
 
   async updateReasoningEffort(instanceId: string, aiSessionId: string, clientRequestId: string, effort: AiSessionReasoningEffort) {

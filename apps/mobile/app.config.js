@@ -1,4 +1,5 @@
 const baseConfig = require('./app.json').expo;
+const { resolveFeatureFlags } = require('../../shared/feature-flags.cjs');
 
 const variants = {
   development: {
@@ -26,6 +27,7 @@ module.exports = () => {
   }
   const taskStatusWidgetsEnabled = process.env.TASK_HANDOFF_WIDGETS_ENABLED !== '0';
   const carPlayEnabled = variantName === 'development' && process.env.TASK_HANDOFF_CARPLAY_ENABLED === '1';
+  const featureFlags = resolveFeatureFlags(process.env);
   const plugins = [
     ...(baseConfig.plugins || []),
     './modules/task-handoff-browser/plugin/withTaskHandoffBrowser',
@@ -76,7 +78,9 @@ module.exports = () => {
       variant: variantName,
       taskStatusWidgetsEnabled,
       carPlayEnabled,
-      cloudRelayEnabled: process.env.TASK_HANDOFF_CLOUD_RELAY_ENABLED === '1',
+      featureFlags,
+      // Compatibility for v0.0.32: keep the old Expo extra available to N-1 JS bundles.
+      cloudRelayEnabled: featureFlags.officialAccount,
       ...(variantName === 'staging' ? { cloudServiceOrigin: new URL(requiredEnv('TASK_HANDOFF_CLOUD_STAGING_ORIGIN')).origin } : {}),
     },
   };

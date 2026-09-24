@@ -64,3 +64,11 @@ test("AI session Markdown file links are routed into File Explorer", async () =>
   assert.match(workspace, /repositoryFileLocation\(href, props\.context\)/);
   assert.match(workspace, /void openFile\(location\)/);
 });
+
+test("Markdown web links leave the Electron renderer instead of navigating the control plane", async () => {
+  const markdown = await readFile(new URL("../src/components/ai-session/AiSessionStreamingMarkdown.vue", import.meta.url), "utf8");
+  assert.match(markdown, /function isWebHref\(href: string\)/);
+  assert.match(markdown, /event\.preventDefault\(\);\s*void openExternalLink\(href\);/);
+  assert.match(markdown, /openDesktopExternalUrl\(href\)/);
+  assert.match(markdown, /window\.open\(href, "_blank", "noopener,noreferrer"\)/);
+});

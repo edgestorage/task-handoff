@@ -1,0 +1,66 @@
+/* Shared chrome for action menus that render instance or app actions.
+   Instance list, workbench layout, and Story resource tab menus all consume this file so the
+   item metrics, colors, and states stay identical; each consumer only declares its own width. */
+.instance-action-menu {
+  display: grid;
+  gap: 2px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface-inset);
+  box-shadow: var(--shadow-popover);
+  padding: 5px;
+}
+
+.instance-action-menu .instance-action-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  min-height: 30px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--control-plane-menu-text);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 0 8px;
+  text-align: left;
+}
+
+.instance-action-menu .instance-action-item span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.instance-action-menu .instance-action-item svg:last-child:not(:first-child) {
+  margin-left: auto;
+  color: var(--text-subtle);
+}
+
+.instance-action-menu .instance-action-item:hover,
+.instance-action-menu .instance-action-item:focus-visible,
+.instance-action-menu .instance-action-item[data-highlighted],
+.instance-action-menu .instance-action-item[data-state="open"] {
+  background: var(--surface-active);
+  color: var(--control-plane-menu-hover-text);
+  outline: none;
+}
+
+.instance-action-menu .instance-action-item.danger {
+  color: var(--status-danger);
+}
+
+.instance-action-menu .instance-action-item.danger:hover,
+.instance-action-menu .instance-action-item.danger:focus-visible,
+.instance-action-menu .instance-action-item.danger[data-highlighted] {
+  background: var(--status-danger-bg);
+  color: var(--status-danger);
+}
+
+.instance-action-menu .instance-action-item[data-disabled] {
+  cursor: default;
+  opacity: 0.52;
+}

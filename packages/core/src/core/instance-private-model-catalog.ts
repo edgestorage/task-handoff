@@ -24,6 +24,42 @@ export const InstancePrivateModelCatalogSchema = z.object({
 
 export type InstancePrivateModelCatalog = z.infer<typeof InstancePrivateModelCatalogSchema>;
 
+const PrivateModelCatalogEntitySummarySchema = z.object({
+  id: z.string().trim().min(1).max(120),
+  protocols: z.array(PrivateModelProtocolSchema).min(1).max(3),
+  modelNames: z.array(z.object({
+    name: z.string().trim().min(1).max(240),
+    order: z.number().int().min(0).max(1_000_000),
+  }).strip()).min(1).max(256),
+}).strip();
+
+export const InstancePrivateModelCatalogSummarySchema = z.object({
+  protocolVersion: z.literal("2026-08-27"),
+  instanceId: z.string().trim().min(1).max(120),
+  updatedAt: z.string().datetime(),
+  entities: z.array(PrivateModelCatalogEntitySummarySchema).max(64),
+}).strip();
+
+export type InstancePrivateModelCatalogSummary = z.infer<typeof InstancePrivateModelCatalogSummarySchema>;
+
+/**
+ * Catalog identity projection for cross-boundary diagnostics. Credential
+ * material never leaves the runtime that owns it; comparing which models an
+ * instance resolved only needs entity identities, protocols and names.
+ */
+export function summarizeInstancePrivateModelCatalog(catalog: InstancePrivateModelCatalog): InstancePrivateModelCatalogSummary {
+  return InstancePrivateModelCatalogSummarySchema.parse({
+    protocolVersion: catalog.protocolVersion,
+    instanceId: catalog.instanceId,
+    updatedAt: catalog.updatedAt,
+    entities: catalog.entities.map((entity) => ({
+      id: entity.id,
+      protocols: entity.protocols,
+      modelNames: entity.modelNames,
+    })),
+  });
+}
+
 export function sanitizeInstancePrivateModelCatalog(input: unknown) {
   if (!input || typeof input !== "object" || Array.isArray(input)) return input;
   const source = input as Record<string, unknown>;

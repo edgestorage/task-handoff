@@ -422,14 +422,15 @@ export class RepositoryWorktreeService {
       const internal = await this.listFromStateInternal(state);
       const target = internal.find((item) => item.id === request.worktreeId);
       if (!target) throw new RepositoryOperationError("REPOSITORY_WORKTREE_NOT_FOUND", "Worktree no longer exists.", state);
+      if (target.isCurrent) throw new RepositoryOperationError("REPOSITORY_WORKTREE_UNSAFE", "The current worktree cannot be removed.", state);
       if (!target.canRemove) throw new RepositoryOperationError("REPOSITORY_WORKTREE_UNSAFE", `Worktree cannot be removed: ${target.removeBlockers.join(", ")}.`, state);
       try {
-        this.registry.beginRemove(target.id, target.canonicalPath);
+        if (target.managed) this.registry.beginRemove(target.id, target.canonicalPath);
         await new GitProcess(state.worktreeRoot!, this.gitOptions).run("worktree", ["remove", target.canonicalPath]);
-        this.registry.completeRemove(target.id);
+        if (target.managed) this.registry.completeRemove(target.id);
         return { removedWorktreeId: target.id, branchRetained: true, worktrees: await this.listFromState(await this.requireAvailable()) };
       } catch (error) {
-        this.registry.cancelRemove(target.id);
+        if (target.managed) this.registry.cancelRemove(target.id);
         if (error instanceof RepositoryOperationError) throw error;
         throw new RepositoryOperationError("REPOSITORY_OPERATION_FAILED", "Git could not remove the worktree.", await this.resolve());
       }
@@ -489,7 +490,6 @@ export class RepositoryWorktreeService {
       if (record.prunable) createAiSessionBlockers.push("prunable");
       const removeBlockers: RepositoryWorktrees["items"][number]["removeBlockers"] = [];
       if (index === 0) removeBlockers.push("main-worktree");
-      if (!managed) removeBlockers.push("external-worktree");
       if (!authorized) removeBlockers.push("outside-workspace-roots");
       if (!accessible) removeBlockers.push("path-inaccessible");
       if (dirty) removeBlockers.push("dirty");

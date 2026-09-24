@@ -10,6 +10,7 @@ import type {
   RepositoryFileContent,
   RepositoryFileMutationResult,
   RepositoryMutationResult,
+  RepositoryPathSearchResult,
   RepositoryCreateWorktreeRequest,
   RepositoryCreateWorktreeResult,
   RepositoryCreateWorktreeAiSessionRequest,
@@ -18,17 +19,72 @@ import type {
   RepositoryRemoveWorktreeResult,
   RepositoryWorktrees,
 } from "@task-handoff/protocol/repository";
-import { RepositoryWorktreesSchema } from "@task-handoff/protocol/repository";
+import { RepositoryPathSearchResultSchema, RepositoryWorktreesSchema } from "@task-handoff/protocol/repository";
 import { safeParseResponse } from "@task-handoff/protocol/response-validation";
 import { useQuery } from "@tanstack/vue-query";
 import { computed, toValue, type MaybeRefOrGetter } from "vue";
-import { deleteUrlData, getUrlData, postUrlData, putUrlData } from "./client";
+import { ApiError, deleteUrlData, getUrlData, postUrlData, putUrlData } from "./client";
 
 export type RepositorySessionTarget = {
   instanceId: string;
   sessionKind: RepositorySessionKind;
   sessionId: string;
 };
+
+export type RepositoryWorkspaceTarget = {
+  instanceId: string;
+  cwdFolderId?: string;
+  legacySession?: RepositorySessionTarget;
+};
+
+function repositoryWorkspaceResource(target: RepositoryWorkspaceTarget, resource: string) {
+  const path = `/api/controlled-instances/${encodeURIComponent(target.instanceId)}/repository/${resource}`;
+  return target.cwdFolderId ? `${path}?${new URLSearchParams({ cwdFolderId: target.cwdFolderId })}` : path;
+}
+
+export async function getRepositoryWorkspaceWorktrees(target: RepositoryWorkspaceTarget, options?: { signal?: AbortSignal }) {
+  let data: unknown;
+  try {
+    data = await getUrlData<unknown>(repositoryWorkspaceResource(target, "worktrees"), options);
+  } catch (error) {
+    // Compatibility for v0.0.21: use its session-scoped route until the controlled instance is upgraded.
+    if (!(error instanceof ApiError) || error.status !== 404 || !target.legacySession) throw error;
+    return getRepositoryWorktrees(target.legacySession, options);
+  }
+  const parsed = safeParseResponse(RepositoryWorktreesSchema, data);
+  if (!parsed.success) throw new Error("The controlled instance returned an incompatible worktree response. Restart the instance to load the current protocol.");
+  return parsed.data satisfies RepositoryWorktrees;
+}
+
+export async function createRepositoryWorkspaceWorktree(target: RepositoryWorkspaceTarget, input: RepositoryCreateWorktreeRequest) {
+  try {
+    return await postUrlData<RepositoryCreateWorktreeResult>(repositoryWorkspaceResource(target, "worktrees"), input);
+  } catch (error) {
+    // Compatibility for v0.0.21: use its session-scoped route until the controlled instance is upgraded.
+    if (!(error instanceof ApiError) || error.status !== 404 || !target.legacySession) throw error;
+    return createRepositoryWorktree(target.legacySession, input);
+  }
+}
+
+export async function removeRepositoryWorkspaceWorktree(target: RepositoryWorkspaceTarget, input: { worktreeId: string; expectedSnapshotId: string; confirm: true }) {
+  try {
+    return await postUrlData<RepositoryRemoveWorktreeResult>(repositoryWorkspaceResource(target, "worktrees/remove"), input);
+  } catch (error) {
+    // Compatibility for v0.0.21: use its session-scoped route until the controlled instance is upgraded.
+    if (!(error instanceof ApiError) || error.status !== 404 || !target.legacySession) throw error;
+    return removeRepositoryWorktree(target.legacySession, input);
+  }
+}
+
+export async function getRepositoryWorkspaceBranches(target: RepositoryWorkspaceTarget, options?: { signal?: AbortSignal }) {
+  try {
+    return await getUrlData<RepositoryBranches>(repositoryWorkspaceResource(target, "branches"), options);
+  } catch (error) {
+    // Compatibility for v0.0.21: use its session-scoped route until the controlled instance is upgraded.
+    if (!(error instanceof ApiError) || error.status !== 404 || !target.legacySession) throw error;
+    return getRepositoryBranches(target.legacySession, options);
+  }
+}
 
 export function repositoryTargetBasePath(target: RepositorySessionTarget) {
   const sessionCollection = target.sessionKind === "ai-session" ? "ai-sessions" : "apps/sessions";
@@ -104,6 +160,13 @@ export function getRepositoryDirectory(target: RepositorySessionTarget, path = "
 
 export function getRepositoryFile(target: RepositorySessionTarget, path: string, options?: { signal?: AbortSignal }) {
   return getUrlData<RepositoryFileContent>(repositoryUrlWithQuery(target, "files", { path }), options);
+}
+
+export async function searchRepositoryPaths(target: RepositorySessionTarget, query: string, limit = 100, options?: { signal?: AbortSignal }) {
+  const data = await getUrlData<unknown>(repositoryUrlWithQuery(target, "files/search", { query, limit }), options);
+  const parsed = safeParseResponse(RepositoryPathSearchResultSchema, data);
+  if (!parsed.success) throw new Error("The controlled instance returned an incompatible repository path search response.");
+  return parsed.data satisfies RepositoryPathSearchResult;
 }
 
 export function createRepositoryFile(
@@ -363,6 +426,34 @@ export function useRepositoryBranchesQuery(
       && resolvedTarget.value.instanceId
       && resolvedTarget.value.sessionId
     )),
+    retry: false,
+    refetchOnWindowFocus: true,
+  });
+}
+
+export function useRepositoryWorkspaceWorktreesQuery(
+  target: MaybeRefOrGetter<RepositoryWorkspaceTarget>,
+  enabled: MaybeRefOrGetter<boolean>,
+) {
+  const resolvedTarget = computed(() => toValue(target));
+  return useQuery({
+    queryKey: computed(() => ["repository-workspace-worktrees", resolvedTarget.value.instanceId, resolvedTarget.value.cwdFolderId || null]),
+    queryFn: ({ signal }) => getRepositoryWorkspaceWorktrees(resolvedTarget.value, { signal }),
+    enabled: computed(() => Boolean(toValue(enabled) && resolvedTarget.value.instanceId)),
+    retry: false,
+    refetchOnWindowFocus: true,
+  });
+}
+
+export function useRepositoryWorkspaceBranchesQuery(
+  target: MaybeRefOrGetter<RepositoryWorkspaceTarget>,
+  enabled: MaybeRefOrGetter<boolean>,
+) {
+  const resolvedTarget = computed(() => toValue(target));
+  return useQuery({
+    queryKey: computed(() => ["repository-workspace-branches", resolvedTarget.value.instanceId, resolvedTarget.value.cwdFolderId || null]),
+    queryFn: ({ signal }) => getRepositoryWorkspaceBranches(resolvedTarget.value, { signal }),
+    enabled: computed(() => Boolean(toValue(enabled) && resolvedTarget.value.instanceId)),
     retry: false,
     refetchOnWindowFocus: true,
   });

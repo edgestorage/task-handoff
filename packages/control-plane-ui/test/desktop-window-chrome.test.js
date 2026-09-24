@@ -60,3 +60,8 @@ test("the main titlebar accepts context menus while preserving desktop window dr
   assert.match(workbench, /<ContextMenu>[\s\S]*?<ContextMenuTrigger as-child :disabled="standaloneMode">[\s\S]*?<header\s+class="control-plane-topbar"/);
   assert.doesNotMatch(workbench, /startTopbarPointer|moveTopbarPointer|finishTopbarPointer|cancelTopbarPointer|windowDrag/);
 });
+
+test("topbar actions do not bubble double-clicks into window maximize", () => {
+  assert.match(workbench, /<div v-if="!standaloneMode" class="control-plane-actions" @dblclick\.stop>/);
+  assert.match(workbench, /<header class="control-plane-topbar" @dblclick="controlWindow\('toggle-maximize'\)">/);
+});

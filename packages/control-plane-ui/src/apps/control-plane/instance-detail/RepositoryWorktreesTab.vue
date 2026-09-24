@@ -2,9 +2,9 @@
   <div class="repository-worktrees-tab-surface">
     <RepositoryWorktreesPanel
       :ai-agent="aiAgent"
-      appearance="page"
       :instance-id="instanceId"
       :open="true"
+      :cwd-folder-id="cwdFolderId"
       :session-id="sessionId"
       :session-kind="sessionKind"
     />
@@ -12,14 +12,17 @@
 </template>
 
 <script setup lang="ts">
-import type { RepositorySessionKind } from "@task-handoff/protocol/repository";
 import { computed } from "vue";
+import type { RepositorySessionKind } from "@task-handoff/protocol/repository";
 import type { SessionTab } from "../useInstanceSessions";
 import RepositoryWorktreesPanel from "./RepositoryWorktreesPanel.vue";
 
 const props = defineProps<{ instanceId: string; session: SessionTab }>();
-const sessionId = computed(() => typeof props.session.source?.sessionId === "string" ? props.session.source.sessionId : "");
-const sessionKind = computed<RepositorySessionKind>(() => props.session.source?.sessionKind === "ai-session" ? "ai-session" : "app-session");
+const cwdFolderId = computed(() => typeof props.session.source?.cwdFolderId === "string" ? props.session.source.cwdFolderId : undefined);
+const sessionId = computed(() => typeof props.session.source?.sessionId === "string" ? props.session.source.sessionId : undefined);
+const sessionKind = computed<RepositorySessionKind | undefined>(() => props.session.source?.sessionKind === "ai-session" || props.session.source?.sessionKind === "app-session"
+  ? props.session.source.sessionKind
+  : undefined);
 const aiAgent = computed<"codex" | "claude" | "opencode" | undefined>(() => {
   const agent = props.session.source?.aiAgent;
   return agent === "codex" || agent === "claude" || agent === "opencode" ? agent : undefined;
