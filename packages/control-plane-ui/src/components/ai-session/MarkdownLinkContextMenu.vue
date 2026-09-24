@@ -1,7 +1,7 @@
 <template>
   <ContextMenu v-model:open="open">
     <div class="markdown-link-menu-host" @contextmenu.capture="captureContextMenu">
-      <ContextMenuTrigger as-child>
+      <ContextMenuTrigger as-child :disabled="!target">
         <div class="markdown-link-menu-content"><slot /></div>
       </ContextMenuTrigger>
     </div>
@@ -50,15 +50,17 @@ const props = defineProps<{
 }>();
 
 function captureContextMenu(event: MouseEvent) {
+  target.value = undefined;
   const anchor = event.target instanceof Element ? event.target.closest("a[href]") : undefined;
   const href = anchor?.getAttribute("href")?.trim();
   if (!href) {
-    event.stopPropagation();
-    open.value = false;
     return;
   }
   target.value = classifyMarkdownLink(href, props.repositoryContext);
-  if (target.value.kind === "unsupported") { event.stopPropagation(); open.value = false; return; }
+  if (target.value.kind === "unsupported") return;
+  // Supported links own the context menu; ordinary text must bubble to the
+  // surrounding response menu (for example, copy/add-to-conversation).
+  event.stopPropagation();
   event.preventDefault();
 }
 

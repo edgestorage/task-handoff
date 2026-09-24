@@ -179,7 +179,7 @@
         <span v-if="standaloneMode && sessionPreviewExpanded && !hasSessionSplit" class="instance-detail-titlebar-divider" aria-hidden="true" />
         <div v-if="standaloneMode" id="instance-detail-titlebar-tabs" class="instance-detail-titlebar-tabs" />
       </div>
-      <div v-if="!standaloneMode" class="control-plane-actions">
+      <div v-if="!standaloneMode" class="control-plane-actions" @dblclick.stop>
         <TooltipProvider v-if="serverUpdateAvailable" :delay-duration="120">
           <Tooltip>
             <TooltipTrigger as-child>
@@ -377,7 +377,7 @@
         v-if="!standaloneMode && storyMode && !settingsMode"
         ref="storyResourceLayoutElement"
         class="story-resource-layout"
-        :class="{ 'sidebar-visible': storyResourceSidebar.visible.value, 'overlay-mode': storyResourceOverlay, resizing: storyResourceResizing, 'context-changing': storyResourceContextChanging }"
+        :class="{ 'sidebar-visible': storyResourceSidebar.visible.value, 'overlay-mode': storyResourceOverlay, 'layout-animating': storyResourceLayoutAnimating, resizing: storyResourceResizing, 'context-changing': storyResourceContextChanging }"
         :style="{ '--story-resource-width': `${storyResourceSidebar.width.value}px` }"
         @keydown.esc="closeStoryResourceOverlay"
       >
@@ -427,6 +427,7 @@
             :launching="storyResourceLaunching"
             :closing-key="storyResourceClosingKey"
             :node-local-folders-by-node-id="nodeLocalFoldersByNodeId"
+            :rename-resource="renameStoryResource"
             @select="storyResourceSidebar.activeKey.value = $event"
             @close="closeStoryResource"
             @reorder="storyResourceSidebar.reorder"
@@ -732,6 +733,7 @@ const BOARD_INTERACTIVE_STORAGE_KEY = "task-handoff.control-plane.board-interact
 const MAIN_SESSION_PREVIEW_EXPANDED_STORAGE_KEY = "task-handoff.control-plane.session-preview-expanded";
 const STANDALONE_SESSION_PREVIEW_EXPANDED_STORAGE_KEY = "task-handoff.control-plane.instance-window.session-preview-expanded";
 const ALL_BOARD_FILTER_VALUE = "__all__";
+const STORY_RESOURCE_LAYOUT_ANIMATION_MS = 200;
 const BOARD_SIZE_VALUES = new Set<BoardSize>(["small", "medium", "large"]);
 
 function storedBoardSize(): BoardSize {
@@ -1006,6 +1008,8 @@ const storyResourceLayoutElement = ref<HTMLElement>();
 const storyResourceLayoutWidth = ref(0);
 const storyResourceResizing = ref(false);
 const storyResourceContextChanging = ref(false);
+const storyResourceLayoutAnimating = ref(false);
+let storyResourceLayoutAnimationTimer: number | undefined;
 const storyResourceContextKey = computed(() => `${storyResourceTargetInstanceId.value}:${storyResourceTargetAiSessionId.value}`);
 const storyResourceOverlay = computed(() => storyResourceSidebarMode(storyResourceLayoutWidth.value) === "overlay");
 const storyResourceMaxWidth = computed(() => storyResourceSidebarMaxWidth(storyResourceLayoutWidth.value));
@@ -1025,6 +1029,15 @@ function observeStoryResourceLayout() {
       : Math.min(storyResourceSidebar.width.value, storyResourceMaxWidth.value);
   });
   storyResourceResizeObserver.observe(element);
+}
+
+function playStoryResourceLayoutAnimation() {
+  if (storyResourceLayoutAnimationTimer !== undefined) window.clearTimeout(storyResourceLayoutAnimationTimer);
+  storyResourceLayoutAnimating.value = true;
+  storyResourceLayoutAnimationTimer = window.setTimeout(() => {
+    storyResourceLayoutAnimationTimer = undefined;
+    storyResourceLayoutAnimating.value = false;
+  }, STORY_RESOURCE_LAYOUT_ANIMATION_MS);
 }
 
 watch([storyMode, settingsMode], async ([isStory, isSettings]) => {
@@ -1047,6 +1060,11 @@ watch([() => storyResourceSidebar.visible.value, storyResourceOverlay], async ([
   if (!visible || !overlay) return;
   await nextTick();
   (document.querySelector(".story-resource-panel") as HTMLElement | null)?.focus();
+});
+
+watch([() => storyResourceSidebar.visible.value, storyResourceContextKey], ([visible, contextKey], [previousVisible, previousContextKey]) => {
+  if (visible === previousVisible || contextKey !== previousContextKey || storyResourceContextChanging.value) return;
+  playStoryResourceLayoutAnimation();
 });
 
 function startStoryResourceResize(event: PointerEvent) {
@@ -1605,6 +1623,8 @@ onBeforeUnmount(() => {
   storyResourceResizeObserver?.disconnect();
   storyResourceResizeObserver = undefined;
   stopStoryResourceResize();
+  window.clearTimeout(storyResourceLayoutAnimationTimer);
+  storyResourceLayoutAnimationTimer = undefined;
 });
 
 onMounted(async () => {
@@ -1819,6 +1839,10 @@ async function renameSession(instance: InstanceBoardItem, session: SessionTab, t
   await renameAppSession(instance.id, sessionId, title);
 }
 
+async function renameStoryResource(instanceId: string, sessionId: string, title: string) {
+  await renameAppSession(instanceId, sessionId, title);
+}
+
 async function controlWindow(action: "minimize" | "toggle-maximize" | "close") {
   await desktopBridge?.windowAction?.(action);
 }
@@ -1946,7 +1970,6 @@ async function launchStoryResourceApp(instance: InstanceBoardItem, appId: string
       ...(cwdFolderId ? { cwdFolderId } : {}),
       ...(options ? { options } : {}),
     });
-    await controlPlaneAppSessions.refetch();
     if (storyResourceTargetAiSessionId.value === aiSessionId && storyResourceTargetInstanceId.value === instance.id) {
       storyResourceSidebar.focusApp(instance.id, session.id);
     }
@@ -1968,6 +1991,7 @@ function openStoryRepositoryWorkspace(target: RepositoryWorkspaceTabTarget & { i
     target.sessionId,
     target.page === "changes-review" || target.page === "worktrees" ? target.page : "files",
     target.filePath,
+    target.cwdFolderId,
   );
 }
 
@@ -1977,10 +2001,11 @@ function openStoryRepositoryResource(
   sessionId: string,
   page: StoryRepositoryPage,
   filePath?: string,
+  cwdFolderId?: string,
 ) {
   const aiSessionId = storyResourceTargetAiSessionId.value;
   if (!aiSessionId || storyResourceTargetInstanceId.value !== instanceId || !boardInstancesWithAiSessions.value.some((instance) => instance.id === instanceId)) return;
-  storyResourceSidebar.openRepository(repositoryResource(aiSessionId, instanceId, sessionKind, sessionId, page, filePath));
+  storyResourceSidebar.openRepository(repositoryResource(aiSessionId, instanceId, sessionKind, sessionId, page, filePath, cwdFolderId));
 }
 
 async function closeStoryResource(key: string) {
@@ -1991,7 +2016,6 @@ async function closeStoryResource(key: string) {
     await closeStoryResourceTarget(resource, {
       stopAppSession: async (instanceId, sessionId) => {
         await stopAppSession(instanceId, sessionId);
-        await controlPlaneAppSessions.refetch();
       },
       closeRepository: storyResourceSidebar.removeRepository,
       closeEmbeddedBrowser: storyResourceSidebar.removeBrowser,

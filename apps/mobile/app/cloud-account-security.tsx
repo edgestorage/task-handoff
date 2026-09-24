@@ -8,10 +8,10 @@ import { useMobileTheme } from '../src/components/theme';
 import { cloudMobileErrorMessage } from '../src/control-plane/cloud-error';
 import { hasActiveCloudAccount, logoutActiveCloudAccount, restoreActiveCloudAccountSession } from '../src/control-plane/runtime';
 import { useI18n } from '../src/i18n';
-import { isMobileCloudRelayEnabled } from '../src/platform/build-variant';
+import { isMobileFeatureEnabled } from '../src/platform/build-variant';
 
 export default function CloudAccountSecurityScreen() {
-  if (!isMobileCloudRelayEnabled) return <Redirect href="/profiles" />;
+  if (!isMobileFeatureEnabled('officialAccount')) return <Redirect href="/profiles" />;
   return <CloudAccountSecurityContent />;
 }
 

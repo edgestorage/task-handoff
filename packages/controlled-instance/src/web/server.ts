@@ -13,6 +13,7 @@ import type { FastifyServerOptions } from "fastify";
 import { proxyFetch } from "httpxy";
 import { z } from "zod";
 import { appendJsonl, processSnapshot } from "@task-handoff/core/core/diagnostics";
+import { summarizeInstancePrivateModelCatalog } from "@task-handoff/core/core/instance-private-model-catalog";
 import { acquireLocalControlledInstanceLock } from "@task-handoff/core/core/local-controlled-instance-lock";
 import { processStartIdentity } from "@task-handoff/core/core/process-singleton-lock";
 import { TriggerExecutor } from "../triggers/executor";
@@ -63,7 +64,7 @@ import { configSyncPresets, configSyncPrograms, listConfigSyncFolders, runConfig
 import { ConfigSyncRequestSchema } from "@task-handoff/protocol/config-sync";
 import { aiSessionRetentionCandidates, aiSessionRootNode, deriveAiSessionForest } from "@task-handoff/protocol/ai-session-hierarchy";
 import { applyManagedCodexModelConfig, codexProviderId } from "./codex-model-config";
-import { ControlledPrivateModelCatalogSchema, readControlledPrivateCodexSettings, readControlledPrivateModelCatalog, resolveControlledPrivateModelSelection } from "./private-model-catalog";
+import { ControlledPrivateModelCatalogSchema, readControlledPrivateCodexSettings, readControlledPrivateModelCatalog, readControlledPrivateModelCatalogSource, resolveControlledPrivateModelSelection, type ControlledPrivateModelCatalogSource } from "./private-model-catalog";
 import { applyManagedClaudeModelConfig } from "./claude-model-config";
 import { GitCredentialBroker, installGitBrokerEnvironment } from "./git-credential-broker";
 import {
@@ -639,7 +640,10 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   const gitCredentialBrokerInstalled = installGitBrokerEnvironment(process.env.TASK_HANDOFF_CLI_PATH, gitCredentialBroker.socketPath);
   const managedModelEnv = { ...process.env };
   logControlledInstanceStart(storagePaths.logDir, storagePaths.dataDir);
-  let privateModelCatalog = readControlledPrivateModelCatalog(managedModelEnv);
+  const loadedPrivateModelCatalog = readControlledPrivateModelCatalogSource(managedModelEnv);
+  let privateModelCatalog = loadedPrivateModelCatalog.catalog;
+  let privateModelCatalogSource: ControlledPrivateModelCatalogSource | "live-sync" = loadedPrivateModelCatalog.source;
+  let privateModelCatalogLoadedAt: string | undefined = loadedPrivateModelCatalog.catalog ? startedAt : undefined;
   let codexManagedSettings = readControlledPrivateCodexSettings(managedModelEnv);
   let codexManagedConfig = applyManagedCodexModelConfig(managedModelEnv, privateModelCatalog, codexManagedSettings);
   Object.assign(managedModelEnv, codexManagedConfig.providerEnvironment || {});
@@ -1047,7 +1051,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     ensureProvider: async (agent) => {
       await aiSessionProviders.ensureReady(agent);
     },
-    resolveModelSelection: (agent, requested) => resolveControlledPrivateModelSelection(privateModelCatalog, agent, requested),
+    resolveModelSelection: (agent, requested) => resolveControlledPrivateModelSelection(privateModelCatalog, agent, requested, { intent: "target" }),
     resolveStoryAgentTools: async (storyId) => (
       storyId && nodeAgentClient.enabled()
         ? (await nodeAgentClient.resolveStoryAgentToolsForStory(storyId)).enabledTools
@@ -2018,7 +2022,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
           || (body.modelSelection.modelEntityId !== item.modelSelection?.modelEntityId && !capability.selectProviderAtResume)) {
           throw Object.assign(new Error("Model selection is unavailable while resuming this session."), { code: "AI_SESSION_MODEL_SELECTION_UNSUPPORTED", statusCode: 409 });
         }
-        selection = resolveControlledPrivateModelSelection(privateModelCatalog, item.agent, body.modelSelection);
+        selection = resolveControlledPrivateModelSelection(privateModelCatalog, item.agent, body.modelSelection, { intent: "target" });
         if (!selection) throw Object.assign(new Error("Model selection is unavailable."), { code: "AI_SESSION_MODEL_SELECTION_UNAVAILABLE", statusCode: 409 });
       }
       const result = AiSessionResumeResultSchema.parse(await aiSessionResume.resume(request.params.id, selection));
@@ -2099,7 +2103,11 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       const body = AiSessionModelSelectionInputSchema.parse(request.body || {});
       const session = aiSessions.get(request.params.id);
       if (!session) throw Object.assign(new Error("AI Session was not found."), { code: "AI_SESSION_NOT_FOUND", statusCode: 404 });
-      const selection = resolveControlledPrivateModelSelection(privateModelCatalog, session.agent, body.modelSelection);
+      // Switching targets a fresh caller choice, so a missing target must not be
+      // reported with resume/send semantics ("the model previously selected for
+      // this session"). The control plane reacts to the target code by re-pushing
+      // the instance catalog and retrying once.
+      const selection = resolveControlledPrivateModelSelection(privateModelCatalog, session.agent, body.modelSelection, { intent: "target" });
       if (!selection) throw Object.assign(new Error("Model selection is unavailable."), { code: "AI_SESSION_MODEL_SELECTION_UNAVAILABLE", statusCode: 409 });
       await aiSessionController.updateModelSelection(session.id, selection);
       publishAiSessionSnapshot("control-action");
@@ -2614,6 +2622,8 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     message: "Instance registration token is required.",
   }), async (request) => {
     privateModelCatalog = ControlledPrivateModelCatalogSchema.parse(request.body);
+    privateModelCatalogSource = "live-sync";
+    privateModelCatalogLoadedAt = new Date().toISOString();
     for (const key of Object.keys(managedModelEnv)) {
       if (key.startsWith("TASK_HANDOFF_CODEX_PROVIDER_")) delete managedModelEnv[key];
     }
@@ -2622,6 +2632,20 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     replaceManagedAppEnvironment();
     return { data: { applied: true, configUpdated: codexManagedConfig.applied } };
   });
+
+  // Diagnostic read of the catalog this runtime actually holds in memory. Keys
+  // are never projected: comparing identities is enough to detect divergence
+  // between the node-agent assignment and the running instance.
+  app.get("/api/internal/model-catalog", nodeAgentApiRoute({
+    code: "MANAGED_MODEL_CATALOG_FORBIDDEN",
+    message: "Instance registration token is required.",
+  }), async () => ({
+    data: {
+      source: privateModelCatalogSource,
+      loadedAt: privateModelCatalogLoadedAt || null,
+      catalog: privateModelCatalog ? summarizeInstancePrivateModelCatalog(privateModelCatalog) : null,
+    },
+  }));
 
   app.put<{ Body: unknown }>("/api/internal/codex-settings", nodeAgentApiRoute({
     code: "CODEX_SETTINGS_FORBIDDEN",

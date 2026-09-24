@@ -94,7 +94,7 @@ test("template origin survives generic stored instance sanitization", () => {
   assert.ok(warnings.includes("future"));
   assert.ok(warnings.includes("runtime"));
   assert.ok(warnings.includes("environmentSource"));
-  assert.equal(CONTROL_PLANE_PROTOCOL_VERSION, "2026-09-17");
+  assert.equal(CONTROL_PLANE_PROTOCOL_VERSION, "2026-09-24");
 });
 
 test("instance deletion protocol requires one total volume choice and reports each resource", () => {

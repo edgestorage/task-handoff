@@ -75,4 +75,13 @@ export function registerNodeModelRoutes(
     const { modelEntityIds: _modelEntityIds, ...assignment } = result.assignment;
     return { data: { ...result, assignment } };
   });
+
+  // On-demand convergence trigger. The control plane calls this when an
+  // instance rejected a model the node-agent assignment already contains, so a
+  // stale in-memory catalog heals without restarting the instance.
+  app.post("/api/node-agent/instances/:id/sync-models", async (request) => {
+    const id = (request.params as { id: string }).id;
+    const synced = await syncEnvironment(id);
+    return { data: { synced: synced === true } };
+  });
 }

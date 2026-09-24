@@ -7,30 +7,68 @@
       :key="item.key"
       class="story-resource-tab-shell session-tab-sortable-shell"
     >
-      <ResourceTabItem
-        :label="item.label"
-        :active="item.key === activeKey"
-        :drag-placeholder="draggingKey === item.key"
-        :disabled="item.closing"
-        :closing="item.closing"
-        :close-label="item.closeLabel"
-        :close-title="item.closeLabel"
-        :data-resource-tab-key="item.key"
-        :tabindex="item.key === activeKey ? 0 : -1"
-        :title="item.description"
-        @select="handleSelect($event, item.key)"
-        @close="$emit('close', item.key)"
-        @pointerdown="startPointer($event, item)"
-      >
-        <template #icon>
-          <Terminal v-if="item.kind === 'terminal'" :size="14" class="session-tab-icon" />
-          <Globe2 v-else-if="item.kind === 'embedded-browser'" :size="14" class="session-tab-icon" />
-          <AppWindow v-else-if="item.kind === 'app'" :size="14" class="session-tab-icon" />
-          <FolderTree v-else-if="item.kind === 'files'" :size="14" class="session-tab-icon" />
-          <FileDiff v-else-if="item.kind === 'changes-review'" :size="14" class="session-tab-icon" />
-          <GitBranch v-else :size="14" class="session-tab-icon" />
-        </template>
-      </ResourceTabItem>
+      <ContextMenu>
+        <ContextMenuTrigger as-child>
+          <ResourceTabItem
+            :label="item.label"
+            :active="item.key === activeKey"
+            :drag-placeholder="draggingKey === item.key"
+            :closing="item.closing"
+            :close-label="item.closeLabel"
+            :close-title="item.closeLabel"
+            :data-resource-tab-key="item.key"
+            :tabindex="item.key === activeKey ? 0 : -1"
+            @select="handleSelect($event, item.key)"
+            @close="$emit('close', item.key)"
+            @pointerdown="startPointer($event, item)"
+            @mouseenter="showTabDetail($event, item)"
+            @pointermove="showTabDetail($event, item)"
+            @mouseleave="scheduleTabDetailClose"
+            @focusin="showTabDetail($event, item)"
+            @focusout="scheduleTabDetailClose"
+          >
+            <template #icon>
+              <Terminal v-if="item.kind === 'terminal'" :size="14" class="session-tab-icon" />
+              <Globe2 v-else-if="item.kind === 'embedded-browser'" :size="14" class="session-tab-icon" />
+              <AppWindow v-else-if="item.kind === 'app'" :size="14" class="session-tab-icon" />
+              <FolderTree v-else-if="item.kind === 'files'" :size="14" class="session-tab-icon" />
+              <FileDiff v-else-if="item.kind === 'changes-review'" :size="14" class="session-tab-icon" />
+              <GitBranch v-else :size="14" class="session-tab-icon" />
+            </template>
+            <input
+              v-if="editingKey === item.key"
+              :ref="setRenameInput"
+              v-model="titleDraft"
+              class="session-tab-title-input"
+              :aria-invalid="Boolean(renameError)"
+              :disabled="renaming"
+              :title="renameError"
+              maxlength="120"
+              @click.stop
+              @blur="commitRename(item)"
+              @keydown.enter.stop.prevent="commitRename(item)"
+              @keydown.escape.stop.prevent="cancelRename"
+            />
+          </ResourceTabItem>
+        </ContextMenuTrigger>
+        <ContextMenuContent class="instance-action-menu story-resource-tab-menu" @close-auto-focus="holdRenameFocus">
+          <ContextMenuItem
+            v-if="item.rename"
+            class="instance-action-item"
+            :disabled="item.rename === 'unavailable' || item.closing"
+            :title="item.rename === 'unavailable' ? t('sessions.tabs.renameUnavailable') : undefined"
+            @select="beginRename(item)"
+          >
+            <Pencil :size="14" />
+            <span>{{ t("sessions.tabs.rename") }}</span>
+          </ContextMenuItem>
+          <ContextMenuSeparator v-if="item.rename" />
+          <ContextMenuItem class="instance-action-item" :disabled="item.closing" @select="$emit('close', item.key)">
+            <X :size="14" />
+            <span>{{ item.closeLabel }}</span>
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
     </span>
   </TransitionGroup>
   </ResourceTabViewport>
@@ -40,14 +78,24 @@
       <component :is="dragIcon" :size="14" class="session-tab-icon" />
       <strong>{{ pointerDrag.item.label }}</strong>
     </div>
+    <Transition name="session-tab-detail">
+      <div v-if="tabDetailVisible && tabDetailItem" class="session-tab-detail-tooltip" :style="tabDetailStyle" role="tooltip" @mouseenter="cancelTabDetailClose" @mouseleave="scheduleTabDetailClose">
+        <strong class="session-tab-detail-title">{{ tabDetailItem.label }}</strong>
+        <span class="session-tab-detail-subtitle">{{ tabDetailItem.description }}</span>
+      </div>
+    </Transition>
   </Teleport>
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, ref, type ComponentPublicInstance } from "vue";
 import { useI18n } from "vue-i18n";
-import { AppWindow, FileDiff, FolderTree, GitBranch, Globe2, Terminal } from "@lucide/vue";
+import { AppWindow, FileDiff, FolderTree, GitBranch, Globe2, Pencil, Terminal, X } from "@lucide/vue";
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from "../../../components/ui/context-menu";
+import { translateApiError } from "../../../i18n/apiError";
+import { showControlPlaneToast } from "../useControlPlaneToasts";
 import ResourceTabItem from "../shared/ResourceTabItem.vue";
+import { focusResourceTabTitleInput } from "../shared/resourceTabRename.ts";
 import ResourceTabStrip from "../shared/ResourceTabStrip.vue";
 import ResourceTabViewport from "../shared/ResourceTabViewport.vue";
 import { reorderStoryResourceKeys, storyResourceDropTargetAt, type StoryResourceDropPlacement, type StoryResourceDropTarget } from "./storyResourceOrder.ts";
@@ -61,9 +109,14 @@ export type StoryResourceTabItem = {
   kind: "terminal" | "app" | "embedded-browser" | "files" | "changes-review" | "worktrees";
   status?: string;
   closing?: boolean;
+  rename?: "enabled" | "unavailable";
 };
 
-const props = defineProps<{ items: StoryResourceTabItem[]; activeKey: string }>();
+const props = defineProps<{
+  items: StoryResourceTabItem[];
+  activeKey: string;
+  renameResource?: (key: string, title: string) => Promise<void>;
+}>();
 const emit = defineEmits<{ select: [key: string]; close: [key: string]; reorder: [sourceKey: string, targetKey: string, placement: StoryResourceDropPlacement] }>();
 const { t } = useI18n();
 const viewport = ref<InstanceType<typeof ResourceTabViewport>>();
@@ -71,8 +124,104 @@ const draggingKey = ref("");
 const dropTarget = ref<StoryResourceDropTarget>();
 const suppressClickUntil = ref(0);
 const pointerDrag = ref<{ item: StoryResourceTabItem; x: number; y: number; width: number; height: number }>();
+const tabDetailItem = ref<StoryResourceTabItem>();
+const tabDetailVisible = ref(false);
+const tabDetailPosition = ref({ left: 12, top: 12 });
+const tabDetailStyle = computed(() => ({ left: `${tabDetailPosition.value.left}px`, top: `${tabDetailPosition.value.top}px` }));
+const editingKey = ref("");
+const titleDraft = ref("");
+const renameError = ref("");
+const renaming = ref(false);
+const renameInput = ref<HTMLInputElement>();
+const TAB_DETAIL_DELAY_MS = 1_000;
+const TAB_DETAIL_SKIP_DELAY_MS = 800;
+const TAB_DETAIL_CLOSE_DELAY_MS = 120;
+let tabDetailOpenTimer: ReturnType<typeof setTimeout> | undefined;
+let tabDetailCloseTimer: ReturnType<typeof setTimeout> | undefined;
+let tabDetailClosedAt = 0;
 let pending: { pointerId: number; item: StoryResourceTabItem; tab: HTMLElement; startX: number; startY: number; offsetX: number; offsetY: number; width: number; height: number } | undefined;
 let moved = false;
+
+function cancelTabDetailClose() {
+  if (tabDetailCloseTimer) clearTimeout(tabDetailCloseTimer);
+  tabDetailCloseTimer = undefined;
+}
+function closeTabDetail() {
+  if (tabDetailOpenTimer) clearTimeout(tabDetailOpenTimer);
+  cancelTabDetailClose();
+  tabDetailOpenTimer = undefined;
+  if (tabDetailVisible.value) tabDetailClosedAt = Date.now();
+  tabDetailVisible.value = false;
+}
+function scheduleTabDetailClose() {
+  if (tabDetailOpenTimer) clearTimeout(tabDetailOpenTimer);
+  tabDetailOpenTimer = undefined;
+  cancelTabDetailClose();
+  tabDetailCloseTimer = setTimeout(closeTabDetail, TAB_DETAIL_CLOSE_DELAY_MS);
+}
+function showTabDetail(event: Event, item: StoryResourceTabItem) {
+  if (!(event.currentTarget instanceof HTMLElement)) return;
+  cancelTabDetailClose();
+  if (tabDetailOpenTimer) clearTimeout(tabDetailOpenTimer);
+  const bounds = event.currentTarget.getBoundingClientRect();
+  const cardWidth = Math.min(280, window.innerWidth - 24);
+  tabDetailPosition.value = { left: Math.max(12, Math.min(bounds.left, window.innerWidth - cardWidth - 12)), top: bounds.bottom + 4 };
+  tabDetailItem.value = item;
+  if (tabDetailVisible.value || Date.now() - tabDetailClosedAt <= TAB_DETAIL_SKIP_DELAY_MS) {
+    tabDetailVisible.value = true;
+    return;
+  }
+  tabDetailOpenTimer = setTimeout(() => { tabDetailVisible.value = true; tabDetailOpenTimer = undefined; }, TAB_DETAIL_DELAY_MS);
+}
+
+function setRenameInput(element: Element | ComponentPublicInstance | null) {
+  renameInput.value = element instanceof HTMLInputElement ? element : undefined;
+}
+
+async function beginRename(item: StoryResourceTabItem) {
+  if (item.rename !== "enabled" || !props.renameResource || item.closing) return;
+  editingKey.value = item.key;
+  titleDraft.value = item.label;
+  renameError.value = "";
+  await focusResourceTabTitleInput(renameInput);
+}
+
+function holdRenameFocus(event: Event) {
+  if (editingKey.value) event.preventDefault();
+}
+
+function cancelRename() {
+  editingKey.value = "";
+  titleDraft.value = "";
+  renameError.value = "";
+  renaming.value = false;
+}
+
+async function commitRename(item: StoryResourceTabItem) {
+  if (editingKey.value !== item.key || renaming.value) return;
+  const title = titleDraft.value.trim();
+  if (!title) {
+    renameError.value = t("sessions.tabs.titleRequired");
+    await nextTick();
+    renameInput.value?.focus();
+    return;
+  }
+  if (title === item.label) {
+    cancelRename();
+    return;
+  }
+  renaming.value = true;
+  renameError.value = "";
+  try {
+    await props.renameResource?.(item.key, title);
+    cancelRename();
+  } catch (error) {
+    renaming.value = false;
+    showControlPlaneToast(translateApiError(error, t, t("sessions.tabs.renameFailed")));
+    await nextTick();
+    renameInput.value?.focus();
+  }
+}
 
 function startPointer(event: PointerEvent, item: StoryResourceTabItem) {
   if (event.button !== 0 || item.closing) return;
@@ -159,5 +308,13 @@ const dragIcon = computed(() => {
   if (kind === "changes-review") return FileDiff;
   return GitBranch;
 });
-onBeforeUnmount(cancelPointer);
+onBeforeUnmount(() => { cancelPointer(); closeTabDetail(); cancelRename(); });
 </script>
+
+<style scoped>
+:global(.instance-action-menu.story-resource-tab-menu) {
+  width: 172px;
+}
+</style>
+
+<style src="../shared/InstanceActionMenu.css"></style>

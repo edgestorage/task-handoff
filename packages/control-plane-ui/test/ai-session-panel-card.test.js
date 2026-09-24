@@ -487,7 +487,7 @@ test("new-session Git inspection uses cached workspace data without blocking the
   assert.match(panel, /controlPlaneQueryKeys\.aiSessionWorkspace\(instanceId, cwdFolderId\)/);
   assert.match(panel, /getQueryData<RepositoryAiSessionWorkspace>\(queryKey\)[\s\S]*newSessionWorkspace\.value = cachedWorkspace[\s\S]*getAiSessionWorkspace\(instanceId, cwdFolderId, abort\.signal\)/);
   assert.match(panel, /queryClient\.setQueryData\(queryKey, workspace\)/);
-  assert.match(panel, /const newSessionComposerBusy = computed\(\(\) => launchingNewSession\.value \|\| savingNewSessionPermission\.value \|\| choosingNewSessionFolder\.value \|\| switchingNewSessionBranch\.value\);/);
+  assert.match(panel, /const newSessionComposerBusy = computed\(\(\) => launchingNewSession\.value \|\| savingNewSessionPermission\.value \|\| choosingNewSessionFolder\.value \|\| switchingNewSessionBranch\.value \|\| newSessionWorktreeCreating\.value\);/);
   assert.doesNotMatch(panel, /const newSessionComposerBusy = computed\([^\n]*newSessionWorkspaceLoading/);
   assert.match(panel, /:disabled="creationSubmitDisabled \|\| !newSessionFolder \|\| \(newSessionWorkspaceLoading && !newSessionWorkspace\)"/);
 });

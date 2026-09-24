@@ -408,6 +408,12 @@ export class ControlPlaneNodeAgentGateway {
     return result;
   }
 
+  async syncInstanceModels(node: Node, instanceId: string) {
+    return this.client.requestSchema(node, `/instances/${encodeURIComponent(instanceId)}/sync-models`, z.object({
+      synced: z.boolean(),
+    }).strict(), { method: "POST" });
+  }
+
   async listFleetModels(nodes: Node[], init: RequestInit = {}): Promise<NodeAgentFleetResult<{ nodeId: string; model: NodeModelPublicRecord }>> {
     await this.refreshFleetModels(nodes, init, true);
     return this.readFleetModels(nodes);

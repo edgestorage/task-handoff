@@ -1,11 +1,12 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import type { RepositoryDirectoryListingSchema, RepositoryFileContentSchema } from "@task-handoff/protocol/repository";
+import type { RepositoryDirectoryListingSchema, RepositoryFileContentSchema, RepositoryPathSearchResultSchema } from "@task-handoff/protocol/repository";
 import type { z } from "zod";
 
 type RepositoryDirectoryListing = z.infer<typeof RepositoryDirectoryListingSchema>;
 type RepositoryFileContent = z.infer<typeof RepositoryFileContentSchema>;
+type RepositoryPathSearchResult = z.infer<typeof RepositoryPathSearchResultSchema>;
 
 export class RepositoryFileError extends Error {
   constructor(readonly code: string, message: string) {
@@ -50,6 +51,36 @@ export class RepositoryFileService {
       })
       .sort((left, right) => left.name.localeCompare(right.name));
     return { path: relativePath, entries, snapshotId: directoryVersion(entries) };
+  }
+
+  search(query: string, limit = 100): RepositoryPathSearchResult {
+    const normalizedQuery = query.trim().toLocaleLowerCase();
+    if (!normalizedQuery) return { entries: [], truncated: false };
+    const entries: RepositoryPathSearchResult["entries"] = [];
+    const pending = [{ absolutePath: this.root, relativePath: "" }];
+    let truncated = false;
+
+    while (pending.length) {
+      const current = pending.shift()!;
+      const children = fs.readdirSync(current.absolutePath, { withFileTypes: true })
+        .filter((entry) => entry.name.toLowerCase() !== ".git")
+        .sort((left, right) => left.name.localeCompare(right.name));
+      for (const child of children) {
+        const relativePath = current.relativePath ? `${current.relativePath}/${child.name}` : child.name;
+        const absolutePath = path.join(current.absolutePath, child.name);
+        const stat = fs.lstatSync(absolutePath);
+        const kind = this.kind(absolutePath, stat);
+        if ((kind === "file" || kind === "directory") && relativePath.toLocaleLowerCase().includes(normalizedQuery)) {
+          if (entries.length >= limit) {
+            truncated = true;
+            return { entries, truncated };
+          }
+          entries.push({ name: child.name, path: relativePath, kind });
+        }
+        if (kind === "directory") pending.push({ absolutePath, relativePath });
+      }
+    }
+    return { entries, truncated };
   }
 
   read(relativePath: string): RepositoryFileContent {

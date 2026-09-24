@@ -519,7 +519,7 @@ export function useActiveInstanceSessions({
     const key = page === "changes-review"
       ? `repository-changes:${target.sessionKind}:${target.sessionId}`
       : page === "worktrees"
-        ? `repository-worktrees:${target.sessionKind}:${target.sessionId}`
+        ? `repository-worktrees:${target.cwdFolderId || "instance-workspace"}`
         : `repository:${target.sessionKind}:${target.sessionId}`;
     const tabs = repositorySessionTabs[instanceId] ||= reactive<SessionTab[]>([]);
     const existingTab = tabs.find((tab) => tab.key === key);

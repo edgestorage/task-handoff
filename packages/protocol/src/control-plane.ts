@@ -29,7 +29,7 @@ export {
   type AiSessionProviderCapability,
 } from "./ai-session-provider-capabilities.ts";
 
-export const CONTROL_PLANE_PROTOCOL_VERSION = "2026-09-17";
+export const CONTROL_PLANE_PROTOCOL_VERSION = "2026-09-24";
 export const AI_SESSION_RENAME_PROTOCOL_VERSION = "2026-09-17";
 export const NODE_AGENT_PROTOCOL_VERSION_HEADER = "x-task-handoff-node-agent-protocol-version";
 export const NODE_TUNNEL_PROTOCOL_VERSION = "2026-08-01";
@@ -133,6 +133,7 @@ function defaultControlledInstanceFeatures() {
     nodeAgentConnectionUpdate: false,
     gitCliCredentialBroker: false,
     gitCredentialProxy: false,
+    repositoryPathSearch: false,
     aiSessionTimeline: emptyAiSessionTimelineCapabilities(),
     aiSessionConversationAttachments: emptyAiSessionConversationAttachmentCapabilities(),
     aiSessionProviders: emptyAiSessionProviderCapabilities(),
@@ -187,6 +188,8 @@ export const ControlledInstanceFeatureCapabilitiesSchema = z.object({
   gitCliCredentialBroker: z.boolean().optional(),
   // Additive capability for the node-agent-owned runtime broker architecture.
   gitCredentialProxy: z.boolean().optional(),
+  // Compatibility for v0.0.32: absence disables repository-wide path search.
+  repositoryPathSearch: z.boolean().optional(),
   aiSessionTimeline: AiSessionTimelineCapabilitiesSchema.default(emptyAiSessionTimelineCapabilities),
   // Compatibility for v0.0.21: the additive wire field must remain optional.
   aiSessionConversationAttachments: AiSessionConversationAttachmentCapabilitiesSchema.optional(),
@@ -223,6 +226,7 @@ type NormalizedControlledInstanceCapabilities = ControlledInstanceCapabilities &
     aiSessionWorkspaceCheckout: boolean;
     gitCliCredentialBroker: boolean;
     gitCredentialProxy: boolean;
+    repositoryPathSearch: boolean;
     privateModelCatalog: boolean;
     browserTunnel: boolean;
     nodeAgentConnectionUpdate: boolean;
@@ -254,6 +258,7 @@ export function normalizeControlledInstanceCapabilities(capabilities: unknown): 
     "nodeAgentConnectionUpdate",
     "gitCliCredentialBroker",
     "gitCredentialProxy",
+    "repositoryPathSearch",
   ] as const) {
     const parsed = z.boolean().safeParse(features[feature]);
     if (parsed.success) normalizedFeatures[feature] = parsed.data;
@@ -305,6 +310,10 @@ export function supportsGitCliCredentialBroker(capabilities: unknown) {
 
 export function supportsGitCredentialProxy(capabilities: unknown) {
   return normalizeControlledInstanceCapabilities(capabilities).features.gitCredentialProxy;
+}
+
+export function supportsRepositoryPathSearch(capabilities: unknown) {
+  return normalizeControlledInstanceCapabilities(capabilities).features.repositoryPathSearch;
 }
 
 export function aiSessionConversationAttachmentCapabilities(capabilities: unknown): AiSessionConversationAttachmentCapabilities {

@@ -8,6 +8,10 @@ const workflow = fs.readFileSync(path.join(root, ".github/workflows/desktop-rele
 const manifest = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
 const prepareDesktopRuntime = fs.readFileSync(path.join(root, "scripts", "prepare-desktop-runtime.mjs"), "utf8");
 
+test("desktop releases build the shared official account feature flag into the UI", () => {
+  assert.match(workflow, /TASK_HANDOFF_OFFICIAL_ACCOUNT_ENABLED: \$\{\{ vars\.TASK_HANDOFF_OFFICIAL_ACCOUNT_ENABLED \|\| vars\.TASK_HANDOFF_CLOUD_RELAY_ENABLED \|\| '0' \}\}/);
+});
+
 test("local desktop runtime preparation follows the controlled-instance package version", () => {
   assert.match(prepareDesktopRuntime, /path\.join\(root, "packages", "controlled-instance", "package\.json"\)/);
   assert.match(prepareDesktopRuntime, /process\.env\.TASK_HANDOFF_VERSION \|\| controlledInstancePackage\.version/);

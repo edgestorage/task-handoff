@@ -2055,10 +2055,20 @@
   min-width: 0;
   min-height: 26px;
   overflow: hidden;
+  padding-right: calc(var(--session-ai-fixed-actions-width, 0px) + 8px);
   color: var(--text-muted);
   font-size: 13px;
   font-weight: 400;
   line-height: 20px;
+}
+
+.session-ai-detail-context > * {
+  flex: 0 0 auto;
+}
+
+.session-ai-detail-context > .session-ai-detail-folder,
+.session-ai-detail-context > .session-ai-detail-context-path {
+  flex: 0 1 auto;
 }
 
 .session-ai-detail-context > span {

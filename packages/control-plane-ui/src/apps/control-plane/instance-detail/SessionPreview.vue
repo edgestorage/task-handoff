@@ -109,6 +109,7 @@
                       </ResourceTabItem>
                       </ContextMenuTrigger>
                     <WorkbenchLayoutContextMenu
+                      @close-auto-focus="holdSessionRenameFocus"
                       :instance-sidebar-visible="instanceSidebarVisible"
                       :show-header-density="!standalone"
                       :show-instance-sidebar="!standalone"
@@ -124,8 +125,8 @@
                       <ContextMenuItem
                         v-if="session.kind !== 'repository' && session.kind !== 'embedded-browser'"
                         class="instance-action-item"
-                        :disabled="!canRenameAppSession(session)"
-                        :title="canRenameAppSession(session) ? undefined : t('sessions.tabs.renameUnavailable')"
+                        :disabled="!sessionTabCanRename(session)"
+                        :title="sessionTabCanRename(session) ? undefined : t('sessions.tabs.renameUnavailable')"
                         @select="beginSessionRename(session)"
                       >
                         <Pencil :size="14" />
@@ -402,7 +403,7 @@
           @mouseleave="scheduleSessionTabDetailClose"
         >
           <strong class="session-tab-detail-title">{{ sessionDisplayName(sessionTabDetailSession, t) }}</strong>
-          <span class="session-tab-detail-cwd">{{ sessionTabWorkspaceLabel(sessionTabDetailSession) }}</span>
+          <span class="session-tab-detail-subtitle">{{ sessionTabWorkspaceLabel(sessionTabDetailSession) }}</span>
         </div>
       </Transition>
     </Teleport>
@@ -428,12 +429,14 @@ import ProjectFolderPicker from "../shared/ProjectFolderPicker.vue";
 import RepositoryEnvironment from "./RepositoryEnvironment.vue";
 import WorkbenchLayoutContextMenu from "../shared/WorkbenchLayoutContextMenu.vue";
 import ResourceTabItem from "../shared/ResourceTabItem.vue";
+import { focusResourceTabTitleInput } from "../shared/resourceTabRename.ts";
 import ResourceTabStrip from "../shared/ResourceTabStrip.vue";
 import ResourceTabViewport from "../shared/ResourceTabViewport.vue";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
 import { pruneTerminalPreviewCache } from "../useTerminalPreview";
 import {
   appDisplayName,
+  canRenameAppSession,
   groupedAppSessionTabs,
   sessionMeta,
   sessionDisplayName,
@@ -774,19 +777,20 @@ function setRenameInput(element: Element | ComponentPublicInstance | null) {
 }
 
 async function beginSessionRename(session: SessionTab) {
-  if (!canRenameAppSession(session)) return;
+  if (!sessionTabCanRename(session)) return;
   editingSessionKey.value = session.key;
   sessionTitleDraft.value = sessionDisplayName(session, t);
   sessionRenameError.value = "";
-  await nextTick();
-  renameInput.value?.focus();
-  renameInput.value?.select();
+  await focusResourceTabTitleInput(renameInput);
 }
 
-function canRenameAppSession(session: SessionTab) {
+function sessionTabCanRename(session: SessionTab) {
   const appSessionId = typeof session.source?.id === "string" ? session.source.id : session.key;
-  const linkedAiSession = props.instance.aiSessions?.sessions.find((candidate) => candidate.appSessionId === appSessionId);
-  return !linkedAiSession || linkedAiSession.actions?.rename === true;
+  return canRenameAppSession(props.instance, appSessionId);
+}
+
+function holdSessionRenameFocus(event: Event) {
+  if (editingSessionKey.value) event.preventDefault();
 }
 
 function cancelSessionRename() {

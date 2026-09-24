@@ -9,6 +9,7 @@ import { publicInstanceDirectory } from "../public-records.ts";
 import { filterRequestInstances, filterRequestNodes } from "./access-projection.ts";
 import { assertCan } from "../auth/authorization.ts";
 import { controlPlaneRequestActor } from "./request-actor.ts";
+import { RepositoryCreateWorktreeRequestSchema, RepositoryRemoveWorktreeRequestSchema } from "@task-handoff/protocol/repository";
 
 export type RegisterInstanceRoutesOptions = {
   app: FastifyInstance;
@@ -28,6 +29,7 @@ const InstanceBoardQuerySchema = z.object({
   instanceId: z.string().trim().min(1).max(120).optional(),
   progressive: z.enum(["true", "false"]).optional(),
 }).strict();
+const RepositoryWorkspaceQuerySchema = z.object({ cwdFolderId: z.string().trim().min(1).max(120).optional() }).strict();
 
 export function registerInstanceRoutes({ app, service, events, onInstanceDeleted }: RegisterInstanceRoutesOptions) {
   app.get("/api/controlled-instances", async (request) => ({
@@ -48,6 +50,26 @@ export function registerInstanceRoutes({ app, service, events, onInstanceDeleted
   });
   app.get("/api/controlled-instances/:id", async (request) => ({ data: await service.requireControlledInstance(IdParamsSchema.parse(request.params).id, false, true) }));
   app.get("/api/controlled-instances/:id/metrics", async (request) => ({ data: await service.instanceResourceMetrics(IdParamsSchema.parse(request.params).id) }));
+  app.get("/api/controlled-instances/:id/repository/worktrees", async (request) => {
+    const params = IdParamsSchema.parse(request.params);
+    const query = RepositoryWorkspaceQuerySchema.parse(request.query || {});
+    return { data: await service.listRepositoryWorkspaceWorktrees(params.id, query.cwdFolderId) };
+  });
+  app.post("/api/controlled-instances/:id/repository/worktrees", async (request) => {
+    const params = IdParamsSchema.parse(request.params);
+    const query = RepositoryWorkspaceQuerySchema.parse(request.query || {});
+    return { data: await service.createRepositoryWorkspaceWorktree(params.id, RepositoryCreateWorktreeRequestSchema.parse(request.body || {}), query.cwdFolderId) };
+  });
+  app.post("/api/controlled-instances/:id/repository/worktrees/remove", async (request) => {
+    const params = IdParamsSchema.parse(request.params);
+    const query = RepositoryWorkspaceQuerySchema.parse(request.query || {});
+    return { data: await service.removeRepositoryWorkspaceWorktree(params.id, RepositoryRemoveWorktreeRequestSchema.parse(request.body || {}), query.cwdFolderId) };
+  });
+  app.get("/api/controlled-instances/:id/repository/branches", async (request) => {
+    const params = IdParamsSchema.parse(request.params);
+    const query = RepositoryWorkspaceQuerySchema.parse(request.query || {});
+    return { data: await service.listRepositoryWorkspaceBranches(params.id, query.cwdFolderId) };
+  });
   app.get("/api/controlled-instances/:id/apps/management", async (request) => ({ data: await service.instanceAppManagement(IdParamsSchema.parse(request.params).id) }));
   app.post("/api/controlled-instances/:id/apps/:appId/install", async (request) => {
     const params = InstanceAppParamsSchema.parse(request.params);

@@ -2,11 +2,64 @@
   <section class="repository-workspace">
     <div class="repository-workspace-content">
       <header class="repository-workspace-head">
-        <span class="repository-workspace-title">
-          <FolderGit2 :size="17" />
-          <span><strong>{{ t("repository.workspace.explorer") }}</strong><small>{{ workspaceSubtitle }}</small></span>
-        </span>
+        <div
+          ref="pathBar"
+          class="repository-workspace-path"
+          :data-expanded="breadcrumbExpanded ? 'true' : undefined"
+          :data-picker-open="openBreadcrumbIndex === undefined ? undefined : 'true'"
+          @focusin="setBreadcrumbExpanded(true)"
+          @focusout="setBreadcrumbExpanded(false)"
+          @mouseenter="setBreadcrumbExpanded(true)"
+          @mouseleave="setBreadcrumbExpanded(false)"
+          @wheel="scrollBreadcrumb"
+        >
+          <template v-for="(segment, index) in breadcrumbSegments" :key="`${index}:${segment.directoryPath}:${segment.label}`">
+            <ChevronRight
+              v-if="index"
+              class="repository-workspace-path-separator"
+              :data-collapsed="isCollapsedBreadcrumbSeparator(index) ? 'true' : undefined"
+              :size="14"
+            />
+            <RepositoryFilePicker
+              :open="openBreadcrumbIndex === index"
+              :search="fileSearch"
+              :search-disabled="!pathSearchSupported"
+              :search-label="t('repository.workspace.searchFiles')"
+              :search-placeholder="t(pathSearchSupported ? 'repository.workspace.searchFiles' : 'repository.workspace.searchUnavailable')"
+              @update:open="updateBreadcrumbPicker(index, segment, $event)"
+              @update:search="fileSearch = $event"
+            >
+              <template #trigger>
+                <button
+                  type="button"
+                  class="repository-workspace-path-segment"
+                  :data-collapsed="isCollapsedBreadcrumb(index) ? 'true' : undefined"
+                  :data-collapsed-first="isCollapsedBreadcrumbFirst(index) ? 'true' : undefined"
+                  :data-current="index === breadcrumbSegments.length - 1 ? 'true' : undefined"
+                  :title="segment.title"
+                >{{ segment.label }}</button>
+              </template>
+              <template #actions>
+                <Button variant="ghost" size="icon" :aria-label="t('repository.workspace.newFile')" :title="t('repository.workspace.newFile')" @click="openNewFileDialog"><FilePlus2 :size="14" /></Button>
+              </template>
+              <RepositoryWorkspaceFileList
+                :directory-load-error="directoryLoadError"
+                :loading="loadingWorkspace || searchLoading"
+                :nodes="workspaceTreeNodes"
+                :search-error="searchError"
+                :searching="searchLoading"
+                :search-query="normalizedFileSearch"
+                :search-truncated="searchResult?.truncated"
+                :workspace-load-error="workspaceLoadError"
+                @select="selectWorkspaceTreeNode"
+                @toggle="toggleWorkspaceTreeNode"
+              />
+            </RepositoryFilePicker>
+          </template>
+        </div>
         <span class="repository-workspace-head-actions">
+          <Button v-if="activeTab" variant="ghost" size="icon" :disabled="fileActionPending" :aria-label="t('repository.workspace.rename')" :title="t('repository.workspace.rename')" @click="openRenameDialog(activeTab)"><PencilLine :size="14" /></Button>
+          <Button v-if="activeTab" variant="ghost" size="icon" :disabled="fileActionPending" :aria-label="t('repository.workspace.delete')" :title="t('repository.workspace.delete')" @click="openDeleteDialog(activeTab)"><Trash2 :size="14" /></Button>
           <Button
             variant="ghost"
             size="icon"
@@ -21,58 +74,14 @@
         </span>
       </header>
 
-      <div ref="workspaceBody" class="repository-workspace-body" :style="{ '--repository-sidebar-width': `${sidebarWidth}px` }" tabindex="-1">
-        <aside class="repository-workspace-sidebar">
-          <div class="repository-workspace-sidebar-actions">
-            <Button variant="ghost" size="sm" @click="openNewFileDialog"><FilePlus2 :size="13" /> {{ t("repository.workspace.newFile") }}</Button>
-          </div>
-          <ScrollArea type="always" class="repository-workspace-sidebar-content">
-            <div class="repository-workspace-sidebar-content-inner">
-            <div v-if="loadingWorkspace" class="repository-workspace-sidebar-state"><LoaderCircle class="repository-workspace-spin" :size="16" /> {{ t("repository.workspace.loading") }}</div>
-            <RepositoryErrorNotice v-else-if="workspaceLoadError" :error="workspaceLoadError" :fallback="t('repository.errors.workspaceLoad')" />
-            <template v-else>
-              <div v-if="directoryLoadError" class="repository-workspace-directory-error">
-                <small>{{ directoryLoadError.path }}</small>
-                <RepositoryErrorNotice :error="directoryLoadError.error" :fallback="t('repository.errors.directoryLoad')" />
-              </div>
-              <RepositoryFileTree
-                :directories="directories"
-                :expanded-paths="expandedPaths"
-                path=""
-                @open-file="openFile"
-                @toggle-directory="toggleDirectory"
-              />
-            </template>
-            </div>
-          </ScrollArea>
-        </aside>
-
-        <div class="repository-workspace-resize-handle" role="separator" :aria-label="t('repository.workspace.resizeSidebar')" aria-orientation="vertical" :aria-valuenow="Math.round(sidebarWidth)" tabindex="0" @pointerdown="startSidebarResize" @dblclick="sidebarWidth = 320" @keydown.left.prevent="setSidebarWidth(sidebarWidth - 16)" @keydown.right.prevent="setSidebarWidth(sidebarWidth + 16)" />
-
+      <div class="repository-workspace-body" tabindex="-1">
         <main class="repository-workspace-main">
-          <div v-if="tabs.length" ref="workspaceOpenTabs" class="repository-workspace-tabs" role="tablist" :aria-label="t('repository.workspace.openFiles')" @keydown="navigateOpenTabs" @wheel="scrollOpenTabs">
-            <div v-for="tab in tabs" :key="tab.id" class="repository-workspace-tab" :class="{ active: activeTabId === tab.id }">
-              <button type="button" role="tab" :data-repository-tab="tab.id" :tabindex="activeTabId === tab.id ? 0 : -1" :aria-selected="activeTabId === tab.id" @click="selectTab(tab.id)">
-                <FileCode2 :size="13" />
-                <span>{{ tab.path }}</span>
-              </button>
-              <button type="button" class="repository-workspace-tab-close" :aria-label="t('repository.workspace.closeFile', { path: tab.path })" @click="closeTab(tab.id)"><X :size="12" /></button>
-            </div>
-          </div>
           <section v-if="fileOpenError" class="repository-workspace-editor repository-workspace-file-error">
-            <header><span><strong>{{ fileOpenError.path }}</strong></span></header>
             <div class="repository-workspace-editor-body repository-workspace-file-error-body">
               <RepositoryErrorNotice :error="fileOpenError.error" :fallback="t('repository.errors.fileLoad')" />
             </div>
           </section>
           <section v-else-if="activeTab" class="repository-workspace-editor">
-            <header>
-              <span><strong>{{ activeTab.path }}</strong><small>{{ formatBytes(activeTab.byteLength, locale as SupportedLocale) }} · {{ t(activeTab.mode.executable ? "repository.workspace.executable" : "repository.workspace.text") }}</small></span>
-              <span class="repository-workspace-editor-actions">
-                <Button variant="ghost" size="sm" :disabled="fileActionPending" @click="openRenameDialog(activeTab)"><PencilLine :size="13" /> {{ t("repository.workspace.rename") }}</Button>
-                <Button variant="ghost" size="sm" :disabled="fileActionPending" @click="openDeleteDialog(activeTab)"><Trash2 :size="13" /> {{ t("repository.workspace.delete") }}</Button>
-              </span>
-            </header>
             <div class="repository-workspace-editor-body">
               <RepositoryFilePreview :content="activeTab.content" :line="activeTab.line" :path="activeTab.path" />
             </div>
@@ -129,23 +138,23 @@ import type {
   RepositoryDirectoryListing,
   RepositoryFileContent,
   RepositoryFileMutationResult,
+  RepositoryPathSearchResult,
   RepositorySessionKind,
 } from "@task-handoff/protocol/repository";
-import { FileCode2, FilePlus2, FolderGit2, FolderOpen, GitCompareArrows, LoaderCircle, PencilLine, Trash2, X } from "@lucide/vue";
+import { ChevronRight, FilePlus2, FolderOpen, GitCompareArrows, LoaderCircle, PencilLine, Trash2 } from "@lucide/vue";
 import { useQueryClient } from "@tanstack/vue-query";
-import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { ApiError } from "../../../api/client";
-import { createRepositoryFile, deleteRepositoryFile, getRepositoryChanges, getRepositoryContext, getRepositoryDirectory, getRepositoryFile, renameRepositoryFile } from "../../../api/repository";
+import { createRepositoryFile, deleteRepositoryFile, getRepositoryChanges, getRepositoryContext, getRepositoryDirectory, getRepositoryFile, renameRepositoryFile, searchRepositoryPaths } from "../../../api/repository";
 import { Button } from "../../../components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
 import { Input } from "../../../components/ui/input";
-import { ScrollArea } from "../../../components/ui/scroll-area";
-import type { SupportedLocale } from "../../../i18n/locale";
-import { formatBytes } from "../../../i18n/presentation";
 import RepositoryErrorNotice from "./RepositoryErrorNotice.vue";
+import RepositoryFilePicker from "./RepositoryFilePicker.vue";
 import RepositoryFilePreview from "./RepositoryFilePreview.vue";
-import RepositoryFileTree from "./RepositoryFileTree.vue";
+import type { RepositoryFileTreeNode } from "./RepositoryFileTree.vue";
+import RepositoryWorkspaceFileList from "./RepositoryWorkspaceFileList.vue";
 import { repositoryFileLocation } from "./repositoryFilePath";
 
 type FileTab = RepositoryFileContent & {
@@ -159,15 +168,22 @@ type ScopedRepositoryError = {
   error: unknown;
 };
 
+type RepositoryBreadcrumbSegment = {
+  directoryPath: string;
+  label: string;
+  title: string;
+};
+
 const props = defineProps<{
   context: RepositoryContext;
   instanceId: string;
   initialFilePath?: string;
   initialFileRequestId?: number;
+  pathSearchSupported: boolean;
   sessionId: string;
   sessionKind: RepositorySessionKind;
 }>();
-const { locale, t } = useI18n();
+const { t } = useI18n();
 
 const emit = defineEmits<{
   openChanges: [target: { initialView: "changes"; page: "changes-review"; sessionId: string; sessionKind: RepositorySessionKind }];
@@ -184,9 +200,15 @@ const expandedPaths = ref<Set<string>>(new Set());
 const changes = ref<Awaited<ReturnType<typeof getRepositoryChanges>>>();
 const tabs = ref<FileTab[]>([]);
 const activeTabId = ref("");
-const workspaceOpenTabs = ref<HTMLElement>();
-const workspaceBody = ref<HTMLElement>();
-const sidebarWidth = ref(320);
+const pickerRootPath = ref("");
+const openBreadcrumbIndex = ref<number>();
+const pathBar = ref<HTMLElement>();
+const breadcrumbExpanded = ref(false);
+const breadcrumbFirstCollapsedIndex = ref<number>();
+const fileSearch = ref("");
+const searchResult = ref<RepositoryPathSearchResult>();
+const searchLoading = ref(false);
+const searchError = ref<unknown>();
 const loadingWorkspace = ref(false);
 const workspaceLoadError = ref<unknown>();
 const directoryLoadError = ref<ScopedRepositoryError>();
@@ -205,70 +227,208 @@ const deleteTarget = ref<FileTab>();
 const deleteError = ref<unknown>();
 const fileActionPending = ref(false);
 const activeTab = computed(() => tabs.value.find((tab) => tab.id === activeTabId.value));
-const changeCount = computed(() => changes.value?.entries.length || 0);
-const workspaceSubtitle = computed(() => {
-  const branch = props.context.head?.state === "branch" ? props.context.head.branch : props.context.head?.state === "detached"
-    ? t("repository.workspace.detached", { commit: props.context.head.oid?.slice(0, 8) || "" })
-    : t("repository.workspace.unborn");
-  return [branch, props.context.cwdRelativePath ? t("repository.common.cwd", { path: props.context.cwdRelativePath }) : t("repository.common.repositoryRoot")].filter(Boolean).join(" · ");
+const currentFilePath = computed(() => activeTab.value?.path || fileOpenError.value?.path || "");
+const breadcrumbSegments = computed<RepositoryBreadcrumbSegment[]>(() => {
+  const rootLabel = props.context.displayName || t("repository.title");
+  const root = { directoryPath: "", label: rootLabel, title: props.context.repositoryRoot || rootLabel };
+  if (!currentFilePath.value) return [root, { directoryPath: "", label: t("repository.workspace.openFile"), title: t("repository.workspace.openFile") }];
+  const parts = currentFilePath.value.split("/");
+  return [root, ...parts.map((label, index) => {
+    const path = parts.slice(0, index + 1).join("/");
+    const directoryPath = index === parts.length - 1 ? parentPath(path) : path;
+    return { directoryPath, label, title: path };
+  })];
 });
-let stopSidebarResize: (() => void) | undefined;
+const changeCount = computed(() => changes.value?.entries.length || 0);
+const normalizedFileSearch = computed(() => fileSearch.value.trim());
+const workspaceTreeNodes = computed<RepositoryFileTreeNode[]>(() => {
+  if (normalizedFileSearch.value && props.pathSearchSupported) {
+    return (searchResult.value?.entries || []).map((entry) => ({
+      id: `search:${entry.path}`,
+      path: entry.path,
+      name: entry.name,
+      description: parentPath(entry.path),
+      kind: entry.kind,
+      depth: 0,
+      selectable: true,
+      active: entry.kind === "file" && activeTab.value?.path === entry.path,
+    }));
+  }
+  return flattenLoadedDirectories(pickerRootPath.value);
+});
+
+async function updateBreadcrumbPicker(index: number, segment: RepositoryBreadcrumbSegment, nextOpen: boolean) {
+  if (!nextOpen) {
+    if (openBreadcrumbIndex.value === index) openBreadcrumbIndex.value = undefined;
+    return;
+  }
+  pickerRootPath.value = segment.directoryPath;
+  openBreadcrumbIndex.value = index;
+  fileSearch.value = "";
+  searchResult.value = undefined;
+  searchError.value = undefined;
+  directoryLoadError.value = undefined;
+  if (directories.value.has(segment.directoryPath)) return;
+  try {
+    const listing = await getRepositoryDirectory(target.value, segment.directoryPath);
+    directories.value = new Map(directories.value).set(segment.directoryPath, listing);
+  } catch (error) {
+    if (pickerRootPath.value === segment.directoryPath) directoryLoadError.value = { path: segment.directoryPath, error };
+  }
+}
+
+function scrollBreadcrumb(event: WheelEvent) {
+  const element = event.currentTarget as HTMLElement;
+  if (element.scrollWidth <= element.clientWidth || Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+  element.scrollLeft += event.deltaY;
+  event.preventDefault();
+}
+
+function scrollBreadcrumbTo(offset: number) {
+  void nextTick(() => {
+    if (pathBar.value) pathBar.value.scrollLeft = offset;
+  });
+}
+
+function setBreadcrumbExpanded(next: boolean) {
+  if (breadcrumbExpanded.value === next) return;
+  breadcrumbExpanded.value = next;
+  if (next) scrollBreadcrumbTo(0);
+}
+
+// Collapsed breadcrumb segments are measured against the available width so that every
+// segment that fits stays readable and only the overflowing middle collapses into an ellipsis.
+const BREADCRUMB_SEGMENT_PADDING = 10;
+const BREADCRUMB_SEPARATOR_WIDTH = 14;
+const BREADCRUMB_ELLIPSIS_WIDTH = 34;
+
+let breadcrumbMeasureElement: HTMLSpanElement | undefined;
+
+function measureBreadcrumbLabel(label: string, sample: HTMLElement | undefined) {
+  if (!breadcrumbMeasureElement) {
+    breadcrumbMeasureElement = document.createElement("span");
+    breadcrumbMeasureElement.setAttribute("aria-hidden", "true");
+    breadcrumbMeasureElement.style.cssText = "position:absolute;top:0;left:-10000px;visibility:hidden;white-space:pre;pointer-events:none;";
+    document.body.append(breadcrumbMeasureElement);
+  }
+  const style = sample ? getComputedStyle(sample) : undefined;
+  const fontSize = style && Number.parseFloat(style.fontSize) > 0 ? style.fontSize : "12px";
+  breadcrumbMeasureElement.style.fontFamily = style?.fontFamily || "system-ui";
+  breadcrumbMeasureElement.style.fontSize = fontSize;
+  breadcrumbMeasureElement.style.fontStyle = style?.fontStyle || "normal";
+  breadcrumbMeasureElement.style.fontWeight = style?.fontWeight || "400";
+  breadcrumbMeasureElement.style.letterSpacing = style?.letterSpacing || "normal";
+  breadcrumbMeasureElement.textContent = label;
+  return breadcrumbMeasureElement.getBoundingClientRect().width + BREADCRUMB_SEGMENT_PADDING;
+}
+
+function updateBreadcrumbCollapse() {
+  const element = pathBar.value;
+  const segments = breadcrumbSegments.value;
+  if (!element || element.clientWidth <= 0) return;
+  const lastIndex = segments.length - 1;
+  if (segments.length <= 2) {
+    breadcrumbFirstCollapsedIndex.value = undefined;
+    return;
+  }
+  const rendered = element.querySelectorAll<HTMLElement>(".repository-workspace-path-segment");
+  const widths = segments.map((segment, index) => measureBreadcrumbLabel(segment.label, rendered[index]));
+  const available = element.clientWidth;
+  const fullWidth = widths.reduce((total, width) => total + width, 0) + lastIndex * BREADCRUMB_SEPARATOR_WIDTH;
+  if (fullWidth <= available) {
+    breadcrumbFirstCollapsedIndex.value = undefined;
+    return;
+  }
+  const tailWidth = BREADCRUMB_ELLIPSIS_WIDTH + 2 * BREADCRUMB_SEPARATOR_WIDTH + widths[lastIndex];
+  let leadingWidth = 0;
+  let firstCollapsed = 0;
+  for (let index = 0; index < lastIndex; index += 1) {
+    const nextWidth = leadingWidth + (index ? BREADCRUMB_SEPARATOR_WIDTH : 0) + widths[index];
+    if (nextWidth + tailWidth > available) break;
+    leadingWidth = nextWidth;
+    firstCollapsed = index + 1;
+  }
+  breadcrumbFirstCollapsedIndex.value = firstCollapsed;
+}
+
+function isCollapsedBreadcrumb(index: number) {
+  const first = breadcrumbFirstCollapsedIndex.value;
+  return first !== undefined && index >= first && index < breadcrumbSegments.value.length - 1;
+}
+
+function isCollapsedBreadcrumbFirst(index: number) {
+  return breadcrumbFirstCollapsedIndex.value === index;
+}
+
+function isCollapsedBreadcrumbSeparator(index: number) {
+  const first = breadcrumbFirstCollapsedIndex.value;
+  return first !== undefined && index > first && index < breadcrumbSegments.value.length - 1;
+}
+
+watch(openBreadcrumbIndex, (index) => {
+  if (index !== undefined) scrollBreadcrumbTo(0);
+});
+
+watch(currentFilePath, () => {
+  if (!breadcrumbExpanded.value && openBreadcrumbIndex.value === undefined) scrollBreadcrumbTo(0);
+}, { immediate: true });
+
+watch(breadcrumbSegments, () => {
+  void nextTick(updateBreadcrumbCollapse);
+});
+
+let breadcrumbResizeObserver: ResizeObserver | undefined;
+
+onMounted(() => {
+  updateBreadcrumbCollapse();
+  if (document.fonts) void document.fonts.ready.then(() => updateBreadcrumbCollapse());
+  if (typeof ResizeObserver === "undefined" || !pathBar.value) return;
+  breadcrumbResizeObserver = new ResizeObserver(() => updateBreadcrumbCollapse());
+  breadcrumbResizeObserver.observe(pathBar.value);
+});
 
 onBeforeUnmount(() => {
-  stopSidebarResize?.();
+  breadcrumbResizeObserver?.disconnect();
+  breadcrumbResizeObserver = undefined;
+  breadcrumbMeasureElement?.remove();
+  breadcrumbMeasureElement = undefined;
 });
-
-function setSidebarWidth(width: number) {
-  const maxWidth = Math.max(280, (workspaceBody.value?.clientWidth || 960) * 0.62);
-  sidebarWidth.value = Math.min(maxWidth, Math.max(220, width));
-}
-
-function startSidebarResize(event: PointerEvent) {
-  if (event.button !== 0 || !workspaceBody.value) return;
-  event.preventDefault();
-  const startX = event.clientX;
-  const startWidth = sidebarWidth.value;
-  document.body.classList.add("repository-sidebar-resizing");
-  const move = (moveEvent: PointerEvent) => setSidebarWidth(startWidth + moveEvent.clientX - startX);
-  const stop = () => {
-    window.removeEventListener("pointermove", move);
-    window.removeEventListener("pointerup", stop);
-    window.removeEventListener("pointercancel", stop);
-    document.body.classList.remove("repository-sidebar-resizing");
-    stopSidebarResize = undefined;
-  };
-  stopSidebarResize?.();
-  stopSidebarResize = stop;
-  window.addEventListener("pointermove", move);
-  window.addEventListener("pointerup", stop);
-  window.addEventListener("pointercancel", stop);
-}
-
-function navigateOpenTabs(event: KeyboardEvent) {
-  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key) || !tabs.value.length) return;
-  event.preventDefault();
-  const currentIndex = Math.max(0, tabs.value.findIndex((tab) => tab.id === activeTabId.value));
-  const nextIndex = event.key === "Home"
-    ? 0
-    : event.key === "End"
-      ? tabs.value.length - 1
-      : (currentIndex + (event.key === "ArrowRight" ? 1 : -1) + tabs.value.length) % tabs.value.length;
-  activeTabId.value = tabs.value[nextIndex]!.id;
-  void nextTick(() => workspaceOpenTabs.value?.querySelector<HTMLButtonElement>(`[data-repository-tab="${CSS.escape(activeTabId.value)}"]`)?.focus());
-}
-
-function scrollOpenTabs(event: WheelEvent) {
-  const tabList = workspaceOpenTabs.value;
-  if (!tabList || Math.abs(event.deltaX) >= Math.abs(event.deltaY) || tabList.scrollWidth <= tabList.clientWidth) return;
-  const nextScrollLeft = Math.max(0, Math.min(tabList.scrollWidth - tabList.clientWidth, tabList.scrollLeft + event.deltaY));
-  if (nextScrollLeft === tabList.scrollLeft) return;
-  event.preventDefault();
-  tabList.scrollLeft = nextScrollLeft;
-}
 
 watch(() => `${props.instanceId}:${props.sessionKind}:${props.sessionId}`, () => {
   void loadWorkspace();
 }, { immediate: true });
+
+watch(fileSearch, (value, _previous, onCleanup) => {
+  searchResult.value = undefined;
+  searchError.value = undefined;
+  const query = value.trim();
+  if (!query || !props.pathSearchSupported) {
+    searchLoading.value = false;
+    return;
+  }
+  const controller = new AbortController();
+  const timer = window.setTimeout(async () => {
+    searchLoading.value = true;
+    try {
+      searchResult.value = await searchRepositoryPaths(target.value, query, 100, { signal: controller.signal });
+    } catch (error) {
+      if (!controller.signal.aborted) searchError.value = error;
+    } finally {
+      if (!controller.signal.aborted) searchLoading.value = false;
+    }
+  }, 180);
+  onCleanup(() => {
+    window.clearTimeout(timer);
+    controller.abort();
+  });
+});
+
+watch(openBreadcrumbIndex, (index) => {
+  if (index !== undefined) return;
+  fileSearch.value = "";
+  searchResult.value = undefined;
+  searchError.value = undefined;
+});
 
 async function loadWorkspace() {
   const revision = ++loadRevision.value;
@@ -314,6 +474,69 @@ async function toggleDirectory(entry: RepositoryDirectoryEntry) {
   expandedPaths.value = next;
 }
 
+function flattenLoadedDirectories(path = "", depth = 0, result: RepositoryFileTreeNode[] = []) {
+  for (const entry of directories.value.get(path)?.entries || []) {
+    result.push({
+      id: `browse:${entry.path}`,
+      path: entry.path,
+      name: entry.name,
+      kind: entry.kind,
+      depth,
+      expandable: entry.traversable,
+      expanded: entry.traversable && expandedPaths.value.has(entry.path),
+      selectable: entry.kind === "file",
+      active: entry.kind === "file" && activeTab.value?.path === entry.path,
+    });
+    if (entry.traversable && expandedPaths.value.has(entry.path)) flattenLoadedDirectories(entry.path, depth + 1, result);
+  }
+  return result;
+}
+
+function toggleWorkspaceTreeNode(node: RepositoryFileTreeNode) {
+  const entry = directoryEntry(node.path);
+  if (entry) void toggleDirectory(entry);
+}
+
+function selectWorkspaceTreeNode(node: RepositoryFileTreeNode) {
+  if (node.kind === "directory") {
+    void revealDirectory(node.path);
+    return;
+  }
+  openBreadcrumbIndex.value = undefined;
+  void openFile({ path: node.path });
+}
+
+async function revealDirectory(relativePath: string) {
+  directoryLoadError.value = undefined;
+  const nextExpanded = new Set(expandedPaths.value);
+  let current = "";
+  for (const segment of relativePath.split("/")) {
+    current = current ? `${current}/${segment}` : segment;
+    if (!directories.value.has(current)) {
+      try {
+        const listing = await getRepositoryDirectory(target.value, current);
+        directories.value = new Map(directories.value).set(current, listing);
+      } catch (error) {
+        directoryLoadError.value = { path: current, error };
+        return;
+      }
+    }
+    nextExpanded.add(current);
+  }
+  expandedPaths.value = nextExpanded;
+  fileSearch.value = "";
+}
+
+function directoryEntry(relativePath: string) {
+  const parent = parentPath(relativePath);
+  return directories.value.get(parent)?.entries.find((entry) => entry.path === relativePath);
+}
+
+function parentPath(relativePath: string) {
+  const index = relativePath.lastIndexOf("/");
+  return index < 0 ? "" : relativePath.slice(0, index);
+}
+
 async function openFile(entry: RepositoryDirectoryEntry | { path: string; line?: number }) {
   const revision = ++fileOpenRevision;
   const id = `file:${entry.path}`;
@@ -354,6 +577,7 @@ watch(
 );
 
 function openNewFileDialog() {
+  openBreadcrumbIndex.value = undefined;
   newFilePath.value = "";
   newFileError.value = undefined;
   newFileDialogOpen.value = true;
@@ -518,57 +742,39 @@ function closeTab(id: string) {
 </script>
 
 <style scoped>
-.repository-workspace { display: block; width: 100%; height: 100%; min-width: 0; min-height: 0; }
+.repository-workspace { display: block; width: 100%; height: 100%; min-width: 0; min-height: 0; container-type: inline-size; }
 .repository-workspace-content { display: grid; width: 100%; height: 100%; min-width: 0; min-height: 0; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; background: var(--workspace-bg, var(--background)); color: var(--text); }
-.repository-workspace-head { display: flex; min-height: 52px; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line-subtle); padding: 0 10px 0 15px; }
-.repository-workspace-title, .repository-workspace-title > span { display: flex; align-items: center; }
-.repository-workspace-title { gap: 9px; }
-.repository-workspace-title > span { align-items: flex-start; flex-direction: column; gap: 2px; }
-.repository-workspace-title strong { color: var(--text-strong); font-size: 13px; }
-.repository-workspace-title small { color: var(--text-muted); font-size: 12px; }
-.repository-workspace-head-actions { display: flex; min-width: 0; align-items: center; gap: 2px; }
-.repository-workspace-head-actions > button { display: grid; width: 30px; height: 30px; place-items: center; border: 0; border-radius: 7px; background: transparent; color: var(--text-muted); cursor: pointer; }
+.repository-workspace-head { display: flex; min-width: 0; min-height: 40px; align-items: center; gap: 4px; border-bottom: 1px solid var(--line-subtle); padding: 4px 6px 4px 10px; }
+.repository-workspace-path { display: flex; height: 30px; min-width: 0; flex: 1 1 auto; align-items: center; overflow-x: auto; overflow-y: hidden; color: var(--text-muted); scrollbar-width: none; }
+.repository-workspace-path::-webkit-scrollbar { display: none; }
+.repository-workspace-path-separator { flex: 0 0 auto; opacity: 0.72; }
+.repository-workspace-path-segment { height: 28px; min-width: max-content; flex: 0 0 auto; overflow: visible; border: 0; border-radius: 4px; outline: 0; background: transparent; color: inherit; cursor: pointer; font: inherit; font-size: 12px; line-height: 1; padding: 0 5px; white-space: nowrap; }
+.repository-workspace-path-segment[data-collapsed="true"] { max-width: 0; min-width: 0; overflow: hidden; opacity: 0; padding-inline: 0; pointer-events: none; transition: max-width 180ms ease, padding-inline 180ms ease, opacity 140ms ease; }
+.repository-workspace-path-segment[data-collapsed="true"][data-collapsed-first="true"] { max-width: 24px; padding-inline: 5px; opacity: 1; pointer-events: auto; font-size: 0; }
+.repository-workspace-path-segment[data-collapsed="true"][data-collapsed-first="true"]::after { content: "..."; font-size: 12px; }
+.repository-workspace-path-separator[data-collapsed="true"] { width: 0; overflow: hidden; transition: width 180ms ease, opacity 140ms ease; }
+.repository-workspace-path[data-picker-open] .repository-workspace-path-segment[data-collapsed="true"],
+.repository-workspace-path[data-expanded] .repository-workspace-path-segment[data-collapsed="true"] { max-width: 320px; opacity: 1; padding-inline: 5px; pointer-events: auto; font-size: 12px; }
+.repository-workspace-path[data-picker-open] .repository-workspace-path-segment[data-collapsed="true"][data-collapsed-first="true"]::after,
+.repository-workspace-path[data-expanded] .repository-workspace-path-segment[data-collapsed="true"][data-collapsed-first="true"]::after { content: none; }
+.repository-workspace-path[data-picker-open] .repository-workspace-path-separator[data-collapsed="true"],
+.repository-workspace-path[data-expanded] .repository-workspace-path-separator[data-collapsed="true"] { width: 14px; opacity: 0.72; }
+.repository-workspace-path-segment:hover, .repository-workspace-path-segment:focus-visible, .repository-workspace-path-segment[data-state="open"] { background: var(--surface-subtle); color: var(--text); }
+.repository-workspace-path-segment:focus-visible { box-shadow: inset 0 0 0 1px var(--focus-ring); }
+.repository-workspace-path-segment[data-current="true"] { flex: 0 1 auto; color: var(--text-strong); font-weight: 500; }
+.repository-workspace-path:not([data-expanded]):not([data-picker-open]) .repository-workspace-path-segment[data-current="true"] { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.repository-workspace-head-actions { display: flex; min-width: max-content; flex: 0 0 auto; align-items: center; gap: 2px; }
+.repository-workspace-head-actions > button { display: grid; width: 30px; height: 30px; place-items: center; border: 0; border-radius: 5px; background: transparent; color: var(--text-muted); cursor: pointer; }
 .repository-workspace-head-actions > button:hover, .repository-workspace-head-actions > button:focus-visible { background: var(--surface-subtle); color: var(--text); }
 .repository-workspace-head-actions :deep(.repository-workspace-view-switch) { display: inline-flex; width: auto; min-width: 30px; height: 30px; align-items: center; justify-content: center; gap: 5px; padding: 0 7px; white-space: nowrap; }
 .repository-workspace-view-count { display: inline-flex; min-width: 19px; height: 18px; align-items: center; justify-content: center; border: 1px solid var(--line-subtle); border-radius: 999px; background: var(--surface-subtle); color: var(--text); font-size: 11px; font-weight: 600; line-height: 1; padding: 0 5px; }
-.repository-workspace-body { display: grid; min-height: 0; grid-template-columns: minmax(220px, var(--repository-sidebar-width)) 7px minmax(0, 1fr); overflow: hidden; }
-.repository-workspace-sidebar { display: grid; min-width: 0; min-height: 0; grid-template-rows: auto auto minmax(0, 1fr); background: var(--surface-raised, var(--background)); }
-.repository-workspace-resize-handle { position: relative; z-index: 2; cursor: col-resize; background: transparent; touch-action: none; }
-.repository-workspace-resize-handle::after { position: absolute; top: 0; bottom: 0; left: 2.5px; width: 2px; background: var(--line-subtle); content: ""; }
-.repository-workspace-resize-handle:hover::after, :global(body.repository-sidebar-resizing) .repository-workspace-resize-handle::after { background: var(--focus-ring); }
-:global(body.repository-sidebar-resizing) { cursor: col-resize; user-select: none; }
-.repository-workspace-sidebar-actions { display: flex; min-height: 38px; align-items: center; justify-content: flex-end; border-bottom: 1px solid var(--line-subtle); padding: 4px 7px; }
-.repository-workspace-sidebar-actions :deep(button) { gap: 5px; height: 30px; padding: 0 8px; font-size: 12px; }
-.repository-workspace-sidebar-content { min-width: 0; min-height: 0; }
-.repository-workspace-sidebar-content-inner { min-width: 0; padding: 7px; }
-.repository-workspace-directory-error { display: grid; gap: 5px; margin-bottom: 7px; }
-.repository-workspace-directory-error > small { overflow: hidden; color: var(--text-muted); font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-.repository-workspace-sidebar-content :deep([data-task-handoff-scroll-viewport] > div) { width: 100%; min-width: 0 !important; }
-.repository-workspace-sidebar-content :deep([data-orientation="horizontal"]) { display: none; }
-.repository-workspace-sidebar-state { display: flex; min-height: 100px; align-items: center; justify-content: center; gap: 8px; color: var(--text-muted); font-size: 12px; }
-.repository-workspace-sidebar-state.error { color: var(--status-warning); }
-.repository-workspace-main { display: grid; min-width: 0; min-height: 0; grid-template-rows: auto minmax(0, 1fr); }
-.repository-workspace-tabs { display: flex; min-height: 38px; overflow-x: auto; overflow-y: hidden; border-bottom: 1px solid var(--line-subtle); background: var(--surface-raised, var(--background)); padding: 4px 5px 0; scrollbar-width: none; }
-.repository-workspace-tabs::-webkit-scrollbar { display: none; }
-.repository-workspace-tab { display: flex; min-width: 130px; max-width: 260px; align-items: stretch; border-bottom: 2px solid transparent; color: var(--text-muted); }
-.repository-workspace-tab.active { border-bottom-color: var(--focus-ring); color: var(--text-strong); }
-.repository-workspace-tab > [role="tab"] { display: flex; min-width: 0; flex: 1 1 auto; align-items: center; gap: 6px; border: 0; background: transparent; color: inherit; cursor: pointer; padding: 0 4px 0 9px; }
-.repository-workspace-tab > [role="tab"] > span { flex: 1 1 auto; overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-.repository-workspace-tab small { color: var(--text-muted); }
-.repository-workspace-tab-close { display: grid; width: 26px; flex: 0 0 26px; place-items: center; border: 0; border-radius: 5px; background: transparent; color: var(--text-muted); cursor: pointer; padding: 0; }
-.repository-workspace-tab-close:hover, .repository-workspace-tab-close:focus-visible { background: var(--surface-subtle); color: var(--text); }
-.repository-workspace-editor { display: grid; min-height: 0; grid-template-rows: auto minmax(0, 1fr); }
-.repository-workspace-editor > header { display: flex; min-height: 48px; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line-subtle); padding: 0 13px; }
-.repository-workspace-editor > header > span:first-child { display: grid; gap: 2px; }
-.repository-workspace-editor header strong { font-size: 13px; }
-.repository-workspace-editor header small { color: var(--text-muted); font-size: 12px; }
-.repository-workspace-editor-actions { display: flex; align-items: center; gap: 6px; }
-.repository-workspace-editor-actions :deep(button) { gap: 5px; height: 30px; padding: 0 9px; font-size: 12px; }
+.repository-workspace-body { min-width: 0; min-height: 0; overflow: hidden; }
+.repository-workspace-main { display: grid; width: 100%; height: 100%; min-width: 0; min-height: 0; grid-template-rows: minmax(0, 1fr); }
+.repository-workspace-editor { display: grid; min-height: 0; grid-template-rows: minmax(0, 1fr); }
 .repository-workspace-editor-body { display: flex; min-height: 0; overflow: hidden; flex-direction: column; background: var(--workspace-bg); }
-.repository-workspace-file-error { grid-row: 2; }
 .repository-workspace-file-error-body { align-items: center; justify-content: center; padding: 24px; }
 .repository-workspace-file-error-body :deep(.repository-error-notice) { width: min(680px, 100%); }
-.repository-workspace-empty { display: flex; min-height: 0; grid-row: 2; align-items: center; justify-content: center; flex-direction: column; gap: 8px; color: var(--text-muted); }
+.repository-workspace-empty { display: flex; min-height: 0; align-items: center; justify-content: center; flex-direction: column; gap: 8px; color: var(--text-muted); }
 .repository-workspace-empty strong { color: var(--text-strong); font-size: 13px; }
 .repository-workspace-empty span { font-size: 12px; }
 .repository-workspace-spin { animation: repository-workspace-spin 0.9s linear infinite; }
@@ -579,6 +785,5 @@ function closeTab(id: string) {
 .repository-file-action-form :deep(input) { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; }
 .repository-file-action-form :deep(button), :global([role="dialog"].repository-file-action-dialog button) { gap: 6px; }
 @keyframes repository-workspace-spin { to { transform: rotate(360deg); } }
-@media (max-width: 800px) { .repository-workspace-body { grid-template-columns: minmax(220px, var(--repository-sidebar-width)) 7px minmax(0, 1fr); } }
 @media (prefers-reduced-motion: reduce) { .repository-workspace-spin { animation: none; } }
 </style>

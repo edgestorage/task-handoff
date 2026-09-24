@@ -35,6 +35,14 @@ test("resource identity follows the authoritative owner for each resource kind",
   const secondRepository = repositoryResource("ai-b", "instance-a", "ai-session", "repo", "files");
   assert.notEqual(storyResourceKey(firstRepository), storyResourceKey(secondRepository));
 
+  const firstWorktree = repositoryResource("ai-a", "instance-a", "ai-session", "repo", "files", undefined, "worktree-a");
+  const secondWorktree = repositoryResource("ai-a", "instance-a", "ai-session", "repo", "files", undefined, "worktree-b");
+  assert.notEqual(storyResourceKey(firstRepository), storyResourceKey(firstWorktree));
+  assert.notEqual(storyResourceKey(firstWorktree), storyResourceKey(secondWorktree));
+  assert.deepEqual(parseStoryResourceKey(storyResourceKey(firstRepository)), firstRepository);
+  assert.deepEqual(parseStoryResourceKey(storyResourceKey(firstWorktree)), firstWorktree);
+  assert.deepEqual(parseStoryResourceKey(JSON.stringify(["ai-a", "instance-a", "repository", "ai-session", "repo", "files"])), firstRepository);
+
   const firstBrowser = { kind: "embedded-browser", aiSessionId: "ai-a", instanceId: "instance-a", browserTabId: "same" };
   const secondBrowser = { ...firstBrowser, aiSessionId: "ai-b" };
   assert.notEqual(storyResourceKey(firstBrowser), storyResourceKey(secondBrowser));
@@ -68,6 +76,45 @@ test("repository pages coexist while file navigation updates one AI Session File
   assert.equal(resources.length, 3);
   assert.equal(resources[0].filePath, "second.ts");
   assert.equal(resources[0].fileRequestId, 2);
+});
+
+test("one AI Session keeps a separate repository tab per worktree", () => {
+  const workspaceFiles = repositoryResource("ai-a", "instance-a", "ai-session", "ai-a", "files");
+  const worktreeFiles = repositoryResource("ai-a", "instance-a", "ai-session", "ai-a", "files", "second.ts", "worktree-a");
+  let resources = upsertAiSessionRepositoryResource([], workspaceFiles);
+  resources = upsertAiSessionRepositoryResource(resources, worktreeFiles);
+  assert.equal(resources.length, 2);
+  resources = upsertAiSessionRepositoryResource(resources, repositoryResource("ai-a", "instance-a", "ai-session", "ai-a", "files", "workspace.ts"));
+  assert.equal(resources.length, 2);
+  assert.equal(resources[0].filePath, "workspace.ts");
+  assert.equal(resources[1].filePath, "second.ts");
+  assert.equal(resources[1].cwdFolderId, "worktree-a");
+});
+
+test("worktree tabs stay independent across selection and close", async () => {
+  const storage = localStorageWindow();
+  globalThis.window = storage.window;
+  const scope = effectScope();
+  const sidebar = scope.run(() => useStoryResourceSidebar({
+    aiSessionId: computed(() => "ai-a"),
+    instanceId: computed(() => "instance-a"),
+    instances: computed(() => [instance("instance-a")]),
+  }));
+  assert.ok(sidebar);
+  const workspaceFiles = repositoryResource("ai-a", "instance-a", "ai-session", "ai-a", "files");
+  const worktreeFiles = repositoryResource("ai-a", "instance-a", "ai-session", "ai-a", "files", undefined, "worktree-a");
+  sidebar.openRepository(workspaceFiles);
+  sidebar.openRepository(worktreeFiles);
+  await nextTick();
+  assert.deepEqual(sidebar.resources.value.map(storyResourceKey), [storyResourceKey(workspaceFiles), storyResourceKey(worktreeFiles)]);
+  assert.equal(sidebar.activeKey.value, storyResourceKey(worktreeFiles));
+
+  sidebar.removeRepository(worktreeFiles);
+  await nextTick();
+  assert.deepEqual(sidebar.resources.value.map(storyResourceKey), [storyResourceKey(workspaceFiles)]);
+  assert.equal(sidebar.activeKey.value, storyResourceKey(workspaceFiles));
+  scope.stop();
+  delete globalThis.window;
 });
 
 test("active selection falls back only within the current AI Session resource list", () => {
@@ -186,6 +233,30 @@ test("authoritative App removal updates every same-instance AI Session without r
   aiSessionId.value = "ai-b";
   await nextTick();
   assert.deepEqual(sidebar.resources.value.map((resource) => [resource.kind, resource.sessionId]), [["app-session", "app-b"]]);
+  scope.stop();
+  delete globalThis.window;
+});
+
+test("App focus waits for the authoritative session projection", async () => {
+  const storage = localStorageWindow();
+  globalThis.window = storage.window;
+  const instances = ref([instance("instance-a", [{ id: "app-a" }])]);
+  const scope = effectScope();
+  const sidebar = scope.run(() => useStoryResourceSidebar({
+    aiSessionId: computed(() => "ai-a"),
+    instanceId: computed(() => "instance-a"),
+    instances: computed(() => instances.value),
+  }));
+  assert.ok(sidebar);
+
+  sidebar.focusApp("instance-a", "app-b");
+  assert.equal(sidebar.visible.value, true);
+  assert.equal(sidebar.activeKey.value, storyResourceKey({ kind: "app-session", instanceId: "instance-a", sessionId: "app-a" }));
+
+  instances.value = [instance("instance-a", [{ id: "app-a" }, { id: "app-b" }])];
+  await nextTick();
+  assert.equal(sidebar.activeKey.value, storyResourceKey({ kind: "app-session", instanceId: "instance-a", sessionId: "app-b" }));
+
   scope.stop();
   delete globalThis.window;
 });

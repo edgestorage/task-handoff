@@ -49,6 +49,7 @@ import {
   runtimeUsesManagedArtifacts,
 } from "./state.ts";
 import { registerNodeModelRoutes } from "./models/routes.ts";
+import type { InstancePrivateModelCatalog } from "./models/private-catalog.ts";
 import { registerNodeGitCredentialRoutes } from "./git-credentials/routes.ts";
 import { registerNodeStoryRoutes } from "./stories/routes.ts";
 import { NodeStoryStore } from "./stories/store.ts";
@@ -374,7 +375,7 @@ async function autoImportAgentConfig(fetchImpl: typeof fetch, instance: Controll
   }
 }
 
-async function syncAssignedModelEnvironment(
+export async function syncAssignedModelEnvironment(
   fetchImpl: typeof fetch,
   state: NodeAgentState,
   instanceId: string,
@@ -385,10 +386,23 @@ async function syncAssignedModelEnvironment(
   const modelEnvironment = state.resolvedAssignedModelEnvironment(instanceId);
   const modelCatalog = state.modelRegistry.privateCatalog(instanceId);
   state.instancePrivateConfigs.materialize(instance.id, instance.registrationToken, modelEnvironment, modelCatalog, instance.config.codexSettings);
-  if (instance.targetStatus !== "reachable") return false;
+  // Materializing the private config to disk is not enough: the running instance
+  // keeps its own in-memory catalog, so a skipped live push leaves it resolving
+  // models against a stale catalog while AI session resume/send reports those
+  // models as removed. Always attempt the push; status only affects reachability.
+  let instanceBase: string;
+  try {
+    instanceBase = await resolveInstanceWeb(instance);
+  } catch (error) {
+    warn?.({
+      instanceId,
+      error: error instanceof Error ? error.message : String(error),
+    }, "node instance model environment live sync deferred");
+    return false;
+  }
   let response: Response;
   try {
-    response = await fetchWithTimeout(fetchImpl, `${await resolveInstanceWeb(instance)}/api/internal/model-environment`, {
+    response = await fetchWithTimeout(fetchImpl, `${instanceBase}/api/internal/model-environment`, {
       method: "PUT",
       headers: {
         "content-type": "application/json",
@@ -413,8 +427,46 @@ async function syncAssignedModelEnvironment(
     return false;
   }
   if (!supportsControlledInstancePrivateModelCatalog(instance.capabilities)) return true;
+  await pushInstancePrivateModelCatalog(fetchImpl, instanceBase, instance, modelCatalog, warn);
+  return true;
+}
+
+async function readInstanceModelCatalogDiagnostic(
+  fetchImpl: typeof fetch,
+  instanceBase: string,
+  registrationToken: string,
+) {
   try {
-    const catalogResponse = await fetchWithTimeout(fetchImpl, `${await resolveInstanceWeb(instance)}/api/internal/model-catalog`, {
+    const response = await fetchWithTimeout(fetchImpl, `${instanceBase}/api/internal/model-catalog`, {
+      headers: { authorization: `Bearer ${registrationToken}` },
+    }, DEFAULT_AUTO_IMPORT_AGENT_CONFIG_TIMEOUT_MS);
+    if (!response.ok) return undefined;
+    const payload = await response.json() as {
+      data?: { source?: unknown; loadedAt?: unknown; catalog?: { entities?: Array<{ id?: unknown }> } | null };
+    };
+    const entities = payload.data?.catalog?.entities;
+    return {
+      source: typeof payload.data?.source === "string" ? payload.data.source : undefined,
+      loadedAt: typeof payload.data?.loadedAt === "string" ? payload.data.loadedAt : undefined,
+      modelEntityIds: Array.isArray(entities)
+        ? entities.map((entity) => typeof entity?.id === "string" ? entity.id : "unknown")
+        : undefined,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+async function pushInstancePrivateModelCatalog(
+  fetchImpl: typeof fetch,
+  instanceBase: string,
+  instance: ControlledInstance,
+  modelCatalog: InstancePrivateModelCatalog,
+  warn?: (data: Record<string, unknown>, message: string) => void,
+) {
+  let response: Response;
+  try {
+    response = await fetchWithTimeout(fetchImpl, `${instanceBase}/api/internal/model-catalog`, {
       method: "PUT",
       headers: {
         "content-type": "application/json",
@@ -422,13 +474,23 @@ async function syncAssignedModelEnvironment(
       },
       body: JSON.stringify(modelCatalog),
     }, DEFAULT_AUTO_IMPORT_AGENT_CONFIG_TIMEOUT_MS);
-    if (!catalogResponse.ok && catalogResponse.status !== 404) {
-      warn?.({ instanceId, statusCode: catalogResponse.status }, "node instance model catalog live sync deferred");
-    }
   } catch (error) {
-    warn?.({ instanceId, error: error instanceof Error ? error.message : String(error) }, "node instance model catalog live sync deferred");
+    warn?.({ instanceId: instance.id, error: error instanceof Error ? error.message : String(error) }, "node instance model catalog live sync deferred");
+    return false;
   }
-  return true;
+  if (response.ok) return true;
+  // Compatibility for controlled instances without the private catalog route.
+  if (response.status === 404) return false;
+  const diagnostic = await readInstanceModelCatalogDiagnostic(fetchImpl, instanceBase, instance.registrationToken);
+  warn?.({
+    instanceId: instance.id,
+    statusCode: response.status,
+    assignedModelEntityIds: modelCatalog.entities.map((entity) => entity.id),
+    instanceModelEntityIds: diagnostic?.modelEntityIds,
+    instanceModelCatalogSource: diagnostic?.source,
+    instanceModelCatalogLoadedAt: diagnostic?.loadedAt,
+  }, "node instance model catalog live sync deferred");
+  return false;
 }
 
 function appSessionsFromCrossVersionSnapshot(payload: unknown) {

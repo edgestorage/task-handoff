@@ -8,8 +8,10 @@ const {
   ControlledPrivateModelCatalogSchema,
   readControlledPrivateCodexSettings,
   readControlledPrivateModelCatalog,
+  readControlledPrivateModelCatalogSource,
   resolveControlledPrivateModelSelection,
 } = require("../packages/controlled-instance/src/web/private-model-catalog.ts");
+const { summarizeInstancePrivateModelCatalog } = require("../packages/core/src/core/instance-private-model-catalog.ts");
 
 const catalog = {
   protocolVersion: "2026-08-27",
@@ -33,18 +35,57 @@ test("private catalog resolves defaults and rejects stale selections without fal
     () => resolveControlledPrivateModelSelection(catalog, "codex", { modelEntityId: "removed", modelName: "model-one" }),
     (error) => error.code === "AI_SESSION_MODEL_ENTITY_UNAVAILABLE"
       && error.statusCode === 409
-      && error.message.includes("Restart the instance"),
+      && error.message.includes("Select another model"),
   );
   assert.throws(
     () => resolveControlledPrivateModelSelection(catalog, "codex", { modelEntityId: "provider_one", modelName: "removed-model" }),
     (error) => error.code === "AI_SESSION_MODEL_NAME_UNAVAILABLE"
       && error.statusCode === 409
-      && error.message.includes("Restart the instance"),
+      && error.message.includes("Select another model"),
   );
   assert.throws(
     () => resolveControlledPrivateModelSelection(catalog, "claude", { modelEntityId: "provider_one", modelName: "model-one" }),
     (error) => error.code === "AI_SESSION_MODEL_ENTITY_UNAVAILABLE" && error.statusCode === 409,
   );
+});
+
+test("a switch target is never reported as the model previously selected for the session", () => {
+  assert.throws(
+    () => resolveControlledPrivateModelSelection(catalog, "codex", { modelEntityId: "removed", modelName: "model-one" }, { intent: "target" }),
+    (error) => error.code === "AI_SESSION_MODEL_TARGET_UNAVAILABLE"
+      && error.statusCode === 409
+      && !error.message.includes("previously selected"),
+  );
+  assert.throws(
+    () => resolveControlledPrivateModelSelection(catalog, "codex", { modelEntityId: "provider_one", modelName: "removed-model" }, { intent: "target" }),
+    (error) => error.code === "AI_SESSION_MODEL_TARGET_UNAVAILABLE" && error.statusCode === 409,
+  );
+  assert.deepEqual(
+    resolveControlledPrivateModelSelection(catalog, "codex", { modelEntityId: "provider_one", modelName: "model-one" }, { intent: "target" }),
+    { modelEntityId: "provider_one", modelName: "model-one" },
+  );
+});
+
+test("catalog diagnostics project identities without credential material", () => {
+  const summary = summarizeInstancePrivateModelCatalog(catalog);
+  assert.deepEqual(summary, {
+    protocolVersion: "2026-08-27",
+    instanceId: "inst_one",
+    updatedAt: "2026-08-28T00:00:00.000Z",
+    entities: [{ id: "provider_one", protocols: ["openai-responses"], modelNames: [{ name: "model-one", order: 0 }] }],
+  });
+  assert.equal(JSON.stringify(summary).includes("secret"), false);
+});
+
+test("catalog source reports where the running instance loaded its models from", () => {
+  assert.deepEqual(readControlledPrivateModelCatalogSource({
+    TASK_HANDOFF_INSTANCE_ID: "inst_one",
+    TASK_HANDOFF_PRIVATE_MODEL_CATALOG_JSON: JSON.stringify(catalog),
+  }), { catalog, source: "environment" });
+  assert.deepEqual(readControlledPrivateModelCatalogSource({
+    TASK_HANDOFF_INSTANCE_ID: "inst_one",
+    TASK_HANDOFF_PRIVATE_CONFIG_LOADED: "1",
+  }), { catalog: undefined, source: "none" });
 });
 
 test("managed Docker config consumes the catalog loaded before privilege drop", () => {

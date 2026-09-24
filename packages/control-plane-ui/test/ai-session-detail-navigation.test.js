@@ -36,7 +36,7 @@ test("turn navigation stays in the sticky top-right actions before Environment",
   assert.ok(environment > panelNavigator);
   assert.ok(detailHeader > environment);
   assert.equal((panel.match(/<AiSessionTurnNavigator/g) || []).length, 1);
-  assert.match(panel, /class="session-ai-detail-fixed-actions session-ai-detail-head-actions">[\s\S]*?<AiSessionTurnNavigator[\s\S]*?<template v-if="!compactAiSessionLayout">[\s\S]*?<RepositoryEnvironment/);
+  assert.match(panel, /class="session-ai-detail-fixed-actions session-ai-detail-head-actions">[\s\S]*?<AiSessionTurnNavigator[\s\S]*?<template v-if="!detailHeadActionsInMenu">[\s\S]*?<RepositoryEnvironment/);
   assert.match(panelCss, /\.session-ai-detail-fixed-actions \{[\s\S]*?position: sticky;[\s\S]*?top: 0;[\s\S]*?justify-self: end;/);
   assert.doesNotMatch(panel, /session-ai-timeline-sticky-turn-navigator|has-turn-navigation/);
   assert.match(floatingDock, /class="ai-board-floating-head-actions">[\s\S]*?<AiSessionTurnNavigator[\s\S]*?<CircleHelp/);
@@ -80,10 +80,11 @@ test("compact detail supports Ctrl-wheel turn navigation with a centered page ov
 test("all viewport sizes share one compact detail actions menu", () => {
   assert.doesNotMatch(panel, /compactDetailActions/);
   assert.match(panel, /compactAiSessionLayout = useMediaQuery\("\(max-width: 920px\)"\)/);
-  assert.match(panel, /v-if="!compactAiSessionLayout"[\s\S]*?trigger-appearance="detail"[\s\S]*?sessions\.detail\.sessionDetails/);
+  assert.match(panel, /v-if="!detailHeadActionsInMenu"[\s\S]*?trigger-appearance="detail"[\s\S]*?sessions\.detail\.sessionDetails/);
   assert.match(panel, /<DropdownMenu :modal="false">[\s\S]*?<MoreHorizontal[\s\S]*?trigger-appearance="menu"/);
   assert.match(panel, /v-if="supportsAiSessionTimeline"[\s\S]*?<ToggleGroup[\s\S]*?class="session-ai-detail-actions-view-mode"[\s\S]*?:model-value="effectiveTimelineViewMode"[\s\S]*?value="compact"[\s\S]*?value="full"/);
-  assert.match(panel, /<RepositoryEnvironment[\s\S]*?v-if="compactAiSessionLayout"[\s\S]*?trigger-appearance="menu"/);
+  assert.match(panel, /<RepositoryEnvironment[\s\S]*?v-if="detailHeadActionsInMenu"[\s\S]*?trigger-appearance="menu"/);
+  assert.match(panel, /<DropdownMenuSub v-if="detailHeadActionsInMenu">/);
   assert.match(panel, /@interact-outside="keepCompactActionsMenuOpenForRepository"/);
   assert.match(panel, /target\.closest\("\.repository-environment-popover"\)[\s\S]*?event\.preventDefault\(\)/);
   for (const action of ["openApp", "continueFromTurn", "closeSession"]) {

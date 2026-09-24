@@ -15,7 +15,7 @@ import {
   type VerifiedDirectControlPlane,
 } from '../../src/control-plane/direct-enrollment';
 import { hasActiveCloudAccount, mobileProfileStore as profiles, mobileSecureStore as secureStore } from '../../src/control-plane/runtime';
-import { isMobileCloudRelayEnabled, isMobileTestMode } from '../../src/platform/build-variant';
+import { isMobileFeatureEnabled, isMobileTestMode } from '../../src/platform/build-variant';
 import { useI18n, type Translate } from '../../src/i18n';
 
 type EnrollmentStep = 'address' | 'identity' | 'credentials';
@@ -151,7 +151,7 @@ export default function AddControlPlaneScreen() {
             ) : null}
 
             <View style={styles.primaryAction}><NativeActionButton disabled={busy || !address.trim()} icon={{ android: 'verified_user', ios: 'checkmark.shield' }} label={t('enroll.verifyAddress')} onPress={() => { void verifyAddress(); }} /></View>
-            {isMobileCloudRelayEnabled ? <NativeActionButton compact disabled={busy} label={t('enroll.cloudAccount')} onPress={() => { void openCloudAccount(); }} /> : null}
+            {isMobileFeatureEnabled('officialAccount') ? <NativeActionButton compact disabled={busy} label={t('enroll.cloudAccount')} onPress={() => { void openCloudAccount(); }} /> : null}
           </>
         ) : null}
 

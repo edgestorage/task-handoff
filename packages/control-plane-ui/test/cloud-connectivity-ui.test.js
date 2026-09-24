@@ -9,9 +9,11 @@ const read = (relative) => fs.readFileSync(path.join(root, relative), "utf8");
 
 test("cloud connectivity settings are visible only with settings management permission", () => {
   const settings = read("src/apps/control-plane/settings/SettingsModal.vue");
+  const sections = read("src/apps/control-plane/settings/settingsSections.ts");
   assert.match(settings, /permissionIds\.includes\("settings:manage"\)/);
-  assert.match(settings, /!manageSettings && settingsSection\.value === "cloud-connectivity"/);
+  assert.match(settings, /!manageSettings.*settingsSection\.value === "cloud-connectivity"/);
   assert.match(settings, /setSettingsSection\("nodes"\)/);
+  assert.match(sections, /access\.manageSettings && isFeatureEnabled\("officialAccount"\)/);
 });
 
 test("cloud binding challenge stays in component memory and mutations use the existing settings API", () => {

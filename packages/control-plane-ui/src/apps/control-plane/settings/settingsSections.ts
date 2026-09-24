@@ -1,3 +1,5 @@
+import { isFeatureEnabled } from "../../../lib/featureFlags";
+
 export type SettingsSection = "basic" | "chat" | "images" | "environment-templates" | "projects" | "nodes" | "models" | "git-credentials" | "triggers" | "mobile-sessions" | "users" | "cloud-connectivity";
 
 type SettingsSectionAccess = {
@@ -20,7 +22,7 @@ export function buildSettingsSections(t: Translate, access: SettingsSectionAcces
     { id: "chat", label: t("settings.chat") },
     { id: "mobile-sessions", label: t("settings.mobileSessions.navigation") },
     ...(access.manageUsers ? [{ id: "users" as const, label: t("settings.userAccess.navigation") }] : []),
-    ...(access.manageSettings ? [{ id: "cloud-connectivity" as const, label: t("settings.cloud.navigation") }] : []),
+    ...(access.manageSettings && isFeatureEnabled("officialAccount") ? [{ id: "cloud-connectivity" as const, label: t("settings.cloud.navigation") }] : []),
     { id: "basic", label: t("settings.basic") },
   ];
 }

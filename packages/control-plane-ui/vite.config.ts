@@ -1,8 +1,17 @@
 import { fileURLToPath, URL } from "node:url";
+import { createRequire } from "node:module";
 import vue from "@vitejs/plugin-vue";
 import { defineConfig } from "vite";
 
+const require = createRequire(import.meta.url);
+const { resolveFeatureFlags } = require("../../shared/feature-flags.cjs") as {
+  resolveFeatureFlags(environment?: NodeJS.ProcessEnv): Record<string, boolean>;
+};
+
 export default defineConfig({
+  define: {
+    __TASK_HANDOFF_FEATURE_FLAGS__: JSON.stringify(resolveFeatureFlags(process.env)),
+  },
   root: fileURLToPath(new URL(".", import.meta.url)),
   plugins: [vue({ template: { compilerOptions: { isCustomElement: (tag) => tag === "webview" } } })],
   resolve: {
