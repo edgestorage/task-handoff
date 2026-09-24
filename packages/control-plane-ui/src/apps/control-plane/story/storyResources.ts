@@ -22,6 +22,7 @@ export const StoryRepositoryResourceRefSchema = AiSessionResourceIdentitySchema.
   kind: z.literal("repository"),
   sessionKind: z.enum(["ai-session", "app-session"]),
   sessionId: z.string().trim().min(1).max(160),
+  cwdFolderId: z.string().trim().min(1).max(120).optional(),
   page: StoryRepositoryPageSchema,
   filePath: z.string().trim().min(1).max(4096).optional(),
   fileRequestId: z.number().int().nonnegative().optional(),
@@ -51,12 +52,29 @@ export function aiSessionResourceContextKey(instanceId: string, aiSessionId: str
   return instanceId && aiSessionId ? JSON.stringify([instanceId, aiSessionId]) : "";
 }
 
+const REPOSITORY_RESOURCE_KEY_FIELDS = ["aiSessionId", "instanceId", "kind", "sessionKind", "sessionId", "page", "cwdFolderId"] as const;
+
+// cwdFolderId belongs to the identity because one AI Session owns a separate repository resource per worktree.
+function repositoryResourceKeyParts(resource: StoryRepositoryResourceRef) {
+  return REPOSITORY_RESOURCE_KEY_FIELDS.map((field) => resource[field] ?? null);
+}
+
+function parseRepositoryResourceKey(value: readonly unknown[]) {
+  const fields: Record<string, unknown> = {};
+  REPOSITORY_RESOURCE_KEY_FIELDS.forEach((field, index) => {
+    const part = value[index];
+    if (part !== undefined && part !== null) fields[field] = part;
+  });
+  const parsed = StoryRepositoryResourceRefSchema.safeParse(fields);
+  return parsed.success ? parsed.data : undefined;
+}
+
 export function storyResourceKey(resource: StoryResourceRef) {
   return JSON.stringify(resource.kind === "app-session"
     ? [resource.instanceId, resource.kind, resource.sessionId]
     : resource.kind === "embedded-browser"
       ? [resource.aiSessionId, resource.instanceId, resource.kind, resource.browserTabId]
-      : [resource.aiSessionId, resource.instanceId, resource.kind, resource.sessionKind, resource.sessionId, resource.page]);
+      : repositoryResourceKeyParts(resource));
 }
 export function parseStoryResourceKey(key: string): StoryResourceRef | undefined {
   try {
@@ -75,15 +93,7 @@ export function parseStoryResourceKey(key: string): StoryResourceRef | undefined
       });
       return parsed.success ? parsed.data : undefined;
     }
-    const parsed = StoryRepositoryResourceRefSchema.safeParse({
-      aiSessionId: value[0],
-      instanceId: value[1],
-      kind: value[2],
-      sessionKind: value[3],
-      sessionId: value[4],
-      page: value[5],
-    });
-    return parsed.success ? parsed.data : undefined;
+    return parseRepositoryResourceKey(value);
   } catch {
     return undefined;
   }
@@ -129,6 +139,7 @@ export function repositoryResource(
   sessionId: string,
   page: StoryRepositoryPage,
   filePath?: string,
+  cwdFolderId?: string,
 ): StoryRepositoryResourceRef {
   return StoryRepositoryResourceRefSchema.parse({
     kind: "repository",
@@ -137,6 +148,7 @@ export function repositoryResource(
     sessionKind,
     sessionId,
     page,
+    ...(cwdFolderId ? { cwdFolderId } : {}),
     ...(filePath ? { filePath, fileRequestId: 1 } : {}),
   });
 }

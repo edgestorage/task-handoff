@@ -31,6 +31,24 @@ test("repository files list one level and preserve special names", () => {
   assert.deepEqual(service.list("src").entries.map((entry) => entry.name), ["nested.ts"]);
 });
 
+test("repository path search is bounded, case-insensitive, and does not cross special directory boundaries", () => {
+  const fixture = createGitFixture();
+  fixture.write("src/components/SearchPanel.vue", "panel\n");
+  fixture.write("src/search-utils.ts", "utils\n");
+  fs.mkdirSync(path.join(fixture.root, "nested", ".git"), { recursive: true });
+  fixture.write("nested/search-secret.txt", "secret\n");
+  const service = new RepositoryFileService(fixture.root);
+
+  assert.deepEqual(service.search("SEARCH", 10).entries.map((entry) => entry.path), [
+    "src/search-utils.ts",
+    "src/components/SearchPanel.vue",
+  ]);
+  assert.equal(service.search("search", 1).truncated, true);
+  assert.equal(service.search("search", 1).entries.length, 1);
+  assert.equal(service.search("secret", 10).entries.length, 0);
+  assert.equal(service.search(".git", 10).entries.length, 0);
+});
+
 test("repository files use the workspace boundary while traversing nested repositories", () => {
   const fixture = createGitFixture();
   const external = path.join(fixture.base, "external.txt");

@@ -84,38 +84,7 @@ const { headerDensity, setHeaderDensity } = useWorkbenchLayoutPreferences();
 
 <style>
 .instance-action-menu.workbench-layout-context-menu {
-  display: grid;
   width: 172px;
-  gap: 2px;
-  border: 1px solid var(--line-strong);
-  border-radius: 8px;
-  background: var(--surface-inset);
-  box-shadow: var(--shadow-popover);
-  padding: 5px;
-}
-
-.workbench-layout-context-menu .instance-action-item {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  width: 100%;
-  min-height: 30px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--control-plane-menu-text);
-  cursor: pointer;
-  font-size: 13px;
-  font-weight: 500;
-  padding: 0 8px;
-  text-align: left;
-}
-
-.workbench-layout-context-menu .instance-action-item > span:not(:first-child) {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .workbench-layout-context-menu .workbench-layout-menu-label {
@@ -146,3 +115,5 @@ const { headerDensity, setHeaderDensity } = useWorkbenchLayoutPreferences();
   height: 8px;
 }
 </style>
+
+<style src="./InstanceActionMenu.css"></style>

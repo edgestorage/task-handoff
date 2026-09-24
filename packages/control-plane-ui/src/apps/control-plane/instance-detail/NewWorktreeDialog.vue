@@ -105,6 +105,12 @@ const branchName = ref("");
 const newBranchName = ref("");
 const startRef = ref("HEAD");
 const selectedBranch = computed(() => props.branches.find((branch) => branch.name === branchName.value && branch.worktreeSelectable));
+const preferredStartRef = computed(() => (
+  props.branches.find((branch) => branch.name === "main")?.name
+  || props.branches.find((branch) => branch.name === "master")?.name
+  || props.defaultStartRef
+  || "HEAD"
+));
 const canConfirm = computed(() => Boolean(
   !props.busy
   && props.confirmEnabled
@@ -121,14 +127,19 @@ watch(() => props.open, (open, wasOpen) => {
     ? initial.branchName
     : props.branches.find((branch) => branch.worktreeSelectable)?.name || "";
   newBranchName.value = initial?.mode === "new-branch" ? initial.branchName : "";
-  startRef.value = initial?.mode === "new-branch" ? initial.startRef : props.defaultStartRef || "HEAD";
+  startRef.value = initial?.mode === "new-branch" ? initial.startRef : preferredStartRef.value;
 });
 
 watch(() => props.branches, (branches) => {
-  if (!props.open || mode.value !== "existing-branch" || selectedBranch.value) return;
-  branchName.value = branches.find((branch) => branch.worktreeSelectable && branch.name === props.defaultStartRef)?.name
-    || branches.find((branch) => branch.worktreeSelectable)?.name
-    || "";
+  if (!props.open) return;
+  if (mode.value === "existing-branch") {
+    if (selectedBranch.value) return;
+    branchName.value = branches.find((branch) => branch.worktreeSelectable && branch.name === props.defaultStartRef)?.name
+      || branches.find((branch) => branch.worktreeSelectable)?.name
+      || "";
+    return;
+  }
+  if (startRef.value === "HEAD" || startRef.value === props.defaultStartRef) startRef.value = preferredStartRef.value;
 });
 
 function setMode(value: unknown) {

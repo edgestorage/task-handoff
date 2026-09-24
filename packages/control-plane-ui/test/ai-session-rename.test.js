@@ -9,7 +9,9 @@ const board = fs.readFileSync(new URL("../src/apps/control-plane/ai-board/AiSess
 const panel = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/AiSessionPanel.vue", import.meta.url), "utf8");
 const preview = fs.readFileSync(new URL("../src/apps/control-plane/instance-detail/SessionPreview.vue", import.meta.url), "utf8");
 const story = fs.readFileSync(new URL("../src/apps/control-plane/story/StoryView.vue", import.meta.url), "utf8");
+const storyResources = fs.readFileSync(new URL("../src/apps/control-plane/story/StoryResourceSidebar.vue", import.meta.url), "utf8");
 const workbench = fs.readFileSync(new URL("../src/apps/control-plane/ControlPlaneWorkbench.vue", import.meta.url), "utf8");
+const sessions = fs.readFileSync(new URL("../src/apps/control-plane/useInstanceSessions.ts", import.meta.url), "utf8");
 
 test("AI Session rename is gated only by the session action in list, board, and detail menus", () => {
   assert.match(menu, /v-if="canRename"[\s\S]*@select="\$emit\('renameSession'\)"/);
@@ -38,8 +40,10 @@ test("rename dialog keeps authoritative state external and submits strict idempo
 });
 
 test("linked AppSession rename is capability gated and successful actions do not refetch projections", () => {
-  assert.match(preview, /linkedAiSession\.actions\?\.rename === true/);
+  assert.match(sessions, /export function canRenameAppSession[\s\S]*linkedAiSession\.actions\?\.rename === true/);
+  assert.match(preview, /function sessionTabCanRename\(session: SessionTab\)[\s\S]*return canRenameAppSession\(props\.instance, appSessionId\)/);
   assert.match(preview, /renameUnavailable/);
+  assert.match(storyResources, /canRenameAppSession\(instance, resource\.sessionId\) \? "enabled" : "unavailable"/);
   const renameFunction = workbench.slice(workbench.indexOf("async function renameSession"), workbench.indexOf("async function controlWindow"));
   assert.match(renameFunction, /renameAppSession/);
   assert.doesNotMatch(renameFunction, /refetchQueries|invalidateQueries|setQueryData/);

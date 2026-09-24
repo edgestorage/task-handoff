@@ -651,14 +651,7 @@ function openNewInstanceFromTemporaryList() {
 }
 
 :global(.instance-action-menu) {
-  display: grid;
   width: 158px;
-  gap: 2px;
-  border: 1px solid var(--line-strong);
-  border-radius: 8px;
-  background: var(--surface-inset);
-  box-shadow: var(--shadow-popover);
-  padding: 5px;
 }
 
 .instance-group-label {
@@ -738,60 +731,6 @@ function openNewInstanceFromTemporaryList() {
   background: var(--surface-inset);
   box-shadow: var(--shadow-popover);
   padding: 5px;
-}
-
-:global(.instance-action-menu .instance-action-item) {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  width: 100%;
-  min-height: 30px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--control-plane-menu-text);
-  cursor: pointer;
-  font-size: 13px;
-  font-weight: 500;
-  padding: 0 8px;
-  text-align: left;
-}
-
-:global(.instance-action-menu .instance-action-item span) {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-:global(.instance-action-menu .instance-action-item svg:last-child:not(:first-child)) {
-  margin-left: auto;
-  color: var(--text-subtle);
-}
-
-:global(.instance-action-menu .instance-action-item:hover),
-:global(.instance-action-menu .instance-action-item:focus-visible),
-:global(.instance-action-menu .instance-action-item[data-highlighted]),
-:global(.instance-action-menu .instance-action-item[data-state="open"]) {
-  background: var(--surface-active);
-  color: var(--control-plane-menu-hover-text);
-  outline: none;
-}
-
-:global(.instance-action-menu .instance-action-item.danger) {
-  color: var(--status-danger);
-}
-
-:global(.instance-action-menu .instance-action-item.danger:hover),
-:global(.instance-action-menu .instance-action-item.danger:focus-visible),
-:global(.instance-action-menu .instance-action-item.danger[data-highlighted]) {
-  background: var(--status-danger-bg);
-  color: var(--status-danger);
-}
-
-:global(.instance-action-menu .instance-action-item[data-disabled]) {
-  cursor: default;
-  opacity: 0.52;
 }
 
 .status-dot {
@@ -886,3 +825,5 @@ function openNewInstanceFromTemporaryList() {
   }
 }
 </style>
+
+<style src="../shared/InstanceActionMenu.css"></style>

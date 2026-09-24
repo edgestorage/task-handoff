@@ -491,6 +491,7 @@ import { translateApiError } from "../../../i18n/apiError";
 import { normalizeProxyOrigin, proxyClaimForceDeleteAllowed, proxyClaimValidation } from "./controlPlaneProxyUi";
 import type { NodeJoinedEvent } from "@task-handoff/protocol/control-plane";
 import { buildSettingsSections, type SettingsSection } from "./settingsSections";
+import { isFeatureEnabled } from "../../../lib/featureFlags";
 
 type NodeDiagnosticLog = {
   route: string;
@@ -527,7 +528,7 @@ const settingsSections = computed(() => buildSettingsSections(t, {
   manageUsers: canManageUsers.value,
 }));
 
-const settingsSection = ref<SettingsSection>(props.initialSection || "nodes");
+const settingsSection = ref<SettingsSection>(props.initialSection === "cloud-connectivity" && !isFeatureEnabled("officialAccount") ? "nodes" : props.initialSection || "nodes");
 const currentSettingsSectionLabel = computed(() => settingsSections.value.find((item) => item.id === settingsSection.value)?.label || "");
 const settingsNavigationElement = ref<HTMLElement>();
 const settingsBackElement = ref<HTMLElement>();
@@ -578,7 +579,7 @@ const updateChannel = computed<UpdateChannel>(() => controlPlaneSettings.data.va
 const diagnosticLogs = computed(() => controlPlaneSettings.data.value?.diagnosticLogs === true);
 
 watch([canManageUsers, canManageSettings, canManageSecrets], ([manageUsers, manageSettings, manageSecrets]) => {
-  if (!manageSettings && settingsSection.value === "cloud-connectivity") setSettingsSection("nodes");
+  if ((!manageSettings || !isFeatureEnabled("officialAccount")) && settingsSection.value === "cloud-connectivity") setSettingsSection("nodes");
   if (!manageUsers && settingsSection.value === "users") setSettingsSection("nodes");
   if (!manageSecrets && settingsSection.value === "git-credentials") setSettingsSection("nodes");
 }, { immediate: true });
@@ -647,7 +648,7 @@ watch(
   (section) => {
     if (section) {
       if (section !== "nodes") closeNodeStorageFolderPicker();
-      settingsSection.value = section;
+      settingsSection.value = section === "cloud-connectivity" && !isFeatureEnabled("officialAccount") ? "nodes" : section;
     }
   },
 );

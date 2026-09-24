@@ -68,7 +68,15 @@ import {
 } from "@task-handoff/protocol/ai-sessions";
 import { AppSessionDeltaResponseSchema, AppSessionsStateSchema, emptyAppSessionsSnapshot, type AppSessionDeltaResponse, type AppSessionsSnapshot } from "@task-handoff/protocol/app-sessions";
 import type { ControlPlaneTriggerMutationFailure } from "@task-handoff/protocol/triggers";
-import type { RepositoryAiSessionGitSelection } from "@task-handoff/protocol/repository";
+import {
+  RepositoryBranchesSchema,
+  RepositoryCreateWorktreeResultSchema,
+  RepositoryRemoveWorktreeResultSchema,
+  RepositoryWorktreesSchema,
+  type RepositoryAiSessionGitSelection,
+  type RepositoryCreateWorktreeRequest,
+  type RepositoryRemoveWorktreeRequest,
+} from "@task-handoff/protocol/repository";
 import { StorySchema } from "@task-handoff/protocol/stories";
 import { AiSessionActionService } from "../sessions/ai-session-actions.ts";
 import { clientRequestTraceId, type RequestTimingDiagnostics } from "../../shared/http/server-timing.ts";
@@ -275,6 +283,7 @@ export class ControlPlaneService {
       requireInstance: (instanceId) => this.requireControlledInstance(instanceId, true) as Promise<ControlledInstance>,
       request: (instance, route, init, onTiming) => this.instanceRequest(instance, route, init, onTiming),
       requireRuntime: (nodeId, runtimeId) => this.requireNodeRuntimeOnNode(nodeId, runtimeId),
+      syncInstanceModels: (instanceId) => this.syncInstanceModels(instanceId),
     });
     this.projects = new JsonCollection(paths.projectsDir, { ...storeOptions(ProjectSchema), sanitize: sanitizeStoredProject });
     this.modelService = new ControlPlaneModelService({
@@ -1608,7 +1617,7 @@ export class ControlPlaneService {
       if (story.archivedAt) throw Object.assign(new Error("Archived Story cannot create new Sessions."), { statusCode: 409, code: "STORY_ARCHIVED" });
     }
     const { cwdFolderId: _cwdFolderId, ...resolvedInput } = input;
-    const cwdPath = await measure("resolve-cwd", () => this.aiSessionRuntimeCwd(instance, input.cwdFolderId));
+    const cwdPath = await measure("resolve-cwd", () => this.workspaceRuntimeCwd(instance, input.cwdFolderId));
     const cwd = { type: "runtime-path" as const, path: cwdPath };
     return measure("instance-create", () => this.aiSessionActionService.create(instanceId, {
       ...resolvedInput,
@@ -1619,14 +1628,46 @@ export class ControlPlaneService {
 
   async inspectAiSessionWorkspace(instanceId: string, cwdFolderId?: string) {
     const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
-    const cwd = { type: "runtime-path" as const, path: await this.aiSessionRuntimeCwd(instance, cwdFolderId) };
+    const cwd = { type: "runtime-path" as const, path: await this.workspaceRuntimeCwd(instance, cwdFolderId) };
     return this.aiSessionActionService.inspectWorkspace(instanceId, cwd);
   }
 
   async checkoutAiSessionWorkspaceBranch(instanceId: string, branch: string, cwdFolderId?: string) {
     const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
-    const cwd = { type: "runtime-path" as const, path: await this.aiSessionRuntimeCwd(instance, cwdFolderId) };
+    const cwd = { type: "runtime-path" as const, path: await this.workspaceRuntimeCwd(instance, cwdFolderId) };
     return this.aiSessionActionService.checkoutWorkspaceBranch(instanceId, cwd, branch);
+  }
+
+  async listRepositoryWorkspaceWorktrees(instanceId: string, cwdFolderId?: string) {
+    const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
+    const cwd = { type: "runtime-path" as const, path: await this.workspaceRuntimeCwd(instance, cwdFolderId) };
+    return parseResponse(RepositoryWorktreesSchema, await this.instanceRequest(instance, "/repository/workspace/worktrees/list", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ cwd }),
+    }));
+  }
+
+  async createRepositoryWorkspaceWorktree(instanceId: string, input: RepositoryCreateWorktreeRequest, cwdFolderId?: string) {
+    const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
+    const cwd = { type: "runtime-path" as const, path: await this.workspaceRuntimeCwd(instance, cwdFolderId) };
+    return parseResponse(RepositoryCreateWorktreeResultSchema, await this.instanceRequest(instance, "/repository/workspace/worktrees", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ cwd, worktree: input }),
+    }));
+  }
+
+  async removeRepositoryWorkspaceWorktree(instanceId: string, input: RepositoryRemoveWorktreeRequest, cwdFolderId?: string) {
+    const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
+    const cwd = { type: "runtime-path" as const, path: await this.workspaceRuntimeCwd(instance, cwdFolderId) };
+    return parseResponse(RepositoryRemoveWorktreeResultSchema, await this.instanceRequest(instance, "/repository/workspace/worktrees/remove", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ cwd, removal: input }),
+    }));
+  }
+
+  async listRepositoryWorkspaceBranches(instanceId: string, cwdFolderId?: string) {
+    const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
+    const cwd = { type: "runtime-path" as const, path: await this.workspaceRuntimeCwd(instance, cwdFolderId) };
+    return parseResponse(RepositoryBranchesSchema, await this.instanceRequest(instance, "/repository/workspace/branches/list", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ cwd }),
+    }));
   }
 
   forkAiSession(instanceId: string, aiSessionId: string, input: AiSessionForkInput) {
@@ -1863,6 +1904,11 @@ export class ControlPlaneService {
     return this.controlledInstanceGateway.request(instance, route, init, onTiming);
   }
 
+  private async syncInstanceModels(instanceId: string) {
+    const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
+    await this.nodeAgentGateway.syncInstanceModels(this.requireNode(instance.nodeId), instance.id);
+  }
+
   private async reportInstanceHeartbeat(instance: ControlledInstance, input: ControlledInstanceHeartbeat) {
     await this.controlledInstanceGateway.reportHeartbeat(instance, input);
   }
@@ -2000,7 +2046,7 @@ export class ControlPlaneService {
     return this.appLaunchCwdForFolder(instance, folder, runtime);
   }
 
-  private async aiSessionRuntimeCwd(instance: ControlledInstance, cwdFolderId?: string) {
+  private async workspaceRuntimeCwd(instance: ControlledInstance, cwdFolderId?: string) {
     return cwdFolderId
       ? this.runtimeCwdForFolderId(instance, cwdFolderId)
       : instance.runtime.workspacePath || instance.workspace.path || workspacePolicyForSource(instance.source).path || "/workspace";

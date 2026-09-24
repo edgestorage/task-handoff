@@ -18,7 +18,7 @@ jest.mock('expo-router/drawer', () => {
 jest.mock('../src/control-plane/use-mobile-control-plane-runtime', () => ({ useMobileControlPlaneRuntime: jest.fn() }));
 jest.mock('../src/control-plane/use-cloud-account-state', () => ({ useCloudAccountState: jest.fn() }));
 jest.mock('../src/platform/build-variant', () => ({
-  get isMobileCloudRelayEnabled() { return mockCloudRelayEnabled; },
+  isMobileFeatureEnabled: () => mockCloudRelayEnabled,
 }));
 jest.mock('../src/directories/use-directories', () => ({ useActiveDirectories: jest.fn() }));
 jest.mock('../src/instance-scope/use-instance-scope', () => ({ useInstanceScope: jest.fn() }));

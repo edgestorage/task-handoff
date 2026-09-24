@@ -28,6 +28,7 @@ import AiSessionMarkdownNode from "./AiSessionMarkdownNode.vue";
 import { aiSessionMarkdownCodeToolsKey, defaultAiSessionMarkdownCodeTools } from "./markdown-code-tools";
 import MarkdownLinkContextMenu from "./MarkdownLinkContextMenu.vue";
 import type { MarkdownLinkTarget } from "./markdown-link-target";
+import { openDesktopExternalUrl } from "../../lib/desktopBridge";
 import type { RepositoryContext } from "@task-handoff/protocol/repository";
 
 enableKatex();
@@ -82,11 +83,31 @@ function isFileHref(href: string) {
   return !scheme || scheme === "file";
 }
 
+function isWebHref(href: string) {
+  try {
+    const url = new URL(href);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+async function openExternalLink(href: string) {
+  const result = await openDesktopExternalUrl(href);
+  if (!result.ok && typeof window !== "undefined") window.open(href, "_blank", "noopener,noreferrer");
+}
+
 function handleLinkClick(event: MouseEvent) {
-  if (!props.fileLinks || event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+  if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
   const target = event.target instanceof Element ? event.target.closest("a") : undefined;
   const href = target?.getAttribute("href")?.trim();
-  if (!href || !isFileHref(href)) return;
+  if (!href) return;
+  if (isWebHref(href)) {
+    event.preventDefault();
+    void openExternalLink(href);
+    return;
+  }
+  if (!props.fileLinks || !isFileHref(href)) return;
   event.preventDefault();
   emit("openFile", href);
 }

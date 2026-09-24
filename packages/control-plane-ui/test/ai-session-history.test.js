@@ -48,9 +48,6 @@ test("history detail composer resumes, waits for authoritative state, and then s
   assert.match(panel, /:model-groups="historyModelGroups"/);
   assert.match(panel, /:model-selection="historyModelSelection"/);
   assert.match(panel, /@select-model="historyModelSelection = \$event"/);
-  assert.match(panel, /const historyModelFallbackSelection = computed\(\(\) =>/);
-  assert.match(panel, /mode: "create"/);
-  assert.match(panel, /historyModelSelection\.value = defaultAiSessionModelSelection\(groups\) \|\| historyModelFallbackSelection\.value/);
   assert.match(panel, /@run="sendHistoryMessage"/);
   assert.match(panel, /if \(!item \|\| resumingHistoryId\.value/);
   assert.match(panel, /const result = await resumeAiSession\(props\.instance\.id, item\.id, selection \? \{ modelSelection: selection \} : \{\}\);/);

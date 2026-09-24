@@ -102,6 +102,7 @@
         <ContextMenuItem class="ai-session-context-menu-item" @select="$emit('forkSession', 'managed-worktree')">{{ t("sessions.actions.forkWorktree") }}</ContextMenuItem>
       </ContextMenuSubContent>
     </ContextMenuSub>
+    <ContextMenuSeparator v-if="canCloseSession" />
     <ContextMenuItem v-if="canCloseSession" class="ai-session-context-menu-item danger" :disabled="isStoppingAppSession" @select="$emit('closeSession')">
       <Square :size="14" />
       <span>{{ isStoppingAppSession ? t("sessions.actions.closingSession") : t("sessions.actions.closeSession") }}</span>
@@ -121,6 +122,7 @@ import { storyTargetNodeLabel, type AiSessionStoryTarget } from "./storyTarget";
 import {
   ContextMenuContent,
   ContextMenuItem,
+  ContextMenuSeparator,
   ContextMenuSub,
   ContextMenuSubContent,
   ContextMenuSubTrigger,

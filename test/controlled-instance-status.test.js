@@ -22,6 +22,7 @@ const {
   supportsAiSessionPersistenceSettings,
   supportsAiSessionFileSizeLimitSettings,
   supportsControlledInstanceNodeAgentConnectionUpdate,
+  supportsRepositoryPathSearch,
   supportsAiSessionTimelineCapability,
   supportsAiSessionWorkspaceCheckout,
   supportsAiSessionWorkspaceSelection,
@@ -101,7 +102,9 @@ test("instance capabilities are projected from available inventory items", () =>
   assert.equal(supportsAiSessionWorkspaceCheckout(capabilities), true);
   assert.equal(capabilities.features.codexManagedSettings, true);
   assert.equal(capabilities.features.nodeAgentConnectionUpdate, true);
+  assert.equal(capabilities.features.repositoryPathSearch, true);
   assert.equal(supportsControlledInstanceNodeAgentConnectionUpdate(capabilities), true);
+  assert.equal(supportsRepositoryPathSearch(capabilities), true);
   assert.equal(supportsAiSessionPersistenceSettings(capabilities), true);
   assert.equal(supportsAiSessionFileSizeLimitSettings(capabilities), true);
   assert.deepEqual(capabilities.features.aiSessionTimeline, {
@@ -128,6 +131,8 @@ test("controlled instance capability normalization isolates malformed feature do
   assert.equal(ControlledInstanceCapabilitiesSchema.safeParse(malformed).success, false);
 
   const normalized = normalizeControlledInstanceCapabilities(malformed);
+  // Compatibility for v0.0.32: the absent additive capability disables only path search.
+  assert.equal(supportsRepositoryPathSearch(normalized), false);
   assert.equal(supportsAiSessionWorkspaceSelection(normalized), true);
   assert.equal(supportsAiSessionWorkspaceCheckout(normalized), true);
   assert.equal(supportsAiSessionPersistenceSettings(normalized), false);

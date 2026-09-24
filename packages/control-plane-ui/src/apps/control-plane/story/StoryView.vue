@@ -2,8 +2,8 @@
   <section class="story-view">
     <div v-if="error" class="story-error" role="alert">{{ error }}</div>
 
-    <div ref="workspaceEl" class="story-workspace" :data-resizing="resizingSidebar ? 'true' : undefined" :style="{ '--story-sidebar-width': `${sidebarWidth}px` }">
-      <aside ref="storySidebarEl" class="story-sidebar" :aria-busy="storiesFetching ? 'true' : undefined" :aria-label="t('stories.region')">
+    <div ref="workspaceEl" class="story-workspace" :class="{ 'story-workspace-collapsed': sidebarCollapsed, 'story-workspace-overlay-open': sidebarOverlayOpen, 'story-workspace-animating': sidebarLayoutAnimating }" :data-resizing="resizingSidebar ? 'true' : undefined" :style="{ '--story-sidebar-width': `${sidebarWidth}px`, '--story-sidebar-layout-width': sidebarLayoutWidth }">
+      <aside ref="storySidebarEl" class="story-sidebar" :aria-busy="storiesFetching ? 'true' : undefined" :aria-hidden="sidebarCollapsed && !sidebarOverlayOpen ? 'true' : undefined" :aria-label="t('stories.region')" @pointerenter="openSidebarOverlay" @pointerleave="scheduleSidebarOverlayClose">
         <div class="story-sidebar-actions">
           <button type="button" class="story-tree-item story-new-button" @click="openCreate"><Plus :size="15" /><span class="story-tree-item-copy"><strong>{{ t("stories.newStory") }}</strong></span></button>
           <div class="story-sidebar-section">
@@ -135,7 +135,7 @@
         </ScrollArea>
         <span class="sr-only" aria-live="polite">{{ storyReorderAnnouncement }}</span>
       </aside>
-      <button type="button" class="story-sidebar-resize-handle" :aria-label="t('stories.resizeList')" :title="t('stories.resizeList')" @pointerdown.stop.prevent="startSidebarResize" @click.stop @dragstart.prevent />
+      <button type="button" class="story-sidebar-resize-handle" :aria-label="t('stories.resizeList')" :title="t('stories.resizeList')" @pointerdown.stop.prevent="startSidebarResize" @pointerenter="openSidebarOverlay" @pointerleave="scheduleSidebarOverlayClose" @focus="openSidebarOverlay" @blur="scheduleSidebarOverlayClose" @click.stop="toggleSidebarCollapsed" @dragstart.prevent />
 
       <main class="story-content" :class="{ 'story-session-pane': (selectedResource?.kind === 'session' || selectedResource?.kind === 'new-session') }">
         <template v-if="selectedResource?.kind === 'new-session'">
@@ -839,13 +839,28 @@ function handleStorySortKeydown(event: KeyboardEvent, story: Story) {
   storyReorderAnnouncement.value = t("stories.sort.reordered", { title: story.title });
 }
 const SIDEBAR_WIDTH_STORAGE_KEY = "task-handoff.control-plane.stories.sidebar-width";
+const SIDEBAR_LAYOUT_ANIMATION_MS = 200;
 function storedSidebarWidth() {
   try {
     const value = Number(window.localStorage?.getItem(SIDEBAR_WIDTH_STORAGE_KEY));
     return Number.isFinite(value) ? Math.min(520, Math.max(240, value)) : 320;
   } catch { return 320; }
 }
+const SIDEBAR_COLLAPSE_MODE_KEY = "task-handoff.control-plane.stories.sidebar-collapse-mode";
+function storedSidebarCollapsed() {
+  try {
+    const value = window.localStorage?.getItem(SIDEBAR_COLLAPSE_MODE_KEY);
+    return value === "collapsed";
+  } catch { return false; }
+}
 const sidebarWidth = ref(storedSidebarWidth()); const workspaceEl = ref<HTMLElement>(); const resizingSidebar = ref(false); let resizingPointerId: number | undefined;
+const sidebarCollapsed = ref(storedSidebarCollapsed());
+const sidebarLayoutWidth = computed(() => sidebarCollapsed.value ? "11px" : `${sidebarWidth.value}px`);
+const sidebarOverlayOpen = ref(false);
+let sidebarOverlayCloseTimer: number | undefined;
+let sidebarResizeMoved = false;
+const sidebarLayoutAnimating = ref(false);
+let sidebarLayoutAnimationTimer: number | undefined;
 const previewText = ref(""); const previewLoading = ref(false); const previewError = ref("");
 const editorOpen = ref(false); const editing = ref(false); const draftTitle = ref(""); const draftDescription = ref(""); const draftNodeId = ref(""); const draftMaxIdleAiSessions = ref(STORY_DEFAULT_MAX_IDLE_AI_SESSIONS); const saving = ref(false);
 const draftAgentToolPolicy = ref<StoryAgentToolPolicy>({ ...DEFAULT_STORY_AGENT_TOOL_POLICY });
@@ -1243,10 +1258,39 @@ function openStoryRepositoryWorkspace(target: RepositoryWorkspaceTabTarget) {
   if (!selectedSessionInstance.value) return;
   emit("open-repository-workspace", { ...target, instanceId: selectedSessionInstance.value.id });
 }
-function startSidebarResize(event: PointerEvent) { if (window.matchMedia("(max-width: 800px)").matches || !workspaceEl.value) return; resizingSidebar.value = true; resizingPointerId = event.pointerId; (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId); window.addEventListener("pointermove", resizeSidebar); window.addEventListener("pointerup", stopSidebarResize); window.addEventListener("pointercancel", stopSidebarResize); }
-function resizeSidebar(event: PointerEvent) { if (!resizingSidebar.value || event.pointerId !== resizingPointerId || !workspaceEl.value) return; sidebarWidth.value = Math.min(520, Math.max(240, event.clientX - workspaceEl.value.getBoundingClientRect().left)); }
+function startSidebarResize(event: PointerEvent) { if (window.matchMedia("(max-width: 800px)").matches || !workspaceEl.value) return; resizingSidebar.value = true; sidebarResizeMoved = false; resizingPointerId = event.pointerId; (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId); window.addEventListener("pointermove", resizeSidebar); window.addEventListener("pointerup", stopSidebarResize); window.addEventListener("pointercancel", stopSidebarResize); }
+function resizeSidebar(event: PointerEvent) { if (!resizingSidebar.value || event.pointerId !== resizingPointerId || !workspaceEl.value) return; sidebarResizeMoved = true; sidebarWidth.value = Math.min(520, Math.max(240, event.clientX - workspaceEl.value.getBoundingClientRect().left)); }
 function stopSidebarResize(event?: PointerEvent) { if (event && resizingPointerId !== undefined && event.pointerId !== resizingPointerId) return; resizingSidebar.value = false; resizingPointerId = undefined; window.removeEventListener("pointermove", resizeSidebar); window.removeEventListener("pointerup", stopSidebarResize); window.removeEventListener("pointercancel", stopSidebarResize); }
+function toggleSidebarCollapsed() {
+  if (sidebarResizeMoved) { sidebarResizeMoved = false; return; }
+  sidebarCollapsed.value = !sidebarCollapsed.value;
+  try { window.localStorage?.setItem(SIDEBAR_COLLAPSE_MODE_KEY, sidebarCollapsed.value ? "collapsed" : "expanded"); } catch { /* Local storage is optional. */ }
+  if (!sidebarCollapsed.value) sidebarOverlayOpen.value = false;
+}
+function openSidebarOverlay() {
+  if (!sidebarCollapsed.value) return;
+  if (sidebarOverlayCloseTimer !== undefined) window.clearTimeout(sidebarOverlayCloseTimer);
+  sidebarOverlayCloseTimer = undefined;
+  sidebarOverlayOpen.value = true;
+}
+function scheduleSidebarOverlayClose() {
+  if (!sidebarCollapsed.value) return;
+  if (sidebarOverlayCloseTimer !== undefined) window.clearTimeout(sidebarOverlayCloseTimer);
+  sidebarOverlayCloseTimer = window.setTimeout(() => {
+    sidebarOverlayOpen.value = false;
+    sidebarOverlayCloseTimer = undefined;
+  }, 150);
+}
+function playSidebarLayoutAnimation() {
+  if (sidebarLayoutAnimationTimer !== undefined) window.clearTimeout(sidebarLayoutAnimationTimer);
+  sidebarLayoutAnimating.value = true;
+  sidebarLayoutAnimationTimer = window.setTimeout(() => {
+    sidebarLayoutAnimationTimer = undefined;
+    sidebarLayoutAnimating.value = false;
+  }, SIDEBAR_LAYOUT_ANIMATION_MS);
+}
 watch(sidebarWidth, (width) => { try { window.localStorage?.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(width)); } catch { /* Local storage may be unavailable in restricted browser contexts. */ } });
+watch(sidebarCollapsed, playSidebarLayoutAnimation, { flush: "sync" });
 async function load() {
   error.value = "";
   try {
@@ -1585,6 +1629,8 @@ async function deleteDocument(story: Story, storyPath: string) { if (!window.con
 onBeforeUnmount(() => {
   stopSidebarResize();
   cancelStoryPointerDrag();
+  if (sidebarOverlayCloseTimer !== undefined) window.clearTimeout(sidebarOverlayCloseTimer);
+  if (sidebarLayoutAnimationTimer !== undefined) window.clearTimeout(sidebarLayoutAnimationTimer);
   storyDetailHeadResizeObserver?.disconnect();
   storyDetailHeadResizeObserver = undefined;
 });
@@ -1604,7 +1650,8 @@ onBeforeUnmount(() => {
 .story-title-name-input:disabled { cursor:progress; opacity:.72; }
 .story-description,.story-content-header small { color:var(--text-muted); font-size:12px; }
 .story-description { max-width:720px; margin:8px 0 0; line-height:1.5; }
-.story-workspace { display:grid; grid-template-columns:minmax(240px,var(--story-sidebar-width,320px)) 2px minmax(0,1fr); gap:0; flex:1 1 auto; min-height:0; margin-top:0; overflow:hidden; }
+.story-workspace { position:relative; display:grid; grid-template-columns:var(--story-sidebar-layout-width,minmax(240px,var(--story-sidebar-width,320px))) 2px minmax(0,1fr); gap:0; flex:1 1 auto; min-height:0; margin-top:0; overflow:hidden; transition:none; }
+.story-workspace-animating { transition:grid-template-columns 180ms cubic-bezier(.2,0,0,1); }
 .story-sidebar { display:grid; min-width:0; min-height:0; grid-template-rows:auto minmax(0,1fr); }
 .story-sidebar-actions { padding:0 10px; }
 .story-new-button { width:100%; padding-block:11px; }
@@ -1631,6 +1678,13 @@ onBeforeUnmount(() => {
 .story-sidebar-resize-handle:hover::after,.story-sidebar-resize-handle:focus-visible::after,.story-workspace[data-resizing="true"] .story-sidebar-resize-handle::after { background:color-mix(in srgb,var(--line-strong) 72%,var(--brand-accent)); box-shadow:0 0 0 1px color-mix(in srgb,var(--line-strong) 42%,transparent); opacity:1; }
 .story-sidebar-resize-handle:focus-visible { outline:2px solid var(--focus-ring); outline-offset:-3px; }
 .story-workspace[data-resizing="true"] { user-select:none; cursor:col-resize; }
+.story-workspace[data-resizing="true"] { transition:none; }
+.story-workspace-collapsed { grid-template-columns:var(--story-sidebar-layout-width) 0px minmax(0,1fr); }
+.story-workspace-collapsed .story-sidebar { position:absolute; z-index:30; inset:0 auto 0 11px; width:min(var(--story-sidebar-width,320px),calc(100% - 11px)); border-right:1px solid var(--line); background:var(--workspace-bg); box-shadow:12px 0 32px rgb(0 0 0 / 20%); opacity:0; pointer-events:none; transform:translateX(-4px); visibility:hidden; transition:opacity 140ms ease,transform 180ms cubic-bezier(.2,0,0,1),visibility 0s linear 180ms; }
+.story-workspace-collapsed.story-workspace-overlay-open .story-sidebar { opacity:1; pointer-events:auto; transform:translateX(0); visibility:visible; transition-delay:0s; }
+.story-workspace-collapsed .story-sidebar-resize-handle { position:absolute; z-index:31; inset:0 auto 0 0; width:11px; min-width:11px; height:100%; margin:0; }
+.story-workspace-collapsed .story-sidebar-resize-handle::after { position:absolute; top:0; bottom:0; left:8px; width:2px; height:auto; margin:0; }
+.story-content { grid-column:3; }
 .story-tree + .story-tree { margin-top:2px; }
 .story-tree-manual { cursor:grab; touch-action:pan-y; -webkit-touch-callout:none; }
 .story-tree-manual:active { cursor:grabbing; }
@@ -1694,7 +1748,7 @@ onBeforeUnmount(() => {
   .story-session-disclosure { opacity:1; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .story-session-chevron,.story-session-tree-enter-active,.story-session-tree-leave-active,.story-session-tree-move { transition:none; }
+  .story-session-chevron,.story-session-tree-enter-active,.story-session-tree-leave-active,.story-session-tree-move,.story-workspace-animating,.story-workspace-collapsed .story-sidebar { transition:none; }
 }
 .story-tree-item > .story-tree-item-copy { display:flex; align-items:center; min-width:0; flex:1; overflow:hidden; }
 .story-tree-item > .story-tree-item-copy strong { display:block; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; line-height:1.3; }

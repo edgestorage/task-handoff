@@ -50,7 +50,21 @@
                     </ScrollArea>
                   </section>
                   <section v-if="activity.output && !isCommandActivity(activity) && !fileChanges(activity).length">
-                    <MarkdownContent v-if="activity.activityKind === 'reasoning'" :content="activity.output" :code-tools="markdownCodeTools" />
+                    <ContextMenu v-if="activity.activityKind === 'reasoning'" v-model:open="reasoningMenuOpen">
+                      <ContextMenuTrigger as-child>
+                        <div @contextmenu="handleReasoningContextMenu">
+                          <MarkdownContent :content="activity.output" :code-tools="markdownCodeTools" />
+                        </div>
+                      </ContextMenuTrigger>
+                      <ContextMenuContent class="ai-session-response-context-menu">
+                        <ContextMenuItem :disabled="!selectedReasoningText" @select="emit('addToConversation', selectedReasoningText)">
+                          <MessageSquarePlus :size="14" />{{ t("sessions.actions.addToConversation") }}
+                        </ContextMenuItem>
+                        <ContextMenuItem @select="copyReasoningText">
+                          <Copy :size="14" />{{ t("sessions.markdown.copy") }}
+                        </ContextMenuItem>
+                      </ContextMenuContent>
+                    </ContextMenu>
                     <template v-else>
                       <small>{{ t("sessions.timeline.output") }}</small>
                       <ScrollArea type="auto" :horizontal="false" class="ai-session-activity-pre-scroll">
@@ -73,6 +87,7 @@
 import { computed, ref, watch, type Component } from "vue";
 import { useI18n } from "vue-i18n";
 import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
+import { Copy, MessageSquarePlus } from "@lucide/vue";
 import {
   Bot,
   BookOpen,
@@ -96,6 +111,7 @@ import {
 } from "@lucide/vue";
 import type { AiSessionTimelineActivity } from "@task-handoff/protocol/ai-sessions";
 import { ScrollArea } from "../ui/scroll-area";
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "../ui/context-menu";
 import AiSessionCommandResult from "./AiSessionCommandResult.vue";
 import AiSessionFileChanges from "./AiSessionFileChanges.vue";
 import { aiSessionFileChanges } from "./aiSessionFileChanges";
@@ -142,7 +158,7 @@ const props = withDefaults(defineProps<{
   summaryVisible?: boolean;
   autoExpandKinds?: string[];
 }>(), { open: false, summaryVisible: true, autoExpandKinds: () => [] });
-const emit = defineEmits<{ "update:open": [open: boolean] }>();
+const emit = defineEmits<{ "update:open": [open: boolean]; addToConversation: [content: string] }>();
 const { t } = useI18n();
 const markdownCodeTools = computed(() => ({
   copiedLabel: t("sessions.markdown.copied"),
@@ -155,6 +171,8 @@ const fileChangesByActivityId = computed(() => new Map(props.activities.map((act
 const groupOpen = ref(props.summaryVisible ? props.open : true);
 const openActivities = ref(new Set<string>());
 const autoExpandedActivityIds = new Set<string>();
+const reasoningMenuOpen = ref(false);
+const selectedReasoningText = ref("");
 watch(() => props.open, (value) => { if (props.summaryVisible) groupOpen.value = value; });
 watch(() => [props.activities, props.autoExpandKinds] as const, ([activities, autoExpandKinds]) => {
   const automatic = activities
@@ -167,6 +185,21 @@ watch(() => [props.activities, props.autoExpandKinds] as const, ([activities, au
 function toggleGroup(event: MouseEvent) { beginDisclosureTransition(event.currentTarget as Element); groupOpen.value = !groupOpen.value; emit("update:open", groupOpen.value); }
 function activityOpen(activity: AiSessionTimelineActivity) { return openActivities.value.has(activity.id); }
 function toggleActivity(id: string, event: MouseEvent) { beginDisclosureTransition(event.currentTarget as Element); const next = new Set(openActivities.value); next.has(id) ? next.delete(id) : next.add(id); openActivities.value = next; }
+function handleReasoningContextMenu(event: MouseEvent) {
+  const selection = window.getSelection();
+  const text = selection?.toString().trim() || "";
+  const host = event.currentTarget instanceof HTMLElement ? event.currentTarget : undefined;
+  if (!text || !host || !selection?.anchorNode || !host.contains(selection.anchorNode)) {
+    selectedReasoningText.value = "";
+    event.preventDefault();
+    reasoningMenuOpen.value = false;
+    return;
+  }
+  selectedReasoningText.value = text;
+}
+async function copyReasoningText() {
+  if (selectedReasoningText.value) await navigator.clipboard?.writeText(selectedReasoningText.value);
+}
 function hasDetails(activity: AiSessionTimelineActivity) {
   if (isCommandActivity(activity)) return Boolean(activity.input || activity.output || activity.exitCode !== undefined);
   return Boolean(activity.input || activity.output || activity.exitCode !== undefined);

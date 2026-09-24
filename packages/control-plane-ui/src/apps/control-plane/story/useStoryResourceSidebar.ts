@@ -56,6 +56,7 @@ export function useStoryResourceSidebar(input: {
   const repositoryByAiSession = reactive<Record<string, StoryRepositoryResourceRef[]>>({});
   const browserByAiSession = reactive<Record<string, StoryEmbeddedBrowserResourceRef[]>>({});
   const activeByAiSession = reactive<Record<string, string>>({});
+  const pendingAppByAiSession = reactive<Record<string, string>>({});
   const orderByAiSession = reactive<Record<string, string[]>>({});
   const contextKey = computed(() => aiSessionResourceContextKey(input.instanceId.value, input.aiSessionId.value));
   const visible = computed({
@@ -103,7 +104,12 @@ export function useStoryResourceSidebar(input: {
   watch(resources, (next) => {
     const resourceContextKey = contextKey.value;
     if (!resourceContextKey) return;
-    const nextActiveKey = activeStoryResourceKey(activeByAiSession[resourceContextKey], next);
+    const pendingAppKey = pendingAppByAiSession[resourceContextKey];
+    const pendingAppArrived = Boolean(pendingAppKey && next.some((resource) => storyResourceKey(resource) === pendingAppKey));
+    const nextActiveKey = pendingAppArrived
+      ? pendingAppKey
+      : activeStoryResourceKey(activeByAiSession[resourceContextKey], next);
+    if (pendingAppArrived) delete pendingAppByAiSession[resourceContextKey];
     if (activeByAiSession[resourceContextKey] !== nextActiveKey) activeByAiSession[resourceContextKey] = nextActiveKey;
     const nextOrder = next.map(storyResourceKey);
     const currentOrder = orderByAiSession[resourceContextKey] || [];
@@ -192,9 +198,17 @@ export function useStoryResourceSidebar(input: {
   const allBrowserResources = computed(() => Object.values(browserByAiSession).flat());
 
   function focusApp(instanceId: string, sessionId: string) {
-    if (instanceId !== input.instanceId.value) return;
+    const resourceContextKey = contextKey.value;
+    if (!resourceContextKey || instanceId !== input.instanceId.value) return;
+    const key = storyResourceKey({ kind: "app-session", instanceId, sessionId });
     const resource = resources.value.find((candidate) => candidate.kind === "app-session" && candidate.instanceId === instanceId && candidate.sessionId === sessionId);
-    if (resource) select(resource);
+    if (resource) {
+      delete pendingAppByAiSession[resourceContextKey];
+      select(resource);
+      return;
+    }
+    pendingAppByAiSession[resourceContextKey] = key;
+    visible.value = true;
   }
 
   function reorder(sourceKey: string, targetKey: string, placement: StoryResourceDropPlacement) {
