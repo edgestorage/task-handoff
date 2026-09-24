@@ -11,9 +11,10 @@
       :instance-id="instanceId"
       :initial-file-path="initialFilePath"
       :initial-file-request-id="initialFileRequestId"
+      :path-search-supported="pathSearchSupported"
       :session-id="sessionId"
       :session-kind="sessionKind"
-      @open-changes="$emit('openWorkspace', $event)"
+      @open-changes="openWorkspaceFromPane"
     />
   </div>
 </template>
@@ -28,13 +29,19 @@ import type { SessionTab } from "../useInstanceSessions";
 import RepositoryErrorNotice from "./RepositoryErrorNotice.vue";
 import RepositoryWorkspace from "./RepositoryWorkspace.vue";
 
-const props = defineProps<{ instanceId: string; session: SessionTab }>();
+const props = defineProps<{ instanceId: string; pathSearchSupported: boolean; session: SessionTab }>();
 const { t } = useI18n();
-defineEmits<{ openWorkspace: [target: { initialView: "files" | "changes"; page?: "workspace" | "changes-review"; sessionId: string; sessionKind: RepositorySessionKind }] }>();
+const emit = defineEmits<{ openWorkspace: [target: { cwdFolderId?: string; initialView: "files" | "changes"; page?: "workspace" | "changes-review"; sessionId: string; sessionKind: RepositorySessionKind }] }>();
 const sessionId = computed(() => typeof props.session.source?.sessionId === "string" ? props.session.source.sessionId : "");
 const sessionKind = computed<RepositorySessionKind>(() => props.session.source?.sessionKind === "ai-session" ? "ai-session" : "app-session");
 const initialFilePath = computed(() => typeof props.session.source?.filePath === "string" ? props.session.source.filePath : undefined);
 const initialFileRequestId = computed(() => typeof props.session.source?.fileRequestId === "number" ? props.session.source.fileRequestId : 0);
+const cwdFolderId = computed(() => typeof props.session.source?.cwdFolderId === "string" ? props.session.source.cwdFolderId : undefined);
+
+function openWorkspaceFromPane(target: { initialView: "files" | "changes"; page?: "workspace" | "changes-review"; sessionId: string; sessionKind: RepositorySessionKind }) {
+  emit("openWorkspace", { ...target, ...(cwdFolderId.value ? { cwdFolderId: cwdFolderId.value } : {}) });
+}
+
 const contextQuery = useRepositoryContextQuery(
   computed(() => ({ instanceId: props.instanceId, sessionId: sessionId.value, sessionKind: sessionKind.value })),
   computed(() => Boolean(props.instanceId && sessionId.value)),

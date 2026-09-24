@@ -19,7 +19,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  TASK_HANDOFF_CLOUD_RELAY_ENABLED: ${{ vars.TASK_HANDOFF_CLOUD_RELAY_ENABLED || '0' }}
+  TASK_HANDOFF_OFFICIAL_ACCOUNT_ENABLED: ${{ vars.TASK_HANDOFF_OFFICIAL_ACCOUNT_ENABLED || vars.TASK_HANDOFF_CLOUD_RELAY_ENABLED || '0' }}
 
 jobs:
   verify:
@@ -86,9 +86,9 @@ jobs:
             if (config.android?.package !== "com.taskhandoff.mobile") {
               throw new Error(`Unexpected Android package: ${config.android?.package}`);
             }
-            const expectedCloudRelay = process.env.TASK_HANDOFF_CLOUD_RELAY_ENABLED === "1";
-            if (config.extra?.cloudRelayEnabled !== expectedCloudRelay) {
-              throw new Error(`Unexpected cloud Relay feature state: ${config.extra?.cloudRelayEnabled}`);
+            const expectedOfficialAccount = process.env.TASK_HANDOFF_OFFICIAL_ACCOUNT_ENABLED === "1";
+            if (config.extra?.featureFlags?.officialAccount !== expectedOfficialAccount) {
+              throw new Error(`Unexpected official account feature state: ${config.extra?.featureFlags?.officialAccount}`);
             }
           ' "$config"
 

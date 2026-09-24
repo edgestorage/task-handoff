@@ -213,6 +213,7 @@ export function controlledInstanceCapabilities(
       nodeAgentConnectionUpdate: true,
       gitCliCredentialBroker: gitCredentialBrokerInstalled,
       gitCredentialProxy: gitCredentialBrokerInstalled,
+      repositoryPathSearch: true,
       aiSessionTimeline,
       aiSessionProviders: availableProviders,
       aiSessionConversationAttachments: {

@@ -150,6 +150,15 @@ export const RepositoryDirectoryListingSchema = z.object({
   entries: z.array(RepositoryDirectoryEntrySchema).max(10_000),
   snapshotId: IdSchema,
 }).strict();
+export const RepositoryPathSearchEntrySchema = z.object({
+  name: z.string().min(1).max(1024),
+  path: RelativePathSchema,
+  kind: z.enum(["directory", "file"]),
+}).strict();
+export const RepositoryPathSearchResultSchema = z.object({
+  entries: z.array(RepositoryPathSearchEntrySchema).max(200),
+  truncated: z.boolean(),
+}).strict();
 export const RepositoryFileVersionSchema = z.string().min(16).max(160).regex(/^[a-zA-Z0-9_.:-]+$/);
 export const RepositoryFileContentSchema = z.object({
   path: RelativePathSchema,
@@ -433,6 +442,8 @@ export type RepositoryChangeScope = z.infer<typeof RepositoryChangeScopeSchema>;
 export type RepositoryDiff = z.infer<typeof RepositoryDiffSchema>;
 export type RepositoryDirectoryListing = z.infer<typeof RepositoryDirectoryListingSchema>;
 export type RepositoryDirectoryEntry = z.infer<typeof RepositoryDirectoryEntrySchema>;
+export type RepositoryPathSearchEntry = z.infer<typeof RepositoryPathSearchEntrySchema>;
+export type RepositoryPathSearchResult = z.infer<typeof RepositoryPathSearchResultSchema>;
 export type RepositoryFileContent = z.infer<typeof RepositoryFileContentSchema>;
 export type RepositoryFileMutationResult = z.infer<typeof RepositoryFileMutationResultSchema>;
 export type RepositoryMutationResult = z.infer<typeof RepositoryMutationResultSchema>;
@@ -444,6 +455,7 @@ export type RepositoryBranch = z.infer<typeof RepositoryBranchSchema>;
 export type RepositoryBranchMutationResult = z.infer<typeof RepositoryBranchMutationResultSchema>;
 export type RepositoryCreateWorktreeRequest = z.infer<typeof RepositoryCreateWorktreeRequestSchema>;
 export type RepositoryCreateWorktreeResult = z.infer<typeof RepositoryCreateWorktreeResultSchema>;
+export type RepositoryRemoveWorktreeRequest = z.infer<typeof RepositoryRemoveWorktreeRequestSchema>;
 export type RepositoryError = z.infer<typeof RepositoryErrorSchema>;
 export type AiSessionWorkspaceSelection = z.infer<typeof AiSessionWorkspaceSelectionSchema>;
 export type RepositoryStartAiSessionRequest = z.infer<typeof RepositoryStartAiSessionRequestSchema>;

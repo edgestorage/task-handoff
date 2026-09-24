@@ -469,7 +469,7 @@ function testAppInventory(apps, observedAt = new Date().toISOString()) {
 }
 
 test("controlled instance heartbeat protocol rejects legacy receiver projection", () => {
-  assert.equal(CONTROL_PLANE_PROTOCOL_VERSION, "2026-09-17");
+  assert.equal(CONTROL_PLANE_PROTOCOL_VERSION, "2026-09-24");
   // Compatibility for v0.0.21: advancing the current protocol must not relax
   // the appInventory requirement of an already released wire version.
   assert.equal(ControlledInstanceHeartbeatSchema.safeParse({ protocolVersion: "2026-08-17" }).success, false);

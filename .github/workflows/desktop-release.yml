@@ -18,6 +18,9 @@ concurrency:
   group: desktop-release-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  TASK_HANDOFF_OFFICIAL_ACCOUNT_ENABLED: ${{ vars.TASK_HANDOFF_OFFICIAL_ACCOUNT_ENABLED || vars.TASK_HANDOFF_CLOUD_RELAY_ENABLED || '0' }}
+
 jobs:
   node-pty-prebuilds:
     name: node-pty prebuild (${{ matrix.platform }}-${{ matrix.arch }})

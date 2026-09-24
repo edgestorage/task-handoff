@@ -1,7 +1,7 @@
 import { createControlPlaneClient } from '@task-handoff/control-plane-client';
 
 import type { SecureValueStore } from '../platform/secure-storage';
-import { isMobileCloudRelayEnabled, isMobileTestMode } from '../platform/build-variant';
+import { isMobileFeatureEnabled, isMobileTestMode } from '../platform/build-variant';
 import { DirectControlPlaneTransport } from './direct-transport';
 import { isDirectMobileControlPlaneProfile, type MobileControlPlaneProfile, type MobileDirectControlPlaneProfile, type MobileCloudRelayControlPlaneProfile } from './profile';
 import { MobileCloudAccountSession, CLOUD_PRODUCTION_ORIGIN } from './cloud-account';
@@ -24,7 +24,7 @@ export function createDirectControlPlaneClient(profile: MobileControlPlaneProfil
 
 export function createMobileControlPlaneClient(profile: MobileControlPlaneProfile, secureStore: SecureValueStore, options: { relayChannelFactory?: RelayChannelFactory; cloudRequest?: typeof fetch; allowNonProductionOrigin?: boolean } = {}) {
   if (isDirectMobileControlPlaneProfile(profile)) return createDirectControlPlaneClient(profile, secureStore);
-  if (!isMobileCloudRelayEnabled) {
+  if (!isMobileFeatureEnabled('officialAccount')) {
     throw Object.assign(new Error('Cloud Relay is disabled in this mobile build.'), { code: 'CLOUD_RELAY_FEATURE_DISABLED' });
   }
   const cloud = profile as MobileCloudRelayControlPlaneProfile;
