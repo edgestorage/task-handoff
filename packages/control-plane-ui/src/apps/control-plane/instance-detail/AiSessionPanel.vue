@@ -812,10 +812,11 @@
               @previous="previousPrompt(selectedSession)"
               @next="nextPrompt(selectedSession)"
             />
-            <template v-if="!compactAiSessionLayout">
+            <template v-if="!detailHeadActionsInMenu">
               <RepositoryEnvironment
                 :ai-agent="repositoryAiAgent"
                 :connection-status="instance.connectionStatus"
+                :cwd-folder-id="selectedSession.cwdFolderId"
                 :instance-id="instance.id"
                 :session-id="selectedSession.id"
                 session-kind="ai-session"
@@ -861,16 +862,17 @@
                   <DropdownMenuSeparator />
                 </template>
                 <RepositoryEnvironment
-                  v-if="compactAiSessionLayout"
+                  v-if="detailHeadActionsInMenu"
                   :ai-agent="repositoryAiAgent"
                   :connection-status="instance.connectionStatus"
+                  :cwd-folder-id="selectedSession.cwdFolderId"
                   :instance-id="instance.id"
                   :session-id="selectedSession.id"
                   session-kind="ai-session"
                   trigger-appearance="menu"
                   @open-workspace="emit('openRepositoryWorkspace', $event)"
                 />
-                <DropdownMenuSub v-if="compactAiSessionLayout">
+                <DropdownMenuSub v-if="detailHeadActionsInMenu">
                   <DropdownMenuSubTrigger class="session-ai-detail-actions-menu-item">
                     <CircleHelp :size="14" />
                     <span>{{ t("sessions.detail.sessionDetails") }}</span>
@@ -1275,6 +1277,7 @@
       :default-start-ref="newSessionWorkspace?.currentBranch || 'HEAD'"
       :initial-selection="newSessionWorktreeDialogInitialSelection"
       :open="newSessionWorktreeDialogOpen"
+      :busy="newSessionWorktreeCreating"
       @confirm="confirmNewSessionWorktree"
       @update:open="setNewSessionWorktreeDialogOpen"
     />
@@ -1319,6 +1322,7 @@ import { waitForAiSessionProjection } from "../ai-session-projection";
 import { ArrowLeft, Ban, Boxes, Check, ChevronDown, ChevronRight, CircleHelp, ExternalLink, Filter, Folder, FolderOpen, GitBranch, History, LoaderCircle, MessageSquare, MessageSquarePlus, MoreHorizontal, PanelLeftOpen, Pencil, Plus, SearchX, Server, SlidersHorizontal, Split, Square, SquareTerminal, X } from "@lucide/vue";
 import { instanceStatusKeys, translateStatus } from "../../../i18n/status";
 import { useQueryClient } from "@tanstack/vue-query";
+import { ApiError } from "../../../api/client";
 import MarkdownContent from "@task-handoff/web-theme/MarkdownContent.vue";
 import AiSessionCardContextMenu from "../../../components/ai-session/AiSessionCardContextMenu.vue";
 import AiSessionRenameDialog from "../../../components/ai-session/AiSessionRenameDialog.vue";
@@ -1329,6 +1333,7 @@ import AiAgentIcon from "../../../components/AiAgentIcon.vue";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../../components/ui/alert-dialog";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
 import { bindAiSessionTrigger, checkoutAiSessionWorkspaceBranch, closeAiSession, createAiSession, createNodeLocalFolder, editAiSessionQueuedMessage, forkAiSession, getAiSessionHistory, getAiSessionHistoryDetail, getAiSessionWorkspace, interruptAiSession, listNodeFolderPlaces, listNodeFolderTree, markAiSessionRead, openAiSessionApp, removeAiSessionQueuedMessage, reorderAiSessionQueuedMessages, resolveAiSessionApproval, resumeAiSession, retryAiSessionQueuedMessage, sendAiSessionMessage, steerAiSessionQueuedMessage, unbindAiSessionTrigger, updateAiSessionModelSelection, updateAiSessionReasoningEffort, updateControlledInstance, updateNodeLocalFolder, uploadAiSessionAttachment, useControlPlaneSettingsQuery, useControlPlaneTriggersQuery, useModelsQuery, useStoriesQuery } from "../../../api/queries";
+import { createRepositoryWorkspaceWorktree } from "../../../api/repository";
 import { controlPlaneQueryKeys } from "../../../api/queryKeys.ts";
 import { executeAiSessionCommand } from "../../../api/ai-session-commands";
 import { AI_SESSION_DEFAULT_REASONING_EFFORT, type AiSessionCommandInput, type AiSessionCreateWorkspaceSelection, type AiSessionGitSelection, type AiSessionHistoryDetail, type AiSessionHistoryItem, type AiSessionMessageAttachmentRef, type AiSessionModelSelection, type AiSessionPermissionMode, type AiSessionReasoningEffort, type AiSessionUserMessageDetail } from "@task-handoff/protocol/ai-sessions";
@@ -1387,6 +1392,7 @@ import AiSessionPathContextMenu from "./AiSessionPathContextMenu.vue";
 import { useNodeStorageFolderPicker } from "../settings/useNodeStorageFolderPicker";
 import { normalizeAiSessionGroupPath } from "./aiSessionPathGrouping";
 import { loadCollapsedAiSessionPathGroups, persistCollapsedAiSessionPathGroups } from "./aiSessionPathGroupCollapse";
+import { nextDetailHeadActionsOverflow, type DetailHeadActionsOverflow } from "./sessionDetailHeadActions";
 import { loadAiSessionCreationPreferences, persistAiSessionCreationPreferences } from "./aiSessionCreationPreferences";
 import { aiSessionCreationDraftKey, aiSessionMessageText, aiSessionStoryCreationDraftKey, clearAiSessionDraft, loadAiSessionDraftPayload, persistAiSessionDraftPayload } from "../useAiSessionDraft";
 import { useAiSessionAttachmentDraft } from "../useAiSessionAttachmentDraft";
@@ -1857,6 +1863,10 @@ const repositoryAiAgent = computed<"codex" | "claude" | "opencode" | undefined>(
   return agent === "codex" || agent === "claude" || agent === "opencode" ? agent : undefined;
 });
 const compactAiSessionLayout = useMediaQuery("(max-width: 920px)");
+const detailHeadActionsOverflow = ref<DetailHeadActionsOverflow>({ collapsed: false, expandedActionsWidth: 0 });
+// The head actions live in the same row cell as the session context, so they move into the "..."
+// menu whenever the pane can no longer show the context next to them.
+const detailHeadActionsInMenu = computed(() => compactAiSessionLayout.value || detailHeadActionsOverflow.value.collapsed);
 const supportsSessionListHoverPreview = useMediaQuery("(hover: hover) and (pointer: fine)");
 watch(compactAiSessionLayout, (compact) => {
   if (!compact) sessionListOverlayOpen.value = false;
@@ -1939,6 +1949,7 @@ const newSessionManagedWorktreeBranch = ref("");
 const newSessionWorktreeBranchName = ref("");
 const newSessionWorktreeStartRef = ref("HEAD");
 const newSessionCreateNewWorktree = ref(false);
+const newSessionWorktreeCreating = ref(false);
 const newSessionWorkspaceLoading = ref(false);
 const switchingNewSessionBranch = ref(false);
 let newSessionWorkspaceRevision = 0;
@@ -1953,7 +1964,7 @@ const choosingNewSessionFolder = ref(false);
 const newSessionPermissionMode = ref<AiSessionPermissionMode>(props.creationMode === "preset"
   ? props.creationInitialPreset?.permissionMode || props.instance.config.defaultCodexPermissionMode
   : props.instance.config.defaultCodexPermissionMode);
-const newSessionComposerBusy = computed(() => launchingNewSession.value || savingNewSessionPermission.value || choosingNewSessionFolder.value || switchingNewSessionBranch.value);
+const newSessionComposerBusy = computed(() => launchingNewSession.value || savingNewSessionPermission.value || choosingNewSessionFolder.value || switchingNewSessionBranch.value || newSessionWorktreeCreating.value);
 const creationComposerBusy = computed(() => newSessionComposerBusy.value || Boolean(props.creationSubmitting));
 const aiSessionLaunchableApps = computed(() => (props.launchableApps || []).filter((app) => {
   const capability = directoryAiSessionProviderCapability(props.instance.capabilities?.features, app.id);
@@ -2219,30 +2230,12 @@ const historyModelGroups = computed(() => {
     capability: modelSelectionCapability(item.agent),
   });
 });
-const historyModelFallbackSelection = computed(() => {
-  const item = historyDetail.value?.item;
-  if (!item || item.creationSource !== "ai-session") return undefined;
-  if (item.modelSelection) return item.modelSelection;
-  const groups = deriveAiSessionModelGroups({
-    entities: modelsQuery.data.value || [],
-    assignment: props.instance.modelSelection,
-    agent: item.agent,
-    nodeId: props.instance.nodeId,
-    mode: "create",
-    capability: modelSelectionCapability(item.agent),
-  });
-  return defaultAiSessionModelSelection(groups);
-});
 watch(historyModelGroups, (groups) => {
   const current = historyModelSelection.value;
   if (current && groups.some((group) => group.models.some((model) => (
     model.modelEntityId === current.modelEntityId && model.modelName === current.modelName
   )))) return;
-  if (!groups.length && current) return;
-  historyModelSelection.value = defaultAiSessionModelSelection(groups) || historyModelFallbackSelection.value;
-});
-watch(historyModelFallbackSelection, (selection) => {
-  if (!historyModelGroups.value.length && !historyModelSelection.value) historyModelSelection.value = selection;
+  historyModelSelection.value = defaultAiSessionModelSelection(groups);
 });
 let currentListScrollTop = 0;
 let historyDetailRevision = 0;
@@ -3354,20 +3347,38 @@ function setNewSessionWorktreeDialogOpen(open: boolean) {
   newSessionWorktreeDialogOpen.value = open;
 }
 
-function confirmNewSessionWorktree(selection: NewWorktreeSelection) {
-  if (selection.mode === "existing-branch") {
-    newSessionManagedWorktreeBranch.value = selection.branchName;
-    newSessionWorktreeId.value = "";
+async function confirmNewSessionWorktree(selection: NewWorktreeSelection) {
+  const workspace = newSessionWorkspace.value;
+  if (!workspace?.snapshotId || !newSessionFolder.value || newSessionWorktreeCreating.value) return;
+  newSessionWorktreeCreating.value = true;
+  try {
+    const request = selection.mode === "new-branch"
+      ? { mode: "new-branch" as const, branchName: selection.branchName, startRef: selection.startRef, expectedSnapshotId: workspace.snapshotId }
+      : { mode: "existing-branch" as const, branchName: selection.branchName, expectedSnapshotId: workspace.snapshotId };
+    const cwdFolderId = newSessionFolder.value.cwdFolderId;
+    const created = await createRepositoryWorkspaceWorktree({ instanceId: props.instance.id, ...(cwdFolderId ? { cwdFolderId } : {}) }, request);
+    const refreshed = await getAiSessionWorkspace(props.instance.id, cwdFolderId);
+    queryClient.setQueryData(controlPlaneQueryKeys.aiSessionWorkspace(props.instance.id, cwdFolderId), refreshed);
+    newSessionWorkspace.value = refreshed;
+    newSessionWorktreeId.value = created.worktreeId;
+    newSessionManagedWorktreeBranch.value = "";
     newSessionCreateNewWorktree.value = false;
     newSessionWorktreeDialogOpen.value = false;
-    return;
+  } catch (error) {
+    // Compatibility for v0.0.21: it can only create a worktree as part of AI Session creation.
+    if (error instanceof ApiError && error.status === 404) {
+      newSessionManagedWorktreeBranch.value = selection.mode === "existing-branch" ? selection.branchName : "";
+      newSessionWorktreeId.value = "";
+      newSessionCreateNewWorktree.value = selection.mode === "new-branch";
+      newSessionWorktreeBranchName.value = selection.branchName;
+      newSessionWorktreeStartRef.value = selection.mode === "new-branch" ? selection.startRef : "HEAD";
+      newSessionWorktreeDialogOpen.value = false;
+      return;
+    }
+    showControlPlaneToast(translateApiError(error, t, t("sessions.panel.startFailed")));
+  } finally {
+    newSessionWorktreeCreating.value = false;
   }
-  newSessionWorktreeBranchName.value = selection.branchName;
-  newSessionWorktreeStartRef.value = selection.startRef;
-  newSessionManagedWorktreeBranch.value = "";
-  newSessionWorktreeId.value = "";
-  newSessionCreateNewWorktree.value = true;
-  newSessionWorktreeDialogOpen.value = false;
 }
 
 function selectNewSessionApp(agent: string) {
@@ -4061,6 +4072,20 @@ function syncDetailActionsWidth() {
   detail.style.setProperty("--session-ai-fixed-actions-width", `${Math.ceil(actions.getBoundingClientRect().width)}px`);
 }
 
+function syncDetailHeadActionsOverflow() {
+  if (compactAiSessionLayout.value) return;
+  const header = detailHeaderEl.value;
+  const actions = detailActionsEl.value;
+  if (!header || !actions) return;
+  const current = detailHeadActionsOverflow.value;
+  const next = nextDetailHeadActionsOverflow(current, {
+    availableWidth: header.getBoundingClientRect().width,
+    actionsWidth: actions.getBoundingClientRect().width,
+  });
+  if (next === current || (next.collapsed === current.collapsed && next.expandedActionsWidth === current.expandedActionsWidth)) return;
+  detailHeadActionsOverflow.value = next;
+}
+
 function observeDetailActionsWidth() {
   detailActionsResizeObserver?.disconnect();
   detailActionsResizeObserver = undefined;
@@ -4069,9 +4094,13 @@ function observeDetailActionsWidth() {
     syncDetailActionsWidth();
     return;
   }
-  detailActionsResizeObserver = new ResizeObserver(syncDetailActionsWidth);
+  detailActionsResizeObserver = new ResizeObserver(() => {
+    syncDetailActionsWidth();
+    syncDetailHeadActionsOverflow();
+  });
   detailActionsResizeObserver.observe(actions);
   syncDetailActionsWidth();
+  syncDetailHeadActionsOverflow();
 }
 
 function observeDetailScroll() {
@@ -4185,6 +4214,7 @@ watch(() => `${props.instance.id}\u0000${selectedSession.value?.id || ""}`, () =
     promptResizeObserver?.disconnect();
     if (typeof ResizeObserver !== "undefined") {
       promptResizeObserver = new ResizeObserver(() => {
+        syncDetailHeadActionsOverflow();
         if (!detailScrolled.value) {
           updateDetailStickyThreshold();
         }
@@ -4270,6 +4300,7 @@ function openMarkdownFile(session: AiSessionSummary, filePath: string) {
   emit("openRepositoryWorkspace", {
     initialView: "files",
     filePath,
+    ...(session.cwdFolderId ? { cwdFolderId: session.cwdFolderId } : {}),
     sessionId: session.id,
     sessionKind: "ai-session",
   });

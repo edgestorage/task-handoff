@@ -47,14 +47,14 @@
         </summary>
       </details>
 
-      <ContextMenu v-if="displayContent">
+      <ContextMenu v-if="displayContent" v-model:open="responseMenuOpen">
         <ContextMenuTrigger as-child>
-          <section class="ai-session-detail-response" :class="{ 'ai-session-detail-response-active': active }">
+          <section class="ai-session-detail-response" :class="{ 'ai-session-detail-response-active': active }" @contextmenu="handleResponseContextMenu">
             <AiSessionStreamingMarkdown :code-tools="markdownCodeTools" :content="responseContent" :file-links="fileLinks" :instance-id="instanceId" :is-latest="isLatest" :provider-turn-id="providerTurnId" :session-id="session.id" :turn-id="turnId" @open-file="$emit('openFile', $event)" />
           </section>
         </ContextMenuTrigger>
-        <ContextMenuContent>
-          <ContextMenuItem @select="$emit('addToConversation', responseContent)"><MessageSquarePlus :size="14" />{{ t("sessions.actions.addToConversation") }}</ContextMenuItem>
+        <ContextMenuContent class="ai-session-response-context-menu">
+          <ContextMenuItem :disabled="!selectedResponseText" @select="$emit('addToConversation', selectedResponseText)"><MessageSquarePlus :size="14" />{{ t("sessions.actions.addToConversation") }}</ContextMenuItem>
           <ContextMenuItem @select="copyResponse"><Copy :size="14" />{{ t("sessions.markdown.copy") }}</ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>
@@ -72,6 +72,7 @@
         :error="activityError"
         :interactive="activityInteractive"
         :loading="activityLoading"
+        @add-to-conversation="$emit('addToConversation', $event)"
       />
 
       <AiSessionSubAgents
@@ -185,9 +186,26 @@ const emit = defineEmits<{
 
 const retryWarningFirstLine = computed(() => props.retryWarning.split(/\r\n|\r|\n/, 1)[0]);
 const active = computed(() => props.isLatest && (props.session.status === "running" || props.session.status === "waiting"));
+const responseMenuOpen = ref(false);
+const selectedResponseText = ref("");
+
+function handleResponseContextMenu(event: MouseEvent) {
+  const selection = window.getSelection();
+  const selectedText = selection?.toString().trim() || "";
+  const response = event.currentTarget instanceof HTMLElement ? event.currentTarget : undefined;
+  const anchor = selection?.anchorNode;
+  if (!selectedText || !response || !anchor || !response.contains(anchor)) {
+    selectedResponseText.value = "";
+    event.preventDefault();
+    responseMenuOpen.value = false;
+    return;
+  }
+  selectedResponseText.value = selectedText;
+}
 
 async function copyResponse() {
-  try { await navigator.clipboard.writeText(props.responseContent); } catch { /* Clipboard may be unavailable in embedded contexts. */ }
+  if (!selectedResponseText.value) return;
+  try { await navigator.clipboard.writeText(selectedResponseText.value); } catch { /* Clipboard may be unavailable in embedded contexts. */ }
 }
 const turnElement = ref<HTMLElement>();
 const turnContentElement = ref<HTMLElement>();
@@ -387,6 +405,35 @@ const displayContent = computed(() => streamingContent.value || props.responseCo
 
 .ai-session-detail-response-active {
   padding-bottom: 4px;
+}
+
+:global(.ai-session-response-context-menu) {
+  min-width: 180px;
+  border: 1px solid var(--line-subtle);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  color: var(--text-strong);
+  padding: 5px;
+  box-shadow: 0 12px 28px color-mix(in srgb, var(--shadow-color, #000) 24%, transparent);
+}
+
+:global(.ai-session-response-context-menu [role="menuitem"]) {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  border-radius: 5px;
+  color: inherit;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 400;
+  padding: 6px 8px;
+}
+
+:global(.ai-session-response-context-menu [role="menuitem"]:hover),
+:global(.ai-session-response-context-menu [role="menuitem"]:focus-visible) {
+  background: var(--surface-hover);
+  outline: none;
 }
 
 .ai-session-result-detail .ai-session-detail-response-active {

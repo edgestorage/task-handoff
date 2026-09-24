@@ -2,6 +2,7 @@ import { queryOptions, useQuery } from "@tanstack/vue-query";
 import { computed, toValue, type MaybeRefOrGetter } from "vue";
 import { NodeJoinInviteStatusSchema } from "@task-handoff/protocol/control-plane";
 import { api, ApiError, deleteApiData, getApiData, getApiPayload, patchApiData, postApiData, putApiData, withApiError } from "./client";
+import { mergeAppSessionQueryData } from "./appSessionMerge.ts";
 import { mergeInstanceBoardQueryData } from "./instanceBoardMerge.ts";
 import { controlPlaneQueryKeys } from "./queryKeys.ts";
 import { sharedAiSessionsApi, sharedControlPlaneClient } from "./sharedClient.ts";
@@ -712,6 +713,7 @@ export function useControlPlaneAppSessionsQuery(instanceId: MaybeRefOrGetter<str
     },
     enabled: computed(() => toValue(enabled)),
     retry: false,
+    structuralSharing: mergeAppSessionQueryData,
   });
 }
 

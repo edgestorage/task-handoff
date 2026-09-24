@@ -76,7 +76,7 @@
     />
     <RepositoryChangesReviewTab v-else-if="session?.kind === 'repository' && session.source?.page === 'changes-review'" :instance-id="instance.id" :session="session" @open-workspace="$emit('openRepositoryWorkspace', $event)" />
     <RepositoryWorktreesTab v-else-if="session?.kind === 'repository' && session.source?.page === 'worktrees'" :instance-id="instance.id" :session="session" />
-    <RepositoryWorkspaceTab v-else-if="session?.kind === 'repository'" :instance-id="instance.id" :session="session" @open-workspace="$emit('openRepositoryWorkspace', $event)" />
+    <RepositoryWorkspaceTab v-else-if="session?.kind === 'repository'" :instance-id="instance.id" :path-search-supported="supportsRepositoryPathSearch(instance.capabilities)" :session="session" @open-workspace="$emit('openRepositoryWorkspace', $event)" />
     <div v-else-if="activeFrameUrl" class="session-preview-live">
       <iframe class="session-preview-frame" :src="activeFrameUrl" :title="session?.label || t('sessions.tabs.appSession')" allow="clipboard-read; clipboard-write; fullscreen" />
     </div>
@@ -104,6 +104,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
+import { supportsRepositoryPathSearch } from "@task-handoff/protocol/control-plane";
 import type { SupportedLocale } from "../../../i18n/locale";
 import { CircleAlert, Monitor, Play, Plus, PowerOff, RefreshCw, RotateCw, Square, Terminal } from "@lucide/vue";
 import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions, NodeLocalFolder } from "../../../api/types";

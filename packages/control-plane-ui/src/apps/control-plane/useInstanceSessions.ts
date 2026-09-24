@@ -40,6 +40,7 @@ export const EMBEDDED_BROWSER_APP_ID = "embedded-browser";
 
 export type RepositoryWorkspaceTabTarget = {
   aiAgent?: "codex" | "claude" | "opencode";
+  cwdFolderId?: string;
   filePath?: string;
   fileRequestId?: number;
   initialView: "files" | "changes";
@@ -225,6 +226,11 @@ export function appDisplayName(id: string, t: Translate) {
 
 export function sessionDisplayName(session: SessionTab | undefined, t: Translate) {
   return session ? session.title || appDisplayName(session.label, t) : t("sessions.tabs.session");
+}
+
+export function canRenameAppSession(instance: InstanceWithAiSessions | undefined, appSessionId: string) {
+  const linkedAiSession = instance?.aiSessions?.sessions.find((candidate) => candidate.appSessionId === appSessionId);
+  return !linkedAiSession || linkedAiSession.actions?.rename === true;
 }
 
 export function aiSessionAppDisplayName(appTab: SessionTab | undefined, fallback: string, t: Translate) {

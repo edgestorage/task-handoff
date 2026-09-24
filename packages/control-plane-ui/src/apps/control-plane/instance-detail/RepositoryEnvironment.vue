@@ -146,7 +146,7 @@
         </Popover>
 
         <button
-          v-if="context.availability === 'available' && context.primaryAction"
+          v-if="context.availability === 'available' && context.primaryAction && context.primaryAction !== 'review-changes' && context.primaryAction !== 'resolve-conflicts'"
           type="button"
           class="repository-environment-primary"
           :data-action="context.primaryAction"
@@ -189,6 +189,7 @@ import RepositoryErrorNotice from "./RepositoryErrorNotice.vue";
 const props = defineProps<{
   aiAgent?: "codex" | "claude" | "opencode";
   connectionStatus: string;
+  cwdFolderId?: string;
   instanceId: string;
   sessionId: string;
   sessionKind: RepositorySessionKind;
@@ -280,23 +281,30 @@ function toggleBranches() {
 }
 
 function openWorktrees() {
-  emit("openWorkspace", {
+  emit("openWorkspace", repositoryWorkspaceTarget({
     aiAgent: props.aiAgent,
     initialView: "files",
     page: "worktrees",
-    sessionId: props.sessionId,
-    sessionKind: props.sessionKind,
-  });
+  }));
   open.value = false;
 }
 
+function repositoryWorkspaceTarget(extra: Omit<RepositoryWorkspaceTabTarget, "cwdFolderId" | "sessionId" | "sessionKind">) {
+  return {
+    ...(props.cwdFolderId ? { cwdFolderId: props.cwdFolderId } : {}),
+    sessionId: props.sessionId,
+    sessionKind: props.sessionKind,
+    ...extra,
+  };
+}
+
 function openRepositoryWorkspace(view: "files" | "changes") {
-  emit("openWorkspace", { initialView: view, sessionId: props.sessionId, sessionKind: props.sessionKind });
+  emit("openWorkspace", repositoryWorkspaceTarget({ initialView: view }));
   open.value = false;
 }
 
 function openChangesReview() {
-  emit("openWorkspace", { initialView: "changes", page: "changes-review", sessionId: props.sessionId, sessionKind: props.sessionKind });
+  emit("openWorkspace", repositoryWorkspaceTarget({ initialView: "changes", page: "changes-review" }));
   open.value = false;
 }
 
@@ -342,8 +350,10 @@ function runPrimaryAction(action: RepositoryPrimaryAction) {
 
 .repository-environment-trigger-detail {
   width: auto;
+  min-width: 0;
   max-width: min(220px, 32vw);
   height: 26px;
+  overflow: hidden;
   border-color: var(--line-subtle);
   border-radius: 6px;
   background: var(--surface-subtle);
@@ -352,15 +362,22 @@ function runPrimaryAction(action: RepositoryPrimaryAction) {
 }
 
 .repository-environment-trigger-detail .repository-environment-trigger-content {
-  width: auto;
+  width: 100%;
   gap: 5px;
   min-width: 0;
+  overflow: hidden;
+}
+
+.repository-environment-trigger-detail .repository-environment-trigger-content > svg {
+  flex: 0 0 auto;
 }
 
 .repository-environment-trigger-branch {
+  display: block;
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
-  color: var(--text);
+  color: inherit;
   font-size: 12px;
   font-weight: 400;
   line-height: 1;

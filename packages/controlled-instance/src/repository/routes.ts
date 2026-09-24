@@ -60,6 +60,10 @@ type RegisterRepositoryRoutesOptions = {
 const EmptyQuerySchema = z.object({}).strict();
 const DirectoryQuerySchema = z.object({ path: z.string().max(4096).default("") }).strict();
 const FileQuerySchema = z.object({ path: z.string().min(1).max(4096) }).strict();
+const PathSearchQuerySchema = z.object({
+  query: z.string().trim().min(1).max(256),
+  limit: z.coerce.number().int().min(1).max(200).default(100),
+}).strict();
 const DiffQuerySchema = z.object({
   path: z.string().min(1).max(4096),
   scope: z.enum(["conflict", "staged", "unstaged", "untracked"]),
@@ -146,6 +150,48 @@ export function registerRepositoryRoutes(app: FastifyInstance, options: Register
     } catch (error) { return sendRepositoryError(reply, error); }
   });
 
+  const WorkspaceRequestSchema = z.object({ cwd: RepositoryAiSessionWorkspaceInspectSchema.shape.cwd }).strict();
+  const WorkspaceCreateWorktreeSchema = z.object({
+    cwd: RepositoryAiSessionWorkspaceInspectSchema.shape.cwd,
+    worktree: RepositoryCreateWorktreeRequestSchema,
+  }).strict();
+  const WorkspaceRemoveWorktreeSchema = z.object({
+    cwd: RepositoryAiSessionWorkspaceInspectSchema.shape.cwd,
+    removal: RepositoryRemoveWorktreeRequestSchema,
+  }).strict();
+
+  app.post<{ Body: unknown }>("/api/repository/workspace/worktrees/list", async (request, reply) => {
+    try {
+      const body = WorkspaceRequestSchema.parse(request.body || {});
+      const cwd = authorizedWorkspaceCwd(body.cwd.path, options.workspaceRoots);
+      return { data: await servicesForWorkspace(cwd).worktrees.list() };
+    } catch (error) { return sendRepositoryError(reply, error); }
+  });
+
+  app.post<{ Body: unknown }>("/api/repository/workspace/worktrees", async (request, reply) => {
+    try {
+      const body = WorkspaceCreateWorktreeSchema.parse(request.body || {});
+      const cwd = authorizedWorkspaceCwd(body.cwd.path, options.workspaceRoots);
+      return { data: await servicesForWorkspace(cwd).worktrees.create(body.worktree) };
+    } catch (error) { return sendRepositoryError(reply, error); }
+  });
+
+  app.post<{ Body: unknown }>("/api/repository/workspace/worktrees/remove", async (request, reply) => {
+    try {
+      const body = WorkspaceRemoveWorktreeSchema.parse(request.body || {});
+      const cwd = authorizedWorkspaceCwd(body.cwd.path, options.workspaceRoots);
+      return { data: await servicesForWorkspace(cwd).worktrees.remove(body.removal) };
+    } catch (error) { return sendRepositoryError(reply, error); }
+  });
+
+  app.post<{ Body: unknown }>("/api/repository/workspace/branches/list", async (request, reply) => {
+    try {
+      const body = WorkspaceRequestSchema.parse(request.body || {});
+      const cwd = authorizedWorkspaceCwd(body.cwd.path, options.workspaceRoots);
+      return { data: await servicesForWorkspace(cwd).branches.list() };
+    } catch (error) { return sendRepositoryError(reply, error); }
+  });
+
   app.post<{ Body: unknown }>("/api/repository/ai-session-workspace/create", async (request, reply) => {
     try {
       return { data: await createAiSessionWorkspace(request.body) };
@@ -197,6 +243,14 @@ export function registerRepositoryRoutes(app: FastifyInstance, options: Register
         const query = FileQuerySchema.parse(request.query || {});
         const state = await requireRepository(servicesFor(kind, request.params.id).resolve);
         return { data: repositoryFiles(state, options.workspaceRoots).read(query.path) };
+      } catch (error) { return sendRepositoryError(reply, error); }
+    });
+
+    app.get<{ Params: { id: string }; Querystring: unknown }>(`${base}/files/search`, async (request, reply) => {
+      try {
+        const query = PathSearchQuerySchema.parse(request.query || {});
+        const state = await requireRepository(servicesFor(kind, request.params.id).resolve);
+        return { data: repositoryFiles(state, options.workspaceRoots).search(query.query, query.limit) };
       } catch (error) { return sendRepositoryError(reply, error); }
     });
 
@@ -605,13 +659,14 @@ function sanitizeAiSessionLaunchError(error: unknown) {
     return new RepositoryOperationError("REPOSITORY_CONFLICT", error instanceof Error ? error.message : "The request ID conflicts with an earlier session creation.");
   }
   if (AI_SESSION_MODEL_CONFIGURATION_ERROR_CODES.has(code)) {
-    return new RepositoryOperationError(code, error instanceof Error ? error.message : "The selected model is not available in this running instance. Restart the instance to apply the latest model configuration.");
+    return new RepositoryOperationError(code, error instanceof Error ? error.message : "The model selected for this AI session is unavailable. Select another model to continue.");
   }
   return new RepositoryOperationError("REPOSITORY_OPERATION_FAILED", "AI session could not be started.");
 }
 
 const AI_SESSION_MODEL_CONFIGURATION_ERROR_CODES = new Set([
   "AI_SESSION_MODEL_CATALOG_UNAVAILABLE",
+  "AI_SESSION_MODEL_TARGET_UNAVAILABLE",
   "AI_SESSION_MODEL_ENTITY_UNAVAILABLE",
   "AI_SESSION_MODEL_NAME_UNAVAILABLE",
 ]);

@@ -228,7 +228,7 @@ test("v0.0.21 registry downgrade preserves the existing worktree generation on r
   assert.equal(JSON.parse(fs.readFileSync(registryPath, "utf8")).version, 2);
 });
 
-test("stale registry ownership does not transfer to a replacement worktree at the same path", async () => {
+test("stale registry ownership does not transfer to a replacement external worktree and external worktrees remain removable", async () => {
   const fixture = createGitFixture();
   const setupResult = setup(fixture);
   const state = await setupResult.resolve();
@@ -244,10 +244,13 @@ test("stale registry ownership does not transfer to a replacement worktree at th
   fixture.git(["worktree", "add", targetPath, "feature/replacement-generation"]);
 
   const replacementSetup = setup(fixture, { managedRoot: setupResult.managedRoot });
-  const replacement = (await replacementSetup.service.list()).items.find((item) => item.id === created.worktreeId);
+  const replacementList = await replacementSetup.service.list();
+  const replacement = replacementList.items.find((item) => item.id === created.worktreeId);
   assert.equal(replacement.managed, false);
-  assert.equal(replacement.canRemove, false);
-  assert.equal(replacement.removeBlockers.includes("external-worktree"), true);
+  assert.equal(replacement.canRemove, true);
+  assert.equal(replacement.removeBlockers.includes("external-worktree"), false);
+  await replacementSetup.service.remove({ worktreeId: replacement.id, expectedSnapshotId: replacementList.snapshotId, confirm: true });
+  assert.equal(fs.existsSync(targetPath), false);
 });
 
 test("interrupted removal rolls back to ready when the original generation still exists", async () => {
@@ -350,13 +353,12 @@ test("managed worktree removal is non-force, retains branches, and honors safety
   await assert.rejects(() => setupResult.service.remove({ worktreeId: main.id, expectedSnapshotId: removed.worktrees.snapshotId, confirm: true }), (error) => error.code === "REPOSITORY_WORKTREE_UNSAFE");
 });
 
-test("managed removal rejects locked, prunable, external, and stale worktrees", async () => {
+test("worktree removal rejects locked, prunable, stale, and current worktrees", async () => {
   const fixture = createGitFixture();
-  const externalPath = fixture.createWorktree("external-remove");
   const setupResult = setup(fixture);
-  const externalList = await setupResult.service.list();
-  const external = externalList.items.find((item) => item.head.branch === "fixture/external-remove");
-  await assert.rejects(() => setupResult.service.remove({ worktreeId: external.id, expectedSnapshotId: externalList.snapshotId, confirm: true }), (error) => error.code === "REPOSITORY_WORKTREE_UNSAFE");
+  const currentList = await setupResult.service.list();
+  const current = currentList.items.find((item) => item.isCurrent);
+  await assert.rejects(() => setupResult.service.remove({ worktreeId: current.id, expectedSnapshotId: currentList.snapshotId, confirm: true }), (error) => error.code === "REPOSITORY_WORKTREE_UNSAFE");
 
   let state = await setupResult.resolve();
   const locked = await setupResult.service.create({ mode: "new-branch", branchName: "feature/locked", startRef: "HEAD", expectedSnapshotId: state.context.snapshotId });
@@ -378,5 +380,4 @@ test("managed removal rejects locked, prunable, external, and stale worktrees", 
   const beforeDirty = await setupResult.service.list();
   fs.writeFileSync(path.join(managedPath(setupResult.managedRoot, stale.worktreeId), "late.txt"), "late\n");
   await assert.rejects(() => setupResult.service.remove({ worktreeId: stale.worktreeId, expectedSnapshotId: beforeDirty.snapshotId, confirm: true }), (error) => error.code === "REPOSITORY_STATE_STALE");
-  assert.equal(fs.existsSync(externalPath), true);
 });

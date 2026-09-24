@@ -27,9 +27,12 @@ test("Environment uses a portal popover and authoritative repository context", a
 
   assert.match(component, /PopoverContent/);
   assert.match(component, /context\.primaryAction/);
+  assert.match(component, /context\.primaryAction !== 'review-changes' && context\.primaryAction !== 'resolve-conflicts'/);
   assert.match(component, /repository\.environment\.filesChanges/);
   assert.match(component, /repository\.environment\.worktree/);
   assert.match(component, /repository\.environment\.branch/);
+  assert.match(component, /\.repository-environment-trigger-detail \{[^}]*color: var\(--text-muted\);/);
+  assert.match(component, /\.repository-environment-trigger-branch \{[^}]*color: inherit;/);
   assert.doesNotMatch(component, /executionLocation|<Laptop/);
   assert.match(repositoryApi, /\/instances\/\$\{encodeURIComponent\(target\.instanceId\)\}\/api\/\$\{sessionCollection\}\/\$\{encodeURIComponent\(target\.sessionId\)\}\/repository/);
   assert.match(repositoryApi, /safeParseResponse\(RepositoryWorktreesSchema/);
@@ -51,7 +54,7 @@ test("Worktrees use opaque server ids and expose AI-session creation without cwd
   assert.match(environment, /page: "worktrees"/);
   assert.doesNotMatch(environment, /repository-worktrees-popover/);
   assert.match(tab, /<RepositoryWorktreesPanel/);
-  assert.match(tab, /appearance="page"/);
+  assert.match(tab, /class="repository-worktrees-tab-surface"/);
   assert.match(pane, /session\.source\?\.page === 'worktrees'/);
   assert.match(sessions, /repository-worktrees:/);
   assert.match(sessions, /repository\.worktreesPanel\.title/);
@@ -59,13 +62,15 @@ test("Worktrees use opaque server ids and expose AI-session creation without cwd
   assert.match(panel, /repository\.worktreesPanel\.managed/);
   assert.match(panel, /repository\.worktreesPanel\.dirty/);
   assert.match(panel, /repository\.worktreesPanel\.locked/);
-  assert.match(panel, /repository\.environmentExtra\.activeSessions/);
+  assert.match(panel, /repository\.environmentExtra\.associatedSessions/);
+  assert.match(panel, /<DropdownMenuContent class="repository-worktree-menu"/);
   assert.match(panel, /repository\.worktreesPanel\.newHere/);
   assert.match(panel, /repository\.worktreesPanel\.search/);
   assert.match(panel, /filteredWorktrees/);
   assert.match(panel, /<ScrollArea/);
   assert.match(panel, /<strong :title="worktreeLabel\(worktree\)">/);
-  assert.match(panel, /\.repository-worktree-branch \{[\s\S]*flex: 1 1 auto;[\s\S]*overflow: hidden/);
+  assert.match(panel, /\.repository-worktree-title \{[\s\S]*display: flex;[\s\S]*flex-wrap: wrap/);
+  assert.match(panel, /\.repository-worktree-title strong \{[\s\S]*overflow: hidden;[\s\S]*text-overflow: ellipsis;[\s\S]*white-space: nowrap/);
   assert.match(environment, /class="repository-environment-branch-summary" :title="branchSummary"/);
   assert.match(environment, /\.repository-environment-branch-summary \{[\s\S]*white-space: nowrap/);
   assert.match(panel, /repositoryContextId: worktrees\.value\.repositoryContextId/);
@@ -83,19 +88,42 @@ test("managed worktree creation reuses the shared dialog without starting an AI 
   ]);
 
   assert.match(panel, /<NewWorktreeDialog/);
-  assert.match(panel, /createRepositoryWorktree\(target\.value, \{ \.\.\.selection, expectedSnapshotId: worktrees\.value\.snapshotId \}\)/);
+  assert.match(panel, /createRepositoryWorkspaceWorktree\(target\.value, \{ \.\.\.selection, expectedSnapshotId: worktrees\.value\.snapshotId \}\)/);
   assert.match(dialog, /sessions\.panel\.newWorktreeDescription/);
   assert.match(dialog, /value="existing-branch"/);
   assert.match(dialog, /value="new-branch"/);
   assert.doesNotMatch(panel, /createMessage|createRepositoryWorktreeAiSession/);
-  assert.match(panel, /\.repository-worktree-list \{[\s\S]*gap: 2px/);
-  assert.match(panel, /\.repository-worktree-card \{[\s\S]*gap: 5px;[\s\S]*border: 0;[\s\S]*background: transparent;[\s\S]*padding: 7px 8px/);
-  assert.match(panel, /\.repository-worktree-card\[data-current="true"\] \{[\s\S]*background: color-mix\(in srgb, var\(--brand-accent\) 9%, transparent\)/);
-  assert.match(panel, /\.repository-worktree-card\[data-current="true"\] \.repository-worktree-branch strong,[\s\S]*color: var\(--repository-current-text, var\(--brand-accent-muted, var\(--brand-accent\)\)\)/);
-  assert.match(repositoryApi, /repositoryTargetBasePath\(target\)\}\/worktrees`/);
+  assert.match(panel, /\.repository-worktree-directory \{[\s\S]*border: 1px solid var\(--line\);[\s\S]*background: var\(--surface-raised\)/);
+  assert.match(panel, /\.repository-worktree-list \{[\s\S]*display: grid;/);
+  assert.match(panel, /\.repository-worktree-row \+ \.repository-worktree-row \{[\s\S]*border-top: 1px solid var\(--line\)/);
+  assert.match(panel, /\.repository-worktree-row\[data-current="true"\] \.repository-worktree-title strong \{[\s\S]*color: var\(--repository-current-text, var\(--brand-accent-muted, var\(--brand-accent\)\)\)/);
+  assert.match(repositoryApi, /repositoryWorkspaceResource\(target, "worktrees"\)/);
   assert.doesNotMatch(panel, /worktree:\s*\{[^}]*\b(path|cwd)\s*:/);
   assert.match(worktreesTab, /props\.session\.source\?\.aiAgent/);
   assert.match(worktreesTab, /agent === "codex" \|\| agent === "claude"/);
+});
+
+test("worktree rows align identity, state summary, and actions as separate columns", async () => {
+  const panel = await source("apps/control-plane/instance-detail/RepositoryWorktreesPanel.vue");
+
+  assert.match(panel, /\.repository-worktree-row \{[\s\S]*display: grid;[\s\S]*grid-template-columns: minmax\(0, 1\.35fr\) minmax\(190px, 1fr\) auto;/);
+  assert.match(panel, /<div class="repository-worktree-identity">[\s\S]*<div class="repository-worktree-copy">[\s\S]*<div class="repository-worktree-summary">[\s\S]*<div class="repository-worktree-row-actions">/);
+  assert.match(panel, /<div class="repository-worktree-title">[\s\S]*<strong :title="worktreeLabel\(worktree\)">[\s\S]*<Badge variant="secondary">\{\{ worktreeKindLabel\(worktree\) \}\}<\/Badge>[\s\S]*<code v-if="worktreeCommit\(worktree\)"/);
+
+  const identity = panel.slice(panel.indexOf('<div class="repository-worktree-identity">'), panel.indexOf('<div class="repository-worktree-summary">'));
+  assert.doesNotMatch(identity, /worktreesPanel\.(dirty|locked|prunable)/);
+  for (const state of ["dirty", "locked", "prunable"]) {
+    assert.match(panel, new RegExp(`class="repository-worktree-summary-item"[^>]*>[\\s\\S]*?repository\\.worktreesPanel\\.${state}`));
+  }
+  assert.match(panel, /<span v-if="activeSessionCount\(worktree\)" class="repository-worktree-summary-item">[\s\S]*repository\.environmentExtra\.associatedSessions/);
+
+  assert.match(panel, /\.repository-worktree-summary \{[\s\S]*?display: grid;[\s\S]*?gap: 5px;/);
+  assert.match(panel, /\.repository-worktree-summary-item \{[\s\S]*?display: flex;[\s\S]*?font-size: 12px;/);
+  assert.match(panel, /\.repository-worktree-summary-item\[data-state="warning"\] \{[\s\S]*?color: var\(--status-warning\);/);
+  assert.match(panel, /\.repository-worktree-warning \{[\s\S]*grid-column: 1 \/ -1;/);
+  assert.match(panel, /\.repository-worktree-start-composer \{[\s\S]*grid-column: 1 \/ -1;/);
+  assert.match(panel, /@container repository-worktrees \(max-width: 720px\) \{[\s\S]*\.repository-worktree-summary \{[\s\S]*grid-column: 1 \/ -1;/);
+  assert.doesNotMatch(panel, /@media \(max-width: 720px\)/);
 });
 
 test("new-session worktree dialog restores branch selection and detached checkout semantics", async () => {
@@ -115,16 +143,18 @@ test("new-session worktree dialog restores branch selection and detached checkou
   assert.match(dialog, /newWorktreeDetachedDescription/);
   assert.match(panel, /\{ mode: "worktree", branch: newSessionManagedWorktreeBranch\.value \}/);
   assert.match(panel, /\|\| newSessionManagedWorktreeBranch\.value[\s\S]*\? undefined/);
-  assert.match(panel, /selection\.mode === "existing-branch"[\s\S]*newSessionWorktreeId\.value = "";[\s\S]*newSessionCreateNewWorktree\.value = false/);
+  assert.match(panel, /createRepositoryWorkspaceWorktree\([\s\S]*newSessionWorktreeId\.value = created\.worktreeId/);
+  assert.match(panel, /Compatibility for v0\.0\.21:[\s\S]*error instanceof ApiError && error\.status === 404[\s\S]*newSessionCreateNewWorktree\.value = selection\.mode === "new-branch"/);
 });
 
-test("managed worktree removal is AI-only, confirmed, non-force, and retains the branch", async () => {
+test("managed worktree removal is workspace-scoped, confirmed, non-force, and retains the branch", async () => {
   const [panel, repositoryApi] = await Promise.all([
     source("apps/control-plane/instance-detail/RepositoryWorktreesPanel.vue"),
     source("api/repository.ts"),
   ]);
 
-  assert.match(panel, /canManageWorktrees = computed\(\(\) => props\.sessionKind === "ai-session"\)/);
+  assert.match(panel, /canManageWorktrees = computed\(\(\) => true\)/);
+  assert.match(panel, /removeRepositoryWorkspaceWorktree\(target\.value/);
   assert.match(panel, /repository\.worktreeRemoveDescription/);
   assert.match(panel, /confirm: true/);
   assert.match(panel, /expectedSnapshotId: worktrees\.value\.snapshotId/);
@@ -171,55 +201,112 @@ test("branch selector groups, searches, tracks, checks out, and safely deletes s
   assert.doesNotMatch(`${panel}\n${repositoryApi}`, /\bforce\s*:/);
 });
 
-test("Repository workspace opens as a session tab with a resizable ScrollArea sidebar", async () => {
-  const [environment, workspace, workspaceTab, sessionState, tree, repositoryApi, fileEditor, sourceLanguage] = await Promise.all([
+test("Repository workspace opens as a session tab with a floating searchable file tree", async () => {
+  const [environment, workspace, workspaceFileList, workspaceTab, sessionState, tree, picker, repositoryApi, fileEditor, sourceLanguage] = await Promise.all([
     source("apps/control-plane/instance-detail/RepositoryEnvironment.vue"),
     source("apps/control-plane/instance-detail/RepositoryWorkspace.vue"),
+    source("apps/control-plane/instance-detail/RepositoryWorkspaceFileList.vue"),
     source("apps/control-plane/instance-detail/RepositoryWorkspaceTab.vue"),
     source("apps/control-plane/instance-detail/useActiveInstanceSessions.ts"),
     source("apps/control-plane/instance-detail/RepositoryFileTree.vue"),
+    source("apps/control-plane/instance-detail/RepositoryFilePicker.vue"),
     source("api/repository.ts"),
     source("apps/control-plane/instance-detail/RepositoryFilePreview.vue"),
     source("components/source-code/sourceLanguage.ts"),
   ]);
 
-  assert.match(environment, /emit\("openWorkspace", \{ initialView: view, sessionId: props\.sessionId, sessionKind: props\.sessionKind \}\)/);
+  assert.match(environment, /function repositoryWorkspaceTarget\(extra: Omit<RepositoryWorkspaceTabTarget, "cwdFolderId" \| "sessionId" \| "sessionKind">\) \{[\s\S]*\.\.\.\(props\.cwdFolderId \? \{ cwdFolderId: props\.cwdFolderId \} : \{\}\)/);
+  assert.match(environment, /emit\("openWorkspace", repositoryWorkspaceTarget\(\{ initialView: view \}\)\)/);
+  assert.match(environment, /emit\("openWorkspace", repositoryWorkspaceTarget\(\{\s*aiAgent: props\.aiAgent,[\s\S]*page: "worktrees",/);
   assert.match(workspaceTab, /<RepositoryWorkspace[\s\S]*:context="contextQuery\.data\.value"/);
+  assert.match(workspaceTab, /@open-changes="openWorkspaceFromPane"/);
+  assert.match(workspaceTab, /function openWorkspaceFromPane\(target: \{[\s\S]*\.\.\.\(cwdFolderId\.value \? \{ cwdFolderId: cwdFolderId\.value \} : \{\}\)/);
   assert.doesNotMatch(workspaceTab, /dialogOpen|open-dialog|open-tab/);
   assert.doesNotMatch(workspace, /repository\.workspace\.(?:openDialog|returnTab|openWindow)/);
   assert.match(sessionState, /kind: "repository"/);
   assert.match(sessionState, /function openRepositoryWorkspace\(target: RepositoryWorkspaceTabTarget\)/);
   assert.match(workspace, /RepositoryFileTree/);
-  assert.match(workspace, /<ScrollArea type="always" class="repository-workspace-sidebar-content">/);
-  assert.match(workspace, /role="separator" :aria-label="t\('repository\.workspace\.resizeSidebar'\)"/);
-  assert.match(workspace, /function startSidebarResize\(event: PointerEvent\)/);
-  assert.match(workspace, /repository\.workspace\.explorer/);
+  assert.match(workspace, /<RepositoryFilePicker/);
+  assert.match(workspace, /class="repository-workspace-path"/);
+  assert.match(workspace, /v-for="\(segment, index\) in breadcrumbSegments"[\s\S]*:open="openBreadcrumbIndex === index"/);
+  assert.match(workspace, /<ChevronRight\s+v-if="index"/);
+  assert.match(workspace, /updateBreadcrumbPicker\(index, segment, \$event\)/);
+  assert.match(workspace, /@wheel="scrollBreadcrumb"/);
+  assert.match(workspace, /element\.scrollLeft \+= event\.deltaY/);
+  assert.match(workspace, /scrollbar-width: none/);
+  assert.match(workspace, /data-collapsed/);
+  assert.match(workspace, /:data-picker-open="openBreadcrumbIndex === undefined \? undefined : 'true'"/);
+  assert.match(workspace, /:data-expanded="breadcrumbExpanded \? 'true' : undefined"/);
+  assert.match(workspace, /@mouseenter="setBreadcrumbExpanded\(true\)"/);
+  assert.match(workspace, /@mouseleave="setBreadcrumbExpanded\(false\)"/);
+  assert.match(workspace, /@focusin="setBreadcrumbExpanded\(true\)"/);
+  assert.match(workspace, /function setBreadcrumbExpanded\(next: boolean\)/);
+  assert.match(workspace, /repository-workspace-path\[data-expanded\] \.repository-workspace-path-segment\[data-collapsed="true"\]/);
+  assert.doesNotMatch(workspace, /repository-workspace-path:hover/);
+  assert.doesNotMatch(workspace, /:has\(\.repository-workspace-path-segment:focus-visible\)/);
+  assert.match(workspace, /function updateBreadcrumbCollapse\(\) \{/);
+  assert.match(workspace, /measureBreadcrumbLabel/);
+  assert.match(workspace, /const fullWidth = widths\.reduce\(\(total, width\) => total \+ width, 0\) \+ lastIndex \* BREADCRUMB_SEPARATOR_WIDTH;/);
+  assert.match(workspace, /if \(nextWidth \+ tailWidth > available\) break;/);
+  assert.match(workspace, /function isCollapsedBreadcrumb\(index: number\) \{[\s\S]*?index >= first && index < breadcrumbSegments\.value\.length - 1/);
+  assert.match(workspace, /:data-collapsed-first="isCollapsedBreadcrumbFirst\(index\) \? 'true' : undefined"/);
+  assert.match(workspace, /\[data-collapsed="true"\]\[data-collapsed-first="true"\]::after \{ content: "\.\.\.";/);
+  assert.match(workspace, /\.repository-workspace-path:not\(\[data-expanded\]\):not\(\[data-picker-open\]\) \.repository-workspace-path-segment\[data-current="true"\] \{ min-width: 0; overflow: hidden; text-overflow: ellipsis; \}/);
+  const expandedBreadcrumbRule = workspace.match(/\[data-picker-open\] \.repository-workspace-path-segment\[data-collapsed="true"\],[\s\S]*?\{([^}]*)\}/);
+  assert.ok(expandedBreadcrumbRule, "collapsed breadcrumb group must expand on hover");
+  assert.doesNotMatch(expandedBreadcrumbRule[1], /background/);
+  assert.match(workspace, /searchRepositoryPaths\(target\.value, query, 100/);
+  assert.match(workspace, /function flattenLoadedDirectories/);
+  assert.match(workspace, /function revealDirectory/);
+  assert.doesNotMatch(workspace, /repository-workspace-sidebar|startSidebarResize|sidebarWidth/);
+  assert.match(picker, /<Popover[\s\S]*<ScrollArea type="always" :horizontal="false"/);
+  assert.match(picker, /--reka-popover-content-available-height/);
+  assert.match(workspaceFileList, /repository\.workspace\.explorer/);
   assert.match(workspace, /@click="openChangesReview"/);
   assert.match(workspace, /emit\("openChanges", \{ initialView: "changes", page: "changes-review"/);
   assert.match(workspace, /<RepositoryFilePreview :content="activeTab\.content" :line="activeTab\.line" :path="activeTab\.path"/);
   assert.doesNotMatch(workspace, /<textarea|writeRepositoryFile|saveFile\(|activeTab\.draft/);
   assert.match(fileEditor, /highlightSource\(props\.content, language\.value\)/);
-  assert.match(fileEditor, /<pre ref="preview" class="repository-file-preview repository-syntax-highlight"/);
-  assert.match(fileEditor, /overflow: auto/);
+  assert.match(fileEditor, /<ScrollArea ref="previewRoot" type="always" class="repository-file-preview-scroll">/);
+  assert.match(fileEditor, /data-task-handoff-scroll-viewport/);
+  assert.match(fileEditor, /viewport\.scrollTop/);
+  assert.match(fileEditor, /repository-file-preview-scroll :deep\(\[data-task-handoff-scroll-viewport\]/);
+  assert.match(fileEditor, /<div class="repository-file-preview-gutter" aria-hidden="true">/);
+  assert.match(fileEditor, /repository-file-preview-gutter-numbers/);
+  assert.match(fileEditor, /const lineNumbers = computed\(\(\) => \{/);
+  assert.match(fileEditor, /function lineNumberSequence\(from: number, to: number\)/);
+  assert.match(fileEditor, /function measureLineHeight\(\) \{[\s\S]*?gutterLines\.value\?\.getBoundingClientRect\(\)\.height[\s\S]*?height \/ lineCount\.value/);
+  assert.match(fileEditor, /\.repository-file-preview-gutter-lines \{ display: block; \}/);
+  assert.match(fileEditor, /\.repository-file-preview-gutter \{[^}]*position: sticky;[^}]*left: 0;[^}]*\}/);
+  assert.match(fileEditor, /\.repository-file-preview-gutter-numbers \{[^}]*display: block; white-space: pre;/);
+  assert.match(fileEditor, /\.repository-file-preview-scroll :deep\(\[data-task-handoff-scroll-viewport\] > div\) \{[^}]*display: flex;/);
   assert.match(sourceLanguage, /tsx: "typescript"/);
   assert.doesNotMatch(workspace, /stageRepositoryPaths|unstageRepositoryPaths|discardRepositoryWorktree|commitRepositoryIndex/);
+  assert.doesNotMatch(workspace, /repository-workspace-tabs|role="tablist"|data-repository-tab/);
+  assert.doesNotMatch(workspace, /repository-workspace-editor > header/);
   assert.match(workspace, /\.repository-workspace-content \{[^}]*width: 100%;[^}]*height: 100%;/);
-  assert.match(workspace, /repository-workspace-empty[^}]*grid-row: 2/);
-  assert.match(tree, /entry\.traversable/);
+  assert.match(workspace, /\.repository-workspace-main \{[^}]*grid-template-rows: minmax\(0, 1fr\)/);
+  assert.match(tree, /export type RepositoryFileTreeNode/);
+  assert.match(tree, /emit\("toggle", node\)/);
   assert.match(repositoryApi, /getRepositoryDirectory/);
   assert.match(repositoryApi, /getRepositoryFile/);
+  assert.match(repositoryApi, /searchRepositoryPaths/);
   assert.match(repositoryApi, /getRepositoryDiff/);
 });
 
 test("Repository file and directory failures preserve the file tree", async () => {
-  const workspace = await source("apps/control-plane/instance-detail/RepositoryWorkspace.vue");
+  const [workspace, fileList] = await Promise.all([
+    source("apps/control-plane/instance-detail/RepositoryWorkspace.vue"),
+    source("apps/control-plane/instance-detail/RepositoryWorkspaceFileList.vue"),
+  ]);
   const openFile = workspace.slice(workspace.indexOf("async function openFile"), workspace.indexOf("watch(\n  [() => props.initialFileRequestId"));
   const toggleDirectory = workspace.slice(workspace.indexOf("async function toggleDirectory"), workspace.indexOf("async function openFile"));
 
-  assert.match(workspace, /<RepositoryErrorNotice v-else-if="workspaceLoadError"/);
-  assert.match(workspace, /<template v-else>[\s\S]*directoryLoadError[\s\S]*<RepositoryFileTree/);
-  assert.match(workspace, /<section v-if="fileOpenError" class="repository-workspace-editor repository-workspace-file-error">[\s\S]*fileOpenError\.path[\s\S]*RepositoryErrorNotice/);
-  assert.match(workspace, /\.repository-workspace-file-error \{ grid-row: 2; \}/);
+  assert.match(fileList, /<RepositoryErrorNotice v-else-if="workspaceLoadError"/);
+  assert.match(fileList, /<template v-else>[\s\S]*directoryLoadError[\s\S]*<RepositoryFileTree/);
+  assert.match(workspace, /currentFilePath = computed\(\(\) => activeTab\.value\?\.path \|\| fileOpenError\.value\?\.path/);
+  assert.match(workspace, /<section v-if="fileOpenError" class="repository-workspace-editor repository-workspace-file-error">[\s\S]*RepositoryErrorNotice/);
+  assert.doesNotMatch(workspace, /repository-workspace-file-error">\s*<header/);
   assert.match(workspace, /<section v-else-if="activeTab" class="repository-workspace-editor">/);
   assert.match(openFile, /fileOpenError\.value = \{ path: entry\.path, error \}/);
   assert.doesNotMatch(openFile, /workspaceLoadError/);
@@ -238,7 +325,7 @@ test("Repository workspace is tab-only and has no independent-window route", asy
   assert.doesNotMatch(workspace, /Unsaved drafts remain in this window/);
   assert.doesNotMatch(workspace, /BroadcastChannel|repositoryInvalidationChannelName/);
   assert.match(workspace, /watch\(\(\) => `\$\{props\.instanceId\}:\$\{props\.sessionKind\}:\$\{props\.sessionId\}`,[\s\S]*\{ immediate: true \}\)/);
-  assert.doesNotMatch(workspace, /standalone|embedded\?|open: boolean|update:open/);
+  assert.doesNotMatch(workspace, /standalone|embedded\?|open: boolean/);
 });
 
 test("Repository file actions keep previews read-only and refresh stale server content", async () => {
@@ -353,7 +440,7 @@ test("Repository UI preserves edge states and structured recovery guidance", asy
   assert.match(apiClient, /payload\.error\?\.retryable/);
 });
 
-test("Repository navigation keeps portal, keyboard, path, and confirmation contracts", async () => {
+test("Repository navigation keeps portal, breadcrumb path, and confirmation contracts", async () => {
   const [environment, workspace, worktrees, popoverContent, dialogContent, repositoryApi] = await Promise.all([
     source("apps/control-plane/instance-detail/RepositoryEnvironment.vue"),
     source("apps/control-plane/instance-detail/RepositoryWorkspace.vue"),
@@ -366,12 +453,10 @@ test("Repository navigation keeps portal, keyboard, path, and confirmation contr
   assert.match(popoverContent, /PopoverPortal/);
   assert.match(dialogContent, /DialogPortal/);
   assert.doesNotMatch(environment, /@open-auto-focus\.prevent/);
-  assert.match(workspace, /class="repository-workspace-tabs" role="tablist"[\s\S]*@keydown="navigateOpenTabs"/);
-  assert.match(workspace, /\["ArrowLeft", "ArrowRight", "Home", "End"\]/);
+  assert.match(workspace, /<template #trigger>[\s\S]*<button[\s\S]*class="repository-workspace-path-segment"/);
+  assert.match(workspace, /const breadcrumbSegments = computed/);
   assert.match(workspace, /tabindex="-1"/);
-  assert.match(workspace, /:tabindex="activeTabId === tab\.id \? 0 : -1"/);
-  assert.match(workspace, /class="repository-workspace-tab-close" :aria-label="t\('repository\.workspace\.closeFile'/);
-  assert.doesNotMatch(workspace, /<button[^>]*role="tab"[\s\S]{0,500}<X[^>]*role="button"/);
+  assert.doesNotMatch(workspace, /role="tablist"|navigateOpenTabs|repository-workspace-tab-close/);
 
   assert.match(repositoryApi, /new URLSearchParams/);
   assert.match(repositoryApi, /encodeURIComponent\(target\.sessionId\)/);

@@ -39,6 +39,16 @@ test("Story children keep compact spacing between expanded groups", () => {
   assert.match(storyView, /\.story-tree-children \{[^}]*margin:2px 0 4px 16px;/);
 });
 
+test("Story list sidebar animates only its expand and collapse", () => {
+  assert.match(storyView, /const SIDEBAR_LAYOUT_ANIMATION_MS = 200;/);
+  assert.match(storyView, /'story-workspace-animating': sidebarLayoutAnimating/);
+  assert.match(storyView, /function playSidebarLayoutAnimation\(\)[\s\S]*sidebarLayoutAnimating\.value = true;[\s\S]*window\.setTimeout\([\s\S]*sidebarLayoutAnimating\.value = false;/);
+  assert.match(storyView, /watch\(sidebarCollapsed, playSidebarLayoutAnimation, \{ flush: "sync" \}\)/);
+  assert.match(storyView, /\.story-workspace \{[^}]*transition:none; \}/);
+  assert.doesNotMatch(storyView, /\.story-workspace \{[^}]*transition:grid-template-columns/);
+  assert.match(storyView, /\.story-workspace-animating \{ transition:grid-template-columns 180ms cubic-bezier\(\.2,0,0,1\); \}/);
+});
+
 test("Story detail tabs merge section counts into the sticky header", () => {
   assert.match(storyView, /class="story-detail-header-tabs"/);
   assert.match(storyView, /class="story-detail-tab-count"/);

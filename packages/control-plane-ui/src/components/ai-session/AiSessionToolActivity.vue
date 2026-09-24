@@ -47,7 +47,7 @@
               >
                 <MarkdownContent :content="node.message.text" :code-tools="markdownCodeTools" />
               </article>
-              <AiSessionActivityGroup v-else :activities="node.activities" open :summary-visible="false" :auto-expand-kinds="['reasoning']" />
+              <AiSessionActivityGroup v-else :activities="node.activities" open :summary-visible="false" :auto-expand-kinds="['reasoning']" @add-to-conversation="$emit('addToConversation', $event)" />
             </template>
           </template>
           <span v-else>{{ t("sessions.timeline.noActivities") }}</span>
@@ -102,6 +102,7 @@ const props = withDefaults(defineProps<{
   interactive: false,
   loading: false,
 });
+const emit = defineEmits<{ addToConversation: [content: string] }>();
 const { t } = useI18n();
 const markdownCodeTools = computed(() => ({
   copiedLabel: t("sessions.markdown.copied"),

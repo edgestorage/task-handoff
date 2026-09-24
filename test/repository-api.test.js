@@ -153,6 +153,9 @@ test("repository API exposes Files, Changes, diff, and authoritative mutation re
     const nestedDirectory = await app.inject({ method: "GET", url: `${base}/directories?path=nested` });
     assert.equal(nestedDirectory.statusCode, 200);
     assert.deepEqual(nestedDirectory.json().data.entries.map((entry) => entry.name), ["inside.txt"]);
+    const search = await app.inject({ method: "GET", url: `${base}/files/search?query=${encodeURIComponent("new file")}&limit=20` });
+    assert.equal(search.statusCode, 200);
+    assert.deepEqual(search.json().data, { entries: [{ name: "new file.txt", path: "new file.txt", kind: "file" }], truncated: false });
     const file = await app.inject({ method: "GET", url: `${base}/files?path=${encodeURIComponent("tracked.txt")}` });
     assert.equal(file.json().data.content, "changed\n");
     const changes = (await app.inject({ method: "GET", url: `${base}/changes` })).json().data;
@@ -355,6 +358,43 @@ test("pre-session Git workspace selection persists folder identity and creates a
     const inspectedExisting = inspect.json().data.worktrees.find((worktree) => worktree.head.branch === "feature/existing-pre-session");
     assert.ok(inspectedExisting);
     const worktreeCountBeforeExistingSelection = inspect.json().data.worktrees.length;
+
+    const workspaceBranches = await app.inject({
+      method: "POST",
+      url: "/api/repository/workspace/branches/list",
+      payload: { cwd: { type: "runtime-path", path: selectedFolder } },
+    });
+    assert.equal(workspaceBranches.statusCode, 200);
+    assert.ok(workspaceBranches.json().data.branches.some((branch) => branch.name === "feature/isolated"));
+
+    const workspaceCreated = await app.inject({
+      method: "POST",
+      url: "/api/repository/workspace/worktrees",
+      payload: {
+        cwd: { type: "runtime-path", path: selectedFolder },
+        worktree: { mode: "new-branch", branchName: "feature/workspace-managed", startRef: "main", expectedSnapshotId: inspect.json().data.snapshotId },
+      },
+    });
+    assert.equal(workspaceCreated.statusCode, 200, JSON.stringify(workspaceCreated.json()));
+    assert.equal(aiSessions.list().length, 0);
+    const workspaceWorktrees = await app.inject({
+      method: "POST",
+      url: "/api/repository/workspace/worktrees/list",
+      payload: { cwd: { type: "runtime-path", path: selectedFolder } },
+    });
+    assert.equal(workspaceWorktrees.statusCode, 200);
+    assert.ok(workspaceWorktrees.json().data.items.some((worktree) => worktree.id === workspaceCreated.json().data.worktreeId));
+    const workspaceRemoved = await app.inject({
+      method: "POST",
+      url: "/api/repository/workspace/worktrees/remove",
+      payload: {
+        cwd: { type: "runtime-path", path: selectedFolder },
+        removal: { worktreeId: workspaceCreated.json().data.worktreeId, expectedSnapshotId: workspaceWorktrees.json().data.snapshotId, confirm: true },
+      },
+    });
+    assert.equal(workspaceRemoved.statusCode, 200);
+    assert.equal(aiSessions.list().length, 0);
+
     const selectedExisting = await app.inject({
       method: "POST",
       url: "/api/repository/ai-session-workspace/create",
@@ -445,8 +485,10 @@ test("pre-session Git workspace selection persists folder identity and creates a
       },
     });
     assert.equal(staleModel.statusCode, 409);
-    assert.equal(staleModel.json().error.code, "AI_SESSION_MODEL_ENTITY_UNAVAILABLE");
-    assert.match(staleModel.json().error.message, /Restart the instance/);
+    // The model identity comes from this request, not from a persisted session,
+    // so a missing target never claims the session's previous model disappeared.
+    assert.equal(staleModel.json().error.code, "AI_SESSION_MODEL_TARGET_UNAVAILABLE");
+    assert.doesNotMatch(staleModel.json().error.message, /previously selected/);
 
     fixture.write("changed-while-composing.txt", "keep this change\n");
     const created = await app.inject({ method: "POST", url: "/api/repository/ai-session-workspace/create", payload });

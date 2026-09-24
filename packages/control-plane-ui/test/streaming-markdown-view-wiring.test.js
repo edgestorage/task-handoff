@@ -91,7 +91,10 @@ test("streaming Markdown link context menu only captures anchor context menus", 
   const menu = fs.readFileSync(new URL("../src/components/ai-session/MarkdownLinkContextMenu.vue", import.meta.url), "utf8");
   assert.match(menu, /class="markdown-link-menu-host" @contextmenu\.capture="captureContextMenu"/);
   assert.match(menu, /event\.target instanceof Element \? event\.target\.closest\("a\[href\]"\)/);
-  assert.match(menu, /event\.stopPropagation\(\);[\s\S]*open\.value = false/);
+  assert.match(menu, /<ContextMenuTrigger as-child :disabled="!target">/);
+  assert.match(menu, /target\.value = undefined;[\s\S]*if \(!href\) \{\s*return;/);
+  assert.match(menu, /if \(target\.value\.kind === "unsupported"\) return;/);
+  assert.match(menu, /event\.stopPropagation\(\);\s*event\.preventDefault\(\);/);
   assert.doesNotMatch(message, /ContextMenuTrigger[\s\S]*@contextmenu="captureContextMenu"/);
 });
 

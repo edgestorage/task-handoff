@@ -1,6 +1,7 @@
 describe('mobile native feature variants', () => {
   const originalVariant = process.env.TASK_HANDOFF_MOBILE_VARIANT;
   const originalStagingOrigin = process.env.TASK_HANDOFF_CLOUD_STAGING_ORIGIN;
+  const originalOfficialAccountEnabled = process.env.TASK_HANDOFF_OFFICIAL_ACCOUNT_ENABLED;
   const originalCloudRelayEnabled = process.env.TASK_HANDOFF_CLOUD_RELAY_ENABLED;
 
   afterEach(() => {
@@ -8,6 +9,8 @@ describe('mobile native feature variants', () => {
     else process.env.TASK_HANDOFF_MOBILE_VARIANT = originalVariant;
     if (originalStagingOrigin === undefined) delete process.env.TASK_HANDOFF_CLOUD_STAGING_ORIGIN;
     else process.env.TASK_HANDOFF_CLOUD_STAGING_ORIGIN = originalStagingOrigin;
+    if (originalOfficialAccountEnabled === undefined) delete process.env.TASK_HANDOFF_OFFICIAL_ACCOUNT_ENABLED;
+    else process.env.TASK_HANDOFF_OFFICIAL_ACCOUNT_ENABLED = originalOfficialAccountEnabled;
     if (originalCloudRelayEnabled === undefined) delete process.env.TASK_HANDOFF_CLOUD_RELAY_ENABLED;
     else process.env.TASK_HANDOFF_CLOUD_RELAY_ENABLED = originalCloudRelayEnabled;
   });
@@ -64,15 +67,26 @@ describe('mobile native feature variants', () => {
     expect(() => require('../app.config.js')()).toThrow(/must use HTTPS/);
   });
 
-  test('cloud Relay is disabled by default without changing direct profiles', () => {
+  test('official account is disabled by default without changing direct profiles', () => {
+    delete process.env.TASK_HANDOFF_OFFICIAL_ACCOUNT_ENABLED;
     delete process.env.TASK_HANDOFF_CLOUD_RELAY_ENABLED;
-    expect(require('../app.config.js')().extra.cloudRelayEnabled).toBe(false);
+    expect(require('../app.config.js')().extra.featureFlags.officialAccount).toBe(false);
   });
 
-  test('cloud Relay requires an explicit build-time opt-in', () => {
+  test('official account uses the shared build-time flag and preserves the legacy extra', () => {
+    process.env.TASK_HANDOFF_OFFICIAL_ACCOUNT_ENABLED = '1';
+    const enabled = require('../app.config.js')().extra;
+    expect(enabled.featureFlags.officialAccount).toBe(true);
+    expect(enabled.cloudRelayEnabled).toBe(true);
+    process.env.TASK_HANDOFF_OFFICIAL_ACCOUNT_ENABLED = '0';
+    expect(require('../app.config.js')().extra.featureFlags.officialAccount).toBe(false);
+  });
+
+  test('official account accepts the v0.0.32 environment variable only when the canonical flag is absent', () => {
+    delete process.env.TASK_HANDOFF_OFFICIAL_ACCOUNT_ENABLED;
     process.env.TASK_HANDOFF_CLOUD_RELAY_ENABLED = '1';
-    expect(require('../app.config.js')().extra.cloudRelayEnabled).toBe(true);
-    process.env.TASK_HANDOFF_CLOUD_RELAY_ENABLED = '0';
-    expect(require('../app.config.js')().extra.cloudRelayEnabled).toBe(false);
+    expect(require('../app.config.js')().extra.featureFlags.officialAccount).toBe(true);
+    process.env.TASK_HANDOFF_OFFICIAL_ACCOUNT_ENABLED = '0';
+    expect(require('../app.config.js')().extra.featureFlags.officialAccount).toBe(false);
   });
 });
