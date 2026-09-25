@@ -56,14 +56,15 @@ export default function HistoryDetailRoute() {
     currentSelection: detail.item.modelSelection,
     capability: directoryAiSessionProviderCapability(instance.capabilities, detail.item.agent)?.modelSelection,
   }) : [], [detail, instance, modelEntities]);
-  useEffect(() => {
-    if (modelSelection && modelGroups.some((group) => group.models.some((model) => model.modelEntityId === modelSelection.modelEntityId && model.modelName === modelSelection.modelName))) return;
-    setModelSelection(defaultAiSessionModelSelection(modelGroups));
-  }, [modelGroups, modelSelection]);
+  const resolvedModelSelection = useMemo(() => (
+    modelSelection && modelGroups.some((group) => group.models.some((model) => model.modelEntityId === modelSelection.modelEntityId && model.modelName === modelSelection.modelName))
+      ? modelSelection
+      : defaultAiSessionModelSelection(modelGroups)
+  ), [modelGroups, modelSelection]);
   const resume = async () => {
     setBusy(true);
     try {
-      const result = await withClient((api) => api.aiSessions.resume(instanceId, historyId, modelGroups.length && modelSelection ? { modelSelection } : {}));
+      const result = await withClient((api) => api.aiSessions.resume(instanceId, historyId, modelGroups.length && resolvedModelSelection ? { modelSelection: resolvedModelSelection } : {}));
       router.replace({ pathname: '/sessions/[instanceId]/[sessionId]', params: { instanceId, sessionId: result.aiSessionId } });
     } catch (cause) {
       toast.show({ detail: lifecycleGuidance(cause).message, title: t('toast.actionFailed', { action: t('history.resume') }), tone: 'error' });
@@ -110,7 +111,7 @@ export default function HistoryDetailRoute() {
       disabled={busy}
       formatModelGroupSummary={(model, count) => t('sessions.modelGroupSummary', { model, count })}
       modelGroups={modelGroups}
-      modelSelection={modelSelection}
+      modelSelection={resolvedModelSelection}
       onModelChange={setModelSelection}
       onReasoningChange={() => undefined}
       provider={detail.item.agent}
@@ -119,7 +120,7 @@ export default function HistoryDetailRoute() {
       title={t('sessions.model')}
     >{(onPress) => <Pressable accessibilityRole="button" disabled={!onPress} onPress={onPress} style={[styles.modelButton, { backgroundColor: colors.surface, borderColor: colors.border }]}>
       <SystemIcon android="tune" color={colors.primary} ios="slider.horizontal.3" size={16} />
-      <Text numberOfLines={1} style={[styles.modelButtonText, { color: colors.text }]}>{modelSelection?.modelName || t('sessions.model')}</Text>
+      <Text numberOfLines={1} style={[styles.modelButtonText, { color: colors.text }]}>{resolvedModelSelection?.modelName || t('sessions.model')}</Text>
       <SystemIcon android="expand_more" color={colors.textMuted} ios="chevron.down" size={12} />
     </Pressable>}</ModelSettingsMenu> : null}
     <NativePrimaryButton busy={busy} disabled={busy} label={busy ? t('composer.resuming') : t('history.resume')} systemImage="play.fill" onPress={() => { void resume(); }} />
