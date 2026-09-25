@@ -55,7 +55,9 @@ export function StoryEditor({ storyId, nodeId, onSaved }: { storyId?: string; no
     const ownerNodeRequest = nodeAvailable
       ? api.resources.node(nodeId).then((value) => ({ ok: true as const, value }), () => ({ ok: false as const }))
       : Promise.resolve({ ok: false as const });
-    setAgentToolState(nodeAvailable ? 'loading' : 'unavailable');
+    queueMicrotask(() => {
+      if (!cancelled) setAgentToolState(nodeAvailable ? 'loading' : 'unavailable');
+    });
     void Promise.all([
       api.stories.get(storyId, nodeId),
       api.stories.retentionSettings(storyId, nodeId),
