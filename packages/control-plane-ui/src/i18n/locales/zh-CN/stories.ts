@@ -7,6 +7,12 @@ export const stories = {
   newStory: "新建 Story",
   close: "关闭",
   empty: "暂无 Story",
+  nodeLoad: {
+    loading: "加载中",
+    unavailable: "无法读取",
+    loadingNodes: "正在加载 {count} 个节点的 Story...",
+    unavailableNodes: "{count} 个节点的 Story 暂时无法读取",
+  },
   archived: "已归档",
   listOptions: "Story 列表选项",
   viewMode: "视图",

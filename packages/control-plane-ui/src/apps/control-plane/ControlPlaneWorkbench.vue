@@ -109,6 +109,14 @@
                       <span class="control-plane-story-node-menu-copy">
                         <strong>{{ node.name }}</strong>
                       </span>
+                      <span v-if="storyCatalog.nodeLoadState(node.id) === 'loading'" class="control-plane-story-node-menu-load">
+                        <LoaderCircle class="control-plane-story-node-menu-spin" :size="13" aria-hidden="true" />
+                        <span>{{ t("stories.nodeLoad.loading") }}</span>
+                      </span>
+                      <span v-else-if="storyCatalog.nodeLoadState(node.id) === 'unavailable'" class="control-plane-story-node-menu-load" data-state="warning">
+                        <CircleAlert :size="13" aria-hidden="true" />
+                        <span>{{ t("stories.nodeLoad.unavailable") }}</span>
+                      </span>
                     </button>
                     <Checkbox
                       class="control-plane-story-node-menu-checkbox"
@@ -607,7 +615,7 @@ import type { SupportedLocale } from "../../i18n/locale";
 import { translateApiError } from "../../i18n/apiError";
 import { useQueries, useQueryClient } from "@tanstack/vue-query";
 import { useEventListener } from "@vueuse/core";
-import { BookOpen, Bot, Boxes, Check, ChevronDown, Container, Download, House, Laptop, LayoutGrid, LoaderCircle, LogOut, Maximize2, Minus, PanelRight, RefreshCw, Settings, UserRound, X } from "@lucide/vue";
+import { BookOpen, Bot, Boxes, Check, ChevronDown, CircleAlert, Container, Download, House, Laptop, LayoutGrid, LoaderCircle, LogOut, Maximize2, Minus, PanelRight, RefreshCw, Settings, UserRound, X } from "@lucide/vue";
 import "@xterm/xterm/css/xterm.css";
 import { controlPlaneQueryKeys, fetchInstanceBoardPayload, getInstanceAppManagement, getInstanceResourceMetrics, installInstanceApp, instanceBoardQueryOptions, launchAppSession, logoutControlPlane, nodeLocalFoldersQueryOptions, renameAppSession, resolveAiSessionApproval, saveEnvironmentTemplate, stopAppSession, uninstallInstanceApp, updateControlledInstance, useAuthSessionQuery, useControlPlaneAiSessionsQuery, useControlPlaneAppSessionsQuery, useControlPlaneStatusQuery, useCurrentAccessQuery, useInstanceBoardQuery, useInstanceDirectoryQuery, useModelsQuery, useNodesQuery, useServerUpdateCheckQuery } from "../../api/queries";
 import { sharedControlPlaneClient } from "../../api/sharedClient";
@@ -628,6 +636,8 @@ import StoryResourceSidebar from "./story/StoryResourceSidebar.vue";
 import { closeStoryResourceTarget, repositoryResource, storyResourceKey, type StoryRepositoryPage } from "./story/storyResources";
 import { storyResourceSidebarKeyboardWidth, storyResourceSidebarMaxWidth, storyResourceSidebarMode, storyResourceSidebarProportionalWidth } from "./story/storyResourceLayout";
 import { STORY_RESOURCE_SIDEBAR_MIN_WIDTH, normalizeStoryResourceSidebarWidth, useStoryResourceSidebar } from "./story/useStoryResourceSidebar";
+import { loadStoryNodeFilter, persistStoryNodeFilter } from "./story/storyNodeFilterPreference";
+import { useStoryCatalog } from "./story/useStoryCatalog";
 import { allStoryNodes, normalizeStoryNodeFilter, selectOnlyStoryNode, storyNodeIsSelected, toggleStoryNode, type StoryNodeFilter } from "@task-handoff/control-plane-client";
 import InstanceBoardView from "./board/InstanceBoardView.vue";
 import InstanceDetail from "./instance-detail/InstanceDetail.vue";
@@ -829,8 +839,10 @@ const instanceViewMode = computed(() => workbenchView.value === "instance");
 const boardMode = computed(() => workbenchView.value === "board");
 const aiBoardMode = computed(() => workbenchView.value === "ai");
 const storyMode = computed(() => workbenchView.value === "story");
+// Story lists load per node; the node menu reflects which nodes are still answering.
+const storyCatalog = useStoryCatalog(storyMode);
 const storySelection = ref<StorySelection>();
-const storyNodeFilter = ref<StoryNodeFilter>(allStoryNodes());
+const storyNodeFilter = ref<StoryNodeFilter>(loadStoryNodeFilter());
 const storyNodeFilterOpen = ref(false);
 const storyNodeFilterOptions = computed(() => nodes.data.value || []);
 const storyNodeFilterTitle = computed(() => {
@@ -859,6 +871,7 @@ function toggleStoryNodeFilter(nodeId: string, checked: boolean) {
 watch(() => storyNodeFilterOptions.value.map((node) => node.id).join("\0"), () => {
   storyNodeFilter.value = normalizeStoryNodeFilter(storyNodeFilter.value, storyNodeFilterOptions.value.map((node) => node.id));
 });
+watch(storyNodeFilter, (filter) => persistStoryNodeFilter(filter));
 const settingsMode = ref(false);
 const settingsSection = ref<SettingsSection>("nodes");
 const accountSecurityOpen = ref(false);

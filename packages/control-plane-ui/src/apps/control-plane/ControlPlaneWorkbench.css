@@ -597,7 +597,7 @@
 
 :global(.control-plane-story-node-menu-main) {
   display: grid;
-  grid-template-columns: 8px minmax(0, 1fr);
+  grid-template-columns: 8px minmax(0, 1fr) auto;
   gap: 8px;
   min-width: 0;
   height: 32px;
@@ -650,6 +650,31 @@
 :global(.control-plane-story-node-menu-checkbox) {
   box-shadow: none;
   cursor: pointer;
+}
+
+:global(.control-plane-story-node-menu-load) {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+:global(.control-plane-story-node-menu-load[data-state="warning"]) {
+  color: var(--status-warning);
+}
+
+:global(.control-plane-story-node-menu-spin) {
+  animation: control-plane-story-node-menu-spin 0.9s linear infinite;
+}
+
+@keyframes control-plane-story-node-menu-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :global(.control-plane-story-node-menu-spin) { animation: none; }
 }
 
 .control-plane-actions {

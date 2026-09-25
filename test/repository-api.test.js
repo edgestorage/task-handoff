@@ -548,6 +548,89 @@ test("pre-session Git workspace selection persists folder identity and creates a
     assert.equal(switched.statusCode, 200);
     assert.equal(fixture.git(["branch", "--show-current"]), "feature/in-place");
     assert.equal(fs.readFileSync(path.join(fixture.root, "dirty.txt"), "utf8"), "dirty\n");
+    // Moving a worktree is blocked by sessions that are running in the main worktree.
+    aiSessions.patch(switched.json().data.aiSessionId, { status: "running" });
+
+    // Moving a worktree into the main worktree is workspace-scoped and refuses a dirty main worktree.
+    const beforeMove = await app.inject({
+      method: "POST",
+      url: "/api/repository/ai-session-workspace/inspect",
+      payload: { cwd: { type: "runtime-path", path: selectedFolder } },
+    });
+    const moveCandidate = await app.inject({
+      method: "POST",
+      url: "/api/repository/workspace/worktrees",
+      payload: {
+        cwd: { type: "runtime-path", path: selectedFolder },
+        worktree: { mode: "new-branch", branchName: "feature/workspace-move", startRef: "main", expectedSnapshotId: beforeMove.json().data.snapshotId },
+      },
+    });
+    assert.equal(moveCandidate.statusCode, 200, JSON.stringify(moveCandidate.json()));
+    const moveWorktreeId = moveCandidate.json().data.worktreeId;
+
+    const dirtyMoveList = await app.inject({
+      method: "POST",
+      url: "/api/repository/workspace/worktrees/list",
+      payload: { cwd: { type: "runtime-path", path: selectedFolder } },
+    });
+    const dirtyPreflight = await app.inject({
+      method: "POST",
+      url: "/api/repository/workspace/worktrees/move-to-main/preflight",
+      payload: { cwd: { type: "runtime-path", path: selectedFolder }, preflight: { worktreeId: moveWorktreeId } },
+    });
+    assert.equal(dirtyPreflight.statusCode, 200, JSON.stringify(dirtyPreflight.json()));
+    assert.equal(dirtyPreflight.json().data.canMove, false);
+    assert.deepEqual(dirtyPreflight.json().data.blockers, ["main-dirty", "main-session-occupied"]);
+    assert.equal(dirtyPreflight.json().data.targetChanges.staged + dirtyPreflight.json().data.targetChanges.untracked, 0);
+    const refusedMove = await app.inject({
+      method: "POST",
+      url: "/api/repository/workspace/worktrees/move-to-main",
+      payload: {
+        cwd: { type: "runtime-path", path: selectedFolder },
+        move: { worktreeId: moveWorktreeId, expectedSnapshotId: dirtyMoveList.json().data.snapshotId, confirm: true },
+      },
+    });
+    assert.equal(refusedMove.statusCode, 409);
+    assert.equal(refusedMove.json().error.code, "REPOSITORY_MAIN_DIRTY");
+    assert.equal(fixture.git(["branch", "--show-current"]), "feature/in-place");
+
+    // A session between turns keeps its directory but no longer blocks the move.
+    aiSessions.patch(switched.json().data.aiSessionId, { status: "idle" });
+    const idlePreflight = await app.inject({
+      method: "POST",
+      url: "/api/repository/workspace/worktrees/move-to-main/preflight",
+      payload: { cwd: { type: "runtime-path", path: selectedFolder }, preflight: { worktreeId: moveWorktreeId } },
+    });
+    assert.deepEqual(idlePreflight.json().data.blockers, ["main-dirty"]);
+
+    // Clear the remaining blocked precondition this test left in the main worktree.
+    fs.rmSync(path.join(fixture.root, "dirty.txt"));
+    fs.rmSync(path.join(fixture.root, "changed-while-composing.txt"));
+    const releasedPreflight = await app.inject({
+      method: "POST",
+      url: "/api/repository/workspace/worktrees/move-to-main/preflight",
+      payload: { cwd: { type: "runtime-path", path: selectedFolder }, preflight: { worktreeId: moveWorktreeId } },
+    });
+    assert.equal(releasedPreflight.json().data.canMove, true, JSON.stringify(releasedPreflight.json()));
+    const cleanMoveList = await app.inject({
+      method: "POST",
+      url: "/api/repository/workspace/worktrees/list",
+      payload: { cwd: { type: "runtime-path", path: selectedFolder } },
+    });
+    const movedWorktree = await app.inject({
+      method: "POST",
+      url: "/api/repository/workspace/worktrees/move-to-main",
+      payload: {
+        cwd: { type: "runtime-path", path: selectedFolder },
+        move: { worktreeId: moveWorktreeId, expectedSnapshotId: cleanMoveList.json().data.snapshotId, confirm: true },
+      },
+    });
+    assert.equal(movedWorktree.statusCode, 200, JSON.stringify(movedWorktree.json()));
+    assert.equal(movedWorktree.json().data.adoptedBranch, "feature/workspace-move");
+    assert.equal(movedWorktree.json().data.carriedChanges, false);
+    assert.equal(movedWorktree.json().data.worktrees.items.some((worktree) => worktree.id === moveWorktreeId), false);
+    assert.equal(fixture.git(["branch", "--show-current"]), "feature/workspace-move");
+    assert.equal(fixture.git(["stash", "list"]), "");
   } finally {
     await app.close();
     restore();

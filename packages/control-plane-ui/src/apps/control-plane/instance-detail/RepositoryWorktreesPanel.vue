@@ -30,10 +30,10 @@
     </header>
 
     <div class="repository-worktrees-toolbar">
-      <div class="repository-worktrees-search">
+      <label class="repository-worktrees-search">
         <Search :size="15" aria-hidden="true" />
-        <ControlPlaneInput v-model="searchQuery" :aria-label="t('repository.worktreesPanel.search')" :placeholder="t('repository.worktreesPanel.search')" />
-      </div>
+        <input v-model="searchQuery" type="search" :aria-label="t('repository.worktreesPanel.search')" :placeholder="t('repository.worktreesPanel.search')" />
+      </label>
     </div>
 
     <section class="repository-worktree-directory" :aria-label="t('repository.worktreesPanel.count', { count: filteredWorktrees.length })">
@@ -58,9 +58,9 @@
       </div>
       <ScrollArea v-else class="repository-worktree-scroll" :horizontal="false">
         <div class="repository-worktree-list">
-          <div v-if="removeSuccessKey" class="repository-worktree-notice" role="status">
+          <div v-if="listNoticeKey" class="repository-worktree-notice" role="status">
             <Check :size="14" />
-            <span>{{ t(removeSuccessKey) }}</span>
+            <span>{{ t(listNoticeKey) }}</span>
           </div>
           <RepositoryErrorNotice v-if="startError" :error="startError" :fallback="t('repository.worktreesPanel.startError')" />
           <article
@@ -76,30 +76,36 @@
               </span>
               <div class="repository-worktree-copy">
                 <div class="repository-worktree-title">
-                  <strong :title="worktreeLabel(worktree)">{{ worktreeLabel(worktree) }}</strong>
+                  <TooltipProvider :delay-duration="120">
+                    <Tooltip>
+                      <TooltipTrigger as-child>
+                        <strong>{{ worktreeLabel(worktree) }}</strong>
+                      </TooltipTrigger>
+                      <TooltipContent class="repository-worktree-tooltip" side="top" :side-offset="8">{{ worktreeTooltip(worktree) }}</TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
                   <Badge v-if="worktree.isCurrent" variant="default"><Check :size="12" />{{ t("repository.worktreesPanel.current") }}</Badge>
                   <Badge variant="secondary">{{ worktreeKindLabel(worktree) }}</Badge>
                 </div>
-                <code v-if="worktreeCommit(worktree)" :title="worktree.head.oid">{{ worktreeCommit(worktree) }}</code>
+                <div v-if="worktreeHasSummary(worktree)" class="repository-worktree-summary">
+                  <span v-if="activeSessionCount(worktree)" class="repository-worktree-summary-item">
+                    <MessagesSquare :size="13" aria-hidden="true" />
+                    <span>{{ t("repository.environmentExtra.associatedSessions", { count: activeSessionCount(worktree) }) }}</span>
+                  </span>
+                  <span v-if="worktree.dirty" class="repository-worktree-summary-item" data-state="warning">
+                    <FileDiff :size="13" aria-hidden="true" />
+                    <span>{{ t("repository.worktreesPanel.dirty") }}</span>
+                  </span>
+                  <span v-if="worktree.locked" class="repository-worktree-summary-item" data-state="warning">
+                    <LockKeyhole :size="13" aria-hidden="true" />
+                    <span>{{ t("repository.worktreesPanel.locked") }}</span>
+                  </span>
+                  <span v-if="worktree.prunable" class="repository-worktree-summary-item" data-state="warning">
+                    <Eraser :size="13" aria-hidden="true" />
+                    <span>{{ t("repository.worktreesPanel.prunable") }}</span>
+                  </span>
+                </div>
               </div>
-            </div>
-            <div class="repository-worktree-summary">
-              <span v-if="activeSessionCount(worktree)" class="repository-worktree-summary-item">
-                <MessagesSquare :size="13" aria-hidden="true" />
-                <span>{{ t("repository.environmentExtra.associatedSessions", { count: activeSessionCount(worktree) }) }}</span>
-              </span>
-              <span v-if="worktree.dirty" class="repository-worktree-summary-item" data-state="warning">
-                <FileDiff :size="13" aria-hidden="true" />
-                <span>{{ t("repository.worktreesPanel.dirty") }}</span>
-              </span>
-              <span v-if="worktree.locked" class="repository-worktree-summary-item" data-state="warning">
-                <LockKeyhole :size="13" aria-hidden="true" />
-                <span>{{ t("repository.worktreesPanel.locked") }}</span>
-              </span>
-              <span v-if="worktree.prunable" class="repository-worktree-summary-item" data-state="warning">
-                <Eraser :size="13" aria-hidden="true" />
-                <span>{{ t("repository.worktreesPanel.prunable") }}</span>
-              </span>
             </div>
             <div class="repository-worktree-row-actions">
               <DropdownMenu v-if="canStartAiSession || canManageWorktrees">
@@ -138,6 +144,20 @@
                     <span class="repository-worktree-menu-copy">
                       <strong>{{ t("repository.worktreesPanel.remove") }}</strong>
                       <small v-if="worktree.isMain || worktree.isCurrent || !worktree.canRemove">{{ removeBlockerSummary(worktree) }}</small>
+                    </span>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    v-if="canManageWorktrees && moveToMainSupported"
+                    class="repository-worktree-menu-move"
+                    :disabled="worktree.isMain || Boolean(preparingMoveToMainId)"
+                    @select="openMoveToMain(worktree)"
+                  >
+                    <LoaderCircle v-if="preparingMoveToMainId === worktree.id" class="repository-worktree-spin" :size="14" />
+                    <FolderInput v-else :size="14" />
+                    <span class="repository-worktree-menu-copy">
+                      <strong>{{ t("repository.worktreesPanel.moveToMain") }}</strong>
+                      <small v-if="worktree.isMain">{{ t("repository.worktreesPanel.blockers.main") }}</small>
+                      <small v-else-if="preparingMoveToMainId === worktree.id">{{ t("repository.worktreesPanel.moveToMainChecking") }}</small>
                     </span>
                   </DropdownMenuItem>
                 </DropdownMenuContent>
@@ -191,12 +211,12 @@
     </NewWorktreeDialog>
 
     <Dialog v-model:open="removeDialogOpen">
-      <DialogContent class="repository-worktree-remove-dialog">
+      <DialogContent class="repository-worktree-dialog">
         <DialogHeader>
           <DialogTitle>{{ t("repository.worktreesPanel.removeTitle") }}</DialogTitle>
           <DialogDescription>{{ t("repository.worktreeRemoveDescription") }}</DialogDescription>
         </DialogHeader>
-        <div v-if="removeTarget" class="repository-worktree-remove-summary">
+        <div v-if="removeTarget" class="repository-worktree-dialog-summary">
           <span><GitBranch :size="15" /><strong>{{ worktreeLabel(removeTarget) }}</strong></span>
           <small>{{ t("repository.worktreesPanel.removeHint") }}</small>
           <div v-if="removeTarget.removeBlockers.length" class="repository-worktree-blockers">
@@ -214,15 +234,43 @@
         </DialogFooter>
       </DialogContent>
     </Dialog>
+
+    <Dialog v-model:open="moveDialogOpen">
+      <DialogContent class="repository-worktree-dialog">
+        <DialogHeader>
+          <DialogTitle>{{ t("repository.worktreesPanel.moveToMainTitle") }}</DialogTitle>
+          <DialogDescription>{{ t("repository.worktreesPanel.moveToMainDescription") }}</DialogDescription>
+        </DialogHeader>
+        <div v-if="moveTarget" class="repository-worktree-dialog-summary">
+          <span><GitBranch :size="15" /><strong>{{ worktreeLabel(moveTarget) }}</strong></span>
+          <small>{{ moveMainBranchLabel }}</small>
+          <small v-if="moveCarriedCount">{{ t("repository.worktreesPanel.moveToMainCarry", { count: moveCarriedCount }) }}</small>
+          <small v-else>{{ t("repository.worktreesPanel.moveToMainClean") }}</small>
+          <div v-if="movePreflight?.blockers.length" class="repository-worktree-blockers">
+            <span v-for="blocker in movePreflight.blockers" :key="blocker">{{ moveBlockerLabel(blocker) }}</span>
+          </div>
+        </div>
+        <RepositoryErrorNotice v-if="moveError" :error="moveError" :fallback="t('repository.worktreesPanel.moveToMainError')" />
+        <DialogFooter>
+          <Button variant="outline" :disabled="movingWorktree" @click="moveDialogOpen = false">{{ t("repository.common.cancel") }}</Button>
+          <Button :disabled="movingWorktree || !movePreflight?.canMove" @click="moveSelectedWorktreeToMain">
+            <LoaderCircle v-if="movingWorktree" class="repository-worktree-spin" :size="14" />
+            <FolderInput v-else :size="14" />
+            <span>{{ t(movingWorktree ? "repository.worktreesPanel.movingToMain" : "repository.worktreesPanel.moveToMainConfirm") }}</span>
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   </section>
 </template>
 
 <script setup lang="ts">
-import type { RepositoryAiSessionLaunchResult, RepositorySessionKind, RepositoryWorktree, RepositoryWorktreeBlocker } from "@task-handoff/protocol/repository";
-import { Check, Eraser, FileDiff, GitBranch, GitCommitHorizontal, GitFork, LoaderCircle, LockKeyhole, MessagesSquare, MoreHorizontal, Plus, RefreshCw, Search, Trash2, TriangleAlert } from "@lucide/vue";
+import type { RepositoryAiSessionLaunchResult, RepositoryMoveWorktreeBlocker, RepositoryMoveWorktreePreflight, RepositorySessionKind, RepositoryWorktree, RepositoryWorktreeBlocker } from "@task-handoff/protocol/repository";
+import { Check, Eraser, FileDiff, FolderInput, GitBranch, GitCommitHorizontal, GitFork, LoaderCircle, LockKeyhole, MessagesSquare, MoreHorizontal, Plus, RefreshCw, Search, Trash2, TriangleAlert } from "@lucide/vue";
+import { useQueryClient } from "@tanstack/vue-query";
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { createRepositoryWorkspaceWorktree, removeRepositoryWorkspaceWorktree, useRepositoryWorkspaceBranchesQuery, useRepositoryWorkspaceWorktreesQuery } from "../../../api/repository";
+import { createRepositoryWorkspaceWorktree, getRepositoryWorkspaceWorktreeMovePreflight, moveRepositoryWorkspaceWorktreeToMain, removeRepositoryWorkspaceWorktree, useRepositoryWorkspaceBranchesQuery, useRepositoryWorkspaceWorktreesQuery } from "../../../api/repository";
 import { createAiSession } from "../../../api/queries";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
@@ -230,7 +278,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
 import { ScrollArea } from "../../../components/ui/scroll-area";
 import { Textarea } from "../../../components/ui/textarea";
-import ControlPlaneInput from "../shared/ControlPlaneInput.vue";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../../components/ui/tooltip";
 import RepositoryErrorNotice from "./RepositoryErrorNotice.vue";
 import { createBrowserUuid } from "../../../lib/random-id";
 import NewWorktreeDialog, { type NewWorktreeBranch, type NewWorktreeSelection } from "./NewWorktreeDialog.vue";
@@ -239,11 +287,13 @@ const props = defineProps<{
   aiAgent?: "codex" | "claude" | "opencode";
   cwdFolderId?: string;
   instanceId: string;
+  moveToMainSupported?: boolean;
   open: boolean;
   sessionId?: string;
   sessionKind?: RepositorySessionKind;
 }>();
 const { t } = useI18n();
+const queryClient = useQueryClient();
 
 const emit = defineEmits<{
   aiSessionStarted: [result: RepositoryAiSessionLaunchResult];
@@ -274,6 +324,7 @@ const filteredWorktrees = computed(() => {
 });
 const canStartAiSession = computed(() => Boolean(props.aiAgent));
 const canManageWorktrees = computed(() => true);
+const moveToMainSupported = computed(() => Boolean(props.moveToMainSupported));
 const branchesQuery = useRepositoryWorkspaceBranchesQuery(target, computed(() => props.open));
 const startingWorktreeId = ref("");
 const startError = ref<unknown>();
@@ -286,6 +337,24 @@ const removeTarget = ref<RepositoryWorktree>();
 const removingWorktree = ref(false);
 const removeError = ref<unknown>();
 const removeSuccessKey = ref("");
+const moveDialogOpen = ref(false);
+const moveTarget = ref<RepositoryWorktree>();
+const movePreflight = ref<RepositoryMoveWorktreePreflight>();
+const preparingMoveToMainId = ref("");
+const movingWorktree = ref(false);
+const moveError = ref<unknown>();
+const moveSuccessKey = ref("");
+const listNoticeKey = computed(() => removeSuccessKey.value || moveSuccessKey.value);
+const moveCarriedCount = computed(() => {
+  const changes = movePreflight.value?.targetChanges;
+  return changes ? changes.conflicts + changes.staged + changes.unstaged + changes.untracked : 0;
+});
+const moveMainBranchLabel = computed(() => {
+  const branch = movePreflight.value?.mainBranch;
+  return branch
+    ? t("repository.worktreesPanel.moveToMainMainBranch", { branch })
+    : t("repository.worktreesPanel.moveToMainMainDetached");
+});
 const startingComposerWorktreeId = ref("");
 const startMessage = ref("");
 const createBranches = computed<NewWorktreeBranch[]>(() => (branchesQuery.data.value?.branches || [])
@@ -309,6 +378,16 @@ function worktreeKindLabel(worktree: RepositoryWorktree) {
 
 function worktreeCommit(worktree: RepositoryWorktree) {
   return worktree.head.state === "branch" ? worktree.head.oid?.slice(0, 8) : undefined;
+}
+
+function worktreeTooltip(worktree: RepositoryWorktree) {
+  const commit = worktreeCommit(worktree);
+  const label = worktreeLabel(worktree);
+  return commit ? `${label} · ${commit}` : label;
+}
+
+function worktreeHasSummary(worktree: RepositoryWorktree) {
+  return activeSessionCount(worktree) > 0 || worktree.dirty || worktree.locked || worktree.prunable;
 }
 
 function activeSessionCount(worktree: RepositoryWorktree) {
@@ -345,6 +424,22 @@ function blockerLabel(blocker: RepositoryWorktreeBlocker) {
   }[blocker]);
 }
 
+function moveBlockerLabel(blocker: RepositoryMoveWorktreeBlocker) {
+  const keys: Record<RepositoryMoveWorktreeBlocker, string> = {
+    "main-worktree": "repository.worktreesPanel.blockers.main",
+    "outside-workspace-roots": "repository.worktreesPanel.blockers.outsideRoots",
+    "path-inaccessible": "repository.worktreesPanel.blockers.directoryInaccessible",
+    locked: "repository.worktreesPanel.locked",
+    prunable: "repository.worktreesPanel.blockers.prunable",
+    "session-occupied": "repository.worktreesPanel.blockers.activeSession",
+    "main-session-occupied": "repository.worktreesPanel.blockers.mainSessionOccupied",
+    "detached-head": "repository.worktreesPanel.blockers.detachedHead",
+    "unborn-head": "repository.worktreesPanel.blockers.unbornHead",
+    "main-dirty": "repository.worktreesPanel.blockers.mainDirty",
+  };
+  return t(keys[blocker]);
+}
+
 function confirmRemove(worktree: RepositoryWorktree) {
   if (!canManageWorktrees.value || !worktree.canRemove) return;
   removeTarget.value = worktree;
@@ -374,6 +469,61 @@ async function removeSelectedWorktree() {
     await worktreesQuery.refetch();
   } finally {
     removingWorktree.value = false;
+  }
+}
+
+async function refreshRepositoryAfterMove() {
+  await worktreesQuery.refetch();
+  // A move rewrites the main worktree's branch and changes, so every repository
+  // projection of this instance has to be re-read from the instance.
+  await Promise.all([
+    queryClient.invalidateQueries({ queryKey: ["repository-workspace-branches", target.value.instanceId] }),
+    queryClient.invalidateQueries({ queryKey: ["repository-context", target.value.instanceId] }),
+    queryClient.invalidateQueries({ queryKey: ["repository-worktrees", target.value.instanceId] }),
+    queryClient.invalidateQueries({ queryKey: ["repository-branches", target.value.instanceId] }),
+  ]);
+}
+
+async function openMoveToMain(worktree: RepositoryWorktree) {
+  if (!canManageWorktrees.value || !moveToMainSupported.value || worktree.isMain || preparingMoveToMainId.value) return;
+  preparingMoveToMainId.value = worktree.id;
+  moveTarget.value = worktree;
+  moveError.value = undefined;
+  moveSuccessKey.value = "";
+  try {
+    movePreflight.value = await getRepositoryWorkspaceWorktreeMovePreflight(target.value, { worktreeId: worktree.id });
+  } catch (error) {
+    movePreflight.value = undefined;
+    moveError.value = error;
+  } finally {
+    preparingMoveToMainId.value = "";
+    moveDialogOpen.value = true;
+  }
+}
+
+async function moveSelectedWorktreeToMain() {
+  const preflight = movePreflight.value;
+  if (!preflight?.canMove || !worktrees.value?.snapshotId || movingWorktree.value) return;
+  movingWorktree.value = true;
+  moveError.value = undefined;
+  try {
+    const result = await moveRepositoryWorkspaceWorktreeToMain(target.value, {
+      worktreeId: preflight.worktreeId,
+      expectedSnapshotId: worktrees.value.snapshotId,
+      confirm: true,
+    });
+    moveSuccessKey.value = result.carriedChanges
+      ? "repository.worktreesPanel.movedToMainWithChanges"
+      : "repository.worktreesPanel.movedToMain";
+    moveDialogOpen.value = false;
+    moveTarget.value = undefined;
+    movePreflight.value = undefined;
+    await refreshRepositoryAfterMove();
+  } catch (error) {
+    moveError.value = error;
+    await worktreesQuery.refetch();
+  } finally {
+    movingWorktree.value = false;
   }
 }
 
@@ -541,27 +691,35 @@ async function startAiSession(worktree: RepositoryWorktree) {
   align-items: center;
   border-bottom: 1px solid var(--line-subtle);
   background: var(--surface-raised);
-  padding: 5px 11px;
+  padding: 5px 14px;
 }
 
 .repository-worktrees-search {
-  position: relative;
   display: flex;
-  width: min(400px, 100%);
+  width: 100%;
   min-width: 0;
+  min-height: 36px;
   align-items: center;
-}
-
-.repository-worktrees-search > svg {
-  position: absolute;
-  left: 10px;
-  z-index: 1;
+  gap: 8px;
+  border: 1px solid var(--line-subtle);
+  border-radius: 8px;
+  background: var(--surface-subtle);
   color: var(--text-muted);
-  pointer-events: none;
+  padding: 0 10px;
 }
 
-.repository-worktrees-search :deep(input) {
-  padding-left: 32px;
+.repository-worktrees-search:focus-within {
+  border-color: var(--focus-ring);
+}
+
+.repository-worktrees-search input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
 }
 
 .repository-worktree-directory {
@@ -618,10 +776,9 @@ async function startAiSession(worktree: RepositoryWorktree) {
 .repository-worktree-row {
   display: grid;
   min-width: 0;
-  grid-template-columns: minmax(0, 1.35fr) minmax(190px, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px 16px;
-  min-height: 76px;
   padding: 10px 12px;
 }
 
@@ -641,6 +798,7 @@ async function startAiSession(worktree: RepositoryWorktree) {
   display: grid;
   width: 32px;
   height: 32px;
+  align-self: center;
   place-items: center;
   border: 1px solid var(--line);
   border-radius: 7px;
@@ -662,8 +820,7 @@ async function startAiSession(worktree: RepositoryWorktree) {
   display: flex;
   min-width: 0;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
+  gap: 7px;
 }
 
 .repository-worktree-title strong {
@@ -680,18 +837,22 @@ async function startAiSession(worktree: RepositoryWorktree) {
   color: var(--repository-current-text, var(--brand-accent-muted, var(--brand-accent)));
 }
 
-.repository-worktree-copy code {
-  overflow: hidden;
-  color: var(--text-muted);
-  font-size: 12px;
-  text-overflow: ellipsis;
+.repository-worktree-title > :deep(div) {
+  flex: 0 0 auto;
   white-space: nowrap;
 }
 
+:global(.repository-worktree-tooltip) {
+  max-width: min(480px, calc(100vw - 24px));
+  overflow-wrap: anywhere;
+}
+
 .repository-worktree-summary {
-  display: grid;
+  display: flex;
   min-width: 0;
-  gap: 5px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
 }
 
 .repository-worktree-summary-item {
@@ -736,6 +897,8 @@ async function startAiSession(worktree: RepositoryWorktree) {
 .repository-worktree-row-actions {
   display: flex;
   flex: 0 0 auto;
+  grid-column: 2;
+  grid-row: 1;
   align-items: center;
   gap: 4px;
 }
@@ -814,7 +977,7 @@ async function startAiSession(worktree: RepositoryWorktree) {
   font-size: 12px;
 }
 
-:global([role="dialog"].repository-worktree-remove-dialog) {
+:global([role="dialog"].repository-worktree-dialog) {
   width: min(460px, calc(100vw - 24px));
   border-color: var(--line-subtle);
   border-radius: 12px;
@@ -822,7 +985,7 @@ async function startAiSession(worktree: RepositoryWorktree) {
   color: var(--text);
 }
 
-.repository-worktree-remove-summary {
+.repository-worktree-dialog-summary {
   display: grid;
   gap: 9px;
   border: 1px solid var(--line-subtle);
@@ -831,13 +994,13 @@ async function startAiSession(worktree: RepositoryWorktree) {
   padding: 10px;
 }
 
-.repository-worktree-remove-summary > span {
+.repository-worktree-dialog-summary > span {
   display: flex;
   align-items: center;
   gap: 7px;
 }
 
-.repository-worktree-remove-summary small {
+.repository-worktree-dialog-summary small {
   color: var(--text-muted);
   font-size: 12px;
 }
@@ -857,18 +1020,9 @@ async function startAiSession(worktree: RepositoryWorktree) {
   .repository-worktrees-head { min-height: 44px; gap: 8px; padding: 0 9px 0 11px; }
   .repository-worktrees-head-actions :deep(button span) { display: none; }
   .repository-worktrees-head-actions :deep(button) { width: 28px; padding: 0; }
-  .repository-worktrees-toolbar { min-height: 38px; padding: 4px 9px; }
-  .repository-worktrees-search { width: 100%; }
+  .repository-worktrees-toolbar { min-height: 38px; padding: 4px 10px; }
   .repository-worktree-directory { margin: 10px; }
-  .repository-worktree-row {
-    grid-template-columns: minmax(0, 1fr) auto;
-    align-items: start;
-    gap: 8px 10px;
-  }
-  .repository-worktree-summary {
-    grid-column: 1 / -1;
-  }
-  .repository-worktree-row-actions { align-items: flex-start; }
+  .repository-worktree-row { gap: 8px 10px; }
 }
 
 .repository-worktree-spin {

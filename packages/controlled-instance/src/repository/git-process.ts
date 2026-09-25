@@ -17,6 +17,9 @@ const ALLOWED_SUBCOMMANDS = new Set([
   "rev-list",
   "rev-parse",
   "show",
+  // Only the move-to-main carry-over uses stash, with fixed arguments that always
+  // record the worktree's changes in a named entry before anything is removed.
+  "stash",
   "status",
   "symbolic-ref",
   "update-index",

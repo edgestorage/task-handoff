@@ -350,6 +350,37 @@ export const RepositoryRemoveWorktreeResultSchema = z.object({
   branchRetained: z.boolean(),
   worktrees: RepositoryWorktreesSchema,
 }).strict();
+export const RepositoryMoveWorktreeBlockerSchema = z.enum([
+  "main-worktree",
+  "outside-workspace-roots",
+  "path-inaccessible",
+  "locked",
+  "prunable",
+  "session-occupied",
+  "main-session-occupied",
+  "detached-head",
+  "unborn-head",
+  "main-dirty",
+]);
+const EmptyChangeSummary = { conflicts: 0, staged: 0, unstaged: 0, untracked: 0 };
+export const RepositoryMoveWorktreePreflightRequestSchema = z.object({ worktreeId: IdSchema }).strict();
+export const RepositoryMoveWorktreePreflightSchema = z.object({
+  worktreeId: IdSchema,
+  canMove: z.boolean(),
+  blockers: z.array(RepositoryMoveWorktreeBlockerSchema).max(16).default([]),
+  targetBranch: z.string().min(1).max(1024).optional(),
+  targetChanges: RepositoryChangeSummarySchema.default(EmptyChangeSummary),
+  mainWorktreeId: IdSchema,
+  mainBranch: z.string().min(1).max(1024).optional(),
+}).strict();
+export const RepositoryMoveWorktreeRequestSchema = SnapshotMutationSchema.extend({ worktreeId: IdSchema, confirm: z.literal(true) }).strict();
+export const RepositoryMoveWorktreeResultSchema = z.object({
+  movedWorktreeId: IdSchema,
+  adoptedBranch: z.string().min(1).max(1024),
+  previousHead: z.string().regex(/^[0-9a-f]{40,64}$/),
+  carriedChanges: z.boolean(),
+  worktrees: RepositoryWorktreesSchema,
+}).strict();
 export const AiSessionWorkspaceSelectionSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("current") }).strict(),
   z.object({ type: z.literal("worktree"), repositoryContextId: IdSchema, worktreeId: IdSchema }).strict(),
@@ -462,6 +493,11 @@ export type RepositoryStartAiSessionRequest = z.infer<typeof RepositoryStartAiSe
 export type RepositoryCreateWorktreeAiSessionRequest = z.infer<typeof RepositoryCreateWorktreeAiSessionRequestSchema>;
 export type RepositoryAiSessionLaunchResult = z.infer<typeof RepositoryAiSessionLaunchResultSchema>;
 export type RepositoryRemoveWorktreeResult = z.infer<typeof RepositoryRemoveWorktreeResultSchema>;
+export type RepositoryMoveWorktreeBlocker = z.infer<typeof RepositoryMoveWorktreeBlockerSchema>;
+export type RepositoryMoveWorktreePreflightRequest = z.infer<typeof RepositoryMoveWorktreePreflightRequestSchema>;
+export type RepositoryMoveWorktreePreflight = z.infer<typeof RepositoryMoveWorktreePreflightSchema>;
+export type RepositoryMoveWorktreeRequest = z.infer<typeof RepositoryMoveWorktreeRequestSchema>;
+export type RepositoryMoveWorktreeResult = z.infer<typeof RepositoryMoveWorktreeResultSchema>;
 export type RepositoryAiSessionWorkspace = z.infer<typeof RepositoryAiSessionWorkspaceSchema>;
 export type RepositoryAiSessionWorkspaceBranch = z.infer<typeof RepositoryAiSessionWorkspaceBranchSchema>;
 export type RepositoryAiSessionGitSelection = z.infer<typeof RepositoryAiSessionGitSelectionSchema>;

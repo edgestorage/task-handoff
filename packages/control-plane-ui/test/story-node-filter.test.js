@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { loadStoryNodeFilter, persistStoryNodeFilter } from "../src/apps/control-plane/story/storyNodeFilterPreference.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), "utf8");
@@ -20,7 +21,8 @@ test("workbench navigation orders Story before Board and AI", () => {
 });
 
 test("story mode replaces the instance switcher with a node filter", () => {
-  assert.match(workbench, /const storyNodeFilter = ref<StoryNodeFilter>\(allStoryNodes\(\)\);/);
+  assert.match(workbench, /const storyNodeFilter = ref<StoryNodeFilter>\(loadStoryNodeFilter\(\)\);/);
+  assert.match(workbench, /watch\(storyNodeFilter, \(filter\) => persistStoryNodeFilter\(filter\)\);/);
   assert.match(workbench, /const storyNodeFilterOpen = ref\(false\);/);
   assert.match(workbench, /const storyNodeFilterOptions = computed\(\(\) => nodes\.data\.value \|\| \[\]\);/);
   assert.match(workbench, /function selectStoryNodeFilter\(nodeId: string, event: MouseEvent\) \{[\s\S]*storyNodeFilter\.value = selectOnlyStoryNode\(nodeId\);/);
@@ -34,6 +36,39 @@ test("story mode replaces the instance switcher with a node filter", () => {
   assert.match(workbench, /class="control-plane-story-node-menu"/);
   assert.match(workbench, /'--story-node-menu-height': `\$\{Math\.max\(storyNodeFilterOptions\.length \+ 1, 1\) \* 33 \+ 2\}px`/);
   assert.match(workbenchStyles, /control-plane-story-node-menu-item[\s\S]*min-height: 32px/);
+});
+
+function memoryStorage(initial = {}) {
+  const values = new Map(Object.entries(initial));
+  return {
+    getItem: (key) => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, value),
+    values,
+  };
+}
+
+test("story node filter preference survives a reload per browser", () => {
+  const storage = memoryStorage();
+  assert.deepEqual(loadStoryNodeFilter(storage), { kind: "all" });
+
+  persistStoryNodeFilter({ kind: "selected", nodeIds: ["node-b"] }, storage);
+  assert.deepEqual(loadStoryNodeFilter(memoryStorage(Object.fromEntries(storage.values))), { kind: "selected", nodeIds: ["node-b"] });
+
+  persistStoryNodeFilter({ kind: "all" }, storage);
+  assert.deepEqual(loadStoryNodeFilter(storage), { kind: "all" });
+});
+
+test("story node filter preference sanitizes malformed stored state", () => {
+  const key = "task-handoff.control-plane.story-node-filter";
+
+  for (const value of ["{", "[]", "\"selected\"", "null", JSON.stringify({ kind: "unknown" }), JSON.stringify({ kind: "selected" }), JSON.stringify({ kind: "selected", nodeIds: [] }), JSON.stringify({ kind: "selected", nodeIds: ["  ", 7] })]) {
+    assert.deepEqual(loadStoryNodeFilter(memoryStorage({ [key]: value })), { kind: "all" }, value);
+  }
+
+  assert.deepEqual(
+    loadStoryNodeFilter(memoryStorage({ [key]: JSON.stringify({ kind: "selected", nodeIds: [" node-a ", "node-a", "node-b"], futureField: true }) })),
+    { kind: "selected", nodeIds: ["node-a", "node-b"] },
+  );
 });
 
 test("story list filters by the selected owner node", () => {
@@ -137,9 +172,16 @@ test("Story children animate when their tree is expanded or collapsed", () => {
   assert.match(storyView, /@media \(prefers-reduced-motion: reduce\) \{ \.story-tree-collapse,\.story-tree-disclosure \{ transition:none; \} \}/);
 });
 
-test("Story list blocks only for its initial snapshot", () => {
-  assert.match(storyView, /v-if="storiesPending" class="story-loading-overlay"/);
-  assert.doesNotMatch(storyView, /v-if="storiesFetching" class="story-loading-overlay"/);
+test("Story list renders nodes as they answer and hints at the remaining nodes", () => {
+  assert.match(storyView, /const storyCatalog = useStoryCatalog\(\);/);
+  assert.match(storyView, /const allStories = computed\(\(\) => storyCatalog\.stories\.value\);/);
+  assert.doesNotMatch(storyView, /useStoriesQuery/);
+  assert.doesNotMatch(storyView, /story-loading-overlay/);
+  assert.match(storyView, /<div v-if="storyLoadingNodeIds\.length" class="story-node-load" role="status" aria-live="polite">[\s\S]*stories\.nodeLoad\.loadingNodes/);
+  assert.match(storyView, /<div v-if="storyUnavailableNodeIds\.length" class="story-node-load" data-state="warning">[\s\S]*stories\.nodeLoad\.unavailableNodes/);
+  assert.match(storyView, /v-if="!stories\.length && !storiesPending" class="story-empty"/);
+  assert.match(storyView, /async function load\(nodeId\?: string\) \{[\s\S]*storyCatalog\.refetch\(nodeId\)/);
+  assert.match(storyView, /await load\(story\.ownerNodeId\);/);
   assert.match(storyView, /:aria-busy="storiesFetching \? 'true' : undefined"/);
 });
 
