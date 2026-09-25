@@ -8,9 +8,10 @@ test("Story uses the same solid workspace background as AI Session", () => {
   assert.match(storyView, /\.story-view \{[^}]*background:var\(--workspace-bg\);/);
 });
 
-test("Story list loading state keeps the workspace background", () => {
-  assert.match(storyView, /\.story-loading-overlay \{[^}]*background:var\(--workspace-bg\);/);
-  assert.doesNotMatch(storyView, /\.story-loading-overlay \{[^}]*background:color-mix\([^}]*var\(--surface\)/);
+test("Story list stays readable while nodes answer", () => {
+  assert.doesNotMatch(storyView, /story-loading-overlay/);
+  assert.match(storyView, /\.story-node-load \{ display:flex;[^}]*color:var\(--text-muted\);[^}]*font-size:12px; \}/);
+  assert.match(storyView, /\.story-node-load\[data-state="warning"\] \{ color:var\(--status-warning\); \}/);
 });
 
 test("Story detail uses settings-style directories instead of standalone item cards", () => {

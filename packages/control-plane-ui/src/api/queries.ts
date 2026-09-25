@@ -906,18 +906,35 @@ export function listStories(nodeId?: string) {
   return getApiData<{ stories: Story[]; unavailableNodeIds: string[] }>(`stories${query}`);
 }
 
+// The event stream owns normal convergence. Keep the last authoritative Story
+// snapshot across view remounts and refetch only after invalidation.
+const storySnapshotQueryOptions = {
+  staleTime: Infinity,
+  gcTime: Infinity,
+  refetchOnWindowFocus: false,
+  refetchOnReconnect: false,
+  retry: false,
+} as const;
+
+/**
+ * Node-scoped Story list query. Node agents answer independently, so consumers
+ * read one query per node and render nodes as soon as they respond.
+ */
+export function storyNodeQueryOptions(nodeId: string, enabled: MaybeRefOrGetter<boolean> = true) {
+  return queryOptions({
+    queryKey: controlPlaneQueryKeys.stories(nodeId),
+    queryFn: () => listStories(nodeId),
+    enabled: Boolean(nodeId) && toValue(enabled),
+    ...storySnapshotQueryOptions,
+  });
+}
+
 export function useStoriesQuery(nodeId?: MaybeRefOrGetter<string | undefined>, enabled: MaybeRefOrGetter<boolean> = true) {
   return useQuery({
     queryKey: computed(() => controlPlaneQueryKeys.stories(toValue(nodeId))),
     queryFn: () => listStories(toValue(nodeId)),
     enabled: computed(() => toValue(enabled)),
-    // The event stream owns normal convergence. Keep the last authoritative
-    // snapshot across Story view remounts and refetch only after invalidation.
-    staleTime: Infinity,
-    gcTime: Infinity,
-    refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
-    retry: false,
+    ...storySnapshotQueryOptions,
   });
 }
 

@@ -111,7 +111,7 @@ export const errors = {
   REPOSITORY_STATE_STALE: "The repository changed after it was loaded. Review the latest state before retrying.",
   REPOSITORY_WORKTREE_NOT_FOUND: "The worktree was not found.",
   REPOSITORY_WORKTREE_OCCUPIED: "An active session is using this worktree.",
-  REPOSITORY_WORKTREE_UNSAFE: "The worktree is not safe for this operation.",
+  REPOSITORY_WORKTREE_UNSAFE: "The worktree is not safe for this operation.", REPOSITORY_MAIN_DIRTY: "The main worktree has uncommitted changes that must be handled first.", REPOSITORY_MOVE_CONFLICT: "The carried changes could not be applied to the main worktree.",
   REPOSITORY_BRANCH_INVALID: "The branch is invalid or no longer exists.",
   REPOSITORY_BRANCH_OCCUPIED: "The branch is checked out in another worktree.",
   REPOSITORY_BRANCH_UNMERGED: "The branch contains unmerged commits.",

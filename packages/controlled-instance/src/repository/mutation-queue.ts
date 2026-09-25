@@ -10,7 +10,20 @@ export class RepositoryMutationQueue {
   }
 
   async withRepositoryAndWorktree<T>(repositoryKey: string, worktreeKey: string, operation: () => Promise<T>) {
-    return this.withRepository(repositoryKey, () => this.withWorktree(worktreeKey, operation));
+    return this.withRepositoryAndWorktrees(repositoryKey, [worktreeKey], operation);
+  }
+
+  /**
+   * Serialize one operation across a set of worktrees. Lanes are acquired in a
+   * stable order and duplicate keys collapse into a single lane, so an operation
+   * that touches several worktrees can never wait on a lane it already holds.
+   */
+  async withRepositoryAndWorktrees<T>(repositoryKey: string, worktreeKeys: string[], operation: () => Promise<T>) {
+    const lanes = [...new Set(worktreeKeys)].sort();
+    const acquire = (index: number): Promise<T> => index === lanes.length
+      ? operation()
+      : this.withWorktree(lanes[index], () => acquire(index + 1));
+    return this.withRepository(repositoryKey, () => acquire(0));
   }
 
   private async enqueue<T>(key: string, operation: () => Promise<T>) {

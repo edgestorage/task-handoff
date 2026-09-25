@@ -9,7 +9,7 @@ import { publicInstanceDirectory } from "../public-records.ts";
 import { filterRequestInstances, filterRequestNodes } from "./access-projection.ts";
 import { assertCan } from "../auth/authorization.ts";
 import { controlPlaneRequestActor } from "./request-actor.ts";
-import { RepositoryCreateWorktreeRequestSchema, RepositoryRemoveWorktreeRequestSchema } from "@task-handoff/protocol/repository";
+import { RepositoryCreateWorktreeRequestSchema, RepositoryMoveWorktreePreflightRequestSchema, RepositoryMoveWorktreeRequestSchema, RepositoryRemoveWorktreeRequestSchema } from "@task-handoff/protocol/repository";
 
 export type RegisterInstanceRoutesOptions = {
   app: FastifyInstance;
@@ -64,6 +64,16 @@ export function registerInstanceRoutes({ app, service, events, onInstanceDeleted
     const params = IdParamsSchema.parse(request.params);
     const query = RepositoryWorkspaceQuerySchema.parse(request.query || {});
     return { data: await service.removeRepositoryWorkspaceWorktree(params.id, RepositoryRemoveWorktreeRequestSchema.parse(request.body || {}), query.cwdFolderId) };
+  });
+  app.post("/api/controlled-instances/:id/repository/worktrees/move-to-main/preflight", async (request) => {
+    const params = IdParamsSchema.parse(request.params);
+    const query = RepositoryWorkspaceQuerySchema.parse(request.query || {});
+    return { data: await service.moveRepositoryWorkspaceWorktreeToMainPreflight(params.id, RepositoryMoveWorktreePreflightRequestSchema.parse(request.body || {}), query.cwdFolderId) };
+  });
+  app.post("/api/controlled-instances/:id/repository/worktrees/move-to-main", async (request) => {
+    const params = IdParamsSchema.parse(request.params);
+    const query = RepositoryWorkspaceQuerySchema.parse(request.query || {});
+    return { data: await service.moveRepositoryWorkspaceWorktreeToMain(params.id, RepositoryMoveWorktreeRequestSchema.parse(request.body || {}), query.cwdFolderId) };
   });
   app.get("/api/controlled-instances/:id/repository/branches", async (request) => {
     const params = IdParamsSchema.parse(request.params);
