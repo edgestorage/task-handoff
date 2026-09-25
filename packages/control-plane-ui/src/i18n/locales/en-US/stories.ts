@@ -4,6 +4,12 @@ export const stories = {
   newStory: "New Story",
   close: "Close",
   empty: "No Stories yet",
+  nodeLoad: {
+    loading: "Loading",
+    unavailable: "Unavailable",
+    loadingNodes: "Loading Stories from {count} nodes...",
+    unavailableNodes: "Stories from {count} nodes are unavailable",
+  },
   archived: "Archived",
   listOptions: "Story list options",
   viewMode: "View",

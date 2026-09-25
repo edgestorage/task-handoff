@@ -3,6 +3,7 @@
     <RepositoryWorktreesPanel
       :ai-agent="aiAgent"
       :instance-id="instanceId"
+      :move-to-main-supported="moveToMainSupported"
       :open="true"
       :cwd-folder-id="cwdFolderId"
       :session-id="sessionId"
@@ -17,7 +18,7 @@ import type { RepositorySessionKind } from "@task-handoff/protocol/repository";
 import type { SessionTab } from "../useInstanceSessions";
 import RepositoryWorktreesPanel from "./RepositoryWorktreesPanel.vue";
 
-const props = defineProps<{ instanceId: string; session: SessionTab }>();
+const props = defineProps<{ instanceId: string; moveToMainSupported?: boolean; session: SessionTab }>();
 const cwdFolderId = computed(() => typeof props.session.source?.cwdFolderId === "string" ? props.session.source.cwdFolderId : undefined);
 const sessionId = computed(() => typeof props.session.source?.sessionId === "string" ? props.session.source.sessionId : undefined);
 const sessionKind = computed<RepositorySessionKind | undefined>(() => props.session.source?.sessionKind === "ai-session" || props.session.source?.sessionKind === "app-session"

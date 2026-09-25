@@ -45,6 +45,19 @@ function managedPath(registryRoot, worktreeId) {
   return data.entries.find((entry) => entry.worktreeId === worktreeId)?.path;
 }
 
+function worktreeStatus(worktreePath) {
+  return Object.fromEntries(git(worktreePath, ["status", "--porcelain=v2", "--untracked-files=all"]).split("\n").filter(Boolean).map((line) => {
+    const fields = line.split(" ");
+    return fields[0] === "?" ? [fields.slice(1).join(" "), "??"] : [fields.slice(8).join(" "), fields[1]];
+  }));
+}
+
+function moveSetup(fixture, options = {}) {
+  // The default fixture keeps a running session in the main worktree, and an occupied
+  // main worktree refuses moves. Move tests resolve the repository from a finished session.
+  return setup(fixture, { ...options, aiSessions: options.aiSessions || [{ id: "ai-current", cwd: fixture.root, status: "failed" }] });
+}
+
 test("managed worktree registry does not create storage until a mutation needs it", () => {
   const fixture = createGitFixture();
   const managedRoot = path.join(fixture.base, "not-created-yet", "managed-worktrees");
@@ -131,6 +144,53 @@ test("an active session with a missing nested cwd still blocks worktree removal"
   const target = (await setupResult.service.list()).items.find((item) => item.id === created.worktreeId);
   assert.deepEqual(target.activeAiSessionIds, ["ai-missing-cwd"]);
   assert.equal(target.removeBlockers.includes("session-occupied"), true);
+});
+
+test("worktree moves are only blocked by running sessions rooted in the main worktree", async () => {
+  const fixture = createGitFixture();
+  const elsewhere = path.join(fixture.base, "elsewhere");
+  fs.mkdirSync(elsewhere, { recursive: true });
+  const setupResult = setup(fixture, {
+    aiSessions: [{ id: "ai-current", cwd: fixture.root, status: "idle" }],
+    appSessions: [
+      { id: "app-main-stopped", workspace: { cwd: fixture.root }, status: "stopped" },
+      { id: "app-elsewhere", workspace: { cwd: elsewhere }, status: "running" },
+    ],
+  });
+  const state = await setupResult.resolve();
+  const created = await setupResult.service.create({
+    mode: "new-branch",
+    branchName: "feature/idle-main",
+    startRef: "HEAD",
+    expectedSnapshotId: state.context.snapshotId,
+  });
+  const preflight = () => setupResult.service.moveToMainPreflight({ worktreeId: created.worktreeId });
+
+  // A session between turns still occupies the worktree for removal, but does not block a move.
+  const idleMain = (await setupResult.service.list()).items.find((item) => item.isCurrent);
+  assert.deepEqual(idleMain.activeAiSessionIds, ["ai-current"]);
+  assert.equal(idleMain.removeBlockers.includes("session-occupied"), true);
+  assert.equal((await preflight()).canMove, true);
+
+  // A running session outside the main worktree is not associated with it.
+  setupResult.aiSessions.push({ id: "ai-elsewhere", cwd: elsewhere, status: "running" });
+  assert.equal((await preflight()).canMove, true);
+
+  // A running session rooted in the main worktree refuses the move.
+  setupResult.appSessions.push({ id: "app-main-running", workspace: { cwd: fixture.root }, status: "running" });
+  const occupied = await preflight();
+  assert.equal(occupied.canMove, false);
+  assert.deepEqual(occupied.blockers, ["main-session-occupied"]);
+
+  // A turn parked on an approval (`waiting`) is still running.
+  setupResult.appSessions.pop();
+  setupResult.aiSessions[0].status = "waiting";
+  const waiting = await preflight();
+  assert.equal(waiting.canMove, false);
+  assert.deepEqual(waiting.blockers, ["main-session-occupied"]);
+
+  setupResult.aiSessions[0].status = "failed";
+  assert.equal((await preflight()).canMove, true);
 });
 
 test("worktree listing fails closed when Git cannot determine dirty state", async () => {
@@ -380,4 +440,168 @@ test("worktree removal rejects locked, prunable, stale, and current worktrees", 
   const beforeDirty = await setupResult.service.list();
   fs.writeFileSync(path.join(managedPath(setupResult.managedRoot, stale.worktreeId), "late.txt"), "late\n");
   await assert.rejects(() => setupResult.service.remove({ worktreeId: stale.worktreeId, expectedSnapshotId: beforeDirty.snapshotId, confirm: true }), (error) => error.code === "REPOSITORY_STATE_STALE");
+});
+
+test("moving a worktree into the main worktree carries staged, unstaged, deleted, and untracked changes", async () => {
+  const fixture = createGitFixture();
+  fixture.write("removed.txt", "removed\n");
+  fixture.commit("add removable file");
+  const setupResult = moveSetup(fixture);
+  const before = await setupResult.resolve();
+  const created = await setupResult.service.create({ mode: "new-branch", branchName: "feature/move", startRef: "HEAD", expectedSnapshotId: before.context.snapshotId });
+  const targetPath = managedPath(setupResult.managedRoot, created.worktreeId);
+
+  fixture.write("shared.txt", "main only\n");
+  fixture.commit("main keeps its own commit");
+  fs.writeFileSync(path.join(targetPath, "staged.txt"), "staged\n");
+  git(targetPath, ["add", "staged.txt"]);
+  fs.writeFileSync(path.join(targetPath, "tracked.txt"), "worktree change\n");
+  fs.unlinkSync(path.join(targetPath, "removed.txt"));
+  fs.writeFileSync(path.join(targetPath, "untracked.txt"), "untracked\n");
+  const carriedStatus = worktreeStatus(targetPath);
+  assert.deepEqual(carriedStatus, { "staged.txt": "A.", "tracked.txt": ".M", "removed.txt": ".D", "untracked.txt": "??" });
+
+  const listed = await setupResult.service.list();
+  const target = listed.items.find((item) => item.id === created.worktreeId);
+  assert.equal(target.canRemove, false);
+  assert.deepEqual(target.removeBlockers, ["dirty"]);
+  const preflight = await setupResult.service.moveToMainPreflight({ worktreeId: created.worktreeId });
+  assert.equal(preflight.canMove, true);
+  assert.deepEqual(preflight.blockers, []);
+  assert.equal(preflight.targetBranch, "feature/move");
+  assert.deepEqual(preflight.targetChanges, { conflicts: 0, staged: 1, unstaged: 2, untracked: 1 });
+  assert.equal(preflight.mainWorktreeId, listed.items.find((item) => item.isMain).id);
+  assert.equal(preflight.mainBranch, "main");
+
+  const moved = await setupResult.service.moveToMain({ worktreeId: created.worktreeId, expectedSnapshotId: listed.snapshotId, confirm: true });
+  assert.equal(moved.movedWorktreeId, created.worktreeId);
+  assert.equal(moved.adoptedBranch, "feature/move");
+  assert.equal(moved.carriedChanges, true);
+  assert.equal(moved.previousHead, target.head.oid);
+  assert.equal(fs.existsSync(targetPath), false);
+  assert.equal(fixture.git(["branch", "--show-current"]), "feature/move");
+  assert.deepEqual(worktreeStatus(fixture.root), carriedStatus);
+  assert.equal(fixture.git(["stash", "list"]), "");
+  assert.equal(fs.readFileSync(path.join(fixture.root, "staged.txt"), "utf8"), "staged\n");
+  assert.equal(fs.readFileSync(path.join(fixture.root, "untracked.txt"), "utf8"), "untracked\n");
+  assert.equal(fs.existsSync(path.join(fixture.root, "removed.txt")), false);
+  assert.equal(fixture.git(["show-ref", "--verify", "refs/heads/feature/move"]).length > 0, true);
+  assert.equal(moved.worktrees.items.some((item) => item.id === created.worktreeId), false);
+  assert.equal(worktreeStatus(fixture.root)["shared.txt"], undefined);
+});
+
+test("moving a worktree into a dirty main worktree is refused by preflight and by the mutation", async () => {
+  const fixture = createGitFixture();
+  const setupResult = moveSetup(fixture);
+  const before = await setupResult.resolve();
+  const created = await setupResult.service.create({ mode: "new-branch", branchName: "feature/dirty-main", startRef: "HEAD", expectedSnapshotId: before.context.snapshotId });
+  const targetPath = managedPath(setupResult.managedRoot, created.worktreeId);
+  fs.writeFileSync(path.join(targetPath, "work.txt"), "work\n");
+
+  const clean = await setupResult.service.moveToMainPreflight({ worktreeId: created.worktreeId });
+  assert.equal(clean.canMove, true);
+
+  fixture.write("main-only.txt", "uncommitted\n");
+  const dirty = await setupResult.service.moveToMainPreflight({ worktreeId: created.worktreeId });
+  assert.equal(dirty.canMove, false);
+  assert.deepEqual(dirty.blockers, ["main-dirty"]);
+  const listed = await setupResult.service.list();
+  await assert.rejects(
+    () => setupResult.service.moveToMain({ worktreeId: created.worktreeId, expectedSnapshotId: listed.snapshotId, confirm: true }),
+    (error) => error.code === "REPOSITORY_MAIN_DIRTY",
+  );
+  assert.equal(fixture.git(["branch", "--show-current"]), "main");
+  assert.equal(fixture.git(["status", "--porcelain=v2"]).includes("main-only.txt"), true);
+  assert.equal(fs.existsSync(targetPath), true);
+  assert.equal(fs.existsSync(path.join(targetPath, "work.txt")), true);
+});
+
+test("moving a clean worktree keeps the branch, removes the directory, and reports no carried changes", async () => {
+  const fixture = createGitFixture();
+  const setupResult = moveSetup(fixture);
+  const before = await setupResult.resolve();
+  const created = await setupResult.service.create({ mode: "new-branch", branchName: "feature/clean-move", startRef: "HEAD", expectedSnapshotId: before.context.snapshotId });
+  const targetPath = managedPath(setupResult.managedRoot, created.worktreeId);
+  const listed = await setupResult.service.list();
+  const moved = await setupResult.service.moveToMain({ worktreeId: created.worktreeId, expectedSnapshotId: listed.snapshotId, confirm: true });
+  assert.equal(moved.carriedChanges, false);
+  assert.equal(fs.existsSync(targetPath), false);
+  assert.equal(fixture.git(["branch", "--show-current"]), "feature/clean-move");
+  assert.equal(fixture.git(["stash", "list"]), "");
+  assert.deepEqual(worktreeStatus(fixture.root), {});
+});
+
+test("worktree moves reject detached heads, occupied worktrees, stale snapshots, and the main worktree", async () => {
+  const fixture = createGitFixture();
+  const setupResult = moveSetup(fixture);
+  let state = await setupResult.resolve();
+
+  const detached = await setupResult.service.create({ mode: "new-branch", branchName: "feature/move-detached", startRef: "HEAD", expectedSnapshotId: state.context.snapshotId });
+  const detachedPath = managedPath(setupResult.managedRoot, detached.worktreeId);
+  git(detachedPath, ["checkout", "--detach"]);
+  const detachedPreflight = await setupResult.service.moveToMainPreflight({ worktreeId: detached.worktreeId });
+  assert.equal(detachedPreflight.canMove, false);
+  assert.deepEqual(detachedPreflight.blockers, ["detached-head"]);
+  const detachedList = await setupResult.service.list();
+  await assert.rejects(
+    () => setupResult.service.moveToMain({ worktreeId: detached.worktreeId, expectedSnapshotId: detachedList.snapshotId, confirm: true }),
+    (error) => error.code === "REPOSITORY_WORKTREE_UNSAFE",
+  );
+
+  state = await setupResult.resolve();
+  const occupied = await setupResult.service.create({ mode: "new-branch", branchName: "feature/move-occupied", startRef: "HEAD", expectedSnapshotId: state.context.snapshotId });
+  const occupiedPath = managedPath(setupResult.managedRoot, occupied.worktreeId);
+  setupResult.aiSessions.push({ id: "ai-occupied", cwd: occupiedPath, status: "running" });
+  const occupiedPreflight = await setupResult.service.moveToMainPreflight({ worktreeId: occupied.worktreeId });
+  assert.deepEqual(occupiedPreflight.blockers, ["session-occupied"]);
+  assert.equal(occupiedPreflight.canMove, false);
+  const occupiedList = await setupResult.service.list();
+  await assert.rejects(
+    () => setupResult.service.moveToMain({ worktreeId: occupied.worktreeId, expectedSnapshotId: occupiedList.snapshotId, confirm: true }),
+    (error) => error.code === "REPOSITORY_WORKTREE_UNSAFE",
+  );
+  setupResult.aiSessions.pop();
+
+  const staleList = await setupResult.service.list();
+  fs.writeFileSync(path.join(detachedPath, "late.txt"), "late\n");
+  await assert.rejects(
+    () => setupResult.service.moveToMain({ worktreeId: occupied.worktreeId, expectedSnapshotId: staleList.snapshotId, confirm: true }),
+    (error) => error.code === "REPOSITORY_STATE_STALE",
+  );
+
+  const freshList = await setupResult.service.list();
+  const main = freshList.items.find((item) => item.isMain);
+  assert.equal((await setupResult.service.moveToMainPreflight({ worktreeId: main.id })).blockers.includes("main-worktree"), true);
+  await assert.rejects(
+    () => setupResult.service.moveToMain({ worktreeId: main.id, expectedSnapshotId: freshList.snapshotId, confirm: true }),
+    (error) => error.code === "REPOSITORY_WORKTREE_UNSAFE",
+  );
+  await assert.rejects(
+    () => setupResult.service.moveToMainPreflight({ worktreeId: "repo:missing" }),
+    (error) => error.code === "REPOSITORY_WORKTREE_NOT_FOUND",
+  );
+});
+
+test("worktree moves are refused while the main worktree hosts a running session", async () => {
+  const fixture = createGitFixture();
+  const setupResult = setup(fixture);
+  const state = await setupResult.resolve();
+  const created = await setupResult.service.create({ mode: "new-branch", branchName: "feature/occupied-main", startRef: "HEAD", expectedSnapshotId: state.context.snapshotId });
+  const targetPath = managedPath(setupResult.managedRoot, created.worktreeId);
+
+  const occupiedMain = await setupResult.service.moveToMainPreflight({ worktreeId: created.worktreeId });
+  assert.equal(occupiedMain.canMove, false);
+  assert.deepEqual(occupiedMain.blockers, ["main-session-occupied"]);
+  const listed = await setupResult.service.list();
+  await assert.rejects(
+    () => setupResult.service.moveToMain({ worktreeId: created.worktreeId, expectedSnapshotId: listed.snapshotId, confirm: true }),
+    (error) => error.code === "REPOSITORY_WORKTREE_UNSAFE",
+  );
+  assert.equal(fixture.git(["branch", "--show-current"]), "main");
+  assert.equal(fs.existsSync(targetPath), true);
+  assert.equal(fixture.git(["stash", "list"]), "");
+
+  // The blocker clears as soon as the main worktree has no live session.
+  setupResult.aiSessions[0].status = "failed";
+  assert.equal((await setupResult.service.moveToMainPreflight({ worktreeId: created.worktreeId })).canMove, true);
 });

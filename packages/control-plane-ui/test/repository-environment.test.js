@@ -66,11 +66,24 @@ test("Worktrees use opaque server ids and expose AI-session creation without cwd
   assert.match(panel, /<DropdownMenuContent class="repository-worktree-menu"/);
   assert.match(panel, /repository\.worktreesPanel\.newHere/);
   assert.match(panel, /repository\.worktreesPanel\.search/);
+  assert.match(
+    panel,
+    /<label class="repository-worktrees-search">[\s\S]*<Search :size="15" aria-hidden="true" \/>[\s\S]*<input v-model="searchQuery" type="search" :aria-label="t\('repository\.worktreesPanel\.search'\)" :placeholder="t\('repository\.worktreesPanel\.search'\)" \/>[\s\S]*<\/label>/,
+  );
+  assert.match(panel, /\.repository-worktrees-search \{[^}]*display: flex;[^}]*width: 100%;[^}]*min-height: 36px;[^}]*border: 1px solid var\(--line-subtle\);[^}]*border-radius: 8px;[^}]*background: var\(--surface-subtle\);/);
+  assert.match(panel, /\.repository-worktrees-search:focus-within \{[^}]*border-color: var\(--focus-ring\);/);
+  assert.match(panel, /\.repository-worktrees-search input \{[^}]*border: 0;[^}]*background: transparent;[^}]*font-size: 12px;/);
+  assert.doesNotMatch(panel, /ControlPlaneInput/);
   assert.match(panel, /filteredWorktrees/);
   assert.match(panel, /<ScrollArea/);
-  assert.match(panel, /<strong :title="worktreeLabel\(worktree\)">/);
-  assert.match(panel, /\.repository-worktree-title \{[\s\S]*display: flex;[\s\S]*flex-wrap: wrap/);
+  assert.match(panel, /<TooltipProvider :delay-duration="120">[\s\S]*<TooltipTrigger as-child>[\s\S]*<strong>\{\{ worktreeLabel\(worktree\) \}\}<\/strong>/);
+  assert.match(panel, /<TooltipContent class="repository-worktree-tooltip" side="top" :side-offset="8">\{\{ worktreeTooltip\(worktree\) \}\}<\/TooltipContent>/);
+  assert.doesNotMatch(panel, /<strong :title=/);
+  assert.match(panel, /\.repository-worktree-title \{[^}]*display: flex;[^}]*align-items: center;/);
+  assert.doesNotMatch(panel, /\.repository-worktree-title \{[^}]*flex-wrap/);
   assert.match(panel, /\.repository-worktree-title strong \{[\s\S]*overflow: hidden;[\s\S]*text-overflow: ellipsis;[\s\S]*white-space: nowrap/);
+  assert.match(panel, /\.repository-worktree-title > :deep\(div\) \{[^}]*flex: 0 0 auto;[^}]*white-space: nowrap;/);
+  assert.match(panel, /:global\(\.repository-worktree-tooltip\) \{[^}]*max-width: min\(480px, calc\(100vw - 24px\)\);[^}]*overflow-wrap: anywhere;/);
   assert.match(environment, /class="repository-environment-branch-summary" :title="branchSummary"/);
   assert.match(environment, /\.repository-environment-branch-summary \{[\s\S]*white-space: nowrap/);
   assert.match(panel, /repositoryContextId: worktrees\.value\.repositoryContextId/);
@@ -103,26 +116,35 @@ test("managed worktree creation reuses the shared dialog without starting an AI 
   assert.match(worktreesTab, /agent === "codex" \|\| agent === "claude"/);
 });
 
-test("worktree rows align identity, state summary, and actions as separate columns", async () => {
+test("worktree rows keep a single-line title, hover details, and pinned row actions", async () => {
   const panel = await source("apps/control-plane/instance-detail/RepositoryWorktreesPanel.vue");
 
-  assert.match(panel, /\.repository-worktree-row \{[\s\S]*display: grid;[\s\S]*grid-template-columns: minmax\(0, 1\.35fr\) minmax\(190px, 1fr\) auto;/);
-  assert.match(panel, /<div class="repository-worktree-identity">[\s\S]*<div class="repository-worktree-copy">[\s\S]*<div class="repository-worktree-summary">[\s\S]*<div class="repository-worktree-row-actions">/);
-  assert.match(panel, /<div class="repository-worktree-title">[\s\S]*<strong :title="worktreeLabel\(worktree\)">[\s\S]*<Badge variant="secondary">\{\{ worktreeKindLabel\(worktree\) \}\}<\/Badge>[\s\S]*<code v-if="worktreeCommit\(worktree\)"/);
+  assert.match(panel, /\.repository-worktree-row \{[^}]*display: grid;[^}]*grid-template-columns: minmax\(0, 1fr\) auto;/);
+  assert.match(panel, /\.repository-worktree-row \{[^}]*padding: 10px 12px;/);
+  assert.match(panel, /\.repository-worktree-row \{[^}]*align-items: center;/);
+  assert.doesNotMatch(panel, /\.repository-worktree-row \{[^}]*min-height/);
+  assert.match(panel, /\.repository-worktree-icon \{[^}]*align-self: center;/);
+  assert.match(panel, /<div class="repository-worktree-identity">[\s\S]*<div class="repository-worktree-copy">[\s\S]*<div class="repository-worktree-title">[\s\S]*<div v-if="worktreeHasSummary\(worktree\)" class="repository-worktree-summary">[\s\S]*<div class="repository-worktree-row-actions">/);
+  assert.match(panel, /<div class="repository-worktree-title">[\s\S]*<TooltipTrigger as-child>[\s\S]*<strong>\{\{ worktreeLabel\(worktree\) \}\}<\/strong>[\s\S]*<Badge variant="secondary">\{\{ worktreeKindLabel\(worktree\) \}\}<\/Badge>/);
 
-  const identity = panel.slice(panel.indexOf('<div class="repository-worktree-identity">'), panel.indexOf('<div class="repository-worktree-summary">'));
-  assert.doesNotMatch(identity, /worktreesPanel\.(dirty|locked|prunable)/);
+  assert.match(panel, /return commit \? `\$\{label\} · \$\{commit\}` : label;/);
+  assert.doesNotMatch(panel, /<code v-if="worktreeCommit\(worktree\)"/);
+
+  assert.match(panel, /function worktreeHasSummary\(worktree: RepositoryWorktree\) \{[\s\S]*?activeSessionCount\(worktree\) > 0 \|\| worktree\.dirty \|\| worktree\.locked \|\| worktree\.prunable/);
   for (const state of ["dirty", "locked", "prunable"]) {
     assert.match(panel, new RegExp(`class="repository-worktree-summary-item"[^>]*>[\\s\\S]*?repository\\.worktreesPanel\\.${state}`));
   }
   assert.match(panel, /<span v-if="activeSessionCount\(worktree\)" class="repository-worktree-summary-item">[\s\S]*repository\.environmentExtra\.associatedSessions/);
 
-  assert.match(panel, /\.repository-worktree-summary \{[\s\S]*?display: grid;[\s\S]*?gap: 5px;/);
-  assert.match(panel, /\.repository-worktree-summary-item \{[\s\S]*?display: flex;[\s\S]*?font-size: 12px;/);
-  assert.match(panel, /\.repository-worktree-summary-item\[data-state="warning"\] \{[\s\S]*?color: var\(--status-warning\);/);
-  assert.match(panel, /\.repository-worktree-warning \{[\s\S]*grid-column: 1 \/ -1;/);
-  assert.match(panel, /\.repository-worktree-start-composer \{[\s\S]*grid-column: 1 \/ -1;/);
-  assert.match(panel, /@container repository-worktrees \(max-width: 720px\) \{[\s\S]*\.repository-worktree-summary \{[\s\S]*grid-column: 1 \/ -1;/);
+  assert.match(panel, /\.repository-worktree-summary \{[^}]*display: flex;[^}]*flex-wrap: wrap;[^}]*gap: 4px 12px;/);
+  assert.match(panel, /\.repository-worktree-summary-item \{[^}]*display: flex;[^}]*font-size: 12px;/);
+  assert.match(panel, /\.repository-worktree-summary-item\[data-state="warning"\] \{[^}]*color: var\(--status-warning\);/);
+  assert.match(panel, /\.repository-worktree-warning \{[^}]*grid-column: 1 \/ -1;/);
+  assert.match(panel, /\.repository-worktree-start-composer \{[^}]*grid-column: 1 \/ -1;/);
+  assert.match(panel, /\.repository-worktree-row-actions \{[^}]*grid-column: 2;[^}]*grid-row: 1;/);
+
+  const responsiveBlock = panel.slice(panel.indexOf("@container repository-worktrees"), panel.indexOf(".repository-worktree-spin"));
+  assert.doesNotMatch(responsiveBlock, /repository-worktree-row-actions|repository-worktree-summary/);
   assert.doesNotMatch(panel, /@media \(max-width: 720px\)/);
 });
 
@@ -470,4 +492,33 @@ test("Repository navigation keeps portal, breadcrumb path, and confirmation cont
   assert.match(worktrees, /<NewWorktreeDialog/);
   assert.match(workspace, /confirm: true/);
   assert.doesNotMatch(workspace, /data-discard-cancel|This commits the current index only/);
+});
+
+test("Worktree moves into the main worktree are capability-gated, preflighted, and confirmed", async () => {
+  const [panel, tab, pane, repositoryApi, presentation, apiError] = await Promise.all([
+    source("apps/control-plane/instance-detail/RepositoryWorktreesPanel.vue"),
+    source("apps/control-plane/instance-detail/RepositoryWorktreesTab.vue"),
+    source("apps/control-plane/instance-detail/SessionPaneContent.vue"),
+    source("api/repository.ts"),
+    source("apps/control-plane/instance-detail/repositoryErrorPresentation.ts"),
+    source("i18n/apiError.ts"),
+  ]);
+
+  assert.match(panel, /v-if="canManageWorktrees && moveToMainSupported"/);
+  assert.match(panel, /:disabled="worktree\.isMain \|\| Boolean\(preparingMoveToMainId\)"/);
+  assert.match(panel, /repository\.worktreesPanel\.blockers\.mainDirty/);
+  assert.match(panel, /"main-session-occupied": "repository\.worktreesPanel\.blockers\.mainSessionOccupied"/);
+  assert.match(panel, /getRepositoryWorkspaceWorktreeMovePreflight/);
+  assert.match(panel, /moveRepositoryWorkspaceWorktreeToMain/);
+  assert.match(panel, /:disabled="movingWorktree \|\| !movePreflight\?\.canMove"/);
+  assert.match(panel, /expectedSnapshotId: worktrees\.value\.snapshotId/);
+  assert.match(panel, /queryClient\.invalidateQueries\(\{ queryKey: \["repository-context"/);
+  assert.doesNotMatch(panel, /--force|discard/i);
+  assert.match(tab, /:move-to-main-supported="moveToMainSupported"/);
+  assert.match(pane, /supportsRepositoryWorktreeMoveToMain\(instance\.capabilities\)/);
+  assert.match(repositoryApi, /worktrees\/move-to-main\/preflight/);
+  assert.match(repositoryApi, /safeParseResponse\(RepositoryMoveWorktreePreflightSchema/);
+  assert.match(presentation, /"REPOSITORY_MAIN_DIRTY", "REPOSITORY_MOVE_CONFLICT"/);
+  assert.match(apiError, /REPOSITORY_MAIN_DIRTY: \{ key: "errors\.REPOSITORY_MAIN_DIRTY" \}/);
+  assert.match(apiError, /REPOSITORY_MOVE_CONFLICT: \{ key: "errors\.REPOSITORY_MOVE_CONFLICT" \}/);
 });

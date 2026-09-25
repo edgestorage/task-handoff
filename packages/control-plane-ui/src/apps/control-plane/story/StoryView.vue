@@ -128,8 +128,13 @@
                 </div>
               </Transition>
             </div>
-            <div v-if="storiesPending" class="story-loading-overlay" role="status" aria-live="polite">
-              <LoaderCircle class="story-loading-spin" :size="18" />
+            <div v-if="storyLoadingNodeIds.length" class="story-node-load" role="status" aria-live="polite">
+              <LoaderCircle class="story-loading-spin" :size="13" />
+              <span>{{ t("stories.nodeLoad.loadingNodes", { count: storyLoadingNodeIds.length }) }}</span>
+            </div>
+            <div v-if="storyUnavailableNodeIds.length" class="story-node-load" data-state="warning">
+              <CircleAlert :size="13" />
+              <span>{{ t("stories.nodeLoad.unavailableNodes", { count: storyUnavailableNodeIds.length }) }}</span>
             </div>
           </div>
         </ScrollArea>
@@ -445,7 +450,7 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch, type CSSProperties } from "vue";
 import { useI18n } from "vue-i18n";
 import { useQueryClient } from "@tanstack/vue-query";
-import { Archive, BookOpen, CalendarClock, ChevronLeft, ChevronRight, CircleX, Download, FileText, History, Link, LoaderCircle, MessageSquare, MessageSquarePlus, MoreHorizontal, Pencil, Play, Plus, RotateCcw, Trash2, X } from "@lucide/vue";
+import { Archive, BookOpen, CalendarClock, ChevronLeft, ChevronRight, CircleAlert, CircleX, Download, FileText, History, Link, LoaderCircle, MessageSquare, MessageSquarePlus, MoreHorizontal, Pencil, Play, Plus, RotateCcw, Trash2, X } from "@lucide/vue";
 import AiSessionStatusIndicator from "../../../components/ai-session/AiSessionStatusIndicator.vue";
 import AiSessionStreamingMarkdown from "../../../components/ai-session/AiSessionStreamingMarkdown.vue";
 import { Button } from "../../../components/ui/button";
@@ -470,7 +475,8 @@ import DocumentTreeContextMenu from "./DocumentTreeContextMenu.vue";
 import StoryActionEditorContent from "./StoryActionEditorContent.vue";
 import StoryActionAutomations from "./StoryActionAutomations.vue";
 import { storyAutomationDayOfMonthLabel } from "./storyAutomationPresentation";
-import { closeAiSession, getAiSessionHistory, getStoryRetentionSettings, useStoriesQuery } from "../../../api/queries";
+import { closeAiSession, getAiSessionHistory, getStoryRetentionSettings } from "../../../api/queries";
+import { useStoryCatalog } from "./useStoryCatalog";
 import { sharedControlPlaneClient } from "../../../api/sharedClient.ts";
 import { controlPlaneQueryKeys } from "../../../api/queryKeys.ts";
 import { showControlPlaneToast, showDelayedControlPlaneLoadingToast } from "../useControlPlaneToasts";
@@ -584,9 +590,9 @@ let suppressStoryClickUntil = 0;
 let storyAutoScrollFrame = 0;
 let storyPointerClientY = 0;
 let dragStartOrder: string[] = [];
-const storiesQuery = useStoriesQuery();
+const storyCatalog = useStoryCatalog();
 const { boundTriggers, isTriggerBound, toggleTrigger, triggerActionKey, triggerBusyKey, triggerTemplates } = useAiSessionTriggers();
-const allStories = computed(() => storiesQuery.data.value?.stories ?? []);
+const allStories = computed(() => storyCatalog.stories.value);
 const filteredStories = computed(() => allStories.value.filter((story) => storyNodeIsVisible(props.nodeFilter, story.ownerNodeId)));
 const storySessionRecords = computed<StorySessionRecord[]>(() => props.instances.flatMap((instance) => (
   (instance.aiSessions.sessions || []).map((session) => ({ ...session, instanceId: instance.id }))
@@ -619,8 +625,10 @@ const stories = computed(() => {
   const mode = storySortMode.value;
   return sortStories(filteredStories.value, mode, storySortOptions(mode));
 });
-const storiesPending = computed(() => storiesQuery.isPending.value);
-const storiesFetching = computed(() => storiesQuery.isFetching.value);
+const storiesPending = computed(() => storyCatalog.isPending.value);
+const storiesFetching = computed(() => storyCatalog.isFetching.value);
+const storyLoadingNodeIds = computed(() => storyCatalog.loadingNodeIds.value);
+const storyUnavailableNodeIds = computed(() => storyCatalog.unavailableNodeIds.value);
 const selectedResource = ref<Resource>(); const expandedStoryKeys = ref(storedExpandedStoryKeys()); const expandedDocumentStoryKeys = ref(new Set<string>()); const error = ref("");
 type StoryDetailSection = "actions" | "documents" | "sessions" | "automations";
 type StoryAutomationView = StoryAutomationStatus & { recentRuns: StoryAutomationRun[] };
@@ -1291,11 +1299,12 @@ function playSidebarLayoutAnimation() {
 }
 watch(sidebarWidth, (width) => { try { window.localStorage?.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(width)); } catch { /* Local storage may be unavailable in restricted browser contexts. */ } });
 watch(sidebarCollapsed, playSidebarLayoutAnimation, { flush: "sync" });
-async function load() {
+async function load(nodeId?: string) {
   error.value = "";
   try {
-    const result = await storiesQuery.refetch();
-    if (result.error) error.value = result.error instanceof Error ? result.error.message : String(result.error);
+    const results = await storyCatalog.refetch(nodeId);
+    const failure = results.find((result) => result?.error)?.error;
+    if (failure) error.value = failure instanceof Error ? failure.message : String(failure);
   } catch (cause) { error.value = cause instanceof Error ? cause.message : String(cause); }
 }
 watch(documentMarkdownSessionId, async (documentKey, _previousDocumentKey, onCleanup) => {
@@ -1448,7 +1457,7 @@ async function commitStoryTitleEdit() {
       body: JSON.stringify({ nodeId: story.ownerNodeId, input: { title } }),
     });
     if (!response.ok) throw new Error((await response.json()).error?.message || t("stories.errors.renameFailed"));
-    await load();
+    await load(story.ownerNodeId);
     const refreshed = stories.value.find((candidate) => candidate.id === story.id && candidate.ownerNodeId === story.ownerNodeId);
     if (refreshed) selectStory(refreshed);
     cancelStoryTitleEdit();
@@ -1535,7 +1544,7 @@ async function saveAction(draft: AiSessionCreationPresetDraft) {
     const response = await fetch(`/api/stories/${encodeURIComponent(story.id)}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ nodeId: story.ownerNodeId, input: { actions } }) });
     if (!response.ok) throw new Error((await response.json()).error?.message || t("stories.actionEditor.saveFailed"));
     actionEditorOpen.value = false;
-    await load();
+    await load(story.ownerNodeId);
     const refreshed = stories.value.find((item) => item.id === story.id && item.ownerNodeId === story.ownerNodeId);
     if (refreshed) selectStory(refreshed);
   } catch (cause) { error.value = cause instanceof Error ? cause.message : String(cause); } finally { actionSaving.value = false; }
@@ -1551,7 +1560,7 @@ async function createAutomationWithAction(payload: { action: StoryAction; config
       action: { ...payload.action, targetInstanceId: payload.action.targetInstanceId },
       automation: payload.config,
     });
-    await load();
+    await load(story.ownerNodeId);
     const refreshed = stories.value.find((item) => item.id === story.id && item.ownerNodeId === story.ownerNodeId);
     if (refreshed) selectStory(refreshed);
   } catch (cause) {
@@ -1572,7 +1581,7 @@ function storyActionCreationFinished(story: Story) {
   const sourceResourceKey = resourceKey(selectedResource.value);
   return (instanceId: string, sessionId: string) => queueCreatedStorySession(story, instanceId, sessionId, sourceResourceKey);
 }
-async function assignExistingSession() { const story = selectedResource.value?.story; const [instanceId, sessionId] = assignSessionId.value.split(":"); if (!story || !instanceId || !sessionId || assigningSession.value) return; assigningSession.value = true; try { const response = await fetch(`/api/controlled-instances/${encodeURIComponent(instanceId)}/ai-sessions/${encodeURIComponent(sessionId)}/story`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ storyId: story.id }) }); if (!response.ok) throw new Error(t("stories.errors.assignFailed")); assignSessionOpen.value = false; await load(); const refreshed = stories.value.find((item) => item.id === story.id && item.ownerNodeId === story.ownerNodeId); if (refreshed) selectStory(refreshed); } catch (cause) { error.value = cause instanceof Error ? cause.message : String(cause); } finally { assigningSession.value = false; } }
+async function assignExistingSession() { const story = selectedResource.value?.story; const [instanceId, sessionId] = assignSessionId.value.split(":"); if (!story || !instanceId || !sessionId || assigningSession.value) return; assigningSession.value = true; try { const response = await fetch(`/api/controlled-instances/${encodeURIComponent(instanceId)}/ai-sessions/${encodeURIComponent(sessionId)}/story`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ storyId: story.id }) }); if (!response.ok) throw new Error(t("stories.errors.assignFailed")); assignSessionOpen.value = false; await load(story.ownerNodeId); const refreshed = stories.value.find((item) => item.id === story.id && item.ownerNodeId === story.ownerNodeId); if (refreshed) selectStory(refreshed); } catch (cause) { error.value = cause instanceof Error ? cause.message : String(cause); } finally { assigningSession.value = false; } }
 async function saveStory() {
   if (!draftTitle.value.trim() || !draftNodeId.value || saving.value) return;
   const maxIdleAiSessions = Number(draftMaxIdleAiSessions.value);
@@ -1599,14 +1608,14 @@ async function saveStory() {
       showControlPlaneToast(t("stories.editor.agentToolsSaved"));
     }
     editorOpen.value = false;
-    await load();
+    await load(draftNodeId.value);
   } catch (cause) {
     storyEditorError.value = translateApiError(cause, t, t("stories.errors.saveFailed"));
   } finally {
     saving.value = false;
   }
 }
-async function toggleArchive(story: Story = selectedResource.value?.story) { if (!story) return; const action = story.archivedAt ? "restore" : "archive"; const response = await fetch(`/api/stories/${encodeURIComponent(story.id)}/${action}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ nodeId: story.ownerNodeId }) }); if (!response.ok) { error.value = t("stories.errors.updateFailed"); return; } await load(); const refreshed = stories.value.find((item) => item.id === story.id && item.ownerNodeId === story.ownerNodeId); if (refreshed) selectStory(refreshed); }
+async function toggleArchive(story: Story = selectedResource.value?.story) { if (!story) return; const action = story.archivedAt ? "restore" : "archive"; const response = await fetch(`/api/stories/${encodeURIComponent(story.id)}/${action}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ nodeId: story.ownerNodeId }) }); if (!response.ok) { error.value = t("stories.errors.updateFailed"); return; } await load(story.ownerNodeId); const refreshed = stories.value.find((item) => item.id === story.id && item.ownerNodeId === story.ownerNodeId); if (refreshed) selectStory(refreshed); }
 function downloadUrl(story: Story, storyPath: string) { return `/api/stories/${encodeURIComponent(story.id)}/content/file?nodeId=${encodeURIComponent(story.ownerNodeId)}&storyPath=${encodeURIComponent(storyPath)}`; }
 function downloadDocument(story: Story, storyPath: string) { const anchor = document.createElement("a"); anchor.href = downloadUrl(story, storyPath); anchor.download = storyPath.split("/").pop() || storyPath; anchor.click(); }
 async function deleteStory(story: Story) {
@@ -1617,15 +1626,15 @@ async function deleteStory(story: Story) {
       const payload = await response.json().catch(() => undefined) as { error?: unknown } | undefined;
       throw payload?.error || new Error(t("stories.errors.deleteFailed"));
     }
-    await load();
+    await load(story.ownerNodeId);
     const resource = selectedResource.value;
     if (resource && resource.story.id === story.id && resource.story.ownerNodeId === story.ownerNodeId) selectedResource.value = undefined;
   } catch (cause) {
     showControlPlaneToast(translateApiError(cause, t, t("stories.errors.deleteFailed")));
   }
 }
-async function renameDocument(story: Story, storyPath: string, title: string) { const next = window.prompt(t("stories.confirm.documentTitle"), title)?.trim(); if (!next || next === title) return; const response = await fetch(`/api/stories/${encodeURIComponent(story.id)}/documents/${encodeURIComponent(storyPath)}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ nodeId: story.ownerNodeId, input: { title: next } }) }); if (!response.ok) { error.value = t("stories.errors.renameDocumentFailed"); return; } await load(); const refreshed = stories.value.find((item) => item.id === story.id && item.ownerNodeId === story.ownerNodeId); if (refreshed) selectDocument(refreshed, storyPath); }
-async function deleteDocument(story: Story, storyPath: string) { if (!window.confirm(t("stories.confirm.deleteDocument"))) return; const response = await fetch(`/api/stories/${encodeURIComponent(story.id)}/documents/${encodeURIComponent(storyPath)}`, { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ nodeId: story.ownerNodeId }) }); if (!response.ok) { error.value = t("stories.errors.deleteDocumentFailed"); return; } await load(); const refreshed = stories.value.find((item) => item.id === story.id && item.ownerNodeId === story.ownerNodeId); if (refreshed) selectStory(refreshed); }
+async function renameDocument(story: Story, storyPath: string, title: string) { const next = window.prompt(t("stories.confirm.documentTitle"), title)?.trim(); if (!next || next === title) return; const response = await fetch(`/api/stories/${encodeURIComponent(story.id)}/documents/${encodeURIComponent(storyPath)}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ nodeId: story.ownerNodeId, input: { title: next } }) }); if (!response.ok) { error.value = t("stories.errors.renameDocumentFailed"); return; } await load(story.ownerNodeId); const refreshed = stories.value.find((item) => item.id === story.id && item.ownerNodeId === story.ownerNodeId); if (refreshed) selectDocument(refreshed, storyPath); }
+async function deleteDocument(story: Story, storyPath: string) { if (!window.confirm(t("stories.confirm.deleteDocument"))) return; const response = await fetch(`/api/stories/${encodeURIComponent(story.id)}/documents/${encodeURIComponent(storyPath)}`, { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ nodeId: story.ownerNodeId }) }); if (!response.ok) { error.value = t("stories.errors.deleteDocumentFailed"); return; } await load(story.ownerNodeId); const refreshed = stories.value.find((item) => item.id === story.id && item.ownerNodeId === story.ownerNodeId); if (refreshed) selectStory(refreshed); }
 onBeforeUnmount(() => {
   stopSidebarResize();
   cancelStoryPointerDrag();
@@ -1669,7 +1678,8 @@ onBeforeUnmount(() => {
 .story-sidebar-scroll { min-width:0; min-height:0; }
 .story-sidebar-scroll-inner { min-width:0; padding:0 10px 12px; }
 .story-sidebar-scroll :deep([data-task-handoff-scroll-viewport] > div) { width:100%; min-width:0 !important; }
-.story-loading-overlay { position:absolute; inset:0; z-index:5; display:grid; place-items:center; border-radius:8px; background:var(--workspace-bg); }
+.story-node-load { display:flex; align-items:center; justify-content:center; gap:7px; padding:12px 10px 2px; color:var(--text-muted); font-size:12px; }
+.story-node-load[data-state="warning"] { color:var(--status-warning); }
 .story-loading-spin { color:var(--text-muted); animation:story-loading-spin 0.9s linear infinite; }
 @keyframes story-loading-spin { to { transform:rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .story-loading-spin { animation:none; } }
