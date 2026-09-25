@@ -114,7 +114,7 @@ export const errors = {
   REPOSITORY_STATE_STALE: "仓库在加载后发生了变化，请先检查最新状态再重试。",
   REPOSITORY_WORKTREE_NOT_FOUND: "未找到工作树。",
   REPOSITORY_WORKTREE_OCCUPIED: "有活动会话正在使用此工作树。",
-  REPOSITORY_WORKTREE_UNSAFE: "此工作树当前无法安全执行该操作。",
+  REPOSITORY_WORKTREE_UNSAFE: "此工作树当前无法安全执行该操作。", REPOSITORY_MAIN_DIRTY: "主工作树中的未提交变更必须先处理。", REPOSITORY_MOVE_CONFLICT: "搬运的变更无法应用到主工作树。",
   REPOSITORY_BRANCH_INVALID: "分支无效或已不存在。",
   REPOSITORY_BRANCH_OCCUPIED: "此分支已在另一个工作树中检出。",
   REPOSITORY_BRANCH_UNMERGED: "此分支包含尚未合并的提交。",

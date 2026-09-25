@@ -14,12 +14,16 @@ import type {
   RepositoryCreateWorktreeRequest,
   RepositoryCreateWorktreeResult,
   RepositoryCreateWorktreeAiSessionRequest,
+  RepositoryMoveWorktreePreflight,
+  RepositoryMoveWorktreePreflightRequest,
+  RepositoryMoveWorktreeRequest,
+  RepositoryMoveWorktreeResult,
   RepositorySessionKind,
   RepositoryStartAiSessionRequest,
   RepositoryRemoveWorktreeResult,
   RepositoryWorktrees,
 } from "@task-handoff/protocol/repository";
-import { RepositoryPathSearchResultSchema, RepositoryWorktreesSchema } from "@task-handoff/protocol/repository";
+import { RepositoryMoveWorktreePreflightSchema, RepositoryPathSearchResultSchema, RepositoryWorktreesSchema } from "@task-handoff/protocol/repository";
 import { safeParseResponse } from "@task-handoff/protocol/response-validation";
 import { useQuery } from "@tanstack/vue-query";
 import { computed, toValue, type MaybeRefOrGetter } from "vue";
@@ -74,6 +78,17 @@ export async function removeRepositoryWorkspaceWorktree(target: RepositoryWorksp
     if (!(error instanceof ApiError) || error.status !== 404 || !target.legacySession) throw error;
     return removeRepositoryWorktree(target.legacySession, input);
   }
+}
+
+export async function getRepositoryWorkspaceWorktreeMovePreflight(target: RepositoryWorkspaceTarget, input: RepositoryMoveWorktreePreflightRequest) {
+  const data = await postUrlData<unknown>(repositoryWorkspaceResource(target, "worktrees/move-to-main/preflight"), input);
+  const parsed = safeParseResponse(RepositoryMoveWorktreePreflightSchema, data);
+  if (!parsed.success) throw new Error("The controlled instance returned an incompatible worktree move response. Restart the instance to load the current protocol.");
+  return parsed.data satisfies RepositoryMoveWorktreePreflight;
+}
+
+export async function moveRepositoryWorkspaceWorktreeToMain(target: RepositoryWorkspaceTarget, input: RepositoryMoveWorktreeRequest) {
+  return postUrlData<RepositoryMoveWorktreeResult>(repositoryWorkspaceResource(target, "worktrees/move-to-main"), input);
 }
 
 export async function getRepositoryWorkspaceBranches(target: RepositoryWorkspaceTarget, options?: { signal?: AbortSignal }) {

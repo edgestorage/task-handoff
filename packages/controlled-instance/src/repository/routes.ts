@@ -25,6 +25,8 @@ import {
   RepositoryPullRequestSchema,
   RepositoryPublishRequestSchema,
   RepositoryPushRequestSchema,
+  RepositoryMoveWorktreePreflightRequestSchema,
+  RepositoryMoveWorktreeRequestSchema,
   RepositoryRemoveWorktreeRequestSchema,
   RepositoryRenameFileRequestSchema,
   RepositoryStageRequestSchema,
@@ -159,6 +161,14 @@ export function registerRepositoryRoutes(app: FastifyInstance, options: Register
     cwd: RepositoryAiSessionWorkspaceInspectSchema.shape.cwd,
     removal: RepositoryRemoveWorktreeRequestSchema,
   }).strict();
+  const WorkspaceMoveWorktreePreflightSchema = z.object({
+    cwd: RepositoryAiSessionWorkspaceInspectSchema.shape.cwd,
+    preflight: RepositoryMoveWorktreePreflightRequestSchema,
+  }).strict();
+  const WorkspaceMoveWorktreeSchema = z.object({
+    cwd: RepositoryAiSessionWorkspaceInspectSchema.shape.cwd,
+    move: RepositoryMoveWorktreeRequestSchema,
+  }).strict();
 
   app.post<{ Body: unknown }>("/api/repository/workspace/worktrees/list", async (request, reply) => {
     try {
@@ -181,6 +191,22 @@ export function registerRepositoryRoutes(app: FastifyInstance, options: Register
       const body = WorkspaceRemoveWorktreeSchema.parse(request.body || {});
       const cwd = authorizedWorkspaceCwd(body.cwd.path, options.workspaceRoots);
       return { data: await servicesForWorkspace(cwd).worktrees.remove(body.removal) };
+    } catch (error) { return sendRepositoryError(reply, error); }
+  });
+
+  app.post<{ Body: unknown }>("/api/repository/workspace/worktrees/move-to-main/preflight", async (request, reply) => {
+    try {
+      const body = WorkspaceMoveWorktreePreflightSchema.parse(request.body || {});
+      const cwd = authorizedWorkspaceCwd(body.cwd.path, options.workspaceRoots);
+      return { data: await servicesForWorkspace(cwd).worktrees.moveToMainPreflight(body.preflight) };
+    } catch (error) { return sendRepositoryError(reply, error); }
+  });
+
+  app.post<{ Body: unknown }>("/api/repository/workspace/worktrees/move-to-main", async (request, reply) => {
+    try {
+      const body = WorkspaceMoveWorktreeSchema.parse(request.body || {});
+      const cwd = authorizedWorkspaceCwd(body.cwd.path, options.workspaceRoots);
+      return { data: await servicesForWorkspace(cwd).worktrees.moveToMain(body.move) };
     } catch (error) { return sendRepositoryError(reply, error); }
   });
 

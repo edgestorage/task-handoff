@@ -71,10 +71,14 @@ import type { ControlPlaneTriggerMutationFailure } from "@task-handoff/protocol/
 import {
   RepositoryBranchesSchema,
   RepositoryCreateWorktreeResultSchema,
+  RepositoryMoveWorktreePreflightSchema,
+  RepositoryMoveWorktreeResultSchema,
   RepositoryRemoveWorktreeResultSchema,
   RepositoryWorktreesSchema,
   type RepositoryAiSessionGitSelection,
   type RepositoryCreateWorktreeRequest,
+  type RepositoryMoveWorktreePreflightRequest,
+  type RepositoryMoveWorktreeRequest,
   type RepositoryRemoveWorktreeRequest,
 } from "@task-handoff/protocol/repository";
 import { StorySchema } from "@task-handoff/protocol/stories";
@@ -1659,6 +1663,22 @@ export class ControlPlaneService {
     const cwd = { type: "runtime-path" as const, path: await this.workspaceRuntimeCwd(instance, cwdFolderId) };
     return parseResponse(RepositoryRemoveWorktreeResultSchema, await this.instanceRequest(instance, "/repository/workspace/worktrees/remove", {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ cwd, removal: input }),
+    }));
+  }
+
+  async moveRepositoryWorkspaceWorktreeToMainPreflight(instanceId: string, input: RepositoryMoveWorktreePreflightRequest, cwdFolderId?: string) {
+    const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
+    const cwd = { type: "runtime-path" as const, path: await this.workspaceRuntimeCwd(instance, cwdFolderId) };
+    return parseResponse(RepositoryMoveWorktreePreflightSchema, await this.instanceRequest(instance, "/repository/workspace/worktrees/move-to-main/preflight", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ cwd, preflight: input }),
+    }));
+  }
+
+  async moveRepositoryWorkspaceWorktreeToMain(instanceId: string, input: RepositoryMoveWorktreeRequest, cwdFolderId?: string) {
+    const instance = await this.requireControlledInstance(instanceId, true) as ControlledInstance;
+    const cwd = { type: "runtime-path" as const, path: await this.workspaceRuntimeCwd(instance, cwdFolderId) };
+    return parseResponse(RepositoryMoveWorktreeResultSchema, await this.instanceRequest(instance, "/repository/workspace/worktrees/move-to-main", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ cwd, move: input }),
     }));
   }
 

@@ -45,11 +45,16 @@ test("AI Session summaries recover through their revisioned stream instead of fo
 });
 
 test("Story snapshots persist across view remounts and converge through events", () => {
+  const defaults = source.match(/const storySnapshotQueryOptions = \{[\s\S]*?\n\} as const;/)?.[0] || "";
+  assert.match(defaults, /staleTime: Infinity/);
+  assert.match(defaults, /gcTime: Infinity/);
+  assert.match(defaults, /refetchOnWindowFocus: false/);
+  assert.match(defaults, /refetchOnReconnect: false/);
   const query = source.match(/export function useStoriesQuery[\s\S]*?\n\}/)?.[0] || "";
-  assert.match(query, /staleTime: Infinity/);
-  assert.match(query, /gcTime: Infinity/);
-  assert.match(query, /refetchOnWindowFocus: false/);
-  assert.match(query, /refetchOnReconnect: false/);
+  assert.match(query, /\.\.\.storySnapshotQueryOptions/);
+  const nodeQuery = source.match(/export function storyNodeQueryOptions[\s\S]*?\n\}/)?.[0] || "";
+  assert.match(nodeQuery, /queryKey: controlPlaneQueryKeys\.stories\(nodeId\)/);
+  assert.match(nodeQuery, /\.\.\.storySnapshotQueryOptions/);
 });
 
 test("instance directory and scoped board reads stay progressive", () => {

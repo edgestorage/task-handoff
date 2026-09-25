@@ -20,6 +20,14 @@ test("repository workspace, diff, branch, worktree, and delivery labels render i
   assert.equal(chinese("repository.worktreesPanel.search"), "搜索分支、提交或工作树类型…");
   assert.equal(english("repository.delivery.divergedHint", { ahead: 2, behind: 3 }), "The branch is 2 ahead and 3 behind. Resolve it in the session terminal, then refresh Environment.");
   assert.equal(chinese("repository.delivery.divergedHint", { ahead: 2, behind: 3 }), "分支领先 2、落后 3。请在会话终端中处理后刷新环境。");
+  assert.equal(english("repository.worktreesPanel.moveToMainConfirm"), "Move");
+  assert.equal(chinese("repository.worktreesPanel.moveToMainConfirm"), "移动");
+  assert.equal(english("repository.worktreesPanel.moveToMainCarry", { count: 3 }), "Carries 3 uncommitted changes; ignored files are not carried.");
+  assert.equal(chinese("repository.worktreesPanel.moveToMainCarry", { count: 3 }), "将搬运 3 项未提交变更；忽略的文件不会搬运。");
+  assert.equal(english("repository.worktreesPanel.blockers.mainDirty"), "Main worktree has uncommitted changes");
+  assert.equal(chinese("repository.worktreesPanel.blockers.mainDirty"), "主工作树有未提交变更");
+  assert.equal(english("errors.REPOSITORY_MAIN_DIRTY"), "The main worktree has uncommitted changes that must be handled first.");
+  assert.equal(chinese("errors.REPOSITORY_MAIN_DIRTY"), "主工作树中的未提交变更必须先处理。");
 });
 
 test("repository-owned content and diagnostic values stay byte-for-byte unchanged", async () => {

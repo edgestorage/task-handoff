@@ -1,15 +1,17 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import type { RepositoryWorktrees } from "@task-handoff/protocol/repository";
-import { repositoryWorktreeId, type ResolvedRepository } from "./context";
+import type { AiSessionLifecycle } from "@task-handoff/protocol/ai-sessions";
+import type { AppSessionStatus } from "@task-handoff/protocol/app-sessions";
+import type { RepositoryMoveWorktreeBlocker, RepositoryWorktreeBlocker, RepositoryWorktrees } from "@task-handoff/protocol/repository";
+import { changeScopes, parsePorcelainV2, repositoryChangeSummary, repositoryWorktreeId, type ResolvedRepository } from "./context";
 import { GitProcess, type GitProcessOptions } from "./git-process";
 import { RepositoryMutationQueue } from "./mutation-queue";
 import { RepositoryOperationError } from "./changes";
 
 type SessionInventory = {
-  aiSessions: () => Array<{ id: string; appSessionId?: string; cwd?: string; status?: string }>;
-  appSessions: () => Array<{ id: string; workspace?: { cwd?: string }; status?: string }>;
+  aiSessions: () => Array<{ id: string; appSessionId?: string; cwd?: string; status?: AiSessionLifecycle }>;
+  appSessions: () => Array<{ id: string; workspace?: { cwd?: string }; status?: AppSessionStatus }>;
 };
 type WorktreeRecord = {
   path: string;
@@ -20,7 +22,12 @@ type WorktreeRecord = {
   lockReason?: string;
   prunable: boolean;
 };
-type InternalWorktree = RepositoryWorktrees["items"][number] & { canonicalPath: string };
+type InternalWorktree = RepositoryWorktrees["items"][number] & {
+  canonicalPath: string;
+  // Sessions that are running in the worktree right now. Removal hazards keep every live
+  // session, but an in-place rewrite is only unsafe for sessions that are already running.
+  hostsRunningSession: boolean;
+};
 type ManagedWorktreeIntent = {
   requestId?: string;
   ref: { type: "head" } | { type: "branch"; name: string };
@@ -41,6 +48,17 @@ type ManagedWorktreeEntry = {
 const MANAGED_WORKTREE_REGISTRY_VERSION = 2;
 const WORKTREE_STATUS_CONCURRENCY = 8;
 const WORKTREE_GENERATION_MARKER = "task-handoff-generation";
+
+// Removal blockers that also forbid adopting the branch in the main worktree.
+// `dirty` is deliberately absent: a move carries the target's changes instead of refusing.
+const MOVE_BLOCKERS_FROM_REMOVE = [
+  "main-worktree",
+  "outside-workspace-roots",
+  "path-inaccessible",
+  "locked",
+  "prunable",
+  "session-occupied",
+] as const satisfies readonly RepositoryWorktreeBlocker[];
 
 export class ManagedWorktreeRegistry {
   root: string;
@@ -437,6 +455,118 @@ export class RepositoryWorktreeService {
     });
   }
 
+  async moveToMainPreflight(request: { worktreeId: string }) {
+    const state = await this.requireAvailable();
+    const internal = await this.listFromStateInternal(state);
+    const target = internal.find((item) => item.id === request.worktreeId);
+    if (!target) throw new RepositoryOperationError("REPOSITORY_WORKTREE_NOT_FOUND", "Worktree no longer exists.", state);
+    const main = internal.find((item) => item.isMain);
+    if (!main) throw new RepositoryOperationError("REPOSITORY_OPERATION_FAILED", "The main worktree could not be resolved.", state);
+    const blockers = moveWorktreeBlockers(target, main);
+    return {
+      worktreeId: target.id,
+      canMove: blockers.length === 0,
+      blockers,
+      ...(target.head.state === "branch" && target.head.branch ? { targetBranch: target.head.branch } : {}),
+      targetChanges: await worktreeChangeSummary(target, this.gitOptions),
+      mainWorktreeId: main.id,
+      ...(main.head.state === "branch" && main.head.branch ? { mainBranch: main.head.branch } : {}),
+    };
+  }
+
+  /**
+   * Make the main worktree adopt the target worktree's branch, carrying its
+   * uncommitted changes, then delete the target worktree directory. The target's
+   * branch and commits survive; the main worktree's own changes never move.
+   */
+  async moveToMain(request: { worktreeId: string; expectedSnapshotId: string; confirm: true }) {
+    const initial = await this.requireAvailable();
+    const initialInternal = await this.listFromStateInternal(initial);
+    const initialTarget = initialInternal.find((item) => item.id === request.worktreeId);
+    if (!initialTarget) throw new RepositoryOperationError("REPOSITORY_WORKTREE_NOT_FOUND", "Worktree no longer exists.", initial);
+    const initialMain = initialInternal.find((item) => item.isMain);
+    if (!initialMain) throw new RepositoryOperationError("REPOSITORY_OPERATION_FAILED", "The main worktree could not be resolved.", initial);
+    return this.queue.withRepositoryAndWorktrees(initial.gitCommonDir!, [initialTarget.canonicalPath, initialMain.canonicalPath], async () => {
+      const state = await this.requireAvailable();
+      const list = await this.listFromState(state);
+      if (list.snapshotId !== request.expectedSnapshotId) throw new RepositoryOperationError("REPOSITORY_STATE_STALE", "Worktree state changed before the move.", state);
+      const internal = await this.listFromStateInternal(state);
+      const target = internal.find((item) => item.id === request.worktreeId);
+      if (!target) throw new RepositoryOperationError("REPOSITORY_WORKTREE_NOT_FOUND", "Worktree no longer exists.", state);
+      const main = internal.find((item) => item.isMain);
+      if (!main || main.canonicalPath !== initialMain.canonicalPath) throw new RepositoryOperationError("REPOSITORY_STATE_STALE", "The main worktree moved while the repository was locked.", state);
+      const blockers = moveWorktreeBlockers(target, main);
+      if (blockers.length) {
+        throw blockers.includes("main-dirty")
+          ? new RepositoryOperationError("REPOSITORY_MAIN_DIRTY", "The main worktree has uncommitted changes. Commit or stash them there before moving this worktree.", state)
+          : new RepositoryOperationError("REPOSITORY_WORKTREE_UNSAFE", `Worktree cannot be moved into the main worktree: ${blockers.join(", ")}.`, state);
+      }
+      const branch = target.head.state === "branch" ? target.head.branch : undefined;
+      const previousHead = target.head.oid;
+      if (!branch || !previousHead) throw new RepositoryOperationError("REPOSITORY_WORKTREE_UNSAFE", "The worktree HEAD is not an adoptable branch.", state);
+      const carriedChanges = target.dirty;
+      const expectedChanges = carriedChanges ? await worktreeChangeSignature(target.canonicalPath, this.gitOptions) : "";
+      const targetGit = new GitProcess(target.canonicalPath, this.gitOptions);
+      const mainGit = new GitProcess(main.canonicalPath, this.gitOptions);
+      let stashed = false;
+      // Restoring the worktree is always possible before the directory is removed:
+      // its branch is released only after the stash entry is safely recorded.
+      const restoreTargetWorktree = async () => {
+        const failures: string[] = [];
+        try { await targetGit.run("checkout", ["--quiet", branch]); } catch { failures.push("branch checkout"); }
+        if (stashed) {
+          try { await targetGit.run("stash", ["pop", "--index", "--quiet"]); } catch { failures.push("stash restore"); }
+        }
+        return failures;
+      };
+      try {
+        if (carriedChanges) {
+          await targetGit.run("stash", ["push", "--include-untracked", "--quiet", "--message", `task-handoff move-to-main: ${branch}`]);
+          stashed = true;
+        }
+        await targetGit.run("checkout", ["--detach", "--quiet"]);
+      } catch {
+        const failures = await restoreTargetWorktree();
+        throw new RepositoryOperationError("REPOSITORY_OPERATION_FAILED", failures.length
+          ? `The worktree could not be restored (${failures.join(", ")}). Recover it from the retained stash entry before retrying.`
+          : "Git could not release the branch from the worktree.", await this.resolve());
+      }
+      try {
+        await mainGit.run("checkout", ["--quiet", branch]);
+      } catch {
+        const failures = await restoreTargetWorktree();
+        throw new RepositoryOperationError("REPOSITORY_WORKTREE_UNSAFE", failures.length
+          ? `The main worktree could not adopt the branch, and the worktree could not be restored (${failures.join(", ")}). Recover it from the retained stash entry before retrying.`
+          : "The main worktree could not adopt the branch.", await this.resolve());
+      }
+      if (stashed) {
+        try {
+          await mainGit.run("stash", ["pop", "--index", "--quiet"]);
+        } catch {
+          throw new RepositoryOperationError("REPOSITORY_MOVE_CONFLICT", "The carried changes could not be applied to the main worktree. Resolve them there and drop the retained stash entry; the worktree was left in place.", await this.resolve());
+        }
+        if (await worktreeChangeSignature(main.canonicalPath, this.gitOptions) !== expectedChanges) {
+          throw new RepositoryOperationError("REPOSITORY_WORKTREE_UNSAFE", "The carried changes do not match the recorded worktree state. Nothing was removed.", await this.resolve());
+        }
+      }
+      try {
+        if (target.managed) this.registry.beginRemove(target.id, target.canonicalPath);
+        await new GitProcess(state.worktreeRoot!, this.gitOptions).run("worktree", ["remove", target.canonicalPath]);
+        if (target.managed) this.registry.completeRemove(target.id);
+      } catch {
+        if (target.managed) this.registry.cancelRemove(target.id);
+        throw new RepositoryOperationError("REPOSITORY_OPERATION_FAILED", "The branch and its changes are now in the main worktree, but the worktree directory could not be removed.", await this.resolve());
+      }
+      return {
+        movedWorktreeId: target.id,
+        adoptedBranch: branch,
+        previousHead,
+        carriedChanges: stashed,
+        worktrees: await this.listFromState(await this.requireAvailable()),
+      };
+    });
+  }
+
   async resolveWorkspace(repositoryContextId: string, worktreeId: string) {
     const state = await this.requireAvailable();
     if (state.context.repositoryContextId !== repositoryContextId) throw new RepositoryOperationError("REPOSITORY_STATE_STALE", "Repository context is stale.", state);
@@ -454,7 +584,7 @@ export class RepositoryWorktreeService {
 
   private async listFromState(state: ResolvedRepository): Promise<RepositoryWorktrees> {
     const items = await this.listFromStateInternal(state);
-    const publicItems = items.map(({ canonicalPath: _path, ...item }) => item);
+    const publicItems = items.map(({ canonicalPath: _path, hostsRunningSession: _running, ...item }) => item);
     return {
       repositoryId: state.context.repositoryId!,
       repositoryContextId: state.context.repositoryContextId!,
@@ -475,14 +605,20 @@ export class RepositoryWorktreeService {
       const authorized = current || managed || this.workspaceRoots.some((root) => withinRoot(canonicalPath, root));
       const accessible = authorized && fs.existsSync(canonicalPath);
       const dirty = accessible && !record.prunable ? await isDirty(canonicalPath, this.gitOptions) : false;
-      const activeAiSessions = activeSessionsForWorktree(this.sessions.aiSessions(), canonicalPath, (session) => session.cwd);
+      const aiSessionsInWorktree = sessionsInWorktree(this.sessions.aiSessions(), canonicalPath, (session) => session.cwd);
+      const activeAiSessions = aiSessionsInWorktree.filter(isLiveSession);
       const activeAiSessionIds = activeAiSessions.map((session) => session.id);
       const aiAppSessionIds = new Set(activeAiSessions.map((session) => session.appSessionId).filter((id): id is string => Boolean(id)));
       // An AI session and its host app session are one logical user session. Keep
       // the two public ID collections disjoint so consumers do not double-count it.
-      const activeAppSessionIds = activeSessionsForWorktree(this.sessions.appSessions(), canonicalPath, (session) => session.workspace?.cwd)
-        .filter((session) => !aiAppSessionIds.has(session.id))
+      const appSessionsInWorktree = sessionsInWorktree(this.sessions.appSessions(), canonicalPath, (session) => session.workspace?.cwd);
+      const activeAppSessionIds = appSessionsInWorktree
+        .filter((session) => isLiveSession(session) && !aiAppSessionIds.has(session.id))
         .map((session) => session.id);
+      // A move only rewrites the main worktree in place, so it is blocked by sessions that
+      // are running there rather than by every session that happens to live there.
+      const hostsRunningSession = aiSessionsInWorktree.some(isRunningAiSession)
+        || appSessionsInWorktree.some((session) => !aiAppSessionIds.has(session.id) && isRunningAppSession(session));
       const createAiSessionBlockers: RepositoryWorktrees["items"][number]["createAiSessionBlockers"] = [];
       if (!authorized) createAiSessionBlockers.push("outside-workspace-roots");
       if (!accessible) createAiSessionBlockers.push("path-inaccessible");
@@ -504,6 +640,7 @@ export class RepositoryWorktreeService {
       return {
         id,
         canonicalPath,
+        hostsRunningSession,
         isCurrent: current,
         isMain: index === 0,
         managed,
@@ -555,18 +692,64 @@ export function parseWorktreePorcelain(output: string): WorktreeRecord[] {
   return records;
 }
 
-async function isDirty(worktreePath: string, gitOptions: GitProcessOptions) {
-  return Boolean((await new GitProcess(worktreePath, gitOptions).run("status", ["--porcelain=v2", "-z", "--untracked-files=all"])).stdout);
+async function worktreeChangeRecords(worktreePath: string, gitOptions: GitProcessOptions) {
+  const output = (await new GitProcess(worktreePath, gitOptions).run("status", ["--porcelain=v2", "-z", "--untracked-files=all"])).stdout;
+  return parsePorcelainV2(output).records;
 }
 
-function activeSessionsForWorktree<T extends { id: string; status?: string }>(sessions: T[], worktreePath: string, cwd: (session: T) => string | undefined) {
+async function isDirty(worktreePath: string, gitOptions: GitProcessOptions) {
+  return (await worktreeChangeRecords(worktreePath, gitOptions)).length > 0;
+}
+
+async function worktreeChangeSummary(target: InternalWorktree, gitOptions: GitProcessOptions) {
+  // A prunable or inaccessible worktree has no readable changes to carry.
+  if (target.prunable || !fs.existsSync(target.canonicalPath)) return { conflicts: 0, staged: 0, unstaged: 0, untracked: 0 };
+  return repositoryChangeSummary(await worktreeChangeRecords(target.canonicalPath, gitOptions));
+}
+
+async function worktreeChangeSignature(worktreePath: string, gitOptions: GitProcessOptions) {
+  const records = await worktreeChangeRecords(worktreePath, gitOptions);
+  return records.flatMap((record) => changeScopes(record).map((scope) => `${scope}\u0000${record.path}`)).sort().join("\n");
+}
+
+function moveWorktreeBlockers(target: InternalWorktree, main: InternalWorktree): RepositoryMoveWorktreeBlocker[] {
+  const blockers: RepositoryMoveWorktreeBlocker[] = [];
+  if (main.dirty) blockers.push("main-dirty");
+  // The move rewrites the main worktree's HEAD and working tree in place, so only a session
+  // that is running there would write into files that changed underneath it.
+  if (main.hostsRunningSession) blockers.push("main-session-occupied");
+  blockers.push(...MOVE_BLOCKERS_FROM_REMOVE.filter((blocker) => target.removeBlockers.includes(blocker)));
+  if (target.head.state === "detached") blockers.push("detached-head");
+  else if (target.head.state === "unborn") blockers.push("unborn-head");
+  return blockers;
+}
+
+function sessionsInWorktree<T extends { id: string }>(sessions: T[], worktreePath: string, cwd: (session: T) => string | undefined) {
   return sessions.filter((session) => {
-    if (["stopped", "exited", "failed", "closed", "terminated", "completed"].includes(session.status || "")) return false;
     const value = cwd(session);
     if (!value) return false;
     try { return withinRoot(fs.realpathSync(value), worktreePath); }
     catch { return path.isAbsolute(value) && withinRoot(path.resolve(value), worktreePath); }
   });
+}
+
+// AI sessions report `failed` when they end and app sessions report the process exit
+// statuses; anything else still holds a claim on the worktree directory.
+const TERMINAL_SESSION_STATUSES = new Set<string>(["stopped", "exited", "failed", "closed", "terminated", "completed"]);
+
+function isLiveSession(session: { status?: string }) {
+  return !TERMINAL_SESSION_STATUSES.has(session.status || "");
+}
+
+// `waiting` is an in-flight turn parked on an approval, so it counts as running.
+function isRunningAiSession(session: { status?: AiSessionLifecycle }) {
+  return session.status === "running" || session.status === "waiting";
+}
+
+// The app runtime reports `running` only while a process is attached: sessions restored
+// after a restart are rewritten to `exited`.
+function isRunningAppSession(session: { status?: AppSessionStatus }) {
+  return session.status === "running";
 }
 
 function sameManagedRef(left: ManagedWorktreeIntent["ref"], right: ManagedWorktreeIntent["ref"]) {

@@ -184,31 +184,45 @@ function changedPathVersions(root: string, records: ParsedStatusRecord[], indexS
   return result;
 }
 
+type ParsedChangeScope = RepositoryChanges["entries"][number]["scope"];
+
+// The summary keys are not spelled like the scopes, so the mapping is asserted
+// against the summary model instead of assumed.
+const SUMMARY_KEY = {
+  conflict: "conflicts",
+  staged: "staged",
+  unstaged: "unstaged",
+  untracked: "untracked",
+} as const satisfies Record<ParsedChangeScope, keyof RepositoryChanges["summary"]>;
+
+/** The single partition rule that maps one porcelain record to its change scopes. */
+export function changeScopes(record: ParsedStatusRecord): ParsedChangeScope[] {
+  if (record.kind === "unmerged") return ["conflict"];
+  if (record.kind === "untracked") return ["untracked"];
+  const scopes: ParsedChangeScope[] = [];
+  if (record.xy[0] !== ".") scopes.push("staged");
+  if (record.xy[1] !== ".") scopes.push("unstaged");
+  return scopes;
+}
+
+export function repositoryChangeSummary(records: ParsedStatusRecord[]): RepositoryChanges["summary"] {
+  const summary: RepositoryChanges["summary"] = { conflicts: 0, staged: 0, unstaged: 0, untracked: 0 };
+  for (const record of records) for (const scope of changeScopes(record)) summary[SUMMARY_KEY[scope]] += 1;
+  return summary;
+}
+
 function repositoryChanges(parsed: ParsedStatus, versions: Map<string, string>, snapshotId: string): RepositoryChanges {
   const entries: RepositoryChanges["entries"] = [];
   for (const record of parsed.records) {
     const status = changeStatus(record);
     const base = { path: record.path, oldPath: record.oldPath, status, binary: false };
-    const entry = (scope: RepositoryChanges["entries"][number]["scope"]) => ({
-      ...base,
-      scope,
-      version: hashId("version", [versions.get(record.path)!, scope]),
-    });
-    if (record.kind === "unmerged") entries.push(entry("conflict"));
-    else if (record.kind === "untracked") entries.push(entry("untracked"));
-    else {
-      if (record.xy[0] !== ".") entries.push(entry("staged"));
-      if (record.xy[1] !== ".") entries.push(entry("unstaged"));
+    for (const scope of changeScopes(record)) {
+      entries.push({ ...base, scope, version: hashId("version", [versions.get(record.path)!, scope]) });
     }
   }
   return {
     snapshotId,
-    summary: {
-      conflicts: entries.filter((entry) => entry.scope === "conflict").length,
-      staged: entries.filter((entry) => entry.scope === "staged").length,
-      unstaged: entries.filter((entry) => entry.scope === "unstaged").length,
-      untracked: entries.filter((entry) => entry.scope === "untracked").length,
-    },
+    summary: repositoryChangeSummary(parsed.records),
     entries,
   };
 }

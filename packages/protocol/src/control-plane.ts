@@ -134,6 +134,7 @@ function defaultControlledInstanceFeatures() {
     gitCliCredentialBroker: false,
     gitCredentialProxy: false,
     repositoryPathSearch: false,
+    repositoryWorktreeMoveToMain: false,
     aiSessionTimeline: emptyAiSessionTimelineCapabilities(),
     aiSessionConversationAttachments: emptyAiSessionConversationAttachmentCapabilities(),
     aiSessionProviders: emptyAiSessionProviderCapabilities(),
@@ -190,6 +191,8 @@ export const ControlledInstanceFeatureCapabilitiesSchema = z.object({
   gitCredentialProxy: z.boolean().optional(),
   // Compatibility for v0.0.32: absence disables repository-wide path search.
   repositoryPathSearch: z.boolean().optional(),
+  // Compatibility for v0.0.33: absence disables moving a worktree into the main worktree.
+  repositoryWorktreeMoveToMain: z.boolean().optional(),
   aiSessionTimeline: AiSessionTimelineCapabilitiesSchema.default(emptyAiSessionTimelineCapabilities),
   // Compatibility for v0.0.21: the additive wire field must remain optional.
   aiSessionConversationAttachments: AiSessionConversationAttachmentCapabilitiesSchema.optional(),
@@ -227,6 +230,7 @@ type NormalizedControlledInstanceCapabilities = ControlledInstanceCapabilities &
     gitCliCredentialBroker: boolean;
     gitCredentialProxy: boolean;
     repositoryPathSearch: boolean;
+    repositoryWorktreeMoveToMain: boolean;
     privateModelCatalog: boolean;
     browserTunnel: boolean;
     nodeAgentConnectionUpdate: boolean;
@@ -259,6 +263,7 @@ export function normalizeControlledInstanceCapabilities(capabilities: unknown): 
     "gitCliCredentialBroker",
     "gitCredentialProxy",
     "repositoryPathSearch",
+    "repositoryWorktreeMoveToMain",
   ] as const) {
     const parsed = z.boolean().safeParse(features[feature]);
     if (parsed.success) normalizedFeatures[feature] = parsed.data;
@@ -314,6 +319,10 @@ export function supportsGitCredentialProxy(capabilities: unknown) {
 
 export function supportsRepositoryPathSearch(capabilities: unknown) {
   return normalizeControlledInstanceCapabilities(capabilities).features.repositoryPathSearch;
+}
+
+export function supportsRepositoryWorktreeMoveToMain(capabilities: unknown) {
+  return normalizeControlledInstanceCapabilities(capabilities).features.repositoryWorktreeMoveToMain;
 }
 
 export function aiSessionConversationAttachmentCapabilities(capabilities: unknown): AiSessionConversationAttachmentCapabilities {
