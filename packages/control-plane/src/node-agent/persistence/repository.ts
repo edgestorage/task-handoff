@@ -5,6 +5,7 @@ import type { NodeAgentDatabase } from "./database.ts";
 import * as schema from "../stories/database/schema.ts";
 import { createTopologyRepositories } from "./topology-repository.ts";
 import { createModelRepositories } from "./model-repository.ts";
+import { createAgentRepositories } from "./agent-repository.ts";
 import { AccessRepository } from "./access-repository.ts";
 import { GitPersistenceRepository } from "./git-repository.ts";
 
@@ -75,6 +76,7 @@ export function createNodeAgentRepository(database: NodeAgentDatabase) {
     deletionIntents: ReturnType<typeof deletionIntentRepository>;
     topology: ReturnType<typeof createTopologyRepositories>;
     model: ReturnType<typeof createModelRepositories>;
+    agents: ReturnType<typeof createAgentRepositories>;
     access: AccessRepository;
     git: GitPersistenceRepository;
     transaction<T>(operation: (repository: NodeAgentRepository) => Promise<T>): Promise<T>;
@@ -124,6 +126,7 @@ export function createNodeAgentRepository(database: NodeAgentDatabase) {
     deletionIntents: deletionIntentRepository(db, read, mutate),
     topology: createTopologyRepositories(database.client),
     model: createModelRepositories(database.client),
+    agents: createAgentRepositories(database.client),
     access: new AccessRepository(database.client),
     git: new GitPersistenceRepository(database.client),
     transaction,

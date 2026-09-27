@@ -120,6 +120,20 @@
                     @toggle-trigger="toggleTrigger(entry, $event)"
                   />
                 </ContextMenu>
+                <div
+                  v-for="member in agentRunMemberDescendants(entry.session.id)"
+                  :key="member.key"
+                  class="story-tree-item story-agent-run-member-row"
+                  :style="storySessionTreeStyle((entry.depth || 0) + member.depth + 1)"
+                  :data-state="member.status"
+                >
+                  <span class="story-session-leading"><Boxes :size="14" /></span>
+                  <span class="story-tree-item-copy" :class="{ 'story-tree-item-detail': treeViewMode === 'detailed' }">
+                    <strong>{{ member.agentId }}</strong>
+                    <small>{{ t("agents.run.memberDescendant", { runId: member.runId, status: t(`agents.run.status.${member.status}`) }) }}</small>
+                  </span>
+                  <small v-if="treeViewMode === 'compact'" class="story-tree-item-hint" aria-hidden="true">{{ t(`agents.run.status.${member.status}`) }}</small>
+                </div>
                 </div>
                 </TransitionGroup>
                       <div v-if="!sessionsFor(story).length" class="story-tree-empty">{{ t("stories.noLinkedSessions") }}</div>
@@ -390,6 +404,20 @@
           <label class="story-agent-tool-option"><Checkbox :model-value="draftAgentToolPolicy.aiSessions" @update:model-value="draftAgentToolPolicy.aiSessions = $event === true" /><span>{{ t("stories.editor.agentToolAiSessions") }}</span></label>
         </template>
       </fieldset>
+      <fieldset v-if="editing && storyAgentEntriesState !== 'hidden'" class="story-agent-tool-settings" :disabled="saving || storyAgentEntriesState !== 'ready'">
+        <legend>{{ t("stories.editor.entryAgents") }}</legend>
+        <div v-if="storyAgentEntriesState === 'loading'" class="story-agent-tool-state" role="status">{{ t("stories.editor.entryAgentsLoading") }}</div>
+        <div v-else-if="storyAgentEntriesState === 'unsupported'" class="story-agent-tool-state">{{ t("stories.editor.entryAgentsUnsupported") }}</div>
+        <div v-else-if="storyAgentEntriesState === 'unavailable'" class="story-agent-tool-state" role="alert">{{ storyAgentEntriesError || t("stories.editor.entryAgentsUnavailable") }}</div>
+        <template v-else>
+          <p class="story-agent-entry-note">{{ t("stories.editor.entryAgentsScope") }}</p>
+          <div v-if="!storyAgentEntryCandidates.length" class="story-agent-tool-state">{{ t("stories.editor.entryAgentsEmpty") }}</div>
+          <label v-for="agent in storyAgentEntryCandidates" :key="agent.id" class="story-agent-tool-option">
+            <Checkbox :model-value="draftStoryAgentIds.includes(agent.id)" @update:model-value="toggleStoryAgentEntry(agent.id, $event === true)" />
+            <span class="story-agent-entry-copy"><span>{{ agent.name }}</span><small v-if="agent.missing"><CircleAlert :size="13" />{{ t("stories.editor.entryAgentMissing", { id: agent.id }) }}</small></span>
+          </label>
+        </template>
+      </fieldset>
       <div v-if="storyEditorError" class="story-editor-error" role="alert">{{ storyEditorError }}</div>
     </div><DialogFooter><Button variant="outline" @click="editorOpen = false">{{ t("common.actions.cancel") }}</Button><Button :disabled="!draftTitle.trim() || !draftNodeId || saving" @click="saveStory">{{ saving ? t("stories.editor.saving") : t("common.actions.save") }}</Button></DialogFooter></DialogContent>
   </Dialog>
@@ -450,7 +478,7 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch, type CSSProperties } from "vue";
 import { useI18n } from "vue-i18n";
 import { useQueryClient } from "@tanstack/vue-query";
-import { Archive, BookOpen, CalendarClock, ChevronLeft, ChevronRight, CircleAlert, CircleX, Download, FileText, History, Link, LoaderCircle, MessageSquare, MessageSquarePlus, MoreHorizontal, Pencil, Play, Plus, RotateCcw, Trash2, X } from "@lucide/vue";
+import { Archive, BookOpen, Boxes, CalendarClock, ChevronLeft, ChevronRight, CircleAlert, CircleX, Download, FileText, History, Link, LoaderCircle, MessageSquare, MessageSquarePlus, MoreHorizontal, Pencil, Play, Plus, RotateCcw, Trash2, X } from "@lucide/vue";
 import AiSessionStatusIndicator from "../../../components/ai-session/AiSessionStatusIndicator.vue";
 import AiSessionStreamingMarkdown from "../../../components/ai-session/AiSessionStreamingMarkdown.vue";
 import { Button } from "../../../components/ui/button";
@@ -465,6 +493,7 @@ import { Tabs, TabsList, TabsTrigger } from "../../../components/ui/tabs";
 import { Popover, PopoverContent, PopoverTrigger } from "../../../components/ui/popover";
 import ControlPlaneSelect from "../shared/ControlPlaneSelect.vue";
 import ControlPlaneSelectItem from "../shared/ControlPlaneSelectItem.vue";
+import { useResizablePane } from "../shared/useResizablePane";
 import { ContextMenu, ContextMenuTrigger } from "../../../components/ui/context-menu";
 import AiSessionCardContextMenu from "../../../components/ai-session/AiSessionCardContextMenu.vue";
 import AiSessionRenameDialog from "../../../components/ai-session/AiSessionRenameDialog.vue";
@@ -475,18 +504,20 @@ import DocumentTreeContextMenu from "./DocumentTreeContextMenu.vue";
 import StoryActionEditorContent from "./StoryActionEditorContent.vue";
 import StoryActionAutomations from "./StoryActionAutomations.vue";
 import { storyAutomationDayOfMonthLabel } from "./storyAutomationPresentation";
-import { closeAiSession, getAiSessionHistory, getStoryRetentionSettings } from "../../../api/queries";
+import { closeAiSession, getAiSessionHistory, getStoryRetentionSettings, useAgentRunsQuery } from "../../../api/queries";
 import { useStoryCatalog } from "./useStoryCatalog";
 import { sharedControlPlaneClient } from "../../../api/sharedClient.ts";
 import { controlPlaneQueryKeys } from "../../../api/queryKeys.ts";
 import { showControlPlaneToast, showDelayedControlPlaneLoadingToast } from "../useControlPlaneToasts";
 import { translateApiError } from "../../../i18n/apiError";
 import { createBrowserUuid } from "../../../lib/random-id";
+import { isFeatureEnabled } from "../../../lib/featureFlags";
 import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions, Node, NodeLocalFolder } from "../../../api/types";
 import { STORY_DEFAULT_MAX_IDLE_AI_SESSIONS, STORY_MAX_IDLE_AI_SESSIONS, STORY_MIN_IDLE_AI_SESSIONS, type Story, type StoryAction, type StoryAutomationRun, type StoryAutomationSchedule, type StoryAutomationStatus, type StorySessionPreset } from "@task-handoff/protocol/stories";
 import { DEFAULT_STORY_AGENT_TOOL_POLICY, type StoryAgentToolPolicy } from "@task-handoff/protocol/story-agent-tools";
 import { nodeAgentCapabilitiesFromPublicNode, nodeStoryAgentToolCapabilities } from "@task-handoff/protocol/node-agent-capabilities";
 import type { AiSessionHistoryItem } from "@task-handoff/protocol/ai-sessions";
+import type { AgentRun, AgentRunMember } from "@task-handoff/protocol/agent-runs";
 import {
   aiSessionAncestorIds,
   deriveAiSessionForest,
@@ -500,7 +531,8 @@ import { latestStoryDocuments, STORY_TREE_DOCUMENT_LIMIT } from "./storyDocument
 import { normalizeManualStoryOrder, reorderStoryKeys, reuseEqualStoryActivityTimes, sortStories, storyDropTargetAt, storySortKey, type StorySortMode } from "./storySort";
 import { isStoryOnline, isStorySessionOnline } from "./storyAvailability";
 import { useAiSessionTriggers } from "../useAiSessionTriggers";
-import { allStoryNodes, storyNodeIsVisible, type StoryNodeFilter } from "@task-handoff/control-plane-client";
+import { allNodesVisible, controlPlaneAgentCapabilities, nodeIsVisible, type NodeVisibilityFilter } from "@task-handoff/control-plane-client";
+import type { AgentDefinition } from "@task-handoff/protocol/agent-definitions";
 import { storySelectionKey, type StorySelection } from "./storySelection";
 import type { HeaderDensity } from "../useWorkbenchLayoutPreferences";
 
@@ -511,15 +543,16 @@ const props = withDefaults(defineProps<{
   launchingApp?: boolean;
   nodes: Node[];
   nodeLocalFoldersByNodeId?: Record<string, NodeLocalFolder[]>;
-  nodeFilter?: StoryNodeFilter;
+  nodeFilter?: NodeVisibilityFilter;
   selection?: StorySelection;
 }>(), {
   headerDensity: "normal",
   launchingApp: false,
   nodeLocalFoldersByNodeId: () => ({}),
-  nodeFilter: allStoryNodes,
+  nodeFilter: allNodesVisible,
 });
 const { locale, t } = useI18n();
+const agentRunsQuery = useAgentRunsQuery(isFeatureEnabled("agentRuns"));
 const projectFolderChooserFor = (instance: InstanceWithAiSessions | undefined) => (
   canUseNativeProjectFolderPicker(instance, Boolean(props.chooseProjectFolder)) ? props.chooseProjectFolder : undefined
 );
@@ -593,7 +626,7 @@ let dragStartOrder: string[] = [];
 const storyCatalog = useStoryCatalog();
 const { boundTriggers, isTriggerBound, toggleTrigger, triggerActionKey, triggerBusyKey, triggerTemplates } = useAiSessionTriggers();
 const allStories = computed(() => storyCatalog.stories.value);
-const filteredStories = computed(() => allStories.value.filter((story) => storyNodeIsVisible(props.nodeFilter, story.ownerNodeId)));
+const filteredStories = computed(() => allStories.value.filter((story) => nodeIsVisible(props.nodeFilter, story.ownerNodeId)));
 const storySessionRecords = computed<StorySessionRecord[]>(() => props.instances.flatMap((instance) => (
   (instance.aiSessions.sessions || []).map((session) => ({ ...session, instanceId: instance.id }))
 )));
@@ -846,35 +879,42 @@ function handleStorySortKeydown(event: KeyboardEvent, story: Story) {
   persistManualStoryOrder();
   storyReorderAnnouncement.value = t("stories.sort.reordered", { title: story.title });
 }
-const SIDEBAR_WIDTH_STORAGE_KEY = "task-handoff.control-plane.stories.sidebar-width";
-const SIDEBAR_LAYOUT_ANIMATION_MS = 200;
-function storedSidebarWidth() {
-  try {
-    const value = Number(window.localStorage?.getItem(SIDEBAR_WIDTH_STORAGE_KEY));
-    return Number.isFinite(value) ? Math.min(520, Math.max(240, value)) : 320;
-  } catch { return 320; }
-}
-const SIDEBAR_COLLAPSE_MODE_KEY = "task-handoff.control-plane.stories.sidebar-collapse-mode";
-function storedSidebarCollapsed() {
-  try {
-    const value = window.localStorage?.getItem(SIDEBAR_COLLAPSE_MODE_KEY);
-    return value === "collapsed";
-  } catch { return false; }
-}
-const sidebarWidth = ref(storedSidebarWidth()); const workspaceEl = ref<HTMLElement>(); const resizingSidebar = ref(false); let resizingPointerId: number | undefined;
-const sidebarCollapsed = ref(storedSidebarCollapsed());
-const sidebarLayoutWidth = computed(() => sidebarCollapsed.value ? "11px" : `${sidebarWidth.value}px`);
-const sidebarOverlayOpen = ref(false);
-let sidebarOverlayCloseTimer: number | undefined;
-let sidebarResizeMoved = false;
-const sidebarLayoutAnimating = ref(false);
-let sidebarLayoutAnimationTimer: number | undefined;
+// 列表栏的拖拽/折叠交互与 Agent 视图共用同一份实现。
+const {
+  paneEl: workspaceEl, paneWidth: sidebarWidth, paneCollapsed: sidebarCollapsed,
+  paneLayoutWidth: sidebarLayoutWidth, paneResizing: resizingSidebar, paneOverlayOpen: sidebarOverlayOpen,
+  paneLayoutAnimating: sidebarLayoutAnimating, startResize: startSidebarResize,
+  toggleCollapsed: toggleSidebarCollapsed, openOverlay: openSidebarOverlay,
+  scheduleOverlayClose: scheduleSidebarOverlayClose,
+} = useResizablePane({
+  widthStorageKey: "task-handoff.control-plane.stories.sidebar-width",
+  collapseStorageKey: "task-handoff.control-plane.stories.sidebar-collapse-mode",
+  defaultWidth: 320,
+  minWidth: 240,
+  maxWidth: 520,
+});
 const previewText = ref(""); const previewLoading = ref(false); const previewError = ref("");
 const editorOpen = ref(false); const editing = ref(false); const draftTitle = ref(""); const draftDescription = ref(""); const draftNodeId = ref(""); const draftMaxIdleAiSessions = ref(STORY_DEFAULT_MAX_IDLE_AI_SESSIONS); const saving = ref(false);
 const draftAgentToolPolicy = ref<StoryAgentToolPolicy>({ ...DEFAULT_STORY_AGENT_TOOL_POLICY });
 const savedAgentToolPolicy = ref<StoryAgentToolPolicy>({ ...DEFAULT_STORY_AGENT_TOOL_POLICY });
 const agentToolSettingsState = ref<"hidden" | "loading" | "ready" | "unsupported" | "unavailable">("hidden");
 const agentToolSettingsError = ref("");
+const storyAgentEntriesState = ref<"hidden" | "loading" | "ready" | "unsupported" | "unavailable">("hidden");
+const storyAgentEntriesError = ref("");
+const storyAgentEntryRevision = ref("");
+const storyAgentDefinitions = ref<AgentDefinition[]>([]);
+const draftStoryAgentIds = ref<string[]>([]);
+const savedStoryAgentIds = ref<string[]>([]);
+const missingStoryAgentIds = ref<string[]>([]);
+const storyAgentEntryCandidates = computed(() => {
+  const definitions = new Map(storyAgentDefinitions.value.map((agent) => [agent.id, agent]));
+  return [
+    ...storyAgentDefinitions.value.map((agent) => ({ id: agent.id, name: agent.name, missing: false })),
+    ...missingStoryAgentIds.value
+      .filter((agentId) => !definitions.has(agentId))
+      .map((agentId) => ({ id: agentId, name: agentId, missing: true })),
+  ];
+});
 const storyEditorError = ref("");
 const editingStoryTitle = ref(false); const storyTitleDraft = ref(""); const storyTitleInput = ref<HTMLInputElement>(); const savingStoryTitle = ref(false); const storyTitleEditWidth = ref(0);
 const newSessionInstanceId = ref(""); const newSessionInitialCwd = ref(""); const newSessionInitialCwdFolderId = ref(""); const assignSessionOpen = ref(false); const assignSessionId = ref(""); const assigningSession = ref(false);
@@ -906,6 +946,42 @@ const sessionEntriesForRoots = (roots: AiSessionTreeNode<StorySessionRecord>[]):
   hasChildren: node.children.length > 0,
 })).filter((entry) => Boolean(entry.instance));
 const sessionsFor = (story: Story): SessionEntry[] => sessionEntriesForRoots(storySessionRootsFor(story));
+type AgentRunMemberDescendant = Pick<AgentRunMember, "agentId" | "memberId" | "status"> & { key: string; runId: string; depth: number };
+function agentRunMemberDescendants(sessionId: string): AgentRunMemberDescendant[] {
+  const runs = agentRunsQuery.data.value?.runs ?? [];
+  return runs.flatMap(({ nodeId, run }) => run.provenance.source !== "control-plane" && run.provenance.initiatingAiSessionId === sessionId
+    ? agentRunDescendants(nodeId, run)
+    : []);
+}
+function agentRunDescendants(nodeId: string, run: AgentRun): AgentRunMemberDescendant[] {
+  const members = run.members ?? [];
+  const byParent = new Map<string, AgentRunMember[]>();
+  const byId = new Map(members.map((member) => [member.memberId, member]));
+  for (const member of members) {
+    if (!member.parentMemberId) continue;
+    byParent.set(member.parentMemberId, [...(byParent.get(member.parentMemberId) ?? []), member]);
+  }
+  const rows: AgentRunMemberDescendant[] = [];
+  const visited = new Set<string>();
+  const visit = (member: AgentRunMember, depth: number) => {
+    if (visited.has(member.memberId)) return;
+    visited.add(member.memberId);
+    rows.push({
+      key: `${nodeId}:${run.runId}:${member.memberId}`,
+      runId: run.runId,
+      memberId: member.memberId,
+      agentId: member.agentId,
+      status: member.status,
+      depth,
+    });
+    for (const child of byParent.get(member.memberId) ?? []) visit(child, depth + 1);
+  };
+  for (const member of members) {
+    if (!member.parentMemberId || !byId.has(member.parentMemberId)) visit(member, 0);
+  }
+  for (const member of members) visit(member, 0);
+  return rows;
+}
 const allSessionsForStory = (story: Story): SessionEntry[] => storySessionRecords.value
   .filter((session) => session.storyId === story.id && session.actions?.close !== false && targetInstance(session.instanceId)?.node?.id === story.ownerNodeId)
   .map((session) => ({ instance: targetInstance(session.instanceId)!, session, depth: 0, hasChildren: false }))
@@ -1266,39 +1342,6 @@ function openStoryRepositoryWorkspace(target: RepositoryWorkspaceTabTarget) {
   if (!selectedSessionInstance.value) return;
   emit("open-repository-workspace", { ...target, instanceId: selectedSessionInstance.value.id });
 }
-function startSidebarResize(event: PointerEvent) { if (window.matchMedia("(max-width: 800px)").matches || !workspaceEl.value) return; resizingSidebar.value = true; sidebarResizeMoved = false; resizingPointerId = event.pointerId; (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId); window.addEventListener("pointermove", resizeSidebar); window.addEventListener("pointerup", stopSidebarResize); window.addEventListener("pointercancel", stopSidebarResize); }
-function resizeSidebar(event: PointerEvent) { if (!resizingSidebar.value || event.pointerId !== resizingPointerId || !workspaceEl.value) return; sidebarResizeMoved = true; sidebarWidth.value = Math.min(520, Math.max(240, event.clientX - workspaceEl.value.getBoundingClientRect().left)); }
-function stopSidebarResize(event?: PointerEvent) { if (event && resizingPointerId !== undefined && event.pointerId !== resizingPointerId) return; resizingSidebar.value = false; resizingPointerId = undefined; window.removeEventListener("pointermove", resizeSidebar); window.removeEventListener("pointerup", stopSidebarResize); window.removeEventListener("pointercancel", stopSidebarResize); }
-function toggleSidebarCollapsed() {
-  if (sidebarResizeMoved) { sidebarResizeMoved = false; return; }
-  sidebarCollapsed.value = !sidebarCollapsed.value;
-  try { window.localStorage?.setItem(SIDEBAR_COLLAPSE_MODE_KEY, sidebarCollapsed.value ? "collapsed" : "expanded"); } catch { /* Local storage is optional. */ }
-  if (!sidebarCollapsed.value) sidebarOverlayOpen.value = false;
-}
-function openSidebarOverlay() {
-  if (!sidebarCollapsed.value) return;
-  if (sidebarOverlayCloseTimer !== undefined) window.clearTimeout(sidebarOverlayCloseTimer);
-  sidebarOverlayCloseTimer = undefined;
-  sidebarOverlayOpen.value = true;
-}
-function scheduleSidebarOverlayClose() {
-  if (!sidebarCollapsed.value) return;
-  if (sidebarOverlayCloseTimer !== undefined) window.clearTimeout(sidebarOverlayCloseTimer);
-  sidebarOverlayCloseTimer = window.setTimeout(() => {
-    sidebarOverlayOpen.value = false;
-    sidebarOverlayCloseTimer = undefined;
-  }, 150);
-}
-function playSidebarLayoutAnimation() {
-  if (sidebarLayoutAnimationTimer !== undefined) window.clearTimeout(sidebarLayoutAnimationTimer);
-  sidebarLayoutAnimating.value = true;
-  sidebarLayoutAnimationTimer = window.setTimeout(() => {
-    sidebarLayoutAnimationTimer = undefined;
-    sidebarLayoutAnimating.value = false;
-  }, SIDEBAR_LAYOUT_ANIMATION_MS);
-}
-watch(sidebarWidth, (width) => { try { window.localStorage?.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(width)); } catch { /* Local storage may be unavailable in restricted browser contexts. */ } });
-watch(sidebarCollapsed, playSidebarLayoutAnimation, { flush: "sync" });
 async function load(nodeId?: string) {
   error.value = "";
   try {
@@ -1369,10 +1412,11 @@ function openCreate() {
   editing.value = false;
   storyEditorError.value = "";
   agentToolSettingsState.value = "hidden";
+  storyAgentEntriesState.value = "hidden";
   draftTitle.value = "";
   draftDescription.value = "";
   draftMaxIdleAiSessions.value = STORY_DEFAULT_MAX_IDLE_AI_SESSIONS;
-  const filteredOnlineNode = props.nodes.find((node) => node.status === "online" && storyNodeIsVisible(props.nodeFilter, node.id));
+  const filteredOnlineNode = props.nodes.find((node) => node.status === "online" && nodeIsVisible(props.nodeFilter, node.id));
   draftNodeId.value = filteredOnlineNode?.id || props.nodes.find((node) => node.status === "online")?.id || "";
   editorOpen.value = true;
 }
@@ -1382,16 +1426,27 @@ async function openEdit() {
   editing.value = true;
   storyEditorError.value = "";
   agentToolSettingsError.value = "";
+  storyAgentEntriesError.value = "";
   draftTitle.value = story.title;
   draftDescription.value = story.description || "";
   draftNodeId.value = story.ownerNodeId;
   draftMaxIdleAiSessions.value = STORY_DEFAULT_MAX_IDLE_AI_SESSIONS;
   draftAgentToolPolicy.value = { ...DEFAULT_STORY_AGENT_TOOL_POLICY };
   savedAgentToolPolicy.value = { ...DEFAULT_STORY_AGENT_TOOL_POLICY };
+  storyAgentEntryRevision.value = "";
+  storyAgentDefinitions.value = [];
+  draftStoryAgentIds.value = [];
+  savedStoryAgentIds.value = [];
+  missingStoryAgentIds.value = [];
   const ownerNode = props.nodes.find((node) => node.id === story.ownerNodeId);
   agentToolSettingsState.value = ownerNode?.status === "online"
     ? (nodeStoryAgentToolCapabilities(nodeAgentCapabilitiesFromPublicNode(ownerNode.capabilities)).policy ? "loading" : "unsupported")
     : "unavailable";
+  storyAgentEntriesState.value = !isFeatureEnabled("agentRuns")
+    ? "hidden"
+    : ownerNode?.status === "online"
+      ? (controlPlaneAgentCapabilities(ownerNode.capabilities).storyEntryAuthorization ? "loading" : "unsupported")
+      : "unavailable";
   try {
     const settings = await getStoryRetentionSettings(story.id, story.ownerNodeId);
     draftMaxIdleAiSessions.value = settings.maxIdleAiSessions;
@@ -1411,6 +1466,34 @@ async function openEdit() {
       agentToolSettingsError.value = translateApiError(cause, t, t("stories.editor.agentToolsUnavailable"));
     }
   }
+  if (storyAgentEntriesState.value === "loading") {
+    try {
+      const [entrySet, definitionAggregate] = await Promise.all([
+        sharedControlPlaneClient.agents.storyEntries(story.id, story.ownerNodeId),
+        sharedControlPlaneClient.agents.list(story.ownerNodeId),
+      ]);
+      const agentIds = entrySet.entries.map((entry) => entry.agentId);
+      storyAgentEntryRevision.value = entrySet.revision;
+      storyAgentDefinitions.value = definitionAggregate.agents
+        .filter((entry) => entry.nodeId === story.ownerNodeId)
+        .map((entry) => entry.agent);
+      draftStoryAgentIds.value = [...agentIds];
+      savedStoryAgentIds.value = [...agentIds];
+      missingStoryAgentIds.value = entrySet.entries
+        .filter((entry) => entry.status === "missing-reference")
+        .map((entry) => entry.agentId);
+      storyAgentEntriesState.value = "ready";
+    } catch (cause) {
+      storyAgentEntriesState.value = "unavailable";
+      storyAgentEntriesError.value = translateApiError(cause, t, t("stories.editor.entryAgentsUnavailable"));
+    }
+  }
+}
+function toggleStoryAgentEntry(agentId: string, selected: boolean) {
+  const entries = new Set(draftStoryAgentIds.value);
+  if (selected) entries.add(agentId);
+  else entries.delete(agentId);
+  draftStoryAgentIds.value = [...entries];
 }
 async function beginStoryTitleEdit(story: Story, event?: MouseEvent) {
   if (savingStoryTitle.value) return;
@@ -1607,6 +1690,23 @@ async function saveStory() {
       savedAgentToolPolicy.value = { ...settings.policy };
       showControlPlaneToast(t("stories.editor.agentToolsSaved"));
     }
+    const storyAgentEntriesChanged = editing.value
+      && story
+      && storyAgentEntriesState.value === "ready"
+      && JSON.stringify([...draftStoryAgentIds.value].sort()) !== JSON.stringify([...savedStoryAgentIds.value].sort());
+    if (storyAgentEntriesChanged && story) {
+      const entrySet = await sharedControlPlaneClient.agents.updateStoryEntries(story.id, story.ownerNodeId, {
+        expectedRevision: storyAgentEntryRevision.value,
+        agentIds: draftStoryAgentIds.value,
+      });
+      const agentIds = entrySet.entries.map((entry) => entry.agentId);
+      storyAgentEntryRevision.value = entrySet.revision;
+      draftStoryAgentIds.value = [...agentIds];
+      savedStoryAgentIds.value = [...agentIds];
+      missingStoryAgentIds.value = entrySet.entries.filter((entry) => entry.status === "missing-reference").map((entry) => entry.agentId);
+      queryClient.setQueryData(controlPlaneQueryKeys.storyAgentEntries(story.ownerNodeId, story.id), entrySet);
+      showControlPlaneToast(t("stories.editor.entryAgentsSaved"));
+    }
     editorOpen.value = false;
     await load(draftNodeId.value);
   } catch (cause) {
@@ -1636,10 +1736,7 @@ async function deleteStory(story: Story) {
 async function renameDocument(story: Story, storyPath: string, title: string) { const next = window.prompt(t("stories.confirm.documentTitle"), title)?.trim(); if (!next || next === title) return; const response = await fetch(`/api/stories/${encodeURIComponent(story.id)}/documents/${encodeURIComponent(storyPath)}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ nodeId: story.ownerNodeId, input: { title: next } }) }); if (!response.ok) { error.value = t("stories.errors.renameDocumentFailed"); return; } await load(story.ownerNodeId); const refreshed = stories.value.find((item) => item.id === story.id && item.ownerNodeId === story.ownerNodeId); if (refreshed) selectDocument(refreshed, storyPath); }
 async function deleteDocument(story: Story, storyPath: string) { if (!window.confirm(t("stories.confirm.deleteDocument"))) return; const response = await fetch(`/api/stories/${encodeURIComponent(story.id)}/documents/${encodeURIComponent(storyPath)}`, { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ nodeId: story.ownerNodeId }) }); if (!response.ok) { error.value = t("stories.errors.deleteDocumentFailed"); return; } await load(story.ownerNodeId); const refreshed = stories.value.find((item) => item.id === story.id && item.ownerNodeId === story.ownerNodeId); if (refreshed) selectStory(refreshed); }
 onBeforeUnmount(() => {
-  stopSidebarResize();
   cancelStoryPointerDrag();
-  if (sidebarOverlayCloseTimer !== undefined) window.clearTimeout(sidebarOverlayCloseTimer);
-  if (sidebarLayoutAnimationTimer !== undefined) window.clearTimeout(sidebarLayoutAnimationTimer);
   storyDetailHeadResizeObserver?.disconnect();
   storyDetailHeadResizeObserver = undefined;
 });
@@ -1746,7 +1843,10 @@ onBeforeUnmount(() => {
 .story-session-resource-row:focus-within .story-session-leading:has(.story-session-disclosure) .story-session-semantic { opacity:0; }
 .story-session-resource-disclosure { width:28px; height:28px; }
 .story-session-tree-list { display:grid; gap:2px; min-width:0; }
-.story-session-tree-item-shell { min-width:0; max-height:64px; overflow:hidden; }
+.story-session-tree-item-shell { min-width:0; max-height:1000px; overflow:hidden; }
+.story-agent-run-member-row { padding-left:calc(8px + var(--story-session-tree-indent, 0px)); color:var(--text-muted); cursor:default; }
+.story-agent-run-member-row .story-session-leading { color:var(--text-muted); }
+.story-agent-run-member-row .story-tree-item-copy strong { font-weight:400; }
 .story-session-resource-list { display:contents; }
 .story-session-resource-row { max-height:72px; overflow:hidden; }
 .story-session-tree-enter-active,.story-session-tree-leave-active { transition:max-height 180ms ease,opacity 140ms ease,transform 180ms ease,padding-block 180ms ease; }
@@ -1882,6 +1982,9 @@ onBeforeUnmount(() => {
 .story-agent-tool-option { display:flex !important; grid-template-columns:none !important; flex-direction:row; align-items:center; min-height:38px; gap:10px !important; color:var(--text-strong) !important; }
 .story-agent-tool-option + .story-agent-tool-option { border-top:1px solid var(--line); }
 .story-agent-tool-state,.story-editor-error { color:var(--text-muted); font-size:12px; line-height:1.5; padding:10px 0; }
+.story-agent-entry-note { margin:4px 0 6px; color:var(--text-muted); font-size:12px; line-height:1.5; }
+.story-agent-entry-copy { display:grid; min-width:0; gap:2px; font-weight:400; }
+.story-agent-entry-copy small { display:flex; align-items:center; min-width:0; gap:5px; color:var(--status-warning); font-size:12px; font-weight:400; overflow-wrap:anywhere; }
 .story-editor-error { color:var(--danger); padding:0; }
 :global(.story-editor-dialog) { max-width:460px; }
 .story-history-drawer-drag-region { -webkit-app-region:drag; height:var(--control-plane-titlebar-height); flex:0 0 var(--control-plane-titlebar-height); border-bottom:1px solid var(--line); }

@@ -32,6 +32,7 @@ test("policy updates configure provider sessions, reject stale calls, and refres
   let enabledTools = [
     "story_list_content", "story_get_content", "story_set_content", "story_list_actions", "story_run_action",
   ];
+  let allowedAgentIds = ["agent_reviewer"];
   let policyRevision = revision("a");
   const fetchImpl = async (url, init = {}) => {
     const parsed = new URL(String(url));
@@ -52,6 +53,10 @@ test("policy updates configure provider sessions, reject stale calls, and refres
       },
       revision: policyRevision,
       enabledTools,
+      agentInvocation: {
+        enabledTools: allowedAgentIds.length ? ["agent_run"] : [],
+        allowedAgentIds,
+      },
     } });
   };
   const registration = new NodeAgentRegistrationClient({
@@ -101,12 +106,14 @@ test("policy updates configure provider sessions, reject stale calls, and refres
   const codexCreate = events.find((event) => event.agent === "codex" && event.phase === "create");
   assert.deepEqual(codexCreate.projection, {
     "mcp_servers.task_handoff_story.enabled": true,
-    "mcp_servers.task_handoff_story.enabled_tools": enabledTools,
+    "mcp_servers.task_handoff_story.enabled_tools": [...enabledTools, "agent_run"],
   });
   const openCodeCreate = events.find((event) => event.agent === "opencode" && event.phase === "create");
   assert.equal(openCodeCreate.projection.findLast((rule) => rule.permission === "story_run_action").action, "allow");
+  assert.equal(openCodeCreate.projection.findLast((rule) => rule.permission === "agent_run").action, "allow");
 
   enabledTools = [];
+  allowedAgentIds = [];
   policyRevision = revision("b");
   registration.invalidateStoryAgentTools({ storyId: "story_1", revision: policyRevision });
   await assert.rejects(
@@ -120,4 +127,5 @@ test("policy updates configure provider sessions, reject stale calls, and refres
   assert.equal(codexTurn.projection, "session-config-unchanged");
   const openCodeTurn = events.findLast((event) => event.agent === "opencode" && event.phase === "turn");
   assert.equal(openCodeTurn.projection.findLast((rule) => rule.permission === "story_list_content").action, "deny");
+  assert.equal(openCodeTurn.projection.findLast((rule) => rule.permission === "agent_run").action, "deny");
 });

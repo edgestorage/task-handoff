@@ -11,6 +11,7 @@ import {
 } from "@task-handoff/protocol/stories";
 import type { AiSessionStatus } from "@task-handoff/protocol/ai-sessions";
 import type { NodeAgentRegistrationClient } from "./node-agent-client.ts";
+import { AgentInvocationToolInputSchema } from "@task-handoff/protocol/agent-invocation-tools";
 import {
   StoryAgentContentGetResultSchema,
   StoryAgentContentListInputSchema,
@@ -53,9 +54,14 @@ function requireWithinWorkspace(session: AiSessionStatus, candidate: string, mus
 
 export class StoryAgentToolService {
   private readonly nodeAgent: NodeAgentRegistrationClient;
+  private readonly memberForSession?: (sessionId: string) => { runId: string; memberId: string } | undefined;
 
-  constructor(nodeAgent: NodeAgentRegistrationClient) {
+  constructor(
+    nodeAgent: NodeAgentRegistrationClient,
+    memberForSession?: (sessionId: string) => { runId: string; memberId: string } | undefined,
+  ) {
     this.nodeAgent = nodeAgent;
+    this.memberForSession = memberForSession;
   }
 
   async list(session: AiSessionStatus, page = 1, pageSize = 20) {
@@ -68,6 +74,9 @@ export class StoryAgentToolService {
   }
 
   async invoke(session: AiSessionStatus, tool: string, value: unknown, signal?: AbortSignal) {
+    if (tool === "agent_run") {
+      throw storyToolError("AGENT_INVOCATION_IDENTITY_REQUIRED", "Agent invocation requires a provider-owned call identity.", 400);
+    }
     if (tool === "story_list_content") {
       const { page, pageSize } = StoryAgentContentListInputSchema.parse(value ?? {});
       return this.list(session, page, pageSize);
@@ -77,6 +86,14 @@ export class StoryAgentToolService {
     const name = StoryAgentToolNameSchema.parse(tool);
     this.requireStory(session);
     return this.nodeAgent.invokeStoryAgentTool(session.id, name, value);
+  }
+
+  async invokeAgentRun(session: AiSessionStatus, value: unknown, clientRequestId: string) {
+    const input = AgentInvocationToolInputSchema.parse(value);
+    const member = this.memberForSession?.(session.id);
+    if (member) return this.nodeAgent.invokeAgentRunForMember(member.runId, member.memberId, session.id, clientRequestId, input);
+    this.requireStory(session);
+    return this.nodeAgent.invokeAgentRun(session.id, clientRequestId, input);
   }
 
   async get(session: AiSessionStatus, value: unknown, signal?: AbortSignal) {

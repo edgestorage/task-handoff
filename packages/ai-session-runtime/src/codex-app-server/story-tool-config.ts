@@ -1,6 +1,6 @@
-import type { StoryAgentToolName } from "@task-handoff/protocol/story-agent-tools";
+import type { AiSessionAgentToolName } from "@task-handoff/protocol/ai-session-agent-tools";
 
-export function codexThreadConfig(reasoningEffort?: string, storyAgentTools?: StoryAgentToolName[]): Record<string, unknown> {
+export function codexThreadConfig(reasoningEffort?: string, storyAgentTools?: AiSessionAgentToolName[]): Record<string, unknown> {
   return {
     ...(reasoningEffort ? { model_reasoning_effort: reasoningEffort } : {}),
     ...(storyAgentTools ? {

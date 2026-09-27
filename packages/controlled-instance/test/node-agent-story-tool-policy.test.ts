@@ -24,13 +24,14 @@ test("registration client fetches, sanitizes, caches, and invalidates Story tool
       policy: { content: true, actions: true, automations: false, aiSessions: false, future: true },
       revision,
       enabledTools: ["story_list_content", "story_list_actions", "future_tool"],
+      agentInvocation: { enabledTools: ["agent_run"], allowedAgentIds: ["agent_one"] },
       future: "ignored",
     } }), { headers: { "content-type": "application/json" } });
   }) as typeof fetch);
 
   assert.deepEqual(await registration.resolveStoryAgentToolsForStory("story_one"), {
     storyId: "story_one",
-    enabledTools: ["story_list_content", "story_list_actions"],
+    enabledTools: ["story_list_content", "story_list_actions", "agent_run"],
     revision,
     source: "node-agent",
   });

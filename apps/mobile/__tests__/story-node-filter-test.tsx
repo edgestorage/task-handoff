@@ -1,6 +1,6 @@
 import { act, render, waitFor } from '@testing-library/react-native';
 import { Text } from 'react-native';
-import type { StoryNodeFilter } from '@task-handoff/control-plane-client';
+import type { NodeVisibilityFilter } from '@task-handoff/control-plane-client';
 
 import { StoryNodeFilterProvider, useStoryNodeFilter } from '../src/stories/use-story-node-filter';
 
@@ -14,7 +14,7 @@ jest.mock('../src/directories/use-directories', () => ({
 }));
 
 test('Story node filters are isolated by Control Plane and keep their setter stable', async () => {
-  let setFilter: ((filter: StoryNodeFilter) => void) | undefined;
+  let setFilter: ((filter: NodeVisibilityFilter) => void) | undefined;
   let previousSetFilter: typeof setFilter;
   function Consumer() {
     const value = useStoryNodeFilter();

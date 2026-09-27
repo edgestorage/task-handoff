@@ -161,9 +161,118 @@ ALTER TABLE na_stories ADD COLUMN agent_tools_automations INTEGER NOT NULL DEFAU
 ALTER TABLE na_stories ADD COLUMN agent_tools_ai_sessions INTEGER NOT NULL DEFAULT 0 CHECK(agent_tools_ai_sessions IN (0, 1));
 `;
 
+const agentDefinitionDomain = `
+CREATE TABLE na_agent_definitions (
+  id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+  appended_prompt TEXT NOT NULL DEFAULT '', target_instance_id TEXT NOT NULL, cwd_folder_id TEXT NOT NULL,
+  provider_id TEXT NOT NULL, model_entity_id TEXT, model_name TEXT, reasoning_effort TEXT, permission_mode TEXT,
+  execution_policy_json TEXT NOT NULL, revision TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE INDEX na_agent_definitions_target_instance_idx ON na_agent_definitions(target_instance_id);
+CREATE INDEX na_agent_definitions_updated_idx ON na_agent_definitions(updated_at);
+CREATE TABLE na_agent_callable_relations (
+  agent_id TEXT NOT NULL, callable_agent_id TEXT NOT NULL, created_at TEXT NOT NULL,
+  PRIMARY KEY (agent_id, callable_agent_id),
+  FOREIGN KEY (agent_id) REFERENCES na_agent_definitions(id) ON DELETE CASCADE ON UPDATE CASCADE
+);
+CREATE INDEX na_agent_callable_relations_target_idx ON na_agent_callable_relations(callable_agent_id);
+`;
+
+const agentRunDomain = `
+CREATE TABLE na_agent_runs (
+  run_id TEXT PRIMARY KEY NOT NULL, client_request_id TEXT NOT NULL UNIQUE,
+  revision INTEGER NOT NULL DEFAULT 0 CHECK(revision >= 0),
+  status TEXT NOT NULL CHECK(status IN ('queued','preparing','running','finalizing','completed','failed','cancelled')),
+  provenance_json TEXT NOT NULL, root_member_id TEXT NOT NULL, budget_json TEXT NOT NULL,
+  result_json TEXT, error_json TEXT, cleanup_json TEXT,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, completed_at TEXT
+);
+CREATE INDEX na_agent_runs_status_updated_idx ON na_agent_runs(status, updated_at);
+CREATE TABLE na_agent_run_members (
+  member_id TEXT PRIMARY KEY NOT NULL, run_id TEXT NOT NULL, agent_id TEXT NOT NULL,
+  parent_member_id TEXT, instance_id TEXT NOT NULL, ai_session_id TEXT,
+  role TEXT NOT NULL CHECK(role IN ('root','callee')), depth INTEGER NOT NULL CHECK(depth >= 0),
+  status TEXT NOT NULL CHECK(status IN ('queued','preparing','running','finalizing','completed','failed','cancelled')),
+  execution_snapshot_json TEXT NOT NULL, result_json TEXT, error_json TEXT,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, completed_at TEXT,
+  FOREIGN KEY (run_id) REFERENCES na_agent_runs(run_id) ON DELETE CASCADE ON UPDATE CASCADE,
+  FOREIGN KEY (parent_member_id) REFERENCES na_agent_run_members(member_id) ON DELETE RESTRICT ON UPDATE CASCADE
+);
+CREATE INDEX na_agent_run_members_run_idx ON na_agent_run_members(run_id, created_at, member_id);
+CREATE INDEX na_agent_run_members_parent_idx ON na_agent_run_members(parent_member_id);
+CREATE TABLE na_agent_run_timeline (
+  run_id TEXT NOT NULL, sequence INTEGER NOT NULL CHECK(sequence > 0), timestamp TEXT NOT NULL,
+  kind TEXT NOT NULL, member_id TEXT, data_json TEXT NOT NULL,
+  PRIMARY KEY (run_id, sequence),
+  FOREIGN KEY (run_id) REFERENCES na_agent_runs(run_id) ON DELETE CASCADE ON UPDATE CASCADE,
+  FOREIGN KEY (member_id) REFERENCES na_agent_run_members(member_id) ON DELETE RESTRICT ON UPDATE CASCADE
+);
+`;
+
+const storyAgentEntryAuthorization = `
+CREATE TABLE na_story_agent_entries (
+  story_id TEXT NOT NULL, agent_id TEXT NOT NULL, created_at TEXT NOT NULL,
+  PRIMARY KEY (story_id, agent_id),
+  FOREIGN KEY (story_id) REFERENCES na_stories(id) ON DELETE CASCADE ON UPDATE CASCADE
+);
+CREATE INDEX na_story_agent_entries_agent_idx ON na_story_agent_entries(agent_id);
+`;
+
+const agentRunResultDelivery = `
+ALTER TABLE na_agent_runs ADD COLUMN result_delivery_json TEXT;
+`;
+
+const agentRunResourceOwnership = `
+CREATE UNIQUE INDEX na_agent_run_members_run_member_uq ON na_agent_run_members(run_id, member_id);
+CREATE TABLE na_agent_run_shared_spaces (
+  run_id TEXT PRIMARY KEY NOT NULL, runtime_id TEXT NOT NULL, generation_id TEXT NOT NULL,
+  state TEXT NOT NULL CHECK(state IN ('preparing','active','retained','expiring','delete-retrying','expired','manual-intervention')),
+  quota_bytes INTEGER NOT NULL CHECK(quota_bytes > 0), usage_bytes INTEGER NOT NULL DEFAULT 0 CHECK(usage_bytes >= 0),
+  expires_at TEXT, diagnostics_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+  FOREIGN KEY (run_id) REFERENCES na_agent_runs(run_id) ON DELETE CASCADE ON UPDATE CASCADE,
+  FOREIGN KEY (runtime_id) REFERENCES na_runtimes(id) ON DELETE RESTRICT ON UPDATE CASCADE
+);
+CREATE INDEX na_agent_run_shared_spaces_runtime_expiry_idx ON na_agent_run_shared_spaces(runtime_id, expires_at);
+CREATE TABLE na_agent_run_resources (
+  resource_id TEXT PRIMARY KEY NOT NULL, run_id TEXT NOT NULL, member_id TEXT, instance_id TEXT, runtime_id TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK(kind IN ('provider-thread','overlay-mount','overlay-run-directory','shared-space-directory','helper-container','sandbox-container')),
+  generation_id TEXT NOT NULL, backend_identity TEXT NOT NULL,
+  phase TEXT NOT NULL CHECK(phase IN ('preparing','ready','deleting','delete-retrying','deleted','manual-intervention')),
+  cleanup_attempts INTEGER NOT NULL DEFAULT 0 CHECK(cleanup_attempts >= 0), metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+  FOREIGN KEY (run_id) REFERENCES na_agent_runs(run_id) ON DELETE CASCADE ON UPDATE CASCADE,
+  FOREIGN KEY (run_id, member_id) REFERENCES na_agent_run_members(run_id, member_id) ON DELETE CASCADE ON UPDATE CASCADE,
+  UNIQUE (run_id, kind, backend_identity)
+);
+CREATE INDEX na_agent_run_resources_run_phase_idx ON na_agent_run_resources(run_id, phase);
+`;
+
+const agentRunInput = `
+ALTER TABLE na_agent_runs ADD COLUMN input_json TEXT;
+`;
+
+const agentRunMemberInput = `
+ALTER TABLE na_agent_run_members ADD COLUMN input_json TEXT;
+`;
+
+const agentRunMemberRequestIdentity = `
+ALTER TABLE na_agent_run_members ADD COLUMN client_request_id TEXT;
+CREATE UNIQUE INDEX na_agent_run_members_request_uq ON na_agent_run_members(run_id, client_request_id)
+  WHERE client_request_id IS NOT NULL;
+`;
+
 // All Node Agent domains share this immutable migration sequence.
 export const nodeAgentMigrations = [
   migration("0001_story_domain", initialStoryDomain),
   migration("0002_p0_state_domains", p0StateDomains),
   migration("0003_story_agent_tool_policy", storyAgentToolPolicy),
+  migration("0004_agent_definition_domain", agentDefinitionDomain),
+  migration("0005_agent_run_domain", agentRunDomain),
+  migration("0006_story_agent_entry_authorization", storyAgentEntryAuthorization),
+  migration("0007_agent_run_result_delivery", agentRunResultDelivery),
+  migration("0008_agent_run_resource_ownership", agentRunResourceOwnership),
+  // Compatibility for v0.0.32: existing rows remain readable without a frozen input.
+  migration("0009_agent_run_input", agentRunInput),
+  migration("0010_agent_run_member_input", agentRunMemberInput),
+  migration("0011_agent_run_member_request_identity", agentRunMemberRequestIdentity),
 ] as const;

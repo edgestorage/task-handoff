@@ -10,6 +10,12 @@ const prepareDesktopRuntime = fs.readFileSync(path.join(root, "scripts", "prepar
 
 test("desktop releases build the shared official account feature flag into the UI", () => {
   assert.match(workflow, /TASK_HANDOFF_OFFICIAL_ACCOUNT_ENABLED: \$\{\{ vars\.TASK_HANDOFF_OFFICIAL_ACCOUNT_ENABLED \|\| vars\.TASK_HANDOFF_CLOUD_RELAY_ENABLED \|\| '0' \}\}/);
+  assert.match(workflow, /TASK_HANDOFF_AGENT_RUNS_ENABLED: \$\{\{ vars\.TASK_HANDOFF_AGENT_RUNS_ENABLED \|\| '0' \}\}/);
+});
+
+test("mobile releases pass the Agent Runs build flag through to Expo", () => {
+  const mobileWorkflow = fs.readFileSync(path.join(root, ".github/workflows/mobile-release.yml"), "utf8");
+  assert.match(mobileWorkflow, /TASK_HANDOFF_AGENT_RUNS_ENABLED: \$\{\{ vars\.TASK_HANDOFF_AGENT_RUNS_ENABLED \|\| '0' \}\}/);
 });
 
 test("local desktop runtime preparation follows the controlled-instance package version", () => {

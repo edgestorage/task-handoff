@@ -29,24 +29,13 @@ import {
   sanitizeStoryAgentToolPolicySettings,
 } from "@task-handoff/protocol/story-agent-tools";
 import type { ControlPlaneService } from "../application/service.ts";
+import { nodeJson } from "./node-agent-request.ts";
 
 const NodeQuerySchema = z.object({ nodeId: z.string().trim().min(1).max(120).optional() }).strict();
 const StoryRouteSchema = z.object({ storyId: StoryIdSchema }).strict();
 const StoryAutomationRouteSchema = StoryRouteSchema.extend({ automationId: z.string().trim().min(1).max(120) }).strict();
 const StoryActionRouteSchema = StoryRouteSchema.extend({ actionId: z.string().trim().min(1).max(120) }).strict();
 const StoryRouteQuerySchema = z.object({ nodeId: z.string().trim().min(1).max(120) }).strict();
-
-async function nodeJson(service: ControlPlaneService, nodeId: string, route: string, init: RequestInit = {}) {
-  const node = service.requireNode(nodeId);
-  const transport = service.resolveNodeAgentTransport(node);
-  const response = await transport.request(node, route, init);
-  const payload = await response.json().catch(() => ({})) as { data?: unknown; error?: { code?: string; message?: string } };
-  if (!response.ok) throw Object.assign(new Error(payload.error?.message || `Node agent request failed with HTTP ${response.status}.`), {
-    statusCode: response.status,
-    code: payload.error?.code || "NODE_AGENT_REQUEST_FAILED",
-  });
-  return payload.data;
-}
 
 async function requireStoryOnNode(service: ControlPlaneService, storyId: string, nodeId: string) {
   const story = StorySchema.parse(await nodeJson(service, nodeId, `/stories/${encodeURIComponent(storyId)}`));

@@ -1,4 +1,5 @@
 import type { ControlPlaneMessages } from "../en-US/index.ts";
+import { agents } from "./agents.ts";
 import { auth } from "./auth.ts";
 import { common } from "./common.ts";
 import { errors } from "./errors.ts";
@@ -11,6 +12,7 @@ import { stories } from "./stories.ts";
 import { triggers } from "./triggers.ts";
 
 export const zhCN = {
+  agents,
   auth,
   common,
   errors,

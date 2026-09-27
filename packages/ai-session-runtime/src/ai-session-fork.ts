@@ -5,7 +5,7 @@ import type { AiSessionForkInput, AiSessionForkResult, AiSessionStatus } from "@
 import { AiSessionForkInputSchema, AiSessionForkResultSchema } from "@task-handoff/protocol/ai-sessions";
 import { aiSessionControlError, type AiSessionController } from "./ai-session-control";
 import type { AiSessionRegistry } from "./ai-session-registry";
-import type { StoryAgentToolName } from "@task-handoff/protocol/story-agent-tools";
+import type { AiSessionAgentToolName } from "@task-handoff/protocol/ai-session-agent-tools";
 
 type ForkStage = "validated" | "workspace-prepared" | "provider-created" | "materialized" | "completed";
 
@@ -34,7 +34,7 @@ export type AiSessionForkCoordinatorOptions = {
   materializationTimeoutMs?: number;
   operationStorePath?: string;
   onDiagnostic?: (diagnostic: Record<string, unknown>) => void;
-  resolveStoryAgentTools?: (source: AiSessionStatus) => Promise<StoryAgentToolName[]>;
+  resolveStoryAgentTools?: (source: AiSessionStatus) => Promise<AiSessionAgentToolName[]>;
 };
 
 export class AiSessionForkCoordinator {

@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { loadStoryNodeFilter, persistStoryNodeFilter } from "../src/apps/control-plane/story/storyNodeFilterPreference.ts";
+import { loadNodeVisibilityFilter, persistNodeVisibilityFilter } from "../src/apps/control-plane/shared/nodeVisibilityPreference.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), "utf8");
@@ -11,6 +11,7 @@ const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), "u
 const workbench = read("src/apps/control-plane/ControlPlaneWorkbench.vue");
 const workbenchStyles = read("src/apps/control-plane/ControlPlaneWorkbench.css");
 const storyView = read("src/apps/control-plane/story/StoryView.vue");
+const agentView = read("src/apps/control-plane/agent/AgentView.vue");
 const appStyles = read("src/styles/app.css");
 
 test("workbench navigation orders Story before Board and AI", () => {
@@ -20,22 +21,31 @@ test("workbench navigation orders Story before Board and AI", () => {
   assert.match(workbenchStyles, /\[data-active-view="ai"\]::before \{\s*left: calc\(2px \+ \(100% - 4px\) \/ 4 \+ \(100% - 4px\) \/ 2\);/);
 });
 
-test("story mode replaces the instance switcher with a node filter", () => {
-  assert.match(workbench, /const storyNodeFilter = ref<StoryNodeFilter>\(loadStoryNodeFilter\(\)\);/);
-  assert.match(workbench, /watch\(storyNodeFilter, \(filter\) => persistStoryNodeFilter\(filter\)\);/);
-  assert.match(workbench, /const storyNodeFilterOpen = ref\(false\);/);
-  assert.match(workbench, /const storyNodeFilterOptions = computed\(\(\) => nodes\.data\.value \|\| \[\]\);/);
-  assert.match(workbench, /function selectStoryNodeFilter\(nodeId: string, event: MouseEvent\) \{[\s\S]*storyNodeFilter\.value = selectOnlyStoryNode\(nodeId\);/);
-  assert.match(workbench, /function toggleStoryNodeFilter\(nodeId: string, checked: boolean\)/);
-  assert.match(workbench, /<div v-else-if="storyMode && !standaloneMode" class="control-plane-title control-plane-instance-switcher-shell">/);
+test("Story and Agent views share the top-bar node filter", () => {
+  assert.match(workbench, /const nodeFilter = ref<NodeVisibilityFilter>\(loadNodeVisibilityFilter\(\)\);/);
+  assert.match(workbench, /watch\(nodeFilter, \(filter\) => persistNodeVisibilityFilter\(filter\)\);/);
+  assert.match(workbench, /const nodeFilterOpen = ref\(false\);/);
+  assert.match(workbench, /function selectNodeFilter\(nodeId: string, event: MouseEvent\) \{[\s\S]*nodeFilter\.value = selectOnlyNode\(nodeId\);/);
+  assert.match(workbench, /function toggleNodeFilter\(nodeId: string, checked: boolean\)/);
+  assert.match(workbench, /<div v-else-if="\(storyMode \|\| agentMode\) && !standaloneMode" class="control-plane-title control-plane-instance-switcher-shell">/);
+  assert.match(workbench, /const nodeFilterOptions = computed<\{ id: string; name: string; status\?: string \}\[\]>\(\(\) => \{[\s\S]*?agentCatalog\.catalog\.value\.nodes\.map\(\(node\) => \(\{ id: node\.id, name: node\.label \}\)\);/);
   assert.match(workbench, /t\("instances\.board\.allNodes"\)/);
-  assert.match(workbench, /:node-filter="storyNodeFilter"/);
-  assert.match(workbench, /@select="selectAllStoryNodes"/);
-  assert.match(workbench, /@click="selectStoryNodeFilter\(node\.id, \$event\)"/);
-  assert.match(workbench, /@update:model-value="toggleStoryNodeFilter\(node\.id, \$event === true\)"/);
-  assert.match(workbench, /class="control-plane-story-node-menu"/);
-  assert.match(workbench, /'--story-node-menu-height': `\$\{Math\.max\(storyNodeFilterOptions\.length \+ 1, 1\) \* 33 \+ 2\}px`/);
-  assert.match(workbenchStyles, /control-plane-story-node-menu-item[\s\S]*min-height: 32px/);
+  assert.match(workbench, /:node-filter="nodeFilter"/);
+  assert.match(workbench, /@select="selectAllNodes"/);
+  assert.match(workbench, /@click="selectNodeFilter\(node\.id, \$event\)"/);
+  assert.match(workbench, /@update:model-value="toggleNodeFilter\(node\.id, \$event === true\)"/);
+  assert.match(workbench, /class="control-plane-node-filter-menu"/);
+  assert.match(workbench, /'--node-filter-menu-height': `\$\{Math\.max\(nodeFilterOptions\.length \+ 1, 1\) \* 33 \+ 2\}px`/);
+  assert.match(workbenchStyles, /control-plane-node-filter-menu-item[\s\S]*min-height: 32px/);
+  assert.match(workbench, /<AgentView v-if="!standaloneMode && agentMode && !settingsMode" :node-filter="nodeFilter" \/>/);
+});
+
+test("Agent view keeps its list and graph on the same visible node set", () => {
+  assert.match(agentView, /nodeFilter\?: NodeVisibilityFilter/);
+  assert.match(agentView, /const visibleAgents = computed\(\(\) => catalog\.value\.agents\.filter\(\(agent\) => nodeIsVisible\(props\.nodeFilter, agent\.nodeId\)\)\);/);
+  assert.match(agentView, /:agents="visibleAgents"/);
+  assert.match(agentView, /return visibleAgents\.value\.filter/);
+  assert.match(agentView, /const groupedAgents = computed\(\(\) => agentCatalogGroups\(\{ \.\.\.catalog\.value, agents: filteredAgents\.value \}\)\);/);
 });
 
 function memoryStorage(initial = {}) {
@@ -47,33 +57,48 @@ function memoryStorage(initial = {}) {
   };
 }
 
-test("story node filter preference survives a reload per browser", () => {
+test("node visibility preference survives a reload per browser", () => {
   const storage = memoryStorage();
-  assert.deepEqual(loadStoryNodeFilter(storage), { kind: "all" });
+  assert.deepEqual(loadNodeVisibilityFilter(storage), { kind: "all" });
 
-  persistStoryNodeFilter({ kind: "selected", nodeIds: ["node-b"] }, storage);
-  assert.deepEqual(loadStoryNodeFilter(memoryStorage(Object.fromEntries(storage.values))), { kind: "selected", nodeIds: ["node-b"] });
+  persistNodeVisibilityFilter({ kind: "selected", nodeIds: ["node-b"] }, storage);
+  assert.deepEqual(loadNodeVisibilityFilter(memoryStorage(Object.fromEntries(storage.values))), { kind: "selected", nodeIds: ["node-b"] });
 
-  persistStoryNodeFilter({ kind: "all" }, storage);
-  assert.deepEqual(loadStoryNodeFilter(storage), { kind: "all" });
+  persistNodeVisibilityFilter({ kind: "all" }, storage);
+  assert.deepEqual(loadNodeVisibilityFilter(storage), { kind: "all" });
 });
 
-test("story node filter preference sanitizes malformed stored state", () => {
-  const key = "task-handoff.control-plane.story-node-filter";
+test("node visibility preference sanitizes malformed stored state", () => {
+  const key = "task-handoff.control-plane.node-visibility";
 
   for (const value of ["{", "[]", "\"selected\"", "null", JSON.stringify({ kind: "unknown" }), JSON.stringify({ kind: "selected" }), JSON.stringify({ kind: "selected", nodeIds: [] }), JSON.stringify({ kind: "selected", nodeIds: ["  ", 7] })]) {
-    assert.deepEqual(loadStoryNodeFilter(memoryStorage({ [key]: value })), { kind: "all" }, value);
+    assert.deepEqual(loadNodeVisibilityFilter(memoryStorage({ [key]: value })), { kind: "all" }, value);
   }
 
   assert.deepEqual(
-    loadStoryNodeFilter(memoryStorage({ [key]: JSON.stringify({ kind: "selected", nodeIds: [" node-a ", "node-a", "node-b"], futureField: true }) })),
+    loadNodeVisibilityFilter(memoryStorage({ [key]: JSON.stringify({ kind: "selected", nodeIds: [" node-a ", "node-a", "node-b"], futureField: true }) })),
     { kind: "selected", nodeIds: ["node-a", "node-b"] },
   );
 });
 
+test("node visibility preference reads the Story-only key once for existing browsers", () => {
+  const legacyKey = "task-handoff.control-plane.story-node-filter";
+  assert.deepEqual(
+    loadNodeVisibilityFilter(memoryStorage({ [legacyKey]: JSON.stringify({ kind: "selected", nodeIds: ["node-b"] }) })),
+    { kind: "selected", nodeIds: ["node-b"] },
+  );
+  assert.deepEqual(
+    loadNodeVisibilityFilter(memoryStorage({
+      "task-handoff.control-plane.node-visibility": JSON.stringify({ kind: "all" }),
+      [legacyKey]: JSON.stringify({ kind: "selected", nodeIds: ["node-b"] }),
+    })),
+    { kind: "all" },
+  );
+});
+
 test("story list filters by the selected owner node", () => {
-  assert.match(storyView, /nodeFilter\?: StoryNodeFilter/);
-  assert.match(storyView, /allStories\.value\.filter\(\(story\) => storyNodeIsVisible\(props\.nodeFilter, story\.ownerNodeId\)\)/);
+  assert.match(storyView, /nodeFilter\?: NodeVisibilityFilter/);
+  assert.match(storyView, /allStories\.value\.filter\(\(story\) => nodeIsVisible\(props\.nodeFilter, story\.ownerNodeId\)\)/);
   assert.match(storyView, /const stories = computed\(\(\) => \{[\s\S]*return sortStories\(filteredStories\.value, mode, storySortOptions\(mode\)\);/);
 });
 

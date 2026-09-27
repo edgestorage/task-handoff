@@ -3,6 +3,8 @@ import fs from "node:fs";
 import test from "node:test";
 
 const storyView = fs.readFileSync(new URL("../src/apps/control-plane/story/StoryView.vue", import.meta.url), "utf8");
+const agentView = fs.readFileSync(new URL("../src/apps/control-plane/agent/AgentView.vue", import.meta.url), "utf8");
+const resizablePane = fs.readFileSync(new URL("../src/apps/control-plane/shared/useResizablePane.ts", import.meta.url), "utf8");
 
 test("Story uses the same solid workspace background as AI Session", () => {
   assert.match(storyView, /\.story-view \{[^}]*background:var\(--workspace-bg\);/);
@@ -41,10 +43,13 @@ test("Story children keep compact spacing between expanded groups", () => {
 });
 
 test("Story list sidebar animates only its expand and collapse", () => {
-  assert.match(storyView, /const SIDEBAR_LAYOUT_ANIMATION_MS = 200;/);
+  // 拖拽/折叠交互由 Story 与 Agent 共用的 useResizablePane 承载，动画只挂在折叠状态上。
+  assert.match(resizablePane, /const animationMs = options\.animationMs \?\? 200;/);
+  assert.match(resizablePane, /function playLayoutAnimation\(\)[\s\S]*paneLayoutAnimating\.value = true;[\s\S]*window\.setTimeout\([\s\S]*paneLayoutAnimating\.value = false;/);
+  assert.match(resizablePane, /watch\(paneCollapsed, playLayoutAnimation, \{ flush: "sync" \}\)/);
+  assert.match(storyView, /useResizablePane\(\{[\s\S]*widthStorageKey: "task-handoff\.control-plane\.stories\.sidebar-width"[\s\S]*collapseStorageKey: "task-handoff\.control-plane\.stories\.sidebar-collapse-mode"/);
+  assert.match(agentView, /useResizablePane\(\{[\s\S]*widthStorageKey: "task-handoff\.control-plane\.agents\.sidebar-width"[\s\S]*collapseStorageKey: "task-handoff\.control-plane\.agents\.sidebar-collapse-mode"/);
   assert.match(storyView, /'story-workspace-animating': sidebarLayoutAnimating/);
-  assert.match(storyView, /function playSidebarLayoutAnimation\(\)[\s\S]*sidebarLayoutAnimating\.value = true;[\s\S]*window\.setTimeout\([\s\S]*sidebarLayoutAnimating\.value = false;/);
-  assert.match(storyView, /watch\(sidebarCollapsed, playSidebarLayoutAnimation, \{ flush: "sync" \}\)/);
   assert.match(storyView, /\.story-workspace \{[^}]*transition:none; \}/);
   assert.doesNotMatch(storyView, /\.story-workspace \{[^}]*transition:grid-template-columns/);
   assert.match(storyView, /\.story-workspace-animating \{ transition:grid-template-columns 180ms cubic-bezier\(\.2,0,0,1\); \}/);
@@ -114,4 +119,12 @@ test("Story documents and both session views paginate independently", () => {
   assert.match(storyView, /const storyCurrentSessionPage = ref\(1\);/);
   assert.match(storyView, /const storyHistoryPage = ref\(1\);/);
   assert.match(storyView, /class="story-pagination"/);
+});
+
+test("Agent Run member sessions are derived as read-only descendants of the initiating Story session", () => {
+  assert.match(storyView, /useAgentRunsQuery\(isFeatureEnabled\("agentRuns"\)\)/);
+  assert.match(storyView, /run\.provenance\.initiatingAiSessionId === sessionId/);
+  assert.match(storyView, /byParent\.set\(member\.parentMemberId/);
+  assert.match(storyView, /class="story-tree-item story-agent-run-member-row"/);
+  assert.doesNotMatch(storyView, /story-agent-run-member-row[\s\S]{0,400}@(?:click|keydown)/);
 });

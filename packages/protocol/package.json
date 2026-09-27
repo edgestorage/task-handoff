@@ -42,6 +42,26 @@
       "types": "./src/ai-session-provider-capabilities.ts",
       "default": "./src/ai-session-provider-capabilities.ts"
     },
+    "./ai-session-agent-tools": {
+      "types": "./src/ai-session-agent-tools.ts",
+      "default": "./src/ai-session-agent-tools.ts"
+    },
+    "./agent-definitions": {
+      "types": "./src/agent-definitions.ts",
+      "default": "./src/agent-definitions.ts"
+    },
+    "./agent-runs": {
+      "types": "./src/agent-runs.ts",
+      "default": "./src/agent-runs.ts"
+    },
+    "./agent-invocation-tools": {
+      "types": "./src/agent-invocation-tools.ts",
+      "default": "./src/agent-invocation-tools.ts"
+    },
+    "./agent-run-instance": {
+      "types": "./src/agent-run-instance.ts",
+      "default": "./src/agent-run-instance.ts"
+    },
     "./app-sessions": {
       "types": "./src/app-sessions.ts",
       "default": "./src/app-sessions.ts"
@@ -65,6 +85,10 @@
     "./story-agent-tools": {
       "types": "./src/story-agent-tools.ts",
       "default": "./src/story-agent-tools.ts"
+    },
+    "./story-agent-authorization": {
+      "types": "./src/story-agent-authorization.ts",
+      "default": "./src/story-agent-authorization.ts"
     },
     "./story-automation-instance": {
       "types": "./src/story-automation-instance.ts",

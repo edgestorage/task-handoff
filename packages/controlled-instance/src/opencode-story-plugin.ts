@@ -5,9 +5,15 @@ import {
   STORY_AGENT_TOOL_SCHEMAS,
   type StoryAgentToolName,
 } from "@task-handoff/protocol/story-agent-tools";
+import {
+  AGENT_INVOCATION_TOOL_DESCRIPTION,
+  AGENT_INVOCATION_TOOL_SCHEMA,
+  type AgentInvocationToolName,
+} from "@task-handoff/protocol/agent-invocation-tools";
 
 type OpenCodeToolContext = {
   sessionID: string;
+  callID?: string;
   abort: AbortSignal;
 };
 
@@ -17,7 +23,7 @@ type PluginOptions = {
   fetch?: typeof globalThis.fetch;
 };
 
-async function invoke(options: PluginOptions, tool: StoryAgentToolName, args: unknown, context: OpenCodeToolContext) {
+async function invoke(options: PluginOptions, tool: StoryAgentToolName | AgentInvocationToolName, args: unknown, context: OpenCodeToolContext) {
   const endpoint = options.endpoint?.trim();
   const token = options.token?.trim();
   if (!endpoint || !token) throw new Error("TaskHandoff Story tools are not configured.");
@@ -27,7 +33,13 @@ async function invoke(options: PluginOptions, tool: StoryAgentToolName, args: un
       authorization: `Bearer ${token}`,
       "content-type": "application/json",
     },
-    body: JSON.stringify({ provider: "opencode", providerSessionId: context.sessionID, tool, arguments: args }),
+    body: JSON.stringify({
+      provider: "opencode",
+      providerSessionId: context.sessionID,
+      tool,
+      arguments: args,
+      ...(context.callID ? { callId: context.callID } : {}),
+    }),
     signal: context.abort,
   });
   const payload = await response.json() as { data?: unknown; error?: { code?: string; message?: string } };
@@ -43,11 +55,18 @@ export function createOpenCodeStoryPlugin(options: PluginOptions = {
   token: process.env.TASK_HANDOFF_AGENT_TOOLS_TOKEN,
 }) {
   return async () => ({
-    tool: Object.fromEntries(STORY_AGENT_TOOL_NAMES.map((name) => [name, {
+    tool: Object.fromEntries([
+      ...STORY_AGENT_TOOL_NAMES.map((name) => [name, {
       description: STORY_AGENT_TOOL_DESCRIPTIONS[name],
       args: inputShape(name),
       execute: (args: unknown, context: OpenCodeToolContext) => invoke(options, name, args, context),
-    }])),
+      }] as const),
+      ["agent_run", {
+        description: AGENT_INVOCATION_TOOL_DESCRIPTION,
+        args: AGENT_INVOCATION_TOOL_SCHEMA.input.shape,
+        execute: (args: unknown, context: OpenCodeToolContext) => invoke(options, "agent_run", args, context),
+      }],
+    ]),
   });
 }
 

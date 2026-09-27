@@ -208,7 +208,11 @@ export class AppRuntimeManager extends EventEmitter {
     if (!resource) throw Object.assign(new Error(`${appId} does not provide a shared resource.`), { code: "APP_SHARED_RESOURCE_UNAVAILABLE" });
     const app = this.catalogRepository.find(appId);
     if (!app) throw Object.assign(new Error("Shared backend app is unavailable."), { code: "APP_NOT_FOUND" });
-    const cwd = app.cwd || process.env.TASK_HANDOFF_WORKSPACE || process.cwd();
+    // Shared provider backends are instance resources, not workspace processes. A Docker
+    // workspace may intentionally be unreadable by the app user while an isolated session
+    // workspace remains usable, so starting the backend from it would fail before the session
+    // can supply its own cwd.
+    const cwd = app.cwd || this.paths.dataDir;
     const env = { ...process.env, ...app.env, ...this.managedEnvironment, TERM: "xterm-256color" };
     return resource.ensure({ app, cwd, env });
   }
