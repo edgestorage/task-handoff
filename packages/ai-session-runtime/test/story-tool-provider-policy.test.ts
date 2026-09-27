@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { STORY_AGENT_TOOL_NAMES } from "@task-handoff/protocol/story-agent-tools";
+import { AI_SESSION_AGENT_TOOL_NAMES } from "@task-handoff/protocol/ai-session-agent-tools";
 import { codexThreadConfig } from "../src/codex-app-server/story-tool-config.ts";
 import { openCodeSessionPermissionRules } from "../src/opencode/story-tool-permissions.ts";
 
@@ -22,8 +23,8 @@ test("OpenCode preserves base rules and appends exact Story allow and deny rules
   ]);
 
   assert.deepEqual(rules[0], { permission: "bash", pattern: "*", action: "ask" });
-  assert.equal(rules.length, STORY_AGENT_TOOL_NAMES.length + 1);
-  for (const name of STORY_AGENT_TOOL_NAMES) {
+  assert.equal(rules.length, AI_SESSION_AGENT_TOOL_NAMES.length + 1);
+  for (const name of AI_SESSION_AGENT_TOOL_NAMES) {
     assert.equal(rules.findLast((rule) => rule.permission === name)?.action, name === "story_list_actions" ? "allow" : "deny");
   }
 });
@@ -41,7 +42,15 @@ test("OpenCode distinguishes omitted Story policy from an explicit empty allowli
     { permission: "bash", pattern: "*", action: "ask" },
     { permission: "story_list_content", pattern: "*", action: "allow" },
   ]);
-  assert.equal(denied.length, STORY_AGENT_TOOL_NAMES.length + 1);
+  assert.equal(denied.length, AI_SESSION_AGENT_TOOL_NAMES.length + 1);
   assert.deepEqual(denied[0], { permission: "bash", pattern: "*", action: "ask" });
-  assert.ok(STORY_AGENT_TOOL_NAMES.every((name) => denied.findLast((rule) => rule.permission === name)?.action === "deny"));
+  assert.ok(AI_SESSION_AGENT_TOOL_NAMES.every((name) => denied.findLast((rule) => rule.permission === name)?.action === "deny"));
+});
+
+test("Agent invocation is projected into provider thread policy only when granted", () => {
+  assert.equal(openCodeSessionPermissionRules(undefined, ["agent_run"]).findLast((rule) => rule.permission === "agent_run")?.action, "allow");
+  assert.deepEqual(codexThreadConfig(undefined, ["agent_run"]), {
+    "mcp_servers.task_handoff_story.enabled": true,
+    "mcp_servers.task_handoff_story.enabled_tools": ["agent_run"],
+  });
 });

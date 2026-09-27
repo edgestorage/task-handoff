@@ -42,6 +42,7 @@ const expectedDomains = {
   ],
   nodeFolders: [controlPlaneQueryKeys.nodeLocalFolders()],
   stories: [controlPlaneQueryKeys.stories()],
+  agents: [controlPlaneQueryKeys.agents(), controlPlaneQueryKeys.agentRuns],
   controlPlaneProxy: [
     controlPlaneQueryKeys.controlPlaneProxyInvites,
     controlPlaneQueryKeys.controlPlaneProxyBindings,
@@ -63,6 +64,7 @@ test("parameterized query factories expose domain prefixes when no id is provide
   assert.deepEqual(controlPlaneQueryKeys.nodeImageCatalog(), ["node-image-catalog"]);
   assert.deepEqual(controlPlaneQueryKeys.nodeLocalFolders("node-1"), ["control-plane-node-local-folders", "node-1"]);
   assert.deepEqual(controlPlaneQueryKeys.nodeImageCatalog("node-1"), ["node-image-catalog", "node-1"]);
+  assert.deepEqual(controlPlaneQueryKeys.storyAgentEntries("node-1", "story-1").slice(0, 1), controlPlaneQueryKeys.agents());
 });
 
 test("manual refresh covers every domain and manual-only query exactly once", () => {
@@ -102,6 +104,14 @@ test("node.checked invalidates only Node state instead of the full topology", ()
   assert.deepEqual(
     controlPlaneDomainQueryKeys(controlPlaneEventDomains([{ type: "node.checked", topic: "node.state" }])),
     [controlPlaneQueryKeys.nodes],
+  );
+});
+
+test("agent definition events invalidate only the Agent catalog", () => {
+  assert.deepEqual(controlPlaneEventDomains([{ type: "agent.definition.changed", topic: "agents" }]), ["agents"]);
+  assert.deepEqual(
+    controlPlaneDomainQueryKeys(controlPlaneEventDomains([{ type: "agent.definition.changed", topic: "agents" }])),
+    expectedDomains.agents,
   );
 });
 

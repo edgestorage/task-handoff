@@ -3,7 +3,7 @@ import { EventEmitter } from "node:events";
 import { Duplex } from "node:stream";
 import WebSocket from "ws";
 import type { AiSessionApprovalDecision } from "../../ai-session-control";
-import type { StoryAgentToolName } from "@task-handoff/protocol/story-agent-tools";
+import type { AiSessionAgentToolName } from "@task-handoff/protocol/ai-session-agent-tools";
 import type { CodexDynamicToolCall, CodexDynamicToolCallResult, CodexEphemeralStructuredTurnOptions, CodexThreadForkCapabilities, CodexThreadForkOptions, CodexThreadStartOptions, CodexTurnPermissionOverrides } from "./contract";
 import { approvalResponseForRequest, codexApprovalRequest } from "../protocol/approvals";
 import { codexNotification } from "../protocol/events";
@@ -109,7 +109,7 @@ function disabledCodexMcpServerConfig(serverNames: string[]): JsonValue {
   }));
 }
 
-function codexThreadConfigParam(reasoningEffort?: string, storyAgentTools?: StoryAgentToolName[]) {
+function codexThreadConfigParam(reasoningEffort?: string, storyAgentTools?: AiSessionAgentToolName[]) {
   const config = codexThreadConfig(reasoningEffort, storyAgentTools);
   return Object.keys(config).length > 0 ? { config } : {};
 }

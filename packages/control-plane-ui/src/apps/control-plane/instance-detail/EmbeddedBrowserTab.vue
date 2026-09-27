@@ -125,6 +125,7 @@ import { Input } from "../../../components/ui/input";
 import { Popover, PopoverAnchor, PopoverContent } from "../../../components/ui/popover";
 import { ScrollArea } from "../../../components/ui/scroll-area";
 import { canRenewDesktopBrowserContext, logDesktopBrowserDiagnostic, onDesktopBrowserFocusAddress, prepareDesktopBrowserContext, releaseDesktopBrowserContext, setDesktopBrowserTabThrottled, touchDesktopBrowserContext } from "../../../lib/desktopBridge";
+import { createBrowserUuid } from "../../../lib/random-id";
 import { browserAddressSuggestions, normalizeDesktopBrowserUrl, sanitizeBrowserStartPageData, type BrowserAddressSuggestion, type PinnedBrowserShortcut, type RecentBrowserPage } from "./browserAddressSuggestions";
 
 type GuestWebView = HTMLElement & {
@@ -157,7 +158,7 @@ const pinned = ref<PinnedBrowserShortcut[]>([]);
 const recent = ref<RecentBrowserPage[]>([]);
 const suggestionsOpen = ref(false);
 const activeSuggestionIndex = ref(-1);
-const suggestionsListId = `embedded-browser-suggestions-${crypto.randomUUID()}`;
+const suggestionsListId = `embedded-browser-suggestions-${createBrowserUuid()}`;
 const suggestions = computed(() => browserAddressSuggestions(pinned.value, recent.value, address.value));
 const activeSuggestionId = computed(() => activeSuggestionIndex.value >= 0 ? suggestionOptionId(activeSuggestionIndex.value) : undefined);
 const showStartPage = ref(true);
@@ -453,7 +454,7 @@ function savePinned() {
   const value = pinnedUrl.value.trim();
   if (!name || !value) return;
   try {
-    pinned.value = [...pinned.value, { id: crypto.randomUUID(), name: name.slice(0, 40), url: normalizeDesktopBrowserUrl(value) }].slice(0, 6);
+    pinned.value = [...pinned.value, { id: createBrowserUuid(), name: name.slice(0, 40), url: normalizeDesktopBrowserUrl(value) }].slice(0, 6);
     persistStartPageData();
     pinnedDialogOpen.value = false;
   } catch {

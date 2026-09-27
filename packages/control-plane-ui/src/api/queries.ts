@@ -9,6 +9,8 @@ import { sharedAiSessionsApi, sharedControlPlaneClient } from "./sharedClient.ts
 import type { ControlPlaneInstanceResourceEntry } from "@task-handoff/control-plane-client";
 import type { GitCredentialCreateRequest, GitCredentialPublic, GitCredentialUpdateRequest, InstanceGitCredentialAssignment } from "@task-handoff/protocol/managed-git-credentials";
 import type { Story } from "@task-handoff/protocol/stories";
+import type { AgentDefinitionCreateInput, AgentDefinitionUpdateInput } from "@task-handoff/protocol/agent-definitions";
+import type { AgentRunManualCreateInput } from "@task-handoff/protocol/agent-runs";
 import type { AiSessionQueueEditInput } from "@task-handoff/protocol/ai-sessions";
 export { controlPlaneQueryKeys } from "./queryKeys.ts";
 import type {
@@ -938,6 +940,15 @@ export function useStoriesQuery(nodeId?: MaybeRefOrGetter<string | undefined>, e
   });
 }
 
+export function storyAgentEntriesQueryOptions(storyId: string, nodeId: string, enabled: MaybeRefOrGetter<boolean> = true) {
+  return queryOptions({
+    queryKey: controlPlaneQueryKeys.storyAgentEntries(nodeId, storyId),
+    queryFn: () => sharedControlPlaneClient.agents.storyEntries(storyId, nodeId),
+    enabled: Boolean(storyId && nodeId) && toValue(enabled),
+    ...storySnapshotQueryOptions,
+  });
+}
+
 export function getStoryRetentionSettings(storyId: string, nodeId: string) {
   return sharedControlPlaneClient.stories.retentionSettings(storyId, nodeId);
 }
@@ -1120,4 +1131,59 @@ export function deleteNodeRuntime(nodeId: string, runtimeId: string) {
 
 export function listNodeDockerImages(id: string) {
   return getApiData<LocalDockerImage[]>(`nodes/${id}/docker/images`);
+}
+
+/**
+ * AgentDefinition 目录按 Node 独立读取：每个 Node Agent 只回答自己的定义，
+ * 列表随各 Node 响应逐步出现，不等待最慢的 Node。写操作始终带 nodeId 路由回定义所属 Node。
+ */
+export function listAgents(nodeId?: string) {
+  return sharedControlPlaneClient.agents.list(nodeId);
+}
+
+// 授权事件是常态收敛路径。视图重挂载时先复用最后一次权威快照，只在失效后才重新拉取。
+const agentSnapshotQueryOptions = {
+  staleTime: Infinity,
+  gcTime: Infinity,
+  refetchOnWindowFocus: false,
+  refetchOnReconnect: false,
+  retry: false,
+} as const;
+
+export function agentNodeQueryOptions(nodeId: string, enabled: MaybeRefOrGetter<boolean> = true) {
+  return queryOptions({
+    queryKey: controlPlaneQueryKeys.agents(nodeId),
+    queryFn: () => listAgents(nodeId),
+    enabled: Boolean(nodeId) && toValue(enabled),
+    ...agentSnapshotQueryOptions,
+  });
+}
+
+export function useAgentRunsQuery(enabled: MaybeRefOrGetter<boolean> = true) {
+  return useQuery({
+    queryKey: controlPlaneQueryKeys.agentRuns,
+    queryFn: ({ signal }) => sharedControlPlaneClient.agents.listRuns(undefined, signal),
+    enabled: computed(() => toValue(enabled)),
+    ...agentSnapshotQueryOptions,
+  });
+}
+
+export function createAgentDefinition(nodeId: string, input: AgentDefinitionCreateInput) {
+  return sharedControlPlaneClient.agents.create(nodeId, input);
+}
+
+export function updateAgentDefinition(agentId: string, nodeId: string, input: AgentDefinitionUpdateInput) {
+  return sharedControlPlaneClient.agents.update(agentId, nodeId, input);
+}
+
+export function deleteAgentDefinition(agentId: string, nodeId: string) {
+  return sharedControlPlaneClient.agents.remove(agentId, nodeId);
+}
+
+export function cancelAgentRun(runId: string, nodeId: string, expectedRevision?: number) {
+  return sharedControlPlaneClient.agents.cancelRun(runId, nodeId, expectedRevision === undefined ? {} : { expectedRevision });
+}
+
+export function createManualAgentRun(nodeId: string, input: AgentRunManualCreateInput) {
+  return sharedControlPlaneClient.agents.createManualRun(nodeId, input);
 }

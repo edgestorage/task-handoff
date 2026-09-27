@@ -1,3 +1,4 @@
+import { agents } from "./agents.ts";
 import { auth } from "./auth.ts";
 import { common } from "./common.ts";
 import { errors } from "./errors.ts";
@@ -10,6 +11,7 @@ import { stories } from "./stories.ts";
 import { triggers } from "./triggers.ts";
 
 export const enUS = {
+  agents,
   auth,
   common,
   errors,

@@ -12,12 +12,18 @@ import {
   StoryAgentToolNameSchema,
   type StoryAgentToolName,
 } from "@task-handoff/protocol/story-agent-tools";
+import {
+  AGENT_INVOCATION_TOOL_DESCRIPTION,
+  AGENT_INVOCATION_TOOL_SCHEMA,
+  AgentInvocationToolNameSchema,
+} from "@task-handoff/protocol/agent-invocation-tools";
 
 const InvocationSchema = z.object({
   provider: z.literal("opencode"),
   providerSessionId: z.string().min(1).max(240),
-  tool: StoryAgentToolNameSchema,
+  tool: z.union([StoryAgentToolNameSchema, AgentInvocationToolNameSchema]),
   arguments: z.unknown().optional(),
+  callId: z.string().trim().min(1).max(240).optional(),
 }).strict();
 
 const STORY_AGENT_READ_ONLY_TOOLS = new Set<StoryAgentToolName>([
@@ -61,6 +67,11 @@ function errorDetails(error: unknown) {
   };
 }
 
+function invocationRequestId(provider: "codex" | "opencode", providerSessionId: string, callId?: string) {
+  const identity = callId || crypto.randomUUID();
+  return `agent_tool_${crypto.createHash("sha256").update(JSON.stringify([provider, providerSessionId, identity])).digest("hex")}`;
+}
+
 export class StoryAgentToolBridge {
   readonly token: string;
   private readonly options: StoryAgentToolBridgeOptions;
@@ -100,7 +111,14 @@ export class StoryAgentToolBridge {
         const input = InvocationSchema.parse(request.body || {});
         const session = this.options.resolveSession(input.provider, input.providerSessionId);
         if (!session) throw Object.assign(new Error("AI Session was not found for the Story tool call."), { code: "AI_SESSION_NOT_FOUND", statusCode: 404 });
-        return { data: await this.options.service.invoke(session, input.tool, input.arguments) };
+        const data = input.tool === "agent_run"
+          ? await this.options.service.invokeAgentRun(
+            session,
+            input.arguments,
+            invocationRequestId(input.provider, input.providerSessionId, input.callId),
+          )
+          : await this.options.service.invoke(session, input.tool, input.arguments);
+        return { data };
       } catch (error) {
         const details = errorDetails(error);
         return reply.code(details.statusCode).send({ error: { code: details.code, message: details.message } });
@@ -158,6 +176,23 @@ export class StoryAgentToolBridge {
         ...(STORY_AGENT_READ_ONLY_TOOLS.has(name) ? { annotations: { readOnlyHint: true } } : {}),
       }, (args, extra) => invoke(name, args, extra));
     }
+    server.registerTool("agent_run", {
+      description: AGENT_INVOCATION_TOOL_DESCRIPTION,
+      inputSchema: AGENT_INVOCATION_TOOL_SCHEMA.input,
+      outputSchema: AGENT_INVOCATION_TOOL_SCHEMA.output,
+    }, async (args, extra) => {
+      const threadId = typeof extra._meta?.threadId === "string" ? extra._meta.threadId : undefined;
+      if (!threadId) throw Object.assign(new Error("Codex did not provide a thread identity for the Agent tool call."), { code: "AI_SESSION_IDENTITY_REQUIRED", statusCode: 400 });
+      const session = this.options.resolveSession("codex", threadId);
+      if (!session) throw Object.assign(new Error("AI Session was not found for the Agent tool call."), { code: "AI_SESSION_NOT_FOUND", statusCode: 404 });
+      const callId = [extra._meta?.toolCallId, extra._meta?.callId].find((value): value is string => typeof value === "string" && value.length > 0);
+      const result = AGENT_INVOCATION_TOOL_SCHEMA.output.parse(await this.options.service.invokeAgentRun(
+        session,
+        args,
+        invocationRequestId("codex", threadId, callId),
+      ));
+      return { content: [{ type: "text" as const, text: JSON.stringify(result) }], structuredContent: result };
+    });
     return server;
   }
 }

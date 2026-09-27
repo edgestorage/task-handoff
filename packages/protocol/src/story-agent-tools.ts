@@ -9,6 +9,10 @@ import {
 } from "./ai-sessions.ts";
 import { StoryIdSchema } from "./story-id.ts";
 import {
+  AgentInvocationToolGrantSchema,
+  sanitizeAgentInvocationToolGrant,
+} from "./agent-invocation-tools.ts";
+import {
   StoryActionSchema,
   StoryAutomationEffectiveStatusSchema,
   StoryAutomationErrorSchema,
@@ -135,6 +139,7 @@ export const StoryAgentToolPolicyUpdateInputSchema = z.object({ policy: StoryAge
 export const StoryAgentToolResolutionSchema = StoryAgentToolPolicySettingsSchema.extend({
   storyId: StoryIdSchema,
   enabledTools: z.array(StoryAgentToolNameSchema).max(STORY_AGENT_TOOL_NAMES.length),
+  agentInvocation: AgentInvocationToolGrantSchema,
 }).strict();
 export type StoryAgentToolResolution = z.infer<typeof StoryAgentToolResolutionSchema>;
 export const StoryAgentToolPolicyInvalidatedSchema = z.object({
@@ -150,6 +155,7 @@ const StoryAgentToolPolicySettingsConsumerSchema = z.object({
 const StoryAgentToolResolutionConsumerSchema = StoryAgentToolPolicySettingsConsumerSchema.extend({
   storyId: StoryIdSchema,
   enabledTools: z.array(z.string()).max(100),
+  agentInvocation: z.unknown().optional(),
 }).strip();
 
 export function sanitizeStoryAgentToolPolicySettings(input: unknown) {
@@ -161,6 +167,7 @@ export function sanitizeStoryAgentToolResolution(input: unknown) {
   return StoryAgentToolResolutionSchema.parse({
     ...parsed,
     enabledTools: parsed.enabledTools.filter((name): name is StoryAgentToolName => StoryAgentToolNameSchema.safeParse(name).success),
+    agentInvocation: sanitizeAgentInvocationToolGrant(parsed.agentInvocation),
   });
 }
 

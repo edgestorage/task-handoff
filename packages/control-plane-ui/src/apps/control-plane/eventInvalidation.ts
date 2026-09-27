@@ -17,6 +17,7 @@ export function controlPlaneEventDomains(events: InvalidationEvent[]): ControlPl
   if (topics.has("images")) domains.push("images");
   if (topics.has("market")) domains.push("market");
   if (topics.has("stories")) domains.push("stories");
+  if (topics.has("agents")) domains.push("agents");
   if (topics.has("control-plane-proxy")) domains.push("controlPlaneProxy");
   return domains;
 }

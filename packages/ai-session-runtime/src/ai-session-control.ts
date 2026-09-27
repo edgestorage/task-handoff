@@ -19,7 +19,7 @@ import type {
   AiSessionTurnTimeline,
 } from "@task-handoff/protocol/ai-sessions";
 import type { AiSessionTimelineCapabilities } from "@task-handoff/protocol/control-plane";
-import type { StoryAgentToolName } from "@task-handoff/protocol/story-agent-tools";
+import type { AiSessionAgentToolName } from "@task-handoff/protocol/ai-session-agent-tools";
 import type { AiSessionRegistry } from "./ai-session-registry";
 import { aiSessionAttachmentMetas } from "./ai-session/persistence";
 
@@ -37,7 +37,7 @@ export type AiSessionSendInput = {
   draftScopeType?: "session" | "create-request";
   draftScopeId?: string;
   /** Provider-private Story tool allowlist; never persisted or accepted from public wire input. */
-  storyAgentTools?: StoryAgentToolName[];
+  storyAgentTools?: AiSessionAgentToolName[];
 };
 
 export type AiSessionApprovalDecision = AiSessionApprovalInput["decision"];
@@ -53,10 +53,12 @@ export type AiSessionQueueAttachmentEdit = {
 
 export type AiSessionProviderCreateInput = {
   cwd: string;
+  /** Provider-private write roots. Public AI Session create input cannot set these. */
+  runtimeWorkspaceRoots?: string[];
   permissionMode?: AiSessionPermissionMode;
   modelSelection?: AiSessionModelSelection;
   reasoningEffort?: AiSessionReasoningEffort;
-  storyAgentTools?: StoryAgentToolName[];
+  storyAgentTools?: AiSessionAgentToolName[];
 };
 
 export type AiSessionProviderCreateResult = {
@@ -72,7 +74,7 @@ export type AiSessionProviderForkInput = {
   throughTurnId?: string;
   providerThroughTurnId?: string;
   cwd?: string;
-  storyAgentTools?: StoryAgentToolName[];
+  storyAgentTools?: AiSessionAgentToolName[];
 };
 
 export type AiSessionProviderForkResult = AiSessionProviderCreateResult & {
@@ -126,7 +128,7 @@ export interface AiSessionControlProvider {
   forkSession?(input: AiSessionProviderForkInput): Promise<AiSessionProviderForkResult>;
   renameSession?(session: AiSessionStatus, title: string): Promise<AiSessionProviderRenameResult>;
   readSession?(providerSessionId: string): Promise<void>;
-  resumeSession?(providerSessionId: string, modelSelection?: AiSessionModelSelection, reasoningEffort?: AiSessionReasoningEffort, storyAgentTools?: StoryAgentToolName[]): Promise<AiSessionModelSelection | void>;
+  resumeSession?(providerSessionId: string, modelSelection?: AiSessionModelSelection, reasoningEffort?: AiSessionReasoningEffort, storyAgentTools?: AiSessionAgentToolName[]): Promise<AiSessionModelSelection | void>;
   archiveSession?(providerSessionId: string): Promise<void>;
   activeSessionExists?(providerSessionId: string): Promise<boolean>;
   deleteSession?(providerSessionId: string): Promise<void>;
@@ -193,7 +195,7 @@ export class AiSessionController {
 
   constructor(
     private readonly registry: AiSessionRegistry,
-    private readonly resolveStoryAgentTools?: (session: AiSessionStatus) => Promise<StoryAgentToolName[]>,
+    private readonly resolveStoryAgentTools?: (session: AiSessionStatus) => Promise<AiSessionAgentToolName[]>,
   ) {}
 
   register(provider: AiSessionControlProvider) {
@@ -248,7 +250,7 @@ export class AiSessionController {
     return provider.createSession(input);
   }
 
-  async forkSession(sessionId: string, input: { throughTurnId?: string; cwd?: string; storyAgentTools?: StoryAgentToolName[] } = {}) {
+  async forkSession(sessionId: string, input: { throughTurnId?: string; cwd?: string; storyAgentTools?: AiSessionAgentToolName[] } = {}) {
     const source = this.requireSession(sessionId);
     if (!source.providerSessionId || source.actions?.fork !== true) {
       throw aiSessionControlError("AI_SESSION_FORK_UNSUPPORTED", "AI session does not support Fork.", 409);

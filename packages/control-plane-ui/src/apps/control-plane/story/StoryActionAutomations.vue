@@ -382,7 +382,7 @@ async function saveWithNewAction(draft: AiSessionCreationPresetDraft) {
     saving.value = false;
   }
 }
-async function run(entry: StoryAutomationStatus) { await mutate(entry, () => sharedControlPlaneClient.stories.runAutomation(props.story.id, entry.automation.id, props.story.ownerNodeId, { clientRequestId: crypto.randomUUID() })); }
+async function run(entry: StoryAutomationStatus) { await mutate(entry, () => sharedControlPlaneClient.stories.runAutomation(props.story.id, entry.automation.id, props.story.ownerNodeId, { clientRequestId: createBrowserUuid() })); }
 async function toggle(entry: StoryAutomationStatus) { await mutate(entry, () => sharedControlPlaneClient.stories.setAutomationEnabled(props.story.id, entry.automation.id, props.story.ownerNodeId, !entry.automation.enabled)); }
 async function remove(entry: StoryAutomationStatus) {
   if (!window.confirm(t("stories.automation.confirmDelete"))) return;

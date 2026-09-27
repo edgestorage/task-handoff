@@ -1,5 +1,9 @@
 import crypto from "node:crypto";
 import {
+  agentInvocationToolRevisionSource,
+  resolveAgentInvocationToolGrant,
+} from "@task-handoff/protocol/agent-invocation-tools";
+import {
   normalizeStoryAgentToolPolicy,
   resolveStoryAgentToolNames,
   StoryAgentToolNameSchema,
@@ -42,10 +46,20 @@ export class StoryToolPolicyService {
   async resolve(storyId: string) {
     const story = await this.requireStory(storyId);
     const settings = this.settingsFor(story);
+    const entries = this.repository.agents.storyEntries.get(storyId);
+    const availableAgentIds = entries.agentIds.filter((agentId) => Boolean(this.repository.agents.definitions.get(agentId)));
+    const agentInvocation = resolveAgentInvocationToolGrant(story.archivedAt ? [] : availableAgentIds);
+    const revision = crypto.createHash("sha256").update(JSON.stringify([
+      storyAgentToolPolicyRevisionSource(settings.policy),
+      Boolean(story.archivedAt),
+      agentInvocationToolRevisionSource(entries.revision, agentInvocation),
+    ])).digest("hex");
     return StoryAgentToolResolutionSchema.parse({
       storyId,
-      ...settings,
+      policy: settings.policy,
+      revision,
       enabledTools: resolveStoryAgentToolNames(settings.policy, { archived: Boolean(story.archivedAt) }),
+      agentInvocation,
     });
   }
 
@@ -54,6 +68,15 @@ export class StoryToolPolicyService {
     const resolution = await this.resolve(storyId);
     if (!parsedTool.success || !resolution.enabledTools.includes(parsedTool.data)) {
       throw policyError("STORY_AGENT_TOOL_DISABLED", "The Story Agent tool is disabled.", 403);
+    }
+    return resolution;
+  }
+
+  async assertAgentInvocation(storyId: string, agentId: string) {
+    const resolution = await this.resolve(storyId);
+    if (!resolution.agentInvocation.enabledTools.includes("agent_run")
+      || !resolution.agentInvocation.allowedAgentIds.includes(agentId)) {
+      throw policyError("STORY_AGENT_INVOCATION_FORBIDDEN", "The Agent is not authorized as an entry Agent for this Story.", 403);
     }
     return resolution;
   }

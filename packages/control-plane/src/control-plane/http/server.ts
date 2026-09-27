@@ -61,6 +61,7 @@ import { CloudConnectivityBackgroundRuntime } from "../cloud-connectivity/coordi
 import { AuthorizationConnectionRegistry } from "../auth/authorization-connections.ts";
 import { registerBrowserRelayRoutes } from "./browser-relay-routes.ts";
 import { BrowserAccessService } from "../instances/browser-access-service.ts";
+import { ControlPlaneAgentAggregator } from "../agents/agent-aggregator.ts";
 
 export type CreateControlPlaneAppOptions = {
   dataDir?: string;
@@ -522,6 +523,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
   });
   service.setAppSessionSnapshotProvider((options) => appSessionAggregator.list(options));
   service.setAiSessionSnapshotProvider((options) => aiSessionAggregator.list(options));
+  const agentAggregator = new ControlPlaneAgentAggregator();
   const aiSessionAttachmentCache = new AiSessionAttachmentCache(paths.dataDir, {
     onWarning: (reason) => app.log.warn(reason),
   });
@@ -559,6 +561,11 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     onSessionEvent: (event) => event.type.startsWith("app-session.")
       ? appSessionAggregator.handleEvent(event)
       : aiSessionAggregator.handleEvent(event),
+    onAgentEvent: (nodeId, type, payload) => agentAggregator.handleEvent(nodeId, type, payload),
+    onCapabilitiesChanged: async (nodeId) => {
+      const checked = await service.checkNode(nodeId);
+      events.publish("node.checked", { nodeId: checked.id }, { topic: "node.state", scope: { nodeId: checked.id } });
+    },
   });
   const explicitProxyOrigin = options.proxyOrigin || process.env.TASK_HANDOFF_CONTROL_PLANE_PROXY_ORIGIN;
   const projectProxyTarget = (nodeId: string) => {
@@ -1049,6 +1056,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     aiSessionAttachmentCache,
     nodeAgentTunnel,
     nodeEventSubscriber,
+    agentAggregator,
     errorPayload: controlPlaneErrorPayload,
     onInstanceDeleted: async (instanceId) => {
       if (!auth.enabled()) return;

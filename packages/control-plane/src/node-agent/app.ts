@@ -30,7 +30,15 @@ import {
   type ControlledInstance,
   type InstanceResourceMetrics,
 } from "@task-handoff/protocol/control-plane";
-import { defaultCommandRunner, LocalDockerExecutor, listLocalDockerImages, type CommandRunner, type ExecutorContext } from "./runtimes/docker.ts";
+import {
+  DOCKER_AGENT_RUN_SHARED_ROOT,
+  containerNameForInstance,
+  defaultCommandRunner,
+  LocalDockerExecutor,
+  listLocalDockerImages,
+  type CommandRunner,
+  type ExecutorContext,
+} from "./runtimes/docker.ts";
 import { materializeDockerBootstrapAssets } from "./runtimes/bootstrap-assets.ts";
 import { DockerImageService } from "./docker-images.ts";
 import { NodeAgentInstanceEventForwarder } from "./events.ts";
@@ -52,6 +60,15 @@ import { registerNodeModelRoutes } from "./models/routes.ts";
 import type { InstancePrivateModelCatalog } from "./models/private-catalog.ts";
 import { registerNodeGitCredentialRoutes } from "./git-credentials/routes.ts";
 import { registerNodeStoryRoutes } from "./stories/routes.ts";
+import { registerNodeAgentDefinitionRoutes, registerNodeAgentRunRoutes, registerNodeStoryAgentEntryRoutes } from "./agents/routes.ts";
+import { AgentDefinitionService } from "./agents/service.ts";
+import { AgentRunService } from "./agents/run-service.ts";
+import { AgentRunCoordinator } from "./agents/run-coordinator.ts";
+import { AgentRunMemberSessionClient } from "./agents/member-session-client.ts";
+import { AgentRunSharedSpaceService } from "./agents/agent-run-shared-space.ts";
+import { DockerAgentRunStorage } from "./agents/docker-agent-run-storage.ts";
+import { WorkspaceMaterializerRegistry } from "./agents/workspace-materializer.ts";
+import { StoryAgentEntryService } from "./agents/story-entry-service.ts";
 import { NodeStoryStore } from "./stories/store.ts";
 import { StoryAutomationStore } from "./stories/automation-store.ts";
 import { StoryCommandService } from "./stories/command-service.ts";
@@ -843,6 +860,9 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     return resolveArtifactForAdapter(version, requireManagedAdapterForInstance(instance), context);
   };
   const app = Fastify({ logger: options.logger ?? true });
+  // 定义行里出现当前版本未知的列只说明它由更高版本写入：读取时忽略并保留诊断，不阻断启动或读取。
+  storyRepository.agents.definitions.setDiagnostic((message, details) => app.log.warn(details, message));
+  storyRepository.agents.storyEntries.setDiagnostic((message, details) => app.log.warn(details, message));
   const persistenceMaintenance = new NodeAgentPersistenceMaintenance(paths, {
     logger: (message, details) => app.log.warn(details, message),
   });
@@ -944,6 +964,94 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   });
   eventForwarder.start();
   app.decorate("nodeAgentEventForwarder", eventForwarder);
+  const agentDefinitions = new AgentDefinitionService(
+    state,
+    storyRepository.agents.definitions,
+    (type, payload, scope) => eventForwarder.publish(type, payload, scope),
+  );
+  // Phase 1 has one explicit, registered execution combination. Capability publication is
+  // derived from this registry contract; transient provider/workspace failures are reported by
+  // the run itself instead of hiding the feature for the whole Node Agent.
+  const agentRunExecutionCombination = {
+    runtime: "docker" as const,
+    workspaceMaterializer: "overlay-copy-on-write" as const,
+    processSandbox: "instance" as const,
+    providerId: "codex",
+  };
+  const agentRuns = new AgentRunService(
+    state,
+    agentDefinitions,
+    storyRepository.agents.runs,
+    (input) => input.runtimeType === agentRunExecutionCombination.runtime
+      && input.providerId === agentRunExecutionCombination.providerId
+      && input.executionPolicy.workspaceMaterializer === agentRunExecutionCombination.workspaceMaterializer
+      && input.executionPolicy.processSandbox === agentRunExecutionCombination.processSandbox
+      && input.permissionMode !== "full-access",
+    (type, payload, scope) => eventForwarder.publish(type, payload, scope),
+    storyRepository.agents.resources,
+  );
+  const agentRunMemberSessions = new AgentRunMemberSessionClient(fetchImpl, resolveInstanceWeb);
+  const agentRunStorage = new DockerAgentRunStorage(
+    dockerCommandRunner,
+    storyRepository.agents.resources,
+    (instanceId) => {
+      const instance = state.requireInstance(instanceId);
+      return {
+        nodeId: state.node.id,
+        runtimeId: instance.runtimeId,
+        instanceId,
+        containerName: instance.runtime.containerName || containerNameForInstance(instanceId),
+        expectedContainerId: instance.runtime.containerId,
+        providerReady: instance.ready
+          && instance.status === "running"
+          && instance.connectionStatus === "online"
+          && instance.agentStatus === "online"
+          && instance.targetStatus === "reachable",
+      };
+    },
+    async (runId, memberId) => {
+      const member = agentRuns.getMember(runId, memberId);
+      await agentRunMemberSessions.close(state.requireInstance(member.instanceId), runId, memberId);
+    },
+  );
+  const agentRunMaterializers = new WorkspaceMaterializerRegistry();
+  agentRunMaterializers.register({
+    runtimeType: "docker",
+    workspaceMaterializer: "overlay-copy-on-write",
+    processSandbox: "instance",
+  }, agentRunStorage);
+  const agentRunSharedSpaces = new AgentRunSharedSpaceService(
+    storyRepository.agents.resources,
+    agentRunStorage,
+    DOCKER_AGENT_RUN_SHARED_ROOT,
+  );
+  const agentRunCoordinator = new AgentRunCoordinator({
+    state,
+    definitions: agentDefinitions,
+    runs: agentRuns,
+    materializers: agentRunMaterializers,
+    sharedSpaces: agentRunSharedSpaces,
+    resources: storyRepository.agents.resources,
+    sessions: agentRunMemberSessions,
+    reconcileInstanceResources: (instanceId) => agentRunStorage.reconcileInstance(instanceId),
+  });
+  agentRuns.setCoordinator(agentRunCoordinator);
+  void agentRunCoordinator.reconcile().catch((error) => app.log.warn({ error }, "Agent Run startup reconciliation failed"));
+  void agentRunSharedSpaces.reconcileExpired().catch((error) => app.log.warn({ error }, "Agent Run startup shared-space expiry reconciliation failed"));
+  const agentRunReconcileTimer = setInterval(() => {
+    void agentRunCoordinator.reconcile().catch((error) => app.log.warn({ error }, "Agent Run reconciliation retry failed"));
+    void agentRunSharedSpaces.reconcileExpired().catch((error) => app.log.warn({ error }, "Agent Run shared-space expiry reconciliation failed"));
+  }, 5_000);
+  agentRunReconcileTimer.unref();
+  const storyAgentEntries = new StoryAgentEntryService(
+    stories,
+    agentDefinitions,
+    storyRepository.agents.storyEntries,
+    async ({ storyId }) => {
+      const resolution = await storyToolPolicy.resolve(storyId);
+      await storyToolPolicyInvalidation.notify({ storyId, revision: resolution.revision });
+    },
+  );
   const storyActionExecution = new StoryActionExecutionService(state, stories, fetchImpl, resolveInstanceWeb);
   const storyAiSessionRead = new StoryAiSessionReadService(state, fetchImpl, resolveInstanceWeb);
   const storyAiSessionCloser = new StoryAiSessionCloseService(fetchImpl, resolveInstanceWeb);
@@ -1242,6 +1350,8 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     }, drainDiagnosticMs);
     drainDiagnostic.unref();
     try {
+      clearInterval(agentRunReconcileTimer);
+      await agentRunCoordinator.stop();
       await storyScheduler.stop();
       clearInterval(persistenceMaintenanceTimer);
       clearInterval(activeLogMaintenanceTimer);
@@ -1293,6 +1403,21 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
           maxFileBytes: 32 * 1024 * 1024,
           maxBatchPaths: 20,
         },
+        agentExecution: (() => {
+          const combinations = [agentRunExecutionCombination];
+          return {
+            definitions: true,
+            runs: true,
+            orchestration: {
+              storyEntryAuthorization: true,
+              callableRelations: true,
+              runMembers: true,
+              manualRuns: true,
+            },
+            sharedSpace: { enabled: true, runtimes: ["docker" as const] },
+            combinations,
+          };
+        })(),
       },
       build: buildInfo("node-agent"),
       instanceProxy: { ...instanceProxyMetrics },
@@ -1347,6 +1472,9 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   registerNodeModelRoutes(app, state.modelRegistry, (id) => syncAssignedModelEnvironment(fetchImpl, state, id, lifecycleLoggers.warn, resolveInstanceWeb), fetchImpl);
 
   registerNodeGitCredentialRoutes(app, state);
+  registerNodeAgentDefinitionRoutes(app, agentDefinitions);
+  registerNodeAgentRunRoutes(app, agentRuns, state);
+  registerNodeStoryAgentEntryRoutes(app, storyAgentEntries);
   registerNodeStoryRoutes(app, state, stories, {
     fetchImpl,
     resolveInstanceWeb,
@@ -1356,6 +1484,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     toolPolicy: storyToolPolicy,
     actionExecution: storyActionExecution,
     aiSessionRead: storyAiSessionRead,
+    agentRuns,
     onToolPolicyInvalidated: (event) => storyToolPolicyInvalidation.notify(event),
   });
 

@@ -20,6 +20,7 @@ import type { Translate } from "../../../i18n/status";
 import { supportsBrowserTunnel } from "@task-handoff/protocol/control-plane";
 import { supportsDirectoryBrowserTunnel } from "@task-handoff/protocol/control-plane-directory";
 import { canUseDesktopBrowserContext } from "../../../lib/desktopBridge";
+import { createBrowserUuid } from "../../../lib/random-id";
 
 export type SessionPaneId = "left" | "right";
 
@@ -554,7 +555,7 @@ export function useActiveInstanceSessions({
   }
 
   function openBrowserTab(instanceId: string, initialUrl?: string) {
-    const key = `embedded-browser:${crypto.randomUUID()}`;
+    const key = `embedded-browser:${createBrowserUuid()}`;
     const tabs = browserSessionTabs[instanceId] ||= reactive<SessionTab[]>([]);
     tabs.push({
       key,

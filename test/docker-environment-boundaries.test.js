@@ -7,7 +7,13 @@ const test = require("node:test");
 const { ControlledInstanceSchema } = require("../packages/protocol/src/control-plane.ts");
 const { InstancePrivateConfigStore } = require("../packages/control-plane/src/node-agent/instances/private-config-store.ts");
 const { nodeAgentStorePaths } = require("../packages/control-plane/src/node-agent/persistence/paths.ts");
-const { LocalDockerExecutor, assertDockerConfigHasNoSecrets, dockerGitProvisionArgs, dockerRunArgs } = require("../packages/control-plane/src/node-agent/runtimes/docker.ts");
+const {
+  LocalDockerExecutor,
+  agentRunRuntimeVolume,
+  assertDockerConfigHasNoSecrets,
+  dockerGitProvisionArgs,
+  dockerRunArgs,
+} = require("../packages/control-plane/src/node-agent/runtimes/docker.ts");
 
 const timestamp = "2026-08-04T00:00:00.000Z";
 
@@ -67,8 +73,8 @@ function persistentVolumes(value) {
   ];
 }
 
-function volumeForInspection(value, name) {
-  return persistentVolumes(value).find((item) => item.name === name) || {
+function runtimeVolume(value) {
+  return {
     role: "runtime",
     name: `task-handoff-${value.instance.id}-runtime`,
     mountPath: "/opt/task-handoff/instance-runtime",
@@ -79,6 +85,15 @@ function volumeForInspection(value, name) {
       "task-handoff.volume-role": "runtime",
     },
   };
+}
+
+function agentRunVolumes(value) {
+  return [agentRunRuntimeVolume(value.node.id, value.runtime.id)];
+}
+
+function volumeForInspection(value, name) {
+  return [...persistentVolumes(value), runtimeVolume(value), ...agentRunVolumes(value)]
+    .find((item) => item.name === name);
 }
 
 function containerForInspection(value, mounts = persistentVolumes(value)) {
@@ -173,6 +188,9 @@ test("docker config uses a read-only private file and explicit managed mounts wi
   assert.ok(args.includes("type=volume,src=task-handoff-inst_one-data,dst=/data"));
   assert.ok(args.includes("type=volume,src=task-handoff-inst_one-agent-home,dst=/home/agent"));
   assert.ok(args.includes("type=volume,src=task-handoff-inst_one-runtime,dst=/opt/task-handoff/instance-runtime"));
+  for (const volume of agentRunVolumes(local)) {
+    assert.ok(args.includes(`type=volume,src=${volume.name},dst=${volume.mountPath}`));
+  }
   assert.ok(args.includes("/run/task-handoff/bootstrap/entrypoint.sh"));
   assert.ok(args.includes("type=bind,src=/run/task-handoff/container,dst=/run/task-handoff/node-agent-transport,readonly"));
   assert.ok(args.includes("TASK_HANDOFF_NODE_AGENT_SOCKET_PATH=/run/task-handoff/node-agent-transport/node-agent.sock"));
@@ -216,7 +234,7 @@ test("docker executor creates and labels authoritative volumes before docker run
   const result = await executor.start(context());
   const runIndex = calls.findIndex((args) => args[0] === "run");
   const volumeCreateIndexes = calls.flatMap((args, index) => args[0] === "volume" && args[1] === "create" ? [index] : []);
-  assert.equal(volumeCreateIndexes.length, 3);
+  assert.equal(volumeCreateIndexes.length, 4);
   assert.ok(volumeCreateIndexes.every((index) => index < runIndex));
   assert.equal("managedVolumes" in result.runtime, false);
 });
@@ -534,6 +552,42 @@ test("existing containers keep their original bootstrap and TCP node-agent trans
   }), value.nodeAgentUrl);
 });
 
+test("existing containers reject a foreign volume at an Agent Run runtime path", async () => {
+  const value = context();
+  const containerName = "task-handoff-inst_one";
+  const containerId = "existing-container-id";
+  const runtime = runtimeVolume(value);
+  const [agentRun] = agentRunVolumes(value);
+  const executor = new LocalDockerExecutor(async (_command, args) => {
+    if (args[0] === "inspect" && args.includes("{{json .}}")) {
+      return { stdout: JSON.stringify({
+        Id: containerId,
+        State: { Running: true },
+        Config: { Labels: { "task-handoff.instance-id": value.instance.id } },
+        Mounts: [
+          ...persistentVolumes(value).map((volume) => ({ Type: "volume", Name: volume.name, Destination: volume.mountPath })),
+          { Type: "volume", Name: runtime.name, Destination: runtime.mountPath },
+          { Type: "volume", Name: "foreign-agent-run", Destination: agentRun.mountPath },
+          { Type: "bind", Source: path.resolve(value.project.source.path), Destination: value.project.workspacePolicy.path },
+        ],
+      }), stderr: "" };
+    }
+    if (args[0] === "volume" && args[1] === "inspect") {
+      const volume = volumeForInspection(value, args.at(-1));
+      return { stdout: JSON.stringify({ Name: volume.name, Driver: "local", Labels: volume.labels }), stderr: "" };
+    }
+    return { stdout: "", stderr: "" };
+  });
+
+  await assert.rejects(
+    () => executor.start({
+      ...value,
+      instance: { ...value.instance, runtime: { ...value.instance.runtime, containerName, containerId } },
+    }),
+    (error) => error.code === "AGENT_RUN_VOLUME_MOUNT_IDENTITY_MISMATCH",
+  );
+});
+
 test("new docker instances reject an unrelated unlabeled volume with a colliding canonical name", async () => {
   const value = context();
   const executor = new LocalDockerExecutor(async (_command, args) => {
@@ -555,6 +609,34 @@ test("new docker instances reject an unrelated unlabeled volume with a colliding
   );
 });
 
+test("Agent Run runtime volume rejects local-driver remote or bind options", async () => {
+  const value = context();
+  const agentRunVolumeName = agentRunVolumes(value)[0].name;
+  const executor = new LocalDockerExecutor(async (_command, args) => {
+    if (args[0] === "inspect" && args.includes("{{json .}}")) {
+      throw Object.assign(new Error("No such container"), { details: { stderr: "No such container" } });
+    }
+    if (args[0] === "image" && args[1] === "inspect") {
+      return { stdout: JSON.stringify({ Id: `sha256:${"a".repeat(64)}`, RepoDigests: [] }), stderr: "" };
+    }
+    if (args[0] === "volume" && args[1] === "inspect") {
+      const volume = volumeForInspection(value, args.at(-1));
+      return { stdout: JSON.stringify({
+        Name: volume.name,
+        Driver: "local",
+        Options: volume.name === agentRunVolumeName ? { type: "nfs", device: ":/exports/agent-runs" } : null,
+        Labels: volume.labels,
+      }), stderr: "" };
+    }
+    return { stdout: args.at(-1) || "", stderr: "" };
+  });
+
+  await assert.rejects(
+    () => executor.start(value),
+    (error) => error.code === "AGENT_RUN_VOLUME_IDENTITY_MISMATCH",
+  );
+});
+
 test("managed volume deletion returns partial failures and retained resources", async () => {
   const local = context();
   const executor = new LocalDockerExecutor(async (_command, args) => {
@@ -572,6 +654,9 @@ test("managed volume deletion returns partial failures and retained resources", 
   const partial = await executor.delete(local, { deleteVolumes: true });
   assert.equal(partial.completed, false);
   assert.deepEqual(partial.volumeResults.map((item) => item.status).sort(), ["deleted", "failed"]);
+  for (const volume of agentRunVolumes(local)) {
+    assert.equal(partial.volumeResults.some((item) => item.name === volume.name), false);
+  }
 
   const retainedExecutor = new LocalDockerExecutor(async (_command, args) => {
     if (args[0] === "inspect") {

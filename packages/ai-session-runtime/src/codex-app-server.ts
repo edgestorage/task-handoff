@@ -267,7 +267,7 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
       const requestedReasoningEffort = input.reasoningEffort ?? AI_SESSION_DEFAULT_REASONING_EFFORT;
       const thread = await client.startThread({
         cwd: input.cwd,
-        runtimeWorkspaceRoots: [input.cwd],
+        runtimeWorkspaceRoots: input.runtimeWorkspaceRoots || [input.cwd],
         ...this.options.threadStartDefaults,
         ...requestedModel,
         ...(client.supportsPaginatedTimeline?.() ? { historyMode: "paginated" as const } : {}),
@@ -538,7 +538,7 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
     ));
   }
 
-  async resumeSession(providerSessionId: string, modelSelection?: AiSessionModelSelection, reasoningEffort?: AiSessionReasoningEffort, storyAgentTools: import("@task-handoff/protocol/story-agent-tools").StoryAgentToolName[] = []) {
+  async resumeSession(providerSessionId: string, modelSelection?: AiSessionModelSelection, reasoningEffort?: AiSessionReasoningEffort, storyAgentTools: import("@task-handoff/protocol/ai-session-agent-tools").AiSessionAgentToolName[] = []) {
     const client = await this.requireReadyClient();
     const requestedModel = modelSelection ? this.options.resolveModelSelection?.(modelSelection) : undefined;
     if (modelSelection && !requestedModel) {

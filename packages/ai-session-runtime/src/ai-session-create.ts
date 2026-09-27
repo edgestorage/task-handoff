@@ -11,7 +11,7 @@ import type {
   AiSessionReference,
 } from "@task-handoff/protocol/ai-sessions";
 import type { Story } from "@task-handoff/protocol/stories";
-import type { StoryAgentToolName } from "@task-handoff/protocol/story-agent-tools";
+import type { AiSessionAgentToolName } from "@task-handoff/protocol/ai-session-agent-tools";
 import { AiSessionCreateResultSchema } from "@task-handoff/protocol/ai-sessions";
 import { normalizeAiSessionReasoningEffortCapabilities } from "@task-handoff/protocol/ai-session-provider-capabilities";
 import { aiSessionControlError, type AiSessionController } from "./ai-session-control";
@@ -20,6 +20,8 @@ import type { AiSessionRegistry } from "./ai-session-registry";
 export type AiSessionCreateCoordinatorInput = {
   agent: AiAgentKind;
   cwd: string;
+  /** Internal runtime roots for managed member sessions; never accepted from public wire input. */
+  runtimeWorkspaceRoots?: string[];
   cwdFolderId?: string;
   message: string;
   attachments?: AiSessionMessageAttachment[];
@@ -33,6 +35,8 @@ export type AiSessionCreateCoordinatorInput = {
   modelSelection?: AiSessionModelSelection;
   reasoningEffort?: AiSessionReasoningEffort;
   storyId?: Story["id"];
+  /** Internal exact tool set. When present it supersedes Story policy resolution. */
+  agentTools?: AiSessionAgentToolName[];
 };
 
 export type AiSessionCreateCoordinatorOptions = {
@@ -45,7 +49,7 @@ export type AiSessionCreateCoordinatorOptions = {
   operationStorePath?: string;
   onDiagnostic?: (diagnostic: Record<string, unknown>) => void;
   onTiming?: (timing: { clientRequestId: string; agent: string; stage: string; durationMs: number; outcome: "completed" | "failed" }) => void;
-  resolveStoryAgentTools?: (storyId?: Story["id"]) => Promise<StoryAgentToolName[]>;
+  resolveStoryAgentTools?: (storyId?: Story["id"]) => Promise<AiSessionAgentToolName[]>;
 };
 
 export class AiSessionCreateCoordinator {
@@ -94,10 +98,13 @@ export class AiSessionCreateCoordinator {
     }
     const modelSelection = this.options.resolveModelSelection?.(input.agent, input.modelSelection) || input.modelSelection;
     const storyAgentTools = await this.measure(input, "story-agent-tools", async () => (
-      input.storyId ? await this.options.resolveStoryAgentTools?.(input.storyId) || [] : undefined
+      input.agentTools !== undefined
+        ? input.agentTools
+        : input.storyId ? await this.options.resolveStoryAgentTools?.(input.storyId) || [] : undefined
     ));
     const created = await this.measure(input, "provider-create", () => provider.createSession!({
       cwd: input.cwd,
+      runtimeWorkspaceRoots: input.runtimeWorkspaceRoots,
       permissionMode: input.permissionMode,
       modelSelection,
       reasoningEffort: input.reasoningEffort,
