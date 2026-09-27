@@ -5,6 +5,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { StoryAgentToolBridge } from "./src/web/story-agent-tool-bridge.ts";
 import { STORY_AGENT_TOOL_NAMES } from "@task-handoff/protocol/story-agent-tools";
+import { AGENT_INVOCATION_TOOL_NAMES } from "@task-handoff/protocol/agent-invocation-tools";
 
 function testBridge(invocations) {
   return new StoryAgentToolBridge({
@@ -15,6 +16,10 @@ function testBridge(invocations) {
         invocations.push({ session, tool, args });
         if (tool === "story_run_action") return { session: { instanceId: "instance-1", sessionId: "created-session" } };
         return { source: session.id, tool, args };
+      },
+      invokeAgentRun: async (session, args, clientRequestId) => {
+        invocations.push({ session, tool: "agent_run", args, clientRequestId });
+        return { runId: "run-1", status: "completed", result: { text: "done", truncated: false } };
       },
     },
     resolveSession: (provider, providerSessionId) => providerSessionId === `${provider}-provider-session`
@@ -92,7 +97,7 @@ test("Codex MCP bridge uses trusted request metadata to resolve an existing AI S
   try {
     await client.connect(transport);
     const listed = await client.listTools();
-    assert.deepEqual(listed.tools.map((tool) => tool.name).sort(), [...STORY_AGENT_TOOL_NAMES].sort());
+    assert.deepEqual(listed.tools.map((tool) => tool.name).sort(), [...STORY_AGENT_TOOL_NAMES, ...AGENT_INVOCATION_TOOL_NAMES].sort());
     const readOnlyTools = listed.tools
       .filter((tool) => tool.annotations?.readOnlyHint === true)
       .map((tool) => tool.name)
@@ -129,6 +134,21 @@ test("Codex MCP bridge uses trusted request metadata to resolve an existing AI S
     assert.equal(invocations[0].session.storyId, "story-1");
     assert.equal(invocations[0].tool, "story_run_action");
     assert.deepEqual(invocations[0].args, { actionId: "action_1", clientRequestId: "request_1" });
+    const agentResult = await client.callTool({
+      name: "agent_run",
+      arguments: { agentId: "agent-1", prompt: "Review this change" },
+      _meta: { threadId: "codex-provider-session", toolCallId: "call-1" },
+    });
+    assert.deepEqual(agentResult.structuredContent, {
+      runId: "run-1",
+      status: "completed",
+      result: { text: "done", truncated: false },
+    });
+    assert.match(invocations[1].clientRequestId, /^agent_tool_[a-f0-9]{64}$/);
+    const agentTool = listed.tools.find((tool) => tool.name === "agent_run");
+    assert.equal("providerSessionId" in agentTool.inputSchema.properties, false);
+    assert.equal("clientRequestId" in agentTool.inputSchema.properties, false);
+    assert.equal("provenance" in agentTool.inputSchema.properties, false);
   } finally {
     await client.close();
     await app.close();

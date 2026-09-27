@@ -4,6 +4,9 @@ const FEATURE_FLAG_DEFINITIONS = Object.freeze({
     // Compatibility for v0.0.32: mobile releases used the relay-specific name.
     legacyEnvironmentVariable: "TASK_HANDOFF_CLOUD_RELAY_ENABLED",
   }),
+  agentRuns: Object.freeze({
+    environmentVariable: "TASK_HANDOFF_AGENT_RUNS_ENABLED",
+  }),
 });
 
 function resolveFeatureFlags(environment = process.env) {

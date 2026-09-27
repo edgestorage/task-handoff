@@ -4,7 +4,7 @@ import {
   type AiSessionModelSelection,
   type AiSessionResumeResult,
 } from "@task-handoff/protocol/ai-sessions";
-import type { StoryAgentToolName } from "@task-handoff/protocol/story-agent-tools";
+import type { AiSessionAgentToolName } from "@task-handoff/protocol/ai-session-agent-tools";
 import type { AiSessionRegistry } from "./ai-session-registry";
 import type { AiSessionHistoryStore } from "./ai-session-history-store";
 
@@ -18,8 +18,8 @@ export type AiSessionResumeCoordinatorOptions = {
   registry: AiSessionRegistry;
   appSessions: () => readonly AiSessionResumeAppSession[];
   startApp: (item: AiSessionHistoryItem) => AiSessionResumeAppSession | Promise<AiSessionResumeAppSession>;
-  resumeProvider?: (item: AiSessionHistoryItem, storyAgentTools?: StoryAgentToolName[]) => AiSessionModelSelection | void | Promise<AiSessionModelSelection | void>;
-  resolveStoryAgentTools?: (item: AiSessionHistoryItem) => Promise<StoryAgentToolName[]>;
+  resumeProvider?: (item: AiSessionHistoryItem, storyAgentTools?: AiSessionAgentToolName[]) => AiSessionModelSelection | void | Promise<AiSessionModelSelection | void>;
+  resolveStoryAgentTools?: (item: AiSessionHistoryItem) => Promise<AiSessionAgentToolName[]>;
 };
 
 export class AiSessionResumeCoordinator {

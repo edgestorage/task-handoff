@@ -51,6 +51,8 @@ import {
 import { NodeAgentRegistrationClient, nodeAgentRegistrationConfigFromEnv } from "./node-agent-client";
 import { StoryAgentToolService } from "./story-tools";
 import { StoryAgentToolBridge } from "./story-agent-tool-bridge";
+import { AgentRunMemberBindingStore } from "./agent-run-member-bindings";
+import { projectAgentRunMemberStatus } from "./agent-run-member-status";
 import { nodeAgentApiRoute, publicApiRoute, registerAuth, resolveWebAuth } from "./auth";
 import { AiSessionMessageDeltaCoalescer } from "./ai-session-message-delta-coalescer";
 import { projectAiSessionAuthorityChange } from "./ai-session-authority-events";
@@ -180,6 +182,12 @@ import { bridgeWebSockets, TASK_HANDOFF_WEBSOCKET_SERVER_OPTIONS } from "@task-h
 import { SESSION_STREAM_PROTOCOL_VERSION, SessionStreamsHelloEventType } from "@task-handoff/protocol/events";
 import { AppManagementOperationRequestSchema, CodexInstanceSettingsSchema, UpdateControlledInstanceNodeAgentConnectionSchema } from "@task-handoff/protocol/control-plane";
 import { StoryAutomationInstanceCreateInputSchema, StoryAutomationInstanceCreateResultSchema } from "@task-handoff/protocol/story-automation-instance";
+import {
+  AgentRunInstanceProbeStateSchema,
+  AgentRunMemberInstanceCloseResultSchema,
+  AgentRunMemberInstanceCreateInputSchema,
+  AgentRunMemberInstanceCreateResultSchema,
+} from "@task-handoff/protocol/agent-run-instance";
 import {
   StoryAgentAiSessionInstanceReadResultSchema,
   StoryAgentAiSessionInstanceTurnResultSchema,
@@ -616,6 +624,17 @@ function tailTextFile(filePath: string, maxLines = 200) {
   };
 }
 
+function withoutAgentRunMemberSessions(snapshot: AiSessionsSnapshot, bindings: AgentRunMemberBindingStore): AiSessionsSnapshot {
+  const sessions = snapshot.sessions.filter((session) => !bindings.getBySession(session.id));
+  return {
+    ...snapshot,
+    sessions,
+    runningCount: sessions.filter((session) => session.status === "running").length,
+    waitingCount: sessions.filter((session) => session.status === "waiting").length,
+    staleCount: 0,
+  };
+}
+
 async function runTriggerOnce(triggers: TriggerStore, executor: TriggerExecutor, configHash: string, input: unknown = {}) {
   const parsed = TriggerRunRequestSchema.parse(input || {});
   const entry = triggers.get(configHash);
@@ -703,7 +722,11 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     aiSessionProviderCapabilities(),
     gitCredentialBrokerInstalled,
   ));
-  const storyAgentTools = new StoryAgentToolService(nodeAgentClient);
+  const agentRunMembers = new AgentRunMemberBindingStore(storagePaths.runtimeDir);
+  const storyAgentTools = new StoryAgentToolService(
+    nodeAgentClient,
+    (sessionId) => agentRunMembers.getBySession(sessionId),
+  );
   const bundledOpenCodeStoryPlugin = path.join(__dirname, "opencode-story-plugin.mjs");
   const storyAgentToolBridge = nodeAgentClient.enabled() ? new StoryAgentToolBridge({
     service: storyAgentTools,
@@ -719,6 +742,19 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
 
   await app.register(websocket, { options: TASK_HANDOFF_WEBSOCKET_SERVER_OPTIONS });
   registerAuth(app, auth);
+  app.addHook("preHandler", async (request, reply) => {
+    if (request.method === "GET") return;
+    const match = /^\/api\/ai-sessions\/([^/]+)(?:\/|$)/.exec(request.url.split("?")[0]!);
+    if (!match) return;
+    const sessionId = decodeURIComponent(match[1]!);
+    if (!agentRunMembers.getBySession(sessionId)) return;
+    return reply.code(409).send({
+      error: {
+        code: "AGENT_RUN_MEMBER_SESSION_MANAGED",
+        message: "Agent Run member sessions are managed by the Node Agent and cannot be changed through the public AI Session API.",
+      },
+    });
+  });
   storyAgentToolBridge?.register(app);
 
   app.addHook("onReady", async () => {
@@ -1202,7 +1238,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   };
   const publishAiSessionSnapshot = (reason: AiSessionEventReason = "provider-event") => {
     aiSessionMessageDeltas.flushAll("authoritative-event");
-    const snapshot = aiSessions.boundSnapshot(appSessionsWithSharedCodexAppServer());
+    const snapshot = withoutAgentRunMemberSessions(aiSessions.boundSnapshot(appSessionsWithSharedCodexAppServer()), agentRunMembers);
     const change = projectAiSessionAuthorityChange(lastAiSessionSnapshot, snapshot);
     if (change.kind !== "unchanged") {
       aiSessionSnapshotRevision += 1;
@@ -1624,6 +1660,98 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     }
   });
 
+  app.post<{ Body: unknown }>("/api/internal/node-agent/agent-runs/members", nodeAgentProcessRoute, async (request, reply) => {
+    try {
+      const body = AgentRunMemberInstanceCreateInputSchema.parse(request.body || {});
+      if (body.providerId !== "codex") {
+        throw Object.assign(new Error("This controlled instance has not proven Agent Run thread isolation for the requested provider."), {
+          code: "AGENT_RUN_PROVIDER_UNSUPPORTED",
+          statusCode: 409,
+        });
+      }
+      const result = await aiSessionCreate.create({
+        agent: body.providerId,
+        cwd: body.cwd.path,
+        runtimeWorkspaceRoots: [body.writableRoots.workspace.path, body.writableRoots.shared.path],
+        message: body.appendedPrompt.trim()
+          ? `${body.prompt}\n\nAdditional Agent instructions:\n${body.appendedPrompt}`
+          : body.prompt,
+        permissionMode: body.permissionMode,
+        clientRequestId: body.clientRequestId,
+        modelSelection: body.modelSelection,
+        reasoningEffort: body.reasoningEffort,
+        agentTools: body.enabledTools,
+        attachments: [],
+        references: [],
+      });
+      const binding = agentRunMembers.bind({
+        runId: body.runId,
+        memberId: body.memberId,
+        aiSessionId: result.aiSessionId,
+        providerSessionId: result.providerSessionId,
+      });
+      if (binding.closedAt) {
+        throw Object.assign(new Error("The Agent Run member session was already permanently closed."), {
+          code: "AGENT_RUN_MEMBER_SESSION_CLOSED",
+          statusCode: 409,
+        });
+      }
+      publishAiSessionSnapshot("control-action");
+      return { data: AgentRunMemberInstanceCreateResultSchema.parse({
+        disposition: result.disposition,
+        aiSessionId: result.aiSessionId,
+        providerSessionId: result.providerSessionId,
+      }) };
+    } catch (error: unknown) {
+      return sendAiSessionControlError(reply, error);
+    }
+  });
+
+  app.get("/api/internal/node-agent/agent-runs/probe-state", nodeAgentProcessRoute, async () => ({
+    data: AgentRunInstanceProbeStateSchema.parse({
+      ordinaryAiSessionIds: withoutAgentRunMemberSessions(
+        aiSessions.boundSnapshot(appSessionsWithSharedCodexAppServer()),
+        agentRunMembers,
+      ).sessions.map((session) => session.id).sort(),
+    }),
+  }));
+
+  app.get<{ Params: { runId: string; memberId: string } }>(
+    "/api/internal/node-agent/agent-runs/:runId/members/:memberId",
+    nodeAgentProcessRoute,
+    async (request, reply) => {
+      const binding = agentRunMembers.get(request.params.runId, request.params.memberId);
+      if (!binding) return reply.code(404).send({ error: { code: "AGENT_RUN_MEMBER_SESSION_NOT_FOUND", message: "Agent Run member session was not found." } });
+      const session = aiSessions.get(binding.aiSessionId);
+      if (!session) return reply.code(409).send({ error: { code: "AGENT_RUN_MEMBER_SESSION_CLOSED", message: "Agent Run member session is already closed." } });
+      return { data: projectAgentRunMemberStatus(binding, session) };
+    },
+  );
+
+  app.post<{ Params: { runId: string; memberId: string } }>(
+    "/api/internal/node-agent/agent-runs/:runId/members/:memberId/close",
+    nodeAgentProcessRoute,
+    async (request, reply) => {
+      try {
+        const binding = agentRunMembers.get(request.params.runId, request.params.memberId);
+        if (!binding) return reply.code(404).send({ error: { code: "AGENT_RUN_MEMBER_SESSION_NOT_FOUND", message: "Agent Run member session was not found." } });
+        if (!binding.closedAt) {
+          await aiSessionClose!.close(binding.aiSessionId);
+          agentRunMembers.close(binding.runId, binding.memberId);
+        }
+        publishAiSessionSnapshot("control-action");
+        return { data: AgentRunMemberInstanceCloseResultSchema.parse({
+          runId: binding.runId,
+          memberId: binding.memberId,
+          aiSessionId: binding.aiSessionId,
+          closed: true,
+        }) };
+      } catch (error: unknown) {
+        return sendAiSessionControlError(reply, error);
+      }
+    },
+  );
+
   app.get<{ Params: { id: string } }>("/api/internal/node-agent/story-ai-sessions/:id", nodeAgentProcessRoute, async (request, reply) => {
     const session = aiSessions.conversation(request.params.id);
     if (!session) return reply.code(404).send({ error: { code: "AI_SESSION_NOT_FOUND", message: "AI session not found." } });
@@ -1736,7 +1864,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
         socket,
         AiSessionEventType.Snapshot,
         createAiSessionSnapshotEvent(
-          projectAiSessionsSnapshotForConsumer(lastAiSessionSnapshot || aiSessions.boundSnapshot(appSessionsWithSharedCodexAppServer()), hierarchy),
+          projectAiSessionsSnapshotForConsumer(lastAiSessionSnapshot || withoutAgentRunMemberSessions(aiSessions.boundSnapshot(appSessionsWithSharedCodexAppServer()), agentRunMembers), hierarchy),
           "startup",
         ),
       );
@@ -1797,7 +1925,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       streamId: aiSessionStreamId,
       revision: aiSessionSnapshotRevision,
       lastEventAt: aiSessionEventHistory.at(-1)?.payload.meta.generatedAt || startedAt,
-      snapshot: projectAiSessionsSnapshotForConsumer(lastAiSessionSnapshot || aiSessions.boundSnapshot(appSessionsWithSharedCodexAppServer()), hierarchy),
+      snapshot: projectAiSessionsSnapshotForConsumer(lastAiSessionSnapshot || withoutAgentRunMemberSessions(aiSessions.boundSnapshot(appSessionsWithSharedCodexAppServer()), agentRunMembers), hierarchy),
     } };
   });
 
@@ -1806,7 +1934,7 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       streamId: aiSessionStreamId,
       revision: aiSessionSnapshotRevision,
       lastEventAt: aiSessionEventHistory.at(-1)?.payload.meta.generatedAt || startedAt,
-      snapshot: projectAiSessionsSnapshotForConsumer(lastAiSessionSnapshot || aiSessions.boundSnapshot(appSessionsWithSharedCodexAppServer()), { subagents: request.query.hierarchy === "subagents" }),
+      snapshot: projectAiSessionsSnapshotForConsumer(lastAiSessionSnapshot || withoutAgentRunMemberSessions(aiSessions.boundSnapshot(appSessionsWithSharedCodexAppServer()), agentRunMembers), { subagents: request.query.hierarchy === "subagents" }),
     },
   }));
 
@@ -1916,7 +2044,11 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
     const requested = request.query.agents?.split(",").map((agent) => agent.trim()).filter(Boolean);
     const agents = new Set(requested?.length ? requested : ["codex", "claude"]);
     const hierarchy = { subagents: request.query.hierarchy === "subagents" };
-    return { data: AiSessionHistoryListSchema.parse({ items: aiSessionHistory.list().filter((item) => agents.has(item.agent)).map((item) => projectAiSessionHistoryItemForConsumer(item, hierarchy)) }) };
+    return { data: AiSessionHistoryListSchema.parse({
+      items: aiSessionHistory.list()
+        .filter((item) => agents.has(item.agent) && !agentRunMembers.getBySession(item.id))
+        .map((item) => projectAiSessionHistoryItemForConsumer(item, hierarchy)),
+    }) };
   });
 
   app.post<{ Querystring: Record<string, unknown>; Body: Readable }>("/api/ai-session-attachments/drafts", { bodyLimit: AI_SESSION_ATTACHMENT_UPLOAD_BODY_LIMIT }, async (request, reply) => {

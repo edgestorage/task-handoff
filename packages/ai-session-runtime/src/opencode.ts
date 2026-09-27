@@ -12,7 +12,7 @@ import {
   type AiSessionSendInput,
 } from "./ai-session-control";
 import type { AiSessionModelSelection, AiSessionReasoningEffort } from "@task-handoff/protocol/ai-sessions";
-import type { StoryAgentToolName } from "@task-handoff/protocol/story-agent-tools";
+import type { AiSessionAgentToolName } from "@task-handoff/protocol/ai-session-agent-tools";
 import type { AiSessionDiscoveryContext, AiSessionDiscoveryProvider } from "./ai-session-discovery";
 import type { AiSessionRegistry } from "./ai-session-registry";
 import { isRetainedAiSessionAttachment, materializeAiSessionAttachments } from "./ai-session-attachments";
@@ -133,7 +133,7 @@ export class OpenCodeSessionBridge implements AiSessionControlProvider, AiSessio
     await this.reconcile(providerSessionId, await this.resolveDirectory(providerSessionId), undefined, "ai-session");
   }
 
-  async resumeSession(providerSessionId: string, _modelSelection?: AiSessionModelSelection, _reasoningEffort?: AiSessionReasoningEffort, storyAgentTools?: StoryAgentToolName[]) {
+  async resumeSession(providerSessionId: string, _modelSelection?: AiSessionModelSelection, _reasoningEffort?: AiSessionReasoningEffort, storyAgentTools?: AiSessionAgentToolName[]) {
     await this.readSession(providerSessionId);
     if (storyAgentTools === undefined) return;
     const directory = await this.resolveDirectory(providerSessionId);

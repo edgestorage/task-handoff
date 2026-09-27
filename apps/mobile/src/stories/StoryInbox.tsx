@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { ActivityIndicator, Alert, FlatList, Modal, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { MenuView, type MenuAction } from '@expo/ui/community/menu';
 import * as Crypto from 'expo-crypto';
-import { aiSessionStatusGroup, normalizeManualStoryOrder, reorderStoryKeys, storyNodeIsVisible } from '@task-handoff/control-plane-client';
+import { aiSessionStatusGroup, nodeIsVisible, normalizeManualStoryOrder, reorderStoryKeys } from '@task-handoff/control-plane-client';
 import type { Story, StoryDocument } from '@task-handoff/protocol/stories';
 
 import { mobileAiSessionStatusLabel } from '../ai-sessions/SessionDetail';
@@ -65,8 +65,8 @@ export function StoryInbox({ onAddAction, onAddAutomation, onAddExisting, onEdit
   const [error, setError] = useState<string>();
   const [renamingDocument, setRenamingDocument] = useState<{ story: Story; document: StoryDocument; title: string }>();
   const nodeNames = useMemo(() => new Map(directory.nodes.map((node) => [node.id, node.name])), [directory.nodes]);
-  const visibleStories = useMemo(() => stories.filter((story) => storyNodeIsVisible(nodeFilter, story.ownerNodeId)), [nodeFilter, stories]);
-  const visibleUnavailableNodeIds = useMemo(() => unavailableNodeIds.filter((nodeId) => storyNodeIsVisible(nodeFilter, nodeId)), [nodeFilter, unavailableNodeIds]);
+  const visibleStories = useMemo(() => stories.filter((story) => nodeIsVisible(nodeFilter, story.ownerNodeId)), [nodeFilter, stories]);
+  const visibleUnavailableNodeIds = useMemo(() => unavailableNodeIds.filter((nodeId) => nodeIsVisible(nodeFilter, nodeId)), [nodeFilter, unavailableNodeIds]);
   const sessionsByStory = useMemo(
     () => groupStoryTreeSessions(stories, directory.instances, sessions, expandedSessionIds),
     [directory.instances, expandedSessionIds, sessions, stories],

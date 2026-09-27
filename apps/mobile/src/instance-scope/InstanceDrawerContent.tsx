@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { DrawerContentScrollView, type DrawerContentComponentProps } from 'expo-router/drawer';
 import { router, usePathname } from 'expo-router';
 import { ActivityIndicator, Image, Pressable, StyleSheet, Text, View } from 'react-native';
-import { allStoryNodes, storyNodeIsSelected, toggleStoryNode } from '@task-handoff/control-plane-client';
+import { allNodesVisible, nodeIsSelected, toggleNodeVisibility } from '@task-handoff/control-plane-client';
 
 import { SystemIcon } from '../components/SystemIcon';
 import { EmptyState } from '../components/EmptyState';
@@ -42,18 +42,18 @@ export function InstanceDrawerContent(props: DrawerContentComponentProps) {
         </View>
       </View>
       {storyMode ? <>
-        <DrawerRow active={storyNodeFilter.kind === 'all'} count={state.nodes.length} icon="nodes" label={t('directories.allNodes')} onPress={() => setStoryNodeFilter(allStoryNodes())} />
+        <DrawerRow active={storyNodeFilter.kind === 'all'} count={state.nodes.length} icon="nodes" label={t('directories.allNodes')} onPress={() => setStoryNodeFilter(allNodesVisible())} />
         <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>{t('nav.node')}</Text>
         <View style={styles.storyNodeList}>
           {state.nodes.map((node) => {
-            const selected = storyNodeIsSelected(storyNodeFilter, node.id);
+            const selected = nodeIsSelected(storyNodeFilter, node.id);
             const connecting = node.connectionPhase === 'connecting' || node.connectionPhase === 'handshaking' || node.connectionPhase === 'reconnecting';
             const status = nodeStateLabel(node, t);
             return <Pressable
               accessibilityRole="checkbox"
               accessibilityState={{ checked: selected }}
               key={node.id}
-              onPress={() => setStoryNodeFilter(toggleStoryNode(storyNodeFilter, node.id, !selected, state.nodes.map((candidate) => candidate.id)))}
+              onPress={() => setStoryNodeFilter(toggleNodeVisibility(storyNodeFilter, node.id, !selected, state.nodes.map((candidate) => candidate.id)))}
               style={({ pressed }) => [styles.nodeRow, selected && { backgroundColor: colors.surfaceMuted }, pressed && styles.pressed]}
             >
               <SystemIcon android="dns" color={colors.textMuted} ios="server.rack" size={16} />

@@ -27,6 +27,12 @@ import {
 } from "@task-handoff/protocol/app-sessions";
 import { SessionStreamsHelloSchema, type EventEnvelope, type SessionStreamsHello } from "@task-handoff/protocol/events";
 import { safeParseResponse } from "@task-handoff/protocol/response-validation";
+import {
+  NODE_AGENT_CAPABILITIES_CHANGED_EVENT_TYPE,
+  NodeAgentCapabilitiesChangedEventSchema,
+} from "@task-handoff/protocol/node-agent-capabilities";
+import { AGENT_DEFINITION_CHANGED_EVENT_TYPE } from "@task-handoff/protocol/agent-definitions";
+import { AGENT_RUN_CHANGED_EVENT_TYPE, AGENT_RUN_MEMBER_CHANGED_EVENT_TYPE } from "@task-handoff/protocol/agent-runs";
 import type { ControlPlaneEventBus } from "../events/bus.ts";
 
 const SESSION_EVENT_SCHEMAS = {
@@ -54,6 +60,8 @@ type TunnelEventRouterOptions = {
   onSessionEvent?: (event: EventEnvelope) => boolean;
   onInstanceLifecycle?: (nodeId: string, lifecycle: InstanceLifecycleSnapshot) => boolean | Promise<boolean>;
   validateInstanceScope?: (nodeId: string, instanceId: string) => boolean | Promise<boolean>;
+  onAgentEvent?: (nodeId: string, type: string, payload: unknown) => unknown | undefined;
+  onCapabilitiesChanged?: (nodeId: string) => void | Promise<void>;
   scopeTtlMs?: number;
   logger?: Logger;
 };
@@ -180,6 +188,47 @@ export class NodeTunnelEventRouter {
       return true;
     }
 
+    if (eventType === AGENT_DEFINITION_CHANGED_EVENT_TYPE
+      || eventType === AGENT_RUN_CHANGED_EVENT_TYPE
+      || eventType === AGENT_RUN_MEMBER_CHANGED_EVENT_TYPE) {
+      const projected = this.options.onAgentEvent?.(nodeId, eventType, payload);
+      if (!projected) {
+        this.options.logger?.warn?.({ nodeId, eventType, reason: "invalid-payload" }, "agent-event.transport.rejected");
+        return true;
+      }
+      const instanceIds = agentEventInstanceIds(eventType, projected);
+      this.options.events?.publish(eventType, { nodeId, event: projected }, {
+        topic: "agents",
+        scope: {
+          nodeId,
+          ...(instanceIds.length ? { instanceId: instanceIds[0] } : {}),
+          ...(instanceIds.length > 1 ? { instanceIds } : {}),
+        },
+        sourceEvent: {
+          id: typeof event.id === "string" ? event.id : `forwarded_${Date.now().toString(36)}`,
+          createdAt: typeof event.createdAt === "string" ? event.createdAt : new Date().toISOString(),
+          ...(event.replay === true ? { replay: true as const } : {}),
+        },
+      });
+      return true;
+    }
+
+    if (eventType === NODE_AGENT_CAPABILITIES_CHANGED_EVENT_TYPE) {
+      const parsed = safeParseResponse(NodeAgentCapabilitiesChangedEventSchema, payload);
+      if (!parsed.success) {
+        this.options.logger?.warn?.({ nodeId, eventType, reason: "invalid-payload" }, "node-capabilities-event.transport.rejected");
+        return true;
+      }
+      void Promise.resolve(this.options.onCapabilitiesChanged?.(nodeId)).catch((error) => {
+        this.options.logger?.warn?.({
+          nodeId,
+          eventType,
+          error: error instanceof Error ? error.message : String(error),
+        }, "node capability refresh failed");
+      });
+      return true;
+    }
+
     const publishUnknown = () => {
       this.options.events?.publish(eventType, payload, {
         topic: typeof event.topic === "string" ? event.topic : undefined,
@@ -280,6 +329,23 @@ export class NodeTunnelEventRouter {
     this.scopeEpochs.set(key, epoch);
     return epoch;
   }
+}
+
+function agentEventInstanceIds(eventType: string, event: unknown) {
+  if (!event || typeof event !== "object") return [];
+  if (eventType === AGENT_DEFINITION_CHANGED_EVENT_TYPE) {
+    const definition = (event as { definition?: { targetInstanceId?: unknown } }).definition;
+    return typeof definition?.targetInstanceId === "string" ? [definition.targetInstanceId] : [];
+  }
+  if (eventType === AGENT_RUN_MEMBER_CHANGED_EVENT_TYPE) {
+    const instanceId = (event as { member?: { instanceId?: unknown } }).member?.instanceId;
+    return typeof instanceId === "string" ? [instanceId] : [];
+  }
+  const run = (event as { run?: { provenance?: { initiatingInstanceId?: unknown }; members?: Array<{ instanceId?: unknown }> } }).run;
+  return [...new Set([
+    run?.provenance?.initiatingInstanceId,
+    ...(run?.members ?? []).map((member) => member.instanceId),
+  ].filter((value): value is string => typeof value === "string" && Boolean(value)))];
 }
 
 function parseSessionEvent(eventType: string, payload: unknown, claimedInstanceId?: string) {

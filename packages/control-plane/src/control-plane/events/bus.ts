@@ -316,6 +316,7 @@ const NODE_DERIVED_EVENT_TOPICS = new Set([
   "app.sessions",
   "ai.sessions",
   "apps",
+  "agents",
 ]);
 
 function authorizedEvent(client: EventSocket, event: EventEnvelope) {
@@ -324,8 +325,14 @@ function authorizedEvent(client: EventSocket, event: EventEnvelope) {
   if (event.topic === "triggers" && !event.scope?.nodeId && !event.scope?.instanceId) {
     return authorization.permissionIds.includes("triggers:manage");
   }
-  if (event.scope?.nodeId) return !authorization.allowedNodeIds || authorization.allowedNodeIds.has(event.scope.nodeId);
-  if (event.scope?.instanceId) return !authorization.allowedInstanceIds || authorization.allowedInstanceIds.has(event.scope.instanceId);
+  if (event.scope?.nodeId && authorization.allowedNodeIds && !authorization.allowedNodeIds.has(event.scope.nodeId)) return false;
+  const scopedInstanceIds = [
+    event.scope?.instanceId,
+    ...(Array.isArray(event.scope?.instanceIds) ? event.scope.instanceIds : []),
+  ].filter((value): value is string => typeof value === "string" && Boolean(value));
+  if (scopedInstanceIds.length && authorization.allowedInstanceIds
+    && scopedInstanceIds.some((instanceId) => !authorization.allowedInstanceIds!.has(instanceId))) return false;
+  if (event.scope?.nodeId || scopedInstanceIds.length) return true;
   if (!authorization.allowedNodeIds && !authorization.allowedInstanceIds) return true;
   return !NODE_DERIVED_EVENT_TOPICS.has(event.topic);
 }

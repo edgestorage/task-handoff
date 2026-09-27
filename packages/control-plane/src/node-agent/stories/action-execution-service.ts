@@ -1,9 +1,9 @@
-import path from "node:path";
 import type { ControlledInstance } from "@task-handoff/protocol/control-plane";
 import { StoryAutomationInstanceCreateInputSchema, StoryAutomationInstanceCreateResultSchema } from "@task-handoff/protocol/story-automation-instance";
 import type { z } from "zod";
 import { StoryActionRunResultSchema } from "@task-handoff/protocol/stories";
 import type { NodeAgentState } from "../state.ts";
+import { resolveInstanceFolder } from "../instances/instance-folder.ts";
 import type { StoryAutomationExecutionInput } from "./automation-store.ts";
 import type { NodeStoryStore, StoryAutomationContext } from "./store.ts";
 
@@ -89,15 +89,11 @@ export class StoryActionExecutionService {
 
   private runtimeCwd(instance: ControlledInstance, cwdFolderId?: string) {
     if (!cwdFolderId) return instance.runtime.workspacePath || instance.workspace.path || "/workspace";
-    const folder = this.state.localFolders.get(cwdFolderId);
-    if (!folder) throw actionError("NODE_LOCAL_FOLDER_NOT_FOUND", "Story Action working folder was not found.", 404);
-    const runtime = this.state.requireRuntime(instance.runtimeId);
-    if (runtime.type === "local") return path.resolve(folder.path);
-    if (instance.source.type !== "local-folder") throw actionError("AI_SESSION_CWD_UNAVAILABLE", "Working folder is unavailable for this instance source.", 409);
-    const relative = path.relative(path.resolve(instance.source.path), path.resolve(folder.path));
-    if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw actionError("AI_SESSION_CWD_OUTSIDE_WORKSPACE", "Working folder is outside the instance workspace.", 409);
-    const workspace = instance.runtime.workspacePath || instance.workspace.path || "/workspace";
-    return relative ? path.posix.join(workspace, ...relative.split(path.sep)) : workspace;
+    const resolution = resolveInstanceFolder(this.state, instance, cwdFolderId);
+    if (resolution.status === "unknown-folder") throw actionError("NODE_LOCAL_FOLDER_NOT_FOUND", "Story Action working folder was not found.", 404);
+    if (resolution.status === "unsupported-source") throw actionError("AI_SESSION_CWD_UNAVAILABLE", "Working folder is unavailable for this instance source.", 409);
+    if (resolution.status === "outside-workspace") throw actionError("AI_SESSION_CWD_OUTSIDE_WORKSPACE", "Working folder is outside the instance workspace.", 409);
+    return resolution.runtimePath;
   }
 }
 

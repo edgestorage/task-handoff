@@ -266,6 +266,33 @@ test("Linux launcher sources and package preparation enforce LF line endings", (
   assert.match(entrypoint, /sudo --preserve-env --set-home -u agent -- bash "\$0"/);
   assert.match(entrypoint, /exec bash "\$\{TASK_HANDOFF_INSTANCE_LAUNCHER\}"/);
   assert.doesNotMatch(launcher, /task-handoff-controlled-instance/);
+  assert.match(launcher, /cd -- "\$\{runtime_root\}"[\s\S]*exec node/);
+});
+
+test("runtime launcher moves child processes off the previous release directory", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-launcher-cwd-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const runtimeRoot = path.join(root, "runtime");
+  const release = path.join(runtimeRoot, "releases", "current-release");
+  const previousRelease = path.join(runtimeRoot, "releases", "previous-release");
+  const fakeBin = path.join(root, "bin");
+  const observedCwd = path.join(root, "observed-cwd");
+  fs.mkdirSync(release, { recursive: true });
+  fs.mkdirSync(previousRelease);
+  fs.mkdirSync(fakeBin);
+  fs.symlinkSync(path.relative(runtimeRoot, release), path.join(runtimeRoot, "current"));
+  fs.writeFileSync(path.join(fakeBin, "node"), `#!/usr/bin/env bash\npwd > "${observedCwd}"\n`, { mode: 0o755 });
+
+  execFileSync("bash", [path.resolve(__dirname, "../docker/instance-launcher.sh")], {
+    cwd: previousRelease,
+    env: {
+      ...process.env,
+      PATH: `${fakeBin}:${process.env.PATH}`,
+      TASK_HANDOFF_INSTANCE_RUNTIME_ROOT: runtimeRoot,
+    },
+  });
+
+  assert.equal(fs.readFileSync(observedCwd, "utf8").trim(), runtimeRoot);
 });
 
 test("runtime launcher installation preserves the root command stderr", async () => {

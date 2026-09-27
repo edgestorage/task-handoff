@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { InstanceDeleteResultSchema, RuntimeArtifactIdentitySchema, type ControlledInstance, type InstanceDeleteInput, type InstanceDeleteResult, type InstanceImageSnapshot, type LocalDockerImage, type Node, type NodeRuntime, type Project, type RuntimeArtifactIdentity } from "@task-handoff/protocol/control-plane";
@@ -92,6 +93,41 @@ const DOCKER_BOOTSTRAP_ENTRYPOINT = `${DOCKER_BOOTSTRAP_CONTAINER_DIR}/entrypoin
 const DOCKER_BOOTSTRAP_EXECUTABLE = "/bin/bash";
 const DOCKER_RUNTIME_INSTALLER = `${DOCKER_BOOTSTRAP_CONTAINER_DIR}/runtime-installer.mjs`;
 const DOCKER_RUNTIME_ROOT = "/opt/task-handoff/instance-runtime";
+export const DOCKER_AGENT_RUN_ROOT = "/run/task-handoff/agent-runs";
+export const DOCKER_AGENT_RUN_OVERLAY_ROOT = `${DOCKER_AGENT_RUN_ROOT}/overlay`;
+export const DOCKER_AGENT_RUN_SHARED_ROOT = `${DOCKER_AGENT_RUN_ROOT}/shared`;
+
+export type DockerAgentRunRuntimeVolume = {
+  role: "agent-run";
+  name: string;
+  mountPath: string;
+  labels: Record<string, string>;
+};
+
+function dockerResourceSegment(value: string) {
+  const normalized = value.replace(/[^a-zA-Z0-9_.-]/g, "-").replace(/^-+|-+$/g, "").slice(0, 36) || "unknown";
+  const digest = crypto.createHash("sha256").update(value).digest("hex").slice(0, 10);
+  return `${normalized}-${digest}`;
+}
+
+export function agentRunRuntimeVolume(nodeId: string, runtimeId: string): DockerAgentRunRuntimeVolume {
+  const prefix = `task-handoff-agent-${dockerResourceSegment(nodeId)}-${dockerResourceSegment(runtimeId)}`;
+  return {
+    role: "agent-run",
+    name: `${prefix}-runs`,
+    mountPath: DOCKER_AGENT_RUN_ROOT,
+    labels: {
+      "task-handoff.owner": "task-handoff",
+      "task-handoff.node-id": nodeId,
+      "task-handoff.runtime-id": runtimeId,
+      "task-handoff.volume-role": "agent-run",
+    },
+  };
+}
+
+function agentRunRuntimeVolumeForContext(context: ExecutorContext) {
+  return agentRunRuntimeVolume(context.node?.id || "node_unset", context.runtime?.id || "runtime_local_docker");
+}
 
 function runtimeVolumeForInstance(instanceId: string, nodeId: string) {
   const containerName = containerNameForInstance(instanceId);
@@ -385,10 +421,16 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
       await this.createVolume(volume);
       await this.validateOwnedVolume(context.instance.id, volume, legacyMountedVolumeNames.has(volume.name));
     }
+    const agentRunVolume = agentRunRuntimeVolumeForContext(context);
+    await this.createVolume(agentRunVolume);
+    await this.validateAgentRunRuntimeVolume(context, agentRunVolume);
   }
 
   private async createRuntimeVolume(context: ExecutorContext) {
     await this.createVolume(runtimeVolumeForInstance(context.instance.id, context.node?.id || "node_unset"));
+    const agentRunVolume = agentRunRuntimeVolumeForContext(context);
+    await this.createVolume(agentRunVolume);
+    await this.validateAgentRunRuntimeVolume(context, agentRunVolume);
   }
 
   private async createVolume(volume: { name: string; labels: Record<string, string> }) {
@@ -424,6 +466,17 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
         code: "INSTANCE_VOLUME_MOUNT_IDENTITY_MISMATCH",
       });
     }
+    // Compatibility for v0.0.32: existing containers predate Agent Run runtime volumes.
+    // Missing mounts only disable Agent execution; ordinary instance startup remains available.
+    const agentRunVolume = agentRunRuntimeVolumeForContext(context);
+    await this.validateAgentRunRuntimeVolume(context, agentRunVolume);
+    const agentRunMount = mounts.find((item) => item.destination === agentRunVolume.mountPath);
+    if (agentRunMount && (agentRunMount.type !== "volume" || agentRunMount.name !== agentRunVolume.name)) {
+      throw Object.assign(new Error(`Docker Agent Run mount does not match managed volume ${agentRunVolume.name}.`), {
+        statusCode: 409,
+        code: "AGENT_RUN_VOLUME_MOUNT_IDENTITY_MISMATCH",
+      });
+    }
     if (context.project.source.type === "local-folder") {
       const workspace = mounts.find((item) => item.destination === (context.project.workspacePolicy.path || "/workspace"));
       if (!workspace || workspace.type !== "bind" || path.resolve(workspace.source || "") !== path.resolve(context.project.source.path)) {
@@ -432,6 +485,38 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
           code: "INSTANCE_WORKSPACE_MOUNT_IDENTITY_MISMATCH",
         });
       }
+    }
+  }
+
+  private async validateAgentRunRuntimeVolume(context: ExecutorContext, expected: DockerAgentRunRuntimeVolume) {
+    let result;
+    try {
+      result = await this.runCommand("docker", ["volume", "inspect", "--format", "{{json .}}", expected.name]);
+    } catch (cause) {
+      throw runtimeExecutorError("AGENT_RUN_VOLUME_INSPECT_FAILED", `Could not inspect Agent Run volume ${expected.name}.`, cause);
+    }
+    try {
+      const inspected = JSON.parse(result.stdout || "{}") as { Name?: unknown; Labels?: unknown; Driver?: unknown; Options?: unknown };
+      const labels = inspected.Labels && typeof inspected.Labels === "object" && !Array.isArray(inspected.Labels)
+        ? inspected.Labels as Record<string, unknown>
+        : {};
+      const options = inspected.Options && typeof inspected.Options === "object" && !Array.isArray(inspected.Options)
+        ? inspected.Options as Record<string, unknown>
+        : {};
+      if (inspected.Name !== expected.name
+        || labels["task-handoff.owner"] !== "task-handoff"
+        || labels["task-handoff.node-id"] !== (context.node?.id || "node_unset")
+        || labels["task-handoff.runtime-id"] !== (context.runtime?.id || "runtime_local_docker")
+        || labels["task-handoff.volume-role"] !== expected.role
+        || (typeof inspected.Driver === "string" && inspected.Driver !== "local")
+        || Object.keys(options).length > 0) {
+        throw new Error("volume identity, ownership or local driver does not match");
+      }
+    } catch (cause) {
+      throw Object.assign(new Error(`Agent Run volume ${expected.name} identity does not match runtime ${context.runtime?.id}.`, { cause }), {
+        statusCode: 409,
+        code: "AGENT_RUN_VOLUME_IDENTITY_MISMATCH",
+      });
     }
   }
 
@@ -1208,6 +1293,8 @@ export function dockerRunArgs(context: ExecutorContext, containerName: string, o
   }
   const runtimeVolume = runtimeVolumeForInstance(context.instance.id, context.node?.id || "node_unset");
   args.push("--mount", `type=volume,src=${runtimeVolume.name},dst=${runtimeVolume.mountPath}`);
+  const agentRunVolume = agentRunRuntimeVolumeForContext(context);
+  args.push("--mount", `type=volume,src=${agentRunVolume.name},dst=${agentRunVolume.mountPath}`);
 
   const runtimeEnv = {
     TASK_HANDOFF_CONTROL_MODE: "controlled",

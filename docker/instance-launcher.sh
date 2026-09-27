@@ -24,6 +24,10 @@ if [ ! -L "${current}" ]; then
   bootstrap_wait
 fi
 
+# The launcher can be restarted by a process whose cwd belongs to the previous
+# release. Keep this process and every child on a directory that survives release cleanup.
+cd -- "${runtime_root}"
+
 exec node --input-type=module - "${current}" <<'NODE'
 import fs from "node:fs";
 import path from "node:path";

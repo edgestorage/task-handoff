@@ -58,9 +58,9 @@
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
-        <div v-else-if="storyMode && !standaloneMode" class="control-plane-title control-plane-instance-switcher-shell">
+        <div v-else-if="(storyMode || agentMode) && !standaloneMode" class="control-plane-title control-plane-instance-switcher-shell">
           <span class="control-plane-kicker">{{ topbarKicker }}</span>
-          <DropdownMenu :open="storyNodeFilterOpen" @update:open="storyNodeFilterOpen = $event">
+          <DropdownMenu :open="nodeFilterOpen" @update:open="nodeFilterOpen = $event">
             <DropdownMenuTrigger as-child>
               <button
                 type="button"
@@ -69,60 +69,60 @@
                 @dblclick.stop
               >
                 <span class="control-plane-instance-switcher-title">
-                  <strong>{{ storyNodeFilterTitle }}</strong>
+                  <strong>{{ nodeFilterTitle }}</strong>
                   <ChevronDown class="control-plane-instance-switcher-chevron" :size="16" aria-hidden="true" />
                 </span>
               </button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent class="control-plane-story-node-menu" align="start" :collision-padding="12" :side-offset="8">
+            <DropdownMenuContent class="control-plane-node-filter-menu" align="start" :collision-padding="12" :side-offset="8">
               <ScrollArea
-                class="control-plane-story-node-menu-scroll"
+                class="control-plane-node-filter-menu-scroll"
                 :horizontal="false"
-                :style="{ '--story-node-menu-height': `${Math.max(storyNodeFilterOptions.length + 1, 1) * 33 + 2}px` }"
+                :style="{ '--node-filter-menu-height': `${Math.max(nodeFilterOptions.length + 1, 1) * 33 + 2}px` }"
               >
-                <div class="control-plane-story-node-menu-list">
+                <div class="control-plane-node-filter-menu-list">
                   <DropdownMenuItem
-                    class="control-plane-story-node-menu-item control-plane-story-node-menu-all"
-                    :class="{ selected: storyNodeFilter.kind === 'all' }"
-                    :aria-current="storyNodeFilter.kind === 'all' ? 'true' : undefined"
-                    @select="selectAllStoryNodes"
+                    class="control-plane-node-filter-menu-item control-plane-node-filter-menu-all"
+                    :class="{ selected: nodeFilter.kind === 'all' }"
+                    :aria-current="nodeFilter.kind === 'all' ? 'true' : undefined"
+                    @select="selectAllNodes"
                   >
                     <span class="status-dot" />
-                    <span class="control-plane-story-node-menu-copy">
+                    <span class="control-plane-node-filter-menu-copy">
                       <strong>{{ t("instances.board.allNodes") }}</strong>
                     </span>
-                    <Check v-if="storyNodeFilter.kind === 'all'" class="control-plane-story-node-menu-check" :size="16" aria-hidden="true" />
+                    <Check v-if="nodeFilter.kind === 'all'" class="control-plane-node-filter-menu-check" :size="16" aria-hidden="true" />
                   </DropdownMenuItem>
                   <div
-                    v-for="node in storyNodeFilterOptions"
+                    v-for="node in nodeFilterOptions"
                     :key="node.id"
-                    class="control-plane-story-node-menu-item"
-                    :class="{ selected: storyNodeIsSelected(storyNodeFilter, node.id) }"
+                    class="control-plane-node-filter-menu-item"
+                    :class="{ selected: nodeIsSelected(nodeFilter, node.id) }"
                   >
                     <button
                       type="button"
-                      class="control-plane-story-node-menu-main"
-                      :aria-current="storyNodeIsSelected(storyNodeFilter, node.id) ? 'true' : undefined"
-                      @click="selectStoryNodeFilter(node.id, $event)"
+                      class="control-plane-node-filter-menu-main"
+                      :aria-current="nodeIsSelected(nodeFilter, node.id) ? 'true' : undefined"
+                      @click="selectNodeFilter(node.id, $event)"
                     >
                       <span class="status-dot" :data-state="node.status" />
-                      <span class="control-plane-story-node-menu-copy">
+                      <span class="control-plane-node-filter-menu-copy">
                         <strong>{{ node.name }}</strong>
                       </span>
-                      <span v-if="storyCatalog.nodeLoadState(node.id) === 'loading'" class="control-plane-story-node-menu-load">
-                        <LoaderCircle class="control-plane-story-node-menu-spin" :size="13" aria-hidden="true" />
+                      <span v-if="storyMode && storyCatalog.nodeLoadState(node.id) === 'loading'" class="control-plane-node-filter-menu-load">
+                        <LoaderCircle class="control-plane-node-filter-menu-spin" :size="13" aria-hidden="true" />
                         <span>{{ t("stories.nodeLoad.loading") }}</span>
                       </span>
-                      <span v-else-if="storyCatalog.nodeLoadState(node.id) === 'unavailable'" class="control-plane-story-node-menu-load" data-state="warning">
+                      <span v-else-if="storyMode && storyCatalog.nodeLoadState(node.id) === 'unavailable'" class="control-plane-node-filter-menu-load" data-state="warning">
                         <CircleAlert :size="13" aria-hidden="true" />
                         <span>{{ t("stories.nodeLoad.unavailable") }}</span>
                       </span>
                     </button>
                     <Checkbox
-                      class="control-plane-story-node-menu-checkbox"
+                      class="control-plane-node-filter-menu-checkbox"
                       :aria-label="node.name"
-                      :model-value="storyNodeIsSelected(storyNodeFilter, node.id)"
-                      @update:model-value="toggleStoryNodeFilter(node.id, $event === true)"
+                      :model-value="nodeIsSelected(nodeFilter, node.id)"
+                      @update:model-value="toggleNodeFilter(node.id, $event === true)"
                     />
                   </div>
                 </div>
@@ -205,7 +205,7 @@
             <TooltipContent side="bottom" :side-offset="8">{{ t("settings.appearance.updateAvailableVersion", { version: serverUpdateVersion }) }}</TooltipContent>
           </Tooltip>
         </TooltipProvider>
-        <div class="workbench-view-switcher" :class="{ inactive: settingsMode }" :data-active-view="workbenchView" :aria-label="t('navigation.workbenchView')">
+        <div class="workbench-view-switcher" :class="{ inactive: settingsMode }" :data-active-view="workbenchView" :data-option-count="workbenchViewOptions.length" :style="workbenchViewSwitcherStyle" :aria-label="t('navigation.workbenchView')">
           <button
             v-for="option in workbenchViewOptions"
             :key="option.value"
@@ -393,7 +393,7 @@
           v-model:selection="storySelection"
           :choose-project-folder="desktopBridge?.chooseProjectFolder"
           :header-density="effectiveHeaderDensity"
-          :node-filter="storyNodeFilter"
+          :node-filter="nodeFilter"
           :instances="boardInstancesWithAiSessions"
           :launching-app="storyResourceLaunching"
           :node-local-folders-by-node-id="nodeLocalFoldersByNodeId"
@@ -458,6 +458,8 @@
         @resolve-approval="resolveAiSessionApprovalAction"
         @select-instance="selectInstance"
       />
+
+      <AgentView v-if="!standaloneMode && agentMode && !settingsMode" :node-filter="nodeFilter" />
 
       <SettingsModal
         v-if="!standaloneMode && settingsMode"
@@ -629,16 +631,20 @@ import { ContextMenu, ContextMenuTrigger } from "../../components/ui/context-men
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "../../components/ui/dropdown-menu";
 import { ScrollArea } from "../../components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../components/ui/tooltip";
+import { isFeatureEnabled } from "../../lib/featureFlags";
+import { createBrowserUuid } from "../../lib/random-id";
 import AiSessionBoardView from "./ai-board/AiSessionBoardView.vue";
+import AgentView from "./agent/AgentView.vue";
+import { useAgentCatalog } from "./agent/useAgentCatalog";
 import StoryView from "./story/StoryView.vue";
 import type { StorySelection } from "./story/storySelection";
 import StoryResourceSidebar from "./story/StoryResourceSidebar.vue";
 import { closeStoryResourceTarget, repositoryResource, storyResourceKey, type StoryRepositoryPage } from "./story/storyResources";
 import { storyResourceSidebarKeyboardWidth, storyResourceSidebarMaxWidth, storyResourceSidebarMode, storyResourceSidebarProportionalWidth } from "./story/storyResourceLayout";
 import { STORY_RESOURCE_SIDEBAR_MIN_WIDTH, normalizeStoryResourceSidebarWidth, useStoryResourceSidebar } from "./story/useStoryResourceSidebar";
-import { loadStoryNodeFilter, persistStoryNodeFilter } from "./story/storyNodeFilterPreference";
+import { loadNodeVisibilityFilter, persistNodeVisibilityFilter } from "./shared/nodeVisibilityPreference";
 import { useStoryCatalog } from "./story/useStoryCatalog";
-import { allStoryNodes, normalizeStoryNodeFilter, selectOnlyStoryNode, storyNodeIsSelected, toggleStoryNode, type StoryNodeFilter } from "@task-handoff/control-plane-client";
+import { allNodesVisible, nodeIsSelected, normalizeNodeVisibilityFilter, selectOnlyNode, toggleNodeVisibility, type NodeVisibilityFilter } from "@task-handoff/control-plane-client";
 import InstanceBoardView from "./board/InstanceBoardView.vue";
 import InstanceDetail from "./instance-detail/InstanceDetail.vue";
 import EmbeddedBrowserSurfaceLayer from "./instance-detail/EmbeddedBrowserSurfaceLayer.vue";
@@ -737,7 +743,7 @@ function observeInstanceSwitcherOverflow() {
 }
 
 type BoardSize = "small" | "medium" | "large";
-type WorkbenchView = "instance" | "board" | "ai" | "story";
+type WorkbenchView = "instance" | "board" | "ai" | "story" | "agent";
 const BOARD_SIZE_STORAGE_KEY = "task-handoff.control-plane.board-size";
 const BOARD_INTERACTIVE_STORAGE_KEY = "task-handoff.control-plane.board-interactive";
 const MAIN_SESSION_PREVIEW_EXPANDED_STORAGE_KEY = "task-handoff.control-plane.session-preview-expanded";
@@ -832,46 +838,67 @@ const workbenchView = ref<WorkbenchView>("instance");
 const workbenchViewOptions = computed<Array<{ value: WorkbenchView; label: string; icon: typeof LayoutGrid }>>(() => [
   { value: "instance", label: t("navigation.home"), icon: House },
   { value: "story", label: t("navigation.story"), icon: BookOpen },
+  ...(isFeatureEnabled("agentRuns") ? [{ value: "agent" as const, label: t("agents.view"), icon: Boxes }] : []),
   { value: "board", label: t("navigation.board"), icon: LayoutGrid },
   { value: "ai", label: t("navigation.ai"), icon: Bot },
 ]);
+const workbenchViewSwitcherStyle = computed<Record<string, string>>(() => {
+  const count = workbenchViewOptions.value.length;
+  const width = Math.max(288, count * 72);
+  const itemWidth = (width - 4) / count;
+  const activeIndex = Math.max(0, workbenchViewOptions.value.findIndex((option) => option.value === workbenchView.value));
+  return {
+    "--workbench-view-count": String(count),
+    "--workbench-view-width": `${width}px`,
+    "--workbench-view-item-width": `${itemWidth}px`,
+    "--workbench-view-active-offset": `${activeIndex * itemWidth}px`,
+  };
+});
 const instanceViewMode = computed(() => workbenchView.value === "instance");
 const boardMode = computed(() => workbenchView.value === "board");
 const aiBoardMode = computed(() => workbenchView.value === "ai");
 const storyMode = computed(() => workbenchView.value === "story");
+const agentMode = computed(() => workbenchView.value === "agent");
 // Story lists load per node; the node menu reflects which nodes are still answering.
 const storyCatalog = useStoryCatalog(storyMode);
+// Agent 视图的节点作用域取自它自己的权威目录；视图未打开时不发请求。
+const agentCatalog = useAgentCatalog({ enabled: agentMode });
 const storySelection = ref<StorySelection>();
-const storyNodeFilter = ref<StoryNodeFilter>(loadStoryNodeFilter());
-const storyNodeFilterOpen = ref(false);
-const storyNodeFilterOptions = computed(() => nodes.data.value || []);
-const storyNodeFilterTitle = computed(() => {
-  if (storyNodeFilter.value.kind === "all") return t("instances.board.allNodes");
-  if (storyNodeFilter.value.nodeIds.length > 1) return t("instances.board.selectedNodes", { count: storyNodeFilter.value.nodeIds.length });
-  const nodeId = storyNodeFilter.value.nodeIds[0] || "";
-  return storyNodeFilterOptions.value.find((node) => node.id === nodeId)?.name || nodeId;
+const nodeFilter = ref<NodeVisibilityFilter>(loadNodeVisibilityFilter());
+const nodeFilterOpen = ref(false);
+// 顶部导航的节点作用域由 Story 与 Agent 视图共用，但选项取当前视图自己的权威节点集合：
+// Story 用实例板节点（含在线状态），Agent 用它的目录快照，切换视图时不可用的选择会被归一化。
+const nodeFilterOptions = computed<{ id: string; name: string; status?: string }[]>(() => {
+  if (agentMode.value) return agentCatalog.catalog.value.nodes.map((node) => ({ id: node.id, name: node.label }));
+  return (nodes.data.value || []).map((node) => ({ id: node.id, name: node.name, status: node.status }));
 });
-function selectAllStoryNodes() {
-  storyNodeFilter.value = allStoryNodes();
-  storyNodeFilterOpen.value = false;
+const nodeFilterTitle = computed(() => {
+  if (nodeFilter.value.kind === "all") return t("instances.board.allNodes");
+  if (nodeFilter.value.nodeIds.length > 1) return t("instances.board.selectedNodes", { count: nodeFilter.value.nodeIds.length });
+  const nodeId = nodeFilter.value.nodeIds[0] || "";
+  return nodeFilterOptions.value.find((node) => node.id === nodeId)?.name || nodeId;
+});
+function selectAllNodes() {
+  nodeFilter.value = allNodesVisible();
+  nodeFilterOpen.value = false;
   closeFloatingLayers();
 }
-function selectStoryNodeFilter(nodeId: string, event: MouseEvent) {
+function selectNodeFilter(nodeId: string, event: MouseEvent) {
   if (event.metaKey || event.ctrlKey) {
-    toggleStoryNodeFilter(nodeId, !storyNodeIsSelected(storyNodeFilter.value, nodeId));
+    toggleNodeFilter(nodeId, !nodeIsSelected(nodeFilter.value, nodeId));
     return;
   }
-  storyNodeFilter.value = selectOnlyStoryNode(nodeId);
-  storyNodeFilterOpen.value = false;
+  nodeFilter.value = selectOnlyNode(nodeId);
+  nodeFilterOpen.value = false;
   closeFloatingLayers();
 }
-function toggleStoryNodeFilter(nodeId: string, checked: boolean) {
-  storyNodeFilter.value = toggleStoryNode(storyNodeFilter.value, nodeId, checked, storyNodeFilterOptions.value.map((node) => node.id));
+function toggleNodeFilter(nodeId: string, checked: boolean) {
+  nodeFilter.value = toggleNodeVisibility(nodeFilter.value, nodeId, checked, nodeFilterOptions.value.map((node) => node.id));
 }
-watch(() => storyNodeFilterOptions.value.map((node) => node.id).join("\0"), () => {
-  storyNodeFilter.value = normalizeStoryNodeFilter(storyNodeFilter.value, storyNodeFilterOptions.value.map((node) => node.id));
+watch(() => nodeFilterOptions.value.map((node) => node.id).join("\0"), () => {
+  nodeFilter.value = normalizeNodeVisibilityFilter(nodeFilter.value, nodeFilterOptions.value.map((node) => node.id));
 });
-watch(storyNodeFilter, (filter) => persistStoryNodeFilter(filter));
+watch(nodeFilter, (filter) => persistNodeVisibilityFilter(filter));
 const settingsMode = ref(false);
 const settingsSection = ref<SettingsSection>("nodes");
 const accountSecurityOpen = ref(false);
@@ -2048,7 +2075,7 @@ async function runStoryAction(story: Story, action: StoryAction, onCreated: (ins
   if (!window.confirm(t("stories.run.confirm", { name: action.title }))) return;
   const loadingToast = showDelayedControlPlaneLoadingToast(t("stories.run.creating"));
   try {
-    const result = await sharedControlPlaneClient.stories.runAction(story.id, action.id, story.ownerNodeId, `story-action-${crypto.randomUUID()}`);
+    const result = await sharedControlPlaneClient.stories.runAction(story.id, action.id, story.ownerNodeId, `story-action-${createBrowserUuid()}`);
     onCreated(result.targetInstanceId, result.aiSessionId);
     showToast(t("stories.run.created"), storyActionSuccessToast);
   } catch (cause) { showToast(cause instanceof Error ? cause.message : String(cause), storyActionErrorToast); }

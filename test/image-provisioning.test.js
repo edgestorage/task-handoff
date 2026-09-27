@@ -11,6 +11,7 @@ const {
 } = require("../packages/protocol/src/control-plane.ts");
 const { DockerImageService } = require("../packages/control-plane/src/node-agent/docker-images.ts");
 const { createNodeAgentApp } = require("../packages/control-plane/src/node-agent/app.ts");
+const { agentRunRuntimeVolume } = require("../packages/control-plane/src/node-agent/runtimes/docker.ts");
 const { defaultTerminalCommandRunner } = require("../packages/control-plane/src/shared/process/terminal-command-runner.ts");
 
 const digest = (letter) => `sha256:${letter.repeat(64)}`;
@@ -19,6 +20,10 @@ const tempDataDir = (name) => fs.mkdtempSync(path.join(os.tmpdir(), `${name}-`))
 function managedVolumeInspect(args, instanceId) {
   if (args[0] !== "volume" || args[1] !== "inspect") return undefined;
   const name = args.at(-1);
+  const agentRunVolume = agentRunRuntimeVolume("node_image_test", "runtime_local_docker");
+  if (agentRunVolume.name === name) {
+    return { stdout: JSON.stringify({ Name: name, Driver: "local", Labels: agentRunVolume.labels }), stderr: "" };
+  }
   const role = name.endsWith("-agent-home") ? "agent-home" : name.endsWith("-runtime") ? "runtime" : name.endsWith("-workspace") ? "workspace" : "data";
   return { stdout: JSON.stringify({ Name: name, Labels: {
     "task-handoff.owner": "task-handoff",
@@ -211,6 +216,7 @@ test("node-agent creates immediately, provisions the image, and blocks stale wor
   let available = false;
   const pullGate = new Promise((resolve) => { releasePull = resolve; });
   const app = await createNodeAgentApp({
+    nodeId: "node_image_test",
     dataDir: tempDataDir("node-image-provisioning"),
     logger: false,
     token: "agent-secret",
@@ -274,6 +280,7 @@ test("node-agent queues start while pulling and runs the container when the imag
   const calls = [];
   const pullGate = new Promise((resolve) => { releasePull = resolve; });
   const app = await createNodeAgentApp({
+    nodeId: "node_image_test",
     dataDir: tempDataDir("node-image-queued-start"),
     logger: false,
     token: "agent-secret",
@@ -359,6 +366,7 @@ test("node-agent streams Docker pull TTY output live and replays its bounded tai
   let available = false;
   const pullGate = new Promise((resolve) => { releasePull = resolve; });
   const app = await createNodeAgentApp({
+    nodeId: "node_image_test",
     dataDir: tempDataDir("node-image-tty"),
     logger: false,
     token: "agent-secret",
@@ -407,6 +415,7 @@ test("failed node-agent image provisioning is persisted and can be retried", asy
   let failPull = true;
   let available = false;
   const app = await createNodeAgentApp({
+    nodeId: "node_image_test",
     dataDir: tempDataDir("node-image-retry"),
     logger: false,
     token: "agent-secret",
@@ -462,6 +471,7 @@ test("failed node-agent image provisioning is persisted and can be retried", asy
 test("node-agent restart resumes persisted image provisioning without a control plane", async (t) => {
   const dataDir = tempDataDir("node-image-restore");
   const first = await createNodeAgentApp({
+    nodeId: "node_image_test",
     dataDir,
     logger: false,
     token: "agent-secret",
@@ -507,6 +517,7 @@ test("node-agent restart resumes persisted image provisioning without a control 
 
   let available = false;
   const restored = await createNodeAgentApp({
+    nodeId: "node_image_test",
     dataDir,
     logger: false,
     token: "agent-secret",
