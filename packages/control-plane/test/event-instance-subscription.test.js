@@ -422,6 +422,24 @@ test("user event authorization cannot be widened by a subscribe frame", () => {
   assert.deepEqual(events.aiSessionTransientDemand().messageDeltas, { allInstances: false, instanceIds: ["instance-a"] });
 });
 
+test("node-scoped Agent events also require every referenced Instance scope", () => {
+  const events = new ControlPlaneEventBus();
+  const client = socket();
+  events.connect(client.value, {
+    authorization: {
+      userId: "user-a",
+      authorizationRevision: 3,
+      permissionIds: ["nodes:read", "instances:read"],
+      allowedNodeIds: new Set(["node-a"]),
+      allowedInstanceIds: new Set(["instance-a"]),
+    },
+  });
+  events.publish("agent.definition.changed", {}, { topic: "agents", scope: { nodeId: "node-a", instanceId: "instance-b" } });
+  events.publish("agent.run.changed", {}, { topic: "agents", scope: { nodeId: "node-a", instanceIds: ["instance-a", "instance-b"] } });
+  events.publish("agent.run.member.changed", {}, { topic: "agents", scope: { nodeId: "node-a", instanceId: "instance-a" } });
+  assert.deepEqual(client.sent.map((event) => event.type), ["agent.run.member.changed"]);
+});
+
 test("user authorization revision invalidation closes the bound event connection", () => {
   const events = new ControlPlaneEventBus();
   const client = socket();

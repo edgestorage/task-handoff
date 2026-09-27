@@ -54,6 +54,7 @@ test("Story Agent Tool resolution ignores unknown tool names", () => {
     future: true,
   });
   assert.deepEqual(value.enabledTools, ["story_list_content"]);
+  assert.deepEqual(value.agentInvocation, { enabledTools: [], allowedAgentIds: [] });
 });
 
 test("Automation tool creation only accepts an existing action reference", () => {

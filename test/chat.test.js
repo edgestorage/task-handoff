@@ -8377,6 +8377,75 @@ test("controlled instance Story Automation create endpoint is private and idempo
   }
 });
 
+test("controlled instance Agent Run create endpoint projects the private wire result", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-agent-run-instance-"));
+  const paths = appRuntimeTestPaths(root);
+  const workspace = path.join(root, "workspace");
+  const shared = path.join(root, "shared");
+  fs.mkdirSync(workspace);
+  fs.mkdirSync(shared);
+  const restoreEnv = withWebStorageEnv(paths, {
+    TASK_HANDOFF_WEB_AUTH: "off",
+    TASK_HANDOFF_CONTROL_MODE: "controlled",
+    TASK_HANDOFF_INSTANCE_ID: "instance_agent_run",
+    TASK_HANDOFF_REGISTRATION_TOKEN: "instance-registration-token",
+    TASK_HANDOFF_CODEX_APP_SERVER: "0",
+    TASK_HANDOFF_AI_SESSION_SCAN: "0",
+  });
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const runtime = new AppRuntimeManager(paths);
+  runtime.ensureSharedResource = () => undefined;
+  const bridge = {
+    id: "agent-run-codex-stub",
+    agent: "codex",
+    refresh() {},
+    async sync() {},
+    async ensureReady() {},
+    stop() {},
+    supportsThreadSettingsUpdate: () => false,
+    async createSession(input) {
+      return { providerSessionId: "thread_agent_run", creationSource: "ai-session", cwd: input.cwd };
+    },
+    async startMessage(session) {
+      return { session, provider: "codex", action: "send", turnId: "turn_agent_run", providerTurnId: "turn_agent_run" };
+    },
+    async interrupt(session) { return { session, provider: "codex", action: "interrupt" }; },
+  };
+  const app = await createWebApp({ staticDir: path.join(root, "missing-static"), logger: false, appRuntime: runtime, aiSessionRegistry: registry, codexAppServer: bridge });
+  try {
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/internal/node-agent/agent-runs/members",
+      headers: { authorization: "Bearer instance-registration-token" },
+      payload: {
+        runId: "run_agent_wire_projection",
+        memberId: "member_agent_wire_projection",
+        clientRequestId: "agent-wire-projection-1",
+        providerId: "codex",
+        cwd: { type: "runtime-path", path: workspace },
+        writableRoots: {
+          workspace: { type: "runtime-path", path: workspace },
+          shared: { type: "runtime-path", path: shared },
+        },
+        prompt: "Reply with OK.",
+        appendedPrompt: "",
+        permissionMode: "auto-review",
+        enabledTools: [],
+      },
+    });
+    assert.equal(response.statusCode, 200, response.body);
+    assert.deepEqual(response.json().data, {
+      disposition: "created",
+      aiSessionId: response.json().data.aiSessionId,
+      providerSessionId: "thread_agent_run",
+    });
+    assert.equal(Object.hasOwn(response.json().data, "creationSource"), false);
+  } finally {
+    await app.close();
+    restoreEnv();
+  }
+});
+
 test("web app exposes cc-switch only when enabled", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-web-cc-switch-"));
   const paths = appRuntimeTestPaths(root);
@@ -9644,6 +9713,44 @@ test("app runtime reuses an already running shared codex app server", async () =
   } finally {
     runtime.stopAll();
     await Promise.all(servers.map((server) => new Promise((resolve) => server.close(resolve))));
+  }
+});
+
+test("shared provider backend starts from instance storage instead of the workspace", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-shared-provider-cwd-"));
+  const paths = appRuntimeTestPaths(root);
+  const runtime = new AppRuntimeManager(paths);
+  const previousWorkspace = process.env.TASK_HANDOFF_WORKSPACE;
+  process.env.TASK_HANDOFF_WORKSPACE = path.join(root, "unreadable-workspace");
+  let spawnedCwd;
+
+  runtime.hasCommand = () => true;
+  runtime.waitForUnixSocket = () => {};
+  runtime.spawnLogged = (_command, _args, _env, _logDir, _logName, cwd) => {
+    spawnedCwd = cwd;
+    const child = new EventEmitter();
+    child.stdout = { pipe() {} };
+    child.stderr = { pipe() {} };
+    child.pid = 42_424;
+    child.killed = false;
+    child.exitCode = null;
+    child.kill = () => {
+      child.killed = true;
+      child.exitCode = 0;
+      return true;
+    };
+    return child;
+  };
+
+  try {
+    runtime.ensureSharedResource("codex");
+    assert.equal(spawnedCwd, paths.dataDir);
+    assert.notEqual(spawnedCwd, process.env.TASK_HANDOFF_WORKSPACE);
+  } finally {
+    runtime.stopAll();
+    if (previousWorkspace === undefined) delete process.env.TASK_HANDOFF_WORKSPACE;
+    else process.env.TASK_HANDOFF_WORKSPACE = previousWorkspace;
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });
 

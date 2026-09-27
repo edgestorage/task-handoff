@@ -23,12 +23,24 @@ function session(id: string, input: Record<string, unknown> = {}) {
   };
 }
 
-async function fixture() {
+async function fixture(options: { deferAgentRunResult?: boolean } = {}) {
   const database = await createStoryDatabaseFixture("task-handoff-story-tools-integration-");
   await seedStoryAction(database.repository);
   const stories = new NodeStoryStore(database.paths, "node_1", database.repository);
   await stories.init();
   const policy = new StoryToolPolicyService(database.repository);
+  database.repository.agents.definitions.insert({
+    id: "agent_1",
+    name: "Reviewer",
+    description: "",
+    appendedPrompt: "Review carefully",
+    targetInstanceId: "instance_1",
+    cwdFolderId: "folder_1",
+    providerId: "codex",
+    executionPolicy: { workspaceMaterializer: "overlay-copy-on-write", processSandbox: "instance" },
+    callableAgentIds: [],
+  }, timestamp);
+  database.repository.agents.storyEntries.replace("story_1", ["agent_1"], timestamp);
   const caller = session("caller_1");
   const target = session("target_1", { title: "Target session", updatedAt: "2026-09-20T00:01:00.000Z" });
   const instances = [
@@ -88,12 +100,24 @@ async function fixture() {
     error: { code: error.code || "INTERNAL_ERROR", message: error.message },
   }));
   let registration: NodeAgentRegistrationClient | undefined;
+  const agentRunCalls: Array<Record<string, unknown>> = [];
+  let resolveAgentRunResult: ((value: unknown) => void) | undefined;
+  const deferredAgentRunResult = options.deferAgentRunResult
+    ? new Promise((resolve) => { resolveAgentRunResult = resolve; })
+    : undefined;
   registerNodeStoryRoutes(app, state as never, stories, {
     toolPolicy: policy,
     scheduler: scheduler as never,
     aiSessionRead,
     actionExecution: { run: async () => ({ targetInstanceId: "instance_1", aiSessionId: "created_session" }) } as never,
     onToolPolicyInvalidated: (event) => { registration?.invalidateStoryAgentTools(event); },
+    agentRuns: {
+      create: (input: Record<string, unknown>) => {
+        agentRunCalls.push(input);
+        return { runId: "run_1" };
+      },
+      waitForToolResult: async () => deferredAgentRunResult ?? ({ runId: "run_1", status: "completed", result: { text: "done", truncated: false } }),
+    } as never,
   });
   const transportEvents: string[] = [];
   const nodeAgentFetch = (async (url: string | URL | Request, init?: RequestInit) => {
@@ -129,6 +153,8 @@ async function fixture() {
     registration,
     transportEvents,
     downstreamRequests,
+    agentRunCalls,
+    completeAgentRun: () => resolveAgentRunResult?.({ runId: "run_1", status: "completed", result: { text: "done", truncated: false } }),
     async close() {
       await app.close();
       await database.close();
@@ -151,6 +177,70 @@ test("new node-agent revokes Content calls from a v0.0.32 controlled instance wi
     assert.equal(response.json().error.code, "STORY_AGENT_TOOL_DISABLED");
     assert.deepEqual(context.state.listInstances()[0]!.aiSessions.sessions[0], before);
     assert.equal(context.state.authenticateInstance("instance_1", "token_1").id, "instance_1");
+  } finally {
+    await context.close();
+  }
+});
+
+test("an accepted Agent Run continues after entry revocation and initiating Session deletion", async () => {
+  const context = await fixture({ deferAgentRunResult: true });
+  try {
+    const responsePromise = context.app.inject({
+      method: "POST",
+      url: "/api/node-agent/instances/instance_1/ai-sessions/caller_1/agent-runs",
+      headers: { authorization: "Bearer token_1" },
+      payload: { clientRequestId: "agent_tool_call_accepted", input: { agentId: "agent_1", prompt: "Review" } },
+    });
+    while (context.agentRunCalls.length === 0) await new Promise((resolve) => setTimeout(resolve, 1));
+    context.database.repository.agents.storyEntries.replace("story_1", [], timestamp);
+    context.state.listInstances()[0]!.aiSessions.sessions = [];
+    context.completeAgentRun();
+    const response = await responsePromise;
+    assert.equal(response.statusCode, 200, response.body);
+    assert.equal(response.json().data.status, "completed");
+  } finally {
+    await context.close();
+  }
+});
+
+test("Agent invocation is session-bound, reauthorized at call time, and rejects model-owned provenance", async () => {
+  const context = await fixture();
+  try {
+    const result = await context.registration.invokeAgentRun("caller_1", "agent_tool_call_1", {
+      agentId: "agent_1",
+      prompt: "Review this change",
+    });
+    assert.deepEqual(result, { runId: "run_1", status: "completed", result: { text: "done", truncated: false } });
+    assert.deepEqual(context.agentRunCalls[0], {
+      clientRequestId: "agent_tool_call_1",
+      agentId: "agent_1",
+      input: { prompt: "Review this change" },
+      provenance: { initiatingInstanceId: "instance_1", initiatingAiSessionId: "caller_1", storyId: "story_1" },
+      budget: undefined,
+    });
+
+    const injected = await context.app.inject({
+      method: "POST",
+      url: "/api/node-agent/instances/instance_1/ai-sessions/caller_1/agent-runs",
+      headers: { authorization: "Bearer token_1" },
+      payload: {
+        clientRequestId: "agent_tool_call_2",
+        input: { agentId: "agent_1", prompt: "Review", provenance: { storyId: "story_other" } },
+      },
+    });
+    assert.equal(injected.statusCode, 500);
+    assert.equal(context.agentRunCalls.length, 1);
+
+    context.database.repository.agents.storyEntries.replace("story_1", [], timestamp);
+    const revoked = await context.app.inject({
+      method: "POST",
+      url: "/api/node-agent/instances/instance_1/ai-sessions/caller_1/agent-runs",
+      headers: { authorization: "Bearer token_1" },
+      payload: { clientRequestId: "agent_tool_call_3", input: { agentId: "agent_1", prompt: "Review" } },
+    });
+    assert.equal(revoked.statusCode, 403);
+    assert.equal(revoked.json().error.code, "STORY_AGENT_INVOCATION_FORBIDDEN");
+    assert.equal(context.agentRunCalls.length, 1);
   } finally {
     await context.close();
   }

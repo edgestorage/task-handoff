@@ -19,6 +19,8 @@ import { registerNodeRoutes } from "./node-routes.ts";
 import { registerSessionRoutes } from "./session-routes.ts";
 import { registerTriggerRoutes } from "./trigger-routes.ts";
 import { registerStoryRoutes } from "./story-routes.ts";
+import { registerAgentRoutes } from "./agent-routes.ts";
+import type { ControlPlaneAgentAggregator } from "../agents/agent-aggregator.ts";
 
 type ErrorPayload = (error: unknown) => {
   statusCode: number;
@@ -38,6 +40,7 @@ export type RegisterControlPlaneManagementRoutesOptions = {
   aiSessionAttachmentCache: AiSessionAttachmentCache;
   nodeAgentTunnel: ControlPlaneNodeAgentTunnelTransport;
   nodeEventSubscriber: ControlPlaneNodeEventSubscriber;
+  agentAggregator: ControlPlaneAgentAggregator;
   errorPayload: ErrorPayload;
   onInstanceDeleted?: (instanceId: string) => Promise<void>;
 };
@@ -55,6 +58,7 @@ export function registerControlPlaneManagementRoutes(options: RegisterControlPla
     aiSessionAttachmentCache,
     nodeAgentTunnel,
     nodeEventSubscriber,
+    agentAggregator,
     errorPayload,
     onInstanceDeleted,
   } = options;
@@ -67,4 +71,5 @@ export function registerControlPlaneManagementRoutes(options: RegisterControlPla
   registerTriggerRoutes({ app, service, events });
   registerChatGatewayRoutes({ app, service, chatGateway });
   registerStoryRoutes(app, service);
+  registerAgentRoutes(app, service, agentAggregator);
 }

@@ -56,6 +56,9 @@ import type { StoryToolPolicyService } from "./tool-policy-service.ts";
 import type { StoryAgentToolPolicyInvalidated } from "@task-handoff/protocol/story-agent-tools";
 import type { StoryActionExecutionService } from "./action-execution-service.ts";
 import type { StoryAiSessionReadService } from "./ai-session-read-service.ts";
+import { AgentInvocationRequestSchema } from "@task-handoff/protocol/agent-invocation-tools";
+import { AgentRunToolResultSchema } from "@task-handoff/protocol/agent-runs";
+import type { AgentRunService } from "../agents/run-service.ts";
 
 type NodeStoryRouteOptions = {
   fetchImpl?: typeof fetch;
@@ -67,6 +70,7 @@ type NodeStoryRouteOptions = {
   onToolPolicyInvalidated?: (event: StoryAgentToolPolicyInvalidated) => void | Promise<void>;
   actionExecution?: StoryActionExecutionService;
   aiSessionRead?: StoryAiSessionReadService;
+  agentRuns?: AgentRunService;
 };
 
 const StoryParamsSchema = z.object({ storyId: StoryIdSchema }).strict();
@@ -188,7 +192,8 @@ export function registerNodeStoryRoutes(app: FastifyInstance, state: NodeAgentSt
     const settings = await options.toolPolicy.update(storyId, policy);
     const story = await store.get(storyId);
     if (story) store.notifyUpdated(story);
-    await options.onToolPolicyInvalidated?.({ storyId, revision: settings.revision });
+    const resolution = await options.toolPolicy.resolve(storyId);
+    await options.onToolPolicyInvalidated?.({ storyId, revision: resolution.revision });
     return { data: settings };
   });
 
@@ -336,6 +341,28 @@ export function registerNodeStoryRoutes(app: FastifyInstance, state: NodeAgentSt
     const story = await storyForSession(state, store, id, sessionId, bearerToken(request.headers));
     if (!options.toolPolicy) throw Object.assign(new Error("Story Agent Tool policy is unavailable."), { code: "STORY_AGENT_TOOL_POLICY_UNAVAILABLE", statusCode: 503 });
     return { data: StoryAgentToolResolutionSchema.parse(await options.toolPolicy.resolve(story.id)) };
+  });
+
+  app.post("/api/node-agent/instances/:id/ai-sessions/:sessionId/agent-runs", async (request) => {
+    const { id, sessionId } = InstanceSessionParamsSchema.parse(request.params);
+    const story = await storyForSession(state, store, id, sessionId, bearerToken(request.headers));
+    if (!options.toolPolicy || !options.agentRuns) {
+      throw Object.assign(new Error("Story Agent invocation is unavailable."), { code: "STORY_AGENT_INVOCATION_UNAVAILABLE", statusCode: 503 });
+    }
+    const invocation = AgentInvocationRequestSchema.parse(request.body);
+    await options.toolPolicy.assertAgentInvocation(story.id, invocation.input.agentId);
+    const run = options.agentRuns.create({
+      clientRequestId: invocation.clientRequestId,
+      agentId: invocation.input.agentId,
+      input: { prompt: invocation.input.prompt },
+      provenance: {
+        initiatingInstanceId: id,
+        initiatingAiSessionId: sessionId,
+        storyId: story.id,
+      },
+      budget: invocation.input.budget,
+    });
+    return { data: AgentRunToolResultSchema.parse(await options.agentRuns.waitForToolResult(run.runId, request.signal)) };
   });
 
   app.post("/api/node-agent/instances/:id/ai-sessions/:sessionId/story-agent-tools/:tool", async (request) => {

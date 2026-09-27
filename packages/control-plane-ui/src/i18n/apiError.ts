@@ -12,6 +12,8 @@ type ErrorDescriptor = {
     key: string;
     detailKey: string;
     parameter: string;
+    /** 结构化明细是列表时按该分隔符连接，用于展示环等有序链路。 */
+    separator?: string;
   };
 };
 
@@ -67,6 +69,25 @@ const knownApiErrors: Record<string, ErrorDescriptor> = {
   MODEL_DISCOVERY_RESPONSE_INVALID: { key: "errors.MODEL_DISCOVERY_RESPONSE_INVALID" },
   MODEL_TEST_FAILED: { key: "errors.MODEL_TEST_FAILED" },
   MODEL_TEST_RESPONSE_INVALID: { key: "errors.MODEL_TEST_RESPONSE_INVALID" },
+
+  AGENT_DEFINITION_INVALID_INPUT: { key: "errors.AGENT_DEFINITION_INVALID_INPUT" },
+  AGENT_DEFINITION_NOT_FOUND: { key: "errors.AGENT_DEFINITION_NOT_FOUND" },
+  AGENT_DEFINITION_REVISION_CONFLICT: { key: "errors.AGENT_DEFINITION_REVISION_CONFLICT" },
+  AGENT_DEFINITION_TARGET_INSTANCE_UNKNOWN: { key: "errors.AGENT_DEFINITION_TARGET_INSTANCE_UNKNOWN" },
+  AGENT_DEFINITION_FOLDER_UNKNOWN: { key: "errors.AGENT_DEFINITION_FOLDER_UNKNOWN" },
+  AGENT_DEFINITION_PROVIDER_UNSUPPORTED: { key: "errors.AGENT_DEFINITION_PROVIDER_UNSUPPORTED" },
+  AGENT_DEFINITION_CALLABLE_TARGET_UNKNOWN: { key: "errors.AGENT_DEFINITION_CALLABLE_TARGET_UNKNOWN" },
+  AGENT_DEFINITION_SELF_REFERENCE: { key: "errors.AGENT_DEFINITION_SELF_REFERENCE" },
+  AGENT_DEFINITION_CYCLE: {
+    key: "errors.AGENT_DEFINITION_CYCLE",
+    detailVariant: {
+      key: "errors.AGENT_DEFINITION_CYCLE",
+      detailKey: "cycle",
+      parameter: "cycle",
+      separator: " → ",
+    },
+  },
+  AGENT_DEFINITION_POLICY_UNSUPPORTED: { key: "errors.AGENT_DEFINITION_POLICY_UNSUPPORTED" },
 
   NODE_OFFLINE: { key: "errors.NODE_OFFLINE" },
   NODE_NOT_FOUND: {
@@ -183,6 +204,15 @@ function interpolationValue(value: unknown): string | number | undefined {
   return undefined;
 }
 
+function joinDetailList(value: unknown, separator: string): string | undefined {
+  if (!Array.isArray(value)) {
+    const single = interpolationValue(value);
+    return single === undefined ? undefined : String(single);
+  }
+  const entries = value.filter((entry): entry is string => typeof entry === "string" && Boolean(entry.trim()));
+  return entries.length ? entries.join(separator) : undefined;
+}
+
 /**
  * Converts an API error into display text without inferring semantics from its
  * natural-language message. ApiError is supported through its structural
@@ -195,8 +225,9 @@ export function translateApiError(error: unknown, t: Translate, fallback?: strin
 
   if (descriptor) {
     const variant = descriptor.detailVariant;
+    const rawDetail = variant ? detailRecord(record.details)[variant.detailKey] : undefined;
     const detail = variant
-      ? interpolationValue(detailRecord(record.details)[variant.detailKey])
+      ? variant.separator === undefined ? interpolationValue(rawDetail) : joinDetailList(rawDetail, variant.separator)
       : undefined;
     if (variant && detail !== undefined) {
       return t(variant.key, { [variant.parameter]: detail });

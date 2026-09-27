@@ -13,5 +13,6 @@ export * from "./client.ts";
 export * from "./resources.ts";
 export * from "./triggers.ts";
 export * from "./stories.ts";
-export * from "./story-node-filter.ts";
+export * from "./agents.ts";
+export * from "./node-visibility-filter.ts";
 export * from "./story-order.ts";

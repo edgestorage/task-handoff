@@ -43,11 +43,11 @@ test("Story mutations refetch only the node that owns the Story", async () => {
 test("Story node menu surfaces per-node loading and unavailability", () => {
   assert.match(workbench, /import \{ useStoryCatalog \} from "\.\/story\/useStoryCatalog";/);
   assert.match(workbench, /const storyCatalog = useStoryCatalog\(storyMode\);/);
-  assert.match(workbench, /v-if="storyCatalog\.nodeLoadState\(node\.id\) === 'loading'" class="control-plane-story-node-menu-load"[\s\S]*stories\.nodeLoad\.loading/);
-  assert.match(workbench, /v-else-if="storyCatalog\.nodeLoadState\(node\.id\) === 'unavailable'" class="control-plane-story-node-menu-load" data-state="warning"[\s\S]*stories\.nodeLoad\.unavailable/);
-  assert.match(workbenchStyles, /:global\(\.control-plane-story-node-menu-main\) \{\n  display: grid;\n  grid-template-columns: 8px minmax\(0, 1fr\) auto;/);
-  assert.match(workbenchStyles, /:global\(\.control-plane-story-node-menu-load\) \{[\s\S]*font-size: 12px;/);
-  assert.match(workbenchStyles, /:global\(\.control-plane-story-node-menu-load\[data-state="warning"\]\) \{\n  color: var\(--status-warning\);/);
+  assert.match(workbench, /v-if="storyMode && storyCatalog\.nodeLoadState\(node\.id\) === 'loading'" class="control-plane-node-filter-menu-load"[\s\S]*stories\.nodeLoad\.loading/);
+  assert.match(workbench, /v-else-if="storyMode && storyCatalog\.nodeLoadState\(node\.id\) === 'unavailable'" class="control-plane-node-filter-menu-load" data-state="warning"[\s\S]*stories\.nodeLoad\.unavailable/);
+  assert.match(workbenchStyles, /:global\(\.control-plane-node-filter-menu-main\) \{\n  display: grid;\n  grid-template-columns: 8px minmax\(0, 1fr\) auto;/);
+  assert.match(workbenchStyles, /:global\(\.control-plane-node-filter-menu-load\) \{[\s\S]*font-size: 12px;/);
+  assert.match(workbenchStyles, /:global\(\.control-plane-node-filter-menu-load\[data-state="warning"\]\) \{\n  color: var\(--status-warning\);/);
 });
 
 test("Story list footer hints at nodes that are still loading or unavailable", () => {

@@ -20,6 +20,11 @@ export const controlPlaneQueryKeys = {
   stories: (nodeId?: string) => nodeId
     ? ["control-plane-stories", nodeId] as const
     : ["control-plane-stories"] as const,
+  agents: (nodeId?: string) => nodeId
+    ? ["control-plane-agents", nodeId] as const
+    : ["control-plane-agents"] as const,
+  storyAgentEntries: (nodeId: string, storyId: string) => ["control-plane-agents", "story-entries", nodeId, storyId] as const,
+  agentRuns: ["control-plane-agent-runs"] as const,
   controlPlaneProxyInvites: ["control-plane-proxy-invites"] as const,
   controlPlaneProxyBindings: ["control-plane-proxy-bindings"] as const,
   controlPlaneProxyDiagnostics: ["control-plane-proxy-diagnostics"] as const,

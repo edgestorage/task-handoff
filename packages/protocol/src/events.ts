@@ -139,6 +139,9 @@ export function eventTopic(type: string) {
   if (type.startsWith("story.")) {
     return "stories";
   }
+  if (type.startsWith("agent.")) {
+    return "agents";
+  }
   return "system";
 }
 

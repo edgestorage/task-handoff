@@ -12,6 +12,7 @@ import {
   type StoryResourceRef,
 } from "./storyResources.ts";
 import { reorderStoryResourceKeys, type StoryResourceDropPlacement } from "./storyResourceOrder.ts";
+import { createBrowserUuid } from "../../../lib/random-id";
 
 export const STORY_RESOURCE_SIDEBAR_MIN_WIDTH = 320;
 export const STORY_RESOURCE_SIDEBAR_DEFAULT_WIDTH = 420;
@@ -160,7 +161,7 @@ export function useStoryResourceSidebar(input: {
       kind: "embedded-browser" as const,
       aiSessionId,
       instanceId,
-      browserTabId: `story-browser:${crypto.randomUUID()}`,
+      browserTabId: `story-browser:${createBrowserUuid()}`,
       status: initialUrl ? "loading" : "running",
       ...(initialUrl ? { initialUrl } : {}),
     };

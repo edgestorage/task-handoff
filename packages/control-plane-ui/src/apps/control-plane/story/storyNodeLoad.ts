@@ -1,14 +1,8 @@
-export type StoryNodeLoadState = "loading" | "ready" | "unavailable";
+import { nodeQueryLoadState, type NodeLoadState, type NodeQuerySnapshot } from "../shared/nodeQueryLoad.ts";
 
-export type StoryNodeQuerySnapshot = {
-  data?: { unavailableNodeIds: readonly string[] };
-  isError: boolean;
-} | undefined;
+export type StoryNodeLoadState = NodeLoadState;
 
-/** A node is unavailable when its Story read failed or the node agent could not serve it. */
-export function storyNodeLoadState(nodeId: string, query: StoryNodeQuerySnapshot): StoryNodeLoadState {
-  if (!query) return "loading";
-  if (query.isError) return "unavailable";
-  if (!query.data) return "loading";
-  return query.data.unavailableNodeIds.includes(nodeId) ? "unavailable" : "ready";
-}
+export type StoryNodeQuerySnapshot = NodeQuerySnapshot;
+
+/** Story 目录与其它 Node 作用域目录共用同一套「按 Node 独立应答」的加载态判定。 */
+export const storyNodeLoadState = nodeQueryLoadState;

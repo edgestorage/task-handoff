@@ -10,6 +10,7 @@ import { StoryAutomationStore } from "../src/node-agent/stories/automation-store
 import { openNodeAgentDatabase } from "../src/node-agent/persistence/database.ts";
 import { NodeStoryStore } from "../src/node-agent/stories/store.ts";
 import { createStoryDatabaseFixture, seedStoryAction } from "./story-database-fixture.ts";
+import { nodeAgentMigrations } from "../src/node-agent/persistence/migrations.ts";
 
 test("Node Agent SQLite initializes identity, migrations, PRAGMAs, and private permissions", async () => {
   const fixture = await createStoryDatabaseFixture("task-handoff-story-database-");
@@ -23,7 +24,7 @@ test("Node Agent SQLite initializes identity, migrations, PRAGMAs, and private p
     assert.equal(scalar("PRAGMA quick_check"), "ok");
     assert.deepEqual(
       fixture.database.client.prepare("SELECT id FROM na_migration_ledger ORDER BY id").all().map((row) => row.id),
-      ["0001_story_domain", "0002_p0_state_domains", "0003_story_agent_tool_policy", "1000_import_v0_0_28_p0"],
+      ["0001_story_domain", "0002_p0_state_domains", "0003_story_agent_tool_policy", "0004_agent_definition_domain", "0005_agent_run_domain", "0006_story_agent_entry_authorization", "0007_agent_run_result_delivery", "0008_agent_run_resource_ownership", "0009_agent_run_input", "0010_agent_run_member_input", "0011_agent_run_member_request_identity", "1000_import_v0_0_28_p0"],
     );
     assert.equal(fs.statSync(fixture.paths.databasePath).mode & 0o777, 0o600);
     for (const sidecar of [`${fixture.paths.databasePath}-wal`, `${fixture.paths.databasePath}-shm`]) {
@@ -82,9 +83,38 @@ test("Node Agent SQLite reopens idempotently and repository close drains accepte
     const verify = new DatabaseSync(paths.databasePath);
     assert.deepEqual(
       verify.prepare("SELECT id FROM na_migration_ledger ORDER BY id").all().map((row) => row.id),
-      ["0001_story_domain", "0002_p0_state_domains", "0003_story_agent_tool_policy", "1000_import_v0_0_28_p0"],
+      ["0001_story_domain", "0002_p0_state_domains", "0003_story_agent_tool_policy", "0004_agent_definition_domain", "0005_agent_run_domain", "0006_story_agent_entry_authorization", "0007_agent_run_result_delivery", "0008_agent_run_resource_ownership", "0009_agent_run_input", "0010_agent_run_member_input", "0011_agent_run_member_request_identity", "1000_import_v0_0_28_p0"],
     );
     verify.close();
+  } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
+});
+
+test("Compatibility for v0.0.32: its SQLite ledger upgrades additively to the Agent schema", async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-v0-0-32-agent-upgrade-"));
+  const paths = nodeAgentStorePaths(dataDir);
+  try {
+    fs.mkdirSync(path.dirname(paths.databasePath), { recursive: true });
+    const legacy = new DatabaseSync(paths.databasePath);
+    legacy.exec(`CREATE TABLE na_migration_ledger (
+      id TEXT PRIMARY KEY NOT NULL, checksum TEXT NOT NULL, applied_at TEXT NOT NULL, details TEXT NOT NULL
+    )`);
+    const insert = legacy.prepare("INSERT INTO na_migration_ledger (id, checksum, applied_at, details) VALUES (?, ?, ?, ?)");
+    for (const migration of nodeAgentMigrations.slice(0, 2)) {
+      legacy.exec(migration.sql);
+      insert.run(migration.id, migration.checksum, "2026-09-25T00:00:00.000Z", JSON.stringify({ release: "v0.0.32" }));
+    }
+    legacy.close();
+
+    const upgraded = await openNodeAgentDatabase(paths);
+    assert.deepEqual(
+      upgraded.client.prepare("SELECT id FROM na_migration_ledger ORDER BY id").all().map((row) => row.id),
+      [...nodeAgentMigrations.map((migration) => migration.id), "1000_import_v0_0_28_p0"].sort(),
+    );
+    assert.ok(upgraded.client.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'na_agent_definitions'").get());
+    assert.ok(upgraded.client.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'na_story_agent_entries'").get());
+    assert.ok(upgraded.client.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'na_agent_run_shared_spaces'").get());
+    assert.ok(upgraded.client.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'na_agent_run_resources'").get());
+    await upgraded.close();
   } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
 });
 

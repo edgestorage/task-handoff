@@ -27,6 +27,9 @@ import {
   type StoryAgentToolResolution,
 } from "@task-handoff/protocol/story-agent-tools";
 import { STORY_AGENT_TOOL_SCHEMAS } from "@task-handoff/protocol/story-agent-tools";
+import { aiSessionAgentToolNames, type AiSessionAgentToolName } from "@task-handoff/protocol/ai-session-agent-tools";
+import { AgentInvocationRequestSchema, AgentInvocationToolInputSchema } from "@task-handoff/protocol/agent-invocation-tools";
+import { AgentRunToolResultSchema } from "@task-handoff/protocol/agent-runs";
 import { StoryToolPolicyCache } from "./story-tool-policy-cache.ts";
 
 export type NodeAgentRegistrationConfig = {
@@ -71,7 +74,7 @@ export type SnapshotProvider = () => Promise<ControlledInstanceSnapshot>;
 
 export type StoryAgentToolAccess = {
   storyId: string;
-  enabledTools: StoryAgentToolName[];
+  enabledTools: AiSessionAgentToolName[];
   revision?: string;
   source: "node-agent" | "legacy-v0.0.32" | "fail-closed";
   diagnostic?: string;
@@ -249,6 +252,28 @@ export class NodeAgentRegistrationClient {
       { input },
     );
     return STORY_AGENT_TOOL_SCHEMAS[tool].output.parse(result);
+  }
+
+  async invokeAgentRun(sessionId: string, clientRequestId: string, args: unknown) {
+    const request = AgentInvocationRequestSchema.parse({
+      clientRequestId,
+      input: AgentInvocationToolInputSchema.parse(args),
+    });
+    return AgentRunToolResultSchema.parse(await this.request(
+      `node-agent/instances/${encodeURIComponent(this.requiredInstanceId())}/ai-sessions/${encodeURIComponent(sessionId)}/agent-runs`,
+      request,
+    ));
+  }
+
+  async invokeAgentRunForMember(runId: string, memberId: string, sessionId: string, clientRequestId: string, args: unknown) {
+    const request = AgentInvocationRequestSchema.parse({
+      clientRequestId,
+      input: AgentInvocationToolInputSchema.parse(args),
+    });
+    return AgentRunToolResultSchema.parse(await this.request(
+      `node-agent/agent-runs/${encodeURIComponent(runId)}/members/${encodeURIComponent(memberId)}/ai-sessions/${encodeURIComponent(sessionId)}/agent-runs`,
+      request,
+    ));
   }
 
   async resolveStoryAgentToolsForStory(storyId: string): Promise<StoryAgentToolAccess> {
@@ -472,7 +497,7 @@ function requestCode(error: unknown) {
 function accessFromResolution(resolution: StoryAgentToolResolution): StoryAgentToolAccess {
   return {
     storyId: resolution.storyId,
-    enabledTools: [...resolution.enabledTools],
+    enabledTools: aiSessionAgentToolNames(resolution),
     revision: resolution.revision,
     source: "node-agent",
   };

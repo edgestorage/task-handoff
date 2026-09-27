@@ -231,6 +231,8 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
     onSessionEvent?: (event: EventEnvelope) => boolean;
     onInstanceLifecycle?: (nodeId: string, lifecycle: InstanceLifecycleSnapshot) => boolean | Promise<boolean>;
     validateInstanceScope?: (nodeId: string, instanceId: string) => boolean | Promise<boolean>;
+    onAgentEvent?: (nodeId: string, type: string, payload: unknown) => unknown | undefined;
+    onCapabilitiesChanged?: (nodeId: string) => void | Promise<void>;
     httpStreamHeaderTimeoutMs?: number;
     requestTimeoutMs?: number;
     auxiliaryAttachTimeoutMs?: number;
@@ -247,6 +249,8 @@ export class ControlPlaneNodeAgentTunnelTransport implements NodeAgentTransport 
       onSessionEvent: options.onSessionEvent,
       onInstanceLifecycle: options.onInstanceLifecycle,
       validateInstanceScope: options.validateInstanceScope,
+      onAgentEvent: options.onAgentEvent,
+      onCapabilitiesChanged: options.onCapabilitiesChanged,
     });
     this.httpStreamHeaderTimeoutMs = options.httpStreamHeaderTimeoutMs ?? 30_000;
     this.requestTimeoutMs = options.requestTimeoutMs ?? 30_000;
