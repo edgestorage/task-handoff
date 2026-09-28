@@ -261,6 +261,68 @@ CREATE UNIQUE INDEX na_agent_run_members_request_uq ON na_agent_run_members(run_
   WHERE client_request_id IS NOT NULL;
 `;
 
+/**
+ * 编排域：拓扑从 AgentDefinition 迁移到 AgentOrchestration。
+ * 每个既有 Agent 回填一张默认编排（id = `default:<agentId>`），图 = 既有 callable 可达闭包，
+ * 入口保持为该 Agent 自身，因此迁移前后「运行该 Agent」的行为一致；revision 由仓储在读取时按内容补算。
+ * Story 入口明细补上 orchestration_id（缺省指向该 Agent 的默认编排），Run 记录补上 orchestration_id。
+ */
+const agentOrchestrationDomain = `
+CREATE TABLE na_agent_orchestrations (
+  id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL,
+  revision TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE TABLE na_agent_orchestration_agents (
+  orchestration_id TEXT NOT NULL, agent_id TEXT NOT NULL, created_at TEXT NOT NULL,
+  PRIMARY KEY (orchestration_id, agent_id),
+  FOREIGN KEY (orchestration_id) REFERENCES na_agent_orchestrations(id) ON DELETE CASCADE ON UPDATE CASCADE
+);
+CREATE INDEX na_agent_orchestration_agents_agent_idx ON na_agent_orchestration_agents(agent_id);
+CREATE TABLE na_agent_orchestration_edges (
+  orchestration_id TEXT NOT NULL, from_agent_id TEXT NOT NULL, to_agent_id TEXT NOT NULL, created_at TEXT NOT NULL,
+  PRIMARY KEY (orchestration_id, from_agent_id, to_agent_id),
+  FOREIGN KEY (orchestration_id) REFERENCES na_agent_orchestrations(id) ON DELETE CASCADE ON UPDATE CASCADE
+);
+CREATE INDEX na_agent_orchestration_edges_from_idx ON na_agent_orchestration_edges(from_agent_id);
+
+INSERT INTO na_agent_orchestrations (id, name, revision, created_at, updated_at)
+  SELECT 'default:' || id, name, '', updated_at, updated_at FROM na_agent_definitions;
+WITH RECURSIVE reach(origin, node) AS (
+  SELECT id, id FROM na_agent_definitions
+  UNION
+  SELECT reach.origin, relation.callable_agent_id
+    FROM reach JOIN na_agent_callable_relations relation ON relation.agent_id = reach.node
+)
+INSERT INTO na_agent_orchestration_agents (orchestration_id, agent_id, created_at)
+  SELECT DISTINCT 'default:' || origin, node, strftime('%Y-%m-%dT%H:%M:%fZ','now') FROM reach;
+WITH RECURSIVE reach(origin, node) AS (
+  SELECT id, id FROM na_agent_definitions
+  UNION
+  SELECT reach.origin, relation.callable_agent_id
+    FROM reach JOIN na_agent_callable_relations relation ON relation.agent_id = reach.node
+)
+INSERT OR IGNORE INTO na_agent_orchestration_edges (orchestration_id, from_agent_id, to_agent_id, created_at)
+  SELECT DISTINCT 'default:' || reach.origin, relation.agent_id, relation.callable_agent_id, strftime('%Y-%m-%dT%H:%M:%fZ','now')
+    FROM reach JOIN na_agent_callable_relations relation ON relation.agent_id = reach.node;
+DROP TABLE na_agent_callable_relations;
+
+CREATE TABLE na_story_agent_entries_v2 (
+  story_id TEXT NOT NULL, agent_id TEXT NOT NULL, orchestration_id TEXT NOT NULL, created_at TEXT NOT NULL,
+  PRIMARY KEY (story_id, agent_id, orchestration_id),
+  FOREIGN KEY (story_id) REFERENCES na_stories(id) ON DELETE CASCADE ON UPDATE CASCADE
+);
+INSERT INTO na_story_agent_entries_v2 (story_id, agent_id, orchestration_id, created_at)
+  SELECT story_id, agent_id, 'default:' || agent_id, created_at FROM na_story_agent_entries;
+DROP TABLE na_story_agent_entries;
+ALTER TABLE na_story_agent_entries_v2 RENAME TO na_story_agent_entries;
+CREATE INDEX na_story_agent_entries_agent_idx ON na_story_agent_entries(agent_id);
+
+ALTER TABLE na_agent_runs ADD COLUMN orchestration_id TEXT;
+UPDATE na_agent_runs SET orchestration_id = (
+  SELECT 'default:' || agent_id FROM na_agent_run_members WHERE member_id = na_agent_runs.root_member_id
+) WHERE orchestration_id IS NULL;
+`;
+
 // All Node Agent domains share this immutable migration sequence.
 export const nodeAgentMigrations = [
   migration("0001_story_domain", initialStoryDomain),
@@ -275,4 +337,5 @@ export const nodeAgentMigrations = [
   migration("0009_agent_run_input", agentRunInput),
   migration("0010_agent_run_member_input", agentRunMemberInput),
   migration("0011_agent_run_member_request_identity", agentRunMemberRequestIdentity),
+  migration("0012_agent_orchestration_domain", agentOrchestrationDomain),
 ] as const;

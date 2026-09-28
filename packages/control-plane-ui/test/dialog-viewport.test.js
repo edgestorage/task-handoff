@@ -12,15 +12,17 @@ test("shared dialogs preserve a 50px viewport margin", () => {
   assert.match(alertDialog, /:style="\{ maxHeight: 'calc\(100dvh - 100px\)' \}"/);
 });
 
-test("long Story action dialogs scroll only their form body", () => {
+test("long Story dialogs scroll only their form body", () => {
   const story = read("apps/control-plane/story/StoryView.vue");
   const actionEditor = read("apps/control-plane/story/StoryActionEditorContent.vue");
 
   assert.match(story, /<ScrollArea class="story-action-editor-scroll" :horizontal="false">\s*<StoryActionEditorContent/);
   assert.match(actionEditor, /<div class="story-editor-fields story-action-editor-fields">/);
-  assert.match(story, /:global\(\.story-editor-dialog\.story-action-editor-dialog\) \{[^}]*max-width:840px;[^}]*grid-template-rows:auto minmax\(0,1fr\) auto;[^}]*overflow:hidden;/);
+  assert.match(story, /:global\(\.story-editor-dialog\) \{[^}]*max-width:460px;[^}]*grid-template-rows:auto minmax\(0,1fr\) auto;[^}]*overflow:hidden;/);
+  assert.match(story, /:global\(\.story-editor-dialog\.story-action-editor-dialog\) \{ max-width:840px; \}/);
   assert.match(story, /:global\(\.story-action-editor-scroll\) \{ min-height:0; \}/);
-  assert.match(story, /:global\(\.story-editor-dialog\) \{ max-width:460px; \}/);
+  assert.match(story, /<ScrollArea class="story-editor-scroll" :horizontal="false">\s*<div class="story-editor-fields">/);
+  assert.match(story, /\.story-editor-scroll \{ min-height:0; \}/);
 });
 
 test("new instance dialog scrolls only the form panel", () => {

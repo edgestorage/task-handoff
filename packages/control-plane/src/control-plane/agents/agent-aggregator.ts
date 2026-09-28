@@ -12,16 +12,41 @@ import {
   type AgentRun,
   type AgentRunMember,
 } from "@task-handoff/protocol/agent-runs";
+import {
+  AGENT_ORCHESTRATION_CHANGED_EVENT_TYPE,
+  AgentOrchestrationChangedEventSchema,
+  type AgentOrchestration,
+  type AgentOrchestrationChangedEvent,
+} from "@task-handoff/protocol/agent-orchestrations";
 
 export type AgentRunCallTreeNode = { member: AgentRunMember; children: AgentRunCallTreeNode[] };
 
 /** In-memory projection only. Node Agent remains the sole persistence and mutation authority. */
 export class ControlPlaneAgentAggregator {
   private readonly definitions = new Map<string, Map<string, AgentDefinition>>();
+  private readonly orchestrations = new Map<string, Map<string, AgentOrchestration>>();
   private readonly runs = new Map<string, Map<string, AgentRun>>();
 
   replaceDefinitions(nodeId: string, definitions: AgentDefinition[]) {
     this.definitions.set(nodeId, new Map(definitions.map((definition) => [definition.id, definition])));
+  }
+
+  replaceOrchestrations(nodeId: string, orchestrations: AgentOrchestration[]) {
+    this.orchestrations.set(nodeId, new Map(orchestrations.map((orchestration) => [orchestration.id, orchestration])));
+  }
+
+  storeOrchestration(nodeId: string, orchestration: AgentOrchestration) {
+    const orchestrations = this.orchestrations.get(nodeId) ?? new Map<string, AgentOrchestration>();
+    orchestrations.set(orchestration.id, orchestration);
+    this.orchestrations.set(nodeId, orchestrations);
+  }
+
+  removeOrchestration(nodeId: string, orchestrationId: string) {
+    this.orchestrations.get(nodeId)?.delete(orchestrationId);
+  }
+
+  orchestrationsForNode(nodeId: string) {
+    return [...(this.orchestrations.get(nodeId)?.values() ?? [])];
   }
 
   replaceRuns(nodeId: string, runs: AgentRun[]) {
@@ -54,10 +79,11 @@ export class ControlPlaneAgentAggregator {
 
   removeNode(nodeId: string) {
     this.definitions.delete(nodeId);
+    this.orchestrations.delete(nodeId);
     this.runs.delete(nodeId);
   }
 
-  handleEvent(nodeId: string, type: string, payload: unknown): AgentDefinitionChangedEvent | zRunEvent | undefined {
+  handleEvent(nodeId: string, type: string, payload: unknown): AgentDefinitionChangedEvent | AgentOrchestrationChangedEvent | zRunEvent | undefined {
     if (type === AGENT_DEFINITION_CHANGED_EVENT_TYPE) {
       const event = AgentDefinitionChangedEventSchema.safeParse(payload);
       if (!event.success) return undefined;
@@ -65,6 +91,15 @@ export class ControlPlaneAgentAggregator {
       if (event.data.change === "deleted") definitions.delete(event.data.agentId);
       else if (event.data.definition) definitions.set(event.data.agentId, event.data.definition);
       this.definitions.set(nodeId, definitions);
+      return event.data;
+    }
+    if (type === AGENT_ORCHESTRATION_CHANGED_EVENT_TYPE) {
+      const event = AgentOrchestrationChangedEventSchema.safeParse(payload);
+      if (!event.success) return undefined;
+      const orchestrations = this.orchestrations.get(nodeId) ?? new Map<string, AgentOrchestration>();
+      if (event.data.change === "deleted") orchestrations.delete(event.data.orchestrationId);
+      else if (event.data.orchestration) orchestrations.set(event.data.orchestration.id, event.data.orchestration);
+      this.orchestrations.set(nodeId, orchestrations);
       return event.data;
     }
     if (type === AGENT_RUN_CHANGED_EVENT_TYPE) {

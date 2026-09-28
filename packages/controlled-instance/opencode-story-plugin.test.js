@@ -40,7 +40,7 @@ test("OpenCode Story plugin does not expose session identity as a model argument
   assert.deepEqual(Object.keys(hooks.tool.story_get_content.args), ["storyPaths", "destinationPath"]);
   assert.equal("sessionID" in hooks.tool.story_get_content.args, false);
   assert.equal("storyId" in hooks.tool.story_get_content.args, false);
-  assert.deepEqual(Object.keys(hooks.tool.agent_run.args), ["agentId", "prompt", "budget"]);
+  assert.deepEqual(Object.keys(hooks.tool.agent_run.args), ["agentId", "orchestrationId", "prompt", "budget"]);
   assert.equal("clientRequestId" in hooks.tool.agent_run.args, false);
   assert.equal("providerSessionId" in hooks.tool.agent_run.args, false);
 });

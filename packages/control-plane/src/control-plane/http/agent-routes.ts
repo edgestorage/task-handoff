@@ -26,10 +26,23 @@ import {
 import {
   nodeAgentCapabilitiesFromPublicNode,
   supportsNodeAgentDefinitions,
+  supportsNodeAgentOrchestrations,
   supportsNodeAgentRuns,
   supportsNodeAgentManualRuns,
   supportsNodeAgentStoryEntryAuthorization,
 } from "@task-handoff/protocol/node-agent-capabilities";
+import {
+  AgentOrchestrationAggregateSchema,
+  AgentOrchestrationCreateInputSchema,
+  AgentOrchestrationDeleteResultSchema,
+  AgentOrchestrationIdSchema,
+  AgentOrchestrationSchema,
+  AgentOrchestrationUpdateInputSchema,
+  defaultAgentOrchestrationId,
+  sanitizeAgentOrchestration,
+  sanitizeAgentOrchestrationList,
+  type AgentOrchestration,
+} from "@task-handoff/protocol/agent-orchestrations";
 import {
   StoryAgentEntrySetSchema,
   StoryAgentEntrySetUpdateInputSchema,
@@ -37,7 +50,7 @@ import {
 } from "@task-handoff/protocol/story-agent-authorization";
 import { StoryIdSchema, StorySchema } from "@task-handoff/protocol/stories";
 import type { ControlPlaneService } from "../application/service.ts";
-import { requestCanAccessInstance, requestCanAccessNode } from "./access-projection.ts";
+import { requestCanAccessInstance, requestCanAccessNode, requestVisibleInstanceIds } from "./access-projection.ts";
 import { nodeJson } from "./node-agent-request.ts";
 import type { ControlPlaneAgentAggregator } from "../agents/agent-aggregator.ts";
 import { controlPlaneRequestActor } from "./request-actor.ts";
@@ -45,9 +58,19 @@ import { controlPlaneRequestActor } from "./request-actor.ts";
 const NodeQuerySchema = z.object({ nodeId: z.string().trim().min(1).max(120).optional() }).strict();
 const NodeRequiredQuerySchema = z.object({ nodeId: z.string().trim().min(1).max(120) }).strict();
 const AgentRouteSchema = z.object({ agentId: AgentDefinitionIdSchema }).strict();
+const OrchestrationRouteSchema = z.object({ orchestrationId: AgentOrchestrationIdSchema }).strict();
 const RunRouteSchema = z.object({ runId: AgentRunIdSchema }).strict();
 const RunMemberRouteSchema = RunRouteSchema.extend({ memberId: AgentRunMemberIdSchema }).strict();
 const StoryRouteSchema = z.object({ storyId: StoryIdSchema }).strict();
+const AgentDeleteQuerySchema = z.object({
+  nodeId: z.string().trim().min(1).max(120),
+  /** `delete` 同时删除引用该 Agent 的自定义编排；默认只保留（悬挂引用由 UI 标记）。 */
+  referencingOrchestrations: z.enum(["keep", "delete"]).optional(),
+}).strict();
+
+function entryKey(agentId: string, orchestrationId: string) {
+  return `${agentId}\u001f${orchestrationId}`;
+}
 
 /**
  * AgentDefinition 的写操作必须落到定义所属 Node：Control Plane 只做转发与聚合，
@@ -74,6 +97,18 @@ function requireRunCapableNode(service: ControlPlaneService, request: FastifyReq
     throw Object.assign(new Error("This node does not support Agent Runs."), {
       statusCode: 409,
       code: "AGENT_RUNS_UNSUPPORTED",
+    });
+  }
+  return node;
+}
+
+function requireOrchestrationCapableNode(service: ControlPlaneService, request: FastifyRequest, nodeId: string) {
+  if (!requestCanAccessNode(request, nodeId)) throw resourceNotVisible();
+  const node = service.requireNode(nodeId);
+  if (!supportsNodeAgentOrchestrations(nodeAgentCapabilitiesFromPublicNode(node.capabilities))) {
+    throw Object.assign(new Error("This node does not support Agent orchestration management."), {
+      statusCode: 409,
+      code: "AGENT_ORCHESTRATIONS_UNSUPPORTED",
     });
   }
   return node;
@@ -143,6 +178,27 @@ async function requireVisibleRun(service: ControlPlaneService, request: FastifyR
   const run = sanitizeAgentRun(await nodeJson(service, nodeId, `/agent-runs/${encodeURIComponent(runId)}`));
   await assertRunVisible(service, request, nodeId, run);
   return run;
+}
+
+/**
+ * 编排可见性由成员 Agent 的目标实例决定：任何成员位于不可见实例时整张编排都不可见。
+ * 已在 Node 上不存在的悬挂成员没有可暴露的实例，保留展示以便用户清理。
+ */
+async function assertOrchestrationVisible(service: ControlPlaneService, request: FastifyRequest, nodeId: string, orchestration: AgentOrchestration) {
+  const definitions = sanitizeAgentDefinitionList(await nodeJson(service, nodeId, "/agents"));
+  const visibleInstanceIds = await requestVisibleInstanceIds(service, request);
+  const instanceByAgentId = new Map(definitions.agents.map((definition) => [definition.id, definition.targetInstanceId]));
+  for (const agentId of orchestration.agentIds) {
+    const instanceId = instanceByAgentId.get(agentId);
+    if (instanceId && !visibleInstanceIds.has(instanceId)) throw resourceNotVisible();
+  }
+}
+
+async function requireVisibleOrchestration(service: ControlPlaneService, request: FastifyRequest, nodeId: string, orchestrationId: string) {
+  requireOrchestrationCapableNode(service, request, nodeId);
+  const orchestration = sanitizeAgentOrchestration(await nodeJson(service, nodeId, `/agent-orchestrations/${encodeURIComponent(orchestrationId)}`));
+  await assertOrchestrationVisible(service, request, nodeId, orchestration);
+  return orchestration;
 }
 
 async function assertRunVisible(service: ControlPlaneService, request: FastifyRequest, nodeId: string, run: AgentRun) {
@@ -225,10 +281,17 @@ export function registerAgentRoutes(app: FastifyInstance, service: ControlPlaneS
 
   app.delete<{ Params: { agentId: string } }>("/api/agents/:agentId", async (request) => {
     const { agentId } = AgentRouteSchema.parse(request.params);
-    const { nodeId } = NodeRequiredQuerySchema.parse(request.query);
+    const { nodeId, referencingOrchestrations } = AgentDeleteQuerySchema.parse(request.query);
     await requireVisibleAgent(service, request, nodeId, agentId);
-    const result = AgentDefinitionDeleteResultSchema.parse(await nodeJson(service, nodeId, `/agents/${encodeURIComponent(agentId)}`, { method: "DELETE" }));
+    const query = referencingOrchestrations ? `?referencingOrchestrations=${referencingOrchestrations}` : "";
+    const result = AgentDefinitionDeleteResultSchema.parse(await nodeJson(
+      service,
+      nodeId,
+      `/agents/${encodeURIComponent(agentId)}${query}`,
+      { method: "DELETE" },
+    ));
     aggregator?.removeDefinition(nodeId, agentId);
+    for (const orchestrationId of result.deletedOrchestrationIds) aggregator?.removeOrchestration(nodeId, orchestrationId);
     return { data: result };
   });
 
@@ -254,10 +317,10 @@ export function registerAgentRoutes(app: FastifyInstance, service: ControlPlaneS
       body.nodeId,
       `/stories/${encodeURIComponent(storyId)}/agent-entries`,
     ));
-    const retainedIds = new Set(current.entries.map((entry) => entry.agentId));
-    await Promise.all(body.input.agentIds
-      .filter((agentId) => !retainedIds.has(agentId))
-      .map((agentId) => requireVisibleAgent(service, request, body.nodeId, agentId)));
+    const retained = new Set(current.entries.map((entry) => entryKey(entry.agentId, entry.orchestrationId)));
+    await Promise.all(body.input.entries
+      .filter((entry) => !retained.has(entryKey(entry.agentId, entry.orchestrationId ?? defaultAgentOrchestrationId(entry.agentId))))
+      .map((entry) => requireVisibleAgent(service, request, body.nodeId, entry.agentId)));
 
     const data = await nodeJson(service, body.nodeId, `/stories/${encodeURIComponent(storyId)}/agent-entries`, {
       method: "PUT",
@@ -317,7 +380,7 @@ export function registerAgentRoutes(app: FastifyInstance, service: ControlPlaneS
       });
     }
     requireRunCapableNode(service, request, body.nodeId);
-    await requireVisibleAgent(service, request, body.nodeId, body.input.agentId);
+    await requireVisibleOrchestration(service, request, body.nodeId, body.input.orchestrationId);
     await requireVisibleInstanceOnNode(service, request, body.nodeId, body.input.provenance.initiatingInstanceId);
     await requireStoryOnNode(service, request, body.nodeId, body.input.provenance.storyId);
     const run = sanitizeAgentRun(await nodeJson(service, body.nodeId, "/agent-runs", {
@@ -336,7 +399,7 @@ export function registerAgentRoutes(app: FastifyInstance, service: ControlPlaneS
       input: AgentRunManualCreateInputSchema,
     }).strict().parse(request.body);
     requireManualRunCapableNode(service, request, body.nodeId);
-    await requireVisibleAgent(service, request, body.nodeId, body.input.agentId);
+    await requireVisibleOrchestration(service, request, body.nodeId, body.input.orchestrationId);
     const actor = controlPlaneRequestActor(request);
     const run = sanitizeAgentRun(await nodeJson(service, body.nodeId, "/agent-runs", {
       method: "POST",
@@ -395,4 +458,102 @@ export function registerAgentRoutes(app: FastifyInstance, service: ControlPlaneS
     aggregator?.storeRun(body.nodeId, run);
     return { data: run };
   });
+}
+
+/**
+ * AgentOrchestration 的转发层：编排是 Node 本地对象，Control Plane 只做聚合、可见性投影与事件缓存，
+ * 不保存可写副本。Node 不支持编排管理时整个编排域按 capability 关闭，不影响定义与 Run。
+ */
+export function registerAgentOrchestrationRoutes(app: FastifyInstance, service: ControlPlaneService, aggregator?: ControlPlaneAgentAggregator) {
+  app.get("/api/agent-orchestrations", async (request) => {
+    const { nodeId } = NodeQuerySchema.parse(request.query);
+    const nodes = nodeId
+      ? [requireOrchestrationCapableNode(service, request, nodeId)]
+      : service.listNodes().filter((node) => requestCanAccessNode(request, node.id)
+        && supportsNodeAgentOrchestrations(nodeAgentCapabilitiesFromPublicNode(node.capabilities)));
+    const visibleInstanceIds = await requestVisibleInstanceIds(service, request);
+    const orchestrations: Array<{ nodeId: string; orchestration: AgentOrchestration }> = [];
+    const unavailableNodeIds: string[] = [];
+    await Promise.all(nodes.map(async (node) => {
+      try {
+        const list = sanitizeAgentOrchestrationList(await nodeJson(service, node.id, "/agent-orchestrations"));
+        aggregator?.replaceOrchestrations(node.id, list.orchestrations);
+        const definitions = sanitizeAgentDefinitionList(await nodeJson(service, node.id, "/agents")).agents;
+        orchestrations.push(...projectVisibleOrchestrations(list.orchestrations, definitions, visibleInstanceIds).map((orchestration) => ({ nodeId: node.id, orchestration })));
+      } catch {
+        unavailableNodeIds.push(node.id);
+        const cached = aggregator?.orchestrationsForNode(node.id) ?? [];
+        const definitions = aggregator?.definitionsForNode(node.id) ?? [];
+        orchestrations.push(...projectVisibleOrchestrations(cached, definitions, visibleInstanceIds).map((orchestration) => ({ nodeId: node.id, orchestration })));
+      }
+    }));
+    return { data: AgentOrchestrationAggregateSchema.parse({ orchestrations, unavailableNodeIds }) };
+  });
+
+  app.get<{ Params: { orchestrationId: string } }>("/api/agent-orchestrations/:orchestrationId", async (request) => {
+    const { orchestrationId } = OrchestrationRouteSchema.parse(request.params);
+    const { nodeId } = NodeRequiredQuerySchema.parse(request.query);
+    return { data: await requireVisibleOrchestration(service, request, nodeId, orchestrationId) };
+  });
+
+  app.post("/api/agent-orchestrations", async (request, reply) => {
+    const body = z.object({
+      nodeId: z.string().trim().min(1).max(120),
+      input: AgentOrchestrationCreateInputSchema,
+    }).strict().parse(request.body);
+    requireOrchestrationCapableNode(service, request, body.nodeId);
+    await Promise.all(body.input.agentIds.map((agentId) => requireVisibleAgent(service, request, body.nodeId, agentId)));
+    const orchestration = sanitizeAgentOrchestration(await nodeJson(service, body.nodeId, "/agent-orchestrations", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body.input),
+    }));
+    aggregator?.storeOrchestration(body.nodeId, orchestration);
+    return reply.code(201).send({ data: orchestration });
+  });
+
+  app.patch<{ Params: { orchestrationId: string } }>("/api/agent-orchestrations/:orchestrationId", async (request) => {
+    const { orchestrationId } = OrchestrationRouteSchema.parse(request.params);
+    const body = z.object({
+      nodeId: z.string().trim().min(1).max(120),
+      input: AgentOrchestrationUpdateInputSchema,
+    }).strict().parse(request.body);
+    requireOrchestrationCapableNode(service, request, body.nodeId);
+    const current = await requireVisibleOrchestration(service, request, body.nodeId, orchestrationId);
+    await Promise.all((body.input.agentIds ?? current.agentIds).map((agentId) => requireVisibleAgent(service, request, body.nodeId, agentId)));
+    const orchestration = sanitizeAgentOrchestration(await nodeJson(service, body.nodeId, `/agent-orchestrations/${encodeURIComponent(orchestrationId)}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body.input),
+    }));
+    aggregator?.storeOrchestration(body.nodeId, orchestration);
+    return { data: orchestration };
+  });
+
+  app.delete<{ Params: { orchestrationId: string } }>("/api/agent-orchestrations/:orchestrationId", async (request) => {
+    const { orchestrationId } = OrchestrationRouteSchema.parse(request.params);
+    const { nodeId } = NodeRequiredQuerySchema.parse(request.query);
+    await requireVisibleOrchestration(service, request, nodeId, orchestrationId);
+    const result = AgentOrchestrationDeleteResultSchema.parse(await nodeJson(
+      service,
+      nodeId,
+      `/agent-orchestrations/${encodeURIComponent(orchestrationId)}`,
+      { method: "DELETE" },
+    ));
+    aggregator?.removeOrchestration(nodeId, orchestrationId);
+    return { data: result };
+  });
+}
+
+/** 只投影成员实例全部可见的编排；已在 Node 上消失的悬挂成员没有实例语义，保留以便清理。 */
+function projectVisibleOrchestrations(
+  orchestrations: AgentOrchestration[],
+  definitions: AgentDefinition[],
+  visibleInstanceIds: Set<string>,
+) {
+  const instanceByAgentId = new Map(definitions.map((definition) => [definition.id, definition.targetInstanceId]));
+  return orchestrations.filter((orchestration) => orchestration.agentIds.every((agentId) => {
+    const instanceId = instanceByAgentId.get(agentId);
+    return !instanceId || visibleInstanceIds.has(instanceId);
+  }));
 }

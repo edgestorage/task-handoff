@@ -35,7 +35,7 @@
       </div>
       <template v-else>
         <RefreshCw v-if="isInstanceStatusPending(instance)" :size="34" />
-        <CircleAlert v-else-if="instance.status === 'failed' || instance.status === 'unhealthy'" :size="34" />
+        <CircleAlert v-else-if="instance.status === 'failed' || instance.status === 'unhealthy' || isInstanceRuntimeUnavailable(instance)" :size="34" />
         <PowerOff v-else :size="34" />
         <strong>{{ instanceStatusTitle(instance, t) }}</strong>
         <span>{{ instanceStatusDetail(instance, t) }}</span>
@@ -112,7 +112,7 @@ import { Button } from "../../../components/ui/button";
 import type { InstanceAction } from "../useInstanceActions";
 import type { LaunchableApp, RepositoryWorkspaceTabTarget, SessionTab } from "../useInstanceSessions";
 import { previewDetail, previewTitle, sessionFrameUrl, sessionTerminalSocketUrl } from "../useInstanceSessions";
-import { canShowInstanceAction, hasInstanceStatusPage, instanceStatusDetail, instanceStatusTitle, isInstanceStatusPending } from "../useInstanceStatus";
+import { canShowInstanceAction, hasInstanceStatusPage, instanceStatusDetail, instanceStatusTitle, isInstanceRuntimeUnavailable, isInstanceStatusPending } from "../useInstanceStatus";
 import AiSessionPanel from "./AiSessionPanel.vue";
 import SessionTerminalPreview from "./SessionTerminalPreview.vue";
 import RepositoryChangesReviewTab from "./RepositoryChangesReviewTab.vue";

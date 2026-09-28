@@ -1,6 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { agentCatalogKey, agentCatalogMemberRows, buildAgentCatalog, agentCatalogGroups, callableAgentCandidates } from "../src/apps/control-plane/agent/agentCatalog.ts";
+import {
+  agentCatalogKey,
+  agentCatalogMemberRows,
+  agentEntryOrchestrations,
+  agentManualRunAvailable,
+  agentParticipatingOrchestrations,
+  agentRunOrchestrations,
+  buildAgentCatalog,
+  agentCatalogGroups,
+  orchestrationAgentCandidates,
+} from "../src/apps/control-plane/agent/agentCatalog.ts";
 
 const definition = (overrides) => ({
   id: "agent-a",
@@ -12,7 +22,17 @@ const definition = (overrides) => ({
   cwdFolderId: "folder-a",
   providerId: "codex",
   executionPolicy: { workspaceMaterializer: "overlay-copy-on-write", processSandbox: "instance" },
-  callableAgentIds: [],
+  createdAt: "2026-09-26T00:00:00.000Z",
+  updatedAt: "2026-09-26T00:00:00.000Z",
+  ...overrides,
+});
+
+const orchestration = (overrides) => ({
+  id: "default:agent-a",
+  revision: "b".repeat(64),
+  name: "Agent A",
+  agentIds: ["agent-a"],
+  edges: [],
   createdAt: "2026-09-26T00:00:00.000Z",
   updatedAt: "2026-09-26T00:00:00.000Z",
   ...overrides,
@@ -24,6 +44,7 @@ const capableCapabilities = {
   agentExecution: {
     definitions: true,
     runs: true,
+    orchestration: { orchestrations: true, manualRuns: true },
     combinations: [{ runtime: "docker", workspaceMaterializer: "overlay-copy-on-write", processSandbox: "instance", providerId: "codex" }],
   },
 };
@@ -92,7 +113,7 @@ test("catalog keeps same-id Agents on different nodes as distinct aggregate iden
   ]);
   assert.equal(new Set(catalog.agents.map((agent) => agent.key)).size, 2);
   assert.deepEqual(agentCatalogGroups(catalog).map((group) => group.agents[0]?.name), ["Agent on A", "Agent on B"]);
-  assert.deepEqual(callableAgentCandidates(catalog.agents, "node-a", "different-agent").map((agent) => agent.name), ["Agent on A"]);
+  assert.deepEqual(orchestrationAgentCandidates(catalog.agents, "node-a").map((agent) => agent.name), ["Agent on A"]);
 });
 
 test("catalog derives Story entry labels from Story-owned entry sets per node", () => {
@@ -110,7 +131,7 @@ test("catalog derives Story entry labels from Story-owned entry sets per node", 
     storyEntries: [{
       nodeId: "node-a",
       storyLabel: "Release",
-      entrySet: { storyId: "story-a", revision: "b".repeat(64), entries: [{ agentId: "agent-a", status: "available" }] },
+      entrySet: { storyId: "story-a", revision: "b".repeat(64), entries: [{ agentId: "agent-a", orchestrationId: "default:agent-a", status: "available" }] },
     }],
   });
 
@@ -160,16 +181,20 @@ test("catalog blocks the first unmet precondition instead of downgrading the exe
   }
 });
 
-test("catalog keeps callable targets that are not resolvable instead of rewriting them", () => {
+test("catalog keeps orchestration members that are not resolvable instead of rewriting them", () => {
   const catalog = buildAgentCatalog({
     nodes: [node("node-a", capableCapabilities)],
-    definitions: [{ nodeId: "node-a", agent: definition({ callableAgentIds: ["agent-missing"] }) }],
+    definitions: [{ nodeId: "node-a", agent: definition({}) }],
+    orchestrations: [
+      { nodeId: "node-a", orchestration: orchestration({ id: "orchestration-one", agentIds: ["agent-a", "agent-missing"] }) },
+    ],
     instances: [instance({})],
     foldersByNode: new Map(),
   });
-  assert.deepEqual(catalog.agents[0].callableAgentIds, ["agent-missing"]);
-  assert.equal(catalog.agents[0].blockedCode, "missing-reference");
-  assert.deepEqual(callableAgentCandidates(catalog.agents, "node-a", "agent-a"), []);
+  assert.deepEqual(catalog.orchestrations[0].missingAgentIds, ["agent-missing"]);
+  assert.equal(catalog.orchestrations[0].blockedCode, "missing-reference");
+  assert.equal(catalog.orchestrations[0].executable, false);
+  assert.deepEqual(catalog.orchestrations[0].agentIds, ["agent-a", "agent-missing"]);
 });
 
 test("catalog projects authoritative Run members without inventing shared-space diagnostics", () => {
@@ -184,6 +209,7 @@ test("catalog projects authoritative Run members without inventing shared-space 
       revision: 1,
       status: "completed",
       provenance: { initiatingInstanceId: "inst-a", initiatingAiSessionId: "session-a", storyId: "story-a" },
+      orchestrationId: "default:agent-a",
       rootMemberId: "member-a",
       budget: { maxMembers: 4, maxDepth: 2, maxConcurrency: 1 },
       cleanup: { status: "completed", attempts: 1, updatedAt: "2026-09-26T00:00:04.000Z" },
@@ -225,6 +251,37 @@ test("catalog projects authoritative Run members without inventing shared-space 
   assert.equal(catalog.runs[0].sharedUsageBytes, 4096);
   assert.equal(catalog.runs[0].sharedQuotaBytes, 1073741824);
   assert.equal(catalog.runs[0].sharedRootPath, undefined);
+});
+
+test("catalog scopes orchestration visibility and runnable sets to the selected Agent", () => {
+  const catalog = buildAgentCatalog({
+    nodes: [node("node-a", capableCapabilities)],
+    definitions: [
+      { nodeId: "node-a", agent: definition({}) },
+      { nodeId: "node-a", agent: definition({ id: "agent-b", name: "Agent B" }) },
+    ],
+    orchestrations: [
+      { nodeId: "node-a", orchestration: orchestration({}) },
+      // 多顶级节点：两个 Agent 都能"看到"同一张编排，入口是各自那条链的头。
+      { nodeId: "node-a", orchestration: orchestration({ id: "orchestration-shared", agentIds: ["agent-a", "agent-b"], edges: [] }) },
+      // 以 agent-b 为唯一顶级节点：只出现在 Agent B 下。
+      { nodeId: "node-a", orchestration: orchestration({ id: "orchestration-b", agentIds: ["agent-b"] }) },
+    ],
+    instances: [instance({})],
+    foldersByNode: new Map(),
+  });
+  const agentA = catalog.agents.find((agent) => agent.id === "agent-a");
+  const agentB = catalog.agents.find((agent) => agent.id === "agent-b");
+  assert.deepEqual(agentEntryOrchestrations(catalog.orchestrations, agentA).map((entry) => entry.id).sort(), ["default:agent-a", "orchestration-shared"]);
+  assert.deepEqual(agentEntryOrchestrations(catalog.orchestrations, agentB).map((entry) => entry.id).sort(), ["orchestration-b", "orchestration-shared"]);
+  assert.deepEqual(agentParticipatingOrchestrations(catalog.orchestrations, agentA).map((entry) => entry.id).sort(), ["default:agent-a", "orchestration-shared"]);
+  assert.deepEqual(agentParticipatingOrchestrations(catalog.orchestrations, agentB).map((entry) => entry.id).sort(), ["orchestration-b", "orchestration-shared"]);
+  assert.equal(agentManualRunAvailable(agentA, agentRunOrchestrations(catalog.orchestrations, agentA)), true);
+  assert.equal(agentManualRunAvailable(agentA, []), false);
+  assert.deepEqual(catalog.orchestrations.find((entry) => entry.id === "orchestration-shared").entryAgentIds, ["agent-a", "agent-b"]);
+  assert.equal(catalog.orchestrations.find((entry) => entry.id === "default:agent-a").isDefault, true);
+  assert.equal(catalog.orchestrations.find((entry) => entry.id === "default:agent-a").ownerAgentId, "agent-a");
+  assert.equal(catalog.orchestrations.find((entry) => entry.id === "orchestration-b").isDefault, false);
 });
 
 test("member rows preserve arbitrary call depth, duplicate Agent executions, orphans, and malformed cycles", () => {

@@ -3,13 +3,13 @@ import { computed, nextTick, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { formatBytes, formatNumber } from "../../i18n/presentation";
 import type { SupportedLocale } from "../../i18n/locale";
-import { AppWindow, ArrowUp, Box, BrainCircuit, Check, Copy, CornerDownRight, File, FileText, Folder, Hand, LoaderCircle, Minimize2, Pencil, Plus, Puzzle, ScanSearch, ShieldAlert, ShieldCheck, Square, Target, WandSparkles, Waypoints, X } from "@lucide/vue";
+import { AppWindow, ArrowUp, Box, Check, Copy, CornerDownRight, File, FileText, Folder, Hand, LoaderCircle, Minimize2, Pencil, Plus, Puzzle, ScanSearch, ShieldAlert, ShieldCheck, Square, Target, WandSparkles, X } from "@lucide/vue";
 import { PopoverAnchor } from "reka-ui";
 import type { AiSessionMentionCandidate } from "../../api/types";
 import type { AiSessionCommandInput, AiSessionPermissionMode } from "@task-handoff/protocol/ai-sessions";
 import type { AiSessionModelSelection, AiSessionReasoningEffort } from "@task-handoff/protocol/ai-sessions";
 import type { AiSessionModelGroup } from "@task-handoff/control-plane-client";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger } from "../ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "../ui/context-menu";
 import { Popover, PopoverContent } from "../ui/popover";
 import { Textarea } from "../ui/textarea";
@@ -24,6 +24,7 @@ import { classifyAiSessionPastedText, type AiSessionPastedTextPresentation } fro
 import { AI_SESSION_DEFAULT_MAX_FILE_ATTACHMENT_BYTES } from "@task-handoff/protocol/ai-sessions";
 import { scrollHorizontalOverflow, updateHorizontalOverflowFromEvent, vHorizontalOverflow } from "../../lib/horizontalOverflow";
 import AiSessionImagePreview from "./AiSessionImagePreview.vue";
+import AiSessionModelMenu from "./AiSessionModelMenu.vue";
 
 export type AiSessionComposerAttachment = {
   id: string;
@@ -182,8 +183,6 @@ const displayedProviderName = computed(() => modelOptions.value.find((model) => 
 const modelTriggerEl = ref<HTMLButtonElement>();
 const modelMenuOpen = ref(false);
 const modelSummaryTooltipOpen = ref(false);
-const reasoningEfforts: AiSessionReasoningEffort[] = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
-const availableReasoningEfforts = computed(() => props.provider === "codex" ? reasoningEfforts : reasoningEfforts.filter((effort) => effort !== "ultra"));
 const modelMenuDisabled = computed(() => Boolean(
   props.busy
   || props.sessionBusy
@@ -192,25 +191,6 @@ const modelMenuDisabled = computed(() => Boolean(
   || (modelOptions.value.length <= 1 && !props.reasoningEffortEnabled),
 ));
 const noModelAvailable = computed(() => modelOptions.value.length === 0);
-
-function isSelectedModel(model: AiSessionModelSelection) {
-  return model.modelEntityId === displayedModelSelection.value?.modelEntityId && model.modelName === displayedModelSelection.value?.modelName;
-}
-
-function selectedModelNameForGroup(group: AiSessionModelGroup) {
-  return props.modelSelection?.modelEntityId === group.modelEntityId
-    ? props.modelSelection.modelName
-    : undefined;
-}
-
-function modelGroupSubtitle(group: AiSessionModelGroup) {
-  const selected = selectedModelNameForGroup(group);
-  if (selected) return selected;
-  const first = group.models[0]?.modelName || "";
-  return group.models.length > 1
-    ? t("sessions.composer.modelGroupSummary", { model: first, count: group.models.length })
-    : first;
-}
 
 function showModelSummaryTooltip(event?: Event) {
   if (event instanceof PointerEvent && event.pointerType === "touch") return;
@@ -1028,81 +1008,17 @@ watch(() => props.busy, (busy) => {
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>
-          <DropdownMenuContent
-            class="ai-session-model-menu"
+          <AiSessionModelMenu
+            :agent="provider"
+            :model-groups="modelGroups"
+            :model-selection="displayedModelSelection"
+            :reasoning-effort="reasoningEffort"
+            :reasoning-effort-enabled="reasoningEffortEnabled"
             side="top"
             align="end"
-            :collision-padding="12"
-            :side-offset="8"
-          >
-            <ScrollArea type="auto" :horizontal="false" class="ai-session-model-menu__scroll">
-              <div class="ai-session-model-menu__list">
-                <template v-for="group in modelGroups" :key="group.modelEntityId">
-                  <DropdownMenuSub v-if="group.models.length > 1">
-                    <DropdownMenuSubTrigger
-                      class="ai-session-model-menu__item ai-session-model-menu__provider-item"
-                      :class="{ 'ai-session-model-menu__item--selected': selectedModelNameForGroup(group) }"
-                    >
-                      <Waypoints class="ai-session-model-menu__icon" :size="17" />
-                      <span class="ai-session-model-menu__copy">
-                        <strong>{{ group.providerName }}</strong>
-                        <small v-if="modelGroupSubtitle(group)">{{ modelGroupSubtitle(group) }}</small>
-                      </span>
-                    </DropdownMenuSubTrigger>
-                    <DropdownMenuSubContent class="ai-session-model-menu ai-session-model-menu--nested" :collision-padding="12">
-                      <DropdownMenuItem
-                        v-for="model in group.models"
-                        :key="`${model.modelEntityId}:${model.modelName}`"
-                        class="ai-session-model-menu__item"
-                        :class="{ 'ai-session-model-menu__item--selected': isSelectedModel(model) }"
-                        @select="emit('selectModel', { modelEntityId: model.modelEntityId, modelName: model.modelName })"
-                      >
-                        <span class="ai-session-model-menu__copy"><strong>{{ model.modelName }}</strong></span>
-                        <Check v-if="isSelectedModel(model)" class="ai-session-model-menu__check" :size="16" />
-                      </DropdownMenuItem>
-                    </DropdownMenuSubContent>
-                  </DropdownMenuSub>
-                  <DropdownMenuItem
-                    v-else
-                    class="ai-session-model-menu__item ai-session-model-menu__provider-item"
-                    :class="{ 'ai-session-model-menu__item--selected': isSelectedModel(group.models[0]) }"
-                    @select="emit('selectModel', { modelEntityId: group.models[0].modelEntityId, modelName: group.models[0].modelName })"
-                  >
-                    <Waypoints class="ai-session-model-menu__icon" :size="17" />
-                    <span class="ai-session-model-menu__copy">
-                      <strong>{{ group.providerName }}</strong>
-                      <small>{{ group.models[0].modelName }}</small>
-                    </span>
-                    <Check v-if="isSelectedModel(group.models[0])" class="ai-session-model-menu__check" :size="16" />
-                  </DropdownMenuItem>
-                </template>
-                <template v-if="reasoningEffortEnabled">
-                  <DropdownMenuSeparator />
-                  <DropdownMenuSub>
-                    <DropdownMenuSubTrigger class="ai-session-model-menu__item ai-session-model-menu__provider-item">
-                      <BrainCircuit class="ai-session-model-menu__icon" :size="17" />
-                      <span class="ai-session-model-menu__copy">
-                        <strong>{{ t("sessions.composer.reasoningEffort") }}</strong>
-                        <small v-if="reasoningEffort">{{ reasoningEffort }}</small>
-                      </span>
-                    </DropdownMenuSubTrigger>
-                    <DropdownMenuSubContent class="ai-session-model-menu ai-session-model-menu--nested ai-session-reasoning-menu" :collision-padding="12">
-                      <DropdownMenuItem
-                        v-for="effort in availableReasoningEfforts"
-                        :key="effort"
-                        class="ai-session-model-menu__item"
-                        :class="{ 'ai-session-model-menu__item--selected': reasoningEffort === effort }"
-                        @select="emit('selectReasoningEffort', effort)"
-                      >
-                        <span class="ai-session-model-menu__copy"><strong>{{ effort }}</strong></span>
-                        <Check v-if="reasoningEffort === effort" class="ai-session-model-menu__check" :size="16" />
-                      </DropdownMenuItem>
-                    </DropdownMenuSubContent>
-                  </DropdownMenuSub>
-                </template>
-              </div>
-            </ScrollArea>
-          </DropdownMenuContent>
+            @select-model="emit('selectModel', $event)"
+            @select-reasoning-effort="emit('selectReasoningEffort', $event)"
+          />
         </DropdownMenu>
         <TooltipProvider v-else-if="provider" :delay-duration="200">
           <Tooltip>
@@ -1532,116 +1448,6 @@ watch(() => props.busy, (busy) => {
 .ai-session-composer__model-trigger:not(:disabled):is(:hover, :focus-visible) {
   background: color-mix(in srgb, var(--ai-composer-muted, currentColor) 10%, transparent);
   outline: none;
-}
-
-:global(.ai-session-model-menu) {
-  width: min(292px, var(--reka-dropdown-menu-content-available-width));
-  max-height: min(360px, var(--reka-dropdown-menu-content-available-height));
-  overflow: hidden;
-  padding: 5px;
-}
-
-:global(.ai-session-model-menu__scroll) {
-  max-height: min(350px, calc(var(--reka-dropdown-menu-content-available-height) - 10px));
-  min-width: 0;
-}
-
-:global(.ai-session-model-menu__list) {
-  display: grid;
-  gap: 1px;
-}
-
-:global(.ai-session-model-menu__provider) {
-  padding: 7px 9px 5px;
-  color: hsl(var(--muted-foreground));
-  font-size: 12px;
-  font-weight: 400;
-}
-
-:global(.ai-session-model-menu__item) {
-  min-height: 42px;
-  gap: 10px;
-  border-radius: 6px;
-  padding: 7px 9px;
-}
-
-:global(.ai-session-model-menu__provider-item) {
-  align-items: center;
-}
-
-:global(.ai-session-model-menu__icon) {
-  flex: 0 0 auto;
-  color: hsl(var(--muted-foreground));
-}
-
-:global(.ai-session-model-menu__copy) {
-  display: grid;
-  min-width: 0;
-  flex: 1 1 auto;
-  gap: 1px;
-}
-
-:global(.ai-session-model-menu__copy strong) {
-  overflow: hidden;
-  font-size: 13px;
-  font-weight: 500;
-  line-height: 18px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-:global(.ai-session-model-menu__copy small) {
-  overflow: hidden;
-  color: hsl(var(--muted-foreground));
-  font-size: 12px;
-  font-weight: 400;
-  line-height: 17px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-:global(.ai-session-model-menu__check) {
-  flex: 0 0 auto;
-  margin-left: auto;
-}
-
-:global(.ai-session-model-menu__item--selected) {
-  background: var(--surface-active);
-  color: var(--text-strong);
-}
-
-:global(.ai-session-model-menu__item--selected .ai-session-model-menu__icon),
-:global(.ai-session-model-menu__item--selected .ai-session-model-menu__check) {
-  color: hsl(var(--primary));
-}
-
-:global(.ai-session-model-menu__item:is(:focus, [data-highlighted])),
-:global(.ai-session-model-menu__provider-item[data-state="open"]) {
-  background: var(--surface-active);
-  color: var(--text-strong);
-}
-
-:global(.ai-session-model-menu--nested) {
-  width: min(220px, var(--reka-dropdown-menu-content-available-width));
-  max-height: min(360px, var(--reka-dropdown-menu-content-available-height));
-}
-
-:global(.ai-session-model-menu--nested .ai-session-model-menu__item) {
-  min-height: 32px;
-  gap: 8px;
-  padding: 5px 8px;
-}
-
-:global(.ai-session-model-menu--nested .ai-session-model-menu__copy strong) {
-  line-height: 16px;
-}
-
-:global(.ai-session-reasoning-menu) {
-  width: min(190px, var(--reka-dropdown-menu-content-available-width));
-}
-
-:global(.ai-session-reasoning-menu .ai-session-model-menu__item) {
-  min-height: 30px;
 }
 
 :global(.ai-session-permission-menu) {

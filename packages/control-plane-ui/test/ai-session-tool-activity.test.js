@@ -27,7 +27,9 @@ test("tool activity uses the authoritative API projection", () => {
 
 test("expanded tool activity consumes live items without triggering timeline reloads", () => {
   const activity = fs.readFileSync(new URL("../src/components/ai-session/AiSessionToolActivity.vue", import.meta.url), "utf8");
-  assert.doesNotMatch(activity, /requestExpand|activityRevision|defineEmits/);
+  assert.doesNotMatch(activity, /requestExpand|activityRevision/);
+  assert.match(activity, /const expanded = ref\(false\);/);
+  assert.match(activity, /const emit = defineEmits<\{ addToConversation: \[content: string\] \}>\(\);/);
   assert.match(activity, /function toggleExpanded\(event: MouseEvent\) \{[\s\S]*beginDisclosureTransition\(event\.currentTarget as Element\);[\s\S]*expanded\.value = !expanded\.value;/);
 });
 

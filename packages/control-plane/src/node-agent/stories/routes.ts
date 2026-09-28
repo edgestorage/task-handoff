@@ -350,10 +350,11 @@ export function registerNodeStoryRoutes(app: FastifyInstance, state: NodeAgentSt
       throw Object.assign(new Error("Story Agent invocation is unavailable."), { code: "STORY_AGENT_INVOCATION_UNAVAILABLE", statusCode: 503 });
     }
     const invocation = AgentInvocationRequestSchema.parse(request.body);
-    await options.toolPolicy.assertAgentInvocation(story.id, invocation.input.agentId);
+    const entry = await options.toolPolicy.assertAgentInvocation(story.id, invocation.input.agentId, invocation.input.orchestrationId);
     const run = options.agentRuns.create({
       clientRequestId: invocation.clientRequestId,
-      agentId: invocation.input.agentId,
+      orchestrationId: entry.orchestrationId,
+      entryAgentId: entry.agentId,
       input: { prompt: invocation.input.prompt },
       provenance: {
         initiatingInstanceId: id,

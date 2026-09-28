@@ -3,6 +3,7 @@ import {
   agentInvocationToolRevisionSource,
   resolveAgentInvocationToolGrant,
 } from "@task-handoff/protocol/agent-invocation-tools";
+import { agentOrchestrationContainsAgent } from "@task-handoff/protocol/agent-orchestrations";
 import {
   normalizeStoryAgentToolPolicy,
   resolveStoryAgentToolNames,
@@ -47,8 +48,12 @@ export class StoryToolPolicyService {
     const story = await this.requireStory(storyId);
     const settings = this.settingsFor(story);
     const entries = this.repository.agents.storyEntries.get(storyId);
-    const availableAgentIds = entries.agentIds.filter((agentId) => Boolean(this.repository.agents.definitions.get(agentId)));
-    const agentInvocation = resolveAgentInvocationToolGrant(story.archivedAt ? [] : availableAgentIds);
+    const availableTargets = story.archivedAt ? [] : entries.entries.filter((entry) => {
+      if (!this.repository.agents.definitions.get(entry.agentId)) return false;
+      const orchestration = this.repository.agents.orchestrations.get(entry.orchestrationId);
+      return Boolean(orchestration) && agentOrchestrationContainsAgent(orchestration!, entry.agentId);
+    });
+    const agentInvocation = resolveAgentInvocationToolGrant(availableTargets);
     const revision = crypto.createHash("sha256").update(JSON.stringify([
       storyAgentToolPolicyRevisionSource(settings.policy),
       Boolean(story.archivedAt),
@@ -72,13 +77,27 @@ export class StoryToolPolicyService {
     return resolution;
   }
 
-  async assertAgentInvocation(storyId: string, agentId: string) {
+  /** 解析调用目标：显式 orchestrationId 必须精确匹配入口集合；缺省时该 Agent 只能有一个入口。 */
+  async assertAgentInvocation(storyId: string, agentId: string, orchestrationId?: string) {
     const resolution = await this.resolve(storyId);
-    if (!resolution.agentInvocation.enabledTools.includes("agent_run")
-      || !resolution.agentInvocation.allowedAgentIds.includes(agentId)) {
+    if (!resolution.agentInvocation.enabledTools.includes("agent_run")) {
       throw policyError("STORY_AGENT_INVOCATION_FORBIDDEN", "The Agent is not authorized as an entry Agent for this Story.", 403);
     }
-    return resolution;
+    const candidates = resolution.agentInvocation.allowedTargets.filter((target) => target.agentId === agentId);
+    if (orchestrationId) {
+      const target = candidates.find((candidate) => candidate.orchestrationId === orchestrationId);
+      if (!target) throw policyError("STORY_AGENT_INVOCATION_FORBIDDEN", "The Agent is not authorized as an entry Agent for this Story.", 403);
+      return target;
+    }
+    if (candidates.length === 1) return candidates[0]!;
+    if (!candidates.length) {
+      throw policyError("STORY_AGENT_INVOCATION_FORBIDDEN", "The Agent is not authorized as an entry Agent for this Story.", 403);
+    }
+    throw policyError(
+      "STORY_AGENT_INVOCATION_AMBIGUOUS",
+      "The Agent is bound to multiple orchestrations in this Story; the call must name one.",
+      409,
+    );
   }
 
   private async requireStory(storyId: string) {

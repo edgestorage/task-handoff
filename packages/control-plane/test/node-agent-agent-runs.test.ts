@@ -2,10 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import Fastify from "fastify";
 import { AgentDefinitionService } from "../src/node-agent/agents/service.ts";
+import { AgentOrchestrationService } from "../src/node-agent/agents/orchestration-service.ts";
 import { AgentRunService, effectiveAgentRunBudget } from "../src/node-agent/agents/run-service.ts";
 import { registerNodeAgentRunRoutes } from "../src/node-agent/agents/routes.ts";
 import { openNodeAgentDatabase } from "../src/node-agent/persistence/database.ts";
 import { createNodeAgentRepository } from "../src/node-agent/persistence/repository.ts";
+import { defaultAgentOrchestrationId } from "@task-handoff/protocol/agent-orchestrations";
 import { createStoryDatabaseFixture } from "./story-database-fixture.ts";
 
 const t0 = "2026-09-26T00:00:00.000Z";
@@ -28,6 +30,7 @@ function snapshot(overrides: Record<string, unknown> = {}) {
 function createInput(overrides: Record<string, unknown> = {}) {
   return {
     clientRequestId: "request_one",
+    orchestrationId: "default:agent_reviewer",
     input: { prompt: "Review the requested change" },
     provenance: { initiatingInstanceId: "instance_source", initiatingAiSessionId: "session_source", storyId: "story_one" },
     budget: { maxMembers: 4, maxDepth: 2, maxConcurrency: 2 },
@@ -100,7 +103,8 @@ async function createRunApiFixture(supported = true) {
   const database = await createStoryDatabaseFixture("task-handoff-agent-run-api-");
   const state = createRunState();
   const events: Array<{ type: string; payload: Record<string, unknown>; scope: Record<string, unknown> }> = [];
-  const definitions = new AgentDefinitionService(state as never, database.repository.agents.definitions);
+  const orchestrations = new AgentOrchestrationService(database.repository.agents.orchestrations, database.repository.agents.definitions);
+  const definitions = new AgentDefinitionService(state as never, database.repository.agents.definitions, orchestrations);
   const definition = definitions.create({
     name: "Reviewer",
     appendedPrompt: "Original prompt",
@@ -111,6 +115,7 @@ async function createRunApiFixture(supported = true) {
   const runs = new AgentRunService(
     state as never,
     definitions,
+    orchestrations,
     database.repository.agents.runs,
     () => supported,
     (type, payload, scope) => events.push({ type, payload: payload as Record<string, unknown>, scope }),
@@ -127,6 +132,7 @@ async function createRunApiFixture(supported = true) {
     ...database,
     state,
     definitions,
+    orchestrations,
     definition,
     runs,
     events,
@@ -236,13 +242,15 @@ test("callee scheduling preserves its own instance and fails when that authorita
       cwdFolderId: "folder_two",
       providerId: "codex",
     });
-    const root = fixture.definitions.update(fixture.definition.id, {
-      expectedRevision: fixture.definition.revision,
-      callableAgentIds: [callee.id],
+    const root = fixture.definition;
+    fixture.orchestrations.update(defaultAgentOrchestrationId(root.id), {
+      expectedRevision: fixture.orchestrations.get(defaultAgentOrchestrationId(root.id)).revision,
+      agentIds: [root.id, callee.id],
+      edges: [{ fromAgentId: root.id, toAgentId: callee.id }],
     });
     const run = fixture.runs.create({
       clientRequestId: "request_cross_instance",
-      agentId: root.id,
+      orchestrationId: defaultAgentOrchestrationId(root.id),
       input: { prompt: "Coordinate the work" },
       provenance: { initiatingInstanceId: "instance_source", initiatingAiSessionId: "session_source", storyId: "story_one" },
       budget: { maxMembers: 3, maxDepth: 2, maxConcurrency: 1 },
@@ -316,8 +324,8 @@ test("Member failure is isolated from completed sibling results", async () => {
   try {
     const run = fixture.runs.create({
       clientRequestId: "request_member_isolation",
+      orchestrationId: defaultAgentOrchestrationId(fixture.definition.id),
       input: { prompt: "Review the requested change" },
-      agentId: fixture.definition.id,
       provenance: { initiatingInstanceId: "instance_source", initiatingAiSessionId: "session_source", storyId: "story_one" },
       budget: { maxMembers: 4, maxDepth: 2, maxConcurrency: 2 },
     });
@@ -424,7 +432,7 @@ test("Agent Run API creates an immutable idempotent snapshot and publishes node-
   try {
     const payload = {
       clientRequestId: "request_api",
-      agentId: fixture.definition.id,
+      orchestrationId: defaultAgentOrchestrationId(fixture.definition.id),
       input: { prompt: "Review the requested change" },
       provenance: { initiatingInstanceId: "instance_source", initiatingAiSessionId: "session_source", storyId: "story_one" },
       budget: { maxMembers: 4, maxDepth: 2, maxConcurrency: 2 },
@@ -448,7 +456,7 @@ test("Agent Run API creates an immutable idempotent snapshot and publishes node-
     assert.equal(fixture.repository.agents.runs.list().length, 1);
 
     for (const conflictingPayload of [
-      { ...payload, agentId: "agent_missing" },
+      { ...payload, orchestrationId: "default:agent_missing" },
       { ...payload, input: { prompt: "Do a different task" } },
       { ...payload, provenance: { ...payload.provenance, initiatingAiSessionId: "session_other" } },
       { ...payload, budget: { ...payload.budget, maxDepth: 1 } },
@@ -484,7 +492,7 @@ test("Node Agent accepts a manual Control Plane run without a fabricated initiat
       url: "/api/node-agent/agent-runs",
       payload: {
         clientRequestId: "request_manual",
-        agentId: fixture.definition.id,
+        orchestrationId: defaultAgentOrchestrationId(fixture.definition.id),
         input: { prompt: "Run the release checks" },
         provenance: {
           source: "control-plane",
@@ -506,7 +514,7 @@ test("Agent Run API reports structured target, capability, lookup, revision and 
   try {
     const payload = {
       clientRequestId: "request_unsupported",
-      agentId: unsupported.definition.id,
+      orchestrationId: defaultAgentOrchestrationId(unsupported.definition.id),
       input: { prompt: "Review the requested change" },
       provenance: { initiatingInstanceId: "instance_source", initiatingAiSessionId: "session_source", storyId: "story_one" },
       budget: { maxMembers: 4, maxDepth: 2, maxConcurrency: 2 },
@@ -529,8 +537,8 @@ test("Agent Run API reports structured target, capability, lookup, revision and 
   try {
     const run = fixture.runs.create({
       clientRequestId: "request_cancel",
+      orchestrationId: defaultAgentOrchestrationId(fixture.definition.id),
       input: { prompt: "Review the requested change" },
-      agentId: fixture.definition.id,
       provenance: { initiatingInstanceId: "instance_source", initiatingAiSessionId: "session_source", storyId: "story_one" },
       budget: { maxMembers: 4, maxDepth: 2, maxConcurrency: 2 },
     });

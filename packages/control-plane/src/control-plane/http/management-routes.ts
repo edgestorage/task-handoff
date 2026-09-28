@@ -19,7 +19,7 @@ import { registerNodeRoutes } from "./node-routes.ts";
 import { registerSessionRoutes } from "./session-routes.ts";
 import { registerTriggerRoutes } from "./trigger-routes.ts";
 import { registerStoryRoutes } from "./story-routes.ts";
-import { registerAgentRoutes } from "./agent-routes.ts";
+import { registerAgentOrchestrationRoutes, registerAgentRoutes } from "./agent-routes.ts";
 import type { ControlPlaneAgentAggregator } from "../agents/agent-aggregator.ts";
 
 type ErrorPayload = (error: unknown) => {
@@ -72,4 +72,5 @@ export function registerControlPlaneManagementRoutes(options: RegisterControlPla
   registerChatGatewayRoutes({ app, service, chatGateway });
   registerStoryRoutes(app, service);
   registerAgentRoutes(app, service, agentAggregator);
+  registerAgentOrchestrationRoutes(app, service, agentAggregator);
 }

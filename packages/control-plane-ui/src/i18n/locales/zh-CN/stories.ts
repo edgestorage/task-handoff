@@ -109,8 +109,9 @@ export const stories = {
     entryAgentsUnsupported: "当前 Node Agent 不支持入口 Agent 授权。",
     entryAgentsUnavailable: "入口 Agent 当前不可用。",
     entryAgentsEmpty: "当前 Story 节点上没有可访问的 Agent",
-    entryAgentsScope: "此白名单仅控制直接入口；后续调用由各 Agent 自身的可调用 Agent 集合决定。",
+    entryAgentsScope: "此白名单仅控制直接入口；入口 Agent 以所选编排为运行范围，后续调用由该编排的连边决定。",
     entryAgentMissing: "Agent 引用已失效：{id}",
+    entryAgentOrchestration: "选择 {name} 的编排",
     entryAgentsSaved: "Story 入口 Agent 已保存。",
     saving: "正在保存...",
   },
@@ -190,6 +191,7 @@ export const stories = {
   errors: {
     assignFailed: "无法将会话添加到 Story。",
     saveFailed: "无法保存 Story。",
+    settingsApplyFailed: "Story 已创建，但 Agent 设置未能保存，请重试保存。",
     renameFailed: "无法重命名 Story。",
     retentionLoadFailed: "无法加载 Story 会话保留配置。",
     updateFailed: "无法更新 Story。",

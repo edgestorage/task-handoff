@@ -50,6 +50,10 @@
       "types": "./src/agent-definitions.ts",
       "default": "./src/agent-definitions.ts"
     },
+    "./agent-orchestrations": {
+      "types": "./src/agent-orchestrations.ts",
+      "default": "./src/agent-orchestrations.ts"
+    },
     "./agent-runs": {
       "types": "./src/agent-runs.ts",
       "default": "./src/agent-runs.ts"

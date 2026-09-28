@@ -34,7 +34,7 @@ const { ControlPlaneNodeAgentTunnelTransport } = require("../packages/control-pl
 const { createNodeAgentHmacHeaders, NODE_AGENT_HMAC_TIMESTAMP_WINDOW_MS } = require("../packages/control-plane/src/shared/security/node-agent-auth.ts");
 const { fetchNodeAgentIpc, nodeAgentIpcEndpoint, nodeAgentIpcPath, prepareNodeAgentIpcPath } = require("../packages/control-plane/src/shared/transport/node-agent-ipc.ts");
 const { can } = require("../packages/control-plane/src/control-plane/auth/authorization.ts");
-const { LocalDockerExecutor, dockerRunArgs } = require("../packages/control-plane/src/node-agent/runtimes/docker.ts");
+const { LocalDockerExecutor, agentRunRuntimeVolume, dockerRunArgs } = require("../packages/control-plane/src/node-agent/runtimes/docker.ts");
 const { waitForChildExit } = require("../packages/control-plane/src/node-agent/runtimes/local-process-supervisor.ts");
 const { checkNodeAgentUpdate, isNewerVersion, resolveNodeAgentUpdateWorker, resolveNodeUpdatePackage, sanitizeStoredUpdateJob } = require("../packages/control-plane/src/node-agent/updates.ts");
 const { ProcessSingletonError, acquireProcessSingletonLock, readProcessSingletonLockOwner } = require("../packages/control-plane/src/shared/process/singleton-lock.ts");
@@ -323,7 +323,34 @@ function testManagedVolumes(instanceId, includeWorkspace = false) {
   ];
 }
 
-function testManagedVolumeInspection(instanceId, name) {
+/**
+ * docker volume 的测试替身：create 记录标签，inspect 按真实 Docker 语义回放。
+ * 执行器按标签校验卷身份（含 Agent Run 运行时卷），测试桩因此不必逐卷复刻标签规则。
+ */
+function testDockerVolumeLabels() {
+  const labelsByName = new Map();
+  return {
+    create(args) {
+      const labels = {};
+      for (let index = 2; index < args.length - 1; index += 1) {
+        if (args[index] !== "--label") continue;
+        const entry = String(args[index + 1]);
+        const separator = entry.indexOf("=");
+        labels[entry.slice(0, separator)] = entry.slice(separator + 1);
+        index += 1;
+      }
+      labelsByName.set(String(args.at(-1)), labels);
+    },
+    inspection(name) {
+      const labels = labelsByName.get(String(name));
+      return labels ? { Name: name, Driver: "local", Labels: labels, Options: null } : undefined;
+    },
+  };
+}
+
+function testManagedVolumeInspection(instanceId, name, volumeLabels) {
+  const recorded = volumeLabels?.inspection(name);
+  if (recorded) return recorded;
   const volume = testManagedVolumes(instanceId, true).find((item) => item.name === name) || {
     role: "runtime",
     name: `task-handoff-${instanceId}-runtime`,
@@ -658,11 +685,12 @@ test("app inventory protocol is strict and stored legacy app capability is disca
     aiSessionWorkspaceSelection: false,
     aiSessionWorkspaceCheckout: false,
     aiSessionPersistenceSettings: false,
-      privateModelCatalog: false,
-      codexManagedSettings: false,
-      nodeAgentConnectionUpdate: false,
-      gitCliCredentialBroker: false,
+    privateModelCatalog: false,
+    codexManagedSettings: false,
+    nodeAgentConnectionUpdate: false,
+    gitCliCredentialBroker: false,
     gitCredentialProxy: false,
+    repositoryPathSearch: false,
     // Compatibility for v0.0.33: a stored pre-upgrade instance has no worktree-move capability.
     repositoryWorktreeMoveToMain: false,
     aiSessionTimeline: { sessionReadAgents: [], turnReadAgents: [], liveItemAgents: [] },
@@ -4889,7 +4917,10 @@ test("local docker executor checks local images and pulls registry images before
       updatedAt: timestamp,
     },
   };
+  const volumeLabels = testDockerVolumeLabels();
   const managedVolumeInspection = (name) => {
+    const recorded = volumeLabels.inspection(name);
+    if (recorded) return recorded;
     const volume = testManagedVolumes("inst_1").find((item) => item.name === name) || {
       labels: {
         "task-handoff.owner": "task-handoff",
@@ -4957,6 +4988,10 @@ test("local docker executor checks local images and pulls registry images before
   let remotePulled = false;
   const remoteExecutor = new LocalDockerExecutor(async (command, args) => {
     remoteCalls.push([command, args]);
+    if (args[0] === "volume" && args[1] === "create") {
+      volumeLabels.create(args);
+      return { stdout: String(args.at(-1)), stderr: "" };
+    }
     if (args[0] === "volume" && args[1] === "inspect") {
       const name = args.at(-1);
       return { stdout: JSON.stringify(managedVolumeInspection(name)), stderr: "" };
@@ -5018,6 +5053,10 @@ test("local docker executor checks local images and pulls registry images before
   const resolvedCalls = [];
   const resolvedExecutor = new LocalDockerExecutor(async (command, args) => {
     resolvedCalls.push([command, args]);
+    if (args[0] === "volume" && args[1] === "create") {
+      volumeLabels.create(args);
+      return { stdout: String(args.at(-1)), stderr: "" };
+    }
     if (args[0] === "volume" && args[1] === "inspect") {
       const name = args.at(-1);
       return { stdout: JSON.stringify(managedVolumeInspection(name)), stderr: "" };
@@ -5056,6 +5095,10 @@ test("local docker executor checks local images and pulls registry images before
   const existingCalls = [];
   const existingExecutor = new LocalDockerExecutor(async (command, args) => {
     existingCalls.push([command, args]);
+    if (args[0] === "volume" && args[1] === "create") {
+      volumeLabels.create(args);
+      return { stdout: String(args.at(-1)), stderr: "" };
+    }
     if (args[0] === "volume" && args[1] === "inspect") return { stdout: JSON.stringify(managedVolumeInspection(args.at(-1))), stderr: "" };
     if (args[0] === "inspect" && args.includes("{{json .}}")) {
       return { stdout: JSON.stringify(existingContainerInspection), stderr: "" };
@@ -5092,16 +5135,25 @@ test("local docker executor checks local images and pulls registry images before
   assert.equal(resumed.runtime.containerId, "container-1");
   assert.equal(resumed.target.web, "http://127.0.0.1:18081");
   assert.equal(resumed.target.api, "http://127.0.0.1:18081/api");
-  assert.equal(existingCalls.filter(([, args]) => args[0] === "volume" && args[1] === "create").length, 1);
-  assert.ok(existingCalls.some(([, args]) => args[0] === "volume" && args[1] === "create" && args.at(-1) === "task-handoff-inst_1-runtime"));
+  const existingAgentRunVolume = agentRunRuntimeVolume("node_unset", "runtime_local_docker").name;
+  assert.deepEqual(existingCalls.filter(([, args]) => args[0] === "volume" && args[1] === "create").map(([, args]) => args.at(-1)), [
+    "task-handoff-inst_1-runtime",
+    existingAgentRunVolume,
+  ]);
   assert.deepEqual(existingCalls.filter(([, args]) => args[0] === "volume" && args[1] === "inspect").map(([, args]) => args.at(-1)), [
+    existingAgentRunVolume,
     "task-handoff-inst_1-data",
     "task-handoff-inst_1-agent-home",
     "task-handoff-inst_1-runtime",
+    existingAgentRunVolume,
   ]);
   assert.ok(existingCalls.some(([, args]) => args[0] === "start" && args[1] === "task-handoff-inst_1"));
 
   const inspectFallbackExecutor = new LocalDockerExecutor(async (_command, args) => {
+    if (args[0] === "volume" && args[1] === "create") {
+      volumeLabels.create(args);
+      return { stdout: String(args.at(-1)), stderr: "" };
+    }
     if (args[0] === "volume" && args[1] === "inspect") return { stdout: JSON.stringify(managedVolumeInspection(args.at(-1))), stderr: "" };
     if (args[0] === "inspect" && args.includes("{{json .}}")) {
       return { stdout: JSON.stringify(existingContainerInspection), stderr: "" };
@@ -5132,6 +5184,10 @@ test("local docker executor checks local images and pulls registry images before
 
   let transientPortAttempts = 0;
   const transientPortExecutor = new LocalDockerExecutor(async (_command, args) => {
+    if (args[0] === "volume" && args[1] === "create") {
+      volumeLabels.create(args);
+      return { stdout: String(args.at(-1)), stderr: "" };
+    }
     if (args[0] === "volume" && args[1] === "inspect") return { stdout: JSON.stringify(managedVolumeInspection(args.at(-1))), stderr: "" };
     if (args[0] === "inspect" && args.includes("{{json .}}")) {
       return { stdout: JSON.stringify(existingContainerInspection), stderr: "" };
@@ -5166,6 +5222,10 @@ test("local docker executor checks local images and pulls registry images before
   assert.equal(resumedAfterRetry.target.web, "http://127.0.0.1:38081");
 
   const missingPortExecutor = new LocalDockerExecutor(async (_command, args) => {
+    if (args[0] === "volume" && args[1] === "create") {
+      volumeLabels.create(args);
+      return { stdout: String(args.at(-1)), stderr: "" };
+    }
     if (args[0] === "volume" && args[1] === "inspect") return { stdout: JSON.stringify(managedVolumeInspection(args.at(-1))), stderr: "" };
     if (args[0] === "inspect" && args.includes("{{json .}}")) {
       return { stdout: JSON.stringify(existingContainerInspection), stderr: "" };
@@ -5265,6 +5325,7 @@ test("local docker executor checks local images and pulls registry images before
 test("node agent runs local docker behind node-local target and auto-imports agent config on start and restart", async (t) => {
   const calls = [];
   const fetchCalls = [];
+  const volumeLabels = testDockerVolumeLabels();
   let modelEnvironmentStatus = 200;
   let containerExists = false;
   let registrationAfterRestart = Promise.resolve();
@@ -5306,15 +5367,12 @@ test("node agent runs local docker behind node-local target and auto-imports age
     },
     dockerCommandRunner: async (command, args) => {
       calls.push([command, args]);
+      if (args[0] === "volume" && args[1] === "create") {
+        volumeLabels.create(args);
+        return { stdout: String(args.at(-1)), stderr: "" };
+      }
       if (args[0] === "volume" && args[1] === "inspect") {
-        const name = args.at(-1);
-        const role = name.endsWith("-agent-home") ? "agent-home" : name.endsWith("-runtime") ? "runtime" : name.endsWith("-workspace") ? "workspace" : "data";
-        return { stdout: JSON.stringify({ Name: name, Labels: {
-          "task-handoff.owner": "task-handoff",
-          "task-handoff.instance-id": "inst_1",
-          "task-handoff.node-id": "node_local",
-          "task-handoff.volume-role": role,
-        } }), stderr: "" };
+        return { stdout: JSON.stringify(testManagedVolumeInspection("inst_1", args.at(-1), volumeLabels)), stderr: "" };
       }
       if (args[0] === "inspect" && args.includes("{{json .}}") && !containerExists) {
         throw Object.assign(new Error("No such container"), { details: { stderr: "No such container" } });
@@ -5474,6 +5532,7 @@ test("node agent keeps a managed instance started when startup runtime convergen
   const calls = [];
   let containerExists = false;
   let artifactResolutions = 0;
+  const volumeLabels = testDockerVolumeLabels();
   const app = await createNodeAgentApp({
     dataDir: tempDataDir("node-agent-start-runtime-convergence-failure"),
     logger: false,
@@ -5487,8 +5546,12 @@ test("node agent keeps a managed instance started when startup runtime convergen
     },
     dockerCommandRunner: async (_command, args) => {
       calls.push(args);
+      if (args[0] === "volume" && args[1] === "create") {
+        volumeLabels.create(args);
+        return { stdout: String(args.at(-1)), stderr: "" };
+      }
       if (args[0] === "volume" && args[1] === "inspect") {
-        return { stdout: JSON.stringify(testManagedVolumeInspection("inst_start_fallback", args.at(-1))), stderr: "" };
+        return { stdout: JSON.stringify(testManagedVolumeInspection("inst_start_fallback", args.at(-1), volumeLabels)), stderr: "" };
       }
       if (args[0] === "inspect" && args.includes("{{json .}}") && !containerExists) {
         throw Object.assign(new Error("No such container"), { details: { stderr: "No such container" } });
@@ -5573,6 +5636,7 @@ test("node agent keeps a managed instance started when startup runtime convergen
 test("node agent starts a managed container before startup convergence", async (t) => {
   const actions = [];
   let artifactResolutions = 0;
+  const volumeLabels = testDockerVolumeLabels();
   const app = await createNodeAgentApp({
     dataDir: tempDataDir("node-agent-restore-before-convergence"),
     logger: false,
@@ -5586,8 +5650,12 @@ test("node agent starts a managed container before startup convergence", async (
       });
     },
     dockerCommandRunner: async (_command, args) => {
+      if (args[0] === "volume" && args[1] === "create") {
+        volumeLabels.create(args);
+        return { stdout: String(args.at(-1)), stderr: "" };
+      }
       if (args[0] === "volume" && args[1] === "inspect") {
-        return { stdout: JSON.stringify(testManagedVolumeInspection("inst_restore_order", args.at(-1))), stderr: "" };
+        return { stdout: JSON.stringify(testManagedVolumeInspection("inst_restore_order", args.at(-1), volumeLabels)), stderr: "" };
       }
       if (args[0] === "image" && args[1] === "inspect") {
         return { stdout: JSON.stringify({ Id: `sha256:${"a".repeat(64)}`, RepoDigests: [`task-handoff-web@sha256:${"a".repeat(64)}`], Os: "linux", Architecture: "amd64" }), stderr: "" };
@@ -5655,14 +5723,19 @@ test("node agent skips start config auto-import when disabled on the instance", 
   const fetchCalls = [];
   let containerExists = false;
   let app;
+  const volumeLabels = testDockerVolumeLabels();
   app = await createNodeAgentApp({
     dataDir: tempDataDir("node-agent-config-auto-import-disabled"),
     logger: false,
     token: "agent-secret",
     resolveRuntimeArtifact: resolvedRuntimeArtifact,
     dockerCommandRunner: async (_command, args) => {
+      if (args[0] === "volume" && args[1] === "create") {
+        volumeLabels.create(args);
+        return { stdout: String(args.at(-1)), stderr: "" };
+      }
       if (args[0] === "volume" && args[1] === "inspect") {
-        return { stdout: JSON.stringify(testManagedVolumeInspection("inst_no_auto_import", args.at(-1))), stderr: "" };
+        return { stdout: JSON.stringify(testManagedVolumeInspection("inst_no_auto_import", args.at(-1), volumeLabels)), stderr: "" };
       }
       if (args[0] === "inspect" && args.includes("{{json .}}") && !containerExists) {
         throw new Error("No such container");
@@ -5734,14 +5807,19 @@ test("node agent config auto-import failure does not fail start", async (t) => {
   const fetchCalls = [];
   let containerExists = false;
   let app;
+  const volumeLabels = testDockerVolumeLabels();
   app = await createNodeAgentApp({
     dataDir: tempDataDir("node-agent-config-auto-import-failure"),
     logger: false,
     token: "agent-secret",
     resolveRuntimeArtifact: resolvedRuntimeArtifact,
     dockerCommandRunner: async (_command, args) => {
+      if (args[0] === "volume" && args[1] === "create") {
+        volumeLabels.create(args);
+        return { stdout: String(args.at(-1)), stderr: "" };
+      }
       if (args[0] === "volume" && args[1] === "inspect") {
-        return { stdout: JSON.stringify(testManagedVolumeInspection("inst_auto_import_fails", args.at(-1))), stderr: "" };
+        return { stdout: JSON.stringify(testManagedVolumeInspection("inst_auto_import_fails", args.at(-1), volumeLabels)), stderr: "" };
       }
       if (args[0] === "inspect" && args.includes("{{json .}}") && !containerExists) {
         throw new Error("No such container");
@@ -5814,6 +5892,7 @@ test("node agent config auto-import failure does not fail start", async (t) => {
 });
 
 test("node agent config auto-import timeout does not hang start", async (t) => {
+  const volumeLabels = testDockerVolumeLabels();
   const previousTimeout = process.env.TASK_HANDOFF_CONFIG_AUTO_IMPORT_TIMEOUT_MS;
   process.env.TASK_HANDOFF_CONFIG_AUTO_IMPORT_TIMEOUT_MS = "20";
   t.after(() => {
@@ -5832,8 +5911,12 @@ test("node agent config auto-import timeout does not hang start", async (t) => {
     token: "agent-secret",
     resolveRuntimeArtifact: resolvedRuntimeArtifact,
     dockerCommandRunner: async (_command, args) => {
+      if (args[0] === "volume" && args[1] === "create") {
+        volumeLabels.create(args);
+        return { stdout: String(args.at(-1)), stderr: "" };
+      }
       if (args[0] === "volume" && args[1] === "inspect") {
-        return { stdout: JSON.stringify(testManagedVolumeInspection("inst_auto_import_timeout", args.at(-1))), stderr: "" };
+        return { stdout: JSON.stringify(testManagedVolumeInspection("inst_auto_import_timeout", args.at(-1), volumeLabels)), stderr: "" };
       }
       if (args[0] === "inspect" && args.includes("{{json .}}") && !containerExists) {
         throw new Error("No such container");

@@ -21,6 +21,13 @@ test("Agent view reuses the Story workspace layout language", () => {
   assert.match(agentGraph, /\.agent-graph-stage \{[^}]*border-radius:8px; background:var\(--surface-raised\);/);
 });
 
+test("Agent detail head keeps runtime identity in the shared meta-line language", () => {
+  assert.match(agentView, /<div class="agent-detail-runtime">[\s\S]*?<AiAgentIcon v-if="providerBrand"[\s\S]*?agent-detail-runtime-item[\s\S]*?selectedAgent\.provider[\s\S]*?agent-detail-runtime-separator[\s\S]*?selectedAgent\.model/);
+  assert.match(agentView, /import AiAgentIcon from "@\/components\/AiAgentIcon\.vue";/);
+  assert.match(agentView, /providerId === "codex" \|\| providerId === "claude" \|\| providerId === "opencode" \? providerId : undefined/);
+  assert.match(agentView, /\.agent-detail-runtime \{[^}]*color:var\(--text-muted\);[^}]*font-size:12px;[^}]*font-weight:400;/);
+});
+
 test("Agent call graph stays reachable from the Story-style list options", () => {
   assert.match(agentView, /<DropdownMenuRadioItem value="list">/);
   assert.match(agentView, /<DropdownMenuRadioItem value="graph">/);

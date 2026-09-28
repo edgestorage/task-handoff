@@ -306,30 +306,34 @@ export class RepositoryWorktreeService {
       const state = await this.requireAvailable();
       if (state.context.snapshotId !== request.expectedSnapshotId) throw new RepositoryOperationError("REPOSITORY_STATE_STALE", "Repository state changed before worktree creation.", state);
       const current = await this.listFromStateInternal(state);
-      if (current.some((item) => item.head.branch === request.branchName)) {
+      const occupied = hasAttachedBranch(current, request.branchName);
+      // A new branch name must be free, but an existing branch that another worktree already
+      // has checked out stays usable: the new worktree adopts the same commit with a detached HEAD.
+      if (request.mode === "new-branch" && occupied) {
         throw new RepositoryOperationError("REPOSITORY_BRANCH_OCCUPIED", "Branch is already checked out in another worktree.", state);
       }
+      const checkout = request.mode === "existing-branch" && occupied ? "detached" as const : "attached" as const;
       const git = new GitProcess(state.worktreeRoot!, this.gitOptions);
+      const resolvedOid = await resolveCommitOid(git, request.mode === "new-branch" ? request.startRef : `refs/heads/${request.branchName}`);
+      if (!resolvedOid) {
+        throw new RepositoryOperationError("REPOSITORY_BRANCH_INVALID", request.mode === "new-branch"
+          ? "Selected Git start ref no longer exists."
+          : "Selected Git branch no longer exists.", state);
+      }
       const destination = this.registry.allocate(state.context.repositoryId!, request.branchName);
       const worktreeId = repositoryWorktreeId(state.context.repositoryId!, path.resolve(destination));
       let added = false;
       try {
-        let resolvedOid: string;
+        this.registry.prepare(state.context.repositoryId!, worktreeId, destination, {
+          ref: { type: "branch", name: request.branchName },
+          resolvedOid,
+          checkout,
+        });
         if (request.mode === "new-branch") {
-          resolvedOid = (await git.run("rev-parse", ["--verify", "--end-of-options", `${request.startRef}^{commit}`])).stdout.trim();
-          this.registry.prepare(state.context.repositoryId!, worktreeId, destination, {
-            ref: { type: "branch", name: request.branchName },
-            resolvedOid,
-            checkout: "attached",
-          });
           await git.run("worktree", ["add", "-b", request.branchName, destination, resolvedOid]);
+        } else if (checkout === "detached") {
+          await git.run("worktree", ["add", "--detach", destination, resolvedOid]);
         } else {
-          resolvedOid = (await git.run("rev-parse", ["--verify", "--end-of-options", `refs/heads/${request.branchName}^{commit}`])).stdout.trim();
-          this.registry.prepare(state.context.repositoryId!, worktreeId, destination, {
-            ref: { type: "branch", name: request.branchName },
-            resolvedOid,
-            checkout: "attached",
-          });
           await git.run("worktree", ["add", destination, request.branchName]);
         }
         added = true;
@@ -381,18 +385,10 @@ export class RepositoryWorktreeService {
         );
       }
 
-      const revision = request.ref.type === "head"
-        ? "HEAD^{commit}"
-        : `refs/heads/${request.ref.name}^{commit}`;
-      let oid: string;
-      try {
-        oid = (await git.run("rev-parse", ["--verify", "--end-of-options", revision])).stdout.trim();
-      } catch {
-        throw new RepositoryOperationError("REPOSITORY_BRANCH_INVALID", "Selected Git revision no longer exists.", await this.resolve());
-      }
       const branchName = request.ref.type === "branch" ? request.ref.name : undefined;
-      const branchOccupied = branchName !== undefined
-        && current.some((item) => item.head.state === "branch" && item.head.branch === branchName);
+      const oid = await resolveCommitOid(git, branchName !== undefined ? `refs/heads/${branchName}` : "HEAD");
+      if (!oid) throw new RepositoryOperationError("REPOSITORY_BRANCH_INVALID", "Selected Git revision no longer exists.", await this.resolve());
+      const branchOccupied = branchName !== undefined && hasAttachedBranch(current, branchName);
       const checkout = branchName !== undefined && !branchOccupied ? "attached" as const : "detached" as const;
       let added = false;
       try {
@@ -699,6 +695,18 @@ async function worktreeChangeRecords(worktreePath: string, gitOptions: GitProces
 
 async function isDirty(worktreePath: string, gitOptions: GitProcessOptions) {
   return (await worktreeChangeRecords(worktreePath, gitOptions)).length > 0;
+}
+
+async function resolveCommitOid(git: GitProcess, revision: string) {
+  try {
+    return (await git.run("rev-parse", ["--verify", "--end-of-options", `${revision}^{commit}`])).stdout.trim();
+  } catch {
+    return undefined;
+  }
+}
+
+function hasAttachedBranch(worktrees: InternalWorktree[], branchName: string) {
+  return worktrees.some((item) => item.head.state === "branch" && item.head.branch === branchName);
 }
 
 async function worktreeChangeSummary(target: InternalWorktree, gitOptions: GitProcessOptions) {

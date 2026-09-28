@@ -14,8 +14,8 @@
           <Tooltip>
             <TooltipTrigger as-child>
               <span class="repository-environment-trigger-content">
-                <FolderGit2 :size="triggerAppearance === 'menu' ? 16 : 15" />
-                <span v-if="triggerAppearance === 'menu'">{{ t("repository.environment.title") }}</span>
+                <FolderGit2 :size="triggerAppearance === 'menu' ? 14 : 15" />
+                <span v-if="triggerAppearance === 'menu'" class="repository-environment-trigger-menu-branch">{{ triggerMenuLabel }}</span>
                 <span v-else-if="triggerAppearance === 'detail' && triggerBranchSummary" class="repository-environment-trigger-branch" :title="triggerBranchSummary">{{ triggerBranchSummary }}</span>
               </span>
             </TooltipTrigger>
@@ -211,7 +211,7 @@ const contextQuery = useRepositoryContextQuery(
     sessionKind: props.sessionKind,
     sessionId: props.sessionId,
   })),
-  computed(() => canQuery.value && (open.value || props.triggerAppearance === "detail")),
+  computed(() => canQuery.value && (open.value || props.triggerAppearance === "detail" || props.triggerAppearance === "menu")),
 );
 const context = computed<RepositoryContext | undefined>(() => contextQuery.data.value);
 const triggerBranchSummary = computed(() => {
@@ -222,6 +222,7 @@ const triggerBranchSummary = computed(() => {
   return t("repository.common.detachedAt", { commit: head.oid?.slice(0, 8) || t("repository.environmentExtra.unknownCommit") });
 });
 const triggerLabel = computed(() => [t("repository.environment.title"), triggerBranchSummary.value].filter(Boolean).join(" · "));
+const triggerMenuLabel = computed(() => triggerBranchSummary.value || t("repository.environment.title"));
 const changeCount = computed(() => {
   const summary = context.value?.changes;
   return summary ? summary.conflicts + summary.staged + summary.unstaged + summary.untracked : 0;
@@ -406,7 +407,7 @@ function runPrimaryAction(action: RepositoryPrimaryAction) {
   background: transparent;
   color: var(--text);
   font-family: inherit;
-  font-size: 14px;
+  font-size: 13px;
   line-height: 20px;
   padding: 6px 8px;
 }
@@ -418,6 +419,20 @@ function runPrimaryAction(action: RepositoryPrimaryAction) {
 .repository-environment-trigger-menu .repository-environment-trigger-content {
   justify-content: flex-start;
   gap: 8px;
+  min-width: 0;
+}
+
+.repository-environment-trigger-menu .repository-environment-trigger-content > svg {
+  flex: 0 0 auto;
+}
+
+.repository-environment-trigger-menu-branch {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: min(170px, 42vw);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .repository-environment-trigger-menu:hover,

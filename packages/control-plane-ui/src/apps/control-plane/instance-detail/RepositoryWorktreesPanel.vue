@@ -199,7 +199,7 @@
       :branches="createBranches"
       :busy="creatingManagedSession"
       :busy-label="t('repository.worktreesPanel.creating')"
-      :confirm-enabled="Boolean(worktrees?.snapshotId)"
+      :confirm-enabled="Boolean(createSnapshotId)"
       :confirm-label="t('repository.worktreesPanel.create')"
       :default-start-ref="createStartRef"
       :description="t('repository.worktreesPanel.createDescription')"
@@ -326,6 +326,9 @@ const canStartAiSession = computed(() => Boolean(props.aiAgent));
 const canManageWorktrees = computed(() => true);
 const moveToMainSupported = computed(() => Boolean(props.moveToMainSupported));
 const branchesQuery = useRepositoryWorkspaceBranchesQuery(target, computed(() => props.open));
+// Worktree creation validates the selected ref against the same repository snapshot the
+// branch list was read from; the worktree list snapshot only guards list mutations.
+const createSnapshotId = computed(() => branchesQuery.data.value?.snapshotId);
 const startingWorktreeId = ref("");
 const startError = ref<unknown>();
 const createOpen = ref(false);
@@ -531,6 +534,7 @@ function openCreateDialog() {
   createError.value = undefined;
   const current = worktrees.value?.items.find((item) => item.isCurrent);
   createStartRef.value = current?.head.branch || current?.head.oid || "HEAD";
+  void branchesQuery.refetch();
   createOpen.value = true;
 }
 
@@ -540,16 +544,17 @@ function setCreateDialogOpen(open: boolean) {
 }
 
 async function createWorktree(selection: NewWorktreeSelection) {
-  if (!canManageWorktrees.value || !worktrees.value?.snapshotId || creatingManagedSession.value) return;
+  const snapshotId = createSnapshotId.value;
+  if (!canManageWorktrees.value || !snapshotId || creatingManagedSession.value) return;
   createError.value = undefined;
   creatingManagedSession.value = true;
   try {
-    await createRepositoryWorkspaceWorktree(target.value, { ...selection, expectedSnapshotId: worktrees.value.snapshotId });
+    await createRepositoryWorkspaceWorktree(target.value, { ...selection, expectedSnapshotId: snapshotId });
     createOpen.value = false;
-    await worktreesQuery.refetch();
+    await Promise.all([worktreesQuery.refetch(), branchesQuery.refetch()]);
   } catch (error) {
     createError.value = error;
-    await worktreesQuery.refetch();
+    await Promise.all([worktreesQuery.refetch(), branchesQuery.refetch()]);
   } finally {
     creatingManagedSession.value = false;
   }
@@ -803,11 +808,11 @@ async function startAiSession(worktree: RepositoryWorktree) {
   border: 1px solid var(--line);
   border-radius: 7px;
   background: var(--surface-inset);
-  color: var(--brand-accent-muted);
+  color: var(--brand-accent);
 }
 
 .repository-worktree-row[data-current="true"] .repository-worktree-icon {
-  color: var(--repository-current-text, var(--brand-accent-muted));
+  color: var(--repository-current-text, var(--brand-accent));
 }
 
 .repository-worktree-copy {
@@ -834,7 +839,7 @@ async function startAiSession(worktree: RepositoryWorktree) {
 }
 
 .repository-worktree-row[data-current="true"] .repository-worktree-title strong {
-  color: var(--repository-current-text, var(--brand-accent-muted, var(--brand-accent)));
+  color: var(--repository-current-text, var(--brand-accent));
 }
 
 .repository-worktree-title > :deep(div) {
