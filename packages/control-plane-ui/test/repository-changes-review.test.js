@@ -45,6 +45,8 @@ test("changes review keeps a changed-file tree beside continuous authoritative d
   assert.match(review, /useVirtualizer\(computed/);
   assert.match(review, /<ScrollArea type="auto" :horizontal="false" class="repository-review-content">/);
   assert.match(review, /\.repository-review-content \{[^}]*grid-row: 2;/);
+  assert.match(review, /\.repository-review-content :deep\(\[data-task-handoff-scroll-viewport\] > div\) \{[^}]*min-height: 100%;[^}]*flex-direction: column;/);
+  assert.match(review, /\.repository-review-content-viewport \{[^}]*display: flex;[^}]*flex: 1 1 auto;[^}]*flex-direction: column;/);
   assert.match(review, /scrollContent\.value\?\.closest<HTMLElement>\("\[data-task-handoff-scroll-viewport\]"\)/);
   assert.match(review, /getScrollElement: \(\) => scrollViewport\.value \|\| null/);
   assert.match(review, /v-for="virtualRow in virtualRows"/);

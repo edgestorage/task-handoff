@@ -4,6 +4,7 @@ import {
   AGENT_PUBLISHED_EXECUTION_POLICIES,
   AgentDefinitionCreateInputSchema,
   AgentDefinitionChangedEventSchema,
+  AgentDefinitionDeleteResultSchema,
   AgentDefinitionSchema,
   AgentDefinitionUpdateInputSchema,
   isPublishedAgentExecutionPolicy,
@@ -56,7 +57,7 @@ test("AgentDefinition reads tolerate unknown fields but still require the declar
     callableAgentIds: ["agent_two"],
     futureField: "ignored",
   });
-  assert.deepEqual(parsed.callableAgentIds, ["agent_two"]);
+  assert.equal((parsed as Record<string, unknown>).callableAgentIds, undefined);
   assert.equal(parsed.ownerNodeId, undefined);
   assert.throws(() => sanitizeAgentDefinition({ id: "agent_one", revision: "a".repeat(64) }));
 });
@@ -66,6 +67,8 @@ test("AgentDefinition wire model has no server-owned identity field", () => {
   assert.equal(shape.includes("ownerNodeId"), false);
   assert.equal(shape.includes("path"), false);
   assert.equal(shape.includes("storyId"), false);
+  // 拓扑归 AgentOrchestration 所有：定义本体不再承载可调用关系。
+  assert.equal(shape.includes("callableAgentIds"), false);
 });
 
 test("Missing agentExecution capability normalizes to unsupported without blocking other features", () => {
@@ -73,7 +76,7 @@ test("Missing agentExecution capability normalizes to unsupported without blocki
   assert.deepEqual(legacy, {
     definitions: false,
     runs: false,
-    orchestration: { storyEntryAuthorization: false, callableRelations: false, runMembers: false, manualRuns: false },
+    orchestration: { storyEntryAuthorization: false, orchestrations: false, runMembers: false, manualRuns: false },
     sharedSpace: { enabled: false, runtimes: [] },
     combinations: [],
   });
@@ -88,8 +91,22 @@ test("Missing agentExecution capability normalizes to unsupported without blocki
 
 test("Agent definition changes use the agent event topic", () => {
   assert.equal(eventTopic("agent.definition.changed"), "agents");
+  assert.equal(eventTopic("agent.orchestration.changed"), "agents");
   assert.equal(eventTopic("agent.run.updated"), "agents");
   const event = { agentId: "agent_one", change: "deleted", revision: "a".repeat(64) };
   assert.equal(AgentDefinitionChangedEventSchema.safeParse(event).success, true);
   assert.equal(AgentDefinitionChangedEventSchema.safeParse({ ...event, nodeId: "node_one" }).success, false);
+});
+
+test("Agent deletion reports the orchestrations removed in the same operation", () => {
+  assert.deepEqual(AgentDefinitionDeleteResultSchema.parse({ id: "agent_one", deleted: true }), {
+    id: "agent_one",
+    deleted: true,
+    deletedOrchestrationIds: [],
+  });
+  assert.deepEqual(
+    AgentDefinitionDeleteResultSchema.parse({ id: "agent_one", deleted: true, deletedOrchestrationIds: ["orchestration_one"] })
+      .deletedOrchestrationIds,
+    ["orchestration_one"],
+  );
 });

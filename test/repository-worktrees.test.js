@@ -17,6 +17,7 @@ require.extensions[".ts"] = (module, filename) => {
 
 const { RepositorySessionResolver, repositoryWorktreeId } = require("../packages/controlled-instance/src/repository/context.ts");
 const { RepositoryOperationError } = require("../packages/controlled-instance/src/repository/changes.ts");
+const { registerRepositoryRoutes } = require("../packages/controlled-instance/src/repository/routes.ts");
 const { ManagedWorktreeRegistry, RepositoryWorktreeService } = require("../packages/controlled-instance/src/repository/worktrees.ts");
 
 function setup(fixture, options = {}) {
@@ -373,9 +374,10 @@ test("AI session worktree creation never removes a preexisting unregistered dest
   assert.equal(fs.existsSync(path.join(managedRoot, "registry.json")), false);
 });
 
-test("worktree creation serializes refs and rejects stale or occupied branches", async () => {
+test("worktree creation serializes refs, rejects stale snapshots, and detaches occupied branches", async () => {
   const fixture = createGitFixture();
-  const { resolve, service } = setup(fixture);
+  fixture.git(["branch", "feature/free"]);
+  const { resolve, managedRoot, service } = setup(fixture);
   const state = await resolve();
   const attempts = await Promise.allSettled([
     service.create({ mode: "new-branch", branchName: "feature/race", startRef: "HEAD", expectedSnapshotId: state.context.snapshotId }),
@@ -383,8 +385,21 @@ test("worktree creation serializes refs and rejects stale or occupied branches",
   ]);
   assert.equal(attempts.filter((result) => result.status === "fulfilled").length, 1);
   assert.equal(attempts.filter((result) => result.status === "rejected").length, 1);
+
   const fresh = await resolve();
-  await assert.rejects(() => service.create({ mode: "existing-branch", branchName: "feature/race", expectedSnapshotId: fresh.context.snapshotId }), (error) => error instanceof RepositoryOperationError && error.code === "REPOSITORY_BRANCH_OCCUPIED");
+  await assert.rejects(() => service.create({ mode: "existing-branch", branchName: "feature/free", expectedSnapshotId: `${fresh.context.snapshotId}-stale` }), (error) => error instanceof RepositoryOperationError && error.code === "REPOSITORY_STATE_STALE");
+
+  const free = await service.create({ mode: "existing-branch", branchName: "feature/free", expectedSnapshotId: fresh.context.snapshotId });
+  assert.equal(git(managedPath(managedRoot, free.worktreeId), ["branch", "--show-current"]), "feature/free");
+
+  const occupied = await service.create({ mode: "existing-branch", branchName: "main", expectedSnapshotId: fresh.context.snapshotId });
+  const occupiedPath = managedPath(managedRoot, occupied.worktreeId);
+  assert.equal(git(occupiedPath, ["branch", "--show-current"]), "");
+  assert.equal(git(occupiedPath, ["rev-parse", "HEAD"]), fixture.git(["rev-parse", "main"]));
+  assert.equal(occupied.worktrees.items.find((item) => item.id === occupied.worktreeId).head.state, "detached");
+
+  await assert.rejects(() => service.create({ mode: "new-branch", branchName: "feature/free", startRef: "HEAD", expectedSnapshotId: fresh.context.snapshotId }), (error) => error instanceof RepositoryOperationError && error.code === "REPOSITORY_BRANCH_OCCUPIED");
+  await assert.rejects(() => service.create({ mode: "existing-branch", branchName: "feature/missing", expectedSnapshotId: fresh.context.snapshotId }), (error) => error instanceof RepositoryOperationError && error.code === "REPOSITORY_BRANCH_INVALID");
 });
 
 test("managed worktree removal is non-force, retains branches, and honors safety blockers", async () => {
@@ -604,4 +619,45 @@ test("worktree moves are refused while the main worktree hosts a running session
   // The blocker clears as soon as the main worktree has no live session.
   setupResult.aiSessions[0].status = "failed";
   assert.equal((await setupResult.service.moveToMainPreflight({ worktreeId: created.worktreeId })).canMove, true);
+});
+
+test("workspace worktree routes create an attached or detached worktree for the selected branch", async () => {
+  const fixture = createGitFixture();
+  fixture.git(["branch", "feature/free"]);
+  const app = require("fastify")();
+  registerRepositoryRoutes(app, {
+    appRuntime: { getSession: () => undefined, listSessions: () => [] },
+    aiSessions: { get: () => undefined, boundSnapshot: (sessions) => ({ sessions }) },
+    aiSessionCreate: { completedResult: () => undefined },
+    managedWorktreesRoot: path.join(fixture.base, "managed-worktrees"),
+    workspaceRoots: [fixture.base],
+  });
+  try {
+    const cwd = { type: "runtime-path", path: fixture.root };
+    const inspect = await app.inject({ method: "POST", url: "/api/repository/ai-session-workspace/inspect", payload: { cwd } });
+    assert.equal(inspect.statusCode, 200, JSON.stringify(inspect.json()));
+    const snapshotId = inspect.json().data.snapshotId;
+
+    const detached = await app.inject({
+      method: "POST",
+      url: "/api/repository/workspace/worktrees",
+      payload: { cwd, worktree: { mode: "existing-branch", branchName: "main", expectedSnapshotId: snapshotId } },
+    });
+    assert.equal(detached.statusCode, 200, JSON.stringify(detached.json()));
+    const detachedItem = detached.json().data.worktrees.items.find((item) => item.id === detached.json().data.worktreeId);
+    assert.equal(detachedItem.head.state, "detached");
+    assert.equal(detachedItem.head.oid, fixture.git(["rev-parse", "main"]));
+
+    const attached = await app.inject({
+      method: "POST",
+      url: "/api/repository/workspace/worktrees",
+      payload: { cwd, worktree: { mode: "existing-branch", branchName: "feature/free", expectedSnapshotId: snapshotId } },
+    });
+    assert.equal(attached.statusCode, 200, JSON.stringify(attached.json()));
+    const attachedItem = attached.json().data.worktrees.items.find((item) => item.id === attached.json().data.worktreeId);
+    assert.equal(attachedItem.head.state, "branch");
+    assert.equal(attachedItem.head.branch, "feature/free");
+  } finally {
+    await app.close();
+  }
 });

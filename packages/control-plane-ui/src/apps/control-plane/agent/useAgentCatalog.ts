@@ -1,7 +1,7 @@
 import { computed, toValue, type MaybeRefOrGetter } from "vue";
 import { useQueries } from "@tanstack/vue-query";
 import { controlPlaneAgentCapabilities } from "@task-handoff/control-plane-client";
-import { agentNodeQueryOptions, nodeLocalFoldersQueryOptions, storyAgentEntriesQueryOptions, useAgentRunsQuery, useInstanceBoardQuery, useNodesQuery } from "../../../api/queries";
+import { agentNodeQueryOptions, agentOrchestrationsQueryOptions, nodeLocalFoldersQueryOptions, storyAgentEntriesQueryOptions, useAgentRunsQuery, useInstanceBoardQuery, useNodesQuery } from "../../../api/queries";
 import { nodeQueryLoadState, type NodeLoadState } from "../shared/nodeQueryLoad.ts";
 import { buildAgentCatalog, type AgentCatalogDefinition, type AgentCatalogInput, type AgentCatalogStoryEntries } from "./agentCatalog";
 import type { NodeLocalFolder } from "../../../api/types";
@@ -24,6 +24,13 @@ export function useAgentCatalog(options: {
   const activeNodeIds = computed(() => (toValue(options.enabled ?? true) ? capableNodeIds.value : []));
   const runsEnabled = computed(() => toValue(options.enabled ?? true) && nodes.value.some((node) => controlPlaneAgentCapabilities(node.capabilities).runs));
   const agentQueries = useQueries({ queries: () => activeNodeIds.value.map((nodeId) => agentNodeQueryOptions(nodeId)) });
+  // 编排与定义同属 Agent 域：Run 必须绑定编排，因此编排读取失败只影响运行入口，不影响定义维护。
+  const orchestrationQueries = useQueries({
+    queries: () => activeNodeIds.value.map((nodeId) => agentOrchestrationsQueryOptions(
+      nodeId,
+      controlPlaneAgentCapabilities(nodes.value.find((node) => node.id === nodeId)?.capabilities).orchestrations,
+    )),
+  });
   const folderQueries = useQueries({ queries: () => activeNodeIds.value.map((nodeId) => nodeLocalFoldersQueryOptions(nodeId)) });
   const board = useInstanceBoardQuery();
   const runsQuery = useAgentRunsQuery(runsEnabled);
@@ -45,6 +52,9 @@ export function useAgentCatalog(options: {
   const definitions = computed<AgentCatalogDefinition[]>(() => activeNodeIds.value.flatMap((nodeId, index) => (
     (agentQueries.value[index]?.data?.agents || []).map((entry) => ({ nodeId, agent: entry.agent }))
   )));
+  const orchestrations = computed(() => activeNodeIds.value.flatMap((nodeId, index) => (
+    (orchestrationQueries.value[index]?.data?.orchestrations || []).map((entry) => ({ nodeId, orchestration: entry.orchestration }))
+  )));
   const foldersByNode = computed(() => new Map<string, NodeLocalFolder[]>(activeNodeIds.value.map((nodeId, index) => [
     nodeId,
     (folderQueries.value[index]?.data || []) as NodeLocalFolder[],
@@ -57,6 +67,7 @@ export function useAgentCatalog(options: {
   const catalog = computed(() => buildAgentCatalog({
     nodes: nodes.value,
     definitions: definitions.value,
+    orchestrations: orchestrations.value,
     runs: runsQuery.data.value?.runs ?? [],
     storyEntries: storyEntries.value,
     instances: board.data.value || [],
@@ -70,12 +81,15 @@ export function useAgentCatalog(options: {
     ...(runsQuery.data.value?.unavailableNodeIds ?? []),
   ])]);
   const isPending = computed(() => nodesQuery.isPending.value || loadingNodeIds.value.length > 0 || (runsEnabled.value && runsQuery.isPending.value));
-  const isFetching = computed(() => nodesQuery.isFetching.value || runsQuery.isFetching.value || agentQueries.value.some((query) => query.isFetching));
+  const isFetching = computed(() => nodesQuery.isFetching.value || runsQuery.isFetching.value
+    || agentQueries.value.some((query) => query.isFetching)
+    || orchestrationQueries.value.some((query) => query.isFetching));
 
   async function refetch() {
     await Promise.all([
       nodesQuery.refetch(),
       ...agentQueries.value.map((query) => query.refetch()),
+      ...orchestrationQueries.value.map((query) => query.refetch()),
       ...folderQueries.value.map((query) => query.refetch()),
       ...storyEntryQueries.value.map((query) => query.refetch()),
       ...(runsEnabled.value ? [runsQuery.refetch()] : []),

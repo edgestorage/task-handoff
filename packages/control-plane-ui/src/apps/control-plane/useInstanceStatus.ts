@@ -17,16 +17,55 @@ export function isInstanceConnecting(instance: InstanceBoardItem) {
 }
 
 export function hasInstanceStatusPage(instance: InstanceBoardItem) {
-  return instance.status !== "running" || isInstanceRuntimeUpdating(instance);
+  return instance.status !== "running" || isInstanceRuntimeUpdating(instance) || isInstanceRuntimeUnavailable(instance);
 }
 
 export function isInstanceStatusPending(instance: InstanceBoardItem) {
+  // An unavailable base runtime is an external condition, not work in progress:
+  // the instance waits on the runtime instead of retrying, so no spinner.
+  if (isInstanceRuntimeUnavailable(instance)) return false;
   return isInstanceRuntimeUpdating(instance)
     || ["provisioning", "starting", "registering", "registered", "stopping"].includes(instance.status);
 }
 
 export function isInstanceRuntimeUpdating(instance: InstanceBoardItem) {
   return ["draining", "installing", "restarting", "verifying"].includes(instance.runtimeVersion?.phase || "");
+}
+
+/**
+ * The node runtime record is the authoritative source for base runtime
+ * availability. Instances must not reinterpret it from their own failures.
+ */
+export function isInstanceRuntimeOffline(instance: InstanceBoardItem) {
+  return instance.runtime?.status === "offline";
+}
+
+/** True when the offline base runtime is what keeps this instance from running. */
+export function isInstanceRuntimeUnavailable(instance: InstanceBoardItem) {
+  if (instance.status === "stopped" || instance.status === "stopping") return false;
+  return isInstanceRuntimeOffline(instance);
+}
+
+export function instanceRuntimeUnavailableReason(instance: InstanceBoardItem) {
+  const daemon = (instance.runtime?.capabilities as Record<string, unknown> | undefined)?.daemon;
+  if (!daemon || typeof daemon !== "object") return undefined;
+  const error = (daemon as Record<string, unknown>).error;
+  return typeof error === "string" && error.trim() ? error : undefined;
+}
+
+export function instanceRuntimeUnavailableLabel(instance: InstanceBoardItem, t: Translate) {
+  const type = instance.runtime?.type;
+  if (type === "docker") return t("instances.lifecycle.runtimeUnavailableDocker");
+  if (type === "local") return t("instances.lifecycle.runtimeUnavailableLocal");
+  return t("instances.lifecycle.runtimeUnavailable");
+}
+
+/** Short localized runtime name so availability copy never echoes node-owned identifiers. */
+export function instanceRuntimeNameLabel(instance: InstanceBoardItem, t: Translate) {
+  const type = instance.runtime?.type;
+  if (type === "docker") return t("instances.lifecycle.runtimeNameDocker");
+  if (type === "local") return t("instances.lifecycle.runtimeNameLocal");
+  return instance.runtime?.name || t("instances.lifecycle.runtimeUnavailable");
 }
 
 export function isInstanceAppReady(instance: InstanceBoardItem) {
@@ -37,6 +76,9 @@ export function canShowInstanceAction(instance: InstanceBoardItem, action: Insta
   if (action === "delete") {
     return true;
   }
+  // Runtime lifecycle actions need the base runtime; only surface them when it
+  // is present, otherwise the user gets an error instead of a working control.
+  if (isInstanceRuntimeOffline(instance)) return false;
   if (action === "retry-image") {
     return instance.status === "failed" && instance.imageProvisioning?.phase === "failed";
   }
@@ -50,6 +92,7 @@ export function canShowInstanceAction(instance: InstanceBoardItem, action: Insta
 }
 
 export function instanceStatusTitle(instance: InstanceBoardItem, t: Translate) {
+  if (isInstanceRuntimeUnavailable(instance)) return instanceRuntimeUnavailableLabel(instance, t);
   if (isInstanceRuntimeUpdating(instance)) return t("instances.lifecycle.updatingRuntime");
   if (instance.status !== "stopping" && instance.status !== "stopped") {
     const imagePhase = instance.imageProvisioning?.phase;
@@ -68,6 +111,13 @@ export function instanceStatusTitle(instance: InstanceBoardItem, t: Translate) {
 }
 
 export function instanceStatusDetail(instance: InstanceBoardItem, t: Translate) {
+  if (isInstanceRuntimeUnavailable(instance)) {
+    const runtime = instanceRuntimeNameLabel(instance, t);
+    const reason = instanceRuntimeUnavailableReason(instance);
+    return reason
+      ? t("instances.lifecycle.runtimeUnavailableReason", { runtime, reason })
+      : t("instances.lifecycle.runtimeUnavailableDetail", { runtime });
+  }
   const runtimePhase = instance.runtimeVersion?.phase;
   if (runtimePhase === "draining") return t("instances.lifecycle.runtimeDrainingDetail");
   if (runtimePhase === "installing") return t("instances.lifecycle.runtimeInstallingDetail");

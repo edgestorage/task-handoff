@@ -2,11 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import Fastify from "fastify";
 import { ZodError } from "zod";
-import { registerAgentRoutes } from "../src/control-plane/http/agent-routes.ts";
+import { registerAgentOrchestrationRoutes, registerAgentRoutes } from "../src/control-plane/http/agent-routes.ts";
 import { setControlPlaneRequestActor } from "../src/control-plane/http/request-actor.ts";
 import { ControlPlaneAgentAggregator } from "../src/control-plane/agents/agent-aggregator.ts";
+import { defaultAgentOrchestrationId } from "@task-handoff/protocol/agent-orchestrations";
 
-const AGENT_CAPABILITY = { agentExecution: { definitions: true } };
+const AGENT_CAPABILITY = { agentExecution: { definitions: true, orchestration: { orchestrations: true } } };
 const revision = "a".repeat(64);
 const nextRevision = "b".repeat(64);
 
@@ -21,7 +22,19 @@ function definition(overrides: Record<string, unknown> = {}) {
     cwdFolderId: "folder_one",
     providerId: "codex",
     executionPolicy: { workspaceMaterializer: "overlay-copy-on-write", processSandbox: "instance" },
-    callableAgentIds: [],
+    createdAt: "2026-09-26T00:00:00.000Z",
+    updatedAt: "2026-09-26T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+function orchestration(overrides: Record<string, unknown> = {}) {
+  return {
+    id: defaultAgentOrchestrationId("agent_one"),
+    revision,
+    name: "Reviewer",
+    agentIds: ["agent_one"],
+    edges: [],
     createdAt: "2026-09-26T00:00:00.000Z",
     updatedAt: "2026-09-26T00:00:00.000Z",
     ...overrides,
@@ -72,8 +85,13 @@ function fixture(options: { failingNodeIds?: string[]; actor?: Record<string, un
             })] });
           }
           if (route === "/agents" && init.method === "POST") return json(definition(), 201);
+          if (route === "/agent-orchestrations" && (!init.method || init.method === "GET")) return json({ orchestrations: [orchestration()] });
+          if (route === "/agent-orchestrations" && init.method === "POST") return json(orchestration({ id: "orchestration_new" }), 201);
+          if (init.method === "PATCH" && route.startsWith("/agent-orchestrations/")) return json(orchestration({ revision: nextRevision, name: "Updated" }));
+          if (init.method === "DELETE" && route.startsWith("/agent-orchestrations/")) return json({ id: "orchestration_one", deleted: true });
+          if (route.startsWith("/agent-orchestrations/")) return json(orchestration({ id: decodeURIComponent(route.split("/").pop()!) }));
           if (init.method === "PATCH" && route.startsWith("/agents/")) return json(definition({ revision: nextRevision, name: "Updated" }));
-          if (init.method === "DELETE") return json({ id: "agent_one", deleted: true });
+          if (init.method === "DELETE") return json({ id: "agent_one", deleted: true, deletedOrchestrationIds: [] });
           if (route.startsWith("/agents/")) return json(definition({
             targetInstanceId: node.id === "node_capable" ? "instance_capable" : "instance_one",
             unknown: true,
@@ -84,6 +102,7 @@ function fixture(options: { failingNodeIds?: string[]; actor?: Record<string, un
     },
   };
   registerAgentRoutes(app, service as never);
+  registerAgentOrchestrationRoutes(app, service as never);
   app.setErrorHandler((error, _request, reply) => {
     // 与 controlPlaneErrorPayload 一致：Zod 入参错误是 400，其余按错误自带的结构化字段透传。
     if (error instanceof ZodError) {
@@ -242,7 +261,13 @@ test("Control Plane routes Agent writes to the owning Node and forwards structur
   assert.equal(missingNode.statusCode, 400);
 
   const removed = await app.inject({ method: "DELETE", url: "/api/agents/agent_one?nodeId=node_capable" });
-  assert.deepEqual(removed.json().data, { id: "agent_one", deleted: true });
+  assert.deepEqual(removed.json().data, { id: "agent_one", deleted: true, deletedOrchestrationIds: [] });
+
+  const removedWithOrchestrations = await app.inject({
+    method: "DELETE",
+    url: "/api/agents/agent_one?nodeId=node_capable&referencingOrchestrations=delete",
+  });
+  assert.deepEqual(removedWithOrchestrations.json().data, { id: "agent_one", deleted: true, deletedOrchestrationIds: [] });
 
   assert.deepEqual(requests.map((request) => [request.nodeId, request.route]), [
     ["node_second", "/agents"],
@@ -251,25 +276,34 @@ test("Control Plane routes Agent writes to the owning Node and forwards structur
     ["node_second", "/agents/agent_one"],
     ["node_capable", "/agents/agent_one"],
     ["node_capable", "/agents/agent_one"],
+    ["node_capable", "/agents/agent_one"],
+    ["node_capable", "/agents/agent_one?referencingOrchestrations=delete"],
   ]);
   await app.close();
 });
 
-test("Control Plane forwards Node error details such as call-graph cycles", async () => {
+test("Control Plane forwards Node error details such as orchestration cycles", async () => {
   const app = Fastify();
+  const capabilities = { agentExecution: { definitions: true, orchestration: { orchestrations: true } } };
   const service = {
-    requireNode: () => ({ id: "node_capable", capabilities: { agent: { capabilities: AGENT_CAPABILITY } } }),
+    requireNode: () => ({ id: "node_capable", capabilities: { agent: { capabilities } } }),
     listNodes: () => [],
+    listControlledInstances: async () => [{ id: "instance_one", nodeId: "node_capable" }],
+    requireControlledInstance: async () => ({ id: "instance_one", nodeId: "node_capable" }),
     resolveNodeAgentTransport: () => ({
-      async request() {
-        return new Response(JSON.stringify({ error: { code: "AGENT_DEFINITION_CYCLE", message: "cycle", details: { code: "AGENT_DEFINITION_CYCLE", cycle: ["agent_a", "agent_b", "agent_a"] } } }), {
+      async request(_node: unknown, route: string, init: RequestInit = {}) {
+        if (route === "/agents") return json({ agents: [definition({ id: "agent_a" }), definition({ id: "agent_b" })] });
+        if (route.startsWith("/agent-orchestrations/") && init.method !== "PATCH") {
+          return json(orchestration({ id: "orchestration_one", agentIds: ["agent_a", "agent_b"], edges: [{ fromAgentId: "agent_a", toAgentId: "agent_b" }] }));
+        }
+        return new Response(JSON.stringify({ error: { code: "AGENT_ORCHESTRATION_CYCLE", message: "cycle", details: { code: "AGENT_ORCHESTRATION_CYCLE", cycle: ["agent_a", "agent_b", "agent_a"] } } }), {
           status: 409,
           headers: { "content-type": "application/json" },
         });
       },
     }),
   };
-  registerAgentRoutes(app, service as never);
+  registerAgentOrchestrationRoutes(app, service as never);
   app.setErrorHandler((error, _request, reply) => {
     // 与 controlPlaneErrorPayload 一致：Zod 入参错误是 400，其余按错误自带的结构化字段透传。
     if (error instanceof ZodError) {
@@ -280,8 +314,8 @@ test("Control Plane forwards Node error details such as call-graph cycles", asyn
   });
   const response = await app.inject({
     method: "PATCH",
-    url: "/api/agents/agent_a",
-    payload: { nodeId: "node_capable", input: { expectedRevision: revision, callableAgentIds: ["agent_b"] } },
+    url: "/api/agent-orchestrations/orchestration_one",
+    payload: { nodeId: "node_capable", input: { expectedRevision: revision, edges: [{ fromAgentId: "agent_b", toAgentId: "agent_a" }] } },
   });
   assert.equal(response.statusCode, 409);
   assert.deepEqual(response.json().error.details.cycle, ["agent_a", "agent_b", "agent_a"]);
@@ -300,6 +334,44 @@ test("Control Plane gates Story entry and Run proxies on additive Node capabilit
   await app.close();
 });
 
+test("Control Plane proxies orchestration CRUD to the owning Node and gates it on capability", async () => {
+  const { app, requests } = fixture();
+  const listed = await app.inject({ method: "GET", url: "/api/agent-orchestrations?nodeId=node_capable" });
+  assert.equal(listed.statusCode, 200, listed.body);
+  assert.deepEqual(listed.json().data.orchestrations.map((entry: { nodeId: string; orchestration: { id: string } }) => [entry.nodeId, entry.orchestration.id]), [
+    ["node_capable", defaultAgentOrchestrationId("agent_one")],
+  ]);
+
+  const created = await app.inject({
+    method: "POST",
+    url: "/api/agent-orchestrations",
+    payload: { nodeId: "node_capable", input: { name: "Release", agentIds: ["agent_one"], edges: [] } },
+  });
+  assert.equal(created.statusCode, 201, created.body);
+  assert.equal(created.json().data.id, "orchestration_new");
+
+  const updated = await app.inject({
+    method: "PATCH",
+    url: `/api/agent-orchestrations/${encodeURIComponent(defaultAgentOrchestrationId("agent_one"))}`,
+    payload: { nodeId: "node_capable", input: { expectedRevision: revision, name: "Updated" } },
+  });
+  assert.equal(updated.statusCode, 200, updated.body);
+  assert.equal(updated.json().data.revision, nextRevision);
+
+  const removed = await app.inject({
+    method: "DELETE",
+    url: `/api/agent-orchestrations/${encodeURIComponent(defaultAgentOrchestrationId("agent_one"))}?nodeId=node_capable`,
+  });
+  assert.deepEqual(removed.json().data, { id: "orchestration_one", deleted: true });
+
+  // N-1 Node 缺少 orchestration capability 时整个编排域关闭，不影响 Agent 定义代理。
+  const unsupported = await app.inject({ method: "GET", url: "/api/agent-orchestrations?nodeId=node_legacy" });
+  assert.equal(unsupported.statusCode, 409);
+  assert.equal(unsupported.json().error.code, "AGENT_ORCHESTRATIONS_UNSUPPORTED");
+  assert.equal(requests.some((request) => request.nodeId === "node_legacy"), false);
+  await app.close();
+});
+
 test("Control Plane preserves dangling Story entries and authorizes newly referenced live Agents", async () => {
   const app = Fastify();
   const requests: Array<{ route: string; init: RequestInit }> = [];
@@ -307,15 +379,21 @@ test("Control Plane preserves dangling Story entries and authorizes newly refere
   const service = {
     requireNode: () => ({ id: "node_one", capabilities: { agent: { capabilities } } }),
     listNodes: () => [],
+    listControlledInstances: async () => [{ id: "instance_one", nodeId: "node_one" }],
     requireControlledInstance: async () => ({ id: "instance_one", nodeId: "node_one" }),
     resolveNodeAgentTransport: () => ({
       async request(_node: unknown, route: string, init: RequestInit = {}) {
         requests.push({ route, init });
         if (route === "/stories/story_one") return json({ id: "story_one", ownerNodeId: "node_one", title: "Story", documents: [], actions: [], createdAt: "2026-09-26T00:00:00.000Z", updatedAt: "2026-09-26T00:00:00.000Z" });
         if (route === "/stories/story_one/agent-entries" && init.method === "PUT") {
-          return json({ storyId: "story_one", revision: nextRevision, entries: [{ agentId: "agent_missing", status: "missing-reference" }, { agentId: "agent_one", status: "available" }] });
+          return json({ storyId: "story_one", revision: nextRevision, entries: [
+            { agentId: "agent_missing", orchestrationId: defaultAgentOrchestrationId("agent_missing"), status: "missing-reference" },
+            { agentId: "agent_one", orchestrationId: defaultAgentOrchestrationId("agent_one"), status: "available" },
+          ] });
         }
-        if (route === "/stories/story_one/agent-entries") return json({ storyId: "story_one", revision, entries: [{ agentId: "agent_missing", status: "missing-reference" }] });
+        if (route === "/stories/story_one/agent-entries") return json({ storyId: "story_one", revision, entries: [
+          { agentId: "agent_missing", orchestrationId: defaultAgentOrchestrationId("agent_missing"), status: "missing-reference" },
+        ] });
         if (route === "/agents/agent_one") return json(definition({ targetInstanceId: "instance_one" }));
         return json({});
       },
@@ -325,12 +403,15 @@ test("Control Plane preserves dangling Story entries and authorizes newly refere
   const response = await app.inject({
     method: "PUT",
     url: "/api/stories/story_one/agent-entries",
-    payload: { nodeId: "node_one", input: { expectedRevision: revision, agentIds: ["agent_missing", "agent_one"] } },
+    payload: { nodeId: "node_one", input: { expectedRevision: revision, entries: [
+      { agentId: "agent_missing", orchestrationId: defaultAgentOrchestrationId("agent_missing") },
+      { agentId: "agent_one", orchestrationId: defaultAgentOrchestrationId("agent_one") },
+    ] } },
   });
   assert.equal(response.statusCode, 200);
   assert.deepEqual(response.json().data.entries, [
-    { agentId: "agent_missing", status: "missing-reference" },
-    { agentId: "agent_one", status: "available" },
+    { agentId: "agent_missing", orchestrationId: defaultAgentOrchestrationId("agent_missing"), status: "missing-reference" },
+    { agentId: "agent_one", orchestrationId: defaultAgentOrchestrationId("agent_one"), status: "available" },
   ]);
   assert.deepEqual(requests.map(({ route }) => route), [
     "/stories/story_one",
@@ -351,6 +432,7 @@ test("Control Plane authorizes every Run instance before returning or cancelling
     revision: 0,
     status: "running",
     provenance: { initiatingInstanceId: "instance_one", initiatingAiSessionId: "session_one", storyId: "story_one" },
+    orchestrationId: defaultAgentOrchestrationId("agent_one"),
     rootMemberId: "member_one",
     budget: { maxMembers: 4, maxDepth: 2, maxConcurrency: 1 },
     members: [{
@@ -418,7 +500,7 @@ test("Control Plane derives manual Run provenance from the authenticated user", 
     agentExecution: {
       definitions: true,
       runs: true,
-      orchestration: { runMembers: true, manualRuns: true },
+      orchestration: { orchestrations: true, runMembers: true, manualRuns: true },
     },
   };
   const run = {
@@ -427,6 +509,7 @@ test("Control Plane derives manual Run provenance from the authenticated user", 
     revision: 0,
     status: "queued",
     input: { prompt: "Run the release checks" },
+    orchestrationId: defaultAgentOrchestrationId("agent_one"),
     provenance: {
       source: "control-plane",
       authorizationSubject: { kind: "control-plane-user", subjectId: "user_one", authorizationRevision: 7 },
@@ -460,11 +543,15 @@ test("Control Plane derives manual Run provenance from the authenticated user", 
   const service = {
     requireNode: () => ({ id: "node_one", capabilities: { agent: { capabilities } } }),
     listNodes: () => [],
+    listControlledInstances: async () => [{ id: "instance_one", nodeId: "node_one" }],
     requireControlledInstance: async () => ({ id: "instance_one", nodeId: "node_one" }),
     resolveNodeAgentTransport: () => ({
       async request(_node: unknown, route: string, init: RequestInit = {}) {
         requests.push({ route, init });
         if (route === "/agents/agent_one") return json(definition({ targetInstanceId: "instance_one" }));
+        if (route === "/agent-orchestrations") return json({ orchestrations: [orchestration()] });
+        if (route.startsWith("/agent-orchestrations/")) return json(orchestration());
+        if (route === "/agents") return json({ agents: [definition({ targetInstanceId: "instance_one" })] });
         if (route === "/agent-runs" && init.method === "POST") return json(run, 201);
         return json({});
       },
@@ -487,10 +574,10 @@ test("Control Plane derives manual Run provenance from the authenticated user", 
     url: "/api/agent-runs/manual",
     payload: {
       nodeId: "node_one",
-      input: { clientRequestId: "request_manual", agentId: "agent_one", input: { prompt: "Run the release checks" } },
+      input: { clientRequestId: "request_manual", orchestrationId: defaultAgentOrchestrationId("agent_one"), input: { prompt: "Run the release checks" } },
     },
   });
-  assert.equal(response.statusCode, 201);
+  assert.equal(response.statusCode, 201, response.body);
   assert.equal(response.json().data.runId, "run_manual");
   const forwarded = JSON.parse(String(requests.find(({ route, init }) => route === "/agent-runs" && init.method === "POST")?.init.body));
   assert.deepEqual(forwarded.provenance, {

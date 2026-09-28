@@ -32,7 +32,7 @@ test("policy updates configure provider sessions, reject stale calls, and refres
   let enabledTools = [
     "story_list_content", "story_get_content", "story_set_content", "story_list_actions", "story_run_action",
   ];
-  let allowedAgentIds = ["agent_reviewer"];
+  let allowedTargets = [{ agentId: "agent_reviewer", orchestrationId: "default:agent_reviewer" }];
   let policyRevision = revision("a");
   const fetchImpl = async (url, init = {}) => {
     const parsed = new URL(String(url));
@@ -54,8 +54,8 @@ test("policy updates configure provider sessions, reject stale calls, and refres
       revision: policyRevision,
       enabledTools,
       agentInvocation: {
-        enabledTools: allowedAgentIds.length ? ["agent_run"] : [],
-        allowedAgentIds,
+        enabledTools: allowedTargets.length ? ["agent_run"] : [],
+        allowedTargets,
       },
     } });
   };
@@ -113,7 +113,7 @@ test("policy updates configure provider sessions, reject stale calls, and refres
   assert.equal(openCodeCreate.projection.findLast((rule) => rule.permission === "agent_run").action, "allow");
 
   enabledTools = [];
-  allowedAgentIds = [];
+  allowedTargets = [];
   policyRevision = revision("b");
   registration.invalidateStoryAgentTools({ storyId: "story_1", revision: policyRevision });
   await assert.rejects(

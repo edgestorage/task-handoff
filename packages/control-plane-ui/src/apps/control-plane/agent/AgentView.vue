@@ -44,20 +44,31 @@
                 <span v-if="loadingNodeIds.includes(group.nodeId)" class="agent-node-load" role="status">{{ t("agents.list.loadingNode") }}</span>
                 <span v-else-if="unavailableNodeIds.includes(group.nodeId)" class="agent-node-load" data-state="warning">{{ t("agents.list.unavailableNode") }}</span>
               </div>
-              <button
-                v-for="agent in group.agents"
-                :key="agent.key"
-                type="button"
-                class="agent-list-item"
-                :class="{ active: agent.key === selectedAgentKey }"
-                :aria-pressed="agent.key === selectedAgentKey"
-                @click="selectedAgentKey = agent.key"
-              >
-                <span class="agent-list-item-copy">
-                  <strong>{{ agent.name }}</strong>
-                  <small>{{ agent.instanceLabel }} · {{ agent.executable ? t("agents.availability.executable") : t("agents.availability.blocked") }}</small>
-                </span>
-              </button>
+              <ContextMenu v-for="agent in group.agents" :key="agent.key">
+                <ContextMenuTrigger as-child>
+                  <button
+                    type="button"
+                    class="agent-list-item"
+                    :class="{ active: agent.key === selectedAgentKey }"
+                    :aria-pressed="agent.key === selectedAgentKey"
+                    @contextmenu="selectedAgentKey = agent.key"
+                    @click="selectedAgentKey = agent.key"
+                  >
+                    <span class="agent-list-item-copy">
+                      <strong>{{ agent.name }}</strong>
+                      <small>{{ agent.instanceLabel }} · {{ agent.executable ? t("agents.availability.executable") : t("agents.availability.blocked") }}</small>
+                    </span>
+                  </button>
+                </ContextMenuTrigger>
+                <AgentContextMenu
+                  :can-run="agentManualRunAvailable(agent, agentRunOrchestrations(catalog.orchestrations, agent))"
+                  :editable="agent.nodeOnline"
+                  :deleting="deleting"
+                  @run="openManualRun(agent)"
+                  @edit="openEdit(agent)"
+                  @delete="deleteAgent(agent)"
+                />
+              </ContextMenu>
             </div>
             <div v-if="!groupedAgents.length" class="agent-list-empty">
               <span v-if="isPending">{{ t("agents.list.loading") }}</span>
@@ -91,9 +102,18 @@
           class="agent-content-graph"
           :agents="visibleAgents"
           :nodes="catalog.nodes"
+          :orchestrations="visibleOrchestrations"
           :selected-agent-key="selectedAgentKey"
-          :save="saveCallableChanges"
+          :orchestration-key="graphOrchestrationKey"
+          :deleting="deleting"
+          :save="saveOrchestrationChange"
           @select="selectedAgentKey = $event"
+          @run="runAgentByKey"
+          @edit="editAgentByKey"
+          @delete="deleteAgentByKey"
+          @remove="removeOrchestrationByKey"
+          @create="openCreateOrchestration"
+          @orchestration-change="graphOrchestrationKey = $event"
         />
         <p v-else-if="!selectedAgent" class="agent-content-state">{{ t("agents.detail.empty") }}</p>
         <ScrollArea v-else type="auto" :horizontal="false" class="agent-detail-scroll">
@@ -124,12 +144,13 @@
                   </Button>
                 </div>
               </header>
-              <div class="agent-detail-meta">
-                <Badge variant="secondary">{{ selectedAgent.provider }}</Badge>
-                <Badge variant="outline">{{ selectedAgent.model }}</Badge>
-                <Badge variant="outline">{{ t("agents.value.isolationInstance") }}</Badge>
+              <div class="agent-detail-runtime">
+                <AiAgentIcon v-if="providerBrand" :agent="providerBrand" :size="14" />
+                <span class="agent-detail-runtime-item">{{ selectedAgent.provider }}</span>
+                <span class="agent-detail-runtime-separator" aria-hidden="true">·</span>
+                <span class="agent-detail-runtime-item">{{ selectedAgent.model }}</span>
               </div>
-              <p class="agent-detail-description">{{ selectedAgent.description }}</p>
+              <p v-if="selectedAgent.description" class="agent-detail-description">{{ selectedAgent.description }}</p>
               <p v-if="blockedLabel(selectedAgent)" class="agent-detail-blocked" role="alert">{{ blockedLabel(selectedAgent) }}</p>
             </div>
 
@@ -170,13 +191,28 @@
 
             <section class="agent-card">
               <div class="agent-card-header">
-                <div class="agent-card-heading"><h3>{{ t("agents.detail.callable") }}</h3><span>{{ callableAgents.length }}</span></div>
+                <div class="agent-card-heading"><h3>{{ t("agents.detail.orchestration") }}</h3><span>{{ agentOrchestrations.length }}</span></div>
+                <Button variant="outline" size="sm" :disabled="!selectedAgent.nodeOnline || !orchestrationsSupported" @click="openCreateOrchestration">
+                  <Plus :size="14" />
+                  {{ t("agents.detail.orchestrationCreate") }}
+                </Button>
               </div>
               <div class="agent-card-body">
-                <div v-if="callableAgents.length" class="agent-chip-row">
-                  <Badge v-for="agent in callableAgents" :key="agent.id" variant="outline" class="agent-chip">{{ agent.name }} · {{ agent.instanceLabel }}</Badge>
+                <div v-if="agentOrchestrations.length" class="agent-chip-row">
+                  <button
+                    v-for="orchestration in agentOrchestrations"
+                    :key="orchestration.key"
+                    type="button"
+                    class="agent-orchestration-chip"
+                    @click="openOrchestrationInGraph(orchestration)"
+                  >
+                    <span>{{ orchestration.name }}</span>
+                    <Badge v-if="orchestration.isDefault" variant="outline" class="agent-chip">{{ t("agents.detail.orchestrationDefault") }}</Badge>
+                    <small>{{ t("agents.detail.orchestrationMembers", { count: orchestration.agentIds.length }) }}</small>
+                  </button>
                 </div>
-                <p v-else class="agent-note">{{ t("agents.detail.callableEmpty") }}</p>
+                <p v-else class="agent-note">{{ t("agents.detail.orchestrationEmpty") }}</p>
+                <p class="agent-note">{{ t("agents.detail.orchestrationHint") }}</p>
               </div>
             </section>
 
@@ -257,6 +293,64 @@
       </main>
     </div>
 
+    <Dialog v-model:open="orchestrationCreateOpen">
+      <DialogContent class="agent-dialog">
+        <DialogHeader>
+          <DialogTitle>{{ t("agents.orchestration.createTitle") }}</DialogTitle>
+          <DialogDescription>{{ t("agents.orchestration.createDescription", { name: selectedAgent?.name || "" }) }}</DialogDescription>
+        </DialogHeader>
+        <label class="agent-dialog-field">
+          <span>{{ t("agents.orchestration.name") }}</span>
+          <Input v-model="newOrchestrationName" :placeholder="t('agents.orchestration.namePlaceholder')" />
+        </label>
+        <DialogFooter>
+          <Button type="button" variant="outline" @click="orchestrationCreateOpen = false">{{ t("common.actions.cancel") }}</Button>
+          <Button type="button" :disabled="!newOrchestrationName.trim() || creatingOrchestration" @click="confirmCreateOrchestration">
+            {{ creatingOrchestration ? t("agents.orchestration.creating") : t("agents.orchestration.create") }}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+
+    <AlertDialog :open="Boolean(pendingDeleteAgent)" @update:open="(open: boolean) => !open && (pendingDeleteAgent = undefined)">
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{{ t("agents.confirm.deleteTitle") }}</AlertDialogTitle>
+          <AlertDialogDescription>{{ t("agents.confirm.deleteAgent", { name: pendingDeleteAgent?.name || "" }) }}</AlertDialogDescription>
+        </AlertDialogHeader>
+        <label class="agent-dialog-check">
+          <Checkbox
+            :model-value="deleteReferencingOrchestrations"
+            @update:model-value="(value: boolean | 'indeterminate') => (deleteReferencingOrchestrations = value === true)"
+          />
+          <span>
+            <strong>{{ t("agents.confirm.deleteOrchestrations") }}</strong>
+            <small>{{ t("agents.confirm.deleteOrchestrationsHint") }}</small>
+          </span>
+        </label>
+        <AlertDialogFooter>
+          <AlertDialogCancel :disabled="deleting">{{ t("common.actions.cancel") }}</AlertDialogCancel>
+          <Button variant="destructive" size="sm" :disabled="deleting" @click="confirmDeleteAgent">
+            {{ deleting ? t("agents.confirm.deleting") : t("common.actions.delete") }}
+          </Button>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+    <AlertDialog :open="Boolean(pendingDeleteOrchestration)" @update:open="(open: boolean) => !open && (pendingDeleteOrchestration = undefined)">
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{{ t("agents.confirm.deleteTitle") }}</AlertDialogTitle>
+          <AlertDialogDescription>{{ t("agents.orchestration.confirmDelete", { name: pendingDeleteOrchestration?.name || "" }) }}</AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel :disabled="deleting">{{ t("common.actions.cancel") }}</AlertDialogCancel>
+          <Button variant="destructive" size="sm" :disabled="deleting" @click="confirmDeleteOrchestration">
+            {{ deleting ? t("agents.confirm.deleting") : t("common.actions.delete") }}
+          </Button>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+
     <AgentEditor
       v-model:open="editorOpen"
       :agent="editingAgent"
@@ -267,6 +361,7 @@
     <AgentRunDialog
       v-model:open="manualRunOpen"
       :agent-name="manualRunAgent?.name || ''"
+      :orchestrations="manualRunOrchestrations"
       :submitting="launchingRun"
       :submit="launchManualRun"
     />
@@ -279,20 +374,36 @@ import { useI18n } from "vue-i18n";
 import { useQueryClient } from "@tanstack/vue-query";
 import type { AgentDefinitionCreateInput, AgentDefinitionUpdateInput, AgentProcessSandbox, AgentWorkspaceMaterializer } from "@task-handoff/protocol/agent-definitions";
 import { MoreHorizontal, Pencil, Play, Plus, RefreshCw, Trash2, X } from "@lucide/vue";
+import AiAgentIcon from "@/components/AiAgentIcon.vue";
+import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { cancelAgentRun, createAgentDefinition, createManualAgentRun, deleteAgentDefinition, updateAgentDefinition, useInstanceBoardQuery } from "@/api/queries";
-import { allNodesVisible, nodeIsVisible, type NodeVisibilityFilter } from "@task-handoff/control-plane-client";
+import {
+  cancelAgentRun,
+  createAgentDefinition,
+  createAgentOrchestration,
+  createManualAgentRun,
+  deleteAgentDefinition,
+  deleteAgentOrchestration,
+  updateAgentDefinition,
+  updateAgentOrchestration,
+  useInstanceBoardQuery,
+} from "@/api/queries";
+import { allNodesVisible, controlPlaneAgentCapabilities, nodeIsVisible, type NodeVisibilityFilter } from "@task-handoff/control-plane-client";
 import { showControlPlaneToast } from "../useControlPlaneToasts";
 import { useResizablePane } from "../shared/useResizablePane";
 import AgentEditor from "./AgentEditor.vue";
+import AgentContextMenu from "./AgentContextMenu.vue";
 import AgentRunDialog from "./AgentRunDialog.vue";
-import AgentGraph, { type AgentCallableChange } from "./AgentGraph.vue";
-import { agentCatalogGroups, agentCatalogKey, agentCatalogMemberRows } from "./agentCatalog";
-import type { AgentBlockedCode, AgentCatalogAgent, AgentEditorDraft } from "./agentCatalogTypes";
+import AgentGraph, { type AgentOrchestrationChange } from "./AgentGraph.vue";
+import { agentCatalogGroups, agentCatalogKey, agentCatalogMemberRows, agentManualRunAvailable, agentParticipatingOrchestrations, agentRunOrchestrations } from "./agentCatalog";
+import type { AgentBlockedCode, AgentCatalogAgent, AgentCatalogOrchestration, AgentEditorDraft } from "./agentCatalogTypes";
 import { useAgentCatalog } from "./useAgentCatalog";
 import { aiSessionLaunchableAppsForInstance } from "../useInstanceSessions";
 import { translateApiError } from "@/i18n/apiError";
@@ -330,7 +441,7 @@ const board = useInstanceBoardQuery();
 const instances = computed(() => board.data.value || []);
 
 // 目录是视图的唯一数据入口：定义来自各 Node 的权威查询，provider 展示名在投影边界注入。
-const { catalog, loadingNodeIds, unavailableNodeIds, isPending, refetch } = useAgentCatalog({
+const { catalog, nodes, loadingNodeIds, unavailableNodeIds, isPending, refetch } = useAgentCatalog({
   providerLabel: (instance, providerId) => (
     instance ? aiSessionLaunchableAppsForInstance(instance, t).find((app) => app.id === providerId)?.label || providerId : providerId
   ),
@@ -357,10 +468,19 @@ const filteredAgents = computed(() => {
 const groupedAgents = computed(() => agentCatalogGroups({ ...catalog.value, agents: filteredAgents.value }));
 
 const selectedAgent = computed(() => agentsByKey.value.get(selectedAgentKey.value));
-const callableAgents = computed(() => (selectedAgent.value?.callableAgentIds ?? []).flatMap((id) => {
-  const agent = selectedAgent.value ? agentsByKey.value.get(agentCatalogKey(selectedAgent.value.nodeId, id)) : undefined;
-  return agent ? [agent] : [];
-}));
+/** 只有已知 app 有品牌图标；未知 provider 只呈现文字标签，不猜图标。 */
+const providerBrand = computed<"codex" | "claude" | "opencode" | undefined>(() => {
+  const providerId = selectedAgent.value?.providerId;
+  return providerId === "codex" || providerId === "claude" || providerId === "opencode" ? providerId : undefined;
+});
+const orchestrationsSupported = computed(() => nodes.value.some((node) => node.id === selectedAgent.value?.nodeId
+  && controlPlaneAgentCapabilities(node.capabilities).orchestrations));
+/** 该 Agent 参与的全部编排；画布与详情卡片都消费同一份派生列表。 */
+const agentOrchestrations = computed(() => (selectedAgent.value
+  ? [...agentParticipatingOrchestrations(catalog.value.orchestrations, selectedAgent.value)]
+    .sort((left, right) => Number(right.isDefault) - Number(left.isDefault) || left.name.localeCompare(right.name))
+  : []));
+const visibleOrchestrations = computed(() => catalog.value.orchestrations.filter((orchestration) => nodeIsVisible(props.nodeFilter, orchestration.nodeId)));
 const entryStoryLabels = computed(() => selectedAgent.value?.entryStoryLabels ?? []);
 
 const runs = computed(() => (selectedAgent.value
@@ -378,33 +498,50 @@ const cancellingRun = ref(false);
 const manualRunOpen = ref(false);
 const manualRunAgent = ref<AgentCatalogAgent>();
 const launchingRun = ref(false);
-const canLaunchSelectedAgent = computed(() => Boolean(
-  selectedAgent.value?.nodeOnline
-  && selectedAgent.value.executable
-  && selectedAgent.value.runsSupported
-  && selectedAgent.value.manualRunsSupported
-));
-const manualRunUnavailableLabel = computed(() => {
-  const agent = selectedAgent.value;
-  if (!agent || canLaunchSelectedAgent.value) return "";
+function manualRunUnavailableLabelFor(agent?: AgentCatalogAgent) {
+  if (!agent || agentManualRunAvailable(agent, agentRunOrchestrations(catalog.value.orchestrations, agent))) return "";
   if (!agent.manualRunsSupported) return t("agents.manualRun.unsupported");
+  if (!agentRunOrchestrations(catalog.value.orchestrations, agent).length) return t("agents.manualRun.noOrchestration");
   return blockedLabel(agent) || t("agents.manualRun.unavailable");
-});
+}
+
+const canLaunchSelectedAgent = computed(() => agentManualRunAvailable(selectedAgent.value, manualRunOrchestrations.value));
+const manualRunUnavailableLabel = computed(() => manualRunUnavailableLabelFor(selectedAgent.value));
+const manualRunOrchestrations = computed(() => (manualRunAgent.value
+  ? agentRunOrchestrations(catalog.value.orchestrations, manualRunAgent.value)
+  : []));
 
 function openManualRun(agent: AgentCatalogAgent) {
-  if (!canLaunchSelectedAgent.value) return;
+  if (!agentManualRunAvailable(agent, agentRunOrchestrations(catalog.value.orchestrations, agent))) return;
   manualRunAgent.value = agent;
   manualRunOpen.value = true;
 }
 
-async function launchManualRun(prompt: string) {
+// 画布节点只回传聚合 key：这里回到同一份目录解析对象，再走与列表右键完全相同的操作实现。
+function runAgentByKey(key: string) {
+  const agent = agentsByKey.value.get(key);
+  if (agent) openManualRun(agent);
+}
+
+function editAgentByKey(key: string) {
+  const agent = agentsByKey.value.get(key);
+  if (agent) openEdit(agent);
+}
+
+function deleteAgentByKey(key: string) {
+  const agent = agentsByKey.value.get(key);
+  if (agent) void deleteAgent(agent);
+}
+
+async function launchManualRun(prompt: string, orchestrationId: string) {
   const agent = manualRunAgent.value;
   if (!agent || launchingRun.value) return;
   launchingRun.value = true;
   try {
     const run = await createManualAgentRun(agent.nodeId, {
       clientRequestId: createBrowserUuid(),
-      agentId: agent.id,
+      orchestrationId,
+      entryAgentId: agent.id,
       input: { prompt },
     });
     await invalidateControlPlaneDomains(queryClient, ["agents"]);
@@ -513,7 +650,6 @@ function createInputFromDraft(draft: AgentEditorDraft): AgentDefinitionCreateInp
     ...(draft.modelName ? { modelName: draft.modelName } : {}),
     ...(draft.reasoningEffort ? { reasoningEffort: draft.reasoningEffort } : {}),
     ...(draft.permissionMode ? { permissionMode: draft.permissionMode } : {}),
-    callableAgentIds: draft.callableAgentIds,
   };
 }
 
@@ -531,7 +667,6 @@ function updateInputFromDraft(draft: AgentEditorDraft): AgentDefinitionUpdateInp
     modelName: input.modelName ?? null,
     reasoningEffort: input.reasoningEffort ?? null,
     permissionMode: input.permissionMode ?? null,
-    callableAgentIds: input.callableAgentIds,
   };
 }
 
@@ -551,35 +686,107 @@ async function saveDraft(draft: AgentEditorDraft) {
 }
 
 /**
- * 关系图的一次保存按 Agent 逐个提交权威可调用集合：服务端负责环、自引用与引用有效性，
- * 失败也先把界面收敛回权威集合，只把结构化错误交给调用方展示。
+ * 关系图保存整张编排：服务端负责成员有效性、环与默认编排的入口约束，客户端只提交
+ * 读到的 revision 与完整图形，失败时保留本地增量并把结构化错误交给调用方展示。
  */
-async function saveCallableChanges(changes: AgentCallableChange[]) {
-  const failures: unknown[] = [];
-  for (const change of changes) {
-    const agent = agentsByKey.value.get(agentCatalogKey(change.nodeId, change.agentId));
-    if (!agent) continue;
-    try {
-      await updateAgentDefinition(agent.id, agent.nodeId, {
-        expectedRevision: agent.revision,
-        callableAgentIds: change.callableAgentIds,
-      });
-    } catch (cause) {
-      failures.push(cause);
-    }
-  }
+async function saveOrchestrationChange(change: AgentOrchestrationChange) {
+  await updateAgentOrchestration(change.orchestrationId, change.nodeId, {
+    expectedRevision: change.expectedRevision,
+    name: change.name,
+    agentIds: change.agentIds,
+    edges: change.edges,
+  });
   await invalidateControlPlaneDomains(queryClient, ["agents"]);
-  if (failures.length) throw failures[0];
+}
+
+/** 新建编排的入口就是当前 Agent：初始图只有它自己，之后可以在它前面加成员改变顶级节点。 */
+async function createOrchestration(name: string) {
+  const agent = selectedAgent.value;
+  if (!agent) return undefined;
+  const created = await createAgentOrchestration(agent.nodeId, { name, agentIds: [agent.id], edges: [] });
+  await invalidateControlPlaneDomains(queryClient, ["agents"]);
+  return created;
+}
+
+const graphOrchestrationKey = ref("");
+const orchestrationCreateOpen = ref(false);
+const newOrchestrationName = ref("");
+const creatingOrchestration = ref(false);
+
+function openCreateOrchestration() {
+  if (!selectedAgent.value) return;
+  newOrchestrationName.value = t("agents.orchestration.newName", { name: selectedAgent.value.name });
+  orchestrationCreateOpen.value = true;
+}
+
+async function confirmCreateOrchestration() {
+  const name = newOrchestrationName.value.trim();
+  if (!name || creatingOrchestration.value) return;
+  creatingOrchestration.value = true;
+  try {
+    const created = await createOrchestration(name);
+    if (created && selectedAgent.value) graphOrchestrationKey.value = agentCatalogKey(selectedAgent.value.nodeId, created.id);
+    orchestrationCreateOpen.value = false;
+    showControlPlaneToast(t("agents.orchestration.created", { name }), "success");
+  } catch (cause) {
+    showControlPlaneToast(translateApiError(cause, t, t("agents.orchestration.createFailed")));
+  } finally {
+    creatingOrchestration.value = false;
+  }
+}
+
+function openOrchestrationInGraph(orchestration: AgentCatalogOrchestration) {
+  graphOrchestrationKey.value = orchestration.key;
+  viewMode.value = "graph";
+}
+
+function removeOrchestrationByKey(key: string) {
+  const orchestration = catalog.value.orchestrations.find((candidate) => candidate.key === key);
+  if (!orchestration || orchestration.isDefault) return;
+  pendingDeleteOrchestration.value = orchestration;
+}
+
+async function confirmDeleteOrchestration() {
+  const orchestration = pendingDeleteOrchestration.value;
+  if (!orchestration || deleting.value) return;
+  deleting.value = true;
+  try {
+    await deleteAgentOrchestration(orchestration.id, orchestration.nodeId);
+    await invalidateControlPlaneDomains(queryClient, ["agents"]);
+    pendingDeleteOrchestration.value = undefined;
+    showControlPlaneToast(t("agents.orchestration.deleted", { name: orchestration.name }), "success");
+  } catch (cause) {
+    showControlPlaneToast(translateApiError(cause, t, t("agents.orchestration.deleteFailed")));
+  } finally {
+    deleting.value = false;
+  }
 }
 
 const deleting = ref(false);
+const pendingDeleteAgent = ref<AgentCatalogAgent>();
+const pendingDeleteOrchestration = ref<AgentCatalogOrchestration>();
+const deleteReferencingOrchestrations = ref(false);
+
+function requestDeleteAgent(agent: AgentCatalogAgent) {
+  if (deleting.value) return;
+  pendingDeleteAgent.value = agent;
+  deleteReferencingOrchestrations.value = false;
+}
 
 async function deleteAgent(agent: AgentCatalogAgent) {
-  if (deleting.value || !window.confirm(t("agents.confirm.deleteAgent", { name: agent.name }))) return;
+  requestDeleteAgent(agent);
+}
+
+async function confirmDeleteAgent() {
+  const agent = pendingDeleteAgent.value;
+  if (!agent || deleting.value) return;
   deleting.value = true;
   try {
-    await deleteAgentDefinition(agent.id, agent.nodeId);
+    await deleteAgentDefinition(agent.id, agent.nodeId, {
+      ...(deleteReferencingOrchestrations.value ? { referencingOrchestrations: "delete" as const } : {}),
+    });
     await invalidateControlPlaneDomains(queryClient, ["agents"]);
+    pendingDeleteAgent.value = undefined;
     showControlPlaneToast(t("agents.toast.deleted", { name: agent.name }), "success");
   } catch (cause) {
     showControlPlaneToast(translateApiError(cause, t, t("agents.errors.deleteFailed")));
@@ -638,7 +845,9 @@ async function deleteAgent(agent: AgentCatalogAgent) {
 .agent-content-title h2 { margin:0; min-width:0; color:var(--text-strong); font-size:18px; font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .agent-content-title small { color:var(--text-muted); font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .agent-content-actions { display:flex; align-items:center; gap:8px; flex:0 0 auto; }
-.agent-detail-meta { display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
+.agent-detail-runtime { display:flex; align-items:center; gap:7px; min-width:0; color:var(--text-muted); font-size:12px; font-weight:400; line-height:20px; }
+.agent-detail-runtime-item { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.agent-detail-runtime-separator { flex:0 0 auto; color:var(--line-strong); }
 .agent-detail-description { margin:0; color:var(--text-muted); font-size:12px; line-height:1.5; }
 .agent-detail-blocked { margin:0; border:1px solid var(--line-strong); border-radius:8px; padding:7px 10px; color:var(--text-strong); font-size:12px; }
 .agent-card { overflow:hidden; border:1px solid var(--line); border-radius:8px; background:var(--surface-raised); }
@@ -655,6 +864,17 @@ async function deleteAgent(agent: AgentCatalogAgent) {
 .agent-note { margin:0; color:var(--text-muted); font-size:12px; line-height:1.5; }
 .agent-chip-row { display:flex; flex-wrap:wrap; gap:6px; }
 .agent-chip { font-size:12px; font-weight:400; }
+.agent-orchestration-chip { display:flex; align-items:center; gap:8px; min-width:0; border:1px solid var(--line); border-radius:999px; background:transparent; color:var(--text); cursor:pointer; font-size:12px; padding:4px 10px; }
+.agent-orchestration-chip:hover { border-color:var(--line-strong); background:var(--surface-active); }
+.agent-orchestration-chip:focus-visible { outline:2px solid var(--focus-ring); outline-offset:1px; }
+.agent-orchestration-chip > span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.agent-orchestration-chip small { color:var(--text-muted); font-size:12px; white-space:nowrap; }
+.agent-dialog { width:min(440px,calc(100vw - 24px)); }
+.agent-dialog-field { display:grid; gap:6px; color:var(--text-strong); font-size:12px; }
+.agent-dialog-check { display:flex; align-items:flex-start; gap:7px; color:var(--text-strong); font-size:12px; }
+.agent-dialog-check > span { display:grid; gap:2px; min-width:0; }
+.agent-dialog-check strong { font-size:12px; font-weight:400; }
+.agent-dialog-check small { color:var(--text-muted); font-size:12px; line-height:1.5; }
 .agent-run-list { display:grid; }
 .agent-run-item { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:10px; border:0; border-top:1px solid var(--line); background:transparent; color:inherit; cursor:pointer; padding:10px 12px; text-align:left; }
 .agent-run-item:hover,.agent-run-item.active { background:var(--surface-active); }

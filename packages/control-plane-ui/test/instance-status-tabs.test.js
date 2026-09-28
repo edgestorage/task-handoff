@@ -3,7 +3,7 @@ import test from "node:test";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { buildSessionTabs } from "../src/apps/control-plane/useInstanceSessions.ts";
-import { hasInstanceStatusPage, instanceStatusDetail, instanceStatusTitle, isInstanceStatusPending } from "../src/apps/control-plane/useInstanceStatus.ts";
+import { canShowInstanceAction, hasInstanceStatusPage, instanceRuntimeUnavailableLabel, instanceStatusDetail, instanceStatusTitle, isInstanceRuntimeUnavailable, isInstanceStatusPending } from "../src/apps/control-plane/useInstanceStatus.ts";
 import { createControlPlaneI18nForTest } from "../src/i18n/testing.ts";
 
 const t = (key) => ({ "sessions.tabs.status": "Status", "sessions.title": "AI Sessions" })[key] || key;
@@ -89,4 +89,59 @@ test("runtime convergence Status page describes every active phase", () => {
     assert.equal(instanceStatusTitle(current, translate), "Updating instance runtime");
     assert.match(instanceStatusDetail(current, translate), expectedDetail, phase);
   }
+});
+
+const english = createControlPlaneI18nForTest("en-US").global.t;
+const chinese = createControlPlaneI18nForTest("zh-CN").global.t;
+
+function dockerInstance(runtimeStatus, overrides = {}) {
+  return {
+    ...instance("running"),
+    runtime: {
+      id: "runtime_local_docker",
+      nodeId: "node_local",
+      name: "Local Docker",
+      type: "docker",
+      status: runtimeStatus,
+      accessStrategy: "direct-port",
+      capabilities: runtimeStatus === "offline"
+        ? { daemon: { status: "offline", error: "dial unix docker.sock: connect: no such file or directory" } }
+        : { daemon: { status: "online" } },
+      labels: {},
+      createdAt: "2026-09-01T00:00:00.000Z",
+      updatedAt: "2026-09-01T00:00:00.000Z",
+    },
+    ...overrides,
+  };
+}
+
+test("an offline node runtime reports the runtime instead of pending instance work", () => {
+  const current = dockerInstance("offline");
+  assert.equal(isInstanceRuntimeUnavailable(current), true);
+  assert.equal(isInstanceStatusPending(current), false);
+  assert.equal(hasInstanceStatusPage(current), true);
+  assert.equal(instanceStatusTitle(current, english), "Docker is not running");
+  assert.equal(instanceStatusTitle(current, chinese), "Docker 未运行");
+  assert.equal(instanceRuntimeUnavailableLabel(current, chinese), "Docker 未运行");
+  assert.match(instanceStatusDetail(current, english), /not running on the node/);
+  assert.match(instanceStatusDetail(current, english), /no such file or directory/);
+  assert.match(instanceStatusDetail(current, chinese), /实例会自动恢复/);
+  assert.match(instanceStatusDetail(current, chinese), /节点上的 Docker\/OrbStack 未运行/);
+
+  // Lifecycle controls need the base runtime; only deletion stays available.
+  assert.equal(canShowInstanceAction(current, "start"), false);
+  assert.equal(canShowInstanceAction(current, "restart"), false);
+  assert.equal(canShowInstanceAction(current, "delete"), true);
+});
+
+test("a stopped instance keeps its own lifecycle and an online runtime stays untouched", () => {
+  const stopped = dockerInstance("offline", { status: "stopped" });
+  assert.equal(isInstanceRuntimeUnavailable(stopped), false);
+  assert.equal(instanceStatusTitle(stopped, english), "Instance stopped");
+
+  const online = dockerInstance("online");
+  assert.equal(isInstanceRuntimeUnavailable(online), false);
+  assert.equal(isInstanceStatusPending(online), false);
+  assert.equal(hasInstanceStatusPage(online), false);
+  assert.equal(canShowInstanceAction(online, "restart"), true);
 });

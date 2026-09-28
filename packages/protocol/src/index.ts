@@ -4,6 +4,7 @@ export * from "./ai-sessions.ts";
 export * from "./ai-session-hierarchy.ts";
 export * from "./ai-session-provider-capabilities.ts";
 export * from "./agent-definitions.ts";
+export * from "./agent-orchestrations.ts";
 export * from "./agent-runs.ts";
 export * from "./agent-invocation-tools.ts";
 export * from "./agent-run-instance.ts";

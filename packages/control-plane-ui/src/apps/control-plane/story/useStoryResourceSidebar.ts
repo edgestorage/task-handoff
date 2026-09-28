@@ -12,7 +12,7 @@ import {
   type StoryResourceRef,
 } from "./storyResources.ts";
 import { reorderStoryResourceKeys, type StoryResourceDropPlacement } from "./storyResourceOrder.ts";
-import { createBrowserUuid } from "../../../lib/random-id";
+import { createBrowserUuid } from "../../../lib/random-id.ts";
 
 export const STORY_RESOURCE_SIDEBAR_MIN_WIDTH = 320;
 export const STORY_RESOURCE_SIDEBAR_DEFAULT_WIDTH = 420;

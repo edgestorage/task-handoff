@@ -126,6 +126,9 @@
                     <small v-if="instance.imageProvisioning && instance.imageProvisioning.phase !== 'ready'" class="image-provisioning-status">
                       {{ imageProvisioningLabel(instance, t) }}<template v-if="instance.imageProvisioning.error"> · {{ instance.imageProvisioning.error }}</template>
                     </small>
+                    <small v-if="isInstanceRuntimeUnavailable(instance)" class="runtime-unavailable-status">
+                      {{ instanceRuntimeUnavailableLabel(instance, t) }}
+                    </small>
                   </span>
                   <span v-if="!groupByNode" class="instance-row-session">{{ instanceNodeLabel(instance) }}</span>
                 </button>
@@ -173,7 +176,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "../../..
 import { Popover, PopoverContent, PopoverTrigger } from "../../../components/ui/popover";
 import { ScrollArea } from "../../../components/ui/scroll-area";
 import type { InstanceAction } from "../useInstanceActions";
-import { canShowInstanceAction, imageProvisioningLabel, instanceSourceLabel } from "../useInstanceStatus";
+import { canShowInstanceAction, imageProvisioningLabel, instanceRuntimeUnavailableLabel, instanceSourceLabel, isInstanceRuntimeUnavailable } from "../useInstanceStatus";
 import type { InstanceListSortMode } from "./useWorkbenchInstances";
 import InstanceViewOptionsMenu from "../shared/InstanceViewOptionsMenu.vue";
 import InstanceActionMenuItems from "./InstanceActionMenuItems.vue";
@@ -800,6 +803,11 @@ function openNewInstanceFromTemporaryList() {
 
 .instance-row-main .image-provisioning-status {
   color: var(--status-warning);
+}
+
+.instance-row-main .runtime-unavailable-status {
+  color: var(--status-warning);
+  font-size: 12px;
 }
 
 .instance-row-session {

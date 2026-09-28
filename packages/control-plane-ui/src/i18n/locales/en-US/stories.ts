@@ -106,8 +106,9 @@ export const stories = {
     entryAgentsUnsupported: "Entry Agent authorization is not supported by this node agent.",
     entryAgentsUnavailable: "Entry Agents are currently unavailable.",
     entryAgentsEmpty: "No accessible Agents on this Story's node",
-    entryAgentsScope: "This allowlist controls direct entry only. Each Agent's callable Agents control downstream calls.",
+    entryAgentsScope: "This allowlist controls direct entry only. Each entry Agent runs within its selected orchestration, and that orchestration's edges control downstream calls.",
     entryAgentMissing: "Missing Agent reference: {id}",
+    entryAgentOrchestration: "Select orchestration for {name}",
     entryAgentsSaved: "Story entry Agents saved.",
     saving: "Saving...",
   },
@@ -187,6 +188,7 @@ export const stories = {
   errors: {
     assignFailed: "Could not add session to Story.",
     saveFailed: "Could not save Story.",
+    settingsApplyFailed: "The Story was created, but its Agent settings could not be saved. Save again to retry.",
     renameFailed: "Could not rename Story.",
     retentionLoadFailed: "Could not load Story session retention settings.",
     updateFailed: "Story update failed.",

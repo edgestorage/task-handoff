@@ -35,8 +35,8 @@ test("Story catalog reads one query per node instead of one aggregate request", 
 test("Story mutations refetch only the node that owns the Story", async () => {
   assert.match(catalog, /async function refetch\(nodeId\?: string\) \{[\s\S]*\.filter\(\(id\) => !nodeId \|\| id === nodeId\)/);
   assert.match(storyView, /async function load\(nodeId\?: string\) \{[\s\S]*const results = await storyCatalog\.refetch\(nodeId\);[\s\S]*const failure = results\.find\(\(result\) => result\?\.error\)\?\.error;/);
-  assert.match(storyView, /await load\(story\.ownerNodeId\);/);
-  assert.match(storyView, /await load\(draftNodeId\.value\);/);
+  assert.match(storyView, /async function saveStory\(\) \{[\s\S]*?await load\(story\.ownerNodeId\);/);
+  assert.match(storyView, /async function adoptCreatedStory\(story: Story\) \{[\s\S]*?await load\(story\.ownerNodeId\);/);
   assert.doesNotMatch(storyView, /await load\(\);/);
 });
 

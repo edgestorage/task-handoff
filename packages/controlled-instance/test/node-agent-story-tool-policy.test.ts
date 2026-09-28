@@ -24,7 +24,7 @@ test("registration client fetches, sanitizes, caches, and invalidates Story tool
       policy: { content: true, actions: true, automations: false, aiSessions: false, future: true },
       revision,
       enabledTools: ["story_list_content", "story_list_actions", "future_tool"],
-      agentInvocation: { enabledTools: ["agent_run"], allowedAgentIds: ["agent_one"] },
+      agentInvocation: { enabledTools: ["agent_run"], allowedTargets: [{ agentId: "agent_one", orchestrationId: "default:agent_one" }] },
       future: "ignored",
     } }), { headers: { "content-type": "application/json" } });
   }) as typeof fetch);

@@ -12,8 +12,18 @@ const RESTORABLE_INSTANCE_STATUSES = new Set<ControlledInstance["status"]>([
   "running",
 ]);
 
-function isDockerRestoreCandidate(instance: ControlledInstance) {
+function isDockerRestoreCandidate(instance: ControlledInstance, runtime: { status: string }) {
+  if (runtime.status === "offline") return false;
   return RESTORABLE_INSTANCE_STATUSES.has(instance.status) && !instanceImagePreparationPending(instance);
+}
+
+/**
+ * Runtime availability is owned by the runtime record, not by the last failed
+ * operation. An offline runtime means "wait", so instance phases stay put until
+ * the runtime availability monitor reports the runtime back.
+ */
+function runtimeUnavailable(runtime: { status: string }) {
+  return runtime.status === "offline";
 }
 
 type Logger = (data: Record<string, unknown>, message: string) => void;
@@ -145,6 +155,7 @@ export class NodeAgentRecoverySupervisor {
       const runtime = state.requireRuntime(instance.runtimeId);
       if (
         runtime.type === "docker"
+        && !runtimeUnavailable(runtime)
         && ["provisioning", "starting"].includes(instance.status)
         && instance.imageProvisioning?.phase !== "ready"
       ) {
@@ -162,7 +173,7 @@ export class NodeAgentRecoverySupervisor {
           && (!retry || retry.nextAttemptAt <= (this.options.nowMs?.() ?? Date.now()));
       }
       if (runtime.type !== "docker") return false;
-      return isDockerRestoreCandidate(instance);
+      return isDockerRestoreCandidate(instance, runtime);
     });
 
     await Promise.all(candidates.map(async (instance) => {
@@ -225,7 +236,7 @@ export class NodeAgentRecoverySupervisor {
         && (!retry || retry.nextAttemptAt <= (this.options.nowMs?.() ?? Date.now()));
     }
     if (runtime.type !== "docker") return false;
-    return isDockerRestoreCandidate(instance);
+    return isDockerRestoreCandidate(instance, runtime);
   }
 
   async recoverManagedInstances() {
@@ -239,6 +250,7 @@ export class NodeAgentRecoverySupervisor {
       && (this.restoredInstances.has(instance.id) || instance.target.status !== "unknown")
       && (!instance.ready || instance.runtimeVersion?.phase !== "matched")
       && !instanceImagePreparationPending(instance)
+      && !runtimeUnavailable(state.requireRuntime(instance.runtimeId))
       && !["created", "stopped", "failed", "provisioning", "stopping"].includes(instance.status)
     ));
     await Promise.all(candidates.map(async (instance) => {
@@ -255,6 +267,11 @@ export class NodeAgentRecoverySupervisor {
     if (this.started || this.stopped) return;
     this.started = true;
     this.runAndContinue();
+  }
+
+  /** A base runtime came back: resume restore and convergence without waiting for the next tick. */
+  notifyRuntimeAvailable() {
+    this.requestCycle(0);
   }
 
   async stop() {

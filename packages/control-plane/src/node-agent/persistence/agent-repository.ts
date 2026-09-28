@@ -6,8 +6,10 @@ import {
   type AgentExecutionPolicy,
 } from "@task-handoff/protocol/agent-definitions";
 import { AgentRunRepository } from "./agent-run-repository.ts";
+import { AgentOrchestrationRepository } from "./agent-orchestration-repository.ts";
 import { StoryAgentEntryRepository } from "./story-agent-entry-repository.ts";
 import { AgentRunResourceRepository } from "./agent-run-resource-repository.ts";
+import { registerAfterCommit, runInTransaction } from "./transaction-journal.ts";
 
 type Row = Record<string, unknown>;
 
@@ -34,7 +36,6 @@ export type AgentDefinitionContent = {
   reasoningEffort?: string;
   permissionMode?: string;
   executionPolicy: AgentExecutionPolicy;
-  callableAgentIds: string[];
 };
 
 export type AgentDefinitionStoreRow = {
@@ -78,21 +79,7 @@ export function agentDefinitionRevision(content: Omit<AgentDefinitionContent, "i
     content.permissionMode ?? null,
     content.executionPolicy.workspaceMaterializer,
     content.executionPolicy.processSandbox,
-    [...content.callableAgentIds].sort(),
   ])).digest("hex");
-}
-
-function runImmediate<T>(client: DatabaseSync, operation: () => T): T {
-  if ((client as DatabaseSync & { isTransaction?: boolean }).isTransaction) return operation();
-  client.exec("BEGIN IMMEDIATE");
-  try {
-    const result = operation();
-    client.exec("COMMIT");
-    return result;
-  } catch (error) {
-    client.exec("ROLLBACK");
-    throw error;
-  }
 }
 
 export class AgentDefinitionRepository {
@@ -103,28 +90,31 @@ export class AgentDefinitionRepository {
   setDiagnostic(sink: AgentDefinitionDiagnostic) { this.diagnostic = sink; }
 
   transaction<T>(operation: () => T): T {
-    return runImmediate(this.client, operation);
+    return runInTransaction(this.client, operation);
+  }
+
+  /** 在事务内注册提交后副作用：外层事务回滚时不会发布未提交状态。 */
+  afterCommit(callback: () => void) {
+    registerAfterCommit(this.client, callback);
   }
 
   list(): AgentDefinition[] {
     const rows = this.client
       .prepare("SELECT * FROM na_agent_definitions ORDER BY name COLLATE NOCASE ASC, id ASC")
       .all() as Row[];
-    if (!rows.length) return [];
-    const relations = this.callableRelationRows();
-    return rows.map((row) => this.definitionFromRow(row, relations.get(String(row.id)) ?? []));
+    return rows.map((row) => this.definitionFromRow(row));
   }
 
   get(id: string): AgentDefinition | undefined {
     const row = this.client.prepare("SELECT * FROM na_agent_definitions WHERE id = ?").get(id) as Row | undefined;
     if (!row) return undefined;
-    return this.definitionFromRow(row, this.callableRelationRows(id).get(id) ?? []);
+    return this.definitionFromRow(row);
   }
 
   insert(content: AgentDefinitionContent, timestamp: string): AgentDefinition {
-    return runImmediate(this.client, () => {
+    return runInTransaction(this.client, () => {
       const revision = agentDefinitionRevision(content);
-      this.client.prepare(`INSERT INTO na_agent_definitions
+    this.client.prepare(`INSERT INTO na_agent_definitions
         (id, name, description, appended_prompt, target_instance_id, cwd_folder_id, provider_id,
          model_entity_id, model_name, reasoning_effort, permission_mode, execution_policy_json,
          revision, created_at, updated_at)
@@ -133,13 +123,12 @@ export class AgentDefinitionRepository {
           content.cwdFolderId, content.providerId, content.modelEntityId ?? null, content.modelName ?? null,
           content.reasoningEffort ?? null, content.permissionMode ?? null, json(content.executionPolicy),
           revision, timestamp, timestamp);
-      this.replaceCallableRelations(content.id, content.callableAgentIds, timestamp);
       return this.requireDefinition(content.id);
     });
   }
 
   update(id: string, expectedRevision: string, content: Omit<AgentDefinitionContent, "id">, timestamp: string): AgentDefinitionMutationResult {
-    return runImmediate(this.client, () => {
+    return runInTransaction(this.client, () => {
       const current = this.get(id);
       if (!current) return { status: "missing" };
       if (current.revision !== expectedRevision) return { status: "revision-conflict", definition: current };
@@ -152,42 +141,15 @@ export class AgentDefinitionRepository {
         .run(content.name, content.description, content.appendedPrompt, content.targetInstanceId, content.cwdFolderId,
           content.providerId, content.modelEntityId ?? null, content.modelName ?? null, content.reasoningEffort ?? null,
           content.permissionMode ?? null, json(content.executionPolicy), revision, timestamp, id);
-      this.replaceCallableRelations(id, content.callableAgentIds, timestamp);
       return { status: "updated", definition: this.requireDefinition(id) };
     });
   }
 
-  /** 删除定义时由外键清理自身出边；其它定义的入边保留为可诊断的稳定悬挂引用。 */
+  /** 删除定义只影响定义本体；编排里的悬挂引用由编排侧保留并可从权威状态确定性诊断。 */
   delete(id: string): boolean {
-    return runImmediate(this.client, () => {
+    return runInTransaction(this.client, () => {
       return Number(this.client.prepare("DELETE FROM na_agent_definitions WHERE id = ?").run(id).changes) > 0;
     });
-  }
-
-  /** 供环检测使用：全量出边，避免为每个定义单独查询。 */
-  callableEdges(excludeAgentId?: string): Map<string, string[]> {
-    const relations = this.callableRelationRows();
-    if (excludeAgentId) relations.delete(excludeAgentId);
-    return relations;
-  }
-
-  private replaceCallableRelations(agentId: string, callableAgentIds: string[], timestamp: string) {
-    const ids = [...new Set(callableAgentIds)];
-    this.client.prepare("DELETE FROM na_agent_callable_relations WHERE agent_id = ?").run(agentId);
-    const insert = this.client.prepare("INSERT INTO na_agent_callable_relations (agent_id, callable_agent_id, created_at) VALUES (?, ?, ?)");
-    for (const callableAgentId of ids) insert.run(agentId, callableAgentId, timestamp);
-  }
-
-  private callableRelationRows(agentId?: string) {
-    const rows = (agentId
-      ? this.client.prepare("SELECT agent_id, callable_agent_id FROM na_agent_callable_relations WHERE agent_id = ? ORDER BY callable_agent_id").all(agentId)
-      : this.client.prepare("SELECT agent_id, callable_agent_id FROM na_agent_callable_relations ORDER BY agent_id, callable_agent_id").all()) as Row[];
-    const byAgent = new Map<string, string[]>();
-    for (const row of rows) {
-      const key = String(row.agent_id);
-      byAgent.set(key, [...(byAgent.get(key) ?? []), String(row.callable_agent_id)]);
-    }
-    return byAgent;
   }
 
   private requireDefinition(id: string): AgentDefinition {
@@ -196,7 +158,7 @@ export class AgentDefinitionRepository {
     return definition;
   }
 
-  private definitionFromRow(row: Row, callableAgentIds: string[]): AgentDefinition {
+  private definitionFromRow(row: Row): AgentDefinition {
     const unknownColumns = Object.keys(row).filter((column) => !AGENT_DEFINITION_COLUMNS.has(column));
     if (unknownColumns.length) {
       this.diagnostic?.("Agent definition row contains unknown columns; they are ignored on read.", { agentId: row.id, columns: unknownColumns });
@@ -214,7 +176,6 @@ export class AgentDefinitionRepository {
       reasoningEffort: row.reasoning_effort ?? undefined,
       permissionMode: row.permission_mode ?? undefined,
       executionPolicy: parseJson(row.execution_policy_json),
-      callableAgentIds,
       revision: row.revision,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
@@ -240,6 +201,7 @@ export function sanitizeStoredAgentDefinition(input: unknown): AgentDefinition {
 export function createAgentRepositories(client: DatabaseSync) {
   return {
     definitions: new AgentDefinitionRepository(client),
+    orchestrations: new AgentOrchestrationRepository(client),
     runs: new AgentRunRepository(client),
     storyEntries: new StoryAgentEntryRepository(client),
     resources: new AgentRunResourceRepository(client),

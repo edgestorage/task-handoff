@@ -394,7 +394,7 @@ async function deleteBranch() {
 .repository-branch-row { box-sizing: border-box; min-height: 46px; gap: 4px; border: 0; border-radius: 6px; background: transparent; padding: 2px; transition: background-color 120ms ease, box-shadow 120ms ease; }
 .repository-branch-row.remote { min-height: 34px; }
 .repository-branch-row:hover { background: color-mix(in srgb, var(--surface-subtle) 58%, transparent); }
-.repository-branch-row[data-current="true"] .repository-branch-name { color: var(--brand-accent-muted, var(--brand-accent)); }
+.repository-branch-row[data-current="true"] .repository-branch-name { color: var(--repository-current-text, var(--brand-accent)); }
 .repository-branch-select { display: grid; flex: 1 1 auto; gap: 2px; min-width: 0; border: 0; border-radius: 5px; background: transparent; color: inherit; cursor: pointer; padding: 5px 6px; text-align: left; }
 .repository-branch-row.remote .repository-branch-select { padding-block: 3px; }
 .repository-branch-select:focus-visible { outline: 1px solid color-mix(in srgb, var(--focus-ring) 65%, transparent); outline-offset: -1px; }
