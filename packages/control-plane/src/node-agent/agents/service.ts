@@ -9,17 +9,11 @@ import {
   type AgentDefinitionErrorCode,
 } from "@task-handoff/protocol/agent-definitions";
 import { aiSessionProviderCapability, type ControlledInstance } from "@task-handoff/protocol/control-plane";
-import {
-  agentInvocationToolRevisionSource,
-  AgentInvocationToolResolutionSchema,
-  resolveAgentInvocationToolGrant,
-  type AgentInvocationToolResolution,
-} from "@task-handoff/protocol/agent-invocation-tools";
-import crypto from "node:crypto";
 import { createId } from "../../shared/persistence/store.ts";
 import { resolveInstanceFolder } from "../instances/instance-folder.ts";
 import type { AgentDefinitionContent, AgentDefinitionRepository } from "../persistence/agent-repository.ts";
 import type { NodeAgentState } from "../state.ts";
+import type { AgentOrchestrationService } from "./orchestration-service.ts";
 
 export type AgentDefinitionFields = Omit<AgentDefinitionContent, "id">;
 
@@ -40,11 +34,18 @@ export type ResolvedAgentDefinitionExecution = {
 export class AgentDefinitionService {
   private readonly state: NodeAgentState;
   private readonly definitions: AgentDefinitionRepository;
+  private readonly orchestrations: AgentOrchestrationService;
   private readonly publish?: AgentDefinitionChangePublisher;
 
-  constructor(state: NodeAgentState, definitions: AgentDefinitionRepository, publish?: AgentDefinitionChangePublisher) {
+  constructor(
+    state: NodeAgentState,
+    definitions: AgentDefinitionRepository,
+    orchestrations: AgentOrchestrationService,
+    publish?: AgentDefinitionChangePublisher,
+  ) {
     this.state = state;
     this.definitions = definitions;
+    this.orchestrations = orchestrations;
     this.publish = publish;
   }
 
@@ -58,14 +59,8 @@ export class AgentDefinitionService {
     return definition;
   }
 
-  resolveInvocationTools(id: string): AgentInvocationToolResolution {
-    const definition = this.get(id);
-    const availableAgentIds = definition.callableAgentIds.filter((agentId) => Boolean(this.definitions.get(agentId)));
-    const grant = resolveAgentInvocationToolGrant(availableAgentIds);
-    const revision = crypto.createHash("sha256")
-      .update(agentInvocationToolRevisionSource(definition.revision, grant))
-      .digest("hex");
-    return AgentInvocationToolResolutionSchema.parse({ ...grant, revision });
+  has(id: string): boolean {
+    return Boolean(this.definitions.get(id));
   }
 
   /** Re-resolve mutable target state immediately before accepting a run. */
@@ -94,13 +89,20 @@ export class AgentDefinitionService {
     const parsed = AgentDefinitionCreateInputSchema.parse(input);
     const id = createId("agent");
     const timestamp = new Date().toISOString();
-    const definition = this.definitions.transaction(() => {
+    const created = this.definitions.transaction(() => {
       const fields = fieldsFromInput(parsed);
-      this.validate(fields, id);
-      return this.definitions.insert({ id, ...fields }, timestamp);
+      this.validate(fields);
+      const definition = this.definitions.insert({ id, ...fields }, timestamp);
+      // 每个 Agent 恰好一张默认编排，与定义在同一事务里创建；提交后再发布两条变更事件。
+      const defaultOrchestration = this.orchestrations.insertDefaultForAgent(id, fields.name, timestamp);
+      return { definition, defaultOrchestration };
     });
-    this.emit("created", definition);
-    return definition;
+    // 事件只在最外层事务提交后发布：外层回滚不会泄露未提交的定义与编排。
+    this.definitions.afterCommit(() => {
+      this.emit("created", created.definition);
+      this.orchestrations.publishChange("created", created.defaultOrchestration);
+    });
+    return created.definition;
   }
 
   update(id: string, input: AgentDefinitionUpdateInput): AgentDefinition {
@@ -110,7 +112,7 @@ export class AgentDefinitionService {
       const current = this.definitions.get(id);
       if (!current) return { status: "missing" } as const;
       const fields = fieldsFromUpdate(current, parsed);
-      this.validate(fields, id);
+      this.validate(fields);
       return this.definitions.update(id, parsed.expectedRevision, fields, timestamp);
     });
     if (result.status === "missing") throw agentDefinitionError("AGENT_DEFINITION_NOT_FOUND", `Agent definition ${id} was not found.`, 404);
@@ -120,23 +122,36 @@ export class AgentDefinitionService {
         { details: { code: "AGENT_DEFINITION_REVISION_CONFLICT", expectedRevision: parsed.expectedRevision, actualRevision: result.definition.revision } },
       );
     }
-    this.emit("updated", result.definition);
+    this.definitions.afterCommit(() => this.emit("updated", result.definition));
     return result.definition;
   }
 
-  /** 保留其它定义里的稳定引用，使缺失目标可以从权威关系确定性投影并由用户显式修复。 */
-  delete(id: string): boolean {
+  /**
+   * 删除定义：默认编排必然随之删除；`referencingOrchestrations === "delete"` 时把引用该 Agent 的自定义编排一并删除，
+   * 否则编排保留悬挂引用由用户修复。全部动作在同一事务里完成，事件在提交后发布。
+   */
+  delete(id: string, options: { referencingOrchestrations?: "keep" | "delete" } = {}): { deletedOrchestrationIds: string[] } {
     const existing = this.get(id);
-    if (!this.definitions.transaction(() => this.definitions.delete(id))) return false;
-    this.emit("deleted", existing);
-    return true;
+    const deletedOrchestrations = this.definitions.transaction(() => {
+      const deleted = this.orchestrations.deleteForAgent(id, options.referencingOrchestrations ?? "keep");
+      if (!this.definitions.delete(id)) return undefined;
+      return deleted;
+    });
+    if (!deletedOrchestrations) {
+      throw agentDefinitionError("AGENT_DEFINITION_NOT_FOUND", `Agent definition ${id} was not found.`, 404);
+    }
+    this.definitions.afterCommit(() => {
+      this.emit("deleted", existing);
+      for (const orchestration of deletedOrchestrations) this.orchestrations.publishChange("deleted", orchestration);
+    });
+    return { deletedOrchestrationIds: deletedOrchestrations.map((orchestration) => orchestration.id) };
   }
 
   private emit(change: "created" | "updated" | "deleted", definition: AgentDefinition) {
     this.publish?.("agent.definition.changed", { agentId: definition.id, change, revision: definition.revision, definition }, {});
   }
 
-  private validate(fields: AgentDefinitionFields, selfId: string) {
+  private validate(fields: AgentDefinitionFields) {
     const instance = this.requireTargetInstance(fields.targetInstanceId);
     this.requireFolder(instance, fields.cwdFolderId);
     if (!aiSessionProviderCapability(instance.capabilities, fields.providerId)) {
@@ -149,7 +164,6 @@ export class AgentDefinitionService {
         409,
       );
     }
-    this.requireCallableTargets(fields.callableAgentIds, selfId);
   }
 
   private requireTargetInstance(targetInstanceId: string): ControlledInstance {
@@ -170,52 +184,6 @@ export class AgentDefinitionService {
     }
   }
 
-  private requireCallableTargets(callableAgentIds: string[], selfId: string) {
-    const unique = [...new Set(callableAgentIds)];
-    for (const callableAgentId of unique) {
-      if (callableAgentId === selfId) {
-        throw agentDefinitionError("AGENT_DEFINITION_SELF_REFERENCE", "An Agent definition cannot call itself.", 409);
-      }
-      if (!this.definitions.get(callableAgentId)) {
-        throw agentDefinitionError("AGENT_DEFINITION_CALLABLE_TARGET_UNKNOWN", `Callable Agent ${callableAgentId} was not found on this Node Agent.`, 409);
-      }
-    }
-    const edges = this.definitions.callableEdges(selfId);
-    edges.set(selfId, unique);
-    const cycle = findCallableCycle(edges, selfId);
-    if (!cycle) return;
-    throw Object.assign(
-      agentDefinitionError("AGENT_DEFINITION_CYCLE", `Callable Agents would form a cycle: ${cycle.join(" -> ")}.`, 409),
-      { details: { code: "AGENT_DEFINITION_CYCLE", cycle } },
-    );
-  }
-}
-
-/**
- * 环检测只看本 Node 的权威出边集合：从 start 的每条出边出发做 DFS，判断能否回到 start。
- * 返回的环路包含起点与终点，供调用方直接展示引用链。
- */
-export function findCallableCycle(edges: Map<string, string[]>, start: string): string[] | undefined {
-  for (const successor of edges.get(start) ?? []) {
-    const path = [start, successor];
-    const visited = new Set(path);
-    const walk = (node: string): boolean => {
-      for (const next of edges.get(node) ?? []) {
-        if (next === start) {
-          path.push(start);
-          return true;
-        }
-        if (visited.has(next)) continue;
-        visited.add(next);
-        path.push(next);
-        if (walk(next)) return true;
-        path.pop();
-      }
-      return false;
-    };
-    if (walk(successor)) return path;
-  }
-  return undefined;
 }
 
 function fieldsFromInput(input: AgentDefinitionCreateInput): AgentDefinitionFields {
@@ -231,7 +199,6 @@ function fieldsFromInput(input: AgentDefinitionCreateInput): AgentDefinitionFiel
     reasoningEffort: input.reasoningEffort,
     permissionMode: input.permissionMode,
     executionPolicy: input.executionPolicy ?? { workspaceMaterializer: "overlay-copy-on-write", processSandbox: "instance" },
-    callableAgentIds: [...new Set(input.callableAgentIds)],
   };
 }
 
@@ -250,7 +217,6 @@ function fieldsFromUpdate(current: AgentDefinition, input: AgentDefinitionUpdate
     reasoningEffort: clearable(input.reasoningEffort, current.reasoningEffort),
     permissionMode: clearable(input.permissionMode, current.permissionMode),
     executionPolicy: input.executionPolicy ?? current.executionPolicy,
-    callableAgentIds: input.callableAgentIds === undefined ? current.callableAgentIds : [...new Set(input.callableAgentIds)],
   };
 }
 

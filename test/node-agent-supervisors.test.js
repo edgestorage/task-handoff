@@ -120,6 +120,55 @@ test("Docker image preparation blocks restore and runtime convergence", async ()
   assert.equal(convergences, 0);
 });
 
+test("Docker runtime unavailability pauses instance recovery and resumes when the runtime returns", async () => {
+  const instance = {
+    id: "inst_docker_offline",
+    runtimeId: "runtime_docker",
+    status: "running",
+    ready: false,
+    target: { status: "reachable" },
+    runtimeVersion: { desiredVersion: "2.0.0", phase: "matched" },
+    imageProvisioning: { phase: "ready" },
+  };
+  let runtimeStatus = "offline";
+  let restores = 0;
+  let convergences = 0;
+  const supervisor = new NodeAgentRecoverySupervisor({
+    state: {
+      listInstances: () => [instance],
+      requireRuntime: () => ({ type: "docker", status: runtimeStatus }),
+      requireInstance: () => instance,
+      applyInstanceLifecycle: () => undefined,
+    },
+    runtimeAdapters: { stopAll: async () => undefined },
+    convergence: {
+      isRunning: () => false,
+      cancel: async () => undefined,
+      schedule: async () => { convergences += 1; },
+    },
+    restoreInstance: async () => { restores += 1; },
+    autoImport: async () => undefined,
+    provisionImage: () => undefined,
+    stopImageProvisioning: async () => undefined,
+    usesManagedArtifact: () => true,
+    warn: () => undefined,
+    error: () => undefined,
+  });
+
+  await supervisor.restoreManagedInstances();
+  await supervisor.recoverManagedInstances();
+  assert.equal(restores, 0);
+  assert.equal(convergences, 0);
+
+  runtimeStatus = "online";
+  supervisor.start();
+  supervisor.notifyRuntimeAvailable();
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  await supervisor.stop();
+  assert.equal(restores, 1);
+  assert.equal(convergences, 1);
+});
+
 test("an unexpected local exit wakes the supervisor and restores without waiting for the safety interval", async () => {
   const instance = { id: "inst_local_crash", runtimeId: "runtime_local", status: "running", target: { status: "online" } };
   let restores = 0;

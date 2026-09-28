@@ -444,22 +444,26 @@ export class NodeAgentState {
     return this.nodeRuntimes.delete(id);
   }
 
-  checkRuntime(id: string, adapter: RuntimeAdapter) {
+  recordRuntimeProbe(id: string, patch: Partial<NodeRuntime>) {
     const runtime = this.requireRuntime(id);
-    if (!adapter.check) {
-      return this.nodeRuntimes.put(NodeRuntimeSchema.parse({ ...runtime, status: "unknown", updatedAt: now() }));
-    }
-    return adapter.check(runtime).then((patch) => {
-      const updated = NodeRuntimeSchema.parse({
-        ...runtime,
-        ...patch,
-        id: runtime.id,
-        nodeId: this.nodeId,
-        createdAt: runtime.createdAt,
-        updatedAt: now(),
-      });
-      return this.nodeRuntimes.put(updated);
+    const updated = NodeRuntimeSchema.parse({
+      ...runtime,
+      ...patch,
+      id: runtime.id,
+      nodeId: this.nodeId,
+      accessStrategy: patch.accessStrategy || runtime.accessStrategy,
+      capabilities: patch.capabilities || runtime.capabilities,
+      labels: patch.labels || runtime.labels,
+      createdAt: runtime.createdAt,
+      updatedAt: now(),
     });
+    return this.nodeRuntimes.put(updated);
+  }
+
+  checkRuntime(id: string, adapter: RuntimeAdapter) {
+    if (!adapter.check) return this.recordRuntimeProbe(id, { status: "unknown" });
+    const runtime = this.requireRuntime(id);
+    return Promise.resolve(adapter.check(runtime)).then((patch) => this.recordRuntimeProbe(id, patch));
   }
 
   requireRuntime(id: string) {

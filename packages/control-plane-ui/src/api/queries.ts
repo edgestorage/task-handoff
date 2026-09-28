@@ -10,6 +10,7 @@ import type { ControlPlaneInstanceResourceEntry } from "@task-handoff/control-pl
 import type { GitCredentialCreateRequest, GitCredentialPublic, GitCredentialUpdateRequest, InstanceGitCredentialAssignment } from "@task-handoff/protocol/managed-git-credentials";
 import type { Story } from "@task-handoff/protocol/stories";
 import type { AgentDefinitionCreateInput, AgentDefinitionUpdateInput } from "@task-handoff/protocol/agent-definitions";
+import type { AgentOrchestrationCreateInput, AgentOrchestrationUpdateInput } from "@task-handoff/protocol/agent-orchestrations";
 import type { AgentRunManualCreateInput } from "@task-handoff/protocol/agent-runs";
 import type { AiSessionQueueEditInput } from "@task-handoff/protocol/ai-sessions";
 export { controlPlaneQueryKeys } from "./queryKeys.ts";
@@ -1159,6 +1160,19 @@ export function agentNodeQueryOptions(nodeId: string, enabled: MaybeRefOrGetter<
   });
 }
 
+export function listAgentOrchestrations(nodeId?: string) {
+  return sharedControlPlaneClient.agents.listOrchestrations(nodeId);
+}
+
+export function agentOrchestrationsQueryOptions(nodeId: string, enabled: MaybeRefOrGetter<boolean> = true) {
+  return queryOptions({
+    queryKey: controlPlaneQueryKeys.agentOrchestrations(nodeId),
+    queryFn: () => listAgentOrchestrations(nodeId),
+    enabled: Boolean(nodeId) && toValue(enabled),
+    ...agentSnapshotQueryOptions,
+  });
+}
+
 export function useAgentRunsQuery(enabled: MaybeRefOrGetter<boolean> = true) {
   return useQuery({
     queryKey: controlPlaneQueryKeys.agentRuns,
@@ -1176,8 +1190,20 @@ export function updateAgentDefinition(agentId: string, nodeId: string, input: Ag
   return sharedControlPlaneClient.agents.update(agentId, nodeId, input);
 }
 
-export function deleteAgentDefinition(agentId: string, nodeId: string) {
-  return sharedControlPlaneClient.agents.remove(agentId, nodeId);
+export function deleteAgentDefinition(agentId: string, nodeId: string, options: { referencingOrchestrations?: "keep" | "delete" } = {}) {
+  return sharedControlPlaneClient.agents.remove(agentId, nodeId, options);
+}
+
+export function createAgentOrchestration(nodeId: string, input: AgentOrchestrationCreateInput) {
+  return sharedControlPlaneClient.agents.createOrchestration(nodeId, input);
+}
+
+export function updateAgentOrchestration(orchestrationId: string, nodeId: string, input: AgentOrchestrationUpdateInput) {
+  return sharedControlPlaneClient.agents.updateOrchestration(orchestrationId, nodeId, input);
+}
+
+export function deleteAgentOrchestration(orchestrationId: string, nodeId: string) {
+  return sharedControlPlaneClient.agents.removeOrchestration(orchestrationId, nodeId);
 }
 
 export function cancelAgentRun(runId: string, nodeId: string, expectedRevision?: number) {

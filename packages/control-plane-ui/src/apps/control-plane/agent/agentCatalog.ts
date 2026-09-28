@@ -1,12 +1,15 @@
 import type { AgentDefinition } from "@task-handoff/protocol/agent-definitions";
+import type { AgentOrchestration } from "@task-handoff/protocol/agent-orchestrations";
+import { agentOrchestrationEntryAgentIds, defaultAgentOrchestrationOwnerAgentId } from "@task-handoff/protocol/agent-orchestrations";
 import type { AgentRun } from "@task-handoff/protocol/agent-runs";
 import type { StoryAgentEntrySet } from "@task-handoff/protocol/story-agent-authorization";
 import { controlPlaneAgentCapabilities, controlPlaneSupportsAgentExecutionPolicy } from "@task-handoff/control-plane-client";
 import type { InstanceBoardItem, Node, NodeLocalFolder } from "../../../api/types";
-import type { AgentCatalog, AgentCatalogAgent, AgentCatalogNode, AgentBlockedCode, AgentCatalogMember, AgentCatalogMemberRow, AgentEditorDraft } from "./agentCatalogTypes";
+import type { AgentCatalog, AgentCatalogAgent, AgentCatalogNode, AgentCatalogOrchestration, AgentBlockedCode, AgentCatalogMember, AgentCatalogMemberRow, AgentEditorDraft } from "./agentCatalogTypes";
 
 export type AgentCatalogDefinition = { nodeId: string; agent: AgentDefinition };
 export type AgentCatalogRunSnapshot = { nodeId: string; run: AgentRun };
+export type AgentCatalogOrchestrationSnapshot = { nodeId: string; orchestration: AgentOrchestration };
 export type AgentCatalogStoryEntries = { nodeId: string; storyLabel: string; entrySet: StoryAgentEntrySet };
 
 /** Agent/Run wire ids are Node-local; UI selection and keyed rendering use this aggregate identity. */
@@ -17,6 +20,7 @@ export function agentCatalogKey(nodeId: string, objectId: string) {
 export type AgentCatalogInput = {
   nodes: Node[];
   definitions: AgentCatalogDefinition[];
+  orchestrations?: AgentCatalogOrchestrationSnapshot[];
   runs?: AgentCatalogRunSnapshot[];
   storyEntries?: AgentCatalogStoryEntries[];
   instances: InstanceBoardItem[];
@@ -62,7 +66,6 @@ export function buildAgentCatalog(input: AgentCatalogInput): AgentCatalog {
       nodeOnline: node?.status === "online",
       instance,
       agent,
-      definitionIds: definitionIdsByNode.get(nodeId) ?? new Set(),
     });
     return {
       key: agentCatalogKey(nodeId, agent.id),
@@ -83,12 +86,40 @@ export function buildAgentCatalog(input: AgentCatalogInput): AgentCatalog {
       permissionMode: agent.permissionMode || "",
       reasoning: agent.reasoningEffort || "",
       executionPolicy: agent.executionPolicy,
-      callableAgentIds: [...agent.callableAgentIds],
       appendedPrompt: agent.appendedPrompt,
       entryStoryLabels: entryStoryLabels.get(agentCatalogKey(nodeId, agent.id)) ?? [],
       runsSupported: capability?.runs === true,
       manualRunsSupported: capability?.manualRuns === true,
       executable: !blockedCode,
+      blockedCode,
+    };
+  });
+
+  const orchestrations = (input.orchestrations ?? []).map<AgentCatalogOrchestration>(({ nodeId, orchestration }) => {
+    const capability = capabilities.get(nodeId);
+    const node = input.nodes.find((candidate) => candidate.id === nodeId);
+    const definitionIds = definitionIdsByNode.get(nodeId) ?? new Set<string>();
+    const missingAgentIds = orchestration.agentIds.filter((agentId) => !definitionIds.has(agentId));
+    const ownerAgentId = defaultAgentOrchestrationOwnerAgentId(orchestration.id);
+    const editable = capability?.orchestrations === true && node?.status === "online";
+    const blockedCode: AgentBlockedCode | undefined = missingAgentIds.length ? "missing-reference" : undefined;
+    return {
+      key: agentCatalogKey(nodeId, orchestration.id),
+      id: orchestration.id,
+      name: orchestration.name,
+      nodeId,
+      nodeLabel: labels.get(nodeId) || nodeId,
+      revision: orchestration.revision,
+      isDefault: Boolean(ownerAgentId),
+      ownerAgentId,
+      agentIds: [...orchestration.agentIds],
+      edges: [...orchestration.edges],
+      entryAgentIds: agentOrchestrationEntryAgentIds(orchestration),
+      missingAgentIds,
+      editable,
+      runsSupported: capability?.runs === true,
+      manualRunsSupported: capability?.manualRuns === true,
+      executable: editable && !blockedCode,
       blockedCode,
     };
   });
@@ -105,6 +136,7 @@ export function buildAgentCatalog(input: AgentCatalogInput): AgentCatalog {
       ? run.provenance.authorizationSubject?.subjectId ?? ""
       : run.provenance.initiatingAiSessionId,
     initiatorKind: (run.provenance.source === "control-plane" ? "control-plane" : "story-session") as "control-plane" | "story-session",
+    orchestrationId: run.orchestrationId,
     revision: run.revision,
     resultDeliveryStatus: run.resultDelivery?.status,
     resultDeliveryError: run.resultDelivery?.error?.message,
@@ -124,7 +156,7 @@ export function buildAgentCatalog(input: AgentCatalogInput): AgentCatalog {
       resultSummary: member.result?.text ?? member.error?.message ?? "",
     })),
   }));
-  return { nodes, agents, runs };
+  return { nodes, agents, orchestrations, runs };
 }
 
 function durationLabel(startedAt: string, endedAt: string) {
@@ -143,14 +175,12 @@ function agentBlockedCode(input: {
   nodeOnline: boolean;
   instance: InstanceBoardItem | undefined;
   agent: AgentDefinition;
-  definitionIds: Set<string>;
 }): AgentBlockedCode | undefined {
   if (!input.available) return "definitions-unsupported";
   if (!input.nodeOnline) return "node-offline";
   if (!input.instance) return "instance-missing";
   if (input.instance.runtime?.type === "local" || input.instance.runtime?.kind === "local") return "local-runtime";
   if (input.instance.connectionStatus === "offline") return "instance-offline";
-  if (input.agent.callableAgentIds.some((id) => !input.definitionIds.has(id))) return "missing-reference";
   if (!controlPlaneSupportsAgentExecutionPolicy(input.capability?.execution, input.agent.executionPolicy, {
     runtime: "docker",
     providerId: input.agent.providerId,
@@ -162,6 +192,15 @@ export function agentCatalogGroups(catalog: AgentCatalog) {
   return catalog.nodes
     .map((node) => ({ nodeId: node.id, nodeLabel: node.label, agents: catalog.agents.filter((agent) => agent.nodeId === node.id) }))
     .filter((group) => group.agents.length > 0);
+}
+
+/**
+ * 手动运行是否可用：节点在线、定义未被阻塞，且该 Node 同时发布运行与手动运行能力。
+ * 列表行、画布节点与详情页按钮共用这一个判定，避免各视图各自推导门控条件。
+ */
+export function agentManualRunAvailable(agent?: AgentCatalogAgent, runnableOrchestrations: AgentCatalogOrchestration[] = []) {
+  return Boolean(agent?.nodeOnline && agent.executable && agent.runsSupported && agent.manualRunsSupported)
+    && runnableOrchestrations.length > 0;
 }
 
 export function emptyAgentDraft(): AgentEditorDraft {
@@ -179,7 +218,6 @@ export function emptyAgentDraft(): AgentEditorDraft {
     reasoningEffort: "",
     permissionMode: "",
     appendedPrompt: "",
-    callableAgentIds: [],
   };
 }
 
@@ -198,12 +236,28 @@ export function agentDraftFromDefinition(agent: AgentCatalogAgent): AgentEditorD
     reasoningEffort: agent.reasoning,
     permissionMode: agent.permissionMode,
     appendedPrompt: agent.appendedPrompt,
-    callableAgentIds: [...agent.callableAgentIds],
   };
 }
 
-export function callableAgentCandidates(agents: AgentCatalogAgent[], nodeId: string, excludeAgentId: string) {
-  return agents.filter((agent) => agent.nodeId === nodeId && agent.id !== excludeAgentId);
+/** 关系图的可选成员：默认只列同一 Node 上的 Agent，已验证的关系可以跨 Node 保留。 */
+export function orchestrationAgentCandidates(agents: AgentCatalogAgent[], nodeId: string) {
+  return agents.filter((agent) => agent.nodeId === nodeId);
+}
+
+/** 该 Agent 所在的编排：Run 可以把它作为入口成员，画布据此列出「参与的编排」。 */
+export function agentParticipatingOrchestrations(orchestrations: AgentCatalogOrchestration[], agent: AgentCatalogAgent) {
+  return orchestrations.filter((orchestration) => orchestration.nodeId === agent.nodeId && orchestration.agentIds.includes(agent.id));
+}
+
+/** 以该 Agent 为顶级节点的编排：新增编排默认从这里长出，入口换成其它 Agent 后自然移出。 */
+export function agentEntryOrchestrations(orchestrations: AgentCatalogOrchestration[], agent: AgentCatalogAgent) {
+  return orchestrations.filter((orchestration) => orchestration.nodeId === agent.nodeId && orchestration.entryAgentIds.includes(agent.id));
+}
+
+/** 该 Agent 可作为入口发起的编排：默认编排始终包含所属 Agent。 */
+export function agentRunOrchestrations(orchestrations: AgentCatalogOrchestration[], agent: AgentCatalogAgent) {
+  return agentParticipatingOrchestrations(orchestrations, agent)
+    .filter((orchestration) => orchestration.manualRunsSupported && orchestration.executable);
 }
 
 /**

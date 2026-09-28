@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { StoryToolPolicyService } from "../src/node-agent/stories/tool-policy-service.ts";
-import { AgentDefinitionService } from "../src/node-agent/agents/service.ts";
+import { AgentOrchestrationService } from "../src/node-agent/agents/orchestration-service.ts";
+import { defaultAgentOrchestrationId, agentOrchestrationHasEdge } from "@task-handoff/protocol/agent-orchestrations";
 import { createStoryDatabaseFixture } from "./story-database-fixture.ts";
 
 const definitionFields = {
@@ -12,8 +13,19 @@ const definitionFields = {
   cwdFolderId: "folder_one",
   providerId: "codex",
   executionPolicy: { workspaceMaterializer: "overlay-copy-on-write", processSandbox: "instance" },
-  callableAgentIds: [],
 } as const;
+
+/** 定义与默认编排必须成对存在：测试直接走仓储时用这个 helper 复刻服务层的同一事务不变量。 */
+function seedAgent(
+  fixture: Awaited<ReturnType<typeof createStoryDatabaseFixture>>,
+  timestamp: string,
+  fields: { id: string } & Record<string, unknown>,
+) {
+  const { id, ...content } = fields;
+  const definition = fixture.repository.agents.definitions.insert({ id, ...definitionFields, ...content } as never, timestamp);
+  fixture.repository.agents.orchestrations.insert({ id: defaultAgentOrchestrationId(id), name: definition.name, agentIds: [id], edges: [] }, timestamp);
+  return definition;
+}
 
 test("Story tool policy defaults, persists, resolves, and filters archived mutations", async () => {
   const fixture = await createStoryDatabaseFixture("task-handoff-story-tool-policy-");
@@ -33,7 +45,7 @@ test("Story tool policy defaults, persists, resolves, and filters archived mutat
     assert.match(initial.revision, /^[a-f0-9]{64}$/);
     assert.deepEqual((await service.resolve("story_policy")).agentInvocation, {
       enabledTools: [],
-      allowedAgentIds: [],
+      allowedTargets: [],
     });
 
     const updated = await service.update("story_policy", { content: true, actions: true, automations: true, aiSessions: true });
@@ -74,31 +86,39 @@ test("Story policy resolves only available entry Agents and isolates Stories", a
         nextDocumentSequence: 1,
       });
     }
-    const first = fixture.repository.agents.definitions.insert({ id: "agent_first", ...definitionFields }, timestamp);
-    const second = fixture.repository.agents.definitions.insert({ id: "agent_second", ...definitionFields, name: "Second" }, timestamp);
-    fixture.repository.agents.storyEntries.replace("story_a", [second.id, first.id]);
+    const first = seedAgent(fixture, timestamp, { id: "agent_first" });
+    const second = seedAgent(fixture, timestamp, { id: "agent_second", name: "Second" });
+    fixture.repository.agents.storyEntries.replace("story_a", [
+      { agentId: second.id, orchestrationId: defaultAgentOrchestrationId(second.id) },
+      { agentId: first.id, orchestrationId: defaultAgentOrchestrationId(first.id) },
+    ]);
     const service = new StoryToolPolicyService(fixture.repository);
 
     const resolved = await service.resolve("story_a");
     assert.deepEqual(resolved.agentInvocation, {
       enabledTools: ["agent_run"],
-      allowedAgentIds: [first.id, second.id],
+      allowedTargets: [
+        { agentId: first.id, orchestrationId: defaultAgentOrchestrationId(first.id) },
+        { agentId: second.id, orchestrationId: defaultAgentOrchestrationId(second.id) },
+      ],
     });
     assert.deepEqual((await service.resolve("story_b")).agentInvocation, {
       enabledTools: [],
-      allowedAgentIds: [],
+      allowedTargets: [],
     });
 
     fixture.repository.agents.definitions.delete(second.id);
     const afterDelete = await service.resolve("story_a");
-    assert.deepEqual(afterDelete.agentInvocation.allowedAgentIds, [first.id]);
+    assert.deepEqual(afterDelete.agentInvocation.allowedTargets, [
+      { agentId: first.id, orchestrationId: defaultAgentOrchestrationId(first.id) },
+    ]);
     assert.notEqual(afterDelete.revision, resolved.revision);
   } finally {
     await fixture.close();
   }
 });
 
-test("Story entry authorization does not restrict an entry Agent's callable relation", async () => {
+test("Story entry authorization never widens beyond the bound orchestration's edges", async () => {
   const fixture = await createStoryDatabaseFixture("task-handoff-story-agent-callable-policy-");
   try {
     const timestamp = "2026-09-26T00:00:00.000Z";
@@ -110,22 +130,27 @@ test("Story entry authorization does not restrict an entry Agent's callable rela
       maxIdleAiSessions: 5,
       nextDocumentSequence: 1,
     });
-    const downstream = fixture.repository.agents.definitions.insert({
-      id: "agent_downstream",
-      ...definitionFields,
-      name: "Downstream",
-    }, timestamp);
-    const entry = fixture.repository.agents.definitions.insert({
-      id: "agent_entry",
-      ...definitionFields,
-      callableAgentIds: [downstream.id],
-    }, timestamp);
-    fixture.repository.agents.storyEntries.replace("story_entry_only", [entry.id]);
+    const downstream = seedAgent(fixture, timestamp, { id: "agent_downstream", name: "Downstream" });
+    const entry = seedAgent(fixture, timestamp, { id: "agent_entry" });
+    const orchestrations = new AgentOrchestrationService(fixture.repository.agents.orchestrations, fixture.repository.agents.definitions);
+    const entryOrchestrationId = defaultAgentOrchestrationId(entry.id);
+    orchestrations.update(entryOrchestrationId, {
+      expectedRevision: orchestrations.get(entryOrchestrationId).revision,
+      agentIds: [entry.id, downstream.id],
+      edges: [{ fromAgentId: entry.id, toAgentId: downstream.id }],
+    });
+    fixture.repository.agents.storyEntries.replace("story_entry_only", [
+      { agentId: entry.id, orchestrationId: entryOrchestrationId },
+    ]);
 
     const storyPolicy = new StoryToolPolicyService(fixture.repository);
-    const definitions = new AgentDefinitionService({} as never, fixture.repository.agents.definitions);
-    assert.deepEqual((await storyPolicy.resolve("story_entry_only")).agentInvocation.allowedAgentIds, [entry.id]);
-    assert.deepEqual(definitions.resolveInvocationTools(entry.id).allowedAgentIds, [downstream.id]);
+    // Story 白名单只授权入口本身；下游调用只由 Run 绑定编排的连边决定，两者互不扩张。
+    assert.deepEqual((await storyPolicy.resolve("story_entry_only")).agentInvocation.allowedTargets, [
+      { agentId: entry.id, orchestrationId: entryOrchestrationId },
+    ]);
+    const orchestration = orchestrations.get(entryOrchestrationId);
+    assert.equal(agentOrchestrationHasEdge(orchestration, entry.id, downstream.id), true);
+    assert.equal(agentOrchestrationHasEdge(orchestration, downstream.id, entry.id), false);
   } finally {
     await fixture.close();
   }

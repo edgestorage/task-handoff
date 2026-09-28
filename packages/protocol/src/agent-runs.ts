@@ -4,6 +4,7 @@ import {
   AgentDefinitionRevisionSchema,
   AgentExecutionPolicySchema,
 } from "./agent-definitions.ts";
+import { AgentOrchestrationIdSchema, defaultAgentOrchestrationId } from "./agent-orchestrations.ts";
 
 const StableIdSchema = z.string().trim().min(1).max(120).regex(/^[a-zA-Z0-9][a-zA-Z0-9_.:-]*$/);
 export const AgentRunIdSchema = StableIdSchema;
@@ -172,6 +173,8 @@ export const AgentRunSchema = z.object({
   status: AgentRunStatusSchema,
   input: AgentRunInputSchema.optional(),
   provenance: AgentRunProvenanceSchema,
+  /** Run 绑定的编排：入口成员与成员调用授权都从这张编排解析。 */
+  orchestrationId: AgentOrchestrationIdSchema,
   rootMemberId: AgentRunMemberIdSchema,
   budget: AgentRunBudgetSchema,
   result: AgentRunResultSchema.optional(),
@@ -189,7 +192,9 @@ export type AgentRun = z.infer<typeof AgentRunSchema>;
 
 export const AgentRunCreateInputSchema = z.object({
   clientRequestId: StableIdSchema,
-  agentId: AgentDefinitionIdSchema,
+  orchestrationId: AgentOrchestrationIdSchema,
+  /** 入口成员；缺省时使用编排唯一的顶级节点，多顶级节点必须显式指定。 */
+  entryAgentId: AgentDefinitionIdSchema.optional(),
   input: AgentRunInputSchema,
   provenance: AgentRunProvenanceSchema,
   budget: AgentRunBudgetSchema.optional(),
@@ -197,7 +202,8 @@ export const AgentRunCreateInputSchema = z.object({
 /** Control Plane UI input. Provenance is derived from the authenticated request, never caller supplied. */
 export const AgentRunManualCreateInputSchema = z.object({
   clientRequestId: StableIdSchema,
-  agentId: AgentDefinitionIdSchema,
+  orchestrationId: AgentOrchestrationIdSchema,
+  entryAgentId: AgentDefinitionIdSchema.optional(),
   input: AgentRunInputSchema,
   budget: AgentRunBudgetSchema.optional(),
 }).strict();
@@ -214,6 +220,10 @@ export const AGENT_RUN_SERVICE_ERROR_CODES = [
   "AGENT_RUN_IDEMPOTENCY_CONFLICT",
   "AGENT_RUN_REVISION_CONFLICT",
   "AGENT_RUN_INITIATING_INSTANCE_UNKNOWN",
+  "AGENT_RUN_ORCHESTRATION_UNKNOWN",
+  "AGENT_RUN_ENTRY_REQUIRED",
+  "AGENT_RUN_ENTRY_INVALID",
+  "AGENT_RUN_INVOCATION_FORBIDDEN",
   "AGENT_RUN_EXECUTION_UNSUPPORTED",
   "AGENT_RUN_ALREADY_TERMINAL",
 ] as const;
@@ -253,6 +263,8 @@ const MemberConsumerSchema = AgentRunMemberSchema.strip().extend({
 });
 const TimelineConsumerSchema = AgentRunTimelineEntrySchema.strip();
 const RunConsumerSchema = AgentRunSchema.strip().extend({
+  // Compatibility: runs persisted before orchestration binding normalize to the root Agent's default orchestration.
+  orchestrationId: AgentOrchestrationIdSchema.optional(),
   // Compatibility for v0.0.32 and Agent Run records created before input persistence.
   input: AgentRunInputSchema.strip().optional(),
   provenance: z.union([
@@ -273,6 +285,13 @@ const RunConsumerSchema = AgentRunSchema.strip().extend({
   sharedSpace: AgentRunSharedSpaceDiagnosticSchema.strip().optional(),
   members: z.array(MemberConsumerSchema).optional(),
   timeline: z.array(TimelineConsumerSchema).optional(),
+}).transform((value) => {
+  const orchestrationId = value.orchestrationId ?? (() => {
+    const root = (value.members ?? []).find((member) => member.memberId === value.rootMemberId);
+    if (!root) throw new Error("An Agent Run without an orchestration binding requires its root member to normalize.");
+    return defaultAgentOrchestrationId(root.agentId);
+  })();
+  return { ...value, orchestrationId };
 });
 const RunChangedEventConsumerSchema = z.object({
   runId: AgentRunIdSchema,

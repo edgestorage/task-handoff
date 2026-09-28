@@ -36,6 +36,7 @@ async function fixture() {
     .run("instance_one", "node_one", "runtime_one", timestamp, timestamp);
   const run = database.repository.agents.runs.create({
     clientRequestId: "request_one",
+    orchestrationId: "default:agent_one",
     input: { prompt: "Prepare the workspace" },
     provenance: { initiatingInstanceId: "instance_one", initiatingAiSessionId: "session_one", storyId: "story_one" },
     budget: { maxMembers: 4, maxDepth: 2, maxConcurrency: 2 },

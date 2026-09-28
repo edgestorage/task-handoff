@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { AgentDefinitionService } from "../src/node-agent/agents/service.ts";
+import { AgentOrchestrationService } from "../src/node-agent/agents/orchestration-service.ts";
 import { AgentRunCoordinator } from "../src/node-agent/agents/run-coordinator.ts";
 import { AgentRunService } from "../src/node-agent/agents/run-service.ts";
 import { WorkspaceMaterializerRegistry, agentRunWorkspaceLayout } from "../src/node-agent/agents/workspace-materializer.ts";
+import { defaultAgentOrchestrationId } from "@task-handoff/protocol/agent-orchestrations";
 import { createStoryDatabaseFixture } from "./story-database-fixture.ts";
 
 async function waitUntil(predicate: () => boolean, diagnostic: () => unknown, timeoutMs = 2_000) {
@@ -42,7 +44,8 @@ function stateFixture() {
 async function coordinatorFixture(status: "completed" | "running", cleanupFailures = 0, attach = true) {
   const database = await createStoryDatabaseFixture("task-handoff-agent-run-coordinator-");
   const state = stateFixture();
-  const definitions = new AgentDefinitionService(state as never, database.repository.agents.definitions);
+  const orchestrations = new AgentOrchestrationService(database.repository.agents.orchestrations, database.repository.agents.definitions);
+  const definitions = new AgentDefinitionService(state as never, database.repository.agents.definitions, orchestrations);
   const definition = definitions.create({
     name: "Reviewer",
     appendedPrompt: "Review carefully",
@@ -50,7 +53,7 @@ async function coordinatorFixture(status: "completed" | "running", cleanupFailur
     cwdFolderId: "folder_one",
     providerId: "codex",
   });
-  const runs = new AgentRunService(state as never, definitions, database.repository.agents.runs, () => true);
+  const runs = new AgentRunService(state as never, definitions, orchestrations, database.repository.agents.runs, () => true);
   const actions: string[] = [];
   const completedMembers = new Set<string>();
   const materializers = new WorkspaceMaterializerRegistry();
@@ -108,7 +111,6 @@ async function coordinatorFixture(status: "completed" | "running", cleanupFailur
   };
   const coordinator = new AgentRunCoordinator({
     state: state as never,
-    definitions,
     runs,
     materializers,
     sharedSpaces: sharedSpaces as never,
@@ -132,7 +134,7 @@ async function coordinatorFixture(status: "completed" | "running", cleanupFailur
 function createRun(fixture: Awaited<ReturnType<typeof coordinatorFixture>>, clientRequestId: string) {
   return fixture.runs.create({
     clientRequestId,
-    agentId: fixture.definition.id,
+    orchestrationId: defaultAgentOrchestrationId(fixture.definition.id),
     input: { prompt: "Review this change" },
     provenance: { initiatingInstanceId: "instance_one", initiatingAiSessionId: "story_session", storyId: "story_one" },
   });

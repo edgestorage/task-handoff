@@ -50,11 +50,12 @@ export const NodeAgentAgentExecutionCapabilitiesSchema = z.object({
   runs: z.boolean().default(false),
   orchestration: z.object({
     storyEntryAuthorization: z.boolean().default(false),
-    callableRelations: z.boolean().default(false),
+    // 编排对象与其关系图；缺失该字段的节点不支持编排管理，只保留不可编辑的默认编排语义。
+    orchestrations: z.boolean().default(false),
     runMembers: z.boolean().default(false),
     // Compatibility for v0.0.32: existing Story runs stay readable, while direct UI launch fails closed.
     manualRuns: z.boolean().default(false),
-  }).strip().default({ storyEntryAuthorization: false, callableRelations: false, runMembers: false, manualRuns: false }),
+  }).strip().default({ storyEntryAuthorization: false, orchestrations: false, runMembers: false, manualRuns: false }),
   sharedSpace: z.object({
     enabled: z.boolean().default(false),
     runtimes: z.array(z.enum(["docker", "local"])).default([]),
@@ -155,8 +156,8 @@ export function supportsNodeAgentStoryEntryAuthorization(capabilities: unknown) 
   return normalizeNodeAgentCapabilities(capabilities).agentExecution.orchestration.storyEntryAuthorization;
 }
 
-export function supportsNodeAgentCallableRelations(capabilities: unknown) {
-  return normalizeNodeAgentCapabilities(capabilities).agentExecution.orchestration.callableRelations;
+export function supportsNodeAgentOrchestrations(capabilities: unknown) {
+  return normalizeNodeAgentCapabilities(capabilities).agentExecution.orchestration.orchestrations;
 }
 
 export function supportsNodeAgentRunMembers(capabilities: unknown) {

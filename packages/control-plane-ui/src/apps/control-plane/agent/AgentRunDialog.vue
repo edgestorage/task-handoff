@@ -15,6 +15,15 @@
 
       <form class="agent-run-form" @submit.prevent="submit">
         <label class="agent-run-field">
+          <span>{{ t("agents.manualRun.orchestration") }}</span>
+          <ControlPlaneSelect v-model="orchestrationId" :disabled="orchestrations.length <= 1" :placeholder="t('agents.manualRun.orchestrationEmpty')">
+            <ControlPlaneSelectItem v-for="orchestration in orchestrations" :key="orchestration.id" :value="orchestration.id">
+              {{ orchestration.isDefault ? t("agents.graph.orchestrationDefaultLabel", { name: orchestration.name }) : orchestration.name }}
+            </ControlPlaneSelectItem>
+          </ControlPlaneSelect>
+          <small class="agent-run-hint">{{ t("agents.manualRun.orchestrationHint", { name: agentName }) }}</small>
+        </label>
+        <label class="agent-run-field">
           <span>{{ t("agents.manualRun.prompt") }}</span>
           <Textarea
             v-model="prompt"
@@ -42,20 +51,32 @@ import { Play, X } from "@lucide/vue";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import Textarea from "@/components/ui/textarea/Textarea.vue";
+import ControlPlaneSelect from "../shared/ControlPlaneSelect.vue";
+import ControlPlaneSelectItem from "../shared/ControlPlaneSelectItem.vue";
 
 const props = defineProps<{
   open: boolean;
   agentName: string;
   submitting: boolean;
-  submit: (prompt: string) => Promise<void>;
+  /** 该 Agent 可以作为入口成员的编排；Run 绑定其中一张，入口始终是当前 Agent。 */
+  orchestrations: Array<{ id: string; name: string; isDefault: boolean }>;
+  submit: (prompt: string, orchestrationId: string) => Promise<void>;
 }>();
 const emit = defineEmits<{ "update:open": [open: boolean] }>();
 const { t } = useI18n();
 const prompt = ref("");
+const orchestrationId = ref("");
 
 watch(() => props.open, (open) => {
-  if (open) prompt.value = "";
+  if (!open) return;
+  prompt.value = "";
+  orchestrationId.value = defaultOrchestrationId();
 });
+
+// 缺省入口用默认编排：每个 Agent 都恰好有一张，用户仍可显式切换成其它包含该 Agent 的编排。
+function defaultOrchestrationId() {
+  return props.orchestrations.find((orchestration) => orchestration.isDefault)?.id || props.orchestrations[0]?.id || "";
+}
 
 function setOpen(open: boolean) {
   if (!props.submitting) emit("update:open", open);
@@ -63,8 +84,8 @@ function setOpen(open: boolean) {
 
 async function submit() {
   const value = prompt.value.trim();
-  if (!value || props.submitting) return;
-  await props.submit(value);
+  if (!value || !orchestrationId.value || props.submitting) return;
+  await props.submit(value, orchestrationId.value);
 }
 </script>
 
@@ -76,4 +97,5 @@ async function submit() {
 .agent-run-form { display:grid; gap:18px; }
 .agent-run-field { display:grid; gap:7px; color:var(--text-strong); font-size:12px; font-weight:400; }
 .agent-run-prompt { min-height:140px; resize:vertical; font-size:13px; line-height:1.5; }
+.agent-run-hint { color:var(--text-muted); font-size:12px; line-height:1.5; }
 </style>

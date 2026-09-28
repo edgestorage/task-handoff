@@ -469,7 +469,9 @@ function openFiles() {
 .repository-review-tree-empty { color: var(--text-muted); padding: 18px 12px; font-size: 12px; text-align: center; }
 .repository-review-content { min-width: 0; min-height: 0; grid-row: 2; }
 .repository-review-content :deep([data-task-handoff-scroll-viewport]) { scroll-padding-top: 13px; }
-.repository-review-content-viewport { width: 100%; min-width: 0; min-height: 100%; }
+/* The Reka viewport wraps the slot in an auto-height block; stretch it so `.repository-review-empty` can center in the visible area. */
+.repository-review-content :deep([data-task-handoff-scroll-viewport] > div) { display: flex; width: 100%; min-width: 0 !important; min-height: 100%; flex-direction: column; }
+.repository-review-content-viewport { display: flex; width: 100%; min-width: 0; min-height: 0; flex: 1 1 auto; flex-direction: column; }
 .repository-review-virtual-list { position: relative; width: calc(100% - 26px); min-width: 0; margin: 0 13px; }
 /* Rows are offset with `top`, not `transform`: a transformed row makes Chromium offset descendant sticky headers by the scroll position. */
 .repository-review-virtual-row { position: absolute; top: 0; left: 0; width: 100%; }

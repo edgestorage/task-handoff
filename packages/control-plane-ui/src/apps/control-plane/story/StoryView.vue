@@ -391,8 +391,8 @@
   />
 
   <Dialog v-model:open="editorOpen">
-    <DialogContent class="story-editor-dialog"><DialogHeader class="story-dialog-header"><div><DialogTitle>{{ t(editing ? "stories.editor.editTitle" : "stories.editor.newTitle") }}</DialogTitle><DialogDescription>{{ t("stories.editor.description") }}</DialogDescription></div><DialogClose as-child><button type="button" class="story-dialog-close" :aria-label="t('stories.close')"><X :size="16" /></button></DialogClose></DialogHeader><div class="story-editor-fields"><label>{{ t("stories.editor.title") }}<Input v-model="draftTitle" :placeholder="t('stories.editor.titlePlaceholder')" /></label><label>{{ t("stories.editor.descriptionLabel") }}<Textarea v-model="draftDescription" :placeholder="t('stories.editor.descriptionPlaceholder')" /></label><label>{{ t("stories.editor.ownerNode") }}<ControlPlaneSelect v-model="draftNodeId" :disabled="editing"><ControlPlaneSelectItem v-for="node in nodes.filter((candidate) => candidate.status === 'online')" :key="node.id" :value="node.id">{{ node.name }}</ControlPlaneSelectItem></ControlPlaneSelect></label><label>{{ t("stories.editor.maxIdleAiSessions") }}<Input v-model.number="draftMaxIdleAiSessions" type="number" :min="STORY_MIN_IDLE_AI_SESSIONS" :max="STORY_MAX_IDLE_AI_SESSIONS" /></label>
-      <fieldset v-if="editing" class="story-agent-tool-settings" :disabled="saving || agentToolSettingsState !== 'ready'">
+    <DialogContent class="story-editor-dialog"><DialogHeader class="story-dialog-header"><div><DialogTitle>{{ t(editing ? "stories.editor.editTitle" : "stories.editor.newTitle") }}</DialogTitle><DialogDescription>{{ t("stories.editor.description") }}</DialogDescription></div><DialogClose as-child><button type="button" class="story-dialog-close" :aria-label="t('stories.close')"><X :size="16" /></button></DialogClose></DialogHeader><ScrollArea class="story-editor-scroll" :horizontal="false"><div class="story-editor-fields"><label>{{ t("stories.editor.title") }}<Input v-model="draftTitle" :placeholder="t('stories.editor.titlePlaceholder')" /></label><label>{{ t("stories.editor.descriptionLabel") }}<Textarea v-model="draftDescription" :placeholder="t('stories.editor.descriptionPlaceholder')" /></label><label>{{ t("stories.editor.ownerNode") }}<ControlPlaneSelect v-model="draftNodeId" :disabled="editing"><ControlPlaneSelectItem v-for="node in nodes.filter((candidate) => candidate.status === 'online')" :key="node.id" :value="node.id">{{ node.name }}</ControlPlaneSelectItem></ControlPlaneSelect></label><label>{{ t("stories.editor.maxIdleAiSessions") }}<Input v-model.number="draftMaxIdleAiSessions" type="number" :min="STORY_MIN_IDLE_AI_SESSIONS" :max="STORY_MAX_IDLE_AI_SESSIONS" /></label>
+      <fieldset v-if="agentToolSettingsState !== 'hidden'" class="story-agent-tool-settings" :disabled="saving || agentToolSettingsState !== 'ready'">
         <legend>{{ t("stories.editor.agentTools") }}</legend>
         <div v-if="agentToolSettingsState === 'loading'" class="story-agent-tool-state" role="status">{{ t("stories.editor.agentToolsLoading") }}</div>
         <div v-else-if="agentToolSettingsState === 'unsupported'" class="story-agent-tool-state">{{ t("stories.editor.agentToolsUnsupported") }}</div>
@@ -404,7 +404,7 @@
           <label class="story-agent-tool-option"><Checkbox :model-value="draftAgentToolPolicy.aiSessions" @update:model-value="draftAgentToolPolicy.aiSessions = $event === true" /><span>{{ t("stories.editor.agentToolAiSessions") }}</span></label>
         </template>
       </fieldset>
-      <fieldset v-if="editing && storyAgentEntriesState !== 'hidden'" class="story-agent-tool-settings" :disabled="saving || storyAgentEntriesState !== 'ready'">
+      <fieldset v-if="storyAgentEntriesState !== 'hidden'" class="story-agent-tool-settings" :disabled="saving || storyAgentEntriesState !== 'ready'">
         <legend>{{ t("stories.editor.entryAgents") }}</legend>
         <div v-if="storyAgentEntriesState === 'loading'" class="story-agent-tool-state" role="status">{{ t("stories.editor.entryAgentsLoading") }}</div>
         <div v-else-if="storyAgentEntriesState === 'unsupported'" class="story-agent-tool-state">{{ t("stories.editor.entryAgentsUnsupported") }}</div>
@@ -412,14 +412,27 @@
         <template v-else>
           <p class="story-agent-entry-note">{{ t("stories.editor.entryAgentsScope") }}</p>
           <div v-if="!storyAgentEntryCandidates.length" class="story-agent-tool-state">{{ t("stories.editor.entryAgentsEmpty") }}</div>
-          <label v-for="agent in storyAgentEntryCandidates" :key="agent.id" class="story-agent-tool-option">
-            <Checkbox :model-value="draftStoryAgentIds.includes(agent.id)" @update:model-value="toggleStoryAgentEntry(agent.id, $event === true)" />
-            <span class="story-agent-entry-copy"><span>{{ agent.name }}</span><small v-if="agent.missing"><CircleAlert :size="13" />{{ t("stories.editor.entryAgentMissing", { id: agent.id }) }}</small></span>
-          </label>
+          <div v-for="agent in storyAgentEntryCandidates" :key="agent.id" class="story-agent-entry-row">
+            <label class="story-agent-tool-option">
+              <Checkbox :model-value="draftStoryAgentIds.includes(agent.id)" @update:model-value="toggleStoryAgentEntry(agent.id, $event === true)" />
+              <span class="story-agent-entry-copy"><span>{{ agent.name }}</span><small v-if="agent.missing"><CircleAlert :size="13" />{{ t("stories.editor.entryAgentMissing", { id: agent.id }) }}</small></span>
+            </label>
+            <ControlPlaneSelect
+              v-if="draftStoryAgentIds.includes(agent.id) && storyEntryOrchestrationOptions(agent.id).length > 1"
+              :model-value="draftStoryAgentEntryOrchestrationId(agent.id)"
+              class="story-agent-entry-orchestration"
+              :aria-label="t('stories.editor.entryAgentOrchestration', { name: agent.name })"
+              @update:model-value="(value: string) => setStoryAgentEntryOrchestration(agent.id, value)"
+            >
+              <ControlPlaneSelectItem v-for="orchestration in storyEntryOrchestrationOptions(agent.id)" :key="orchestration.id" :value="orchestration.id">
+                {{ orchestration.isDefault ? t("agents.graph.orchestrationDefaultLabel", { name: orchestration.name }) : orchestration.name }}
+              </ControlPlaneSelectItem>
+            </ControlPlaneSelect>
+          </div>
         </template>
       </fieldset>
       <div v-if="storyEditorError" class="story-editor-error" role="alert">{{ storyEditorError }}</div>
-    </div><DialogFooter><Button variant="outline" @click="editorOpen = false">{{ t("common.actions.cancel") }}</Button><Button :disabled="!draftTitle.trim() || !draftNodeId || saving" @click="saveStory">{{ saving ? t("stories.editor.saving") : t("common.actions.save") }}</Button></DialogFooter></DialogContent>
+    </div></ScrollArea><DialogFooter><Button variant="outline" @click="editorOpen = false">{{ t("common.actions.cancel") }}</Button><Button :disabled="!draftTitle.trim() || !draftNodeId || saving" @click="saveStory">{{ saving ? t("stories.editor.saving") : t("common.actions.save") }}</Button></DialogFooter></DialogContent>
   </Dialog>
   <Dialog v-model:open="assignSessionOpen"><DialogContent class="story-editor-dialog"><DialogHeader class="story-dialog-header"><div><DialogTitle>{{ t("stories.assign.title") }}</DialogTitle><DialogDescription>{{ t("stories.assign.description") }}</DialogDescription></div><DialogClose as-child><button type="button" class="story-dialog-close" :aria-label="t('stories.close')"><X :size="16" /></button></DialogClose></DialogHeader><div class="story-editor-fields"><label>{{ t("stories.assign.session") }}<ControlPlaneSelect v-model="assignSessionId"><ControlPlaneSelectItem v-for="entry in availableSessions" :key="`${entry.instance.id}:${entry.session.id}`" :value="`${entry.instance.id}:${entry.session.id}`">{{ entry.session.title || entry.session.userPrompt || entry.session.id }} · {{ entry.instance.name }}</ControlPlaneSelectItem></ControlPlaneSelect></label></div><DialogFooter><Button variant="outline" @click="assignSessionOpen = false">{{ t("common.actions.cancel") }}</Button><Button :disabled="!assignSessionId || assigningSession" @click="assignExistingSession">{{ assigningSession ? t("stories.assign.adding") : t("stories.assign.submit") }}</Button></DialogFooter></DialogContent></Dialog>
   <Dialog :open="actionEditorOpen" @update:open="handleActionEditorOpenChange">
@@ -533,6 +546,8 @@ import { isStoryOnline, isStorySessionOnline } from "./storyAvailability";
 import { useAiSessionTriggers } from "../useAiSessionTriggers";
 import { allNodesVisible, controlPlaneAgentCapabilities, nodeIsVisible, type NodeVisibilityFilter } from "@task-handoff/control-plane-client";
 import type { AgentDefinition } from "@task-handoff/protocol/agent-definitions";
+import { defaultAgentOrchestrationId, isDefaultAgentOrchestrationId } from "@task-handoff/protocol/agent-orchestrations";
+import type { StoryAgentEntrySet } from "@task-handoff/protocol/story-agent-authorization";
 import { storySelectionKey, type StorySelection } from "./storySelection";
 import type { HeaderDensity } from "../useWorkbenchLayoutPreferences";
 
@@ -897,15 +912,21 @@ const previewText = ref(""); const previewLoading = ref(false); const previewErr
 const editorOpen = ref(false); const editing = ref(false); const draftTitle = ref(""); const draftDescription = ref(""); const draftNodeId = ref(""); const draftMaxIdleAiSessions = ref(STORY_DEFAULT_MAX_IDLE_AI_SESSIONS); const saving = ref(false);
 const draftAgentToolPolicy = ref<StoryAgentToolPolicy>({ ...DEFAULT_STORY_AGENT_TOOL_POLICY });
 const savedAgentToolPolicy = ref<StoryAgentToolPolicy>({ ...DEFAULT_STORY_AGENT_TOOL_POLICY });
-const agentToolSettingsState = ref<"hidden" | "loading" | "ready" | "unsupported" | "unavailable">("hidden");
+type StorySettingsState = "hidden" | "loading" | "ready" | "unsupported" | "unavailable";
+const agentToolSettingsState = ref<StorySettingsState>("hidden");
 const agentToolSettingsError = ref("");
-const storyAgentEntriesState = ref<"hidden" | "loading" | "ready" | "unsupported" | "unavailable">("hidden");
+const storyAgentEntriesState = ref<StorySettingsState>("hidden");
 const storyAgentEntriesError = ref("");
 const storyAgentEntryRevision = ref("");
 const storyAgentDefinitions = ref<AgentDefinition[]>([]);
-const draftStoryAgentIds = ref<string[]>([]);
-const savedStoryAgentIds = ref<string[]>([]);
+/** Story 入口是 (Agent, 编排) 对；缺省编排由 Agent 派生，UI 只在需要消歧时展示编排选择。 */
+type StoryAgentEntryDraft = { agentId: string; orchestrationId: string };
+const draftStoryAgentEntries = ref<StoryAgentEntryDraft[]>([]);
+const savedStoryAgentEntries = ref<StoryAgentEntryDraft[]>([]);
 const missingStoryAgentIds = ref<string[]>([]);
+const storyAgentOrchestrations = ref<Array<{ id: string; name: string; agentIds: string[]; isDefault: boolean }>>([]);
+const draftStoryAgentIds = computed(() => draftStoryAgentEntries.value.map((entry) => entry.agentId));
+const nodeById = (nodeId: string) => props.nodes.find((node) => node.id === nodeId);
 const storyAgentEntryCandidates = computed(() => {
   const definitions = new Map(storyAgentDefinitions.value.map((agent) => [agent.id, agent]));
   return [
@@ -1408,17 +1429,68 @@ watch([filteredStories, () => props.nodes, () => props.instances], () => {
   const firstOnlineStory = stories.value.find(storyIsOnline);
   selectedResource.value = refreshed || (firstOnlineStory ? { kind: "story", story: firstOnlineStory } : undefined);
 }, { immediate: true });
+function agentToolSettingsStateForNode(ownerNode: Node | undefined, readyState: "ready" | "loading"): StorySettingsState {
+  if (ownerNode?.status !== "online") return "unavailable";
+  return nodeStoryAgentToolCapabilities(nodeAgentCapabilitiesFromPublicNode(ownerNode.capabilities)).policy ? readyState : "unsupported";
+}
+function storyAgentEntriesStateForNode(ownerNode: Node | undefined, readyState: "ready" | "loading"): StorySettingsState {
+  if (!isFeatureEnabled("agentRuns")) return "hidden";
+  if (ownerNode?.status !== "online") return "unavailable";
+  return controlPlaneAgentCapabilities(ownerNode.capabilities).storyEntryAuthorization ? readyState : "unsupported";
+}
 function openCreate() {
   editing.value = false;
   storyEditorError.value = "";
-  agentToolSettingsState.value = "hidden";
-  storyAgentEntriesState.value = "hidden";
+  agentToolSettingsError.value = "";
+  storyAgentEntriesError.value = "";
   draftTitle.value = "";
   draftDescription.value = "";
   draftMaxIdleAiSessions.value = STORY_DEFAULT_MAX_IDLE_AI_SESSIONS;
+  draftAgentToolPolicy.value = { ...DEFAULT_STORY_AGENT_TOOL_POLICY };
+  savedAgentToolPolicy.value = { ...DEFAULT_STORY_AGENT_TOOL_POLICY };
+  storyAgentEntryRevision.value = "";
+  storyAgentDefinitions.value = [];
+  draftStoryAgentEntries.value = [];
+  savedStoryAgentEntries.value = [];
+  missingStoryAgentIds.value = [];
+  storyAgentOrchestrations.value = [];
   const filteredOnlineNode = props.nodes.find((node) => node.status === "online" && nodeIsVisible(props.nodeFilter, node.id));
   draftNodeId.value = filteredOnlineNode?.id || props.nodes.find((node) => node.status === "online")?.id || "";
   editorOpen.value = true;
+}
+// 创建弹窗没有 Story 可以读取，设置以当前选中节点能力和默认策略为初值，保存时再落到新 Story 上。
+watch([draftNodeId, editorOpen, editing], () => {
+  if (!editorOpen.value || editing.value) return;
+  refreshCreateStoryAgentSettings();
+});
+function refreshCreateStoryAgentSettings() {
+  if (editing.value) return;
+  const ownerNode = props.nodes.find((node) => node.id === draftNodeId.value);
+  agentToolSettingsError.value = "";
+  storyAgentEntriesError.value = "";
+  storyAgentEntryRevision.value = "";
+  storyAgentDefinitions.value = [];
+  draftStoryAgentEntries.value = [];
+  savedStoryAgentEntries.value = [];
+  missingStoryAgentIds.value = [];
+  storyAgentOrchestrations.value = [];
+  agentToolSettingsState.value = agentToolSettingsStateForNode(ownerNode, "ready");
+  storyAgentEntriesState.value = storyAgentEntriesStateForNode(ownerNode, "loading");
+  if (storyAgentEntriesState.value === "loading" && ownerNode) void loadCreateStoryAgentEntries(ownerNode.id);
+}
+async function loadCreateStoryAgentEntries(nodeId: string) {
+  try {
+    const definitionAggregate = await sharedControlPlaneClient.agents.list(nodeId);
+    if (editing.value || !editorOpen.value || draftNodeId.value !== nodeId) return;
+    storyAgentDefinitions.value = definitionAggregate.agents
+      .filter((entry) => entry.nodeId === nodeId)
+      .map((entry) => entry.agent);
+    storyAgentEntriesState.value = "ready";
+  } catch (cause) {
+    if (editing.value || !editorOpen.value || draftNodeId.value !== nodeId) return;
+    storyAgentEntriesState.value = "unavailable";
+    storyAgentEntriesError.value = translateApiError(cause, t, t("stories.editor.entryAgentsUnavailable"));
+  }
 }
 async function openEdit() {
   const story = selectedResource.value?.story;
@@ -1435,18 +1507,13 @@ async function openEdit() {
   savedAgentToolPolicy.value = { ...DEFAULT_STORY_AGENT_TOOL_POLICY };
   storyAgentEntryRevision.value = "";
   storyAgentDefinitions.value = [];
-  draftStoryAgentIds.value = [];
-  savedStoryAgentIds.value = [];
+  draftStoryAgentEntries.value = [];
+  savedStoryAgentEntries.value = [];
   missingStoryAgentIds.value = [];
+  storyAgentOrchestrations.value = [];
   const ownerNode = props.nodes.find((node) => node.id === story.ownerNodeId);
-  agentToolSettingsState.value = ownerNode?.status === "online"
-    ? (nodeStoryAgentToolCapabilities(nodeAgentCapabilitiesFromPublicNode(ownerNode.capabilities)).policy ? "loading" : "unsupported")
-    : "unavailable";
-  storyAgentEntriesState.value = !isFeatureEnabled("agentRuns")
-    ? "hidden"
-    : ownerNode?.status === "online"
-      ? (controlPlaneAgentCapabilities(ownerNode.capabilities).storyEntryAuthorization ? "loading" : "unsupported")
-      : "unavailable";
+  agentToolSettingsState.value = agentToolSettingsStateForNode(ownerNode, "loading");
+  storyAgentEntriesState.value = storyAgentEntriesStateForNode(ownerNode, "loading");
   try {
     const settings = await getStoryRetentionSettings(story.id, story.ownerNodeId);
     draftMaxIdleAiSessions.value = settings.maxIdleAiSessions;
@@ -1468,17 +1535,29 @@ async function openEdit() {
   }
   if (storyAgentEntriesState.value === "loading") {
     try {
-      const [entrySet, definitionAggregate] = await Promise.all([
+      const [entrySet, definitionAggregate, orchestrationAggregate] = await Promise.all([
         sharedControlPlaneClient.agents.storyEntries(story.id, story.ownerNodeId),
         sharedControlPlaneClient.agents.list(story.ownerNodeId),
+        controlPlaneAgentCapabilities(nodeById(story.ownerNodeId)?.capabilities).orchestrations
+          ? sharedControlPlaneClient.agents.listOrchestrations(story.ownerNodeId)
+          : Promise.resolve({ orchestrations: [], unavailableNodeIds: [] }),
       ]);
-      const agentIds = entrySet.entries.map((entry) => entry.agentId);
       storyAgentEntryRevision.value = entrySet.revision;
       storyAgentDefinitions.value = definitionAggregate.agents
         .filter((entry) => entry.nodeId === story.ownerNodeId)
         .map((entry) => entry.agent);
-      draftStoryAgentIds.value = [...agentIds];
-      savedStoryAgentIds.value = [...agentIds];
+      storyAgentOrchestrations.value = orchestrationAggregate.orchestrations
+        .filter((entry) => entry.nodeId === story.ownerNodeId)
+        .map((entry) => ({
+          id: entry.orchestration.id,
+          name: entry.orchestration.name,
+          agentIds: entry.orchestration.agentIds,
+          isDefault: isDefaultAgentOrchestrationId(entry.orchestration.id),
+        }))
+        .sort((left, right) => Number(right.isDefault) - Number(left.isDefault) || left.name.localeCompare(right.name));
+      const entries = storyAgentEntriesFrom(entrySet);
+      draftStoryAgentEntries.value = entries;
+      savedStoryAgentEntries.value = entries;
       missingStoryAgentIds.value = entrySet.entries
         .filter((entry) => entry.status === "missing-reference")
         .map((entry) => entry.agentId);
@@ -1490,10 +1569,46 @@ async function openEdit() {
   }
 }
 function toggleStoryAgentEntry(agentId: string, selected: boolean) {
-  const entries = new Set(draftStoryAgentIds.value);
-  if (selected) entries.add(agentId);
-  else entries.delete(agentId);
-  draftStoryAgentIds.value = [...entries];
+  if (selected) {
+    if (draftStoryAgentIds.value.includes(agentId)) return;
+    draftStoryAgentEntries.value = [...draftStoryAgentEntries.value, { agentId, orchestrationId: defaultAgentOrchestrationId(agentId) }];
+    return;
+  }
+  draftStoryAgentEntries.value = draftStoryAgentEntries.value.filter((entry) => entry.agentId !== agentId);
+}
+
+/** 同一 Agent 绑定了多张编排时才需要在这里消歧；默认编排始终存在。 */
+function storyEntryOrchestrationOptions(agentId: string) {
+  const candidates = storyAgentOrchestrations.value.filter((orchestration) => orchestration.agentIds.includes(agentId));
+  if (candidates.some((orchestration) => orchestration.isDefault)) return candidates;
+  return [{ id: defaultAgentOrchestrationId(agentId), name: defaultAgentOrchestrationId(agentId), agentIds: [agentId], isDefault: true }, ...candidates];
+}
+
+function draftStoryAgentEntryOrchestrationId(agentId: string) {
+  return draftStoryAgentEntries.value.find((entry) => entry.agentId === agentId)?.orchestrationId || defaultAgentOrchestrationId(agentId);
+}
+
+function setStoryAgentEntryOrchestration(agentId: string, orchestrationId: string) {
+  draftStoryAgentEntries.value = draftStoryAgentEntries.value.map((entry) => (
+    entry.agentId === agentId ? { ...entry, orchestrationId } : entry
+  ));
+}
+
+/** 提交时省略默认编排，只把显式的非默认绑定写进 wire；读取时统一归一为带编排的对。 */
+function storyAgentEntryInputs() {
+  return draftStoryAgentEntries.value.map((entry) => (
+    entry.orchestrationId === defaultAgentOrchestrationId(entry.agentId)
+      ? { agentId: entry.agentId }
+      : { agentId: entry.agentId, orchestrationId: entry.orchestrationId }
+  ));
+}
+
+function entryPairsFor(entries: StoryAgentEntryDraft[]) {
+  return entries.map((entry) => `${entry.agentId}${"\u001f"}${entry.orchestrationId}`).sort();
+}
+
+function storyAgentEntriesFrom(entrySet: StoryAgentEntrySet): StoryAgentEntryDraft[] {
+  return entrySet.entries.map((entry) => ({ agentId: entry.agentId, orchestrationId: entry.orchestrationId }));
 }
 async function beginStoryTitleEdit(story: Story, event?: MouseEvent) {
   if (savingStoryTitle.value) return;
@@ -1670,50 +1785,89 @@ async function saveStory() {
   const maxIdleAiSessions = Number(draftMaxIdleAiSessions.value);
   saving.value = true;
   storyEditorError.value = "";
+  let createdStory: Story | undefined;
   try {
-    const story = selectedResource.value?.story;
-    const response = await fetch(editing.value && story ? `/api/stories/${encodeURIComponent(story.id)}` : "/api/stories", {
-      method: editing.value ? "PATCH" : "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(editing.value
-        ? { nodeId: draftNodeId.value, input: { title: draftTitle.value.trim(), description: draftDescription.value.trim() || null, maxIdleAiSessions } }
-        : { nodeId: draftNodeId.value, input: { title: draftTitle.value.trim(), description: draftDescription.value.trim() || undefined, maxIdleAiSessions } }),
-    });
-    if (!response.ok) throw new Error((await response.json()).error?.message || t("stories.errors.saveFailed"));
-    const agentToolsChanged = editing.value
-      && story
-      && agentToolSettingsState.value === "ready"
+    const existing = editing.value ? selectedResource.value?.story : undefined;
+    if (editing.value && !existing) throw new Error(t("stories.errors.saveFailed"));
+    let story = existing;
+    if (existing) {
+      story = await sharedControlPlaneClient.stories.update(existing.id, draftNodeId.value, {
+        title: draftTitle.value.trim(),
+        description: draftDescription.value.trim() || null,
+        maxIdleAiSessions,
+      });
+    } else {
+      createdStory = await sharedControlPlaneClient.stories.create(draftNodeId.value, {
+        title: draftTitle.value.trim(),
+        description: draftDescription.value.trim() || undefined,
+        maxIdleAiSessions,
+      });
+      story = createdStory;
+    }
+    const agentToolsChanged = agentToolSettingsState.value === "ready"
       && JSON.stringify(draftAgentToolPolicy.value) !== JSON.stringify(savedAgentToolPolicy.value);
-    if (agentToolsChanged && story) {
+    if (agentToolsChanged) {
       const settings = await sharedControlPlaneClient.stories.updateAgentToolSettings(story.id, story.ownerNodeId, draftAgentToolPolicy.value);
       draftAgentToolPolicy.value = { ...settings.policy };
       savedAgentToolPolicy.value = { ...settings.policy };
       showControlPlaneToast(t("stories.editor.agentToolsSaved"));
     }
-    const storyAgentEntriesChanged = editing.value
-      && story
-      && storyAgentEntriesState.value === "ready"
-      && JSON.stringify([...draftStoryAgentIds.value].sort()) !== JSON.stringify([...savedStoryAgentIds.value].sort());
-    if (storyAgentEntriesChanged && story) {
+    const storyAgentEntriesChanged = storyAgentEntriesState.value === "ready"
+      && JSON.stringify(entryPairsFor(draftStoryAgentEntries.value)) !== JSON.stringify(entryPairsFor(savedStoryAgentEntries.value));
+    if (storyAgentEntriesChanged) {
+      if (!existing) {
+        const entrySet = await sharedControlPlaneClient.agents.storyEntries(story.id, story.ownerNodeId);
+        storyAgentEntryRevision.value = entrySet.revision;
+      }
       const entrySet = await sharedControlPlaneClient.agents.updateStoryEntries(story.id, story.ownerNodeId, {
         expectedRevision: storyAgentEntryRevision.value,
-        agentIds: draftStoryAgentIds.value,
+        entries: storyAgentEntryInputs(),
       });
-      const agentIds = entrySet.entries.map((entry) => entry.agentId);
+      const entries = storyAgentEntriesFrom(entrySet);
       storyAgentEntryRevision.value = entrySet.revision;
-      draftStoryAgentIds.value = [...agentIds];
-      savedStoryAgentIds.value = [...agentIds];
+      draftStoryAgentEntries.value = entries;
+      savedStoryAgentEntries.value = entries;
       missingStoryAgentIds.value = entrySet.entries.filter((entry) => entry.status === "missing-reference").map((entry) => entry.agentId);
       queryClient.setQueryData(controlPlaneQueryKeys.storyAgentEntries(story.ownerNodeId, story.id), entrySet);
       showControlPlaneToast(t("stories.editor.entryAgentsSaved"));
     }
     editorOpen.value = false;
-    await load(draftNodeId.value);
+    await load(story.ownerNodeId);
   } catch (cause) {
-    storyEditorError.value = translateApiError(cause, t, t("stories.errors.saveFailed"));
+    if (!createdStory) {
+      storyEditorError.value = translateApiError(cause, t, t("stories.errors.saveFailed"));
+    } else {
+      // Story 已经创建，保留弹窗并切换为编辑态，重试保存走更新而不是再创建一份。
+      const adopted = await adoptCreatedStory(createdStory);
+      if (adopted) storyEditorError.value = t("stories.errors.settingsApplyFailed");
+      else {
+        editorOpen.value = false;
+        error.value = translateApiError(cause, t, t("stories.errors.saveFailed"));
+      }
+    }
   } finally {
     saving.value = false;
   }
+}
+async function adoptCreatedStory(story: Story) {
+  editing.value = true;
+  draftNodeId.value = story.ownerNodeId;
+  await load(story.ownerNodeId);
+  const refreshed = stories.value.find((item) => item.id === story.id && item.ownerNodeId === story.ownerNodeId);
+  if (!refreshed) return false;
+  selectStory(refreshed);
+  if (selectedResource.value?.story?.id !== story.id) return false;
+  if (storyAgentEntriesState.value !== "ready") return true;
+  try {
+    const entrySet = await sharedControlPlaneClient.agents.storyEntries(story.id, story.ownerNodeId);
+    storyAgentEntryRevision.value = entrySet.revision;
+    savedStoryAgentEntries.value = storyAgentEntriesFrom(entrySet);
+    draftStoryAgentEntries.value = [...savedStoryAgentEntries.value];
+    missingStoryAgentIds.value = entrySet.entries.filter((entry) => entry.status === "missing-reference").map((entry) => entry.agentId);
+  } catch {
+    return false;
+  }
+  return true;
 }
 async function toggleArchive(story: Story = selectedResource.value?.story) { if (!story) return; const action = story.archivedAt ? "restore" : "archive"; const response = await fetch(`/api/stories/${encodeURIComponent(story.id)}/${action}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ nodeId: story.ownerNodeId }) }); if (!response.ok) { error.value = t("stories.errors.updateFailed"); return; } await load(story.ownerNodeId); const refreshed = stories.value.find((item) => item.id === story.id && item.ownerNodeId === story.ownerNodeId); if (refreshed) selectStory(refreshed); }
 function downloadUrl(story: Story, storyPath: string) { return `/api/stories/${encodeURIComponent(story.id)}/content/file?nodeId=${encodeURIComponent(story.ownerNodeId)}&storyPath=${encodeURIComponent(storyPath)}`; }
@@ -1969,13 +2123,14 @@ onBeforeUnmount(() => {
 :global(.story-action-automation-link span),:global(.story-action-automation-link small) { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 :global(.story-action-automation-link span) { font-size:12px; }
 :global(.story-action-automation-link small) { color:var(--text-muted); font-size:12px; }
-:global(.story-editor-dialog.story-action-editor-dialog) { max-width:840px; grid-template-rows:auto minmax(0,1fr) auto; overflow:hidden; }
+:global(.story-editor-dialog.story-action-editor-dialog) { max-width:840px; }
 :global(.story-action-editor-scroll) { min-height:0; }
+.story-editor-scroll { min-height:0; }
 .story-directory > .story-empty { min-height:64px; padding:22px 12px; }
 .story-empty { color:var(--text-muted); font-size:12px; padding:16px; text-align:center; }
 .story-empty-with-action { display:flex; align-items:center; justify-content:center; gap:8px; }
 .story-error { color:var(--status-danger); font-size:12px; }
-.story-editor-fields { display:grid; gap:14px; }
+.story-editor-fields { display:grid; gap:14px; padding-right:8px; }
 .story-editor-fields label { display:grid; gap:6px; color:var(--text-muted); font-size:12px; }
 .story-agent-tool-settings { display:grid; gap:0; min-width:0; border:1px solid var(--line); border-radius:7px; padding:0 12px 4px; }
 .story-agent-tool-settings legend { padding:0 6px; color:var(--text-muted); font-size:12px; font-weight:500; }
@@ -1985,8 +2140,12 @@ onBeforeUnmount(() => {
 .story-agent-entry-note { margin:4px 0 6px; color:var(--text-muted); font-size:12px; line-height:1.5; }
 .story-agent-entry-copy { display:grid; min-width:0; gap:2px; font-weight:400; }
 .story-agent-entry-copy small { display:flex; align-items:center; min-width:0; gap:5px; color:var(--status-warning); font-size:12px; font-weight:400; overflow-wrap:anywhere; }
+.story-agent-entry-row { display:flex; align-items:center; gap:8px; min-width:0; }
+.story-agent-entry-row + .story-agent-entry-row { border-top:1px solid var(--line); }
+.story-agent-entry-row .story-agent-tool-option { flex:1 1 auto; border-top:0 !important; }
+.story-agent-entry-orchestration { width:190px; flex:0 0 auto; margin-right:2px; }
 .story-editor-error { color:var(--danger); padding:0; }
-:global(.story-editor-dialog) { max-width:460px; }
+:global(.story-editor-dialog) { max-width:460px; grid-template-rows:auto minmax(0,1fr) auto; overflow:hidden; }
 .story-history-drawer-drag-region { -webkit-app-region:drag; height:var(--control-plane-titlebar-height); flex:0 0 var(--control-plane-titlebar-height); border-bottom:1px solid var(--line); }
 .story-history-drawer-close { -webkit-app-region:no-drag; position:absolute; top:calc(var(--control-plane-titlebar-height) + 10px); left:-42px; display:grid; width:32px; height:32px; place-items:center; border:1px solid var(--line); border-radius:6px; background:var(--surface-raised); box-shadow:var(--shadow-soft); color:var(--text-muted); cursor:pointer; padding:0; }
 .story-history-drawer-close:hover,.story-history-drawer-close:focus-visible { background:var(--surface-active); color:var(--text-strong); outline:none; }

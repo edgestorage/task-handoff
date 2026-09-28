@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import Fastify from "fastify";
-import { NodeAgentRegistrationClient } from "../../controlled-instance/src/web/node-agent-client.ts";
+import { NodeAgentRegistrationClient } from "@task-handoff/controlled-instance/web/node-agent-client";
 import { registerNodeStoryRoutes } from "../src/node-agent/stories/routes.ts";
 import { StoryAiSessionReadService } from "../src/node-agent/stories/ai-session-read-service.ts";
 import { NodeStoryStore } from "../src/node-agent/stories/store.ts";
 import { StoryToolPolicyService } from "../src/node-agent/stories/tool-policy-service.ts";
+import { defaultAgentOrchestrationId } from "@task-handoff/protocol/agent-orchestrations";
 import { createStoryDatabaseFixture, seedStoryAction } from "./story-database-fixture.ts";
 
 const timestamp = "2026-09-20T00:00:00.000Z";
@@ -38,9 +39,14 @@ async function fixture(options: { deferAgentRunResult?: boolean } = {}) {
     cwdFolderId: "folder_1",
     providerId: "codex",
     executionPolicy: { workspaceMaterializer: "overlay-copy-on-write", processSandbox: "instance" },
-    callableAgentIds: [],
   }, timestamp);
-  database.repository.agents.storyEntries.replace("story_1", ["agent_1"], timestamp);
+  database.repository.agents.orchestrations.insert({
+    id: defaultAgentOrchestrationId("agent_1"),
+    name: "Reviewer",
+    agentIds: ["agent_1"],
+    edges: [],
+  }, timestamp);
+  database.repository.agents.storyEntries.replace("story_1", [{ agentId: "agent_1", orchestrationId: defaultAgentOrchestrationId("agent_1") }], timestamp);
   const caller = session("caller_1");
   const target = session("target_1", { title: "Target session", updatedAt: "2026-09-20T00:01:00.000Z" });
   const instances = [
@@ -213,7 +219,8 @@ test("Agent invocation is session-bound, reauthorized at call time, and rejects 
     assert.deepEqual(result, { runId: "run_1", status: "completed", result: { text: "done", truncated: false } });
     assert.deepEqual(context.agentRunCalls[0], {
       clientRequestId: "agent_tool_call_1",
-      agentId: "agent_1",
+      orchestrationId: defaultAgentOrchestrationId("agent_1"),
+      entryAgentId: "agent_1",
       input: { prompt: "Review this change" },
       provenance: { initiatingInstanceId: "instance_1", initiatingAiSessionId: "caller_1", storyId: "story_1" },
       budget: undefined,
