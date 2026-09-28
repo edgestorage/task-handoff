@@ -29,6 +29,7 @@ import {
   type BuildInfo,
   type ControlledInstance,
   type InstanceResourceMetrics,
+  type NodeRuntime,
 } from "@task-handoff/protocol/control-plane";
 import {
   DOCKER_AGENT_RUN_SHARED_ROOT,
@@ -60,8 +61,9 @@ import { registerNodeModelRoutes } from "./models/routes.ts";
 import type { InstancePrivateModelCatalog } from "./models/private-catalog.ts";
 import { registerNodeGitCredentialRoutes } from "./git-credentials/routes.ts";
 import { registerNodeStoryRoutes } from "./stories/routes.ts";
-import { registerNodeAgentDefinitionRoutes, registerNodeAgentRunRoutes, registerNodeStoryAgentEntryRoutes } from "./agents/routes.ts";
+import { registerNodeAgentDefinitionRoutes, registerNodeAgentOrchestrationRoutes, registerNodeAgentRunRoutes, registerNodeStoryAgentEntryRoutes } from "./agents/routes.ts";
 import { AgentDefinitionService } from "./agents/service.ts";
+import { AgentOrchestrationService } from "./agents/orchestration-service.ts";
 import { AgentRunService } from "./agents/run-service.ts";
 import { AgentRunCoordinator } from "./agents/run-coordinator.ts";
 import { AgentRunMemberSessionClient } from "./agents/member-session-client.ts";
@@ -104,6 +106,7 @@ import { NodeAgentIdentityService } from "./identity/service.ts";
 import { registerNodeAgentIdentityRoutes } from "./identity/routes.ts";
 import { NodeUpdateController, registerNodeUpdateRoutes } from "./node-update-controller.ts";
 import { NodeAgentRecoverySupervisor } from "./recovery-supervisor.ts";
+import { RuntimeAvailabilityMonitor, runtimeAvailabilityIntervalMs } from "./runtime-availability.ts";
 import { connectReverseTunnel } from "./reverse-tunnel/client.ts";
 import { createReverseTunnelManager } from "./reverse-tunnel/manager.ts";
 import {
@@ -144,6 +147,7 @@ declare module "fastify" {
     nodeAgentRestoreManagedInstances?: () => Promise<void>;
     nodeAgentRecoverManagedInstances?: () => Promise<void>;
     nodeAgentStartRecoverySupervisor?: () => void;
+    nodeAgentStartRuntimeAvailabilityMonitor?: () => void;
     nodeAgentResolveInstanceNodeAgentUrl?: (instance: ControlledInstance) => Promise<string>;
   }
 
@@ -315,6 +319,13 @@ function nodeAgentDiagnosticLogsEnabled() {
   return envFlag(process.env.TASK_HANDOFF_DIAGNOSTIC_LOGS);
 }
 
+/** Runtime adapters report their availability detail inside runtime capabilities. */
+function runtimeDaemonError(runtime: NodeRuntime) {
+  const daemon = (runtime.capabilities as Record<string, unknown> | undefined)?.daemon;
+  if (!daemon || typeof daemon !== "object") return undefined;
+  const error = (daemon as Record<string, unknown>).error;
+  return typeof error === "string" && error.trim() ? error : undefined;
+}
 
 type ResolveInstanceWeb = (instance: ControlledInstance) => Promise<string>;
 
@@ -863,6 +874,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   // 定义行里出现当前版本未知的列只说明它由更高版本写入：读取时忽略并保留诊断，不阻断启动或读取。
   storyRepository.agents.definitions.setDiagnostic((message, details) => app.log.warn(details, message));
   storyRepository.agents.storyEntries.setDiagnostic((message, details) => app.log.warn(details, message));
+  storyRepository.agents.orchestrations.setDiagnostic((message, details) => app.log.warn(details, message));
   const persistenceMaintenance = new NodeAgentPersistenceMaintenance(paths, {
     logger: (message, details) => app.log.warn(details, message),
   });
@@ -964,9 +976,15 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   });
   eventForwarder.start();
   app.decorate("nodeAgentEventForwarder", eventForwarder);
+  const agentOrchestrations = new AgentOrchestrationService(
+    storyRepository.agents.orchestrations,
+    storyRepository.agents.definitions,
+    (type, payload, scope) => eventForwarder.publish(type, payload, scope),
+  );
   const agentDefinitions = new AgentDefinitionService(
     state,
     storyRepository.agents.definitions,
+    agentOrchestrations,
     (type, payload, scope) => eventForwarder.publish(type, payload, scope),
   );
   // Phase 1 has one explicit, registered execution combination. Capability publication is
@@ -981,6 +999,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   const agentRuns = new AgentRunService(
     state,
     agentDefinitions,
+    agentOrchestrations,
     storyRepository.agents.runs,
     (input) => input.runtimeType === agentRunExecutionCombination.runtime
       && input.providerId === agentRunExecutionCombination.providerId
@@ -1027,7 +1046,6 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   );
   const agentRunCoordinator = new AgentRunCoordinator({
     state,
-    definitions: agentDefinitions,
     runs: agentRuns,
     materializers: agentRunMaterializers,
     sharedSpaces: agentRunSharedSpaces,
@@ -1046,6 +1064,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   const storyAgentEntries = new StoryAgentEntryService(
     stories,
     agentDefinitions,
+    agentOrchestrations,
     storyRepository.agents.storyEntries,
     async ({ storyId }) => {
       const resolution = await storyToolPolicy.resolve(storyId);
@@ -1227,6 +1246,51 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     runInstanceOperation: (instanceId, operation) => instanceOperations.run(instanceId, operation),
   });
 
+  // Runtime availability is the authoritative explanation for instances whose
+  // base runtime is gone. Probing it in the background keeps the persisted
+  // runtime record fresh, resumes instance recovery as soon as the runtime comes
+  // back, and stops recovery cycles from driving instance phases while it is down.
+  const runtimeAvailability = new RuntimeAvailabilityMonitor({
+    listTargets: () => state.nodeRuntimes.list().flatMap((runtime) => {
+      let check: ((runtime: NodeRuntime) => Promise<Partial<NodeRuntime>>) | undefined;
+      try {
+        const adapter = runtimeAdapters.forRuntime(runtime);
+        check = adapter.check?.bind(adapter);
+      } catch {
+        // Runtimes without a local adapter (for example kubernetes) are not probeable here.
+        return [];
+      }
+      if (!check) return [];
+      return [{
+        runtime,
+        probe: () => check(state.requireRuntime(runtime.id)),
+      }];
+    }),
+    apply: (runtime, patch) => {
+      state.recordRuntimeProbe(runtime.id, patch);
+    },
+    onAvailable: (next, previous) => {
+      app.log.info({ runtimeId: next.id, runtimeType: next.type, previousStatus: previous.status }, "node runtime became available; resuming instance recovery");
+      recoverySupervisor.notifyRuntimeAvailable();
+    },
+    onUnavailable: (next, previous) => {
+      app.log.warn({
+        runtimeId: next.id,
+        runtimeType: next.type,
+        previousStatus: previous.status,
+        error: runtimeDaemonError(next),
+      }, "node runtime is unavailable; instance recovery is paused until it returns");
+    },
+    onProbeError: (runtime, error) => {
+      app.log.warn({ runtimeId: runtime.id, runtimeType: runtime.type, error }, "node runtime availability probe failed");
+    },
+    onCycleError: (error) => {
+      app.log.warn({ error }, "node runtime availability cycle failed");
+    },
+  }, {
+    intervalMs: runtimeAvailabilityIntervalMs(process.env.TASK_HANDOFF_RUNTIME_AVAILABILITY_INTERVAL_MS),
+  });
+
   const updateController = new NodeUpdateController({
     nodeId,
     jobs: state.updateJobs,
@@ -1356,6 +1420,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       clearInterval(persistenceMaintenanceTimer);
       clearInterval(activeLogMaintenanceTimer);
       runtimeMetrics.stop();
+      runtimeAvailability.stop();
       eventForwarder.stop();
       await recoverySupervisor.stop();
       await stories.drain();
@@ -1368,6 +1433,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
   app.decorate("nodeAgentRestoreManagedInstances", () => recoverySupervisor.restoreManagedInstances());
   app.decorate("nodeAgentRecoverManagedInstances", () => recoverySupervisor.recoverManagedInstances());
   app.decorate("nodeAgentStartRecoverySupervisor", () => recoverySupervisor.start());
+  app.decorate("nodeAgentStartRuntimeAvailabilityMonitor", () => runtimeAvailability.start());
 
   app.get("/api/node-agent/health", async () => ({
     data: {
@@ -1410,7 +1476,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
             runs: true,
             orchestration: {
               storyEntryAuthorization: true,
-              callableRelations: true,
+              orchestrations: true,
               runMembers: true,
               manualRuns: true,
             },
@@ -1458,6 +1524,9 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
     updateRuntime: (id, input) => state.updateRuntime(id, input),
     deleteRuntime: (id) => state.deleteRuntime(id),
     checkRuntime: async (id) => {
+      // Manual checks share the monitor's transition handling so a runtime that
+      // comes back here also resumes instance recovery.
+      if (await runtimeAvailability.checkRuntime(id)) return state.requireRuntime(id);
       const runtime = state.requireRuntime(id);
       return state.checkRuntime(id, runtimeAdapters.forRuntime(runtime));
     },
@@ -1473,6 +1542,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
 
   registerNodeGitCredentialRoutes(app, state);
   registerNodeAgentDefinitionRoutes(app, agentDefinitions);
+  registerNodeAgentOrchestrationRoutes(app, agentOrchestrations);
   registerNodeAgentRunRoutes(app, agentRuns, state);
   registerNodeStoryAgentEntryRoutes(app, storyAgentEntries);
   registerNodeStoryRoutes(app, state, stories, {
@@ -1783,6 +1853,9 @@ export async function runNodeAgentServer(options: RunNodeAgentServerOptions) {
       if (containerIpcPath) containerIpcServer = await listenNodeAgentContainerIpcServer(app, containerIpcPath);
       await listenerManager.start();
       reverseTunnels.connectConfigured();
+      // Probe runtime availability first so instance recovery does not start from
+      // a stale runtime record and drive instance phases while the runtime is gone.
+      app.nodeAgentStartRuntimeAvailabilityMonitor?.();
       app.nodeAgentStartRecoverySupervisor?.();
     } catch (error) {
       await app.close();

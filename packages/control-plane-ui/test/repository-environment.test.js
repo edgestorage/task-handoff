@@ -101,7 +101,8 @@ test("managed worktree creation reuses the shared dialog without starting an AI 
   ]);
 
   assert.match(panel, /<NewWorktreeDialog/);
-  assert.match(panel, /createRepositoryWorkspaceWorktree\(target\.value, \{ \.\.\.selection, expectedSnapshotId: worktrees\.value\.snapshotId \}\)/);
+  assert.match(panel, /createRepositoryWorkspaceWorktree\(target\.value, \{ \.\.\.selection, expectedSnapshotId: snapshotId \}\)/);
+  assert.match(panel, /const createSnapshotId = computed\(\(\) => branchesQuery\.data\.value\?\.snapshotId\)/);
   assert.match(dialog, /sessions\.panel\.newWorktreeDescription/);
   assert.match(dialog, /value="existing-branch"/);
   assert.match(dialog, /value="new-branch"/);
@@ -109,7 +110,7 @@ test("managed worktree creation reuses the shared dialog without starting an AI 
   assert.match(panel, /\.repository-worktree-directory \{[\s\S]*border: 1px solid var\(--line\);[\s\S]*background: var\(--surface-raised\)/);
   assert.match(panel, /\.repository-worktree-list \{[\s\S]*display: grid;/);
   assert.match(panel, /\.repository-worktree-row \+ \.repository-worktree-row \{[\s\S]*border-top: 1px solid var\(--line\)/);
-  assert.match(panel, /\.repository-worktree-row\[data-current="true"\] \.repository-worktree-title strong \{[\s\S]*color: var\(--repository-current-text, var\(--brand-accent-muted, var\(--brand-accent\)\)\)/);
+  assert.match(panel, /\.repository-worktree-row\[data-current="true"\] \.repository-worktree-title strong \{[\s\S]*color: var\(--repository-current-text, var\(--brand-accent\)\)/);
   assert.match(repositoryApi, /repositoryWorkspaceResource\(target, "worktrees"\)/);
   assert.doesNotMatch(panel, /worktree:\s*\{[^}]*\b(path|cwd)\s*:/);
   assert.match(worktreesTab, /props\.session\.source\?\.aiAgent/);
@@ -124,6 +125,8 @@ test("worktree rows keep a single-line title, hover details, and pinned row acti
   assert.match(panel, /\.repository-worktree-row \{[^}]*align-items: center;/);
   assert.doesNotMatch(panel, /\.repository-worktree-row \{[^}]*min-height/);
   assert.match(panel, /\.repository-worktree-icon \{[^}]*align-self: center;/);
+  assert.match(panel, /\.repository-worktree-icon \{[^}]*color: var\(--brand-accent\);/);
+  assert.doesNotMatch(panel, /\.repository-worktree-icon \{[^}]*color: var\(--brand-accent-muted\)/);
   assert.match(panel, /<div class="repository-worktree-identity">[\s\S]*<div class="repository-worktree-copy">[\s\S]*<div class="repository-worktree-title">[\s\S]*<div v-if="worktreeHasSummary\(worktree\)" class="repository-worktree-summary">[\s\S]*<div class="repository-worktree-row-actions">/);
   assert.match(panel, /<div class="repository-worktree-title">[\s\S]*<TooltipTrigger as-child>[\s\S]*<strong>\{\{ worktreeLabel\(worktree\) \}\}<\/strong>[\s\S]*<Badge variant="secondary">\{\{ worktreeKindLabel\(worktree\) \}\}<\/Badge>/);
 
@@ -206,7 +209,7 @@ test("branch selector groups, searches, tracks, checks out, and safely deletes s
   assert.match(panel, /repository-branch-folder-count/);
   assert.match(panel, /countBranchLeaves\(node\)/);
   assert.match(panel, /width: `calc\(100% - \$\{inset \+ 2\}px\)`/);
-  assert.match(panel, /repository-branch-row\[data-current="true"\] \.repository-branch-name \{ color: var\(--brand-accent-muted, var\(--brand-accent\)\); \}/);
+  assert.match(panel, /repository-branch-row\[data-current="true"\] \.repository-branch-name \{ color: var\(--repository-current-text, var\(--brand-accent\)\); \}/);
   assert.doesNotMatch(panel, /repository-branch-row\[data-current="true"\][^{]*\{[^}]*box-shadow/);
   assert.match(panel, /\.repository-branch-row\.remote \{ min-height: 34px; \}/);
   assert.match(panel, /\.repository-branch-row\.remote \.repository-branch-select \{ padding-block: 3px; \}/);

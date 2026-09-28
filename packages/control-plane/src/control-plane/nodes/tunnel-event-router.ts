@@ -32,6 +32,7 @@ import {
   NodeAgentCapabilitiesChangedEventSchema,
 } from "@task-handoff/protocol/node-agent-capabilities";
 import { AGENT_DEFINITION_CHANGED_EVENT_TYPE } from "@task-handoff/protocol/agent-definitions";
+import { AGENT_ORCHESTRATION_CHANGED_EVENT_TYPE } from "@task-handoff/protocol/agent-orchestrations";
 import { AGENT_RUN_CHANGED_EVENT_TYPE, AGENT_RUN_MEMBER_CHANGED_EVENT_TYPE } from "@task-handoff/protocol/agent-runs";
 import type { ControlPlaneEventBus } from "../events/bus.ts";
 
@@ -189,6 +190,7 @@ export class NodeTunnelEventRouter {
     }
 
     if (eventType === AGENT_DEFINITION_CHANGED_EVENT_TYPE
+      || eventType === AGENT_ORCHESTRATION_CHANGED_EVENT_TYPE
       || eventType === AGENT_RUN_CHANGED_EVENT_TYPE
       || eventType === AGENT_RUN_MEMBER_CHANGED_EVENT_TYPE) {
       const projected = this.options.onAgentEvent?.(nodeId, eventType, payload);

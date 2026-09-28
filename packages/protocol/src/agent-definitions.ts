@@ -9,7 +9,6 @@ import { z } from "zod";
 export const AGENT_DEFINITION_NAME_MAX_LENGTH = 120;
 export const AGENT_DEFINITION_DESCRIPTION_MAX_LENGTH = 2000;
 export const AGENT_DEFINITION_APPENDED_PROMPT_MAX_LENGTH = 32_000;
-export const AGENT_DEFINITION_MAX_CALLABLE_AGENTS = 50;
 
 const StableIdSchema = z.string().trim().min(1).max(120).regex(/^[a-zA-Z0-9][a-zA-Z0-9_.:-]*$/);
 export const AgentDefinitionIdSchema = StableIdSchema;
@@ -42,7 +41,7 @@ export function isPublishedAgentExecutionPolicy(policy: AgentExecutionPolicy) {
 
 /**
  * AgentDefinition 是 Node 本地一级对象，只保存最小执行意图：不包含 `ownerNodeId`、
- * 绝对路径、密钥或 Story 引用；Story 入口关联由 Story 侧持有。
+ * 绝对路径、密钥、Story 引用或调用拓扑；拓扑由 AgentOrchestration 持有，Story 入口关联由 Story 侧持有。
  */
 export const AgentDefinitionSchema = z.object({
   id: AgentDefinitionIdSchema,
@@ -58,7 +57,6 @@ export const AgentDefinitionSchema = z.object({
   reasoningEffort: z.string().trim().min(1).max(120).optional(),
   permissionMode: z.string().trim().min(1).max(120).optional(),
   executionPolicy: AgentExecutionPolicySchema,
-  callableAgentIds: z.array(AgentDefinitionIdSchema).max(AGENT_DEFINITION_MAX_CALLABLE_AGENTS).default([]),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
 }).strict();
@@ -76,7 +74,6 @@ const definitionInputShape = {
   reasoningEffort: z.string().trim().min(1).max(120).optional(),
   permissionMode: z.string().trim().min(1).max(120).optional(),
   executionPolicy: AgentExecutionPolicySchema.optional(),
-  callableAgentIds: z.array(AgentDefinitionIdSchema).max(AGENT_DEFINITION_MAX_CALLABLE_AGENTS).default([]),
 } as const;
 
 export const AgentDefinitionCreateInputSchema = z.object(definitionInputShape).strict();
@@ -99,13 +96,16 @@ export const AgentDefinitionUpdateInputSchema = z.object({
   reasoningEffort: z.string().trim().min(1).max(120).nullable().optional(),
   permissionMode: z.string().trim().min(1).max(120).nullable().optional(),
   executionPolicy: definitionInputShape.executionPolicy,
-  // 这里不能复用 create 形状：带 default 的字段在缺失时会被补成 `[]`，把补丁语义变成清空可调用集合。
-  callableAgentIds: z.array(AgentDefinitionIdSchema).max(AGENT_DEFINITION_MAX_CALLABLE_AGENTS).optional(),
 }).strict();
 export type AgentDefinitionUpdateInput = z.infer<typeof AgentDefinitionUpdateInputSchema>;
 
 export const AgentDefinitionListSchema = z.object({ agents: z.array(AgentDefinitionSchema) }).strict();
-export const AgentDefinitionDeleteResultSchema = z.object({ id: AgentDefinitionIdSchema, deleted: z.literal(true) }).strict();
+/** 删除结果带上被一并删除的编排：UI 用它提示"同时删除了哪些编排"并精确失效缓存。 */
+export const AgentDefinitionDeleteResultSchema = z.object({
+  id: AgentDefinitionIdSchema,
+  deleted: z.literal(true),
+  deletedOrchestrationIds: z.array(z.string().trim().min(1).max(160)).default([]),
+}).strict();
 
 /** Control Plane 聚合信封：Node 身份只出现在信封上，不进入定义本体。 */
 export const AgentDefinitionAggregateSchema = z.object({
@@ -121,19 +121,10 @@ export const AGENT_DEFINITION_ERROR_CODES = [
   "AGENT_DEFINITION_TARGET_INSTANCE_UNKNOWN",
   "AGENT_DEFINITION_FOLDER_UNKNOWN",
   "AGENT_DEFINITION_PROVIDER_UNSUPPORTED",
-  "AGENT_DEFINITION_CALLABLE_TARGET_UNKNOWN",
-  "AGENT_DEFINITION_SELF_REFERENCE",
-  "AGENT_DEFINITION_CYCLE",
   "AGENT_DEFINITION_POLICY_UNSUPPORTED",
 ] as const;
 export const AgentDefinitionErrorCodeSchema = z.enum(AGENT_DEFINITION_ERROR_CODES);
 export type AgentDefinitionErrorCode = z.infer<typeof AgentDefinitionErrorCodeSchema>;
-
-/** 环错误必须带可展示的环路，调用方据此指出具体引用链。 */
-export const AgentDefinitionCycleErrorDetailsSchema = z.object({
-  code: z.literal("AGENT_DEFINITION_CYCLE"),
-  cycle: z.array(AgentDefinitionIdSchema).min(2),
-}).strict();
 
 /** 修订冲突必须带调用方读到的与当前权威的 revision，调用方可直接重读并重试。 */
 export const AgentDefinitionRevisionConflictErrorDetailsSchema = z.object({
@@ -143,7 +134,6 @@ export const AgentDefinitionRevisionConflictErrorDetailsSchema = z.object({
 }).strict();
 
 export const AgentDefinitionErrorDetailsSchema = z.union([
-  AgentDefinitionCycleErrorDetailsSchema,
   AgentDefinitionRevisionConflictErrorDetailsSchema,
   z.object({ code: AgentDefinitionErrorCodeSchema }).strict(),
 ]);

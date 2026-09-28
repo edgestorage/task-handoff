@@ -1351,6 +1351,7 @@ import { directoryAiSessionProviderCapability } from "@task-handoff/protocol/con
 import { supportsAiSessionWorkspaceCheckout } from "@task-handoff/protocol/control-plane";
 import type { AiSessionSummary, InstanceBoardItem, InstanceWithAiSessions, NodeLocalFolder } from "../../../api/types";
 import { aiSessionStoryTarget, type AiSessionStoryTarget } from "../../../components/ai-session/storyTarget";
+import { supportedAiSessionReasoningEfforts } from "../../../components/ai-session/aiSessionReasoningEfforts";
 import type { LaunchableApp } from "../useInstanceSessions";
 import { isAiSessionTriggerDeployment, removeInstanceTriggerBinding, upsertInstanceTriggerBinding } from "../instanceTriggerCache.ts";
 import AiSessionComposer, { type AiSessionComposerAttachment } from "../../../components/ai-session/AiSessionComposer.vue";
@@ -1986,7 +1987,7 @@ function reasoningEffortCapability(agent: string) {
 }
 
 function supportedCreationReasoningEffort(agent: string, effort?: AiSessionReasoningEffort) {
-  return effort && (agent === "codex" || effort !== "ultra") ? effort : AI_SESSION_DEFAULT_REASONING_EFFORT;
+  return effort && supportedAiSessionReasoningEfforts(agent).includes(effort) ? effort : AI_SESSION_DEFAULT_REASONING_EFFORT;
 }
 
 function providerPermissionModes(agent: string) {

@@ -52,6 +52,53 @@ test("node-agent app wires local runtime exits into immediate recovery", () => {
   assert.equal(recoveryCall.arguments[0]?.getText(source), "event.instanceId");
 });
 
+test("node-agent app starts runtime availability monitoring and resumes recovery when a runtime returns", () => {
+  const filename = path.join(__dirname, "../packages/control-plane/src/node-agent/app.ts");
+  const source = ts.createSourceFile(
+    filename,
+    fs.readFileSync(filename, "utf8"),
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+  const monitors = [];
+  const visit = (node) => {
+    if (ts.isNewExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "RuntimeAvailabilityMonitor") {
+      monitors.push(node);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+
+  assert.equal(monitors.length, 1, "the node agent must own exactly one runtime availability monitor");
+  const options = monitors[0].arguments?.[0];
+  assert.ok(options && ts.isObjectLiteralExpression(options));
+
+  const property = (name) => options.properties.find((entry) => (
+    ts.isPropertyAssignment(entry) && entry.name.getText(source) === name
+  ));
+  const onAvailable = property("onAvailable");
+  assert.ok(onAvailable, "the monitor must react to a runtime coming back");
+
+  let resumeCall;
+  const findResumeCall = (node) => {
+    if (
+      ts.isCallExpression(node)
+      && ts.isPropertyAccessExpression(node.expression)
+      && ts.isIdentifier(node.expression.expression)
+      && node.expression.expression.text === "recoverySupervisor"
+      && node.expression.name.text === "notifyRuntimeAvailable"
+    ) {
+      resumeCall = node;
+    }
+    ts.forEachChild(node, findResumeCall);
+  };
+  findResumeCall(onAvailable);
+
+  assert.ok(resumeCall, "a returned runtime must resume instance recovery instead of waiting for the next tick");
+  assert.match(source.getFullText(), /app\.nodeAgentStartRuntimeAvailabilityMonitor\?\.\(\);/);
+});
+
 function fakeChild(pid) {
   const child = new EventEmitter();
   child.pid = pid;

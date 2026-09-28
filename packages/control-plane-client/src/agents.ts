@@ -33,8 +33,8 @@ import {
 import {
   nodeAgentCapabilitiesFromPublicNode,
   nodeAgentExecutionCapabilities,
-  supportsNodeAgentCallableRelations,
   supportsNodeAgentDefinitions,
+  supportsNodeAgentOrchestrations,
   supportsNodeAgentRunMembers,
   supportsNodeAgentManualRuns,
   supportsNodeAgentRuns,
@@ -42,6 +42,19 @@ import {
   supportsNodeAgentExecutionPolicy,
 } from "@task-handoff/protocol/node-agent-capabilities";
 import type { AgentExecutionPolicy } from "@task-handoff/protocol/agent-definitions";
+
+import {
+  AGENT_ORCHESTRATION_CHANGED_EVENT_TYPE,
+  AgentOrchestrationCreateInputSchema,
+  AgentOrchestrationDeleteResultSchema,
+  AgentOrchestrationUpdateInputSchema,
+  sanitizeAgentOrchestration,
+  sanitizeAgentOrchestrationAggregate,
+  sanitizeAgentOrchestrationAggregateEvent,
+  type AgentOrchestration,
+  type AgentOrchestrationCreateInput,
+  type AgentOrchestrationUpdateInput,
+} from "@task-handoff/protocol/agent-orchestrations";
 
 const DataSchema = <T extends z.ZodType>(schema: T) => z.object({ data: schema }).passthrough();
 
@@ -73,10 +86,49 @@ export function createControlPlaneAgentsApi(transport: ControlPlaneClientTranspo
       const data = await requestData(`/api/agents/${encodeURIComponent(agentId)}`, z.unknown(), json("PATCH", { nodeId, input: AgentDefinitionUpdateInputSchema.parse(input) }));
       return sanitizeAgentDefinition(data);
     },
-    remove(agentId: string, nodeId: string) {
+    remove(agentId: string, nodeId: string, options: { referencingOrchestrations?: "keep" | "delete" } = {}) {
+      const query = new URLSearchParams({ nodeId });
+      if (options.referencingOrchestrations) query.set("referencingOrchestrations", options.referencingOrchestrations);
       return requestData(
-        `/api/agents/${encodeURIComponent(agentId)}?nodeId=${encodeURIComponent(nodeId)}`,
+        `/api/agents/${encodeURIComponent(agentId)}?${query.toString()}`,
         AgentDefinitionDeleteResultSchema,
+        { method: "DELETE" },
+      );
+    },
+    async listOrchestrations(nodeId?: string, signal?: AbortSignal) {
+      const data = await requestData(
+        "/api/agent-orchestrations" + (nodeId ? `?nodeId=${encodeURIComponent(nodeId)}` : ""),
+        z.unknown(),
+        { signal },
+      );
+      return sanitizeAgentOrchestrationAggregate(data);
+    },
+    async getOrchestration(orchestrationId: string, nodeId: string, signal?: AbortSignal): Promise<AgentOrchestration> {
+      const data = await requestData(
+        `/api/agent-orchestrations/${encodeURIComponent(orchestrationId)}?nodeId=${encodeURIComponent(nodeId)}`,
+        z.unknown(),
+        { signal },
+      );
+      return sanitizeAgentOrchestration(data);
+    },
+    async createOrchestration(nodeId: string, input: AgentOrchestrationCreateInput) {
+      const data = await requestData("/api/agent-orchestrations", z.unknown(), json("POST", {
+        nodeId,
+        input: AgentOrchestrationCreateInputSchema.parse(input),
+      }));
+      return sanitizeAgentOrchestration(data);
+    },
+    async updateOrchestration(orchestrationId: string, nodeId: string, input: AgentOrchestrationUpdateInput) {
+      const data = await requestData(`/api/agent-orchestrations/${encodeURIComponent(orchestrationId)}`, z.unknown(), json("PATCH", {
+        nodeId,
+        input: AgentOrchestrationUpdateInputSchema.parse(input),
+      }));
+      return sanitizeAgentOrchestration(data);
+    },
+    removeOrchestration(orchestrationId: string, nodeId: string) {
+      return requestData(
+        `/api/agent-orchestrations/${encodeURIComponent(orchestrationId)}?nodeId=${encodeURIComponent(nodeId)}`,
+        AgentOrchestrationDeleteResultSchema,
         { method: "DELETE" },
       );
     },
@@ -148,7 +200,7 @@ export function controlPlaneAgentCapabilities(publicNodeCapabilities: unknown) {
     definitions: supportsNodeAgentDefinitions(capabilities),
     runs: supportsNodeAgentRuns(capabilities),
     storyEntryAuthorization: supportsNodeAgentStoryEntryAuthorization(capabilities),
-    callableRelations: supportsNodeAgentCallableRelations(capabilities),
+    orchestrations: supportsNodeAgentOrchestrations(capabilities),
     runMembers: supportsNodeAgentRunMembers(capabilities),
     manualRuns: supportsNodeAgentManualRuns(capabilities),
     execution: nodeAgentExecutionCapabilities(capabilities),
@@ -165,6 +217,7 @@ export function controlPlaneSupportsAgentExecutionPolicy(
 
 export type ControlPlaneAgentEvent =
   | { type: typeof AGENT_DEFINITION_CHANGED_EVENT_TYPE; payload: ReturnType<typeof sanitizeAgentDefinitionAggregateEvent> }
+  | { type: typeof AGENT_ORCHESTRATION_CHANGED_EVENT_TYPE; payload: ReturnType<typeof sanitizeAgentOrchestrationAggregateEvent> }
   | { type: typeof AGENT_RUN_CHANGED_EVENT_TYPE | typeof AGENT_RUN_MEMBER_CHANGED_EVENT_TYPE; payload: ReturnType<typeof sanitizeAgentRunAggregateEvent> };
 
 /** Parses only Control Plane-owned aggregate events; malformed or unrelated frames are ignored. */
@@ -173,6 +226,10 @@ export function consumeControlPlaneAgentEvent(input: unknown): ControlPlaneAgent
   const frame = input as { type?: unknown; payload?: unknown };
   if (frame.type === AGENT_DEFINITION_CHANGED_EVENT_TYPE) {
     const payload = safeConsume(() => sanitizeAgentDefinitionAggregateEvent(frame.payload));
+    return payload ? { type: frame.type, payload } : undefined;
+  }
+  if (frame.type === AGENT_ORCHESTRATION_CHANGED_EVENT_TYPE) {
+    const payload = safeConsume(() => sanitizeAgentOrchestrationAggregateEvent(frame.payload));
     return payload ? { type: frame.type, payload } : undefined;
   }
   if (frame.type === AGENT_RUN_CHANGED_EVENT_TYPE || frame.type === AGENT_RUN_MEMBER_CHANGED_EVENT_TYPE) {

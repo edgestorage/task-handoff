@@ -335,6 +335,7 @@ import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescript
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import AiAgentIcon from "../../../components/AiAgentIcon.vue";
+import { AI_SESSION_REASONING_EFFORTS } from "../../../components/ai-session/aiSessionReasoningEfforts";
 import { Checkbox } from "../../../components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
 import { Progress } from "../../../components/ui/progress";
@@ -384,7 +385,7 @@ const codexMultiAgentEnabled = ref(true);
 const codexMultiAgentMaxThreads = ref("");
 const codexSubagentModel = ref("default");
 const codexSubagentReasoning = ref<"default" | AiSessionReasoningEffort>("default");
-const codexReasoningEfforts: AiSessionReasoningEffort[] = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
+const codexReasoningEfforts = AI_SESSION_REASONING_EFFORTS;
 const aiSessionHistoryLimit = ref("50");
 const aiSessionAttachmentRetentionDays = ref("30");
 const aiSessionMaxFileAttachmentKiB = ref("500");

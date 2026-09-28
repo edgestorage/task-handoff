@@ -5,7 +5,6 @@ import { AGENT_RUN_TERMINAL_STATUSES, type AgentRun, type AgentRunError, type Ag
 import type { NodeAgentState } from "../state.ts";
 import type { AgentRunResourceRepository } from "../persistence/agent-run-resource-repository.ts";
 import { resolveInstanceFolder } from "../instances/instance-folder.ts";
-import type { AgentDefinitionService } from "./service.ts";
 import type { AgentRunExecutionCoordinator, AgentRunService } from "./run-service.ts";
 import type { AgentRunMemberSessionClient } from "./member-session-client.ts";
 import type { AgentRunSharedSpaceService } from "./agent-run-shared-space.ts";
@@ -38,7 +37,6 @@ export class AgentRunCoordinator implements AgentRunExecutionCoordinator {
   private readonly managedRunIds = new Set<string>();
   private readonly options: {
     state: NodeAgentState;
-    definitions: AgentDefinitionService;
     runs: AgentRunService;
     materializers: WorkspaceMaterializerRegistry;
     sharedSpaces: AgentRunSharedSpaceService;
@@ -52,7 +50,6 @@ export class AgentRunCoordinator implements AgentRunExecutionCoordinator {
 
   constructor(options: {
     state: NodeAgentState;
-    definitions: AgentDefinitionService;
     runs: AgentRunService;
     materializers: WorkspaceMaterializerRegistry;
     sharedSpaces: AgentRunSharedSpaceService;
@@ -261,7 +258,7 @@ export class AgentRunCoordinator implements AgentRunExecutionCoordinator {
         executionSnapshot: member.executionSnapshot,
       });
       const pathPolicy = this.options.sharedSpaces.pathPolicyForMember(run.runId, runtime.id, workspace.layout.cwd);
-      const invocation = this.options.definitions.resolveInvocationTools(member.agentId);
+      const invocation = this.options.runs.resolveMemberInvocationTools(run.runId, member.agentId);
       const modelSelection = member.executionSnapshot.modelEntityId && member.executionSnapshot.modelName
         ? { modelEntityId: member.executionSnapshot.modelEntityId, modelName: member.executionSnapshot.modelName }
         : undefined;

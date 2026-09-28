@@ -84,29 +84,41 @@
             <h3>{{ t("agents.editor.runtime") }}</h3>
             <div class="agent-editor-grid">
               <label class="agent-editor-field">
-                <span>{{ t("agents.editor.provider") }}</span>
-                <ControlPlaneSelect :model-value="draft.providerId" :disabled="!providers.length" :placeholder="t('agents.editor.providerPlaceholder')" @update:model-value="selectProvider">
-                  <ControlPlaneSelectItem v-if="storedProviderUnavailable" :value="draft.providerId" disabled>{{ storedProviderLabel }}</ControlPlaneSelectItem>
-                  <ControlPlaneSelectItem v-for="provider in providers" :key="provider.id" :value="provider.id">{{ provider.label }}</ControlPlaneSelectItem>
+                <span>{{ t("agents.editor.agent") }}</span>
+                <ControlPlaneSelect :model-value="draft.providerId" :disabled="!launchableAgents.length" :placeholder="t('agents.editor.agentPlaceholder')" @update:model-value="selectAgent">
+                  <ControlPlaneSelectItem v-if="storedAgentUnavailable" :value="draft.providerId" disabled>{{ storedAgentLabel }}</ControlPlaneSelectItem>
+                  <ControlPlaneSelectItem v-for="agent in launchableAgents" :key="agent.id" :value="agent.id">{{ agent.label }}</ControlPlaneSelectItem>
                 </ControlPlaneSelect>
-                <small v-if="selectedInstance && !providers.length" class="agent-editor-hint">{{ t("agents.editor.providerUnavailable") }}</small>
+                <small v-if="selectedInstance && !launchableAgents.length" class="agent-editor-hint">{{ t("agents.editor.agentUnavailable") }}</small>
               </label>
               <label class="agent-editor-field">
                 <span>{{ t("agents.editor.model") }}</span>
-                <ControlPlaneSelect :model-value="modelSelectionValue" :disabled="!modelOptions.length" :placeholder="t('agents.editor.model')" @update:model-value="selectModel">
-                  <ControlPlaneSelectItem v-if="modelSelectionValue === storedModelValue" :value="storedModelValue" disabled>{{ draft.modelName }}</ControlPlaneSelectItem>
-                  <ControlPlaneSelectItem v-for="(option, index) in modelOptions" :key="`${option.modelEntityId}:${option.modelName}`" :value="String(index)">
-                    {{ option.modelName }}
-                  </ControlPlaneSelectItem>
-                </ControlPlaneSelect>
+                <DropdownMenu>
+                  <DropdownMenuTrigger as-child>
+                    <button
+                      type="button"
+                      class="agent-editor-model-trigger"
+                      :disabled="modelMenuDisabled"
+                      :aria-label="t('sessions.composer.modelSelectionTitle', { model: displayedModelLabel })"
+                    >
+                      <span>{{ modelTriggerLabel }}</span>
+                      <ChevronDown :size="14" />
+                    </button>
+                  </DropdownMenuTrigger>
+                  <AiSessionModelMenu
+                    side="bottom"
+                    align="start"
+                    :agent="draft.providerId"
+                    :model-groups="modelGroups"
+                    :model-selection="draftModelSelection"
+                    :reasoning-effort="draft.reasoningEffort ? draft.reasoningEffort as AiSessionReasoningEffort : undefined"
+                    :reasoning-effort-enabled="reasoningEffortEnabled"
+                    @select-model="selectModel"
+                    @select-reasoning-effort="selectReasoningEffort"
+                  />
+                </DropdownMenu>
                 <small v-if="storedModelUnavailable" class="agent-editor-hint">{{ t("agents.editor.modelUnavailable") }}</small>
-              </label>
-              <label class="agent-editor-field">
-                <span>{{ t("agents.editor.reasoning") }}</span>
-                <ControlPlaneSelect :model-value="draft.reasoningEffort" :disabled="!reasoningEffortEnabled" :placeholder="t('agents.editor.reasoning')" @update:model-value="selectReasoningEffort">
-                  <ControlPlaneSelectItem v-for="effort in availableReasoningEfforts" :key="effort" :value="effort">{{ effort }}</ControlPlaneSelectItem>
-                </ControlPlaneSelect>
-                <small v-if="!reasoningEffortEnabled" class="agent-editor-hint">{{ t("agents.editor.reasoningDisabled") }}</small>
+                <small v-else-if="reasoningEffortUnavailable" class="agent-editor-hint">{{ t("agents.editor.reasoningDisabled") }}</small>
               </label>
               <label class="agent-editor-field">
                 <span>{{ t("agents.editor.permission") }}</span>
@@ -125,18 +137,8 @@
           </section>
 
           <section class="agent-editor-section">
-            <h3>{{ t("agents.editor.callable") }}</h3>
-            <p class="agent-editor-hint">{{ t("agents.editor.callableHint") }}</p>
-            <div v-if="callableCandidates.length" class="agent-editor-callable">
-              <label v-for="candidate in callableCandidates" :key="candidate.id" class="agent-editor-callable-item">
-                <Checkbox :model-value="draft.callableAgentIds.includes(candidate.id)" @update:model-value="toggleCallable(candidate.id, $event === true)" />
-                <span>
-                  <strong>{{ candidate.name }}</strong>
-                  <small>{{ candidate.instanceLabel }}</small>
-                </span>
-              </label>
-            </div>
-            <p v-else class="agent-editor-hint">{{ t("agents.editor.callableEmpty") }}</p>
+            <h3>{{ t("agents.editor.orchestration") }}</h3>
+            <p class="agent-editor-hint">{{ t("agents.editor.orchestrationHint") }}</p>
           </section>
 
           <section class="agent-editor-section">
@@ -166,7 +168,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { FolderCheck, X } from "@lucide/vue";
+import { ChevronDown, FolderCheck, X } from "@lucide/vue";
 import { defaultAiSessionModelSelection, deriveAiSessionModelGroups } from "@task-handoff/control-plane-client";
 import { AI_SESSION_DEFAULT_REASONING_EFFORT } from "@task-handoff/protocol/ai-sessions";
 import type { AiSessionModelSelection, AiSessionPermissionMode, AiSessionReasoningEffort } from "@task-handoff/protocol/ai-sessions";
@@ -176,11 +178,13 @@ import { createNodeLocalFolder, listNodeFolderTree, useModelsQuery, useNodeLocal
 import type { InstanceBoardItem, NodeLocalFolder } from "@/api/types";
 import { translateApiError } from "@/i18n/apiError";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { DropdownMenu, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Textarea } from "@/components/ui/textarea";
+import AiSessionModelMenu from "@/components/ai-session/AiSessionModelMenu.vue";
+import { AI_SESSION_REASONING_EFFORTS } from "@/components/ai-session/aiSessionReasoningEfforts";
 import ControlPlaneSelect from "../shared/ControlPlaneSelect.vue";
 import ControlPlaneSelectItem from "../shared/ControlPlaneSelectItem.vue";
 import { nodeLocalFolderDisplayName, nodePathName } from "../nodePath";
@@ -188,7 +192,7 @@ import { findInstanceCwdFolderByPath, selectableInstanceCwdFolders } from "../sh
 import NodeFolderTree from "../new-instance/NodeFolderTree.vue";
 import { useNodeFolderBrowser } from "../useNodeFolderBrowser";
 import { aiSessionLaunchableAppsForInstance } from "../useInstanceSessions";
-import { agentDraftFromDefinition, callableAgentCandidates, emptyAgentDraft } from "./agentCatalog";
+import { agentDraftFromDefinition, emptyAgentDraft } from "./agentCatalog";
 import type { AgentCatalogAgent, AgentEditorDraft } from "./agentCatalogTypes";
 
 const props = defineProps<{
@@ -206,8 +210,6 @@ const emit = defineEmits<{
 
 const { t } = useI18n();
 const modelsQuery = useModelsQuery();
-const storedModelValue = "__stored_model__";
-const reasoningEfforts: AiSessionReasoningEffort[] = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
 
 const draft = ref<AgentEditorDraft>(emptyAgentDraft());
 const saving = ref(false);
@@ -262,31 +264,39 @@ const candidateInstances = computed(() => {
   return [...scoped].sort((left, right) => left.nodeId.localeCompare(right.nodeId) || left.name.localeCompare(right.name));
 });
 const missingInstanceLabel = computed(() => (draft.value.targetInstanceId && !selectedInstance.value ? props.agent?.instanceLabel || draft.value.targetInstanceId : ""));
-const providers = computed(() => (selectedInstance.value ? aiSessionLaunchableAppsForInstance(selectedInstance.value, t) : []));
-const providerCapability = computed(() => (selectedInstance.value ? directoryAiSessionProviderCapability(selectedInstance.value.capabilities?.features, draft.value.providerId) : undefined));
-const permissionOptions = computed(() => providerCapability.value?.permissionModes || []);
-const reasoningEffortEnabled = computed(() => normalizeAiSessionReasoningEffortCapabilities(providerCapability.value).selectAtCreate);
-const availableReasoningEfforts = computed(() => (draft.value.providerId === "codex" ? reasoningEfforts : reasoningEfforts.filter((effort) => effort !== "ultra")));
+// 「Agent」是 AgentDefinition.providerId 指向的运行程序（Codex、Claude 等）；模型连接（provider）
+// 只出现在模型菜单分组里，两个概念不共用同一个展示名。
+const launchableAgents = computed(() => (selectedInstance.value ? aiSessionLaunchableAppsForInstance(selectedInstance.value, t) : []));
+const agentCapability = computed(() => (selectedInstance.value ? directoryAiSessionProviderCapability(selectedInstance.value.capabilities?.features, draft.value.providerId) : undefined));
+const permissionOptions = computed(() => agentCapability.value?.permissionModes || []);
+const reasoningEffortEnabled = computed(() => normalizeAiSessionReasoningEffortCapabilities(agentCapability.value).selectAtCreate);
+const reasoningEffortUnavailable = computed(() => Boolean(selectedInstance.value && draft.value.providerId) && !reasoningEffortEnabled.value);
 const modelGroups = computed(() => modelGroupsFor(draft.value.providerId));
 const modelOptions = computed(() => modelGroups.value.flatMap((group) => group.models));
-const modelSelectionValue = computed(() => {
-  const index = modelOptions.value.findIndex(matchesDraftModel);
-  return index >= 0 ? String(index) : draft.value.modelName ? storedModelValue : "";
+const currentModelOption = computed(() => modelOptions.value.find(matchesDraftModel));
+const draftModelSelection = computed<AiSessionModelSelection | undefined>(() => {
+  const option = currentModelOption.value;
+  return option ? { modelEntityId: option.modelEntityId, modelName: option.modelName } : undefined;
 });
+// 触发器同时给出模型连接与模型名，和菜单里的分组标题一致；目录里没有该模型时只回显已保存的模型名。
+const modelTriggerLabel = computed(() => currentModelOption.value
+  ? `${currentModelOption.value.providerName} · ${currentModelOption.value.modelName}`
+  : draft.value.modelName || t("agents.editor.modelEmpty"));
+const displayedModelLabel = computed(() => currentModelOption.value?.modelName || draft.value.modelName || t("agents.editor.modelEmpty"));
+const modelMenuDisabled = computed(() => saving.value || (!modelOptions.value.length && !reasoningEffortEnabled.value));
 const storedModelUnavailable = computed(() => Boolean(draft.value.modelName) && modelOptions.value.length > 0 && !modelOptions.value.some(matchesDraftModel));
-const storedProviderUnavailable = computed(() => Boolean(draft.value.providerId) && !providers.value.some((provider) => provider.id === draft.value.providerId));
-const storedProviderLabel = computed(() => props.agent?.provider || draft.value.providerId);
+const storedAgentUnavailable = computed(() => Boolean(draft.value.providerId) && !launchableAgents.value.some((agent) => agent.id === draft.value.providerId));
+const storedAgentLabel = computed(() => props.agent?.provider || draft.value.providerId);
 const permissionSelectionUnavailable = computed(() => Boolean(draft.value.permissionMode) && !permissionOptions.value.includes(draft.value.permissionMode as AiSessionPermissionMode));
 
-const callableCandidates = computed(() => (nodeId.value ? callableAgentCandidates(props.agents, nodeId.value, draft.value.id) : []));
 
 const blockedReason = computed(() => {
   if (!draft.value.targetInstanceId) return "";
   if (!selectedInstance.value) return t("agents.editor.blockedInstanceMissing");
   if (selectedInstance.value.runtime?.type === "local") return t("agents.editor.blockedLocalRuntime");
   if (selectedInstance.value.connectionStatus === "offline") return t("agents.editor.blockedInstanceOffline");
-  if (!providers.value.length) return t("agents.editor.blockedNoProvider");
-  if (storedProviderUnavailable.value) return t("agents.editor.blockedProviderUnavailable");
+  if (!launchableAgents.value.length) return t("agents.editor.blockedNoAgent");
+  if (storedAgentUnavailable.value) return t("agents.editor.blockedAgentUnavailable");
   if (permissionSelectionUnavailable.value) return t("agents.editor.blockedPermissionUnavailable");
   if (storedModelUnavailable.value) return t("agents.editor.blockedModelUnavailable");
   if (storedFolderUnavailable.value) return t("agents.editor.blockedFolderUnavailable");
@@ -349,10 +359,10 @@ function permissionLabelKey(mode: AiSessionPermissionMode) {
   return mode === "auto-review" ? "autoReview" : mode === "full-access" ? "fullAccess" : "ask";
 }
 
-function applyProvider(providerId: string, storedSelection?: AiSessionModelSelection) {
-  draft.value.providerId = providerId;
-  const options = modelOptionsFor(providerId);
-  const groups = modelGroupsFor(providerId);
+function applyAgent(agentId: string, storedSelection?: AiSessionModelSelection) {
+  draft.value.providerId = agentId;
+  const options = modelOptionsFor(agentId);
+  const groups = modelGroupsFor(agentId);
   const match = storedSelection ? options.find((option) => option.modelName === storedSelection.modelName && (!storedSelection.modelEntityId || option.modelEntityId === storedSelection.modelEntityId)) : undefined;
   const fallback = options.length ? defaultAiSessionModelSelection(groups) : undefined;
   const selection = match || fallback;
@@ -366,20 +376,20 @@ function applyProvider(providerId: string, storedSelection?: AiSessionModelSelec
     draft.value.modelEntityId = "";
     draft.value.modelName = "";
   }
-  if (normalizeAiSessionReasoningEffortCapabilities(providerCapabilityFor(providerId)).selectAtCreate) {
-    draft.value.reasoningEffort = reasoningEfforts.includes(draft.value.reasoningEffort as AiSessionReasoningEffort) ? draft.value.reasoningEffort : AI_SESSION_DEFAULT_REASONING_EFFORT;
+  if (normalizeAiSessionReasoningEffortCapabilities(agentCapabilityFor(agentId)).selectAtCreate) {
+    draft.value.reasoningEffort = AI_SESSION_REASONING_EFFORTS.includes(draft.value.reasoningEffort as AiSessionReasoningEffort) ? draft.value.reasoningEffort : AI_SESSION_DEFAULT_REASONING_EFFORT;
   } else if (!props.agent) {
     draft.value.reasoningEffort = "";
   }
 }
 
-function modelOptionsFor(providerId: string) {
-  return modelGroupsFor(providerId).flatMap((group) => group.models);
+function modelOptionsFor(agentId: string) {
+  return modelGroupsFor(agentId).flatMap((group) => group.models);
 }
 
-function providerCapabilityFor(providerId: string) {
+function agentCapabilityFor(agentId: string) {
   const instance = selectedInstance.value;
-  return instance ? directoryAiSessionProviderCapability(instance.capabilities?.features, providerId) : undefined;
+  return instance ? directoryAiSessionProviderCapability(instance.capabilities?.features, agentId) : undefined;
 }
 
 function initialize() {
@@ -396,8 +406,8 @@ function initialize() {
   }
   const instance = selectedInstance.value;
   if (!instance) return;
-  const providerId = providers.value.some((provider) => provider.id === draft.value.providerId) ? draft.value.providerId : providers.value[0]?.id || draft.value.providerId;
-  applyProvider(providerId, agent ? { modelEntityId: draft.value.modelEntityId, modelName: draft.value.modelName } : undefined);
+  const agentId = launchableAgents.value.some((candidate) => candidate.id === draft.value.providerId) ? draft.value.providerId : launchableAgents.value[0]?.id || draft.value.providerId;
+  applyAgent(agentId, agent ? { modelEntityId: draft.value.modelEntityId, modelName: draft.value.modelName } : undefined);
   if (!draft.value.permissionMode) draft.value.permissionMode = permissionOptions.value[0] || instance.config.defaultCodexPermissionMode;
   if (!draft.value.cwdFolderPath) applyDefaultFolder();
 }
@@ -409,24 +419,22 @@ function selectInstance(instanceId: string) {
   folderBrowserOpen.value = false;
   folderError.value = "";
   createdFolders.value = [];
-  const providerId = providers.value.some((provider) => provider.id === draft.value.providerId) ? draft.value.providerId : providers.value[0]?.id || "";
-  applyProvider(providerId);
+  const agentId = launchableAgents.value.some((candidate) => candidate.id === draft.value.providerId) ? draft.value.providerId : launchableAgents.value[0]?.id || "";
+  applyAgent(agentId);
   applyDefaultFolder();
 }
 
-function selectProvider(providerId: string) {
-  applyProvider(providerId);
+function selectAgent(agentId: string) {
+  applyAgent(agentId);
 }
 
-function selectModel(value: string) {
-  const option = modelOptions.value[Number(value)];
-  if (!option) return;
-  draft.value.modelEntityId = option.modelEntityId;
-  draft.value.modelName = option.modelName;
+function selectModel(selection: AiSessionModelSelection) {
+  draft.value.modelEntityId = selection.modelEntityId;
+  draft.value.modelName = selection.modelName;
 }
 
-function selectReasoningEffort(value: string) {
-  draft.value.reasoningEffort = value;
+function selectReasoningEffort(effort: AiSessionReasoningEffort) {
+  draft.value.reasoningEffort = effort;
 }
 
 function selectPermissionMode(value: string) {
@@ -476,13 +484,6 @@ async function useBrowsedFolder() {
   }
 }
 
-function toggleCallable(agentId: string, checked: boolean) {
-  const next = new Set(draft.value.callableAgentIds);
-  if (checked) next.add(agentId);
-  else next.delete(agentId);
-  draft.value.callableAgentIds = [...next];
-}
-
 function setOpen(open: boolean) {
   emit("update:open", open);
 }
@@ -521,15 +522,15 @@ async function submit() {
 .agent-editor-section h3 { margin: 0; color: var(--text-muted); font-size: 12px; font-weight: 500; }
 .agent-editor-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 8px 12px; }
 .agent-editor-field { display: grid; gap: 6px; min-width: 0; color: var(--text-muted); font-size: 12px; }
+.agent-editor-model-trigger { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; min-width: 0; min-height: 34px; border: 1px solid var(--control-plane-select-border); border-radius: 6px; background: var(--control-plane-select-bg); color: var(--control-plane-select-text); cursor: pointer; font-size: 13px; padding: 0 9px; }
+.agent-editor-model-trigger > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-editor-model-trigger > svg { flex: none; color: var(--text-muted); }
+.agent-editor-model-trigger:not(:disabled):is(:hover, :focus-visible), .agent-editor-model-trigger[data-state="open"] { background: var(--surface-hover); color: var(--text-strong); outline: none; }
+.agent-editor-model-trigger:disabled { color: var(--control-plane-select-placeholder); cursor: default; }
 .agent-editor-textarea { min-height: 66px; font-size: 13px; }
 .agent-editor-hint { margin: 0; color: var(--text-muted); font-size: 12px; }
 .agent-editor-folder { display: grid; gap: 8px; }
 .agent-editor-folder-path { min-width: 0; color: var(--text); font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 12px; overflow-wrap: anywhere; }
-.agent-editor-callable { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 6px; }
-.agent-editor-callable-item { display: flex; align-items: flex-start; gap: 8px; min-width: 0; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-inset); padding: 8px; }
-.agent-editor-callable-item > span { display: grid; min-width: 0; gap: 2px; }
-.agent-editor-callable-item strong { color: var(--text-strong); font-size: 13px; font-weight: 500; }
-.agent-editor-callable-item small { color: var(--text-muted); font-size: 12px; }
 .agent-editor-field-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 6px 12px; margin: 0; }
 .agent-editor-field-list > div { display: flex; gap: 8px; min-width: 0; }
 .agent-editor-field-list dt { flex: none; min-width: 56px; color: var(--text-muted); font-size: 12px; }

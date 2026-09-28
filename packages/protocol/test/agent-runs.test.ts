@@ -16,7 +16,7 @@ import {
 import {
   normalizeNodeAgentCapabilities,
   nodeAgentExecutionCapabilities,
-  supportsNodeAgentCallableRelations,
+  supportsNodeAgentOrchestrations,
   supportsNodeAgentExecutionPolicy,
   supportsNodeAgentRunMembers,
   supportsNodeAgentRuns,
@@ -46,6 +46,7 @@ function run() {
     status: "running",
     input: { prompt: "Review the requested change" },
     provenance: { initiatingInstanceId: "instance_source", initiatingAiSessionId: "session_source", storyId: "story_one" },
+    orchestrationId: "default:agent_one",
     rootMemberId: "member_root",
     budget: { maxMembers: 8, maxDepth: 3, maxConcurrency: 2 },
     members: [{
@@ -69,12 +70,14 @@ function run() {
 test("Agent Run write schemas reject unknown and server-owned fields", () => {
   const input = {
     clientRequestId: "request_one",
-    agentId: "agent_one",
+    orchestrationId: "default:agent_one",
     input: { prompt: "Review the requested change" },
     provenance: { initiatingInstanceId: "instance_one", initiatingAiSessionId: "session_one", storyId: "story_one" },
     budget: { maxMembers: 8, maxDepth: 3, maxConcurrency: 2 },
   };
   assert.equal(AgentRunCreateInputSchema.safeParse(input).success, true);
+  // 入口缺省时由编排唯一的顶级节点解析；同时接受显式入口。
+  assert.equal(AgentRunCreateInputSchema.safeParse({ ...input, entryAgentId: "agent_one" }).success, true);
   assert.equal(AgentRunCreateInputSchema.safeParse({ ...input, runId: "run_injected" }).success, false);
   assert.equal(AgentRunCreateInputSchema.safeParse({ ...input, absolutePath: "/host/private" }).success, false);
   assert.equal(AgentRunCreateInputSchema.safeParse({ ...input, input: { prompt: "Review", cwd: "/host/private" } }).success, false);
@@ -129,7 +132,7 @@ test("Agent Run result delivery is additive and tool results are independently b
 test("Agent Run create budget is optional and defaults remain server-owned", () => {
   const input = {
     clientRequestId: "request_default_budget",
-    agentId: "agent_one",
+    orchestrationId: "default:agent_one",
     input: { prompt: "Review the requested change" },
     provenance: { initiatingInstanceId: "instance_one", initiatingAiSessionId: "session_one", storyId: "story_one" },
   };
@@ -140,7 +143,7 @@ test("Agent Run create budget is optional and defaults remain server-owned", () 
 test("Manual Agent Run input keeps authenticated provenance server-owned", () => {
   const input = {
     clientRequestId: "request_manual",
-    agentId: "agent_one",
+    orchestrationId: "default:agent_one",
     input: { prompt: "Run the release checks" },
   };
   assert.equal(AgentRunManualCreateInputSchema.safeParse(input).success, true);
@@ -188,21 +191,21 @@ test("Agent execution incremental capabilities normalize through one query bound
   assert.deepEqual(nodeAgentExecutionCapabilities(undefined), {
     definitions: false,
     runs: false,
-    orchestration: { storyEntryAuthorization: false, callableRelations: false, runMembers: false, manualRuns: false },
+    orchestration: { storyEntryAuthorization: false, orchestrations: false, runMembers: false, manualRuns: false },
     sharedSpace: { enabled: false, runtimes: [] },
     combinations: [],
   });
   const capabilities = {
     agentExecution: {
       runs: true,
-      orchestration: { storyEntryAuthorization: true, callableRelations: true, runMembers: true, manualRuns: true, future: true },
+      orchestration: { storyEntryAuthorization: true, orchestrations: true, runMembers: true, manualRuns: true, future: true },
       sharedSpace: { enabled: true, runtimes: ["docker"], future: true },
       future: true,
     },
   };
   assert.equal(supportsNodeAgentRuns(capabilities), true);
   assert.equal(supportsNodeAgentStoryEntryAuthorization(capabilities), true);
-  assert.equal(supportsNodeAgentCallableRelations(capabilities), true);
+  assert.equal(supportsNodeAgentOrchestrations(capabilities), true);
   assert.equal(supportsNodeAgentRunMembers(capabilities), true);
   assert.equal(supportsNodeAgentManualRuns(capabilities), true);
   assert.equal(supportsNodeAgentSharedSpace(capabilities, "docker"), true);

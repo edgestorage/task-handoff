@@ -3,6 +3,7 @@ import test from "node:test";
 import { ControlPlaneAgentAggregator, deriveAgentRunCallTree } from "../src/control-plane/agents/agent-aggregator.ts";
 import { ControlPlaneEventBus } from "../src/control-plane/events/bus.ts";
 import { NodeTunnelEventRouter } from "../src/control-plane/nodes/tunnel-event-router.ts";
+import { defaultAgentOrchestrationId } from "@task-handoff/protocol/agent-orchestrations";
 
 const revision = "a".repeat(64);
 const timestamp = "2026-09-26T00:00:00.000Z";
@@ -18,7 +19,18 @@ function definition(id: string) {
     cwdFolderId: "folder_one",
     providerId: "codex",
     executionPolicy: { workspaceMaterializer: "overlay-copy-on-write" as const, processSandbox: "instance" as const },
-    callableAgentIds: [],
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+}
+
+function orchestration(id: string, agentIds: string[]) {
+  return {
+    id,
+    revision,
+    name: id,
+    agentIds,
+    edges: [],
     createdAt: timestamp,
     updatedAt: timestamp,
   };
@@ -54,6 +66,7 @@ function run() {
     revision: 0,
     status: "queued" as const,
     provenance: { initiatingInstanceId: "instance_one", initiatingAiSessionId: "session_one", storyId: "story_one" },
+    orchestrationId: defaultAgentOrchestrationId("agent_shared"),
     rootMemberId: "member_root",
     budget: { maxMembers: 4, maxDepth: 2, maxConcurrency: 1 },
     members: [member("member_root")],
@@ -117,6 +130,41 @@ test("Node tunnel validates Agent events and adds Node identity only at the aggr
   assert.equal(event.payload.event.agentId, "agent_one");
   assert.deepEqual(event.scope, { nodeId: "node_one", instanceId: "instance_one" });
   assert.equal(aggregator.definitionsForNode("node_one")[0]?.id, "agent_one");
+});
+
+test("Agent aggregator keeps orchestration projections per Node alongside definitions", () => {
+  const aggregator = new ControlPlaneAgentAggregator();
+  aggregator.replaceOrchestrations("node_one", [orchestration("orchestration_one", ["agent_one"])]);
+  aggregator.replaceOrchestrations("node_two", [orchestration("orchestration_one", ["agent_two"])]);
+  aggregator.handleEvent("node_one", "agent.orchestration.changed", {
+    orchestrationId: "orchestration_one",
+    change: "deleted",
+    revision,
+    orchestration: orchestration("orchestration_one", ["agent_one"]),
+  });
+  assert.deepEqual(aggregator.orchestrationsForNode("node_one"), []);
+  assert.deepEqual(aggregator.orchestrationsForNode("node_two").map((entry) => entry.agentIds), [["agent_two"]]);
+
+  const events = new ControlPlaneEventBus();
+  const published: unknown[] = [];
+  events.on((event) => published.push(event));
+  const router = new NodeTunnelEventRouter({
+    events,
+    onAgentEvent: (nodeId, type, payload) => aggregator.handleEvent(nodeId, type, payload),
+  });
+  router.handle("node_one", {
+    type: "node-agent.event.forwarded",
+    event: {
+      id: "event_two",
+      type: "agent.orchestration.changed",
+      createdAt: timestamp,
+      payload: { orchestrationId: "orchestration_one", change: "created", revision, orchestration: orchestration("orchestration_one", ["agent_one"]) },
+    },
+  });
+  const event = published[0] as { payload: { nodeId: string; event: { orchestrationId: string } }; scope: { nodeId: string } };
+  assert.equal(event.payload.nodeId, "node_one");
+  assert.equal(event.payload.event.orchestrationId, "orchestration_one");
+  assert.equal(event.scope.nodeId, "node_one");
 });
 
 test("Node tunnel treats capability changes as invalidation signals", async () => {

@@ -20,11 +20,19 @@ import {
   type AgentRunToolResult,
 } from "@task-handoff/protocol/agent-runs";
 import { isDeepStrictEqual } from "node:util";
+import {
+  agentOrchestrationContainsAgent,
+  agentOrchestrationEntryAgentIds,
+  agentOrchestrationHasEdge,
+  type AgentOrchestration,
+} from "@task-handoff/protocol/agent-orchestrations";
+import { resolveAgentInvocationToolGrant, type AgentInvocationToolGrant } from "@task-handoff/protocol/agent-invocation-tools";
 import type { AgentRunRepository } from "../persistence/agent-run-repository.ts";
 import type { AgentRunResourceRepository } from "../persistence/agent-run-resource-repository.ts";
 import type { AgentRunMemberTransition } from "../persistence/agent-run-repository.ts";
 import type { NodeAgentState } from "../state.ts";
 import type { AgentDefinitionService, AgentDefinitionChangePublisher } from "./service.ts";
+import type { AgentOrchestrationService } from "./orchestration-service.ts";
 
 export type AgentRunExecutionSupport = (input: {
   targetInstanceId: string;
@@ -46,6 +54,7 @@ export type AgentRunExecutionCoordinator = {
 export class AgentRunService {
   private readonly state: NodeAgentState;
   private readonly definitions: AgentDefinitionService;
+  private readonly orchestrations: AgentOrchestrationService;
   private readonly runs: AgentRunRepository;
   private readonly supportsExecution: AgentRunExecutionSupport;
   private readonly publish?: AgentDefinitionChangePublisher;
@@ -55,6 +64,7 @@ export class AgentRunService {
   constructor(
     state: NodeAgentState,
     definitions: AgentDefinitionService,
+    orchestrations: AgentOrchestrationService,
     runs: AgentRunRepository,
     supportsExecution: AgentRunExecutionSupport,
     publish?: AgentDefinitionChangePublisher,
@@ -62,6 +72,7 @@ export class AgentRunService {
   ) {
     this.state = state;
     this.definitions = definitions;
+    this.orchestrations = orchestrations;
     this.runs = runs;
     this.supportsExecution = supportsExecution;
     this.publish = publish;
@@ -115,12 +126,39 @@ export class AgentRunService {
     return member;
   }
 
+  /**
+   * 成员会话的调用工具授权：只来自 Run 绑定编排中该成员的出边，且目标定义仍然存在。
+   * 这只是会话侧的工具面投影；每次调用仍按同一编排图重新校验。
+   */
+  resolveMemberInvocationTools(runId: string, memberAgentId: string): AgentInvocationToolGrant {
+    const run = this.get(runId);
+    const orchestration = this.requireOrchestrationForRun(run.orchestrationId);
+    const targets = orchestration.edges
+      .filter((edge) => edge.fromAgentId === memberAgentId)
+      .flatMap((edge) => (this.definitions.has(edge.toAgentId) ? [{ agentId: edge.toAgentId, orchestrationId: orchestration.id }] : []));
+    return resolveAgentInvocationToolGrant(targets);
+  }
+
+  private requireOrchestrationForRun(orchestrationId: string): AgentOrchestration {
+    const orchestration = this.orchestrations.find(orchestrationId);
+    if (!orchestration) {
+      throw agentRunServiceError(
+        "AGENT_RUN_ORCHESTRATION_UNKNOWN",
+        `Agent orchestration ${orchestrationId} was not found on this Node Agent.`,
+        409,
+        { orchestrationId },
+      );
+    }
+    return orchestration;
+  }
+
   create(input: AgentRunCreateInput): AgentRun {
     const parsed = AgentRunCreateInputSchema.parse(input);
     const existing = this.runs.getByClientRequestId(parsed.clientRequestId);
     if (existing) {
       const root = existing.members?.find((member) => member.memberId === existing.rootMemberId);
-      const sameRequest = root?.agentId === parsed.agentId
+      const sameRequest = existing.orchestrationId === parsed.orchestrationId
+        && (parsed.entryAgentId === undefined || root?.agentId === parsed.entryAgentId)
         && isDeepStrictEqual(existing.input, parsed.input)
         && isDeepStrictEqual(existing.provenance, parsed.provenance)
         && isDeepStrictEqual(existing.budget, effectiveAgentRunBudget(parsed.budget));
@@ -142,7 +180,9 @@ export class AgentRunService {
       );
     }
 
-    const { definition, runtimeType } = this.definitions.resolveExecution(parsed.agentId);
+    const orchestration = this.requireOrchestrationForRun(parsed.orchestrationId);
+    const entryAgentId = resolveAgentRunEntry(orchestration, parsed.entryAgentId);
+    const { definition, runtimeType } = this.definitions.resolveExecution(entryAgentId);
     if (!this.supportsExecution({
       targetInstanceId: definition.targetInstanceId,
       runtimeType,
@@ -165,6 +205,7 @@ export class AgentRunService {
 
     const run = this.runs.create({
       clientRequestId: parsed.clientRequestId,
+      orchestrationId: orchestration.id,
       input: parsed.input,
       provenance: parsed.provenance,
       budget: effectiveAgentRunBudget(parsed.budget),
@@ -215,10 +256,11 @@ export class AgentRunService {
         runId: input.runId, memberId: input.parentMemberId, status: parent.status,
       });
     }
-    const tools = this.definitions.resolveInvocationTools(parent.agentId);
-    if (!tools.allowedAgentIds.includes(input.agentId)) {
-      throw agentRunServiceError("AGENT_RUN_EXECUTION_UNSUPPORTED", "The caller Agent is not authorized to invoke the target Agent.", 403, {
-        runId: input.runId, memberId: input.parentMemberId, agentId: input.agentId,
+    // 授权来源是 Run 绑定编排的当前图：撤边、删节点或删除编排立即拒绝后续调用。
+    const orchestration = this.requireOrchestrationForRun(run.orchestrationId);
+    if (!agentOrchestrationHasEdge(orchestration, parent.agentId, input.agentId)) {
+      throw agentRunServiceError("AGENT_RUN_INVOCATION_FORBIDDEN", "The caller Agent is not authorized to invoke the target Agent in this orchestration.", 403, {
+        runId: input.runId, memberId: input.parentMemberId, agentId: input.agentId, orchestrationId: orchestration.id,
       });
     }
     const { definition, runtimeType } = this.definitions.resolveExecution(input.agentId);
@@ -420,6 +462,34 @@ export function effectiveAgentRunBudget(requested?: AgentRunBudget): AgentRunBud
     maxDepth: Math.min(requested.maxDepth, AGENT_RUN_DEFAULT_BUDGET.maxDepth),
     maxConcurrency: Math.min(requested.maxConcurrency, AGENT_RUN_DEFAULT_BUDGET.maxConcurrency),
   };
+}
+
+/**
+ * 运行入口是编排内的任意节点：顶级节点只是缺省入口。只有一个顶级节点时可以省略 entryAgentId，
+ * 多顶级节点必须显式指定，避免用不确定的默认值启动运行。
+ */
+export function resolveAgentRunEntry(orchestration: AgentOrchestration, entryAgentId?: string): string {
+  if (entryAgentId) {
+    if (!agentOrchestrationContainsAgent(orchestration, entryAgentId)) {
+      throw agentRunServiceError(
+        "AGENT_RUN_ENTRY_INVALID",
+        `Agent ${entryAgentId} is not part of orchestration ${orchestration.id}.`,
+        409,
+        { orchestrationId: orchestration.id, entryAgentId },
+      );
+    }
+    return entryAgentId;
+  }
+  const entries = agentOrchestrationEntryAgentIds(orchestration);
+  if (entries.length !== 1) {
+    throw agentRunServiceError(
+      "AGENT_RUN_ENTRY_REQUIRED",
+      "The orchestration has multiple entry Agents; the request must name one.",
+      409,
+      { orchestrationId: orchestration.id, entryAgentIds: entries },
+    );
+  }
+  return entries[0]!;
 }
 
 export function agentRunServiceError(

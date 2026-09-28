@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
+import { runInTransaction } from "./transaction-journal.ts";
 import { isDeepStrictEqual } from "node:util";
 import {
   AGENT_RUN_TERMINAL_STATUSES,
@@ -20,11 +21,13 @@ import {
   type AgentRunStatus,
   type AgentRunTimelineEntry,
 } from "@task-handoff/protocol/agent-runs";
+import { defaultAgentOrchestrationId } from "@task-handoff/protocol/agent-orchestrations";
 
 type Row = Record<string, unknown>;
 
 export type CreateAgentRunInput = {
   clientRequestId: string;
+  orchestrationId: string;
   input: AgentRunInput;
   provenance: AgentRunProvenance;
   budget: AgentRunBudget;
@@ -95,19 +98,6 @@ function parseJson(value: unknown): unknown {
   }
 }
 
-function runImmediate<T>(client: DatabaseSync, operation: () => T): T {
-  if ((client as DatabaseSync & { isTransaction?: boolean }).isTransaction) return operation();
-  client.exec("BEGIN IMMEDIATE");
-  try {
-    const result = operation();
-    client.exec("COMMIT");
-    return result;
-  } catch (error) {
-    client.exec("ROLLBACK");
-    throw error;
-  }
-}
-
 function repositoryError(code: string, message: string, statusCode: number, details?: Record<string, unknown>) {
   return Object.assign(new Error(message), { code, statusCode, ...(details ? { details } : {}) });
 }
@@ -131,15 +121,16 @@ export class AgentRunRepository {
   }
 
   transaction<T>(operation: () => T): T {
-    return runImmediate(this.client, operation);
+    return runInTransaction(this.client, operation);
   }
 
   create(input: CreateAgentRunInput): AgentRun {
-    return runImmediate(this.client, () => {
+    return runInTransaction(this.client, () => {
       const existing = this.getByClientRequestId(input.clientRequestId);
       if (existing) {
         const root = existing.members?.find((member) => member.memberId === existing.rootMemberId);
-        const sameRequest = root?.agentId === input.root.agentId
+        const sameRequest = existing.orchestrationId === input.orchestrationId
+          && root?.agentId === input.root.agentId
           && root.instanceId === input.root.instanceId
           && isDeepStrictEqual(root.executionSnapshot, input.root.executionSnapshot)
           && isDeepStrictEqual(existing.input, input.input)
@@ -159,10 +150,10 @@ export class AgentRunRepository {
       const rootMemberId = id("member");
       const timestamp = now(input.timestamp);
       this.client.prepare(`INSERT INTO na_agent_runs
-        (run_id, client_request_id, revision, status, input_json, provenance_json, root_member_id, budget_json,
+        (run_id, client_request_id, revision, status, input_json, provenance_json, orchestration_id, root_member_id, budget_json,
          result_json, error_json, cleanup_json, created_at, updated_at, completed_at)
-        VALUES (?, ?, 0, 'queued', ?, ?, ?, ?, NULL, NULL, NULL, ?, ?, NULL)`)
-        .run(runId, input.clientRequestId, json(input.input), json(input.provenance), rootMemberId, json(input.budget), timestamp, timestamp);
+        VALUES (?, ?, 0, 'queued', ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?, NULL)`)
+        .run(runId, input.clientRequestId, json(input.input), json(input.provenance), input.orchestrationId, rootMemberId, json(input.budget), timestamp, timestamp);
       this.client.prepare(`INSERT INTO na_agent_run_members
         (member_id, run_id, client_request_id, agent_id, parent_member_id, instance_id, ai_session_id, role, depth, status,
          input_json, execution_snapshot_json, result_json, error_json, created_at, updated_at, completed_at)
@@ -189,7 +180,7 @@ export class AgentRunRepository {
   }
 
   addMember(input: AddAgentRunMemberInput): AgentRunMember {
-    return runImmediate(this.client, () => {
+    return runInTransaction(this.client, () => {
       const run = this.require(input.runId);
       if (AGENT_RUN_TERMINAL_STATUSES.has(run.status)) {
         throw repositoryError("AGENT_RUN_TERMINAL", "A terminal run cannot accept another member.", 409, { runId: input.runId, status: run.status });
@@ -251,7 +242,7 @@ export class AgentRunRepository {
   }
 
   transitionRun(runId: string, transition: AgentRunTransition): AgentRun {
-    return runImmediate(this.client, () => {
+    return runInTransaction(this.client, () => {
       const current = this.require(runId);
       this.assertTransition(current.status, transition.status, { runId });
       const timestamp = now(transition.timestamp);
@@ -277,7 +268,7 @@ export class AgentRunRepository {
   }
 
   transitionMember(runId: string, memberId: string, transition: AgentRunMemberTransition): AgentRunMember {
-    return runImmediate(this.client, () => {
+    return runInTransaction(this.client, () => {
       const current = this.requireMember(runId, memberId);
       this.assertTransition(current.status, transition.status, { runId, memberId });
       const timestamp = now(transition.timestamp);
@@ -301,7 +292,7 @@ export class AgentRunRepository {
   }
 
   appendTimeline(input: AppendAgentRunTimelineInput): AgentRunTimelineEntry {
-    return runImmediate(this.client, () => {
+    return runInTransaction(this.client, () => {
       this.require(input.runId);
       if (input.memberId && !this.getMember(input.runId, input.memberId)) {
         throw repositoryError("AGENT_RUN_TIMELINE_MEMBER_NOT_FOUND", "The timeline member does not belong to this run.", 404, {
@@ -355,6 +346,13 @@ export class AgentRunRepository {
       .map((member) => this.memberFromRow(member));
     const timeline = (this.client.prepare("SELECT * FROM na_agent_run_timeline WHERE run_id = ? ORDER BY sequence").all(runId) as Row[])
       .map((entry) => this.timelineFromRow(entry));
+    // 迁移会为既有运行回填编排绑定；未回填的历史行按根成员的默认编排归一，与迁移前的行为一致。
+    const orchestrationId = row.orchestration_id == null || String(row.orchestration_id).length === 0
+      ? (() => {
+        const root = members.find((member) => member.memberId === String(row.root_member_id));
+        return root ? defaultAgentOrchestrationId(root.agentId) : undefined;
+      })()
+      : String(row.orchestration_id);
     try {
       return sanitizeAgentRun({
         runId,
@@ -363,6 +361,7 @@ export class AgentRunRepository {
         status: row.status,
         input: row.input_json == null ? undefined : parseJson(row.input_json),
         provenance: parseJson(row.provenance_json),
+        orchestrationId,
         rootMemberId: row.root_member_id,
         budget: parseJson(row.budget_json),
         result: row.result_json == null ? undefined : parseJson(row.result_json),
