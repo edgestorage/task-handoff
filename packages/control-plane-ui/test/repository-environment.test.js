@@ -83,6 +83,7 @@ test("Worktrees use opaque server ids and expose AI-session creation without cwd
   assert.doesNotMatch(panel, /\.repository-worktree-title \{[^}]*flex-wrap/);
   assert.match(panel, /\.repository-worktree-title strong \{[\s\S]*overflow: hidden;[\s\S]*text-overflow: ellipsis;[\s\S]*white-space: nowrap/);
   assert.match(panel, /\.repository-worktree-title > :deep\(div\) \{[^}]*flex: 0 0 auto;[^}]*white-space: nowrap;/);
+  assert.match(panel, /\.repository-worktree-title > :deep\(\.repository-worktree-kind\) \{[^}]*color: var\(--text\);/);
   assert.match(panel, /:global\(\.repository-worktree-tooltip\) \{[^}]*max-width: min\(480px, calc\(100vw - 24px\)\);[^}]*overflow-wrap: anywhere;/);
   assert.match(environment, /class="repository-environment-branch-summary" :title="branchSummary"/);
   assert.match(environment, /\.repository-environment-branch-summary \{[\s\S]*white-space: nowrap/);
@@ -128,7 +129,7 @@ test("worktree rows keep a single-line title, hover details, and pinned row acti
   assert.match(panel, /\.repository-worktree-icon \{[^}]*color: var\(--brand-accent\);/);
   assert.doesNotMatch(panel, /\.repository-worktree-icon \{[^}]*color: var\(--brand-accent-muted\)/);
   assert.match(panel, /<div class="repository-worktree-identity">[\s\S]*<div class="repository-worktree-copy">[\s\S]*<div class="repository-worktree-title">[\s\S]*<div v-if="worktreeHasSummary\(worktree\)" class="repository-worktree-summary">[\s\S]*<div class="repository-worktree-row-actions">/);
-  assert.match(panel, /<div class="repository-worktree-title">[\s\S]*<TooltipTrigger as-child>[\s\S]*<strong>\{\{ worktreeLabel\(worktree\) \}\}<\/strong>[\s\S]*<Badge variant="secondary">\{\{ worktreeKindLabel\(worktree\) \}\}<\/Badge>/);
+  assert.match(panel, /<div class="repository-worktree-title">[\s\S]*<TooltipTrigger as-child>[\s\S]*<strong>\{\{ worktreeLabel\(worktree\) \}\}<\/strong>[\s\S]*<Badge variant="secondary" class="repository-worktree-kind">\{\{ worktreeKindLabel\(worktree\) \}\}<\/Badge>/);
 
   assert.match(panel, /return commit \? `\$\{label\} · \$\{commit\}` : label;/);
   assert.doesNotMatch(panel, /<code v-if="worktreeCommit\(worktree\)"/);
@@ -329,7 +330,7 @@ test("Repository file and directory failures preserve the file tree", async () =
 
   assert.match(fileList, /<RepositoryErrorNotice v-else-if="workspaceLoadError"/);
   assert.match(fileList, /<template v-else>[\s\S]*directoryLoadError[\s\S]*<RepositoryFileTree/);
-  assert.match(workspace, /currentFilePath = computed\(\(\) => activeTab\.value\?\.path \|\| fileOpenError\.value\?\.path/);
+  assert.match(workspace, /currentFilePath = computed\(\(\) => openingFilePath\.value \|\| activeTab\.value\?\.path \|\| fileOpenError\.value\?\.path/);
   assert.match(workspace, /<section v-if="fileOpenError" class="repository-workspace-editor repository-workspace-file-error">[\s\S]*RepositoryErrorNotice/);
   assert.doesNotMatch(workspace, /repository-workspace-file-error">\s*<header/);
   assert.match(workspace, /<section v-else-if="activeTab" class="repository-workspace-editor">/);
@@ -337,6 +338,21 @@ test("Repository file and directory failures preserve the file tree", async () =
   assert.doesNotMatch(openFile, /workspaceLoadError/);
   assert.match(toggleDirectory, /directoryLoadError\.value = \{ path: entry\.path, error \}/);
   assert.doesNotMatch(toggleDirectory, /workspaceLoadError/);
+});
+
+test("Repository file content shows a loading state while the file is fetched", async () => {
+  const workspace = await source("apps/control-plane/instance-detail/RepositoryWorkspace.vue");
+  const openFile = workspace.slice(workspace.indexOf("async function openFile"), workspace.indexOf("function selectTab("));
+  const selectTab = workspace.slice(workspace.indexOf("function selectTab("), workspace.indexOf("watch(\n  [() => props.initialFileRequestId"));
+
+  assert.match(
+    workspace,
+    /<section v-else-if="openingFilePath" class="repository-workspace-editor repository-workspace-file-loading">[\s\S]*repository-workspace-spin[\s\S]*repository\.workspace\.fileLoading[\s\S]*\{\{ openingFilePath \}\}/,
+  );
+  assert.match(openFile, /openingFilePath\.value = entry\.path;[\s\S]*await getRepositoryFile/);
+  assert.match(openFile, /finally \{[\s\S]*if \(revision === fileOpenRevision\) openingFilePath\.value = undefined;/);
+  assert.match(selectTab, /openingFilePath\.value = undefined;/);
+  assert.match(workspace, /\.repository-workspace-file-loading-body \{ align-items: center; justify-content: center;/);
 });
 
 test("Repository workspace is tab-only and has no independent-window route", async () => {

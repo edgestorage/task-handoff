@@ -85,7 +85,7 @@
                     </Tooltip>
                   </TooltipProvider>
                   <Badge v-if="worktree.isCurrent" variant="default"><Check :size="12" />{{ t("repository.worktreesPanel.current") }}</Badge>
-                  <Badge variant="secondary">{{ worktreeKindLabel(worktree) }}</Badge>
+                  <Badge variant="secondary" class="repository-worktree-kind">{{ worktreeKindLabel(worktree) }}</Badge>
                 </div>
                 <div v-if="worktreeHasSummary(worktree)" class="repository-worktree-summary">
                   <span v-if="activeSessionCount(worktree)" class="repository-worktree-summary-item">
@@ -845,6 +845,10 @@ async function startAiSession(worktree: RepositoryWorktree) {
 .repository-worktree-title > :deep(div) {
   flex: 0 0 auto;
   white-space: nowrap;
+}
+
+.repository-worktree-title > :deep(.repository-worktree-kind) {
+  color: var(--text);
 }
 
 :global(.repository-worktree-tooltip) {

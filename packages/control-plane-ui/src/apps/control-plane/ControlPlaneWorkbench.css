@@ -446,6 +446,8 @@
 }
 
 :global(.control-plane-instance-menu.control-plane-instance-menu) {
+  --instance-menu-row-height: 50px;
+  --instance-menu-row-gap: 2px;
   width: max(var(--reka-dropdown-menu-trigger-width), 260px);
   max-width: min(360px, var(--reka-dropdown-menu-content-available-width));
   max-height: min(360px, var(--reka-dropdown-menu-content-available-height));
@@ -454,12 +456,16 @@
 }
 
 :global(.control-plane-instance-menu-scroll) {
-  height: min(var(--instance-menu-height), 352px, calc(var(--reka-dropdown-menu-content-available-height) - 8px));
+  height: min(
+    calc(var(--instance-menu-items, 1) * var(--instance-menu-row-height) + (var(--instance-menu-items, 1) - 1) * var(--instance-menu-row-gap)),
+    352px,
+    calc(var(--reka-dropdown-menu-content-available-height) - 8px)
+  );
 }
 
 :global(.control-plane-instance-menu-list) {
   display: grid;
-  gap: 2px;
+  gap: var(--instance-menu-row-gap);
   padding-right: 0;
 }
 
@@ -472,7 +478,7 @@
   grid-template-columns: 8px minmax(0, 1fr) 16px;
   align-items: start;
   gap: 10px;
-  min-height: 50px;
+  min-height: var(--instance-menu-row-height);
   border-radius: 7px;
   padding: 8px;
   cursor: pointer;
@@ -521,6 +527,8 @@
 }
 
 :global(.control-plane-settings-menu.control-plane-settings-menu) {
+  --settings-menu-row-height: 32px;
+  --settings-menu-row-gap: 1px;
   width: max(var(--reka-dropdown-menu-trigger-width), 220px);
   max-width: min(320px, var(--reka-dropdown-menu-content-available-width));
   max-height: var(--reka-dropdown-menu-content-available-height);
@@ -529,12 +537,16 @@
 }
 
 :global(.control-plane-settings-menu-scroll) {
-  height: min(var(--settings-menu-height), 352px, calc(var(--reka-dropdown-menu-content-available-height) - 8px));
+  height: min(
+    calc(var(--settings-menu-items, 1) * var(--settings-menu-row-height) + (var(--settings-menu-items, 1) - 1) * var(--settings-menu-row-gap)),
+    352px,
+    calc(var(--reka-dropdown-menu-content-available-height) - 8px)
+  );
 }
 
 :global(.control-plane-settings-menu-list) {
   display: grid;
-  gap: 1px;
+  gap: var(--settings-menu-row-gap);
 }
 
 :global(.control-plane-settings-menu-scroll:has([data-orientation="vertical"][data-state="visible"]) .control-plane-settings-menu-list) {
@@ -545,7 +557,7 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr) 16px;
   gap: 8px;
-  min-height: 32px;
+  min-height: var(--settings-menu-row-height);
   align-items: center;
   border-radius: 7px;
   padding: 4px 9px;
@@ -558,6 +570,8 @@
 }
 
 :global(.control-plane-node-filter-menu.control-plane-node-filter-menu) {
+  --node-filter-menu-row-height: 32px;
+  --node-filter-menu-row-gap: 1px;
   width: max(var(--reka-dropdown-menu-trigger-width), 220px);
   max-width: min(320px, var(--reka-dropdown-menu-content-available-width));
   max-height: min(320px, var(--reka-dropdown-menu-content-available-height));
@@ -566,12 +580,16 @@
 }
 
 :global(.control-plane-node-filter-menu-scroll) {
-  height: min(var(--node-filter-menu-height), 320px, calc(var(--reka-dropdown-menu-content-available-height) - 8px));
+  height: min(
+    calc(var(--node-filter-menu-items, 1) * var(--node-filter-menu-row-height) + (var(--node-filter-menu-items, 1) - 1) * var(--node-filter-menu-row-gap)),
+    320px,
+    calc(var(--reka-dropdown-menu-content-available-height) - 8px)
+  );
 }
 
 :global(.control-plane-node-filter-menu-list) {
   display: grid;
-  gap: 1px;
+  gap: var(--node-filter-menu-row-gap);
 }
 
 :global(.control-plane-node-filter-menu-scroll:has([data-orientation="vertical"][data-state="visible"]) .control-plane-node-filter-menu-list) {
@@ -582,7 +600,7 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr) 16px;
   gap: 4px;
-  min-height: 32px;
+  min-height: var(--node-filter-menu-row-height);
   align-items: center;
   border-radius: 7px;
   padding: 0 9px 0 0;
@@ -600,7 +618,7 @@
   grid-template-columns: 8px minmax(0, 1fr) auto;
   gap: 8px;
   min-width: 0;
-  height: 32px;
+  height: var(--node-filter-menu-row-height);
   align-items: center;
   border: 0;
   padding: 4px 5px 4px 9px;

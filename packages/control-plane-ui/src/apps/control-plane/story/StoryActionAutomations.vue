@@ -4,7 +4,7 @@
       <div><h3>{{ t("stories.automation.title") }}</h3><span>{{ automations.length }}</span></div>
       <Button variant="ghost" size="icon-sm" :disabled="disabled" :aria-label="t('stories.automation.add')" :title="t('stories.automation.add')" @click="openCreate"><Plus :size="16" /></Button>
     </div>
-    <div v-if="loading" class="story-automation-state"><LoaderCircle class="story-automation-spin" :size="14" /> {{ t("stories.automation.loading") }}</div>
+    <div v-if="loading" class="story-automation-state" role="status"><LoaderCircle class="story-automation-spin" :size="14" /> {{ t("stories.automation.loading") }}</div>
     <div v-else-if="error" class="story-automation-state story-automation-error" role="alert">{{ error }}</div>
     <div v-else-if="!automations.length" class="story-automation-state story-automation-empty-state">
       <span>{{ t("stories.automation.empty") }}</span>
@@ -424,9 +424,9 @@ function formatTime(value: string) { return new Intl.DateTimeFormat(locale.value
 .story-automation-meta { color:var(--text-muted); }
 .story-automation-action { overflow:hidden; color:var(--text-strong); font-size:13px; font-weight:500; text-overflow:ellipsis; white-space:nowrap; }
 .story-automation-actions { display:flex; flex:0 0 auto; gap:2px; }
-.story-automation-state { min-height:38px; color:var(--text-muted); font-size:12px; padding:11px 12px; }
-.story-automation-empty-state { display:flex; align-items:center; justify-content:center; gap:8px; min-height:64px; padding:16px 12px; }
-.story-automation-error { color:var(--status-danger) !important; font-size:12px; }
+.story-automation-state { display:flex; min-height:38px; align-items:center; gap:8px; color:var(--text-muted); font-size:12px; padding:11px 12px; }
+.story-automation-empty-state { justify-content:center; min-height:64px; padding:16px 12px; }
+.story-automation-error { color:var(--status-danger); font-size:12px; }
 .story-automation-spin { animation:story-automation-spin .9s linear infinite; }
 .story-automation-history-trigger { display:flex; width:max-content; align-items:center; gap:5px; border:0; background:transparent; color:var(--text-muted); cursor:pointer; font-size:12px; padding:0; }
 .story-automation-history-trigger:hover,.story-automation-history-trigger:focus-visible,.story-automation-history-trigger[data-state="open"] { color:var(--text-strong); outline:none; }

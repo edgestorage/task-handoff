@@ -8,6 +8,7 @@ import {
   sanitizeStoredControlledInstance,
   supportsNodeMultiEntityModelAssignment,
   supportsNodePrivateModelCatalog,
+  supportsNodeStableModelIdentity,
 } from "../src/control-plane.ts";
 import {
   AiSessionCreateInputSchema,
@@ -77,7 +78,10 @@ test("model capabilities default to unsupported for v0.0.23 peers and ignore fut
     managedModels: { multiEntityAssignment: true, privateModelCatalog: true, future: true },
     future: true,
   });
-  assert.deepEqual(node.managedModels, { multiEntityAssignment: true, privateModelCatalog: true });
+  // stableModelIdentity is additive: peers that predate it normalize to false.
+  assert.deepEqual(node.managedModels, { multiEntityAssignment: true, privateModelCatalog: true, stableModelIdentity: false });
+  assert.equal(supportsNodeStableModelIdentity({ managedModels: { stableModelIdentity: true } }), true);
+  assert.equal(supportsNodeStableModelIdentity({ managedModels: { multiEntityAssignment: true } }), false);
 
   assert.deepEqual(normalizeAiSessionModelSelectionCapabilities({
     agent: "codex",

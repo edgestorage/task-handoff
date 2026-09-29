@@ -13,6 +13,11 @@ HOST=${TASK_HANDOFF_TEST_HOST:-huadream@192.168.139.109}
 SSH_PORT=${TASK_HANDOFF_TEST_SSH_PORT:-}
 REUSE_ARTIFACTS=${TASK_HANDOFF_TEST_REUSE_ARTIFACTS:-0}
 BASE_VERSION=${TASK_HANDOFF_TEST_BASE_VERSION:-0.0.25}
+# 测试环境默认打开 Agent 运行能力：feature flag 在构建期烧进 Control Plane UI
+# （packages/control-plane-ui/vite.config.ts 读取 TASK_HANDOFF_AGENT_RUNS_ENABLED），
+# 未开启时部署出来的界面不会出现 Agent/编排入口。可用同名环境变量显式覆盖。
+TASK_HANDOFF_AGENT_RUNS_ENABLED=${TASK_HANDOFF_AGENT_RUNS_ENABLED:-1}
+export TASK_HANDOFF_AGENT_RUNS_ENABLED
 ARTIFACT_DIR=release/npm/artifacts
 BUILD_DATE=$(date +%Y%m%d)
 VERSION=${1:-}
@@ -107,7 +112,7 @@ if [ "$REUSE_ARTIFACTS" != 1 ]; then
   done
 fi
 
-log "Build and verify $VERSION"
+log "Build and verify $VERSION (agentRuns=$TASK_HANDOFF_AGENT_RUNS_ENABLED)"
 if [ "$REUSE_ARTIFACTS" = 1 ]; then
   log "Reuse existing verified artifacts for $VERSION"
 else
@@ -124,6 +129,24 @@ for name in server control-plane node-agent controlled-instance; do
 done
 test -f "release/runtime-artifacts/controlled-instance-runtime-$VERSION-linux-universal.tar.gz"
 test -f "release/npm/node-agent/runtime-artifacts/controlled-instance-runtime-$VERSION-linux-universal.tar.gz"
+
+# feature flag 是构建期内联的，产物里必须是本轮要求的取值，否则测试环境会缺少 Agent/编排入口。
+# 直接在待发布的 control-plane tarball 上校验，这样复用旧产物（REUSE_ARTIFACTS=1）时同样有效。
+# 校验先把 bundle 解到临时文件：tar 与 `grep -q` 直接构成管道时，grep 命中后提前退出会让
+# tar 收到 SIGPIPE，在 `set -o pipefail` 下变成误报。
+if [ "$TASK_HANDOFF_AGENT_RUNS_ENABLED" = 1 ]; then EXPECTED_AGENT_RUNS_FLAG='!0'; else EXPECTED_AGENT_RUNS_FLAG='!1'; fi
+CONTROL_PLANE_ASSETS=$(tar -tf "$ARTIFACT_DIR/task-handoff-control-plane-$VERSION.tgz" | grep -E '^package/ui/assets/index-[^/]*\.js$' || true)
+CONTROL_PLANE_BUNDLE=${CONTROL_PLANE_ASSETS%%$'\n'*}
+CONTROL_PLANE_BUNDLE_TMP=$(mktemp -t task-handoff-control-plane-bundle)
+if [ -z "$CONTROL_PLANE_BUNDLE" ] \
+  || ! tar -xOf "$ARTIFACT_DIR/task-handoff-control-plane-$VERSION.tgz" "$CONTROL_PLANE_BUNDLE" > "$CONTROL_PLANE_BUNDLE_TMP" \
+  || ! grep -Fq "agentRuns:$EXPECTED_AGENT_RUNS_FLAG" "$CONTROL_PLANE_BUNDLE_TMP"; then
+  rm -f "$CONTROL_PLANE_BUNDLE_TMP"
+  printf 'Control Plane UI bundle does not contain agentRuns:%s; expected agentRuns=%s. Rebuild the artifacts instead of reusing them.\n' \
+    "$EXPECTED_AGENT_RUNS_FLAG" "$TASK_HANDOFF_AGENT_RUNS_ENABLED" >&2
+  exit 1
+fi
+rm -f "$CONTROL_PLANE_BUNDLE_TMP"
 if [ "$REUSE_ARTIFACTS" = 1 ]; then
   for name in server control-plane node-agent controlled-instance; do
     tar -xOf "$ARTIFACT_DIR/task-handoff-$name-$VERSION.tgz" package/package.json | node -e '

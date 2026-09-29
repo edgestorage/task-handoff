@@ -10,6 +10,8 @@ const chinese = createControlPlaneI18nForTest("zh-CN").global.t;
 test("repository workspace, diff, branch, worktree, and delivery labels render in both locales", () => {
   assert.equal(english("repository.workspace.explorer"), "File Explorer");
   assert.equal(chinese("repository.workspace.explorer"), "文件浏览器");
+  assert.equal(english("repository.workspace.fileLoading"), "Loading file…");
+  assert.equal(chinese("repository.workspace.fileLoading"), "正在加载文件…");
   assert.equal(english("repository.diff.status.modified"), "Modified");
   assert.equal(chinese("repository.diff.status.modified"), "已修改");
   assert.equal(english("repository.branchesPanel.delete"), "Delete branch");

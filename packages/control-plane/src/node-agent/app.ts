@@ -1453,7 +1453,7 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       protocolVersion: CONTROL_PLANE_PROTOCOL_VERSION,
       capabilities: {
         modelEndpointProbe: true,
-        managedModels: { multiEntityAssignment: true, privateModelCatalog: true },
+        managedModels: { multiEntityAssignment: true, privateModelCatalog: true, stableModelIdentity: true },
         aiSessionHistoryLimit: true,
         aiSessionAttachmentRetention: true,
         aiSessionFileAttachmentLimit: true,

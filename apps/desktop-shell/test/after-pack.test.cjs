@@ -58,3 +58,43 @@ test("afterPack requires the dedicated transparent tray icon", () => {
   fs.writeFileSync(path.join(resources, "tray-icon.png"), "icon");
   assert.doesNotThrow(() => validateDesktopTrayResource(context));
 });
+
+test("afterPack rejects a desktop bundle that dropped a node agent bootstrap asset", () => {
+  const appOutDir = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-after-pack-bootstrap-"));
+  const runtimeRoot = path.join(appOutDir, "TaskHandoff.app", "Contents", "Resources", "app.asar.unpacked");
+  fs.mkdirSync(path.join(runtimeRoot, "bin"), { recursive: true });
+  fs.writeFileSync(path.join(runtimeRoot, "bin", "task-handoff.js"), "require('../dist/cli');\n");
+  fs.mkdirSync(path.join(runtimeRoot, "dist"), { recursive: true });
+  fs.writeFileSync(path.join(runtimeRoot, "dist", "cli.js"), "export {};\n");
+  fs.mkdirSync(path.join(runtimeRoot, "node_modules", "fastify"), { recursive: true });
+  fs.writeFileSync(path.join(runtimeRoot, "node_modules", "fastify", "package.json"), "{}\n");
+  const context = {
+    appOutDir,
+    electronPlatformName: "darwin",
+    packager: {
+      appInfo: { productFilename: "TaskHandoff" },
+      projectDir: path.resolve(__dirname, "../../.."),
+    },
+  };
+
+  assert.throws(
+    () => validateDesktopServerRuntime(context),
+    /missing docker\/entrypoint\.sh, docker\/git-provision\.sh/,
+  );
+
+  const sourceDockerDir = path.join(context.packager.projectDir, "docker");
+  const sourceAssets = fs.readdirSync(sourceDockerDir).filter((name) => fs.statSync(path.join(sourceDockerDir, name)).isFile());
+  fs.mkdirSync(path.join(runtimeRoot, "docker"), { recursive: true });
+  for (const name of sourceAssets) {
+    if (name === "git-provision.sh") continue;
+    fs.copyFileSync(path.join(sourceDockerDir, name), path.join(runtimeRoot, "docker", name));
+  }
+
+  assert.throws(
+    () => validateDesktopServerRuntime(context),
+    /missing docker\/git-provision\.sh/,
+  );
+
+  fs.copyFileSync(path.join(sourceDockerDir, "git-provision.sh"), path.join(runtimeRoot, "docker", "git-provision.sh"));
+  assert.doesNotThrow(() => validateDesktopServerRuntime(context));
+});

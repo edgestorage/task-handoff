@@ -90,12 +90,21 @@
                       <div class="model-summary-popover-list">
                         <div v-for="location in model.locations || []" :key="modelLocationKey(location)" class="model-summary-popover-row">
                           <MapPin :size="14" aria-hidden="true" />
-                          <span><strong>{{ modelLocationLabel(location) }}</strong><small>{{ location.type === "node" ? t("settings.modelRegistry.references", { count: location.referenceCount }) : t("settings.modelRegistry.controlPlaneManaged") }}</small></span>
+                          <span>
+                            <strong>{{ modelLocationLabel(location) }}</strong>
+                            <small v-if="location.type === 'node' && location.revision && model.revision && location.revision !== model.revision" class="model-location-stale">{{ t("settings.modelRegistry.locationPending") }}</small>
+                            <small v-else-if="location.type === 'node' && location.revision && model.revision">{{ t("settings.modelRegistry.locationSynced") }}</small>
+                            <small v-else>{{ location.type === "node" ? t("settings.modelRegistry.references", { count: location.referenceCount }) : t("settings.modelRegistry.controlPlaneManaged") }}</small>
+                          </span>
                         </div>
                       </div>
                     </ScrollArea>
                   </PopoverContent>
                 </Popover>
+                <span v-if="staleLocations(model).length" class="model-summary-item model-summary-alert" role="status">
+                  <AlertTriangle :size="14" aria-hidden="true" />
+                  <span>{{ t("settings.modelRegistry.pendingSync", { count: staleLocations(model).length }) }}</span>
+                </span>
                 <Popover>
                   <PopoverTrigger as-child>
                     <button type="button" class="model-summary-item model-summary-trigger">
@@ -129,6 +138,19 @@
                     <DropdownMenuItem v-if="model.locations?.some((location) => location.type === 'control-plane')" :disabled="!canMoveModel(model.id, -1)" @select="moveModel(model.id, -1)"><ChevronUp :size="14" /><span>{{ t("settings.modelRegistry.moveUp") }}</span></DropdownMenuItem>
                     <DropdownMenuItem v-if="model.locations?.some((location) => location.type === 'control-plane')" :disabled="!canMoveModel(model.id, 1)" @select="moveModel(model.id, 1)"><ChevronDown :size="14" /><span>{{ t("settings.modelRegistry.moveDown") }}</span></DropdownMenuItem>
                     <DropdownMenuSeparator v-if="model.locations?.some((location) => location.type === 'control-plane')" />
+                    <DropdownMenuItem v-if="staleLocations(model).length" :disabled="syncingModelId === model.id" @select="syncModelLocations(model)"><RefreshCw :size="14" /><span>{{ t("settings.modelRegistry.syncLocations") }}</span></DropdownMenuItem>
+                    <DropdownMenuSub v-if="mergeCandidates(model).length">
+                      <DropdownMenuSubTrigger><Combine :size="14" /><span>{{ t("settings.modelRegistry.mergeInto") }}</span></DropdownMenuSubTrigger>
+                      <DropdownMenuSubContent class="model-merge-menu">
+                        <DropdownMenuItem v-for="candidate in mergeCandidates(model)" :key="candidate.id" @select="requestMerge(model, candidate)">
+                          <span class="model-menu-copy">
+                            <strong>{{ candidate.name }} · {{ candidate.model }}</strong>
+                            <small>{{ t("settings.modelRegistry.mergeIntoDescription", { model: candidate.model, endpoint: candidate.endpoint }) }}</small>
+                          </span>
+                        </DropdownMenuItem>
+                      </DropdownMenuSubContent>
+                    </DropdownMenuSub>
+                    <DropdownMenuSeparator v-if="staleLocations(model).length || mergeCandidates(model).length" />
                     <DropdownMenuSub>
                       <DropdownMenuSubTrigger><Trash2 :size="14" /><span>{{ t("settings.modelRegistry.deleteFrom") }}</span></DropdownMenuSubTrigger>
                       <DropdownMenuSubContent class="model-delete-location-menu">
@@ -250,12 +272,22 @@
       <AlertDialogFooter><AlertDialogCancel>{{ t("common.actions.cancel") }}</AlertDialogCancel><AlertDialogAction @click="discardAndClose">{{ t("settings.modelRegistry.discard") }}</AlertDialogAction></AlertDialogFooter>
     </AlertDialogContent>
   </AlertDialog>
+
+  <AlertDialog :open="Boolean(pendingMerge)" @update:open="(open) => !open && (pendingMerge = undefined)">
+    <AlertDialogContent>
+      <AlertDialogHeader>
+        <AlertDialogTitle>{{ t("settings.modelRegistry.mergeTitle") }}</AlertDialogTitle>
+        <AlertDialogDescription>{{ t("settings.modelRegistry.mergeConfirm", { source: pendingMerge?.model.model || '', target: pendingMerge?.target.model || '' }) }}</AlertDialogDescription>
+      </AlertDialogHeader>
+      <AlertDialogFooter><AlertDialogCancel :disabled="Boolean(mergingModelId)">{{ t("common.actions.cancel") }}</AlertDialogCancel><Button variant="destructive" size="sm" :disabled="Boolean(mergingModelId)" @click="confirmMerge">{{ mergingModelId ? t("settings.modelRegistry.merging") : t("settings.modelRegistry.merge") }}</Button></AlertDialogFooter>
+    </AlertDialogContent>
+  </AlertDialog>
 </template>
 
 <script setup lang="ts">
 import { computed, nextTick, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { Activity, AlertTriangle, Boxes, Check, ChevronDown, ChevronUp, ChevronsUpDown, Copy, GripVertical, KeyRound, Layers, Link2, MapPin, MoreHorizontal, Plus, RefreshCw, Search, Settings, Trash2, X } from "@lucide/vue";
+import { Activity, AlertTriangle, Boxes, Check, ChevronDown, ChevronUp, ChevronsUpDown, Combine, Copy, GripVertical, KeyRound, Layers, Link2, MapPin, MoreHorizontal, Plus, RefreshCw, Search, Settings, Trash2, X } from "@lucide/vue";
 import type { ModelApp, ModelConfig, ModelLocation } from "../../../api/types";
 import { useModelRegistryQuery, useModelsQuery, useNodesQuery } from "../../../api/queries";
 import { invalidateControlPlaneDomains } from "../../../api/queryInvalidation";
@@ -299,9 +331,10 @@ const modelNameMenuOpenOnPointerDownKey = ref<number>();
 const modelNameEntryKeys = new WeakMap<object, number>();
 let nextModelNameEntryKey = 0;
 const pendingDelete = ref<{ model: ModelConfig; location: ModelLocation }>();
+const pendingMerge = ref<{ model: ModelConfig; target: ModelConfig }>();
 const refreshModels = () => invalidateControlPlaneDomains(queryClient, ["models"]);
 const translateError = (error: unknown) => translateApiError(error, t, error instanceof Error ? error.message : String(error));
-const { addModelName, canDiscoverModels, canMoveModel, canSaveModel, canTestModel, checkModel, copyingModelId, copyModelDraft, deletingModelId, discoveredModels, discoveringModels, editModel, editingModelId, formModelBusyId, modelDraftDirty, moveModel, moveModelName, reorderModelName, removeModel, removeModelName, resetModelForm, saveModel, savingModelId, selectedNodeSupportsModelEndpointProbe, setProtocols, settingsModel, testingModel, fetchModelOptions } = useModelSettings({ errorText: translateError, models: () => models.data.value || [], nodes: () => nodes.data.value || [], onModelDeleted() {}, refreshModels, translate: t });
+const { addModelName, canDiscoverModels, canMoveModel, canSaveModel, canTestModel, checkModel, copyingModelId, copyModelDraft, deletingModelId, discoveredModels, discoveringModels, editModel, editingModelId, formModelBusyId, mergeCandidates, mergeModelInto, mergingModelId, modelDraftDirty, moveModel, moveModelName, reorderModelName, removeModel, removeModelName, resetModelForm, saveModel, savingModelId, selectedNodeSupportsModelEndpointProbe, setProtocols, settingsModel, staleLocations, syncModelLocations, syncingModelId, testingModel, fetchModelOptions } = useModelSettings({ errorText: translateError, models: () => models.data.value || [], nodes: () => nodes.data.value || [], onModelDeleted() {}, refreshModels, translate: t });
 const modelProtocols = ["openai-responses", "openai-chat-completions", "anthropic-messages"] as const;
 const editingModelLocationCount = computed(() => (models.data.value || []).find((model) => model.id === editingModelId.value)?.locations?.length || 1);
 const hasActiveFilters = computed(() => Boolean(searchQuery.value.trim() || appFilter.value !== "all" || locationFilter.value !== "all" || statusFilter.value !== "all"));
@@ -425,6 +458,12 @@ function handleModelNameHandleKeydown(event: KeyboardEvent, index: number, key: 
 }
 function requestDelete(model: ModelConfig, location: ModelLocation) { pendingDelete.value = { model, location }; }
 async function confirmDelete() { const target = pendingDelete.value; if (!target) return; if (await removeModel(target.model, target.location)) pendingDelete.value = undefined; }
+function requestMerge(model: ModelConfig, target: ModelConfig) { pendingMerge.value = { model, target }; }
+async function confirmMerge() {
+  const target = pendingMerge.value;
+  if (!target) return;
+  if (await mergeModelInto(target.model, target.target.id)) pendingMerge.value = undefined;
+}
 </script>
 
 <style scoped>
@@ -461,6 +500,8 @@ async function confirmDelete() { const target = pendingDelete.value; if (!target
 .model-summary { align-content: center; display: grid; gap: 5px; min-width: 0; }
 .model-summary-item { align-items: center; color: var(--text-muted); display: flex; font-size: 12px; gap: 6px; min-width: 0; }
 .model-summary-item svg { flex: 0 0 auto; }
+.model-summary-alert { color: var(--status-warning); }
+.model-location-stale { color: var(--status-warning); }
 .model-summary-trigger { background: transparent; border: 0; cursor: pointer; padding: 0; text-align: left; width: fit-content; }
 .model-summary-trigger:hover, .model-summary-trigger[data-state="open"] { color: var(--text-strong); }
 .model-summary-trigger > svg:last-child { transition: transform 140ms ease; }
@@ -486,6 +527,7 @@ async function confirmDelete() { const target = pendingDelete.value; if (!target
 .model-empty-state strong { color: var(--text-strong); font-size: 13px; }
 .model-empty-state p { margin: 0; }
 :global(.model-delete-location-menu) { min-width: 260px; }
+:global(.model-merge-menu) { min-width: 260px; }
 .model-menu-copy { display: grid; gap: 2px; min-width: 0; }
 .model-menu-copy strong { font-size: 12px; font-weight: 500; }
 .model-menu-copy small { color: var(--text-muted); font-size: 12px; }

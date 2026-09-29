@@ -39,7 +39,7 @@
               <ScrollArea
                 class="control-plane-settings-menu-scroll"
                 :horizontal="false"
-                :style="{ '--settings-menu-height': `${settingsSections.length * 33 + 2}px` }"
+                :style="{ '--settings-menu-items': String(settingsSections.length) }"
               >
                 <div class="control-plane-settings-menu-list">
                   <DropdownMenuItem
@@ -78,7 +78,7 @@
               <ScrollArea
                 class="control-plane-node-filter-menu-scroll"
                 :horizontal="false"
-                :style="{ '--node-filter-menu-height': `${Math.max(nodeFilterOptions.length + 1, 1) * 33 + 2}px` }"
+                :style="{ '--node-filter-menu-items': String(nodeFilterOptions.length + 1) }"
               >
                 <div class="control-plane-node-filter-menu-list">
                   <DropdownMenuItem
@@ -158,7 +158,7 @@
             <ScrollArea
               class="control-plane-instance-menu-scroll"
               :horizontal="false"
-              :style="{ '--instance-menu-height': `${Math.max(switcherInstances.length, 1) * 52 - 2}px` }"
+              :style="{ '--instance-menu-items': String(Math.max(switcherInstances.length, 1)) }"
             >
               <div class="control-plane-instance-menu-list">
                 <DropdownMenuItem

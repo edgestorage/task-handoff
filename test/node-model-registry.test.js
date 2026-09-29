@@ -57,7 +57,7 @@ function instancePayload(id, timestamp) {
   };
 }
 
-test("node model registry uses immutable content hashes, private storage, and hash assignments", async (t) => {
+test("node model registry keeps entity ids stable across edits and protects referenced models", async (t) => {
   const dataDir = tempDataDir();
   let app = await createNodeAgentApp({ dataDir, logger: false, token: "agent-secret", nodeId: "node_a" });
   t.after(async () => app.close());
@@ -80,6 +80,7 @@ test("node model registry uses immutable content hashes, private storage, and ha
 
   const upgradedLegacy = await request(app, "PATCH", `/api/node-agent/models/${codexHash}`, { name: "Saved legacy model" });
   assert.equal(upgradedLegacy.statusCode, 200);
+  assert.equal(upgradedLegacy.json().data.id, codexHash);
 
   const duplicate = await request(app, "POST", "/api/node-agent/models", { ...codexInput, name: "Same content" });
   assert.equal(duplicate.statusCode, 201);
@@ -100,7 +101,12 @@ test("node model registry uses immutable content hashes, private storage, and ha
   const deployHash = modelConfigHash(deployInput);
   const deployedPayload = { ...deployInput, id: deployHash, createdAt: timestamp, updatedAt: timestamp };
   assert.equal((await request(app, "PUT", `/api/node-agent/models/${deployHash}/deploy`, deployedPayload)).statusCode, 200);
-  const mismatch = await request(app, "PUT", `/api/node-agent/models/${deployHash}/deploy`, { ...deployedPayload, key: "different" });
+  const revised = await request(app, "PUT", `/api/node-agent/models/${deployHash}/deploy`, { ...deployedPayload, key: "deployed-secret-2" });
+  assert.equal(revised.statusCode, 200);
+  assert.equal(revised.json().data.id, deployHash);
+  assert.equal(revised.json().data.revision, modelConfigHash({ ...deployInput, key: "deployed-secret-2" }));
+  const unknownDeployId = `mdl_${"0".repeat(64)}`;
+  const mismatch = await request(app, "PUT", `/api/node-agent/models/${unknownDeployId}/deploy`, { ...deployedPayload, id: unknownDeployId });
   assert.equal(mismatch.statusCode, 400);
   assert.equal(mismatch.json().error.code, "NODE_MODEL_HASH_MISMATCH");
 
@@ -155,22 +161,59 @@ test("node model registry uses immutable content hashes, private storage, and ha
   const rotated = await request(app, "PATCH", `/api/node-agent/models/${codexHash}`, { key: "rotated-secret" });
   const rotatedHash = modelConfigHash({ ...codexInput, key: "rotated-secret" });
   assert.equal(rotated.statusCode, 200);
-  assert.equal(rotated.json().data.id, rotatedHash);
-  assert.equal(app.nodeAgentState.resolvedAssignedModelEnvironment("inst_models").OPENAI_API_KEY, codexInput.key);
+  // The entity keeps its identity: only the content revision advances.
+  assert.equal(rotated.json().data.id, codexHash);
+  assert.equal(rotated.json().data.revision, rotatedHash);
+  assert.equal(app.nodeAgentState.resolvedAssignedModelEnvironment("inst_models").OPENAI_API_KEY, "rotated-secret");
   assert.equal((await request(app, "GET", "/api/node-agent/models")).json().data.some((model) => model.id === codexHash), true);
+  assert.equal((await request(app, "GET", "/api/node-agent/models")).json().data.length, 4);
 
   assert.equal((await request(app, "DELETE", `/api/node-agent/models/${codexHash}`)).statusCode, 409);
   assert.equal((await request(app, "PUT", "/api/node-agent/instances/inst_models/model-assignment", {
-    modelSelection: { codexModelHash: rotatedHash }, codexModelHash: rotatedHash,
+    modelSelection: {},
   })).statusCode, 200);
   assert.equal((await request(app, "DELETE", `/api/node-agent/models/${codexHash}`)).statusCode, 200);
 
   assert.equal(fs.existsSync(path.join(dataDir, "model-assignments")), false);
-  assert.equal(app.nodeAgentState.resolvedAssignedModelEnvironment("inst_models").OPENAI_API_KEY, "rotated-secret");
 
   await app.close();
   app = await createNodeAgentApp({ dataDir, logger: false, token: "agent-secret", nodeId: "node_a" });
-  assert.equal(app.nodeAgentState.resolvedAssignedModelEnvironment("inst_models").OPENAI_API_KEY, "rotated-secret");
+  assert.equal((await request(app, "GET", "/api/node-agent/models")).json().data.some((model) => model.id === codexHash), false);
+});
+
+test("node model registry merges a superseded entity into its successor", async (t) => {
+  const dataDir = tempDataDir();
+  const app = await createNodeAgentApp({ dataDir, logger: false, token: "agent-secret", nodeId: "node_merge" });
+  t.after(async () => app.close());
+
+  const ghostInput = modelInput({ name: "Legacy copy", key: "legacy-secret", model: "gpt-legacy" });
+  const ghostId = modelConfigHash(ghostInput);
+  assert.equal((await request(app, "POST", "/api/node-agent/models", ghostInput)).statusCode, 201);
+  const targetInput = modelInput({ name: "Legacy copy", key: "legacy-secret", model: "gpt-successor" });
+  const targetId = modelConfigHash(targetInput);
+  assert.equal((await request(app, "POST", "/api/node-agent/models", targetInput)).statusCode, 201);
+
+  const timestamp = new Date().toISOString();
+  assert.equal((await request(app, "POST", "/api/node-agent/instances", instancePayload("inst_merge", timestamp))).statusCode, 201);
+  assert.equal((await request(app, "PUT", "/api/node-agent/instances/inst_merge/model-assignment", {
+    modelSelection: { modelEntityIds: [ghostId], codexModelHash: ghostId },
+    modelEntityIds: [ghostId],
+    codexModelHash: ghostId,
+  })).statusCode, 200);
+
+  const merged = await request(app, "POST", `/api/node-agent/models/${ghostId}/merge`, { targetModelId: targetId });
+  assert.equal(merged.statusCode, 200);
+  assert.deepEqual(merged.json().data.reassignedInstances, ["inst_merge"]);
+
+  const models = (await request(app, "GET", "/api/node-agent/models")).json().data;
+  assert.equal(models.some((model) => model.id === ghostId), false);
+  assert.equal(models.find((model) => model.id === targetId).referenceCount, 1);
+  const selection = app.nodeAgentState.requireInstance("inst_merge").modelSelection;
+  assert.deepEqual(selection.modelEntityIds, [targetId]);
+  assert.equal(selection.codexModelHash, targetId);
+  assert.equal(selection.claudeModelHash ?? null, null);
+  assert.equal(selection.opencodeModelHash ?? null, null);
+  assert.equal(app.nodeAgentState.resolvedAssignedModelEnvironment("inst_merge").TASK_HANDOFF_CODEX_MODEL, "gpt-successor");
 });
 
 test("node model assignment persists private config when live environment sync cannot connect", async (t) => {

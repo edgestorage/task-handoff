@@ -4,12 +4,17 @@ import {
   agentCatalogKey,
   agentCatalogMemberRows,
   agentEntryOrchestrations,
+  agentFirstOrchestration,
   agentManualRunAvailable,
+  agentOrchestrationGroups,
+  agentOrchestrationOrder,
   agentParticipatingOrchestrations,
   agentRunOrchestrations,
   buildAgentCatalog,
   agentCatalogGroups,
   orchestrationAgentCandidates,
+  requestedOrchestrationKey,
+  resolvedOrchestrationKey,
 } from "../src/apps/control-plane/agent/agentCatalog.ts";
 
 const definition = (overrides) => ({
@@ -282,6 +287,60 @@ test("catalog scopes orchestration visibility and runnable sets to the selected 
   assert.equal(catalog.orchestrations.find((entry) => entry.id === "default:agent-a").isDefault, true);
   assert.equal(catalog.orchestrations.find((entry) => entry.id === "default:agent-a").ownerAgentId, "agent-a");
   assert.equal(catalog.orchestrations.find((entry) => entry.id === "orchestration-b").isDefault, false);
+});
+
+test("orchestration groups keep entry scope first and never repeat one orchestration twice", () => {
+  const catalog = buildAgentCatalog({
+    nodes: [node("node-a", capableCapabilities)],
+    definitions: [
+      { nodeId: "node-a", agent: definition({}) },
+      { nodeId: "node-a", agent: definition({ id: "agent-b", name: "Agent B" }) },
+      { nodeId: "node-a", agent: definition({ id: "agent-c", name: "Agent C" }) },
+    ],
+    orchestrations: [
+      { nodeId: "node-a", orchestration: orchestration({}) },
+      // 与 agent-b 共享顶级节点：对两边都是入口编排。
+      { nodeId: "node-a", orchestration: orchestration({ id: "orchestration-shared", name: "Shared", agentIds: ["agent-a", "agent-b"] }) },
+      // 边指向 agent-a：agent-a 不再是顶级节点，只作为成员参与这张编排。
+      { nodeId: "node-a", orchestration: orchestration({ id: "orchestration-nested", name: "Nested", agentIds: ["agent-a", "agent-b"], edges: [{ fromAgentId: "agent-b", toAgentId: "agent-a" }] }) },
+      // agent-c 只被 agent-a 调用，没有任何以它为入口的编排。
+      { nodeId: "node-a", orchestration: orchestration({ id: "orchestration-calls-c", name: "Calls C", agentIds: ["agent-a", "agent-c"], edges: [{ fromAgentId: "agent-a", toAgentId: "agent-c" }] }) },
+    ],
+    instances: [instance({})],
+    foldersByNode: new Map(),
+  });
+  const agentA = catalog.agents.find((agent) => agent.id === "agent-a");
+  const agentC = catalog.agents.find((agent) => agent.id === "agent-c");
+  const groupsA = agentOrchestrationGroups(catalog.orchestrations, agentA);
+  assert.deepEqual(groupsA.map((group) => group.key), ["entry", "participating"]);
+  assert.deepEqual(groupsA[0].orchestrations.map((entry) => entry.id).sort(), ["default:agent-a", "orchestration-calls-c", "orchestration-shared"]);
+  // 入口编排同时是成员，参与组里不会再出现一次。
+  assert.deepEqual(groupsA[1].orchestrations.map((entry) => entry.id), ["orchestration-nested"]);
+  assert.equal(agentFirstOrchestration(catalog.orchestrations, agentA), groupsA[0].orchestrations[0]);
+  // 没有入口编排时只剩下参与组，默认落点仍是切换顺序里的第一张。
+  assert.deepEqual(agentOrchestrationGroups(catalog.orchestrations, agentC).map((group) => group.key), ["participating"]);
+  assert.equal(agentFirstOrchestration(catalog.orchestrations, agentC).id, "orchestration-calls-c");
+  assert.equal(agentFirstOrchestration([], agentA), undefined);
+  // 切换顺序：入口组在前，参与组在后；当前编排永远取「指定的那张，还在就沿用」。
+  const order = agentOrchestrationOrder(catalog.orchestrations, agentA);
+  assert.deepEqual(order.map((entry) => entry.id), [...groupsA[0].orchestrations, ...groupsA[1].orchestrations].map((entry) => entry.id));
+  assert.equal(resolvedOrchestrationKey(order, order[0].key), order[0].key);
+  // 参与组的编排也是合法目标：详情页点它必须落到它自己，而不是第一张。
+  assert.equal(resolvedOrchestrationKey(order, order[order.length - 1].key), order[order.length - 1].key);
+  // 指定的编排已经不在可切换列表里（切了 Agent / 被删除）才回落到第一张。
+  assert.equal(resolvedOrchestrationKey(order, "orchestration-elsewhere"), order[0].key);
+  assert.equal(resolvedOrchestrationKey([], "orchestration-elsewhere"), "");
+  // 画布请求绑定发起它的 Agent：agent-b 的编排视图里点开 agent-a，即使 current 编排对 agent-a 也可切换，
+  // 也必须落到 agent-a 自己的第一张；只有请求属于当前 Agent 时才沿用指定的那张。
+  const agentB = catalog.agents.find((agent2) => agent2.id === "agent-b");
+  const sharedKey = catalog.orchestrations.find((entry) => entry.id === "orchestration-shared").key;
+  assert.notEqual(sharedKey, order[0].key);
+  assert.equal(order.some((entry) => entry.key === sharedKey), true);
+  assert.equal(requestedOrchestrationKey(order, { agentKey: agentB.key, key: sharedKey }, agentA.key), order[0].key);
+  assert.equal(requestedOrchestrationKey(order, { agentKey: agentA.key, key: sharedKey }, agentA.key), sharedKey);
+  // 请求属于当前 Agent、但那张编排已经不可切换时同样回落到第一张。
+  assert.equal(requestedOrchestrationKey(order, { agentKey: agentA.key, key: "orchestration-elsewhere" }, agentA.key), order[0].key);
+  assert.equal(requestedOrchestrationKey([], { agentKey: agentA.key, key: sharedKey }, agentA.key), "");
 });
 
 test("member rows preserve arbitrary call depth, duplicate Agent executions, orphans, and malformed cycles", () => {

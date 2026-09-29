@@ -78,8 +78,15 @@ bootstrap_workspace() {
   fi
   local workspace="${TASK_HANDOFF_WORKSPACE:-/workspace}"
   local mode="${TASK_HANDOFF_WORKSPACE_MODE:-}"
-  local git_url="${TASK_HANDOFF_GIT_URL:-}"
-  local git_ref="${TASK_HANDOFF_GIT_REF:-}"
+  # Workspace Git environment contract (mirrors @task-handoff/protocol/workspace-git).
+  # This script is mounted by the node agent that writes the environment, so the
+  # workspace keys are the only input. The legacy keys are never read: images
+  # bake TASK_HANDOFF_GIT_COMMIT as their build commit and docker run exposes
+  # image environment here.
+  local git_url="${TASK_HANDOFF_WORKSPACE_GIT_URL:-}"
+  local git_ref="${TASK_HANDOFF_WORKSPACE_GIT_REF:-}"
+  local git_depth="${TASK_HANDOFF_WORKSPACE_GIT_DEPTH:-}"
+  local git_submodules="${TASK_HANDOFF_WORKSPACE_GIT_SUBMODULES:-false}"
 
   if [ "${mode}" != "git-clone" ] || [ -z "${git_url}" ]; then
     return
@@ -97,10 +104,10 @@ bootstrap_workspace() {
   fi
 
   local clone_args=(clone)
-  if [ -n "${TASK_HANDOFF_GIT_DEPTH:-}" ]; then
-    clone_args+=(--depth "${TASK_HANDOFF_GIT_DEPTH}")
+  if [ -n "${git_depth}" ]; then
+    clone_args+=(--depth "${git_depth}")
   fi
-  if [ "${TASK_HANDOFF_GIT_SUBMODULES:-false}" = "true" ]; then
+  if [ "${git_submodules}" = "true" ]; then
     clone_args+=(--recurse-submodules)
   fi
   if [ -n "${git_ref}" ]; then
@@ -111,8 +118,8 @@ bootstrap_workspace() {
   echo "Cloning workspace ${git_url} into ${workspace}."
   git "${clone_args[@]}"
 
-  if [ -n "${TASK_HANDOFF_GIT_COMMIT:-}" ]; then
-    git -C "${workspace}" checkout "${TASK_HANDOFF_GIT_COMMIT}"
+  if [ -n "${TASK_HANDOFF_WORKSPACE_GIT_COMMIT:-}" ]; then
+    git -C "${workspace}" checkout "${TASK_HANDOFF_WORKSPACE_GIT_COMMIT}"
   fi
 }
 

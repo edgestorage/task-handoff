@@ -718,6 +718,14 @@ export class ControlPlaneService {
     return this.modelService.update(id, input);
   }
 
+  syncModel(id: string) {
+    return this.modelService.sync(id);
+  }
+
+  mergeModel(id: string, input: unknown) {
+    return this.modelService.merge(id, input);
+  }
+
   deleteModel(id: string) {
     return this.modelService.delete(id);
   }

@@ -82,11 +82,15 @@ git_config=(
   -c credential.useHttpPath=true
   -c core.sshCommand="node /run/task-handoff/bootstrap/git-provisioning-helper.js ssh"
 )
+# Workspace Git environment contract (mirrors @task-handoff/protocol/workspace-git).
+# Only the TASK_HANDOFF_WORKSPACE_GIT_* keys are provisioning input: released
+# images bake TASK_HANDOFF_GIT_COMMIT as the image build commit and docker run
+# exposes image environment here, so the legacy keys must never be read.
 clone_args=(clone)
 # A commit SHA is not guaranteed to be reachable from a shallow default-branch clone.
-if [ -n "${TASK_HANDOFF_GIT_DEPTH:-}" ] && [ -z "${TASK_HANDOFF_GIT_COMMIT:-}" ]; then clone_args+=(--depth "${TASK_HANDOFF_GIT_DEPTH}"); fi
-if [ -n "${TASK_HANDOFF_GIT_REF:-}" ]; then clone_args+=(--branch "${TASK_HANDOFF_GIT_REF}"); fi
-clone_args+=(-- "${TASK_HANDOFF_GIT_URL}" "${checkout}")
+if [ -n "${TASK_HANDOFF_WORKSPACE_GIT_DEPTH:-}" ] && [ -z "${TASK_HANDOFF_WORKSPACE_GIT_COMMIT:-}" ]; then clone_args+=(--depth "${TASK_HANDOFF_WORKSPACE_GIT_DEPTH}"); fi
+if [ -n "${TASK_HANDOFF_WORKSPACE_GIT_REF:-}" ]; then clone_args+=(--branch "${TASK_HANDOFF_WORKSPACE_GIT_REF}"); fi
+clone_args+=(-- "${TASK_HANDOFF_WORKSPACE_GIT_URL}" "${checkout}")
 
 mkdir -p /tmp/task-handoff-git-home
 chown 1000:1000 /tmp/task-handoff-git-home
@@ -99,12 +103,12 @@ if ! runuser -u agent -- env \
   fail CLONE_FAILED 74
 fi
 
-if [ -n "${TASK_HANDOFF_GIT_COMMIT:-}" ]; then
-  if ! runuser -u agent -- git -C "${checkout}" checkout --detach "${TASK_HANDOFF_GIT_COMMIT}"; then
+if [ -n "${TASK_HANDOFF_WORKSPACE_GIT_COMMIT:-}" ]; then
+  if ! runuser -u agent -- git -C "${checkout}" checkout --detach "${TASK_HANDOFF_WORKSPACE_GIT_COMMIT}"; then
     fail REF_NOT_FOUND 75
   fi
 fi
-if [ "${TASK_HANDOFF_GIT_SUBMODULES:-false}" = "true" ]; then
+if [ "${TASK_HANDOFF_WORKSPACE_GIT_SUBMODULES:-false}" = "true" ]; then
   if ! runuser -u agent -- env \
     HOME=/tmp/task-handoff-git-home \
     GIT_TERMINAL_PROMPT=0 \
@@ -113,7 +117,7 @@ if [ "${TASK_HANDOFF_GIT_SUBMODULES:-false}" = "true" ]; then
     fail CLONE_FAILED 74
   fi
 fi
-if [ "${TASK_HANDOFF_GIT_LFS:-false}" = "true" ]; then
+if [ "${TASK_HANDOFF_WORKSPACE_GIT_LFS:-false}" = "true" ]; then
   if ! runuser -u agent -- env GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="node /run/task-handoff/bootstrap/git-provisioning-helper.js ssh" git "${git_config[@]}" -C "${checkout}" lfs pull; then
     fail LFS_FAILED 76
   fi

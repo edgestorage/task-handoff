@@ -27,6 +27,7 @@ test("composer image attachments expose upload progress, contain previews, and i
   assert.match(composer, /<AiSessionImagePreview/);
   assert.match(composer, /<ContextMenuItem @select="copyAttachmentImage\(attachment\)">/);
   assert.match(composer, /navigator\.clipboard\.write\(\[new ClipboardItem/);
+  assert.match(composer, /showControlPlaneToast\(t\("sessions\.composer\.imageCopied"\), "success"\)/);
   assert.match(composer, /imageBlobAsPng/);
   assert.match(upload, /attachment\.uploadState = "uploading"/);
   assert.match(upload, /attachment\.uploadProgress = Math\.max\(0, Math\.min\(1, progress\)\)/);
@@ -94,6 +95,7 @@ test("conversation detail renders retained image and file metadata without a UI 
   assert.match(attachments, /<AiSessionImagePreview/);
   assert.match(attachments, /<ContextMenuItem @select="copyImage\(attachment\)">/);
   assert.match(attachments, /navigator\.clipboard\.write/);
+  assert.match(attachments, /showControlPlaneToast\(t\("sessions\.composer\.imageCopied"\), "success"\)/);
   assert.match(attachments, /attachment\.contentState === 'expired'/);
   assert.match(attachments, /'Expired' : 'Missing'/);
   assert.match(attachments, /ai-session-message-attachments-compact/);

@@ -5,6 +5,7 @@ import {
   FinalComputerArchSchema,
   NodeAgentCapabilitiesSchema,
   ModelConfigSchema,
+  modelConfigHash,
   ProjectSchema,
   sanitizeStoredProject,
   type ControlledInstance,
@@ -192,6 +193,7 @@ export function publicModel(model: ModelConfig) {
     ...publicRecord,
     keyPreview: keyPreview(model.key),
     keySet: true,
+    revision: modelConfigHash(model),
   };
 }
 

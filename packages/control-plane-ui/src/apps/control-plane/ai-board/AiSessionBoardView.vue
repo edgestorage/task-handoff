@@ -399,8 +399,8 @@ type StoryTarget = {
   storyId?: string | null;
 };
 
-function onStoryAssigned(_card: AiBoardCard, _target: StoryTarget) {
-  showControlPlaneToast(t("sessions.actions.storyAssigned"), "success");
+function onStoryAssigned(_card: AiBoardCard, _target: StoryTarget, moved: boolean) {
+  showControlPlaneToast(t(moved ? "sessions.actions.storyMoved" : "sessions.actions.storyAssigned"), "success");
   void queryClient.invalidateQueries({ queryKey: controlPlaneQueryKeys.instanceBoard });
 }
 

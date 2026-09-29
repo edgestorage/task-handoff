@@ -434,7 +434,7 @@ async function copyAttachmentImage(attachment: AiSessionComposerAttachment) {
     const sourceBlob = await fetch(source).then((response) => response.blob());
     const blob = sourceBlob.type === "image/png" ? sourceBlob : await imageBlobAsPng(sourceBlob);
     await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
-    showControlPlaneToast(t("sessions.composer.imageCopied"));
+    showControlPlaneToast(t("sessions.composer.imageCopied"), "success");
   } catch {
     showControlPlaneToast(t("sessions.composer.copyImageFailed"));
   }
@@ -1058,6 +1058,7 @@ watch(() => props.busy, (busy) => {
 
 <style scoped>
 .ai-session-composer {
+  container: ai-session-composer / inline-size;
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -1370,6 +1371,17 @@ watch(() => props.busy, (busy) => {
   opacity: 0.55;
 }
 
+@container ai-session-composer (max-width: 420px) {
+  .ai-session-composer__permission-trigger {
+    flex: 0 0 auto;
+    padding: 0 8px;
+  }
+
+  .ai-session-composer__permission-trigger span {
+    display: none;
+  }
+}
+
 .ai-session-composer__model-trigger {
   display: inline-flex;
   min-width: 0;
@@ -1502,6 +1514,7 @@ watch(() => props.busy, (busy) => {
 .ai-session-composer__tool,
 .ai-session-composer__primary {
   display: inline-grid;
+  flex: 0 0 auto;
   place-items: center;
   border: 0;
   border-radius: 999px;

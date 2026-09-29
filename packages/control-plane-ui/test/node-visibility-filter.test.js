@@ -35,8 +35,9 @@ test("Story and Agent views share the top-bar node filter", () => {
   assert.match(workbench, /@click="selectNodeFilter\(node\.id, \$event\)"/);
   assert.match(workbench, /@update:model-value="toggleNodeFilter\(node\.id, \$event === true\)"/);
   assert.match(workbench, /class="control-plane-node-filter-menu"/);
-  assert.match(workbench, /'--node-filter-menu-height': `\$\{Math\.max\(nodeFilterOptions\.length \+ 1, 1\) \* 33 \+ 2\}px`/);
-  assert.match(workbenchStyles, /control-plane-node-filter-menu-item[\s\S]*min-height: 32px/);
+  assert.match(workbench, /'--node-filter-menu-items': String\(nodeFilterOptions\.length \+ 1\)/);
+  assert.match(workbenchStyles, /control-plane-node-filter-menu-scroll\) \{\s*height: min\(\s*calc\(var\(--node-filter-menu-items, 1\) \* var\(--node-filter-menu-row-height\) \+ \(var\(--node-filter-menu-items, 1\) - 1\) \* var\(--node-filter-menu-row-gap\)\)/);
+  assert.match(workbenchStyles, /control-plane-node-filter-menu \.control-plane-node-filter-menu-item\) \{[\s\S]*min-height: var\(--node-filter-menu-row-height\)/);
   assert.match(workbench, /<AgentView v-if="!standaloneMode && agentMode && !settingsMode" :node-filter="nodeFilter" \/>/);
 });
 

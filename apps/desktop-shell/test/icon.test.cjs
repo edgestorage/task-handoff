@@ -4,6 +4,7 @@ const path = require("node:path");
 const test = require("node:test");
 const zlib = require("node:zlib");
 const { applyDesktopDockIcon, desktopIconPath, desktopTrayIconPath } = require("../src/icon.cjs");
+const { REQUIRED_BOOTSTRAP_ASSETS } = require("../../../packages/control-plane/src/node-agent/runtimes/bootstrap-assets.ts");
 
 const root = path.resolve(__dirname, "../../..");
 const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
@@ -100,26 +101,29 @@ test("packaged macOS apps keep the bundle-managed rounded Dock icon", () => {
 });
 
 test("Electron unpacks the server runtime needed by its bundled Node process", () => {
-  assert.deepEqual(packageJson.build.asarUnpack, [
+  for (const requiredEntry of [
     "bin/**/*",
-    "docker/entrypoint.sh",
-    "docker/instance-launcher.sh",
-    "docker/node-agent-unix-proxy.mjs",
-    "docker/runtime-installer.mjs",
     "dist/**/*",
     "packages/control-plane-ui/dist/**/*",
     "release/runtime-artifacts/**/*",
     "node_modules/**/*",
-  ]);
-  for (const launcherAsset of [
-    "docker/entrypoint.sh",
-    "docker/instance-launcher.sh",
-    "docker/node-agent-unix-proxy.mjs",
-    "docker/runtime-installer.mjs",
   ]) {
+    assert.ok(packageJson.build.asarUnpack.includes(requiredEntry), `${requiredEntry} must be available as a real file`);
+  }
+  // Derive the docker asset list from the node-agent bootstrap contract so a new
+  // bootstrap asset cannot be forgotten here while the runtime keeps requiring it.
+  assert.ok(REQUIRED_BOOTSTRAP_ASSETS.size > 0, "node agent must declare its required bootstrap assets");
+  for (const name of REQUIRED_BOOTSTRAP_ASSETS) {
+    const launcherAsset = `docker/${name}`;
     assert.ok(packageJson.build.files.includes(launcherAsset), `${launcherAsset} must be packaged`);
     assert.ok(packageJson.build.asarUnpack.includes(launcherAsset), `${launcherAsset} must be available as a real file`);
   }
+  const packagedDockerAssets = packageJson.build.asarUnpack.filter((entry) => entry.startsWith("docker/"));
+  assert.deepEqual(
+    packagedDockerAssets.map((entry) => entry.slice("docker/".length)).sort(),
+    [...REQUIRED_BOOTSTRAP_ASSETS].sort(),
+    "desktop packaging must unpack exactly the node agent bootstrap assets",
+  );
   assert.ok(packageJson.build.files.includes("release/runtime-artifacts/**/*"));
   assert.ok(packageJson.files.includes("shared"), "npm releases must contain shared desktop runtime sources");
   assert.ok(packageJson.build.files.includes("shared/process-start-identity.cjs"), "Desktop packages must contain the shared process identity helper");

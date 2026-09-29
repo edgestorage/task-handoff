@@ -13,6 +13,7 @@ import {
   type AiSessionProviderCapability,
   type ControlledInstanceCapabilities,
 } from "@task-handoff/protocol/control-plane";
+import { workspaceGitEnvironmentValue } from "@task-handoff/protocol/workspace-git";
 import { TriggerStore } from "../triggers/store";
 
 // The controlled-instance artifact is hot-swapped inside an older base image.
@@ -169,15 +170,16 @@ function controlledInstanceTarget() {
 export function workspaceStatus(paths: TaskHandoffStoragePaths) {
   const workspacePath = process.env.TASK_HANDOFF_WORKSPACE || process.env.WORKSPACE || "/workspace";
   const exists = fs.existsSync(workspacePath);
+  const gitUrl = workspaceGitEnvironmentValue(process.env, "url");
   return {
-    mode: process.env.TASK_HANDOFF_WORKSPACE_MODE || (process.env.TASK_HANDOFF_GIT_URL ? "git-clone" : "local-bind"),
+    mode: process.env.TASK_HANDOFF_WORKSPACE_MODE || (gitUrl ? "git-clone" : "local-bind"),
     status: exists ? "ready" : "unknown",
     path: workspacePath,
     exists,
     git: {
-      url: process.env.TASK_HANDOFF_GIT_URL,
-      ref: process.env.TASK_HANDOFF_GIT_REF,
-      resolvedCommit: process.env.TASK_HANDOFF_GIT_COMMIT,
+      url: gitUrl,
+      ref: workspaceGitEnvironmentValue(process.env, "ref"),
+      resolvedCommit: workspaceGitEnvironmentValue(process.env, "commit"),
     },
     storage: {
       dataDir: paths.dataDir,

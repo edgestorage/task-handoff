@@ -21,6 +21,7 @@ export * from "./config-sync.ts";
 export * from "./events.ts";
 export * from "./managed-git-credentials.ts";
 export * from "./repository.ts";
+export * from "./workspace-git.ts";
 export * from "./stories.ts";
 export * from "./triggers.ts";
 export * from "./websocket-bridge.ts";

@@ -17,6 +17,7 @@ const view = read("src/apps/control-plane/agent/AgentView.vue");
 const editor = read("src/apps/control-plane/agent/AgentEditor.vue");
 const runDialog = read("src/apps/control-plane/agent/AgentRunDialog.vue");
 const graph = read("src/apps/control-plane/agent/AgentGraph.vue");
+const switcher = read("src/apps/control-plane/agent/AgentViewSwitcher.vue");
 const graphEdge = read("src/apps/control-plane/agent/AgentGraphEdge.vue");
 const types = read("src/apps/control-plane/agent/agentCatalogTypes.ts");
 const clientAgents = fs.readFileSync(new URL("../../control-plane-client/src/agents.ts", import.meta.url), "utf8");
@@ -175,6 +176,7 @@ test("the agent list opens run, edit and delete from a right-click menu", () => 
   assert.match(view, /<AgentContextMenu\s/);
   assert.match(view, /@run="openManualRun\(agent\)"/);
   assert.match(view, /@edit="openEdit\(agent\)"/);
+  assert.match(view, /@orchestration="openAgentOrchestrationInGraph\(agent\.key\)"/);
   assert.match(view, /@delete="deleteAgent\(agent\)"/);
   // 行内操作只按该 Agent 自己的目录数据判定，不受当前选中项影响；手动运行还要求该 Agent 属于一张可运行的编排。
   assert.match(view, /:can-run="agentManualRunAvailable\(agent, agentRunOrchestrations\(catalog\.orchestrations, agent\)\)"/);
@@ -187,21 +189,55 @@ test("the agent list opens run, edit and delete from a right-click menu", () => 
   assert.match(contextMenu, /<ContextMenuContent class="ai-session-context-menu">/);
   assert.match(contextMenu, /class="ai-session-context-menu-item"[\s\S]*agents\.detail\.run/);
   assert.match(contextMenu, /agents\.detail\.edit/);
+  assert.match(contextMenu, /agents\.detail\.editOrchestration/);
+  // 「查看 Agent 详情」只属于画布节点菜单：列表行单击即可选中，所以列表不传这个入口。
+  assert.doesNotMatch(view, /:view-detail=/);
+  // 用对象而不是 boolean 表示「不传 = 不提供」：Vue 会把缺省的 boolean prop 强转成 false，那样列表里会多出一个灰项。
+  assert.match(contextMenu, /viewDetail\?: \{ enabled: boolean \};/);
+  assert.match(contextMenu, /<ContextMenuItem v-if="viewDetail" class="ai-session-context-menu-item" :disabled="!viewDetail\.enabled"/);
   assert.match(contextMenu, /class="ai-session-context-menu-item danger"/);
   assert.match(contextMenu, /agents\.detail\.delete/);
-  assert.match(contextMenu, /defineEmits<\{\n  run: \[\];\n  edit: \[\];\n  delete: \[\];\n\}>\(\);/);
+  assert.match(contextMenu, /defineEmits<\{\n  run: \[\];\n  edit: \[\];\n  viewDetail: \[\];\n  orchestration: \[\];\n  delete: \[\];\n\}>\(\);/);
+  // 「编辑编排」只在列表行提供，可用性与编辑同源：节点在线且发布了编排能力；画布节点本身就在编排里，不重复给入口。
+  assert.match(view, /:orchestration="\{ label: 'edit', enabled: agent\.nodeOnline && nodeOrchestrationsSupported\(agent\.nodeId\) \}"/);
+  assert.match(view, /function nodeOrchestrationsSupported\(nodeId\?: string\) \{[\s\S]*?controlPlaneAgentCapabilities\(node\.capabilities\)\.orchestrations[\s\S]*?\}/);
+  // 右键进入编排后落在该 Agent 的第一张编排上：入口组优先，组的顺序只在目录层定义一次。
+  assert.match(view, /function openAgentOrchestrationInGraph\(agentKey: string\) \{[\s\S]*?selectedAgentKey\.value = agent\.key;[\s\S]*?graphOrchestrationKey\.value = agentFirstOrchestration\(visibleOrchestrations\.value, agent\)\?\.key \|\| "";[\s\S]*?viewMode\.value = "graph";[\s\S]*?\n\}/);
+});
+
+test("the agent graph keeps canvas clicks local and switches agents from the node menu", () => {
+  // 单击节点只选中画布元素，不再切换当前 Agent：切 Agent 一律由节点右键菜单显式触发。
+  assert.doesNotMatch(graph, /@node-click/);
+  assert.doesNotMatch(graph, /emit\("select"/);
+  assert.doesNotMatch(view, /@select="selectedAgentKey = \$event"/);
+  // 节点菜单补齐「查看 Agent 详情」与「查看编排」，可用性与成员是否在线、是否仍存在对齐。
+  assert.match(graph, /:view-detail="\{ enabled: !nodeProps\.data\.missing \}"/);
+  assert.match(graph, /:orchestration="\{ label: 'view', enabled: !nodeProps\.data\.missing && nodeProps\.data\.online \}"/);
+  assert.match(graph, /@view-detail="viewMemberDetail\(nodeProps\.data\.agentId\)"/);
+  assert.match(graph, /@orchestration="viewMemberOrchestration\(nodeProps\.data\.agentId\)"/);
+  assert.match(graph, /function viewMemberDetail\(agentId: string\) \{[\s\S]*?requestDetail\(agent\.key\);[\s\S]*?\n\}/);
+  assert.match(graph, /function viewMemberOrchestration\(agentId: string\) \{[\s\S]*?emit\("show-orchestration", agent\.key\);[\s\S]*?\n\}/);
+  // 离开画布会丢弃草稿，所以节点菜单切详情与头部切换器共用同一条确认，再带上目标 Agent。
+  assert.match(graph, /@select-detail="requestDetail\(\)"/);
+  assert.match(graph, /function requestDetail\(agentKey\?: string\) \{[\s\S]*?emit\("show-detail", agentKey\);[\s\S]*?\n\}/);
+  assert.match(graph, /"show-detail": \[agentKey\?: string\]/);
+  assert.match(graph, /"show-orchestration": \[agentKey: string\]/);
+  assert.match(view, /@show-detail="showAgentDetail"/);
+  assert.match(view, /@show-orchestration="openAgentOrchestrationInGraph"/);
+  assert.match(view, /function showAgentDetail\(agentKey\?: string\) \{[\s\S]*?viewMode\.value = "detail";[\s\S]*?\n\}/);
 });
 
 test("the agent graph opens the same actions from a node right-click menu", () => {
   // 画布节点与列表行共用同一个操作菜单，操作事件只回传聚合 key，由视图解析回目录对象。
   assert.match(graph, /<template #node-agent="nodeProps">[\s\S]*?<ContextMenu>\n\s*<ContextMenuTrigger as-child>/);
-  assert.match(graph, /<AgentContextMenu\n\s*:can-run="canRunMember\(nodeProps\.data\.agentId\)"\n\s*:editable="editable && !nodeProps\.data\.missing"\n\s*:deleting="deleting"/);
+  assert.match(graph, /<AgentContextMenu\n\s*:can-run="canRunMember\(nodeProps\.data\.agentId\)"\n\s*:editable="editable && !nodeProps\.data\.missing"\n\s*:deleting="deleting"\n\s*:view-detail="\{ enabled: !nodeProps\.data\.missing \}"\n\s*:orchestration="\{ label: 'view', enabled: !nodeProps\.data\.missing && nodeProps\.data\.online \}"/);
   assert.match(graph, /@run="runMember\(nodeProps\.data\.agentId\)"/);
   assert.match(graph, /@edit="editMember\(nodeProps\.data\.agentId\)"/);
   assert.match(graph, /@delete="deleteMember\(nodeProps\.data\.agentId\)"/);
-  assert.match(graph, /import \{ agentEntryOrchestrations, agentManualRunAvailable, agentParticipatingOrchestrations, agentRunOrchestrations, orchestrationAgentCandidates \} from "\.\/agentCatalog";/);
+  assert.match(graph, /import \{ agentManualRunAvailable, agentOrchestrationGroups, agentRunOrchestrations, orchestrationAgentCandidates, requestedOrchestrationKey \} from "\.\/agentCatalog";/);
+  assert.match(graph, /import type \{ AgentOrchestrationRequest \} from "\.\/agentCatalog";/);
   assert.match(graph, /deleting: boolean;/);
-  assert.match(view, /:deleting="deleting"[\s\S]*?:save="saveOrchestrationChange"[\s\S]*?@select="selectedAgentKey = \$event"[\s\S]*?@run="runAgentByKey"[\s\S]*?@edit="editAgentByKey"[\s\S]*?@delete="deleteAgentByKey"/);
+  assert.match(view, /:deleting="deleting"[\s\S]*?:save="saveOrchestrationChange"[\s\S]*?@run="runAgentByKey"[\s\S]*?@edit="editAgentByKey"[\s\S]*?@delete="deleteAgentByKey"/);
   assert.match(view, /function runAgentByKey\(key: string\) \{[\s\S]*?openManualRun\(agent\);[\s\S]*?\}/);
   assert.match(view, /function editAgentByKey\(key: string\) \{[\s\S]*?openEdit\(agent\);[\s\S]*?\}/);
   assert.match(view, /function deleteAgentByKey\(key: string\) \{[\s\S]*?void deleteAgent\(agent\);[\s\S]*?\}/);
@@ -235,7 +271,7 @@ test("the agent detail renders the saved execution policy instead of a fixed pha
 test("the agent graph renders one authoritative orchestration with Vue Flow", () => {
   const manifest = JSON.parse(read("package.json"));
   assert.ok(manifest.dependencies["@vue-flow/core"], "the graph canvas must come from Vue Flow");
-  assert.match(graph, /import \{ Handle, Position, VueFlow, useVueFlow \} from "@vue-flow\/core";/);
+  assert.match(graph, /import \{ Handle, MarkerType, Position, VueFlow, useVueFlow \} from "@vue-flow\/core";/);
   assert.match(graph, /import "@vue-flow\/core\/dist\/style\.css";/);
   assert.match(graph, /v-model:nodes="flowNodes"/);
   assert.match(graph, /v-model:edges="flowEdges"/);
@@ -254,23 +290,35 @@ test("the agent graph renders one authoritative orchestration with Vue Flow", ()
   assert.match(graph, /flowNodes\.value = layoutNodes\(memberViews\.value, activeEdgeKeys\.value\);/);
   assert.match(view, /<AgentGraph\s/);
   assert.match(view, /:agents="visibleAgents"/);
-  assert.match(view, /const viewMode = ref<"list" \| "graph">\("list"\)/);
+  assert.match(view, /const viewMode = ref<"detail" \| "graph">\("detail"\)/);
 });
 
-test("the agent graph scopes visibility by entry or participating orchestration", () => {
-  // 画布一次只投影一张权威编排，作用域决定从哪个方向挑出候选：以该 Agent 为顶级节点，或所有参与的编排。
-  assert.match(graph, /const scope = ref<"entry" \| "participating">\("entry"\);/);
-  assert.match(graph, /const scopedOrchestrations = computed\(\(\) => \{/);
-  assert.match(graph, /const primary = scope\.value === "entry" \? agentEntryOrchestrations\(props\.orchestrations, agent\) : agentParticipatingOrchestrations\(props\.orchestrations, agent\);/);
-  assert.match(graph, /const fallback = scope\.value === "entry" \? agentParticipatingOrchestrations\(props\.orchestrations, agent\) : agentEntryOrchestrations\(props\.orchestrations, agent\);/);
-  assert.match(graph, /<ControlPlaneSelectItem value="entry">/);
-  assert.match(graph, /<ControlPlaneSelectItem value="participating">/);
+test("the agent graph switcher groups orchestrations by entry and participating scope", () => {
+  // 画布一次只投影一张权威编排；切换菜单一次列出两个作用域，入口组在前，参与组剔除入口编排避免重复。
+  // 分组只在目录层定义一次：详情侧与画布都消费 agentOrchestrationGroups，不再各写一份分组逻辑。
+  assert.match(catalog, /export function agentOrchestrationGroups\(orchestrations: AgentCatalogOrchestration\[\], agent: AgentCatalogAgent\): AgentOrchestrationGroup\[\] \{[\s\S]*?const entry = agentEntryOrchestrations\(orchestrations, agent\);[\s\S]*?const participating = agentParticipatingOrchestrations\(orchestrations, agent\)\.filter\(\(orchestration\) => !entryKeys\.has\(orchestration\.key\)\);[\s\S]*?\n\}/);
+  assert.match(graph, /const orchestrationGroups = computed\(\(\) => \(focusAgent\.value \? agentOrchestrationGroups\(props\.orchestrations, focusAgent\.value\) : \[\]\)\);/);
+  assert.match(view, /const switcherGroups = computed\(\(\) => \(selectedAgent\.value \? agentOrchestrationGroups\(visibleOrchestrations\.value, selectedAgent\.value\) : \[\]\)\);/);
+  assert.match(graph, /const availableOrchestrations = computed\(\(\) => \(focusAgent\.value \? orchestrationGroups\.value\.flatMap\(\(group\) => group\.orchestrations\) : props\.orchestrations\)\);/);
+  // 当前编排是「请求」的派生结果：详情页点参与组的编排也必须落在它自己，只有它不再可切换时才回落到第一张。
+  assert.match(graph, /const requested = ref<AgentOrchestrationRequest>\(\{ agentKey: focusKey\.value, key: props\.orchestrationKey \?\? "" \}\);/);
+  assert.match(graph, /const activeKey = computed\(\(\) => requestedOrchestrationKey\(availableOrchestrations\.value, requested\.value, focusKey\.value\)\);/);
+  assert.match(graph, /function selectOrchestration\(key: string\) \{\n\s*requested\.value = \{ agentKey: focusKey\.value, key \};\n\}/);
+  // 换 Agent 一律作废旧请求：列表切换后必须落在新 Agent 的第一张编排，而不是另一张「对新 Agent 也可切换」的旧编排。
+  assert.match(graph, /watch\(focusKey, \(agentKey\) => \{\n\s*requested\.value = \{ agentKey, key: "" \};\n\s*\}\);/);
+  assert.doesNotMatch(graph, /activeKey\.value = |const activeKey = ref/);
+  // 内容选择器渲染分组菜单；画布把同一份分组、当前编排与草稿圆点传给它，详情侧复用同一组件。
+  assert.match(graph, /<AgentViewSwitcher\s+mode="graph"\s+:active-key="activeKey"\s+:groups="orchestrationGroups"\s+:draft-counts="draftCounts"/);
+  assert.match(view, /<AgentViewSwitcher\s+mode="detail"\s+:active-key="graphOrchestrationKey"\s+:groups="switcherGroups"/);
+  assert.match(switcher, /<DropdownMenuRadioGroup :model-value="mode === 'graph' \? activeKey : ''" @update:model-value="selectOrchestration">/);
+  assert.match(switcher, /<DropdownMenuLabel class="agent-view-switcher-label">[\s\S]*?agents\.graph\.scope\.entry[\s\S]*?agents\.graph\.scope\.participating[\s\S]*?<\/DropdownMenuLabel>/);
   // 视图可以从详情卡片跳进某张编排，画布内部切换也会同步回视图。
   assert.match(graph, /watch\(\(\) => props\.orchestrationKey, \(key\) => \{/);
   assert.match(graph, /if \(key !== props\.orchestrationKey\) emit\("orchestration-change", key\);/);
   assert.match(view, /@orchestration-change="graphOrchestrationKey = \$event"/);
   assert.match(view, /function openOrchestrationInGraph\(orchestration: AgentCatalogOrchestration\) \{/);
   assert.match(view, /graphOrchestrationKey\.value = orchestration\.key;\n\s*viewMode\.value = "graph";/);
+  assert.match(view, /function openOrchestrationInGraphByKey\(key: string\) \{[\s\S]*?graphOrchestrationKey\.value = key;[\s\S]*?viewMode\.value = "graph";[\s\S]*?\n\}/);
   // 从上到下分层：调用深度决定行，层内顺序用重心扫描，横向位置做松弛对齐。
   assert.match(graph, /function buildLayers\(keys: string\[\], edges: LayerEdges\): string\[\]\[\]/);
   assert.match(graph, /const depth = new Map\(keys\.map\(\(key\) => \[key, 0\]\)\);/);
@@ -280,14 +328,64 @@ test("the agent graph scopes visibility by entry or participating orchestration"
   // 连线手柄改为上下方向，边从上往下走。
   assert.match(graph, /:position="Position\.Top"/);
   assert.match(graph, /:position="Position\.Bottom"/);
-  // 初始缩放小于默认视角：用带 maxZoom 上限的 fitView 适配视图。
-  assert.match(graph, /const FIT_VIEW_MAX_ZOOM = 0\.85;/);
+  // 初始缩放带 maxZoom 上限：整棵树先落进视口，小图仍保持可读字号。
+  assert.match(graph, /const FIT_VIEW_MAX_ZOOM = 1\.1;/);
   assert.match(graph, /const \{ fitView, connectionEndHandle, onNodesInitialized, onMoveStart \} = useVueFlow\(\);/);
   // 浮层锚在画布内的节点上，平移缩放后立刻关掉，避免脱锚。
   assert.match(graph, /onMoveStart\(\(\) => \{\n  addPickerKey\.value = "";\n\}\);/);
   assert.match(graph, /void fitView\(\{ padding: FIT_VIEW_PADDING, maxZoom: FIT_VIEW_MAX_ZOOM, duration: 0 \}\);/);
   // 拖拽落在画布空白处时给出画布范围说明，不静默无响应。
   assert.match(graph, /rejectedMessage\.value = t\("agents\.graph\.rejected\.outOfScope"\);/);
+});
+
+test("the agent graph header keeps identity, save state and actions on one band", () => {
+  // 头部只有一条控制带：编排切换、可编辑名称、默认标记与保存状态属于文档身份，操作按钮在右。
+  assert.match(graph, /<header class="agent-graph-head">/);
+  assert.match(graph, /<div class="agent-graph-identity">[\s\S]*<AgentViewSwitcher[\s\S]*class="agent-graph-name-field"[\s\S]*class="agent-graph-badge"[\s\S]*agent-graph-state/);
+  assert.match(graph, /<div class="agent-graph-actions">[\s\S]*agents\.graph\.reset[\s\S]*agents\.graph\.save/);
+  // 内容选择器把详情固定在顶部、编排列表设为可滚动、新建入口固定在底部，入口不随列表溢出。
+  assert.match(switcher, /<DropdownMenuRadioItem :value="DETAIL_ITEM" class="agent-view-switcher-item">/);
+  assert.match(switcher, /<DropdownMenuSeparator class="agent-view-switcher-separator" \/>/);
+  assert.match(switcher, /class="agent-view-switcher-create" :disabled="!canCreate" @select="emit\('create'\)"/);
+  assert.match(switcher, /\.agent-view-switcher-menu\.agent-view-switcher-menu\) \{[^}]*display:flex;[^}]*flex-direction:column;/);
+  assert.match(switcher, /\.agent-view-switcher-list\) \{[^}]*overflow-y:auto;/);
+  assert.doesNotMatch(graph, /agent-graph-toolbar|agent-graph-hint|agent-graph-meta/);
+  // 画布手势说明常驻在帮助浮层里，不再占着画布上方铺一段说明文字。
+  assert.match(graph, /<PopoverTrigger as-child>[\s\S]*agents\.graph\.help\.title/);
+  for (const key of ["intro", "move", "connect", "removeEdge", "removeMember"]) {
+    assert.match(graph, new RegExp(`agents\\.graph\\.help\\.${key}`), `the help popover must explain ${key}`);
+  }
+  // 删除编排是危险操作，收进更多操作菜单。
+  assert.match(graph, /class="agent-graph-danger-item" :disabled="!editable \|\| deleting" @select="removeActiveOrchestration"/);
+  // 名称与 Story 头部同一交互：hover 提示可编辑，点击后才换成输入框；Enter/失焦提交，Esc 丢弃草稿。
+  assert.match(graph, /class="agent-graph-name-button"[\s\S]*?@click="beginNameEdit\(\$event\)"/);
+  assert.match(graph, /class="agent-graph-name-input"[\s\S]*?@blur="endNameEdit"[\s\S]*?@keydown="handleNameEditKeydown"/);
+  assert.match(graph, /function handleNameEditKeydown\(event: KeyboardEvent\) \{[\s\S]*?if \(event\.isComposing\) return;[\s\S]*?event\.key === "Enter"[\s\S]*?endNameEdit\(\)[\s\S]*?event\.key === "Escape"[\s\S]*?cancelNameEdit\(\)/);
+  assert.match(graph, /function cancelNameEdit\(\) \{[\s\S]*?revertNameDraft\(\);[\s\S]*?\n\}/);
+  assert.match(graph, /function revertNameDraft\(\) \{[\s\S]*?orchestrationName\.value = orchestration\.name;[\s\S]*?\n\}/);
+  assert.match(graph, /\.agent-graph-name-button:hover \.agent-graph-name-button-label[^}]*background:var\(--surface-hover\);/);
+  // ⌘/Ctrl + S 在画布内保存，交给同一份 save 实现；选择器标出仍有本地草稿的编排。
+  assert.match(graph, /@keydown\.capture="handleShortcut"/);
+  assert.match(graph, /function handleShortcut\(event: KeyboardEvent\) \{[\s\S]*?event\.key\.toLowerCase\(\) !== "s"[\s\S]*?void save\(\);[\s\S]*?\n\}/);
+  assert.match(graph, /const draftCounts = computed\(\(\) => \{[\s\S]*?counts\[orchestration\.key\] = count;[\s\S]*?\n\}\);/);
+  assert.match(switcher, /v-if="draftCount\(orchestration\.key\)" class="agent-view-switcher-pending"/);
+  // 画布有未保存改动时先确认再离开，AgentView 收到事件才切回详情（节点菜单会带上目标 Agent）。
+  assert.match(graph, /function requestDetail\(agentKey\?: string\) \{[\s\S]*?window\.confirm\(t\("agents\.graph\.discardOnSwitch", \{ count: dirtyCount\.value \}\)\)[\s\S]*?emit\("show-detail", agentKey\);[\s\S]*?\n\}/);
+  assert.match(view, /@show-detail="showAgentDetail"/);
+  // 菜单条目：名称占满剩余宽度，名称与「默认」标记、草稿圆点之间留出间距。
+  assert.match(switcher, /\.agent-view-switcher-item\) \{[^}]*gap:8px;/);
+  assert.match(switcher, /\.agent-view-switcher-name\) \{[^}]*flex:1 1 auto;/);
+});
+
+test("the agent detail header renames the agent inline", () => {
+  // 列表模式的 Agent 名称与 Story 头部同一交互：hover 后点击进入编辑，提交写回 Node 权威定义。
+  assert.match(view, /class="agent-title-name-button"[\s\S]*?@click="beginAgentNameEdit\(selectedAgent, \$event\)"/);
+  assert.match(view, /class="agent-title-name-input"[\s\S]*?@blur="commitAgentNameEdit"[\s\S]*?@keydown="handleAgentNameEditKeydown"/);
+  assert.match(view, /function handleAgentNameEditKeydown\(event: KeyboardEvent\) \{[\s\S]*?if \(event\.isComposing\) return;[\s\S]*?event\.key === "Enter"[\s\S]*?commitAgentNameEdit\(\)[\s\S]*?event\.key === "Escape"[\s\S]*?cancelAgentNameEdit\(\)/);
+  assert.match(view, /await updateAgentDefinition\(agent\.id, agent\.nodeId, \{ expectedRevision: agent\.revision, name \}\);/);
+  assert.match(view, /await invalidateControlPlaneDomains\(queryClient, \["agents"\]\);/);
+  assert.match(view, /\.agent-title-name-button:hover \.agent-title-name-button-label[^}]*background:var\(--surface-hover\);/);
+  assert.match(view, /\.agent-content-title h2\.agent-title-name-field \{[^}]*width:max-content;[^}]*max-width:100%;/);
 });
 
 test("the agent graph adds orchestration edges from the handle picker", () => {
@@ -316,6 +414,7 @@ test("the agent graph removes relations from the edge midpoint control", () => {
   // 边走自定义类型，模板提供同名 edge slot：保留原路径与箭头，并在中点上叠加删除入口。
   assert.match(graph, /const EDGE_TYPE = "agent-callable";/);
   assert.match(graph, /type: EDGE_TYPE,/);
+  assert.match(graph, /markerEnd: MarkerType\.ArrowClosed,/);
   assert.match(graph, /<template #edge-agent-callable="edgeProps">/);
   assert.match(graphEdge, /<BaseEdge/);
   assert.match(graphEdge, /getBezierPath\(\{/);
@@ -392,6 +491,8 @@ test("the manual run dialog binds the Run to a chosen orchestration", () => {
 test("the agent editor leaves Story association to the Story settings", () => {
   assert.doesNotMatch(editor, /useStoriesQuery/);
   assert.doesNotMatch(editor, /agents\.editor\.story/);
+  // 编排关系由编排图维护，编辑器里不再放一段没有可操作内容的说明区块。
+  assert.doesNotMatch(editor, /agents\.editor\.orchestration/);
   assert.doesNotMatch(types, /storyId/);
   assert.match(types, /entryStoryLabels\?: string\[\]/);
   assert.match(view, /agents\.detail\.storyEntry/);

@@ -29,17 +29,31 @@ test("models settings exposes location scope, references, and node diagnostics",
   ]) assert.match(settings, contract);
 });
 
-test("model location operations route to the selected store and reset busy state after failures", () => {
+test("model edits use one authoritative call and report per-location sync state", () => {
   const settings = read("src/apps/control-plane/settings/useModelSettings.ts");
+  assert.match(settings, /const result = await updateModel\(editingModelId\.value, payload\)/);
+  assert.match(settings, /result\.locations\.filter\(\(location\) => location\.state !== "synced"\)/);
+  assert.match(settings, /syncModelRequest\(model\.id\)/);
+  assert.match(settings, /mergeModelRequest\(model\.id, targetModelId\)/);
+  assert.match(settings, /function staleLocations\(model: ModelConfig\)/);
+  assert.match(settings, /function mergeCandidates\(model: ModelConfig\)/);
   assert.match(settings, /createNodeModel\(settingsModel\.locationScope/);
-  assert.match(settings, /Promise\.allSettled\(locations\.map/);
-  assert.match(settings, /updateNodeModel\(location\.nodeId, editingModelId\.value/);
-  assert.match(settings, /updateModel\(editingModelId\.value/);
   assert.match(settings, /deleteNodeModel\(location\.nodeId/);
   assert.match(settings, /removeModel\(model: ModelConfig, location: ModelLocation\)/);
   assert.match(settings, /settingsModel\.locationScope === "control-plane"/);
   assert.match(settings, /finally \{\s*savingModelId\.value = ""/);
   assert.match(settings, /finally \{\s*deletingModelId\.value = ""/);
+  assert.doesNotMatch(settings, /Promise\.allSettled\(locations\.map/);
+  assert.doesNotMatch(settings, /updateNodeModel\(/);
+});
+
+test("model settings surface pending node sync and merge actions", () => {
+  const settings = read("src/apps/control-plane/settings/ModelSettingsSection.vue");
+  assert.match(settings, /staleLocations\(model\)\.length/);
+  assert.match(settings, /@select="syncModelLocations\(model\)"/);
+  assert.match(settings, /@select="requestMerge\(model, candidate\)"/);
+  assert.match(settings, /class="model-location-stale"/);
+  assert.match(settings, /pendingMerge/);
 });
 
 test("models settings edits aggregate entries and deletes explicit locations through a portal menu", () => {

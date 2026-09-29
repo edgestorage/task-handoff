@@ -137,11 +137,6 @@
           </section>
 
           <section class="agent-editor-section">
-            <h3>{{ t("agents.editor.orchestration") }}</h3>
-            <p class="agent-editor-hint">{{ t("agents.editor.orchestrationHint") }}</p>
-          </section>
-
-          <section class="agent-editor-section">
             <h3>{{ t("agents.editor.execution") }}</h3>
             <dl class="agent-editor-field-list">
               <div><dt>{{ t("agents.field.workspace") }}</dt><dd>{{ t("agents.value.workspaceOverlay") }}</dd></div>
