@@ -208,7 +208,7 @@ async function copyImage(attachment: AiSessionConversationAttachment) {
     });
     const blob = source.type === "image/png" ? source : await imageBlobAsPng(source);
     await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
-    showControlPlaneToast(t("sessions.composer.imageCopied"));
+    showControlPlaneToast(t("sessions.composer.imageCopied"), "success");
   } catch {
     showControlPlaneToast(t("sessions.composer.copyImageFailed"));
   }

@@ -86,11 +86,19 @@ export class NodeModelRegistry {
 
   deploy(input: z.infer<typeof DeployNodeModelSchema>) {
     const expectedHash = modelConfigHash(input);
-    if (input.id !== expectedHash) {
+    const existing = this.models.get(input.id);
+    const modelNames = normalizeModelNames(input.modelNames, input.model);
+    const normalizedInput = { ...input, model: modelNames[0].name, modelNames, protocols: input.protocols?.length ? input.protocols : defaultProtocols(input.app) };
+    if (input.id !== expectedHash && !existing) {
+      // Ids are stable entity identities. An unknown id is only acceptable when
+      // it still matches the content hash, which keeps legacy writers working
+      // while allowing in-place revisions of entities this node already owns.
       throw Object.assign(new Error(`Model content hash ${expectedHash} does not match ${input.id}.`), { statusCode: 400, code: "NODE_MODEL_HASH_MISMATCH" });
     }
-    const modelNames = normalizeModelNames(input.modelNames, input.model);
-    const stored = this.models.get(input.id) || this.models.put(NodeModelConfigSchema.parse({ ...input, model: modelNames[0].name, modelNames, protocols: input.protocols?.length ? input.protocols : defaultProtocols(input.app) }));
+    const stored = this.models.put(NodeModelConfigSchema.parse({
+      ...normalizedInput,
+      createdAt: existing?.createdAt || normalizedInput.createdAt,
+    }));
     return this.toPublic(stored, this.referenceIds(stored.id).length);
   }
 
@@ -112,9 +120,10 @@ export class NodeModelRegistry {
       createdAt: current.createdAt,
       updatedAt: now(),
     });
-    const nextId = modelConfigHash(candidate);
-    const stored = this.models.put(NodeModelConfigSchema.parse({ ...candidate, id: nextId }));
-    return this.toPublic(stored, this.referenceIds(nextId).length);
+    // The entity id is stable: editing content updates this record in place so
+    // instance assignments and AI session selections keep resolving to it.
+    const stored = this.models.put(NodeModelConfigSchema.parse({ ...candidate, id }));
+    return this.toPublic(stored, this.referenceIds(id).length);
   }
 
   delete(id: string) {
@@ -205,6 +214,74 @@ export class NodeModelRegistry {
     this.assignments.delete(instanceId);
   }
 
+  /** Instance ids whose assignment currently references this model entity. */
+  referencingInstanceIds(modelId: string) {
+    this.requireModel(modelId);
+    return this.referenceIds(modelId);
+  }
+
+  /**
+   * Fold a superseded model entity into its successor: every instance that
+   * still references the superseded id is re-pointed at the target inside one
+   * transaction, then the superseded record is removed. This is the recovery
+   * path for registries that accumulated detached copies before identities
+   * became stable.
+   */
+  merge(id: string, targetModelId: string) {
+    const ghost = this.requireModel(id);
+    const target = this.requireModel(targetModelId);
+    if (ghost.id === target.id) {
+      throw Object.assign(new Error("A model cannot be merged into itself."), { statusCode: 400, code: "NODE_MODEL_MERGE_SAME" });
+    }
+    this.validateEntityRef(target.id);
+    for (const app of ["codex", "claude", "opencode"] as const) {
+      if (this.modelSupportsApp(ghost, app) && !this.modelSupportsApp(target, app)) {
+        throw Object.assign(new Error(`Model ${target.id} does not support the ${app} runtime protocol required by ${ghost.id}.`), {
+          statusCode: 409,
+          code: "NODE_MODEL_MERGE_APP_MISMATCH",
+        });
+      }
+    }
+    const instanceIds = this.referenceIds(id);
+    this.transaction(() => {
+      for (const instanceId of instanceIds) {
+        const instance = this.instances.require(instanceId);
+        const assignment = this.assignments.get(instanceId);
+        if (!assignment) continue;
+        const modelEntityIds = [...new Set(assignment.modelEntityIds.map((entityId) => entityId === id ? targetModelId : entityId))];
+        const resolveHash = (app: "codex" | "claude" | "opencode", currentHash?: string) => (
+          currentHash && currentHash !== id
+            ? currentHash
+            : modelEntityIds.find((entityId) => this.modelSupportsApp(this.requireModel(entityId), app))
+        );
+        const codexModelHash = resolveHash("codex", assignment.codexModelHash);
+        const claudeModelHash = resolveHash("claude", assignment.claudeModelHash);
+        const opencodeModelHash = resolveHash("opencode", assignment.opencodeModelHash);
+        this.assignments.put(NodeModelAssignmentSchema.parse({
+          instanceId,
+          modelEntityIds,
+          codexModelHash,
+          claudeModelHash,
+          opencodeModelHash,
+          updatedAt: now(),
+        }));
+        this.instances.put(ControlledInstanceSchema.parse({
+          ...instance,
+          modelSelection: {
+            ...instance.modelSelection,
+            modelEntityIds,
+            codexModelHash: codexModelHash ?? null,
+            claudeModelHash: claudeModelHash ?? null,
+            opencodeModelHash: opencodeModelHash ?? null,
+          },
+          updatedAt: now(),
+        }));
+      }
+      this.models.delete(id);
+    });
+    return { merged: true as const, reassignedInstances: instanceIds };
+  }
+
   private validateRef(app: "codex" | "claude" | "opencode", modelHash?: string) {
     if (!modelHash) return;
     const model = this.requireModel(modelHash);
@@ -274,7 +351,6 @@ export class NodeModelRegistry {
   private requireModel(id: string) {
     const model = this.models.get(id);
     if (!model) throw Object.assign(new Error(`Model ${id} was not found on node ${this.nodeId}.`), { statusCode: 404, code: "NODE_MODEL_NOT_FOUND" });
-    if (modelConfigHash(model) !== model.id) throw Object.assign(new Error(`Stored model ${id} does not match its content hash.`), { statusCode: 409, code: "NODE_MODEL_HASH_INVALID" });
     return model;
   }
 
@@ -287,7 +363,13 @@ export class NodeModelRegistry {
 
   private toPublic(model: NodeModelConfig, referenceCount: number): NodeModelPublicRecord {
     const { key, ...safe } = model;
-    return NodeModelPublicRecordSchema.parse({ ...safe, keyPreview: key.length <= 8 ? "set" : `${key.slice(0, 4)}...${key.slice(-4)}`, keySet: true, referenceCount });
+    return NodeModelPublicRecordSchema.parse({
+      ...safe,
+      keyPreview: key.length <= 8 ? "set" : `${key.slice(0, 4)}...${key.slice(-4)}`,
+      keySet: true,
+      referenceCount,
+      revision: modelConfigHash(model),
+    });
   }
 
   private nextOrder() {

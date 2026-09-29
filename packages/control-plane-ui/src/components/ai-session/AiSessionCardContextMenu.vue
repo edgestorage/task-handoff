@@ -30,7 +30,7 @@
     <ContextMenuSub v-if="storyTarget" @update:open="onStoryMenuOpen">
       <ContextMenuSubTrigger class="ai-session-context-menu-item" :disabled="storyMenuBusy">
         <BookOpen :size="14" />
-        <span>{{ t("sessions.actions.addToStory") }}</span>
+        <span>{{ t(currentStoryId ? "sessions.actions.moveToStory" : "sessions.actions.addToStory") }}</span>
       </ContextMenuSubTrigger>
       <ContextMenuSubContent class="ai-session-context-menu ai-session-context-story-menu">
         <ContextMenuItem v-if="storyLoading" class="ai-session-context-menu-item muted" disabled>
@@ -162,7 +162,7 @@ const emit = defineEmits<{
   renameSession: [];
   forkSession: [mode: "current" | "managed-worktree"];
   toggleTrigger: [configHash: string];
-  storyAssigned: [target: AiSessionStoryTarget];
+  storyAssigned: [target: AiSessionStoryTarget, moved: boolean];
   storyAssignFailed: [target: AiSessionStoryTarget, error: unknown];
 }>();
 
@@ -212,12 +212,13 @@ async function assignToStory(storyId: string) {
   const target = props.storyTarget;
   if (!target || assigningStoryId.value) return;
   if (target.storyId === storyId) return;
+  const moved = Boolean(target.storyId);
   assigningStoryId.value = storyId;
   try {
     await assignAiSessionToStory(target.instanceId, target.sessionId, storyId);
     const updatedTarget = { ...target, storyId };
     await loadStories();
-    emit("storyAssigned", updatedTarget);
+    emit("storyAssigned", updatedTarget, moved);
   } catch (cause) {
     storyError.value = t("sessions.actions.storyAssignFailed");
     emit("storyAssignFailed", target, cause);

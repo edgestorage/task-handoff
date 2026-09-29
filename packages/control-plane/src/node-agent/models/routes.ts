@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   CreateNodeModelSchema,
   DeployNodeModelSchema,
+  NodeModelMergeSchema,
   UpdateNodeModelAssignmentSchema,
   UpdateNodeModelSchema,
 } from "@task-handoff/protocol/control-plane";
@@ -27,6 +28,15 @@ export function registerNodeModelRoutes(
   syncEnvironment: (instanceId: string) => Promise<unknown>,
   fetchImpl: typeof fetch,
 ) {
+  // Model content changes must reach every instance that resolves it. The sync
+  // helper is best-effort by design: unreachable instances are warned and heal
+  // on their next lifecycle operation instead of failing the model write.
+  const resyncReferencingInstances = async (modelId: string) => {
+    for (const instanceId of registry.referencingInstanceIds(modelId)) {
+      await syncEnvironment(instanceId);
+    }
+  };
+
   app.get("/api/node-agent/models", async () => ({ data: registry.list() }));
 
   app.post("/api/node-agent/models", async (request, reply) => reply.code(201).send({
@@ -52,12 +62,24 @@ export function registerNodeModelRoutes(
         { statusCode: 400, code: "NODE_MODEL_ID_MISMATCH" },
       );
     }
-    return { data: registry.deploy(input) };
+    const model = registry.deploy(input);
+    await resyncReferencingInstances(model.id);
+    return { data: model };
   });
 
-  app.patch("/api/node-agent/models/:id", async (request) => ({
-    data: registry.update((request.params as { id: string }).id, UpdateNodeModelSchema.parse(request.body)),
-  }));
+  app.patch("/api/node-agent/models/:id", async (request) => {
+    const model = registry.update((request.params as { id: string }).id, UpdateNodeModelSchema.parse(request.body));
+    await resyncReferencingInstances(model.id);
+    return { data: model };
+  });
+
+  app.post("/api/node-agent/models/:id/merge", async (request) => {
+    const id = (request.params as { id: string }).id;
+    const { targetModelId } = NodeModelMergeSchema.parse(request.body);
+    const result = registry.merge(id, targetModelId);
+    for (const instanceId of result.reassignedInstances) await syncEnvironment(instanceId);
+    return { data: result };
+  });
 
   app.delete("/api/node-agent/models/:id", async (request) => ({
     data: { deleted: registry.delete((request.params as { id: string }).id) },

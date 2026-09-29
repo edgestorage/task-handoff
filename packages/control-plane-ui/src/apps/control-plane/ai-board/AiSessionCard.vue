@@ -131,7 +131,7 @@
       @open-app="$emit('openAiSessionApp', card.instance, card.session)"
       @rename-session="$emit('renameSession', card)"
       @fork-session="$emit('forkSession', card, $event)"
-      @story-assigned="$emit('storyAssigned', card, $event)"
+      @story-assigned="(target, moved) => $emit('storyAssigned', card, target, moved)"
       @story-assign-failed="(target, error) => $emit('storyAssignFailed', card, target, error)"
       @toggle-trigger="$emit('toggleTrigger', card, $event)"
     />
@@ -198,7 +198,7 @@ const emit = defineEmits<{
   selectInstance: [instanceId: string];
   stopAppSession: [card: AiBoardCard];
   forkSession: [card: AiBoardCard, mode: "current" | "managed-worktree"];
-  storyAssigned: [card: AiBoardCard, target: AiSessionStoryTarget];
+  storyAssigned: [card: AiBoardCard, target: AiSessionStoryTarget, moved: boolean];
   storyAssignFailed: [card: AiBoardCard, target: AiSessionStoryTarget, error: unknown];
   toggleTrigger: [card: AiBoardCard, configHash: string];
 }>();

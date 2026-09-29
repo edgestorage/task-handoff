@@ -1175,8 +1175,8 @@ async function closeAllStorySessions(story: Story, entries: SessionEntry[]) {
     closingAllStoryKey.value = "";
   }
 }
-async function onStoryAssigned(_target: AiSessionStoryTarget) {
-  showControlPlaneToast(t("sessions.actions.storyAssigned"), "success");
+async function onStoryAssigned(_target: AiSessionStoryTarget, moved: boolean) {
+  showControlPlaneToast(t(moved ? "sessions.actions.storyMoved" : "sessions.actions.storyAssigned"), "success");
   await refreshStorySessions();
 }
 function onStoryAssignFailed(_target: AiSessionStoryTarget, error: unknown) {
@@ -1245,6 +1245,22 @@ function toggleStoryExpanded(story: Story) { setStoryExpanded(story, !isStoryOpe
 function selectStory(story: Story) { if (storyIsOnline(story)) selectedResource.value = { kind: "story", story }; }
 function selectDocument(story: Story, path: string) { if (!storyIsOnline(story)) return; const document = story.documents.find((item) => item.storyPath === path); if (document) { setStoryExpanded(story, true); if (!treeDocumentsFor(story).includes(document)) showAllTreeDocuments(story); selectedResource.value = { kind: "document", story, document }; } }
 function selectSession(story: Story, entry: SessionEntry) { if (!sessionIsOnline(story, entry)) return; setStoryExpanded(story, true); selectedResource.value = { kind: "session", story, entry }; }
+function storyTreeRowElement(story: Story) {
+  const viewport = storyScrollViewport();
+  if (!viewport) return undefined;
+  const key = storySortKey(story);
+  const tree = [...viewport.querySelectorAll<HTMLElement>(".story-tree")].find((element) => element.dataset.storyKey === key);
+  return tree?.querySelector<HTMLElement>(".story-tree-story-row") || undefined;
+}
+// 新建 Story 后侧栏可能重新排序或落在可视区之外，选中后一并滚动到可见位置。
+async function focusStoryInSidebar(story: Story) {
+  const target = stories.value.find((candidate) => candidate.id === story.id && candidate.ownerNodeId === story.ownerNodeId);
+  if (!target || !storyIsOnline(target)) return false;
+  selectStory(target);
+  await nextTick();
+  storyTreeRowElement(target)?.scrollIntoView({ behavior: storyScrollBehavior(), block: "nearest" });
+  return true;
+}
 function storySessionTreeStyle(depth = 0): CSSProperties { return { "--story-session-tree-indent": `${depth * 14}px` } as CSSProperties; }
 function isStorySessionExpanded(sessionId: string) { return expandedStorySessionIds.value.has(sessionId) || forcedExpandedStorySessionIds.value.has(sessionId); }
 function sessionDisclosureLabel(expanded: boolean) { return t(expanded ? "sessions.panel.collapseSubSessions" : "sessions.panel.expandSubSessions"); }
@@ -1280,16 +1296,17 @@ watch(storyDetailHeadEl, (head) => {
 function storySectionElement(section: StoryDetailSection) {
   return { actions: storyActionsSectionEl.value, documents: storyDocumentsSectionEl.value, sessions: storySessionsSectionEl.value, automations: storyAutomationsSectionEl.value }[section];
 }
+function storyScrollBehavior(): ScrollBehavior { return window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth"; }
 async function scrollToStorySection(section: StoryDetailSection) {
   storyDetailSection.value = section;
   await nextTick();
-  storySectionElement(section)?.scrollIntoView({ behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" });
+  storySectionElement(section)?.scrollIntoView({ behavior: storyScrollBehavior(), block: "start" });
 }
 async function scrollToAutomation(automationId: string) {
   await scrollToStorySection("automations");
   await nextTick();
   const row = storyAutomationsSectionEl.value?.querySelector<HTMLElement>(`[data-automation-id="${automationId}"]`);
-  row?.scrollIntoView({ behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "center" });
+  row?.scrollIntoView({ behavior: storyScrollBehavior(), block: "center" });
   row?.focus({ preventScroll: true });
 }
 function resourceKey(resource: Resource | undefined) {
@@ -1309,20 +1326,20 @@ function selectionForResource(resource: Resource | undefined): StorySelection | 
 function resolveSelection(selection: StorySelection | undefined): Resource | undefined {
   if (!selection) return undefined;
   const story = filteredStories.value.find((candidate) => candidate.id === selection.storyId && candidate.ownerNodeId === selection.ownerNodeId);
-  if (!story || !storyIsOnline(story)) return undefined;
+  if (!story) return undefined;
   if (selection.kind === "document") {
     const document = story.documents.find((candidate) => candidate.storyPath === selection.storyPath);
     return document ? { kind: "document", story, document } : { kind: "story", story };
   }
   if (selection.kind === "session") {
     const entry = allSessionsForStory(story).find((candidate) => candidate.instance.id === selection.instanceId && candidate.session.id === selection.sessionId);
-    return entry && sessionIsOnline(story, entry) ? { kind: "session", story, entry } : { kind: "story", story };
+    return entry ? { kind: "session", story, entry } : { kind: "story", story };
   }
   return { kind: "story", story };
 }
 function refreshResource(resource: Resource): Resource | undefined {
   const story = filteredStories.value.find((candidate) => candidate.id === resource.story.id && candidate.ownerNodeId === resource.story.ownerNodeId);
-  if (!story || !storyIsOnline(story)) return undefined;
+  if (!story) return undefined;
   if (resource.kind === "new-session") return { kind: "new-session", story };
   return resolveSelection(selectionForResource(resource));
 }
@@ -1331,8 +1348,11 @@ watch(() => storySelectionKey(props.selection), () => {
   if (storySelectionKey(props.selection) === storySelectionKey(selectionForResource(selectedResource.value))) return;
   selectedResource.value = resolveSelection(props.selection);
 }, { immediate: true });
+// 用户选择只由用户操作与权威目录变化驱动：目标暂时解析不出来（节点离线、目录尚未返回）时
+// 保留 workbench 里的选择，不回写空值，节点恢复后回到原 session。
 watch(selectedResource, (resource) => {
   const selection = selectionForResource(resource);
+  if (!selection) return;
   if (storySelectionKey(selection) !== storySelectionKey(props.selection)) emit("update:selection", selection);
 });
 function selectPendingCreatedStorySession() {
@@ -1833,6 +1853,7 @@ async function saveStory() {
     }
     editorOpen.value = false;
     await load(story.ownerNodeId);
+    if (createdStory) await focusStoryInSidebar(createdStory);
   } catch (cause) {
     if (!createdStory) {
       storyEditorError.value = translateApiError(cause, t, t("stories.errors.saveFailed"));
@@ -1853,10 +1874,7 @@ async function adoptCreatedStory(story: Story) {
   editing.value = true;
   draftNodeId.value = story.ownerNodeId;
   await load(story.ownerNodeId);
-  const refreshed = stories.value.find((item) => item.id === story.id && item.ownerNodeId === story.ownerNodeId);
-  if (!refreshed) return false;
-  selectStory(refreshed);
-  if (selectedResource.value?.story?.id !== story.id) return false;
+  if (!(await focusStoryInSidebar(story))) return false;
   if (storyAgentEntriesState.value !== "ready") return true;
   try {
     const entrySet = await sharedControlPlaneClient.agents.storyEntries(story.id, story.ownerNodeId);
@@ -1914,7 +1932,6 @@ onBeforeUnmount(() => {
 .story-workspace-animating { transition:grid-template-columns 180ms cubic-bezier(.2,0,0,1); }
 .story-sidebar { display:grid; min-width:0; min-height:0; grid-template-rows:auto minmax(0,1fr); }
 .story-sidebar-actions { padding:0 10px; }
-.story-new-button { width:100%; padding-block:11px; }
 .story-sidebar-section { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:8px 0 4px 8px; }
 .story-sidebar-section-label { color:var(--text-muted); font-size:12px; font-weight:500; line-height:1; }
 .story-view-mode-button { width:26px; height:26px; color:var(--text-muted); }

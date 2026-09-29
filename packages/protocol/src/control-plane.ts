@@ -29,14 +29,14 @@ export {
   type AiSessionProviderCapability,
 } from "./ai-session-provider-capabilities.ts";
 
-export const CONTROL_PLANE_PROTOCOL_VERSION = "2026-09-24";
+export const CONTROL_PLANE_PROTOCOL_VERSION = "2026-09-29";
 export const AI_SESSION_RENAME_PROTOCOL_VERSION = "2026-09-17";
 export const NODE_AGENT_PROTOCOL_VERSION_HEADER = "x-task-handoff-node-agent-protocol-version";
 export const NODE_TUNNEL_PROTOCOL_VERSION = "2026-08-01";
 export const MARKET_CATALOG_PROTOCOL_VERSION = "2026-07-29";
 // Compatibility for v0.0.21: this released protocol already requires appInventory
 // and remains inside the N-1 support window as later additive features advance the boundary.
-const APP_INVENTORY_REQUIRED_PROTOCOL_VERSIONS = new Set(["2026-08-01", "2026-08-16", "2026-08-17", "2026-08-20", CONTROL_PLANE_PROTOCOL_VERSION]);
+const APP_INVENTORY_REQUIRED_PROTOCOL_VERSIONS = new Set(["2026-08-01", "2026-08-16", "2026-08-17", "2026-08-20", "2026-09-24", CONTROL_PLANE_PROTOCOL_VERSION]);
 export const ProtocolVersionSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Protocol version must use YYYY-MM-DD format.");
 
 const AiSessionCapabilityAgentSchema = z.string().trim().min(1).max(120);
@@ -1082,6 +1082,10 @@ export const NodeModelConfigSchema = ModelConfigSchema;
 export const PublicModelConfigSchema = ModelConfigSchema.omit({ key: true }).extend({
   keyPreview: z.string().trim().min(1).max(160),
   keySet: z.boolean(),
+  // Content revision of the stored record. Optional so that N-1 node-agents
+  // and historical public snapshots stay readable; consumers treat a missing
+  // revision as "unknown" instead of assuming the entity is in sync.
+  revision: z.string().trim().min(1).max(160).optional(),
 }).strict();
 
 export const NodeModelPublicRecordSchema = PublicModelConfigSchema.extend({
@@ -1111,6 +1115,7 @@ export const ModelLocationSchema = z.discriminatedUnion("type", [
     name: ModelConfigSchema.shape.name,
     enabled: ModelConfigSchema.shape.enabled,
     order: ModelConfigSchema.shape.order,
+    revision: z.string().trim().min(1).max(160).optional(),
   }).strict(),
   z.object({
     type: z.literal("node"),
@@ -1119,6 +1124,7 @@ export const ModelLocationSchema = z.discriminatedUnion("type", [
     enabled: ModelConfigSchema.shape.enabled,
     order: ModelConfigSchema.shape.order,
     referenceCount: z.number().int().min(0),
+    revision: z.string().trim().min(1).max(160).optional(),
   }).strict(),
 ]);
 
@@ -1150,6 +1156,42 @@ export const CreateNodeModelSchema = ModelConfigSchema.omit({
 export const UpdateNodeModelSchema = CreateNodeModelSchema.partial().strict();
 
 export const DeployNodeModelSchema = ModelConfigSchema;
+
+// Result of propagating one model edit to a single replica location.
+export const ModelLocationSyncStateSchema = z.enum(["synced", "pending", "unsupported", "error"]);
+export const ModelLocationSyncResultSchema = z.object({
+  nodeId: IdSchema,
+  state: ModelLocationSyncStateSchema,
+  code: z.string().trim().min(1).max(120).optional(),
+  message: z.string().trim().min(1).max(2000).optional(),
+}).strict();
+
+export const ModelMutationResultSchema = z.object({
+  model: PublicModelConfigSchema,
+  locations: z.array(ModelLocationSyncResultSchema).default([]),
+}).strict();
+
+export const NodeModelMergeSchema = z.object({ targetModelId: IdSchema }).strict();
+
+export const NodeModelMergeResultSchema = z.object({
+  merged: z.literal(true),
+  reassignedInstances: z.array(IdSchema).default([]),
+}).strict();
+
+export const ModelMergeLocationResultSchema = z.object({
+  nodeId: IdSchema,
+  merged: z.boolean(),
+  reassignedInstances: z.array(IdSchema).default([]),
+  code: z.string().trim().min(1).max(120).optional(),
+  message: z.string().trim().min(1).max(2000).optional(),
+}).strict();
+
+export const ModelMergeResultSchema = z.object({
+  modelId: IdSchema,
+  targetModelId: IdSchema,
+  merged: z.boolean(),
+  locations: z.array(ModelMergeLocationResultSchema).default([]),
+}).strict();
 
 export const UpdateNodeModelAssignmentSchema = z.object({
   modelSelection: ModelSelectionSchema,
@@ -2716,6 +2758,13 @@ export type NodeModelAssignment = z.infer<typeof NodeModelAssignmentSchema>;
 export type ModelLocation = z.infer<typeof ModelLocationSchema>;
 export type FederatedModelGroup = z.infer<typeof FederatedModelGroupSchema>;
 export type FederatedModelRegistry = z.infer<typeof FederatedModelRegistrySchema>;
+export type ModelLocationSyncState = z.infer<typeof ModelLocationSyncStateSchema>;
+export type ModelLocationSyncResult = z.infer<typeof ModelLocationSyncResultSchema>;
+export type ModelMutationResult = z.infer<typeof ModelMutationResultSchema>;
+export type NodeModelMergeInput = z.infer<typeof NodeModelMergeSchema>;
+export type NodeModelMergeResult = z.infer<typeof NodeModelMergeResultSchema>;
+export type ModelMergeLocationResult = z.infer<typeof ModelMergeLocationResultSchema>;
+export type ModelMergeResult = z.infer<typeof ModelMergeResultSchema>;
 export type ImageSelection = z.infer<typeof ImageSelectionSchema>;
 export type EnvironmentSource = z.infer<typeof EnvironmentSourceSchema>;
 export type EnvironmentTemplateStatus = z.infer<typeof EnvironmentTemplateStatusSchema>;

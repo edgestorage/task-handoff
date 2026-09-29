@@ -60,6 +60,8 @@ import type {
   LocalDockerImage,
   NodeImageAvailability,
   ModelConfig,
+  ModelMergeResult,
+  ModelMutationResult,
   ModelDiscoveryResult,
   ModelEndpointDraft,
   ModelTestResult,
@@ -998,7 +1000,15 @@ export function copyModel(id: string, input: CopyModelInput) {
 }
 
 export function updateModel(id: string, input: UpdateModelInput) {
-  return patchApiData<ModelConfig>(`models/${id}`, input);
+  return patchApiData<ModelMutationResult>(`models/${id}`, input);
+}
+
+export function syncModel(id: string) {
+  return postApiData<ModelMutationResult>(`models/${id}/sync`, {});
+}
+
+export function mergeModel(id: string, targetModelId: string) {
+  return postApiData<ModelMergeResult>(`models/${id}/merge`, { targetModelId });
 }
 
 export function deleteModel(id: string) {

@@ -56,6 +56,14 @@ test("Automation run history uses the shared popover and scroll area", () => {
   assert.doesNotMatch(source, /\.runs\.slice\(0, 3\)/);
 });
 
+test("Automation panel states use one inline flex row so the loading spinner stays beside its label", () => {
+  assert.match(source, /<div v-if="loading" class="story-automation-state" role="status">/);
+  assert.match(source, /<LoaderCircle class="story-automation-spin" :size="14" \/> \{\{ t\("stories\.automation\.loading"\) \}\}/);
+  assert.match(source, /\.story-automation-state \{[^}]*display:flex;[^}]*align-items:center;[^}]*gap:8px;/);
+  assert.match(source, /\.story-automation-empty-state \{[^}]*justify-content:center;[^}]*min-height:64px;/);
+  assert.doesNotMatch(source, /\.story-automation-error \{[^}]*!important/);
+});
+
 test("Automation creation can reuse an existing Action or create one with the shared editor", () => {
   const dialogHeaderStart = source.indexOf('<DialogHeader class="story-automation-dialog-header');
   const dialogHeader = source.slice(dialogHeaderStart, source.indexOf('</DialogHeader>', dialogHeaderStart));

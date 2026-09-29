@@ -37,6 +37,27 @@ function validateDesktopServerRuntime(context) {
   if (missing.length > 0) {
     throw new Error(`Packaged desktop server runtime is incomplete: ${missing.join(", ")}`);
   }
+  const missingBootstrapAssets = missingDockerBootstrapAssets(context);
+  if (missingBootstrapAssets.length > 0) {
+    throw new Error(`Packaged desktop node agent bootstrap assets are incomplete: missing ${missingBootstrapAssets.join(", ")}`);
+  }
+}
+
+// The node agent mounts these files into every Docker container, so any script the
+// repository ships in docker/ must survive as a real file outside the asar archive.
+function missingDockerBootstrapAssets(context) {
+  const projectDir = context.packager?.projectDir;
+  if (!projectDir) {
+    throw new Error("Packager project directory is unavailable; cannot verify node agent bootstrap assets.");
+  }
+  const sourceDir = path.join(projectDir, "docker");
+  const unpackedDir = path.join(resourcesDirectory(context), "app.asar.unpacked", "docker");
+  return fs.readdirSync(sourceDir, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && /\.(?:sh|mjs|js)$/.test(entry.name))
+    .map((entry) => entry.name)
+    .filter((name) => !fs.existsSync(path.join(unpackedDir, name)))
+    .map((name) => `docker/${name}`)
+    .sort();
 }
 
 function validateDesktopTrayResource(context) {
@@ -56,3 +77,4 @@ module.exports = afterPack;
 module.exports.normalizeNodePtyRuntime = normalizeNodePtyRuntime;
 module.exports.validateDesktopServerRuntime = validateDesktopServerRuntime;
 module.exports.validateDesktopTrayResource = validateDesktopTrayResource;
+module.exports.missingDockerBootstrapAssets = missingDockerBootstrapAssets;

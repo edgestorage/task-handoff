@@ -3,7 +3,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import writeFileAtomic from "write-file-atomic";
 
-const REQUIRED_BOOTSTRAP_ASSETS = new Set([
+// Single source of truth for the bootstrap asset contract between node-agent and
+// every packaging path (desktop bundle, npm runtime package, docker runtime).
+// Desktop packaging tests derive their coverage assertions from this set.
+export const REQUIRED_BOOTSTRAP_ASSETS = new Set([
   "entrypoint.sh",
   "git-provision.sh",
   "instance-launcher.sh",

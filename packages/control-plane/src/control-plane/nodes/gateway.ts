@@ -19,6 +19,7 @@ import {
   NodeFolderPlaceSchema,
   NodeLocalFolderSchema,
   NodeModelAssignmentSchema,
+  NodeModelMergeResultSchema,
   NodeModelPublicRecordSchema,
   NodeRuntimeSchema,
   UpdateCheckResultSchema,
@@ -372,6 +373,16 @@ export class ControlPlaneNodeAgentGateway {
 
   async deleteModel(node: Node, modelId: string) {
     const result = await this.client.requestSchema(node, `/models/${encodeURIComponent(modelId)}`, NodeAgentDeleteResponseSchema, { method: "DELETE" });
+    this.invalidateFleetResource(node, "models");
+    return result;
+  }
+
+  async mergeModel(node: Node, modelId: string, targetModelId: string) {
+    const result = await this.client.requestSchema(node, `/models/${encodeURIComponent(modelId)}/merge`, NodeModelMergeResultSchema, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ targetModelId }),
+    });
     this.invalidateFleetResource(node, "models");
     return result;
   }

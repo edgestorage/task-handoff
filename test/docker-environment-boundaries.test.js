@@ -210,6 +210,12 @@ test("docker config uses a read-only private file and explicit managed mounts wi
   });
   const gitArgs = dockerRunArgs(git, "task-handoff-inst_one");
   assert.ok(gitArgs.includes("type=volume,src=task-handoff-inst_one-workspace,dst=/workspace"));
+  assert.ok(gitArgs.includes("TASK_HANDOFF_WORKSPACE_GIT_URL=https://example.com/repo.git"));
+  assert.ok(gitArgs.includes("TASK_HANDOFF_WORKSPACE_GIT_REF=main"));
+  assert.ok(gitArgs.includes("TASK_HANDOFF_WORKSPACE_GIT_COMMIT="));
+  assert.ok(gitArgs.includes("TASK_HANDOFF_GIT_URL=https://example.com/repo.git"));
+  assert.ok(gitArgs.includes("TASK_HANDOFF_GIT_REF=main"));
+  assert.equal(gitArgs.some((value) => value.startsWith("TASK_HANDOFF_GIT_COMMIT=")), false);
 });
 
 test("docker executor creates and labels authoritative volumes before docker run", async () => {
@@ -295,11 +301,19 @@ test("Docker Git provisioning uses a disposable helper before the final instance
   assert.ok(calls[helperIndex].includes("task-handoff.role=git-provisioning"));
   assert.ok(calls[helperIndex].includes(`task-handoff.instance-id=${value.instance.id}`));
   assert.ok(calls[helperIndex].includes("TASK_HANDOFF_WORKSPACE_SUBDIRECTORY=packages/app"));
+  assert.ok(calls[helperIndex].includes("TASK_HANDOFF_WORKSPACE_GIT_URL=https://git.example.com/team/repo.git"));
+  assert.ok(calls[helperIndex].includes("TASK_HANDOFF_WORKSPACE_GIT_REF=main"));
+  assert.ok(calls[helperIndex].includes("TASK_HANDOFF_WORKSPACE_GIT_COMMIT="));
+  assert.equal(calls[helperIndex].some((item) => item.startsWith("TASK_HANDOFF_GIT_") && !item.startsWith("TASK_HANDOFF_GIT_PROVISIONING_")), false);
   assert.equal(completed, 1);
   assert.equal(fs.existsSync(authDirectory), false);
   const finalArgs = calls[finalIndex];
   assert.ok(finalArgs.includes("TASK_HANDOFF_SKIP_WORKSPACE_BOOTSTRAP=true"));
   assert.ok(finalArgs.includes("TASK_HANDOFF_WORKSPACE_SUBDIRECTORY=packages/app"));
+  assert.ok(finalArgs.includes("TASK_HANDOFF_WORKSPACE_GIT_URL=https://git.example.com/team/repo.git"));
+  assert.ok(finalArgs.includes("TASK_HANDOFF_WORKSPACE_GIT_REF=main"));
+  assert.ok(finalArgs.includes("TASK_HANDOFF_GIT_REF=main"));
+  assert.equal(finalArgs.some((item) => item.startsWith("TASK_HANDOFF_GIT_COMMIT=")), false);
   assert.equal(finalArgs.some((item) => item.includes("provision-secret")), false);
   const dryRun = dockerGitProvisionArgs(value, "helper", "/private/auth");
   assert.equal(dryRun.some((item) => item.includes("provision-secret")), false);
@@ -429,7 +443,10 @@ test("Git provisioning script only replaces instance-owned staging and rejects u
   assert.match(script, /checkout="\$\{staging\}\/checkout"/);
   assert.match(script, /CLONE_FAILED/);
   assert.match(script, /SUBDIRECTORY_NOT_FOUND/);
-  assert.match(script, /TASK_HANDOFF_GIT_COMMIT.*TASK_HANDOFF_GIT_DEPTH|TASK_HANDOFF_GIT_DEPTH.*TASK_HANDOFF_GIT_COMMIT/);
+  assert.match(script, /TASK_HANDOFF_WORKSPACE_GIT_COMMIT.*TASK_HANDOFF_WORKSPACE_GIT_DEPTH|TASK_HANDOFF_WORKSPACE_GIT_DEPTH.*TASK_HANDOFF_WORKSPACE_GIT_COMMIT/);
+  // Provisioning input never comes from legacy keys: images bake
+  // TASK_HANDOFF_GIT_COMMIT as the image build commit.
+  assert.doesNotMatch(script, /\$\{TASK_HANDOFF_GIT_(?:URL|REF|COMMIT|DEPTH|SUBMODULES|LFS)/);
   assert.doesNotMatch(script, /rm -rf -- "\$\{workspace\}"/);
 });
 

@@ -158,4 +158,30 @@ test("real Docker helper recursively provisions independently scoped HTTPS remot
   const workspaceInspection = await defaultCommandRunner("docker", ["run", "--rm", "--entrypoint", "sh", "--mount", `type=volume,src=${expectedVolume},dst=/workspace`, image, "-c", "test -f /workspace/README.md && test \"$(cat /workspace/deps/sub/sub.txt)\" = submodule && test ! -e /workspace/.task-handoff-git-provisioning && find /workspace -type f -maxdepth 5 -exec cat {} +"]);
   assert.equal(workspaceInspection.stdout.includes(token), false);
   await assert.rejects(() => defaultCommandRunner("docker", ["inspect", container]));
+
+  // Released images bake TASK_HANDOFF_GIT_COMMIT as the image build commit and
+  // docker run exposes image environment to the helper container, so a branch
+  // ref must still produce a branch checkout instead of a detached build commit.
+  const branchInstanceId = `integration-branch-${suffix}`;
+  const branchVolume = `task-handoff-${branchInstanceId}-workspace`;
+  const branchContainer = `task-handoff-git-provision-branch-${suffix}`;
+  await defaultCommandRunner("docker", ["volume", "rm", "-f", branchVolume]).catch(() => undefined);
+  await defaultCommandRunner("docker", ["volume", "create", branchVolume]);
+  t.after(() => defaultCommandRunner("docker", ["volume", "rm", "-f", branchVolume]).catch(() => undefined));
+  const branchContext = {
+    ...context,
+    instance: { id: branchInstanceId },
+    gitWorkspaceProvisioning: {
+      ...context.gitWorkspaceProvisioning,
+      instanceId: branchInstanceId,
+      ref: { type: "branch", name: "main" },
+      clone: { submodules: false, lfs: false, subdirectory: "" },
+    },
+  };
+  const branchArgs = dockerGitProvisionArgs(branchContext, branchContainer, auth, { launcherAssetsDir: path.resolve("docker") });
+  branchArgs.splice(branchArgs.length - 4, 0, "-e", "GIT_SSL_NO_VERIFY=1", "-e", "TASK_HANDOFF_GIT_COMMIT=35d682e84b1391850ef92c1bd22cbf66c35eeb0a", "-e", "TASK_HANDOFF_GIT_REF=main");
+  await defaultCommandRunner("docker", branchArgs, { timeoutMs: 120_000 });
+  const branchInspection = await defaultCommandRunner("docker", ["run", "--rm", "--entrypoint", "sh", "--mount", `type=volume,src=${branchVolume},dst=/workspace`, image, "-c", "test -f /workspace/README.md && git -C /workspace symbolic-ref --short HEAD"]);
+  assert.equal(branchInspection.stdout.trim(), "main");
+  await assert.rejects(() => defaultCommandRunner("docker", ["inspect", branchContainer]));
 });

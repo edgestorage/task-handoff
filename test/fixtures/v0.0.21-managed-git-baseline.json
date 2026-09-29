@@ -34,7 +34,8 @@
   },
   "dockerEntrypoint": {
     "sourceEnvironment": "TASK_HANDOFF_WORKSPACE_MODE",
-    "urlEnvironment": "TASK_HANDOFF_GIT_URL",
+    "urlEnvironment": "TASK_HANDOFF_WORKSPACE_GIT_URL",
+    "urlEnvironmentNote": "The workspace Git environment split renamed the checkout input namespace; the entrypoint ships with the node agent that writes the environment.",
     "cloneFunction": "bootstrap_workspace",
     "emptyWorkspaceGuard": "find \"${workspace}\" -mindepth 1 -maxdepth 1 -print -quit"
   }

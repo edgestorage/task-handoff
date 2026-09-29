@@ -78,9 +78,21 @@ export function registerCatalogRoutes({ app, service, events }: RegisterCatalogR
   });
   app.get("/api/models/:id", async (request) => ({ data: await service.requireModel(IdParamsSchema.parse(request.params).id) }));
   app.patch("/api/models/:id", async (request) => {
-    const model = await service.updateModel(IdParamsSchema.parse(request.params).id, request.body);
-    events.publish("model.updated", { modelId: model.id });
-    return { data: model };
+    const result = await service.updateModel(IdParamsSchema.parse(request.params).id, request.body);
+    events.publish("model.updated", { modelId: result.model.id });
+    return { data: result };
+  });
+  app.post("/api/models/:id/sync", async (request) => {
+    const id = IdParamsSchema.parse(request.params).id;
+    const result = await service.syncModel(id);
+    events.publish("model.updated", { modelId: id });
+    return { data: result };
+  });
+  app.post("/api/models/:id/merge", async (request) => {
+    const id = IdParamsSchema.parse(request.params).id;
+    const result = await service.mergeModel(id, request.body);
+    if (result.merged) events.publish("model.deleted", { modelId: id, deleted: true });
+    return { data: result };
   });
   app.delete("/api/models/:id", async (request) => {
     const id = IdParamsSchema.parse(request.params).id;

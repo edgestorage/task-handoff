@@ -260,6 +260,58 @@ export function agentRunOrchestrations(orchestrations: AgentCatalogOrchestration
     .filter((orchestration) => orchestration.manualRunsSupported && orchestration.executable);
 }
 
+export type AgentOrchestrationGroup = {
+  key: "entry" | "participating";
+  orchestrations: AgentCatalogOrchestration[];
+};
+
+/**
+ * 该 Agent 的编排按「作为入口」「参与」分组：入口编排同时是成员，分组时从参与组剔除，避免同一张编排出现两次。
+ * 组的顺序就是切换顺序，因此第一组的第一个既是最先看到的编排，也是「编辑编排」的默认落点。
+ */
+export function agentOrchestrationGroups(orchestrations: AgentCatalogOrchestration[], agent: AgentCatalogAgent): AgentOrchestrationGroup[] {
+  const entry = agentEntryOrchestrations(orchestrations, agent);
+  const entryKeys = new Set(entry.map((orchestration) => orchestration.key));
+  const participating = agentParticipatingOrchestrations(orchestrations, agent).filter((orchestration) => !entryKeys.has(orchestration.key));
+  const groups: AgentOrchestrationGroup[] = [
+    { key: "entry", orchestrations: entry },
+    { key: "participating", orchestrations: participating },
+  ];
+  return groups.filter((group) => group.orchestrations.length > 0);
+}
+
+/** 「编辑编排」的默认落点：切换顺序里的第一张编排。 */
+export function agentFirstOrchestration(orchestrations: AgentCatalogOrchestration[], agent: AgentCatalogAgent) {
+  return agentOrchestrationGroups(orchestrations, agent)[0]?.orchestrations[0];
+}
+
+/** 切换顺序摊平后的编排列表：入口组在前，位置就是下拉里的顺序。 */
+export function agentOrchestrationOrder(orchestrations: AgentCatalogOrchestration[], agent: AgentCatalogAgent) {
+  return agentOrchestrationGroups(orchestrations, agent).flatMap((group) => group.orchestrations);
+}
+
+/**
+ * 当前编排的 key：指定的编排仍然可切换就沿用它（详情页跳转、画布内切换），否则回落到第一张。
+ * 这是「指定的编排」与「第一张」唯一的裁决点，调用方只保存指定值，不再各自维护当前值。
+ */
+export function resolvedOrchestrationKey(available: AgentCatalogOrchestration[], requestedKey?: string) {
+  return available.some((orchestration) => orchestration.key === requestedKey)
+    ? requestedKey as string
+    : available[0]?.key || "";
+}
+
+/** 一次编排跳转请求：跳到哪张编排，以及是为哪个 Agent 发起的。 */
+export type AgentOrchestrationRequest = { agentKey: string; key: string };
+
+/**
+ * 画布当前编排：请求属于当前 Agent 时沿用，否则回落到该 Agent 的第一张。
+ * 换 Agent 必须让旧请求作废——同一张编排多个 Agent 都能看到（入口与参与），
+ * 只看 key 是否可切换会让画布停在另一个 Agent 的编排上。
+ */
+export function requestedOrchestrationKey(available: AgentCatalogOrchestration[], request: AgentOrchestrationRequest, agentKey: string) {
+  return resolvedOrchestrationKey(available, request.agentKey === agentKey ? request.key : "");
+}
+
 /**
  * Flattens the authoritative parentMemberId tree for rendering. Orphans remain visible as roots, and
  * malformed cycles cannot recurse forever or hide every member in the cycle.

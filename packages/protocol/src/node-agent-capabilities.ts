@@ -19,6 +19,11 @@ export const NodeAgentManagedGitCapabilitiesSchema = z.object({
 export const NodeAgentManagedModelCapabilitiesSchema = z.object({
   multiEntityAssignment: z.boolean().default(false),
   privateModelCatalog: z.boolean().default(false),
+  // Additive capability: the node keeps a model entity id stable across edits
+  // and applies content updates in place. Older nodes derive the id from the
+  // content hash and reject in-place edits, so writers must fall back to the
+  // legacy deploy shape for them.
+  stableModelIdentity: z.boolean().default(false),
 }).strip();
 
 export const NodeAgentStoryAgentToolCapabilitiesSchema = z.object({
@@ -130,6 +135,10 @@ export function supportsNodeMultiEntityModelAssignment(capabilities: unknown) {
 
 export function supportsNodePrivateModelCatalog(capabilities: unknown) {
   return normalizeNodeAgentCapabilities(capabilities).managedModels.privateModelCatalog;
+}
+
+export function supportsNodeStableModelIdentity(capabilities: unknown) {
+  return normalizeNodeAgentCapabilities(capabilities).managedModels.stableModelIdentity;
 }
 
 export function supportsNodeCodexManagedSettings(capabilities: unknown) {

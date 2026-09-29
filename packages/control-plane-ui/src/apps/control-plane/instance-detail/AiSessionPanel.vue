@@ -3918,8 +3918,8 @@ function storyTargetFor(session: AiSessionSummary): AiSessionStoryTarget | undef
   return aiSessionStoryTarget(props.instance, session);
 }
 
-function onStoryAssigned(_target: AiSessionStoryTarget) {
-  showControlPlaneToast(t("sessions.actions.storyAssigned"), "success");
+function onStoryAssigned(_target: AiSessionStoryTarget, moved: boolean) {
+  showControlPlaneToast(t(moved ? "sessions.actions.storyMoved" : "sessions.actions.storyAssigned"), "success");
   void refreshBoard();
 }
 

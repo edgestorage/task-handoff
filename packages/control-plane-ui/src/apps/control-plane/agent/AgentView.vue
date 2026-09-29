@@ -22,18 +22,6 @@
           <Input v-model="filter" class="agent-sidebar-filter" :placeholder="t('agents.list.filterPlaceholder')" />
           <div class="agent-sidebar-section">
             <span class="agent-sidebar-section-label">{{ t("agents.list.title") }}</span>
-            <DropdownMenu>
-              <DropdownMenuTrigger as-child>
-                <Button variant="ghost" size="icon-sm" class="agent-view-mode-button" :aria-label="t('agents.listOptions')" :title="t('agents.listOptions')"><MoreHorizontal :size="16" /></Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" :side-offset="6">
-                <DropdownMenuLabel>{{ t("agents.viewMode.label") }}</DropdownMenuLabel>
-                <DropdownMenuRadioGroup :model-value="viewMode" @update:model-value="setViewMode">
-                  <DropdownMenuRadioItem value="list">{{ t("agents.viewMode.list") }}</DropdownMenuRadioItem>
-                  <DropdownMenuRadioItem value="graph">{{ t("agents.viewMode.graph") }}</DropdownMenuRadioItem>
-                </DropdownMenuRadioGroup>
-              </DropdownMenuContent>
-            </DropdownMenu>
           </div>
         </div>
         <ScrollArea type="hover" :horizontal="false" class="agent-sidebar-scroll">
@@ -64,8 +52,10 @@
                   :can-run="agentManualRunAvailable(agent, agentRunOrchestrations(catalog.orchestrations, agent))"
                   :editable="agent.nodeOnline"
                   :deleting="deleting"
+                  :orchestration="{ label: 'edit', enabled: agent.nodeOnline && nodeOrchestrationsSupported(agent.nodeId) }"
                   @run="openManualRun(agent)"
                   @edit="openEdit(agent)"
+                  @orchestration="openAgentOrchestrationInGraph(agent.key)"
                   @delete="deleteAgent(agent)"
                 />
               </ContextMenu>
@@ -107,12 +97,13 @@
           :orchestration-key="graphOrchestrationKey"
           :deleting="deleting"
           :save="saveOrchestrationChange"
-          @select="selectedAgentKey = $event"
           @run="runAgentByKey"
           @edit="editAgentByKey"
           @delete="deleteAgentByKey"
           @remove="removeOrchestrationByKey"
           @create="openCreateOrchestration"
+          @show-detail="showAgentDetail"
+          @show-orchestration="openAgentOrchestrationInGraph"
           @orchestration-change="graphOrchestrationKey = $event"
         />
         <p v-else-if="!selectedAgent" class="agent-content-state">{{ t("agents.detail.empty") }}</p>
@@ -121,7 +112,41 @@
             <div class="agent-detail-head">
               <header class="agent-content-header">
                 <div class="agent-content-title">
-                  <h2>{{ selectedAgent.name }}</h2>
+                  <AgentViewSwitcher
+                    mode="detail"
+                    :active-key="graphOrchestrationKey"
+                    :groups="switcherGroups"
+                    :can-create="selectedAgent.nodeOnline && orchestrationsSupported"
+                    @select-orchestration="openOrchestrationInGraphByKey"
+                    @create="openCreateOrchestration"
+                  />
+                  <h2
+                    class="agent-title-name-field"
+                    :class="{ editing: editingAgentName }"
+                    :style="editingAgentName && agentNameEditWidth ? { '--agent-title-name-edit-width': `${agentNameEditWidth}px` } : undefined"
+                  >
+                    <input
+                      v-if="editingAgentName"
+                      ref="agentNameInput"
+                      v-model="agentNameDraft"
+                      class="agent-title-name-input"
+                      :disabled="savingAgentName"
+                      :aria-label="t('agents.detail.editName', { name: selectedAgent.name })"
+                      @blur="commitAgentNameEdit"
+                      @keydown="handleAgentNameEditKeydown"
+                    />
+                    <button
+                      v-else
+                      type="button"
+                      class="agent-title-name-button"
+                      :disabled="!selectedAgent.nodeOnline"
+                      :aria-label="t('agents.detail.editName', { name: selectedAgent.name })"
+                      :title="t('agents.detail.editNameTitle')"
+                      @click="beginAgentNameEdit(selectedAgent, $event)"
+                    >
+                      <span class="agent-title-name-button-label">{{ selectedAgent.name }}</span>
+                    </button>
+                  </h2>
                   <small>{{ selectedAgent.instanceLabel }}</small>
                 </div>
                 <div class="agent-content-actions">
@@ -369,11 +394,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useQueryClient } from "@tanstack/vue-query";
 import type { AgentDefinitionCreateInput, AgentDefinitionUpdateInput, AgentProcessSandbox, AgentWorkspaceMaterializer } from "@task-handoff/protocol/agent-definitions";
-import { MoreHorizontal, Pencil, Play, Plus, RefreshCw, Trash2, X } from "@lucide/vue";
+import { Pencil, Play, Plus, RefreshCw, Trash2, X } from "@lucide/vue";
 import AiAgentIcon from "@/components/AiAgentIcon.vue";
 import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
@@ -381,7 +406,6 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
@@ -402,7 +426,8 @@ import AgentEditor from "./AgentEditor.vue";
 import AgentContextMenu from "./AgentContextMenu.vue";
 import AgentRunDialog from "./AgentRunDialog.vue";
 import AgentGraph, { type AgentOrchestrationChange } from "./AgentGraph.vue";
-import { agentCatalogGroups, agentCatalogKey, agentCatalogMemberRows, agentManualRunAvailable, agentParticipatingOrchestrations, agentRunOrchestrations } from "./agentCatalog";
+import AgentViewSwitcher from "./AgentViewSwitcher.vue";
+import { agentCatalogGroups, agentCatalogKey, agentCatalogMemberRows, agentFirstOrchestration, agentManualRunAvailable, agentOrchestrationGroups, agentParticipatingOrchestrations, agentRunOrchestrations } from "./agentCatalog";
 import type { AgentBlockedCode, AgentCatalogAgent, AgentCatalogOrchestration, AgentEditorDraft } from "./agentCatalogTypes";
 import { useAgentCatalog } from "./useAgentCatalog";
 import { aiSessionLaunchableAppsForInstance } from "../useInstanceSessions";
@@ -434,9 +459,15 @@ const queryClient = useQueryClient();
 const filter = ref("");
 const selectedAgentKey = ref("");
 const selectedRunKey = ref("");
-const viewMode = ref<"list" | "graph">("list");
+const viewMode = ref<"detail" | "graph">("detail");
 const editorOpen = ref(false);
 const editingAgent = ref<AgentCatalogAgent>();
+// 列表模式头部改名与 Story 头部同一交互：默认是 hover 可点的标签，点击后才换成输入框。
+const editingAgentName = ref(false);
+const agentNameDraft = ref("");
+const agentNameEditWidth = ref(0);
+const agentNameInput = ref<HTMLInputElement>();
+const savingAgentName = ref(false);
 const board = useInstanceBoardQuery();
 const instances = computed(() => board.data.value || []);
 
@@ -473,14 +504,19 @@ const providerBrand = computed<"codex" | "claude" | "opencode" | undefined>(() =
   const providerId = selectedAgent.value?.providerId;
   return providerId === "codex" || providerId === "claude" || providerId === "opencode" ? providerId : undefined;
 });
-const orchestrationsSupported = computed(() => nodes.value.some((node) => node.id === selectedAgent.value?.nodeId
-  && controlPlaneAgentCapabilities(node.capabilities).orchestrations));
+/** 编排能力由 Node 的 capability document 决定：详情头部、内容选择器与列表右键菜单共用同一份判定。 */
+function nodeOrchestrationsSupported(nodeId?: string) {
+  return nodes.value.some((node) => node.id === nodeId && controlPlaneAgentCapabilities(node.capabilities).orchestrations);
+}
+const orchestrationsSupported = computed(() => nodeOrchestrationsSupported(selectedAgent.value?.nodeId));
 /** 该 Agent 参与的全部编排；画布与详情卡片都消费同一份派生列表。 */
 const agentOrchestrations = computed(() => (selectedAgent.value
   ? [...agentParticipatingOrchestrations(catalog.value.orchestrations, selectedAgent.value)]
     .sort((left, right) => Number(right.isDefault) - Number(left.isDefault) || left.name.localeCompare(right.name))
   : []));
 const visibleOrchestrations = computed(() => catalog.value.orchestrations.filter((orchestration) => nodeIsVisible(props.nodeFilter, orchestration.nodeId)));
+/** 内容选择器与画布共用目录层的「入口 / 参与」分组，顺序只在目录层定义一次。 */
+const switcherGroups = computed(() => (selectedAgent.value ? agentOrchestrationGroups(visibleOrchestrations.value, selectedAgent.value) : []));
 const entryStoryLabels = computed(() => selectedAgent.value?.entryStoryLabels ?? []);
 
 const runs = computed(() => (selectedAgent.value
@@ -585,14 +621,65 @@ function openCreate() {
   editorOpen.value = true;
 }
 
-// Keep the pane bound to a real mode: a single-value radio group must not leave the pane unset.
-function setViewMode(value: unknown) {
-  if (value === "list" || value === "graph") viewMode.value = value;
-}
-
 function openEdit(agent: AgentCatalogAgent) {
   editingAgent.value = agent;
   editorOpen.value = true;
+}
+
+/** 点击名称进入编辑：输入框先与标签同宽，内容更长时再增宽，避免头部跳动。 */
+async function beginAgentNameEdit(agent: AgentCatalogAgent, event?: MouseEvent) {
+  if (!agent.nodeOnline || savingAgentName.value) return;
+  agentNameEditWidth.value = Math.ceil((event?.currentTarget as HTMLElement | undefined)?.getBoundingClientRect().width || 0);
+  agentNameDraft.value = agent.name;
+  editingAgentName.value = true;
+  await nextTick();
+  const input = agentNameInput.value;
+  if (input) {
+    const inputContentWidth = input.scrollWidth + input.offsetWidth - input.clientWidth;
+    agentNameEditWidth.value = Math.max(agentNameEditWidth.value, Math.ceil(inputContentWidth));
+  }
+  agentNameInput.value?.focus();
+  agentNameInput.value?.select();
+}
+
+function cancelAgentNameEdit() {
+  editingAgentName.value = false;
+  agentNameDraft.value = "";
+  agentNameEditWidth.value = 0;
+}
+
+function handleAgentNameEditKeydown(event: KeyboardEvent) {
+  if (event.isComposing) return;
+  if (event.key === "Enter") {
+    event.preventDefault();
+    void commitAgentNameEdit();
+  } else if (event.key === "Escape") {
+    event.preventDefault();
+    cancelAgentNameEdit();
+  }
+}
+
+/** 改名是补丁式权威写入：只提交名称与新 revision，其余字段由 Node 保持；失败时重读收敛。 */
+async function commitAgentNameEdit() {
+  const agent = selectedAgent.value;
+  if (!agent || !editingAgentName.value || savingAgentName.value) return;
+  const name = agentNameDraft.value.trim();
+  if (!name || name === agent.name) {
+    cancelAgentNameEdit();
+    return;
+  }
+  savingAgentName.value = true;
+  try {
+    await updateAgentDefinition(agent.id, agent.nodeId, { expectedRevision: agent.revision, name });
+    await invalidateControlPlaneDomains(queryClient, ["agents"]);
+    showControlPlaneToast(t("agents.toast.updated", { name }), "success");
+  } catch (cause) {
+    showControlPlaneToast(translateApiError(cause, t, t("agents.errors.updateFailed")));
+    await refetch();
+  } finally {
+    savingAgentName.value = false;
+    cancelAgentNameEdit();
+  }
 }
 
 const blockedLabelKeys: Record<AgentBlockedCode, string> = {
@@ -740,6 +827,27 @@ function openOrchestrationInGraph(orchestration: AgentCatalogOrchestration) {
   viewMode.value = "graph";
 }
 
+/** 列表右键的「编辑编排」与画布节点右键的「查看编排」共用：切到该 Agent 的第一张编排。 */
+function openAgentOrchestrationInGraph(agentKey: string) {
+  const agent = agentsByKey.value.get(agentKey);
+  if (!agent) return;
+  selectedAgentKey.value = agent.key;
+  graphOrchestrationKey.value = agentFirstOrchestration(visibleOrchestrations.value, agent)?.key || "";
+  viewMode.value = "graph";
+}
+
+/** 回详情视图；画布节点菜单会带上目标 Agent，头部切换器不带 key，只切视图。 */
+function showAgentDetail(agentKey?: string) {
+  if (agentKey && agentsByKey.value.has(agentKey)) selectedAgentKey.value = agentKey;
+  viewMode.value = "detail";
+}
+
+/** 内容选择器只给出编排 key；画布挂载后会把它解析成当前编排，key 无效时自然回落到第一张。 */
+function openOrchestrationInGraphByKey(key: string) {
+  graphOrchestrationKey.value = key;
+  viewMode.value = "graph";
+}
+
 function removeOrchestrationByKey(key: string) {
   const orchestration = catalog.value.orchestrations.find((candidate) => candidate.key === key);
   if (!orchestration || orchestration.isDefault) return;
@@ -805,7 +913,6 @@ async function confirmDeleteAgent() {
 .agent-sidebar-filter { height:30px; margin-top:6px; }
 .agent-sidebar-section { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:8px 0 4px 8px; }
 .agent-sidebar-section-label { color:var(--text-muted); font-size:12px; font-weight:500; line-height:1; }
-.agent-view-mode-button { width:26px; height:26px; color:var(--text-muted); }
 .agent-sidebar-scroll { min-width:0; min-height:0; }
 .agent-sidebar-scroll-inner { min-width:0; padding:0 10px 12px; }
 .agent-sidebar-scroll :deep([data-task-handoff-scroll-viewport] > div) { width:100%; min-width:0 !important; }
@@ -827,10 +934,10 @@ async function confirmDeleteAgent() {
 .agent-list-item:hover { background:var(--sidebar-row-hover-bg,var(--surface-active)); }
 .agent-list-item.active,.agent-list-item.active:hover { background:var(--sidebar-row-selected-bg,var(--surface-active)); }
 .agent-list-item:focus-visible { outline:2px solid var(--focus-ring); outline-offset:-2px; }
-.agent-list-item-copy { display:grid; gap:2px; min-width:0; flex:1; }
+.agent-list-item-copy { display:grid; gap:2px; min-width:0; flex:1; line-height:1.5; }
 .agent-list-item-copy strong { color:var(--text-strong); font-size:13px; font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .agent-list-item-copy small { color:var(--text-muted); font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.agent-new-button { padding-block:11px; }
+.agent-new-button .agent-list-item-copy strong { line-height:1.3; }
 .agent-list-empty { display:grid; justify-items:start; gap:4px; padding:8px; color:var(--text-muted); font-size:12px; }
 .agent-content { display:flex; min-width:0; min-height:0; flex-direction:column; overflow:hidden; padding:0 20px; }
 .agent-content-state { display:grid; flex:1; place-items:center; color:var(--text-muted); font-size:13px; padding:24px; }
@@ -842,7 +949,19 @@ async function confirmDeleteAgent() {
 .agent-detail-head { position:sticky; top:0; z-index:3; display:grid; gap:10px; min-width:0; padding-bottom:10px; background:var(--workspace-bg); }
 .agent-content-header { display:flex; align-items:center; justify-content:space-between; gap:12px; border-bottom:1px solid var(--line); padding:0 0 12px; flex:0 0 auto; }
 .agent-content-title { display:flex; flex:1 1 auto; align-items:baseline; gap:10px; min-width:0; }
+.agent-content-title .agent-view-switcher { align-self:center; }
 .agent-content-title h2 { margin:0; min-width:0; color:var(--text-strong); font-size:18px; font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+/* 名称与 Story 头部同一交互：默认是 hover 有反馈的标签，点击后才换成同宽的输入框。 */
+.agent-content-title h2.agent-title-name-field { display:grid; flex:0 1 auto; width:max-content; max-width:100%; overflow:visible; }
+.agent-title-name-button,.agent-title-name-input { box-sizing:border-box; grid-area:1 / 1; min-width:0; margin:0; font:inherit; font-size:inherit; font-weight:inherit; letter-spacing:0; line-height:1.3; white-space:nowrap; }
+.agent-title-name-field.editing { width:min(var(--agent-title-name-edit-width,720px),100%); }
+.agent-title-name-button { display:block; width:fit-content; max-width:100%; border:0; padding:0; background:transparent; color:inherit; cursor:text; text-align:left; }
+.agent-title-name-button-label { display:block; box-sizing:border-box; max-width:100%; overflow:hidden; border:1px solid transparent; border-radius:7px; color:inherit; font:inherit; padding:2px 6px 3px; text-overflow:ellipsis; }
+.agent-title-name-button:hover .agent-title-name-button-label,.agent-title-name-button:focus-visible .agent-title-name-button-label { border-color:var(--line); background:var(--surface-hover); box-shadow:inset 0 1px 0 var(--workspace-grid); }
+.agent-title-name-button:focus-visible { outline:none; }
+.agent-title-name-button:disabled { cursor:default; color:var(--text-muted); }
+.agent-title-name-input { width:100%; border:1px solid var(--brand-accent); border-radius:7px; background:var(--surface-inset); color:inherit; padding:2px 6px 3px; outline:none; box-shadow:0 0 0 3px var(--brand-accent-soft),inset 0 1px 0 var(--workspace-grid); }
+.agent-title-name-input:disabled { cursor:progress; opacity:.72; }
 .agent-content-title small { color:var(--text-muted); font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .agent-content-actions { display:flex; align-items:center; gap:8px; flex:0 0 auto; }
 .agent-detail-runtime { display:flex; align-items:center; gap:7px; min-width:0; color:var(--text-muted); font-size:12px; font-weight:400; line-height:20px; }

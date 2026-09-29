@@ -114,6 +114,10 @@
       "types": "./src/managed-git-credentials.ts",
       "default": "./src/managed-git-credentials.ts"
     },
+    "./workspace-git": {
+      "types": "./src/workspace-git.ts",
+      "default": "./src/workspace-git.ts"
+    },
     "./response-validation": {
       "types": "./src/response-validation.ts",
       "default": "./src/response-validation.ts"

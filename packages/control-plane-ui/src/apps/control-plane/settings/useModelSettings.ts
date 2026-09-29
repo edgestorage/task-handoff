@@ -1,5 +1,5 @@
 import { computed, reactive, ref, watch } from "vue";
-import { copyModel, createModel, createNodeModel, deleteModel, deleteNodeModel, discoverModels, reorderModels, testModel, updateModel, updateNodeModel } from "../../../api/queries";
+import { copyModel, createModel, createNodeModel, deleteModel, deleteNodeModel, discoverModels, mergeModel as mergeModelRequest, reorderModels, syncModel as syncModelRequest, testModel, updateModel } from "../../../api/queries";
 import type { DiscoveredModel, ModelApp, ModelConfig, ModelLocation, ModelProtocol, Node } from "../../../api/types";
 import { showControlPlaneToast, showDelayedControlPlaneLoadingToast } from "../useControlPlaneToasts";
 import type { Translate } from "../../../i18n/status.ts";
@@ -24,6 +24,8 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
   const copyingModelId = ref("");
   const savingModelId = ref("");
   const deletingModelId = ref("");
+  const syncingModelId = ref("");
+  const mergingModelId = ref("");
   const modelSaveSuccess = ref("");
   const discoveredModels = ref<DiscoveredModel[]>([]);
   const discoveringModels = ref(false);
@@ -239,18 +241,16 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
       const editing = models().find((model) => model.id === editingModelId.value);
       let saved: ModelConfig;
       let refreshed = false;
+      let syncNotice = "";
       if (editingModelId.value && editing) {
-        const locations = editing.locations?.length
-          ? editing.locations
-          : [{ type: "control-plane", name: editing.name, enabled: editing.enabled, order: editing.order } as const];
-        const results = await Promise.allSettled(locations.map((location) => location.type === "node"
-          ? updateNodeModel(location.nodeId, editingModelId.value, payload)
-          : updateModel(editingModelId.value, payload)));
+        // One authoritative edit: the control plane keeps the entity id stable
+        // and converges the same content onto every node that holds a replica.
+        const result = await updateModel(editingModelId.value, payload);
         await refreshModels();
         refreshed = true;
-        const failure = results.find((result) => result.status === "rejected");
-        if (failure?.status === "rejected") throw failure.reason;
-        saved = results.find((result): result is PromiseFulfilledResult<ModelConfig> => result.status === "fulfilled")!.value;
+        saved = { ...editing, ...result.model };
+        const deferred = result.locations.filter((location) => location.state !== "synced");
+        if (deferred.length) syncNotice = t("settings.modelRegistry.syncIncomplete", { count: deferred.length });
       } else if (copyingModelId.value) {
         saved = await copyModel(copyingModelId.value, payload);
       } else {
@@ -259,7 +259,11 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
           : await createNodeModel(settingsModel.locationScope, { ...payload, key: settingsModel.key.trim() });
       }
       resetModelForm();
-      modelSaveSuccess.value = t("settings.modelRegistry.saved", { name: saved.name });
+      if (syncNotice) {
+        showControlPlaneToast(syncNotice, "info");
+      } else {
+        modelSaveSuccess.value = t("settings.modelRegistry.saved", { name: saved.name });
+      }
       if (!refreshed) await refreshModels();
       return true;
     } catch (error) {
@@ -313,6 +317,67 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
     }
   }
 
+  /** Node replicas whose stored content revision differs from the entity's. */
+  function staleLocations(model: ModelConfig) {
+    return (model.locations || []).filter((location) => location.type === "node"
+      && Boolean(location.revision && model.revision && location.revision !== model.revision));
+  }
+
+  /**
+   * Entities that look like a superseded copy of this one: same app and name.
+   * The endpoint may differ because editing it is a normal content change.
+   */
+  function mergeCandidates(model: ModelConfig) {
+    return models().filter((candidate) => candidate.id !== model.id
+      && candidate.app === model.app
+      && candidate.name === model.name);
+  }
+
+  async function syncModelLocations(model: ModelConfig): Promise<boolean> {
+    if (syncingModelId.value) return false;
+    syncingModelId.value = model.id;
+    clearModelFeedback();
+    try {
+      const result = await syncModelRequest(model.id);
+      await refreshModels();
+      const failed = result.locations.filter((location) => location.state !== "synced");
+      if (failed.length) {
+        showControlPlaneToast(failed[0].message || t("settings.modelRegistry.syncFailed"), "error");
+        return false;
+      }
+      showControlPlaneToast(t("settings.modelRegistry.synced"), "success");
+      return true;
+    } catch (error) {
+      showControlPlaneToast(translateError(error));
+      return false;
+    } finally {
+      syncingModelId.value = "";
+    }
+  }
+
+  async function mergeModelInto(model: ModelConfig, targetModelId: string): Promise<boolean> {
+    if (mergingModelId.value) return false;
+    mergingModelId.value = model.id;
+    clearModelFeedback();
+    try {
+      const result = await mergeModelRequest(model.id, targetModelId);
+      await refreshModels();
+      if (!result.merged) {
+        const failure = result.locations.find((location) => !location.merged);
+        showControlPlaneToast(failure?.message || t("settings.modelRegistry.syncFailed"), "error");
+        return false;
+      }
+      const reassigned = result.locations.reduce((count, location) => count + location.reassignedInstances.length, 0);
+      showControlPlaneToast(t("settings.modelRegistry.merged", { count: reassigned }), "success");
+      return true;
+    } catch (error) {
+      showControlPlaneToast(translateError(error));
+      return false;
+    } finally {
+      mergingModelId.value = "";
+    }
+  }
+
   function canMoveModel(modelId: string, direction: -1 | 1) {
     const items = models().filter((model) => model.locations?.some((location) => location.type === "control-plane"));
     const index = items.findIndex((model) => model.id === modelId);
@@ -336,6 +401,9 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
     editModel,
     editingModelId,
     formModelBusyId,
+    mergeCandidates,
+    mergeModelInto,
+    mergingModelId,
     modelSaveSuccess,
     modelDraftDirty,
     moveModel,
@@ -344,6 +412,9 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
     saveModel,
     savingModelId,
     settingsModel,
+    staleLocations,
+    syncModelLocations,
+    syncingModelId,
     testingModel,
     setProtocols,
     addModelName,

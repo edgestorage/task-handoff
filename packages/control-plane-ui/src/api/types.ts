@@ -180,6 +180,8 @@ export type ModelConfig = {
   name: string;
   endpoint: string;
   model: string;
+  /** Content revision of the record; edits advance it while the id stays stable. */
+  revision?: string;
   modelNames?: ModelNameEntry[];
   protocols?: ModelProtocol[];
   app: ModelApp;
@@ -197,8 +199,37 @@ export type ModelConfig = {
 export type { CodexInstanceSettings };
 
 export type ModelLocation =
-  | { type: "control-plane"; name: string; enabled: boolean; order: number }
-  | { type: "node"; nodeId: string; name: string; enabled: boolean; order: number; referenceCount: number };
+  | { type: "control-plane"; name: string; enabled: boolean; order: number; revision?: string }
+  | { type: "node"; nodeId: string; name: string; enabled: boolean; order: number; referenceCount: number; revision?: string };
+
+export type ModelLocationSyncState = "synced" | "pending" | "unsupported" | "error";
+
+export type ModelLocationSyncResult = {
+  nodeId: string;
+  state: ModelLocationSyncState;
+  code?: string;
+  message?: string;
+};
+
+export type ModelMutationResult = {
+  model: Omit<ModelConfig, "locations" | "referenceCount">;
+  locations: ModelLocationSyncResult[];
+};
+
+export type ModelMergeLocationResult = {
+  nodeId: string;
+  merged: boolean;
+  reassignedInstances: string[];
+  code?: string;
+  message?: string;
+};
+
+export type ModelMergeResult = {
+  modelId: string;
+  targetModelId: string;
+  merged: boolean;
+  locations: ModelMergeLocationResult[];
+};
 
 export type FederatedModelRegistry = {
   models: Array<{

@@ -58,8 +58,8 @@
           </template>
         </div>
         <span class="repository-workspace-head-actions">
-          <Button v-if="activeTab" variant="ghost" size="icon" :disabled="fileActionPending" :aria-label="t('repository.workspace.rename')" :title="t('repository.workspace.rename')" @click="openRenameDialog(activeTab)"><PencilLine :size="14" /></Button>
-          <Button v-if="activeTab" variant="ghost" size="icon" :disabled="fileActionPending" :aria-label="t('repository.workspace.delete')" :title="t('repository.workspace.delete')" @click="openDeleteDialog(activeTab)"><Trash2 :size="14" /></Button>
+          <Button v-if="activeTab && !openingFilePath" variant="ghost" size="icon" :disabled="fileActionPending" :aria-label="t('repository.workspace.rename')" :title="t('repository.workspace.rename')" @click="openRenameDialog(activeTab)"><PencilLine :size="14" /></Button>
+          <Button v-if="activeTab && !openingFilePath" variant="ghost" size="icon" :disabled="fileActionPending" :aria-label="t('repository.workspace.delete')" :title="t('repository.workspace.delete')" @click="openDeleteDialog(activeTab)"><Trash2 :size="14" /></Button>
           <Button
             variant="ghost"
             size="icon"
@@ -79,6 +79,13 @@
           <section v-if="fileOpenError" class="repository-workspace-editor repository-workspace-file-error">
             <div class="repository-workspace-editor-body repository-workspace-file-error-body">
               <RepositoryErrorNotice :error="fileOpenError.error" :fallback="t('repository.errors.fileLoad')" />
+            </div>
+          </section>
+          <section v-else-if="openingFilePath" class="repository-workspace-editor repository-workspace-file-loading">
+            <div class="repository-workspace-editor-body repository-workspace-file-loading-body">
+              <LoaderCircle class="repository-workspace-spin" :size="20" />
+              <span>{{ t("repository.workspace.fileLoading") }}</span>
+              <small>{{ openingFilePath }}</small>
             </div>
           </section>
           <section v-else-if="activeTab" class="repository-workspace-editor">
@@ -213,6 +220,8 @@ const loadingWorkspace = ref(false);
 const workspaceLoadError = ref<unknown>();
 const directoryLoadError = ref<ScopedRepositoryError>();
 const fileOpenError = ref<ScopedRepositoryError>();
+// Path of the file whose content is being fetched, so the editor can show a loading state instead of the previous file.
+const openingFilePath = ref<string>();
 const loadRevision = ref(0);
 let fileOpenRevision = 0;
 const newFileDialogOpen = ref(false);
@@ -227,7 +236,7 @@ const deleteTarget = ref<FileTab>();
 const deleteError = ref<unknown>();
 const fileActionPending = ref(false);
 const activeTab = computed(() => tabs.value.find((tab) => tab.id === activeTabId.value));
-const currentFilePath = computed(() => activeTab.value?.path || fileOpenError.value?.path || "");
+const currentFilePath = computed(() => openingFilePath.value || activeTab.value?.path || fileOpenError.value?.path || "");
 const breadcrumbSegments = computed<RepositoryBreadcrumbSegment[]>(() => {
   const rootLabel = props.context.displayName || t("repository.title");
   const root = { directoryPath: "", label: rootLabel, title: props.context.repositoryRoot || rootLabel };
@@ -437,6 +446,7 @@ async function loadWorkspace() {
   directoryLoadError.value = undefined;
   fileOpenError.value = undefined;
   fileOpenRevision += 1;
+  openingFilePath.value = undefined;
   try {
     const [root, nextChanges] = await Promise.all([
       getRepositoryDirectory(target.value, ""),
@@ -548,6 +558,7 @@ async function openFile(entry: RepositoryDirectoryEntry | { path: string; line?:
     selectTab(id, revision);
     return;
   }
+  openingFilePath.value = entry.path;
   try {
     const file = await getRepositoryFile(target.value, entry.path);
     if (revision !== fileOpenRevision) return;
@@ -557,12 +568,15 @@ async function openFile(entry: RepositoryDirectoryEntry | { path: string; line?:
     if (revision !== fileOpenRevision) return;
     activeTabId.value = "";
     fileOpenError.value = { path: entry.path, error };
+  } finally {
+    if (revision === fileOpenRevision) openingFilePath.value = undefined;
   }
 }
 
 function selectTab(id: string, revision = ++fileOpenRevision) {
   if (revision !== fileOpenRevision) return;
   fileOpenError.value = undefined;
+  openingFilePath.value = undefined;
   activeTabId.value = id;
 }
 
@@ -774,6 +788,8 @@ function closeTab(id: string) {
 .repository-workspace-editor-body { display: flex; min-height: 0; overflow: hidden; flex-direction: column; background: var(--workspace-bg); }
 .repository-workspace-file-error-body { align-items: center; justify-content: center; padding: 24px; }
 .repository-workspace-file-error-body :deep(.repository-error-notice) { width: min(680px, 100%); }
+.repository-workspace-file-loading-body { align-items: center; justify-content: center; gap: 8px; padding: 24px; color: var(--text-muted); font-size: 12px; }
+.repository-workspace-file-loading-body > small { max-width: min(680px, 100%); overflow: hidden; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .repository-workspace-empty { display: flex; min-height: 0; align-items: center; justify-content: center; flex-direction: column; gap: 8px; color: var(--text-muted); }
 .repository-workspace-empty strong { color: var(--text-strong); font-size: 13px; }
 .repository-workspace-empty span { font-size: 12px; }

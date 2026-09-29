@@ -17,7 +17,7 @@ const timestamp = "2026-08-01T00:00:00.000Z";
 class Socket extends EventEmitter {
   close() { this.closed = true; }
   message(value) { this.emit("message", JSON.stringify(value)); }
-  disconnect() { this.emit("close"); }
+  disconnect(code, reason) { this.emit("close", code, reason); }
 }
 
 function snapshot(revision, target = {}) {
@@ -84,8 +84,8 @@ async function fixture(t) {
   return current.service;
 }
 
-async function waitFor(predicate) {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+async function waitFor(predicate, attempts = 100) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
     if (predicate()) return;
     await new Promise((resolve) => setTimeout(resolve, 2));
   }
@@ -137,11 +137,14 @@ test("subscriber applies snapshot before opening WSS and then consumes contiguou
   assert.equal(fetches, 1);
 });
 
-test("R disconnect degrades only proxy reachability, retains target state, then reboots from snapshot before a new WSS", async (t) => {
+test("event stream disconnect inside the grace period keeps the last projection and reboots from the next snapshot", async (t) => {
   const service = await fixture(t);
   const sockets = [];
+  const warnings = [];
   const revisions = [7, 9];
   const subscriber = new ControlPlaneProxyStateSubscriber(service, {
+    unavailableGraceMs: 20,
+    logger: { warn(details, message) { warnings.push({ details, message }); } },
     async fetchImpl() { return Response.json({ data: snapshot(revisions.shift(), { status: "offline", health: "degraded" }) }); },
     openWebSocket(url) {
       const socket = new Socket();
@@ -153,15 +156,71 @@ test("R disconnect degrades only proxy reachability, retains target state, then 
   t.after(() => subscriber.stop());
   subscriber.start();
   await waitFor(() => sockets.length === 1);
+  sockets[0].disconnect(1006, "TLS handshake timeout");
+  await waitFor(() => sockets.length === 2);
+  assert.equal(sockets[1].sinceRevision, "9");
+  const recovered = service.requirePublicNode("node_b");
+  assert.equal(recovered.proxyState.reachability, "reachable");
+  assert.equal(recovered.proxyState.revision, 9);
+  assert.equal(recovered.status, "offline");
+  // 宽限期内重连成功，节点全程没有被投影成不可用。
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.equal(service.requirePublicNode("node_b").proxyState.reachability, "reachable");
+  assert.equal(service.requirePublicNode("node_b").status, "offline");
+  // 断开原因进入诊断日志，便于区分链路抖动与真实离线。
+  const interrupted = warnings.find((warning) => warning.message === "control-plane proxy link interrupted, awaiting grace period");
+  assert.ok(interrupted);
+  assert.equal(interrupted.details.trigger, "event-stream-close");
+  assert.equal(interrupted.details.closeCode, 1006);
+  assert.equal(interrupted.details.closeReason, "TLS handshake timeout");
+});
+
+test("proxy outage degrades once after the grace period and restores reachability from the next snapshot", async (t) => {
+  const service = await fixture(t);
+  const sockets = [];
+  const revisions = [6, 7];
+  let fetches = 0;
+  let failFetches = 0;
+  let unreachableStates = 0;
+  const subscriber = new ControlPlaneProxyStateSubscriber(service, {
+    unavailableGraceMs: 20,
+    onStateChanged(node) { if (node.proxyState.reachability === "unreachable") unreachableStates += 1; },
+    async fetchImpl() {
+      fetches += 1;
+      if (failFetches > 0) {
+        failFetches -= 1;
+        throw Object.assign(new Error("connect failed"), { code: "ECONNRESET" });
+      }
+      return Response.json({ data: snapshot(revisions.shift(), { status: "offline", health: "degraded" }) });
+    },
+    openWebSocket() {
+      const socket = new Socket();
+      sockets.push(socket);
+      return socket;
+    },
+  });
+  t.after(() => subscriber.stop());
+  subscriber.start();
+  await waitFor(() => sockets.length === 1);
+  failFetches = 2;
   sockets[0].disconnect();
   await waitFor(() => service.requirePublicNode("node_b").proxyState.reachability === "unreachable");
   const degraded = service.requirePublicNode("node_b");
   assert.equal(degraded.status, "degraded");
   assert.equal(degraded.proxyState.target.status, "offline");
-  assert.equal(degraded.proxyState.revision, 7);
-  await waitFor(() => sockets.length === 2);
-  assert.equal(sockets[1].sinceRevision, "9");
-  assert.equal(service.requirePublicNode("node_b").proxyState.reachability, "reachable");
+  assert.equal(degraded.proxyState.revision, 6);
+  assert.equal(unreachableStates, 1);
+  // 同一次中断里继续重连失败也不会重复发布降级。
+  await waitFor(() => fetches >= 3, 400);
+  assert.equal(unreachableStates, 1);
+  await waitFor(() => service.requirePublicNode("node_b").proxyState.reachability === "reachable", 1_000);
+  const recovered = service.requirePublicNode("node_b");
+  assert.equal(recovered.proxyState.revision, 7);
+  assert.equal(recovered.status, "offline");
+  // 恢复后再次中断会重新进入宽限并重新发布降级。
+  failFetches = 5;
+  sockets[1].disconnect();
+  await waitFor(() => unreachableStates === 2, 200);
 });
 
 test("binding revoked is distinct from proxy unreachability and preserves the last target", async (t) => {
@@ -233,7 +292,9 @@ test("subscriber logs only a redacted proxy failure summary", async (t) => {
   subscriber.start();
   await waitFor(() => warnings.length >= 1);
 
-  for (const warning of warnings) {
+  const bootstrapWarnings = warnings.filter((warning) => warning.message === "control-plane proxy state bootstrap failed");
+  assert.ok(bootstrapWarnings.length >= 1);
+  for (const warning of bootstrapWarnings) {
     assert.deepEqual(warning, {
       details: {
         nodeId: "node_b",

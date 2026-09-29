@@ -8,6 +8,8 @@ const read = (path) => fs.readFileSync(new URL(path, root), "utf8");
 const agentView = read("src/apps/control-plane/agent/AgentView.vue");
 const agentGraph = read("src/apps/control-plane/agent/AgentGraph.vue");
 const agentEditor = read("src/apps/control-plane/agent/AgentEditor.vue");
+const agentSwitcher = read("src/apps/control-plane/agent/AgentViewSwitcher.vue");
+const storyView = read("src/apps/control-plane/story/StoryView.vue");
 
 test("Agent view reuses the Story workspace layout language", () => {
   assert.match(agentView, /\.agent-view \{[^}]*background:var\(--workspace-bg\);[^}]*padding:12px 0;/);
@@ -28,11 +30,14 @@ test("Agent detail head keeps runtime identity in the shared meta-line language"
   assert.match(agentView, /\.agent-detail-runtime \{[^}]*color:var\(--text-muted\);[^}]*font-size:12px;[^}]*font-weight:400;/);
 });
 
-test("Agent call graph stays reachable from the Story-style list options", () => {
-  assert.match(agentView, /<DropdownMenuRadioItem value="list">/);
-  assert.match(agentView, /<DropdownMenuRadioItem value="graph">/);
-  assert.match(agentView, /:aria-label="t\('agents\.listOptions'\)"/);
-  assert.match(agentView, /const viewMode = ref<"list" \| "graph">\("list"\)/);
+test("Agent content switcher keeps detail and orchestrations in one control", () => {
+  // 详情固定在第一项，编排按作用域分组；切换器在详情头部与画布头部是同一个组件。
+  assert.match(agentSwitcher, /const DETAIL_ITEM = "__detail__";/);
+  assert.match(agentSwitcher, /<DropdownMenuRadioItem :value="DETAIL_ITEM" class="agent-view-switcher-item">/);
+  assert.match(agentSwitcher, /<DropdownMenuRadioItem v-for="orchestration in group\.orchestrations"/);
+  assert.match(agentView, /<AgentViewSwitcher\s+mode="detail"/);
+  assert.match(agentGraph, /<AgentViewSwitcher\s+mode="graph"/);
+  assert.match(agentView, /const viewMode = ref<"detail" \| "graph">\("detail"\)/);
 });
 
 test("Agent view text stays at or above the 12px floor", () => {
@@ -41,4 +46,13 @@ test("Agent view text stays at or above the 12px floor", () => {
       assert.ok(Number(match[1]) >= 12, `${name} must not render text below 12px (found ${match[1]}px)`);
     }
   }
+});
+
+test("Agent and Story create rows render with the same single-line metrics", () => {
+  // 两个侧边栏的“新建”行都是单行标签：基础行 8px 内边距 + 13px/1.3 标签行高，不能再叠纵向 padding。
+  assert.match(storyView, /\.story-tree-item \{[^}]*padding:8px;/);
+  assert.match(storyView, /\.story-tree-item > \.story-tree-item-copy strong \{[^}]*line-height:1\.3;/);
+  assert.doesNotMatch(storyView, /\.story-new-button \{[^}]*padding-block/);
+  assert.match(agentView, /\.agent-new-button \.agent-list-item-copy strong \{ line-height:1\.3; \}/);
+  assert.doesNotMatch(agentView, /\.agent-new-button \{[^}]*padding-block/);
 });

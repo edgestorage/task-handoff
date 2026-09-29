@@ -1,37 +1,53 @@
 <template>
-  <section class="agent-graph" :aria-label="t('agents.viewMode.graph')">
-    <div class="agent-graph-toolbar">
-      <p class="agent-graph-hint">{{ t("agents.graph.hint") }}</p>
-      <div class="agent-graph-scope">
-        <ControlPlaneSelect v-model="scope" class="agent-graph-scope-select" :aria-label="t('agents.graph.scopeLabel')">
-          <ControlPlaneSelectItem value="entry">{{ t("agents.graph.scope.entry") }}</ControlPlaneSelectItem>
-          <ControlPlaneSelectItem value="participating">{{ t("agents.graph.scope.participating") }}</ControlPlaneSelectItem>
-        </ControlPlaneSelect>
-        <ControlPlaneSelect
-          :model-value="activeOrchestration?.key || ''"
-          class="agent-graph-orchestration-select"
-          :disabled="!scopedOrchestrations.length"
-          :placeholder="t('agents.graph.orchestrationEmpty')"
-          :aria-label="t('agents.graph.orchestrationLabel')"
-          @update:model-value="selectOrchestration"
-        >
-          <ControlPlaneSelectItem v-for="orchestration in scopedOrchestrations" :key="orchestration.key" :value="orchestration.key">
-            {{ orchestrationLabel(orchestration) }}
-          </ControlPlaneSelectItem>
-        </ControlPlaneSelect>
+  <section class="agent-graph" :aria-label="t('agents.viewMode.graph')" @keydown.capture="handleShortcut">
+    <header class="agent-graph-head">
+      <div class="agent-graph-identity">
+        <AgentViewSwitcher
+          mode="graph"
+          :active-key="activeKey"
+          :groups="orchestrationGroups"
+          :draft-counts="draftCounts"
+          :can-create="focusAgent?.nodeOnline === true"
+          @select-detail="requestDetail()"
+          @select-orchestration="selectOrchestration"
+          @create="$emit('create')"
+        />
+        <template v-if="activeOrchestration">
+          <h2
+            class="agent-graph-name-field"
+            :class="{ editing: editingName }"
+            :style="editingName && nameEditWidth ? { '--agent-graph-name-edit-width': `${nameEditWidth}px` } : undefined"
+          >
+            <input
+              v-if="editingName"
+              ref="nameInput"
+              v-model="orchestrationName"
+              class="agent-graph-name-input"
+              :disabled="!editable"
+              :aria-label="t('agents.graph.editName', { name: orchestrationName })"
+              :placeholder="t('agents.graph.orchestrationNamePlaceholder')"
+              @blur="endNameEdit"
+              @keydown="handleNameEditKeydown"
+            />
+            <button
+              v-else
+              type="button"
+              class="agent-graph-name-button"
+              :disabled="!editable"
+              :aria-label="t('agents.graph.editName', { name: orchestrationName })"
+              :title="t('agents.graph.editNameTitle')"
+              @click="beginNameEdit($event)"
+            >
+              <span class="agent-graph-name-button-label">{{ orchestrationName }}</span>
+            </button>
+          </h2>
+          <Badge v-if="activeOrchestration.isDefault" variant="outline" class="agent-graph-badge">{{ t("agents.graph.defaultBadge") }}</Badge>
+          <span class="agent-graph-state" :data-dirty="dirtyCount ? 'true' : undefined">
+            {{ dirtyCount ? t("agents.graph.dirty", { count: dirtyCount }) : t("agents.graph.clean") }}
+          </span>
+        </template>
       </div>
       <div class="agent-graph-actions">
-        <span class="agent-graph-state" :data-dirty="dirtyCount ? 'true' : undefined">
-          {{ dirtyCount ? t("agents.graph.dirty", { count: dirtyCount }) : t("agents.graph.clean") }}
-        </span>
-        <Button variant="outline" size="sm" :disabled="!focusAgent?.nodeOnline" @click="$emit('create')">
-          <Plus :size="14" />
-          <span>{{ t("agents.graph.createOrchestration") }}</span>
-        </Button>
-        <Button v-if="activeOrchestration && !activeOrchestration.isDefault" variant="outline" size="sm" :disabled="!editable || deleting" @click="$emit('remove', activeOrchestration.key)">
-          <Trash2 :size="14" />
-          <span>{{ t("agents.graph.deleteOrchestration") }}</span>
-        </Button>
         <Button variant="outline" size="sm" :disabled="!dirtyCount" @click="reset">
           <RotateCcw :size="14" />
           <span>{{ t("agents.graph.reset") }}</span>
@@ -40,21 +56,37 @@
           <Save :size="14" />
           <span>{{ saving ? t("agents.graph.saving") : t("agents.graph.save") }}</span>
         </Button>
+        <DropdownMenu v-if="activeOrchestration && !activeOrchestration.isDefault">
+          <DropdownMenuTrigger as-child>
+            <Button variant="ghost" size="icon-sm" :aria-label="t('agents.graph.moreActions')" :title="t('agents.graph.moreActions')"><MoreHorizontal :size="16" /></Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" :side-offset="6" :collision-padding="12">
+            <DropdownMenuItem class="agent-graph-danger-item" :disabled="!editable || deleting" @select="removeActiveOrchestration">
+              <Trash2 :size="14" />
+              <span>{{ t("agents.graph.deleteOrchestration") }}</span>
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+        <Popover>
+          <PopoverTrigger as-child>
+            <Button variant="ghost" size="icon-sm" :aria-label="t('agents.graph.help.title')" :title="t('agents.graph.help.title')"><CircleHelp :size="16" /></Button>
+          </PopoverTrigger>
+          <PopoverContent class="agent-graph-help-popover" align="end" :side-offset="6" :collision-padding="12">
+            <p class="agent-graph-help-title">{{ t("agents.graph.help.title") }}</p>
+            <p class="agent-graph-help-intro">{{ t("agents.graph.help.intro") }}</p>
+            <ul class="agent-graph-help-list">
+              <li>{{ t("agents.graph.help.move") }}</li>
+              <li>{{ t("agents.graph.help.connect") }}</li>
+              <li>{{ t("agents.graph.help.removeEdge") }}</li>
+              <li>{{ t("agents.graph.help.removeMember") }}</li>
+            </ul>
+          </PopoverContent>
+        </Popover>
       </div>
-    </div>
-    <div v-if="activeOrchestration" class="agent-graph-meta">
-      <Input
-        v-model="orchestrationName"
-        class="agent-graph-name"
-        :disabled="!editable"
-        :aria-label="t('agents.graph.orchestrationName')"
-        :placeholder="t('agents.graph.orchestrationNamePlaceholder')"
-      />
-      <Badge v-if="activeOrchestration.isDefault" variant="outline" class="agent-graph-badge">{{ t("agents.graph.defaultBadge") }}</Badge>
-      <span v-if="activeOrchestration.missingAgentIds.length" class="agent-graph-state" data-dirty="true">
-        {{ t("agents.graph.missingMembers", { count: activeOrchestration.missingAgentIds.length }) }}
-      </span>
-    </div>
+    </header>
+    <p v-if="activeOrchestration && activeOrchestration.missingAgentIds.length" class="agent-graph-notice" role="status">
+      {{ t("agents.graph.missingMembers", { count: activeOrchestration.missingAgentIds.length }) }}
+    </p>
     <p v-if="rejectedMessage" class="agent-graph-rejected" role="alert">{{ rejectedMessage }}</p>
     <p v-if="!agents.length" class="agent-graph-empty">{{ t("agents.graph.empty") }}</p>
     <p v-else-if="!activeOrchestration" class="agent-graph-empty">{{ t("agents.graph.orchestrationMissing") }}</p>
@@ -72,7 +104,6 @@
         @connect-start="onConnectStart"
         @connect-end="onConnectEnd"
         @edges-change="onEdgesChange"
-        @node-click="onNodeClick"
         @edge-click="onEdgeClick"
       >
         <Background variant="dots" :gap="22" :size="1.6" />
@@ -157,8 +188,12 @@
               :can-run="canRunMember(nodeProps.data.agentId)"
               :editable="editable && !nodeProps.data.missing"
               :deleting="deleting"
+              :view-detail="{ enabled: !nodeProps.data.missing }"
+              :orchestration="{ label: 'view', enabled: !nodeProps.data.missing && nodeProps.data.online }"
               @run="runMember(nodeProps.data.agentId)"
               @edit="editMember(nodeProps.data.agentId)"
+              @view-detail="viewMemberDetail(nodeProps.data.agentId)"
+              @orchestration="viewMemberOrchestration(nodeProps.data.agentId)"
               @delete="deleteMember(nodeProps.data.agentId)"
             />
           </ContextMenu>
@@ -189,13 +224,13 @@
 // 画布用 @vue-flow/core（MIT，Vue 3 版 React Flow）承载缩放平移、节点拖拽与连线手柄。画布一次只投影一张
 // 权威编排：成员节点、入口（入度为 0 的顶级节点）与调用边都来自 Node Agent；本地只保存这张编排的未保存
 // 增量，保存时整张提交并带 revision 做乐观并发控制。画布的展示范围只决定看哪张编排，不裁剪编辑内容。
-import { computed, reactive, ref, shallowRef, watch } from "vue";
+import { computed, nextTick, reactive, ref, shallowRef, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { Plus, RotateCcw, Save, Trash2, X } from "@lucide/vue";
+import { CircleHelp, MoreHorizontal, Plus, RotateCcw, Save, Trash2, X } from "@lucide/vue";
 import { Background } from "@vue-flow/background";
 import { Controls } from "@vue-flow/controls";
-import { Handle, Position, VueFlow, useVueFlow } from "@vue-flow/core";
-import type { Connection, Edge, EdgeChange, EdgeMouseEvent, Node, NodeMouseEvent } from "@vue-flow/core";
+import { Handle, MarkerType, Position, VueFlow, useVueFlow } from "@vue-flow/core";
+import type { Connection, Edge, EdgeChange, EdgeMouseEvent, Node } from "@vue-flow/core";
 import "@vue-flow/core/dist/style.css";
 import "@vue-flow/controls/dist/style.css";
 import type { AgentOrchestrationEdge } from "@task-handoff/protocol/agent-orchestrations";
@@ -204,15 +239,15 @@ import { Badge } from "@/components/ui/badge";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { translateApiError } from "@/i18n/apiError";
-import ControlPlaneSelect from "../shared/ControlPlaneSelect.vue";
-import ControlPlaneSelectItem from "../shared/ControlPlaneSelectItem.vue";
 import AgentContextMenu from "./AgentContextMenu.vue";
 import AgentGraphEdge from "./AgentGraphEdge.vue";
-import { agentEntryOrchestrations, agentManualRunAvailable, agentParticipatingOrchestrations, agentRunOrchestrations, orchestrationAgentCandidates } from "./agentCatalog";
+import AgentViewSwitcher from "./AgentViewSwitcher.vue";
+import { agentManualRunAvailable, agentOrchestrationGroups, agentRunOrchestrations, orchestrationAgentCandidates, requestedOrchestrationKey } from "./agentCatalog";
+import type { AgentOrchestrationRequest } from "./agentCatalog";
 import type { AgentCatalogAgent, AgentCatalogNode, AgentCatalogOrchestration } from "./agentCatalogTypes";
 
 /** 关系图一次保存提交的整张编排内容（节点集合与边整体替换，带读到的 revision）。 */
@@ -250,8 +285,8 @@ const SIBLING_GAP = 40;
 const LAYER_GAP = 88;
 const CANVAS_ORIGIN = 48;
 const FIT_VIEW_PADDING = 0.18;
-/** 初始视角的缩放上限：小图也保持较小的初始缩放，先看清整棵树再看细节。 */
-const FIT_VIEW_MAX_ZOOM = 0.85;
+/** 初始视角的缩放上限：整棵树适配后不无限放大，但小图也要落在可读的字号上。 */
+const FIT_VIEW_MAX_ZOOM = 1.1;
 const LAYOUT_RELAXATION_PASSES = 24;
 const EDGE_SEPARATOR = "\u001f";
 /** 自定义边类型：模板里对应 #edge-agent-callable，用来在边中点叠加删除入口。 */
@@ -273,12 +308,15 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  select: [agentKey: string];
   run: [agentKey: string];
   edit: [agentKey: string];
   delete: [agentKey: string];
   remove: [orchestrationKey: string];
   create: [];
+  /** 回详情视图；带 key 时视图会先把该 Agent 设为当前项（节点菜单的「查看 Agent 详情」）。 */
+  "show-detail": [agentKey?: string];
+  /** 切到另一个 Agent 的编排（节点菜单的「查看编排」）。 */
+  "show-orchestration": [agentKey: string];
   "orchestration-change": [orchestrationKey: string];
 }>();
 
@@ -292,9 +330,11 @@ const { fitView, connectionEndHandle, onNodesInitialized, onMoveStart } = useVue
 const flowNodes = shallowRef<Node[]>([]);
 const flowEdges = shallowRef<Edge[]>([]);
 const rejectedMessage = ref("");
-const scope = ref<"entry" | "participating">("entry");
-const activeKey = ref("");
 const orchestrationName = ref("");
+// 名称编辑与 Story 头部一致：默认是 hover 可点的标签，点击后才换成输入框。
+const editingName = ref(false);
+const nameEditWidth = ref(0);
+const nameInput = ref<HTMLInputElement>();
 // 拖拽连线是否落在了画布内的 Agent 上：落在空白处时给出画布范围的说明，不静默无响应。
 let connectDragSettled = false;
 // 连线起点：按下后没有位移的抬手是点击（打开「+」列表），不能当成拖拽落空。
@@ -305,18 +345,22 @@ const addPickerKey = ref("");
 const focusKey = computed(() => (agentByKey(props.selectedAgentKey) ? props.selectedAgentKey : props.agents[0]?.key || ""));
 const focusAgent = computed(() => agentByKey(focusKey.value));
 
-/** 参与/顶级两个作用域都为空时退回到另一个作用域，保证选中 Agent 时画布不会无故为空。 */
-const scopedOrchestrations = computed(() => {
-  const agent = focusAgent.value;
-  if (!agent) return props.orchestrations;
-  const primary = scope.value === "entry" ? agentEntryOrchestrations(props.orchestrations, agent) : agentParticipatingOrchestrations(props.orchestrations, agent);
-  const fallback = scope.value === "entry" ? agentParticipatingOrchestrations(props.orchestrations, agent) : agentEntryOrchestrations(props.orchestrations, agent);
-  return primary.length ? primary : fallback;
-});
+// 视图或用户最近一次指定的编排，连同它属于哪个 Agent：换 Agent 后请求作废（见下方 watch），
+// 由 activeKey 派生回落到新 Agent 的第一张，所以这里只保存请求本身，不维护第二份「当前值」。
+const requested = ref<AgentOrchestrationRequest>({ agentKey: focusKey.value, key: props.orchestrationKey ?? "" });
+
+/** 切换菜单与详情侧共用目录层的「入口 / 参与」分组，画布只消费顺序。 */
+const orchestrationGroups = computed(() => (focusAgent.value ? agentOrchestrationGroups(props.orchestrations, focusAgent.value) : []));
+
+/** 画布可切换的全部编排：入口组在前，与旧的作用域顺序一致；没有可解析的 Agent 时退回全部目录编排。 */
+const availableOrchestrations = computed(() => (focusAgent.value ? orchestrationGroups.value.flatMap((group) => group.orchestrations) : props.orchestrations));
+
+/** 画布当前编排由「请求」派生：详情页跳转与画布内切换只写 requested，作用域与回退规则都在目录层定义。 */
+const activeKey = computed(() => requestedOrchestrationKey(availableOrchestrations.value, requested.value, focusKey.value));
 
 const activeOrchestration = computed(() => {
-  const scoped = scopedOrchestrations.value;
-  return scoped.find((orchestration) => orchestration.key === activeKey.value) || scoped[0];
+  const available = availableOrchestrations.value;
+  return available.find((orchestration) => orchestration.key === activeKey.value) || available[0];
 });
 
 const editable = computed(() => activeOrchestration.value?.editable === true);
@@ -401,38 +445,50 @@ function agentByKey(key: string) {
   return props.agents.find((agent) => agent.key === key);
 }
 
-/** 画布节点菜单的运行/编辑/删除都回到同一份目录对象，入口判定与列表行共用同一函数。 */
-function canRunMember(agentId: string) {
+/**
+ * 节点菜单的每一行都先按「当前编排的 Node + 成员 AgentId」解析回目录对象；
+ * 单击节点只选中画布元素，不切换当前 Agent，切换动作一律由菜单显式触发。
+ */
+function memberAgent(agentId: string) {
   const orchestration = activeOrchestration.value;
-  const agent = orchestration ? agentByCatalogId(orchestration.nodeId, agentId) : undefined;
+  return orchestration ? agentByCatalogId(orchestration.nodeId, agentId) : undefined;
+}
+
+/** 入口判定与列表行共用同一函数。 */
+function canRunMember(agentId: string) {
+  const agent = memberAgent(agentId);
   return Boolean(agent) && agentManualRunAvailable(agent, agentRunOrchestrations(props.orchestrations, agent!));
 }
 
 function runMember(agentId: string) {
-  const orchestration = activeOrchestration.value;
-  const agent = orchestration ? agentByCatalogId(orchestration.nodeId, agentId) : undefined;
+  const agent = memberAgent(agentId);
   if (agent) emit("run", agent.key);
 }
 
 function editMember(agentId: string) {
-  const orchestration = activeOrchestration.value;
-  const agent = orchestration ? agentByCatalogId(orchestration.nodeId, agentId) : undefined;
+  const agent = memberAgent(agentId);
   if (agent) emit("edit", agent.key);
 }
 
 function deleteMember(agentId: string) {
-  const orchestration = activeOrchestration.value;
-  const agent = orchestration ? agentByCatalogId(orchestration.nodeId, agentId) : undefined;
+  const agent = memberAgent(agentId);
   if (agent) emit("delete", agent.key);
 }
 
-function orchestrationLabel(orchestration: AgentCatalogOrchestration) {
-  return orchestration.isDefault ? t("agents.graph.orchestrationDefaultLabel", { name: orchestration.name }) : orchestration.name;
+/** 切到该成员的详情视图：离开画布会丢弃本地草稿，所以与头部切换器共用同一条确认。 */
+function viewMemberDetail(agentId: string) {
+  const agent = memberAgent(agentId);
+  if (agent) requestDetail(agent.key);
 }
 
-const dirtyCount = computed(() => {
-  const orchestration = activeOrchestration.value;
-  if (!orchestration) return 0;
+/** 切到该成员的第一张编排：画布保持挂载，本地草稿只按编排 key 隔离，不丢。 */
+function viewMemberOrchestration(agentId: string) {
+  const agent = memberAgent(agentId);
+  if (agent) emit("show-orchestration", agent.key);
+}
+
+/** 一张编排相对权威内容的未保存改动数：切换菜单据此在条目上标出仍有草稿的编排。 */
+function dirtyCountFor(orchestration: AgentCatalogOrchestration) {
   const idsBefore = new Set(orchestration.agentIds);
   const idsAfter = new Set(effectiveAgentIds(orchestration));
   const edgesBefore = new Set(orchestration.edges.map((edge) => edgeKey(edge.fromAgentId, edge.toAgentId)));
@@ -444,6 +500,18 @@ const dirtyCount = computed(() => {
   for (const key of edgesBefore) if (!edgesAfter.has(key)) count += 1;
   if (effectiveName(orchestration) !== orchestration.name) count += 1;
   return count;
+}
+
+const dirtyCount = computed(() => (activeOrchestration.value ? dirtyCountFor(activeOrchestration.value) : 0));
+
+/** 内容选择器上的草稿圆点：只列仍有本地增量的编排，切换菜单据此提示未保存状态。 */
+const draftCounts = computed(() => {
+  const counts: Record<string, number> = {};
+  for (const orchestration of props.orchestrations) {
+    const count = dirtyCountFor(orchestration);
+    if (count) counts[orchestration.key] = count;
+  }
+  return counts;
 });
 
 /** 画布节点：权威成员 + 本地增量，悬挂成员保留占位卡片以便清理。 */
@@ -475,7 +543,6 @@ const layoutKey = computed(() => {
   return [
     orchestration.key,
     orchestration.revision,
-    scope.value,
     ...memberViews.value.map((member) => `${member.key}${EDGE_SEPARATOR}${member.name}${EDGE_SEPARATOR}${member.meta}${EDGE_SEPARATOR}${member.executable ? 1 : 0}${EDGE_SEPARATOR}${member.removable ? 1 : 0}`),
     ...activeEdgeKeys.value,
   ].join("\n");
@@ -506,26 +573,29 @@ watch(authorityScopes, (next, previous) => {
   }
 }, { immediate: true });
 
-// 选中 Agent 或权威列表变化后收敛当前编排：保留仍然可见的选中项，否则回到作用域内的第一张。
-watch([() => props.selectedAgentKey, scopedOrchestrations, () => props.orchestrations], () => {
-  const scoped = scopedOrchestrations.value;
-  if (scoped.some((orchestration) => orchestration.key === activeKey.value)) return;
-  activeKey.value = scoped[0]?.key || "";
-}, { immediate: true });
-
-// 视图指定编排（详情卡片跳转）时同步到画布；画布内部切换通过事件回传给视图。
-watch(() => props.orchestrationKey, (key) => {
-  if (!key || key === activeKey.value) return;
-  if (props.orchestrations.some((orchestration) => orchestration.key === key)) activeKey.value = key;
+// 换 Agent（列表切换、节点菜单）后旧请求作废：列表切换必须落在新 Agent 的第一张编排，
+// 而不是另一张「对新 Agent 也可切换」的旧编排；派生的 activeKey 也会拒绝跨 Agent 的请求，这里把状态收敛回第一张。
+watch(focusKey, (agentKey) => {
+  requested.value = { agentKey, key: "" };
 });
 
+// 视图指定编排（详情卡片跳转、节点菜单）时同步到画布；画布内部切换通过事件回传给视图。
+// 对比请求而不是 activeKey：换 Agent 后 activeKey 已经回落到新 Agent 的第一张，
+// 但请求里还留着旧编排，必须让视图给出的目标覆盖它，否则请求会带回旧 Agent 的编排。
+watch(() => props.orchestrationKey, (key) => {
+  if (!key || key === requested.value.key) return;
+  if (props.orchestrations.some((orchestration) => orchestration.key === key)) requested.value = { agentKey: focusKey.value, key };
+});
+
+// 画布内切换通过事件回传给视图（含挂载时自动回落到第一张的情况），视图只消费画布当前的编排。
 watch(activeKey, (key) => {
   if (key !== props.orchestrationKey) emit("orchestration-change", key);
-});
+}, { immediate: true });
 
 // 编排切换后把名称草稿重置到该编排的当前投影，本地重命名不会串到另一张编排。
 watch(activeKey, () => {
   orchestrationName.value = activeOrchestration.value ? effectiveName(activeOrchestration.value) : "";
+  endNameEdit();
 }, { immediate: true });
 
 watch(orchestrationName, (value) => {
@@ -698,6 +768,9 @@ function createEdge(fromAgentId: string, toAgentId: string): Edge {
     target,
     type: EDGE_TYPE,
     deletable: false,
+    // 目标端箭头用 ArrowClosed 标记：颜色随 default-marker-color="currentColor" 取
+    // .vue-flow__transformationpane 的 --line-strong，和边的描边保持一致。
+    markerEnd: MarkerType.ArrowClosed,
     ariaLabel: edgeAriaLabel(source, target),
   };
 }
@@ -716,9 +789,68 @@ function nameOfFlowKey(flowKey: string) {
   return agentByKey(flowKey)?.name || flowKey;
 }
 
-function selectOrchestration(value: unknown) {
-  if (typeof value !== "string") return;
-  activeKey.value = value;
+function selectOrchestration(key: string) {
+  requested.value = { agentKey: focusKey.value, key };
+}
+
+/** 头部切换器与节点菜单共用：离开画布前先确认丢弃草稿，带 key 时同时切到该 Agent。 */
+function requestDetail(agentKey?: string) {
+  if (dirtyCount.value && !window.confirm(t("agents.graph.discardOnSwitch", { count: dirtyCount.value }))) return;
+  emit("show-detail", agentKey);
+}
+
+/** Esc 只丢弃名称草稿，回到权威名称；其它未保存改动保持不变。 */
+function revertNameDraft() {
+  const orchestration = activeOrchestration.value;
+  if (orchestration) orchestrationName.value = orchestration.name;
+}
+
+/** 点击名称进入编辑：输入框先与标签同宽，内容更长时再增宽，避免头部跳动。 */
+async function beginNameEdit(event?: MouseEvent) {
+  if (!editable.value) return;
+  nameEditWidth.value = Math.ceil((event?.currentTarget as HTMLElement | undefined)?.getBoundingClientRect().width || 0);
+  editingName.value = true;
+  await nextTick();
+  const input = nameInput.value;
+  if (input) {
+    const inputContentWidth = input.scrollWidth + input.offsetWidth - input.clientWidth;
+    nameEditWidth.value = Math.max(nameEditWidth.value, Math.ceil(inputContentWidth));
+  }
+  nameInput.value?.focus();
+  nameInput.value?.select();
+}
+
+function endNameEdit() {
+  editingName.value = false;
+  nameEditWidth.value = 0;
+}
+
+function cancelNameEdit() {
+  revertNameDraft();
+  endNameEdit();
+}
+
+function handleNameEditKeydown(event: KeyboardEvent) {
+  if (event.isComposing) return;
+  if (event.key === "Enter") {
+    event.preventDefault();
+    endNameEdit();
+  } else if (event.key === "Escape") {
+    event.preventDefault();
+    cancelNameEdit();
+  }
+}
+
+function removeActiveOrchestration() {
+  const orchestration = activeOrchestration.value;
+  if (orchestration) emit("remove", orchestration.key);
+}
+
+/** ⌘/Ctrl + S 保存当前编排：只在画布内操作时生效，不接管其它视图的快捷键。 */
+function handleShortcut(event: KeyboardEvent) {
+  if (event.altKey || !(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "s") return;
+  event.preventDefault();
+  if (dirtyCount.value && editable.value && !saving.value) void save();
 }
 
 function isEdgeEffective(fromAgentId: string, toAgentId: string) {
@@ -871,13 +1003,6 @@ function reaches(startAgentId: string, goalAgentId: string) {
   return false;
 }
 
-function onNodeClick(event: NodeMouseEvent) {
-  if (event.node.type !== "agent") return;
-  const orchestration = activeOrchestration.value;
-  const agent = orchestration ? agentByCatalogId(orchestration.nodeId, (event.node.data as AgentNodeData).agentId) : undefined;
-  if (agent) emit("select", agent.key);
-}
-
 function onEdgeClick(event: EdgeMouseEvent) {
   removeEdge(event.edge);
 }
@@ -972,17 +1097,24 @@ async function save() {
 
 <style scoped>
 .agent-graph { display:flex; flex-direction:column; gap:12px; min-height:0; height:100%; padding:0 0 16px; }
-.agent-graph-toolbar { flex:none; display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; border-bottom:1px solid var(--line); padding-bottom:12px; }
-.agent-graph-hint { margin:0; max-width:72ch; color:var(--text-muted); font-size:12px; }
-.agent-graph-scope { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
-.agent-graph-scope-select { width:170px; }
-.agent-graph-orchestration-select { width:220px; }
-.agent-graph-actions { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
-.agent-graph-state { color:var(--text-muted); font-size:12px; }
+.agent-graph-head { flex:none; display:flex; align-items:center; justify-content:space-between; gap:10px 16px; flex-wrap:wrap; border-bottom:1px solid var(--line); padding-bottom:12px; }
+.agent-graph-identity { display:flex; align-items:center; gap:8px; min-width:0; flex:1 1 320px; }
+/* 名称与 Story 头部同一交互：默认是 hover 有反馈的标签，点击后才换成同宽的输入框。 */
+.agent-graph-name-field { display:grid; flex:0 1 auto; width:max-content; min-width:0; max-width:100%; margin:0; color:var(--text-strong); font-size:13px; font-weight:500; }
+.agent-graph-name-button,.agent-graph-name-input { box-sizing:border-box; grid-area:1 / 1; min-width:0; margin:0; font:inherit; font-size:inherit; font-weight:inherit; letter-spacing:0; line-height:1.3; white-space:nowrap; }
+.agent-graph-name-field.editing { width:min(var(--agent-graph-name-edit-width,320px),100%); }
+.agent-graph-name-button { display:block; width:fit-content; max-width:100%; border:0; padding:0; background:transparent; color:inherit; cursor:text; text-align:left; }
+.agent-graph-name-button-label { display:block; box-sizing:border-box; max-width:100%; overflow:hidden; border:1px solid transparent; border-radius:7px; color:inherit; font:inherit; padding:2px 6px 3px; text-overflow:ellipsis; }
+.agent-graph-name-button:hover .agent-graph-name-button-label,.agent-graph-name-button:focus-visible .agent-graph-name-button-label { border-color:var(--line); background:var(--surface-hover); box-shadow:inset 0 1px 0 var(--workspace-grid); }
+.agent-graph-name-button:focus-visible { outline:none; }
+.agent-graph-name-button:disabled { cursor:default; color:var(--text-muted); }
+.agent-graph-name-input { width:100%; border:1px solid var(--brand-accent); border-radius:7px; background:var(--surface-inset); color:inherit; padding:2px 6px 3px; outline:none; box-shadow:0 0 0 3px var(--brand-accent-soft),inset 0 1px 0 var(--workspace-grid); }
+.agent-graph-name-input:disabled { cursor:progress; opacity:.72; }
+.agent-graph-badge { flex:none; font-size:12px; font-weight:400; }
+.agent-graph-actions { display:flex; align-items:center; justify-content:flex-end; gap:8px; flex-wrap:wrap; min-width:0; margin-left:auto; }
+.agent-graph-state { flex:none; color:var(--text-muted); font-size:12px; white-space:nowrap; }
 .agent-graph-state[data-dirty="true"] { color:var(--text-strong); }
-.agent-graph-meta { flex:none; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
-.agent-graph-name { width:min(320px,100%); height:30px; font-size:13px; }
-.agent-graph-badge { font-size:12px; font-weight:400; }
+.agent-graph-notice { flex:none; margin:0; color:var(--text-strong); font-size:12px; }
 .agent-graph-rejected { flex:none; margin:0; border:1px solid var(--line-strong); border-radius:8px; padding:7px 10px; color:var(--text-strong); font-size:12px; }
 .agent-graph-empty { display:flex; flex:none; align-items:center; min-height:64px; margin:0; border:1px solid var(--line); border-radius:8px; background:var(--surface-raised); color:var(--text-muted); font-size:12px; padding:12px; }
 .agent-graph-stage { position:relative; flex:1 1 auto; min-height:0; border:1px solid var(--line); border-radius:8px; background:var(--surface-raised); overflow:hidden; }
@@ -1005,7 +1137,7 @@ async function save() {
 @media (hover: none) { .agent-graph-add { opacity:1; pointer-events:auto; } }
 .agent-graph-remove-node { position:absolute; top:-6px; left:-6px; display:grid; width:18px; height:18px; place-items:center; border:1px solid var(--line-strong); border-radius:999px; background:var(--surface); color:var(--text-muted); cursor:pointer; padding:0; opacity:0; pointer-events:none; transition:opacity 120ms ease,color 120ms ease; }
 .agent-graph-node:hover .agent-graph-remove-node,.agent-graph-node:focus-within .agent-graph-remove-node { opacity:1; pointer-events:auto; }
-.agent-graph-remove-node:hover { color:var(--danger,var(--text-strong)); }
+.agent-graph-remove-node:hover { color:var(--status-danger); }
 .agent-graph-remove-node:focus-visible { outline:2px solid var(--focus-ring); outline-offset:1px; }
 @media (hover: none) { .agent-graph-remove-node { opacity:1; pointer-events:auto; } }
 .agent-graph-canvas :deep(.vue-flow__controls) { box-shadow:none; border:1px solid var(--line); border-radius:8px; overflow:hidden; }
@@ -1021,7 +1153,14 @@ async function save() {
 .agent-graph-node-meta { color:var(--text-muted); font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .agent-graph-dialog { width:min(440px,calc(100vw - 24px)); }
 .agent-graph-dialog-field { display:grid; gap:6px; color:var(--text-strong); font-size:12px; }
-/* 列表挂在 body 上（reka-ui portal），样式只能用全局选择器：尺寸服从 available 变量，只有列表内部滚动。 */
+/* 删除菜单与说明浮层都挂在 body 上（reka-ui portal），样式只能用全局选择器。
+   内容选择器（详情/编排）的浮层样式归 AgentViewSwitcher 自己维护。 */
+:global(.agent-graph-danger-item) { color:var(--status-danger); }
+:global(.agent-graph-danger-item:hover),:global(.agent-graph-danger-item:focus-visible),:global(.agent-graph-danger-item[data-highlighted]) { background:var(--status-danger-bg); color:var(--status-danger); }
+:global(.agent-graph-help-popover) { width:min(340px,var(--reka-popover-content-available-width)); border-color:var(--line-strong); background:var(--surface); color:var(--text-strong); padding:12px; }
+:global(.agent-graph-help-title) { margin:0 0 6px; font-size:13px; font-weight:500; }
+:global(.agent-graph-help-intro) { margin:0 0 10px; color:var(--text-muted); font-size:12px; line-height:1.5; }
+:global(.agent-graph-help-list) { display:grid; gap:6px; margin:0; padding-left:16px; color:var(--text-muted); font-size:12px; line-height:1.5; }
 :global(.agent-graph-add-popover) { width:min(280px,var(--reka-popover-content-available-width)); max-height:min(320px,var(--reka-popover-content-available-height)); overflow:hidden; border-color:var(--line-strong); background:var(--surface); color:var(--text-strong); }
 :global(.agent-graph-add-popover .agent-graph-add-search) { height:34px; padding-top:0; padding-bottom:0; font-size:13px; }
 :global(.agent-graph-add-scroll) { height:min(260px,calc(var(--reka-popover-content-available-height) - 35px)); }
@@ -1031,8 +1170,10 @@ async function save() {
 :global(.agent-graph-add-option-state) { flex:0 0 auto; margin-left:auto; color:var(--text-muted); font-size:12px; font-weight:400; white-space:nowrap; }
 :global(.agent-graph-add-list .agent-graph-add-option:hover),:global(.agent-graph-add-list .agent-graph-add-option:focus-visible),:global(.agent-graph-add-list .agent-graph-add-option[data-highlighted]) { background:var(--surface-active); color:var(--text-strong); outline:none; }
 @media (max-width: 900px) {
-  .agent-graph-toolbar { flex-direction:column; align-items:stretch; }
-  .agent-graph-scope { flex-direction:column; align-items:stretch; }
-  .agent-graph-scope-select,.agent-graph-orchestration-select { width:100%; }
+  /* 头部换成上下两段后，identity 的 flex-basis 会作用在纵轴上，必须显式取消。 */
+  .agent-graph-head { flex-direction:column; align-items:stretch; }
+  .agent-graph-identity { flex:0 0 auto; flex-wrap:wrap; }
+  .agent-graph-name-field { flex:1 1 200px; }
+  .agent-graph-actions { justify-content:flex-start; margin-left:0; }
 }
 </style>

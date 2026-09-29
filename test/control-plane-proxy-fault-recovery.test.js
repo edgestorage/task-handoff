@@ -161,7 +161,8 @@ test("A and R process recovery rebuilds B observations and deterministically res
   assert.ok(restartedA.proxyPrivateStore.nodeCredential("node_b"));
   assert.equal(restartedA.requirePublicNode("node_b").status, "unknown");
   assert.equal(restartedA.requirePublicNode("node_b").proxyState, undefined);
-  const restartedSubscriber = new ControlPlaneProxyStateSubscriber(restartedA, { fetchImpl, openWebSocket });
+  // 缩短不可用宽限期，让 R 停机在测试时限内暴露出来（生产默认值见 subscriber 选项）。
+  const restartedSubscriber = new ControlPlaneProxyStateSubscriber(restartedA, { fetchImpl, openWebSocket, unavailableGraceMs: 20 });
   t.after(() => restartedSubscriber.stop());
   restartedSubscriber.start();
   await waitFor(

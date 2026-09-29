@@ -7,6 +7,7 @@ import { safeParseResponse } from "@task-handoff/protocol/response-validation";
 import { defaultCommandRunner, type CommandRunner } from "../../shared/process/command-runner.ts";
 import { DockerImageService, listDockerImages } from "../docker-images.ts";
 import type { GitWorkspaceProvisioningInput } from "@task-handoff/protocol/managed-git-credentials";
+import { LEGACY_WORKSPACE_GIT_ENV, WORKSPACE_GIT_ENV } from "@task-handoff/protocol/workspace-git";
 import { packagedDockerBootstrapAssetsDir } from "./bootstrap-assets.ts";
 
 export { defaultCommandRunner, type CommandResult, type CommandRunner } from "../../shared/process/command-runner.ts";
@@ -1224,6 +1225,46 @@ function appendDockerEnv(args: string[], key: string, value: string) {
   args.push("-e", `${key}=${value}`);
 }
 
+type WorkspaceGitSource = {
+  url: string;
+  ref: { type: "branch" | "tag"; name: string } | { type: "commit"; commit: string };
+  clone?: { depth?: number; submodules?: boolean; lfs?: boolean };
+};
+
+/**
+ * Workspace Git environment entries for one Git source. Unused keys are written
+ * as empty strings so the container environment is fully declared by the node
+ * agent and image build metadata cannot leak in as checkout input.
+ */
+function workspaceGitEnvironmentEntries(source: WorkspaceGitSource, options: { legacy: boolean }): Array<[string, string]> {
+  const refName = source.ref.type === "commit" ? "" : source.ref.name;
+  const commit = source.ref.type === "commit" ? source.ref.commit : "";
+  const depth = source.clone?.depth ? String(source.clone.depth) : "";
+  const submodules = source.clone?.submodules ? "true" : "false";
+  const lfs = source.clone?.lfs ? "true" : "false";
+  const entries: Array<[string, string]> = [
+    [WORKSPACE_GIT_ENV.url, source.url],
+    [WORKSPACE_GIT_ENV.ref, refName],
+    [WORKSPACE_GIT_ENV.commit, commit],
+    [WORKSPACE_GIT_ENV.depth, depth],
+    [WORKSPACE_GIT_ENV.submodules, submodules],
+    [WORKSPACE_GIT_ENV.lfs, lfs],
+  ];
+  if (!options.legacy) return entries;
+  // Compatibility for v0.0.34: the controlled-instance artifact is hot-swapped
+  // independently of the node agent, and the N-1 artifact reads the legacy keys
+  // for workspace status. Scripts shipped with this node agent read only the
+  // workspace keys. The legacy commit key stays unwritten because images bake it
+  // as their build commit.
+  return entries.concat([
+    [LEGACY_WORKSPACE_GIT_ENV.url, source.url],
+    [LEGACY_WORKSPACE_GIT_ENV.ref, refName],
+    [LEGACY_WORKSPACE_GIT_ENV.depth, depth],
+    [LEGACY_WORKSPACE_GIT_ENV.submodules, submodules],
+    [LEGACY_WORKSPACE_GIT_ENV.lfs, lfs],
+  ]);
+}
+
 export function dockerRunArgs(context: ExecutorContext, containerName: string, options: DockerRunOptions = {}) {
   const publishHost = options.publishHost || "127.0.0.1";
   const launcherAssetsDir = path.resolve(options.launcherAssetsDir || packagedDockerBootstrapAssetsDir());
@@ -1320,17 +1361,17 @@ export function dockerRunArgs(context: ExecutorContext, containerName: string, o
   } else {
     appendDockerEnv(args, "TASK_HANDOFF_PROJECT_SOURCE", JSON.stringify(context.project.source));
     appendDockerEnv(args, "TASK_HANDOFF_WORKSPACE_POLICY", JSON.stringify(context.project.workspacePolicy));
-    appendDockerEnv(args, "TASK_HANDOFF_GIT_URL", context.project.source.url);
-    if (context.project.source.ref.type === "commit") {
-      appendDockerEnv(args, "TASK_HANDOFF_GIT_COMMIT", context.project.source.ref.commit);
-    } else {
-      appendDockerEnv(args, "TASK_HANDOFF_GIT_REF", context.project.source.ref.name);
+    // Workspace Git keys are the authoritative checkout input. Legacy keys stay
+    // for the N-1 controlled-instance artifact that reports workspace status;
+    // TASK_HANDOFF_GIT_COMMIT is never written because images bake it as their
+    // own build commit.
+    for (const [key, value] of workspaceGitEnvironmentEntries({
+      url: context.project.source.url,
+      ref: context.project.source.ref,
+      clone: context.project.source.clone,
+    }, { legacy: true })) {
+      appendDockerEnv(args, key, value);
     }
-    if (context.project.source.clone?.depth) {
-      appendDockerEnv(args, "TASK_HANDOFF_GIT_DEPTH", String(context.project.source.clone.depth));
-    }
-    appendDockerEnv(args, "TASK_HANDOFF_GIT_SUBMODULES", context.project.source.clone?.submodules ? "true" : "false");
-    appendDockerEnv(args, "TASK_HANDOFF_GIT_LFS", context.project.source.clone?.lfs ? "true" : "false");
     if (context.project.source.clone?.subdirectory) {
       appendDockerEnv(args, "TASK_HANDOFF_WORKSPACE_SUBDIRECTORY", context.project.source.clone.subdirectory);
     }
@@ -1388,13 +1429,16 @@ export function dockerGitProvisionArgs(
   ];
   if (input.credentials.length) args.push("--mount", `type=bind,src=${path.resolve(authDirectory)},dst=/run/task-handoff/git-auth,readonly`);
   const append = (key: string, value: string) => args.push("-e", `${key}=${value}`);
-  append("TASK_HANDOFF_GIT_URL", input.remoteUrl);
   append("TASK_HANDOFF_INSTANCE_ID", context.instance.id);
-  if (input.ref.type === "commit") append("TASK_HANDOFF_GIT_COMMIT", input.ref.commit);
-  else append("TASK_HANDOFF_GIT_REF", input.ref.name);
-  if (input.clone.depth) append("TASK_HANDOFF_GIT_DEPTH", String(input.clone.depth));
-  append("TASK_HANDOFF_GIT_SUBMODULES", input.clone.submodules ? "true" : "false");
-  append("TASK_HANDOFF_GIT_LFS", input.clone.lfs ? "true" : "false");
+  // The provisioning helper ships with this node agent and reads the workspace
+  // Git keys only, so image build metadata can never impersonate a requested ref.
+  for (const [key, value] of workspaceGitEnvironmentEntries({
+    url: input.remoteUrl,
+    ref: input.ref,
+    clone: input.clone,
+  }, { legacy: false })) {
+    append(key, value);
+  }
   if (input.clone.subdirectory) append("TASK_HANDOFF_WORKSPACE_SUBDIRECTORY", input.clone.subdirectory);
   args.push(
     "--entrypoint", "/bin/bash",

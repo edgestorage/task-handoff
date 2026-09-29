@@ -75,6 +75,7 @@
     "asarUnpack": [
       "bin/**/*",
       "docker/entrypoint.sh",
+      "docker/git-provision.sh",
       "docker/instance-launcher.sh",
       "docker/node-agent-unix-proxy.mjs",
       "docker/runtime-installer.mjs",
@@ -101,6 +102,7 @@
       "shared/process-start-identity.cjs",
       "bin/task-handoff.js",
       "docker/entrypoint.sh",
+      "docker/git-provision.sh",
       "docker/instance-launcher.sh",
       "docker/node-agent-unix-proxy.mjs",
       "docker/runtime-installer.mjs",
