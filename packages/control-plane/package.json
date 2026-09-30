@@ -26,6 +26,10 @@
       "types": "./src/node-agent/schemas.ts",
       "default": "./src/node-agent/schemas.ts"
     },
+    "./node-agent-bootstrap-assets": {
+      "types": "./src/node-agent/runtimes/bootstrap-assets.ts",
+      "default": "./src/node-agent/runtimes/bootstrap-assets.ts"
+    },
     "./node-agent-tunnel": {
       "types": "./src/control-plane/nodes/tunnel.ts",
       "default": "./src/control-plane/nodes/tunnel.ts"

@@ -7,7 +7,7 @@ import {
   sanitizeStoredMarketCatalogSnapshot,
   type MarketCatalogSnapshot,
 } from "@task-handoff/protocol/control-plane";
-import { embeddedMarketCatalogSnapshot, type MarketCatalogProvider } from "./market.ts";
+import type { MarketCatalogProvider } from "./market.ts";
 
 export const DEFAULT_MARKET_CATALOG_URL = "https://images.thandoff.com/market/v1/catalog.json";
 export const DEFAULT_MARKET_CATALOG_REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000;
@@ -51,22 +51,19 @@ export function normalizeMarketRepository(reference: string) {
   return name ? stripDefaultRegistry(name) : undefined;
 }
 
-export function defaultMarketRepositoryPrefixes() {
-  const prefixes = new Set<string>();
-  for (const item of embeddedMarketCatalogSnapshot().items) {
-    const repository = normalizeMarketRepository(item.repository);
-    if (!repository) continue;
-    const slash = repository.lastIndexOf("/");
-    if (slash === -1) continue;
-    prefixes.add(`${repository.slice(0, slash + 1)}`);
-  }
-  return [...prefixes].sort();
-}
-
+/**
+ * Optional operator restriction on where a signed catalog may pull images
+ * from. The issued catalog is authoritative, so nothing is filtered unless the
+ * operator configured prefixes explicitly; entries match on repository path
+ * boundaries after normalization.
+ */
 export function isAllowedMarketRepository(reference: string, prefixes: string[]) {
   const repository = normalizeMarketRepository(reference);
   if (!repository) return false;
-  return prefixes.some((prefix) => repository.startsWith(prefix));
+  return prefixes.some((prefix) => {
+    const normalized = normalizeMarketRepository(prefix.trim().replace(/\/+$/, ""));
+    return normalized !== undefined && (repository === normalized || repository.startsWith(`${normalized}/`));
+  });
 }
 
 export function marketCatalogSignatureUrl(url: string) {
@@ -144,6 +141,23 @@ export function writeMarketCatalogCache(cachePath: string, cache: MarketCatalogC
 }
 
 async function readLimited(response: Response, maxBytes: number) {
+  const stream = (response as { body?: ReadableStream<Uint8Array> | null }).body;
+  if (stream) {
+    const reader = stream.getReader();
+    const chunks: Buffer[] = [];
+    let total = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel().catch(() => undefined);
+        throw new Error(`market catalog response exceeds ${maxBytes} bytes`);
+      }
+      chunks.push(Buffer.from(value));
+    }
+    return Buffer.concat(chunks).toString("utf8");
+  }
   const buffer = Buffer.from(await response.arrayBuffer());
   if (buffer.byteLength > maxBytes) throw new Error(`market catalog response exceeds ${maxBytes} bytes`);
   return buffer.toString("utf8");
@@ -154,6 +168,7 @@ export class RemoteMarketCatalogProvider implements MarketCatalogProvider {
 
   constructor(options: RemoteMarketCatalogOptions) {
     if (!options.url || !options.url.startsWith("https://")) throw new Error("market catalog URL must use https");
+    if (!options.publicKey?.trim()) throw new Error("market catalog remote requires a signing public key");
     this.options = options;
   }
 
@@ -173,14 +188,16 @@ export class RemoteMarketCatalogProvider implements MarketCatalogProvider {
     if (parsed.data.source !== "remote") throw new Error(`market catalog response must declare source "remote"`);
     if (!parsed.data.items.length) throw new Error("market catalog response must contain at least one image");
 
-    const prefixes = this.options.allowedRepositoryPrefixes ?? defaultMarketRepositoryPrefixes();
-    for (const item of parsed.data.items) {
-      if (!isAllowedMarketRepository(item.repository, prefixes)) {
-        throw new Error(`market catalog repository is not allowed: ${item.repository}`);
-      }
-      for (const tag of item.tags) {
-        if (!isAllowedMarketRepository(tag.reference, prefixes)) {
-          throw new Error(`market catalog tag reference is not allowed: ${tag.reference}`);
+    const prefixes = this.options.allowedRepositoryPrefixes?.filter((prefix) => prefix.trim());
+    if (prefixes?.length) {
+      for (const item of parsed.data.items) {
+        if (!isAllowedMarketRepository(item.repository, prefixes)) {
+          throw new Error(`market catalog repository is not allowed: ${item.repository}`);
+        }
+        for (const tag of item.tags) {
+          if (!isAllowedMarketRepository(tag.reference, prefixes)) {
+            throw new Error(`market catalog tag reference is not allowed: ${tag.reference}`);
+          }
         }
       }
     }
@@ -189,7 +206,7 @@ export class RemoteMarketCatalogProvider implements MarketCatalogProvider {
 
   private async verifySignature(body: string, fetchImpl: typeof fetch) {
     const publicKey = loadMarketCatalogPublicKey(this.options.publicKey);
-    if (!publicKey) return;
+    if (!publicKey) throw new Error("market catalog signature verification requires a public key");
     const url = marketCatalogSignatureUrl(this.options.url);
     const response = await fetchImpl(url, {
       headers: { accept: "application/json" },

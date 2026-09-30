@@ -14,5 +14,8 @@
     "electron": "catalog:",
     "electron-updater": "^6.8.9",
     "ws": "^8.21.0"
+  },
+  "devDependencies": {
+    "@task-handoff/control-plane": "workspace:*"
   }
 }

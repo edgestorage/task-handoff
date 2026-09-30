@@ -4,7 +4,7 @@ const path = require("node:path");
 const test = require("node:test");
 const zlib = require("node:zlib");
 const { applyDesktopDockIcon, desktopIconPath, desktopTrayIconPath } = require("../src/icon.cjs");
-const { REQUIRED_BOOTSTRAP_ASSETS } = require("../../../packages/control-plane/src/node-agent/runtimes/bootstrap-assets.ts");
+const { REQUIRED_BOOTSTRAP_ASSETS } = require("@task-handoff/control-plane/node-agent-bootstrap-assets");
 
 const root = path.resolve(__dirname, "../../..");
 const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));

@@ -256,6 +256,10 @@ importers:
       ws:
         specifier: ^8.21.0
         version: 8.21.0
+    devDependencies:
+      '@task-handoff/control-plane':
+        specifier: workspace:*
+        version: link:../../packages/control-plane
 
   apps/mobile:
     dependencies:

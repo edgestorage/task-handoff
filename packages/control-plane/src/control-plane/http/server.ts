@@ -145,16 +145,25 @@ function optionalEnv(name: string) {
   return value || undefined;
 }
 
-export function marketCatalogOptionsFromEnv(): ControlPlaneServiceOptions["marketCatalog"] {
+export function marketCatalogOptionsFromEnv(warn: (message: string) => void = (message) => console.warn(message)): ControlPlaneServiceOptions["marketCatalog"] {
   const configuredUrl = process.env.TASK_HANDOFF_MARKET_CATALOG_URL?.trim();
   const disabled = configuredUrl !== undefined && ["", "0", "off", "false", "disabled"].includes(configuredUrl.toLowerCase());
   if (disabled) return undefined;
+
+  // The issued catalog is authoritative for every repository it references, so
+  // the signature is the integrity boundary. Without a key the remote catalog
+  // stays off and the control plane keeps using the bundled snapshot.
+  const publicKey = optionalEnv("TASK_HANDOFF_MARKET_CATALOG_PUBLIC_KEY");
+  if (!publicKey) {
+    if (configuredUrl) warn("TASK_HANDOFF_MARKET_CATALOG_PUBLIC_KEY is not set; the remote market catalog stays disabled and the bundled catalog is used.");
+    return undefined;
+  }
 
   const refreshInterval = process.env.TASK_HANDOFF_MARKET_REFRESH_INTERVAL;
   const refreshSeconds = refreshInterval === undefined ? undefined : Number(refreshInterval);
   return {
     url: configuredUrl || DEFAULT_MARKET_CATALOG_URL,
-    publicKey: optionalEnv("TASK_HANDOFF_MARKET_CATALOG_PUBLIC_KEY"),
+    publicKey,
     keyId: optionalEnv("TASK_HANDOFF_MARKET_CATALOG_KEY_ID"),
     allowedRepositoryPrefixes: optionalEnv("TASK_HANDOFF_MARKET_ALLOWED_REPOSITORIES")?.split(",").map((entry) => entry.trim()).filter(Boolean),
     refreshIntervalMs: refreshSeconds === undefined
