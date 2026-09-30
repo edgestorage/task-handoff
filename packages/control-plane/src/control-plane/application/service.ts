@@ -368,6 +368,7 @@ export class ControlPlaneService {
     });
     const marketCachePath = options.marketCatalog?.cachePath ?? paths.marketCachePath;
     this.marketCatalogRemote = options.marketCatalog?.url
+      && options.marketCatalog.publicKey?.trim()
       ? new RemoteMarketCatalogProvider({
         url: options.marketCatalog.url,
         publicKey: options.marketCatalog.publicKey,
@@ -378,6 +379,9 @@ export class ControlPlaneService {
         log: (message, details) => this.logWarn(details, message),
       })
       : undefined;
+    if (options.marketCatalog?.url && !options.marketCatalog.publicKey?.trim()) {
+      this.logWarn({ url: options.marketCatalog.url }, "remote market catalog requires a signing public key; using the bundled market");
+    }
     this.marketCatalogService = new MarketCatalogService(
       loadCachedMarketCatalogSnapshot(marketCachePath) ?? embeddedMarketCatalogSnapshot(),
     );

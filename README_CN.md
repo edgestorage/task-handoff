@@ -263,16 +263,19 @@ scripts/                          安装、构建和运行脚本
 Node Agent 继续作为权威所有者挂载 bootstrap bundle，并安装目标 runtime
 artifact。
 
-Control Plane 的镜像市场默认从 <https://images.thandoff.com/market/v1/catalog.json>
-拉取目录，并按“远程 → 本地缓存 → 包内置快照”的顺序降级；缓存位于数据目录的
-`market/catalog-cache.json`。远程响应必须通过 schema 校验，配置公钥后还会强制
-验签，且所有镜像仓库必须落在内置发布者命名空间内（可用
-`TASK_HANDOFF_MARKET_ALLOWED_REPOSITORIES` 覆盖）。相关配置：
+Control Plane 的镜像市场默认使用包内置快照；配置验签公钥后从
+<https://images.thandoff.com/market/v1/catalog.json> 拉取目录，并按
+“远程 → 本地缓存 → 包内置快照”的顺序降级；缓存位于数据目录的
+`market/catalog-cache.json`。下发的目录是镜像仓库的权威来源：远程响应必须
+通过 schema 校验并强制 ed25519 验签，未配置公钥时不会启用远程拉取。相关配置：
 
-- `TASK_HANDOFF_MARKET_CATALOG_URL`：目录地址，设为 `off`/`0` 可关闭远程拉取。
-- `TASK_HANDOFF_MARKET_REFRESH_INTERVAL`：刷新间隔秒数，设为 `0` 只保留手动刷新。
-- `TASK_HANDOFF_MARKET_CATALOG_PUBLIC_KEY`、`TASK_HANDOFF_MARKET_CATALOG_KEY_ID`：
-  ed25519 验签公钥（PEM 或 base64 SPKI）和密钥标识。
+- `TASK_HANDOFF_MARKET_CATALOG_URL`：目录地址，默认官方地址；设为 `off`/`0` 可关闭远程拉取。
+- `TASK_HANDOFF_MARKET_REFRESH_INTERVAL`：刷新间隔秒数，默认 6 小时，设为 `0` 只保留手动刷新。
+- `TASK_HANDOFF_MARKET_CATALOG_PUBLIC_KEY`：启用远程拉取所需的 ed25519 验签公钥
+  （PEM 或 base64 SPKI）。
+- `TASK_HANDOFF_MARKET_CATALOG_KEY_ID`：可选，用于固定目录签名里携带的密钥标识。
+- `TASK_HANDOFF_MARKET_ALLOWED_REPOSITORIES`：可选仓库白名单（逗号分隔的仓库路径，
+  按路径分段匹配），用于把目录可引用的仓库进一步限制在自己的 registry 内。
 
 ### 桌面应用
 
