@@ -117,9 +117,33 @@
                     <header class="model-summary-popover-head"><strong>{{ t("settings.modelRegistry.referenceDistribution") }}</strong><span>{{ t("settings.modelRegistry.references", { count: model.referenceCount || 0 }) }}</span></header>
                     <ScrollArea v-if="referenceLocations(model).length" class="model-summary-popover-scroll" :horizontal="false">
                       <div class="model-summary-popover-list">
-                        <div v-for="location in referenceLocations(model)" :key="modelLocationKey(location)" class="model-summary-popover-row">
-                          <Link2 :size="14" aria-hidden="true" />
-                          <span><strong>{{ modelLocationLabel(location) }}</strong><small>{{ t("settings.modelRegistry.inUseBy", { count: location.referenceCount }) }}</small></span>
+                        <div v-for="location in referenceLocations(model)" :key="modelLocationKey(location)" class="model-reference-group">
+                          <button
+                            type="button"
+                            class="model-summary-popover-row model-reference-toggle"
+                            :aria-expanded="referenceGroupExpanded(model.id, location)"
+                            @click="toggleReferenceGroup(model.id, location)"
+                          >
+                            <Link2 :size="14" aria-hidden="true" />
+                            <span><strong>{{ modelLocationLabel(location) }}</strong><small>{{ t("settings.modelRegistry.inUseBy", { count: location.referenceCount }) }}</small></span>
+                            <ChevronDown :size="14" class="model-reference-chevron" :class="{ 'is-open': referenceGroupExpanded(model.id, location) }" aria-hidden="true" />
+                          </button>
+                          <div v-if="referenceGroupExpanded(model.id, location)" class="model-reference-instances">
+                            <button
+                              v-for="instance in nodeReferenceInstances(model, location)"
+                              :key="instance.id"
+                              type="button"
+                              class="model-reference-instance"
+                              :aria-label="t('settings.modelRegistry.openInstanceSettings', { name: instance.name })"
+                              @click="openInstanceModelSettings(instance)"
+                            >
+                              <span>{{ instance.name }}</span>
+                              <small>{{ localizedStatus(instanceStatusKeys, instance.status) }}</small>
+                            </button>
+                            <p v-if="unlistedReferenceCount(model, location)" class="model-reference-remainder">
+                              {{ t("settings.modelRegistry.unlistedReferences", { count: unlistedReferenceCount(model, location) }) }}
+                            </p>
+                          </div>
                         </div>
                       </div>
                     </ScrollArea>
@@ -288,8 +312,9 @@
 import { computed, nextTick, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { Activity, AlertTriangle, Boxes, Check, ChevronDown, ChevronUp, ChevronsUpDown, Combine, Copy, GripVertical, KeyRound, Layers, Link2, MapPin, MoreHorizontal, Plus, RefreshCw, Search, Settings, Trash2, X } from "@lucide/vue";
-import type { ModelApp, ModelConfig, ModelLocation } from "../../../api/types";
+import type { InstanceBoardItem, ModelApp, ModelConfig, ModelLocation, ModelSelection } from "../../../api/types";
 import { useModelRegistryQuery, useModelsQuery, useNodesQuery } from "../../../api/queries";
+import { instanceStatusKeys, translateStatus } from "../../../i18n/status";
 import { invalidateControlPlaneDomains } from "../../../api/queryInvalidation";
 import { useQueryClient } from "@tanstack/vue-query";
 import { translateApiError } from "../../../i18n/apiError";
@@ -310,6 +335,9 @@ import { useModelSettings } from "./useModelSettings";
 import { modelSupportsApp } from "../instance-settings/instanceSettingsState";
 
 type FilterValue = "all" | string;
+type NodeLocation = Extract<ModelLocation, { type: "node" }>;
+const props = withDefaults(defineProps<{ instances?: InstanceBoardItem[] }>(), { instances: () => [] });
+const emit = defineEmits<{ openInstanceSettings: [instanceId: string, section: "models"] }>();
 const { t } = useI18n();
 const queryClient = useQueryClient();
 const models = useModelsQuery();
@@ -362,6 +390,39 @@ function modelLocationLabel(location: ModelLocation) { return location.type === 
 function appLabel(app: string) { return app === "opencode" ? "OpenCode" : app === "claude" ? "Claude" : "Codex"; }
 function compatibleAppLabel(model: ModelConfig) { return (["codex", "claude", "opencode"] as ModelApp[]).filter((app) => modelSupportsApp(model, app)).map(appLabel).join(" · "); }
 function referenceLocations(model: ModelConfig) { return (model.locations || []).filter((location): location is Extract<ModelLocation, { type: "node" }> => location.type === "node" && location.referenceCount > 0); }
+const localizedStatus = (keys: Record<string, string>, value: string) => translateStatus(keys, value, t);
+const expandedReferenceGroups = ref(new Set<string>());
+function referenceGroupKey(modelId: string, location: NodeLocation) { return `${modelId}:${location.nodeId}`; }
+function referenceGroupExpanded(modelId: string, location: NodeLocation) { return expandedReferenceGroups.value.has(referenceGroupKey(modelId, location)); }
+function toggleReferenceGroup(modelId: string, location: NodeLocation) {
+  const key = referenceGroupKey(modelId, location);
+  const next = new Set(expandedReferenceGroups.value);
+  if (next.has(key)) next.delete(key);
+  else next.add(key);
+  expandedReferenceGroups.value = next;
+}
+/**
+ * Instances on nodes that predate stable identities store the content-hash
+ * projection, so the entity id and both revisions identify the same model.
+ */
+function instanceSelectionIds(selection: ModelSelection | undefined) {
+  if (!selection) return [];
+  return selection.modelEntityIds?.length
+    ? selection.modelEntityIds
+    : [selection.codexModelHash, selection.claudeModelHash, selection.opencodeModelHash].filter((id): id is string => Boolean(id));
+}
+function nodeReferenceInstances(model: ModelConfig, location: NodeLocation) {
+  const candidateIds = new Set([model.id, model.revision, location.revision].filter((id): id is string => Boolean(id)));
+  return (props.instances || [])
+    .filter((instance) => instance.nodeId === location.nodeId
+      && instanceSelectionIds(instance.modelSelection).some((id) => candidateIds.has(id)))
+    .sort((left, right) => left.name.localeCompare(right.name));
+}
+/** Node reference counts include replicas the control plane cannot resolve to an instance yet. */
+function unlistedReferenceCount(model: ModelConfig, location: NodeLocation) {
+  return Math.max(0, location.referenceCount - nodeReferenceInstances(model, location).length);
+}
+function openInstanceModelSettings(instance: InstanceBoardItem) { emit("openInstanceSettings", instance.id, "models"); }
 function openCreateDialog() { resetModelForm(); editorOpen.value = true; }
 function openEditDialog(model: ModelConfig) { editModel(model); editorOpen.value = true; }
 function openCopyDialog(model: ModelConfig) { copyModelDraft(model); editorOpen.value = true; }
@@ -520,6 +581,16 @@ async function confirmMerge() {
 .model-summary-popover-row strong, .model-summary-popover-row small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .model-summary-popover-row strong { color: var(--text-strong); font-size: 12px; font-weight: 500; }
 .model-summary-popover-row small { color: var(--text-muted); font-size: 12px; }
+.model-reference-group { display: grid; }
+.model-reference-toggle { background: transparent; border: 0; cursor: pointer; font: inherit; grid-template-columns: auto minmax(0,1fr) auto; text-align: left; width: 100%; }
+.model-reference-chevron { transition: transform 140ms ease; }
+.model-reference-chevron.is-open { transform: rotate(180deg); }
+.model-reference-instances { display: grid; gap: 1px; padding: 0 2px 4px 27px; }
+.model-reference-instance { align-items: center; background: transparent; border: 0; border-radius: 5px; cursor: pointer; display: grid; font: inherit; gap: 6px; grid-template-columns: minmax(0,1fr) auto; padding: 4px 7px; text-align: left; width: 100%; }
+.model-reference-instance:hover { background: var(--surface-hover); }
+.model-reference-instance > span { color: var(--text-strong); font-size: 12px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-reference-instance > small { color: var(--text-muted); font-size: 12px; }
+.model-reference-remainder { color: var(--text-muted); font-size: 12px; margin: 0; padding: 2px 7px 0; }
 .model-summary-popover-empty { color: var(--text-muted); font-size: 12px; margin: 0; padding: 10px 9px; }
 .model-state { align-items: center; color: var(--text-muted); display: flex; font-size: 12px; justify-content: center; min-height: 160px; padding: 20px; }
 .model-state-error { gap: 10px; }

@@ -1784,14 +1784,15 @@ function createMockNodeAgentFetch(options = {}) {
     }
     if (path === "/models" && init.method === "POST") {
       const id = modelConfigHash(body);
+      const created = new Date().toISOString();
       const model = {
         ...body,
         id,
         enabled: body.enabled ?? true,
         order: body.order ?? (nodeModels.size + 1) * 100,
         labels: body.labels || {},
-        createdAt: timestamp,
-        updatedAt: timestamp,
+        createdAt: created,
+        updatedAt: created,
         keyPreview: "set",
         keySet: true,
         referenceCount: 0,
@@ -1809,6 +1810,7 @@ function createMockNodeAgentFetch(options = {}) {
       const model = {
         ...body,
         id,
+        updatedAt: new Date().toISOString(),
         keyPreview: "set",
         keySet: true,
         referenceCount: nodeModels.get(id)?.referenceCount || 0,
@@ -1824,7 +1826,7 @@ function createMockNodeAgentFetch(options = {}) {
       const id = decodeURIComponent(modelRoute[1]);
       const current = nodeModels.get(id);
       if (!current) return errorResponse(`Model ${id} was not found.`, 404, "NODE_MODEL_NOT_FOUND");
-      const candidate = { ...current, ...body, updatedAt: timestamp };
+      const candidate = { ...current, ...body, updatedAt: new Date().toISOString() };
       const nextKey = body.key || nodeModelKeys.get(id) || "mock-private-key";
       const revision = modelConfigHash({ ...candidate, key: nextKey });
       // Nodes that predate stable model identities fork the entity under the
@@ -12119,6 +12121,228 @@ test("federated model registry groups one control-plane model across multiple no
   secondOptions.modelDeleteError = new Error("node two offline");
   const sourceDelete = await json(app, "DELETE", `/api/models/${model.body.data.id}`);
   assert.equal(sourceDelete.statusCode, 200);
+});
+
+test("control plane sync converges a node owned model onto its lagging replicas", async (t) => {
+  const health = {
+    capabilities: {
+      managedModels: { multiEntityAssignment: true, privateModelCatalog: true, stableModelIdentity: true },
+    },
+  };
+  const firstNode = createMockNodeAgentFetch({ nodeId: "node_one", health });
+  const secondNode = createMockNodeAgentFetch({ nodeId: "node_two", health });
+  const fetchImpl = (url, init) => new URL(String(url)).hostname === "node-two.example"
+    ? secondNode.fetchImpl(url, init)
+    : firstNode.fetchImpl(url, init);
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-node-owned-sync"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+    service: { fetchImpl },
+  });
+  t.after(() => app.close());
+
+  const nodeTwo = await json(app, "POST", "/api/nodes", {
+    id: "node_two",
+    name: "Node Two",
+    connectionMode: "direct-http",
+    endpoint: "http://node-two.example:8091",
+    auth: { mode: "paired-hmac", keyId: "key_two", secret: "secret-two" },
+  });
+  assert.equal(nodeTwo.statusCode, 201, JSON.stringify(nodeTwo.body));
+
+  // The same node owned entity exists on both nodes under one stable id.
+  const spec = {
+    name: "Node owned",
+    endpoint: "https://node-owned.example/v1",
+    key: "node-owned-secret",
+    model: "gpt-node-owned",
+    app: "codex",
+  };
+  const first = await json(app, "POST", "/api/nodes/node_one/models", spec);
+  const second = await json(app, "POST", "/api/nodes/node_two/models", spec);
+  assert.equal(first.statusCode, 201, JSON.stringify(first.body));
+  assert.equal(second.statusCode, 201, JSON.stringify(second.body));
+  const entityId = first.body.data.id;
+  assert.equal(second.body.data.id, entityId);
+
+  // node_one edits in place while node_two keeps the original content.
+  const edited = await json(app, "PATCH", `/api/nodes/node_one/models/${entityId}`, { endpoint: "https://node-owned-v2.example/v1" });
+  assert.equal(edited.statusCode, 200, JSON.stringify(edited.body));
+  assert.equal(secondNode.nodeModels.get(entityId).endpoint, "https://node-owned.example/v1");
+
+  const registry = await json(app, "GET", "/api/models");
+  const group = registry.body.data.models.find((item) => item.id === entityId);
+  const staleLocation = group.locations.find((location) => location.type === "node" && location.nodeId === "node_two");
+  assert.notEqual(staleLocation.revision, group.model.revision);
+
+  const synced = await json(app, "POST", `/api/models/${entityId}/sync`);
+  assert.equal(synced.statusCode, 200, JSON.stringify(synced.body));
+  assert.equal(synced.body.data.model.id, entityId);
+  assert.deepEqual(
+    [...synced.body.data.locations].sort((left, right) => left.nodeId.localeCompare(right.nodeId)),
+    [{ nodeId: "node_one", state: "synced" }, { nodeId: "node_two", state: "synced" }],
+  );
+  const converged = secondNode.nodeModels.get(entityId);
+  assert.equal(converged.endpoint, "https://node-owned-v2.example/v1");
+  assert.equal(converged.id, entityId);
+  // The secret never leaves the node: the convergence projection carries no key.
+  const convergence = secondNode.requests.findLast((request) => request.method === "PATCH" && request.path === `/models/${entityId}`);
+  assert.ok(convergence, "the lagging replica is converged in place");
+  assert.equal("key" in convergence.body, false);
+
+  const convergedRegistry = await json(app, "GET", "/api/models");
+  const convergedGroup = convergedRegistry.body.data.models.find((item) => item.id === entityId);
+  const convergedLocations = convergedGroup.locations.filter((location) => location.type === "node");
+  assert.equal(convergedLocations.length, 2);
+  for (const location of convergedLocations) {
+    assert.equal(location.revision, convergedGroup.model.revision);
+  }
+});
+
+test("control plane sync reports node owned replicas that must be updated first", async (t) => {
+  const modernHealth = {
+    capabilities: {
+      managedModels: { multiEntityAssignment: true, privateModelCatalog: true, stableModelIdentity: true },
+    },
+  };
+  const legacyHealth = {
+    capabilities: {
+      managedModels: { multiEntityAssignment: true, privateModelCatalog: true },
+    },
+  };
+  const firstNode = createMockNodeAgentFetch({ nodeId: "node_one", health: modernHealth });
+  const secondNode = createMockNodeAgentFetch({ nodeId: "node_two", health: legacyHealth });
+  const fetchImpl = (url, init) => new URL(String(url)).hostname === "node-two.example"
+    ? secondNode.fetchImpl(url, init)
+    : firstNode.fetchImpl(url, init);
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-node-owned-sync-legacy"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+    service: { fetchImpl },
+  });
+  t.after(() => app.close());
+
+  const nodeTwo = await json(app, "POST", "/api/nodes", {
+    id: "node_two",
+    name: "Node Two",
+    connectionMode: "direct-http",
+    endpoint: "http://node-two.example:8091",
+    auth: { mode: "paired-hmac", keyId: "key_two", secret: "secret-two" },
+  });
+  assert.equal(nodeTwo.statusCode, 201, JSON.stringify(nodeTwo.body));
+  const spec = {
+    name: "Node owned legacy",
+    endpoint: "https://node-owned-legacy.example/v1",
+    key: "node-owned-legacy-secret",
+    model: "gpt-node-owned-legacy",
+    app: "codex",
+  };
+  const first = await json(app, "POST", "/api/nodes/node_one/models", spec);
+  const second = await json(app, "POST", "/api/nodes/node_two/models", spec);
+  assert.equal(first.statusCode, 201, JSON.stringify(first.body));
+  assert.equal(second.statusCode, 201, JSON.stringify(second.body));
+  const entityId = first.body.data.id;
+  const edited = await json(app, "PATCH", `/api/nodes/node_one/models/${entityId}`, { endpoint: "https://node-owned-legacy-v2.example/v1" });
+  assert.equal(edited.statusCode, 200, JSON.stringify(edited.body));
+
+  const synced = await json(app, "POST", `/api/models/${entityId}/sync`);
+  assert.equal(synced.statusCode, 200, JSON.stringify(synced.body));
+  assert.deepEqual(
+    [...synced.body.data.locations].sort((left, right) => left.nodeId.localeCompare(right.nodeId)),
+    [
+      { nodeId: "node_one", state: "synced" },
+      {
+        nodeId: "node_two",
+        state: "unsupported",
+        code: "NODE_MODEL_STABLE_IDENTITY_UNSUPPORTED",
+        message: "Node node_two must be updated before models can be synced there.",
+      },
+    ],
+  );
+  // The outdated node keeps its record rather than forking a second entity.
+  assert.equal(secondNode.nodeModels.size, 1);
+  assert.equal(secondNode.nodeModels.get(entityId).endpoint, "https://node-owned-legacy.example/v1");
+  assert.equal(secondNode.requests.some((request) => request.method === "PATCH" && request.path === `/models/${entityId}`), false);
+});
+
+test("control plane revalidates stale node capabilities before converging models", async (t) => {
+  const legacyHealth = {
+    capabilities: {
+      managedModels: { multiEntityAssignment: true, privateModelCatalog: true },
+    },
+  };
+  const upgradedHealth = {
+    capabilities: {
+      managedModels: { multiEntityAssignment: true, privateModelCatalog: true, stableModelIdentity: true },
+    },
+  };
+  const firstNode = createMockNodeAgentFetch({ nodeId: "node_one" });
+  const secondOptions = { nodeId: "node_two", health: legacyHealth };
+  const secondNode = createMockNodeAgentFetch(secondOptions);
+  const fetchImpl = (url, init) => new URL(String(url)).hostname === "node-two.example"
+    ? secondNode.fetchImpl(url, init)
+    : firstNode.fetchImpl(url, init);
+  const app = await createControlPlaneApp({
+    dataDir: tempDataDir("control-plane-stale-capabilities"),
+    logger: false,
+    staticDir: path.join(os.tmpdir(), "missing-task-handoff-ui"),
+    service: { fetchImpl },
+  });
+  t.after(() => app.close());
+
+  const nodeTwo = await json(app, "POST", "/api/nodes", {
+    id: "node_two",
+    name: "Node Two",
+    connectionMode: "direct-http",
+    endpoint: "http://node-two.example:8091",
+    auth: { mode: "paired-hmac", keyId: "key_two", secret: "secret-two" },
+  });
+  assert.equal(nodeTwo.statusCode, 201, JSON.stringify(nodeTwo.body));
+
+  const model = await json(app, "POST", "/api/models", {
+    name: "Revalidated model",
+    endpoint: "https://revalidated.example/v1",
+    key: "revalidated-secret",
+    model: "gpt-revalidated",
+    app: "codex",
+  });
+  assert.equal(model.statusCode, 201, JSON.stringify(model.body));
+  const stableId = model.body.data.id;
+  // Editing diverges the stable id from the content hash, so the deploy shape
+  // exposes whether the control plane trusts a legacy projection.
+  const firstEdit = await json(app, "PATCH", `/api/models/${stableId}`, { endpoint: "https://revalidated-v2.example/v1" });
+  assert.equal(firstEdit.statusCode, 200, JSON.stringify(firstEdit.body));
+
+  // The node agent is upgraded out of band; the cached document stays stale.
+  secondOptions.health = upgradedHealth;
+  const project = await json(app, "POST", "/api/projects", {
+    name: "Revalidated project",
+    source: { type: "local-folder", path: "/tmp/revalidated" },
+  });
+  const instance = await json(app, "POST", "/api/controlled-instances", {
+    name: "revalidated-instance",
+    projectId: project.body.data.id,
+    nodeId: "node_two",
+    runtimeId: "runtime_local_docker",
+    imageSelection: { imageId: "market_taskhandoff_browser" },
+    modelSelection: { modelEntityIds: [stableId] },
+  });
+  assert.equal(instance.statusCode, 201, JSON.stringify(instance.body));
+  const deployed = secondNode.requests.findLast((request) => request.path === `/models/${stableId}/deploy` && request.method === "PUT");
+  assert.ok(deployed, "the upgraded node receives the stable entity id");
+  assert.equal(deployed.body.id, stableId);
+  assert.equal(secondNode.requests.some((request) => request.path === "/health"), true);
+
+  // Explicit edits revalidate too: the node that was just upgraded converges
+  // in place instead of being reported as outdated.
+  const secondEdit = await json(app, "PATCH", `/api/models/${stableId}`, { endpoint: "https://revalidated-v3.example/v1" });
+  assert.equal(secondEdit.statusCode, 200, JSON.stringify(secondEdit.body));
+  assert.deepEqual(secondEdit.body.data.locations, [{ nodeId: "node_two", state: "synced" }]);
+  const deploy = secondNode.requests.findLast((request) => request.path === `/models/${stableId}/deploy` && request.method === "PUT");
+  assert.equal(deploy.body.id, stableId);
+  assert.equal(secondNode.nodeModels.get(stableId).endpoint, "https://revalidated-v3.example/v1");
 });
 
 test("failed assignment leaves an unreferenced hash entry without deployment state", async (t) => {

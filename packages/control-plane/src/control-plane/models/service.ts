@@ -34,6 +34,35 @@ function nodeSupportsStableModelIdentity(node: Node) {
   return supportsNodeStableModelIdentity(nodeAgentCapabilities(node));
 }
 
+type NodeOwnedWriteIntent = "edit" | "sync";
+
+// A node without a capability document cannot be classified; only a parsed
+// document that denies stable identities proves the node edits by forking.
+function nodeDeniesStableModelIdentity(node: Node) {
+  const capabilities = nodeAgentCapabilities(node);
+  return capabilities !== undefined && !supportsNodeStableModelIdentity(capabilities);
+}
+
+function nodeOwnedStableIdentityMessage(nodeId: string, intent: NodeOwnedWriteIntent) {
+  return intent === "edit"
+    ? `Node ${nodeId} must be updated before models can be edited in place.`
+    : `Node ${nodeId} must be updated before models can be synced there.`;
+}
+
+// Public projection of a node owned replica. The secret stays on the nodes:
+// applying this patch in place converges content without moving key material.
+function nodeOwnedModelProjection(model: NodeModelPublicRecord): UpdateModelInput {
+  return {
+    name: model.name,
+    endpoint: model.endpoint,
+    model: model.model,
+    modelNames: model.modelNames,
+    protocols: model.protocols,
+    app: model.app,
+    enabled: model.enabled,
+  };
+}
+
 function nodeLocationFailure(nodeId: string, error: unknown): ModelLocationSyncResult {
   const record = error && typeof error === "object" ? error as Record<string, unknown> : {};
   const statusCode = typeof record.statusCode === "number" ? record.statusCode : undefined;
@@ -56,6 +85,10 @@ type ControlPlaneModelServiceOptions = {
   listNodes: () => Node[];
   requireNode: (id: string) => Node;
   fetchImpl: typeof fetch;
+  // Revalidates a node's cached capability document before writes that depend
+  // on it. Explicit mutations force a probe; background convergence respects
+  // the cache TTL so retries stay cheap.
+  ensureNodeCapabilities?: (node: Node, options?: { force?: boolean }) => Promise<Node>;
   listInstances?: () => Promise<ControlledInstance[]>;
   listAiSessions?: () => Promise<{ instances: Array<{ instanceId: string; aiSessions: { sessions: Array<{ id: string; modelSelection?: { modelEntityId: string } }> } }> }>;
   listAiSessionHistory?: (instanceId: string) => Promise<AiSessionHistoryList>;
@@ -244,42 +277,13 @@ export class ControlPlaneModelService {
     if (!holderIds.size) {
       throwNotFound("MODEL_NOT_FOUND", `Model ${id} was not found on the control plane or any node.`);
     }
+    const holders = await this.withFreshNodeCapabilities(nodes.filter((node) => holderIds.has(node.id)), true);
     const locations: ModelLocationSyncResult[] = [];
     let updated: PublicModelConfig | undefined;
-    for (const node of nodes) {
-      if (!holderIds.has(node.id)) continue;
-      try {
-        const record = await this.options.gateway.updateModel(node, id, parsedInput);
-        if (record.id !== id) {
-          // Compatibility for v0.0.34: a node without stable identities forks
-          // the entity instead of editing it in place. Remove the fork and
-          // fail that location so the registry cannot accumulate a copy that
-          // would show up as a second model.
-          let rolledBack = true;
-          try {
-            await this.options.gateway.deleteModel(node, record.id);
-          } catch {
-            rolledBack = false;
-          }
-          locations.push(ModelLocationSyncResultSchema.parse(rolledBack ? {
-            nodeId: node.id,
-            state: "unsupported",
-            code: "NODE_MODEL_STABLE_IDENTITY_UNSUPPORTED",
-            message: `Node ${node.id} must be updated before models can be edited in place.`,
-          } : {
-            nodeId: node.id,
-            state: "error",
-            code: "NODE_MODEL_LEGACY_EDIT_FORKED",
-            message: `Node ${node.id} left a detached copy ${record.id} behind while editing; remove it after updating the node.`,
-          }));
-          continue;
-        }
-        const { referenceCount: _referenceCount, ...publicRecord } = record;
-        updated = updated || publicRecord;
-        locations.push(ModelLocationSyncResultSchema.parse({ nodeId: node.id, state: "synced" }));
-      } catch (error) {
-        locations.push(nodeLocationFailure(node.id, error));
-      }
+    for (const node of holders) {
+      const applied = await this.applyNodeEntityUpdate(node, id, parsedInput, "edit");
+      if (applied.record) updated = updated || applied.record;
+      locations.push(applied.location);
     }
     if (!updated) {
       const detail = locations.find((location) => location.message)?.message;
@@ -294,15 +298,112 @@ export class ControlPlaneModelService {
     return ModelMutationResultSchema.parse({ model: updated, locations });
   }
 
-  /** Push the current control-plane content to every known node replica. */
+  /**
+   * Apply one patch to a node owned replica. A parsed capability document that
+   * denies stable identities skips the write instead of forking a duplicate;
+   * an unknown document still probes the fork response so the control plane
+   * cannot stay stuck on a stale "legacy" classification.
+   */
+  private async applyNodeEntityUpdate(
+    node: Node,
+    id: string,
+    patch: UpdateModelInput,
+    intent: NodeOwnedWriteIntent,
+  ): Promise<{ location: ModelLocationSyncResult; record?: PublicModelConfig }> {
+    if (nodeDeniesStableModelIdentity(node)) {
+      return {
+        location: ModelLocationSyncResultSchema.parse({
+          nodeId: node.id,
+          state: "unsupported",
+          code: "NODE_MODEL_STABLE_IDENTITY_UNSUPPORTED",
+          message: nodeOwnedStableIdentityMessage(node.id, intent),
+        }),
+      };
+    }
+    try {
+      const record = await this.options.gateway.updateModel(node, id, patch);
+      if (record.id !== id) {
+        // Compatibility for v0.0.34: a node without stable identities forks
+        // the entity instead of editing it in place. Remove the fork and
+        // fail that location so the registry cannot accumulate a copy that
+        // would show up as a second model.
+        let rolledBack = true;
+        try {
+          await this.options.gateway.deleteModel(node, record.id);
+        } catch {
+          rolledBack = false;
+        }
+        return {
+          location: ModelLocationSyncResultSchema.parse(rolledBack ? {
+            nodeId: node.id,
+            state: "unsupported",
+            code: "NODE_MODEL_STABLE_IDENTITY_UNSUPPORTED",
+            message: nodeOwnedStableIdentityMessage(node.id, intent),
+          } : {
+            nodeId: node.id,
+            state: "error",
+            code: "NODE_MODEL_LEGACY_EDIT_FORKED",
+            message: `Node ${node.id} left a detached copy ${record.id} behind while editing; remove it after updating the node.`,
+          }),
+        };
+      }
+      const { referenceCount: _referenceCount, ...publicRecord } = record;
+      return {
+        location: ModelLocationSyncResultSchema.parse({ nodeId: node.id, state: "synced" }),
+        record: publicRecord,
+      };
+    } catch (error) {
+      return { location: nodeLocationFailure(node.id, error) };
+    }
+  }
+
+  /**
+   * Push the current content to every known replica. Control-plane owned
+   * entities deploy the stored record; node owned entities converge onto the
+   * newest replica because their secret only exists on the nodes.
+   */
   async sync(id: string) {
     const model = this.modelGet(id);
-    if (!model) throwNotFound("MODEL_NOT_FOUND", `Model ${id} was not found on the control plane.`);
+    if (!model) return this.syncNodeOwnedEntity(id);
     await this.refreshFleetModelIndex(this.options.listNodes());
     return ModelMutationResultSchema.parse({
       model: publicModel(model),
       locations: await this.syncEntityToReplicas(model),
     });
+  }
+
+  /**
+   * Convergence for node owned entities: the newest replica is the authority
+   * and its public projection is applied in place to every lagging holder.
+   */
+  private async syncNodeOwnedEntity(id: string) {
+    const nodes = this.options.listNodes();
+    await this.refreshFleetModelIndex(nodes);
+    const fleet = this.options.gateway.readFleetModels(nodes);
+    const holders = fleet.items.filter(({ model }) => model.id === id);
+    if (!holders.length) {
+      throwNotFound("MODEL_NOT_FOUND", `Model ${id} was not found on the control plane or any node.`);
+    }
+    const authority = holders.reduce((best, candidate) => candidate.model.updatedAt > best.model.updatedAt ? candidate : best);
+    const projection = nodeOwnedModelProjection(authority.model);
+    const refreshed = new Map((await this.withFreshNodeCapabilities(
+      nodes.filter((node) => holders.some((holder) => holder.nodeId === node.id)),
+      true,
+    )).map((node) => [node.id, node]));
+    const locations: ModelLocationSyncResult[] = [];
+    for (const holder of holders) {
+      const node = refreshed.get(holder.nodeId);
+      if (!node) continue;
+      if (holder.nodeId === authority.nodeId
+        || (holder.model.revision && authority.model.revision && holder.model.revision === authority.model.revision)) {
+        locations.push(ModelLocationSyncResultSchema.parse({ nodeId: node.id, state: "synced" }));
+        continue;
+      }
+      const applied = await this.applyNodeEntityUpdate(node, id, projection, "sync");
+      locations.push(applied.location);
+    }
+    const { referenceCount: _referenceCount, ...publicRecord } = authority.model;
+    return ModelMutationResultSchema.parse({ model: publicRecord, locations });
   }
 
   /**
@@ -647,13 +748,31 @@ export class ControlPlaneModelService {
    * legacy content hash, so they receive that projection until they upgrade.
    */
   private async deployModelToNode(node: Node, model: ModelConfig) {
-    if (nodeSupportsStableModelIdentity(node)) {
-      await this.options.gateway.deployModel(node, model.id, model);
+    const [resolved] = await this.withFreshNodeCapabilities([node], false);
+    if (nodeSupportsStableModelIdentity(resolved)) {
+      await this.options.gateway.deployModel(resolved, model.id, model);
       return model.id;
     }
     const legacyId = modelConfigHash(model);
-    await this.options.gateway.deployModel(node, legacyId, ModelConfigSchema.parse({ ...model, id: legacyId }));
+    await this.options.gateway.deployModel(resolved, legacyId, ModelConfigSchema.parse({ ...model, id: legacyId }));
     return legacyId;
+  }
+
+  /**
+   * Revalidate cached node capability documents before writes that branch on
+   * them. Direct-http nodes never deliver the capabilities-changed tunnel
+   * event, so without this probe an updated node keeps its stale document
+   * until an operator opens the node check by hand.
+   */
+  private async withFreshNodeCapabilities(nodes: Node[], force: boolean): Promise<Node[]> {
+    if (!this.options.ensureNodeCapabilities || !nodes.length) return nodes;
+    return Promise.all(nodes.map(async (node) => {
+      try {
+        return await this.options.ensureNodeCapabilities!(node, { force });
+      } catch {
+        return node;
+      }
+    }));
   }
 
   /**
@@ -666,6 +785,10 @@ export class ControlPlaneModelService {
     const fleet = this.options.gateway.readFleetModels(nodes);
     const holderIds = new Set(fleet.items.filter(({ model: record }) => record.id === model.id).map(({ nodeId }) => nodeId));
     const nodePhases = new Map(fleet.nodeStates.map((state) => [state.nodeId, state.phase]));
+    const involved = nodes.filter((node) => targets ? targets.has(node.id) : holderIds.has(node.id));
+    // Explicit syncs revalidate capabilities up front; background retries use
+    // the cached document so offline replicas are not probed on every read.
+    const refreshed = new Map((await this.withFreshNodeCapabilities(involved, !targets)).map((node) => [node.id, node]));
     const results: ModelLocationSyncResult[] = [];
     const pending = new Set<string>();
     for (const node of nodes) {
@@ -673,7 +796,8 @@ export class ControlPlaneModelService {
       // A reachable node that no longer reports the replica has removed it;
       // retrying would recreate the entity behind the operator's back.
       if (targets && !holderIds.has(node.id) && nodePhases.get(node.id) === "ready") continue;
-      if (!nodeSupportsStableModelIdentity(node)) {
+      const resolved = refreshed.get(node.id) || node;
+      if (!nodeSupportsStableModelIdentity(resolved)) {
         pending.add(node.id);
         results.push(ModelLocationSyncResultSchema.parse({
           nodeId: node.id,
@@ -684,7 +808,7 @@ export class ControlPlaneModelService {
         continue;
       }
       try {
-        await this.options.gateway.deployModel(node, model.id, model);
+        await this.options.gateway.deployModel(resolved, model.id, model);
         results.push(ModelLocationSyncResultSchema.parse({ nodeId: node.id, state: "synced" }));
       } catch (error) {
         const failure = nodeLocationFailure(node.id, error);

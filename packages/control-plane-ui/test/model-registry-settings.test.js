@@ -180,3 +180,31 @@ test("model locations and references open portal popovers without expanding rows
   assert.match(settings, /--reka-popover-content-available-height/);
   assert.doesNotMatch(settings, /expandedModelIds|model-location-panel/);
 });
+
+test("model reference distribution expands node instances and opens their model settings", () => {
+  const settings = read("src/apps/control-plane/settings/ModelSettingsSection.vue");
+  const modal = read("src/apps/control-plane/settings/SettingsModal.vue");
+  const zh = read("src/i18n/locales/zh-CN/settings.ts");
+  const en = read("src/i18n/locales/en-US/settings.ts");
+  assert.match(settings, /defineProps<\{ instances\?: InstanceBoardItem\[\] \}>\(\)/);
+  assert.match(settings, /defineEmits<\{ openInstanceSettings: \[instanceId: string, section: "models"\] \}>\(\)/);
+  assert.match(settings, /:aria-expanded="referenceGroupExpanded\(model\.id, location\)"/);
+  assert.match(settings, /@click="toggleReferenceGroup\(model\.id, location\)"/);
+  assert.match(settings, /v-for="instance in nodeReferenceInstances\(model, location\)"/);
+  assert.match(settings, /@click="openInstanceModelSettings\(instance\)"/);
+  assert.match(settings, /emit\("openInstanceSettings", instance\.id, "models"\)/);
+  assert.match(settings, /function nodeReferenceInstances\(model: ModelConfig, location: NodeLocation\)/);
+  assert.match(settings, /\[model\.id, model\.revision, location\.revision\]/);
+  assert.match(settings, /instanceSelectionIds\(instance\.modelSelection\)\.some\(\(id\) => candidateIds\.has\(id\)\)/);
+  assert.match(settings, /instance\.nodeId === location\.nodeId/);
+  assert.match(settings, /t\("settings\.modelRegistry\.unlistedReferences"/);
+  assert.match(settings, /localizedStatus\(instanceStatusKeys, instance\.status\)/);
+  assert.match(settings, /\.model-reference-instance > span \{[^}]*font-size: 12px;/);
+  assert.match(settings, /\.model-reference-toggle \{ background: transparent; border: 0; cursor: pointer;/);
+  assert.match(modal, /<ModelSettingsSection v-else-if="settingsSection === 'models'" :instances="instances" @open-instance-settings="\(instanceId, section\) => emit\('openInstanceSettings', instanceId, section\)"/);
+  assert.match(modal, /openInstanceSettings: \[instanceId: string, section\?: "general" \| "ai" \| "codex" \| "models" \| "git-credentials" \| "apps"\]/);
+  for (const locale of [zh, en]) {
+    assert.match(locale, /openInstanceSettings: "/);
+    assert.match(locale, /unlistedReferences: "/);
+  }
+});

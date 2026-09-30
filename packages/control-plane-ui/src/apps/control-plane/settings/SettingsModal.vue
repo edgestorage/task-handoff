@@ -106,7 +106,7 @@
 
       <GitCredentialsSettingsSection v-else-if="settingsSection === 'git-credentials'" />
 
-      <ModelSettingsSection v-else-if="settingsSection === 'models'" />
+      <ModelSettingsSection v-else-if="settingsSection === 'models'" :instances="instances" @open-instance-settings="(instanceId, section) => emit('openInstanceSettings', instanceId, section)" />
 
       <ImageSettingsSection v-else-if="settingsSection === 'images'" />
 
@@ -511,7 +511,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   back: [];
-  openInstanceSettings: [instanceId: string];
+  openInstanceSettings: [instanceId: string, section?: "general" | "ai" | "codex" | "models" | "git-credentials" | "apps"];
   "section-change": [section: SettingsSection];
 }>();
 

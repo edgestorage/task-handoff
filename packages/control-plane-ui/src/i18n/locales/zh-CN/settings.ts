@@ -245,6 +245,7 @@ export const settings = {
     connection: "连接配置", connectionDescription: "配置 Provider 端点、接口协议及私有凭据。", deleteTitle: "删除模型位置？",
     discardTitle: "放弃未保存的更改？", discardDescription: "模型草稿已经修改，关闭后这些更改不会保留。", discard: "放弃更改",
     references: "{count} 个引用", locations: "模型位置", referenceDistribution: "引用分布", noReferences: "暂无实例引用此模型", moveUp: "上移模型", moveDown: "下移模型", editAll: "编辑全部",
+    openInstanceSettings: "打开 {name} 的模型设置", unlistedReferences: "另有 {count} 个引用未在实例列表中找到",
     deleting: "正在删除", deleteFrom: "从位置删除", inUseBy: "被 {count} 个实例使用", deleteLocation: "仅删除此位置", empty: "尚未配置模型",
     diagnostics: "部分节点模型无法加载", retrying: "正在重试", edit: "编辑模型", add: "添加模型", copyTitle: "复制模型", copyDescription: "基于控制面板保存的配置创建新模型，并安全继承现有密钥。", copyName: "{name} 副本", copyIdentityHint: "请修改默认模型、端点或 API 密钥，以创建独立模型。", copyCredential: "留空将继承原模型密钥；填写内容则使用新密钥。", createCopy: "创建副本",
     editDescription: "变更将应用到全部 {count} 个位置，模型本身保持不变。", addDescription: "在一个位置创建私有模型配置。", new: "新建模型",
