@@ -191,6 +191,14 @@ test("Story tree rows share distinct light-theme hover and selected states", () 
   assert.match(appStyles, /--sidebar-row-hover-bg: #eeeef2;[\s\S]*--sidebar-row-selected-bg: #e6e6ec;[\s\S]*--ai-session-row-hover-bg: var\(--sidebar-row-hover-bg\);[\s\S]*--ai-session-row-selected-bg: var\(--sidebar-row-selected-bg\);/);
 });
 
+test("Instance list rows reuse the story hover and selected states", () => {
+  const instanceList = read("src/apps/control-plane/instance-list/InstanceList.vue");
+  assert.match(instanceList, /\.instance-row:hover,\s*\.instance-row:focus-within \{\s*background: var\(--sidebar-row-hover-bg, var\(--surface-active\)\);\s*outline: none;\s*\}/);
+  assert.match(instanceList, /\.instance-row\.active,\s*\.instance-row\.active:hover,\s*\.instance-row\.active:focus-within \{\s*background: var\(--sidebar-row-selected-bg, var\(--surface-active\)\);\s*\}/);
+  assert.match(instanceList, /\.instance-row \{[^}]*border: 0;[^}]*border-radius: 6px;[^}]*background: transparent;/s);
+  assert.doesNotMatch(instanceList, /instance-list-row-(?:bg|border|hover-bg)/);
+});
+
 test("Story children animate when their tree is expanded or collapsed", () => {
   assert.match(storyView, /<Transition name="story-tree-collapse">[\s\S]*v-if="isStoryOpen\(story\)" class="story-tree-collapse"[\s\S]*class="story-tree-collapse-inner"/);
   assert.match(storyView, /\.story-tree-collapse \{[^}]*grid-template-rows:1fr;[^}]*transition:grid-template-rows 180ms ease,opacity 140ms ease;/);

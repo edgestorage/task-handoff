@@ -148,6 +148,10 @@ export const models = sqliteTable("cp_models", {
   labels: text("labels", { mode: "json" }).$type<Record<string, string>>().notNull(), ...timestamps,
 }, (table) => [index("cp_models_order_idx").on(table.order, table.name, table.id)]);
 
+export const modelLegacyProjections = sqliteTable("cp_model_legacy_projections", {
+  id: text("id").primaryKey(), modelId: text("model_id").notNull(), ...timestamps,
+}, (table) => [index("cp_model_legacy_projections_model_idx").on(table.modelId)]);
+
 export const chatBridges = sqliteTable("cp_chat_bridges", {
   id: text("id").primaryKey(), channel: text("channel").notNull(), name: text("name").notNull(),
   enabled: integer("enabled", { mode: "boolean" }).notNull(), credentialCiphertext: text("credential_ciphertext"),

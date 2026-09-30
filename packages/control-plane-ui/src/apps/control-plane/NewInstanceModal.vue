@@ -76,7 +76,7 @@
                   :git-source="selectedProject?.source.type === 'git-repository'"
                   :models="models.data.value || []"
                   :new-image="newImage"
-                  :nodes="nodes.data.value || []"
+                  :node-name="workspaceNodeName"
                   :runtime-draft="runtimeDraft"
                   :runtimes-for-selected-node="runtimesForSelectedNode"
                   :selected-runtime="selectedRuntime"
@@ -125,6 +125,7 @@ import { ScrollArea } from "../../components/ui/scroll-area";
 import RuntimeStep from "./new-instance/RuntimeStep.vue";
 import SourceStep from "./new-instance/SourceStep.vue";
 import { dockerDaemonDetails, nodePlatform, type DockerRuntimeCheckState } from "./new-instance/dockerRuntimeGuidance";
+import { defaultImageTag, resolveImageTag } from "./new-instance/imageTagSelection";
 import type { NodeFolderTreeNode } from "./new-instance/nodeFolderTree";
 import type { InstanceDraft, NewImageDraft, NewProjectDraft, ProjectFolderSelection, RuntimeDraft, SourceDraft, SourceMode, WizardStep } from "./new-instance/newInstanceTypes";
 import { nodeFolderSelectionMode, nodePathName } from "./nodePath";
@@ -252,7 +253,16 @@ const localPathPlaceholder = computed(() => (folderSelectionMode.value === "nati
 const runtimesForSelectedNode = computed(() => (nodeRuntimes.data.value || []).filter((runtime) => runtime.nodeId === runtimeDraft.nodeId));
 const selectedNode = computed(() => (nodes.data.value || []).find((node) => node.id === runtimeDraft.nodeId));
 const selectedNodePlatform = computed(() => nodePlatform(selectedNode.value));
+const controlPlaneDefaultNodeId = computed(() => {
+  const items = nodes.data.value || [];
+  return items.find((node) => node.labels[CONTROL_PLANE_LOCAL_NODE_LABEL] === "true")?.id || items[0]?.id || "";
+});
+const workspaceNodeId = computed(() => sourceDraft.mode === "project"
+  ? selectedProject.value?.defaultNodeId || controlPlaneDefaultNodeId.value
+  : sourceDraft.localNodeId || controlPlaneDefaultNodeId.value);
+const workspaceNodeName = computed(() => (nodes.data.value || []).find((node) => node.id === workspaceNodeId.value)?.name || "");
 const selectedRuntime = computed(() => runtimesForSelectedNode.value.find((runtime) => runtime.id === runtimeDraft.runtimeId));
+const selectedImageOption = computed(() => (imageOptions.data.value || []).find((image) => image.id === runtimeDraft.imageId));
 const selectedNodeAgentCapabilities = computed(() => {
   const agent = selectedNode.value?.capabilities.agent;
   return agent && typeof agent === "object" && !Array.isArray(agent)
@@ -310,7 +320,7 @@ const sourceBlockedReason = computed(() => {
 });
 const runtimeBlockedReason = computed(() => {
   if (!runtimeDraft.nodeId) {
-    return t("instances.create.blocked.node");
+    return t("instances.create.blocked.workspaceNode");
   }
   if (!runtimeDraft.runtimeId) {
     return t("instances.create.blocked.runtime");
@@ -402,12 +412,7 @@ watch(
     if (!runtimeDraft.imageId && imageItems[0]) {
       runtimeDraft.imageId = imageItems[0].id;
     }
-    const selected = imageItems.find((image) => image.id === runtimeDraft.imageId);
-    if (selected?.origin === "market" && !selected.availableTags.some((tag) => tag.name === runtimeDraft.imageTag && tag.status !== "yanked")) {
-      runtimeDraft.imageTag = selected.tag || selected.availableTags.find((tag) => tag.status !== "yanked")?.name || "";
-    } else if (selected?.origin !== "market") {
-      runtimeDraft.imageTag = "";
-    }
+    runtimeDraft.imageTag = resolveImageTag(imageItems.find((image) => image.id === runtimeDraft.imageId), runtimeDraft.imageTag);
   },
   { immediate: true },
 );
@@ -415,10 +420,7 @@ watch(
 watch(
   () => runtimeDraft.imageId,
   (imageId) => {
-    const selected = imageOptions.data.value?.find((image) => image.id === imageId);
-    runtimeDraft.imageTag = selected?.origin === "market"
-      ? selected.tag || selected.availableTags.find((tag) => tag.status !== "yanked")?.name || ""
-      : "";
+    runtimeDraft.imageTag = defaultImageTag((imageOptions.data.value || []).find((image) => image.id === imageId));
   },
 );
 
@@ -459,6 +461,16 @@ watch(
       sourceDraft.localPath = "";
     }
   },
+);
+
+watch(
+  workspaceNodeId,
+  (nodeId) => {
+    if (runtimeDraft.nodeId !== nodeId) {
+      runtimeDraft.nodeId = nodeId;
+    }
+  },
+  { immediate: true },
 );
 
 watch(
@@ -581,19 +593,17 @@ function previousStep() {
 }
 
 function deriveRuntimeDefaults() {
-  const firstNodeId = nodes.data.value?.[0]?.id || "";
   const firstImageId = imageOptions.data.value?.[0]?.id || "";
+  const nodeId = workspaceNodeId.value;
+  runtimeDraft.nodeId = nodeId;
+  runtimeDraft.runtimeId = runtimeIdForNode(nodeId, runtimeDraft.runtimeId);
   if (sourceDraft.mode === "project") {
     const project = selectedProject.value;
-    const nodeId = project?.defaultNodeId || runtimeDraft.nodeId || firstNodeId;
-    runtimeDraft.nodeId = nodeId;
-    runtimeDraft.runtimeId = runtimeIdForNode(nodeId, runtimeDraft.runtimeId);
     runtimeDraft.imageId = selectedRuntimeRequiresImage.value ? project?.defaultImageSelection?.imageId || runtimeDraft.imageId || firstImageId : "";
-    return;
+  } else {
+    runtimeDraft.imageId = selectedRuntimeRequiresImage.value ? runtimeDraft.imageId || firstImageId : "";
   }
-  runtimeDraft.nodeId = sourceDraft.localNodeId || runtimeDraft.nodeId || firstNodeId;
-  runtimeDraft.runtimeId = runtimeIdForNode(runtimeDraft.nodeId, runtimeDraft.runtimeId);
-  runtimeDraft.imageId = selectedRuntimeRequiresImage.value ? runtimeDraft.imageId || firstImageId : "";
+  runtimeDraft.imageTag = resolveImageTag(selectedImageOption.value, runtimeDraft.imageTag);
 }
 
 function ensureRuntimeForNode() {

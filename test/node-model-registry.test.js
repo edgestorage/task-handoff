@@ -66,35 +66,35 @@ test("node model registry keeps entity ids stable across edits and protects refe
   const codexHash = modelConfigHash(codexInput);
   const created = await request(app, "POST", "/api/node-agent/models", codexInput);
   assert.equal(created.statusCode, 201);
-  assert.equal(created.json().data.id, codexHash);
+  const codexId = created.json().data.id;
+  assert.match(codexId, /^mdl_[0-9abcdefghjkmnpqrstvwxyz]{13}$/);
+  assert.equal(created.json().data.revision, codexHash);
   assert.deepEqual(created.json().data.modelNames, [{ name: codexInput.model, order: 100 }]);
   assert.equal("key" in created.json().data, false);
 
   const storedDatabase = new DatabaseSync(path.join(dataDir, "node-agent.sqlite"), { readOnly: true });
-  const storedCodex = storedDatabase.prepare("SELECT key, model_names_json, protocols_json FROM na_models WHERE id = ?").get(codexHash);
+  const storedCodex = storedDatabase.prepare("SELECT key, model_names_json, protocols_json FROM na_models WHERE id = ?").get(codexId);
   assert.equal(storedCodex.key, codexInput.key);
   assert.deepEqual(JSON.parse(storedCodex.model_names_json), [{ name: codexInput.model, order: 100 }]);
   assert.deepEqual(JSON.parse(storedCodex.protocols_json), ["openai-responses"]);
   storedDatabase.close();
   assert.equal(fs.existsSync(path.join(dataDir, "models")), false);
 
-  const upgradedLegacy = await request(app, "PATCH", `/api/node-agent/models/${codexHash}`, { name: "Saved legacy model" });
+  const upgradedLegacy = await request(app, "PATCH", `/api/node-agent/models/${codexId}`, { name: "Saved legacy model" });
   assert.equal(upgradedLegacy.statusCode, 200);
-  assert.equal(upgradedLegacy.json().data.id, codexHash);
+  assert.equal(upgradedLegacy.json().data.id, codexId);
 
   const duplicate = await request(app, "POST", "/api/node-agent/models", { ...codexInput, name: "Same content" });
   assert.equal(duplicate.statusCode, 201);
-  assert.equal(duplicate.json().data.id, codexHash);
+  assert.equal(duplicate.json().data.id, codexId);
   assert.equal((await request(app, "GET", "/api/node-agent/models")).json().data.length, 1);
 
   assert.equal((await request(app, "GET", "/api/node-agent/models")).json().data.length, 1);
 
   const claudeInput = modelInput({ name: "Local Claude", key: "claude-secret", model: "claude-test", app: "claude", order: 200 });
-  const claudeHash = modelConfigHash(claudeInput);
-  assert.equal((await request(app, "POST", "/api/node-agent/models", claudeInput)).statusCode, 201);
+  const claudeId = (await request(app, "POST", "/api/node-agent/models", claudeInput)).json().data.id;
   const opencodeInput = modelInput({ name: "Local OpenCode", key: "opencode-secret", model: "openai-compatible-test", app: "opencode", order: 300 });
-  const opencodeHash = modelConfigHash(opencodeInput);
-  assert.equal((await request(app, "POST", "/api/node-agent/models", opencodeInput)).statusCode, 201);
+  const opencodeId = (await request(app, "POST", "/api/node-agent/models", opencodeInput)).json().data.id;
 
   const timestamp = new Date().toISOString();
   const deployInput = modelInput({ name: "Deployed Codex", key: "deployed-secret" });
@@ -112,21 +112,21 @@ test("node model registry keeps entity ids stable across edits and protects refe
 
   assert.equal((await request(app, "POST", "/api/node-agent/instances", instancePayload("inst_models", timestamp))).statusCode, 201);
   const wrongApp = await request(app, "PUT", "/api/node-agent/instances/inst_models/model-assignment", {
-    modelSelection: { claudeModelHash: codexHash }, claudeModelHash: codexHash,
+    modelSelection: { claudeModelHash: codexId }, claudeModelHash: codexId,
   });
   assert.equal(wrongApp.statusCode, 400);
   assert.equal(wrongApp.json().error.code, "NODE_MODEL_APP_MISMATCH");
 
   const assigned = await request(app, "PUT", "/api/node-agent/instances/inst_models/model-assignment", {
-    modelSelection: { codexModelHash: codexHash, claudeModelHash: claudeHash, opencodeModelHash: opencodeHash },
-    codexModelHash: codexHash,
-    claudeModelHash: claudeHash,
-    opencodeModelHash: opencodeHash,
+    modelSelection: { codexModelHash: codexId, claudeModelHash: claudeId, opencodeModelHash: opencodeId },
+    codexModelHash: codexId,
+    claudeModelHash: claudeId,
+    opencodeModelHash: opencodeId,
   });
   assert.equal(assigned.statusCode, 200);
   assert.deepEqual(assigned.json().data.instance.modelSelection, {
-    modelEntityIds: [codexHash, claudeHash, opencodeHash],
-    codexModelHash: codexHash, claudeModelHash: claudeHash, opencodeModelHash: opencodeHash,
+    modelEntityIds: [codexId, claudeId, opencodeId],
+    codexModelHash: codexId, claudeModelHash: claudeId, opencodeModelHash: opencodeId,
   });
   const assignedEnvironment = app.nodeAgentState.resolvedAssignedModelEnvironment("inst_models");
   assert.deepEqual({ ...assignedEnvironment, TASK_HANDOFF_OPENCODE_CONFIG_CONTENT: undefined }, {
@@ -141,9 +141,9 @@ test("node model registry keeps entity ids stable across edits and protects refe
   });
   assert.deepEqual(JSON.parse(assignedEnvironment.TASK_HANDOFF_OPENCODE_CONFIG_CONTENT), {
     $schema: "https://opencode.ai/config.json",
-    model: `task-handoff-${opencodeHash}/${opencodeInput.model}`,
+    model: `task-handoff-${opencodeId}/${opencodeInput.model}`,
     provider: {
-      [`task-handoff-${opencodeHash}`]: {
+      [`task-handoff-${opencodeId}`]: {
         npm: "@ai-sdk/openai-compatible",
         name: opencodeInput.name,
         options: { baseURL: opencodeInput.endpoint, apiKey: opencodeInput.key },
@@ -158,27 +158,27 @@ test("node model registry keeps entity ids stable across edits and protects refe
     },
   });
 
-  const rotated = await request(app, "PATCH", `/api/node-agent/models/${codexHash}`, { key: "rotated-secret" });
+  const rotated = await request(app, "PATCH", `/api/node-agent/models/${codexId}`, { key: "rotated-secret" });
   const rotatedHash = modelConfigHash({ ...codexInput, key: "rotated-secret" });
   assert.equal(rotated.statusCode, 200);
   // The entity keeps its identity: only the content revision advances.
-  assert.equal(rotated.json().data.id, codexHash);
+  assert.equal(rotated.json().data.id, codexId);
   assert.equal(rotated.json().data.revision, rotatedHash);
   assert.equal(app.nodeAgentState.resolvedAssignedModelEnvironment("inst_models").OPENAI_API_KEY, "rotated-secret");
-  assert.equal((await request(app, "GET", "/api/node-agent/models")).json().data.some((model) => model.id === codexHash), true);
+  assert.equal((await request(app, "GET", "/api/node-agent/models")).json().data.some((model) => model.id === codexId), true);
   assert.equal((await request(app, "GET", "/api/node-agent/models")).json().data.length, 4);
 
-  assert.equal((await request(app, "DELETE", `/api/node-agent/models/${codexHash}`)).statusCode, 409);
+  assert.equal((await request(app, "DELETE", `/api/node-agent/models/${codexId}`)).statusCode, 409);
   assert.equal((await request(app, "PUT", "/api/node-agent/instances/inst_models/model-assignment", {
     modelSelection: {},
   })).statusCode, 200);
-  assert.equal((await request(app, "DELETE", `/api/node-agent/models/${codexHash}`)).statusCode, 200);
+  assert.equal((await request(app, "DELETE", `/api/node-agent/models/${codexId}`)).statusCode, 200);
 
   assert.equal(fs.existsSync(path.join(dataDir, "model-assignments")), false);
 
   await app.close();
   app = await createNodeAgentApp({ dataDir, logger: false, token: "agent-secret", nodeId: "node_a" });
-  assert.equal((await request(app, "GET", "/api/node-agent/models")).json().data.some((model) => model.id === codexHash), false);
+  assert.equal((await request(app, "GET", "/api/node-agent/models")).json().data.some((model) => model.id === codexId), false);
 });
 
 test("node model registry merges a superseded entity into its successor", async (t) => {
@@ -187,11 +187,13 @@ test("node model registry merges a superseded entity into its successor", async 
   t.after(async () => app.close());
 
   const ghostInput = modelInput({ name: "Legacy copy", key: "legacy-secret", model: "gpt-legacy" });
-  const ghostId = modelConfigHash(ghostInput);
-  assert.equal((await request(app, "POST", "/api/node-agent/models", ghostInput)).statusCode, 201);
+  const ghostCreated = await request(app, "POST", "/api/node-agent/models", ghostInput);
+  assert.equal(ghostCreated.statusCode, 201);
+  const ghostId = ghostCreated.json().data.id;
   const targetInput = modelInput({ name: "Legacy copy", key: "legacy-secret", model: "gpt-successor" });
-  const targetId = modelConfigHash(targetInput);
-  assert.equal((await request(app, "POST", "/api/node-agent/models", targetInput)).statusCode, 201);
+  const targetCreated = await request(app, "POST", "/api/node-agent/models", targetInput);
+  assert.equal(targetCreated.statusCode, 201);
+  const targetId = targetCreated.json().data.id;
 
   const timestamp = new Date().toISOString();
   assert.equal((await request(app, "POST", "/api/node-agent/instances", instancePayload("inst_merge", timestamp))).statusCode, 201);

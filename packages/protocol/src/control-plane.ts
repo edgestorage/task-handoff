@@ -1125,6 +1125,10 @@ export const ModelLocationSchema = z.discriminatedUnion("type", [
     order: ModelConfigSchema.shape.order,
     referenceCount: z.number().int().min(0),
     revision: z.string().trim().min(1).max(160).optional(),
+    // Compatibility for v0.0.34: nodes without stable model identities store a
+    // control-plane entity under its legacy content-hash projection. Absent
+    // means the replica uses the group id.
+    replicaId: IdSchema.optional(),
   }).strict(),
 ]);
 
@@ -1218,6 +1222,74 @@ export function modelConfigHash(input: Pick<z.infer<typeof ModelConfigSchema>, "
     model: ModelConfigSchema.shape.model.parse(input.model),
   };
   return `mdl_${crypto.createHash("sha256").update(JSON.stringify(canonical)).digest("hex")}`;
+}
+
+// Entity ids are opaque identities. New records mint a short time-ordered id
+// (41 bits of milliseconds since the epoch plus 23 random bits: one complete
+// 64-bit snowflake) while modelConfigHash stays the content revision and the
+// projection id used by nodes that predate stable model identities. The
+// payload encodes the whole 64-bit value as 13 lower-case Crockford base32
+// symbols, ULID-style: Crockford never emits "=" padding, and the fixed width
+// keeps ids lexicographically ordered by their millisecond prefix. The
+// alphabet never mixes case because ids double as file names, Docker tags, and
+// provider env var segments: folding an id to lower case or a DNS-safe
+// character set must stay lossless. The random low bits replace the snowflake
+// worker/sequence pair because control-plane and node-agent hosts share no
+// worker registry; same-process bursts are deduplicated, and a cross-host
+// collision needs two writers to draw the same 23 random bits in the same
+// millisecond.
+const ENTITY_ID_EPOCH_MS = Date.UTC(2026, 0, 1);
+const ENTITY_ID_TIMESTAMP_BITS = 41n;
+const ENTITY_ID_RANDOM_BITS = 23n;
+// 5 bits per symbol: a full 64-bit value needs ceil(64 / 5) = 13 symbols.
+const ENTITY_ID_PAYLOAD_LENGTH = 13;
+// Crockford base32 without the ambiguous i/l/o/u, lower case only.
+const ENTITY_ID_ALPHABET = "0123456789abcdefghjkmnpqrstvwxyz";
+const MODEL_CONFIG_HASH_ID_PATTERN = /^mdl_[0-9a-f]{64}$/;
+
+function encodeEntityIdPayload(value: bigint, length: number) {
+  const digits: string[] = [];
+  let current = value;
+  while (current > 0n) {
+    digits.unshift(ENTITY_ID_ALPHABET[Number(current % 32n)]);
+    current /= 32n;
+  }
+  return `${"0".repeat(Math.max(0, length - digits.length))}${digits.join("")}`;
+}
+
+let mintedEntityIds: { timestamp: bigint; random: Set<bigint> } | undefined;
+
+function drawEntityIdRandom(timestamp: bigint) {
+  if (mintedEntityIds?.timestamp !== timestamp) mintedEntityIds = { timestamp, random: new Set() };
+  for (;;) {
+    const random = BigInt(crypto.randomBytes(3).readUIntBE(0, 3)) >> 1n;
+    if (!mintedEntityIds.random.has(random)) {
+      mintedEntityIds.random.add(random);
+      return random;
+    }
+  }
+}
+
+/**
+ * Mint the id for a new entity record, following the project-wide short id
+ * scheme: `<prefix>_` plus a fixed-length lower-case base32 payload that
+ * encodes one complete 64-bit snowflake whose high bits are the millisecond
+ * timestamp, so ids sort by creation time and never depend on character case.
+ */
+export function createEntityId(prefix: string, now = Date.now()) {
+  const timestamp = BigInt(Math.max(0, now - ENTITY_ID_EPOCH_MS)) & ((1n << ENTITY_ID_TIMESTAMP_BITS) - 1n);
+  const random = drawEntityIdRandom(timestamp);
+  return `${prefix}_${encodeEntityIdPayload((timestamp << ENTITY_ID_RANDOM_BITS) | random, ENTITY_ID_PAYLOAD_LENGTH)}`;
+}
+
+export function createModelEntityId(now = Date.now()) {
+  return createEntityId("mdl", now);
+}
+
+// Compatibility for v0.0.34: released writers deploy control-plane models under
+// their content hash, which is the only id shape those nodes accept.
+export function isModelConfigHashId(value: string) {
+  return MODEL_CONFIG_HASH_ID_PATTERN.test(value);
 }
 
 export const ImageOriginSchema = z.enum(["market", "custom"]);

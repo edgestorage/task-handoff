@@ -14,6 +14,7 @@ import { now } from "../application/helpers.ts";
 import { publicInstanceWithAccess } from "../public-records.ts";
 import { createId } from "../../shared/persistence/store.ts";
 import type { ControlPlaneGitCredentialService } from "../git-credentials/service.ts";
+import type { PreparedModelAssignment } from "../models/service.ts";
 
 type ControlledInstanceCreatorOptions = {
   gateway: ControlPlaneNodeAgentGateway;
@@ -26,7 +27,8 @@ type ControlledInstanceCreatorOptions = {
   prepareModels: (
     node: Node,
     selection: { modelEntityIds?: string[]; codexModelHash?: string | null; claudeModelHash?: string | null; opencodeModelHash?: string | null },
-  ) => Promise<unknown>;
+  ) => Promise<PreparedModelAssignment>;
+  retireSupersededModels: (node: Node, assignment: PreparedModelAssignment) => Promise<void>;
   gitCredentials: ControlPlaneGitCredentialService;
 };
 
@@ -161,6 +163,7 @@ export class ControlledInstanceCreator {
         );
       }
       assigned = (await this.options.gateway.assignInstanceModels(node, instance.id, preparedModels)).instance;
+      await this.options.retireSupersededModels(node, preparedModels);
       if (codexSettings !== undefined) {
         assigned = await this.options.gateway.updateInstance(node, instance.id, {
           config: { codexSettings },

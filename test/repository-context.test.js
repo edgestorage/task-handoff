@@ -63,13 +63,25 @@ test("repository context distinguishes unavailable, non-worktree, unborn, detach
   });
   assert.equal((await service.resolveAiSession("missing")).context.availability, "session-not-found");
   assert.equal((await service.resolveAiSession("inaccessible")).context.availability, "cwd-inaccessible");
-  assert.equal((await service.resolveAiSession("plain")).context.availability, "not-worktree");
+  const plain = await service.resolveAiSession("plain");
+  assert.equal(plain.context.availability, "not-worktree");
+  assert.equal(plain.context.repositoryRoot, fs.realpathSync(fixture.base));
+  assert.equal(plain.context.displayName, path.basename(fs.realpathSync(fixture.base)));
+  assert.equal(plain.worktreeRoot, fs.realpathSync(fixture.base));
+  assert.deepEqual(plain.changes.entries, []);
+  assert.deepEqual(plain.changes.summary, { conflicts: 0, staged: 0, unstaged: 0, untracked: 0 });
+  assert.equal(plain.context.snapshotId, plain.changes.snapshotId);
   assert.equal((await service.resolveAiSession("unborn")).context.head.state, "unborn");
   assert.equal((await service.resolveAiSession("stopped")).context.availability, "session-inactive");
+  assert.equal((await service.resolveAiSession("plain")).worktreeRoot, plain.worktreeRoot);
 
   fixture.git(["checkout", "--detach"]);
   assert.equal((await resolver({ detached: { cwd: fixture.root, status: "running" } }).resolveAiSession("detached")).context.head.state, "detached");
-  assert.equal((await resolver({ repo: { cwd: fixture.root, status: "running" } }, {}, { gitCommand: path.join(fixture.base, "missing-git") }).resolveAiSession("repo")).context.availability, "git-unavailable");
+  const withoutGit = await resolver({ repo: { cwd: fixture.root, status: "running" } }, {}, { gitCommand: path.join(fixture.base, "missing-git") }).resolveAiSession("repo");
+  assert.equal(withoutGit.context.availability, "git-unavailable");
+  assert.equal(withoutGit.context.repositoryRoot, fs.realpathSync(fixture.root));
+  assert.equal(withoutGit.context.head, undefined);
+  assert.deepEqual(withoutGit.changes.entries, []);
 });
 
 test("app repository context uses workspace cwd through stop and disappears on delete", async () => {

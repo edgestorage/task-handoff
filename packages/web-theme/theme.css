@@ -82,9 +82,6 @@
     --control-plane-status-online-shadow: 0 0 14px var(--focus-ring);
     --control-plane-status-offline: var(--status-warning);
     --control-plane-status-danger: var(--status-danger);
-    --instance-list-row-bg: transparent;
-    --instance-list-row-hover-bg: hsl(190 25% 91%);
-    --instance-list-row-border: var(--line);
     --instance-list-title: hsl(197 31% 18%);
     --instance-list-meta: hsl(194 13% 36%);
     --instance-list-empty-bg: var(--surface-inset);
@@ -343,9 +340,6 @@
     --control-plane-status-online-shadow: 0 0 14px rgb(49 198 182 / 58%);
     --control-plane-status-offline: #ffb86b;
     --control-plane-status-danger: #ff8d8d;
-    --instance-list-row-bg: transparent;
-    --instance-list-row-hover-bg: #173038;
-    --instance-list-row-border: #2b424a;
     --instance-list-title: #f3fbfc;
     --instance-list-meta: #8da3aa;
     --instance-list-empty-bg: #0b171d;

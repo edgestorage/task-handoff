@@ -32,7 +32,7 @@ test("v0.0.21 instance reports keep their released app inventory requirement", (
   }).success, true);
 });
 
-test("model identity is a stable canonical content hash", () => {
+test("model content revision stays the canonical hash used by legacy node projections", () => {
   assert.equal(modelConfigHash(spec), id);
   assert.equal(modelConfigHash({ ...spec, key: "rotated" }) === id, false);
   assert.match(id, /^mdl_[a-f0-9]{64}$/);

@@ -129,6 +129,72 @@ test("AI and app repository APIs use separate authoritative cwd and strict input
   }
 });
 
+test("repository API browses plain directories while every Git operation stays gated", async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-plain-workspace-"));
+  fs.mkdirSync(path.join(workspace, "src"));
+  fs.writeFileSync(path.join(workspace, "src", "index.ts"), "export const value = 1;\n");
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-repository-api-plain-"));
+  const paths = pathsFor(dataRoot);
+  const restore = setEnvironment(paths, workspace);
+  const aiSessions = createAiSessionRegistry({ dir: path.join(dataRoot, "ai-sessions") });
+  const ai = aiSessions.start({ agent: "codex", creationSource: "ai-session", cwd: workspace, status: "running" });
+  const app = await createWebApp({ staticDir: path.join(dataRoot, "missing-static"), logger: false, appRuntime: new AppRuntimeManager(paths), aiSessionRegistry: aiSessions, codexAppServer: codexBridgeStub() });
+  try {
+    const base = `/api/ai-sessions/${ai.id}/repository`;
+    const context = await app.inject({ method: "GET", url: `${base}/context` });
+    assert.equal(context.statusCode, 200);
+    assert.equal(context.json().data.availability, "not-worktree");
+    assert.equal(context.json().data.repositoryRoot, fs.realpathSync(workspace));
+    assert.equal(context.json().data.displayName, path.basename(fs.realpathSync(workspace)));
+
+    const directory = await app.inject({ method: "GET", url: `${base}/directories` });
+    assert.equal(directory.statusCode, 200);
+    assert.deepEqual(directory.json().data.entries.map((entry) => entry.name), ["src"]);
+    const file = await app.inject({ method: "GET", url: `${base}/files?path=${encodeURIComponent("src/index.ts")}` });
+    assert.equal(file.statusCode, 200);
+    assert.equal(file.json().data.content, "export const value = 1;\n");
+    const search = await app.inject({ method: "GET", url: `${base}/files/search?query=${encodeURIComponent("index")}` });
+    assert.deepEqual(search.json().data.entries.map((entry) => entry.path), ["src/index.ts"]);
+    const changes = await app.inject({ method: "GET", url: `${base}/changes` });
+    assert.equal(changes.statusCode, 200);
+    assert.deepEqual(changes.json().data.entries, []);
+    assert.deepEqual(changes.json().data.summary, { conflicts: 0, staged: 0, unstaged: 0, untracked: 0 });
+
+    const created = await app.inject({
+      method: "POST", url: `${base}/files`,
+      payload: { path: "src/created.ts", content: "created\n", expectedAbsent: true, expectedSnapshotId: context.json().data.snapshotId },
+    });
+    assert.equal(created.statusCode, 200);
+    assert.equal(created.json().data.file.path, "src/created.ts");
+    assert.equal(created.json().data.changes.entries.length, 0);
+    assert.equal(fs.readFileSync(path.join(workspace, "src", "created.ts"), "utf8"), "created\n");
+
+    const rewritten = await app.inject({
+      method: "PUT", url: `${base}/files`,
+      payload: { path: "src/created.ts", content: "rewritten\n", expectedVersion: created.json().data.file.version, expectedSnapshotId: created.json().data.snapshotId },
+    });
+    assert.equal(rewritten.statusCode, 200);
+    assert.equal(rewritten.json().data.file.content, "rewritten\n");
+
+    const escaped = await app.inject({ method: "GET", url: `${base}/files?path=${encodeURIComponent("../outside.txt")}` });
+    assert.equal(escaped.statusCode, 400);
+    assert.equal(escaped.json().error.code, "REPOSITORY_PATH_INVALID");
+
+    const staged = await app.inject({
+      method: "POST", url: `${base}/index/stage`,
+      payload: { expectedSnapshotId: created.json().data.snapshotId, paths: [{ path: "src/created.ts", expectedVersion: rewritten.json().data.file.version }] },
+    });
+    assert.equal(staged.statusCode, 400);
+    assert.equal(staged.json().error.code, "REPOSITORY_NOT_WORKTREE");
+    const diff = await app.inject({ method: "GET", url: `${base}/diff?scope=untracked&path=${encodeURIComponent("src/created.ts")}` });
+    assert.equal(diff.statusCode, 400);
+    assert.equal(diff.json().error.code, "REPOSITORY_NOT_WORKTREE");
+  } finally {
+    await app.close();
+    restore();
+  }
+});
+
 test("repository API exposes Files, Changes, diff, and authoritative mutation results", async () => {
   const fixture = createGitFixture();
   fixture.write("tracked.txt", "changed\n");

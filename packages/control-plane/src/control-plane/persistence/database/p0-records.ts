@@ -68,6 +68,19 @@ export const ModelRecordSchema = z.object({
   updatedAt: TimestampSchema,
 }).strict();
 
+/**
+ * Compatibility for v0.0.34: nodes without stable model identities store a
+ * control-plane entity under the content hash of whatever content was deployed
+ * to them. The mapping back to the entity is not derivable once the entity
+ * content changes, so deployments record it until those nodes are updated.
+ */
+export const ModelLegacyProjectionRecordSchema = z.object({
+  id: IdSchema,
+  modelId: IdSchema,
+  createdAt: TimestampSchema,
+  updatedAt: TimestampSchema,
+}).strict();
+
 export const ChatBridgeRecordSchema = z.object({
   id: IdSchema,
   channel: z.enum(["web", "telegram", "wechat", "dingding", "lark"]),
@@ -146,6 +159,7 @@ export const GitAuditRecordSchema = z.object({
 export type NodeConfigRecord = z.infer<typeof NodeConfigRecordSchema>;
 export type PairingRevokeRecord = z.infer<typeof PairingRevokeRecordSchema>;
 export type ModelRecord = z.infer<typeof ModelRecordSchema>;
+export type ModelLegacyProjectionRecord = z.infer<typeof ModelLegacyProjectionRecordSchema>;
 export type ChatBridgeRecord = z.infer<typeof ChatBridgeRecordSchema>;
 export type ChatSessionRecord = z.infer<typeof ChatSessionRecordSchema>;
 export type GitCredentialRecord = z.infer<typeof GitCredentialRecordSchema>;
@@ -157,6 +171,7 @@ export const p0RecordSchemas = {
   nodes: NodeConfigRecordSchema,
   pairingRevocations: PairingRevokeRecordSchema,
   models: ModelRecordSchema,
+  modelLegacyProjections: ModelLegacyProjectionRecordSchema,
   chatBridges: ChatBridgeRecordSchema,
   chatSessions: ChatSessionRecordSchema,
   gitCredentials: GitCredentialRecordSchema,

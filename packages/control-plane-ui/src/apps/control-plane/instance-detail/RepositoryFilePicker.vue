@@ -41,8 +41,8 @@ defineEmits<{ "update:open": [value: boolean]; "update:search": [value: string] 
 </script>
 
 <style scoped>
-:global([data-reka-popper-content-wrapper] > .repository-file-picker-popover) { width: min(360px, calc(100vw - 24px)); height: min(620px, var(--reka-popover-content-available-height, calc(100vh - 24px))); max-height: var(--reka-popover-content-available-height, calc(100vh - 24px)); border-color: var(--line-subtle); background: var(--surface); color: var(--text); overflow: hidden; }
-.repository-file-picker { display: grid; width: 100%; height: 100%; min-height: 0; grid-template-rows: auto minmax(0, 1fr); }
+:global([data-reka-popper-content-wrapper] > .repository-file-picker-popover) { width: min(300px, calc(100vw - 24px)); border-color: var(--line-subtle); background: var(--surface); color: var(--text); overflow: hidden; }
+.repository-file-picker { display: grid; width: 100%; min-height: 0; max-height: min(400px, var(--reka-popover-content-available-height, calc(100vh - 24px))); grid-template-rows: auto minmax(0, 1fr); }
 .repository-file-picker-toolbar { display: flex; min-width: 0; align-items: center; gap: 6px; border-bottom: 1px solid var(--line-subtle); padding: 6px; }
 .repository-file-picker-search { display: flex; min-width: 0; min-height: 30px; flex: 1 1 auto; align-items: center; gap: 6px; border: 1px solid var(--line-subtle); border-radius: 5px; background: var(--surface-inset); color: var(--text-muted); padding: 0 8px; }
 .repository-file-picker-search:focus-within { border-color: var(--brand-accent); }

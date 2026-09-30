@@ -254,6 +254,7 @@ export const instances = {
     blocked: {
       repository: "Select a repository.",
       node: "Select a node.",
+      workspaceNode: "No node is available for this workspace. Connect a node first.",
       localFolder: "Select or choose a local folder.",
       runtime: "Select a runtime.",
       dockerChecking: "Checking the Docker daemon on the selected node.",

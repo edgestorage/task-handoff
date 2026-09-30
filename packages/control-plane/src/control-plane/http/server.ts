@@ -19,6 +19,10 @@ import { DEFAULT_MAINTENANCE_INTERVAL_MS } from "@task-handoff/core/storage/rete
 import { SESSION_STREAM_PROTOCOL_VERSION, SessionStreamsHelloEventType, aiSessionTransientSubscriptionAccepts, type AiSessionTransientSubscription, type EventEnvelope } from "@task-handoff/protocol/events";
 import { CONTROL_PLANE_SESSION_COOKIE, ControlPlaneAuth, type ControlPlaneAuthOptions } from "../auth/service.ts";
 import { ControlPlaneService, type ControlPlaneServiceOptions } from "../application/service.ts";
+import {
+  DEFAULT_MARKET_CATALOG_REFRESH_INTERVAL_MS,
+  DEFAULT_MARKET_CATALOG_URL,
+} from "../catalog/remote-market.ts";
 import { ControlPlaneChatGatewayRuntime } from "../chat/gateway/runtime.ts";
 import { ControlPlaneEventBus } from "../events/bus.ts";
 import { AiSessionAttachmentStore } from "../sessions/ai-session-attachments.ts";
@@ -139,6 +143,24 @@ function nodeStateProjection(node: Node & {
 function optionalEnv(name: string) {
   const value = process.env[name]?.trim();
   return value || undefined;
+}
+
+export function marketCatalogOptionsFromEnv(): ControlPlaneServiceOptions["marketCatalog"] {
+  const configuredUrl = process.env.TASK_HANDOFF_MARKET_CATALOG_URL?.trim();
+  const disabled = configuredUrl !== undefined && ["", "0", "off", "false", "disabled"].includes(configuredUrl.toLowerCase());
+  if (disabled) return undefined;
+
+  const refreshInterval = process.env.TASK_HANDOFF_MARKET_REFRESH_INTERVAL;
+  const refreshSeconds = refreshInterval === undefined ? undefined : Number(refreshInterval);
+  return {
+    url: configuredUrl || DEFAULT_MARKET_CATALOG_URL,
+    publicKey: optionalEnv("TASK_HANDOFF_MARKET_CATALOG_PUBLIC_KEY"),
+    keyId: optionalEnv("TASK_HANDOFF_MARKET_CATALOG_KEY_ID"),
+    allowedRepositoryPrefixes: optionalEnv("TASK_HANDOFF_MARKET_ALLOWED_REPOSITORIES")?.split(",").map((entry) => entry.trim()).filter(Boolean),
+    refreshIntervalMs: refreshSeconds === undefined
+      ? DEFAULT_MARKET_CATALOG_REFRESH_INTERVAL_MS
+      : (Number.isFinite(refreshSeconds) && refreshSeconds > 0 ? refreshSeconds * 1000 : 0),
+  };
 }
 
 const packageVersion = packageVersionResolver("@task-handoff/control-plane");
@@ -1133,7 +1155,13 @@ export async function runControlPlaneServer(options: RunControlPlaneServerOption
     port: options.port,
   });
   try {
-    const app = await createControlPlaneApp(options);
+    const app = await createControlPlaneApp({
+      ...options,
+      service: {
+        ...options.service,
+        marketCatalog: options.service?.marketCatalog ?? marketCatalogOptionsFromEnv(),
+      },
+    });
     app.addHook("onClose", async () => {
       lock.release();
     });

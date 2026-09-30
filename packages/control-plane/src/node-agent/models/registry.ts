@@ -8,6 +8,8 @@ import {
   NodeModelPublicRecordSchema,
   UpdateNodeModelAssignmentSchema,
   UpdateNodeModelSchema,
+  createModelEntityId,
+  isModelConfigHashId,
   modelConfigHash,
   type ControlledInstance,
   type NodeModelConfig,
@@ -70,8 +72,15 @@ export class NodeModelRegistry {
     const timestamp = now();
     const modelNames = normalizeModelNames(input.modelNames, input.model);
     const normalizedInput = { ...input, model: modelNames[0].name, modelNames, protocols: input.protocols?.length ? input.protocols : defaultProtocols(input.app) };
-    const id = modelConfigHash(normalizedInput);
-    const current = this.models.get(id);
+    // Entity identity is opaque and stable. Re-adding the same content still
+    // converges on the existing entity, but a new record mints a short id.
+    const contentHash = modelConfigHash(normalizedInput);
+    const current = this.models.list().find((model) => modelConfigHash(model) === contentHash);
+    let id = current?.id;
+    if (!id) {
+      id = createModelEntityId();
+      while (this.models.get(id)) id = createModelEntityId();
+    }
     const model = NodeModelConfigSchema.parse({
       ...normalizedInput,
       id,
@@ -89,10 +98,11 @@ export class NodeModelRegistry {
     const existing = this.models.get(input.id);
     const modelNames = normalizeModelNames(input.modelNames, input.model);
     const normalizedInput = { ...input, model: modelNames[0].name, modelNames, protocols: input.protocols?.length ? input.protocols : defaultProtocols(input.app) };
-    if (input.id !== expectedHash && !existing) {
-      // Ids are stable entity identities. An unknown id is only acceptable when
-      // it still matches the content hash, which keeps legacy writers working
-      // while allowing in-place revisions of entities this node already owns.
+    if (input.id !== expectedHash && !existing && isModelConfigHashId(input.id)) {
+      // Compatibility for v0.0.34: released control planes deploy under the
+      // content hash, so a hash-shaped unknown id must still match its content.
+      // Current writers mint opaque entity ids, which are accepted as-is;
+      // in-place revisions of entities this node already owns stay allowed.
       throw Object.assign(new Error(`Model content hash ${expectedHash} does not match ${input.id}.`), { statusCode: 400, code: "NODE_MODEL_HASH_MISMATCH" });
     }
     const stored = this.models.put(NodeModelConfigSchema.parse({

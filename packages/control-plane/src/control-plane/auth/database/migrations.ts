@@ -244,10 +244,22 @@ export const sqliteMigrations = [
   migration("0002_p0_persistence", sqliteP0Persistence),
   migration("0003_p0_pairing_revoke_phase", "ALTER TABLE cp_node_pairing_revocations ADD COLUMN phase TEXT NOT NULL DEFAULT 'pending-compensation';"),
   migration("0004_p0_chat_credential_metadata", `ALTER TABLE cp_chat_bridges ADD COLUMN credential_metadata TEXT NOT NULL DEFAULT '{"tokenSet":false,"clientSecretSet":false,"appSecretSet":false}';`),
+  migration("0005_model_legacy_projections", `
+CREATE TABLE cp_model_legacy_projections (
+  id TEXT PRIMARY KEY NOT NULL, model_id TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE INDEX cp_model_legacy_projections_model_idx ON cp_model_legacy_projections(model_id);
+`),
 ];
 export const postgresqlMigrations = [
   migration("0001_user_access", postgresqlInitial),
   migration("0002_p0_persistence", postgresqlP0Persistence),
   migration("0003_p0_pairing_revoke_phase", "ALTER TABLE cp_node_pairing_revocations ADD COLUMN phase TEXT NOT NULL DEFAULT 'pending-compensation';"),
   migration("0004_p0_chat_credential_metadata", `ALTER TABLE cp_chat_bridges ADD COLUMN credential_metadata JSONB NOT NULL DEFAULT '{"tokenSet":false,"clientSecretSet":false,"appSecretSet":false}'::jsonb;`),
+  migration("0005_model_legacy_projections", `
+CREATE TABLE cp_model_legacy_projections (
+  id TEXT PRIMARY KEY NOT NULL, model_id TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE INDEX cp_model_legacy_projections_model_idx ON cp_model_legacy_projections(model_id);
+`),
 ];

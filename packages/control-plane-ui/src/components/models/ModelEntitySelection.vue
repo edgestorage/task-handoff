@@ -111,9 +111,23 @@ const { t } = useI18n();
 const eligibleModels = computed(() => props.models
   .filter((model) => model.enabled && model.locations?.some((location) => location.enabled && (location.type === "control-plane" || location.nodeId === props.nodeId)))
   .sort((a, b) => a.order - b.order || a.name.localeCompare(b.name) || a.id.localeCompare(b.id)));
-const modelById = computed(() => new Map(props.models.map((model) => [model.id, model])));
+// Nodes without stable model identities store the replica under its content-hash
+// projection, so instance selections can reference either that projection or the
+// canonical entity id.
+const modelById = computed(() => {
+  const index = new Map<string, ModelConfig>();
+  for (const model of props.models) {
+    if (!index.has(model.id)) index.set(model.id, model);
+    const replicaId = model.locations?.map((location) => location.type === "node" && location.nodeId === props.nodeId ? location.replicaId : undefined).find(Boolean);
+    if (replicaId && !index.has(replicaId)) index.set(replicaId, model);
+  }
+  return index;
+});
+function canonicalModelId(id: string) {
+  return modelById.value.get(id)?.id || id;
+}
 const selectedModels = computed(() => props.modelValue.map((id) => modelById.value.get(id)).filter((model): model is ModelConfig => Boolean(model)));
-const selectedIds = computed(() => new Set(props.modelValue));
+const selectedIds = computed(() => new Set(props.modelValue.map(canonicalModelId)));
 const availableModels = computed(() => eligibleModels.value.filter((model) => !selectedIds.value.has(model.id)));
 const draggingModelId = ref("");
 const dragTargetModelId = ref("");
@@ -128,14 +142,16 @@ function add(id: string) {
 }
 
 function remove(id: string) {
-  emit("update:modelValue", props.modelValue.filter((candidate) => candidate !== id));
+  const canonical = canonicalModelId(id);
+  emit("update:modelValue", props.modelValue.filter((candidate) => canonicalModelId(candidate) !== canonical));
 }
 
 function move(id: string, delta: -1 | 1) {
-  const index = props.modelValue.indexOf(id);
-  const adjacentModel = selectedModels.value[selectedModels.value.findIndex((model) => model.id === id) + delta];
+  const canonical = canonicalModelId(id);
+  const index = props.modelValue.findIndex((candidate) => canonicalModelId(candidate) === canonical);
+  const adjacentModel = selectedModels.value[selectedModels.value.findIndex((model) => model.id === canonical) + delta];
   if (index < 0 || !adjacentModel) return;
-  const target = props.modelValue.indexOf(adjacentModel.id);
+  const target = props.modelValue.findIndex((candidate) => canonicalModelId(candidate) === adjacentModel.id);
   if (target < 0) return;
   const next = [...props.modelValue];
   [next[index], next[target]] = [next[target], next[index]];
@@ -215,8 +231,8 @@ function dragStyle(index: number) {
 function commitDrag() {
   const sourceId = draggingModelId.value;
   const targetId = dragTargetModelId.value;
-  const sourceIndex = props.modelValue.indexOf(sourceId);
-  const targetIndex = props.modelValue.indexOf(targetId);
+  const sourceIndex = props.modelValue.findIndex((candidate) => canonicalModelId(candidate) === sourceId);
+  const targetIndex = props.modelValue.findIndex((candidate) => canonicalModelId(candidate) === targetId);
   if (sourceIndex >= 0 && targetIndex >= 0 && sourceIndex !== targetIndex) {
     const next = [...props.modelValue];
     const [moved] = next.splice(sourceIndex, 1);

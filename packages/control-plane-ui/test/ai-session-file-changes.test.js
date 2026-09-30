@@ -39,6 +39,38 @@ test("normalizes OpenCode patch metadata and raw edit diffs", () => {
   assert.deepEqual(raw, [{ path: "/workspace/b.ts", diff: "-before\n+after" }]);
 });
 
+test("renders Codex added and deleted files from their full content", () => {
+  const added = aiSessionFileChanges(activity({
+    output: JSON.stringify([{ path: "/workspace/new.ts", kind: { type: "add" }, diff: "line one\nline two\n" }]),
+  }));
+  assert.deepEqual(added, [{ path: "/workspace/new.ts", kind: "add", diff: "@@ -0,0 +1,2 @@\n+line one\n+line two" }]);
+  assert.deepEqual(parseAiSessionDiff(added[0].diff), [
+    { kind: "addition", content: "line one", newLine: 1 },
+    { kind: "addition", content: "line two", newLine: 2 },
+  ]);
+
+  const removed = aiSessionFileChanges(activity({
+    output: JSON.stringify([{ path: "/workspace/old.ts", kind: { type: "delete" }, diff: "line one\nline two" }]),
+  }));
+  assert.deepEqual(removed, [{ path: "/workspace/old.ts", kind: "delete", diff: "@@ -1,2 +0,0 @@\n-line one\n-line two" }]);
+  assert.deepEqual(parseAiSessionDiff(removed[0].diff), [
+    { kind: "deletion", content: "line one", oldLine: 1 },
+    { kind: "deletion", content: "line two", oldLine: 2 },
+  ]);
+});
+
+test("reads nested Codex file change content and unified diffs", () => {
+  const added = aiSessionFileChanges(activity({
+    output: JSON.stringify([{ path: "/workspace/new.ts", kind: { type: "add", content: "hello\n" } }]),
+  }));
+  assert.deepEqual(added, [{ path: "/workspace/new.ts", kind: "add", diff: "@@ -0,0 +1,1 @@\n+hello" }]);
+
+  const updated = aiSessionFileChanges(activity({
+    output: JSON.stringify([{ path: "/workspace/a.ts", kind: { type: "update", unified_diff: "@@ -1 +1 @@\n-old\n+new" } }]),
+  }));
+  assert.deepEqual(updated, [{ path: "/workspace/a.ts", kind: "update", diff: "@@ -1 +1 @@\n-old\n+new" }]);
+});
+
 test("parses unified diff line numbers while excluding patch metadata", () => {
   const lines = parseAiSessionDiff([
     "diff --git a/a.ts b/a.ts",

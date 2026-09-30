@@ -61,6 +61,7 @@
           <Button v-if="activeTab && !openingFilePath" variant="ghost" size="icon" :disabled="fileActionPending" :aria-label="t('repository.workspace.rename')" :title="t('repository.workspace.rename')" @click="openRenameDialog(activeTab)"><PencilLine :size="14" /></Button>
           <Button v-if="activeTab && !openingFilePath" variant="ghost" size="icon" :disabled="fileActionPending" :aria-label="t('repository.workspace.delete')" :title="t('repository.workspace.delete')" @click="openDeleteDialog(activeTab)"><Trash2 :size="14" /></Button>
           <Button
+            v-if="gitBacked"
             variant="ghost"
             size="icon"
             class="repository-workspace-view-switch"
@@ -202,6 +203,9 @@ function openChangesReview() {
 
 const queryClient = useQueryClient();
 const target = computed(() => ({ instanceId: props.instanceId, sessionKind: props.sessionKind, sessionId: props.sessionId }));
+// The file manager serves plain directories too; Git-only affordances stay hidden
+// until the workspace resolves to a real worktree.
+const gitBacked = computed(() => props.context.availability === "available");
 const directories = ref<Map<string, RepositoryDirectoryListing>>(new Map());
 const expandedPaths = ref<Set<string>>(new Set());
 const changes = ref<Awaited<ReturnType<typeof getRepositoryChanges>>>();
@@ -450,7 +454,7 @@ async function loadWorkspace() {
   try {
     const [root, nextChanges] = await Promise.all([
       getRepositoryDirectory(target.value, ""),
-      getRepositoryChanges(target.value),
+      gitBacked.value ? getRepositoryChanges(target.value) : Promise.resolve(undefined),
     ]);
     if (revision !== loadRevision.value) return;
     directories.value = new Map([["", root]]);

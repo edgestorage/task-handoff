@@ -43,7 +43,7 @@ test("control-plane model copies inherit secrets without overwriting an existing
     });
     await service.init();
     const savedLegacy = await service.update(legacyId, { name: "Legacy saved" });
-    assert.deepEqual(savedLegacy.modelNames, [{ name: "legacy-model", order: 100 }]);
+    assert.deepEqual(savedLegacy.model.modelNames, [{ name: "legacy-model", order: 100 }]);
     const persistedLegacy = await repository.get(legacyId);
     assert.deepEqual(persistedLegacy.modelNames, [{ name: "legacy-model", order: 100 }]);
     assert.deepEqual(persistedLegacy.protocols, ["openai-responses"]);
@@ -52,7 +52,7 @@ test("control-plane model copies inherit secrets without overwriting an existing
     assert.deepEqual(source.modelNames, [{ name: "model-a", order: 100 }]);
 
     const upgraded = await service.update(source.id, { name: "Primary renamed" });
-    assert.deepEqual(upgraded.modelNames, [{ name: "model-a", order: 100 }]);
+    assert.deepEqual(upgraded.model.modelNames, [{ name: "model-a", order: 100 }]);
 
     const multiModel = await service.create({
       name: "Multiple",
@@ -90,7 +90,7 @@ test("control-plane model copies inherit secrets without overwriting an existing
   }
 });
 
-test("control-plane model deletion protects instance, active session and recoverable history references", async () => {
+test("control-plane model deletion is protected by instance assignments only", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-model-references-"));
   const paths = controlPlaneStorePaths(directory);
   const database = await createControlPlaneDatabase(paths);
@@ -106,19 +106,13 @@ test("control-plane model deletion protects instance, active session and recover
       requireNode: () => { throw new Error("unused"); },
       fetchImpl: fetch,
       listInstances: async () => [{ id: "inst_one", modelSelection: { modelEntityIds: [modelId] } } as never, { id: "inst_two", modelSelection: {} } as never],
-      listAiSessions: async () => ({ instances: [{ instanceId: "inst_two", aiSessions: { sessions: [{ id: "session_current", modelSelection: { modelEntityId: modelId } }] } }] }),
-      listAiSessionHistory: async (instanceId) => ({ items: instanceId === "inst_two" ? [{
-        id: "session_history", agent: "codex", creationSource: "ai-session", providerSessionId: "thread_history",
-        modelSelection: { modelEntityId: modelId, modelName: "same-name" }, cwd: "/workspace",
-        lastActiveAt: "2026-08-28T00:00:00.000Z", archivedAt: "2026-08-28T00:00:00.000Z",
-      }] : [] }),
     });
     await service.init();
     modelId = (await service.create({ name: "Referenced", endpoint: "https://api.example.test/v1", key: "secret", model: "same-name", app: "codex" })).id;
     await assert.rejects(service.delete(modelId), (error: unknown) => {
       const value = error as { code?: string; details?: { references?: unknown[] }; message?: string };
       assert.equal(value.code, "MODEL_IN_USE");
-      assert.equal(value.details?.references?.length, 3);
+      assert.deepEqual(value.details?.references, [{ kind: "instance", instanceId: "inst_one" }]);
       assert.equal(JSON.stringify(value).includes("secret"), false);
       return true;
     });

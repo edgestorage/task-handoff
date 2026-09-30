@@ -107,7 +107,11 @@ import { InstanceBoardReader } from "../instances/board-reader.ts";
 import { ControlledInstanceCreator } from "../instances/creator.ts";
 import { ControlPlaneTriggerService } from "../triggers/service.ts";
 import { ControlPlaneCatalogService } from "../catalog/service.ts";
-import { EmbeddedMarketCatalogProvider, MarketCatalogService } from "../catalog/market.ts";
+import { EmbeddedMarketCatalogProvider, MarketCatalogService, embeddedMarketCatalogSnapshot } from "../catalog/market.ts";
+import {
+  RemoteMarketCatalogProvider,
+  loadCachedMarketCatalogSnapshot,
+} from "../catalog/remote-market.ts";
 import { ControlPlaneGitCredentialService } from "../git-credentials/service.ts";
 import { ControlPlaneGitRepository } from "../git-credentials/repository.ts";
 import { AppAccessService, type AppAccessMode } from "../instances/app-access-service.ts";
@@ -190,6 +194,14 @@ export type ControlPlaneServiceOptions = {
   onFleetStateChanged?: (state: ControlPlaneNodeFleetUpdatedEvent) => void;
   database?: ControlPlaneDatabase;
   secrets?: SecretEnvelopeService;
+  marketCatalog?: {
+    url?: string;
+    publicKey?: string;
+    keyId?: string;
+    allowedRepositoryPrefixes?: string[];
+    cachePath?: string;
+    refreshIntervalMs?: number;
+  };
 };
 
 function isControlPlaneLocalNode(node: Node) {
@@ -243,6 +255,8 @@ export class ControlPlaneService {
   private readonly controlPlaneTriggerService: ControlPlaneTriggerService;
   private readonly catalogService: ControlPlaneCatalogService;
   private readonly marketCatalogService: MarketCatalogService;
+  private readonly marketCatalogRemote: RemoteMarketCatalogProvider | undefined;
+  private marketCatalogRefreshTimer: NodeJS.Timeout | undefined;
   readonly gitCredentials: ControlPlaneGitCredentialService;
   private readonly chatBridgeService: ChatBridgeService;
   private readonly chatSessionService: ChatSessionService;
@@ -312,8 +326,6 @@ export class ControlPlaneService {
       fetchImpl: this.fetchImpl,
       ensureNodeCapabilities: (node, refreshOptions) => this.ensureNodeCapabilities(node, refreshOptions),
       listInstances: () => this.listCachedNodeInstances(),
-      listAiSessions: () => this.listAiSessions(),
-      listAiSessionHistory: (instanceId) => this.listAiSessionHistory(instanceId),
     });
     this.images = new JsonCollection(paths.imagesDir, {
       ...storeOptions(CustomImageProfileSchema),
@@ -354,7 +366,27 @@ export class ControlPlaneService {
       ...storeOptions(ConfigSyncPreferenceRecordSchema),
       sanitize: sanitizeStoredConfigSyncPreferenceRecord,
     });
-    this.marketCatalogService = new MarketCatalogService();
+    const marketCachePath = options.marketCatalog?.cachePath ?? paths.marketCachePath;
+    this.marketCatalogRemote = options.marketCatalog?.url
+      ? new RemoteMarketCatalogProvider({
+        url: options.marketCatalog.url,
+        publicKey: options.marketCatalog.publicKey,
+        keyId: options.marketCatalog.keyId,
+        allowedRepositoryPrefixes: options.marketCatalog.allowedRepositoryPrefixes,
+        cachePath: marketCachePath,
+        fetchImpl: this.fetchImpl,
+        log: (message, details) => this.logWarn(details, message),
+      })
+      : undefined;
+    this.marketCatalogService = new MarketCatalogService(
+      loadCachedMarketCatalogSnapshot(marketCachePath) ?? embeddedMarketCatalogSnapshot(),
+    );
+    const refreshIntervalMs = options.marketCatalog?.refreshIntervalMs ?? 0;
+    if (this.marketCatalogRemote && refreshIntervalMs > 0) {
+      this.marketCatalogRefreshTimer = setInterval(() => { void this.refreshMarketCatalog(); }, refreshIntervalMs);
+      this.marketCatalogRefreshTimer.unref();
+      void this.refreshMarketCatalog();
+    }
     this.gitCredentials = new ControlPlaneGitCredentialService(new ControlPlaneGitRepository(options.database, options.secrets), {
       repositoryReferences: (credentialId) => this.projects.list().flatMap((project) => {
         const source = project.source;
@@ -380,6 +412,7 @@ export class ControlPlaneService {
       requireLocalFolder: (node, folderId) => this.requireNodeLocalFolder(node, folderId),
       resolveImageSelection: (selection) => this.catalogService.resolveImageSelection(selection),
       prepareModels: (node, selection) => this.modelService.prepareAssignment(node, selection),
+      retireSupersededModels: (node, prepared) => this.modelService.retireSupersededNodeModels(node, prepared),
       gitCredentials: this.gitCredentials,
     });
     this.controlPlaneTriggerService = new ControlPlaneTriggerService({
@@ -798,6 +831,16 @@ export class ControlPlaneService {
   }
 
   async refreshMarketCatalog() {
+    if (this.marketCatalogRemote) {
+      const result = await this.marketCatalogService.refresh(this.marketCatalogRemote);
+      if (!result.accepted) {
+        this.logWarn(
+          { error: result.error instanceof Error ? result.error.message : String(result.error) },
+          "market catalog refresh failed; keeping the previous snapshot",
+        );
+      }
+      return this.getMarketCatalog();
+    }
     await this.marketCatalogService.refresh(new EmbeddedMarketCatalogProvider());
     return this.getMarketCatalog();
   }
@@ -1157,6 +1200,8 @@ export class ControlPlaneService {
   }
 
   dispose() {
+    if (this.marketCatalogRefreshTimer) clearInterval(this.marketCatalogRefreshTimer);
+    this.marketCatalogRefreshTimer = undefined;
     this.nodeAgentGateway.dispose();
   }
 
@@ -1277,6 +1322,7 @@ export class ControlPlaneService {
     if (modelSelection) {
       const preparedModels = await this.modelService.prepareAssignment(node, modelSelection);
       instance = (await this.nodeAgentGateway.assignInstanceModels(node, id, preparedModels)).instance;
+      await this.modelService.retireSupersededNodeModels(node, preparedModels);
     }
     return publicInstanceWithAccess(instance);
   }

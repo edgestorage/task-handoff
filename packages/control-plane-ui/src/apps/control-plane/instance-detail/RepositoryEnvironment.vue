@@ -66,13 +66,14 @@
         <button
           type="button"
           class="repository-environment-row repository-environment-files"
-          :disabled="context.availability !== 'available'"
+          :disabled="!workspaceBrowsable"
           @click="openRepositoryWorkspace('files')"
         >
           <span class="repository-environment-row-icon"><Files :size="16" /></span>
           <span class="repository-environment-row-copy">
             <strong>{{ t("repository.environment.filesChanges") }}</strong>
             <small v-if="context.availability === 'available'">{{ changeSummary }}</small>
+            <small v-else-if="workspaceBrowsable">{{ unavailableMessage }}</small>
             <small v-else>{{ t("repository.environment.filesUnavailable") }}</small>
           </span>
           <span v-if="changeCount" class="repository-environment-count">{{ changeCount }}</span>
@@ -185,6 +186,7 @@ import type { RepositoryWorkspaceTabTarget } from "../useInstanceSessions";
 import RepositoryBranchesPanel from "./RepositoryBranchesPanel.vue";
 import RepositoryDeliveryDialog from "./RepositoryDeliveryDialog.vue";
 import RepositoryErrorNotice from "./RepositoryErrorNotice.vue";
+import { repositoryAvailabilityMessage } from "./repositoryAvailability";
 
 const props = defineProps<{
   aiAgent?: "codex" | "claude" | "opencode";
@@ -214,6 +216,9 @@ const contextQuery = useRepositoryContextQuery(
   computed(() => canQuery.value && (open.value || props.triggerAppearance === "detail" || props.triggerAppearance === "menu")),
 );
 const context = computed<RepositoryContext | undefined>(() => contextQuery.data.value);
+// The instance resolves a workspace root for plain directories as well, so the
+// file manager opens whenever the context carries a browsable root.
+const workspaceBrowsable = computed(() => Boolean(context.value?.repositoryRoot));
 const triggerBranchSummary = computed(() => {
   const head = context.value?.head;
   if (context.value?.availability !== "available" || !head) return "";
@@ -258,15 +263,7 @@ const branchSummary = computed(() => {
   if (head.state === "unborn") return t("repository.common.unbornBranch");
   return t("repository.common.detachedAt", { commit: head.oid?.slice(0, 8) || t("repository.environmentExtra.unknownCommit") });
 });
-const unavailableMessage = computed(() => t({
-  "session-not-found": "repository.environment.unavailable.sessionNotFound",
-  "session-inactive": "repository.environment.unavailable.sessionInactive",
-  "cwd-missing": "repository.environmentExtra.availability.cwdMissing",
-  "cwd-inaccessible": "repository.environmentExtra.availability.cwdInaccessible",
-  "git-unavailable": "repository.environmentExtra.availability.gitUnavailable",
-  "not-worktree": "repository.environmentExtra.availability.notWorktree",
-  available: "repository.environmentExtra.availability.available",
-}[context.value?.availability || "cwd-missing"]));
+const unavailableMessage = computed(() => repositoryAvailabilityMessage(context.value?.availability, t));
 const primaryActionLabel = computed(() => t({
   "review-changes": "repository.environmentExtra.actions.review",
   "resolve-conflicts": "repository.environmentExtra.actions.resolve",

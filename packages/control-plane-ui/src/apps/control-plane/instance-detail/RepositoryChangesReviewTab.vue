@@ -112,6 +112,7 @@ import RepositoryChangeDiffCard from "./RepositoryChangeDiffCard.vue";
 import RepositoryErrorNotice from "./RepositoryErrorNotice.vue";
 import RepositoryFilePicker from "./RepositoryFilePicker.vue";
 import RepositoryFileTree, { type RepositoryFileTreeNode } from "./RepositoryFileTree.vue";
+import { repositoryAvailabilityMessage } from "./repositoryAvailability";
 import type { ContextDirection, GapExpansion } from "./repositoryDiffPresentation";
 
 type ReviewScope = "all" | "working" | "staged" | "conflict";
@@ -164,8 +165,12 @@ const filteredEntries = computed(() => allEntries.value
   .sort(compareEntries));
 const logicalFileCount = computed(() => new Set(allEntries.value.map((entry) => entry.path)).size);
 const repositorySubtitle = computed(() => {
+  const name = context.value?.displayName || t("repository.title");
+  if (context.value && context.value.availability !== "available") {
+    return [name, repositoryAvailabilityMessage(context.value.availability, t)].filter(Boolean).join(" · ");
+  }
   const branch = context.value?.head?.state === "branch" ? context.value.head.branch : context.value?.head?.state === "detached" ? t("repository.workspace.detached", { commit: context.value.head.oid?.slice(0, 8) }) : t("repository.common.unbornBranch");
-  return [context.value?.displayName || t("repository.title"), branch, context.value?.cwdRelativePath ? t("repository.common.cwd", { path: context.value.cwdRelativePath }) : t("repository.common.repositoryRoot")].filter(Boolean).join(" · ");
+  return [name, branch, context.value?.cwdRelativePath ? t("repository.common.cwd", { path: context.value.cwdRelativePath }) : t("repository.common.repositoryRoot")].filter(Boolean).join(" · ");
 });
 const summaryLabel = computed(() => {
   const summary = changes.value?.summary;

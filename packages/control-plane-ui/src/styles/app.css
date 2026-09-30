@@ -70,7 +70,6 @@
   --instance-board-background: var(--workspace-bg);
   --instance-board-accent-text: hsl(var(--primary));
   --instance-board-card-shadow: 0 0 0 transparent;
-  --instance-list-row-hover-bg: var(--surface-inset);
   --instance-list-title: var(--text-strong);
   --instance-list-meta: var(--text-muted);
   --repository-current-text: hsl(var(--primary));

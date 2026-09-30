@@ -105,6 +105,7 @@ function fixture(retention, deployedStatus = "deferred") {
     requireLocalFolder: async () => { throw new Error("not used"); },
     resolveImageSelection: () => { throw new Error("not used"); },
     prepareModels: async () => ({}),
+    retireSupersededModels: async () => {},
     gitCredentials,
   });
   const run = (overrides = {}) => creator.create({

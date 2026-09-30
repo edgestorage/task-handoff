@@ -69,14 +69,34 @@ function structuredChanges(value: string | undefined) {
   return parsed.slice(0, maxFiles).flatMap((raw): AiSessionFileChange[] => {
     if (!isRecord(raw)) return [];
     const path = stringField(raw, "path") || stringField(raw, "filePath") || stringField(raw, "relativePath");
-    const diff = stringValue(raw.diff) ?? stringValue(raw.patch) ?? "";
     if (!path) return [];
     const rawKind = raw.kind;
     const kind = typeof rawKind === "string" ? rawKind : isRecord(rawKind) ? stringField(rawKind, "type") : stringField(raw, "type");
     const movePath = stringField(raw, "movePath") || stringField(raw, "move_path")
       || (isRecord(rawKind) ? stringField(rawKind, "move_path") || stringField(rawKind, "movePath") : undefined);
+    const diff = normalizeFileChangeDiff(kind, stringValue(raw.diff) ?? stringValue(raw.patch) ?? nestedDiff(rawKind));
     return [{ path, diff, ...(kind ? { kind } : {}), ...(movePath ? { movePath } : {}) }];
   });
+}
+
+function nestedDiff(kind: unknown) {
+  if (!isRecord(kind)) return undefined;
+  return stringValue(kind.unified_diff) ?? stringValue(kind.unifiedDiff) ?? stringValue(kind.content);
+}
+
+function normalizeFileChangeDiff(kind: string | undefined, diff: string | undefined) {
+  if (!diff) return diff ?? "";
+  if (kind === "add") return contentToDiff(diff, "addition");
+  if (kind === "delete") return contentToDiff(diff, "deletion");
+  return diff;
+}
+
+function contentToDiff(content: string, side: "addition" | "deletion") {
+  const lines = content.split("\n");
+  if (lines.at(-1) === "") lines.pop();
+  const marker = side === "addition" ? "+" : "-";
+  const range = side === "addition" ? `-0,0 +1,${lines.length}` : `-1,${lines.length} +0,0`;
+  return [`@@ ${range} @@`, ...lines.map((line) => marker + line)].join("\n");
 }
 
 function looksLikeDiff(value: string) {

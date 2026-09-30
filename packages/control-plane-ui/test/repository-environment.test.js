@@ -287,6 +287,8 @@ test("Repository workspace opens as a session tab with a floating searchable fil
   assert.doesNotMatch(workspace, /repository-workspace-sidebar|startSidebarResize|sidebarWidth/);
   assert.match(picker, /<Popover[\s\S]*<ScrollArea type="always" :horizontal="false"/);
   assert.match(picker, /--reka-popover-content-available-height/);
+  assert.doesNotMatch(picker, /repository-file-picker-popover\) \{[^}]*height:/);
+  assert.match(picker, /\.repository-file-picker \{[^}]*max-height: min\(\d+px, var\(--reka-popover-content-available-height/);
   assert.match(workspaceFileList, /repository\.workspace\.explorer/);
   assert.match(workspace, /@click="openChangesReview"/);
   assert.match(workspace, /emit\("openChanges", \{ initialView: "changes", page: "changes-review"/);
@@ -440,8 +442,9 @@ test("Repository delivery follows the server primary action and uses explicit no
 });
 
 test("Repository UI preserves edge states and structured recovery guidance", async () => {
-  const [environment, worktrees, workspace, reviewCard, delivery, errorNotice, errorPresentation, apiClient] = await Promise.all([
+  const [environment, availabilityPresentation, worktrees, workspace, reviewCard, delivery, errorNotice, errorPresentation, apiClient] = await Promise.all([
     source("apps/control-plane/instance-detail/RepositoryEnvironment.vue"),
+    source("apps/control-plane/instance-detail/repositoryAvailability.ts"),
     source("apps/control-plane/instance-detail/RepositoryWorktreesPanel.vue"),
     source("apps/control-plane/instance-detail/RepositoryWorkspace.vue"),
     source("apps/control-plane/instance-detail/RepositoryChangeDiffCard.vue"),
@@ -452,8 +455,9 @@ test("Repository UI preserves edge states and structured recovery guidance", asy
   ]);
 
   for (const availability of ["session-not-found", "session-inactive", "cwd-missing", "cwd-inaccessible", "git-unavailable", "not-worktree"]) {
-    assert.match(environment, new RegExp(`"${availability}"`));
+    assert.match(availabilityPresentation, new RegExp(`"${availability}"`));
   }
+  assert.match(environment, /repositoryAvailabilityMessage\(context\.value\?\.availability, t\)/);
   assert.match(environment, /connectionStatus !== 'online'/);
   assert.match(environment, /repository\.environment\.detachedNotice/);
   assert.match(environment, /repository\.environment\.unbornNotice/);
@@ -540,4 +544,26 @@ test("Worktree moves into the main worktree are capability-gated, preflighted, a
   assert.match(presentation, /"REPOSITORY_MAIN_DIRTY", "REPOSITORY_MOVE_CONFLICT"/);
   assert.match(apiError, /REPOSITORY_MAIN_DIRTY: \{ key: "errors\.REPOSITORY_MAIN_DIRTY" \}/);
   assert.match(apiError, /REPOSITORY_MOVE_CONFLICT: \{ key: "errors\.REPOSITORY_MOVE_CONFLICT" \}/);
+});
+
+test("Repository file manager stays usable without a Git worktree", async () => {
+  const [workspace, environment, workspaceTab, locales] = await Promise.all([
+    source("apps/control-plane/instance-detail/RepositoryWorkspace.vue"),
+    source("apps/control-plane/instance-detail/RepositoryEnvironment.vue"),
+    source("apps/control-plane/instance-detail/RepositoryWorkspaceTab.vue"),
+    source("i18n/locales/zh-CN/repository.ts"),
+  ]);
+
+  // Browsing and file mutations only need the server-resolved workspace root.
+  assert.match(workspace, /const gitBacked = computed\(\(\) => props\.context\.availability === "available"\)/);
+  assert.match(workspace, /gitBacked\.value \? getRepositoryChanges\(target\.value\) : Promise\.resolve\(undefined\)/);
+  assert.match(workspace, /v-if="gitBacked"[\s\S]{0,200}repository-workspace-view-switch/);
+  assert.match(workspace, /snapshotId = changes\.value\?\.snapshotId \|\| props\.context\.snapshotId/);
+  assert.match(workspaceTab, /<RepositoryWorkspace[\s\S]*:context="contextQuery\.data\.value"/);
+
+  assert.match(environment, /const workspaceBrowsable = computed\(\(\) => Boolean\(context\.value\?\.repositoryRoot\)\)/);
+  assert.match(environment, /class="repository-environment-row repository-environment-files"[\s\S]{0,120}:disabled="!workspaceBrowsable"[\s\S]{0,400}openRepositoryWorkspace\('files'\)/);
+  assert.match(environment, /<small v-else-if="workspaceBrowsable">\{\{ unavailableMessage \}\}<\/small>/);
+  assert.match(environment, /repository-environment-review"[\s\S]{0,200}:disabled="context\.availability !== 'available'"/);
+  assert.match(locales, /REPOSITORY_NOT_WORKTREE: "该操作需要 Git 工作树。/);
 });

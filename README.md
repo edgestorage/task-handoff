@@ -260,12 +260,29 @@ A semantic version tag such as `v1.2.3` builds the controlled-instance runtime a
 
 ### Docker images
 
-The five public base images and their independent `docker-vX.Y.Z` release
+The six public base images and their independent `docker-vX.Y.Z` release
 workflow are maintained in the
 [TaskHandoff Images repository](https://github.com/edgestorage/task-handoff-images).
 They contain system dependencies and developer tools, but not the
 controlled-instance runtime. Node Agent remains the authority for mounting the
 bootstrap bundle and installing the desired runtime artifact.
+
+The Control Plane image market pulls its catalog from
+<https://images.thandoff.com/market/v1/catalog.json> and degrades through
+remote, local cache, then the bundled snapshot; the cache lives at
+`market/catalog-cache.json` inside the data directory. Remote responses must
+pass schema validation and, when a public key is configured, signature
+verification, and every image repository must stay inside the embedded
+publisher namespace (override with
+`TASK_HANDOFF_MARKET_ALLOWED_REPOSITORIES`). Configuration:
+
+- `TASK_HANDOFF_MARKET_CATALOG_URL` overrides the catalog URL; set it to
+  `off`/`0` to disable remote loading.
+- `TASK_HANDOFF_MARKET_REFRESH_INTERVAL` sets the refresh interval in seconds;
+  `0` keeps manual refresh only.
+- `TASK_HANDOFF_MARKET_CATALOG_PUBLIC_KEY` and
+  `TASK_HANDOFF_MARKET_CATALOG_KEY_ID` configure ed25519 verification (PEM or
+  base64 SPKI plus optional key identifier).
 
 ### Desktop application
 

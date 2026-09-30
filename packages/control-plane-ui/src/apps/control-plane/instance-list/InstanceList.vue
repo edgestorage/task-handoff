@@ -516,11 +516,13 @@ function openNewInstanceFromTemporaryList() {
 
 .instance-rows {
   min-height: 0;
+  /* Keep the overlay scrollbar next to the panel border instead of the padded content edge. */
+  margin-right: -9px;
 }
 
 .instance-rows-content {
   min-height: 100%;
-  padding-right: 2px;
+  padding-right: 11px;
 }
 
 .instance-group-status {
@@ -572,24 +574,24 @@ function openNewInstanceFromTemporaryList() {
   align-self: start;
   width: 100%;
   gap: 8px;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  background: var(--instance-list-row-bg);
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
   color: inherit;
   margin-bottom: 4px;
   padding: 0;
 }
 
 .instance-row:hover,
-.instance-row:focus-within,
-.instance-row.active {
-  border-color: var(--instance-list-row-border);
-  background: var(--instance-list-row-hover-bg);
+.instance-row:focus-within {
+  background: var(--sidebar-row-hover-bg, var(--surface-active));
   outline: none;
 }
 
-.instance-row.active {
-  box-shadow: inset 3px 0 0 var(--brand-accent);
+.instance-row.active,
+.instance-row.active:hover,
+.instance-row.active:focus-within {
+  background: var(--sidebar-row-selected-bg, var(--surface-active));
 }
 
 .instance-row-content {
