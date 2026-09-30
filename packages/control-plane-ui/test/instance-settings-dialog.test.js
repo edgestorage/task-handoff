@@ -19,7 +19,7 @@ test("instance settings is one top-level dialog with three independent entry poi
   assert.match(workbench, /@open-instance-settings="openInstanceSettings"/);
   assert.match(list, /\$emit\('openSettings', instance\.id\)/);
   assert.match(detail, /\$emit\('openSettings', instance\.id\)/);
-  assert.match(settings, /openInstanceSettings: \[instanceId: string\]/);
+  assert.match(settings, /openInstanceSettings: \[instanceId: string, section\?: "general" \| "ai" \| "codex" \| "models" \| "git-credentials" \| "apps"\]/);
   assert.match(nodeDetail, /actions\.openInstanceSettings\(instance\.id\)/);
 });
 

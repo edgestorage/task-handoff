@@ -175,6 +175,11 @@ type ServiceLogger = {
 };
 const CONTROL_PLANE_LOCAL_NODE_LABEL = "task-handoff.control-plane.local";
 const CONTROL_PLANE_BUILTIN_NODE_LABEL = "task-handoff.control-plane.builtin";
+// Capability documents are cached on the node record. Direct-http nodes never
+// deliver the capabilities-changed tunnel event, so model writes revalidate
+// the document on demand: explicit operations force a probe, background
+// convergence respects this TTL.
+const NODE_CAPABILITY_REFRESH_TTL_MS = 10 * 60_000;
 
 export type ControlPlaneServiceOptions = {
   fetchImpl?: FetchImpl;
@@ -193,6 +198,13 @@ function isControlPlaneLocalNode(node: Node) {
 
 function isControlPlaneBuiltinNode(node: Node) {
   return node.labels[CONTROL_PLANE_BUILTIN_NODE_LABEL] === "true";
+}
+
+function nodeAgentCapabilityDocument(node: Node) {
+  const agent = node.capabilities.agent;
+  return agent && typeof agent === "object" && !Array.isArray(agent)
+    ? (agent as { capabilities?: unknown }).capabilities
+    : undefined;
 }
 
 export class ControlPlaneService {
@@ -222,6 +234,8 @@ export class ControlPlaneService {
   private readonly proxyLifecycle: ControlPlaneProxyLifecycle;
   private readonly nodeConnectionManager: NodeConnectionManager;
   private readonly nodeAgentGateway: ControlPlaneNodeAgentGateway;
+  private readonly nodeCapabilityCheckedAt = new Map<string, number>();
+  private readonly nodeCapabilityRefreshes = new Map<string, Promise<Node>>();
   private readonly controlledInstanceGateway: ControlledInstanceGateway;
   private readonly aiSessionActionService: AiSessionActionService;
   private readonly controlledInstanceCreator: ControlledInstanceCreator;
@@ -296,6 +310,7 @@ export class ControlPlaneService {
       listNodes: () => this.listNodes(),
       requireNode: (id) => this.requireNode(id),
       fetchImpl: this.fetchImpl,
+      ensureNodeCapabilities: (node, refreshOptions) => this.ensureNodeCapabilities(node, refreshOptions),
       listInstances: () => this.listCachedNodeInstances(),
       listAiSessions: () => this.listAiSessions(),
       listAiSessionHistory: (instanceId) => this.listAiSessionHistory(instanceId),
@@ -869,9 +884,7 @@ export class ControlPlaneService {
 
   async updateNodeLocalFolder(nodeId: string, folderId: string, input: unknown) {
     const node = this.requireNode(nodeId);
-    const agentCapabilities = node.capabilities?.agent && typeof node.capabilities.agent === "object"
-      ? (node.capabilities.agent as { capabilities?: unknown }).capabilities
-      : undefined;
+    const agentCapabilities = nodeAgentCapabilityDocument(node);
     if (!supportsNodeLocalFolderNameUpdate(agentCapabilities)) {
       // Compatibility for v0.0.21: older node-agents do not expose local-folder display-name updates.
       const error = new Error(`Node ${node.id} does not support local folder name updates.`);
@@ -888,28 +901,12 @@ export class ControlPlaneService {
   async checkNode(id: string) {
     const node = this.requireNode(id);
     try {
-      const data = await this.nodeAgentGateway.health(node);
-      const record = data && typeof data === "object" ? data as Record<string, unknown> : {};
-      const agentNodeId = typeof record.nodeId === "string" && record.nodeId.trim() ? record.nodeId.trim() : node.id;
-      const updated = NodeSchema.parse({
-        ...node,
-        id: agentNodeId,
-        status: "online",
-        health: "ok",
-        capabilities: typeof data === "object" && data ? { ...node.capabilities, agent: publicNodeAgentCapabilities(data) } : node.capabilities,
-        lastSeenAt: now(),
-        updatedAt: now(),
-      });
-      if (agentNodeId !== node.id) {
-        await this.nodes.delete(node.id);
-      }
-      this.observeNode(updated);
-      this.nodeConnectionRuntime?.observedReachable(updated);
+      const { node: updated, agent } = await this.probeNodeCapabilities(node);
       return {
         id: updated.id,
         status: "online",
         checkedAt: now(),
-        agent: data,
+        agent,
       };
     } catch (error) {
       const updated = NodeSchema.parse({
@@ -927,6 +924,53 @@ export class ControlPlaneService {
         error: error instanceof Error ? error.message : String(error),
       };
     }
+  }
+
+  /** Probe a node's health document and persist the authoritative capabilities. */
+  private async probeNodeCapabilities(node: Node) {
+    const data = await this.nodeAgentGateway.health(node);
+    const record = data && typeof data === "object" ? data as Record<string, unknown> : {};
+    const agentNodeId = typeof record.nodeId === "string" && record.nodeId.trim() ? record.nodeId.trim() : node.id;
+    const updated = NodeSchema.parse({
+      ...node,
+      id: agentNodeId,
+      status: "online",
+      health: "ok",
+      capabilities: typeof data === "object" && data ? { ...node.capabilities, agent: publicNodeAgentCapabilities(data) } : node.capabilities,
+      lastSeenAt: now(),
+      updatedAt: now(),
+    });
+    if (agentNodeId !== node.id) {
+      await this.nodes.delete(node.id);
+    }
+    this.observeNode(updated);
+    this.nodeConnectionRuntime?.observedReachable(updated);
+    this.nodeCapabilityCheckedAt.set(updated.id, Date.now());
+    return { node: updated, agent: data };
+  }
+
+  /**
+   * Revalidate a node's cached capability document before writes that branch
+   * on it. Refresh happens when the document is missing, when the cache entry
+   * expired, or when the caller forces it for an explicit operation; failures
+   * fall back to the cached node so callers can still attempt the write.
+   */
+  async ensureNodeCapabilities(node: Node, options: { force?: boolean } = {}): Promise<Node> {
+    const checkedAt = this.nodeCapabilityCheckedAt.get(node.id) || 0;
+    const fresh = nodeAgentCapabilityDocument(node) !== undefined
+      && !options.force
+      && Date.now() - checkedAt < NODE_CAPABILITY_REFRESH_TTL_MS;
+    if (fresh) return node;
+    const pending = this.nodeCapabilityRefreshes.get(node.id);
+    if (pending) return pending;
+    const refresh = this.probeNodeCapabilities(node)
+      .then(({ node: updated }) => updated)
+      .catch(() => node)
+      .finally(() => {
+        this.nodeCapabilityRefreshes.delete(node.id);
+      });
+    this.nodeCapabilityRefreshes.set(node.id, refresh);
+    return refresh;
   }
 
   async checkNodeUpdate(id: string, input: UpdateCheckRequest) {

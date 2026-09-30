@@ -250,7 +250,9 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
         refreshed = true;
         saved = { ...editing, ...result.model };
         const deferred = result.locations.filter((location) => location.state !== "synced");
-        if (deferred.length) syncNotice = t("settings.modelRegistry.syncIncomplete", { count: deferred.length });
+        // Surface the actionable per-location reason (for example a node that
+        // must be updated first) instead of only a count.
+        if (deferred.length) syncNotice = deferred[0].message || t("settings.modelRegistry.syncIncomplete", { count: deferred.length });
       } else if (copyingModelId.value) {
         saved = await copyModel(copyingModelId.value, payload);
       } else {
