@@ -27,3 +27,25 @@ test("derives resume choices independently from active-session switching", () =>
   const groups = deriveAiSessionModelGroups({ entities, assignment: { modelEntityIds: ["one", "two"] }, agent: "codex", nodeId: "node-1", mode: "resume", currentSelection: { modelEntityId: "one", modelName: "small" }, capability: { selectModelAtResume: true, selectProviderAtResume: true, switchProviderDuringSession: false } });
   assert.deepEqual(groups.map((group) => group.modelEntityId), ["one", "two"]);
 });
+
+test("resolves a node-local replica id back onto its control-plane entity", () => {
+  const replicated = [{
+    id: "mdl_stable", name: "Replicated", model: "replicated-model", enabled: true, order: 1,
+    protocols: ["openai-responses"],
+    modelNames: [{ name: "replicated-model", order: 100 }],
+    locations: [
+      { type: "control-plane" as const, enabled: true },
+      { type: "node" as const, nodeId: "node-1", enabled: true, replicaId: "mdl_projection" },
+    ],
+  }];
+  const capability = { selectModelAtCreate: true, selectProviderAtCreate: true };
+  const instanceGroups = deriveAiSessionModelGroups({
+    entities: replicated, assignment: { modelEntityIds: ["mdl_projection"] }, agent: "codex", nodeId: "node-1", mode: "create", capability,
+  });
+  assert.deepEqual(instanceGroups.map((group) => group.modelEntityId), ["mdl_projection"]);
+  assert.deepEqual(instanceGroups[0]?.models.map((model) => model.modelEntityId), ["mdl_projection"]);
+  const otherNodeGroups = deriveAiSessionModelGroups({
+    entities: replicated, assignment: { modelEntityIds: ["mdl_stable"] }, agent: "codex", nodeId: "node-2", mode: "create", capability,
+  });
+  assert.deepEqual(otherNodeGroups.map((group) => group.modelEntityId), ["mdl_stable"]);
+});

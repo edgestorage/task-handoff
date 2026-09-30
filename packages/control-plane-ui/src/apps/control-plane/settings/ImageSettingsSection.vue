@@ -32,7 +32,7 @@
       <section v-if="marketCatalog.data.value?.status.error" class="image-diagnostics" role="alert">
         <AlertTriangle :size="16" aria-hidden="true" />
         <div><strong>{{ t("settings.imageRegistry.marketUnavailable") }}</strong><span>{{ marketCatalog.data.value.status.error }}</span></div>
-        <Button variant="ghost" size="sm" @click="marketCatalog.refetch()"><RefreshCw :size="14" /><span>{{ t("common.actions.retry") }}</span></Button>
+        <Button variant="ghost" size="sm" :disabled="refreshingMarketCatalog" @click="retryMarketCatalog"><RefreshCw :size="14" /><span>{{ t("common.actions.retry") }}</span></Button>
       </section>
 
       <section class="image-directory" :aria-label="t('settings.imageRegistry.directoryCount', { count: filteredImages.length })">
@@ -130,6 +130,7 @@ import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useQueryClient } from "@tanstack/vue-query";
 import { AlertTriangle, Boxes, CircleDot, Download, MoreHorizontal, Plus, RefreshCw, Search, Trash2, X } from "@lucide/vue";
+import { postApiData } from "../../../api/client";
 import type { ImageCover, ImageProfile } from "../../../api/types";
 import { useImagesQuery, useMarketCatalogQuery, useNodeImageAvailabilityQuery, useNodesQuery } from "../../../api/queries";
 import { invalidateControlPlaneDomains } from "../../../api/queryInvalidation";
@@ -176,8 +177,19 @@ const createOpen = ref(false);
 const discardOpen = ref(false);
 const createBaseline = ref("");
 const deleteTarget = ref<DirectoryImage>();
+const refreshingMarketCatalog = ref(false);
 const errorText = (error: unknown) => translateApiError(error, t, error instanceof Error ? error.message : String(error));
 const refreshImages = () => invalidateControlPlaneDomains(queryClient, ["images"]);
+async function retryMarketCatalog() {
+  if (refreshingMarketCatalog.value) return;
+  refreshingMarketCatalog.value = true;
+  try {
+    await postApiData("market/refresh", {});
+    invalidateControlPlaneDomains(queryClient, ["market"]);
+  } finally {
+    refreshingMarketCatalog.value = false;
+  }
+}
 const { canCreateImage, clearImageFeedback, createRegistryImage, deletingImageId, removeImageProfile, savingImage, settingsImage } = useImageSettings({ errorText, images: images.data, onImageDeleted() {}, refreshImages, translate: t });
 
 watch(() => nodes.data.value, (items) => {

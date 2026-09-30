@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import writeFileAtomic from "write-file-atomic";
 import type { z } from "zod";
+import { createEntityId } from "@task-handoff/protocol/control-plane";
 
 export type StoredRecord = {
   id: string;
@@ -76,7 +77,7 @@ function parseStored<T>(filePath: string, options: StoreOptions<T>): T | undefin
 }
 
 export function createId(prefix: string) {
-  return `${prefix}_${crypto.randomUUID().replace(/-/g, "").slice(0, 20)}`;
+  return createEntityId(prefix);
 }
 
 export function createSecret() {

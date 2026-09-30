@@ -67,6 +67,16 @@ export function embeddedMarketCatalogSnapshot(): MarketCatalogSnapshot {
         optionalApps: ["terminal-tty"],
       }),
       embeddedImage({
+        id: "market_taskhandoff_obscura",
+        slug: "obscura",
+        name: "TaskHandoff Obscura",
+        description: "Codex runtime with terminal, Codex, and Obscura.",
+        localizedDescriptions: { "zh-CN": "包含终端、Codex 和 Obscura 的运行环境。" },
+        reference: process.env.TASK_HANDOFF_CONTROLLED_OBSCURA_IMAGE || "huadream/task-handoff-controlled-obscura:latest",
+        capabilities: ["terminal", "codex", "obscura"],
+        optionalApps: ["terminal-tty"],
+      }),
+      embeddedImage({
         id: "market_taskhandoff_opencode",
         slug: "opencode",
         name: "TaskHandoff OpenCode",

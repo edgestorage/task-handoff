@@ -70,7 +70,6 @@ const knownApiErrors: Record<string, ErrorDescriptor> = {
   MODEL_TEST_FAILED: { key: "errors.MODEL_TEST_FAILED" },
   MODEL_TEST_RESPONSE_INVALID: { key: "errors.MODEL_TEST_RESPONSE_INVALID" },
   MODEL_IN_USE: { key: "errors.MODEL_IN_USE" },
-  MODEL_REFERENCE_CHECK_INCOMPLETE: { key: "errors.MODEL_REFERENCE_CHECK_INCOMPLETE" },
   MODEL_UPDATE_SYNC_FAILED: { key: "errors.MODEL_UPDATE_SYNC_FAILED" },
   MODEL_MERGE_SAME: { key: "errors.MODEL_MERGE_SAME" },
 

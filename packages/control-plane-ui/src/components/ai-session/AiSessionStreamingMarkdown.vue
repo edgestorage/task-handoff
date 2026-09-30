@@ -25,6 +25,7 @@ import type { MarkdownCodeTools } from "@task-handoff/web-theme/markdown";
 import "markstream-vue/index.css";
 import { messageMatchesTurn, useStreamingMessagesStore } from "../../apps/control-plane/useStreamingMessagesStore";
 import AiSessionMarkdownNode from "./AiSessionMarkdownNode.vue";
+import { resolveFinalReadyAction } from "./aiSessionFinalReady";
 import { aiSessionMarkdownCodeToolsKey, defaultAiSessionMarkdownCodeTools } from "./markdown-code-tools";
 import MarkdownLinkContextMenu from "./MarkdownLinkContextMenu.vue";
 import type { MarkdownLinkTarget } from "./markdown-link-target";
@@ -195,9 +196,13 @@ watch(
 watch(
   [sourceStreaming, pacing.final, activeCharacterAnimations],
   async ([streaming, pacingFinal, activeAnimations]) => {
+    const action = resolveFinalReadyAction({ streaming, pacingFinal, activeAnimations });
+    if (action === "reset") {
+      finalReady.value = false;
+      return;
+    }
+    if (action === "wait") return;
     const generation = ++finalGeneration;
-    finalReady.value = false;
-    if (streaming || !pacingFinal || activeAnimations > 0) return;
     await nextTick();
     if (
       generation === finalGeneration

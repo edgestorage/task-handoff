@@ -140,11 +140,12 @@ test("stored custom profiles and controlled instances migrate before strict pars
   assert.equal(stored.imageSnapshot.requestedReference, "docker.io/example/codex:latest");
 });
 
-test("embedded provider returns five stable Market images and retains the last valid snapshot", async () => {
+test("embedded provider returns six stable Market images and retains the last valid snapshot", async () => {
   const embedded = await new EmbeddedMarketCatalogProvider().loadCatalog();
   assert.equal(embedded.protocolVersion, MARKET_CATALOG_PROTOCOL_VERSION);
   assert.deepEqual(embedded.items.map((item) => item.id), [
     "market_taskhandoff_codex",
+    "market_taskhandoff_obscura",
     "market_taskhandoff_opencode",
     "market_taskhandoff_ai",
     "market_taskhandoff_webcap",
@@ -152,6 +153,7 @@ test("embedded provider returns five stable Market images and retains the last v
   ]);
   assert.deepEqual(embedded.items.map((item) => item.description), [
     "Minimal Codex runtime with terminal and Codex.",
+    "Codex runtime with terminal, Codex, and Obscura.",
     "Minimal OpenCode runtime with terminal and OpenCode.",
     "AI development runtime with Codex, Claude, and terminal.",
     "Browser automation runtime with WebCap, Codex, Claude, Chromium, and VNC.",
@@ -159,6 +161,7 @@ test("embedded provider returns five stable Market images and retains the last v
   ]);
   assert.deepEqual(embedded.items.map((item) => item.localizedDescriptions?.["zh-CN"]), [
     "最小 Codex 运行环境，包含终端和 Codex。",
+    "包含终端、Codex 和 Obscura 的运行环境。",
     "最小 OpenCode 运行环境，包含终端和 OpenCode。",
     "AI 开发运行环境，包含 Codex、Claude 和终端。",
     "浏览器自动化运行环境，包含 WebCap、Codex、Claude、Chromium 和 VNC。",
@@ -182,7 +185,7 @@ test("stored Market caches ignore unknown fields and isolate invalid items", asy
     items: [...embedded.items, { id: "broken", future: true }],
   }, (warning) => warnings.push(warning));
   const parsed = MarketCatalogSnapshotSchema.parse(cached);
-  assert.equal(parsed.items.length, 5);
+  assert.equal(parsed.items.length, 6);
   assert.ok(warnings.some((warning) => warning.field === "futureField"));
   assert.ok(warnings.some((warning) => warning.itemId === "broken" && warning.field === "invalid-record"));
 });
@@ -196,7 +199,7 @@ test("catalog keeps Custom CRUD separate while exposing unified selectable image
   assert.equal(custom.origin, "custom");
   assert.equal(duplicate.reference, custom.reference);
   assert.equal(catalog.listImages().length, 2);
-  assert.equal(catalog.listImageOptions().length, 7);
+  assert.equal(catalog.listImageOptions().length, 8);
   assert.equal(catalog.resolveImageSelection({ imageId: "market_taskhandoff_browser" }).tag, "latest");
   assert.throws(() => catalog.requireImage("market_taskhandoff_browser"), (error) => error.code === "MARKET_IMAGE_READ_ONLY");
   assert.throws(() => catalog.resolveImageSelection({ imageId: custom.id, tag: "v2" }), (error) => error.code === "CUSTOM_IMAGE_TAG_OVERRIDE");
@@ -298,7 +301,7 @@ test("HTTP keeps Market, Custom, unified options, and node availability as separ
 
   const market = await app.inject({ method: "GET", url: "/api/market/catalog" });
   assert.equal(market.statusCode, 200, market.body);
-  assert.equal(market.json().data.catalog.items.length, 5);
+  assert.equal(market.json().data.catalog.items.length, 6);
   assert.equal(market.json().data.status.source, "embedded");
 
   const emptyCustom = await app.inject({ method: "GET", url: "/api/images" });

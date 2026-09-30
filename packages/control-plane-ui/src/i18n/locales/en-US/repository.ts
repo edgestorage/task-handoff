@@ -29,7 +29,7 @@ export const repository = {
       REPOSITORY_CWD_MISSING: "This session has no authoritative working directory to inspect.",
       REPOSITORY_CWD_INACCESSIBLE: "Restore access to the session working directory in the controlled instance, then refresh.",
       REPOSITORY_GIT_UNAVAILABLE: "Install Git in the controlled instance. The control plane will not run Git against a local substitute path.",
-      REPOSITORY_NOT_WORKTREE: "Use the session terminal to initialize or enter a Git worktree, then refresh Environment.",
+      REPOSITORY_NOT_WORKTREE: "This action requires a Git worktree. Use the session terminal to initialize or enter a Git worktree, then refresh Environment.",
       REPOSITORY_FILE_BINARY: "Binary content is not loaded into the editor. Use an appropriate tool in the session environment.",
       REPOSITORY_FILE_TOO_LARGE: "Open the file with a tool in the session environment; the browser editor size limit was not bypassed.",
       REPOSITORY_FILE_STALE: "The server version changed. Review the latest content before explicitly retrying your draft.",

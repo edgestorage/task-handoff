@@ -350,6 +350,7 @@ import { formatDateTime } from "../../../i18n/presentation";
 import { connectionStatusKeys, instanceStatusKeys, translateStatus } from "../../../i18n/status";
 import { translateApiError } from "../../../i18n/apiError";
 import { authorizeInstanceGitCredential, revokeInstanceGitCredential, useGitCredentialsQuery, useInstanceGitCredentialAssignmentsQuery } from "../../../api/queries";
+import { instanceModelEntityId, instanceModelIdMatches } from "./instanceSettingsState";
 
 const { t } = useI18n();
 const { locale } = useControlPlaneLocale();
@@ -482,12 +483,13 @@ function codexModelValue(modelEntityId: string, modelName: string) {
 }
 const codexModelOptions = computed(() => {
   const assigned = new Set(normalizedSelection(props.instance?.modelSelection || {}).modelEntityIds || []);
+  const nodeId = props.instance?.nodeId || "";
   return props.models
-    .filter((model) => assigned.has(model.id) && model.enabled && (model.protocols?.includes("openai-responses") || (!model.protocols?.length && model.app === "codex")))
+    .filter((model) => [...assigned].some((id) => instanceModelIdMatches(model, nodeId, id)) && model.enabled && (model.protocols?.includes("openai-responses") || (!model.protocols?.length && model.app === "codex")))
     .flatMap((model) => (model.modelNames?.length ? model.modelNames : [{ name: model.model, order: 0 }])
       .slice()
       .sort((left, right) => left.order - right.order || left.name.localeCompare(right.name))
-      .map((entry) => ({ value: codexModelValue(model.id, entry.name), label: `${model.name} · ${entry.name}` })));
+      .map((entry) => ({ value: codexModelValue(instanceModelEntityId(model, nodeId), entry.name), label: `${model.name} · ${entry.name}` })));
 });
 function currentCodexSettings(): CodexInstanceSettings {
   const selectedModel = codexSubagentModel.value === "default"

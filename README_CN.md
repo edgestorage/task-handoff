@@ -257,11 +257,22 @@ scripts/                          安装、构建和运行脚本
 
 ### Docker 镜像
 
-五个公开基础镜像及其独立的 `docker-vX.Y.Z` 发布流程由
+六个公开基础镜像及其独立的 `docker-vX.Y.Z` 发布流程由
 [TaskHandoff Images 仓库](https://github.com/edgestorage/task-handoff-images)
 维护。镜像只包含系统依赖和开发工具，不包含 controlled-instance runtime。
 Node Agent 继续作为权威所有者挂载 bootstrap bundle，并安装目标 runtime
 artifact。
+
+Control Plane 的镜像市场默认从 <https://images.thandoff.com/market/v1/catalog.json>
+拉取目录，并按“远程 → 本地缓存 → 包内置快照”的顺序降级；缓存位于数据目录的
+`market/catalog-cache.json`。远程响应必须通过 schema 校验，配置公钥后还会强制
+验签，且所有镜像仓库必须落在内置发布者命名空间内（可用
+`TASK_HANDOFF_MARKET_ALLOWED_REPOSITORIES` 覆盖）。相关配置：
+
+- `TASK_HANDOFF_MARKET_CATALOG_URL`：目录地址，设为 `off`/`0` 可关闭远程拉取。
+- `TASK_HANDOFF_MARKET_REFRESH_INTERVAL`：刷新间隔秒数，设为 `0` 只保留手动刷新。
+- `TASK_HANDOFF_MARKET_CATALOG_PUBLIC_KEY`、`TASK_HANDOFF_MARKET_CATALOG_KEY_ID`：
+  ed25519 验签公钥（PEM 或 base64 SPKI）和密钥标识。
 
 ### 桌面应用
 

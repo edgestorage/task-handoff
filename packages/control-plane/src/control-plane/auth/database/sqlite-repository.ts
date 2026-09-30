@@ -308,6 +308,7 @@ function repositoryFor(
     nodes: collection(db, schema.nodes, p0RecordSchemas.nodes, mutate),
     pairingRevocations: collection(db, schema.pairingRevocations, p0RecordSchemas.pairingRevocations, mutate),
     models: collection(db, schema.models, p0RecordSchemas.models, mutate),
+    modelLegacyProjections: collection(db, schema.modelLegacyProjections, p0RecordSchemas.modelLegacyProjections, mutate),
     chatBridges: collection(db, schema.chatBridges, p0RecordSchemas.chatBridges, mutate),
     chatSessions: collection(db, schema.chatSessions, p0RecordSchemas.chatSessions, mutate),
     gitCredentials: collection(db, schema.gitCredentials, p0RecordSchemas.gitCredentials, mutate),

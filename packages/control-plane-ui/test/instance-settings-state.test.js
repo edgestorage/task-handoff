@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   effectiveInstanceModel,
+  instanceModelEntityId,
+  instanceModelIdMatches,
   invalidInstanceModelSelection,
   selectableInstanceModels,
 } from "../src/apps/control-plane/instance-settings/instanceSettingsState.ts";
@@ -50,4 +52,19 @@ test("global default resolves only to an enabled control-plane model", () => {
   assert.equal(effectiveInstanceModel(models, "codex", "node-a", null), undefined);
   assert.equal(invalidInstanceModelSelection(models, "codex", "node-a", null), false);
   assert.equal(effectiveInstanceModel(models, "codex", "node-a", "missing"), undefined);
+});
+
+test("a node-local replica matches and resolves under its projected id", () => {
+  const replicated = model("mdl_stable", "codex", {
+    locations: [
+      { type: "control-plane", name: "global", enabled: true, order: 0 },
+      { type: "node", nodeId: "node-a", name: "a", enabled: true, order: 0, referenceCount: 0, replicaId: "mdl_projection" },
+    ],
+  });
+  assert.equal(instanceModelIdMatches(replicated, "node-a", "mdl_projection"), true);
+  assert.equal(instanceModelIdMatches(replicated, "node-a", "mdl_stable"), true);
+  assert.equal(instanceModelIdMatches(replicated, "node-b", "mdl_projection"), false);
+  assert.equal(instanceModelEntityId(replicated, "node-a"), "mdl_projection");
+  assert.equal(instanceModelEntityId(replicated, "node-b"), "mdl_stable");
+  assert.equal(invalidInstanceModelSelection([replicated], "codex", "node-a", "mdl_projection"), false);
 });

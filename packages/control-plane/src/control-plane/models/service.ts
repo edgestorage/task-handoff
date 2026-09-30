@@ -4,6 +4,7 @@ import {
   ModelMergeResultSchema,
   ModelMutationResultSchema,
   ModelLocationSyncResultSchema,
+  createModelEntityId,
   modelConfigHash,
   NodeModelMergeSchema,
   supportsNodeMultiEntityModelAssignment,
@@ -16,7 +17,6 @@ import {
   type PublicModelConfig,
 } from "@task-handoff/protocol/control-plane";
 import type { ControlPlaneModelRepository } from "./repository.ts";
-import type { AiSessionHistoryList } from "@task-handoff/protocol/ai-sessions";
 import { CopyModelInputSchema, CreateModelInputSchema, ModelDiscoveryInputSchema, ModelTestInputSchema, UpdateModelInputSchema, type ModelDiscoveryInput, type ModelTestInput, type UpdateModelInput } from "../application/inputs.ts";
 import { now, throwNotFound } from "../application/helpers.ts";
 import type { ControlPlaneNodeAgentGateway } from "../nodes/gateway.ts";
@@ -48,6 +48,24 @@ function nodeOwnedStableIdentityMessage(nodeId: string, intent: NodeOwnedWriteIn
     ? `Node ${nodeId} must be updated before models can be edited in place.`
     : `Node ${nodeId} must be updated before models can be synced there.`;
 }
+
+/**
+ * Wire shape accepted by the node assignment endpoint. Nodes without stable
+ * model identities receive the per-agent hash fields, newer nodes also receive
+ * the ordered entity collection.
+ */
+export type PreparedModelAssignment = {
+  modelSelection: {
+    modelEntityIds?: string[];
+    codexModelHash?: string | null;
+    claudeModelHash?: string | null;
+    opencodeModelHash?: string | null;
+  };
+  modelEntityIds?: string[];
+  codexModelHash?: string | null;
+  claudeModelHash?: string | null;
+  opencodeModelHash?: string | null;
+};
 
 // Public projection of a node owned replica. The secret stays on the nodes:
 // applying this patch in place converges content without moving key material.
@@ -90,13 +108,17 @@ type ControlPlaneModelServiceOptions = {
   // the cache TTL so retries stay cheap.
   ensureNodeCapabilities?: (node: Node, options?: { force?: boolean }) => Promise<Node>;
   listInstances?: () => Promise<ControlledInstance[]>;
-  listAiSessions?: () => Promise<{ instances: Array<{ instanceId: string; aiSessions: { sessions: Array<{ id: string; modelSelection?: { modelEntityId: string } }> } }> }>;
-  listAiSessionHistory?: (instanceId: string) => Promise<AiSessionHistoryList>;
 };
 
 export class ControlPlaneModelService {
   private readonly options: ControlPlaneModelServiceOptions;
   private readonly databaseModels = new Map<string, ModelConfig>();
+  // Compatibility for v0.0.34: content-hash ids that were already deployed to
+  // nodes without stable model identities, keyed by projection id. The node
+  // keeps a replica under that id even after the entity content changes, so
+  // the mapping cannot be recomputed from current content and is persisted.
+  private readonly legacyProjections = new Map<string, string>();
+  private readonly legacyProjectionIds = new Map<string, Set<string>>();
   // Replica node ids that still need an edit pushed to them. Entries are
   // retried on registry reads and by the explicit sync endpoint.
   private readonly pendingModelSyncs = new Map<string, Set<string>>();
@@ -109,6 +131,14 @@ export class ControlPlaneModelService {
   async init() {
     this.databaseModels.clear();
     for (const model of await this.options.repository.list()) this.databaseModels.set(model.id, model);
+    this.legacyProjections.clear();
+    this.legacyProjectionIds.clear();
+    for (const projection of await this.options.repository.listLegacyProjections()) {
+      this.legacyProjections.set(projection.id, projection.modelId);
+      const ids = this.legacyProjectionIds.get(projection.modelId) || new Set<string>();
+      ids.add(projection.id);
+      this.legacyProjectionIds.set(projection.modelId, ids);
+    }
   }
 
   list() {
@@ -126,10 +156,14 @@ export class ControlPlaneModelService {
       model: PublicModelConfig | NodeModelPublicRecord;
       locations: Array<
         | { type: "control-plane"; name: string; enabled: boolean; order: number; revision?: string }
-        | { type: "node"; nodeId: string; name: string; enabled: boolean; order: number; referenceCount: number; revision?: string }
+        | { type: "node"; nodeId: string; name: string; enabled: boolean; order: number; referenceCount: number; revision?: string; replicaId?: string }
       >;
       referenceCount: number;
     }>();
+    // Nodes without stable model identities hold a control-plane entity under
+    // its content-hash projection; fold those records back onto the entity so
+    // the registry keeps one row per identity.
+    const projectionIndex = this.modelProjectionIndex();
     for (const model of this.listAll()) {
       groups.set(model.id, {
         id: model.id,
@@ -139,8 +173,9 @@ export class ControlPlaneModelService {
       });
     }
     for (const { nodeId, model } of fleet.items) {
+      const entityId = projectionIndex.get(model.id) ?? model.id;
       const { referenceCount: _referenceCount, ...publicModelRecord } = model;
-      const group = groups.get(model.id);
+      const group = groups.get(entityId);
       if (group) {
         group.locations.push({
           type: "node",
@@ -150,11 +185,12 @@ export class ControlPlaneModelService {
           order: model.order,
           referenceCount: model.referenceCount,
           ...(model.revision ? { revision: model.revision } : {}),
+          ...(entityId === model.id ? {} : { replicaId: model.id }),
         });
         group.referenceCount += model.referenceCount;
       } else {
-        groups.set(model.id, {
-          id: model.id,
+        groups.set(entityId, {
+          id: entityId,
           model: publicModelRecord,
           locations: [{
             type: "node",
@@ -189,8 +225,15 @@ export class ControlPlaneModelService {
     const modelNames = normalizeModelNames(parsedInput.modelNames, parsedInput.model);
     const normalizedInput = { ...parsedInput, modelNames, model: modelNames[0].name };
     const timestamp = now();
-    const id = modelConfigHash(normalizedInput);
-    const existing = this.modelGet(id);
+    // Entity identity is opaque and stable. Re-adding the same content still
+    // converges on the existing entity, but a new record mints a short id.
+    const contentHash = modelConfigHash(normalizedInput);
+    const existing = this.findByContentHash(contentHash);
+    let id = existing?.id;
+    if (!id) {
+      id = createModelEntityId();
+      while (this.modelGet(id)) id = createModelEntityId();
+    }
     const model = ModelConfigSchema.parse({
       ...normalizedInput,
       protocols,
@@ -212,15 +255,16 @@ export class ControlPlaneModelService {
       key: parsedInput.key?.trim() || source.key,
     };
     const modelNames = normalizeModelNames(candidate.modelNames, candidate.model);
-    const nextId = modelConfigHash({ ...candidate, model: modelNames[0].name });
-    if (nextId === source.id) {
+    const nextContentHash = modelConfigHash({ ...candidate, model: modelNames[0].name });
+    if (nextContentHash === modelConfigHash(source)) {
       throw Object.assign(new Error("Change the model, endpoint, app, or API key before creating a copy."), {
         statusCode: 409,
         code: "MODEL_COPY_UNCHANGED",
       });
     }
-    if (this.modelGet(nextId)) {
-      throw Object.assign(new Error(`Model ${nextId} already exists.`), {
+    const conflict = this.findByContentHash(nextContentHash);
+    if (conflict) {
+      throw Object.assign(new Error(`Model ${conflict.id} already exists.`), {
         statusCode: 409,
         code: "MODEL_COPY_CONFLICT",
       });
@@ -453,9 +497,9 @@ export class ControlPlaneModelService {
 
   async delete(id: string) {
     this.requireSecret(id);
-    const references = await this.references(id);
+    const references = await this.instanceReferences(id);
     if (references.length) {
-      throw Object.assign(new Error(`Model ${id} is referenced by managed instances or AI Sessions.`), {
+      throw Object.assign(new Error(`Model ${id} is assigned to ${references.length} managed instance${references.length === 1 ? "" : "s"}.`), {
         statusCode: 409,
         code: "MODEL_IN_USE",
         details: { references },
@@ -520,7 +564,7 @@ export class ControlPlaneModelService {
     return includeSecret ? model : publicModel(model);
   }
 
-  async prepareAssignment(node: Node, selection: { modelEntityIds?: string[]; codexModelHash?: string | null; claudeModelHash?: string | null; opencodeModelHash?: string | null }) {
+  async prepareAssignment(node: Node, selection: { modelEntityIds?: string[]; codexModelHash?: string | null; claudeModelHash?: string | null; opencodeModelHash?: string | null }): Promise<PreparedModelAssignment> {
     const nodeModels = await this.options.gateway.listModels(node);
     const hasEntitySelection = selection.modelEntityIds !== undefined;
     const storedSelection: {
@@ -567,10 +611,16 @@ export class ControlPlaneModelService {
     }
     const projectedEntityIds = [...new Set(nodeEntityIds)];
     if (hasEntitySelection) storedSelection.modelEntityIds = projectedEntityIds;
+    // A stored selection on a node without stable identities references the
+    // content-hash projection. Fold it back onto the control-plane entity so
+    // enabled state, app checks, and later edits keep following the
+    // authoritative record instead of the node-local replica.
+    const projectionIndex = this.modelProjectionIndex();
     const resolve = async (app: "codex" | "claude" | "opencode", selectedId?: string | null) => {
       if (selectedId === null) return undefined;
+      const projectedEntityId = selectedId ? projectionIndex.get(selectedId) : undefined;
       const controlPlaneModel = selectedId
-        ? controlPlaneModels.find((model) => model.id === selectedId)
+        ? controlPlaneModels.find((model) => model.id === selectedId || model.id === projectedEntityId)
         : controlPlaneModels.find((model) => model.enabled && modelSupportsApp(model, app));
       if (controlPlaneModel) {
         assertUsableModel(controlPlaneModel, app);
@@ -597,6 +647,15 @@ export class ControlPlaneModelService {
     const opencodeModelHash = hasEntitySelection
       ? storedSelection.opencodeModelHash
       : await resolve("opencode", storedSelection.opencodeModelHash);
+    if (!hasEntitySelection) {
+      // The node persists and validates the selection it is assigned, so on a
+      // node without stable identities the stored reference must be the
+      // content-hash projection the model was deployed under, not the
+      // control-plane entity id the caller picked.
+      if (storedSelection.codexModelHash !== undefined) storedSelection.codexModelHash = codexModelHash ?? null;
+      if (storedSelection.claudeModelHash !== undefined) storedSelection.claudeModelHash = claudeModelHash ?? null;
+      if (storedSelection.opencodeModelHash !== undefined) storedSelection.opencodeModelHash = opencodeModelHash ?? null;
+    }
     const prepared = {
       modelSelection: storedSelection,
       modelEntityIds: projectedEntityIds,
@@ -626,7 +685,59 @@ export class ControlPlaneModelService {
   async ensureInstanceAssignment(instance: ControlledInstance) {
     const node = this.options.requireNode(instance.nodeId);
     const prepared = await this.prepareAssignment(node, instance.modelSelection);
-    return this.options.gateway.assignInstanceModels(node, instance.id, prepared);
+    const assigned = await this.options.gateway.assignInstanceModels(node, instance.id, prepared);
+    await this.retireSupersededNodeModels(node, prepared);
+    return assigned;
+  }
+
+  /**
+   * Retire the content-revision projections a node kept for one entity once an
+   * assignment has moved to a newer revision. Nodes without stable model
+   * identities store one registry record per deployed revision, so the record
+   * the assignment no longer references would otherwise stay behind and show up
+   * as a duplicate location. Runs only after the new assignment is durable: a
+   * record another instance still references answers 409 and is retried by the
+   * next assignment on that node. Never throws - the assignment already
+   * succeeded and cleanup must not fail the caller.
+   */
+  async retireSupersededNodeModels(node: Node, assignment: PreparedModelAssignment) {
+    try {
+      const assignedIds = new Set<string>();
+      for (const id of [
+        ...(assignment.modelSelection.modelEntityIds ?? []),
+        ...(assignment.modelEntityIds ?? []),
+        assignment.modelSelection.codexModelHash,
+        assignment.modelSelection.claudeModelHash,
+        assignment.modelSelection.opencodeModelHash,
+        assignment.codexModelHash,
+        assignment.claudeModelHash,
+        assignment.opencodeModelHash,
+      ]) {
+        if (id) assignedIds.add(id);
+      }
+      if (!assignedIds.size) return;
+      const projectionIndex = this.modelProjectionIndex();
+      const superseded = new Set<string>();
+      for (const assignedId of assignedIds) {
+        const entityId = projectionIndex.get(assignedId) ?? assignedId;
+        for (const projectionId of this.legacyProjectionIds.get(entityId) || []) {
+          if (!assignedIds.has(projectionId)) superseded.add(projectionId);
+        }
+      }
+      if (!superseded.size) return;
+      const records = await this.options.gateway.listModels(node);
+      for (const record of records) {
+        if (!superseded.has(record.id)) continue;
+        try {
+          await this.options.gateway.deleteModel(node, record.id);
+        } catch {
+          // Another assignment still holds the revision (409 NODE_MODEL_IN_USE)
+          // or the node rejected the delete; leave it for the next assignment.
+        }
+      }
+    } catch {
+      // Discovery failed (offline node, unsupported listing); retry later.
+    }
   }
 
   private listAll() {
@@ -658,6 +769,40 @@ export class ControlPlaneModelService {
     return this.databaseModels.get(id);
   }
 
+  private findByContentHash(contentHash: string) {
+    return this.modelList().find((model) => modelConfigHash(model) === contentHash);
+  }
+
+  /**
+   * Maps legacy content-hash projections back onto control-plane entity ids.
+   * Recorded deployments keep their mapping after edits; projections shared by
+   * several entities are ambiguous and stay unmapped.
+   */
+  private modelProjectionIndex() {
+    const index = new Map<string, string>(this.legacyProjections);
+    const ambiguous = new Set<string>();
+    for (const model of this.modelList()) {
+      const projection = modelConfigHash(model);
+      const current = index.get(projection);
+      if (current !== undefined && current !== model.id) {
+        ambiguous.add(projection);
+        continue;
+      }
+      index.set(projection, model.id);
+    }
+    for (const projection of ambiguous) index.delete(projection);
+    return index;
+  }
+
+  private async recordLegacyProjection(projectionId: string, modelId: string) {
+    if (this.legacyProjections.get(projectionId) === modelId) return;
+    await this.options.repository.putLegacyProjection(projectionId, modelId);
+    this.legacyProjections.set(projectionId, modelId);
+    const ids = this.legacyProjectionIds.get(modelId) || new Set<string>();
+    ids.add(projectionId);
+    this.legacyProjectionIds.set(modelId, ids);
+  }
+
   private async modelPut(model: ModelConfig) {
     const stored = await this.options.repository.put(model);
     this.databaseModels.set(stored.id, stored);
@@ -666,70 +811,54 @@ export class ControlPlaneModelService {
 
   private async modelDelete(id: string) {
     const deleted = await this.options.repository.delete(id);
-    if (deleted) this.databaseModels.delete(id);
+    if (deleted) {
+      this.databaseModels.delete(id);
+      const projections = [...(this.legacyProjectionIds.get(id) || [])];
+      if (projections.length) {
+        await this.options.repository.deleteLegacyProjections(projections);
+        this.legacyProjectionIds.delete(id);
+        for (const projection of projections) this.legacyProjections.delete(projection);
+      }
+    }
     return deleted;
   }
 
-  private async references(modelId: string) {
+  /**
+   * Only instance model assignments pin a registry entry. AI session
+   * selections are runtime snapshots of whatever the session used when it
+   * started, and sessions already degrade through their own model-unavailable
+   * recovery when the selected entity is gone, so they never block deletion.
+   */
+  private async instanceReferences(modelId: string) {
     const instances = await this.options.listInstances?.() || [];
     // Nodes that predate stable identities store the content-hash projection
     // of a control-plane entity, so both ids identify the same model there.
     const candidateIds = this.entityReferenceIds(modelId);
-    const isReference = (id?: string | null) => Boolean(id && candidateIds.includes(id));
-    const references: Array<{ kind: "instance" | "ai-session" | "history"; instanceId: string; aiSessionId?: string }> = [];
+    const references = new Map<string, { kind: "instance"; instanceId: string }>();
     for (const instance of instances) {
       const ids = instance.modelSelection.modelEntityIds?.length
         ? instance.modelSelection.modelEntityIds
         : [instance.modelSelection.codexModelHash, instance.modelSelection.claudeModelHash, instance.modelSelection.opencodeModelHash];
-      if (ids.some(isReference)) references.push({ kind: "instance", instanceId: instance.id });
-    }
-    const current = await this.options.listAiSessions?.() || { instances: [] };
-    for (const entry of current.instances) {
-      for (const session of entry.aiSessions.sessions) {
-        if (isReference(session.modelSelection?.modelEntityId)) {
-          references.push({ kind: "ai-session", instanceId: entry.instanceId, aiSessionId: session.id });
-        }
+      if (ids.some((id) => Boolean(id && candidateIds.includes(id)))) {
+        references.set(instance.id, { kind: "instance", instanceId: instance.id });
       }
     }
-    const diagnostics: Array<{ instanceId: string; code: string }> = [];
-    await Promise.all(this.options.listAiSessionHistory ? instances.map(async (instance) => {
-      try {
-        const history = await this.options.listAiSessionHistory!(instance.id);
-        for (const item of history.items) {
-          if (isReference(item.modelSelection?.modelEntityId)) {
-            references.push({ kind: "history", instanceId: instance.id, aiSessionId: item.id });
-          }
-        }
-      } catch (error) {
-        diagnostics.push({
-          instanceId: instance.id,
-          code: error && typeof error === "object" && "code" in error && typeof error.code === "string"
-            ? error.code
-            : "AI_SESSION_HISTORY_UNAVAILABLE",
-        });
-      }
-    }) : []);
-    if (diagnostics.length && references.length === 0) {
-      throw Object.assign(new Error("Model references could not be verified for every managed instance."), {
-        statusCode: 409,
-        code: "MODEL_REFERENCE_CHECK_INCOMPLETE",
-        details: { diagnostics },
-      });
-    }
-    return references
-      .filter((reference, index, all) => all.findIndex((candidate) => candidate.kind === reference.kind
-        && candidate.instanceId === reference.instanceId && candidate.aiSessionId === reference.aiSessionId) === index)
-      .sort((a, b) => a.instanceId.localeCompare(b.instanceId) || a.kind.localeCompare(b.kind) || (a.aiSessionId || "").localeCompare(b.aiSessionId || ""));
+    return [...references.values()].sort((left, right) => left.instanceId.localeCompare(right.instanceId));
   }
 
   private entityReferenceIds(modelId: string) {
     const model = this.modelGet(modelId);
-    return model ? [modelId, modelConfigHash(model)] : [modelId];
+    return model
+      ? [...new Set([modelId, modelConfigHash(model), ...(this.legacyProjectionIds.get(modelId) || [])])]
+      : [modelId];
   }
 
   private replicaHolderIds(modelId: string, nodes: Node[]) {
     const fleet = this.options.gateway.readFleetModels(nodes);
-    return new Set(fleet.items.filter(({ model }) => model.id === modelId).map(({ nodeId }) => nodeId));
+    const projectionIndex = this.modelProjectionIndex();
+    return new Set(fleet.items
+      .filter(({ model }) => (projectionIndex.get(model.id) ?? model.id) === modelId)
+      .map(({ nodeId }) => nodeId));
   }
 
   /**
@@ -755,6 +884,7 @@ export class ControlPlaneModelService {
     }
     const legacyId = modelConfigHash(model);
     await this.options.gateway.deployModel(resolved, legacyId, ModelConfigSchema.parse({ ...model, id: legacyId }));
+    await this.recordLegacyProjection(legacyId, model.id);
     return legacyId;
   }
 
@@ -782,8 +912,12 @@ export class ControlPlaneModelService {
    */
   private async syncEntityToReplicas(model: ModelConfig, targets?: Set<string>): Promise<ModelLocationSyncResult[]> {
     const nodes = this.options.listNodes();
+    if (!nodes.length) return [];
     const fleet = this.options.gateway.readFleetModels(nodes);
-    const holderIds = new Set(fleet.items.filter(({ model: record }) => record.id === model.id).map(({ nodeId }) => nodeId));
+    const projectionIndex = this.modelProjectionIndex();
+    const holderIds = new Set(fleet.items
+      .filter(({ model: record }) => (projectionIndex.get(record.id) ?? record.id) === model.id)
+      .map(({ nodeId }) => nodeId));
     const nodePhases = new Map(fleet.nodeStates.map((state) => [state.nodeId, state.phase]));
     const involved = nodes.filter((node) => targets ? targets.has(node.id) : holderIds.has(node.id));
     // Explicit syncs revalidate capabilities up front; background retries use

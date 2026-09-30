@@ -27,7 +27,7 @@ export const repository = {
       REPOSITORY_CWD_MISSING: "该会话没有可供检查的权威工作目录。",
       REPOSITORY_CWD_INACCESSIBLE: "请恢复受控实例中工作目录的访问权限，然后刷新。",
       REPOSITORY_GIT_UNAVAILABLE: "请在受控实例中安装 Git。控制面板不会改用本地替代路径运行 Git。",
-      REPOSITORY_NOT_WORKTREE: "请在会话终端中初始化或进入 Git 工作树，然后刷新环境。",
+      REPOSITORY_NOT_WORKTREE: "该操作需要 Git 工作树。请在会话终端中初始化或进入 Git 工作树，然后刷新环境。",
       REPOSITORY_FILE_BINARY: "编辑器不会加载二进制内容。请在会话环境中使用合适的工具。",
       REPOSITORY_FILE_TOO_LARGE: "请在会话环境中使用工具打开该文件；浏览器编辑器不会绕过大小限制。",
       REPOSITORY_FILE_STALE: "服务端版本已变化。请查看最新内容后再明确重试草稿。",

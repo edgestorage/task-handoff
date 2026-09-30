@@ -200,7 +200,7 @@ export type { CodexInstanceSettings };
 
 export type ModelLocation =
   | { type: "control-plane"; name: string; enabled: boolean; order: number; revision?: string }
-  | { type: "node"; nodeId: string; name: string; enabled: boolean; order: number; referenceCount: number; revision?: string };
+  | { type: "node"; nodeId: string; name: string; enabled: boolean; order: number; referenceCount: number; revision?: string; replicaId?: string };
 
 export type ModelLocationSyncState = "synced" | "pending" | "unsupported" | "error";
 

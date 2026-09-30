@@ -17,12 +17,22 @@ export function modelSupportsApp(model: ModelConfig, app: ModelApp) {
 
 export function invalidInstanceModelSelection(models: ModelConfig[], app: ModelApp, nodeId: string, modelId?: string | null) {
   if (!modelId) return false;
-  return !selectableInstanceModels(models, app, nodeId).some((model) => model.id === modelId);
+  return !selectableInstanceModels(models, app, nodeId).some((model) => instanceModelIdMatches(model, nodeId, modelId));
 }
 
 export function effectiveInstanceModel(models: ModelConfig[], app: ModelApp, nodeId: string, modelId?: string | null) {
   if (modelId === null) return undefined;
   const selectable = selectableInstanceModels(models, app, nodeId);
-  if (modelId) return selectable.find((model) => model.id === modelId);
+  if (modelId) return selectable.find((model) => instanceModelIdMatches(model, nodeId, modelId));
   return selectable.find((model) => model.locations?.some((location) => location.type === "control-plane" && location.enabled));
+}
+
+/** Nodes without stable model identities store the replica under its content-hash projection. */
+export function instanceModelIdMatches(model: ModelConfig, nodeId: string, modelId: string) {
+  return model.id === modelId || instanceModelEntityId(model, nodeId) === modelId;
+}
+
+/** Id under which the target instance resolves the model. */
+export function instanceModelEntityId(model: ModelConfig, nodeId: string) {
+  return model.locations?.map((location) => location.type === "node" && location.nodeId === nodeId ? location.replicaId : undefined).find(Boolean) || model.id;
 }

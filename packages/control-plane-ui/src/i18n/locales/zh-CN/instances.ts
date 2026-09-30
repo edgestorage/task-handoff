@@ -257,6 +257,7 @@ export const instances = {
     blocked: {
       repository: "请选择仓库。",
       node: "请选择节点。",
+      workspaceNode: "该工作区没有可用节点，请先连接节点。",
       localFolder: "请选择或指定本地文件夹。",
       runtime: "请选择运行环境。",
       dockerChecking: "正在检查所选节点上的 Docker daemon。",

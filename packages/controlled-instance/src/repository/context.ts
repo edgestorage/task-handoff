@@ -81,8 +81,8 @@ export class RepositorySessionResolver {
       gitCommonDir = canonicalGitPath(commonDirOutput, cwd);
       cwdRelativePath = prefixOutput.replace(/\/$/, "");
     } catch (error) {
-      if (error instanceof GitProcessError && error.code === "GIT_NOT_FOUND") return unavailable("git-unavailable");
-      return unavailable("not-worktree");
+      const availability = error instanceof GitProcessError && error.code === "GIT_NOT_FOUND" ? "git-unavailable" as const : "not-worktree" as const;
+      return directoryWorkspace(availability, sessionKind, sessionId, observedAt, cwd);
     }
 
     const statusResult = await git.run("status", ["--porcelain=v2", "--branch", "-z", "--untracked-files=all"]);
@@ -137,6 +137,37 @@ export class RepositorySessionResolver {
 
 function canonicalGitPath(value: string, cwd: string) {
   return fs.realpathSync(path.resolve(cwd, value));
+}
+
+// A session may work outside Git, or in an instance where Git is missing. The
+// workspace still resolves so file browsing and file mutations stay available;
+// only Git state is empty and every Git operation stays gated on the "available"
+// availability.
+function directoryWorkspace(availability: "git-unavailable" | "not-worktree", sessionKind: "ai-session" | "app-session", sessionId: string, observedAt: string, cwd: string): ResolvedRepository {
+  const root = fs.realpathSync(cwd);
+  // A plain directory has no Git state to fingerprint; the path-derived snapshot
+  // keeps the wire model stable while file writes stay guarded by content versions.
+  const snapshotId = hashId("snapshot", ["directory", root]);
+  const changes: RepositoryChanges = {
+    snapshotId,
+    summary: { conflicts: 0, staged: 0, unstaged: 0, untracked: 0 },
+    entries: [],
+  };
+  return {
+    context: {
+      availability,
+      sessionKind,
+      sessionId,
+      observedAt,
+      snapshotId,
+      repositoryRoot: root,
+      displayName: path.basename(root) || root,
+      cwdRelativePath: "",
+      changes: changes.summary,
+    },
+    changes,
+    worktreeRoot: root,
+  };
 }
 
 export function parsePorcelainV2(output: string): ParsedStatus {

@@ -8,16 +8,16 @@
     <div class="runtime-summary">
       <span>{{ t("instances.create.source") }}</span>
       <strong>{{ sourceSummary }}</strong>
+      <span v-if="nodeName">{{ t("instances.create.node") }}</span>
+      <strong v-if="nodeName">{{ nodeName }}</strong>
       <span v-if="selectedRuntime && !selectedRuntimeRequiresImage">{{ t("instances.create.runtime") }}</span>
       <strong v-if="selectedRuntime && !selectedRuntimeRequiresImage">{{ selectedRuntime.name }} · {{ t("instances.create.noContainer") }}</strong>
     </div>
 
     <div class="step-fields runtime-fields">
-      <label>
-        <span>{{ t("instances.create.node") }}</span>
-        <ControlPlaneSelect v-model="runtimeDraft.nodeId" :placeholder="t('instances.create.selectNode')">
-          <ControlPlaneSelectItem v-for="node in nodes" :key="node.id" :value="node.id">{{ node.name }}</ControlPlaneSelectItem>
-        </ControlPlaneSelect>
+      <label class="instance-name-field">
+        <span>{{ t("instances.create.name") }}</span>
+        <ControlPlaneInput v-model="instanceDraft.name" :placeholder="t('instances.create.optionalInstanceName')" />
       </label>
       <label>
         <span>{{ t("instances.create.runtime") }}</span>
@@ -197,11 +197,6 @@
       </Button>
     </div>
 
-    <label class="instance-name-field">
-      <span>{{ t("instances.create.name") }}</span>
-      <ControlPlaneInput v-model="instanceDraft.name" :placeholder="t('instances.create.optionalInstanceName')" />
-    </label>
-
     <div v-if="gitSource && gitCredentialId && gitCredentialProvisioningSupported" class="git-credential-selection">
       <div class="git-credential-summary">
         <span>{{ t("instances.create.gitCredential") }}</span>
@@ -235,7 +230,7 @@
 import { Check, ChevronDown, CircleAlert, CircleCheck, ExternalLink, Image, LoaderCircle, Package, Plus, RefreshCw, Search } from "@lucide/vue";
 import { computed, nextTick, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import type { EnvironmentTemplate, ModelConfig, Node, NodeImageAvailability, NodeRuntime, SelectableImage } from "../../../api/types";
+import type { EnvironmentTemplate, ModelConfig, NodeImageAvailability, NodeRuntime, SelectableImage } from "../../../api/types";
 import type { GitCredentialPublic } from "@task-handoff/protocol/managed-git-credentials";
 import { Button } from "../../../components/ui/button";
 import { Card, CardContent } from "../../../components/ui/card";
@@ -244,6 +239,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "../../../components/ui/
 import { ScrollArea } from "../../../components/ui/scroll-area";
 import ImageArtwork from "../shared/ImageArtwork.vue";
 import { resolveImageDescription } from "../shared/imageDescription";
+import { resolveImageTag, selectableImageTags } from "./imageTagSelection";
 import ControlPlaneInput from "../shared/ControlPlaneInput.vue";
 import ControlPlaneSelect from "../shared/ControlPlaneSelect.vue";
 import ControlPlaneSelectItem from "../shared/ControlPlaneSelectItem.vue";
@@ -270,7 +266,7 @@ const props = defineProps<{
   models: ModelConfig[];
   newImage: NewImageDraft;
   newImageOpen: boolean;
-  nodes: Node[];
+  nodeName: string;
   runtimeDraft: RuntimeDraft;
   runtimesForSelectedNode: NodeRuntime[];
   selectedRuntime?: NodeRuntime;
@@ -318,7 +314,7 @@ const formatBytes = (bytes?: number) => {
   return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
 };
 const localizedImageDescription = (image: SelectableImage) => resolveImageDescription(image, locale.value);
-const selectableTags = computed(() => selectedImage.value?.availableTags.filter((tag) => tag.status !== "yanked") || []);
+const selectableTags = computed(() => selectableImageTags(selectedImage.value));
 const lifecycleLabel = (status: string) => t(`instances.create.lifecycle.${status}`);
 const selectImage = (imageId: string) => {
   props.runtimeDraft.imageId = imageId;
@@ -334,7 +330,10 @@ const selectEnvironmentSource = (type: "image" | "template") => {
     props.runtimeDraft.environmentTemplateId ||= readyTemplates.value[0]?.id || "";
     props.runtimeDraft.imageTag = "";
   }
-  if (type === "image") props.runtimeDraft.imageId ||= props.images[0]?.id || "";
+  if (type === "image") {
+    props.runtimeDraft.imageId ||= props.images[0]?.id || "";
+    props.runtimeDraft.imageTag = resolveImageTag(selectedImage.value, props.runtimeDraft.imageTag);
+  }
 };
 const installGuidance = computed(() => dockerInstallGuidance(props.selectedNodePlatform));
 const installGuidanceLabel = computed(() => t(`instances.create.docker.install.${installGuidance.value.kind}Label`));

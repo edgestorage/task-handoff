@@ -57,6 +57,10 @@ test("instance and settings surfaces preserve Market and Custom ownership", () =
 
   const settings = fs.readFileSync(path.join(__dirname, "../src/apps/control-plane/settings/ImageSettingsSection.vue"), "utf8");
   assert.match(settings, /marketCatalog\.data/);
+  assert.match(settings, /@click="retryMarketCatalog"/);
+  assert.match(settings, /:disabled="refreshingMarketCatalog"/);
+  assert.match(settings, /postApiData\("market\/refresh", \{\}\)/);
+  assert.match(settings, /invalidateControlPlaneDomains\(queryClient, \["market"\]\)/);
   assert.match(settings, /<ImageArtwork compact class="image-artwork"/);
   assert.match(settings, /imageRegistry\.official/);
   assert.match(settings, /capabilitySummary\(image\.capabilities\)/);

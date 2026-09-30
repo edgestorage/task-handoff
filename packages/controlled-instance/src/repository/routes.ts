@@ -259,7 +259,7 @@ export function registerRepositoryRoutes(app: FastifyInstance, options: Register
     app.get<{ Params: { id: string }; Querystring: unknown }>(`${base}/directories`, async (request, reply) => {
       try {
         const query = DirectoryQuerySchema.parse(request.query || {});
-        const state = await requireRepository(servicesFor(kind, request.params.id).resolve);
+        const state = await requireWorkspace(servicesFor(kind, request.params.id).resolve);
         return { data: repositoryFiles(state, options.workspaceRoots).list(query.path) };
       } catch (error) { return sendRepositoryError(reply, error); }
     });
@@ -267,7 +267,7 @@ export function registerRepositoryRoutes(app: FastifyInstance, options: Register
     app.get<{ Params: { id: string }; Querystring: unknown }>(`${base}/files`, async (request, reply) => {
       try {
         const query = FileQuerySchema.parse(request.query || {});
-        const state = await requireRepository(servicesFor(kind, request.params.id).resolve);
+        const state = await requireWorkspace(servicesFor(kind, request.params.id).resolve);
         return { data: repositoryFiles(state, options.workspaceRoots).read(query.path) };
       } catch (error) { return sendRepositoryError(reply, error); }
     });
@@ -275,7 +275,7 @@ export function registerRepositoryRoutes(app: FastifyInstance, options: Register
     app.get<{ Params: { id: string }; Querystring: unknown }>(`${base}/files/search`, async (request, reply) => {
       try {
         const query = PathSearchQuerySchema.parse(request.query || {});
-        const state = await requireRepository(servicesFor(kind, request.params.id).resolve);
+        const state = await requireWorkspace(servicesFor(kind, request.params.id).resolve);
         return { data: repositoryFiles(state, options.workspaceRoots).search(query.query, query.limit) };
       } catch (error) { return sendRepositoryError(reply, error); }
     });
@@ -311,7 +311,7 @@ export function registerRepositoryRoutes(app: FastifyInstance, options: Register
     app.get<{ Params: { id: string }; Querystring: unknown }>(`${base}/changes`, async (request, reply) => {
       try {
         EmptyQuerySchema.parse(request.query || {});
-        const state = await requireRepository(servicesFor(kind, request.params.id).resolve);
+        const state = await requireWorkspace(servicesFor(kind, request.params.id).resolve);
         return { data: state.changes };
       } catch (error) { return sendRepositoryError(reply, error); }
     });
@@ -698,12 +698,12 @@ const AI_SESSION_MODEL_CONFIGURATION_ERROR_CODES = new Set([
 ]);
 
 async function fileMutation<T>(resolve: () => Promise<ResolvedRepository>, queue: RepositoryMutationQueue, workspaceRoots: string[], expectedSnapshotId: string, operation: (files: RepositoryFileService) => T) {
-  const initial = await requireRepository(resolve);
+  const initial = await requireWorkspace(resolve);
   return queue.withWorktree(initial.worktreeRoot!, async () => {
-    const state = await requireRepository(resolve);
+    const state = await requireWorkspace(resolve);
     if (state.context.snapshotId !== expectedSnapshotId) throw new RepositoryOperationError("REPOSITORY_STATE_STALE", "Repository state changed after the file was loaded.", state);
     const file = operation(repositoryFiles(state, workspaceRoots));
-    const current = await requireRepository(resolve);
+    const current = await requireWorkspace(resolve);
     return { file, snapshotId: current.context.snapshotId, context: current.context, changes: current.changes };
   });
 }
@@ -747,6 +747,16 @@ async function requireRepository(resolve: () => Promise<ResolvedRepository>) {
   const state = await resolve();
   if (state.context.availability !== "available" || !state.worktreeRoot || !state.changes) {
     throw new RepositoryOperationError(repositoryAvailabilityCode(state.context.availability), "Repository is unavailable for this session.", state);
+  }
+  return state;
+}
+
+// File browsing and file mutations only need a resolved workspace root. Git
+// operations keep requiring an available repository.
+async function requireWorkspace(resolve: () => Promise<ResolvedRepository>) {
+  const state = await resolve();
+  if (!state.worktreeRoot || !state.changes) {
+    throw new RepositoryOperationError(repositoryAvailabilityCode(state.context.availability), "Workspace is unavailable for this session.", state);
   }
   return state;
 }

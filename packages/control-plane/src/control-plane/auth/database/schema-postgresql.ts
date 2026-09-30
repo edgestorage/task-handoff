@@ -78,6 +78,9 @@ export const models = pgTable("cp_models", {
   protocols: jsonb("protocols").$type<string[]>().notNull(), app: text("app").notNull(), enabled: boolean("enabled").notNull(),
   order: integer("display_order").notNull(), labels: jsonb("labels").$type<Record<string, string>>().notNull(), ...timestamps,
 }, (table) => [index("cp_models_order_idx").on(table.order, table.name, table.id)]);
+export const modelLegacyProjections = pgTable("cp_model_legacy_projections", {
+  id: text("id").primaryKey(), modelId: text("model_id").notNull(), ...timestamps,
+}, (table) => [index("cp_model_legacy_projections_model_idx").on(table.modelId)]);
 export const chatBridges = pgTable("cp_chat_bridges", {
   id: text("id").primaryKey(), channel: text("channel").notNull(), name: text("name").notNull(), enabled: boolean("enabled").notNull(),
   credentialCiphertext: text("credential_ciphertext"),
