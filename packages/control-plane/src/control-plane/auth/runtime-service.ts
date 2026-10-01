@@ -5,8 +5,9 @@ import type { ControlPlaneUserDatabaseConfigInput } from "./database/index.ts";
 import type { ControlPlaneUserRepository } from "./database/repository.ts";
 import { assertCanAccessResolvedResource, type ControlPlaneUserAuthorizationContext } from "./authorization.ts";
 import { ControlPlaneExternalAuthentication } from "./external-authentication.ts";
+import { ControlPlaneCliAuthorizationService, type ControlPlaneCliAuthorizationApprover } from "./cli-authorization.ts";
 import { ControlPlaneIdentityProviderService } from "./identity-provider-service.ts";
-import { ControlPlaneUserAuthentication } from "./user-authentication.ts";
+import { ControlPlaneUserAuthentication, type ControlPlaneSessionClientType } from "./user-authentication.ts";
 import { ControlPlaneUserService } from "./user-service.ts";
 import type { SecretEnvelopeService } from "../persistence/secret-envelope.ts";
 
@@ -30,6 +31,7 @@ export class ControlPlaneAuth {
   readonly mode: ControlPlaneAuthMode;
   readonly users: ControlPlaneUserService;
   readonly sessions: ControlPlaneUserAuthentication;
+  readonly cli: ControlPlaneCliAuthorizationService;
   readonly identityProviders: ControlPlaneIdentityProviderService;
   readonly external: ControlPlaneExternalAuthentication;
   private readonly onUserAuthorizationChanged?: ControlPlaneAuthOptions["onUserAuthorizationChanged"];
@@ -38,6 +40,7 @@ export class ControlPlaneAuth {
     this.mode = ControlPlaneAuthModeSchema.parse(options.mode || process.env.TASK_HANDOFF_CONTROL_PLANE_AUTH_MODE || "disabled");
     this.users = new ControlPlaneUserService(paths, { database: options.database, repository: runtime.repository });
     this.sessions = new ControlPlaneUserAuthentication(this.users, options.loginRateLimit);
+    this.cli = new ControlPlaneCliAuthorizationService(this.users, this.sessions);
     this.identityProviders = new ControlPlaneIdentityProviderService(paths, this.users, { secrets: runtime.secrets });
     this.external = new ControlPlaneExternalAuthentication(this.users, this.sessions, this.identityProviders);
     this.onUserAuthorizationChanged = options.onUserAuthorizationChanged;
@@ -91,22 +94,26 @@ export class ControlPlaneAuth {
     return this.sessions.changeLocalPassword(token, input);
   }
 
-  async currentSession(token: string | undefined, clientType: "web" | "mobile" = "web") {
-    const current = this.enabled() ? await this.sessions.currentSession(token, clientType) : { authenticated: true };
+  async currentSession(token: string | undefined, clientTypes: readonly ControlPlaneSessionClientType[] = ["web"]) {
+    const current = this.enabled() ? await this.sessions.currentSession(token, clientTypes) : { authenticated: true };
     return { ...await this.state(), ...current };
   }
 
-  async renewMobileSession(token: string | undefined) {
+  async renewSession(token: string | undefined, clientTypes: readonly ControlPlaneSessionClientType[]) {
     this.assertEnabled();
-    return this.sessions.renewMobileSession(token);
+    return this.sessions.renewSession(token, clientTypes);
   }
 
-  async currentAccess(token: string | undefined, clientType: "web" | "mobile") {
-    return (await this.sessions.resolve(token, clientType))?.authorization;
+  async renewMobileSession(token: string | undefined) {
+    return this.renewSession(token, ["mobile"]);
   }
 
-  async authorizationForSessionToken(token: string | undefined, clientType: "web" | "mobile"): Promise<ControlPlaneUserAuthorizationContext | undefined> {
-    const current = await this.sessions.resolve(token, clientType);
+  async currentAccess(token: string | undefined, clientTypes: readonly ControlPlaneSessionClientType[]) {
+    return (await this.sessions.resolve(token, clientTypes))?.authorization;
+  }
+
+  async authorizationForSessionToken(token: string | undefined, clientTypes: readonly ControlPlaneSessionClientType[]): Promise<ControlPlaneUserAuthorizationContext | undefined> {
+    const current = await this.sessions.resolve(token, clientTypes);
     if (!current) return undefined;
     return {
       type: "user",
@@ -125,14 +132,73 @@ export class ControlPlaneAuth {
     return this.sessions.logout(token);
   }
 
-  async mobileSessions(token: string | undefined) {
-    const current = await this.sessions.resolve(token);
-    return current ? this.sessions.listMobileSessions(current.user.id) : undefined;
+  async logoutSession(token: string | undefined, clientTypes: readonly ControlPlaneSessionClientType[]) {
+    if (!this.enabled()) return { ok: true };
+    const current = await this.sessions.resolve(token, clientTypes);
+    return this.sessions.logout(current ? token : undefined);
   }
 
-  async revokeMobileSession(token: string | undefined, sessionId: string) {
-    const current = await this.sessions.resolve(token);
-    return current ? this.sessions.revokeSession(current.user.id, sessionId) : undefined;
+  async mobileSessions(token: string | undefined, credentialClientTypes: readonly ControlPlaneSessionClientType[] = ["mobile"]) {
+    return this.clientSessions(token, credentialClientTypes, "mobile");
+  }
+
+  async cliSessions(token: string | undefined, credentialClientTypes: readonly ControlPlaneSessionClientType[] = ["cli"]) {
+    this.assertEnabled();
+    return this.clientSessions(token, credentialClientTypes, "cli");
+  }
+
+  async revokeClientSession(
+    token: string | undefined,
+    credentialClientTypes: readonly ControlPlaneSessionClientType[],
+    targetClientTypes: readonly ControlPlaneSessionClientType[],
+    sessionId: string,
+  ) {
+    const current = await this.sessions.resolve(token, credentialClientTypes);
+    return current ? this.sessions.revokeSession(current.user.id, sessionId, targetClientTypes) : undefined;
+  }
+
+  async revokeMobileSession(token: string | undefined, sessionId: string, credentialClientTypes: readonly ControlPlaneSessionClientType[] = ["mobile"]) {
+    return this.revokeClientSession(token, credentialClientTypes, ["mobile"], sessionId);
+  }
+
+  async revokeCliSession(token: string | undefined, sessionId: string, credentialClientTypes: readonly ControlPlaneSessionClientType[] = ["cli"]) {
+    this.assertEnabled();
+    return this.revokeClientSession(token, credentialClientTypes, ["cli"], sessionId);
+  }
+
+  async createCliAuthorization(input: unknown, context: { publicOrigin: string; sourceId?: string }) {
+    this.assertEnabled();
+    return this.cli.create(input, context);
+  }
+
+  cliAuthorizationRequest(requestId: string) {
+    this.assertEnabled();
+    return this.cli.detail(requestId);
+  }
+
+  cliAuthorizationRequestByUserCode(userCode: string) {
+    this.assertEnabled();
+    return this.cli.detailByUserCode(userCode);
+  }
+
+  async approveCliAuthorization(requestId: string, approver: ControlPlaneCliAuthorizationApprover) {
+    this.assertEnabled();
+    return this.cli.approve(requestId, approver);
+  }
+
+  async denyCliAuthorization(requestId: string, approver: ControlPlaneCliAuthorizationApprover) {
+    this.assertEnabled();
+    return this.cli.deny(requestId, approver);
+  }
+
+  async exchangeCliToken(input: unknown, context: { sourceId?: string } = {}) {
+    this.assertEnabled();
+    return this.cli.exchange(input, context);
+  }
+
+  private async clientSessions(token: string | undefined, clientTypes: readonly ControlPlaneSessionClientType[], clientType: "mobile" | "cli") {
+    const current = await this.sessions.resolve(token, clientTypes);
+    return current ? this.sessions.listClientSessions(current.user.id, clientType) : undefined;
   }
 
   async assertAppAccessAuthorization(binding: { userId: string; authorizationRevision: number; instanceId: string; nodeId: string }) {

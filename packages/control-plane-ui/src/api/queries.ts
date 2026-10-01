@@ -135,6 +135,32 @@ export function logoutControlPlane() {
   return sharedControlPlaneClient.auth.logout();
 }
 
+export function useCliAuthorizationRequestQuery(requestId: MaybeRefOrGetter<string | undefined>) {
+  return useQuery({
+    queryKey: computed(() => ["cli-authorization-request", toValue(requestId)]),
+    queryFn: ({ signal }) => sharedControlPlaneClient.auth.cliAuthorizationRequest(toValue(requestId) as string, signal),
+    enabled: computed(() => Boolean(toValue(requestId))),
+    retry: false,
+  });
+}
+
+export function useCliAuthorizationRequestByUserCodeQuery(userCode: MaybeRefOrGetter<string | undefined>) {
+  return useQuery({
+    queryKey: computed(() => ["cli-authorization-request-by-code", toValue(userCode)]),
+    queryFn: ({ signal }) => sharedControlPlaneClient.auth.cliAuthorizationRequestByUserCode(toValue(userCode) as string, signal),
+    enabled: computed(() => Boolean(toValue(userCode))),
+    retry: false,
+  });
+}
+
+export function approveCliAuthorization(requestId: string) {
+  return sharedControlPlaneClient.auth.approveCliAuthorization(requestId);
+}
+
+export function denyCliAuthorization(requestId: string) {
+  return sharedControlPlaneClient.auth.denyCliAuthorization(requestId);
+}
+
 export function useMobileSessionsQuery(enabled: MaybeRefOrGetter<boolean> = true) {
   return useQuery({
     queryKey: controlPlaneQueryKeys.mobileSessions,
@@ -144,8 +170,21 @@ export function useMobileSessionsQuery(enabled: MaybeRefOrGetter<boolean> = true
   });
 }
 
+export function useCliSessionsQuery(enabled: MaybeRefOrGetter<boolean> = true) {
+  return useQuery({
+    queryKey: controlPlaneQueryKeys.cliSessions,
+    queryFn: ({ signal }) => sharedControlPlaneClient.auth.cliSessions(signal),
+    enabled: computed(() => toValue(enabled)),
+    retry: false,
+  });
+}
+
 export function revokeMobileSession(sessionId: string) {
   return sharedControlPlaneClient.auth.revokeMobileSession(sessionId);
+}
+
+export function revokeCliSession(sessionId: string) {
+  return sharedControlPlaneClient.auth.revokeCliSession(sessionId);
 }
 
 export function useCurrentAccessQuery(enabled: MaybeRefOrGetter<boolean> = true) {

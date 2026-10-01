@@ -250,6 +250,23 @@ CREATE TABLE cp_model_legacy_projections (
 );
 CREATE INDEX cp_model_legacy_projections_model_idx ON cp_model_legacy_projections(model_id);
 `),
+  migration("0006_cli_sessions", `
+ALTER TABLE cp_user_sessions RENAME TO cp_user_sessions_pre_cli;
+CREATE TABLE cp_user_sessions (
+  id TEXT PRIMARY KEY NOT NULL, identity_id TEXT NOT NULL REFERENCES cp_login_identities(id) ON DELETE CASCADE,
+  authorization_revision INTEGER NOT NULL,
+  token_hash TEXT NOT NULL, expires_at TEXT NOT NULL, last_seen_at TEXT,
+  client_type TEXT NOT NULL CHECK(client_type IN ('web','mobile','cli')),
+  device TEXT, client_info TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+INSERT INTO cp_user_sessions (id, identity_id, authorization_revision, token_hash, expires_at, last_seen_at, client_type, device, client_info, created_at, updated_at)
+  SELECT id, identity_id, authorization_revision, token_hash, expires_at, last_seen_at, client_type, device, NULL, created_at, updated_at
+  FROM cp_user_sessions_pre_cli;
+DROP TABLE cp_user_sessions_pre_cli;
+CREATE UNIQUE INDEX cp_user_sessions_token_hash_uq ON cp_user_sessions(token_hash);
+CREATE INDEX cp_user_sessions_identity_idx ON cp_user_sessions(identity_id);
+CREATE INDEX cp_user_sessions_expiry_idx ON cp_user_sessions(expires_at);
+`),
 ];
 export const postgresqlMigrations = [
   migration("0001_user_access", postgresqlInitial),
@@ -261,5 +278,10 @@ CREATE TABLE cp_model_legacy_projections (
   id TEXT PRIMARY KEY NOT NULL, model_id TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
 CREATE INDEX cp_model_legacy_projections_model_idx ON cp_model_legacy_projections(model_id);
+`),
+  migration("0006_cli_sessions", `
+ALTER TABLE cp_user_sessions DROP CONSTRAINT IF EXISTS cp_user_sessions_client_type_check;
+ALTER TABLE cp_user_sessions ADD CONSTRAINT cp_user_sessions_client_type_check CHECK (client_type IN ('web','mobile','cli'));
+ALTER TABLE cp_user_sessions ADD COLUMN IF NOT EXISTS client_info JSONB;
 `),
 ];

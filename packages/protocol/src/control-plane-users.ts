@@ -111,11 +111,13 @@ export const ControlPlaneLoginIdentitySummarySchema = z.object({
   }
 });
 
+export const ControlPlaneSessionClientTypeSchema = z.enum(["web", "mobile", "cli"]);
+
 export const ControlPlaneUserSessionSummarySchema = z.object({
   id: z.string().trim().min(1),
   userId: z.string().trim().min(1),
   identityId: z.string().trim().min(1),
-  clientType: z.enum(["web", "mobile"]),
+  clientType: ControlPlaneSessionClientTypeSchema,
   createdAt: z.string().datetime(),
   expiresAt: z.string().datetime(),
   lastSeenAt: z.string().datetime().optional(),

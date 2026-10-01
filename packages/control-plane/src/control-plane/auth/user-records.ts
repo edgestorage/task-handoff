@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  ControlPlaneCliClientSchema,
   ControlPlaneExternalIdentityLoginPolicySchema,
   ControlPlaneIdentityProviderKindSchema,
   ControlPlaneIdentityProviderStatusSchema,
@@ -77,16 +78,20 @@ export const UserSessionRecordSchema = StoredRecordSchema.extend({
   tokenHash: z.string().trim().min(1),
   expiresAt: z.string().datetime(),
   lastSeenAt: z.string().datetime().optional(),
-  clientType: z.enum(["web", "mobile"]),
+  clientType: z.enum(["web", "mobile", "cli"]),
   device: z.object({
     id: z.string().trim().min(1),
     name: z.string().trim().min(1),
     platform: z.enum(["ios", "android"]),
     appVersion: z.string().trim().min(1).optional(),
   }).strict().optional(),
+  clientInfo: ControlPlaneCliClientSchema.optional(),
 }).strict().refine((session) => session.clientType !== "mobile" || Boolean(session.device), {
   path: ["device"],
   message: "Mobile sessions require device metadata.",
+}).refine((session) => session.clientType !== "cli" || Boolean(session.clientInfo), {
+  path: ["clientInfo"],
+  message: "CLI sessions require client metadata.",
 });
 
 export const IdentityProviderRecordSchema = StoredRecordSchema.extend({

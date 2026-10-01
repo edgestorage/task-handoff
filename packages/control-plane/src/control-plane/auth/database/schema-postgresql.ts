@@ -39,7 +39,8 @@ export const sessions = pgTable("cp_user_sessions", {
   id: text("id").primaryKey(),
   identityId: text("identity_id").notNull().references(() => identities.id, { onDelete: "cascade" }), authorizationRevision: integer("authorization_revision").notNull(),
   tokenHash: text("token_hash").notNull(), expiresAt: text("expires_at").notNull(), lastSeenAt: text("last_seen_at"), clientType: text("client_type").notNull(),
-  device: jsonb("device").$type<{ id: string; name: string; platform: "ios" | "android"; appVersion?: string }>(), ...timestamps,
+  device: jsonb("device").$type<{ id: string; name: string; platform: "ios" | "android"; appVersion?: string }>(),
+  clientInfo: jsonb("client_info").$type<{ name: string; platform: "darwin" | "linux" | "win32"; version?: string }>(), ...timestamps,
 }, (table) => [uniqueIndex("cp_user_sessions_token_hash_uq").on(table.tokenHash), index("cp_user_sessions_identity_idx").on(table.identityId), index("cp_user_sessions_expiry_idx").on(table.expiresAt)]);
 export const providers = pgTable("cp_identity_providers", {
   id: text("id").primaryKey(), name: text("name").notNull(), kind: text("kind").notNull(), status: text("status").notNull(),

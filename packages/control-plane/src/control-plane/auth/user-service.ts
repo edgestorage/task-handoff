@@ -193,6 +193,12 @@ export class ControlPlaneUserService {
     });
   }
 
+  async summary(userId: string) {
+    const user = await this.requireUser(userId);
+    const identities = await this.store.identities.listByUser(userId);
+    return this.publicUser(user, identities.find((identity) => identity.kind === "local-password"));
+  }
+
   async createLocalUser(input: unknown) {
     const parsed = CreateLocalUserInputSchema.parse(input);
     const created = await this.createLocalUserInternal(parsed);

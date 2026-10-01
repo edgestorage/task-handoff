@@ -1,6 +1,7 @@
 import type { ControlPlaneMessages } from "../en-US/index.ts";
 import { agents } from "./agents.ts";
 import { auth } from "./auth.ts";
+import { cliAuthorize } from "./cliAuthorize.ts";
 import { common } from "./common.ts";
 import { errors } from "./errors.ts";
 import { instances } from "./instances.ts";
@@ -14,6 +15,7 @@ import { triggers } from "./triggers.ts";
 export const zhCN = {
   agents,
   auth,
+  cliAuthorize,
   common,
   errors,
   instances,

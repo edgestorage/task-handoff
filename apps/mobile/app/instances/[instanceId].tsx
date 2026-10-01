@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import * as Crypto from 'expo-crypto';
-import { router, Stack, useLocalSearchParams } from 'expo-router';
+import { router, Stack, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { MenuView, type MenuAction } from '@expo/ui/community/menu';
 import { ActivityIndicator, Alert, KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import type { ControlPlaneInstanceAction } from '@task-handoff/protocol/control-plane-directory';
@@ -14,6 +14,7 @@ import { SystemIcon } from '../../src/components/SystemIcon';
 import { useMobileTheme } from '../../src/components/theme';
 import { useActiveDirectories } from '../../src/directories/use-directories';
 import { InstanceOverview } from '../../src/instances/InstanceNativeSections';
+import { InstanceWorktreesSection } from '../../src/instances/InstanceWorktreesSection';
 import { RESOURCE_NAME_MAX_LENGTH, validateResourceName } from '../../src/instances/resource-name';
 import { useI18n } from '../../src/i18n';
 
@@ -33,8 +34,10 @@ export default function InstanceDirectoryDetailRoute() {
   const [renaming, setRenaming] = useState(false);
   const [lifecycleAction, setLifecycleAction] = useState<ControlPlaneInstanceAction>();
   const [closingAllSessions, setClosingAllSessions] = useState(false);
+  const [worktreeRefreshToken, setWorktreeRefreshToken] = useState(0);
   const instance = state.instances.find((candidate) => candidate.id === instanceId);
   const node = instance ? state.nodes.find((candidate) => candidate.id === instance.nodeId) : undefined;
+  useFocusEffect(useCallback(() => { setWorktreeRefreshToken((current) => current + 1); }, []));
   if (!instance) {
     return <Screen contentContainerStyle={styles.emptyScreen}><EmptyState icon={{ android: 'deployed_code', ios: 'shippingbox' }} message={t('instance.notFound')} /></Screen>;
   }
@@ -213,6 +216,8 @@ export default function InstanceDirectoryDetailRoute() {
         runtime={`${instance.runtime.name || instance.runtime.id}${instance.runtime.type ? ` · ${instance.runtime.type}` : ''}`}
         workspace={instance.workspace.path || instance.workspace.status}
       />
+
+      <InstanceWorktreesSection instanceId={instance.id} nodeId={instance.nodeId} refreshToken={worktreeRefreshToken} workspacePath={instance.workspace.path || undefined} />
 
       {instance.protocol.warning ? <Notice text={instance.protocol.warning} /> : null}
       {instance.error ? <Notice error text={`${instance.error.code}: ${instance.error.message}`} /> : null}

@@ -2400,6 +2400,7 @@ test("control plane exposes a stable signed identity and authorizes revocable mo
   assert.equal(firstIdentity.payload.kind, "control-plane");
   assert.equal(firstIdentity.payload.capabilities.authentication, "required");
   assert.equal(firstIdentity.payload.capabilities.triggers, true);
+  assert.equal(firstIdentity.payload.capabilities.cliSessions, true);
   const publicKey = crypto.createPublicKey({
     key: { kty: "OKP", crv: "Ed25519", x: firstIdentity.payload.publicKey.value },
     format: "jwk",

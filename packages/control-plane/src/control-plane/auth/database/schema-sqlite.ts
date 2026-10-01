@@ -73,8 +73,9 @@ export const sessions = sqliteTable("cp_user_sessions", {
   tokenHash: text("token_hash").notNull(),
   expiresAt: text("expires_at").notNull(),
   lastSeenAt: text("last_seen_at"),
-  clientType: text("client_type", { enum: ["web", "mobile"] }).notNull(),
+  clientType: text("client_type", { enum: ["web", "mobile", "cli"] }).notNull(),
   device: text("device", { mode: "json" }).$type<{ id: string; name: string; platform: "ios" | "android"; appVersion?: string }>(),
+  clientInfo: text("client_info", { mode: "json" }).$type<{ name: string; platform: "darwin" | "linux" | "win32"; version?: string }>(),
   ...timestamps,
 }, (table) => [
   uniqueIndex("cp_user_sessions_token_hash_uq").on(table.tokenHash),

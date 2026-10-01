@@ -427,6 +427,34 @@ importers:
         specifier: ~6.0.3
         version: 6.0.3
 
+  apps/thctl:
+    dependencies:
+      '@task-handoff/control-plane-client':
+        specifier: workspace:*
+        version: link:../../packages/control-plane-client
+      '@task-handoff/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@task-handoff/protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
+      commander:
+        specifier: ^14.0.3
+        version: 14.0.3
+      ws:
+        specifier: ^8.21.0
+        version: 8.21.0
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@types/ws':
+        specifier: ^8.18.1
+        version: 8.18.1
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+
   packages/ai-session-runtime:
     dependencies:
       '@task-handoff/core':

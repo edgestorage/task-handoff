@@ -55,6 +55,7 @@ import {
 } from "@task-handoff/protocol/ai-sessions";
 import type { ControlPlaneClientTransport } from "./transport.ts";
 import { RepositoryAiSessionWorkspaceSchema } from "@task-handoff/protocol/repository";
+import { jsonRequest } from "./json-request.ts";
 
 const DataSchema = <T extends z.ZodType>(schema: T) => z.object({ data: schema }).strict();
 
@@ -88,12 +89,6 @@ export function createControlPlaneAiSessionsApi(transport: ControlPlaneClientTra
   const requestData = async <T>(path: string, schema: z.ZodType<T>, init?: RequestInit) => (
     (await transport.request(path, DataSchema(schema), init)).data
   );
-  const json = (method: string, body?: unknown, signal?: AbortSignal): RequestInit => ({
-    method,
-    signal,
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body ?? {}),
-  });
   const sessionRoute = (instanceId: string, sessionId: string) => `/api/controlled-instances/${encodeURIComponent(instanceId)}/ai-sessions/${encodeURIComponent(sessionId)}`;
 
   return {
@@ -139,24 +134,24 @@ export function createControlPlaneAiSessionsApi(transport: ControlPlaneClientTra
       return requestData(`${sessionRoute(instanceId, aiSessionId)}/turns/${encodeURIComponent(turnId)}/timeline`, AiSessionTurnTimelineSchema, { signal });
     },
     resume(instanceId: string, aiSessionId: string, input: AiSessionResumeInput = {}) {
-      return requestData(`${sessionRoute(instanceId, aiSessionId)}/resume`, AiSessionResumeResultSchema, json("POST", AiSessionResumeInputSchema.parse(input)));
+      return requestData(`${sessionRoute(instanceId, aiSessionId)}/resume`, AiSessionResumeResultSchema, jsonRequest("POST", AiSessionResumeInputSchema.parse(input)));
     },
     create(instanceId: string, input: AiSessionCreateRefInput) {
-      return requestData(`/api/controlled-instances/${encodeURIComponent(instanceId)}/ai-sessions`, AiSessionCreateResultSchema, json("POST", AiSessionCreateRefInputSchema.parse(input)));
+      return requestData(`/api/controlled-instances/${encodeURIComponent(instanceId)}/ai-sessions`, AiSessionCreateResultSchema, jsonRequest("POST", AiSessionCreateRefInputSchema.parse(input)));
     },
     updateModelSelection(instanceId: string, aiSessionId: string, clientRequestId: string, modelSelection: AiSessionModelSelection) {
       const body = AiSessionModelSelectionInputSchema.parse({ clientRequestId, modelSelection });
-      return requestData(`${sessionRoute(instanceId, aiSessionId)}/model-selection`, AiSessionModelSelectionActionResponseSchema, json("PUT", body));
+      return requestData(`${sessionRoute(instanceId, aiSessionId)}/model-selection`, AiSessionModelSelectionActionResponseSchema, jsonRequest("PUT", body));
     },
     updateReasoningEffort(instanceId: string, aiSessionId: string, clientRequestId: string, reasoningEffort: AiSessionReasoningEffort) {
       const body = AiSessionReasoningEffortInputSchema.parse({ clientRequestId, reasoningEffort });
-      return requestData(`${sessionRoute(instanceId, aiSessionId)}/reasoning-effort`, AiSessionReasoningEffortActionResponseSchema, json("PUT", body));
+      return requestData(`${sessionRoute(instanceId, aiSessionId)}/reasoning-effort`, AiSessionReasoningEffortActionResponseSchema, jsonRequest("PUT", body));
     },
     rename(instanceId: string, aiSessionId: string, input: AiSessionRenameInput) {
-      return requestData(`${sessionRoute(instanceId, aiSessionId)}/title`, AiSessionRenameResultSchema, json("PUT", AiSessionRenameInputSchema.parse(input)));
+      return requestData(`${sessionRoute(instanceId, aiSessionId)}/title`, AiSessionRenameResultSchema, jsonRequest("PUT", AiSessionRenameInputSchema.parse(input)));
     },
     fork(instanceId: string, aiSessionId: string, input: AiSessionForkInput) {
-      return requestData(`${sessionRoute(instanceId, aiSessionId)}/fork`, AiSessionForkResultSchema, json("POST", AiSessionForkInputSchema.parse(input)));
+      return requestData(`${sessionRoute(instanceId, aiSessionId)}/fork`, AiSessionForkResultSchema, jsonRequest("POST", AiSessionForkInputSchema.parse(input)));
     },
     workspace(instanceId: string, cwdFolderId?: string, signal?: AbortSignal) {
       const query = cwdFolderId ? `?${new URLSearchParams({ cwdFolderId })}` : "";
@@ -164,22 +159,22 @@ export function createControlPlaneAiSessionsApi(transport: ControlPlaneClientTra
     },
     checkoutWorkspaceBranch(instanceId: string, input: { cwdFolderId?: string; branch: string }) {
       const body = AiSessionWorkspaceCheckoutInputSchema.parse(input);
-      return requestData(`/api/controlled-instances/${encodeURIComponent(instanceId)}/ai-sessions/workspace/checkout`, RepositoryAiSessionWorkspaceSchema, json("POST", body));
+      return requestData(`/api/controlled-instances/${encodeURIComponent(instanceId)}/ai-sessions/workspace/checkout`, RepositoryAiSessionWorkspaceSchema, jsonRequest("POST", body));
     },
     openApp(instanceId: string, aiSessionId: string, clientRequestId: string) {
-      return requestData(`${sessionRoute(instanceId, aiSessionId)}/open-app`, AiSessionOpenAppResultSchema, json("POST", AiSessionOpenAppInputSchema.parse({ clientRequestId })));
+      return requestData(`${sessionRoute(instanceId, aiSessionId)}/open-app`, AiSessionOpenAppResultSchema, jsonRequest("POST", AiSessionOpenAppInputSchema.parse({ clientRequestId })));
     },
     close(instanceId: string, aiSessionId: string, clientRequestId: string) {
-      return requestData(`${sessionRoute(instanceId, aiSessionId)}/close`, AiSessionCloseResultSchema, json("POST", AiSessionCloseInputSchema.parse({ clientRequestId })));
+      return requestData(`${sessionRoute(instanceId, aiSessionId)}/close`, AiSessionCloseResultSchema, jsonRequest("POST", AiSessionCloseInputSchema.parse({ clientRequestId })));
     },
     clear(instanceId: string, aiSessionId: string) {
       return requestData(sessionRoute(instanceId, aiSessionId), AiSessionClearResultSchema, { method: "DELETE" });
     },
     executeCommand(instanceId: string, sessionId: string, input: AiSessionCommandInput) {
-      return requestData(`${sessionRoute(instanceId, sessionId)}/commands`, AiSessionCommandResultSchema, json("POST", AiSessionCommandInputSchema.parse(input)));
+      return requestData(`${sessionRoute(instanceId, sessionId)}/commands`, AiSessionCommandResultSchema, jsonRequest("POST", AiSessionCommandInputSchema.parse(input)));
     },
     markRead(instanceId: string, sessionId: string, sessionUpdatedAt: string) {
-      return requestData(`${sessionRoute(instanceId, sessionId)}/read`, AiSessionUnreadStateSchema, json("POST", { sessionUpdatedAt }));
+      return requestData(`${sessionRoute(instanceId, sessionId)}/read`, AiSessionUnreadStateSchema, jsonRequest("POST", { sessionUpdatedAt }));
     },
     sendMessage(instanceId: string, sessionId: string, input: {
       message: string;
@@ -193,28 +188,28 @@ export function createControlPlaneAiSessionsApi(transport: ControlPlaneClientTra
         attachments: input.attachments ?? [],
         references: input.references ?? [],
       });
-      return requestData(`${sessionRoute(instanceId, sessionId)}/messages`, AiSessionActionCompatibleResponseSchema, json("POST", body));
+      return requestData(`${sessionRoute(instanceId, sessionId)}/messages`, AiSessionActionCompatibleResponseSchema, jsonRequest("POST", body));
     },
     approval(instanceId: string, sessionId: string, decision: "allow" | "deny" | "skip") {
-      return requestData(`${sessionRoute(instanceId, sessionId)}/approval`, AiSessionActionCompatibleResponseSchema, json("POST", AiSessionApprovalInputSchema.parse({ decision })));
+      return requestData(`${sessionRoute(instanceId, sessionId)}/approval`, AiSessionActionCompatibleResponseSchema, jsonRequest("POST", AiSessionApprovalInputSchema.parse({ decision })));
     },
     interrupt(instanceId: string, sessionId: string) {
-      return requestData(`${sessionRoute(instanceId, sessionId)}/interrupt`, AiSessionActionCompatibleResponseSchema, json("POST"));
+      return requestData(`${sessionRoute(instanceId, sessionId)}/interrupt`, AiSessionActionCompatibleResponseSchema, jsonRequest("POST", {}));
     },
     steerQueue(instanceId: string, sessionId: string, queueId: string) {
-      return requestData(`${sessionRoute(instanceId, sessionId)}/queue/${encodeURIComponent(queueId)}/steer`, AiSessionActionCompatibleResponseSchema, json("POST"));
+      return requestData(`${sessionRoute(instanceId, sessionId)}/queue/${encodeURIComponent(queueId)}/steer`, AiSessionActionCompatibleResponseSchema, jsonRequest("POST", {}));
     },
     retryQueue(instanceId: string, sessionId: string, queueId: string) {
-      return requestData(`${sessionRoute(instanceId, sessionId)}/queue/${encodeURIComponent(queueId)}/retry`, AiSessionQueueMutationResponseSchema, json("POST"));
+      return requestData(`${sessionRoute(instanceId, sessionId)}/queue/${encodeURIComponent(queueId)}/retry`, AiSessionQueueMutationResponseSchema, jsonRequest("POST", {}));
     },
     removeQueue(instanceId: string, sessionId: string, queueId: string) {
       return requestData(`${sessionRoute(instanceId, sessionId)}/queue/${encodeURIComponent(queueId)}`, AiSessionQueueMutationResponseSchema, { method: "DELETE" });
     },
     editQueue(instanceId: string, sessionId: string, queueId: string, input: AiSessionQueueEditInput) {
-      return requestData(`${sessionRoute(instanceId, sessionId)}/queue/${encodeURIComponent(queueId)}`, AiSessionQueueMutationResponseSchema, json("PATCH", AiSessionQueueEditInputSchema.parse(input)));
+      return requestData(`${sessionRoute(instanceId, sessionId)}/queue/${encodeURIComponent(queueId)}`, AiSessionQueueMutationResponseSchema, jsonRequest("PATCH", AiSessionQueueEditInputSchema.parse(input)));
     },
     reorderQueue(instanceId: string, sessionId: string, input: AiSessionQueueReorderInput) {
-      return requestData(`${sessionRoute(instanceId, sessionId)}/queue/reorder`, AiSessionQueueMutationResponseSchema, json("PATCH", AiSessionQueueReorderInputSchema.parse(input)));
+      return requestData(`${sessionRoute(instanceId, sessionId)}/queue/reorder`, AiSessionQueueMutationResponseSchema, jsonRequest("PATCH", AiSessionQueueReorderInputSchema.parse(input)));
     },
     async uploadAttachment(input: { instanceId: string; sessionId: string; scopeType?: "session" | "create-request"; kind: "image" | "file"; name: string; mime: string; data: string }, onProgress?: (progress: number) => void) {
       onProgress?.(0);
@@ -242,7 +237,7 @@ export function createControlPlaneAiSessionsApi(transport: ControlPlaneClientTra
         response = await transport.request(
           "/api/ai-session-attachments",
           DataSchema(AiSessionUploadedAttachmentSchema),
-          json("POST", {
+          jsonRequest("POST", {
             instanceId: input.instanceId,
             sessionId: input.sessionId,
             kind: input.kind,
@@ -260,7 +255,7 @@ export function createControlPlaneAiSessionsApi(transport: ControlPlaneClientTra
       return requestData(`${sessionRoute(instanceId, sessionId)}/mentions`, AiSessionMentionCatalogSchema, { signal });
     },
     searchMentionFiles(instanceId: string, sessionId: string, query: string, signal?: AbortSignal) {
-      return requestData(`${sessionRoute(instanceId, sessionId)}/mentions/files`, AiSessionMentionFileSearchSchema, json("POST", { query }, signal));
+      return requestData(`${sessionRoute(instanceId, sessionId)}/mentions/files`, AiSessionMentionFileSearchSchema, jsonRequest("POST", { query }, signal));
     },
   };
 }

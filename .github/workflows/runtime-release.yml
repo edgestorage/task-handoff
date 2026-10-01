@@ -276,6 +276,7 @@ jobs:
           publish_or_verify release/npm/node-agent "release/npm/artifacts/task-handoff-node-agent-$RELEASE_VERSION.tgz"
           publish_or_verify release/npm/controlled-instance "release/npm/artifacts/task-handoff-controlled-instance-$RELEASE_VERSION.tgz"
           publish_or_verify release/npm/server "release/npm/artifacts/task-handoff-server-$RELEASE_VERSION.tgz"
+          publish_or_verify release/npm/thctl "release/npm/artifacts/task-handoff-thctl-$RELEASE_VERSION.tgz"
 
       - name: Keep prereleases out of the latest dist-tag
         if: needs.runtime-packages.outputs.npm_tag != 'latest'
@@ -289,6 +290,7 @@ jobs:
             @task-handoff/node-agent
             @task-handoff/controlled-instance
             @task-handoff/server
+            @task-handoff/thctl
           )
           for package in "${packages[@]}"; do
             latest="$(npm view "$package" dist-tags.latest --json 2>/dev/null | node -e 'const fs = require("node:fs"); const value = JSON.parse(fs.readFileSync(0, "utf8")); process.stdout.write(typeof value === "string" ? value : "")' || true)"

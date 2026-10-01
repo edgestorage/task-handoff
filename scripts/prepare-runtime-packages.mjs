@@ -139,12 +139,12 @@ for (const [name, definition] of selected) {
   };
   fs.writeFileSync(path.join(packageDir, "package.json"), `${JSON.stringify(manifest, null, 2)}\n`);
   if (definition.bundledNativeDependencies?.includes("node-pty")) copyBundledNodePty(packageDir);
-  fs.writeFileSync(
-    path.join(packageDir, "README.md"),
-    definition.aggregateDependencies
+  const readme = definition.readmeFile
+    ? fs.readFileSync(path.join(root, definition.readmeFile), "utf8")
+    : definition.aggregateDependencies
       ? `# ${definition.packageName}\n\nComplete TaskHandoff server package. Installing it installs the control plane, node agent, and controlled instance runtimes at the same version. Run \`task-handoff install\` as root to create and start the systemd services.\n`
-      : `# ${definition.packageName}\n\nPrebuilt ${name} runtime for TaskHandoff. This package contains compiled JavaScript${definition.uiDir ? " and built Web UI assets" : ""}; it does not contain monorepo source code.\n`,
-  );
+      : `# ${definition.packageName}\n\nPrebuilt ${name} runtime for TaskHandoff. This package contains compiled JavaScript${definition.uiDir ? " and built Web UI assets" : ""}; it does not contain monorepo source code.\n`;
+  fs.writeFileSync(path.join(packageDir, "README.md"), readme);
   fs.copyFileSync(path.join(root, "LICENSE"), path.join(packageDir, "LICENSE"));
   fs.copyFileSync(path.join(root, "NOTICE"), path.join(packageDir, "NOTICE"));
 }

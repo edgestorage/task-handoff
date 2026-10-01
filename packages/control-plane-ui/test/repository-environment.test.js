@@ -112,7 +112,10 @@ test("managed worktree creation reuses the shared dialog without starting an AI 
   assert.match(panel, /\.repository-worktree-list \{[\s\S]*display: grid;/);
   assert.match(panel, /\.repository-worktree-row \+ \.repository-worktree-row \{[\s\S]*border-top: 1px solid var\(--line\)/);
   assert.match(panel, /\.repository-worktree-row\[data-current="true"\] \.repository-worktree-title strong \{[\s\S]*color: var\(--repository-current-text, var\(--brand-accent\)\)/);
-  assert.match(repositoryApi, /repositoryWorkspaceResource\(target, "worktrees"\)/);
+  // Workspace routes and the v0.0.21 fallback live in @task-handoff/control-plane-client
+  // (covered by its repository-api tests); the UI must delegate instead of re-implementing them.
+  assert.match(repositoryApi, /createControlPlaneClient\(repositoryTransport\)\.repository/);
+  assert.match(repositoryApi, /controlPlaneRepository\.createWorktree\(target, input\)/);
   assert.doesNotMatch(panel, /worktree:\s*\{[^}]*\b(path|cwd)\s*:/);
   assert.match(worktreesTab, /props\.session\.source\?\.aiAgent/);
   assert.match(worktreesTab, /agent === "codex" \|\| agent === "claude"/);
@@ -539,8 +542,8 @@ test("Worktree moves into the main worktree are capability-gated, preflighted, a
   assert.doesNotMatch(panel, /--force|discard/i);
   assert.match(tab, /:move-to-main-supported="moveToMainSupported"/);
   assert.match(pane, /supportsRepositoryWorktreeMoveToMain\(instance\.capabilities\)/);
-  assert.match(repositoryApi, /worktrees\/move-to-main\/preflight/);
-  assert.match(repositoryApi, /safeParseResponse\(RepositoryMoveWorktreePreflightSchema/);
+  assert.match(repositoryApi, /controlPlaneRepository\.moveWorktreeToMainPreflight\(target, input\)/);
+  assert.match(repositoryApi, /controlPlaneRepository\.moveWorktreeToMain\(target, input\)/);
   assert.match(presentation, /"REPOSITORY_MAIN_DIRTY", "REPOSITORY_MOVE_CONFLICT"/);
   assert.match(apiError, /REPOSITORY_MAIN_DIRTY: \{ key: "errors\.REPOSITORY_MAIN_DIRTY" \}/);
   assert.match(apiError, /REPOSITORY_MOVE_CONFLICT: \{ key: "errors\.REPOSITORY_MOVE_CONFLICT" \}/);

@@ -1,9 +1,12 @@
 import crypto from "node:crypto";
 import { z } from "zod";
 import {
+  ControlPlaneCliClientSchema,
   ControlPlaneCurrentAuthorizationSchema,
   ControlPlaneMobileDeviceSchema,
+  ControlPlaneSessionClientTypeSchema,
   ControlPlaneUserSessionSummarySchema,
+  type ControlPlaneCliClient,
   type ControlPlaneMobileDevice,
 } from "@task-handoff/protocol/control-plane-access";
 import { nowIso as now } from "@task-handoff/core/core/time";
@@ -12,8 +15,16 @@ import { normalizeControlPlaneLoginName, verifyControlPlanePassword } from "./pa
 import type { ControlPlaneUserService } from "./user-service.ts";
 
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 14;
-const MOBILE_SESSION_RENEWAL_WINDOW_MS = 1000 * 60 * 60 * 24 * 7;
+const SESSION_RENEWAL_WINDOW_MS = 1000 * 60 * 60 * 24 * 7;
 const SESSION_ACTIVITY_PRUNE_INTERVAL_MS = 1000 * 60 * 60;
+
+export type ControlPlaneSessionClientType = z.infer<typeof ControlPlaneSessionClientTypeSchema>;
+
+export type ControlPlaneSessionContext = {
+  device?: ControlPlaneMobileDevice;
+  client?: ControlPlaneCliClient;
+  loginAt?: string;
+};
 const LoginSchema = z.object({
   username: z.string().trim().min(1).max(80),
   password: z.string().min(1).max(4096),
@@ -97,7 +108,7 @@ export class ControlPlaneUserAuthentication {
     this.limiter = new LoginRateLimiter({ ...DEFAULT_RATE_LIMIT, ...options });
   }
 
-  async loginLocal(input: unknown, context: { sourceId?: string; clientType?: "web" | "mobile"; device?: ControlPlaneMobileDevice } = {}) {
+  async loginLocal(input: unknown, context: { sourceId?: string; clientType?: ControlPlaneSessionClientType; device?: ControlPlaneMobileDevice } = {}) {
     const parsed = LoginSchema.parse(input);
     const loginName = normalizeControlPlaneLoginName(parsed.username);
     const sourceId = context.sourceId?.trim() || "unknown";
@@ -115,7 +126,7 @@ export class ControlPlaneUserAuthentication {
         throw Object.assign(new Error("Invalid username or password."), { code: "AUTH_LOGIN_FAILED", statusCode: 401 });
       }
       const timestamp = now();
-      return this.createSessionForIdentity(identity.id, context.clientType || "web", context.device, { loginAt: timestamp });
+      return this.createSessionForIdentity(identity.id, context.clientType || "web", { device: context.device, loginAt: timestamp });
     } finally {
       this.limiter.finish();
     }
@@ -123,31 +134,32 @@ export class ControlPlaneUserAuthentication {
 
   async createSessionForIdentity(
     identityId: string,
-    clientType: "web" | "mobile",
-    device?: ControlPlaneMobileDevice,
-    activity: { loginAt?: string } = {},
+    clientType: ControlPlaneSessionClientType,
+    context: ControlPlaneSessionContext = {},
   ) {
-    const parsedDevice = device ? ControlPlaneMobileDeviceSchema.parse(device) : undefined;
+    const parsedDevice = context.device ? ControlPlaneMobileDeviceSchema.parse(context.device) : undefined;
+    const parsedClient = context.client ? ControlPlaneCliClientSchema.parse(context.client) : undefined;
     if (clientType === "mobile" && !parsedDevice) throw Object.assign(new Error("Mobile sessions require device metadata."), { code: "AUTH_MOBILE_DEVICE_REQUIRED", statusCode: 400 });
+    if (clientType === "cli" && !parsedClient) throw Object.assign(new Error("CLI sessions require client metadata."), { code: "AUTH_CLI_CLIENT_REQUIRED", statusCode: 400 });
     const timestamp = now();
     const secret = createSecret();
     const created = await this.users.store.transaction(async (repository) => {
       const identity = await repository.identities.get(identityId);
       if (!identity) throw Object.assign(new Error("Login identity was not found."), { code: "CONTROL_PLANE_IDENTITY_NOT_FOUND", statusCode: 404 });
-      if (clientType === "mobile" && identity.requiresPasswordChange === true) {
-        throw Object.assign(new Error("Change the temporary password in the Control Plane before signing in on mobile."), {
+      if (clientType !== "web" && identity.requiresPasswordChange === true) {
+        throw Object.assign(new Error("Change the temporary password in the Control Plane before signing in with a client session."), {
           code: "AUTH_PASSWORD_CHANGE_REQUIRED",
           statusCode: 403,
         });
       }
       const authorization = await this.users.authorization(identity.userId, repository);
-      if (activity.loginAt) {
+      if (context.loginAt) {
         const user = (await repository.users.get(identity.userId))!;
-        await repository.users.put({ ...user, lastLoginAt: activity.loginAt, updatedAt: activity.loginAt });
-        await repository.identities.put({ ...identity, lastUsedAt: activity.loginAt, updatedAt: activity.loginAt });
+        await repository.users.put({ ...user, lastLoginAt: context.loginAt, updatedAt: context.loginAt });
+        await repository.identities.put({ ...identity, lastUsedAt: context.loginAt, updatedAt: context.loginAt });
       }
       const record = await repository.sessions.put({
-        id: createId(clientType === "mobile" ? "msess" : "sess"),
+        id: createId(clientType === "mobile" ? "msess" : clientType === "cli" ? "csess" : "sess"),
         userId: identity.userId,
         identityId,
         authorizationRevision: authorization.authorizationRevision,
@@ -157,6 +169,7 @@ export class ControlPlaneUserAuthentication {
         updatedAt: timestamp,
         clientType,
         ...(parsedDevice ? { device: parsedDevice } : {}),
+        ...(parsedClient ? { clientInfo: parsedClient } : {}),
       });
       return { record, identity, authorization };
     });
@@ -174,7 +187,7 @@ export class ControlPlaneUserAuthentication {
 
   async changeLocalPassword(token: string | undefined, input: unknown) {
     const parsed = z.object({ currentPassword: z.string().min(1).max(4096), newPassword: z.string().min(8).max(4096) }).strict().parse(input);
-    const current = await this.resolve(token, "web");
+    const current = await this.resolve(token, ["web"]);
     if (!current) throw Object.assign(new Error("Sign in to change the password."), { code: "CONTROL_PLANE_AUTH_REQUIRED", statusCode: 401 });
     if (this.passwordUpdates.has(current.user.id)) {
       throw Object.assign(new Error("A password update is already in progress for this account."), { code: "AUTH_CREDENTIAL_UPDATE_IN_PROGRESS", statusCode: 409 });
@@ -195,7 +208,7 @@ export class ControlPlaneUserAuthentication {
     }
   }
 
-  async resolve(token: string | undefined, clientType?: "web" | "mobile") {
+  async resolve(token: string | undefined, clientTypes?: readonly ControlPlaneSessionClientType[]) {
     const [sessionId, secret] = token?.split(".") || [];
     if (!sessionId || !secret) return undefined;
     const session = await this.users.store.sessions.get(sessionId);
@@ -208,7 +221,7 @@ export class ControlPlaneUserAuthentication {
       this.sessionActivity.delete(sessionId);
       return undefined;
     }
-    if ((clientType && session.clientType !== clientType) || session.tokenHash !== sha256(secret)) return undefined;
+    if ((clientTypes && !clientTypes.includes(session.clientType)) || session.tokenHash !== sha256(secret)) return undefined;
     let authorization;
     try {
       authorization = await this.users.authorization(session.userId);
@@ -231,10 +244,10 @@ export class ControlPlaneUserAuthentication {
     };
   }
 
-  async currentSession(token: string | undefined, clientType: "web" | "mobile" = "web") {
+  async currentSession(token: string | undefined, clientTypes: readonly ControlPlaneSessionClientType[] = ["web"]) {
     // Compatibility for v0.0.28: its mobile client probes this endpoint but does not know the renewal route.
-    if (clientType === "mobile") await this.renewMobileSession(token);
-    const current = await this.resolve(token, clientType);
+    if (clientTypes.includes("mobile")) await this.renewMobileSession(token);
+    const current = await this.resolve(token, clientTypes);
     return {
       authenticated: Boolean(current),
       user: current?.user,
@@ -243,24 +256,28 @@ export class ControlPlaneUserAuthentication {
     };
   }
 
-  async renewMobileSession(token: string | undefined) {
-    const current = await this.resolve(token, "mobile");
+  async renewSession(token: string | undefined, clientTypes: readonly ControlPlaneSessionClientType[]) {
+    const current = await this.resolve(token, clientTypes);
     if (!current) return undefined;
     const timestamp = now();
-    if (Date.parse(current.session.expiresAt) - Date.parse(timestamp) > MOBILE_SESSION_RENEWAL_WINDOW_MS) {
+    if (Date.parse(current.session.expiresAt) - Date.parse(timestamp) > SESSION_RENEWAL_WINDOW_MS) {
       return { expiresAt: current.session.expiresAt };
     }
     const [sessionId, secret] = token?.split(".") || [];
     if (!sessionId || !secret) return undefined;
     const renewed = await this.users.store.transaction(async (repository) => {
       const session = await repository.sessions.get(sessionId);
-      if (!session || session.clientType !== "mobile" || session.tokenHash !== sha256(secret) || session.expiresAt <= timestamp) return undefined;
+      if (!session || !clientTypes.includes(session.clientType) || session.tokenHash !== sha256(secret) || session.expiresAt <= timestamp) return undefined;
       const expiresAt = new Date(Date.parse(timestamp) + SESSION_TTL_MS).toISOString();
       return repository.sessions.put({ ...session, expiresAt, updatedAt: timestamp });
     });
     if (!renewed) return undefined;
     this.trackSessionActivity(renewed, timestamp);
     return { expiresAt: renewed.expiresAt };
+  }
+
+  renewMobileSession(token: string | undefined) {
+    return this.renewSession(token, ["mobile"]);
   }
 
   async listSessions(requestingUserId: string, targetUserId = requestingUserId) {
@@ -272,22 +289,28 @@ export class ControlPlaneUserAuthentication {
     return Promise.all(sessions.map((session) => this.publicSession(session.id)));
   }
 
-  async listMobileSessions(requestingUserId: string) {
+  async listClientSessions(requestingUserId: string, clientType: "mobile" | "cli") {
     const sessions = (await this.users.store.sessions.listByUser(requestingUserId))
-      .filter((session) => session.clientType === "mobile" && session.expiresAt > now());
+      .filter((session) => session.clientType === clientType && session.expiresAt > now());
     return Promise.all(sessions.map(async (session) => ({
       ...await this.publicSession(session.id),
-      device: session.device!,
+      ...(session.device ? { device: session.device } : {}),
+      ...(session.clientInfo ? { client: session.clientInfo } : {}),
       user: await this.users.detail(session.userId),
     })));
   }
 
-  async revokeSession(requestingUserId: string, sessionId: string) {
+  listMobileSessions(requestingUserId: string) {
+    return this.listClientSessions(requestingUserId, "mobile");
+  }
+
+  async revokeSession(requestingUserId: string, sessionId: string, restrictToClientTypes?: readonly ControlPlaneSessionClientType[]) {
     const session = await this.users.store.sessions.get(sessionId);
     if (!session) {
       this.sessionActivity.delete(sessionId);
       return false;
     }
+    if (restrictToClientTypes && !restrictToClientTypes.includes(session.clientType)) return false;
     if (session.userId !== requestingUserId && !(await this.users.authorization(requestingUserId)).permissionIds.includes("users:manage")) {
       throw Object.assign(new Error("Session management is forbidden."), { code: "CONTROL_PLANE_FORBIDDEN", statusCode: 403 });
     }

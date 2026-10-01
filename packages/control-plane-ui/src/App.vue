@@ -1,5 +1,8 @@
 <template>
   <AppAccessView v-if="isAppAccessRoute" />
+  <AuthGate v-else-if="isCliAuthorizeRoute">
+    <CliAuthorizeView />
+  </AuthGate>
   <AuthGate v-else>
     <ControlPlaneWorkbench
       :mode="isInstanceDetailPath ? 'standalone' : 'workbench'"
@@ -13,11 +16,13 @@
 import { computed } from "vue";
 import AuthGate from "./apps/control-plane/AuthGate.vue";
 import AppAccessView from "./apps/control-plane/app-access/AppAccessView.vue";
+import CliAuthorizeView from "./apps/control-plane/cli-authorize/CliAuthorizeView.vue";
 import ControlPlaneWorkbench from "./apps/control-plane/ControlPlaneWorkbench.vue";
 import { INSTANCE_DETAIL_ROUTE_PREFIX, parseInstanceDetailRoute } from "./apps/control-plane/instance-detail/instanceDetailWindow";
 import { Toaster } from "./components/ui/sonner";
 
 const isAppAccessRoute = computed(() => window.location.pathname.startsWith("/apps/access/"));
+const isCliAuthorizeRoute = computed(() => window.location.pathname === "/cli/authorize");
 const instanceDetailRoute = computed(() => parseInstanceDetailRoute(window.location));
 const isInstanceDetailPath = computed(() => window.location.pathname.startsWith(INSTANCE_DETAIL_ROUTE_PREFIX));
 </script>

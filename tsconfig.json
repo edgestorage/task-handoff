@@ -32,6 +32,7 @@
   },
   "include": [
     "apps/cli/src/**/*",
+    "apps/thctl/src/**/*",
     "apps/controlled-instance-image/src/**/*",
     "scripts/node-update-worker.cts",
     "packages/core/src/**/*",

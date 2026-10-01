@@ -11,7 +11,8 @@
   "main": "apps/desktop-shell/src/main.cjs",
   "packageManager": "pnpm@9.15.3",
   "bin": {
-    "task-handoff": "bin/task-handoff.js"
+    "task-handoff": "bin/task-handoff.js",
+    "thctl": "bin/thctl.js"
   },
   "files": [
     "bin",
@@ -45,6 +46,7 @@
     "runtime:build": "node scripts/build-runtime-packages.mjs",
     "runtime:pack": "node scripts/build-runtime-packages.mjs --pack",
     "runtime:pack:controlled-instance": "node scripts/build-runtime-packages.mjs --target controlled-instance --pack",
+    "runtime:pack:thctl": "node scripts/build-runtime-packages.mjs --target thctl --pack",
     "runtime:artifact": "node scripts/runtime-artifact.mjs build",
     "runtime:artifact:verify": "node scripts/runtime-artifact.mjs verify",
     "web:typecheck": "pnpm run control-plane-ui:typecheck",

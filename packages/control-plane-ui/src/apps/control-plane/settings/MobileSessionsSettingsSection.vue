@@ -51,7 +51,7 @@
               variant="outline"
               size="sm"
               :disabled="Boolean(revokingId)"
-              @click="pendingSession = session"
+              @click="pendingTarget = { kind: 'mobile', id: session.id, name: session.device.name }"
             >
               <Trash2 :size="14" />
               <span>{{ revokingId === session.id ? t("settings.mobileSessions.revoking") : t("settings.mobileSessions.revoke") }}</span>
@@ -59,19 +59,70 @@
           </article>
         </div>
       </section>
+
+      <section class="mobile-sessions-directory">
+        <header class="mobile-sessions-directory-head">
+          <strong>{{ t("settings.cliSessions.title") }}</strong>
+          <span v-if="cliSessions.data.value?.length">{{ cliSessions.data.value.length }}</span>
+        </header>
+
+        <p v-if="authSession.isLoading.value" class="mobile-sessions-state" role="status">{{ t("settings.cliSessions.loading") }}</p>
+        <p v-else-if="!authSession.data.value?.enabled" class="mobile-sessions-state">{{ t("settings.mobileSessions.authenticationRequired") }}</p>
+        <p v-else-if="cliSessions.isLoading.value" class="mobile-sessions-state" role="status">{{ t("settings.cliSessions.loading") }}</p>
+        <div v-else-if="cliSessions.error.value" class="mobile-sessions-error" role="alert">
+          <span>{{ cliErrorText(cliSessions.error.value) }}</span>
+          <Button variant="outline" size="sm" @click="cliSessions.refetch()">{{ t("common.actions.retry") }}</Button>
+        </div>
+        <p v-else-if="!cliSessions.data.value?.length" class="mobile-sessions-state">{{ t("settings.cliSessions.empty") }}</p>
+        <div v-else class="mobile-session-list">
+          <article v-for="session in cliSessions.data.value" :key="session.id" class="mobile-session-row">
+            <div class="mobile-session-icon" aria-hidden="true"><Terminal :size="19" /></div>
+            <div class="mobile-session-copy">
+              <div class="mobile-session-title">
+                <strong>{{ session.client.name }}</strong>
+                <Badge variant="secondary">{{ cliPlatformLabel(session.client.platform) }}</Badge>
+                <Badge v-if="session.client.version" variant="secondary">v{{ session.client.version }}</Badge>
+              </div>
+              <dl>
+                <div>
+                  <dt>{{ t("settings.cliSessions.lastSeen") }}</dt>
+                  <dd>{{ formatSessionDate(session.lastSeenAt || session.createdAt) }}</dd>
+                </div>
+                <div>
+                  <dt>{{ t("settings.cliSessions.expires") }}</dt>
+                  <dd>{{ formatSessionDate(session.expiresAt) }}</dd>
+                </div>
+                <div>
+                  <dt>{{ t("settings.cliSessions.signedInAs") }}</dt>
+                  <dd>{{ session.user.primaryUsername || session.user.displayName }}</dd>
+                </div>
+              </dl>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              :disabled="Boolean(pendingTarget)"
+              @click="pendingTarget = { kind: 'cli', id: session.id, name: session.client.name }"
+            >
+              <Trash2 :size="14" />
+              <span>{{ revokingId === session.id ? t("settings.cliSessions.revoking") : t("settings.cliSessions.revoke") }}</span>
+            </Button>
+          </article>
+        </div>
+      </section>
     </div>
   </ScrollArea>
 
-  <Dialog :open="Boolean(pendingSession)" @update:open="(open) => { if (!open && !revokingId) pendingSession = undefined; }">
+  <Dialog :open="Boolean(pendingTarget)" @update:open="(open) => { if (!open && !revokingId) pendingTarget = undefined; }">
     <DialogContent>
       <DialogHeader>
-        <DialogTitle>{{ t("settings.mobileSessions.revokeTitle", { name: pendingSession?.device.name || "" }) }}</DialogTitle>
-        <DialogDescription>{{ t("settings.mobileSessions.revokeDescription") }}</DialogDescription>
+        <DialogTitle>{{ t(pendingTarget?.kind === "cli" ? "settings.cliSessions.revokeTitle" : "settings.mobileSessions.revokeTitle", { name: pendingTarget?.name || "" }) }}</DialogTitle>
+        <DialogDescription>{{ t(pendingTarget?.kind === "cli" ? "settings.cliSessions.revokeDescription" : "settings.mobileSessions.revokeDescription") }}</DialogDescription>
       </DialogHeader>
       <DialogFooter>
-        <Button variant="outline" :disabled="Boolean(revokingId)" @click="pendingSession = undefined">{{ t("common.actions.cancel") }}</Button>
+        <Button variant="outline" :disabled="Boolean(revokingId)" @click="pendingTarget = undefined">{{ t("common.actions.cancel") }}</Button>
         <Button variant="destructive" :disabled="Boolean(revokingId)" @click="confirmRevoke">
-          {{ revokingId ? t("settings.mobileSessions.revoking") : t("settings.mobileSessions.revoke") }}
+          {{ revokingId ? t(pendingTarget?.kind === "cli" ? "settings.cliSessions.revoking" : "settings.mobileSessions.revoking") : t(pendingTarget?.kind === "cli" ? "settings.cliSessions.revoke" : "settings.mobileSessions.revoke") }}
         </Button>
       </DialogFooter>
     </DialogContent>
@@ -81,9 +132,9 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { RefreshCw, Smartphone, Trash2 } from "@lucide/vue";
-import type { ControlPlaneMobileSession } from "@task-handoff/protocol/control-plane-access";
-import { revokeMobileSession, useAuthSessionQuery, useMobileSessionsQuery } from "../../../api/queries";
+import { RefreshCw, Smartphone, Terminal, Trash2 } from "@lucide/vue";
+import type { ControlPlaneCliClient, ControlPlaneMobileSession } from "@task-handoff/protocol/control-plane-access";
+import { revokeCliSession, revokeMobileSession, useAuthSessionQuery, useCliSessionsQuery, useMobileSessionsQuery } from "../../../api/queries";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
@@ -97,25 +148,29 @@ const { locale, t } = useI18n();
 const authSession = useAuthSessionQuery();
 const canLoadSessions = computed(() => Boolean(authSession.data.value?.enabled && authSession.data.value.authenticated));
 const sessions = useMobileSessionsQuery(canLoadSessions);
-const pendingSession = ref<ControlPlaneMobileSession>();
+const cliSessions = useCliSessionsQuery(canLoadSessions);
+const pendingTarget = ref<{ kind: "mobile" | "cli"; id: string; name: string }>();
 const revokingId = ref("");
 
 const errorText = (error: unknown) => translateApiError(error, t, t("settings.mobileSessions.loadFailed"));
+const cliErrorText = (error: unknown) => translateApiError(error, t, t("settings.cliSessions.loadFailed"));
 const platformLabel = (platform: ControlPlaneMobileSession["device"]["platform"]) => platform === "ios" ? "iOS" : "Android";
+const cliPlatformLabel = (platform: ControlPlaneCliClient["platform"]) => ({ darwin: "macOS", linux: "Linux", win32: "Windows" })[platform];
 const formatSessionDate = (value: string) => formatDateTime(value, locale.value as SupportedLocale);
 
 async function confirmRevoke() {
-  const session = pendingSession.value;
-  if (!session || revokingId.value) return;
-  revokingId.value = session.id;
+  const target = pendingTarget.value;
+  if (!target || revokingId.value) return;
+  revokingId.value = target.id;
+  const mobile = target.kind === "mobile";
   try {
-    const result = await revokeMobileSession(session.id);
-    if (!result.revoked) throw new Error(t("settings.mobileSessions.notFound"));
-    pendingSession.value = undefined;
-    await sessions.refetch();
-    showControlPlaneToast(t("settings.mobileSessions.revoked", { name: session.device.name }), "success");
+    const result = mobile ? await revokeMobileSession(target.id) : await revokeCliSession(target.id);
+    if (!result.revoked) throw new Error(t(mobile ? "settings.mobileSessions.notFound" : "settings.cliSessions.notFound"));
+    pendingTarget.value = undefined;
+    await (mobile ? sessions.refetch() : cliSessions.refetch());
+    showControlPlaneToast(t(mobile ? "settings.mobileSessions.revoked" : "settings.cliSessions.revoked", { name: target.name }), "success");
   } catch (error) {
-    showControlPlaneToast(translateApiError(error, t, t("settings.mobileSessions.revokeFailed")));
+    showControlPlaneToast(translateApiError(error, t, t(mobile ? "settings.mobileSessions.revokeFailed" : "settings.cliSessions.revokeFailed")));
   } finally {
     revokingId.value = "";
   }
