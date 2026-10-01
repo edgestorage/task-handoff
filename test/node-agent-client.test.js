@@ -99,6 +99,43 @@ test("controlled instance node agent client posts register and heartbeat payload
   assert.equal(requests[2].url, "http://node.local/api/node-agent/instances/inst_registered/heartbeat");
 });
 
+test("an explicit heartbeat republishes state that changed while a cycle was in flight", async () => {
+  const requests = [];
+  let capabilities = { features: { tty: true } };
+  let releaseRegistration;
+  const registrationGate = new Promise((resolve) => { releaseRegistration = resolve; });
+  const client = new NodeAgentRegistrationClient(
+    {
+      controlMode: "controlled",
+      nodeAgentUrl: "http://node.local",
+      registrationToken: "secret-token",
+      instanceId: "inst_late_capability",
+      heartbeatIntervalMs: 10_000,
+    },
+    async () => ({ ...snapshot(), capabilities }),
+    async (url, init) => {
+      const path = String(url);
+      requests.push({ url: path, body: JSON.parse(init.body) });
+      if (path.endsWith("/register")) await registrationGate;
+      return new Response(JSON.stringify({ data: path.endsWith("/register") ? { id: "inst_late_capability" } : { ok: true } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+  );
+
+  const registering = client.register();
+  // Capabilities resolve while the registration snapshot is already in flight.
+  capabilities = { features: { tty: true, aiSessionProviders: [{ agent: "codex" }] } };
+  const heartbeat = client.heartbeat();
+  releaseRegistration();
+  await Promise.all([registering, heartbeat]);
+
+  assert.deepEqual(requests[0].body.capabilities, { features: { tty: true } });
+  assert.deepEqual(requests[1].body.capabilities, { features: { tty: true, aiSessionProviders: [{ agent: "codex" }] } });
+  assert.equal(requests[1].url, "http://node.local/api/node-agent/instances/inst_late_capability/heartbeat");
+});
+
 test("v0.0.31 node agents receive heartbeats without the newer rename action", async () => {
   const requests = [];
   const currentSnapshot = {
@@ -293,6 +330,8 @@ test("an endpoint switch during an in-flight registration immediately retries th
 
 test("controlled instance serializes concurrent heartbeat requests", async () => {
   let heartbeatRequests = 0;
+  let inFlightHeartbeats = 0;
+  let maxInFlightHeartbeats = 0;
   let releaseHeartbeat;
   const heartbeatGate = new Promise((resolve) => { releaseHeartbeat = resolve; });
   const client = new NodeAgentRegistrationClient(
@@ -307,7 +346,13 @@ test("controlled instance serializes concurrent heartbeat requests", async () =>
     async (url) => {
       if (url.endsWith("/heartbeat")) {
         heartbeatRequests += 1;
-        if (heartbeatRequests > 1) await heartbeatGate;
+        inFlightHeartbeats += 1;
+        maxInFlightHeartbeats = Math.max(maxInFlightHeartbeats, inFlightHeartbeats);
+        try {
+          if (heartbeatRequests > 1) await heartbeatGate;
+        } finally {
+          inFlightHeartbeats -= 1;
+        }
       }
       return new Response(JSON.stringify({ data: url.endsWith("/register") ? { id: "inst_serial" } : { ok: true } }), {
         status: 200,
@@ -323,7 +368,10 @@ test("controlled instance serializes concurrent heartbeat requests", async () =>
   assert.equal(heartbeatRequests, 2, "the registration heartbeat plus one shared heartbeat should be sent");
   releaseHeartbeat();
   await Promise.all([first, second]);
-  assert.equal(heartbeatRequests, 2);
+  // A caller that arrives while a cycle is in flight must not be answered by a
+  // snapshot that predates its state change, so it gets a follow-up publish.
+  assert.equal(heartbeatRequests, 3);
+  assert.equal(maxInFlightHeartbeats, 1, "heartbeats must never overlap");
 });
 
 test("controlled instance requests and sanitizes paginated Story content", async () => {

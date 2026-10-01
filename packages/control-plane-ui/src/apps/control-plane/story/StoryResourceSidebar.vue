@@ -41,9 +41,9 @@
           <DropdownMenuItem v-else class="app-launch-menu-item story-resource-menu-item" disabled>{{ targetInstance && supportsApps(targetInstance) ? t("stories.resources.noApps") : t("stories.resources.appsUnsupported") }}</DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuLabel>{{ t("stories.resources.repository") }}</DropdownMenuLabel>
-          <DropdownMenuItem class="app-launch-menu-item story-resource-menu-item" @select="openTargetRepository('files')"><FolderTree :size="14" />{{ t("stories.resources.files") }}</DropdownMenuItem>
-          <DropdownMenuItem class="app-launch-menu-item story-resource-menu-item" @select="openTargetRepository('changes-review')"><FileDiff :size="14" />{{ t("stories.resources.reviewChanges") }}</DropdownMenuItem>
-          <DropdownMenuItem class="app-launch-menu-item story-resource-menu-item" @select="openTargetRepository('worktrees')"><GitBranch :size="14" />{{ t("stories.resources.worktrees") }}</DropdownMenuItem>
+          <DropdownMenuItem v-for="option in repositoryOpenOptions" :key="option.key" class="app-launch-menu-item story-resource-menu-item" @select="runOpenOption(option)">
+            <component :is="option.icon" :size="14" />{{ option.label }}
+          </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
     </header>
@@ -51,7 +51,24 @@
     <div v-if="!activeResource" class="story-resource-empty">
       <PanelRight :size="28" />
       <strong>{{ t("stories.resources.empty") }}</strong>
-      <span>{{ t("stories.resources.emptyHint") }}</span>
+      <span class="story-resource-empty-hint">{{ resourceOpenHint }}</span>
+      <div class="story-resource-empty-actions" role="group" :aria-label="t('stories.resources.quickActions')">
+        <Button
+          v-for="option in openOptions"
+          :key="option.key"
+          class="story-resource-empty-action"
+          :disabled="optionDisabled(option)"
+          :title="resourceOpenBlocked ? t('stories.resources.selectAiSessionFirst') : undefined"
+          type="button"
+          variant="outline"
+          size="sm"
+          @click="runOpenOption(option)"
+        >
+          <AppLaunchIcon v-if="option.kind === 'app'" :app-id="option.appId" :size="16" />
+          <component :is="option.icon" v-else :size="14" aria-hidden="true" />
+          <span>{{ option.label }}</span>
+        </Button>
+      </div>
     </div>
     <div v-else-if="!activeInstance" class="story-resource-empty story-resource-unavailable">
       <CircleAlert :size="28" />
@@ -78,7 +95,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, type Component } from "vue";
 import { useI18n } from "vue-i18n";
 import { Boxes, CircleAlert, FileDiff, FolderTree, GitBranch, PanelRight, Plus, Server } from "@lucide/vue";
 import { normalizeControlledInstanceCapabilities, supportsBrowserTunnel } from "@task-handoff/protocol/control-plane";
@@ -89,6 +106,7 @@ import { Button } from "../../../components/ui/button";
 import { canUseDesktopBrowserContext } from "../../../lib/desktopBridge";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
 import SessionPaneContent from "../instance-detail/SessionPaneContent.vue";
+import AppLaunchIcon from "../shared/AppLaunchIcon.vue";
 import AppLaunchMenuItems from "../shared/AppLaunchMenuItems.vue";
 import { buildAppSessionTabs, canRenameAppSession, EMBEDDED_BROWSER_APP_ID, launchableAppsForInstance, type RepositoryWorkspaceTabTarget, type SessionTab } from "../useInstanceSessions";
 import { storyResourceKey, type StoryRepositoryPage, type StoryResourceRef } from "./storyResources";
@@ -114,8 +132,35 @@ const emit = defineEmits<{
   openRepository: [instanceId: string, sessionKind: RepositorySessionKind, sessionId: string, page: StoryRepositoryPage, filePath?: string, cwdFolderId?: string];
 }>();
 const { t } = useI18n();
+
+type StoryResourceAppOpenOption = { key: string; kind: "app"; appId: string; label: string };
+type StoryResourceRepositoryOpenOption = { key: string; kind: "repository"; page: StoryRepositoryPage; label: string; icon: Component };
+type StoryResourceOpenOption = StoryResourceAppOpenOption | StoryResourceRepositoryOpenOption;
+
+const REPOSITORY_OPEN_OPTIONS: readonly { page: StoryRepositoryPage; labelKey: string; icon: Component }[] = [
+  { page: "files", labelKey: "stories.resources.files", icon: FolderTree },
+  { page: "changes-review", labelKey: "stories.resources.reviewChanges", icon: FileDiff },
+  { page: "worktrees", labelKey: "stories.resources.worktrees", icon: GitBranch },
+];
+
 const resourceMenuLabel = computed(() => props.targetInstance && props.targetAiSessionId ? t("stories.resources.add") : t("stories.resources.selectAiSessionFirst"));
 const targetAiSession = computed(() => props.targetInstance?.aiSessions.sessions.find((session) => session.id === props.targetAiSessionId));
+const resourceOpenBlocked = computed(() => !props.targetInstance || !props.targetAiSessionId);
+const resourceOpenHint = computed(() => resourceOpenBlocked.value ? t("stories.resources.selectAiSessionFirst") : t("stories.resources.emptyHint"));
+const repositoryOpenOptions = computed<StoryResourceRepositoryOpenOption[]>(() => REPOSITORY_OPEN_OPTIONS.map((option) => ({
+  key: `repository:${option.page}`,
+  kind: "repository",
+  page: option.page,
+  label: t(option.labelKey),
+  icon: option.icon,
+})));
+const appOpenOptions = computed<StoryResourceAppOpenOption[]>(() => {
+  const instance = props.targetInstance;
+  return instance
+    ? launchableApps(instance).map((app) => ({ key: `app:${app.id}`, kind: "app", appId: app.id, label: app.label }))
+    : [];
+});
+const openOptions = computed<StoryResourceOpenOption[]>(() => [...appOpenOptions.value, ...repositoryOpenOptions.value]);
 
 const activeResource = computed(() => props.resources.find((resource) => storyResourceKey(resource) === props.activeKey));
 const activeInstance = computed(() => props.instances.find((instance) => instance.id === activeResource.value?.instanceId));
@@ -189,6 +234,14 @@ function launchableApps(instance: InstanceWithAiSessions) {
     : [];
   return [...apps, ...browser];
 }
+function optionDisabled(option: StoryResourceOpenOption) {
+  return resourceOpenBlocked.value || (option.kind === "app" && props.launching);
+}
+function runOpenOption(option: StoryResourceOpenOption) {
+  if (optionDisabled(option)) return;
+  if (option.kind === "app") launchTargetApp(option.appId);
+  else openTargetRepository(option.page);
+}
 function launchTargetApp(appId: string) {
   if (!props.targetInstance || !targetAiSession.value?.cwd) return;
   emit("launchApp", props.targetInstance, appId, undefined, { cwd: targetAiSession.value.cwd });
@@ -217,9 +270,14 @@ const noSelectedAiSession = (_instance: InstanceBoardItem, _sessions?: AiSession
 .story-resource-header { display:flex; min-width:0; height:40px; align-items:stretch; padding-inline:8px; border-bottom:1px solid var(--line); background:var(--surface-raised); color:var(--text-muted); }
 .story-resource-header-action { width:28px; min-width:28px; height:28px; flex:0 0 28px; align-self:center; margin:0 0 0 4px; border:0; border-radius:7px; background:transparent; color:var(--text-muted); padding:0; }
 .story-resource-header-action:hover, .story-resource-header-action:focus-visible, .story-resource-header-action[data-state="open"] { background:color-mix(in srgb,var(--surface-raised) 92%,var(--white) 4%); color:var(--text-strong); }
-.story-resource-empty { display:grid; place-items:center; align-content:center; gap:8px; min-width:0; min-height:0; padding:24px; background:var(--terminal-bg); color:var(--text-muted); text-align:center; }
+.story-resource-empty { display:grid; place-items:center; align-content:center; gap:8px; min-width:0; min-height:0; overflow:auto; padding:24px; background:var(--terminal-bg); color:var(--text-muted); text-align:center; }
 .story-resource-empty strong { color:var(--text); font-size:13px; font-weight:500; }
-.story-resource-empty span { max-width:280px; font-size:12px; }
+.story-resource-empty-hint { max-width:280px; font-size:12px; }
+.story-resource-empty-actions { display:grid; width:min(280px,100%); min-width:0; gap:4px; margin-top:8px; }
+.story-resource-empty-action { box-sizing:border-box; display:flex; width:100%; height:32px; min-height:32px; align-items:center; justify-content:flex-start; gap:8px; border-color:var(--terminal-selection); background:var(--surface-raised); color:var(--text); font-size:12px; font-weight:500; padding:0 10px; }
+.story-resource-empty-action:hover:not(:disabled), .story-resource-empty-action:focus-visible:not(:disabled) { border-color:var(--brand-accent); background:var(--surface-active); color:var(--text-strong); }
+.story-resource-empty-action > span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.story-resource-empty-action > svg { flex:0 0 auto; }
 .story-resource-content { min-width:0; min-height:0; }
 :global(.story-resource-target-label) { display:flex; align-items:center; gap:6px; min-width:0; }
 :global(.story-resource-target-instance), :global(.story-resource-target-node) { display:inline-flex; align-items:center; gap:5px; min-width:0; }

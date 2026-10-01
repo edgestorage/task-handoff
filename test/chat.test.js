@@ -1491,6 +1491,162 @@ test("ai session reducer preserves canonical turn id when transcript provider id
   assert.equal(updated.turns[0].lastMessage, "你好！有什么我可以帮助你的吗？");
 });
 
+test("ai session reducer keeps repeated prompts as distinct turns across snapshots", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-repeated-prompt-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const session = registry.applyAdapterSnapshot({
+    source: "adapter-snapshot",
+    observedAt: "2026-07-04T12:00:00.000Z",
+    agent: "codex",
+    appId: "codex-app-server",
+    appSessionId: "app_repeated_prompt",
+    providerSessionId: "thread_repeated_prompt",
+    status: "idle",
+    phase: "unknown",
+  });
+  const prompt = "现在是在检查啥";
+
+  registry.applyRealtimeEvent(session.id, {
+    kind: "send-ack",
+    activeTurnId: "turn_1",
+    providerTurnId: "turn_1",
+    userPrompt: prompt,
+    observedAt: "2026-07-04T12:00:01.000Z",
+    source: "control",
+  });
+  registry.applyRealtimeEvent(session.id, {
+    kind: "assistant-message",
+    activeTurnId: "turn_1",
+    providerTurnId: "turn_1",
+    text: "first answer",
+    observedAt: "2026-07-04T12:00:02.000Z",
+    source: "realtime",
+  });
+  registry.applyRealtimeEvent(session.id, {
+    kind: "turn-completed",
+    activeTurnId: "turn_1",
+    providerTurnId: "turn_1",
+    status: "idle",
+    observedAt: "2026-07-04T12:00:03.000Z",
+    source: "realtime",
+  });
+
+  // The same prompt starts a new turn.
+  registry.applyRealtimeEvent(session.id, {
+    kind: "send-ack",
+    activeTurnId: "turn_2",
+    providerTurnId: "turn_2",
+    userPrompt: prompt,
+    observedAt: "2026-07-04T12:01:01.000Z",
+    source: "control",
+  });
+
+  // A provider snapshot while turn 2 is pending still contains turn 1 and its
+  // answer. Turn 1 is already known by id, so its answer must not be attached
+  // to the newer pending turn just because the prompt text matches.
+  registry.applyAdapterSnapshot({
+    source: "adapter-snapshot",
+    observedAt: "2026-07-04T12:01:02.000Z",
+    agent: "codex",
+    appId: "codex-app-server",
+    appSessionId: "app_repeated_prompt",
+    providerSessionId: "thread_repeated_prompt",
+    activeTurnId: "turn_2",
+    userPrompt: prompt,
+    turns: [
+      {
+        id: "turn_1",
+        providerTurnId: "turn_1",
+        userPrompt: prompt,
+        lastMessage: "first answer",
+        summary: "first answer",
+        status: "completed",
+        startedAt: "2026-07-04T12:00:01.000Z",
+        updatedAt: "2026-07-04T12:00:03.000Z",
+      },
+      {
+        id: "turn_2",
+        providerTurnId: "turn_2",
+        userPrompt: prompt,
+        status: "running",
+        startedAt: "2026-07-04T12:01:01.000Z",
+        updatedAt: "2026-07-04T12:01:01.000Z",
+      },
+    ],
+    lastMessage: "first answer",
+    summary: "first answer",
+    status: "running",
+    phase: "thinking",
+    replaceActivity: true,
+  });
+
+  const updated = registry.get(session.id);
+  assert.equal(updated.turns.length, 2);
+  assert.equal(updated.turns[0].id, "turn_1");
+  assert.equal(updated.turns[0].lastMessage, "first answer");
+  assert.equal(updated.turns[1].id, "turn_2");
+  assert.equal(updated.turns[1].providerTurnId, "turn_2");
+  assert.equal(updated.turns[1].status, "running");
+  assert.equal(updated.turns[1].lastMessage, undefined);
+  assert.equal(updated.turns[1].summary, undefined);
+});
+
+test("ai session reducer matches turns by provider identity without re-parenting", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-provider-identity-"));
+  const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });
+  const session = registry.applyAdapterSnapshot({
+    source: "adapter-snapshot",
+    observedAt: "2026-07-04T13:00:00.000Z",
+    agent: "codex",
+    appId: "codex-app-server",
+    appSessionId: "app_provider_identity",
+    providerSessionId: "thread_provider_identity",
+    status: "idle",
+    phase: "unknown",
+  });
+
+  registry.applyRealtimeEvent(session.id, {
+    kind: "send-ack",
+    activeTurnId: "turn_canonical",
+    providerTurnId: "provider_turn",
+    userPrompt: "inspect the runtime",
+    observedAt: "2026-07-04T13:00:01.000Z",
+    source: "control",
+  });
+
+  // The provider snapshot names the turn by its provider id. Identity must
+  // match the stored turn instead of inserting a second turn or renaming it.
+  registry.applyAdapterSnapshot({
+    source: "adapter-snapshot",
+    observedAt: "2026-07-04T13:00:02.000Z",
+    agent: "codex",
+    appId: "codex-app-server",
+    appSessionId: "app_provider_identity",
+    providerSessionId: "thread_provider_identity",
+    activeTurnId: "provider_turn",
+    userPrompt: "inspect the runtime",
+    turns: [{
+      id: "provider_turn",
+      userPrompt: "inspect the runtime",
+      lastMessage: "runtime answer",
+      summary: "runtime answer",
+      status: "completed",
+      updatedAt: "2026-07-04T13:00:02.000Z",
+    }],
+    lastMessage: "runtime answer",
+    summary: "runtime answer",
+    status: "running",
+    phase: "responding",
+    replaceActivity: true,
+  });
+
+  const updated = registry.get(session.id);
+  assert.equal(updated.turns.length, 1);
+  assert.equal(updated.turns[0].id, "turn_canonical");
+  assert.equal(updated.turns[0].providerTurnId, "provider_turn");
+  assert.equal(updated.turns[0].lastMessage, "runtime answer");
+});
+
 test("ai session transcript turns ignore synthetic interrupt user messages", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-ai-session-interrupt-"));
   const registry = createAiSessionRegistry({ dir: path.join(root, "ai-sessions") });

@@ -12,12 +12,11 @@
       <div v-if="loading" class="app-access-state">{{ t("common.appAccess.loading") }}</div>
       <div v-else-if="error" class="app-access-state">{{ error }}</div>
       <div v-else-if="mode === 'tty'" ref="terminalHost" class="app-access-terminal" />
-      <iframe
+      <AppSessionViewer
         v-else-if="vncFrameUrl"
         class="app-access-frame"
         :src="vncFrameUrl"
         :title="t('common.appAccess.vncSession')"
-        allow="clipboard-read; clipboard-write; fullscreen"
       />
       <div v-else class="app-access-state">{{ t("common.appAccess.noDirectView") }}</div>
     </section>
@@ -32,8 +31,10 @@ import { formatTime } from "../../../i18n/presentation";
 import type { SupportedLocale } from "../../../i18n/locale";
 import { getApiData } from "../../../api/client";
 import type { AppSession } from "../../../api/types";
+import { TtyStreamConnection } from "../ttyStreamConnection.ts";
 import "./app-access.css";
 import { translateApiError } from "../../../i18n/apiError";
+import AppSessionViewer from "../shared/AppSessionViewer.vue";
 
 type AppAccessSession = {
   mode: "tty" | "vnc" | "web";
@@ -52,6 +53,7 @@ const loading = ref(true);
 const error = ref("");
 const access = ref<AppAccessSession | undefined>();
 const terminalHost = ref<HTMLElement | null>(null);
+const streamState = ref<"connecting" | "connected" | "reconnecting" | "expired">("connecting");
 let cleanupTerminal: (() => void) | undefined;
 const { locale, t } = useI18n();
 
@@ -66,6 +68,8 @@ const accessModeLabel = computed(() => (mode.value === "vnc" ? "VNC" : mode.valu
 const statusText = computed(() => {
   if (loading.value) return t("common.appAccess.connecting");
   if (error.value) return t("common.appAccess.unavailable");
+  if (streamState.value === "expired") return t("common.appAccess.linkExpired");
+  if (streamState.value === "reconnecting") return t("common.appAccess.reconnecting");
   const expiresAt = access.value?.expiresAt ? formatTime(access.value.expiresAt, locale.value as SupportedLocale) : "";
   return expiresAt ? t("common.appAccess.linkExpires", { time: expiresAt }) : t("common.appAccess.connected");
 });
@@ -103,21 +107,23 @@ async function mountTerminal() {
     theme: terminalTheme(),
   });
   const fit = new FitAddon();
-  const socket = new WebSocket(websocketUrl(socketPath));
+  let stream: TtyStreamConnection | undefined;
   let restoringSnapshot = false;
+  const linkExpired = () => {
+    const expiresAt = access.value?.expiresAt ? Date.parse(access.value.expiresAt) : Number.NaN;
+    return Number.isFinite(expiresAt) && expiresAt <= Date.now();
+  };
   const resize = () => {
     if (restoringSnapshot) return;
     fit.fit();
     const dimensions = fit.proposeDimensions();
-    if (dimensions && socket.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify({ type: "resize", cols: dimensions.cols, rows: dimensions.rows }));
+    if (dimensions) {
+      stream?.send({ type: "resize", cols: dimensions.cols, rows: dimensions.rows });
     }
   };
   terminal.loadAddon(fit);
   terminal.open(host);
-  socket.binaryType = "arraybuffer";
-  socket.addEventListener("open", resize);
-  socket.addEventListener("message", (event) => {
+  const handleStreamMessage = (event: MessageEvent) => {
     if (typeof event.data !== "string") {
       terminal.write(new Uint8Array(event.data));
       return;
@@ -143,18 +149,35 @@ async function mountTerminal() {
     } catch {
       terminal.write(event.data);
     }
+  };
+  stream = new TtyStreamConnection({
+    url: websocketUrl(socketPath),
+    handlers: {
+      onOpen: () => {
+        streamState.value = "connected";
+        resize();
+      },
+      onDisconnect: () => {
+        // The access link is validated on every attach, so retrying past its TTL can only fail.
+        if (linkExpired()) {
+          streamState.value = "expired";
+          stream?.stop();
+          return;
+        }
+        streamState.value = "reconnecting";
+      },
+      onMessage: handleStreamMessage,
+    },
   });
-  socket.addEventListener("close", () => terminal.writeln("\r\n[connection closed]"));
+  stream.start();
   terminal.onData((data) => {
-    if (socket.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify({ type: "input", data }));
-    }
+    stream?.send({ type: "input", data });
   });
   window.addEventListener("resize", resize);
   window.setTimeout(resize, 50);
   cleanupTerminal = () => {
     window.removeEventListener("resize", resize);
-    socket.close();
+    stream?.stop();
     terminal.dispose();
   };
 }

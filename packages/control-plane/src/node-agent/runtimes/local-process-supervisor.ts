@@ -367,6 +367,19 @@ export class LocalProcessSupervisor {
     return false;
   }
 
+  /**
+   * Liveness probe for runtime convergence. A tracked child is authoritative;
+   * an untracked instance may still be a process this node agent adopted after
+   * a restart, so fall back to the authenticated identity endpoint.
+   */
+  async isRunning(instance: ControlledInstance) {
+    const child = this.children.get(instance.id);
+    if (child && child.exitCode === null && child.signalCode === null) return true;
+    const web = processWeb(instance);
+    if (!web || !instance.registrationToken) return false;
+    return Boolean(await fetchProcessIdentity(web, instance.registrationToken));
+  }
+
   async stopAll() {
     const children = Array.from(this.children.values());
     for (const child of children) {

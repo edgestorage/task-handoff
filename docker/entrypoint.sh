@@ -1,36 +1,75 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-load_private_config() {
-  local config_path="/run/task-handoff/instance-private-config.json"
-  if [ ! -f "${config_path}" ]; then
-    echo "Managed instance private configuration is missing." >&2
-    exit 78
-  fi
-  while IFS=$'\t' read -r key encoded; do
-    if [[ ! "${key}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
-      echo "Managed instance private configuration contains an invalid environment key." >&2
-      exit 78
+# The private config is mounted as a per-instance directory. The legacy single
+# file path stays readable so containers created by older node agents keep
+# starting after a node-agent upgrade.
+readonly private_config_default_path="/run/task-handoff/private/private-config.json"
+readonly private_config_legacy_path="/run/task-handoff/instance-private-config.json"
+
+resolve_private_config_path() {
+  local candidate
+  for candidate in "${TASK_HANDOFF_INSTANCE_PRIVATE_CONFIG_PATH:-}" "${private_config_default_path}" "${private_config_legacy_path}"; do
+    if [ -n "${candidate}" ] && [ -f "${candidate}" ]; then
+      printf '%s' "${candidate}"
+      return 0
     fi
-    local value
-    value="$(printf '%s' "${encoded}" | base64 --decode)"
-    export "${key}=${value}"
-  done < <(node -e '
+  done
+  return 1
+}
+
+# Only the instance identity is required to start. Model environment, catalog,
+# and Codex settings are an optional startup snapshot that the node agent pushes
+# over the authenticated internal API once the instance is registered.
+decode_private_config() {
+  node -e '
     const fs = require("node:fs");
     const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-    if (value.version !== 1 || typeof value.instanceCredential !== "string" || !value.instanceCredential || !value.environment || typeof value.environment !== "object" || Array.isArray(value.environment)) process.exit(78);
-    const environment = { ...value.environment, TASK_HANDOFF_REGISTRATION_TOKEN: value.instanceCredential, TASK_HANDOFF_PRIVATE_CONFIG_LOADED: "1", TASK_HANDOFF_INSTANCE_PRIVATE_CONFIG_PATH: process.argv[1] };
+    if (value.version !== 1 || typeof value.instanceId !== "string" || !value.instanceId || typeof value.instanceCredential !== "string" || !value.instanceCredential) process.exit(78);
+    const configured = value.environment === undefined ? {} : value.environment;
+    if (!configured || typeof configured !== "object" || Array.isArray(configured)) process.exit(78);
+    const environment = { ...configured, TASK_HANDOFF_REGISTRATION_TOKEN: value.instanceCredential, TASK_HANDOFF_PRIVATE_CONFIG_LOADED: "1", TASK_HANDOFF_INSTANCE_PRIVATE_CONFIG_PATH: process.argv[1] };
     if (value.modelCatalog !== undefined) environment.TASK_HANDOFF_PRIVATE_MODEL_CATALOG_JSON = JSON.stringify(value.modelCatalog);
     if (value.codexSettings !== undefined) environment.TASK_HANDOFF_PRIVATE_CODEX_SETTINGS_JSON = JSON.stringify(value.codexSettings);
     for (const [key, item] of Object.entries(environment)) {
       if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) || typeof item !== "string") process.exit(78);
       process.stdout.write(`${key}\t${Buffer.from(item).toString("base64")}\n`);
     }
-  ' "${config_path}")
-  if [ "${TASK_HANDOFF_PRIVATE_CONFIG_LOADED:-}" != "1" ]; then
-    echo "Managed instance private configuration is invalid." >&2
-    exit 78
-  fi
+  ' "$1"
+}
+
+load_private_config() {
+  local attempts="${TASK_HANDOFF_PRIVATE_CONFIG_RETRY_ATTEMPTS:-20}"
+  local delay_seconds="${TASK_HANDOFF_PRIVATE_CONFIG_RETRY_DELAY_SECONDS:-1}"
+  local attempt=1
+  local config_path decoded key encoded value
+  while :; do
+    if config_path="$(resolve_private_config_path)" && decoded="$(decode_private_config "${config_path}")"; then
+      while IFS=$'\t' read -r key encoded; do
+        if [ -z "${key}" ]; then
+          continue
+        fi
+        if [[ ! "${key}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+          echo "Managed instance private configuration contains an invalid environment key." >&2
+          exit 78
+        fi
+        value="$(printf '%s' "${encoded}" | base64 --decode)"
+        export "${key}=${value}"
+      done <<< "${decoded}"
+      if [ "${TASK_HANDOFF_PRIVATE_CONFIG_LOADED:-}" = "1" ]; then
+        return 0
+      fi
+      echo "Managed instance private configuration could not be applied." >&2
+      exit 78
+    fi
+    if [ "${attempt}" -ge "${attempts}" ]; then
+      break
+    fi
+    attempt=$((attempt + 1))
+    sleep "${delay_seconds}"
+  done
+  echo "Managed instance private configuration is missing or invalid after ${attempts} attempts." >&2
+  exit 78
 }
 
 start_node_agent_unix_proxy() {

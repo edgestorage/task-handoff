@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { defaultAiSessionModelSelection, deriveAiSessionModelGroups } from "../src/ai-session-model-catalog.ts";
+import { aiSessionModelSelectionAllowed, aiSessionProviderSelectionAllowed, defaultAiSessionModelSelection, deriveAiSessionModelGroups } from "../src/ai-session-model-catalog.ts";
 
 const entities = [
   { id: "one", name: "One", model: "fallback", enabled: true, order: 1, protocols: ["openai-responses"], modelNames: [{ name: "large", order: 2 }, { name: "small", order: 1 }], locations: [{ type: "control-plane" as const, enabled: true }] },
@@ -48,4 +48,22 @@ test("resolves a node-local replica id back onto its control-plane entity", () =
     entities: replicated, assignment: { modelEntityIds: ["mdl_stable"] }, agent: "codex", nodeId: "node-2", mode: "create", capability,
   });
   assert.deepEqual(otherNodeGroups.map((group) => group.modelEntityId), ["mdl_stable"]);
+});
+
+test("gates model and provider selection per catalog mode", () => {
+  assert.equal(aiSessionModelSelectionAllowed({ selectModelAtCreate: true }, "create"), true);
+  assert.equal(aiSessionModelSelectionAllowed({ selectModelAtCreate: true }, "existing"), false);
+  assert.equal(aiSessionModelSelectionAllowed({ selectModelAtResume: true }, "resume"), true);
+  assert.equal(aiSessionModelSelectionAllowed({ switchModelWithinProvider: true }, "existing"), true);
+  assert.equal(aiSessionModelSelectionAllowed(undefined, "existing"), false);
+  assert.equal(aiSessionProviderSelectionAllowed({ selectProviderAtCreate: true }, "create"), true);
+  assert.equal(aiSessionProviderSelectionAllowed({ selectProviderAtResume: true }, "resume"), true);
+  assert.equal(aiSessionProviderSelectionAllowed({ switchProviderDuringSession: true }, "existing"), true);
+  assert.equal(aiSessionProviderSelectionAllowed({ selectProviderAtCreate: true }, "existing"), false);
+});
+
+test("an instance that only supports create-time selection derives no in-session choices", () => {
+  const capability = { selectModelAtCreate: true, selectProviderAtCreate: true };
+  const groups = deriveAiSessionModelGroups({ entities, assignment: { modelEntityIds: ["one"] }, agent: "codex", nodeId: "node-1", mode: "existing", currentSelection: { modelEntityId: "one", modelName: "small" }, capability });
+  assert.deepEqual(groups, []);
 });

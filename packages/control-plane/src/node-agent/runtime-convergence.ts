@@ -13,7 +13,10 @@ type ConvergenceStore = {
 
 export type RuntimeConvergenceHooks = {
   isInstalled?(instance: ControlledInstance, desiredVersion: string): Promise<boolean>;
+  /** Reports whether the runtime is alive; a stopped runtime has nothing to drain. */
+  isRuntimeRunning?(instance: ControlledInstance): Promise<boolean> | boolean;
   beginDrain?(instance: ControlledInstance): Promise<boolean | void> | boolean | void;
+  onDrainSkipped?(instance: ControlledInstance): Promise<void> | void;
   endDrain?(instance: ControlledInstance): Promise<void> | void;
   install(instance: ControlledInstance, desiredVersion: string): Promise<void>;
   restart(instance: ControlledInstance): Promise<void>;
@@ -145,29 +148,35 @@ export class RuntimeConvergenceCoordinator {
           instance = this.requireInstance(instanceId);
           if (hasRegisteredRuntime(instance)) {
             instance = this.storePhase(instance, "draining");
-            const drainDeadline = this.now().getTime() + this.drainTimeoutMs;
-            let drainAccepted = false;
-            while (!drainAccepted) {
-              drainAccepted = await this.hooks.beginDrain?.(instance) !== false;
-              if (drainAccepted) {
-                drainStarted = true;
-                break;
+            if (!await this.runtimeIsRunning(instance)) {
+              // A stopped runtime cannot drain and already stopped its work; waiting
+              // for the drain deadline here only delays the restart that recovers it.
+              await this.hooks.onDrainSkipped?.(instance);
+            } else {
+              const drainDeadline = this.now().getTime() + this.drainTimeoutMs;
+              let drainAccepted = false;
+              while (!drainAccepted) {
+                drainAccepted = await this.hooks.beginDrain?.(instance) !== false;
+                if (drainAccepted) {
+                  drainStarted = true;
+                  break;
+                }
+                if (this.cancelled.has(instanceId)) return this.storePhase(this.requireInstance(instanceId), "pending");
+                const remainingMs = drainDeadline - this.now().getTime();
+                if (remainingMs <= 0) break;
+                await this.delay(Math.min(this.drainRequestRetryMs, remainingMs));
+                instance = this.requireInstance(instanceId);
               }
-              if (this.cancelled.has(instanceId)) return this.storePhase(this.requireInstance(instanceId), "pending");
-              const remainingMs = drainDeadline - this.now().getTime();
-              if (remainingMs <= 0) break;
-              await this.delay(Math.min(this.drainRequestRetryMs, remainingMs));
               instance = this.requireInstance(instanceId);
-            }
-            instance = this.requireInstance(instanceId);
-            if (!drainAccepted || hasActiveWork(instance)) {
-              const remainingMs = Math.max(0, drainDeadline - this.now().getTime());
-              const drained = drainAccepted
-                && await this.waitUntil(instanceId, remainingMs, (candidate) => !hasActiveWork(candidate));
-              instance = this.requireInstance(instanceId);
-              if (!drained) {
-                if (this.cancelled.has(instanceId)) return this.storePhase(instance, "pending");
-                await this.hooks.onForcedDrain?.(instance);
+              if (!drainAccepted || hasActiveWork(instance)) {
+                const remainingMs = Math.max(0, drainDeadline - this.now().getTime());
+                const drained = drainAccepted
+                  && await this.waitUntil(instanceId, remainingMs, (candidate) => !hasActiveWork(candidate));
+                instance = this.requireInstance(instanceId);
+                if (!drained) {
+                  if (this.cancelled.has(instanceId)) return this.storePhase(instance, "pending");
+                  await this.hooks.onForcedDrain?.(instance);
+                }
               }
             }
           }
@@ -263,6 +272,16 @@ export class RuntimeConvergenceCoordinator {
 
   private retryDelayMs(failedAttempt: number) {
     return Math.min(this.retryMaxDelayMs, this.retryBaseDelayMs * (2 ** Math.max(0, failedAttempt - 1)));
+  }
+
+  private async runtimeIsRunning(instance: ControlledInstance) {
+    if (!this.hooks.isRuntimeRunning) return true;
+    try {
+      return await this.hooks.isRuntimeRunning(instance) !== false;
+    } catch {
+      // An unknown runtime state must never block convergence.
+      return true;
+    }
   }
 
   private remainingRetryDelayMs(runtimeVersion: RuntimeVersionState | undefined) {

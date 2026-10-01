@@ -915,6 +915,13 @@ export async function createNodeAgentApp(options: CreateNodeAgentAppOptions = {}
       const installed = await requireManagedAdapterForInstance(instance).inspectRuntime(state.context(instance), artifact.identity);
       return installed;
     },
+    isRuntimeRunning: async (instance) => {
+      const adapter = adapterForInstance(instance);
+      if (!adapter.runtimeState) return true;
+      const liveness = await adapter.runtimeState(state.context(instance));
+      return liveness !== "stopped" && liveness !== "absent";
+    },
+    onDrainSkipped: (instance) => app.log.warn({ instanceId: instance.id }, "runtime is not running; skipping app session drain before runtime convergence"),
     beginDrain: async (instance) => {
       try {
         const result = await requestRuntimeAppSessionDrain(fetchImpl, instance, resolveInstanceWeb);

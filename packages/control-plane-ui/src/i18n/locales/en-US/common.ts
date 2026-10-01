@@ -58,6 +58,6 @@ export const common = {
   },
   appAccess: {
     loading: "Loading session...", vncSession: "VNC session", appSession: "App session", noDirectView: "This app session does not expose a direct view",
-    connecting: "Connecting", unavailable: "Unavailable", linkExpires: "Link expires {time}", connected: "Connected",
+    connecting: "Connecting", unavailable: "Unavailable", linkExpires: "Link expires {time}", linkExpired: "Link expired", connected: "Connected", reconnecting: "Reconnecting",
   },
 } as const;

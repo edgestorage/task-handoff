@@ -248,6 +248,38 @@ function mergeTurnPatch(
   return patch;
 }
 
+function turnIdentities(turn: Pick<NonNullable<AiSessionStatus["turns"]>[number], "id" | "providerTurnId">) {
+  return [...new Set([turn.id, turn.providerTurnId].filter((value): value is string => Boolean(value)))];
+}
+
+/**
+ * Identity is authoritative: prompt text may only pair turns while neither side
+ * proves that they are different turns. Repeated prompts are common, so a turn
+ * that is already known by id (on either side) must never be re-parented by a
+ * prompt match.
+ */
+function sharesTurnIdentity(
+  left: Pick<NonNullable<AiSessionStatus["turns"]>[number], "id" | "providerTurnId">,
+  right: Pick<NonNullable<AiSessionStatus["turns"]>[number], "id" | "providerTurnId">,
+) {
+  const identities = new Set(turnIdentities(left));
+  return turnIdentities(right).some((identity) => identities.has(identity));
+}
+
+function hasKnownTurnIdentity(
+  turns: NonNullable<AiSessionStatus["turns"]>,
+  turn: Pick<NonNullable<AiSessionStatus["turns"]>[number], "id" | "providerTurnId">,
+) {
+  return turns.some((entry) => sharesTurnIdentity(entry, turn));
+}
+
+function findTurnIndex(
+  turns: NonNullable<AiSessionStatus["turns"]>,
+  turn: Pick<NonNullable<AiSessionStatus["turns"]>[number], "id" | "providerTurnId">,
+) {
+  return turns.findIndex((entry) => sharesTurnIdentity(entry, turn));
+}
+
 function mergeTurns(current?: AiSessionStatus["turns"], next?: AiSessionStatus["turns"], meta: TurnMeta = {}) {
   const baseline = normalizeTurns(current);
   // Merge into detached turn records. If the normalized result is unchanged,
@@ -272,36 +304,52 @@ function mergeTurns(current?: AiSessionStatus["turns"], next?: AiSessionStatus["
   }
   for (const [incomingIndex, turn] of incomingTurns.entries()) {
     let mergedIntoPending = false;
-    for (const [index, existing] of merged.entries()) {
-      if (
-        existing.id !== turn.id &&
-        existing.userPrompt &&
-        existing.userPrompt === turn.userPrompt &&
-        !existing.lastMessage &&
-        !existing.summary &&
-        (turn.lastMessage || turn.summary)
-      ) {
-        const updated = {
-          ...existing,
-          ...mergeTurnPatch(existing, turn),
-          id: existing.id,
-          providerTurnId: turn.providerTurnId || turn.id,
-          revision: Math.max(existing.revision || 0, turn.revision || 0),
-        };
-        if (shouldAcceptIncomingTurn(existing, updated)) {
-          merged[index] = updated;
+    // Only an incoming turn without a known identity can be paired by prompt
+    // text. An incoming turn that is already part of the merged state keeps its
+    // own identity; otherwise an older same-prompt turn would be attached to a
+    // newer pending turn.
+    if (!hasKnownTurnIdentity(merged, turn)) {
+      for (const [index, existing] of merged.entries()) {
+        if (
+          existing.id !== turn.id &&
+          existing.userPrompt &&
+          existing.userPrompt === turn.userPrompt &&
+          !existing.lastMessage &&
+          !existing.summary &&
+          (turn.lastMessage || turn.summary) &&
+          // The pending turn must not already be represented in the incoming
+          // list by its own identity; that record is authoritative for it.
+          !hasKnownTurnIdentity(incomingTurns, existing)
+        ) {
+          const updated = {
+            ...existing,
+            ...mergeTurnPatch(existing, turn),
+            id: existing.id,
+            providerTurnId: turn.providerTurnId || turn.id,
+            revision: Math.max(existing.revision || 0, turn.revision || 0),
+          };
+          if (shouldAcceptIncomingTurn(existing, updated)) {
+            merged[index] = updated;
+          }
+          mergedIntoPending = true;
+          break;
         }
-        mergedIntoPending = true;
-        break;
       }
     }
     if (mergedIntoPending) {
       continue;
     }
-    const existingIndex = merged.findIndex((entry) => entry.id === turn.id);
+    const existingIndex = findTurnIndex(merged, turn);
     const existing = existingIndex >= 0 ? merged[existingIndex] : undefined;
     if (shouldAcceptIncomingTurn(existing, turn)) {
-      const updated = { ...existing, ...mergeTurnPatch(existing, turn), revision: Math.max(existing?.revision || 0, turn.revision || 0) };
+      const updated = {
+        ...existing,
+        ...mergeTurnPatch(existing, turn),
+        // A turn matched by provider identity keeps the canonical id of the
+        // stored turn so clients keyed by that id are not re-parented.
+        ...(existing ? { id: existing.id } : {}),
+        revision: Math.max(existing?.revision || 0, turn.revision || 0),
+      };
       if (existingIndex >= 0) {
         merged[existingIndex] = updated;
       } else {
@@ -320,7 +368,9 @@ export function currentActiveTurnIsPending(session: AiSessionStatus) {
   if (!session.activeTurnId || session.status !== "running") {
     return false;
   }
-  const turn = normalizeTurns(session.turns).find((entry) => entry.id === session.activeTurnId);
+  const turns = normalizeTurns(session.turns);
+  const index = findTurnIndex(turns, { id: session.activeTurnId });
+  const turn = index >= 0 ? turns[index] : undefined;
   return Boolean(!turn || !turnHasResponse(turn));
 }
 
@@ -328,9 +378,11 @@ export function snapshotMissingPendingActiveTurn(session: AiSessionStatus, incom
   if (!currentActiveTurnIsPending(session)) {
     return false;
   }
-  const activeTurn = normalizeTurns(session.turns).find((turn) => turn.id === session.activeTurnId);
+  const turns = normalizeTurns(session.turns);
+  const activeTurnIndex = findTurnIndex(turns, { id: session.activeTurnId });
+  const activeTurn = activeTurnIndex >= 0 ? turns[activeTurnIndex] : undefined;
   return !normalizeTurns(incomingTurns).some((turn) =>
-    turn.id === session.activeTurnId ||
+    sharesTurnIdentity(turn, { id: session.activeTurnId }) ||
     Boolean(
       activeTurn?.userPrompt &&
       turn.userPrompt === activeTurn.userPrompt &&
@@ -382,16 +434,19 @@ export function updateTurns(
   const turns = merged.turns;
   const activeTurnId = patch.activeTurnId ? compact(patch.activeTurnId, 240) : "";
   const activeTurnPrompt = activeTurnId
-    ? patch.turns?.find((turn) => turn.id === activeTurnId)?.userPrompt
+    ? patch.turns?.find((turn) => sharesTurnIdentity(turn, { id: activeTurnId }))?.userPrompt
     : undefined;
   const prompt = messageText(activeTurnPrompt || patch.userPrompt);
   if (prompt) {
     const last = turns.at(-1);
-    const activeTurn = activeTurnId ? turns.find((turn) => turn.id === activeTurnId) : undefined;
+    const activeTurnIndex = activeTurnId ? findTurnIndex(turns, { id: activeTurnId }) : -1;
+    const activeTurn = activeTurnIndex >= 0 ? turns[activeTurnIndex] : undefined;
     const promptTurn = activeTurn || [...turns].reverse().find((turn) => turn.userPrompt === prompt && !turn.lastMessage && !turn.summary);
     const promptAlreadyRepresented = Boolean(patch.turns?.some((turn) => turn.userPrompt && messageText(turn.userPrompt) === prompt));
     if (promptTurn) {
-      if (activeTurnId && promptTurn.id !== activeTurnId) {
+      // Adopting the active id is only valid when the turn was matched by
+      // prompt text, not when an existing identity already found it.
+      if (activeTurnId && !activeTurn && promptTurn.id !== activeTurnId) {
         promptTurn.id = activeTurnId;
       }
       const nextStatus = turnStatusFromSessionStatus(patch.status);
@@ -435,7 +490,7 @@ export function updateTurns(
     }
   }
   if (patch.userMessage) {
-    let messageTurn = activeTurnId ? turns.find((turn) => turn.id === activeTurnId) : turns.at(-1);
+    let messageTurn = activeTurnId ? turns[findTurnIndex(turns, { id: activeTurnId })] : turns.at(-1);
     if (!messageTurn) {
       messageTurn = {
         id: activeTurnId || stableGeneratedTurnId(patch.userMessage.text, updatedAt),
@@ -457,7 +512,7 @@ export function updateTurns(
     }
   }
   if (patch.lastMessage || patch.summary) {
-    let last = activeTurnId ? turns.find((turn) => turn.id === activeTurnId) : turns.at(-1);
+    let last = activeTurnId ? turns[findTurnIndex(turns, { id: activeTurnId })] : turns.at(-1);
     if (!last && activeTurnId) {
       const latestPromptTurn = [...turns].reverse().find((turn) => turn.userPrompt && !turn.lastMessage && !turn.summary);
       if (latestPromptTurn) {
@@ -513,7 +568,7 @@ export function updateTurns(
     }
   } else if (patch.status || patch.phase) {
     const last = activeTurnId
-      ? turns.find((turn) => turn.id === activeTurnId)
+      ? turns[findTurnIndex(turns, { id: activeTurnId })]
       : patch.status === "idle" || patch.status === "failed"
         ? turns.at(-1)
         : undefined;
@@ -531,7 +586,7 @@ export function updateTurns(
     }
   }
   if ((patch.status === "running" || patch.status === "waiting") && activeTurnId) {
-    const activeIndex = turns.findIndex((turn) => turn.id === activeTurnId);
+    const activeIndex = findTurnIndex(turns, { id: activeTurnId });
     if (activeIndex >= 0 && activeIndex !== turns.length - 1) {
       const [activeTurn] = turns.splice(activeIndex, 1);
       turns.push(activeTurn);

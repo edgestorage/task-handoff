@@ -130,21 +130,44 @@ test("node-agent maintenance retains active data and ages orphan data through tr
   fs.mkdirSync(paths.instancePrivateConfigsDir, { recursive: true });
   fs.writeFileSync(path.join(paths.instancePrivateConfigsDir, "inst_active.json"), "active");
   fs.writeFileSync(path.join(paths.instancePrivateConfigsDir, "inst_orphan.json"), "orphan");
+  fs.mkdirSync(path.join(paths.instancePrivateConfigsDir, "inst_active_dir"), { recursive: true });
+  fs.mkdirSync(path.join(paths.instancePrivateConfigsDir, "inst_orphan_dir"), { recursive: true });
+  fs.writeFileSync(path.join(paths.instancePrivateConfigsDir, "inst_active_dir", "private-config.json"), "active");
+  fs.writeFileSync(path.join(paths.instancePrivateConfigsDir, "inst_orphan_dir", "private-config.json"), "orphan");
   const external = tempDir("external-workspace");
   if (process.platform !== "win32") {
     fs.symlinkSync(external, path.join(root, "inst_link"));
   }
 
-  new NodeAgentPersistenceMaintenance(paths, { now: () => 2_000, retentionMs: 500 }).run(["inst_active"]);
+  new NodeAgentPersistenceMaintenance(paths, { now: () => 2_000, retentionMs: 500 }).run(["inst_active", "inst_active_dir"]);
   assert.equal(fs.existsSync(path.join(root, "inst_active")), true);
   assert.equal(fs.existsSync(path.join(root, "inst_orphan")), false);
   assert.equal(fs.existsSync(path.join(paths.instancePrivateConfigsDir, "inst_active.json")), true);
   assert.equal(fs.existsSync(path.join(paths.instancePrivateConfigsDir, "inst_orphan.json")), false);
+  assert.equal(fs.existsSync(path.join(paths.instancePrivateConfigsDir, "inst_active_dir", "private-config.json")), true);
+  assert.equal(fs.existsSync(path.join(paths.instancePrivateConfigsDir, "inst_orphan_dir")), false);
   assert.equal(fs.existsSync(external), true);
   if (process.platform !== "win32") assert.equal(fs.lstatSync(path.join(root, "inst_link")).isSymbolicLink(), true);
 
-  new NodeAgentPersistenceMaintenance(paths, { now: () => 2_501, retentionMs: 500 }).run(["inst_active"]);
+  new NodeAgentPersistenceMaintenance(paths, { now: () => 2_501, retentionMs: 500 }).run(["inst_active", "inst_active_dir"]);
   assert.deepEqual(fs.readdirSync(path.join(paths.dataDir, "local-instances-trash")), []);
+});
+
+test("node-agent maintenance retries orphan private config directory cleanup", () => {
+  const paths = nodeAgentStorePaths(tempDir("node-agent-private-config-directory-retry"));
+  fs.mkdirSync(path.join(paths.instancePrivateConfigsDir, "inst_deleted"), { recursive: true });
+  const orphan = path.join(paths.instancePrivateConfigsDir, "inst_deleted", "private-config.json");
+  fs.writeFileSync(orphan, "stale-secret");
+  const warnings = [];
+  new NodeAgentPersistenceMaintenance(paths, {
+    removeDirectory: () => { throw new Error("injected cleanup failure"); },
+    logger: (message, details) => warnings.push({ message, details }),
+  }).run([]);
+  assert.equal(fs.existsSync(orphan), true);
+  assert.equal(warnings[0].message, "orphan instance private config cleanup failed");
+
+  new NodeAgentPersistenceMaintenance(paths).run([]);
+  assert.equal(fs.existsSync(path.join(paths.instancePrivateConfigsDir, "inst_deleted")), false);
 });
 
 test("node-agent maintenance retries orphan private config cleanup without restoring an instance", () => {

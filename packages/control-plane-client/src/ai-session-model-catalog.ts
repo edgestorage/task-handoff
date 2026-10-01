@@ -45,6 +45,31 @@ export function assignedModelEntityIds(assignment: AiSessionCatalogAssignment): 
   return [...new Set(current.filter((id): id is string => typeof id === "string" && id.length > 0))];
 }
 
+/**
+ * Whether the provider advertises model selection for this catalog mode. The
+ * composer renders "no model configured" only when selection is available and
+ * the assignment is empty; an unsupported mode keeps the current model visible
+ * instead of hiding it behind a misleading empty state.
+ */
+export function aiSessionModelSelectionAllowed(
+  capability: Partial<AiSessionModelSelectionCapabilities> | undefined,
+  mode: "create" | "existing" | "resume",
+): boolean {
+  if (mode === "create") return capability?.selectModelAtCreate === true;
+  if (mode === "resume") return capability?.selectModelAtResume === true;
+  return capability?.switchModelWithinProvider === true;
+}
+
+/** Provider counterpart of {@link aiSessionModelSelectionAllowed}. */
+export function aiSessionProviderSelectionAllowed(
+  capability: Partial<AiSessionModelSelectionCapabilities> | undefined,
+  mode: "create" | "existing" | "resume",
+): boolean {
+  if (mode === "create") return capability?.selectProviderAtCreate === true;
+  if (mode === "resume") return capability?.selectProviderAtResume === true;
+  return capability?.switchProviderDuringSession === true;
+}
+
 export function deriveAiSessionModelGroups(input: {
   entities: AiSessionCatalogModelEntity[];
   assignment: AiSessionCatalogAssignment;
@@ -67,16 +92,8 @@ export function deriveAiSessionModelGroups(input: {
     }
   }
   const capability = input.capability || {};
-  const providerSelectionAllowed = input.mode === "create"
-    ? capability.selectProviderAtCreate === true
-    : input.mode === "resume"
-      ? capability.selectProviderAtResume === true
-      : capability.switchProviderDuringSession === true;
-  const modelSelectionAllowed = input.mode === "create"
-    ? capability.selectModelAtCreate === true
-    : input.mode === "resume"
-      ? capability.selectModelAtResume === true
-      : capability.switchModelWithinProvider === true;
+  const providerSelectionAllowed = aiSessionProviderSelectionAllowed(capability, input.mode);
+  const modelSelectionAllowed = aiSessionModelSelectionAllowed(capability, input.mode);
   if (!modelSelectionAllowed) return [];
 
   return ids.flatMap((id) => {

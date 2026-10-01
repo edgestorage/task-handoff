@@ -570,7 +570,8 @@
             :provider="historyDetail.item.agent"
             :permission-modes="providerPermissionModes(historyDetail.item.agent)"
             :model-groups="historyModelGroups"
-            :model-selection="historyModelSelection"
+            :model-selection="historyModelDisplay"
+            :model-selection-enabled="historyModelSelectionEnabled"
             :permission-key="historyAiSessionPermissionKey(instance.id, historyDetail.item.id)"
             :default-permission-mode="instance.config.defaultCodexPermissionMode"
             :max-file-attachment-bytes="instance.config.aiSessionMaxFileAttachmentBytes"
@@ -1126,6 +1127,7 @@
             :model-groups="selectedSessionModelGroups"
             :model-selection="selectedSessionModelDisplay"
             :model-selection-pending="modelSelectionPendingSessionId === selectedSession.id"
+            :model-selection-enabled="selectedSessionModelSelectionEnabled"
             :reasoning-effort="selectedSession.reasoningEffort || (selectedSession.agent === 'codex' ? AI_SESSION_DEFAULT_REASONING_EFFORT : undefined)"
             :reasoning-effort-enabled="selectedSessionReasoningEffortCapability.updateDuringSession"
             :reasoning-effort-pending="reasoningEffortPending?.sessionId === selectedSession.id"
@@ -1408,6 +1410,7 @@ import { createStreamingScrollFollow, distanceFromBottom, STREAMING_SCROLL_FOLLO
 import { createLayoutScrollAnchor, createUserLayoutChangeGuard } from "../../../lib/layout-scroll-anchor";
 import { createBrowserUuid } from "../../../lib/random-id";
 import {
+  aiSessionModelSelectionAllowed,
   aiSessionPriority,
   aiSessionStatusGroup as sessionStatusGroup,
   canInterruptAiSession,
@@ -1923,6 +1926,10 @@ const selectedSessionModelDisplay = computed(() => {
   const session = selectedSession.value;
   return session?.modelSelection;
 });
+const selectedSessionModelSelectionEnabled = computed(() => aiSessionModelSelectionAllowed(
+  modelSelectionCapability(selectedSession.value?.agent || ""),
+  "existing",
+));
 const newSessionReasoningEffortCapability = computed(() => reasoningEffortCapability(newSessionApp.value));
 const selectedSessionReasoningEffortCapability = computed(() => reasoningEffortCapability(selectedSession.value?.agent || ""));
 const newSessionFolderId = ref("");
@@ -2231,6 +2238,13 @@ const historyModelGroups = computed(() => {
     capability: modelSelectionCapability(item.agent),
   });
 });
+const historyModelSelectionEnabled = computed(() => aiSessionModelSelectionAllowed(
+  modelSelectionCapability(historyDetail.value?.item.agent || ""),
+  "resume",
+));
+// An unsupported resume leaves no catalog to pick from; keep showing the
+// resumed session's own model instead of an empty, misleading selection.
+const historyModelDisplay = computed(() => historyModelSelection.value || historyDetail.value?.item.modelSelection);
 watch(historyModelGroups, (groups) => {
   const current = historyModelSelection.value;
   if (current && groups.some((group) => group.models.some((model) => (

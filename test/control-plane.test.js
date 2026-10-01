@@ -4091,7 +4091,7 @@ test("local docker run args include controlled metadata and disable local chat b
   const args = dockerRunArgs(
     {
       nodeAgentUrl: "http://127.0.0.1:8091",
-      privateConfigPath: "/private/inst_1.json",
+      privateConfigPath: "/private/inst_1/private-config.json",
       node: {
         id: "node_exec",
         name: "Execution Node",
@@ -4758,7 +4758,7 @@ test("local docker run args keep resolved model environment out of Docker Config
   const args = dockerRunArgs(
     {
       nodeAgentUrl: "http://127.0.0.1:8091",
-      privateConfigPath: "/private/inst_1.json",
+      privateConfigPath: "/private/inst_1/private-config.json",
       modelEnv: {
         OPENAI_API_KEY: "codex-key",
         OPENAI_BASE_URL: "https://openai.example/v1",
@@ -4819,7 +4819,8 @@ test("local docker run args keep resolved model environment out of Docker Config
   );
 
   assert.equal(args.some((value) => value.includes("codex-key") || value.includes("claude-key")), false);
-  assert.ok(args.includes("type=bind,src=/private/inst_1.json,dst=/run/task-handoff/instance-private-config.json,readonly"));
+  assert.ok(args.includes("type=bind,src=/private/inst_1,dst=/run/task-handoff/private,readonly"));
+  assert.ok(args.includes("TASK_HANDOFF_INSTANCE_PRIVATE_CONFIG_PATH=/run/task-handoff/private/private-config.json"));
 });
 
 test("local docker run args expose git workspace bootstrap environment", () => {
@@ -4827,7 +4828,7 @@ test("local docker run args expose git workspace bootstrap environment", () => {
   const args = dockerRunArgs(
     {
       nodeAgentUrl: "http://127.0.0.1:8091",
-      privateConfigPath: "/private/inst_git.json",
+      privateConfigPath: "/private/inst_git/private-config.json",
       project: {
         id: "proj_git",
         name: "Git Project",
@@ -4899,7 +4900,7 @@ test("local docker executor checks local images and pulls registry images before
   const timestamp = new Date().toISOString();
   const baseContext = {
     nodeAgentUrl: "http://127.0.0.1:8091",
-    privateConfigPath: "/private/inst_1.json",
+    privateConfigPath: "/private/inst_1/private-config.json",
     project: {
       id: "proj_1",
       name: "Project",

@@ -4,6 +4,7 @@ import type { Terminal as XTermTerminal } from "@xterm/xterm";
 import { TTY_STREAM_PROTOCOL_VERSION } from "@task-handoff/protocol/app-sessions";
 import { BoundedInactiveLruCache } from "./terminalPreviewCache";
 import { canPublishTerminalResize } from "./terminalResizeOwnership.ts";
+import { TtyStreamConnection } from "./ttyStreamConnection.ts";
 
 export const MAX_CACHED_TERMINAL_PREVIEWS = 5;
 
@@ -64,7 +65,8 @@ class CachedTerminalPreview {
   private fit?: FitAddon;
   private container?: HTMLElement;
   private host?: HTMLElement;
-  private socket?: WebSocket;
+  private stream?: TtyStreamConnection;
+  private streamGeneration = 0;
   private resizeObserver?: ResizeObserver;
   private refreshFrame?: number;
   private resizeGeneration = 0;
@@ -126,8 +128,8 @@ class CachedTerminalPreview {
     this.cancelScheduledResize();
     this.resizeObserver?.disconnect();
     this.resizeObserver = undefined;
-    this.socket?.close();
-    this.socket = undefined;
+    this.stream?.stop();
+    this.stream = undefined;
     this.terminal?.dispose();
     this.terminal = undefined;
     this.fit = undefined;
@@ -160,9 +162,7 @@ class CachedTerminalPreview {
       terminal.open(container);
       terminal.onResize(({ cols, rows }) => this.sendResize(cols, rows));
       terminal.onData((data) => {
-        if (this.active && this.socket?.readyState === WebSocket.OPEN) {
-          this.socket.send(JSON.stringify({ type: "input", data }));
-        }
+        if (this.active) this.stream?.send({ type: "input", data });
       });
       this.terminal = terminal;
       this.fit = fit;
@@ -176,54 +176,63 @@ class CachedTerminalPreview {
   }
 
   private ensureSocket() {
-    if (this.disposed || !this.terminal || (this.socket && this.socket.readyState < WebSocket.CLOSING)) return;
-    const socket = new WebSocket(this.socketUrl);
-    this.socket = socket;
+    if (this.disposed || !this.terminal) return;
+    if (!this.stream) {
+      this.stream = new TtyStreamConnection({
+        url: this.socketUrl,
+        handlers: {
+          onOpen: () => this.handleStreamOpen(),
+          onMessage: (event) => this.handleStreamMessage(event),
+        },
+      });
+    }
+    this.stream.start();
+  }
+
+  private handleStreamOpen() {
+    this.streamGeneration += 1;
+    this.restoringSnapshot = false;
     this.lastSentDimensions = undefined;
-    socket.binaryType = "arraybuffer";
-    socket.addEventListener("open", () => {
-      if (this.socket === socket) this.scheduleResize({ repaint: true, sendInitialSize: true });
-    });
-    socket.addEventListener("message", (event) => {
-      if (this.socket !== socket || !this.terminal) return;
-      if (typeof event.data !== "string") {
-        this.terminal.write(new Uint8Array(event.data));
-        return;
-      }
-      try {
-        const message = JSON.parse(event.data) as { type?: string; data?: unknown; message?: unknown; pendingEscape?: unknown; protocolVersion?: unknown; cols?: unknown; rows?: unknown };
-        if (message.type === "connected" && message.protocolVersion !== TTY_STREAM_PROTOCOL_VERSION) {
-          console.warn("TTY stream protocol version mismatch.", {
-            expected: TTY_STREAM_PROTOCOL_VERSION,
-            received: message.protocolVersion,
-          });
-        } else if (message.type === "snapshot" && typeof message.data === "string") {
-          this.restoringSnapshot = true;
-          this.cancelScheduledResize();
-          if (Number.isInteger(message.cols) && Number.isInteger(message.rows) && Number(message.cols) > 0 && Number(message.rows) > 0) {
-            this.applyRemoteDimensions(Number(message.cols), Number(message.rows));
-          }
-          this.terminal.reset();
-          const pendingEscape = typeof message.pendingEscape === "string" ? message.pendingEscape : "";
-          this.terminal.write(`${message.data}${pendingEscape}`, () => {
-            if (this.socket !== socket || !this.terminal) return;
-            this.restoringSnapshot = false;
-            this.scheduleResize({ repaint: true, sendInitialSize: true });
-          });
-        } else if (message.type === "output" && typeof message.data === "string") {
-          this.terminal.write(message.data);
-        } else if (message.type === "resize" && Number.isInteger(message.cols) && Number.isInteger(message.rows) && Number(message.cols) > 0 && Number(message.rows) > 0) {
+    this.scheduleResize({ repaint: true, sendInitialSize: true });
+  }
+
+  private handleStreamMessage(event: MessageEvent) {
+    if (!this.terminal) return;
+    if (typeof event.data !== "string") {
+      this.terminal.write(new Uint8Array(event.data));
+      return;
+    }
+    const generation = this.streamGeneration;
+    try {
+      const message = JSON.parse(event.data) as { type?: string; data?: unknown; message?: unknown; pendingEscape?: unknown; protocolVersion?: unknown; cols?: unknown; rows?: unknown };
+      if (message.type === "connected" && message.protocolVersion !== TTY_STREAM_PROTOCOL_VERSION) {
+        console.warn("TTY stream protocol version mismatch.", {
+          expected: TTY_STREAM_PROTOCOL_VERSION,
+          received: message.protocolVersion,
+        });
+      } else if (message.type === "snapshot" && typeof message.data === "string") {
+        this.restoringSnapshot = true;
+        this.cancelScheduledResize();
+        if (Number.isInteger(message.cols) && Number.isInteger(message.rows) && Number(message.cols) > 0 && Number(message.rows) > 0) {
           this.applyRemoteDimensions(Number(message.cols), Number(message.rows));
-        } else if (message.type === "error") {
-          this.terminal.writeln(String(message.message || "TTY session error."));
         }
-      } catch {
-        this.terminal.write(event.data);
+        this.terminal.reset();
+        const pendingEscape = typeof message.pendingEscape === "string" ? message.pendingEscape : "";
+        this.terminal.write(`${message.data}${pendingEscape}`, () => {
+          if (generation !== this.streamGeneration || !this.terminal) return;
+          this.restoringSnapshot = false;
+          this.scheduleResize({ repaint: true, sendInitialSize: true });
+        });
+      } else if (message.type === "output" && typeof message.data === "string") {
+        this.terminal.write(message.data);
+      } else if (message.type === "resize" && Number.isInteger(message.cols) && Number.isInteger(message.rows) && Number(message.cols) > 0 && Number(message.rows) > 0) {
+        this.applyRemoteDimensions(Number(message.cols), Number(message.rows));
+      } else if (message.type === "error") {
+        this.terminal.writeln(String(message.message || "TTY session error."));
       }
-    });
-    socket.addEventListener("close", () => {
-      if (this.socket === socket) this.socket = undefined;
-    });
+    } catch {
+      this.terminal.write(event.data);
+    }
   }
 
   private sendResize(cols: number, rows: number) {
@@ -235,11 +244,11 @@ class CachedTerminalPreview {
         applyingRemoteResize: this.applyingRemoteResize || this.restoringSnapshot,
       })
       || this.restoringSnapshot
-      || this.socket?.readyState !== WebSocket.OPEN
+      || !this.stream?.connected
       || (this.lastSentDimensions?.cols === cols && this.lastSentDimensions.rows === rows)
     ) return;
     this.lastSentDimensions = { cols, rows };
-    this.socket.send(JSON.stringify({ type: "resize", cols, rows }));
+    this.stream.send({ type: "resize", cols, rows });
   }
 
   private applyRemoteDimensions(cols: number, rows: number) {

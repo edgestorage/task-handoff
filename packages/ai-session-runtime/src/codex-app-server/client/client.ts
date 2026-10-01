@@ -29,6 +29,9 @@ export type CodexAppServerClientOptions = {
   socketPath?: string;
   onDynamicToolCall?: (call: CodexDynamicToolCall) => Promise<CodexDynamicToolCallResult>;
   onDiagnostic?: (diagnostic: Record<string, unknown>) => void;
+  // Fires once per resolved artifact version so owners can re-publish capability
+  // documents that are derived from the app-server version.
+  onVersionResolved?: (version: string) => void;
 };
 
 type PendingRequest = {
@@ -193,7 +196,9 @@ export class CodexAppServerClient extends EventEmitter {
   private readonly resolveVersion: (command: string) => Promise<string>;
   private readonly onDynamicToolCall?: CodexAppServerClientOptions["onDynamicToolCall"];
   private readonly onDiagnostic?: CodexAppServerClientOptions["onDiagnostic"];
+  private readonly onVersionResolved?: CodexAppServerClientOptions["onVersionResolved"];
   private versionPromise?: Promise<string>;
+  private resolvedVersion?: string;
   private serverUserAgent?: string;
   private forkMethodAvailable = true;
   private threadItemsListAvailable = true;
@@ -214,6 +219,7 @@ export class CodexAppServerClient extends EventEmitter {
     this.resolveVersion = options.resolveVersion || resolveCodexCliVersion;
     this.onDynamicToolCall = options.onDynamicToolCall;
     this.onDiagnostic = options.onDiagnostic;
+    this.onVersionResolved = options.onVersionResolved;
   }
 
   get connected() {
@@ -322,7 +328,37 @@ export class CodexAppServerClient extends EventEmitter {
   }
 
   supportsThreadSettingsUpdate() {
-    return codexThreadSettingsUpdateSupported(this.serverUserAgent);
+    return codexThreadSettingsUpdateSupported(this.capabilityVersion());
+  }
+
+  /**
+   * Capability probes describe the artifact this client runs, not whether the
+   * process happens to be started yet: a deployment that ships Codex >= 0.133.0
+   * supports thread/settings/update before the first thread exists. The live
+   * handshake user agent wins once it is known; before that the resolved CLI
+   * version answers, so the advertised capability does not flip mid-session.
+   */
+  private capabilityVersion() {
+    return this.serverUserAgent || this.resolvedVersion;
+  }
+
+  /** Resolves the app-server artifact version once; callers may warm it before start(). */
+  resolveAppServerVersion(): Promise<string> {
+    if (!this.versionPromise) {
+      const attempt = this.resolveVersion(this.mode.command);
+      this.versionPromise = attempt;
+      void attempt.then(
+        (version) => {
+          this.resolvedVersion = version;
+          if (this.versionPromise === attempt) this.onVersionResolved?.(version);
+        },
+        () => {
+          // Keep failed detection retryable: start() must be able to probe again.
+          if (this.versionPromise === attempt) this.versionPromise = undefined;
+        },
+      );
+    }
+    return this.versionPromise;
   }
 
   async updateThreadSettings(threadId: string, settings: import("./contract").CodexThreadSettings) {
@@ -370,7 +406,7 @@ export class CodexAppServerClient extends EventEmitter {
   }
 
   threadForkCapabilities() {
-    const capability = codexThreadForkCapabilities(this.serverUserAgent);
+    const capability = codexThreadForkCapabilities(this.capabilityVersion());
     return this.forkMethodAvailable ? capability : { fullHistory: false, throughTurn: false };
   }
 
@@ -450,7 +486,7 @@ export class CodexAppServerClient extends EventEmitter {
   }
 
   supportsPaginatedTimeline() {
-    return codexPaginatedTimelineSupported(this.serverUserAgent);
+    return codexPaginatedTimelineSupported(this.capabilityVersion());
   }
 
   async listThreads() {
@@ -780,15 +816,7 @@ export class CodexAppServerClient extends EventEmitter {
   }
 
   private async initialize() {
-    const versionAttempt = this.versionPromise || this.resolveVersion(this.mode.command);
-    this.versionPromise = versionAttempt;
-    let version: string;
-    try {
-      version = await versionAttempt;
-    } catch (error) {
-      if (this.versionPromise === versionAttempt) this.versionPromise = undefined;
-      throw error;
-    }
+    const version = await this.resolveAppServerVersion();
     const result = await this.request("initialize", {
       clientInfo: { name: "codex-tui", version },
       capabilities: { experimentalApi: true },

@@ -16,11 +16,23 @@ export class NodeAgentPersistenceMaintenance {
   readonly localInstancesRoot: string;
   readonly localInstancesTrashRoot: string;
   readonly privateConfigsDir: string;
-  private readonly options: { retentionMs?: number; now?: () => number; logger?: MaintenanceLogger; removeFile?: (filePath: string) => void };
+  private readonly options: {
+    retentionMs?: number;
+    now?: () => number;
+    logger?: MaintenanceLogger;
+    removeFile?: (filePath: string) => void;
+    removeDirectory?: (directoryPath: string) => void;
+  };
 
   constructor(
     paths: NodeAgentStorePaths,
-    options: { retentionMs?: number; now?: () => number; logger?: MaintenanceLogger; removeFile?: (filePath: string) => void } = {},
+    options: {
+      retentionMs?: number;
+      now?: () => number;
+      logger?: MaintenanceLogger;
+      removeFile?: (filePath: string) => void;
+      removeDirectory?: (directoryPath: string) => void;
+    } = {},
   ) {
     this.options = options;
     this.logsDir = paths.logsDir;
@@ -109,16 +121,24 @@ export class NodeAgentPersistenceMaintenance {
   private removeOrphanPrivateConfigs(activeInstanceIds: Set<string>) {
     if (!fs.existsSync(this.privateConfigsDir)) return;
     for (const entry of fs.readdirSync(this.privateConfigsDir, { withFileTypes: true })) {
-      if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
-      const instanceId = entry.name.slice(0, -".json".length);
+      if (entry.isSymbolicLink()) continue;
+      // The per-instance directory layout owns new configs; the single-file
+      // layout stays until containers created by v0.0.34 are recreated.
+      const directoryLayout = entry.isDirectory();
+      if (!directoryLayout && (!entry.isFile() || !entry.name.endsWith(".json"))) continue;
+      const instanceId = directoryLayout ? entry.name : entry.name.slice(0, -".json".length);
       if (activeInstanceIds.has(instanceId)) continue;
-      const filePath = path.join(this.privateConfigsDir, entry.name);
+      const target = path.join(this.privateConfigsDir, entry.name);
       try {
-        (this.options.removeFile || ((target) => fs.rmSync(target, { force: true })))(filePath);
+        if (directoryLayout) {
+          (this.options.removeDirectory || ((directoryPath) => fs.rmSync(directoryPath, { recursive: true, force: true })))(target);
+        } else {
+          (this.options.removeFile || ((filePath) => fs.rmSync(filePath, { force: true })))(target);
+        }
       } catch (error) {
         this.options.logger?.("orphan instance private config cleanup failed", {
           instanceId,
-          filePath,
+          filePath: target,
           error: error instanceof Error ? error.message : String(error),
         });
       }

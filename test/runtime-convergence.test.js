@@ -205,6 +205,42 @@ test("a first start without a registered runtime installs immediately instead of
   assert.equal(updated.runtimeVersion.phase, "matched");
 });
 
+test("a stopped runtime skips the drain deadline and restarts immediately", async () => {
+  let clock = 0;
+  const store = memoryStore(instance({
+    apps: { runningCount: 1, problemCount: 0 },
+    aiSessions: { runningCount: 1, waitingCount: 0, sessions: [], updatedAt: new Date().toISOString() },
+  }));
+  const calls = [];
+  const coordinator = new RuntimeConvergenceCoordinator(store, () => "2.0.0", {
+    async isRuntimeRunning() { return false; },
+    async beginDrain() { calls.push("drain"); return false; },
+    async onDrainSkipped() { calls.push("skip"); },
+    async onForcedDrain() { calls.push("forced"); },
+    async install() { calls.push("install"); },
+    async restart(value) {
+      calls.push("restart");
+      store.put(ControlledInstanceSchema.parse({
+        ...store.get(value.id),
+        status: "running",
+        build: { component: "controlled-instance", packageVersion: "2.0.0" },
+      }));
+    },
+  }, {
+    now: () => new Date(clock),
+    delay: async (milliseconds) => { clock += milliseconds; },
+    drainTimeoutMs: 5 * 60_000,
+    verificationTimeoutMs: 0,
+  });
+
+  const updated = await coordinator.schedule("inst_runtime", { startRequested: true });
+  // A dead runtime cannot drain and must not hold the restart behind the drain
+  // deadline, even when the last observation still counted active work.
+  assert.deepEqual(calls, ["skip", "install", "restart"]);
+  assert.equal(clock, 0);
+  assert.equal(updated.runtimeVersion.phase, "matched");
+});
+
 test("an explicit stop cancels restart after an in-flight install", async () => {
   const store = memoryStore(instance());
   let finishInstall;
