@@ -1,0 +1,28 @@
+{
+  "name": "@task-handoff/thctl",
+  "version": "1.0.0",
+  "private": true,
+  "description": "TaskHandoff Control Plane command line client.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": {
+    "thctl": "bin/thctl.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json --noEmit",
+    "check": "pnpm run build",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@task-handoff/control-plane-client": "workspace:*",
+    "@task-handoff/core": "workspace:*",
+    "@task-handoff/protocol": "workspace:*",
+    "commander": "^14.0.3",
+    "ws": "^8.21.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.1",
+    "typescript": "^6.0.3"
+  }
+}

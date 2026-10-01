@@ -1,0 +1,11 @@
+{
+  "extends": "../../tsconfig.workspace.json",
+  "compilerOptions": {
+    "rootDir": "../.."
+  },
+  "include": [
+    "src/**/*",
+    "../../packages/protocol/src/**/*",
+    "../../packages/control-plane-client/src/**/*"
+  ]
+}

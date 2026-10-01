@@ -32,7 +32,7 @@ test("legacy receiver CLI and package are removed", () => {
   const rollupSource = read("rollup.config.mjs");
   const lockfile = read("pnpm-lock.yaml");
 
-  assert.deepEqual(rootManifest.bin, { "task-handoff": "bin/task-handoff.js" });
+  assert.deepEqual(rootManifest.bin, { "task-handoff": "bin/task-handoff.js", thctl: "bin/thctl.js" });
   assert.equal(cliManifest.dependencies?.["@task-handoff/receiver-worker"], undefined);
   assert.equal(cliManifest.dependencies?.["@task-handoff/terminal-ui"], undefined);
   assert.doesNotMatch(cliSource, /\.command\("(?:receiver|send|mcp|codex-approval-hook|claude-approval-hook)"\)/);

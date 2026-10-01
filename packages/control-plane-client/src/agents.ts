@@ -55,6 +55,7 @@ import {
   type AgentOrchestrationCreateInput,
   type AgentOrchestrationUpdateInput,
 } from "@task-handoff/protocol/agent-orchestrations";
+import { jsonRequest } from "./json-request.ts";
 
 const DataSchema = <T extends z.ZodType>(schema: T) => z.object({ data: schema }).passthrough();
 
@@ -64,7 +65,6 @@ const DataSchema = <T extends z.ZodType>(schema: T) => z.object({ data: schema }
  */
 export function createControlPlaneAgentsApi(transport: ControlPlaneClientTransport) {
   const requestData = async <T>(path: string, schema: z.ZodType<T>, init?: RequestInit) => (await transport.request(path, DataSchema(schema), init)).data;
-  const json = (method: string, body: unknown): RequestInit => ({ method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
   return {
     async list(nodeId?: string, signal?: AbortSignal) {
       const data = await requestData(
@@ -79,11 +79,11 @@ export function createControlPlaneAgentsApi(transport: ControlPlaneClientTranspo
       return sanitizeAgentDefinition(data);
     },
     async create(nodeId: string, input: AgentDefinitionCreateInput) {
-      const data = await requestData("/api/agents", z.unknown(), json("POST", { nodeId, input: AgentDefinitionCreateInputSchema.parse(input) }));
+      const data = await requestData("/api/agents", z.unknown(), jsonRequest("POST", { nodeId, input: AgentDefinitionCreateInputSchema.parse(input) }));
       return sanitizeAgentDefinition(data);
     },
     async update(agentId: string, nodeId: string, input: AgentDefinitionUpdateInput) {
-      const data = await requestData(`/api/agents/${encodeURIComponent(agentId)}`, z.unknown(), json("PATCH", { nodeId, input: AgentDefinitionUpdateInputSchema.parse(input) }));
+      const data = await requestData(`/api/agents/${encodeURIComponent(agentId)}`, z.unknown(), jsonRequest("PATCH", { nodeId, input: AgentDefinitionUpdateInputSchema.parse(input) }));
       return sanitizeAgentDefinition(data);
     },
     remove(agentId: string, nodeId: string, options: { referencingOrchestrations?: "keep" | "delete" } = {}) {
@@ -112,14 +112,14 @@ export function createControlPlaneAgentsApi(transport: ControlPlaneClientTranspo
       return sanitizeAgentOrchestration(data);
     },
     async createOrchestration(nodeId: string, input: AgentOrchestrationCreateInput) {
-      const data = await requestData("/api/agent-orchestrations", z.unknown(), json("POST", {
+      const data = await requestData("/api/agent-orchestrations", z.unknown(), jsonRequest("POST", {
         nodeId,
         input: AgentOrchestrationCreateInputSchema.parse(input),
       }));
       return sanitizeAgentOrchestration(data);
     },
     async updateOrchestration(orchestrationId: string, nodeId: string, input: AgentOrchestrationUpdateInput) {
-      const data = await requestData(`/api/agent-orchestrations/${encodeURIComponent(orchestrationId)}`, z.unknown(), json("PATCH", {
+      const data = await requestData(`/api/agent-orchestrations/${encodeURIComponent(orchestrationId)}`, z.unknown(), jsonRequest("PATCH", {
         nodeId,
         input: AgentOrchestrationUpdateInputSchema.parse(input),
       }));
@@ -140,7 +140,7 @@ export function createControlPlaneAgentsApi(transport: ControlPlaneClientTranspo
       const data = await requestData(
         `/api/stories/${encodeURIComponent(storyId)}/agent-entries`,
         z.unknown(),
-        json("PUT", { nodeId, input: StoryAgentEntrySetUpdateInputSchema.parse(input) }),
+        jsonRequest("PUT", { nodeId, input: StoryAgentEntrySetUpdateInputSchema.parse(input) }),
       );
       return sanitizeStoryAgentEntrySet(data);
     },
@@ -171,11 +171,11 @@ export function createControlPlaneAgentsApi(transport: ControlPlaneClientTranspo
       return sanitizeAgentRunMember(data);
     },
     async createRun(nodeId: string, input: AgentRunCreateInput) {
-      const data = await requestData("/api/agent-runs", z.unknown(), json("POST", { nodeId, input: AgentRunCreateInputSchema.parse(input) }));
+      const data = await requestData("/api/agent-runs", z.unknown(), jsonRequest("POST", { nodeId, input: AgentRunCreateInputSchema.parse(input) }));
       return sanitizeAgentRun(data);
     },
     async createManualRun(nodeId: string, input: AgentRunManualCreateInput) {
-      const data = await requestData("/api/agent-runs/manual", z.unknown(), json("POST", {
+      const data = await requestData("/api/agent-runs/manual", z.unknown(), jsonRequest("POST", {
         nodeId,
         input: AgentRunManualCreateInputSchema.parse(input),
       }));
@@ -185,7 +185,7 @@ export function createControlPlaneAgentsApi(transport: ControlPlaneClientTranspo
       const data = await requestData(
         `/api/agent-runs/${encodeURIComponent(runId)}/cancel`,
         z.unknown(),
-        json("POST", { nodeId, input: AgentRunCancelInputSchema.parse(input) }),
+        jsonRequest("POST", { nodeId, input: AgentRunCancelInputSchema.parse(input) }),
       );
       return sanitizeAgentRun(data);
     },

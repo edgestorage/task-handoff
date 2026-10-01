@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (relative) => fs.readFileSync(path.join(root, relative), "utf8");
 
-test("settings exposes account-scoped mobile sessions and authoritative revocation", () => {
+test("settings exposes account-scoped mobile and command line sessions with authoritative revocation", () => {
   const modal = read("src/apps/control-plane/settings/SettingsModal.vue");
   const settingsSections = read("src/apps/control-plane/settings/settingsSections.ts");
   const section = read("src/apps/control-plane/settings/MobileSessionsSettingsSection.vue");
@@ -17,11 +17,15 @@ test("settings exposes account-scoped mobile sessions and authoritative revocati
   assert.match(modal, /<MobileSessionsSettingsSection v-else-if="settingsSection === 'mobile-sessions'"/);
   assert.match(section, /useAuthSessionQuery\(\)/);
   assert.match(section, /useMobileSessionsQuery\(canLoadSessions\)/);
-  assert.match(section, /<Dialog :open="Boolean\(pendingSession\)"/);
-  assert.match(section, /await revokeMobileSession\(session\.id\)/);
-  assert.match(section, /await sessions\.refetch\(\)/);
+  assert.match(section, /useCliSessionsQuery\(canLoadSessions\)/);
+  assert.match(section, /<Dialog :open="Boolean\(pendingTarget\)"/);
+  assert.match(section, /await revokeMobileSession\(target\.id\)/);
+  assert.match(section, /await revokeCliSession\(target\.id\)/);
+  assert.match(section, /\(mobile \? sessions\.refetch\(\) : cliSessions\.refetch\(\)\)/);
   assert.match(queries, /sharedControlPlaneClient\.auth\.mobileSessions\(signal\)/);
   assert.match(queries, /sharedControlPlaneClient\.auth\.revokeMobileSession\(sessionId\)/);
+  assert.match(queries, /sharedControlPlaneClient\.auth\.cliSessions\(signal\)/);
+  assert.match(queries, /sharedControlPlaneClient\.auth\.revokeCliSession\(sessionId\)/);
 });
 
 test("mobile sessions follow the shared settings directory layout", () => {

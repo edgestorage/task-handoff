@@ -73,6 +73,9 @@ export class ControlPlaneIdentityService {
       instanceBoard: true,
       triggers: true,
       stories: true,
+      // Compatibility for the CLI release: additive capability with no frozen-payload projection for
+      // older clients; they must move to CONTROL_PLANE_ACCESS_PROTOCOL_VERSION 2026-10-01.
+      cliSessions: authentication === "required",
       ...(authentication === "required" ? {
         accessManagement: {
           userManagement: {

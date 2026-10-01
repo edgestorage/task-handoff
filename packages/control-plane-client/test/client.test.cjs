@@ -21,6 +21,7 @@ const {
   sortedAiSessions,
   sortedAiSessionInboxEntries,
 } = require("../src/index.ts");
+const { jsonRequest } = require("../src/json-request.ts");
 
 test("shared AI Session elapsed time requires a terminal timestamp once inactive", () => {
   const startedAt = "2026-08-17T00:00:00.000Z";
@@ -281,7 +282,6 @@ test("shared AI Session client sends an optional resume model selection", async 
     path: "/api/controlled-instances/instance%2Fone/ai-sessions/session%20resume/resume",
     init: {
       method: "POST",
-      signal: undefined,
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ modelSelection: { modelEntityId: "provider-two", modelName: "model-two" } }),
     },
@@ -938,6 +938,7 @@ test("shared trigger client owns template, binding, and run routes", async () =>
       if (path.includes("/ai-sessions/") && init.method === "POST") return schema.parse({ data: { config, deployment } });
       if (path.includes("/ai-sessions/") && init.method === "DELETE") return schema.parse({ data: { deleted: true } });
       if (path.endsWith("/run")) return schema.parse({ data: { status: "completed" } });
+      if (path.endsWith("/apply")) return schema.parse({ data: { configHash: config.configHash, results: [{ instanceId: "instance/1" }] } });
       return schema.parse({ data: init.method === "PUT" ? {
         previousConfigHash: config.configHash,
         trigger: { ...config, id: config.configHash },
@@ -951,6 +952,7 @@ test("shared trigger client owns template, binding, and run routes", async () =>
   const listed = await api.triggers.list();
   await api.triggers.create(input);
   const updated = await api.triggers.update(config.configHash, input);
+  const applied = await api.triggers.apply(config.configHash, { instanceIds: ["instance/1"], target: { type: "ai-session", aiSessionId: "session/1" } });
   await api.triggers.bindSession("instance/1", "session/1", config.configHash);
   await api.triggers.run("instance/1", config.configHash, deployment.deploymentId);
   await api.triggers.unbindSession("instance/1", "session/1", config.configHash);
@@ -963,12 +965,14 @@ test("shared trigger client owns template, binding, and run routes", async () =>
     "/api/triggers",
     "/api/triggers",
     `/api/triggers/${config.configHash}`,
+    `/api/triggers/${config.configHash}/apply`,
     `/api/controlled-instances/instance%2F1/ai-sessions/session%2F1/triggers`,
     `/api/controlled-instances/instance%2F1/triggers/${config.configHash}/run`,
     `/api/controlled-instances/instance%2F1/ai-sessions/session%2F1/triggers/${config.configHash}`,
     `/api/triggers/${config.configHash}`,
   ]);
-  assert.deepEqual(JSON.parse(requests[4].init.body), { deploymentId: deployment.deploymentId });
+  assert.equal(applied.configHash, config.configHash);
+  assert.deepEqual(JSON.parse(requests[5].init.body), { deploymentId: deployment.deploymentId });
 });
 
 test("shared AI Session state preserves Web sorting, unread, approval, and delta behavior", () => {
@@ -1074,4 +1078,24 @@ test("AI Session inbox sorts by the latest user message instead of status or ass
     { instanceId: "instance-1", session: activeWithLaterAssistantUpdate },
     { instanceId: "instance-1", session: recentIdle },
   ]).map((entry) => entry.session.id), ["recent-idle", "old-active"]);
+});
+
+test("shared JSON request init omits body and content type unless a body is provided", () => {
+  assert.deepEqual(jsonRequest("DELETE"), { method: "DELETE" });
+  const controller = new AbortController();
+  assert.deepEqual(jsonRequest("GET", undefined, controller.signal), { method: "GET", signal: controller.signal });
+  assert.deepEqual(jsonRequest("POST", {}), { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+});
+
+test("shared Story client removes a story without a bodyless JSON content type", async () => {
+  const requests = [];
+  const transport = {
+    async request(path, schema, init) {
+      requests.push({ path, init });
+      return schema.parse({ data: { deleted: true } });
+    },
+  };
+  const api = createControlPlaneClient(transport);
+  assert.deepEqual(await api.stories.remove("story/1", "node/1"), { deleted: true });
+  assert.deepEqual(requests, [{ path: "/api/stories/story%2F1?nodeId=node%2F1", init: { method: "DELETE" } }]);
 });

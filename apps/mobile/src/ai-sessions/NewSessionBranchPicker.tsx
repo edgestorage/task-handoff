@@ -6,15 +6,18 @@ import { SystemIcon } from '../components/SystemIcon';
 import { useMobileTheme } from '../components/theme';
 import { useI18n } from '../i18n';
 
+/** Minimal branch shape the picker needs; workspace and repository branch projections both satisfy it. */
+export type BranchPickerBranch = Pick<RepositoryAiSessionWorkspaceBranch, 'name' | 'current' | 'currentFolderSelectable' | 'worktreeSelectable' | 'worktreeCheckout'>;
+
 type BranchFolder = { children: BranchNode[]; id: string; kind: 'folder'; label: string };
-type BranchLeaf = { branch: RepositoryAiSessionWorkspaceBranch; id: string; kind: 'branch'; label: string };
+type BranchLeaf = { branch: BranchPickerBranch; id: string; kind: 'branch'; label: string };
 type BranchNode = BranchFolder | BranchLeaf;
 type VisibleBranchNode =
   | { count: number; depth: number; expanded: boolean; id: string; kind: 'folder'; label: string }
-  | { branch: RepositoryAiSessionWorkspaceBranch; depth: number; id: string; kind: 'branch'; label: string };
+  | { branch: BranchPickerBranch; depth: number; id: string; kind: 'branch'; label: string };
 
 export function NewSessionBranchPicker(props: {
-  branches: RepositoryAiSessionWorkspaceBranch[];
+  branches: BranchPickerBranch[];
   disabled?: boolean;
   mode: 'current-folder' | 'worktree';
   selectedValue: string;
@@ -37,7 +40,7 @@ export function NewSessionBranchPicker(props: {
   const visible = useMemo(() => flattenBranchTree(buildBranchTree(filtered), collapsedFolders, Boolean(query.trim())), [collapsedFolders, filtered, query]);
   const show = props.disabled || !selectable.length ? undefined : () => setOpen(true);
 
-  const select = (branch: RepositoryAiSessionWorkspaceBranch) => {
+  const select = (branch: BranchPickerBranch) => {
     const branchSelectable = props.mode === 'worktree' ? branch.worktreeSelectable : branch.currentFolderSelectable;
     if (!branchSelectable) return;
     setOpen(false);
@@ -133,7 +136,7 @@ export function NewSessionBranchPicker(props: {
   </>;
 }
 
-export function buildBranchTree(branches: RepositoryAiSessionWorkspaceBranch[]): BranchNode[] {
+export function buildBranchTree(branches: BranchPickerBranch[]): BranchNode[] {
   const root: BranchFolder = { children: [], id: 'branch', kind: 'folder', label: 'branch' };
   for (const branch of branches) {
     const parts = branch.name.split('/').filter(Boolean);

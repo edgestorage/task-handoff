@@ -105,3 +105,12 @@ export async function deleteUrlData<T>(url: string, body?: unknown, options?: { 
   const payload = await withApiError(urlApi.delete(url, { json: body, ...options }).json<{ data: T }>());
   return payload.data;
 }
+
+/** Returns the raw Control Plane response envelope so transports can apply their own schema. */
+export async function requestUrlEnvelope(url: string, options: { method?: string; signal?: AbortSignal; body?: unknown } = {}): Promise<unknown> {
+  return withApiError(urlApi(url, {
+    method: options.method ?? "GET",
+    ...(options.signal ? { signal: options.signal } : {}),
+    ...(options.body === undefined ? {} : { json: options.body }),
+  }).json<unknown>());
+}

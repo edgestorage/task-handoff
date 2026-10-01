@@ -23,11 +23,12 @@ import type {
   RepositoryRemoveWorktreeResult,
   RepositoryWorktrees,
 } from "@task-handoff/protocol/repository";
-import { RepositoryMoveWorktreePreflightSchema, RepositoryPathSearchResultSchema, RepositoryWorktreesSchema } from "@task-handoff/protocol/repository";
+import { RepositoryPathSearchResultSchema, RepositoryWorktreesSchema } from "@task-handoff/protocol/repository";
 import { safeParseResponse } from "@task-handoff/protocol/response-validation";
 import { useQuery } from "@tanstack/vue-query";
 import { computed, toValue, type MaybeRefOrGetter } from "vue";
-import { ApiError, deleteUrlData, getUrlData, postUrlData, putUrlData } from "./client";
+import { createControlPlaneClient, type ControlPlaneClientTransport, type RepositoryWorkspaceTarget } from "@task-handoff/control-plane-client";
+import { deleteUrlData, getUrlData, postUrlData, putUrlData, requestUrlEnvelope } from "./client";
 
 export type RepositorySessionTarget = {
   instanceId: string;
@@ -35,70 +36,47 @@ export type RepositorySessionTarget = {
   sessionId: string;
 };
 
-export type RepositoryWorkspaceTarget = {
-  instanceId: string;
-  cwdFolderId?: string;
-  legacySession?: RepositorySessionTarget;
-};
+export type { RepositoryWorkspaceTarget };
 
-function repositoryWorkspaceResource(target: RepositoryWorkspaceTarget, resource: string) {
-  const path = `/api/controlled-instances/${encodeURIComponent(target.instanceId)}/repository/${resource}`;
-  return target.cwdFolderId ? `${path}?${new URLSearchParams({ cwdFolderId: target.cwdFolderId })}` : path;
-}
+// The workspace-scoped repository routes and the v0.0.21 session fallback live in
+// @task-handoff/control-plane-client so the Control Plane UI and mobile consume one
+// contract. This transport connects the shared client to the UI's ky-based fetch.
+const repositoryTransport: ControlPlaneClientTransport = {
+  async request(path, schema, init) {
+    const body = await requestUrlEnvelope(path, {
+      method: init?.method,
+      signal: init?.signal ?? undefined,
+      body: typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
+    });
+    const parsed = schema.safeParse(body);
+    if (!parsed.success) throw parsed.error;
+    return parsed.data;
+  },
+};
+const controlPlaneRepository = createControlPlaneClient(repositoryTransport).repository;
 
 export async function getRepositoryWorkspaceWorktrees(target: RepositoryWorkspaceTarget, options?: { signal?: AbortSignal }) {
-  let data: unknown;
-  try {
-    data = await getUrlData<unknown>(repositoryWorkspaceResource(target, "worktrees"), options);
-  } catch (error) {
-    // Compatibility for v0.0.21: use its session-scoped route until the controlled instance is upgraded.
-    if (!(error instanceof ApiError) || error.status !== 404 || !target.legacySession) throw error;
-    return getRepositoryWorktrees(target.legacySession, options);
-  }
-  const parsed = safeParseResponse(RepositoryWorktreesSchema, data);
-  if (!parsed.success) throw new Error("The controlled instance returned an incompatible worktree response. Restart the instance to load the current protocol.");
-  return parsed.data satisfies RepositoryWorktrees;
+  return controlPlaneRepository.worktrees(target, options) satisfies Promise<RepositoryWorktrees>;
 }
 
 export async function createRepositoryWorkspaceWorktree(target: RepositoryWorkspaceTarget, input: RepositoryCreateWorktreeRequest) {
-  try {
-    return await postUrlData<RepositoryCreateWorktreeResult>(repositoryWorkspaceResource(target, "worktrees"), input);
-  } catch (error) {
-    // Compatibility for v0.0.21: use its session-scoped route until the controlled instance is upgraded.
-    if (!(error instanceof ApiError) || error.status !== 404 || !target.legacySession) throw error;
-    return createRepositoryWorktree(target.legacySession, input);
-  }
+  return controlPlaneRepository.createWorktree(target, input) satisfies Promise<RepositoryCreateWorktreeResult>;
 }
 
 export async function removeRepositoryWorkspaceWorktree(target: RepositoryWorkspaceTarget, input: { worktreeId: string; expectedSnapshotId: string; confirm: true }) {
-  try {
-    return await postUrlData<RepositoryRemoveWorktreeResult>(repositoryWorkspaceResource(target, "worktrees/remove"), input);
-  } catch (error) {
-    // Compatibility for v0.0.21: use its session-scoped route until the controlled instance is upgraded.
-    if (!(error instanceof ApiError) || error.status !== 404 || !target.legacySession) throw error;
-    return removeRepositoryWorktree(target.legacySession, input);
-  }
+  return controlPlaneRepository.removeWorktree(target, input) satisfies Promise<RepositoryRemoveWorktreeResult>;
 }
 
 export async function getRepositoryWorkspaceWorktreeMovePreflight(target: RepositoryWorkspaceTarget, input: RepositoryMoveWorktreePreflightRequest) {
-  const data = await postUrlData<unknown>(repositoryWorkspaceResource(target, "worktrees/move-to-main/preflight"), input);
-  const parsed = safeParseResponse(RepositoryMoveWorktreePreflightSchema, data);
-  if (!parsed.success) throw new Error("The controlled instance returned an incompatible worktree move response. Restart the instance to load the current protocol.");
-  return parsed.data satisfies RepositoryMoveWorktreePreflight;
+  return controlPlaneRepository.moveWorktreeToMainPreflight(target, input) satisfies Promise<RepositoryMoveWorktreePreflight>;
 }
 
 export async function moveRepositoryWorkspaceWorktreeToMain(target: RepositoryWorkspaceTarget, input: RepositoryMoveWorktreeRequest) {
-  return postUrlData<RepositoryMoveWorktreeResult>(repositoryWorkspaceResource(target, "worktrees/move-to-main"), input);
+  return controlPlaneRepository.moveWorktreeToMain(target, input) satisfies Promise<RepositoryMoveWorktreeResult>;
 }
 
 export async function getRepositoryWorkspaceBranches(target: RepositoryWorkspaceTarget, options?: { signal?: AbortSignal }) {
-  try {
-    return await getUrlData<RepositoryBranches>(repositoryWorkspaceResource(target, "branches"), options);
-  } catch (error) {
-    // Compatibility for v0.0.21: use its session-scoped route until the controlled instance is upgraded.
-    if (!(error instanceof ApiError) || error.status !== 404 || !target.legacySession) throw error;
-    return getRepositoryBranches(target.legacySession, options);
-  }
+  return controlPlaneRepository.branches(target, options) satisfies Promise<RepositoryBranches>;
 }
 
 export function repositoryTargetBasePath(target: RepositorySessionTarget) {

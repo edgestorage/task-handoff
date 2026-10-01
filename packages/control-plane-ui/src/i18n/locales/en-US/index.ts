@@ -1,5 +1,6 @@
 import { agents } from "./agents.ts";
 import { auth } from "./auth.ts";
+import { cliAuthorize } from "./cliAuthorize.ts";
 import { common } from "./common.ts";
 import { errors } from "./errors.ts";
 import { instances } from "./instances.ts";
@@ -13,6 +14,7 @@ import { triggers } from "./triggers.ts";
 export const enUS = {
   agents,
   auth,
+  cliAuthorize,
   common,
   errors,
   instances,

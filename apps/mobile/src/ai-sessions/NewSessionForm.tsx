@@ -34,9 +34,11 @@ import {
 import type { NewSessionFormProps } from './new-session-types';
 import { NewSessionBranchPicker } from './NewSessionBranchPicker';
 import { NewSessionContextMenu } from './NewSessionContextMenu';
+import { NewSessionWorktreePicker } from './NewSessionWorktreePicker';
 import { AttachmentMenu, ModelSettingsMenu } from './SessionComposerMenus';
 import { formatMobileAttachmentBytes, formatMobileTextLength } from './attachments';
 import { instanceSelectOptions } from '../directories/instance-select-options';
+import { repositoryWorktreeLabel } from '../repository/worktree-presentation';
 
 export function NewSessionForm(props: NewSessionFormProps) {
   const { colors } = useMobileTheme();
@@ -63,16 +65,10 @@ export function NewSessionForm(props: NewSessionFormProps) {
       value: branch.name,
     }));
   const selectedBranchLabel = branchOptions.find((option) => option.value === props.selectedBranch)?.label || props.selectedBranch || t('sessions.selectBranch');
-  const worktreeOptions: AnchoredSelectOption[] = [
-    ...(gitWorkspace?.worktrees || []).filter((worktree) => worktree.canCreateAiSession).map((worktree) => ({
-      label: worktree.head.state === 'branch' ? worktree.head.branch || t('sessions.unknownBranch') : t('sessions.detachedAt', { commit: worktree.head.oid?.slice(0, 8) || '-' }),
-      description: worktree.isCurrent ? t('sessions.currentWorktree') : worktree.managed ? t('sessions.managedWorktree') : t('sessions.externalWorktree'),
-      systemImage: 'arrow.triangle.branch' as const,
-      value: worktree.id,
-    })),
-    ...(gitWorkspace?.snapshotId ? [{ label: t('sessions.newWorktree'), systemImage: 'arrow.triangle.branch' as const, value: '__new_worktree__' }] : []),
-  ];
-  const selectedWorktreeLabel = worktreeOptions.find((option) => option.value === props.selectedWorktree)?.label || t('sessions.selectWorktree');
+  const worktrees = gitWorkspace?.worktrees || [];
+  const selectedWorktree = worktrees.find((worktree) => worktree.id === props.selectedWorktree);
+  const selectedWorktreeLabel = props.selectedWorktreeLabel
+    || (selectedWorktree ? repositoryWorktreeLabel(selectedWorktree, t) : t('sessions.selectWorktree'));
   const modelGroups = props.modelGroups || [];
 
   const content = <>
@@ -95,9 +91,9 @@ export function NewSessionForm(props: NewSessionFormProps) {
           {gitWorkspace && workspaceMode === 'current-folder' ? <NewSessionBranchPicker branches={gitWorkspace.branches} disabled={props.busy || props.workspaceLoading} mode={workspaceMode} onSelect={(value) => props.onBranchChange?.(value)} selectedValue={props.selectedBranch || ''} title={t('sessions.branch')}>
             {(onPress) => <ContextPill disabled={props.busy || props.workspaceLoading || !branchOptions.length} icon={{ android: 'account_tree', ios: 'arrow.triangle.branch' }} label={selectedBranchLabel} onPress={onPress} />}
           </NewSessionBranchPicker> : null}
-          {gitWorkspace && workspaceMode === 'worktree' ? <NewSessionContextMenu cancelLabel={t('common.cancel')} disabled={props.busy || props.workspaceLoading} onSelect={(value) => props.onWorktreeChange?.(value)} options={worktreeOptions} selectedValue={props.selectedWorktree || ''} title={t('sessions.worktreeMode')}>
-            {(onPress) => <ContextPill disabled={props.busy || props.workspaceLoading || !worktreeOptions.length} icon={{ android: 'account_tree', ios: 'arrow.triangle.branch' }} label={selectedWorktreeLabel} onPress={onPress} />}
-          </NewSessionContextMenu> : null}
+          {gitWorkspace && workspaceMode === 'worktree' ? <NewSessionWorktreePicker busy={props.busy} disabled={props.busy || props.workspaceLoading || (!worktrees.length && !gitWorkspace.snapshotId)} newWorktreeLabel={t('sessions.newWorktree')} onNewWorktree={() => props.onNewWorktree?.()} onSelect={(value) => props.onWorktreeChange?.(value)} selectedValue={props.selectedWorktree || ''} title={t('sessions.worktreeMode')} worktrees={worktrees}>
+            {(onPress) => <ContextPill disabled={props.busy || props.workspaceLoading || (!worktrees.length && !gitWorkspace.snapshotId)} icon={{ android: 'account_tree', ios: 'arrow.triangle.branch' }} label={selectedWorktreeLabel} onPress={onPress} />}
+          </NewSessionWorktreePicker> : null}
           <NewSessionContextMenu cancelLabel={t('common.cancel')} disabled={props.busy} onSelect={props.onAgentChange} options={agentOptions} selectedValue={props.selectedAgent} title={t('sessions.agent')}>
             {(onPress) => <ContextPill disabled={props.busy || !agentOptions.length} icon={{ android: 'auto_awesome', ios: 'sparkles' }} label={selectedAgentName || t('sessions.selectAgent')} onPress={onPress} />}
           </NewSessionContextMenu>

@@ -26,6 +26,7 @@ export type NewSessionFormProps = {
   workspaceMode?: 'current-folder' | 'worktree';
   selectedBranch?: string;
   selectedWorktree?: string;
+  selectedWorktreeLabel?: string;
   workspaceLoading?: boolean;
   message: string;
   permissionMode: AiSessionPermissionMode;
@@ -50,6 +51,7 @@ export type NewSessionFormProps = {
   onWorkspaceModeChange?(value: 'current-folder' | 'worktree'): void;
   onBranchChange?(value: string): void;
   onWorktreeChange?(value: string): void;
+  onNewWorktree?(): void;
   onMessageChange(value: string): void;
   onAddImage(): void;
   onAddFile(): void;

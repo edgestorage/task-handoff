@@ -30,7 +30,8 @@ const LegacySessionSchema = StoredRecordSchema.extend({
   tokenHash: z.string().trim().min(1),
   expiresAt: z.string().datetime(),
   lastSeenAt: z.string().datetime().optional(),
-  clientType: z.enum(["web", "mobile"]).default("web"),
+  // Read boundary accepts cli (written since the CLI release); historical JSON only contains web/mobile.
+  clientType: z.enum(["web", "mobile", "cli"]).default("web"),
   device: ControlPlaneMobileDeviceSchema.optional(),
 }).strip().refine((session) => session.clientType !== "mobile" || Boolean(session.device), {
   path: ["device"],

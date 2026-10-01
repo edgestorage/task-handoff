@@ -15,7 +15,7 @@ test("runtime releases map stable to latest and isolate prerelease dist-tags", (
   assert.match(workflow, /"\$npm_tag" != "alpha" && "\$npm_tag" != "beta"/);
   assert.match(workflow, /NPM_DIST_TAG: \$\{\{ needs\.runtime-packages\.outputs\.npm_tag \}\}/);
   assert.match(workflow, /publish_or_verify\(\)/);
-  assert.equal((workflow.match(/publish_or_verify release\/npm\/[a-z-]+ "release\/npm\/artifacts\//g) || []).length, 4);
+  assert.equal((workflow.match(/publish_or_verify release\/npm\/[a-z-]+ "release\/npm\/artifacts\//g) || []).length, 5);
   assert.match(workflow, /Published \$package@\$version integrity does not match/);
   assert.match(workflow, /npm publish "\$archive" --access public --tag "\$NPM_DIST_TAG"/);
   assert.doesNotMatch(workflow, /npm pack "\$directory"/);

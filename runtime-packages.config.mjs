@@ -106,6 +106,19 @@ export const runtimePackages = {
       bundledControlPlaneDependencies,
     ),
   },
+  thctl: {
+    packageName: "@task-handoff/thctl",
+    description: "TaskHandoff Control Plane command line client.",
+    input: "apps/thctl/src/bin.ts",
+    entryFile: "thctl.js",
+    binName: "thctl",
+    readmeFile: "docs/control-plane-cli.md",
+    // The workspace client/protocol/core modules are inlined into the minified
+    // CLI bundle; only the CLI runtime libraries stay external. Deriving the
+    // external set from the whole workspace closure would declare unrelated core
+    // libraries (cron parsing, chat rendering, atomic writes) as CLI dependencies.
+    dependencies: runtimeDependencies(["@task-handoff/control-plane-client"], ["commander", "ws"]),
+  },
   "controlled-instance": {
     packageName: "@task-handoff/controlled-instance",
     description: "Prebuilt TaskHandoff controlled instance runtime.",

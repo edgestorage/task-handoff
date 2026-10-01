@@ -15,6 +15,7 @@ openspec
 docs
 !docs/
 docs/*
+!docs/control-plane-cli.md
 !docs/mobile-control-plane-client-baseline.md
 !docs/mobile-control-plane-future-changes.md
 !docs/mobile-control-plane-operations.md

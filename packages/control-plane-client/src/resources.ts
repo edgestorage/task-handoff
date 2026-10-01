@@ -32,25 +32,26 @@ const PublicNodeCapabilityRecordSchema = z.object({
   id: z.string().trim().min(1).max(160),
   capabilities: z.record(z.string(), z.unknown()).default({}),
 }).passthrough();
-const PublicModelRegistrySchema = z.object({
-  models: z.array(z.object({
+export const PublicModelRegistryEntrySchema = z.object({
+  id: z.string().trim().min(1).max(120),
+  model: z.object({
     id: z.string().trim().min(1).max(120),
-    model: z.object({
-      id: z.string().trim().min(1).max(120),
-      name: z.string().trim().min(1).max(160),
-      model: z.string().trim().min(1).max(240),
-      modelNames: z.array(z.object({ name: z.string(), order: z.number().int() }).strip()).default([]),
-      protocols: z.array(z.string()).default([]),
-      app: z.string().optional(),
-      enabled: z.boolean(),
-      order: z.number().int(),
-    }).passthrough(),
-    locations: z.array(z.object({
-      type: z.enum(["control-plane", "node"]),
-      nodeId: z.string().optional(),
-      enabled: z.boolean(),
-    }).passthrough()),
+    name: z.string().trim().min(1).max(160),
+    model: z.string().trim().min(1).max(240),
+    modelNames: z.array(z.object({ name: z.string(), order: z.number().int() }).strip()).default([]),
+    protocols: z.array(z.string()).default([]),
+    app: z.string().optional(),
+    enabled: z.boolean(),
+    order: z.number().int(),
+  }).passthrough(),
+  locations: z.array(z.object({
+    type: z.enum(["control-plane", "node"]),
+    nodeId: z.string().optional(),
+    enabled: z.boolean(),
   }).passthrough()),
+}).passthrough();
+export const PublicModelRegistrySchema = z.object({
+  models: z.array(PublicModelRegistryEntrySchema),
 }).passthrough();
 const InstanceActionResultSchema = z.object({
   id: z.string().trim().min(1).max(160),

@@ -14,10 +14,16 @@ import { AiSessionUnreadEventType } from "@task-handoff/protocol/ai-sessions";
 import { TtyStreamSnapshotMessageSchema } from "@task-handoff/protocol/app-sessions";
 import { RelayTtySnapshotEnvelopeSchema } from "@task-handoff/cloud-contracts";
 import { CONTROL_PLANE_PROTOCOL_VERSION, ControlPlaneHealthResponseSchema, ImagePullTerminalEventType, NodeStateProjectionEventSchema, type BuildInfo, type Node } from "@task-handoff/protocol/control-plane";
+import {
+  ControlPlaneCliAuthorizationApprovalResponseSchema,
+  ControlPlaneCliAuthorizationDenialResponseSchema,
+  ControlPlaneCliAuthorizationRequestDetailResponseSchema,
+} from "@task-handoff/protocol/control-plane-access";
 import { packageVersionResolver } from "@task-handoff/core/core/package-version";
 import { DEFAULT_MAINTENANCE_INTERVAL_MS } from "@task-handoff/core/storage/retention";
 import { SESSION_STREAM_PROTOCOL_VERSION, SessionStreamsHelloEventType, aiSessionTransientSubscriptionAccepts, type AiSessionTransientSubscription, type EventEnvelope } from "@task-handoff/protocol/events";
 import { CONTROL_PLANE_SESSION_COOKIE, ControlPlaneAuth, type ControlPlaneAuthOptions } from "../auth/service.ts";
+import type { ControlPlaneSessionClientType } from "../auth/user-authentication.ts";
 import { ControlPlaneService, type ControlPlaneServiceOptions } from "../application/service.ts";
 import {
   DEFAULT_MARKET_CATALOG_REFRESH_INTERVAL_MS,
@@ -252,22 +258,85 @@ function isPublicUiPath(url: string) {
   return !path.startsWith("/api/") && path !== "/api" && !path.startsWith("/instances/") && path !== "/instances";
 }
 
-type RequestSessionCredential = { token: string | undefined; clientType: "web" | "mobile" };
+type RequestSessionCredential = {
+  token: string | undefined;
+  source: "cookie" | "bearer";
+  clientTypes: readonly ControlPlaneSessionClientType[];
+};
 
-function requestSessionCredential(request: FastifyRequest): RequestSessionCredential {
+/**
+ * Credentials resolve by source, never by session ID shape: cookies only match web sessions,
+ * Bearer tokens match machine sessions and can be narrowed per route (for example mobile-only).
+ */
+function requestSessionCredential(
+  request: FastifyRequest,
+  options: { allowCookie?: boolean; bearerClientTypes?: readonly ControlPlaneSessionClientType[] } = {},
+): RequestSessionCredential {
   const authorization = request.headers.authorization;
   if (authorization !== undefined) {
     const match = /^Bearer ([^\s]+)$/.exec(authorization);
-    return { token: match?.[1], clientType: "mobile" };
+    return { token: match?.[1], source: "bearer", clientTypes: options.bearerClientTypes ?? ["mobile", "cli"] };
   }
-  return { token: request.cookies[CONTROL_PLANE_SESSION_COOKIE], clientType: "web" };
+  return {
+    token: request.cookies[CONTROL_PLANE_SESSION_COOKIE],
+    source: "cookie",
+    clientTypes: options.allowCookie === false ? [] : ["web"],
+  };
 }
 
 async function actorForRequest(auth: ControlPlaneAuth, credential: RequestSessionCredential) {
   if (!auth.enabled()) {
     return disabledAuthActor();
   }
-  return auth.authorizationForSessionToken(credential.token, credential.clientType);
+  return auth.authorizationForSessionToken(credential.token, credential.clientTypes);
+}
+
+function controlPlanePublicOrigin(service: ControlPlaneService, request: FastifyRequest) {
+  const configured = service.getSettings().publicBaseUrl?.trim();
+  if (configured) {
+    try {
+      return new URL(configured).origin;
+    } catch {
+      // Ignore malformed public base URLs and fall back to the request host.
+    }
+  }
+  const host = request.headers.host?.trim();
+  if (host) {
+    try {
+      return new URL(`http://${host}`).origin;
+    } catch {
+      // Ignore malformed Host headers below.
+    }
+  }
+  return "http://127.0.0.1";
+}
+
+function cliAuthorizationDecisionGuard(service: ControlPlaneService) {
+  return async (request: FastifyRequest) => {
+    if (request.headers.authorization !== undefined || !request.cookies[CONTROL_PLANE_SESSION_COOKIE]) {
+      throw Object.assign(new Error("CLI authorization decisions require a Control Plane web session."), { code: "CONTROL_PLANE_AUTH_REQUIRED", statusCode: 401 });
+    }
+    if (!["POST", "PATCH", "PUT", "DELETE"].includes(request.method.toUpperCase())) return;
+    const contentType = request.headers["content-type"]?.split(";")[0]?.trim().toLowerCase();
+    if (contentType !== "application/json") {
+      throw Object.assign(new Error("CLI authorization decisions require a JSON request body."), { code: "CLI_AUTHORIZATION_ORIGIN_INVALID", statusCode: 415 });
+    }
+    const fetchSite = request.headers["sec-fetch-site"];
+    if (typeof fetchSite === "string" && fetchSite !== "same-origin") {
+      throw Object.assign(new Error("CLI authorization decisions must originate from the Control Plane web UI."), { code: "CLI_AUTHORIZATION_ORIGIN_INVALID", statusCode: 403 });
+    }
+    if (request.headers.origin !== controlPlanePublicOrigin(service, request)) {
+      throw Object.assign(new Error("CLI authorization decisions must originate from the Control Plane web UI."), { code: "CLI_AUTHORIZATION_ORIGIN_INVALID", statusCode: 403 });
+    }
+  };
+}
+
+function cliApprover(request: FastifyRequest) {
+  const actor = controlPlaneRequestActor(request);
+  if (!actor || actor.type !== "user") {
+    throw Object.assign(new Error("Sign in to decide CLI authorization requests."), { code: "CONTROL_PLANE_AUTH_REQUIRED", statusCode: 401 });
+  }
+  return { userId: actor.userId, identityId: actor.identityId };
 }
 
 const ROUTES_WITHOUT_RBAC = new Set([
@@ -304,6 +373,8 @@ export function routeAuthorization(method: string, url: string): { action: Contr
   if (path === "/api/auth/mobile/logout" || path.startsWith("/api/auth/mobile/sessions")) {
     return undefined;
   }
+  // CLI authorization and CLI session routes carry their own credential and CSRF rules.
+  if (path.startsWith("/api/auth/cli/")) return undefined;
   if (path === "/api/auth/password") {
     return undefined;
   }
@@ -967,7 +1038,7 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
 
   app.get("/api/auth/session", { config: PUBLIC_CONTROL_PLANE_ROUTE }, async (request) => {
     const credential = requestSessionCredential(request);
-    return { data: await auth.currentSession(credential.token, credential.clientType) };
+    return { data: await auth.currentSession(credential.token, credential.clientTypes) };
   });
   app.post("/api/auth/bootstrap-admin", { config: PUBLIC_CONTROL_PLANE_ROUTE }, async (request, reply) => {
     const user = await auth.bootstrapAdmin(request.body);
@@ -997,39 +1068,104 @@ export async function createControlPlaneApp(options: CreateControlPlaneAppOption
     return { data: { user: result.user } };
   });
   app.post("/api/auth/mobile/logout", async (request) => {
-    const credential = requestSessionCredential(request);
-    return { data: await auth.logout(credential.clientType === "mobile" ? credential.token : undefined) };
+    const credential = requestSessionCredential(request, { allowCookie: false, bearerClientTypes: ["mobile"] });
+    return { data: await auth.logoutSession(credential.token, credential.clientTypes) };
   });
   app.post("/api/auth/mobile/renew", async (request, reply) => {
     reply.header("cache-control", "no-store");
-    const credential = requestSessionCredential(request);
-    const renewed = await auth.renewMobileSession(credential.clientType === "mobile" ? credential.token : undefined);
+    const credential = requestSessionCredential(request, { allowCookie: false, bearerClientTypes: ["mobile"] });
+    const renewed = await auth.renewSession(credential.token, credential.clientTypes);
     return renewed ? { data: renewed } : reply.code(401).send({
       error: { code: "CONTROL_PLANE_AUTH_REQUIRED", message: "Sign in to renew the mobile session." },
     });
   });
   app.get("/api/auth/mobile/sessions", async (request, reply) => {
-    const sessions = await auth.mobileSessions(requestSessionCredential(request).token);
+    const credential = requestSessionCredential(request, { bearerClientTypes: ["mobile"] });
+    const sessions = await auth.mobileSessions(credential.token, credential.clientTypes);
     return sessions ? { data: sessions } : reply.code(401).send({
       error: { code: "CONTROL_PLANE_AUTH_REQUIRED", message: "Sign in to access mobile sessions." },
     });
   });
   app.delete("/api/auth/mobile/sessions/:id", async (request, reply) => {
     const params = z.object({ id: z.string().trim().min(1) }).parse(request.params);
-    const revoked = await auth.revokeMobileSession(requestSessionCredential(request).token, params.id);
+    const credential = requestSessionCredential(request, { bearerClientTypes: ["mobile"] });
+    const revoked = await auth.revokeMobileSession(credential.token, params.id, credential.clientTypes);
     return revoked === undefined ? reply.code(401).send({
       error: { code: "CONTROL_PLANE_AUTH_REQUIRED", message: "Sign in to revoke mobile sessions." },
     }) : { data: { revoked } };
   });
   app.post("/api/auth/logout", { config: PUBLIC_CONTROL_PLANE_ROUTE }, async (request, reply) => {
-    const result = await auth.logout(request.cookies[CONTROL_PLANE_SESSION_COOKIE]);
+    const credential = requestSessionCredential(request);
+    const result = await auth.logoutSession(credential.token, credential.clientTypes);
     reply.clearCookie(CONTROL_PLANE_SESSION_COOKIE, { path: "/" });
     return { data: result };
   });
 
+  // CLI sign-in: the web session only approves the request; the CLI token is minted at exchange time.
+  const cliDecisionGuard = cliAuthorizationDecisionGuard(service);
+  app.post("/api/auth/cli/authorize", { config: PUBLIC_CONTROL_PLANE_ROUTE }, async (request) => ({
+    data: await auth.createCliAuthorization(request.body, { publicOrigin: controlPlanePublicOrigin(service, request), sourceId: request.ip }),
+  }));
+  app.post("/api/auth/cli/token", { config: PUBLIC_CONTROL_PLANE_ROUTE }, async (request) => ({
+    data: await auth.exchangeCliToken(request.body, { sourceId: request.ip }),
+  }));
+  app.get("/api/auth/cli/requests/:requestId", { preHandler: cliDecisionGuard }, async (request) => (
+    ControlPlaneCliAuthorizationRequestDetailResponseSchema.parse({
+      data: auth.cliAuthorizationRequest(z.object({ requestId: z.string().trim().min(1) }).parse(request.params).requestId),
+    })
+  ));
+  app.get("/api/auth/cli/requests", { preHandler: cliDecisionGuard }, async (request) => (
+    ControlPlaneCliAuthorizationRequestDetailResponseSchema.parse({
+      data: auth.cliAuthorizationRequestByUserCode(z.object({ userCode: z.string().trim().min(1).max(40) }).parse(request.query).userCode),
+    })
+  ));
+  app.post("/api/auth/cli/requests/:requestId/approve", { preHandler: cliDecisionGuard }, async (request) => (
+    ControlPlaneCliAuthorizationApprovalResponseSchema.parse({
+      data: await auth.approveCliAuthorization(
+        z.object({ requestId: z.string().trim().min(1) }).parse(request.params).requestId,
+        cliApprover(request),
+      ),
+    })
+  ));
+  app.post("/api/auth/cli/requests/:requestId/deny", { preHandler: cliDecisionGuard }, async (request) => (
+    ControlPlaneCliAuthorizationDenialResponseSchema.parse({
+      data: await auth.denyCliAuthorization(
+        z.object({ requestId: z.string().trim().min(1) }).parse(request.params).requestId,
+        cliApprover(request),
+      ),
+    })
+  ));
+  app.post("/api/auth/cli/logout", async (request) => {
+    const credential = requestSessionCredential(request, { allowCookie: false, bearerClientTypes: ["cli"] });
+    return { data: await auth.logoutSession(credential.token, credential.clientTypes) };
+  });
+  app.post("/api/auth/cli/renew", async (request, reply) => {
+    reply.header("cache-control", "no-store");
+    const credential = requestSessionCredential(request, { allowCookie: false, bearerClientTypes: ["cli"] });
+    const renewed = await auth.renewSession(credential.token, credential.clientTypes);
+    return renewed ? { data: renewed } : reply.code(401).send({
+      error: { code: "CONTROL_PLANE_AUTH_REQUIRED", message: "Sign in to renew the CLI session." },
+    });
+  });
+  app.get("/api/auth/cli/sessions", async (request, reply) => {
+    const credential = requestSessionCredential(request, { allowCookie: false, bearerClientTypes: ["cli"] });
+    const sessions = await auth.cliSessions(credential.token, credential.clientTypes);
+    return sessions ? { data: sessions } : reply.code(401).send({
+      error: { code: "CONTROL_PLANE_AUTH_REQUIRED", message: "Sign in to access CLI sessions." },
+    });
+  });
+  app.delete("/api/auth/cli/sessions/:id", async (request, reply) => {
+    const params = z.object({ id: z.string().trim().min(1) }).parse(request.params);
+    const credential = requestSessionCredential(request, { allowCookie: false, bearerClientTypes: ["cli"] });
+    const revoked = await auth.revokeCliSession(credential.token, params.id, credential.clientTypes);
+    return revoked === undefined ? reply.code(401).send({
+      error: { code: "CONTROL_PLANE_AUTH_REQUIRED", message: "Sign in to revoke CLI sessions." },
+    }) : { data: { revoked } };
+  });
+
   app.get("/api/access/me", async (request, reply) => {
     const credential = requestSessionCredential(request);
-    const access = await auth.currentAccess(credential.token, credential.clientType);
+    const access = await auth.currentAccess(credential.token, credential.clientTypes);
     return access ? { data: access } : reply.code(401).send({
       error: { code: "CONTROL_PLANE_AUTH_REQUIRED", message: "Sign in to read Control Plane access." },
     });

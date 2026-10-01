@@ -4,13 +4,13 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import { Platform } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { AI_SESSION_DEFAULT_REASONING_EFFORT, type AiSessionCreateWorkspaceSelection, type AiSessionGitSelection, type AiSessionModelSelection, type AiSessionPermissionMode, type AiSessionReasoningEffort } from '@task-handoff/protocol/ai-sessions';
+import { AI_SESSION_DEFAULT_REASONING_EFFORT, type AiSessionModelSelection, type AiSessionPermissionMode, type AiSessionReasoningEffort } from '@task-handoff/protocol/ai-sessions';
 import { normalizeAiSessionReasoningEffortCapabilities } from '@task-handoff/protocol/ai-session-provider-capabilities';
 import { aiSessionMessageText, defaultAiSessionModelSelection, deriveAiSessionModelGroups, type AiSessionCatalogModelEntity } from '@task-handoff/control-plane-client';
 import { directoryAiSessionProviderCapability } from '@task-handoff/protocol/control-plane-directory';
-import type { RepositoryAiSessionWorkspace } from '@task-handoff/protocol/repository';
 
 import { NewSessionForm, newSessionVisualBalanceInset } from '../../src/ai-sessions/NewSessionForm';
+import { NewWorktreeDialog } from '../../src/ai-sessions/NewWorktreeDialog';
 import { aiSessionFolderOptions, defaultAiSessionFolderId, initialAiSessionFolderId, initialInstanceId, instanceCreateGuidance, type AiSessionFolderOption } from '../../src/ai-sessions/new-session-types';
 import { createMobileAiSession, lifecycleGuidance } from '../../src/ai-sessions/session-lifecycle';
 import { mobilePastedImage, mobilePastedText, uploadMobileAttachment, usableUploadRefs, validateMobileLocalFile, type MobilePendingAttachment } from '../../src/ai-sessions/attachments';
@@ -23,6 +23,21 @@ import { useMobileToast } from '../../src/components/MobileToast';
 import { useI18n } from '../../src/i18n';
 import { mobileSessionCreationInstanceStore, preferredSessionCreationInstanceId } from '../../src/session-creation/instance-selection';
 import { useInstanceScope } from '../../src/instance-scope/use-instance-scope';
+import {
+  aiSessionGitSelection,
+  aiSessionWorkspaceSelection,
+  aiSessionWorkspaceDialogInitialSelection,
+  aiSessionWorkspaceSelectionLabel,
+  aiSessionWorkspaceSelectionValue,
+  applyWorktreeCreationOutcome,
+  createWorkspaceWorktreeForSession,
+  initialAiSessionWorkspaceState,
+  selectAiSessionWorktree,
+  switchAiSessionWorkspaceMode,
+  type AiSessionWorkspaceSelectionState,
+  type MobileNewWorktreeSelection,
+} from '../../src/repository/worktree-selection';
+import { invalidateWorktreeInstance, loadWorktreeScope, subscribeToWorktreeForeground } from '../../src/repository/worktree-sync';
 
 export default function NewAiSessionRoute() {
   const insets = useSafeAreaInsets();
@@ -40,15 +55,9 @@ export default function NewAiSessionRoute() {
   const [modelSelectionDraft, setModelSelectionDraft] = useState<{ instanceId: string; agent: string; value: AiSessionModelSelection }>();
   const [reasoningEffort, setReasoningEffort] = useState<AiSessionReasoningEffort>();
   const [folderState, setFolderState] = useState<{ nodeId: string; folders: AiSessionFolderOption[] }>({ nodeId: '', folders: [] });
-  const [workspaceState, setWorkspaceState] = useState<{
-    instanceId?: string;
-    folderId?: string;
-    workspace?: RepositoryAiSessionWorkspace;
-    mode: 'current-folder' | 'worktree';
-    branch?: string;
-    worktreeId?: string;
-    newWorktree?: { branchName: string; startRef: string };
-  }>({ mode: 'current-folder' });
+  const [workspaceState, setWorkspaceState] = useState<AiSessionWorkspaceSelectionState>({ mode: 'current-folder' });
+  const [worktreeDialogOpen, setWorktreeDialogOpen] = useState(false);
+  const [creatingWorktree, setCreatingWorktree] = useState(false);
   const [busy, setBusy] = useState(false);
   const [attachments, setAttachments] = useState<NewSessionLocalAttachment[]>([]);
   const attachmentsRef = useRef(attachments);
@@ -153,49 +162,57 @@ export default function NewAiSessionRoute() {
     return () => abort.abort();
   }, [controlPlaneId]);
 
+  const [workspaceRefreshToken, setWorkspaceRefreshToken] = useState(0);
+  useEffect(() => subscribeToWorktreeForeground(() => setWorkspaceRefreshToken((current) => current + 1)), []);
   useEffect(() => {
     if (!selectedInstanceId || !selectedCwdFolderId) return;
     const abort = new AbortController();
     void mobileProfileStore.active().then(async (profile) => {
       if (!profile || abort.signal.aborted) return;
-      const workspace = await createMobileControlPlaneClient(profile, mobileSecureStore).api.aiSessions.workspace(selectedInstanceId, selectedCwdFolderId, abort.signal);
+      const client = createMobileControlPlaneClient(profile, mobileSecureStore).api;
+      const workspace = await loadWorktreeScope(
+        { kind: 'session-workspace', instanceId: selectedInstanceId, cwdFolderId: selectedCwdFolderId },
+        () => client.aiSessions.workspace(selectedInstanceId, selectedCwdFolderId, abort.signal),
+      );
       if (abort.signal.aborted) return;
-      setWorkspaceState({
-        instanceId: selectedInstanceId,
-        folderId,
-        workspace,
-        mode: 'current-folder',
-        branch: workspace.currentBranch
-          || workspace.branches.find((candidate) => candidate.current)?.name
-          || workspace.branches.find((candidate) => candidate.currentFolderSelectable)?.name,
-        worktreeId: workspace.worktrees.find((candidate) => !candidate.isCurrent && candidate.canCreateAiSession)?.id
-          || workspace.worktrees.find((candidate) => candidate.canCreateAiSession)?.id,
-      });
+      setWorkspaceState(initialAiSessionWorkspaceState(selectedInstanceId, folderId, workspace));
     }).catch(() => {
       // Compatibility for v0.0.21: an older Control Plane keeps the cwd-only creation flow.
       if (!abort.signal.aborted) setWorkspaceState({ instanceId: selectedInstanceId, folderId, mode: 'current-folder' });
     });
     return () => abort.abort();
-  }, [selectedInstanceId, folderId, selectedCwdFolderId]);
+  }, [selectedInstanceId, folderId, selectedCwdFolderId, workspaceRefreshToken]);
 
   const workspaceMatchesSelection = workspaceState.instanceId === selectedInstanceId && workspaceState.folderId === folderId;
   const workspaceLoading = Boolean(selectedInstanceId && folderId && !workspaceMatchesSelection);
 
-  const gitSelection: AiSessionGitSelection | undefined = workspaceMatchesSelection
-    && workspaceState.workspace?.availability === 'available'
-    && workspaceState.branch
-    && workspaceState.mode === 'current-folder'
-    ? { mode: workspaceState.mode, branch: workspaceState.branch }
-    : undefined;
-  const workspaceSelection: AiSessionCreateWorkspaceSelection | undefined = workspaceMatchesSelection
-    && workspaceState.workspace?.availability === 'available'
-    && workspaceState.mode === 'worktree'
-    ? workspaceState.newWorktree && workspaceState.workspace.snapshotId
-      ? { type: 'new-worktree', ...workspaceState.newWorktree, expectedSnapshotId: workspaceState.workspace.snapshotId }
-      : workspaceState.worktreeId && workspaceState.workspace.repositoryContextId
-        ? { type: 'existing-worktree', repositoryContextId: workspaceState.workspace.repositoryContextId, worktreeId: workspaceState.worktreeId }
-        : undefined
-    : undefined;
+  const gitSelection = aiSessionGitSelection(workspaceState, workspaceMatchesSelection);
+  const workspaceSelection = aiSessionWorkspaceSelection(workspaceState, workspaceMatchesSelection);
+
+  const confirmNewWorktree = async (selection: MobileNewWorktreeSelection) => {
+    const workspace = workspaceState.workspace;
+    if (!workspace?.snapshotId || !selectedInstance || creatingWorktree) return;
+    setCreatingWorktree(true);
+    try {
+      const profile = await mobileProfileStore.active();
+      if (!profile) throw new Error('No active Control Plane.');
+      const client = createMobileControlPlaneClient(profile, mobileSecureStore).api;
+      const outcome = await createWorkspaceWorktreeForSession({
+        client,
+        instanceId: selectedInstance.id,
+        cwdFolderId: selectedFolder?.cwdFolderId,
+        workspace,
+        selection,
+      });
+      if (outcome.type === 'created') invalidateWorktreeInstance(selectedInstance.id);
+      setWorkspaceState((current) => applyWorktreeCreationOutcome(current, outcome));
+      setWorktreeDialogOpen(false);
+    } catch (cause) {
+      toast.show({ detail: cause instanceof Error ? cause.message : t('sessions.worktreeCreateFailed'), title: t('toast.actionFailed', { action: t('sessions.newWorktree') }), tone: 'error' });
+    } finally {
+      setCreatingWorktree(false);
+    }
+  };
 
   const create = async () => {
     if (!selectedInstance || !controlPlaneId || guidance || !selectedFolder) return;
@@ -315,7 +332,7 @@ export default function NewAiSessionRoute() {
     }
   };
 
-  return <NewSessionForm
+  const form = <NewSessionForm
     key={selectedInstance?.id || 'no-instance'}
     instances={state.instances}
     nodes={state.nodes}
@@ -327,7 +344,8 @@ export default function NewAiSessionRoute() {
     workspace={workspaceMatchesSelection ? workspaceState.workspace : undefined}
     workspaceMode={workspaceMatchesSelection ? workspaceState.mode : 'current-folder'}
     selectedBranch={workspaceMatchesSelection ? workspaceState.branch : undefined}
-    selectedWorktree={workspaceMatchesSelection ? workspaceState.newWorktree ? '__new_worktree__' : workspaceState.worktreeId : undefined}
+    selectedWorktree={workspaceMatchesSelection ? aiSessionWorkspaceSelectionValue(workspaceState) : undefined}
+    selectedWorktreeLabel={workspaceMatchesSelection ? aiSessionWorkspaceSelectionLabel(workspaceState) : undefined}
     workspaceLoading={workspaceLoading}
     message={message}
     attachments={attachments.map(({ id, local }) => ({ id, kind: local.kind, name: local.name, size: local.size, textPresentation: local.textPresentation }))}
@@ -353,18 +371,11 @@ export default function NewAiSessionRoute() {
     onAgentChange={(nextAgent) => { setReasoningEffort(undefined); setSelection({ instanceId: selectedInstanceId, agent: nextAgent, folderId }); }}
     onFolderChange={(nextFolderId) => setSelection({ instanceId: selectedInstanceId, agent, folderId: nextFolderId })}
     onWorkspaceModeChange={(mode) => {
-      const workspace = workspaceState.workspace;
-      const selected = workspace?.branches.find((candidate) => candidate.name === workspaceState.branch);
-      const branch = selected?.currentFolderSelectable ? selected.name : workspace?.branches.find((candidate) => candidate.currentFolderSelectable)?.name;
-      const worktreeId = workspaceState.worktreeId
-        || workspace?.worktrees.find((candidate) => !candidate.isCurrent && candidate.canCreateAiSession)?.id
-        || workspace?.worktrees.find((candidate) => candidate.canCreateAiSession)?.id;
-      setWorkspaceState((current) => ({ ...current, mode, branch, worktreeId, newWorktree: undefined }));
+      setWorkspaceState((current) => switchAiSessionWorkspaceMode(current, mode));
     }}
     onBranchChange={(branch) => setWorkspaceState((current) => ({ ...current, branch }))}
-    onWorktreeChange={(value) => setWorkspaceState((current) => value === '__new_worktree__'
-      ? { ...current, worktreeId: undefined, newWorktree: { branchName: `session/${Crypto.randomUUID().slice(0, 8)}`, startRef: current.workspace?.currentBranch || 'HEAD' } }
-      : { ...current, worktreeId: value, newWorktree: undefined })}
+    onWorktreeChange={(value) => setWorkspaceState((current) => selectAiSessionWorktree(current, value))}
+    onNewWorktree={() => setWorktreeDialogOpen(true)}
     onMessageChange={setMessage}
     onAddImage={() => { void addAttachment('image'); }}
     onAddFile={() => { void addAttachment('file'); }}
@@ -374,6 +385,19 @@ export default function NewAiSessionRoute() {
     onPermissionModeChange={(next) => { void updatePermissionMode(next); }}
     onCreate={() => { void create(); }}
   />;
+
+  return <>{form}{workspaceMatchesSelection && workspaceState.workspace?.availability === 'available' ? <NewWorktreeDialog
+    branches={workspaceState.workspace.branches}
+    busy={creatingWorktree}
+    confirmLabel={t('sessions.useNewWorktree')}
+    defaultStartRef={workspaceState.workspace.currentBranch || 'HEAD'}
+    description={t('sessions.newWorktreeDescription')}
+    initialSelection={aiSessionWorkspaceDialogInitialSelection(workspaceState)}
+    onCancel={() => setWorktreeDialogOpen(false)}
+    onConfirm={(selection) => { void confirmNewWorktree(selection); }}
+    title={t('sessions.newWorktree')}
+    visible={worktreeDialogOpen}
+  /> : null}</>;
 }
 
 type NewSessionLocalAttachment = {

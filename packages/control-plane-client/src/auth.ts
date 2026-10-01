@@ -1,6 +1,16 @@
 import { z } from "zod";
 import {
   ControlPlaneAuthenticatedUserSchema,
+  ControlPlaneCliAuthorizationApprovalResponseSchema,
+  ControlPlaneCliAuthorizationDenialResponseSchema,
+  ControlPlaneCliAuthorizationRequestDetailResponseSchema,
+  ControlPlaneCliAuthorizationRequestSchema,
+  ControlPlaneCliAuthorizeResponseSchema,
+  ControlPlaneCliSessionRenewalResponseSchema,
+  ControlPlaneCliSessionRevocationResponseSchema,
+  ControlPlaneCliSessionsResponseSchema,
+  ControlPlaneCliTokenRequestSchema,
+  ControlPlaneCliTokenResponseSchema,
   ControlPlaneCurrentAuthorizationSchema,
   ControlPlaneMobileLoginInputSchema,
   ControlPlaneMobileLoginResponseSchema,
@@ -8,6 +18,8 @@ import {
   ControlPlaneMobileSessionRevocationResponseSchema,
   ControlPlaneMobileSessionsResponseSchema,
   ControlPlanePublicIdentityDocumentSchema,
+  type ControlPlaneCliAuthorizationRequest,
+  type ControlPlaneCliTokenRequest,
   type ControlPlaneMobileLoginInput,
 } from "@task-handoff/protocol/control-plane-access";
 import type { ControlPlaneClientTransport } from "./transport.ts";
@@ -77,6 +89,68 @@ export function createControlPlaneAuthApi(transport: ControlPlaneClientTransport
         ControlPlaneMobileLoginResponseSchema,
         post(ControlPlaneMobileLoginInputSchema.parse(input)),
       )).data;
+    },
+    cliAuthorize(input: ControlPlaneCliAuthorizationRequest) {
+      return transport.request(
+        "/api/auth/cli/authorize",
+        ControlPlaneCliAuthorizeResponseSchema,
+        post(ControlPlaneCliAuthorizationRequestSchema.parse(input)),
+      ).then((response) => response.data);
+    },
+    cliToken(input: ControlPlaneCliTokenRequest) {
+      return transport.request(
+        "/api/auth/cli/token",
+        ControlPlaneCliTokenResponseSchema,
+        post(ControlPlaneCliTokenRequestSchema.parse(input)),
+      ).then((response) => response.data);
+    },
+    cliAuthorizationRequest(requestId: string, signal?: AbortSignal) {
+      return transport.request(
+        `/api/auth/cli/requests/${encodeURIComponent(requestId)}`,
+        ControlPlaneCliAuthorizationRequestDetailResponseSchema,
+        { signal },
+      ).then((response) => response.data);
+    },
+    cliAuthorizationRequestByUserCode(userCode: string, signal?: AbortSignal) {
+      return transport.request(
+        `/api/auth/cli/requests?userCode=${encodeURIComponent(userCode)}`,
+        ControlPlaneCliAuthorizationRequestDetailResponseSchema,
+        { signal },
+      ).then((response) => response.data);
+    },
+    approveCliAuthorization(requestId: string) {
+      return transport.request(
+        `/api/auth/cli/requests/${encodeURIComponent(requestId)}/approve`,
+        ControlPlaneCliAuthorizationApprovalResponseSchema,
+        post(),
+      ).then((response) => response.data);
+    },
+    denyCliAuthorization(requestId: string) {
+      return transport.request(
+        `/api/auth/cli/requests/${encodeURIComponent(requestId)}/deny`,
+        ControlPlaneCliAuthorizationDenialResponseSchema,
+        post(),
+      ).then((response) => response.data);
+    },
+    logoutCli() {
+      return requestData("/api/auth/cli/logout", z.object({ ok: z.boolean() }).strict(), post());
+    },
+    renewCliSession(signal?: AbortSignal) {
+      return transport.request(
+        "/api/auth/cli/renew",
+        ControlPlaneCliSessionRenewalResponseSchema,
+        { ...post(), signal },
+      ).then((response) => response.data);
+    },
+    cliSessions(signal?: AbortSignal) {
+      return transport.request("/api/auth/cli/sessions", ControlPlaneCliSessionsResponseSchema, { signal }).then((response) => response.data);
+    },
+    revokeCliSession(sessionId: string) {
+      return transport.request(
+        `/api/auth/cli/sessions/${encodeURIComponent(sessionId)}`,
+        ControlPlaneCliSessionRevocationResponseSchema,
+        { method: "DELETE" },
+      ).then((response) => response.data);
     },
     mobileSessions(signal?: AbortSignal) {
       return transport.request("/api/auth/mobile/sessions", ControlPlaneMobileSessionsResponseSchema, { signal }).then((response) => response.data);
