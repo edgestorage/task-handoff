@@ -13,6 +13,7 @@ import {
   type ExecutorStartResult,
 } from "./docker.ts";
 import type { RuntimeAdapter } from "./adapters.ts";
+import type { RuntimeLiveness } from "./docker.ts";
 import {
   LOCAL_PROCESS_NONCE_LABEL,
   LocalProcessSupervisor,
@@ -99,6 +100,14 @@ export class LocalhostRuntimeAdapter implements RuntimeAdapter {
       });
     }
     return `http://127.0.0.1:${port}`;
+  }
+
+  async runtimeState(context: ExecutorContext): Promise<RuntimeLiveness> {
+    try {
+      return await this.processSupervisor.isRunning(context.instance) ? "running" : "stopped";
+    } catch {
+      return "unknown";
+    }
   }
   private readonly commandOverride?: string[];
   private readonly lockPath?: string;

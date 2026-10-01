@@ -10,6 +10,7 @@ import {
   type CommandRunner,
   type ExecutorContext,
   type ExecutorStartResult,
+  type RuntimeLiveness,
 } from "./docker.ts";
 
 const FINAL_COMPUTER_PLATFORMS = new Set([
@@ -29,6 +30,8 @@ export function finalComputerPlatform(platform: string) {
 export type RuntimeAdapter = {
   resolveInstanceWeb(context: ExecutorContext): Promise<string>;
   resolveNodeAgentUrl?(context: ExecutorContext): Promise<string>;
+  /** Reports whether the runtime is alive without touching the instance itself. */
+  runtimeState?(context: ExecutorContext): Promise<RuntimeLiveness>;
   start(context: ExecutorContext): Promise<ExecutorStartResult>;
   stop(context: ExecutorContext): Promise<ExecutorStartResult>;
   restart(context: ExecutorContext): Promise<ExecutorStartResult>;
@@ -89,6 +92,12 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
 
   resolveNodeAgentUrl(context: ExecutorContext) {
     return this.executor.resolveNodeAgentUrl(context);
+  }
+
+  runtimeState(context: ExecutorContext) {
+    const containerName = context.instance.runtime.containerName;
+    if (!containerName) return Promise.resolve<RuntimeLiveness>("absent");
+    return this.executor.runtimeState(containerName);
   }
 
   async installRuntime(context: ExecutorContext, artifact: ResolvedRuntimeArtifact) {

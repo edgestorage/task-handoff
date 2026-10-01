@@ -1,4 +1,5 @@
 import { nextTick, type Ref } from "vue";
+import { TtyStreamConnection } from "../ttyStreamConnection.ts";
 
 function terminalTheme() {
   const styles = window.getComputedStyle(document.documentElement);
@@ -80,7 +81,40 @@ export function useBoardTerminalPreviews(boardMode: Ref<boolean>, interactive: R
       scrollback: 0,
       theme: terminalTheme(),
     });
-    const socket = new WebSocket(target.url);
+    const stream = new TtyStreamConnection({
+      url: target.url,
+      handlers: {
+        onMessage: (event) => {
+          if (typeof event.data !== "string") {
+            terminal.write(new Uint8Array(event.data));
+            return;
+          }
+          try {
+            const message = JSON.parse(event.data) as { type?: string; data?: unknown; message?: unknown; pendingEscape?: unknown; dimensions?: { cols?: unknown; rows?: unknown }; cols?: unknown; rows?: unknown };
+            if (message.type === "connected") {
+              resizeTerminalGrid(message.dimensions);
+              return;
+            }
+            if (message.type === "resize") {
+              resizeTerminalGrid(message);
+              return;
+            }
+            if (message.type === "snapshot" && typeof message.data === "string") {
+              resizeTerminalGrid(message);
+              terminal.reset();
+              terminal.write(message.data);
+              if (typeof message.pendingEscape === "string" && message.pendingEscape) terminal.write(message.pendingEscape);
+            } else if (message.type === "output" && typeof message.data === "string") {
+              terminal.write(message.data);
+            } else if (message.type === "error") {
+              terminal.writeln(String(message.message || "TTY session error."));
+            }
+          } catch {
+            terminal.write(event.data);
+          }
+        },
+      },
+    });
     let naturalWidth = terminalCols * 6.2;
     let naturalHeight = terminalRows * 11.2;
     const resizeTerminalGrid = (dimensions: { cols?: unknown; rows?: unknown } | undefined) => {
@@ -143,41 +177,10 @@ export function useBoardTerminalPreviews(boardMode: Ref<boolean>, interactive: R
     terminal.resize(terminalCols, terminalRows);
     scheduleResize();
     resizeObserver.observe(target.element);
-    socket.binaryType = "arraybuffer";
-    socket.addEventListener("message", (event) => {
-      if (typeof event.data !== "string") {
-        terminal.write(new Uint8Array(event.data));
-        return;
-      }
-      try {
-        const message = JSON.parse(event.data) as { type?: string; data?: unknown; message?: unknown; pendingEscape?: unknown; dimensions?: { cols?: unknown; rows?: unknown }; cols?: unknown; rows?: unknown };
-        if (message.type === "connected") {
-          resizeTerminalGrid(message.dimensions);
-          return;
-        }
-        if (message.type === "resize") {
-          resizeTerminalGrid(message);
-          return;
-        }
-        if (message.type === "snapshot" && typeof message.data === "string") {
-          resizeTerminalGrid(message);
-          terminal.reset();
-          terminal.write(message.data);
-          if (typeof message.pendingEscape === "string" && message.pendingEscape) terminal.write(message.pendingEscape);
-        } else if (message.type === "output" && typeof message.data === "string") {
-          terminal.write(message.data);
-        } else if (message.type === "error") {
-          terminal.writeln(String(message.message || "TTY session error."));
-        }
-      } catch {
-        terminal.write(event.data);
-      }
-    });
+    stream.start();
     if (terminalInteractive) {
       terminal.onData((data) => {
-        if (socket.readyState === WebSocket.OPEN) {
-          socket.send(JSON.stringify({ type: "input", data }));
-        }
+        stream.send({ type: "input", data });
       });
     }
     scheduleResize();
@@ -192,7 +195,7 @@ export function useBoardTerminalPreviews(boardMode: Ref<boolean>, interactive: R
           window.clearTimeout(refreshTimer);
         }
         resizeObserver.disconnect();
-        socket.close();
+        stream.stop();
         terminal.dispose();
         surface.remove();
       },

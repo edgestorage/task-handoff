@@ -67,6 +67,7 @@ const props = defineProps<{
   modelGroups?: AiSessionModelGroup[];
   modelSelection?: AiSessionModelSelection;
   modelSelectionPending?: boolean;
+  modelSelectionEnabled?: boolean;
   reasoningEffort?: AiSessionReasoningEffort;
   reasoningEffortEnabled?: boolean;
   reasoningEffortPending?: boolean;
@@ -191,6 +192,10 @@ const modelMenuDisabled = computed(() => Boolean(
   || (modelOptions.value.length <= 1 && !props.reasoningEffortEnabled),
 ));
 const noModelAvailable = computed(() => modelOptions.value.length === 0);
+// An empty catalog means "no model configured" only when the provider actually
+// offers in-session model selection; otherwise the session keeps its current
+// model and the trigger stays read-only.
+const modelSelectionLocked = computed(() => noModelAvailable.value && props.modelSelectionEnabled === false);
 
 function showModelSummaryTooltip(event?: Event) {
   if (event instanceof PointerEvent && event.pointerType === "touch") return;
@@ -950,7 +955,22 @@ watch(() => props.busy, (busy) => {
         >
           <CornerDownRight :size="18" />
         </button>
-        <TooltipProvider v-if="noModelAvailable" :delay-duration="200">
+        <TooltipProvider v-if="modelSelectionLocked" :delay-duration="200">
+          <Tooltip>
+            <TooltipTrigger as-child>
+              <button
+                type="button"
+                class="ai-session-composer__model-trigger"
+                disabled
+                :aria-label="t('sessions.composer.modelSelectionTitle', { model: displayedModelName })"
+              >
+                <span>{{ displayedModelName }}</span>
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="top" :side-offset="8">{{ t("sessions.composer.modelSelectionUnavailable") }}</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+        <TooltipProvider v-else-if="noModelAvailable" :delay-duration="200">
           <Tooltip>
             <TooltipTrigger as-child>
               <button
@@ -1020,23 +1040,6 @@ watch(() => props.busy, (busy) => {
             @select-reasoning-effort="emit('selectReasoningEffort', $event)"
           />
         </DropdownMenu>
-        <TooltipProvider v-else-if="provider" :delay-duration="200">
-          <Tooltip>
-            <TooltipTrigger as-child>
-              <span class="ai-session-composer__model-tooltip-trigger">
-                <button
-                  type="button"
-                  class="ai-session-composer__model-trigger ai-session-composer__model-trigger--unavailable"
-                  disabled
-                  :aria-label="modelSelection ? t('sessions.composer.modelSelectionTitle', { model: displayedModelName }) : t('sessions.composer.modelSelectionUnavailable')"
-                >
-                  <span>{{ displayedModelName }}</span>
-                </button>
-              </span>
-            </TooltipTrigger>
-            <TooltipContent side="top" :side-offset="8">{{ t('sessions.composer.modelSelectionUnavailable') }}</TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
         <button
           v-if="!submitHidden"
           type="submit"
@@ -1410,11 +1413,6 @@ watch(() => props.busy, (busy) => {
 .ai-session-composer__model-trigger:disabled {
   cursor: default;
   opacity: 0.62;
-}
-
-.ai-session-composer__model-tooltip-trigger {
-  display: inline-flex;
-  min-width: 0;
 }
 
 .ai-session-composer__model-tooltip-anchor {

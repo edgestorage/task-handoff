@@ -191,14 +191,26 @@ test("resource menu exposes Apps, Files, Review Changes, and Worktrees", () => {
   assert.match(sidebar, /<AppLaunchMenuItems/);
   assert.match(sidebar, /<DropdownMenuContent class="app-launch-menu"/);
   assert.doesNotMatch(sidebar, /submenu-class="story-resource-menu"/);
-  assert.match(sidebar, /class="app-launch-menu-item story-resource-menu-item" @select="openTargetRepository\('files'\)"/);
+  assert.match(sidebar, /v-for="option in repositoryOpenOptions"[\s\S]*class="app-launch-menu-item story-resource-menu-item"/);
   assert.match(appLaunchMenuItems, /\.app-launch-menu \.app-launch-menu-item span[\s\S]*display: grid;[\s\S]*min-width: 0;/);
   assert.match(appLaunchMenuItems, /\.app-launch-menu \.app-launch-menu-item strong[\s\S]*text-overflow: ellipsis;[\s\S]*white-space: nowrap;/);
-  assert.match(sidebar, /'files'/);
-  assert.match(sidebar, /'changes-review'/);
-  assert.match(sidebar, /'worktrees'/);
-  assert.match(sidebar, /class="app-launch-menu-item story-resource-menu-item" @select="openTargetRepository\('files'\)"/);
+  assert.match(sidebar, /\{ page: "files", labelKey: "stories\.resources\.files", icon: FolderTree \}/);
+  assert.match(sidebar, /\{ page: "changes-review", labelKey: "stories\.resources\.reviewChanges", icon: FileDiff \}/);
+  assert.match(sidebar, /\{ page: "worktrees", labelKey: "stories\.resources\.worktrees", icon: GitBranch \}/);
   assert.match(sidebar, /:global\(\.app-launch-menu-item\.story-resource-menu-item\)\s*\{\s*min-height:32px;/);
+});
+
+test("empty Story resource sidebar offers the same quick open actions", () => {
+  assert.match(sidebar, /<div v-if="!activeResource" class="story-resource-empty">[\s\S]*class="story-resource-empty-actions"[\s\S]*v-for="option in openOptions"/);
+  assert.match(sidebar, /const openOptions = computed<StoryResourceOpenOption\[\]>\(\(\) => \[\.\.\.appOpenOptions\.value, \.\.\.repositoryOpenOptions\.value\]\)/);
+  assert.match(sidebar, /launchableApps\(instance\)\.map\(\(app\) => \(\{ key: `app:\$\{app\.id\}`, kind: "app", appId: app\.id, label: app\.label \}\)\)/);
+  assert.match(sidebar, /<AppLaunchIcon v-if="option\.kind === 'app'" :app-id="option\.appId" :size="16"/);
+  assert.match(sidebar, /:disabled="optionDisabled\(option\)"[\s\S]*@click="runOpenOption\(option\)"/);
+  assert.match(sidebar, /function runOpenOption\(option: StoryResourceOpenOption\)[\s\S]*launchTargetApp\(option\.appId\)[\s\S]*openTargetRepository\(option\.page\)/);
+  assert.match(sidebar, /\.story-resource-empty-action \{[^}]*height:32px;[^}]*font-size:12px;[^}]*font-weight:500;/);
+  assert.match(sidebar, /\.story-resource-empty-action:hover:not\(:disabled\), \.story-resource-empty-action:focus-visible:not\(:disabled\) \{ border-color:var\(--brand-accent\); background:var\(--surface-active\); color:var\(--text-strong\); \}/);
+  assert.doesNotMatch(sidebar, /story-resource-empty-action[\s\S]{0,240}brand-accent-foreground/);
+  assert.doesNotMatch(sidebar, /\.story-resource-empty span \{/);
 });
 
 test("resource menu targets the current AI Session instance without an instance picker", () => {

@@ -153,12 +153,12 @@
                   {{ boardAiSessionIndex(instance) + 1 }} / {{ boardAiSessions(instance).length }}
                 </small>
               </div>
-              <iframe
+              <AppSessionViewer
                 v-else-if="boardSessionFrameUrl(instance)"
                 class="board-card-frame"
+                compact
                 :src="boardSessionFrameUrl(instance)"
                 :title="t('instances.board.sessionFrame', { name: instanceDisplayName(instance) })"
-                allow="clipboard-read; clipboard-write; fullscreen"
               />
               <div
                 v-else-if="boardTerminalSocketUrl(instance)"
@@ -244,6 +244,7 @@ import { canShowInstanceAction, imageProvisioningLabel, instanceSourceLabel, isI
 import type { InstanceListSortMode } from "../instance-list/useWorkbenchInstances";
 import InstanceViewOptionsMenu from "../shared/InstanceViewOptionsMenu.vue";
 import AppLaunchMenuItems from "../shared/AppLaunchMenuItems.vue";
+import AppSessionViewer from "../shared/AppSessionViewer.vue";
 import ProjectFolderPicker from "../shared/ProjectFolderPicker.vue";
 import { connectionStatusKeys, instanceStatusKeys, translateStatus } from "../../../i18n/status";
 import {

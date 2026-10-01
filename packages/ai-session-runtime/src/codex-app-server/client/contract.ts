@@ -89,6 +89,7 @@ export type CodexAppServerClientLike = EventEmitter & {
   start: () => Promise<void>;
   stop: () => void;
   listLoadedThreadIds: () => Promise<string[]>;
+  resolveAppServerVersion?: () => Promise<string>;
   threadForkCapabilities?: () => CodexThreadForkCapabilities;
   startThread?: (options: CodexThreadStartOptions) => Promise<CodexThread>;
   updateThreadSettings?: (threadId: string, settings: CodexThreadSettings) => Promise<CodexThreadSettingsResult>;

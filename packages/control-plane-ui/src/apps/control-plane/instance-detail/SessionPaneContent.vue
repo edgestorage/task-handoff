@@ -78,7 +78,7 @@
     <RepositoryWorktreesTab v-else-if="session?.kind === 'repository' && session.source?.page === 'worktrees'" :instance-id="instance.id" :move-to-main-supported="supportsRepositoryWorktreeMoveToMain(instance.capabilities)" :session="session" />
     <RepositoryWorkspaceTab v-else-if="session?.kind === 'repository'" :instance-id="instance.id" :path-search-supported="supportsRepositoryPathSearch(instance.capabilities)" :session="session" @open-workspace="$emit('openRepositoryWorkspace', $event)" />
     <div v-else-if="activeFrameUrl" class="session-preview-live">
-      <iframe class="session-preview-frame" :src="activeFrameUrl" :title="session?.label || t('sessions.tabs.appSession')" allow="clipboard-read; clipboard-write; fullscreen" />
+      <AppSessionViewer class="session-preview-frame" :src="activeFrameUrl" :title="session?.label || t('sessions.tabs.appSession')" />
     </div>
     <div v-else-if="session?.kind !== 'embedded-browser' && !activeTerminalSocketUrl" class="session-preview-body">
       <Terminal v-if="session?.kind === 'terminal'" :size="34" />
@@ -114,6 +114,7 @@ import type { LaunchableApp, RepositoryWorkspaceTabTarget, SessionTab } from "..
 import { previewDetail, previewTitle, sessionFrameUrl, sessionTerminalSocketUrl } from "../useInstanceSessions";
 import { canShowInstanceAction, hasInstanceStatusPage, instanceStatusDetail, instanceStatusTitle, isInstanceRuntimeUnavailable, isInstanceStatusPending } from "../useInstanceStatus";
 import AiSessionPanel from "./AiSessionPanel.vue";
+import AppSessionViewer from "../shared/AppSessionViewer.vue";
 import SessionTerminalPreview from "./SessionTerminalPreview.vue";
 import RepositoryChangesReviewTab from "./RepositoryChangesReviewTab.vue";
 import RepositoryWorktreesTab from "./RepositoryWorktreesTab.vue";

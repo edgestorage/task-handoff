@@ -41,6 +41,10 @@ type CodexAppServerBridgeOptions = {
   dynamicTools?: CodexDynamicToolSpec[];
   onDynamicToolCall?: (call: CodexDynamicToolCall) => Promise<CodexDynamicToolCallResult>;
   projectUnboundThreads?: boolean;
+  // The capability document derives from the app-server artifact version.
+  // Owners republish their snapshot when that version resolves so a lazy
+  // app-server start cannot leave stale capabilities behind.
+  onCapabilitiesChanged?: () => void;
 };
 
 export type { CodexAppServerClientLike } from "./codex-app-server/client/contract";
@@ -58,6 +62,7 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
   private readonly mentions: CodexAppServerMentions;
   private readonly timelineStore?: CodexTimelineStore;
   private readonly injectedClient?: CodexAppServerClientLike;
+  private capabilityClient?: CodexAppServerClientLike;
   private readonly options: CodexAppServerBridgeOptions;
   private readonly timelineItemListeners = new Set<AiSessionProviderTimelineItemListener>();
   private readonly timelineSourceByThread = new Map<string, "adapter-store" | "codex-native">();
@@ -236,15 +241,36 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
   stop() {
     this.connection.stop();
     this.binding.clear();
+    this.capabilityClient?.stop?.();
   }
 
   supportsThreadSettingsUpdate() {
-    return this.connection.current()?.client.supportsThreadSettingsUpdate?.() === true;
+    return this.capabilitySource()?.supportsThreadSettingsUpdate?.() === true;
   }
 
   supportsProviderReload() {
-    const client = this.connection.current()?.client;
+    const client = this.capabilitySource();
     return Boolean(client?.archiveThread && client.unarchiveThread && client.resumeThread);
+  }
+
+  /**
+   * Version-derived capability probes must answer before the app-server has
+   * ever connected: the connection client only exists after the first session
+   * action, which previously advertised "no in-session model switching" for
+   * every instance that had just started.
+   */
+  private capabilitySource(): CodexAppServerClientLike | undefined {
+    const connected = this.connection.current()?.client;
+    if (connected) return connected;
+    if (this.injectedClient) return this.injectedClient;
+    if (!this.capabilityClient) this.capabilityClient = this.createClient({});
+    // Warm the artifact version so the first heartbeat already reports the
+    // deployment's real capabilities instead of waiting for a session action.
+    // The probe is promise-cached once it succeeds and clears itself after a
+    // failure, so this also retries until the artifact is actually installed.
+    const probing = this.capabilityClient.resolveAppServerVersion?.();
+    if (probing) void probing.catch(() => undefined);
+    return this.capabilityClient;
   }
 
   async sendMessage(session: AiSessionStatus, input: AiSessionSendInput): Promise<AiSessionActionResult> {
@@ -735,6 +761,7 @@ export class CodexAppServerSessionBridge implements AiSessionControlProvider, Ai
       ...options,
       onDynamicToolCall: this.options.onDynamicToolCall,
       onDiagnostic: this.options.onDiagnostic,
+      onVersionResolved: () => this.options.onCapabilitiesChanged?.(),
     };
     return this.options.createClient ? this.options.createClient(configured) : new CodexAppServerClient(configured);
   }

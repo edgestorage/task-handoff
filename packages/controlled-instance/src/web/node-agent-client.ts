@@ -167,6 +167,11 @@ export class NodeAgentRegistrationClient {
   }
 
   async heartbeat() {
+    // A scheduled cycle may already be publishing a snapshot that predates the
+    // state change this caller just made. Chain a follow-up heartbeat so the
+    // newer snapshot cannot silently wait for the next interval.
+    const running = this.inFlight;
+    if (running) await running.catch(() => undefined);
     return this.runExclusive(() => this.heartbeatOnce());
   }
 

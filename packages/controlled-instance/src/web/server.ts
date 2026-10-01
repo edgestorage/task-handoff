@@ -812,6 +812,13 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
   });
   const codexAppServer = options.codexAppServer || new CodexAppServerSessionBridge(aiSessions, {
     projectUnboundThreads: false,
+    // Model/provider switching in an existing session is derived from the
+    // app-server artifact version. Republish the instance snapshot as soon as
+    // that version resolves so a freshly started instance does not advertise
+    // "no model switching" until the next heartbeat interval elapses.
+    onCapabilitiesChanged: () => {
+      if (nodeAgentClient.enabled()) void nodeAgentClient.heartbeat().catch(() => undefined);
+    },
     ensureAppSessions: async () => {
       appRuntime.ensureSharedResource("codex");
       return appSessionsWithSharedCodexAppServer();

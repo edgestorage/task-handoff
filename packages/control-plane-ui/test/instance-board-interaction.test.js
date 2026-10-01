@@ -43,7 +43,7 @@ test("board options expose one interaction switch and apply it to every live pre
 
 test("interactive board terminals use the existing terminal input protocol", () => {
   assert.match(terminal, /disableStdin: !terminalInteractive/);
-  assert.match(terminal, /if \(terminalInteractive\) \{[\s\S]*terminal\.onData\(\(data\) => \{[\s\S]*socket\.send\(JSON\.stringify\(\{ type: "input", data \}\)\)/);
+  assert.match(terminal, /if \(terminalInteractive\) \{[\s\S]*terminal\.onData\(\(data\) => \{[\s\S]*stream\.send\(\{ type: "input", data \}\)/);
   assert.match(terminal, /existing\?\.url === target\.url && existing\.interactive === interactive\.value/);
   assert.match(terminal, /generation !== boardTerminalGenerations\.get\(instanceId\)[\s\S]*interactive\.value !== terminalInteractive/);
   assert.match(workbench, /useBoardTerminalPreviews\(boardMode, boardInteractive\)/);

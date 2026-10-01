@@ -9,6 +9,7 @@ import { DockerImageService, listDockerImages } from "../docker-images.ts";
 import type { GitWorkspaceProvisioningInput } from "@task-handoff/protocol/managed-git-credentials";
 import { LEGACY_WORKSPACE_GIT_ENV, WORKSPACE_GIT_ENV } from "@task-handoff/protocol/workspace-git";
 import { packagedDockerBootstrapAssetsDir } from "./bootstrap-assets.ts";
+import { INSTANCE_PRIVATE_CONFIG_FILE_NAME } from "../instances/private-config-store.ts";
 
 export { defaultCommandRunner, type CommandResult, type CommandRunner } from "../../shared/process/command-runner.ts";
 
@@ -37,6 +38,8 @@ export type ExecutorStartResult = {
   workspace?: Partial<ControlledInstance["workspace"]>;
   runtime?: Partial<ControlledInstance["runtime"]>;
 };
+
+export type RuntimeLiveness = "running" | "stopped" | "absent" | "unknown";
 
 export type NodeRuntimeExecutor = {
   start(context: ExecutorContext): Promise<ExecutorStartResult>;
@@ -92,6 +95,12 @@ const DOCKER_BOOTSTRAP_ABI = "1";
 const DOCKER_BOOTSTRAP_CONTAINER_DIR = "/run/task-handoff/bootstrap";
 const DOCKER_BOOTSTRAP_ENTRYPOINT = `${DOCKER_BOOTSTRAP_CONTAINER_DIR}/entrypoint.sh`;
 const DOCKER_BOOTSTRAP_EXECUTABLE = "/bin/bash";
+
+// The private config is mounted as a per-instance directory: replacing a
+// bind-mounted single file (tmp + rename) invalidates the mount on virtualized
+// Docker file shares, which used to leave containers unable to start (exit 78).
+export const DOCKER_PRIVATE_CONFIG_CONTAINER_DIR = "/run/task-handoff/private";
+export const DOCKER_PRIVATE_CONFIG_CONTAINER_PATH = `${DOCKER_PRIVATE_CONFIG_CONTAINER_DIR}/${INSTANCE_PRIVATE_CONFIG_FILE_NAME}`;
 const DOCKER_RUNTIME_INSTALLER = `${DOCKER_BOOTSTRAP_CONTAINER_DIR}/runtime-installer.mjs`;
 const DOCKER_RUNTIME_ROOT = "/opt/task-handoff/instance-runtime";
 export const DOCKER_AGENT_RUN_ROOT = "/run/task-handoff/agent-runs";
@@ -912,6 +921,21 @@ export class LocalDockerExecutor implements NodeRuntimeExecutor {
     }
   }
 
+  /**
+   * Lifecycle probe used by runtime convergence: a stopped or absent container
+   * has no app sessions to drain, so convergence must not wait for the drain
+   * deadline before restarting it.
+   */
+  async runtimeState(containerName: string): Promise<RuntimeLiveness> {
+    try {
+      const result = await this.runCommand("docker", ["inspect", "--format", "{{.State.Running}}", containerName], { timeoutMs: 5_000 });
+      return result.stdout.trim() === "true" ? "running" : "stopped";
+    } catch (cause) {
+      if (isDockerContainerNotFound(cause)) return "absent";
+      return "unknown";
+    }
+  }
+
   async inspectRuntimeTarget(containerName?: string): Promise<DockerRuntimeTarget> {
     let platform: unknown;
     let arch: unknown;
@@ -1310,9 +1334,15 @@ export function dockerRunArgs(context: ExecutorContext, containerName: string, o
       code: "INSTANCE_PRIVATE_CONFIG_MISSING",
     });
   }
+  if (path.basename(context.privateConfigPath) !== INSTANCE_PRIVATE_CONFIG_FILE_NAME) {
+    throw Object.assign(new Error(`Instance ${context.instance.id} private config path ${context.privateConfigPath} does not use the per-instance directory layout.`), {
+      statusCode: 409,
+      code: "INSTANCE_PRIVATE_CONFIG_LAYOUT_INVALID",
+    });
+  }
   args.push(
     "--mount",
-    `type=bind,src=${context.privateConfigPath},dst=/run/task-handoff/instance-private-config.json,readonly`,
+    `type=bind,src=${path.dirname(context.privateConfigPath)},dst=${DOCKER_PRIVATE_CONFIG_CONTAINER_DIR},readonly`,
     "--mount",
     `type=bind,src=${launcherAssetsDir},dst=${DOCKER_BOOTSTRAP_CONTAINER_DIR},readonly`,
     "--entrypoint",
@@ -1352,6 +1382,7 @@ export function dockerRunArgs(context: ExecutorContext, containerName: string, o
     TASK_HANDOFF_CHAT_BRIDGES: "none",
     TASK_HANDOFF_WORKSPACE: context.project.workspacePolicy.path || "/workspace",
     TASK_HANDOFF_WORKSPACE_MODE: context.project.workspacePolicy.mode,
+    TASK_HANDOFF_INSTANCE_PRIVATE_CONFIG_PATH: DOCKER_PRIVATE_CONFIG_CONTAINER_PATH,
     ...(context.project.source.type === "local-folder" ? {} : { TASK_HANDOFF_SKIP_WORKSPACE_BOOTSTRAP: "true" }),
   };
   for (const [key, value] of Object.entries(runtimeEnv)) appendDockerEnv(args, key, value);
