@@ -57,7 +57,7 @@ test("one-time invite tokens stay in component-local state and never enter query
   const queries = read("src/api/queries.ts");
   assert.match(panel, /generatedInvite\.value = await createControlPlaneProxyInvite/);
   assert.doesNotMatch(panel, /setQueryData/);
-  assert.match(queries, /createControlPlaneProxyInvite[\s\S]*postApiData<CreateProxyInviteResult>/);
+  assert.match(queries, /createControlPlaneProxyInvite[\s\S]*sharedControlPlaneClient\.admin\.createProxyInvite\(input\)/);
   assert.doesNotMatch(queries, /queryFn:[^\n]*createControlPlaneProxyInvite/);
 });
 

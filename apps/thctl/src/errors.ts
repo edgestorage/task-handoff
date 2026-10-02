@@ -50,6 +50,32 @@ export function notImplementedError(commandId: string, stage: string) {
   );
 }
 
+/**
+ * capability 缺失只关闭对应功能域：命令与所需能力写进 details，退出码固定 14。
+ * 旧服务端未注册的新路由也归一到这里（见 routeMissingError）。
+ */
+export function capabilityMissingError(commandId: string, capability: string, details?: Record<string, unknown>) {
+  return new ThctlError(
+    "CLI_CAPABILITY_MISSING",
+    `\`${commandId}\` requires capability \`${capability}\`, which the connected Control Plane or node does not declare. Upgrade it or pick a supported command.`,
+    CLI_EXIT_CODES.capability,
+    { command: commandId, capability, ...details },
+  );
+}
+
+/**
+ * 未注册路由（无结构化错误信封的 404/405/501）说明服务端版本早于该命令；
+ * 在 executeLeaf 中会带上 command 归一为 CLI_CAPABILITY_MISSING。
+ */
+export function routeMissingError(status: number, method: string, path: string) {
+  return new ThctlError(
+    "CLI_ROUTE_MISSING",
+    `The Control Plane does not expose \`${method} ${path}\` (HTTP ${status}); this server version predates the command.`,
+    CLI_EXIT_CODES.capability,
+    { path, status, method },
+  );
+}
+
 export function protocolError(message: string, details?: Record<string, unknown>) {
   return new ThctlError("CLI_PROTOCOL_ERROR", message, CLI_EXIT_CODES.protocol, details);
 }

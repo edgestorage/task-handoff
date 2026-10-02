@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { z } from "zod";
 import { protocolError, usageError } from "../errors.ts";
 import type { CliInvocation } from "../runtime.ts";
+import { registerSecret } from "../redact.ts";
 
 export function requireArgument(invocation: CliInvocation, name: string) {
   const value = invocation.args[name]?.trim();
@@ -66,4 +67,43 @@ export function requireUpdatedDetail<T>(
     throw protocolError(`AI session \`${sessionId}\` is unchanged at revision ${detail.revision}; no projection is available locally.`, { sessionId, revision: detail.revision });
   }
   return detail.detail;
+}
+
+/**
+ * 管理面写命令统一从 `--config <file>` 读取 JSON 请求体，避免密钥或复杂结构走明文选项；
+ * 具体字段由服务端权威 schema 校验，客户端只保证是合法 JSON 对象。
+ */
+export function readRequestBody(invocation: CliInvocation, label = "request body") {
+  const file = requireOption(invocation, "config");
+  const value = readJsonFile(file, z.unknown(), label);
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw usageError("CLI_INVALID_INPUT", `${label} \`${file}\` must be a JSON object.`, { file });
+  }
+  return value as Record<string, unknown>;
+}
+
+const STDIN_SECRET_LIMIT_BYTES = 1024 * 1024;
+
+/**
+ * 密钥只从 stdin 读取（`--token-stdin`），不接受明文选项或位置参数，
+ * 避免 secret 进入 shell history、进程列表或 dry-run 输出。
+ */
+export async function readTokenFromStdin(invocation: CliInvocation) {
+  if (invocation.options.tokenStdin !== true) {
+    throw usageError("CLI_TOKEN_STDIN_REQUIRED", "Provide the secret on stdin and re-run with --token-stdin.");
+  }
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of process.stdin) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+    size += buffer.length;
+    if (size > STDIN_SECRET_LIMIT_BYTES) {
+      throw usageError("CLI_TOKEN_STDIN_TOO_LARGE", "The secret on stdin is too large.");
+    }
+    chunks.push(buffer);
+  }
+  const value = Buffer.concat(chunks).toString("utf8").trim();
+  if (!value) throw usageError("CLI_TOKEN_STDIN_EMPTY", "No secret was provided on stdin.");
+  registerSecret(value);
+  return value;
 }

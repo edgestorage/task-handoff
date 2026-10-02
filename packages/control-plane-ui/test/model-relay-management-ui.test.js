@@ -3,6 +3,7 @@ import fs from "node:fs";
 import test from "node:test";
 
 const modelSettings = fs.readFileSync(new URL("../src/apps/control-plane/settings/ModelSettingsSection.vue", import.meta.url), "utf8");
+const modelEntryList = fs.readFileSync(new URL("../src/apps/control-plane/settings/ModelEntryList.vue", import.meta.url), "utf8");
 const modelSettingsComposable = fs.readFileSync(new URL("../src/apps/control-plane/settings/useModelSettings.ts", import.meta.url), "utf8");
 const nodeDetail = fs.readFileSync(new URL("../src/apps/control-plane/settings/NodeDetailPanel.vue", import.meta.url), "utf8");
 const settingsModal = fs.readFileSync(new URL("../src/apps/control-plane/settings/SettingsModal.vue", import.meta.url), "utf8");
@@ -11,9 +12,9 @@ const enSettings = fs.readFileSync(new URL("../src/i18n/locales/en-US/settings.t
 
 test("model editor exposes external and upstream name fields per entry", () => {
   assert.match(modelSettings, /settings\.modelRegistry\.externalName/);
-  assert.match(modelSettings, /<ControlPlaneInput v-model="entry\.name"/);
+  assert.match(modelEntryList, /<ControlPlaneInput v-model="entry\.name"/);
   assert.match(modelSettings, /settings\.modelRegistry\.upstreamName/);
-  assert.match(modelSettings, /<ControlPlaneInput v-model="entry\.upstreamName"/);
+  assert.match(modelEntryList, /<ControlPlaneInput v-model="entry\.upstreamName"/);
   // Discovered ids initialize both fields before the external name is edited.
   assert.match(modelSettings, /empty\.name = value;\s*empty\.upstreamName = value;/);
   assert.match(modelSettings, /push\(\{ name: value, upstreamName: value, order:/);
@@ -22,8 +23,8 @@ test("model editor exposes external and upstream name fields per entry", () => {
 });
 
 test("model name fields stay at the 12px body metric and keep secondary weight", () => {
-  assert.match(modelSettings, /\.model-name-field > span \{[^}]*font-size: 12px;[^}]*font-weight: 400;/);
-  assert.doesNotMatch(modelSettings, /\.model-name-field[^{]*\{[^}]*font-size: 1[01]px/);
+  assert.match(modelEntryList, /\.model-entry-field > span \{[^}]*font-size: 12px;[^}]*font-weight: 400;/);
+  assert.doesNotMatch(modelEntryList, /\.model-entry-field[^{]*\{[^}]*font-size: 1[01]px/);
 });
 
 test("node detail renders the relay switch from the authoritative response", () => {
@@ -59,6 +60,6 @@ test("session selectors consume only the shared external-name directory", () => 
 });
 
 test("narrow layout stacks the name fields instead of overflowing", () => {
-  assert.match(modelSettings, /@media\(max-width:560px\) \{[\s\S]*grid-template-columns: 32px minmax\(0,1fr\) auto;[\s\S]*\.model-name-field:last-of-type \{ grid-row: 2; \}/);
-  assert.match(modelSettings, /\.model-name-delete \{ grid-column: 3; grid-row: 1; \}/);
+  assert.match(modelEntryList, /@media\(max-width:560px\) \{[\s\S]*grid-template-columns: 32px minmax\(0,1fr\) auto;[\s\S]*\.model-entry-field:last-of-type \{ grid-row: 2; \}/);
+  assert.match(modelEntryList, /\.model-entry-delete \{ grid-column: 3; grid-row: 1; \}/);
 });

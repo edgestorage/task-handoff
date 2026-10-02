@@ -124,12 +124,14 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
     settingsModel.mappings.splice(index, 1);
     renumberMappings();
   }
-  function moveMapping(index: number, direction: -1 | 1) {
-    const target = index + direction;
-    if (index < 0 || target < 0 || target >= settingsModel.mappings.length) return;
-    const [entry] = settingsModel.mappings.splice(index, 1);
+  function reorderMapping(source: number, target: number) {
+    if (source < 0 || target < 0 || source >= settingsModel.mappings.length || target >= settingsModel.mappings.length || source === target) return;
+    const [entry] = settingsModel.mappings.splice(source, 1);
     settingsModel.mappings.splice(target, 0, entry);
     renumberMappings();
+  }
+  function moveMapping(index: number, direction: -1 | 1) {
+    reorderMapping(index, index + direction);
   }
   /** Inserts a preset's request names; existing rows and the target stay untouched. */
   function applyMappingPreset(presetId: string) {
@@ -524,6 +526,7 @@ export function useModelSettings({ errorText, models, nodes, onModelDeleted, ref
     applyMappingPreset,
     mappingsEditable,
     moveMapping,
+    reorderMapping,
     removeMapping,
     requestMappingInactive,
     fetchModelOptions,

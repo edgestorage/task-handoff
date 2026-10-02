@@ -11,6 +11,7 @@ test("node settings separates paired control planes from active connections", ()
   const modal = fs.readFileSync(path.join(root, "src/apps/control-plane/settings/SettingsModal.vue"), "utf8");
   const diagnostics = fs.readFileSync(path.join(root, "src/apps/control-plane/settings/NodeConnectionDiagnostics.vue"), "utf8");
   const queries = fs.readFileSync(path.join(root, "src/api/queries.ts"), "utf8");
+  const nodeAdminClient = fs.readFileSync(path.join(root, "..", "control-plane-client", "src", "node-admin.ts"), "utf8");
   const zh = fs.readFileSync(path.join(root, "src/i18n/locales/zh-CN/settings.ts"), "utf8");
   const en = fs.readFileSync(path.join(root, "src/i18n/locales/en-US/settings.ts"), "utf8");
 
@@ -38,8 +39,10 @@ test("node settings separates paired control planes from active connections", ()
   assert.match(diagnostics, /diagnostics\?\.consecutiveReconnects/);
   assert.match(diagnostics, /retryCountdown\(diagnostics\?\.nextRetryAt\)/);
   assert.doesNotMatch(panel, /remote\.current \?[^\n]*remote\.active/);
-  assert.match(queries, /control-plane-pairings/);
-  assert.match(queries, /control-plane-connections/);
+  assert.match(queries, /listNodeControlPlanePairings\(nodeId: string\)[\s\S]*sharedControlPlaneClient\.nodeAdmin\.listControlPlanePairings\(nodeId\)/);
+  assert.match(queries, /listNodeControlPlaneConnections\(nodeId: string\)[\s\S]*sharedControlPlaneClient\.nodeAdmin\.listControlPlaneConnections\(nodeId\)/);
+  assert.match(nodeAdminClient, /control-plane-pairings/);
+  assert.match(nodeAdminClient, /control-plane-connections/);
   assert.match(zh, /inventory: "清单", remote: "连接"/);
   assert.match(en, /inventory: "Inventory", remote: "Connections"/);
 });

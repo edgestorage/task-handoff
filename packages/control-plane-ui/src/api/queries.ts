@@ -16,6 +16,18 @@ import type { AiSessionQueueEditInput } from "@task-handoff/protocol/ai-sessions
 export { controlPlaneQueryKeys } from "./queryKeys.ts";
 import type { AiSessionAttachmentRef, AiSessionHistoryDetail, AiSessionHistoryList, AiSessionMentionCatalog, AiSessionMentionFileSearch, AiSessionReference, AiSessionResumeResult, AiSessionUploadedAttachment, AppManagementJobResponse, AppManagementSnapshot, AppSession, ApplyUpdateRequest, AuthSession, CancelProxyClaimResult, ChatBridgeConfig, ChatChannel, ChatGatewayStatus, ClaimProxyNodeResult, CloudBindingChallenge, CloudConnectivity, ControlPlaneAiSessions, ControlPlaneAppSessions, ControlPlaneProxyDiagnostic, ControlPlaneSettings, ControlPlaneStatusResponse, ControlPlaneTriggerMutationResult, ControlPlaneTriggers, CopyModelInput, CreateChatBridgeInput, CreateControlPlaneTriggerInput, CreateControlledInstanceInput, CreateControlledInstanceResult, CreateImageInput, CreateModelInput, CreateNodeControlPlaneConnectionInput, CreateNodeInput, CreateNodeLocalFolderInput, CreateNodeRuntimeInput, CreateProjectInput, CreateProxyInviteResult, DeleteNodeResult, FederatedModelRegistry, HealthResponse, ImageProfile, InstanceBoardItem, InstanceBoardPayload, InstanceResourceMetrics, InstanceTriggerIndex, InstanceTriggerMutationResult, LaunchAppSessionInput, LocalDockerImage, MarketCatalog, ModelConfig, ModelDiscoveryResult, ModelEndpointDraft, ModelMergeResult, ModelMutationResult, ModelTestResult, Node, NodeAgentExternalListener, NodeAgentModelRelay, NodeControlPlaneConnection, NodeControlPlaneConnectionCreateResult, NodeControlPlanePairing, NodeFolderTreeEntry, NodeImageAvailability, NodeJoinInvite, NodeLocalFolder, NodePairingInvite, NodeRuntime, NodeRuntimesPayload, NodeStatus, Project, PublicPendingProxyClaim, PublicProxyBinding, PublicProxyInvite, SelectableImage, UpdateChannel, UpdateChatBridgeInput, UpdateCheckResult, UpdateControlledInstanceInput, UpdateJob, UpdateModelInput, UpdateNodeAgentExternalListener, UpdateNodeAgentModelRelay, UpdateNodeInput, UpdateNodeLocalFolderInput, UpdateProjectInput } from "./types";
 
+/**
+ * Several control plane UI view models in `./types.ts` stay looser than the
+ * shared wire schemas: they keep legacy optional fields, accept form drafts, and
+ * omit newer protocol variants their views do not render yet (for example
+ * `git-template` in `ProjectSource`). The shared client still validates the wire
+ * model, then this re-asserts the established UI shape so existing consumers keep
+ * their contracts instead of every view being rewritten in the same change.
+ */
+function asUiModel<T>(promise: Promise<unknown>): Promise<T> {
+  return promise as Promise<T>;
+}
+
 export function useHealthQuery() {
   return useQuery({
     queryKey: ["health"],
@@ -166,7 +178,7 @@ export const rejectControlPlaneExternalIdentity = (approvalId: string) => shared
 export function useControlPlaneStatusQuery() {
   return useQuery({
     queryKey: controlPlaneQueryKeys.status,
-    queryFn: () => getApiData<ControlPlaneStatusResponse>("control-plane/status"),
+    queryFn: () => sharedControlPlaneClient.admin.status(),
     retry: false,
   });
 }
@@ -174,29 +186,29 @@ export function useControlPlaneStatusQuery() {
 export function useControlPlaneSettingsQuery() {
   return useQuery({
     queryKey: controlPlaneQueryKeys.settings,
-    queryFn: () => getApiData<ControlPlaneSettings>("control-plane/settings"),
+    queryFn: () => sharedControlPlaneClient.admin.getSettings(),
     retry: false,
   });
 }
 
 export function updateControlPlaneSettings(input: Partial<ControlPlaneSettings>) {
-  return patchApiData<ControlPlaneSettings>("control-plane/settings", input);
+  return sharedControlPlaneClient.admin.updateSettings(input);
 }
 
 export function useCloudConnectivityQuery() {
-  return useQuery({ queryKey: controlPlaneQueryKeys.cloudConnectivity, queryFn: () => getApiData<CloudConnectivity>("cloud-connectivity"), retry: false });
+  return useQuery({ queryKey: controlPlaneQueryKeys.cloudConnectivity, queryFn: () => sharedControlPlaneClient.admin.cloudConnectivity(), retry: false });
 }
 
 export function createCloudBindingChallenge() {
-  return postApiData<CloudBindingChallenge>("cloud-connectivity/challenges", {});
+  return sharedControlPlaneClient.admin.createCloudChallenge();
 }
 
 export function updateCloudRemoteAccess(enabled: boolean) {
-  return postApiData<CloudConnectivity>("cloud-connectivity/remote-access", { enabled });
+  return sharedControlPlaneClient.admin.setCloudRemoteAccess(enabled);
 }
 
 export function disconnectCloudAccount() {
-  return postApiData<CloudConnectivity>("cloud-connectivity/disconnect", {});
+  return sharedControlPlaneClient.admin.disconnectCloud();
 }
 
 export async function downloadControlPlaneDiagnosticLogs() {
@@ -209,7 +221,7 @@ export async function downloadControlPlaneDiagnosticLogs() {
 export function useProjectsQuery() {
   return useQuery({
     queryKey: controlPlaneQueryKeys.projects,
-    queryFn: () => getApiData<Project[]>("projects"),
+    queryFn: () => asUiModel<Project[]>(sharedControlPlaneClient.catalog.listProjects()),
     retry: false,
   });
 }
@@ -217,7 +229,7 @@ export function useProjectsQuery() {
 export function useImagesQuery() {
   return useQuery({
     queryKey: controlPlaneQueryKeys.images,
-    queryFn: () => getApiData<ImageProfile[]>("images"),
+    queryFn: () => asUiModel<ImageProfile[]>(sharedControlPlaneClient.catalog.listImages()),
     retry: false,
   });
 }
@@ -225,7 +237,7 @@ export function useImagesQuery() {
 export function useMarketCatalogQuery() {
   return useQuery({
     queryKey: controlPlaneQueryKeys.marketCatalog,
-    queryFn: () => getApiData<MarketCatalog>("market/catalog"),
+    queryFn: () => asUiModel<MarketCatalog>(sharedControlPlaneClient.catalog.marketCatalog()),
     retry: false,
   });
 }
@@ -233,16 +245,16 @@ export function useMarketCatalogQuery() {
 export function useImageOptionsQuery() {
   return useQuery({
     queryKey: controlPlaneQueryKeys.imageOptions,
-    queryFn: () => getApiData<SelectableImage[]>("image-options"),
+    queryFn: () => asUiModel<SelectableImage[]>(sharedControlPlaneClient.catalog.imageOptions()),
     retry: false,
   });
 }
 
 function fetchModelRegistry(signal?: AbortSignal) {
-  return getApiData<FederatedModelRegistry>("models?progressive=true", { signal }).catch((error) => {
+  return sharedControlPlaneClient.catalog.listModels({ progressive: true, signal }).catch((error) => {
     // Compatibility for v0.0.21: progressive fleet reads are additive.
     if (!(error instanceof ApiError) || error.status !== 400 || error.code !== "VALIDATION_ERROR") throw error;
-    return getApiData<FederatedModelRegistry>("models", { signal });
+    return sharedControlPlaneClient.catalog.listModels({ signal });
   });
 }
 
@@ -275,7 +287,7 @@ export function useModelsQuery(enabled: MaybeRefOrGetter<boolean> = true) {
 export function useGitCredentialsQuery(enabled: MaybeRefOrGetter<boolean> = true) {
   return useQuery({
     queryKey: controlPlaneQueryKeys.gitCredentials,
-    queryFn: ({ signal }) => getApiData<{ items: GitCredentialPublic[] }>("git-credentials", { signal }),
+    queryFn: ({ signal }) => sharedControlPlaneClient.gitCredentials.listCredentials(signal),
     select: (value) => value.items,
     enabled: computed(() => toValue(enabled)),
     retry: false,
@@ -285,7 +297,7 @@ export function useGitCredentialsQuery(enabled: MaybeRefOrGetter<boolean> = true
 export function useInstanceGitCredentialAssignmentsQuery(instanceId: MaybeRefOrGetter<string>, enabled: MaybeRefOrGetter<boolean> = true) {
   return useQuery({
     queryKey: computed(() => controlPlaneQueryKeys.instanceGitCredentialAssignments(toValue(instanceId))),
-    queryFn: ({ signal }) => getApiData<InstanceGitCredentialAssignment[]>(`controlled-instances/${encodeURIComponent(toValue(instanceId))}/git-credential-assignments`, { signal }),
+    queryFn: ({ signal }) => sharedControlPlaneClient.gitCredentials.listInstanceAssignments(toValue(instanceId), signal),
     enabled: computed(() => Boolean(toValue(instanceId)) && toValue(enabled)),
     retry: false,
   });
@@ -303,23 +315,23 @@ export function useNodesQuery(enabled: MaybeRefOrGetter<boolean> = true) {
 export function useControlPlaneProxyInvitesQuery() {
   return useQuery({
     queryKey: controlPlaneQueryKeys.controlPlaneProxyInvites,
-    queryFn: ({ signal }) => getApiData<PublicProxyInvite[]>("control-plane-proxy/invites", { signal }),
+    queryFn: ({ signal }) => sharedControlPlaneClient.admin.proxyInvites(signal),
     retry: false,
   });
 }
 
 export function createControlPlaneProxyInvite(input: { targetNodeId: string; expiresInSeconds?: number }) {
-  return postApiData<CreateProxyInviteResult>("control-plane-proxy/invites", input);
+  return asUiModel<CreateProxyInviteResult>(sharedControlPlaneClient.admin.createProxyInvite(input));
 }
 
 export function revokeControlPlaneProxyInvite(id: string) {
-  return deleteApiData<PublicProxyInvite>(`control-plane-proxy/invites/${id}`);
+  return sharedControlPlaneClient.admin.revokeProxyInvite(id);
 }
 
 export function useControlPlaneProxyBindingsQuery() {
   return useQuery({
     queryKey: controlPlaneQueryKeys.controlPlaneProxyBindings,
-    queryFn: ({ signal }) => getApiData<PublicProxyBinding[]>("control-plane-proxy/bindings", { signal }),
+    queryFn: ({ signal }) => sharedControlPlaneClient.admin.proxyBindings(signal),
     retry: false,
   });
 }
@@ -331,7 +343,7 @@ export function revokeControlPlaneProxyBinding(id: string) {
 export function useControlPlaneProxyDiagnosticsQuery() {
   return useQuery({
     queryKey: controlPlaneQueryKeys.controlPlaneProxyDiagnostics,
-    queryFn: ({ signal }) => getApiData<ControlPlaneProxyDiagnostic[]>("control-plane-proxy/diagnostics", { signal }),
+    queryFn: ({ signal }) => sharedControlPlaneClient.admin.proxyDiagnostics(signal),
     retry: false,
   });
 }
@@ -339,7 +351,7 @@ export function useControlPlaneProxyDiagnosticsQuery() {
 export function usePendingControlPlaneProxyClaimsQuery() {
   return useQuery({
     queryKey: controlPlaneQueryKeys.controlPlaneProxyPendingClaims,
-    queryFn: ({ signal }) => getApiData<PublicPendingProxyClaim[]>("control-plane-proxy/pending-claims", { signal }),
+    queryFn: ({ signal }) => sharedControlPlaneClient.admin.pendingProxyClaims(signal),
     retry: false,
   });
 }
@@ -357,7 +369,7 @@ export function cancelControlPlaneProxyClaim(id: string, force = false) {
 }
 
 export function checkNodeUpdate(nodeId: string, channel: UpdateChannel) {
-  return postApiData<UpdateCheckResult>(`nodes/${nodeId}/updates/check`, { channel });
+  return sharedControlPlaneClient.nodeAdmin.checkUpdate(nodeId, { channel });
 }
 
 export function useServerUpdateCheckQuery(
@@ -376,18 +388,18 @@ export function useServerUpdateCheckQuery(
 }
 
 export function applyNodeUpdate(nodeId: string, input: ApplyUpdateRequest) {
-  return postApiData<UpdateJob>(`nodes/${nodeId}/updates/apply`, input);
+  return sharedControlPlaneClient.nodeAdmin.applyUpdate(nodeId, input);
 }
 
 export function listNodeUpdateJobs(nodeId: string) {
-  return getApiData<UpdateJob[]>(`nodes/${nodeId}/updates/jobs`);
+  return sharedControlPlaneClient.nodeAdmin.updateJobs(nodeId);
 }
 
 function fetchNodeRuntimesPayload(signal?: AbortSignal) {
-  return getApiPayload<NodeRuntime[], NodeRuntimesPayload["meta"]>("node-runtimes?progressive=true", { signal }).catch((error) => {
+  return sharedControlPlaneClient.nodeAdmin.listAllRuntimes({ progressive: true, signal }).catch((error) => {
     // Compatibility for v0.0.21: progressive fleet reads are additive.
     if (!(error instanceof ApiError) || error.status !== 400 || error.code !== "VALIDATION_ERROR") throw error;
-    return getApiPayload<NodeRuntime[], NodeRuntimesPayload["meta"]>("node-runtimes", { signal });
+    return sharedControlPlaneClient.nodeAdmin.listAllRuntimes({ signal });
   });
 }
 
@@ -411,7 +423,7 @@ export function useNodeRuntimesPayloadQuery() {
 export function nodeLocalFoldersQueryOptions(nodeId: string) {
   return queryOptions({
     queryKey: controlPlaneQueryKeys.nodeLocalFolders(nodeId),
-    queryFn: ({ signal }) => getApiData<NodeLocalFolder[]>(`nodes/${nodeId}/local-folders`, { signal }),
+    queryFn: ({ signal }) => sharedControlPlaneClient.nodeAdmin.listFolders(nodeId, signal),
     enabled: Boolean(nodeId),
     retry: false,
   });
@@ -430,19 +442,18 @@ export function listNodeFolderTree(nodeId: string, input: { path?: string; depth
   if (input.depth !== undefined) {
     params.set("depth", String(input.depth));
   }
-  const query = params.toString();
-  return getApiData<NodeFolderTreeEntry[]>(`nodes/${nodeId}/folders/tree${query ? `?${query}` : ""}`);
+  return sharedControlPlaneClient.nodeAdmin.listFolderTree(nodeId, input);
 }
 
 export function listNodeFolderPlaces(nodeId: string) {
-  return getApiData<import("./types").NodeFolderPlace[]>(`nodes/${nodeId}/folders/places`);
+  return sharedControlPlaneClient.nodeAdmin.listFolderPlaces(nodeId);
 }
 
 export function useLocalDockerImagesQuery(nodeId: MaybeRefOrGetter<string>) {
   const resolvedNodeId = computed(() => toValue(nodeId));
   return useQuery({
     queryKey: computed(() => ["node-docker-images", resolvedNodeId.value]),
-    queryFn: () => getApiData<LocalDockerImage[]>(`nodes/${resolvedNodeId.value}/docker/images`),
+    queryFn: () => sharedControlPlaneClient.nodeAdmin.listDockerImages(resolvedNodeId.value),
     enabled: false,
     retry: false,
   });
@@ -452,7 +463,7 @@ export function useNodeImageAvailabilityQuery(nodeId: MaybeRefOrGetter<string>) 
   const resolvedNodeId = computed(() => toValue(nodeId));
   return useQuery({
     queryKey: computed(() => controlPlaneQueryKeys.nodeImageCatalog(resolvedNodeId.value)),
-    queryFn: () => getApiData<NodeImageAvailability[]>(`nodes/${resolvedNodeId.value}/image-options`),
+    queryFn: () => asUiModel<NodeImageAvailability[]>(sharedControlPlaneClient.nodeAdmin.imageOptions(resolvedNodeId.value)),
     enabled: computed(() => Boolean(resolvedNodeId.value)),
     retry: false,
   });
@@ -462,34 +473,34 @@ export function useEnvironmentTemplatesQuery(nodeId: MaybeRefOrGetter<string>) {
   const resolvedNodeId = computed(() => toValue(nodeId));
   return useQuery({
     queryKey: computed(() => controlPlaneQueryKeys.environmentTemplates(resolvedNodeId.value)),
-    queryFn: () => getApiData<import("./types").EnvironmentTemplate[]>(`nodes/${resolvedNodeId.value}/environment-templates`),
+    queryFn: () => sharedControlPlaneClient.environmentTemplates.listForNode(resolvedNodeId.value),
     enabled: computed(() => Boolean(resolvedNodeId.value)),
     retry: false,
   });
 }
 
 export function saveEnvironmentTemplate(instanceId: string, name: string) {
-  return postApiData<import("./types").EnvironmentTemplate>(`controlled-instances/${instanceId}/environment-templates`, { name });
+  return sharedControlPlaneClient.environmentTemplates.createFromInstance(instanceId, { name });
 }
 
 export function deleteEnvironmentTemplate(nodeId: string, templateId: string) {
-  return deleteApiData<import("./types").EnvironmentTemplate>(`nodes/${nodeId}/environment-templates/${templateId}`);
+  return sharedControlPlaneClient.environmentTemplates.remove(nodeId, templateId);
 }
 
 export function listNodeControlPlanePairings(nodeId: string) {
-  return getApiData<NodeControlPlanePairing[]>(`nodes/${nodeId}/control-plane-pairings`);
+  return sharedControlPlaneClient.nodeAdmin.listControlPlanePairings(nodeId);
 }
 
 export function deleteNodeControlPlanePairing(nodeId: string, keyId: string) {
-  return deleteApiData<{ deleted: boolean }>(`nodes/${nodeId}/control-plane-pairings/${encodeURIComponent(keyId)}`);
+  return sharedControlPlaneClient.nodeAdmin.removeControlPlanePairing(nodeId, keyId);
 }
 
 export function listNodeControlPlaneConnections(nodeId: string) {
-  return getApiData<NodeControlPlaneConnection[]>(`nodes/${nodeId}/control-plane-connections`);
+  return sharedControlPlaneClient.nodeAdmin.listControlPlaneConnections(nodeId);
 }
 
 export function deleteNodeControlPlaneConnection(nodeId: string, connectionId: string) {
-  return deleteApiData<{ deleted: boolean }>(`nodes/${nodeId}/control-plane-connections/${encodeURIComponent(connectionId)}`);
+  return sharedControlPlaneClient.nodeAdmin.removeControlPlaneConnection(nodeId, connectionId);
 }
 
 export async function fetchInstanceBoardPayload(signal?: AbortSignal, instanceId = "") {
@@ -717,7 +728,7 @@ export function getControlledInstanceTriggers(instanceId: string) {
 export function useChatGatewayStatusQuery() {
   return useQuery({
     queryKey: controlPlaneQueryKeys.chatStatus,
-    queryFn: () => getApiData<ChatGatewayStatus>("chat-gateway/status"),
+    queryFn: () => sharedControlPlaneClient.chatGateway.status(),
     refetchInterval: 5000,
     retry: false,
   });
@@ -726,7 +737,7 @@ export function useChatGatewayStatusQuery() {
 export function useChatBridgesQuery() {
   return useQuery({
     queryKey: controlPlaneQueryKeys.chatBridges,
-    queryFn: () => getApiData<ChatBridgeConfig[]>("chat-gateway/bridges"),
+    queryFn: () => sharedControlPlaneClient.chatGateway.listBridges(),
     retry: false,
   });
 }

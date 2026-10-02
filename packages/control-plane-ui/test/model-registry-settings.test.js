@@ -76,29 +76,45 @@ test("model deletion keeps its target until the asynchronous request completes",
 
 test("model settings discovers models into an ordered name list with real endpoint testing", () => {
   const settings = read("src/apps/control-plane/settings/ModelSettingsSection.vue");
+  const list = read("src/apps/control-plane/settings/ModelEntryList.vue");
   const state = read("src/apps/control-plane/settings/useModelSettings.ts");
-  assert.match(settings, /v-for="\(entry, index\) in settingsModel\.modelNames"/);
-  assert.match(settings, /<ControlPlaneInput v-model="entry\.name"/);
-  assert.match(settings, /class="model-name-drag-handle"\s+draggable="true"/);
-  assert.match(settings, /<TransitionGroup name="model-name-row" tag="div" class="model-name-items"[^>]*>/);
-  assert.match(settings, /:key="modelNameEntryKey\(entry\)"/);
-  assert.match(settings, /\.model-name-row-move \{ transition: transform 180ms ease/);
-  assert.match(settings, /\.model-name-row-dragging \{ opacity: 0; \}/);
-  assert.match(settings, /@dragstart="startModelNameDrag\(\$event, index\)"/);
-  assert.match(settings, /@dragover\.prevent="previewModelNameDrag\(\$event, index\)"/);
-  assert.match(settings, /@drop\.prevent="commitModelNameDrag"/);
-  assert.match(settings, /function modelNameDragStyle\(index: number\)/);
-  assert.match(settings, /reorderModelName\(sourceIndex, targetIndex\)/);
-  assert.match(settings, /modelNameDragSettling\.value = true;[\s\S]*requestAnimationFrame\(\(\) => \{ modelNameDragSettling\.value = false; \}\)/);
-  assert.match(settings, /\.model-name-items-settling \.model-name-row \{ transition: none; \}/);
+  assert.match(settings, /<ModelEntryList[\s\S]{0,240}:entries="settingsModel\.modelNames"/);
+  assert.match(settings, /:external-label="t\('settings\.modelRegistry\.externalName'\)"/);
+  assert.match(settings, /:upstream-label="t\('settings\.modelRegistry\.upstreamName'\)"/);
+  assert.match(settings, /:upstream-placeholder="modelNameUpstreamPlaceholder"/);
+  assert.match(settings, /function modelNameUpstreamPlaceholder\(entry: \{ name: string \}\)/);
+  assert.match(settings, /@remove="removeModelName"/);
+  assert.match(settings, /@move="moveModelName"/);
+  assert.match(settings, /@reorder="reorderModelName"/);
+  assert.match(list, /v-for="\(entry, index\) in entries"/);
+  assert.match(list, /<ControlPlaneInput v-model="entry\.name"/);
+  assert.match(list, /class="model-entry-drag-handle"\s+draggable="true"/);
+  assert.match(list, /<TransitionGroup name="model-entry-row" tag="div" class="model-entry-items"[^>]*>/);
+  assert.match(list, /:key="entryKey\(entry\)"/);
+  assert.match(list, /\.model-entry-row-move \{ transition: transform 180ms ease/);
+  assert.match(list, /\.model-entry-row-dragging \{ opacity: 0; \}/);
+  assert.match(list, /@dragstart="startDrag\(\$event, index\)"/);
+  assert.match(list, /@dragover\.prevent="previewDrag\(\$event, index\)"/);
+  assert.match(list, /@drop\.prevent="commitDrag"/);
+  assert.match(list, /function dragStyle\(index: number\)/);
+  assert.match(list, /emit\("reorder", sourceIndex, targetIndex\)/);
+  assert.match(list, /dragSettling\.value = true;[\s\S]*requestAnimationFrame\(\(\) => \{ dragSettling\.value = false; \}\)/);
+  assert.match(list, /\.model-entry-items-settling \.model-entry-row \{ transition: none; \}/);
   assert.match(state, /function reorderModelName\(source: number, target: number\)/);
-  assert.match(settings, /:open="openModelNameMenuKey === modelNameEntryKey\(entry\)"/);
-  assert.match(settings, /@click="toggleModelNameMenu\(\$event, modelNameEntryKey\(entry\)\)"/);
-  assert.match(settings, /<DropdownMenuContent align="start"[\s\S]*moveModelNameUp[\s\S]*moveModelNameDown/);
-  assert.match(settings, /@keydown\.capture="handleModelNameHandleKeydown\(\$event, index, modelNameEntryKey\(entry\)\)"/);
-  assert.match(settings, /<GripVertical :size="18"/);
-  assert.doesNotMatch(settings, /:disabled="index === 0" @click="moveModelName\(index, -1\)"/);
-  assert.doesNotMatch(settings, /:disabled="index === settingsModel\.modelNames\.length - 1" @click="moveModelName\(index, 1\)"/);
+  assert.match(state, /function moveModelName\(index: number, direction: -1 \| 1\)/);
+  assert.match(list, /:open="openMenuKey === entryKey\(entry\)"/);
+  assert.match(list, /@click="toggleMenu\(\$event, entryKey\(entry\)\)"/);
+  assert.match(list, /<DropdownMenuContent align="start"[\s\S]*moveUpLabel[\s\S]*moveDownLabel/);
+  assert.match(list, /@keydown\.capture="handleHandleKeydown\(\$event, index, entryKey\(entry\)\)"/);
+  assert.match(list, /<GripVertical :size="18"/);
+  // One shared column header replaces per-row labels; compact layouts fall back to labels.
+  assert.match(list, /<div v-if="entries\.length" class="model-entry-columns" aria-hidden="true">[\s\S]{0,220}externalLabel[\s\S]{0,220}upstreamLabel/);
+  assert.match(list, /<span class="model-entry-field-label">\{\{ externalLabel \}\}<\/span>/);
+  assert.match(list, /<span class="model-entry-field-label">\{\{ upstreamLabel \}\}<\/span>/);
+  assert.match(list, /\.model-entry-columns \{[^}]*grid-template-columns: 32px minmax\(0,1fr\) minmax\(0,1fr\) 36px; \}/);
+  assert.match(list, /\.model-entry-field-label \{ display: none; \}/);
+  assert.match(list, /@media\(max-width:560px\) \{[\s\S]*\.model-entry-columns \{ display: none; \}[\s\S]*\.model-entry-field-label \{ display: block; \}/);
+  assert.doesNotMatch(settings, /model-name-row|model-name-columns|model-name-drag-handle/);
   assert.doesNotMatch(settings, /<ControlPlaneInput v-model="settingsModel\.model"/);
   assert.match(settings, /<PopoverContent class="model-picker-popover [^"]*p-1"[\s\S]*:collision-padding="12"/);
   assert.match(settings, /<Command class="model-picker-command"[\s\S]*<CommandInput class="model-picker-search-input [^"]*text-\[13px\]" :placeholder="t\('settings\.modelRegistry\.searchModels'\)"/);
@@ -109,7 +125,9 @@ test("model settings discovers models into an ordered name list with real endpoi
   assert.match(settings, /\.model-picker-command \{[\s\S]*grid-template-rows: auto minmax\(0,1fr\);/);
   assert.match(settings, /\.model-picker-scroll \{ min-height: 0; \}/);
   assert.match(settings, /:deep\(\[role="option"\]\) \{[^}]*font-size: 13px;/);
-  assert.match(settings, /:deep\(\[role="group"\]\) \{ display: grid; gap: 2px; padding: 0; \}/);
+  // Bounded option track: an unbounded auto column sizes to the widest discovered
+  // model id, and the group's overflow-hidden then clips the trailing check icon.
+  assert.match(settings, /:deep\(\[role="group"\]\) \{ display: grid; gap: 2px; grid-template-columns: minmax\(0,1fr\); padding: 0; \}/);
   assert.doesNotMatch(settings, /\[cmdk-item\]/);
   assert.match(settings, /@update:open="handleModelPickerOpen"/);
   assert.match(settings, /if \(open && !discoveredModels\.value\.length && !discoveringModels\.value\) void fetchModelOptions\(\)/);
@@ -213,6 +231,7 @@ test("model reference distribution expands node instances and opens their model 
 
 test("model request mappings stay independent, preset-driven, and hint relay dependency", () => {
   const settings = read("src/apps/control-plane/settings/ModelSettingsSection.vue");
+  const list = read("src/apps/control-plane/settings/ModelEntryList.vue");
   const state = read("src/apps/control-plane/settings/useModelSettings.ts");
   const capabilities = read("src/api/nodeCapabilities.ts");
   const zh = read("src/i18n/locales/zh-CN/settings.ts");
@@ -223,6 +242,7 @@ test("model request mappings stay independent, preset-driven, and hint relay dep
   assert.match(state, /function addMapping\(\)/);
   assert.match(state, /function removeMapping\(index: number\)/);
   assert.match(state, /function moveMapping\(index: number, direction: -1 \| 1\)/);
+  assert.match(state, /function reorderMapping\(source: number, target: number\)/);
   assert.match(state, /function applyMappingPreset\(presetId: string\)/);
   // Presets fill the first upstream name by default and remain editable.
   assert.match(state, /const mappingTargetDefault = \(\) => \{[\s\S]*upstreamName\?\.trim\(\) \|\| primary\?\.name\.trim\(\) \|\| ""/);
@@ -231,15 +251,23 @@ test("model request mappings stay independent, preset-driven, and hint relay dep
   assert.match(state, /if \(!mappingsEditable\.value && settingsModel\.mappings\.length\) return false/);
 
   assert.match(capabilities, /supportsNodeModelRequestMappings/);
-  assert.match(settings, /v-for="\(entry, index\) in settingsModel\.mappings"/);
+  assert.match(settings, /:entries="settingsModel\.mappings"/);
   assert.match(settings, /v-for="preset in mappingPresets"/);
   assert.match(settings, /@select="applyMappingPreset\(preset\.id\)"/);
   assert.match(settings, /@click="addMapping"/);
-  assert.match(settings, /requestMappingInactive\(entry\)/);
+  assert.match(settings, /:row-note="mappingRowNote"/);
+  assert.match(settings, /function mappingRowNote\(entry: \{ name: string \}\)/);
+  assert.match(settings, /@remove="removeMapping"/);
+  assert.match(settings, /@move="moveMapping"/);
+  assert.match(settings, /@reorder="reorderMapping"/);
   assert.match(settings, /settings\.modelRegistry\.mappingsRelayHint/);
   assert.match(settings, /settings\.modelRegistry\.mappingsUnsupported/);
   assert.match(settings, /:disabled="!mappingsEditable/);
-  assert.match(settings, /grid-template-columns: minmax\(0,1fr\) 22px minmax\(0,1fr\) auto/);
+  // Mappings render through the same ordered list as model names: shared header,
+  // grip drag handle, and no per-row labels or arrow column.
+  assert.doesNotMatch(settings, /model-mapping-row|model-mapping-arrow|model-mapping-actions/);
+  assert.match(list, /class="model-entry-drag-handle"[\s\S]*draggable="true"/);
+  assert.match(list, /<span class="model-entry-field-label">\{\{ externalLabel \}\}<\/span>/);
 
   for (const locale of [zh, en]) {
     assert.match(locale, /mappings: "/);

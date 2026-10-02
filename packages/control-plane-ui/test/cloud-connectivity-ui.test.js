@@ -23,9 +23,10 @@ test("cloud binding challenge stays in component memory and mutations use the ex
   assert.match(component, /window\.open\(challenge\.value\.authorizationUrl/);
   assert.match(component, /navigator\.clipboard\?\.writeText\(challenge\.value\.challengeCode\)/);
   assert.doesNotMatch(component, /localStorage|sessionStorage|setQueryData/);
-  assert.match(queries, /postApiData<CloudBindingChallenge>\("cloud-connectivity\/challenges", \{\}\)/);
-  assert.match(queries, /postApiData<CloudConnectivity>\("cloud-connectivity\/remote-access"/);
-  assert.match(queries, /postApiData<CloudConnectivity>\("cloud-connectivity\/disconnect"/);
+  assert.match(queries, /useCloudConnectivityQuery[\s\S]*sharedControlPlaneClient\.admin\.cloudConnectivity\(\)/);
+  assert.match(queries, /createCloudBindingChallenge\(\)[\s\S]*sharedControlPlaneClient\.admin\.createCloudChallenge\(\)/);
+  assert.match(queries, /updateCloudRemoteAccess\(enabled: boolean\)[\s\S]*sharedControlPlaneClient\.admin\.setCloudRemoteAccess\(enabled\)/);
+  assert.match(queries, /disconnectCloudAccount\(\)[\s\S]*sharedControlPlaneClient\.admin\.disconnectCloud\(\)/);
 });
 
 test("cloud settings explain background ownership and expose structured non-color states", () => {
