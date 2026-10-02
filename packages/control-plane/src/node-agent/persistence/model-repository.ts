@@ -3,8 +3,10 @@ import {
   NodeModelAssignmentSchema,
   NodeModelConfigSchema,
   normalizeModelNameEntries,
+  normalizeModelRequestMappings,
   projectModelNameEntries,
   sanitizeModelNameEntries,
+  sanitizeModelRequestMappings,
   type NodeModelAssignment,
   type NodeModelConfig,
 } from "@task-handoff/protocol/control-plane";
@@ -30,14 +32,14 @@ export class ModelRepository {
   put(input: NodeModelConfig): NodeModelConfig {
     const value = NodeModelConfigSchema.parse(input);
     this.client.prepare(`INSERT INTO na_models
-      (id, name, endpoint, key, model, app, enabled, display_order, model_names_json, protocols_json, labels_json, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (id, name, endpoint, key, model, app, enabled, display_order, model_names_json, mappings_json, protocols_json, labels_json, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET name=excluded.name, endpoint=excluded.endpoint, key=excluded.key,
         model=excluded.model, app=excluded.app, enabled=excluded.enabled, display_order=excluded.display_order,
-        model_names_json=excluded.model_names_json, protocols_json=excluded.protocols_json,
+        model_names_json=excluded.model_names_json, mappings_json=excluded.mappings_json, protocols_json=excluded.protocols_json,
         labels_json=excluded.labels_json, updated_at=excluded.updated_at`)
       .run(value.id, value.name, value.endpoint, value.key, value.model, value.app, value.enabled ? 1 : 0, value.order,
-        json(projectModelNameEntries(value.modelNames)), json(value.protocols), json(value.labels), value.createdAt, value.updatedAt);
+        json(projectModelNameEntries(value.modelNames)), json(value.mappings), json(value.protocols), json(value.labels), value.createdAt, value.updatedAt);
     return value;
   }
 
@@ -146,6 +148,13 @@ function modelFromRow(row: Row): NodeModelConfig {
       field: warning.field,
     }));
   });
+  const mappings = sanitizeModelRequestMappings(parseJson<unknown>(row.mappings_json ?? "[]"), (warning) => {
+    console.warn(JSON.stringify({
+      message: "unknown or invalid stored node model request mapping was sanitized",
+      modelId: row.id,
+      field: warning.field,
+    }));
+  });
   const parsed = NodeModelConfigSchema.parse({
     id: row.id,
     name: row.name,
@@ -153,6 +162,7 @@ function modelFromRow(row: Row): NodeModelConfig {
     key: row.key,
     model: row.model,
     modelNames,
+    mappings,
     protocols: parseJson(row.protocols_json),
     app: row.app,
     enabled: Boolean(row.enabled),
@@ -163,5 +173,9 @@ function modelFromRow(row: Row): NodeModelConfig {
   });
   // Read path: fill upstreamName from the legacy `model` field without
   // rewriting stored order values (v0.0.28 migrated records use order 0).
-  return { ...parsed, modelNames: normalizeModelNameEntries(parsed.modelNames, parsed.model, { renumber: false }) };
+  return {
+    ...parsed,
+    modelNames: normalizeModelNameEntries(parsed.modelNames, parsed.model, { renumber: false }),
+    mappings: normalizeModelRequestMappings(parsed.mappings, { renumber: false }),
+  };
 }

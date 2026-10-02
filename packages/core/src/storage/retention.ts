@@ -4,7 +4,27 @@ import path from "node:path";
 export const DEFAULT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 export const DEFAULT_MAINTENANCE_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
+// Retired entries are named `<retiredAtMs>-<label>` so a sweep can age them
+// without reading filesystem timestamps, which browsing tools keep rewriting.
+export function retiredEntryName(label: string, nowMs: number = Date.now()) {
+  return `${nowMs}-${label}`;
+}
+
 type RetentionLogger = (message: string, details: Record<string, unknown>) => void;
+
+const LEGACY_V0_0_28_ARCHIVE_STAMP = /(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z)$/;
+
+function retiredAtMs(name: string) {
+  const leading = name.split("-", 1)[0];
+  if (/^\d+$/.test(leading)) return Number(leading);
+  // Compatibility for v0.0.28: control-plane P0 import archives were named
+  // `v0.0.28-control-plane-p0-<ISO stamp>` before adopting `retiredEntryName`,
+  // so recover their timestamp by name until those archives have aged out.
+  const stamp = LEGACY_V0_0_28_ARCHIVE_STAMP.exec(name)?.[1];
+  if (typeof stamp !== "string") return undefined;
+  const parsed = Date.parse(stamp.replace(/T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z$/, "T$1:$2:$3.$4Z"));
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
 
 function directChild(root: string, name: string) {
   const resolvedRoot = path.resolve(root);
@@ -41,10 +61,10 @@ export function retireManagedDirectory(options: {
   ensurePrivateDirectory(options.trashRoot);
   const timestamp = options.nowMs ?? Date.now();
   let suffix = 0;
-  let name = `${timestamp}-${options.entryName}`;
+  let name = retiredEntryName(options.entryName, timestamp);
   while (fs.existsSync(directChild(options.trashRoot, name))) {
     suffix += 1;
-    name = `${timestamp}-${suffix}-${options.entryName}`;
+    name = retiredEntryName(`${suffix}-${options.entryName}`, timestamp);
   }
   const destination = directChild(options.trashRoot, name);
   fs.renameSync(source, destination);
@@ -64,8 +84,8 @@ export function sweepRetiredDirectories(options: {
   for (const entry of fs.readdirSync(options.trashRoot, { withFileTypes: true })) {
     const target = directChild(options.trashRoot, entry.name);
     try {
-      const retiredAt = Number(entry.name.split("-", 1)[0]);
-      if (!Number.isFinite(retiredAt) || retiredAt + retentionMs > nowMs) continue;
+      const retiredAt = retiredAtMs(entry.name);
+      if (retiredAt === undefined || retiredAt + retentionMs > nowMs) continue;
       const stat = fs.lstatSync(target);
       if (stat.isSymbolicLink()) fs.unlinkSync(target);
       else if (stat.isDirectory()) fs.rmSync(target, { recursive: true, force: true });

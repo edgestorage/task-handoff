@@ -28,6 +28,14 @@ export function isInstanceStatusPending(instance: InstanceBoardItem) {
     || ["provisioning", "starting", "registering", "registered", "stopping"].includes(instance.status);
 }
 
+/**
+ * Compact in-progress copy for row surfaces such as the instance list.
+ * Settled states return undefined so rows keep their regular presentation.
+ */
+export function instancePendingStatusLabel(instance: InstanceBoardItem, t: Translate) {
+  return isInstanceStatusPending(instance) ? instanceStatusTitle(instance, t) : undefined;
+}
+
 export function isInstanceRuntimeUpdating(instance: InstanceBoardItem) {
   return ["draining", "installing", "restarting", "verifying"].includes(instance.runtimeVersion?.phase || "");
 }
@@ -101,7 +109,7 @@ export function instanceStatusTitle(instance: InstanceBoardItem, t: Translate) {
   }
   if (instance.status === "created") return t("instances.lifecycle.created");
   if (instance.status === "provisioning") return t("instances.lifecycle.preparingRuntime");
-  if (instance.status === "starting") return t("instances.lifecycle.startingContainer");
+  if (instance.status === "starting") return t("instances.lifecycle.starting");
   if (instance.status === "registering" || instance.status === "registered") return t("instances.lifecycle.connecting");
   if (instance.status === "stopping") return t("instances.lifecycle.stopping");
   if (instance.status === "stopped") return t("instances.lifecycle.stopped");

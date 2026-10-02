@@ -95,6 +95,9 @@ test("v0.0.34 control-plane wire stays same-name and relay defaults off on a cur
   // Write paths keep the released renumbering onto the 100-step grid.
   assert.deepEqual(model.modelNames, [{ name: "gpt-v028", order: 100 }]);
   assert.equal(Object.prototype.hasOwnProperty.call(model.modelNames[0], "upstreamName"), false);
+  // Compatibility for v0.0.34: the released write shape carries no request
+  // mappings, and the current node reads them back as an empty list.
+  assert.deepEqual(model.mappings, []);
 
   // The switch is the only enable authority: without it the derived route is
   // refused before any upstream contact.
@@ -106,6 +109,12 @@ test("v0.0.34 control-plane wire stays same-name and relay defaults off on a cur
   // Reading a v0.0.34 record normalizes the internal mapping to upstreamName = name.
   assert.equal(resolved.model.modelNames[0].upstreamName, "gpt-v028");
   assert.equal(resolver.resolveUpstreamModelName(resolved.model, "gpt-v028"), "gpt-v028");
+  // A name that is neither declared nor mapped still fails closed, so a
+  // v0.0.34 record cannot accidentally resolve a hidden reviewer model.
+  assert.throws(
+    () => resolver.resolveUpstreamModelName(resolved.model, "codex-auto-review"),
+    (error) => error.code === "MODEL_RELAY_UNKNOWN_MODEL_NAME",
+  );
 });
 
 test("a v0.0.34 controlled instance keeps the direct catalog and rejects mapped assignments", async (t) => {

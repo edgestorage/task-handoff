@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { createModelEntityId, type ControlledInstance, type Node } from "@task-handoff/protocol/control-plane";
+import { ModelConfigSchema, createModelEntityId, modelConfigHash, type ControlledInstance, type Node } from "@task-handoff/protocol/control-plane";
 import { ControlPlaneModelService } from "../src/control-plane/models/service.ts";
 import { ControlPlaneModelRepository } from "../src/control-plane/models/repository.ts";
 import { createControlPlaneDatabase } from "../src/control-plane/persistence/database/index.ts";
@@ -24,6 +24,7 @@ function relayNode(id = "node_relay") {
       multiEntityAssignment: true,
       privateModelCatalog: true,
       stableModelIdentity: true,
+      requestMappings: true,
       modelRelay: { protocols: ["openai-responses", "openai-chat-completions", "anthropic-messages"], streaming: true },
     }),
   } as unknown as Node;
@@ -57,7 +58,13 @@ function relayInstance(id: string, nodeId: string, capabilities: unknown = {
 
 type GatewayCall = { nodeId: string; input: Record<string, unknown> };
 
-async function createHarness(options: { nodes?: Node[]; relayEnabled?: Record<string, boolean> } = {}) {
+async function createHarness(options: {
+  nodes?: Node[];
+  relayEnabled?: Record<string, boolean>;
+  instances?: ControlledInstance[];
+  seedRepository?: (repository: ControlPlaneModelRepository) => Promise<void>;
+  seedNodeModels?: (nodeModels: Map<string, Map<string, Record<string, unknown>>>) => void;
+} = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-model-relay-management-"));
   const paths = controlPlaneStorePaths(directory);
   const database = await createControlPlaneDatabase(paths);
@@ -112,10 +119,13 @@ async function createHarness(options: { nodes?: Node[]; relayEnabled?: Record<st
     }),
     listFleetModels: async (fleetNodes: Node[]) => gateway.readFleetModels(fleetNodes),
   };
+  if (options.seedRepository) await options.seedRepository(repository);
+  options.seedNodeModels?.(nodeModels);
   const service = new ControlPlaneModelService({
     repository,
     gateway: gateway as never,
     listNodes: () => nodes,
+    listInstances: async () => options.instances ?? [],
     requireNode: (id: string) => {
       const node = nodes.find((candidate) => candidate.id === id);
       if (!node) throw new Error(`Node ${id} was not found.`);
@@ -143,6 +153,23 @@ function mappedModelInput(overrides: Record<string, unknown> = {}) {
     key: KEY,
     model: "public-model",
     modelNames: [{ name: "public-model", upstreamName: "upstream-model", order: 100 }],
+    protocols: ["openai-responses"],
+    app: "codex",
+    ...overrides,
+  };
+}
+
+function requestMapping(overrides: Record<string, unknown> = {}) {
+  return { name: "gpt-5.6-luna", upstreamName: "upstream-model", order: 100, ...overrides };
+}
+
+function sameNameModelInput(overrides: Record<string, unknown> = {}) {
+  return {
+    name: "Codex relay",
+    endpoint: ENDPOINT,
+    key: KEY,
+    model: "public-model",
+    modelNames: [{ name: "public-model", order: 100 }],
     protocols: ["openai-responses"],
     app: "codex",
     ...overrides,
@@ -305,6 +332,73 @@ test("mapped entities refuse to converge onto nodes that cannot store the mappin
   }
 });
 
+test("explicit request mapping writes fail closed on nodes that cannot store them", async () => {
+  const harness = await createHarness({ relayEnabled: { node_relay: true, node_legacy: true } });
+  try {
+    const [relay, legacy] = harness.nodes;
+    const relayed = await harness.service.createOnNode(relay.id, sameNameModelInput({ mappings: [requestMapping()] }));
+    assert.deepEqual(harness.calls.create[0].input.mappings, [{ name: "gpt-5.6-luna", upstreamName: "upstream-model", order: 100 }]);
+
+    await assert.rejects(
+      () => harness.service.createOnNode(legacy.id, sameNameModelInput({ mappings: [requestMapping()] })),
+      (error) => errorCode(error) === "NODE_MODEL_MAPPINGS_UNSUPPORTED",
+    );
+    assert.equal(harness.calls.create.length, 1);
+
+    // Same-name writes without mappings keep the released wire shape: the
+    // additive field is absent entirely, not empty.
+    await harness.service.createOnNode(legacy.id, sameNameModelInput({ name: "Legacy" }));
+    assert.equal(Object.prototype.hasOwnProperty.call(harness.calls.create[1].input, "mappings"), false);
+
+    // Untouched patches stay allowed; an explicit clear is inert, an explicit
+    // mapping edit fails closed before any node write.
+    const legacySame = await harness.service.createOnNode(legacy.id, sameNameModelInput({ name: "Legacy same" })) as { id: string };
+    await harness.service.updateOnNode(legacy.id, legacySame.id, { name: "Renamed" });
+    assert.equal(Object.prototype.hasOwnProperty.call(harness.calls.update[0].input, "mappings"), false);
+    await harness.service.updateOnNode(legacy.id, legacySame.id, { mappings: [] });
+    assert.equal(Object.prototype.hasOwnProperty.call(harness.calls.update[1].input, "mappings"), false);
+    await assert.rejects(
+      () => harness.service.updateOnNode(legacy.id, legacySame.id, { mappings: [requestMapping()] }),
+      (error) => errorCode(error) === "NODE_MODEL_MAPPINGS_UNSUPPORTED",
+    );
+    assert.equal(harness.calls.update.length, 2);
+
+    await harness.service.updateOnNode(relay.id, relayed.id, { mappings: [requestMapping({ upstreamName: "upstream-2" })] });
+    assert.deepEqual(harness.calls.update[2].input.mappings, [{ name: "gpt-5.6-luna", upstreamName: "upstream-2", order: 100 }]);
+  } finally {
+    await harness.close();
+  }
+});
+
+test("control-plane request mappings sync to capable replicas and degrade visibly elsewhere", async () => {
+  const stable = stableNodeWithoutRelay("node_stable_mappings");
+  const harness = await createHarness({ nodes: [relayNode("node_relay_mappings"), stable] });
+  try {
+    const [relay] = harness.nodes;
+    const model = await harness.service.create(sameNameModelInput({ mappings: [requestMapping()] }));
+    assert.deepEqual((model as { mappings: unknown }).mappings, [{ name: "gpt-5.6-luna", upstreamName: "upstream-model", order: 100 }]);
+
+    // Assignability is untouched: a node without the capability still receives
+    // the base content, just without the additive field.
+    await harness.service.prepareAssignment(relay, { modelEntityIds: [model.id] }, relayInstance("inst_mapping_relay", relay.id));
+    const relayDeploy = harness.calls.deploy.find((call) => call.nodeId === relay.id);
+    assert.deepEqual(relayDeploy?.input.mappings, [{ name: "gpt-5.6-luna", upstreamName: "upstream-model", order: 100 }]);
+
+    await harness.service.prepareAssignment(stable, { modelEntityIds: [model.id] }, relayInstance("inst_mapping_stable", stable.id));
+    const stableDeploy = harness.calls.deploy.find((call) => call.nodeId === stable.id);
+    assert.equal(Object.prototype.hasOwnProperty.call(stableDeploy?.input ?? {}, "mappings"), false);
+
+    const result = await harness.service.sync(model.id);
+    const stableLocation = result.locations.find((location) => location.nodeId === stable.id);
+    assert.equal(stableLocation?.state, "unsupported");
+    assert.equal(stableLocation?.code, "NODE_MODEL_MAPPINGS_UNSUPPORTED");
+    const relayLocation = result.locations.find((location) => location.nodeId === relay.id);
+    assert.equal(relayLocation?.state, "synced");
+  } finally {
+    await harness.close();
+  }
+});
+
 test("different entities may share one external name and keep distinct upstreams", async () => {
   const harness = await createHarness({ relayEnabled: { node_relay: true } });
   try {
@@ -348,6 +442,100 @@ test("a rejected mapped assignment keeps the previous authoritative assignment",
       (error) => errorCode(error) === "NODE_MODEL_RELAY_DISABLED",
     );
     assert.equal(harness.calls.assign.length, 1);
+  } finally {
+    await harness.close();
+  }
+});
+
+test("control-plane records persist request mappings across a database reopen", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-model-mappings-db-"));
+  const paths = controlPlaneStorePaths(directory);
+  const secrets = new SecretEnvelopeService(paths.databaseEncryptionKeyPath);
+  secrets.init();
+  const first = await createControlPlaneDatabase(paths);
+  try {
+    const repository = new ControlPlaneModelRepository(first, secrets);
+    await repository.put(ModelConfigSchema.parse({
+      id: createModelEntityId(),
+      name: "Persisted",
+      endpoint: ENDPOINT,
+      key: KEY,
+      model: "public-model",
+      modelNames: [{ name: "public-model", order: 100 }],
+      mappings: [requestMapping()],
+      protocols: ["openai-responses"],
+      app: "codex",
+      enabled: true,
+      order: 100,
+      labels: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }));
+  } finally {
+    await first.close();
+  }
+  const second = await createControlPlaneDatabase(paths);
+  try {
+    const repository = new ControlPlaneModelRepository(second, secrets);
+    const models = await repository.list();
+    assert.equal(models.length, 1);
+    assert.deepEqual(models[0]!.mappings, [{ name: "gpt-5.6-luna", upstreamName: "upstream-model", order: 100 }]);
+  } finally {
+    await second.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a legacy content-hash record upgrades to a stable id on its first request mapping write", async () => {
+  const legacyId = modelConfigHash({ app: "codex", endpoint: ENDPOINT, key: KEY, model: "public-model" });
+  const timestamp = new Date().toISOString();
+  const legacyRecord = {
+    id: legacyId,
+    name: "Legacy",
+    endpoint: ENDPOINT,
+    key: KEY,
+    model: "public-model",
+    modelNames: [{ name: "public-model", order: 100 }],
+    protocols: ["openai-responses"],
+    app: "codex",
+    enabled: true,
+    order: 100,
+    labels: {},
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+  const instance = relayInstance("inst_legacy", "node_relay");
+  instance.modelSelection = { modelEntityIds: [legacyId] } as never;
+  const harness = await createHarness({
+    nodes: [relayNode("node_relay")],
+    instances: [instance],
+    seedRepository: async (repository) => {
+      await repository.put(ModelConfigSchema.parse(legacyRecord));
+    },
+    seedNodeModels: (nodeModels) => {
+      // The node still holds the replica a v0.0.34 control plane deployed
+      // under the content hash.
+      nodeModels.get("node_relay")!.set(legacyId, { ...legacyRecord, key: undefined, referenceCount: 1, revision: legacyId });
+    },
+  });
+  try {
+    // Reads never rewrite the released identity by themselves.
+    assert.deepEqual(harness.service.list().map((model) => model.id), [legacyId]);
+
+    const updated = await harness.service.update(legacyId, { mappings: [requestMapping()] });
+    const stableId = updated.model.id;
+    assert.notEqual(stableId, legacyId);
+    assert.equal(stableId, harness.service.require(legacyId).id);
+    assert.deepEqual(updated.model.mappings, [{ name: "gpt-5.6-luna", upstreamName: "upstream-model", order: 100 }]);
+    assert.deepEqual(harness.service.require(stableId).mappings, updated.model.mappings);
+
+    // The node receives the mapped record under the stable id, and the
+    // instance assignment moves off the content-hash projection.
+    const deploy = harness.calls.deploy.filter((call) => call.id === stableId).at(-1)!;
+    assert.deepEqual(deploy.input.mappings, [{ name: "gpt-5.6-luna", upstreamName: "upstream-model", order: 100 }]);
+    await harness.service.convergeLegacyProjectionAssignments();
+    const assigned = harness.calls.assign.at(-1)!;
+    assert.deepEqual((assigned.input as { modelSelection: { modelEntityIds: string[] } }).modelSelection.modelEntityIds, [stableId]);
   } finally {
     await harness.close();
   }

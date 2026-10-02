@@ -24,7 +24,7 @@ test("Node Agent SQLite initializes identity, migrations, PRAGMAs, and private p
     assert.equal(scalar("PRAGMA quick_check"), "ok");
     assert.deepEqual(
       fixture.database.client.prepare("SELECT id FROM na_migration_ledger ORDER BY id").all().map((row) => row.id),
-      ["0001_story_domain", "0002_p0_state_domains", "0003_story_agent_tool_policy", "0004_agent_definition_domain", "0005_agent_run_domain", "0006_story_agent_entry_authorization", "0007_agent_run_result_delivery", "0008_agent_run_resource_ownership", "0009_agent_run_input", "0010_agent_run_member_input", "0011_agent_run_member_request_identity", "0012_agent_orchestration_domain", "1000_import_v0_0_28_p0"],
+      ["0001_story_domain", "0002_p0_state_domains", "0003_story_agent_tool_policy", "0004_agent_definition_domain", "0005_agent_run_domain", "0006_story_agent_entry_authorization", "0007_agent_run_result_delivery", "0008_agent_run_resource_ownership", "0009_agent_run_input", "0010_agent_run_member_input", "0011_agent_run_member_request_identity", "0012_agent_orchestration_domain", "0013_model_request_mappings", "1000_import_v0_0_28_p0"],
     );
     assert.equal(fs.statSync(fixture.paths.databasePath).mode & 0o777, 0o600);
     for (const sidecar of [`${fixture.paths.databasePath}-wal`, `${fixture.paths.databasePath}-shm`]) {
@@ -83,7 +83,7 @@ test("Node Agent SQLite reopens idempotently and repository close drains accepte
     const verify = new DatabaseSync(paths.databasePath);
     assert.deepEqual(
       verify.prepare("SELECT id FROM na_migration_ledger ORDER BY id").all().map((row) => row.id),
-      ["0001_story_domain", "0002_p0_state_domains", "0003_story_agent_tool_policy", "0004_agent_definition_domain", "0005_agent_run_domain", "0006_story_agent_entry_authorization", "0007_agent_run_result_delivery", "0008_agent_run_resource_ownership", "0009_agent_run_input", "0010_agent_run_member_input", "0011_agent_run_member_request_identity", "0012_agent_orchestration_domain", "1000_import_v0_0_28_p0"],
+      ["0001_story_domain", "0002_p0_state_domains", "0003_story_agent_tool_policy", "0004_agent_definition_domain", "0005_agent_run_domain", "0006_story_agent_entry_authorization", "0007_agent_run_result_delivery", "0008_agent_run_resource_ownership", "0009_agent_run_input", "0010_agent_run_member_input", "0011_agent_run_member_request_identity", "0012_agent_orchestration_domain", "0013_model_request_mappings", "1000_import_v0_0_28_p0"],
     );
     verify.close();
   } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
@@ -103,6 +103,15 @@ test("Compatibility for v0.0.32: its SQLite ledger upgrades additively to the Ag
       legacy.exec(migration.sql);
       insert.run(migration.id, migration.checksum, "2026-09-25T00:00:00.000Z", JSON.stringify({ release: "v0.0.32" }));
     }
+    // Compatibility for v0.0.34: a model stored before request mappings
+    // existed must read back with an empty list, not a missing column.
+    legacy.prepare(`INSERT INTO na_models
+      (id, name, endpoint, key, model, app, enabled, display_order, model_names_json, protocols_json, labels_json, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, 'codex', 1, 100, ?, ?, '{}', ?, ?)`).run(
+      "mdl_legacy_upgrade", "Legacy", "https://legacy.example.test/v1", "legacy-key", "gpt-legacy",
+      JSON.stringify([{ name: "gpt-legacy", order: 100 }]), JSON.stringify(["openai-responses"]),
+      "2026-09-25T00:00:00.000Z", "2026-09-25T00:00:00.000Z",
+    );
     legacy.close();
 
     const upgraded = await openNodeAgentDatabase(paths);
@@ -114,6 +123,11 @@ test("Compatibility for v0.0.32: its SQLite ledger upgrades additively to the Ag
     assert.ok(upgraded.client.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'na_story_agent_entries'").get());
     assert.ok(upgraded.client.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'na_agent_run_shared_spaces'").get());
     assert.ok(upgraded.client.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'na_agent_run_resources'").get());
+    assert.deepEqual(
+      upgraded.client.prepare("SELECT id FROM na_migration_ledger ORDER BY id").all().map((row) => row.id).includes("0013_model_request_mappings"),
+      true,
+    );
+    assert.equal(upgraded.client.prepare("SELECT mappings_json FROM na_models WHERE id = ?").get("mdl_legacy_upgrade").mappings_json, "[]");
     await upgraded.close();
   } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
 });

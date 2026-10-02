@@ -6,7 +6,6 @@ import {
   aiSessionAuthoritativeMessageStatus,
   aiSessionMessageKey,
   appendAiSessionMessageDelta,
-  applyAiSessionUnreadState,
   applyControlPlaneAiSessionStreamEvent,
   AiSessionConversationCache,
   aiSessionTurnsCacheRevision,
@@ -21,7 +20,6 @@ import {
   type AiSessionTimelineItemEvent,
   type AiSessionTurn,
   type AiSessionTurnIndex,
-  type AiSessionUnreadState,
 } from '@task-handoff/protocol/ai-sessions';
 
 export const mobileControlPlaneQueryKeys = {
@@ -284,25 +282,6 @@ export class MobileAiSessionStore {
       instances: nextInstances,
     }, affectedSessionKeys);
     return result;
-  }
-
-  applyUnread(controlPlaneId: string, state: AiSessionUnreadState) {
-    const current = this.profile(controlPlaneId);
-    if (!current.snapshot) return false;
-    let applied = false;
-    const instances = current.snapshot.instances.map((entry) => {
-      if (entry.instanceId !== state.instanceId) return entry;
-      const sessions = entry.aiSessions.sessions.map((session) => {
-        const next = applyAiSessionUnreadState(session, state);
-        if (next !== session) applied = true;
-        return next;
-      });
-      return applied ? { ...entry, aiSessions: { ...entry.aiSessions, sessions } } : entry;
-    });
-    if (applied) this.replaceSnapshot(controlPlaneId, { updatedAt: state.updatedAt, instances }, new Set([
-      mobileSessionSubscriptionKey(controlPlaneId, state.instanceId, state.sessionId),
-    ]));
-    return applied;
   }
 
   appendMessageDelta(controlPlaneId: string, event: AiSessionMessageDeltaEvent, options: { replay?: boolean } = {}) {

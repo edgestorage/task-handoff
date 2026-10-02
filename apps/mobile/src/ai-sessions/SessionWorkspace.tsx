@@ -60,7 +60,7 @@ export function SessionWorkspace({
   modelGroups?: AiSessionModelGroup[];
   client?: ControlPlaneClient;
   refresh?(): Promise<void>;
-  onVisible?(updatedAt: string): void;
+  onVisible?(): void;
   onOpenSession?(sessionId: string): void;
   detailMode?: SessionDetailMode;
   onDetailModeChange?(mode: SessionDetailMode): void;

@@ -76,6 +76,7 @@ export const pairingRevocations = pgTable("cp_node_pairing_revocations", {
 export const models = pgTable("cp_models", {
   id: text("id").primaryKey(), name: text("name").notNull(), endpoint: text("endpoint").notNull(), keyCiphertext: text("key_ciphertext").notNull(),
   model: text("model").notNull(), modelNames: jsonb("model_names").$type<Array<{ name: string; upstreamName?: string; order: number }>>().notNull(),
+  mappings: jsonb("mappings").$type<Array<{ name: string; upstreamName: string; order: number }>>().notNull(),
   protocols: jsonb("protocols").$type<string[]>().notNull(), app: text("app").notNull(), enabled: boolean("enabled").notNull(),
   order: integer("display_order").notNull(), labels: jsonb("labels").$type<Record<string, string>>().notNull(), ...timestamps,
 }, (table) => [index("cp_models_order_idx").on(table.order, table.name, table.id)]);

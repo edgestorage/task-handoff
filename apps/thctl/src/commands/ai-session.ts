@@ -32,19 +32,6 @@ const SESSION_COLUMNS = [
 const INSTANCE_SESSION_ROUTE = (instanceId: string, sessionId: string) =>
   `/api/controlled-instances/${encodeURIComponent(instanceId)}/ai-sessions/${encodeURIComponent(sessionId)}`;
 
-async function findSessionUpdatedAt(context: CliContext, instanceId: string, sessionId: string) {
-  const connection = await openConnection(context);
-  const view = await connection.client.aiSessions.list(context.signal, instanceId);
-  const session = view.instances
-    .filter((entry) => entry.instanceId === instanceId)
-    .flatMap((entry) => entry.aiSessions.sessions)
-    .find((candidate) => candidate.id === sessionId);
-  if (!session) {
-    throw new ThctlError("CLI_SESSION_NOT_FOUND", `No AI session \`${sessionId}\` is visible on instance \`${instanceId}\`.`, 7, { instanceId, sessionId });
-  }
-  return { connection, session };
-}
-
 export async function aiSessionList(context: CliContext, invocation: CliInvocation) {
   const connection = await openConnection(context);
   const instanceId = typeof invocation.options.instance === "string" ? invocation.options.instance.trim() : "";
@@ -307,12 +294,12 @@ export async function aiSessionResume(context: CliContext, invocation: CliInvoca
 export async function aiSessionRead(context: CliContext, invocation: CliInvocation) {
   const instanceId = requireArgument(invocation, "instanceId");
   const sessionId = requireArgument(invocation, "sessionId");
-  const { connection, session } = await findSessionUpdatedAt(context, instanceId, sessionId);
+  const connection = await openConnection(context);
   const result = await performWrite(
     context,
     "ai-session read",
-    () => ({ method: "POST", path: `${INSTANCE_SESSION_ROUTE(instanceId, sessionId)}/read`, body: { sessionUpdatedAt: session.updatedAt } }),
-    () => connection.client.aiSessions.markRead(instanceId, sessionId, session.updatedAt),
+    () => ({ method: "POST", path: `${INSTANCE_SESSION_ROUTE(instanceId, sessionId)}/read` }),
+    () => connection.client.aiSessions.markRead(instanceId, sessionId),
   );
   if (!result) return;
   return { data: result, message: `AI session \`${sessionId}\` marked as read.` };

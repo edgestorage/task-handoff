@@ -23,6 +23,7 @@ import {
   AiSessionModelSelectionActionResponseSchema,
   AiSessionQueueMutationResponseSchema,
   AiSessionQueueSchema,
+  AiSessionReadResultSchema,
   AiSessionReasoningEffortActionResponseSchema,
   AiSessionRenameResultSchema,
   AiSessionResumeResultSchema,
@@ -30,7 +31,6 @@ import {
   AiSessionTurnBodyReadSchema,
   AiSessionTurnIndexReadSchema,
   AiSessionTurnTimelineSchema,
-  AiSessionUnreadStateSchema,
 } from "@task-handoff/protocol/ai-sessions";
 import { AppSessionAccessLeaseSchema, AppSessionRecordSchema } from "@task-handoff/protocol/app-sessions";
 import {
@@ -490,7 +490,7 @@ const aiSessionGroup = group("ai-session", "Inspect and drive AI sessions", [
       { name: "sessionId", description: "AI session ID", required: true },
     ],
     input: inputOf({ instanceId: z.string(), sessionId: z.string() }),
-    output: AiSessionUnreadStateSchema,
+    output: AiSessionReadResultSchema,
     handler: aiSessionRead,
   },
   {

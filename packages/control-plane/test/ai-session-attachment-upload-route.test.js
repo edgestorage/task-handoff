@@ -47,7 +47,6 @@ test("managed upload forwards bounded chunks while retaining a non-blocking cach
     events: { publish() {} },
     appSessionAggregator: {},
     aiSessionAggregator: {},
-    aiSessionUnread: {},
     aiSessionAttachments: {},
     aiSessionAttachmentCache: cache,
   });
@@ -93,7 +92,6 @@ test("managed upload reports malformed controlled-instance responses as a bad ga
     events: { publish() {} },
     appSessionAggregator: {},
     aiSessionAggregator: {},
-    aiSessionUnread: {},
     aiSessionAttachments: {},
     aiSessionAttachmentCache: new AiSessionAttachmentCache(dataDir),
   });
@@ -125,7 +123,6 @@ test("managed upload rejects ordinary files at the instance limit before proxyin
     events: { publish() {} },
     appSessionAggregator: {},
     aiSessionAggregator: {},
-    aiSessionUnread: {},
     aiSessionAttachments: {},
     aiSessionAttachmentCache: new AiSessionAttachmentCache(dataDir),
   });
@@ -163,7 +160,6 @@ test("message actions resolve attachment retention only for managed upload refer
     events: { publish() {} },
     appSessionAggregator: {},
     aiSessionAggregator: {},
-    aiSessionUnread: {},
     aiSessionAttachments: { resolveRefs() { return []; } },
     aiSessionAttachmentCache: new AiSessionAttachmentCache(dataDir),
   });

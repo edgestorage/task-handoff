@@ -523,7 +523,7 @@ export function useActiveInstanceSessions({
     selectedSessionKeys[instanceId] = tab.key;
     focusedSessionPanes[instanceId] = "left";
     rememberSessionKey(instanceId, tab.key);
-    if (session?.unread && !alreadySelected) void markAiSessionRead(instanceId, session.id, session.updatedAt).catch(() => undefined);
+    if (session?.unread && !alreadySelected) void markAiSessionRead(instanceId, session.id).catch(() => undefined);
   }
 
   function openRepositoryWorkspace(target: RepositoryWorkspaceTabTarget) {

@@ -27,7 +27,7 @@ const PERSISTED_AI_SESSION_FIELD_NAMES = [
   "id", "agent", "creationSource", "appSessionId", "appId", "providerSessionId", "lineage", "providerMeta", "modelSelection", "reasoningEffort", "storyId", "appBindingKeys", "actions",
   "activeTurnId", "title", "cwd", "cwdFolderId", "userPrompt", "turns", "status", "phase", "summary", "lastMessage", "lastMessageItemId",
   "currentTool", "toolCallsSinceLastMessage", "subAgents", "transcriptPath", "transcriptSize", "startedAt", "updatedAt",
-  "completedAt", "error", "counters", "queue",
+  "completedAt", "error", "counters", "queue", "unread",
 ] as const satisfies readonly (keyof AiSessionStatus)[];
 
 const PERSISTED_SESSION_FIELDS = new Set<string>(PERSISTED_AI_SESSION_FIELD_NAMES);
@@ -309,6 +309,7 @@ export function decodePersistedAiSession(value: unknown): AiSessionStatus | unde
     ...(typeof record.error === "string" && record.error ? { error: compact(record.error, 4000) } : {}),
     counters: normalizeAiSessionCounters(record.counters as Partial<AiSessionStatus["counters"]> | undefined),
     queue: normalizeAiSessionQueue(record.queue),
+    unread: record.unread === true,
   };
   const parsed = AiSessionStatusSchema.safeParse(candidate);
   return parsed.success ? parsed.data : undefined;

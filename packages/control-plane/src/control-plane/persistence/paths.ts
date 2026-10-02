@@ -30,7 +30,6 @@ export type ControlPlaneStorePaths = {
   gitCredentialAuditDir: string;
   gitCredentialProvisioningIntentsDir: string;
   gitCredentialEncryptionKeyPath: string;
-  aiSessionUnreadDir: string;
   logsDir: string;
 };
 
@@ -69,7 +68,6 @@ export function controlPlaneStorePaths(dataDir = defaultControlPlaneDataDir()): 
     gitCredentialAuditDir: path.join(root, "git-credentials", "audit"),
     gitCredentialProvisioningIntentsDir: path.join(root, "git-credentials", "provisioning-intents"),
     gitCredentialEncryptionKeyPath: path.join(root, "git-credentials", "encryption-key.json"),
-    aiSessionUnreadDir: path.join(root, "ai-session-unread"),
     logsDir: path.join(root, "logs"),
   };
 }

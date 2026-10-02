@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
+import { retiredEntryName } from "@task-handoff/core/storage/retention";
 import {
   ChatBridgeConfigSchema,
   ChatSessionBindingSchema,
@@ -335,8 +336,8 @@ function archiveLegacyP0Sources(paths: ControlPlaneStorePaths, options: { now?: 
   const sources = [paths.nodesDir, paths.pendingPairingRevokesDir, paths.modelsDir, paths.chatBridgesDir, paths.chatSessionsDir, path.dirname(paths.gitCredentialsDir)]
     .filter((source) => fs.existsSync(source));
   if (!sources.length) return;
-  const stamp = (options.now?.() || new Date()).toISOString().replace(/[:.]/g, "-");
-  const destination = path.join(paths.dataDir, "retired-persistence", `v0.0.28-control-plane-p0-${stamp}`);
+  const retiredAt = options.now?.() || new Date();
+  const destination = path.join(paths.dataDir, "retired-persistence", retiredEntryName("v0.0.28-control-plane-p0", retiredAt.getTime()));
   const staging = `${destination}.staging`;
   const moved: Array<{ source: string; staged: string }> = [];
   try {

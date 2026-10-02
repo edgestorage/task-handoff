@@ -495,3 +495,16 @@ test("instance creation sends Market default, explicit tag, and Custom reference
   ]);
   assert.deepEqual(received.map((input) => input.environmentSource.imageSelection.tag), [undefined, "latest", undefined]);
 });
+
+test("listing projects does not rewrite unchanged project files", () => {
+  const { projects, images, settings } = stores();
+  const market = new MarketCatalogService();
+  const catalog = new ControlPlaneCatalogService({ projects, images, settings, market, defaultNodeId: () => "node_1" });
+  const project = catalog.createProject({ name: "Stable", source: { type: "local-folder", path: "/tmp/stable" } });
+  const filePath = projects.filePath(project.id);
+  const before = fs.statSync(filePath, { bigint: true }).mtimeNs;
+
+  assert.equal(catalog.listProjects().length, 1);
+  assert.equal(catalog.getProject(project.id)?.name, "Stable");
+  assert.equal(fs.statSync(filePath, { bigint: true }).mtimeNs, before);
+});

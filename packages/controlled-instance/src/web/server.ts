@@ -114,6 +114,7 @@ import {
   AiSessionRenameResultSchema,
   AiSessionStoryInputSchema,
   AiSessionStoryActionResponseSchema,
+  AiSessionReadResultSchema,
   type AiSessionModelSelection,
   AiSessionForkInputSchema,
   AiSessionForkResultSchema,
@@ -2309,6 +2310,17 @@ export async function createWebApp(options: Partial<CreateWebAppOptions> = {}) {
       const input = AiSessionRenameInputSchema.parse(request.body || {});
       const result = AiSessionRenameResultSchema.parse(await sessionTitles.renameAiSession(request.params.id, input));
       return { data: result };
+    } catch (error: unknown) {
+      return sendAiSessionControlError(reply, error);
+    }
+  });
+
+  app.post<{ Params: { id: string } }>("/api/ai-sessions/:id/read", async (request, reply) => {
+    try {
+      const session = aiSessions.markRead(request.params.id);
+      if (!session) throw Object.assign(new Error("AI Session was not found."), { code: "AI_SESSION_NOT_FOUND", statusCode: 404 });
+      publishAiSessionSnapshot("control-action");
+      return { data: AiSessionReadResultSchema.parse({ sessionId: session.id, unread: session.unread }) };
     } catch (error: unknown) {
       return sendAiSessionControlError(reply, error);
     }

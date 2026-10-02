@@ -32,6 +32,7 @@ test("database setup uses canonical ordered cp-prefixed migrations per dialect",
       "0005_model_legacy_projections",
       "0006_cli_sessions",
       "0007_local_trust_identities",
+      "0008_model_request_mappings",
     ]);
     assert.doesNotMatch(migrations[0]!.sql, /control_plane_/);
     assert.match(migrations[0]!.sql, /CREATE TABLE cp_user_access_grants/);

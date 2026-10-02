@@ -2,6 +2,7 @@ import {
   ControlledInstanceSchema,
   InstanceConfigInputSchema,
   ModelConfigSchema,
+  ModelRequestMappingListSchema,
   NodeSchema,
 } from "@task-handoff/protocol/control-plane";
 import { z } from "zod";
@@ -34,6 +35,7 @@ export const CreateModelInputSchema = z.object({
   key: ModelConfigSchema.shape.key,
   model: ModelConfigSchema.shape.model,
   modelNames: ModelConfigSchema.shape.modelNames.optional(),
+  mappings: ModelRequestMappingListSchema.optional(),
   protocols: ModelConfigSchema.shape.protocols.optional(),
   app: ModelConfigSchema.shape.app,
   enabled: ModelConfigSchema.shape.enabled.optional(),

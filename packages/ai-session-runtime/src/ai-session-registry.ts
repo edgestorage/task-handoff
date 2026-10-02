@@ -209,6 +209,7 @@ function summaryForHeartbeat(session: AiSessionStatus): AiSessionSummary {
     userPrompt: session.userPrompt ? compact(session.userPrompt, 400) : undefined,
     detailRevision: aiSessionDetailRevision(session),
     turnsRevision: aiSessionTurnsRevision(session),
+    unread: session.unread,
     latestTurnRef: meaningfulTurns.length ? {
       id: meaningfulTurns.at(-1)!.id,
       bodyRevision: aiSessionTurnBodyRevision(meaningfulTurns.at(-1)!),
@@ -369,6 +370,7 @@ export class AiSessionRegistry {
       }, timestamp, meta),
       status: normalizeLifecycle(input.status || "idle"),
       phase: normalizePhase(input.phase || "unknown"),
+      unread: false,
       summary: input.summary ? compact(input.summary, 1000) : undefined,
       toolCallsSinceLastMessage: 0,
       subAgents: [],
@@ -425,6 +427,7 @@ export class AiSessionRegistry {
       turns: current?.turns || [],
       status: "idle",
       phase: "unknown",
+      unread: current?.unread || false,
       lastMessage: item.lastMessage,
       toolCallsSinceLastMessage: 0,
       subAgents: [],
@@ -506,6 +509,10 @@ export class AiSessionRegistry {
 
   patch(id: string, patch: AiSessionUpdateInput) {
     return this.update(id, patch);
+  }
+
+  markRead(id: string) {
+    return this.update(id, { unread: false }, { preserveUpdatedAt: true });
   }
 
   restoreAuthority(session: AiSessionStatus) {

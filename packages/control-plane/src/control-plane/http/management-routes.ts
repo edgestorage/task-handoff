@@ -6,7 +6,6 @@ import type { ControlPlaneAiSessionAggregator } from "../sessions/ai-session-agg
 import type { ControlPlaneAppSessionAggregator } from "../sessions/app-session-aggregator.ts";
 import type { AiSessionAttachmentStore } from "../sessions/ai-session-attachments.ts";
 import type { AiSessionAttachmentCache } from "../sessions/ai-session-attachment-cache.ts";
-import type { AiSessionUnreadStore } from "../sessions/ai-session-unread-store.ts";
 import type {
   ControlPlaneNodeAgentTunnelTransport,
   ControlPlaneNodeEventSubscriber,
@@ -34,7 +33,6 @@ export type RegisterControlPlaneManagementRoutesOptions = {
   events: ControlPlaneEventBus;
   appSessionAggregator: ControlPlaneAppSessionAggregator;
   aiSessionAggregator: ControlPlaneAiSessionAggregator;
-  aiSessionUnread: AiSessionUnreadStore;
   chatGateway: ControlPlaneChatGatewayRuntime;
   aiSessionAttachments: AiSessionAttachmentStore;
   aiSessionAttachmentCache: AiSessionAttachmentCache;
@@ -52,7 +50,6 @@ export function registerControlPlaneManagementRoutes(options: RegisterControlPla
     events,
     appSessionAggregator,
     aiSessionAggregator,
-    aiSessionUnread,
     chatGateway,
     aiSessionAttachments,
     aiSessionAttachmentCache,
@@ -67,7 +64,7 @@ export function registerControlPlaneManagementRoutes(options: RegisterControlPla
   registerNodeRoutes({ app, service, events, nodeAgentTunnel, nodeEventSubscriber, errorPayload });
   registerInstanceRoutes({ app, service, events, onInstanceDeleted });
   registerEnvironmentTemplateRoutes(app, service, events);
-  registerSessionRoutes({ app, service, events, appSessionAggregator, aiSessionAggregator, aiSessionUnread, aiSessionAttachments, aiSessionAttachmentCache });
+  registerSessionRoutes({ app, service, events, appSessionAggregator, aiSessionAggregator, aiSessionAttachments, aiSessionAttachmentCache });
   registerTriggerRoutes({ app, service, events });
   registerChatGatewayRoutes({ app, service, chatGateway });
   registerStoryRoutes(app, service);

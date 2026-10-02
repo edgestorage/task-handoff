@@ -8,14 +8,17 @@ import {
   UpdateNodeModelSchema,
   createModelEntityId,
   defaultModelProtocols,
+  isModelConfigHashId,
   modelConfigHash,
   modelContentRevision,
   normalizeModelNameEntries,
+  normalizeModelRequestMappings,
   projectModelNameEntries,
   NodeModelMergeSchema,
   supportsControlledInstanceModelRelay,
   supportsControlledInstanceModelRelayProtocol,
   supportsNodeMultiEntityModelAssignment,
+  supportsNodeModelRequestMappings,
   supportsNodeModelRelay,
   supportsNodeStableModelIdentity,
   type ControlledInstance,
@@ -23,6 +26,7 @@ import {
   type ModelConfig,
   type ModelNameEntry,
   type ModelProtocol,
+  type ModelRequestMapping,
   type Node,
   type NodeModelPublicRecord,
   type PublicModelConfig,
@@ -43,6 +47,10 @@ function nodeAgentCapabilities(node: Node) {
 
 function nodeSupportsStableModelIdentity(node: Node) {
   return supportsNodeStableModelIdentity(nodeAgentCapabilities(node));
+}
+
+function nodeSupportsModelRequestMappings(node: Node) {
+  return supportsNodeModelRequestMappings(nodeAgentCapabilities(node));
 }
 
 /**
@@ -83,7 +91,58 @@ function nodeWireModelNames(node: Node, model: { model?: string; modelNames?: Mo
     : names.map(({ name, order }) => ({ name, order }));
 }
 
+function requestMappingsUnsupportedError(node: Node) {
+  return Object.assign(new Error(`Node ${node.id} must be updated before model request mappings can be stored.`), {
+    statusCode: 409,
+    code: "NODE_MODEL_MAPPINGS_UNSUPPORTED",
+    details: { nodeId: node.id },
+  });
+}
+
+/**
+ * Explicit mapping edits fail closed instead of silently dropping the field on
+ * a node that cannot store it. Untouched patches never trip this check.
+ */
+function assertRequestMappingsSupported(node: Node, mappings?: ModelRequestMapping[]) {
+  if (nodeSupportsModelRequestMappings(node)) return;
+  if (normalizeModelRequestMappings(mappings).length) throw requestMappingsUnsupportedError(node);
+}
+
+/** True when a wire payload carries mappings this node cannot store. */
+function requestMappingsDropped(node: Node, mappings?: ModelRequestMapping[]) {
+  return !nodeSupportsModelRequestMappings(node) && normalizeModelRequestMappings(mappings).length > 0;
+}
+
+function withoutRequestMappings<T extends { mappings?: ModelRequestMapping[] }>(patch: T): T {
+  if (!("mappings" in patch)) return patch;
+  const { mappings: _mappings, ...rest } = patch;
+  return rest as T;
+}
+
 type NodeOwnedWriteIntent = "edit" | "sync";
+
+type AssignmentSelection = {
+  modelEntityIds?: string[];
+  codexModelHash?: string | null;
+  claudeModelHash?: string | null;
+  opencodeModelHash?: string | null;
+};
+
+function assignmentIds(selection: AssignmentSelection) {
+  return new Set([
+    ...(selection.modelEntityIds || []),
+    selection.codexModelHash,
+    selection.claudeModelHash,
+    selection.opencodeModelHash,
+  ].filter((id): id is string => Boolean(id)));
+}
+
+/** True when a prepared assignment would leave every node-side reference unchanged. */
+function sameAssignmentIds(stored: AssignmentSelection, projected: AssignmentSelection, prepared: { modelEntityIds?: string[] }) {
+  const before = assignmentIds(stored);
+  const after = assignmentIds({ ...projected, modelEntityIds: projected.modelEntityIds ?? prepared.modelEntityIds });
+  return before.size === after.size && [...before].every((id) => after.has(id));
+}
 
 // A node without a capability document cannot be classified; only a parsed
 // document that denies stable identities proves the node edits by forking.
@@ -124,6 +183,7 @@ function nodeOwnedModelProjection(model: NodeModelPublicRecord): UpdateModelInpu
     endpoint: model.endpoint,
     model: model.model,
     modelNames: model.modelNames,
+    mappings: model.mappings,
     protocols: model.protocols,
     app: model.app,
     enabled: model.enabled,
@@ -135,13 +195,16 @@ function nodeOwnedModelProjection(model: NodeModelPublicRecord): UpdateModelInpu
  * explicit only towards relay-capable nodes; a mapped record targeted at an
  * older node fails closed instead of silently degrading to a same-name model.
  */
-function nodeModelWirePatch<T extends { model?: string; modelNames?: ModelNameEntry[] }>(node: Node, patch: T): T {
-  if (!patch.modelNames?.length) return patch;
-  if (modelRecordHasMapping({ model: patch.model ?? "", modelNames: patch.modelNames })
+function nodeModelWirePatch<T extends { model?: string; modelNames?: ModelNameEntry[]; mappings?: ModelRequestMapping[] }>(node: Node, patch: T): T {
+  // Nodes without the capability receive no `mappings` key at all: their
+  // strict request schema would reject the unknown additive field.
+  const wire = nodeSupportsModelRequestMappings(node) ? patch : withoutRequestMappings(patch);
+  if (!wire.modelNames?.length) return wire;
+  if (modelRecordHasMapping({ model: wire.model ?? "", modelNames: wire.modelNames })
     && !supportsNodeModelRelay(nodeAgentCapabilities(node))) {
     throw relayUnsupportedError(node, true);
   }
-  return { ...patch, modelNames: nodeWireModelNames(node, patch) };
+  return { ...wire, modelNames: nodeWireModelNames(node, wire) };
 }
 
 function nodeLocationFailure(nodeId: string, error: unknown): ModelLocationSyncResult {
@@ -186,6 +249,7 @@ export class ControlPlaneModelService {
   // retried on registry reads and by the explicit sync endpoint.
   private readonly pendingModelSyncs = new Map<string, Set<string>>();
   private flushingPendingSyncs = false;
+  private projectionAssignmentSweep: Promise<void> | undefined;
 
   constructor(options: ControlPlaneModelServiceOptions) {
     this.options = options;
@@ -201,6 +265,82 @@ export class ControlPlaneModelService {
       const ids = this.legacyProjectionIds.get(projection.modelId) || new Set<string>();
       ids.add(projection.id);
       this.legacyProjectionIds.set(projection.modelId, ids);
+    }
+    void this.convergeLegacyProjectionAssignments();
+  }
+
+  /**
+   * Compatibility for v0.0.34: records persisted by writers that predate
+   * stable identities carry the content hash as the record id, and released
+   * writers address those ids by content. Request mappings need an identity
+   * content edits cannot rewrite (two records with equal content but different
+   * mappings would otherwise collide on one hash), so a legacy record is
+   * rekeyed lazily when the operator stores request mappings on it. The old
+   * hash remains a recorded legacy projection: existing node replicas,
+   * instance references and API calls keep resolving, and
+   * {@link convergeLegacyProjectionAssignments} moves node side assignments to
+   * the stable id.
+   */
+  private async rekeyOwnedEntity(record: ModelConfig) {
+    const legacyId = record.id;
+    let id = createModelEntityId();
+    while (this.modelGet(id)) id = createModelEntityId();
+    const rekeyed = ModelConfigSchema.parse({ ...record, id });
+    await this.options.repository.transaction(async (repository) => {
+      await repository.put(rekeyed);
+      await repository.delete(legacyId);
+      await repository.putLegacyProjection(legacyId, id);
+    });
+    this.databaseModels.delete(legacyId);
+    this.databaseModels.set(id, rekeyed);
+    this.legacyProjections.set(legacyId, id);
+    const ids = this.legacyProjectionIds.get(id) || new Set<string>();
+    ids.add(legacyId);
+    this.legacyProjectionIds.set(id, ids);
+    void this.convergeLegacyProjectionAssignments();
+    return rekeyed;
+  }
+
+  /**
+   * Best-effort convergence for assignments that still reference a recorded
+   * content-hash projection (a rekeyed entity or a replica a node without
+   * stable identities kept). Replaying the stored selection re-points the node
+   * at the entity's stable id and retires the projection replica. Offline
+   * nodes and competing assignment edits are retried on the next registry read
+   * because the projection record itself is the durable marker.
+   */
+  convergeLegacyProjectionAssignments(): Promise<void> {
+    if (!this.legacyProjections.size) return Promise.resolve();
+    // Concurrent reads coalesce onto the in-flight sweep.
+    this.projectionAssignmentSweep ||= this.runProjectionAssignmentSweep()
+      .finally(() => { this.projectionAssignmentSweep = undefined; });
+    return this.projectionAssignmentSweep;
+  }
+
+  private async runProjectionAssignmentSweep() {
+    const nodes = this.options.listNodes();
+    // Only nodes with stable identities can move off a projection id; a fleet
+    // that is entirely legacy keeps its content-hash assignments, so skip the
+    // instance lookup entirely (it may populate caches other readers depend on).
+    if (!nodes.some((node) => nodeSupportsStableModelIdentity(node))) return;
+    const instances = await this.options.listInstances?.() || [];
+    for (const instance of instances) {
+      const selection = instance.modelSelection;
+      const selectedIds = assignmentIds(selection);
+      if (![...selectedIds].some((id) => this.legacyProjections.has(id))) continue;
+      const node = nodes.find((candidate) => candidate.id === instance.nodeId);
+      if (!node) continue;
+      // A node without stable identities keeps the content-hash projection as
+      // its intended assignment id; only capable nodes converge.
+      if (!nodeSupportsStableModelIdentity(node)) continue;
+      try {
+        const prepared = await this.prepareAssignment(node, selection, instance);
+        if (sameAssignmentIds(selection, prepared.modelSelection, prepared)) continue;
+        await this.options.gateway.assignInstanceModels(node, instance.id, prepared);
+        await this.retireSupersededNodeModels(node, prepared);
+      } catch {
+        // The projection record stays, so the sweep retries on the next read.
+      }
     }
   }
 
@@ -271,6 +411,7 @@ export class ControlPlaneModelService {
     // Reading the registry is the natural retry point for replicas that were
     // offline during an edit; the flush is best-effort and never blocks the read.
     void this.flushPendingModelSyncs();
+    void this.convergeLegacyProjectionAssignments();
     return FederatedModelRegistrySchema.parse({
       models: [...groups.values()].sort((a, b) => a.model.order - b.model.order || a.model.name.localeCompare(b.model.name)),
       nodeDiagnostics: fleet.nodeErrors.map((error) => ({ nodeId: error.nodeId, code: error.code, message: error.message })),
@@ -282,7 +423,12 @@ export class ControlPlaneModelService {
     const parsedInput = CreateModelInputSchema.parse(input);
     const protocols = parsedInput.protocols?.length ? parsedInput.protocols : defaultModelProtocols(parsedInput.app);
     const modelNames = normalizeModelNames(parsedInput.modelNames, parsedInput.model);
-    const normalizedInput = { ...parsedInput, modelNames, model: modelNames[0].name };
+    const normalizedInput = {
+      ...parsedInput,
+      modelNames,
+      mappings: normalizeModelRequestMappings(parsedInput.mappings),
+      model: modelNames[0].name,
+    };
     const timestamp = now();
     // Entity identity is opaque and stable. Re-adding the same content still
     // converges on the existing entity, but a new record mints a short id.
@@ -311,6 +457,8 @@ export class ControlPlaneModelService {
     const parsedInput = CopyModelInputSchema.parse(input);
     const candidate = {
       ...parsedInput,
+      // A copy inherits the source mappings unless the operator replaced them.
+      mappings: normalizeModelRequestMappings(parsedInput.mappings === undefined ? source.mappings : parsedInput.mappings),
       key: parsedInput.key?.trim() || source.key,
     };
     const modelNames = normalizeModelNames(candidate.modelNames, candidate.model);
@@ -350,16 +498,25 @@ export class ControlPlaneModelService {
     const protocols = parsedInput.protocols?.length
       ? parsedInput.protocols
       : current.protocols?.length ? current.protocols : defaultProtocols(parsedInput.app || current.app);
-    const next = ModelConfigSchema.parse({
+    let next = ModelConfigSchema.parse({
       ...current,
       ...parsedInput,
       key: parsedInput.key?.trim() ? parsedInput.key : current.key,
       protocols,
       modelNames,
+      mappings: parsedInput.mappings !== undefined
+        ? normalizeModelRequestMappings(parsedInput.mappings)
+        : current.mappings,
       model: modelNames[0].name,
       createdAt: current.createdAt,
       updatedAt: now(),
     });
+    // A legacy content-hash record cannot carry request mappings: released
+    // writers address it by content, so equal-content records with different
+    // mappings would collide. The first mapping write upgrades the identity.
+    if (isModelConfigHashId(current.id) && next.mappings.length) {
+      next = await this.rekeyOwnedEntity(next);
+    }
     await this.modelPut(next);
     await this.refreshFleetModelIndex(this.options.listNodes());
     return ModelMutationResultSchema.parse({
@@ -451,6 +608,19 @@ export class ControlPlaneModelService {
         };
       }
       const { referenceCount: _referenceCount, ...publicRecord } = record;
+      // The base content converged; the mapping domain stays closed on this
+      // node and is reported instead of blocking the edit or failing silently.
+      if (requestMappingsDropped(node, patch.mappings)) {
+        return {
+          location: ModelLocationSyncResultSchema.parse({
+            nodeId: node.id,
+            state: "unsupported",
+            code: "NODE_MODEL_MAPPINGS_UNSUPPORTED",
+            message: `Node ${node.id} must be updated before model request mappings can sync there.`,
+          }),
+          record: publicRecord,
+        };
+      }
       return {
         location: ModelLocationSyncResultSchema.parse({ nodeId: node.id, state: "synced" }),
         record: publicRecord,
@@ -555,16 +725,16 @@ export class ControlPlaneModelService {
   }
 
   async delete(id: string) {
-    this.requireSecret(id);
-    const references = await this.instanceReferences(id);
+    const model = this.requireSecret(id);
+    const references = await this.instanceReferences(model.id);
     if (references.length) {
-      throw Object.assign(new Error(`Model ${id} is assigned to ${references.length} managed instance${references.length === 1 ? "" : "s"}.`), {
+      throw Object.assign(new Error(`Model ${model.id} is assigned to ${references.length} managed instance${references.length === 1 ? "" : "s"}.`), {
         statusCode: 409,
         code: "MODEL_IN_USE",
         details: { references },
       });
     }
-    return this.modelDelete(id);
+    return this.modelDelete(model.id);
   }
 
   async reorder(ids: string[]) {
@@ -596,12 +766,14 @@ export class ControlPlaneModelService {
 
   private async createNodeModelWrite(node: Node, input: ReturnType<typeof CreateNodeModelSchema.parse>) {
     const target = await this.refreshModelWriteNode(node);
+    assertRequestMappingsSupported(target, input.mappings);
     const payload = await this.projectNodeModelWrite(target, input);
     return this.options.gateway.createModel(target, payload);
   }
 
   private async updateNodeModelWrite(node: Node, modelId: string, input: ReturnType<typeof UpdateNodeModelSchema.parse>) {
     const target = await this.refreshModelWriteNode(node);
+    assertRequestMappingsSupported(target, input.mappings);
     const payload = await this.projectNodeModelWrite(target, input);
     return this.options.gateway.updateModel(target, modelId, payload);
   }
@@ -617,7 +789,7 @@ export class ControlPlaneModelService {
     return resolved || node;
   }
 
-  private async projectNodeModelWrite<T extends { model?: string; modelNames?: ModelNameEntry[] }>(node: Node, patch: T): Promise<T> {
+  private async projectNodeModelWrite<T extends { model?: string; modelNames?: ModelNameEntry[]; mappings?: ModelRequestMapping[] }>(node: Node, patch: T): Promise<T> {
     const projected = nodeModelWirePatch(node, patch);
     if (modelRecordHasMapping(projected)) {
       const relay = await this.options.gateway.getModelRelay(node);
@@ -683,12 +855,16 @@ export class ControlPlaneModelService {
     const controlPlaneModels = this.listAll();
     await this.assertMappedAssignmentAllowed(node, storedSelection, nodeModels, instance);
     const resolvedEntities: ModelConfig[] = [];
+    // Selections persisted before a rekey reference the content-hash projection
+    // the node still holds; fold it back onto the entity so replaying the
+    // selection converges the node onto the stable identity.
+    const projectionIndex = this.modelProjectionIndex();
     // Nodes without stable identities store the legacy content hash as the
     // entity id, so every reference this assignment sends must be projected
     // onto the id the model actually got deployed with on this node.
     const nodeEntityIds: string[] = [];
     for (const entityId of entityIds) {
-      const controlPlaneModel = controlPlaneModels.find((model) => model.id === entityId);
+      const controlPlaneModel = controlPlaneModels.find((model) => model.id === entityId || model.id === projectionIndex.get(entityId));
       if (controlPlaneModel) {
         assertEnabledModel(controlPlaneModel);
         const deployedId = await this.deployModelToNode(node, controlPlaneModel);
@@ -713,7 +889,6 @@ export class ControlPlaneModelService {
     // content-hash projection. Fold it back onto the control-plane entity so
     // enabled state, app checks, and later edits keep following the
     // authoritative record instead of the node-local replica.
-    const projectionIndex = this.modelProjectionIndex();
     const resolve = async (app: "codex" | "claude" | "opencode", selectedId?: string | null) => {
       if (selectedId === null) return undefined;
       const projectedEntityId = selectedId ? projectionIndex.get(selectedId) : undefined;
@@ -931,7 +1106,12 @@ export class ControlPlaneModelService {
   }
 
   private modelGet(id: string) {
-    return this.databaseModels.get(id);
+    const model = this.databaseModels.get(id);
+    if (model) return model;
+    // Recorded content-hash projections stay valid aliases after a rekey so a
+    // client holding the previous id keeps addressing the same entity.
+    const projection = this.legacyProjections.get(id);
+    return projection ? this.databaseModels.get(projection) : undefined;
   }
 
   private findByContentRevision(contentRevision: string) {
@@ -1109,7 +1289,12 @@ export class ControlPlaneModelService {
       }
       try {
         await this.options.gateway.deployModel(resolved, model.id, nodeModelWirePatch(resolved, model));
-        results.push(ModelLocationSyncResultSchema.parse({ nodeId: node.id, state: "synced" }));
+        results.push(ModelLocationSyncResultSchema.parse(requestMappingsDropped(resolved, model.mappings) ? {
+          nodeId: node.id,
+          state: "unsupported",
+          code: "NODE_MODEL_MAPPINGS_UNSUPPORTED",
+          message: `Node ${node.id} must be updated before model request mappings can sync there.`,
+        } : { nodeId: node.id, state: "synced" }));
       } catch (error) {
         const failure = nodeLocationFailure(node.id, error);
         if (failure.state === "pending") pending.add(node.id);
@@ -1166,6 +1351,7 @@ function nodePublicModelToConfig(model: NodeModelPublicRecord): ModelConfig {
     key: "node-private",
     model: model.model,
     modelNames: model.modelNames,
+    mappings: model.mappings,
     protocols: model.protocols,
     app: model.app,
     enabled: model.enabled,

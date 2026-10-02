@@ -80,11 +80,14 @@ test("model capabilities default to unsupported for v0.0.23 peers and ignore fut
   });
   // stableModelIdentity is additive: peers that predate it normalize to false.
   // modelRelay is additive too: absence keeps the relay feature domain closed.
+  // requestMappings is additive as well: peers without it cannot receive
+  // request-mapping edits from the control plane.
   assert.deepEqual(node.managedModels, {
     multiEntityAssignment: true,
     privateModelCatalog: true,
     stableModelIdentity: false,
     modelRelay: { protocols: [], streaming: false },
+    requestMappings: false,
   });
   assert.equal(supportsNodeStableModelIdentity({ managedModels: { stableModelIdentity: true } }), true);
   assert.equal(supportsNodeStableModelIdentity({ managedModels: { multiEntityAssignment: true } }), false);

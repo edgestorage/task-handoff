@@ -4,6 +4,7 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import TOML from "@iarna/toml";
 import { atomicWriteFileSync } from "@task-handoff/core/storage/atomic-write";
+import { createManagedBackupSync, pruneManagedBackupsSync } from "@task-handoff/core/storage/managed-file-backup";
 import {
   instancePrivateModelCatalogBaseUrl,
   relayInstancePrivateModelCatalog,
@@ -126,6 +127,9 @@ export function applyManagedCodexModelConfig(
   fs.mkdirSync(home, { recursive: true, mode: 0o700 });
   const configPath = path.join(home, "config.toml");
   const authPath = path.join(home, "auth.json");
+  // Retain a bounded history even when this apply is a no-op, so instances
+  // that predate backup retention converge on their next start.
+  pruneManagedBackupsSync(configPath);
   let applied = false;
   if (hasManagedModel && !catalog && apiKey) {
     let currentKey = "";
@@ -175,10 +179,7 @@ export function applyManagedCodexModelConfig(
   }
   let backupPath: string | undefined;
   if (current.contents) {
-    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-    backupPath = `${configPath}.bak.${stamp}`;
-    fs.copyFileSync(configPath, backupPath);
-    fs.chmodSync(backupPath, 0o600);
+    backupPath = createManagedBackupSync(configPath);
   }
   atomicWrite(configPath, TOML.stringify(next as TomlMap));
   return { applied: true, configPath, authPath, backupPath, model, modelProvider, providerEnvironment };

@@ -301,6 +301,7 @@ CREATE UNIQUE INDEX cp_user_sessions_token_hash_uq ON cp_user_sessions(token_has
 CREATE INDEX cp_user_sessions_identity_idx ON cp_user_sessions(identity_id);
 CREATE INDEX cp_user_sessions_expiry_idx ON cp_user_sessions(expires_at);
 `),
+  migration("0008_model_request_mappings", "ALTER TABLE cp_models ADD COLUMN mappings TEXT NOT NULL DEFAULT '[]';"),
 ];
 export const postgresqlMigrations = [
   migration("0001_user_access", postgresqlInitial),
@@ -322,4 +323,5 @@ ALTER TABLE cp_user_sessions ADD COLUMN IF NOT EXISTS client_info JSONB;
 ALTER TABLE cp_login_identities DROP CONSTRAINT IF EXISTS cp_login_identities_kind_check;
 ALTER TABLE cp_login_identities ADD CONSTRAINT cp_login_identities_kind_check CHECK (kind IN ('local-password','oidc','oauth','local-trust'));
 `),
+  migration("0008_model_request_mappings", "ALTER TABLE cp_models ADD COLUMN mappings JSONB NOT NULL DEFAULT '[]'::jsonb;"),
 ];

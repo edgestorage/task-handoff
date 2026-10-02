@@ -1821,6 +1821,10 @@ export class ControlPlaneService {
     return this.aiSessionActionService.rename(instanceId, aiSessionId, input);
   }
 
+  readAiSession(instanceId: string, aiSessionId: string) {
+    return this.aiSessionActionService.read(instanceId, aiSessionId);
+  }
+
   openAiSessionApp(instanceId: string, aiSessionId: string, clientRequestId: string) {
     return this.aiSessionActionService.openApp(instanceId, aiSessionId, clientRequestId);
   }

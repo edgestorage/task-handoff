@@ -50,7 +50,7 @@ const { openNodeAgentDatabaseSync } = require("../packages/control-plane/src/nod
 const { createNodeAgentRepository } = require("../packages/control-plane/src/node-agent/persistence/repository.ts");
 const { aiSessionUserPrompts, displayAiSessionMessage, displayAiSessionTitle, launchableAppsForInstance: uiLaunchableAppsForInstance } = require("../packages/control-plane-ui/src/apps/control-plane/useInstanceSessions.ts");
 const { launchableAppsForInstance: chatLaunchableAppsForInstance } = require("../packages/control-plane/src/control-plane/chat/rendering.ts");
-const { AiSessionEventType, AiSessionEventTopic, AiSessionUnreadEventType } = require("../packages/protocol/src/ai-sessions.ts");
+const { AiSessionEventType, AiSessionEventTopic } = require("../packages/protocol/src/ai-sessions.ts");
 const { AppSessionEventType, normalizeAppSessionRecord, normalizeAppSessionStatus } = require("../packages/protocol/src/app-sessions.ts");
 const { ApplyUpdateRequestSchema, CONTROL_PLANE_PROTOCOL_VERSION, ControlledInstanceHeartbeatSchema, ControlledInstanceRegisterSchema, ControlledInstanceSchema, InstanceAppInventorySchema, InstanceLifecycleEventType, RuntimeArtifactIdentitySchema, RuntimeVersionStateSchema, UpdateCheckRequestSchema, UpdateJobSchema, decodeNodeTunnelRequestBody, modelConfigHash, modelContentRevision, parseStoredControlledInstance, sanitizeStoredControlledInstance } = require("../packages/protocol/src/control-plane.ts");
 const { ChatActionTokenService, parsePendingDecisionCallbackData, pendingDecisionRouteFingerprint } = require("../packages/control-plane/src/control-plane/chat/action-token-service.ts");
@@ -3780,9 +3780,49 @@ test("control plane forwards lifecycle snapshots only for instances owned by the
 });
 
 test("control plane subscribes to direct node agent websocket events", async (t) => {
-  const instanceEvents = new WebSocket.Server({ host: "127.0.0.1", port: 0 });
   let instanceEventSocket;
+  const instanceReadRequests = [];
+  const instanceServer = http.createServer((request, response) => {
+    if (request.method === "POST" && request.url === "/api/ai-sessions/ai_1/read") {
+      instanceReadRequests.push(request.url);
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ data: { sessionId: "ai_1", unread: false } }));
+      const readAt = new Date().toISOString();
+      instanceEventSocket?.send(JSON.stringify({
+        type: AiSessionEventType.Patch,
+        topic: AiSessionEventTopic,
+        payload: {
+          meta: {
+            instanceId: "inst_direct_events",
+            streamId: "ai_direct_stream",
+            revision: 6,
+            previousRevision: 5,
+            traceId: "ai_direct_read",
+            generatedAt: readAt,
+            reason: "control-action",
+          },
+          upserted: [{
+            id: "ai_1",
+            agent: "codex",
+            appId: "codex",
+            appSessionId: "app_1",
+            status: "failed",
+            phase: "unknown",
+            unread: false,
+            startedAt: readAt,
+            updatedAt: readAt,
+          }],
+          removed: [],
+        },
+      }));
+      return;
+    }
+    response.writeHead(404, { "content-type": "application/json" });
+    response.end(JSON.stringify({ error: { code: "ROUTE_NOT_FOUND" } }));
+  });
+  const instanceEvents = new WebSocket.Server({ server: instanceServer });
   t.after(() => instanceEvents.close());
+  t.after(() => instanceServer.close());
   instanceEvents.on("connection", (socket) => {
     instanceEventSocket = socket;
     socket.on("message", () => {
@@ -3841,8 +3881,8 @@ test("control plane subscribes to direct node agent websocket events", async (t)
       coalescer.flushAll("authoritative-event");
     });
   });
-  await new Promise((resolve) => instanceEvents.once("listening", resolve));
-  const instanceEventsAddress = instanceEvents.address();
+  await new Promise((resolve) => instanceServer.listen({ host: "127.0.0.1", port: 0 }, resolve));
+  const instanceEventsAddress = instanceServer.address();
   assert.equal(typeof instanceEventsAddress, "object");
 
   const nodeAgent = await createNodeAgentApp({
@@ -3926,6 +3966,7 @@ test("control plane subscribes to direct node agent websocket events", async (t)
     ...registeredState,
     status: "running",
     ready: true,
+    runtime: { ...registeredState.runtime, kind: "local", port: instanceEventsAddress.port },
     runtimeVersion: runtimeVersionStateForActual(runtimeVersionStateForActual().desiredVersion),
   });
 
@@ -4029,7 +4070,7 @@ test("control plane subscribes to direct node agent websocket events", async (t)
   assert.equal(aggregatedEntry.revision, 1);
   assert.equal(aggregatedEntry.aiSessions.sessions[0].unread, false);
 
-  const sendAiSessionStatus = (status, revision, updatedAt) => instanceEventSocket.send(JSON.stringify({
+  const sendAiSessionStatus = (status, revision, updatedAt, unread = false) => instanceEventSocket.send(JSON.stringify({
     type: AiSessionEventType.Snapshot,
     topic: AiSessionEventTopic,
     payload: aiSessionSnapshotPayload({
@@ -4042,6 +4083,7 @@ test("control plane subscribes to direct node agent websocket events", async (t)
         appSessionId: "app_1",
         status,
         phase: "unknown",
+        unread,
         startedAt: updatedAt,
         updatedAt,
       }],
@@ -4052,28 +4094,41 @@ test("control plane subscribes to direct node agent websocket events", async (t)
   const roundCompletedAt = new Date(roundBase + 1_000).toISOString();
   const nextRoundStartedAt = new Date(roundBase + 2_000).toISOString();
   const nextRoundFailedAt = new Date(roundBase + 3_000).toISOString();
-  sendAiSessionStatus("running", 2, roundStartedAt);
-  sendAiSessionStatus("idle", 3, roundCompletedAt);
-  const unreadEvent = await waitForCondition(() => receivedEvents.find((entry) => entry.type === AiSessionUnreadEventType.Updated && entry.payload.unread), "completed AI session unread event");
-  assert.equal(unreadEvent.payload.sessionId, "ai_1");
-  const unreadView = await waitForCondition(async () => {
+  const projectSession = async () => {
     const response = await json(controlPlane, "GET", "/api/ai-sessions");
-    const session = response.body.data.instances.find((entry) => entry.instanceId === "inst_direct_events")?.aiSessions.sessions[0];
-    return session?.unread ? response : undefined;
+    return {
+      response,
+      session: response.body.data.instances.find((entry) => entry.instanceId === "inst_direct_events")?.aiSessions.sessions[0],
+    };
+  };
+  sendAiSessionStatus("running", 2, roundStartedAt, false);
+  sendAiSessionStatus("idle", 3, roundCompletedAt, true);
+  const unreadView = await waitForCondition(async () => {
+    const { response, session } = await projectSession();
+    return session?.unread && session.updatedAt === roundCompletedAt ? response : undefined;
   }, "completed AI session unread projection");
   assert.equal(unreadView.statusCode, 200);
+  assert.equal(receivedEvents.some((entry) => String(entry.type).includes("unread")), false);
 
-  sendAiSessionStatus("running", 4, nextRoundStartedAt);
-  const clearedForNewRound = await waitForCondition(() => receivedEvents.find((entry) => entry.type === AiSessionUnreadEventType.Updated && entry.payload.sessionUpdatedAt === nextRoundStartedAt && !entry.payload.unread), "new AI session round clears unread");
-  assert.equal(clearedForNewRound.payload.unread, false);
-  sendAiSessionStatus("failed", 5, nextRoundFailedAt);
-  await waitForCondition(() => receivedEvents.find((entry) => entry.type === AiSessionUnreadEventType.Updated && entry.payload.sessionUpdatedAt === nextRoundFailedAt && entry.payload.unread), "failed AI session unread event");
-  const read = await json(controlPlane, "POST", "/api/controlled-instances/inst_direct_events/ai-sessions/ai_1/read", {
-    sessionUpdatedAt: nextRoundFailedAt,
-  });
+  sendAiSessionStatus("running", 4, nextRoundStartedAt, false);
+  const clearedForNewRound = await waitForCondition(async () => {
+    const { response, session } = await projectSession();
+    return session && !session.unread && session.updatedAt === nextRoundStartedAt ? response : undefined;
+  }, "new AI session round clears unread in the projection");
+  assert.equal(clearedForNewRound.statusCode, 200);
+  sendAiSessionStatus("failed", 5, nextRoundFailedAt, true);
+  await waitForCondition(async () => {
+    const { response, session } = await projectSession();
+    return session?.unread && session.updatedAt === nextRoundFailedAt ? response : undefined;
+  }, "failed AI session unread projection");
+  const read = await json(controlPlane, "POST", "/api/controlled-instances/inst_direct_events/ai-sessions/ai_1/read");
   assert.equal(read.statusCode, 200);
   assert.equal(read.body.data.unread, false);
-  await waitForCondition(() => receivedEvents.find((entry) => entry.type === AiSessionUnreadEventType.Updated && entry.payload.updatedAt === read.body.data.updatedAt && !entry.payload.unread), "AI session read event");
+  assert.deepEqual(instanceReadRequests, ["/api/ai-sessions/ai_1/read"]);
+  await waitForCondition(async () => {
+    const { response, session } = await projectSession();
+    return session && !session.unread ? response : undefined;
+  }, "AI session read clears the aggregated unread projection");
 
   const delta = await waitForCondition(async () => {
     const response = await json(controlPlane, "GET", "/api/ai-sessions?instanceId=inst_direct_events&streamId=ai_direct_stream&sinceRevision=0");
@@ -4082,11 +4137,13 @@ test("control plane subscribes to direct node agent websocket events", async (t)
   assert.equal(delta.statusCode, 200);
   assert.equal(delta.body.data.instanceId, "inst_direct_events");
   assert.equal(delta.body.data.syncRequired, false);
-  assert.equal(delta.body.data.events.length, 5);
+  assert.equal(delta.body.data.events.length, 6);
   assert.equal(delta.body.data.events[0].type, AiSessionEventType.Snapshot);
   assert.equal(delta.body.data.events[0].payload.snapshot.sessions[0].id, "ai_1");
+  assert.equal(delta.body.data.events[5].type, AiSessionEventType.Patch);
+  assert.equal(delta.body.data.events[5].payload.upserted[0].unread, false);
 
-  const currentDelta = await json(controlPlane, "GET", "/api/ai-sessions?instanceId=inst_direct_events&streamId=ai_direct_stream&sinceRevision=5");
+  const currentDelta = await json(controlPlane, "GET", "/api/ai-sessions?instanceId=inst_direct_events&streamId=ai_direct_stream&sinceRevision=6");
   assert.equal(currentDelta.statusCode, 200);
   assert.equal(currentDelta.body.data.syncRequired, false);
   assert.deepEqual(currentDelta.body.data.events, []);
@@ -10745,13 +10802,16 @@ test("aborting an active fleet query cancels its reverse-WSS node request", asyn
   const controller = new AbortController();
   const responsePromise = fetch(`http://127.0.0.1:${address.port}/api/node-runtimes`, { signal: controller.signal })
     .catch((error) => error);
-  const forwarded = await onceWebSocketMessage(socket);
+  // Identifying a reverse-tunnel node also schedules an asynchronous node
+  // capability probe (/health) on the same tunnel, so wait for the request
+  // this test issued instead of assuming it is the next tunnel message.
+  const forwarded = await onceWebSocketJsonMatching(socket, (message) => message.type === "control-plane.request" && message.route === "/runtimes");
   assert.equal(forwarded.type, "control-plane.request");
   assert.equal(forwarded.route, "/runtimes");
 
   controller.abort();
 
-  const cancellation = await onceWebSocketMessage(socket);
+  const cancellation = await onceWebSocketJsonMatching(socket, (message) => message.type === "control-plane.request.cancel" && message.requestId === forwarded.requestId);
   assert.deepEqual(cancellation, { type: "control-plane.request.cancel", requestId: forwarded.requestId });
   assert.equal((await responsePromise).name, "AbortError");
   const nodeAfterAbort = await json(app, "GET", "/api/nodes/node_fleet_query_abort");

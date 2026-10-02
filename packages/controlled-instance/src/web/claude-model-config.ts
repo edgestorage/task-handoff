@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { atomicWriteJsonSync } from "@task-handoff/core/storage/atomic-write";
+import { createManagedBackupSync, pruneManagedBackupsSync } from "@task-handoff/core/storage/managed-file-backup";
 
 type ConfigObject = Record<string, unknown>;
 
@@ -53,6 +54,9 @@ export function applyManagedClaudeModelConfig(env: NodeJS.ProcessEnv = process.e
   if (!model || !baseUrl || !apiKey) return { applied: false };
 
   const settingsPath = path.join(claudeHome(env), "settings.json");
+  // Retain a bounded history even when this apply is a no-op, so instances
+  // that predate backup retention converge on their next start.
+  pruneManagedBackupsSync(settingsPath);
   const current = readSettings(settingsPath);
   const currentEnv = isConfigObject(current.settings.env) ? current.settings.env : {};
   if (
@@ -76,10 +80,7 @@ export function applyManagedClaudeModelConfig(env: NodeJS.ProcessEnv = process.e
 
   let backupPath: string | undefined;
   if (current.contents) {
-    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-    backupPath = `${settingsPath}.bak.${stamp}`;
-    fs.copyFileSync(settingsPath, backupPath);
-    fs.chmodSync(backupPath, 0o600);
+    backupPath = createManagedBackupSync(settingsPath);
   }
   atomicWriteJsonSync(settingsPath, { ...current.settings, env: nextEnv });
   return { applied: true, settingsPath, backupPath };

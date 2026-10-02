@@ -74,6 +74,7 @@ const { CodexAppServerConnectionProxy } = require("../packages/app-runtime/src/c
 const { AiSessionRefreshScheduler, createWebApp } = require("../packages/controlled-instance/src/web/server.ts");
 const { applyManagedCodexModelConfig, codexProviderId } = require("../packages/controlled-instance/src/web/codex-model-config.ts");
 const { applyManagedClaudeModelConfig } = require("../packages/controlled-instance/src/web/claude-model-config.ts");
+const { createManagedBackupSync, DEFAULT_MANAGED_BACKUP_LIMIT } = require("../packages/core/src/storage/managed-file-backup.ts");
 
 test("codex approval parser preserves the request reason", () => {
   const request = codexApprovalRequest(42, "item/commandExecution/requestApproval", {
@@ -7512,6 +7513,49 @@ test("controlled instance leaves user Codex files unchanged when no managed mode
   assert.deepEqual(fs.readdirSync(codexHome).sort(), ["auth.json", "config.toml"]);
 });
 
+test("controlled instance keeps only the newest Codex config backups", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-backup-retention-"));
+  const codexHome = path.join(root, ".codex");
+  const configPath = path.join(codexHome, "config.toml");
+  fs.mkdirSync(codexHome, { recursive: true });
+  fs.writeFileSync(configPath, 'model = "seed"\n');
+  // Legacy and manually suffixed backups must survive managed retention.
+  fs.writeFileSync(`${configPath}.bak`, "legacy backup\n");
+  fs.writeFileSync(`${configPath}.bak-task-handoff-timeout`, "legacy timeout backup\n");
+  fs.writeFileSync(`${configPath}.bak.not-a-generation`, "manual backup\n");
+
+  const environment = {
+    TASK_HANDOFF_CONTROL_MODE: "controlled",
+    CODEX_HOME: codexHome,
+    TASK_HANDOFF_CODEX_BASE_URL: "https://proxy.example/v1",
+    OPENAI_API_KEY: "managed-api-key",
+  };
+  const writes = DEFAULT_MANAGED_BACKUP_LIMIT + 5;
+  for (let index = 0; index < writes; index += 1) {
+    const result = applyManagedCodexModelConfig({ ...environment, TASK_HANDOFF_CODEX_MODEL: `model-${index}` });
+    assert.equal(result.applied, true);
+  }
+
+  const generations = fs.readdirSync(codexHome)
+    .filter((name) => /^config\.toml\.bak\.\d{4}-\d{2}-\d{2}T/.test(name))
+    .sort();
+  assert.equal(generations.length, DEFAULT_MANAGED_BACKUP_LIMIT);
+  const backedUpModels = generations.map((name) => require("@iarna/toml").parse(fs.readFileSync(path.join(codexHome, name), "utf8")).model);
+  assert.deepEqual(backedUpModels, Array.from({ length: DEFAULT_MANAGED_BACKUP_LIMIT }, (_value, index) => `model-${writes - DEFAULT_MANAGED_BACKUP_LIMIT - 1 + index}`));
+  assert.equal(fs.readFileSync(`${configPath}.bak`, "utf8"), "legacy backup\n");
+  assert.equal(fs.readFileSync(`${configPath}.bak-task-handoff-timeout`, "utf8"), "legacy timeout backup\n");
+  assert.equal(fs.readFileSync(`${configPath}.bak.not-a-generation`, "utf8"), "manual backup\n");
+
+  // Two backups created within the same millisecond stay distinct generations.
+  const sameInstant = new Date("2030-01-01T00:00:00.000Z");
+  fs.writeFileSync(configPath, 'model = "collision"\n');
+  const first = createManagedBackupSync(configPath, { now: sameInstant });
+  const second = createManagedBackupSync(configPath, { now: sameInstant });
+  assert.notEqual(first, second);
+  assert.equal(fs.existsSync(first), true);
+  assert.equal(fs.existsSync(second), true);
+});
+
 test("controlled instance materializes managed Codex behavior and multi-agent settings", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-codex-settings-"));
   const codexHome = path.join(root, ".codex");
@@ -8231,6 +8275,34 @@ test("controlled instance leaves user Claude settings unchanged when no managed 
     CLAUDE_HOME: claudeHome,
   }), { applied: false });
   assert.equal(fs.readFileSync(settingsPath, "utf8"), contents);
+});
+
+test("controlled instance keeps only the newest Claude settings backups", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-handoff-claude-backup-retention-"));
+  const claudeHome = path.join(root, ".claude");
+  const settingsPath = path.join(claudeHome, "settings.json");
+  fs.mkdirSync(claudeHome, { recursive: true });
+  fs.writeFileSync(settingsPath, `${JSON.stringify({ env: { ANTHROPIC_MODEL: "seed" }, theme: "dark" }, null, 2)}\n`);
+  fs.writeFileSync(`${settingsPath}.bak`, "legacy backup\n");
+
+  const environment = {
+    TASK_HANDOFF_CONTROL_MODE: "controlled",
+    CLAUDE_HOME: claudeHome,
+    ANTHROPIC_BASE_URL: "https://anthropic-proxy.example",
+    ANTHROPIC_API_KEY: "managed-claude-key",
+  };
+  const writes = DEFAULT_MANAGED_BACKUP_LIMIT + 3;
+  for (let index = 0; index < writes; index += 1) {
+    assert.equal(applyManagedClaudeModelConfig({ ...environment, TASK_HANDOFF_CLAUDE_MODEL: `claude-${index}` }).applied, true);
+  }
+
+  const generations = fs.readdirSync(claudeHome)
+    .filter((name) => /^settings\.json\.bak\.\d{4}-\d{2}-\d{2}T/.test(name))
+    .sort();
+  assert.equal(generations.length, DEFAULT_MANAGED_BACKUP_LIMIT);
+  const backedUpModels = generations.map((name) => JSON.parse(fs.readFileSync(path.join(claudeHome, name), "utf8")).env.ANTHROPIC_MODEL);
+  assert.deepEqual(backedUpModels, Array.from({ length: DEFAULT_MANAGED_BACKUP_LIMIT }, (_value, index) => `claude-${writes - DEFAULT_MANAGED_BACKUP_LIMIT - 1 + index}`));
+  assert.equal(fs.readFileSync(`${settingsPath}.bak`, "utf8"), "legacy backup\n");
 });
 
 test("controlled instance refreshes managed model auth through its registration-token endpoint", async () => {
@@ -10182,6 +10254,11 @@ function withWebStorageEnv(paths, extra = {}) {
     TASK_HANDOFF_WEB_TOKEN_FILE: paths.webTokenPath,
     CODEX_HOME: undefined,
     CLAUDE_HOME: undefined,
+    // Managed apps (for example the OpenCode bridge) resolve their user data
+    // through XDG paths; point them at the test root so a developer machine's
+    // real sessions cannot leak into the isolated web app.
+    XDG_DATA_HOME: path.join(paths.dataDir, "xdg-data"),
+    XDG_CONFIG_HOME: path.join(paths.dataDir, "xdg-config"),
     TASK_HANDOFF_AI_PROCESS_SCAN: "0",
     TASK_HANDOFF_AI_SESSION_SCAN: "0",
     TASK_HANDOFF_CODEX_APP_SERVER: "0",

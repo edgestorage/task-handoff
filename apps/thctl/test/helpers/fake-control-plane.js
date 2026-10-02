@@ -586,7 +586,7 @@ export function createFakeControlPlane(options = {}) {
             ? { sessionId, provider: "codex", action: "approval", decision: body?.decision ?? "allow" }
             : action === "resume"
               ? { disposition: "resumed", aiSessionId: sessionId, providerSessionId: "prov_fake01", creationSource: "ai-session" }
-              : { instanceId: instanceEntry.id, sessionId, unread: false, sessionUpdatedAt: now, updatedAt: now };
+              : { sessionId, unread: false };
       return json(200, { data: payload });
     }
     if (method === "POST" && /^\/api\/controlled-instances\/[^/]+\/ai-sessions\/[^/]+\/queue\/[^/]+\/(steer|retry)$/.test(path)) {

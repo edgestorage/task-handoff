@@ -1218,19 +1218,18 @@ watch(
 watch(() => ({
   key: selectedCard.value?.key,
   unread: selectedCard.value?.session.unread,
-  updatedAt: selectedCard.value?.session.updatedAt,
 }), (current, previous) => {
   const card = selectedCard.value;
   if (!card || detailCollapsed.value || !current.unread) return;
-  if (current.key !== previous?.key || !previous.unread || current.updatedAt !== previous.updatedAt) {
-    void markAiSessionRead(card.instance.id, card.session.id, card.session.updatedAt).catch(() => undefined);
+  if (current.key !== previous?.key || !previous?.unread) {
+    void markAiSessionRead(card.instance.id, card.session.id).catch(() => undefined);
   }
 });
 
 watch(detailCollapsed, (collapsed, previous) => {
   const card = selectedCard.value;
   if (previous && !collapsed && card?.session.unread) {
-    void markAiSessionRead(card.instance.id, card.session.id, card.session.updatedAt).catch(() => undefined);
+    void markAiSessionRead(card.instance.id, card.session.id).catch(() => undefined);
   }
 });
 

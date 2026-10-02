@@ -1,4 +1,12 @@
-import { ModelConfigSchema, normalizeModelNameEntries, projectModelNameEntries, sanitizeModelNameEntries, type ModelConfig } from "@task-handoff/protocol/control-plane";
+import {
+  ModelConfigSchema,
+  normalizeModelNameEntries,
+  normalizeModelRequestMappings,
+  projectModelNameEntries,
+  sanitizeModelNameEntries,
+  sanitizeModelRequestMappings,
+  type ModelConfig,
+} from "@task-handoff/protocol/control-plane";
 import type { ControlPlaneDatabase } from "../persistence/database/index.ts";
 import type { ModelRecord } from "../persistence/database/p0-records.ts";
 import type { SecretEnvelopeService } from "../persistence/secret-envelope.ts";
@@ -63,6 +71,7 @@ export class ControlPlaneModelRepository {
     return {
       ...metadata,
       modelNames: projectModelNameEntries(model.modelNames),
+      mappings: normalizeModelRequestMappings(model.mappings),
       keyCiphertext: this.secrets.seal(key, secretContext(model.id)),
     };
   }
@@ -74,9 +83,16 @@ export class ControlPlaneModelRepository {
       modelNames: sanitizeModelNameEntries(metadata.modelNames, (warning) => {
         console.warn(JSON.stringify({ message: "unknown stored control plane model name entry field was ignored", modelId: record.id, field: warning.field }));
       }),
+      mappings: sanitizeModelRequestMappings(metadata.mappings, (warning) => {
+        console.warn(JSON.stringify({ message: "unknown stored control plane model request mapping field was ignored", modelId: record.id, field: warning.field }));
+      }),
       key: this.secrets.open(keyCiphertext, secretContext(record.id)),
     });
     // Read path: normalize upstreamName without rewriting stored order values.
-    return { ...parsed, modelNames: normalizeModelNameEntries(parsed.modelNames, parsed.model, { renumber: false }) };
+    return {
+      ...parsed,
+      modelNames: normalizeModelNameEntries(parsed.modelNames, parsed.model, { renumber: false }),
+      mappings: normalizeModelRequestMappings(parsed.mappings, { renumber: false }),
+    };
   }
 }

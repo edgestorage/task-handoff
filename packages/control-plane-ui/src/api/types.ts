@@ -29,9 +29,8 @@ import type {
   AiSessionSource as ProtocolAiSessionSource,
   AiSessionTool as ProtocolAiSessionTool,
   AiSessionTurn as ProtocolAiSessionTurn,
-  AiSessionUnreadState as ProtocolAiSessionUnreadState,
 } from "@task-handoff/protocol/ai-sessions";
-import { AiSessionEventType as ProtocolAiSessionEventType, AiSessionUnreadEventType as ProtocolAiSessionUnreadEventType } from "@task-handoff/protocol/ai-sessions";
+import { AiSessionEventType as ProtocolAiSessionEventType } from "@task-handoff/protocol/ai-sessions";
 import type { AiSessionSubAgent as ProtocolAiSessionSubAgent } from "@task-handoff/protocol/ai-sessions";
 import type { ControlPlaneTriggerMutationFailure } from "@task-handoff/protocol/triggers";
 import type { ControlPlaneNodeFleetState } from "@task-handoff/protocol/control-plane-directory";
@@ -77,7 +76,6 @@ export type HealthResponse = {
 };
 
 export const AiSessionEventType = ProtocolAiSessionEventType;
-export const AiSessionUnreadEventType = ProtocolAiSessionUnreadEventType;
 export const AppSessionEventType = ProtocolAppSessionEventType;
 
 export type AiSessionEventType = (typeof AiSessionEventType)[keyof typeof AiSessionEventType];
@@ -175,6 +173,8 @@ export type ModelApp = "codex" | "claude" | "opencode";
 export type ModelProtocol = "openai-responses" | "openai-chat-completions" | "anthropic-messages";
 /** `upstreamName` is omitted while it equals the external `name`. */
 export type ModelNameEntry = { name: string; upstreamName?: string; order: number };
+/** Relay-only rewrite from a client-requested model name to an upstream name. */
+export type ModelRequestMapping = { name: string; upstreamName: string; order: number };
 
 export type ModelConfig = {
   id: string;
@@ -184,6 +184,7 @@ export type ModelConfig = {
   /** Content revision of the record; edits advance it while the id stays stable. */
   revision?: string;
   modelNames?: ModelNameEntry[];
+  mappings?: ModelRequestMapping[];
   protocols?: ModelProtocol[];
   app: ModelApp;
   enabled: boolean;
@@ -976,7 +977,6 @@ export type AiSessionSubAgent = ProtocolAiSessionSubAgent;
 
 export type AiSessionSummary = SharedControlPlaneAiSessionSummary;
 
-export type AiSessionUnreadState = ProtocolAiSessionUnreadState;
 
 export type AiSessionsSnapshot = SharedControlPlaneAiSessionsSnapshot;
 
@@ -1138,6 +1138,7 @@ export type CreateModelInput = {
   key: string;
   model: string;
   modelNames?: ModelNameEntry[];
+  mappings?: ModelRequestMapping[];
   protocols?: ModelProtocol[];
   app: ModelApp;
   enabled?: boolean;

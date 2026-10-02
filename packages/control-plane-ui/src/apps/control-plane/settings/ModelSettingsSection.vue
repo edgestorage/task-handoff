@@ -280,6 +280,52 @@
             </div>
             <small v-if="!selectedNodeSupportsModelEndpointProbe" class="model-form-note">{{ t("settings.modelRegistry.probeUnsupported") }}</small>
           </section>
+
+          <section class="model-form-section">
+            <header>
+              <h3>{{ t("settings.modelRegistry.mappings") }}</h3>
+              <p>{{ t("settings.modelRegistry.mappingsDescription") }}</p>
+            </header>
+            <div class="model-mapping-list">
+              <div class="model-mapping-list-head">
+                <span>{{ t("settings.modelRegistry.mappingCount", { count: settingsModel.mappings.length }) }}</span>
+                <div>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger as-child>
+                      <Button type="button" size="sm" variant="ghost" :disabled="!mappingsEditable">{{ t("settings.modelRegistry.mappingPresets") }}<ChevronDown :size="14" /></Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" :side-offset="6">
+                      <DropdownMenuItem v-for="preset in mappingPresets" :key="preset.id" @select="applyMappingPreset(preset.id)">
+                        <span>{{ t(`settings.modelRegistry.mappingPreset.${preset.id}.label`) }}</span>
+                        <small class="model-mapping-preset-description">{{ t(`settings.modelRegistry.mappingPreset.${preset.id}.description`) }}</small>
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                  <Button type="button" size="sm" variant="ghost" :disabled="!mappingsEditable || settingsModel.mappings.length >= requestMappingLimit" @click="addMapping">{{ t("settings.modelRegistry.addMapping") }}</Button>
+                </div>
+              </div>
+              <div v-if="!settingsModel.mappings.length" class="model-mapping-empty">{{ t("settings.modelRegistry.mappingsEmpty") }}</div>
+              <div v-for="(entry, index) in settingsModel.mappings" :key="mappingEntryKey(entry)" class="model-mapping-row">
+                <label class="model-name-field">
+                  <span>{{ t("settings.modelRegistry.mappingRequestName") }}</span>
+                  <ControlPlaneInput v-model="entry.name" :placeholder="t('settings.modelRegistry.mappingRequestNamePlaceholder')" />
+                </label>
+                <span class="model-mapping-arrow" aria-hidden="true">→</span>
+                <label class="model-name-field">
+                  <span>{{ t("settings.modelRegistry.mappingUpstreamName") }}</span>
+                  <ControlPlaneInput v-model="entry.upstreamName" :placeholder="mappingTargetPlaceholder" />
+                </label>
+                <div class="model-mapping-actions">
+                  <Button type="button" variant="ghost" size="icon" :disabled="index === 0" :aria-label="t('settings.modelRegistry.moveModelNameUp')" @click="moveMapping(index, -1)"><ChevronUp :size="14" /></Button>
+                  <Button type="button" variant="ghost" size="icon" :disabled="index === settingsModel.mappings.length - 1" :aria-label="t('settings.modelRegistry.moveModelNameDown')" @click="moveMapping(index, 1)"><ChevronDown :size="14" /></Button>
+                  <Button type="button" variant="ghost" size="icon" :aria-label="t('settings.modelRegistry.removeMapping')" @click="removeMapping(index)"><Trash2 :size="14" /></Button>
+                </div>
+                <small v-if="requestMappingInactive(entry)" class="model-form-note model-mapping-inactive">{{ t("settings.modelRegistry.mappingInactive") }}</small>
+              </div>
+              <small v-if="!mappingsEditable" class="model-form-note">{{ t("settings.modelRegistry.mappingsUnsupported") }}</small>
+              <small class="model-form-note">{{ t("settings.modelRegistry.mappingsRelayHint") }}</small>
+            </div>
+          </section>
         </form>
       </ScrollArea>
       <DialogFooter class="model-editor-footer">
@@ -319,6 +365,7 @@
 import { computed, nextTick, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { Activity, AlertTriangle, Boxes, Check, ChevronDown, ChevronUp, ChevronsUpDown, Combine, Copy, GripVertical, KeyRound, Layers, Link2, MapPin, MoreHorizontal, Plus, RefreshCw, Search, Settings, Trash2, X } from "@lucide/vue";
+import { MODEL_REQUEST_MAPPING_PRESETS } from "@task-handoff/protocol/control-plane";
 import type { InstanceBoardItem, ModelApp, ModelConfig, ModelLocation, ModelSelection } from "../../../api/types";
 import { useModelRegistryQuery, useModelsQuery, useNodesQuery } from "../../../api/queries";
 import { instanceStatusKeys, translateStatus } from "../../../i18n/status";
@@ -365,12 +412,17 @@ const openModelNameMenuKey = ref<number>();
 const modelNameMenuOpenOnPointerDownKey = ref<number>();
 const modelNameEntryKeys = new WeakMap<object, number>();
 let nextModelNameEntryKey = 0;
+const mappingEntryKeys = new WeakMap<object, number>();
+let nextMappingEntryKey = 0;
 const pendingDelete = ref<{ model: ModelConfig; location: ModelLocation }>();
 const pendingMerge = ref<{ model: ModelConfig; target: ModelConfig }>();
 const refreshModels = () => invalidateControlPlaneDomains(queryClient, ["models"]);
 const translateError = (error: unknown) => translateApiError(error, t, error instanceof Error ? error.message : String(error));
-const { addModelName, canDiscoverModels, canMoveModel, canSaveModel, canTestModel, checkModel, copyingModelId, copyModelDraft, deletingModelId, discoveredModels, discoveringModels, editModel, editingModelId, formModelBusyId, mergeCandidates, mergeModelInto, mergingModelId, modelDraftDirty, moveModel, moveModelName, reorderModelName, removeModel, removeModelName, resetModelForm, saveModel, savingModelId, selectedNodeSupportsModelEndpointProbe, setProtocols, settingsModel, staleLocations, syncModelLocations, syncingModelId, testingModel, fetchModelOptions } = useModelSettings({ errorText: translateError, models: () => models.data.value || [], nodes: () => nodes.data.value || [], onModelDeleted() {}, refreshModels, translate: t });
+const { addMapping, addModelName, applyMappingPreset, canDiscoverModels, canMoveModel, canSaveModel, canTestModel, checkModel, copyingModelId, copyModelDraft, deletingModelId, discoveredModels, discoveringModels, editModel, editingModelId, formModelBusyId, mappingsEditable, mergeCandidates, mergeModelInto, mergingModelId, modelDraftDirty, moveMapping, moveModel, moveModelName, reorderModelName, removeMapping, removeModel, removeModelName, requestMappingInactive, resetModelForm, saveModel, savingModelId, selectedNodeSupportsModelEndpointProbe, setProtocols, settingsModel, staleLocations, syncModelLocations, syncingModelId, testingModel, fetchModelOptions } = useModelSettings({ errorText: translateError, models: () => models.data.value || [], nodes: () => nodes.data.value || [], onModelDeleted() {}, refreshModels, translate: t });
 const modelProtocols = ["openai-responses", "openai-chat-completions", "anthropic-messages"] as const;
+const mappingPresets = MODEL_REQUEST_MAPPING_PRESETS;
+const requestMappingLimit = 64;
+const mappingTargetPlaceholder = computed(() => settingsModel.modelNames[0]?.upstreamName?.trim() || settingsModel.modelNames[0]?.name.trim() || t("settings.modelRegistry.mappingUpstreamNamePlaceholder"));
 const editingModelLocationCount = computed(() => (models.data.value || []).find((model) => model.id === editingModelId.value)?.locations?.length || 1);
 const hasActiveFilters = computed(() => Boolean(searchQuery.value.trim() || appFilter.value !== "all" || locationFilter.value !== "all" || statusFilter.value !== "all"));
 const filteredModels = computed(() => {
@@ -388,6 +440,13 @@ function modelNameEntryKey(entry: object) {
   if (existing !== undefined) return existing;
   const key = nextModelNameEntryKey++;
   modelNameEntryKeys.set(entry, key);
+  return key;
+}
+function mappingEntryKey(entry: object) {
+  const existing = mappingEntryKeys.get(entry);
+  if (existing !== undefined) return existing;
+  const key = nextMappingEntryKey++;
+  mappingEntryKeys.set(entry, key);
   return key;
 }
 function clearFilters() { searchQuery.value = ""; appFilter.value = "all"; locationFilter.value = "all"; statusFilter.value = "all"; }
@@ -676,6 +735,16 @@ async function confirmMerge() {
 .model-name-drag-handle:active { cursor: grabbing; }
 .model-name-drag-handle:focus-visible { box-shadow: 0 0 0 2px var(--focus-ring); outline: none; }
 .model-name-row-dragging { opacity: 0; }
+.model-mapping-list { display: grid; gap: 7px; }
+.model-mapping-list-head { align-items: center; display: flex; justify-content: space-between; }
+.model-mapping-list-head > div { align-items: center; display: flex; gap: 4px; }
+.model-mapping-list-head > span { color: var(--text-muted); font-size: 12px; }
+.model-mapping-empty { border: 1px dashed var(--line-strong); border-radius: 6px; color: var(--text-muted); font-size: 12px; padding: 10px; text-align: center; }
+.model-mapping-row { align-items: end; display: grid; gap: 6px; grid-template-columns: minmax(0,1fr) 22px minmax(0,1fr) auto; }
+.model-mapping-arrow { color: var(--text-muted); font-size: 12px; padding-bottom: 10px; text-align: center; }
+.model-mapping-actions { display: flex; gap: 2px; }
+.model-mapping-inactive { grid-column: 1 / -1; }
+.model-mapping-preset-description { color: var(--text-muted); display: block; font-size: 12px; font-weight: 400; }
 .model-editor-footer { border-top: 1px solid var(--line); display: flex; gap: 8px; justify-content: flex-end; padding: 8px 16px; }
 :global(.model-picker-popover) { height: min(360px,var(--reka-popover-content-available-height)); overflow: hidden; padding: 4px; width: min(360px,var(--reka-popover-content-available-width)); }
 .model-picker-command { display: grid; grid-template-rows: auto minmax(0,1fr); height: 100%; }
@@ -697,4 +766,5 @@ async function confirmMerge() {
 @media(prefers-reduced-motion:reduce) { .model-name-row, .model-name-row-move { transition: none; } }
 @media(max-width:900px) { .model-toolbar { grid-template-columns: minmax(220px,1fr) repeat(3,minmax(130px,.35fr)); } .model-row-main { grid-template-columns: minmax(210px,1fr) minmax(220px,.8fr) auto; } }
 @media(max-width:720px) { .model-toolbar { grid-template-columns: 1fr 1fr; } .model-search { grid-column: 1/-1; } .model-row-main { align-items: start; grid-template-columns: 1fr auto; gap: 10px; } .model-summary { grid-column: 1/-1; } .model-diagnostic-row { grid-template-columns: 1fr; } .model-protocol-options { grid-template-columns: 1fr; } }
+@media(max-width:560px) { .model-mapping-row { grid-template-columns: minmax(0,1fr) auto; } .model-mapping-arrow { display: none; } .model-mapping-row .model-name-field { grid-column: 1; } .model-mapping-actions { grid-column: 2; grid-row: 1 / span 2; } }
 </style>

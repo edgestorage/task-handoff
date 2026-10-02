@@ -390,6 +390,8 @@ const displayContent = computed(() => streamingContent.value || props.responseCo
   font-size: 14px;
   line-height: var(--detail-response-line-height);
   padding-bottom: 12px;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .ai-session-result-detail .ai-session-detail-response {

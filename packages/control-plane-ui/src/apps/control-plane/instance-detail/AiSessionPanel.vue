@@ -1856,10 +1856,9 @@ async function setTimelineViewMode(value: unknown) {
 watch(() => ({
   id: selectedSession.value?.id,
   unread: selectedSession.value?.unread,
-  updatedAt: selectedSession.value?.updatedAt,
 }), (current) => {
-  if (current.id && current.unread && current.updatedAt) {
-    void markAiSessionRead(props.instance.id, current.id, current.updatedAt).catch(() => undefined);
+  if (current.id && current.unread) {
+    void markAiSessionRead(props.instance.id, current.id).catch(() => undefined);
   }
 }, { immediate: true });
 const repositoryAiAgent = computed<"codex" | "claude" | "opencode" | undefined>(() => {

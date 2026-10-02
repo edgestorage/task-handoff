@@ -25,6 +25,11 @@ export const NodeAgentManagedModelCapabilitiesSchema = z.object({
   // content hash and reject in-place edits, so writers must fall back to the
   // legacy deploy shape for them.
   stableModelIdentity: z.boolean().default(false),
+  // Additive capability: the node persists per-entity request name mappings
+  // and applies them when resolving relay requests. Absence (v0.0.34 and
+  // earlier) keeps mapping edits disabled and makes writers strip the field
+  // from node payloads so the legacy strict request schema keeps working.
+  requestMappings: z.boolean().default(false),
   // Additive capability: the node can relay model traffic for assigned
   // entities over the declared protocols. Absence (v0.0.34 and earlier) keeps
   // mapping deployment disabled; the relay switch is node configuration and
@@ -148,6 +153,11 @@ export function supportsNodePrivateModelCatalog(capabilities: unknown) {
 
 export function supportsNodeStableModelIdentity(capabilities: unknown) {
   return normalizeNodeAgentCapabilities(capabilities).managedModels.stableModelIdentity;
+}
+
+/** Single query for the relay request mapping producer capability. */
+export function supportsNodeModelRequestMappings(capabilities: unknown) {
+  return normalizeNodeAgentCapabilities(capabilities).managedModels.requestMappings;
 }
 
 /** Single query for the relay producer capability declared by this boundary. */

@@ -11,6 +11,7 @@ import {
   ProjectSchema,
   projectModelNameEntries,
   sanitizeModelNameEntries,
+  sanitizeModelRequestMappings,
   sanitizeStoredProject,
   type ControlledInstance,
   type ModelConfig,
@@ -217,6 +218,7 @@ export function normalizeModel(model: unknown) {
       ? sanitizedModelNames
       : [{ name: record.model, order: 100 }];
     record.modelNames = sourceModelNames;
+    record.mappings = sanitizeModelRequestMappings(record.mappings);
     // Compatibility for v0.0.34: legacy records may still carry the released
     // `apps` discriminator, which the strict current schema rejects.
     delete record.apps;

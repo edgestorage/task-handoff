@@ -505,6 +505,8 @@ watch(() => turns.value.length, () => void nextTick(syncScrollElement));
   color: var(--text);
   font-size: 14px;
   line-height: 1.55;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .ai-session-user-message-actions {
@@ -563,6 +565,8 @@ watch(() => turns.value.length, () => void nextTick(syncScrollElement));
   color: var(--text);
   font-size: 14px;
   line-height: 1.55;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .ai-session-timeline-stored-response :deep(.markdown-content),
